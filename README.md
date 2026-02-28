@@ -42,7 +42,7 @@ My goal is simple: **make it easy for anyone to join the Grin network and keep t
 > - Browse [LowEndBox](https://lowendbox.com) for deals around **$2/month**
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/grin-node-toolkit.git
+git clone https://github.com/noobvie/grin-node-toolkit.git
 cd grin-node-toolkit
 chmod +x grin-node-toolkit.sh scripts/*.sh
 sudo ./grin-node-toolkit.sh

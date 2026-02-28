@@ -1370,7 +1370,7 @@ add_grin_autostart() {
             delay=$default_delay
         fi
 
-        local cron_line="@reboot sleep $delay && cd $GRIN_DIR && tmux new-session -d -s $TMUX_SESSION $GRIN_BINARY $cron_marker"
+        local cron_line="@reboot sleep $delay && cd $GRIN_DIR && env SHELL=/bin/bash tmux new-session -d -s $TMUX_SESSION $GRIN_BINARY $cron_marker"
 
         # Check for existing entry
         if echo "$existing_cron" | grep -qF "$cron_marker"; then

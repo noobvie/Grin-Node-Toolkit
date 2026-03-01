@@ -8,6 +8,33 @@
 #   B) Grin Explorer              (aglkm/grin-explorer — Rust + Rocket)
 #      explorer.yourdomain.com    nginx proxy → 127.0.0.1:8000
 # =============================================================================
+#
+# PREREQUISITES — Complete these steps before using this script:
+#
+#   1. Grin Node  (Script 01)
+#      ● Mainnet node is required — testnet peer data is very limited
+#      ● Pruned node (/grinprunemain)  → sufficient for option A (Stats + Map)
+#      ● Full archive (/grinfullmain)  → required for option B (Explorer)
+#        The explorer can also use a remote archival node instead (B→2)
+#      ● Node must be running and listening on port 3413 (mainnet)
+#
+#   2. Nginx  (Script 02 → Option 1)
+#      ● Run script 02 first to install nginx + certbot on this machine
+#      ● You do NOT need to create a site in script 02 — script 06 creates
+#        its own nginx configs independently (option A→5 and B→5)
+#
+#   3. DNS records  (external — must be done BEFORE running nginx setup)
+#      ● Create an A-record: stats.yourdomain.com    → this server's public IP
+#      ● Create an A-record: explorer.yourdomain.com → this server's public IP
+#      ● SSL certificates are issued by Certbot automatically at nginx setup time
+#
+# RECOMMENDED SETUP ORDER (first time):
+#   [Script 01]  Install + sync a Grin mainnet node (pruned is fine for stats)
+#   [Script 02]  Option 1 — installs nginx + certbot on the machine
+#   [DNS panel]  Point your subdomains to this server's IP address
+#   [Script 06]  A: 1 Install → 2 Import History → 3 Start Updates → 5 Nginx
+#                B: 1 Install & Build → 2 Configure → 3 Start → 5 Nginx
+# =============================================================================
 
 set -euo pipefail
 
@@ -735,6 +762,13 @@ show_main_menu() {
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -e "${BOLD}${CYAN}  6) Global Grin Health${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  ${BOLD}Requirements:${RESET}"
+    echo -e "  ${GREEN}✓${RESET}  Grin ${BOLD}mainnet${RESET} node running        ${DIM}(Script 01 — pruned is fine for A)${RESET}"
+    echo -e "  ${GREEN}✓${RESET}  Nginx installed                  ${DIM}(Script 02 → Option 1)${RESET}"
+    echo -e "  ${GREEN}✓${RESET}  DNS A-records set for subdomains ${DIM}(before running A→5 or B→5)${RESET}"
+    echo ""
+    echo -e "${DIM}  ─────────────────────────────────────────────${RESET}"
     echo ""
     echo -e "  ${GREEN}A${RESET})   Network Stats + Peer Map"
     echo -e "      ${DIM}Hashrate · Difficulty · Transactions · Fees · Versions · 3D Peer Map${RESET}"

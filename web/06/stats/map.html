@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Global Grin Health — Peer Map</title>
+<script src="globe.min.js"></script>
+<style>
+  :root {
+    --bg:      #0d1117;
+    --surface: #161b22;
+    --border:  #30363d;
+    --text:    #e6edf3;
+    --muted:   #8b949e;
+    --grin:    #ff9900;
+    --blue:    #58a6ff;
+    --green:   #3fb950;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ──────────────────────────────────────────────────────────────── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    gap: 12px;
+    flex-wrap: wrap;
+    z-index: 10;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; }
+  .logo-dot {
+    width: 10px; height: 10px;
+    background: var(--grin);
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.3} }
+  .logo h1 { font-size: 16px; font-weight: 600; }
+  .logo h1 span { color: var(--grin); }
+  nav a {
+    color: var(--muted);
+    text-decoration: none;
+    margin-left: 20px;
+    font-size: 13px;
+    transition: color 0.2s;
+  }
+  nav a:hover, nav a.active { color: var(--text); }
+  #peer-count { color: var(--muted); font-size: 12px; }
+
+  /* ── Globe container ─────────────────────────────────────────────────────── */
+  #globe-container {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+  /* Target only the Globe.GL canvas wrapper, not our overlay panels */
+  #globe { width: 100% !important; height: 100% !important; }
+
+  /* ── Left panel — peer list ──────────────────────────────────────────────── */
+  #left-panel {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    width: 272px;
+    max-height: calc(100% - 32px);
+    background: rgba(22, 27, 34, 0.92);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    backdrop-filter: blur(8px);
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    transition: transform 0.25s ease, opacity 0.25s ease;
+  }
+  #left-panel.lp-hidden {
+    transform: translateX(-310px);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .lp-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 14px 8px;
+    flex-shrink: 0;
+  }
+  .lp-head h2 { font-size: 13px; font-weight: 600; color: var(--text); }
+  .lp-close {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 6px;
+  }
+  .lp-close:hover { color: var(--text); }
+  .lp-filters {
+    padding: 0 10px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    flex-shrink: 0;
+  }
+  .lp-filters select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 5px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  #lp-count {
+    padding: 0 14px 6px;
+    font-size: 11px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  #peer-list {
+    overflow-y: auto;
+    flex: 1;
+    border-top: 1px solid var(--border);
+    min-height: 0;
+  }
+  .peer-item {
+    padding: 8px 14px;
+    border-bottom: 1px solid rgba(48,54,61,0.5);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .peer-item:hover { background: rgba(255,153,0,0.07); }
+  .pi-row1 {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 4px;
+  }
+  .pi-ip {
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--grin);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pi-seen { font-size: 11px; color: var(--muted); flex-shrink: 0; }
+  .pi-row2 {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--muted);
+    gap: 4px;
+  }
+  .pi-loc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .pi-ua  {
+    color: var(--blue);
+    flex-shrink: 0;
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ── Panel open toggle (shown when left panel is closed) ─────────────────── */
+  #lp-toggle {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    z-index: 6;
+    background: rgba(22, 27, 34, 0.85);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    display: none;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  #lp-toggle.lp-btn-visible { display: block; }
+  #lp-toggle:hover { color: var(--text); border-color: var(--grin); }
+
+  /* ── Right side panel ────────────────────────────────────────────────────── */
+  #panel {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 260px;
+    background: rgba(22, 27, 34, 0.92);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    backdrop-filter: blur(8px);
+    z-index: 5;
+    max-height: calc(100% - 32px);
+    overflow-y: auto;
+  }
+  #panel h2 { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--text); }
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .stat-row:last-of-type { border-bottom: none; }
+  .stat-row .lbl { color: var(--muted); }
+  .stat-row .val { font-weight: 600; color: var(--text); }
+  #panel .legend-title { font-size: 12px; color: var(--muted); margin: 14px 0 8px; }
+  .leg-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 12px;
+  }
+  .leg-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .leg-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .leg-pct  { color: var(--grin); font-weight: 600; }
+
+  /* ── Peer tooltip ────────────────────────────────────────────────────────── */
+  #tooltip {
+    position: absolute;
+    background: rgba(22, 27, 34, 0.95);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    pointer-events: none;
+    font-size: 12px;
+    z-index: 20;
+    display: none;
+    max-width: 220px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  #tooltip .t-ip  { color: var(--grin); font-weight: 600; margin-bottom: 4px; font-family: monospace; }
+  #tooltip .t-loc { color: var(--muted); }
+  #tooltip .t-ua  { color: var(--blue); margin-top: 4px; }
+  #tooltip .t-dir { color: var(--green); font-size: 11px; }
+
+  /* ── Loading ─────────────────────────────────────────────────────────────── */
+  #loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    z-index: 50;
+    gap: 12px;
+  }
+  .spinner {
+    width: 36px; height: 36px;
+    border: 3px solid var(--border);
+    border-top-color: var(--grin);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to{transform:rotate(360deg)} }
+  #loading p { color: var(--muted); font-size: 13px; }
+
+  /* ── Footer ──────────────────────────────────────────────────────────────── */
+  footer {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 7px 24px;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+  footer a { color: var(--grin); text-decoration: none; margin: 0 8px; }
+  footer a:hover { color: var(--text); }
+
+  /* ── Mobile responsiveness ───────────────────────────────────────────────── */
+  /* Bottom action bar — shown only on mobile to toggle panels */
+  #mobile-bar {
+    display: none;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 8;
+    background: rgba(22, 27, 34, 0.92);
+    border-top: 1px solid var(--border);
+    padding: 8px 16px;
+    gap: 8px;
+    backdrop-filter: blur(8px);
+  }
+  #mobile-bar button {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 8px 4px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  #mobile-bar button.mb-active {
+    border-color: var(--grin);
+    color: var(--grin);
+  }
+
+  @media (max-width: 720px) {
+    /* Smaller header */
+    header { padding: 10px 14px; }
+    .logo h1 { font-size: 14px; }
+    nav a { margin-left: 12px; font-size: 12px; }
+    #peer-count { display: none; }
+
+    /* Both floating panels go full-width, start hidden */
+    #left-panel {
+      width: calc(100vw - 32px);
+      max-height: 55vh;
+    }
+    #panel {
+      width: calc(100vw - 32px);
+      right: 16px;
+      max-height: 55vh;
+    }
+
+    /* The desktop toggle button is hidden; mobile bar handles it */
+    #lp-toggle { display: none !important; }
+
+    /* Show the mobile bottom action bar */
+    #mobile-bar { display: flex; }
+
+    /* Push the globe up to leave room for the mobile bar */
+    #globe-container { padding-bottom: 52px; }
+
+    /* Footer text shrinks */
+    footer { font-size: 11px; padding: 6px 8px; }
+    footer a { margin: 0 5px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-dot"></div>
+    <h1>Global <span>Grin</span> Health</h1>
+  </div>
+  <nav>
+    <a href="index.html">Network Stats</a>
+    <a href="map.html" class="active">Peer Map</a>
+  </nav>
+  <span id="peer-count">Loading peers…</span>
+</header>
+
+<div id="globe-container">
+  <div id="loading">
+    <div class="spinner"></div>
+    <p>Building peer map…</p>
+  </div>
+  <div id="globe"></div>
+  <!-- Reopens left panel when it is closed -->
+  <button id="lp-toggle" title="Show peer list">☰ Peers</button>
+</div>
+
+<!-- Left panel: filterable peer list -->
+<div id="left-panel">
+  <div class="lp-head">
+    <h2>Peer List</h2>
+    <button class="lp-close" id="lp-close" title="Close">✕</button>
+  </div>
+  <div class="lp-filters">
+    <select id="f-country"><option value="">All Countries</option></select>
+    <select id="f-version"><option value="">All Versions</option></select>
+  </div>
+  <div id="lp-count">Loading…</div>
+  <div id="peer-list"></div>
+</div>
+
+<!-- Right side panel -->
+<div id="panel">
+  <h2>Network Snapshot</h2>
+  <div class="stat-row"><span class="lbl">Total peers</span><span class="val" id="p-total">—</span></div>
+  <div class="stat-row">
+    <span class="lbl"><span style="color:#ff9900">●</span> Mainnet</span>
+    <span class="val" id="p-mainnet">—</span>
+  </div>
+  <div class="stat-row">
+    <span class="lbl"><span style="color:#00bcd4">●</span> Testnet</span>
+    <span class="val" id="p-testnet">—</span>
+  </div>
+  <div class="stat-row"><span class="lbl">Countries</span><span class="val" id="p-countries">—</span></div>
+  <div class="stat-row"><span class="lbl">Outbound</span><span class="val" id="p-out">—</span></div>
+  <div class="stat-row"><span class="lbl">Inbound</span><span class="val" id="p-in">—</span></div>
+  <div class="stat-row"><span class="lbl">Updated</span><span class="val" id="p-updated">—</span></div>
+
+  <div class="legend-title">Colour Key</div>
+  <div class="leg-row"><span class="leg-dot" style="background:#ff9900"></span><span class="leg-name">Mainnet peer</span></div>
+  <div class="leg-row"><span class="leg-dot" style="background:#00bcd4"></span><span class="leg-name">Testnet peer</span></div>
+
+  <div class="legend-title">Mainnet Version Distribution</div>
+  <div id="ver-legend"></div>
+</div>
+
+<!-- Mobile bottom action bar (hidden on desktop via CSS) -->
+<div id="mobile-bar">
+  <button id="mb-peers"   onclick="mobilePeers()">☰ Peers</button>
+  <button id="mb-network" onclick="mobileNetwork()">● Network</button>
+</div>
+
+<!-- Hover tooltip -->
+<div id="tooltip">
+  <div class="t-ip"  id="tt-ip"></div>
+  <div class="t-loc" id="tt-loc"></div>
+  <div class="t-ua"  id="tt-ua"></div>
+  <div class="t-dir" id="tt-dir"></div>
+</div>
+
+<footer>
+  <a href="https://grin.mw/"                             target="_blank" rel="noopener">grin.mw</a>
+  <a href="https://forum.grin.mw/"                       target="_blank" rel="noopener">Forum</a>
+  <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>
+</footer>
+
+<script>
+const DATA_URL = "data/peers.json";
+const REFRESH  = 5 * 60 * 1000;
+
+const VERSION_COLORS = [
+  "#ff9900","#58a6ff","#3fb950","#bc8cff","#f85149","#d29922","#79c0ff","#ffa657",
+];
+
+// Network dot colours — mainnet orange, testnet teal
+const NET_COLOR = { mainnet: "#ff9900", testnet: "#00bcd4" };
+
+// Standard peer ports — not shown in tooltip
+const STD_PORTS = new Set(["3414", "13414"]);
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const fmt = n => Number(n).toLocaleString();
+
+const timeAgo = ts => {
+  const s = Math.floor(Date.now() / 1000) - ts;
+  if (s < 60)    return s + "s ago";
+  if (s < 3600)  return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+};
+
+// Hide last IPv4 octet  (1.2.3.4 → 1.2.3.x)
+// Hide last IPv6 group  (::1 → ::x)
+function maskIp(ip) {
+  const v4 = ip.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/);
+  if (v4) return v4[1] + ".x";
+  if (ip.includes(":")) {
+    const parts = ip.split(":");
+    parts[parts.length - 1] = "x";
+    return parts.join(":");
+  }
+  return ip;
+}
+
+// Unicode flag emoji from ISO 3166-1 alpha-2 country code (e.g. "US" → 🇺🇸)
+function countryFlag(code) {
+  if (!code || code.length !== 2) return "";
+  const base = 0x1F1E6 - 65;
+  try {
+    const up = code.toUpperCase();
+    return String.fromCodePoint(up.charCodeAt(0) + base, up.charCodeAt(1) + base);
+  } catch { return ""; }
+}
+
+// Safe HTML escape for dynamic values in innerHTML
+function esc(s) {
+  return String(s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// ── Version colour map (mainnet peers only) ───────────────────────────────────
+function buildVersionColorMap(peers) {
+  const mainnet = peers.filter(p => p.network !== "testnet");
+  const agents  = [...new Set(mainnet.map(p => p.user_agent))].sort();
+  const map = {};
+  agents.forEach((a, i) => { map[a] = VERSION_COLORS[i % VERSION_COLORS.length]; });
+  return map;
+}
+
+// ── Globe setup ───────────────────────────────────────────────────────────────
+let globe = null;
+
+function initGlobe(peers) {
+  globe = Globe()($("globe"))
+    .globeImageUrl("https://unpkg.com/three-globe/example/img/earth-night.jpg")
+    .backgroundImageUrl("https://unpkg.com/three-globe/example/img/night-sky.png")
+    .atmosphereColor("#ff990033")
+    .atmosphereAltitude(0.12)
+    .pointsData(peers)
+    .pointLat(d => d.lat)
+    .pointLng(d => d.lng)
+    .pointAltitude(0.01)
+    .pointRadius(0.35)
+    .pointColor(d => NET_COLOR[d.network] || "#ff9900")
+    .pointResolution(6)
+    .onPointHover(handleHover)
+    .onPointClick(handleClick);
+
+  globe.controls().autoRotate      = true;
+  globe.controls().autoRotateSpeed = 0.4;
+  globe.controls().enableZoom      = true;
+
+  const resize = () => {
+    const c = $("globe-container");
+    globe.width(c.clientWidth).height(c.clientHeight);
+  };
+  window.addEventListener("resize", resize);
+  resize();
+}
+
+function handleHover(peer, _prev, event) {
+  const tt = $("tooltip");
+  if (!peer) { tt.style.display = "none"; return; }
+  const port = peer.port && !STD_PORTS.has(String(peer.port)) ? `:${peer.port}` : "";
+  $("tt-ip").textContent  = maskIp(peer.ip) + port;
+  $("tt-loc").textContent = [peer.city, peer.country].filter(Boolean).join(", ") || "Unknown location";
+  $("tt-ua").textContent  = peer.user_agent || "Unknown";
+  $("tt-dir").textContent = (peer.direction || "") + (peer.network === "testnet" ? " · testnet" : "");
+  tt.style.display = "block";
+  tt.style.left    = (event.clientX + 14) + "px";
+  tt.style.top     = (event.clientY - 10) + "px";
+  const r = tt.getBoundingClientRect();
+  if (r.right  > window.innerWidth)  tt.style.left = (event.clientX - r.width  - 14) + "px";
+  if (r.bottom > window.innerHeight) tt.style.top  = (event.clientY - r.height + 10) + "px";
+}
+
+function handleClick(peer) {
+  if (!peer || !peer.lat || !peer.lng) return;
+  globe.pointOfView({ lat: peer.lat, lng: peer.lng, altitude: 1.2 }, 600);
+}
+
+// ── Right side panel ──────────────────────────────────────────────────────────
+function updatePanel(data, verColorMap) {
+  const peers     = data.peers || [];
+  const countries = new Set(peers.map(p => p.country).filter(Boolean));
+  const outbound  = peers.filter(p => p.direction === "Outbound").length;
+
+  $("p-total").textContent     = fmt(data.count);
+  $("p-mainnet").textContent   = fmt(data.mainnet_count ?? peers.filter(p => p.network !== "testnet").length);
+  $("p-testnet").textContent   = fmt(data.testnet_count ?? peers.filter(p => p.network === "testnet").length);
+  $("p-countries").textContent = fmt(countries.size);
+  $("p-out").textContent       = fmt(outbound);
+  $("p-in").textContent        = fmt(data.count - outbound);
+  $("p-updated").textContent   = timeAgo(data.updated);
+  $("peer-count").textContent  = `${fmt(data.count)} peers · ${fmt(countries.size)} countries`;
+
+  // Version legend — mainnet only
+  const mainnetPeers = peers.filter(p => p.network !== "testnet");
+  const counts = {};
+  mainnetPeers.forEach(p => { counts[p.user_agent] = (counts[p.user_agent] || 0) + 1; });
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const total  = mainnetPeers.length || 1;
+  $("ver-legend").innerHTML = sorted.map(([ua, n]) => `
+    <div class="leg-row">
+      <span class="leg-dot" style="background:${verColorMap[ua] || "#aaa"}"></span>
+      <span class="leg-name" title="${esc(ua)}">${esc(ua)}</span>
+      <span class="leg-pct">${((n / total) * 100).toFixed(0)}%</span>
+    </div>`
+  ).join("");
+}
+
+// ── Left panel — filterable peer list ────────────────────────────────────────
+let ALL_PEERS = [];
+
+function buildPeerList(peers) {
+  ALL_PEERS = peers;
+
+  // Country filter — preserve current selection
+  const countries = [...new Set(peers.map(p => p.country).filter(Boolean))].sort();
+  const fc = $("f-country"), prevC = fc.value;
+  fc.innerHTML = '<option value="">All Countries</option>' +
+    countries.map(c => `<option>${esc(c)}</option>`).join("");
+  if (prevC && countries.includes(prevC)) fc.value = prevC;
+
+  // Version filter — preserve current selection
+  const versions = [...new Set(peers.map(p => p.user_agent).filter(Boolean))].sort();
+  const fv = $("f-version"), prevV = fv.value;
+  fv.innerHTML = '<option value="">All Versions</option>' +
+    versions.map(v => `<option>${esc(v)}</option>`).join("");
+  if (prevV && versions.includes(prevV)) fv.value = prevV;
+
+  renderPeerList();
+}
+
+function renderPeerList() {
+  const country = $("f-country").value;
+  const version = $("f-version").value;
+
+  let list = ALL_PEERS;
+  if (country) list = list.filter(p => p.country === country);
+  if (version) list = list.filter(p => p.user_agent === version);
+
+  // Most recently seen first
+  list = [...list].sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
+  window._filteredPeers = list;
+
+  $("lp-count").textContent = `Showing ${list.length} of ${ALL_PEERS.length} peers`;
+
+  $("peer-list").innerHTML = list.map((p, i) => {
+    const flag = countryFlag(p.country_code || "");
+    const loc  = [p.city, p.country].filter(Boolean).join(", ") || "Unknown";
+    const seen = p.last_seen ? timeAgo(p.last_seen) : "active";
+    const dot  = `<span style="color:${NET_COLOR[p.network] || NET_COLOR.mainnet}">●</span>`;
+    return `<div class="peer-item" data-i="${i}">
+      <div class="pi-row1">
+        <span class="pi-ip">${dot} ${maskIp(p.ip)}</span>
+        <span class="pi-seen">${seen}</span>
+      </div>
+      <div class="pi-row2">
+        <span class="pi-loc">${flag} ${esc(loc)}</span>
+        <span class="pi-ua" title="${esc(p.user_agent || "")}">${esc(p.user_agent || "?")}</span>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// Click a row — fly globe to that peer
+$("peer-list").addEventListener("click", e => {
+  const item = e.target.closest(".peer-item");
+  if (!item) return;
+  const p = window._filteredPeers[+item.dataset.i];
+  if (!p || !p.lat || !p.lng) return;
+  if (globe) globe.pointOfView({ lat: p.lat, lng: p.lng, altitude: 1.2 }, 600);
+});
+
+$("f-country").addEventListener("change", renderPeerList);
+$("f-version").addEventListener("change", renderPeerList);
+
+// ── Left panel toggle ─────────────────────────────────────────────────────────
+function toggleLeftPanel(show) {
+  $("left-panel").classList.toggle("lp-hidden", !show);
+  $("lp-toggle").classList.toggle("lp-btn-visible", !show);
+}
+$("lp-close").addEventListener("click",  () => toggleLeftPanel(false));
+$("lp-toggle").addEventListener("click", () => toggleLeftPanel(true));
+
+// ── Load + refresh ────────────────────────────────────────────────────────────
+async function loadPeers() {
+  const data        = await fetch(DATA_URL + "?t=" + Date.now()).then(r => r.json());
+  const peers       = data.peers || [];
+  const verColorMap = buildVersionColorMap(peers);
+
+  if (!globe) {
+    initGlobe(peers);
+    $("loading").style.display = "none";
+  } else {
+    globe.pointsData(peers)
+         .pointColor(d => NET_COLOR[d.network] || "#ff9900");
+  }
+
+  updatePanel(data, verColorMap);
+  buildPeerList(peers);
+}
+
+// ── Mobile panel toggles ──────────────────────────────────────────────────────
+function mobilePeers() {
+  const lp  = $("left-panel");
+  const rp  = $("panel");
+  const open = lp.classList.contains("lp-hidden");
+  lp.classList.toggle("lp-hidden", !open);
+  rp.style.display = "none";           // close right panel if open
+  $("mb-peers").classList.toggle("mb-active", open);
+  $("mb-network").classList.remove("mb-active");
+}
+function mobileNetwork() {
+  const rp   = $("panel");
+  const lp   = $("left-panel");
+  const open = rp.style.display === "none" || rp.style.display === "";
+  rp.style.display = open ? "block" : "none";
+  lp.classList.add("lp-hidden");       // close left panel if open
+  $("mb-network").classList.toggle("mb-active", open);
+  $("mb-peers").classList.remove("mb-active");
+}
+
+// On mobile, start both panels hidden and hide right panel via inline style
+if (window.matchMedia("(max-width: 720px)").matches) {
+  document.getElementById("left-panel").classList.add("lp-hidden");
+  document.getElementById("panel").style.display = "none";
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+loadPeers().catch(e => {
+  console.error(e);
+  $("loading").innerHTML =
+    `<p style="color:#f85149">Failed to load peer data.<br>Ensure the collector has run at least once.</p>`;
+});
+
+setInterval(() => loadPeers().catch(console.error), REFRESH);
+</script>
+</body>
+</html>

@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Global Grin Health — Network Stats</title>
+<script src="chart.min.js"></script>
+<style>
+  :root {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --border:    #30363d;
+    --text:      #e6edf3;
+    --muted:     #8b949e;
+    --grin:      #ff9900;
+    --blue:      #58a6ff;
+    --green:     #3fb950;
+    --purple:    #bc8cff;
+    --red:       #f85149;
+    --chart-h:   260px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* ── Header ─────────────────────────────────────────────────────────────── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; }
+  .logo-dot {
+    width: 10px; height: 10px;
+    background: var(--grin);
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.3; }
+  }
+  .logo h1 { font-size: 16px; font-weight: 600; color: var(--text); }
+  .logo h1 span { color: var(--grin); }
+  nav a {
+    color: var(--muted);
+    text-decoration: none;
+    margin-left: 20px;
+    font-size: 13px;
+    transition: color 0.2s;
+  }
+  nav a:hover, nav a.active { color: var(--text); }
+  #last-updated { color: var(--muted); font-size: 12px; }
+
+  /* ── Stats bar ───────────────────────────────────────────────────────────── */
+  .stats-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .stat-item {
+    background: var(--surface);
+    padding: 14px 20px;
+  }
+  .stat-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat-value { font-size: 22px; font-weight: 700; color: var(--text); margin-top: 2px; }
+  .stat-value.grin  { color: var(--grin); }
+  .stat-value.blue  { color: var(--blue); }
+  .stat-value.green { color: var(--green); }
+
+  /* ── Main layout ─────────────────────────────────────────────────────────── */
+  main { padding: 24px; max-width: 1280px; margin: 0 auto; }
+
+  /* ── Chart cards ─────────────────────────────────────────────────────────── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .card-title .dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+  }
+  .dot-grin   { background: var(--grin); }
+  .dot-blue   { background: var(--blue); }
+  .dot-green  { background: var(--green); }
+  .dot-purple { background: var(--purple); }
+
+  /* ── Time range buttons ──────────────────────────────────────────────────── */
+  .range-btns { display: flex; gap: 4px; }
+  .range-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .range-btn:hover  { border-color: var(--grin); color: var(--text); }
+  .range-btn.active { background: var(--grin); border-color: var(--grin); color: #000; font-weight: 600; }
+
+  /* ── Canvas wrapper ──────────────────────────────────────────────────────── */
+  .chart-wrap { position: relative; height: var(--chart-h); }
+
+  /* ── Two-column grid ─────────────────────────────────────────────────────── */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  @media (max-width: 768px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  /* ── Versions donut ──────────────────────────────────────────────────────── */
+  .versions-wrap {
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    flex-wrap: wrap;
+  }
+  .donut-wrap { position: relative; width: 180px; height: 180px; flex-shrink: 0; }
+  .donut-center {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .donut-center .dc-num { font-size: 28px; font-weight: 700; color: var(--text); }
+  .donut-center .dc-lbl { font-size: 11px; color: var(--muted); }
+  .version-legend { flex: 1; min-width: 200px; }
+  .vl-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+  }
+  .vl-row:last-child { border-bottom: none; }
+  .vl-dot {
+    width: 10px; height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .vl-name { flex: 1; color: var(--text); font-size: 13px; }
+  .vl-count { color: var(--muted); font-size: 12px; }
+  .vl-pct { color: var(--grin); font-size: 12px; font-weight: 600; min-width: 36px; text-align: right; }
+
+  /* ── Footer ──────────────────────────────────────────────────────────────── */
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 20px 24px;
+    border-top: 1px solid var(--border);
+    margin-top: 24px;
+  }
+  footer a { color: var(--grin); text-decoration: none; margin: 0 8px; }
+  footer a:hover { color: var(--text); }
+
+  /* ── Mobile responsiveness ───────────────────────────────────────────────── */
+  @media (max-width: 640px) {
+    :root { --chart-h: 200px; }
+
+    header { padding: 10px 14px; gap: 8px; }
+    .logo h1 { font-size: 14px; }
+    nav a { margin-left: 12px; font-size: 12px; }
+    #last-updated { font-size: 11px; }
+
+    .stats-bar { grid-template-columns: repeat(2, 1fr); }
+    .stat-item { padding: 10px 14px; }
+    .stat-value { font-size: 18px; }
+
+    main { padding: 12px; }
+    .card { padding: 12px; margin-bottom: 12px; }
+    .card-title { font-size: 13px; }
+    .range-btn { padding: 3px 7px; font-size: 11px; }
+
+    .grid-2 { grid-template-columns: 1fr; gap: 12px; }
+
+    .versions-wrap { flex-direction: column; gap: 16px; }
+    .donut-wrap { width: 150px; height: 150px; margin: 0 auto; }
+    .version-legend { min-width: unset; width: 100%; }
+
+    footer { padding: 14px; }
+  }
+
+  /* ── Loading overlay ─────────────────────────────────────────────────────── */
+  #loading {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 999;
+    gap: 12px;
+  }
+  .spinner {
+    width: 36px; height: 36px;
+    border: 3px solid var(--border);
+    border-top-color: var(--grin);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading p { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <p>Loading Grin network data…</p>
+</div>
+
+<header>
+  <div class="logo">
+    <div class="logo-dot"></div>
+    <h1>Global <span>Grin</span> Health</h1>
+  </div>
+  <nav>
+    <a href="index.html" class="active">Network Stats</a>
+    <a href="map.html">Peer Map</a>
+  </nav>
+  <span id="last-updated">—</span>
+</header>
+
+<!-- ── Stats bar ─────────────────────────────────────────────────────────── -->
+<div class="stats-bar">
+  <div class="stat-item">
+    <div class="stat-label">Block Height</div>
+    <div class="stat-value" id="s-height">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">Network Hashrate</div>
+    <div class="stat-value grin" id="s-hashrate">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">Difficulty</div>
+    <div class="stat-value blue" id="s-difficulty">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">Avg Block Time</div>
+    <div class="stat-value" id="s-blocktime">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">Connected Peers</div>
+    <div class="stat-value green" id="s-peers">—</div>
+  </div>
+</div>
+
+<!-- ── Main content ─────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- Hashrate chart -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-grin"></span>Network Hashrate (GPS)</div>
+      <div class="range-btns" id="hr-range">
+        <button class="range-btn" data-r="recent">24h</button>
+        <button class="range-btn" data-r="hourly">30d</button>
+        <button class="range-btn active" data-r="all">All</button>
+      </div>
+    </div>
+    <div class="chart-wrap"><canvas id="chart-hashrate"></canvas></div>
+  </div>
+
+  <!-- Difficulty chart -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-blue"></span>Network Difficulty</div>
+      <div class="range-btns" id="diff-range">
+        <button class="range-btn" data-r="recent">24h</button>
+        <button class="range-btn" data-r="hourly">30d</button>
+        <button class="range-btn active" data-r="all">All</button>
+      </div>
+    </div>
+    <div class="chart-wrap"><canvas id="chart-difficulty"></canvas></div>
+  </div>
+
+  <!-- Transactions + Fees -->
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><span class="dot dot-green"></span>Transactions per Block</div>
+        <div class="range-btns" id="tx-range">
+          <button class="range-btn active" data-r="recent">24h</button>
+          <button class="range-btn" data-r="hourly">30d</button>
+          <button class="range-btn" data-r="daily">All</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-tx"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><span class="dot dot-purple"></span>Fees per Block (nGrin)</div>
+        <div class="range-btns" id="fee-range">
+          <button class="range-btn active" data-r="recent">24h</button>
+          <button class="range-btn" data-r="hourly">30d</button>
+          <button class="range-btn" data-r="daily">All</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="chart-fees"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Node versions -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-grin"></span>Node Version Distribution</div>
+      <span id="versions-sample" style="color:var(--muted);font-size:12px;"></span>
+    </div>
+    <div class="versions-wrap">
+      <div class="donut-wrap">
+        <canvas id="chart-versions"></canvas>
+        <div class="donut-center">
+          <span class="dc-num" id="donut-total">—</span>
+          <span class="dc-lbl">peers</span>
+        </div>
+      </div>
+      <div class="version-legend" id="version-legend"></div>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  Data sourced from local Grin node &nbsp;·&nbsp;
+  <a href="https://grin.mw/"                             target="_blank" rel="noopener">grin.mw</a>
+  <a href="https://forum.grin.mw/"                       target="_blank" rel="noopener">Forum</a>
+  <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>
+</footer>
+
+<script>
+// ── Config ───────────────────────────────────────────────────────────────────
+const DATA = "data/";
+const REFRESH_MS = 5 * 60 * 1000;  // re-fetch every 5 minutes
+const VERSION_COLORS = [
+  "#ff9900","#58a6ff","#3fb950","#bc8cff","#f85149","#d29922","#79c0ff",
+];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const fmt = (n, d=0) => Number(n).toLocaleString(undefined, {maximumFractionDigits: d});
+const fmtGPS = v => {
+  if (v >= 1e6) return (v/1e6).toFixed(2) + " MGPS";
+  if (v >= 1e3) return (v/1e3).toFixed(2) + " kGPS";
+  return v.toFixed(2) + " GPS";
+};
+const fmtDiff = v => {
+  if (v >= 1e9) return (v/1e9).toFixed(3) + "G";
+  if (v >= 1e6) return (v/1e6).toFixed(3) + "M";
+  if (v >= 1e3) return (v/1e3).toFixed(1) + "K";
+  return fmt(v);
+};
+const timeAgo = ts => {
+  const s = Math.floor(Date.now()/1000) - ts;
+  if (s < 60)   return s + "s ago";
+  if (s < 3600) return Math.floor(s/60) + "m ago";
+  return Math.floor(s/3600) + "h ago";
+};
+const fetchJSON = url => fetch(url + "?t=" + Date.now()).then(r => r.json());
+
+// ── Chart defaults ────────────────────────────────────────────────────────────
+Chart.defaults.color = "#8b949e";
+Chart.defaults.borderColor = "#30363d";
+Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+
+function makeLineChart(id, label, color, yFmt) {
+  const ctx = $(id).getContext("2d");
+  return new Chart(ctx, {
+    type: "line",
+    data: {
+      datasets: [{
+        label,
+        data: [],
+        borderColor: color,
+        backgroundColor: color + "18",
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.3,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => " " + yFmt(ctx.parsed.y),
+            title: items => {
+              const d = new Date(items[0].parsed.x);
+              return d.toLocaleString();
+            },
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: "time",
+          time: { tooltipFormat: "MMM d yyyy HH:mm" },
+          grid: { color: "#21262d" },
+          ticks: { maxTicksLimit: 8, color: "#8b949e" },
+        },
+        y: {
+          grid: { color: "#21262d" },
+          ticks: { color: "#8b949e", callback: v => yFmt(v) },
+        }
+      }
+    }
+  });
+}
+
+// ── Chart instances ───────────────────────────────────────────────────────────
+const charts = {};
+
+function initCharts() {
+  charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS);
+  charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff);
+  charts.tx         = makeLineChart("chart-tx",         "Transactions", "#3fb950", v => fmt(v,1));
+  charts.fees       = makeLineChart("chart-fees",       "Fees (nGrin)", "#bc8cff", v => fmt(v));
+}
+
+// Range state
+const rangeState = { hr: "all", diff: "all", tx: "recent", fee: "recent" };
+
+function updateChartData(chart, json, range) {
+  let pts;
+  if (range === "all")    pts = [...(json.daily||[]), ...(json.hourly||[]), ...(json.recent||[])];
+  else if (range === "hourly") pts = json.hourly || [];
+  else                    pts = json.recent || [];
+  chart.data.datasets[0].data = pts.map(([ts, v]) => ({x: ts * 1000, y: v}));
+  chart.update("none");
+}
+
+// ── Data store ────────────────────────────────────────────────────────────────
+let DATA_CACHE = {};
+
+async function loadAll() {
+  const [summary, hashrate, difficulty, transactions, fees, versions, peers] =
+    await Promise.all([
+      fetchJSON(DATA + "summary.json"),
+      fetchJSON(DATA + "hashrate.json"),
+      fetchJSON(DATA + "difficulty.json"),
+      fetchJSON(DATA + "transactions.json"),
+      fetchJSON(DATA + "fees.json"),
+      fetchJSON(DATA + "versions.json"),
+      fetchJSON(DATA + "peers.json"),
+    ]);
+
+  DATA_CACHE = { hashrate, difficulty, transactions, fees, versions };
+
+  // Stats bar
+  $("s-height").textContent     = fmt(summary.tip_height);
+  $("s-hashrate").textContent   = fmtGPS(summary.current_hashrate);
+  $("s-difficulty").textContent = fmtDiff(summary.current_difficulty);
+  $("s-blocktime").textContent  = summary.avg_block_time.toFixed(1) + "s";
+  $("s-peers").textContent      = fmt(peers.count);
+  $("last-updated").textContent = "Updated " + timeAgo(summary.updated);
+
+  // Charts
+  updateChartData(charts.hashrate,   hashrate,     rangeState.hr);
+  updateChartData(charts.difficulty, difficulty,   rangeState.diff);
+  updateChartData(charts.tx,         transactions, rangeState.tx);
+  updateChartData(charts.fees,       fees,         rangeState.fee);
+
+  // Versions donut
+  renderVersions(versions);
+}
+
+// ── Version donut ─────────────────────────────────────────────────────────────
+let versionChart = null;
+
+function renderVersions(data) {
+  const total = data.sampled_from || 0;
+  $("donut-total").textContent    = fmt(total);
+  $("versions-sample").textContent = `Sampled from ${fmt(total)} peer${total !== 1 ? "s" : ""}`;
+
+  const labels = data.versions.map(v => v.label);
+  const counts = data.versions.map(v => v.count);
+  const colors = labels.map((_, i) => VERSION_COLORS[i % VERSION_COLORS.length]);
+
+  if (!versionChart) {
+    versionChart = new Chart($("chart-versions").getContext("2d"), {
+      type: "doughnut",
+      data: { labels, datasets: [{ data: counts, backgroundColor: colors, borderWidth: 0 }] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "72%",
+        animation: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed} nodes` }
+          }
+        }
+      }
+    });
+  } else {
+    versionChart.data.labels                     = labels;
+    versionChart.data.datasets[0].data           = counts;
+    versionChart.data.datasets[0].backgroundColor = colors;
+    versionChart.update("none");
+  }
+
+  // Legend
+  const leg = $("version-legend");
+  leg.innerHTML = data.versions.map((v, i) => {
+    const pct = total > 0 ? ((v.count / total) * 100).toFixed(1) : "0.0";
+    return `
+      <div class="vl-row">
+        <span class="vl-dot" style="background:${colors[i]}"></span>
+        <span class="vl-name">${v.label}</span>
+        <span class="vl-count">${fmt(v.count)}</span>
+        <span class="vl-pct">${pct}%</span>
+      </div>`;
+  }).join("");
+}
+
+// ── Range button wiring ───────────────────────────────────────────────────────
+function wireRangeGroup(groupId, chartKey, cacheKey) {
+  $(groupId).querySelectorAll(".range-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      $(groupId).querySelectorAll(".range-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      rangeState[chartKey] = btn.dataset.r;
+      if (DATA_CACHE[cacheKey]) updateChartData(charts[chartKey === "hr" ? "hashrate" : chartKey === "diff" ? "difficulty" : chartKey === "tx" ? "tx" : "fees"], DATA_CACHE[cacheKey], rangeState[chartKey]);
+    });
+  });
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+async function boot() {
+  initCharts();
+  wireRangeGroup("hr-range",   "hr",   "hashrate");
+  wireRangeGroup("diff-range", "diff", "difficulty");
+  wireRangeGroup("tx-range",   "tx",   "transactions");
+  wireRangeGroup("fee-range",  "fee",  "fees");
+
+  // Fix range button wiring (map keys properly)
+  ["hr-range", "diff-range", "tx-range", "fee-range"].forEach((gid, idx) => {
+    const chartObjs = [charts.hashrate, charts.difficulty, charts.tx, charts.fees];
+    const cacheKeys = ["hashrate", "difficulty", "transactions", "fees"];
+    const stateKeys = ["hr", "diff", "tx", "fee"];
+    $(gid).querySelectorAll(".range-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        $(gid).querySelectorAll(".range-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        rangeState[stateKeys[idx]] = btn.dataset.r;
+        if (DATA_CACHE[cacheKeys[idx]]) {
+          updateChartData(chartObjs[idx], DATA_CACHE[cacheKeys[idx]], btn.dataset.r);
+        }
+      });
+    });
+  });
+
+  try {
+    await loadAll();
+  } catch (e) {
+    console.error("Failed to load data:", e);
+    $("last-updated").textContent = "Error loading data";
+  }
+  $("loading").style.display = "none";
+  setInterval(() => loadAll().catch(console.error), REFRESH_MS);
+}
+
+document.addEventListener("DOMContentLoaded", boot);
+</script>
+</body>
+</html>

@@ -20,11 +20,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_DIR="$SCRIPT_DIR/../conf"
 
 # ─── GitHub self-update ───────────────────────────────────────────────────────
-# Set to "username/repo-name" after publishing to GitHub.
-# If empty, the user is prompted on first run and the value is saved to
-# conf/github_repo.conf for future runs.
-GITHUB_REPO=""
-GITHUB_BRANCH="main"
+# Official public repository. A fork slug saved in conf/github_repo.conf
+# overrides this (useful if you maintain your own fork).
+GITHUB_REPO="noobvie/Grin-Node-Toolkit"
+GITHUB_BRANCH="main"   # fallback default; branch is chosen interactively
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -832,38 +831,55 @@ self_update() {
         pause; return
     fi
 
-    # ── Resolve GitHub repo slug ──────────────────────────────────────────────
+    # ── Resolve GitHub repo ───────────────────────────────────────────────────
+    # conf/github_repo.conf overrides the default (useful for forks)
     local repo="$GITHUB_REPO"
     local repo_conf="$CONF_DIR/github_repo.conf"
-
-    if [[ -z "$repo" && -f "$repo_conf" ]]; then
-        repo=$(tr -d '[:space:]' < "$repo_conf" 2>/dev/null || true)
+    if [[ -f "$repo_conf" ]]; then
+        local saved_repo
+        saved_repo=$(tr -d '[:space:]' < "$repo_conf" 2>/dev/null || true)
+        [[ -n "$saved_repo" ]] && repo="$saved_repo"
     fi
 
-    if [[ -z "$repo" ]]; then
-        echo -e "  ${YELLOW}GitHub repository not configured.${RESET}"
-        echo -e "  ${DIM}Example: noobvie/grin-node-toolkit${RESET}"
-        echo ""
-        echo -ne "Enter GitHub repo (username/repo-name): "
-        read -r repo
-        repo=$(echo "$repo" | tr -d '[:space:]')
-        if [[ -z "$repo" ]]; then
-            warn "No repository entered. Update cancelled."
-            pause; return
-        fi
-        mkdir -p "$CONF_DIR"
-        echo "$repo" > "$repo_conf"
-        success "Repository saved to $repo_conf"
-        echo ""
-    fi
-
-    local tarball_url="https://github.com/$repo/archive/refs/heads/$GITHUB_BRANCH.tar.gz"
-    info "Repository : https://github.com/$repo"
-    info "Branch     : $GITHUB_BRANCH"
-    info "Download   : $tarball_url"
+    echo -e "  ${BOLD}Repository${RESET} : https://github.com/$repo"
+    echo -e "  ${DIM}(to use a fork, save a slug to conf/github_repo.conf)${RESET}"
     echo ""
 
-    echo -ne "${YELLOW}Download and install latest version? [y/N]: ${RESET}"
+    # ── Branch selection ──────────────────────────────────────────────────────
+    echo -e "${BOLD}  Select branch to pull:${RESET}"
+    echo ""
+    echo -e "  ${GREEN}1${RESET})  main          ${DIM}— stable releases${RESET}"
+    echo -e "  ${CYAN}2${RESET})  addons        ${DIM}— addon features in development${RESET}"
+    echo -e "  ${CYAN}3${RESET})  corefeatures  ${DIM}— core features in development${RESET}"
+    echo -e "  ${YELLOW}4${RESET})  Custom branch ${DIM}— enter branch name manually${RESET}"
+    echo ""
+    echo -ne "${BOLD}  Choose [1-4, default 1]: ${RESET}"
+    read -r branch_choice
+
+    local branch
+    case "$branch_choice" in
+        2) branch="addons" ;;
+        3) branch="corefeatures" ;;
+        4)
+            echo -ne "  Branch name: "
+            read -r branch
+            branch=$(echo "$branch" | tr -d '[:space:]')
+            if [[ -z "$branch" ]]; then
+                warn "No branch entered. Defaulting to 'main'."
+                branch="main"
+            fi
+            ;;
+        *) branch="main" ;;
+    esac
+
+    local tarball_url="https://github.com/$repo/archive/refs/heads/$branch.tar.gz"
+    echo ""
+    info "Branch   : $branch"
+    info "Download : $tarball_url"
+    echo ""
+
+    # ── Confirm ───────────────────────────────────────────────────────────────
+    echo -ne "${YELLOW}Pull and install from branch '${branch}'? [y/N]: ${RESET}"
     read -r confirm
     if [[ "${confirm,,}" != "y" ]]; then
         info "Update cancelled."
@@ -875,16 +891,16 @@ self_update() {
     tmp_dir=$(mktemp -d /tmp/grin-toolkit-update-XXXXXX)
 
     echo ""
-    info "Downloading..."
-    if ! curl -fsSL "$tarball_url" -o "$tmp_dir/update.tar.gz" 2>&1; then
-        error "Download failed. Check your internet connection and repository name."
+    info "Downloading from GitHub..."
+    if ! curl -fsSL "$tarball_url" -o "$tmp_dir/update.tar.gz"; then
+        error "Download failed. Check your internet connection or branch name."
         rm -rf "$tmp_dir"
         pause; return
     fi
 
     # ── Extract ───────────────────────────────────────────────────────────────
     info "Extracting..."
-    if ! tar -xz -C "$tmp_dir" -f "$tmp_dir/update.tar.gz" 2>&1; then
+    if ! tar -xz -C "$tmp_dir" -f "$tmp_dir/update.tar.gz"; then
         error "Extraction failed. The downloaded file may be invalid."
         rm -rf "$tmp_dir"
         pause; return
@@ -907,8 +923,9 @@ self_update() {
 
     rm -rf "$tmp_dir"
     echo ""
-    success "Update complete. Restart the toolkit to apply changes."
-    log "[8.8] Downloaded and installed update from $tarball_url"
+    success "Update complete — branch '${branch}' installed."
+    success "Restart the toolkit to apply changes."
+    log "[8.8] Installed from $tarball_url"
 
     pause
 }

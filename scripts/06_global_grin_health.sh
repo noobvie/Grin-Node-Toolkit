@@ -18,10 +18,9 @@
 #        The explorer can also use a remote archival node instead (B→2)
 #      ● Node must be running and listening on port 3413 (mainnet)
 #
-#   2. Nginx  (Script 02 → Option 1)
-#      ● Run script 02 first to install nginx + certbot on this machine
-#      ● You do NOT need to create a site in script 02 — script 06 creates
-#        its own nginx configs independently (option A→5 and B→5)
+#   2. Nginx + Certbot
+#      ● Use option N) in this script's main menu to install nginx + certbot
+#      ● This script creates its own nginx site configs (option A→5 and B→5)
 #
 #   3. DNS records  (external — must be done BEFORE running nginx setup)
 #      ● Create an A-record: stats.yourdomain.com    → this server's public IP
@@ -30,7 +29,7 @@
 #
 # RECOMMENDED SETUP ORDER (first time):
 #   [Script 01]  Install + sync a Grin mainnet node (pruned is fine for stats)
-#   [Script 02]  Option 1 — installs nginx + certbot on the machine
+#   [Script 06]  N) Install Nginx + Certbot
 #   [DNS panel]  Point your subdomains to this server's IP address
 #   [Script 06]  A: 1 Install → 2 Import History → 3 Start Updates → 5 Nginx
 #                B: 1 Install & Build → 2 Configure → 3 Start → 5 Nginx
@@ -87,6 +86,53 @@ pause()   { echo ""; echo -e "${DIM}Press Enter to continue...${RESET}"; read -r
 # ─── Privilege check ──────────────────────────────────────────────────────────
 require_root() {
     [[ $EUID -eq 0 ]] || die "This action requires root / sudo."
+}
+
+# ─── Install nginx + certbot ──────────────────────────────────────────────────
+install_nginx_certbot() {
+    require_root
+    clear
+    echo -e "\n${BOLD}${CYAN}── Install Nginx + Certbot ──${RESET}\n"
+
+    local nginx_ok=0 certbot_ok=0
+    command -v nginx   &>/dev/null && nginx_ok=1
+    command -v certbot &>/dev/null && certbot_ok=1
+
+    if [[ $nginx_ok -eq 1 ]]; then
+        success "Nginx already installed:   $(nginx -v 2>&1)"
+    fi
+    if [[ $certbot_ok -eq 1 ]]; then
+        success "Certbot already installed: $(certbot --version 2>&1)"
+    fi
+    if [[ $nginx_ok -eq 1 && $certbot_ok -eq 1 ]]; then
+        pause; return
+    fi
+
+    echo -ne "${BOLD}Install nginx + certbot now? [Y/n/0]: ${RESET}"
+    read -r confirm
+    [[ "$confirm" == "0" ]] && return
+    [[ "${confirm,,}" == "n" ]] && return
+
+    info "Updating package lists..."
+    apt-get update -qq
+
+    if [[ $nginx_ok -eq 0 ]]; then
+        info "Installing nginx..."
+        apt-get install -y nginx -qq
+        systemctl enable nginx --quiet
+        systemctl start  nginx  || true
+        success "Nginx installed."
+    fi
+
+    if [[ $certbot_ok -eq 0 ]]; then
+        info "Installing certbot + nginx plugin..."
+        apt-get install -y certbot python3-certbot-nginx -qq
+        success "Certbot installed."
+    fi
+
+    success "Nginx + Certbot are ready."
+    log "nginx + certbot installed"
+    pause
 }
 
 # ─── Detect running Grin node ─────────────────────────────────────────────────
@@ -696,6 +742,44 @@ status_explorer() {
 }
 
 ################################################################################
+# DNS CHECK (shared)
+################################################################################
+
+# ─── DNS A-record confirmation ────────────────────────────────────────────────
+# $1 = "stats" | "explorer"
+check_dns_record() {
+    local service="${1:-stats}"
+    local example_sub="stats"
+    [[ "$service" == "explorer" ]] && example_sub="explorer"
+    clear
+    echo -e "\n${BOLD}${CYAN}── Check DNS A-Record — ${service^} ──${RESET}\n"
+    echo -e "  This step is ${BOLD}required${RESET} before running Setup Nginx (step 5)."
+    echo -e "  Certbot will fail to issue an SSL certificate if your subdomain"
+    echo -e "  does not already resolve to this server's IP address."
+    echo ""
+    echo -e "  ${BOLD}This server's IP addresses:${RESET}"
+    ip -4 address show scope global 2>/dev/null \
+        | grep -oP '(?<=inet )\d+\.\d+\.\d+\.\d+' \
+        | while read -r _ip; do echo -e "    ${CYAN}${_ip}${RESET}"; done
+    echo ""
+    echo -e "  ${DIM}In your DNS provider's dashboard, create an A-record:${RESET}"
+    echo -e "  ${DIM}  ${example_sub}.yourdomain.com  →  <one of the IPs above>${RESET}"
+    echo -e "  ${DIM}DNS changes can take up to 24 h to propagate (usually < 5 min).${RESET}"
+    echo ""
+    echo -ne "${BOLD}Have you set (or confirmed) your DNS A-record? [y/N/0]: ${RESET}"
+    read -r _dns_confirm
+    [[ "$_dns_confirm" == "0" ]] && return
+    echo ""
+    if [[ "${_dns_confirm,,}" == "y" ]]; then
+        success "DNS confirmed. Proceed to Setup Nginx (step 5)."
+    else
+        warn "Please set your DNS A-record before running Setup Nginx (step 5)."
+        warn "Certbot SSL certificate issuance will fail without a valid DNS entry."
+    fi
+    pause
+}
+
+################################################################################
 # MENUS
 ################################################################################
 
@@ -718,14 +802,15 @@ show_menu_a() {
     echo -e "  ${GREEN}1${RESET})   Install          ${DIM}collector + Chart.js + Globe.GL${RESET}  [$inst]"
     echo -e "  ${GREEN}2${RESET})   Import History   ${DIM}backfill all historical data${RESET}"
     echo -e "  ${GREEN}3${RESET})   Start Updates    ${DIM}cron every 5 min${RESET}  [$cron]"
-    echo -e "  ${GREEN}4${RESET})   Stop Updates     ${DIM}disable cron${RESET}"
+    echo -e "  ${GREEN}4${RESET})   Check DNS        ${DIM}confirm A-record before nginx setup${RESET}"
     echo -e "  ${GREEN}5${RESET})   Setup Nginx      ${DIM}HTTPS subdomain${RESET}  [$ngnx]"
     echo -e "  ${GREEN}6${RESET})   Status"
+    echo -e "  ${YELLOW}Z${RESET})   Stop Updates     ${DIM}disable cron${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-6]: ${RESET}"
+    echo -ne "${BOLD}Select [0-6, Z]: ${RESET}"
 }
 
 show_menu_b() {
@@ -747,14 +832,15 @@ show_menu_b() {
     echo -e "  ${GREEN}1${RESET})   Install & Build  ${DIM}clone + cargo build --release${RESET}  [$built]"
     echo -e "  ${GREEN}2${RESET})   Configure        ${DIM}patch Explorer.toml${RESET}"
     echo -e "  ${GREEN}3${RESET})   Start            ${DIM}launch in tmux${RESET}  [$running]"
-    echo -e "  ${GREEN}4${RESET})   Stop             ${DIM}kill tmux session${RESET}"
+    echo -e "  ${GREEN}4${RESET})   Check DNS        ${DIM}confirm A-record before nginx setup${RESET}"
     echo -e "  ${GREEN}5${RESET})   Setup Nginx      ${DIM}HTTPS subdomain → proxy :8000${RESET}  [$ngnx]"
     echo -e "  ${GREEN}6${RESET})   Status"
+    echo -e "  ${YELLOW}Z${RESET})   Stop             ${DIM}kill tmux session${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-6]: ${RESET}"
+    echo -ne "${BOLD}Select [0-6, Z]: ${RESET}"
 }
 
 show_main_menu() {
@@ -763,10 +849,21 @@ show_main_menu() {
     echo -e "${BOLD}${CYAN}  6) Global Grin Health${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
+    local _node_st _nginx_st
+    ss -tlnp 2>/dev/null | grep -q ":3413 " \
+        && _node_st="${GREEN}[OK]${RESET} " \
+        || _node_st="${RED}[NOK]${RESET}"
+    command -v nginx &>/dev/null \
+        && _nginx_st="${GREEN}[OK]${RESET} " \
+        || _nginx_st="${RED}[NOK]${RESET}"
     echo -e "  ${BOLD}Requirements:${RESET}"
-    echo -e "  ${GREEN}✓${RESET}  Grin ${BOLD}mainnet${RESET} node running        ${DIM}(Script 01 — pruned is fine for A)${RESET}"
-    echo -e "  ${GREEN}✓${RESET}  Nginx installed                  ${DIM}(Script 02 → Option 1)${RESET}"
-    echo -e "  ${GREEN}✓${RESET}  DNS A-records set for subdomains ${DIM}(before running A→5 or B→5)${RESET}"
+    echo -e "  ${_node_st}  Grin mainnet node running        ${DIM}(pruned is fine for A)${RESET}"
+    echo -e "  ${_nginx_st}  Nginx installed                  ${DIM}(use option N to install)${RESET}"
+    echo -e "  ${YELLOW}[--]${RESET}  DNS A-records — confirm via A→4 or B→4 before nginx setup"
+    echo ""
+    echo -e "${DIM}  ─────────────────────────────────────────────${RESET}"
+    echo ""
+    echo -e "  ${GREEN}N${RESET})   Install Nginx + Certbot  ${DIM}install nginx + certbot on this machine${RESET}"
     echo ""
     echo -e "${DIM}  ─────────────────────────────────────────────${RESET}"
     echo ""
@@ -779,21 +876,22 @@ show_main_menu() {
     echo -e "  ${DIM}0) Back to main menu${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [A/B/0]: ${RESET}"
+    echo -ne "${BOLD}Select [N/A/B/0]: ${RESET}"
 }
 
 run_menu_a() {
     while true; do
         show_menu_a
         read -r choice
-        case "$choice" in
-            1) install_stats      ;;
-            2) import_history     ;;
-            3) start_updates      ;;
-            4) stop_updates       ;;
-            5) setup_nginx_stats  ;;
-            6) status_stats       ;;
-            0) break              ;;
+        case "${choice^^}" in
+            1) install_stats              ;;
+            2) import_history             ;;
+            3) start_updates              ;;
+            4) check_dns_record "stats"   ;;
+            5) setup_nginx_stats          ;;
+            6) status_stats               ;;
+            Z) stop_updates               ;;
+            0) break                      ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done
@@ -803,14 +901,15 @@ run_menu_b() {
     while true; do
         show_menu_b
         read -r choice
-        case "$choice" in
-            1) install_explorer        ;;
-            2) configure_explorer      ;;
-            3) start_explorer          ;;
-            4) stop_explorer           ;;
-            5) setup_nginx_explorer    ;;
-            6) status_explorer         ;;
-            0) break                   ;;
+        case "${choice^^}" in
+            1) install_explorer                ;;
+            2) configure_explorer              ;;
+            3) start_explorer                  ;;
+            4) check_dns_record "explorer"     ;;
+            5) setup_nginx_explorer            ;;
+            6) status_explorer                 ;;
+            Z) stop_explorer                   ;;
+            0) break                           ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done
@@ -821,9 +920,10 @@ run_interactive() {
         show_main_menu
         read -r choice
         case "${choice^^}" in
-            A) run_menu_a ;;
-            B) run_menu_b ;;
-            0) break      ;;
+            N) install_nginx_certbot ;;
+            A) run_menu_a            ;;
+            B) run_menu_b            ;;
+            0) break                 ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done

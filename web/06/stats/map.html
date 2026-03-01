@@ -523,9 +523,8 @@ function initGlobe(peers) {
     .onPointHover(handleHover)
     .onPointClick(handleClick);
 
-  globe.controls().autoRotate      = true;
-  globe.controls().autoRotateSpeed = 0.4;
-  globe.controls().enableZoom      = true;
+  globe.controls().autoRotate = false;
+  globe.controls().enableZoom = true;
 
   const resize = () => {
     const c = $("globe-container");

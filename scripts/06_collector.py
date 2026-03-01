@@ -588,9 +588,17 @@ def _update_peers():
                         "country_code": g.get("countryCode", ""),
                         "city":         g.get("city", ""),
                     }
-            time.sleep(1.5)  # stay under ip-api.com free tier (45 req/min)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                print(f"[WARN] Geo rate-limited (429) — waiting 65s before next batch...",
+                      file=sys.stderr)
+                time.sleep(65)   # wait out the ip-api.com rate-limit window
+            else:
+                print(f"[WARN] Geo batch failed: {exc}", file=sys.stderr)
         except Exception as exc:
             print(f"[WARN] Geo batch failed: {exc}", file=sys.stderr)
+        finally:
+            time.sleep(1.5)  # always pause between batches (free tier: 45 req/min)
 
     # ── Build enriched peer list ──────────────────────────────────────────────
     enriched = []
@@ -780,7 +788,8 @@ def export_all_json():
         "SELECT MAX(sampled_at) FROM peer_snapshots"
     ).fetchone()[0]
 
-    versions = []
+    versions    = []
+    total_peers = 0
     if latest_snap_ts:
         rows = conn.execute(
             "SELECT user_agent, count FROM peer_snapshots WHERE sampled_at=? ORDER BY count DESC",
@@ -788,17 +797,18 @@ def export_all_json():
         ).fetchall()
         total_peers = sum(r[1] for r in rows)
         # Consolidate minor versions: keep top 5, rest → "Other"
-        top = rows[:5]
+        top   = rows[:5]
         other = sum(r[1] for r in rows[5:])
         versions = [{"label": r[0], "count": r[1]} for r in top]
         if other > 0:
             versions.append({"label": "Other", "count": other})
 
-        _write_json("versions.json", {
-            "updated":      ts_now,
-            "sampled_from": total_peers if latest_snap_ts else 0,
-            "versions":     versions,
-        })
+    # Always write versions.json so the page can load even with no snapshot data
+    _write_json("versions.json", {
+        "updated":      ts_now,
+        "sampled_from": total_peers,
+        "versions":     versions,
+    })
 
     # ── summary (for the header stats bar) ───────────────────────────────────
     last_hr   = conn.execute("SELECT hashrate FROM blocks ORDER BY height DESC LIMIT 1").fetchone()

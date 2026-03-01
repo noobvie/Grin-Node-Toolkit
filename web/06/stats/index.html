@@ -394,7 +394,12 @@ const timeAgo = ts => {
   if (s < 3600) return Math.floor(s/60) + "m ago";
   return Math.floor(s/3600) + "h ago";
 };
-const fetchJSON = url => fetch(url + "?t=" + Date.now()).then(r => r.json());
+const fetchJSON = async url => {
+  const r = await fetch(url + "?t=" + Date.now());
+  if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+  return r.json();
+};
+const tryFetchJSON = async url => { try { return await fetchJSON(url); } catch { return null; } };
 
 // ── Chart defaults ────────────────────────────────────────────────────────────
 Chart.defaults.color = "#8b949e";
@@ -478,33 +483,41 @@ let DATA_CACHE = {};
 async function loadAll() {
   const [summary, hashrate, difficulty, transactions, fees, versions, peers] =
     await Promise.all([
-      fetchJSON(DATA + "summary.json"),
-      fetchJSON(DATA + "hashrate.json"),
-      fetchJSON(DATA + "difficulty.json"),
-      fetchJSON(DATA + "transactions.json"),
-      fetchJSON(DATA + "fees.json"),
-      fetchJSON(DATA + "versions.json"),
-      fetchJSON(DATA + "peers.json"),
+      tryFetchJSON(DATA + "summary.json"),
+      tryFetchJSON(DATA + "hashrate.json"),
+      tryFetchJSON(DATA + "difficulty.json"),
+      tryFetchJSON(DATA + "transactions.json"),
+      tryFetchJSON(DATA + "fees.json"),
+      tryFetchJSON(DATA + "versions.json"),
+      tryFetchJSON(DATA + "peers.json"),
     ]);
+
+  const anyData = summary || hashrate || difficulty;
+  if (!anyData) {
+    $("last-updated").textContent = "Data not available — run Import History (step 2) first";
+    return;
+  }
 
   DATA_CACHE = { hashrate, difficulty, transactions, fees, versions };
 
   // Stats bar
-  $("s-height").textContent     = fmt(summary.tip_height);
-  $("s-hashrate").textContent   = fmtGPS(summary.current_hashrate);
-  $("s-difficulty").textContent = fmtDiff(summary.current_difficulty);
-  $("s-blocktime").textContent  = summary.avg_block_time.toFixed(1) + "s";
-  $("s-peers").textContent      = fmt(peers.count);
-  $("last-updated").textContent = "Updated " + timeAgo(summary.updated);
+  if (summary) {
+    $("s-height").textContent     = fmt(summary.tip_height);
+    $("s-hashrate").textContent   = fmtGPS(summary.current_hashrate);
+    $("s-difficulty").textContent = fmtDiff(summary.current_difficulty);
+    $("s-blocktime").textContent  = summary.avg_block_time.toFixed(1) + "s";
+    $("last-updated").textContent = "Updated " + timeAgo(summary.updated);
+  }
+  $("s-peers").textContent = peers ? fmt(peers.count) : "—";
 
   // Charts
-  updateChartData(charts.hashrate,   hashrate,     rangeState.hr);
-  updateChartData(charts.difficulty, difficulty,   rangeState.diff);
-  updateChartData(charts.tx,         transactions, rangeState.tx);
-  updateChartData(charts.fees,       fees,         rangeState.fee);
+  if (hashrate)     updateChartData(charts.hashrate,   hashrate,     rangeState.hr);
+  if (difficulty)   updateChartData(charts.difficulty, difficulty,   rangeState.diff);
+  if (transactions) updateChartData(charts.tx,         transactions, rangeState.tx);
+  if (fees)         updateChartData(charts.fees,       fees,         rangeState.fee);
 
   // Versions donut
-  renderVersions(versions);
+  if (versions) renderVersions(versions);
 }
 
 // ── Version donut ─────────────────────────────────────────────────────────────
@@ -598,9 +611,10 @@ async function boot() {
     await loadAll();
   } catch (e) {
     console.error("Failed to load data:", e);
-    $("last-updated").textContent = "Error loading data";
+    $("last-updated").textContent = "Error loading data — check browser console";
+  } finally {
+    $("loading").style.display = "none";
   }
-  $("loading").style.display = "none";
   setInterval(() => loadAll().catch(console.error), REFRESH_MS);
 }
 

@@ -1214,10 +1214,11 @@ get_cron_expression() {
             echo -ne "Enter cron expression (or 0 to cancel): "
             read -r CRON_EXPR
             [[ "$CRON_EXPR" == "0" ]] && return 1
-            [ -z "$CRON_EXPR" ] && { sched_error "Empty expression."; return 1; }
+            if [[ -z "$CRON_EXPR" ]]; then sched_error "Empty expression."; return 1; fi
             ;;
         *) CRON_EXPR="0 0 * * 1,4"  ;;
     esac
+    return 0
 }
 
 # Add or replace the nginx cron entry
@@ -1267,7 +1268,7 @@ add_nginx_schedule() {
 remove_nginx_schedule() {
     echo -e "\n${BOLD}${CYAN}── Disable Nginx Jobs ──${RESET}\n"
     show_current_schedule
-    echo -ne "${YELLOW}Remove all Grin nginx cron jobs? [y/N/0]: ${RESET}"
+    echo -ne "${YELLOW}Remove Grin nginx cron jobs? Cron of reboot won't be deleted. [y/N/0]: ${RESET}"
     read -r confirm
     [[ "$confirm" == "0" ]] && return
     if [[ "${confirm,,}" == "y" ]]; then

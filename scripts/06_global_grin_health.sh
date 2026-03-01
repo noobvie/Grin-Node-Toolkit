@@ -268,15 +268,19 @@ import_history() {
     [[ "$confirm" == "0" ]] && return
     [[ "${confirm,,}" == "n" ]] && return
 
-    info "Starting historical import..."
-    env "$(cat "$DATA_DIR/config.env" | tr '\n' ' ')" \
-        python3 "$COLLECTOR_BIN" --init-history
-    local rc=$?
+    info "Starting historical import (this may take 2-5 minutes)..."
+    echo -e "  ${DIM}Progress will appear below — do not close this window.${RESET}"
+    echo ""
+    local rc=0
+    # shellcheck disable=SC2046
+    env $(cat "$DATA_DIR/config.env" | tr '\n' ' ') \
+        python3 "$COLLECTOR_BIN" --init-history || rc=$?
+    echo ""
     if [[ $rc -eq 0 ]]; then
         success "Historical import complete."
         log "Historical import completed successfully."
     else
-        error "Import failed (exit $rc). Check node is running."
+        error "Import failed (exit $rc). Check node is running and config.env is valid."
         log "Historical import failed: exit $rc"
     fi
     pause
@@ -331,30 +335,25 @@ setup_nginx_stats() {
     clear
     echo -e "\n${BOLD}${CYAN}── Setup Nginx — Network Stats ──${RESET}\n"
 
-    command -v nginx &>/dev/null || { die "nginx not installed. Run option 2 (Manage Nginx) first."; return; }
+    command -v nginx &>/dev/null || { die "nginx not installed. Run option N first."; return; }
     command -v certbot &>/dev/null || apt-get install -y certbot python3-certbot-nginx -qq
 
     echo -ne "${BOLD}Stats subdomain (e.g. stats.yourdomain.com): ${RESET}"
     read -r stats_domain
     [[ -z "$stats_domain" || "$stats_domain" == "0" ]] && return
 
+    echo -ne "${BOLD}Email address for SSL certificate (Let's Encrypt): ${RESET}"
+    read -r ssl_email
+    if [[ -z "$ssl_email" ]]; then
+        warn "Email is required for Let's Encrypt SSL certificate."; pause; return
+    fi
+
+    # Write HTTP-only config first — certbot needs nginx to serve the ACME challenge
     info "Creating nginx config for ${stats_domain}..."
     cat > "$NGINX_STATS_CONF" <<NGINX
 server {
     listen 80;
     server_name ${stats_domain};
-    return 301 https://\$host\$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    server_name ${stats_domain};
-
-    ssl_certificate     /etc/letsencrypt/live/${stats_domain}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${stats_domain}/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
-    add_header Strict-Transport-Security "max-age=31536000" always;
 
     root  ${WWW_DIR};
     index index.html;
@@ -376,11 +375,13 @@ NGINX
 
     ln -sf "$NGINX_STATS_CONF" "/etc/nginx/sites-enabled/grin-stats"
     nginx -t || { die "nginx config test failed. Check $NGINX_STATS_CONF."; return; }
+    nginx -s reload
 
     info "Obtaining SSL certificate for ${stats_domain}..."
+    info "Certbot will add HTTPS and redirect to the nginx config automatically."
     certbot --nginx -d "$stats_domain" --non-interactive --agree-tos \
-        --email "admin@${stats_domain}" --redirect \
-        || warn "Certbot failed — SSL cert may need manual setup."
+        --email "$ssl_email" --redirect \
+        || { warn "Certbot failed — verify DNS A-record resolves to this server (step 4)."; pause; return; }
 
     nginx -s reload
     success "Stats site live: https://${stats_domain}"
@@ -635,30 +636,25 @@ setup_nginx_explorer() {
     clear
     echo -e "\n${BOLD}${CYAN}── Setup Nginx — Grin Explorer ──${RESET}\n"
 
-    command -v nginx &>/dev/null || { die "nginx not installed. Run option 2 first."; return; }
+    command -v nginx &>/dev/null || { die "nginx not installed. Run option N first."; return; }
     command -v certbot &>/dev/null || apt-get install -y certbot python3-certbot-nginx -qq
 
     echo -ne "${BOLD}Explorer subdomain (e.g. explorer.yourdomain.com): ${RESET}"
     read -r expl_domain
     [[ -z "$expl_domain" || "$expl_domain" == "0" ]] && return
 
+    echo -ne "${BOLD}Email address for SSL certificate (Let's Encrypt): ${RESET}"
+    read -r ssl_email
+    if [[ -z "$ssl_email" ]]; then
+        warn "Email is required for Let's Encrypt SSL certificate."; pause; return
+    fi
+
+    # Write HTTP-only config first — certbot needs nginx to serve the ACME challenge
     info "Creating nginx config for ${expl_domain}..."
     cat > "$NGINX_EXPLORER_CONF" <<NGINX
 server {
     listen 80;
     server_name ${expl_domain};
-    return 301 https://\$host\$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    server_name ${expl_domain};
-
-    ssl_certificate     /etc/letsencrypt/live/${expl_domain}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${expl_domain}/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
-    add_header Strict-Transport-Security "max-age=31536000" always;
 
     location / {
         proxy_pass         http://127.0.0.1:8000;
@@ -677,11 +673,13 @@ NGINX
 
     ln -sf "$NGINX_EXPLORER_CONF" "/etc/nginx/sites-enabled/grin-explorer"
     nginx -t || { die "nginx config test failed. Check $NGINX_EXPLORER_CONF."; return; }
+    nginx -s reload
 
     info "Obtaining SSL certificate for ${expl_domain}..."
+    info "Certbot will add HTTPS and redirect to the nginx config automatically."
     certbot --nginx -d "$expl_domain" --non-interactive --agree-tos \
-        --email "admin@${expl_domain}" --redirect \
-        || warn "Certbot failed — SSL cert may need manual setup."
+        --email "$ssl_email" --redirect \
+        || { warn "Certbot failed — verify DNS A-record resolves to this server (step 4)."; pause; return; }
 
     nginx -s reload
     success "Explorer live: https://${expl_domain}"
@@ -786,7 +784,7 @@ check_dns_record() {
 show_menu_a() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  A) Network Stats + Peer Map${RESET}"
+    echo -e "${BOLD}${CYAN}  6A) Network Stats + Peer Map${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     echo -e "  ${DIM}Pages served:  /          → hashrate, difficulty, tx, fees, versions${RESET}"
@@ -808,6 +806,7 @@ show_menu_a() {
     echo -e "  ${YELLOW}Z${RESET})   Stop Updates     ${DIM}disable cron${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back${RESET}"
+    echo -e "  ${DIM}[Enter] Refresh menu${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -ne "${BOLD}Select [0-6, Z]: ${RESET}"
@@ -838,6 +837,7 @@ show_menu_b() {
     echo -e "  ${YELLOW}Z${RESET})   Stop             ${DIM}kill tmux session${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back${RESET}"
+    echo -e "  ${DIM}[Enter] Refresh menu${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -ne "${BOLD}Select [0-6, Z]: ${RESET}"
@@ -884,15 +884,16 @@ run_menu_a() {
         show_menu_a
         read -r choice
         case "${choice^^}" in
-            1) install_stats              ;;
-            2) import_history             ;;
-            3) start_updates              ;;
-            4) check_dns_record "stats"   ;;
-            5) setup_nginx_stats          ;;
-            6) status_stats               ;;
-            Z) stop_updates               ;;
-            0) break                      ;;
-            *) warn "Invalid option."; sleep 1 ;;
+            1) install_stats              || true ;;
+            2) import_history             || true ;;
+            3) start_updates              || true ;;
+            4) check_dns_record "stats"   || true ;;
+            5) setup_nginx_stats          || true ;;
+            6) status_stats               || true ;;
+            Z) stop_updates               || true ;;
+            0) break                               ;;
+            "") ;;  # Enter = refresh menu
+            *) warn "Invalid option."; sleep 1    ;;
         esac
     done
 }
@@ -902,15 +903,16 @@ run_menu_b() {
         show_menu_b
         read -r choice
         case "${choice^^}" in
-            1) install_explorer                ;;
-            2) configure_explorer              ;;
-            3) start_explorer                  ;;
-            4) check_dns_record "explorer"     ;;
-            5) setup_nginx_explorer            ;;
-            6) status_explorer                 ;;
-            Z) stop_explorer                   ;;
-            0) break                           ;;
-            *) warn "Invalid option."; sleep 1 ;;
+            1) install_explorer                || true ;;
+            2) configure_explorer              || true ;;
+            3) start_explorer                  || true ;;
+            4) check_dns_record "explorer"     || true ;;
+            5) setup_nginx_explorer            || true ;;
+            6) status_explorer                 || true ;;
+            Z) stop_explorer                   || true ;;
+            0) break                                    ;;
+            "") ;;  # Enter = refresh menu
+            *) warn "Invalid option."; sleep 1         ;;
         esac
     done
 }

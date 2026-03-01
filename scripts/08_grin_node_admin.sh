@@ -849,7 +849,7 @@ self_update() {
     echo -e "${BOLD}  Select branch to pull:${RESET}"
     echo ""
     echo -e "  ${GREEN}1${RESET})  main          ${DIM}— stable releases${RESET}"
-    echo -e "  ${CYAN}2${RESET})  addons        ${DIM}— addon features in development${RESET}"
+    echo -e "  ${CYAN}2${RESET})  add-ons       ${DIM}— addon features in development${RESET}"
     echo -e "  ${CYAN}3${RESET})  corefeatures  ${DIM}— core features in development${RESET}"
     echo -e "  ${YELLOW}4${RESET})  Custom branch ${DIM}— enter branch name manually${RESET}"
     echo ""
@@ -858,7 +858,7 @@ self_update() {
 
     local branch
     case "$branch_choice" in
-        2) branch="addons" ;;
+        2) branch="add-ons" ;;
         3) branch="corefeatures" ;;
         4)
             echo -ne "  Branch name: "

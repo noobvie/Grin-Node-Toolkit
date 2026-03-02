@@ -236,10 +236,19 @@ install_stats() {
     # Write collector config
     detect_node
     info "Writing collector config..."
+    # Always use the standard Grin config-dir paths for API secrets.
+    # detect_node() sets API_SECRET_PATH based on whichever node was detected,
+    # but we need BOTH secrets explicitly so the collector can authenticate
+    # against both the mainnet and testnet owner APIs independently.
+    local mainnet_secret="$HOME/.grin/main/.api_secret"
     local testnet_secret="$HOME/.grin/test/.api_secret"
+    [[ -f "$mainnet_secret" ]] \
+        || warn "Mainnet secret not found: $mainnet_secret — owner API calls may fail."
+    [[ -f "$testnet_secret" ]] \
+        || warn "Testnet secret not found: $testnet_secret — testnet peers will be skipped."
     cat > "$DATA_DIR/config.env" <<EOF
 GRIN_NODE_URL=${NODE_URL}
-GRIN_API_SECRET_PATH=${API_SECRET_PATH}
+GRIN_API_SECRET_PATH=${mainnet_secret}
 GRIN_MAINNET_OWNER_URL=http://127.0.0.1:3413/v2/owner
 GRIN_TESTNET_OWNER_URL=http://127.0.0.1:13413/v2/owner
 GRIN_TESTNET_SECRET_PATH=${testnet_secret}
@@ -247,6 +256,8 @@ GRIN_WWW_DATA=${WWW_DIR}/data
 GRIN_DB_PATH=${DB_PATH}
 EOF
     chmod 600 "$DATA_DIR/config.env"
+    info "Config written to $DATA_DIR/config.env"
+    info "If your secret files are in a different location, edit that file manually."
 
     # Initialise empty DB (schema only)
     info "Initialising database..."

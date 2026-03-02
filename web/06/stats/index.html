@@ -401,11 +401,6 @@ const fetchJSON = async url => {
 };
 const tryFetchJSON = async url => { try { return await fetchJSON(url); } catch { return null; } };
 
-// ── Chart defaults ────────────────────────────────────────────────────────────
-Chart.defaults.color = "#8b949e";
-Chart.defaults.borderColor = "#30363d";
-Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-
 function makeLineChart(id, label, color, yFmt) {
   const ctx = $(id).getContext("2d");
   return new Chart(ctx, {
@@ -459,6 +454,9 @@ function makeLineChart(id, label, color, yFmt) {
 const charts = {};
 
 function initCharts() {
+  Chart.defaults.color = "#8b949e";
+  Chart.defaults.borderColor = "#30363d";
+  Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
   charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS);
   charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff);
   charts.tx         = makeLineChart("chart-tx",         "Transactions", "#3fb950", v => fmt(v,1));
@@ -510,11 +508,11 @@ async function loadAll() {
   }
   $("s-peers").textContent = peers ? fmt(peers.count) : "—";
 
-  // Charts
-  if (hashrate)     updateChartData(charts.hashrate,   hashrate,     rangeState.hr);
-  if (difficulty)   updateChartData(charts.difficulty, difficulty,   rangeState.diff);
-  if (transactions) updateChartData(charts.tx,         transactions, rangeState.tx);
-  if (fees)         updateChartData(charts.fees,       fees,         rangeState.fee);
+  // Charts (skipped if chart.min.js didn't load)
+  if (charts.hashrate   && hashrate)     updateChartData(charts.hashrate,   hashrate,     rangeState.hr);
+  if (charts.difficulty && difficulty)   updateChartData(charts.difficulty, difficulty,   rangeState.diff);
+  if (charts.tx         && transactions) updateChartData(charts.tx,         transactions, rangeState.tx);
+  if (charts.fees       && fees)         updateChartData(charts.fees,       fees,         rangeState.fee);
 
   // Versions donut
   if (versions) renderVersions(versions);
@@ -532,6 +530,7 @@ function renderVersions(data) {
   const counts = data.versions.map(v => v.count);
   const colors = labels.map((_, i) => VERSION_COLORS[i % VERSION_COLORS.length]);
 
+  if (typeof Chart === "undefined") return;  // chart.min.js not loaded
   if (!versionChart) {
     versionChart = new Chart($("chart-versions").getContext("2d"), {
       type: "doughnut",
@@ -584,7 +583,9 @@ function wireRangeGroup(groupId, chartKey, cacheKey) {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function boot() {
-  initCharts();
+  const chartsOk = typeof Chart !== "undefined";
+  if (chartsOk) initCharts();
+  else console.warn("chart.min.js not loaded — charts disabled");
   wireRangeGroup("hr-range",   "hr",   "hashrate");
   wireRangeGroup("diff-range", "diff", "difficulty");
   wireRangeGroup("tx-range",   "tx",   "transactions");

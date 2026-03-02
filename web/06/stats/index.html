@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Global Grin Health — Network Stats</title>
 <script src="chart.min.js"></script>
+<script src="chartjs-adapter-date-fns.bundle.min.js"></script>
 <style>
   :root {
     --bg:        #0d1117;
@@ -583,35 +584,17 @@ function wireRangeGroup(groupId, chartKey, cacheKey) {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function boot() {
-  const chartsOk = typeof Chart !== "undefined";
-  if (chartsOk) initCharts();
-  else console.warn("chart.min.js not loaded — charts disabled");
   wireRangeGroup("hr-range",   "hr",   "hashrate");
   wireRangeGroup("diff-range", "diff", "difficulty");
   wireRangeGroup("tx-range",   "tx",   "transactions");
   wireRangeGroup("fee-range",  "fee",  "fees");
 
-  // Fix range button wiring (map keys properly)
-  ["hr-range", "diff-range", "tx-range", "fee-range"].forEach((gid, idx) => {
-    const chartObjs = [charts.hashrate, charts.difficulty, charts.tx, charts.fees];
-    const cacheKeys = ["hashrate", "difficulty", "transactions", "fees"];
-    const stateKeys = ["hr", "diff", "tx", "fee"];
-    $(gid).querySelectorAll(".range-btn").forEach(btn => {
-      btn.addEventListener("click", () => {
-        $(gid).querySelectorAll(".range-btn").forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
-        rangeState[stateKeys[idx]] = btn.dataset.r;
-        if (DATA_CACHE[cacheKeys[idx]]) {
-          updateChartData(chartObjs[idx], DATA_CACHE[cacheKeys[idx]], btn.dataset.r);
-        }
-      });
-    });
-  });
-
   try {
+    if (typeof Chart !== "undefined") initCharts();
+    else console.warn("chart.min.js not loaded — charts disabled");
     await loadAll();
   } catch (e) {
-    console.error("Failed to load data:", e);
+    console.error("Boot error:", e);
     $("last-updated").textContent = "Error loading data — check browser console";
   } finally {
     $("loading").style.display = "none";

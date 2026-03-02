@@ -215,6 +215,16 @@ install_stats() {
         info "Chart.js already present — skipping download."
     fi
 
+    # Download Chart.js date adapter (required for time-axis charts)
+    if [[ ! -f "$WWW_DIR/chartjs-adapter-date-fns.bundle.min.js" ]]; then
+        info "Downloading Chart.js date adapter..."
+        curl -fsSL "https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js" \
+            -o "$WWW_DIR/chartjs-adapter-date-fns.bundle.min.js" \
+            || die "Failed to download Chart.js date adapter. Check internet connection."
+    else
+        info "Chart.js date adapter already present — skipping download."
+    fi
+
     # Download Leaflet
     if [[ ! -f "$WWW_DIR/leaflet.min.js" ]]; then
         info "Downloading Leaflet.js..."
@@ -262,6 +272,11 @@ EOF
     # Initialise empty DB (schema only)
     info "Initialising database..."
     python3 "$COLLECTOR_BIN" --init-db
+
+    # Fix ownership so Nginx (www-data) can serve all web files
+    info "Setting file ownership to www-data..."
+    chown -R www-data:www-data "$WWW_DIR"
+
     log "Stats installed: DATA_DIR=$DATA_DIR WWW_DIR=$WWW_DIR"
     success "Network Stats installed."
     echo ""
@@ -806,8 +821,8 @@ show_menu_a() {
     echo -e "${BOLD}${CYAN}  6A) Network Stats + Peer Map${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  ${DIM}Pages served:  /          → hashrate, difficulty, tx, fees, versions${RESET}"
-    echo -e "  ${DIM}               /map.html  → 3D peer world map${RESET}"
+    echo -e "  ${DIM}Pages served:  /index.html          → hashrate, difficulty, tx, fees, versions${RESET}"
+    echo -e "  ${DIM}               /map.html  → Grin peer world map${RESET}"
     echo ""
     local inst="${RED}✗ not installed${RESET}"
     local cron="${YELLOW}inactive${RESET}"

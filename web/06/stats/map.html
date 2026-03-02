@@ -581,8 +581,8 @@ function initMap() {
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 function showTooltip(peer, ev) {
-  const port = peer.port && !STD_PORTS.has(String(peer.port)) ? `:${peer.port}` : "";
-  $("tt-ip").textContent  = maskIp(peer.ip) + port;
+  const port = peer.port ? `:${peer.port}` : "";
+  $("tt-ip").textContent  = peer.ip + port;
   $("tt-loc").textContent = [peer.city, peer.country].filter(Boolean).join(", ") || "Unknown location";
   $("tt-ua").textContent  = peer.user_agent || "Unknown";
   $("tt-dir").textContent = (peer.direction || "") + (peer.network === "testnet" ? " · testnet" : "");
@@ -714,7 +714,7 @@ function renderPeerList() {
     const dot  = `<span style="color:${NET_COLOR[p.network] || NET_COLOR.mainnet}">●</span>`;
     return `<div class="peer-item" data-i="${i}">
       <div class="pi-row1">
-        <span class="pi-ip">${dot} ${maskIp(p.ip)}</span>
+        <span class="pi-ip">${dot} ${esc(p.ip)}${p.port ? ":" + esc(p.port) : ""}</span>
         <span class="pi-seen">${seen}</span>
       </div>
       <div class="pi-row2">

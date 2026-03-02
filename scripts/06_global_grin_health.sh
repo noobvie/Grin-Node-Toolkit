@@ -2,7 +2,7 @@
 # =============================================================================
 # 06_global_grin_health.sh — Global Grin Health
 # =============================================================================
-#   A) Network Stats + Peer Map   (Python collector → Chart.js + Globe.GL)
+#   A) Network Stats + Peer Map   (Python collector → Chart.js + Leaflet)
 #      stats.yourdomain.com       nginx serves /var/www/grin-stats/ (static)
 #
 #   B) Grin Explorer              (aglkm/grin-explorer — Rust + Rocket)
@@ -215,14 +215,22 @@ install_stats() {
         info "Chart.js already present — skipping download."
     fi
 
-    # Download Globe.GL
-    if [[ ! -f "$WWW_DIR/globe.min.js" ]]; then
-        info "Downloading Globe.GL..."
-        curl -fsSL "https://cdn.jsdelivr.net/npm/globe.gl/dist/globe.gl.min.js" \
-            -o "$WWW_DIR/globe.min.js" \
-            || die "Failed to download Globe.GL. Check internet connection."
+    # Download Leaflet
+    if [[ ! -f "$WWW_DIR/leaflet.min.js" ]]; then
+        info "Downloading Leaflet.js..."
+        curl -fsSL "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js" \
+            -o "$WWW_DIR/leaflet.min.js" \
+            || die "Failed to download Leaflet.js. Check internet connection."
     else
-        info "Globe.GL already present — skipping download."
+        info "Leaflet.js already present — skipping download."
+    fi
+    if [[ ! -f "$WWW_DIR/leaflet.min.css" ]]; then
+        info "Downloading Leaflet.css..."
+        curl -fsSL "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css" \
+            -o "$WWW_DIR/leaflet.min.css" \
+            || die "Failed to download Leaflet.css. Check internet connection."
+    else
+        info "Leaflet.css already present — skipping download."
     fi
 
     # Write collector config
@@ -797,7 +805,7 @@ show_menu_a() {
     crontab -l 2>/dev/null | grep -q "grin_stats_update"           && cron="${GREEN}active${RESET}"
     [[ -f "$NGINX_STATS_CONF" ]]                                   && ngnx="${GREEN}✓ configured${RESET}"
 
-    echo -e "  ${GREEN}1${RESET})   Install          ${DIM}collector + Chart.js + Globe.GL${RESET}  [$inst]"
+    echo -e "  ${GREEN}1${RESET})   Install          ${DIM}collector + Chart.js + Leaflet${RESET}   [$inst]"
     echo -e "  ${GREEN}2${RESET})   Import History   ${DIM}backfill all historical data${RESET}"
     echo -e "  ${GREEN}3${RESET})   Start Updates    ${DIM}cron every 5 min${RESET}  [$cron]"
     echo -e "  ${GREEN}4${RESET})   Check DNS        ${DIM}confirm A-record before nginx setup${RESET}"

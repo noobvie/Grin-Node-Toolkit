@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Global Grin Health — Peer Map</title>
-<script src="globe.min.js"></script>
+<link rel="stylesheet" href="leaflet.min.css">
+<script src="leaflet.min.js"></script>
 <style>
   :root {
     --bg:      #0d1117;
@@ -61,14 +62,31 @@
   nav a:hover, nav a.active { color: var(--text); }
   #peer-count { color: var(--muted); font-size: 12px; }
 
-  /* ── Globe container ─────────────────────────────────────────────────────── */
-  #globe-container {
+  /* ── Map container (position:relative so panels position against it) ─────── */
+  #map-container {
     flex: 1;
     position: relative;
     overflow: hidden;
   }
-  /* Target only the Globe.GL canvas wrapper, not our overlay panels */
-  #globe { width: 100% !important; height: 100% !important; }
+  #map { width: 100%; height: 100%; }
+
+  /* Override Leaflet defaults for dark theme */
+  .leaflet-container { background: #0a0e14; }
+  .leaflet-control-attribution {
+    background: rgba(13,17,23,0.75) !important;
+    color: var(--muted) !important;
+    font-size: 10px !important;
+  }
+  .leaflet-control-attribution a { color: var(--muted) !important; }
+  .leaflet-control-zoom a {
+    background: var(--surface) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+  }
+  .leaflet-control-zoom a:hover {
+    background: var(--bg) !important;
+    color: var(--grin) !important;
+  }
 
   /* ── Left panel — peer list ──────────────────────────────────────────────── */
   #left-panel {
@@ -81,7 +99,7 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     backdrop-filter: blur(8px);
-    z-index: 5;
+    z-index: 1000;
     display: flex;
     flex-direction: column;
     transition: transform 0.25s ease, opacity 0.25s ease;
@@ -185,7 +203,7 @@
     position: absolute;
     top: 16px;
     left: 16px;
-    z-index: 6;
+    z-index: 1001;
     background: rgba(22, 27, 34, 0.85);
     border: 1px solid var(--border);
     color: var(--muted);
@@ -210,7 +228,7 @@
     border-radius: 8px;
     padding: 16px;
     backdrop-filter: blur(8px);
-    z-index: 5;
+    z-index: 1000;
     max-height: calc(100% - 32px);
     overflow-y: auto;
   }
@@ -240,14 +258,14 @@
 
   /* ── Peer tooltip ────────────────────────────────────────────────────────── */
   #tooltip {
-    position: absolute;
+    position: fixed;
     background: rgba(22, 27, 34, 0.95);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 10px 14px;
     pointer-events: none;
     font-size: 12px;
-    z-index: 20;
+    z-index: 2000;
     display: none;
     max-width: 220px;
     box-shadow: 0 4px 16px rgba(0,0,0,0.4);
@@ -266,7 +284,7 @@
     align-items: center;
     justify-content: center;
     background: var(--bg);
-    z-index: 50;
+    z-index: 1200;
     gap: 12px;
   }
   .spinner {
@@ -293,15 +311,14 @@
   footer a { color: var(--grin); text-decoration: none; margin: 0 8px; }
   footer a:hover { color: var(--text); }
 
-  /* ── Mobile responsiveness ───────────────────────────────────────────────── */
-  /* Bottom action bar — shown only on mobile to toggle panels */
+  /* ── Mobile bottom action bar ────────────────────────────────────────────── */
   #mobile-bar {
     display: none;
     position: absolute;
     bottom: 0;
     left: 0;
     right: 0;
-    z-index: 8;
+    z-index: 1001;
     background: rgba(22, 27, 34, 0.92);
     border-top: 1px solid var(--border);
     padding: 8px 16px;
@@ -324,13 +341,10 @@
   }
 
   @media (max-width: 720px) {
-    /* Smaller header */
     header { padding: 10px 14px; }
     .logo h1 { font-size: 14px; }
     nav a { margin-left: 12px; font-size: 12px; }
     #peer-count { display: none; }
-
-    /* Both floating panels go full-width, start hidden */
     #left-panel {
       width: calc(100vw - 32px);
       max-height: 55vh;
@@ -340,17 +354,9 @@
       right: 16px;
       max-height: 55vh;
     }
-
-    /* The desktop toggle button is hidden; mobile bar handles it */
     #lp-toggle { display: none !important; }
-
-    /* Show the mobile bottom action bar */
     #mobile-bar { display: flex; }
-
-    /* Push the globe up to leave room for the mobile bar */
-    #globe-container { padding-bottom: 52px; }
-
-    /* Footer text shrinks */
+    #map-container { padding-bottom: 52px; }
     footer { font-size: 11px; padding: 6px 8px; }
     footer a { margin: 0 5px; }
   }
@@ -370,62 +376,62 @@
   <span id="peer-count">Loading peers…</span>
 </header>
 
-<div id="globe-container">
+<div id="map-container">
   <div id="loading">
     <div class="spinner"></div>
     <p>Building peer map…</p>
   </div>
-  <div id="globe"></div>
+
+  <!-- Leaflet map fills the container -->
+  <div id="map"></div>
+
+  <!-- Floating panels (positioned inside the container) -->
+  <div id="left-panel">
+    <div class="lp-head">
+      <h2>Peer List</h2>
+      <button class="lp-close" id="lp-close" title="Close">✕</button>
+    </div>
+    <div class="lp-filters">
+      <select id="f-country"><option value="">All Countries</option></select>
+      <select id="f-version"><option value="">All Versions</option></select>
+    </div>
+    <div id="lp-count">Loading…</div>
+    <div id="peer-list"></div>
+  </div>
+
+  <div id="panel">
+    <h2>Network Snapshot</h2>
+    <div class="stat-row"><span class="lbl">Total peers</span><span class="val" id="p-total">—</span></div>
+    <div class="stat-row">
+      <span class="lbl"><span style="color:#ff9900">●</span> Mainnet</span>
+      <span class="val" id="p-mainnet">—</span>
+    </div>
+    <div class="stat-row">
+      <span class="lbl"><span style="color:#00bcd4">●</span> Testnet</span>
+      <span class="val" id="p-testnet">—</span>
+    </div>
+    <div class="stat-row"><span class="lbl">Countries</span><span class="val" id="p-countries">—</span></div>
+    <div class="stat-row"><span class="lbl">Outbound</span><span class="val" id="p-out">—</span></div>
+    <div class="stat-row"><span class="lbl">Inbound</span><span class="val" id="p-in">—</span></div>
+    <div class="stat-row"><span class="lbl">Updated</span><span class="val" id="p-updated">—</span></div>
+    <div class="legend-title">Colour Key</div>
+    <div class="leg-row"><span class="leg-dot" style="background:#ff9900"></span><span class="leg-name">Mainnet peer</span></div>
+    <div class="leg-row"><span class="leg-dot" style="background:#00bcd4"></span><span class="leg-name">Testnet peer</span></div>
+    <div class="legend-title">Mainnet Version Distribution</div>
+    <div id="ver-legend"></div>
+  </div>
+
   <!-- Reopens left panel when it is closed -->
   <button id="lp-toggle" title="Show peer list">☰ Peers</button>
+
+  <!-- Mobile bottom action bar (hidden on desktop via CSS) -->
+  <div id="mobile-bar">
+    <button id="mb-peers"   onclick="mobilePeers()">☰ Peers</button>
+    <button id="mb-network" onclick="mobileNetwork()">● Network</button>
+  </div>
 </div>
 
-<!-- Left panel: filterable peer list -->
-<div id="left-panel">
-  <div class="lp-head">
-    <h2>Peer List</h2>
-    <button class="lp-close" id="lp-close" title="Close">✕</button>
-  </div>
-  <div class="lp-filters">
-    <select id="f-country"><option value="">All Countries</option></select>
-    <select id="f-version"><option value="">All Versions</option></select>
-  </div>
-  <div id="lp-count">Loading…</div>
-  <div id="peer-list"></div>
-</div>
-
-<!-- Right side panel -->
-<div id="panel">
-  <h2>Network Snapshot</h2>
-  <div class="stat-row"><span class="lbl">Total peers</span><span class="val" id="p-total">—</span></div>
-  <div class="stat-row">
-    <span class="lbl"><span style="color:#ff9900">●</span> Mainnet</span>
-    <span class="val" id="p-mainnet">—</span>
-  </div>
-  <div class="stat-row">
-    <span class="lbl"><span style="color:#00bcd4">●</span> Testnet</span>
-    <span class="val" id="p-testnet">—</span>
-  </div>
-  <div class="stat-row"><span class="lbl">Countries</span><span class="val" id="p-countries">—</span></div>
-  <div class="stat-row"><span class="lbl">Outbound</span><span class="val" id="p-out">—</span></div>
-  <div class="stat-row"><span class="lbl">Inbound</span><span class="val" id="p-in">—</span></div>
-  <div class="stat-row"><span class="lbl">Updated</span><span class="val" id="p-updated">—</span></div>
-
-  <div class="legend-title">Colour Key</div>
-  <div class="leg-row"><span class="leg-dot" style="background:#ff9900"></span><span class="leg-name">Mainnet peer</span></div>
-  <div class="leg-row"><span class="leg-dot" style="background:#00bcd4"></span><span class="leg-name">Testnet peer</span></div>
-
-  <div class="legend-title">Mainnet Version Distribution</div>
-  <div id="ver-legend"></div>
-</div>
-
-<!-- Mobile bottom action bar (hidden on desktop via CSS) -->
-<div id="mobile-bar">
-  <button id="mb-peers"   onclick="mobilePeers()">☰ Peers</button>
-  <button id="mb-network" onclick="mobileNetwork()">● Network</button>
-</div>
-
-<!-- Hover tooltip -->
+<!-- Hover tooltip (fixed-position so clientX/Y math works correctly) -->
 <div id="tooltip">
   <div class="t-ip"  id="tt-ip"></div>
   <div class="t-loc" id="tt-loc"></div>
@@ -504,55 +510,72 @@ function buildVersionColorMap(peers) {
   return map;
 }
 
-// ── Globe setup ───────────────────────────────────────────────────────────────
-let globe = null;
+// ── Leaflet 2D map ────────────────────────────────────────────────────────────
+let leafletMap    = null;
+let markersLayer  = null;
 
-function initGlobe(peers) {
-  globe = Globe()($("globe"))
-    .globeImageUrl("https://unpkg.com/three-globe/example/img/earth-night.jpg")
-    .backgroundImageUrl("https://unpkg.com/three-globe/example/img/night-sky.png")
-    .atmosphereColor("#ff990033")
-    .atmosphereAltitude(0.12)
-    .pointsData(peers)
-    .pointLat(d => d.lat)
-    .pointLng(d => d.lng)
-    .pointAltitude(0.01)
-    .pointRadius(0.35)
-    .pointColor(d => NET_COLOR[d.network] || "#ff9900")
-    .pointResolution(6)
-    .onPointHover(handleHover)
-    .onPointClick(handleClick);
+function initMap() {
+  leafletMap = L.map("map", {
+    center: [20, 10],
+    zoom: 2,
+    minZoom: 1,
+    maxZoom: 10,
+    zoomControl: true,
+    preferCanvas: true,   // canvas renderer — much faster for many markers
+  });
 
-  globe.controls().autoRotate = false;
-  globe.controls().enableZoom = true;
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution:
+      '&copy; <a href="https://carto.com/" target="_blank">CARTO</a>' +
+      ' &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OSM</a>',
+    subdomains: "abcd",
+    maxZoom: 19,
+  }).addTo(leafletMap);
 
-  const resize = () => {
-    const c = $("globe-container");
-    globe.width(c.clientWidth).height(c.clientHeight);
-  };
-  window.addEventListener("resize", resize);
-  resize();
+  markersLayer = L.layerGroup().addTo(leafletMap);
 }
 
-function handleHover(peer, _prev, event) {
-  const tt = $("tooltip");
-  if (!peer) { tt.style.display = "none"; return; }
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+function showTooltip(peer, ev) {
   const port = peer.port && !STD_PORTS.has(String(peer.port)) ? `:${peer.port}` : "";
   $("tt-ip").textContent  = maskIp(peer.ip) + port;
   $("tt-loc").textContent = [peer.city, peer.country].filter(Boolean).join(", ") || "Unknown location";
   $("tt-ua").textContent  = peer.user_agent || "Unknown";
   $("tt-dir").textContent = (peer.direction || "") + (peer.network === "testnet" ? " · testnet" : "");
-  tt.style.display = "block";
-  tt.style.left    = (event.clientX + 14) + "px";
-  tt.style.top     = (event.clientY - 10) + "px";
-  const r = tt.getBoundingClientRect();
-  if (r.right  > window.innerWidth)  tt.style.left = (event.clientX - r.width  - 14) + "px";
-  if (r.bottom > window.innerHeight) tt.style.top  = (event.clientY - r.height + 10) + "px";
+  $("tooltip").style.display = "block";
+  positionTooltip(ev);
 }
 
-function handleClick(peer) {
-  if (!peer || !peer.lat || !peer.lng) return;
-  globe.pointOfView({ lat: peer.lat, lng: peer.lng, altitude: 1.2 }, 600);
+function positionTooltip(ev) {
+  const tt = $("tooltip");
+  tt.style.left = (ev.clientX + 14) + "px";
+  tt.style.top  = (ev.clientY - 10) + "px";
+  const r = tt.getBoundingClientRect();
+  if (r.right  > window.innerWidth)  tt.style.left = (ev.clientX - r.width  - 14) + "px";
+  if (r.bottom > window.innerHeight) tt.style.top  = (ev.clientY - r.height + 10) + "px";
+}
+
+function hideTooltip() { $("tooltip").style.display = "none"; }
+
+// ── Build / refresh markers ───────────────────────────────────────────────────
+function buildMarkers(peers) {
+  markersLayer.clearLayers();
+  peers.forEach(peer => {
+    if (!peer.lat || !peer.lng) return;
+    const color  = NET_COLOR[peer.network] || NET_COLOR.mainnet;
+    const marker = L.circleMarker([peer.lat, peer.lng], {
+      radius:      5,
+      color:       color,
+      fillColor:   color,
+      fillOpacity: 0.75,
+      weight:      1,
+    });
+    marker.on("mouseover", e => showTooltip(peer, e.originalEvent));
+    marker.on("mousemove", e => positionTooltip(e.originalEvent));
+    marker.on("mouseout",  () => hideTooltip());
+    marker.on("click",     () => leafletMap.flyTo([peer.lat, peer.lng], 6));
+    markersLayer.addLayer(marker);
+  });
 }
 
 // ── Right side panel ──────────────────────────────────────────────────────────
@@ -640,13 +663,13 @@ function renderPeerList() {
   }).join("");
 }
 
-// Click a row — fly globe to that peer
+// Click a row — fly map to that peer
 $("peer-list").addEventListener("click", e => {
   const item = e.target.closest(".peer-item");
   if (!item) return;
   const p = window._filteredPeers[+item.dataset.i];
   if (!p || !p.lat || !p.lng) return;
-  if (globe) globe.pointOfView({ lat: p.lat, lng: p.lng, altitude: 1.2 }, 600);
+  if (leafletMap) leafletMap.flyTo([p.lat, p.lng], 6);
 });
 
 $("f-country").addEventListener("change", renderPeerList);
@@ -666,13 +689,9 @@ async function loadPeers() {
   const peers       = data.peers || [];
   const verColorMap = buildVersionColorMap(peers);
 
-  if (!globe) {
-    initGlobe(peers);
-    $("loading").style.display = "none";
-  } else {
-    globe.pointsData(peers)
-         .pointColor(d => NET_COLOR[d.network] || "#ff9900");
-  }
+  if (!leafletMap) initMap();
+  buildMarkers(peers);
+  $("loading").style.display = "none";
 
   updatePanel(data, verColorMap);
   buildPeerList(peers);
@@ -680,11 +699,11 @@ async function loadPeers() {
 
 // ── Mobile panel toggles ──────────────────────────────────────────────────────
 function mobilePeers() {
-  const lp  = $("left-panel");
-  const rp  = $("panel");
+  const lp   = $("left-panel");
+  const rp   = $("panel");
   const open = lp.classList.contains("lp-hidden");
   lp.classList.toggle("lp-hidden", !open);
-  rp.style.display = "none";           // close right panel if open
+  rp.style.display = "none";
   $("mb-peers").classList.toggle("mb-active", open);
   $("mb-network").classList.remove("mb-active");
 }
@@ -693,15 +712,15 @@ function mobileNetwork() {
   const lp   = $("left-panel");
   const open = rp.style.display === "none" || rp.style.display === "";
   rp.style.display = open ? "block" : "none";
-  lp.classList.add("lp-hidden");       // close left panel if open
+  lp.classList.add("lp-hidden");
   $("mb-network").classList.toggle("mb-active", open);
   $("mb-peers").classList.remove("mb-active");
 }
 
-// On mobile, start both panels hidden and hide right panel via inline style
+// On mobile, start both panels hidden
 if (window.matchMedia("(max-width: 720px)").matches) {
-  document.getElementById("left-panel").classList.add("lp-hidden");
-  document.getElementById("panel").style.display = "none";
+  $("left-panel").classList.add("lp-hidden");
+  $("panel").style.display = "none";
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────

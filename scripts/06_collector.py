@@ -483,6 +483,42 @@ def _extract_addr(peer, default_port):
     return ip, port
 
 
+def _geo_batch(unique_ips):
+    """Geolocate a list of IPs via ip-api.com batch endpoint. Returns {ip: geo_dict}."""
+    geo_map = {}
+    for i in range(0, len(unique_ips), GEO_BATCH):
+        batch = unique_ips[i: i + GEO_BATCH]
+        try:
+            payload = json.dumps([{"query": ip} for ip in batch]).encode()
+            req = urllib.request.Request(
+                GEO_URL, data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                geo_results = json.loads(resp.read())
+            for g in geo_results:
+                if g.get("status") == "success":
+                    geo_map[g["query"]] = {
+                        "lat":          g.get("lat", 0),
+                        "lng":          g.get("lon", 0),
+                        "country":      g.get("country", ""),
+                        "country_code": g.get("countryCode", ""),
+                        "city":         g.get("city", ""),
+                    }
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                print("[WARN] Geo rate-limited (429) — waiting 65s before next batch...",
+                      file=sys.stderr)
+                time.sleep(65)
+            else:
+                print(f"[WARN] Geo batch failed: {exc}", file=sys.stderr)
+        except Exception as exc:
+            print(f"[WARN] Geo batch failed: {exc}", file=sys.stderr)
+        finally:
+            time.sleep(1.5)
+    return geo_map
+
+
 def _fetch_connected_peers(owner_url, secret, network_label):
     """
     Fetch CURRENTLY CONNECTED peers via get_connected_peers (owner API, auth required).
@@ -514,8 +550,8 @@ def _fetch_connected_peers(owner_url, secret, network_label):
 def _fetch_all_peers_from_node(owner_url, secret, network_label):
     """
     Query the owner API get_peers filtered to Healthy flag only.
-    Used exclusively for version distribution stats (peer_snapshots table).
-    Returns a larger set than get_connected_peers but may include recently-offline peers.
+    Returns a larger set than get_connected_peers — used for version stats AND
+    as a secondary map source (routing-table peers seen within PEER_HISTORY_DAYS).
     Standard P2P port filter applied to exclude gossip-only routing-table noise.
     """
     expected_port = MAINNET_P2P_PORT if network_label == "mainnet" else TESTNET_P2P_PORT
@@ -537,18 +573,55 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
                     continue
                 if not _is_public_ip(ip):
                     continue
+                # Capture last_seen from the routing table (Unix timestamp)
+                last_seen_raw = p.get("last_seen", 0)
+                last_seen_ts  = int(last_seen_raw) if last_seen_raw else 0
                 peer_list.append({
                     "ip":         ip,
                     "port":       port,
                     "user_agent": p.get("user_agent", "unknown"),
                     "direction":  p.get("direction", "Outbound"),
                     "network":    network_label,
+                    "last_seen":  last_seen_ts,
                 })
             print(f"[INFO] {network_label}: {len(peer_list)} healthy peers for stats "
                   f"(skipped {skipped_flag} non-Healthy, {skipped_port} wrong-port).")
     except Exception as exc:
         print(f"[WARN] {network_label} owner API get_peers failed: {exc}", file=sys.stderr)
     return peer_list
+
+def _upsert_peers(conn, enriched, first_seen_ts, use_max_last_seen=False):
+    """
+    Upsert a list of enriched peer dicts into known_peers.
+    use_max_last_seen=True keeps the LARGER of the two last_seen values on conflict,
+    so connected-peer entries (last_seen=now) are never downgraded by older routing-table data.
+    """
+    last_seen_sql = (
+        "CASE WHEN excluded.last_seen > last_seen THEN excluded.last_seen ELSE last_seen END"
+        if use_max_last_seen else "excluded.last_seen"
+    )
+    conn.executemany(f"""
+        INSERT INTO known_peers
+            (ip, network, port, user_agent, direction, lat, lng,
+             country, country_code, city, first_seen, last_seen)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(ip, network) DO UPDATE SET
+            port         = excluded.port,
+            user_agent   = excluded.user_agent,
+            direction    = excluded.direction,
+            lat          = CASE WHEN excluded.lat  != 0  THEN excluded.lat  ELSE lat  END,
+            lng          = CASE WHEN excluded.lng  != 0  THEN excluded.lng  ELSE lng  END,
+            country      = CASE WHEN excluded.country      != '' THEN excluded.country      ELSE country      END,
+            country_code = CASE WHEN excluded.country_code != '' THEN excluded.country_code ELSE country_code END,
+            city         = CASE WHEN excluded.city         != '' THEN excluded.city         ELSE city         END,
+            last_seen    = {last_seen_sql}
+    """, [
+        (p["ip"], p["network"], p["port"], p["user_agent"], p["direction"],
+         p["lat"], p["lng"], p["country"], p["country_code"], p["city"],
+         p.get("last_seen", first_seen_ts), p["last_seen"])
+        for p in enriched
+    ])
+
 
 def _is_node_running(port):
     """Quick check if a node is listening on the given port."""
@@ -617,39 +690,7 @@ def _update_peers():
     print(f"[INFO] Connected peers (unique): {len(map_peers)}")
 
     # ── 3. Geolocate connected peers ──────────────────────────────────────────
-    # With get_connected_peers we typically have <30 IPs — usually 1 batch.
-    geo_map = {}
-    unique_ips = list({p["ip"] for p in map_peers})
-    for i in range(0, len(unique_ips), GEO_BATCH):
-        batch = unique_ips[i: i + GEO_BATCH]
-        try:
-            payload = json.dumps([{"query": ip} for ip in batch]).encode()
-            req = urllib.request.Request(
-                GEO_URL, data=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                geo_results = json.loads(resp.read())
-            for g in geo_results:
-                if g.get("status") == "success":
-                    geo_map[g["query"]] = {
-                        "lat":          g.get("lat", 0),
-                        "lng":          g.get("lon", 0),
-                        "country":      g.get("country", ""),
-                        "country_code": g.get("countryCode", ""),
-                        "city":         g.get("city", ""),
-                    }
-        except urllib.error.HTTPError as exc:
-            if exc.code == 429:
-                print(f"[WARN] Geo rate-limited (429) — waiting 65s before next batch...",
-                      file=sys.stderr)
-                time.sleep(65)
-            else:
-                print(f"[WARN] Geo batch failed: {exc}", file=sys.stderr)
-        except Exception as exc:
-            print(f"[WARN] Geo batch failed: {exc}", file=sys.stderr)
-        finally:
-            time.sleep(1.5)
+    geo_map = _geo_batch(list({p["ip"] for p in map_peers}))
 
     # ── 4. Build enriched connected peer list ─────────────────────────────────
     enriched = []
@@ -674,27 +715,42 @@ def _update_peers():
 
     # ── 5. Upsert connected peers into known_peers ────────────────────────────
     # Preserve existing geo if the new lookup returned zeros (geo API miss).
-    conn.executemany("""
-        INSERT INTO known_peers
-            (ip, network, port, user_agent, direction, lat, lng,
-             country, country_code, city, first_seen, last_seen)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(ip, network) DO UPDATE SET
-            port         = excluded.port,
-            user_agent   = excluded.user_agent,
-            direction    = excluded.direction,
-            lat          = CASE WHEN excluded.lat  != 0  THEN excluded.lat  ELSE lat  END,
-            lng          = CASE WHEN excluded.lng  != 0  THEN excluded.lng  ELSE lng  END,
-            country      = CASE WHEN excluded.country      != '' THEN excluded.country      ELSE country      END,
-            country_code = CASE WHEN excluded.country_code != '' THEN excluded.country_code ELSE country_code END,
-            city         = CASE WHEN excluded.city         != '' THEN excluded.city         ELSE city         END,
-            last_seen    = excluded.last_seen
-    """, [
-        (p["ip"], p["network"], p["port"], p["user_agent"], p["direction"],
-         p["lat"], p["lng"], p["country"], p["country_code"], p["city"],
-         ts, ts)
-        for p in enriched
-    ])
+    _upsert_peers(conn, enriched, ts)
+
+    # ── 5b. Also store recent routing-table peers (Healthy, port 3414) ───────
+    # These extend the map beyond the ~55 directly connected peers by including
+    # all Healthy peers the node has seen within PEER_HISTORY_DAYS.
+    # last_seen comes from the routing table; connected peers always win (ts=now).
+    history_cutoff = ts - PEER_HISTORY_DAYS * 86400
+    recent_stat = [p for p in stat_peers if p.get("last_seen", 0) >= history_cutoff]
+    if recent_stat:
+        connected_ips = {p["ip"] for p in map_peers}
+        new_ips       = list({p["ip"] for p in recent_stat if p["ip"] not in connected_ips})
+        if new_ips:
+            extra_geo = _geo_batch(new_ips)
+            # Merge: don't overwrite geo we already fetched for connected peers
+            for ip, geo in extra_geo.items():
+                geo_map.setdefault(ip, geo)
+        stat_enriched = []
+        for p in recent_stat:
+            geo = geo_map.get(p["ip"], {})
+            stat_enriched.append({
+                "ip":           p["ip"],
+                "port":         p["port"],
+                "lat":          geo.get("lat", 0),
+                "lng":          geo.get("lng", 0),
+                "country":      geo.get("country", ""),
+                "country_code": geo.get("country_code", ""),
+                "city":         geo.get("city", ""),
+                "user_agent":   p["user_agent"],
+                "direction":    p["direction"],
+                "network":      p["network"],
+                "last_seen":    p["last_seen"],
+            })
+        # Use MAX(last_seen) so connected peers (last_seen=now) are never downgraded
+        _upsert_peers(conn, stat_enriched, ts, use_max_last_seen=True)
+        print(f"[INFO] Routing-table peers added to map: {len(recent_stat)} "
+              f"({len(new_ips)} new IPs geo-located).")
 
     # ── 6. Prune peers not seen in PEER_RETENTION_DAYS ───────────────────────
     cutoff = ts - PEER_RETENTION_DAYS * 86400
@@ -718,7 +774,6 @@ def _update_peers():
     conn.commit()
 
     # ── 8. Export peers.json from known_peers (last PEER_HISTORY_DAYS) ────────
-    history_cutoff = ts - PEER_HISTORY_DAYS * 86400
     rows = conn.execute("""
         SELECT ip, network, port, user_agent, direction,
                lat, lng, country, country_code, city, first_seen, last_seen
@@ -750,7 +805,7 @@ def _update_peers():
     testnet_count = sum(1 for p in output_peers if p["network"] == "testnet")
     _write_peers_json(output_peers, mainnet_count, testnet_count)
     print(f"[INFO] Peers written: {mainnet_count} mainnet, {testnet_count} testnet "
-          f"(last {PEER_HISTORY_DAYS}d of connected peers).")
+          f"(connected + routing-table peers from last {PEER_HISTORY_DAYS}d).")
 
 def _write_peers_json(peers, mainnet_count=0, testnet_count=0):
     os.makedirs(WWW_DATA, exist_ok=True)

@@ -3,7 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Global Grin Health — Peer Map</title>
+<title>Grin Node World Map — Global Grin Network Peer Map</title>
+<meta name="description" content="Live Grin node world map. See active Grin network peers by country, version, and direction. Monitor global Grin node health in real time.">
+<meta name="keywords" content="grin node map, grin node world, grin network map, grin peers, grin cryptocurrency nodes, grin blockchain, grin network health, grin peer map, mimblewimble nodes">
+<meta name="robots" content="index, follow">
+<meta property="og:title" content="Grin Node World Map — Global Grin Network">
+<meta property="og:description" content="Interactive world map of active Grin network nodes. Filter by country, version, or direction.">
+<meta property="og:type" content="website">
 <link rel="stylesheet" href="leaflet.min.css">
 <script src="leaflet.min.js"></script>
 <style>
@@ -62,7 +68,7 @@
   nav a:hover, nav a.active { color: var(--text); }
   #peer-count { color: var(--muted); font-size: 12px; }
 
-  /* ── Map container (position:relative so panels position against it) ─────── */
+  /* ── Map container ───────────────────────────────────────────────────────── */
   #map-container {
     flex: 1;
     position: relative;
@@ -78,10 +84,20 @@
     font-size: 10px !important;
   }
   .leaflet-control-attribution a { color: var(--muted) !important; }
+  /* Zoom control */
+  .leaflet-control-zoom {
+    border: 1px solid var(--border) !important;
+    border-radius: 6px !important;
+    overflow: hidden;
+  }
   .leaflet-control-zoom a {
     background: var(--surface) !important;
     color: var(--text) !important;
-    border-color: var(--border) !important;
+    border-bottom-color: var(--border) !important;
+    width: 30px !important;
+    height: 30px !important;
+    line-height: 30px !important;
+    font-size: 16px !important;
   }
   .leaflet-control-zoom a:hover {
     background: var(--bg) !important;
@@ -198,7 +214,7 @@
     white-space: nowrap;
   }
 
-  /* ── Panel open toggle (shown when left panel is closed) ─────────────────── */
+  /* ── Panel open toggle ───────────────────────────────────────────────────── */
   #lp-toggle {
     position: absolute;
     top: 16px;
@@ -244,7 +260,14 @@
   .stat-row:last-of-type { border-bottom: none; }
   .stat-row .lbl { color: var(--muted); }
   .stat-row .val { font-weight: 600; color: var(--text); }
-  #panel .legend-title { font-size: 12px; color: var(--muted); margin: 14px 0 8px; }
+  .stat-row .val-price { font-weight: 600; color: var(--grin); }
+  #panel .legend-title {
+    font-size: 12px;
+    color: var(--muted);
+    margin: 14px 0 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+  }
   .leg-row {
     display: flex;
     align-items: center;
@@ -254,7 +277,13 @@
   }
   .leg-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
   .leg-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .leg-pct  { color: var(--grin); font-weight: 600; }
+  .leg-pct  { color: var(--grin); font-weight: 600; min-width: 36px; text-align: right; }
+  .filter-note {
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 8px;
+    opacity: 0.7;
+  }
 
   /* ── Peer tooltip ────────────────────────────────────────────────────────── */
   #tooltip {
@@ -345,15 +374,8 @@
     .logo h1 { font-size: 14px; }
     nav a { margin-left: 12px; font-size: 12px; }
     #peer-count { display: none; }
-    #left-panel {
-      width: calc(100vw - 32px);
-      max-height: 55vh;
-    }
-    #panel {
-      width: calc(100vw - 32px);
-      right: 16px;
-      max-height: 55vh;
-    }
+    #left-panel { width: calc(100vw - 32px); max-height: 55vh; }
+    #panel { width: calc(100vw - 32px); right: 16px; max-height: 55vh; }
     #lp-toggle { display: none !important; }
     #mobile-bar { display: flex; }
     #map-container { padding-bottom: 52px; }
@@ -382,10 +404,9 @@
     <p>Building peer map…</p>
   </div>
 
-  <!-- Leaflet map fills the container -->
   <div id="map"></div>
 
-  <!-- Floating panels (positioned inside the container) -->
+  <!-- Floating panels -->
   <div id="left-panel">
     <div class="lp-head">
       <h2>Peer List</h2>
@@ -401,6 +422,7 @@
 
   <div id="panel">
     <h2>Network Snapshot</h2>
+    <p class="filter-note">Active peers — last 48 hours</p>
     <div class="stat-row"><span class="lbl">Total peers</span><span class="val" id="p-total">—</span></div>
     <div class="stat-row">
       <span class="lbl"><span style="color:#ff9900">●</span> Mainnet</span>
@@ -414,24 +436,29 @@
     <div class="stat-row"><span class="lbl">Outbound</span><span class="val" id="p-out">—</span></div>
     <div class="stat-row"><span class="lbl">Inbound</span><span class="val" id="p-in">—</span></div>
     <div class="stat-row"><span class="lbl">Updated</span><span class="val" id="p-updated">—</span></div>
+
+    <div class="legend-title">Grin Price</div>
+    <div class="stat-row">
+      <span class="lbl">USD</span>
+      <span class="val val-price" id="grin-price">—</span>
+    </div>
+
     <div class="legend-title">Colour Key</div>
     <div class="leg-row"><span class="leg-dot" style="background:#ff9900"></span><span class="leg-name">Mainnet peer</span></div>
     <div class="leg-row"><span class="leg-dot" style="background:#00bcd4"></span><span class="leg-name">Testnet peer</span></div>
+
     <div class="legend-title">Mainnet Version Distribution</div>
     <div id="ver-legend"></div>
   </div>
 
-  <!-- Reopens left panel when it is closed -->
   <button id="lp-toggle" title="Show peer list">☰ Peers</button>
 
-  <!-- Mobile bottom action bar (hidden on desktop via CSS) -->
   <div id="mobile-bar">
     <button id="mb-peers"   onclick="mobilePeers()">☰ Peers</button>
     <button id="mb-network" onclick="mobileNetwork()">● Network</button>
   </div>
 </div>
 
-<!-- Hover tooltip (fixed-position so clientX/Y math works correctly) -->
 <div id="tooltip">
   <div class="t-ip"  id="tt-ip"></div>
   <div class="t-loc" id="tt-loc"></div>
@@ -447,16 +474,14 @@
 
 <script>
 const DATA_URL = "data/peers.json";
-const REFRESH  = 5 * 60 * 1000;
+
+// Only show peers seen within the last 48 hours
+const ACTIVE_WINDOW_SEC = 48 * 3600;
 
 const VERSION_COLORS = [
   "#ff9900","#58a6ff","#3fb950","#bc8cff","#f85149","#d29922","#79c0ff","#ffa657",
 ];
-
-// Network dot colours — mainnet orange, testnet teal
 const NET_COLOR = { mainnet: "#ff9900", testnet: "#00bcd4" };
-
-// Standard peer ports — not shown in tooltip
 const STD_PORTS = new Set(["3414", "13414"]);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -471,8 +496,6 @@ const timeAgo = ts => {
   return Math.floor(s / 86400) + "d ago";
 };
 
-// Hide last IPv4 octet  (1.2.3.4 → 1.2.3.x)
-// Hide last IPv6 group  (::1 → ::x)
 function maskIp(ip) {
   const v4 = ip.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/);
   if (v4) return v4[1] + ".x";
@@ -484,7 +507,6 @@ function maskIp(ip) {
   return ip;
 }
 
-// Unicode flag emoji from ISO 3166-1 alpha-2 country code (e.g. "US" → 🇺🇸)
 function countryFlag(code) {
   if (!code || code.length !== 2) return "";
   const base = 0x1F1E6 - 65;
@@ -494,14 +516,21 @@ function countryFlag(code) {
   } catch { return ""; }
 }
 
-// Safe HTML escape for dynamic values in innerHTML
 function esc(s) {
   return String(s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-// ── Version colour map (mainnet peers only) ───────────────────────────────────
+function fmtPct(n, total) {
+  if (total === 0) return "—";
+  const pct = (n / total) * 100;
+  if (pct < 0.1) return "<0.1%";
+  if (pct < 1)   return pct.toFixed(1) + "%";
+  return pct.toFixed(0) + "%";
+}
+
+// ── Version colour map ────────────────────────────────────────────────────────
 function buildVersionColorMap(peers) {
   const mainnet = peers.filter(p => p.network !== "testnet");
   const agents  = [...new Set(mainnet.map(p => p.user_agent))].sort();
@@ -511,17 +540,20 @@ function buildVersionColorMap(peers) {
 }
 
 // ── Leaflet 2D map ────────────────────────────────────────────────────────────
-let leafletMap    = null;
-let markersLayer  = null;
+let leafletMap   = null;
+let markersLayer = null;
 
 function initMap() {
   leafletMap = L.map("map", {
-    center: [20, 10],
-    zoom: 2,
-    minZoom: 1,
-    maxZoom: 10,
-    zoomControl: true,
-    preferCanvas: true,   // canvas renderer — much faster for many markers
+    center:               [20, 10],
+    zoom:                 2,
+    minZoom:              2,
+    maxZoom:              10,
+    zoomControl:          false,       // placed manually at bottom-right
+    preferCanvas:         true,        // canvas renderer — much faster for many markers
+    maxBounds:            [[-85.05, -180], [85.05, 180]],
+    maxBoundsViscosity:   1.0,         // hard boundary — no bounce beyond world edge
+    worldCopyJump:        false,
   });
 
   L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
@@ -529,8 +561,13 @@ function initMap() {
       '&copy; <a href="https://carto.com/" target="_blank">CARTO</a>' +
       ' &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OSM</a>',
     subdomains: "abcd",
-    maxZoom: 19,
+    maxZoom:    19,
+    noWrap:     true,                  // prevents tile layer from repeating horizontally
+    bounds:     [[-90, -180], [90, 180]],
   }).addTo(leafletMap);
+
+  // Zoom control — bottom-right avoids overlap with both floating panels
+  L.control.zoom({ position: "bottomright" }).addTo(leafletMap);
 
   markersLayer = L.layerGroup().addTo(leafletMap);
 }
@@ -557,7 +594,7 @@ function positionTooltip(ev) {
 
 function hideTooltip() { $("tooltip").style.display = "none"; }
 
-// ── Build / refresh markers ───────────────────────────────────────────────────
+// ── Build markers ─────────────────────────────────────────────────────────────
 function buildMarkers(peers) {
   markersLayer.clearLayers();
   peers.forEach(peer => {
@@ -579,33 +616,53 @@ function buildMarkers(peers) {
 }
 
 // ── Right side panel ──────────────────────────────────────────────────────────
-function updatePanel(data, verColorMap) {
-  const peers     = data.peers || [];
+function updatePanel(peers, updatedTs, verColorMap) {
   const countries = new Set(peers.map(p => p.country).filter(Boolean));
   const outbound  = peers.filter(p => p.direction === "Outbound").length;
+  const mainnetPeers = peers.filter(p => p.network !== "testnet");
 
-  $("p-total").textContent     = fmt(data.count);
-  $("p-mainnet").textContent   = fmt(data.mainnet_count ?? peers.filter(p => p.network !== "testnet").length);
-  $("p-testnet").textContent   = fmt(data.testnet_count ?? peers.filter(p => p.network === "testnet").length);
+  $("p-total").textContent     = fmt(peers.length);
+  $("p-mainnet").textContent   = fmt(mainnetPeers.length);
+  $("p-testnet").textContent   = fmt(peers.filter(p => p.network === "testnet").length);
   $("p-countries").textContent = fmt(countries.size);
   $("p-out").textContent       = fmt(outbound);
-  $("p-in").textContent        = fmt(data.count - outbound);
-  $("p-updated").textContent   = timeAgo(data.updated);
-  $("peer-count").textContent  = `${fmt(data.count)} peers · ${fmt(countries.size)} countries`;
+  $("p-in").textContent        = fmt(peers.length - outbound);
+  $("p-updated").textContent   = updatedTs ? timeAgo(updatedTs) : "—";
+  $("peer-count").textContent  = `${fmt(peers.length)} active peers · ${fmt(countries.size)} countries`;
 
-  // Version legend — mainnet only
-  const mainnetPeers = peers.filter(p => p.network !== "testnet");
+  // Version distribution — mainnet only
   const counts = {};
   mainnetPeers.forEach(p => { counts[p.user_agent] = (counts[p.user_agent] || 0) + 1; });
   const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  const total  = mainnetPeers.length || 1;
-  $("ver-legend").innerHTML = sorted.map(([ua, n]) => `
-    <div class="leg-row">
-      <span class="leg-dot" style="background:${verColorMap[ua] || "#aaa"}"></span>
-      <span class="leg-name" title="${esc(ua)}">${esc(ua)}</span>
-      <span class="leg-pct">${((n / total) * 100).toFixed(0)}%</span>
-    </div>`
-  ).join("");
+  const total  = mainnetPeers.length;
+  $("ver-legend").innerHTML = sorted.length
+    ? sorted.map(([ua, n]) => `
+      <div class="leg-row">
+        <span class="leg-dot" style="background:${verColorMap[ua] || "#aaa"}"></span>
+        <span class="leg-name" title="${esc(ua)}">${esc(ua)}</span>
+        <span class="leg-pct">${fmtPct(n, total)}</span>
+      </div>`).join("")
+    : `<div style="color:var(--muted);font-size:11px;padding:4px 0">No mainnet peers in last 48h</div>`;
+}
+
+// ── CoinGecko price ───────────────────────────────────────────────────────────
+async function loadGrinPrice() {
+  try {
+    const r = await fetch(
+      "https://api.coingecko.com/api/v3/simple/price?ids=grin&vs_currencies=usd"
+    );
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data  = await r.json();
+    const price = data?.grin?.usd;
+    if (price != null) {
+      // Show 4 decimal places for a low-priced coin
+      $("grin-price").textContent = "$" + Number(price).toFixed(4);
+    } else {
+      $("grin-price").textContent = "—";
+    }
+  } catch {
+    $("grin-price").textContent = "unavailable";
+  }
 }
 
 // ── Left panel — filterable peer list ────────────────────────────────────────
@@ -614,14 +671,12 @@ let ALL_PEERS = [];
 function buildPeerList(peers) {
   ALL_PEERS = peers;
 
-  // Country filter — preserve current selection
   const countries = [...new Set(peers.map(p => p.country).filter(Boolean))].sort();
   const fc = $("f-country"), prevC = fc.value;
   fc.innerHTML = '<option value="">All Countries</option>' +
     countries.map(c => `<option>${esc(c)}</option>`).join("");
   if (prevC && countries.includes(prevC)) fc.value = prevC;
 
-  // Version filter — preserve current selection
   const versions = [...new Set(peers.map(p => p.user_agent).filter(Boolean))].sort();
   const fv = $("f-version"), prevV = fv.value;
   fv.innerHTML = '<option value="">All Versions</option>' +
@@ -638,8 +693,6 @@ function renderPeerList() {
   let list = ALL_PEERS;
   if (country) list = list.filter(p => p.country === country);
   if (version) list = list.filter(p => p.user_agent === version);
-
-  // Most recently seen first
   list = [...list].sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
   window._filteredPeers = list;
 
@@ -683,20 +736,6 @@ function toggleLeftPanel(show) {
 $("lp-close").addEventListener("click",  () => toggleLeftPanel(false));
 $("lp-toggle").addEventListener("click", () => toggleLeftPanel(true));
 
-// ── Load + refresh ────────────────────────────────────────────────────────────
-async function loadPeers() {
-  const data        = await fetch(DATA_URL + "?t=" + Date.now()).then(r => r.json());
-  const peers       = data.peers || [];
-  const verColorMap = buildVersionColorMap(peers);
-
-  if (!leafletMap) initMap();
-  buildMarkers(peers);
-  $("loading").style.display = "none";
-
-  updatePanel(data, verColorMap);
-  buildPeerList(peers);
-}
-
 // ── Mobile panel toggles ──────────────────────────────────────────────────────
 function mobilePeers() {
   const lp   = $("left-panel");
@@ -717,20 +756,43 @@ function mobileNetwork() {
   $("mb-peers").classList.remove("mb-active");
 }
 
-// On mobile, start both panels hidden
 if (window.matchMedia("(max-width: 720px)").matches) {
   $("left-panel").classList.add("lp-hidden");
   $("panel").style.display = "none";
 }
 
-// ── Boot ──────────────────────────────────────────────────────────────────────
-loadPeers().catch(e => {
-  console.error(e);
-  $("loading").innerHTML =
-    `<p style="color:#f85149">Failed to load peer data.<br>Ensure the collector has run at least once.</p>`;
-});
+// ── Boot — load once, no auto-refresh ─────────────────────────────────────────
+async function boot() {
+  try {
+    const data = await fetch(DATA_URL + "?t=" + Date.now()).then(r => r.json());
 
-setInterval(() => loadPeers().catch(console.error), REFRESH);
+    // Filter to peers active in the last 48 hours
+    const now    = Math.floor(Date.now() / 1000);
+    const cutoff = now - ACTIVE_WINDOW_SEC;
+    const peers  = (data.peers || []).filter(p =>
+      p.last_seen && p.last_seen >= cutoff
+    );
+
+    const verColorMap = buildVersionColorMap(peers);
+
+    if (!leafletMap) initMap();
+    buildMarkers(peers);
+    updatePanel(peers, data.updated, verColorMap);
+    buildPeerList(peers);
+  } catch (e) {
+    console.error(e);
+    $("loading").innerHTML =
+      `<p style="color:#f85149">Failed to load peer data.<br>Ensure the collector has run at least once.</p>`;
+    return;
+  } finally {
+    $("loading").style.display = "none";
+  }
+
+  // Load price independently — don't block the map if CoinGecko is slow
+  loadGrinPrice();
+}
+
+boot();
 </script>
 </body>
 </html>

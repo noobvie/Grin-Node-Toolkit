@@ -466,71 +466,74 @@ def _fetch_block_stats_range(start, end, workers=4):
 
 # ── Peer update ───────────────────────────────────────────────────────────────
 
-def _fetch_all_peers_from_node(owner_url, secret, network_label):
-    """
-    Query the owner API get_peers (returns ALL known peers — connected, healthy,
-    and recently seen). This gives 100-500+ peers vs 8-30 from get_connected_peers.
-    Falls back to get_connected_peers on the foreign API if owner API fails.
+def _is_public_ip(ip):
+    """Return True if ip is a routable public address (not loopback/RFC-1918)."""
+    return (ip
+            and not ip.startswith("127.")
+            and not ip.startswith("::1")
+            and not ip.startswith("10.")
+            and not ip.startswith("192.168."))
 
-    Note: only peers on the standard Grin P2P port (3414 mainnet / 13414 testnet)
-    are accepted. Non-standard ports are not Grin nodes — they appear because
-    get_peers returns every IP ever gossiped about in the routing table.
+
+def _extract_addr(peer, default_port):
+    """Split a Grin peer dict's addr field into (ip, port)."""
+    addr = peer.get("addr", "")
+    ip   = addr.rsplit(":", 1)[0].strip("[]")
+    port = addr.rsplit(":", 1)[-1] if ":" in addr else default_port
+    return ip, port
+
+
+def _fetch_connected_peers(foreign_url, network_label):
+    """
+    Fetch CURRENTLY CONNECTED peers via get_connected_peers (foreign API, no auth).
+    These peers have an active TCP session — guaranteed to be alive right now.
+    Typically returns 8–30 peers; used as the authoritative source for peers.json.
     """
     expected_port = MAINNET_P2P_PORT if network_label == "mainnet" else TESTNET_P2P_PORT
     peer_list = []
-
-    def _extract(p, default_port):
-        addr = p.get("addr", "")
-        ip   = addr.rsplit(":", 1)[0].strip("[]")
-        port = addr.rsplit(":", 1)[-1] if ":" in addr else default_port
-        return ip, port
-
-    def _is_public_ip(ip):
-        return (ip
-                and not ip.startswith("127.")
-                and not ip.startswith("::1")
-                and not ip.startswith("10.")
-                and not ip.startswith("192.168."))
-
-    # Try owner API first (all known peers, requires API secret)
-    try:
-        raw = _rpc(owner_url, "get_peers", {"peer_addr": None}, secret=secret)
-        if raw:
-            skipped = 0
-            for p in raw:
-                flags = p.get("flags", "")
-                # Skip banned peers — they're not healthy network participants
-                if "Banned" in str(flags):
-                    continue
-                ip, port = _extract(p, expected_port)
-                # Only accept peers on the standard Grin P2P port for this network
-                if port != expected_port:
-                    skipped += 1
-                    continue
-                if not _is_public_ip(ip):
-                    continue
-                peer_list.append({
-                    "ip":         ip,
-                    "port":       port,
-                    "user_agent": p.get("user_agent", "unknown"),
-                    "direction":  p.get("direction", "Outbound"),
-                    "network":    network_label,
-                })
-            if skipped:
-                print(f"[INFO] {network_label}: skipped {skipped} peer(s) on non-standard ports.")
-            print(f"[INFO] {network_label}: {len(peer_list)} peers (port {expected_port}) from owner API.")
-            return peer_list
-    except Exception as exc:
-        print(f"[WARN] {network_label} owner API get_peers failed: {exc} — falling back.", file=sys.stderr)
-
-    # Fallback: get_connected_peers on foreign API (direct connections only)
-    foreign_url = owner_url.replace("/v2/owner", "/v2/foreign")
     try:
         raw = _rpc(foreign_url, "get_connected_peers", retries=2)
         if raw:
             for p in raw:
-                ip, port = _extract(p, expected_port)
+                ip, port = _extract_addr(p, expected_port)
+                if port != expected_port or not _is_public_ip(ip):
+                    continue
+                peer_list.append({
+                    "ip":         ip,
+                    "port":       port,
+                    "user_agent": p.get("user_agent", "unknown"),
+                    "direction":  p.get("direction", "Outbound"),
+                    "network":    network_label,
+                })
+        print(f"[INFO] {network_label}: {len(peer_list)} currently connected peers (port {expected_port}).")
+    except Exception as exc:
+        print(f"[WARN] {network_label} get_connected_peers failed: {exc}", file=sys.stderr)
+    return peer_list
+
+
+def _fetch_all_peers_from_node(owner_url, secret, network_label):
+    """
+    Query the owner API get_peers filtered to Healthy flag only.
+    Used exclusively for version distribution stats (peer_snapshots table).
+    Returns a larger set than get_connected_peers but may include recently-offline peers.
+    Standard P2P port filter applied to exclude gossip-only routing-table noise.
+    """
+    expected_port = MAINNET_P2P_PORT if network_label == "mainnet" else TESTNET_P2P_PORT
+    peer_list = []
+    try:
+        raw = _rpc(owner_url, "get_peers", {"peer_addr": None}, secret=secret)
+        if raw:
+            skipped_port = 0
+            skipped_flag = 0
+            for p in raw:
+                flags = str(p.get("flags", ""))
+                # Only accept peers the node considers Healthy (successfully handshaked)
+                if "Healthy" not in flags:
+                    skipped_flag += 1
+                    continue
+                ip, port = _extract_addr(p, expected_port)
                 if port != expected_port:
+                    skipped_port += 1
                     continue
                 if not _is_public_ip(ip):
                     continue
@@ -541,10 +544,10 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
                     "direction":  p.get("direction", "Outbound"),
                     "network":    network_label,
                 })
-        print(f"[INFO] {network_label}: {len(peer_list)} connected peers (fallback, port {expected_port}).")
+            print(f"[INFO] {network_label}: {len(peer_list)} healthy peers for stats "
+                  f"(skipped {skipped_flag} non-Healthy, {skipped_port} wrong-port).")
     except Exception as exc:
-        print(f"[WARN] {network_label} fallback also failed: {exc}", file=sys.stderr)
-
+        print(f"[WARN] {network_label} owner API get_peers failed: {exc}", file=sys.stderr)
     return peer_list
 
 def _is_node_running(port):
@@ -559,45 +562,65 @@ def _is_node_running(port):
 def _update_peers():
     from collections import Counter
 
-    all_peers = []
+    # ── 1. Connected peers — for the map (verified alive right now) ───────────
+    # get_connected_peers returns only peers with an active TCP session.
+    # These are the only peers we store in known_peers and export to peers.json.
+    map_peers = []
+    testnet_foreign = TESTNET_OWNER_URL.replace("/v2/owner", "/v2/foreign")
 
-    # ── Mainnet ───────────────────────────────────────────────────────────────
     if _is_node_running(3413):
-        mainnet_peers = _fetch_all_peers_from_node(
-            MAINNET_OWNER_URL, API_SECRET, "mainnet"
-        )
-        all_peers.extend(mainnet_peers)
+        map_peers.extend(_fetch_connected_peers(NODE_URL, "mainnet"))
     else:
         print("[INFO] Mainnet node not running — skipping mainnet peers.")
 
-    # ── Testnet ───────────────────────────────────────────────────────────────
     if _is_node_running(13413):
-        testnet_peers = _fetch_all_peers_from_node(
-            TESTNET_OWNER_URL, TESTNET_API_SECRET, "testnet"
-        )
-        all_peers.extend(testnet_peers)
+        map_peers.extend(_fetch_connected_peers(testnet_foreign, "testnet"))
     else:
         print("[INFO] Testnet node not running — skipping testnet peers.")
 
-    if not all_peers:
-        print("[WARN] No peers found from any node.", file=sys.stderr)
+    # ── 2. All healthy known peers — for version stats only ───────────────────
+    # get_peers (Healthy flag) gives a larger sample for the version distribution
+    # chart. These are NOT stored in known_peers and NOT exported to peers.json.
+    stat_peers = []
+    if _is_node_running(3413):
+        stat_peers.extend(_fetch_all_peers_from_node(MAINNET_OWNER_URL, API_SECRET, "mainnet"))
+    if _is_node_running(13413):
+        stat_peers.extend(_fetch_all_peers_from_node(TESTNET_OWNER_URL, TESTNET_API_SECRET, "testnet"))
+
+    if not map_peers:
+        print("[WARN] No connected peers found from any node.", file=sys.stderr)
         _write_peers_json([])
+        # Still record version snapshot from stat_peers if we have any
+        if stat_peers:
+            conn = open_db()
+            ts = now_ts()
+            mainnet_only = [p for p in stat_peers if p["network"] == "mainnet"]
+            version_counts = Counter(p["user_agent"] for p in mainnet_only)
+            if version_counts:
+                conn.executemany(
+                    "INSERT INTO peer_snapshots(sampled_at, user_agent, count) VALUES(?,?,?)",
+                    [(ts, ua, cnt) for ua, cnt in version_counts.items()],
+                )
+                conn.execute("DELETE FROM peer_snapshots WHERE sampled_at < ?", (ts - 365 * 86400,))
+                conn.commit()
+            conn.close()
         return
 
-    # De-duplicate: same IP+network can appear multiple times
+    # De-duplicate map_peers (same IP+network can appear in both mainnet + testnet runs)
     seen  = set()
     dedup = []
-    for p in all_peers:
+    for p in map_peers:
         key = (p["ip"], p["network"])
         if key not in seen:
             seen.add(key)
             dedup.append(p)
-    all_peers = dedup
-    print(f"[INFO] Total unique peers: {len(all_peers)} ({len(seen)} after dedup)")
+    map_peers = dedup
+    print(f"[INFO] Connected peers (unique): {len(map_peers)}")
 
-    # ── Geolocate in batches ──────────────────────────────────────────────────
+    # ── 3. Geolocate connected peers ──────────────────────────────────────────
+    # With get_connected_peers we typically have <30 IPs — usually 1 batch.
     geo_map = {}
-    unique_ips = list({p["ip"] for p in all_peers})
+    unique_ips = list({p["ip"] for p in map_peers})
     for i in range(0, len(unique_ips), GEO_BATCH):
         batch = unique_ips[i: i + GEO_BATCH]
         try:
@@ -621,18 +644,18 @@ def _update_peers():
             if exc.code == 429:
                 print(f"[WARN] Geo rate-limited (429) — waiting 65s before next batch...",
                       file=sys.stderr)
-                time.sleep(65)   # wait out the ip-api.com rate-limit window
+                time.sleep(65)
             else:
                 print(f"[WARN] Geo batch failed: {exc}", file=sys.stderr)
         except Exception as exc:
             print(f"[WARN] Geo batch failed: {exc}", file=sys.stderr)
         finally:
-            time.sleep(1.5)  # always pause between batches (free tier: 45 req/min)
+            time.sleep(1.5)
 
-    # ── Build enriched peer list ──────────────────────────────────────────────
+    # ── 4. Build enriched connected peer list ─────────────────────────────────
     enriched = []
     ts = now_ts()
-    for p in all_peers:
+    for p in map_peers:
         geo = geo_map.get(p["ip"], {})
         enriched.append({
             "ip":           p["ip"],
@@ -644,13 +667,14 @@ def _update_peers():
             "city":         geo.get("city", ""),
             "user_agent":   p["user_agent"],
             "direction":    p["direction"],
-            "network":      p["network"],    # "mainnet" | "testnet"
+            "network":      p["network"],
             "last_seen":    ts,
         })
 
     conn = open_db()
 
-    # ── Upsert current peers into known_peers ─────────────────────────────────
+    # ── 5. Upsert connected peers into known_peers ────────────────────────────
+    # Preserve existing geo if the new lookup returned zeros (geo API miss).
     conn.executemany("""
         INSERT INTO known_peers
             (ip, network, port, user_agent, direction, lat, lng,
@@ -660,11 +684,11 @@ def _update_peers():
             port         = excluded.port,
             user_agent   = excluded.user_agent,
             direction    = excluded.direction,
-            lat          = excluded.lat,
-            lng          = excluded.lng,
-            country      = excluded.country,
-            country_code = excluded.country_code,
-            city         = excluded.city,
+            lat          = CASE WHEN excluded.lat  != 0  THEN excluded.lat  ELSE lat  END,
+            lng          = CASE WHEN excluded.lng  != 0  THEN excluded.lng  ELSE lng  END,
+            country      = CASE WHEN excluded.country      != '' THEN excluded.country      ELSE country      END,
+            country_code = CASE WHEN excluded.country_code != '' THEN excluded.country_code ELSE country_code END,
+            city         = CASE WHEN excluded.city         != '' THEN excluded.city         ELSE city         END,
             last_seen    = excluded.last_seen
     """, [
         (p["ip"], p["network"], p["port"], p["user_agent"], p["direction"],
@@ -673,7 +697,7 @@ def _update_peers():
         for p in enriched
     ])
 
-    # ── Prune peers not seen in PEER_RETENTION_DAYS ───────────────────────────
+    # ── 6. Prune peers not seen in PEER_RETENTION_DAYS ───────────────────────
     cutoff = ts - PEER_RETENTION_DAYS * 86400
     deleted = conn.execute(
         "DELETE FROM known_peers WHERE last_seen < ?", (cutoff,)
@@ -681,8 +705,9 @@ def _update_peers():
     if deleted:
         print(f"[INFO] Pruned {deleted} stale peers (>{PEER_RETENTION_DAYS}d).")
 
-    # ── Store version snapshot (mainnet only for stats charts) ────────────────
-    mainnet_only = [p for p in all_peers if p["network"] == "mainnet"]
+    # ── 7. Version snapshot — use stat_peers if available, else map_peers ─────
+    version_source = stat_peers if stat_peers else map_peers
+    mainnet_only   = [p for p in version_source if p["network"] == "mainnet"]
     version_counts = Counter(p["user_agent"] for p in mainnet_only)
     if version_counts:
         conn.executemany(
@@ -693,7 +718,7 @@ def _update_peers():
 
     conn.commit()
 
-    # ── Read all peers seen within PEER_HISTORY_DAYS for the JSON ─────────────
+    # ── 8. Export peers.json from known_peers (last PEER_HISTORY_DAYS) ────────
     history_cutoff = ts - PEER_HISTORY_DAYS * 86400
     rows = conn.execute("""
         SELECT ip, network, port, user_agent, direction,
@@ -726,7 +751,7 @@ def _update_peers():
     testnet_count = sum(1 for p in output_peers if p["network"] == "testnet")
     _write_peers_json(output_peers, mainnet_count, testnet_count)
     print(f"[INFO] Peers written: {mainnet_count} mainnet, {testnet_count} testnet "
-          f"(including up to {PEER_HISTORY_DAYS}d history).")
+          f"(last {PEER_HISTORY_DAYS}d of connected peers).")
 
 def _write_peers_json(peers, mainnet_count=0, testnet_count=0):
     os.makedirs(WWW_DATA, exist_ok=True)

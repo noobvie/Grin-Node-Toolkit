@@ -449,7 +449,7 @@
 
   <div id="panel">
     <h2>Network Snapshot</h2>
-    <p class="filter-note">Active peers — last 48 hours</p>
+    <p class="filter-note">Active peers — last 7 days</p>
     <div class="stat-row"><span class="lbl">Total peers</span><span class="val" id="p-total">—</span></div>
     <div class="stat-row">
       <span class="lbl"><span style="color:#ff9900">●</span> Mainnet</span>
@@ -502,8 +502,8 @@
 <script>
 const DATA_URL = "data/peers.json";
 
-// Only show peers seen within the last 48 hours
-const ACTIVE_WINDOW_SEC = 48 * 3600;
+// Show peers seen within the last 7 days (matches PEER_HISTORY_DAYS in collector)
+const ACTIVE_WINDOW_SEC = 7 * 24 * 3600;
 
 const VERSION_COLORS = [
   "#ff9900","#58a6ff","#3fb950","#bc8cff","#f85149","#d29922","#79c0ff","#ffa657",

@@ -61,8 +61,8 @@ GEO_URL       = "http://ip-api.com/batch?fields=status,lat,lon,country,countryCo
 
 # Peer retention: keep known_peers not seen for more than this many days
 PEER_RETENTION_DAYS = 30
-# How many days back to include in peers.json (0 = current run only)
-PEER_HISTORY_DAYS   = 2
+# How many days back to include in peers.json (must match ACTIVE_WINDOW_SEC in map.html)
+PEER_HISTORY_DAYS   = 7
 
 # Standard Grin P2P ports — only accept peers advertising these ports.
 # get_peers returns ALL gossip-discovered IPs; non-standard ports are not Grin nodes.
@@ -717,12 +717,16 @@ def _update_peers():
     # Preserve existing geo if the new lookup returned zeros (geo API miss).
     _upsert_peers(conn, enriched, ts)
 
-    # ── 5b. Also store recent routing-table peers (Healthy, port 3414) ───────
-    # These extend the map beyond the ~55 directly connected peers by including
-    # all Healthy peers the node has seen within PEER_HISTORY_DAYS.
-    # last_seen comes from the routing table; connected peers always win (ts=now).
+    # ── 5b. Also store routing-table peers (Healthy, port 3414) ─────────────
+    # These extend the map beyond directly connected peers.
+    # Grin's get_peers API returns last_seen=0 for routing-table entries, so we
+    # fall back to (ts - 60s) — slightly older than live peers but within the
+    # 48h frontend filter.  Connected peers always win because their last_seen=ts.
     history_cutoff = ts - PEER_HISTORY_DAYS * 86400
-    recent_stat = [p for p in stat_peers if p.get("last_seen", 0) >= history_cutoff]
+    for p in stat_peers:
+        if not p.get("last_seen"):
+            p["last_seen"] = ts - 60  # mark as "routing table" (1 min behind live)
+    recent_stat = [p for p in stat_peers if p["last_seen"] >= history_cutoff]
     if recent_stat:
         connected_ips = {p["ip"] for p in map_peers}
         new_ips       = list({p["ip"] for p in recent_stat if p["ip"] not in connected_ips})

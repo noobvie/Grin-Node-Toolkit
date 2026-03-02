@@ -483,16 +483,16 @@ def _extract_addr(peer, default_port):
     return ip, port
 
 
-def _fetch_connected_peers(foreign_url, network_label):
+def _fetch_connected_peers(owner_url, secret, network_label):
     """
-    Fetch CURRENTLY CONNECTED peers via get_connected_peers (foreign API, no auth).
+    Fetch CURRENTLY CONNECTED peers via get_connected_peers (owner API, auth required).
     These peers have an active TCP session — guaranteed to be alive right now.
     Typically returns 8–30 peers; used as the authoritative source for peers.json.
     """
     expected_port = MAINNET_P2P_PORT if network_label == "mainnet" else TESTNET_P2P_PORT
     peer_list = []
     try:
-        raw = _rpc(foreign_url, "get_connected_peers", retries=2)
+        raw = _rpc(owner_url, "get_connected_peers", secret=secret, retries=2)
         if raw:
             for p in raw:
                 ip, port = _extract_addr(p, expected_port)
@@ -566,15 +566,14 @@ def _update_peers():
     # get_connected_peers returns only peers with an active TCP session.
     # These are the only peers we store in known_peers and export to peers.json.
     map_peers = []
-    testnet_foreign = TESTNET_OWNER_URL.replace("/v2/owner", "/v2/foreign")
 
     if _is_node_running(3413):
-        map_peers.extend(_fetch_connected_peers(NODE_URL, "mainnet"))
+        map_peers.extend(_fetch_connected_peers(MAINNET_OWNER_URL, API_SECRET, "mainnet"))
     else:
         print("[INFO] Mainnet node not running — skipping mainnet peers.")
 
     if _is_node_running(13413):
-        map_peers.extend(_fetch_connected_peers(testnet_foreign, "testnet"))
+        map_peers.extend(_fetch_connected_peers(TESTNET_OWNER_URL, TESTNET_API_SECRET, "testnet"))
     else:
         print("[INFO] Testnet node not running — skipping testnet peers.")
 

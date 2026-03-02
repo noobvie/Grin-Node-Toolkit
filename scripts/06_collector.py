@@ -360,9 +360,9 @@ def cmd_init_history():
     conn.commit()
     conn.close()
 
-    # Fetch full block stats for last 90 days
-    print("[INFO] Fetching tx/fee stats for last 90 days...")
-    _fetch_block_stats_range(tip_height - 90 * BLOCKS_PER_DAY, tip_height)
+    # Fetch full block stats for last 180 days
+    print("[INFO] Fetching tx/fee stats for last 180 days...")
+    _fetch_block_stats_range(tip_height - 180 * BLOCKS_PER_DAY, tip_height)
 
     # Update peers
     print("[INFO] Updating peer data...")
@@ -895,25 +895,41 @@ def export_all_json():
         })
 
     # ── node versions ─────────────────────────────────────────────────────────
-    # Most recent snapshot
-    latest_snap_ts = conn.execute(
-        "SELECT MAX(sampled_at) FROM peer_snapshots"
-    ).fetchone()[0]
+    # Use all unique peers seen in the last PEER_HISTORY_DAYS for a broader sample.
+    # This captures every peer we've connected to recently, not just one run's snapshot.
+    version_cutoff = ts_now - PEER_HISTORY_DAYS * 86400
+    ver_rows = conn.execute(
+        "SELECT user_agent, COUNT(*) as cnt FROM known_peers "
+        "WHERE last_seen >= ? AND network='mainnet' AND user_agent != '' AND user_agent != 'unknown' "
+        "GROUP BY user_agent ORDER BY cnt DESC",
+        (version_cutoff,),
+    ).fetchall()
 
     versions    = []
     total_peers = 0
-    if latest_snap_ts:
-        rows = conn.execute(
-            "SELECT user_agent, count FROM peer_snapshots WHERE sampled_at=? ORDER BY count DESC",
-            (latest_snap_ts,),
-        ).fetchall()
-        total_peers = sum(r[1] for r in rows)
-        # Consolidate minor versions: keep top 5, rest → "Other"
-        top   = rows[:5]
-        other = sum(r[1] for r in rows[5:])
+    if ver_rows:
+        total_peers = sum(r[1] for r in ver_rows)
+        top   = ver_rows[:5]
+        other = sum(r[1] for r in ver_rows[5:])
         versions = [{"label": r[0], "count": r[1]} for r in top]
         if other > 0:
             versions.append({"label": "Other", "count": other})
+    else:
+        # Fall back to latest peer_snapshots if known_peers has no data yet
+        latest_snap_ts = conn.execute(
+            "SELECT MAX(sampled_at) FROM peer_snapshots"
+        ).fetchone()[0]
+        if latest_snap_ts:
+            rows = conn.execute(
+                "SELECT user_agent, count FROM peer_snapshots WHERE sampled_at=? ORDER BY count DESC",
+                (latest_snap_ts,),
+            ).fetchall()
+            total_peers = sum(r[1] for r in rows)
+            top   = rows[:5]
+            other = sum(r[1] for r in rows[5:])
+            versions = [{"label": r[0], "count": r[1]} for r in top]
+            if other > 0:
+                versions.append({"label": "Other", "count": other})
 
     # Always write versions.json so the page can load even with no snapshot data
     _write_json("versions.json", {

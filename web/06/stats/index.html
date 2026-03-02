@@ -322,18 +322,18 @@
         <div class="range-btns" id="tx-range">
           <button class="range-btn active" data-r="recent">24h</button>
           <button class="range-btn" data-r="hourly">30d</button>
-          <button class="range-btn" data-r="daily">All</button>
+          <button class="range-btn" data-r="all">All</button>
         </div>
       </div>
       <div class="chart-wrap"><canvas id="chart-tx"></canvas></div>
     </div>
     <div class="card">
       <div class="card-header">
-        <div class="card-title"><span class="dot dot-purple"></span>Fees per Block (nGrin)</div>
+        <div class="card-title"><span class="dot dot-purple"></span>Fees per Block</div>
         <div class="range-btns" id="fee-range">
           <button class="range-btn active" data-r="recent">24h</button>
           <button class="range-btn" data-r="hourly">30d</button>
-          <button class="range-btn" data-r="daily">All</button>
+          <button class="range-btn" data-r="all">All</button>
         </div>
       </div>
       <div class="chart-wrap"><canvas id="chart-fees"></canvas></div>
@@ -389,6 +389,13 @@ const fmtDiff = v => {
   if (v >= 1e3) return (v/1e3).toFixed(1) + "K";
   return fmt(v);
 };
+// v is in nGrin; display in human-readable units
+const fmtFee = v => {
+  if (v >= 1e9) return (v/1e9).toFixed(3) + " Grin";
+  if (v >= 1e6) return (v/1e6).toFixed(1) + " mGrin";
+  if (v >= 1e3) return (v/1e3).toFixed(0) + " µGrin";
+  return fmt(v) + " nGrin";
+};
 const timeAgo = ts => {
   const s = Math.floor(Date.now()/1000) - ts;
   if (s < 60)   return s + "s ago";
@@ -402,7 +409,7 @@ const fetchJSON = async url => {
 };
 const tryFetchJSON = async url => { try { return await fetchJSON(url); } catch { return null; } };
 
-function makeLineChart(id, label, color, yFmt) {
+function makeLineChart(id, label, color, yFmt, suggestedMax) {
   const ctx = $(id).getContext("2d");
   return new Chart(ctx, {
     type: "line",
@@ -443,6 +450,7 @@ function makeLineChart(id, label, color, yFmt) {
           ticks: { maxTicksLimit: 8, color: "#8b949e" },
         },
         y: {
+          suggestedMax,
           grid: { color: "#21262d" },
           ticks: { color: "#8b949e", callback: v => yFmt(v) },
         }
@@ -458,10 +466,10 @@ function initCharts() {
   Chart.defaults.color = "#8b949e";
   Chart.defaults.borderColor = "#30363d";
   Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-  charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS);
-  charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff);
+  charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS,        6e6);
+  charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff,       5e9);
   charts.tx         = makeLineChart("chart-tx",         "Transactions", "#3fb950", v => fmt(v,1));
-  charts.fees       = makeLineChart("chart-fees",       "Fees (nGrin)", "#bc8cff", v => fmt(v));
+  charts.fees       = makeLineChart("chart-fees",       "Fees",         "#bc8cff", fmtFee);
 }
 
 // Range state

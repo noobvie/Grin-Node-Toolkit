@@ -480,7 +480,12 @@ function updateChartData(chart, json, range) {
   if (range === "all")    pts = [...(json.daily||[]), ...(json.hourly||[]), ...(json.recent||[])];
   else if (range === "hourly") pts = json.hourly || [];
   else                    pts = json.recent || [];
-  chart.data.datasets[0].data = pts.map(([ts, v]) => ({x: ts * 1000, y: v}));
+  let data = pts.map(([ts, v]) => ({x: ts * 1000, y: v}));
+  // Drop extreme outlier points (> 10× suggestedMax) caused by partial/corrupt imports.
+  // This keeps the axis sane while still allowing the scale to grow for legitimate spikes.
+  const cap = chart.options.scales.y.suggestedMax;
+  if (cap) data = data.filter(p => p.y <= cap * 10);
+  chart.data.datasets[0].data = data;
   chart.update("none");
 }
 

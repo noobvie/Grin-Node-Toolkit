@@ -150,7 +150,8 @@
     gap: 5px;
     flex-shrink: 0;
   }
-  .lp-filters select {
+  .lp-filters select,
+  .lp-filters input[type="text"] {
     width: 100%;
     background: var(--bg);
     border: 1px solid var(--border);
@@ -158,7 +159,12 @@
     padding: 5px 8px;
     border-radius: 4px;
     font-size: 12px;
-    cursor: pointer;
+  }
+  .lp-filters select { cursor: pointer; }
+  .lp-filters input[type="text"]::placeholder { color: var(--muted); }
+  .lp-filters input[type="text"]:focus {
+    outline: none;
+    border-color: var(--grin);
   }
   #lp-count {
     padding: 0 14px 6px;
@@ -413,6 +419,7 @@
       <button class="lp-close" id="lp-close" title="Close">✕</button>
     </div>
     <div class="lp-filters">
+      <input id="f-ip" type="text" placeholder="Search IP address…" autocomplete="off" spellcheck="false">
       <select id="f-country"><option value="">All Countries</option></select>
       <select id="f-version"><option value="">All Versions</option></select>
     </div>
@@ -687,10 +694,12 @@ function buildPeerList(peers) {
 }
 
 function renderPeerList() {
+  const ipQuery = $("f-ip").value.trim().toLowerCase();
   const country = $("f-country").value;
   const version = $("f-version").value;
 
   let list = ALL_PEERS;
+  if (ipQuery) list = list.filter(p => p.ip && p.ip.toLowerCase().includes(ipQuery));
   if (country) list = list.filter(p => p.country === country);
   if (version) list = list.filter(p => p.user_agent === version);
   list = [...list].sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
@@ -725,8 +734,9 @@ $("peer-list").addEventListener("click", e => {
   if (leafletMap) leafletMap.flyTo([p.lat, p.lng], 6);
 });
 
-$("f-country").addEventListener("change", renderPeerList);
-$("f-version").addEventListener("change", renderPeerList);
+$("f-ip").addEventListener("input",        renderPeerList);
+$("f-country").addEventListener("change",  renderPeerList);
+$("f-version").addEventListener("change",  renderPeerList);
 
 // ── Left panel toggle ─────────────────────────────────────────────────────────
 function toggleLeftPanel(show) {

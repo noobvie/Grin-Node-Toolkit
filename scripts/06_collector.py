@@ -2,7 +2,7 @@
 """
 grin-stats-collector
 ====================
-Collects Grin network stats from a local node and exports JSON for Chart.js + Globe.GL.
+Collects Grin network stats from a local node and exports JSON for Chart.js + Leaflet.
 
 Usage:
     python3 06_collector.py --init-db         create schema only
@@ -62,7 +62,12 @@ GEO_URL       = "http://ip-api.com/batch?fields=status,lat,lon,country,countryCo
 # Peer retention: keep known_peers not seen for more than this many days
 PEER_RETENTION_DAYS = 30
 # How many days back to include in peers.json (0 = current run only)
-PEER_HISTORY_DAYS   = 7
+PEER_HISTORY_DAYS   = 2
+
+# Standard Grin P2P ports — only accept peers advertising these ports.
+# get_peers returns ALL gossip-discovered IPs; non-standard ports are not Grin nodes.
+MAINNET_P2P_PORT = "3414"
+TESTNET_P2P_PORT = "13414"
 
 # ── API secret ────────────────────────────────────────────────────────────────
 
@@ -466,31 +471,54 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
     Query the owner API get_peers (returns ALL known peers — connected, healthy,
     and recently seen). This gives 100-500+ peers vs 8-30 from get_connected_peers.
     Falls back to get_connected_peers on the foreign API if owner API fails.
+
+    Note: only peers on the standard Grin P2P port (3414 mainnet / 13414 testnet)
+    are accepted. Non-standard ports are not Grin nodes — they appear because
+    get_peers returns every IP ever gossiped about in the routing table.
     """
+    expected_port = MAINNET_P2P_PORT if network_label == "mainnet" else TESTNET_P2P_PORT
     peer_list = []
+
+    def _extract(p, default_port):
+        addr = p.get("addr", "")
+        ip   = addr.rsplit(":", 1)[0].strip("[]")
+        port = addr.rsplit(":", 1)[-1] if ":" in addr else default_port
+        return ip, port
+
+    def _is_public_ip(ip):
+        return (ip
+                and not ip.startswith("127.")
+                and not ip.startswith("::1")
+                and not ip.startswith("10.")
+                and not ip.startswith("192.168."))
 
     # Try owner API first (all known peers, requires API secret)
     try:
         raw = _rpc(owner_url, "get_peers", {"peer_addr": None}, secret=secret)
         if raw:
+            skipped = 0
             for p in raw:
                 flags = p.get("flags", "")
                 # Skip banned peers — they're not healthy network participants
                 if "Banned" in str(flags):
                     continue
-                addr = p.get("addr", "")
-                ip   = addr.rsplit(":", 1)[0].strip("[]")
-                port = addr.rsplit(":", 1)[-1] if ":" in addr else "3414"
-                if ip and not ip.startswith("127.") and not ip.startswith("::1") \
-                       and not ip.startswith("10.")  and not ip.startswith("192.168."):
-                    peer_list.append({
-                        "ip":         ip,
-                        "port":       port,
-                        "user_agent": p.get("user_agent", "unknown"),
-                        "direction":  p.get("direction", "Outbound"),
-                        "network":    network_label,
-                    })
-            print(f"[INFO] {network_label}: {len(peer_list)} known peers from owner API.")
+                ip, port = _extract(p, expected_port)
+                # Only accept peers on the standard Grin P2P port for this network
+                if port != expected_port:
+                    skipped += 1
+                    continue
+                if not _is_public_ip(ip):
+                    continue
+                peer_list.append({
+                    "ip":         ip,
+                    "port":       port,
+                    "user_agent": p.get("user_agent", "unknown"),
+                    "direction":  p.get("direction", "Outbound"),
+                    "network":    network_label,
+                })
+            if skipped:
+                print(f"[INFO] {network_label}: skipped {skipped} peer(s) on non-standard ports.")
+            print(f"[INFO] {network_label}: {len(peer_list)} peers (port {expected_port}) from owner API.")
             return peer_list
     except Exception as exc:
         print(f"[WARN] {network_label} owner API get_peers failed: {exc} — falling back.", file=sys.stderr)
@@ -501,18 +529,19 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
         raw = _rpc(foreign_url, "get_connected_peers", retries=2)
         if raw:
             for p in raw:
-                addr = p.get("addr", "")
-                ip   = addr.rsplit(":", 1)[0].strip("[]")
-                port = addr.rsplit(":", 1)[-1] if ":" in addr else "3414"
-                if ip and not ip.startswith("127.") and not ip.startswith("::1"):
-                    peer_list.append({
-                        "ip":         ip,
-                        "port":       port,
-                        "user_agent": p.get("user_agent", "unknown"),
-                        "direction":  p.get("direction", "Outbound"),
-                        "network":    network_label,
-                    })
-        print(f"[INFO] {network_label}: {len(peer_list)} connected peers (fallback).")
+                ip, port = _extract(p, expected_port)
+                if port != expected_port:
+                    continue
+                if not _is_public_ip(ip):
+                    continue
+                peer_list.append({
+                    "ip":         ip,
+                    "port":       port,
+                    "user_agent": p.get("user_agent", "unknown"),
+                    "direction":  p.get("direction", "Outbound"),
+                    "network":    network_label,
+                })
+        print(f"[INFO] {network_label}: {len(peer_list)} connected peers (fallback, port {expected_port}).")
     except Exception as exc:
         print(f"[WARN] {network_label} fallback also failed: {exc}", file=sys.stderr)
 

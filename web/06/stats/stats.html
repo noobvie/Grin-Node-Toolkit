@@ -277,6 +277,35 @@
   .range-btn:hover  { border-color: var(--grin); color: var(--text); }
   .range-btn.active { background: var(--grin); border-color: var(--grin); color: #000; font-weight: 600; }
 
+  /* ── Metric toggle buttons ───────────────────────────────────────────────── */
+  .metric-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 5px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .metric-toggle:hover { border-color: var(--text); color: var(--text); }
+  .metric-toggle.active {
+    background: rgba(88,166,255,0.15);
+    border-color: var(--blue);
+    color: var(--blue);
+    font-weight: 600;
+  }
+  .metric-toggle .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
   /* ── Canvas wrapper ──────────────────────────────────────────────────────── */
   .chart-wrap { position: relative; height: var(--chart-h); }
 
@@ -492,32 +521,29 @@
     <div class="chart-wrap"><canvas id="chart-difficulty"></canvas></div>
   </div>
 
-  <!-- Transactions + Fees -->
-  <div class="grid-2">
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title"><span class="dot dot-green"></span>Transactions per Block</div>
-        <div class="range-btns" id="tx-range">
-          <button class="range-btn" data-r="day">Day</button>
-          <button class="range-btn" data-r="month">Month</button>
-          <button class="range-btn" data-r="year">Year</button>
-          <button class="range-btn active" data-r="all">All Time</button>
-        </div>
+  <!-- Transactions + Fees (Combined) -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-green"></span>Block Activity</div>
+      <div class="range-btns" id="activity-range">
+        <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="month">Month</button>
+        <button class="range-btn" data-r="year">Year</button>
+        <button class="range-btn active" data-r="all">All Time</button>
       </div>
-      <div class="chart-wrap"><canvas id="chart-tx"></canvas></div>
     </div>
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title"><span class="dot dot-purple"></span>Fees per Block</div>
-        <div class="range-btns" id="fee-range">
-          <button class="range-btn" data-r="day">Day</button>
-          <button class="range-btn" data-r="month">Month</button>
-          <button class="range-btn" data-r="year">Year</button>
-          <button class="range-btn active" data-r="all">All Time</button>
-        </div>
-      </div>
-      <div class="chart-wrap"><canvas id="chart-fees"></canvas></div>
+    <div style="display: flex; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--border); flex-wrap: wrap;">
+      <button class="metric-toggle active" data-metric="tx" title="Transactions per Block">
+        <span class="dot dot-green"></span>Transactions
+      </button>
+      <button class="metric-toggle" data-metric="fee" title="Fees per Block">
+        <span class="dot dot-purple"></span>Fees
+      </button>
+      <button class="metric-toggle" data-metric="both" title="Show Both Metrics">
+        <span class="dot dot-blue"></span>Both
+      </button>
     </div>
+    <div class="chart-wrap"><canvas id="chart-activity"></canvas></div>
   </div>
 
   <!-- Node versions -->
@@ -641,19 +667,95 @@ function makeLineChart(id, label, color, yFmt, suggestedMax) {
   });
 }
 
+function makeMultiChart(id, yFmt1, yFmt2) {
+  const ctx = $(id).getContext("2d");
+  return new Chart(ctx, {
+    type: "line",
+    data: {
+      datasets: [
+        {
+          label: "Transactions",
+          data: [],
+          borderColor: "#3fb950",
+          backgroundColor: "#3fb950" + "18",
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.3,
+          yAxisID: "y1",
+          hidden: false,
+        },
+        {
+          label: "Fees",
+          data: [],
+          borderColor: "#bc8cff",
+          backgroundColor: "#bc8cff" + "18",
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.3,
+          yAxisID: "y2",
+          hidden: false,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: true, position: "top" },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const fmt = ctx.datasetIndex === 0 ? yFmt1 : yFmt2;
+              return ctx.dataset.label + ": " + fmt(ctx.parsed.y);
+            },
+            title: items => {
+              const d = new Date(items[0].parsed.x);
+              return d.toLocaleString();
+            },
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: "time",
+          time: { tooltipFormat: "MMM d yyyy HH:mm" },
+          ticks: { maxTicksLimit: 8 },
+        },
+        y1: {
+          type: "linear",
+          position: "left",
+          ticks: { callback: v => yFmt1(v) },
+          title: { display: true, text: "Transactions" }
+        },
+        y2: {
+          type: "linear",
+          position: "right",
+          ticks: { callback: v => yFmt2(v) },
+          title: { display: true, text: "Fees" },
+          grid: { drawOnChartArea: false }
+        }
+      }
+    }
+  });
+}
+
 // ── Chart instances ───────────────────────────────────────────────────────────
 const charts = {};
+let activityMetric = "tx";  // "tx", "fee", or "both"
 
 function initCharts() {
   // Chart.defaults (color, borderColor, font) are set by initTheme() before this runs
   charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS);
   charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff);
-  charts.tx         = makeLineChart("chart-tx",         "Transactions", "#3fb950", v => fmt(v,1));
-  charts.fees       = makeLineChart("chart-fees",       "Fees",         "#bc8cff", fmtFee);
+  charts.activity   = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee);
 }
 
 // Range state
-const rangeState = { hr: "all", diff: "all", tx: "all", fee: "all" };
+const rangeState = { hr: "all", diff: "all", activity: "all" };
 
 function updateChartData(chart, json, range) {
   let pts;
@@ -681,6 +783,51 @@ function updateChartData(chart, json, range) {
 
   chart.data.datasets[0].data = data;
   chart.update("none");
+}
+
+function updateActivityChart(txJson, feeJson, range, metric) {
+  let txPts, feePts;
+  const nowMs = Date.now();
+  
+  const filterByRange = (json) => {
+    if (range === "all") {
+      return [...(json.daily||[]), ...(json.hourly||[]), ...(json.recent||[])];
+    } else if (range === "year") {
+      const cutoff = nowMs - 365 * 86400000;
+      return [
+        ...(json.daily||[]).filter(([ts]) => ts*1000 >= cutoff),
+        ...(json.hourly||[]),
+        ...(json.recent||[]),
+      ];
+    } else if (range === "month") {
+      return [...(json.hourly||[]), ...(json.recent||[])];
+    } else {
+      return [...(json.recent||[])];
+    }
+  };
+  
+  txPts = filterByRange(txJson);
+  feePts = filterByRange(feeJson);
+  
+  const byTs = (pts) => {
+    const map = new Map();
+    pts.forEach(([ts, v]) => map.set(ts, v));
+    return [...map.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([ts, v]) => ({x: ts * 1000, y: v}));
+  };
+  
+  const txData = byTs(txPts);
+  const feeData = byTs(feePts);
+  
+  charts.activity.data.datasets[0].data = txData;
+  charts.activity.data.datasets[1].data = feeData;
+  
+  // Update visibility based on metric selection
+  charts.activity.data.datasets[0].hidden = metric === "fee";
+  charts.activity.data.datasets[1].hidden = metric === "tx";
+  
+  charts.activity.update("none");
 }
 
 // ── Data store ────────────────────────────────────────────────────────────────
@@ -734,8 +881,7 @@ async function loadAll() {
   // Charts (skipped if chart.min.js didn't load)
   if (charts.hashrate   && hashrate)     updateChartData(charts.hashrate,   hashrate,     rangeState.hr);
   if (charts.difficulty && difficulty)   updateChartData(charts.difficulty, difficulty,   rangeState.diff);
-  if (charts.tx         && transactions) updateChartData(charts.tx,         transactions, rangeState.tx);
-  if (charts.fees       && fees)         updateChartData(charts.fees,       fees,         rangeState.fee);
+  if (charts.activity   && transactions && fees) updateActivityChart(transactions, fees, rangeState.activity, activityMetric);
 
   // Versions donut
   if (versions) renderVersions(versions);
@@ -893,7 +1039,30 @@ function wireRangeGroup(groupId, chartKey, cacheKey) {
       $(groupId).querySelectorAll(".range-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
       rangeState[chartKey] = btn.dataset.r;
-      if (DATA_CACHE[cacheKey]) updateChartData(charts[chartKey === "hr" ? "hashrate" : chartKey === "diff" ? "difficulty" : chartKey === "tx" ? "tx" : "fees"], DATA_CACHE[cacheKey], rangeState[chartKey]);
+      
+      if (chartKey === "activity") {
+        if (DATA_CACHE.transactions && DATA_CACHE.fees) {
+          updateActivityChart(DATA_CACHE.transactions, DATA_CACHE.fees, rangeState.activity, activityMetric);
+        }
+      } else {
+        const chartMap = { hr: "hashrate", diff: "difficulty" };
+        if (DATA_CACHE[cacheKey]) {
+          updateChartData(charts[chartMap[chartKey]], DATA_CACHE[cacheKey], rangeState[chartKey]);
+        }
+      }
+    });
+  });
+}
+
+function wireMetricToggles() {
+  document.querySelectorAll(".metric-toggle").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".metric-toggle").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      activityMetric = btn.dataset.metric;
+      if (DATA_CACHE.transactions && DATA_CACHE.fees) {
+        updateActivityChart(DATA_CACHE.transactions, DATA_CACHE.fees, rangeState.activity, activityMetric);
+      }
     });
   });
 }
@@ -901,10 +1070,10 @@ function wireRangeGroup(groupId, chartKey, cacheKey) {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function boot() {
   initTheme();   // apply saved theme before charts are created
-  wireRangeGroup("hr-range",   "hr",   "hashrate");
-  wireRangeGroup("diff-range", "diff", "difficulty");
-  wireRangeGroup("tx-range",   "tx",   "transactions");
-  wireRangeGroup("fee-range",  "fee",  "fees");
+  wireRangeGroup("hr-range",      "hr",       "hashrate");
+  wireRangeGroup("diff-range",    "diff",     "difficulty");
+  wireRangeGroup("activity-range", "activity", "transactions");
+  wireMetricToggles();
 
   try {
     if (typeof Chart !== "undefined") initCharts();

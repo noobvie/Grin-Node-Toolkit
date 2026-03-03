@@ -4,11 +4,28 @@ grin-stats-collector
 ====================
 Collects Grin network stats from a local node and exports JSON for Chart.js + Leaflet.
 
-Usage:
-    python3 06_collector.py --init-db         create schema only
-    python3 06_collector.py --init-history    backfill all historical data (sampled)
-    python3 06_collector.py --update          fetch new blocks + update peers
-    python3 06_collector.py --peers-only      update peer geolocation only
+📊 DATABASE SIZING & STORAGE ESTIMATES
+═══════════════════════════════════════
+Per-block storage: ~23 bytes (tx_count, fee_total, output_count, timestamp, height)
+
+Grin chain (genesis Jan 2019 → present, ~3.7M blocks):
+  • block_stats table (all TX/fees):  ~85 MB
+  • blocks table (headers, sampled):  ~100 KB (daily + hourly + recent buckets)
+  • Indexes:                          ~15-20% overhead
+  • TOTAL:                            ~100-110 MB for complete history
+
+Growth projection:
+  • Per year: ~12.1 MB (525,600 new blocks)
+  • After 10 more years (2036): ~220 MB total (manageable on any filesystem)
+
+Usage (commands):
+    python3 06_collector.py --init-db            Create DB schema only
+    python3 06_collector.py --init-history       Backfill ENTIRE chain (headers + all TX/fees)
+    python3 06_collector.py --update             Fetch new blocks + TX stats (incremental)
+    python3 06_collector.py --peers-only         Update peer geolocation only
+    python3 06_collector.py --backfill-stats     Fetch last 180 days (default)
+    python3 06_collector.py --backfill-stats 90  Fetch last 90 days
+    python3 06_collector.py --backfill-stats all Fetch ENTIRE chain history from block 0
 
 Config (env vars or /var/lib/grin-stats/config.env):
     GRIN_NODE_URL          default: http://127.0.0.1:3413/v2/foreign
@@ -380,9 +397,9 @@ def cmd_init_history():
     conn.commit()
     conn.close()
 
-    # Fetch full block stats for last 180 days
-    print("[INFO] Fetching tx/fee stats for last 180 days...")
-    _fetch_block_stats_range(tip_height - 180 * BLOCKS_PER_DAY, tip_height)
+    # Fetch full block stats for complete history (ALL blocks since genesis)
+    print("[INFO] Fetching tx/fee stats for complete chain history...")
+    _fetch_block_stats_range(0, tip_height)
 
     # Update peers
     print("[INFO] Updating peer data...")
@@ -485,9 +502,26 @@ def _fetch_block_stats_range(start, end, workers=4, heights=None):
     print()
     conn.close()
 
-def cmd_backfill_stats(days=180):
-    """Fetch full block stats for the last N days, skipping already-stored heights."""
-    print(f"[INFO] Backfilling block stats for last {days} days...")
+def cmd_backfill_stats(days=None):
+    """
+    Fetch full block stats for the last N days (or ALL history if days=None).
+    Skips already-stored heights.
+    
+    Database sizing (estimated):
+    ├─ Per block (tx/fee data): ~23 bytes
+    ├─ Grin chain (2019-2026, ~3.7M blocks): ~85 MB
+    ├─ Future growth: ~12.1 MB/year
+    └─ Indexes: add ~15% overhead
+    
+    Examples:
+        --backfill-stats all      fetch entire chain history (~85 MB, 3.7M blocks)
+        --backfill-stats 180      fetch last 180 days (~6 MB)
+        --backfill-stats          fetch last 180 days (default)
+    """
+    if days is None:
+        days = 180
+    
+    print(f"[INFO] Backfilling block stats for last {days if days != float('inf') else 'ALL'} days...")
     conn = open_db()
     init_schema(conn)
     tip_row = conn.execute(
@@ -498,15 +532,20 @@ def cmd_backfill_stats(days=180):
         conn.close()
         sys.exit(1)
     tip_height = tip_row[0]
-    start = max(0, tip_height - days * BLOCKS_PER_DAY)
+    
+    # If days is float('inf'), fetch from block 0; otherwise use time-based cutoff
+    start = 0 if days == float('inf') else max(0, tip_height - days * BLOCKS_PER_DAY)
+    
     existing = {r[0] for r in conn.execute(
         "SELECT height FROM block_stats WHERE height BETWEEN ? AND ?", (start, tip_height)
     ).fetchall()}
     conn.close()
 
     heights = [h for h in range(start, tip_height + 1) if h not in existing]
+    
+    est_mb = len(heights) * 23 / (1024 * 1024)
     print(f"[INFO] Range {start:,} → {tip_height:,}  "
-          f"({len(heights):,} to fetch, {len(existing):,} already present)")
+          f"({len(heights):,} to fetch, {len(existing):,} already present, ~{est_mb:.1f} MB)")
     if heights:
         _fetch_block_stats_range(start, tip_height, heights=heights)
     export_all_json()
@@ -1073,11 +1112,11 @@ def main():
     parser = argparse.ArgumentParser(description="Grin Stats Collector")
     group  = parser.add_mutually_exclusive_group()
     group.add_argument("--init-db",        action="store_true", help="Create DB schema only")
-    group.add_argument("--init-history",   action="store_true", help="Backfill all historical data")
-    group.add_argument("--update",         action="store_true", help="Fetch new blocks + update peers")
+    group.add_argument("--init-history",   action="store_true", help="Backfill all historical data (headers + complete TX/fee history)")
+    group.add_argument("--update",         action="store_true", help="Fetch new blocks + update peers + TX stats")
     group.add_argument("--peers-only",     action="store_true", help="Update peer data only")
-    group.add_argument("--backfill-stats", nargs="?", const=180, type=int, metavar="DAYS",
-                       help="Fetch TX/fee stats for last N days (default 180), skipping existing")
+    group.add_argument("--backfill-stats", nargs="?", const=180, metavar="DAYS|all",
+                       help="Fetch TX/fee stats for last N days or 'all' for complete history (default: 180)")
     args = parser.parse_args()
 
     if args.init_db:
@@ -1091,7 +1130,17 @@ def main():
         _update_peers()
         export_all_json()
     elif args.backfill_stats is not None:
-        cmd_backfill_stats(args.backfill_stats)
+        # Handle "all" keyword or numeric days
+        if isinstance(args.backfill_stats, str) and args.backfill_stats.lower() == "all":
+            cmd_backfill_stats(float('inf'))
+        else:
+            try:
+                days = int(args.backfill_stats) if isinstance(args.backfill_stats, str) else args.backfill_stats
+                cmd_backfill_stats(days)
+            except ValueError:
+                print(f"[ERROR] Invalid --backfill-stats argument: {args.backfill_stats}. Use a number or 'all'.", 
+                      file=sys.stderr)
+                sys.exit(1)
     else:
         # Default: --update
         cmd_update()

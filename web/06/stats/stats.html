@@ -30,6 +30,116 @@
     --red:       #f85149;
     --chart-h:   260px;
   }
+  /* ── Light theme ─────────────────────────────────────────────────────────── */
+  html[data-theme="light"] {
+    --bg:      #f6f8fa;
+    --surface: #ffffff;
+    --border:  #d0d7de;
+    --text:    #24292f;
+    --muted:   #656d76;
+    --grin:    #bf6800;
+    --blue:    #0969da;
+    --green:   #1a7f37;
+    --purple:  #8250df;
+    --red:     #cf222e;
+  }
+  /* ── Matrix theme ────────────────────────────────────────────────────────── */
+  html[data-theme="matrix"] {
+    --bg:      #000000;
+    --surface: #001500;
+    --border:  #004400;
+    --text:    #00ff41;
+    --muted:   #009922;
+    --grin:    #00ff41;
+    --blue:    #00e5ff;
+    --green:   #00ff41;
+    --purple:  #00e5ff;
+    --red:     #ff4444;
+  }
+  html[data-theme="matrix"] body { font-family: 'Courier New', Courier, monospace; }
+  html[data-theme="matrix"] body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px);
+    pointer-events: none;
+    z-index: 9998;
+  }
+  /* ── Harry Potter theme ──────────────────────────────────────────────────── */
+  html[data-theme="hp"] {
+    --bg:      #0d0221;
+    --surface: #1a0545;
+    --border:  #4a1a8a;
+    --text:    #f0e68c;
+    --muted:   #b8a0d4;
+    --grin:    #ffd700;
+    --blue:    #7b68ee;
+    --green:   #50c878;
+    --purple:  #da70d6;
+    --red:     #ff6347;
+  }
+  html[data-theme="hp"] body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 0%, rgba(100,40,200,0.18) 0%, transparent 65%);
+    pointer-events: none;
+    z-index: 9998;
+  }
+
+  /* ── Theme controls ──────────────────────────────────────────────────────── */
+  .mode-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 28px; height: 26px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+    flex-shrink: 0;
+    padding: 0;
+  }
+  .mode-toggle:hover { border-color: var(--grin); color: var(--text); }
+  .theme-picker { position: relative; }
+  .theme-pill-btn {
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .theme-pill-btn:hover { border-color: var(--grin); color: var(--text); }
+  .theme-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    display: none;
+    z-index: 500;
+    min-width: 145px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  .theme-menu.open { display: block; }
+  .tm-item {
+    display: block; width: 100%;
+    padding: 8px 14px;
+    background: transparent; border: none;
+    color: var(--text); font-size: 12px;
+    text-align: left; cursor: pointer;
+    transition: background 0.1s;
+  }
+  .tm-item:hover { background: rgba(255,153,0,0.1); color: var(--grin); }
+  .tm-item.active { color: var(--grin); font-weight: 600; }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     background: var(--bg);
@@ -76,7 +186,7 @@
   .pill-peers    { color: var(--grin);  border-color: var(--grin);  background: rgba(255,153,0,0.08); }
   .pill-country  { color: var(--blue);  border-color: var(--blue);  background: rgba(88,166,255,0.08); }
   .pill-price    { color: var(--green); border-color: var(--green); background: rgba(63,185,80,0.08); }
-  .pill-btc      { color: #f7931a;      border-color: #f7931a;      background: rgba(247,147,26,0.08); }
+  .pill-btc      { color: #ffd700;      border-color: #ffd700;      background: rgba(255,215,0,0.08); }
   .pill-sep { color: var(--border); font-size: 14px; }
   nav { display: flex; gap: 6px; }
   .nav-btn {
@@ -305,6 +415,17 @@
       <span class="pill pill-price"   id="h-price">$—</span>
       <span class="pill-sep">·</span>
       <span class="pill pill-btc"     id="h-btc-price">₿—</span>
+      <span class="pill-sep">|</span>
+      <button class="mode-toggle" id="mode-toggle" title="Toggle dark/light mode">🌙</button>
+      <div class="theme-picker">
+        <button class="theme-pill-btn" id="theme-pill-btn">🎨</button>
+        <div class="theme-menu" id="theme-menu">
+          <button class="tm-item" data-theme="dark">◼ Default</button>
+          <button class="tm-item" data-theme="light">◻ Light</button>
+          <button class="tm-item" data-theme="matrix">▓ Matrix</button>
+          <button class="tm-item" data-theme="hp">✦ Harry Potter</button>
+        </div>
+      </div>
     </div>
   </div>
 </header>
@@ -539,25 +660,29 @@ function initCharts() {
 const rangeState = { hr: "all", diff: "all", tx: "all", fee: "all" };
 
 function updateChartData(chart, json, range) {
-  let data;
+  let pts;
   const nowMs = Date.now();
   if (range === "all") {
-    const pts = [...(json.daily||[]), ...(json.hourly||[]), ...(json.recent||[])];
-    data = pts.map(([ts, v]) => ({x: ts*1000, y: v}));
+    pts = [...(json.daily||[]), ...(json.hourly||[]), ...(json.recent||[])];
   } else if (range === "year") {
     const cutoff = nowMs - 365 * 86400000;
-    const pts = [
+    pts = [
       ...(json.daily||[]).filter(([ts]) => ts*1000 >= cutoff),
       ...(json.hourly||[]),
       ...(json.recent||[]),
     ];
-    data = pts.map(([ts,v]) => ({x:ts*1000, y:v}));
   } else if (range === "month") {
-    const pts = [...(json.hourly||[]), ...(json.recent||[])];
-    data = pts.map(([ts,v]) => ({x:ts*1000, y:v}));
+    pts = [...(json.hourly||[]), ...(json.recent||[])];
   } else {                           // day
-    data = (json.recent||[]).map(([ts,v]) => ({x:ts*1000, y:v}));
+    pts = [...(json.recent||[])];
   }
+  // Deduplicate (later entries = more granular, overwrite coarser) then sort
+  const byTs = new Map();
+  pts.forEach(([ts, v]) => byTs.set(ts, v));
+  const data = [...byTs.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([ts, v]) => ({x: ts * 1000, y: v}));
+
   chart.data.datasets[0].data = data;
   chart.update("none");
 }
@@ -696,6 +821,75 @@ async function loadGrinPrice() {
   }
 }
 
+// ── Theme management ──────────────────────────────────────────────────────────
+let currentTheme = localStorage.getItem("grin-theme") || "dark";
+
+const THEME_CHART = {
+  dark:   { grid: "#21262d", tick: "#8b949e" },
+  light:  { grid: "#d0d7de", tick: "#656d76" },
+  matrix: { grid: "#004400", tick: "#009922" },
+  hp:     { grid: "#4a1a8a", tick: "#b8a0d4" },
+};
+
+function applyTheme(theme) {
+  currentTheme = theme;
+  localStorage.setItem("grin-theme", theme);
+  if (theme === "dark") {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    document.documentElement.setAttribute("data-theme", theme);
+  }
+
+  const modeBtn = $("mode-toggle");
+  if (modeBtn) modeBtn.textContent = theme === "light" ? "☀️" : "🌙";
+
+  document.querySelectorAll(".tm-item").forEach(b =>
+    b.classList.toggle("active", b.dataset.theme === theme)
+  );
+
+  // Update Chart.js defaults and all live charts
+  const tc = THEME_CHART[theme] || THEME_CHART.dark;
+  const monoFont = "'Courier New', Courier, monospace";
+  const sansFont = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  if (typeof Chart !== "undefined") {
+    Chart.defaults.borderColor = tc.grid;
+    Chart.defaults.color       = tc.tick;
+    Chart.defaults.font.family = theme === "matrix" ? monoFont : sansFont;
+    Object.values(charts).forEach(c => {
+      if (!c?.options?.scales) return;
+      ["x","y"].forEach(ax => {
+        if (c.options.scales[ax]) {
+          c.options.scales[ax].grid  = { ...c.options.scales[ax].grid,  color: tc.grid };
+          c.options.scales[ax].ticks = { ...c.options.scales[ax].ticks, color: tc.tick };
+        }
+      });
+      c.update("none");
+    });
+  }
+}
+
+function initTheme() {
+  applyTheme(currentTheme);
+
+  $("mode-toggle").addEventListener("click", () => {
+    applyTheme(currentTheme === "light" ? "dark" : "light");
+  });
+
+  $("theme-pill-btn").addEventListener("click", e => {
+    e.stopPropagation();
+    $("theme-menu").classList.toggle("open");
+  });
+
+  document.addEventListener("click", () => $("theme-menu").classList.remove("open"));
+
+  document.querySelectorAll(".tm-item").forEach(btn => {
+    btn.addEventListener("click", () => {
+      applyTheme(btn.dataset.theme);
+      $("theme-menu").classList.remove("open");
+    });
+  });
+}
+
 // ── Range button wiring ───────────────────────────────────────────────────────
 function wireRangeGroup(groupId, chartKey, cacheKey) {
   $(groupId).querySelectorAll(".range-btn").forEach(btn => {
@@ -710,6 +904,7 @@ function wireRangeGroup(groupId, chartKey, cacheKey) {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function boot() {
+  initTheme();   // apply saved theme before charts are created
   wireRangeGroup("hr-range",   "hr",   "hashrate");
   wireRangeGroup("diff-range", "diff", "difficulty");
   wireRangeGroup("tx-range",   "tx",   "transactions");

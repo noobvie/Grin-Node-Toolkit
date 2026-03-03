@@ -291,7 +291,9 @@ def calc_hashrate(rows):
         if dt > 0 and dd > 0:
             hr = dd * CUCKOO_CYCLE / dt / C32_RATE   # GPS (graphs per second)
         else:
-            hr = out[-1][3] if out else 0.0
+            # Invalid data: same or earlier timestamp, or difficulty decreased
+            # Do NOT copy previous hashrate (prevents propagation of anomalies)
+            hr = 0.0
         out.append((h, ts, diff, hr))
     return out
 

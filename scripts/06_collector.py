@@ -31,17 +31,18 @@ from datetime import datetime, timezone
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-# Foreign API (mainnet) — used for block stats (no auth required)
-NODE_URL    = os.environ.get("GRIN_NODE_URL",    "http://127.0.0.1:3413/v2/foreign")
-WWW_DATA    = os.environ.get("GRIN_WWW_DATA",    "/var/www/grin-stats/data")
-DB_PATH     = os.environ.get("GRIN_DB_PATH",     "/var/lib/grin-stats/stats.db")
-SECRET_PATH = os.environ.get("GRIN_API_SECRET_PATH", "")
+# Foreign API (mainnet) — block headers, tip, tx stats.  No auth required.
+NODE_URL = os.environ.get("GRIN_NODE_URL", "http://127.0.0.1:3413/v2/foreign")
+WWW_DATA = os.environ.get("GRIN_WWW_DATA", "/var/www/grin-stats/data")
+DB_PATH  = os.environ.get("GRIN_DB_PATH",  "/var/lib/grin-stats/stats.db")
 
-# Owner APIs — used for get_peers (all known peers, not just connected)
-# get_peers on owner API returns 100s of known peers vs 8-30 from get_connected_peers
-MAINNET_OWNER_URL  = os.environ.get("GRIN_MAINNET_OWNER_URL", "http://127.0.0.1:3413/v2/owner")
-TESTNET_OWNER_URL  = os.environ.get("GRIN_TESTNET_OWNER_URL", "http://127.0.0.1:13413/v2/owner")
-TESTNET_SECRET_PATH = os.environ.get("GRIN_TESTNET_SECRET_PATH", "")
+# Owner APIs — get_connected_peers / get_peers require Basic Auth.
+# The secret is in ~/.grin/main/.api_secret (mainnet) and ~/.grin/test/.api_secret (testnet).
+# Both paths are written to config.env by the install script.
+MAINNET_OWNER_URL   = os.environ.get("GRIN_MAINNET_OWNER_URL",  "http://127.0.0.1:3413/v2/owner")
+MAINNET_SECRET_PATH = os.environ.get("GRIN_API_SECRET_PATH",    "~/.grin/main/.api_secret")  # ~/.grin/main/.api_secret
+TESTNET_OWNER_URL   = os.environ.get("GRIN_TESTNET_OWNER_URL",  "http://127.0.0.1:13413/v2/owner")
+TESTNET_SECRET_PATH = os.environ.get("GRIN_TESTNET_SECRET_PATH", "")  # ~/.grin/test/.api_secret
 
 # Blocks per hour / day at 60-second target
 BLOCKS_PER_HOUR = 60
@@ -71,14 +72,13 @@ TESTNET_P2P_PORT = "13414"
 
 # ── API secret ────────────────────────────────────────────────────────────────
 
-def _load_secret(path=""):
-    p = path or SECRET_PATH
-    if p and os.path.isfile(p):
-        with open(p) as f:
+def _load_secret(path):
+    if path and os.path.isfile(path):
+        with open(path) as f:
             return f.read().strip()
     return ""
 
-API_SECRET         = _load_secret(SECRET_PATH)
+API_SECRET         = _load_secret(MAINNET_SECRET_PATH)
 TESTNET_API_SECRET = _load_secret(TESTNET_SECRET_PATH)
 
 # ── Grin JSON-RPC helper ──────────────────────────────────────────────────────
@@ -113,8 +113,8 @@ def _rpc(url, method, params=None, secret="", retries=3):
     return None
 
 def grin_rpc(method, params=None, retries=3):
-    """Foreign API call (mainnet, no auth needed for public methods)."""
-    return _rpc(NODE_URL, method, params, secret=API_SECRET, retries=retries)
+    """Foreign API call — block headers, tip, tx data.  No auth required."""
+    return _rpc(NODE_URL, method, params, secret="", retries=retries)
 
 # ── Timestamp helpers ─────────────────────────────────────────────────────────
 
@@ -853,39 +853,34 @@ def export_all_json():
     ts_now = now_ts()
 
     # ── hashrate + difficulty ────────────────────────────────────────────────
-    for metric, col in (("hashrate", "hashrate"), ("difficulty", "total_diff")):
-        daily  = conn.execute(
-            f"SELECT timestamp, {col} FROM blocks WHERE bucket='daily'  ORDER BY timestamp"
-        ).fetchall()
-        hourly = conn.execute(
-            f"SELECT timestamp, {col} FROM blocks WHERE bucket='hourly' ORDER BY timestamp"
-        ).fetchall()
-        recent = conn.execute(
-            f"SELECT timestamp, {col} FROM blocks WHERE bucket='recent' ORDER BY timestamp"
-        ).fetchall()
+    # difficulty = hashrate × 60  (per-block mining difficulty: expected graphs
+    # tried per block at the 60-second target).  We derive it from the stored
+    # hashrate rather than total_diff, which is the CUMULATIVE chain difficulty
+    # (monotonically increasing from genesis) and is not a per-block metric.
+    BLOCK_TARGET = 60  # seconds
+    hr_daily  = conn.execute(
+        "SELECT timestamp, hashrate FROM blocks WHERE bucket='daily'  ORDER BY timestamp"
+    ).fetchall()
+    hr_hourly = conn.execute(
+        "SELECT timestamp, hashrate FROM blocks WHERE bucket='hourly' ORDER BY timestamp"
+    ).fetchall()
+    hr_recent = conn.execute(
+        "SELECT timestamp, hashrate FROM blocks WHERE bucket='recent' ORDER BY timestamp"
+    ).fetchall()
 
-        # Current stat from most recent block
-        last = conn.execute(
-            f"SELECT {col} FROM blocks ORDER BY height DESC LIMIT 1"
-        ).fetchone()
-        current_val = last[0] if last else 0
-
+    for metric, mul in (("hashrate", 1), ("difficulty", BLOCK_TARGET)):
         _write_json(f"{metric}.json", {
-            "updated":  ts_now,
-            "current":  round(current_val, 2),
-            "daily":    [[r[0], round(r[1], 2)] for r in daily],
-            "hourly":   [[r[0], round(r[1], 2)] for r in hourly],
-            "recent":   [[r[0], round(r[1], 2)] for r in recent],
+            "updated": ts_now,
+            "daily":   [[r[0], round(r[1] * mul, 2)] for r in hr_daily],
+            "hourly":  [[r[0], round(r[1] * mul, 2)] for r in hr_hourly],
+            "recent":  [[r[0], round(r[1] * mul, 2)] for r in hr_recent],
         })
 
     # ── tip stats ─────────────────────────────────────────────────────────────
     tip_row = conn.execute(
         "SELECT height, timestamp, total_diff FROM blocks ORDER BY height DESC LIMIT 2"
     ).fetchall()
-    tip_height    = tip_row[0][0] if tip_row else 0
-    avg_blocktime = 0
-    if len(tip_row) == 2:
-        avg_blocktime = round((tip_row[0][1] - tip_row[1][1]), 1)
+    tip_height = tip_row[0][0] if tip_row else 0
 
     # ── transactions + fees ───────────────────────────────────────────────────
     cutoff_24h  = ts_now - 86400
@@ -962,14 +957,18 @@ def export_all_json():
     })
 
     # ── summary (for the header stats bar) ───────────────────────────────────
-    last_hr   = conn.execute("SELECT hashrate FROM blocks ORDER BY height DESC LIMIT 1").fetchone()
-    last_diff = conn.execute("SELECT total_diff FROM blocks ORDER BY height DESC LIMIT 1").fetchone()
+    # Average the last 60 blocks (~1 hour) so that a single short-interval block
+    # does not inflate the displayed hashrate.  Individual blocks can have very
+    # short timestamps producing artificially high single-block GPS values.
+    avg_hr_row = conn.execute(
+        "SELECT AVG(hashrate) FROM (SELECT hashrate FROM blocks ORDER BY height DESC LIMIT 60)"
+    ).fetchone()
+    avg_hr = round(avg_hr_row[0], 2) if avg_hr_row and avg_hr_row[0] else 0
     _write_json("summary.json", {
-        "updated":        ts_now,
-        "tip_height":     tip_height,
-        "avg_block_time": avg_blocktime,
-        "current_hashrate":   round(last_hr[0], 2)   if last_hr   else 0,
-        "current_difficulty": last_diff[0]             if last_diff else 0,
+        "updated":            ts_now,
+        "tip_height":         tip_height,
+        "current_hashrate":   avg_hr,
+        "current_difficulty": round(avg_hr * BLOCK_TARGET, 0),
     })
 
     conn.close()

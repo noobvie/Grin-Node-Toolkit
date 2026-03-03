@@ -311,8 +311,8 @@
     <div class="stat-value blue" id="s-difficulty">—</div>
   </div>
   <div class="stat-item">
-    <div class="stat-label">Avg Block Time</div>
-    <div class="stat-value" id="s-blocktime">—</div>
+    <div class="stat-label">Coin Supply</div>
+    <div class="stat-value" id="s-supply">—</div>
   </div>
   <div class="stat-item">
     <div class="stat-label">Connected Peers</div>
@@ -418,20 +418,30 @@ const VERSION_COLORS = [
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-const fmt = (n, d=0) => Number(n).toLocaleString(undefined, {maximumFractionDigits: d});
+const fmtNum = (n, d=0) => {
+  const [int, dec] = Number(n).toFixed(d).split(".");
+  const intFmt = int.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return d > 0 ? intFmt + "," + dec : intFmt;
+};
+const fmt = (n, d=0) => fmtNum(n, d);
 const fmtGPS = v => {
-  if (v >= 1e6) return (v/1e6).toFixed(2) + " MGPS";
-  if (v >= 1e3) return (v/1e3).toFixed(2) + " kGPS";
-  return v.toFixed(2) + " GPS";
+  if (v >= 1e6) return fmtNum(v/1e6, 2) + " MG/s";
+  if (v >= 1e3) return fmtNum(v/1e3, 2) + " kG/s";
+  return fmtNum(v, 2) + " G/s";
+};
+const fmtSupply = v => {
+  if (v >= 1e6) return fmtNum(v/1e6, 2) + "M ツ";
+  if (v >= 1e3) return fmtNum(v/1e3, 1) + "K ツ";
+  return fmtNum(v, 0) + " ツ";
 };
 const fmtDiff = v => {
-  if (v >= 1e9) return (v/1e9).toFixed(3) + "G";
-  if (v >= 1e6) return (v/1e6).toFixed(3) + "M";
-  if (v >= 1e3) return (v/1e3).toFixed(1) + "K";
-  return fmt(v);
+  if (v >= 1e9) return fmtNum(v/1e9, 3) + "G";
+  if (v >= 1e6) return fmtNum(v/1e6, 2) + "M";
+  if (v >= 1e3) return fmtNum(v/1e3, 1) + "K";
+  return fmtNum(v, 0);
 };
 // v is in nGrin; always display in Grin for clarity
-const fmtFee = v => (v / 1e9).toFixed(4) + " Grin";
+const fmtFee = v => fmtNum(v / 1e9, 4) + " Grin";
 const timeAgo = ts => {
   const s = Math.floor(Date.now()/1000) - ts;
   if (s < 60)   return s + "s ago";
@@ -502,8 +512,8 @@ function initCharts() {
   Chart.defaults.color = "#8b949e";
   Chart.defaults.borderColor = "#30363d";
   Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-  charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS,        6e6);
-  charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff,       5e9);
+  charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS,        6e3);
+  charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff,       4e5);
   charts.tx         = makeLineChart("chart-tx",         "Transactions", "#3fb950", v => fmt(v,1));
   charts.fees       = makeLineChart("chart-fees",       "Fees",         "#bc8cff", fmtFee);
 }
@@ -519,9 +529,15 @@ function updateChartData(chart, json, range) {
     data = pts.map(([ts, v]) => ({x: ts*1000, y: v}));
   } else if (range === "year") {
     const cutoff = nowMs - 365 * 86400000;
-    data = (json.daily||[]).filter(([ts]) => ts*1000 >= cutoff).map(([ts,v]) => ({x:ts*1000, y:v}));
+    const pts = [
+      ...(json.daily||[]).filter(([ts]) => ts*1000 >= cutoff),
+      ...(json.hourly||[]),
+      ...(json.recent||[]),
+    ];
+    data = pts.map(([ts,v]) => ({x:ts*1000, y:v}));
   } else if (range === "month") {
-    data = (json.hourly||[]).map(([ts,v]) => ({x:ts*1000, y:v}));
+    const pts = [...(json.hourly||[]), ...(json.recent||[])];
+    data = pts.map(([ts,v]) => ({x:ts*1000, y:v}));
   } else {                           // day
     data = (json.recent||[]).map(([ts,v]) => ({x:ts*1000, y:v}));
   }
@@ -560,7 +576,7 @@ async function loadAll() {
     $("s-height").textContent     = fmt(summary.tip_height);
     $("s-hashrate").textContent   = fmtGPS(summary.current_hashrate);
     $("s-difficulty").textContent = fmtDiff(summary.current_difficulty);
-    $("s-blocktime").textContent  = summary.avg_block_time.toFixed(1) + "s";
+    $("s-supply").textContent     = fmtSupply(summary.tip_height * 60);
     $("last-updated").textContent = "Updated " + timeAgo(summary.updated);
   }
   $("s-peers").textContent = peers ? fmt(peers.count) : "—";
@@ -620,7 +636,7 @@ function renderVersions(data) {
   // Legend
   const leg = $("version-legend");
   leg.innerHTML = data.versions.map((v, i) => {
-    const pct = total > 0 ? ((v.count / total) * 100).toFixed(1) : "0.0";
+    const pct = total > 0 ? fmtNum((v.count / total) * 100, 1) : "0,0";
     return `
       <div class="vl-row">
         <span class="vl-dot" style="background:${colors[i]}"></span>
@@ -641,7 +657,7 @@ async function loadGrinPrice() {
     const data  = await r.json();
     const price = data?.grin?.usd;
     if (price != null) {
-      $("h-price").textContent = "$" + Number(price).toFixed(4);
+      $("h-price").textContent = "$" + fmtNum(price, 4);
     } else {
       $("h-price").textContent = "$—";
     }

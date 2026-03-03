@@ -126,7 +126,7 @@ def parse_ts(ts_str):
         dt = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%S")
         return int(dt.replace(tzinfo=timezone.utc).timestamp())
     except Exception:
-        return int(time.time())
+        return 0  # 0 = epoch; calc_hashrate guards against negative/huge dt
 
 def now_ts():
     return int(time.time())
@@ -207,16 +207,17 @@ def set_meta(conn, key, value):
 def fetch_header(height):
     """Fetch a single block header. Returns (height, timestamp_int, total_diff) or None."""
     try:
-        data = grin_rpc("get_header", {"height": height, "hash": None, "commit": None})
-        if not data:
+        data = grin_rpc("get_header", [height, None, None], retries=5)
+        if not data or "height" not in data:
+            print(f"  [WARN] Empty or invalid response for height {height}", file=sys.stderr)
             return None
         return (
             int(data["height"]),
-            parse_ts(data["timestamp"]),
-            int(data["total_difficulty"]),
+            parse_ts(data.get("timestamp", "")),
+            int(data.get("total_difficulty", 0)),
         )
     except Exception as exc:
-        print(f"  [WARN] header {height}: {exc}", file=sys.stderr)
+        print(f"  [ERROR] Failed height {height}: {exc}", file=sys.stderr)
         return None
 
 def fetch_headers_batch(heights, workers=8):
@@ -234,7 +235,7 @@ def fetch_headers_batch(heights, workers=8):
 def fetch_full_block(height):
     """Fetch full block (kernels + outputs) for tx/fee stats."""
     try:
-        data = grin_rpc("get_block", {"height": height, "hash": None, "commit": None})
+        data = grin_rpc("get_block", [height, None, None])
         if not data:
             return None
         header   = data.get("header", {})
@@ -340,7 +341,7 @@ def cmd_init_history():
     init_schema(conn)
 
     # Fetch in batches
-    batch_size = 20
+    batch_size = 100
     done = 0
     rows_all = []
 
@@ -448,8 +449,9 @@ def _append_hashrate(new_rows, last_height):
     combined = calc_hashrate(base + new_rows)
     return combined[len(base):]  # return only the new ones
 
-def _fetch_block_stats_range(start, end, workers=4):
-    heights = list(range(max(0, start), end + 1))
+def _fetch_block_stats_range(start, end, workers=4, heights=None):
+    if heights is None:
+        heights = list(range(max(0, start), end + 1))
     if not heights:
         return
     conn = open_db()
@@ -473,6 +475,33 @@ def _fetch_block_stats_range(start, end, workers=4):
             conn.commit()
     print()
     conn.close()
+
+def cmd_backfill_stats(days=180):
+    """Fetch full block stats for the last N days, skipping already-stored heights."""
+    print(f"[INFO] Backfilling block stats for last {days} days...")
+    conn = open_db()
+    init_schema(conn)
+    tip_row = conn.execute(
+        "SELECT height FROM blocks ORDER BY height DESC LIMIT 1"
+    ).fetchone()
+    if not tip_row:
+        print("[ERROR] No block headers in DB — run --init-history first.", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+    tip_height = tip_row[0]
+    start = max(0, tip_height - days * BLOCKS_PER_DAY)
+    existing = {r[0] for r in conn.execute(
+        "SELECT height FROM block_stats WHERE height BETWEEN ? AND ?", (start, tip_height)
+    ).fetchall()}
+    conn.close()
+
+    heights = [h for h in range(start, tip_height + 1) if h not in existing]
+    print(f"[INFO] Range {start:,} → {tip_height:,}  "
+          f"({len(heights):,} to fetch, {len(existing):,} already present)")
+    if heights:
+        _fetch_block_stats_range(start, tip_height, heights=heights)
+    export_all_json()
+    print("[OK] Backfill complete.")
 
 # ── Peer update ───────────────────────────────────────────────────────────────
 
@@ -1034,10 +1063,12 @@ def cmd_init_db():
 def main():
     parser = argparse.ArgumentParser(description="Grin Stats Collector")
     group  = parser.add_mutually_exclusive_group()
-    group.add_argument("--init-db",      action="store_true", help="Create DB schema only")
-    group.add_argument("--init-history", action="store_true", help="Backfill all historical data")
-    group.add_argument("--update",       action="store_true", help="Fetch new blocks + update peers")
-    group.add_argument("--peers-only",   action="store_true", help="Update peer data only")
+    group.add_argument("--init-db",        action="store_true", help="Create DB schema only")
+    group.add_argument("--init-history",   action="store_true", help="Backfill all historical data")
+    group.add_argument("--update",         action="store_true", help="Fetch new blocks + update peers")
+    group.add_argument("--peers-only",     action="store_true", help="Update peer data only")
+    group.add_argument("--backfill-stats", nargs="?", const=180, type=int, metavar="DAYS",
+                       help="Fetch TX/fee stats for last N days (default 180), skipping existing")
     args = parser.parse_args()
 
     if args.init_db:
@@ -1050,6 +1081,8 @@ def main():
         conn.close()
         _update_peers()
         export_all_json()
+    elif args.backfill_stats is not None:
+        cmd_backfill_stats(args.backfill_stats)
     else:
         # Default: --update
         cmd_update()

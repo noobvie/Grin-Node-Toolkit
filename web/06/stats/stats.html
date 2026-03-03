@@ -2,8 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Global Grin Health — Network Stats</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Grin Network Stats — Hashrate, Difficulty &amp; Blockchain Data</title>
+<meta name="description" content="Live Grin network statistics: real-time hashrate (GPS), mining difficulty, block height, coin supply, annual inflation rate, connected peers, node version distribution, transactions per block, and fee history. Monitor the Grin (ツ) MimbleWimble blockchain.">
+<meta name="keywords" content="grin network stats, grin hashrate, grin mining difficulty, grin block height, grin blockchain statistics, grin node monitor, grin coin supply, grin inflation rate, grin GPS, grin transactions, grin fees, mimblewimble stats, grin cryptocurrency data, grin blockchain explorer, grin network health, grin mining monitor, grin node version, cuckatoo32">
+<meta name="robots" content="index, follow">
+<meta property="og:title" content="Grin Network Stats — Hashrate, Difficulty &amp; Blockchain Data">
+<meta property="og:description" content="Real-time Grin network stats: hashrate (GPS), mining difficulty, block height, coin supply, inflation, and transaction history. Live MimbleWimble blockchain data.">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Grin Network Stats — Hashrate &amp; Difficulty">
+<meta name="twitter:description" content="Live Grin blockchain stats: hashrate, difficulty, block height, coin supply, inflation rate, and peer count. Real-time MimbleWimble network data.">
+<link rel="icon" href="grin-logo.svg" type="image/svg+xml">
 <script src="chart.min.js"></script>
 <script src="chartjs-adapter-date-fns.bundle.min.js"></script>
 <style>
@@ -66,6 +76,7 @@
   .pill-peers    { color: var(--grin);  border-color: var(--grin);  background: rgba(255,153,0,0.08); }
   .pill-country  { color: var(--blue);  border-color: var(--blue);  background: rgba(88,166,255,0.08); }
   .pill-price    { color: var(--green); border-color: var(--green); background: rgba(63,185,80,0.08); }
+  .pill-btc      { color: #f7931a;      border-color: #f7931a;      background: rgba(247,147,26,0.08); }
   .pill-sep { color: var(--border); font-size: 14px; }
   nav { display: flex; gap: 6px; }
   .nav-btn {
@@ -292,6 +303,8 @@
       <span class="pill pill-country" id="h-countries">— countries</span>
       <span class="pill-sep">·</span>
       <span class="pill pill-price"   id="h-price">$—</span>
+      <span class="pill-sep">·</span>
+      <span class="pill pill-btc"     id="h-btc-price">₿—</span>
     </div>
   </div>
 </header>
@@ -313,6 +326,10 @@
   <div class="stat-item">
     <div class="stat-label">Coin Supply</div>
     <div class="stat-value" id="s-supply">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">Inflation Rate</div>
+    <div class="stat-value" id="s-inflation">—</div>
   </div>
   <div class="stat-item">
     <div class="stat-label">Connected Peers</div>
@@ -575,6 +592,16 @@ async function loadAll() {
     $("s-difficulty").textContent = fmtDiff(summary.current_difficulty);
     $("s-supply").textContent     = fmtSupply(summary.tip_height * 60);
     $("last-updated").textContent = "Updated " + timeAgo(summary.updated);
+
+    // Grin inflation rate: 1 Grin/second constant emission
+    // Annual inflation % = (31,557,600 new Grins/yr) / current_supply × 100
+    const GRINS_PER_YEAR = 365.25 * 86400;   // 31,557,600
+    const supply         = summary.tip_height * 60;
+    if (supply > 0) {
+      const inflationPct = (GRINS_PER_YEAR / supply) * 100;
+      const currentYear  = new Date().getFullYear();
+      $("s-inflation").textContent = fmtNum(inflationPct, 1) + "% (" + currentYear + ")";
+    }
   }
   $("s-peers").textContent = peers ? fmt(peers.count) : "—";
   if (peers && peers.peers) {
@@ -644,22 +671,28 @@ function renderVersions(data) {
   }).join("");
 }
 
-// ── CoinGecko price ───────────────────────────────────────────────────────────
+// ── CoinGecko price (USD + BTC) ───────────────────────────────────────────────
 async function loadGrinPrice() {
   try {
     const r = await fetch(
-      "https://api.coingecko.com/api/v3/simple/price?ids=grin&vs_currencies=usd"
+      "https://api.coingecko.com/api/v3/simple/price?ids=grin&vs_currencies=usd,btc"
     );
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data  = await r.json();
-    const price = data?.grin?.usd;
-    if (price != null) {
-      $("h-price").textContent = "$" + fmtNum(price, 4);
+    const data = await r.json();
+
+    const priceUsd = data?.grin?.usd;
+    $("h-price").textContent = priceUsd != null ? "$" + fmtNum(priceUsd, 4) : "$—";
+
+    const priceBtc = data?.grin?.btc;
+    if (priceBtc != null) {
+      const sats = Math.round(priceBtc * 1e8);
+      $("h-btc-price").textContent = sats + " sat";
     } else {
-      $("h-price").textContent = "$—";
+      $("h-btc-price").textContent = "₿—";
     }
   } catch {
-    $("h-price").textContent = "$—";
+    $("h-price").textContent     = "$—";
+    $("h-btc-price").textContent = "₿—";
   }
 }
 

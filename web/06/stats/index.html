@@ -10,6 +10,7 @@
 <meta property="og:title" content="Grin Node World Map — Global Grin Network">
 <meta property="og:description" content="Interactive world map of active Grin network nodes. Filter by country, version, or direction.">
 <meta property="og:type" content="website">
+<link rel="icon" href="grin-logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="leaflet.min.css">
 <script src="leaflet.min.js"></script>
 <style>
@@ -72,6 +73,7 @@
   .pill-peers    { color: var(--grin);  border-color: var(--grin);  background: rgba(255,153,0,0.08); }
   .pill-country  { color: var(--blue);  border-color: var(--blue);  background: rgba(88,166,255,0.08); }
   .pill-price    { color: var(--green); border-color: var(--green); background: rgba(63,185,80,0.08); }
+  .pill-btc      { color: #f7931a;      border-color: #f7931a;      background: rgba(247,147,26,0.08); }
   .pill-sep { color: var(--border); font-size: 14px; }
   nav { display: flex; gap: 6px; }
   .nav-btn {
@@ -468,6 +470,8 @@
       <span class="pill pill-country" id="h-countries">— countries</span>
       <span class="pill-sep">·</span>
       <span class="pill pill-price"   id="h-price">$—</span>
+      <span class="pill-sep">·</span>
+      <span class="pill pill-btc"     id="h-btc-price">₿—</span>
     </div>
   </div>
 </header>
@@ -728,22 +732,28 @@ function showVerTab(net, btn) {
   $("ver-legend-testnet").style.display = net === "testnet" ? "" : "none";
 }
 
-// ── CoinGecko price ───────────────────────────────────────────────────────────
+// ── CoinGecko price (USD + BTC) ───────────────────────────────────────────────
 async function loadGrinPrice() {
   try {
     const r = await fetch(
-      "https://api.coingecko.com/api/v3/simple/price?ids=grin&vs_currencies=usd"
+      "https://api.coingecko.com/api/v3/simple/price?ids=grin&vs_currencies=usd,btc"
     );
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data  = await r.json();
-    const price = data?.grin?.usd;
-    if (price != null) {
-      $("h-price").textContent = "$" + fmtNum(price, 4);
+    const data = await r.json();
+
+    const priceUsd = data?.grin?.usd;
+    $("h-price").textContent = priceUsd != null ? "$" + fmtNum(priceUsd, 4) : "$—";
+
+    const priceBtc = data?.grin?.btc;
+    if (priceBtc != null) {
+      const sats = Math.round(priceBtc * 1e8);
+      $("h-btc-price").textContent = sats + " sat";
     } else {
-      $("h-price").textContent = "$—";
+      $("h-btc-price").textContent = "₿—";
     }
   } catch {
-    $("h-price").textContent = "$—";
+    $("h-price").textContent     = "$—";
+    $("h-btc-price").textContent = "₿—";
   }
 }
 

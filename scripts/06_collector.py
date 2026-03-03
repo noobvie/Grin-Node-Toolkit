@@ -259,9 +259,19 @@ def fetch_full_block(height):
 def calc_hashrate(rows):
     """
     Given list of (height, ts, total_diff) sorted by height,
-    compute per-point hashrate (GPS) using the diff delta / time delta method.
+    compute per-point hashrate (GPS) using the Cuckatoo32 formula from aglkm/grin-explorer:
+        hashrate_GPS = net_diff * 42 / block_time_seconds / 16384
+    where:
+        net_diff    = total_diff delta between consecutive sampled rows
+        42          = Cuckoo cycle length for Cuckatoo32
+        16384       = C32 solution rate = 32 × 2^(32-23) = 32 × 512
+        block_time  = actual seconds between the two sampled blocks
     Returns list of (height, ts, total_diff, hashrate).
     """
+    # Cuckatoo32 constants (matches aglkm/grin-explorer formula)
+    CUCKOO_CYCLE  = 42.0
+    C32_RATE      = 16384.0   # 32 × 2^9
+
     out = []
     for i, (h, ts, diff) in enumerate(rows):
         if i == 0:
@@ -271,7 +281,7 @@ def calc_hashrate(rows):
         dt = ts - pts
         dd = diff - pdiff
         if dt > 0 and dd > 0:
-            hr = dd / dt  # graphs per second (GPS)
+            hr = dd * CUCKOO_CYCLE / dt / C32_RATE   # GPS (graphs per second)
         else:
             hr = out[-1][3] if out else 0.0
         out.append((h, ts, diff, hr))
@@ -605,16 +615,22 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
         print(f"[WARN] {network_label} owner API get_peers failed: {exc}", file=sys.stderr)
     return peer_list
 
-def _upsert_peers(conn, enriched, first_seen_ts, use_max_last_seen=False):
+def _upsert_peers(conn, enriched, first_seen_ts, use_max_last_seen=False,
+                  preserve_direction=False):
     """
     Upsert a list of enriched peer dicts into known_peers.
-    use_max_last_seen=True keeps the LARGER of the two last_seen values on conflict,
-    so connected-peer entries (last_seen=now) are never downgraded by older routing-table data.
+    use_max_last_seen=True  keeps the LARGER last_seen so connected peers are never
+                            downgraded by older routing-table timestamps.
+    preserve_direction=True keeps the existing direction column unchanged; used for
+                            routing-table upserts so they never overwrite the accurate
+                            direction recorded from get_connected_peers.
     """
-    last_seen_sql = (
+    last_seen_sql  = (
         "CASE WHEN excluded.last_seen > last_seen THEN excluded.last_seen ELSE last_seen END"
         if use_max_last_seen else "excluded.last_seen"
     )
+    direction_sql  = "direction" if preserve_direction else "excluded.direction"
+
     conn.executemany(f"""
         INSERT INTO known_peers
             (ip, network, port, user_agent, direction, lat, lng,
@@ -623,7 +639,7 @@ def _upsert_peers(conn, enriched, first_seen_ts, use_max_last_seen=False):
         ON CONFLICT(ip, network) DO UPDATE SET
             port         = excluded.port,
             user_agent   = excluded.user_agent,
-            direction    = excluded.direction,
+            direction    = {direction_sql},
             lat          = CASE WHEN excluded.lat  != 0  THEN excluded.lat  ELSE lat  END,
             lng          = CASE WHEN excluded.lng  != 0  THEN excluded.lng  ELSE lng  END,
             country      = CASE WHEN excluded.country      != '' THEN excluded.country      ELSE country      END,
@@ -766,8 +782,10 @@ def _update_peers():
                 "network":      p["network"],
                 "last_seen":    p["last_seen"],
             })
-        # Use MAX(last_seen) so connected peers (last_seen=now) are never downgraded
-        _upsert_peers(conn, stat_enriched, ts, use_max_last_seen=True)
+        # Use MAX(last_seen) and preserve direction so routing-table updates never
+        # overwrite the accurate Inbound/Outbound direction from get_connected_peers.
+        _upsert_peers(conn, stat_enriched, ts,
+                      use_max_last_seen=True, preserve_direction=True)
         print(f"[INFO] Routing-table peers added to map: {len(recent_stat)} "
               f"({len(new_ips)} new IPs geo-located).")
 
@@ -853,11 +871,15 @@ def export_all_json():
     ts_now = now_ts()
 
     # ── hashrate + difficulty ────────────────────────────────────────────────
-    # difficulty = hashrate × 60  (per-block mining difficulty: expected graphs
-    # tried per block at the 60-second target).  We derive it from the stored
-    # hashrate rather than total_diff, which is the CUMULATIVE chain difficulty
-    # (monotonically increasing from genesis) and is not a per-block metric.
-    BLOCK_TARGET = 60  # seconds
+    # hashrate (GPS) is stored with the Cuckatoo32 formula: net_diff * 42 / dt / 16384
+    # To recover per-block difficulty (net_diff) from stored hashrate:
+    #   net_diff = hashrate_GPS * block_target_seconds * 16384 / 42
+    # This matches what aglkm/grin-explorer displays as "difficulty".
+    BLOCK_TARGET    = 60       # seconds (Grin target block time)
+    CUCKOO_CYCLE    = 42.0
+    C32_RATE        = 16384.0
+    DIFF_MUL        = BLOCK_TARGET * C32_RATE / CUCKOO_CYCLE  # ~23405.7
+
     hr_daily  = conn.execute(
         "SELECT timestamp, hashrate FROM blocks WHERE bucket='daily'  ORDER BY timestamp"
     ).fetchall()
@@ -868,7 +890,7 @@ def export_all_json():
         "SELECT timestamp, hashrate FROM blocks WHERE bucket='recent' ORDER BY timestamp"
     ).fetchall()
 
-    for metric, mul in (("hashrate", 1), ("difficulty", BLOCK_TARGET)):
+    for metric, mul in (("hashrate", 1), ("difficulty", DIFF_MUL)):
         _write_json(f"{metric}.json", {
             "updated": ts_now,
             "daily":   [[r[0], round(r[1] * mul, 2)] for r in hr_daily],
@@ -957,18 +979,36 @@ def export_all_json():
     })
 
     # ── summary (for the header stats bar) ───────────────────────────────────
-    # Average the last 60 blocks (~1 hour) so that a single short-interval block
-    # does not inflate the displayed hashrate.  Individual blocks can have very
-    # short timestamps producing artificially high single-block GPS values.
-    avg_hr_row = conn.execute(
-        "SELECT AVG(hashrate) FROM (SELECT hashrate FROM blocks ORDER BY height DESC LIMIT 60)"
-    ).fetchone()
-    avg_hr = round(avg_hr_row[0], 2) if avg_hr_row and avg_hr_row[0] else 0
+    # Use the 1440-block (≈ 1 day) total_diff window — matches aglkm/grin-explorer:
+    #   net_diff = (total_diff[H] - total_diff[H-1440]) / 1440
+    #   hashrate = net_diff * 42 / 60 / 16384
+    # Fall back to a 60-block hashrate average if fewer rows exist.
+    tip_blocks = conn.execute(
+        "SELECT height, total_diff FROM blocks ORDER BY height DESC LIMIT 1441"
+    ).fetchall()
+
+    if len(tip_blocks) >= 2:
+        hi_h, hi_d = tip_blocks[0]
+        lo_h, lo_d = tip_blocks[-1]
+        block_count = hi_h - lo_h
+        if block_count > 0:
+            avg_diff       = (hi_d - lo_d) / block_count          # per-block difficulty
+            avg_hr         = round(avg_diff * CUCKOO_CYCLE / BLOCK_TARGET / C32_RATE, 2)
+            current_diff   = round(avg_diff, 0)
+        else:
+            avg_hr, current_diff = 0, 0
+    else:
+        avg_hr_row = conn.execute(
+            "SELECT AVG(hashrate) FROM (SELECT hashrate FROM blocks ORDER BY height DESC LIMIT 60)"
+        ).fetchone()
+        avg_hr       = round(avg_hr_row[0], 2) if avg_hr_row and avg_hr_row[0] else 0
+        current_diff = round(avg_hr * DIFF_MUL, 0)
+
     _write_json("summary.json", {
         "updated":            ts_now,
         "tip_height":         tip_height,
         "current_hashrate":   avg_hr,
-        "current_difficulty": round(avg_hr * BLOCK_TARGET, 0),
+        "current_difficulty": current_diff,
     })
 
     conn.close()

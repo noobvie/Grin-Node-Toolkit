@@ -881,13 +881,13 @@ def export_all_json():
     DIFF_MUL        = BLOCK_TARGET * C32_RATE / CUCKOO_CYCLE  # ~23405.7
 
     hr_daily  = conn.execute(
-        "SELECT timestamp, hashrate FROM blocks WHERE bucket='daily'  ORDER BY timestamp"
+        "SELECT timestamp, hashrate FROM blocks WHERE bucket='daily'  AND hashrate > 0 ORDER BY timestamp"
     ).fetchall()
     hr_hourly = conn.execute(
-        "SELECT timestamp, hashrate FROM blocks WHERE bucket='hourly' ORDER BY timestamp"
+        "SELECT timestamp, hashrate FROM blocks WHERE bucket='hourly' AND hashrate > 0 ORDER BY timestamp"
     ).fetchall()
     hr_recent = conn.execute(
-        "SELECT timestamp, hashrate FROM blocks WHERE bucket='recent' ORDER BY timestamp"
+        "SELECT timestamp, hashrate FROM blocks WHERE bucket='recent' AND hashrate > 0 ORDER BY timestamp"
     ).fetchall()
 
     for metric, mul in (("hashrate", 1), ("difficulty", DIFF_MUL)):
@@ -915,13 +915,13 @@ def export_all_json():
             (cutoff_24h,),
         ).fetchall()
         hourly_raw = conn.execute(
-            f"SELECT (timestamp/{BLOCKS_PER_HOUR*60})*{BLOCKS_PER_HOUR*60} as bucket_ts, SUM({col}) "
+            f"SELECT (timestamp/{BLOCKS_PER_HOUR*60})*{BLOCKS_PER_HOUR*60} as bucket_ts, SUM({col})*1.0/COUNT(*) "
             f"FROM block_stats WHERE timestamp >= ? AND timestamp < ? "
             f"GROUP BY bucket_ts ORDER BY bucket_ts",
             (cutoff_30d, cutoff_24h),
         ).fetchall()
         daily_raw = conn.execute(
-            f"SELECT (timestamp/86400)*86400 as bucket_ts, SUM({col}) "
+            f"SELECT (timestamp/86400)*86400 as bucket_ts, SUM({col})*1.0/COUNT(*) "
             f"FROM block_stats WHERE timestamp < ? "
             f"GROUP BY bucket_ts ORDER BY bucket_ts",
             (cutoff_30d,),
@@ -929,8 +929,8 @@ def export_all_json():
 
         _write_json(f"{metric}.json", {
             "updated": ts_now,
-            "daily":   [[r[0], r[1]] for r in daily_raw],
-            "hourly":  [[r[0], r[1]] for r in hourly_raw],
+            "daily":   [[r[0], round(r[1], 4) if r[1] is not None else 0] for r in daily_raw],
+            "hourly":  [[r[0], round(r[1], 4) if r[1] is not None else 0] for r in hourly_raw],
             "recent":  [[r[0], r[1]] for r in recent],
         })
 

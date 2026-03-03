@@ -630,13 +630,10 @@ function makeLineChart(id, label, color, yFmt, suggestedMax) {
         x: {
           type: "time",
           time: { tooltipFormat: "MMM d yyyy HH:mm" },
-          grid: { color: "#21262d" },
-          ticks: { maxTicksLimit: 8, color: "#8b949e" },
+          ticks: { maxTicksLimit: 8 },
         },
         y: {
-          suggestedMax,
-          grid: { color: "#21262d" },
-          ticks: { color: "#8b949e", callback: v => yFmt(v) },
+          ticks: { callback: v => yFmt(v) },
         }
       }
     }
@@ -647,9 +644,7 @@ function makeLineChart(id, label, color, yFmt, suggestedMax) {
 const charts = {};
 
 function initCharts() {
-  Chart.defaults.color = "#8b949e";
-  Chart.defaults.borderColor = "#30363d";
-  Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  // Chart.defaults (color, borderColor, font) are set by initTheme() before this runs
   charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS);
   charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff);
   charts.tx         = makeLineChart("chart-tx",         "Transactions", "#3fb950", v => fmt(v,1));

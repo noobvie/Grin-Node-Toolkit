@@ -485,64 +485,85 @@ def _append_hashrate(new_rows, last_height):
     combined = calc_hashrate(base + new_rows)
     return combined[len(base):]  # return only the new ones
 
-def _fetch_block_stats_range(start, end, workers=4, heights=None):
+def _fmt_eta(secs):
+    """Format seconds into a compact human-readable ETA string."""
+    if secs < 60:   return f"{int(secs)}s"
+    if secs < 3600: return f"{int(secs/60)}m"
+    return f"{secs/3600:.1f}h"
+
+def _fetch_block_stats_range(start, end, workers=None, heights=None):
     """
-    Fetch block stats (tx/fee data) efficiently with memory-aware batching.
-    For large ranges (3.7M blocks), uses smaller workers and periodic commits
-    to prevent OOM (out-of-memory) kills.
+    Fetch block stats (tx/fee data) with chunked processing.
+
+    Processes heights in fixed-size chunks so the ThreadPoolExecutor dict never
+    grows beyond chunk_size entries.  Each chunk is committed immediately, keeping
+    resident memory low regardless of total block count.
+
+    Progress bar shows percentage, blocks/sec, and ETA.
     """
     if heights is None:
         heights = list(range(max(0, start), end + 1))
     if not heights:
         return
-    
+
+    total = len(heights)
+
+    # Adaptive workers: fewer parallel requests for very large imports
+    if workers is None:
+        if total > 500_000: workers = 1
+        elif total > 50_000: workers = 2
+        elif total > 5_000:  workers = 4
+        else:                workers = 8
+
+    # Chunk size: limits concurrent futures in RAM.
+    # ~5 000 at a time is enough parallelism while keeping memory flat.
+    chunk_size = min(5_000, max(500, total // 20))
+
     conn = open_db()
     init_schema(conn)
-    
-    # Adaptive workers: reduce for large batches to conserve memory
-    total_blocks = len(heights)
-    if total_blocks > 1000000:  # >1M blocks = reduce workers to 1-2
-        workers = 1
-    elif total_blocks > 100000:  # >100K blocks = reduce to 2-3
-        workers = min(workers, 2)
-   
-    done = 0
-    committed = 0
-    commit_interval = max(100, min(5000, total_blocks // 10))  # Commit every 100-5000 blocks
-    batch = []
-    
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(fetch_full_block, h): h for h in heights}
-        for fut in as_completed(futures):
-            row = fut.result()
-            if row:
-                batch.append(row)
-            done += 1
-            
-            # Periodic progress + memory-aware commit
-            if done % 100 == 0:
-                print(f"\r  Block stats: {done:,}/{total_blocks:,} ", end="", flush=True)
-            
-            # Commit in chunks to prevent memory buildup
-            if len(batch) >= commit_interval:
-                conn.executemany(
-                    "INSERT OR REPLACE INTO block_stats(height,timestamp,tx_count,fee_total,output_count) VALUES(?,?,?,?,?)",
-                    batch,
-                )
-                conn.commit()
-                committed += len(batch)
-                batch = []
-    
-    # Final commit of remaining rows
-    if batch:
-        conn.executemany(
-            "INSERT OR REPLACE INTO block_stats(height,timestamp,tx_count,fee_total,output_count) VALUES(?,?,?,?,?)",
-            batch,
-        )
-        conn.commit()
-        committed += len(batch)
-    
-    print()
+    done = committed = 0
+    t0 = time.time()
+
+    print(f"  Fetching {total:,} blocks  (workers={workers}, chunk={chunk_size:,})")
+
+    for ci in range(0, total, chunk_size):
+        chunk = heights[ci : ci + chunk_size]
+        batch = []
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(fetch_full_block, h): h for h in chunk}
+            for fut in as_completed(futs):
+                row = fut.result()
+                if row:
+                    batch.append(row)
+                done += 1
+
+                # Refresh progress bar every 200 blocks (low overhead)
+                if done % 200 == 0 or done == total:
+                    elapsed = time.time() - t0
+                    rate    = done / elapsed if elapsed > 0 else 1
+                    eta     = (total - done) / rate if rate > 0 else 0
+                    pct     = done / total
+                    bar_w   = 30
+                    filled  = int(bar_w * pct)
+                    bar     = "█" * filled + "░" * (bar_w - filled)
+                    print(
+                        f"\r  [{bar}] {done:,}/{total:,} ({pct*100:.1f}%)"
+                        f"  {rate:.0f} blk/s  ETA {_fmt_eta(eta)}   ",
+                        end="", flush=True,
+                    )
+
+        # Commit each chunk immediately — keeps SQLite WAL small
+        if batch:
+            conn.executemany(
+                "INSERT OR REPLACE INTO block_stats"
+                "(height,timestamp,tx_count,fee_total,output_count) VALUES(?,?,?,?,?)",
+                batch,
+            )
+            conn.commit()
+            committed += len(batch)
+
+    print()  # newline after progress bar
     conn.close()
     print(f"[INFO] Committed {committed:,} block stats to database")
 

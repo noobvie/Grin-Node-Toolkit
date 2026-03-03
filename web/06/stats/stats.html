@@ -543,7 +543,13 @@
         <span class="dot dot-blue"></span>Both
       </button>
     </div>
-    <div class="chart-wrap"><canvas id="chart-activity"></canvas></div>
+    <div class="chart-wrap">
+      <canvas id="chart-activity"></canvas>
+      <div id="activity-no-data" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column;gap:8px;pointer-events:none;">
+        <span style="color:var(--muted);font-size:13px;">No block stats yet</span>
+        <span style="color:var(--muted);font-size:12px;">Run <code style="background:rgba(255,153,0,0.1);color:var(--grin);padding:2px 6px;border-radius:3px;font-family:monospace">--backfill-stats</code> to import transaction history</span>
+      </div>
+    </div>
   </div>
 
   <!-- Node versions -->
@@ -819,7 +825,11 @@ function updateActivityChart(txJson, feeJson, range, metric) {
   
   const txData = byTs(txPts);
   const feeData = byTs(feePts);
-  
+
+  // Show no-data overlay when both datasets are empty
+  const noDataEl = $("activity-no-data");
+  if (noDataEl) noDataEl.style.display = (txData.length === 0 && feeData.length === 0) ? "flex" : "none";
+
   charts.activity.data.datasets[0].data = txData;
   charts.activity.data.datasets[1].data = feeData;
   
@@ -999,11 +1009,9 @@ function applyTheme(theme) {
     Chart.defaults.font.family = theme === "matrix" ? monoFont : sansFont;
     Object.values(charts).forEach(c => {
       if (!c?.options?.scales) return;
-      ["x","y"].forEach(ax => {
-        if (c.options.scales[ax]) {
-          c.options.scales[ax].grid  = { ...c.options.scales[ax].grid,  color: tc.grid };
-          c.options.scales[ax].ticks = { ...c.options.scales[ax].ticks, color: tc.tick };
-        }
+      Object.keys(c.options.scales).forEach(ax => {
+        c.options.scales[ax].grid  = { ...c.options.scales[ax].grid,  color: tc.grid };
+        c.options.scales[ax].ticks = { ...c.options.scales[ax].ticks, color: tc.tick };
       });
       c.update("none");
     });

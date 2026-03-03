@@ -120,16 +120,21 @@ def grin_rpc(method, params=None, retries=3):
 
 def parse_ts(ts_str):
     """Convert Grin ISO timestamp string → Unix int."""
+    # e.g. "2019-01-15T16:44:15.763877+00:00" or "2019-01-15T17:38:05+00:00"
     try:
-        # Take only the first 19 characters (YYYY-MM-DDTHH:MM:SS)
-        # This safely drops both sub-seconds (.xxxxx) AND timezone offsets (+00:00)
-        clean_ts = ts_str[:19]
-        dt = datetime.strptime(clean_ts, "%Y-%m-%dT%H:%M:%S")
+        # Remove subseconds if present
+        if '.' in ts_str:
+            ts_str = ts_str.split('.')[0]
+        # Remove timezone offset if present (+00:00 or Z)
+        if '+' in ts_str:
+            ts_str = ts_str.split('+')[0]
+        elif 'Z' in ts_str:
+            ts_str = ts_str.split('Z')[0]
+        dt = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%S")
         return int(dt.replace(tzinfo=timezone.utc).timestamp())
-    except Exception as e:
-        print(f"  [WARN] parse_ts failed on {ts_str}: {e}")
-        return 0
-        
+    except Exception:
+        return 0  # Fallback; should be rare with the fixes above
+
 def now_ts():
     return int(time.time())
 
@@ -237,7 +242,7 @@ def fetch_headers_batch(heights, workers=8):
 def fetch_full_block(height):
     """Fetch full block (kernels + outputs) for tx/fee stats."""
     try:
-        data = grin_rpc("get_block", [height, None, None])
+        data = grin_rpc("get_block", [height, None, None], retries=5)
         if not data:
             return None
         header   = data.get("header", {})

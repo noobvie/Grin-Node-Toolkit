@@ -48,9 +48,10 @@
     flex-wrap: wrap;
     z-index: 10;
   }
-  .logo { display: flex; align-items: center; gap: 10px; }
+  .logo { display: flex; align-items: center; gap: 8px; }
+  .logo-img { height: 26px; width: 26px; flex-shrink: 0; }
   .logo-dot {
-    width: 10px; height: 10px;
+    width: 8px; height: 8px;
     background: var(--grin);
     border-radius: 50%;
     animation: pulse 2s infinite;
@@ -58,15 +59,55 @@
   @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.3} }
   .logo h1 { font-size: 16px; font-weight: 600; }
   .logo h1 span { color: var(--grin); }
-  nav a {
+  .header-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .stat-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .pill {
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid;
+    white-space: nowrap;
+  }
+  .pill-peers    { color: var(--grin);  border-color: var(--grin);  background: rgba(255,153,0,0.08); }
+  .pill-country  { color: var(--blue);  border-color: var(--blue);  background: rgba(88,166,255,0.08); }
+  .pill-price    { color: var(--green); border-color: var(--green); background: rgba(63,185,80,0.08); }
+  .pill-sep { color: var(--border); font-size: 14px; }
+  nav { display: flex; gap: 6px; }
+  .nav-btn {
     color: var(--muted);
     text-decoration: none;
-    margin-left: 20px;
-    font-size: 13px;
-    transition: color 0.2s;
+    padding: 5px 13px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.15s;
+    white-space: nowrap;
   }
-  nav a:hover, nav a.active { color: var(--text); }
-  #peer-count { color: var(--muted); font-size: 12px; }
+  .nav-btn:hover { color: var(--text); border-color: var(--muted); }
+  .nav-btn.active {
+    color: var(--grin);
+    border-color: var(--grin);
+    background: rgba(255,153,0,0.1);
+  }
+  /* ── Version distribution tabs ───────────────────────────────────────────── */
+  .ver-tabs { display: flex; gap: 4px; margin: 6px 0 4px; }
+  .ver-tab {
+    padding: 3px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: none;
+    color: var(--muted);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .ver-tab.active {
+    color: var(--grin);
+    border-color: var(--grin);
+    background: rgba(255,153,0,0.1);
+  }
 
   /* ── Map container ───────────────────────────────────────────────────────── */
   #map-container {
@@ -408,14 +449,23 @@
 
 <header>
   <div class="logo">
+    <img src="grin-logo.svg" class="logo-img" alt="Grin" onerror="this.style.display='none'">
     <div class="logo-dot"></div>
     <h1>Global <span>Grin</span> Health</h1>
   </div>
-  <nav>
-    <a href="index.html">Network Stats</a>
-    <a href="map.html" class="active">Peer Map</a>
-  </nav>
-  <span id="peer-count">Loading peers…</span>
+  <div class="header-right">
+    <div class="stat-pills">
+      <span class="pill pill-peers"   id="h-peers">— peers</span>
+      <span class="pill-sep">·</span>
+      <span class="pill pill-country" id="h-countries">— countries</span>
+      <span class="pill-sep">·</span>
+      <span class="pill pill-price"   id="h-price">$—</span>
+    </div>
+    <nav>
+      <a href="stats.html" class="nav-btn">Network Stats</a>
+      <a href="index.html" class="nav-btn active">Peer Map</a>
+    </nav>
+  </div>
 </header>
 
 <div id="map-container">
@@ -464,18 +514,17 @@
     <div class="stat-row"><span class="lbl">Inbound</span><span class="val" id="p-in">—</span></div>
     <div class="stat-row"><span class="lbl">Updated</span><span class="val" id="p-updated">—</span></div>
 
-    <div class="legend-title">Grin Price</div>
-    <div class="stat-row">
-      <span class="lbl">USD</span>
-      <span class="val val-price" id="grin-price">—</span>
-    </div>
-
     <div class="legend-title">Colour Key</div>
     <div class="leg-row"><span class="leg-dot" style="background:#ff9900"></span><span class="leg-name">Mainnet peer</span></div>
     <div class="leg-row"><span class="leg-dot" style="background:#00bcd4"></span><span class="leg-name">Testnet peer</span></div>
 
-    <div class="legend-title">Mainnet Version Distribution</div>
-    <div id="ver-legend"></div>
+    <div class="legend-title">Version Distribution</div>
+    <div class="ver-tabs">
+      <button class="ver-tab active" onclick="showVerTab('mainnet',this)">Mainnet</button>
+      <button class="ver-tab"        onclick="showVerTab('testnet',this)">Testnet</button>
+    </div>
+    <div id="ver-legend-mainnet"></div>
+    <div id="ver-legend-testnet" style="display:none"></div>
   </div>
 
   <button id="lp-toggle" title="Show peer list">☰ Peers</button>
@@ -652,21 +701,35 @@ function updatePanel(peers, updatedTs, verColorMap) {
   $("p-out").textContent       = fmt(outbound);
   $("p-in").textContent        = fmt(peers.length - outbound);
   $("p-updated").textContent   = updatedTs ? timeAgo(updatedTs) : "—";
-  $("peer-count").textContent  = `${fmt(peers.length)} active peers · ${fmt(countries.size)} countries`;
+  $("h-peers").textContent     = `${fmt(peers.length)} active peers`;
+  $("h-countries").textContent = `${fmt(countries.size)} countries`;
 
-  // Version distribution — mainnet only
+  // Version distribution — render both tabs
+  const testnetPeers = peers.filter(p => p.network === "testnet");
+  renderVerTab(mainnetPeers, "ver-legend-mainnet", verColorMap, "No mainnet peers");
+  renderVerTab(testnetPeers, "ver-legend-testnet", verColorMap, "No testnet peers");
+}
+
+function renderVerTab(tabPeers, elId, verColorMap, emptyMsg) {
   const counts = {};
-  mainnetPeers.forEach(p => { counts[p.user_agent] = (counts[p.user_agent] || 0) + 1; });
+  tabPeers.forEach(p => { counts[p.user_agent] = (counts[p.user_agent] || 0) + 1; });
   const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  const total  = mainnetPeers.length;
-  $("ver-legend").innerHTML = sorted.length
+  const total  = tabPeers.length;
+  $(elId).innerHTML = sorted.length
     ? sorted.map(([ua, n]) => `
       <div class="leg-row">
         <span class="leg-dot" style="background:${verColorMap[ua] || "#aaa"}"></span>
         <span class="leg-name" title="${esc(ua)}">${esc(ua)}</span>
-        <span class="leg-pct">${fmtPct(n, total)}</span>
+        <span class="leg-pct">${fmtPct(n, total)} · ${n}</span>
       </div>`).join("")
-    : `<div style="color:var(--muted);font-size:11px;padding:4px 0">No mainnet peers in last 48h</div>`;
+    : `<div style="color:var(--muted);font-size:11px;padding:4px 0">${emptyMsg}</div>`;
+}
+
+function showVerTab(net, btn) {
+  document.querySelectorAll(".ver-tab").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  $("ver-legend-mainnet").style.display = net === "mainnet" ? "" : "none";
+  $("ver-legend-testnet").style.display = net === "testnet" ? "" : "none";
 }
 
 // ── CoinGecko price ───────────────────────────────────────────────────────────
@@ -679,13 +742,12 @@ async function loadGrinPrice() {
     const data  = await r.json();
     const price = data?.grin?.usd;
     if (price != null) {
-      // Show 4 decimal places for a low-priced coin
-      $("grin-price").textContent = "$" + Number(price).toFixed(4);
+      $("h-price").textContent = "$" + Number(price).toFixed(4);
     } else {
-      $("grin-price").textContent = "—";
+      $("h-price").textContent = "$—";
     }
   } catch {
-    $("grin-price").textContent = "unavailable";
+    $("h-price").textContent = "$—";
   }
 }
 

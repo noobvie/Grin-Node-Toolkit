@@ -474,6 +474,14 @@ def _is_public_ip(ip):
             and not ip.startswith("10.")
             and not ip.startswith("192.168."))
 
+def _is_valid_grin_agent(ua):
+    """Return True only for known Grin node implementations.
+    Rejects blank/unknown agents that flood the routing table from non-Grin software."""
+    if not ua:
+        return False
+    ua_lower = ua.lower()
+    return "mw/grin" in ua_lower or "grin++" in ua_lower
+
 
 def _extract_addr(peer, default_port):
     """Split a Grin peer dict's addr field into (ip, port)."""
@@ -559,8 +567,9 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
     try:
         raw = _rpc(owner_url, "get_peers", {"peer_addr": None}, secret=secret)
         if raw:
-            skipped_port = 0
-            skipped_flag = 0
+            skipped_port  = 0
+            skipped_flag  = 0
+            skipped_agent = 0
             for p in raw:
                 flags = str(p.get("flags", ""))
                 # Only accept peers the node considers Healthy (successfully handshaked)
@@ -573,19 +582,25 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
                     continue
                 if not _is_public_ip(ip):
                     continue
+                # Only accept known Grin node implementations (MW/Grin or Grin++)
+                ua = p.get("user_agent", "")
+                if not _is_valid_grin_agent(ua):
+                    skipped_agent += 1
+                    continue
                 # Capture last_seen from the routing table (Unix timestamp)
                 last_seen_raw = p.get("last_seen", 0)
                 last_seen_ts  = int(last_seen_raw) if last_seen_raw else 0
                 peer_list.append({
                     "ip":         ip,
                     "port":       port,
-                    "user_agent": p.get("user_agent", "unknown"),
+                    "user_agent": ua,
                     "direction":  p.get("direction", "Outbound"),
                     "network":    network_label,
                     "last_seen":  last_seen_ts,
                 })
             print(f"[INFO] {network_label}: {len(peer_list)} healthy peers for stats "
-                  f"(skipped {skipped_flag} non-Healthy, {skipped_port} wrong-port).")
+                  f"(skipped {skipped_flag} non-Healthy, {skipped_port} wrong-port, "
+                  f"{skipped_agent} unknown-agent).")
     except Exception as exc:
         print(f"[WARN] {network_label} owner API get_peers failed: {exc}", file=sys.stderr)
     return peer_list
@@ -756,13 +771,20 @@ def _update_peers():
         print(f"[INFO] Routing-table peers added to map: {len(recent_stat)} "
               f"({len(new_ips)} new IPs geo-located).")
 
-    # ── 6. Prune peers not seen in PEER_RETENTION_DAYS ───────────────────────
+    # ── 6. Prune peers not seen in PEER_RETENTION_DAYS + invalid agents ──────
     cutoff = ts - PEER_RETENTION_DAYS * 86400
     deleted = conn.execute(
         "DELETE FROM known_peers WHERE last_seen < ?", (cutoff,)
     ).rowcount
     if deleted:
         print(f"[INFO] Pruned {deleted} stale peers (>{PEER_RETENTION_DAYS}d).")
+    # Remove any existing entries without a valid Grin agent (legacy contamination)
+    purged = conn.execute(
+        "DELETE FROM known_peers "
+        "WHERE user_agent NOT LIKE '%MW/Grin%' AND user_agent NOT LIKE '%Grin++%'"
+    ).rowcount
+    if purged:
+        print(f"[INFO] Purged {purged} peers with unknown agent names.")
 
     # ── 7. Version snapshot — use stat_peers if available, else map_peers ─────
     version_source = stat_peers if stat_peers else map_peers
@@ -783,6 +805,7 @@ def _update_peers():
                lat, lng, country, country_code, city, first_seen, last_seen
         FROM known_peers
         WHERE last_seen >= ?
+          AND (user_agent LIKE '%MW/Grin%' OR user_agent LIKE '%Grin++%')
         ORDER BY last_seen DESC
     """, (history_cutoff,)).fetchall()
     conn.close()

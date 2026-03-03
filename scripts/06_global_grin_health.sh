@@ -202,8 +202,8 @@ install_stats() {
         die "Web source not found: $WEB_SRC. Ensure the toolkit is complete."
     fi
     info "Deploying web pages..."
-    cp "$WEB_SRC/index.html" "$WWW_DIR/index.html"
-    cp "$WEB_SRC/map.html"   "$WWW_DIR/map.html"
+    cp "$WEB_SRC/index.html"  "$WWW_DIR/index.html"
+    cp "$WEB_SRC/stats.html"  "$WWW_DIR/stats.html"
 
     # Download Chart.js
     if [[ ! -f "$WWW_DIR/chart.min.js" ]]; then
@@ -241,6 +241,16 @@ install_stats() {
             || die "Failed to download Leaflet.css. Check internet connection."
     else
         info "Leaflet.css already present — skipping download."
+    fi
+
+    # Download Grin logo (SVG) for the page header
+    if [[ ! -f "$WWW_DIR/grin-logo.svg" ]]; then
+        info "Downloading Grin logo..."
+        curl -fsSL "https://canada1.discourse-cdn.com/flex036/uploads/grin/original/1X/f96e1cdce64456785297c317e6cb84f3fab2edcb.svg" \
+            -o "$WWW_DIR/grin-logo.svg" \
+            || warn "Could not download Grin logo — header logo will be hidden (non-fatal)."
+    else
+        info "Grin logo already present — skipping download."
     fi
 
     # Write collector config

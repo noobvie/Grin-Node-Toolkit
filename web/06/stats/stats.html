@@ -40,9 +40,10 @@
     flex-wrap: wrap;
     gap: 12px;
   }
-  .logo { display: flex; align-items: center; gap: 10px; }
+  .logo { display: flex; align-items: center; gap: 8px; }
+  .logo-img { height: 26px; width: 26px; flex-shrink: 0; }
   .logo-dot {
-    width: 10px; height: 10px;
+    width: 8px; height: 8px;
     background: var(--grin);
     border-radius: 50%;
     animation: pulse 2s infinite;
@@ -53,14 +54,38 @@
   }
   .logo h1 { font-size: 16px; font-weight: 600; color: var(--text); }
   .logo h1 span { color: var(--grin); }
-  nav a {
+  .header-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .stat-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .pill {
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid;
+    white-space: nowrap;
+  }
+  .pill-peers    { color: var(--grin);  border-color: var(--grin);  background: rgba(255,153,0,0.08); }
+  .pill-country  { color: var(--blue);  border-color: var(--blue);  background: rgba(88,166,255,0.08); }
+  .pill-price    { color: var(--green); border-color: var(--green); background: rgba(63,185,80,0.08); }
+  .pill-sep { color: var(--border); font-size: 14px; }
+  nav { display: flex; gap: 6px; }
+  .nav-btn {
     color: var(--muted);
     text-decoration: none;
-    margin-left: 20px;
-    font-size: 13px;
-    transition: color 0.2s;
+    padding: 5px 13px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.15s;
+    white-space: nowrap;
   }
-  nav a:hover, nav a.active { color: var(--text); }
+  .nav-btn:hover { color: var(--text); border-color: var(--muted); }
+  .nav-btn.active {
+    color: var(--grin);
+    border-color: var(--grin);
+    background: rgba(255,153,0,0.1);
+  }
   #last-updated { color: var(--muted); font-size: 12px; }
 
   /* ── Stats bar ───────────────────────────────────────────────────────────── */
@@ -198,7 +223,7 @@
 
     header { padding: 10px 14px; gap: 8px; }
     .logo h1 { font-size: 14px; }
-    nav a { margin-left: 12px; font-size: 12px; }
+    .nav-btn { padding: 4px 9px; font-size: 11px; }
     #last-updated { font-size: 11px; }
 
     .stats-bar { grid-template-columns: repeat(2, 1fr); }
@@ -251,14 +276,23 @@
 
 <header>
   <div class="logo">
+    <img src="grin-logo.svg" class="logo-img" alt="Grin" onerror="this.style.display='none'">
     <div class="logo-dot"></div>
     <h1>Global <span>Grin</span> Health</h1>
   </div>
-  <nav>
-    <a href="index.html" class="active">Network Stats</a>
-    <a href="map.html">Peer Map</a>
-  </nav>
-  <span id="last-updated">—</span>
+  <div class="header-right">
+    <div class="stat-pills">
+      <span class="pill pill-peers"   id="h-peers">— peers</span>
+      <span class="pill-sep">·</span>
+      <span class="pill pill-country" id="h-countries">— countries</span>
+      <span class="pill-sep">·</span>
+      <span class="pill pill-price"   id="h-price">$—</span>
+    </div>
+    <nav>
+      <a href="stats.html" class="nav-btn active">Network Stats</a>
+      <a href="index.html" class="nav-btn">Peer Map</a>
+    </nav>
+  </div>
 </header>
 
 <!-- ── Stats bar ─────────────────────────────────────────────────────────── -->
@@ -521,6 +555,11 @@ async function loadAll() {
     $("last-updated").textContent = "Updated " + timeAgo(summary.updated);
   }
   $("s-peers").textContent = peers ? fmt(peers.count) : "—";
+  if (peers && peers.peers) {
+    const countries = new Set(peers.peers.map(p => p.country).filter(Boolean));
+    $("h-peers").textContent     = `${fmt(peers.count)} active peers`;
+    $("h-countries").textContent = `${fmt(countries.size)} countries`;
+  }
 
   // Charts (skipped if chart.min.js didn't load)
   if (charts.hashrate   && hashrate)     updateChartData(charts.hashrate,   hashrate,     rangeState.hr);
@@ -583,6 +622,25 @@ function renderVersions(data) {
   }).join("");
 }
 
+// ── CoinGecko price ───────────────────────────────────────────────────────────
+async function loadGrinPrice() {
+  try {
+    const r = await fetch(
+      "https://api.coingecko.com/api/v3/simple/price?ids=grin&vs_currencies=usd"
+    );
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data  = await r.json();
+    const price = data?.grin?.usd;
+    if (price != null) {
+      $("h-price").textContent = "$" + Number(price).toFixed(4);
+    } else {
+      $("h-price").textContent = "$—";
+    }
+  } catch {
+    $("h-price").textContent = "$—";
+  }
+}
+
 // ── Range button wiring ───────────────────────────────────────────────────────
 function wireRangeGroup(groupId, chartKey, cacheKey) {
   $(groupId).querySelectorAll(".range-btn").forEach(btn => {
@@ -613,6 +671,8 @@ async function boot() {
     $("loading").style.display = "none";
   }
   setInterval(() => loadAll().catch(console.error), REFRESH_MS);
+  // Load price independently — don't block charts if CoinGecko is slow
+  loadGrinPrice();
 }
 
 document.addEventListener("DOMContentLoaded", boot);

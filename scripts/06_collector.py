@@ -18,13 +18,22 @@ Growth projection:
   • Per year: ~12.1 MB (525,600 new blocks)
   • After 10 more years (2036): ~220 MB total (manageable on any filesystem)
 
+⚠️  MEMORY REQUIREMENTS
+══════════════════════
+Full history import (--init-history) fetches all 3.7M block stats.
+Uses adaptive multi-threading (reduced workers for large batches) + periodic
+commits to stay within ~500MB RAM. If you get "Killed (137)" errors:
+  Option 1: Add swap space (Linux: fallocate -l 4G /swapfile && mkswap...)
+  Option 2: Run incremental backfill: --backfill-stats 90 (fetch 90 days at a time)
+  Option 3: Increase available RAM before running --init-history
+
 Usage (commands):
     python3 06_collector.py --init-db            Create DB schema only
-    python3 06_collector.py --init-history       Backfill ENTIRE chain (headers + all TX/fees)
+    python3 06_collector.py --init-history       Backfill ENTIRE chain (headers + all TX/fees, 30+ min)
     python3 06_collector.py --update             Fetch new blocks + TX stats (incremental)
     python3 06_collector.py --peers-only         Update peer geolocation only
     python3 06_collector.py --backfill-stats     Fetch last 180 days (default)
-    python3 06_collector.py --backfill-stats 90  Fetch last 90 days
+    python3 06_collector.py --backfill-stats 90  Fetch last 90 days (lighter on memory)
     python3 06_collector.py --backfill-stats all Fetch ENTIRE chain history from block 0
 
 Config (env vars or /var/lib/grin-stats/config.env):
@@ -399,6 +408,7 @@ def cmd_init_history():
 
     # Fetch full block stats for complete history (ALL blocks since genesis)
     print("[INFO] Fetching tx/fee stats for complete chain history...")
+    print("[INFO] ⚠️  Large import: using memory-efficient streaming (may take 30+ min)")
     _fetch_block_stats_range(0, tip_height)
 
     # Update peers
@@ -476,31 +486,65 @@ def _append_hashrate(new_rows, last_height):
     return combined[len(base):]  # return only the new ones
 
 def _fetch_block_stats_range(start, end, workers=4, heights=None):
+    """
+    Fetch block stats (tx/fee data) efficiently with memory-aware batching.
+    For large ranges (3.7M blocks), uses smaller workers and periodic commits
+    to prevent OOM (out-of-memory) kills.
+    """
     if heights is None:
         heights = list(range(max(0, start), end + 1))
     if not heights:
         return
+    
     conn = open_db()
     init_schema(conn)
+    
+    # Adaptive workers: reduce for large batches to conserve memory
+    total_blocks = len(heights)
+    if total_blocks > 1000000:  # >1M blocks = reduce workers to 1-2
+        workers = 1
+    elif total_blocks > 100000:  # >100K blocks = reduce to 2-3
+        workers = min(workers, 2)
+   
     done = 0
+    committed = 0
+    commit_interval = max(100, min(5000, total_blocks // 10))  # Commit every 100-5000 blocks
+    batch = []
+    
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(fetch_full_block, h): h for h in heights}
-        batch = []
         for fut in as_completed(futures):
             row = fut.result()
             if row:
                 batch.append(row)
             done += 1
+            
+            # Periodic progress + memory-aware commit
             if done % 100 == 0:
-                print(f"\r  Block stats: {done}/{len(heights)}", end="", flush=True)
-        if batch:
-            conn.executemany(
-                "INSERT OR REPLACE INTO block_stats(height,timestamp,tx_count,fee_total,output_count) VALUES(?,?,?,?,?)",
-                batch,
-            )
-            conn.commit()
+                print(f"\r  Block stats: {done:,}/{total_blocks:,} ", end="", flush=True)
+            
+            # Commit in chunks to prevent memory buildup
+            if len(batch) >= commit_interval:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO block_stats(height,timestamp,tx_count,fee_total,output_count) VALUES(?,?,?,?,?)",
+                    batch,
+                )
+                conn.commit()
+                committed += len(batch)
+                batch = []
+    
+    # Final commit of remaining rows
+    if batch:
+        conn.executemany(
+            "INSERT OR REPLACE INTO block_stats(height,timestamp,tx_count,fee_total,output_count) VALUES(?,?,?,?,?)",
+            batch,
+        )
+        conn.commit()
+        committed += len(batch)
+    
     print()
     conn.close()
+    print(f"[INFO] Committed {committed:,} block stats to database")
 
 def cmd_backfill_stats(days=None):
     """

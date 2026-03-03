@@ -34,10 +34,9 @@
     background: var(--surface);
     border-bottom: 1px solid var(--border);
     padding: 14px 24px;
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
     gap: 12px;
   }
   .logo { display: flex; align-items: center; gap: 8px; }
@@ -54,7 +53,7 @@
   }
   .logo h1 { font-size: 16px; font-weight: 600; color: var(--text); }
   .logo h1 span { color: var(--grin); }
-  .header-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .header-right { display: flex; align-items: center; justify-self: end; flex-wrap: wrap; }
   .stat-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .pill {
     padding: 3px 10px;
@@ -221,8 +220,10 @@
   @media (max-width: 640px) {
     :root { --chart-h: 200px; }
 
-    header { padding: 10px 14px; gap: 8px; }
+    header { grid-template-columns: 1fr; padding: 10px 14px; gap: 8px; }
     .logo h1 { font-size: 14px; }
+    nav { justify-self: center; }
+    .header-right { justify-self: auto; }
     .nav-btn { padding: 4px 9px; font-size: 11px; }
     #last-updated { font-size: 11px; }
 
@@ -280,6 +281,10 @@
     <div class="logo-dot"></div>
     <h1>Global <span>Grin</span> Health</h1>
   </div>
+  <nav>
+    <a href="stats.html" class="nav-btn active"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><polyline points="1,11 5,6 8,8 13,2"/><line x1="1" y1="13" x2="13" y2="13"/></svg>Network Stats</a>
+    <a href="index.html" class="nav-btn"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="7" cy="7" r="5.5"/><path d="M7 1.5c-2 2-2.5 3.5-2.5 5.5s.5 3.5 2.5 5.5M7 1.5c2 2 2.5 3.5 2.5 5.5S9 11 7 12.5"/><line x1="1.5" y1="7" x2="12.5" y2="7"/></svg>Peer Map</a>
+  </nav>
   <div class="header-right">
     <div class="stat-pills">
       <span class="pill pill-peers"   id="h-peers">— peers</span>
@@ -288,10 +293,6 @@
       <span class="pill-sep">·</span>
       <span class="pill pill-price"   id="h-price">$—</span>
     </div>
-    <nav>
-      <a href="stats.html" class="nav-btn active">Network Stats</a>
-      <a href="index.html" class="nav-btn">Peer Map</a>
-    </nav>
   </div>
 </header>
 
@@ -319,6 +320,8 @@
   </div>
 </div>
 
+<div id="last-updated" style="text-align:right;padding:3px 24px;font-size:11px;color:var(--muted);"></div>
+
 <!-- ── Main content ─────────────────────────────────────────────────────── -->
 <main>
 
@@ -327,9 +330,10 @@
     <div class="card-header">
       <div class="card-title"><span class="dot dot-grin"></span>Network Hashrate (GPS)</div>
       <div class="range-btns" id="hr-range">
-        <button class="range-btn" data-r="recent">24h</button>
-        <button class="range-btn" data-r="hourly">30d</button>
-        <button class="range-btn active" data-r="all">All</button>
+        <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="month">Month</button>
+        <button class="range-btn" data-r="year">Year</button>
+        <button class="range-btn active" data-r="all">All Time</button>
       </div>
     </div>
     <div class="chart-wrap"><canvas id="chart-hashrate"></canvas></div>
@@ -340,9 +344,10 @@
     <div class="card-header">
       <div class="card-title"><span class="dot dot-blue"></span>Network Difficulty</div>
       <div class="range-btns" id="diff-range">
-        <button class="range-btn" data-r="recent">24h</button>
-        <button class="range-btn" data-r="hourly">30d</button>
-        <button class="range-btn active" data-r="all">All</button>
+        <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="month">Month</button>
+        <button class="range-btn" data-r="year">Year</button>
+        <button class="range-btn active" data-r="all">All Time</button>
       </div>
     </div>
     <div class="chart-wrap"><canvas id="chart-difficulty"></canvas></div>
@@ -354,9 +359,10 @@
       <div class="card-header">
         <div class="card-title"><span class="dot dot-green"></span>Transactions per Block</div>
         <div class="range-btns" id="tx-range">
-          <button class="range-btn active" data-r="recent">24h</button>
-          <button class="range-btn" data-r="hourly">30d</button>
-          <button class="range-btn" data-r="all">All</button>
+          <button class="range-btn active" data-r="day">Day</button>
+          <button class="range-btn" data-r="month">Month</button>
+          <button class="range-btn" data-r="year">Year</button>
+          <button class="range-btn" data-r="all">All Time</button>
         </div>
       </div>
       <div class="chart-wrap"><canvas id="chart-tx"></canvas></div>
@@ -365,9 +371,10 @@
       <div class="card-header">
         <div class="card-title"><span class="dot dot-purple"></span>Fees per Block</div>
         <div class="range-btns" id="fee-range">
-          <button class="range-btn active" data-r="recent">24h</button>
-          <button class="range-btn" data-r="hourly">30d</button>
-          <button class="range-btn" data-r="all">All</button>
+          <button class="range-btn active" data-r="day">Day</button>
+          <button class="range-btn" data-r="month">Month</button>
+          <button class="range-btn" data-r="year">Year</button>
+          <button class="range-btn" data-r="all">All Time</button>
         </div>
       </div>
       <div class="chart-wrap"><canvas id="chart-fees"></canvas></div>
@@ -423,13 +430,8 @@ const fmtDiff = v => {
   if (v >= 1e3) return (v/1e3).toFixed(1) + "K";
   return fmt(v);
 };
-// v is in nGrin; display in human-readable units
-const fmtFee = v => {
-  if (v >= 1e9) return (v/1e9).toFixed(3) + " Grin";
-  if (v >= 1e6) return (v/1e6).toFixed(1) + " mGrin";
-  if (v >= 1e3) return (v/1e3).toFixed(0) + " µGrin";
-  return fmt(v) + " nGrin";
-};
+// v is in nGrin; always display in Grin for clarity
+const fmtFee = v => (v / 1e9).toFixed(4) + " Grin";
 const timeAgo = ts => {
   const s = Math.floor(Date.now()/1000) - ts;
   if (s < 60)   return s + "s ago";
@@ -507,16 +509,23 @@ function initCharts() {
 }
 
 // Range state
-const rangeState = { hr: "all", diff: "all", tx: "recent", fee: "recent" };
+const rangeState = { hr: "all", diff: "all", tx: "day", fee: "day" };
 
 function updateChartData(chart, json, range) {
-  let pts;
-  if (range === "all")    pts = [...(json.daily||[]), ...(json.hourly||[]), ...(json.recent||[])];
-  else if (range === "hourly") pts = json.hourly || [];
-  else                    pts = json.recent || [];
-  let data = pts.map(([ts, v]) => ({x: ts * 1000, y: v}));
+  let data;
+  const nowMs = Date.now();
+  if (range === "all") {
+    const pts = [...(json.daily||[]), ...(json.hourly||[]), ...(json.recent||[])];
+    data = pts.map(([ts, v]) => ({x: ts*1000, y: v}));
+  } else if (range === "year") {
+    const cutoff = nowMs - 365 * 86400000;
+    data = (json.daily||[]).filter(([ts]) => ts*1000 >= cutoff).map(([ts,v]) => ({x:ts*1000, y:v}));
+  } else if (range === "month") {
+    data = (json.hourly||[]).map(([ts,v]) => ({x:ts*1000, y:v}));
+  } else {                           // day
+    data = (json.recent||[]).map(([ts,v]) => ({x:ts*1000, y:v}));
+  }
   // Drop extreme outlier points (> 10× suggestedMax) caused by partial/corrupt imports.
-  // This keeps the axis sane while still allowing the scale to grow for legitimate spikes.
   const cap = chart.options.scales.y.suggestedMax;
   if (cap) data = data.filter(p => p.y <= cap * 10);
   chart.data.datasets[0].data = data;

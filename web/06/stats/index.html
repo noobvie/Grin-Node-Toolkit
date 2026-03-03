@@ -3,22 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Global Grin Health — Network Stats</title>
-<script src="chart.min.js"></script>
-<script src="chartjs-adapter-date-fns.bundle.min.js"></script>
+<title>Grin Node World Map — Global Grin Network Peer Map</title>
+<meta name="description" content="Live Grin node world map. See active Grin network peers by country, version, and direction. Monitor global Grin node health in real time.">
+<meta name="keywords" content="grin node map, grin node world, grin network map, grin peers, grin cryptocurrency nodes, grin blockchain, grin network health, grin peer map, mimblewimble nodes">
+<meta name="robots" content="index, follow">
+<meta property="og:title" content="Grin Node World Map — Global Grin Network">
+<meta property="og:description" content="Interactive world map of active Grin network nodes. Filter by country, version, or direction.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="leaflet.min.css">
+<script src="leaflet.min.js"></script>
 <style>
   :root {
-    --bg:        #0d1117;
-    --surface:   #161b22;
-    --border:    #30363d;
-    --text:      #e6edf3;
-    --muted:     #8b949e;
-    --grin:      #ff9900;
-    --blue:      #58a6ff;
-    --green:     #3fb950;
-    --purple:    #bc8cff;
-    --red:       #f85149;
-    --chart-h:   260px;
+    --bg:      #0d1117;
+    --surface: #161b22;
+    --border:  #30363d;
+    --text:    #e6edf3;
+    --muted:   #8b949e;
+    --grin:    #ff9900;
+    --blue:    #58a6ff;
+    --green:   #3fb950;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -26,19 +29,24 @@
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     font-size: 14px;
-    line-height: 1.6;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
   }
 
-  /* ── Header ─────────────────────────────────────────────────────────────── */
+  /* ── Header ──────────────────────────────────────────────────────────────── */
   header {
     background: var(--surface);
     border-bottom: 1px solid var(--border);
-    padding: 14px 24px;
+    padding: 12px 24px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    flex-wrap: wrap;
+    flex-shrink: 0;
     gap: 12px;
+    flex-wrap: wrap;
+    z-index: 10;
   }
   .logo { display: flex; align-items: center; gap: 10px; }
   .logo-dot {
@@ -47,11 +55,8 @@
     border-radius: 50%;
     animation: pulse 2s infinite;
   }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.3; }
-  }
-  .logo h1 { font-size: 16px; font-weight: 600; color: var(--text); }
+  @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.3} }
+  .logo h1 { font-size: 16px; font-weight: 600; }
   .logo h1 span { color: var(--grin); }
   nav a {
     color: var(--muted);
@@ -61,174 +66,273 @@
     transition: color 0.2s;
   }
   nav a:hover, nav a.active { color: var(--text); }
-  #last-updated { color: var(--muted); font-size: 12px; }
+  #peer-count { color: var(--muted); font-size: 12px; }
 
-  /* ── Stats bar ───────────────────────────────────────────────────────────── */
-  .stats-bar {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 1px;
-    background: var(--border);
-    border-bottom: 1px solid var(--border);
+  /* ── Map container ───────────────────────────────────────────────────────── */
+  #map-container {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
   }
-  .stat-item {
-    background: var(--surface);
-    padding: 14px 20px;
+  #map { width: 100%; height: 100%; }
+
+  /* Override Leaflet defaults for dark theme */
+  .leaflet-container { background: #0a0e14; }
+  .leaflet-control-attribution {
+    background: rgba(13,17,23,0.75) !important;
+    color: var(--muted) !important;
+    font-size: 10px !important;
   }
-  .stat-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
-  .stat-value { font-size: 22px; font-weight: 700; color: var(--text); margin-top: 2px; }
-  .stat-value.grin  { color: var(--grin); }
-  .stat-value.blue  { color: var(--blue); }
-  .stat-value.green { color: var(--green); }
+  .leaflet-control-attribution a { color: var(--muted) !important; }
+  /* ── Custom horizontal zoom control ─────────────────────────────────────── */
+  /* Positioned bottom-left, just to the right of the left panel (16+272+16=304px) */
+  #zoom-ctrl {
+    position: absolute;
+    bottom: 16px;
+    left: 304px;
+    z-index: 1001;
+    display: flex;
+    flex-direction: row;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    backdrop-filter: blur(6px);
+  }
+  #zoom-ctrl button {
+    background: rgba(22, 27, 34, 0.85);
+    color: var(--text);
+    border: none;
+    border-right: 1px solid var(--border);
+    width: 32px;
+    height: 32px;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+    user-select: none;
+  }
+  #zoom-ctrl button:last-child { border-right: none; }
+  #zoom-ctrl button:hover { background: var(--bg); color: var(--grin); }
 
-  /* ── Main layout ─────────────────────────────────────────────────────────── */
-  main { padding: 24px; max-width: 1280px; margin: 0 auto; }
-
-  /* ── Chart cards ─────────────────────────────────────────────────────────── */
-  .card {
-    background: var(--surface);
+  /* ── Left panel — peer list ──────────────────────────────────────────────── */
+  #left-panel {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    width: 272px;
+    max-height: calc(100% - 32px);
+    background: rgba(22, 27, 34, 0.92);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 20px;
-    margin-bottom: 20px;
-  }
-  .card-header {
+    backdrop-filter: blur(8px);
+    z-index: 1000;
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    transition: transform 0.25s ease, opacity 0.25s ease;
+  }
+  #left-panel.lp-hidden {
+    transform: translateX(-310px);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .lp-head {
+    display: flex;
     justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-bottom: 16px;
+    align-items: center;
+    padding: 12px 14px 8px;
+    flex-shrink: 0;
   }
-  .card-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .card-title .dot {
-    display: inline-block;
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    margin-right: 8px;
-  }
-  .dot-grin   { background: var(--grin); }
-  .dot-blue   { background: var(--blue); }
-  .dot-green  { background: var(--green); }
-  .dot-purple { background: var(--purple); }
-
-  /* ── Time range buttons ──────────────────────────────────────────────────── */
-  .range-btns { display: flex; gap: 4px; }
-  .range-btn {
-    background: transparent;
-    border: 1px solid var(--border);
+  .lp-head h2 { font-size: 13px; font-weight: 600; color: var(--text); }
+  .lp-close {
+    background: none;
+    border: none;
     color: var(--muted);
-    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 6px;
+  }
+  .lp-close:hover { color: var(--text); }
+  .lp-filters {
+    padding: 0 10px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    flex-shrink: 0;
+  }
+  .lp-filters select,
+  .lp-filters input[type="text"] {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 5px 8px;
     border-radius: 4px;
     font-size: 12px;
+  }
+  .lp-filters select { cursor: pointer; }
+  .lp-filters input[type="text"]::placeholder { color: var(--muted); }
+  .lp-filters input[type="text"]:focus {
+    outline: none;
+    border-color: var(--grin);
+  }
+  #lp-count {
+    padding: 0 14px 6px;
+    font-size: 11px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  #peer-list {
+    overflow-y: auto;
+    flex: 1;
+    border-top: 1px solid var(--border);
+    min-height: 0;
+  }
+  .peer-item {
+    padding: 8px 14px;
+    border-bottom: 1px solid rgba(48,54,61,0.5);
     cursor: pointer;
-    transition: all 0.2s;
+    transition: background 0.12s;
   }
-  .range-btn:hover  { border-color: var(--grin); color: var(--text); }
-  .range-btn.active { background: var(--grin); border-color: var(--grin); color: #000; font-weight: 600; }
-
-  /* ── Canvas wrapper ──────────────────────────────────────────────────────── */
-  .chart-wrap { position: relative; height: var(--chart-h); }
-
-  /* ── Two-column grid ─────────────────────────────────────────────────────── */
-  .grid-2 {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
+  .peer-item:hover { background: rgba(255,153,0,0.07); }
+  .pi-row1 {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 4px;
   }
-  @media (max-width: 768px) { .grid-2 { grid-template-columns: 1fr; } }
+  .pi-ip {
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--grin);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pi-seen { font-size: 11px; color: var(--muted); flex-shrink: 0; }
+  .pi-row2 {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--muted);
+    gap: 4px;
+  }
+  .pi-loc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .pi-ua  {
+    color: var(--blue);
+    flex-shrink: 0;
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
-  /* ── Versions donut ──────────────────────────────────────────────────────── */
-  .versions-wrap {
+  /* ── Panel open toggle ───────────────────────────────────────────────────── */
+  #lp-toggle {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    z-index: 1001;
+    background: rgba(22, 27, 34, 0.85);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    display: none;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  #lp-toggle.lp-btn-visible { display: block; }
+  #lp-toggle:hover { color: var(--text); border-color: var(--grin); }
+
+  /* ── Right side panel ────────────────────────────────────────────────────── */
+  #panel {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 260px;
+    background: rgba(22, 27, 34, 0.92);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    backdrop-filter: blur(8px);
+    z-index: 1000;
+    max-height: calc(100% - 32px);
+    overflow-y: auto;
+  }
+  #panel h2 { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--text); }
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .stat-row:last-of-type { border-bottom: none; }
+  .stat-row .lbl { color: var(--muted); }
+  .stat-row .val { font-weight: 600; color: var(--text); }
+  .stat-row .val-price { font-weight: 600; color: var(--grin); }
+  #panel .legend-title {
+    font-size: 12px;
+    color: var(--muted);
+    margin: 14px 0 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+  }
+  .leg-row {
     display: flex;
     align-items: center;
-    gap: 32px;
-    flex-wrap: wrap;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 12px;
   }
-  .donut-wrap { position: relative; width: 180px; height: 180px; flex-shrink: 0; }
-  .donut-center {
+  .leg-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .leg-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .leg-pct  { color: var(--grin); font-weight: 600; min-width: 36px; text-align: right; }
+  .filter-note {
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 8px;
+    opacity: 0.7;
+  }
+
+  /* ── Peer tooltip ────────────────────────────────────────────────────────── */
+  #tooltip {
+    position: fixed;
+    background: rgba(22, 27, 34, 0.95);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    pointer-events: none;
+    font-size: 12px;
+    z-index: 2000;
+    display: none;
+    max-width: 220px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  #tooltip .t-ip  { color: var(--grin); font-weight: 600; margin-bottom: 4px; font-family: monospace; }
+  #tooltip .t-loc { color: var(--muted); }
+  #tooltip .t-ua  { color: var(--blue); margin-top: 4px; }
+  #tooltip .t-dir { color: var(--green); font-size: 11px; }
+
+  /* ── Loading ─────────────────────────────────────────────────────────────── */
+  #loading {
     position: absolute;
     inset: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    pointer-events: none;
-  }
-  .donut-center .dc-num { font-size: 28px; font-weight: 700; color: var(--text); }
-  .donut-center .dc-lbl { font-size: 11px; color: var(--muted); }
-  .version-legend { flex: 1; min-width: 200px; }
-  .vl-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 6px 0;
-    border-bottom: 1px solid var(--border);
-    gap: 12px;
-  }
-  .vl-row:last-child { border-bottom: none; }
-  .vl-dot {
-    width: 10px; height: 10px;
-    border-radius: 2px;
-    flex-shrink: 0;
-  }
-  .vl-name { flex: 1; color: var(--text); font-size: 13px; }
-  .vl-count { color: var(--muted); font-size: 12px; }
-  .vl-pct { color: var(--grin); font-size: 12px; font-weight: 600; min-width: 36px; text-align: right; }
-
-  /* ── Footer ──────────────────────────────────────────────────────────────── */
-  footer {
-    text-align: center;
-    color: var(--muted);
-    font-size: 12px;
-    padding: 20px 24px;
-    border-top: 1px solid var(--border);
-    margin-top: 24px;
-  }
-  footer a { color: var(--grin); text-decoration: none; margin: 0 8px; }
-  footer a:hover { color: var(--text); }
-
-  /* ── Mobile responsiveness ───────────────────────────────────────────────── */
-  @media (max-width: 640px) {
-    :root { --chart-h: 200px; }
-
-    header { padding: 10px 14px; gap: 8px; }
-    .logo h1 { font-size: 14px; }
-    nav a { margin-left: 12px; font-size: 12px; }
-    #last-updated { font-size: 11px; }
-
-    .stats-bar { grid-template-columns: repeat(2, 1fr); }
-    .stat-item { padding: 10px 14px; }
-    .stat-value { font-size: 18px; }
-
-    main { padding: 12px; }
-    .card { padding: 12px; margin-bottom: 12px; }
-    .card-title { font-size: 13px; }
-    .range-btn { padding: 3px 7px; font-size: 11px; }
-
-    .grid-2 { grid-template-columns: 1fr; gap: 12px; }
-
-    .versions-wrap { flex-direction: column; gap: 16px; }
-    .donut-wrap { width: 150px; height: 150px; margin: 0 auto; }
-    .version-legend { min-width: unset; width: 100%; }
-
-    footer { padding: 14px; }
-  }
-
-  /* ── Loading overlay ─────────────────────────────────────────────────────── */
-  #loading {
-    position: fixed;
-    inset: 0;
     background: var(--bg);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    z-index: 999;
+    z-index: 1200;
     gap: 12px;
   }
   .spinner {
@@ -238,16 +342,69 @@
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes spin { to{transform:rotate(360deg)} }
   #loading p { color: var(--muted); font-size: 13px; }
+
+  /* ── Footer ──────────────────────────────────────────────────────────────── */
+  footer {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 7px 24px;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+  footer a { color: var(--grin); text-decoration: none; margin: 0 8px; }
+  footer a:hover { color: var(--text); }
+
+  /* ── Mobile bottom action bar ────────────────────────────────────────────── */
+  #mobile-bar {
+    display: none;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 1001;
+    background: rgba(22, 27, 34, 0.92);
+    border-top: 1px solid var(--border);
+    padding: 8px 16px;
+    gap: 8px;
+    backdrop-filter: blur(8px);
+  }
+  #mobile-bar button {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 8px 4px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  #mobile-bar button.mb-active {
+    border-color: var(--grin);
+    color: var(--grin);
+  }
+
+  @media (max-width: 720px) {
+    header { padding: 10px 14px; }
+    .logo h1 { font-size: 14px; }
+    nav a { margin-left: 12px; font-size: 12px; }
+    #peer-count { display: none; }
+    #left-panel { width: calc(100vw - 32px); max-height: 55vh; }
+    #panel { width: calc(100vw - 32px); right: 16px; max-height: 55vh; }
+    #lp-toggle { display: none !important; }
+    #mobile-bar { display: flex; }
+    #map-container { padding-bottom: 52px; }
+    #zoom-ctrl { left: 16px; bottom: 68px; } /* above mobile bar */
+    footer { font-size: 11px; padding: 6px 8px; }
+    footer a { margin: 0 5px; }
+  }
 </style>
 </head>
 <body>
-
-<div id="loading">
-  <div class="spinner"></div>
-  <p>Loading Grin network data…</p>
-</div>
 
 <header>
   <div class="logo">
@@ -255,367 +412,414 @@
     <h1>Global <span>Grin</span> Health</h1>
   </div>
   <nav>
-    <a href="index.html" class="active">Network Stats</a>
-    <a href="map.html">Peer Map</a>
+    <a href="index.html">Network Stats</a>
+    <a href="map.html" class="active">Peer Map</a>
   </nav>
-  <span id="last-updated">—</span>
+  <span id="peer-count">Loading peers…</span>
 </header>
 
-<!-- ── Stats bar ─────────────────────────────────────────────────────────── -->
-<div class="stats-bar">
-  <div class="stat-item">
-    <div class="stat-label">Block Height</div>
-    <div class="stat-value" id="s-height">—</div>
+<div id="map-container">
+  <div id="loading">
+    <div class="spinner"></div>
+    <p>Building peer map…</p>
   </div>
-  <div class="stat-item">
-    <div class="stat-label">Network Hashrate</div>
-    <div class="stat-value grin" id="s-hashrate">—</div>
+
+  <div id="map"></div>
+
+  <!-- Horizontal zoom buttons — bottom-left, right of the peer panel -->
+  <div id="zoom-ctrl">
+    <button title="Zoom in"  onclick="if(leafletMap) leafletMap.zoomIn()">+</button>
+    <button title="Zoom out" onclick="if(leafletMap) leafletMap.zoomOut()">−</button>
   </div>
-  <div class="stat-item">
-    <div class="stat-label">Difficulty</div>
-    <div class="stat-value blue" id="s-difficulty">—</div>
+
+  <!-- Floating panels -->
+  <div id="left-panel">
+    <div class="lp-head">
+      <h2>Peer List</h2>
+      <button class="lp-close" id="lp-close" title="Close">✕</button>
+    </div>
+    <div class="lp-filters">
+      <input id="f-ip" type="text" placeholder="Search IP address…" autocomplete="off" spellcheck="false">
+      <select id="f-country"><option value="">All Countries</option></select>
+      <select id="f-version"><option value="">All Versions</option></select>
+    </div>
+    <div id="lp-count">Loading…</div>
+    <div id="peer-list"></div>
   </div>
-  <div class="stat-item">
-    <div class="stat-label">Avg Block Time</div>
-    <div class="stat-value" id="s-blocktime">—</div>
+
+  <div id="panel">
+    <h2>Network Snapshot</h2>
+    <p class="filter-note">Active peers — last 7 days</p>
+    <div class="stat-row"><span class="lbl">Total peers</span><span class="val" id="p-total">—</span></div>
+    <div class="stat-row">
+      <span class="lbl"><span style="color:#ff9900">●</span> Mainnet</span>
+      <span class="val" id="p-mainnet">—</span>
+    </div>
+    <div class="stat-row">
+      <span class="lbl"><span style="color:#00bcd4">●</span> Testnet</span>
+      <span class="val" id="p-testnet">—</span>
+    </div>
+    <div class="stat-row"><span class="lbl">Countries</span><span class="val" id="p-countries">—</span></div>
+    <div class="stat-row"><span class="lbl">Outbound</span><span class="val" id="p-out">—</span></div>
+    <div class="stat-row"><span class="lbl">Inbound</span><span class="val" id="p-in">—</span></div>
+    <div class="stat-row"><span class="lbl">Updated</span><span class="val" id="p-updated">—</span></div>
+
+    <div class="legend-title">Grin Price</div>
+    <div class="stat-row">
+      <span class="lbl">USD</span>
+      <span class="val val-price" id="grin-price">—</span>
+    </div>
+
+    <div class="legend-title">Colour Key</div>
+    <div class="leg-row"><span class="leg-dot" style="background:#ff9900"></span><span class="leg-name">Mainnet peer</span></div>
+    <div class="leg-row"><span class="leg-dot" style="background:#00bcd4"></span><span class="leg-name">Testnet peer</span></div>
+
+    <div class="legend-title">Mainnet Version Distribution</div>
+    <div id="ver-legend"></div>
   </div>
-  <div class="stat-item">
-    <div class="stat-label">Connected Peers</div>
-    <div class="stat-value green" id="s-peers">—</div>
+
+  <button id="lp-toggle" title="Show peer list">☰ Peers</button>
+
+  <div id="mobile-bar">
+    <button id="mb-peers"   onclick="mobilePeers()">☰ Peers</button>
+    <button id="mb-network" onclick="mobileNetwork()">● Network</button>
   </div>
 </div>
 
-<!-- ── Main content ─────────────────────────────────────────────────────── -->
-<main>
-
-  <!-- Hashrate chart -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title"><span class="dot dot-grin"></span>Network Hashrate (GPS)</div>
-      <div class="range-btns" id="hr-range">
-        <button class="range-btn" data-r="recent">24h</button>
-        <button class="range-btn" data-r="hourly">30d</button>
-        <button class="range-btn active" data-r="all">All</button>
-      </div>
-    </div>
-    <div class="chart-wrap"><canvas id="chart-hashrate"></canvas></div>
-  </div>
-
-  <!-- Difficulty chart -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title"><span class="dot dot-blue"></span>Network Difficulty</div>
-      <div class="range-btns" id="diff-range">
-        <button class="range-btn" data-r="recent">24h</button>
-        <button class="range-btn" data-r="hourly">30d</button>
-        <button class="range-btn active" data-r="all">All</button>
-      </div>
-    </div>
-    <div class="chart-wrap"><canvas id="chart-difficulty"></canvas></div>
-  </div>
-
-  <!-- Transactions + Fees -->
-  <div class="grid-2">
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title"><span class="dot dot-green"></span>Transactions per Block</div>
-        <div class="range-btns" id="tx-range">
-          <button class="range-btn active" data-r="recent">24h</button>
-          <button class="range-btn" data-r="hourly">30d</button>
-          <button class="range-btn" data-r="all">All</button>
-        </div>
-      </div>
-      <div class="chart-wrap"><canvas id="chart-tx"></canvas></div>
-    </div>
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title"><span class="dot dot-purple"></span>Fees per Block</div>
-        <div class="range-btns" id="fee-range">
-          <button class="range-btn active" data-r="recent">24h</button>
-          <button class="range-btn" data-r="hourly">30d</button>
-          <button class="range-btn" data-r="all">All</button>
-        </div>
-      </div>
-      <div class="chart-wrap"><canvas id="chart-fees"></canvas></div>
-    </div>
-  </div>
-
-  <!-- Node versions -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title"><span class="dot dot-grin"></span>Node Version Distribution</div>
-      <span id="versions-sample" style="color:var(--muted);font-size:12px;"></span>
-    </div>
-    <div class="versions-wrap">
-      <div class="donut-wrap">
-        <canvas id="chart-versions"></canvas>
-        <div class="donut-center">
-          <span class="dc-num" id="donut-total">—</span>
-          <span class="dc-lbl">peers</span>
-        </div>
-      </div>
-      <div class="version-legend" id="version-legend"></div>
-    </div>
-  </div>
-
-</main>
+<div id="tooltip">
+  <div class="t-ip"  id="tt-ip"></div>
+  <div class="t-loc" id="tt-loc"></div>
+  <div class="t-ua"  id="tt-ua"></div>
+  <div class="t-dir" id="tt-dir"></div>
+</div>
 
 <footer>
-  Data sourced from local Grin node &nbsp;·&nbsp;
   <a href="https://grin.mw/"                             target="_blank" rel="noopener">grin.mw</a>
   <a href="https://forum.grin.mw/"                       target="_blank" rel="noopener">Forum</a>
   <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>
 </footer>
 
 <script>
-// ── Config ───────────────────────────────────────────────────────────────────
-const DATA = "data/";
-const REFRESH_MS = 5 * 60 * 1000;  // re-fetch every 5 minutes
+const DATA_URL = "data/peers.json";
+
+// Show peers seen within the last 7 days (matches PEER_HISTORY_DAYS in collector)
+const ACTIVE_WINDOW_SEC = 7 * 24 * 3600;
+
 const VERSION_COLORS = [
-  "#ff9900","#58a6ff","#3fb950","#bc8cff","#f85149","#d29922","#79c0ff",
+  "#ff9900","#58a6ff","#3fb950","#bc8cff","#f85149","#d29922","#79c0ff","#ffa657",
 ];
+const NET_COLOR = { mainnet: "#ff9900", testnet: "#00bcd4" };
+const STD_PORTS = new Set(["3414", "13414"]);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-const fmt = (n, d=0) => Number(n).toLocaleString(undefined, {maximumFractionDigits: d});
-const fmtGPS = v => {
-  if (v >= 1e6) return (v/1e6).toFixed(2) + " MGPS";
-  if (v >= 1e3) return (v/1e3).toFixed(2) + " kGPS";
-  return v.toFixed(2) + " GPS";
-};
-const fmtDiff = v => {
-  if (v >= 1e9) return (v/1e9).toFixed(3) + "G";
-  if (v >= 1e6) return (v/1e6).toFixed(3) + "M";
-  if (v >= 1e3) return (v/1e3).toFixed(1) + "K";
-  return fmt(v);
-};
-// v is in nGrin; display in human-readable units
-const fmtFee = v => {
-  if (v >= 1e9) return (v/1e9).toFixed(3) + " Grin";
-  if (v >= 1e6) return (v/1e6).toFixed(1) + " mGrin";
-  if (v >= 1e3) return (v/1e3).toFixed(0) + " µGrin";
-  return fmt(v) + " nGrin";
-};
-const timeAgo = ts => {
-  const s = Math.floor(Date.now()/1000) - ts;
-  if (s < 60)   return s + "s ago";
-  if (s < 3600) return Math.floor(s/60) + "m ago";
-  return Math.floor(s/3600) + "h ago";
-};
-const fetchJSON = async url => {
-  const r = await fetch(url + "?t=" + Date.now());
-  if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
-  return r.json();
-};
-const tryFetchJSON = async url => { try { return await fetchJSON(url); } catch { return null; } };
+const fmt = n => Number(n).toLocaleString();
 
-function makeLineChart(id, label, color, yFmt, suggestedMax) {
-  const ctx = $(id).getContext("2d");
-  return new Chart(ctx, {
-    type: "line",
-    data: {
-      datasets: [{
-        label,
-        data: [],
-        borderColor: color,
-        backgroundColor: color + "18",
-        borderWidth: 1.5,
-        pointRadius: 0,
-        fill: true,
-        tension: 0.3,
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      interaction: { mode: "index", intersect: false },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: ctx => " " + yFmt(ctx.parsed.y),
-            title: items => {
-              const d = new Date(items[0].parsed.x);
-              return d.toLocaleString();
-            },
-          }
-        }
-      },
-      scales: {
-        x: {
-          type: "time",
-          time: { tooltipFormat: "MMM d yyyy HH:mm" },
-          grid: { color: "#21262d" },
-          ticks: { maxTicksLimit: 8, color: "#8b949e" },
-        },
-        y: {
-          suggestedMax,
-          grid: { color: "#21262d" },
-          ticks: { color: "#8b949e", callback: v => yFmt(v) },
-        }
-      }
-    }
+const timeAgo = ts => {
+  const s = Math.floor(Date.now() / 1000) - ts;
+  if (s < 60)    return s + "s ago";
+  if (s < 3600)  return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+};
+
+function maskIp(ip) {
+  const v4 = ip.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/);
+  if (v4) return v4[1] + ".x";
+  if (ip.includes(":")) {
+    const parts = ip.split(":");
+    parts[parts.length - 1] = "x";
+    return parts.join(":");
+  }
+  return ip;
+}
+
+function countryFlag(code) {
+  if (!code || code.length !== 2) return "";
+  const base = 0x1F1E6 - 65;
+  try {
+    const up = code.toUpperCase();
+    return String.fromCodePoint(up.charCodeAt(0) + base, up.charCodeAt(1) + base);
+  } catch { return ""; }
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function fmtPct(n, total) {
+  if (total === 0) return "—";
+  const pct = (n / total) * 100;
+  if (pct < 0.1) return "<0.1%";
+  if (pct < 1)   return pct.toFixed(1) + "%";
+  return pct.toFixed(0) + "%";
+}
+
+// ── Version colour map ────────────────────────────────────────────────────────
+function buildVersionColorMap(peers) {
+  const mainnet = peers.filter(p => p.network !== "testnet");
+  const agents  = [...new Set(mainnet.map(p => p.user_agent))].sort();
+  const map = {};
+  agents.forEach((a, i) => { map[a] = VERSION_COLORS[i % VERSION_COLORS.length]; });
+  return map;
+}
+
+// ── Leaflet 2D map ────────────────────────────────────────────────────────────
+let leafletMap   = null;
+let markersLayer = null;
+
+function initMap() {
+  leafletMap = L.map("map", {
+    center:               [20, 10],
+    zoom:                 2,
+    minZoom:              2,
+    maxZoom:              10,
+    zoomControl:          false,       // placed manually at bottom-right
+    preferCanvas:         true,        // canvas renderer — much faster for many markers
+    maxBounds:            [[-85.05, -180], [85.05, 180]],
+    maxBoundsViscosity:   1.0,         // hard boundary — no bounce beyond world edge
+    worldCopyJump:        false,
+  });
+
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution:
+      '&copy; <a href="https://carto.com/" target="_blank">CARTO</a>' +
+      ' &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OSM</a>',
+    subdomains: "abcd",
+    maxZoom:    19,
+    noWrap:     true,                  // prevents tile layer from repeating horizontally
+    bounds:     [[-90, -180], [90, 180]],
+  }).addTo(leafletMap);
+
+  markersLayer = L.layerGroup().addTo(leafletMap);
+}
+
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+function showTooltip(peer, ev) {
+  const port = peer.port ? `:${peer.port}` : "";
+  $("tt-ip").textContent  = peer.ip + port;
+  $("tt-loc").textContent = [peer.city, peer.country].filter(Boolean).join(", ") || "Unknown location";
+  $("tt-ua").textContent  = peer.user_agent || "Unknown";
+  $("tt-dir").textContent = (peer.direction || "") + (peer.network === "testnet" ? " · testnet" : "");
+  $("tooltip").style.display = "block";
+  positionTooltip(ev);
+}
+
+function positionTooltip(ev) {
+  const tt = $("tooltip");
+  tt.style.left = (ev.clientX + 14) + "px";
+  tt.style.top  = (ev.clientY - 10) + "px";
+  const r = tt.getBoundingClientRect();
+  if (r.right  > window.innerWidth)  tt.style.left = (ev.clientX - r.width  - 14) + "px";
+  if (r.bottom > window.innerHeight) tt.style.top  = (ev.clientY - r.height + 10) + "px";
+}
+
+function hideTooltip() { $("tooltip").style.display = "none"; }
+
+// ── Build markers ─────────────────────────────────────────────────────────────
+function buildMarkers(peers) {
+  markersLayer.clearLayers();
+  peers.forEach(peer => {
+    if (!peer.lat || !peer.lng) return;
+    const color  = NET_COLOR[peer.network] || NET_COLOR.mainnet;
+    const marker = L.circleMarker([peer.lat, peer.lng], {
+      radius:      5,
+      color:       color,
+      fillColor:   color,
+      fillOpacity: 0.75,
+      weight:      1,
+    });
+    marker.on("mouseover", e => showTooltip(peer, e.originalEvent));
+    marker.on("mousemove", e => positionTooltip(e.originalEvent));
+    marker.on("mouseout",  () => hideTooltip());
+    marker.on("click",     () => leafletMap.flyTo([peer.lat, peer.lng], 6));
+    markersLayer.addLayer(marker);
   });
 }
 
-// ── Chart instances ───────────────────────────────────────────────────────────
-const charts = {};
+// ── Right side panel ──────────────────────────────────────────────────────────
+function updatePanel(peers, updatedTs, verColorMap) {
+  const countries = new Set(peers.map(p => p.country).filter(Boolean));
+  const outbound  = peers.filter(p => p.direction === "Outbound").length;
+  const mainnetPeers = peers.filter(p => p.network !== "testnet");
 
-function initCharts() {
-  Chart.defaults.color = "#8b949e";
-  Chart.defaults.borderColor = "#30363d";
-  Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-  charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS,        6e6);
-  charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff,       5e9);
-  charts.tx         = makeLineChart("chart-tx",         "Transactions", "#3fb950", v => fmt(v,1));
-  charts.fees       = makeLineChart("chart-fees",       "Fees",         "#bc8cff", fmtFee);
+  $("p-total").textContent     = fmt(peers.length);
+  $("p-mainnet").textContent   = fmt(mainnetPeers.length);
+  $("p-testnet").textContent   = fmt(peers.filter(p => p.network === "testnet").length);
+  $("p-countries").textContent = fmt(countries.size);
+  $("p-out").textContent       = fmt(outbound);
+  $("p-in").textContent        = fmt(peers.length - outbound);
+  $("p-updated").textContent   = updatedTs ? timeAgo(updatedTs) : "—";
+  $("peer-count").textContent  = `${fmt(peers.length)} active peers · ${fmt(countries.size)} countries`;
+
+  // Version distribution — mainnet only
+  const counts = {};
+  mainnetPeers.forEach(p => { counts[p.user_agent] = (counts[p.user_agent] || 0) + 1; });
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const total  = mainnetPeers.length;
+  $("ver-legend").innerHTML = sorted.length
+    ? sorted.map(([ua, n]) => `
+      <div class="leg-row">
+        <span class="leg-dot" style="background:${verColorMap[ua] || "#aaa"}"></span>
+        <span class="leg-name" title="${esc(ua)}">${esc(ua)}</span>
+        <span class="leg-pct">${fmtPct(n, total)}</span>
+      </div>`).join("")
+    : `<div style="color:var(--muted);font-size:11px;padding:4px 0">No mainnet peers in last 48h</div>`;
 }
 
-// Range state
-const rangeState = { hr: "all", diff: "all", tx: "recent", fee: "recent" };
-
-function updateChartData(chart, json, range) {
-  let pts;
-  if (range === "all")    pts = [...(json.daily||[]), ...(json.hourly||[]), ...(json.recent||[])];
-  else if (range === "hourly") pts = json.hourly || [];
-  else                    pts = json.recent || [];
-  let data = pts.map(([ts, v]) => ({x: ts * 1000, y: v}));
-  // Drop extreme outlier points (> 10× suggestedMax) caused by partial/corrupt imports.
-  // This keeps the axis sane while still allowing the scale to grow for legitimate spikes.
-  const cap = chart.options.scales.y.suggestedMax;
-  if (cap) data = data.filter(p => p.y <= cap * 10);
-  chart.data.datasets[0].data = data;
-  chart.update("none");
+// ── CoinGecko price ───────────────────────────────────────────────────────────
+async function loadGrinPrice() {
+  try {
+    const r = await fetch(
+      "https://api.coingecko.com/api/v3/simple/price?ids=grin&vs_currencies=usd"
+    );
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data  = await r.json();
+    const price = data?.grin?.usd;
+    if (price != null) {
+      // Show 4 decimal places for a low-priced coin
+      $("grin-price").textContent = "$" + Number(price).toFixed(4);
+    } else {
+      $("grin-price").textContent = "—";
+    }
+  } catch {
+    $("grin-price").textContent = "unavailable";
+  }
 }
 
-// ── Data store ────────────────────────────────────────────────────────────────
-let DATA_CACHE = {};
+// ── Left panel — filterable peer list ────────────────────────────────────────
+let ALL_PEERS = [];
 
-async function loadAll() {
-  const [summary, hashrate, difficulty, transactions, fees, versions, peers] =
-    await Promise.all([
-      tryFetchJSON(DATA + "summary.json"),
-      tryFetchJSON(DATA + "hashrate.json"),
-      tryFetchJSON(DATA + "difficulty.json"),
-      tryFetchJSON(DATA + "transactions.json"),
-      tryFetchJSON(DATA + "fees.json"),
-      tryFetchJSON(DATA + "versions.json"),
-      tryFetchJSON(DATA + "peers.json"),
-    ]);
+function buildPeerList(peers) {
+  ALL_PEERS = peers;
 
-  const anyData = summary || hashrate || difficulty;
-  if (!anyData) {
-    $("last-updated").textContent = "Data not available — run Import History (step 2) first";
-    return;
-  }
+  const countries = [...new Set(peers.map(p => p.country).filter(Boolean))].sort();
+  const fc = $("f-country"), prevC = fc.value;
+  fc.innerHTML = '<option value="">All Countries</option>' +
+    countries.map(c => `<option>${esc(c)}</option>`).join("");
+  if (prevC && countries.includes(prevC)) fc.value = prevC;
 
-  DATA_CACHE = { hashrate, difficulty, transactions, fees, versions };
+  const versions = [...new Set(peers.map(p => p.user_agent).filter(Boolean))].sort();
+  const fv = $("f-version"), prevV = fv.value;
+  fv.innerHTML = '<option value="">All Versions</option>' +
+    versions.map(v => `<option>${esc(v)}</option>`).join("");
+  if (prevV && versions.includes(prevV)) fv.value = prevV;
 
-  // Stats bar
-  if (summary) {
-    $("s-height").textContent     = fmt(summary.tip_height);
-    $("s-hashrate").textContent   = fmtGPS(summary.current_hashrate);
-    $("s-difficulty").textContent = fmtDiff(summary.current_difficulty);
-    $("s-blocktime").textContent  = summary.avg_block_time.toFixed(1) + "s";
-    $("last-updated").textContent = "Updated " + timeAgo(summary.updated);
-  }
-  $("s-peers").textContent = peers ? fmt(peers.count) : "—";
-
-  // Charts (skipped if chart.min.js didn't load)
-  if (charts.hashrate   && hashrate)     updateChartData(charts.hashrate,   hashrate,     rangeState.hr);
-  if (charts.difficulty && difficulty)   updateChartData(charts.difficulty, difficulty,   rangeState.diff);
-  if (charts.tx         && transactions) updateChartData(charts.tx,         transactions, rangeState.tx);
-  if (charts.fees       && fees)         updateChartData(charts.fees,       fees,         rangeState.fee);
-
-  // Versions donut
-  if (versions) renderVersions(versions);
+  renderPeerList();
 }
 
-// ── Version donut ─────────────────────────────────────────────────────────────
-let versionChart = null;
+function renderPeerList() {
+  const ipQuery = $("f-ip").value.trim().toLowerCase();
+  const country = $("f-country").value;
+  const version = $("f-version").value;
 
-function renderVersions(data) {
-  const total = data.sampled_from || 0;
-  $("donut-total").textContent    = fmt(total);
-  $("versions-sample").textContent = `Sampled from ${fmt(total)} peer${total !== 1 ? "s" : ""}`;
+  let list = ALL_PEERS;
+  if (ipQuery) list = list.filter(p => p.ip && p.ip.toLowerCase().includes(ipQuery));
+  if (country) list = list.filter(p => p.country === country);
+  if (version) list = list.filter(p => p.user_agent === version);
+  list = [...list].sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
+  window._filteredPeers = list;
 
-  const labels = data.versions.map(v => v.label);
-  const counts = data.versions.map(v => v.count);
-  const colors = labels.map((_, i) => VERSION_COLORS[i % VERSION_COLORS.length]);
+  $("lp-count").textContent = `Showing ${list.length} of ${ALL_PEERS.length} peers`;
 
-  if (typeof Chart === "undefined") return;  // chart.min.js not loaded
-  if (!versionChart) {
-    versionChart = new Chart($("chart-versions").getContext("2d"), {
-      type: "doughnut",
-      data: { labels, datasets: [{ data: counts, backgroundColor: colors, borderWidth: 0 }] },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        cutout: "72%",
-        animation: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed} nodes` }
-          }
-        }
-      }
-    });
-  } else {
-    versionChart.data.labels                     = labels;
-    versionChart.data.datasets[0].data           = counts;
-    versionChart.data.datasets[0].backgroundColor = colors;
-    versionChart.update("none");
-  }
-
-  // Legend
-  const leg = $("version-legend");
-  leg.innerHTML = data.versions.map((v, i) => {
-    const pct = total > 0 ? ((v.count / total) * 100).toFixed(1) : "0.0";
-    return `
-      <div class="vl-row">
-        <span class="vl-dot" style="background:${colors[i]}"></span>
-        <span class="vl-name">${v.label}</span>
-        <span class="vl-count">${fmt(v.count)}</span>
-        <span class="vl-pct">${pct}%</span>
-      </div>`;
+  $("peer-list").innerHTML = list.map((p, i) => {
+    const flag = countryFlag(p.country_code || "");
+    const loc  = [p.city, p.country].filter(Boolean).join(", ") || "Unknown";
+    const seen = p.last_seen ? timeAgo(p.last_seen) : "active";
+    const dot  = `<span style="color:${NET_COLOR[p.network] || NET_COLOR.mainnet}">●</span>`;
+    return `<div class="peer-item" data-i="${i}">
+      <div class="pi-row1">
+        <span class="pi-ip">${dot} ${esc(p.ip)}${p.port ? ":" + esc(p.port) : ""}</span>
+        <span class="pi-seen">${seen}</span>
+      </div>
+      <div class="pi-row2">
+        <span class="pi-loc">${flag} ${esc(loc)}</span>
+        <span class="pi-ua" title="${esc(p.user_agent || "")}">${esc(p.user_agent || "?")}</span>
+      </div>
+    </div>`;
   }).join("");
 }
 
-// ── Range button wiring ───────────────────────────────────────────────────────
-function wireRangeGroup(groupId, chartKey, cacheKey) {
-  $(groupId).querySelectorAll(".range-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      $(groupId).querySelectorAll(".range-btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      rangeState[chartKey] = btn.dataset.r;
-      if (DATA_CACHE[cacheKey]) updateChartData(charts[chartKey === "hr" ? "hashrate" : chartKey === "diff" ? "difficulty" : chartKey === "tx" ? "tx" : "fees"], DATA_CACHE[cacheKey], rangeState[chartKey]);
-    });
-  });
+// Click a row — fly map to that peer
+$("peer-list").addEventListener("click", e => {
+  const item = e.target.closest(".peer-item");
+  if (!item) return;
+  const p = window._filteredPeers[+item.dataset.i];
+  if (!p || !p.lat || !p.lng) return;
+  if (leafletMap) leafletMap.flyTo([p.lat, p.lng], 6);
+});
+
+$("f-ip").addEventListener("input",        renderPeerList);
+$("f-country").addEventListener("change",  renderPeerList);
+$("f-version").addEventListener("change",  renderPeerList);
+
+// ── Left panel toggle ─────────────────────────────────────────────────────────
+function toggleLeftPanel(show) {
+  $("left-panel").classList.toggle("lp-hidden", !show);
+  $("lp-toggle").classList.toggle("lp-btn-visible", !show);
+}
+$("lp-close").addEventListener("click",  () => toggleLeftPanel(false));
+$("lp-toggle").addEventListener("click", () => toggleLeftPanel(true));
+
+// ── Mobile panel toggles ──────────────────────────────────────────────────────
+function mobilePeers() {
+  const lp   = $("left-panel");
+  const rp   = $("panel");
+  const open = lp.classList.contains("lp-hidden");
+  lp.classList.toggle("lp-hidden", !open);
+  rp.style.display = "none";
+  $("mb-peers").classList.toggle("mb-active", open);
+  $("mb-network").classList.remove("mb-active");
+}
+function mobileNetwork() {
+  const rp   = $("panel");
+  const lp   = $("left-panel");
+  const open = rp.style.display === "none" || rp.style.display === "";
+  rp.style.display = open ? "block" : "none";
+  lp.classList.add("lp-hidden");
+  $("mb-network").classList.toggle("mb-active", open);
+  $("mb-peers").classList.remove("mb-active");
 }
 
-// ── Boot ──────────────────────────────────────────────────────────────────────
-async function boot() {
-  wireRangeGroup("hr-range",   "hr",   "hashrate");
-  wireRangeGroup("diff-range", "diff", "difficulty");
-  wireRangeGroup("tx-range",   "tx",   "transactions");
-  wireRangeGroup("fee-range",  "fee",  "fees");
+if (window.matchMedia("(max-width: 720px)").matches) {
+  $("left-panel").classList.add("lp-hidden");
+  $("panel").style.display = "none";
+}
 
+// ── Boot — load once, no auto-refresh ─────────────────────────────────────────
+async function boot() {
   try {
-    if (typeof Chart !== "undefined") initCharts();
-    else console.warn("chart.min.js not loaded — charts disabled");
-    await loadAll();
+    const data = await fetch(DATA_URL + "?t=" + Date.now()).then(r => r.json());
+
+    // Filter to peers active in the last 48 hours
+    const now    = Math.floor(Date.now() / 1000);
+    const cutoff = now - ACTIVE_WINDOW_SEC;
+    const peers  = (data.peers || []).filter(p =>
+      p.last_seen && p.last_seen >= cutoff
+    );
+
+    const verColorMap = buildVersionColorMap(peers);
+
+    if (!leafletMap) initMap();
+    buildMarkers(peers);
+    updatePanel(peers, data.updated, verColorMap);
+    buildPeerList(peers);
   } catch (e) {
-    console.error("Boot error:", e);
-    $("last-updated").textContent = "Error loading data — check browser console";
+    console.error(e);
+    $("loading").innerHTML =
+      `<p style="color:#f85149">Failed to load peer data.<br>Ensure the collector has run at least once.</p>`;
+    return;
   } finally {
     $("loading").style.display = "none";
   }
-  setInterval(() => loadAll().catch(console.error), REFRESH_MS);
+
+  // Load price independently — don't block the map if CoinGecko is slow
+  loadGrinPrice();
 }
 
-document.addEventListener("DOMContentLoaded", boot);
+boot();
 </script>
 </body>
 </html>

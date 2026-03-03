@@ -31,6 +31,7 @@
     font-size: 14px;
     overflow: hidden;
     height: 100vh;
+    height: 100svh;
     display: flex;
     flex-direction: column;
   }
@@ -393,6 +394,7 @@
     color: var(--muted);
     font-size: 12px;
     padding: 7px 24px;
+    padding-bottom: calc(7px + env(safe-area-inset-bottom, 0px));
     flex-shrink: 0;
     z-index: 10;
   }
@@ -442,7 +444,7 @@
     #mobile-bar { display: flex; }
     #map-container { padding-bottom: 52px; }
     #zoom-ctrl { left: 16px; bottom: 68px; } /* above mobile bar */
-    footer { font-size: 11px; padding: 6px 8px; }
+    footer { font-size: 11px; padding: 6px 8px; padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)); }
     footer a { margin: 0 5px; }
   }
 </style>
@@ -556,9 +558,6 @@ const DATA_URL = "data/peers.json";
 // Show peers seen within the last 7 days (matches PEER_HISTORY_DAYS in collector)
 const ACTIVE_WINDOW_SEC = 7 * 24 * 3600;
 
-const VERSION_COLORS = [
-  "#ff9900","#58a6ff","#3fb950","#bc8cff","#f85149","#d29922","#79c0ff","#ffa657",
-];
 const NET_COLOR = { mainnet: "#ff9900", testnet: "#00bcd4" };
 const STD_PORTS = new Set(["3414", "13414"]);
 
@@ -611,15 +610,6 @@ function fmtPct(n, total) {
   if (pct < 0.1) return "<0,1%";
   if (pct < 1)   return fmtNum(pct, 1) + "%";
   return fmtNum(pct, 0) + "%";
-}
-
-// ── Version colour map ────────────────────────────────────────────────────────
-function buildVersionColorMap(peers) {
-  const mainnet = peers.filter(p => p.network !== "testnet");
-  const agents  = [...new Set(mainnet.map(p => p.user_agent))].sort();
-  const map = {};
-  agents.forEach((a, i) => { map[a] = VERSION_COLORS[i % VERSION_COLORS.length]; });
-  return map;
 }
 
 // ── Leaflet 2D map ────────────────────────────────────────────────────────────
@@ -696,7 +686,7 @@ function buildMarkers(peers) {
 }
 
 // ── Right side panel ──────────────────────────────────────────────────────────
-function updatePanel(peers, updatedTs, verColorMap) {
+function updatePanel(peers, updatedTs) {
   const countries = new Set(peers.map(p => p.country).filter(Boolean));
   const outbound  = peers.filter(p => p.direction === "Outbound").length;
   const mainnetPeers = peers.filter(p => p.network !== "testnet");
@@ -713,11 +703,11 @@ function updatePanel(peers, updatedTs, verColorMap) {
 
   // Version distribution — render both tabs
   const testnetPeers = peers.filter(p => p.network === "testnet");
-  renderVerTab(mainnetPeers, "ver-legend-mainnet", verColorMap, "No mainnet peers");
-  renderVerTab(testnetPeers, "ver-legend-testnet", verColorMap, "No testnet peers");
+  renderVerTab(mainnetPeers, "ver-legend-mainnet", "No mainnet peers");
+  renderVerTab(testnetPeers, "ver-legend-testnet", "No testnet peers");
 }
 
-function renderVerTab(tabPeers, elId, verColorMap, emptyMsg) {
+function renderVerTab(tabPeers, elId, emptyMsg) {
   const counts = {};
   tabPeers.forEach(p => { counts[p.user_agent] = (counts[p.user_agent] || 0) + 1; });
   const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
@@ -725,7 +715,6 @@ function renderVerTab(tabPeers, elId, verColorMap, emptyMsg) {
   $(elId).innerHTML = sorted.length
     ? sorted.map(([ua, n]) => `
       <div class="leg-row">
-        <span class="leg-dot" style="background:${verColorMap[ua] || "#aaa"}"></span>
         <span class="leg-name" title="${esc(ua)}">${esc(ua)}</span>
         <span class="leg-pct">${fmtPct(n, total)} · ${n}</span>
       </div>`).join("")
@@ -869,11 +858,9 @@ async function boot() {
       p.last_seen && p.last_seen >= cutoff
     );
 
-    const verColorMap = buildVersionColorMap(peers);
-
     if (!leafletMap) initMap();
     buildMarkers(peers);
-    updatePanel(peers, data.updated, verColorMap);
+    updatePanel(peers, data.updated);
     buildPeerList(peers);
   } catch (e) {
     console.error(e);

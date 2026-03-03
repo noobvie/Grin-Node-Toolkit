@@ -359,10 +359,10 @@
       <div class="card-header">
         <div class="card-title"><span class="dot dot-green"></span>Transactions per Block</div>
         <div class="range-btns" id="tx-range">
-          <button class="range-btn active" data-r="day">Day</button>
+          <button class="range-btn" data-r="day">Day</button>
           <button class="range-btn" data-r="month">Month</button>
           <button class="range-btn" data-r="year">Year</button>
-          <button class="range-btn" data-r="all">All Time</button>
+          <button class="range-btn active" data-r="all">All Time</button>
         </div>
       </div>
       <div class="chart-wrap"><canvas id="chart-tx"></canvas></div>
@@ -371,10 +371,10 @@
       <div class="card-header">
         <div class="card-title"><span class="dot dot-purple"></span>Fees per Block</div>
         <div class="range-btns" id="fee-range">
-          <button class="range-btn active" data-r="day">Day</button>
+          <button class="range-btn" data-r="day">Day</button>
           <button class="range-btn" data-r="month">Month</button>
           <button class="range-btn" data-r="year">Year</button>
-          <button class="range-btn" data-r="all">All Time</button>
+          <button class="range-btn active" data-r="all">All Time</button>
         </div>
       </div>
       <div class="chart-wrap"><canvas id="chart-fees"></canvas></div>
@@ -512,14 +512,14 @@ function initCharts() {
   Chart.defaults.color = "#8b949e";
   Chart.defaults.borderColor = "#30363d";
   Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-  charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS,        6e3);
-  charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff,       4e5);
+  charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS);
+  charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff);
   charts.tx         = makeLineChart("chart-tx",         "Transactions", "#3fb950", v => fmt(v,1));
   charts.fees       = makeLineChart("chart-fees",       "Fees",         "#bc8cff", fmtFee);
 }
 
 // Range state
-const rangeState = { hr: "all", diff: "all", tx: "day", fee: "day" };
+const rangeState = { hr: "all", diff: "all", tx: "all", fee: "all" };
 
 function updateChartData(chart, json, range) {
   let data;
@@ -541,9 +541,6 @@ function updateChartData(chart, json, range) {
   } else {                           // day
     data = (json.recent||[]).map(([ts,v]) => ({x:ts*1000, y:v}));
   }
-  // Drop extreme outlier points (> 10× suggestedMax) caused by partial/corrupt imports.
-  const cap = chart.options.scales.y.suggestedMax;
-  if (cap) data = data.filter(p => p.y <= cap * 10);
   chart.data.datasets[0].data = data;
   chart.update("none");
 }

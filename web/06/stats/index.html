@@ -41,6 +41,7 @@
     --ctrl-bg:   rgba(246,248,250,0.92);
     --tip-bg:    rgba(255,255,255,0.98);
   }
+  html[data-theme="light"] .pill-btc { color: #cf222e; border-color: #cf222e; background: rgba(207,34,46,0.08); }
   html[data-theme="light"] .leaflet-container { background: #aad3df !important; }
   html[data-theme="light"] .leaflet-control-attribution {
     background: rgba(255,255,255,0.75) !important;
@@ -767,7 +768,7 @@ const TILE_URLS = {
   dark:   "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
   light:  "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
   matrix: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-  hp:     "https://{s}.basemaps.cartocdn.com/dark_matter/{z}/{x}/{y}{r}.png",
+  hp:     "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
 };
 const TILE_ATTR = '&copy; <a href="https://carto.com/" target="_blank">CARTO</a>' +
                   ' &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OSM</a>';

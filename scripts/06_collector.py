@@ -120,14 +120,16 @@ def grin_rpc(method, params=None, retries=3):
 
 def parse_ts(ts_str):
     """Convert Grin ISO timestamp string → Unix int."""
-    # e.g. "2019-01-15T16:44:15.763877+00:00"
     try:
-        ts_str = ts_str.split(".")[0]  # drop sub-seconds
-        dt = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%S")
+        # Take only the first 19 characters (YYYY-MM-DDTHH:MM:SS)
+        # This safely drops both sub-seconds (.xxxxx) AND timezone offsets (+00:00)
+        clean_ts = ts_str[:19]
+        dt = datetime.strptime(clean_ts, "%Y-%m-%dT%H:%M:%S")
         return int(dt.replace(tzinfo=timezone.utc).timestamp())
-    except Exception:
-        return 0  # 0 = epoch; calc_hashrate guards against negative/huge dt
-
+    except Exception as e:
+        print(f"  [WARN] parse_ts failed on {ts_str}: {e}")
+        return 0
+        
 def now_ts():
     return int(time.time())
 

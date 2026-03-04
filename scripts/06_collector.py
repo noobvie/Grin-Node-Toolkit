@@ -1023,20 +1023,52 @@ def export_all_json():
     C32_RATE        = 16384.0
     DIFF_MUL        = BLOCK_TARGET * C32_RATE / CUCKOO_CYCLE  # ~23405.7
 
-    hr_daily  = conn.execute(
-        "SELECT timestamp, hashrate FROM blocks WHERE bucket='daily'  AND hashrate > 0 ORDER BY timestamp"
-    ).fetchall()
-    hr_hourly = conn.execute(
-        "SELECT timestamp, hashrate FROM blocks WHERE bucket='hourly' AND hashrate > 0 ORDER BY timestamp"
-    ).fetchall()
-    # Per-block hashrate has extreme variance because Grin timestamps have 1-second
-    # resolution — a block mined in 1s shows 60× the average hashrate (e.g. 600 kG/s
-    # instead of 10 kG/s).  Smooth with a 10-block rolling window so the Day chart
-    # reflects ~10 minutes of hashrate rather than a single inter-block interval.
+    # For each bucket, compute hashrate by grouping into time bins and computing
+    # delta total_diff / delta time between consecutive bins.  This normalises
+    # both sparse entries (from --init-history) and dense per-block entries
+    # (aged out of the recent window by --update) which would otherwise spike.
+
+    # Daily: one representative per calendar day
+    daily_bins = conn.execute("""
+        SELECT (timestamp/86400)*86400 AS day_ts,
+               MAX(timestamp)          AS max_ts,
+               MAX(total_diff)         AS max_td
+        FROM blocks WHERE bucket='daily' AND total_diff > 0
+        GROUP BY day_ts ORDER BY day_ts
+    """).fetchall()
+    hr_daily = []
+    for i in range(1, len(daily_bins)):
+        _, p_ts, p_td = daily_bins[i - 1]
+        d_ts, c_ts, c_td = daily_bins[i]
+        dt = c_ts - p_ts
+        dd = c_td - p_td
+        if dt > 0 and dd > 0:
+            hr_daily.append((d_ts, round(dd * CUCKOO_CYCLE / dt / C32_RATE, 2)))
+
+    # Hourly: one representative per hour — normalises sparse (every-60-blocks from
+    # --init-history) and dense (per-block, aged from recent via --update) entries.
+    hourly_bins = conn.execute("""
+        SELECT (timestamp/3600)*3600 AS hour_ts,
+               MAX(timestamp)         AS max_ts,
+               MAX(total_diff)        AS max_td
+        FROM blocks WHERE bucket='hourly' AND total_diff > 0
+        GROUP BY hour_ts ORDER BY hour_ts
+    """).fetchall()
+    hr_hourly = []
+    for i in range(1, len(hourly_bins)):
+        _, p_ts, p_td = hourly_bins[i - 1]
+        h_ts, c_ts, c_td = hourly_bins[i]
+        dt = c_ts - p_ts
+        dd = c_td - p_td
+        if dt > 0 and dd > 0:
+            hr_hourly.append((h_ts, round(dd * CUCKOO_CYCLE / dt / C32_RATE, 2)))
+
+    # Recent: 30-block rolling window (~30 minutes) to smooth out 1-second timestamp
+    # resolution variance while still showing meaningful sub-hour hashrate trends.
     recent_td = conn.execute(
         "SELECT timestamp, total_diff FROM blocks WHERE bucket='recent' AND total_diff > 0 ORDER BY timestamp"
     ).fetchall()
-    SMOOTH_N = 10
+    SMOOTH_N = 30
     hr_recent = []
     for i in range(len(recent_td)):
         j = max(0, i - SMOOTH_N)

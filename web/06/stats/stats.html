@@ -499,6 +499,7 @@
       <div class="card-title"><span class="dot dot-grin"></span>Network Hashrate (GPS)</div>
       <div class="range-btns" id="hr-range">
         <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="week">Week</button>
         <button class="range-btn" data-r="month">Month</button>
         <button class="range-btn" data-r="year">Year</button>
         <button class="range-btn active" data-r="all">All Time</button>
@@ -513,6 +514,7 @@
       <div class="card-title"><span class="dot dot-blue"></span>Network Difficulty</div>
       <div class="range-btns" id="diff-range">
         <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="week">Week</button>
         <button class="range-btn" data-r="month">Month</button>
         <button class="range-btn" data-r="year">Year</button>
         <button class="range-btn active" data-r="all">All Time</button>
@@ -527,20 +529,21 @@
       <div class="card-title"><span class="dot dot-green"></span>Block Activity</div>
       <div class="range-btns" id="activity-range">
         <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="week">Week</button>
         <button class="range-btn" data-r="month">Month</button>
         <button class="range-btn" data-r="year">Year</button>
         <button class="range-btn active" data-r="all">All Time</button>
       </div>
     </div>
     <div style="display: flex; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--border); flex-wrap: wrap;">
-      <button class="metric-toggle active" data-metric="tx" title="Transactions per Block">
+      <button class="metric-toggle active" data-metric="both" title="Show Both Metrics">
+        <span class="dot dot-blue"></span>Both
+      </button>
+      <button class="metric-toggle" data-metric="tx" title="Transactions per Block">
         <span class="dot dot-green"></span>Transactions
       </button>
       <button class="metric-toggle" data-metric="fee" title="Fees per Block">
         <span class="dot dot-purple"></span>Fees
-      </button>
-      <button class="metric-toggle" data-metric="both" title="Show Both Metrics">
-        <span class="dot dot-blue"></span>Both
       </button>
     </div>
     <div class="chart-wrap">
@@ -600,6 +603,18 @@ const fmtGPS = v => {
   if (v >= 1e3) return fmtNum(v/1e3, 2) + " kG/s";
   return fmtNum(v, 2) + " G/s";
 };
+// Tick-only variants: no trailing decimals (cleaner axis labels)
+const fmtGPSTick = v => {
+  if (v >= 1e6) return fmtNum(v/1e6, 0) + " MG/s";
+  if (v >= 1e3) return fmtNum(v/1e3, 0) + " kG/s";
+  return fmtNum(v, 0) + " G/s";
+};
+const fmtDiffTick = v => {
+  if (v >= 1e9) return fmtNum(v/1e9, 0) + "G";
+  if (v >= 1e6) return fmtNum(v/1e6, 0) + "M";
+  if (v >= 1e3) return fmtNum(v/1e3, 0) + "K";
+  return fmtNum(v, 0);
+};
 const fmtSupply = v => {
   if (v >= 1e6) return fmtNum(v/1e6, 2) + "M ツ";
   if (v >= 1e3) return fmtNum(v/1e3, 1) + "K ツ";
@@ -640,7 +655,7 @@ function aggToDaily(pts, sum = false) {
   return [...byDay.entries()].map(([dk, [s, c]]) => [dk, sum ? s : s / c]);
 }
 
-function makeLineChart(id, label, color, yFmt, suggestedMax) {
+function makeLineChart(id, label, color, yFmt, suggestedMax, yFmtTick = null) {
   const ctx = $(id).getContext("2d");
   return new Chart(ctx, {
     type: "line",
@@ -680,14 +695,14 @@ function makeLineChart(id, label, color, yFmt, suggestedMax) {
           ticks: { maxTicksLimit: 8 },
         },
         y: {
-          ticks: { callback: v => yFmt(v) },
+          ticks: { callback: v => (yFmtTick || yFmt)(v) },
         }
       }
     }
   });
 }
 
-function makeMultiChart(id, yFmt1, yFmt2) {
+function makeMultiChart(id, yFmt1, yFmt2, yFmt1Tick = null) {
   const ctx = $(id).getContext("2d");
   return new Chart(ctx, {
     type: "line",
@@ -748,7 +763,7 @@ function makeMultiChart(id, yFmt1, yFmt2) {
         y1: {
           type: "linear",
           position: "left",
-          ticks: { callback: v => yFmt1(v) },
+          ticks: { callback: v => (yFmt1Tick || yFmt1)(v) },
           title: { display: true, text: "Transactions" }
         },
         y2: {
@@ -765,13 +780,13 @@ function makeMultiChart(id, yFmt1, yFmt2) {
 
 // ── Chart instances ───────────────────────────────────────────────────────────
 const charts = {};
-let activityMetric = "tx";  // "tx", "fee", or "both"
+let activityMetric = "both";  // "tx", "fee", or "both"
 
 function initCharts() {
   // Chart.defaults (color, borderColor, font) are set by initTheme() before this runs
-  charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS);
-  charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff);
-  charts.activity   = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee);
+  charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS,  undefined, fmtGPSTick);
+  charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff, undefined, fmtDiffTick);
+  charts.activity   = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee, v => fmt(v,0));
 }
 
 // Range state
@@ -793,6 +808,9 @@ function updateChartData(chart, json, range) {
     ];
   } else if (range === "month") {
     pts = [...(json.hourly||[])];
+  } else if (range === "week") {
+    const cutoff = nowMs - 7 * 86400000;
+    pts = (json.hourly||[]).filter(([ts]) => ts*1000 >= cutoff);
   } else {                           // day
     pts = [...(json.recent||[])];
   }
@@ -826,6 +844,9 @@ function updateActivityChart(txJson, feeJson, range, metric) {
       ];
     } else if (range === "month") {
       return [...(json.hourly||[])];
+    } else if (range === "week") {
+      const cutoff = nowMs - 7 * 86400000;
+      return (json.hourly||[]).filter(([ts]) => ts*1000 >= cutoff);
     } else {                          // day — raw per-block for high granularity
       return [...(json.recent||[])];
     }

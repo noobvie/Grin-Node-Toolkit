@@ -11,7 +11,8 @@
 #   8.6  Top 20 Bandwidth Consumers— parse nginx logs, block/limit from menu
 #   8.7  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs
 #   8.8  Self-Update               — download latest from GitHub
-#   8.9  Full Grin Cleanup         — 08del_clean_all_grin_things.sh
+#   8.9  Backup                    — coming soon
+#   DEL  Full Grin Cleanup         — 08del_clean_all_grin_things.sh
 # =============================================================================
 
 set -euo pipefail
@@ -927,11 +928,35 @@ self_update() {
     success "Restart the toolkit to apply changes."
     log "[8.8] Installed from $tarball_url"
 
+    echo ""
+    echo -e "  ${DIM}Press Enter to exit the script completely${RESET}"
+    echo -e "  ${DIM}Press 0 to return to the previous menu${RESET}"
+    echo ""
+    echo -ne "${BOLD}  [Enter / 0]: ${RESET}"
+    read -r _exit_choice
+    if [[ "$_exit_choice" == "0" ]]; then
+        return
+    else
+        exit 0
+    fi
+}
+
+# =============================================================================
+# 8.9  Backup  — placeholder for future implementation
+# =============================================================================
+backup() {
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  9  Backup${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  ${DIM}Coming soon — backup functionality not yet implemented.${RESET}"
+    echo ""
     pause
 }
 
 # =============================================================================
-# 8.9  Full Grin Cleanup — delegate to 088
+# Full Grin Cleanup — delegate to 088
 # =============================================================================
 menu_full_cleanup() {
     local cleanup_script="$SCRIPT_DIR/08del_clean_all_grin_things.sh"
@@ -964,6 +989,7 @@ show_menu() {
     echo -e "${BOLD}  Maintenance${RESET}"
     echo -e "  ${YELLOW}7${RESET})   Disk Cleanup              ${DIM}tar archives + OS temp/logs + nginx dirs${RESET}"
     echo -e "  ${YELLOW}8${RESET})   Self-Update               ${DIM}pull latest changes from GitHub${RESET}"
+    echo -e "  ${YELLOW}9${RESET})   Backup                    ${DIM}coming soon${RESET}"
     echo ""
     echo -e "${BOLD}  Danger Zone${RESET}"
     echo -e "  ${RED}DEL${RESET}) Full Grin Cleanup         ${DIM}remove EVERYTHING about Grin now!${RESET}"
@@ -971,7 +997,7 @@ show_menu() {
     echo -e "  ${DIM}0${RESET})   Return to main menu"
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-8, DEL]: ${RESET}"
+    echo -ne "${BOLD}Select [0-9, DEL]: ${RESET}"
 }
 
 main() {
@@ -988,6 +1014,7 @@ main() {
             "6")   show_bandwidth_consumers ;;
             "7")   clean_maintenance        ;;
             "8")   self_update              ;;
+            "9")   backup                   ;;
             "del") menu_full_cleanup        ;;
             "0")   break                    ;;
             *)     warn "Invalid option." ; sleep 1 ;;

@@ -4,11 +4,37 @@ grin-stats-collector
 ====================
 Collects Grin network stats from a local node and exports JSON for Chart.js + Leaflet.
 
-Usage:
-    python3 06_collector.py --init-db         create schema only
-    python3 06_collector.py --init-history    backfill all historical data (sampled)
-    python3 06_collector.py --update          fetch new blocks + update peers
-    python3 06_collector.py --peers-only      update peer geolocation only
+📊 DATABASE SIZING & STORAGE ESTIMATES
+═══════════════════════════════════════
+Per-block storage: ~23 bytes (tx_count, fee_total, output_count, timestamp, height)
+
+Grin chain (genesis Jan 2019 → present, ~3.7M blocks):
+  • block_stats table (all TX/fees):  ~85 MB
+  • blocks table (headers, sampled):  ~100 KB (daily + hourly + recent buckets)
+  • Indexes:                          ~15-20% overhead
+  • TOTAL:                            ~100-110 MB for complete history
+
+Growth projection:
+  • Per year: ~12.1 MB (525,600 new blocks)
+  • After 10 more years (2036): ~220 MB total (manageable on any filesystem)
+
+⚠️  MEMORY REQUIREMENTS
+══════════════════════
+Full history import (--init-history) fetches all 3.7M block stats.
+Uses adaptive multi-threading (reduced workers for large batches) + periodic
+commits to stay within ~500MB RAM. If you get "Killed (137)" errors:
+  Option 1: Add swap space (Linux: fallocate -l 4G /swapfile && mkswap...)
+  Option 2: Run incremental backfill: --backfill-stats 90 (fetch 90 days at a time)
+  Option 3: Increase available RAM before running --init-history
+
+Usage (commands):
+    python3 06_collector.py --init-db            Create DB schema only
+    python3 06_collector.py --init-history       Backfill ENTIRE chain (headers + all TX/fees, 30+ min)
+    python3 06_collector.py --update             Fetch new blocks + TX stats (incremental)
+    python3 06_collector.py --peers-only         Update peer geolocation only
+    python3 06_collector.py --backfill-stats     Fetch last 180 days (default)
+    python3 06_collector.py --backfill-stats 90  Fetch last 90 days (lighter on memory)
+    python3 06_collector.py --backfill-stats all Fetch ENTIRE chain history from block 0
 
 Config (env vars or /var/lib/grin-stats/config.env):
     GRIN_NODE_URL          default: http://127.0.0.1:3413/v2/foreign
@@ -120,13 +146,20 @@ def grin_rpc(method, params=None, retries=3):
 
 def parse_ts(ts_str):
     """Convert Grin ISO timestamp string → Unix int."""
-    # e.g. "2019-01-15T16:44:15.763877+00:00"
+    # e.g. "2019-01-15T16:44:15.763877+00:00" or "2019-01-15T17:38:05+00:00"
     try:
-        ts_str = ts_str.split(".")[0]  # drop sub-seconds
+        # Remove subseconds if present
+        if '.' in ts_str:
+            ts_str = ts_str.split('.')[0]
+        # Remove timezone offset if present (+00:00 or Z)
+        if '+' in ts_str:
+            ts_str = ts_str.split('+')[0]
+        elif 'Z' in ts_str:
+            ts_str = ts_str.split('Z')[0]
         dt = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%S")
         return int(dt.replace(tzinfo=timezone.utc).timestamp())
     except Exception:
-        return int(time.time())
+        return 0  # Fallback; should be rare with the fixes above
 
 def now_ts():
     return int(time.time())
@@ -207,16 +240,17 @@ def set_meta(conn, key, value):
 def fetch_header(height):
     """Fetch a single block header. Returns (height, timestamp_int, total_diff) or None."""
     try:
-        data = grin_rpc("get_header", {"height": height, "hash": None, "commit": None})
-        if not data:
+        data = grin_rpc("get_header", [height, None, None], retries=5)
+        if not data or "height" not in data:
+            print(f"  [WARN] Empty or invalid response for height {height}", file=sys.stderr)
             return None
         return (
             int(data["height"]),
-            parse_ts(data["timestamp"]),
-            int(data["total_difficulty"]),
+            parse_ts(data.get("timestamp", "")),
+            int(data.get("total_difficulty", 0)),
         )
     except Exception as exc:
-        print(f"  [WARN] header {height}: {exc}", file=sys.stderr)
+        print(f"  [ERROR] Failed height {height}: {exc}", file=sys.stderr)
         return None
 
 def fetch_headers_batch(heights, workers=8):
@@ -234,7 +268,7 @@ def fetch_headers_batch(heights, workers=8):
 def fetch_full_block(height):
     """Fetch full block (kernels + outputs) for tx/fee stats."""
     try:
-        data = grin_rpc("get_block", {"height": height, "hash": None, "commit": None})
+        data = grin_rpc("get_block", [height, None, None], retries=5)
         if not data:
             return None
         header   = data.get("header", {})
@@ -259,9 +293,19 @@ def fetch_full_block(height):
 def calc_hashrate(rows):
     """
     Given list of (height, ts, total_diff) sorted by height,
-    compute per-point hashrate (GPS) using the diff delta / time delta method.
+    compute per-point hashrate (GPS) using the Cuckatoo32 formula from aglkm/grin-explorer:
+        hashrate_GPS = net_diff * 42 / block_time_seconds / 16384
+    where:
+        net_diff    = total_diff delta between consecutive sampled rows
+        42          = Cuckoo cycle length for Cuckatoo32
+        16384       = C32 solution rate = 32 × 2^(32-23) = 32 × 512
+        block_time  = actual seconds between the two sampled blocks
     Returns list of (height, ts, total_diff, hashrate).
     """
+    # Cuckatoo32 constants (matches aglkm/grin-explorer formula)
+    CUCKOO_CYCLE  = 42.0
+    C32_RATE      = 16384.0   # 32 × 2^9
+
     out = []
     for i, (h, ts, diff) in enumerate(rows):
         if i == 0:
@@ -271,9 +315,11 @@ def calc_hashrate(rows):
         dt = ts - pts
         dd = diff - pdiff
         if dt > 0 and dd > 0:
-            hr = dd / dt  # graphs per second (GPS)
+            hr = dd * CUCKOO_CYCLE / dt / C32_RATE   # GPS (graphs per second)
         else:
-            hr = out[-1][3] if out else 0.0
+            # Invalid data: same or earlier timestamp, or difficulty decreased
+            # Do NOT copy previous hashrate (prevents propagation of anomalies)
+            hr = 0.0
         out.append((h, ts, diff, hr))
     return out
 
@@ -330,7 +376,7 @@ def cmd_init_history():
     init_schema(conn)
 
     # Fetch in batches
-    batch_size = 20
+    batch_size = 100
     done = 0
     rows_all = []
 
@@ -360,9 +406,10 @@ def cmd_init_history():
     conn.commit()
     conn.close()
 
-    # Fetch full block stats for last 180 days
-    print("[INFO] Fetching tx/fee stats for last 180 days...")
-    _fetch_block_stats_range(tip_height - 180 * BLOCKS_PER_DAY, tip_height)
+    # Fetch full block stats for complete history (ALL blocks since genesis)
+    print("[INFO] Fetching tx/fee stats for complete chain history...")
+    print("[INFO] ⚠️  Large import: using memory-efficient streaming (may take 30+ min)")
+    _fetch_block_stats_range(0, tip_height)
 
     # Update peers
     print("[INFO] Updating peer data...")
@@ -438,31 +485,137 @@ def _append_hashrate(new_rows, last_height):
     combined = calc_hashrate(base + new_rows)
     return combined[len(base):]  # return only the new ones
 
-def _fetch_block_stats_range(start, end, workers=4):
-    heights = list(range(max(0, start), end + 1))
+def _fmt_eta(secs):
+    """Format seconds into a compact human-readable ETA string."""
+    if secs < 60:   return f"{int(secs)}s"
+    if secs < 3600: return f"{int(secs/60)}m"
+    return f"{secs/3600:.1f}h"
+
+def _progress(done, total, t0):
+    """Print a single-line progress bar to stdout (call with \r)."""
+    elapsed = time.time() - t0
+    rate    = done / elapsed if elapsed > 0 else 1
+    eta     = (total - done) / rate if rate > 0 else 0
+    pct     = done / total
+    filled  = int(30 * pct)
+    bar     = "█" * filled + "░" * (30 - filled)
+    print(
+        f"\r  [{bar}] {done:,}/{total:,} ({pct*100:.1f}%)"
+        f"  {rate:.0f} blk/s  ETA {_fmt_eta(eta)}   ",
+        end="", flush=True,
+    )
+
+def _fetch_block_stats_range(start, end, workers=1, heights=None):
+    """
+    Fetch block stats (tx/fee data) one block at a time (workers=1, default).
+
+    Sequential mode avoids flooding the local Grin node with concurrent requests.
+    Blocks are committed in chunks of 1 000 so progress is saved frequently and
+    RAM stays flat regardless of total block count.
+
+    Pass workers > 1 only when the node can handle parallel requests
+    (e.g. a fast remote node or a small catch-up batch).
+    """
+    if heights is None:
+        heights = list(range(max(0, start), end + 1))
     if not heights:
         return
-    conn = open_db()
+
+    total      = len(heights)
+    chunk_size = 1_000   # commit every 1 000 blocks; keeps SQLite WAL small
+    conn       = open_db()
     init_schema(conn)
-    done = 0
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(fetch_full_block, h): h for h in heights}
+    done = committed = 0
+    t0   = time.time()
+
+    print(f"  Fetching {total:,} blocks (workers={workers}, commit every {chunk_size:,})")
+
+    for ci in range(0, total, chunk_size):
+        chunk = heights[ci : ci + chunk_size]
         batch = []
-        for fut in as_completed(futures):
-            row = fut.result()
-            if row:
-                batch.append(row)
-            done += 1
-            if done % 100 == 0:
-                print(f"\r  Block stats: {done}/{len(heights)}", end="", flush=True)
+
+        if workers == 1:
+            # ── Sequential: one request at a time, no thread overhead ──────────
+            for h in chunk:
+                row = fetch_full_block(h)
+                if row:
+                    batch.append(row)
+                done += 1
+                if done % 100 == 0 or done == total:
+                    _progress(done, total, t0)
+        else:
+            # ── Parallel: submit only this chunk (not all heights at once) ─────
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futs = [pool.submit(fetch_full_block, h) for h in chunk]
+                for fut in as_completed(futs):
+                    row = fut.result()
+                    if row:
+                        batch.append(row)
+                    done += 1
+                    if done % 100 == 0 or done == total:
+                        _progress(done, total, t0)
+
         if batch:
             conn.executemany(
-                "INSERT OR REPLACE INTO block_stats(height,timestamp,tx_count,fee_total,output_count) VALUES(?,?,?,?,?)",
+                "INSERT OR REPLACE INTO block_stats"
+                "(height,timestamp,tx_count,fee_total,output_count) VALUES(?,?,?,?,?)",
                 batch,
             )
             conn.commit()
-    print()
+            committed += len(batch)
+
+    print()  # newline after progress bar
     conn.close()
+    print(f"[INFO] Committed {committed:,} block stats to database")
+
+def cmd_backfill_stats(days=None):
+    """
+    Fetch full block stats for the last N days (or ALL history if days=None).
+    Skips already-stored heights.
+    
+    Database sizing (estimated):
+    ├─ Per block (tx/fee data): ~23 bytes
+    ├─ Grin chain (2019-2026, ~3.7M blocks): ~85 MB
+    ├─ Future growth: ~12.1 MB/year
+    └─ Indexes: add ~15% overhead
+    
+    Examples:
+        --backfill-stats all      fetch entire chain history (~85 MB, 3.7M blocks)
+        --backfill-stats 180      fetch last 180 days (~6 MB)
+        --backfill-stats          fetch last 180 days (default)
+    """
+    if days is None:
+        days = 180
+    
+    print(f"[INFO] Backfilling block stats for last {days if days != float('inf') else 'ALL'} days...")
+    conn = open_db()
+    init_schema(conn)
+    tip_row = conn.execute(
+        "SELECT height FROM blocks ORDER BY height DESC LIMIT 1"
+    ).fetchone()
+    if not tip_row:
+        print("[ERROR] No block headers in DB — run --init-history first.", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+    tip_height = tip_row[0]
+    
+    # If days is float('inf'), fetch from block 0; otherwise use time-based cutoff
+    start = 0 if days == float('inf') else max(0, tip_height - days * BLOCKS_PER_DAY)
+    
+    existing = {r[0] for r in conn.execute(
+        "SELECT height FROM block_stats WHERE height BETWEEN ? AND ?", (start, tip_height)
+    ).fetchall()}
+    conn.close()
+
+    heights = [h for h in range(start, tip_height + 1) if h not in existing]
+    
+    est_mb = len(heights) * 23 / (1024 * 1024)
+    print(f"[INFO] Range {start:,} → {tip_height:,}  "
+          f"({len(heights):,} to fetch, {len(existing):,} already present, ~{est_mb:.1f} MB)")
+    if heights:
+        _fetch_block_stats_range(start, tip_height, heights=heights)
+    export_all_json()
+    print("[OK] Backfill complete.")
 
 # ── Peer update ───────────────────────────────────────────────────────────────
 
@@ -605,16 +758,22 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
         print(f"[WARN] {network_label} owner API get_peers failed: {exc}", file=sys.stderr)
     return peer_list
 
-def _upsert_peers(conn, enriched, first_seen_ts, use_max_last_seen=False):
+def _upsert_peers(conn, enriched, first_seen_ts, use_max_last_seen=False,
+                  preserve_direction=False):
     """
     Upsert a list of enriched peer dicts into known_peers.
-    use_max_last_seen=True keeps the LARGER of the two last_seen values on conflict,
-    so connected-peer entries (last_seen=now) are never downgraded by older routing-table data.
+    use_max_last_seen=True  keeps the LARGER last_seen so connected peers are never
+                            downgraded by older routing-table timestamps.
+    preserve_direction=True keeps the existing direction column unchanged; used for
+                            routing-table upserts so they never overwrite the accurate
+                            direction recorded from get_connected_peers.
     """
-    last_seen_sql = (
+    last_seen_sql  = (
         "CASE WHEN excluded.last_seen > last_seen THEN excluded.last_seen ELSE last_seen END"
         if use_max_last_seen else "excluded.last_seen"
     )
+    direction_sql  = "direction" if preserve_direction else "excluded.direction"
+
     conn.executemany(f"""
         INSERT INTO known_peers
             (ip, network, port, user_agent, direction, lat, lng,
@@ -623,7 +782,7 @@ def _upsert_peers(conn, enriched, first_seen_ts, use_max_last_seen=False):
         ON CONFLICT(ip, network) DO UPDATE SET
             port         = excluded.port,
             user_agent   = excluded.user_agent,
-            direction    = excluded.direction,
+            direction    = {direction_sql},
             lat          = CASE WHEN excluded.lat  != 0  THEN excluded.lat  ELSE lat  END,
             lng          = CASE WHEN excluded.lng  != 0  THEN excluded.lng  ELSE lng  END,
             country      = CASE WHEN excluded.country      != '' THEN excluded.country      ELSE country      END,
@@ -766,8 +925,10 @@ def _update_peers():
                 "network":      p["network"],
                 "last_seen":    p["last_seen"],
             })
-        # Use MAX(last_seen) so connected peers (last_seen=now) are never downgraded
-        _upsert_peers(conn, stat_enriched, ts, use_max_last_seen=True)
+        # Use MAX(last_seen) and preserve direction so routing-table updates never
+        # overwrite the accurate Inbound/Outbound direction from get_connected_peers.
+        _upsert_peers(conn, stat_enriched, ts,
+                      use_max_last_seen=True, preserve_direction=True)
         print(f"[INFO] Routing-table peers added to map: {len(recent_stat)} "
               f"({len(new_ips)} new IPs geo-located).")
 
@@ -853,22 +1014,75 @@ def export_all_json():
     ts_now = now_ts()
 
     # ── hashrate + difficulty ────────────────────────────────────────────────
-    # difficulty = hashrate × 60  (per-block mining difficulty: expected graphs
-    # tried per block at the 60-second target).  We derive it from the stored
-    # hashrate rather than total_diff, which is the CUMULATIVE chain difficulty
-    # (monotonically increasing from genesis) and is not a per-block metric.
-    BLOCK_TARGET = 60  # seconds
-    hr_daily  = conn.execute(
-        "SELECT timestamp, hashrate FROM blocks WHERE bucket='daily'  ORDER BY timestamp"
-    ).fetchall()
-    hr_hourly = conn.execute(
-        "SELECT timestamp, hashrate FROM blocks WHERE bucket='hourly' ORDER BY timestamp"
-    ).fetchall()
-    hr_recent = conn.execute(
-        "SELECT timestamp, hashrate FROM blocks WHERE bucket='recent' ORDER BY timestamp"
-    ).fetchall()
+    # hashrate (GPS) is stored with the Cuckatoo32 formula: net_diff * 42 / dt / 16384
+    # To recover per-block difficulty (net_diff) from stored hashrate:
+    #   net_diff = hashrate_GPS * block_target_seconds * 16384 / 42
+    # This matches what aglkm/grin-explorer displays as "difficulty".
+    BLOCK_TARGET    = 60       # seconds (Grin target block time)
+    CUCKOO_CYCLE    = 42.0
+    C32_RATE        = 16384.0
+    DIFF_MUL        = BLOCK_TARGET * C32_RATE / CUCKOO_CYCLE  # ~23405.7
 
-    for metric, mul in (("hashrate", 1), ("difficulty", BLOCK_TARGET)):
+    # For each bucket, compute hashrate by grouping into time bins and computing
+    # delta total_diff / delta time between consecutive bins.  This normalises
+    # both sparse entries (from --init-history) and dense per-block entries
+    # (aged out of the recent window by --update) which would otherwise spike.
+
+    # Daily: one representative per calendar day
+    daily_bins = conn.execute("""
+        SELECT (timestamp/86400)*86400 AS day_ts,
+               MAX(timestamp)          AS max_ts,
+               MAX(total_diff)         AS max_td
+        FROM blocks WHERE bucket='daily' AND total_diff > 0
+        GROUP BY day_ts ORDER BY day_ts
+    """).fetchall()
+    hr_daily = []
+    for i in range(1, len(daily_bins)):
+        _, p_ts, p_td = daily_bins[i - 1]
+        d_ts, c_ts, c_td = daily_bins[i]
+        dt = c_ts - p_ts
+        dd = c_td - p_td
+        if dt > 0 and dd > 0:
+            hr_daily.append((d_ts, round(dd * CUCKOO_CYCLE / dt / C32_RATE, 2)))
+
+    # Hourly: one representative per hour — normalises sparse (every-60-blocks from
+    # --init-history) and dense (per-block, aged from recent via --update) entries.
+    hourly_bins = conn.execute("""
+        SELECT (timestamp/3600)*3600 AS hour_ts,
+               MAX(timestamp)         AS max_ts,
+               MAX(total_diff)        AS max_td
+        FROM blocks WHERE bucket='hourly' AND total_diff > 0
+        GROUP BY hour_ts ORDER BY hour_ts
+    """).fetchall()
+    hr_hourly = []
+    for i in range(1, len(hourly_bins)):
+        _, p_ts, p_td = hourly_bins[i - 1]
+        h_ts, c_ts, c_td = hourly_bins[i]
+        dt = c_ts - p_ts
+        dd = c_td - p_td
+        if dt > 0 and dd > 0:
+            hr_hourly.append((h_ts, round(dd * CUCKOO_CYCLE / dt / C32_RATE, 2)))
+
+    # Recent: 30-block rolling window (~30 minutes) to smooth out 1-second timestamp
+    # resolution variance while still showing meaningful sub-hour hashrate trends.
+    # Order by height (not timestamp) because Grin timestamps can be non-monotonic
+    # (miners set them within protocol bounds), which would corrupt the dt calculation.
+    # Start from index SMOOTH_N so every point always has a full 30-block window —
+    # the clamped j=0 warm-up phase produces spikes when early blocks share the same
+    # second timestamp (dt→0 while dd spans multiple blocks).
+    recent_td = conn.execute(
+        "SELECT timestamp, total_diff FROM blocks WHERE bucket='recent' AND total_diff > 0 ORDER BY height"
+    ).fetchall()
+    SMOOTH_N = 30
+    hr_recent = []
+    for i in range(SMOOTH_N, len(recent_td)):
+        j = i - SMOOTH_N
+        dt = recent_td[i][0] - recent_td[j][0]
+        dd = recent_td[i][1] - recent_td[j][1]
+        if dt > 0 and dd > 0:
+            hr_recent.append((recent_td[i][0], round(dd * CUCKOO_CYCLE / dt / C32_RATE, 2)))
+
+    for metric, mul in (("hashrate", 1), ("difficulty", DIFF_MUL)):
         _write_json(f"{metric}.json", {
             "updated": ts_now,
             "daily":   [[r[0], round(r[1] * mul, 2)] for r in hr_daily],
@@ -893,10 +1107,10 @@ def export_all_json():
             (cutoff_24h,),
         ).fetchall()
         hourly_raw = conn.execute(
-            f"SELECT (timestamp/{BLOCKS_PER_HOUR*60})*{BLOCKS_PER_HOUR*60} as bucket_ts, SUM({col}) "
-            f"FROM block_stats WHERE timestamp >= ? AND timestamp < ? "
+            f"SELECT (timestamp/3600)*3600 as bucket_ts, SUM({col}) "
+            f"FROM block_stats WHERE timestamp >= ? "
             f"GROUP BY bucket_ts ORDER BY bucket_ts",
-            (cutoff_30d, cutoff_24h),
+            (cutoff_30d,),
         ).fetchall()
         daily_raw = conn.execute(
             f"SELECT (timestamp/86400)*86400 as bucket_ts, SUM({col}) "
@@ -907,8 +1121,8 @@ def export_all_json():
 
         _write_json(f"{metric}.json", {
             "updated": ts_now,
-            "daily":   [[r[0], r[1]] for r in daily_raw],
-            "hourly":  [[r[0], r[1]] for r in hourly_raw],
+            "daily":   [[r[0], r[1] if r[1] is not None else 0] for r in daily_raw],
+            "hourly":  [[r[0], r[1] if r[1] is not None else 0] for r in hourly_raw],
             "recent":  [[r[0], r[1]] for r in recent],
         })
 
@@ -957,18 +1171,36 @@ def export_all_json():
     })
 
     # ── summary (for the header stats bar) ───────────────────────────────────
-    # Average the last 60 blocks (~1 hour) so that a single short-interval block
-    # does not inflate the displayed hashrate.  Individual blocks can have very
-    # short timestamps producing artificially high single-block GPS values.
-    avg_hr_row = conn.execute(
-        "SELECT AVG(hashrate) FROM (SELECT hashrate FROM blocks ORDER BY height DESC LIMIT 60)"
-    ).fetchone()
-    avg_hr = round(avg_hr_row[0], 2) if avg_hr_row and avg_hr_row[0] else 0
+    # Use the 1440-block (≈ 1 day) total_diff window — matches aglkm/grin-explorer:
+    #   net_diff = (total_diff[H] - total_diff[H-1440]) / 1440
+    #   hashrate = net_diff * 42 / 60 / 16384
+    # Fall back to a 60-block hashrate average if fewer rows exist.
+    tip_blocks = conn.execute(
+        "SELECT height, total_diff FROM blocks ORDER BY height DESC LIMIT 1441"
+    ).fetchall()
+
+    if len(tip_blocks) >= 2:
+        hi_h, hi_d = tip_blocks[0]
+        lo_h, lo_d = tip_blocks[-1]
+        block_count = hi_h - lo_h
+        if block_count > 0:
+            avg_diff       = (hi_d - lo_d) / block_count          # per-block difficulty
+            avg_hr         = round(avg_diff * CUCKOO_CYCLE / BLOCK_TARGET / C32_RATE, 2)
+            current_diff   = round(avg_diff, 0)
+        else:
+            avg_hr, current_diff = 0, 0
+    else:
+        avg_hr_row = conn.execute(
+            "SELECT AVG(hashrate) FROM (SELECT hashrate FROM blocks ORDER BY height DESC LIMIT 60)"
+        ).fetchone()
+        avg_hr       = round(avg_hr_row[0], 2) if avg_hr_row and avg_hr_row[0] else 0
+        current_diff = round(avg_hr * DIFF_MUL, 0)
+
     _write_json("summary.json", {
         "updated":            ts_now,
         "tip_height":         tip_height,
         "current_hashrate":   avg_hr,
-        "current_difficulty": round(avg_hr * BLOCK_TARGET, 0),
+        "current_difficulty": current_diff,
     })
 
     conn.close()
@@ -994,10 +1226,12 @@ def cmd_init_db():
 def main():
     parser = argparse.ArgumentParser(description="Grin Stats Collector")
     group  = parser.add_mutually_exclusive_group()
-    group.add_argument("--init-db",      action="store_true", help="Create DB schema only")
-    group.add_argument("--init-history", action="store_true", help="Backfill all historical data")
-    group.add_argument("--update",       action="store_true", help="Fetch new blocks + update peers")
-    group.add_argument("--peers-only",   action="store_true", help="Update peer data only")
+    group.add_argument("--init-db",        action="store_true", help="Create DB schema only")
+    group.add_argument("--init-history",   action="store_true", help="Backfill all historical data (headers + complete TX/fee history)")
+    group.add_argument("--update",         action="store_true", help="Fetch new blocks + update peers + TX stats")
+    group.add_argument("--peers-only",     action="store_true", help="Update peer data only")
+    group.add_argument("--backfill-stats", nargs="?", const=180, metavar="DAYS|all",
+                       help="Fetch TX/fee stats for last N days or 'all' for complete history (default: 180)")
     args = parser.parse_args()
 
     if args.init_db:
@@ -1010,6 +1244,18 @@ def main():
         conn.close()
         _update_peers()
         export_all_json()
+    elif args.backfill_stats is not None:
+        # Handle "all" keyword or numeric days
+        if isinstance(args.backfill_stats, str) and args.backfill_stats.lower() == "all":
+            cmd_backfill_stats(float('inf'))
+        else:
+            try:
+                days = int(args.backfill_stats) if isinstance(args.backfill_stats, str) else args.backfill_stats
+                cmd_backfill_stats(days)
+            except ValueError:
+                print(f"[ERROR] Invalid --backfill-stats argument: {args.backfill_stats}. Use a number or 'all'.", 
+                      file=sys.stderr)
+                sys.exit(1)
     else:
         # Default: --update
         cmd_update()

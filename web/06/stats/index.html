@@ -10,19 +10,142 @@
 <meta property="og:title" content="Grin Node World Map — Global Grin Network">
 <meta property="og:description" content="Interactive world map of active Grin network nodes. Filter by country, version, or direction.">
 <meta property="og:type" content="website">
+<link rel="icon" href="grin-logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="leaflet.min.css">
 <script src="leaflet.min.js"></script>
 <style>
   :root {
-    --bg:      #0d1117;
-    --surface: #161b22;
-    --border:  #30363d;
-    --text:    #e6edf3;
-    --muted:   #8b949e;
-    --grin:    #ff9900;
-    --blue:    #58a6ff;
-    --green:   #3fb950;
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --border:    #30363d;
+    --text:      #e6edf3;
+    --muted:     #8b949e;
+    --grin:      #ff9900;
+    --blue:      #58a6ff;
+    --green:     #3fb950;
+    --panel-bg:  rgba(22,27,34,0.92);
+    --ctrl-bg:   rgba(22,27,34,0.85);
+    --tip-bg:    rgba(22,27,34,0.95);
   }
+  /* ── Light theme ─────────────────────────────────────────────────────────── */
+  html[data-theme="light"] {
+    --bg:        #f6f8fa;
+    --surface:   #ffffff;
+    --border:    #d0d7de;
+    --text:      #24292f;
+    --muted:     #656d76;
+    --grin:      #bf6800;
+    --blue:      #0969da;
+    --green:     #1a7f37;
+    --panel-bg:  rgba(255,255,255,0.95);
+    --ctrl-bg:   rgba(246,248,250,0.92);
+    --tip-bg:    rgba(255,255,255,0.98);
+  }
+  html[data-theme="light"] .pill-btc { color: #cf222e; border-color: #cf222e; background: rgba(207,34,46,0.08); }
+  html[data-theme="light"] .leaflet-container { background: #aad3df !important; }
+  html[data-theme="light"] .leaflet-control-attribution {
+    background: rgba(255,255,255,0.75) !important;
+    color: #656d76 !important;
+  }
+  /* ── Matrix theme ────────────────────────────────────────────────────────── */
+  html[data-theme="matrix"] {
+    --bg:        #000000;
+    --surface:   #001500;
+    --border:    #004400;
+    --text:      #00ff41;
+    --muted:     #009922;
+    --grin:      #00ff41;
+    --blue:      #00e5ff;
+    --green:     #00ff41;
+    --panel-bg:  rgba(0,21,0,0.95);
+    --ctrl-bg:   rgba(0,10,0,0.90);
+    --tip-bg:    rgba(0,21,0,0.98);
+  }
+  html[data-theme="matrix"] body { font-family: 'Courier New', Courier, monospace; }
+  html[data-theme="matrix"] #map-container::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px);
+    pointer-events: none;
+    z-index: 999;
+  }
+  /* ── Harry Potter theme ──────────────────────────────────────────────────── */
+  html[data-theme="hp"] {
+    --bg:        #0d0221;
+    --surface:   #1a0545;
+    --border:    #4a1a8a;
+    --text:      #f0e68c;
+    --muted:     #b8a0d4;
+    --grin:      #ffd700;
+    --blue:      #7b68ee;
+    --green:     #50c878;
+    --panel-bg:  rgba(26,5,69,0.95);
+    --ctrl-bg:   rgba(13,2,33,0.90);
+    --tip-bg:    rgba(26,5,69,0.98);
+  }
+  html[data-theme="hp"] #map-container::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 0%, rgba(100,40,200,0.15) 0%, transparent 65%);
+    pointer-events: none;
+    z-index: 999;
+  }
+
+  /* ── Theme controls ──────────────────────────────────────────────────────── */
+  .mode-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 28px; height: 26px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+    flex-shrink: 0;
+    padding: 0;
+  }
+  .mode-toggle:hover { border-color: var(--grin); color: var(--text); }
+  .theme-picker { position: relative; }
+  .theme-pill-btn {
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .theme-pill-btn:hover { border-color: var(--grin); color: var(--text); }
+  .theme-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    display: none;
+    z-index: 1100;
+    min-width: 145px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  .theme-menu.open { display: block; }
+  .tm-item {
+    display: block; width: 100%;
+    padding: 8px 14px;
+    background: transparent; border: none;
+    color: var(--text); font-size: 12px;
+    text-align: left; cursor: pointer;
+    transition: background 0.1s;
+  }
+  .tm-item:hover { background: rgba(255,153,0,0.1); color: var(--grin); }
+  .tm-item.active { color: var(--grin); font-weight: 600; }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     background: var(--bg);
@@ -31,6 +154,7 @@
     font-size: 14px;
     overflow: hidden;
     height: 100vh;
+    height: 100svh;
     display: flex;
     flex-direction: column;
   }
@@ -45,7 +169,7 @@
     align-items: center;
     flex-shrink: 0;
     gap: 12px;
-    z-index: 10;
+    z-index: 1050;   /* must be > panel z-index (1000) so theme dropdown renders on top */
   }
   .logo { display: flex; align-items: center; gap: 8px; }
   .logo-img { height: 26px; width: 26px; flex-shrink: 0; }
@@ -71,6 +195,7 @@
   .pill-peers    { color: var(--grin);  border-color: var(--grin);  background: rgba(255,153,0,0.08); }
   .pill-country  { color: var(--blue);  border-color: var(--blue);  background: rgba(88,166,255,0.08); }
   .pill-price    { color: var(--green); border-color: var(--green); background: rgba(63,185,80,0.08); }
+  .pill-btc      { color: #ffd700;      border-color: #ffd700;      background: rgba(255,215,0,0.08); }
   .pill-sep { color: var(--border); font-size: 14px; }
   nav { display: flex; gap: 6px; }
   .nav-btn {
@@ -139,7 +264,7 @@
     backdrop-filter: blur(6px);
   }
   #zoom-ctrl button {
-    background: rgba(22, 27, 34, 0.85);
+    background: var(--ctrl-bg);
     color: var(--text);
     border: none;
     border-right: 1px solid var(--border);
@@ -164,7 +289,7 @@
     left: 16px;
     width: 272px;
     max-height: calc(100% - 32px);
-    background: rgba(22, 27, 34, 0.92);
+    background: var(--panel-bg);
     border: 1px solid var(--border);
     border-radius: 8px;
     backdrop-filter: blur(8px);
@@ -279,7 +404,7 @@
     top: 16px;
     left: 16px;
     z-index: 1001;
-    background: rgba(22, 27, 34, 0.85);
+    background: var(--ctrl-bg);
     border: 1px solid var(--border);
     color: var(--muted);
     padding: 6px 12px;
@@ -298,7 +423,7 @@
     top: 16px;
     right: 16px;
     width: 260px;
-    background: rgba(22, 27, 34, 0.92);
+    background: var(--panel-bg);
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 16px;
@@ -347,7 +472,7 @@
   /* ── Peer tooltip ────────────────────────────────────────────────────────── */
   #tooltip {
     position: fixed;
-    background: rgba(22, 27, 34, 0.95);
+    background: var(--tip-bg);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 10px 14px;
@@ -393,8 +518,9 @@
     color: var(--muted);
     font-size: 12px;
     padding: 7px 24px;
+    padding-bottom: calc(7px + env(safe-area-inset-bottom, 0px));
     flex-shrink: 0;
-    z-index: 10;
+    z-index: 1050;
   }
   footer a { color: var(--grin); text-decoration: none; margin: 0 8px; }
   footer a:hover { color: var(--text); }
@@ -407,7 +533,7 @@
     left: 0;
     right: 0;
     z-index: 1001;
-    background: rgba(22, 27, 34, 0.92);
+    background: var(--panel-bg);
     border-top: 1px solid var(--border);
     padding: 8px 16px;
     padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
@@ -442,7 +568,7 @@
     #mobile-bar { display: flex; }
     #map-container { padding-bottom: 52px; }
     #zoom-ctrl { left: 16px; bottom: 68px; } /* above mobile bar */
-    footer { font-size: 11px; padding: 6px 8px; }
+    footer { font-size: 11px; padding: 6px 8px; padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)); }
     footer a { margin: 0 5px; }
   }
 </style>
@@ -466,6 +592,19 @@
       <span class="pill pill-country" id="h-countries">— countries</span>
       <span class="pill-sep">·</span>
       <span class="pill pill-price"   id="h-price">$—</span>
+      <span class="pill-sep">·</span>
+      <span class="pill pill-btc"     id="h-btc-price">₿—</span>
+      <span class="pill-sep">|</span>
+      <button class="mode-toggle" id="mode-toggle" title="Toggle dark/light mode">🌙</button>
+      <div class="theme-picker">
+        <button class="theme-pill-btn" id="theme-pill-btn">🎨</button>
+        <div class="theme-menu" id="theme-menu">
+          <button class="tm-item" data-theme="dark">◼ Default</button>
+          <button class="tm-item" data-theme="light">◻ Light</button>
+          <button class="tm-item" data-theme="matrix">▓ Matrix</button>
+          <button class="tm-item" data-theme="hp">✦ Harry Potter</button>
+        </div>
+      </div>
     </div>
   </div>
 </header>
@@ -494,6 +633,16 @@
       <input id="f-ip" type="text" placeholder="Search IP address…" autocomplete="off" spellcheck="false">
       <select id="f-country"><option value="">All Countries</option></select>
       <select id="f-version"><option value="">All Versions</option></select>
+      <select id="f-direction">
+        <option value="">All Traffic Flow</option>
+        <option value="Inbound">Inbound</option>
+        <option value="Outbound">Outbound</option>
+      </select>
+      <select id="f-network">
+        <option value="">All Network Types</option>
+        <option value="mainnet">Mainnet</option>
+        <option value="testnet">Testnet</option>
+      </select>
     </div>
     <div id="lp-count">Loading…</div>
     <div id="peer-list"></div>
@@ -556,9 +705,6 @@ const DATA_URL = "data/peers.json";
 // Show peers seen within the last 7 days (matches PEER_HISTORY_DAYS in collector)
 const ACTIVE_WINDOW_SEC = 7 * 24 * 3600;
 
-const VERSION_COLORS = [
-  "#ff9900","#58a6ff","#3fb950","#bc8cff","#f85149","#d29922","#79c0ff","#ffa657",
-];
 const NET_COLOR = { mainnet: "#ff9900", testnet: "#00bcd4" };
 const STD_PORTS = new Set(["3414", "13414"]);
 
@@ -613,18 +759,19 @@ function fmtPct(n, total) {
   return fmtNum(pct, 0) + "%";
 }
 
-// ── Version colour map ────────────────────────────────────────────────────────
-function buildVersionColorMap(peers) {
-  const mainnet = peers.filter(p => p.network !== "testnet");
-  const agents  = [...new Set(mainnet.map(p => p.user_agent))].sort();
-  const map = {};
-  agents.forEach((a, i) => { map[a] = VERSION_COLORS[i % VERSION_COLORS.length]; });
-  return map;
-}
-
 // ── Leaflet 2D map ────────────────────────────────────────────────────────────
-let leafletMap   = null;
-let markersLayer = null;
+let leafletMap      = null;
+let markersLayer    = null;
+let currentTileLayer = null;
+
+const TILE_URLS = {
+  dark:   "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+  light:  "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+  matrix: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+  hp:     "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+};
+const TILE_ATTR = '&copy; <a href="https://carto.com/" target="_blank">CARTO</a>' +
+                  ' &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OSM</a>';
 
 function initMap() {
   leafletMap = L.map("map", {
@@ -632,21 +779,20 @@ function initMap() {
     zoom:                 2,
     minZoom:              2,
     maxZoom:              10,
-    zoomControl:          false,       // placed manually at bottom-right
-    preferCanvas:         true,        // canvas renderer — much faster for many markers
+    zoomControl:          false,
+    preferCanvas:         true,
     maxBounds:            [[-85.05, -180], [85.05, 180]],
-    maxBoundsViscosity:   1.0,         // hard boundary — no bounce beyond world edge
+    maxBoundsViscosity:   1.0,
     worldCopyJump:        false,
   });
 
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-    attribution:
-      '&copy; <a href="https://carto.com/" target="_blank">CARTO</a>' +
-      ' &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OSM</a>',
-    subdomains: "abcd",
-    maxZoom:    19,
-    noWrap:     true,                  // prevents tile layer from repeating horizontally
-    bounds:     [[-90, -180], [90, 180]],
+  const tileUrl = TILE_URLS[currentTheme] || TILE_URLS.dark;
+  currentTileLayer = L.tileLayer(tileUrl, {
+    attribution: TILE_ATTR,
+    subdomains:  "abcd",
+    maxZoom:     19,
+    noWrap:      true,
+    bounds:      [[-90, -180], [90, 180]],
   }).addTo(leafletMap);
 
   markersLayer = L.layerGroup().addTo(leafletMap);
@@ -696,7 +842,7 @@ function buildMarkers(peers) {
 }
 
 // ── Right side panel ──────────────────────────────────────────────────────────
-function updatePanel(peers, updatedTs, verColorMap) {
+function updatePanel(peers, updatedTs) {
   const countries = new Set(peers.map(p => p.country).filter(Boolean));
   const outbound  = peers.filter(p => p.direction === "Outbound").length;
   const mainnetPeers = peers.filter(p => p.network !== "testnet");
@@ -713,11 +859,11 @@ function updatePanel(peers, updatedTs, verColorMap) {
 
   // Version distribution — render both tabs
   const testnetPeers = peers.filter(p => p.network === "testnet");
-  renderVerTab(mainnetPeers, "ver-legend-mainnet", verColorMap, "No mainnet peers");
-  renderVerTab(testnetPeers, "ver-legend-testnet", verColorMap, "No testnet peers");
+  renderVerTab(mainnetPeers, "ver-legend-mainnet", "No mainnet peers");
+  renderVerTab(testnetPeers, "ver-legend-testnet", "No testnet peers");
 }
 
-function renderVerTab(tabPeers, elId, verColorMap, emptyMsg) {
+function renderVerTab(tabPeers, elId, emptyMsg) {
   const counts = {};
   tabPeers.forEach(p => { counts[p.user_agent] = (counts[p.user_agent] || 0) + 1; });
   const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
@@ -725,7 +871,6 @@ function renderVerTab(tabPeers, elId, verColorMap, emptyMsg) {
   $(elId).innerHTML = sorted.length
     ? sorted.map(([ua, n]) => `
       <div class="leg-row">
-        <span class="leg-dot" style="background:${verColorMap[ua] || "#aaa"}"></span>
         <span class="leg-name" title="${esc(ua)}">${esc(ua)}</span>
         <span class="leg-pct">${fmtPct(n, total)} · ${n}</span>
       </div>`).join("")
@@ -739,22 +884,28 @@ function showVerTab(net, btn) {
   $("ver-legend-testnet").style.display = net === "testnet" ? "" : "none";
 }
 
-// ── CoinGecko price ───────────────────────────────────────────────────────────
+// ── CoinGecko price (USD + BTC) ───────────────────────────────────────────────
 async function loadGrinPrice() {
   try {
     const r = await fetch(
-      "https://api.coingecko.com/api/v3/simple/price?ids=grin&vs_currencies=usd"
+      "https://api.coingecko.com/api/v3/simple/price?ids=grin&vs_currencies=usd,btc"
     );
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data  = await r.json();
-    const price = data?.grin?.usd;
-    if (price != null) {
-      $("h-price").textContent = "$" + fmtNum(price, 4);
+    const data = await r.json();
+
+    const priceUsd = data?.grin?.usd;
+    $("h-price").textContent = priceUsd != null ? "$" + fmtNum(priceUsd, 4) : "$—";
+
+    const priceBtc = data?.grin?.btc;
+    if (priceBtc != null) {
+      const sats = Math.round(priceBtc * 1e8);
+      $("h-btc-price").textContent = sats + " sat";
     } else {
-      $("h-price").textContent = "$—";
+      $("h-btc-price").textContent = "₿—";
     }
   } catch {
-    $("h-price").textContent = "$—";
+    $("h-price").textContent     = "$—";
+    $("h-btc-price").textContent = "₿—";
   }
 }
 
@@ -780,14 +931,18 @@ function buildPeerList(peers) {
 }
 
 function renderPeerList() {
-  const ipQuery = $("f-ip").value.trim().toLowerCase();
-  const country = $("f-country").value;
-  const version = $("f-version").value;
+  const ipQuery   = $("f-ip").value.trim().toLowerCase();
+  const country   = $("f-country").value;
+  const version   = $("f-version").value;
+  const direction = $("f-direction").value;
+  const network   = $("f-network").value;
 
   let list = ALL_PEERS;
-  if (ipQuery) list = list.filter(p => p.ip && p.ip.toLowerCase().includes(ipQuery));
-  if (country) list = list.filter(p => p.country === country);
-  if (version) list = list.filter(p => p.user_agent === version);
+  if (ipQuery)   list = list.filter(p => p.ip && p.ip.toLowerCase().includes(ipQuery));
+  if (country)   list = list.filter(p => p.country === country);
+  if (version)   list = list.filter(p => p.user_agent === version);
+  if (direction) list = list.filter(p => p.direction === direction);
+  if (network)   list = list.filter(p => (p.network || "mainnet") === network);
   list = [...list].sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
   window._filteredPeers = list;
 
@@ -820,9 +975,11 @@ $("peer-list").addEventListener("click", e => {
   if (leafletMap) leafletMap.flyTo([p.lat, p.lng], 6);
 });
 
-$("f-ip").addEventListener("input",        renderPeerList);
-$("f-country").addEventListener("change",  renderPeerList);
-$("f-version").addEventListener("change",  renderPeerList);
+$("f-ip").addEventListener("input",          renderPeerList);
+$("f-country").addEventListener("change",    renderPeerList);
+$("f-version").addEventListener("change",    renderPeerList);
+$("f-direction").addEventListener("change",  renderPeerList);
+$("f-network").addEventListener("change",    renderPeerList);
 
 // ── Left panel toggle ─────────────────────────────────────────────────────────
 function toggleLeftPanel(show) {
@@ -857,6 +1014,63 @@ if (window.matchMedia("(max-width: 720px)").matches) {
   $("panel").style.display = "none";
 }
 
+// ── Theme management ──────────────────────────────────────────────────────────
+let currentTheme = localStorage.getItem("grin-theme") || "dark";
+
+function applyTheme(theme) {
+  currentTheme = theme;
+  localStorage.setItem("grin-theme", theme);
+  if (theme === "dark") {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    document.documentElement.setAttribute("data-theme", theme);
+  }
+
+  const modeBtn = $("mode-toggle");
+  if (modeBtn) modeBtn.textContent = theme === "light" ? "☀️" : "🌙";
+
+  document.querySelectorAll(".tm-item").forEach(b =>
+    b.classList.toggle("active", b.dataset.theme === theme)
+  );
+
+  // Swap Leaflet tile layer if map is ready
+  if (leafletMap && currentTileLayer) {
+    const tileUrl = TILE_URLS[theme] || TILE_URLS.dark;
+    leafletMap.removeLayer(currentTileLayer);
+    currentTileLayer = L.tileLayer(tileUrl, {
+      attribution: TILE_ATTR,
+      subdomains:  "abcd",
+      maxZoom:     19,
+      noWrap:      true,
+      bounds:      [[-90, -180], [90, 180]],
+    }).addTo(leafletMap);
+    // Keep markers on top
+    if (markersLayer) markersLayer.bringToFront();
+  }
+}
+
+function initTheme() {
+  applyTheme(currentTheme);
+
+  $("mode-toggle").addEventListener("click", () => {
+    applyTheme(currentTheme === "light" ? "dark" : "light");
+  });
+
+  $("theme-pill-btn").addEventListener("click", e => {
+    e.stopPropagation();
+    $("theme-menu").classList.toggle("open");
+  });
+
+  document.addEventListener("click", () => $("theme-menu").classList.remove("open"));
+
+  document.querySelectorAll(".tm-item").forEach(btn => {
+    btn.addEventListener("click", () => {
+      applyTheme(btn.dataset.theme);
+      $("theme-menu").classList.remove("open");
+    });
+  });
+}
+
 // ── Boot — load once, no auto-refresh ─────────────────────────────────────────
 async function boot() {
   try {
@@ -869,11 +1083,9 @@ async function boot() {
       p.last_seen && p.last_seen >= cutoff
     );
 
-    const verColorMap = buildVersionColorMap(peers);
-
     if (!leafletMap) initMap();
     buildMarkers(peers);
-    updatePanel(peers, data.updated, verColorMap);
+    updatePanel(peers, data.updated);
     buildPeerList(peers);
   } catch (e) {
     console.error(e);
@@ -888,6 +1100,7 @@ async function boot() {
   loadGrinPrice();
 }
 
+initTheme();
 boot();
 </script>
 </body>

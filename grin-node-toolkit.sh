@@ -148,7 +148,11 @@ run_script() {
         read -r
         return 0
     fi
-    bash "$script_path" || true
+    bash "$script_path"
+    local rc=$?
+    # Exit code 100 means the subscript requested a full exit (e.g. after self-update)
+    [[ $rc -eq 100 ]] && exit 0
+    return 0
 }
 
 show_header() {

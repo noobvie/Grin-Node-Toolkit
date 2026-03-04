@@ -937,7 +937,7 @@ self_update() {
     if [[ "$_exit_choice" == "0" ]]; then
         return
     else
-        exit 0
+        exit 100  # signals grin-node-toolkit.sh to exit completely
     fi
 }
 

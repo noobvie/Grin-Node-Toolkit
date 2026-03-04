@@ -766,17 +766,19 @@ const rangeState = { hr: "all", diff: "all", activity: "all" };
 function updateChartData(chart, json, range) {
   let pts;
   const nowMs = Date.now();
+  // "recent" is raw per-block — only use it for Day view.
+  // Wider views use hourly/daily averages so the Y-axis stays consistent
+  // and individual high-difficulty blocks don't distort the entire chart.
   if (range === "all") {
-    pts = [...(json.daily||[]), ...(json.hourly||[]), ...(json.recent||[])];
+    pts = [...(json.daily||[]), ...(json.hourly||[])];
   } else if (range === "year") {
     const cutoff = nowMs - 365 * 86400000;
     pts = [
       ...(json.daily||[]).filter(([ts]) => ts*1000 >= cutoff),
       ...(json.hourly||[]),
-      ...(json.recent||[]),
     ];
   } else if (range === "month") {
-    pts = [...(json.hourly||[]), ...(json.recent||[])];
+    pts = [...(json.hourly||[])];
   } else {                           // day
     pts = [...(json.recent||[])];
   }

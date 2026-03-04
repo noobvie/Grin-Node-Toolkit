@@ -491,69 +491,70 @@ def _fmt_eta(secs):
     if secs < 3600: return f"{int(secs/60)}m"
     return f"{secs/3600:.1f}h"
 
-def _fetch_block_stats_range(start, end, workers=None, heights=None):
+def _progress(done, total, t0):
+    """Print a single-line progress bar to stdout (call with \r)."""
+    elapsed = time.time() - t0
+    rate    = done / elapsed if elapsed > 0 else 1
+    eta     = (total - done) / rate if rate > 0 else 0
+    pct     = done / total
+    filled  = int(30 * pct)
+    bar     = "█" * filled + "░" * (30 - filled)
+    print(
+        f"\r  [{bar}] {done:,}/{total:,} ({pct*100:.1f}%)"
+        f"  {rate:.0f} blk/s  ETA {_fmt_eta(eta)}   ",
+        end="", flush=True,
+    )
+
+def _fetch_block_stats_range(start, end, workers=1, heights=None):
     """
-    Fetch block stats (tx/fee data) with chunked processing.
+    Fetch block stats (tx/fee data) one block at a time (workers=1, default).
 
-    Processes heights in fixed-size chunks so the ThreadPoolExecutor dict never
-    grows beyond chunk_size entries.  Each chunk is committed immediately, keeping
-    resident memory low regardless of total block count.
+    Sequential mode avoids flooding the local Grin node with concurrent requests.
+    Blocks are committed in chunks of 1 000 so progress is saved frequently and
+    RAM stays flat regardless of total block count.
 
-    Progress bar shows percentage, blocks/sec, and ETA.
+    Pass workers > 1 only when the node can handle parallel requests
+    (e.g. a fast remote node or a small catch-up batch).
     """
     if heights is None:
         heights = list(range(max(0, start), end + 1))
     if not heights:
         return
 
-    total = len(heights)
-
-    # Adaptive workers: fewer parallel requests for very large imports
-    if workers is None:
-        if total > 500_000: workers = 1
-        elif total > 50_000: workers = 2
-        elif total > 5_000:  workers = 4
-        else:                workers = 8
-
-    # Chunk size: limits concurrent futures in RAM.
-    # ~5 000 at a time is enough parallelism while keeping memory flat.
-    chunk_size = min(5_000, max(500, total // 20))
-
-    conn = open_db()
+    total      = len(heights)
+    chunk_size = 1_000   # commit every 1 000 blocks; keeps SQLite WAL small
+    conn       = open_db()
     init_schema(conn)
     done = committed = 0
-    t0 = time.time()
+    t0   = time.time()
 
-    print(f"  Fetching {total:,} blocks  (workers={workers}, chunk={chunk_size:,})")
+    print(f"  Fetching {total:,} blocks (workers={workers}, commit every {chunk_size:,})")
 
     for ci in range(0, total, chunk_size):
         chunk = heights[ci : ci + chunk_size]
         batch = []
 
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futs = {pool.submit(fetch_full_block, h): h for h in chunk}
-            for fut in as_completed(futs):
-                row = fut.result()
+        if workers == 1:
+            # ── Sequential: one request at a time, no thread overhead ──────────
+            for h in chunk:
+                row = fetch_full_block(h)
                 if row:
                     batch.append(row)
                 done += 1
+                if done % 100 == 0 or done == total:
+                    _progress(done, total, t0)
+        else:
+            # ── Parallel: submit only this chunk (not all heights at once) ─────
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futs = [pool.submit(fetch_full_block, h) for h in chunk]
+                for fut in as_completed(futs):
+                    row = fut.result()
+                    if row:
+                        batch.append(row)
+                    done += 1
+                    if done % 100 == 0 or done == total:
+                        _progress(done, total, t0)
 
-                # Refresh progress bar every 200 blocks (low overhead)
-                if done % 200 == 0 or done == total:
-                    elapsed = time.time() - t0
-                    rate    = done / elapsed if elapsed > 0 else 1
-                    eta     = (total - done) / rate if rate > 0 else 0
-                    pct     = done / total
-                    bar_w   = 30
-                    filled  = int(bar_w * pct)
-                    bar     = "█" * filled + "░" * (bar_w - filled)
-                    print(
-                        f"\r  [{bar}] {done:,}/{total:,} ({pct*100:.1f}%)"
-                        f"  {rate:.0f} blk/s  ETA {_fmt_eta(eta)}   ",
-                        end="", flush=True,
-                    )
-
-        # Commit each chunk immediately — keeps SQLite WAL small
         if batch:
             conn.executemany(
                 "INSERT OR REPLACE INTO block_stats"
@@ -1057,10 +1058,10 @@ def export_all_json():
             (cutoff_24h,),
         ).fetchall()
         hourly_raw = conn.execute(
-            f"SELECT (timestamp/{BLOCKS_PER_HOUR*60})*{BLOCKS_PER_HOUR*60} as bucket_ts, SUM({col})*1.0/COUNT(*) "
-            f"FROM block_stats WHERE timestamp >= ? AND timestamp < ? "
+            f"SELECT (timestamp/3600)*3600 as bucket_ts, SUM({col})*1.0/COUNT(*) "
+            f"FROM block_stats WHERE timestamp >= ? "
             f"GROUP BY bucket_ts ORDER BY bucket_ts",
-            (cutoff_30d, cutoff_24h),
+            (cutoff_30d,),
         ).fetchall()
         daily_raw = conn.execute(
             f"SELECT (timestamp/86400)*86400 as bucket_ts, SUM({col})*1.0/COUNT(*) "

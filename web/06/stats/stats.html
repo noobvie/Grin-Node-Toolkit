@@ -796,18 +796,21 @@ function updateActivityChart(txJson, feeJson, range, metric) {
   const nowMs = Date.now();
   
   const filterByRange = (json) => {
+    // "recent" is raw per-block data — only use it for the Day view.
+    // All wider views use hourly/daily averages (same unit: avg tx per block)
+    // so the Y axis stays on a consistent scale and the recent boundary
+    // doesn't produce a false spike.
     if (range === "all") {
-      return [...(json.daily||[]), ...(json.hourly||[]), ...(json.recent||[])];
+      return [...(json.daily||[]), ...(json.hourly||[])];
     } else if (range === "year") {
       const cutoff = nowMs - 365 * 86400000;
       return [
         ...(json.daily||[]).filter(([ts]) => ts*1000 >= cutoff),
         ...(json.hourly||[]),
-        ...(json.recent||[]),
       ];
     } else if (range === "month") {
-      return [...(json.hourly||[]), ...(json.recent||[])];
-    } else {
+      return [...(json.hourly||[])];
+    } else {                          // day — raw per-block for high granularity
       return [...(json.recent||[])];
     }
   };

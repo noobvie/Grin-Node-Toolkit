@@ -627,7 +627,8 @@ const fmtDiff = v => {
   return fmtNum(v, 0);
 };
 // v is in nGrin; always display in Grin for clarity
-const fmtFee = v => fmtNum(v / 1e9, 4) + " Grin";
+const fmtFee     = v => fmtNum(v / 1e9, 2) + " Grin";
+const fmtFeeTick = v => fmtNum(v / 1e9, 0) + " Grin";
 const timeAgo = ts => {
   const s = Math.floor(Date.now()/1000) - ts;
   if (s < 60)   return s + "s ago";
@@ -702,7 +703,7 @@ function makeLineChart(id, label, color, yFmt, suggestedMax, yFmtTick = null) {
   });
 }
 
-function makeMultiChart(id, yFmt1, yFmt2, yFmt1Tick = null) {
+function makeMultiChart(id, yFmt1, yFmt2, yFmt1Tick = null, yFmt2Tick = null) {
   const ctx = $(id).getContext("2d");
   return new Chart(ctx, {
     type: "line",
@@ -769,7 +770,7 @@ function makeMultiChart(id, yFmt1, yFmt2, yFmt1Tick = null) {
         y2: {
           type: "linear",
           position: "right",
-          ticks: { callback: v => yFmt2(v) },
+          ticks: { callback: v => (yFmt2Tick || yFmt2)(v) },
           title: { display: true, text: "Fees" },
           grid: { drawOnChartArea: false }
         }
@@ -786,7 +787,7 @@ function initCharts() {
   // Chart.defaults (color, borderColor, font) are set by initTheme() before this runs
   charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS,  undefined, fmtGPSTick);
   charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff, undefined, fmtDiffTick);
-  charts.activity   = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee, v => fmt(v,0));
+  charts.activity   = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee, v => fmt(v,0), fmtFeeTick);
 }
 
 // Range state

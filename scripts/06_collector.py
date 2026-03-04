@@ -1029,9 +1029,21 @@ def export_all_json():
     hr_hourly = conn.execute(
         "SELECT timestamp, hashrate FROM blocks WHERE bucket='hourly' AND hashrate > 0 ORDER BY timestamp"
     ).fetchall()
-    hr_recent = conn.execute(
-        "SELECT timestamp, hashrate FROM blocks WHERE bucket='recent' AND hashrate > 0 ORDER BY timestamp"
+    # Per-block hashrate has extreme variance because Grin timestamps have 1-second
+    # resolution — a block mined in 1s shows 60× the average hashrate (e.g. 600 kG/s
+    # instead of 10 kG/s).  Smooth with a 10-block rolling window so the Day chart
+    # reflects ~10 minutes of hashrate rather than a single inter-block interval.
+    recent_td = conn.execute(
+        "SELECT timestamp, total_diff FROM blocks WHERE bucket='recent' AND total_diff > 0 ORDER BY timestamp"
     ).fetchall()
+    SMOOTH_N = 10
+    hr_recent = []
+    for i in range(len(recent_td)):
+        j = max(0, i - SMOOTH_N)
+        dt = recent_td[i][0] - recent_td[j][0]
+        dd = recent_td[i][1] - recent_td[j][1]
+        if dt > 0 and dd > 0:
+            hr_recent.append((recent_td[i][0], round(dd * CUCKOO_CYCLE / dt / C32_RATE, 2)))
 
     for metric, mul in (("hashrate", 1), ("difficulty", DIFF_MUL)):
         _write_json(f"{metric}.json", {

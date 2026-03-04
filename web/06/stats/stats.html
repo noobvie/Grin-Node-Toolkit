@@ -626,6 +626,20 @@ const fetchJSON = async url => {
 };
 const tryFetchJSON = async url => { try { return await fetchJSON(url); } catch { return null; } };
 
+// Aggregate hourly [[ts,v],...] data down to one averaged point per calendar day.
+// Used in Year and All Time views so the last 30 days of hourly data don't appear
+// 24× denser than the older daily data.
+function aggToDaily(pts) {
+  const byDay = new Map();
+  (pts || []).forEach(([ts, v]) => {
+    const dk = Math.floor(ts / 86400) * 86400;
+    if (!byDay.has(dk)) byDay.set(dk, [0, 0]);
+    const [s, c] = byDay.get(dk);
+    byDay.set(dk, [s + v, c + 1]);
+  });
+  return [...byDay.entries()].map(([dk, [s, c]]) => [dk, s / c]);
+}
+
 function makeLineChart(id, label, color, yFmt, suggestedMax) {
   const ctx = $(id).getContext("2d");
   return new Chart(ctx, {
@@ -767,15 +781,15 @@ function updateChartData(chart, json, range) {
   let pts;
   const nowMs = Date.now();
   // "recent" is raw per-block — only use it for Day view.
-  // Wider views use hourly/daily averages so the Y-axis stays consistent
-  // and individual high-difficulty blocks don't distort the entire chart.
+  // "hourly" (24 pts/day) is aggregated to daily resolution for Year/All views so
+  // the last 30 days don't appear 24× denser than older daily data.
   if (range === "all") {
-    pts = [...(json.daily||[]), ...(json.hourly||[])];
+    pts = [...(json.daily||[]), ...aggToDaily(json.hourly||[])];
   } else if (range === "year") {
     const cutoff = nowMs - 365 * 86400000;
     pts = [
       ...(json.daily||[]).filter(([ts]) => ts*1000 >= cutoff),
-      ...(json.hourly||[]),
+      ...aggToDaily(json.hourly||[]),
     ];
   } else if (range === "month") {
     pts = [...(json.hourly||[])];
@@ -799,16 +813,15 @@ function updateActivityChart(txJson, feeJson, range, metric) {
   
   const filterByRange = (json) => {
     // "recent" is raw per-block data — only use it for the Day view.
-    // All wider views use hourly/daily averages (same unit: avg tx per block)
-    // so the Y axis stays on a consistent scale and the recent boundary
-    // doesn't produce a false spike.
+    // For Year/All views, aggregate hourly to daily resolution so the last
+    // 30 days don't appear 24× denser than the older daily averages.
     if (range === "all") {
-      return [...(json.daily||[]), ...(json.hourly||[])];
+      return [...(json.daily||[]), ...aggToDaily(json.hourly||[])];
     } else if (range === "year") {
       const cutoff = nowMs - 365 * 86400000;
       return [
         ...(json.daily||[]).filter(([ts]) => ts*1000 >= cutoff),
-        ...(json.hourly||[]),
+        ...aggToDaily(json.hourly||[]),
       ];
     } else if (range === "month") {
       return [...(json.hourly||[])];

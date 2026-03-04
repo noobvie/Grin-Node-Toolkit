@@ -1065,13 +1065,18 @@ def export_all_json():
 
     # Recent: 30-block rolling window (~30 minutes) to smooth out 1-second timestamp
     # resolution variance while still showing meaningful sub-hour hashrate trends.
+    # Order by height (not timestamp) because Grin timestamps can be non-monotonic
+    # (miners set them within protocol bounds), which would corrupt the dt calculation.
+    # Start from index SMOOTH_N so every point always has a full 30-block window —
+    # the clamped j=0 warm-up phase produces spikes when early blocks share the same
+    # second timestamp (dt→0 while dd spans multiple blocks).
     recent_td = conn.execute(
-        "SELECT timestamp, total_diff FROM blocks WHERE bucket='recent' AND total_diff > 0 ORDER BY timestamp"
+        "SELECT timestamp, total_diff FROM blocks WHERE bucket='recent' AND total_diff > 0 ORDER BY height"
     ).fetchall()
     SMOOTH_N = 30
     hr_recent = []
-    for i in range(len(recent_td)):
-        j = max(0, i - SMOOTH_N)
+    for i in range(SMOOTH_N, len(recent_td)):
+        j = i - SMOOTH_N
         dt = recent_td[i][0] - recent_td[j][0]
         dd = recent_td[i][1] - recent_td[j][1]
         if dt > 0 and dd > 0:
@@ -1102,13 +1107,13 @@ def export_all_json():
             (cutoff_24h,),
         ).fetchall()
         hourly_raw = conn.execute(
-            f"SELECT (timestamp/3600)*3600 as bucket_ts, SUM({col})*1.0/COUNT(*) "
+            f"SELECT (timestamp/3600)*3600 as bucket_ts, SUM({col}) "
             f"FROM block_stats WHERE timestamp >= ? "
             f"GROUP BY bucket_ts ORDER BY bucket_ts",
             (cutoff_30d,),
         ).fetchall()
         daily_raw = conn.execute(
-            f"SELECT (timestamp/86400)*86400 as bucket_ts, SUM({col})*1.0/COUNT(*) "
+            f"SELECT (timestamp/86400)*86400 as bucket_ts, SUM({col}) "
             f"FROM block_stats WHERE timestamp < ? "
             f"GROUP BY bucket_ts ORDER BY bucket_ts",
             (cutoff_30d,),
@@ -1116,8 +1121,8 @@ def export_all_json():
 
         _write_json(f"{metric}.json", {
             "updated": ts_now,
-            "daily":   [[r[0], round(r[1], 4) if r[1] is not None else 0] for r in daily_raw],
-            "hourly":  [[r[0], round(r[1], 4) if r[1] is not None else 0] for r in hourly_raw],
+            "daily":   [[r[0], r[1] if r[1] is not None else 0] for r in daily_raw],
+            "hourly":  [[r[0], r[1] if r[1] is not None else 0] for r in hourly_raw],
             "recent":  [[r[0], r[1]] for r in recent],
         })
 

@@ -626,10 +626,10 @@ const fetchJSON = async url => {
 };
 const tryFetchJSON = async url => { try { return await fetchJSON(url); } catch { return null; } };
 
-// Aggregate hourly [[ts,v],...] data down to one averaged point per calendar day.
-// Used in Year and All Time views so the last 30 days of hourly data don't appear
-// 24× denser than the older daily data.
-function aggToDaily(pts) {
+// Aggregate hourly [[ts,v],...] data down to one point per calendar day.
+// sum=false (default): average — used for hashrate/difficulty (rate metrics).
+// sum=true: total — used for transactions/fees (count/amount metrics).
+function aggToDaily(pts, sum = false) {
   const byDay = new Map();
   (pts || []).forEach(([ts, v]) => {
     const dk = Math.floor(ts / 86400) * 86400;
@@ -637,7 +637,7 @@ function aggToDaily(pts) {
     const [s, c] = byDay.get(dk);
     byDay.set(dk, [s + v, c + 1]);
   });
-  return [...byDay.entries()].map(([dk, [s, c]]) => [dk, s / c]);
+  return [...byDay.entries()].map(([dk, [s, c]]) => [dk, sum ? s : s / c]);
 }
 
 function makeLineChart(id, label, color, yFmt, suggestedMax) {
@@ -725,7 +725,7 @@ function makeMultiChart(id, yFmt1, yFmt2) {
       animation: false,
       interaction: { mode: "index", intersect: false },
       plugins: {
-        legend: { display: true, position: "top" },
+        legend: { display: false },
         tooltip: {
           callbacks: {
             label: ctx => {
@@ -814,14 +814,15 @@ function updateActivityChart(txJson, feeJson, range, metric) {
   const filterByRange = (json) => {
     // "recent" is raw per-block data — only use it for the Day view.
     // For Year/All views, aggregate hourly to daily resolution so the last
-    // 30 days don't appear 24× denser than the older daily averages.
+    // 30 days don't appear 24× denser than the older daily data.
+    // sum=true: hourly values are totals (tx count / fee amount), so daily = sum of hours.
     if (range === "all") {
-      return [...(json.daily||[]), ...aggToDaily(json.hourly||[])];
+      return [...(json.daily||[]), ...aggToDaily(json.hourly||[], true)];
     } else if (range === "year") {
       const cutoff = nowMs - 365 * 86400000;
       return [
         ...(json.daily||[]).filter(([ts]) => ts*1000 >= cutoff),
-        ...aggToDaily(json.hourly||[]),
+        ...aggToDaily(json.hourly||[], true),
       ];
     } else if (range === "month") {
       return [...(json.hourly||[])];

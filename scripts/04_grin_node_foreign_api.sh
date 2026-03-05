@@ -710,7 +710,7 @@ disable_testnet_stratum() { _disable_stratum testnet "$STRATUM_PORT_TESTNET" "$N
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  Grin Node Services Manager${RESET}"
+    echo -e "${BOLD}${CYAN}  04) Grin Node Services Manager${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     show_all_status
 

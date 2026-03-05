@@ -29,7 +29,7 @@ commits to stay within ~500MB RAM. If you get "Killed (137)" errors:
 
 Usage (commands):
     python3 06_collector.py --init-db            Create DB schema only
-    python3 06_collector.py --init-history       Backfill ENTIRE chain (headers + all TX/fees, 30+ min)
+    python3 06_collector.py --init-history       Backfill ENTIRE chain (headers + all TX/fees, 6 hours)
     python3 06_collector.py --update             Fetch new blocks + TX stats (incremental)
     python3 06_collector.py --peers-only         Update peer geolocation only
     python3 06_collector.py --backfill-stats     Fetch last 180 days (default)

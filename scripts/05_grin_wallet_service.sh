@@ -315,11 +315,30 @@ init_wallet() {
     info "Binary : $WALLET_BIN"
     info "Dir    : $WALLET_DIR"
     echo ""
-    info "Running grin-wallet init inline — you will be prompted to enter and confirm a wallet password."
+
+    # Capture password here so grin-wallet doesn't prompt (avoids TTY conflicts in menu)
+    local wallet_pass wallet_pass2
+    read -rs -p "  Enter wallet password (min 5 chars): " wallet_pass; echo ""
+    read -rs -p "  Confirm wallet password:              " wallet_pass2; echo ""
     echo ""
 
-    cd "$WALLET_DIR" && "$WALLET_BIN" --top-level-dir "$WALLET_DIR" init
+    if [[ "$wallet_pass" != "$wallet_pass2" ]]; then
+        error "Passwords do not match."
+        unset wallet_pass wallet_pass2
+        return
+    fi
+    if [[ ${#wallet_pass} -lt 5 ]]; then
+        warn "Password must be at least 5 characters."
+        unset wallet_pass wallet_pass2
+        return
+    fi
+
+    info "Initializing wallet — seed phrase will appear below, write it down safely!"
+    echo ""
+
+    cd "$WALLET_DIR" && "$WALLET_BIN" --top-level-dir "$WALLET_DIR" -p "$wallet_pass" init
     local rc=$?
+    unset wallet_pass wallet_pass2
     echo ""
 
     if [[ $rc -ne 0 || ! -f "$GRIN_WALLET_TOML" ]]; then

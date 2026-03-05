@@ -1475,8 +1475,8 @@ show_main_menu() {
     echo -e "${BOLD}${CYAN} 03) Grin Node Share & Schedule Manager${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -e "${BOLD}${YELLOW} Note that sharing script below will stop your Grin node ${RESET}"
-    echo -e "${BOLD}${YELLOW} and interrupt addons services like Grin explorer/Global health... ${RESET}"
-    echo ""
+    echo -e "${BOLD}${YELLOW} and interrupt addons services like Grin explorer/Global health/mining... ${RESET}"
+    echo ""echo -e "${BOLD}${YELLOW} Grin process must be running to let the script schedule jobs for you. ${RESET}"
     show_current_schedule
     echo -e "${BOLD}Options:${RESET}"
     echo ""

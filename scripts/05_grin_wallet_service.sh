@@ -608,7 +608,7 @@ configure_firewall_foreign() {
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  Grin Wallet Service${RESET}"
+    echo -e "${BOLD}${CYAN} 05) GRIN WALLET SERVICE ${RESET}"
     echo -e "${BOLD}${GREEN}  Disclaimer: Always store or write your seed key safe!${RESET}"
     echo -e "${BOLD}${YELLOW}  This tool is for testing and development purpose! ${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"

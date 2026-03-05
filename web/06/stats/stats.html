@@ -1,0 +1,1150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Grin Network Stats — Hashrate, Difficulty &amp; Blockchain Data</title>
+<meta name="description" content="Live Grin network statistics: real-time hashrate (GPS), mining difficulty, block height, coin supply, annual inflation rate, connected peers, node version distribution, transactions per block, and fee history. Monitor the Grin (ツ) MimbleWimble blockchain.">
+<meta name="keywords" content="grin network stats, grin hashrate, grin mining difficulty, grin block height, grin blockchain statistics, grin node monitor, grin coin supply, grin inflation rate, grin GPS, grin transactions, grin fees, mimblewimble stats, grin cryptocurrency data, grin blockchain explorer, grin network health, grin mining monitor, grin node version, cuckatoo32">
+<meta name="robots" content="index, follow">
+<meta property="og:title" content="Grin Network Stats — Hashrate, Difficulty &amp; Blockchain Data">
+<meta property="og:description" content="Real-time Grin network stats: hashrate (GPS), mining difficulty, block height, coin supply, inflation, and transaction history. Live MimbleWimble blockchain data.">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Grin Network Stats — Hashrate &amp; Difficulty">
+<meta name="twitter:description" content="Live Grin blockchain stats: hashrate, difficulty, block height, coin supply, inflation rate, and peer count. Real-time MimbleWimble network data.">
+<link rel="icon" href="grin-logo.svg" type="image/svg+xml">
+<script src="chart.min.js"></script>
+<script src="chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+  :root {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --border:    #30363d;
+    --text:      #e6edf3;
+    --muted:     #8b949e;
+    --grin:      #ff9900;
+    --blue:      #58a6ff;
+    --green:     #3fb950;
+    --purple:    #bc8cff;
+    --red:       #f85149;
+    --chart-h:   260px;
+  }
+  /* ── Light theme ─────────────────────────────────────────────────────────── */
+  html[data-theme="light"] {
+    --bg:      #f6f8fa;
+    --surface: #ffffff;
+    --border:  #d0d7de;
+    --text:    #24292f;
+    --muted:   #656d76;
+    --grin:    #bf6800;
+    --blue:    #0969da;
+    --green:   #1a7f37;
+    --purple:  #8250df;
+    --red:     #cf222e;
+  }
+  html[data-theme="light"] .pill-btc { color: #cf222e; border-color: #cf222e; background: rgba(207,34,46,0.08); }
+  /* ── Matrix theme ────────────────────────────────────────────────────────── */
+  html[data-theme="matrix"] {
+    --bg:      #000000;
+    --surface: #001500;
+    --border:  #004400;
+    --text:    #00ff41;
+    --muted:   #009922;
+    --grin:    #00ff41;
+    --blue:    #00e5ff;
+    --green:   #00ff41;
+    --purple:  #00e5ff;
+    --red:     #ff4444;
+  }
+  html[data-theme="matrix"] body { font-family: 'Courier New', Courier, monospace; }
+  html[data-theme="matrix"] body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px);
+    pointer-events: none;
+    z-index: 9998;
+  }
+  /* ── Harry Potter theme ──────────────────────────────────────────────────── */
+  html[data-theme="hp"] {
+    --bg:      #0d0221;
+    --surface: #1a0545;
+    --border:  #4a1a8a;
+    --text:    #f0e68c;
+    --muted:   #b8a0d4;
+    --grin:    #ffd700;
+    --blue:    #7b68ee;
+    --green:   #50c878;
+    --purple:  #da70d6;
+    --red:     #ff6347;
+  }
+  html[data-theme="hp"] body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 0%, rgba(100,40,200,0.18) 0%, transparent 65%);
+    pointer-events: none;
+    z-index: 9998;
+  }
+
+  /* ── Theme controls ──────────────────────────────────────────────────────── */
+  .mode-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 28px; height: 26px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+    flex-shrink: 0;
+    padding: 0;
+  }
+  .mode-toggle:hover { border-color: var(--grin); color: var(--text); }
+  .theme-picker { position: relative; }
+  .theme-pill-btn {
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .theme-pill-btn:hover { border-color: var(--grin); color: var(--text); }
+  .theme-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    display: none;
+    z-index: 500;
+    min-width: 145px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  .theme-menu.open { display: block; }
+  .tm-item {
+    display: block; width: 100%;
+    padding: 8px 14px;
+    background: transparent; border: none;
+    color: var(--text); font-size: 12px;
+    text-align: left; cursor: pointer;
+    transition: background 0.1s;
+  }
+  .tm-item:hover { background: rgba(255,153,0,0.1); color: var(--grin); }
+  .tm-item.active { color: var(--grin); font-weight: 600; }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* ── Header ─────────────────────────────────────────────────────────────── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 12px;
+  }
+  .logo { display: flex; align-items: center; gap: 8px; }
+  .logo-img { height: 26px; width: 26px; flex-shrink: 0; }
+  .logo-dot {
+    width: 8px; height: 8px;
+    background: var(--grin);
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.3; }
+  }
+  .logo h1 { font-size: 16px; font-weight: 600; color: var(--text); }
+  .logo h1 span { color: var(--grin); }
+  .header-right { display: flex; align-items: center; justify-self: end; flex-wrap: wrap; }
+  .stat-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .pill {
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid;
+    white-space: nowrap;
+  }
+  .pill-peers    { color: var(--grin);  border-color: var(--grin);  background: rgba(255,153,0,0.08); }
+  .pill-country  { color: var(--blue);  border-color: var(--blue);  background: rgba(88,166,255,0.08); }
+  .pill-price    { color: var(--green); border-color: var(--green); background: rgba(63,185,80,0.08); }
+  .pill-btc      { color: #ffd700;      border-color: #ffd700;      background: rgba(255,215,0,0.08); }
+  .pill-sep { color: var(--border); font-size: 14px; }
+  nav { display: flex; gap: 6px; }
+  .nav-btn {
+    color: var(--muted);
+    text-decoration: none;
+    padding: 5px 13px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .nav-btn:hover { color: var(--text); border-color: var(--muted); }
+  .nav-btn.active {
+    color: var(--grin);
+    border-color: var(--grin);
+    background: rgba(255,153,0,0.1);
+  }
+  #last-updated { color: var(--muted); font-size: 12px; }
+
+  /* ── Stats bar ───────────────────────────────────────────────────────────── */
+  .stats-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .stat-item {
+    background: var(--surface);
+    padding: 14px 20px;
+  }
+  .stat-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat-value { font-size: 22px; font-weight: 700; color: var(--text); margin-top: 2px; }
+  .stat-value.grin  { color: var(--grin); }
+  .stat-value.blue  { color: var(--blue); }
+  .stat-value.green { color: var(--green); }
+
+  /* ── Main layout ─────────────────────────────────────────────────────────── */
+  main { padding: 24px; max-width: 1280px; margin: 0 auto; }
+
+  /* ── Chart cards ─────────────────────────────────────────────────────────── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .card-title .dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+  }
+  .dot-grin   { background: var(--grin); }
+  .dot-blue   { background: var(--blue); }
+  .dot-green  { background: var(--green); }
+  .dot-purple { background: var(--purple); }
+
+  /* ── Time range buttons ──────────────────────────────────────────────────── */
+  .range-btns { display: flex; gap: 4px; }
+  .range-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .range-btn:hover  { border-color: var(--grin); color: var(--text); }
+  .range-btn.active { background: var(--grin); border-color: var(--grin); color: #000; font-weight: 600; }
+
+  /* ── Metric toggle buttons ───────────────────────────────────────────────── */
+  .metric-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 5px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .metric-toggle:hover { border-color: var(--text); color: var(--text); }
+  .metric-toggle.active {
+    background: rgba(88,166,255,0.15);
+    border-color: var(--blue);
+    color: var(--blue);
+    font-weight: 600;
+  }
+  .metric-toggle .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  /* ── Canvas wrapper ──────────────────────────────────────────────────────── */
+  .chart-wrap { position: relative; height: var(--chart-h); }
+
+  /* ── Two-column grid ─────────────────────────────────────────────────────── */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  @media (max-width: 768px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  /* ── Versions donut ──────────────────────────────────────────────────────── */
+  .versions-wrap {
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    flex-wrap: wrap;
+  }
+  .donut-wrap { position: relative; width: 180px; height: 180px; flex-shrink: 0; }
+  .donut-center {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .donut-center .dc-num { font-size: 28px; font-weight: 700; color: var(--text); }
+  .donut-center .dc-lbl { font-size: 11px; color: var(--muted); }
+  .version-legend { flex: 1; min-width: 200px; }
+  .vl-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+  }
+  .vl-row:last-child { border-bottom: none; }
+  .vl-dot {
+    width: 10px; height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .vl-name { flex: 1; color: var(--text); font-size: 13px; }
+  .vl-count { color: var(--muted); font-size: 12px; }
+  .vl-pct { color: var(--grin); font-size: 12px; font-weight: 600; min-width: 36px; text-align: right; }
+
+  /* ── Footer ──────────────────────────────────────────────────────────────── */
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 20px 24px;
+    border-top: 1px solid var(--border);
+    margin-top: 24px;
+  }
+  footer a { color: var(--grin); text-decoration: none; margin: 0 8px; }
+  footer a:hover { color: var(--text); }
+
+  /* ── Mobile responsiveness ───────────────────────────────────────────────── */
+  @media (max-width: 640px) {
+    :root { --chart-h: 200px; }
+
+    header { grid-template-columns: 1fr; padding: 10px 14px; gap: 8px; }
+    .logo h1 { font-size: 14px; }
+    nav { justify-self: center; }
+    .header-right { justify-self: auto; }
+    .nav-btn { padding: 4px 9px; font-size: 11px; }
+    #last-updated { font-size: 11px; }
+
+    .stats-bar { grid-template-columns: repeat(2, 1fr); }
+    .stat-item { padding: 10px 14px; }
+    .stat-value { font-size: 18px; }
+
+    main { padding: 12px; }
+    .card { padding: 12px; margin-bottom: 12px; }
+    .card-title { font-size: 13px; }
+    .range-btn { padding: 3px 7px; font-size: 11px; }
+
+    .grid-2 { grid-template-columns: 1fr; gap: 12px; }
+
+    .versions-wrap { flex-direction: column; gap: 16px; }
+    .donut-wrap { width: 150px; height: 150px; margin: 0 auto; }
+    .version-legend { min-width: unset; width: 100%; }
+
+    footer { padding: 14px; }
+  }
+
+  /* ── Loading overlay ─────────────────────────────────────────────────────── */
+  #loading {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 999;
+    gap: 12px;
+  }
+  .spinner {
+    width: 36px; height: 36px;
+    border: 3px solid var(--border);
+    border-top-color: var(--grin);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading p { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <p>Loading Grin network data…</p>
+</div>
+
+<header>
+  <div class="logo">
+    <img src="grin-logo.svg" class="logo-img" alt="Grin" onerror="this.style.display='none'">
+    <div class="logo-dot"></div>
+    <h1>Global <span>Grin</span> Health</h1>
+  </div>
+  <nav>
+    <a href="stats.html" class="nav-btn active"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><polyline points="1,11 5,6 8,8 13,2"/><line x1="1" y1="13" x2="13" y2="13"/></svg>Network Stats</a>
+    <a href="index.html" class="nav-btn"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="7" cy="7" r="5.5"/><path d="M7 1.5c-2 2-2.5 3.5-2.5 5.5s.5 3.5 2.5 5.5M7 1.5c2 2 2.5 3.5 2.5 5.5S9 11 7 12.5"/><line x1="1.5" y1="7" x2="12.5" y2="7"/></svg>Peer Map</a>
+  </nav>
+  <div class="header-right">
+    <div class="stat-pills">
+      <span class="pill pill-peers"   id="h-peers">— peers</span>
+      <span class="pill-sep">·</span>
+      <span class="pill pill-country" id="h-countries">— countries</span>
+      <span class="pill-sep">·</span>
+      <span class="pill pill-price"   id="h-price">$—</span>
+      <span class="pill-sep">·</span>
+      <span class="pill pill-btc"     id="h-btc-price">₿—</span>
+      <span class="pill-sep">|</span>
+      <button class="mode-toggle" id="mode-toggle" title="Toggle dark/light mode">🌙</button>
+      <div class="theme-picker">
+        <button class="theme-pill-btn" id="theme-pill-btn">🎨</button>
+        <div class="theme-menu" id="theme-menu">
+          <button class="tm-item" data-theme="dark">◼ Default</button>
+          <button class="tm-item" data-theme="light">◻ Light</button>
+          <button class="tm-item" data-theme="matrix">▓ Matrix</button>
+          <button class="tm-item" data-theme="hp">✦ Harry Potter</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ── Stats bar ─────────────────────────────────────────────────────────── -->
+<div class="stats-bar">
+  <div class="stat-item">
+    <div class="stat-label">Block Height</div>
+    <div class="stat-value" id="s-height">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">Network Hashrate</div>
+    <div class="stat-value grin" id="s-hashrate">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">Difficulty</div>
+    <div class="stat-value blue" id="s-difficulty">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">Coin Supply</div>
+    <div class="stat-value" id="s-supply">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">Inflation Rate</div>
+    <div class="stat-value" id="s-inflation">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-label">Connected Peers</div>
+    <div class="stat-value green" id="s-peers">—</div>
+  </div>
+</div>
+
+<div id="last-updated" style="text-align:right;padding:3px 24px;font-size:11px;color:var(--muted);"></div>
+
+<!-- ── Main content ─────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- Hashrate chart -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-grin"></span>Network Hashrate (GPS)</div>
+      <div class="range-btns" id="hr-range">
+        <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="week">Week</button>
+        <button class="range-btn" data-r="month">Month</button>
+        <button class="range-btn active" data-r="year">Year</button>
+        <button class="range-btn" data-r="all">All Time</button>
+      </div>
+    </div>
+    <div class="chart-wrap"><canvas id="chart-hashrate"></canvas></div>
+  </div>
+
+  <!-- Difficulty chart -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-blue"></span>Network Difficulty</div>
+      <div class="range-btns" id="diff-range">
+        <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="week">Week</button>
+        <button class="range-btn" data-r="month">Month</button>
+        <button class="range-btn active" data-r="year">Year</button>
+        <button class="range-btn" data-r="all">All Time</button>
+      </div>
+    </div>
+    <div class="chart-wrap"><canvas id="chart-difficulty"></canvas></div>
+  </div>
+
+  <!-- Transactions + Fees (Combined) -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-green"></span>Block Activity</div>
+      <div class="range-btns" id="activity-range">
+        <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="week">Week</button>
+        <button class="range-btn" data-r="month">Month</button>
+        <button class="range-btn active" data-r="year">Year</button>
+        <button class="range-btn" data-r="all">All Time</button>
+      </div>
+    </div>
+    <div style="display: flex; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--border); flex-wrap: wrap;">
+      <button class="metric-toggle active" data-metric="both" title="Show Both Metrics">
+        <span class="dot dot-blue"></span>Both
+      </button>
+      <button class="metric-toggle" data-metric="tx" title="Transactions per Block">
+        <span class="dot dot-green"></span>Transactions
+      </button>
+      <button class="metric-toggle" data-metric="fee" title="Fees per Block">
+        <span class="dot dot-purple"></span>Fees
+      </button>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart-activity"></canvas>
+      <div id="activity-no-data" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column;gap:8px;pointer-events:none;">
+        <span style="color:var(--muted);font-size:13px;">No block stats yet</span>
+        <span style="color:var(--muted);font-size:12px;">Run <code style="background:rgba(255,153,0,0.1);color:var(--grin);padding:2px 6px;border-radius:3px;font-family:monospace">--backfill-stats</code> to import transaction history</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Node versions -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-grin"></span>Node Version Distribution</div>
+      <span id="versions-sample" style="color:var(--muted);font-size:12px;"></span>
+    </div>
+    <div class="versions-wrap">
+      <div class="donut-wrap">
+        <canvas id="chart-versions"></canvas>
+        <div class="donut-center">
+          <span class="dc-num" id="donut-total">—</span>
+          <span class="dc-lbl">peers</span>
+        </div>
+      </div>
+      <div class="version-legend" id="version-legend"></div>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  Data sourced from local Grin node &nbsp;·&nbsp;
+  <a href="https://grin.mw/"                             target="_blank" rel="noopener">grin.mw</a>
+  <a href="https://forum.grin.mw/"                       target="_blank" rel="noopener">Forum</a>
+  <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>
+</footer>
+
+<script>
+// ── Config ───────────────────────────────────────────────────────────────────
+const DATA = "data/";
+const REFRESH_MS = 5 * 60 * 1000;  // re-fetch every 5 minutes
+const VERSION_COLORS = [
+  "#ff9900","#58a6ff","#3fb950","#bc8cff","#f85149","#d29922","#79c0ff",
+];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const fmtNum = (n, d=0) => {
+  const [int, dec] = Number(n).toFixed(d).split(".");
+  const intFmt = int.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return d > 0 ? intFmt + "," + dec : intFmt;
+};
+const fmt = (n, d=0) => fmtNum(n, d);
+const fmtGPS = v => {
+  if (v >= 1e6) return fmtNum(v/1e6, 2) + " MG/s";
+  if (v >= 1e3) return fmtNum(v/1e3, 2) + " kG/s";
+  return fmtNum(v, 2) + " G/s";
+};
+// Tick-only variants: no trailing decimals (cleaner axis labels)
+const fmtGPSTick = v => {
+  if (v >= 1e6) return fmtNum(v/1e6, 0) + " MG/s";
+  if (v >= 1e3) return fmtNum(v/1e3, 0) + " kG/s";
+  return fmtNum(v, 0) + " G/s";
+};
+const fmtDiffTick = v => {
+  if (v >= 1e9) return fmtNum(v/1e9, 0) + "G";
+  if (v >= 1e6) return fmtNum(v/1e6, 0) + "M";
+  if (v >= 1e3) return fmtNum(v/1e3, 0) + "K";
+  return fmtNum(v, 0);
+};
+const fmtSupply = v => {
+  if (v >= 1e6) return fmtNum(v/1e6, 2) + "M ツ";
+  if (v >= 1e3) return fmtNum(v/1e3, 1) + "K ツ";
+  return fmtNum(v, 0) + " ツ";
+};
+const fmtDiff = v => {
+  if (v >= 1e9) return fmtNum(v/1e9, 3) + "G";
+  if (v >= 1e6) return fmtNum(v/1e6, 2) + "M";
+  if (v >= 1e3) return fmtNum(v/1e3, 1) + "K";
+  return fmtNum(v, 0);
+};
+// v is in nGrin; always display in Grin for clarity
+const fmtFee     = v => fmtNum(v / 1e9, 2) + " Grin";
+const fmtFeeTick = v => {
+  const g = v / 1e9;
+  if (g >= 10)  return fmtNum(g, 0) + " Grin";   // daily totals (Year/All Time)
+  if (g >= 0.1) return fmtNum(g, 2) + " Grin";   // hourly totals (Month/Week)
+  return fmtNum(g, 3) + " Grin";                  // per-block (Day)
+};
+const timeAgo = ts => {
+  const s = Math.floor(Date.now()/1000) - ts;
+  if (s < 60)   return s + "s ago";
+  if (s < 3600) return Math.floor(s/60) + "m ago";
+  return Math.floor(s/3600) + "h ago";
+};
+const fetchJSON = async url => {
+  const r = await fetch(url + "?t=" + Date.now());
+  if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+  return r.json();
+};
+const tryFetchJSON = async url => { try { return await fetchJSON(url); } catch { return null; } };
+
+// Aggregate hourly [[ts,v],...] data down to one point per calendar day.
+// sum=false (default): average — used for hashrate/difficulty (rate metrics).
+// sum=true: total — used for transactions/fees (count/amount metrics).
+function aggToDaily(pts, sum = false) {
+  const byDay = new Map();
+  (pts || []).forEach(([ts, v]) => {
+    const dk = Math.floor(ts / 86400) * 86400;
+    if (!byDay.has(dk)) byDay.set(dk, [0, 0]);
+    const [s, c] = byDay.get(dk);
+    byDay.set(dk, [s + v, c + 1]);
+  });
+  return [...byDay.entries()].map(([dk, [s, c]]) => [dk, sum ? s : s / c]);
+}
+
+function makeLineChart(id, label, color, yFmt, suggestedMax, yFmtTick = null) {
+  const ctx = $(id).getContext("2d");
+  return new Chart(ctx, {
+    type: "line",
+    data: {
+      datasets: [{
+        label,
+        data: [],
+        borderColor: color,
+        backgroundColor: color + "18",
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.3,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => " " + yFmt(ctx.parsed.y),
+            title: items => {
+              const d = new Date(items[0].parsed.x);
+              return d.toLocaleString();
+            },
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: "time",
+          time: { tooltipFormat: "MMM d yyyy HH:mm" },
+          ticks: { maxTicksLimit: 8 },
+        },
+        y: {
+          ticks: { callback: v => (yFmtTick || yFmt)(v) },
+        }
+      }
+    }
+  });
+}
+
+function makeMultiChart(id, yFmt1, yFmt2, yFmt1Tick = null, yFmt2Tick = null) {
+  const ctx = $(id).getContext("2d");
+  return new Chart(ctx, {
+    type: "line",
+    data: {
+      datasets: [
+        {
+          label: "Transactions",
+          data: [],
+          borderColor: "#3fb950",
+          backgroundColor: "#3fb950" + "18",
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.3,
+          yAxisID: "y1",
+          hidden: false,
+        },
+        {
+          label: "Fees",
+          data: [],
+          borderColor: "#bc8cff",
+          backgroundColor: "#bc8cff" + "18",
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.3,
+          yAxisID: "y2",
+          hidden: false,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const fmt = ctx.datasetIndex === 0 ? yFmt1 : yFmt2;
+              return ctx.dataset.label + ": " + fmt(ctx.parsed.y);
+            },
+            title: items => {
+              const d = new Date(items[0].parsed.x);
+              return d.toLocaleString();
+            },
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: "time",
+          time: { tooltipFormat: "MMM d yyyy HH:mm" },
+          ticks: { maxTicksLimit: 8 },
+        },
+        y1: {
+          type: "linear",
+          position: "left",
+          ticks: { callback: v => (yFmt1Tick || yFmt1)(v) },
+          title: { display: true, text: "Transactions" }
+        },
+        y2: {
+          type: "linear",
+          position: "right",
+          ticks: { callback: v => (yFmt2Tick || yFmt2)(v) },
+          title: { display: true, text: "Fees" },
+          grid: { drawOnChartArea: false }
+        }
+      }
+    }
+  });
+}
+
+// ── Chart instances ───────────────────────────────────────────────────────────
+const charts = {};
+let activityMetric = "both";  // "tx", "fee", or "both"
+
+function initCharts() {
+  // Chart.defaults (color, borderColor, font) are set by initTheme() before this runs
+  charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS,  undefined, fmtGPSTick);
+  charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff, undefined, fmtDiffTick);
+  charts.activity   = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee, v => fmt(v,0), fmtFeeTick);
+}
+
+// Range state
+const rangeState = { hr: "year", diff: "year", activity: "year" };
+
+function updateChartData(chart, json, range) {
+  let pts;
+  const nowMs = Date.now();
+  // "recent" is raw per-block — only use it for Day view.
+  // "hourly" (24 pts/day) is aggregated to daily resolution for Year/All views so
+  // the last 30 days don't appear 24× denser than older daily data.
+  if (range === "all") {
+    pts = [...(json.daily||[]), ...aggToDaily(json.hourly||[])];
+  } else if (range === "year") {
+    const cutoff = nowMs - 365 * 86400000;
+    pts = [
+      ...(json.daily||[]).filter(([ts]) => ts*1000 >= cutoff),
+      ...aggToDaily(json.hourly||[]),
+    ];
+  } else if (range === "month") {
+    pts = [...(json.hourly||[])];
+  } else if (range === "week") {
+    const cutoff = nowMs - 7 * 86400000;
+    pts = (json.hourly||[]).filter(([ts]) => ts*1000 >= cutoff);
+  } else {                           // day
+    pts = [...(json.recent||[])];
+  }
+  // Deduplicate (later entries = more granular, overwrite coarser) then sort
+  const byTs = new Map();
+  pts.forEach(([ts, v]) => byTs.set(ts, v));
+  const data = [...byTs.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([ts, v]) => ({x: ts * 1000, y: v}));
+
+  chart.data.datasets[0].data = data;
+  chart.update("none");
+}
+
+function updateActivityChart(txJson, feeJson, range, metric) {
+  let txPts, feePts;
+  const nowMs = Date.now();
+  
+  const filterByRange = (json) => {
+    // "recent" is raw per-block data — only use it for the Day view.
+    // For Year/All views, aggregate hourly to daily resolution so the last
+    // 30 days don't appear 24× denser than the older daily data.
+    // sum=true: hourly values are totals (tx count / fee amount), so daily = sum of hours.
+    if (range === "all") {
+      return [...(json.daily||[]), ...aggToDaily(json.hourly||[], true)];
+    } else if (range === "year") {
+      const cutoff = nowMs - 365 * 86400000;
+      return [
+        ...(json.daily||[]).filter(([ts]) => ts*1000 >= cutoff),
+        ...aggToDaily(json.hourly||[], true),
+      ];
+    } else if (range === "month") {
+      return [...(json.hourly||[])];
+    } else if (range === "week") {
+      const cutoff = nowMs - 7 * 86400000;
+      return (json.hourly||[]).filter(([ts]) => ts*1000 >= cutoff);
+    } else {                          // day — raw per-block for high granularity
+      return [...(json.recent||[])];
+    }
+  };
+  
+  txPts = filterByRange(txJson);
+  feePts = filterByRange(feeJson);
+  
+  const byTs = (pts) => {
+    const map = new Map();
+    pts.forEach(([ts, v]) => map.set(ts, v));
+    return [...map.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([ts, v]) => ({x: ts * 1000, y: v}));
+  };
+  
+  const txData = byTs(txPts);
+  const feeData = byTs(feePts);
+
+  // Show no-data overlay when both datasets are empty
+  const noDataEl = $("activity-no-data");
+  if (noDataEl) noDataEl.style.display = (txData.length === 0 && feeData.length === 0) ? "flex" : "none";
+
+  charts.activity.data.datasets[0].data = txData;
+  charts.activity.data.datasets[1].data = feeData;
+  
+  // Update visibility based on metric selection
+  charts.activity.data.datasets[0].hidden = metric === "fee";
+  charts.activity.data.datasets[1].hidden = metric === "tx";
+  
+  charts.activity.update("none");
+}
+
+// ── Data store ────────────────────────────────────────────────────────────────
+let DATA_CACHE = {};
+
+async function loadAll() {
+  const [summary, hashrate, difficulty, transactions, fees, versions, peers] =
+    await Promise.all([
+      tryFetchJSON(DATA + "summary.json"),
+      tryFetchJSON(DATA + "hashrate.json"),
+      tryFetchJSON(DATA + "difficulty.json"),
+      tryFetchJSON(DATA + "transactions.json"),
+      tryFetchJSON(DATA + "fees.json"),
+      tryFetchJSON(DATA + "versions.json"),
+      tryFetchJSON(DATA + "peers.json"),
+    ]);
+
+  const anyData = summary || hashrate || difficulty;
+  if (!anyData) {
+    $("last-updated").textContent = "Data not available — run Import History (step 2) first";
+    return;
+  }
+
+  DATA_CACHE = { hashrate, difficulty, transactions, fees, versions };
+
+  // Stats bar
+  if (summary) {
+    $("s-height").textContent     = fmt(summary.tip_height);
+    $("s-hashrate").textContent   = fmtGPS(summary.current_hashrate);
+    $("s-difficulty").textContent = fmtDiff(summary.current_difficulty);
+    $("s-supply").textContent     = fmtSupply(summary.tip_height * 60);
+    $("last-updated").textContent = "Updated " + timeAgo(summary.updated);
+
+    // Grin inflation rate: 1 Grin/second constant emission
+    // Annual inflation % = (31,557,600 new Grins/yr) / current_supply × 100
+    const GRINS_PER_YEAR = 365.25 * 86400;   // 31,557,600
+    const supply         = summary.tip_height * 60;
+    if (supply > 0) {
+      const inflationPct = (GRINS_PER_YEAR / supply) * 100;
+      const currentYear  = new Date().getFullYear();
+      $("s-inflation").textContent = fmtNum(inflationPct, 1) + "% (" + currentYear + ")";
+    }
+  }
+  $("s-peers").textContent = peers ? fmt(peers.count) : "—";
+  if (peers && peers.peers) {
+    const countries = new Set(peers.peers.map(p => p.country).filter(Boolean));
+    $("h-peers").textContent     = `${fmt(peers.count)} active peers`;
+    $("h-countries").textContent = `${fmt(countries.size)} countries`;
+  }
+
+  // Charts (skipped if chart.min.js didn't load)
+  if (charts.hashrate   && hashrate)     updateChartData(charts.hashrate,   hashrate,     rangeState.hr);
+  if (charts.difficulty && difficulty)   updateChartData(charts.difficulty, difficulty,   rangeState.diff);
+  if (charts.activity   && transactions && fees) updateActivityChart(transactions, fees, rangeState.activity, activityMetric);
+
+  // Versions donut
+  if (versions) renderVersions(versions);
+}
+
+// ── Version donut ─────────────────────────────────────────────────────────────
+let versionChart = null;
+
+function renderVersions(data) {
+  const total = data.sampled_from || 0;
+  $("donut-total").textContent    = fmt(total);
+  $("versions-sample").textContent = `Sampled from ${fmt(total)} peer${total !== 1 ? "s" : ""}`;
+
+  const labels = data.versions.map(v => v.label);
+  const counts = data.versions.map(v => v.count);
+  const colors = labels.map((_, i) => VERSION_COLORS[i % VERSION_COLORS.length]);
+
+  if (typeof Chart === "undefined") return;  // chart.min.js not loaded
+  if (!versionChart) {
+    versionChart = new Chart($("chart-versions").getContext("2d"), {
+      type: "doughnut",
+      data: { labels, datasets: [{ data: counts, backgroundColor: colors, borderWidth: 0 }] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "72%",
+        animation: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed} nodes` }
+          }
+        }
+      }
+    });
+  } else {
+    versionChart.data.labels                     = labels;
+    versionChart.data.datasets[0].data           = counts;
+    versionChart.data.datasets[0].backgroundColor = colors;
+    versionChart.update("none");
+  }
+
+  // Legend
+  const leg = $("version-legend");
+  leg.innerHTML = data.versions.map((v, i) => {
+    const pct = total > 0 ? fmtNum((v.count / total) * 100, 1) : "0,0";
+    return `
+      <div class="vl-row">
+        <span class="vl-dot" style="background:${colors[i]}"></span>
+        <span class="vl-name">${v.label}</span>
+        <span class="vl-count">${fmt(v.count)}</span>
+        <span class="vl-pct">${pct}%</span>
+      </div>`;
+  }).join("");
+}
+
+// ── CoinGecko price (USD + BTC) ───────────────────────────────────────────────
+async function loadGrinPrice() {
+  try {
+    const r = await fetch(
+      "https://api.coingecko.com/api/v3/simple/price?ids=grin&vs_currencies=usd,btc"
+    );
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+
+    const priceUsd = data?.grin?.usd;
+    $("h-price").textContent = priceUsd != null ? "$" + fmtNum(priceUsd, 4) : "$—";
+
+    const priceBtc = data?.grin?.btc;
+    if (priceBtc != null) {
+      const sats = Math.round(priceBtc * 1e8);
+      $("h-btc-price").textContent = sats + " sat";
+    } else {
+      $("h-btc-price").textContent = "₿—";
+    }
+  } catch {
+    $("h-price").textContent     = "$—";
+    $("h-btc-price").textContent = "₿—";
+  }
+}
+
+// ── Theme management ──────────────────────────────────────────────────────────
+let currentTheme = localStorage.getItem("grin-theme") || "matrix";
+
+const THEME_CHART = {
+  dark:   { grid: "#21262d", tick: "#8b949e" },
+  light:  { grid: "#d0d7de", tick: "#656d76" },
+  matrix: { grid: "#004400", tick: "#009922" },
+  hp:     { grid: "#4a1a8a", tick: "#b8a0d4" },
+};
+
+function applyTheme(theme) {
+  currentTheme = theme;
+  localStorage.setItem("grin-theme", theme);
+  if (theme === "dark") {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    document.documentElement.setAttribute("data-theme", theme);
+  }
+
+  const modeBtn = $("mode-toggle");
+  if (modeBtn) modeBtn.textContent = theme === "light" ? "☀️" : "🌙";
+
+  document.querySelectorAll(".tm-item").forEach(b =>
+    b.classList.toggle("active", b.dataset.theme === theme)
+  );
+
+  // Update Chart.js defaults and all live charts
+  const tc = THEME_CHART[theme] || THEME_CHART.dark;
+  const monoFont = "'Courier New', Courier, monospace";
+  const sansFont = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  if (typeof Chart !== "undefined") {
+    Chart.defaults.borderColor = tc.grid;
+    Chart.defaults.color       = tc.tick;
+    Chart.defaults.font.family = theme === "matrix" ? monoFont : sansFont;
+    Object.values(charts).forEach(c => {
+      if (!c?.options?.scales) return;
+      Object.keys(c.options.scales).forEach(ax => {
+        c.options.scales[ax].grid  = { ...c.options.scales[ax].grid,  color: tc.grid };
+        c.options.scales[ax].ticks = { ...c.options.scales[ax].ticks, color: tc.tick };
+      });
+      c.update("none");
+    });
+  }
+}
+
+function initTheme() {
+  applyTheme(currentTheme);
+
+  $("mode-toggle").addEventListener("click", () => {
+    applyTheme(currentTheme === "light" ? "dark" : "light");
+  });
+
+  $("theme-pill-btn").addEventListener("click", e => {
+    e.stopPropagation();
+    $("theme-menu").classList.toggle("open");
+  });
+
+  document.addEventListener("click", () => $("theme-menu").classList.remove("open"));
+
+  document.querySelectorAll(".tm-item").forEach(btn => {
+    btn.addEventListener("click", () => {
+      applyTheme(btn.dataset.theme);
+      $("theme-menu").classList.remove("open");
+    });
+  });
+}
+
+// ── Range button wiring ───────────────────────────────────────────────────────
+function wireRangeGroup(groupId, chartKey, cacheKey) {
+  $(groupId).querySelectorAll(".range-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      $(groupId).querySelectorAll(".range-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      rangeState[chartKey] = btn.dataset.r;
+      
+      if (chartKey === "activity") {
+        if (DATA_CACHE.transactions && DATA_CACHE.fees) {
+          updateActivityChart(DATA_CACHE.transactions, DATA_CACHE.fees, rangeState.activity, activityMetric);
+        }
+      } else {
+        const chartMap = { hr: "hashrate", diff: "difficulty" };
+        if (DATA_CACHE[cacheKey]) {
+          updateChartData(charts[chartMap[chartKey]], DATA_CACHE[cacheKey], rangeState[chartKey]);
+        }
+      }
+    });
+  });
+}
+
+function wireMetricToggles() {
+  document.querySelectorAll(".metric-toggle").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".metric-toggle").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      activityMetric = btn.dataset.metric;
+      if (DATA_CACHE.transactions && DATA_CACHE.fees) {
+        updateActivityChart(DATA_CACHE.transactions, DATA_CACHE.fees, rangeState.activity, activityMetric);
+      }
+    });
+  });
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+async function boot() {
+  initTheme();   // apply saved theme before charts are created
+  wireRangeGroup("hr-range",      "hr",       "hashrate");
+  wireRangeGroup("diff-range",    "diff",     "difficulty");
+  wireRangeGroup("activity-range", "activity", "transactions");
+  wireMetricToggles();
+
+  try {
+    if (typeof Chart !== "undefined") initCharts();
+    else console.warn("chart.min.js not loaded — charts disabled");
+    await loadAll();
+  } catch (e) {
+    console.error("Boot error:", e);
+    $("last-updated").textContent = "Error loading data — check browser console";
+  } finally {
+    $("loading").style.display = "none";
+  }
+  setInterval(() => loadAll().catch(console.error), REFRESH_MS);
+  // Load price independently — don't block charts if CoinGecko is slow
+  loadGrinPrice();
+}
+
+document.addEventListener("DOMContentLoaded", boot);
+</script>
+</body>
+</html>

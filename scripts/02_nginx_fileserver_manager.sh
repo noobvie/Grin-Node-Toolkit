@@ -346,7 +346,7 @@ show_main_menu() {
     cat << "EOF"
 ╔════════════════════════════════════════════════════════════════╗
 ║                                                                ║
-║        Nginx File Server Management Script                    ║
+║     02)   Nginx File Server Management Script                  ║
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
 EOF

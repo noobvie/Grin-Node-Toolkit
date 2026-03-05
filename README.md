@@ -110,7 +110,22 @@ Grin Node Toolkit
 │   │   ├── 6) Configure nginx proxy           (wallet)
 │   │   ├── 7) Configure firewall rules        (port 3415)
 │   │   └── 0) Back
-│   ├── 6) Coming Soon
+│   ├── 6) Global Grin Health            → 06_global_grin_health.sh
+│   │   ├── A) Network Stats + Peer Map
+│   │   │   ├── A1) Install (Python collector, Chart.js, Globe.GL)
+│   │   │   ├── A2) Import full history (backfill from genesis)
+│   │   │   ├── A3) Start periodic updates (cron every 5 min)
+│   │   │   ├── A4) Stop updates
+│   │   │   ├── A5) Setup nginx (stats.yourdomain.com)
+│   │   │   └── A6) Status
+│   │   ├── B) Grin Explorer              (aglkm/grin-explorer — Rust + Rocket)
+│   │   │   ├── B1) Install (cargo build --release)
+│   │   │   ├── B2) Configure (Explorer.toml)
+│   │   │   ├── B3) Start
+│   │   │   ├── B4) Stop
+│   │   │   ├── B5) Setup nginx (explorer.yourdomain.com)
+│   │   │   └── B6) Status
+│   │   └── 0) Back
 │   ├── 7) Coming Soon
 │   └── 8) Admin & Maintenance           → 08_grin_node_admin.sh
 │       ├── 1) Remote Node Monitor       (081_host_monitor_port.sh — also cron-ready)
@@ -184,6 +199,43 @@ Automates Grin blockchain backup and sharing so others can bootstrap from your n
 - **Listen** — starts `grin-wallet listen` in a named tmux session; auto-detects running node
 - **Publish** — toggles `owner_api_include_foreign`, configures firewall (port 3415), optional nginx reverse proxy with SSL
 
+### 6. Global Grin Health — `06_global_grin_health.sh`
+
+A self-hosted network monitoring dashboard with two components that share a single install, Python collector, SQLite database, and nginx virtual host.
+
+**A) Network Stats + Peer Map** — served at `stats.yourdomain.com`
+
+*Network Stats page (`index.html`)*
+- Live stats bar: block height, hashrate (GPS), difficulty, avg block time, peer count
+- Chart.js line charts (24h / 30d / All time) for: Hashrate, Difficulty, Transactions/block, Fees/block
+- Node version distribution donut chart
+- Data collected by a Python cron job every 5 minutes; JSON files served statically
+- Smart sampling: every block for last 24 h, hourly for last 30 d, daily for full chain history → SQLite DB under 3 MB
+- Fully responsive — works on mobile browsers
+
+*Peer Map page (`map.html`)*
+- Globe.GL 3D interactive world globe, night-side Earth texture, auto-rotate
+- Queries **owner API `get_peers`** for all known peers (100–500+) vs only direct connections
+- Mainnet (orange) and testnet (teal) peers shown simultaneously
+- Filterable peer list panel: filter by country or node version; click a row to fly the globe to that peer
+- **IP privacy**: last IPv4 octet masked (`1.2.3.x`); last IPv6 group masked
+- **Last seen**: peers are persisted in `known_peers` SQLite table for 30 days; JSON includes up to 7 days of history with `last_seen` timestamps
+- Country flag emojis via Unicode regional indicator symbols
+- Non-standard port shown in tooltip; testnet peers labelled `· testnet`
+- Fully responsive — bottom action bar on mobile to toggle peer list / network snapshot
+
+*Collector (`06_collector.py`)*
+- Modes: `--init-db`, `--init-history` (backfill all 2.1 M blocks), `--update`, `--peers-only`
+- Geo-location via ip-api.com batch API (no key required, 100 IPs/request)
+- Dual-network: queries mainnet (port 3413) and testnet (port 13413) owner APIs independently
+- Atomic JSON writes (`os.replace`) — safe for concurrent browser reads
+
+**B) Grin Explorer** — served at `explorer.yourdomain.com`
+- Automates clone + `cargo build --release` of [aglkm/grin-explorer](https://github.com/aglkm/grin-explorer) (Rust + Rocket)
+- Configures `Explorer.toml`, manages systemd-style start/stop via `nohup`
+- nginx reverse proxy to `127.0.0.1:8000`
+- Note: initial build takes 10–30 min and requires ~2 GB disk for Rust toolchain
+
 ### 8. Admin & Maintenance — `08_grin_node_admin.sh`
 
 **1 · Remote Node Monitor** (`081_host_monitor_port.sh`)
@@ -212,8 +264,9 @@ Automates Grin blockchain backup and sharing so others can bootstrap from your n
 - OS & logs: `/tmp`, txhashset zips, Grin node logs, system journal, toolkit logs
 
 **8 · Self-Update**
-- Prompts for GitHub repo slug on first run (e.g. `username/grin-node-toolkit`); saved to `conf/github_repo.conf` for future runs
-- Downloads the latest tarball from `github.com/REPO/archive/main.tar.gz`, extracts, and overwrites toolkit files in-place
+- Repo hardcoded to `noobvie/Grin-Node-Toolkit`; override for forks by saving a slug to `conf/github_repo.conf`
+- **Branch selector**: choose `main` (stable), `addons` (addon development), `corefeatures` (core development), or type any custom branch name — useful for testing in-progress features before they merge to `main`
+- Downloads tarball from `github.com/REPO/archive/refs/heads/BRANCH.tar.gz`, extracts, and overwrites toolkit files in-place
 - Works whether installed via `git clone` or zip download
 
 **DEL · Full Grin Cleanup** (`08del_clean_all_grin_things.sh`)
@@ -236,18 +289,36 @@ grin-node-toolkit/
 │   ├── nginx-<action>-<datetime>.log
 │   ├── grin_nodes_status_<datetime>.log  # Node monitor results
 │   └── grin_full_cleanup_<datetime>.log  # Full cleanup audit trail
-└── scripts/
-    ├── 01_build_new_grin_node.sh         # Feature 1 : node installation
-    ├── 02_nginx_fileserver_manager.sh    # Feature 2 : nginx management
-    ├── 03_grin_share_chain_data.sh       # Feature 3 : chain data sharing + schedule
-    ├── 04_grin_node_foreign_api.sh       # Feature 4 : node services (API + stratum)
-    ├── 05_grin_wallet_service.sh         # Feature 5 : wallet service
-    ├── 06_coming_soon.sh                 # Placeholder
-    ├── 07_coming_soon.sh                 # Placeholder
-    ├── 08_grin_node_admin.sh             # Addon  8 : admin & maintenance menu
-    ├── 081_host_monitor_port.sh          # Remote node port monitor (standalone / cron)
-    └── 08del_clean_all_grin_things.sh    # Full Grin removal (nuclear cleanup)
+├── scripts/
+│   ├── 01_build_new_grin_node.sh         # Feature 1 : node installation
+│   ├── 02_nginx_fileserver_manager.sh    # Feature 2 : nginx management
+│   ├── 03_grin_share_chain_data.sh       # Feature 3 : chain data sharing + schedule
+│   ├── 04_grin_node_foreign_api.sh       # Feature 4 : node services (API + stratum)
+│   ├── 05_grin_wallet_service.sh         # Feature 5 : wallet service
+│   ├── 06_global_grin_health.sh          # Feature 6 : Global Grin Health menu
+│   ├── 06_collector.py                   # Feature 6 : Python stats + peer collector
+│   ├── 07_coming_soon.sh                 # Placeholder
+│   ├── 08_grin_node_admin.sh             # Addon  8 : admin & maintenance menu
+│   ├── 081_host_monitor_port.sh          # Remote node port monitor (standalone / cron)
+│   └── 08del_clean_all_grin_things.sh    # Full Grin removal (nuclear cleanup)
+└── web/
+    └── 06/
+        └── stats/                        # Feature 6 static web assets
+            ├── index.html                # Network Stats dashboard (Chart.js)
+            ├── map.html                  # Peer Map (Globe.GL 3D globe)
+            ├── chart.min.js              # Chart.js bundle (copy before deploy)
+            └── globe.min.js              # Globe.GL bundle (copy before deploy)
 ```
+
+**Runtime paths created by option 6 install:**
+
+| Path | Purpose |
+|------|---------|
+| `/var/lib/grin-stats/stats.db` | SQLite database (blocks, peers, versions) |
+| `/var/lib/grin-stats/config.env` | Collector config (node URLs, API secret paths) |
+| `/var/www/grin-stats/` | Nginx web root (HTML + JSON data files) |
+| `/usr/local/bin/grin-stats-collector` | Installed collector script |
+| `/opt/grin-explorer/` | Grin Explorer build directory (option B) |
 
 ---
 

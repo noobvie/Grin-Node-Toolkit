@@ -764,7 +764,7 @@ patch_config() {
 # Each host is checked via check_status_before_download.txt — only used if it
 # contains "Sync completed.".
 # If all 3 known hosts fail, the user is prompted to enter a custom base URL
-# (e.g. http://myserver.com) or press 0 to return to the master script.
+# (e.g. https://myserver.com) or press 0 to return to the master script.
 # Custom sources are accepted if they contain a .tar.gz in their directory
 # listing (status file check is skipped for custom URLs).
 # Parses the directory index to find .tar.gz and .sha256 filenames dynamically.
@@ -826,7 +826,7 @@ download_chain_data() {
     # Try each known host (shuffled order, fallback to next on failure)
     local base_url=""
     for host in "${hosts[@]}"; do
-        local status_url="http://${host}/check_status_before_download.txt"
+        local status_url="https://${host}/check_status_before_download.txt"
         info "Checking sync status at: $status_url"
         local status_content
         status_content=$(curl -fsSL --max-time 15 "$status_url" 2>/dev/null) || {
@@ -834,7 +834,7 @@ download_chain_data() {
             continue
         }
         if echo "$status_content" | grep -q "Sync completed."; then
-            base_url="http://$host"
+            base_url="https://$host"
             success "Source ready: $host"
             break
         else

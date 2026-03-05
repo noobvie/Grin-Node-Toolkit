@@ -114,53 +114,6 @@ check_node_status() {
     fi
     echo ""
 }
-    local mainnet_up=0 testnet_up=0
-    ss -tlnp 2>/dev/null | grep -q ":3413 "  && mainnet_up=1
-    ss -tlnp 2>/dev/null | grep -q ":13413 " && testnet_up=1
-
-    echo -e "${BOLD}Detected Grin nodes:${RESET}"
-    [[ $mainnet_up -eq 1 ]] && echo -e "  ${GREEN}✓${RESET} Mainnet node  (port 3413)" \
-                             || echo -e "  ${DIM}✗ Mainnet node  (port 3413 — not listening)${RESET}"
-    [[ $testnet_up -eq 1 ]] && echo -e "  ${GREEN}✓${RESET} Testnet node  (port 13413)" \
-                             || echo -e "  ${DIM}✗ Testnet node  (port 13413 — not listening)${RESET}"
-    echo ""
-
-    if [[ $mainnet_up -eq 1 && $testnet_up -eq 0 ]]; then
-        NETWORK="mainnet"
-        NODE_PORT=3413
-        echo -e "  ${DIM}Auto-selected: mainnet${RESET}"
-    elif [[ $mainnet_up -eq 0 && $testnet_up -eq 1 ]]; then
-        NETWORK="testnet"
-        NODE_PORT=13413
-        echo -e "  ${DIM}Auto-selected: testnet${RESET}"
-    else
-        [[ $mainnet_up -eq 0 && $testnet_up -eq 0 ]] && \
-            warn "No Grin node detected. Wallet will not connect until a node is running."
-        echo -e "  ${GREEN}1${RESET}) Mainnet  ${DIM}(port 3413)${RESET}  ${DIM}[default]${RESET}"
-        echo -e "  ${YELLOW}2${RESET}) Testnet  ${DIM}(port 13413)${RESET}"
-        echo -e "  ${DIM}0) Cancel${RESET}"
-        echo -ne "Select network [1]: "
-        read -r net_choice || true
-        [[ "$net_choice" == "0" ]] && return 1
-        case "${net_choice:-1}" in
-            2) NETWORK="testnet";  NODE_PORT=13413 ;;
-            *) NETWORK="mainnet";  NODE_PORT=3413   ;;
-        esac
-    fi
-
-    if [[ "$NETWORK" == "mainnet" ]]; then
-        WALLET_BIN="$WALLET_BIN_MAINNET"
-        WALLET_DIR="$WALLET_BIN_DIR_MAINNET"
-        GRIN_WALLET_TOML="$GRIN_WALLET_TOML_MAINNET"
-        WALLET_NGINX_CONF="$WALLET_NGINX_CONF_MAINNET"
-    else
-        WALLET_BIN="$WALLET_BIN_TESTNET"
-        WALLET_DIR="$WALLET_BIN_DIR_TESTNET"
-        GRIN_WALLET_TOML="$GRIN_WALLET_TOML_TESTNET"
-        WALLET_NGINX_CONF="$WALLET_NGINX_CONF_TESTNET"
-    fi
-    echo ""
-}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STATUS DISPLAY

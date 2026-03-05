@@ -912,7 +912,7 @@ show_main_menu() {
     echo -e "${DIM}  ─────────────────────────────────────────────${RESET}"
     echo ""
     echo -e "  ${GREEN}A${RESET})   Network Stats + Peer Map"
-    echo -e "      ${DIM}Hashrate · Difficulty · Transactions · Fees · Versions · 3D Peer Map${RESET}"
+    echo -e "      ${DIM}Hashrate · Difficulty · Transactions · Fees · Versions · 2D Peer Map${RESET}"
     echo ""
     echo -e "  ${GREEN}B${RESET})   Grin Explorer"
     echo -e "      ${DIM}Browse blocks · Kernels · Search by height or hash${RESET}"

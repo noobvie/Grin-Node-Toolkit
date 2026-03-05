@@ -92,9 +92,28 @@ show_port_guide() {
     return 0
 }
 
-# ─── Node / network detection ─────────────────────────────────────────────────
-# Sets: NETWORK  NODE_PORT  WALLET_BIN  WALLET_DIR  GRIN_WALLET_TOML  WALLET_NGINX_CONF
-detect_and_select_network() {
+# ─── Node status check for menu ─────────────────────────────────────────────────
+check_node_status() {
+    local mainnet_up=0 testnet_up=0
+    ss -tlnp 2>/dev/null | grep -q ":3413 "  && mainnet_up=1
+    ss -tlnp 2>/dev/null | grep -q ":13413 " && testnet_up=1
+
+    echo -e "  ${BOLD}Grin Node Status:${RESET}"
+    if [[ $mainnet_up -eq 1 ]]; then
+        echo -e "    Mainnet: ${GREEN}✓ Running${RESET}  ${DIM}(port 3413)${RESET}"
+    else
+        echo -e "    Mainnet: ${RED}✗ Not running${RESET}  ${DIM}(port 3413)${RESET}"
+        echo -e "    ${YELLOW}Warning: Start mainnet node from /grinprunemain or /grinfullmain, or run Script 01${RESET}"
+    fi
+
+    if [[ $testnet_up -eq 1 ]]; then
+        echo -e "    Testnet: ${GREEN}✓ Running${RESET}  ${DIM}(port 13413)${RESET}"
+    else
+        echo -e "    Testnet: ${RED}✗ Not running${RESET}  ${DIM}(port 13413)${RESET}"
+        echo -e "    ${YELLOW}Warning: Start testnet node from /grinprunetest, or run Script 01${RESET}"
+    fi
+    echo ""
+}
     local mainnet_up=0 testnet_up=0
     ss -tlnp 2>/dev/null | grep -q ":3413 "  && mainnet_up=1
     ss -tlnp 2>/dev/null | grep -q ":13413 " && testnet_up=1
@@ -615,24 +634,17 @@ show_menu() {
     echo -e "${BOLD}${YELLOW}  This tool is for testing and development purpose! ${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     show_status
+    check_node_status
 
-    echo -e "${DIM}  ─── Setup ────────────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Download & install grin-wallet  ${DIM}(choose mainnet / testnet)${RESET}"
-    echo -e "  ${GREEN}2${RESET}) Initialize wallet               ${DIM}(grin-wallet init — runs inline)${RESET}"
-    echo ""
-    echo -e "${DIM}  ─── Run ──────────────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Start wallet listener           ${DIM}(grin-wallet listen, tmux)${RESET}"
-    echo ""
-    echo -e "${DIM}  ─── Publish ──────────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}4${RESET}) Enable Wallet Foreign API       ${DIM}(port $FOREIGN_API_PORT)${RESET}"
-    echo -e "  ${RED}5${RESET}) Disable Wallet Foreign API"
-    echo -e "  ${CYAN}6${RESET}) Configure nginx proxy           ${DIM}(wallet)${RESET}"
-    echo -e "  ${CYAN}7${RESET}) Configure firewall rules        ${DIM}(port $FOREIGN_API_PORT)${RESET}"
+    echo -e "  ${GREEN}A${RESET}) Download & install grin-wallet"
+    echo -e "  ${GREEN}B${RESET}) Initialize wallet"
+    echo -e "  ${GREEN}C${RESET}) Start wallet listener"
+    echo -e "  ${GREEN}D${RESET}) Configure wallet API       ${DIM}(localhost / public / disable)${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh status${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [0-7]: ${RESET}"
+    echo -ne "${BOLD}Select [A-D, 0]: ${RESET}"
 }
 
 main() {
@@ -641,13 +653,10 @@ main() {
         read -r choice || true
 
         case "$choice" in
-            1) download_wallet ;;
-            2) init_wallet ;;
-            3) start_wallet ;;
-            4) enable_foreign_api ;;
-            5) disable_foreign_api ;;
-            6) offer_nginx_proxy ;;
-            7) configure_firewall_foreign ;;
+            A|a) download_wallet ;;
+            B|b) init_wallet ;;
+            C|c) start_wallet ;;
+            D|d) enable_foreign_api ;;
             0) break ;;
             "") continue ;;
             *) warn "Invalid option." ; sleep 1 ;;

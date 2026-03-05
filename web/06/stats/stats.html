@@ -501,8 +501,8 @@
         <button class="range-btn" data-r="day">Day</button>
         <button class="range-btn" data-r="week">Week</button>
         <button class="range-btn" data-r="month">Month</button>
-        <button class="range-btn" data-r="year">Year</button>
-        <button class="range-btn active" data-r="all">All Time</button>
+        <button class="range-btn active" data-r="year">Year</button>
+        <button class="range-btn" data-r="all">All Time</button>
       </div>
     </div>
     <div class="chart-wrap"><canvas id="chart-hashrate"></canvas></div>
@@ -516,8 +516,8 @@
         <button class="range-btn" data-r="day">Day</button>
         <button class="range-btn" data-r="week">Week</button>
         <button class="range-btn" data-r="month">Month</button>
-        <button class="range-btn" data-r="year">Year</button>
-        <button class="range-btn active" data-r="all">All Time</button>
+        <button class="range-btn active" data-r="year">Year</button>
+        <button class="range-btn" data-r="all">All Time</button>
       </div>
     </div>
     <div class="chart-wrap"><canvas id="chart-difficulty"></canvas></div>
@@ -531,8 +531,8 @@
         <button class="range-btn" data-r="day">Day</button>
         <button class="range-btn" data-r="week">Week</button>
         <button class="range-btn" data-r="month">Month</button>
-        <button class="range-btn" data-r="year">Year</button>
-        <button class="range-btn active" data-r="all">All Time</button>
+        <button class="range-btn active" data-r="year">Year</button>
+        <button class="range-btn" data-r="all">All Time</button>
       </div>
     </div>
     <div style="display: flex; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--border); flex-wrap: wrap;">
@@ -628,7 +628,12 @@ const fmtDiff = v => {
 };
 // v is in nGrin; always display in Grin for clarity
 const fmtFee     = v => fmtNum(v / 1e9, 2) + " Grin";
-const fmtFeeTick = v => fmtNum(v / 1e9, 0) + " Grin";
+const fmtFeeTick = v => {
+  const g = v / 1e9;
+  if (g >= 10)  return fmtNum(g, 0) + " Grin";   // daily totals (Year/All Time)
+  if (g >= 0.1) return fmtNum(g, 2) + " Grin";   // hourly totals (Month/Week)
+  return fmtNum(g, 3) + " Grin";                  // per-block (Day)
+};
 const timeAgo = ts => {
   const s = Math.floor(Date.now()/1000) - ts;
   if (s < 60)   return s + "s ago";
@@ -791,7 +796,7 @@ function initCharts() {
 }
 
 // Range state
-const rangeState = { hr: "all", diff: "all", activity: "all" };
+const rangeState = { hr: "year", diff: "year", activity: "year" };
 
 function updateChartData(chart, json, range) {
   let pts;
@@ -1015,7 +1020,7 @@ async function loadGrinPrice() {
 }
 
 // ── Theme management ──────────────────────────────────────────────────────────
-let currentTheme = localStorage.getItem("grin-theme") || "dark";
+let currentTheme = localStorage.getItem("grin-theme") || "matrix";
 
 const THEME_CHART = {
   dark:   { grid: "#21262d", tick: "#8b949e" },

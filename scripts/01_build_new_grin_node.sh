@@ -1120,7 +1120,7 @@ setup_one_node() {
 main() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  Grin Node Setup — Build New Node${RESET}"
+    echo -e "${BOLD}${CYAN} 01) Grin Node Setup — Build New Node${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     log "=== Grin Node Build Started ==="

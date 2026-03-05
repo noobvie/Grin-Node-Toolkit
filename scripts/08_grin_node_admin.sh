@@ -937,7 +937,7 @@ self_update() {
     if [[ "$_exit_choice" == "0" ]]; then
         return
     else
-        exit 0
+        exit 100  # signals grin-node-toolkit.sh to exit completely
     fi
 }
 
@@ -973,7 +973,7 @@ menu_full_cleanup() {
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  Grin Node Administration Centre${RESET}"
+    echo -e "${BOLD}${CYAN} 08)  Grin Node Administration Centre${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     echo -e "${BOLD}  Monitoring${RESET}"

@@ -29,7 +29,7 @@ commits to stay within ~500MB RAM. If you get "Killed (137)" errors:
 
 Usage (commands):
     python3 06_collector.py --init-db            Create DB schema only
-    python3 06_collector.py --init-history       Backfill ENTIRE chain (headers + all TX/fees, 30+ min)
+    python3 06_collector.py --init-history       Backfill ENTIRE chain (headers + all TX/fees, 6 hours)
     python3 06_collector.py --update             Fetch new blocks + TX stats (incremental)
     python3 06_collector.py --peers-only         Update peer geolocation only
     python3 06_collector.py --backfill-stats     Fetch last 180 days (default)
@@ -376,7 +376,7 @@ def cmd_init_history():
     init_schema(conn)
 
     # Fetch in batches
-    batch_size = 100
+    batch_size = 70
     done = 0
     rows_all = []
 
@@ -408,7 +408,7 @@ def cmd_init_history():
 
     # Fetch full block stats for complete history (ALL blocks since genesis)
     print("[INFO] Fetching tx/fee stats for complete chain history...")
-    print("[INFO] ⚠️  Large import: using memory-efficient streaming (may take 30+ min)")
+    print("[INFO] ⚠️  Large import: using memory-efficient streaming (may take 6 hours or more)...")
     _fetch_block_stats_range(0, tip_height)
 
     # Update peers
@@ -464,8 +464,22 @@ def cmd_update():
         conn.commit()
         conn.close()
 
-        # Full block stats for new blocks only
-        _fetch_block_stats_range(last_height + 1, tip_height)
+        # Fetch stats for new blocks + fill any gaps in the last HOURLY_DAYS window.
+        # last_height is already committed to DB before this runs, so any interruption
+        # here would leave gaps permanently on simple range-based fetching.
+        # The gap-aware approach: query which heights are actually missing and fetch only those.
+        gap_start = max(0, tip_height - HOURLY_DAYS * BLOCKS_PER_DAY)
+        conn_gap = open_db()
+        have = {r[0] for r in conn_gap.execute(
+            "SELECT height FROM block_stats WHERE height BETWEEN ? AND ?",
+            (gap_start, tip_height),
+        ).fetchall()}
+        conn_gap.close()
+        missing = [h for h in range(gap_start, tip_height + 1) if h not in have]
+        if missing:
+            print(f"[INFO] Fetching stats for {len(missing):,} block(s) "
+                  f"({len(missing) - (tip_height - last_height):+,} gap-fill in last {HOURLY_DAYS}d)...")
+            _fetch_block_stats_range(gap_start, tip_height, heights=missing)
 
     _update_peers()
     export_all_json()

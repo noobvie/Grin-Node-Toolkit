@@ -304,15 +304,16 @@ import_history() {
     echo -e "\n${BOLD}${CYAN}── Import Historical Data ──${RESET}\n"
     detect_node
     echo -e "  ${DIM}Node   : ${NODE_URL}${RESET}"
-    echo -e "  ${DIM}This fetches sampled blocks to build historical charts.${RESET}"
-    echo -e "  ${DIM}Typically completes in 2-5 minutes.${RESET}"
+    echo -e "  ${DIM}This fetches full blocks to build historical charts since the genesis block.${RESET}"
+    echo -e "  ${DIM}Typically completes in 6 hours or more depends on the hardware resources.${RESET}"
+    echo -e "  ${DIM}Run this step only ONE TIME for initial setup!${RESET}"
     echo ""
     echo -ne "${BOLD}Start import? [Y/n/0]: ${RESET}"
     read -r confirm
     [[ "$confirm" == "0" ]] && return
     [[ "${confirm,,}" == "n" ]] && return
 
-    info "Starting historical import (this may take 2-5 minutes)..."
+    info "Starting historical import (this may take 6 hours or more)..."
     echo -e "  ${DIM}Progress will appear below — do not close this window.${RESET}"
     echo ""
     local rc=0

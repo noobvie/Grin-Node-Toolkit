@@ -123,7 +123,7 @@ check_scripts() {
         "03_grin_share_chain_data.sh"
         "04_grin_node_foreign_api.sh"
         "05_grin_wallet_service.sh"
-        "06_coming_soon.sh"
+        "06_global_grin_health.sh"
         "07_coming_soon.sh"
         "08_grin_node_admin.sh"
     )
@@ -148,7 +148,11 @@ run_script() {
         read -r
         return 0
     fi
-    bash "$script_path" || true
+    bash "$script_path"
+    local rc=$?
+    # Exit code 100 means the subscript requested a full exit (e.g. after self-update)
+    [[ $rc -eq 100 ]] && exit 0
+    return 0
 }
 
 show_header() {
@@ -188,8 +192,8 @@ show_main_menu() {
     echo -e "${BOLD}  Addons${RESET} (Being developed)"
     echo ""
     echo -e "  ${GREEN}5${RESET}) Grin Wallet Service"
-    echo -e "  ${YELLOW}6${RESET}) Unknown Feature"
-    echo -e "  ${YELLOW}7${RESET}) Unknown Feature"
+    echo -e "  ${GREEN}6${RESET}) Global Grin Health"
+    echo -e "  ${YELLOW}7${RESET}) Coming Soon"
     echo -e "  ${GREEN}8${RESET}) Admin & Maintenance"
     echo ""
     echo -e "${DIM}  ─────────────────────────────────────────${RESET}"
@@ -229,8 +233,8 @@ main() {
                 run_script "05_grin_wallet_service.sh"
                 ;;
             6)
-                echo -e "\n${CYAN}Starting: Coming Soon...${RESET}\n"
-                run_script "06_coming_soon.sh"
+                echo -e "\n${CYAN}Starting: Global Grin Health...${RESET}\n"
+                run_script "06_global_grin_health.sh"
                 ;;
             7)
                 echo -e "\n${CYAN}Starting: Coming Soon...${RESET}\n"

@@ -1473,8 +1473,10 @@ get_conf_status() {
 show_main_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  Grin Node Share & Schedule Manager${RESET}"
+    echo -e "${BOLD}${CYAN} 03) Grin Node Share & Schedule Manager${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${YELLOW} Note that sharing script below will stop your Grin node ${RESET}"
+    echo -e "${BOLD}${YELLOW} and interrupt addons services like Grin explorer/Global health... ${RESET}"
     echo ""
     show_current_schedule
     echo -e "${BOLD}Options:${RESET}"

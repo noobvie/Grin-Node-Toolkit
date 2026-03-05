@@ -159,6 +159,23 @@ get_foreign_api_status() {
 show_status() {
     echo -e "\n${BOLD}Status:${RESET}\n"
 
+    # ── Grin node status ──
+    local mainnet_up=0 testnet_up=0
+    ss -tlnp 2>/dev/null | grep -q ":3413 "  && mainnet_up=1
+    ss -tlnp 2>/dev/null | grep -q ":13413 " && testnet_up=1
+
+    if [[ $mainnet_up -eq 1 ]]; then
+        echo -e "  ${BOLD}Grin node (mainnet)${RESET}   : ${GREEN}RUNNING${RESET}  ${DIM}(port 3413)${RESET}"
+    else
+        echo -e "  ${BOLD}Grin node (mainnet)${RESET}   : ${RED}NOT RUNNING${RESET}  ${YELLOW}⚠ Start node from /grin*main or run script 01${RESET}"
+    fi
+    if [[ $testnet_up -eq 1 ]]; then
+        echo -e "  ${BOLD}Grin node (testnet)${RESET}   : ${GREEN}RUNNING${RESET}  ${DIM}(port 13413)${RESET}"
+    else
+        echo -e "  ${BOLD}Grin node (testnet)${RESET}   : ${RED}NOT RUNNING${RESET}  ${YELLOW}⚠ Start node from /grin*test or run script 01${RESET}"
+    fi
+    echo ""
+
     # ── Binaries ──
     if [[ -x "$WALLET_BIN_MAINNET" ]]; then
         local ver_main
@@ -318,13 +335,13 @@ init_wallet() {
     info "Running grin-wallet init inline — you will be prompted to enter and confirm a wallet password."
     echo ""
 
-    cd "$WALLET_DIR" && "$WALLET_BIN" --top-level-dir "$WALLET_DIR" init
+    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" init
     local rc=$?
     echo ""
 
     if [[ $rc -ne 0 || ! -f "$GRIN_WALLET_TOML" ]]; then
         warn "Init may have failed (exit code $rc). Check output above."
-        warn "Manual command: cd $WALLET_DIR && $WALLET_BIN --top-level-dir $WALLET_DIR init"
+        warn "Manual command: cd $WALLET_DIR && $WALLET_BIN --top_level_dir $WALLET_DIR init"
         return
     fi
 
@@ -385,7 +402,7 @@ start_wallet() {
 
     info "Starting grin-wallet listen in tmux session: $session"
     tmux new-session -d -s "$session" -c "$WALLET_DIR" \
-        "bash -c \"'$WALLET_BIN' --top-level-dir '$WALLET_DIR' listen; echo ''; echo 'Wallet listener exited. Press Enter to close.'; read\""
+        "bash -c \"'$WALLET_BIN' --top_level_dir '$WALLET_DIR' listen; echo ''; echo 'Wallet listener exited. Press Enter to close.'; read\""
 
     sleep 1
     if tmux has-session -t "$session" 2>/dev/null; then
@@ -394,7 +411,7 @@ start_wallet() {
         info "Detach: Ctrl+B then D"
     else
         warn "tmux session did not persist — wallet may have exited immediately."
-        warn "Try running manually: $WALLET_BIN --top-level-dir $WALLET_DIR listen"
+        warn "Try running manually: $WALLET_BIN --top_level_dir $WALLET_DIR listen"
     fi
 
     log "[OPT 3] Wallet listener started: session=$session network=$NETWORK"

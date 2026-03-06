@@ -453,6 +453,23 @@ server {
 }
 NGINX
 
+    # Logrotate: rotate at 10 MB or after 10 days
+    cat > /etc/logrotate.d/grin-stats <<'LOGROTATE'
+/var/log/nginx/grin-stats-access.log /var/log/nginx/grin-stats-error.log {
+    daily
+    rotate 10
+    maxsize 10M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    sharedscripts
+    postrotate
+        nginx -s reopen 2>/dev/null || true
+    endscript
+}
+LOGROTATE
+
     ln -sf "$NGINX_STATS_CONF" "/etc/nginx/sites-enabled/grin-stats"
     nginx -t || { die "nginx config test failed. Check $NGINX_STATS_CONF."; return; }
     nginx -s reload
@@ -815,6 +832,23 @@ server {
     error_log  /var/log/nginx/grin-explorer-error.log;
 }
 NGINX
+
+    # Logrotate: rotate at 10 MB or after 10 days
+    cat > /etc/logrotate.d/grin-explorer <<'LOGROTATE'
+/var/log/nginx/grin-explorer-access.log /var/log/nginx/grin-explorer-error.log {
+    daily
+    rotate 10
+    maxsize 10M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    sharedscripts
+    postrotate
+        nginx -s reopen 2>/dev/null || true
+    endscript
+}
+LOGROTATE
 
     ln -sf "$NGINX_EXPLORER_CONF" "/etc/nginx/sites-enabled/grin-explorer"
     nginx -t || { die "nginx config test failed. Check $NGINX_EXPLORER_CONF."; return; }

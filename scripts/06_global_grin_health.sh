@@ -309,7 +309,7 @@ import_data() {
     echo ""
     echo -e "  ${GREEN}a${RESET}) Init DB schema only          ${DIM}(no data — first-time setup without data)${RESET}"
     echo -e "  ${GREEN}b${RESET}) Full history import          ${DIM}(headers + TX/fees — 6+ hours, run ONCE)${RESET}"
-    echo -e "  ${GREEN}b${RESET}) ---------------------------- ${DIM}Optional choice below${RESET}"
+    echo -e "  ${DIM}  ─── Optional ───────────────────────────────────${RESET}"
     echo -e "  ${GREEN}c${RESET}) Backfill last 180 days       ${DIM}(TX + fees — ~30 min, recommended first run)${RESET}"
     echo -e "  ${GREEN}d${RESET}) Backfill last 90 days        ${DIM}(TX + fees — lighter on memory)${RESET}"
     echo -e "  ${GREEN}e${RESET}) Backfill entire chain        ${DIM}(TX + fees from block 0 — several hours)${RESET}"

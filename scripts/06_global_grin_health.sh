@@ -464,8 +464,8 @@ NGINX
         || { warn "Certbot failed — verify DNS A-record resolves to this server (step 4)."; pause; return; }
 
     nginx -s reload
-    success "Stats site live: https://${stats_domain}"
-    success "Peer map live:   https://${stats_domain}/map.html"
+    success "Site live:       https://${stats_domain}              (peer map — index.html)"
+    success "Stats page:      https://${stats_domain}/stats.html"
     log "Nginx stats config created for ${stats_domain}"
     pause
 }
@@ -939,8 +939,8 @@ show_menu_a() {
     echo -e "${BOLD}${CYAN}  6A) Network Stats + Peer Map${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  ${DIM}Pages served:  /index.html          → hashrate, difficulty, tx, fees, versions${RESET}"
-    echo -e "  ${DIM}               /map.html  → Grin peer world map${RESET}"
+    echo -e "  ${DIM}Pages served:  /            (index.html) → Grin peer world map${RESET}"
+    echo -e "  ${DIM}               /stats.html              → hashrate, difficulty, tx, fees, versions${RESET}"
     echo ""
     local inst="${RED}✗ not installed${RESET}"
     local cron="${YELLOW}inactive${RESET}"

@@ -108,7 +108,7 @@ Grin Node Toolkit
 │   │   └── 0) Back
 │   ├── 6) Global Grin Health            → 06_global_grin_health.sh
 │   │   ├── A) Network Stats + Peer Map
-│   │   │   ├── A1) Install (Python collector, Chart.js, Globe.GL)
+│   │   │   ├── A1) Install (Python collector, Chart.js, Leaflet)
 │   │   │   ├── A2) Import full history (backfill from genesis)
 │   │   │   ├── A3) Start periodic updates (cron every 5 min)
 │   │   │   ├── A4) Stop updates
@@ -224,24 +224,24 @@ A self-hosted network monitoring dashboard with two components that share a sing
 
 **A) Network Stats + Peer Map** — served at `stats.yourdomain.com`
 
-*Network Stats page (`index.html`)*
+*Peer Map page (`index.html` — served at `/`)*
+- Leaflet 2D interactive world map with peer markers
+- Queries **owner API `get_peers`** for all known peers (100–500+) vs only direct connections
+- Mainnet (orange) and testnet (teal) peers shown simultaneously
+- Filterable peer list panel: filter by country or node version; click a row to center the map on that peer
+- **IP privacy**: last IPv4 octet masked (`1.2.3.x`); last IPv6 group masked
+- **Last seen**: peers are persisted in `known_peers` SQLite table for 30 days; JSON includes up to 7 days of history with `last_seen` timestamps
+- Country flag emojis via Unicode regional indicator symbols
+- Non-standard port shown in tooltip; testnet peers labelled `· testnet`
+- Fully responsive — works on mobile browsers
+
+*Network Stats page (`stats.html`)*
 - Live stats bar: block height, hashrate (GPS), difficulty, avg block time, peer count
 - Chart.js line charts (24h / 30d / All time) for: Hashrate, Difficulty, Transactions/block, Fees/block
 - Node version distribution donut chart
 - Data collected by a Python cron job every 5 minutes; JSON files served statically
 - Smart sampling: every block for last 24 h, hourly for last 30 d, daily for full chain history → SQLite DB under 3 MB
 - Fully responsive — works on mobile browsers
-
-*Peer Map page (`map.html`)*
-- Globe.GL 3D interactive world globe, night-side Earth texture, auto-rotate
-- Queries **owner API `get_peers`** for all known peers (100–500+) vs only direct connections
-- Mainnet (orange) and testnet (teal) peers shown simultaneously
-- Filterable peer list panel: filter by country or node version; click a row to fly the globe to that peer
-- **IP privacy**: last IPv4 octet masked (`1.2.3.x`); last IPv6 group masked
-- **Last seen**: peers are persisted in `known_peers` SQLite table for 30 days; JSON includes up to 7 days of history with `last_seen` timestamps
-- Country flag emojis via Unicode regional indicator symbols
-- Non-standard port shown in tooltip; testnet peers labelled `· testnet`
-- Fully responsive — bottom action bar on mobile to toggle peer list / network snapshot
 
 *Collector (`06_collector.py`)*
 - Modes: `--init-db`, `--init-history` (backfill all 2.1 M blocks), `--update`, `--peers-only`
@@ -323,10 +323,9 @@ grin-node-toolkit/
 └── web/
     └── 06/
         └── stats/                        # Feature 6 static web assets
-            ├── index.html                # Network Stats dashboard (Chart.js)
-            ├── map.html                  # Peer Map (Globe.GL 3D globe)
-            ├── chart.min.js              # Chart.js bundle (copy before deploy)
-            └── globe.min.js              # Globe.GL bundle (copy before deploy)
+            ├── index.html                # Peer Map (Leaflet 2D map)
+            ├── stats.html                # Network Stats dashboard (Chart.js)
+            └── chart.min.js              # Chart.js bundle (copy before deploy)
 ```
 
 **Runtime paths created by option 6 install:**

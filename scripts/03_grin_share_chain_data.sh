@@ -1039,6 +1039,53 @@ run_nginx_share_for_port() {
     log "=========================================="
 }
 
+# Try to start Grin from toolkit default directories when not found on expected port
+try_start_from_known_dir() {
+    local network=$1   # mainnet or testnet
+    local port=$2
+    local dirs=()
+    if [ "$network" = "testnet" ]; then
+        dirs=("/grinprunetest")
+    else
+        dirs=("/grinfullmain" "/grinprunemain")
+    fi
+
+    local found_binary="" found_dir=""
+    for d in "${dirs[@]}"; do
+        if [ -x "$d/grin" ]; then
+            found_binary="$d/grin"
+            found_dir="$d"
+            break
+        fi
+    done
+
+    if [ -z "$found_binary" ]; then
+        echo "  ✗ No grin binary found in: ${dirs[*]}"
+        echo "    Start grin manually and re-run, or verify chain_data exists first."
+        return 1
+    fi
+
+    echo "  → Binary found: $found_binary"
+    command -v tmux &>/dev/null || apt-get install -y tmux -qq
+    local sess="grin-auto-${network}"
+    tmux new-session -d -s "$sess" "$found_binary" 2>/dev/null || true
+    echo "  → Started in tmux session '$sess' — waiting for port $port (up to 120s)..."
+
+    local elapsed=0
+    while [ $elapsed -lt 120 ]; do
+        sleep 5; elapsed=$((elapsed + 5))
+        if [ -n "$(get_pid_on_port "$port")" ]; then
+            echo "  ✓ Grin $network is up after ${elapsed}s"
+            return 0
+        fi
+        [ $((elapsed % 30)) -eq 0 ] && echo "    ... still waiting (${elapsed}s)"
+    done
+
+    echo "  ✗ Grin $network did not start within 120s"
+    echo "    Start manually:  cd $found_dir && tmux new-session -d -s $sess './grin'"
+    return 1
+}
+
 # Entry point for --cron-nginx  (loads nginx conf, runs both ports)
 run_cron_nginx() {
     if [[ ! -f "$CONF_NGINX" ]]; then
@@ -1058,13 +1105,24 @@ run_cron_nginx() {
     [ -n "$(get_pid_on_port "$GRIN_PORT_MAINNET")" ] && has_main=true
     [ -n "$(get_pid_on_port "$GRIN_PORT_TESTNET")" ] && has_test=true
 
+    # If not running, attempt auto-start from toolkit default directories
+    if [ "$has_main" = false ] && [ "$SYNC_CHOICE" != "testnet" ]; then
+        echo "  - Mainnet not running — attempting auto-start..."
+        try_start_from_known_dir "mainnet" "$GRIN_PORT_MAINNET" && has_main=true
+    fi
+    if [ "$has_test" = false ] && [ "$SYNC_CHOICE" != "mainnet" ]; then
+        echo "  - Testnet not running — attempting auto-start..."
+        try_start_from_known_dir "testnet" "$GRIN_PORT_TESTNET" && has_test=true
+    fi
+
     [ "$has_main" = false ] && [ "$has_test" = false ] && {
-        echo "ERROR: No Grin node found on port $GRIN_PORT_MAINNET or $GRIN_PORT_TESTNET"
+        echo "ERROR: No Grin node running or started on port $GRIN_PORT_MAINNET or $GRIN_PORT_TESTNET"
+        echo "Start grin manually, let it sync, then retry."
         exit 1
     }
 
-    [ "$has_main" = true ] && echo "  ✓ Mainnet detected" || echo "  - Mainnet not running"
-    [ "$has_test" = true ] && echo "  ✓ Testnet detected" || echo "  - Testnet not running"
+    [ "$has_main" = true ] && echo "  ✓ Mainnet ready" || echo "  - Mainnet skipped (not running / SYNC_CHOICE=$SYNC_CHOICE)"
+    [ "$has_test" = true ] && echo "  ✓ Testnet ready" || echo "  - Testnet skipped (not running / SYNC_CHOICE=$SYNC_CHOICE)"
     echo ""
 
     run_nginx_share_for_port "$GRIN_PORT_MAINNET"

@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Grin Web Wallet — nginx vhost template
+#
+# This file is a human-readable reference.
+# The actual nginx config is generated at deploy time by:
+#   Grin Node Toolkit / scripts/05_grin_wallet_service.sh  (option m)
+#
+# Variables replaced by the bash script:
+#   __DOMAIN__      → wallet.yourdomain.com
+#   __DEPLOY_DIR__  → /var/www/grin-wallet
+#   __PHP_FPM_SOCK__→ /run/php/php8.x-fpm.sock
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Rate limit zone (written to /etc/nginx/conf.d/grin-wallet-ratelimit.conf)
+# limit_req_zone $binary_remote_addr zone=grin_wallet_api:10m rate=10r/m;
+
+# HTTP → HTTPS redirect
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __DOMAIN__;
+
+    # Allow Let's Encrypt HTTP-01 challenge
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# HTTPS — main vhost
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name __DOMAIN__;
+
+    # SSL — managed by certbot
+    ssl_certificate     /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    root  __DEPLOY_DIR__;
+    index index.html;
+
+    # ── Authentication ──────────────────────────────────────────────────────
+    auth_basic           "Grin Wallet";
+    auth_basic_user_file /etc/nginx/grin-wallet.htpasswd;
+
+    # ── Security headers ────────────────────────────────────────────────────
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options    "nosniff"                                      always;
+    add_header X-Frame-Options           "DENY"                                         always;
+    add_header Referrer-Policy           "no-referrer"                                  always;
+    add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self';" always;
+
+    # ── Logging ─────────────────────────────────────────────────────────────
+    access_log /var/log/nginx/grin-wallet-access.log;
+    error_log  /var/log/nginx/grin-wallet-error.log;
+
+    # ── API: PHP proxy with rate limiting ───────────────────────────────────
+    location ~ ^/api/.*\.php$ {
+        limit_req zone=grin_wallet_api burst=5 nodelay;
+        try_files $uri =404;
+        fastcgi_pass   __PHP_FPM_SOCK__;
+        fastcgi_param  SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include        fastcgi_params;
+    }
+
+    # ── Static files ────────────────────────────────────────────────────────
+    location ~* \.(css|js|ico|png|svg)$ {
+        expires 1h;
+        add_header Cache-Control "public";
+    }
+
+    # ── Default — serve SPA ─────────────────────────────────────────────────
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # ── Security: deny sensitive files ──────────────────────────────────────
+    location = /api/config.json { deny all; }
+    location ~ /\.              { deny all; }
+    location ~ ~$               { deny all; }
+}

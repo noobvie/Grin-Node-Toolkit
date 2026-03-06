@@ -598,6 +598,16 @@ install_explorer() {
         git clone "$EXPLORER_REPO" "$EXPLORER_DIR"
     fi
 
+    # Patch hardcoded /main/ segment in chain_data path.
+    # Upstream code uses: format!("{}/main/chain_data", CONFIG.grin_dir)
+    # Toolkit stores chain_data at /grinfullmain/chain_data (no /main/ subdirectory).
+    local requests_rs="$EXPLORER_DIR/src/requests.rs"
+    if [[ -f "$requests_rs" ]] && grep -q '/main/chain_data' "$requests_rs"; then
+        info "Patching src/requests.rs: removing hardcoded /main/ from chain_data path..."
+        sed -i 's|{}/main/chain_data|{}/chain_data|g' "$requests_rs"
+        success "Patched: chain_dir now resolves to grin_dir/chain_data directly."
+    fi
+
     # Build
     info "Building release binary — this may take 10-30 minutes..."
     echo -e "  ${DIM}Watch build log: tail -f $LOG_DIR/grin_explorer_build.log${RESET}"
@@ -632,8 +642,8 @@ configure_explorer() {
     read -r node_choice
     [[ "$node_choice" == "0" ]] && return
 
-    local cfg_host cfg_port cfg_proto cfg_secret cfg_db_root
-    cfg_db_root=""
+    local cfg_host cfg_port cfg_proto cfg_secret cfg_grin_dir
+    cfg_grin_dir=""
 
     case "${node_choice:-1}" in
         2)
@@ -643,6 +653,20 @@ configure_explorer() {
             cfg_secret=""
             ;;
         *)
+            # Verify archive node exists before proceeding
+            if [[ ! -d "/grinfullmain" ]]; then
+                echo ""
+                warn "Full archive node not found at /grinfullmain"
+                echo -e "  ${DIM}The Grin Explorer requires a mainnet archive node to read block data.${RESET}"
+                echo -e "  ${DIM}Run ${BOLD}Script 01${RESET}${DIM} and install a mainnet archive node, then return here.${RESET}"
+                echo ""
+                echo -ne "Press ${BOLD}0${RESET} and Enter to return: "
+                while read -r _back; do
+                    [[ "$_back" == "0" ]] && break
+                    echo -ne "Press ${BOLD}0${RESET} and Enter to return: "
+                done
+                return
+            fi
             cfg_host="127.0.0.1"
             cfg_port="$NODE_PORT"
             cfg_proto="http"
@@ -654,21 +678,21 @@ configure_explorer() {
                 cfg_secret=""
                 warn "API secret not found at ${API_SECRET_PATH} — proceeding without auth."
             fi
-            # Detect db_root (parent directory of chain_data)
+            # Detect grin_dir (parent directory of chain_data, written to Explorer.toml)
             echo ""
-            info "Detecting chain_data path for db_root..."
+            info "Detecting chain_data path for grin_dir..."
             if [[ -d "/grinfullmain/chain_data" ]]; then
-                cfg_db_root="/grinfullmain"
+                cfg_grin_dir="/grinfullmain"
                 success "Found: /grinfullmain/chain_data  ${DIM}(toolkit default for full archive)${RESET}"
             elif [[ -d "$HOME/.grin/main/chain_data" ]]; then
-                cfg_db_root="$HOME/.grin/main"
+                cfg_grin_dir="$HOME/.grin/main"
                 success "Found: $HOME/.grin/main/chain_data"
             else
                 warn "chain_data not found in /grinfullmain or $HOME/.grin/main"
                 echo -e "  ${DIM}The explorer needs a full archive node — pruned nodes are not supported.${RESET}"
-                echo -ne "Enter db_root path (parent directory of chain_data, or 0 to skip): "
-                read -r cfg_db_root
-                [[ "$cfg_db_root" == "0" ]] && cfg_db_root=""
+                echo -ne "Enter grin_dir path (parent directory of chain_data, or 0 to skip): "
+                read -r cfg_grin_dir
+                [[ "$cfg_grin_dir" == "0" ]] && cfg_grin_dir=""
             fi
             ;;
     esac
@@ -688,9 +712,9 @@ configure_explorer() {
         sed -i "s|^api_secret_path\s*=.*|api_secret_path = \"${API_SECRET_PATH}\"|" "$toml"
     fi
 
-    # Patch db_root (only for local node; remote nodes connect via API only)
-    if [[ -n "$cfg_db_root" ]]; then
-        sed -i "s|^db_root\s*=.*|db_root = \"${cfg_db_root}\"|" "$toml"
+    # Patch grin_dir (only for local node; remote nodes connect via API only)
+    if [[ -n "$cfg_grin_dir" ]]; then
+        sed -i "s|^grin_dir\s*=.*|grin_dir = \"${cfg_grin_dir}\"|" "$toml"
     fi
 
     # Summary of patched values
@@ -699,8 +723,8 @@ configure_explorer() {
     echo -e "    host             = ${CYAN}${cfg_host}${RESET}"
     echo -e "    port             = ${CYAN}${cfg_port}${RESET}"
     echo -e "    protocol         = ${CYAN}${cfg_proto}${RESET}"
-    [[ -n "$cfg_db_root" ]] && \
-        echo -e "    db_root          = ${CYAN}${cfg_db_root}${RESET}  ${DIM}(parent of chain_data)${RESET}"
+    [[ -n "$cfg_grin_dir" ]] && \
+        echo -e "    grin_dir         = ${CYAN}${cfg_grin_dir}${RESET}  ${DIM}(parent of chain_data)${RESET}"
     [[ -n "$cfg_secret" ]] && \
         echo -e "    api_secret_path  = ${CYAN}${API_SECRET_PATH}${RESET}"
     echo ""
@@ -711,7 +735,7 @@ configure_explorer() {
     fi
 
     success "Explorer.toml patched."
-    log "Explorer configured: host=$cfg_host port=$cfg_port proto=$cfg_proto db_root=${cfg_db_root:-skipped}"
+    log "Explorer configured: host=$cfg_host port=$cfg_port proto=$cfg_proto grin_dir=${cfg_grin_dir:-skipped}"
     pause
 }
 
@@ -723,14 +747,14 @@ start_explorer() {
 
     # Pre-start: verify chain_data path if Explorer.toml is present
     if [[ -f "$EXPLORER_TOML" ]]; then
-        local db_root_val
-        db_root_val=$(grep -E '^[[:space:]]*db_root[[:space:]]*=' "$EXPLORER_TOML" 2>/dev/null \
+        local grin_dir_val
+        grin_dir_val=$(grep -E '^[[:space:]]*grin_dir[[:space:]]*=' "$EXPLORER_TOML" 2>/dev/null \
                       | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
-        if [[ -n "$db_root_val" && ! -d "$db_root_val/chain_data" ]]; then
-            warn "chain_data not found at: ${db_root_val}/chain_data"
+        if [[ -n "$grin_dir_val" && ! -d "$grin_dir_val/chain_data" ]]; then
+            warn "chain_data not found at: ${grin_dir_val}/chain_data"
             echo -e "  ${DIM}The explorer reads block data directly from chain_data on disk.${RESET}"
             echo -e "  ${DIM}Toolkit default for full archive: /grinfullmain/chain_data${RESET}"
-            echo -e "  ${DIM}Run Configure (B→2) to update db_root to the correct path.${RESET}"
+            echo -e "  ${DIM}Run Configure (B→2) to update grin_dir to the correct path.${RESET}"
             echo ""
             echo -ne "Continue anyway? [y/N/0]: "
             read -r cont_anyway
@@ -761,7 +785,7 @@ start_explorer() {
     else
         warn "Explorer may still be starting — check port 8000 in a moment."
         echo -e "  ${DIM}Attach: tmux attach -t ${EXPLORER_SESSION}${RESET}"
-        echo -e "  ${DIM}If it exits immediately, run Configure (B→2) to fix db_root / chain_data path.${RESET}"
+        echo -e "  ${DIM}If it exits immediately, run Configure (B→2) to fix grin_dir / chain_data path.${RESET}"
     fi
     log "Explorer session started: $EXPLORER_SESSION"
     pause

@@ -7,18 +7,14 @@
 #   a) Download & install grin-wallet   (mainnet → /grinwalletmain
 #                                        testnet → /grinwallettest)
 #   b) Initialize wallet                (grin-wallet init)
-#   c) Recover wallet from seed         (grin-wallet init -r)
-#   d) Show seed phrase                 (grin-wallet recover)
-#
-#  ─── Run ─────────────────────────────────────────────────────────────────────
-#   e) Start wallet listener            (grin-wallet listen, in tmux)
+#   c) Start wallet listener            (grin-wallet listen, in tmux)
 #
 #  ─── Foreign API ─────────────────────────────────────────────────────────────
-#   f) Enable Wallet Foreign API        (port 3415 — localhost only)
-#   g) Disable Wallet Foreign API
+#   d) Enable Wallet Foreign API        (port 3415 — localhost only)
+#   e) Disable Wallet Foreign API
 #
 #  ─── Web Interface ───────────────────────────────────────────────────────────
-#   m) Web Wallet Interface             (submenu — 05 M)
+#   z) Web Wallet Interface             (submenu — 05 Z)
 #      1) Install dependencies          (nginx, php, certbot, htpasswd, qrencode)
 #      2) Deploy files                  (copy web/05/ → deploy directory)
 #      3) Configure nginx               (vhost + rate-limit + security headers)
@@ -217,9 +213,9 @@ show_status() {
     if [[ -f "/etc/nginx/sites-enabled/grin-wallet-web" ]]; then
         echo -e "  ${BOLD}Web Wallet UI${RESET}               : ${GREEN}DEPLOYED${RESET}  ${DIM}(nginx: grin-wallet-web)${RESET}"
     elif [[ -d "$WEB_WALLET_DEPLOY_DIR_DEFAULT" ]]; then
-        echo -e "  ${BOLD}Web Wallet UI${RESET}               : ${YELLOW}FILES PRESENT${RESET}  ${DIM}(nginx not configured — option m)${RESET}"
+        echo -e "  ${BOLD}Web Wallet UI${RESET}               : ${YELLOW}FILES PRESENT${RESET}  ${DIM}(nginx not configured — option z)${RESET}"
     else
-        echo -e "  ${BOLD}Web Wallet UI${RESET}               : ${DIM}not deployed${RESET}  ${DIM}(option m)${RESET}"
+        echo -e "  ${BOLD}Web Wallet UI${RESET}               : ${DIM}not deployed${RESET}  ${DIM}(option z)${RESET}"
     fi
     echo ""
 }
@@ -354,79 +350,7 @@ init_wallet() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# c) RECOVER WALLET FROM SEED
-# ═══════════════════════════════════════════════════════════════════════════════
-
-recover_wallet() {
-    echo -e "\n${BOLD}${CYAN}── Recover Wallet from Seed Phrase ──${RESET}\n"
-
-    detect_and_select_network || return
-
-    if [[ ! -x "$WALLET_BIN" ]]; then
-        warn "grin-wallet binary not found — run option (a) first."; return
-    fi
-
-    warn "This will create a new wallet from your 24-word seed phrase."
-    warn "Any existing wallet data in $WALLET_DIR will be overwritten!"
-    echo -ne "${BOLD}Type ${GREEN}yes${RESET}${BOLD} to confirm [yes/N]: ${RESET}"
-    read -r confirm || true
-    [[ "${confirm,,}" != "yes" ]] && info "Cancelled." && return
-
-    local wallet_pass wallet_pass2
-    read -rs -p "  Enter new wallet password (min 5 chars): " wallet_pass; echo ""
-    read -rs -p "  Confirm wallet password:                  " wallet_pass2; echo ""
-    echo ""
-    if [[ "$wallet_pass" != "$wallet_pass2" ]]; then
-        error "Passwords do not match."; unset wallet_pass wallet_pass2; return
-    fi
-    if [[ ${#wallet_pass} -lt 5 ]]; then
-        warn "Password must be at least 5 characters."; unset wallet_pass wallet_pass2; return
-    fi
-
-    info "You will be prompted to enter your 24-word seed phrase."
-    echo ""
-    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" init -r
-    local rc=$?
-    unset wallet_pass wallet_pass2
-    echo ""
-    [[ $rc -eq 0 ]] && success "Wallet recovered successfully." || warn "Recovery may have failed (exit code $rc)."
-    log "[recover_wallet] network=$NETWORK rc=$rc"
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# d) SHOW SEED PHRASE
-# ═══════════════════════════════════════════════════════════════════════════════
-
-show_seed() {
-    echo -e "\n${BOLD}${CYAN}── Show Wallet Seed Phrase ──${RESET}\n"
-
-    detect_and_select_network || return
-
-    if [[ ! -x "$WALLET_BIN" ]]; then
-        warn "grin-wallet binary not found — run option (a) first."; return
-    fi
-    if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
-        warn "Wallet not initialized. Run option (b) first."; return
-    fi
-
-    warn "Your seed phrase will be displayed on screen."
-    echo -ne "${BOLD}Are you in a private location? Type ${GREEN}yes${RESET}${BOLD} to continue [yes/N]: ${RESET}"
-    read -r confirm || true
-    [[ "${confirm,,}" != "yes" ]] && info "Cancelled." && return
-
-    local wallet_pass
-    read -rs -p "  Enter wallet password: " wallet_pass; echo ""
-    echo ""
-    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" recover
-    local rc=$?
-    unset wallet_pass
-    echo ""
-    [[ $rc -ne 0 ]] && warn "Command failed (exit code $rc)."
-    log "[show_seed] network=$NETWORK rc=$rc"
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# e) START WALLET LISTENER
+# c) START WALLET LISTENER
 # ═══════════════════════════════════════════════════════════════════════════════
 
 start_wallet() {
@@ -484,13 +408,13 @@ start_wallet() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# f) ENABLE WALLET FOREIGN API
+# d) ENABLE WALLET FOREIGN API
 # ═══════════════════════════════════════════════════════════════════════════════
 
 enable_foreign_api() {
     echo -e "\n${BOLD}${CYAN}── Enable Wallet Foreign API ──${RESET}\n"
     echo -e "  ${DIM}The Foreign API (port $FOREIGN_API_PORT) allows other wallets to send you Grin via HTTP.${RESET}"
-    echo -e "  ${DIM}It runs on localhost only — the Web Wallet (option m) proxies to it internally.${RESET}"
+    echo -e "  ${DIM}It runs on localhost only — the Web Wallet (option z) proxies to it internally.${RESET}"
     echo -e "  ${DIM}You do NOT need to open port $FOREIGN_API_PORT publicly when using the Web Wallet.${RESET}"
     echo ""
 
@@ -512,12 +436,12 @@ enable_foreign_api() {
     fi
 
     success "Wallet Foreign API enabled in grin-wallet.toml"
-    warn "Restart the wallet listener (option e) for the change to take effect."
+    warn "Restart the wallet listener (option c) for the change to take effect."
     log "[enable_foreign_api] network=$NETWORK"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# g) DISABLE WALLET FOREIGN API
+# e) DISABLE WALLET FOREIGN API
 # ═══════════════════════════════════════════════════════════════════════════════
 
 disable_foreign_api() {
@@ -532,12 +456,12 @@ disable_foreign_api() {
     cp "$GRIN_WALLET_TOML" "${GRIN_WALLET_TOML}.bak.$(date +%s)"
     sed -i 's/owner_api_include_foreign\s*=.*/owner_api_include_foreign = false/' "$GRIN_WALLET_TOML"
     success "Wallet Foreign API disabled in grin-wallet.toml"
-    warn "Restart the wallet listener (option e) for the change to take effect."
+    warn "Restart the wallet listener (option c) for the change to take effect."
     log "[disable_foreign_api] network=$NETWORK"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 05 M) WEB WALLET INTERFACE — Config helpers
+# 05 Z) WEB WALLET INTERFACE — Config helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
 ww_load_config() {
@@ -1087,7 +1011,7 @@ web_wallet_menu() {
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN} 05 M) WEB WALLET INTERFACE${RESET}"
+        echo -e "${BOLD}${CYAN} 05 Z) WEB WALLET INTERFACE${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         show_web_wallet_status
 
@@ -1141,23 +1065,19 @@ show_menu() {
     echo -e "${DIM}  ─── Setup ────────────────────────────────────────${RESET}"
     echo -e "  ${GREEN}a${RESET}) Download & install grin-wallet  ${DIM}(mainnet / testnet)${RESET}"
     echo -e "  ${GREEN}b${RESET}) Initialize wallet               ${DIM}(grin-wallet init)${RESET}"
-    echo -e "  ${GREEN}c${RESET}) Recover wallet from seed        ${DIM}(grin-wallet init -r)${RESET}"
-    echo -e "  ${GREEN}d${RESET}) Show seed phrase                ${DIM}(grin-wallet recover)${RESET}"
-    echo ""
-    echo -e "${DIM}  ─── Run ──────────────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}e${RESET}) Start wallet listener           ${DIM}(grin-wallet listen, tmux)${RESET}"
+    echo -e "  ${GREEN}c${RESET}) Start wallet listener           ${DIM}(grin-wallet listen, tmux)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Foreign API ──────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}f${RESET}) Enable Wallet Foreign API       ${DIM}(port $FOREIGN_API_PORT — localhost only)${RESET}"
-    echo -e "  ${RED}g${RESET}) Disable Wallet Foreign API"
+    echo -e "  ${GREEN}d${RESET}) Enable Wallet Foreign API       ${DIM}(port $FOREIGN_API_PORT — localhost only)${RESET}"
+    echo -e "  ${RED}e${RESET}) Disable Wallet Foreign API"
     echo ""
     echo -e "${DIM}  ─── Web Interface ────────────────────────────────${RESET}"
-    echo -e "  ${CYAN}m${RESET}) Web Wallet Interface            ${DIM}(nginx + PHP + HTTPS + Basic Auth)${RESET}"
+    echo -e "  ${CYAN}z${RESET}) Web Wallet Interface            ${DIM}(nginx + PHP + HTTPS + Basic Auth)${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh status${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [a-g / m / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [a-e / z / 0]: ${RESET}"
 }
 
 main() {
@@ -1168,12 +1088,10 @@ main() {
         case "$choice" in
             a) download_wallet ;;
             b) init_wallet ;;
-            c) recover_wallet ;;
-            d) show_seed ;;
-            e) start_wallet ;;
-            f) enable_foreign_api ;;
-            g) disable_foreign_api ;;
-            m) web_wallet_menu ;;
+            c) start_wallet ;;
+            d) enable_foreign_api ;;
+            e) disable_foreign_api ;;
+            z) web_wallet_menu ;;
             0) break ;;
             "") continue ;;
             *) warn "Invalid option." ; sleep 1 ;;

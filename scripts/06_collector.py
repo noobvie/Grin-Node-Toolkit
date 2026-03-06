@@ -633,6 +633,15 @@ def cmd_backfill_stats(days=None):
 
 # ── Peer update ───────────────────────────────────────────────────────────────
 
+def _mask_ip(ip):
+    """Mask the last octet of an IPv4 address to protect peer privacy (1.2.3.4 → 1.2.3.x).
+    IPv6 addresses are returned as-is (already non-trivial to correlate)."""
+    parts = ip.rsplit(".", 1)
+    if len(parts) == 2 and not ip.startswith("["):
+        return parts[0] + ".x"
+    return ip
+
+
 def _is_public_ip(ip):
     """Return True if ip is a routable public address (not loopback/RFC-1918)."""
     return (ip
@@ -987,7 +996,7 @@ def _update_peers():
 
     output_peers = [
         {
-            "ip":           r[0],
+            "ip":           _mask_ip(r[0]),
             "network":      r[1],
             "port":         r[2],
             "user_agent":   r[3],

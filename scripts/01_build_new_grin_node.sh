@@ -28,7 +28,8 @@
 #   /grinfullmain    — full archive, mainnet
 #   /grinprunetest   — pruned,       testnet
 #
-# SETUP PIPELINE  (14 steps, run automatically)
+# SETUP PIPELINE  (up to 14 steps; Steps 10–12 replaced by a single stream step
+#                  when on-the-fly extraction is chosen at Step 9)
 #   Step  1 — Process & Port Check
 #              Scans for running 'grin' processes (excluding the toolkit's own
 #              scripts) and occupied ports (3413 API, 3414 P2P mainnet,
@@ -73,26 +74,31 @@
 #              For testnet, also changes ports: 3413 → 13413, 3414 → 13414,
 #                3415 → 13415, 3416 → 13416.
 #
-#   Step  9 — Download Chain Data
-#              Downloads pre-synced chain data. Three known hosts tried in order:
+#   Step  9 — Chain Data Source & Transfer Mode
+#              All three known hosts are checked (shuffled order):
 #                *.grin.money    — primary
 #                *.grinily.com   — backup 1
 #                *.onlygrins.com — backup 2
-#              Each host is checked via check_status_before_download.txt — only
-#              used if status says "Sync completed."
-#              If all 3 fail, prompts the user to enter a custom base URL or
-#              press 0 to return to the master script.
-#              Prompts to remove any existing .tar.gz before downloading fresh.
+#              Each host is tested via check_status_before_download.txt; all
+#              passing hosts are queued as fallback sources.
+#              If all 3 fail, prompts for a custom base URL or 0 to return.
+#              User then chooses transfer mode:
+#                1) On-the-fly — pipes remote tar.gz straight into tar; no
+#                   .tar.gz stored locally; auto-switches source on failure;
+#                   skips Steps 10 & 11.  cmd: wget -O - <url> | tar -xzvf -
+#                2) Full download — saves .tar.gz to disk (wget -c, resumable),
+#                   auto-switches source on failure; continues to Steps 10–12.
 #
-#   Step 10 — SHA256 Checksum Verification
+#   Step 10 — SHA256 Checksum Verification  [full-download mode only]
 #              Runs 'sha256sum -c' against the downloaded .sha256 file.
 #              Exits immediately on mismatch — never extracts a corrupt archive.
+#              [In on-the-fly mode this step is replaced by the stream step.]
 #
-#   Step 11 — Disk Space Check
+#   Step 11 — Disk Space Check  [full-download mode only]
 #              Requires at least  tar_size × 1.2  free on / before extracting.
 #              Shows archive size, required space, and available space.
 #
-#   Step 12 — Extract Chain Data
+#   Step 12 — Extract Chain Data  [full-download mode only]
 #              Extracts the tar.gz into the node directory. Prompts to remove
 #              an existing chain_data directory before extraction if found.
 #              Deletes .tar.gz and .sha256 after successful extraction to
@@ -134,6 +140,8 @@ TAR_FILE=""
 SHA_FILE=""
 GRIN_BIN_TMP=""        # cache binary between mainnet+testnet setups
 RESTRICTED_NETWORK=""  # set by check_grin_running if one slot is already occupied
+STREAM_MODE=false      # true = on-the-fly pipe extraction (no local .tar.gz saved)
+READY_SOURCES=()       # ordered list of base URLs that passed sync-status check
 
 # --- Colors ---
 RED='\033[0;31m'
@@ -783,7 +791,7 @@ download_chain_data() {
     local network="$1"
     local mode="$2"
 
-    step_header "Step 9: Download Chain Data"
+    step_header "Step 9: Chain Data Source & Transfer Mode"
 
     # Check for an existing .tar.gz in the destination directory before downloading
     local existing_tar
@@ -823,28 +831,26 @@ download_chain_data() {
     info "Known sources (random order):"
     local h; for h in "${hosts[@]}"; do info "  → $h"; done
 
-    # Try each known host (shuffled order, fallback to next on failure)
-    local base_url=""
+    # Check ALL known hosts and collect every ready base URL for fallback
+    READY_SOURCES=()
     for host in "${hosts[@]}"; do
         local status_url="https://${host}/check_status_before_download.txt"
         info "Checking sync status at: $status_url"
         local status_content
         status_content=$(curl -fsSL --max-time 15 "$status_url" 2>/dev/null) || {
-            warn "Cannot reach $host — trying next source..."
+            warn "Cannot reach $host — skipping..."
             continue
         }
         if echo "$status_content" | grep -q "Sync completed."; then
-            base_url="https://$host"
+            READY_SOURCES+=("https://$host")
             success "Source ready: $host"
-            break
         else
             warn "$host is not ready: $(echo "$status_content" | head -1)"
-            warn "Trying next source..."
         fi
     done
 
     # All known hosts failed — prompt for custom URL or exit
-    if [[ -z "$base_url" ]]; then
+    if [[ ${#READY_SOURCES[@]} -eq 0 ]]; then
         echo ""
         warn "All 3 known sources are unavailable or not fully synced."
         echo ""
@@ -867,11 +873,10 @@ download_chain_data() {
                 *)
                     custom_url="${custom_url%/}"   # strip trailing slash
                     info "Checking custom source: $custom_url"
-                    # Check status file first (best-effort; not required for custom hosts)
                     local custom_status
                     custom_status=$(curl -fsSL --max-time 15 "${custom_url}/check_status_before_download.txt" 2>/dev/null) || true
                     if echo "$custom_status" | grep -q "Sync completed."; then
-                        base_url="$custom_url"
+                        READY_SOURCES=("$custom_url")
                         success "Custom source ready: $custom_url"
                         break
                     fi
@@ -879,7 +884,7 @@ download_chain_data() {
                     local custom_index
                     custom_index=$(curl -fsSL --max-time 15 "${custom_url}/" 2>/dev/null) || true
                     if echo "$custom_index" | grep -q '\.tar\.gz'; then
-                        base_url="$custom_url"
+                        READY_SOURCES=("$custom_url")
                         info "Custom source has chain data files — proceeding without status check."
                         break
                     fi
@@ -891,7 +896,8 @@ download_chain_data() {
         done
     fi
 
-    # Parse the directory index to find the .tar.gz and .sha256 filenames
+    # Parse the directory index from the first ready source to get filenames
+    local base_url="${READY_SOURCES[0]}"
     info "Fetching file listing from $base_url ..."
     local index
     index=$(curl -fsSL --max-time 15 "$base_url/" 2>/dev/null) \
@@ -907,17 +913,64 @@ download_chain_data() {
     TAR_FILE="$GRIN_DIR/$tar_name"
     SHA_FILE="$GRIN_DIR/$sha_name"
 
+    # ── Ask user: on-the-fly stream or full download ───────────────────────────
+    echo ""
+    echo -e "${BOLD}  How do you want to get the chain data?${RESET}"
+    echo ""
+    echo -e "  ${GREEN}1${RESET}) ${BOLD}On-the-fly extraction${RESET} ${DIM}(stream directly — no full download)${RESET}"
+    echo -e "     ${DIM}Pipes the remote archive straight into tar without saving locally.${RESET}"
+    echo -e "     ${DIM}cmd: wget -O - <url> | tar -xzvf -${RESET}"
+    echo -e "     ${DIM}Saves temporary disk space and reduces total setup time.${RESET}"
+    echo -e "     ${DIM}Auto-switches to the next source if the stream fails mid-transfer.${RESET}"
+    echo -e "     ${DIM}Note: SHA256 checksum verification is skipped in this mode.${RESET}"
+    echo ""
+    echo -e "  ${CYAN}2${RESET}) ${BOLD}Full download first${RESET} ${DIM}(default — more resilient on slow connections)${RESET}"
+    echo -e "     ${DIM}Downloads .tar.gz to disk (wget -c, supports resume on interruption).${RESET}"
+    echo -e "     ${DIM}Verifies SHA256 checksum before extracting.${RESET}"
+    echo -e "     ${DIM}Auto-switches to the next source if download fails mid-transfer.${RESET}"
+    echo ""
+    echo -ne "${BOLD}Choose [1/2] (default: 2): ${RESET}"
+    local dl_choice
+    read -r dl_choice || true
+
+    if [[ "${dl_choice:-2}" == "1" ]]; then
+        STREAM_MODE=true
+        info "On-the-fly extraction selected. Streaming will begin at Step 10."
+        log "[STEP 9] On-the-fly mode. sources=(${READY_SOURCES[*]}) tar=$tar_name"
+        return 0
+    fi
+
+    # ── Full download mode ─────────────────────────────────────────────────────
+    STREAM_MODE=false
+
     info "Downloading checksum file: $sha_name"
     curl -fsSL "$base_url/$sha_name" -o "$SHA_FILE" \
         || die "Failed to download checksum file."
     success "Checksum saved: $SHA_FILE"
 
     info "Downloading chain data: $tar_name"
-    info "(Large file — progress shown below)"
-    wget -c --progress=bar:force -O "$TAR_FILE" "$base_url/$tar_name" \
-        || die "Chain data download failed from $base_url."
+    info "(Large file — progress shown below. Auto-switches source on failure.)"
+    local dl_ok=false
+    local src_num=0 total_src=${#READY_SOURCES[@]}
+    for src_base in "${READY_SOURCES[@]}"; do
+        src_num=$(( src_num + 1 ))
+        info "Trying source $src_num/$total_src: $src_base"
+        if wget -c --progress=bar:force -O "$TAR_FILE" "$src_base/$tar_name"; then
+            dl_ok=true
+            success "Chain data downloaded from $src_base"
+            break
+        else
+            warn "Download failed from $src_base."
+            rm -f "$TAR_FILE"
+            if [[ $src_num -lt $total_src ]]; then
+                warn "Switching to source $((src_num + 1))/$total_src..."
+            fi
+        fi
+    done
+    [[ "$dl_ok" == "true" ]] || die "Chain data download failed from all available sources."
+
     success "Chain data downloaded: $TAR_FILE"
-    log "[STEP 9] Downloaded $tar_name from $base_url"
+    log "[STEP 9] Downloaded $tar_name (full download mode)"
 }
 
 # =============================================================================
@@ -1021,6 +1074,74 @@ extract_chain_data() {
 }
 
 # =============================================================================
+# [STREAM] EXTRACT CHAIN DATA ON-THE-FLY  (no local archive)
+# -----------------------------------------------------------------------------
+# Pipes the remote .tar.gz directly into tar without saving it locally:
+#   wget -O - <url> | tar -xzvf - -C "$GRIN_DIR"
+# All ready sources from READY_SOURCES are tried in order. On failure, any
+# partially extracted chain_data directory is removed before retrying.
+# Steps 10 (SHA256) and 11 (disk space) are skipped in this mode.
+# =============================================================================
+stream_extract_chain_data() {
+    step_header "Step 10: Extract Chain Data (On-the-fly)"
+
+    local tar_name="${TAR_FILE##*/}"
+
+    # Handle existing chain_data directory (same prompt as full-download mode)
+    if [[ -d "$GRIN_DIR/chain_data" ]]; then
+        warn "Existing chain_data directory found: $GRIN_DIR/chain_data"
+        echo -e "  ${GREEN}y${RESET}) Remove and extract fresh"
+        echo -e "  ${RED}n${RESET}) Keep it (existing files may be overwritten)"
+        echo -e "  ${DIM}0${RESET}) Return to main menu"
+        echo ""
+        echo -ne "${BOLD}Remove existing chain_data? [y/N/0]: ${RESET}"
+        read -r rm_choice || true
+        case "${rm_choice,,}" in
+            y)
+                info "Removing existing chain_data..."
+                rm -rf "$GRIN_DIR/chain_data"
+                success "Existing chain_data removed. Starting fresh extraction..."
+                ;;
+            0) exit 0 ;;
+            *) info "Keeping existing chain_data. Continuing (existing files may be overwritten)..." ;;
+        esac
+    fi
+
+    local stream_ok=false
+    local src_num=0 total_src=${#READY_SOURCES[@]}
+    for src_base in "${READY_SOURCES[@]}"; do
+        src_num=$(( src_num + 1 ))
+        local tar_url="$src_base/$tar_name"
+        info "Source $src_num/$total_src: $tar_url"
+        info "Running: wget -O - \"$tar_url\" | tar -xzvf - -C \"$GRIN_DIR\""
+        [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
+        echo ""
+        log "[STEP 10] Streaming from $tar_url"
+        if wget --progress=bar:force -O - "$tar_url" \
+                | tar -xzvf - -C "$GRIN_DIR"; then
+            stream_ok=true
+            break
+        else
+            warn "Stream failed from $src_base."
+            if [[ -d "$GRIN_DIR/chain_data" ]]; then
+                warn "Removing partial extraction..."
+                rm -rf "$GRIN_DIR/chain_data"
+            fi
+            if [[ $src_num -lt $total_src ]]; then
+                warn "Switching to source $((src_num + 1))/$total_src..."
+                echo ""
+            fi
+        fi
+    done
+
+    [[ "$stream_ok" == "true" ]] \
+        || die "On-the-fly extraction failed from all available sources. Retry or choose full download mode."
+
+    success "On-the-fly extraction complete."
+    log "[STEP 10] On-the-fly extraction complete."
+}
+
+# =============================================================================
 # [13] START GRIN NODE IN A TMUX SESSION
 # -----------------------------------------------------------------------------
 # Creates a named tmux session: grin_<dirname>  (e.g. grin_grinprunemain).
@@ -1101,9 +1222,13 @@ setup_one_node() {
     generate_config
     patch_config        "$network" "$ARCHIVE_MODE"
     download_chain_data "$network" "$ARCHIVE_MODE"
-    verify_checksum
-    check_disk_space
-    extract_chain_data
+    if [[ "$STREAM_MODE" == "true" ]]; then
+        stream_extract_chain_data
+    else
+        verify_checksum
+        check_disk_space
+        extract_chain_data
+    fi
     start_grin_tmux
     show_summary        "$network" "$ARCHIVE_MODE"
 
@@ -1112,6 +1237,8 @@ setup_one_node() {
     TAR_FILE=""
     SHA_FILE=""
     ARCHIVE_MODE=""
+    STREAM_MODE=false
+    READY_SOURCES=()
 }
 
 # =============================================================================

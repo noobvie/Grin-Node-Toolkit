@@ -94,10 +94,6 @@ Grin Node Toolkit
 │       ├── 2) Remove nginx proxy         (mainnet)
 │       ├── 3) Enable Node API via nginx  (testnet port 13413, /v2/foreign, HTTPS)
 │       ├── 4) Remove nginx proxy         (testnet)
-│       ├── 5) Expose stratum             (mainnet port 3416, patch .toml + restart)
-│       ├── 6) Restrict stratum           (mainnet, revert to localhost)
-│       ├── 7) Expose stratum             (testnet port 13416, patch .toml + restart)
-│       ├── 8) Restrict stratum           (testnet, revert to localhost)
 │       └── 0) Back
 │
 ├── Addons
@@ -126,7 +122,16 @@ Grin Node Toolkit
 │   │   │   ├── B5) Setup nginx (explorer.yourdomain.com)
 │   │   │   └── B6) Status
 │   │   └── 0) Back
-│   ├── 7) Coming Soon
+│   ├── 7) Grin Mining Services          → 07_grin_mining_services.sh
+│   │   ├── A) Node Status               (running nodes, tmux sessions, binary path)
+│   │   ├── B) Setup Stratum             (enable_stratum_server, wallet_listener_url)
+│   │   ├── C) Configure Stratum         (wallet URL, burn_reward, toggle enable)
+│   │   ├── D) Publish Stratum           (mainnet port 3416, 0.0.0.0 + firewall)
+│   │   ├── E) Restrict Stratum          (mainnet, revert to localhost)
+│   │   ├── F) Publish Stratum           (testnet port 13416, 0.0.0.0 + firewall)
+│   │   ├── G) Restrict Stratum          (testnet, revert to localhost)
+│   │   ├── H) Mining Status             (ports, miners connected, toml values)
+│   │   └── 0) Back
 │   └── 8) Admin & Maintenance           → 08_grin_node_admin.sh
 │       ├── 1) Remote Node Monitor       (081_host_monitor_port.sh — also cron-ready)
 │       ├── 2) Service & Port Dashboard
@@ -152,7 +157,11 @@ A guided setup that downloads, verifies, configures, and launches a Grin node �
 
 - Choose mainnet or testnet, and full archive or pruned mode
 - Downloads the official Grin binary, verifies its SHA256, patches `grin-server.toml`
-- Downloads a community chain snapshot (3 sources, random order), verifies checksum, checks disk space, extracts
+- Checks all 3 known chain snapshot sources; every synced source is queued as a fallback
+- **Transfer mode choice at download time:**
+  - **On-the-fly extraction** — streams the remote archive directly into tar with no local `.tar.gz` saved (`wget -O - <url> | tar -xzvf -`); saves temporary disk space and reduces total setup time; SHA256 verification is skipped
+  - **Full download** — downloads `.tar.gz` to disk (supports `-c` resume on interruption), verifies SHA256 checksum, then extracts
+- **Auto-fallback** — if a stream or download fails mid-transfer, the script automatically switches to the next available source without user intervention; applies to both transfer modes
 - Launches the node in a named `tmux` session; displays elapsed time and session name
 
 ### 2. Manage Nginx Server — `02_nginx_fileserver_manager.sh`
@@ -189,9 +198,19 @@ Automates Grin blockchain backup and sharing so others can bootstrap from your n
 - Exposes `/v2/foreign` only via nginx HTTPS reverse proxy; blocks `/v2/owner` (returns 403)
 - Enables light wallets, block explorers, and tools to query your node
 
-**Stratum Mining (port 3416 / 13416)**
-- Patches `stratum_server_addr` in `grin-server.toml` from `127.0.0.1` → `0.0.0.0`
-- Configures firewall rules; performs graceful node stop + restart
+### 7. Grin Mining Services — `07_grin_mining_services.sh`
+
+Manages the Stratum Mining server for Grin nodes — setup, configuration, publishing, and live status — all from an alphabet menu (A–H).
+
+- **A) Node Status** — shows running node info per network: PID, binary path, tmux session, stratum port state
+- **B) Setup Stratum** — enables `enable_stratum_server = true`, sets `wallet_listener_url` (where coinbase rewards go), and optionally sets `burn_reward = false`; supports mainnet and testnet
+- **C) Configure Stratum** — interactively change any toml setting: `enable_stratum_server`, `stratum_server_addr`, `wallet_listener_url`, `burn_reward`; prompts for graceful node restart
+- **D) Publish Stratum — Mainnet** — patches `grin-server.toml` to `0.0.0.0:3416`, opens firewall port (UFW/iptables), graceful restart
+- **E) Restrict Stratum — Mainnet** — reverts bind to `127.0.0.1:3416`, closes firewall port, graceful restart
+- **F) Publish Stratum — Testnet** — same as D but for port 13416
+- **G) Restrict Stratum — Testnet** — same as E but for port 13416
+- **H) Mining Status** — shows per-network: port listening, number of connected miners (ESTAB TCP connections), full toml settings, and the miner connect URL
+- Auto-detects `grin-server.toml` via running process (`/proc/$pid/exe`) or known toolkit directories
 
 ### 5. Grin Wallet Service — `05_grin_wallet_service.sh`
 
@@ -293,11 +312,11 @@ grin-node-toolkit/
 │   ├── 01_build_new_grin_node.sh         # Feature 1 : node installation
 │   ├── 02_nginx_fileserver_manager.sh    # Feature 2 : nginx management
 │   ├── 03_grin_share_chain_data.sh       # Feature 3 : chain data sharing + schedule
-│   ├── 04_grin_node_foreign_api.sh       # Feature 4 : node services (API + stratum)
+│   ├── 04_grin_node_foreign_api.sh       # Feature 4 : node services (Node API)
 │   ├── 05_grin_wallet_service.sh         # Feature 5 : wallet service
 │   ├── 06_global_grin_health.sh          # Feature 6 : Global Grin Health menu
 │   ├── 06_collector.py                   # Feature 6 : Python stats + peer collector
-│   ├── 07_coming_soon.sh                 # Placeholder
+│   ├── 07_grin_mining_services.sh        # Feature 7 : stratum mining services
 │   ├── 08_grin_node_admin.sh             # Addon  8 : admin & maintenance menu
 │   ├── 081_host_monitor_port.sh          # Remote node port monitor (standalone / cron)
 │   └── 08del_clean_all_grin_things.sh    # Full Grin removal (nuclear cleanup)

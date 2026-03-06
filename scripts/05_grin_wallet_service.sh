@@ -3,13 +3,18 @@
 # 05_grin_wallet_service.sh - Grin Wallet Service
 # =============================================================================
 # Manages the complete grin-wallet lifecycle:
-#   1) Download & install grin-wallet  (mainnet → /grinwalletmain  |  testnet → /grinwallettest)
-#   2) Initialize wallet               (grin-wallet init — runs inline in current terminal)
-#   3) Start wallet listener           (grin-wallet listen, in tmux)
-#   4) Enable Wallet Foreign API       (port 3415) — allow HTTP payments
-#   5) Disable Wallet Foreign API
-#   6) Configure nginx proxy           (wallet, HTTPS)
-#   7) Configure firewall rules        (port 3415)
+#   a) Download & install grin-wallet  (mainnet → /grinwalletmain  |  testnet → /grinwallettest)
+#   b) Initialize wallet               (grin-wallet init)
+#   c) Start wallet listener           (grin-wallet listen, in tmux)
+#   d) Enable Wallet Foreign API       (port 3415) — allow HTTP payments
+#   e) Disable Wallet Foreign API
+#   f) Configure nginx proxy           (wallet, HTTPS)
+#   g) Configure firewall rules        (port 3415)
+#   h) Recover wallet from seed        (grin-wallet init -r)
+#   i) Show seed phrase                (grin-wallet recover)
+#   j) Send Grin                       (grin-wallet send)
+#   k) Receive Grin                    (grin-wallet receive -i, paste Slatepack)
+#   l) Finalize transaction            (grin-wallet finalize -i, paste Slatepack)
 # =============================================================================
 
 set -euo pipefail
@@ -130,6 +135,23 @@ get_foreign_api_status() {
 
 show_status() {
     echo -e "\n${BOLD}Status:${RESET}\n"
+
+    # ── Grin node status ──
+    local mainnet_up=0 testnet_up=0
+    ss -tlnp 2>/dev/null | grep -q ":3413 "  && mainnet_up=1
+    ss -tlnp 2>/dev/null | grep -q ":13413 " && testnet_up=1
+
+    if [[ $mainnet_up -eq 1 ]]; then
+        echo -e "  ${BOLD}Grin node (mainnet)${RESET}   : ${GREEN}RUNNING${RESET}  ${DIM}(port 3413)${RESET}"
+    else
+        echo -e "  ${BOLD}Grin node (mainnet)${RESET}   : ${RED}NOT RUNNING${RESET}  ${YELLOW}⚠ Start from /grin*main or run Script 01${RESET}"
+    fi
+    if [[ $testnet_up -eq 1 ]]; then
+        echo -e "  ${BOLD}Grin node (testnet)${RESET}   : ${GREEN}RUNNING${RESET}  ${DIM}(port 13413)${RESET}"
+    else
+        echo -e "  ${BOLD}Grin node (testnet)${RESET}   : ${RED}NOT RUNNING${RESET}  ${YELLOW}⚠ Start from /grin*test or run Script 01${RESET}"
+    fi
+    echo ""
 
     # ── Binaries ──
     if [[ -x "$WALLET_BIN_MAINNET" ]]; then
@@ -308,14 +330,14 @@ init_wallet() {
     info "Initializing wallet — seed phrase will appear below, write it down safely!"
     echo ""
 
-    cd "$WALLET_DIR" && "$WALLET_BIN" --top-level-dir "$WALLET_DIR" -p "$wallet_pass" init
+    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" init
     local rc=$?
     unset wallet_pass wallet_pass2
     echo ""
 
     if [[ $rc -ne 0 || ! -f "$GRIN_WALLET_TOML" ]]; then
         warn "Init may have failed (exit code $rc). Check output above."
-        warn "Manual command: cd $WALLET_DIR && $WALLET_BIN --top-level-dir $WALLET_DIR init"
+        warn "Manual command: cd $WALLET_DIR && $WALLET_BIN --top_level_dir $WALLET_DIR init"
         return
     fi
 
@@ -374,9 +396,19 @@ start_wallet() {
         fi
     fi
 
+    # Capture password here to pass to tmux (avoids TTY conflict inside tmux sessions)
+    local wallet_pass
+    read -rs -p "  Enter wallet password: " wallet_pass; echo ""
+    echo ""
+    if [[ -z "$wallet_pass" ]]; then
+        warn "No password entered. Cancelled."
+        return
+    fi
+
     info "Starting grin-wallet listen in tmux session: $session"
     tmux new-session -d -s "$session" -c "$WALLET_DIR" \
-        "bash -c \"'$WALLET_BIN' --top-level-dir '$WALLET_DIR' listen; echo ''; echo 'Wallet listener exited. Press Enter to close.'; read\""
+        "bash -c \"'$WALLET_BIN' --top_level_dir '$WALLET_DIR' -p '$wallet_pass' listen; echo ''; echo 'Wallet listener exited. Press Enter to close.'; read\""
+    unset wallet_pass
 
     sleep 1
     if tmux has-session -t "$session" 2>/dev/null; then
@@ -385,7 +417,7 @@ start_wallet() {
         info "Detach: Ctrl+B then D"
     else
         warn "tmux session did not persist — wallet may have exited immediately."
-        warn "Try running manually: $WALLET_BIN --top-level-dir $WALLET_DIR listen"
+        warn "Try running manually: $WALLET_BIN --top_level_dir $WALLET_DIR listen"
     fi
 
     log "[OPT 3] Wallet listener started: session=$session network=$NETWORK"
@@ -576,6 +608,254 @@ configure_firewall_foreign() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# RECOVER WALLET  (grin-wallet init -r)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+recover_wallet() {
+    echo -e "\n${BOLD}${CYAN}── Recover Wallet from Seed Phrase ──${RESET}\n"
+
+    detect_and_select_network || return
+
+    if [[ ! -x "$WALLET_BIN" ]]; then
+        warn "grin-wallet binary not found at $WALLET_BIN — run option (a) first."
+        return
+    fi
+
+    warn "This will create a new wallet from your 24-word seed phrase."
+    warn "Any existing wallet data in $WALLET_DIR will be overwritten!"
+    echo -ne "${BOLD}Type ${GREEN}yes${RESET}${BOLD} to confirm [yes/N]: ${RESET}"
+    read -r confirm || true
+    [[ "${confirm,,}" != "yes" ]] && info "Cancelled." && return
+
+    local wallet_pass wallet_pass2
+    read -rs -p "  Enter new wallet password (min 5 chars): " wallet_pass; echo ""
+    read -rs -p "  Confirm wallet password:                  " wallet_pass2; echo ""
+    echo ""
+    if [[ "$wallet_pass" != "$wallet_pass2" ]]; then
+        error "Passwords do not match."; unset wallet_pass wallet_pass2; return
+    fi
+    if [[ ${#wallet_pass} -lt 5 ]]; then
+        warn "Password must be at least 5 characters."; unset wallet_pass wallet_pass2; return
+    fi
+
+    info "You will be prompted to enter your 24-word seed phrase."
+    echo ""
+    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" init -r
+    local rc=$?
+    unset wallet_pass wallet_pass2
+    echo ""
+    if [[ $rc -eq 0 ]]; then
+        success "Wallet recovered successfully."
+    else
+        warn "Recovery may have failed (exit code $rc). Check output above."
+    fi
+    log "[recover_wallet] network=$NETWORK rc=$rc"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SHOW SEED PHRASE  (grin-wallet recover)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+show_seed() {
+    echo -e "\n${BOLD}${CYAN}── Show Wallet Seed Phrase ──${RESET}\n"
+
+    detect_and_select_network || return
+
+    if [[ ! -x "$WALLET_BIN" ]]; then
+        warn "grin-wallet binary not found at $WALLET_BIN — run option (a) first."
+        return
+    fi
+
+    if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
+        warn "Wallet not initialized. Run option (b) first."
+        return
+    fi
+
+    warn "Your seed phrase will be displayed on screen."
+    echo -ne "${BOLD}Are you in a private location? Type ${GREEN}yes${RESET}${BOLD} to continue [yes/N]: ${RESET}"
+    read -r confirm || true
+    [[ "${confirm,,}" != "yes" ]] && info "Cancelled." && return
+
+    local wallet_pass
+    read -rs -p "  Enter wallet password: " wallet_pass; echo ""
+    echo ""
+
+    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" recover
+    local rc=$?
+    unset wallet_pass
+    echo ""
+    if [[ $rc -ne 0 ]]; then
+        warn "Command failed (exit code $rc). Check output above."
+    fi
+    log "[show_seed] network=$NETWORK rc=$rc"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COLLECT SLATEPACK  (shared helper for receive/finalize)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+collect_slatepack() {
+    # Writes slatepack content to $1 (a temp file path)
+    local outfile="$1"
+    echo -e "  ${DIM}Paste your Slatepack message below."
+    echo -e "  It starts with BEGINSLATEPACK. and ends with ENDSLATEPACK."
+    echo -e "  Press Ctrl+D when done.${RESET}"
+    echo ""
+
+    local content=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        content+="$line"$'\n'
+        [[ "$line" == *"ENDSLATEPACK."* ]] && break
+    done
+
+    if [[ -z "$content" || "$content" != *"BEGINSLATEPACK."* ]]; then
+        warn "No valid Slatepack detected."
+        return 1
+    fi
+    printf '%s' "$content" > "$outfile"
+    return 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEND GRIN  (grin-wallet send)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+send_grin() {
+    echo -e "\n${BOLD}${CYAN}── Send Grin ──${RESET}\n"
+
+    detect_and_select_network || return
+
+    if [[ ! -x "$WALLET_BIN" ]]; then
+        warn "grin-wallet binary not found — run option (a) first."; return
+    fi
+    if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
+        warn "Wallet not initialized — run option (b) first."; return
+    fi
+
+    echo -ne "  Amount to send (e.g. 1.5, or 0 to cancel): "
+    read -r amount || true
+    [[ "$amount" == "0" || -z "$amount" ]] && info "Cancelled." && return
+
+    echo -ne "  Recipient address or 'slatepack' for interactive mode [slatepack]: "
+    read -r dest || true
+
+    local wallet_pass
+    read -rs -p "  Enter wallet password: " wallet_pass; echo ""
+    echo ""
+
+    if [[ -z "$dest" || "$dest" == "slatepack" ]]; then
+        # Generate initial slatepack to send to recipient
+        local tmp_slate
+        tmp_slate="$(mktemp /tmp/grin_slate_XXXXXX.slatepack)"
+        cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" \
+            send -m slatepack -d "$tmp_slate" "$amount"
+        local rc=$?
+        unset wallet_pass
+        if [[ $rc -eq 0 && -f "$tmp_slate" ]]; then
+            echo ""
+            echo -e "${BOLD}${GREEN}Send this Slatepack to the recipient:${RESET}"
+            cat "$tmp_slate"
+            echo ""
+            info "After recipient responds, use option (l) Finalize to complete."
+        else
+            warn "send failed (exit code $rc)."
+        fi
+        rm -f "$tmp_slate"
+    else
+        cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" \
+            send -d "$dest" "$amount"
+        local rc=$?
+        unset wallet_pass
+        [[ $rc -eq 0 ]] && success "Send completed." || warn "Send failed (exit code $rc)."
+    fi
+    log "[send_grin] network=$NETWORK amount=$amount"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RECEIVE GRIN  (grin-wallet receive -i)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+receive_grin() {
+    echo -e "\n${BOLD}${CYAN}── Receive Grin (paste sender's Slatepack) ──${RESET}\n"
+
+    detect_and_select_network || return
+
+    if [[ ! -x "$WALLET_BIN" ]]; then
+        warn "grin-wallet binary not found — run option (a) first."; return
+    fi
+    if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
+        warn "Wallet not initialized — run option (b) first."; return
+    fi
+
+    local tmp_in tmp_out
+    tmp_in="$(mktemp /tmp/grin_slate_in_XXXXXX.slatepack)"
+    tmp_out="$(mktemp /tmp/grin_slate_out_XXXXXX.slatepack)"
+
+    collect_slatepack "$tmp_in" || { rm -f "$tmp_in" "$tmp_out"; return; }
+
+    local wallet_pass
+    read -rs -p "  Enter wallet password: " wallet_pass; echo ""
+    echo ""
+
+    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" \
+        receive -i "$tmp_in" -o "$tmp_out"
+    local rc=$?
+    unset wallet_pass
+
+    if [[ $rc -eq 0 && -f "$tmp_out" ]]; then
+        echo ""
+        echo -e "${BOLD}${GREEN}Return this Slatepack to the sender to finalize:${RESET}"
+        cat "$tmp_out"
+        echo ""
+        success "Receive step complete — send the above Slatepack back to the sender."
+    else
+        warn "receive failed (exit code $rc). Check output above."
+    fi
+    rm -f "$tmp_in" "$tmp_out"
+    log "[receive_grin] network=$NETWORK rc=$rc"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FINALIZE GRIN  (grin-wallet finalize -i)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+finalize_grin() {
+    echo -e "\n${BOLD}${CYAN}── Finalize Grin Transaction (paste receiver's Slatepack) ──${RESET}\n"
+
+    detect_and_select_network || return
+
+    if [[ ! -x "$WALLET_BIN" ]]; then
+        warn "grin-wallet binary not found — run option (a) first."; return
+    fi
+    if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
+        warn "Wallet not initialized — run option (b) first."; return
+    fi
+
+    local tmp_in
+    tmp_in="$(mktemp /tmp/grin_slate_fin_XXXXXX.slatepack)"
+
+    collect_slatepack "$tmp_in" || { rm -f "$tmp_in"; return; }
+
+    local wallet_pass
+    read -rs -p "  Enter wallet password: " wallet_pass; echo ""
+    echo ""
+
+    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" \
+        finalize -i "$tmp_in"
+    local rc=$?
+    unset wallet_pass
+    rm -f "$tmp_in"
+
+    echo ""
+    if [[ $rc -eq 0 ]]; then
+        success "Transaction finalized and broadcast to the network."
+    else
+        warn "Finalize failed (exit code $rc). Check output above."
+    fi
+    log "[finalize_grin] network=$NETWORK rc=$rc"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # MENU
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -587,17 +867,31 @@ show_menu() {
     echo -e "${BOLD}${YELLOW}  This tool is for testing and development purpose! ${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     show_status
-    check_node_status
 
-    echo -e "  ${GREEN}A${RESET}) Download & install grin-wallet"
-    echo -e "  ${GREEN}B${RESET}) Initialize wallet"
-    echo -e "  ${GREEN}C${RESET}) Start wallet listener"
-    echo -e "  ${GREEN}D${RESET}) Configure wallet API       ${DIM}(localhost / public / disable)${RESET}"
+    echo -e "${DIM}  ─── Setup ────────────────────────────────────────${RESET}"
+    echo -e "  ${GREEN}a${RESET}) Download & install grin-wallet  ${DIM}(choose mainnet / testnet)${RESET}"
+    echo -e "  ${GREEN}b${RESET}) Initialize wallet               ${DIM}(grin-wallet init)${RESET}"
+    echo -e "  ${GREEN}h${RESET}) Recover wallet from seed        ${DIM}(grin-wallet init -r)${RESET}"
+    echo -e "  ${GREEN}i${RESET}) Show seed phrase                ${DIM}(grin-wallet recover)${RESET}"
+    echo ""
+    echo -e "${DIM}  ─── Run ──────────────────────────────────────────${RESET}"
+    echo -e "  ${GREEN}c${RESET}) Start wallet listener           ${DIM}(grin-wallet listen, tmux)${RESET}"
+    echo ""
+    echo -e "${DIM}  ─── Transact ─────────────────────────────────────${RESET}"
+    echo -e "  ${GREEN}j${RESET}) Send Grin                       ${DIM}(grin-wallet send)${RESET}"
+    echo -e "  ${GREEN}k${RESET}) Receive Grin                    ${DIM}(paste sender's Slatepack)${RESET}"
+    echo -e "  ${GREEN}l${RESET}) Finalize transaction            ${DIM}(paste receiver's Slatepack)${RESET}"
+    echo ""
+    echo -e "${DIM}  ─── Publish ──────────────────────────────────────${RESET}"
+    echo -e "  ${GREEN}d${RESET}) Enable Wallet Foreign API       ${DIM}(port $FOREIGN_API_PORT)${RESET}"
+    echo -e "  ${RED}e${RESET}) Disable Wallet Foreign API"
+    echo -e "  ${CYAN}f${RESET}) Configure nginx proxy           ${DIM}(wallet)${RESET}"
+    echo -e "  ${CYAN}g${RESET}) Configure firewall rules        ${DIM}(port $FOREIGN_API_PORT)${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh status${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [A-D, 0]: ${RESET}"
+    echo -ne "${BOLD}Select [a-l / 0]: ${RESET}"
 }
 
 main() {
@@ -606,10 +900,18 @@ main() {
         read -r choice || true
 
         case "$choice" in
-            A|a) download_wallet ;;
-            B|b) init_wallet ;;
-            C|c) start_wallet ;;
-            D|d) enable_foreign_api ;;
+            a) download_wallet ;;
+            b) init_wallet ;;
+            c) start_wallet ;;
+            d) enable_foreign_api ;;
+            e) disable_foreign_api ;;
+            f) offer_nginx_proxy ;;
+            g) configure_firewall_foreign ;;
+            h) recover_wallet ;;
+            i) show_seed ;;
+            j) send_grin ;;
+            k) receive_grin ;;
+            l) finalize_grin ;;
             0) break ;;
             "") continue ;;
             *) warn "Invalid option." ; sleep 1 ;;

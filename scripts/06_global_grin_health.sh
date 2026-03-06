@@ -291,42 +291,73 @@ EOF
     success "Network Stats installed."
     echo ""
     echo -e "  ${DIM}Next steps:${RESET}"
-    echo -e "  ${GREEN}2${RESET}) Import History   — backfill historical data"
+    echo -e "  ${GREEN}2${RESET}) Import Data      — backfill 180 days (recommended) or full history"
     echo -e "  ${GREEN}3${RESET}) Start Updates    — enable live 5-min refresh"
     echo -e "  ${GREEN}5${RESET}) Setup Nginx      — expose on a subdomain"
     pause
 }
 
-# ── A-2: Import History ───────────────────────────────────────────────────────
-import_history() {
+# ── A-2: Import Data (sub-menu) ───────────────────────────────────────────────
+import_data() {
     [[ ! -f "$COLLECTOR_BIN" ]] && { die "Not installed. Run Install (1) first."; return; }
     clear
-    echo -e "\n${BOLD}${CYAN}── Import Historical Data ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Import / Update Data ──${RESET}\n"
     detect_node
-    echo -e "  ${DIM}Node   : ${NODE_URL}${RESET}"
-    echo -e "  ${DIM}This fetches full blocks to build historical charts since the genesis block.${RESET}"
-    echo -e "  ${DIM}Typically completes in 6 hours or more depends on the hardware resources.${RESET}"
-    echo -e "  ${DIM}Run this step only ONE TIME for initial setup!${RESET}"
+    echo -e "  ${DIM}Node : ${NODE_URL}${RESET}"
     echo ""
-    echo -ne "${BOLD}Start import? [Y/n/0]: ${RESET}"
-    read -r confirm
-    [[ "$confirm" == "0" ]] && return
-    [[ "${confirm,,}" == "n" ]] && return
+    echo -e "  ${BOLD}Select what to import:${RESET}"
+    echo ""
+    echo -e "  ${GREEN}a${RESET}) Init DB schema only          ${DIM}(no data — first-time setup without data)${RESET}"
+    echo -e "  ${GREEN}b${RESET}) Full history import          ${DIM}(headers + TX/fees — 6+ hours, run ONCE)${RESET}"
+    echo -e "  ${GREEN}b${RESET}) ---------------------------- ${DIM}Optional choice below${RESET}"
+    echo -e "  ${GREEN}c${RESET}) Backfill last 180 days       ${DIM}(TX + fees — ~30 min, recommended first run)${RESET}"
+    echo -e "  ${GREEN}d${RESET}) Backfill last 90 days        ${DIM}(TX + fees — lighter on memory)${RESET}"
+    echo -e "  ${GREEN}e${RESET}) Backfill entire chain        ${DIM}(TX + fees from block 0 — several hours)${RESET}"
+    echo -e "  ${GREEN}f${RESET}) Incremental update only      ${DIM}(new blocks since last run)${RESET}"
+    echo -e "  ${GREEN}g${RESET}) Peers geolocation only       ${DIM}(refresh peer map, no blockchain data)${RESET}"
+    echo ""
+    echo -e "  ${DIM}0) Cancel${RESET}"
+    echo ""
+    echo -ne "${BOLD}Select [a-g / 0]: ${RESET}"
+    read -r imp_choice
+    [[ "$imp_choice" == "0" || -z "$imp_choice" ]] && return
 
-    info "Starting historical import (this may take 6 hours or more)..."
+    local cmd="" desc=""
+    case "$imp_choice" in
+        a) cmd="--init-db";            desc="Init DB schema only" ;;
+        b)
+            warn "Full history import takes 6+ hours and should be run only ONCE."
+            echo -ne "Continue? [y/N/0]: "
+            read -r ok || true
+            [[ "${ok,,}" != "y" ]] && info "Cancelled." && return
+            cmd="--init-history"
+            desc="Full history import"
+            ;;
+        c) cmd="--backfill-stats";     desc="Backfill last 180 days" ;;
+        d) cmd="--backfill-stats 90";  desc="Backfill last 90 days" ;;
+        e) cmd="--backfill-stats all"; desc="Backfill entire chain TX/fees" ;;
+        f) cmd="--update";             desc="Incremental update" ;;
+        g) cmd="--peers-only";         desc="Peers geolocation update" ;;
+        *) warn "Invalid choice."; sleep 1; return ;;
+    esac
+
+    echo ""
+    info "Running: $desc"
     echo -e "  ${DIM}Progress will appear below — do not close this window.${RESET}"
     echo ""
     local rc=0
     # shellcheck disable=SC2046
     env $(cat "$DATA_DIR/config.env" | tr '\n' ' ') \
-        python3 "$COLLECTOR_BIN" --init-history || rc=$?
+        python3 "$COLLECTOR_BIN" $cmd || rc=$?
     echo ""
     if [[ $rc -eq 0 ]]; then
-        success "Historical import complete."
-        log "Historical import completed successfully."
+        success "$desc completed."
+        # Fix ownership so nginx (www-data) can serve any newly written files
+        chown -R www-data:www-data "$WWW_DIR" 2>/dev/null || true
+        log "$desc completed successfully."
     else
-        error "Import failed (exit $rc). Check node is running and config.env is valid."
-        log "Historical import failed: exit $rc"
+        error "$desc failed (exit $rc). Check node is running and config.env is valid."
+        log "$desc failed: exit $rc"
     fi
     pause
 }
@@ -350,7 +381,7 @@ start_updates() {
         fi
     fi
 
-    local cron_line="*/5 * * * * env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $COLLECTOR_BIN --update >> $LOG_DIR/grin_stats_cron.log 2>&1 $CRON_MARKER_STATS"
+    local cron_line="*/5 * * * * env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $COLLECTOR_BIN --update >> $LOG_DIR/grin_stats_cron.log 2>&1 && chown -R www-data:www-data $WWW_DIR/data >> /dev/null 2>&1 $CRON_MARKER_STATS"
     (echo "$existing"; echo "$cron_line") | grep -v '^$' | crontab -
     success "Live updates enabled — collector runs every 5 minutes."
     log "Stats cron added: $cron_line"
@@ -408,7 +439,11 @@ server {
     }
 
     location /data/ {
-        add_header Access-Control-Allow-Origin *;
+        # Block direct URL access — only allow requests originating from this site
+        valid_referers server_names;
+        if (\$invalid_referer) {
+            return 403;
+        }
         add_header Cache-Control "public, max-age=300";
         try_files \$uri =404;
     }
@@ -843,7 +878,7 @@ show_menu_a() {
     [[ -f "$NGINX_STATS_CONF" ]]                                   && ngnx="${GREEN}✓ configured${RESET}"
 
     echo -e "  ${GREEN}1${RESET})   Install          ${DIM}collector + Chart.js + Leaflet${RESET}   [$inst]"
-    echo -e "  ${GREEN}2${RESET})   Import History   ${DIM}backfill all historical data${RESET}"
+    echo -e "  ${GREEN}2${RESET})   Import Data      ${DIM}init DB / backfill / update / peers${RESET}"
     echo -e "  ${GREEN}3${RESET})   Start Updates    ${DIM}cron every 5 min${RESET}  [$cron]"
     echo -e "  ${GREEN}4${RESET})   Check DNS        ${DIM}confirm A-record before nginx setup${RESET}"
     echo -e "  ${GREEN}5${RESET})   Setup Nginx      ${DIM}HTTPS subdomain${RESET}  [$ngnx]"
@@ -930,7 +965,7 @@ run_menu_a() {
         read -r choice
         case "${choice^^}" in
             1) install_stats              || true ;;
-            2) import_history             || true ;;
+            2) import_data                || true ;;
             3) start_updates              || true ;;
             4) check_dns_record "stats"   || true ;;
             5) setup_nginx_stats          || true ;;

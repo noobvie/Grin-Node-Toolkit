@@ -13,7 +13,12 @@
 # Scheduled:    bash 03_grin_share_chain_data.sh --cron-nginx
 #               bash 03_grin_share_chain_data.sh --cron-ssh
 ################################################################################
-
+# SUGGESTION: If you have free a VPS and domain, become a public Grin master node to support the network!
+# Set your domain to following formats, then run script 01/02/03 to share your node data, other choices are optional.
+# fullmain.yourdomain.com → shares full mainnet archive node data
+# prunemain.yourdomain.com → shares mainnet pruned node data
+# prunetest.yourdomain.com → shares testnet pruned node data
+################################################################################
 # ============================================================================
 # PATHS & CONSTANTS
 # ============================================================================
@@ -868,7 +873,9 @@ Node type    : ${NODE_TYPE^^}
 ${port_info}
 Next chain_data refresh: Undefined as the server owner will decide the cron job.
 However, default config will refresh the chain_data At 00:00 on Monday and Thursday.
+This Grin master node is configured automatically by the Grin Node Toolkit https://github.com/noobvie/grin-node-toolkit
 
+===Instructions to run your grin node/wallet locally below===
 Download Grin binary: https://github.com/mimblewimble/grin/releases
 
 ================================================================================
@@ -883,9 +890,18 @@ LINUX
 ${toml_block}
 7. Start Grin node
 
-Faster setup  : https://github.com/noobvie/grin-node-toolkit
-                Use Script 01 to set up a new Grin node and import
-                pre-synced chain data automatically - no manual sync needed.
+--- Alternative: on-the-fly extraction (no .tar.gz saved locally) -------------
+  Use this if disk space is tight or you want to skip the verification step.
+  Streams the archive directly into tar — nothing is stored temporarily.
+  SHA256 checksum verification is skipped.
+
+  1. Stop your Grin node
+  2. Remove old chain_data:  rm -rf /path/to/grin_dir/chain_data
+  3. Run from your Grin node directory:
+       cd /path/to/grin_dir
+       wget -O - https://<this-server-url>/${base}.tar.gz | tar -xzvf -
+  4. Set in grin-server.toml and start Grin node (steps 6–7 above)
+--------------------------------------------------------------------------------
 
 ================================================================================
 WINDOWS (PowerShell - tar is built-in)
@@ -898,6 +914,21 @@ WINDOWS (PowerShell - tar is built-in)
 5. Edit grin-server.toml (in %USERPROFILE%\.grin\main\):
 ${toml_block}
 6. Start Grin node
+
+--- Alternative: on-the-fly extraction (no .tar.gz saved locally) -------------
+  Use this if disk space is tight or you want to skip the verification step.
+  Requires curl.exe and tar — both built into Windows 10 / 11 by default.
+  Streams the archive directly into tar — nothing is stored temporarily.
+  SHA256 checksum verification is skipped.
+
+  1. Stop your Grin node
+  2. Delete the old chain_data folder in Explorer or with:
+       Remove-Item -Recurse -Force "$env:USERPROFILE\.grin\main\chain_data"
+  3. Navigate to your Grin node directory in PowerShell, then run:
+       cd "$env:USERPROFILE\.grin\main"
+       curl.exe -L "https://<this-server-url>/${base}.tar.gz" | tar -xzf -
+  4. Edit grin-server.toml and start Grin node (steps 5–6 above)
+--------------------------------------------------------------------------------
 
 ================================================================================
 GRIM WALLET  (https://gri.mw)
@@ -1476,7 +1507,7 @@ show_main_menu() {
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -e "${BOLD}${YELLOW} Note that sharing script below will stop your Grin node ${RESET}"
     echo -e "${BOLD}${YELLOW} and interrupt addons services like Grin explorer/Global health/mining... ${RESET}"
-    echo ""echo -e "${BOLD}${YELLOW} Grin process must be running to let the script schedule jobs for you. ${RESET}"
+    echo -e "${BOLD}${YELLOW} Grin process must be running to let the script schedule jobs for you. ${RESET}"
     show_current_schedule
     echo -e "${BOLD}Options:${RESET}"
     echo ""

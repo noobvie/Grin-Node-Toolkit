@@ -925,7 +925,7 @@ ww_show_info() {
        tmux has-session -t "grin-wallet-testnet" 2>/dev/null; then
         echo -e "  ${BOLD}Wallet listener${RESET}: ${GREEN}running${RESET}"
     else
-        echo -e "  ${BOLD}Wallet listener${RESET}: ${RED}not running${RESET}  ${YELLOW}⚠ start via option (e)${RESET}"
+        echo -e "  ${BOLD}Wallet listener${RESET}: ${RED}not running${RESET}  ${YELLOW}⚠ start via option (c)${RESET}"
     fi
 
     echo ""

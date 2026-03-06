@@ -609,18 +609,24 @@ install_explorer() {
     fi
 
     # Build
+    local build_log="$LOG_DIR/grin_explorer_build_$(date +%Y%m%d_%H%M%S).log"
     info "Building release binary — this may take 10-30 minutes..."
-    echo -e "  ${DIM}Watch build log: tail -f $LOG_DIR/grin_explorer_build.log${RESET}"
+    echo -e "  ${DIM}Log: $build_log${RESET}"
     echo ""
     cargo build --release --manifest-path "$EXPLORER_DIR/Cargo.toml" \
-        > "$LOG_DIR/grin_explorer_build.log" 2>&1
+        > "$build_log" 2>&1 &
+    local cargo_pid=$!
+    # Stream log output so user can see progress
+    tail -f "$build_log" --pid="$cargo_pid" 2>/dev/null
+    wait "$cargo_pid"
     local rc=$?
+    echo ""
     if [[ $rc -eq 0 ]]; then
         success "Build complete: $EXPLORER_BIN"
-        log "Explorer built successfully."
+        log "Explorer built successfully. Log: $build_log"
     else
-        error "Build failed. See: $LOG_DIR/grin_explorer_build.log"
-        log "Explorer build failed: exit $rc"
+        error "Build failed. See: $build_log"
+        log "Explorer build failed: exit $rc. Log: $build_log"
         pause; return
     fi
     pause

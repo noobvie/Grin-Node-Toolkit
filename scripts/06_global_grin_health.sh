@@ -291,41 +291,73 @@ EOF
     success "Network Stats installed."
     echo ""
     echo -e "  ${DIM}Next steps:${RESET}"
-    echo -e "  ${GREEN}2${RESET}) Import History   — backfill historical data"
+    echo -e "  ${GREEN}2${RESET}) Import Data      — backfill 180 days (recommended) or full history"
     echo -e "  ${GREEN}3${RESET}) Start Updates    — enable live 5-min refresh"
     echo -e "  ${GREEN}5${RESET}) Setup Nginx      — expose on a subdomain"
     pause
 }
 
-# ── A-2: Import History ───────────────────────────────────────────────────────
-import_history() {
+# ── A-2: Import Data (sub-menu) ───────────────────────────────────────────────
+import_data() {
     [[ ! -f "$COLLECTOR_BIN" ]] && { die "Not installed. Run Install (1) first."; return; }
     clear
-    echo -e "\n${BOLD}${CYAN}── Import Historical Data ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Import / Update Data ──${RESET}\n"
     detect_node
-    echo -e "  ${DIM}Node   : ${NODE_URL}${RESET}"
-    echo -e "  ${DIM}This fetches sampled blocks to build historical charts.${RESET}"
-    echo -e "  ${DIM}Typically completes in 2-5 minutes.${RESET}"
+    echo -e "  ${DIM}Node : ${NODE_URL}${RESET}"
     echo ""
-    echo -ne "${BOLD}Start import? [Y/n/0]: ${RESET}"
-    read -r confirm
-    [[ "$confirm" == "0" ]] && return
-    [[ "${confirm,,}" == "n" ]] && return
+    echo -e "  ${BOLD}Select what to import:${RESET}"
+    echo ""
+    echo -e "  ${GREEN}a${RESET}) Init DB schema only          ${DIM}(RUN ONCE! First-time setup without data)${RESET}"
+    echo -e "  ${GREEN}b${RESET}) Full history import          ${DIM}(RUN ONCE! Import headers + TX/fees — 6+ hours)${RESET}"
+    echo -e "  ${DIM}  ─── Optional ───────────────────────────────────${RESET}"
+    echo -e "  ${GREEN}c${RESET}) Backfill last 180 days       ${DIM}(TX + fees — ~30 min, recommended first run)${RESET}"
+    echo -e "  ${GREEN}d${RESET}) Backfill last 90 days        ${DIM}(TX + fees — lighter on memory)${RESET}"
+    echo -e "  ${GREEN}e${RESET}) Backfill entire chain        ${DIM}(TX + fees from block 0 — several hours)${RESET}"
+    echo -e "  ${GREEN}f${RESET}) Incremental update only      ${DIM}(new blocks since last run)${RESET}"
+    echo -e "  ${GREEN}g${RESET}) Peers geolocation only       ${DIM}(refresh peer map, no blockchain data)${RESET}"
+    echo ""
+    echo -e "  ${DIM}0) Cancel${RESET}"
+    echo ""
+    echo -ne "${BOLD}Select [a-g / 0]: ${RESET}"
+    read -r imp_choice
+    [[ "$imp_choice" == "0" || -z "$imp_choice" ]] && return
 
-    info "Starting historical import (this may take 2-5 minutes)..."
+    local cmd="" desc=""
+    case "$imp_choice" in
+        a) cmd="--init-db";            desc="Init DB schema only" ;;
+        b)
+            warn "Full history import takes 6+ hours and should be run only ONCE."
+            echo -ne "Continue? [y/N/0]: "
+            read -r ok || true
+            [[ "${ok,,}" != "y" ]] && info "Cancelled." && return
+            cmd="--init-history"
+            desc="Full history import"
+            ;;
+        c) cmd="--backfill-stats";     desc="Backfill last 180 days" ;;
+        d) cmd="--backfill-stats 90";  desc="Backfill last 90 days" ;;
+        e) cmd="--backfill-stats all"; desc="Backfill entire chain TX/fees" ;;
+        f) cmd="--update";             desc="Incremental update" ;;
+        g) cmd="--peers-only";         desc="Peers geolocation update" ;;
+        *) warn "Invalid choice."; sleep 1; return ;;
+    esac
+
+    echo ""
+    info "Running: $desc"
     echo -e "  ${DIM}Progress will appear below — do not close this window.${RESET}"
     echo ""
     local rc=0
     # shellcheck disable=SC2046
     env $(cat "$DATA_DIR/config.env" | tr '\n' ' ') \
-        python3 "$COLLECTOR_BIN" --init-history || rc=$?
+        python3 "$COLLECTOR_BIN" $cmd || rc=$?
     echo ""
     if [[ $rc -eq 0 ]]; then
-        success "Historical import complete."
-        log "Historical import completed successfully."
+        success "$desc completed."
+        # Fix ownership so nginx (www-data) can serve any newly written files
+        chown -R www-data:www-data "$WWW_DIR" 2>/dev/null || true
+        log "$desc completed successfully."
     else
-        error "Import failed (exit $rc). Check node is running and config.env is valid."
-        log "Historical import failed: exit $rc"
+        error "$desc failed (exit $rc). Check node is running and config.env is valid."
+        log "$desc failed: exit $rc"
     fi
     pause
 }
@@ -349,7 +381,7 @@ start_updates() {
         fi
     fi
 
-    local cron_line="*/5 * * * * env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $COLLECTOR_BIN --update >> $LOG_DIR/grin_stats_cron.log 2>&1 $CRON_MARKER_STATS"
+    local cron_line="*/5 * * * * env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $COLLECTOR_BIN --update >> $LOG_DIR/grin_stats_cron.log 2>&1 && chown -R www-data:www-data $WWW_DIR/data >> /dev/null 2>&1 $CRON_MARKER_STATS"
     (echo "$existing"; echo "$cron_line") | grep -v '^$' | crontab -
     success "Live updates enabled — collector runs every 5 minutes."
     log "Stats cron added: $cron_line"
@@ -407,7 +439,11 @@ server {
     }
 
     location /data/ {
-        add_header Access-Control-Allow-Origin *;
+        # Block direct URL access — only allow requests originating from this site
+        valid_referers server_names;
+        if (\$invalid_referer) {
+            return 403;
+        }
         add_header Cache-Control "public, max-age=300";
         try_files \$uri =404;
     }
@@ -428,8 +464,8 @@ NGINX
         || { warn "Certbot failed — verify DNS A-record resolves to this server (step 4)."; pause; return; }
 
     nginx -s reload
-    success "Stats site live: https://${stats_domain}"
-    success "Peer map live:   https://${stats_domain}/map.html"
+    success "Site live:       https://${stats_domain}              (peer map — index.html)"
+    success "Stats page:      https://${stats_domain}/stats.html"
     log "Nginx stats config created for ${stats_domain}"
     pause
 }
@@ -572,16 +608,19 @@ configure_explorer() {
 
     echo -e "  ${DIM}Detected node: ${NODE_URL}${RESET}"
     echo ""
-    echo -e "  ${GREEN}1${RESET}) Use local node  ${DIM}(${NODE_URL})${RESET}"
-    echo -e "  ${GREEN}2${RESET}) Use remote node  ${DIM}(e.g. grinnode.live)${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Use local node   ${DIM}(${NODE_URL})${RESET}"
+    echo -e "  ${GREEN}2${RESET}) Use remote node  ${DIM}(e.g. scan.grin.money or grincoin.org)${RESET}"
     echo -e "  ${DIM}0) Cancel${RESET}"
     echo -ne "${BOLD}Select [1]: ${RESET}"
     read -r node_choice
+    [[ "$node_choice" == "0" ]] && return
 
-    local cfg_host cfg_port cfg_proto cfg_secret
+    local cfg_host cfg_port cfg_proto cfg_secret cfg_db_root
+    cfg_db_root=""
+
     case "${node_choice:-1}" in
         2)
-            echo -ne "Remote host (e.g. grinnode.live): "; read -r cfg_host
+            echo -ne "Remote host (e.g. scan.grin.money): "; read -r cfg_host
             echo -ne "Port [3413]: "; read -r cfg_port; cfg_port="${cfg_port:-3413}"
             echo -ne "Protocol [https]: "; read -r cfg_proto; cfg_proto="${cfg_proto:-https}"
             cfg_secret=""
@@ -598,32 +637,64 @@ configure_explorer() {
                 cfg_secret=""
                 warn "API secret not found at ${API_SECRET_PATH} — proceeding without auth."
             fi
+            # Detect db_root (parent directory of chain_data)
+            echo ""
+            info "Detecting chain_data path for db_root..."
+            if [[ -d "/grinfullmain/chain_data" ]]; then
+                cfg_db_root="/grinfullmain"
+                success "Found: /grinfullmain/chain_data  ${DIM}(toolkit default for full archive)${RESET}"
+            elif [[ -d "$HOME/.grin/main/chain_data" ]]; then
+                cfg_db_root="$HOME/.grin/main"
+                success "Found: $HOME/.grin/main/chain_data"
+            else
+                warn "chain_data not found in /grinfullmain or $HOME/.grin/main"
+                echo -e "  ${DIM}The explorer needs a full archive node — pruned nodes are not supported.${RESET}"
+                echo -ne "Enter db_root path (parent directory of chain_data, or 0 to skip): "
+                read -r cfg_db_root
+                [[ "$cfg_db_root" == "0" ]] && cfg_db_root=""
+            fi
             ;;
     esac
 
-    info "Patching Explorer.toml..."
     local toml="$EXPLORER_TOML"
     [[ ! -f "$toml" ]] && { die "Explorer.toml not found: $toml"; return; }
 
-    # Patch node connection settings (preserve other config)
-    sed -i "s|^host\s*=.*|host = \"${cfg_host}\"|"             "$toml"
-    sed -i "s|^port\s*=.*|port = ${cfg_port}|"                  "$toml"
-    sed -i "s|^protocol\s*=.*|protocol = \"${cfg_proto}\"|"    "$toml"
+    echo ""
+    info "Patching Explorer.toml: $toml"
+
+    # Patch node connection settings
+    sed -i "s|^host\s*=.*|host = \"${cfg_host}\"|"          "$toml"
+    sed -i "s|^port\s*=.*|port = ${cfg_port}|"               "$toml"
+    sed -i "s|^protocol\s*=.*|protocol = \"${cfg_proto}\"|" "$toml"
 
     if [[ -n "$cfg_secret" ]]; then
         sed -i "s|^api_secret_path\s*=.*|api_secret_path = \"${API_SECRET_PATH}\"|" "$toml"
     fi
 
-    # Detect archival vs pruned node and warn
-    if [[ "$cfg_host" == "127.0.0.1" ]] && [[ ! -d /grinfullmain ]]; then
-        warn "Local node appears to be in pruned mode."
-        warn "The explorer works best with a full archival node (/grinfullmain)."
-        warn "For full history, consider pointing to a remote archival node."
-        echo ""
+    # Patch db_root (only for local node; remote nodes connect via API only)
+    if [[ -n "$cfg_db_root" ]]; then
+        sed -i "s|^db_root\s*=.*|db_root = \"${cfg_db_root}\"|" "$toml"
+    fi
+
+    # Summary of patched values
+    echo ""
+    echo -e "${BOLD}  Patched in Explorer.toml:${RESET}"
+    echo -e "    host             = ${CYAN}${cfg_host}${RESET}"
+    echo -e "    port             = ${CYAN}${cfg_port}${RESET}"
+    echo -e "    protocol         = ${CYAN}${cfg_proto}${RESET}"
+    [[ -n "$cfg_db_root" ]] && \
+        echo -e "    db_root          = ${CYAN}${cfg_db_root}${RESET}  ${DIM}(parent of chain_data)${RESET}"
+    [[ -n "$cfg_secret" ]] && \
+        echo -e "    api_secret_path  = ${CYAN}${API_SECRET_PATH}${RESET}"
+    echo ""
+
+    if [[ "$node_choice" != "2" ]] && [[ ! -d /grinfullmain ]]; then
+        warn "A full archive node (/grinfullmain) is recommended for the explorer."
+        warn "Pruned nodes lack older block data. Use a remote archival node instead."
     fi
 
     success "Explorer.toml patched."
-    log "Explorer configured: host=$cfg_host port=$cfg_port proto=$cfg_proto"
+    log "Explorer configured: host=$cfg_host port=$cfg_port proto=$cfg_proto db_root=${cfg_db_root:-skipped}"
     pause
 }
 
@@ -632,6 +703,24 @@ start_explorer() {
     [[ ! -f "$EXPLORER_BIN" ]] && { die "Not installed. Run Install (1) first."; return; }
     clear
     echo -e "\n${BOLD}${CYAN}── Start Grin Explorer ──${RESET}\n"
+
+    # Pre-start: verify chain_data path if Explorer.toml is present
+    if [[ -f "$EXPLORER_TOML" ]]; then
+        local db_root_val
+        db_root_val=$(grep -E '^[[:space:]]*db_root[[:space:]]*=' "$EXPLORER_TOML" 2>/dev/null \
+                      | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
+        if [[ -n "$db_root_val" && ! -d "$db_root_val/chain_data" ]]; then
+            warn "chain_data not found at: ${db_root_val}/chain_data"
+            echo -e "  ${DIM}The explorer reads block data directly from chain_data on disk.${RESET}"
+            echo -e "  ${DIM}Toolkit default for full archive: /grinfullmain/chain_data${RESET}"
+            echo -e "  ${DIM}Run Configure (B→2) to update db_root to the correct path.${RESET}"
+            echo ""
+            echo -ne "Continue anyway? [y/N/0]: "
+            read -r cont_anyway
+            [[ "$cont_anyway" == "0" || "${cont_anyway,,}" != "y" ]] && return
+            echo ""
+        fi
+    fi
 
     if tmux has-session -t "$EXPLORER_SESSION" 2>/dev/null; then
         warn "Explorer session '${EXPLORER_SESSION}' is already running."
@@ -655,6 +744,7 @@ start_explorer() {
     else
         warn "Explorer may still be starting — check port 8000 in a moment."
         echo -e "  ${DIM}Attach: tmux attach -t ${EXPLORER_SESSION}${RESET}"
+        echo -e "  ${DIM}If it exits immediately, run Configure (B→2) to fix db_root / chain_data path.${RESET}"
     fi
     log "Explorer session started: $EXPLORER_SESSION"
     pause
@@ -679,16 +769,27 @@ setup_nginx_explorer() {
     require_root
     clear
     echo -e "\n${BOLD}${CYAN}── Setup Nginx — Grin Explorer ──${RESET}\n"
+    echo -e "  Creates an nginx HTTPS reverse proxy for the explorer (port 8000)."
+    echo -e "  Obtains a free SSL certificate via Let's Encrypt (certbot)."
+    echo ""
+    echo -e "  ${YELLOW}Before continuing:${RESET}"
+    echo -e "  · Make sure your DNS A-record points to this server (use option 4 to check)"
+    echo -e "  · If using Cloudflare, set to ${BOLD}DNS only${RESET} (grey cloud) — not Proxied"
+    echo -e "  · The explorer (option 3) must be running before visitors can browse it"
+    echo ""
+    echo -e "  ${DIM}Press 0 at any prompt to cancel and return.${RESET}"
+    echo ""
 
     command -v nginx &>/dev/null || { die "nginx not installed. Run option N first."; return; }
     command -v certbot &>/dev/null || apt-get install -y certbot python3-certbot-nginx -qq
 
-    echo -ne "${BOLD}Explorer subdomain (e.g. explorer.yourdomain.com): ${RESET}"
+    echo -ne "${BOLD}Enter domain or sub-domain for the explorer (e.g. explorer.yourdomain.com) [0 = cancel]: ${RESET}"
     read -r expl_domain
     [[ -z "$expl_domain" || "$expl_domain" == "0" ]] && return
 
-    echo -ne "${BOLD}Email address for SSL certificate (Let's Encrypt): ${RESET}"
+    echo -ne "${BOLD}Email address for Let's Encrypt SSL certificate [0 = cancel]: ${RESET}"
     read -r ssl_email
+    [[ "$ssl_email" == "0" ]] && return
     if [[ -z "$ssl_email" ]]; then
         warn "Email is required for Let's Encrypt SSL certificate."; pause; return
     fi
@@ -808,6 +909,13 @@ check_dns_record() {
     echo -e "  ${DIM}  ${example_sub}.yourdomain.com  →  <one of the IPs above>${RESET}"
     echo -e "  ${DIM}DNS changes can take up to 24 h to propagate (usually < 5 min).${RESET}"
     echo ""
+    echo -e "  ${BOLD}Using Cloudflare?${RESET}"
+    echo -e "  ${RED}Important:${RESET} Set the record to ${BOLD}DNS only${RESET} ${DIM}(grey cloud icon)${RESET},"
+    echo -e "  ${RED}NOT${RESET} ${BOLD}Proxied${RESET} ${DIM}(orange cloud)${RESET}."
+    echo -e "  ${DIM}Certbot requires a direct HTTP connection to this server to issue the${RESET}"
+    echo -e "  ${DIM}SSL certificate. Cloudflare's proxy blocks the ACME challenge.${RESET}"
+    echo -e "  ${DIM}You can switch back to Proxied after the certificate is obtained.${RESET}"
+    echo ""
     echo -ne "${BOLD}Have you set (or confirmed) your DNS A-record? [y/N/0]: ${RESET}"
     read -r _dns_confirm
     [[ "$_dns_confirm" == "0" ]] && return
@@ -831,8 +939,8 @@ show_menu_a() {
     echo -e "${BOLD}${CYAN}  6A) Network Stats + Peer Map${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  ${DIM}Pages served:  /index.html          → hashrate, difficulty, tx, fees, versions${RESET}"
-    echo -e "  ${DIM}               /map.html  → Grin peer world map${RESET}"
+    echo -e "  ${DIM}Pages served:  /            (index.html) → Grin peer world map${RESET}"
+    echo -e "  ${DIM}               /stats.html              → hashrate, difficulty, tx, fees, versions${RESET}"
     echo ""
     local inst="${RED}✗ not installed${RESET}"
     local cron="${YELLOW}inactive${RESET}"
@@ -842,7 +950,7 @@ show_menu_a() {
     [[ -f "$NGINX_STATS_CONF" ]]                                   && ngnx="${GREEN}✓ configured${RESET}"
 
     echo -e "  ${GREEN}1${RESET})   Install          ${DIM}collector + Chart.js + Leaflet${RESET}   [$inst]"
-    echo -e "  ${GREEN}2${RESET})   Import History   ${DIM}backfill all historical data${RESET}"
+    echo -e "  ${GREEN}2${RESET})   Import Data      ${DIM}init DB / backfill / update / peers${RESET}"
     echo -e "  ${GREEN}3${RESET})   Start Updates    ${DIM}cron every 5 min${RESET}  [$cron]"
     echo -e "  ${GREEN}4${RESET})   Check DNS        ${DIM}confirm A-record before nginx setup${RESET}"
     echo -e "  ${GREEN}5${RESET})   Setup Nginx      ${DIM}HTTPS subdomain${RESET}  [$ngnx]"
@@ -912,7 +1020,7 @@ show_main_menu() {
     echo -e "${DIM}  ─────────────────────────────────────────────${RESET}"
     echo ""
     echo -e "  ${GREEN}A${RESET})   Network Stats + Peer Map"
-    echo -e "      ${DIM}Hashrate · Difficulty · Transactions · Fees · Versions · 3D Peer Map${RESET}"
+    echo -e "      ${DIM}Hashrate · Difficulty · Transactions · Fees · Versions · 2D Peer Map${RESET}"
     echo ""
     echo -e "  ${GREEN}B${RESET})   Grin Explorer"
     echo -e "      ${DIM}Browse blocks · Kernels · Search by height or hash${RESET}"
@@ -929,7 +1037,7 @@ run_menu_a() {
         read -r choice
         case "${choice^^}" in
             1) install_stats              || true ;;
-            2) import_history             || true ;;
+            2) import_data                || true ;;
             3) start_updates              || true ;;
             4) check_dns_record "stats"   || true ;;
             5) setup_nginx_stats          || true ;;

@@ -813,7 +813,8 @@ function updateChartData(chart, json, range) {
       ...aggToDaily(json.hourly||[]),
     ];
   } else if (range === "month") {
-    pts = [...(json.hourly||[])];
+    const cutoff = nowMs - 30 * 86400000;
+    pts = (json.hourly||[]).filter(([ts]) => ts*1000 >= cutoff);
   } else if (range === "week") {
     const cutoff = nowMs - 7 * 86400000;
     pts = (json.hourly||[]).filter(([ts]) => ts*1000 >= cutoff);
@@ -849,7 +850,8 @@ function updateActivityChart(txJson, feeJson, range, metric) {
         ...aggToDaily(json.hourly||[], true),
       ];
     } else if (range === "month") {
-      return [...(json.hourly||[])];
+      const cutoff = nowMs - 30 * 86400000;
+      return (json.hourly||[]).filter(([ts]) => ts*1000 >= cutoff);
     } else if (range === "week") {
       const cutoff = nowMs - 7 * 86400000;
       return (json.hourly||[]).filter(([ts]) => ts*1000 >= cutoff);

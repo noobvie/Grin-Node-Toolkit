@@ -124,7 +124,7 @@ check_scripts() {
         "04_grin_node_foreign_api.sh"
         "05_grin_wallet_service.sh"
         "06_global_grin_health.sh"
-        "07_coming_soon.sh"
+        "07_grin_mining_services.sh"
         "08_grin_node_admin.sh"
     )
     for script in "${required_scripts[@]}"; do
@@ -193,7 +193,7 @@ show_main_menu() {
     echo ""
     echo -e "  ${GREEN}5${RESET}) Grin Wallet Service"
     echo -e "  ${GREEN}6${RESET}) Global Grin Health"
-    echo -e "  ${YELLOW}7${RESET}) Coming Soon"
+    echo -e "  ${GREEN}7${RESET}) Grin Mining Services"
     echo -e "  ${GREEN}8${RESET}) Admin & Maintenance"
     echo ""
     echo -e "${DIM}  ─────────────────────────────────────────${RESET}"
@@ -237,8 +237,8 @@ main() {
                 run_script "06_global_grin_health.sh"
                 ;;
             7)
-                echo -e "\n${CYAN}Starting: Coming Soon...${RESET}\n"
-                run_script "07_coming_soon.sh"
+                echo -e "\n${CYAN}Starting: Grin Mining Services...${RESET}\n"
+                run_script "07_grin_mining_services.sh"
                 ;;
             8)
                 echo -e "\n${CYAN}Starting: Admin & Maintenance...${RESET}\n"

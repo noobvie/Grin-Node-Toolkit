@@ -1,25 +1,35 @@
 #!/bin/bash
 # =============================================================================
-# 05_grin_wallet_service.sh - Grin Wallet Service
+# 05_grin_wallet_service.sh — Grin Wallet Service
 # =============================================================================
-# Manages the complete grin-wallet lifecycle:
-#   a) Download & install grin-wallet  (mainnet → /grinwalletmain  |  testnet → /grinwallettest)
-#   b) Initialize wallet               (grin-wallet init)
-#   c) Start wallet listener           (grin-wallet listen, in tmux)
-#   d) Enable Wallet Foreign API       (port 3415) — allow HTTP payments
+#
+#  ─── Setup ───────────────────────────────────────────────────────────────────
+#   a) Download & install grin-wallet   (mainnet → /grinwalletmain
+#                                        testnet → /grinwallettest)
+#   b) Initialize wallet                (grin-wallet init)
+#   c) Start wallet listener            (grin-wallet listen, in tmux)
+#
+#  ─── Foreign API ─────────────────────────────────────────────────────────────
+#   d) Enable Wallet Foreign API        (port 3415 — localhost only)
 #   e) Disable Wallet Foreign API
-#   f) Configure nginx proxy           (wallet, HTTPS)
-#   g) Configure firewall rules        (port 3415)
-#   h) Recover wallet from seed        (grin-wallet init -r)
-#   i) Show seed phrase                (grin-wallet recover)
-#   j) Send Grin                       (grin-wallet send)
-#   k) Receive Grin                    (grin-wallet receive -i, paste Slatepack)
-#   l) Finalize transaction            (grin-wallet finalize -i, paste Slatepack)
+#
+#  ─── Web Interface ───────────────────────────────────────────────────────────
+#   z) Web Wallet Interface             (submenu — 05 Z)
+#      1) Install dependencies          (nginx, php, certbot, htpasswd, qrencode)
+#      2) Deploy files                  (copy web/05/ → deploy directory)
+#      3) Configure nginx               (vhost + rate-limit + security headers)
+#      4) Setup SSL                     (Let's Encrypt / certbot)
+#      5) Setup Basic Auth              (set / change password)
+#      6) Configure firewall            (open port 443)
+#      7) Status & info
+#      s) Edit saved settings           (domain, directory, email, user)
+#
 # =============================================================================
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOOLKIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -34,20 +44,24 @@ RESET='\033[0m'
 FOREIGN_API_PORT=3415
 GRIN_WALLET_GITHUB_API="https://api.github.com/repos/mimblewimble/grin-wallet/releases/latest"
 
-# Per-network binary directories (mirrors grin node dirs: /grinfullmain, /grinprunemain, …)
 WALLET_BIN_DIR_MAINNET="/grinwalletmain"
 WALLET_BIN_DIR_TESTNET="/grinwallettest"
 WALLET_BIN_MAINNET="$WALLET_BIN_DIR_MAINNET/grin-wallet"
 WALLET_BIN_TESTNET="$WALLET_BIN_DIR_TESTNET/grin-wallet"
-
-# grin-wallet.toml lives inside the top-level-dir (same as the binary dir)
 GRIN_WALLET_TOML_MAINNET="$WALLET_BIN_DIR_MAINNET/grin-wallet.toml"
 GRIN_WALLET_TOML_TESTNET="$WALLET_BIN_DIR_TESTNET/grin-wallet.toml"
 
-LOG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/log"
+LOG_DIR="$TOOLKIT_ROOT/log"
 LOG_FILE="$LOG_DIR/grin_wallet_service_$(date +%Y%m%d_%H%M%S).log"
+
 WALLET_NGINX_CONF_MAINNET="/etc/nginx/sites-available/grin-wallet-mainnet"
 WALLET_NGINX_CONF_TESTNET="/etc/nginx/sites-available/grin-wallet-testnet"
+
+# Web wallet
+WEB_WALLET_SRC_DIR="$TOOLKIT_ROOT/web/05/public_html"
+WEB_WALLET_NGINX_CONF="/etc/nginx/sites-available/grin-wallet-web"
+WEB_WALLET_DEPLOY_DIR_DEFAULT="/var/www/grin-wallet"
+WW_CONF_FILE="$TOOLKIT_ROOT/conf/grin_web_wallet.conf"
 
 # ─── Runtime state (set by detect_and_select_network) ─────────────────────────
 NETWORK=""
@@ -65,59 +79,53 @@ success() { echo -e "${GREEN}[OK]${RESET}    $*"; log "[OK] $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; log "[WARN] $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 die()     { error "$*"; echo ""; echo "Press Enter to continue..."; read -r || true; return 1; }
+pause()   { echo ""; echo -e "${DIM}Press Enter to continue...${RESET}"; read -r || true; }
 
-# ─── Port guide popup ─────────────────────────────────────────────────────────
-show_port_guide() {
-    clear
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  PORT GUIDE — Read before continuing${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-    echo -e "  ${BOLD}PORT 3415 — Wallet Foreign API (HTTP transaction listener)${RESET}"
-    echo ""
-    echo -e "  ${CYAN}What it does${RESET} : Allows other users to send you Grin transactions via HTTP."
-    echo -e "  ${CYAN}Who needs it${RESET} : Users who want to receive Grin via the HTTP method."
-    echo -e "  ${CYAN}Expose via${RESET}   : Direct or via nginx HTTPS reverse proxy with SSL."
-    echo -e "  ${GREEN}Expose if${RESET}    : You want to receive Grin over HTTP (e.g. running a payment"
-    echo -e "               service or accepting donations via the HTTP wallet method)."
-    echo -e "  ${YELLOW}Skip if${RESET}      : You receive Grin via Tor or Slatepack (the modern methods),"
-    echo -e "               or if you are running a node without a wallet service."
-    echo -e "  ${DIM}Mining note${RESET}  : If you run a mining pool, port 3415 stays on localhost."
-    echo -e "               Paying out miners is done by your pool software — port 3415"
-    echo -e "               does not need to be public."
-    echo ""
-    echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-    echo -ne "${BOLD}Type ${GREEN}yes${RESET}${BOLD} to confirm you have read the above and want to proceed [yes/N/0]: ${RESET}"
-    read -r _guide_confirm || true
-    if [[ "${_guide_confirm,,}" != "yes" ]]; then
-        info "Cancelled."
-        return 1
-    fi
-    return 0
-}
+# ═══════════════════════════════════════════════════════════════════════════════
+# NETWORK DETECTION
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# ─── Node status check for menu ─────────────────────────────────────────────────
-check_node_status() {
+detect_and_select_network() {
     local mainnet_up=0 testnet_up=0
     ss -tlnp 2>/dev/null | grep -q ":3413 "  && mainnet_up=1
     ss -tlnp 2>/dev/null | grep -q ":13413 " && testnet_up=1
 
-    echo -e "  ${BOLD}Grin Node Status:${RESET}"
-    if [[ $mainnet_up -eq 1 ]]; then
-        echo -e "    Mainnet: ${GREEN}✓ Running${RESET}  ${DIM}(port 3413)${RESET}"
+    if [[ $mainnet_up -eq 1 && $testnet_up -eq 0 ]]; then
+        NETWORK="mainnet"; NODE_PORT=3413
+    elif [[ $mainnet_up -eq 0 && $testnet_up -eq 1 ]]; then
+        NETWORK="testnet"; NODE_PORT=13413
     else
-        echo -e "    Mainnet: ${RED}✗ Not running${RESET}  ${DIM}(port 3413)${RESET}"
-        echo -e "    ${YELLOW}Warning: Start mainnet node from /grinprunemain or /grinfullmain, or run Script 01${RESET}"
+        if [[ $mainnet_up -eq 1 && $testnet_up -eq 1 ]]; then
+            echo -e "\n  ${BOLD}Both mainnet and testnet nodes are running:${RESET}"
+        else
+            warn "No Grin node detected on ports 3413 or 13413."
+        fi
+        echo -e "  ${GREEN}1${RESET}) Mainnet  ${DIM}(port 3413)${RESET}  [default]"
+        echo -e "  ${YELLOW}2${RESET}) Testnet  ${DIM}(port 13413)${RESET}"
+        echo -e "  ${DIM}0) Cancel${RESET}"
+        echo -ne "Select network [1]: "
+        read -r net_sel || true
+        [[ "$net_sel" == "0" ]] && return 1
+        if [[ "${net_sel:-1}" == "2" ]]; then
+            NETWORK="testnet"; NODE_PORT=13413
+        else
+            NETWORK="mainnet"; NODE_PORT=3413
+        fi
     fi
 
-    if [[ $testnet_up -eq 1 ]]; then
-        echo -e "    Testnet: ${GREEN}✓ Running${RESET}  ${DIM}(port 13413)${RESET}"
+    if [[ "$NETWORK" == "mainnet" ]]; then
+        WALLET_BIN="$WALLET_BIN_MAINNET"
+        WALLET_DIR="$WALLET_BIN_DIR_MAINNET"
+        GRIN_WALLET_TOML="$GRIN_WALLET_TOML_MAINNET"
+        WALLET_NGINX_CONF="$WALLET_NGINX_CONF_MAINNET"
     else
-        echo -e "    Testnet: ${RED}✗ Not running${RESET}  ${DIM}(port 13413)${RESET}"
-        echo -e "    ${YELLOW}Warning: Start testnet node from /grinprunetest, or run Script 01${RESET}"
+        WALLET_BIN="$WALLET_BIN_TESTNET"
+        WALLET_DIR="$WALLET_BIN_DIR_TESTNET"
+        GRIN_WALLET_TOML="$GRIN_WALLET_TOML_TESTNET"
+        WALLET_NGINX_CONF="$WALLET_NGINX_CONF_TESTNET"
     fi
-    echo ""
+    info "Network: ${BOLD}$NETWORK${RESET}  (node port $NODE_PORT)"
+    return 0
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -136,41 +144,39 @@ get_foreign_api_status() {
 show_status() {
     echo -e "\n${BOLD}Status:${RESET}\n"
 
-    # ── Grin node status ──
+    # ── Grin nodes ──
     local mainnet_up=0 testnet_up=0
     ss -tlnp 2>/dev/null | grep -q ":3413 "  && mainnet_up=1
     ss -tlnp 2>/dev/null | grep -q ":13413 " && testnet_up=1
-
     if [[ $mainnet_up -eq 1 ]]; then
         echo -e "  ${BOLD}Grin node (mainnet)${RESET}   : ${GREEN}RUNNING${RESET}  ${DIM}(port 3413)${RESET}"
     else
-        echo -e "  ${BOLD}Grin node (mainnet)${RESET}   : ${RED}NOT RUNNING${RESET}  ${YELLOW}⚠ Start from /grin*main or run Script 01${RESET}"
+        echo -e "  ${BOLD}Grin node (mainnet)${RESET}   : ${RED}NOT RUNNING${RESET}  ${YELLOW}⚠ run Script 01${RESET}"
     fi
     if [[ $testnet_up -eq 1 ]]; then
         echo -e "  ${BOLD}Grin node (testnet)${RESET}   : ${GREEN}RUNNING${RESET}  ${DIM}(port 13413)${RESET}"
     else
-        echo -e "  ${BOLD}Grin node (testnet)${RESET}   : ${RED}NOT RUNNING${RESET}  ${YELLOW}⚠ Start from /grin*test or run Script 01${RESET}"
+        echo -e "  ${BOLD}Grin node (testnet)${RESET}   : ${RED}NOT RUNNING${RESET}  ${YELLOW}⚠ run Script 01${RESET}"
     fi
     echo ""
 
     # ── Binaries ──
     if [[ -x "$WALLET_BIN_MAINNET" ]]; then
         local ver_main
-        ver_main=$("$WALLET_BIN_MAINNET" --version 2>/dev/null | head -1 || echo "unknown version")
-        echo -e "  ${BOLD}grin-wallet (mainnet)${RESET} : ${GREEN}INSTALLED${RESET}  ${DIM}($ver_main — $WALLET_BIN_MAINNET)${RESET}"
+        ver_main=$("$WALLET_BIN_MAINNET" --version 2>/dev/null | head -1 || echo "unknown")
+        echo -e "  ${BOLD}grin-wallet (mainnet)${RESET} : ${GREEN}INSTALLED${RESET}  ${DIM}($ver_main)${RESET}"
     else
         echo -e "  ${BOLD}grin-wallet (mainnet)${RESET} : ${RED}NOT FOUND${RESET}  ${DIM}($WALLET_BIN_MAINNET)${RESET}"
     fi
-
     if [[ -x "$WALLET_BIN_TESTNET" ]]; then
         local ver_test
-        ver_test=$("$WALLET_BIN_TESTNET" --version 2>/dev/null | head -1 || echo "unknown version")
-        echo -e "  ${BOLD}grin-wallet (testnet)${RESET} : ${GREEN}INSTALLED${RESET}  ${DIM}($ver_test — $WALLET_BIN_TESTNET)${RESET}"
+        ver_test=$("$WALLET_BIN_TESTNET" --version 2>/dev/null | head -1 || echo "unknown")
+        echo -e "  ${BOLD}grin-wallet (testnet)${RESET} : ${GREEN}INSTALLED${RESET}  ${DIM}($ver_test)${RESET}"
     else
         echo -e "  ${BOLD}grin-wallet (testnet)${RESET} : ${RED}NOT FOUND${RESET}  ${DIM}($WALLET_BIN_TESTNET)${RESET}"
     fi
 
-    # ── Wallet configs ──
+    # ── Configs ──
     if [[ -f "$GRIN_WALLET_TOML_MAINNET" ]]; then
         echo -e "  ${BOLD}Mainnet wallet config${RESET} : ${GREEN}INITIALIZED${RESET}  ${DIM}($GRIN_WALLET_TOML_MAINNET)${RESET}"
     else
@@ -182,16 +188,14 @@ show_status() {
         echo -e "  ${BOLD}Testnet wallet config${RESET} : ${DIM}not initialized${RESET}"
     fi
 
-    # ── Listeners (tmux sessions) ──
-    local mn_session="grin-wallet-mainnet"
-    local tn_session="grin-wallet-testnet"
-    if tmux has-session -t "$mn_session" 2>/dev/null; then
-        echo -e "  ${BOLD}Wallet listener${RESET} (mainnet)  : ${GREEN}RUNNING${RESET}  ${DIM}(tmux: $mn_session)${RESET}"
+    # ── Listeners ──
+    if tmux has-session -t "grin-wallet-mainnet" 2>/dev/null; then
+        echo -e "  ${BOLD}Wallet listener${RESET} (mainnet)  : ${GREEN}RUNNING${RESET}  ${DIM}(tmux: grin-wallet-mainnet)${RESET}"
     else
         echo -e "  ${BOLD}Wallet listener${RESET} (mainnet)  : ${DIM}not running${RESET}"
     fi
-    if tmux has-session -t "$tn_session" 2>/dev/null; then
-        echo -e "  ${BOLD}Wallet listener${RESET} (testnet)  : ${GREEN}RUNNING${RESET}  ${DIM}(tmux: $tn_session)${RESET}"
+    if tmux has-session -t "grin-wallet-testnet" 2>/dev/null; then
+        echo -e "  ${BOLD}Wallet listener${RESET} (testnet)  : ${GREEN}RUNNING${RESET}  ${DIM}(tmux: grin-wallet-testnet)${RESET}"
     else
         echo -e "  ${BOLD}Wallet listener${RESET} (testnet)  : ${DIM}not running${RESET}"
     fi
@@ -205,23 +209,24 @@ show_status() {
         echo -e "  ${BOLD}Foreign API${RESET} (mainnet)       : ${DIM}disabled / unknown${RESET}"
     fi
 
-    # ── nginx proxy ──
-    if [[ -f "/etc/nginx/sites-enabled/grin-wallet-mainnet" ]]; then
-        echo -e "  ${BOLD}nginx proxy${RESET} (mainnet)       : ${GREEN}CONFIGURED${RESET}"
+    # ── Web wallet ──
+    if [[ -f "/etc/nginx/sites-enabled/grin-wallet-web" ]]; then
+        echo -e "  ${BOLD}Web Wallet UI${RESET}               : ${GREEN}DEPLOYED${RESET}  ${DIM}(nginx: grin-wallet-web)${RESET}"
+    elif [[ -d "$WEB_WALLET_DEPLOY_DIR_DEFAULT" ]]; then
+        echo -e "  ${BOLD}Web Wallet UI${RESET}               : ${YELLOW}FILES PRESENT${RESET}  ${DIM}(nginx not configured — option z)${RESET}"
     else
-        echo -e "  ${BOLD}nginx proxy${RESET} (mainnet)       : ${DIM}not configured${RESET}"
+        echo -e "  ${BOLD}Web Wallet UI${RESET}               : ${DIM}not deployed${RESET}  ${DIM}(option z)${RESET}"
     fi
     echo ""
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# OPTION 1 — DOWNLOAD & INSTALL GRIN-WALLET
+# a) DOWNLOAD & INSTALL GRIN-WALLET
 # ═══════════════════════════════════════════════════════════════════════════════
 
 download_wallet() {
     echo -e "\n${BOLD}${CYAN}── Download & Install grin-wallet ──${RESET}\n"
 
-    # Select target network
     echo -e "  ${GREEN}1${RESET}) Mainnet  → install to ${BOLD}$WALLET_BIN_DIR_MAINNET${RESET}  ${DIM}[default]${RESET}"
     echo -e "  ${YELLOW}2${RESET}) Testnet  → install to ${BOLD}$WALLET_BIN_DIR_TESTNET${RESET}"
     echo -e "  ${DIM}0) Cancel${RESET}"
@@ -247,32 +252,30 @@ download_wallet() {
         | head -1)
 
     if [[ -z "$download_url" || "$download_url" == "null" ]]; then
-        die "No linux-x86_64 tar.gz asset found in GitHub release '$version'."; return
+        die "No linux-x86_64 tar.gz asset found in release '$version'."; return
     fi
 
-    info "Latest version : $version"
-    info "Download URL   : $download_url"
-    info "Install target : $target_bin"
+    info "Version       : $version"
+    info "Install target: $target_bin"
     echo ""
 
     local tmp_tar="/tmp/grin_wallet_$$.tar.gz"
     local tmp_dir="/tmp/grin_wallet_extract_$$"
     mkdir -p "$tmp_dir"
 
-    info "Downloading grin-wallet..."
+    info "Downloading..."
     wget -c --progress=bar:force -O "$tmp_tar" "$download_url" \
         || { die "Download failed."; rm -rf "$tmp_tar" "$tmp_dir"; return; }
 
-    info "Extracting archive..."
+    info "Extracting..."
     tar -xzf "$tmp_tar" -C "$tmp_dir" \
-        || { die "Failed to extract archive."; rm -rf "$tmp_tar" "$tmp_dir"; return; }
+        || { die "Failed to extract."; rm -rf "$tmp_tar" "$tmp_dir"; return; }
     rm -f "$tmp_tar"
 
     local wallet_bin_src
     wallet_bin_src=$(find "$tmp_dir" -type f -name "grin-wallet" | head -1)
     if [[ -z "$wallet_bin_src" ]]; then
-        die "Could not locate 'grin-wallet' binary in downloaded archive."
-        rm -rf "$tmp_dir"; return
+        die "Could not locate 'grin-wallet' binary in archive."; rm -rf "$tmp_dir"; return
     fi
 
     mkdir -p "$target_dir"
@@ -280,11 +283,11 @@ download_wallet() {
     rm -rf "$tmp_dir"
 
     success "grin-wallet $version installed to $target_bin"
-    log "[OPT 1] Version=$version Network=$target_net Binary=$target_bin"
+    log "[download_wallet] version=$version network=$target_net binary=$target_bin"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# OPTION 2 — INITIALIZE WALLET  (runs inline in current terminal)
+# b) INITIALIZE WALLET
 # ═══════════════════════════════════════════════════════════════════════════════
 
 init_wallet() {
@@ -294,13 +297,13 @@ init_wallet() {
 
     if [[ ! -x "$WALLET_BIN" ]]; then
         warn "grin-wallet binary not found at $WALLET_BIN"
-        warn "Run option 1 first to download and install grin-wallet for $NETWORK."
+        warn "Run option (a) first to download and install grin-wallet."
         return
     fi
 
     if [[ -f "$GRIN_WALLET_TOML" ]]; then
         warn "Wallet already initialized at: $GRIN_WALLET_TOML"
-        echo -ne "Re-initialize? This will overwrite the existing wallet data! [y/N/0]: "
+        echo -ne "Re-initialize? This will overwrite existing wallet data! [y/N/0]: "
         read -r reinit || true
         [[ "$reinit" == "0" ]] && return
         [[ "${reinit,,}" != "y" ]] && info "Cancelled." && return
@@ -310,26 +313,20 @@ init_wallet() {
     info "Dir    : $WALLET_DIR"
     echo ""
 
-    # Capture password here so grin-wallet doesn't prompt (avoids TTY conflicts in menu)
     local wallet_pass wallet_pass2
     read -rs -p "  Enter wallet password (min 5 chars): " wallet_pass; echo ""
     read -rs -p "  Confirm wallet password:              " wallet_pass2; echo ""
     echo ""
 
     if [[ "$wallet_pass" != "$wallet_pass2" ]]; then
-        error "Passwords do not match."
-        unset wallet_pass wallet_pass2
-        return
+        error "Passwords do not match."; unset wallet_pass wallet_pass2; return
     fi
     if [[ ${#wallet_pass} -lt 5 ]]; then
-        warn "Password must be at least 5 characters."
-        unset wallet_pass wallet_pass2
-        return
+        warn "Password must be at least 5 characters."; unset wallet_pass wallet_pass2; return
     fi
 
-    info "Initializing wallet — seed phrase will appear below, write it down safely!"
+    info "Initializing wallet — write down the seed phrase that appears below!"
     echo ""
-
     cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" init
     local rc=$?
     unset wallet_pass wallet_pass2
@@ -337,14 +334,11 @@ init_wallet() {
 
     if [[ $rc -ne 0 || ! -f "$GRIN_WALLET_TOML" ]]; then
         warn "Init may have failed (exit code $rc). Check output above."
-        warn "Manual command: cd $WALLET_DIR && $WALLET_BIN --top_level_dir $WALLET_DIR init"
         return
     fi
 
-    success "Wallet initialized. Config: $GRIN_WALLET_TOML"
-
-    # Patch check_node_api_http_addr to point at the detected/selected node
-    info "Patching grin-wallet.toml: check_node_api_http_addr → http://127.0.0.1:$NODE_PORT"
+    success "Wallet initialized: $GRIN_WALLET_TOML"
+    info "Patching check_node_api_http_addr → http://127.0.0.1:$NODE_PORT"
     if grep -q "check_node_api_http_addr" "$GRIN_WALLET_TOML"; then
         sed -i "s|check_node_api_http_addr\s*=.*|check_node_api_http_addr = \"http://127.0.0.1:$NODE_PORT\"|" \
             "$GRIN_WALLET_TOML"
@@ -352,11 +346,11 @@ init_wallet() {
         echo "check_node_api_http_addr = \"http://127.0.0.1:$NODE_PORT\"" >> "$GRIN_WALLET_TOML"
     fi
     success "check_node_api_http_addr patched to 127.0.0.1:$NODE_PORT"
-    log "[OPT 2] Wallet initialized for $NETWORK node=127.0.0.1:$NODE_PORT toml=$GRIN_WALLET_TOML"
+    log "[init_wallet] network=$NETWORK node=127.0.0.1:$NODE_PORT toml=$GRIN_WALLET_TOML"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# OPTION 3 — START WALLET LISTENER
+# c) START WALLET LISTENER
 # ═══════════════════════════════════════════════════════════════════════════════
 
 start_wallet() {
@@ -365,19 +359,13 @@ start_wallet() {
     detect_and_select_network || return
 
     if [[ ! -x "$WALLET_BIN" ]]; then
-        warn "grin-wallet binary not found at $WALLET_BIN"
-        warn "Run option 1 first to download and install grin-wallet for $NETWORK."
-        return
+        warn "grin-wallet binary not found — run option (a) first."; return
     fi
-
     if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
-        warn "Wallet not initialized. Run option 2 first."
-        return
+        warn "Wallet not initialized. Run option (b) first."; return
     fi
-
     if ! command -v tmux &>/dev/null; then
-        warn "tmux is not installed. Install it with: apt-get install tmux"
-        return
+        warn "tmux not installed. Run: apt-get install tmux"; return
     fi
 
     local session="grin-wallet-$NETWORK"
@@ -386,57 +374,55 @@ start_wallet() {
         warn "Existing tmux session '$session' found."
         echo -ne "Kill it and restart? [y/N/0]: "
         read -r restart_choice || true
-        [[ "$restart_choice" == "0" ]] && info "Keeping existing session. Attach with: tmux attach -t $session" && return
+        [[ "$restart_choice" == "0" ]] && info "Keeping existing session. Attach: tmux attach -t $session" && return
         if [[ "${restart_choice,,}" == "y" ]]; then
             tmux kill-session -t "$session"
             success "Existing session stopped."
         else
-            info "Keeping existing session. Attach with: tmux attach -t $session"
+            info "Keeping existing session. Attach: tmux attach -t $session"
             return
         fi
     fi
 
-    # Capture password here to pass to tmux (avoids TTY conflict inside tmux sessions)
     local wallet_pass
     read -rs -p "  Enter wallet password: " wallet_pass; echo ""
     echo ""
     if [[ -z "$wallet_pass" ]]; then
-        warn "No password entered. Cancelled."
-        return
+        warn "No password entered. Cancelled."; return
     fi
 
-    info "Starting grin-wallet listen in tmux session: $session"
+    info "Starting grin-wallet listener in tmux session: $session"
     tmux new-session -d -s "$session" -c "$WALLET_DIR" \
-        "bash -c \"'$WALLET_BIN' --top_level_dir '$WALLET_DIR' -p '$wallet_pass' listen; echo ''; echo 'Wallet listener exited. Press Enter to close.'; read\""
+        "bash -c \"'$WALLET_BIN' --top_level_dir '$WALLET_DIR' -p '$wallet_pass' listen; echo ''; echo 'Listener exited. Press Enter to close.'; read\""
     unset wallet_pass
 
     sleep 1
     if tmux has-session -t "$session" 2>/dev/null; then
-        success "Wallet listener started in tmux session: $session"
+        success "Wallet listener started: $session"
         info "View  : tmux attach -t $session"
         info "Detach: Ctrl+B then D"
     else
         warn "tmux session did not persist — wallet may have exited immediately."
-        warn "Try running manually: $WALLET_BIN --top_level_dir $WALLET_DIR listen"
     fi
-
-    log "[OPT 3] Wallet listener started: session=$session network=$NETWORK"
+    log "[start_wallet] session=$session network=$NETWORK"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# OPTIONS 4-7 — WALLET FOREIGN API (PORT 3415)
+# d) ENABLE WALLET FOREIGN API
 # ═══════════════════════════════════════════════════════════════════════════════
 
 enable_foreign_api() {
-    show_port_guide || return
     echo -e "\n${BOLD}${CYAN}── Enable Wallet Foreign API ──${RESET}\n"
+    echo -e "  ${DIM}The Foreign API (port $FOREIGN_API_PORT) allows other wallets to send you Grin via HTTP.${RESET}"
+    echo -e "  ${DIM}It runs on localhost only — the Web Wallet (option z) proxies to it internally.${RESET}"
+    echo -e "  ${DIM}You do NOT need to open port $FOREIGN_API_PORT publicly when using the Web Wallet.${RESET}"
+    echo ""
 
     detect_and_select_network || return
 
     if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
         warn "Wallet config not found at $GRIN_WALLET_TOML"
-        warn "Initialize the wallet first (option 2)."
-        return
+        warn "Initialize the wallet first (option b)."; return
     fi
 
     info "Updating $GRIN_WALLET_TOML ..."
@@ -449,25 +435,14 @@ enable_foreign_api() {
             echo 'owner_api_include_foreign = true' >> "$GRIN_WALLET_TOML"
     fi
 
-    echo -ne "Make Wallet Foreign API listen on all interfaces (0.0.0.0:$FOREIGN_API_PORT)? [y/N/0]: "
-    read -r all_iface || true
-    [[ "$all_iface" == "0" ]] && return
-    if [[ "${all_iface,,}" == "y" ]]; then
-        if grep -q "api_listen_interface" "$GRIN_WALLET_TOML"; then
-            sed -i "s/api_listen_interface\s*=.*/api_listen_interface = \"0.0.0.0\"/" "$GRIN_WALLET_TOML"
-        else
-            sed -i '/^\[wallet\]/a api_listen_interface = "0.0.0.0"' "$GRIN_WALLET_TOML" || \
-                echo 'api_listen_interface = "0.0.0.0"' >> "$GRIN_WALLET_TOML"
-        fi
-    fi
-
     success "Wallet Foreign API enabled in grin-wallet.toml"
-    warn "Restart the wallet listener (option 3) for the change to take effect."
-    log "Wallet Foreign API enabled for $NETWORK."
-
-    configure_firewall_foreign
-    offer_nginx_proxy
+    warn "Restart the wallet listener (option c) for the change to take effect."
+    log "[enable_foreign_api] network=$NETWORK"
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# e) DISABLE WALLET FOREIGN API
+# ═══════════════════════════════════════════════════════════════════════════════
 
 disable_foreign_api() {
     echo -e "\n${BOLD}${CYAN}── Disable Wallet Foreign API ──${RESET}\n"
@@ -475,423 +450,634 @@ disable_foreign_api() {
     detect_and_select_network || return
 
     if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
-        warn "Wallet config not found at $GRIN_WALLET_TOML"
-        return
+        warn "Wallet config not found at $GRIN_WALLET_TOML"; return
     fi
 
     cp "$GRIN_WALLET_TOML" "${GRIN_WALLET_TOML}.bak.$(date +%s)"
     sed -i 's/owner_api_include_foreign\s*=.*/owner_api_include_foreign = false/' "$GRIN_WALLET_TOML"
     success "Wallet Foreign API disabled in grin-wallet.toml"
-    warn "Restart the wallet listener (option 3) for the change to take effect."
-    log "Wallet Foreign API disabled for $NETWORK."
+    warn "Restart the wallet listener (option c) for the change to take effect."
+    log "[disable_foreign_api] network=$NETWORK"
+}
 
-    echo -ne "Remove firewall rules for port $FOREIGN_API_PORT? [y/N/0]: "
-    read -r remove_fw || true
-    [[ "$remove_fw" == "0" ]] && return
-    if [[ "${remove_fw,,}" == "y" ]]; then
-        if command -v ufw &>/dev/null; then
-            ufw delete allow "$FOREIGN_API_PORT/tcp" 2>/dev/null || true
-            success "UFW rule removed for port $FOREIGN_API_PORT"
-        elif command -v iptables &>/dev/null; then
-            iptables -D INPUT -p tcp --dport "$FOREIGN_API_PORT" -j ACCEPT 2>/dev/null || true
-            success "iptables rule removed for port $FOREIGN_API_PORT"
-        fi
+# ═══════════════════════════════════════════════════════════════════════════════
+# 05 Z) WEB WALLET INTERFACE — Config helpers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ww_load_config() {
+    WW_DOMAIN=""
+    WW_DEPLOY_DIR="$WEB_WALLET_DEPLOY_DIR_DEFAULT"
+    WW_PHP_FPM_SOCK=""
+    WW_AUTH_USER="grin"
+    WW_EMAIL=""
+    if [[ -f "$WW_CONF_FILE" ]]; then
+        # shellcheck disable=SC1090
+        source "$WW_CONF_FILE" 2>/dev/null || true
     fi
 }
 
-offer_nginx_proxy() {
+ww_save_config() {
+    mkdir -p "$(dirname "$WW_CONF_FILE")"
+    cat > "$WW_CONF_FILE" << CONF
+WW_DOMAIN="${WW_DOMAIN:-}"
+WW_DEPLOY_DIR="${WW_DEPLOY_DIR:-$WEB_WALLET_DEPLOY_DIR_DEFAULT}"
+WW_PHP_FPM_SOCK="${WW_PHP_FPM_SOCK:-}"
+WW_AUTH_USER="${WW_AUTH_USER:-grin}"
+WW_EMAIL="${WW_EMAIL:-}"
+CONF
+    chmod 600 "$WW_CONF_FILE"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 05 M) STEP 1 — Install dependencies
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ww_install_deps() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05 M-1) Install Dependencies ──${RESET}\n"
+
+    local all_ok=1
+    for pkg_cmd in "nginx:nginx" "php:php" "certbot:certbot" "htpasswd:apache2-utils" "qrencode:qrencode"; do
+        local cmd="${pkg_cmd%%:*}" pkg="${pkg_cmd##*:}"
+        if command -v "$cmd" &>/dev/null; then
+            success "$cmd already installed."
+        else
+            warn "$cmd not found (package: $pkg)"
+            all_ok=0
+        fi
+    done
+
+    if [[ $all_ok -eq 1 ]]; then
+        echo ""
+        success "All dependencies are present."
+        pause; return
+    fi
+
     echo ""
-    echo -ne "${BOLD}Set up nginx reverse proxy for Wallet Foreign API (with SSL)? [y/N/0]: ${RESET}"
-    read -r use_nginx || true
-    [[ "${use_nginx,,}" != "y" ]] && return
+    echo -ne "${BOLD}Install missing packages now? (requires root / sudo) [Y/n/0]: ${RESET}"
+    read -r confirm || true
+    [[ "$confirm" == "0" ]] && return
+    [[ "${confirm,,}" == "n" ]] && return
 
-    echo -ne "Domain name for the Wallet Foreign API (e.g. wallet.mynode.example.com) or 0 to cancel: "
-    read -r domain || true
-    [[ "$domain" == "0" ]] && return
-    [[ -z "$domain" ]] && warn "No domain entered. Skipping nginx setup." && return
+    info "Updating package lists..."
+    apt-get update -qq 2>/dev/null || { warn "apt-get update failed — continuing anyway."; }
 
-    echo -ne "Email for Let's Encrypt SSL certificate (or 0 to cancel): "
-    read -r email || true
-    [[ "$email" == "0" ]] && return
-    [[ -z "$email" ]] && warn "No email entered. Skipping nginx setup." && return
+    for pkg_cmd in "nginx:nginx" "php:php" "certbot:certbot" "htpasswd:apache2-utils" "qrencode:qrencode"; do
+        local cmd="${pkg_cmd%%:*}" pkg="${pkg_cmd##*:}"
+        if ! command -v "$cmd" &>/dev/null; then
+            info "Installing $pkg..."
+            # php needs extra packages
+            if [[ "$cmd" == "php" ]]; then
+                apt-get install -y php php-fpm php-curl php-json -qq 2>/dev/null \
+                    || warn "Failed to install php — install manually: apt-get install php php-fpm php-curl"
+            elif [[ "$cmd" == "certbot" ]]; then
+                apt-get install -y certbot python3-certbot-nginx -qq 2>/dev/null \
+                    || warn "Failed to install certbot."
+            else
+                apt-get install -y "$pkg" -qq 2>/dev/null \
+                    || warn "Failed to install $pkg."
+            fi
+        fi
+    done
+
+    echo ""
+    info "Verification:"
+    for pkg_cmd in "nginx:nginx" "php:php" "certbot:certbot" "htpasswd:apache2-utils" "qrencode:qrencode"; do
+        local cmd="${pkg_cmd%%:*}"
+        if command -v "$cmd" &>/dev/null; then
+            success "$cmd  OK"
+        else
+            warn "$cmd  MISSING — install manually"
+        fi
+    done
+    log "[ww_install_deps] completed"
+    pause
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 05 M) STEP 2 — Deploy files
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ww_deploy_files() {
+    ww_load_config
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05 M-2) Deploy Files ──${RESET}\n"
+
+    if [[ ! -d "$WEB_WALLET_SRC_DIR" ]]; then
+        die "Source not found: $WEB_WALLET_SRC_DIR"
+        warn "Ensure the Grin Node Toolkit is complete (web/05/public_html/)."; return
+    fi
+
+    echo -ne "Deploy directory [${WW_DEPLOY_DIR}]: "
+    read -r input_dir || true
+    [[ -n "$input_dir" ]] && WW_DEPLOY_DIR="$input_dir"
+    echo ""
+
+    if [[ -d "$WW_DEPLOY_DIR" ]]; then
+        warn "Directory already exists: $WW_DEPLOY_DIR"
+        echo -ne "Update files? (existing config.json will be preserved) [y/N/0]: "
+        read -r overwrite || true
+        [[ "$overwrite" == "0" ]] && return
+        [[ "${overwrite,,}" != "y" ]] && info "Cancelled." && return
+    fi
+
+    info "Deploying from $WEB_WALLET_SRC_DIR → $WW_DEPLOY_DIR ..."
+    mkdir -p "$WW_DEPLOY_DIR"
+
+    # Preserve existing config.json if present
+    local tmp_config=""
+    if [[ -f "$WW_DEPLOY_DIR/api/config.json" ]]; then
+        tmp_config=$(cat "$WW_DEPLOY_DIR/api/config.json")
+        info "Preserving existing api/config.json"
+    fi
+
+    cp -r "$WEB_WALLET_SRC_DIR"/. "$WW_DEPLOY_DIR/"
+
+    if [[ -n "$tmp_config" ]]; then
+        echo "$tmp_config" > "$WW_DEPLOY_DIR/api/config.json"
+    else
+        # Write default server-side config
+        cat > "$WW_DEPLOY_DIR/api/config.json" << JSON
+{
+    "walletHost": "127.0.0.1",
+    "walletPort": 3415
+}
+JSON
+    fi
+
+    chown -R www-data:www-data "$WW_DEPLOY_DIR" 2>/dev/null || \
+        warn "Could not chown to www-data — set permissions manually if needed."
+    chmod -R 755 "$WW_DEPLOY_DIR"
+    chmod 600 "$WW_DEPLOY_DIR/api/config.json"
+
+    ww_save_config
+    success "Files deployed to $WW_DEPLOY_DIR"
+    log "[ww_deploy_files] deploy_dir=$WW_DEPLOY_DIR"
+    pause
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 05 M) STEP 3 — Configure nginx
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ww_configure_nginx() {
+    ww_load_config
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05 M-3) Configure nginx ──${RESET}\n"
 
     if ! command -v nginx &>/dev/null; then
-        warn "nginx is not installed. Install it first via the 'Manage Nginx Server' menu option."
-        return
+        die "nginx not installed — run step 1 first."; return
     fi
-    if ! command -v certbot &>/dev/null; then
-        warn "certbot is not installed. Install it with: apt-get install certbot python3-certbot-nginx"
-        return
+    if [[ ! -d "$WW_DEPLOY_DIR" ]]; then
+        die "Files not deployed yet — run step 2 first."; return
     fi
 
-    local nginx_symlink="/etc/nginx/sites-enabled/grin-wallet-$NETWORK"
+    echo -ne "Domain name (e.g. wallet.mynode.example.com) [${WW_DOMAIN:-}]: "
+    read -r input_domain || true
+    [[ -n "$input_domain" ]] && WW_DOMAIN="$input_domain"
+    [[ -z "$WW_DOMAIN" ]] && warn "No domain entered." && return
 
-    cat > "$WALLET_NGINX_CONF" << EOF
+    # Detect PHP-FPM socket
+    if [[ -z "$WW_PHP_FPM_SOCK" ]]; then
+        local php_version
+        php_version=$(php --version 2>/dev/null | grep -oP '^\S+ \K\d+\.\d+' | head -1 || echo "")
+        if [[ -n "$php_version" && -S "/run/php/php${php_version}-fpm.sock" ]]; then
+            WW_PHP_FPM_SOCK="unix:/run/php/php${php_version}-fpm.sock"
+        elif [[ -S "/run/php/php-fpm.sock" ]]; then
+            WW_PHP_FPM_SOCK="unix:/run/php/php-fpm.sock"
+        fi
+    fi
+    echo -ne "PHP-FPM socket [${WW_PHP_FPM_SOCK:-unix:/run/php/php-fpm.sock}]: "
+    read -r input_sock || true
+    [[ -n "$input_sock" ]] && WW_PHP_FPM_SOCK="$input_sock"
+    WW_PHP_FPM_SOCK="${WW_PHP_FPM_SOCK:-unix:/run/php/php-fpm.sock}"
+
+    echo ""
+    info "Domain     : $WW_DOMAIN"
+    info "Deploy dir : $WW_DEPLOY_DIR"
+    info "PHP-FPM    : $WW_PHP_FPM_SOCK"
+    echo ""
+    echo -ne "${BOLD}Write nginx config? [y/N/0]: ${RESET}"
+    read -r confirm || true
+    [[ "$confirm" == "0" ]] && return
+    [[ "${confirm,,}" != "y" ]] && info "Cancelled." && return
+
+    # Rate-limit snippet
+    info "Writing rate-limit zone ..."
+    mkdir -p /etc/nginx/conf.d
+    cat > /etc/nginx/conf.d/grin-wallet-ratelimit.conf << 'RATELIMIT'
+# Grin Web Wallet API rate limit — 10 req/min per IP
+limit_req_zone $binary_remote_addr zone=grin_wallet_api:10m rate=10r/m;
+RATELIMIT
+
+    # vhost
+    info "Writing vhost → $WEB_WALLET_NGINX_CONF ..."
+    cat > "$WEB_WALLET_NGINX_CONF" << NGINX_CONF
+# Grin Web Wallet — generated by 05_grin_wallet_service.sh
 server {
     listen 80;
-    server_name $domain;
+    listen [::]:80;
+    server_name $WW_DOMAIN;
+    location /.well-known/acme-challenge/ { root /var/www/letsencrypt; }
     location / { return 301 https://\$host\$request_uri; }
 }
 
 server {
     listen 443 ssl http2;
-    server_name $domain;
+    listen [::]:443 ssl http2;
+    server_name $WW_DOMAIN;
 
-    ssl_certificate     /etc/letsencrypt/live/$domain/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/$WW_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$WW_DOMAIN/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
+    root  $WW_DEPLOY_DIR;
+    index index.html;
+
+    auth_basic           "Grin Wallet";
+    auth_basic_user_file /etc/nginx/grin-wallet.htpasswd;
+
     add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options    "nosniff"                                      always;
+    add_header X-Frame-Options           "DENY"                                         always;
+    add_header Referrer-Policy           "no-referrer"                                  always;
+    add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self';" always;
 
-    location / {
-        proxy_pass         http://127.0.0.1:$FOREIGN_API_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header   Host \$host;
-        proxy_set_header   X-Real-IP \$remote_addr;
-        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 300;
+    access_log /var/log/nginx/grin-wallet-access.log;
+    error_log  /var/log/nginx/grin-wallet-error.log;
+
+    location ~ ^/api/.*\\.php\$ {
+        limit_req zone=grin_wallet_api burst=5 nodelay;
+        try_files \$uri =404;
+        fastcgi_pass   $WW_PHP_FPM_SOCK;
+        fastcgi_param  SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include        fastcgi_params;
     }
+
+    location ~* \\.(css|js|ico|png|svg)\$ {
+        expires 1h;
+        add_header Cache-Control "public";
+    }
+
+    location / { try_files \$uri \$uri/ /index.html; }
+
+    location = /api/config.json { deny all; }
+    location ~ /\\.              { deny all; }
+    location ~ ~\$               { deny all; }
 }
-EOF
+NGINX_CONF
 
-    ln -sf "$WALLET_NGINX_CONF" "$nginx_symlink" 2>/dev/null || true
-    nginx -t && systemctl reload nginx
-    certbot --nginx -d "$domain" --non-interactive --agree-tos -m "$email"
-    systemctl reload nginx
+    mkdir -p /var/www/letsencrypt
+    ln -sf "$WEB_WALLET_NGINX_CONF" "/etc/nginx/sites-enabled/grin-wallet-web" 2>/dev/null || true
 
-    success "nginx reverse proxy for Wallet Foreign API configured!"
-    info "Wallet Foreign API accessible at: https://$domain"
-    log "nginx proxy configured for $domain -> 127.0.0.1:$FOREIGN_API_PORT ($NETWORK)"
-}
-
-configure_firewall_foreign() {
-    echo ""
-    echo -e "${BOLD}Firewall configuration for Wallet Foreign API (port $FOREIGN_API_PORT):${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Open port $FOREIGN_API_PORT to all IPs (public)"
-    echo -e "  ${YELLOW}2${RESET}) Open port $FOREIGN_API_PORT to a specific IP only"
-    echo -e "  ${RED}3${RESET}) Skip firewall changes"
-    echo -e "  ${DIM}0) Back${RESET}"
-    echo -ne "Choice [3]: "
-    read -r fw_choice || true
-    [[ "$fw_choice" == "0" ]] && return
-
-    case "${fw_choice:-3}" in
-        1)
-            if command -v ufw &>/dev/null; then
-                ufw allow "$FOREIGN_API_PORT/tcp"
-                success "UFW: port $FOREIGN_API_PORT opened to all."
-            elif command -v iptables &>/dev/null; then
-                iptables -I INPUT -p tcp --dport "$FOREIGN_API_PORT" -j ACCEPT
-                success "iptables: port $FOREIGN_API_PORT opened to all."
-            else
-                warn "No firewall tool found (ufw/iptables). Configure manually."
-            fi
-            ;;
-        2)
-            echo -ne "Enter allowed IP address (or 0 to skip): "
-            read -r allowed_ip || true
-            [[ "$allowed_ip" == "0" ]] && allowed_ip=""
-            if [[ -n "$allowed_ip" ]]; then
-                if command -v ufw &>/dev/null; then
-                    ufw allow from "$allowed_ip" to any port "$FOREIGN_API_PORT" proto tcp
-                    success "UFW: port $FOREIGN_API_PORT opened for $allowed_ip."
-                elif command -v iptables &>/dev/null; then
-                    iptables -I INPUT -s "$allowed_ip" -p tcp --dport "$FOREIGN_API_PORT" -j ACCEPT
-                    success "iptables: port $FOREIGN_API_PORT opened for $allowed_ip."
-                fi
-            fi
-            ;;
-        3|*) info "Firewall not modified." ;;
-    esac
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# RECOVER WALLET  (grin-wallet init -r)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-recover_wallet() {
-    echo -e "\n${BOLD}${CYAN}── Recover Wallet from Seed Phrase ──${RESET}\n"
-
-    detect_and_select_network || return
-
-    if [[ ! -x "$WALLET_BIN" ]]; then
-        warn "grin-wallet binary not found at $WALLET_BIN — run option (a) first."
-        return
-    fi
-
-    warn "This will create a new wallet from your 24-word seed phrase."
-    warn "Any existing wallet data in $WALLET_DIR will be overwritten!"
-    echo -ne "${BOLD}Type ${GREEN}yes${RESET}${BOLD} to confirm [yes/N]: ${RESET}"
-    read -r confirm || true
-    [[ "${confirm,,}" != "yes" ]] && info "Cancelled." && return
-
-    local wallet_pass wallet_pass2
-    read -rs -p "  Enter new wallet password (min 5 chars): " wallet_pass; echo ""
-    read -rs -p "  Confirm wallet password:                  " wallet_pass2; echo ""
-    echo ""
-    if [[ "$wallet_pass" != "$wallet_pass2" ]]; then
-        error "Passwords do not match."; unset wallet_pass wallet_pass2; return
-    fi
-    if [[ ${#wallet_pass} -lt 5 ]]; then
-        warn "Password must be at least 5 characters."; unset wallet_pass wallet_pass2; return
-    fi
-
-    info "You will be prompted to enter your 24-word seed phrase."
-    echo ""
-    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" init -r
-    local rc=$?
-    unset wallet_pass wallet_pass2
-    echo ""
-    if [[ $rc -eq 0 ]]; then
-        success "Wallet recovered successfully."
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+        success "nginx vhost configured and reloaded."
     else
-        warn "Recovery may have failed (exit code $rc). Check output above."
+        warn "nginx config test failed — check $WEB_WALLET_NGINX_CONF"
+        warn "Note: The 443 block will fail until SSL certs exist (run step 4 next)."
     fi
-    log "[recover_wallet] network=$NETWORK rc=$rc"
+
+    ww_save_config
+    log "[ww_configure_nginx] domain=$WW_DOMAIN deploy_dir=$WW_DEPLOY_DIR"
+    pause
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SHOW SEED PHRASE  (grin-wallet recover)
+# 05 M) STEP 4 — Setup SSL (Let's Encrypt)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-show_seed() {
-    echo -e "\n${BOLD}${CYAN}── Show Wallet Seed Phrase ──${RESET}\n"
+ww_setup_ssl() {
+    ww_load_config
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05 M-4) Setup SSL (Let's Encrypt) ──${RESET}\n"
 
-    detect_and_select_network || return
-
-    if [[ ! -x "$WALLET_BIN" ]]; then
-        warn "grin-wallet binary not found at $WALLET_BIN — run option (a) first."
-        return
+    if ! command -v certbot &>/dev/null; then
+        die "certbot not installed — run step 1 first."; return
+    fi
+    if [[ -z "$WW_DOMAIN" ]]; then
+        die "Domain not configured — run step 3 first."; return
+    fi
+    if [[ ! -f "$WEB_WALLET_NGINX_CONF" ]]; then
+        die "nginx vhost not configured — run step 3 first."; return
     fi
 
-    if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
-        warn "Wallet not initialized. Run option (b) first."
-        return
-    fi
+    echo -e "  ${DIM}DNS must point ${BOLD}$WW_DOMAIN${RESET}${DIM} to this server's public IP before continuing.${RESET}"
+    echo ""
+    echo -ne "Let's Encrypt email [${WW_EMAIL:-}]: "
+    read -r input_email || true
+    [[ -n "$input_email" ]] && WW_EMAIL="$input_email"
+    [[ -z "$WW_EMAIL" ]] && warn "No email entered." && return
 
-    warn "Your seed phrase will be displayed on screen."
-    echo -ne "${BOLD}Are you in a private location? Type ${GREEN}yes${RESET}${BOLD} to continue [yes/N]: ${RESET}"
+    echo ""
+    echo -ne "${BOLD}Request SSL certificate for $WW_DOMAIN? [y/N/0]: ${RESET}"
     read -r confirm || true
-    [[ "${confirm,,}" != "yes" ]] && info "Cancelled." && return
+    [[ "$confirm" == "0" ]] && return
+    [[ "${confirm,,}" != "y" ]] && info "Cancelled." && return
 
-    local wallet_pass
-    read -rs -p "  Enter wallet password: " wallet_pass; echo ""
-    echo ""
+    info "Requesting certificate for $WW_DOMAIN ..."
+    certbot --nginx -d "$WW_DOMAIN" --non-interactive --agree-tos -m "$WW_EMAIL" \
+        && success "SSL certificate issued for $WW_DOMAIN" \
+        || warn "certbot failed — ensure DNS is pointing to this server and port 80 is open."
 
-    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" recover
-    local rc=$?
-    unset wallet_pass
-    echo ""
-    if [[ $rc -ne 0 ]]; then
-        warn "Command failed (exit code $rc). Check output above."
-    fi
-    log "[show_seed] network=$NETWORK rc=$rc"
+    systemctl reload nginx 2>/dev/null || true
+
+    ww_save_config
+    log "[ww_setup_ssl] domain=$WW_DOMAIN email=$WW_EMAIL"
+    pause
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# COLLECT SLATEPACK  (shared helper for receive/finalize)
+# 05 M) STEP 5 — Setup Basic Auth
 # ═══════════════════════════════════════════════════════════════════════════════
 
-collect_slatepack() {
-    # Writes slatepack content to $1 (a temp file path)
-    local outfile="$1"
-    echo -e "  ${DIM}Paste your Slatepack message below."
-    echo -e "  It starts with BEGINSLATEPACK. and ends with ENDSLATEPACK."
-    echo -e "  Press Ctrl+D when done.${RESET}"
-    echo ""
+ww_setup_auth() {
+    ww_load_config
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05 M-5) Setup Basic Auth ──${RESET}\n"
 
-    local content=""
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        content+="$line"$'\n'
-        [[ "$line" == *"ENDSLATEPACK."* ]] && break
+    if ! command -v htpasswd &>/dev/null; then
+        die "htpasswd not installed — run step 1 first."; return
+    fi
+
+    echo -e "  ${DIM}Basic Auth protects the wallet UI with a username + password.${RESET}"
+    echo -e "  ${DIM}Run this step again at any time to change the password.${RESET}"
+    echo ""
+    echo -ne "Auth username [${WW_AUTH_USER:-grin}]: "
+    read -r input_user || true
+    [[ -n "$input_user" ]] && WW_AUTH_USER="$input_user"
+    WW_AUTH_USER="${WW_AUTH_USER:-grin}"
+
+    local htpasswd_file="/etc/nginx/grin-wallet.htpasswd"
+    local htpasswd_flag="-c"
+    if [[ -f "$htpasswd_file" ]]; then
+        warn "Password file already exists: $htpasswd_file"
+        echo -e "  ${GREEN}1${RESET}) Add / update user '${WW_AUTH_USER}'  ${DIM}(keeps other users)${RESET}"
+        echo -e "  ${RED}2${RESET}) Recreate file                    ${DIM}(removes all existing users)${RESET}"
+        echo -e "  ${DIM}0) Cancel${RESET}"
+        echo -ne "Choice [1]: "
+        read -r recreate || true
+        [[ "$recreate" == "0" ]] && return
+        [[ "${recreate:-1}" == "2" ]] && htpasswd_flag="-c" || htpasswd_flag=""
+    fi
+
+    echo ""
+    info "Setting password for user '${WW_AUTH_USER}' — enter password at the prompt:"
+    # shellcheck disable=SC2086
+    htpasswd $htpasswd_flag "$htpasswd_file" "$WW_AUTH_USER" \
+        && success "Basic Auth configured for user '$WW_AUTH_USER'." \
+        || { die "htpasswd failed."; return; }
+
+    nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true
+
+    ww_save_config
+    log "[ww_setup_auth] user=$WW_AUTH_USER"
+    pause
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 05 M) STEP 6 — Configure firewall
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ww_configure_firewall() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05 M-6) Configure Firewall ──${RESET}\n"
+    echo -e "  ${DIM}Opens port 443 (HTTPS) and 80 (HTTP → redirect + certbot renewal).${RESET}"
+    echo -e "  ${DIM}Port $FOREIGN_API_PORT (wallet API) stays on localhost — NOT opened publicly.${RESET}"
+    echo ""
+    echo -ne "${BOLD}Open ports 80 and 443 in the firewall? [y/N/0]: ${RESET}"
+    read -r confirm || true
+    [[ "$confirm" == "0" ]] && return
+    [[ "${confirm,,}" != "y" ]] && info "Cancelled." && return
+
+    if command -v ufw &>/dev/null; then
+        ufw allow 443/tcp && success "UFW: port 443 opened."
+        ufw allow 80/tcp  && success "UFW: port 80 opened."
+    elif command -v iptables &>/dev/null; then
+        iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+        iptables -I INPUT -p tcp --dport 80  -j ACCEPT
+        success "iptables: ports 80 and 443 opened."
+        warn "iptables rules are not persistent. Use iptables-persistent to save them."
+    else
+        warn "No firewall tool found (ufw / iptables). Open ports 80 and 443 manually."
+    fi
+    log "[ww_configure_firewall] completed"
+    pause
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 05 M) STEP 7 — Status & info
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ww_show_info() {
+    ww_load_config
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05 M-7) Status & Info ──${RESET}\n"
+
+    # Dependencies
+    local deps_ok=1
+    for cmd in nginx php certbot htpasswd; do
+        command -v "$cmd" &>/dev/null || { deps_ok=0; break; }
     done
+    [[ $deps_ok -eq 1 ]] && echo -e "  ${BOLD}Dependencies${RESET}  : ${GREEN}all present${RESET}" \
+                         || echo -e "  ${BOLD}Dependencies${RESET}  : ${RED}some missing${RESET}  ${DIM}(step 1)${RESET}"
 
-    if [[ -z "$content" || "$content" != *"BEGINSLATEPACK."* ]]; then
-        warn "No valid Slatepack detected."
-        return 1
-    fi
-    printf '%s' "$content" > "$outfile"
-    return 0
-}
+    command -v qrencode &>/dev/null \
+        && echo -e "  ${BOLD}qrencode${RESET}      : ${GREEN}installed${RESET}" \
+        || echo -e "  ${BOLD}qrencode${RESET}      : ${YELLOW}not installed${RESET}  ${DIM}QR codes will be hidden${RESET}"
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SEND GRIN  (grin-wallet send)
-# ═══════════════════════════════════════════════════════════════════════════════
+    # Files
+    [[ -d "$WW_DEPLOY_DIR" ]] \
+        && echo -e "  ${BOLD}Files${RESET}         : ${GREEN}deployed${RESET}  ${DIM}($WW_DEPLOY_DIR)${RESET}" \
+        || echo -e "  ${BOLD}Files${RESET}         : ${RED}not deployed${RESET}  ${DIM}(step 2)${RESET}"
 
-send_grin() {
-    echo -e "\n${BOLD}${CYAN}── Send Grin ──${RESET}\n"
+    # nginx
+    [[ -f "$WEB_WALLET_NGINX_CONF" ]] \
+        && echo -e "  ${BOLD}nginx vhost${RESET}   : ${GREEN}configured${RESET}  ${DIM}($WEB_WALLET_NGINX_CONF)${RESET}" \
+        || echo -e "  ${BOLD}nginx vhost${RESET}   : ${RED}not configured${RESET}  ${DIM}(step 3)${RESET}"
 
-    detect_and_select_network || return
-
-    if [[ ! -x "$WALLET_BIN" ]]; then
-        warn "grin-wallet binary not found — run option (a) first."; return
-    fi
-    if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
-        warn "Wallet not initialized — run option (b) first."; return
-    fi
-
-    echo -ne "  Amount to send (e.g. 1.5, or 0 to cancel): "
-    read -r amount || true
-    [[ "$amount" == "0" || -z "$amount" ]] && info "Cancelled." && return
-
-    echo -ne "  Recipient address or 'slatepack' for interactive mode [slatepack]: "
-    read -r dest || true
-
-    local wallet_pass
-    read -rs -p "  Enter wallet password: " wallet_pass; echo ""
-    echo ""
-
-    if [[ -z "$dest" || "$dest" == "slatepack" ]]; then
-        # Generate initial slatepack to send to recipient
-        local tmp_slate
-        tmp_slate="$(mktemp /tmp/grin_slate_XXXXXX.slatepack)"
-        cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" \
-            send -m slatepack -d "$tmp_slate" "$amount"
-        local rc=$?
-        unset wallet_pass
-        if [[ $rc -eq 0 && -f "$tmp_slate" ]]; then
-            echo ""
-            echo -e "${BOLD}${GREEN}Send this Slatepack to the recipient:${RESET}"
-            cat "$tmp_slate"
-            echo ""
-            info "After recipient responds, use option (l) Finalize to complete."
-        else
-            warn "send failed (exit code $rc)."
-        fi
-        rm -f "$tmp_slate"
+    # SSL
+    if [[ -n "$WW_DOMAIN" && -f "/etc/letsencrypt/live/$WW_DOMAIN/fullchain.pem" ]]; then
+        local cert_expiry
+        cert_expiry=$(openssl x509 -enddate -noout \
+            -in "/etc/letsencrypt/live/$WW_DOMAIN/fullchain.pem" 2>/dev/null \
+            | sed 's/notAfter=//' || echo "unknown")
+        echo -e "  ${BOLD}SSL cert${RESET}      : ${GREEN}issued${RESET}  ${DIM}(expires: $cert_expiry)${RESET}"
     else
-        cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" \
-            send -d "$dest" "$amount"
-        local rc=$?
-        unset wallet_pass
-        [[ $rc -eq 0 ]] && success "Send completed." || warn "Send failed (exit code $rc)."
+        echo -e "  ${BOLD}SSL cert${RESET}      : ${RED}not issued${RESET}  ${DIM}(step 4)${RESET}"
     fi
-    log "[send_grin] network=$NETWORK amount=$amount"
+
+    # Auth
+    [[ -f "/etc/nginx/grin-wallet.htpasswd" ]] \
+        && echo -e "  ${BOLD}Basic Auth${RESET}    : ${GREEN}configured${RESET}  ${DIM}(user: ${WW_AUTH_USER:-grin})${RESET}" \
+        || echo -e "  ${BOLD}Basic Auth${RESET}    : ${RED}not configured${RESET}  ${DIM}(step 5)${RESET}"
+
+    # Live
+    if [[ -f "/etc/nginx/sites-enabled/grin-wallet-web" ]]; then
+        echo -e "  ${BOLD}Web UI${RESET}        : ${GREEN}LIVE${RESET}  ${DIM}→ https://${WW_DOMAIN:-<domain>}${RESET}"
+    else
+        echo -e "  ${BOLD}Web UI${RESET}        : ${RED}not live${RESET}  ${DIM}(complete steps 3-5)${RESET}"
+    fi
+
+    # Wallet listener
+    if tmux has-session -t "grin-wallet-mainnet" 2>/dev/null || \
+       tmux has-session -t "grin-wallet-testnet" 2>/dev/null; then
+        echo -e "  ${BOLD}Wallet listener${RESET}: ${GREEN}running${RESET}"
+    else
+        echo -e "  ${BOLD}Wallet listener${RESET}: ${RED}not running${RESET}  ${YELLOW}⚠ start via option (c)${RESET}"
+    fi
+
+    echo ""
+    [[ -n "$WW_DOMAIN" ]] && echo -e "  URL: ${BOLD}${GREEN}https://$WW_DOMAIN${RESET}"
+    echo ""
+    pause
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# RECEIVE GRIN  (grin-wallet receive -i)
+# 05 M) STEP s — Edit saved settings
 # ═══════════════════════════════════════════════════════════════════════════════
 
-receive_grin() {
-    echo -e "\n${BOLD}${CYAN}── Receive Grin (paste sender's Slatepack) ──${RESET}\n"
-
-    detect_and_select_network || return
-
-    if [[ ! -x "$WALLET_BIN" ]]; then
-        warn "grin-wallet binary not found — run option (a) first."; return
-    fi
-    if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
-        warn "Wallet not initialized — run option (b) first."; return
-    fi
-
-    local tmp_in tmp_out
-    tmp_in="$(mktemp /tmp/grin_slate_in_XXXXXX.slatepack)"
-    tmp_out="$(mktemp /tmp/grin_slate_out_XXXXXX.slatepack)"
-
-    collect_slatepack "$tmp_in" || { rm -f "$tmp_in" "$tmp_out"; return; }
-
-    local wallet_pass
-    read -rs -p "  Enter wallet password: " wallet_pass; echo ""
+ww_edit_settings() {
+    ww_load_config
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05 M-s) Edit Saved Settings ──${RESET}\n"
+    echo -e "  ${DIM}Press Enter to keep the current value.${RESET}"
     echo ""
 
-    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" \
-        receive -i "$tmp_in" -o "$tmp_out"
-    local rc=$?
-    unset wallet_pass
+    echo -ne "Domain           [${WW_DOMAIN:-}]: "
+    read -r v || true; [[ -n "$v" ]] && WW_DOMAIN="$v"
 
-    if [[ $rc -eq 0 && -f "$tmp_out" ]]; then
+    echo -ne "Deploy directory [${WW_DEPLOY_DIR}]: "
+    read -r v || true; [[ -n "$v" ]] && WW_DEPLOY_DIR="$v"
+
+    echo -ne "PHP-FPM socket   [${WW_PHP_FPM_SOCK:-}]: "
+    read -r v || true; [[ -n "$v" ]] && WW_PHP_FPM_SOCK="$v"
+
+    echo -ne "Auth username    [${WW_AUTH_USER}]: "
+    read -r v || true; [[ -n "$v" ]] && WW_AUTH_USER="$v"
+
+    echo -ne "Let's Encrypt email [${WW_EMAIL:-}]: "
+    read -r v || true; [[ -n "$v" ]] && WW_EMAIL="$v"
+
+    ww_save_config
+    success "Settings saved to $WW_CONF_FILE"
+    pause
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 05 M) WEB WALLET INTERFACE — Submenu
+# ═══════════════════════════════════════════════════════════════════════════════
+
+show_web_wallet_status() {
+    ww_load_config
+    echo -e "\n${BOLD}Status:${RESET}\n"
+
+    # Dependencies
+    local deps_ok=1
+    for cmd in nginx php certbot htpasswd; do
+        command -v "$cmd" &>/dev/null || { deps_ok=0; break; }
+    done
+    [[ $deps_ok -eq 1 ]] && echo -e "  ${BOLD}1 Dependencies${RESET}  : ${GREEN}OK${RESET}" \
+                         || echo -e "  ${BOLD}1 Dependencies${RESET}  : ${RED}missing${RESET}  ${DIM}→ run step 1${RESET}"
+
+    [[ -d "$WW_DEPLOY_DIR" ]] \
+        && echo -e "  ${BOLD}2 Files${RESET}         : ${GREEN}deployed${RESET}  ${DIM}($WW_DEPLOY_DIR)${RESET}" \
+        || echo -e "  ${BOLD}2 Files${RESET}         : ${DIM}not deployed${RESET}  ${DIM}→ run step 2${RESET}"
+
+    [[ -f "$WEB_WALLET_NGINX_CONF" ]] \
+        && echo -e "  ${BOLD}3 nginx vhost${RESET}   : ${GREEN}configured${RESET}" \
+        || echo -e "  ${BOLD}3 nginx vhost${RESET}   : ${DIM}not configured${RESET}  ${DIM}→ run step 3${RESET}"
+
+    if [[ -n "$WW_DOMAIN" && -f "/etc/letsencrypt/live/$WW_DOMAIN/fullchain.pem" ]]; then
+        echo -e "  ${BOLD}4 SSL cert${RESET}      : ${GREEN}issued${RESET}  ${DIM}($WW_DOMAIN)${RESET}"
+    else
+        echo -e "  ${BOLD}4 SSL cert${RESET}      : ${DIM}not issued${RESET}  ${DIM}→ run step 4${RESET}"
+    fi
+
+    [[ -f "/etc/nginx/grin-wallet.htpasswd" ]] \
+        && echo -e "  ${BOLD}5 Basic Auth${RESET}    : ${GREEN}configured${RESET}  ${DIM}(user: ${WW_AUTH_USER:-grin})${RESET}" \
+        || echo -e "  ${BOLD}5 Basic Auth${RESET}    : ${DIM}not configured${RESET}  ${DIM}→ run step 5${RESET}"
+
+    if [[ -f "/etc/nginx/sites-enabled/grin-wallet-web" ]]; then
+        echo -e "  ${BOLD}Web UI${RESET}          : ${GREEN}LIVE${RESET}  ${DIM}https://${WW_DOMAIN:-<domain>}${RESET}"
+    else
+        echo -e "  ${BOLD}Web UI${RESET}          : ${DIM}not live${RESET}"
+    fi
+    echo ""
+}
+
+web_wallet_menu() {
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN} 05 Z) WEB WALLET INTERFACE${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        show_web_wallet_status
+
+        echo -e "${DIM}  ─── First-time setup (run in order) ─────────────${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Install dependencies    ${DIM}(nginx, php, certbot, htpasswd, qrencode)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Deploy files            ${DIM}(copy web/05/ → deploy directory)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Configure nginx         ${DIM}(vhost + rate-limit + security headers)${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Setup SSL               ${DIM}(Let's Encrypt — DNS must point here first)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Setup Basic Auth        ${DIM}(set / change password)${RESET}"
+        echo -e "  ${GREEN}6${RESET}) Configure firewall      ${DIM}(open ports 80 and 443)${RESET}"
         echo ""
-        echo -e "${BOLD}${GREEN}Return this Slatepack to the sender to finalize:${RESET}"
-        cat "$tmp_out"
+        echo -e "${DIM}  ─── Info ─────────────────────────────────────────${RESET}"
+        echo -e "  ${CYAN}7${RESET}) Status & info           ${DIM}(URLs, cert expiry, service health)${RESET}"
+        echo -e "  ${CYAN}s${RESET}) Edit saved settings     ${DIM}(domain, directory, email, username)${RESET}"
         echo ""
-        success "Receive step complete — send the above Slatepack back to the sender."
-    else
-        warn "receive failed (exit code $rc). Check output above."
-    fi
-    rm -f "$tmp_in" "$tmp_out"
-    log "[receive_grin] network=$NETWORK rc=$rc"
+        echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
+        echo -e "  ${RED}0${RESET}) Back to wallet menu"
+        echo ""
+        echo -ne "${BOLD}Select [1-7 / s / 0]: ${RESET}"
+        read -r ww_choice || true
+
+        case "$ww_choice" in
+            1) ww_install_deps ;;
+            2) ww_deploy_files ;;
+            3) ww_configure_nginx ;;
+            4) ww_setup_ssl ;;
+            5) ww_setup_auth ;;
+            6) ww_configure_firewall ;;
+            7) ww_show_info ;;
+            s) ww_edit_settings ;;
+            0) break ;;
+            "") continue ;;
+            *) warn "Invalid option." ; sleep 1 ;;
+        esac
+    done
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# FINALIZE GRIN  (grin-wallet finalize -i)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-finalize_grin() {
-    echo -e "\n${BOLD}${CYAN}── Finalize Grin Transaction (paste receiver's Slatepack) ──${RESET}\n"
-
-    detect_and_select_network || return
-
-    if [[ ! -x "$WALLET_BIN" ]]; then
-        warn "grin-wallet binary not found — run option (a) first."; return
-    fi
-    if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
-        warn "Wallet not initialized — run option (b) first."; return
-    fi
-
-    local tmp_in
-    tmp_in="$(mktemp /tmp/grin_slate_fin_XXXXXX.slatepack)"
-
-    collect_slatepack "$tmp_in" || { rm -f "$tmp_in"; return; }
-
-    local wallet_pass
-    read -rs -p "  Enter wallet password: " wallet_pass; echo ""
-    echo ""
-
-    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" \
-        finalize -i "$tmp_in"
-    local rc=$?
-    unset wallet_pass
-    rm -f "$tmp_in"
-
-    echo ""
-    if [[ $rc -eq 0 ]]; then
-        success "Transaction finalized and broadcast to the network."
-    else
-        warn "Finalize failed (exit code $rc). Check output above."
-    fi
-    log "[finalize_grin] network=$NETWORK rc=$rc"
-}
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MENU
+# MAIN MENU
 # ═══════════════════════════════════════════════════════════════════════════════
 
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN} 05) GRIN WALLET SERVICE ${RESET}"
-    echo -e "${BOLD}${GREEN}  Disclaimer: Always store or write your seed key safe!${RESET}"
-    echo -e "${BOLD}${YELLOW}  This tool is for testing and development purpose! ${RESET}"
+    echo -e "${BOLD}${CYAN} 05) GRIN WALLET SERVICE${RESET}"
+    echo -e "${BOLD}${GREEN}  Disclaimer: Always store your seed phrase safely!${RESET}"
+    echo -e "${BOLD}${YELLOW}  This tool is for testing and development purposes!${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     show_status
 
     echo -e "${DIM}  ─── Setup ────────────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}a${RESET}) Download & install grin-wallet  ${DIM}(choose mainnet / testnet)${RESET}"
+    echo -e "  ${GREEN}a${RESET}) Download & install grin-wallet  ${DIM}(mainnet / testnet)${RESET}"
     echo -e "  ${GREEN}b${RESET}) Initialize wallet               ${DIM}(grin-wallet init)${RESET}"
-    echo -e "  ${GREEN}h${RESET}) Recover wallet from seed        ${DIM}(grin-wallet init -r)${RESET}"
-    echo -e "  ${GREEN}i${RESET}) Show seed phrase                ${DIM}(grin-wallet recover)${RESET}"
-    echo ""
-    echo -e "${DIM}  ─── Run ──────────────────────────────────────────${RESET}"
     echo -e "  ${GREEN}c${RESET}) Start wallet listener           ${DIM}(grin-wallet listen, tmux)${RESET}"
     echo ""
-    echo -e "${DIM}  ─── Transact ─────────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}j${RESET}) Send Grin                       ${DIM}(grin-wallet send)${RESET}"
-    echo -e "  ${GREEN}k${RESET}) Receive Grin                    ${DIM}(paste sender's Slatepack)${RESET}"
-    echo -e "  ${GREEN}l${RESET}) Finalize transaction            ${DIM}(paste receiver's Slatepack)${RESET}"
-    echo ""
-    echo -e "${DIM}  ─── Publish ──────────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}d${RESET}) Enable Wallet Foreign API       ${DIM}(port $FOREIGN_API_PORT)${RESET}"
+    echo -e "${DIM}  ─── Foreign API ──────────────────────────────────${RESET}"
+    echo -e "  ${GREEN}d${RESET}) Enable Wallet Foreign API       ${DIM}(port $FOREIGN_API_PORT — localhost only)${RESET}"
     echo -e "  ${RED}e${RESET}) Disable Wallet Foreign API"
-    echo -e "  ${CYAN}f${RESET}) Configure nginx proxy           ${DIM}(wallet)${RESET}"
-    echo -e "  ${CYAN}g${RESET}) Configure firewall rules        ${DIM}(port $FOREIGN_API_PORT)${RESET}"
+    echo ""
+    echo -e "${DIM}  ─── Web Interface ────────────────────────────────${RESET}"
+    echo -e "  ${CYAN}z${RESET}) Web Wallet Interface            ${DIM}(nginx + PHP + HTTPS + Basic Auth)${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh status${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [a-l / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [a-e / z / 0]: ${RESET}"
 }
 
 main() {
@@ -905,13 +1091,7 @@ main() {
             c) start_wallet ;;
             d) enable_foreign_api ;;
             e) disable_foreign_api ;;
-            f) offer_nginx_proxy ;;
-            g) configure_firewall_foreign ;;
-            h) recover_wallet ;;
-            i) show_seed ;;
-            j) send_grin ;;
-            k) receive_grin ;;
-            l) finalize_grin ;;
+            z) web_wallet_menu ;;
             0) break ;;
             "") continue ;;
             *) warn "Invalid option." ; sleep 1 ;;

@@ -35,22 +35,13 @@ DELETE_FILES=""              # Set to "yes" to delete files, "no" to keep
 # IMPORTANT NOTES BEFORE RUNNING:
 #############################################################################
 # 
-# 1. DOMAIN DNS REQUIREMENT:
-#    Your domain MUST be pointed directly to this server's IP address.
-#    
-# 2. CLOUDFLARE USERS - CRITICAL:
-#    If you use Cloudflare DNS, you MUST temporarily disable the proxy:
-#    - Go to Cloudflare DNS panel
-#    - Find your domain record (A or AAAA)
-#    - Change proxy status from "Proxied" (orange cloud) to "DNS only" (gray cloud)
-#    - Wait for DNS propagation (usually a few minutes)
-#    - Run this script to obtain SSL certificate
-#    - After SSL is obtained, you can re-enable Cloudflare proxy if desired
-#    
-#    WHY? Let's Encrypt needs to connect directly to your server to verify
-#    domain ownership. Cloudflare proxy will block this verification.
+# 1. DNS REQUIREMENT:
+#    Your domain A record must point directly to this server's IP address.
+#    If you use Cloudflare, change the A record from "Proxied" to "DNS only"
+#    — this makes your Grin node reachable as a DNSSeed and avoids
+#    Let's Encrypt / certbot certificate issues.
 #
-# 3. FIREWALL:
+# 2. FIREWALL:
 #    Ensure ports 80 and 443 are open and accessible from the internet.
 #
 #############################################################################
@@ -598,25 +589,9 @@ parse_arguments() {
 # 5.0 - Function to get domain input
 get_domain() {
     echo ""
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}[NOTICE] DNS REQUIREMENTS — Read before entering your domain${NC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    echo "  • Your domain A record MUST point to this server's IP address."
-    echo "  • Let's Encrypt will verify domain ownership via HTTP — if the"
-    echo "    domain does not resolve to this server, SSL setup will FAIL."
-    echo ""
-    echo -e "${YELLOW}  CLOUDFLARE USERS:${NC}"
-    echo -e "    ${RED}✗ Proxy (orange cloud)${NC} = SSL will FAIL — Cloudflare intercepts"
-    echo -e "      the Let's Encrypt challenge before it reaches this server."
-    echo ""
-    echo -e "    ${GREEN}✓ DNS only (gray cloud)${NC} = Correct setting."
-    echo ""
-    echo "    For Grin node DNS seeds, keep the A record as 'DNS only'"
-    echo "    (gray cloud) permanently. Do NOT enable Cloudflare proxy"
-    echo "    on this domain — it will break peer discovery."
-    echo ""
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}[DNS]${NC} Point your A record to this server. If using Cloudflare, change"
+    echo -e "      from ${RED}Proxied${NC} to ${GREEN}DNS only${NC} — makes your node become a DNSSeed and avoids"
+    echo -e "      certbot / Let's Encrypt issues."
     echo ""
     while true; do
         if [[ -z "$DOMAIN" ]]; then

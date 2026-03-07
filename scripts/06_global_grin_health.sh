@@ -598,19 +598,35 @@ install_explorer() {
         git clone "$EXPLORER_REPO" "$EXPLORER_DIR"
     fi
 
+    # Patch hardcoded /main/ segment in chain_data path.
+    # Upstream code uses: format!("{}/main/chain_data", CONFIG.grin_dir)
+    # Toolkit stores chain_data at /grinfullmain/chain_data (no /main/ subdirectory).
+    local requests_rs="$EXPLORER_DIR/src/requests.rs"
+    if [[ -f "$requests_rs" ]] && grep -q '/main/chain_data' "$requests_rs"; then
+        info "Patching src/requests.rs: removing hardcoded /main/ from chain_data path..."
+        sed -i 's|{}/main/chain_data|{}/chain_data|g' "$requests_rs"
+        success "Patched: chain_dir now resolves to grin_dir/chain_data directly."
+    fi
+
     # Build
+    local build_log="$LOG_DIR/grin_explorer_build_$(date +%Y%m%d_%H%M%S).log"
     info "Building release binary — this may take 10-30 minutes..."
-    echo -e "  ${DIM}Watch build log: tail -f $LOG_DIR/grin_explorer_build.log${RESET}"
+    echo -e "  ${DIM}Log: $build_log${RESET}"
     echo ""
     cargo build --release --manifest-path "$EXPLORER_DIR/Cargo.toml" \
-        > "$LOG_DIR/grin_explorer_build.log" 2>&1
+        > "$build_log" 2>&1 &
+    local cargo_pid=$!
+    # Stream log output so user can see progress
+    tail -f "$build_log" --pid="$cargo_pid" 2>/dev/null
+    wait "$cargo_pid"
     local rc=$?
+    echo ""
     if [[ $rc -eq 0 ]]; then
         success "Build complete: $EXPLORER_BIN"
-        log "Explorer built successfully."
+        log "Explorer built successfully. Log: $build_log"
     else
-        error "Build failed. See: $LOG_DIR/grin_explorer_build.log"
-        log "Explorer build failed: exit $rc"
+        error "Build failed. See: $build_log"
+        log "Explorer build failed: exit $rc. Log: $build_log"
         pause; return
     fi
     pause
@@ -632,8 +648,8 @@ configure_explorer() {
     read -r node_choice
     [[ "$node_choice" == "0" ]] && return
 
-    local cfg_host cfg_port cfg_proto cfg_secret cfg_db_root
-    cfg_db_root=""
+    local cfg_host cfg_port cfg_proto cfg_secret cfg_grin_dir
+    cfg_grin_dir=""
 
     case "${node_choice:-1}" in
         2)
@@ -643,6 +659,20 @@ configure_explorer() {
             cfg_secret=""
             ;;
         *)
+            # Verify archive node exists before proceeding
+            if [[ ! -d "/grinfullmain" ]]; then
+                echo ""
+                warn "Full archive node not found at /grinfullmain"
+                echo -e "  ${DIM}The Grin Explorer requires a mainnet archive node to read block data.${RESET}"
+                echo -e "  ${DIM}Run ${BOLD}Script 01${RESET}${DIM} and install a mainnet archive node, then return here.${RESET}"
+                echo ""
+                echo -ne "Press ${BOLD}0${RESET} and Enter to return: "
+                while read -r _back; do
+                    [[ "$_back" == "0" ]] && break
+                    echo -ne "Press ${BOLD}0${RESET} and Enter to return: "
+                done
+                return
+            fi
             cfg_host="127.0.0.1"
             cfg_port="$NODE_PORT"
             cfg_proto="http"
@@ -654,21 +684,21 @@ configure_explorer() {
                 cfg_secret=""
                 warn "API secret not found at ${API_SECRET_PATH} — proceeding without auth."
             fi
-            # Detect db_root (parent directory of chain_data)
+            # Detect grin_dir (parent directory of chain_data, written to Explorer.toml)
             echo ""
-            info "Detecting chain_data path for db_root..."
+            info "Detecting chain_data path for grin_dir..."
             if [[ -d "/grinfullmain/chain_data" ]]; then
-                cfg_db_root="/grinfullmain"
+                cfg_grin_dir="/grinfullmain"
                 success "Found: /grinfullmain/chain_data  ${DIM}(toolkit default for full archive)${RESET}"
             elif [[ -d "$HOME/.grin/main/chain_data" ]]; then
-                cfg_db_root="$HOME/.grin/main"
+                cfg_grin_dir="$HOME/.grin/main"
                 success "Found: $HOME/.grin/main/chain_data"
             else
                 warn "chain_data not found in /grinfullmain or $HOME/.grin/main"
                 echo -e "  ${DIM}The explorer needs a full archive node — pruned nodes are not supported.${RESET}"
-                echo -ne "Enter db_root path (parent directory of chain_data, or 0 to skip): "
-                read -r cfg_db_root
-                [[ "$cfg_db_root" == "0" ]] && cfg_db_root=""
+                echo -ne "Enter grin_dir path (parent directory of chain_data, or 0 to skip): "
+                read -r cfg_grin_dir
+                [[ "$cfg_grin_dir" == "0" ]] && cfg_grin_dir=""
             fi
             ;;
     esac
@@ -688,9 +718,9 @@ configure_explorer() {
         sed -i "s|^api_secret_path\s*=.*|api_secret_path = \"${API_SECRET_PATH}\"|" "$toml"
     fi
 
-    # Patch db_root (only for local node; remote nodes connect via API only)
-    if [[ -n "$cfg_db_root" ]]; then
-        sed -i "s|^db_root\s*=.*|db_root = \"${cfg_db_root}\"|" "$toml"
+    # Patch grin_dir (only for local node; remote nodes connect via API only)
+    if [[ -n "$cfg_grin_dir" ]]; then
+        sed -i "s|^grin_dir\s*=.*|grin_dir = \"${cfg_grin_dir}\"|" "$toml"
     fi
 
     # Summary of patched values
@@ -699,8 +729,8 @@ configure_explorer() {
     echo -e "    host             = ${CYAN}${cfg_host}${RESET}"
     echo -e "    port             = ${CYAN}${cfg_port}${RESET}"
     echo -e "    protocol         = ${CYAN}${cfg_proto}${RESET}"
-    [[ -n "$cfg_db_root" ]] && \
-        echo -e "    db_root          = ${CYAN}${cfg_db_root}${RESET}  ${DIM}(parent of chain_data)${RESET}"
+    [[ -n "$cfg_grin_dir" ]] && \
+        echo -e "    grin_dir         = ${CYAN}${cfg_grin_dir}${RESET}  ${DIM}(parent of chain_data)${RESET}"
     [[ -n "$cfg_secret" ]] && \
         echo -e "    api_secret_path  = ${CYAN}${API_SECRET_PATH}${RESET}"
     echo ""
@@ -711,7 +741,7 @@ configure_explorer() {
     fi
 
     success "Explorer.toml patched."
-    log "Explorer configured: host=$cfg_host port=$cfg_port proto=$cfg_proto db_root=${cfg_db_root:-skipped}"
+    log "Explorer configured: host=$cfg_host port=$cfg_port proto=$cfg_proto grin_dir=${cfg_grin_dir:-skipped}"
     pause
 }
 
@@ -723,14 +753,14 @@ start_explorer() {
 
     # Pre-start: verify chain_data path if Explorer.toml is present
     if [[ -f "$EXPLORER_TOML" ]]; then
-        local db_root_val
-        db_root_val=$(grep -E '^[[:space:]]*db_root[[:space:]]*=' "$EXPLORER_TOML" 2>/dev/null \
+        local grin_dir_val
+        grin_dir_val=$(grep -E '^[[:space:]]*grin_dir[[:space:]]*=' "$EXPLORER_TOML" 2>/dev/null \
                       | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
-        if [[ -n "$db_root_val" && ! -d "$db_root_val/chain_data" ]]; then
-            warn "chain_data not found at: ${db_root_val}/chain_data"
+        if [[ -n "$grin_dir_val" && ! -d "$grin_dir_val/chain_data" ]]; then
+            warn "chain_data not found at: ${grin_dir_val}/chain_data"
             echo -e "  ${DIM}The explorer reads block data directly from chain_data on disk.${RESET}"
             echo -e "  ${DIM}Toolkit default for full archive: /grinfullmain/chain_data${RESET}"
-            echo -e "  ${DIM}Run Configure (B→2) to update db_root to the correct path.${RESET}"
+            echo -e "  ${DIM}Run Configure (B→2) to update grin_dir to the correct path.${RESET}"
             echo ""
             echo -ne "Continue anyway? [y/N/0]: "
             read -r cont_anyway
@@ -761,9 +791,74 @@ start_explorer() {
     else
         warn "Explorer may still be starting — check port 8000 in a moment."
         echo -e "  ${DIM}Attach: tmux attach -t ${EXPLORER_SESSION}${RESET}"
-        echo -e "  ${DIM}If it exits immediately, run Configure (B→2) to fix db_root / chain_data path.${RESET}"
+        echo -e "  ${DIM}If it exits immediately, run Configure (B→2) to fix grin_dir / chain_data path.${RESET}"
     fi
     log "Explorer session started: $EXPLORER_SESSION"
+    pause
+}
+
+# ── B-7: Schedule Explorer auto-start (@reboot via cron) ──────────────────────
+schedule_explorer_autostart() {
+    [[ ! -f "$EXPLORER_BIN" ]] && { die "Not installed. Run Install (1) first."; return; }
+    clear
+    echo -e "\n${BOLD}${CYAN}── B-7) Auto-Start Explorer on Boot ──${RESET}\n"
+    echo -e "  Adds a ${BOLD}@reboot${RESET} cron entry that sleeps N minutes, then launches"
+    echo -e "  grin-explorer in a tmux session (mirrors option 3 — Start)."
+    echo ""
+
+    # ── Show all toolkit cron entries so user can assess timing ───────────────
+    echo -e "  ${BOLD}Current toolkit cron jobs:${RESET}"
+    local all_cron; all_cron=$(crontab -l 2>/dev/null || true)
+    local found_any=0
+    while IFS= read -r line; do
+        echo "$line" | grep -q "grin-node-toolkit" && {
+            echo -e "    ${GREEN}▶${RESET} $line"
+            found_any=1
+        }
+    done <<< "$all_cron"
+    [[ $found_any -eq 0 ]] && echo -e "    ${DIM}None found.${RESET}"
+    echo ""
+
+    # ── Warn if no script-03 nginx cron for full mainnet ──────────────────────
+    if ! echo "$all_cron" | grep -q "grin_share_nginx"; then
+        echo -e "  ${YELLOW}[NOTICE]${RESET} No script-03 nginx cron detected."
+        echo -e "  The explorer reads chain_data from the ${BOLD}full archive mainnet${RESET} node."
+        echo -e "  Script 03 (E → Schedule Nginx jobs) refreshes chain_data and restarts"
+        echo -e "  the Grin node. Without it the explorer may serve stale or missing data."
+        echo -e "  ${DIM}→ Run script 03 → option E to schedule chain_data refresh first.${RESET}"
+        echo ""
+    fi
+
+    # ── Default sleep: 100 seconds ────────────────────────────────────────────
+    local delay=100
+    echo -ne "  Boot delay in seconds [${delay}] (default = 100 sec) or 0 to cancel: "
+    local inp; read -r inp
+    [[ "$inp" == "0" ]] && return
+    [[ -n "$inp" && "$inp" =~ ^[0-9]+$ ]] && delay=$inp
+
+    # ── Build cron line ───────────────────────────────────────────────────────
+    local cron_log="$LOG_DIR/cron_explorer.log"
+    local cron_line="@reboot sleep $delay && tmux new-session -d -s $EXPLORER_SESSION -c $EXPLORER_DIR \"RUST_LOG=rocket=warn,grin_explorer=info $EXPLORER_BIN >> $cron_log 2>&1\" $CRON_MARKER_EXPLORER"
+
+    # ── Check for existing entry ───────────────────────────────────────────────
+    if echo "$all_cron" | grep -qF "grin_explorer"; then
+        warn "An explorer auto-start cron entry already exists."
+        echo -ne "  Replace it? [y/N/0]: "
+        local rep; read -r rep
+        [[ "$rep" == "0" ]] && return
+        if [[ "${rep,,}" == "y" ]]; then
+            all_cron=$(echo "$all_cron" | grep -v "grin_explorer" || true)
+        else
+            info "Keeping existing entry."; echo ""; pause; return
+        fi
+    fi
+
+    (echo "$all_cron"; echo "$cron_line") | grep -v '^$' | crontab -
+    success "Explorer auto-start scheduled (sleep ${delay}s after boot)."
+    log "Explorer @reboot cron added: $cron_line"
+    echo ""
+    echo -e "  ${DIM}Log: $cron_log${RESET}"
+    echo -e "  ${DIM}Run 'crontab -l' to verify. Remove with: crontab -e${RESET}"
     pause
 }
 
@@ -790,8 +885,8 @@ setup_nginx_explorer() {
     echo -e "  Obtains a free SSL certificate via Let's Encrypt (certbot)."
     echo ""
     echo -e "  ${YELLOW}Before continuing:${RESET}"
-    echo -e "  · Make sure your DNS A-record points to this server (use option 4 to check)"
-    echo -e "  · If using Cloudflare, set to ${BOLD}DNS only${RESET} (grey cloud) — not Proxied"
+    echo -e "  · DNS A-record must point to this server. If using Cloudflare, change from"
+    echo -e "    ${BOLD}Proxied${RESET} to ${BOLD}DNS only${RESET} — enables DNSSeed and avoids Let's Encrypt issues."
     echo -e "  · The explorer (option 3) must be running before visitors can browse it"
     echo ""
     echo -e "  ${DIM}Press 0 at any prompt to cancel and return.${RESET}"
@@ -943,12 +1038,8 @@ check_dns_record() {
     echo -e "  ${DIM}  ${example_sub}.yourdomain.com  →  <one of the IPs above>${RESET}"
     echo -e "  ${DIM}DNS changes can take up to 24 h to propagate (usually < 5 min).${RESET}"
     echo ""
-    echo -e "  ${BOLD}Using Cloudflare?${RESET}"
-    echo -e "  ${RED}Important:${RESET} Set the record to ${BOLD}DNS only${RESET} ${DIM}(grey cloud icon)${RESET},"
-    echo -e "  ${RED}NOT${RESET} ${BOLD}Proxied${RESET} ${DIM}(orange cloud)${RESET}."
-    echo -e "  ${DIM}Certbot requires a direct HTTP connection to this server to issue the${RESET}"
-    echo -e "  ${DIM}SSL certificate. Cloudflare's proxy blocks the ACME challenge.${RESET}"
-    echo -e "  ${DIM}You can switch back to Proxied after the certificate is obtained.${RESET}"
+    echo -e "  ${BOLD}Using Cloudflare?${RESET} Change your A record from ${BOLD}Proxied${RESET} to ${BOLD}DNS only${RESET}."
+    echo -e "  ${DIM}This makes your Grin node reachable as a DNSSeed and avoids certbot / Let's Encrypt issues.${RESET}"
     echo ""
     echo -ne "${BOLD}Have you set (or confirmed) your DNS A-record? [y/N/0]: ${RESET}"
     read -r _dns_confirm
@@ -1020,13 +1111,16 @@ show_menu_b() {
     echo -e "  ${GREEN}4${RESET})   Check DNS        ${DIM}confirm A-record before nginx setup${RESET}"
     echo -e "  ${GREEN}5${RESET})   Setup Nginx      ${DIM}HTTPS subdomain → proxy :8000${RESET}  [$ngnx]"
     echo -e "  ${GREEN}6${RESET})   Status"
+    local _xcron="${YELLOW}inactive${RESET}"
+    crontab -l 2>/dev/null | grep -q "grin_explorer" && _xcron="${GREEN}active${RESET}"
+    echo -e "  ${GREEN}7${RESET})   Auto-Start on Boot  ${DIM}@reboot cron via tmux${RESET}  [$_xcron]"
     echo -e "  ${YELLOW}Z${RESET})   Stop             ${DIM}kill tmux session${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back${RESET}"
     echo -e "  ${DIM}[Enter] Refresh menu${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-6, Z]: ${RESET}"
+    echo -ne "${BOLD}Select [0-7, Z]: ${RESET}"
 }
 
 show_main_menu() {
@@ -1095,6 +1189,7 @@ run_menu_b() {
             4) check_dns_record "explorer"     || true ;;
             5) setup_nginx_explorer            || true ;;
             6) status_explorer                 || true ;;
+            7) schedule_explorer_autostart     || true ;;
             Z) stop_explorer                   || true ;;
             0) break                                    ;;
             "") ;;  # Enter = refresh menu

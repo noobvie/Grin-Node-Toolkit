@@ -1008,6 +1008,16 @@ status_explorer() {
     else
         echo -e "  Grin node    ${RED}✗ not detected${RESET}"
     fi
+
+    # Crontab
+    echo ""
+    local cron_entry; cron_entry=$(crontab -l 2>/dev/null | grep "grin_explorer" | head -1)
+    if [[ -n "$cron_entry" ]]; then
+        echo -e "  Auto-start   ${GREEN}✓ scheduled${RESET}"
+        echo -e "  ${DIM}$cron_entry${RESET}"
+    else
+        echo -e "  Auto-start   ${YELLOW}✗ not scheduled${RESET}  ${DIM}(use option 6 to set up)${RESET}"
+    fi
     echo ""
     pause
 }
@@ -1109,10 +1119,10 @@ show_menu_b() {
     echo -e "  ${GREEN}3${RESET})   Start            ${DIM}launch in tmux${RESET}  [$running]"
     echo -e "  ${GREEN}4${RESET})   Check DNS        ${DIM}confirm A-record before nginx setup${RESET}"
     echo -e "  ${GREEN}5${RESET})   Setup Nginx      ${DIM}HTTPS subdomain → proxy :8000${RESET}  [$ngnx]"
-    echo -e "  ${GREEN}6${RESET})   Status"
     local _xcron="${YELLOW}inactive${RESET}"
     crontab -l 2>/dev/null | grep -q "grin_explorer" && _xcron="${GREEN}active${RESET}"
-    echo -e "  ${GREEN}7${RESET})   Auto-Start on Boot  ${DIM}@reboot cron via tmux${RESET}  [$_xcron]"
+    echo -e "  ${GREEN}6${RESET})   Auto-Start on Boot  ${DIM}@reboot cron via tmux${RESET}  [$_xcron]"
+    echo -e "  ${GREEN}7${RESET})   Status"
     echo -e "  ${YELLOW}Z${RESET})   Stop             ${DIM}kill tmux session${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back${RESET}"
@@ -1187,8 +1197,8 @@ run_menu_b() {
             3) start_explorer                  || true ;;
             4) check_dns_record "explorer"     || true ;;
             5) setup_nginx_explorer            || true ;;
-            6) status_explorer                 || true ;;
-            7) schedule_explorer_autostart     || true ;;
+            6) schedule_explorer_autostart     || true ;;
+            7) status_explorer                 || true ;;
             Z) stop_explorer                   || true ;;
             0) break                                    ;;
             "") ;;  # Enter = refresh menu

@@ -12,6 +12,7 @@
 # Interactive:  bash 03_grin_share_chain_data.sh
 # Scheduled:    bash 03_grin_share_chain_data.sh --cron-nginx
 #               bash 03_grin_share_chain_data.sh --cron-ssh
+#               bash 03_grin_share_chain_data.sh --cron-clean
 ################################################################################
 # SUGGESTION: If you have free a VPS and domain, become a public Grin master node to support the network!
 # Set your domain to following formats, then run script 01/02/03 to share your node data, other choices are optional.
@@ -32,6 +33,7 @@ SCHED_LOG_FILE="$LOG_DIR/schedule.log"
 CRON_COMMENT_NGINX="# grin-node-toolkit: grin_share_nginx"
 CRON_COMMENT_AUTOSTART_MAIN="# grin-node-toolkit: grin_autostart_mainnet"
 CRON_COMMENT_AUTOSTART_TEST="# grin-node-toolkit: grin_autostart_testnet"
+CRON_COMMENT_CLEAN="# grin-node-toolkit: grin_clean_txhashset"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
@@ -1262,6 +1264,39 @@ run_cron_ssh() {
 }
 
 ################################################################################
+# I) Auto-delete txhashset snapshot zips
+################################################################################
+
+# Default directories to scan (chain_data inside each toolkit node dir)
+CLEAN_TXHASHSET_DIRS=(
+    "/grinprunemain/chain_data"
+    "/grinfullmain/chain_data"
+    "/grinprunetest/chain_data"
+)
+
+# Entry point for --cron-clean
+run_txhashset_cleanup() {
+    local ts; ts="[$(date -u '+%Y-%m-%d %H:%M:%S UTC')]"
+    echo "$ts Starting txhashset_snapshot_*.zip cleanup..."
+    local total=0
+    for d in "${CLEAN_TXHASHSET_DIRS[@]}"; do
+        if [[ ! -d "$d" ]]; then
+            echo "$ts   Skip: $d (not found)"
+            continue
+        fi
+        local count; count=$(find "$d" -maxdepth 1 -name "txhashset_snapshot_*.zip" 2>/dev/null | wc -l)
+        if [[ "$count" -gt 0 ]]; then
+            find "$d" -maxdepth 1 -name "txhashset_snapshot_*.zip" -delete
+            echo "$ts   Removed $count file(s) from $d"
+            total=$((total + count))
+        else
+            echo "$ts   None found in $d"
+        fi
+    done
+    echo "$ts Done. Total removed: $total file(s)"
+}
+
+################################################################################
 # Schedule management  (nginx cron only — SSH cron is managed manually)
 ################################################################################
 
@@ -1277,35 +1312,46 @@ show_current_schedule() {
 }
 
 list_presets() {
+    # Generate random hour/minute/day from current server time
+    local now_h now_m
+    now_h=$(date +%-H)   # 0-23, no leading zero
+    now_m=$(date +%-M)   # 0-59, no leading zero
+    _R_MIN=$(( (RANDOM + now_m) % 60 ))
+    _R_HOUR=$(( (RANDOM + now_h) % 24 ))
+    _R_HOUR2=$(( (_R_HOUR + 12) % 24 ))
+    _R_DOW=$(( RANDOM % 7 ))   # 0=Sun … 6=Sat
+
+    local -a _DAYS=("Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat")
+    local _DAY_NAME="${_DAYS[$_R_DOW]}"
+    local _HM; printf -v _HM '%02d:%02d' "$_R_HOUR" "$_R_MIN"
+
+    _PRESET2="$_R_MIN $_R_HOUR * * $_R_DOW"
+    _PRESET3="$_R_MIN $_R_HOUR * * *"
+    _PRESET4="$_R_MIN $_R_HOUR,$_R_HOUR2 * * *"
+    _PRESET5="$_R_MIN $_R_HOUR 1 * *"
+
     echo -e "${BOLD}Schedule presets (UTC):${RESET}"
     echo ""
-    echo -e "  ${GREEN}1${RESET}) Mon & Thu at 00:00   ${DIM}(0 0 * * 1,4)${RESET}  [Recommended]"
-    echo -e "  ${GREEN}2${RESET}) Every Sunday 00:00  ${DIM}(0 0 * * 0)${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Daily at 02:00      ${DIM}(0 2 * * *)${RESET}"
-    echo -e "  ${GREEN}4${RESET}) Every 12 hours      ${DIM}(0 0,12 * * *)${RESET}"
-    echo -e "  ${GREEN}5${RESET}) 1st of month 00:00  ${DIM}(0 0 1 * *)${RESET}"
-    echo -e "  ${GREEN}6${RESET}) Custom expression"
+    echo -e "  ${GREEN}1${RESET}) Mon & Thu at 00:00              ${DIM}(0 0 * * 1,4)${RESET}  [Default]"
+    echo -e "  ${GREEN}2${RESET}) Weekly — ${_DAY_NAME} at ${_HM}          ${DIM}(${_PRESET2})${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Daily  at ${_HM}                  ${DIM}(${_PRESET3})${RESET}"
+    echo -e "  ${GREEN}4${RESET}) Every 12 h  at :$(printf '%02d' "$_R_MIN") / :$(printf '%02d' "$_R_MIN")  ${DIM}(${_PRESET4})${RESET}"
+    echo -e "  ${GREEN}5${RESET}) Monthly — 1st at ${_HM}           ${DIM}(${_PRESET5})${RESET}"
     echo ""
 }
 
 get_cron_expression() {
     list_presets
     echo -e "  ${DIM}0) Cancel${RESET}"
-    echo -ne "${BOLD}Select [0-6, default=1]: ${RESET}"
+    echo -ne "${BOLD}Select [0-5, default=1]: ${RESET}"
     read -r preset
     [[ "$preset" == "0" ]] && return 1
     case "${preset:-1}" in
-        2) CRON_EXPR="0 0 * * 0"    ;;
-        3) CRON_EXPR="0 2 * * *"    ;;
-        4) CRON_EXPR="0 0,12 * * *" ;;
-        5) CRON_EXPR="0 0 1 * *"    ;;
-        6)
-            echo -ne "Enter cron expression (or 0 to cancel): "
-            read -r CRON_EXPR
-            [[ "$CRON_EXPR" == "0" ]] && return 1
-            [ -z "$CRON_EXPR" ] && { sched_error "Empty expression."; return 1; }
-            ;;
-        *) CRON_EXPR="0 0 * * 1,4"  ;;
+        2) CRON_EXPR="$_PRESET2" ;;
+        3) CRON_EXPR="$_PRESET3" ;;
+        4) CRON_EXPR="$_PRESET4" ;;
+        5) CRON_EXPR="$_PRESET5" ;;
+        *) CRON_EXPR="0 0 * * 1,4" ;;
     esac
 }
 
@@ -1367,6 +1413,59 @@ remove_nginx_schedule() {
     else
         sched_info "No changes made."
     fi
+    echo ""
+    echo "Press Enter to continue..."
+    read -r
+}
+
+################################################################################
+# I) Schedule auto-delete of txhashset snapshot zips
+################################################################################
+
+add_clean_schedule() {
+    echo -e "\n${BOLD}${CYAN}── Auto-Delete txhashset Snapshots ──${RESET}\n"
+    echo -e "  Deletes ${BOLD}txhashset_snapshot_*.zip${RESET} files from chain_data directories:"
+    for d in "${CLEAN_TXHASHSET_DIRS[@]}"; do
+        echo -e "    ${DIM}$d${RESET}"
+    done
+    echo ""
+    echo -e "  ${BOLD}Schedule:${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Every  4 hours  ${DIM}(0 */4  * * *)${RESET}  [Default]"
+    echo -e "  ${GREEN}2${RESET}) Every 12 hours  ${DIM}(0 */12 * * *)${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Every 24 hours  ${DIM}(0 0    * * *)${RESET}"
+    echo -e "  ${DIM}0${RESET}) Cancel"
+    echo ""
+    echo -ne "${BOLD}Select [0-3, default=1]: ${RESET}"
+    local sel; read -r sel
+    [[ "$sel" == "0" ]] && return
+
+    local clean_expr
+    case "${sel:-1}" in
+        2) clean_expr="0 */12 * * *" ;;
+        3) clean_expr="0 0    * * *" ;;
+        *) clean_expr="0 */4  * * *" ;;
+    esac
+
+    local this_script; this_script="$(realpath "${BASH_SOURCE[0]}")"
+    local clean_log="$LOG_DIR/cron_clean_txhashset.log"
+    local cron_line="$clean_expr bash $this_script --cron-clean >> $clean_log 2>&1 $CRON_COMMENT_CLEAN"
+    local existing; existing=$(crontab -l 2>/dev/null || true)
+
+    if echo "$existing" | grep -qF "grin_clean_txhashset"; then
+        sched_warn "A cleanup cron job already exists."
+        echo -ne "Replace it? [y/N/0]: "
+        local rep; read -r rep
+        [[ "$rep" == "0" ]] && return
+        if [[ "${rep,,}" == "y" ]]; then
+            existing=$(echo "$existing" | grep -v "grin_clean_txhashset" || true)
+        else
+            sched_info "Keeping existing schedule."; echo ""; echo "Press Enter to continue..."; read -r; return
+        fi
+    fi
+
+    (echo "$existing"; echo "$cron_line") | grep -v '^$' | crontab -
+    sched_success "Cleanup schedule set: ${CYAN}$clean_expr${RESET}"
+    sched_log "Added txhashset cleanup cron: $cron_line"
     echo ""
     echo "Press Enter to continue..."
     read -r
@@ -1581,9 +1680,11 @@ show_main_menu() {
     echo -e "  ${DIM}G${RESET}) Auto startup Grin node"
     echo -e "  ${DIM}H${RESET}) Disable auto startup Grin node"
     echo ""
+    echo -e "  ${DIM}I${RESET}) Auto-delete txhashset snapshots  ${DIM}(schedule cleanup cron)${RESET}"
+    echo ""
     echo -e "  ${RED}0${RESET}) Back to master script"
     echo ""
-    echo -ne "${BOLD}Select [A-H / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [A-I / 0]: ${RESET}"
 }
 
 # Menu action for B — interactive nginx share
@@ -1648,6 +1749,7 @@ run_interactive() {
             F) remove_nginx_schedule ;;
             G) add_grin_autostart ;;
             H) remove_grin_autostart ;;
+            I) add_clean_schedule ;;
             0) break ;;
             *) sched_warn "Invalid option." ; sleep 1 ;;
         esac
@@ -1660,9 +1762,10 @@ run_interactive() {
 
 main() {
     case "${1:-}" in
-        --cron-nginx) run_cron_nginx  ;;
-        --cron-ssh)   run_cron_ssh    ;;
-        *)            run_interactive ;;
+        --cron-nginx)  run_cron_nginx        ;;
+        --cron-ssh)    run_cron_ssh          ;;
+        --cron-clean)  run_txhashset_cleanup ;;
+        *)             run_interactive       ;;
     esac
 }
 

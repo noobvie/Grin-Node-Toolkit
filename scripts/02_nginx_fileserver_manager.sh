@@ -35,22 +35,13 @@ DELETE_FILES=""              # Set to "yes" to delete files, "no" to keep
 # IMPORTANT NOTES BEFORE RUNNING:
 #############################################################################
 # 
-# 1. DOMAIN DNS REQUIREMENT:
-#    Your domain MUST be pointed directly to this server's IP address.
-#    
-# 2. CLOUDFLARE USERS - CRITICAL:
-#    If you use Cloudflare DNS, you MUST temporarily disable the proxy:
-#    - Go to Cloudflare DNS panel
-#    - Find your domain record (A or AAAA)
-#    - Change proxy status from "Proxied" (orange cloud) to "DNS only" (gray cloud)
-#    - Wait for DNS propagation (usually a few minutes)
-#    - Run this script to obtain SSL certificate
-#    - After SSL is obtained, you can re-enable Cloudflare proxy if desired
-#    
-#    WHY? Let's Encrypt needs to connect directly to your server to verify
-#    domain ownership. Cloudflare proxy will block this verification.
+# 1. DNS REQUIREMENT:
+#    Your domain A record must point directly to this server's IP address.
+#    If you use Cloudflare, change the A record from "Proxied" to "DNS only"
+#    — this makes your Grin node reachable as a DNSSeed and avoids
+#    Let's Encrypt / certbot certificate issues.
 #
-# 3. FIREWALL:
+# 2. FIREWALL:
 #    Ensure ports 80 and 443 are open and accessible from the internet.
 #
 #############################################################################

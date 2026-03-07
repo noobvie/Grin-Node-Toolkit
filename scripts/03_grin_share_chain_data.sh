@@ -1419,7 +1419,7 @@ add_nginx_schedule() {
 remove_nginx_schedule() {
     echo -e "\n${BOLD}${CYAN}── Disable Nginx Jobs ──${RESET}\n"
     show_current_schedule
-    echo -ne "${YELLOW}Remove all Grin nginx cron jobs? [y/N/0]: ${RESET}"
+    echo -ne "${YELLOW}Remove chain_data sharing cron job only? [y/N/0]: ${RESET}"
     read -r confirm
     [[ "$confirm" == "0" ]] && return
     if [[ "${confirm,,}" == "y" ]]; then

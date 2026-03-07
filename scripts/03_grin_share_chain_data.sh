@@ -1312,31 +1312,48 @@ show_current_schedule() {
 }
 
 list_presets() {
-    # Generate random hour/minute/day from current server time
     local now_h now_m
-    now_h=$(date +%-H)   # 0-23, no leading zero
-    now_m=$(date +%-M)   # 0-59, no leading zero
+    now_h=$(date +%-H)
+    now_m=$(date +%-M)
     _R_MIN=$(( (RANDOM + now_m) % 60 ))
     _R_HOUR=$(( (RANDOM + now_h) % 24 ))
-    _R_HOUR2=$(( (_R_HOUR + 12) % 24 ))
-    _R_DOW=$(( RANDOM % 7 ))   # 0=Sun … 6=Sat
 
-    local -a _DAYS=("Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat")
-    local _DAY_NAME="${_DAYS[$_R_DOW]}"
+    # Partial Fisher-Yates: shuffle 4 unique days out of 0-6
+    local -a _dow=(0 1 2 3 4 5 6)
+    local _i _j _t
+    for _i in 0 1 2 3; do
+        _j=$(( _i + RANDOM % (7 - _i) ))
+        _t="${_dow[$_i]}"; _dow[$_i]="${_dow[$_j]}"; _dow[$_j]="$_t"
+    done
+
+    # Sort first 3 days (opt2: 3x/week)
+    local a=${_dow[0]} b=${_dow[1]} c=${_dow[2]} t
+    [ "$a" -gt "$b" ] && t=$a && a=$b && b=$t
+    [ "$b" -gt "$c" ] && t=$b && b=$c && c=$t
+    [ "$a" -gt "$b" ] && t=$a && a=$b && b=$t
+
+    # Sort first 2 days (opt4: 2x/week)
+    local p=${_dow[0]} q=${_dow[1]}
+    [ "$p" -gt "$q" ] && t=$p && p=$q && q=$t
+
+    # 4th shuffled day = opt5 (1x/week, distinct from opt2/opt4 days)
+    local r=${_dow[3]}
+
+    local -a _DN=("Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat")
     local _HM; printf -v _HM '%02d:%02d' "$_R_HOUR" "$_R_MIN"
 
-    _PRESET2="$_R_MIN $_R_HOUR * * $_R_DOW"
+    _PRESET2="$_R_MIN $_R_HOUR * * $a,$b,$c"
     _PRESET3="$_R_MIN $_R_HOUR * * *"
-    _PRESET4="$_R_MIN $_R_HOUR,$_R_HOUR2 * * *"
-    _PRESET5="$_R_MIN $_R_HOUR 1 * *"
+    _PRESET4="$_R_MIN $_R_HOUR * * $p,$q"
+    _PRESET5="$_R_MIN $_R_HOUR * * $r"
 
     echo -e "${BOLD}Schedule presets (UTC):${RESET}"
     echo ""
-    echo -e "  ${GREEN}1${RESET}) Mon & Thu at 00:00              ${DIM}(0 0 * * 1,4)${RESET}  [Default]"
-    echo -e "  ${GREEN}2${RESET}) Weekly — ${_DAY_NAME} at ${_HM}          ${DIM}(${_PRESET2})${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Daily  at ${_HM}                  ${DIM}(${_PRESET3})${RESET}"
-    echo -e "  ${GREEN}4${RESET}) Every 12 h  at :$(printf '%02d' "$_R_MIN") / :$(printf '%02d' "$_R_MIN")  ${DIM}(${_PRESET4})${RESET}"
-    echo -e "  ${GREEN}5${RESET}) Monthly — 1st at ${_HM}           ${DIM}(${_PRESET5})${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Mon & Thu at 00:00  ${DIM}(0 0 * * 1,4)${RESET}  [Default]"
+    echo -e "  ${GREEN}2${RESET}) 3x/week — ${_DN[$a]}, ${_DN[$b]}, ${_DN[$c]} at ${_HM}  ${DIM}(${_PRESET2})${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Daily at ${_HM}  ${DIM}(${_PRESET3})${RESET}"
+    echo -e "  ${GREEN}4${RESET}) 2x/week — ${_DN[$p]}, ${_DN[$q]} at ${_HM}  ${DIM}(${_PRESET4})${RESET}"
+    echo -e "  ${GREEN}5${RESET}) Weekly — ${_DN[$r]} at ${_HM}  ${DIM}(${_PRESET5})${RESET}"
     echo ""
 }
 

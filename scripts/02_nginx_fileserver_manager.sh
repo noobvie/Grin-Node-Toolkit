@@ -393,6 +393,7 @@ get_action() {
                 print_info "Exiting..."
                 exit 0
                 ;;
+            "")  ;;  # Enter with no input — refresh menu
             *)
                 print_error "Invalid choice. Please select 0-9."
                 sleep 2

@@ -902,7 +902,7 @@ ${toml_block}
   3. Run from your Grin node directory:
        cd /path/to/grin_dir
        wget -O - https://<this-server-url>/${base}.tar.gz | tar -xzvf -
-  4. Set in grin-server.toml and start Grin node (steps 6–7 above)
+  4. Set in grin-server.toml and start Grin node (steps 6 and 7 above)
 --------------------------------------------------------------------------------
 
 ================================================================================
@@ -929,7 +929,7 @@ ${toml_block}
   3. Navigate to your Grin node directory in PowerShell, then run:
        cd "$env:USERPROFILE\.grin\main"
        curl.exe -L "https://<this-server-url>/${base}.tar.gz" | tar -xzf -
-  4. Edit grin-server.toml and start Grin node (steps 5–6 above)
+  4. Edit grin-server.toml and start Grin node (steps 5 and 6 above)
 --------------------------------------------------------------------------------
 
 ================================================================================

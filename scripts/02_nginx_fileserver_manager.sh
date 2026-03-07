@@ -653,7 +653,13 @@ get_files_directory() {
         print_info "Detected running Grin instance(s) — suggested directories:"
         local i
         for i in "${!suggestions[@]}"; do
-            echo "  $((i+1))) ${labels[$i]}  →  ${suggestions[$i]}"
+            local _tag=""
+            # Check if this directory is already used as a root in any nginx site config
+            if [[ -d "$NGINX_AVAILABLE" ]] && grep -rl "root ${suggestions[$i]}" "$NGINX_AVAILABLE" &>/dev/null; then
+                local _domain; _domain=$(grep -rl "root ${suggestions[$i]}" "$NGINX_AVAILABLE" | head -1 | xargs basename 2>/dev/null)
+                _tag=" ⚠  already configured (${_domain})"
+            fi
+            echo "  $((i+1))) ${labels[$i]}  →  ${suggestions[$i]}${_tag}"
         done
         local manual_opt=$(( ${#suggestions[@]} + 1 ))
         echo "  ${manual_opt}) Enter path manually  [default: $DEFAULT_FILES_DIR]"

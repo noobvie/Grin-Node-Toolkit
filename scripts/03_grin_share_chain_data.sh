@@ -272,7 +272,7 @@ run_nginx_setup() {
     # ── SYNC_CHOICE — only prompt when both node types are present ────────────
     if [ ${#detected_combos[@]} -ge 2 ]; then
         echo -e "${BOLD}Which networks to share?${RESET}"
-        echo -e "  ${GREEN}1${RESET}) both     (mainnet + testnet)"
+        echo -e "  ${GREEN}1${RESET}) both     (mainnet + testnet) !will consume more diskspace!"
         echo -e "  ${GREEN}2${RESET}) mainnet  only"
         echo -e "  ${GREEN}3${RESET}) testnet  only"
         echo -e "  ${DIM}0${RESET}) Cancel — return to main menu"

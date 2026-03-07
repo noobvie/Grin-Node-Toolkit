@@ -216,10 +216,11 @@ run_nginx_setup() {
 
     # ── Detect running nodes ──────────────────────────────────────────────────
     echo -e "${BOLD}Detecting running Grin nodes...${RESET}"
-    local detected_combos=() scan_port scan_pid scan_binary scan_dir scan_cfg scan_net scan_ntype
+    local detected_combos=() scan_port scan_pid scan_binary scan_dir scan_cfg scan_net scan_ntype total_bytes=0
 
     while true; do
         detected_combos=()
+        total_bytes=0
         for scan_port in $GRIN_PORT_MAINNET $GRIN_PORT_TESTNET; do
             scan_pid=$(get_pid_on_port "$scan_port" 2>/dev/null) || true
             [ -z "$scan_pid" ] && continue
@@ -253,6 +254,13 @@ run_nginx_setup() {
             fi
 
             echo -e "  ${GREEN}✓${RESET} Found: ${BOLD}${scan_net} / ${scan_ntype}${RESET}  (port ${scan_port}, PID ${scan_pid})"
+            local _cdata="$scan_dir/chain_data"
+            [ -d "$_cdata" ] || _cdata="$scan_dir"
+            local _dsize _dbytes
+            _dsize=$(du -sh "$_cdata" 2>/dev/null | cut -f1) || _dsize="?"
+            _dbytes=$(du -sb "$_cdata" 2>/dev/null | cut -f1) || _dbytes=0
+            echo -e "       ${DIM}$_cdata${RESET}  ${BOLD}${_dsize}${RESET}"
+            total_bytes=$(( total_bytes + ${_dbytes:-0} ))
             detected_combos+=("${scan_net}:${scan_ntype}")
         done
 
@@ -267,6 +275,16 @@ run_nginx_setup() {
         fi
         break
     done
+    if [ ${#detected_combos[@]} -ge 2 ]; then
+        local _total_human
+        _total_human=$(awk -v b="$total_bytes" 'BEGIN {
+            if (b >= 2^30) printf "%.1f GiB", b/2^30
+            else if (b >= 2^20) printf "%.1f MiB", b/2^20
+            else printf "%.1f KiB", b/2^10
+        }')
+        echo -e "  ${DIM}─────────────────────────────────────────${RESET}"
+        echo -e "  ${DIM}Total chain_data:${RESET}  ${BOLD}${_total_human}${RESET}"
+    fi
     echo ""
 
     # ── SYNC_CHOICE — only prompt when both node types are present ────────────
@@ -1676,6 +1694,22 @@ get_conf_status() {
     [[ -f "$1" ]] && echo -e "${GREEN}[configured]${RESET}" || echo -e "${DIM}[not configured]${RESET}"
 }
 
+# Return detailed nginx config badge showing which networks are configured
+get_nginx_conf_badge() {
+    if [[ ! -f "$CONF_NGINX" ]]; then
+        echo -e "${DIM}[not configured]${RESET}"
+        return
+    fi
+    local _sync
+    _sync=$(grep -E '^SYNC_CHOICE=' "$CONF_NGINX" | cut -d'"' -f2)
+    case "$_sync" in
+        all)     echo -e "${GREEN}[configured: mainnet + testnet]${RESET}" ;;
+        mainnet) echo -e "${GREEN}[configured: mainnet only]${RESET}" ;;
+        testnet) echo -e "${GREEN}[configured: testnet only]${RESET}" ;;
+        *)       echo -e "${GREEN}[configured]${RESET}" ;;
+    esac
+}
+
 show_main_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -1687,7 +1721,7 @@ show_main_menu() {
     show_current_schedule
     echo -e "${BOLD}Options:${RESET}"
     echo ""
-    echo -e "  ${GREEN}A${RESET}) Create Nginx config        $(get_conf_status "$CONF_NGINX")"
+    echo -e "  ${GREEN}A${RESET}) Create Nginx config        $(get_nginx_conf_badge)"
     echo -e "  ${GREEN}B${RESET}) Share chain data via Nginx ${DIM}[depends on A]${RESET}"
     echo ""
     echo -e "  ${CYAN}C${RESET}) Create SSH config          $(get_conf_status "$CONF_SSH")  ${DIM}(optional)${RESET}"

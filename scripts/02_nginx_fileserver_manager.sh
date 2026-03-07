@@ -1181,16 +1181,21 @@ list_domains() {
 # 12.0 - Function to get domain to remove
 get_domain_to_remove() {
     if [[ -z "$DOMAIN_TO_REMOVE" ]]; then
-        read -p "Enter domain name to remove (e.g., files.example.com) or 0 to cancel: " DOMAIN_TO_REMOVE
-        [[ "$DOMAIN_TO_REMOVE" == "0" ]] && exit 0
+        while true; do
+            read -p "Enter domain name to remove (e.g., files.example.com) or 0 to cancel: " DOMAIN_TO_REMOVE
+            [[ "$DOMAIN_TO_REMOVE" == "0" ]] && exit 0
+            [[ -z "$DOMAIN_TO_REMOVE" ]] && continue
+            break
+        done
     fi
-    
+
     # Validate domain exists
     if [[ ! -f "$NGINX_AVAILABLE/$DOMAIN_TO_REMOVE" ]]; then
         print_error "Domain '$DOMAIN_TO_REMOVE' not found in nginx configuration"
         print_info "Available domains:"
         list_domains
-        exit 1
+        DOMAIN_TO_REMOVE=""
+        return
     fi
     
     print_info "Domain to remove: $DOMAIN_TO_REMOVE"
@@ -1615,26 +1620,26 @@ run_setup_or_add() {
         
         # Check and install nginx if needed
         if ! check_nginx; then
-            read -r -p "Nginx is not installed. Install it now? (y/n/0) [0 = cancel]: " nginx_choice
-            if [[ "$nginx_choice" == "0" ]]; then exit 0
-            elif [[ "${nginx_choice,,}" =~ ^y ]]; then
-                install_nginx
-            else
-                print_error "Nginx is required. Exiting."
-                exit 0
-            fi
+            local nginx_choice
+            while true; do
+                read -r -p "Nginx is not installed. Install it now? (y/n/0) [0 = cancel]: " nginx_choice
+                [[ "$nginx_choice" == "0" ]] && exit 0
+                [[ "${nginx_choice,,}" =~ ^y ]] && install_nginx && break
+                [[ "${nginx_choice,,}" =~ ^n ]] && print_error "Nginx is required. Exiting." && exit 0
+                # empty or unrecognised — re-prompt
+            done
         fi
 
         # Check and install certbot if needed
         if ! check_certbot; then
-            read -r -p "Certbot is not installed. Install it now? (y/n/0) [0 = cancel]: " certbot_choice
-            if [[ "$certbot_choice" == "0" ]]; then exit 0
-            elif [[ "${certbot_choice,,}" =~ ^y ]]; then
-                install_certbot
-            else
-                print_error "Certbot is required for SSL. Exiting."
-                exit 0
-            fi
+            local certbot_choice
+            while true; do
+                read -r -p "Certbot is not installed. Install it now? (y/n/0) [0 = cancel]: " certbot_choice
+                [[ "$certbot_choice" == "0" ]] && exit 0
+                [[ "${certbot_choice,,}" =~ ^y ]] && install_certbot && break
+                [[ "${certbot_choice,,}" =~ ^n ]] && print_error "Certbot is required for SSL. Exiting." && exit 0
+                # empty or unrecognised — re-prompt
+            done
         fi
     else
         print_section "Adding Additional Domain"
@@ -1658,11 +1663,14 @@ run_setup_or_add() {
         echo "  Speed after quota: $SPEED_LIMIT_AFTER_QUOTA"
     fi
     echo ""
-    read -r -p "Proceed with setup? (y/n/0) [0 = cancel]: " proceed_choice
-    if [[ "$proceed_choice" == "0" ]] || [[ ! "${proceed_choice,,}" =~ ^y ]]; then
-        print_info "Setup cancelled."
-        exit 0
-    fi
+    local proceed_choice
+    while true; do
+        read -r -p "Proceed with setup? (y/n/0) [0 = cancel]: " proceed_choice
+        [[ "$proceed_choice" == "0" ]] && print_info "Setup cancelled." && exit 0
+        [[ "${proceed_choice,,}" =~ ^y ]] && break
+        [[ "${proceed_choice,,}" =~ ^n ]] && print_info "Setup cancelled." && exit 0
+        # empty or unrecognised — re-prompt
+    done
     
     # Execute setup steps
     create_files_directory
@@ -2056,11 +2064,14 @@ run_enhance_security() {
     echo "  3. Create fail2ban jails for nginx (auto-ban abusive IPs)"
     echo " NOTICE! You may remove/lift the rate limiting later in option 6"
     echo ""
-    read -r -p "Proceed? (y/n/0) [0 = cancel]: " sec_choice
-    if [[ "$sec_choice" == "0" ]] || [[ ! "${sec_choice,,}" =~ ^y ]]; then
-        print_info "Cancelled."
-        return
-    fi
+    local sec_choice
+    while true; do
+        read -r -p "Proceed? (y/n/0) [0 = cancel]: " sec_choice
+        [[ "$sec_choice" == "0" ]] && print_info "Cancelled." && return
+        [[ "${sec_choice,,}" =~ ^y ]] && break
+        [[ "${sec_choice,,}" =~ ^n ]] && print_info "Cancelled." && return
+        # empty or unrecognised — re-prompt
+    done
 
     # ----- Step 1: Install fail2ban -----
     print_section "Step 1: Installing fail2ban"

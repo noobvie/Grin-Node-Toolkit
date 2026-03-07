@@ -797,6 +797,71 @@ start_explorer() {
     pause
 }
 
+# ── B-7: Schedule Explorer auto-start (@reboot via cron) ──────────────────────
+schedule_explorer_autostart() {
+    [[ ! -f "$EXPLORER_BIN" ]] && { die "Not installed. Run Install (1) first."; return; }
+    clear
+    echo -e "\n${BOLD}${CYAN}── B-7) Auto-Start Explorer on Boot ──${RESET}\n"
+    echo -e "  Adds a ${BOLD}@reboot${RESET} cron entry that sleeps N minutes, then launches"
+    echo -e "  grin-explorer in a tmux session (mirrors option 3 — Start)."
+    echo ""
+
+    # ── Show all toolkit cron entries so user can assess timing ───────────────
+    echo -e "  ${BOLD}Current toolkit cron jobs:${RESET}"
+    local all_cron; all_cron=$(crontab -l 2>/dev/null || true)
+    local found_any=0
+    while IFS= read -r line; do
+        echo "$line" | grep -q "grin-node-toolkit" && {
+            echo -e "    ${GREEN}▶${RESET} $line"
+            found_any=1
+        }
+    done <<< "$all_cron"
+    [[ $found_any -eq 0 ]] && echo -e "    ${DIM}None found.${RESET}"
+    echo ""
+
+    # ── Warn if no script-03 nginx cron for full mainnet ──────────────────────
+    if ! echo "$all_cron" | grep -q "grin_share_nginx"; then
+        echo -e "  ${YELLOW}[NOTICE]${RESET} No script-03 nginx cron detected."
+        echo -e "  The explorer reads chain_data from the ${BOLD}full archive mainnet${RESET} node."
+        echo -e "  Script 03 (E → Schedule Nginx jobs) refreshes chain_data and restarts"
+        echo -e "  the Grin node. Without it the explorer may serve stale or missing data."
+        echo -e "  ${DIM}→ Run script 03 → option E to schedule chain_data refresh first.${RESET}"
+        echo ""
+    fi
+
+    # ── Default sleep: 100 seconds ────────────────────────────────────────────
+    local delay=100
+    echo -ne "  Boot delay in seconds [${delay}] (default = 100 sec) or 0 to cancel: "
+    local inp; read -r inp
+    [[ "$inp" == "0" ]] && return
+    [[ -n "$inp" && "$inp" =~ ^[0-9]+$ ]] && delay=$inp
+
+    # ── Build cron line ───────────────────────────────────────────────────────
+    local cron_log="$LOG_DIR/cron_explorer.log"
+    local cron_line="@reboot sleep $delay && tmux new-session -d -s $EXPLORER_SESSION -c $EXPLORER_DIR \"RUST_LOG=rocket=warn,grin_explorer=info $EXPLORER_BIN >> $cron_log 2>&1\" $CRON_MARKER_EXPLORER"
+
+    # ── Check for existing entry ───────────────────────────────────────────────
+    if echo "$all_cron" | grep -qF "grin_explorer"; then
+        warn "An explorer auto-start cron entry already exists."
+        echo -ne "  Replace it? [y/N/0]: "
+        local rep; read -r rep
+        [[ "$rep" == "0" ]] && return
+        if [[ "${rep,,}" == "y" ]]; then
+            all_cron=$(echo "$all_cron" | grep -v "grin_explorer" || true)
+        else
+            info "Keeping existing entry."; echo ""; pause; return
+        fi
+    fi
+
+    (echo "$all_cron"; echo "$cron_line") | grep -v '^$' | crontab -
+    success "Explorer auto-start scheduled (sleep ${delay}s after boot)."
+    log "Explorer @reboot cron added: $cron_line"
+    echo ""
+    echo -e "  ${DIM}Log: $cron_log${RESET}"
+    echo -e "  ${DIM}Run 'crontab -l' to verify. Remove with: crontab -e${RESET}"
+    pause
+}
+
 # ── B-4: Stop ─────────────────────────────────────────────────────────────────
 stop_explorer() {
     clear
@@ -1046,13 +1111,16 @@ show_menu_b() {
     echo -e "  ${GREEN}4${RESET})   Check DNS        ${DIM}confirm A-record before nginx setup${RESET}"
     echo -e "  ${GREEN}5${RESET})   Setup Nginx      ${DIM}HTTPS subdomain → proxy :8000${RESET}  [$ngnx]"
     echo -e "  ${GREEN}6${RESET})   Status"
+    local _xcron="${YELLOW}inactive${RESET}"
+    crontab -l 2>/dev/null | grep -q "grin_explorer" && _xcron="${GREEN}active${RESET}"
+    echo -e "  ${GREEN}7${RESET})   Auto-Start on Boot  ${DIM}@reboot cron via tmux${RESET}  [$_xcron]"
     echo -e "  ${YELLOW}Z${RESET})   Stop             ${DIM}kill tmux session${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back${RESET}"
     echo -e "  ${DIM}[Enter] Refresh menu${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-6, Z]: ${RESET}"
+    echo -ne "${BOLD}Select [0-7, Z]: ${RESET}"
 }
 
 show_main_menu() {
@@ -1121,6 +1189,7 @@ run_menu_b() {
             4) check_dns_record "explorer"     || true ;;
             5) setup_nginx_explorer            || true ;;
             6) status_explorer                 || true ;;
+            7) schedule_explorer_autostart     || true ;;
             Z) stop_explorer                   || true ;;
             0) break                                    ;;
             "") ;;  # Enter = refresh menu

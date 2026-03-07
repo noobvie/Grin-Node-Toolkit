@@ -589,25 +589,9 @@ parse_arguments() {
 # 5.0 - Function to get domain input
 get_domain() {
     echo ""
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}[NOTICE] DNS REQUIREMENTS — Read before entering your domain${NC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    echo "  • Your domain A record MUST point to this server's IP address."
-    echo "  • Let's Encrypt will verify domain ownership via HTTP — if the"
-    echo "    domain does not resolve to this server, SSL setup will FAIL."
-    echo ""
-    echo -e "${YELLOW}  CLOUDFLARE USERS:${NC}"
-    echo -e "    ${RED}✗ Proxy (orange cloud)${NC} = SSL will FAIL — Cloudflare intercepts"
-    echo -e "      the Let's Encrypt challenge before it reaches this server."
-    echo ""
-    echo -e "    ${GREEN}✓ DNS only (gray cloud)${NC} = Correct setting."
-    echo ""
-    echo "    For Grin node DNS seeds, keep the A record as 'DNS only'"
-    echo "    (gray cloud) permanently. Do NOT enable Cloudflare proxy"
-    echo "    on this domain — it will break peer discovery."
-    echo ""
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}[DNS]${NC} Point your A record to this server. If using Cloudflare, change"
+    echo -e "      from ${RED}Proxied${NC} to ${GREEN}DNS only${NC} — makes your node become a DNSSeed and avoids"
+    echo -e "      certbot / Let's Encrypt issues."
     echo ""
     while true; do
         if [[ -z "$DOMAIN" ]]; then

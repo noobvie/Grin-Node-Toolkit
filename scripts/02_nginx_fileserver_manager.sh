@@ -1118,7 +1118,10 @@ list_domains() {
     
     if [[ ! -d "$NGINX_AVAILABLE" ]]; then
         print_error "Nginx sites-available directory not found"
-        exit 1
+        echo ""
+        echo "Press Enter to return to menu..."
+        read -r
+        return
     fi
     
     local domains=()

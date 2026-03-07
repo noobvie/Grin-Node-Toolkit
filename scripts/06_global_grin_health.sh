@@ -571,9 +571,8 @@ install_explorer() {
 
     # Dependencies
     info "Installing build dependencies..."
-    apt-get update -qq
-    apt-get install -y build-essential pkg-config libssl-dev libsqlite3-dev \
-        git curl -qq
+    apt-get update
+    apt-get install -y build-essential pkg-config libssl-dev libsqlite3-dev git curl
 
     # Rust toolchain
     if ! command -v cargo &>/dev/null; then
@@ -838,7 +837,7 @@ schedule_explorer_autostart() {
 
     # ── Build cron line ───────────────────────────────────────────────────────
     local cron_log="$LOG_DIR/cron_explorer.log"
-    local cron_line="@reboot sleep $delay && tmux new-session -d -s $EXPLORER_SESSION -c $EXPLORER_DIR \"RUST_LOG=rocket=warn,grin_explorer=info $EXPLORER_BIN >> $cron_log 2>&1\" $CRON_MARKER_EXPLORER"
+    local cron_line="@reboot sleep $delay && env SHELL=/bin/bash tmux new-session -d -s $EXPLORER_SESSION -c $EXPLORER_DIR \"RUST_LOG=rocket=warn,grin_explorer=info $EXPLORER_BIN >> $cron_log 2>&1\" $CRON_MARKER_EXPLORER"
 
     # ── Check for existing entry ───────────────────────────────────────────────
     if echo "$all_cron" | grep -qF "grin_explorer"; then

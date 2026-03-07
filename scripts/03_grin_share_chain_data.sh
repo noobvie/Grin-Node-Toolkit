@@ -984,7 +984,7 @@ restart_grin_node() {
     command -v tmux &>/dev/null || { apt-get update -qq && apt-get install -y tmux -qq; }
 
     log "Starting in tmux session '$TMUX_SESSION'..."
-    tmux new-session -d -s "$TMUX_SESSION" "$GRIN_BINARY"
+    tmux new-session -d -s "$TMUX_SESSION" -c "$GRIN_DIR" "$GRIN_BINARY"
     sleep 5
 
     if is_grin_running; then
@@ -1070,7 +1070,7 @@ try_start_from_known_dir() {
     echo "  → Binary found: $found_binary"
     command -v tmux &>/dev/null || apt-get install -y tmux -qq
     local sess="grin-auto-${network}"
-    tmux new-session -d -s "$sess" "$found_binary" 2>/dev/null || true
+    tmux new-session -d -s "$sess" -c "$found_dir" "$found_binary" 2>/dev/null || true
     echo "  → Started in tmux session '$sess' — waiting for port $port (up to 120s)..."
 
     local elapsed=0

@@ -272,7 +272,7 @@ run_nginx_setup() {
     # ── SYNC_CHOICE — only prompt when both node types are present ────────────
     if [ ${#detected_combos[@]} -ge 2 ]; then
         echo -e "${BOLD}Which networks to share?${RESET}"
-        echo -e "  ${GREEN}1${RESET}) both     (mainnet + testnet)"
+        echo -e "  ${GREEN}1${RESET}) both     (mainnet + testnet) !will consume more diskspace!"
         echo -e "  ${GREEN}2${RESET}) mainnet  only"
         echo -e "  ${GREEN}3${RESET}) testnet  only"
         echo -e "  ${DIM}0${RESET}) Cancel — return to main menu"
@@ -902,7 +902,7 @@ ${toml_block}
   3. Run from your Grin node directory:
        cd /path/to/grin_dir
        wget -O - https://<this-server-url>/${base}.tar.gz | tar -xzvf -
-  4. Set in grin-server.toml and start Grin node (steps 6–7 above)
+  4. Set in grin-server.toml and start Grin node (steps 6 and 7 above)
 --------------------------------------------------------------------------------
 
 ================================================================================
@@ -929,7 +929,7 @@ ${toml_block}
   3. Navigate to your Grin node directory in PowerShell, then run:
        cd "$env:USERPROFILE\.grin\main"
        curl.exe -L "https://<this-server-url>/${base}.tar.gz" | tar -xzf -
-  4. Edit grin-server.toml and start Grin node (steps 5–6 above)
+  4. Edit grin-server.toml and start Grin node (steps 5 and 6 above)
 --------------------------------------------------------------------------------
 
 ================================================================================
@@ -1501,18 +1501,19 @@ add_grin_autostart() {
     echo -e "  ${GREEN}3${RESET}) Both"
     echo -e "  ${DIM}0${RESET}) Cancel"
     echo ""
-    echo -ne "${BOLD}Select [1/2/3/0]: ${RESET}"
-    local net_choice
-    read -r net_choice
-    [[ "$net_choice" == "0" ]] && return
-
-    local networks=()
-    case "$net_choice" in
-        1) networks=("mainnet") ;;
-        2) networks=("testnet") ;;
-        3) networks=("mainnet" "testnet") ;;
-        *) sched_warn "Invalid selection."; sleep 1; return ;;
-    esac
+    local net_choice networks=()
+    while true; do
+        echo -ne "${BOLD}Select [1/2/3/0]: ${RESET}"
+        read -r net_choice
+        [[ "$net_choice" == "0" ]] && return
+        [[ -z "$net_choice" ]] && continue
+        case "$net_choice" in
+            1) networks=("mainnet");              break ;;
+            2) networks=("testnet");              break ;;
+            3) networks=("mainnet" "testnet");    break ;;
+            *) sched_warn "Invalid selection."; sleep 1 ;;
+        esac
+    done
 
     local existing_cron
     existing_cron=$(crontab -l 2>/dev/null || true)
@@ -1642,21 +1643,22 @@ remove_grin_autostart() {
     [[ "$has_main" -gt 0 && "$has_test" -gt 0 ]] && echo -e "  ${GREEN}3${RESET}) Both"
     echo -e "  ${DIM}0${RESET}) Cancel"
     echo ""
-    echo -ne "${BOLD}Select: ${RESET}"
-    local choice
-    read -r choice
-    [[ "$choice" == "0" ]] && return
-
-    local tmp_cron="$existing_cron"
-    case "$choice" in
-        1) tmp_cron=$(echo "$tmp_cron" | grep -vF "$CRON_COMMENT_AUTOSTART_MAIN" || true)
-           sched_success "Mainnet autostart removed." ;;
-        2) tmp_cron=$(echo "$tmp_cron" | grep -vF "$CRON_COMMENT_AUTOSTART_TEST" || true)
-           sched_success "Testnet autostart removed." ;;
-        3) tmp_cron=$(echo "$tmp_cron" | grep -vF "$CRON_COMMENT_AUTOSTART_MAIN" | grep -vF "$CRON_COMMENT_AUTOSTART_TEST" || true)
-           sched_success "Mainnet and Testnet autostart removed." ;;
-        *) sched_warn "Invalid selection."; sleep 1; return ;;
-    esac
+    local choice tmp_cron="$existing_cron"
+    while true; do
+        echo -ne "${BOLD}Select: ${RESET}"
+        read -r choice
+        [[ "$choice" == "0" ]] && return
+        [[ -z "$choice" ]] && continue
+        case "$choice" in
+            1) tmp_cron=$(echo "$tmp_cron" | grep -vF "$CRON_COMMENT_AUTOSTART_MAIN" || true)
+               sched_success "Mainnet autostart removed."; break ;;
+            2) tmp_cron=$(echo "$tmp_cron" | grep -vF "$CRON_COMMENT_AUTOSTART_TEST" || true)
+               sched_success "Testnet autostart removed."; break ;;
+            3) tmp_cron=$(echo "$tmp_cron" | grep -vF "$CRON_COMMENT_AUTOSTART_MAIN" | grep -vF "$CRON_COMMENT_AUTOSTART_TEST" || true)
+               sched_success "Mainnet and Testnet autostart removed."; break ;;
+            *) sched_warn "Invalid selection."; sleep 1 ;;
+        esac
+    done
 
     echo "$tmp_cron" | crontab -
     sched_log "Removed grin autostart cron entries (choice: $choice)"
@@ -1768,6 +1770,7 @@ run_interactive() {
             H) remove_grin_autostart ;;
             I) add_clean_schedule ;;
             0) break ;;
+            "") ;;  # Enter with no input — refresh menu
             *) sched_warn "Invalid option." ; sleep 1 ;;
         esac
     done

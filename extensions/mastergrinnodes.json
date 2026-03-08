@@ -1,0 +1,39 @@
+{
+  "_comment": "Grin Node Toolkit — Master node registry. Each key is a zone, each sub-key is a site_key (fullmain|prunemain|prunetest). To contribute a server: add its hostname under the correct zone and site_key, then submit a PR.",
+  "_site_keys": {
+    "fullmain":  "full archive, mainnet",
+    "prunemain": "pruned,       mainnet",
+    "prunetest": "pruned,       testnet"
+  },
+
+  "america": {
+    "fullmain":  ["fullmain.grin.money",  "fullmain.grinily.com",  "fullmain.onlygrins.com"],
+    "prunemain": ["prunemain.grin.money", "prunemain.grinily.com"],
+    "prunetest": ["prunetest.grin.money", "prunetest.onlygrins.com"]
+  },
+
+  "asia": {
+    "fullmain":  [],
+    "prunemain": ["prunemain.onlygrins.com"],
+    "prunetest": ["prunetest.grinily.com"]
+  },
+
+  "europe": {
+    "fullmain":  [],
+    "prunemain": [],
+    "prunetest": []
+  },
+
+  "africa": {
+    "fullmain":  [],
+    "prunemain": [],
+    "prunetest": []
+  },
+
+  "_contacts": {
+    "_comment": "Owner contact keyed by base domain (last two labels, e.g. grin.money). Covers all subdomains under that domain. Used by script 081 to identify who to reach if a host goes stale or offline. To add your contact when contributing hosts, add one entry per base domain.",
+    "grin.money":    { "owner": "noobvie", "contact": "https://github.com/noobvie" },
+    "grinily.com":   { "owner": "noobvie", "contact": "https://github.com/noobvie" },
+    "onlygrins.com": { "owner": "noobvie", "contact": "https://github.com/noobvie" }
+  }
+}

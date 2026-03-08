@@ -594,13 +594,30 @@ get_domain() {
     echo -e "      from ${RED}Proxied${NC} to ${GREEN}DNS only${NC} — makes your node become a DNSSeed and avoids"
     echo -e "      certbot / Let's Encrypt issues."
     echo ""
+    echo -e "  ${YELLOW}Required subdomain format:${NC}"
+    echo -e "    fullmain.yourdomain.com   — full archive node, mainnet"
+    echo -e "    prunemain.yourdomain.com  — pruned node, mainnet"
+    echo -e "    prunetest.yourdomain.com  — pruned node, testnet"
+    echo ""
     while true; do
         if [[ -z "$DOMAIN" ]]; then
-            read -p "Enter domain name (e.g., prunemain.example.com) or 0 to cancel: " DOMAIN
+            read -p "Enter domain name (e.g., prunemain.yourdomain.com) or 0 to cancel: " DOMAIN
             [[ "$DOMAIN" == "0" ]] && exit 0
         fi
 
         if validate_domain "$DOMAIN"; then
+            # Hard check: subdomain prefix must be a known site key
+            local _prefix
+            _prefix=$(echo "$DOMAIN" | cut -d'.' -f1)
+            if [[ "$_prefix" != "fullmain" && "$_prefix" != "prunemain" && "$_prefix" != "prunetest" ]]; then
+                echo ""
+                print_error "Subdomain prefix '${_prefix}' is not valid."
+                echo -e "  Domain must start with one of: fullmain / prunemain / prunetest"
+                echo -e "  e.g. prunemain.yourdomain.com"
+                echo ""
+                DOMAIN=""
+                continue
+            fi
             print_info "Domain validated: $DOMAIN"
             break
         else

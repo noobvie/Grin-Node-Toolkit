@@ -23,6 +23,8 @@ LOG_DIR="$SCRIPT_DIR/../log"
 CONF_FILE="$CONF_DIR/host_monitor_port.conf"
 STATE_FILE="$CONF_DIR/host_monitor_last_state.conf"
 LOG_FILE="$LOG_DIR/grin_nodes_status_$(date +%Y%m%d_%H%M%S).log"
+REGISTRY="$SCRIPT_DIR/../extensions/mastergrinnodes.json"
+MASTER_LOG_FILE="$LOG_DIR/grin_master_nodes_status_$(date +%Y%m%d_%H%M%S).log"
 
 # ─── Colors (disabled when not a terminal) ────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -36,6 +38,7 @@ fi
 mkdir -p "$LOG_DIR" "$CONF_DIR"
 
 log()     { echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*" >> "$LOG_FILE"; }
+mlog()    { echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*" >> "$MASTER_LOG_FILE"; }
 info()    { echo -e "${CYAN}[INFO]${RESET}  $*"; }
 success() { echo -e "${GREEN}[OK]${RESET}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
@@ -103,6 +106,142 @@ show_local_grin_instances() {
     done
     [[ $found -eq 0 ]] && echo -e "    ${DIM}(no local grin process detected)${RESET}"
     echo ""
+}
+
+# =============================================================================
+# Registry Master Nodes — Freshness, Availability & Sync Check
+# Reads extensions/mastergrinnodes.json. For every registered host checks:
+#   1. HTTP 200 reachability
+#   2. .tar.gz file age via Last-Modified (> 5 days = stale)
+#   3. Sync status via check_status_before_download.txt
+# Stale / down hosts show the owner contact from _contacts (keyed by base domain).
+# Results are written to MASTER_LOG_FILE.
+# =============================================================================
+check_master_nodes() {
+    echo ""
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  Registry Master Nodes — Freshness & Sync Check${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+
+    if ! command -v jq &>/dev/null; then
+        warn "jq is required for the registry check — skipping."
+        return 0
+    fi
+    if [[ ! -f "$REGISTRY" ]]; then
+        warn "mastergrinnodes.json not found at: $REGISTRY — skipping."
+        return 0
+    fi
+
+    local max_age=5
+    local now; now=$(date +%s)
+    mlog "=== Registry Master Nodes Check ==="
+    mlog "Registry: $REGISTRY  |  Threshold: ${max_age} days"
+
+    local zones; zones=$(jq -r 'keys[] | select(startswith("_") | not)' "$REGISTRY" 2>/dev/null)
+    local total=0 ok=0 stale=0 unsynced=0 down=0
+
+    for zone in $zones; do
+        local site_keys; site_keys=$(jq -r --arg z "$zone" '.[$z] | keys[]' "$REGISTRY" 2>/dev/null)
+        local zone_printed=false
+        for sk in $site_keys; do
+            local hosts; hosts=$(jq -r --arg z "$zone" --arg s "$sk" \
+                '(.[$z][$s] // [])[]' "$REGISTRY" 2>/dev/null)
+            [[ -z "$hosts" ]] && continue
+            if [[ "$zone_printed" == false ]]; then
+                echo -e "  ${BOLD}Zone: ${zone^}${RESET}"
+                zone_printed=true
+            fi
+            echo -e "    ${DIM}${sk}${RESET}"
+            while IFS= read -r host; do
+                total=$((total + 1))
+                local base="https://$host"
+
+                # Contact lookup by base domain (last two labels)
+                local domain; domain=$(echo "$host" | rev | cut -d'.' -f1-2 | rev)
+                local contact; contact=$(jq -r --arg d "$domain" \
+                    '._contacts[$d].contact // ""' "$REGISTRY" 2>/dev/null)
+                local contact_hint=""
+                [[ -n "$contact" ]] && contact_hint="  ${DIM}→ contact: ${contact}${RESET}"
+
+                # Gate 1: HTTP 200 reachability
+                local http_code
+                http_code=$(curl -o /dev/null -fsSI -w "%{http_code}" \
+                    --max-time 8 "$base/" 2>/dev/null) || http_code="000"
+                if [[ "$http_code" != "200" ]]; then
+                    printf "      %-40s  ${RED}✗ HTTP %s — unreachable${RESET}%b\n" \
+                        "$host" "$http_code" "$contact_hint"
+                    mlog "  DOWN     $host  HTTP $http_code"
+                    down=$((down + 1))
+                    continue
+                fi
+
+                # Gate 2: directory listing → find .tar.gz filename
+                local idx tname
+                idx=$(curl -fsSL --max-time 10 "$base/" 2>/dev/null) || idx=""
+                tname=$(echo "$idx" | grep -oP 'href="\K[^"]*\.tar\.gz' \
+                    | grep -v '^\.\.' | head -1)
+                if [[ -z "$tname" ]]; then
+                    printf "      %-40s  ${RED}✗ no .tar.gz in listing${RESET}%b\n" \
+                        "$host" "$contact_hint"
+                    mlog "  DOWN     $host  no .tar.gz found in directory listing"
+                    down=$((down + 1))
+                    continue
+                fi
+
+                # Gate 3: file age via HEAD Last-Modified
+                local lm age_days=0 age_known=false
+                lm=$(curl -fsSI --max-time 8 "$base/$tname" 2>/dev/null \
+                    | grep -i '^last-modified:' | cut -d' ' -f2- | tr -d '\r')
+                if [[ -n "$lm" ]]; then
+                    local fts; fts=$(date -d "$lm" +%s 2>/dev/null) || true
+                    if [[ -n "$fts" ]]; then
+                        age_days=$(( (now - fts) / 86400 ))
+                        age_known=true
+                    fi
+                fi
+                if [[ "$age_known" == true && $age_days -gt $max_age ]]; then
+                    printf "      %-40s  ${RED}⚠ %d day(s) old — stale${RESET}%b\n" \
+                        "$host" "$age_days" "$contact_hint"
+                    mlog "  STALE    $host  ${age_days} day(s) old (threshold: ${max_age})"
+                    stale=$((stale + 1))
+                    continue
+                fi
+
+                # Gate 4: sync status
+                local sync_txt
+                sync_txt=$(curl -fsSL --max-time 10 \
+                    "$base/check_status_before_download.txt" 2>/dev/null) || sync_txt=""
+                if ! echo "$sync_txt" | grep -q "Sync completed."; then
+                    local sync_state; sync_state=$(echo "$sync_txt" | head -1 | tr -d '\r')
+                    [[ -z "$sync_state" ]] && sync_state="status file unreachable"
+                    printf "      %-40s  ${YELLOW}⟳ sync in progress: %s${RESET}%b\n" \
+                        "$host" "$sync_state" "$contact_hint"
+                    mlog "  SYNCING  $host  status: ${sync_state}"
+                    unsynced=$((unsynced + 1))
+                    continue
+                fi
+
+                # All gates passed
+                if [[ "$age_known" == true ]]; then
+                    printf "      %-40s  ${GREEN}✓ %d day(s) old — OK${RESET}\n" "$host" "$age_days"
+                    mlog "  OK       $host  ${age_days} day(s) old"
+                else
+                    printf "      %-40s  ${GREEN}✓ OK${RESET} ${DIM}(age unknown)${RESET}\n" "$host"
+                    mlog "  OK       $host  age unknown"
+                fi
+                ok=$((ok + 1))
+            done <<< "$hosts"
+        done
+        [[ "$zone_printed" == true ]] && echo ""
+    done
+
+    echo -e "  ${DIM}Threshold: > ${max_age} days flagged stale${RESET}"
+    echo -e "  ${DIM}Summary: ${GREEN}${ok} OK${RESET}  ${RED}${stale} stale  ${down} down${RESET}  ${YELLOW}${unsynced} syncing${RESET}  (total: ${total})${RESET}"
+    echo -e "  ${DIM}Log: $MASTER_LOG_FILE${RESET}"
+    echo ""
+    mlog "Summary: OK=$ok stale=$stale syncing=$unsynced down=$down total=$total"
+    mlog "=== End of Registry Check ==="
 }
 
 # =============================================================================
@@ -453,6 +592,7 @@ show_cron_help() {
     echo -e "  ${DIM}Config file : $CONF_FILE${RESET}"
     echo -e "  ${DIM}State file  : $STATE_FILE${RESET}"
     echo -e "  ${DIM}Logs stored : $LOG_DIR/grin_nodes_status_<datetime>.log${RESET}"
+    echo -e "  ${DIM}              $LOG_DIR/grin_master_nodes_status_<datetime>.log${RESET}"
     echo ""
 }
 
@@ -465,6 +605,7 @@ main() {
     # ── Non-interactive / cron / email mode ───────────────────────────────────
     if [[ ! -t 0 || -n "$EMAIL" ]]; then
         setup_conf || return 0
+        check_master_nodes
         LAST_STATE=(); RESULTS=(); LABELS=(); CHANGES=()
         load_last_state
         run_checks || return 0
@@ -513,9 +654,11 @@ main() {
 
         case "$choice" in
             1)
+                check_master_nodes
                 if [[ ! -f "$CONF_FILE" ]]; then
-                    warn "No config file. Use option 2 to configure first."
-                    sleep 2; continue
+                    warn "No custom hosts configured. Use option 2 to add more hosts to monitor."
+                    echo "Press Enter to return to menu..."
+                    read -r; continue
                 fi
                 LAST_STATE=(); RESULTS=(); LABELS=(); CHANGES=()
                 load_last_state

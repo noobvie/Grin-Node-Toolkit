@@ -327,6 +327,7 @@ import_data() {
         a) cmd="--init-db";            desc="Init DB schema only" ;;
         b)
             warn "Full history import takes 6+ hours and should be run only ONCE."
+            warn "Run this step inside tmux session to avoid connection interruption."
             echo -ne "Continue? [y/N/0]: "
             read -r ok || true
             [[ "${ok,,}" != "y" ]] && info "Cancelled." && return
@@ -1146,7 +1147,7 @@ show_main_menu() {
         && _nginx_st="${GREEN}[OK]${RESET} " \
         || _nginx_st="${RED}[NOK]${RESET}"
     echo -e "  ${BOLD}Requirements:${RESET}"
-    echo -e "  ${_node_st}  Grin mainnet node running        ${DIM}(pruned is fine for A)${RESET}"
+    echo -e "  ${_node_st}  Grin mainnet archive node running ${DIM}(both options A and B require archive_mode=true)${RESET}"
     echo -e "  ${_nginx_st}  Nginx installed                  ${DIM}(use option N to install)${RESET}"
     echo -e "  ${YELLOW}[--]${RESET}  DNS A-records — confirm via A→4 or B→4 before nginx setup"
     echo ""

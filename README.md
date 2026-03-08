@@ -79,24 +79,25 @@ Grin Node Toolkit
 │   │   ├── 8) Fail2ban Management       (status, unban, list bans)
 │   │   ├── 9) IP Filtering              (block/unblock via ufw / iptables)
 │   │   └── 0) Exit
-│   ├── 3) Share Grin Chain Data / Schedule → 03_grin_share_chain_data.sh
-│   │   ├── A) Create Nginx config
-│   │   ├── B) Share chain data via Nginx
-│   │   ├── C) Create SSH config          (optional)
-│   │   ├── D) Share chain data via SSH   (optional)
-│   │   ├── E) Schedule Nginx jobs
-│   │   ├── F) Disable Nginx jobs
-│   │   ├── G) Auto startup Grin node
-│   │   ├── H) Disable auto startup Grin node
-│   │   └── 0) Back
-│   └── 4) Publish Grin Node Services    → 04_grin_node_foreign_api.sh
-│       ├── 1) Enable Node API via nginx  (mainnet port 3413, /v2/foreign, HTTPS)
-│       ├── 2) Remove nginx proxy         (mainnet)
-│       ├── 3) Enable Node API via nginx  (testnet port 13413, /v2/foreign, HTTPS)
-│       ├── 4) Remove nginx proxy         (testnet)
+│   └── 3) Share Grin Chain Data / Schedule → 03_grin_share_chain_data.sh
+│       ├── A) Create Nginx config
+│       ├── B) Share chain data via Nginx
+│       ├── C) Create SSH config          (optional)
+│       ├── D) Share chain data via SSH   (optional)
+│       ├── E) Schedule Nginx jobs
+│       ├── F) Disable Nginx jobs
+│       ├── G) Auto startup Grin node
+│       ├── H) Disable auto startup Grin node
+│       ├── I) Auto-delete txhashset snapshots  (schedule cleanup cron)
 │       └── 0) Back
 │
 ├── Addons
+│   ├── 4) Publish Grin Node Services    → 04_grin_node_foreign_api.sh
+│   │   ├── 1) Enable Node API via nginx  (mainnet port 3413, /v2/foreign, HTTPS)
+│   │   ├── 2) Remove nginx proxy         (mainnet)
+│   │   ├── 3) Enable Node API via nginx  (testnet port 13413, /v2/foreign, HTTPS)
+│   │   ├── 4) Remove nginx proxy         (testnet)
+│   │   └── 0) Back
 │   ├── 5) Grin Wallet Service           → 05_grin_wallet_service.sh
 │   │   ├── 1) Download & install grin-wallet  (choose mainnet → /grinwalletmain | testnet → /grinwallettest)
 │   │   ├── 2) Initialize wallet               (grin-wallet init — runs in tmux for password prompt)
@@ -134,6 +135,10 @@ Grin Node Toolkit
 │   │   └── 0) Back
 │   └── 8) Admin & Maintenance           → 08_grin_node_admin.sh
 │       ├── 1) Remote Node Monitor       (081_host_monitor_port.sh — also cron-ready)
+│       │   ├── 1) Run check now         (registry hosts first, then custom conf hosts)
+│       │   ├── 2) Reconfigure host list
+│       │   ├── 3) Show crontab / email setup
+│       │   └── 0) Back
 │       ├── 2) Service & Port Dashboard
 │       ├── 3) Chain Sync Status
 │       ├── 4) nginx Config & SSL Audit
@@ -157,7 +162,8 @@ A guided setup that downloads, verifies, configures, and launches a Grin node �
 
 - Choose mainnet or testnet, and full archive or pruned mode
 - Downloads the official Grin binary, verifies its SHA256, patches `grin-server.toml`
-- Checks all 3 known chain snapshot sources; every synced source is queued as a fallback
+- **Zone selection** — choose America, Asia, Europe, or Africa; hosts are loaded from `extensions/mastergrinnodes.json` (a community-maintained registry); auto-falls back to America if the chosen zone has no fresh hosts
+- **Per-host freshness filter** — each candidate host passes a 4-gate check: directory reachability → sync-complete status → directory listing (tar filename) → `Last-Modified` age on the `.tar.gz` file; hosts with data older than 5 days are silently skipped
 - **Transfer mode choice at download time:**
   - **On-the-fly extraction** — streams the remote archive directly into tar with no local `.tar.gz` saved (`wget -O - <url> | tar -xzvf -`); saves temporary disk space and reduces total setup time; SHA256 verification is skipped
   - **Full download** — downloads `.tar.gz` to disk (supports `-c` resume on interruption), verifies SHA256 checksum, then extracts
@@ -191,6 +197,19 @@ Automates Grin blockchain backup and sharing so others can bootstrap from your n
 - **E/F) Nginx schedule** — add/remove cron jobs (preset Mon & Thu 00:00 UTC or custom expression)
 - **G) Auto startup** — adds a crontab `@reboot sleep N && tmux new-session -d -s SESSION BINARY` entry; detects running binary via port → PID → `/proc/$pid/exe`; configurable boot delay (default 60s mainnet, 120s testnet)
 - **H) Disable auto startup** — removes the `@reboot` crontab entries
+- **I) Auto-delete txhashset snapshots** — schedules a cron job to purge old snapshot files from the nginx web root, keeping disk usage under control
+
+**Contributing your node to the community registry**
+
+Once your node is publicly sharing chain data via nginx (options A → B → E), you can add it to `extensions/mastergrinnodes.json` so other users can download from your server when setting up a new node:
+
+1. Fork the [Grin Node Toolkit repository](https://github.com/noobvie/grin-node-toolkit) on GitHub
+2. Open `extensions/mastergrinnodes.json` and add your hostname(s) under the correct zone and site key using the standard subdomain format `<site_key>.yourdomain.com`:
+   - `fullmain.yourdomain.com` — full archive node, mainnet
+   - `prunemain.yourdomain.com` — pruned node, mainnet
+   - `prunetest.yourdomain.com` — pruned node, testnet
+3. Add a `_contacts` entry keyed by your **base domain** (e.g. `yourdomain.com`) with your owner name and a contact URL
+4. Submit a pull request — the toolkit's `081_host_monitor_port.sh` will verify freshness and sync status of your host automatically
 
 ### 4. Publish Grin Node Services — `04_grin_node_foreign_api.sh`
 
@@ -259,7 +278,9 @@ A self-hosted network monitoring dashboard with two components that share a sing
 
 **1 · Remote Node Monitor** (`081_host_monitor_port.sh`)
 - Persistent submenu: run check, reconfigure hosts, view crontab setup
-- Checks all configured hosts via `nc` (TCP); detects state changes; logs every run
+- **"Run check now" always starts with the registry scan** — reads `extensions/mastergrinnodes.json`, checks every registered host for: HTTP 200 reachability, `.tar.gz` age ≤ 5 days (via `Last-Modified`), and sync-complete status (`check_status_before_download.txt`); stale/down hosts show the owner contact
+- Results logged to `grin_master_nodes_status_<datetime>.log`
+- Then checks all custom hosts from `conf/host_monitor_port.conf` via TCP (`nc`); detects state changes; logs to `grin_nodes_status_<datetime>.log`
 - Emails on change (or always with `--force`); cron-ready standalone script
 
 **2 · Service & Port Dashboard**
@@ -308,6 +329,8 @@ grin-node-toolkit/
 │   ├── nginx-<action>-<datetime>.log
 │   ├── grin_nodes_status_<datetime>.log  # Node monitor results
 │   └── grin_full_cleanup_<datetime>.log  # Full cleanup audit trail
+├── extensions/
+│   └── mastergrinnodes.json              # Community host registry (zone → site_key → hostnames)
 ├── scripts/
 │   ├── 01_build_new_grin_node.sh         # Feature 1 : node installation
 │   ├── 02_nginx_fileserver_manager.sh    # Feature 2 : nginx management

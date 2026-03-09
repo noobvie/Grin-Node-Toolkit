@@ -639,7 +639,11 @@ main() {
             echo -e "  ${YELLOW}No config — use option 2 to configure.${RESET}"
         fi
         echo ""
-        echo -e "  ${GREEN}1${RESET}) Run check now"
+        if [[ -f "$CONF_FILE" ]]; then
+            echo -e "  ${GREEN}1${RESET}) Run check now"
+        else
+            echo -e "  ${GREEN}1${RESET}) Run check now ${DIM}(mastergrinnodes.json only)${RESET}"
+        fi
         echo -e "  ${YELLOW}2${RESET}) Reconfigure host list"
         echo -e "  ${CYAN}3${RESET}) Show crontab / email setup"
         echo -e "  ${DIM}0${RESET}) Return to main menu"
@@ -650,24 +654,6 @@ main() {
 
         case "$choice" in
             1)
-                if [[ ! -f "$CONF_FILE" ]]; then
-                    echo ""
-                    warn "No remote hosts configured (use option 2 to add)."
-                    echo ""
-                    echo -e "  ${BOLD}Input mode:${RESET}"
-                    echo -e "  ${CYAN}3${RESET}) Run report from mastergrinnodes.json"
-                    echo -e "  ${DIM}0${RESET}) Return to menu"
-                    echo ""
-                    echo -ne "${BOLD}Select [3/0]: ${RESET}"
-                    local sub_choice
-                    read -r sub_choice
-                    case "$sub_choice" in
-                        3) check_master_nodes; echo "Press Enter to return to menu..."; read -r ;;
-                        0) continue ;;
-                        *) warn "Invalid selection."; sleep 1 ;;
-                    esac
-                    continue
-                fi
                 check_master_nodes
                 LAST_STATE=(); RESULTS=(); LABELS=(); CHANGES=()
                 load_last_state

@@ -654,12 +654,25 @@ main() {
 
         case "$choice" in
             1)
-                check_master_nodes
                 if [[ ! -f "$CONF_FILE" ]]; then
-                    warn "No custom hosts configured. Use option 2 to add more hosts to monitor."
-                    echo "Press Enter to return to menu..."
-                    read -r; continue
+                    echo ""
+                    warn "No remote hosts configured (use option 2 to add)."
+                    echo ""
+                    echo -e "  ${BOLD}Input mode:${RESET}"
+                    echo -e "  ${CYAN}3${RESET}) Run report from mastergrinnodes.json"
+                    echo -e "  ${DIM}0${RESET}) Return to menu"
+                    echo ""
+                    echo -ne "${BOLD}Select [3/0]: ${RESET}"
+                    local sub_choice
+                    read -r sub_choice
+                    case "$sub_choice" in
+                        3) check_master_nodes; echo "Press Enter to return to menu..."; read -r ;;
+                        0) continue ;;
+                        *) warn "Invalid selection."; sleep 1 ;;
+                    esac
+                    continue
                 fi
+                check_master_nodes
                 LAST_STATE=(); RESULTS=(); LABELS=(); CHANGES=()
                 load_last_state
                 run_checks || { echo "Press Enter to continue..."; read -r; continue; }

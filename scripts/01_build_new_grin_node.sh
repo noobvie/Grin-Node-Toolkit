@@ -453,9 +453,12 @@ select_archive_mode() {
     local network="$1"
     step_header "Step 4: Archive Mode (${network})"
     echo ""
-    echo -e "  ${GREEN}1${RESET}) Pruned       (default, recommended — smaller storage)"
-    echo -e "  ${YELLOW}2${RESET}) Full archive (mainnet only — full UTXO history)"
+    echo -e "  ${GREEN}1${RESET}) Pruned       (default, recommended — smaller storage, ~10 GiB)"
+    echo -e "  ${YELLOW}2${RESET}) Full archive (mainnet only — full UTXO history, ~25 GiB)"
     echo -e "  ${DIM}0${RESET}) Return to main menu"
+    echo ""
+    echo -e "  ${DIM}Tip: you can run mainnet + testnet in parallel on the same server.${RESET}"
+    echo -e "  ${DIM}     Select '3) Both' at the network step to set up both at once.${RESET}"
 
     if [[ "$network" == "testnet" ]]; then
         warn "Testnet does NOT support full archive mode."
@@ -476,8 +479,34 @@ select_archive_mode() {
             ;;
         *) die "Invalid archive mode '${arc_choice}'." ;;
     esac
+
+    # Disk space check — warn if / has less than the recommended minimum
+    local _free_kb _free_gb _min_gb
+    _free_kb=$(df / | awk 'NR==2 {print $4}')
+    _free_gb=$(awk "BEGIN {printf \"%.1f\", $_free_kb/1048576}")
+    if [[ "$ARCHIVE_MODE" == "full" ]]; then
+        _min_gb=25
+    else
+        _min_gb=10
+    fi
+    echo ""
+    echo -e "  ${DIM}Free disk (/):${RESET}  ${BOLD}${_free_gb} GiB${RESET}"
+    if awk "BEGIN {exit ($_free_gb >= $_min_gb) ? 0 : 1}"; then
+        echo -e "  ${GREEN}✓${RESET}  Sufficient space for ${ARCHIVE_MODE} mode (min ~${_min_gb} GiB)."
+    else
+        echo ""
+        echo -e "  ${RED}⚠  Low disk space:${RESET} ${_free_gb} GiB free, recommended minimum is ~${_min_gb} GiB"
+        echo -e "     for ${ARCHIVE_MODE} mode (archive download + extraction)."
+        echo ""
+        echo -ne "  Continue anyway? [y/N]: "
+        read -r _space_ok || true
+        if [[ "${_space_ok,,}" != "y" ]]; then
+            exit 0
+        fi
+    fi
+
     info "Archive mode: $ARCHIVE_MODE"
-    log "[STEP 4] ArchiveMode=$ARCHIVE_MODE"
+    log "[STEP 4] ArchiveMode=$ARCHIVE_MODE free_disk=${_free_gb}GiB"
 }
 
 # =============================================================================

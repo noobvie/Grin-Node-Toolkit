@@ -1129,7 +1129,7 @@ download_chain_data() {
     STREAM_MODE=false
 
     info "Downloading checksum file: $sha_name"
-    curl -fsSL "$base_url/$sha_name" -o "$SHA_FILE" \
+    curl -fsSL "${READY_SOURCES[0]}/$sha_name" -o "$SHA_FILE" \
         || die "Failed to download checksum file."
     success "Checksum saved: $SHA_FILE"
 

@@ -76,7 +76,7 @@
 #
 #   Step  9 — Chain Data Source & Transfer Mode
 #              User selects a download zone (America / Asia / Europe / Africa).
-#              Host list is loaded from extensions/mastergrinnodes.json.
+#              Host list is loaded from extensions/grinmasternodes.json.
 #              Each host is checked in order:
 #                1) sync-status via check_status_before_download.txt
 #                2) directory listing fetched to discover tar/sha filenames
@@ -791,7 +791,7 @@ patch_config() {
 # [9] DOWNLOAD CHAIN DATA FROM TRUSTED SOURCE
 # -----------------------------------------------------------------------------
 # Selects the correct chain data source based on network + archive mode.
-# Server list is loaded from extensions/mastergrinnodes.json (zone-aware registry).
+# Server list is loaded from extensions/grinmasternodes.json (zone-aware registry).
 # User selects a zone (America/Asia/Europe/Africa); zones without dedicated
 # servers for the chosen site_key automatically fall back to America.
 # Site keys (site_key prefix on each hostname):
@@ -816,7 +816,7 @@ _get_site_key() {
     echo "${mode_short}${net_short}"
 }
 
-# Read host list for a given zone+sitekey from mastergrinnodes.json.
+# Read host list for a given zone+sitekey from grinmasternodes.json.
 # Returns space-separated hostnames, or empty string if none found.
 # Args: zone sitekey registry_path
 _get_zone_hosts() {
@@ -954,12 +954,12 @@ download_chain_data() {
 
     # ── Zone selection ─────────────────────────────────────────────────────────
     local REGISTRY
-    REGISTRY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../extensions/mastergrinnodes.json"
+    REGISTRY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../extensions/grinmasternodes.json"
 
     local _zone_order=(america asia europe africa)
 
     if [[ ! -f "$REGISTRY" ]]; then
-        warn "mastergrinnodes.json not found — using built-in America servers."
+        warn "grinmasternodes.json not found — using built-in America servers."
         SELECTED_ZONE="america"
     else
         echo ""

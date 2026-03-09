@@ -162,7 +162,7 @@ A guided setup that downloads, verifies, configures, and launches a Grin node �
 
 - Choose mainnet or testnet, and full archive or pruned mode
 - Downloads the official Grin binary, verifies its SHA256, patches `grin-server.toml`
-- **Zone selection** — choose America, Asia, Europe, or Africa; hosts are loaded from `extensions/mastergrinnodes.json` (a community-maintained registry); auto-falls back to America if the chosen zone has no fresh hosts
+- **Zone selection** — choose America, Asia, Europe, or Africa; hosts are loaded from `extensions/grinmasternodes.json` (a community-maintained registry); auto-falls back to America if the chosen zone has no fresh hosts
 - **Per-host freshness filter** — each candidate host passes a 4-gate check: directory reachability → sync-complete status → directory listing (tar filename) → `Last-Modified` age on the `.tar.gz` file; hosts with data older than 5 days are silently skipped
 - **Transfer mode choice at download time:**
   - **On-the-fly extraction** — streams the remote archive directly into tar with no local `.tar.gz` saved (`wget -O - <url> | tar -xzvf -`); saves temporary disk space and reduces total setup time; SHA256 verification is skipped
@@ -201,10 +201,10 @@ Automates Grin blockchain backup and sharing so others can bootstrap from your n
 
 **Contributing your node to the community registry**
 
-Once your node is publicly sharing chain data via nginx (options A → B → E), you can add it to `extensions/mastergrinnodes.json` so other users can download from your server when setting up a new node:
+Once your node is publicly sharing chain data via nginx (options A → B → E), you can add it to `extensions/grinmasternodes.json` so other users can download from your server when setting up a new node:
 
 1. Fork the [Grin Node Toolkit repository](https://github.com/noobvie/grin-node-toolkit) on GitHub
-2. Open `extensions/mastergrinnodes.json` and add your hostname(s) under the correct zone and site key using the standard subdomain format `<site_key>.yourdomain.com`:
+2. Open `extensions/grinmasternodes.json` and add your hostname(s) under the correct zone and site key using the standard subdomain format `<site_key>.yourdomain.com`:
    - `fullmain.yourdomain.com` — full archive node, mainnet
    - `prunemain.yourdomain.com` — pruned node, mainnet
    - `prunetest.yourdomain.com` — pruned node, testnet
@@ -278,7 +278,7 @@ A self-hosted network monitoring dashboard with two components that share a sing
 
 **1 · Remote Node Monitor** (`081_host_monitor_port.sh`)
 - Persistent submenu: run check, reconfigure hosts, view crontab setup
-- **"Run check now" always starts with the registry scan** — reads `extensions/mastergrinnodes.json`, checks every registered host for: HTTP 200 reachability, `.tar.gz` age ≤ 5 days (via `Last-Modified`), and sync-complete status (`check_status_before_download.txt`); stale/down hosts show the owner contact
+- **"Run check now" always starts with the registry scan** — reads `extensions/grinmasternodes.json`, checks every registered host for: HTTP 200 reachability, `.tar.gz` age ≤ 5 days (via `Last-Modified`), and sync-complete status (`check_status_before_download.txt`); stale/down hosts show the owner contact
 - Results logged to `grin_master_nodes_status_<datetime>.log`
 - Then checks all custom hosts from `conf/host_monitor_port.conf` via TCP (`nc`); detects state changes; logs to `grin_nodes_status_<datetime>.log`
 - Emails on change (or always with `--force`); cron-ready standalone script
@@ -330,7 +330,7 @@ grin-node-toolkit/
 │   ├── grin_nodes_status_<datetime>.log  # Node monitor results
 │   └── grin_full_cleanup_<datetime>.log  # Full cleanup audit trail
 ├── extensions/
-│   └── mastergrinnodes.json              # Community host registry (zone → site_key → hostnames)
+│   └── grinmasternodes.json              # Community host registry (zone → site_key → hostnames)
 ├── scripts/
 │   ├── 01_build_new_grin_node.sh         # Feature 1 : node installation
 │   ├── 02_nginx_fileserver_manager.sh    # Feature 2 : nginx management

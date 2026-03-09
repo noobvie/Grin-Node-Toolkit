@@ -23,7 +23,7 @@ LOG_DIR="$SCRIPT_DIR/../log"
 CONF_FILE="$CONF_DIR/host_monitor_port.conf"
 STATE_FILE="$CONF_DIR/host_monitor_last_state.conf"
 LOG_FILE="$LOG_DIR/grin_nodes_status_$(date +%Y%m%d_%H%M%S).log"
-REGISTRY="$SCRIPT_DIR/../extensions/mastergrinnodes.json"
+REGISTRY="$SCRIPT_DIR/../extensions/grinmasternodes.json"
 MASTER_LOG_FILE="$LOG_DIR/grin_master_nodes_status_$(date +%Y%m%d_%H%M%S).log"
 
 # ─── Colors (disabled when not a terminal) ────────────────────────────────────
@@ -110,7 +110,7 @@ show_local_grin_instances() {
 
 # =============================================================================
 # Registry Master Nodes — Freshness, Availability & Sync Check
-# Reads extensions/mastergrinnodes.json. For every registered host checks:
+# Reads extensions/grinmasternodes.json. For every registered host checks:
 #   1. HTTP 200 reachability
 #   2. .tar.gz file age via Last-Modified (> 5 days = stale)
 #   3. Sync status via check_status_before_download.txt
@@ -129,7 +129,7 @@ check_master_nodes() {
         return 0
     fi
     if [[ ! -f "$REGISTRY" ]]; then
-        warn "mastergrinnodes.json not found at: $REGISTRY — skipping."
+        warn "grinmasternodes.json not found at: $REGISTRY — skipping."
         return 0
     fi
 
@@ -642,7 +642,7 @@ main() {
         if [[ -f "$CONF_FILE" ]]; then
             echo -e "  ${GREEN}1${RESET}) Run check now"
         else
-            echo -e "  ${GREEN}1${RESET}) Run check now ${DIM}(mastergrinnodes.json only)${RESET}"
+            echo -e "  ${GREEN}1${RESET}) Run check now ${DIM}(grinmasternodes.json only)${RESET}"
         fi
         echo -e "  ${YELLOW}2${RESET}) Reconfigure host list"
         echo -e "  ${CYAN}3${RESET}) Show crontab / email setup"

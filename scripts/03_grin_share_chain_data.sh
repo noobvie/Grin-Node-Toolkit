@@ -1735,7 +1735,7 @@ show_main_menu() {
     echo -e "  ${DIM}I${RESET}) Auto-delete txhashset snapshots  ${DIM}(schedule cleanup cron)${RESET}"
     echo ""
     echo -e "  ${DIM}→ Hosting a Grin node? Contribute your hostname to the community registry:${RESET}"
-    echo -e "  ${DIM}  extensions/mastergrinnodes.json  (see README.md for the format)${RESET}"
+    echo -e "  ${DIM}  extensions/grinmasternodes.json  (see README.md for the format)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to master script"
     echo ""

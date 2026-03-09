@@ -977,7 +977,7 @@ show_menu() {
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     echo -e "${BOLD}  Monitoring${RESET}"
-    echo -e "  ${GREEN}1${RESET})   Remote Node Monitor       ${DIM}check peer ports, log & email${RESET}"
+    echo -e "  ${GREEN}1${RESET})   Remote Node Monitor       ${DIM}registry + custom hosts: ports, freshness, sync${RESET}"
     echo -e "  ${GREEN}2${RESET})   Service & Port Dashboard  ${DIM}local PIDs, ports, tmux sessions${RESET}"
     echo -e "  ${GREEN}3${RESET})   Chain Sync Status         ${DIM}query local node API for current tip${RESET}"
     echo ""
@@ -1009,7 +1009,7 @@ main() {
             "1")   menu_node_monitor        ;;
             "2")   show_service_dashboard   ;;
             "3")   show_chain_sync          ;;
-            "4")   show_nginx_audit         ;;
+            "4")   show_nginx_audit            ;;
             "5")   show_firewall_audit      ;;
             "6")   show_bandwidth_consumers ;;
             "7")   clean_maintenance        ;;

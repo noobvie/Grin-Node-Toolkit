@@ -275,15 +275,20 @@ run_nginx_setup() {
         fi
         break
     done
-    if [ ${#detected_combos[@]} -ge 2 ]; then
+    if [ ${#detected_combos[@]} -ge 1 ]; then
         local _total_human
         _total_human=$(awk -v b="$total_bytes" 'BEGIN {
             if (b >= 2^30) printf "%.1f GiB", b/2^30
             else if (b >= 2^20) printf "%.1f MiB", b/2^20
             else printf "%.1f KiB", b/2^10
         }')
+        local _free_root _free_www
+        _free_root=$(df -h / 2>/dev/null | awk 'NR==2 {print $4}') || _free_root="?"
+        _free_www=$(df -h /var/www 2>/dev/null | awk 'NR==2 {print $4}') || _free_www="?"
         echo -e "  ${DIM}─────────────────────────────────────────${RESET}"
         echo -e "  ${DIM}Total chain_data:${RESET}  ${BOLD}${_total_human}${RESET}"
+        echo -e "  ${DIM}Free disk  /:${RESET}        ${BOLD}${_free_root}${RESET}"
+        echo -e "  ${DIM}Free disk  /var/www:${RESET}  ${BOLD}${_free_www}${RESET}"
     fi
     echo ""
 
@@ -1354,16 +1359,12 @@ list_presets() {
     local p=${_dow[0]} q=${_dow[1]}
     [ "$p" -gt "$q" ] && t=$p && p=$q && q=$t
 
-    # 4th shuffled day = opt5 (1x/week, distinct from opt2/opt4 days)
-    local r=${_dow[3]}
-
     local -a _DN=("Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat")
     local _HM; printf -v _HM '%02d:%02d' "$_R_HOUR" "$_R_MIN"
 
     _PRESET2="$_R_MIN $_R_HOUR * * $a,$b,$c"
     _PRESET3="$_R_MIN $_R_HOUR * * *"
     _PRESET4="$_R_MIN $_R_HOUR * * $p,$q"
-    _PRESET5="$_R_MIN $_R_HOUR * * $r"
 
     echo -e "${BOLD}Schedule presets (UTC):${RESET}"
     echo ""
@@ -1371,21 +1372,19 @@ list_presets() {
     echo -e "  ${GREEN}2${RESET}) 3x/week — ${_DN[$a]}, ${_DN[$b]}, ${_DN[$c]} at ${_HM}  ${DIM}(${_PRESET2})${RESET}"
     echo -e "  ${GREEN}3${RESET}) Daily at ${_HM}  ${DIM}(${_PRESET3})${RESET}"
     echo -e "  ${GREEN}4${RESET}) 2x/week — ${_DN[$p]}, ${_DN[$q]} at ${_HM}  ${DIM}(${_PRESET4})${RESET}"
-    echo -e "  ${GREEN}5${RESET}) Weekly — ${_DN[$r]} at ${_HM}  ${DIM}(${_PRESET5})${RESET}"
     echo ""
 }
 
 get_cron_expression() {
     list_presets
     echo -e "  ${DIM}0) Cancel${RESET}"
-    echo -ne "${BOLD}Select [0-5, default=1]: ${RESET}"
+    echo -ne "${BOLD}Select [0-4, default=1]: ${RESET}"
     read -r preset
     [[ "$preset" == "0" ]] && return 1
     case "${preset:-1}" in
         2) CRON_EXPR="$_PRESET2" ;;
         3) CRON_EXPR="$_PRESET3" ;;
         4) CRON_EXPR="$_PRESET4" ;;
-        5) CRON_EXPR="$_PRESET5" ;;
         *) CRON_EXPR="0 0 * * 1,4" ;;
     esac
 }
@@ -1734,6 +1733,9 @@ show_main_menu() {
     echo -e "  ${DIM}H${RESET}) Disable auto startup Grin node"
     echo ""
     echo -e "  ${DIM}I${RESET}) Auto-delete txhashset snapshots  ${DIM}(schedule cleanup cron)${RESET}"
+    echo ""
+    echo -e "  ${DIM}→ Hosting a Grin node? Contribute your hostname to the community registry:${RESET}"
+    echo -e "  ${DIM}  extensions/grinmasternodes.json  (see README.md for the format)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to master script"
     echo ""

@@ -75,13 +75,15 @@
 #                3415 → 13415, 3416 → 13416.
 #
 #   Step  9 — Chain Data Source & Transfer Mode
-#              All three known hosts are checked (shuffled order):
-#                *.grin.money    — primary
-#                *.grinily.com   — backup 1
-#                *.onlygrins.com — backup 2
-#              Each host is tested via check_status_before_download.txt; all
-#              passing hosts are queued as fallback sources.
-#              If all 3 fail, prompts for a custom base URL or 0 to return.
+#              User selects a download zone (America / Asia / Europe / Africa).
+#              Host list is loaded from extensions/grinmasternodes.json.
+#              Each host is checked in order:
+#                1) sync-status via check_status_before_download.txt
+#                2) directory listing fetched to discover tar/sha filenames
+#                3) Last-Modified header checked — files older than 5 days skipped
+#              Hosts passing all checks are added as fallback sources.
+#              If selected zone has no fresh hosts, auto-falls back to America.
+#              If America also fails, prompts for a custom base URL or 0 to return.
 #              User then chooses transfer mode:
 #                1) On-the-fly — pipes remote tar.gz straight into tar; no
 #                   .tar.gz stored locally; auto-switches source on failure;
@@ -142,6 +144,7 @@ GRIN_BIN_TMP=""        # cache binary between mainnet+testnet setups
 RESTRICTED_NETWORK=""  # set by check_grin_running if one slot is already occupied
 STREAM_MODE=false      # true = on-the-fly pipe extraction (no local .tar.gz saved)
 READY_SOURCES=()       # ordered list of base URLs that passed sync-status check
+SELECTED_ZONE=""       # zone chosen at Step 9 (america|asia|europe|africa|all)
 
 # --- Colors ---
 RED='\033[0;31m'
@@ -421,7 +424,7 @@ select_network() {
     echo ""
     echo -e "  ${GREEN}1${RESET}) Mainnet  (default)"
     echo -e "  ${YELLOW}2${RESET}) Testnet"
-    echo -e "  ${CYAN}3${RESET}) Both     (mainnet first, then testnet)"
+    echo -e "  ${CYAN}3${RESET}) Both     (you can run both mainnet/testnet in parallel — install mainnet first, then testnet)"
     echo -e "  ${DIM}0${RESET}) Return to main menu"
     echo ""
     echo -ne "${BOLD}Choice [1]: ${RESET}"
@@ -450,9 +453,10 @@ select_archive_mode() {
     local network="$1"
     step_header "Step 4: Archive Mode (${network})"
     echo ""
-    echo -e "  ${GREEN}1${RESET}) Pruned       (default, recommended — smaller storage)"
-    echo -e "  ${YELLOW}2${RESET}) Full archive (mainnet only — full UTXO history)"
+    echo -e "  ${GREEN}1${RESET}) Pruned       (default, recommended — smaller storage, ~10 GiB)"
+    echo -e "  ${YELLOW}2${RESET}) Full archive (mainnet only — full UTXO history, ~25 GiB)"
     echo -e "  ${DIM}0${RESET}) Return to main menu"
+    echo ""
 
     if [[ "$network" == "testnet" ]]; then
         warn "Testnet does NOT support full archive mode."
@@ -473,8 +477,34 @@ select_archive_mode() {
             ;;
         *) die "Invalid archive mode '${arc_choice}'." ;;
     esac
+
+    # Disk space check — warn if / has less than the recommended minimum
+    local _free_kb _free_gb _min_gb
+    _free_kb=$(df / | awk 'NR==2 {print $4}')
+    _free_gb=$(awk "BEGIN {printf \"%.1f\", $_free_kb/1048576}")
+    if [[ "$ARCHIVE_MODE" == "full" ]]; then
+        _min_gb=25
+    else
+        _min_gb=10
+    fi
+    echo ""
+    echo -e "  ${DIM}Free disk (/):${RESET}  ${BOLD}${_free_gb} GiB${RESET}"
+    if awk "BEGIN {exit ($_free_gb >= $_min_gb) ? 0 : 1}"; then
+        echo -e "  ${GREEN}✓${RESET}  Sufficient space for ${ARCHIVE_MODE} mode (min ~${_min_gb} GiB)."
+    else
+        echo ""
+        echo -e "  ${RED}⚠  Low disk space:${RESET} ${_free_gb} GiB free, recommended minimum is ~${_min_gb} GiB"
+        echo -e "     for ${ARCHIVE_MODE} mode (archive download + extraction)."
+        echo ""
+        echo -ne "  Continue anyway? [y/N]: "
+        read -r _space_ok || true
+        if [[ "${_space_ok,,}" != "y" ]]; then
+            exit 0
+        fi
+    fi
+
     info "Archive mode: $ARCHIVE_MODE"
-    log "[STEP 4] ArchiveMode=$ARCHIVE_MODE"
+    log "[STEP 4] ArchiveMode=$ARCHIVE_MODE free_disk=${_free_gb}GiB"
 }
 
 # =============================================================================
@@ -761,11 +791,10 @@ patch_config() {
 # [9] DOWNLOAD CHAIN DATA FROM TRUSTED SOURCE
 # -----------------------------------------------------------------------------
 # Selects the correct chain data source based on network + archive mode.
-# Three known hosts are tried in order (primary → backup1 → backup2):
-#   *.grin.money    — primary
-#   *.grinily.com   — backup 1
-#   *.onlygrins.com — backup 2
-# Prefixes (site_key):
+# Server list is loaded from extensions/grinmasternodes.json (zone-aware registry).
+# User selects a zone (America/Asia/Europe/Africa); zones without dedicated
+# servers for the chosen site_key automatically fall back to America.
+# Site keys (site_key prefix on each hostname):
 #   fullmain  — full archive, mainnet
 #   prunemain — pruned,       mainnet
 #   prunetest — pruned,       testnet
@@ -785,6 +814,110 @@ _get_site_key() {
     [[ "$network" == "mainnet" ]] && net_short="main" || net_short="test"
     [[ "$mode"    == "full"    ]] && mode_short="full" || mode_short="prune"
     echo "${mode_short}${net_short}"
+}
+
+# Read host list for a given zone+sitekey from grinmasternodes.json.
+# Returns space-separated hostnames, or empty string if none found.
+# Args: zone sitekey registry_path
+_get_zone_hosts() {
+    local zone="$1" sk="$2" reg="$3"
+    [[ ! -f "$reg" ]] && return
+    local result=""
+    if command -v jq &>/dev/null; then
+        result=$(jq -r --arg z "$zone" --arg s "$sk" \
+            '(.[$z][$s] // [])[]' "$reg" 2>/dev/null | tr '\n' ' ')
+    elif command -v python3 &>/dev/null; then
+        result=$(python3 - "$reg" "$zone" "$sk" <<'PYEOF' 2>/dev/null
+import json, sys
+try:
+    reg, zone, sk = sys.argv[1], sys.argv[2], sys.argv[3]
+    print(' '.join(json.load(open(reg)).get(zone, {}).get(sk, [])))
+except: pass
+PYEOF
+)
+    fi
+    echo "${result}" | xargs
+}
+
+# Check one host in optimised order (fail fast, fewest bytes first):
+#   1. HEAD /          → directory Last-Modified  (1 cheap request, skip stale early)
+#   2. GET  status txt → "Sync completed."        (small file, confirm node is ready)
+#   3. GET  /          → directory listing        (parse tar/sha filenames)
+#   4. HEAD /$tar      → precise .tar.gz age      (exact file timestamp)
+# On pass: appends "https://$host" to READY_SOURCES; sets _HOST_TAR_NAME/_HOST_SHA_NAME
+# from the first passing host. Returns 0=pass, 1=skip.
+# Args: host  max_age_days
+_check_and_add_host() {
+    local host="$1" max_age="$2" site_key="${3:-}"
+    local base="https://$host"
+
+    # 1. HEAD / — quick directory freshness check before downloading anything
+    local dir_lm dir_age=0
+    dir_lm=$(curl -fsSI --max-time 8 "$base/" 2>/dev/null \
+        | grep -i '^last-modified:' | cut -d' ' -f2- | tr -d '\r') || true
+    if [[ -n "$dir_lm" ]]; then
+        local dir_ts; dir_ts=$(date -d "$dir_lm" +%s 2>/dev/null) || true
+        [[ -n "$dir_ts" ]] && dir_age=$(( ( $(date +%s) - dir_ts ) / 86400 ))
+        if (( dir_age > max_age )); then
+            warn "$host: directory is ${dir_age} day(s) old — skipping."; return 1
+        fi
+    else
+        # No Last-Modified on root — server may not be reachable at all
+        curl -fsSI --max-time 8 "$base/" &>/dev/null \
+            || { warn "$host: unreachable — skipping."; return 1; }
+    fi
+
+    # 2. GET check_status_before_download.txt — confirm node sync is complete
+    local status_content
+    status_content=$(curl -fsSL --max-time 15 \
+        "$base/check_status_before_download.txt" 2>/dev/null) \
+        || { warn "$host: status file unavailable — skipping."; return 1; }
+    echo "$status_content" | grep -q "Sync completed." \
+        || { warn "$host: not synced ($(echo "$status_content" | head -1)) — skipping."; return 1; }
+
+    # 3. GET / — directory listing to discover tar/sha filenames
+    local index
+    index=$(curl -fsSL --max-time 15 "$base/" 2>/dev/null) \
+        || { warn "$host: directory listing failed — skipping."; return 1; }
+    local tname sname
+    tname=$(echo "$index" | grep -oP 'href="\K[^"]*\.tar\.gz' | grep -v '^\.\.' | head -1)
+    sname=$(echo "$index" | grep -oP 'href="\K[^"]*\.sha256'  | grep -v '^\.\.' | head -1)
+    [[ -z "$tname" ]] && { warn "$host: no .tar.gz in directory listing — skipping."; return 1; }
+
+    # 3b. Verify tar filename matches the expected site_key type
+    if [[ -n "$site_key" ]]; then
+        local _type_ok=true
+        case "$site_key" in
+            fullmain)  echo "$tname" | grep -qi "full"   && echo "$tname" | grep -qi "mainnet" || _type_ok=false ;;
+            prunemain) echo "$tname" | grep -qi "pruned" && echo "$tname" | grep -qi "mainnet" || _type_ok=false ;;
+            prunetest) echo "$tname" | grep -qi "pruned" && echo "$tname" | grep -qi "testnet" || _type_ok=false ;;
+        esac
+        if [[ "$_type_ok" == false ]]; then
+            warn "$host: tar '$tname' does not match expected type (${site_key}) — skipping."
+            return 1
+        fi
+    fi
+
+    # 4. HEAD /$tname — precise file age on the actual .tar.gz
+    local last_mod age_days=0
+    last_mod=$(curl -fsSI --max-time 10 "$base/$tname" 2>/dev/null \
+        | grep -i '^last-modified:' | cut -d' ' -f2- | tr -d '\r')
+    if [[ -n "$last_mod" ]]; then
+        local fts; fts=$(date -d "$last_mod" +%s 2>/dev/null) || true
+        [[ -n "$fts" ]] && age_days=$(( ( $(date +%s) - fts ) / 86400 ))
+        if (( age_days > max_age )); then
+            warn "$host: chain data is ${age_days} day(s) old (limit: ${max_age}) — skipping."
+            return 1
+        fi
+        success "$host: chain data is ${age_days} day(s) old — OK."
+    else
+        info "$host: Last-Modified unavailable — allowing."
+    fi
+
+    READY_SOURCES+=("$base")
+    [[ -z "${_HOST_TAR_NAME:-}" ]] && _HOST_TAR_NAME="$tname"
+    [[ -z "${_HOST_SHA_NAME:-}" ]] && _HOST_SHA_NAME="${sname:-}"
+    return 0
 }
 
 download_chain_data() {
@@ -819,40 +952,98 @@ download_chain_data() {
     local site_key
     site_key=$(_get_site_key "$network" "$mode")
 
-    local hosts=(
-        "${site_key}.grin.money"
-        "${site_key}.grinily.com"
-        "${site_key}.onlygrins.com"
-    )
+    # ── Zone selection ─────────────────────────────────────────────────────────
+    local REGISTRY
+    REGISTRY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../extensions/grinmasternodes.json"
 
-    # Shuffle for load distribution across sources
-    mapfile -t hosts < <(printf '%s\n' "${hosts[@]}" | shuf)
+    local _zone_order=(america asia europe africa)
 
-    info "Known sources (random order):"
+    if [[ ! -f "$REGISTRY" ]]; then
+        warn "grinmasternodes.json not found — using built-in America servers."
+        SELECTED_ZONE="america"
+    else
+        echo ""
+        echo -e "${BOLD}  Select a download zone:${RESET}"
+        echo ""
+        local _zi=1
+        for _z in "${_zone_order[@]}"; do
+            local _zh _zcount=0
+            _zh=$(_get_zone_hosts "$_z" "$site_key" "$REGISTRY")
+            [[ -n "$_zh" ]] && read -r -a _tmp_arr <<< "$_zh" && _zcount=${#_tmp_arr[@]}
+            if (( _zcount > 0 )); then
+                printf "  ${GREEN}%d${RESET}) %-10s  ${DIM}[%d server(s)]${RESET}\n" \
+                    "$_zi" "${_z^}" "$_zcount"
+            else
+                printf "  ${CYAN}%d${RESET}) %-10s  ${DIM}[using America servers]${RESET}\n" \
+                    "$_zi" "${_z^}"
+            fi
+            _zi=$(( _zi + 1 ))
+        done
+        echo -e "  ${DIM}0${RESET}) Skip  ${DIM}(use all known servers, shuffled)${RESET}"
+        echo ""
+        echo -ne "${BOLD}Zone [1]: ${RESET}"
+        local _zone_choice
+        read -r _zone_choice || true
+        _zone_choice="${_zone_choice:-1}"
+
+        if [[ "$_zone_choice" == "0" ]]; then
+            SELECTED_ZONE="all"
+        elif [[ "$_zone_choice" =~ ^[1-4]$ ]]; then
+            SELECTED_ZONE="${_zone_order[$(( _zone_choice - 1 ))]}"
+        else
+            warn "Invalid zone '${_zone_choice}' — defaulting to America."
+            SELECTED_ZONE="america"
+        fi
+    fi
+
+    # ── Resolve zone to host list ───────────────────────────────────────────────
+    local _resolved_hosts=""
+    if [[ "$SELECTED_ZONE" == "all" ]]; then
+        for _z in "${_zone_order[@]}"; do
+            local _zh; _zh=$(_get_zone_hosts "$_z" "$site_key" "$REGISTRY")
+            [[ -n "$_zh" ]] && _resolved_hosts+=" $_zh"
+        done
+    else
+        _resolved_hosts=$(_get_zone_hosts "$SELECTED_ZONE" "$site_key" "$REGISTRY")
+        if [[ -z "$_resolved_hosts" ]]; then
+            info "No ${SELECTED_ZONE^} servers for ${site_key} — using America servers."
+            _resolved_hosts=$(_get_zone_hosts "america" "$site_key" "$REGISTRY")
+            SELECTED_ZONE="america"
+        fi
+    fi
+
+    # ── Build hosts array (deduplicate, then shuffle) ───────────────────────────
+    local hosts=()
+    mapfile -t hosts < <(tr ' ' '\n' <<< "$_resolved_hosts" | grep -v '^$' | sort -u | shuf)
+
+    info "Checking zone hosts (sync status + file age ≤ 7 days)..."
     local h; for h in "${hosts[@]}"; do info "  → $h"; done
 
-    # Check ALL known hosts and collect every ready base URL for fallback
+    # Combined check: sync-status + directory listing + file age per host
+    local _MAX_AGE_DAYS=5
+    local _HOST_TAR_NAME="" _HOST_SHA_NAME=""
     READY_SOURCES=()
     for host in "${hosts[@]}"; do
-        local status_url="https://${host}/check_status_before_download.txt"
-        info "Checking sync status at: $status_url"
-        local status_content
-        status_content=$(curl -fsSL --max-time 15 "$status_url" 2>/dev/null) || {
-            warn "Cannot reach $host — skipping..."
-            continue
-        }
-        if echo "$status_content" | grep -q "Sync completed."; then
-            READY_SOURCES+=("https://$host")
-            success "Source ready: $host"
-        else
-            warn "$host is not ready: $(echo "$status_content" | head -1)"
-        fi
+        _check_and_add_host "$host" "$_MAX_AGE_DAYS" "$site_key" || true
     done
+
+    # Auto-fallback to America hardcoded hosts if selected zone yielded nothing
+    if [[ ${#READY_SOURCES[@]} -eq 0 && "$SELECTED_ZONE" != "america" && "$SELECTED_ZONE" != "all" ]]; then
+        info "No fresh hosts in ${SELECTED_ZONE^} — trying America fallback..."
+        local _am_hosts=()
+        mapfile -t _am_hosts < <(
+            _get_zone_hosts "america" "$site_key" "$REGISTRY" | tr ' ' '\n' | grep -v '^$' | shuf
+        )
+        for host in "${_am_hosts[@]}"; do
+            _check_and_add_host "$host" "$_MAX_AGE_DAYS" "$site_key" || true
+        done
+        [[ ${#READY_SOURCES[@]} -gt 0 ]] && SELECTED_ZONE="america"
+    fi
 
     # All known hosts failed — prompt for custom URL or exit
     if [[ ${#READY_SOURCES[@]} -eq 0 ]]; then
         echo ""
-        warn "All 3 known sources are unavailable or not fully synced."
+        warn "All known sources are unavailable or have chain data older than ${_MAX_AGE_DAYS} days."
         echo ""
         while true; do
             echo -e "  Enter a ${BOLD}custom base URL${RESET}  ${DIM}(e.g. https://example.com)${RESET}"
@@ -896,19 +1087,13 @@ download_chain_data() {
         done
     fi
 
-    # Parse the directory index from the first ready source to get filenames
-    local base_url="${READY_SOURCES[0]}"
-    info "Fetching file listing from $base_url ..."
-    local index
-    index=$(curl -fsSL --max-time 15 "$base_url/" 2>/dev/null) \
-        || die "Failed to fetch directory listing from $base_url."
-
+    # Filenames already discovered during per-host checks above
     local tar_name sha_name
-    tar_name=$(echo "$index" | grep -oP 'href="\K[^"]*\.tar\.gz' | grep -v '^\.\.' | head -1)
-    sha_name=$(echo "$index" | grep -oP 'href="\K[^"]*\.sha256'  | grep -v '^\.\.' | head -1)
+    tar_name="$_HOST_TAR_NAME"
+    sha_name="$_HOST_SHA_NAME"
 
-    [[ -z "$tar_name" ]] && die "No .tar.gz file found in directory listing at $base_url"
-    [[ -z "$sha_name" ]] && die "No .sha256 file found in directory listing at $base_url"
+    [[ -z "$tar_name" ]] && die "No .tar.gz filename found from any ready source."
+    [[ -z "$sha_name" ]] && die "No .sha256 filename found from any ready source."
 
     TAR_FILE="$GRIN_DIR/$tar_name"
     SHA_FILE="$GRIN_DIR/$sha_name"
@@ -936,7 +1121,7 @@ download_chain_data() {
     if [[ "${dl_choice:-2}" == "1" ]]; then
         STREAM_MODE=true
         info "On-the-fly extraction selected. Streaming will begin at Step 10."
-        log "[STEP 9] On-the-fly mode. sources=(${READY_SOURCES[*]}) tar=$tar_name"
+        log "[STEP 9] On-the-fly mode. zone=$SELECTED_ZONE sources=(${READY_SOURCES[*]}) tar=$tar_name"
         return 0
     fi
 
@@ -944,7 +1129,7 @@ download_chain_data() {
     STREAM_MODE=false
 
     info "Downloading checksum file: $sha_name"
-    curl -fsSL "$base_url/$sha_name" -o "$SHA_FILE" \
+    curl -fsSL "${READY_SOURCES[0]}/$sha_name" -o "$SHA_FILE" \
         || die "Failed to download checksum file."
     success "Checksum saved: $SHA_FILE"
 
@@ -970,7 +1155,7 @@ download_chain_data() {
     [[ "$dl_ok" == "true" ]] || die "Chain data download failed from all available sources."
 
     success "Chain data downloaded: $TAR_FILE"
-    log "[STEP 9] Downloaded $tar_name (full download mode)"
+    log "[STEP 9] Downloaded $tar_name (full download mode) zone=$SELECTED_ZONE"
 }
 
 # =============================================================================

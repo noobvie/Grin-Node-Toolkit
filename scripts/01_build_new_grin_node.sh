@@ -424,7 +424,7 @@ select_network() {
     echo ""
     echo -e "  ${GREEN}1${RESET}) Mainnet  (default)"
     echo -e "  ${YELLOW}2${RESET}) Testnet"
-    echo -e "  ${CYAN}3${RESET}) Both     (mainnet first, then testnet)"
+    echo -e "  ${CYAN}3${RESET}) Both     (you can run both mainnet/testnet in parallel — install mainnet first, then testnet)"
     echo -e "  ${DIM}0${RESET}) Return to main menu"
     echo ""
     echo -ne "${BOLD}Choice [1]: ${RESET}"
@@ -457,8 +457,6 @@ select_archive_mode() {
     echo -e "  ${YELLOW}2${RESET}) Full archive (mainnet only — full UTXO history, ~25 GiB)"
     echo -e "  ${DIM}0${RESET}) Return to main menu"
     echo ""
-    echo -e "  ${DIM}Tip: you can run mainnet + testnet in parallel on the same server.${RESET}"
-    echo -e "  ${DIM}     Select '3) Both' at the network step to set up both at once.${RESET}"
 
     if [[ "$network" == "testnet" ]]; then
         warn "Testnet does NOT support full archive mode."

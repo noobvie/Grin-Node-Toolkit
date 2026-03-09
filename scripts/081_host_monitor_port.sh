@@ -627,10 +627,6 @@ main() {
     fi
 
     # ── Interactive mode — persistent menu ────────────────────────────────────
-    if [[ ! -f "$CONF_FILE" ]]; then
-        setup_conf || return 0
-    fi
-
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"

@@ -2,7 +2,7 @@
 
 #############################################################################
 # Nginx File Server Management Script
-# Unified script for: Setup, Add Domain, Remove Domain
+# Unified script for: Grin node domains, Custom domains, Remove Domain
 # Features: SSL, HSTS, Bandwidth Limiting, Directory Listing
 #############################################################################
 
@@ -13,7 +13,7 @@ set -e  # Exit on any error
 #############################################################################
 
 # Set action here, or leave empty for interactive menu
-# Options: "setup" | "add" | "remove" | "list"
+# Options: "grin" | "custom" | "remove" | "list"
 ACTION=""
 
 # Domain configuration (for setup/add operations)
@@ -337,7 +337,7 @@ show_main_menu() {
     cat << "EOF"
 ╔════════════════════════════════════════════════════════════════╗
 ║                                                                ║
-║     02)   Nginx File Server Management Script                  ║
+║     02)   Nginx Server Management Script                       ║
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
 EOF
@@ -345,8 +345,8 @@ EOF
     echo ""
     echo "Select an action:"
     echo ""
-    echo "  1) Setup New File Server      - Install and configure first domain"
-    echo "  2) Add Additional Domain      - Add another domain to existing setup"
+    echo "  1) Build Grin Master Nodes    - Run this 2 times if you wanna share both mainnet and testnet"
+    echo "  2) Add Custom Domain          - Add any new custom domain"
     echo "  3) Remove Domain              - Remove domain and its configuration"
     echo "  4) List Domains               - Show all configured domains"
     echo ""
@@ -364,7 +364,7 @@ EOF
 get_action() {
     if [[ -n "$ACTION" ]]; then
         case "$ACTION" in
-            setup|add|remove|list|limit_rate|lift_rate|enhance_security|fail2ban_management|ip_filtering)
+            grin|custom|remove|list|limit_rate|lift_rate|enhance_security|fail2ban_management|ip_filtering)
                 return 0
                 ;;
             *)
@@ -380,8 +380,8 @@ get_action() {
         read -p "Enter choice [0-9]: " choice
 
         case $choice in
-            1) ACTION="setup"               ; break ;;
-            2) ACTION="add"                 ; break ;;
+            1) ACTION="grin"                ; break ;;
+            2) ACTION="custom"              ; break ;;
             3) ACTION="remove"              ; break ;;
             4) ACTION="list"                ; break ;;
             5) ACTION="limit_rate"          ; break ;;
@@ -504,14 +504,14 @@ EXAMPLES:
     # Interactive menu mode:
     sudo $0
 
-    # Setup first domain:
-    sudo $0 --action setup --domain files.example.com --email admin@example.com
+    # Setup Grin master node domain:
+    sudo $0 --action grin --domain prunemain.example.com --email admin@example.com
 
-    # Add second domain:
-    sudo $0 --action add --domain share.example.com --email admin@example.com
+    # Add custom (non-Grin) domain:
+    sudo $0 --action custom --domain files.example.com --email admin@example.com
 
-    # Add domain with bandwidth limiting:
-    sudo $0 --action add --domain files.example.com --email admin@example.com \\
+    # Add custom domain with bandwidth limiting:
+    sudo $0 --action custom --domain files.example.com --email admin@example.com \\
             --enable-bandwidth --quota 50 --speed-after 2m
 
     # Remove domain (keep files):
@@ -525,7 +525,7 @@ EXAMPLES:
 
 CONFIGURATION FILE:
     You can also edit variables at the top of this script:
-    - ACTION="setup|add|remove|list"
+    - ACTION="grin|custom|remove|list"
     - DOMAIN="files.example.com"
     - EMAIL="admin@example.com"
     - And more...
@@ -589,34 +589,45 @@ parse_arguments() {
 
 # 5.0 - Function to get domain input
 get_domain() {
+    local strict="${1:-true}"
     echo ""
     echo -e "${YELLOW}[DNS]${NC} Point your A record to this server. If using Cloudflare, change"
     echo -e "      from ${RED}Proxied${NC} to ${GREEN}DNS only${NC} — makes your node become a DNSSeed and avoids"
     echo -e "      certbot / Let's Encrypt issues."
     echo ""
-    echo -e "  ${YELLOW}Required subdomain format:${NC}"
-    echo -e "    fullmain.yourdomain.com   — full archive node, mainnet"
-    echo -e "    prunemain.yourdomain.com  — pruned node, mainnet"
-    echo -e "    prunetest.yourdomain.com  — pruned node, testnet"
+    if [[ "$strict" == "true" ]]; then
+        echo -e "  ${YELLOW}Required subdomain format:${NC}"
+        echo -e "    fullmain.yourdomain.com   — full archive node, mainnet"
+        echo -e "    prunemain.yourdomain.com  — pruned node, mainnet"
+        echo -e "    prunetest.yourdomain.com  — pruned node, testnet"
+    else
+        echo -e "  Enter any valid domain or subdomain (e.g., files.yourdomain.com)"
+    fi
     echo ""
     while true; do
         if [[ -z "$DOMAIN" ]]; then
-            read -p "Enter domain name (e.g., prunemain.yourdomain.com) or 0 to cancel: " DOMAIN
+            if [[ "$strict" == "true" ]]; then
+                read -p "Enter domain name (e.g., prunemain.yourdomain.com) or 0 to cancel: " DOMAIN
+            else
+                read -p "Enter domain name (e.g., files.yourdomain.com) or 0 to cancel: " DOMAIN
+            fi
             [[ "$DOMAIN" == "0" ]] && exit 0
         fi
 
         if validate_domain "$DOMAIN"; then
-            # Hard check: subdomain prefix must be a known site key
-            local _prefix
-            _prefix=$(echo "$DOMAIN" | cut -d'.' -f1)
-            if [[ "$_prefix" != "fullmain" && "$_prefix" != "prunemain" && "$_prefix" != "prunetest" ]]; then
-                echo ""
-                print_error "Subdomain prefix '${_prefix}' is not valid."
-                echo -e "  Domain must start with one of: fullmain / prunemain / prunetest"
-                echo -e "  e.g. prunemain.yourdomain.com"
-                echo ""
-                DOMAIN=""
-                continue
+            if [[ "$strict" == "true" ]]; then
+                # Hard check: subdomain prefix must be a known Grin site key
+                local _prefix
+                _prefix=$(echo "$DOMAIN" | cut -d'.' -f1)
+                if [[ "$_prefix" != "fullmain" && "$_prefix" != "prunemain" && "$_prefix" != "prunetest" ]]; then
+                    echo ""
+                    print_error "Subdomain prefix '${_prefix}' is not valid."
+                    echo -e "  Domain must start with one of: fullmain / prunemain / prunetest"
+                    echo -e "  e.g. prunemain.yourdomain.com"
+                    echo ""
+                    DOMAIN=""
+                    continue
+                fi
             fi
             print_info "Domain validated: $DOMAIN"
             break
@@ -1628,43 +1639,37 @@ finalize_log() {
 # Main Workflows
 #############################################################################
 
-# 23.0 - Setup/Add domain workflow
-run_setup_or_add() {
-    local is_first_setup=$1
-    
-    if [[ "$is_first_setup" == "true" ]]; then
-        print_section "Nginx File Server Setup - First Domain"
-        
-        # Check and install nginx if needed
-        if ! check_nginx; then
-            local nginx_choice
-            while true; do
-                read -r -p "Nginx is not installed. Install it now? (y/n/0) [0 = cancel]: " nginx_choice
-                [[ "$nginx_choice" == "0" ]] && exit 0
-                [[ "${nginx_choice,,}" =~ ^y ]] && install_nginx && break
-                [[ "${nginx_choice,,}" =~ ^n ]] && print_error "Nginx is required. Exiting." && exit 0
-                # empty or unrecognised — re-prompt
-            done
-        fi
+# 23.0 - Setup Grin master node domain workflow
+run_setup_grin() {
+    print_section "Nginx File Server Setup — Grin Master Nodes"
 
-        # Check and install certbot if needed
-        if ! check_certbot; then
-            local certbot_choice
-            while true; do
-                read -r -p "Certbot is not installed. Install it now? (y/n/0) [0 = cancel]: " certbot_choice
-                [[ "$certbot_choice" == "0" ]] && exit 0
-                [[ "${certbot_choice,,}" =~ ^y ]] && install_certbot && break
-                [[ "${certbot_choice,,}" =~ ^n ]] && print_error "Certbot is required for SSL. Exiting." && exit 0
-                # empty or unrecognised — re-prompt
-            done
-        fi
-    else
-        print_section "Adding Additional Domain"
+    # Check and install nginx if needed
+    if ! check_nginx; then
+        local nginx_choice
+        while true; do
+            read -r -p "Nginx is not installed. Install it now? (y/n/0) [0 = cancel]: " nginx_choice
+            [[ "$nginx_choice" == "0" ]] && exit 0
+            [[ "${nginx_choice,,}" =~ ^y ]] && install_nginx && break
+            [[ "${nginx_choice,,}" =~ ^n ]] && print_error "Nginx is required. Exiting." && exit 0
+            # empty or unrecognised — re-prompt
+        done
     fi
-    
+
+    # Check and install certbot if needed
+    if ! check_certbot; then
+        local certbot_choice
+        while true; do
+            read -r -p "Certbot is not installed. Install it now? (y/n/0) [0 = cancel]: " certbot_choice
+            [[ "$certbot_choice" == "0" ]] && exit 0
+            [[ "${certbot_choice,,}" =~ ^y ]] && install_certbot && break
+            [[ "${certbot_choice,,}" =~ ^n ]] && print_error "Certbot is required for SSL. Exiting." && exit 0
+            # empty or unrecognised — re-prompt
+        done
+    fi
+
     # Get required information
     print_section "Configuration"
-    get_domain
+    get_domain "true"
     get_email
     get_files_directory
     get_bandwidth_settings
@@ -1697,6 +1702,74 @@ run_setup_or_add() {
     setup_bandwidth_limiting
     setup_auto_renewal
     
+    # Display summary
+    display_setup_summary
+    echo ""
+    print_info "Full log saved to: $LOG_FILE"
+    echo ""
+    read -rp "Press Enter to return to the main menu..."
+}
+
+# 23.1 - Add custom (non-Grin) domain workflow
+run_setup_custom() {
+    print_section "Add Custom Domain"
+
+    # Check and install nginx if needed
+    if ! check_nginx; then
+        local nginx_choice
+        while true; do
+            read -r -p "Nginx is not installed. Install it now? (y/n/0) [0 = cancel]: " nginx_choice
+            [[ "$nginx_choice" == "0" ]] && exit 0
+            [[ "${nginx_choice,,}" =~ ^y ]] && install_nginx && break
+            [[ "${nginx_choice,,}" =~ ^n ]] && print_error "Nginx is required. Exiting." && exit 0
+        done
+    fi
+
+    # Check and install certbot if needed
+    if ! check_certbot; then
+        local certbot_choice
+        while true; do
+            read -r -p "Certbot is not installed. Install it now? (y/n/0) [0 = cancel]: " certbot_choice
+            [[ "$certbot_choice" == "0" ]] && exit 0
+            [[ "${certbot_choice,,}" =~ ^y ]] && install_certbot && break
+            [[ "${certbot_choice,,}" =~ ^n ]] && print_error "Certbot is required for SSL. Exiting." && exit 0
+        done
+    fi
+
+    # Get required information
+    print_section "Configuration"
+    get_domain "false"
+    get_email
+    get_files_directory
+    get_bandwidth_settings
+
+    # Confirm before proceeding
+    echo ""
+    print_warn "About to configure:"
+    echo "  Domain: $DOMAIN"
+    echo "  Email: $EMAIL"
+    echo "  Files Directory: $FILES_DIR"
+    if [[ "$ENABLE_BANDWIDTH_LIMIT" == "yes" ]]; then
+        echo "  Bandwidth Limit: ${DOWNLOAD_QUOTA_GB}GB per IP"
+        echo "  Speed after quota: $SPEED_LIMIT_AFTER_QUOTA"
+    fi
+    echo ""
+    local proceed_choice
+    while true; do
+        read -r -p "Proceed with setup? (y/n/0) [0 = cancel]: " proceed_choice
+        [[ "$proceed_choice" == "0" ]] && print_info "Setup cancelled." && exit 0
+        [[ "${proceed_choice,,}" =~ ^y ]] && break
+        [[ "${proceed_choice,,}" =~ ^n ]] && print_info "Setup cancelled." && exit 0
+    done
+
+    # Execute setup steps
+    create_files_directory
+    create_initial_nginx_config
+    obtain_ssl_certificate
+    enhance_nginx_config
+    setup_bandwidth_limiting
+    setup_auto_renewal
+
     # Display summary
     display_setup_summary
     echo ""
@@ -2424,8 +2497,8 @@ run_ip_filtering() {
 # 29.0 - Dispatch a single action
 _dispatch_action() {
     case "$ACTION" in
-        setup)               run_setup_or_add true ;;
-        add)                 run_setup_or_add false ;;
+        grin)                run_setup_grin ;;
+        custom)              run_setup_custom ;;
         remove)              run_remove ;;
         list)                run_list ;;
         limit_rate)          run_limit_rate ;;

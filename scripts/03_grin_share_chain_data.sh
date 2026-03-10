@@ -28,6 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_DIR="$SCRIPT_DIR/../conf"
 CONF_NGINX="$CONF_DIR/grin_share_nginx.conf"
 CONF_SSH="$CONF_DIR/grin_share_ssh.conf"
+INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"
 LOG_DIR="$SCRIPT_DIR/../log"
 SCHED_LOG_FILE="$LOG_DIR/schedule.log"
 CRON_COMMENT_NGINX="# grin-node-toolkit: grin_share_nginx"
@@ -111,6 +112,29 @@ sched_info()    { echo -e "${CYAN}[INFO]${RESET}  $*"; }
 sched_success() { echo -e "${GREEN}[OK]${RESET}    $*"; }
 sched_warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
 sched_error()   { echo -e "${RED}[ERROR]${RESET} $*"; }
+
+# Silently enforce UTC timezone — required for accurate Last-Modified timestamps
+# on compressed chain data files (used by script 081 staleness checks).
+check_timezone_utc() {
+    local current_tz
+    current_tz=$(timedatectl show --property=Timezone --value 2>/dev/null \
+        || cat /etc/timezone 2>/dev/null \
+        || echo "unknown")
+    if [[ "$current_tz" == "UTC" ]]; then
+        log "Timezone: UTC — OK."
+        return 0
+    fi
+    if command -v timedatectl &>/dev/null; then
+        timedatectl set-timezone UTC \
+            && log "Timezone set to UTC (was: ${current_tz})." \
+            || log "WARN: Failed to set timezone to UTC (was: ${current_tz})."
+    else
+        ln -sf /usr/share/zoneinfo/UTC /etc/localtime \
+            && echo "UTC" > /etc/timezone \
+            && log "Timezone set to UTC via symlink (was: ${current_tz})." \
+            || log "WARN: Failed to set timezone to UTC (was: ${current_tz})."
+    fi
+}
 
 # Display an error and wait for the user to press Enter (interactive mode)
 show_error_pause() {
@@ -664,6 +688,78 @@ reset_detection_vars() {
     LOG_FILE="" OUTPUT_DIR="" STATUS_FILE="" FINAL_DEST="" TMUX_SESSION=""
 }
 
+# Map (network_type, node_type) → conf key prefix (PRUNEMAIN / FULLMAIN / PRUNETEST)
+_instance_key() {
+    local net="$1" type="$2"
+    [[ "$type" == "full" ]]                           && echo "FULLMAIN"  && return
+    [[ "$type" == "pruned" && "$net" == "mainnet" ]]  && echo "PRUNEMAIN" && return
+    [[ "$net" == "testnet" ]]                         && echo "PRUNETEST" && return
+    echo ""
+}
+
+# Update instances conf after a successful live process detection
+save_instance_detection() {
+    [[ -z "$NETWORK_TYPE" || -z "$NODE_TYPE" ]] && return 0
+    local key; key=$(_instance_key "$NETWORK_TYPE" "$NODE_TYPE")
+    [[ -z "$key" ]] && return 0
+    mkdir -p "$CONF_DIR"
+    [[ -f "$INSTANCES_CONF" ]] && sed -i "/^${key}_/d" "$INSTANCES_CONF"
+    cat >> "$INSTANCES_CONF" << __EOF__
+
+${key}_GRIN_DIR="$GRIN_DIR"
+${key}_BINARY="$GRIN_BINARY"
+${key}_TOML="$GRIN_CONFIG_FILE"
+${key}_CHAIN_DATA="$GRIN_DATA_DIR"
+__EOF__
+    chmod 600 "$INSTANCES_CONF"
+    log "Instance location updated in conf: $key"
+}
+
+# Fallback: load instance vars from conf when grin process is not running.
+# Two conditions required: (1) port matches expected network, (2) chain_data dir exists.
+load_instance_from_conf() {
+    local port="$1"
+    [[ ! -f "$INSTANCES_CONF" ]] && return 1
+
+    source "$INSTANCES_CONF" 2>/dev/null || return 1
+
+    local expected_network candidates=()
+    if [[ "$port" == "$GRIN_PORT_MAINNET" ]]; then
+        expected_network="mainnet"
+        candidates=(PRUNEMAIN FULLMAIN)
+    elif [[ "$port" == "$GRIN_PORT_TESTNET" ]]; then
+        expected_network="testnet"
+        candidates=(PRUNETEST)
+    else
+        return 1
+    fi
+
+    for key in "${candidates[@]}"; do
+        local chain_var="${key}_CHAIN_DATA"
+        local chain_dir="${!chain_var}"
+        [[ -z "$chain_dir" || ! -d "$chain_dir" ]] && continue
+
+        local grin_dir_var="${key}_GRIN_DIR"
+        local binary_var="${key}_BINARY"
+        local toml_var="${key}_TOML"
+        GRIN_DIR="${!grin_dir_var}"
+        GRIN_BINARY="${!binary_var}"
+        GRIN_CONFIG_FILE="${!toml_var}"
+        GRIN_DATA_DIR="$chain_dir"
+        NETWORK_TYPE="$expected_network"
+        if [[ "$key" == "FULLMAIN" ]]; then
+            NODE_TYPE="full";   ARCHIVE_NODE=true
+        else
+            NODE_TYPE="pruned"; ARCHIVE_NODE=false
+        fi
+        log "Conf fallback OK: port=$port key=$key network=$NETWORK_TYPE chain_data=$GRIN_DATA_DIR"
+        return 0
+    done
+
+    log "Conf fallback: no valid entry for port=$port (expected network=$expected_network)"
+    return 1
+}
+
 ################################################################################
 # Validation
 ################################################################################
@@ -1027,15 +1123,22 @@ restart_grin_node() {
 # Run the full nginx share pipeline for one port (one node instance)
 run_nginx_share_for_port() {
     local port=$1
+    check_timezone_utc
     reset_detection_vars
 
-    detect_active_port "$port" || return 0   # port not active — skip silently
-    detect_grin_binary
-    detect_config_file
-    detect_network_type
-    detect_node_type
-    detect_chain_data
-    setup_derived_variables
+    if detect_active_port "$port"; then
+        detect_grin_binary
+        detect_config_file
+        detect_network_type
+        detect_node_type
+        detect_chain_data
+        setup_derived_variables
+        save_instance_detection          # keep conf fresh after live run
+    elif ! load_instance_from_conf "$port"; then
+        return 0                         # no process, no conf entry — skip silently
+    else
+        setup_derived_variables          # conf loaded — still need OUTPUT_DIR etc.
+    fi
 
     # Skip if SYNC_CHOICE excludes this network
     [ "$SYNC_CHOICE" = "mainnet" ] && [ "$NETWORK_TYPE" = "testnet" ] && \

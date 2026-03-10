@@ -55,7 +55,7 @@ sudo ./grin-node-toolkit.sh
 > **This toolkit is under active development.**
 >
 > I strongly recommend running it on a **clean / empty VPS only.**
-> Some scripts perform system-level operations (installing packages, modifying firewall rules, writing to `/etc/nginx`, etc.) that **could affect or delete existing data** on your server.
+> Some scripts perform system-level operations (installing packages, changing UTC time, modifying firewall rules, writing to `/etc/nginx`, etc.) that **could affect or delete existing data** on your server.
 >
 > **Use at your own risk. Do not run on a production server with existing data you cannot afford to lose.**
 

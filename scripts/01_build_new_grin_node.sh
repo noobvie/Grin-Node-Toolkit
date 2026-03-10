@@ -132,6 +132,8 @@ SCRIPT_START_TIME=$(date +%s)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/../log"
 LOG_FILE="$LOG_DIR/01_build_new_grin_node_$(date +%Y%m%d_%H%M%S).log"
+CONF_DIR="$SCRIPT_DIR/../conf"
+INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"
 GRIN_GITHUB_API="https://api.github.com/repos/mimblewimble/grin/releases/latest"
 
 # --- Session state (reset per node) ---
@@ -1392,6 +1394,34 @@ show_summary() {
 }
 
 # =============================================================================
+# Save grin instance paths to shared conf file for use by other scripts (e.g. 03).
+# Only the block for the current key is replaced — other instances are untouched.
+# =============================================================================
+save_instance_location() {
+    local network="$1" mode="$2"
+    local key
+    if [[ "$mode" == "full" ]]; then
+        key="FULLMAIN"
+    elif [[ "$network" == "testnet" ]]; then
+        key="PRUNETEST"
+    else
+        key="PRUNEMAIN"
+    fi
+
+    mkdir -p "$CONF_DIR"
+    [[ -f "$INSTANCES_CONF" ]] && sed -i "/^${key}_/d" "$INSTANCES_CONF"
+    cat >> "$INSTANCES_CONF" << __EOF__
+
+${key}_GRIN_DIR="$GRIN_DIR"
+${key}_BINARY="$GRIN_DIR/grin"
+${key}_TOML="$GRIN_DIR/grin-server.toml"
+${key}_CHAIN_DATA="$GRIN_DIR/chain_data"
+__EOF__
+    chmod 600 "$INSTANCES_CONF"
+    log "Instance location saved: $key → $GRIN_DIR"
+}
+
+# =============================================================================
 # [ORCHESTRATOR] FULL SETUP FLOW FOR ONE NETWORK
 # -----------------------------------------------------------------------------
 # Calls steps 4–14 in sequence for a single network (mainnet or testnet).
@@ -1416,6 +1446,7 @@ setup_one_node() {
     fi
     start_grin_tmux
     show_summary        "$network" "$ARCHIVE_MODE"
+    save_instance_location "$network" "$ARCHIVE_MODE"
 
     # Reset per-node state
     GRIN_DIR=""

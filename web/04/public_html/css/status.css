@@ -79,11 +79,29 @@ html[data-theme="winxp"] header {
 html[data-theme="winxp"] .header-title,
 html[data-theme="winxp"] .header-title span,
 html[data-theme="winxp"] header .refresh-badge { color: #ffffff; }
-/* On blue page background, green elements become white for legibility */
-html[data-theme="winxp"] .section-dot,
-html[data-theme="winxp"] .api-pill.pill-ok .pill-dot { background: #ffffff !important; }
-html[data-theme="winxp"] .api-pill.pill-ok           { color: #ffffff; }
-html[data-theme="winxp"] .dev-steps code             { color: #000000; }
+
+/* ── XP: elements on blue page background → white ─────────────────────── */
+/* Section labels + dots sit directly on --bg (blue) */
+html[data-theme="winxp"] .section-label         { color: #ffffff; }
+html[data-theme="winxp"] .section-dot           { background: #ffffff !important; }
+/* API status bar pills */
+html[data-theme="winxp"] .api-pill              { color: #dddddd; }
+html[data-theme="winxp"] .api-pill code         { color: #ffffff; }
+html[data-theme="winxp"] .api-pill.pill-ok      { color: #ffffff; }
+html[data-theme="winxp"] .api-pill.pill-ok .pill-dot,
+html[data-theme="winxp"] .api-pill.pill-off .pill-dot { background: #ffffff !important; }
+/* curl-block uses --bg as its background → text must be light */
+html[data-theme="winxp"] .curl-block            { color: #f0f0f0; border-color: #7baee8; }
+html[data-theme="winxp"] .fetch-result.ok       { color: #aaffaa; border-color: #aaffaa; }
+html[data-theme="winxp"] .fetch-result.err      { color: #ffaaaa; border-color: #ffaaaa; }
+/* card-sub code tags (on beige surface) */
+html[data-theme="winxp"] .card-sub code         { color: #0044aa; }
+/* dev-steps list (on beige surface) */
+html[data-theme="winxp"] .dev-steps             { color: #333333; }
+html[data-theme="winxp"] .dev-steps code        { color: #000000; }
+/* endpoint links → yellow for visibility on blue bg */
+html[data-theme="winxp"] .endpoint-list a       { color: #ffdd44; }
+html[data-theme="winxp"] .endpoint-list .ep-desc { color: #c8dff8; }
 html[data-theme="winxp"] .network-badge {
   color: #ffffff;
   border-color: #7baee8;
@@ -120,9 +138,10 @@ header {
   flex-shrink: 0;
 }
 
-.header-left {
+.header-center {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
 }
 
@@ -140,7 +159,6 @@ header {
 .header-title {
   font-size: 16px;
   font-weight: 600;
-  text-align: center;
   white-space: nowrap;
 }
 

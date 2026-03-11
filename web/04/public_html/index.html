@@ -21,9 +21,10 @@
   <!-- ── Favicon (local SVG) ───────────────────────────────────────────────── -->
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
 
-  <!-- ── CSP: same-origin only ─────────────────────────────────────────────── -->
+  <!-- ── CSP ───────────────────────────────────────────────────────────────── -->
+  <!-- connect-src includes https: to allow the remote API checker to reach external nodes -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'">
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https:">
 
   <link rel="stylesheet" href="css/status.css">
 </head>
@@ -127,6 +128,19 @@
       <pre class="curl-block" id="fetch-tip">…</pre>
       <div class="card-sub">
         Works from any website — proves this API is publicly accessible cross-origin
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-label">Remote API checker — test another Grin node's public endpoint</div>
+      <div class="remote-row">
+        <input class="url-input" id="remote-url" type="url"
+               placeholder="https://grincoin.org" spellcheck="false">
+        <button class="test-btn" id="remote-btn">&#9654; Check</button>
+      </div>
+      <pre class="curl-block fetch-result" id="remote-result">Enter a remote Grin node origin above and click Check…</pre>
+      <div class="card-sub">
+        Sends <code>get_tip</code> to <code>{origin}/v2/foreign</code> directly from your browser
+        &nbsp;·&nbsp; If CORS is missing on the remote node, the browser will block it and show an error
       </div>
     </div>
   </div>

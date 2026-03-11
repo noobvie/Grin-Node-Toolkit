@@ -211,6 +211,46 @@ async function runSelfTest() {
   }
 }
 
+// ── Remote API checker ─────────────────────────────────────────────────────────
+async function runRemoteCheck() {
+  const input = document.getElementById('remote-url');
+  const btn   = document.getElementById('remote-btn');
+  const out   = document.getElementById('remote-result');
+  if (!out || !input) return;
+
+  const origin = input.value.trim().replace(/\/+$/, '');
+  if (!origin) { out.textContent = 'Enter a URL first.'; return; }
+
+  const url = origin + '/v2/foreign';
+  out.textContent = 'Checking ' + url + ' …';
+  out.className   = 'curl-block fetch-result';
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ jsonrpc: '2.0', method: 'get_tip', params: [], id: 1 }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    const json   = await res.json();
+    const result = json.result?.Ok ?? json.result;
+    out.textContent = JSON.stringify(result, null, 2);
+    out.classList.add('ok');
+  } catch (err) {
+    const isCors = err.message === 'Failed to fetch' || err.message.includes('NetworkError');
+    out.textContent = isCors
+      ? 'Blocked — likely CORS not enabled on the remote node.\n\n'
+        + 'Open F12 → Console for the exact browser error.\n'
+        + 'The remote node must respond with:\n'
+        + '  Access-Control-Allow-Origin: *'
+      : 'Error: ' + err.message;
+    out.classList.add('err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // ── Boot ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(currentTheme);
@@ -218,8 +258,12 @@ document.addEventListener('DOMContentLoaded', () => {
   applyCurlTip();
   applyFetchTip();
 
-  // Attach button listener here — inline onclick is blocked by CSP script-src 'self'
+  // Attach button listeners here — inline onclick is blocked by CSP script-src 'self'
   document.getElementById('test-btn')?.addEventListener('click', runSelfTest);
+  document.getElementById('remote-btn')?.addEventListener('click', runRemoteCheck);
+  document.getElementById('remote-url')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') runRemoteCheck();
+  });
   document.getElementById('theme-btn')?.addEventListener('click', () => {
     applyTheme(currentTheme === 'light' ? 'dark' : 'light');
   });

@@ -655,14 +655,14 @@ main() {
 
         case "$choice" in
             "") continue ;;  # bare Enter = refresh status display
-            1) enable_mainnet_node_api ;;
-            2) disable_mainnet_node_api ;;
-            3) enable_testnet_node_api ;;
-            4) disable_testnet_node_api ;;
-            5) enable_mainnet_status_page ;;
-            6) disable_mainnet_status_page ;;
-            7) enable_testnet_status_page ;;
-            8) disable_testnet_status_page ;;
+            1) enable_mainnet_node_api    || true ;;
+            2) disable_mainnet_node_api   || true ;;
+            3) enable_testnet_node_api    || true ;;
+            4) disable_testnet_node_api   || true ;;
+            5) enable_mainnet_status_page || true ;;
+            6) disable_mainnet_status_page || true ;;
+            7) enable_testnet_status_page || true ;;
+            8) disable_testnet_status_page || true ;;
             0) break ;;
             *) warn "Invalid option." ; sleep 1 ;;
         esac

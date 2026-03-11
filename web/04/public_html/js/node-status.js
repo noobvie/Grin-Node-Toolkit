@@ -161,6 +161,52 @@ function applyTheme(theme) {
   if (btn) btn.textContent = theme === 'light' ? '☀' : '🌙';
 }
 
+// ── REST endpoints ─────────────────────────────────────────────────────────────
+async function applyRestLinks() {
+  const origin = window.location.origin;
+  const endpoints = [
+    'stats.json       — height, supply, difficulty, hash, versions',
+    'supply.json      — circulating supply (height × 60)',
+    'height.json      — block height only',
+    'difficulty.json  — total network difficulty',
+    'emission.json    — static emission schedule',
+  ];
+  const el = document.getElementById('rest-endpoints');
+  if (el) {
+    el.textContent = endpoints.map(e => `${origin}/rest/${e}`).join('\n');
+  }
+
+  // Try to fetch /rest/stats.json to see if REST is deployed on this server.
+  const statusEl = document.getElementById('v-rest-status');
+  const subEl    = document.getElementById('v-rest-sub');
+  try {
+    const res = await fetch('/rest/stats.json');
+    if (res.ok) {
+      const data = await res.json();
+      if (statusEl) {
+        statusEl.textContent = 'Live';
+        statusEl.className   = 'card-value ok';
+      }
+      if (subEl) subEl.textContent =
+        `Height ${data.height} · Supply ${data.supply} GRIN · Updated ${data.updated_at}`;
+    } else {
+      if (statusEl) {
+        statusEl.textContent = 'Not deployed';
+        statusEl.className   = 'card-value dim';
+      }
+      if (subEl) subEl.textContent =
+        'Enable via script 04 → option 9 (mainnet) or 11 (testnet)';
+    }
+  } catch {
+    if (statusEl) {
+      statusEl.textContent = 'Not deployed';
+      statusEl.className   = 'card-value dim';
+    }
+    if (subEl) subEl.textContent =
+      'Enable via script 04 → option 9 (mainnet) or 11 (testnet)';
+  }
+}
+
 // ── Curl tip ───────────────────────────────────────────────────────────────────
 function applyCurlTip() {
   const el = document.getElementById('curl-tip');
@@ -260,6 +306,7 @@ async function runRemoteCheck() {
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(currentTheme);
   applyNetwork();
+  applyRestLinks();
   applyCurlTip();
   applyFetchTip();
 

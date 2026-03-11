@@ -1,9 +1,30 @@
 #!/bin/bash
 # =============================================================================
-# 04_grin_node_foreign_api.sh - Grin Node Services Manager
+# 04_grin_node_foreign_api.sh — Grin Node API Services Manager
 # =============================================================================
-# Manages Grin node-facing services:
-#   · Node Public API  (port 3413 / 13413) — nginx HTTPS reverse proxy, /v2/foreign only
+# Manages all public-facing services for a Grin node:
+#
+#   1 / 3)  nginx HTTPS reverse proxy  (/v2/foreign, JSON-RPC)
+#             · Exposes only the read-only foreign API — owner API stays private
+#             · CORS enabled so any website can query the endpoint from a browser
+#             · Rate-limited (10 r/s, burst 20) to protect the node
+#
+#   5 / 7)  Live status page  (https://domain/)
+#             · HTML dashboard showing height, difficulty, supply, hash, versions
+#             · Auto-refreshes every 60 s; dark/light theme; mobile-friendly
+#             · Served as static files — zero extra server load per visitor
+#             · Includes Developer section: CORS test, fetch snippets, remote checker
+#
+#   9 / 11) REST API  (https://domain/rest/)
+#             · Simple GET endpoints returning clean JSON — no JSON-RPC knowledge needed
+#             · Ideal for: CoinGecko, Google Sheets, no-code tools, website widgets
+#             · Static JSON files refreshed every 60 s by a cron job (www-data)
+#             · Endpoints: /rest/stats.json  /rest/supply.json  /rest/height.json
+#                          /rest/difficulty.json  /rest/emission.json
+#             · CORS enabled; Cache-Control: public, max-age=60
+#             · Requires: status page deployed (option 5 / 7) first
+#
+# Networks:  mainnet (port 3413)  ·  testnet (port 13413)
 # =============================================================================
 
 set -euo pipefail
@@ -31,6 +52,14 @@ LOG_FILE="$LOG_DIR/grin_node_services_$(date +%Y%m%d_%H%M%S).log"
 STATUS_PAGE_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/public_html"
 STATUS_PAGE_DEPLOY_MAINNET="/var/www/grin-node-api"
 STATUS_PAGE_DEPLOY_TESTNET="/var/www/grin-node-api-testnet"
+
+# REST API — static JSON files written by cron, served by nginx under /rest/
+REST_API_DIR_MAINNET="$STATUS_PAGE_DEPLOY_MAINNET/rest"
+REST_API_DIR_TESTNET="$STATUS_PAGE_DEPLOY_TESTNET/rest"
+REST_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/rest-collector.py"
+REST_COLLECTOR_DEST="/usr/local/lib/grin-node-toolkit/rest-collector.py"
+REST_CRON_MAINNET="/etc/cron.d/grin-node-api-rest"
+REST_CRON_TESTNET="/etc/cron.d/grin-node-api-rest-testnet"
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 mkdir -p "$LOG_DIR"
@@ -251,6 +280,57 @@ with open(conf_file, 'w') as fh:
 PYEOF
 }
 
+# Patch (or unpatch) an nginx site config to add /rest/ GET endpoints.
+# Inserts two location blocks immediately before the final "location / { return 403; }"
+# catch-all that is written by _nginx_patch_status (status page must exist first).
+#   action=enable  — insert REST location blocks
+#   action=disable — remove REST location blocks
+_nginx_patch_rest() {
+    local nginx_conf="$1" action="$2"
+    python3 - "$nginx_conf" "$action" << 'PYEOF'
+import sys
+conf_file, action = sys.argv[1], sys.argv[2]
+with open(conf_file) as fh:
+    txt = fh.read()
+
+# Anchor: the final catch-all written by _nginx_patch_status (status page block)
+CATCH_ALL = (
+    '    # Block everything else\n'
+    '    location / {\n'
+    '        return 403;\n'
+    '    }')
+
+# REST location blocks to insert before the catch-all
+REST_BLOCK = (
+    '    # ── REST API — static JSON files, refreshed every 60 s by cron ──────────\n'
+    '    #   GET /rest/stats.json       height, supply, difficulty, hash, versions\n'
+    '    #   GET /rest/supply.json      circulating supply (height × 60)\n'
+    '    #   GET /rest/height.json      block height\n'
+    '    #   GET /rest/difficulty.json  total network difficulty\n'
+    '    #   GET /rest/emission.json    emission schedule (static)\n'
+    '    location ~* ^/rest/[^/]+\\.json$ {\n'
+    '        add_header Content-Type         "application/json; charset=utf-8" always;\n'
+    '        add_header Access-Control-Allow-Origin  "*" always;\n'
+    '        add_header Access-Control-Allow-Methods "GET, OPTIONS" always;\n'
+    '        add_header Cache-Control        "public, max-age=60" always;\n'
+    '        try_files $uri =404;\n'
+    '    }\n'
+    '\n'
+    '    location /rest/ { return 403; }  # block directory listing\n'
+    '\n')
+
+if action == 'enable':
+    if REST_BLOCK not in txt and CATCH_ALL in txt:
+        txt = txt.replace(CATCH_ALL, REST_BLOCK + CATCH_ALL)
+elif action == 'disable':
+    if REST_BLOCK in txt:
+        txt = txt.replace(REST_BLOCK, '')
+
+with open(conf_file, 'w') as fh:
+    fh.write(txt)
+PYEOF
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # STATUS DISPLAY
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -276,9 +356,16 @@ show_all_status() {
     else
         echo -e "    status page: ${DIM}not deployed${RESET}"
     fi
+    if [[ -f "$REST_API_DIR_MAINNET/stats.json" ]]; then
+        local _mn_dom2; _mn_dom2=$(_nginx_domain "$NODE_API_NGINX_CONF_MAINNET")
+        echo -e "    REST API   : ${GREEN}ENABLED${RESET}  ${DIM}https://$_mn_dom2/rest/${RESET}"
+    else
+        echo -e "    REST API   : ${DIM}not deployed${RESET}"
+    fi
     echo ""
 
     # ── Testnet Node API (13413) ──
+
     echo -e "  ${BOLD}Node Public API — Testnet (port $NODE_API_PORT_TESTNET):${RESET}"
     if ss -tlnp 2>/dev/null | grep -q ":$NODE_API_PORT_TESTNET "; then
         echo -e "    Grin port  : ${GREEN}LISTENING${RESET}"
@@ -295,6 +382,12 @@ show_all_status() {
         echo -e "    status page: ${GREEN}ENABLED${RESET}  ${DIM}https://$_tn_dom/${RESET}"
     else
         echo -e "    status page: ${DIM}not deployed${RESET}"
+    fi
+    if [[ -f "$REST_API_DIR_TESTNET/stats.json" ]]; then
+        local _tn_dom2; _tn_dom2=$(_nginx_domain "$NODE_API_NGINX_CONF_TESTNET")
+        echo -e "    REST API   : ${GREEN}ENABLED${RESET}  ${DIM}https://$_tn_dom2/rest/${RESET}"
+    else
+        echo -e "    REST API   : ${DIM}not deployed${RESET}"
     fi
     echo ""
 
@@ -588,6 +681,169 @@ enable_testnet_status_page()  { _enable_status_page  testnet "$NODE_API_NGINX_CO
 disable_testnet_status_page() { _disable_status_page testnet "$NODE_API_NGINX_CONF_TESTNET"  "$STATUS_PAGE_DEPLOY_TESTNET"; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# REST API — static JSON files served under /rest/, refreshed by cron every 60 s
+# ═══════════════════════════════════════════════════════════════════════════════
+# How it works:
+#   1. The Python collector (rest-collector.py) is installed to /usr/local/lib/grin-node-toolkit/
+#   2. A cron job (/etc/cron.d/grin-node-api-rest*) calls it every 60 s as www-data.
+#   3. The collector queries the Grin foreign API locally (no auth) and writes five
+#      atomic JSON files into {deploy_dir}/rest/:
+#        stats.json        full snapshot: height, supply, difficulty, hash, versions
+#        supply.json       circulating supply (height × 60)
+#        height.json       block height only
+#        difficulty.json   total network difficulty only
+#        emission.json     static emission schedule (no node call needed)
+#   4. nginx serves these files under /rest/ with CORS * and Cache-Control 60 s.
+#
+# Requires: status page deployed (option 5 / 7) — the nginx config needs the
+#           static root already set by _nginx_patch_status before REST blocks can be added.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_enable_rest_api() {
+    local network="$1" port="$2" nginx_conf="$3" rest_dir="$4" cron_file="$5"
+
+    echo -e "\n${BOLD}${CYAN}── Enable REST API ($network) ──${RESET}\n"
+    echo -e "  Simple GET endpoints — no JSON-RPC knowledge required."
+    echo -e "  Ideal for: CoinGecko, Google Sheets, no-code tools, website widgets."
+    echo ""
+
+    # Prerequisite: status page (and thus nginx static root) must already be deployed.
+    # The _nginx_patch_rest function inserts REST location blocks before the catch-all
+    # written by _nginx_patch_status — so the status page config must exist first.
+    local deploy_dir
+    deploy_dir="$( [[ "$network" == "mainnet" ]] && echo "$STATUS_PAGE_DEPLOY_MAINNET" \
+                                                  || echo "$STATUS_PAGE_DEPLOY_TESTNET" )"
+    if [[ ! -f "$deploy_dir/index.html" ]]; then
+        local _opt; [[ "$network" == "mainnet" ]] && _opt=5 || _opt=7
+        warn "Status page not deployed for $network."
+        warn "Run option $_opt first to set up the nginx static root, then come back here."
+        return
+    fi
+
+    echo -e "  REST dir  : ${DIM}$rest_dir${RESET}"
+    echo -e "  Collector : ${DIM}$REST_COLLECTOR_DEST${RESET}"
+    echo -e "  Cron      : ${DIM}$cron_file${RESET}"
+    echo ""
+
+    # 1. Install the Python collector to a system lib path so cron can call it directly.
+    if [[ ! -f "$REST_COLLECTOR_SRC" ]]; then
+        error "Collector script not found: $REST_COLLECTOR_SRC"
+        error "Ensure web/04/rest-collector.py exists in the toolkit directory."
+        return
+    fi
+    mkdir -p "$(dirname "$REST_COLLECTOR_DEST")"
+    cp "$REST_COLLECTOR_SRC" "$REST_COLLECTOR_DEST"
+    chmod 755 "$REST_COLLECTOR_DEST"
+    info "Collector installed: $REST_COLLECTOR_DEST"
+
+    # 2. Create the REST directory. www-data must own it so the cron job can write files.
+    mkdir -p "$rest_dir"
+    chown -R www-data:www-data "$rest_dir"
+    chmod 755 "$rest_dir"
+    info "REST directory ready: $rest_dir"
+
+    # 3. Write the cron job — every minute, as www-data.
+    #    /etc/cron.d/ files are root-owned 644 and must declare SHELL/PATH.
+    cat > "$cron_file" << EOF
+# Grin Node Toolkit — REST API updater ($network)
+# Queries the Grin $network node foreign API (port $port) every 60 s.
+# Writes static JSON files to $rest_dir for nginx to serve.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+* * * * * www-data python3 $REST_COLLECTOR_DEST $port $rest_dir 2>/dev/null || true
+EOF
+    chmod 644 "$cron_file"
+    chown root:root "$cron_file"
+    info "Cron job installed: $cron_file"
+
+    # 4. Run initial collection now so JSON files exist before nginx reload.
+    #    If the node is not running yet, cron will fill them on the next minute.
+    info "Running initial collection..."
+    if sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" 2>/dev/null; then
+        success "Initial REST data collected."
+    else
+        warn "Initial collection failed (node may not be running yet)."
+        warn "Cron will retry automatically every minute."
+    fi
+
+    # 5. Patch nginx to serve /rest/*.json (location block before the catch-all).
+    _nginx_patch_rest "$nginx_conf" enable
+
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+        local domain; domain=$(_nginx_domain "$nginx_conf")
+        success "REST API enabled for $network!"
+        echo ""
+        info "Endpoints (GET, CORS enabled, refreshed every 60 s):"
+        echo ""
+        echo "    https://$domain/rest/stats.json"
+        echo "    https://$domain/rest/supply.json"
+        echo "    https://$domain/rest/height.json"
+        echo "    https://$domain/rest/difficulty.json"
+        echo "    https://$domain/rest/emission.json"
+        echo ""
+        info "Quick test:"
+        echo ""
+        echo "    curl -s https://$domain/rest/supply.json"
+        echo ""
+        info "Cron job : $cron_file"
+        info "Log file : $LOG_FILE"
+        log "REST API enabled: network=$network domain=$domain port=$port rest_dir=$rest_dir cron=$cron_file"
+    else
+        error "nginx config test failed — reverting REST changes."
+        _nginx_patch_rest "$nginx_conf" disable
+        rm -f "$cron_file"
+        nginx -t 2>/dev/null && systemctl reload nginx || true
+        log "REST API enable FAILED (nginx -t): network=$network"
+    fi
+}
+
+_disable_rest_api() {
+    local network="$1" nginx_conf="$2" rest_dir="$3" cron_file="$4"
+
+    echo -e "\n${BOLD}${CYAN}── Disable REST API ($network) ──${RESET}\n"
+
+    # Remove cron job — stops the 60 s update cycle.
+    if [[ -f "$cron_file" ]]; then
+        rm -f "$cron_file"
+        info "Cron job removed: $cron_file"
+    else
+        info "No cron job found at $cron_file (already removed)."
+    fi
+
+    # Remove REST data directory and all JSON files under it.
+    if [[ -d "$rest_dir" ]]; then
+        rm -rf "$rest_dir"
+        info "REST directory removed: $rest_dir"
+    else
+        info "No REST directory found at $rest_dir (already removed)."
+    fi
+
+    # Remove /rest/ nginx location blocks (only if the nginx config still exists).
+    if [[ -f "$nginx_conf" ]]; then
+        _nginx_patch_rest "$nginx_conf" disable
+        if nginx -t 2>/dev/null; then
+            systemctl reload nginx
+        else
+            warn "nginx config test failed after REST removal. Check $nginx_conf manually."
+        fi
+    fi
+
+    success "REST API disabled for $network."
+    log "REST API disabled: network=$network"
+}
+
+enable_mainnet_rest_api()  { _enable_rest_api  mainnet "$NODE_API_PORT_MAINNET" \
+                                "$NODE_API_NGINX_CONF_MAINNET" "$REST_API_DIR_MAINNET" "$REST_CRON_MAINNET"; }
+disable_mainnet_rest_api() { _disable_rest_api mainnet \
+                                "$NODE_API_NGINX_CONF_MAINNET" "$REST_API_DIR_MAINNET" "$REST_CRON_MAINNET"; }
+enable_testnet_rest_api()  { _enable_rest_api  testnet "$NODE_API_PORT_TESTNET" \
+                                "$NODE_API_NGINX_CONF_TESTNET" "$REST_API_DIR_TESTNET" "$REST_CRON_TESTNET"; }
+disable_testnet_rest_api() { _disable_rest_api testnet \
+                                "$NODE_API_NGINX_CONF_TESTNET" "$REST_API_DIR_TESTNET" "$REST_CRON_TESTNET"; }
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # MENU
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -598,9 +854,9 @@ show_menu() {
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     show_all_status
 
-    # ── Build dynamic option labels based on current nginx state ──────────────
+    # ── Build dynamic option labels based on current state ────────────────────
     local mn_domain="" tn_domain=""
-    local mn_label_1 tn_label_3 mn_label_5 tn_label_7
+    local mn_label_1 tn_label_3 mn_label_5 tn_label_7 mn_label_9 tn_label_11
 
     if [[ -f "/etc/nginx/sites-enabled/grin-node-api" ]]; then
         mn_domain=$(_nginx_domain "$NODE_API_NGINX_CONF_MAINNET")
@@ -628,6 +884,23 @@ show_menu() {
         tn_label_7="${DIM}(testnet — deploy after option 3)${RESET}"
     fi
 
+    # REST option labels — show live URL if enabled, or prerequisite hint if not
+    if [[ -f "$REST_API_DIR_MAINNET/stats.json" && -n "$mn_domain" ]]; then
+        mn_label_9="${GREEN}[ENABLED]${RESET}    ${BOLD}https://$mn_domain/rest/${RESET}  ${DIM}(re-run to reinstall collector)${RESET}"
+    elif [[ -f "$STATUS_PAGE_DEPLOY_MAINNET/index.html" ]]; then
+        mn_label_9="${DIM}(mainnet — requires option 5 first: done ✓ — ready to enable)${RESET}"
+    else
+        mn_label_9="${DIM}(mainnet — requires option 5 first)${RESET}"
+    fi
+
+    if [[ -f "$REST_API_DIR_TESTNET/stats.json" && -n "$tn_domain" ]]; then
+        tn_label_11="${GREEN}[ENABLED]${RESET}    ${BOLD}https://$tn_domain/rest/${RESET}  ${DIM}(re-run to reinstall collector)${RESET}"
+    elif [[ -f "$STATUS_PAGE_DEPLOY_TESTNET/index.html" ]]; then
+        tn_label_11="${DIM}(testnet — requires option 7 first: done ✓ — ready to enable)${RESET}"
+    else
+        tn_label_11="${DIM}(testnet — requires option 7 first)${RESET}"
+    fi
+
     echo -e "${DIM}  ─── Node Public API — Mainnet (port $NODE_API_PORT_MAINNET) ─────────────${RESET}"
     echo -e "  ${GREEN}1${RESET}) Enable via nginx     $mn_label_1"
     echo -e "  ${RED}2${RESET}) Remove nginx proxy"
@@ -642,10 +915,16 @@ show_menu() {
     echo -e "  ${GREEN}7${RESET}) Deploy / Update page  $tn_label_7"
     echo -e "  ${RED}8${RESET}) Remove status page    ${DIM}(testnet)${RESET}"
     echo ""
+    echo -e "${DIM}  ─── REST API  /rest/*.json  (requires status page above) ────────${RESET}"
+    echo -e "  ${GREEN}9${RESET}) Enable REST API       $mn_label_9"
+    echo -e "  ${RED}10${RESET}) Disable REST API      ${DIM}(mainnet — removes cron + JSON files)${RESET}"
+    echo -e "  ${GREEN}11${RESET}) Enable REST API      $tn_label_11"
+    echo -e "  ${RED}12${RESET}) Disable REST API      ${DIM}(testnet — removes cron + JSON files)${RESET}"
+    echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh status${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [0-8]: ${RESET}"
+    echo -ne "${BOLD}Select [0-12]: ${RESET}"
 }
 
 main() {
@@ -655,16 +934,20 @@ main() {
 
         case "$choice" in
             "") continue ;;  # bare Enter = refresh status display
-            1) enable_mainnet_node_api    || true ;;
-            2) disable_mainnet_node_api   || true ;;
-            3) enable_testnet_node_api    || true ;;
-            4) disable_testnet_node_api   || true ;;
-            5) enable_mainnet_status_page || true ;;
-            6) disable_mainnet_status_page || true ;;
-            7) enable_testnet_status_page || true ;;
-            8) disable_testnet_status_page || true ;;
-            0) break ;;
-            *) warn "Invalid option." ; sleep 1 ;;
+            1)  enable_mainnet_node_api    || true ;;
+            2)  disable_mainnet_node_api   || true ;;
+            3)  enable_testnet_node_api    || true ;;
+            4)  disable_testnet_node_api   || true ;;
+            5)  enable_mainnet_status_page || true ;;
+            6)  disable_mainnet_status_page || true ;;
+            7)  enable_testnet_status_page || true ;;
+            8)  disable_testnet_status_page || true ;;
+            9)  enable_mainnet_rest_api    || true ;;
+            10) disable_mainnet_rest_api   || true ;;
+            11) enable_testnet_rest_api    || true ;;
+            12) disable_testnet_rest_api   || true ;;
+            0)  break ;;
+            *)  warn "Invalid option." ; sleep 1 ;;
         esac
 
         echo ""

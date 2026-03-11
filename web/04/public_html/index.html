@@ -95,6 +95,46 @@
     </div>
   </div>
 
+  <!-- ── REST API section ───────────────────────────────────────────────── -->
+  <div class="section-label">
+    <span class="section-dot" style="background:var(--green)"></span>
+    REST Endpoints
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">REST API status — simple GET endpoints updated every 60 s</div>
+      <div class="card-value dim" id="v-rest-status">Checking…</div>
+      <div class="card-sub" id="v-rest-sub">
+        Enable via script 04 → option 9 (mainnet) or 11 (testnet)
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-label">Available endpoints — copy any URL to fetch from anywhere</div>
+      <pre class="curl-block" id="rest-endpoints">…</pre>
+      <div class="card-sub">
+        GET request &nbsp;·&nbsp; CORS enabled (<code>Access-Control-Allow-Origin: *</code>)
+        &nbsp;·&nbsp; <code>Cache-Control: public, max-age=60</code>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-label">Which API style should I use?</div>
+      <table class="api-compare">
+        <thead>
+          <tr><th></th><th>JSON-RPC <code>/v2/foreign</code></th><th>REST <code>/rest/*.json</code></th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Request method</td><td>POST</td><td>GET</td></tr>
+          <tr><td>Auth required</td><td>No (foreign API)</td><td>No</td></tr>
+          <tr><td>Response format</td><td><code>{"result":{"Ok":{…}}}</code></td><td><code>{"height":…}</code></td></tr>
+          <tr><td>Live data</td><td>Always fresh</td><td>Up to 60 s old</td></tr>
+          <tr><td>Best for</td><td>Wallets, explorers, tx push, full chain queries</td><td>CoinGecko, widgets, spreadsheets, no-code tools</td></tr>
+          <tr><td>Browser fetch</td><td>Needs POST + JSON body</td><td>One-line <code>fetch(url)</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- ── Developer section ──────────────────────────────────────────────── -->
   <div class="section-label">
     <span class="section-dot" style="background:var(--muted)"></span>

@@ -297,6 +297,49 @@ main {
 .url-input::placeholder { color: var(--muted); }
 .url-input:focus        { border-color: var(--grin); }
 
+/* ── API comparison table ────────────────────────────────────────────────── */
+.api-compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 10px;
+}
+
+.api-compare th,
+.api-compare td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.api-compare thead th {
+  background: var(--bg);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.api-compare thead th:first-child { width: 22%; }
+.api-compare thead th:nth-child(2),
+.api-compare thead th:nth-child(3) { width: 39%; }
+
+.api-compare tbody tr:nth-child(odd) { background: var(--bg); }
+
+.api-compare td:first-child {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.api-compare code {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: var(--green);
+}
+
 /* loading shimmer */
 .loading .card-value { animation: blink 1.2s step-start infinite; }
 @keyframes blink { 50% { opacity: 0.35; } }

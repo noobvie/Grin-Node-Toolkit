@@ -874,9 +874,15 @@ EOF
         echo ""
         echo "    curl -s https://$domain/rest/supply.json"
         echo ""
-        info "Cron job : $cron_file"
+        info "Cron jobs:"
+        info "  REST collector  (www-data) : $cron_file"
+        local node_cron_file
+        [[ "$network" == "mainnet" ]] && node_cron_file="$NODE_CRON_MAINNET" \
+                                      || node_cron_file="$NODE_CRON_TESTNET"
+        [[ -f "$node_cron_file" ]] && \
+        info "  Node collector  (root)     : $node_cron_file"
         info "Log file : $LOG_FILE"
-        log "REST API enabled: network=$network domain=$domain port=$port rest_dir=$rest_dir cron=$cron_file"
+        log "REST API enabled: network=$network domain=$domain port=$port rest_dir=$rest_dir cron=$cron_file node_cron=$node_cron_file"
     else
         error "nginx config test failed — reverting REST changes."
         _nginx_patch_rest "$nginx_conf" disable

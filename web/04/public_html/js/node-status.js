@@ -174,6 +174,21 @@ function applyCurlTip() {
     `     -D -`;
 }
 
+// ── Fetch tip (browser console example) ────────────────────────────────────────
+function applyFetchTip() {
+  const el = document.getElementById('fetch-tip');
+  if (!el) return;
+  const origin = window.location.origin;
+  el.textContent =
+    `fetch('${origin}/v2/foreign', {\n` +
+    `  method: 'POST',\n` +
+    `  headers: { 'Content-Type': 'application/json' },\n` +
+    `  body: JSON.stringify({\n` +
+    `    jsonrpc: '2.0', method: 'get_tip', params: [], id: 1\n` +
+    `  })\n` +
+    `}).then(r => r.json()).then(console.log)`;
+}
+
 // ── Self test ──────────────────────────────────────────────────────────────────
 async function runSelfTest() {
   const btn = document.getElementById('test-btn');
@@ -201,6 +216,7 @@ document.addEventListener('DOMContentLoaded', () => {
   applyTheme(currentTheme);
   applyNetwork();
   applyCurlTip();
+  applyFetchTip();
 
   // Attach button listener here — inline onclick is blocked by CSP script-src 'self'
   document.getElementById('test-btn')?.addEventListener('click', runSelfTest);

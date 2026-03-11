@@ -27,6 +27,8 @@ Exit codes:
 import sys
 import json
 import os
+import pwd
+import grp
 import tempfile
 import datetime
 import urllib.request
@@ -87,6 +89,20 @@ def dir_size_mb(path):
         if result.returncode == 0:
             size_bytes = int(result.stdout.split()[0])
             return round(size_bytes / (1024 * 1024), 1)
+        print(f"[WARN] du failed (rc={result.returncode}): {result.stderr.strip()}", file=sys.stderr)
+    except Exception as exc:
+        print(f"[WARN] dir_size_mb({path!r}): {exc}", file=sys.stderr)
+    return None
+
+
+def read_toml_value(toml_path, key):
+    """Return the string value of a bare `key = value` line in the TOML, or None."""
+    try:
+        with open(toml_path) as fh:
+            for line in fh:
+                stripped = line.strip()
+                if stripped.startswith(key) and "=" in stripped:
+                    return stripped.split("=", 1)[1].strip().strip('"').strip("'")
     except Exception:
         pass
     return None
@@ -94,29 +110,37 @@ def dir_size_mb(path):
 
 def read_archive_mode(toml_path):
     """Parse archive_mode from grin-server.toml. Returns True/False/None."""
-    try:
-        with open(toml_path) as fh:
-            for line in fh:
-                stripped = line.strip()
-                if stripped.startswith("archive_mode"):
-                    val = stripped.split("=", 1)[1].strip().lower()
-                    return val == "true"
-    except Exception:
-        pass
-    return None
+    val = read_toml_value(toml_path, "archive_mode")
+    return (val.lower() == "true") if val is not None else None
+
+
+def read_db_root(toml_path):
+    """Parse db_root from grin-server.toml. Returns the path string or None."""
+    return read_toml_value(toml_path, "db_root")
 
 
 # ── Atomic file writer ────────────────────────────────────────────────────────
 
+def _www_data_ids():
+    """Return (uid, gid) for www-data, or (-1, -1) if not found (leave unchanged)."""
+    try:
+        return pwd.getpwnam("www-data").pw_uid, grp.getgrnam("www-data").gr_gid
+    except KeyError:
+        return -1, -1
+
+
 def write_atomic(path, obj):
-    """Write a JSON object to path atomically (tmp file → os.replace)."""
+    """Write a JSON object to path atomically (tmp file → os.replace).
+    Output file is owned by www-data:www-data 0644 so nginx can serve it."""
     directory = os.path.dirname(path)
     fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:
             json.dump(obj, fh, indent=2)
             fh.write("\n")
-        os.chmod(tmp_path, 0o644)   # ensure nginx (www-data) can read root-owned files
+        uid, gid = _www_data_ids()
+        os.chown(tmp_path, uid, gid)  # transfer ownership to www-data before rename
+        os.chmod(tmp_path, 0o644)
         os.replace(tmp_path, path)
     except Exception:
         try:
@@ -153,14 +177,19 @@ def main():
     except Exception:
         pass   # node not running or auth failed — field simply omitted
 
+    # ── Parse grin-server.toml for db_root and archive_mode ──────────────────
+    toml_path = os.path.join(grin_data_dir, "grin-server.toml")
+
+    # db_root is the authoritative chain data path (set by Grin itself in the TOML)
+    db_root   = read_db_root(toml_path) or os.path.join(grin_data_dir, "chain_data")
+    print(f"[INFO] chain data path: {db_root}", file=sys.stderr)
+
     # ── Chain data size ───────────────────────────────────────────────────────
-    chain_dir = os.path.join(grin_data_dir, "chain_data")
-    size_mb   = dir_size_mb(chain_dir if os.path.isdir(chain_dir) else grin_data_dir)
+    size_mb = dir_size_mb(db_root)
     if size_mb is not None:
         node_data["chain_size_mb"] = size_mb
 
     # ── Archive mode ──────────────────────────────────────────────────────────
-    toml_path    = os.path.join(grin_data_dir, "grin-server.toml")
     archive_mode = read_archive_mode(toml_path)
     if archive_mode is not None:
         node_data["archive_mode"] = archive_mode

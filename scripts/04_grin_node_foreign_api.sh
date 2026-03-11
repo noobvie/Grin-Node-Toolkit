@@ -71,10 +71,9 @@ NODE_COLLECTOR_DEST="/usr/local/lib/grin-node-toolkit/node-collector.py"
 NODE_CRON_MAINNET="/etc/cron.d/grin-node-api-node"
 NODE_CRON_TESTNET="/etc/cron.d/grin-node-api-node-testnet"
 
-# Grin node data directories — used by node-collector.py.
-# These are standard Grin defaults; adjust if your node user/path differs.
-GRIN_DATA_DIR_MAINNET="/home/grin/.grin/main"
-GRIN_DATA_DIR_TESTNET="/home/grin/.grin/floo"
+# Grin instance conf — written by script 01, read here to find actual data dirs.
+CONF_DIR="$SCRIPT_DIR/../conf"
+INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 mkdir -p "$LOG_DIR"
@@ -726,6 +725,26 @@ disable_testnet_status_page() { _disable_status_page testnet "$NODE_API_NGINX_CO
 #           static root already set by _nginx_patch_status before REST blocks can be added.
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Resolve the Grin node data directory from the instance conf written by script 01.
+# Returns GRIN_DIR (e.g. /grinprunemain) which contains .api_secret, grin-server.toml,
+# and chain_data/.  Falls back to /home/grin/.grin/{main,floo} if conf not present.
+_lookup_grin_dir() {
+    local network="$1"
+    if [[ -f "$INSTANCES_CONF" ]]; then
+        local candidates=()
+        [[ "$network" == "mainnet" ]] && candidates=(PRUNEMAIN FULLMAIN) || candidates=(PRUNETEST)
+        # shellcheck source=/dev/null
+        source "$INSTANCES_CONF" 2>/dev/null
+        for key in "${candidates[@]}"; do
+            local varname="${key}_GRIN_DIR"
+            local grin_dir="${!varname}"
+            [[ -n "$grin_dir" && -d "$grin_dir" ]] && echo "$grin_dir" && return 0
+        done
+    fi
+    # Fallback — standard Grin defaults
+    [[ "$network" == "mainnet" ]] && echo "/home/grin/.grin/main" || echo "/home/grin/.grin/floo"
+}
+
 _enable_rest_api() {
     local network="$1" port="$2" nginx_conf="$3" rest_dir="$4" cron_file="$5" grin_data_dir="$6"
 
@@ -908,12 +927,12 @@ _disable_rest_api() {
 
 enable_mainnet_rest_api()  { _enable_rest_api  mainnet "$NODE_API_PORT_MAINNET" \
                                 "$NODE_API_NGINX_CONF_MAINNET" "$REST_API_DIR_MAINNET" "$REST_CRON_MAINNET" \
-                                "$GRIN_DATA_DIR_MAINNET"; }
+                                "$(_lookup_grin_dir mainnet)"; }
 disable_mainnet_rest_api() { _disable_rest_api mainnet \
                                 "$NODE_API_NGINX_CONF_MAINNET" "$REST_API_DIR_MAINNET" "$REST_CRON_MAINNET"; }
 enable_testnet_rest_api()  { _enable_rest_api  testnet "$NODE_API_PORT_TESTNET" \
                                 "$NODE_API_NGINX_CONF_TESTNET" "$REST_API_DIR_TESTNET" "$REST_CRON_TESTNET" \
-                                "$GRIN_DATA_DIR_TESTNET"; }
+                                "$(_lookup_grin_dir testnet)"; }
 disable_testnet_rest_api() { _disable_rest_api testnet \
                                 "$NODE_API_NGINX_CONF_TESTNET" "$REST_API_DIR_TESTNET" "$REST_CRON_TESTNET"; }
 

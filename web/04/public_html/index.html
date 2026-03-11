@@ -115,7 +115,6 @@
         <div class="card">
           <div class="card-label">Response Time — last get_tip round-trip</div>
           <div class="card-value dim" id="v-latency">…</div>
-          <div class="card-sub">measured in your browser each refresh cycle</div>
         </div>
         <div class="card">
           <div class="card-label">Connected Peers</div>
@@ -124,7 +123,10 @@
         </div>
         <div class="card">
           <div class="card-label">Chain Data Size</div>
-          <div class="card-value dim" id="v-chain-size">—</div>
+          <div class="card-value-row">
+            <div class="card-value dim" id="v-chain-size">—</div>
+            <span class="archive-badge" id="v-archive-badge" hidden></span>
+          </div>
           <div class="card-sub" id="v-chain-sub">requires REST collector (script 04 → option 9/11)</div>
         </div>
       </div>

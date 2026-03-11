@@ -196,11 +196,15 @@ async function applyNodeJson() {
         ? (mb / 1024).toFixed(1) + ' GB'
         : mb.toFixed(0) + ' MB';
       setVal('v-chain-size', sizeStr);
-      const archiveStr = data.archive_mode == null
-        ? 'updated ' + (data.updated_at ?? '')
-        : 'Archive mode: ' + (data.archive_mode ? 'enabled' : 'disabled')
-          + ' · updated ' + (data.updated_at ?? '');
-      setText('v-chain-sub', archiveStr);
+      setText('v-chain-sub', 'updated ' + (data.updated_at ?? ''));
+
+      // Archive / Pruned badge
+      const badge = document.getElementById('v-archive-badge');
+      if (badge && data.archive_mode != null) {
+        badge.textContent = data.archive_mode ? 'Archive' : 'Pruned';
+        badge.className   = 'archive-badge ' + (data.archive_mode ? 'full' : 'pruned');
+        badge.hidden      = false;
+      }
     }
   } catch {
     // node.json not available yet — cards keep their default "—"

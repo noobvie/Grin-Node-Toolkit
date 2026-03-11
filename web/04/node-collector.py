@@ -2,25 +2,20 @@
 """
 node-collector.py — Grin Node Toolkit · Node stats updater
 ===========================================================
-Runs as the Grin node OS user (not www-data) to access privileged data:
+Runs as root to access the Grin owner API:
   · Owner API via .api_secret  → connected peer count
-  · Filesystem (du)            → chain data size in MB/GB
-  · grin-server.toml           → archive_mode true/false
 
 Installed by script 04 (option 9 / 11) to:
     /usr/local/lib/grin-node-toolkit/node-collector.py
 
-Called every 60 s by a separate cron job running as the grin node user:
-    * * * * * grin python3 <this file> <port> <rest_dir> <grin_data_dir>
+Called every 60 s by a cron job running as root:
+    * * * * * root python3 <this file> <port> <rest_dir> <grin_data_dir>
 
 Output file (written atomically via tmp + rename):
-    {rest_dir}/node.json  — peers, chain_size_mb, archive_mode, updated_at
-
-All three fields are optional — omitted from the JSON if unavailable
-(node not running, wrong path, permission error, etc.).
+    {rest_dir}/node.json  — peers, updated_at
 
 Exit codes:
-    0  success (node.json written, even if some fields are missing)
+    0  success (node.json written, even if peers field is missing)
     1  fatal error (rest_dir not writable, etc.)
 """
 
@@ -33,7 +28,6 @@ import tempfile
 import datetime
 import urllib.request
 import base64
-import subprocess
 
 
 # ── Owner API helper ──────────────────────────────────────────────────────────
@@ -77,44 +71,6 @@ def owner_rpc_call(port, method, secret_path):
     raise RuntimeError(f"Unexpected response: {data}")
 
 
-# ── Filesystem helpers ────────────────────────────────────────────────────────
-
-def dir_size_mb(path):
-    """Return total size of a directory tree in MB using du, or None on error."""
-    try:
-        result = subprocess.run(
-            ["du", "-sb", path],
-            capture_output=True, text=True, timeout=60,
-        )
-        if result.returncode == 0:
-            size_bytes = int(result.stdout.split()[0])
-            return round(size_bytes / (1024 * 1024), 1)
-        print(f"[WARN] du failed (rc={result.returncode}): {result.stderr.strip()}", file=sys.stderr)
-    except Exception as exc:
-        print(f"[WARN] dir_size_mb({path!r}): {exc}", file=sys.stderr)
-    return None
-
-
-def read_toml_value(toml_path, key):
-    """Return the string value of a bare `key = value` line in the TOML, or None."""
-    try:
-        with open(toml_path) as fh:
-            for line in fh:
-                stripped = line.strip()
-                if stripped.startswith(key) and "=" in stripped:
-                    return stripped.split("=", 1)[1].strip().strip('"').strip("'")
-    except Exception:
-        pass
-    return None
-
-
-def read_archive_mode(toml_path):
-    """Parse archive_mode from grin-server.toml. Returns True/False/None."""
-    val = read_toml_value(toml_path, "archive_mode")
-    return (val.lower() == "true") if val is not None else None
-
-
-
 # ── Atomic file writer ────────────────────────────────────────────────────────
 
 def _www_data_ids():
@@ -149,17 +105,16 @@ def write_atomic(path, obj):
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    if len(sys.argv) != 5:
+    if len(sys.argv) != 4:
         print(
-            f"Usage: {sys.argv[0]} <foreign_port> <rest_dir> <grin_data_dir> <chain_data_dir>",
+            f"Usage: {sys.argv[0]} <foreign_port> <rest_dir> <grin_data_dir>",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    port           = int(sys.argv[1])
-    rest_dir       = sys.argv[2]
-    grin_data_dir  = sys.argv[3]
-    chain_data_dir = sys.argv[4]   # resolved by the bash script via _lookup_chain_data()
+    port          = int(sys.argv[1])
+    rest_dir      = sys.argv[2]
+    grin_data_dir = sys.argv[3]
 
     updated_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     node_data  = {"updated_at": updated_at}
@@ -173,19 +128,6 @@ def main():
             node_data["peers"] = int(peers)
     except Exception:
         pass   # node not running or auth failed — field simply omitted
-
-    # ── Chain data size ───────────────────────────────────────────────────────
-    # chain_data_dir is resolved by the bash installer (conf → TOML → home dir probe)
-    print(f"[INFO] chain data path: {chain_data_dir}", file=sys.stderr)
-    size_mb = dir_size_mb(chain_data_dir)
-    if size_mb is not None:
-        node_data["chain_size_mb"] = size_mb
-
-    # ── Archive mode — read from grin-server.toml ─────────────────────────────
-    toml_path    = os.path.join(grin_data_dir, "grin-server.toml")
-    archive_mode = read_archive_mode(toml_path)
-    if archive_mode is not None:
-        node_data["archive_mode"] = archive_mode
 
     # ── Write node.json ───────────────────────────────────────────────────────
     os.makedirs(rest_dir, exist_ok=True)

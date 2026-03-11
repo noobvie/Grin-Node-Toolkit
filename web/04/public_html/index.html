@@ -31,11 +31,11 @@
 <body>
 
 <header>
-  <div class="logo">
+  <div class="header-left">
     <div class="logo-dot"></div>
-    <h1><span>Grin</span> API Status</h1>
     <span class="network-badge" id="network-badge">—</span>
   </div>
+  <h1 class="header-title"><span>Grin</span> API Status</h1>
   <div class="header-right">
     <span class="refresh-badge" id="countdown">—</span>
     <select id="theme-select" class="theme-select" title="Choose theme">
@@ -119,15 +119,13 @@
         <div class="card">
           <div class="card-label">Connected Peers</div>
           <div class="card-value dim" id="v-peers">—</div>
-          <div class="card-sub" id="v-peers-sub">requires REST collector (script 04 → option 9/11)</div>
         </div>
         <div class="card">
           <div class="card-label">Chain Data Size</div>
-          <div class="card-value-row">
-            <div class="card-value dim" id="v-chain-size">—</div>
-            <span class="archive-badge" id="v-archive-badge" hidden></span>
+          <div class="card-value dim coming-soon">
+            This one's tough for me to crack ^^ — help welcome!
+            <img src="favicon.svg" alt="Grin" class="grin-inline-logo">
           </div>
-          <div class="card-sub" id="v-chain-sub">requires REST collector (script 04 → option 9/11)</div>
         </div>
       </div>
     </div>
@@ -149,8 +147,8 @@
       </div>
     </div>
     <div class="card">
-      <div class="card-label">Available endpoints — copy any URL to fetch from anywhere</div>
-      <pre class="curl-block" id="rest-endpoints">…</pre>
+      <div class="card-label">Available endpoints — click to open, or copy URL to fetch from anywhere</div>
+      <div class="endpoint-list" id="rest-endpoints">…</div>
       <div class="card-sub">
         GET request &nbsp;·&nbsp; CORS enabled (<code>Access-Control-Allow-Origin: *</code>)
         &nbsp;·&nbsp; <code>Cache-Control: public, max-age=60</code>

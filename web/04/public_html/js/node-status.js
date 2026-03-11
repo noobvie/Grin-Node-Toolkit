@@ -185,29 +185,9 @@ async function applyNodeJson() {
     const res = await fetch('/rest/node.json');
     if (!res.ok) return;
     const data = await res.json();
-
-    if (data.peers != null) {
-      setVal('v-peers', String(data.peers));
-      setText('v-peers-sub', 'connected peers · updated ' + (data.updated_at ?? ''));
-    }
-    if (data.chain_size_mb != null) {
-      const mb = Number(data.chain_size_mb);
-      const sizeStr = mb >= 1024
-        ? (mb / 1024).toFixed(1) + ' GB'
-        : mb.toFixed(0) + ' MB';
-      setVal('v-chain-size', sizeStr);
-      setText('v-chain-sub', 'updated ' + (data.updated_at ?? ''));
-
-      // Archive / Pruned badge
-      const badge = document.getElementById('v-archive-badge');
-      if (badge && data.archive_mode != null) {
-        badge.textContent = data.archive_mode ? 'Archive' : 'Pruned';
-        badge.className   = 'archive-badge ' + (data.archive_mode ? 'full' : 'pruned');
-        badge.hidden      = false;
-      }
-    }
+    if (data.peers != null) setVal('v-peers', String(data.peers));
   } catch {
-    // node.json not available yet — cards keep their default "—"
+    // node.json not available yet — card keeps its default "—"
   }
 }
 
@@ -215,16 +195,31 @@ async function applyNodeJson() {
 async function applyRestLinks() {
   const origin = window.location.origin;
   const endpoints = [
-    'stats.json       — height, supply, difficulty, hash, versions',
-    'supply.json      — circulating supply (height × 60)',
-    'height.json      — block height only',
-    'difficulty.json  — total network difficulty',
-    'emission.json    — static emission schedule',
-    'node.json        — peers, chain_size_mb, archive_mode  (node-collector)',
+    ['stats.json',      'height, supply, difficulty, hash, versions'],
+    ['supply.json',     'circulating supply (height × 60)'],
+    ['height.json',     'block height only'],
+    ['difficulty.json', 'total network difficulty'],
+    ['emission.json',   'static emission schedule'],
+    ['node.json',       'connected peers  (node-collector)'],
   ];
   const el = document.getElementById('rest-endpoints');
   if (el) {
-    el.textContent = endpoints.map(e => `${origin}/rest/${e}`).join('\n');
+    el.innerHTML = '';
+    endpoints.forEach(([file, desc]) => {
+      const url  = `${origin}/rest/${file}`;
+      const row  = document.createElement('div');
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.target   = '_blank';
+      a.rel      = 'noopener';
+      a.textContent = url;
+      const span = document.createElement('span');
+      span.className   = 'ep-desc';
+      span.textContent = `  — ${desc}`;
+      row.appendChild(a);
+      row.appendChild(span);
+      el.appendChild(row);
+    });
   }
 
   // Try to fetch /rest/stats.json to see if REST is deployed on this server.

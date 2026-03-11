@@ -4,21 +4,16 @@
 //
 // Calls two Grin foreign API (v2) methods — both read-only, no auth needed:
 //   get_tip     → height, total_difficulty, latest block hash
-//   get_version → node_version, protocol_version, block_header_version
+//   get_version → node_version, block_header_version
 //
-// NOTE: get_peers_connected and get_status are owner-API only — not exposed
-//       on /v2/foreign. Peer count is therefore not available here.
+// NOTE: get_peers_connected / get_status are owner-API only — not on /v2/foreign.
 //
-// GRIN_NETWORK is injected by config.js (generated at deploy time by the
-// Grin Node Toolkit install script).
-//
-// Auto-refreshes every INTERVAL_SEC seconds with a live countdown badge.
+// GRIN_NETWORK is injected by config.js (written at deploy time by the toolkit).
 // =============================================================================
 
-const INTERVAL_SEC = 10;
+const INTERVAL_SEC = 60;
 
 // ── RPC helper ────────────────────────────────────────────────────────────────
-// Grin v2 JSON-RPC returns { result: { Ok: ... } } or { result: { Err: ... } }
 async function rpc(method, params) {
   const res = await fetch('/v2/foreign', {
     method:  'POST',
@@ -34,9 +29,9 @@ async function rpc(method, params) {
   return result;
 }
 
-// ── Formatting helpers ─────────────────────────────────────────────────────────
-const fmtNum    = n => Number(n).toLocaleString();
-const truncHash = h => (h && h.length > 14) ? h.slice(0, 14) + '…' : (h || '—');
+// ── Formatting ────────────────────────────────────────────────────────────────
+// Integer only — no decimals
+const fmtInt = n => Math.floor(Number(n)).toLocaleString();
 
 // ── DOM helper ─────────────────────────────────────────────────────────────────
 function setVal(id, text, extraClass) {
@@ -44,6 +39,11 @@ function setVal(id, text, extraClass) {
   if (!el) return;
   el.textContent = text;
   el.className = 'card-value' + (extraClass ? ' ' + extraClass : '');
+}
+
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
 }
 
 // ── Countdown ──────────────────────────────────────────────────────────────────
@@ -78,7 +78,6 @@ async function refresh() {
 
   document.querySelectorAll('.card').forEach(c => c.classList.add('loading'));
 
-  // Use allSettled so a single method failure doesn't blank the whole page
   const [tipRes, verRes] = await Promise.allSettled([
     rpc('get_tip'),
     rpc('get_version'),
@@ -88,16 +87,26 @@ async function refresh() {
   const ver = verRes.status === 'fulfilled' ? verRes.value : null;
 
   // Chain
-  setVal('v-height',     tip?.height           != null ? fmtNum(tip.height)           : '—');
-  setVal('v-difficulty', tip?.total_difficulty != null ? fmtNum(tip.total_difficulty) : '—');
-  setVal('v-hash',       truncHash(tip?.last_block_pushed), 'small');
+  setVal('v-height',     tip?.height           != null ? fmtInt(tip.height)           : '—');
+  setVal('v-difficulty', tip?.total_difficulty != null ? fmtInt(tip.total_difficulty) : '—');
+  // Full hash — no truncation, CSS handles wrapping
+  setVal('v-hash', tip?.last_block_pushed ?? '—', 'hash');
+
+  // Circulating supply: Grin emits 1 coin/second, ~60/block
+  if (tip?.height != null) {
+    const supply = Math.floor(tip.height) * 60;
+    setVal('v-supply', fmtInt(supply) + ' GRIN');
+    setText('v-supply-sub', '≈ height × 60  (1 GRIN/s · 60 s/block)');
+  } else {
+    setVal('v-supply', '—');
+  }
 
   // Node
-  setVal('v-node-ver',  ver?.node_version          ?? '—');
-  setVal('v-proto-ver', ver?.protocol_version       != null ? String(ver.protocol_version)       : '—');
-  setVal('v-hdr-ver',   ver?.block_header_version   != null ? String(ver.block_header_version)   : '—');
+  setVal('v-node-ver', ver?.node_version              ?? '—');
+  setVal('v-hdr-ver',  ver?.block_header_version != null
+                         ? String(ver.block_header_version) : '—');
 
-  // Error banner — show if both calls failed
+  // Error banner
   const anyError = tipRes.status === 'rejected' && verRes.status === 'rejected';
   if (anyError && errBanner) {
     errBanner.textContent = 'Could not reach node: ' + tipRes.reason?.message;
@@ -106,8 +115,17 @@ async function refresh() {
     errBanner.classList.remove('visible');
   }
 
+  // Footer timestamp — UTC + user's local time
+  const now      = new Date();
+  const utcStr   = now.toUTCString();
+  const localStr = now.toLocaleString([], {
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    timeZoneName: 'short',
+  });
   const ts = document.getElementById('last-updated');
-  if (ts) ts.textContent = (anyError ? 'Last attempt ' : 'Updated ') + new Date().toUTCString();
+  if (ts) ts.innerHTML = (anyError ? 'Last attempt ' : 'Updated ')
+    + utcStr + ' &nbsp;|&nbsp; Local: ' + localStr;
 
   document.querySelectorAll('.card').forEach(c => c.classList.remove('loading'));
   startCountdown();
@@ -120,11 +138,10 @@ function applyNetwork() {
 
   const badge = document.getElementById('network-badge');
   if (badge) {
-    badge.textContent  = network.toUpperCase();
-    badge.className    = 'network-badge ' + network;
+    badge.textContent = network.toUpperCase();
+    badge.className   = 'network-badge ' + network;
   }
 
-  // Update page title and og:title
   const label = network.charAt(0).toUpperCase() + network.slice(1);
   document.title = 'Grin ' + label + ' API Status';
 }

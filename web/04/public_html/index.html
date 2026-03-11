@@ -7,20 +7,19 @@
   <!-- ── SEO ──────────────────────────────────────────────────────────────── -->
   <title>Grin API Status</title>
   <meta name="description"
-        content="Live Grin node API status — block height, total difficulty, latest block, and version info. Public /v2/foreign endpoint for Grin MimbleWimble blockchain.">
+        content="Live Grin node API status — block height, total difficulty, circulating supply, and version info. Public /v2/foreign endpoint for Grin MimbleWimble blockchain.">
   <meta name="keywords"
-        content="Grin, Grin blockchain, Grin API, Grin node, MimbleWimble, privacy coin, grin-node, blockchain status, foreign API">
+        content="Grin, Grin blockchain, Grin API, Grin node, MimbleWimble, privacy coin, grin-node, blockchain status, foreign API, emission">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#ff9900">
 
   <!-- ── Open Graph ────────────────────────────────────────────────────────── -->
   <meta property="og:type"        content="website">
   <meta property="og:title"       content="Grin API Status">
-  <meta property="og:description" content="Live Grin node API status — block height, total difficulty, and version info.">
-  <meta property="og:image"       content="https://grin.mw/images/grin-logo.svg">
+  <meta property="og:description" content="Live Grin node API status — block height, total difficulty, circulating supply, and version info.">
 
-  <!-- ── Favicon — inline SVG, no external file needed ───────────────────── -->
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23ff9900'/><text y='24' x='16' text-anchor='middle' font-family='sans-serif' font-size='22' font-weight='bold' fill='white'>G</text></svg>">
+  <!-- ── Favicon (local SVG) ───────────────────────────────────────────────── -->
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
 
   <!-- ── CSP: same-origin only ─────────────────────────────────────────────── -->
   <meta http-equiv="Content-Security-Policy"
@@ -64,7 +63,17 @@
     </div>
     <div class="card">
       <div class="card-label">Latest Block Hash</div>
-      <div class="card-value dim small" id="v-hash">…</div>
+      <div class="card-value dim hash" id="v-hash">…</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Circulating Supply</div>
+      <div class="card-value dim" id="v-supply">…</div>
+      <div class="card-sub" id="v-supply-sub"></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Emission Rate</div>
+      <div class="card-value">1 GRIN / second</div>
+      <div class="card-sub">60 GRIN / block &nbsp;·&nbsp; 86,400 GRIN / day</div>
     </div>
   </div>
 
@@ -80,10 +89,6 @@
       <div class="card-value dim" id="v-node-ver">…</div>
     </div>
     <div class="card">
-      <div class="card-label">Protocol Version</div>
-      <div class="card-value dim" id="v-proto-ver">…</div>
-    </div>
-    <div class="card">
       <div class="card-label">Header Version</div>
       <div class="card-value dim" id="v-hdr-ver">…</div>
     </div>
@@ -93,10 +98,12 @@
 
 <footer>
   <span id="last-updated">Connecting…</span>
-  <span>
-    <a href="https://github.com/Anynomouss/grin-node-toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>
+  <span class="footer-links">
+    <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>
     &nbsp;·&nbsp;
     <a href="https://grin.mw/" target="_blank" rel="noopener">grin.mw</a>
+    &nbsp;·&nbsp;
+    <a href="https://forum.grin.mw/" target="_blank" rel="noopener">Forum</a>
   </span>
 </footer>
 

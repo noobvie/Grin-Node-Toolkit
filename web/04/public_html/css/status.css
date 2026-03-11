@@ -163,10 +163,10 @@ main {
   flex-shrink: 0;
 }
 
-/* ── Card grid ───────────────────────────────────────────────────────────── */
+/* ── Card grid — single column ───────────────────────────────────────────── */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: 1fr;
   gap: 12px;
   margin-bottom: 24px;
 }
@@ -202,7 +202,16 @@ main {
 .card-value.ok     { color: var(--green); }
 .card-value.warn   { color: var(--yellow); }
 .card-value.err    { color: var(--red); }
-.card-value.small  { font-size: 0.85rem; }
+/* Full hash — smaller font so 64-char hex wraps cleanly */
+.card-value.hash   { font-size: 0.9rem; word-break: break-all; }
+
+/* Secondary info line below a card value */
+.card-sub {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 5px;
+  font-family: inherit;
+}
 
 /* loading shimmer */
 .loading .card-value { animation: blink 1.2s step-start infinite; }
@@ -226,7 +235,7 @@ main {
 footer {
   background: var(--surface);
   border-top: 1px solid var(--border);
-  padding: 8px 24px;
+  padding: 10px 24px;
   font-size: 11px;
   color: var(--muted);
   display: flex;
@@ -239,10 +248,12 @@ footer {
 footer a { color: var(--grin); text-decoration: none; }
 footer a:hover { color: var(--text); }
 
+.footer-links { white-space: nowrap; }
+
 /* ── Responsive ──────────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
-  header { padding: 10px 16px; }
-  main   { padding: 16px; }
-  .grid  { grid-template-columns: 1fr 1fr; }
-  footer { flex-direction: column; gap: 4px; text-align: center; }
+  header         { padding: 10px 16px; }
+  main           { padding: 16px; }
+  footer         { flex-direction: column; gap: 6px; text-align: center; }
+  .footer-links  { white-space: normal; }
 }

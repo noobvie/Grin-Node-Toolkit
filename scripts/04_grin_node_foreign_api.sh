@@ -27,6 +27,11 @@ NODE_API_NGINX_CONF_TESTNET="/etc/nginx/sites-available/grin-node-api-testnet"
 LOG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/log"
 LOG_FILE="$LOG_DIR/grin_node_services_$(date +%Y%m%d_%H%M%S).log"
 
+# Status page source (repo) and deploy (live web root) paths
+STATUS_PAGE_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/public_html"
+STATUS_PAGE_DEPLOY_MAINNET="/var/www/grin-node-api"
+STATUS_PAGE_DEPLOY_TESTNET="/var/www/grin-node-api-testnet"
+
 # ─── Logging ──────────────────────────────────────────────────────────────────
 mkdir -p "$LOG_DIR"
 log()     { echo -e "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*" >> "$LOG_FILE" 2>/dev/null || true; }
@@ -122,6 +127,113 @@ PYEOF
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# STATUS PAGE HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Read server_name from an nginx site config
+_nginx_domain() {
+    grep -m1 'server_name' "$1" 2>/dev/null | awk '{print $2}' | tr -d ';'
+}
+
+# Add limit_req_zone for grin_api into the http {} block of nginx.conf.
+# Idempotent — only adds if our marker comment is absent.
+_nginx_add_limit_req_zone() {
+    local nginx_conf="/etc/nginx/nginx.conf"
+    grep -q "zone=grin_api" "$nginx_conf" 2>/dev/null && return 0
+    python3 - "$nginx_conf" << 'PYEOF'
+import sys, re
+conf_file = sys.argv[1]
+with open(conf_file) as fh:
+    txt = fh.read()
+if 'zone=grin_api' in txt:
+    sys.exit(0)
+insert = (
+    '\n    # Grin Node Toolkit — rate-limit zone for /v2/foreign\n'
+    '    limit_req_zone $binary_remote_addr zone=grin_api:10m rate=10r/s;\n'
+)
+idx = txt.find('http {')
+if idx == -1:
+    idx = txt.find('http{')
+if idx == -1:
+    print('ERROR: http { block not found in ' + conf_file, file=sys.stderr)
+    sys.exit(1)
+nl = txt.find('\n', idx)
+txt = txt[:nl] + insert + txt[nl:]
+with open(conf_file, 'w') as fh:
+    fh.write(txt)
+PYEOF
+}
+
+# Remove the limit_req_zone added by this script (marker-guarded).
+_nginx_remove_limit_req_zone() {
+    local nginx_conf="/etc/nginx/nginx.conf"
+    grep -q "Grin Node Toolkit.*rate-limit zone" "$nginx_conf" 2>/dev/null || return 0
+    python3 - "$nginx_conf" << 'PYEOF'
+import sys, re
+conf_file = sys.argv[1]
+with open(conf_file) as fh:
+    txt = fh.read()
+txt = re.sub(
+    r'\n    # Grin Node Toolkit[^\n]*rate-limit zone[^\n]*\n    limit_req_zone[^\n]*zone=grin_api[^\n]*\n',
+    '\n', txt)
+with open(conf_file, 'w') as fh:
+    fh.write(txt)
+PYEOF
+}
+
+# Patch (or unpatch) an nginx site config for the status page.
+#   action=enable  — replace the 403 location / with static serve + security headers + rate limit
+#   action=disable — reverse the above
+_nginx_patch_status() {
+    local nginx_conf="$1" deploy_dir="$2" action="$3"
+    python3 - "$nginx_conf" "$deploy_dir" "$action" << 'PYEOF'
+import sys
+conf_file, deploy_dir, action = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(conf_file) as fh:
+    txt = fh.read()
+
+# ── Exact strings written by _enable_node_api_nginx ───────────────────────────
+OLD_LOC = (
+    '    # Block all other paths — owner/admin API stays private\n'
+    '    location / {\n'
+    '        return 403 "Access denied. Only /v2/foreign is exposed.";\n'
+    '    }')
+
+NEW_LOC = (
+    '    # Security headers — added by Grin Node Toolkit status page\n'
+    '    add_header X-Content-Type-Options  "nosniff"     always;\n'
+    '    add_header X-Frame-Options         "DENY"        always;\n'
+    '    add_header Referrer-Policy         "no-referrer" always;\n'
+    '    add_header Content-Security-Policy'
+    ' "default-src \'self\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\'; connect-src \'self\'" always;\n'
+    '\n'
+    '    # Live node status page — Grin Node Toolkit\n'
+    '    root ' + deploy_dir + ';\n'
+    '    index index.html;\n'
+    '    location / {\n'
+    '        try_files $uri $uri/ /index.html =404;\n'
+    '    }')
+
+OLD_PROXY_TAIL = '        proxy_read_timeout 60;\n    }'
+NEW_PROXY_TAIL = '        proxy_read_timeout 60;\n        limit_req          zone=grin_api burst=20 nodelay;\n    }'
+
+if action == 'enable':
+    if OLD_LOC in txt:
+        txt = txt.replace(OLD_LOC, NEW_LOC)
+    if OLD_PROXY_TAIL in txt and NEW_PROXY_TAIL not in txt:
+        txt = txt.replace(OLD_PROXY_TAIL, NEW_PROXY_TAIL)
+elif action == 'disable':
+    if NEW_LOC in txt:
+        txt = txt.replace(NEW_LOC, OLD_LOC)
+    if NEW_PROXY_TAIL in txt:
+        txt = txt.replace(NEW_PROXY_TAIL, OLD_PROXY_TAIL)
+
+with open(conf_file, 'w') as fh:
+    fh.write(txt)
+PYEOF
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # STATUS DISPLAY
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -140,6 +252,11 @@ show_all_status() {
     else
         echo -e "    nginx proxy: ${DIM}not configured${RESET}"
     fi
+    if [[ -f "$STATUS_PAGE_DEPLOY_MAINNET/index.html" ]]; then
+        echo -e "    status page: ${GREEN}ENABLED${RESET}  ${DIM}(https://domain/)${RESET}"
+    else
+        echo -e "    status page: ${DIM}not deployed${RESET}"
+    fi
     echo ""
 
     # ── Testnet Node API (13413) ──
@@ -153,6 +270,11 @@ show_all_status() {
         echo -e "    nginx proxy: ${GREEN}CONFIGURED${RESET}"
     else
         echo -e "    nginx proxy: ${DIM}not configured${RESET}"
+    fi
+    if [[ -f "$STATUS_PAGE_DEPLOY_TESTNET/index.html" ]]; then
+        echo -e "    status page: ${GREEN}ENABLED${RESET}  ${DIM}(https://domain/)${RESET}"
+    else
+        echo -e "    status page: ${DIM}not deployed${RESET}"
     fi
     echo ""
 
@@ -262,6 +384,8 @@ EOF
     echo "         -d '{\"jsonrpc\":\"2.0\",\"method\":\"get_version\",\"params\":{},\"id\":1}'"
     echo ""
     info "Log file    : $LOG_FILE"
+    echo ""
+    info "Next step   : run option 5 (or 7 for testnet) to deploy the live status page at https://$domain/"
     log "nginx $network node API proxy configured: domain=$domain config=$nginx_conf -> 127.0.0.1:$port/v2/foreign"
     log "Test: curl -s -X POST https://$domain/v2/foreign -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"get_tip\",\"params\":[],\"id\":1}'"
     log "Test: curl -X POST https://$domain/v2/foreign -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"get_version\",\"params\":{},\"id\":1}'"
@@ -289,6 +413,16 @@ _disable_node_api_nginx() {
         return
     fi
 
+    # Cascade: also remove status page deploy if present (proxy gone = page unreachable anyway)
+    local deploy_dir
+    deploy_dir="$( [[ "$network" == "mainnet" ]] && echo "$STATUS_PAGE_DEPLOY_MAINNET" || echo "$STATUS_PAGE_DEPLOY_TESTNET" )"
+    if [[ -f "$deploy_dir/index.html" ]]; then
+        info "Also removing deployed status page files at $deploy_dir"
+        _nginx_remove_limit_req_zone
+        rm -rf "$deploy_dir"
+        log "Status page files removed (cascade from proxy removal): $deploy_dir"
+    fi
+
     rm -f "/etc/nginx/sites-enabled/$nginx_symlink"
     rm -f "$nginx_conf"
 
@@ -311,13 +445,118 @@ disable_testnet_node_api() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# STATUS PAGE — deploy web/04/public_html, patch nginx, add rate-limiting
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_enable_status_page() {
+    local network="$1" nginx_conf="$2" deploy_dir="$3"
+
+    # Detect update vs first-time deploy
+    local mode="Enable"
+    [[ -f "$deploy_dir/index.html" ]] && mode="Update"
+
+    echo -e "\n${BOLD}${CYAN}── $mode Live Status Page ($network) ──${RESET}\n"
+
+    if [[ ! -f "$nginx_conf" ]]; then
+        warn "nginx proxy not set up for $network yet."
+        warn "Run 'Enable via nginx' (option 1 or 3) first, then come back here."
+        return
+    fi
+
+    if [[ ! -d "$STATUS_PAGE_SRC" ]]; then
+        error "Source files not found: $STATUS_PAGE_SRC"
+        error "Ensure web/04/public_html/ exists in the toolkit directory."
+        return
+    fi
+
+    local domain
+    domain=$(_nginx_domain "$nginx_conf")
+
+    echo -e "  Source : ${DIM}$STATUS_PAGE_SRC${RESET}"
+    echo -e "  Deploy : ${DIM}$deploy_dir${RESET}"
+    echo -e "  URL    : ${BOLD}https://$domain/${RESET}"
+    echo ""
+
+    log "Status page $mode started: network=$network domain=$domain"
+
+    # Deploy static files (cp is safe to re-run — overwrites with latest)
+    mkdir -p "$deploy_dir"
+    cp -r "$STATUS_PAGE_SRC"/. "$deploy_dir/"
+
+    # Set ownership and permissions for nginx (www-data)
+    chown -R www-data:www-data "$deploy_dir"   2>/dev/null || true
+    find "$deploy_dir" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    find "$deploy_dir" -type f -exec chmod 644 {} \; 2>/dev/null || true
+
+    if [[ "$mode" == "Update" ]]; then
+        # Files already live — nginx config unchanged, just reload to pick up new files
+        systemctl reload nginx 2>/dev/null || true
+        success "Status page updated!"
+        info "URL : https://$domain/"
+        log  "Status page updated: network=$network domain=$domain"
+        return
+    fi
+
+    # First-time: patch nginx site config + inject rate-limit zone
+    _nginx_patch_status "$nginx_conf" "$deploy_dir" enable
+    _nginx_add_limit_req_zone
+
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+        success "Status page enabled!"
+        echo ""
+        info "Open in browser : https://$domain/"
+        info "Shows           : height, difficulty, latest block, peers, versions"
+        info "Auto-refresh    : every 10 seconds"
+        info "To update files : run this option again"
+        log  "Status page enabled: network=$network domain=$domain deploy_dir=$deploy_dir"
+    else
+        error "nginx config test failed — reverting status page changes."
+        _nginx_patch_status "$nginx_conf" "$deploy_dir" disable
+        _nginx_remove_limit_req_zone
+        rm -rf "$deploy_dir"
+        nginx -t 2>/dev/null && systemctl reload nginx || true
+        log  "Status page enable FAILED (nginx -t): network=$network"
+    fi
+}
+
+_disable_status_page() {
+    local network="$1" nginx_conf="$2" deploy_dir="$3"
+
+    echo -e "\n${BOLD}${CYAN}── Remove Status Page ($network) ──${RESET}\n"
+
+    if [[ ! -f "$nginx_conf" ]]; then
+        warn "No nginx config found for $network. Nothing to revert."
+        return
+    fi
+
+    _nginx_patch_status "$nginx_conf" "$deploy_dir" disable
+    _nginx_remove_limit_req_zone
+    rm -rf "$deploy_dir"
+
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+        success "Status page removed for $network."
+        log "Status page removed: network=$network"
+    else
+        warn "nginx config test failed after removal. Check $nginx_conf manually."
+        log "Status page remove: nginx -t failed after removal, network=$network"
+    fi
+}
+
+enable_mainnet_status_page()  { _enable_status_page  mainnet "$NODE_API_NGINX_CONF_MAINNET"  "$STATUS_PAGE_DEPLOY_MAINNET"; }
+disable_mainnet_status_page() { _disable_status_page mainnet "$NODE_API_NGINX_CONF_MAINNET"  "$STATUS_PAGE_DEPLOY_MAINNET"; }
+enable_testnet_status_page()  { _enable_status_page  testnet "$NODE_API_NGINX_CONF_TESTNET"  "$STATUS_PAGE_DEPLOY_TESTNET"; }
+disable_testnet_status_page() { _disable_status_page testnet "$NODE_API_NGINX_CONF_TESTNET"  "$STATUS_PAGE_DEPLOY_TESTNET"; }
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # MENU
 # ═══════════════════════════════════════════════════════════════════════════════
 
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  04) Grin Node Services Manager${RESET}"
+    echo -e "${BOLD}${CYAN}  04) Grin Node API Services Manager${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     show_all_status
 
@@ -329,10 +568,16 @@ show_menu() {
     echo -e "  ${GREEN}3${RESET}) Enable via nginx     ${DIM}(/v2/foreign, HTTPS)${RESET}"
     echo -e "  ${RED}4${RESET}) Remove nginx proxy"
     echo ""
+    echo -e "${DIM}  ─── Live Status Page (requires nginx proxy above) ────────────────${RESET}"
+    echo -e "  ${GREEN}5${RESET}) Deploy / Update page  ${DIM}(mainnet — https://domain/)${RESET}"
+    echo -e "  ${RED}6${RESET}) Remove status page    ${DIM}(mainnet)${RESET}"
+    echo -e "  ${GREEN}7${RESET}) Deploy / Update page  ${DIM}(testnet — https://domain/)${RESET}"
+    echo -e "  ${RED}8${RESET}) Remove status page    ${DIM}(testnet)${RESET}"
+    echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh status${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [0-4]: ${RESET}"
+    echo -ne "${BOLD}Select [0-8]: ${RESET}"
 }
 
 main() {
@@ -346,6 +591,10 @@ main() {
             2) disable_mainnet_node_api ;;
             3) enable_testnet_node_api ;;
             4) disable_testnet_node_api ;;
+            5) enable_mainnet_status_page ;;
+            6) disable_mainnet_status_page ;;
+            7) enable_testnet_status_page ;;
+            8) disable_testnet_status_page ;;
             0) break ;;
             *) warn "Invalid option." ; sleep 1 ;;
         esac

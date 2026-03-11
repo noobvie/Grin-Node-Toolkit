@@ -23,10 +23,12 @@
 #   Archives  : Pruned (default, smaller)  |  Full (mainnet only, full UTXO history)
 #   Note: Full archive mode is NOT available for testnet.
 #
-# NODE DIRECTORIES  (created at filesystem root /)
-#   /grinprunemain   — pruned,       mainnet
-#   /grinfullmain    — full archive, mainnet
-#   /grinprunetest   — pruned,       testnet
+# NODE DIRECTORIES  (default paths — user may choose a custom location at Step 5)
+#   /grinprunemain   — pruned,       mainnet  (default)
+#   /grinfullmain    — full archive, mainnet  (default)
+#   /grinprunetest   — pruned,       testnet  (default)
+#   The chosen path (default or custom) is saved to:
+#     conf/grin_instances_location.conf  (used by other toolkit scripts)
 #
 # SETUP PIPELINE  (up to 14 steps; Steps 10–12 replaced by a single stream step
 #                  when on-the-fly extraction is chosen at Step 9)
@@ -50,8 +52,14 @@
 #              User chooses: 1) Pruned  2) Full archive (mainnet only)
 #
 #   Step  5 — Create Node Directory
-#              Creates the target node directory (e.g. /grinprunemain).
-#              Prompts before reusing if it already exists.
+#              User enters a path (default or custom). After each entry, shows
+#              disk space for the chosen location and, if the directory already
+#              exists, lists its contents (up to 20 items). A bold red warning
+#              is shown when files are present: all will be permanently removed
+#              before downloading begins. User must confirm [y/N/0] before the
+#              path is accepted. On confirmation, all existing files are wiped
+#              immediately so the directory is clean for the binary and chain
+#              data that follow.
 #
 #   Step  6 — Download Grin Binary
 #              Queries the GitHub API for the latest release and downloads the
@@ -571,8 +579,20 @@ select_archive_mode() {
 #   /grinfullmain   — full archive, mainnet
 #   /grinprunemain  — pruned,       mainnet
 #   /grinprunetest  — pruned,       testnet
-# If the directory already exists, prompts to clean it (remove all contents)
-# before proceeding — ensuring a fresh rebuild with no stale files.
+#
+# Flow (repeats until user confirms):
+#   1. User enters a path (Enter = default, 0 = return to menu).
+#   2. Disk space for the nearest existing parent is shown.
+#      Loops back if available space is below the required minimum.
+#   3. If the directory already exists, its contents are listed (ls -lah,
+#      up to 20 items with a total count if more).
+#   4. A bold red warning is displayed when files are present:
+#        "All existing files will be permanently removed before downloading."
+#   5. User confirms with [y/N/0]. N or Enter loops back to prompt for a
+#      different path; 0 exits to the main menu; y accepts and breaks.
+#
+# After confirmation, any existing files are removed immediately (rm -rf) so
+# the directory is clean before the binary download begins.
 # Sets the global GRIN_DIR variable used by all subsequent steps.
 # =============================================================================
 create_node_dir() {
@@ -626,30 +646,49 @@ create_node_dir() {
             continue
         fi
 
+        # Show existing directory contents so user can verify before committing
+        if [[ -d "$chosen_dir" ]]; then
+            local _item_count
+            _item_count=$(find "$chosen_dir" -mindepth 1 2>/dev/null | wc -l) || _item_count=0
+            if (( _item_count > 0 )); then
+                echo -e "  ${YELLOW}Directory already contains ${_item_count} item(s):${RESET}"
+                ls -lah "$chosen_dir" 2>/dev/null | awk 'NR>1' | head -20 | \
+                    while IFS= read -r _dl; do echo -e "    ${DIM}$_dl${RESET}"; done
+                (( _item_count > 20 )) && \
+                    echo -e "    ${DIM}... (${_item_count} items total — only first 20 shown)${RESET}"
+                echo ""
+                echo -e "  ${RED}${BOLD}All existing files will be permanently removed before downloading begins.${RESET}"
+            else
+                echo -e "  ${DIM}Directory exists and is currently empty.${RESET}"
+            fi
+            echo ""
+        fi
+
+        echo -ne "${BOLD}Confirm this directory and proceed? [y/N/0]: ${RESET}"
+        local _dir_confirm
+        read -r _dir_confirm || true
+        case "${_dir_confirm,,}" in
+            y) ;;
+            0) exit 0 ;;
+            *) echo ""; continue ;;
+        esac
+
         GRIN_DIR="$chosen_dir"
         break
     done
 
     info "Target directory: $GRIN_DIR"
 
+    # Remove all existing files before the binary and chain data are downloaded
     if [[ -d "$GRIN_DIR" ]]; then
-        warn "Directory $GRIN_DIR already exists."
-        echo -e "  ${GREEN}y${RESET}) Clean up and continue"
-        echo -e "  ${RED}n${RESET}) Abort"
-        echo -e "  ${DIM}0${RESET}) Return to main menu"
-        echo ""
-        echo -ne "${BOLD}Clean up this directory? [y/N/0]: ${RESET}"
-        read -r ow || true
-        case "${ow,,}" in
-            y)
-                info "Cleaning $GRIN_DIR ..."
-                rm -rf "${GRIN_DIR:?}"/*  2>/dev/null || true
-                rm -rf "${GRIN_DIR:?}"/.[!.]* 2>/dev/null || true
-                success "Directory cleaned: $GRIN_DIR"
-                ;;
-            0) exit 0 ;;
-            *) die "Aborted. Clean the directory manually or choose a different location." ;;
-        esac
+        local _existing_count
+        _existing_count=$(find "$GRIN_DIR" -mindepth 1 2>/dev/null | wc -l) || _existing_count=0
+        if (( _existing_count > 0 )); then
+            info "Removing all existing files from $GRIN_DIR ..."
+            rm -rf "${GRIN_DIR:?}"/*  2>/dev/null || true
+            rm -rf "${GRIN_DIR:?}"/.[!.]* 2>/dev/null || true
+            success "Directory cleaned: $GRIN_DIR"
+        fi
     fi
 
     mkdir -p "$GRIN_DIR" \

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grin Node Status</title>
+  <meta name="description" content="Live Grin node status — block height, difficulty, peers, and version info.">
+  <!-- CSP: scripts/styles/fetch from same origin only — no external deps -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'">
+  <link rel="stylesheet" href="css/status.css">
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-dot"></div>
+    <h1><span>Grin</span> Node Status</h1>
+  </div>
+  <div class="header-right">
+    <span class="refresh-badge" id="countdown">—</span>
+    <button class="theme-btn" id="theme-btn" title="Toggle light / dark theme">🌙</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- Error banner — hidden until a fetch fails -->
+  <div id="error-banner" class="error-banner"></div>
+
+  <!-- ── Chain section ─────────────────────────────────────────────────── -->
+  <div class="section-label">
+    <span class="section-dot"></span>
+    Chain
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">Block Height</div>
+      <div class="card-value dim" id="v-height">…</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Total Difficulty</div>
+      <div class="card-value dim" id="v-difficulty">…</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Latest Block Hash</div>
+      <div class="card-value dim small" id="v-hash">…</div>
+    </div>
+  </div>
+
+  <!-- ── Node section ──────────────────────────────────────────────────── -->
+  <div class="section-label">
+    <span class="section-dot" style="background:var(--blue)"></span>
+    Node
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">Peers Connected</div>
+      <div class="card-value dim" id="v-peers">…</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Node Version</div>
+      <div class="card-value dim" id="v-node-ver">…</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Protocol Version</div>
+      <div class="card-value dim" id="v-proto-ver">…</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Header Version</div>
+      <div class="card-value dim" id="v-hdr-ver">…</div>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  <span id="last-updated">Connecting…</span>
+  <span>
+    <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>
+    &nbsp;·&nbsp;
+    <a href="https://grin.mw/" target="_blank" rel="noopener">grin.mw</a>
+  </span>
+</footer>
+
+<script src="js/node-status.js"></script>
+</body>
+</html>

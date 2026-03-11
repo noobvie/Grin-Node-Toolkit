@@ -116,6 +116,7 @@ def write_atomic(path, obj):
         with os.fdopen(fd, "w") as fh:
             json.dump(obj, fh, indent=2)
             fh.write("\n")
+        os.chmod(tmp_path, 0o644)   # ensure nginx (www-data) can read root-owned files
         os.replace(tmp_path, path)
     except Exception:
         try:

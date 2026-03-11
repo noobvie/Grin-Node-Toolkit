@@ -775,12 +775,6 @@ _enable_rest_api() {
     chmod 775 "$rest_dir"
     info "REST directory ready: $rest_dir"
 
-    # Add grin_user to www-data group so it can write into the REST dir.
-    if [[ "$grin_user" != "www-data" ]]; then
-        usermod -aG www-data "$grin_user" 2>/dev/null || true
-        info "Added $grin_user to www-data group (for REST dir write access)"
-    fi
-
     # 4. Write the main cron job — www-data queries the foreign API (no auth).
     #    /etc/cron.d/ files are root-owned 644 and must declare SHELL/PATH.
     cat > "$cron_file" << EOF
@@ -796,8 +790,8 @@ EOF
     chown root:root "$cron_file"
     info "REST cron installed: $cron_file"
 
-    # 5. Install the node-collector (runs as grin_user — can read .api_secret,
-    #    chain_data/, and grin-server.toml).
+    # 5. Install the node-collector (runs as root — reads .api_secret,
+    #    chain_data/, grin-server.toml; writes 0644 files nginx can serve).
     if [[ ! -f "$NODE_COLLECTOR_SRC" ]]; then
         warn "node-collector.py not found: $NODE_COLLECTOR_SRC — skipping node stats."
     else
@@ -811,19 +805,20 @@ EOF
 
         cat > "$node_cron_file" << EOF
 # Grin Node Toolkit — node stats updater ($network)
-# Runs as $grin_user to access owner API, chain data dir, and grin-server.toml.
+# Runs as root to read .api_secret, chain_data/, grin-server.toml.
 # Writes node.json (peers, chain_size_mb, archive_mode) to $rest_dir.
+# node-collector.py chmod()s each file to 0644 so nginx (www-data) can serve it.
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
-* * * * * $grin_user python3 $NODE_COLLECTOR_DEST $port $rest_dir $grin_data_dir 2>/dev/null || true
+* * * * * root python3 $NODE_COLLECTOR_DEST $port $rest_dir $grin_data_dir 2>/dev/null || true
 EOF
         chmod 644 "$node_cron_file"
         chown root:root "$node_cron_file"
-        info "Node cron installed: $node_cron_file (runs as $grin_user)"
+        info "Node cron installed: $node_cron_file (runs as root, detected data owner: $grin_user)"
 
         info "Running initial node stats collection..."
-        if sudo -u "$grin_user" python3 "$NODE_COLLECTOR_DEST" "$port" "$rest_dir" "$grin_data_dir" 2>/dev/null; then
+        if python3 "$NODE_COLLECTOR_DEST" "$port" "$rest_dir" "$grin_data_dir" 2>/dev/null; then
             success "Initial node stats collected."
         else
             warn "Initial node stats failed (node may not be running yet)."

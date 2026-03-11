@@ -244,6 +244,141 @@ stop_grin_gracefully() {
 }
 
 # =============================================================================
+# HELPER: STOP A SINGLE GRIN INSTANCE
+# -----------------------------------------------------------------------------
+# Stops only the instance on the given P2P port (SIGTERM → wait → SIGKILL) and
+# kills its associated tmux session by looking up INSTANCES_CONF.
+#   Usage: stop_grin_one <port>   e.g. stop_grin_one 3414
+# =============================================================================
+stop_grin_one() {
+    local target_port="$1"
+    local stop_timeout=30
+
+    local pid
+    pid=$(ss -tlnp "sport = :$target_port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+    if [[ -z "$pid" ]]; then
+        warn "No process found on port $target_port."
+        return
+    fi
+
+    info "PID $pid on port $target_port — sending SIGTERM..."
+    kill -TERM "$pid" 2>/dev/null || true
+    local count=0
+    while ps -p "$pid" >/dev/null 2>&1 && [[ $count -lt $stop_timeout ]]; do
+        sleep 2; count=$(( count + 2 ))
+        [[ $(( count % 10 )) -eq 0 ]] && info "Waiting for Grin to stop... (${count}s)"
+    done
+    if ps -p "$pid" >/dev/null 2>&1; then
+        warn "Grin (PID $pid) still running — sending SIGKILL..."
+        kill -KILL "$pid" 2>/dev/null || true; sleep 2
+    fi
+
+    # Kill the tmux session associated with this port's instance dir (from conf)
+    if [[ -f "$INSTANCES_CONF" ]]; then
+        local grin_dir=""
+        # shellcheck source=/dev/null
+        source "$INSTANCES_CONF" 2>/dev/null || true
+        if [[ "$target_port" == "3414" ]]; then
+            grin_dir="${PRUNEMAIN_GRIN_DIR:-${FULLMAIN_GRIN_DIR:-}}"
+        else
+            grin_dir="${PRUNETEST_GRIN_DIR:-}"
+        fi
+        if [[ -n "$grin_dir" ]]; then
+            local sess="grin_$(basename "$grin_dir")"
+            tmux kill-session -t "$sess" 2>/dev/null && info "Tmux session '$sess' closed." || true
+        fi
+    fi
+
+    success "Grin on port $target_port stopped."
+}
+
+# =============================================================================
+# BINARY-ONLY UPDATE — all installed instances
+# -----------------------------------------------------------------------------
+# Reads all instance dirs from INSTANCES_CONF, downloads the latest Grin binary
+# from GitHub once, stops all running nodes, replaces each binary, and restarts
+# each node in its existing tmux session.  Chain data is never touched.
+# =============================================================================
+update_binary_only() {
+    step_header "Binary Update: All Grin Instances"
+
+    [[ ! -f "$INSTANCES_CONF" ]] && \
+        die "No instances found in $INSTANCES_CONF. Run node setup first."
+
+    # shellcheck source=/dev/null
+    source "$INSTANCES_CONF" 2>/dev/null || true
+
+    # Collect all installed instance dirs + network type
+    local -a inst_dirs=() inst_nets=()
+    for key in PRUNEMAIN FULLMAIN PRUNETEST; do
+        local varname="${key}_GRIN_DIR"
+        local dir="${!varname:-}"
+        if [[ -n "$dir" && -d "$dir" && -f "$dir/grin" ]]; then
+            inst_dirs+=("$dir")
+            [[ "$key" == "PRUNETEST" ]] && inst_nets+=("testnet") || inst_nets+=("mainnet")
+        fi
+    done
+
+    [[ ${#inst_dirs[@]} -eq 0 ]] && die "No installed Grin instances found."
+
+    info "Found ${#inst_dirs[@]} instance(s):"
+    for i in "${!inst_dirs[@]}"; do
+        info "  → ${inst_dirs[$i]}  (${inst_nets[$i]})"
+    done
+    echo ""
+
+    # Download latest binary once
+    info "Querying GitHub for latest Grin release..."
+    local release_json version download_url
+    release_json=$(curl -fsSL --max-time 30 "$GRIN_GITHUB_API") \
+        || die "Failed to reach GitHub API. Check internet connection."
+    version=$(echo "$release_json" | jq -r '.tag_name')
+    download_url=$(echo "$release_json" \
+        | jq -r '.assets[] | select(.name | test("linux-x86_64\\.tar\\.gz$"; "i")) | .browser_download_url' \
+        | head -1)
+    [[ -z "$download_url" || "$download_url" == "null" ]] \
+        && die "No linux-x86_64 asset found for release '$version'."
+
+    info "Latest version : $version"
+    info "Download URL   : $download_url"
+    local tmp_tar="/tmp/grin_bin_$$.tar.gz"
+    local tmp_dir="/tmp/grin_extract_$$"
+    mkdir -p "$tmp_dir"
+    wget --progress=bar:force -O "$tmp_tar" "$download_url" \
+        || die "Binary download failed."
+    tar -xzf "$tmp_tar" -C "$tmp_dir" \
+        || die "Failed to extract binary archive."
+    rm -f "$tmp_tar"
+    local grin_bin
+    grin_bin=$(find "$tmp_dir" -type f -name "grin" | grep -v "grin-wallet" | head -1)
+    [[ -z "$grin_bin" ]] && die "Could not locate 'grin' binary in the downloaded archive."
+
+    # Stop all running nodes before replacing binaries
+    stop_grin_gracefully
+
+    # Replace binary + restart each instance
+    for i in "${!inst_dirs[@]}"; do
+        local dir="${inst_dirs[$i]}"
+        local net="${inst_nets[$i]}"
+        info "Installing $version to $dir/grin ..."
+        install -m 755 "$grin_bin" "$dir/grin"
+        success "Binary updated: $dir/grin"
+        # start_grin_tmux reads GRIN_DIR and NETWORK_TYPE globals
+        GRIN_DIR="$dir"
+        NETWORK_TYPE="$net"
+        start_grin_tmux
+    done
+
+    rm -rf "$tmp_dir"
+    echo ""
+    success "All instances updated to Grin $version."
+    log "[BINARY UPDATE] version=$version instances=${#inst_dirs[@]}"
+    info "Press Enter to return to main menu."
+    read -r || true
+    exit 0
+}
+
+# =============================================================================
 # [1] CHECK FOR RUNNING GRIN PROCESSES AND PORT CONFLICTS
 # -----------------------------------------------------------------------------
 # P2P ports 3414 (mainnet) and 13414 (testnet) are the authoritative indicators
@@ -251,9 +386,12 @@ stop_grin_gracefully() {
 # network. Archive mode on testnet is NOT supported.
 #
 # Scenarios:
-#   Both 3414 + 13414 occupied → offer K to kill all & rebuild, or 0 to return to menu
-#   Only 3414 occupied         → restrict to testnet installation; set RESTRICTED_NETWORK
-#   Only 13414 occupied        → restrict to mainnet installation; set RESTRICTED_NETWORK
+#   Both 3414 + 13414 occupied → B = binary-only update (all instances, no rebuild)
+#                                  M = kill mainnet & rebuild mainnet only
+#                                  T = kill testnet  & rebuild testnet only
+#                                  K = kill all & rebuild both; 0 = return to menu
+#   Only 3414 occupied         → B = binary-only update; 1 = install testnet alongside
+#   Only 13414 occupied        → B = binary-only update; 1 = install mainnet alongside
 #   Neither occupied           → check for stale/orphaned grin processes and ports,
 #                                offer to kill them before continuing
 # =============================================================================
@@ -275,17 +413,31 @@ check_grin_running() {
         warn "Mainnet node is running on port 3414  (PID: $mainnet_pid)"
         warn "Testnet node is running on port 13414 (PID: $testnet_pid)"
         echo ""
-        error "Both mainnet and testnet are already running on this server."
+        warn  "Both mainnet and testnet are already running on this server."
         info  "A server can host at most two Grin instances (one per network)."
         echo ""
         local _both_choice
         while true; do
-            echo -e "  ${RED}K${RESET} — kill all Grin processes & rebuild nodes"
+            echo -e "  ${CYAN}B${RESET} — update binary only  (no chain data rebuild)"
+            echo -e "  ${YELLOW}M${RESET} — kill mainnet  & rebuild mainnet"
+            echo -e "  ${YELLOW}T${RESET} — kill testnet  & rebuild testnet"
+            echo -e "  ${RED}K${RESET} — kill all Grin processes & rebuild both"
             echo -e "  ${GREEN}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[K = kill & rebuild  /  0 = main menu]: ${RESET}"
+            echo -ne "${DIM}[B/M/T/K/0]: ${RESET}"
             read -r _both_choice || true
             case "${_both_choice:-}" in
+                [Bb])
+                    update_binary_only
+                    ;;
+                [Mm])
+                    stop_grin_one 3414
+                    exec "$0"
+                    ;;
+                [Tt])
+                    stop_grin_one 13414
+                    exec "$0"
+                    ;;
                 [Kk])
                     stop_grin_gracefully
                     exec "$0"
@@ -294,7 +446,7 @@ check_grin_running() {
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — press K to kill & rebuild, or 0 to return."
+                    warn "Invalid input — choose B, M, T, K, or 0."
                     echo ""
                     ;;
             esac
@@ -307,11 +459,35 @@ check_grin_running() {
         info "Mainnet node is running on port 3414 (PID: $mainnet_pid)."
         info "This server has one free slot — testnet can be installed alongside it."
         warn "Note: full archive mode is NOT available on testnet."
-        RESTRICTED_NETWORK="testnet"
-        success "Continuing with testnet installation."
         echo ""
-        log "[STEP 1] Mainnet running (PID $mainnet_pid). Restricted to testnet."
-        return
+        local _main_choice
+        while true; do
+            echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
+            echo -e "  ${GREEN}1${RESET} — install testnet alongside mainnet  ${DIM}(default)${RESET}"
+            echo -e "  ${DIM}0${RESET} — return to master script"
+            echo ""
+            echo -ne "${DIM}[B/1/0, Enter = 1]: ${RESET}"
+            read -r _main_choice || true
+            case "${_main_choice:-1}" in
+                [Bb])
+                    update_binary_only
+                    ;;
+                1|"")
+                    RESTRICTED_NETWORK="testnet"
+                    success "Continuing with testnet installation."
+                    echo ""
+                    log "[STEP 1] Mainnet running (PID $mainnet_pid). Restricted to testnet."
+                    return
+                    ;;
+                0)
+                    exit 0
+                    ;;
+                *)
+                    warn "Invalid input — choose B, 1, or 0."
+                    echo ""
+                    ;;
+            esac
+        done
     fi
 
     # ── Only testnet running → can install mainnet alongside it ───────────────
@@ -319,11 +495,35 @@ check_grin_running() {
         echo ""
         info "Testnet node is running on port 13414 (PID: $testnet_pid)."
         info "This server has one free slot — mainnet can be installed alongside it."
-        RESTRICTED_NETWORK="mainnet"
-        success "Continuing with mainnet installation."
         echo ""
-        log "[STEP 1] Testnet running (PID $testnet_pid). Restricted to mainnet."
-        return
+        local _test_choice
+        while true; do
+            echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
+            echo -e "  ${GREEN}1${RESET} — install mainnet alongside testnet  ${DIM}(default)${RESET}"
+            echo -e "  ${DIM}0${RESET} — return to master script"
+            echo ""
+            echo -ne "${DIM}[B/1/0, Enter = 1]: ${RESET}"
+            read -r _test_choice || true
+            case "${_test_choice:-1}" in
+                [Bb])
+                    update_binary_only
+                    ;;
+                1|"")
+                    RESTRICTED_NETWORK="mainnet"
+                    success "Continuing with mainnet installation."
+                    echo ""
+                    log "[STEP 1] Testnet running (PID $testnet_pid). Restricted to mainnet."
+                    return
+                    ;;
+                0)
+                    exit 0
+                    ;;
+                *)
+                    warn "Invalid input — choose B, 1, or 0."
+                    echo ""
+                    ;;
+            esac
+        done
     fi
 
     # ── No legitimate node running → check for stale/orphaned processes ───────

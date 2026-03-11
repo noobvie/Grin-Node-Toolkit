@@ -84,13 +84,6 @@ html[data-theme="winxp"] .network-badge {
   border-color: #7baee8;
   background: rgba(255,255,255,0.15);
 }
-html[data-theme="winxp"] .theme-btn {
-  background: linear-gradient(to bottom, #f0f4fc, #c8d8ef);
-  border: 1px solid #7b9ecc;
-  color: #000;
-  border-radius: 3px;
-  box-shadow: 1px 1px 0 #fff inset;
-}
 html[data-theme="winxp"] footer {
   background: linear-gradient(to bottom, #1f5fbf, #1a5ab8);
   border-top: 2px solid #0054e3;
@@ -201,6 +194,29 @@ header {
 
 .theme-btn:hover { border-color: var(--grin); color: var(--text); }
 
+.theme-select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.theme-select:hover,
+.theme-select:focus { border-color: var(--grin); }
+
+/* WinXP overrides the select to match its button style */
+html[data-theme="winxp"] .theme-select {
+  background: linear-gradient(to bottom, #f0f4fc, #c8d8ef);
+  border: 1px solid #7b9ecc;
+  color: #000;
+  border-radius: 3px;
+}
+
 /* ── Main ────────────────────────────────────────────────────────────────── */
 main {
   flex: 1;
@@ -230,6 +246,16 @@ main {
   background: var(--grin);
   flex-shrink: 0;
 }
+
+/* ── Two-column section layout (Chain + Node side by side) ─────────────── */
+.two-col-sections {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 24px;
+  align-items: start;
+  margin-bottom: 24px;
+}
+.two-col-sections .grid { margin-bottom: 0; }
 
 /* ── Card grid — single column ───────────────────────────────────────────── */
 .grid {
@@ -503,8 +529,9 @@ footer a:hover { color: var(--text); }
 
 /* ── Responsive ──────────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
-  header         { padding: 10px 16px; }
-  main           { padding: 16px; }
-  footer         { flex-direction: column; gap: 6px; text-align: center; }
-  .footer-links  { white-space: normal; }
+  header              { padding: 10px 16px; }
+  main                { padding: 16px; }
+  footer              { flex-direction: column; gap: 6px; text-align: center; }
+  .footer-links       { white-space: normal; }
+  .two-col-sections   { grid-template-columns: 1fr; }
 }

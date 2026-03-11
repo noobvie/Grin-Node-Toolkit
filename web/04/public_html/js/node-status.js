@@ -78,10 +78,12 @@ async function refresh() {
 
   document.querySelectorAll('.card').forEach(c => c.classList.add('loading'));
 
+  const t0 = performance.now();
   const [tipRes, verRes] = await Promise.allSettled([
     rpc('get_tip'),
     rpc('get_version'),
   ]);
+  const latency = Math.round(performance.now() - t0);
 
   const tip = tipRes.status === 'fulfilled' ? tipRes.value : null;
   const ver = verRes.status === 'fulfilled' ? verRes.value : null;
@@ -116,6 +118,7 @@ async function refresh() {
   setVal('v-node-ver', ver?.node_version              ?? '—');
   setVal('v-hdr-ver',  ver?.block_header_version != null
                          ? String(ver.block_header_version) : '—');
+  setVal('v-latency',  tipRes.status === 'fulfilled' ? latency + ' ms' : '—');
 
   // Error banner
   const anyError = tipRes.status === 'rejected' && verRes.status === 'rejected';
@@ -155,11 +158,12 @@ function applyNetwork() {
 
   const label = network.charAt(0).toUpperCase() + network.slice(1);
   document.title = 'Grin ' + label + ' API Status';
+
+  setVal('v-network', network.toUpperCase(), network === 'mainnet' ? 'ok' : 'warn');
 }
 
 // ── Theme ──────────────────────────────────────────────────────────────────────
-const THEME_CYCLE  = ['dark', 'light', 'matrix', 'winxp'];
-const THEME_ICONS  = { dark: '🌙', light: '☀️', matrix: '</>', winxp: '🪟' };
+const THEME_CYCLE = ['dark', 'light', 'matrix', 'winxp'];
 
 let currentTheme = localStorage.getItem('grin-node-theme') || 'dark';
 if (!THEME_CYCLE.includes(currentTheme)) currentTheme = 'dark';
@@ -172,13 +176,8 @@ function applyTheme(theme) {
   } else {
     document.documentElement.setAttribute('data-theme', theme);
   }
-  const btn = document.getElementById('theme-btn');
-  if (btn) btn.textContent = THEME_ICONS[theme] ?? '🌙';
-}
-
-function nextTheme() {
-  const idx = THEME_CYCLE.indexOf(currentTheme);
-  return THEME_CYCLE[(idx + 1) % THEME_CYCLE.length];
+  const sel = document.getElementById('theme-select');
+  if (sel) sel.value = theme;
 }
 
 // ── REST endpoints ─────────────────────────────────────────────────────────────
@@ -354,6 +353,14 @@ function initDevCollapse() {
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(currentTheme);
   applyNetwork();
+
+  // Set API endpoint URL once — static, doesn't change
+  const endpointEl = document.getElementById('v-api-url');
+  if (endpointEl) {
+    endpointEl.textContent = window.location.origin + '/v2/foreign';
+    endpointEl.className   = 'card-value hash';
+  }
+
   applyRestLinks();
   applyCurlTip();
   applyFetchTip();
@@ -365,8 +372,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('remote-url')?.addEventListener('keydown', e => {
     if (e.key === 'Enter') runRemoteCheck();
   });
-  document.getElementById('theme-btn')?.addEventListener('click', () => {
-    applyTheme(nextTheme());
+  document.getElementById('theme-select')?.addEventListener('change', e => {
+    applyTheme(e.target.value);
   });
 
   refresh();

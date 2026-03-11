@@ -38,7 +38,12 @@
   </div>
   <div class="header-right">
     <span class="refresh-badge" id="countdown">—</span>
-    <button class="theme-btn" id="theme-btn" title="Cycle themes: dark / light / matrix / Windows XP">🌙</button>
+    <select id="theme-select" class="theme-select" title="Choose theme">
+      <option value="dark">🌙 Dark</option>
+      <option value="light">☀️ Light</option>
+      <option value="matrix">&lt;/&gt; Matrix</option>
+      <option value="winxp">🪟 Windows XP</option>
+    </select>
   </div>
 </header>
 
@@ -59,52 +64,71 @@
     </span>
   </div>
 
-  <!-- ── Chain section ──────────────────────────────────────────────────── -->
-  <div class="section-label">
-    <span class="section-dot"></span>
-    Chain
-  </div>
+  <!-- ── Chain + Node — 2-column side-by-side layout ──────────────────── -->
+  <div class="two-col-sections">
 
-  <div class="grid">
-    <div class="card">
-      <div class="card-label">Block Height</div>
-      <div class="card-value dim" id="v-height">…</div>
+    <div class="section-col">
+      <div class="section-label">
+        <span class="section-dot"></span>
+        Chain
+      </div>
+      <div class="grid">
+        <div class="card">
+          <div class="card-label">Block Height</div>
+          <div class="card-value dim" id="v-height">…</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Total Difficulty</div>
+          <div class="card-value dim" id="v-difficulty">…</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Latest Block Hash</div>
+          <div class="card-value dim hash" id="v-hash">…</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Circulating Supply</div>
+          <div class="card-value dim" id="v-supply">…</div>
+          <div class="card-sub" id="v-supply-sub"></div>
+        </div>
+        <div class="card">
+          <div class="card-label">Emission Rate</div>
+          <div class="card-value">1 GRIN / second</div>
+          <div class="card-sub">60 GRIN / block &nbsp;·&nbsp; 86,400 GRIN / day</div>
+        </div>
+      </div>
     </div>
-    <div class="card">
-      <div class="card-label">Total Difficulty</div>
-      <div class="card-value dim" id="v-difficulty">…</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Latest Block Hash</div>
-      <div class="card-value dim hash" id="v-hash">…</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Circulating Supply</div>
-      <div class="card-value dim" id="v-supply">…</div>
-      <div class="card-sub" id="v-supply-sub"></div>
-    </div>
-    <div class="card">
-      <div class="card-label">Emission Rate</div>
-      <div class="card-value">1 GRIN / second</div>
-      <div class="card-sub">60 GRIN / block &nbsp;·&nbsp; 86,400 GRIN / day</div>
-    </div>
-  </div>
 
-  <!-- ── Node section ───────────────────────────────────────────────────── -->
-  <div class="section-label">
-    <span class="section-dot" style="background:var(--blue)"></span>
-    Node
-  </div>
+    <div class="section-col">
+      <div class="section-label">
+        <span class="section-dot" style="background:var(--blue)"></span>
+        Node
+      </div>
+      <div class="grid">
+        <div class="card">
+          <div class="card-label">Node Version</div>
+          <div class="card-value dim" id="v-node-ver">…</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Header Version — block header format (increments on hard fork)</div>
+          <div class="card-value dim" id="v-hdr-ver">…</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Network</div>
+          <div class="card-value dim" id="v-network">…</div>
+        </div>
+        <div class="card">
+          <div class="card-label">API Endpoint — public JSON-RPC access point</div>
+          <div class="card-value dim hash" id="v-api-url">…</div>
+          <div class="card-sub">POST &nbsp;·&nbsp; CORS enabled &nbsp;·&nbsp; no auth required</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Response Time — last get_tip round-trip</div>
+          <div class="card-value dim" id="v-latency">…</div>
+          <div class="card-sub">measured in your browser each refresh cycle</div>
+        </div>
+      </div>
+    </div>
 
-  <div class="grid">
-    <div class="card">
-      <div class="card-label">Node Version</div>
-      <div class="card-value dim" id="v-node-ver">…</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Header Version — block header format (increments on hard fork)</div>
-      <div class="card-value dim" id="v-hdr-ver">…</div>
-    </div>
   </div>
 
   <!-- ── REST API section ───────────────────────────────────────────────── -->

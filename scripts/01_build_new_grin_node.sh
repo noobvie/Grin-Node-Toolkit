@@ -527,9 +527,54 @@ create_node_dir() {
 
     [[ "$network" == "mainnet" ]] && net_short="main" || net_short="test"
     [[ "$mode"    == "full"    ]] && mode_short="full" || mode_short="prune"
-    GRIN_DIR="/grin${mode_short}${net_short}"
+    local default_dir="/grin${mode_short}${net_short}"
+
+    # Minimum free space: pruned=10GB, full=25GB (in KB)
+    local min_gb; [[ "$mode" == "full" ]] && min_gb=25 || min_gb=10
+    local min_kb=$(( min_gb * 1024 * 1024 ))
 
     step_header "Step 5: Create Node Directory"
+    echo -e "  Default directory: ${BOLD}$default_dir${RESET}"
+    echo ""
+    echo -e "  Press ${GREEN}Enter${RESET} to use the default, or type a custom path."
+    echo -e "  ${DIM}Minimum free space required: ${min_gb}GB${RESET}"
+    echo -e "  ${DIM}0${RESET}) Return to main menu"
+    echo ""
+
+    while true; do
+        echo -ne "${BOLD}Directory [${default_dir}]: ${RESET}"
+        read -r dir_input || true
+        [[ "${dir_input}" == "0" ]] && exit 0
+        [[ -z "$dir_input" ]] && dir_input="$default_dir"
+
+        # Resolve to absolute path
+        local chosen_dir
+        chosen_dir=$(realpath -m "$dir_input" 2>/dev/null) || chosen_dir="$dir_input"
+
+        # Show free space for the nearest existing parent
+        local check_path="$chosen_dir"
+        while [[ ! -d "$check_path" && "$check_path" != "/" ]]; do
+            check_path=$(dirname "$check_path")
+        done
+        local avail_kb
+        avail_kb=$(df -k "$check_path" 2>/dev/null | awk 'NR==2{print $4}') || avail_kb=0
+        local avail_gb=$(( avail_kb / 1024 / 1024 ))
+        echo ""
+        echo -e "  ${DIM}$(df -h "$check_path" 2>/dev/null | awk 'NR==1||NR==2' | column -t)${RESET}"
+        echo -e "  Available: ${BOLD}${avail_gb}GB${RESET}  (required: ${min_gb}GB)"
+        echo ""
+
+        if (( avail_kb < min_kb )); then
+            warn "Insufficient space: ${avail_gb}GB available, ${min_gb}GB required."
+            echo -e "  Choose a different location or free up space."
+            echo ""
+            continue
+        fi
+
+        GRIN_DIR="$chosen_dir"
+        break
+    done
+
     info "Target directory: $GRIN_DIR"
 
     if [[ -d "$GRIN_DIR" ]]; then
@@ -548,7 +593,7 @@ create_node_dir() {
                 success "Directory cleaned: $GRIN_DIR"
                 ;;
             0) exit 0 ;;
-            *) die "Aborted. Clean the directory manually or choose a different configuration." ;;
+            *) die "Aborted. Clean the directory manually or choose a different location." ;;
         esac
     fi
 

@@ -180,8 +180,12 @@ def main():
     # ── Parse grin-server.toml for db_root and archive_mode ──────────────────
     toml_path = os.path.join(grin_data_dir, "grin-server.toml")
 
-    # db_root is the authoritative chain data path (set by Grin itself in the TOML)
-    db_root   = read_db_root(toml_path) or os.path.join(grin_data_dir, "chain_data")
+    # db_root is the authoritative chain data path (set by Grin itself in the TOML).
+    # Grin often writes it as a relative path (e.g. "chain_data") — resolve against
+    # grin_data_dir so du gets an absolute path regardless.
+    db_root = read_db_root(toml_path) or "chain_data"
+    if not os.path.isabs(db_root):
+        db_root = os.path.join(grin_data_dir, db_root)
     print(f"[INFO] chain data path: {db_root}", file=sys.stderr)
 
     # ── Chain data size ───────────────────────────────────────────────────────

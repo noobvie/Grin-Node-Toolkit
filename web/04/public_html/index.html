@@ -117,7 +117,7 @@
       </div>
     </div>
     <div class="card">
-      <div class="card-label">Browser fetch test — query this API from any website's console</div>
+      <div class="card-label">Browser fetch test — get chain tip &amp; circulating supply from any website's console</div>
       <ol class="dev-steps">
         <li>Open any website — e.g. <code>https://www.google.com</code></li>
         <li>Press <code>F12</code> &nbsp;(or right-click anywhere → <strong>Inspect</strong>)</li>
@@ -127,7 +127,8 @@
       </ol>
       <pre class="curl-block" id="fetch-tip">…</pre>
       <div class="card-sub">
-        Works from any website — proves this API is publicly accessible cross-origin
+        Circulating supply is not a direct field — it is derived as <code>height × 60</code>
+        &nbsp;·&nbsp; Copy this snippet into your own site to display live Grin data
       </div>
     </div>
     <div class="card">

@@ -174,7 +174,7 @@ function applyCurlTip() {
     `     -D -`;
 }
 
-// ── Fetch tip (browser console example) ────────────────────────────────────────
+// ── Fetch tip (browser console example — shows supply derivation) ───────────────
 function applyFetchTip() {
   const el = document.getElementById('fetch-tip');
   if (!el) return;
@@ -183,10 +183,15 @@ function applyFetchTip() {
     `fetch('${origin}/v2/foreign', {\n` +
     `  method: 'POST',\n` +
     `  headers: { 'Content-Type': 'application/json' },\n` +
-    `  body: JSON.stringify({\n` +
-    `    jsonrpc: '2.0', method: 'get_tip', params: [], id: 1\n` +
-    `  })\n` +
-    `}).then(r => r.json()).then(console.log)`;
+    `  body: JSON.stringify({ jsonrpc: '2.0', method: 'get_tip', params: [], id: 1 })\n` +
+    `}).then(r => r.json()).then(data => {\n` +
+    `  const tip    = data.result.Ok;\n` +
+    `  const supply = Math.floor(tip.height) * 60;  // 1 GRIN/s · 60 s/block\n` +
+    `  console.log('Height:            ', tip.height);\n` +
+    `  console.log('Circulating supply:', supply, 'GRIN');\n` +
+    `  console.log('Total difficulty:  ', tip.total_difficulty);\n` +
+    `  console.log('Latest block hash: ', tip.last_block_pushed);\n` +
+    `})`;
 }
 
 // ── Self test ──────────────────────────────────────────────────────────────────

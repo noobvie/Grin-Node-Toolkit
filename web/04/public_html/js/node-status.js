@@ -2,10 +2,15 @@
 // Grin Node Status Page — node-status.js
 // web/04/public_html/js/node-status.js
 //
-// Calls three Grin foreign API (v2) methods — all read-only, no auth needed:
-//   get_tip             → height, total_difficulty, latest block hash
-//   get_version         → node_version, protocol_version, block_header_version
-//   get_peers_connected → array of connected peers (length = peer count)
+// Calls two Grin foreign API (v2) methods — both read-only, no auth needed:
+//   get_tip     → height, total_difficulty, latest block hash
+//   get_version → node_version, protocol_version, block_header_version
+//
+// NOTE: get_peers_connected and get_status are owner-API only — not exposed
+//       on /v2/foreign. Peer count is therefore not available here.
+//
+// GRIN_NETWORK is injected by config.js (generated at deploy time by the
+// Grin Node Toolkit install script).
 //
 // Auto-refreshes every INTERVAL_SEC seconds with a live countdown badge.
 // =============================================================================
@@ -29,11 +34,11 @@ async function rpc(method, params) {
   return result;
 }
 
-// ── Formatting helpers ────────────────────────────────────────────────────────
-const fmtNum   = n  => Number(n).toLocaleString();
+// ── Formatting helpers ─────────────────────────────────────────────────────────
+const fmtNum    = n => Number(n).toLocaleString();
 const truncHash = h => (h && h.length > 14) ? h.slice(0, 14) + '…' : (h || '—');
 
-// ── DOM helper ────────────────────────────────────────────────────────────────
+// ── DOM helper ─────────────────────────────────────────────────────────────────
 function setVal(id, text, extraClass) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -41,7 +46,7 @@ function setVal(id, text, extraClass) {
   el.className = 'card-value' + (extraClass ? ' ' + extraClass : '');
 }
 
-// ── Countdown ────────────────────────────────────────────────────────────────
+// ── Countdown ──────────────────────────────────────────────────────────────────
 let countdownTimer = null;
 let nextIn         = INTERVAL_SEC;
 
@@ -63,55 +68,68 @@ function clearCountdown() {
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
 }
 
-// ── Refresh ───────────────────────────────────────────────────────────────────
+// ── Refresh ────────────────────────────────────────────────────────────────────
 async function refresh() {
   clearCountdown();
 
-  const badge  = document.getElementById('countdown');
+  const badge     = document.getElementById('countdown');
   const errBanner = document.getElementById('error-banner');
   if (badge) badge.textContent = '…';
 
-  // Add loading shimmer while fetching
   document.querySelectorAll('.card').forEach(c => c.classList.add('loading'));
 
-  try {
-    const [tip, ver, peers] = await Promise.all([
-      rpc('get_tip'),
-      rpc('get_version'),
-      rpc('get_peers_connected'),
-    ]);
+  // Use allSettled so a single method failure doesn't blank the whole page
+  const [tipRes, verRes] = await Promise.allSettled([
+    rpc('get_tip'),
+    rpc('get_version'),
+  ]);
 
-    // Chain section
-    setVal('v-height',     tip?.height           != null ? fmtNum(tip.height)            : '—');
-    setVal('v-difficulty', tip?.total_difficulty != null ? fmtNum(tip.total_difficulty)  : '—');
-    setVal('v-hash',       truncHash(tip?.last_block_pushed), 'small');
+  const tip = tipRes.status === 'fulfilled' ? tipRes.value : null;
+  const ver = verRes.status === 'fulfilled' ? verRes.value : null;
 
-    // Node section
-    setVal('v-peers',    Array.isArray(peers) ? fmtNum(peers.length) : '—');
-    setVal('v-node-ver', ver?.node_version      ?? '—');
-    setVal('v-proto-ver',ver?.protocol_version  != null ? String(ver.protocol_version)  : '—');
-    setVal('v-hdr-ver',  ver?.block_header_version != null ? String(ver.block_header_version) : '—');
+  // Chain
+  setVal('v-height',     tip?.height           != null ? fmtNum(tip.height)           : '—');
+  setVal('v-difficulty', tip?.total_difficulty != null ? fmtNum(tip.total_difficulty) : '—');
+  setVal('v-hash',       truncHash(tip?.last_block_pushed), 'small');
 
-    if (errBanner) errBanner.classList.remove('visible');
+  // Node
+  setVal('v-node-ver',  ver?.node_version          ?? '—');
+  setVal('v-proto-ver', ver?.protocol_version       != null ? String(ver.protocol_version)       : '—');
+  setVal('v-hdr-ver',   ver?.block_header_version   != null ? String(ver.block_header_version)   : '—');
 
-    const ts = document.getElementById('last-updated');
-    if (ts) ts.textContent = 'Updated ' + new Date().toUTCString();
-
-  } catch (e) {
-    if (errBanner) {
-      errBanner.textContent = 'Could not reach node: ' + e.message;
-      errBanner.classList.add('visible');
-    }
-    const ts = document.getElementById('last-updated');
-    if (ts) ts.textContent = 'Last attempt ' + new Date().toUTCString();
-  } finally {
-    document.querySelectorAll('.card').forEach(c => c.classList.remove('loading'));
+  // Error banner — show if both calls failed
+  const anyError = tipRes.status === 'rejected' && verRes.status === 'rejected';
+  if (anyError && errBanner) {
+    errBanner.textContent = 'Could not reach node: ' + tipRes.reason?.message;
+    errBanner.classList.add('visible');
+  } else if (errBanner) {
+    errBanner.classList.remove('visible');
   }
 
+  const ts = document.getElementById('last-updated');
+  if (ts) ts.textContent = (anyError ? 'Last attempt ' : 'Updated ') + new Date().toUTCString();
+
+  document.querySelectorAll('.card').forEach(c => c.classList.remove('loading'));
   startCountdown();
 }
 
-// ── Theme ─────────────────────────────────────────────────────────────────────
+// ── Network badge ──────────────────────────────────────────────────────────────
+function applyNetwork() {
+  const network = (typeof GRIN_NETWORK !== 'undefined' ? GRIN_NETWORK : '').toLowerCase();
+  if (!network) return;
+
+  const badge = document.getElementById('network-badge');
+  if (badge) {
+    badge.textContent  = network.toUpperCase();
+    badge.className    = 'network-badge ' + network;
+  }
+
+  // Update page title and og:title
+  const label = network.charAt(0).toUpperCase() + network.slice(1);
+  document.title = 'Grin ' + label + ' API Status';
+}
+
+// ── Theme ──────────────────────────────────────────────────────────────────────
 let currentTheme = localStorage.getItem('grin-node-theme') || 'dark';
 
 function applyTheme(theme) {
@@ -126,9 +144,10 @@ function applyTheme(theme) {
   if (btn) btn.textContent = theme === 'light' ? '☀' : '🌙';
 }
 
-// ── Boot ──────────────────────────────────────────────────────────────────────
+// ── Boot ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(currentTheme);
+  applyNetwork();
 
   document.getElementById('theme-btn')?.addEventListener('click', () => {
     applyTheme(currentTheme === 'light' ? 'dark' : 'light');

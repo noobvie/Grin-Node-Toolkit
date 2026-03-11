@@ -336,9 +336,22 @@ server {
     listen 80;
     server_name $domain;
 
-    # Public V2 Foreign API — JSON-RPC: get_tip, get_block, get_header,
-    # get_kernel, push_transaction, get_peers_connected
+    # Public V2 Foreign API — JSON-RPC (no auth required):
+    #   get_tip, get_version, get_block, get_header, get_kernel,
+    #   get_outputs, push_transaction
     location /v2/foreign {
+        # CORS — allow any origin to query this public read-only endpoint
+        if (\$request_method = OPTIONS) {
+            add_header Access-Control-Allow-Origin  "*";
+            add_header Access-Control-Allow-Methods "POST, OPTIONS";
+            add_header Access-Control-Allow-Headers "Content-Type";
+            add_header Access-Control-Max-Age       86400;
+            return 204;
+        }
+        add_header Access-Control-Allow-Origin  "*" always;
+        add_header Access-Control-Allow-Methods "POST, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "Content-Type" always;
+
         proxy_pass         http://127.0.0.1:$port/v2/foreign;
         proxy_http_version 1.1;
         proxy_set_header   Host \$host;
@@ -486,6 +499,9 @@ _enable_status_page() {
     # Deploy static files (cp is safe to re-run — overwrites with latest)
     mkdir -p "$deploy_dir"
     cp -r "$STATUS_PAGE_SRC"/. "$deploy_dir/"
+
+    # Write network identifier — read by node-status.js at runtime
+    printf 'const GRIN_NETWORK = "%s";\n' "$network" > "$deploy_dir/config.js"
 
     # Set ownership and permissions for nginx (www-data)
     chown -R www-data:www-data "$deploy_dir"   2>/dev/null || true

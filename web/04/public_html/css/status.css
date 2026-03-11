@@ -78,6 +78,30 @@ header {
 
 .logo h1 span { color: var(--grin); }
 
+/* Network badge — injected by config.js / node-status.js */
+.network-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.network-badge.mainnet {
+  color: var(--green);
+  border-color: var(--green);
+  background: rgba(63, 185, 80, 0.08);
+}
+
+.network-badge.testnet {
+  color: var(--yellow);
+  border-color: var(--yellow);
+  background: rgba(210, 153, 34, 0.08);
+}
+
 .header-right {
   display: flex;
   align-items: center;

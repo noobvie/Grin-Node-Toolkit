@@ -414,12 +414,67 @@ check_os_and_deps() {
 select_network() {
     step_header "Step 3: Network Selection"
 
-    # If one network slot is already occupied, auto-select the other one.
-    # "Both" is not offered — the occupied slot is already running.
+    # If one network slot is already occupied, offer: install the other network,
+    # or rebuild the running one with a different mode (mainnet only — testnet is always pruned).
     if [[ -n "$RESTRICTED_NETWORK" ]]; then
-        NETWORK_TYPE="$RESTRICTED_NETWORK"
-        info "Network auto-selected: ${BOLD}${NETWORK_TYPE}${RESET} (the other slot is already running)"
-        log "[STEP 3] Network=$NETWORK_TYPE (auto-restricted)"
+        local running_network running_port
+        [[ "$RESTRICTED_NETWORK" == "testnet" ]] && running_network="mainnet" || running_network="testnet"
+        [[ "$running_network"    == "mainnet" ]] && running_port=3414         || running_port=13414
+
+        # Detect current mode of the running node via its config file
+        local running_mode="unknown"
+        local running_pid
+        running_pid=$(ss -tlnp "sport = :$running_port" 2>/dev/null \
+            | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+        if [[ -n "$running_pid" ]]; then
+            local _bin _cfg
+            _bin=$(readlink -f "/proc/$running_pid/exe" 2>/dev/null) || true
+            _cfg="$(dirname "${_bin:-}")/grin-server.toml"
+            if [[ -f "$_cfg" ]] && grep -qiE 'archive_mode\s*=\s*true' "$_cfg" 2>/dev/null; then
+                running_mode="full archive"
+            else
+                running_mode="pruned"
+            fi
+        fi
+
+        echo ""
+        info "Running: ${BOLD}${running_network}${RESET}  port $running_port  mode: $running_mode"
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Install ${BOLD}${RESTRICTED_NETWORK}${RESET} alongside it"
+        if [[ "$running_network" == "mainnet" ]]; then
+            local switch_to
+            [[ "$running_mode" == "pruned" ]] && switch_to="full archive" || switch_to="pruned"
+            echo -e "  ${YELLOW}2${RESET}) Rebuild ${BOLD}${running_network}${RESET} — switch to ${switch_to}"
+        fi
+        echo -e "  ${DIM}0${RESET}) Return to main menu"
+        echo ""
+        echo -ne "${BOLD}Choice [1]: ${RESET}"
+        local slot_choice
+        read -r slot_choice || true
+
+        case "${slot_choice:-1}" in
+            1)
+                NETWORK_TYPE="$RESTRICTED_NETWORK"
+                info "Network: ${BOLD}${NETWORK_TYPE}${RESET}"
+                log "[STEP 3] Network=$NETWORK_TYPE (other slot occupied)"
+                ;;
+            2)
+                if [[ "$running_network" == "mainnet" ]]; then
+                    warn "Stopping ${running_network} to rebuild with different mode..."
+                    stop_grin_gracefully
+                    NETWORK_TYPE="mainnet"
+                    RESTRICTED_NETWORK=""
+                    info "Network: ${BOLD}${NETWORK_TYPE}${RESET} — select new mode at Step 4"
+                    log "[STEP 3] Network=$NETWORK_TYPE (mode-switch rebuild)"
+                else
+                    warn "Mode switching is only available for mainnet (testnet is always pruned)."
+                    NETWORK_TYPE="$RESTRICTED_NETWORK"
+                    log "[STEP 3] Network=$NETWORK_TYPE (auto-restricted)"
+                fi
+                ;;
+            0) exit 0 ;;
+            *) die "Invalid choice." ;;
+        esac
         return
     fi
 

@@ -185,8 +185,8 @@ async function runSelfTest() {
   if (btn) btn.disabled = true;
 
   try {
-    const data = await rpc('get_tip');
-    out.textContent = JSON.stringify(data, null, 2);
+    const [tip, ver] = await Promise.all([rpc('get_tip'), rpc('get_version')]);
+    out.textContent = JSON.stringify({ get_tip: tip, get_version: ver }, null, 2);
     out.classList.add('ok');
   } catch (err) {
     out.textContent = 'Error: ' + err.message;
@@ -202,6 +202,8 @@ document.addEventListener('DOMContentLoaded', () => {
   applyNetwork();
   applyCurlTip();
 
+  // Attach button listener here — inline onclick is blocked by CSP script-src 'self'
+  document.getElementById('test-btn')?.addEventListener('click', runSelfTest);
   document.getElementById('theme-btn')?.addEventListener('click', () => {
     applyTheme(currentTheme === 'light' ? 'dark' : 'light');
   });

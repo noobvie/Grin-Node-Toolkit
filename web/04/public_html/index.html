@@ -89,8 +89,31 @@
       <div class="card-value dim" id="v-node-ver">…</div>
     </div>
     <div class="card">
-      <div class="card-label">Header Version</div>
+      <div class="card-label">Header Version — block header format (increments on hard fork)</div>
       <div class="card-value dim" id="v-hdr-ver">…</div>
+    </div>
+  </div>
+
+  <!-- ── Developer section ──────────────────────────────────────────────── -->
+  <div class="section-label">
+    <span class="section-dot" style="background:var(--muted)"></span>
+    Developer
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">Live API test — runs get_tip directly from this browser</div>
+      <button class="test-btn" id="test-btn" onclick="runSelfTest()">&#9654; Run Test</button>
+      <pre class="curl-block fetch-result" id="fetch-result">Click "Run Test" to fetch live data from this node…</pre>
+      <div class="card-sub">Executes in your browser — no terminal needed &nbsp;·&nbsp; same-origin fetch to <code>/v2/foreign</code></div>
+    </div>
+    <div class="card">
+      <div class="card-label">CORS test — verify any website can query this API</div>
+      <pre class="curl-block" id="curl-tip">…</pre>
+      <div class="card-sub">
+        Expected response header: <code>Access-Control-Allow-Origin: *</code>
+        &nbsp;·&nbsp; Run from any terminal on any machine
+      </div>
     </div>
   </div>
 

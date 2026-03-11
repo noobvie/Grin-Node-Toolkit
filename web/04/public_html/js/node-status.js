@@ -30,8 +30,8 @@ async function rpc(method, params) {
 }
 
 // ── Formatting ────────────────────────────────────────────────────────────────
-// Integer only — no decimals
-const fmtInt = n => Math.floor(Number(n)).toLocaleString();
+// Integer only — no decimals, no thousands separator
+const fmtInt = n => String(Math.floor(Number(n)));
 
 // ── DOM helper ─────────────────────────────────────────────────────────────────
 function setVal(id, text, extraClass) {
@@ -95,8 +95,8 @@ async function refresh() {
   // Circulating supply: Grin emits 1 coin/second, ~60/block
   if (tip?.height != null) {
     const supply = Math.floor(tip.height) * 60;
-    setVal('v-supply', fmtInt(supply) + ' GRIN');
-    setText('v-supply-sub', '≈ height × 60  (1 GRIN/s · 60 s/block)');
+    setVal('v-supply', fmtInt(supply) + ' GRIN / ∞');
+    setText('v-supply-sub', '≈ height × 60  (1 GRIN/s · 60 s/block · no max supply)');
   } else {
     setVal('v-supply', '—');
   }
@@ -161,10 +161,46 @@ function applyTheme(theme) {
   if (btn) btn.textContent = theme === 'light' ? '☀' : '🌙';
 }
 
+// ── Curl tip ───────────────────────────────────────────────────────────────────
+function applyCurlTip() {
+  const el = document.getElementById('curl-tip');
+  if (!el) return;
+  const origin = window.location.origin;
+  el.textContent =
+    `curl -s -X POST ${origin}/v2/foreign \\\n` +
+    `     -H 'Origin: https://www.google.com' \\\n` +
+    `     -H 'Content-Type: application/json' \\\n` +
+    `     -d '{"jsonrpc":"2.0","method":"get_tip","params":[],"id":1}' \\\n` +
+    `     -D -`;
+}
+
+// ── Self test ──────────────────────────────────────────────────────────────────
+async function runSelfTest() {
+  const btn = document.getElementById('test-btn');
+  const out = document.getElementById('fetch-result');
+  if (!out) return;
+
+  out.textContent = 'Fetching…';
+  out.className   = 'curl-block fetch-result';
+  if (btn) btn.disabled = true;
+
+  try {
+    const data = await rpc('get_tip');
+    out.textContent = JSON.stringify(data, null, 2);
+    out.classList.add('ok');
+  } catch (err) {
+    out.textContent = 'Error: ' + err.message;
+    out.classList.add('err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // ── Boot ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(currentTheme);
   applyNetwork();
+  applyCurlTip();
 
   document.getElementById('theme-btn')?.addEventListener('click', () => {
     applyTheme(currentTheme === 'light' ? 'dark' : 'light');

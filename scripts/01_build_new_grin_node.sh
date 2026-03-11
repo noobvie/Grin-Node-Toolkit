@@ -23,10 +23,12 @@
 #   Archives  : Pruned (default, smaller)  |  Full (mainnet only, full UTXO history)
 #   Note: Full archive mode is NOT available for testnet.
 #
-# NODE DIRECTORIES  (created at filesystem root /)
-#   /grinprunemain   — pruned,       mainnet
-#   /grinfullmain    — full archive, mainnet
-#   /grinprunetest   — pruned,       testnet
+# NODE DIRECTORIES  (default paths — user may choose a custom location at Step 5)
+#   /grinprunemain   — pruned,       mainnet  (default)
+#   /grinfullmain    — full archive, mainnet  (default)
+#   /grinprunetest   — pruned,       testnet  (default)
+#   The chosen path (default or custom) is saved to:
+#     conf/grin_instances_location.conf  (used by other toolkit scripts)
 #
 # SETUP PIPELINE  (up to 14 steps; Steps 10–12 replaced by a single stream step
 #                  when on-the-fly extraction is chosen at Step 9)
@@ -50,8 +52,14 @@
 #              User chooses: 1) Pruned  2) Full archive (mainnet only)
 #
 #   Step  5 — Create Node Directory
-#              Creates the target node directory (e.g. /grinprunemain).
-#              Prompts before reusing if it already exists.
+#              User enters a path (default or custom). After each entry, shows
+#              disk space for the chosen location and, if the directory already
+#              exists, lists its contents (up to 20 items). A bold red warning
+#              is shown when files are present: all will be permanently removed
+#              before downloading begins. User must confirm [y/N/0] before the
+#              path is accepted. On confirmation, all existing files are wiped
+#              immediately so the directory is clean for the binary and chain
+#              data that follow.
 #
 #   Step  6 — Download Grin Binary
 #              Queries the GitHub API for the latest release and downloads the
@@ -132,6 +140,8 @@ SCRIPT_START_TIME=$(date +%s)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/../log"
 LOG_FILE="$LOG_DIR/01_build_new_grin_node_$(date +%Y%m%d_%H%M%S).log"
+CONF_DIR="$SCRIPT_DIR/../conf"
+INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"
 GRIN_GITHUB_API="https://api.github.com/repos/mimblewimble/grin/releases/latest"
 
 # --- Session state (reset per node) ---
@@ -234,6 +244,141 @@ stop_grin_gracefully() {
 }
 
 # =============================================================================
+# HELPER: STOP A SINGLE GRIN INSTANCE
+# -----------------------------------------------------------------------------
+# Stops only the instance on the given P2P port (SIGTERM → wait → SIGKILL) and
+# kills its associated tmux session by looking up INSTANCES_CONF.
+#   Usage: stop_grin_one <port>   e.g. stop_grin_one 3414
+# =============================================================================
+stop_grin_one() {
+    local target_port="$1"
+    local stop_timeout=30
+
+    local pid
+    pid=$(ss -tlnp "sport = :$target_port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+    if [[ -z "$pid" ]]; then
+        warn "No process found on port $target_port."
+        return
+    fi
+
+    info "PID $pid on port $target_port — sending SIGTERM..."
+    kill -TERM "$pid" 2>/dev/null || true
+    local count=0
+    while ps -p "$pid" >/dev/null 2>&1 && [[ $count -lt $stop_timeout ]]; do
+        sleep 2; count=$(( count + 2 ))
+        [[ $(( count % 10 )) -eq 0 ]] && info "Waiting for Grin to stop... (${count}s)"
+    done
+    if ps -p "$pid" >/dev/null 2>&1; then
+        warn "Grin (PID $pid) still running — sending SIGKILL..."
+        kill -KILL "$pid" 2>/dev/null || true; sleep 2
+    fi
+
+    # Kill the tmux session associated with this port's instance dir (from conf)
+    if [[ -f "$INSTANCES_CONF" ]]; then
+        local grin_dir=""
+        # shellcheck source=/dev/null
+        source "$INSTANCES_CONF" 2>/dev/null || true
+        if [[ "$target_port" == "3414" ]]; then
+            grin_dir="${PRUNEMAIN_GRIN_DIR:-${FULLMAIN_GRIN_DIR:-}}"
+        else
+            grin_dir="${PRUNETEST_GRIN_DIR:-}"
+        fi
+        if [[ -n "$grin_dir" ]]; then
+            local sess="grin_$(basename "$grin_dir")"
+            tmux kill-session -t "$sess" 2>/dev/null && info "Tmux session '$sess' closed." || true
+        fi
+    fi
+
+    success "Grin on port $target_port stopped."
+}
+
+# =============================================================================
+# BINARY-ONLY UPDATE — all installed instances
+# -----------------------------------------------------------------------------
+# Reads all instance dirs from INSTANCES_CONF, downloads the latest Grin binary
+# from GitHub once, stops all running nodes, replaces each binary, and restarts
+# each node in its existing tmux session.  Chain data is never touched.
+# =============================================================================
+update_binary_only() {
+    step_header "Binary Update: All Grin Instances"
+
+    [[ ! -f "$INSTANCES_CONF" ]] && \
+        die "No instances found in $INSTANCES_CONF. Run node setup first."
+
+    # shellcheck source=/dev/null
+    source "$INSTANCES_CONF" 2>/dev/null || true
+
+    # Collect all installed instance dirs + network type
+    local -a inst_dirs=() inst_nets=()
+    for key in PRUNEMAIN FULLMAIN PRUNETEST; do
+        local varname="${key}_GRIN_DIR"
+        local dir="${!varname:-}"
+        if [[ -n "$dir" && -d "$dir" && -f "$dir/grin" ]]; then
+            inst_dirs+=("$dir")
+            [[ "$key" == "PRUNETEST" ]] && inst_nets+=("testnet") || inst_nets+=("mainnet")
+        fi
+    done
+
+    [[ ${#inst_dirs[@]} -eq 0 ]] && die "No installed Grin instances found."
+
+    info "Found ${#inst_dirs[@]} instance(s):"
+    for i in "${!inst_dirs[@]}"; do
+        info "  → ${inst_dirs[$i]}  (${inst_nets[$i]})"
+    done
+    echo ""
+
+    # Download latest binary once
+    info "Querying GitHub for latest Grin release..."
+    local release_json version download_url
+    release_json=$(curl -fsSL --max-time 30 "$GRIN_GITHUB_API") \
+        || die "Failed to reach GitHub API. Check internet connection."
+    version=$(echo "$release_json" | jq -r '.tag_name')
+    download_url=$(echo "$release_json" \
+        | jq -r '.assets[] | select(.name | test("linux-x86_64\\.tar\\.gz$"; "i")) | .browser_download_url' \
+        | head -1)
+    [[ -z "$download_url" || "$download_url" == "null" ]] \
+        && die "No linux-x86_64 asset found for release '$version'."
+
+    info "Latest version : $version"
+    info "Download URL   : $download_url"
+    local tmp_tar="/tmp/grin_bin_$$.tar.gz"
+    local tmp_dir="/tmp/grin_extract_$$"
+    mkdir -p "$tmp_dir"
+    wget --progress=bar:force -O "$tmp_tar" "$download_url" \
+        || die "Binary download failed."
+    tar -xzf "$tmp_tar" -C "$tmp_dir" \
+        || die "Failed to extract binary archive."
+    rm -f "$tmp_tar"
+    local grin_bin
+    grin_bin=$(find "$tmp_dir" -type f -name "grin" | grep -v "grin-wallet" | head -1)
+    [[ -z "$grin_bin" ]] && die "Could not locate 'grin' binary in the downloaded archive."
+
+    # Stop all running nodes before replacing binaries
+    stop_grin_gracefully
+
+    # Replace binary + restart each instance
+    for i in "${!inst_dirs[@]}"; do
+        local dir="${inst_dirs[$i]}"
+        local net="${inst_nets[$i]}"
+        info "Installing $version to $dir/grin ..."
+        install -m 755 "$grin_bin" "$dir/grin"
+        success "Binary updated: $dir/grin"
+        # start_grin_tmux reads GRIN_DIR and NETWORK_TYPE globals
+        GRIN_DIR="$dir"
+        NETWORK_TYPE="$net"
+        start_grin_tmux
+    done
+
+    rm -rf "$tmp_dir"
+    echo ""
+    success "All instances updated to Grin $version."
+    log "[BINARY UPDATE] version=$version instances=${#inst_dirs[@]}"
+    info "Press Enter to return to main menu."
+    read -r || true
+    exit 0
+}
+
+# =============================================================================
 # [1] CHECK FOR RUNNING GRIN PROCESSES AND PORT CONFLICTS
 # -----------------------------------------------------------------------------
 # P2P ports 3414 (mainnet) and 13414 (testnet) are the authoritative indicators
@@ -241,9 +386,12 @@ stop_grin_gracefully() {
 # network. Archive mode on testnet is NOT supported.
 #
 # Scenarios:
-#   Both 3414 + 13414 occupied → offer K to kill all & rebuild, or 0 to return to menu
-#   Only 3414 occupied         → restrict to testnet installation; set RESTRICTED_NETWORK
-#   Only 13414 occupied        → restrict to mainnet installation; set RESTRICTED_NETWORK
+#   Both 3414 + 13414 occupied → B = binary-only update (all instances, no rebuild)
+#                                  M = kill mainnet & rebuild mainnet only
+#                                  T = kill testnet  & rebuild testnet only
+#                                  K = kill all & rebuild both; 0 = return to menu
+#   Only 3414 occupied         → B = binary-only update; 1 = install testnet alongside
+#   Only 13414 occupied        → B = binary-only update; 1 = install mainnet alongside
 #   Neither occupied           → check for stale/orphaned grin processes and ports,
 #                                offer to kill them before continuing
 # =============================================================================
@@ -265,17 +413,31 @@ check_grin_running() {
         warn "Mainnet node is running on port 3414  (PID: $mainnet_pid)"
         warn "Testnet node is running on port 13414 (PID: $testnet_pid)"
         echo ""
-        error "Both mainnet and testnet are already running on this server."
+        warn  "Both mainnet and testnet are already running on this server."
         info  "A server can host at most two Grin instances (one per network)."
         echo ""
         local _both_choice
         while true; do
-            echo -e "  ${RED}K${RESET} — kill all Grin processes & rebuild nodes"
+            echo -e "  ${CYAN}B${RESET} — update binary only  (no chain data rebuild)"
+            echo -e "  ${YELLOW}M${RESET} — kill mainnet  & rebuild mainnet"
+            echo -e "  ${YELLOW}T${RESET} — kill testnet  & rebuild testnet"
+            echo -e "  ${RED}K${RESET} — kill all Grin processes & rebuild both"
             echo -e "  ${GREEN}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[K = kill & rebuild  /  0 = main menu]: ${RESET}"
+            echo -ne "${DIM}[B/M/T/K/0]: ${RESET}"
             read -r _both_choice || true
             case "${_both_choice:-}" in
+                [Bb])
+                    update_binary_only
+                    ;;
+                [Mm])
+                    stop_grin_one 3414
+                    exec "$0"
+                    ;;
+                [Tt])
+                    stop_grin_one 13414
+                    exec "$0"
+                    ;;
                 [Kk])
                     stop_grin_gracefully
                     exec "$0"
@@ -284,7 +446,7 @@ check_grin_running() {
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — press K to kill & rebuild, or 0 to return."
+                    warn "Invalid input — choose B, M, T, K, or 0."
                     echo ""
                     ;;
             esac
@@ -297,11 +459,35 @@ check_grin_running() {
         info "Mainnet node is running on port 3414 (PID: $mainnet_pid)."
         info "This server has one free slot — testnet can be installed alongside it."
         warn "Note: full archive mode is NOT available on testnet."
-        RESTRICTED_NETWORK="testnet"
-        success "Continuing with testnet installation."
         echo ""
-        log "[STEP 1] Mainnet running (PID $mainnet_pid). Restricted to testnet."
-        return
+        local _main_choice
+        while true; do
+            echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
+            echo -e "  ${GREEN}1${RESET} — install testnet alongside mainnet  ${DIM}(default)${RESET}"
+            echo -e "  ${DIM}0${RESET} — return to master script"
+            echo ""
+            echo -ne "${DIM}[B/1/0, Enter = 1]: ${RESET}"
+            read -r _main_choice || true
+            case "${_main_choice:-1}" in
+                [Bb])
+                    update_binary_only
+                    ;;
+                1|"")
+                    RESTRICTED_NETWORK="testnet"
+                    success "Continuing with testnet installation."
+                    echo ""
+                    log "[STEP 1] Mainnet running (PID $mainnet_pid). Restricted to testnet."
+                    return
+                    ;;
+                0)
+                    exit 0
+                    ;;
+                *)
+                    warn "Invalid input — choose B, 1, or 0."
+                    echo ""
+                    ;;
+            esac
+        done
     fi
 
     # ── Only testnet running → can install mainnet alongside it ───────────────
@@ -309,11 +495,35 @@ check_grin_running() {
         echo ""
         info "Testnet node is running on port 13414 (PID: $testnet_pid)."
         info "This server has one free slot — mainnet can be installed alongside it."
-        RESTRICTED_NETWORK="mainnet"
-        success "Continuing with mainnet installation."
         echo ""
-        log "[STEP 1] Testnet running (PID $testnet_pid). Restricted to mainnet."
-        return
+        local _test_choice
+        while true; do
+            echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
+            echo -e "  ${GREEN}1${RESET} — install mainnet alongside testnet  ${DIM}(default)${RESET}"
+            echo -e "  ${DIM}0${RESET} — return to master script"
+            echo ""
+            echo -ne "${DIM}[B/1/0, Enter = 1]: ${RESET}"
+            read -r _test_choice || true
+            case "${_test_choice:-1}" in
+                [Bb])
+                    update_binary_only
+                    ;;
+                1|"")
+                    RESTRICTED_NETWORK="mainnet"
+                    success "Continuing with mainnet installation."
+                    echo ""
+                    log "[STEP 1] Testnet running (PID $testnet_pid). Restricted to mainnet."
+                    return
+                    ;;
+                0)
+                    exit 0
+                    ;;
+                *)
+                    warn "Invalid input — choose B, 1, or 0."
+                    echo ""
+                    ;;
+            esac
+        done
     fi
 
     # ── No legitimate node running → check for stale/orphaned processes ───────
@@ -412,12 +622,67 @@ check_os_and_deps() {
 select_network() {
     step_header "Step 3: Network Selection"
 
-    # If one network slot is already occupied, auto-select the other one.
-    # "Both" is not offered — the occupied slot is already running.
+    # If one network slot is already occupied, offer: install the other network,
+    # or rebuild the running one with a different mode (mainnet only — testnet is always pruned).
     if [[ -n "$RESTRICTED_NETWORK" ]]; then
-        NETWORK_TYPE="$RESTRICTED_NETWORK"
-        info "Network auto-selected: ${BOLD}${NETWORK_TYPE}${RESET} (the other slot is already running)"
-        log "[STEP 3] Network=$NETWORK_TYPE (auto-restricted)"
+        local running_network running_port
+        [[ "$RESTRICTED_NETWORK" == "testnet" ]] && running_network="mainnet" || running_network="testnet"
+        [[ "$running_network"    == "mainnet" ]] && running_port=3414         || running_port=13414
+
+        # Detect current mode of the running node via its config file
+        local running_mode="unknown"
+        local running_pid
+        running_pid=$(ss -tlnp "sport = :$running_port" 2>/dev/null \
+            | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+        if [[ -n "$running_pid" ]]; then
+            local _bin _cfg
+            _bin=$(readlink -f "/proc/$running_pid/exe" 2>/dev/null) || true
+            _cfg="$(dirname "${_bin:-}")/grin-server.toml"
+            if [[ -f "$_cfg" ]] && grep -qiE 'archive_mode\s*=\s*true' "$_cfg" 2>/dev/null; then
+                running_mode="full archive"
+            else
+                running_mode="pruned"
+            fi
+        fi
+
+        echo ""
+        info "Running: ${BOLD}${running_network}${RESET}  port $running_port  mode: $running_mode"
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Install ${BOLD}${RESTRICTED_NETWORK}${RESET} alongside it"
+        if [[ "$running_network" == "mainnet" ]]; then
+            local switch_to
+            [[ "$running_mode" == "pruned" ]] && switch_to="full archive" || switch_to="pruned"
+            echo -e "  ${YELLOW}2${RESET}) Rebuild ${BOLD}${running_network}${RESET} — switch to ${switch_to}"
+        fi
+        echo -e "  ${DIM}0${RESET}) Return to main menu"
+        echo ""
+        echo -ne "${BOLD}Choice [1]: ${RESET}"
+        local slot_choice
+        read -r slot_choice || true
+
+        case "${slot_choice:-1}" in
+            1)
+                NETWORK_TYPE="$RESTRICTED_NETWORK"
+                info "Network: ${BOLD}${NETWORK_TYPE}${RESET}"
+                log "[STEP 3] Network=$NETWORK_TYPE (other slot occupied)"
+                ;;
+            2)
+                if [[ "$running_network" == "mainnet" ]]; then
+                    warn "Stopping ${running_network} to rebuild with different mode..."
+                    stop_grin_gracefully
+                    NETWORK_TYPE="mainnet"
+                    RESTRICTED_NETWORK=""
+                    info "Network: ${BOLD}${NETWORK_TYPE}${RESET} — select new mode at Step 4"
+                    log "[STEP 3] Network=$NETWORK_TYPE (mode-switch rebuild)"
+                else
+                    warn "Mode switching is only available for mainnet (testnet is always pruned)."
+                    NETWORK_TYPE="$RESTRICTED_NETWORK"
+                    log "[STEP 3] Network=$NETWORK_TYPE (auto-restricted)"
+                fi
+                ;;
+            0) exit 0 ;;
+            *) die "Invalid choice." ;;
+        esac
         return
     fi
 
@@ -514,8 +779,20 @@ select_archive_mode() {
 #   /grinfullmain   — full archive, mainnet
 #   /grinprunemain  — pruned,       mainnet
 #   /grinprunetest  — pruned,       testnet
-# If the directory already exists, prompts to clean it (remove all contents)
-# before proceeding — ensuring a fresh rebuild with no stale files.
+#
+# Flow (repeats until user confirms):
+#   1. User enters a path (Enter = default, 0 = return to menu).
+#   2. Disk space for the nearest existing parent is shown.
+#      Loops back if available space is below the required minimum.
+#   3. If the directory already exists, its contents are listed (ls -lah,
+#      up to 20 items with a total count if more).
+#   4. A bold red warning is displayed when files are present:
+#        "All existing files will be permanently removed before downloading."
+#   5. User confirms with [y/N/0]. N or Enter loops back to prompt for a
+#      different path; 0 exits to the main menu; y accepts and breaks.
+#
+# After confirmation, any existing files are removed immediately (rm -rf) so
+# the directory is clean before the binary download begins.
 # Sets the global GRIN_DIR variable used by all subsequent steps.
 # =============================================================================
 create_node_dir() {
@@ -525,29 +802,93 @@ create_node_dir() {
 
     [[ "$network" == "mainnet" ]] && net_short="main" || net_short="test"
     [[ "$mode"    == "full"    ]] && mode_short="full" || mode_short="prune"
-    GRIN_DIR="/grin${mode_short}${net_short}"
+    local default_dir="/grin${mode_short}${net_short}"
+
+    # Minimum free space: pruned=10GB, full=25GB (in KB)
+    local min_gb; [[ "$mode" == "full" ]] && min_gb=25 || min_gb=10
+    local min_kb=$(( min_gb * 1024 * 1024 ))
 
     step_header "Step 5: Create Node Directory"
+    echo -e "  Default directory: ${BOLD}$default_dir${RESET}"
+    echo ""
+    echo -e "  Press ${GREEN}Enter${RESET} to use the default, or type a custom path."
+    echo -e "  ${DIM}Minimum free space required: ${min_gb}GB${RESET}"
+    echo -e "  ${DIM}0${RESET}) Return to main menu"
+    echo ""
+
+    while true; do
+        echo -ne "${BOLD}Directory [${default_dir}]: ${RESET}"
+        read -r dir_input || true
+        [[ "${dir_input}" == "0" ]] && exit 0
+        [[ -z "$dir_input" ]] && dir_input="$default_dir"
+
+        # Resolve to absolute path
+        local chosen_dir
+        chosen_dir=$(realpath -m "$dir_input" 2>/dev/null) || chosen_dir="$dir_input"
+
+        # Show free space for the nearest existing parent
+        local check_path="$chosen_dir"
+        while [[ ! -d "$check_path" && "$check_path" != "/" ]]; do
+            check_path=$(dirname "$check_path")
+        done
+        local avail_kb
+        avail_kb=$(df -k "$check_path" 2>/dev/null | awk 'NR==2{print $4}') || avail_kb=0
+        local avail_gb=$(( avail_kb / 1024 / 1024 ))
+        echo ""
+        echo -e "  ${DIM}$(df -h "$check_path" 2>/dev/null | awk 'NR==1||NR==2' | column -t)${RESET}"
+        echo -e "  Available: ${BOLD}${avail_gb}GB${RESET}  (required: ${min_gb}GB)"
+        echo ""
+
+        if (( avail_kb < min_kb )); then
+            warn "Insufficient space: ${avail_gb}GB available, ${min_gb}GB required."
+            echo -e "  Choose a different location or free up space."
+            echo ""
+            continue
+        fi
+
+        # Show existing directory contents so user can verify before committing
+        if [[ -d "$chosen_dir" ]]; then
+            local _item_count
+            _item_count=$(find "$chosen_dir" -mindepth 1 2>/dev/null | wc -l) || _item_count=0
+            if (( _item_count > 0 )); then
+                echo -e "  ${YELLOW}Directory already contains ${_item_count} item(s):${RESET}"
+                ls -lah "$chosen_dir" 2>/dev/null | awk 'NR>1' | head -20 | \
+                    while IFS= read -r _dl; do echo -e "    ${DIM}$_dl${RESET}"; done
+                (( _item_count > 20 )) && \
+                    echo -e "    ${DIM}... (${_item_count} items total — only first 20 shown)${RESET}"
+                echo ""
+                echo -e "  ${RED}${BOLD}All existing files will be permanently removed before downloading begins.${RESET}"
+            else
+                echo -e "  ${DIM}Directory exists and is currently empty.${RESET}"
+            fi
+            echo ""
+        fi
+
+        echo -ne "${BOLD}Confirm this directory and proceed? [y/N/0]: ${RESET}"
+        local _dir_confirm
+        read -r _dir_confirm || true
+        case "${_dir_confirm,,}" in
+            y) ;;
+            0) exit 0 ;;
+            *) echo ""; continue ;;
+        esac
+
+        GRIN_DIR="$chosen_dir"
+        break
+    done
+
     info "Target directory: $GRIN_DIR"
 
+    # Remove all existing files before the binary and chain data are downloaded
     if [[ -d "$GRIN_DIR" ]]; then
-        warn "Directory $GRIN_DIR already exists."
-        echo -e "  ${GREEN}y${RESET}) Clean up and continue"
-        echo -e "  ${RED}n${RESET}) Abort"
-        echo -e "  ${DIM}0${RESET}) Return to main menu"
-        echo ""
-        echo -ne "${BOLD}Clean up this directory? [y/N/0]: ${RESET}"
-        read -r ow || true
-        case "${ow,,}" in
-            y)
-                info "Cleaning $GRIN_DIR ..."
-                rm -rf "${GRIN_DIR:?}"/*  2>/dev/null || true
-                rm -rf "${GRIN_DIR:?}"/.[!.]* 2>/dev/null || true
-                success "Directory cleaned: $GRIN_DIR"
-                ;;
-            0) exit 0 ;;
-            *) die "Aborted. Clean the directory manually or choose a different configuration." ;;
-        esac
+        local _existing_count
+        _existing_count=$(find "$GRIN_DIR" -mindepth 1 2>/dev/null | wc -l) || _existing_count=0
+        if (( _existing_count > 0 )); then
+            info "Removing all existing files from $GRIN_DIR ..."
+            rm -rf "${GRIN_DIR:?}"/*  2>/dev/null || true
+            rm -rf "${GRIN_DIR:?}"/.[!.]* 2>/dev/null || true
+            success "Directory cleaned: $GRIN_DIR"
+        fi
     fi
 
     mkdir -p "$GRIN_DIR" \
@@ -1392,6 +1733,34 @@ show_summary() {
 }
 
 # =============================================================================
+# Save grin instance paths to shared conf file for use by other scripts (e.g. 03).
+# Only the block for the current key is replaced — other instances are untouched.
+# =============================================================================
+save_instance_location() {
+    local network="$1" mode="$2"
+    local key
+    if [[ "$mode" == "full" ]]; then
+        key="FULLMAIN"
+    elif [[ "$network" == "testnet" ]]; then
+        key="PRUNETEST"
+    else
+        key="PRUNEMAIN"
+    fi
+
+    mkdir -p "$CONF_DIR"
+    [[ -f "$INSTANCES_CONF" ]] && sed -i "/^${key}_/d" "$INSTANCES_CONF"
+    cat >> "$INSTANCES_CONF" << __EOF__
+
+${key}_GRIN_DIR="$GRIN_DIR"
+${key}_BINARY="$GRIN_DIR/grin"
+${key}_TOML="$GRIN_DIR/grin-server.toml"
+${key}_CHAIN_DATA="$GRIN_DIR/chain_data"
+__EOF__
+    chmod 600 "$INSTANCES_CONF"
+    log "Instance location saved: $key → $GRIN_DIR"
+}
+
+# =============================================================================
 # [ORCHESTRATOR] FULL SETUP FLOW FOR ONE NETWORK
 # -----------------------------------------------------------------------------
 # Calls steps 4–14 in sequence for a single network (mainnet or testnet).
@@ -1416,6 +1785,7 @@ setup_one_node() {
     fi
     start_grin_tmux
     show_summary        "$network" "$ARCHIVE_MODE"
+    save_instance_location "$network" "$ARCHIVE_MODE"
 
     # Reset per-node state
     GRIN_DIR=""

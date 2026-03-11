@@ -1,0 +1,608 @@
+/* =============================================================================
+   Grin Node Status Page — stylesheet
+   web/04/public_html/css/status.css
+   Shared CSS variable system matches web/06 (dark / light themes).
+============================================================================= */
+
+:root {
+  --bg:      #0d1117;
+  --surface: #161b22;
+  --border:  #30363d;
+  --text:    #e6edf3;
+  --muted:   #8b949e;
+  --grin:    #ff9900;
+  --blue:    #58a6ff;
+  --green:   #3fb950;
+  --red:     #f85149;
+  --yellow:  #d29922;
+}
+
+html[data-theme="light"] {
+  --bg:      #f6f8fa;
+  --surface: #ffffff;
+  --border:  #d0d7de;
+  --text:    #24292f;
+  --muted:   #656d76;
+  --grin:    #bf6800;
+  --blue:    #0969da;
+  --green:   #1a7f37;
+  --red:     #cf222e;
+  --yellow:  #9a6700;
+}
+
+/* ── Matrix theme — terminal green on black ──────────────────────────────── */
+html[data-theme="matrix"] {
+  --bg:      #000000;
+  --surface: #001100;
+  --border:  #004400;
+  --text:    #00ff41;
+  --muted:   #007722;
+  --grin:    #00ff41;
+  --blue:    #00ccff;
+  --green:   #00ff41;
+  --red:     #ff4141;
+  --yellow:  #aaff00;
+}
+html[data-theme="matrix"] body {
+  font-family: 'Courier New', monospace;
+}
+html[data-theme="matrix"] .logo-dot { animation: matrix-pulse 0.5s step-start infinite; }
+@keyframes matrix-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* ── Windows XP theme — retro Tahoma, silver + XP blue ──────────────────── */
+html[data-theme="winxp"] {
+  --bg:      #3a6ea8;
+  --surface: #ece9d8;
+  --border:  #0054e3;
+  --text:    #000000;
+  --muted:   #444444;
+  --grin:    #0066cc;
+  --blue:    #0066cc;
+  --green:   #007700;
+  --red:     #cc0000;
+  --yellow:  #806600;
+}
+html[data-theme="winxp"] body {
+  font-family: Tahoma, 'MS Sans Serif', sans-serif;
+  font-size: 13px;
+}
+html[data-theme="winxp"] .card {
+  border: 2px solid var(--border);
+  border-radius: 0;
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 #848484;
+}
+html[data-theme="winxp"] .card:hover { border-color: #0066cc; }
+html[data-theme="winxp"] header {
+  background: linear-gradient(to bottom, #1f5fbf 0%, #3a85d4 40%, #1a5ab8 100%);
+  border-bottom: 2px solid #0054e3;
+}
+html[data-theme="winxp"] .header-title,
+html[data-theme="winxp"] .header-title span,
+html[data-theme="winxp"] header .refresh-badge { color: #ffffff; }
+
+/* ── XP: elements on blue page background → white ─────────────────────── */
+/* Section labels + dots sit directly on --bg (blue) */
+html[data-theme="winxp"] .section-label         { color: #ffffff; }
+html[data-theme="winxp"] .section-dot           { background: #ffffff !important; }
+/* API status bar pills */
+html[data-theme="winxp"] .api-pill              { color: #dddddd; }
+html[data-theme="winxp"] .api-pill code         { color: #ffffff; }
+html[data-theme="winxp"] .api-pill.pill-ok      { color: #ffffff; }
+html[data-theme="winxp"] .api-pill.pill-ok .pill-dot,
+html[data-theme="winxp"] .api-pill.pill-off .pill-dot { background: #ffffff !important; }
+/* curl-block uses --bg as its background → text must be light */
+html[data-theme="winxp"] .curl-block            { color: #f0f0f0; border-color: #7baee8; }
+html[data-theme="winxp"] .fetch-result.ok       { color: #aaffaa; border-color: #aaffaa; }
+html[data-theme="winxp"] .fetch-result.err      { color: #ffaaaa; border-color: #ffaaaa; }
+/* card-sub code tags (on beige surface) */
+html[data-theme="winxp"] .card-sub code         { color: #0044aa; }
+/* dev-steps list (on beige surface) */
+html[data-theme="winxp"] .dev-steps             { color: #333333; }
+html[data-theme="winxp"] .dev-steps code        { color: #000000; }
+/* endpoint links → yellow for visibility on blue bg */
+html[data-theme="winxp"] .endpoint-list a       { color: #ffdd44; }
+html[data-theme="winxp"] .endpoint-list .ep-desc { color: #c8dff8; }
+html[data-theme="winxp"] .network-badge {
+  color: #ffffff;
+  border-color: #7baee8;
+  background: rgba(255,255,255,0.15);
+}
+html[data-theme="winxp"] footer {
+  background: linear-gradient(to bottom, #1f5fbf, #1a5ab8);
+  border-top: 2px solid #0054e3;
+  color: #ffffff;
+}
+html[data-theme="winxp"] footer a { color: #add8ff; }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.header-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.logo-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--grin);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.header-title {
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.header-title span { color: var(--grin); }
+
+/* Network badge — injected by config.js / node-status.js */
+.network-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.network-badge.mainnet {
+  color: var(--green);
+  border-color: var(--green);
+  background: rgba(63, 185, 80, 0.08);
+}
+
+.network-badge.testnet {
+  color: var(--yellow);
+  border-color: var(--yellow);
+  background: rgba(210, 153, 34, 0.08);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.refresh-badge {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: 'Courier New', monospace;
+  min-width: 38px;
+  text-align: right;
+}
+
+.theme-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  width: 28px;
+  height: 26px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.theme-btn:hover { border-color: var(--grin); color: var(--text); }
+
+.theme-select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.theme-select:hover,
+.theme-select:focus { border-color: var(--grin); }
+
+/* WinXP overrides the select to match its button style */
+html[data-theme="winxp"] .theme-select {
+  background: linear-gradient(to bottom, #f0f4fc, #c8d8ef);
+  border: 1px solid #7b9ecc;
+  color: #000;
+  border-radius: 3px;
+}
+
+/* ── Main ────────────────────────────────────────────────────────────────── */
+main {
+  flex: 1;
+  padding: 24px;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* ── Section label ───────────────────────────────────────────────────────── */
+.section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.section-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--grin);
+  flex-shrink: 0;
+}
+
+/* ── Two-column section layout (Chain + Node side by side) ─────────────── */
+.two-col-sections {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 24px;
+  align-items: start;
+  margin-bottom: 24px;
+}
+.two-col-sections .grid { margin-bottom: 0; }
+
+/* ── Card grid — single column ───────────────────────────────────────────── */
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  transition: border-color 0.15s;
+}
+
+.card:hover { border-color: var(--grin); }
+
+.card-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.card-value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text);
+  word-break: break-all;
+  font-family: 'Courier New', monospace;
+}
+
+.card-value.dim    { color: var(--muted); }
+.card-value.ok     { color: var(--green); }
+.card-value.warn   { color: var(--yellow); }
+.card-value.err    { color: var(--red); }
+/* Full hash — smaller font so 64-char hex wraps cleanly */
+.card-value.hash   { font-size: 0.9rem; word-break: break-all; }
+
+/* Coming-soon placeholder text in a card */
+.card-value.coming-soon {
+  font-size: 0.85rem;
+  font-family: inherit;
+  font-weight: 400;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.grin-inline-logo {
+  width: 20px;
+  height: 20px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+/* Clickable REST endpoint links list */
+.endpoint-list {
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-radius: 4px;
+  margin: 8px 0 4px;
+  overflow-x: auto;
+}
+
+.endpoint-list a {
+  color: var(--grin);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.endpoint-list a:hover { text-decoration: underline; }
+
+.endpoint-list .ep-desc {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Secondary info line below a card value */
+.card-sub {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 5px;
+  font-family: inherit;
+}
+
+/* Curl / code block inside a card */
+.curl-block {
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 10px 0 6px;
+}
+
+.card-sub code {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: var(--green);
+}
+
+.fetch-result.ok  { border-color: var(--green); color: var(--green); }
+.fetch-result.err { border-color: var(--red);   color: var(--red);   }
+
+/* Numbered steps list in developer cards */
+.dev-steps {
+  margin: 10px 0 8px 18px;
+  padding: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 2;
+}
+
+.dev-steps li { padding-left: 4px; }
+
+.dev-steps code {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: var(--grin);
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+.test-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 5px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  margin: 8px 0 0;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.test-btn:hover    { border-color: var(--grin); color: var(--text); }
+.test-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Remote checker — input + button on one row */
+.remote-row {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.url-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  padding: 5px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.url-input::placeholder { color: var(--muted); }
+.url-input:focus        { border-color: var(--grin); }
+
+/* ── API status bar ─────────────────────────────────────────────────────── */
+.api-status-bar {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.api-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  transition: color 0.3s;
+}
+
+.pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+
+.api-pill.pill-ok .pill-dot { background: var(--green); }
+.api-pill.pill-ok            { color: var(--text); }
+.api-pill.pill-off .pill-dot { background: var(--red); }
+.api-pill.pill-off           { color: var(--muted); }
+
+.api-pill code {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: inherit;
+}
+
+/* ── Collapsible section toggle button ──────────────────────────────────── */
+.collapse-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 4px;
+  margin-left: 6px;
+  line-height: 1;
+  transition: color 0.15s;
+  vertical-align: middle;
+}
+.collapse-btn:hover { color: var(--grin); }
+
+/* ── API comparison table ────────────────────────────────────────────────── */
+.api-compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 10px;
+}
+
+.api-compare th,
+.api-compare td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.api-compare thead th {
+  background: var(--bg);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.api-compare thead th:first-child { width: 22%; }
+.api-compare thead th:nth-child(2),
+.api-compare thead th:nth-child(3) { width: 39%; }
+
+.api-compare tbody tr:nth-child(odd) { background: var(--bg); }
+
+.api-compare td:first-child {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.api-compare code {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: var(--green);
+}
+
+/* loading shimmer */
+.loading .card-value { animation: blink 1.2s step-start infinite; }
+@keyframes blink { 50% { opacity: 0.35; } }
+
+/* ── Error banner ────────────────────────────────────────────────────────── */
+.error-banner {
+  display: none;
+  background: rgba(248, 81, 73, 0.08);
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  padding: 10px 16px;
+  color: var(--red);
+  font-size: 13px;
+  margin-bottom: 20px;
+}
+
+.error-banner.visible { display: block; }
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+footer {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 10px 24px;
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+footer a { color: var(--grin); text-decoration: none; }
+footer a:hover { color: var(--text); }
+
+.footer-links { white-space: nowrap; }
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  header              { padding: 10px 16px; }
+  main                { padding: 16px; }
+  footer              { flex-direction: column; gap: 6px; text-align: center; }
+  .footer-links       { white-space: normal; }
+  .two-col-sections   { grid-template-columns: 1fr; }
+}

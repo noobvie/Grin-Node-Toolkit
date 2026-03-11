@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- ── SEO ──────────────────────────────────────────────────────────────── -->
+  <title>Grin API Status</title>
+  <meta name="description"
+        content="Live Grin node API status — block height, total difficulty, circulating supply, and version info. Public /v2/foreign endpoint for Grin MimbleWimble blockchain.">
+  <meta name="keywords"
+        content="Grin, Grin blockchain, Grin API, Grin node, MimbleWimble, privacy coin, grin-node, blockchain status, foreign API, emission">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#ff9900">
+
+  <!-- ── Open Graph ────────────────────────────────────────────────────────── -->
+  <meta property="og:type"        content="website">
+  <meta property="og:title"       content="Grin API Status">
+  <meta property="og:description" content="Live Grin node API status — block height, total difficulty, circulating supply, and version info.">
+
+  <!-- ── Favicon (local SVG) ───────────────────────────────────────────────── -->
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+
+  <!-- ── CSP ───────────────────────────────────────────────────────────────── -->
+  <!-- connect-src includes https: to allow the remote API checker to reach external nodes -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https:">
+
+  <link rel="stylesheet" href="css/status.css">
+</head>
+<body>
+
+<header>
+  <div></div><!-- grid spacer -->
+  <div class="header-center">
+    <div class="logo-dot"></div>
+    <h1 class="header-title"><span>Grin</span> API Status</h1>
+    <span class="network-badge" id="network-badge">—</span>
+  </div>
+  <div class="header-right">
+    <span class="refresh-badge" id="countdown">—</span>
+    <select id="theme-select" class="theme-select" title="Choose theme">
+      <option value="dark">🌙 Dark</option>
+      <option value="light">☀️ Light</option>
+      <option value="matrix">&lt;/&gt; Matrix</option>
+      <option value="winxp">🪟 Windows XP</option>
+    </select>
+  </div>
+</header>
+
+<main>
+
+  <!-- Error banner — hidden until a fetch fails -->
+  <div id="error-banner" class="error-banner"></div>
+
+  <!-- ── API status bar — live online/offline indicator for both API types ── -->
+  <div class="api-status-bar">
+    <span class="api-pill" id="pill-jsonrpc">
+      <span class="pill-dot"></span>
+      JSON-RPC <code>/v2/foreign</code> — <span id="pill-jsonrpc-text">checking…</span>
+    </span>
+    <span class="api-pill" id="pill-rest">
+      <span class="pill-dot"></span>
+      REST <code>/rest/</code> — <span id="pill-rest-text">checking…</span>
+    </span>
+  </div>
+
+  <!-- ── Chain + Node — 2-column side-by-side layout ──────────────────── -->
+  <div class="two-col-sections">
+
+    <div class="section-col">
+      <div class="section-label">
+        <span class="section-dot"></span>
+        Chain
+      </div>
+      <div class="grid">
+        <div class="card">
+          <div class="card-label">Block Height</div>
+          <div class="card-value dim" id="v-height">…</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Total Difficulty</div>
+          <div class="card-value dim" id="v-difficulty">…</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Latest Block Hash</div>
+          <div class="card-value dim hash" id="v-hash">…</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Circulating Supply</div>
+          <div class="card-value dim" id="v-supply">…</div>
+          <div class="card-sub" id="v-supply-sub"></div>
+        </div>
+        <div class="card">
+          <div class="card-label">Emission Rate</div>
+          <div class="card-value">1 GRIN / second</div>
+          <div class="card-sub">60 GRIN / block &nbsp;·&nbsp; 86,400 GRIN / day</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-col">
+      <div class="section-label">
+        <span class="section-dot" style="background:var(--blue)"></span>
+        Node
+      </div>
+      <div class="grid">
+        <div class="card">
+          <div class="card-label">Node Version</div>
+          <div class="card-value dim" id="v-node-ver">…</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Header Version - increments on hard fork)</div>
+          <div class="card-value dim" id="v-hdr-ver">…</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Response Time — last get_tip round-trip</div>
+          <div class="card-value dim" id="v-latency">…</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Connected Peers</div>
+          <div class="card-value dim" id="v-peers">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Chain Data Size</div>
+          <div class="card-value dim coming-soon">
+            This one's tough for me to crack ^^ — help welcome!
+            <img src="favicon.svg" alt="Grin" class="grin-inline-logo">
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── REST API section ───────────────────────────────────────────────── -->
+  <div class="section-label">
+    <span class="section-dot" style="background:var(--green)"></span>
+    REST Endpoints
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">REST API status — simple GET endpoints updated every 60 s</div>
+      <div class="card-value dim" id="v-rest-status">Checking…</div>
+      <div class="card-sub" id="v-rest-sub">
+        Enable via script 04 → option 9 (mainnet) or 11 (testnet)
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-label">Available endpoints — click to open, or copy URL to fetch from anywhere</div>
+      <div class="endpoint-list" id="rest-endpoints">…</div>
+      <div class="card-sub">
+        GET request &nbsp;·&nbsp; CORS enabled (<code>Access-Control-Allow-Origin: *</code>)
+        &nbsp;·&nbsp; <code>Cache-Control: public, max-age=60</code>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-label">Which API style should I use?</div>
+      <table class="api-compare">
+        <thead>
+          <tr><th></th><th>JSON-RPC <code>/v2/foreign</code></th><th>REST <code>/rest/*.json</code></th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Request method</td><td>POST</td><td>GET</td></tr>
+          <tr><td>Auth required</td><td>No (foreign API)</td><td>No</td></tr>
+          <tr><td>Response format</td><td><code>{"result":{"Ok":{…}}}</code></td><td><code>{"height":…}</code></td></tr>
+          <tr><td>Live data</td><td>Always fresh</td><td>Up to 60 s old</td></tr>
+          <tr><td>Best for</td><td>Wallets, explorers, tx push, full chain queries</td><td>CoinGecko, widgets, spreadsheets, no-code tools</td></tr>
+          <tr><td>Browser fetch</td><td>Needs POST + JSON body</td><td>One-line <code>fetch(url)</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Developer section ──────────────────────────────────────────────── -->
+  <div class="section-label">
+    <span class="section-dot" style="background:var(--muted)"></span>
+    Developer — JSON-RPC
+    <button class="collapse-btn" id="dev-toggle" title="Collapse / expand">▼</button>
+  </div>
+
+  <div id="dev-cards"><div class="grid">
+    <div class="card">
+      <div class="card-label">Live API test — runs get_tip directly from this browser</div>
+      <button class="test-btn" id="test-btn">&#9654; Run Test</button>
+      <pre class="curl-block fetch-result" id="fetch-result">Click "Run Test" to fetch live data from this node…</pre>
+      <div class="card-sub">Executes in your browser — no terminal needed &nbsp;·&nbsp; same-origin fetch to <code>/v2/foreign</code></div>
+    </div>
+    <div class="card">
+      <div class="card-label">CORS test — verify any website can query this API</div>
+      <pre class="curl-block" id="curl-tip">…</pre>
+      <div class="card-sub">
+        Expected response header: <code>Access-Control-Allow-Origin: *</code>
+        &nbsp;·&nbsp; Run from any terminal on any machine
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-label">Browser fetch test — get chain tip &amp; circulating supply from any website's console</div>
+      <ol class="dev-steps">
+        <li>Open any website — e.g. <code>https://www.google.com</code></li>
+        <li>Press <code>F12</code> &nbsp;(or right-click anywhere → <strong>Inspect</strong>)</li>
+        <li>Click the <strong>Console</strong> tab at the top of DevTools</li>
+        <li>Paste the command below and press <code>Enter</code></li>
+        <li>The JSON response from this node will appear directly below</li>
+      </ol>
+      <pre class="curl-block" id="fetch-tip">…</pre>
+      <div class="card-sub">
+        Circulating supply is not a direct field — it is derived as <code>height × 60</code>
+        &nbsp;·&nbsp; Copy this snippet into your own site to display live Grin data
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-label">Remote API checker — test another Grin node's public endpoint</div>
+      <div class="remote-row">
+        <input class="url-input" id="remote-url" type="url"
+               placeholder="https://api.example.com" spellcheck="false">
+        <button class="test-btn" id="remote-btn">&#9654; Check</button>
+      </div>
+      <pre class="curl-block fetch-result" id="remote-result">Enter a remote Grin node origin above and click Check…</pre>
+      <div class="card-sub">
+        Sends <code>get_tip</code> to <code>{origin}/v2/foreign</code> directly from your browser
+        &nbsp;·&nbsp; If CORS is missing on the remote node, the browser will block it and show an error
+      </div>
+    </div>
+  </div></div>
+
+</main>
+
+<footer>
+  <span id="last-updated">Connecting…</span>
+  <span class="footer-links">
+    <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>
+    &nbsp;·&nbsp;
+    <a href="https://grin.mw/" target="_blank" rel="noopener">grin.mw</a>
+    &nbsp;·&nbsp;
+    <a href="https://forum.grin.mw/" target="_blank" rel="noopener">Forum</a>
+  </span>
+</footer>
+
+<!-- config.js is generated by the deploy script and sets GRIN_NETWORK -->
+<script src="config.js"></script>
+<script src="js/node-status.js"></script>
+</body>
+</html>

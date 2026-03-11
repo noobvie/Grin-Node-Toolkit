@@ -113,18 +113,19 @@
           <div class="card-value dim" id="v-hdr-ver">…</div>
         </div>
         <div class="card">
-          <div class="card-label">Network</div>
-          <div class="card-value dim" id="v-network">…</div>
-        </div>
-        <div class="card">
-          <div class="card-label">API Endpoint — public JSON-RPC access point</div>
-          <div class="card-value dim hash" id="v-api-url">…</div>
-          <div class="card-sub">POST &nbsp;·&nbsp; CORS enabled &nbsp;·&nbsp; no auth required</div>
-        </div>
-        <div class="card">
           <div class="card-label">Response Time — last get_tip round-trip</div>
           <div class="card-value dim" id="v-latency">…</div>
           <div class="card-sub">measured in your browser each refresh cycle</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Connected Peers</div>
+          <div class="card-value dim" id="v-peers">—</div>
+          <div class="card-sub" id="v-peers-sub">requires REST collector (script 04 → option 9/11)</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Chain Data Size</div>
+          <div class="card-value dim" id="v-chain-size">—</div>
+          <div class="card-sub" id="v-chain-sub">requires REST collector (script 04 → option 9/11)</div>
         </div>
       </div>
     </div>

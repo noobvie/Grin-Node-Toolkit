@@ -61,6 +61,12 @@ REST_COLLECTOR_DEST="/usr/local/lib/grin-node-toolkit/rest-collector.py"
 REST_CRON_MAINNET="/etc/cron.d/grin-node-api-rest"
 REST_CRON_TESTNET="/etc/cron.d/grin-node-api-rest-testnet"
 
+# Grin node data directories — used by the REST collector to read chain size + archive mode.
+# The collector also tries the owner API for connected peer count (owner port = foreign + 7).
+# These are standard Grin defaults; adjust if your node user/path differs.
+GRIN_DATA_DIR_MAINNET="/home/grin/.grin/main"
+GRIN_DATA_DIR_TESTNET="/home/grin/.grin/floo"
+
 # ─── Logging ──────────────────────────────────────────────────────────────────
 mkdir -p "$LOG_DIR"
 log()     { echo -e "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*" >> "$LOG_FILE" 2>/dev/null || true; }
@@ -712,7 +718,7 @@ disable_testnet_status_page() { _disable_status_page testnet "$NODE_API_NGINX_CO
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _enable_rest_api() {
-    local network="$1" port="$2" nginx_conf="$3" rest_dir="$4" cron_file="$5"
+    local network="$1" port="$2" nginx_conf="$3" rest_dir="$4" cron_file="$5" grin_data_dir="$6"
 
     echo -e "\n${BOLD}${CYAN}── Enable REST API ($network) ──${RESET}\n"
     echo -e "  Simple GET endpoints — no JSON-RPC knowledge required."
@@ -763,7 +769,7 @@ _enable_rest_api() {
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
-* * * * * www-data python3 $REST_COLLECTOR_DEST $port $rest_dir 2>/dev/null || true
+* * * * * www-data python3 $REST_COLLECTOR_DEST $port $rest_dir $grin_data_dir 2>/dev/null || true
 EOF
     chmod 644 "$cron_file"
     chown root:root "$cron_file"
@@ -772,7 +778,7 @@ EOF
     # 4. Run initial collection now so JSON files exist before nginx reload.
     #    If the node is not running yet, cron will fill them on the next minute.
     info "Running initial collection..."
-    if sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" 2>/dev/null; then
+    if sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" "$grin_data_dir" 2>/dev/null; then
         success "Initial REST data collected."
     else
         warn "Initial collection failed (node may not be running yet)."
@@ -847,11 +853,13 @@ _disable_rest_api() {
 }
 
 enable_mainnet_rest_api()  { _enable_rest_api  mainnet "$NODE_API_PORT_MAINNET" \
-                                "$NODE_API_NGINX_CONF_MAINNET" "$REST_API_DIR_MAINNET" "$REST_CRON_MAINNET"; }
+                                "$NODE_API_NGINX_CONF_MAINNET" "$REST_API_DIR_MAINNET" "$REST_CRON_MAINNET" \
+                                "$GRIN_DATA_DIR_MAINNET"; }
 disable_mainnet_rest_api() { _disable_rest_api mainnet \
                                 "$NODE_API_NGINX_CONF_MAINNET" "$REST_API_DIR_MAINNET" "$REST_CRON_MAINNET"; }
 enable_testnet_rest_api()  { _enable_rest_api  testnet "$NODE_API_PORT_TESTNET" \
-                                "$NODE_API_NGINX_CONF_TESTNET" "$REST_API_DIR_TESTNET" "$REST_CRON_TESTNET"; }
+                                "$NODE_API_NGINX_CONF_TESTNET" "$REST_API_DIR_TESTNET" "$REST_CRON_TESTNET" \
+                                "$GRIN_DATA_DIR_TESTNET"; }
 disable_testnet_rest_api() { _disable_rest_api testnet \
                                 "$NODE_API_NGINX_CONF_TESTNET" "$REST_API_DIR_TESTNET" "$REST_CRON_TESTNET"; }
 

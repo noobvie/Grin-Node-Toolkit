@@ -159,7 +159,6 @@ function applyNetwork() {
   const label = network.charAt(0).toUpperCase() + network.slice(1);
   document.title = 'Grin ' + label + ' API Status';
 
-  setVal('v-network', network.toUpperCase(), network === 'mainnet' ? 'ok' : 'warn');
 }
 
 // ── Theme ──────────────────────────────────────────────────────────────────────
@@ -212,6 +211,23 @@ async function applyRestLinks() {
         `Height ${data.height} · Supply ${data.supply} GRIN · Updated ${data.updated_at}`;
       if (pillRest)  pillRest.className  = 'api-pill pill-ok';
       if (pillRestT) pillRestT.textContent = 'online';
+
+      // Populate Node cards sourced from REST collector
+      if (data.peers != null) {
+        setVal('v-peers', String(data.peers));
+        setText('v-peers-sub', 'connected peers at last REST update');
+      }
+      if (data.chain_size_mb != null) {
+        const mb  = Number(data.chain_size_mb);
+        const sizeStr = mb >= 1024
+          ? (mb / 1024).toFixed(1) + ' GB'
+          : mb.toFixed(0) + ' MB';
+        setVal('v-chain-size', sizeStr);
+        const archiveStr = data.archive_mode == null
+          ? 'at last REST update'
+          : 'Archive mode: ' + (data.archive_mode ? 'enabled' : 'disabled') + ' · at last REST update';
+        setText('v-chain-sub', archiveStr);
+      }
     } else {
       if (statusEl) {
         statusEl.textContent = 'Not deployed';
@@ -353,13 +369,6 @@ function initDevCollapse() {
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(currentTheme);
   applyNetwork();
-
-  // Set API endpoint URL once — static, doesn't change
-  const endpointEl = document.getElementById('v-api-url');
-  if (endpointEl) {
-    endpointEl.textContent = window.location.origin + '/v2/foreign';
-    endpointEl.className   = 'card-value hash';
-  }
 
   applyRestLinks();
   applyCurlTip();

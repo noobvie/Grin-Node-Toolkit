@@ -253,7 +253,8 @@ show_all_status() {
         echo -e "    nginx proxy: ${DIM}not configured${RESET}"
     fi
     if [[ -f "$STATUS_PAGE_DEPLOY_MAINNET/index.html" ]]; then
-        echo -e "    status page: ${GREEN}ENABLED${RESET}  ${DIM}(https://domain/)${RESET}"
+        local _mn_dom; _mn_dom=$(_nginx_domain "$NODE_API_NGINX_CONF_MAINNET")
+        echo -e "    status page: ${GREEN}ENABLED${RESET}  ${DIM}https://$_mn_dom/${RESET}"
     else
         echo -e "    status page: ${DIM}not deployed${RESET}"
     fi
@@ -272,7 +273,8 @@ show_all_status() {
         echo -e "    nginx proxy: ${DIM}not configured${RESET}"
     fi
     if [[ -f "$STATUS_PAGE_DEPLOY_TESTNET/index.html" ]]; then
-        echo -e "    status page: ${GREEN}ENABLED${RESET}  ${DIM}(https://domain/)${RESET}"
+        local _tn_dom; _tn_dom=$(_nginx_domain "$NODE_API_NGINX_CONF_TESTNET")
+        echo -e "    status page: ${GREEN}ENABLED${RESET}  ${DIM}https://$_tn_dom/${RESET}"
     else
         echo -e "    status page: ${DIM}not deployed${RESET}"
     fi
@@ -310,7 +312,8 @@ _enable_node_api_nginx() {
         [[ "${cont,,}" != "y" ]] && return
     fi
 
-    echo -ne "Domain for the $network Node API (e.g. api.example.com) or 0 to cancel: "
+    local _eg_domain; [[ "$network" == "mainnet" ]] && _eg_domain="api.example.com" || _eg_domain="testapi.example.com"
+    echo -ne "Domain for the $network Node API (e.g. $_eg_domain) or 0 to cancel: "
     read -r domain
     [[ "$domain" == "0" ]] && return
     [[ -z "$domain" ]] && warn "No domain entered. Aborting." && return
@@ -385,7 +388,8 @@ EOF
     echo ""
     info "Log file    : $LOG_FILE"
     echo ""
-    info "Next step   : run option 5 (or 7 for testnet) to deploy the live status page at https://$domain/"
+    local _status_opt; [[ "$network" == "mainnet" ]] && _status_opt=5 || _status_opt=7
+    info "Next step   : run option $_status_opt to deploy the live status page at https://$domain/"
     log "nginx $network node API proxy configured: domain=$domain config=$nginx_conf -> 127.0.0.1:$port/v2/foreign"
     log "Test: curl -s -X POST https://$domain/v2/foreign -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"get_tip\",\"params\":[],\"id\":1}'"
     log "Test: curl -X POST https://$domain/v2/foreign -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"get_version\",\"params\":{},\"id\":1}'"
@@ -560,18 +564,48 @@ show_menu() {
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     show_all_status
 
+    # ── Build dynamic option labels based on current nginx state ──────────────
+    local mn_domain="" tn_domain=""
+    local mn_label_1 tn_label_3 mn_label_5 tn_label_7
+
+    if [[ -f "/etc/nginx/sites-enabled/grin-node-api" ]]; then
+        mn_domain=$(_nginx_domain "$NODE_API_NGINX_CONF_MAINNET")
+        mn_label_1="${GREEN}[CONFIGURED]${RESET} ${BOLD}$mn_domain${RESET}  ${DIM}(use 2) to change domain)${RESET}"
+    else
+        mn_label_1="${DIM}(/v2/foreign, HTTPS)${RESET}"
+    fi
+
+    if [[ -f "/etc/nginx/sites-enabled/grin-node-api-testnet" ]]; then
+        tn_domain=$(_nginx_domain "$NODE_API_NGINX_CONF_TESTNET")
+        tn_label_3="${GREEN}[CONFIGURED]${RESET} ${BOLD}$tn_domain${RESET}  ${DIM}(use 4) to change domain)${RESET}"
+    else
+        tn_label_3="${DIM}(/v2/foreign, HTTPS)${RESET}"
+    fi
+
+    if [[ -f "$STATUS_PAGE_DEPLOY_MAINNET/index.html" && -n "$mn_domain" ]]; then
+        mn_label_5="${GREEN}[DEPLOYED]${RESET}   ${BOLD}https://$mn_domain/${RESET}  ${DIM}(re-run to push updates)${RESET}"
+    else
+        mn_label_5="${DIM}(mainnet — deploy after option 1)${RESET}"
+    fi
+
+    if [[ -f "$STATUS_PAGE_DEPLOY_TESTNET/index.html" && -n "$tn_domain" ]]; then
+        tn_label_7="${GREEN}[DEPLOYED]${RESET}   ${BOLD}https://$tn_domain/${RESET}  ${DIM}(re-run to push updates)${RESET}"
+    else
+        tn_label_7="${DIM}(testnet — deploy after option 3)${RESET}"
+    fi
+
     echo -e "${DIM}  ─── Node Public API — Mainnet (port $NODE_API_PORT_MAINNET) ─────────────${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Enable via nginx     ${DIM}(/v2/foreign, HTTPS)${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Enable via nginx     $mn_label_1"
     echo -e "  ${RED}2${RESET}) Remove nginx proxy"
     echo ""
     echo -e "${DIM}  ─── Node Public API — Testnet (port $NODE_API_PORT_TESTNET) ────────────${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Enable via nginx     ${DIM}(/v2/foreign, HTTPS)${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Enable via nginx     $tn_label_3"
     echo -e "  ${RED}4${RESET}) Remove nginx proxy"
     echo ""
     echo -e "${DIM}  ─── Live Status Page (requires nginx proxy above) ────────────────${RESET}"
-    echo -e "  ${GREEN}5${RESET}) Deploy / Update page  ${DIM}(mainnet — https://domain/)${RESET}"
+    echo -e "  ${GREEN}5${RESET}) Deploy / Update page  $mn_label_5"
     echo -e "  ${RED}6${RESET}) Remove status page    ${DIM}(mainnet)${RESET}"
-    echo -e "  ${GREEN}7${RESET}) Deploy / Update page  ${DIM}(testnet — https://domain/)${RESET}"
+    echo -e "  ${GREEN}7${RESET}) Deploy / Update page  $tn_label_7"
     echo -e "  ${RED}8${RESET}) Remove status page    ${DIM}(testnet)${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh status${RESET}"

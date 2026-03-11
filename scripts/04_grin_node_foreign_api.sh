@@ -359,6 +359,12 @@ show_all_status() {
     if [[ -f "$REST_API_DIR_MAINNET/stats.json" ]]; then
         local _mn_dom2; _mn_dom2=$(_nginx_domain "$NODE_API_NGINX_CONF_MAINNET")
         echo -e "    REST API   : ${GREEN}ENABLED${RESET}  ${DIM}https://$_mn_dom2/rest/${RESET}"
+        if [[ -f "$REST_CRON_MAINNET" ]]; then
+            echo -e "    REST cron  : ${GREEN}ACTIVE${RESET}   ${DIM}every 60 s  (${REST_CRON_MAINNET})${RESET}"
+            echo -e "                 ${DIM}note: /etc/cron.d/ jobs are not shown by 'crontab -l'${RESET}"
+        else
+            echo -e "    REST cron  : ${YELLOW}MISSING${RESET}  ${DIM}(re-run option 9 to reinstall)${RESET}"
+        fi
     else
         echo -e "    REST API   : ${DIM}not deployed${RESET}"
     fi
@@ -386,6 +392,12 @@ show_all_status() {
     if [[ -f "$REST_API_DIR_TESTNET/stats.json" ]]; then
         local _tn_dom2; _tn_dom2=$(_nginx_domain "$NODE_API_NGINX_CONF_TESTNET")
         echo -e "    REST API   : ${GREEN}ENABLED${RESET}  ${DIM}https://$_tn_dom2/rest/${RESET}"
+        if [[ -f "$REST_CRON_TESTNET" ]]; then
+            echo -e "    REST cron  : ${GREEN}ACTIVE${RESET}   ${DIM}every 60 s  (${REST_CRON_TESTNET})${RESET}"
+            echo -e "                 ${DIM}note: /etc/cron.d/ jobs are not shown by 'crontab -l'${RESET}"
+        else
+            echo -e "    REST cron  : ${YELLOW}MISSING${RESET}  ${DIM}(re-run option 11 to reinstall)${RESET}"
+        fi
     else
         echo -e "    REST API   : ${DIM}not deployed${RESET}"
     fi

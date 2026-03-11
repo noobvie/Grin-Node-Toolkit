@@ -30,6 +30,74 @@ html[data-theme="light"] {
   --yellow:  #9a6700;
 }
 
+/* ── Matrix theme — terminal green on black ──────────────────────────────── */
+html[data-theme="matrix"] {
+  --bg:      #000000;
+  --surface: #001100;
+  --border:  #004400;
+  --text:    #00ff41;
+  --muted:   #007722;
+  --grin:    #00ff41;
+  --blue:    #00ccff;
+  --green:   #00ff41;
+  --red:     #ff4141;
+  --yellow:  #aaff00;
+}
+html[data-theme="matrix"] body {
+  font-family: 'Courier New', monospace;
+}
+html[data-theme="matrix"] .logo-dot { animation: matrix-pulse 0.5s step-start infinite; }
+@keyframes matrix-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* ── Windows XP theme — retro Tahoma, silver + XP blue ──────────────────── */
+html[data-theme="winxp"] {
+  --bg:      #3a6ea8;
+  --surface: #ece9d8;
+  --border:  #0054e3;
+  --text:    #000000;
+  --muted:   #444444;
+  --grin:    #0066cc;
+  --blue:    #0066cc;
+  --green:   #007700;
+  --red:     #cc0000;
+  --yellow:  #806600;
+}
+html[data-theme="winxp"] body {
+  font-family: Tahoma, 'MS Sans Serif', sans-serif;
+  font-size: 13px;
+}
+html[data-theme="winxp"] .card {
+  border: 2px solid var(--border);
+  border-radius: 0;
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 #848484;
+}
+html[data-theme="winxp"] .card:hover { border-color: #0066cc; }
+html[data-theme="winxp"] header {
+  background: linear-gradient(to bottom, #1f5fbf 0%, #3a85d4 40%, #1a5ab8 100%);
+  border-bottom: 2px solid #0054e3;
+}
+html[data-theme="winxp"] header .logo h1,
+html[data-theme="winxp"] header .logo h1 span,
+html[data-theme="winxp"] header .refresh-badge { color: #ffffff; }
+html[data-theme="winxp"] .network-badge {
+  color: #ffffff;
+  border-color: #7baee8;
+  background: rgba(255,255,255,0.15);
+}
+html[data-theme="winxp"] .theme-btn {
+  background: linear-gradient(to bottom, #f0f4fc, #c8d8ef);
+  border: 1px solid #7b9ecc;
+  color: #000;
+  border-radius: 3px;
+  box-shadow: 1px 1px 0 #fff inset;
+}
+html[data-theme="winxp"] footer {
+  background: linear-gradient(to bottom, #1f5fbf, #1a5ab8);
+  border-top: 2px solid #0054e3;
+  color: #ffffff;
+}
+html[data-theme="winxp"] footer a { color: #add8ff; }
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
@@ -296,6 +364,62 @@ main {
 
 .url-input::placeholder { color: var(--muted); }
 .url-input:focus        { border-color: var(--grin); }
+
+/* ── API status bar ─────────────────────────────────────────────────────── */
+.api-status-bar {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.api-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  transition: color 0.3s;
+}
+
+.pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+
+.api-pill.pill-ok .pill-dot { background: var(--green); }
+.api-pill.pill-ok            { color: var(--text); }
+.api-pill.pill-off .pill-dot { background: var(--red); }
+.api-pill.pill-off           { color: var(--muted); }
+
+.api-pill code {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: inherit;
+}
+
+/* ── Collapsible section toggle button ──────────────────────────────────── */
+.collapse-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 4px;
+  margin-left: 6px;
+  line-height: 1;
+  transition: color 0.15s;
+  vertical-align: middle;
+}
+.collapse-btn:hover { color: var(--grin); }
 
 /* ── API comparison table ────────────────────────────────────────────────── */
 .api-compare {

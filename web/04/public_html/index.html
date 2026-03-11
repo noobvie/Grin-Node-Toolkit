@@ -38,7 +38,7 @@
   </div>
   <div class="header-right">
     <span class="refresh-badge" id="countdown">—</span>
-    <button class="theme-btn" id="theme-btn" title="Toggle light / dark theme">🌙</button>
+    <button class="theme-btn" id="theme-btn" title="Cycle themes: dark / light / matrix / Windows XP">🌙</button>
   </div>
 </header>
 
@@ -46,6 +46,18 @@
 
   <!-- Error banner — hidden until a fetch fails -->
   <div id="error-banner" class="error-banner"></div>
+
+  <!-- ── API status bar — live online/offline indicator for both API types ── -->
+  <div class="api-status-bar">
+    <span class="api-pill" id="pill-jsonrpc">
+      <span class="pill-dot"></span>
+      JSON-RPC <code>/v2/foreign</code> — <span id="pill-jsonrpc-text">checking…</span>
+    </span>
+    <span class="api-pill" id="pill-rest">
+      <span class="pill-dot"></span>
+      REST <code>/rest/</code> — <span id="pill-rest-text">checking…</span>
+    </span>
+  </div>
 
   <!-- ── Chain section ──────────────────────────────────────────────────── -->
   <div class="section-label">
@@ -138,10 +150,11 @@
   <!-- ── Developer section ──────────────────────────────────────────────── -->
   <div class="section-label">
     <span class="section-dot" style="background:var(--muted)"></span>
-    Developer
+    Developer — JSON-RPC
+    <button class="collapse-btn" id="dev-toggle" title="Collapse / expand">▼</button>
   </div>
 
-  <div class="grid">
+  <div id="dev-cards"><div class="grid">
     <div class="card">
       <div class="card-label">Live API test — runs get_tip directly from this browser</div>
       <button class="test-btn" id="test-btn">&#9654; Run Test</button>
@@ -184,7 +197,7 @@
         &nbsp;·&nbsp; If CORS is missing on the remote node, the browser will block it and show an error
       </div>
     </div>
-  </div>
+  </div></div>
 
 </main>
 

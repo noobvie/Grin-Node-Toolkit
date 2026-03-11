@@ -86,6 +86,17 @@ async function refresh() {
   const tip = tipRes.status === 'fulfilled' ? tipRes.value : null;
   const ver = verRes.status === 'fulfilled' ? verRes.value : null;
 
+  // JSON-RPC status pill
+  const pillRpc  = document.getElementById('pill-jsonrpc');
+  const pillRpcT = document.getElementById('pill-jsonrpc-text');
+  if (tipRes.status === 'fulfilled') {
+    if (pillRpc)  pillRpc.className  = 'api-pill pill-ok';
+    if (pillRpcT) pillRpcT.textContent = 'online';
+  } else {
+    if (pillRpc)  pillRpc.className  = 'api-pill pill-off';
+    if (pillRpcT) pillRpcT.textContent = 'offline';
+  }
+
   // Chain
   setVal('v-height',     tip?.height           != null ? fmtInt(tip.height)           : '—');
   setVal('v-difficulty', tip?.total_difficulty != null ? fmtInt(tip.total_difficulty) : '—');
@@ -147,18 +158,27 @@ function applyNetwork() {
 }
 
 // ── Theme ──────────────────────────────────────────────────────────────────────
+const THEME_CYCLE  = ['dark', 'light', 'matrix', 'winxp'];
+const THEME_ICONS  = { dark: '🌙', light: '☀️', matrix: '</>', winxp: '🪟' };
+
 let currentTheme = localStorage.getItem('grin-node-theme') || 'dark';
+if (!THEME_CYCLE.includes(currentTheme)) currentTheme = 'dark';
 
 function applyTheme(theme) {
   currentTheme = theme;
   localStorage.setItem('grin-node-theme', theme);
-  if (theme === 'light') {
-    document.documentElement.setAttribute('data-theme', 'light');
-  } else {
+  if (theme === 'dark') {
     document.documentElement.removeAttribute('data-theme');
+  } else {
+    document.documentElement.setAttribute('data-theme', theme);
   }
   const btn = document.getElementById('theme-btn');
-  if (btn) btn.textContent = theme === 'light' ? '☀' : '🌙';
+  if (btn) btn.textContent = THEME_ICONS[theme] ?? '🌙';
+}
+
+function nextTheme() {
+  const idx = THEME_CYCLE.indexOf(currentTheme);
+  return THEME_CYCLE[(idx + 1) % THEME_CYCLE.length];
 }
 
 // ── REST endpoints ─────────────────────────────────────────────────────────────
@@ -177,8 +197,10 @@ async function applyRestLinks() {
   }
 
   // Try to fetch /rest/stats.json to see if REST is deployed on this server.
-  const statusEl = document.getElementById('v-rest-status');
-  const subEl    = document.getElementById('v-rest-sub');
+  const statusEl  = document.getElementById('v-rest-status');
+  const subEl     = document.getElementById('v-rest-sub');
+  const pillRest  = document.getElementById('pill-rest');
+  const pillRestT = document.getElementById('pill-rest-text');
   try {
     const res = await fetch('/rest/stats.json');
     if (res.ok) {
@@ -189,6 +211,8 @@ async function applyRestLinks() {
       }
       if (subEl) subEl.textContent =
         `Height ${data.height} · Supply ${data.supply} GRIN · Updated ${data.updated_at}`;
+      if (pillRest)  pillRest.className  = 'api-pill pill-ok';
+      if (pillRestT) pillRestT.textContent = 'online';
     } else {
       if (statusEl) {
         statusEl.textContent = 'Not deployed';
@@ -196,6 +220,8 @@ async function applyRestLinks() {
       }
       if (subEl) subEl.textContent =
         'Enable via script 04 → option 9 (mainnet) or 11 (testnet)';
+      if (pillRest)  pillRest.className  = 'api-pill pill-off';
+      if (pillRestT) pillRestT.textContent = 'not deployed';
     }
   } catch {
     if (statusEl) {
@@ -204,6 +230,8 @@ async function applyRestLinks() {
     }
     if (subEl) subEl.textContent =
       'Enable via script 04 → option 9 (mainnet) or 11 (testnet)';
+    if (pillRest)  pillRest.className  = 'api-pill pill-off';
+    if (pillRestT) pillRestT.textContent = 'not deployed';
   }
 }
 
@@ -302,6 +330,26 @@ async function runRemoteCheck() {
   }
 }
 
+// ── Developer section collapse ─────────────────────────────────────────────────
+function initDevCollapse() {
+  const cards  = document.getElementById('dev-cards');
+  const toggle = document.getElementById('dev-toggle');
+  if (!cards || !toggle) return;
+
+  const collapsed = localStorage.getItem('grin-dev-collapsed') === '1';
+  if (collapsed) {
+    cards.style.display  = 'none';
+    toggle.textContent   = '▶';
+  }
+
+  toggle.addEventListener('click', () => {
+    const isHidden = cards.style.display === 'none';
+    cards.style.display = isHidden ? '' : 'none';
+    toggle.textContent  = isHidden ? '▼' : '▶';
+    localStorage.setItem('grin-dev-collapsed', isHidden ? '0' : '1');
+  });
+}
+
 // ── Boot ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(currentTheme);
@@ -309,6 +357,7 @@ document.addEventListener('DOMContentLoaded', () => {
   applyRestLinks();
   applyCurlTip();
   applyFetchTip();
+  initDevCollapse();
 
   // Attach button listeners here — inline onclick is blocked by CSP script-src 'self'
   document.getElementById('test-btn')?.addEventListener('click', runSelfTest);
@@ -317,7 +366,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') runRemoteCheck();
   });
   document.getElementById('theme-btn')?.addEventListener('click', () => {
-    applyTheme(currentTheme === 'light' ? 'dark' : 'light');
+    applyTheme(nextTheme());
   });
 
   refresh();

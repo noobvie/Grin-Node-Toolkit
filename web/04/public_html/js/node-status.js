@@ -179,6 +179,34 @@ function applyTheme(theme) {
   if (sel) sel.value = theme;
 }
 
+// ── Node stats from node.json (written by node-collector as grin user) ────────
+async function applyNodeJson() {
+  try {
+    const res = await fetch('/rest/node.json');
+    if (!res.ok) return;
+    const data = await res.json();
+
+    if (data.peers != null) {
+      setVal('v-peers', String(data.peers));
+      setText('v-peers-sub', 'connected peers · updated ' + (data.updated_at ?? ''));
+    }
+    if (data.chain_size_mb != null) {
+      const mb = Number(data.chain_size_mb);
+      const sizeStr = mb >= 1024
+        ? (mb / 1024).toFixed(1) + ' GB'
+        : mb.toFixed(0) + ' MB';
+      setVal('v-chain-size', sizeStr);
+      const archiveStr = data.archive_mode == null
+        ? 'updated ' + (data.updated_at ?? '')
+        : 'Archive mode: ' + (data.archive_mode ? 'enabled' : 'disabled')
+          + ' · updated ' + (data.updated_at ?? '');
+      setText('v-chain-sub', archiveStr);
+    }
+  } catch {
+    // node.json not available yet — cards keep their default "—"
+  }
+}
+
 // ── REST endpoints ─────────────────────────────────────────────────────────────
 async function applyRestLinks() {
   const origin = window.location.origin;
@@ -188,6 +216,7 @@ async function applyRestLinks() {
     'height.json      — block height only',
     'difficulty.json  — total network difficulty',
     'emission.json    — static emission schedule',
+    'node.json        — peers, chain_size_mb, archive_mode  (node-collector)',
   ];
   const el = document.getElementById('rest-endpoints');
   if (el) {
@@ -212,22 +241,8 @@ async function applyRestLinks() {
       if (pillRest)  pillRest.className  = 'api-pill pill-ok';
       if (pillRestT) pillRestT.textContent = 'online';
 
-      // Populate Node cards sourced from REST collector
-      if (data.peers != null) {
-        setVal('v-peers', String(data.peers));
-        setText('v-peers-sub', 'connected peers at last REST update');
-      }
-      if (data.chain_size_mb != null) {
-        const mb  = Number(data.chain_size_mb);
-        const sizeStr = mb >= 1024
-          ? (mb / 1024).toFixed(1) + ' GB'
-          : mb.toFixed(0) + ' MB';
-        setVal('v-chain-size', sizeStr);
-        const archiveStr = data.archive_mode == null
-          ? 'at last REST update'
-          : 'Archive mode: ' + (data.archive_mode ? 'enabled' : 'disabled') + ' · at last REST update';
-        setText('v-chain-sub', archiveStr);
-      }
+      // Also try node.json (written by node-collector running as grin user)
+      applyNodeJson();
     } else {
       if (statusEl) {
         statusEl.textContent = 'Not deployed';

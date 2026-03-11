@@ -61,8 +61,17 @@ REST_COLLECTOR_DEST="/usr/local/lib/grin-node-toolkit/rest-collector.py"
 REST_CRON_MAINNET="/etc/cron.d/grin-node-api-rest"
 REST_CRON_TESTNET="/etc/cron.d/grin-node-api-rest-testnet"
 
-# Grin node data directories — used by the REST collector to read chain size + archive mode.
-# The collector also tries the owner API for connected peer count (owner port = foreign + 7).
+# node-collector.py runs as the grin OS user to access privileged data:
+#   · owner API (.api_secret) for connected peer count
+#   · du on chain_data/ for chain size
+#   · grin-server.toml for archive_mode
+# Writes node.json to the REST dir (grin user has group-write via www-data group).
+NODE_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/node-collector.py"
+NODE_COLLECTOR_DEST="/usr/local/lib/grin-node-toolkit/node-collector.py"
+NODE_CRON_MAINNET="/etc/cron.d/grin-node-api-node"
+NODE_CRON_TESTNET="/etc/cron.d/grin-node-api-node-testnet"
+
+# Grin node data directories — used by node-collector.py.
 # These are standard Grin defaults; adjust if your node user/path differs.
 GRIN_DATA_DIR_MAINNET="/home/grin/.grin/main"
 GRIN_DATA_DIR_TESTNET="/home/grin/.grin/floo"
@@ -754,13 +763,25 @@ _enable_rest_api() {
     chmod 755 "$REST_COLLECTOR_DEST"
     info "Collector installed: $REST_COLLECTOR_DEST"
 
-    # 2. Create the REST directory. www-data must own it so the cron job can write files.
+    # 2. Detect the OS user who owns the grin data directory for the node-collector cron.
+    local grin_user
+    grin_user=$(stat -c '%U' "$grin_data_dir" 2>/dev/null || echo "grin")
+    info "Grin data dir owner (node-collector will run as): $grin_user"
+
+    # 3. Create the REST directory — www-data owns it (nginx reads), grin_user gets
+    #    group-write via the www-data group so node-collector can write node.json.
     mkdir -p "$rest_dir"
-    chown -R www-data:www-data "$rest_dir"
-    chmod 755 "$rest_dir"
+    chown www-data:www-data "$rest_dir"
+    chmod 775 "$rest_dir"
     info "REST directory ready: $rest_dir"
 
-    # 3. Write the cron job — every minute, as www-data.
+    # Add grin_user to www-data group so it can write into the REST dir.
+    if [[ "$grin_user" != "www-data" ]]; then
+        usermod -aG www-data "$grin_user" 2>/dev/null || true
+        info "Added $grin_user to www-data group (for REST dir write access)"
+    fi
+
+    # 4. Write the main cron job — www-data queries the foreign API (no auth).
     #    /etc/cron.d/ files are root-owned 644 and must declare SHELL/PATH.
     cat > "$cron_file" << EOF
 # Grin Node Toolkit — REST API updater ($network)
@@ -769,23 +790,57 @@ _enable_rest_api() {
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
-* * * * * www-data python3 $REST_COLLECTOR_DEST $port $rest_dir $grin_data_dir 2>/dev/null || true
+* * * * * www-data python3 $REST_COLLECTOR_DEST $port $rest_dir 2>/dev/null || true
 EOF
     chmod 644 "$cron_file"
     chown root:root "$cron_file"
-    info "Cron job installed: $cron_file"
+    info "REST cron installed: $cron_file"
 
-    # 4. Run initial collection now so JSON files exist before nginx reload.
-    #    If the node is not running yet, cron will fill them on the next minute.
-    info "Running initial collection..."
-    if sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" "$grin_data_dir" 2>/dev/null; then
+    # 5. Install the node-collector (runs as grin_user — can read .api_secret,
+    #    chain_data/, and grin-server.toml).
+    if [[ ! -f "$NODE_COLLECTOR_SRC" ]]; then
+        warn "node-collector.py not found: $NODE_COLLECTOR_SRC — skipping node stats."
+    else
+        cp "$NODE_COLLECTOR_SRC" "$NODE_COLLECTOR_DEST"
+        chmod 755 "$NODE_COLLECTOR_DEST"
+        info "Node-collector installed: $NODE_COLLECTOR_DEST"
+
+        local node_cron_file
+        [[ "$network" == "mainnet" ]] && node_cron_file="$NODE_CRON_MAINNET" \
+                                      || node_cron_file="$NODE_CRON_TESTNET"
+
+        cat > "$node_cron_file" << EOF
+# Grin Node Toolkit — node stats updater ($network)
+# Runs as $grin_user to access owner API, chain data dir, and grin-server.toml.
+# Writes node.json (peers, chain_size_mb, archive_mode) to $rest_dir.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+* * * * * $grin_user python3 $NODE_COLLECTOR_DEST $port $rest_dir $grin_data_dir 2>/dev/null || true
+EOF
+        chmod 644 "$node_cron_file"
+        chown root:root "$node_cron_file"
+        info "Node cron installed: $node_cron_file (runs as $grin_user)"
+
+        info "Running initial node stats collection..."
+        if sudo -u "$grin_user" python3 "$NODE_COLLECTOR_DEST" "$port" "$rest_dir" "$grin_data_dir" 2>/dev/null; then
+            success "Initial node stats collected."
+        else
+            warn "Initial node stats failed (node may not be running yet)."
+            warn "Node cron will retry automatically every minute."
+        fi
+    fi
+
+    # 6. Run initial REST collection now so JSON files exist before nginx reload.
+    info "Running initial REST collection..."
+    if sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" 2>/dev/null; then
         success "Initial REST data collected."
     else
-        warn "Initial collection failed (node may not be running yet)."
+        warn "Initial REST collection failed (node may not be running yet)."
         warn "Cron will retry automatically every minute."
     fi
 
-    # 5. Patch nginx to serve /rest/*.json (location block before the catch-all).
+    # 7. Patch nginx to serve /rest/*.json (location block before the catch-all).
     _nginx_patch_rest "$nginx_conf" enable
 
     if nginx -t 2>/dev/null; then
@@ -822,13 +877,17 @@ _disable_rest_api() {
 
     echo -e "\n${BOLD}${CYAN}── Disable REST API ($network) ──${RESET}\n"
 
-    # Remove cron job — stops the 60 s update cycle.
-    if [[ -f "$cron_file" ]]; then
-        rm -f "$cron_file"
-        info "Cron job removed: $cron_file"
-    else
-        info "No cron job found at $cron_file (already removed)."
-    fi
+    # Remove both cron jobs (main REST collector + node-collector).
+    local node_cron_file
+    [[ "$network" == "mainnet" ]] && node_cron_file="$NODE_CRON_MAINNET" \
+                                  || node_cron_file="$NODE_CRON_TESTNET"
+
+    for _cron in "$cron_file" "$node_cron_file"; do
+        if [[ -f "$_cron" ]]; then
+            rm -f "$_cron"
+            info "Cron job removed: $_cron"
+        fi
+    done
 
     # Remove REST data directory and all JSON files under it.
     if [[ -d "$rest_dir" ]]; then

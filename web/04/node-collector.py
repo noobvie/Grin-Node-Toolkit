@@ -114,10 +114,6 @@ def read_archive_mode(toml_path):
     return (val.lower() == "true") if val is not None else None
 
 
-def read_db_root(toml_path):
-    """Parse db_root from grin-server.toml. Returns the path string or None."""
-    return read_toml_value(toml_path, "db_root")
-
 
 # ── Atomic file writer ────────────────────────────────────────────────────────
 
@@ -153,18 +149,19 @@ def write_atomic(path, obj):
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    if len(sys.argv) != 4:
+    if len(sys.argv) != 5:
         print(
-            f"Usage: {sys.argv[0]} <foreign_port> <rest_dir> <grin_data_dir>",
+            f"Usage: {sys.argv[0]} <foreign_port> <rest_dir> <grin_data_dir> <chain_data_dir>",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    port          = int(sys.argv[1])
-    rest_dir      = sys.argv[2]
-    grin_data_dir = sys.argv[3]
+    port           = int(sys.argv[1])
+    rest_dir       = sys.argv[2]
+    grin_data_dir  = sys.argv[3]
+    chain_data_dir = sys.argv[4]   # resolved by the bash script via _lookup_chain_data()
 
-    updated_at = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    updated_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     node_data  = {"updated_at": updated_at}
 
     # ── Connected peers — owner API (same port as foreign, different path) ────
@@ -177,23 +174,15 @@ def main():
     except Exception:
         pass   # node not running or auth failed — field simply omitted
 
-    # ── Parse grin-server.toml for db_root and archive_mode ──────────────────
-    toml_path = os.path.join(grin_data_dir, "grin-server.toml")
-
-    # db_root is the authoritative chain data path (set by Grin itself in the TOML).
-    # Grin often writes it as a relative path (e.g. "chain_data") — resolve against
-    # grin_data_dir so du gets an absolute path regardless.
-    db_root = read_db_root(toml_path) or "chain_data"
-    if not os.path.isabs(db_root):
-        db_root = os.path.join(grin_data_dir, db_root)
-    print(f"[INFO] chain data path: {db_root}", file=sys.stderr)
-
     # ── Chain data size ───────────────────────────────────────────────────────
-    size_mb = dir_size_mb(db_root)
+    # chain_data_dir is resolved by the bash installer (conf → TOML → home dir probe)
+    print(f"[INFO] chain data path: {chain_data_dir}", file=sys.stderr)
+    size_mb = dir_size_mb(chain_data_dir)
     if size_mb is not None:
         node_data["chain_size_mb"] = size_mb
 
-    # ── Archive mode ──────────────────────────────────────────────────────────
+    # ── Archive mode — read from grin-server.toml ─────────────────────────────
+    toml_path    = os.path.join(grin_data_dir, "grin-server.toml")
     archive_mode = read_archive_mode(toml_path)
     if archive_mode is not None:
         node_data["archive_mode"] = archive_mode

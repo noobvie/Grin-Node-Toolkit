@@ -726,8 +726,7 @@ disable_testnet_status_page() { _disable_status_page testnet "$NODE_API_NGINX_CO
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Resolve the Grin node data directory from the instance conf written by script 01.
-# Returns GRIN_DIR (e.g. /grinprunemain) which contains .api_secret, grin-server.toml,
-# and chain_data/.  Falls back to /home/grin/.grin/{main,floo} if conf not present.
+# Returns GRIN_DIR (e.g. /grinprunemain) which contains .api_secret and grin-server.toml.
 _lookup_grin_dir() {
     local network="$1"
     if [[ -f "$INSTANCES_CONF" ]]; then
@@ -745,8 +744,53 @@ _lookup_grin_dir() {
     [[ "$network" == "mainnet" ]] && echo "/home/grin/.grin/main" || echo "/home/grin/.grin/floo"
 }
 
+# Resolve the actual chain_data directory for a Grin instance.
+# Priority:
+#   1. Conf _CHAIN_DATA entry (written by script 01) — if the dir exists on disk
+#   2. db_root from grin-server.toml — resolved as absolute or relative to grin_dir
+#   3. Grin user's ~/.grin/{main,floo}/chain_data (Grin default when db_root is relative)
+#   4. <grin_dir>/chain_data as last resort (returned even if absent, Python will warn)
+_lookup_chain_data() {
+    local network="$1" grin_dir="$2"
+
+    # 1. Conf entry — most reliable, written when node was first set up
+    if [[ -f "$INSTANCES_CONF" ]]; then
+        local candidates=()
+        [[ "$network" == "mainnet" ]] && candidates=(PRUNEMAIN FULLMAIN) || candidates=(PRUNETEST)
+        source "$INSTANCES_CONF" 2>/dev/null
+        for key in "${candidates[@]}"; do
+            local varname="${key}_CHAIN_DATA"
+            local chain_dir="${!varname}"
+            [[ -n "$chain_dir" && -d "$chain_dir" ]] && echo "$chain_dir" && return 0
+        done
+    fi
+
+    # 2. db_root from grin-server.toml
+    local toml="$grin_dir/grin-server.toml"
+    if [[ -f "$toml" ]]; then
+        local db_root
+        db_root=$(grep -m1 '^db_root' "$toml" | sed 's/.*=\s*["'\'']\?\([^"'\'']*\)["'\'']\?.*/\1/' 2>/dev/null || true)
+        if [[ -n "$db_root" ]]; then
+            # Absolute path
+            [[ "$db_root" == /* && -d "$db_root" ]] && echo "$db_root" && return 0
+            # Relative to grin_dir
+            [[ -d "$grin_dir/$db_root" ]] && echo "$grin_dir/$db_root" && return 0
+        fi
+    fi
+
+    # 3. Grin resolves relative db_root against the user's ~/.grin/{main,floo}
+    local grin_user; grin_user=$(stat -c '%U' "$grin_dir" 2>/dev/null || echo "grin")
+    local home_dir;  home_dir=$(getent passwd "$grin_user" 2>/dev/null | cut -d: -f6 || echo "/home/$grin_user")
+    local grin_home
+    [[ "$network" == "mainnet" ]] && grin_home="$home_dir/.grin/main" || grin_home="$home_dir/.grin/floo"
+    [[ -d "$grin_home/chain_data" ]] && echo "$grin_home/chain_data" && return 0
+
+    # 4. Last resort — return the expected path; Python will log a WARN if missing
+    echo "$grin_dir/chain_data"
+}
+
 _enable_rest_api() {
-    local network="$1" port="$2" nginx_conf="$3" rest_dir="$4" cron_file="$5" grin_data_dir="$6"
+    local network="$1" port="$2" nginx_conf="$3" rest_dir="$4" cron_file="$5" grin_data_dir="$6" chain_data_dir="$7"
 
     echo -e "\n${BOLD}${CYAN}── Enable REST API ($network) ──${RESET}\n"
     echo -e "  Simple GET endpoints — no JSON-RPC knowledge required."
@@ -766,9 +810,11 @@ _enable_rest_api() {
         return
     fi
 
-    echo -e "  REST dir  : ${DIM}$rest_dir${RESET}"
-    echo -e "  Collector : ${DIM}$REST_COLLECTOR_DEST${RESET}"
-    echo -e "  Cron      : ${DIM}$cron_file${RESET}"
+    echo -e "  REST dir    : ${DIM}$rest_dir${RESET}"
+    echo -e "  Collector   : ${DIM}$REST_COLLECTOR_DEST${RESET}"
+    echo -e "  Cron        : ${DIM}$cron_file${RESET}"
+    echo -e "  Grin dir    : ${DIM}$grin_data_dir${RESET}"
+    echo -e "  Chain data  : ${DIM}$chain_data_dir${RESET}"
     echo ""
 
     # 1. Install the Python collector to a system lib path so cron can call it directly.
@@ -830,14 +876,14 @@ EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
-* * * * * root python3 $NODE_COLLECTOR_DEST $port $rest_dir $grin_data_dir 2>/dev/null || true
+* * * * * root python3 $NODE_COLLECTOR_DEST $port $rest_dir $grin_data_dir $chain_data_dir 2>/dev/null || true
 EOF
         chmod 644 "$node_cron_file"
         chown root:root "$node_cron_file"
         info "Node cron installed: $node_cron_file (runs as root, detected data owner: $grin_user)"
 
         info "Running initial node stats collection..."
-        if python3 "$NODE_COLLECTOR_DEST" "$port" "$rest_dir" "$grin_data_dir" 2>/dev/null; then
+        if python3 "$NODE_COLLECTOR_DEST" "$port" "$rest_dir" "$grin_data_dir" "$chain_data_dir" 2>/dev/null; then
             success "Initial node stats collected."
         else
             warn "Initial node stats failed (node may not be running yet)."
@@ -931,14 +977,22 @@ _disable_rest_api() {
     log "REST API disabled: network=$network"
 }
 
-enable_mainnet_rest_api()  { _enable_rest_api  mainnet "$NODE_API_PORT_MAINNET" \
-                                "$NODE_API_NGINX_CONF_MAINNET" "$REST_API_DIR_MAINNET" "$REST_CRON_MAINNET" \
-                                "$(_lookup_grin_dir mainnet)"; }
+enable_mainnet_rest_api()  {
+    local _gd; _gd=$(_lookup_grin_dir   mainnet)
+    local _cd; _cd=$(_lookup_chain_data mainnet "$_gd")
+    _enable_rest_api mainnet "$NODE_API_PORT_MAINNET" \
+        "$NODE_API_NGINX_CONF_MAINNET" "$REST_API_DIR_MAINNET" "$REST_CRON_MAINNET" \
+        "$_gd" "$_cd"
+}
 disable_mainnet_rest_api() { _disable_rest_api mainnet \
                                 "$NODE_API_NGINX_CONF_MAINNET" "$REST_API_DIR_MAINNET" "$REST_CRON_MAINNET"; }
-enable_testnet_rest_api()  { _enable_rest_api  testnet "$NODE_API_PORT_TESTNET" \
-                                "$NODE_API_NGINX_CONF_TESTNET" "$REST_API_DIR_TESTNET" "$REST_CRON_TESTNET" \
-                                "$(_lookup_grin_dir testnet)"; }
+enable_testnet_rest_api()  {
+    local _gd; _gd=$(_lookup_grin_dir   testnet)
+    local _cd; _cd=$(_lookup_chain_data testnet "$_gd")
+    _enable_rest_api testnet "$NODE_API_PORT_TESTNET" \
+        "$NODE_API_NGINX_CONF_TESTNET" "$REST_API_DIR_TESTNET" "$REST_CRON_TESTNET" \
+        "$_gd" "$_cd"
+}
 disable_testnet_rest_api() { _disable_rest_api testnet \
                                 "$NODE_API_NGINX_CONF_TESTNET" "$REST_API_DIR_TESTNET" "$REST_CRON_TESTNET"; }
 

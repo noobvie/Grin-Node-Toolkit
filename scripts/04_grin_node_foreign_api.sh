@@ -522,7 +522,35 @@ EOF
     certbot --nginx -d "$domain" --non-interactive --agree-tos -m "$email" \
         || { warn "certbot failed — check /var/log/letsencrypt/letsencrypt.log"; return; }
 
-    systemctl reload nginx
+    # Re-apply status page + REST patches if they were active before this rebuild.
+    # Writing a fresh config above wipes those patches; restore them here so the
+    # status page (/) and REST endpoints (/rest/) keep working after option 1 is re-run.
+    local _deploy_dir _rest_dir _rest_cron
+    if [[ "$network" == "mainnet" ]]; then
+        _deploy_dir="$STATUS_PAGE_DEPLOY_MAINNET"
+        _rest_dir="$REST_API_DIR_MAINNET"
+        _rest_cron="$REST_CRON_MAINNET"
+    else
+        _deploy_dir="$STATUS_PAGE_DEPLOY_TESTNET"
+        _rest_dir="$REST_API_DIR_TESTNET"
+        _rest_cron="$REST_CRON_TESTNET"
+    fi
+    if [[ -f "$_deploy_dir/index.html" ]]; then
+        info "Re-applying status page configuration (was active before rebuild)..."
+        _nginx_patch_status "$nginx_conf" "$_deploy_dir" enable
+        _nginx_add_limit_req_zone
+    fi
+    if [[ -f "$_rest_cron" || -f "$_rest_dir/stats.json" ]]; then
+        info "Re-applying REST API configuration (was active before rebuild)..."
+        _nginx_patch_rest "$nginx_conf" "enable"
+    fi
+
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+    else
+        warn "nginx config test failed after re-applying patches — reload skipped. Check $nginx_conf manually."
+        return
+    fi
 
     success "Node Public API ($network) nginx proxy configured!"
     echo ""

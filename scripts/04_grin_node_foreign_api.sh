@@ -485,6 +485,11 @@ server {
             add_header Access-Control-Max-Age       86400;
             return 204;
         }
+        # Strip CORS headers the Grin node sends itself — nginx re-adds them below.
+        # Without this, the header appears twice ("*, *") and browsers reject it.
+        proxy_hide_header Access-Control-Allow-Origin;
+        proxy_hide_header Access-Control-Allow-Methods;
+        proxy_hide_header Access-Control-Allow-Headers;
         add_header Access-Control-Allow-Origin  "*" always;
         add_header Access-Control-Allow-Methods "POST, OPTIONS" always;
         add_header Access-Control-Allow-Headers "Content-Type" always;

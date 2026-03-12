@@ -248,7 +248,7 @@ NEW_LOC = (
     '    add_header X-Frame-Options         "DENY"        always;\n'
     '    add_header Referrer-Policy         "no-referrer" always;\n'
     '    add_header Content-Security-Policy'
-    ' "default-src \'self\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\'; connect-src \'self\'" always;\n'
+    ' "default-src \'self\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\'; connect-src \'self\' https:" always;\n'
     '\n'
     '    # Static web root — Grin Node Toolkit status page\n'
     '    root ' + deploy_dir + ';\n'

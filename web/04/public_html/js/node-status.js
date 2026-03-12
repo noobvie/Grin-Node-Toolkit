@@ -326,8 +326,15 @@ async function runRemoteCheck() {
   const out   = document.getElementById('remote-result');
   if (!out || !input) return;
 
-  const origin = input.value.trim().replace(/\/+$/, '');
-  if (!origin) { out.textContent = 'Enter a URL first.'; return; }
+  const raw = input.value.trim();
+  if (!raw) { out.textContent = 'Enter a URL first.'; return; }
+  let origin;
+  try {
+    origin = new URL(raw).origin;
+  } catch {
+    out.textContent = 'Invalid URL — example: https://api.example.com/v2/foreign';
+    return;
+  }
 
   const url = origin + '/v2/foreign';
   out.textContent = 'Checking ' + url + ' …';

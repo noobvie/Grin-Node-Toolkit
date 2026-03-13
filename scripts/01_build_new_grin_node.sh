@@ -599,7 +599,7 @@ check_grin_running() {
 # Checks the script is run as root, then installs any missing packages via
 # apt-get: tar, openssl, libncurses5 (or libncurses6 on Ubuntu 24.04+),
 # tmux, jq, tor, curl, wget.
-# dnf (Rocky 10+): tar, openssl, ncurses-compat-libs, tmux, jq, tor, curl, wget.
+# dnf (Rocky/Alma 10+): epel-release (auto), tar, openssl, ncurses-compat-libs, tmux, jq, tor, curl, wget.
 # OS version check is handled upstream by the master script.
 # =============================================================================
 check_os_and_deps() {
@@ -611,9 +611,16 @@ check_os_and_deps() {
     os_id="$(grep '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || true)"
 
     if [[ "$os_id" == "rocky" || "$os_id" == "almalinux" ]]; then
-        # Rocky Linux 10+ — use dnf
+        # Rocky Linux / AlmaLinux 10+ — use dnf
         # ncurses-compat-libs fixes "no version information available" warnings
         # from the Grin binary at runtime. tar and tmux are not installed by default.
+        # tor is only available via EPEL — install epel-release first if missing.
+        if ! rpm -q epel-release &>/dev/null 2>&1; then
+            info "Installing EPEL repository (required for tor)..."
+            dnf install -y -q epel-release \
+                || die "Failed to install epel-release. Check internet connection."
+        fi
+
         local packages=(tar tmux curl wget jq tor openssl ncurses-compat-libs)
         local to_install=()
         for pkg in "${packages[@]}"; do

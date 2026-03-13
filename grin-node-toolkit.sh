@@ -84,9 +84,10 @@ EOF
     echo -e "         ${BOLD}${log_file}${RESET}"
     echo -e "         ${DIM}cat ${log_file}${RESET}"
     echo ""
-    echo -e "${DIM}  Returning to main menu — other toolkit features may still be usable.${RESET}"
+    echo -e "${DIM}  Other toolkit features may still be usable on this OS version.${RESET}"
     echo ""
-    sleep 4
+    echo -ne "${BOLD}  Press Enter to return to the main menu...${RESET}"
+    read -r
 }
 
 check_os() {

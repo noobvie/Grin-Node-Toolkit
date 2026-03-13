@@ -84,7 +84,9 @@ EOF
     echo -e "         ${BOLD}${log_file}${RESET}"
     echo -e "         ${DIM}cat ${log_file}${RESET}"
     echo ""
-    exit 1
+    echo -e "${DIM}  Returning to main menu — other toolkit features may still be usable.${RESET}"
+    echo ""
+    sleep 4
 }
 
 check_os() {
@@ -116,6 +118,7 @@ check_os() {
             return
         else
             upgrade_rhel_clone_elevate "$os_id" "$os_name"
+            return
         fi
     fi
 

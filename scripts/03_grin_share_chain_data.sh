@@ -672,7 +672,9 @@ detect_chain_data() {
 setup_derived_variables() {
     mkdir -p "$LOG_DIR"
     LOG_FILE="$LOG_DIR/share_nginx_${NETWORK_TYPE}_${NODE_TYPE}_$(date -u '+%Y%m%d_%H%M%S').log"
-    TMUX_SESSION="grin-${NODE_TYPE}-${NETWORK_TYPE}"
+    # Session name matches script 01 convention: grin_<basename of GRIN_DIR>
+    # e.g. /grinprunemain → grin_grinprunemain
+    TMUX_SESSION="grin_$(basename "$GRIN_DIR")"
 
     local web_dir_var="LOCAL_WEB_DIR_${NETWORK_TYPE^^}_${NODE_TYPE^^}"
     OUTPUT_DIR="${!web_dir_var}"
@@ -1102,8 +1104,13 @@ restart_grin_node() {
     cd "$GRIN_DIR" || error_exit "Cannot access $GRIN_DIR"
     command -v tmux &>/dev/null || { apt-get update -qq && apt-get install -y tmux -qq; }
 
+    # Kill any stale session with this name (e.g. left over after stop_grin_node
+    # killed the process but not the tmux session)
+    tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+
     log "Starting in tmux session '$TMUX_SESSION'..."
-    tmux new-session -d -s "$TMUX_SESSION" -c "$GRIN_DIR" "$GRIN_BINARY"
+    tmux new-session -d -s "$TMUX_SESSION" -c "$GRIN_DIR" \
+        "echo 'Starting Grin node...'; cd $GRIN_DIR && $GRIN_BINARY server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read"
     sleep 5
 
     if is_grin_running; then
@@ -1167,36 +1174,66 @@ run_nginx_share_for_port() {
     log "=========================================="
 }
 
-# Try to start Grin from toolkit default directories when not found on expected port
+# Try to start Grin from known directories when not found on expected port.
+# Priority: (1) conf file entry, (2) toolkit default directories.
+# Session name uses script 01 convention: grin_<basename of dir>
 try_start_from_known_dir() {
     local network=$1   # mainnet or testnet
     local port=$2
-    local dirs=()
-    if [ "$network" = "testnet" ]; then
-        dirs=("/grinprunetest")
-    else
-        dirs=("/grinfullmain" "/grinprunemain")
-    fi
 
     local found_binary="" found_dir=""
-    for d in "${dirs[@]}"; do
-        if [ -x "$d/grin" ]; then
-            found_binary="$d/grin"
-            found_dir="$d"
-            break
-        fi
-    done
 
-    if [ -z "$found_binary" ]; then
-        echo "  ✗ No grin binary found in: ${dirs[*]}"
+    # 1) Check conf file first (respects custom install paths)
+    if [[ -f "$INSTANCES_CONF" ]]; then
+        # shellcheck source=/dev/null
+        source "$INSTANCES_CONF" 2>/dev/null || true
+        local conf_dir=""
+        if [[ "$network" == "testnet" ]]; then
+            conf_dir="${PRUNETEST_GRIN_DIR:-}"
+        else
+            conf_dir="${FULLMAIN_GRIN_DIR:-${PRUNEMAIN_GRIN_DIR:-}}"
+        fi
+        if [[ -n "$conf_dir" && -x "$conf_dir/grin" ]]; then
+            found_dir="$conf_dir"
+            found_binary="$conf_dir/grin"
+            echo "  → Binary from conf: $found_binary"
+        fi
+    fi
+
+    # 2) Fall back to toolkit default directories if conf had no entry
+    if [[ -z "$found_binary" ]]; then
+        local fallback_dirs=()
+        if [[ "$network" == "testnet" ]]; then
+            fallback_dirs=("/grinprunetest")
+        else
+            fallback_dirs=("/grinfullmain" "/grinprunemain")
+        fi
+        for d in "${fallback_dirs[@]}"; do
+            if [[ -x "$d/grin" ]]; then
+                found_dir="$d"
+                found_binary="$d/grin"
+                echo "  → Binary from default path: $found_binary"
+                break
+            fi
+        done
+    fi
+
+    if [[ -z "$found_binary" ]]; then
+        echo "  ✗ No grin binary found in conf or default directories."
         echo "    Start grin manually and re-run, or verify chain_data exists first."
         return 1
     fi
 
-    echo "  → Binary found: $found_binary"
     command -v tmux &>/dev/null || apt-get install -y tmux -qq
-    local sess="grin-auto-${network}"
-    tmux new-session -d -s "$sess" -c "$found_dir" "$found_binary" 2>/dev/null || true
+    # Session name matches script 01: grin_<basename of dir>
+    local sess="grin_$(basename "$found_dir")"
+
+    # Kill any stale session with this name before starting fresh
+    tmux kill-session -t "$sess" 2>/dev/null || true
+
+    tmux new-session -d -s "$sess" -c "$found_dir" \
+        "echo 'Starting Grin node...'; cd $found_dir && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+        2>/dev/null || true
     echo "  → Started in tmux session '$sess' — waiting for port $port (up to 120s)..."
 
     local elapsed=0
@@ -1210,7 +1247,7 @@ try_start_from_known_dir() {
     done
 
     echo "  ✗ Grin $network did not start within 120s"
-    echo "    Start manually:  cd $found_dir && tmux new-session -d -s $sess './grin'"
+    echo "    Start manually:  cd $found_dir && tmux attach -t $sess"
     return 1
 }
 

@@ -1,0 +1,196 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║                    01_build_new_grin_node.sh  —  ENTRY                  ║
+╚══════════════════════════════════════════════════════════════════════════╝
+                                    │
+                    ┌───────────────▼───────────────┐
+                    │   STEP 1 — Process & Port Check│
+                    │  scan ports 3414 / 13414       │
+                    └───────────────────────────────┘
+                                    │
+          ┌─────────────────────────┼──────────────────────────┐
+          │                         │                          │
+   Both running              Only 3414 running          Only 13414 running
+  3414 + 13414                  (mainnet)                  (testnet)
+          │                         │                          │
+  ┌───────▼──────┐         ┌────────▼────────┐       ┌────────▼────────┐
+  │ [WARN] both  │         │  free slot:     │       │  free slot:     │
+  │ B/M/T/K/0 ? │         │  B / M / 1 / 0 │       │  B / T / 1 / 0 │
+  └──────────────┘         └─────────────────┘       └─────────────────┘
+   B→update_binary_only     B→update_binary_only       B→update_binary_only
+   M→stop_grin_one(3414)    M→stop_grin_one(3414)      T→stop_grin_one(13414)
+     clear PRUNEMAIN/         clear PRUNEMAIN/            clear PRUNETEST
+     FULLMAIN from conf       FULLMAIN from conf          from conf
+     exec "$0" ↺              exec "$0" ↺                 exec "$0" ↺
+   T→stop_grin_one(13414)    1→RESTRICTED=testnet        1→RESTRICTED=mainnet
+     clear PRUNETEST          continue ↓                  continue ↓
+     from conf               0→exit                      0→exit
+     exec "$0" ↺
+   K→stop_grin_gracefully
+     truncate conf
+     exec "$0" ↺
+   0→exit
+
+          │                         │                          │
+          │         Neither running — stale/orphan check       │
+          │         (pgrep, ss ports 3413/3414/13414/3415)     │
+          │         y→kill all + truncate conf                 │
+          │         c→continue with warning                    │
+          │         n/0→abort                                  │
+          └─────────────────────────┴──────────────────────────┘
+                                    │
+                    ┌───────────────▼───────────────┐
+                    │   STEP 2 — Dependency Check    │
+                    │   must run as root             │
+                    │   apt install: tar openssl     │
+                    │   libncurses tmux jq tor       │
+                    │   curl wget                    │
+                    └───────────────────────────────┘
+                                    │
+                    ┌───────────────▼───────────────┐
+                    │   STEP 3 — Network Selection   │
+                    │                                │
+                    │   [slot free]  1=mainnet       │
+                    │               2=testnet        │
+                    │               3=both           │
+                    │                                │
+                    │   [RESTRICTED set from Step 1] │
+                    │   1=install the other network  │
+                    │   2=rebuild running mainnet    │
+                    │     with different mode        │
+                    │     (kill + clear mainnet conf)│
+                    └───────────────────────────────┘
+                                    │
+              ┌─────────────────────┼──────────────────────┐
+              │                     │                       │
+           mainnet               testnet                  both
+              │                     │                       │
+              │                     │           setup mainnet first
+              │                     │                then testnet
+              └──────────┬──────────┘                    (loop)
+                         │
+                ╔════════▼═══════════════════════════════════╗
+                ║       setup_one_node(network)               ║
+                ╚═════════════════════════════════════════════╝
+                         │
+         ┌───────────────▼───────────────┐
+         │   STEP 4 — Archive Mode       │
+         │   1=pruned (~10 GiB)          │
+         │   2=full archive (~25 GiB)    │
+         │     (mainnet only)            │
+         │   disk space warning if low   │
+         └───────────────────────────────┘
+                         │
+         ┌───────────────▼───────────────┐
+         │   STEP 5 — Create Node Dir    │
+         │   default: /grin{mode}{net}   │
+         │   e.g. /grinprunemain        │
+         │   confirm if dir has files    │
+         │   → rm -rf existing contents  │
+         │   sets GRIN_DIR global        │
+         └───────────────────────────────┘
+                         │
+         ┌───────────────▼───────────────┐
+         │   STEP 6 — Download Binary    │
+         │   GitHub API → latest release │
+         │   linux-x86_64.tar.gz         │
+         │   cached: reused if already   │
+         │   downloaded for first node   │
+         │   install to GRIN_DIR/grin    │
+         └───────────────────────────────┘
+                         │
+         ┌───────────────▼───────────────┐
+         │   STEP 7 — Generate Config    │
+         │   ./grin server config        │
+         │   backup if toml exists       │
+         └───────────────────────────────┘
+                         │
+         ┌───────────────▼───────────────┐
+         │   STEP 8 — Patch Config       │
+         │   set archive_mode            │
+         │   set db_root path            │
+         │   set p2p port                │
+         │     mainnet: 3414             │
+         │     testnet: 13414            │
+         └───────────────────────────────┘
+                         │
+         ┌───────────────▼───────────────┐
+         │   STEP 9 — Chain Data Source  │
+         │   scan zones (america/asia/   │
+         │   europe/africa/all)          │
+         │   check sync status of peers  │
+         │   user picks server           │
+         │                               │
+         │   ┌─────────────────────────┐ │
+         │   │ How to download?        │ │
+         │   │ A = On-the-fly stream   │ │
+         │   │ B = Full download first │ │
+         │   └─────────────────────────┘ │
+         └───────────────────────────────┘
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+     STREAM_MODE=true        STREAM_MODE=false
+              │                     │
+  ┌───────────▼──────────┐  ┌───────▼──────────────┐
+  │  STEP 10 — Stream    │  │  STEP 10 — Download   │
+  │  Extract (on-the-fly)│  │  .tar.gz + .sha256    │
+  │  curl | tar -xz pipe │  ├──────────────────────-┤
+  │  no local file saved │  │  STEP 11 — SHA256     │
+  │  skips steps 11 & 12 │  │  verify checksum      │
+  └──────────────────────┘  ├───────────────────────┤
+                             │  STEP 12 — Disk check │
+                             │  check space ≥ tar.gz │
+                             ├───────────────────────┤
+                             │  STEP 12 — Extract    │
+                             │  tar -xz into GRIN_DIR│
+                             └───────────────────────┘
+              │                     │
+              └──────────┬──────────┘
+                         │
+         ┌───────────────▼───────────────┐
+         │   STEP 13 — Start in tmux     │
+         │   session: grin_<dirname>     │
+         │   e.g. grin_grinprunemain     │
+         │   kill existing session first │
+         │   if already exists           │
+         └───────────────────────────────┘
+                         │
+         ┌───────────────▼───────────────┐
+         │   STEP 14 — Summary           │
+         │   network / mode / dir        │
+         │   tmux session name           │
+         │   elapsed time / log path     │
+         └───────────────────────────────┘
+                         │
+         ┌───────────────▼───────────────┐
+         │   save_instance_location      │
+         │   writes to conf/             │
+         │   grin_instances_location.conf│
+         │   key: PRUNEMAIN / FULLMAIN   │
+         │        / PRUNETEST            │
+         │   clears sibling mainnet key  │
+         │   (PRUNEMAIN↔FULLMAIN mutual  │
+         │    exclusion enforced here)   │
+         └───────────────────────────────┘
+                         │
+              ┌──────────┴──────────┐
+              │  if NETWORK=both    │
+              │  and mainnet done   │
+              └──────────┬──────────┘
+                         │
+                  loop back to
+              setup_one_node("testnet")
+                         │
+                  (same steps 4–14)
+                         │
+         ┌───────────────▼───────────────┐
+         │   Press 0 to return to menu   │
+         └───────────────────────────────┘
+
+
+Key flows to highlight:
+
+B (binary update) — completely bypasses steps 2–14. Reads conf → downloads binary once → stop_grin_gracefully (no conf wipe) → replace binary → restart tmux per instance.
+M / T (kill one & rebuild) — stop_grin_one kills process + tmux + clears that network's conf entries → exec "$0" restarts script → now in single-running-node scenario → user picks install/rebuild → full steps 4–14.
+K (kill all & rebuild both) — stop_grin_gracefully + truncate entire conf → exec "$0" → fresh start with no restrictions.
+"both" network — runs setup_one_node twice sequentially. Binary download cached after first run (reused for testnet). Each run independently saves to conf.

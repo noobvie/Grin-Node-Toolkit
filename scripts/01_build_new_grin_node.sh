@@ -241,12 +241,6 @@ stop_grin_gracefully() {
     done < <(tmux ls -F '#{session_name}' 2>/dev/null | grep '^grin_' || true)
 
     success "All Grin nodes and tmux sessions stopped."
-
-    # Clear all instance entries from INSTANCES_CONF so the rebuild registers cleanly
-    if [[ -f "$INSTANCES_CONF" ]]; then
-        : > "$INSTANCES_CONF"
-        log "Conf cleared (all instances stopped)."
-    fi
 }
 
 # =============================================================================
@@ -454,6 +448,7 @@ check_grin_running() {
                     ;;
                 [Kk])
                     stop_grin_gracefully
+                    [[ -f "$INSTANCES_CONF" ]] && { : > "$INSTANCES_CONF"; log "Conf cleared (full rebuild)."; }
                     exec "$0"
                     ;;
                 0)
@@ -584,7 +579,8 @@ check_grin_running() {
         echo -ne "${BOLD}${RED}Kill all and continue? [y/c/N/0]: ${RESET}"
         read -r confirm || true
         case "${confirm,,}" in
-            y) stop_grin_gracefully ;;
+            y) stop_grin_gracefully
+               [[ -f "$INSTANCES_CONF" ]] && { : > "$INSTANCES_CONF"; log "Conf cleared (stale-process kill)."; } ;;
             c) warn "Continuing despite detected processes — ensure they are NOT Grin-related." ; echo "" ;;
             0) exit 0 ;;
             *) die "Aborted. Resolve the conflicts manually and re-run." ;;
@@ -694,6 +690,7 @@ select_network() {
                 if [[ "$running_network" == "mainnet" ]]; then
                     warn "Stopping ${running_network} to rebuild with different mode..."
                     stop_grin_gracefully
+                    [[ -f "$INSTANCES_CONF" ]] && { sed -i '/^PRUNEMAIN_\|^FULLMAIN_/d' "$INSTANCES_CONF"; log "Conf entries cleared (mainnet mode-switch rebuild)."; }
                     NETWORK_TYPE="mainnet"
                     RESTRICTED_NETWORK=""
                     info "Network: ${BOLD}${NETWORK_TYPE}${RESET} — select new mode at Step 4"
@@ -1772,7 +1769,13 @@ save_instance_location() {
     fi
 
     mkdir -p "$CONF_DIR"
-    [[ -f "$INSTANCES_CONF" ]] && sed -i "/^${key}_/d" "$INSTANCES_CONF"
+    if [[ -f "$INSTANCES_CONF" ]]; then
+        # Remove current key and, for mainnet, also remove the sibling mainnet key
+        # (PRUNEMAIN and FULLMAIN are mutually exclusive — one server, one mainnet mode)
+        sed -i "/^${key}_/d" "$INSTANCES_CONF"
+        [[ "$key" == "FULLMAIN"  ]] && sed -i '/^PRUNEMAIN_/d' "$INSTANCES_CONF"
+        [[ "$key" == "PRUNEMAIN" ]] && sed -i '/^FULLMAIN_/d'  "$INSTANCES_CONF"
+    fi
     cat >> "$INSTANCES_CONF" << __EOF__
 
 ${key}_GRIN_DIR="$GRIN_DIR"

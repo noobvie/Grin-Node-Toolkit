@@ -20,16 +20,19 @@ My goal is simple: **make it easy for anyone to join the Grin network and keep t
 
 ## Requirements
 
-- **Linux — Debian-based only**
+- **Linux — supported distributions:**
   - Ubuntu 22.04 LTS or later — **fully tested and recommended**
+  - Rocky Linux 10 or later — **fully tested**
+  - AlmaLinux 10 or later — **fully tested**
   - Other Debian-based distros (Debian, Mint, Pop!\_OS, Kali, etc.) — best effort, not guaranteed
-  - Non-Debian systems (RHEL, Fedora, AlmaLinux, Arch, etc.) — **not supported, script will exit**
+  - Rocky Linux / AlmaLinux 9 or older — **not supported** (glibc too old); upgrade instructions shown at startup
+  - Other non-Debian systems (RHEL, Fedora, Arch, etc.) — **not supported, script will exit**
 - `bash` 4.0+
 - `curl`, `wget`, `jq`, `tar`, `tmux` (installed automatically where possible)
 - Root / `sudo` access for system-level operations
 - **Free disk space: 10 GB minimum** (pruned mode) — more recommended for full archive or hosting snapshots
 
-> The main script checks your OS at startup and will immediately exit with a clear error if a non-Debian distribution is detected.
+> The main script checks your OS at startup. Unsupported distros exit immediately with a clear error. Rocky/AlmaLinux older than version 10 receive upgrade instructions instead of a hard stop.
 
 ---
 
@@ -327,8 +330,9 @@ grin-node-toolkit/
 │   └── github_repo.conf                  # GitHub repo slug for self-update (option 8)
 ├── log/                                  # Per-action logs (auto-created)
 │   ├── nginx-<action>-<datetime>.log
-│   ├── grin_nodes_status_<datetime>.log  # Node monitor results
-│   └── grin_full_cleanup_<datetime>.log  # Full cleanup audit trail
+│   ├── grin_nodes_status_<datetime>.log          # Node monitor results
+│   ├── grin_full_cleanup_<datetime>.log          # Full cleanup audit trail
+│   └── non_debian_upgrade_instructions.log       # Rocky/Alma upgrade steps (if applicable)
 ├── extensions/
 │   └── grinmasternodes.json              # Community host registry (zone → site_key → hostnames)
 ├── scripts/

@@ -241,6 +241,12 @@ stop_grin_gracefully() {
     done < <(tmux ls -F '#{session_name}' 2>/dev/null | grep '^grin_' || true)
 
     success "All Grin nodes and tmux sessions stopped."
+
+    # Clear all instance entries from INSTANCES_CONF so the rebuild registers cleanly
+    if [[ -f "$INSTANCES_CONF" ]]; then
+        : > "$INSTANCES_CONF"
+        log "Conf cleared (all instances stopped)."
+    fi
 }
 
 # =============================================================================
@@ -273,20 +279,24 @@ stop_grin_one() {
         kill -KILL "$pid" 2>/dev/null || true; sleep 2
     fi
 
-    # Kill the tmux session associated with this port's instance dir (from conf)
+    # Kill the tmux session and clear this instance's conf entries so a rebuild
+    # registers cleanly via save_instance_location
     if [[ -f "$INSTANCES_CONF" ]]; then
         local grin_dir=""
         # shellcheck source=/dev/null
         source "$INSTANCES_CONF" 2>/dev/null || true
         if [[ "$target_port" == "3414" ]]; then
             grin_dir="${PRUNEMAIN_GRIN_DIR:-${FULLMAIN_GRIN_DIR:-}}"
+            sed -i '/^PRUNEMAIN_\|^FULLMAIN_/d' "$INSTANCES_CONF"
         else
             grin_dir="${PRUNETEST_GRIN_DIR:-}"
+            sed -i '/^PRUNETEST_/d' "$INSTANCES_CONF"
         fi
         if [[ -n "$grin_dir" ]]; then
             local sess="grin_$(basename "$grin_dir")"
             tmux kill-session -t "$sess" 2>/dev/null && info "Tmux session '$sess' closed." || true
         fi
+        log "Conf entries cleared for port $target_port instance."
     fi
 
     success "Grin on port $target_port stopped."
@@ -390,8 +400,12 @@ update_binary_only() {
 #                                  M = kill mainnet & rebuild mainnet only
 #                                  T = kill testnet  & rebuild testnet only
 #                                  K = kill all & rebuild both; 0 = return to menu
-#   Only 3414 occupied         → B = binary-only update; 1 = install testnet alongside
-#   Only 13414 occupied        → B = binary-only update; 1 = install mainnet alongside
+#   Only 3414 occupied         → B = binary-only update
+#                                  M = kill mainnet & rebuild mainnet
+#                                  1 = install testnet alongside (default)
+#   Only 13414 occupied        → B = binary-only update
+#                                  T = kill testnet  & rebuild testnet
+#                                  1 = install mainnet alongside (default)
 #   Neither occupied           → check for stale/orphaned grin processes and ports,
 #                                offer to kill them before continuing
 # =============================================================================
@@ -453,7 +467,7 @@ check_grin_running() {
         done
     fi
 
-    # ── Only mainnet running → can install testnet alongside it ───────────────
+    # ── Only mainnet running → can install testnet alongside, or rebuild mainnet ──
     if $mainnet_running; then
         echo ""
         info "Mainnet node is running on port 3414 (PID: $mainnet_pid)."
@@ -463,14 +477,19 @@ check_grin_running() {
         local _main_choice
         while true; do
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
+            echo -e "  ${RED}M${RESET} — kill mainnet  & rebuild mainnet"
             echo -e "  ${GREEN}1${RESET} — install testnet alongside mainnet  ${DIM}(default)${RESET}"
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[B/1/0, Enter = 1]: ${RESET}"
+            echo -ne "${DIM}[B/M/1/0, Enter = 1]: ${RESET}"
             read -r _main_choice || true
             case "${_main_choice:-1}" in
                 [Bb])
                     update_binary_only
+                    ;;
+                [Mm])
+                    stop_grin_one 3414
+                    exec "$0"
                     ;;
                 1|"")
                     RESTRICTED_NETWORK="testnet"
@@ -483,14 +502,14 @@ check_grin_running() {
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose B, 1, or 0."
+                    warn "Invalid input — choose B, M, 1, or 0."
                     echo ""
                     ;;
             esac
         done
     fi
 
-    # ── Only testnet running → can install mainnet alongside it ───────────────
+    # ── Only testnet running → can install mainnet alongside, or rebuild testnet ──
     if $testnet_running; then
         echo ""
         info "Testnet node is running on port 13414 (PID: $testnet_pid)."
@@ -499,14 +518,19 @@ check_grin_running() {
         local _test_choice
         while true; do
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
+            echo -e "  ${RED}T${RESET} — kill testnet  & rebuild testnet"
             echo -e "  ${GREEN}1${RESET} — install mainnet alongside testnet  ${DIM}(default)${RESET}"
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[B/1/0, Enter = 1]: ${RESET}"
+            echo -ne "${DIM}[B/T/1/0, Enter = 1]: ${RESET}"
             read -r _test_choice || true
             case "${_test_choice:-1}" in
                 [Bb])
                     update_binary_only
+                    ;;
+                [Tt])
+                    stop_grin_one 13414
+                    exec "$0"
                     ;;
                 1|"")
                     RESTRICTED_NETWORK="mainnet"
@@ -519,7 +543,7 @@ check_grin_running() {
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose B, 1, or 0."
+                    warn "Invalid input — choose B, T, 1, or 0."
                     echo ""
                     ;;
             esac

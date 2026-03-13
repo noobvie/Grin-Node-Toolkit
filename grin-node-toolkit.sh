@@ -19,6 +19,96 @@ BOLD='\033[1m'
 DIM='\033[2m'
 RESET='\033[0m'
 
+# Shared handler for Rocky Linux and AlmaLinux older than version 10.
+# $1 = os_id (rocky|almalinux)  $2 = os_name (pretty name)
+upgrade_rhel_clone_elevate() {
+    local os_id="$1"
+    local os_name="$2"
+    local log_dir="$SCRIPT_DIR/log"
+    local log_file="$log_dir/non_debian_upgrade_instructions.log"
+
+    # Distro-specific values
+    local leapp_data_pkg verify_cmd
+    if [[ "$os_id" == "almalinux" ]]; then
+        leapp_data_pkg="leapp-data-almalinux"
+        verify_cmd="cat /etc/almalinux-release"
+    else
+        leapp_data_pkg="leapp-data-rocky"
+        verify_cmd="cat /etc/rocky-release"
+    fi
+
+    mkdir -p "$log_dir"
+
+    cat > "$log_file" <<EOF
+================================================================================
+ Non-Debian OS Upgrade Instructions
+ Generated : $(date)
+ Detected  : $os_name
+================================================================================
+
+Version 10+ is required. The pre-built Grin binary requires glibc 2.38+
+which is only available on $os_id 10+.
+
+To upgrade this system to version 10:
+
+  Step 1 — Install ELevate and leapp packages:
+    dnf install -y https://repo.almalinux.org/elevate/elevate-release-latest-el9.noarch.rpm
+    dnf install -y leapp-upgrade $leapp_data_pkg
+
+  Step 2 — Run pre-upgrade check (review any inhibitors):
+    leapp preupgrade
+
+  Step 3 — Start the upgrade:
+    leapp upgrade
+
+  Step 4 — Reboot (system will reboot twice to complete):
+    reboot
+
+  Step 5 — After upgrade, verify and re-run this toolkit:
+    $verify_cmd
+
+  More info: https://wiki.almalinux.org/elevate/
+
+================================================================================
+EOF
+
+    echo ""
+    echo -e "${RED}${BOLD}╔══════════════════════════════════════════════════════════╗${RESET}"
+    echo -e "${RED}${BOLD}║   OS VERSION TOO OLD — CANNOT CONTINUE                  ║${RESET}"
+    echo -e "${RED}${BOLD}╚══════════════════════════════════════════════════════════╝${RESET}"
+    echo ""
+    echo -e "  Detected OS  : ${BOLD}${os_name}${RESET}"
+    echo ""
+    echo -e "  ${RED}Version 10+ is required.${RESET} The pre-built Grin binary"
+    echo -e "  requires glibc 2.38+ which is only available on ${os_id} 10+."
+    echo ""
+    echo -e "${BOLD}  To upgrade this system to version 10:${RESET}"
+    echo ""
+    echo -e "  ${CYAN}Step 1${RESET} — Install ELevate and leapp packages:"
+    echo -e "    ${DIM}dnf install -y https://repo.almalinux.org/elevate/elevate-release-latest-el9.noarch.rpm${RESET}"
+    echo -e "    ${DIM}dnf install -y leapp-upgrade ${leapp_data_pkg}${RESET}"
+    echo ""
+    echo -e "  ${CYAN}Step 2${RESET} — Run pre-upgrade check (review any inhibitors):"
+    echo -e "    ${DIM}leapp preupgrade${RESET}"
+    echo ""
+    echo -e "  ${CYAN}Step 3${RESET} — Start the upgrade:"
+    echo -e "    ${DIM}leapp upgrade${RESET}"
+    echo ""
+    echo -e "  ${CYAN}Step 4${RESET} — Reboot (system will reboot twice to complete):"
+    echo -e "    ${DIM}reboot${RESET}"
+    echo ""
+    echo -e "  ${CYAN}Step 5${RESET} — After upgrade, verify and re-run this toolkit:"
+    echo -e "    ${DIM}${verify_cmd}${RESET}"
+    echo ""
+    echo -e "  ${DIM}More info: https://wiki.almalinux.org/elevate/${RESET}"
+    echo ""
+    echo -e "${GREEN}[INFO]${RESET}  These instructions have been saved to:"
+    echo -e "         ${BOLD}${log_file}${RESET}"
+    echo -e "         ${DIM}cat ${log_file}${RESET}"
+    echo ""
+    exit 1
+}
+
 check_os() {
     # Must be Linux
     if [[ "$(uname -s)" != "Linux" ]]; then
@@ -39,37 +129,20 @@ check_os() {
     os_name="$(grep '^PRETTY_NAME=' /etc/os-release | cut -d= -f2- | tr -d '"' || true)"
     os_name="${os_name:-$os_id}"
 
-    # Rocky Linux — supported on version 10+, blocked on older versions
-    if [[ "$os_id" == "rocky" ]]; then
-        local rocky_major
-        rocky_major="$(echo "$os_version_id" | cut -d. -f1)"
-        if (( rocky_major >= 10 )); then
+    # Rocky Linux / AlmaLinux — supported on version 10+, show upgrade instructions on older versions
+    if [[ "$os_id" == "rocky" || "$os_id" == "almalinux" ]]; then
+        local major_ver
+        major_ver="$(echo "$os_version_id" | cut -d. -f1)"
+        if (( major_ver >= 10 )); then
             echo -e "${GREEN}[OK]${RESET}    OS detected: ${BOLD}${os_name}${RESET} — supported."
             return
         else
-            echo ""
-            echo -e "${RED}${BOLD}╔══════════════════════════════════════════════════════════╗${RESET}"
-            echo -e "${RED}${BOLD}║   ROCKY LINUX VERSION TOO OLD — CANNOT CONTINUE         ║${RESET}"
-            echo -e "${RED}${BOLD}╚══════════════════════════════════════════════════════════╝${RESET}"
-            echo ""
-            echo -e "  Detected OS  : ${BOLD}${os_name}${RESET}"
-            echo -e "  Detected ID  : ${os_id}  version: ${os_version_id}"
-            echo ""
-            echo -e "  ${RED}Rocky Linux 10 or later is required.${RESET}"
-            echo -e "  The pre-built Grin binary requires glibc 2.38+ which is"
-            echo -e "  only available on Rocky Linux 10+."
-            echo ""
-            echo -e "  ${YELLOW}To upgrade from Rocky Linux 9 to 10:${RESET}"
-            echo -e "    Rocky Linux major version upgrades require the ${BOLD}ELevate${RESET} tool."
-            echo -e "    A full reinstall of Rocky Linux 10 is the simpler option."
-            echo -e "    See: ${CYAN}https://rockylinux.org/download${RESET}"
-            echo ""
-            exit 1
+            upgrade_rhel_clone_elevate "$os_id" "$os_name"
         fi
     fi
 
     # Hard-stop for known non-Debian families (RHEL, Fedora, Arch, etc.)
-    local non_debian_ids="rhel fedora centos almalinux ol amzn sles opensuse arch manjaro gentoo void slackware"
+    local non_debian_ids="rhel fedora centos ol amzn sles opensuse arch manjaro gentoo void slackware"
     local blocked=0
     local matched_id=""
     for non_deb_id in $non_debian_ids; do
@@ -103,6 +176,7 @@ check_os() {
         echo -e "  ${GREEN}Supported systems:${RESET}"
         echo -e "    ${GREEN}✓${RESET}  Ubuntu 22.04 LTS or later    ${DIM}(fully tested)${RESET}"
         echo -e "    ${GREEN}✓${RESET}  Rocky Linux 10 or later      ${DIM}(fully tested)${RESET}"
+        echo -e "    ${GREEN}✓${RESET}  AlmaLinux 10 or later        ${DIM}(fully tested)${RESET}"
         echo -e "    ${YELLOW}~${RESET}  Other Debian-based distros   ${DIM}(best effort, not guaranteed)${RESET}"
         echo ""
         exit 1

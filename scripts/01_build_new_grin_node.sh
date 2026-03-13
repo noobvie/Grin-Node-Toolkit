@@ -16,7 +16,8 @@
 #   • OS version check is handled by the master script (grin-node-toolkit.sh)
 #   • Internet access  (GitHub API + chain data hosts)
 #   • Required packages (auto-installed if missing):
-#       tar  openssl  libncurses5  tmux  jq  tor  curl  wget
+#       Debian/Ubuntu : tar  openssl  libncurses5 (or libncurses6)  tmux  jq  tor  curl  wget
+#       Rocky / Alma  : tar  openssl  ncurses-compat-libs  tmux  jq  tor  curl  wget
 #
 # NETWORK & ARCHIVE MODES
 #   Networks  : Mainnet  |  Testnet  |  Both (mainnet first, then testnet)
@@ -39,7 +40,8 @@
 #              Prompts to kill conflicts before continuing.
 #
 #   Step  2 — Dependency Check
-#              Installs any missing packages via apt-get. OS version check is
+#              Installs any missing packages via apt-get (Debian/Ubuntu) or
+#              dnf (Rocky Linux / AlmaLinux 10+). OS version check is
 #              handled upstream by the master script.
 #
 #   Step  3 — Network Selection
@@ -608,7 +610,7 @@ check_os_and_deps() {
     local os_id
     os_id="$(grep '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || true)"
 
-    if [[ "$os_id" == "rocky" ]]; then
+    if [[ "$os_id" == "rocky" || "$os_id" == "almalinux" ]]; then
         # Rocky Linux 10+ — use dnf
         # ncurses-compat-libs fixes "no version information available" warnings
         # from the Grin binary at runtime. tar and tmux are not installed by default.

@@ -27,14 +27,11 @@ upgrade_rhel_clone_elevate() {
     local log_dir="$SCRIPT_DIR/log"
     local log_file="$log_dir/non_debian_upgrade_instructions.log"
 
-    # Distro-specific values
-    local leapp_data_pkg verify_cmd
+    local download_url
     if [[ "$os_id" == "almalinux" ]]; then
-        leapp_data_pkg="leapp-data-almalinux"
-        verify_cmd="cat /etc/almalinux-release"
+        download_url="https://almalinux.org/get-almalinux/"
     else
-        leapp_data_pkg="leapp-data-rocky"
-        verify_cmd="cat /etc/rocky-release"
+        download_url="https://rockylinux.org/download"
     fi
 
     mkdir -p "$log_dir"
@@ -49,25 +46,16 @@ upgrade_rhel_clone_elevate() {
 Version 10+ is required. The pre-built Grin binary requires glibc 2.38+
 which is only available on $os_id 10+.
 
-To upgrade this system to version 10:
+In-place upgrades from version 9 to 10 are not yet supported by the ELevate
+tool for $os_id. A fresh install of version 10 is required.
 
-  Step 1 — Install ELevate and leapp packages:
-    dnf install -y https://repo.almalinux.org/elevate/elevate-release-latest-el9.noarch.rpm
-    dnf install -y leapp-upgrade $leapp_data_pkg
+Option A — Fresh reinstall (recommended):
+  1. Download $os_id 10 from: $download_url
+  2. Reinstall your VPS with the new image
+  3. Re-run this toolkit after the install
 
-  Step 2 — Run pre-upgrade check (review any inhibitors):
-    leapp preupgrade
-
-  Step 3 — Start the upgrade:
-    leapp upgrade
-
-  Step 4 — Reboot (system will reboot twice to complete):
-    reboot
-
-  Step 5 — After upgrade, verify and re-run this toolkit:
-    $verify_cmd
-
-  More info: https://wiki.almalinux.org/elevate/
+Option B — Check if ELevate support has been added since this message:
+  See: https://wiki.almalinux.org/elevate/
 
 ================================================================================
 EOF
@@ -82,25 +70,15 @@ EOF
     echo -e "  ${RED}Version 10+ is required.${RESET} The pre-built Grin binary"
     echo -e "  requires glibc 2.38+ which is only available on ${os_id} 10+."
     echo ""
-    echo -e "${BOLD}  To upgrade this system to version 10:${RESET}"
+    echo -e "  ${YELLOW}In-place upgrade (ELevate) from version 9 → 10 is not yet${RESET}"
+    echo -e "  ${YELLOW}available for ${os_id}. A fresh install is required.${RESET}"
     echo ""
-    echo -e "  ${CYAN}Step 1${RESET} — Install ELevate and leapp packages:"
-    echo -e "    ${DIM}dnf install -y https://repo.almalinux.org/elevate/elevate-release-latest-el9.noarch.rpm${RESET}"
-    echo -e "    ${DIM}dnf install -y leapp-upgrade ${leapp_data_pkg}${RESET}"
+    echo -e "  ${CYAN}Option A${RESET} — Fresh reinstall ${DIM}(recommended)${RESET}:"
+    echo -e "    Reinstall your VPS with ${BOLD}${os_id} 10${RESET} from your hosting panel."
+    echo -e "    ${DIM}${download_url}${RESET}"
     echo ""
-    echo -e "  ${CYAN}Step 2${RESET} — Run pre-upgrade check (review any inhibitors):"
-    echo -e "    ${DIM}leapp preupgrade${RESET}"
-    echo ""
-    echo -e "  ${CYAN}Step 3${RESET} — Start the upgrade:"
-    echo -e "    ${DIM}leapp upgrade${RESET}"
-    echo ""
-    echo -e "  ${CYAN}Step 4${RESET} — Reboot (system will reboot twice to complete):"
-    echo -e "    ${DIM}reboot${RESET}"
-    echo ""
-    echo -e "  ${CYAN}Step 5${RESET} — After upgrade, verify and re-run this toolkit:"
-    echo -e "    ${DIM}${verify_cmd}${RESET}"
-    echo ""
-    echo -e "  ${DIM}More info: https://wiki.almalinux.org/elevate/${RESET}"
+    echo -e "  ${CYAN}Option B${RESET} — Check if ELevate support has been added since:"
+    echo -e "    ${DIM}https://wiki.almalinux.org/elevate/${RESET}"
     echo ""
     echo -e "${GREEN}[INFO]${RESET}  These instructions have been saved to:"
     echo -e "         ${BOLD}${log_file}${RESET}"

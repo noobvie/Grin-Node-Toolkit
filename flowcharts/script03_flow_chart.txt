@@ -1,0 +1,605 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║                  03_grin_share_chain_data.sh  —  ENTRY                  ║
+╚══════════════════════════════════════════════════════════════════════════╝
+                                    │
+                         parse argument $1
+                                    │
+          ┌──────────────┬──────────┴──────────┬──────────────┐
+          │              │                     │              │
+    --cron-nginx   --cron-ssh           --cron-clean      (none)
+          │              │                     │              │
+   run_cron_nginx() run_cron_ssh()  run_txhashset_     run_interactive()
+    (scheduled)     (scheduled)      cleanup()          (interactive)
+          │              │           (scheduled)              │
+          │              │                │                   │
+   [see NGINX      [see SSH               │            ┌──────▼──────────────┐
+    CRON flow]      CRON flow]    scan default dirs:   │     MAIN MENU       │
+                                  /grinprunemain/      │  A) Nginx Setup     │
+                                  /grinfullmain/       │  B) Share Now (nginx)│
+                                  /grinprunetest/      │  C) SSH Setup       │
+                                  delete all:          │  D) Share Now (SSH) │
+                                  txhashset_           │  E) Add Nginx Cron  │
+                                  snapshot_*.zip       │  F) Remove Nginx Cron│
+                                  log count removed    │  G) Add Grin Autostart│
+                                                       │  H) Remove Autostart │
+                                                       │  I) Add Clean Cron  │
+                                                       │  0) Exit            │
+                                                       └──────────┬──────────┘
+                                                                  │
+        ┌──────┬────────┬────────┬────────┬────────┬────────┬────┴─┬────────┐
+       [A]    [B]      [C]      [D]      [E]      [F]      [G]   [H]      [I]
+══════════════════════════════════════════════════════════════════
+[A] run_nginx_setup()  —  Configure nginx sharing
+══════════════════════════════════════════════════════════════════
+
+    ┌──────────────────────────────────┐
+    │  Prompt mainnet P2P port [3414]  │
+    │  Prompt testnet P2P port [13414] │
+    └──────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────┐
+    │  Detect running Grin nodes       │
+    │  for each port:                  │
+    │    get_pid_on_port()             │
+    │    → lsof / ss / netstat        │
+    │    read /proc/$pid/exe           │
+    │    locate grin-server.toml       │
+    │    parse chain_type              │
+    │    parse archive_mode            │
+    │  build detected_combos[]:        │
+    │    "mainnet:pruned"              │
+    │    "mainnet:full"                │
+    │    "testnet:pruned"              │
+    │  show chain_data size            │
+    │  show free disk space            │
+    └──────────────────────────────────┘
+                    │
+            1 combo detected              2+ combos detected
+                    │                              │
+            auto-select                  ┌─────────▼──────────┐
+            no prompt                    │  Network choice:    │
+                                         │  1=both             │
+                                         │  2=mainnet only     │
+                                         │  3=testnet only     │
+                                         │  0=cancel           │
+                                         └─────────────────────┘
+                    │                              │
+                    └──────────────┬───────────────┘
+                                   │  sets SYNC_CHOICE
+                                   │  = "all"/"mainnet"/"testnet"
+                    ┌──────────────▼───────────────┐
+                    │  For each detected combo:    │
+                    │  Web directory selection:    │
+                    │                             │
+                    │  scan nginx sites-enabled   │
+                    │  show matching paths        │
+                    │    1..N) detected paths     │
+                    │    M)    manual input       │
+                    │    0)    cancel             │
+                    │                             │
+                    │  sets LOCAL_WEB_DIR_        │
+                    │   MAINNET_FULL / _PRUNED    │
+                    │   TESTNET_PRUNED            │
+                    └──────────────────────────────┘
+                                   │
+                    ┌──────────────▼───────────────┐
+                    │  File ownership              │
+                    │  [default: www-data:www-data]│
+                    │                             │
+                    │  Grin stop timeout          │
+                    │  [default: 120s]            │
+                    └──────────────────────────────┘
+                                   │
+                    ┌──────────────▼───────────────┐
+                    │  Save conf/grin_share_        │
+                    │  nginx.conf  (chmod 600)     │
+                    │  SYNC_CHOICE, ports,         │
+                    │  web dirs, owner, timeout,   │
+                    │  DETECTED_NODE_TYPES         │
+                    └──────────────────────────────┘
+══════════════════════════════════════════════════════════════════
+[C] run_ssh_setup()  —  Configure SSH upload
+══════════════════════════════════════════════════════════════════
+
+    guard: nginx conf must exist → load it
+                    │
+    ┌──────────────────────────────────┐
+    │  Global SSH defaults:            │
+    │  SSH port [default: 22]          │
+    │  SSH key  [default: /root/       │
+    │            .ssh/id_rsa]          │
+    └──────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────┐
+    │  For each combo in              │
+    │  DETECTED_NODE_TYPES:           │
+    │  (mainnet:full / mainnet:pruned  │
+    │   / testnet:pruned)             │
+    │                                 │
+    │  Enable SSH upload? [y/N/0]     │
+    │   yes →                         │
+    │    source dir (from nginx conf) │
+    │    remote host (user@ip)        │
+    │    remote SSH port              │
+    │    SSH key path                 │
+    │    remote web directory         │
+    │    test SSH connection ─────────┼──→ fail → warn, allow save
+    │   no  → skip this combo        │
+    └──────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────┐
+    │  Remote file ownership          │
+    │  [default: www-data:www-data]   │
+    │                                 │
+    │  Show cron timing advisory      │
+    │  (schedule SSH 1-2h after nginx)│
+    └──────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────┐
+    │  Save conf/grin_share_ssh.conf  │
+    │  (chmod 600)                    │
+    │  SSH_ENABLE_*, REMOTE_HOST_*,   │
+    │  REMOTE_PORT_*, SSH_KEY_*,      │
+    │  REMOTE_WEB_DIR_*               │
+    └──────────────────────────────────┘
+══════════════════════════════════════════════════════════════════
+[B] menu_share_nginx()  →  leads to NGINX CRON FLOW
+[E run_cron_nginx()]    (same pipeline, called directly when scheduled)
+══════════════════════════════════════════════════════════════════
+
+    guard: nginx conf must exist
+                    │
+    [B only] show warning: "Grin will be stopped"
+    [B only] confirm: y/N/0
+                    │
+    ┌──────────────────────────────────┐
+    │  run_cron_nginx()               │
+    │                                 │
+    │  load grin_share_nginx.conf     │
+    │                                 │
+    │  mainnet running?               │
+    │   no + SYNC ≠ testnet →        │
+    │    try_start_from_known_dir()   │──→ check INSTANCES_CONF first
+    │    (mainnet, port 3414)         │    fallback: /grinfullmain
+    │                                 │               /grinprunemain
+    │  testnet running?               │    session: grin_<dirname>
+    │   no + SYNC ≠ mainnet →        │    wait up to 120s
+    │    try_start_from_known_dir()   │
+    │    (testnet, port 13414)        │
+    │                                 │
+    │  neither running → error exit   │
+    └──────────────────────────────────┘
+                    │
+    ┌───────────────┴───────────────┐
+    │  for each port [3414, 13414]: │
+    │  run_nginx_share_for_port()   │
+    └───────────────────────────────┘
+                    │
+                    ▼
+    ╔══════════════════════════════════════════════════════════╗
+    ║      run_nginx_share_for_port(port)  — 9-STEP PIPELINE  ║
+    ╚══════════════════════════════════════════════════════════╝
+
+    ┌──────────────────────────────────────────┐
+    │  check_timezone_utc()                   │
+    │  reset_detection_vars()                 │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Live detection:                        │
+    │  detect_active_port(port)               │
+    │    get PID via lsof / ss / netstat      │
+    │                                         │
+    │  found ──────────────────────────────→  │
+    │   detect_grin_binary()                  │
+    │    /proc/$pid/exe → GRIN_BINARY         │
+    │    dirname       → GRIN_DIR             │
+    │   detect_config_file()                  │
+    │    search: GRIN_DIR / home / root       │
+    │   detect_network_type()                 │
+    │    parse chain_type from toml           │
+    │    fallback: infer from port number     │
+    │   detect_node_type()                    │
+    │    parse archive_mode from toml         │
+    │   detect_chain_data()                   │
+    │    parse db_root, append /chain_data    │
+    │    fallbacks: GRIN_DIR / home / root    │
+    │   save_instance_detection()             │
+    │    → update INSTANCES_CONF             │
+    │   setup_derived_variables()             │
+    │    TMUX_SESSION = grin_<dirname>        │
+    │    OUTPUT_DIR   = LOCAL_WEB_DIR_*       │
+    │    LOG_FILE     = timestamped           │
+    │                                         │
+    │  not found ──────────────────────────→  │
+    │   load_instance_from_conf(port)         │
+    │    source INSTANCES_CONF               │
+    │    match port → key (PRUNEMAIN etc)     │
+    │    validate chain_data dir exists       │
+    │    still fails → skip silently / return │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  SYNC_CHOICE filter:                    │
+    │  SYNC=mainnet + network=testnet → skip  │
+    │  SYNC=testnet + network=mainnet → skip  │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  display_configuration()  (log vars)    │
+    │  validate_nginx_config()                │
+    │   nginx -t                              │
+    │   check output dir reachable            │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 0 — clean_output_directory()      │
+    │  wipe OUTPUT_DIR                        │
+    │  keep .htaccess                         │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 1 — stop_grin_node()              │
+    │  get PID on GRIN_PORT                   │
+    │  PID missing → skip                     │
+    │  send SIGTERM                           │
+    │  wait GRIN_STOP_TIMEOUT (default 120s)  │
+    │  still running?                         │
+    │   FORCE_KILL_IF_STUCK=true → SIGKILL   │
+    │   false → error_exit                    │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 2 — remove_old_txhashset()        │
+    │  delete txhashset_snapshot*.zip         │
+    │  from GRIN_DATA_DIR                     │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 3 — remove_peer_directory()       │
+    │  rm -rf $GRIN_DATA_DIR/peer             │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 4 — create_status_in_progress()   │
+    │  write: "Sync is in progress..."        │
+    │  to OUTPUT_DIR/check_status_before_     │
+    │  download.txt                           │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 5 — compress_chain_data()         │
+    │  tar -czf OUTPUT_DIR/                   │
+    │   grin_{type}_{net}_{date}.tar.gz       │
+    │   chain_data/                           │
+    │  sha256sum > .sha256 file               │
+    │  create_readme()                        │
+    │   → README.txt with instructions:      │
+    │      download / verify / extract        │
+    │      for Linux / Windows / Grim         │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 6 — update_status_completed()     │
+    │  overwrite status file:                 │
+    │  "Sync completed {date}"                │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 7 — change_file_ownership()       │
+    │  chown -R FILE_OWNER OUTPUT_DIR         │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 8 — restart_grin_node()           │
+    │  already running? → skip               │
+    │  kill stale tmux session (same name)    │
+    │  tmux new-session -d -s $TMUX_SESSION   │
+    │    "grin server run; Press Enter..."    │
+    │  wait 5s, verify PID on port            │
+    │  started? → log attach command         │
+    │  not started? → warn, manual start msg │
+    └──────────────────────────────────────────┘
+══════════════════════════════════════════════════════════════════
+[B] menu_share_nginx()  →  leads to NGINX CRON FLOW
+[E run_cron_nginx()]    (same pipeline, called directly when scheduled)
+══════════════════════════════════════════════════════════════════
+
+    guard: nginx conf must exist
+                    │
+    [B only] show warning: "Grin will be stopped"
+    [B only] confirm: y/N/0
+                    │
+    ┌──────────────────────────────────┐
+    │  run_cron_nginx()               │
+    │                                 │
+    │  load grin_share_nginx.conf     │
+    │                                 │
+    │  mainnet running?               │
+    │   no + SYNC ≠ testnet →        │
+    │    try_start_from_known_dir()   │──→ check INSTANCES_CONF first
+    │    (mainnet, port 3414)         │    fallback: /grinfullmain
+    │                                 │               /grinprunemain
+    │  testnet running?               │    session: grin_<dirname>
+    │   no + SYNC ≠ mainnet →        │    wait up to 120s
+    │    try_start_from_known_dir()   │
+    │    (testnet, port 13414)        │
+    │                                 │
+    │  neither running → error exit   │
+    └──────────────────────────────────┘
+                    │
+    ┌───────────────┴───────────────┐
+    │  for each port [3414, 13414]: │
+    │  run_nginx_share_for_port()   │
+    └───────────────────────────────┘
+                    │
+                    ▼
+    ╔══════════════════════════════════════════════════════════╗
+    ║      run_nginx_share_for_port(port)  — 9-STEP PIPELINE  ║
+    ╚══════════════════════════════════════════════════════════╝
+
+    ┌──────────────────────────────────────────┐
+    │  check_timezone_utc()                   │
+    │  reset_detection_vars()                 │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Live detection:                        │
+    │  detect_active_port(port)               │
+    │    get PID via lsof / ss / netstat      │
+    │                                         │
+    │  found ──────────────────────────────→  │
+    │   detect_grin_binary()                  │
+    │    /proc/$pid/exe → GRIN_BINARY         │
+    │    dirname       → GRIN_DIR             │
+    │   detect_config_file()                  │
+    │    search: GRIN_DIR / home / root       │
+    │   detect_network_type()                 │
+    │    parse chain_type from toml           │
+    │    fallback: infer from port number     │
+    │   detect_node_type()                    │
+    │    parse archive_mode from toml         │
+    │   detect_chain_data()                   │
+    │    parse db_root, append /chain_data    │
+    │    fallbacks: GRIN_DIR / home / root    │
+    │   save_instance_detection()             │
+    │    → update INSTANCES_CONF             │
+    │   setup_derived_variables()             │
+    │    TMUX_SESSION = grin_<dirname>        │
+    │    OUTPUT_DIR   = LOCAL_WEB_DIR_*       │
+    │    LOG_FILE     = timestamped           │
+    │                                         │
+    │  not found ──────────────────────────→  │
+    │   load_instance_from_conf(port)         │
+    │    source INSTANCES_CONF               │
+    │    match port → key (PRUNEMAIN etc)     │
+    │    validate chain_data dir exists       │
+    │    still fails → skip silently / return │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  SYNC_CHOICE filter:                    │
+    │  SYNC=mainnet + network=testnet → skip  │
+    │  SYNC=testnet + network=mainnet → skip  │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  display_configuration()  (log vars)    │
+    │  validate_nginx_config()                │
+    │   nginx -t                              │
+    │   check output dir reachable            │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 0 — clean_output_directory()      │
+    │  wipe OUTPUT_DIR                        │
+    │  keep .htaccess                         │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 1 — stop_grin_node()              │
+    │  get PID on GRIN_PORT                   │
+    │  PID missing → skip                     │
+    │  send SIGTERM                           │
+    │  wait GRIN_STOP_TIMEOUT (default 120s)  │
+    │  still running?                         │
+    │   FORCE_KILL_IF_STUCK=true → SIGKILL   │
+    │   false → error_exit                    │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 2 — remove_old_txhashset()        │
+    │  delete txhashset_snapshot*.zip         │
+    │  from GRIN_DATA_DIR                     │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 3 — remove_peer_directory()       │
+    │  rm -rf $GRIN_DATA_DIR/peer             │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 4 — create_status_in_progress()   │
+    │  write: "Sync is in progress..."        │
+    │  to OUTPUT_DIR/check_status_before_     │
+    │  download.txt                           │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 5 — compress_chain_data()         │
+    │  tar -czf OUTPUT_DIR/                   │
+    │   grin_{type}_{net}_{date}.tar.gz       │
+    │   chain_data/                           │
+    │  sha256sum > .sha256 file               │
+    │  create_readme()                        │
+    │   → README.txt with instructions:      │
+    │      download / verify / extract        │
+    │      for Linux / Windows / Grim         │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 6 — update_status_completed()     │
+    │  overwrite status file:                 │
+    │  "Sync completed {date}"                │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 7 — change_file_ownership()       │
+    │  chown -R FILE_OWNER OUTPUT_DIR         │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Step 8 — restart_grin_node()           │
+    │  already running? → skip               │
+    │  kill stale tmux session (same name)    │
+    │  tmux new-session -d -s $TMUX_SESSION   │
+    │    "grin server run; Press Enter..."    │
+    │  wait 5s, verify PID on port            │
+    │  started? → log attach command         │
+    │  not started? → warn, manual start msg │
+    └──────────────────────────────────────────┘
+══════════════════════════════════════════════════════════════════
+[D] menu_share_ssh()  →  SSH CRON FLOW
+══════════════════════════════════════════════════════════════════
+
+    guard: nginx conf must exist
+    guard: SSH conf must exist
+    load both configs
+                    │
+    ┌──────────────────────────────────────────┐
+    │  run_cron_ssh()                         │
+    │                                         │
+    │  For each combo:                        │
+    │  mainnet:full / mainnet:pruned          │
+    │  / testnet:pruned                       │
+    │                                         │
+    │  SSH_ENABLE_* == "true"?               │
+    │   no → skip                            │
+    │   yes → run_ssh_share_for_combo()      │
+    │           │                             │
+    │    ┌──────▼────────────────────────┐   │
+    │    │  validate source dir exists   │   │
+    │    │  .tar.gz files found?         │   │
+    │    │   no → error (run nginx first)│   │
+    │    │  test SSH connection          │   │
+    │    │   fail → error exit           │   │
+    │    │  ssh mkdir -p remote dir      │   │
+    │    │  write remote status:         │   │
+    │    │   "in progress..."            │   │
+    │    │  rsync -az --delete           │   │
+    │    │   --exclude .htaccess         │   │
+    │    │   src/ → host:remote_dir/     │   │
+    │    │  success →                    │   │
+    │    │   write remote status:        │   │
+    │    │   "Sync completed {date}"     │   │
+    │    │   chown -R FILE_OWNER_SSH     │   │
+    │    │  fail → log error, return 1   │   │
+    │    └───────────────────────────────┘   │
+    │                                         │
+    │  no enabled combos → error exit         │
+    └──────────────────────────────────────────┘
+══════════════════════════════════════════════════════════════════
+[E] add_nginx_schedule()  —  Cron scheduling
+══════════════════════════════════════════════════════════════════
+
+    ┌──────────────────────────────────────────┐
+    │  Select schedule preset:                │
+    │  1) Mon+Thu 00:00 UTC  (default)        │
+    │     0 0 * * 1,4                         │
+    │  2) 3x/week randomized                  │
+    │  3) Daily at random time                │
+    │  4) 2x/week randomized                  │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Prompt cron log path                   │
+    │  [default: log/cron_nginx.log]          │
+    └──────────────────────────────────────────┘
+                    │
+    ┌──────────────────────────────────────────┐
+    │  Build cron line:                       │
+    │  $CRON_EXPR bash $script --cron-nginx   │
+    │  >> $log 2>&1                           │
+    │  # grin-node-toolkit: grin_share_nginx  │
+    └──────────────────────────────────────────┘
+                    │
+    existing entry found?
+          no ↓           yes ↓
+    add to crontab    ask: replace? y/n
+                       yes → remove old, add new
+                       no  → keep existing
+
+    ┌──────────────────────────────────────────┐
+    │  Show SSH advisory:                     │
+    │  "Schedule SSH 1-2h after nginx"        │
+    │  (manual --cron-ssh command shown)      │
+    └──────────────────────────────────────────┘
+
+══════════════════════════════════════════════════════════════════
+[F] remove_nginx_schedule()
+══════════════════════════════════════════════════════════════════
+
+    show current cron jobs
+    confirm remove? [y/N/0]
+    yes → remove lines matching "grin_share_nginx"
+    update crontab
+
+══════════════════════════════════════════════════════════════════
+[I] add_clean_schedule()  —  txhashset cleanup cron
+══════════════════════════════════════════════════════════════════
+
+    show directories being scanned
+    1) every 4h   2) every 12h   3) every 24h
+    build cron → add / replace if existing
+══════════════════════════════════════════════════════════════════
+[G] add_grin_autostart()  —  Boot cron setup
+══════════════════════════════════════════════════════════════════
+
+    ┌──────────────────────────────────────────┐
+    │  Select network:                        │
+    │  1=Mainnet  2=Testnet  3=Both           │
+    └──────────────────────────────────────────┘
+                    │
+    For each selected network:
+    ┌──────────────────────────────────────────┐
+    │  Try live detection on port              │
+    │  found → use detected binary + dir      │
+    │  not found → ask user for binary path   │
+    │                                         │
+    │  Prompt boot delay [default: 60s/120s]  │
+    │                                         │
+    │  Build @reboot cron:                    │
+    │  @reboot sleep $delay                   │
+    │  && cd $GRIN_DIR                        │
+    │  && env SHELL=/bin/bash                 │
+    │  tmux new-session -d -s $SESSION        │
+    │  $GRIN_BINARY                           │
+    │  # grin-node-toolkit:                   │
+    │    grin_autostart_{mainnet|testnet}     │
+    │                                         │
+    │  existing entry found?                  │
+    │   yes → ask replace? y/n               │
+    └──────────────────────────────────────────┘
+    update crontab with all new entries
+
+══════════════════════════════════════════════════════════════════
+[H] remove_grin_autostart()
+══════════════════════════════════════════════════════════════════
+
+    check for mainnet / testnet autostart entries
+    none found → info + return
+    found → menu:
+      1=Mainnet only
+      2=Testnet only
+      3=Both
+      0=Cancel
+    remove selected entries from crontab
+
+Key design patterns in script 03:
+
+Two execution modes — interactive setup wizard (A/C) vs. headless cron pipelines (--cron-*). The cron pipelines are designed to run unattended and exit on error.
+Detection priority — live process (/proc/$pid/exe) → conf cache (INSTANCES_CONF) → skip silently. This means script 03 always prefers the current running state over saved data.
+Auto-start before share — run_cron_nginx tries to start Grin if not running before the pipeline, so a rebooted server self-recovers at cron time.
+9-step nginx pipeline is sequential with no retries — any step failure aborts the run. The status file (check_status_before_download.txt) is visible to downloaders so they know when a share is in progress vs. completed.
+SSH is downstream of nginx — SSH reads what nginx compressed; they're designed to run 1–2 hours apart.
+Session naming now unified — grin_$(basename "$GRIN_DIR") matches script 01, so tmux ls always shows the same session name regardless of which script started the node.

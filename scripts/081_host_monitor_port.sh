@@ -138,15 +138,15 @@ check_master_nodes() {
     mlog "=== Registry Master Nodes Check ==="
     mlog "Registry: $REGISTRY  |  Threshold: ${max_age} days"
 
-    local zones; zones=$(jq -r 'keys[] | select(startswith("_") | not)' "$REGISTRY" 2>/dev/null)
+    local zones; zones=$(jq -r 'keys[] | select(startswith("_") | not)' "$REGISTRY" 2>/dev/null) || true
     local total=0 ok=0 stale=0 unsynced=0 down=0
 
     for zone in $zones; do
-        local site_keys; site_keys=$(jq -r --arg z "$zone" '.[$z] | keys[]' "$REGISTRY" 2>/dev/null)
+        local site_keys; site_keys=$(jq -r --arg z "$zone" '.[$z] | keys[]' "$REGISTRY" 2>/dev/null) || true
         local zone_printed=false
         for sk in $site_keys; do
             local hosts; hosts=$(jq -r --arg z "$zone" --arg s "$sk" \
-                '(.[$z][$s] // [])[]' "$REGISTRY" 2>/dev/null)
+                '(.[$z][$s] // [])[]' "$REGISTRY" 2>/dev/null) || true
             [[ -z "$hosts" ]] && continue
             if [[ "$zone_printed" == false ]]; then
                 echo -e "  ${BOLD}Zone: ${zone^}${RESET}"
@@ -192,7 +192,7 @@ check_master_nodes() {
                 # Gate 3: file age via HEAD Last-Modified
                 local lm age_days=0 age_known=false
                 lm=$(curl -fsSI --max-time 8 "$base/$tname" 2>/dev/null \
-                    | grep -i '^last-modified:' | cut -d' ' -f2- | tr -d '\r')
+                    | grep -i '^last-modified:' | cut -d' ' -f2- | tr -d '\r') || true
                 if [[ -n "$lm" ]]; then
                     local fts; fts=$(date -d "$lm" +%s 2>/dev/null) || true
                     if [[ -n "$fts" ]]; then

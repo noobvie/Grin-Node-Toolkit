@@ -39,8 +39,37 @@ check_os() {
     os_name="$(grep '^PRETTY_NAME=' /etc/os-release | cut -d= -f2- | tr -d '"' || true)"
     os_name="${os_name:-$os_id}"
 
+    # Rocky Linux — supported on version 10+, blocked on older versions
+    if [[ "$os_id" == "rocky" ]]; then
+        local rocky_major
+        rocky_major="$(echo "$os_version_id" | cut -d. -f1)"
+        if (( rocky_major >= 10 )); then
+            echo -e "${GREEN}[OK]${RESET}    OS detected: ${BOLD}${os_name}${RESET} — supported."
+            return
+        else
+            echo ""
+            echo -e "${RED}${BOLD}╔══════════════════════════════════════════════════════════╗${RESET}"
+            echo -e "${RED}${BOLD}║   ROCKY LINUX VERSION TOO OLD — CANNOT CONTINUE         ║${RESET}"
+            echo -e "${RED}${BOLD}╚══════════════════════════════════════════════════════════╝${RESET}"
+            echo ""
+            echo -e "  Detected OS  : ${BOLD}${os_name}${RESET}"
+            echo -e "  Detected ID  : ${os_id}  version: ${os_version_id}"
+            echo ""
+            echo -e "  ${RED}Rocky Linux 10 or later is required.${RESET}"
+            echo -e "  The pre-built Grin binary requires glibc 2.38+ which is"
+            echo -e "  only available on Rocky Linux 10+."
+            echo ""
+            echo -e "  ${YELLOW}To upgrade from Rocky Linux 9 to 10:${RESET}"
+            echo -e "    Rocky Linux major version upgrades require the ${BOLD}ELevate${RESET} tool."
+            echo -e "    A full reinstall of Rocky Linux 10 is the simpler option."
+            echo -e "    See: ${CYAN}https://rockylinux.org/download${RESET}"
+            echo ""
+            exit 1
+        fi
+    fi
+
     # Hard-stop for known non-Debian families (RHEL, Fedora, Arch, etc.)
-    local non_debian_ids="rhel fedora centos almalinux rocky ol amzn sles opensuse arch manjaro gentoo void slackware"
+    local non_debian_ids="rhel fedora centos almalinux ol amzn sles opensuse arch manjaro gentoo void slackware"
     local blocked=0
     local matched_id=""
     for non_deb_id in $non_debian_ids; do
@@ -67,13 +96,14 @@ check_os() {
         echo -e "  Detected ID  : ${os_id}  (ID_LIKE: ${os_id_like:-none})"
         echo -e "  Matched rule : ${matched_id}"
         echo ""
-        echo -e "  ${RED}This toolkit requires a Debian-based Linux distribution.${RESET}"
+        echo -e "  ${RED}This toolkit requires a Debian-based or supported Linux distribution.${RESET}"
         echo -e "  Non-Debian systems (RHEL, Fedora, AlmaLinux, Arch, etc.)"
         echo -e "  are NOT supported and this toolkit will not run on them."
         echo ""
         echo -e "  ${GREEN}Supported systems:${RESET}"
-        echo -e "    ${GREEN}✓${RESET}  Ubuntu 22.04 LTS or later  ${DIM}(fully tested)${RESET}"
-        echo -e "    ${YELLOW}~${RESET}  Other Debian-based distros  ${DIM}(best effort, not guaranteed)${RESET}"
+        echo -e "    ${GREEN}✓${RESET}  Ubuntu 22.04 LTS or later    ${DIM}(fully tested)${RESET}"
+        echo -e "    ${GREEN}✓${RESET}  Rocky Linux 10 or later      ${DIM}(fully tested)${RESET}"
+        echo -e "    ${YELLOW}~${RESET}  Other Debian-based distros   ${DIM}(best effort, not guaranteed)${RESET}"
         echo ""
         exit 1
     fi
@@ -88,7 +118,7 @@ check_os() {
             echo ""
             echo -e "${YELLOW}[WARN]${RESET}  OS detected: ${BOLD}${os_name}${RESET}"
             echo -e "         Ubuntu 22.04 LTS or later is recommended."
-            echo -e "         This older version may work but is not fully tested."
+            echo -e "         This older Ubuntu version may work but is not fully tested."
             echo ""
             sleep 3
         fi

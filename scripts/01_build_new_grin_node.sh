@@ -273,20 +273,24 @@ stop_grin_one() {
         kill -KILL "$pid" 2>/dev/null || true; sleep 2
     fi
 
-    # Kill the tmux session associated with this port's instance dir (from conf)
+    # Kill the tmux session and clear this instance's conf entries so a rebuild
+    # registers cleanly via save_instance_location
     if [[ -f "$INSTANCES_CONF" ]]; then
         local grin_dir=""
         # shellcheck source=/dev/null
         source "$INSTANCES_CONF" 2>/dev/null || true
         if [[ "$target_port" == "3414" ]]; then
             grin_dir="${PRUNEMAIN_GRIN_DIR:-${FULLMAIN_GRIN_DIR:-}}"
+            sed -i '/^PRUNEMAIN_\|^FULLMAIN_/d' "$INSTANCES_CONF"
         else
             grin_dir="${PRUNETEST_GRIN_DIR:-}"
+            sed -i '/^PRUNETEST_/d' "$INSTANCES_CONF"
         fi
         if [[ -n "$grin_dir" ]]; then
             local sess="grin_$(basename "$grin_dir")"
             tmux kill-session -t "$sess" 2>/dev/null && info "Tmux session '$sess' closed." || true
         fi
+        log "Conf entries cleared for port $target_port instance."
     fi
 
     success "Grin on port $target_port stopped."
@@ -390,8 +394,12 @@ update_binary_only() {
 #                                  M = kill mainnet & rebuild mainnet only
 #                                  T = kill testnet  & rebuild testnet only
 #                                  K = kill all & rebuild both; 0 = return to menu
-#   Only 3414 occupied         → B = binary-only update; 1 = install testnet alongside
-#   Only 13414 occupied        → B = binary-only update; 1 = install mainnet alongside
+#   Only 3414 occupied         → B = binary-only update
+#                                  M = kill mainnet & rebuild mainnet
+#                                  1 = install testnet alongside (default)
+#   Only 13414 occupied        → B = binary-only update
+#                                  T = kill testnet  & rebuild testnet
+#                                  1 = install mainnet alongside (default)
 #   Neither occupied           → check for stale/orphaned grin processes and ports,
 #                                offer to kill them before continuing
 # =============================================================================
@@ -440,6 +448,7 @@ check_grin_running() {
                     ;;
                 [Kk])
                     stop_grin_gracefully
+                    [[ -f "$INSTANCES_CONF" ]] && { : > "$INSTANCES_CONF"; log "Conf cleared (full rebuild)."; }
                     exec "$0"
                     ;;
                 0)
@@ -453,7 +462,7 @@ check_grin_running() {
         done
     fi
 
-    # ── Only mainnet running → can install testnet alongside it ───────────────
+    # ── Only mainnet running → can install testnet alongside, or rebuild mainnet ──
     if $mainnet_running; then
         echo ""
         info "Mainnet node is running on port 3414 (PID: $mainnet_pid)."
@@ -463,14 +472,19 @@ check_grin_running() {
         local _main_choice
         while true; do
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
+            echo -e "  ${RED}M${RESET} — kill mainnet  & rebuild mainnet"
             echo -e "  ${GREEN}1${RESET} — install testnet alongside mainnet  ${DIM}(default)${RESET}"
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[B/1/0, Enter = 1]: ${RESET}"
+            echo -ne "${DIM}[B/M/1/0, Enter = 1]: ${RESET}"
             read -r _main_choice || true
             case "${_main_choice:-1}" in
                 [Bb])
                     update_binary_only
+                    ;;
+                [Mm])
+                    stop_grin_one 3414
+                    exec "$0"
                     ;;
                 1|"")
                     RESTRICTED_NETWORK="testnet"
@@ -483,14 +497,14 @@ check_grin_running() {
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose B, 1, or 0."
+                    warn "Invalid input — choose B, M, 1, or 0."
                     echo ""
                     ;;
             esac
         done
     fi
 
-    # ── Only testnet running → can install mainnet alongside it ───────────────
+    # ── Only testnet running → can install mainnet alongside, or rebuild testnet ──
     if $testnet_running; then
         echo ""
         info "Testnet node is running on port 13414 (PID: $testnet_pid)."
@@ -499,14 +513,19 @@ check_grin_running() {
         local _test_choice
         while true; do
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
+            echo -e "  ${RED}T${RESET} — kill testnet  & rebuild testnet"
             echo -e "  ${GREEN}1${RESET} — install mainnet alongside testnet  ${DIM}(default)${RESET}"
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[B/1/0, Enter = 1]: ${RESET}"
+            echo -ne "${DIM}[B/T/1/0, Enter = 1]: ${RESET}"
             read -r _test_choice || true
             case "${_test_choice:-1}" in
                 [Bb])
                     update_binary_only
+                    ;;
+                [Tt])
+                    stop_grin_one 13414
+                    exec "$0"
                     ;;
                 1|"")
                     RESTRICTED_NETWORK="mainnet"
@@ -519,7 +538,7 @@ check_grin_running() {
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose B, 1, or 0."
+                    warn "Invalid input — choose B, T, 1, or 0."
                     echo ""
                     ;;
             esac
@@ -560,7 +579,8 @@ check_grin_running() {
         echo -ne "${BOLD}${RED}Kill all and continue? [y/c/N/0]: ${RESET}"
         read -r confirm || true
         case "${confirm,,}" in
-            y) stop_grin_gracefully ;;
+            y) stop_grin_gracefully
+               [[ -f "$INSTANCES_CONF" ]] && { : > "$INSTANCES_CONF"; log "Conf cleared (stale-process kill)."; } ;;
             c) warn "Continuing despite detected processes — ensure they are NOT Grin-related." ; echo "" ;;
             0) exit 0 ;;
             *) die "Aborted. Resolve the conflicts manually and re-run." ;;
@@ -577,6 +597,7 @@ check_grin_running() {
 # Checks the script is run as root, then installs any missing packages via
 # apt-get: tar, openssl, libncurses5 (or libncurses6 on Ubuntu 24.04+),
 # tmux, jq, tor, curl, wget.
+# dnf (Rocky 10+): tar, openssl, ncurses-compat-libs, tmux, jq, tor, curl, wget.
 # OS version check is handled upstream by the master script.
 # =============================================================================
 check_os_and_deps() {
@@ -584,30 +605,55 @@ check_os_and_deps() {
 
     [[ $EUID -ne 0 ]] && die "This script must be run as root (sudo)."
 
-    # ncurses: libncurses5 was removed in Ubuntu 24.04 — use libncurses6 there.
-    local ncurses_pkg
-    if apt-cache show libncurses5 &>/dev/null 2>&1; then
-        ncurses_pkg="libncurses5"
+    local os_id
+    os_id="$(grep '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || true)"
+
+    if [[ "$os_id" == "rocky" ]]; then
+        # Rocky Linux 10+ — use dnf
+        # ncurses-compat-libs fixes "no version information available" warnings
+        # from the Grin binary at runtime. tar and tmux are not installed by default.
+        local packages=(tar tmux curl wget jq tor openssl ncurses-compat-libs)
+        local to_install=()
+        for pkg in "${packages[@]}"; do
+            rpm -q "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")
+        done
+
+        if [[ ${#to_install[@]} -gt 0 ]]; then
+            info "Installing missing packages: ${to_install[*]}"
+            dnf install -y -q "${to_install[@]}" \
+                || die "Failed to install packages: ${to_install[*]}. See error above."
+            success "Packages installed."
+        else
+            success "All required packages already present."
+        fi
     else
-        ncurses_pkg="libncurses6"
+        # Debian/Ubuntu — use apt-get
+        # ncurses: libncurses5 was removed in Ubuntu 24.04 — use libncurses6 there.
+        local ncurses_pkg
+        if apt-cache show libncurses5 &>/dev/null 2>&1; then
+            ncurses_pkg="libncurses5"
+        else
+            ncurses_pkg="libncurses6"
+        fi
+
+        local packages=(tar openssl "$ncurses_pkg" tmux jq tor curl wget)
+        local to_install=()
+        for pkg in "${packages[@]}"; do
+            dpkg -s "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")
+        done
+
+        if [[ ${#to_install[@]} -gt 0 ]]; then
+            info "Installing missing packages: ${to_install[*]}"
+            apt-get update -qq \
+                || die "apt-get update failed. Check your internet connection and package sources."
+            apt-get install -y -qq "${to_install[@]}" \
+                || die "Failed to install packages: ${to_install[*]}. See error above."
+            success "Packages installed."
+        else
+            success "All required packages already present."
+        fi
     fi
 
-    local packages=(tar openssl "$ncurses_pkg" tmux jq tor curl wget)
-    local to_install=()
-    for pkg in "${packages[@]}"; do
-        dpkg -s "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")
-    done
-
-    if [[ ${#to_install[@]} -gt 0 ]]; then
-        info "Installing missing packages: ${to_install[*]}"
-        apt-get update -qq \
-            || die "apt-get update failed. Check your internet connection and package sources."
-        apt-get install -y -qq "${to_install[@]}" \
-            || die "Failed to install packages: ${to_install[*]}. See error above."
-        success "Packages installed."
-    else
-        success "All required packages already present."
-    fi
     log "[STEP 2] Deps OK."
 }
 
@@ -670,6 +716,7 @@ select_network() {
                 if [[ "$running_network" == "mainnet" ]]; then
                     warn "Stopping ${running_network} to rebuild with different mode..."
                     stop_grin_gracefully
+                    [[ -f "$INSTANCES_CONF" ]] && { sed -i '/^PRUNEMAIN_\|^FULLMAIN_/d' "$INSTANCES_CONF"; log "Conf entries cleared (mainnet mode-switch rebuild)."; }
                     NETWORK_TYPE="mainnet"
                     RESTRICTED_NETWORK=""
                     info "Network: ${BOLD}${NETWORK_TYPE}${RESET} — select new mode at Step 4"
@@ -1748,7 +1795,13 @@ save_instance_location() {
     fi
 
     mkdir -p "$CONF_DIR"
-    [[ -f "$INSTANCES_CONF" ]] && sed -i "/^${key}_/d" "$INSTANCES_CONF"
+    if [[ -f "$INSTANCES_CONF" ]]; then
+        # Remove current key and, for mainnet, also remove the sibling mainnet key
+        # (PRUNEMAIN and FULLMAIN are mutually exclusive — one server, one mainnet mode)
+        sed -i "/^${key}_/d" "$INSTANCES_CONF"
+        [[ "$key" == "FULLMAIN"  ]] && sed -i '/^PRUNEMAIN_/d' "$INSTANCES_CONF"
+        [[ "$key" == "PRUNEMAIN" ]] && sed -i '/^FULLMAIN_/d'  "$INSTANCES_CONF"
+    fi
     cat >> "$INSTANCES_CONF" << __EOF__
 
 ${key}_GRIN_DIR="$GRIN_DIR"

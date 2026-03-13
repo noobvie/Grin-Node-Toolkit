@@ -73,15 +73,15 @@ _get_pid_on_port() {
     local port="$1"
     local pid
     if command -v lsof &>/dev/null; then
-        pid=$(lsof -tni :"$port" -sTCP:LISTEN 2>/dev/null | head -1)
+        pid=$(lsof -tni :"$port" -sTCP:LISTEN 2>/dev/null | head -1) || true
         [[ -n "$pid" ]] && echo "$pid" && return 0
     fi
     if command -v ss &>/dev/null; then
-        pid=$(ss -tlnp 2>/dev/null | grep ":$port " | grep -oP 'pid=\K[0-9]+' | head -1)
+        pid=$(ss -tlnp 2>/dev/null | grep ":$port " | grep -oP 'pid=\K[0-9]+' | head -1) || true
         [[ -n "$pid" ]] && echo "$pid" && return 0
     fi
     if command -v netstat &>/dev/null; then
-        pid=$(netstat -tlnp 2>/dev/null | grep ":$port " | grep -oP '[0-9]+/.*' | cut -d'/' -f1 | head -1)
+        pid=$(netstat -tlnp 2>/dev/null | grep ":$port " | grep -oP '[0-9]+/.*' | cut -d'/' -f1 | head -1) || true
         [[ -n "$pid" ]] && echo "$pid" && return 0
     fi
     return 1
@@ -180,7 +180,7 @@ check_master_nodes() {
                 local idx tname
                 idx=$(curl -fsSL --max-time 10 "$base/" 2>/dev/null) || idx=""
                 tname=$(echo "$idx" | grep -oP 'href="\K[^"]*\.tar\.gz' \
-                    | grep -v '^\.\.' | head -1)
+                    | grep -v '^\.\.' | head -1) || true
                 if [[ -z "$tname" ]]; then
                     printf "      %-40s  ${RED}✗ no .tar.gz in listing${RESET}%b\n" \
                         "$host" "$contact_hint"

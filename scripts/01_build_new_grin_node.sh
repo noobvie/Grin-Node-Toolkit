@@ -597,6 +597,7 @@ check_grin_running() {
 # Checks the script is run as root, then installs any missing packages via
 # apt-get: tar, openssl, libncurses5 (or libncurses6 on Ubuntu 24.04+),
 # tmux, jq, tor, curl, wget.
+# dnf (Rocky 10+): tar, openssl, ncurses-compat-libs, tmux, jq, tor, curl, wget.
 # OS version check is handled upstream by the master script.
 # =============================================================================
 check_os_and_deps() {
@@ -604,30 +605,55 @@ check_os_and_deps() {
 
     [[ $EUID -ne 0 ]] && die "This script must be run as root (sudo)."
 
-    # ncurses: libncurses5 was removed in Ubuntu 24.04 — use libncurses6 there.
-    local ncurses_pkg
-    if apt-cache show libncurses5 &>/dev/null 2>&1; then
-        ncurses_pkg="libncurses5"
+    local os_id
+    os_id="$(grep '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || true)"
+
+    if [[ "$os_id" == "rocky" ]]; then
+        # Rocky Linux 10+ — use dnf
+        # ncurses-compat-libs fixes "no version information available" warnings
+        # from the Grin binary at runtime. tar and tmux are not installed by default.
+        local packages=(tar tmux curl wget jq tor openssl ncurses-compat-libs)
+        local to_install=()
+        for pkg in "${packages[@]}"; do
+            rpm -q "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")
+        done
+
+        if [[ ${#to_install[@]} -gt 0 ]]; then
+            info "Installing missing packages: ${to_install[*]}"
+            dnf install -y -q "${to_install[@]}" \
+                || die "Failed to install packages: ${to_install[*]}. See error above."
+            success "Packages installed."
+        else
+            success "All required packages already present."
+        fi
     else
-        ncurses_pkg="libncurses6"
+        # Debian/Ubuntu — use apt-get
+        # ncurses: libncurses5 was removed in Ubuntu 24.04 — use libncurses6 there.
+        local ncurses_pkg
+        if apt-cache show libncurses5 &>/dev/null 2>&1; then
+            ncurses_pkg="libncurses5"
+        else
+            ncurses_pkg="libncurses6"
+        fi
+
+        local packages=(tar openssl "$ncurses_pkg" tmux jq tor curl wget)
+        local to_install=()
+        for pkg in "${packages[@]}"; do
+            dpkg -s "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")
+        done
+
+        if [[ ${#to_install[@]} -gt 0 ]]; then
+            info "Installing missing packages: ${to_install[*]}"
+            apt-get update -qq \
+                || die "apt-get update failed. Check your internet connection and package sources."
+            apt-get install -y -qq "${to_install[@]}" \
+                || die "Failed to install packages: ${to_install[*]}. See error above."
+            success "Packages installed."
+        else
+            success "All required packages already present."
+        fi
     fi
 
-    local packages=(tar openssl "$ncurses_pkg" tmux jq tor curl wget)
-    local to_install=()
-    for pkg in "${packages[@]}"; do
-        dpkg -s "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")
-    done
-
-    if [[ ${#to_install[@]} -gt 0 ]]; then
-        info "Installing missing packages: ${to_install[*]}"
-        apt-get update -qq \
-            || die "apt-get update failed. Check your internet connection and package sources."
-        apt-get install -y -qq "${to_install[@]}" \
-            || die "Failed to install packages: ${to_install[*]}. See error above."
-        success "Packages installed."
-    else
-        success "All required packages already present."
-    fi
     log "[STEP 2] Deps OK."
 }
 

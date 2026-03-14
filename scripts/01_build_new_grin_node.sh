@@ -617,6 +617,22 @@ check_grin_running() {
             fi
         done
 
+        # Check for an installed-but-not-running node (conf file or binary on disk)
+        if [[ $found -eq 0 ]]; then
+            local _inst_detected=false
+            if [[ -s "$INSTANCES_CONF" ]]; then
+                _inst_detected=true
+            else
+                for _chk in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/node/testnet-prune; do
+                    [[ -x "$_chk/grin" ]] && { _inst_detected=true; break; }
+                done
+            fi
+            if $_inst_detected; then
+                info "Grin node installation found (not currently running)."
+                found=1
+            fi
+        fi
+
         if [[ $found -eq 1 ]]; then
             echo ""
             echo -e "  ${GREEN}k${RESET}) Kill all conflicting processes and continue"

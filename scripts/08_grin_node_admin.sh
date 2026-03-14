@@ -20,6 +20,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_DIR="$SCRIPT_DIR/../conf"
+WALLETS_CONF="$CONF_DIR/grin_wallets_location.conf"
 
 # ─── GitHub self-update ───────────────────────────────────────────────────────
 # Official public repository. A fork slug saved in conf/github_repo.conf
@@ -1153,6 +1154,26 @@ __EOF__
                 warn "No grin binaries found in $dest_base — nothing rebuilt."
                 info  "Run Script 01 to install a node, or re-run option 10 with the correct source path."
             fi
+
+            # Also scan wallet dirs
+            local -a _wscan_dirs=( "$dest_base/wallet/mainnet" "$dest_base/wallet/testnet" )
+            declare -A _wscan_keys=( [mainnet]="MAINNET" [testnet]="TESTNET" )
+            touch "$WALLETS_CONF"
+            for _wd in "${_wscan_dirs[@]}"; do
+                [[ -x "$_wd/grin-wallet" ]] || continue
+                local _wk="${_wscan_keys[$(basename "$_wd")]:-}"
+                [[ -z "$_wk" ]] && continue
+                sed -i "/^${_wk}_WALLET_/d" "$WALLETS_CONF" 2>/dev/null || true
+                cat >> "$WALLETS_CONF" << __EOF__
+
+${_wk}_WALLET_DIR="$_wd"
+${_wk}_WALLET_BIN="$_wd/grin-wallet"
+${_wk}_WALLET_TOML="$_wd/grin-wallet.toml"
+${_wk}_WALLET_DATA="$_wd/wallet_data"
+__EOF__
+                success "Wallet conf entry: $_wk → $_wd"
+            done
+            chmod 600 "$WALLETS_CONF" 2>/dev/null || true
         else
             info "All directories already at target — nothing to migrate."
         fi
@@ -1183,7 +1204,7 @@ __EOF__
         printf "    ${CYAN}%-38s${RESET} → ${GREEN}%s${RESET}\n" "${move_srcs[$_i]}" "${move_dsts[$_i]}"
     done
     echo ""
-    echo -e "  ${BOLD}Patches:${RESET}  grin_instances_location.conf · grin-server.toml (db_root, log_file_path) · crontab"
+    echo -e "  ${BOLD}Patches:${RESET}  grin_instances_location.conf · grin_wallets_location.conf · grin-server.toml (db_root, log_file_path) · crontab"
     echo -e "  ${BOLD}Perms:${RESET}    chown -R grin:grin $dest_base · chmod 700 wallet dirs"
     echo ""
     echo -ne "  Proceed? [y/N]: "
@@ -1255,6 +1276,30 @@ __EOF__
     chmod 600 "$inst_conf" 2>/dev/null || true
     success "grin_instances_location.conf updated."
 
+    # ── Phase 5b: Update grin_wallets_location.conf ────────────────────────────
+    touch "$WALLETS_CONF"
+    for _i in "${!move_srcs[@]}"; do
+        [[ "${move_types[$_i]}" == "wallet" ]] || continue
+        local _wbname; _wbname=$(basename "${move_dsts[$_i]}")
+        local _wkey
+        case "$_wbname" in
+            mainnet) _wkey="MAINNET" ;;
+            testnet) _wkey="TESTNET" ;;
+            *) warn "Unknown wallet dir name '$_wbname' — skipping wallet conf entry."; continue ;;
+        esac
+        sed -i "/^${_wkey}_WALLET_/d" "$WALLETS_CONF" 2>/dev/null || true
+        local _wdst="${move_dsts[$_i]}"
+        cat >> "$WALLETS_CONF" << __EOF__
+
+${_wkey}_WALLET_DIR="$_wdst"
+${_wkey}_WALLET_BIN="$_wdst/grin-wallet"
+${_wkey}_WALLET_TOML="$_wdst/grin-wallet.toml"
+${_wkey}_WALLET_DATA="$_wdst/wallet_data"
+__EOF__
+        info "Wallet conf entry: $_wkey → $_wdst"
+    done
+    chmod 600 "$WALLETS_CONF" 2>/dev/null || true
+
     # Double-check: if the conf is still empty (e.g. no nodes were in move_srcs),
     # scan the standard locations and write any entries we can find.
     if [[ ! -s "$inst_conf" ]]; then
@@ -1275,6 +1320,27 @@ __EOF__
             info "Conf entry (scan fallback): $_sk → $_sd"
         done
         chmod 600 "$inst_conf" 2>/dev/null || true
+    fi
+
+    # Also scan wallet dirs if wallets_conf is empty
+    if [[ ! -s "$WALLETS_CONF" ]]; then
+        local -a _wfb_dirs=( "$dest_base/wallet/mainnet" "$dest_base/wallet/testnet" )
+        declare -A _wfb_keys=( [mainnet]="MAINNET" [testnet]="TESTNET" )
+        touch "$WALLETS_CONF"
+        for _wd in "${_wfb_dirs[@]}"; do
+            [[ -x "$_wd/grin-wallet" ]] || continue
+            local _wk="${_wfb_keys[$(basename "$_wd")]:-}"
+            [[ -z "$_wk" ]] && continue
+            cat >> "$WALLETS_CONF" << __EOF__
+
+${_wk}_WALLET_DIR="$_wd"
+${_wk}_WALLET_BIN="$_wd/grin-wallet"
+${_wk}_WALLET_TOML="$_wd/grin-wallet.toml"
+${_wk}_WALLET_DATA="$_wd/wallet_data"
+__EOF__
+            info "Wallet conf entry (scan fallback): $_wk → $_wd"
+        done
+        chmod 600 "$WALLETS_CONF" 2>/dev/null || true
     fi
 
     # ── Phase 6: Patch grin-server.toml (db_root + log_file_path) ────────────

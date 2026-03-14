@@ -33,6 +33,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLKIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CONF_DIR="$TOOLKIT_ROOT/conf"
+WALLETS_CONF="$CONF_DIR/grin_wallets_location.conf"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -81,6 +83,27 @@ success() { echo -e "${GREEN}[OK]${RESET}    $*"; log "[OK] $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; log "[WARN] $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 die()     { error "$*"; echo ""; echo "Press Enter to continue..."; read -r || true; return 1; }
+
+# -----------------------------------------------------------------------------
+# Save wallet location to conf/grin_wallets_location.conf
+# Requires: NETWORK and WALLET_DIR set (by detect_and_select_network)
+# -----------------------------------------------------------------------------
+save_wallet_location() {
+    local key
+    [[ "$NETWORK" == "mainnet" ]] && key="MAINNET" || key="TESTNET"
+    mkdir -p "$CONF_DIR"
+    touch "$WALLETS_CONF"
+    sed -i "/^${key}_WALLET_/d" "$WALLETS_CONF" 2>/dev/null || true
+    cat >> "$WALLETS_CONF" << __EOF__
+
+${key}_WALLET_DIR="$WALLET_DIR"
+${key}_WALLET_BIN="$WALLET_DIR/grin-wallet"
+${key}_WALLET_TOML="$WALLET_DIR/grin-wallet.toml"
+${key}_WALLET_DATA="$WALLET_DIR/wallet_data"
+__EOF__
+    chmod 600 "$WALLETS_CONF"
+    log "Wallet location saved: $key → $WALLET_DIR"
+}
 pause()   { echo ""; echo -e "${DIM}Press Enter to continue...${RESET}"; read -r || true; }
 
 # Harden wallet directory and API secret file permissions.
@@ -172,6 +195,23 @@ detect_and_select_network() {
         GRIN_WALLET_TOML="$GRIN_WALLET_TOML_TESTNET"
         WALLET_NGINX_CONF="$WALLET_NGINX_CONF_TESTNET"
     fi
+
+    # Override defaults with saved path from conf if available (e.g. after migration)
+    if [[ -f "$WALLETS_CONF" ]]; then
+        local _saved_dir
+        if [[ "$NETWORK" == "mainnet" ]]; then
+            _saved_dir=$( (source "$WALLETS_CONF" 2>/dev/null; echo "${MAINNET_WALLET_DIR:-}") 2>/dev/null || true)
+        else
+            _saved_dir=$( (source "$WALLETS_CONF" 2>/dev/null; echo "${TESTNET_WALLET_DIR:-}") 2>/dev/null || true)
+        fi
+        if [[ -n "$_saved_dir" && -d "$_saved_dir" ]]; then
+            WALLET_DIR="$_saved_dir"
+            WALLET_BIN="$WALLET_DIR/grin-wallet"
+            GRIN_WALLET_TOML="$WALLET_DIR/grin-wallet.toml"
+            log "Wallet dir loaded from conf: $WALLET_DIR"
+        fi
+    fi
+
     info "Network: ${BOLD}$NETWORK${RESET}  (node port $NODE_PORT)"
     return 0
 }
@@ -300,6 +340,7 @@ download_wallet() {
 
     success "grin-wallet $version installed to $target_bin"
     log "[download_wallet] version=$version network=$target_net binary=$target_bin"
+    save_wallet_location
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -373,6 +414,7 @@ init_wallet() {
     success "grin-wallet.toml patched: api=$api_port, owner=$owner_api_port, node=127.0.0.1:$NODE_PORT, tor=$socks_addr, log_max_files=3"
     log "[init_wallet] network=$NETWORK node=127.0.0.1:$NODE_PORT toml=$GRIN_WALLET_TOML"
     _harden_wallet_dir
+    save_wallet_location
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

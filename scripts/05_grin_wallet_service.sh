@@ -10,7 +10,7 @@
 #   c) Start wallet listener            (grin-wallet listen, in tmux)
 #
 #  ─── Foreign API ─────────────────────────────────────────────────────────────
-#   d) Enable Wallet Foreign API        (port 3415 — localhost only)
+#   d) Enable Wallet Foreign API        (mainnet 3415 / testnet 13415 — localhost only)
 #   e) Disable Wallet Foreign API
 #
 #  ─── Web Interface ───────────────────────────────────────────────────────────
@@ -41,7 +41,6 @@ DIM='\033[2m'
 RESET='\033[0m'
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-FOREIGN_API_PORT=3415
 GRIN_WALLET_GITHUB_API="https://api.github.com/repos/mimblewimble/grin-wallet/releases/latest"
 
 WALLET_BIN_DIR_MAINNET="/grinwalletmain"
@@ -80,6 +79,17 @@ warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; log "[WARN] $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 die()     { error "$*"; echo ""; echo "Press Enter to continue..."; read -r || true; return 1; }
 pause()   { echo ""; echo -e "${DIM}Press Enter to continue...${RESET}"; read -r || true; }
+
+# Patch or append a key=value in a TOML file.
+# Usage: _patch_toml <file> <key> <value>  (value should include quotes if needed)
+_patch_toml() {
+    local toml="$1" key="$2" val="$3"
+    if grep -q "^${key}\s*=" "$toml"; then
+        sed -i "s|^${key}\s*=.*|${key} = ${val}|" "$toml"
+    else
+        echo "${key} = ${val}" >> "$toml"
+    fi
+}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NETWORK DETECTION
@@ -314,15 +324,15 @@ init_wallet() {
     echo ""
 
     local wallet_pass wallet_pass2
-    read -rs -p "  Enter wallet password (min 5 chars): " wallet_pass; echo ""
-    read -rs -p "  Confirm wallet password:              " wallet_pass2; echo ""
+    read -rs -p "  Enter wallet password: " wallet_pass; echo ""
+    read -rs -p "  Confirm wallet password: " wallet_pass2; echo ""
     echo ""
 
     if [[ "$wallet_pass" != "$wallet_pass2" ]]; then
         error "Passwords do not match."; unset wallet_pass wallet_pass2; return
     fi
-    if [[ ${#wallet_pass} -lt 5 ]]; then
-        warn "Password must be at least 5 characters."; unset wallet_pass wallet_pass2; return
+    if [[ -z "$wallet_pass" ]]; then
+        warn "Password cannot be empty."; unset wallet_pass wallet_pass2; return
     fi
 
     info "Initializing wallet — write down the seed phrase that appears below!"
@@ -338,14 +348,25 @@ init_wallet() {
     fi
 
     success "Wallet initialized: $GRIN_WALLET_TOML"
-    info "Patching check_node_api_http_addr → http://127.0.0.1:$NODE_PORT"
-    if grep -q "check_node_api_http_addr" "$GRIN_WALLET_TOML"; then
-        sed -i "s|check_node_api_http_addr\s*=.*|check_node_api_http_addr = \"http://127.0.0.1:$NODE_PORT\"|" \
-            "$GRIN_WALLET_TOML"
+    info "Patching grin-wallet.toml for $NETWORK..."
+
+    local api_port owner_api_port socks_addr chain_type_val
+    if [[ "$NETWORK" == "mainnet" ]]; then
+        api_port=3415; owner_api_port=3420
+        socks_addr="127.0.0.1:59050"; chain_type_val='"Mainnet"'
     else
-        echo "check_node_api_http_addr = \"http://127.0.0.1:$NODE_PORT\"" >> "$GRIN_WALLET_TOML"
+        api_port=13415; owner_api_port=13420
+        socks_addr="127.0.0.1:59060"; chain_type_val='"Testnet"'
     fi
-    success "check_node_api_http_addr patched to 127.0.0.1:$NODE_PORT"
+
+    _patch_toml "$GRIN_WALLET_TOML" "chain_type"               "$chain_type_val"
+    _patch_toml "$GRIN_WALLET_TOML" "api_listen_port"          "$api_port"
+    _patch_toml "$GRIN_WALLET_TOML" "owner_api_listen_port"    "$owner_api_port"
+    _patch_toml "$GRIN_WALLET_TOML" "check_node_api_http_addr" "\"http://127.0.0.1:$NODE_PORT\""
+    _patch_toml "$GRIN_WALLET_TOML" "socks_proxy_addr"         "\"$socks_addr\""
+    _patch_toml "$GRIN_WALLET_TOML" "log_max_files"            "3"
+
+    success "grin-wallet.toml patched: api=$api_port, owner=$owner_api_port, node=127.0.0.1:$NODE_PORT, tor=$socks_addr, log_max_files=3"
     log "[init_wallet] network=$NETWORK node=127.0.0.1:$NODE_PORT toml=$GRIN_WALLET_TOML"
 }
 
@@ -413,12 +434,16 @@ start_wallet() {
 
 enable_foreign_api() {
     echo -e "\n${BOLD}${CYAN}── Enable Wallet Foreign API ──${RESET}\n"
-    echo -e "  ${DIM}The Foreign API (port $FOREIGN_API_PORT) allows other wallets to send you Grin via HTTP.${RESET}"
-    echo -e "  ${DIM}It runs on localhost only — the Web Wallet (option z) proxies to it internally.${RESET}"
-    echo -e "  ${DIM}You do NOT need to open port $FOREIGN_API_PORT publicly when using the Web Wallet.${RESET}"
-    echo ""
 
     detect_and_select_network || return
+
+    local foreign_api_port
+    [[ "$NETWORK" == "mainnet" ]] && foreign_api_port=3415 || foreign_api_port=13415
+
+    echo -e "  ${DIM}The Foreign API (port $foreign_api_port) allows other wallets to send you Grin via HTTP.${RESET}"
+    echo -e "  ${DIM}It runs on localhost only — the Web Wallet (option z) proxies to it internally.${RESET}"
+    echo -e "  ${DIM}You do NOT need to open port $foreign_api_port publicly when using the Web Wallet.${RESET}"
+    echo ""
 
     if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
         warn "Wallet config not found at $GRIN_WALLET_TOML"

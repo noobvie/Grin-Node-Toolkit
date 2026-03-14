@@ -50,16 +50,24 @@ Entry point: `grin-node-toolkit.sh` → launches sub-scripts from `scripts/`.
 |-------|---------|---------|
 | 3413  | mainnet | Node Foreign API |
 | 3414  | mainnet | P2P |
-| 3415  | all     | Wallet Foreign API (localhost only) |
+| 3415  | mainnet | Wallet Foreign API (localhost only) |
 | 3416  | mainnet | Stratum mining |
+| 3420  | mainnet | Wallet Owner API (localhost only) |
 | 13413 | testnet | Node Foreign API |
 | 13414 | testnet | P2P |
+| 13415 | testnet | Wallet Foreign API (localhost only) |
 | 13416 | testnet | Stratum mining |
+| 13420 | testnet | Wallet Owner API (localhost only) |
+| 59050 | mainnet | TOR SOCKS port  |
+| 59060 | testnet | TOR SOCKS port |
 | 80/443| all     | nginx (HTTP → HTTPS) |
 
 ## Node Directories (on target server)
 
 `/grinfullmain` · `/grinprunemain` · `/grinprunetest`
+
+## Wallet  Directories (on target server)
+`/grinwalletmain` · `/grinwallettest`
 
 ## Git Branches
 

@@ -405,6 +405,46 @@ update_binary_only() {
 #   Neither occupied           → check for stale/orphaned grin processes and ports,
 #                                offer to kill them before continuing
 # =============================================================================
+
+# -----------------------------------------------------------------------------
+# _start_installed_node — start already-installed Grin nodes from standard paths.
+# Starts mainnet first, then waits 30 s before starting testnet (if both present).
+# Returns 0 on success (caller should exit 0 after).
+# Returns 1 if no installed nodes found (caller should fall through to build wizard).
+# -----------------------------------------------------------------------------
+_start_installed_node() {
+    local -a found_dirs=() found_nets=()
+    local -a check_dirs=( "/opt/grin/node/mainnet-prune" "/opt/grin/node/mainnet-full" "/opt/grin/node/testnet-prune" )
+    local -a check_nets=( "mainnet"                       "mainnet"                     "testnet"                      )
+
+    for i in "${!check_dirs[@]}"; do
+        [[ -x "${check_dirs[$i]}/grin" ]] && {
+            found_dirs+=("${check_dirs[$i]}")
+            found_nets+=("${check_nets[$i]}")
+        }
+    done
+
+    if [[ ${#found_dirs[@]} -eq 0 ]]; then
+        return 1  # no installed nodes found — caller will fall through to build wizard
+    fi
+
+    # start each node; mainnet first, 30-second gap before testnet
+    local started=0
+    for i in "${!found_dirs[@]}"; do
+        GRIN_DIR="${found_dirs[$i]}"
+        NETWORK_TYPE="${found_nets[$i]}"
+        info "Starting node: $GRIN_DIR ($NETWORK_TYPE)"
+        start_grin_tmux
+        started=$(( started + 1 ))
+        if [[ $(( i + 1 )) -lt ${#found_dirs[@]} ]]; then
+            info "Waiting 30 seconds before starting next instance..."
+            sleep 30
+        fi
+    done
+    success "$started node(s) started."
+    return 0
+}
+
 check_grin_running() {
     step_header "Step 1: Process & Port Check"
 
@@ -548,48 +588,61 @@ check_grin_running() {
     fi
 
     # ── No legitimate node running → check for stale/orphaned processes ───────
-    local found=0
-
-    local grin_procs
-    grin_procs=$(pgrep -a -f '[g]rin' 2>/dev/null \
-        | grep -v -E "(grin-node-toolkit|build_new_grin_node)" \
-        || true)
-    if [[ -n "$grin_procs" ]]; then
-        warn "Stale Grin processes detected:"
-        while IFS= read -r line; do echo -e "  ${YELLOW}→${RESET} $line"; done <<< "$grin_procs"
-        found=1
-    fi
-
     local -A PORT_NAMES=([3413]="API" [3414]="P2P mainnet" [13414]="P2P testnet" [3415]="Wallet Listener")
-    for port in 3413 3414 13414 3415; do
-        local result
-        result=$(ss -tlnp "sport = :$port" 2>/dev/null | tail -n +2 || true)
-        if [[ -n "$result" ]]; then
-            warn "Port $port (${PORT_NAMES[$port]}) is occupied:"
-            echo -e "  ${YELLOW}→${RESET} $result"
+    while true; do
+        local found=0
+
+        local grin_procs
+        grin_procs=$(pgrep -a -f '[g]rin' 2>/dev/null \
+            | grep -v -E "(grin-node-toolkit|build_new_grin_node)" \
+            || true)
+        if [[ -n "$grin_procs" ]]; then
+            warn "Stale Grin processes detected:"
+            while IFS= read -r line; do echo -e "  ${YELLOW}→${RESET} $line"; done <<< "$grin_procs"
             found=1
         fi
-    done
 
-    if [[ $found -eq 1 ]]; then
-        echo ""
-        echo -e "  ${GREEN}y${RESET}) Kill all conflicting processes and continue"
-        echo -e "  ${YELLOW}c${RESET}) Continue anyway with warning only (if processes are unrelated to Grin)"
-        echo -e "  ${RED}n${RESET}) Abort  (resolve manually)"
-        echo -e "  ${DIM}0${RESET}) Return to main menu"
-        echo ""
-        echo -ne "${BOLD}${RED}Kill all and continue? [y/c/N/0]: ${RESET}"
-        read -r confirm || true
-        case "${confirm,,}" in
-            y) stop_grin_gracefully
-               [[ -f "$INSTANCES_CONF" ]] && { : > "$INSTANCES_CONF"; log "Conf cleared (stale-process kill)."; } ;;
-            c) warn "Continuing despite detected processes — ensure they are NOT Grin-related." ; echo "" ;;
-            0) exit 0 ;;
-            *) die "Aborted. Resolve the conflicts manually and re-run." ;;
-        esac
-    else
-        success "No Grin processes or port conflicts found."
-    fi
+        for port in 3413 3414 13414 3415; do
+            local result
+            result=$(ss -tlnp "sport = :$port" 2>/dev/null | tail -n +2 || true)
+            if [[ -n "$result" ]]; then
+                warn "Port $port (${PORT_NAMES[$port]}) is occupied:"
+                echo -e "  ${YELLOW}→${RESET} $result"
+                found=1
+            fi
+        done
+
+        if [[ $found -eq 1 ]]; then
+            echo ""
+            echo -e "  ${GREEN}k${RESET}) Kill all conflicting processes and continue"
+            echo -e "  ${YELLOW}c${RESET}) Continue anyway with warning only (if processes are unrelated to Grin)"
+            echo -e "  ${CYAN}s${RESET}) Start installed node (no rebuild)"
+            echo -e "  ${RED}n${RESET}) Abort  (resolve manually)"
+            echo -e "  ${DIM}0${RESET}) Return to main menu"
+            echo -e "  ${DIM}Enter${RESET}) Recheck"
+            echo ""
+            echo -ne "${BOLD}${RED}Choose [k/c/s/n/0]: ${RESET}"
+            read -r confirm || true
+            case "${confirm,,}" in
+                k) stop_grin_gracefully
+                   [[ -f "$INSTANCES_CONF" ]] && { : > "$INSTANCES_CONF"; log "Conf cleared (stale-process kill)."; }
+                   break ;;
+                c) warn "Continuing despite detected processes — ensure they are NOT Grin-related."; echo ""; break ;;
+                s) if _start_installed_node; then
+                       exit 0
+                   else
+                       warn "No installed nodes found — proceeding with new node setup."
+                       break
+                   fi ;;
+                0) exit 0 ;;
+                "") continue ;;
+                *) die "Aborted. Resolve the conflicts manually and re-run." ;;
+            esac
+        else
+            success "No Grin processes or port conflicts found."
+            break
+        fi
+    done
     log "[STEP 1] Complete. No restrictions."
 }
 
@@ -799,9 +852,10 @@ select_archive_mode() {
         *) die "Invalid archive mode '${arc_choice}'." ;;
     esac
 
-    # Disk space check — warn if / has less than the recommended minimum
+    # Disk space check — warn if /opt/grin has less than the recommended minimum
     local _free_kb _free_gb _min_gb
-    _free_kb=$(df / | awk 'NR==2 {print $4}')
+    _free_kb=$(df /opt/grin 2>/dev/null | awk 'NR==2{print $4}' \
+               || df / | awk 'NR==2{print $4}')
     _free_gb=$(awk "BEGIN {printf \"%.1f\", $_free_kb/1048576}")
     if [[ "$ARCHIVE_MODE" == "full" ]]; then
         _min_gb=25
@@ -809,7 +863,7 @@ select_archive_mode() {
         _min_gb=10
     fi
     echo ""
-    echo -e "  ${DIM}Free disk (/):${RESET}  ${BOLD}${_free_gb} GiB${RESET}"
+    echo -e "  ${DIM}Free disk (/opt/grin):${RESET}  ${BOLD}${_free_gb} GiB${RESET}"
     if awk "BEGIN {exit ($_free_gb >= $_min_gb) ? 0 : 1}"; then
         echo -e "  ${GREEN}✓${RESET}  Sufficient space for ${ARCHIVE_MODE} mode (min ~${_min_gb} GiB)."
     else
@@ -1506,23 +1560,23 @@ download_chain_data() {
     echo ""
     echo -e "${BOLD}  How do you want to get the chain data?${RESET}"
     echo ""
-    echo -e "  ${GREEN}1${RESET}) ${BOLD}On-the-fly extraction${RESET} ${DIM}(stream directly — no full download)${RESET}"
+    echo -e "  ${GREEN}1${RESET}) ${BOLD}On-the-fly extraction${RESET} ${DIM}(default — stream directly, no full download)${RESET}"
     echo -e "     ${DIM}Pipes the remote archive straight into tar without saving locally.${RESET}"
     echo -e "     ${DIM}cmd: wget -O - <url> | tar -xzvf -${RESET}"
     echo -e "     ${DIM}Saves temporary disk space and reduces total setup time.${RESET}"
     echo -e "     ${DIM}Auto-switches to the next source if the stream fails mid-transfer.${RESET}"
     echo -e "     ${DIM}Note: SHA256 checksum verification is skipped in this mode.${RESET}"
     echo ""
-    echo -e "  ${CYAN}2${RESET}) ${BOLD}Full download first${RESET} ${DIM}(default — more resilient on slow connections)${RESET}"
+    echo -e "  ${CYAN}2${RESET}) ${BOLD}Full download first${RESET} ${DIM}(more resilient on slow connections)${RESET}"
     echo -e "     ${DIM}Downloads .tar.gz to disk (wget -c, supports resume on interruption).${RESET}"
     echo -e "     ${DIM}Verifies SHA256 checksum before extracting.${RESET}"
     echo -e "     ${DIM}Auto-switches to the next source if download fails mid-transfer.${RESET}"
     echo ""
-    echo -ne "${BOLD}Choose [1/2] (default: 2): ${RESET}"
+    echo -ne "${BOLD}Choose [1/2] (default: 1): ${RESET}"
     local dl_choice
     read -r dl_choice || true
 
-    if [[ "${dl_choice:-2}" == "1" ]]; then
+    if [[ "${dl_choice:-1}" == "1" ]]; then
         STREAM_MODE=true
         info "On-the-fly extraction selected. Streaming will begin at Step 10."
         log "[STEP 9] On-the-fly mode. zone=$SELECTED_ZONE sources=(${READY_SOURCES[*]}) tar=$tar_name"
@@ -1798,6 +1852,9 @@ show_summary() {
     echo -e "${BOLD}  Quick commands:${RESET}"
     echo -e "  ${YELLOW}tmux attach -t $session${RESET}   — view node output"
     echo -e "  ${YELLOW}tmux ls${RESET}                   — list sessions"
+    echo ""
+    echo -e "  ${YELLOW}⚠  Remember:${RESET} schedule auto-start on reboot via"
+    echo -e "     ${BOLD}3) Share Grin Chain Data / Schedule${RESET} → option ${GREEN}G) Auto startup Grin node${RESET}"
     echo -e "${BOLD}${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 
     log "[STEP 14] DONE. network=$network mode=$mode dir=$GRIN_DIR time=${mins}m${secs}s"

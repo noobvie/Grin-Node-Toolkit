@@ -1023,13 +1023,18 @@ migrate_filesystem() {
     echo -e "  ${DIM}Press Enter to accept default. Type - to skip a component.${RESET}"
     echo ""
 
-    # Pre-fill nodes from grin_instances_location.conf (grep, no source — avoids side-effects)
+    # Pre-fill nodes from grin_instances_location.conf
+    # Source in a subshell so variables are extracted reliably without polluting current env
     local inst_conf="$CONF_DIR/grin_instances_location.conf"
     local pre_fullmain="" pre_prunemain="" pre_prunetest=""
     if [[ -f "$inst_conf" ]]; then
-        pre_fullmain=$(grep  '^FULLMAIN_GRIN_DIR='  "$inst_conf" 2>/dev/null | tail -1 | cut -d'"' -f2 || true)
-        pre_prunemain=$(grep '^PRUNEMAIN_GRIN_DIR=' "$inst_conf" 2>/dev/null | tail -1 | cut -d'"' -f2 || true)
-        pre_prunetest=$(grep '^PRUNETEST_GRIN_DIR=' "$inst_conf" 2>/dev/null | tail -1 | cut -d'"' -f2 || true)
+        info "Reading instances conf: $inst_conf"
+        pre_fullmain=$(  (source "$inst_conf" 2>/dev/null; echo "${FULLMAIN_GRIN_DIR:-}")  2>/dev/null || true)
+        pre_prunemain=$( (source "$inst_conf" 2>/dev/null; echo "${PRUNEMAIN_GRIN_DIR:-}") 2>/dev/null || true)
+        pre_prunetest=$(  (source "$inst_conf" 2>/dev/null; echo "${PRUNETEST_GRIN_DIR:-}") 2>/dev/null || true)
+    else
+        warn "Instances conf not found: $inst_conf"
+        warn "Node paths not pre-filled — enter them manually below."
     fi
 
     # Pre-fill wallets from known legacy defaults (not in instances conf)

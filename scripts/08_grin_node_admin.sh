@@ -977,7 +977,7 @@ menu_full_cleanup() {
 #   3. Creates the grin:grin system user
 #   4. Stops running node/wallet tmux sessions
 #   5. mv's each directory (no extra disk space needed — same filesystem)
-#   6. Patches grin_instances_location.conf, grin-server.toml (db_root), crontab
+#   6. Patches grin_instances_location.conf, grin-server.toml (db_root, log_file_path), crontab
 #   7. Sets chown grin:grin + chmod 700 on wallet dirs
 #
 # New layout under <base>:
@@ -1149,7 +1149,7 @@ migrate_filesystem() {
         printf "    ${CYAN}%-38s${RESET} → ${GREEN}%s${RESET}\n" "${move_srcs[$_i]}" "${move_dsts[$_i]}"
     done
     echo ""
-    echo -e "  ${BOLD}Patches:${RESET}  grin_instances_location.conf · grin-server.toml (db_root) · crontab"
+    echo -e "  ${BOLD}Patches:${RESET}  grin_instances_location.conf · grin-server.toml (db_root, log_file_path) · crontab"
     echo -e "  ${BOLD}Perms:${RESET}    chown -R grin:grin $dest_base · chmod 700 wallet dirs"
     echo ""
     echo -ne "  Proceed? [y/N]: "
@@ -1198,14 +1198,15 @@ migrate_filesystem() {
         success "grin_instances_location.conf patched."
     fi
 
-    # ── Phase 6: Patch grin-server.toml (db_root only) ────────────────────────
+    # ── Phase 6: Patch grin-server.toml (db_root + log_file_path) ────────────
     for _i in "${!move_srcs[@]}"; do
         [[ "${move_types[$_i]}" == "node" ]] || continue
         local _toml="${move_dsts[$_i]}/grin-server.toml"
         if [[ -f "$_toml" ]]; then
-            info "Patching db_root in $(basename "${move_dsts[$_i]}")/grin-server.toml..."
-            sed -i "s|db_root = \"${move_srcs[$_i]}/chain_data\"|db_root = \"${move_dsts[$_i]}/chain_data\"|" "$_toml" || true
-            success "db_root patched."
+            info "Patching grin-server.toml in $(basename "${move_dsts[$_i]}")..."
+            sed -i "s|db_root\s*=\s*\".*\"|db_root = \"${move_dsts[$_i]}/chain_data\"|" "$_toml" 2>/dev/null || true
+            sed -i "s|log_file_path\s*=\s*\".*\"|log_file_path = \"${move_dsts[$_i]}/grin-server.log\"|" "$_toml" 2>/dev/null || true
+            success "db_root and log_file_path patched."
         fi
     done
 
@@ -1255,12 +1256,12 @@ migrate_filesystem() {
                 warn "No grin binary at $_ndst — skipping auto-start."; continue
             fi
 
-            # Ensure db_root in grin-server.toml points to the new chain_data location.
-            # Phase 6's sed may have silently failed if the toml format didn't match exactly.
+            # Tolerant re-patch: Phase 6 sed may have silently failed on whitespace variants.
             local _toml="$_ndst/grin-server.toml"
             if [[ -f "$_toml" ]]; then
                 sed -i "s|db_root\s*=\s*\".*\"|db_root = \"$_ndst/chain_data\"|" "$_toml" 2>/dev/null || true
-                info "db_root verified: $_ndst/chain_data"
+                sed -i "s|log_file_path\s*=\s*\".*\"|log_file_path = \"$_ndst/grin-server.log\"|" "$_toml" 2>/dev/null || true
+                info "db_root and log_file_path verified for $_ndst"
             fi
 
             # Remove stale LMDB lock file left by SIGKILL — prevents grin from starting.

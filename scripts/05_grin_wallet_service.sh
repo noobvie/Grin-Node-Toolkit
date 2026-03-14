@@ -382,7 +382,13 @@ init_wallet() {
 
     info "Initializing wallet — write down the seed phrase that appears below!"
     echo ""
-    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" init
+    # --testnet generates correct chain_type, api_listen_port, and
+    # check_node_api_http_addr automatically; no need to patch those fields.
+    if [[ "$NETWORK" == "testnet" ]]; then
+        cd "$WALLET_DIR" && "$WALLET_BIN" --testnet --top_level_dir "$WALLET_DIR" -p "$wallet_pass" init
+    else
+        cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" init
+    fi
     local rc=$?
     unset wallet_pass wallet_pass2
     echo ""
@@ -395,24 +401,19 @@ init_wallet() {
     success "Wallet initialized: $GRIN_WALLET_TOML"
     info "Patching grin-wallet.toml for $NETWORK..."
 
-    local api_port owner_api_port socks_addr chain_type_val
+    local owner_api_port socks_addr
     if [[ "$NETWORK" == "mainnet" ]]; then
-        api_port=3415; owner_api_port=3420
-        socks_addr="127.0.0.1:59050"; chain_type_val='"Mainnet"'
+        owner_api_port=3420; socks_addr="127.0.0.1:59050"
     else
-        api_port=13415; owner_api_port=13420
-        socks_addr="127.0.0.1:59060"; chain_type_val='"Testnet"'
+        owner_api_port=13420; socks_addr="127.0.0.1:59060"
     fi
 
-    _patch_toml "$GRIN_WALLET_TOML" "chain_type"               "$chain_type_val"
-    _patch_toml "$GRIN_WALLET_TOML" "api_listen_port"          "$api_port"
-    _patch_toml "$GRIN_WALLET_TOML" "owner_api_listen_port"    "$owner_api_port"
-    _patch_toml "$GRIN_WALLET_TOML" "check_node_api_http_addr" "\"http://127.0.0.1:$NODE_PORT\""
-    _patch_toml "$GRIN_WALLET_TOML" "socks_proxy_addr"         "\"$socks_addr\""
-    _patch_toml "$GRIN_WALLET_TOML" "log_max_files"            "3"
+    _patch_toml "$GRIN_WALLET_TOML" "owner_api_listen_port" "$owner_api_port"
+    _patch_toml "$GRIN_WALLET_TOML" "socks_proxy_addr"      "\"$socks_addr\""
+    _patch_toml "$GRIN_WALLET_TOML" "log_max_files"         "3"
 
-    success "grin-wallet.toml patched: api=$api_port, owner=$owner_api_port, node=127.0.0.1:$NODE_PORT, tor=$socks_addr, log_max_files=3"
-    log "[init_wallet] network=$NETWORK node=127.0.0.1:$NODE_PORT toml=$GRIN_WALLET_TOML"
+    success "grin-wallet.toml patched: owner=$owner_api_port, tor=$socks_addr, log_max_files=3"
+    log "[init_wallet] network=$NETWORK toml=$GRIN_WALLET_TOML owner_api=$owner_api_port tor=$socks_addr"
     _harden_wallet_dir
     save_wallet_location
 }

@@ -157,78 +157,55 @@ get_foreign_api_status() {
 show_status() {
     echo -e "\n${BOLD}Status:${RESET}\n"
 
-    # ── Grin nodes ──
-    local mainnet_up=0 testnet_up=0
-    ss -tlnp 2>/dev/null | grep -q ":3413 "  && mainnet_up=1
-    ss -tlnp 2>/dev/null | grep -q ":13413 " && testnet_up=1
-    if [[ $mainnet_up -eq 1 ]]; then
-        echo -e "  ${BOLD}Grin node (mainnet)${RESET}   : ${GREEN}RUNNING${RESET}  ${DIM}(port 3413)${RESET}"
-    else
-        echo -e "  ${BOLD}Grin node (mainnet)${RESET}   : ${RED}NOT RUNNING${RESET}  ${YELLOW}⚠ run Script 01${RESET}"
-    fi
-    if [[ $testnet_up -eq 1 ]]; then
-        echo -e "  ${BOLD}Grin node (testnet)${RESET}   : ${GREEN}RUNNING${RESET}  ${DIM}(port 13413)${RESET}"
-    else
-        echo -e "  ${BOLD}Grin node (testnet)${RESET}   : ${RED}NOT RUNNING${RESET}  ${YELLOW}⚠ run Script 01${RESET}"
-    fi
-    echo ""
+    local tmux_session
+    tmux_session="grin-wallet-${NETWORK}"
 
-    # ── Binaries ──
-    if [[ -x "$WALLET_BIN_MAINNET" ]]; then
-        local ver_main
-        ver_main=$("$WALLET_BIN_MAINNET" --version 2>/dev/null | head -1 || echo "unknown")
-        echo -e "  ${BOLD}grin-wallet (mainnet)${RESET} : ${GREEN}INSTALLED${RESET}  ${DIM}($ver_main)${RESET}"
+    # ── Grin node ──
+    if ss -tlnp 2>/dev/null | grep -q ":${NODE_PORT} "; then
+        echo -e "  ${BOLD}Grin node${RESET}       : ${GREEN}RUNNING${RESET}  ${DIM}(port $NODE_PORT)${RESET}"
     else
-        echo -e "  ${BOLD}grin-wallet (mainnet)${RESET} : ${RED}NOT FOUND${RESET}  ${DIM}($WALLET_BIN_MAINNET)${RESET}"
-    fi
-    if [[ -x "$WALLET_BIN_TESTNET" ]]; then
-        local ver_test
-        ver_test=$("$WALLET_BIN_TESTNET" --version 2>/dev/null | head -1 || echo "unknown")
-        echo -e "  ${BOLD}grin-wallet (testnet)${RESET} : ${GREEN}INSTALLED${RESET}  ${DIM}($ver_test)${RESET}"
-    else
-        echo -e "  ${BOLD}grin-wallet (testnet)${RESET} : ${RED}NOT FOUND${RESET}  ${DIM}($WALLET_BIN_TESTNET)${RESET}"
+        echo -e "  ${BOLD}Grin node${RESET}       : ${RED}NOT RUNNING${RESET}  ${YELLOW}⚠ run Script 01${RESET}"
     fi
 
-    # ── Configs ──
-    if [[ -f "$GRIN_WALLET_TOML_MAINNET" ]]; then
-        echo -e "  ${BOLD}Mainnet wallet config${RESET} : ${GREEN}INITIALIZED${RESET}  ${DIM}($GRIN_WALLET_TOML_MAINNET)${RESET}"
+    # ── Binary ──
+    if [[ -x "$WALLET_BIN" ]]; then
+        local ver
+        ver=$("$WALLET_BIN" --version 2>/dev/null | head -1 || echo "unknown")
+        echo -e "  ${BOLD}grin-wallet${RESET}     : ${GREEN}INSTALLED${RESET}  ${DIM}($ver)${RESET}"
     else
-        echo -e "  ${BOLD}Mainnet wallet config${RESET} : ${DIM}not initialized${RESET}"
-    fi
-    if [[ -f "$GRIN_WALLET_TOML_TESTNET" ]]; then
-        echo -e "  ${BOLD}Testnet wallet config${RESET} : ${GREEN}INITIALIZED${RESET}  ${DIM}($GRIN_WALLET_TOML_TESTNET)${RESET}"
-    else
-        echo -e "  ${BOLD}Testnet wallet config${RESET} : ${DIM}not initialized${RESET}"
+        echo -e "  ${BOLD}grin-wallet${RESET}     : ${RED}NOT FOUND${RESET}  ${DIM}($WALLET_BIN)${RESET}"
     fi
 
-    # ── Listeners ──
-    if tmux has-session -t "grin-wallet-mainnet" 2>/dev/null; then
-        echo -e "  ${BOLD}Wallet listener${RESET} (mainnet)  : ${GREEN}RUNNING${RESET}  ${DIM}(tmux: grin-wallet-mainnet)${RESET}"
+    # ── Config ──
+    if [[ -f "$GRIN_WALLET_TOML" ]]; then
+        echo -e "  ${BOLD}Wallet config${RESET}   : ${GREEN}INITIALIZED${RESET}  ${DIM}($GRIN_WALLET_TOML)${RESET}"
     else
-        echo -e "  ${BOLD}Wallet listener${RESET} (mainnet)  : ${DIM}not running${RESET}"
+        echo -e "  ${BOLD}Wallet config${RESET}   : ${DIM}not initialized${RESET}"
     fi
-    if tmux has-session -t "grin-wallet-testnet" 2>/dev/null; then
-        echo -e "  ${BOLD}Wallet listener${RESET} (testnet)  : ${GREEN}RUNNING${RESET}  ${DIM}(tmux: grin-wallet-testnet)${RESET}"
+
+    # ── Listener ──
+    if tmux has-session -t "$tmux_session" 2>/dev/null; then
+        echo -e "  ${BOLD}Wallet listener${RESET} : ${GREEN}RUNNING${RESET}  ${DIM}(tmux: $tmux_session)${RESET}"
     else
-        echo -e "  ${BOLD}Wallet listener${RESET} (testnet)  : ${DIM}not running${RESET}"
+        echo -e "  ${BOLD}Wallet listener${RESET} : ${DIM}not running${RESET}"
     fi
 
     # ── Foreign API ──
-    local main_fa_status
-    main_fa_status="$(get_foreign_api_status "$GRIN_WALLET_TOML_MAINNET")"
-    if [[ "$main_fa_status" == "true" ]]; then
-        echo -e "  ${BOLD}Foreign API${RESET} (mainnet)       : ${GREEN}ENABLED${RESET}  in grin-wallet.toml"
+    local fa_status
+    fa_status="$(get_foreign_api_status "$GRIN_WALLET_TOML")"
+    if [[ "$fa_status" == "true" ]]; then
+        echo -e "  ${BOLD}Foreign API${RESET}     : ${GREEN}ENABLED${RESET}  in grin-wallet.toml"
     else
-        echo -e "  ${BOLD}Foreign API${RESET} (mainnet)       : ${DIM}disabled / unknown${RESET}"
+        echo -e "  ${BOLD}Foreign API${RESET}     : ${DIM}disabled / unknown${RESET}"
     fi
 
     # ── Web wallet ──
     if [[ -f "/etc/nginx/sites-enabled/grin-wallet-web" ]]; then
-        echo -e "  ${BOLD}Web Wallet UI${RESET}               : ${GREEN}DEPLOYED${RESET}  ${DIM}(nginx: grin-wallet-web)${RESET}"
+        echo -e "  ${BOLD}Web Wallet UI${RESET}   : ${GREEN}DEPLOYED${RESET}  ${DIM}(nginx: grin-wallet-web)${RESET}"
     elif [[ -d "$WEB_WALLET_DEPLOY_DIR_DEFAULT" ]]; then
-        echo -e "  ${BOLD}Web Wallet UI${RESET}               : ${YELLOW}FILES PRESENT${RESET}  ${DIM}(nginx not configured — option z)${RESET}"
+        echo -e "  ${BOLD}Web Wallet UI${RESET}   : ${YELLOW}FILES PRESENT${RESET}  ${DIM}(nginx not configured — option w)${RESET}"
     else
-        echo -e "  ${BOLD}Web Wallet UI${RESET}               : ${DIM}not deployed${RESET}  ${DIM}(option z)${RESET}"
+        echo -e "  ${BOLD}Web Wallet UI${RESET}   : ${DIM}not deployed${RESET}  ${DIM}(option w)${RESET}"
     fi
     echo ""
 }

@@ -71,18 +71,28 @@
 #              separately — no second download needed.
 #
 #   Step  7 — Generate grin-server.toml
-#              Runs './grin server config' (with HOME overridden to the node
-#              directory) to produce a fresh default config. Any pre-existing
-#              config is backed up with a timestamp suffix before generation.
+#              Mainnet: './grin server config'
+#              Testnet: './grin --testnet server config'
+#              The --testnet flag produces the correct chain_type and testnet
+#              ports (13413/13414/13415/13416) automatically — no port patching
+#              needed. HOME is overridden to the node directory so grin writes
+#              its output under our custom path instead of /root.
+#              Any pre-existing config is backed up with a timestamp suffix.
 #              No fallback minimal config — only the grin-generated file is used.
 #
 #   Step  8 — Patch grin-server.toml
-#              Applies user choices to the generated config:
-#                chain_type   → "Mainnet" or "Testnet"
-#                archive_mode → true (full) or false (pruned)
-#                db_root      → <node_dir>/chain_data
-#              For testnet, also changes ports: 3413 → 13413, 3414 → 13414,
-#                3415 → 13415, 3416 → 13416.
+#              Applies user choices and enforces absolute paths:
+#                archive_mode         → true (full) or false (pruned)
+#                db_root              → <node_dir>/chain_data
+#                log_file_path        → <node_dir>/grin-server.log
+#                api_secret_path      → <node_dir>/.api_secret
+#                foreign_api_secret_path → <node_dir>/.foreign_api_secret
+#              Also sets peer limits and enables stratum server.
+#
+#   Step  8b — Generate API secret files
+#              Creates .api_secret and .foreign_api_secret in the node
+#              directory with a 20-character random alphanumeric key.
+#              Sets permissions 600 and ownership grin:grin.
 #
 #   Step  9 — Chain Data Source & Transfer Mode
 #              User selects a download zone (America / Asia / Europe / Africa).
@@ -1100,20 +1110,22 @@ download_grin_binary() {
 # =============================================================================
 # [7] GENERATE grin-server.toml VIA 'grin server config'
 # -----------------------------------------------------------------------------
-# If a grin-server.toml already exists in $GRIN_DIR, it is backed up with a
-# timestamp suffix before generating a new one (e.g. grin-server.toml.bak.1234).
-# Runs './grin server config' with HOME overridden to $GRIN_DIR so that grin
-# writes its output config under our custom directory instead of /root.
-# If 'grin server config' fails for any reason, the error is shown with guidance
-# and the user must press Enter before exiting — no fallback minimal config.
-# Only the freshly generated file is used.
+# Mainnet: './grin server config'
+# Testnet: './grin --testnet server config'
+# The --testnet flag produces the correct chain_type ("Testnet") and testnet
+# ports (13413/13414/13415/13416) automatically — no manual patching needed.
+# HOME is overridden to $GRIN_DIR so grin writes its output under our custom
+# directory instead of /root.
+# If the command fails the error is shown and the user must press Enter —
+# there is no fallback minimal config; only the grin-generated file is used.
 # =============================================================================
 generate_config() {
+    local network="$1"
     step_header "Step 7: Generate grin-server.toml"
     local target="$GRIN_DIR/grin-server.toml"
 
     # If a grin-server.toml already exists, back it up with a timestamp so the
-    # newly generated file is always a clean slate from 'grin server config'.
+    # newly generated file is always a clean slate.
     if [[ -f "$target" ]]; then
         local backup="${target}.bak.$(date +%s)"
         mv "$target" "$backup" \
@@ -1121,20 +1133,24 @@ generate_config() {
         warn "Existing config backed up: $(basename "$backup")"
     fi
 
-    info "Running: ./grin server config  (HOME overridden to $GRIN_DIR)"
+    local cmd
+    if [[ "$network" == "testnet" ]]; then
+        cmd="./grin --testnet server config"
+    else
+        cmd="./grin server config"
+    fi
+    info "Running: $cmd  (HOME overridden to $GRIN_DIR)"
 
-    # Run 'grin server config' — no || true here.
-    # If the command fails, the error is shown with fix guidance and user must press Enter.
-    # There is NO fallback minimal config — only the grin-generated file is used.
-    (cd "$GRIN_DIR" && HOME="$GRIN_DIR" ./grin server config 2>&1 | tee -a "$LOG_FILE") \
-        || die "'grin server config' failed. Cannot continue without a valid generated config. Exiting."
+    # No || true — if the command fails, die() stops execution.
+    (cd "$GRIN_DIR" && HOME="$GRIN_DIR" $cmd 2>&1 | tee -a "$LOG_FILE") \
+        || die "'$cmd' failed. Cannot continue without a valid generated config. Exiting."
 
     # Locate the newly generated config (grin may write it into a subdirectory)
     local found_config
     found_config=$(find "$GRIN_DIR" -name "grin-server.toml" 2>/dev/null | head -1)
 
     if [[ -z "$found_config" ]]; then
-        die "'grin server config' ran but grin-server.toml was not found in $GRIN_DIR. Check binary compatibility. Exiting."
+        die "'$cmd' ran but grin-server.toml was not found in $GRIN_DIR. Check binary compatibility. Exiting."
     fi
 
     # Move to the root of GRIN_DIR if grin placed it in a subdirectory
@@ -1145,17 +1161,20 @@ generate_config() {
     fi
 
     success "Config ready: $target"
-    log "[STEP 7] Config=$target"
+    log "[STEP 7] network=$network cmd=$cmd config=$target"
 }
 
 # =============================================================================
 # [8] PATCH grin-server.toml WITH USER CHOICES
 # -----------------------------------------------------------------------------
-# Modifies the generated config file with three key values:
-#   chain_type   — "Mainnet" or "Testnet" based on network selection
-#   archive_mode — true (full) or false (pruned) based on mode selection
-#   db_root      — set to $GRIN_DIR/chain_data so data stays in our directory
-# For testnet, also changes ports: 3413 → 13413, 3414 → 13414, 3415 → 13415, 3416 → 13416.
+# Modifies the generated config with user choices and enforces absolute paths:
+#   archive_mode            → true (full) or false (pruned)
+#   db_root                 → <node_dir>/chain_data
+#   log_file_path           → <node_dir>/grin-server.log
+#   api_secret_path         → <node_dir>/.api_secret
+#   foreign_api_secret_path → <node_dir>/.foreign_api_secret
+# chain_type and ports are already correct from 'grin [--testnet] server config'
+# and do not need patching here.
 # If any key is missing from the generated config, it is appended with a warning.
 # =============================================================================
 patch_config() {
@@ -1165,17 +1184,8 @@ patch_config() {
 
     step_header "Step 8: Patch Config"
 
-    local chain_type archive_val
-    [[ "$network" == "mainnet" ]] && chain_type="Mainnet" || chain_type="Testnet"
-    [[ "$mode"    == "full"    ]] && archive_val="true"   || archive_val="false"
-
-    # chain_type
-    if grep -q 'chain_type' "$config"; then
-        sed -i "s/^chain_type = .*/chain_type = \"$chain_type\"/" "$config"
-    else
-        echo "chain_type = \"$chain_type\"" >> "$config"
-        warn "chain_type not found in config — appended."
-    fi
+    local archive_val
+    [[ "$mode" == "full" ]] && archive_val="true" || archive_val="false"
 
     # archive_mode
     if grep -q 'archive_mode' "$config"; then
@@ -1185,13 +1195,37 @@ patch_config() {
         warn "archive_mode not found in config — appended."
     fi
 
-    # db_root — point to our custom directory so grin stores data here
+    # db_root — point to our custom directory so grin stores chain data here
     local db_root="$GRIN_DIR/chain_data"
     if grep -q 'db_root' "$config"; then
         sed -i "s|^db_root = .*|db_root = \"$db_root\"|" "$config"
     else
         echo "db_root = \"$db_root\"" >> "$config"
         warn "db_root not found in config — appended."
+    fi
+
+    # log_file_path — keep log in the node directory, not in HOME
+    if grep -qE '^#?[[:space:]]*log_file_path' "$config"; then
+        sed -i -E "s|^#?[[:space:]]*log_file_path[[:space:]]*=.*|log_file_path = \"$GRIN_DIR/grin-server.log\"|" "$config"
+    else
+        echo "log_file_path = \"$GRIN_DIR/grin-server.log\"" >> "$config"
+        warn "log_file_path not found in config — appended."
+    fi
+
+    # api_secret_path — absolute path so it works regardless of working directory
+    if grep -qE '^#?[[:space:]]*api_secret_path' "$config"; then
+        sed -i -E "s|^#?[[:space:]]*api_secret_path[[:space:]]*=.*|api_secret_path = \"$GRIN_DIR/.api_secret\"|" "$config"
+    else
+        echo "api_secret_path = \"$GRIN_DIR/.api_secret\"" >> "$config"
+        warn "api_secret_path not found in config — appended."
+    fi
+
+    # foreign_api_secret_path — absolute path so it works regardless of working directory
+    if grep -qE '^#?[[:space:]]*foreign_api_secret_path' "$config"; then
+        sed -i -E "s|^#?[[:space:]]*foreign_api_secret_path[[:space:]]*=.*|foreign_api_secret_path = \"$GRIN_DIR/.foreign_api_secret\"|" "$config"
+    else
+        echo "foreign_api_secret_path = \"$GRIN_DIR/.foreign_api_secret\"" >> "$config"
+        warn "foreign_api_secret_path not found in config — appended."
     fi
 
     # peer_max_inbound_count — allow more inbound peers for a community node
@@ -1234,36 +1268,55 @@ patch_config() {
         warn "enable_stratum_server not found in config — appended."
     fi
 
-    # For testnet: change all default ports from mainnet (341x) to testnet (1341x).
-    # Uses word-boundary (\b) replacement so ports are matched wherever they appear
-    # in the config — as standalone values (port = 3414), embedded in address strings
-    # (api_http_addr = "127.0.0.1:3413"), or in any other key (api_listen_port = 3415).
-    if [[ "$network" == "testnet" ]]; then
-        sed -i \
-            -e 's/\b3413\b/13413/g' \
-            -e 's/\b3414\b/13414/g' \
-            -e 's/\b3415\b/13415/g' \
-            -e 's/\b3416\b/13416/g' \
-            "$config"
-        # Verify no original port numbers remain
-        for mport in 3413 3414 3415 3416; do
-            if grep -qP "\b${mport}\b" "$config"; then
-                warn "Port $mport still present in config after patching — verify manually."
-            fi
-        done
-    fi
-
     success "Config patched:"
-    info "  chain_type                        = \"$chain_type\""
     info "  archive_mode                      = $archive_val"
     info "  db_root                           = \"$db_root\""
+    info "  log_file_path                     = \"$GRIN_DIR/grin-server.log\""
+    info "  api_secret_path                   = \"$GRIN_DIR/.api_secret\""
+    info "  foreign_api_secret_path           = \"$GRIN_DIR/.foreign_api_secret\""
     info "  peer_max_inbound_count            = 999"
     info "  peer_max_outbound_count           = 199"
     info "  peer_min_preferred_outbound_count = 199"
     info "  log_max_files                     = 3"
     info "  enable_stratum_server             = true"
-    [[ "$network" == "testnet" ]] && info "  Ports patched: 3413→13413, 3414→13414, 3415→13415, 3416→13416"
-    log "[STEP 8] chain_type=$chain_type archive_mode=$archive_val db_root=$db_root peer_limits=999in/199out/199min log_max_files=3 stratum=true${network:+ (testnet: ports=13413/13414/13415/13416)}"
+    log "[STEP 8] archive_mode=$archive_val db_root=$db_root api_secret=$GRIN_DIR/.api_secret peer_limits=999in/199out/199min log_max_files=3 stratum=true"
+}
+
+# =============================================================================
+# [8b] GENERATE API SECRET FILES
+# -----------------------------------------------------------------------------
+# Creates .api_secret and .foreign_api_secret in $GRIN_DIR with a 20-character
+# random alphanumeric key (A-Z a-z 0-9). Any existing files are overwritten.
+# Permissions set to 600; ownership set to grin:grin if the grin user exists.
+# =============================================================================
+generate_secrets() {
+    step_header "Step 8b: Generate API Secret Files"
+
+    local secret_file="$GRIN_DIR/.api_secret"
+    local foreign_file="$GRIN_DIR/.foreign_api_secret"
+
+    # Generate 20-char random alphanumeric string; || true handles tr SIGPIPE
+    local api_secret foreign_secret
+    api_secret=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20 || true)
+    foreign_secret=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20 || true)
+
+    [[ ${#api_secret}     -eq 20 ]] || die "Failed to generate api_secret — /dev/urandom unavailable?"
+    [[ ${#foreign_secret} -eq 20 ]] || die "Failed to generate foreign_api_secret — /dev/urandom unavailable?"
+
+    printf '%s' "$api_secret"     > "$secret_file"
+    printf '%s' "$foreign_secret" > "$foreign_file"
+
+    chmod 600 "$secret_file" "$foreign_file"
+
+    if id grin &>/dev/null; then
+        chown grin:grin "$secret_file" "$foreign_file"
+        info "Ownership set to grin:grin"
+    fi
+
+    success "Secret files created:"
+    info "  $secret_file"
+    info "  $foreign_file"
+    log "[STEP 8b] api_secret=$secret_file foreign_api_secret=$foreign_file"
 }
 
 # =============================================================================
@@ -1928,8 +1981,9 @@ setup_one_node() {
     select_archive_mode "$network"
     create_node_dir     "$network" "$ARCHIVE_MODE"
     download_grin_binary
-    generate_config
+    generate_config     "$network"
     patch_config        "$network" "$ARCHIVE_MODE"
+    generate_secrets
     download_chain_data "$network" "$ARCHIVE_MODE"
     if [[ "$STREAM_MODE" == "true" ]]; then
         stream_extract_chain_data

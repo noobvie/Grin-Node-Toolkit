@@ -1204,7 +1204,7 @@ __EOF__
         printf "    ${CYAN}%-38s${RESET} → ${GREEN}%s${RESET}\n" "${move_srcs[$_i]}" "${move_dsts[$_i]}"
     done
     echo ""
-    echo -e "  ${BOLD}Patches:${RESET}  grin_instances_location.conf · grin_wallets_location.conf · grin-server.toml (db_root, log_file_path) · crontab"
+    echo -e "  ${BOLD}Patches:${RESET}  grin_instances_location.conf · grin_wallets_location.conf · grin-server.toml · grin-wallet.toml · crontab"
     echo -e "  ${BOLD}Perms:${RESET}    chown -R grin:grin $dest_base · chmod 700 wallet dirs"
     echo ""
     echo -ne "  Proceed? [y/N]: "
@@ -1343,7 +1343,7 @@ __EOF__
         chmod 600 "$WALLETS_CONF" 2>/dev/null || true
     fi
 
-    # ── Phase 6: Patch grin-server.toml (db_root + log_file_path) ────────────
+    # ── Phase 6: Patch grin-server.toml ───────────────────────────────────────
     for _i in "${!move_srcs[@]}"; do
         [[ "${move_types[$_i]}" == "node" ]] || continue
         local _toml="${move_dsts[$_i]}/grin-server.toml"
@@ -1351,7 +1351,22 @@ __EOF__
             info "Patching grin-server.toml in $(basename "${move_dsts[$_i]}")..."
             sed -i "s|db_root\s*=\s*\".*\"|db_root = \"${move_dsts[$_i]}/chain_data\"|" "$_toml" 2>/dev/null || true
             sed -i "s|log_file_path\s*=\s*\".*\"|log_file_path = \"${move_dsts[$_i]}/grin-server.log\"|" "$_toml" 2>/dev/null || true
-            success "db_root and log_file_path patched."
+            sed -i "s|api_secret_path\s*=\s*\".*\"|api_secret_path = \"${move_dsts[$_i]}/.api_secret\"|" "$_toml" 2>/dev/null || true
+            sed -i "s|foreign_api_secret_path\s*=\s*\".*\"|foreign_api_secret_path = \"${move_dsts[$_i]}/.foreign_api_secret\"|" "$_toml" 2>/dev/null || true
+            success "grin-server.toml patched."
+        fi
+    done
+
+    # ── Phase 6b: Patch grin-wallet.toml ──────────────────────────────────────
+    for _i in "${!move_srcs[@]}"; do
+        [[ "${move_types[$_i]}" == "wallet" ]] || continue
+        local _wtoml="${move_dsts[$_i]}/grin-wallet.toml"
+        if [[ -f "$_wtoml" ]]; then
+            info "Patching grin-wallet.toml in $(basename "${move_dsts[$_i]}")..."
+            sed -i "s|log_file_path\s*=\s*\".*\"|log_file_path = \"${move_dsts[$_i]}/grin-wallet.log\"|" "$_wtoml" 2>/dev/null || true
+            sed -i "s|api_secret_path\s*=\s*\".*\"|api_secret_path = \"${move_dsts[$_i]}/.api_secret\"|" "$_wtoml" 2>/dev/null || true
+            sed -i "s|owner_api_secret_path\s*=\s*\".*\"|owner_api_secret_path = \"${move_dsts[$_i]}/.owner_api_secret\"|" "$_wtoml" 2>/dev/null || true
+            success "grin-wallet.toml patched."
         fi
     done
 
@@ -1406,7 +1421,9 @@ __EOF__
             if [[ -f "$_toml" ]]; then
                 sed -i "s|db_root\s*=\s*\".*\"|db_root = \"$_ndst/chain_data\"|" "$_toml" 2>/dev/null || true
                 sed -i "s|log_file_path\s*=\s*\".*\"|log_file_path = \"$_ndst/grin-server.log\"|" "$_toml" 2>/dev/null || true
-                info "db_root and log_file_path verified for $_ndst"
+                sed -i "s|api_secret_path\s*=\s*\".*\"|api_secret_path = \"$_ndst/.api_secret\"|" "$_toml" 2>/dev/null || true
+                sed -i "s|foreign_api_secret_path\s*=\s*\".*\"|foreign_api_secret_path = \"$_ndst/.foreign_api_secret\"|" "$_toml" 2>/dev/null || true
+                info "grin-server.toml paths verified for $_ndst"
             fi
 
             # Remove stale LMDB lock file left by SIGKILL — prevents grin from starting.

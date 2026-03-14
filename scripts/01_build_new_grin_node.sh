@@ -433,10 +433,12 @@ _start_installed_node() {
     for i in "${!found_dirs[@]}"; do
         GRIN_DIR="${found_dirs[$i]}"
         NETWORK_TYPE="${found_nets[$i]}"
-        # Ensure log_file_path in toml is accessible by the grin user (may be stale after migration).
+        # Patch stale absolute paths in toml (all may point to old location after migration).
         local _toml="$GRIN_DIR/grin-server.toml"
         if [[ -f "$_toml" ]]; then
             sed -i "s|log_file_path\s*=\s*\".*\"|log_file_path = \"$GRIN_DIR/grin-server.log\"|" "$_toml" 2>/dev/null || true
+            sed -i "s|api_secret_path\s*=\s*\".*\"|api_secret_path = \"$GRIN_DIR/.api_secret\"|" "$_toml" 2>/dev/null || true
+            sed -i "s|foreign_api_secret_path\s*=\s*\".*\"|foreign_api_secret_path = \"$GRIN_DIR/.foreign_api_secret\"|" "$_toml" 2>/dev/null || true
         fi
         info "Starting node: $GRIN_DIR ($NETWORK_TYPE)"
         start_grin_tmux

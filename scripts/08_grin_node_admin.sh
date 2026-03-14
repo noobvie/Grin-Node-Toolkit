@@ -1122,7 +1122,41 @@ migrate_filesystem() {
     done
 
     if [[ ${#move_srcs[@]} -eq 0 ]]; then
-        warn "Nothing to migrate — no valid source directories found."; pause; return
+        if [[ ! -s "$inst_conf" ]]; then
+            # Directories already in place but conf is empty — scan dest and rebuild.
+            warn "Nothing to migrate — conf is empty. Scanning $dest_base for installed nodes..."
+            echo ""
+            local -a _scan_dirs=( "$dest_base/node/mainnet-prune" "$dest_base/node/mainnet-full" "$dest_base/node/testnet-prune" )
+            declare -A _scan_keys=( [mainnet-prune]="PRUNEMAIN" [mainnet-full]="FULLMAIN" [testnet-prune]="PRUNETEST" )
+            local _scan_found=0
+            mkdir -p "$CONF_DIR"
+            touch "$inst_conf"
+            for _sd in "${_scan_dirs[@]}"; do
+                [[ -x "$_sd/grin" ]] || continue
+                local _sk="${_scan_keys[$(basename "$_sd")]:-}"
+                [[ -z "$_sk" ]] && continue
+                cat >> "$inst_conf" << __EOF__
+
+${_sk}_GRIN_DIR="$_sd"
+${_sk}_BINARY="$_sd/grin"
+${_sk}_TOML="$_sd/grin-server.toml"
+${_sk}_CHAIN_DATA="$_sd/chain_data"
+__EOF__
+                success "Conf entry: $_sk → $_sd"
+                _scan_found=$(( _scan_found + 1 ))
+            done
+            chmod 600 "$inst_conf" 2>/dev/null || true
+            echo ""
+            if [[ $_scan_found -gt 0 ]]; then
+                success "grin_instances_location.conf rebuilt with $_scan_found node(s)."
+            else
+                warn "No grin binaries found in $dest_base — nothing rebuilt."
+                info  "Run Script 01 to install a node, or re-run option 10 with the correct source path."
+            fi
+        else
+            info "All directories already at target — nothing to migrate."
+        fi
+        pause; return
     fi
 
     # ── Same-filesystem guard ──────────────────────────────────────────────────

@@ -439,10 +439,10 @@ start_wallet() {
 
     if tmux has-session -t "$session" 2>/dev/null; then
         warn "Existing tmux session '$session' found."
-        echo -ne "Kill it and restart? [y/N/0]: "
+        echo -ne "Kill it and restart? [Y/n/0]: "
         read -r restart_choice || true
         [[ "$restart_choice" == "0" ]] && info "Keeping existing session. Attach: tmux attach -t $session" && return
-        if [[ "${restart_choice,,}" == "y" ]]; then
+        if [[ "${restart_choice,,}" != "n" ]]; then
             tmux kill-session -t "$session"
             success "Existing session stopped."
         else
@@ -649,10 +649,10 @@ ww_deploy_files() {
 
     if [[ -d "$WW_DEPLOY_DIR" ]]; then
         warn "Directory already exists: $WW_DEPLOY_DIR"
-        echo -ne "Update files? (existing config.json will be preserved) [y/N/0]: "
+        echo -ne "Update files? (existing config.json will be preserved) [Y/n/0]: "
         read -r overwrite || true
         [[ "$overwrite" == "0" ]] && return
-        [[ "${overwrite,,}" != "y" ]] && info "Cancelled." && return
+        [[ "${overwrite,,}" == "n" ]] && info "Cancelled." && return
     fi
 
     info "Deploying from $WEB_WALLET_SRC_DIR → $WW_DEPLOY_DIR ..."
@@ -731,10 +731,10 @@ ww_configure_nginx() {
     info "Deploy dir : $WW_DEPLOY_DIR"
     info "PHP-FPM    : $WW_PHP_FPM_SOCK"
     echo ""
-    echo -ne "${BOLD}Write nginx config? [y/N/0]: ${RESET}"
+    echo -ne "${BOLD}Write nginx config? [Y/n/0]: ${RESET}"
     read -r confirm || true
     [[ "$confirm" == "0" ]] && return
-    [[ "${confirm,,}" != "y" ]] && info "Cancelled." && return
+    [[ "${confirm,,}" == "n" ]] && info "Cancelled." && return
 
     # Rate-limit snippet
     info "Writing rate-limit zone ..."
@@ -845,10 +845,10 @@ ww_setup_ssl() {
     [[ -z "$WW_EMAIL" ]] && warn "No email entered." && return
 
     echo ""
-    echo -ne "${BOLD}Request SSL certificate for $WW_DOMAIN? [y/N/0]: ${RESET}"
+    echo -ne "${BOLD}Request SSL certificate for $WW_DOMAIN? [Y/n/0]: ${RESET}"
     read -r confirm || true
     [[ "$confirm" == "0" ]] && return
-    [[ "${confirm,,}" != "y" ]] && info "Cancelled." && return
+    [[ "${confirm,,}" == "n" ]] && info "Cancelled." && return
 
     info "Requesting certificate for $WW_DOMAIN ..."
     certbot --nginx -d "$WW_DOMAIN" --non-interactive --agree-tos -m "$WW_EMAIL" \
@@ -920,10 +920,10 @@ ww_configure_firewall() {
     echo -e "  ${DIM}Opens port 443 (HTTPS) and 80 (HTTP → redirect + certbot renewal).${RESET}"
     echo -e "  ${DIM}Wallet API ports (3415/13415) stay on localhost — NOT opened publicly.${RESET}"
     echo ""
-    echo -ne "${BOLD}Open ports 80 and 443 in the firewall? [y/N/0]: ${RESET}"
+    echo -ne "${BOLD}Open ports 80 and 443 in the firewall? [Y/n/0]: ${RESET}"
     read -r confirm || true
     [[ "$confirm" == "0" ]] && return
-    [[ "${confirm,,}" != "y" ]] && info "Cancelled." && return
+    [[ "${confirm,,}" == "n" ]] && info "Cancelled." && return
 
     if command -v ufw &>/dev/null; then
         ufw allow 443/tcp && success "UFW: port 443 opened."

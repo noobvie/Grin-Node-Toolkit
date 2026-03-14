@@ -882,9 +882,9 @@ self_update() {
     echo ""
 
     # ── Confirm ───────────────────────────────────────────────────────────────
-    echo -ne "${YELLOW}Pull and install from branch '${branch}'? [y/N]: ${RESET}"
+    echo -ne "${YELLOW}Pull and install from branch '${branch}'? [Y/n]: ${RESET}"
     read -r confirm
-    if [[ "${confirm,,}" != "y" ]]; then
+    if [[ "${confirm,,}" == "n" ]]; then
         info "Update cancelled."
         pause; return
     fi

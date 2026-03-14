@@ -75,6 +75,10 @@ NODE_CRON_TESTNET="/etc/cron.d/grin-node-api-node-testnet"
 CONF_DIR="$SCRIPT_DIR/../conf"
 INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"
 
+# ─── Runtime state (set by main when network is selected) ─────────────────────
+NETWORK=""
+NODE_PORT=""
+
 # ─── Logging ──────────────────────────────────────────────────────────────────
 mkdir -p "$LOG_DIR"
 log()     { echo -e "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*" >> "$LOG_FILE" 2>/dev/null || true; }
@@ -349,74 +353,50 @@ PYEOF
 # STATUS DISPLAY
 # ═══════════════════════════════════════════════════════════════════════════════
 
-show_all_status() {
-    echo -e "\n${BOLD}Service Status:${RESET}\n"
+show_network_status() {
+    echo -e "\n${BOLD}Status:${RESET}\n"
 
-    # ── Mainnet Node API (3413) ──
-    echo -e "  ${BOLD}Node Public API — Mainnet (port $NODE_API_PORT_MAINNET):${RESET}"
-    if ss -tlnp 2>/dev/null | grep -q ":$NODE_API_PORT_MAINNET "; then
-        echo -e "    Grin port  : ${GREEN}LISTENING${RESET}"
+    local nginx_conf nginx_symlink status_deploy rest_dir rest_cron
+    if [[ "$NETWORK" == "mainnet" ]]; then
+        nginx_conf="$NODE_API_NGINX_CONF_MAINNET"; nginx_symlink="grin-node-api"
+        status_deploy="$STATUS_PAGE_DEPLOY_MAINNET"; rest_dir="$REST_API_DIR_MAINNET"
+        rest_cron="$REST_CRON_MAINNET"
     else
-        echo -e "    Grin port  : ${RED}NOT LISTENING${RESET}  ${DIM}(mainnet node not running?)${RESET}"
+        nginx_conf="$NODE_API_NGINX_CONF_TESTNET"; nginx_symlink="grin-node-api-testnet"
+        status_deploy="$STATUS_PAGE_DEPLOY_TESTNET"; rest_dir="$REST_API_DIR_TESTNET"
+        rest_cron="$REST_CRON_TESTNET"
     fi
-    if [[ -f "/etc/nginx/sites-enabled/grin-node-api" ]]; then
-        echo -e "    nginx proxy: ${GREEN}CONFIGURED${RESET}"
+
+    if ss -tlnp 2>/dev/null | grep -q ":$NODE_PORT "; then
+        echo -e "  ${BOLD}Grin node${RESET}   : ${GREEN}RUNNING${RESET}  ${DIM}(port $NODE_PORT)${RESET}"
     else
-        echo -e "    nginx proxy: ${DIM}not configured${RESET}"
+        echo -e "  ${BOLD}Grin node${RESET}   : ${RED}NOT RUNNING${RESET}  ${YELLOW}⚠ run Script 01${RESET}"
     fi
-    if [[ -f "$STATUS_PAGE_DEPLOY_MAINNET/index.html" ]]; then
-        local _mn_dom; _mn_dom=$(_nginx_domain "$NODE_API_NGINX_CONF_MAINNET")
-        echo -e "    status page: ${GREEN}ENABLED${RESET}  ${DIM}https://$_mn_dom/${RESET}"
+
+    if [[ -f "/etc/nginx/sites-enabled/$nginx_symlink" ]]; then
+        local domain; domain=$(_nginx_domain "$nginx_conf")
+        echo -e "  ${BOLD}nginx proxy${RESET} : ${GREEN}CONFIGURED${RESET}  ${DIM}https://$domain/v2/foreign${RESET}"
     else
-        echo -e "    status page: ${DIM}not deployed${RESET}"
+        echo -e "  ${BOLD}nginx proxy${RESET} : ${DIM}not configured${RESET}  ${DIM}(option 1)${RESET}"
     fi
-    if [[ -f "$REST_API_DIR_MAINNET/stats.json" ]]; then
-        local _mn_dom2; _mn_dom2=$(_nginx_domain "$NODE_API_NGINX_CONF_MAINNET")
-        echo -e "    REST API   : ${GREEN}ENABLED${RESET}  ${DIM}https://$_mn_dom2/rest/${RESET}"
-        if [[ -f "$REST_CRON_MAINNET" ]]; then
-            echo -e "    REST cron  : ${GREEN}ACTIVE${RESET}   ${DIM}every 60 s  (${REST_CRON_MAINNET})${RESET}"
-            echo -e "                 ${DIM}note: /etc/cron.d/ jobs are not shown by 'crontab -l'${RESET}"
-        else
-            echo -e "    REST cron  : ${YELLOW}MISSING${RESET}  ${DIM}(re-run option 9 to reinstall)${RESET}"
-        fi
+
+    if [[ -f "$status_deploy/index.html" ]]; then
+        local domain2; domain2=$(_nginx_domain "$nginx_conf")
+        echo -e "  ${BOLD}status page${RESET} : ${GREEN}DEPLOYED${RESET}  ${DIM}https://$domain2/${RESET}"
     else
-        echo -e "    REST API   : ${DIM}not deployed${RESET}"
+        echo -e "  ${BOLD}status page${RESET} : ${DIM}not deployed${RESET}  ${DIM}(option 3)${RESET}"
+    fi
+
+    if [[ -f "$rest_dir/stats.json" ]]; then
+        local domain3; domain3=$(_nginx_domain "$nginx_conf")
+        echo -e "  ${BOLD}REST API${RESET}    : ${GREEN}ENABLED${RESET}  ${DIM}https://$domain3/rest/${RESET}"
+        [[ -f "$rest_cron" ]] \
+            && echo -e "  ${BOLD}REST cron${RESET}   : ${GREEN}ACTIVE${RESET}  ${DIM}every 60 s${RESET}" \
+            || echo -e "  ${BOLD}REST cron${RESET}   : ${YELLOW}MISSING${RESET}  ${DIM}(re-run option 5)${RESET}"
+    else
+        echo -e "  ${BOLD}REST API${RESET}    : ${DIM}not deployed${RESET}  ${DIM}(option 5)${RESET}"
     fi
     echo ""
-
-    # ── Testnet Node API (13413) ──
-
-    echo -e "  ${BOLD}Node Public API — Testnet (port $NODE_API_PORT_TESTNET):${RESET}"
-    if ss -tlnp 2>/dev/null | grep -q ":$NODE_API_PORT_TESTNET "; then
-        echo -e "    Grin port  : ${GREEN}LISTENING${RESET}"
-    else
-        echo -e "    Grin port  : ${RED}NOT LISTENING${RESET}  ${DIM}(testnet node not running?)${RESET}"
-    fi
-    if [[ -f "/etc/nginx/sites-enabled/grin-node-api-testnet" ]]; then
-        echo -e "    nginx proxy: ${GREEN}CONFIGURED${RESET}"
-    else
-        echo -e "    nginx proxy: ${DIM}not configured${RESET}"
-    fi
-    if [[ -f "$STATUS_PAGE_DEPLOY_TESTNET/index.html" ]]; then
-        local _tn_dom; _tn_dom=$(_nginx_domain "$NODE_API_NGINX_CONF_TESTNET")
-        echo -e "    status page: ${GREEN}ENABLED${RESET}  ${DIM}https://$_tn_dom/${RESET}"
-    else
-        echo -e "    status page: ${DIM}not deployed${RESET}"
-    fi
-    if [[ -f "$REST_API_DIR_TESTNET/stats.json" ]]; then
-        local _tn_dom2; _tn_dom2=$(_nginx_domain "$NODE_API_NGINX_CONF_TESTNET")
-        echo -e "    REST API   : ${GREEN}ENABLED${RESET}  ${DIM}https://$_tn_dom2/rest/${RESET}"
-        if [[ -f "$REST_CRON_TESTNET" ]]; then
-            echo -e "    REST cron  : ${GREEN}ACTIVE${RESET}   ${DIM}every 60 s  (${REST_CRON_TESTNET})${RESET}"
-            echo -e "                 ${DIM}note: /etc/cron.d/ jobs are not shown by 'crontab -l'${RESET}"
-        else
-            echo -e "    REST cron  : ${YELLOW}MISSING${RESET}  ${DIM}(re-run option 11 to reinstall)${RESET}"
-        fi
-    else
-        echo -e "    REST API   : ${DIM}not deployed${RESET}"
-    fi
-    echo ""
-
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -571,8 +551,7 @@ EOF
     echo ""
     info "Log file    : $LOG_FILE"
     echo ""
-    local _status_opt; [[ "$network" == "mainnet" ]] && _status_opt=5 || _status_opt=7
-    info "Next step   : run option $_status_opt to deploy the live status page at https://$domain/"
+    info "Next step   : run option 3 to deploy the live status page at https://$domain/"
     log "nginx $network node API proxy configured: domain=$domain config=$nginx_conf -> 127.0.0.1:$port/v2/foreign"
     log "Test: curl -s -X POST https://$domain/v2/foreign -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"get_tip\",\"params\":[],\"id\":1}'"
     log "Test: curl -X POST https://$domain/v2/foreign -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"get_version\",\"params\":{},\"id\":1}'"
@@ -792,9 +771,8 @@ _enable_rest_api() {
     deploy_dir="$( [[ "$network" == "mainnet" ]] && echo "$STATUS_PAGE_DEPLOY_MAINNET" \
                                                   || echo "$STATUS_PAGE_DEPLOY_TESTNET" )"
     if [[ ! -f "$deploy_dir/index.html" ]]; then
-        local _opt; [[ "$network" == "mainnet" ]] && _opt=5 || _opt=7
         warn "Status page not deployed for $network."
-        warn "Run option $_opt first to set up the nginx static root, then come back here."
+        warn "Run option 3 first to set up the nginx static root, then come back here."
         return
     fi
 
@@ -976,115 +954,137 @@ disable_testnet_rest_api() { _disable_rest_api testnet \
                                 "$NODE_API_NGINX_CONF_TESTNET" "$REST_API_DIR_TESTNET" "$REST_CRON_TESTNET"; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# MENU
+# MENUS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-show_menu() {
+show_network_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -e "${BOLD}${CYAN}  04) Grin Node API Services Manager${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    show_all_status
-
-    # ── Build dynamic option labels based on current state ────────────────────
-    local mn_domain="" tn_domain=""
-    local mn_label_1 tn_label_3 mn_label_5 tn_label_7 mn_label_9 tn_label_11
-
-    if [[ -f "/etc/nginx/sites-enabled/grin-node-api" ]]; then
-        mn_domain=$(_nginx_domain "$NODE_API_NGINX_CONF_MAINNET")
-        mn_label_1="${GREEN}[CONFIGURED]${RESET} ${BOLD}$mn_domain${RESET}  ${DIM}(use 2) to change domain)${RESET}"
-    else
-        mn_label_1="${DIM}(/v2/foreign, HTTPS)${RESET}"
-    fi
-
-    if [[ -f "/etc/nginx/sites-enabled/grin-node-api-testnet" ]]; then
-        tn_domain=$(_nginx_domain "$NODE_API_NGINX_CONF_TESTNET")
-        tn_label_3="${GREEN}[CONFIGURED]${RESET} ${BOLD}$tn_domain${RESET}  ${DIM}(use 4) to change domain)${RESET}"
-    else
-        tn_label_3="${DIM}(/v2/foreign, HTTPS)${RESET}"
-    fi
-
-    if [[ -f "$STATUS_PAGE_DEPLOY_MAINNET/index.html" && -n "$mn_domain" ]]; then
-        mn_label_5="${GREEN}[DEPLOYED]${RESET}   ${BOLD}https://$mn_domain/${RESET}  ${DIM}(re-run to push updates)${RESET}"
-    else
-        mn_label_5="${DIM}(mainnet — deploy after option 1)${RESET}"
-    fi
-
-    if [[ -f "$STATUS_PAGE_DEPLOY_TESTNET/index.html" && -n "$tn_domain" ]]; then
-        tn_label_7="${GREEN}[DEPLOYED]${RESET}   ${BOLD}https://$tn_domain/${RESET}  ${DIM}(re-run to push updates)${RESET}"
-    else
-        tn_label_7="${DIM}(testnet — deploy after option 3)${RESET}"
-    fi
-
-    # REST option labels — show live URL if enabled, or prerequisite hint if not
-    if [[ -f "$REST_API_DIR_MAINNET/stats.json" && -n "$mn_domain" ]]; then
-        mn_label_9="${GREEN}[ENABLED]${RESET}    ${BOLD}https://$mn_domain/rest/${RESET}  ${DIM}(re-run to reinstall collector)${RESET}"
-    elif [[ -f "$STATUS_PAGE_DEPLOY_MAINNET/index.html" ]]; then
-        mn_label_9="${DIM}(mainnet — requires option 5 first: done ✓ — ready to enable)${RESET}"
-    else
-        mn_label_9="${DIM}(mainnet — requires option 5 first)${RESET}"
-    fi
-
-    if [[ -f "$REST_API_DIR_TESTNET/stats.json" && -n "$tn_domain" ]]; then
-        tn_label_11="${GREEN}[ENABLED]${RESET}    ${BOLD}https://$tn_domain/rest/${RESET}  ${DIM}(re-run to reinstall collector)${RESET}"
-    elif [[ -f "$STATUS_PAGE_DEPLOY_TESTNET/index.html" ]]; then
-        tn_label_11="${DIM}(testnet — requires option 7 first: done ✓ — ready to enable)${RESET}"
-    else
-        tn_label_11="${DIM}(testnet — requires option 7 first)${RESET}"
-    fi
-
-    echo -e "${DIM}  ─── Node Public API — Mainnet (port $NODE_API_PORT_MAINNET) ─────────────${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Enable via nginx     $mn_label_1"
-    echo -e "  ${RED}2${RESET}) Remove nginx proxy"
     echo ""
-    echo -e "${DIM}  ─── Node Public API — Testnet (port $NODE_API_PORT_TESTNET) ────────────${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Enable via nginx     $tn_label_3"
-    echo -e "  ${RED}4${RESET}) Remove nginx proxy"
+
+    local mn_node tn_node
+    ss -tlnp 2>/dev/null | grep -q ":$NODE_API_PORT_MAINNET " \
+        && mn_node="${GREEN}node RUNNING${RESET}" || mn_node="${RED}node down${RESET}"
+    ss -tlnp 2>/dev/null | grep -q ":$NODE_API_PORT_TESTNET " \
+        && tn_node="${GREEN}node RUNNING${RESET}" || tn_node="${RED}node down${RESET}"
+
+    echo -e "  ${GREEN}1${RESET}) Mainnet API  ${DIM}($mn_node${DIM}, port $NODE_API_PORT_MAINNET)${RESET}"
+    echo -e "  ${YELLOW}2${RESET}) Testnet API  ${DIM}($tn_node${DIM}, port $NODE_API_PORT_TESTNET)${RESET}"
     echo ""
-    echo -e "${DIM}  ─── Live Status Page (requires nginx proxy above) ────────────────${RESET}"
-    echo -e "  ${GREEN}5${RESET}) Deploy / Update page  $mn_label_5"
-    echo -e "  ${RED}6${RESET}) Remove status page    ${DIM}(mainnet)${RESET}"
-    echo -e "  ${GREEN}7${RESET}) Deploy / Update page  $tn_label_7"
-    echo -e "  ${RED}8${RESET}) Remove status page    ${DIM}(testnet)${RESET}"
-    echo ""
-    echo -e "${DIM}  ─── REST API  /rest/*.json  (requires status page above) ────────${RESET}"
-    echo -e "  ${GREEN}9${RESET}) Enable REST API       $mn_label_9"
-    echo -e "  ${RED}10${RESET}) Disable REST API      ${DIM}(mainnet — removes cron + JSON files)${RESET}"
-    echo -e "  ${GREEN}11${RESET}) Enable REST API      $tn_label_11"
-    echo -e "  ${RED}12${RESET}) Disable REST API      ${DIM}(testnet — removes cron + JSON files)${RESET}"
-    echo ""
-    echo -e "  ${DIM}↩  Press Enter to refresh status${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [0-12]: ${RESET}"
+    echo -ne "${BOLD}Select network [1/2/0]: ${RESET}"
 }
+
+show_api_menu() {
+    clear
+    local net_label="${NETWORK^}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  04) Grin Node API Services  [${net_label}]${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    show_network_status
+
+    local nginx_conf nginx_symlink status_deploy rest_dir rest_cron
+    if [[ "$NETWORK" == "mainnet" ]]; then
+        nginx_conf="$NODE_API_NGINX_CONF_MAINNET"; nginx_symlink="grin-node-api"
+        status_deploy="$STATUS_PAGE_DEPLOY_MAINNET"; rest_dir="$REST_API_DIR_MAINNET"
+        rest_cron="$REST_CRON_MAINNET"
+    else
+        nginx_conf="$NODE_API_NGINX_CONF_TESTNET"; nginx_symlink="grin-node-api-testnet"
+        status_deploy="$STATUS_PAGE_DEPLOY_TESTNET"; rest_dir="$REST_API_DIR_TESTNET"
+        rest_cron="$REST_CRON_TESTNET"
+    fi
+
+    local label_1 label_3 label_5
+    if [[ -f "/etc/nginx/sites-enabled/$nginx_symlink" ]]; then
+        local _d1; _d1=$(_nginx_domain "$nginx_conf")
+        label_1="${GREEN}[CONFIGURED]${RESET} ${BOLD}$_d1${RESET}  ${DIM}(re-run to change domain)${RESET}"
+    else
+        label_1="${DIM}(/v2/foreign, HTTPS + Let's Encrypt)${RESET}"
+    fi
+
+    if [[ -f "$status_deploy/index.html" ]]; then
+        local _d3; _d3=$(_nginx_domain "$nginx_conf")
+        label_3="${GREEN}[DEPLOYED]${RESET}   ${BOLD}https://$_d3/${RESET}  ${DIM}(re-run to push updates)${RESET}"
+    else
+        label_3="${DIM}(requires option 1 first)${RESET}"
+    fi
+
+    if [[ -f "$rest_dir/stats.json" ]]; then
+        local _d5; _d5=$(_nginx_domain "$nginx_conf")
+        label_5="${GREEN}[ENABLED]${RESET}    ${BOLD}https://$_d5/rest/${RESET}  ${DIM}(re-run to reinstall collector)${RESET}"
+    elif [[ -f "$status_deploy/index.html" ]]; then
+        label_5="${DIM}(status page deployed ✓ — ready to enable)${RESET}"
+    else
+        label_5="${DIM}(requires option 3 first)${RESET}"
+    fi
+
+    echo -e "${DIM}  ─── Node Public API ─────────────────────────────${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Enable via nginx     $label_1"
+    echo -e "  ${RED}2${RESET}) Remove nginx proxy"
+    echo ""
+    echo -e "${DIM}  ─── Live Status Page (requires option 1) ─────────${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Deploy / Update page $label_3"
+    echo -e "  ${RED}4${RESET}) Remove status page"
+    echo ""
+    echo -e "${DIM}  ─── REST API /rest/*.json (requires option 3) ────${RESET}"
+    echo -e "  ${GREEN}5${RESET}) Enable REST API      $label_5"
+    echo -e "  ${RED}6${RESET}) Disable REST API      ${DIM}(removes cron + JSON files)${RESET}"
+    echo ""
+    echo -e "  ${DIM}↩  Press Enter to refresh status${RESET}"
+    echo -e "  ${RED}0${RESET}) Back to network select"
+    echo ""
+    echo -ne "${BOLD}Select [1-6 / 0]: ${RESET}"
+}
+
+# ─── Network-aware dispatch ────────────────────────────────────────────────────
+_call_enable_node_api()  { [[ "$NETWORK" == "mainnet" ]] && enable_mainnet_node_api    || enable_testnet_node_api; }
+_call_disable_node_api() { [[ "$NETWORK" == "mainnet" ]] && disable_mainnet_node_api   || disable_testnet_node_api; }
+_call_enable_status()    { [[ "$NETWORK" == "mainnet" ]] && enable_mainnet_status_page  || enable_testnet_status_page; }
+_call_disable_status()   { [[ "$NETWORK" == "mainnet" ]] && disable_mainnet_status_page || disable_testnet_status_page; }
+_call_enable_rest()      { [[ "$NETWORK" == "mainnet" ]] && enable_mainnet_rest_api    || enable_testnet_rest_api; }
+_call_disable_rest()     { [[ "$NETWORK" == "mainnet" ]] && disable_mainnet_rest_api   || disable_testnet_rest_api; }
 
 main() {
     while true; do
-        show_menu
-        read -r choice
+        show_network_menu
+        read -r net_choice
 
-        case "$choice" in
-            "") continue ;;  # bare Enter = refresh status display
-            1)  enable_mainnet_node_api    || true ;;
-            2)  disable_mainnet_node_api   || true ;;
-            3)  enable_testnet_node_api    || true ;;
-            4)  disable_testnet_node_api   || true ;;
-            5)  enable_mainnet_status_page || true ;;
-            6)  disable_mainnet_status_page || true ;;
-            7)  enable_testnet_status_page || true ;;
-            8)  disable_testnet_status_page || true ;;
-            9)  enable_mainnet_rest_api    || true ;;
-            10) disable_mainnet_rest_api   || true ;;
-            11) enable_testnet_rest_api    || true ;;
-            12) disable_testnet_rest_api   || true ;;
-            0)  break ;;
-            *)  warn "Invalid option." ; sleep 1 ;;
+        case "$net_choice" in
+            0) break ;;
+            "") continue ;;
+            1|2)
+                if [[ "$net_choice" == "2" ]]; then
+                    NETWORK="testnet"; NODE_PORT="$NODE_API_PORT_TESTNET"
+                else
+                    NETWORK="mainnet"; NODE_PORT="$NODE_API_PORT_MAINNET"
+                fi
+
+                while true; do
+                    show_api_menu
+                    read -r choice
+
+                    case "$choice" in
+                        1) _call_enable_node_api  || true ;;
+                        2) _call_disable_node_api || true ;;
+                        3) _call_enable_status    || true ;;
+                        4) _call_disable_status   || true ;;
+                        5) _call_enable_rest      || true ;;
+                        6) _call_disable_rest     || true ;;
+                        0) break ;;
+                        "") continue ;;
+                        *) warn "Invalid option." ; sleep 1 ;;
+                    esac
+
+                    echo ""
+                    echo "Press Enter to continue..."
+                    read -r
+                done
+                ;;
+            *) warn "Invalid option." ; sleep 1 ;;
         esac
-
-        echo ""
-        echo "Press Enter to continue..."
-        read -r
     done
 }
 

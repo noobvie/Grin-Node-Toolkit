@@ -3,18 +3,21 @@
 # 05_grin_wallet_service.sh — Grin Wallet Service
 # =============================================================================
 #
-#  ─── Setup ───────────────────────────────────────────────────────────────────
-#   a) Download & install grin-wallet   (mainnet → /grinwalletmain
-#                                        testnet → /grinwallettest)
+#  ─── Network Selection ───────────────────────────────────────────────────────
+#   1) Mainnet wallet
+#   2) Testnet wallet
+#
+#  ─── Wallet Menu (per network) ───────────────────────────────────────────────
+#   a) Download & install grin-wallet
 #   b) Initialize wallet                (grin-wallet init)
 #   c) Start wallet listener            (grin-wallet listen, in tmux)
 #
 #  ─── Foreign API ─────────────────────────────────────────────────────────────
-#   d) Enable Wallet Foreign API        (mainnet 3415 / testnet 13415 — localhost only)
+#   d) Enable Wallet Foreign API        (3415 mainnet / 13415 testnet — localhost only)
 #   e) Disable Wallet Foreign API
 #
 #  ─── Web Interface ───────────────────────────────────────────────────────────
-#   z) Web Wallet Interface             (submenu — 05 Z)
+#   w) Web Wallet Interface             (submenu — 05 W)
 #      1) Install dependencies          (nginx, php, certbot, htpasswd, qrencode)
 #      2) Deploy files                  (copy web/05/ → deploy directory)
 #      3) Configure nginx               (vhost + rate-limit + security headers)
@@ -237,18 +240,9 @@ show_status() {
 download_wallet() {
     echo -e "\n${BOLD}${CYAN}── Download & Install grin-wallet ──${RESET}\n"
 
-    echo -e "  ${GREEN}1${RESET}) Mainnet  → install to ${BOLD}$WALLET_BIN_DIR_MAINNET${RESET}  ${DIM}[default]${RESET}"
-    echo -e "  ${YELLOW}2${RESET}) Testnet  → install to ${BOLD}$WALLET_BIN_DIR_TESTNET${RESET}"
-    echo -e "  ${DIM}0) Cancel${RESET}"
-    echo -ne "Select network [1]: "
-    read -r net_choice || true
-    [[ "$net_choice" == "0" ]] && return
-    local target_dir target_bin target_net
-    case "${net_choice:-1}" in
-        2) target_dir="$WALLET_BIN_DIR_TESTNET"; target_bin="$WALLET_BIN_TESTNET"; target_net="testnet" ;;
-        *) target_dir="$WALLET_BIN_DIR_MAINNET"; target_bin="$WALLET_BIN_MAINNET"; target_net="mainnet" ;;
-    esac
+    info "Network: ${BOLD}$NETWORK${RESET}  →  install to ${BOLD}$WALLET_DIR${RESET}"
     echo ""
+    local target_dir="$WALLET_DIR" target_bin="$WALLET_BIN" target_net="$NETWORK"
 
     info "Querying GitHub for latest grin-wallet release..."
     local release_json
@@ -302,8 +296,6 @@ download_wallet() {
 
 init_wallet() {
     echo -e "\n${BOLD}${CYAN}── Initialize Wallet ──${RESET}\n"
-
-    detect_and_select_network || return
 
     if [[ ! -x "$WALLET_BIN" ]]; then
         warn "grin-wallet binary not found at $WALLET_BIN"
@@ -377,8 +369,6 @@ init_wallet() {
 start_wallet() {
     echo -e "\n${BOLD}${CYAN}── Start Wallet Listener ──${RESET}\n"
 
-    detect_and_select_network || return
-
     if [[ ! -x "$WALLET_BIN" ]]; then
         warn "grin-wallet binary not found — run option (a) first."; return
     fi
@@ -435,13 +425,11 @@ start_wallet() {
 enable_foreign_api() {
     echo -e "\n${BOLD}${CYAN}── Enable Wallet Foreign API ──${RESET}\n"
 
-    detect_and_select_network || return
-
     local foreign_api_port
     [[ "$NETWORK" == "mainnet" ]] && foreign_api_port=3415 || foreign_api_port=13415
 
     echo -e "  ${DIM}The Foreign API (port $foreign_api_port) allows other wallets to send you Grin via HTTP.${RESET}"
-    echo -e "  ${DIM}It runs on localhost only — the Web Wallet (option z) proxies to it internally.${RESET}"
+    echo -e "  ${DIM}It runs on localhost only — the Web Wallet (option w) proxies to it internally.${RESET}"
     echo -e "  ${DIM}You do NOT need to open port $foreign_api_port publicly when using the Web Wallet.${RESET}"
     echo ""
 
@@ -472,8 +460,6 @@ enable_foreign_api() {
 disable_foreign_api() {
     echo -e "\n${BOLD}${CYAN}── Disable Wallet Foreign API ──${RESET}\n"
 
-    detect_and_select_network || return
-
     if [[ ! -f "$GRIN_WALLET_TOML" ]]; then
         warn "Wallet config not found at $GRIN_WALLET_TOML"; return
     fi
@@ -486,7 +472,7 @@ disable_foreign_api() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 05 Z) WEB WALLET INTERFACE — Config helpers
+# 05 W) WEB WALLET INTERFACE — Config helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
 ww_load_config() {
@@ -869,7 +855,7 @@ ww_configure_firewall() {
     clear
     echo -e "\n${BOLD}${CYAN}── 05 M-6) Configure Firewall ──${RESET}\n"
     echo -e "  ${DIM}Opens port 443 (HTTPS) and 80 (HTTP → redirect + certbot renewal).${RESET}"
-    echo -e "  ${DIM}Port $FOREIGN_API_PORT (wallet API) stays on localhost — NOT opened publicly.${RESET}"
+    echo -e "  ${DIM}Wallet API ports (3415/13415) stay on localhost — NOT opened publicly.${RESET}"
     echo ""
     echo -ne "${BOLD}Open ports 80 and 443 in the firewall? [y/N/0]: ${RESET}"
     read -r confirm || true
@@ -1036,7 +1022,7 @@ web_wallet_menu() {
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN} 05 Z) WEB WALLET INTERFACE${RESET}"
+        echo -e "${BOLD}${CYAN} 05 W) WEB WALLET INTERFACE${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         show_web_wallet_status
 
@@ -1075,56 +1061,107 @@ web_wallet_menu() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# MAIN MENU
+# MENUS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-show_menu() {
+show_network_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -e "${BOLD}${CYAN} 05) GRIN WALLET SERVICE${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+
+    local mainnet_up=0 testnet_up=0
+    ss -tlnp 2>/dev/null | grep -q ":3413 "  && mainnet_up=1
+    ss -tlnp 2>/dev/null | grep -q ":13413 " && testnet_up=1
+    local mn_node tn_node
+    [[ $mainnet_up -eq 1 ]] && mn_node="${GREEN}node RUNNING${RESET}" || mn_node="${RED}node down${RESET}"
+    [[ $testnet_up -eq 1 ]] && tn_node="${GREEN}node RUNNING${RESET}" || tn_node="${RED}node down${RESET}"
+
+    echo -e "  ${GREEN}1${RESET}) Mainnet wallet  ${DIM}($mn_node${DIM})${RESET}"
+    echo -e "  ${YELLOW}2${RESET}) Testnet wallet  ${DIM}($tn_node${DIM})${RESET}"
+    echo ""
+    echo -e "  ${RED}0${RESET}) Back to main menu"
+    echo ""
+    echo -ne "${BOLD}Select network [1/2/0]: ${RESET}"
+}
+
+show_wallet_menu() {
+    clear
+    local net_label="${NETWORK^}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN} 05) GRIN WALLET SERVICE  [${net_label}]${RESET}"
     echo -e "${BOLD}${GREEN}  Disclaimer: Always store your seed phrase safely!${RESET}"
     echo -e "${BOLD}${YELLOW}  This tool is for testing and development purposes!${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     show_status
 
+    local fa_port; [[ "$NETWORK" == "mainnet" ]] && fa_port=3415 || fa_port=13415
+
     echo -e "${DIM}  ─── Setup ────────────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}a${RESET}) Download & install grin-wallet  ${DIM}(mainnet / testnet)${RESET}"
+    echo -e "  ${GREEN}a${RESET}) Download & install grin-wallet"
     echo -e "  ${GREEN}b${RESET}) Initialize wallet               ${DIM}(grin-wallet init)${RESET}"
     echo -e "  ${GREEN}c${RESET}) Start wallet listener           ${DIM}(grin-wallet listen, tmux)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Foreign API ──────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}d${RESET}) Enable Wallet Foreign API       ${DIM}(port $FOREIGN_API_PORT — localhost only)${RESET}"
+    echo -e "  ${GREEN}d${RESET}) Enable Wallet Foreign API       ${DIM}(port $fa_port — localhost only)${RESET}"
     echo -e "  ${RED}e${RESET}) Disable Wallet Foreign API"
     echo ""
     echo -e "${DIM}  ─── Web Interface ────────────────────────────────${RESET}"
-    echo -e "  ${CYAN}z${RESET}) Web Wallet Interface            ${DIM}(nginx + PHP + HTTPS + Basic Auth)${RESET}"
+    echo -e "  ${CYAN}w${RESET}) Web Wallet Interface            ${DIM}(nginx + PHP + HTTPS + Basic Auth)${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh status${RESET}"
-    echo -e "  ${RED}0${RESET}) Back to main menu"
+    echo -e "  ${RED}0${RESET}) Back to network select"
     echo ""
-    echo -ne "${BOLD}Select [a-e / z / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [a-e / w / 0]: ${RESET}"
 }
 
 main() {
     while true; do
-        show_menu
-        read -r choice || true
+        show_network_menu
+        read -r net_choice || true
 
-        case "$choice" in
-            a) download_wallet ;;
-            b) init_wallet ;;
-            c) start_wallet ;;
-            d) enable_foreign_api ;;
-            e) disable_foreign_api ;;
-            z) web_wallet_menu ;;
+        case "$net_choice" in
             0) break ;;
             "") continue ;;
+            1|2)
+                if [[ "$net_choice" == "2" ]]; then
+                    NETWORK="testnet"; NODE_PORT=13413
+                    WALLET_BIN="$WALLET_BIN_TESTNET"
+                    WALLET_DIR="$WALLET_BIN_DIR_TESTNET"
+                    GRIN_WALLET_TOML="$GRIN_WALLET_TOML_TESTNET"
+                    WALLET_NGINX_CONF="$WALLET_NGINX_CONF_TESTNET"
+                else
+                    NETWORK="mainnet"; NODE_PORT=3413
+                    WALLET_BIN="$WALLET_BIN_MAINNET"
+                    WALLET_DIR="$WALLET_BIN_DIR_MAINNET"
+                    GRIN_WALLET_TOML="$GRIN_WALLET_TOML_MAINNET"
+                    WALLET_NGINX_CONF="$WALLET_NGINX_CONF_MAINNET"
+                fi
+
+                while true; do
+                    show_wallet_menu
+                    read -r choice || true
+
+                    case "$choice" in
+                        a) download_wallet ;;
+                        b) init_wallet ;;
+                        c) start_wallet ;;
+                        d) enable_foreign_api ;;
+                        e) disable_foreign_api ;;
+                        w) web_wallet_menu ;;
+                        0) break ;;
+                        "") continue ;;
+                        *) warn "Invalid option." ; sleep 1 ;;
+                    esac
+
+                    echo ""
+                    echo "Press Enter to continue..."
+                    read -r || true
+                done
+                ;;
             *) warn "Invalid option." ; sleep 1 ;;
         esac
-
-        echo ""
-        echo "Press Enter to continue..."
-        read -r || true
     done
 }
 

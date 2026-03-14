@@ -598,9 +598,7 @@ check_grin_running() {
         local found=0
 
         local grin_procs
-        grin_procs=$(pgrep -a -f '[g]rin' 2>/dev/null \
-            | grep -v -E "(grin-node-toolkit|build_new_grin_node)" \
-            || true)
+        grin_procs=$(pgrep -a -f '[g]rin server run' 2>/dev/null || true)
         if [[ -n "$grin_procs" ]]; then
             warn "Stale Grin processes detected:"
             while IFS= read -r line; do echo -e "  ${YELLOW}→${RESET} $line"; done <<< "$grin_procs"

@@ -1188,14 +1188,59 @@ migrate_filesystem() {
         fi
     done
 
-    # ── Phase 5: Patch grin_instances_location.conf ────────────────────────────
-    if [[ -f "$inst_conf" ]]; then
-        info "Patching grin_instances_location.conf..."
-        for _i in "${!move_srcs[@]}"; do
-            [[ "${move_types[$_i]}" == "node" ]] || continue
-            sed -i "s|${move_srcs[$_i]}|${move_dsts[$_i]}|g" "$inst_conf" || true
+    # ── Phase 5: Rebuild grin_instances_location.conf ─────────────────────────
+    # Always write fresh entries — sed-based patching silently fails when the file
+    # was empty (cleared by a prior kill) or entries were missing.
+    info "Updating grin_instances_location.conf..."
+    mkdir -p "$CONF_DIR"
+    touch "$inst_conf"
+    for _i in "${!move_srcs[@]}"; do
+        [[ "${move_types[$_i]}" == "node" ]] || continue
+        local _bname; _bname=$(basename "${move_dsts[$_i]}")
+        local _key
+        case "$_bname" in
+            mainnet-prune) _key="PRUNEMAIN" ;;
+            mainnet-full)  _key="FULLMAIN"  ;;
+            testnet-prune) _key="PRUNETEST" ;;
+            *) warn "Unknown node dir name '$_bname' — skipping conf entry."; continue ;;
+        esac
+        # Remove stale entries; also remove sibling mainnet key if applicable
+        sed -i "/^${_key}_/d" "$inst_conf" 2>/dev/null || true
+        [[ "$_key" == "FULLMAIN"  ]] && { sed -i '/^PRUNEMAIN_/d' "$inst_conf" 2>/dev/null || true; }
+        [[ "$_key" == "PRUNEMAIN" ]] && { sed -i '/^FULLMAIN_/d'  "$inst_conf" 2>/dev/null || true; }
+        local _ndst="${move_dsts[$_i]}"
+        cat >> "$inst_conf" << __EOF__
+
+${_key}_GRIN_DIR="$_ndst"
+${_key}_BINARY="$_ndst/grin"
+${_key}_TOML="$_ndst/grin-server.toml"
+${_key}_CHAIN_DATA="$_ndst/chain_data"
+__EOF__
+        info "Conf entry: $_key → $_ndst"
+    done
+    chmod 600 "$inst_conf" 2>/dev/null || true
+    success "grin_instances_location.conf updated."
+
+    # Double-check: if the conf is still empty (e.g. no nodes were in move_srcs),
+    # scan the standard locations and write any entries we can find.
+    if [[ ! -s "$inst_conf" ]]; then
+        warn "Conf file is empty — scanning standard locations as fallback..."
+        local -a _scan_dirs=( "/opt/grin/node/mainnet-prune" "/opt/grin/node/mainnet-full" "/opt/grin/node/testnet-prune" )
+        declare -A _scan_keys=( [mainnet-prune]="PRUNEMAIN" [mainnet-full]="FULLMAIN" [testnet-prune]="PRUNETEST" )
+        for _sd in "${_scan_dirs[@]}"; do
+            [[ -x "$_sd/grin" ]] || continue
+            local _sk="${_scan_keys[$(basename "$_sd")]:-}"
+            [[ -z "$_sk" ]] && continue
+            cat >> "$inst_conf" << __EOF__
+
+${_sk}_GRIN_DIR="$_sd"
+${_sk}_BINARY="$_sd/grin"
+${_sk}_TOML="$_sd/grin-server.toml"
+${_sk}_CHAIN_DATA="$_sd/chain_data"
+__EOF__
+            info "Conf entry (scan fallback): $_sk → $_sd"
         done
-        success "grin_instances_location.conf patched."
+        chmod 600 "$inst_conf" 2>/dev/null || true
     fi
 
     # ── Phase 6: Patch grin-server.toml (db_root + log_file_path) ────────────

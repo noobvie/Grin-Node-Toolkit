@@ -1254,9 +1254,24 @@ migrate_filesystem() {
             if [[ ! -x "$_ndst/grin" ]]; then
                 warn "No grin binary at $_ndst — skipping auto-start."; continue
             fi
+
+            # Ensure db_root in grin-server.toml points to the new chain_data location.
+            # Phase 6's sed may have silently failed if the toml format didn't match exactly.
+            local _toml="$_ndst/grin-server.toml"
+            if [[ -f "$_toml" ]]; then
+                sed -i "s|db_root\s*=\s*\".*\"|db_root = \"$_ndst/chain_data\"|" "$_toml" 2>/dev/null || true
+                info "db_root verified: $_ndst/chain_data"
+            fi
+
+            # Remove stale LMDB lock file left by SIGKILL — prevents grin from starting.
+            find "$_ndst/chain_data" -maxdepth 3 -name "lock.mdb" -delete 2>/dev/null || true
+
+            # Kill any lingering session with the same name before creating a new one.
             local _nsess="grin_$(basename "$_ndst")"
-            tmux has-session -t "$_nsess" 2>/dev/null && \
-                { tmux kill-session -t "$_nsess" 2>/dev/null || true; }
+            if tmux has-session -t "$_nsess" 2>/dev/null; then
+                tmux kill-session -t "$_nsess" 2>/dev/null || true
+            fi
+
             chown -R grin:grin "$_ndst" 2>/dev/null || true
             if id grin &>/dev/null; then
                 tmux new-session -d -s "$_nsess" -c "$_ndst" \
@@ -1264,10 +1279,11 @@ migrate_filesystem() {
                     || warn "Failed to start tmux session $_nsess."
             else
                 tmux new-session -d -s "$_nsess" -c "$_ndst" \
-                    "echo 'Starting Grin node...'; cd $_ndst && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+                    "echo 'Starting Grin node...'; cd \"$_ndst\" && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
                     || warn "Failed to start tmux session $_nsess."
             fi
-            success "Node started: tmux attach -t $_nsess"
+            success "Node started in tmux session: $_nsess"
+            info "  Attach : tmux attach -t $_nsess"
             _nstarted=$(( _nstarted + 1 ))
             if [[ $_nstarted -lt ${#_node_dsts[@]} ]]; then
                 info "Waiting 30 seconds before starting next node..."

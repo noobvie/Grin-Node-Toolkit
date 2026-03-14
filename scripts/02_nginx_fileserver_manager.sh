@@ -761,14 +761,15 @@ create_files_directory() {
     
     # Set appropriate permissions
     chown -R www-data:www-data "$FILES_DIR"
-    chmod -R 755 "$FILES_DIR"
-    
+    chmod 755 "$FILES_DIR"
+
     # Create .htaccess file for directory indexing
     cat > "$FILES_DIR/.htaccess" << 'EOF'
 Options +Indexes
 EOF
-    
+
     chown www-data:www-data "$FILES_DIR/.htaccess"
+    chmod 644 "$FILES_DIR/.htaccess"
     print_info "Created .htaccess file with directory indexing enabled"
 }
 

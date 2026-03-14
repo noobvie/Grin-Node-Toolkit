@@ -102,7 +102,7 @@ Grin Node Toolkit
 │   │   ├── 4) Remove nginx proxy         (testnet)
 │   │   └── 0) Back
 │   ├── 5) Grin Wallet Service           → 05_grin_wallet_service.sh
-│   │   ├── 1) Download & install grin-wallet  (choose mainnet → /grinwalletmain | testnet → /grinwallettest)
+│   │   ├── 1) Download & install grin-wallet  (mainnet → /opt/grin/wallet/mainnet | testnet → /opt/grin/wallet/testnet)
 │   │   ├── 2) Initialize wallet               (grin-wallet init — runs in tmux for password prompt)
 │   │   ├── 3) Start wallet listener           (grin-wallet listen, tmux)
 │   │   ├── 4) Enable Wallet Foreign API       (port 3415)
@@ -236,7 +236,7 @@ Manages the Stratum Mining server for Grin nodes — setup, configuration, publi
 
 ### 5. Grin Wallet Service — `05_grin_wallet_service.sh`
 
-- **Download & init** — installs `grin-wallet` binary to `/grinwalletmain` or `/grinwallettest`; runs `grin-wallet init` in tmux (proper TTY for password prompt); auto-patches `check_node_api_http_addr` in `grin-wallet.toml`
+- **Download & init** — installs `grin-wallet` binary to `/opt/grin/wallet/mainnet` or `/opt/grin/wallet/testnet`; runs `grin-wallet init` in tmux (proper TTY for password prompt); auto-patches `check_node_api_http_addr` in `grin-wallet.toml`
 - **Listen** — starts `grin-wallet listen` in a named tmux session; auto-detects running node
 - **Publish** — toggles `owner_api_include_foreign`, configures firewall (port 3415), optional nginx reverse proxy with SSL
 
@@ -387,20 +387,20 @@ grin-node-toolkit/
 
 The setup script creates a dedicated directory per node based on its type:
 
-| Network | Mode   | Directory        |
-|---------|--------|------------------|
-| Mainnet | Full   | `/grinfullmain`  |
-| Mainnet | Pruned | `/grinprunemain` |
-| Testnet | Pruned | `/grinprunetest` |
+| Network | Mode   | Directory                          |
+|---------|--------|------------------------------------|
+| Mainnet | Full   | `/opt/grin/node/mainnet-full`      |
+| Mainnet | Pruned | `/opt/grin/node/mainnet-prune`     |
+| Testnet | Pruned | `/opt/grin/node/testnet-prune`     |
 
 > Full archive mode on testnet is blocked — testnet chain data is too large for a practical full archive setup.
 
 The wallet service uses separate directories per network:
 
-| Network | Directory          | Wallet config                           |
-|---------|--------------------|-----------------------------------------|
-| Mainnet | `/grinwalletmain`  | `/grinwalletmain/grin-wallet.toml`      |
-| Testnet | `/grinwallettest`  | `/grinwallettest/grin-wallet.toml`      |
+| Network | Directory                   | Wallet config                                        |
+|---------|-----------------------------|------------------------------------------------------|
+| Mainnet | `/opt/grin/wallet/mainnet`  | `/opt/grin/wallet/mainnet/grin-wallet.toml`          |
+| Testnet | `/opt/grin/wallet/testnet`  | `/opt/grin/wallet/testnet/grin-wallet.toml`          |
 
 ---
 

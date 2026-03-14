@@ -267,11 +267,12 @@ step_remove_install_dirs() {
 
     # Known locations script 01 creates
     local -a candidates=(
-        "/grinwallettest"
-        "/grinwalletmain"
-        "/grinprunemain"
-        "/grinprunetest"
-        "/grinfullmain"
+        "/opt/grin/wallet/testnet"
+        "/opt/grin/wallet/mainnet"
+        "/opt/grin/node/mainnet-prune"
+        "/opt/grin/node/testnet-prune"
+        "/opt/grin/node/mainnet-full"
+        "/opt/grin"
         "/grin"
         "/grin-wallet"
         "/usr/local/bin/grin"

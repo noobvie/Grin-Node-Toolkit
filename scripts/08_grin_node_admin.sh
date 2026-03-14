@@ -12,6 +12,7 @@
 #   8.7  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs
 #   8.8  Self-Update               — download latest from GitHub
 #   8.9  Backup                    — coming soon
+#   8.10 Filesystem Standardization Wizard — relocate dirs, create grin user, patch configs
 #   DEL  Full Grin Cleanup         — 08del_clean_all_grin_things.sh
 # =============================================================================
 
@@ -19,6 +20,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_DIR="$SCRIPT_DIR/../conf"
+WALLETS_CONF="$CONF_DIR/grin_wallets_location.conf"
 
 # ─── GitHub self-update ───────────────────────────────────────────────────────
 # Official public repository. A fork slug saved in conf/github_repo.conf
@@ -968,6 +970,490 @@ menu_full_cleanup() {
 }
 
 # =============================================================================
+# 8.10  Filesystem Standardization Wizard
+# -----------------------------------------------------------------------------
+# Interactive wizard that:
+#   1. Asks where each Grin component currently lives (pre-fills from conf)
+#   2. Asks where the new base directory should be (default: /opt/grin)
+#   3. Creates the grin:grin system user
+#   4. Stops running node/wallet tmux sessions
+#   5. mv's each directory (no extra disk space needed — same filesystem)
+#   6. Patches grin_instances_location.conf, grin-server.toml (db_root, log_file_path), crontab
+#   7. Sets chown grin:grin + chmod 700 on wallet dirs
+#
+# New layout under <base>:
+#   node/mainnet-full    node/mainnet-prune    node/testnet-prune
+#   wallet/mainnet       wallet/testnet
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# _migrate_stop_grin — gracefully stop all running Grin nodes before migration.
+# Sends SIGTERM, waits up to 30 s for each process to exit, then SIGKILL if needed.
+# Kills all grin_* and grin-wallet-* tmux sessions, then does a final pgrep check.
+# -----------------------------------------------------------------------------
+_migrate_stop_grin() {
+    local stop_timeout=30
+    info "Gracefully stopping Grin nodes..."
+
+    for port in 3414 13414; do
+        local pid
+        pid=$(ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+        [[ -z "$pid" ]] && continue
+        info "PID $pid on port $port — sending SIGTERM..."
+        kill -TERM "$pid" 2>/dev/null || true
+        local count=0
+        while ps -p "$pid" >/dev/null 2>&1 && [[ $count -lt $stop_timeout ]]; do
+            sleep 2; count=$(( count + 2 ))
+            [[ $(( count % 10 )) -eq 0 ]] && info "Waiting for Grin to stop... (${count}s)"
+        done
+        if ps -p "$pid" >/dev/null 2>&1; then
+            warn "PID $pid still running after ${stop_timeout}s — sending SIGKILL..."
+            kill -KILL "$pid" 2>/dev/null || true
+            sleep 2
+        fi
+        success "Port $port process stopped."
+    done
+
+    # Kill all grin tmux sessions (nodes + wallets)
+    local _sess
+    while IFS= read -r _sess; do
+        tmux kill-session -t "$_sess" 2>/dev/null && info "Tmux session '$_sess' closed." || true
+    done < <(tmux ls -F '#{session_name}' 2>/dev/null | grep -E '^(grin_|grin-wallet-)' || true)
+
+    # Final process verification
+    local _still
+    _still=$(pgrep -a -f '[g]rin server run' 2>/dev/null || true)
+    if [[ -n "$_still" ]]; then
+        warn "Some Grin processes still detected after stop — proceeding anyway:"
+        while IFS= read -r _line; do echo -e "  ${YELLOW}→${RESET} $_line"; done <<< "$_still"
+    else
+        success "All Grin processes confirmed stopped."
+    fi
+}
+
+migrate_filesystem() {
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  10  Filesystem Standardization Wizard${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  Moves Grin node and wallet directories to a standard location,"
+    echo -e "  creates the ${BOLD}grin${RESET} service user, and patches all configs."
+    echo ""
+    echo -e "  ${YELLOW}Requirements:${RESET}"
+    echo -e "    • Run as root"
+    echo -e "    • Source and destination must be on the ${BOLD}same filesystem${RESET}  (uses mv)"
+    echo -e "    • All Grin processes will be stopped during migration"
+    echo -e "    • Type ${BOLD}-${RESET} to skip a pre-detected component"
+    echo ""
+
+    if [[ $EUID -ne 0 ]]; then
+        error "Must be run as root."; pause; return
+    fi
+
+    # ── Step 1: Destination base ───────────────────────────────────────────────
+    echo -e "${BOLD}── Step 1/3: Destination ──────────────────────────────────────────${RESET}"
+    echo -e "  New layout:"
+    echo -e "    ${DIM}<base>/node/mainnet-full   mainnet-prune   testnet-prune${RESET}"
+    echo -e "    ${DIM}<base>/wallet/mainnet   testnet${RESET}"
+    echo ""
+    echo -ne "  Base directory [/opt/grin]: "
+    read -r dest_base || true
+    dest_base="${dest_base:-/opt/grin}"
+    dest_base="${dest_base%/}"
+    local dest_node="$dest_base/node"
+    local dest_wallet="$dest_base/wallet"
+    echo ""
+
+    # ── Step 2: Source locations ───────────────────────────────────────────────
+    echo -e "${BOLD}── Step 2/3: Current Locations ────────────────────────────────────${RESET}"
+    echo -e "  ${DIM}Press Enter to accept default. Type - to skip a component.${RESET}"
+    echo ""
+
+    # Pre-fill nodes from grin_instances_location.conf
+    # Source in a subshell so variables are extracted reliably without polluting current env
+    local inst_conf="$CONF_DIR/grin_instances_location.conf"
+    local pre_fullmain="" pre_prunemain="" pre_prunetest=""
+    if [[ -f "$inst_conf" ]]; then
+        info "Reading instances conf: $inst_conf"
+        pre_fullmain=$(  (source "$inst_conf" 2>/dev/null; echo "${FULLMAIN_GRIN_DIR:-}")  2>/dev/null || true)
+        pre_prunemain=$( (source "$inst_conf" 2>/dev/null; echo "${PRUNEMAIN_GRIN_DIR:-}") 2>/dev/null || true)
+        pre_prunetest=$(  (source "$inst_conf" 2>/dev/null; echo "${PRUNETEST_GRIN_DIR:-}") 2>/dev/null || true)
+    else
+        warn "Instances conf not found: $inst_conf"
+        warn "Node paths not pre-filled — enter them manually below."
+    fi
+
+    # Pre-fill wallets from known legacy defaults (not in instances conf)
+    local pre_walletmain="" pre_wallettest=""
+    [[ -d "/opt/grin/wallet/mainnet" ]] && pre_walletmain="/opt/grin/wallet/mainnet"
+    [[ -d "/opt/grin/wallet/testnet" ]] && pre_wallettest="/opt/grin/wallet/testnet"
+
+    local src_fullmain="" src_prunemain="" src_prunetest="" src_walletmain="" src_wallettest=""
+    local _shown
+
+    _shown="${pre_fullmain:-(not detected)}";   echo -ne "  Mainnet full node  [$_shown]: "; read -r src_fullmain  || true
+    [[ -z "$src_fullmain"  ]] && src_fullmain="$pre_fullmain";   [[ "$src_fullmain"  == "-" ]] && src_fullmain=""
+    _shown="${pre_prunemain:-(not detected)}";  echo -ne "  Mainnet prune node [$_shown]: "; read -r src_prunemain || true
+    [[ -z "$src_prunemain" ]] && src_prunemain="$pre_prunemain"; [[ "$src_prunemain" == "-" ]] && src_prunemain=""
+    _shown="${pre_prunetest:-(not detected)}";  echo -ne "  Testnet prune node [$_shown]: "; read -r src_prunetest || true
+    [[ -z "$src_prunetest" ]] && src_prunetest="$pre_prunetest"; [[ "$src_prunetest" == "-" ]] && src_prunetest=""
+    _shown="${pre_walletmain:-(not detected)}"; echo -ne "  Mainnet wallet     [$_shown]: "; read -r src_walletmain || true
+    [[ -z "$src_walletmain" ]] && src_walletmain="$pre_walletmain"; [[ "$src_walletmain" == "-" ]] && src_walletmain=""
+    _shown="${pre_wallettest:-(not detected)}"; echo -ne "  Testnet wallet     [$_shown]: "; read -r src_wallettest || true
+    [[ -z "$src_wallettest" ]] && src_wallettest="$pre_wallettest"; [[ "$src_wallettest" == "-" ]] && src_wallettest=""
+    echo ""
+
+    # ── Build move plan (parallel indexed arrays) ──────────────────────────────
+    local -a move_srcs=() move_dsts=() move_types=()
+    local -a _all_srcs=("$src_fullmain"  "$src_prunemain"  "$src_prunetest"  "$src_walletmain"  "$src_wallettest")
+    local -a _all_dsts=("$dest_node/mainnet-full" "$dest_node/mainnet-prune" "$dest_node/testnet-prune" "$dest_wallet/mainnet" "$dest_wallet/testnet")
+    local -a _all_types=("node" "node" "node" "wallet" "wallet")
+    local _i
+    for _i in "${!_all_srcs[@]}"; do
+        local _s="${_all_srcs[$_i]}" _d="${_all_dsts[$_i]}" _t="${_all_types[$_i]}"
+        [[ -z "$_s" ]] && continue
+        if [[ ! -d "$_s" ]]; then
+            warn "Source not found, skipping: $_s"; continue
+        fi
+        if [[ "$_s" == "$_d" ]]; then
+            info "Already at target, skipping: $_s"; continue
+        fi
+        move_srcs+=("$_s"); move_dsts+=("$_d"); move_types+=("$_t")
+    done
+
+    if [[ ${#move_srcs[@]} -eq 0 ]]; then
+        if [[ ! -s "$inst_conf" ]]; then
+            # Directories already in place but conf is empty — scan dest and rebuild.
+            warn "Nothing to migrate — conf is empty. Scanning $dest_base for installed nodes..."
+            echo ""
+            local -a _scan_dirs=( "$dest_base/node/mainnet-prune" "$dest_base/node/mainnet-full" "$dest_base/node/testnet-prune" )
+            declare -A _scan_keys=( [mainnet-prune]="PRUNEMAIN" [mainnet-full]="FULLMAIN" [testnet-prune]="PRUNETEST" )
+            local _scan_found=0
+            mkdir -p "$CONF_DIR"
+            touch "$inst_conf"
+            for _sd in "${_scan_dirs[@]}"; do
+                [[ -x "$_sd/grin" ]] || continue
+                local _sk="${_scan_keys[$(basename "$_sd")]:-}"
+                [[ -z "$_sk" ]] && continue
+                cat >> "$inst_conf" << __EOF__
+
+${_sk}_GRIN_DIR="$_sd"
+${_sk}_BINARY="$_sd/grin"
+${_sk}_TOML="$_sd/grin-server.toml"
+${_sk}_CHAIN_DATA="$_sd/chain_data"
+__EOF__
+                success "Conf entry: $_sk → $_sd"
+                _scan_found=$(( _scan_found + 1 ))
+            done
+            chmod 600 "$inst_conf" 2>/dev/null || true
+            echo ""
+            if [[ $_scan_found -gt 0 ]]; then
+                success "grin_instances_location.conf rebuilt with $_scan_found node(s)."
+            else
+                warn "No grin binaries found in $dest_base — nothing rebuilt."
+                info  "Run Script 01 to install a node, or re-run option 10 with the correct source path."
+            fi
+
+            # Also scan wallet dirs
+            local -a _wscan_dirs=( "$dest_base/wallet/mainnet" "$dest_base/wallet/testnet" )
+            declare -A _wscan_keys=( [mainnet]="MAINNET" [testnet]="TESTNET" )
+            touch "$WALLETS_CONF"
+            for _wd in "${_wscan_dirs[@]}"; do
+                [[ -x "$_wd/grin-wallet" ]] || continue
+                local _wk="${_wscan_keys[$(basename "$_wd")]:-}"
+                [[ -z "$_wk" ]] && continue
+                sed -i "/^${_wk}_WALLET_/d" "$WALLETS_CONF" 2>/dev/null || true
+                cat >> "$WALLETS_CONF" << __EOF__
+
+${_wk}_WALLET_DIR="$_wd"
+${_wk}_WALLET_BIN="$_wd/grin-wallet"
+${_wk}_WALLET_TOML="$_wd/grin-wallet.toml"
+${_wk}_WALLET_DATA="$_wd/wallet_data"
+__EOF__
+                success "Wallet conf entry: $_wk → $_wd"
+            done
+            chmod 600 "$WALLETS_CONF" 2>/dev/null || true
+        else
+            info "All directories already at target — nothing to migrate."
+        fi
+        pause; return
+    fi
+
+    # ── Same-filesystem guard ──────────────────────────────────────────────────
+    local _dest_parent; _dest_parent="$(dirname "$dest_base")"
+    [[ ! -d "$_dest_parent" ]] && _dest_parent="/"
+    local _dest_dev; _dest_dev="$(stat -c '%d' "$_dest_parent" 2>/dev/null || echo "0")"
+    for _i in "${!move_srcs[@]}"; do
+        local _src_dev; _src_dev="$(stat -c '%d' "${move_srcs[$_i]}" 2>/dev/null || echo "1")"
+        if [[ "$_src_dev" != "$_dest_dev" ]]; then
+            error "Cross-filesystem move detected: ${move_srcs[$_i]} → ${move_dsts[$_i]}"
+            error "Source and destination are on different filesystems."
+            warn  "Mount the destination on the same filesystem as the source, then retry."
+            pause; return
+        fi
+    done
+
+    # ── Step 3: Plan + confirm ─────────────────────────────────────────────────
+    echo -e "${BOLD}── Step 3/3: Migration Plan ───────────────────────────────────────${RESET}"
+    echo ""
+    echo -e "  ${BOLD}Service user  :${RESET}  grin:grin  (system user, no login shell)"
+    echo ""
+    echo -e "  ${BOLD}Moves:${RESET}"
+    for _i in "${!move_srcs[@]}"; do
+        printf "    ${CYAN}%-38s${RESET} → ${GREEN}%s${RESET}\n" "${move_srcs[$_i]}" "${move_dsts[$_i]}"
+    done
+    echo ""
+    echo -e "  ${BOLD}Patches:${RESET}  grin_instances_location.conf · grin_wallets_location.conf · grin-server.toml (db_root, log_file_path) · crontab"
+    echo -e "  ${BOLD}Perms:${RESET}    chown -R grin:grin $dest_base · chmod 700 wallet dirs"
+    echo ""
+    echo -ne "  Proceed? [y/N]: "
+    read -r _confirm || true
+    [[ "${_confirm,,}" != "y" ]] && { info "Migration cancelled."; pause; return; }
+    echo ""
+
+    # ── Phase 1: Create grin:grin system user ─────────────────────────────────
+    if id grin &>/dev/null; then
+        info "System user 'grin' already exists — skipping."
+    else
+        useradd -r -s /usr/sbin/nologin -d "$dest_base" -M grin \
+            && success "System user grin:grin created." \
+            || { error "Failed to create user grin."; pause; return; }
+    fi
+
+    # ── Phase 2: Create destination structure ─────────────────────────────────
+    mkdir -p "$dest_node" "$dest_wallet"
+
+    # ── Phase 3: Stop all Grin processes (graceful) ───────────────────────────
+    _migrate_stop_grin
+
+    # ── Phase 4: Move directories ──────────────────────────────────────────────
+    local moved=0
+    for _i in "${!move_srcs[@]}"; do
+        local _src="${move_srcs[$_i]}" _dst="${move_dsts[$_i]}"
+        mkdir -p "$(dirname "$_dst")"
+        info "Moving: $_src → $_dst"
+        if mv "$_src" "$_dst"; then
+            success "Moved: $_dst"
+            moved=$((moved + 1))
+        else
+            error "Failed to move $_src → $_dst — stopping migration."
+            warn  "Components moved so far: $moved. Manual cleanup may be required."
+            pause; return
+        fi
+    done
+
+    # ── Phase 5: Rebuild grin_instances_location.conf ─────────────────────────
+    # Always write fresh entries — sed-based patching silently fails when the file
+    # was empty (cleared by a prior kill) or entries were missing.
+    info "Updating grin_instances_location.conf..."
+    mkdir -p "$CONF_DIR"
+    touch "$inst_conf"
+    for _i in "${!move_srcs[@]}"; do
+        [[ "${move_types[$_i]}" == "node" ]] || continue
+        local _bname; _bname=$(basename "${move_dsts[$_i]}")
+        local _key
+        case "$_bname" in
+            mainnet-prune) _key="PRUNEMAIN" ;;
+            mainnet-full)  _key="FULLMAIN"  ;;
+            testnet-prune) _key="PRUNETEST" ;;
+            *) warn "Unknown node dir name '$_bname' — skipping conf entry."; continue ;;
+        esac
+        # Remove stale entries; also remove sibling mainnet key if applicable
+        sed -i "/^${_key}_/d" "$inst_conf" 2>/dev/null || true
+        [[ "$_key" == "FULLMAIN"  ]] && { sed -i '/^PRUNEMAIN_/d' "$inst_conf" 2>/dev/null || true; }
+        [[ "$_key" == "PRUNEMAIN" ]] && { sed -i '/^FULLMAIN_/d'  "$inst_conf" 2>/dev/null || true; }
+        local _ndst="${move_dsts[$_i]}"
+        cat >> "$inst_conf" << __EOF__
+
+${_key}_GRIN_DIR="$_ndst"
+${_key}_BINARY="$_ndst/grin"
+${_key}_TOML="$_ndst/grin-server.toml"
+${_key}_CHAIN_DATA="$_ndst/chain_data"
+__EOF__
+        info "Conf entry: $_key → $_ndst"
+    done
+    chmod 600 "$inst_conf" 2>/dev/null || true
+    success "grin_instances_location.conf updated."
+
+    # ── Phase 5b: Update grin_wallets_location.conf ────────────────────────────
+    touch "$WALLETS_CONF"
+    for _i in "${!move_srcs[@]}"; do
+        [[ "${move_types[$_i]}" == "wallet" ]] || continue
+        local _wbname; _wbname=$(basename "${move_dsts[$_i]}")
+        local _wkey
+        case "$_wbname" in
+            mainnet) _wkey="MAINNET" ;;
+            testnet) _wkey="TESTNET" ;;
+            *) warn "Unknown wallet dir name '$_wbname' — skipping wallet conf entry."; continue ;;
+        esac
+        sed -i "/^${_wkey}_WALLET_/d" "$WALLETS_CONF" 2>/dev/null || true
+        local _wdst="${move_dsts[$_i]}"
+        cat >> "$WALLETS_CONF" << __EOF__
+
+${_wkey}_WALLET_DIR="$_wdst"
+${_wkey}_WALLET_BIN="$_wdst/grin-wallet"
+${_wkey}_WALLET_TOML="$_wdst/grin-wallet.toml"
+${_wkey}_WALLET_DATA="$_wdst/wallet_data"
+__EOF__
+        info "Wallet conf entry: $_wkey → $_wdst"
+    done
+    chmod 600 "$WALLETS_CONF" 2>/dev/null || true
+
+    # Double-check: if the conf is still empty (e.g. no nodes were in move_srcs),
+    # scan the standard locations and write any entries we can find.
+    if [[ ! -s "$inst_conf" ]]; then
+        warn "Conf file is empty — scanning standard locations as fallback..."
+        local -a _scan_dirs=( "/opt/grin/node/mainnet-prune" "/opt/grin/node/mainnet-full" "/opt/grin/node/testnet-prune" )
+        declare -A _scan_keys=( [mainnet-prune]="PRUNEMAIN" [mainnet-full]="FULLMAIN" [testnet-prune]="PRUNETEST" )
+        for _sd in "${_scan_dirs[@]}"; do
+            [[ -x "$_sd/grin" ]] || continue
+            local _sk="${_scan_keys[$(basename "$_sd")]:-}"
+            [[ -z "$_sk" ]] && continue
+            cat >> "$inst_conf" << __EOF__
+
+${_sk}_GRIN_DIR="$_sd"
+${_sk}_BINARY="$_sd/grin"
+${_sk}_TOML="$_sd/grin-server.toml"
+${_sk}_CHAIN_DATA="$_sd/chain_data"
+__EOF__
+            info "Conf entry (scan fallback): $_sk → $_sd"
+        done
+        chmod 600 "$inst_conf" 2>/dev/null || true
+    fi
+
+    # Also scan wallet dirs if wallets_conf is empty
+    if [[ ! -s "$WALLETS_CONF" ]]; then
+        local -a _wfb_dirs=( "$dest_base/wallet/mainnet" "$dest_base/wallet/testnet" )
+        declare -A _wfb_keys=( [mainnet]="MAINNET" [testnet]="TESTNET" )
+        touch "$WALLETS_CONF"
+        for _wd in "${_wfb_dirs[@]}"; do
+            [[ -x "$_wd/grin-wallet" ]] || continue
+            local _wk="${_wfb_keys[$(basename "$_wd")]:-}"
+            [[ -z "$_wk" ]] && continue
+            cat >> "$WALLETS_CONF" << __EOF__
+
+${_wk}_WALLET_DIR="$_wd"
+${_wk}_WALLET_BIN="$_wd/grin-wallet"
+${_wk}_WALLET_TOML="$_wd/grin-wallet.toml"
+${_wk}_WALLET_DATA="$_wd/wallet_data"
+__EOF__
+            info "Wallet conf entry (scan fallback): $_wk → $_wd"
+        done
+        chmod 600 "$WALLETS_CONF" 2>/dev/null || true
+    fi
+
+    # ── Phase 6: Patch grin-server.toml (db_root + log_file_path) ────────────
+    for _i in "${!move_srcs[@]}"; do
+        [[ "${move_types[$_i]}" == "node" ]] || continue
+        local _toml="${move_dsts[$_i]}/grin-server.toml"
+        if [[ -f "$_toml" ]]; then
+            info "Patching grin-server.toml in $(basename "${move_dsts[$_i]}")..."
+            sed -i "s|db_root\s*=\s*\".*\"|db_root = \"${move_dsts[$_i]}/chain_data\"|" "$_toml" 2>/dev/null || true
+            sed -i "s|log_file_path\s*=\s*\".*\"|log_file_path = \"${move_dsts[$_i]}/grin-server.log\"|" "$_toml" 2>/dev/null || true
+            success "db_root and log_file_path patched."
+        fi
+    done
+
+    # ── Phase 7: Update crontab ────────────────────────────────────────────────
+    local _cron_orig; _cron_orig="$(crontab -l 2>/dev/null || true)"
+    if [[ -n "$_cron_orig" ]]; then
+        local _cron_new="$_cron_orig" _cron_changed=0
+        for _i in "${!move_srcs[@]}"; do
+            if echo "$_cron_new" | grep -qF "${move_srcs[$_i]}" 2>/dev/null; then
+                _cron_new="${_cron_new//${move_srcs[$_i]}/${move_dsts[$_i]}}"
+                _cron_changed=1
+            fi
+        done
+        if [[ $_cron_changed -eq 1 ]]; then
+            echo "$_cron_new" | crontab -
+            success "Crontab updated."
+        else
+            info "No cron entries reference old paths — nothing to update."
+        fi
+    fi
+
+    # ── Phase 8: chown + chmod ─────────────────────────────────────────────────
+    info "Setting ownership: chown -R grin:grin $dest_base"
+    chown -R grin:grin "$dest_base"
+    for _i in "${!move_srcs[@]}"; do
+        [[ "${move_types[$_i]}" == "wallet" ]] || continue
+        local _wdir="${move_dsts[$_i]}"
+        chmod 700 "$_wdir" 2>/dev/null || true
+        [[ -d "$_wdir/wallet_data" ]] && chmod 700 "$_wdir/wallet_data" || true
+        for _secret in "$_wdir/wallet_data/.api_secret" "$_wdir/wallet_data/.owner_api_secret"; do
+            [[ -f "$_secret" ]] && chmod 600 "$_secret" || true
+        done
+    done
+    success "Permissions set."
+
+    # ── Phase 9: Restart nodes in new location ─────────────────────────────────
+    local -a _node_dsts=()
+    for _i in "${!move_types[@]}"; do
+        [[ "${move_types[$_i]}" == "node" ]] && _node_dsts+=("${move_dsts[$_i]}")
+    done
+
+    if [[ ${#_node_dsts[@]} -gt 0 ]]; then
+        info "Restarting Grin node(s) in new location..."
+        local _nstarted=0
+        for _ndst in "${_node_dsts[@]}"; do
+            if [[ ! -x "$_ndst/grin" ]]; then
+                warn "No grin binary at $_ndst — skipping auto-start."; continue
+            fi
+
+            # Tolerant re-patch: Phase 6 sed may have silently failed on whitespace variants.
+            local _toml="$_ndst/grin-server.toml"
+            if [[ -f "$_toml" ]]; then
+                sed -i "s|db_root\s*=\s*\".*\"|db_root = \"$_ndst/chain_data\"|" "$_toml" 2>/dev/null || true
+                sed -i "s|log_file_path\s*=\s*\".*\"|log_file_path = \"$_ndst/grin-server.log\"|" "$_toml" 2>/dev/null || true
+                info "db_root and log_file_path verified for $_ndst"
+            fi
+
+            # Remove stale LMDB lock file left by SIGKILL — prevents grin from starting.
+            find "$_ndst/chain_data" -maxdepth 3 -name "lock.mdb" -delete 2>/dev/null || true
+
+            # Kill any lingering session with the same name before creating a new one.
+            local _nsess="grin_$(basename "$_ndst")"
+            if tmux has-session -t "$_nsess" 2>/dev/null; then
+                tmux kill-session -t "$_nsess" 2>/dev/null || true
+            fi
+
+            chown -R grin:grin "$_ndst" 2>/dev/null || true
+            if id grin &>/dev/null; then
+                tmux new-session -d -s "$_nsess" -c "$_ndst" \
+                    "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$_ndst\" && ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+                    || warn "Failed to start tmux session $_nsess."
+            else
+                tmux new-session -d -s "$_nsess" -c "$_ndst" \
+                    "echo 'Starting Grin node...'; cd \"$_ndst\" && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+                    || warn "Failed to start tmux session $_nsess."
+            fi
+            success "Node started in tmux session: $_nsess"
+            info "  Attach : tmux attach -t $_nsess"
+            _nstarted=$(( _nstarted + 1 ))
+            if [[ $_nstarted -lt ${#_node_dsts[@]} ]]; then
+                info "Waiting 30 seconds before starting next node..."
+                sleep 30
+            fi
+        done
+    fi
+
+    # ── Summary ────────────────────────────────────────────────────────────────
+    echo ""
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${GREEN}  Done — $moved component(s) moved to $dest_base${RESET}"
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  ${BOLD}Next steps:${RESET}"
+    echo -e "  ${GREEN}1${RESET})  Update toolkit default path constants to use $dest_base"
+    echo -e "       Pull the latest toolkit version after the code update is released."
+    echo -e "  ${GREEN}2${RESET})  Restart wallet (if applicable): Script 05 → Start wallet listener"
+    echo ""
+    log "[migrate_filesystem] moved=$moved dest=$dest_base"
+    pause
+}
+
+# =============================================================================
 # Main menu
 # =============================================================================
 show_menu() {
@@ -990,6 +1476,7 @@ show_menu() {
     echo -e "  ${YELLOW}7${RESET})   Disk Cleanup              ${DIM}tar archives + OS temp/logs + nginx dirs${RESET}"
     echo -e "  ${YELLOW}8${RESET})   Self-Update               ${DIM}pull latest changes from GitHub${RESET}"
     echo -e "  ${YELLOW}9${RESET})   Backup                    ${DIM}coming soon${RESET}"
+    echo -e "  ${YELLOW}10${RESET})  Filesystem Standardization ${DIM}relocate dirs, create grin user, patch configs${RESET}"
     echo ""
     echo -e "${BOLD}  Danger Zone${RESET}"
     echo -e "  ${RED}DEL${RESET}) Full Grin Cleanup         ${DIM}remove EVERYTHING about Grin now!${RESET}"
@@ -997,7 +1484,7 @@ show_menu() {
     echo -e "  ${DIM}0${RESET})   Return to main menu"
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-9, DEL]: ${RESET}"
+    echo -ne "${BOLD}Select [0-10, DEL]: ${RESET}"
 }
 
 main() {
@@ -1015,6 +1502,7 @@ main() {
             "7")   clean_maintenance        ;;
             "8")   self_update              ;;
             "9")   backup                   ;;
+            "10")  migrate_filesystem       ;;
             "del") menu_full_cleanup        ;;
             "0")   break                    ;;
             *)     warn "Invalid option." ; sleep 1 ;;

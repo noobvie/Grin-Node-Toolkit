@@ -673,7 +673,7 @@ setup_derived_variables() {
     mkdir -p "$LOG_DIR"
     LOG_FILE="$LOG_DIR/share_nginx_${NETWORK_TYPE}_${NODE_TYPE}_$(date -u '+%Y%m%d_%H%M%S').log"
     # Session name matches script 01 convention: grin_<basename of GRIN_DIR>
-    # e.g. /grinprunemain → grin_grinprunemain
+    # e.g. /opt/grin/node/mainnet-prune → grin_mainnet-prune
     TMUX_SESSION="grin_$(basename "$GRIN_DIR")"
 
     local web_dir_var="LOCAL_WEB_DIR_${NETWORK_TYPE^^}_${NODE_TYPE^^}"
@@ -1204,9 +1204,9 @@ try_start_from_known_dir() {
     if [[ -z "$found_binary" ]]; then
         local fallback_dirs=()
         if [[ "$network" == "testnet" ]]; then
-            fallback_dirs=("/grinprunetest")
+            fallback_dirs=("/opt/grin/node/testnet-prune")
         else
-            fallback_dirs=("/grinfullmain" "/grinprunemain")
+            fallback_dirs=("/opt/grin/node/mainnet-full" "/opt/grin/node/mainnet-prune")
         fi
         for d in "${fallback_dirs[@]}"; do
             if [[ -x "$d/grin" ]]; then
@@ -1432,9 +1432,9 @@ run_cron_ssh() {
 
 # Default directories to scan (chain_data inside each toolkit node dir)
 CLEAN_TXHASHSET_DIRS=(
-    "/grinprunemain/chain_data"
-    "/grinfullmain/chain_data"
-    "/grinprunetest/chain_data"
+    "/opt/grin/node/mainnet-prune/chain_data"
+    "/opt/grin/node/mainnet-full/chain_data"
+    "/opt/grin/node/testnet-prune/chain_data"
 )
 
 # Entry point for --cron-clean

@@ -25,9 +25,9 @@
 #   Note: Full archive mode is NOT available for testnet.
 #
 # NODE DIRECTORIES  (default paths — user may choose a custom location at Step 5)
-#   /grinprunemain   — pruned,       mainnet  (default)
-#   /grinfullmain    — full archive, mainnet  (default)
-#   /grinprunetest   — pruned,       testnet  (default)
+#   /opt/grin/node/mainnet-prune  — pruned,       mainnet  (default)
+#   /opt/grin/node/mainnet-full   — full archive, mainnet  (default)
+#   /opt/grin/node/testnet-prune  — pruned,       testnet  (default)
 #   The chosen path (default or custom) is saved to:
 #     conf/grin_instances_location.conf  (used by other toolkit scripts)
 #
@@ -48,7 +48,7 @@
 #              User chooses: 1) Mainnet  2) Testnet  3) Both
 #              When "Both" is selected, steps 4–14 run for mainnet, then repeat
 #              for testnet automatically. Each network gets its own node
-#              directory (/grinprunemain, /grinprunetest) with its own binary.
+#              directory (/opt/grin/node/mainnet-prune, /opt/grin/node/testnet-prune) with its own binary.
 #
 #   Step  4 — Archive Mode Selection  (once per network)
 #              User chooses: 1) Pruned  2) Full archive (mainnet only)
@@ -117,7 +117,7 @@
 #              reclaim disk space.
 #
 #   Step 13 — Start Node in Tmux
-#              Creates a named tmux session (e.g. grin_grinprunemain) and runs
+#              Creates a named tmux session (e.g. grin_mainnet-prune) and runs
 #              './grin server run' inside it. Kills any pre-existing session with
 #              the same name first. The window stays open after grin exits so
 #              the user can read any output.
@@ -405,6 +405,51 @@ update_binary_only() {
 #   Neither occupied           → check for stale/orphaned grin processes and ports,
 #                                offer to kill them before continuing
 # =============================================================================
+
+# -----------------------------------------------------------------------------
+# _start_installed_node — start already-installed Grin nodes from standard paths.
+# Starts mainnet first, then waits 30 s before starting testnet (if both present).
+# Returns 0 on success (caller should exit 0 after).
+# Returns 1 if no installed nodes found (caller should fall through to build wizard).
+# -----------------------------------------------------------------------------
+_start_installed_node() {
+    local -a found_dirs=() found_nets=()
+    local -a check_dirs=( "/opt/grin/node/mainnet-prune" "/opt/grin/node/mainnet-full" "/opt/grin/node/testnet-prune" )
+    local -a check_nets=( "mainnet"                       "mainnet"                     "testnet"                      )
+
+    for i in "${!check_dirs[@]}"; do
+        [[ -x "${check_dirs[$i]}/grin" ]] && {
+            found_dirs+=("${check_dirs[$i]}")
+            found_nets+=("${check_nets[$i]}")
+        }
+    done
+
+    if [[ ${#found_dirs[@]} -eq 0 ]]; then
+        return 1  # no installed nodes found — caller will fall through to build wizard
+    fi
+
+    # start each node; mainnet first, 30-second gap before testnet
+    local started=0
+    for i in "${!found_dirs[@]}"; do
+        GRIN_DIR="${found_dirs[$i]}"
+        NETWORK_TYPE="${found_nets[$i]}"
+        # Ensure log_file_path in toml is accessible by the grin user (may be stale after migration).
+        local _toml="$GRIN_DIR/grin-server.toml"
+        if [[ -f "$_toml" ]]; then
+            sed -i "s|log_file_path\s*=\s*\".*\"|log_file_path = \"$GRIN_DIR/grin-server.log\"|" "$_toml" 2>/dev/null || true
+        fi
+        info "Starting node: $GRIN_DIR ($NETWORK_TYPE)"
+        start_grin_tmux
+        started=$(( started + 1 ))
+        if [[ $(( i + 1 )) -lt ${#found_dirs[@]} ]]; then
+            info "Waiting 30 seconds before starting next instance..."
+            sleep 30
+        fi
+    done
+    success "$started node(s) started."
+    return 0
+}
+
 check_grin_running() {
     step_header "Step 1: Process & Port Check"
 
@@ -548,48 +593,59 @@ check_grin_running() {
     fi
 
     # ── No legitimate node running → check for stale/orphaned processes ───────
-    local found=0
-
-    local grin_procs
-    grin_procs=$(pgrep -a -f '[g]rin' 2>/dev/null \
-        | grep -v -E "(grin-node-toolkit|build_new_grin_node)" \
-        || true)
-    if [[ -n "$grin_procs" ]]; then
-        warn "Stale Grin processes detected:"
-        while IFS= read -r line; do echo -e "  ${YELLOW}→${RESET} $line"; done <<< "$grin_procs"
-        found=1
-    fi
-
     local -A PORT_NAMES=([3413]="API" [3414]="P2P mainnet" [13414]="P2P testnet" [3415]="Wallet Listener")
-    for port in 3413 3414 13414 3415; do
-        local result
-        result=$(ss -tlnp "sport = :$port" 2>/dev/null | tail -n +2 || true)
-        if [[ -n "$result" ]]; then
-            warn "Port $port (${PORT_NAMES[$port]}) is occupied:"
-            echo -e "  ${YELLOW}→${RESET} $result"
+    while true; do
+        local found=0
+
+        local grin_procs
+        grin_procs=$(pgrep -a -f '[g]rin server run' 2>/dev/null || true)
+        if [[ -n "$grin_procs" ]]; then
+            warn "Stale Grin processes detected:"
+            while IFS= read -r line; do echo -e "  ${YELLOW}→${RESET} $line"; done <<< "$grin_procs"
             found=1
         fi
-    done
 
-    if [[ $found -eq 1 ]]; then
-        echo ""
-        echo -e "  ${GREEN}y${RESET}) Kill all conflicting processes and continue"
-        echo -e "  ${YELLOW}c${RESET}) Continue anyway with warning only (if processes are unrelated to Grin)"
-        echo -e "  ${RED}n${RESET}) Abort  (resolve manually)"
-        echo -e "  ${DIM}0${RESET}) Return to main menu"
-        echo ""
-        echo -ne "${BOLD}${RED}Kill all and continue? [y/c/N/0]: ${RESET}"
-        read -r confirm || true
-        case "${confirm,,}" in
-            y) stop_grin_gracefully
-               [[ -f "$INSTANCES_CONF" ]] && { : > "$INSTANCES_CONF"; log "Conf cleared (stale-process kill)."; } ;;
-            c) warn "Continuing despite detected processes — ensure they are NOT Grin-related." ; echo "" ;;
-            0) exit 0 ;;
-            *) die "Aborted. Resolve the conflicts manually and re-run." ;;
-        esac
-    else
-        success "No Grin processes or port conflicts found."
-    fi
+        for port in 3413 3414 13414 3415; do
+            local result
+            result=$(ss -tlnp "sport = :$port" 2>/dev/null | tail -n +2 || true)
+            if [[ -n "$result" ]]; then
+                warn "Port $port (${PORT_NAMES[$port]}) is occupied:"
+                echo -e "  ${YELLOW}→${RESET} $result"
+                found=1
+            fi
+        done
+
+        if [[ $found -eq 1 ]]; then
+            echo ""
+            echo -e "  ${GREEN}k${RESET}) Kill all conflicting processes and continue"
+            echo -e "  ${YELLOW}c${RESET}) Continue anyway with warning only (if processes are unrelated to Grin)"
+            echo -e "  ${CYAN}s${RESET}) Start installed node (no rebuild)"
+            echo -e "  ${RED}n${RESET}) Abort  (resolve manually)"
+            echo -e "  ${DIM}0${RESET}) Return to main menu"
+            echo -e "  ${DIM}Enter${RESET}) Recheck"
+            echo ""
+            echo -ne "${BOLD}${RED}Choose [k/c/s/n/0]: ${RESET}"
+            read -r confirm || true
+            case "${confirm,,}" in
+                k) stop_grin_gracefully
+                   [[ -f "$INSTANCES_CONF" ]] && { : > "$INSTANCES_CONF"; log "Conf cleared (stale-process kill)."; }
+                   break ;;
+                c) warn "Continuing despite detected processes — ensure they are NOT Grin-related."; echo ""; break ;;
+                s) if _start_installed_node; then
+                       exit 0
+                   else
+                       warn "No installed nodes found — proceeding with new node setup."
+                       break
+                   fi ;;
+                0) exit 0 ;;
+                "") continue ;;
+                *) die "Aborted. Resolve the conflicts manually and re-run." ;;
+            esac
+        else
+            success "No Grin processes or port conflicts found."
+            break
+        fi
+    done
     log "[STEP 1] Complete. No restrictions."
 }
 
@@ -599,7 +655,7 @@ check_grin_running() {
 # Checks the script is run as root, then installs any missing packages via
 # apt-get: tar, openssl, libncurses5 (or libncurses6 on Ubuntu 24.04+),
 # tmux, jq, tor, curl, wget.
-# dnf (Rocky 10+): tar, openssl, ncurses-compat-libs, tmux, jq, tor, curl, wget.
+# dnf (Rocky/Alma 10+): epel-release (auto), tar, openssl, ncurses-compat-libs, tmux, jq, tor, curl, wget.
 # OS version check is handled upstream by the master script.
 # =============================================================================
 check_os_and_deps() {
@@ -611,9 +667,16 @@ check_os_and_deps() {
     os_id="$(grep '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || true)"
 
     if [[ "$os_id" == "rocky" || "$os_id" == "almalinux" ]]; then
-        # Rocky Linux 10+ — use dnf
+        # Rocky Linux / AlmaLinux 10+ — use dnf
         # ncurses-compat-libs fixes "no version information available" warnings
         # from the Grin binary at runtime. tar and tmux are not installed by default.
+        # tor is only available via EPEL — install epel-release first if missing.
+        if ! rpm -q epel-release &>/dev/null 2>&1; then
+            info "Installing EPEL repository (required for tor)..."
+            dnf install -y -q epel-release \
+                || die "Failed to install epel-release. Check internet connection."
+        fi
+
         local packages=(tar tmux curl wget jq tor openssl ncurses-compat-libs)
         local to_install=()
         for pkg in "${packages[@]}"; do
@@ -792,9 +855,10 @@ select_archive_mode() {
         *) die "Invalid archive mode '${arc_choice}'." ;;
     esac
 
-    # Disk space check — warn if / has less than the recommended minimum
+    # Disk space check — warn if /opt/grin has less than the recommended minimum
     local _free_kb _free_gb _min_gb
-    _free_kb=$(df / | awk 'NR==2 {print $4}')
+    _free_kb=$(df /opt/grin 2>/dev/null | awk 'NR==2{print $4}' \
+               || df / | awk 'NR==2{print $4}')
     _free_gb=$(awk "BEGIN {printf \"%.1f\", $_free_kb/1048576}")
     if [[ "$ARCHIVE_MODE" == "full" ]]; then
         _min_gb=25
@@ -802,7 +866,7 @@ select_archive_mode() {
         _min_gb=10
     fi
     echo ""
-    echo -e "  ${DIM}Free disk (/):${RESET}  ${BOLD}${_free_gb} GiB${RESET}"
+    echo -e "  ${DIM}Free disk (/opt/grin):${RESET}  ${BOLD}${_free_gb} GiB${RESET}"
     if awk "BEGIN {exit ($_free_gb >= $_min_gb) ? 0 : 1}"; then
         echo -e "  ${GREEN}✓${RESET}  Sufficient space for ${ARCHIVE_MODE} mode (min ~${_min_gb} GiB)."
     else
@@ -825,9 +889,9 @@ select_archive_mode() {
 # [5] CREATE NODE DIRECTORY
 # -----------------------------------------------------------------------------
 # Creates the node directory at / (root, not /root) using naming convention:
-#   /grinfullmain   — full archive, mainnet
-#   /grinprunemain  — pruned,       mainnet
-#   /grinprunetest  — pruned,       testnet
+#   /opt/grin/node/mainnet-full   — full archive, mainnet
+#   /opt/grin/node/mainnet-prune  — pruned,       mainnet
+#   /opt/grin/node/testnet-prune  — pruned,       testnet
 #
 # Flow (repeats until user confirms):
 #   1. User enters a path (Enter = default, 0 = return to menu).
@@ -851,7 +915,14 @@ create_node_dir() {
 
     [[ "$network" == "mainnet" ]] && net_short="main" || net_short="test"
     [[ "$mode"    == "full"    ]] && mode_short="full" || mode_short="prune"
-    local default_dir="/grin${mode_short}${net_short}"
+    local default_dir
+    if [[ "$mode" == "full" ]]; then
+        default_dir="/opt/grin/node/mainnet-full"
+    elif [[ "$network" == "mainnet" ]]; then
+        default_dir="/opt/grin/node/mainnet-prune"
+    else
+        default_dir="/opt/grin/node/testnet-prune"
+    fi
 
     # Minimum free space: pruned=10GB, full=25GB (in KB)
     local min_gb; [[ "$mode" == "full" ]] && min_gb=25 || min_gb=10
@@ -1492,23 +1563,23 @@ download_chain_data() {
     echo ""
     echo -e "${BOLD}  How do you want to get the chain data?${RESET}"
     echo ""
-    echo -e "  ${GREEN}1${RESET}) ${BOLD}On-the-fly extraction${RESET} ${DIM}(stream directly — no full download)${RESET}"
+    echo -e "  ${GREEN}1${RESET}) ${BOLD}On-the-fly extraction${RESET} ${DIM}(default — stream directly, no full download)${RESET}"
     echo -e "     ${DIM}Pipes the remote archive straight into tar without saving locally.${RESET}"
     echo -e "     ${DIM}cmd: wget -O - <url> | tar -xzvf -${RESET}"
     echo -e "     ${DIM}Saves temporary disk space and reduces total setup time.${RESET}"
     echo -e "     ${DIM}Auto-switches to the next source if the stream fails mid-transfer.${RESET}"
     echo -e "     ${DIM}Note: SHA256 checksum verification is skipped in this mode.${RESET}"
     echo ""
-    echo -e "  ${CYAN}2${RESET}) ${BOLD}Full download first${RESET} ${DIM}(default — more resilient on slow connections)${RESET}"
+    echo -e "  ${CYAN}2${RESET}) ${BOLD}Full download first${RESET} ${DIM}(more resilient on slow connections)${RESET}"
     echo -e "     ${DIM}Downloads .tar.gz to disk (wget -c, supports resume on interruption).${RESET}"
     echo -e "     ${DIM}Verifies SHA256 checksum before extracting.${RESET}"
     echo -e "     ${DIM}Auto-switches to the next source if download fails mid-transfer.${RESET}"
     echo ""
-    echo -ne "${BOLD}Choose [1/2] (default: 2): ${RESET}"
+    echo -ne "${BOLD}Choose [1/2] (default: 1): ${RESET}"
     local dl_choice
     read -r dl_choice || true
 
-    if [[ "${dl_choice:-2}" == "1" ]]; then
+    if [[ "${dl_choice:-1}" == "1" ]]; then
         STREAM_MODE=true
         info "On-the-fly extraction selected. Streaming will begin at Step 10."
         log "[STEP 9] On-the-fly mode. zone=$SELECTED_ZONE sources=(${READY_SOURCES[*]}) tar=$tar_name"
@@ -1719,7 +1790,7 @@ stream_extract_chain_data() {
 # =============================================================================
 # [13] START GRIN NODE IN A TMUX SESSION
 # -----------------------------------------------------------------------------
-# Creates a named tmux session: grin_<dirname>  (e.g. grin_grinprunemain).
+# Creates a named tmux session: grin_<dirname>  (e.g. grin_mainnet-prune).
 # If a session with that name already exists, it is killed first.
 # Runs './grin server run' inside the session so the node starts in TUI mode.
 # The session stays open after grin exits so the user can read any output.
@@ -1734,10 +1805,18 @@ start_grin_tmux() {
         tmux kill-session -t "$session" 2>/dev/null || true
     fi
 
-    # Start session; keep window open after grin exits so user can read output
-    tmux new-session -d -s "$session" -c "$GRIN_DIR" \
-        "echo 'Starting Grin node...'; cd $GRIN_DIR && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
-        || die "Failed to create tmux session '$session'. Is tmux installed and working?"
+    # Own the directory and run process as grin service user if available
+    if id grin &>/dev/null; then
+        chown -R grin:grin "$GRIN_DIR" 2>/dev/null || true
+        tmux new-session -d -s "$session" -c "$GRIN_DIR" \
+            "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$GRIN_DIR\" && ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            || die "Failed to create tmux session '$session'. Is tmux installed and working?"
+    else
+        warn "User 'grin' not found — running as current user. Create it via Script 08 → option 10."
+        tmux new-session -d -s "$session" -c "$GRIN_DIR" \
+            "echo 'Starting Grin node...'; cd $GRIN_DIR && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            || die "Failed to create tmux session '$session'. Is tmux installed and working?"
+    fi
 
     success "Grin node started in tmux session: $session"
     info "  Attach  : tmux attach -t $session"
@@ -1776,6 +1855,9 @@ show_summary() {
     echo -e "${BOLD}  Quick commands:${RESET}"
     echo -e "  ${YELLOW}tmux attach -t $session${RESET}   — view node output"
     echo -e "  ${YELLOW}tmux ls${RESET}                   — list sessions"
+    echo ""
+    echo -e "  ${YELLOW}⚠  Remember:${RESET} schedule auto-start on reboot via"
+    echo -e "     ${BOLD}3) Share Grin Chain Data / Schedule${RESET} → option ${GREEN}G) Auto startup Grin node${RESET}"
     echo -e "${BOLD}${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 
     log "[STEP 14] DONE. network=$network mode=$mode dir=$GRIN_DIR time=${mins}m${secs}s"

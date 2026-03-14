@@ -54,8 +54,8 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _KNOWN_TOML_SEARCH_PATHS=(
-    /grinfullmain    /grinprunemain
-    /grinfulltest    /grinprunetest
+    /opt/grin/node/mainnet-full   /opt/grin/node/mainnet-prune
+    /opt/grin/node/testnet-prune
     "${HOME}/.grin/main"   "${HOME}/.grin/test"
     /root/.grin/main       /root/.grin/test
 )

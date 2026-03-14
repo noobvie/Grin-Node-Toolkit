@@ -83,6 +83,36 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 die()     { error "$*"; echo ""; echo "Press Enter to continue..."; read -r || true; return 1; }
 pause()   { echo ""; echo -e "${DIM}Press Enter to continue...${RESET}"; read -r || true; }
 
+# Harden wallet directory and API secret file permissions.
+# Call after init (locks the dir) and after start (locks secrets written by grin-wallet).
+# Security model:
+#   /grinwalletmain/              700  — only wallet owner can enter
+#   /grinwalletmain/wallet_data/  700  — only wallet owner can enter
+#   wallet_data/.api_secret       600  — Foreign API token (read by wallet process only)
+#   wallet_data/.owner_api_secret 600  — Owner API token  (read by wallet process only)
+# When web UI is added: grant www-data read on .owner_api_secret only via group (640 + chown :www-data).
+_harden_wallet_dir() {
+    local dir="$WALLET_DIR"
+    local data_dir="$dir/wallet_data"
+
+    chmod 700 "$dir" 2>/dev/null || true
+    [[ -d "$data_dir" ]] && chmod 700 "$data_dir" 2>/dev/null || true
+
+    local changed=0
+    for secret_file in "$data_dir/.api_secret" "$data_dir/.owner_api_secret"; do
+        if [[ -f "$secret_file" ]]; then
+            chmod 600 "$secret_file" 2>/dev/null || true
+            changed=1
+        fi
+    done
+
+    if [[ $changed -eq 1 ]]; then
+        info "Permissions hardened: $dir → 700, secret files → 600"
+    else
+        info "Permissions hardened: $dir → 700  (secret files not yet created — re-run after first wallet start)"
+    fi
+}
+
 # Patch or append a key=value in a TOML file.
 # Usage: _patch_toml <file> <key> <value>  (value should include quotes if needed)
 _patch_toml() {
@@ -337,6 +367,7 @@ init_wallet() {
 
     success "grin-wallet.toml patched: api=$api_port, owner=$owner_api_port, node=127.0.0.1:$NODE_PORT, tor=$socks_addr, log_max_files=3"
     log "[init_wallet] network=$NETWORK node=127.0.0.1:$NODE_PORT toml=$GRIN_WALLET_TOML"
+    _harden_wallet_dir
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -384,7 +415,7 @@ start_wallet() {
         "bash -c \"'$WALLET_BIN' --top_level_dir '$WALLET_DIR' -p '$wallet_pass' listen; echo ''; echo 'Listener exited. Press Enter to close.'; read\""
     unset wallet_pass
 
-    sleep 1
+    sleep 2
     if tmux has-session -t "$session" 2>/dev/null; then
         success "Wallet listener started: $session"
         info "View  : tmux attach -t $session"
@@ -392,6 +423,7 @@ start_wallet() {
     else
         warn "tmux session did not persist — wallet may have exited immediately."
     fi
+    _harden_wallet_dir
     log "[start_wallet] session=$session network=$NETWORK"
 }
 

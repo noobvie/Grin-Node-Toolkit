@@ -984,6 +984,52 @@ menu_full_cleanup() {
 #   node/mainnet-full    node/mainnet-prune    node/testnet-prune
 #   wallet/mainnet       wallet/testnet
 # =============================================================================
+
+# -----------------------------------------------------------------------------
+# _migrate_stop_grin — gracefully stop all running Grin nodes before migration.
+# Sends SIGTERM, waits up to 30 s for each process to exit, then SIGKILL if needed.
+# Kills all grin_* and grin-wallet-* tmux sessions, then does a final pgrep check.
+# -----------------------------------------------------------------------------
+_migrate_stop_grin() {
+    local stop_timeout=30
+    info "Gracefully stopping Grin nodes..."
+
+    for port in 3414 13414; do
+        local pid
+        pid=$(ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+        [[ -z "$pid" ]] && continue
+        info "PID $pid on port $port — sending SIGTERM..."
+        kill -TERM "$pid" 2>/dev/null || true
+        local count=0
+        while ps -p "$pid" >/dev/null 2>&1 && [[ $count -lt $stop_timeout ]]; do
+            sleep 2; count=$(( count + 2 ))
+            [[ $(( count % 10 )) -eq 0 ]] && info "Waiting for Grin to stop... (${count}s)"
+        done
+        if ps -p "$pid" >/dev/null 2>&1; then
+            warn "PID $pid still running after ${stop_timeout}s — sending SIGKILL..."
+            kill -KILL "$pid" 2>/dev/null || true
+            sleep 2
+        fi
+        success "Port $port process stopped."
+    done
+
+    # Kill all grin tmux sessions (nodes + wallets)
+    local _sess
+    while IFS= read -r _sess; do
+        tmux kill-session -t "$_sess" 2>/dev/null && info "Tmux session '$_sess' closed." || true
+    done < <(tmux ls -F '#{session_name}' 2>/dev/null | grep -E '^(grin_|grin-wallet-)' || true)
+
+    # Final process verification
+    local _still
+    _still=$(pgrep -a -f '[g]rin server run' 2>/dev/null || true)
+    if [[ -n "$_still" ]]; then
+        warn "Some Grin processes still detected after stop — proceeding anyway:"
+        while IFS= read -r _line; do echo -e "  ${YELLOW}→${RESET} $_line"; done <<< "$_still"
+    else
+        success "All Grin processes confirmed stopped."
+    fi
+}
+
 migrate_filesystem() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -1123,22 +1169,8 @@ migrate_filesystem() {
     # ── Phase 2: Create destination structure ─────────────────────────────────
     mkdir -p "$dest_node" "$dest_wallet"
 
-    # ── Phase 3: Stop all Grin processes ──────────────────────────────────────
-    info "Stopping Grin processes..."
-    for _i in "${!move_srcs[@]}"; do
-        if [[ "${move_types[$_i]}" == "node" ]]; then
-            local _sess="grin_$(basename "${move_srcs[$_i]}")"
-            if tmux has-session -t "$_sess" 2>/dev/null; then
-                tmux kill-session -t "$_sess" && info "Stopped: $_sess" || true
-            fi
-        fi
-    done
-    for _wsess in grin-wallet-mainnet grin-wallet-testnet; do
-        if tmux has-session -t "$_wsess" 2>/dev/null; then
-            tmux kill-session -t "$_wsess" && info "Stopped: $_wsess" || true
-        fi
-    done
-    sleep 1
+    # ── Phase 3: Stop all Grin processes (graceful) ───────────────────────────
+    _migrate_stop_grin
 
     # ── Phase 4: Move directories ──────────────────────────────────────────────
     local moved=0
@@ -1209,6 +1241,41 @@ migrate_filesystem() {
     done
     success "Permissions set."
 
+    # ── Phase 9: Restart nodes in new location ─────────────────────────────────
+    local -a _node_dsts=()
+    for _i in "${!move_types[@]}"; do
+        [[ "${move_types[$_i]}" == "node" ]] && _node_dsts+=("${move_dsts[$_i]}")
+    done
+
+    if [[ ${#_node_dsts[@]} -gt 0 ]]; then
+        info "Restarting Grin node(s) in new location..."
+        local _nstarted=0
+        for _ndst in "${_node_dsts[@]}"; do
+            if [[ ! -x "$_ndst/grin" ]]; then
+                warn "No grin binary at $_ndst — skipping auto-start."; continue
+            fi
+            local _nsess="grin_$(basename "$_ndst")"
+            tmux has-session -t "$_nsess" 2>/dev/null && \
+                { tmux kill-session -t "$_nsess" 2>/dev/null || true; }
+            chown -R grin:grin "$_ndst" 2>/dev/null || true
+            if id grin &>/dev/null; then
+                tmux new-session -d -s "$_nsess" -c "$_ndst" \
+                    "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$_ndst\" && ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+                    || warn "Failed to start tmux session $_nsess."
+            else
+                tmux new-session -d -s "$_nsess" -c "$_ndst" \
+                    "echo 'Starting Grin node...'; cd $_ndst && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+                    || warn "Failed to start tmux session $_nsess."
+            fi
+            success "Node started: tmux attach -t $_nsess"
+            _nstarted=$(( _nstarted + 1 ))
+            if [[ $_nstarted -lt ${#_node_dsts[@]} ]]; then
+                info "Waiting 30 seconds before starting next node..."
+                sleep 30
+            fi
+        done
+    fi
+
     # ── Summary ────────────────────────────────────────────────────────────────
     echo ""
     echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -1218,8 +1285,7 @@ migrate_filesystem() {
     echo -e "  ${BOLD}Next steps:${RESET}"
     echo -e "  ${GREEN}1${RESET})  Update toolkit default path constants to use $dest_base"
     echo -e "       Pull the latest toolkit version after the code update is released."
-    echo -e "  ${GREEN}2${RESET})  Restart nodes:  Script 01 → start existing node"
-    echo -e "  ${GREEN}3${RESET})  Restart wallet: Script 05 → Start wallet listener"
+    echo -e "  ${GREEN}2${RESET})  Restart wallet (if applicable): Script 05 → Start wallet listener"
     echo ""
     log "[migrate_filesystem] moved=$moved dest=$dest_base"
     pause

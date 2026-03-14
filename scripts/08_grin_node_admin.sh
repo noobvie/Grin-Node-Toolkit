@@ -12,6 +12,7 @@
 #   8.7  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs
 #   8.8  Self-Update               — download latest from GitHub
 #   8.9  Backup                    — coming soon
+#   8.10 Filesystem Standardization Wizard — relocate dirs, create grin user, patch configs
 #   DEL  Full Grin Cleanup         — 08del_clean_all_grin_things.sh
 # =============================================================================
 
@@ -968,6 +969,258 @@ menu_full_cleanup() {
 }
 
 # =============================================================================
+# 8.10  Filesystem Standardization Wizard
+# -----------------------------------------------------------------------------
+# Interactive wizard that:
+#   1. Asks where each Grin component currently lives (pre-fills from conf)
+#   2. Asks where the new base directory should be (default: /opt/grin)
+#   3. Creates the grin:grin system user
+#   4. Stops running node/wallet tmux sessions
+#   5. mv's each directory (no extra disk space needed — same filesystem)
+#   6. Patches grin_instances_location.conf, grin-server.toml (db_root), crontab
+#   7. Sets chown grin:grin + chmod 700 on wallet dirs
+#
+# New layout under <base>:
+#   node/mainnet-full    node/mainnet-prune    node/testnet-prune
+#   wallet/mainnet       wallet/testnet
+# =============================================================================
+migrate_filesystem() {
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  10  Filesystem Standardization Wizard${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  Moves Grin node and wallet directories to a standard location,"
+    echo -e "  creates the ${BOLD}grin${RESET} service user, and patches all configs."
+    echo ""
+    echo -e "  ${YELLOW}Requirements:${RESET}"
+    echo -e "    • Run as root"
+    echo -e "    • Source and destination must be on the ${BOLD}same filesystem${RESET}  (uses mv)"
+    echo -e "    • All Grin processes will be stopped during migration"
+    echo -e "    • Type ${BOLD}-${RESET} to skip a pre-detected component"
+    echo ""
+
+    if [[ $EUID -ne 0 ]]; then
+        error "Must be run as root."; pause; return
+    fi
+
+    # ── Step 1: Destination base ───────────────────────────────────────────────
+    echo -e "${BOLD}── Step 1/3: Destination ──────────────────────────────────────────${RESET}"
+    echo -e "  New layout:"
+    echo -e "    ${DIM}<base>/node/mainnet-full   mainnet-prune   testnet-prune${RESET}"
+    echo -e "    ${DIM}<base>/wallet/mainnet   testnet${RESET}"
+    echo ""
+    echo -ne "  Base directory [/opt/grin]: "
+    read -r dest_base || true
+    dest_base="${dest_base:-/opt/grin}"
+    dest_base="${dest_base%/}"
+    local dest_node="$dest_base/node"
+    local dest_wallet="$dest_base/wallet"
+    echo ""
+
+    # ── Step 2: Source locations ───────────────────────────────────────────────
+    echo -e "${BOLD}── Step 2/3: Current Locations ────────────────────────────────────${RESET}"
+    echo -e "  ${DIM}Press Enter to accept default. Type - to skip a component.${RESET}"
+    echo ""
+
+    # Pre-fill nodes from grin_instances_location.conf (grep, no source — avoids side-effects)
+    local inst_conf="$CONF_DIR/grin_instances_location.conf"
+    local pre_fullmain="" pre_prunemain="" pre_prunetest=""
+    if [[ -f "$inst_conf" ]]; then
+        pre_fullmain=$(grep  '^FULLMAIN_GRIN_DIR='  "$inst_conf" 2>/dev/null | tail -1 | cut -d'"' -f2 || true)
+        pre_prunemain=$(grep '^PRUNEMAIN_GRIN_DIR=' "$inst_conf" 2>/dev/null | tail -1 | cut -d'"' -f2 || true)
+        pre_prunetest=$(grep '^PRUNETEST_GRIN_DIR=' "$inst_conf" 2>/dev/null | tail -1 | cut -d'"' -f2 || true)
+    fi
+
+    # Pre-fill wallets from known legacy defaults (not in instances conf)
+    local pre_walletmain="" pre_wallettest=""
+    [[ -d "/opt/grin/wallet/mainnet" ]] && pre_walletmain="/opt/grin/wallet/mainnet"
+    [[ -d "/opt/grin/wallet/testnet" ]] && pre_wallettest="/opt/grin/wallet/testnet"
+
+    local src_fullmain="" src_prunemain="" src_prunetest="" src_walletmain="" src_wallettest=""
+    local _shown
+
+    _shown="${pre_fullmain:-(not detected)}";   echo -ne "  Mainnet full node  [$_shown]: "; read -r src_fullmain  || true
+    [[ -z "$src_fullmain"  ]] && src_fullmain="$pre_fullmain";   [[ "$src_fullmain"  == "-" ]] && src_fullmain=""
+    _shown="${pre_prunemain:-(not detected)}";  echo -ne "  Mainnet prune node [$_shown]: "; read -r src_prunemain || true
+    [[ -z "$src_prunemain" ]] && src_prunemain="$pre_prunemain"; [[ "$src_prunemain" == "-" ]] && src_prunemain=""
+    _shown="${pre_prunetest:-(not detected)}";  echo -ne "  Testnet prune node [$_shown]: "; read -r src_prunetest || true
+    [[ -z "$src_prunetest" ]] && src_prunetest="$pre_prunetest"; [[ "$src_prunetest" == "-" ]] && src_prunetest=""
+    _shown="${pre_walletmain:-(not detected)}"; echo -ne "  Mainnet wallet     [$_shown]: "; read -r src_walletmain || true
+    [[ -z "$src_walletmain" ]] && src_walletmain="$pre_walletmain"; [[ "$src_walletmain" == "-" ]] && src_walletmain=""
+    _shown="${pre_wallettest:-(not detected)}"; echo -ne "  Testnet wallet     [$_shown]: "; read -r src_wallettest || true
+    [[ -z "$src_wallettest" ]] && src_wallettest="$pre_wallettest"; [[ "$src_wallettest" == "-" ]] && src_wallettest=""
+    echo ""
+
+    # ── Build move plan (parallel indexed arrays) ──────────────────────────────
+    local -a move_srcs=() move_dsts=() move_types=()
+    local -a _all_srcs=("$src_fullmain"  "$src_prunemain"  "$src_prunetest"  "$src_walletmain"  "$src_wallettest")
+    local -a _all_dsts=("$dest_node/mainnet-full" "$dest_node/mainnet-prune" "$dest_node/testnet-prune" "$dest_wallet/mainnet" "$dest_wallet/testnet")
+    local -a _all_types=("node" "node" "node" "wallet" "wallet")
+    local _i
+    for _i in "${!_all_srcs[@]}"; do
+        local _s="${_all_srcs[$_i]}" _d="${_all_dsts[$_i]}" _t="${_all_types[$_i]}"
+        [[ -z "$_s" ]] && continue
+        if [[ ! -d "$_s" ]]; then
+            warn "Source not found, skipping: $_s"; continue
+        fi
+        if [[ "$_s" == "$_d" ]]; then
+            info "Already at target, skipping: $_s"; continue
+        fi
+        move_srcs+=("$_s"); move_dsts+=("$_d"); move_types+=("$_t")
+    done
+
+    if [[ ${#move_srcs[@]} -eq 0 ]]; then
+        warn "Nothing to migrate — no valid source directories found."; pause; return
+    fi
+
+    # ── Same-filesystem guard ──────────────────────────────────────────────────
+    local _dest_parent; _dest_parent="$(dirname "$dest_base")"
+    [[ ! -d "$_dest_parent" ]] && _dest_parent="/"
+    local _dest_dev; _dest_dev="$(stat -c '%d' "$_dest_parent" 2>/dev/null || echo "0")"
+    for _i in "${!move_srcs[@]}"; do
+        local _src_dev; _src_dev="$(stat -c '%d' "${move_srcs[$_i]}" 2>/dev/null || echo "1")"
+        if [[ "$_src_dev" != "$_dest_dev" ]]; then
+            error "Cross-filesystem move detected: ${move_srcs[$_i]} → ${move_dsts[$_i]}"
+            error "Source and destination are on different filesystems."
+            warn  "Mount the destination on the same filesystem as the source, then retry."
+            pause; return
+        fi
+    done
+
+    # ── Step 3: Plan + confirm ─────────────────────────────────────────────────
+    echo -e "${BOLD}── Step 3/3: Migration Plan ───────────────────────────────────────${RESET}"
+    echo ""
+    echo -e "  ${BOLD}Service user  :${RESET}  grin:grin  (system user, no login shell)"
+    echo ""
+    echo -e "  ${BOLD}Moves:${RESET}"
+    for _i in "${!move_srcs[@]}"; do
+        printf "    ${CYAN}%-38s${RESET} → ${GREEN}%s${RESET}\n" "${move_srcs[$_i]}" "${move_dsts[$_i]}"
+    done
+    echo ""
+    echo -e "  ${BOLD}Patches:${RESET}  grin_instances_location.conf · grin-server.toml (db_root) · crontab"
+    echo -e "  ${BOLD}Perms:${RESET}    chown -R grin:grin $dest_base · chmod 700 wallet dirs"
+    echo ""
+    echo -ne "  Proceed? [y/N]: "
+    read -r _confirm || true
+    [[ "${_confirm,,}" != "y" ]] && { info "Migration cancelled."; pause; return; }
+    echo ""
+
+    # ── Phase 1: Create grin:grin system user ─────────────────────────────────
+    if id grin &>/dev/null; then
+        info "System user 'grin' already exists — skipping."
+    else
+        useradd -r -s /usr/sbin/nologin -d "$dest_base" -M grin \
+            && success "System user grin:grin created." \
+            || { error "Failed to create user grin."; pause; return; }
+    fi
+
+    # ── Phase 2: Create destination structure ─────────────────────────────────
+    mkdir -p "$dest_node" "$dest_wallet"
+
+    # ── Phase 3: Stop all Grin processes ──────────────────────────────────────
+    info "Stopping Grin processes..."
+    for _i in "${!move_srcs[@]}"; do
+        if [[ "${move_types[$_i]}" == "node" ]]; then
+            local _sess="grin_$(basename "${move_srcs[$_i]}")"
+            if tmux has-session -t "$_sess" 2>/dev/null; then
+                tmux kill-session -t "$_sess" && info "Stopped: $_sess" || true
+            fi
+        fi
+    done
+    for _wsess in grin-wallet-mainnet grin-wallet-testnet; do
+        if tmux has-session -t "$_wsess" 2>/dev/null; then
+            tmux kill-session -t "$_wsess" && info "Stopped: $_wsess" || true
+        fi
+    done
+    sleep 1
+
+    # ── Phase 4: Move directories ──────────────────────────────────────────────
+    local moved=0
+    for _i in "${!move_srcs[@]}"; do
+        local _src="${move_srcs[$_i]}" _dst="${move_dsts[$_i]}"
+        mkdir -p "$(dirname "$_dst")"
+        info "Moving: $_src → $_dst"
+        if mv "$_src" "$_dst"; then
+            success "Moved: $_dst"
+            moved=$((moved + 1))
+        else
+            error "Failed to move $_src → $_dst — stopping migration."
+            warn  "Components moved so far: $moved. Manual cleanup may be required."
+            pause; return
+        fi
+    done
+
+    # ── Phase 5: Patch grin_instances_location.conf ────────────────────────────
+    if [[ -f "$inst_conf" ]]; then
+        info "Patching grin_instances_location.conf..."
+        for _i in "${!move_srcs[@]}"; do
+            [[ "${move_types[$_i]}" == "node" ]] || continue
+            sed -i "s|${move_srcs[$_i]}|${move_dsts[$_i]}|g" "$inst_conf" || true
+        done
+        success "grin_instances_location.conf patched."
+    fi
+
+    # ── Phase 6: Patch grin-server.toml (db_root only) ────────────────────────
+    for _i in "${!move_srcs[@]}"; do
+        [[ "${move_types[$_i]}" == "node" ]] || continue
+        local _toml="${move_dsts[$_i]}/grin-server.toml"
+        if [[ -f "$_toml" ]]; then
+            info "Patching db_root in $(basename "${move_dsts[$_i]}")/grin-server.toml..."
+            sed -i "s|db_root = \"${move_srcs[$_i]}/chain_data\"|db_root = \"${move_dsts[$_i]}/chain_data\"|" "$_toml" || true
+            success "db_root patched."
+        fi
+    done
+
+    # ── Phase 7: Update crontab ────────────────────────────────────────────────
+    local _cron_orig; _cron_orig="$(crontab -l 2>/dev/null || true)"
+    if [[ -n "$_cron_orig" ]]; then
+        local _cron_new="$_cron_orig" _cron_changed=0
+        for _i in "${!move_srcs[@]}"; do
+            if echo "$_cron_new" | grep -qF "${move_srcs[$_i]}" 2>/dev/null; then
+                _cron_new="${_cron_new//${move_srcs[$_i]}/${move_dsts[$_i]}}"
+                _cron_changed=1
+            fi
+        done
+        if [[ $_cron_changed -eq 1 ]]; then
+            echo "$_cron_new" | crontab -
+            success "Crontab updated."
+        else
+            info "No cron entries reference old paths — nothing to update."
+        fi
+    fi
+
+    # ── Phase 8: chown + chmod ─────────────────────────────────────────────────
+    info "Setting ownership: chown -R grin:grin $dest_base"
+    chown -R grin:grin "$dest_base"
+    for _i in "${!move_srcs[@]}"; do
+        [[ "${move_types[$_i]}" == "wallet" ]] || continue
+        local _wdir="${move_dsts[$_i]}"
+        chmod 700 "$_wdir" 2>/dev/null || true
+        [[ -d "$_wdir/wallet_data" ]] && chmod 700 "$_wdir/wallet_data" || true
+        for _secret in "$_wdir/wallet_data/.api_secret" "$_wdir/wallet_data/.owner_api_secret"; do
+            [[ -f "$_secret" ]] && chmod 600 "$_secret" || true
+        done
+    done
+    success "Permissions set."
+
+    # ── Summary ────────────────────────────────────────────────────────────────
+    echo ""
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${GREEN}  Done — $moved component(s) moved to $dest_base${RESET}"
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  ${BOLD}Next steps:${RESET}"
+    echo -e "  ${GREEN}1${RESET})  Update toolkit default path constants to use $dest_base"
+    echo -e "       Pull the latest toolkit version after the code update is released."
+    echo -e "  ${GREEN}2${RESET})  Restart nodes:  Script 01 → start existing node"
+    echo -e "  ${GREEN}3${RESET})  Restart wallet: Script 05 → Start wallet listener"
+    echo ""
+    log "[migrate_filesystem] moved=$moved dest=$dest_base"
+    pause
+}
+
+# =============================================================================
 # Main menu
 # =============================================================================
 show_menu() {
@@ -990,6 +1243,7 @@ show_menu() {
     echo -e "  ${YELLOW}7${RESET})   Disk Cleanup              ${DIM}tar archives + OS temp/logs + nginx dirs${RESET}"
     echo -e "  ${YELLOW}8${RESET})   Self-Update               ${DIM}pull latest changes from GitHub${RESET}"
     echo -e "  ${YELLOW}9${RESET})   Backup                    ${DIM}coming soon${RESET}"
+    echo -e "  ${YELLOW}10${RESET})  Filesystem Standardization ${DIM}relocate dirs, create grin user, patch configs${RESET}"
     echo ""
     echo -e "${BOLD}  Danger Zone${RESET}"
     echo -e "  ${RED}DEL${RESET}) Full Grin Cleanup         ${DIM}remove EVERYTHING about Grin now!${RESET}"
@@ -997,7 +1251,7 @@ show_menu() {
     echo -e "  ${DIM}0${RESET})   Return to main menu"
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-9, DEL]: ${RESET}"
+    echo -ne "${BOLD}Select [0-10, DEL]: ${RESET}"
 }
 
 main() {
@@ -1015,6 +1269,7 @@ main() {
             "7")   clean_maintenance        ;;
             "8")   self_update              ;;
             "9")   backup                   ;;
+            "10")  migrate_filesystem       ;;
             "del") menu_full_cleanup        ;;
             "0")   break                    ;;
             *)     warn "Invalid option." ; sleep 1 ;;

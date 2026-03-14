@@ -64,10 +64,11 @@ Entry point: `grin-node-toolkit.sh` → launches sub-scripts from `scripts/`.
 
 ## Node Directories (on target server)
 
-`/grinfullmain` · `/grinprunemain` · `/grinprunetest`
+`/opt/grin/node/mainnet-full` · `/opt/grin/node/mainnet-prune` · `/opt/grin/node/testnet-prune`
 
-## Wallet  Directories (on target server)
-`/grinwalletmain` · `/grinwallettest`
+## Wallet Directories (on target server)
+
+`/opt/grin/wallet/mainnet` · `/opt/grin/wallet/testnet`
 
 ## Git Branches
 

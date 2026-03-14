@@ -738,7 +738,7 @@ disable_testnet_status_page() { _disable_status_page testnet "$NODE_API_NGINX_CO
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Resolve the Grin node data directory from the instance conf written by script 01.
-# Returns GRIN_DIR (e.g. /grinprunemain) which contains .api_secret and grin-server.toml.
+# Returns GRIN_DIR (e.g. /opt/grin/node/mainnet-prune) which contains .api_secret and grin-server.toml.
 _lookup_grin_dir() {
     local network="$1"
     if [[ -f "$INSTANCES_CONF" ]]; then

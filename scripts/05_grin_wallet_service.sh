@@ -46,8 +46,8 @@ RESET='\033[0m'
 # ─── Constants ────────────────────────────────────────────────────────────────
 GRIN_WALLET_GITHUB_API="https://api.github.com/repos/mimblewimble/grin-wallet/releases/latest"
 
-WALLET_BIN_DIR_MAINNET="/grinwalletmain"
-WALLET_BIN_DIR_TESTNET="/grinwallettest"
+WALLET_BIN_DIR_MAINNET="/opt/grin/wallet/mainnet"
+WALLET_BIN_DIR_TESTNET="/opt/grin/wallet/testnet"
 WALLET_BIN_MAINNET="$WALLET_BIN_DIR_MAINNET/grin-wallet"
 WALLET_BIN_TESTNET="$WALLET_BIN_DIR_TESTNET/grin-wallet"
 GRIN_WALLET_TOML_MAINNET="$WALLET_BIN_DIR_MAINNET/grin-wallet.toml"
@@ -86,8 +86,8 @@ pause()   { echo ""; echo -e "${DIM}Press Enter to continue...${RESET}"; read -r
 # Harden wallet directory and API secret file permissions.
 # Call after init (locks the dir) and after start (locks secrets written by grin-wallet).
 # Security model:
-#   /grinwalletmain/              700  — only wallet owner can enter
-#   /grinwalletmain/wallet_data/  700  — only wallet owner can enter
+#   /opt/grin/wallet/mainnet/              700  — only wallet owner can enter
+#   /opt/grin/wallet/mainnet/wallet_data/  700  — only wallet owner can enter
 #   wallet_data/.api_secret       600  — Foreign API token (read by wallet process only)
 #   wallet_data/.owner_api_secret 600  — Owner API token  (read by wallet process only)
 # When web UI is added: grant www-data read on .owner_api_secret only via group (640 + chown :www-data).
@@ -95,6 +95,11 @@ _harden_wallet_dir() {
     local dir="$WALLET_DIR"
     local data_dir="$dir/wallet_data"
 
+    if id grin &>/dev/null; then
+        chown -R grin:grin "$dir" 2>/dev/null || true
+    else
+        warn "User 'grin' not found — skipping chown. Run Script 08 → option 10 to create it."
+    fi
     chmod 700 "$dir" 2>/dev/null || true
     [[ -d "$data_dir" ]] && chmod 700 "$data_dir" 2>/dev/null || true
 
@@ -411,8 +416,14 @@ start_wallet() {
     fi
 
     info "Starting grin-wallet listener in tmux session: $session"
-    tmux new-session -d -s "$session" -c "$WALLET_DIR" \
-        "bash -c \"'$WALLET_BIN' --top_level_dir '$WALLET_DIR' -p '$wallet_pass' listen; echo ''; echo 'Listener exited. Press Enter to close.'; read\""
+    if id grin &>/dev/null; then
+        tmux new-session -d -s "$session" -c "$WALLET_DIR" \
+            "su -s /bin/bash -c \"'$WALLET_BIN' --top_level_dir '$WALLET_DIR' -p '$wallet_pass' listen\" grin; echo ''; echo 'Listener exited. Press Enter to close.'; read"
+    else
+        warn "User 'grin' not found — running as current user. Run Script 08 → option 10."
+        tmux new-session -d -s "$session" -c "$WALLET_DIR" \
+            "bash -c \"'$WALLET_BIN' --top_level_dir '$WALLET_DIR' -p '$wallet_pass' listen; echo ''; echo 'Listener exited. Press Enter to close.'; read\""
+    fi
     unset wallet_pass
 
     sleep 2

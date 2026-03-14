@@ -83,7 +83,7 @@
          ┌───────────────▼───────────────┐
          │   STEP 5 — Create Node Dir    │
          │   default: /grin{mode}{net}   │
-         │   e.g. /grinprunemain        │
+         │   e.g. /opt/grin/node/mainnet-prune        │
          │   confirm if dir has files    │
          │   → rm -rf existing contents  │
          │   sets GRIN_DIR global        │
@@ -150,7 +150,7 @@
          ┌───────────────▼───────────────┐
          │   STEP 13 — Start in tmux     │
          │   session: grin_<dirname>     │
-         │   e.g. grin_grinprunemain     │
+         │   e.g. grin_mainnet-prune     │
          │   kill existing session first │
          │   if already exists           │
          └───────────────────────────────┘

@@ -14,9 +14,9 @@
           │              │                │                   │
    [see NGINX      [see SSH               │            ┌──────▼──────────────┐
     CRON flow]      CRON flow]    scan default dirs:   │     MAIN MENU       │
-                                  /grinprunemain/      │  A) Nginx Setup     │
-                                  /grinfullmain/       │  B) Share Now (nginx)│
-                                  /grinprunetest/      │  C) SSH Setup       │
+                                  /opt/grin/node/mainnet-prune/      │  A) Nginx Setup     │
+                                  /opt/grin/node/mainnet-full/       │  B) Share Now (nginx)│
+                                  /opt/grin/node/testnet-prune/      │  C) SSH Setup       │
                                   delete all:          │  D) Share Now (SSH) │
                                   txhashset_           │  E) Add Nginx Cron  │
                                   snapshot_*.zip       │  F) Remove Nginx Cron│
@@ -160,8 +160,8 @@
     │  mainnet running?               │
     │   no + SYNC ≠ testnet →        │
     │    try_start_from_known_dir()   │──→ check INSTANCES_CONF first
-    │    (mainnet, port 3414)         │    fallback: /grinfullmain
-    │                                 │               /grinprunemain
+    │    (mainnet, port 3414)         │    fallback: /opt/grin/node/mainnet-full
+    │                                 │               /opt/grin/node/mainnet-prune
     │  testnet running?               │    session: grin_<dirname>
     │   no + SYNC ≠ mainnet →        │    wait up to 120s
     │    try_start_from_known_dir()   │
@@ -318,8 +318,8 @@
     │  mainnet running?               │
     │   no + SYNC ≠ testnet →        │
     │    try_start_from_known_dir()   │──→ check INSTANCES_CONF first
-    │    (mainnet, port 3414)         │    fallback: /grinfullmain
-    │                                 │               /grinprunemain
+    │    (mainnet, port 3414)         │    fallback: /opt/grin/node/mainnet-full
+    │                                 │               /opt/grin/node/mainnet-prune
     │  testnet running?               │    session: grin_<dirname>
     │   no + SYNC ≠ mainnet →        │    wait up to 120s
     │    try_start_from_known_dir()   │

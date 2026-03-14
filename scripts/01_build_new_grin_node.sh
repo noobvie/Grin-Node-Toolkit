@@ -25,9 +25,9 @@
 #   Note: Full archive mode is NOT available for testnet.
 #
 # NODE DIRECTORIES  (default paths — user may choose a custom location at Step 5)
-#   /grinprunemain   — pruned,       mainnet  (default)
-#   /grinfullmain    — full archive, mainnet  (default)
-#   /grinprunetest   — pruned,       testnet  (default)
+#   /opt/grin/node/mainnet-prune  — pruned,       mainnet  (default)
+#   /opt/grin/node/mainnet-full   — full archive, mainnet  (default)
+#   /opt/grin/node/testnet-prune  — pruned,       testnet  (default)
 #   The chosen path (default or custom) is saved to:
 #     conf/grin_instances_location.conf  (used by other toolkit scripts)
 #
@@ -48,7 +48,7 @@
 #              User chooses: 1) Mainnet  2) Testnet  3) Both
 #              When "Both" is selected, steps 4–14 run for mainnet, then repeat
 #              for testnet automatically. Each network gets its own node
-#              directory (/grinprunemain, /grinprunetest) with its own binary.
+#              directory (/opt/grin/node/mainnet-prune, /opt/grin/node/testnet-prune) with its own binary.
 #
 #   Step  4 — Archive Mode Selection  (once per network)
 #              User chooses: 1) Pruned  2) Full archive (mainnet only)
@@ -117,7 +117,7 @@
 #              reclaim disk space.
 #
 #   Step 13 — Start Node in Tmux
-#              Creates a named tmux session (e.g. grin_grinprunemain) and runs
+#              Creates a named tmux session (e.g. grin_mainnet-prune) and runs
 #              './grin server run' inside it. Kills any pre-existing session with
 #              the same name first. The window stays open after grin exits so
 #              the user can read any output.
@@ -832,9 +832,9 @@ select_archive_mode() {
 # [5] CREATE NODE DIRECTORY
 # -----------------------------------------------------------------------------
 # Creates the node directory at / (root, not /root) using naming convention:
-#   /grinfullmain   — full archive, mainnet
-#   /grinprunemain  — pruned,       mainnet
-#   /grinprunetest  — pruned,       testnet
+#   /opt/grin/node/mainnet-full   — full archive, mainnet
+#   /opt/grin/node/mainnet-prune  — pruned,       mainnet
+#   /opt/grin/node/testnet-prune  — pruned,       testnet
 #
 # Flow (repeats until user confirms):
 #   1. User enters a path (Enter = default, 0 = return to menu).
@@ -858,7 +858,14 @@ create_node_dir() {
 
     [[ "$network" == "mainnet" ]] && net_short="main" || net_short="test"
     [[ "$mode"    == "full"    ]] && mode_short="full" || mode_short="prune"
-    local default_dir="/grin${mode_short}${net_short}"
+    local default_dir
+    if [[ "$mode" == "full" ]]; then
+        default_dir="/opt/grin/node/mainnet-full"
+    elif [[ "$network" == "mainnet" ]]; then
+        default_dir="/opt/grin/node/mainnet-prune"
+    else
+        default_dir="/opt/grin/node/testnet-prune"
+    fi
 
     # Minimum free space: pruned=10GB, full=25GB (in KB)
     local min_gb; [[ "$mode" == "full" ]] && min_gb=25 || min_gb=10
@@ -1726,7 +1733,7 @@ stream_extract_chain_data() {
 # =============================================================================
 # [13] START GRIN NODE IN A TMUX SESSION
 # -----------------------------------------------------------------------------
-# Creates a named tmux session: grin_<dirname>  (e.g. grin_grinprunemain).
+# Creates a named tmux session: grin_<dirname>  (e.g. grin_mainnet-prune).
 # If a session with that name already exists, it is killed first.
 # Runs './grin server run' inside the session so the node starts in TUI mode.
 # The session stays open after grin exits so the user can read any output.
@@ -1741,10 +1748,18 @@ start_grin_tmux() {
         tmux kill-session -t "$session" 2>/dev/null || true
     fi
 
-    # Start session; keep window open after grin exits so user can read output
-    tmux new-session -d -s "$session" -c "$GRIN_DIR" \
-        "echo 'Starting Grin node...'; cd $GRIN_DIR && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
-        || die "Failed to create tmux session '$session'. Is tmux installed and working?"
+    # Own the directory and run process as grin service user if available
+    if id grin &>/dev/null; then
+        chown -R grin:grin "$GRIN_DIR" 2>/dev/null || true
+        tmux new-session -d -s "$session" -c "$GRIN_DIR" \
+            "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$GRIN_DIR\" && ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            || die "Failed to create tmux session '$session'. Is tmux installed and working?"
+    else
+        warn "User 'grin' not found — running as current user. Create it via Script 08 → option 10."
+        tmux new-session -d -s "$session" -c "$GRIN_DIR" \
+            "echo 'Starting Grin node...'; cd $GRIN_DIR && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            || die "Failed to create tmux session '$session'. Is tmux installed and working?"
+    fi
 
     success "Grin node started in tmux session: $session"
     info "  Attach  : tmux attach -t $session"

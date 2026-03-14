@@ -13,8 +13,8 @@
 #
 #   1. Grin Node  (Script 01)
 #      ● Mainnet node is required — testnet peer data is very limited
-#      ● Pruned node (/grinprunemain)  → sufficient for option A (Stats + Map)
-#      ● Full archive (/grinfullmain)  → required for option B (Explorer)
+#      ● Pruned node (/opt/grin/node/mainnet-prune)  → sufficient for option A (Stats + Map)
+#      ● Full archive (/opt/grin/node/mainnet-full)  → required for option B (Explorer)
 #        The explorer can also use a remote archival node instead (B→2)
 #      ● Node must be running and listening on port 3413 (mainnet)
 #
@@ -158,11 +158,11 @@ detect_node() {
 
     if [[ $NODE_PORT -eq $MAINNET_PORT ]]; then
         API_SECRET_PATH="$HOME/.grin/main/.api_secret"
-        NODE_DIR="/grinfullmain"
-        [[ -d /grinprunemain ]] && NODE_DIR="/grinprunemain"
+        NODE_DIR="/opt/grin/node/mainnet-full"
+        [[ -d /opt/grin/node/mainnet-prune ]] && NODE_DIR="/opt/grin/node/mainnet-prune"
     else
         API_SECRET_PATH="$HOME/.grin/test/.api_secret"
-        NODE_DIR="/grinprunetest"
+        NODE_DIR="/opt/grin/node/testnet-prune"
     fi
 }
 
@@ -600,7 +600,7 @@ install_explorer() {
 
     # Patch hardcoded /main/ segment in chain_data path.
     # Upstream code uses: format!("{}/main/chain_data", CONFIG.grin_dir)
-    # Toolkit stores chain_data at /grinfullmain/chain_data (no /main/ subdirectory).
+    # Toolkit stores chain_data at /opt/grin/node/mainnet-full/chain_data (no /main/ subdirectory).
     local requests_rs="$EXPLORER_DIR/src/requests.rs"
     if [[ -f "$requests_rs" ]] && grep -q '/main/chain_data' "$requests_rs"; then
         info "Patching src/requests.rs: removing hardcoded /main/ from chain_data path..."
@@ -660,9 +660,9 @@ configure_explorer() {
             ;;
         *)
             # Verify archive node exists before proceeding
-            if [[ ! -d "/grinfullmain" ]]; then
+            if [[ ! -d "/opt/grin/node/mainnet-full" ]]; then
                 echo ""
-                warn "Full archive node not found at /grinfullmain"
+                warn "Full archive node not found at /opt/grin/node/mainnet-full"
                 echo -e "  ${DIM}The Grin Explorer requires a mainnet archive node to read block data.${RESET}"
                 echo -e "  ${DIM}Run ${BOLD}Script 01${RESET}${DIM} and install a mainnet archive node, then return here.${RESET}"
                 echo ""
@@ -687,14 +687,14 @@ configure_explorer() {
             # Detect grin_dir (parent directory of chain_data, written to Explorer.toml)
             echo ""
             info "Detecting chain_data path for grin_dir..."
-            if [[ -d "/grinfullmain/chain_data" ]]; then
-                cfg_grin_dir="/grinfullmain"
-                success "Found: /grinfullmain/chain_data  ${DIM}(toolkit default for full archive)${RESET}"
+            if [[ -d "/opt/grin/node/mainnet-full/chain_data" ]]; then
+                cfg_grin_dir="/opt/grin/node/mainnet-full"
+                success "Found: /opt/grin/node/mainnet-full/chain_data  ${DIM}(toolkit default for full archive)${RESET}"
             elif [[ -d "$HOME/.grin/main/chain_data" ]]; then
                 cfg_grin_dir="$HOME/.grin/main"
                 success "Found: $HOME/.grin/main/chain_data"
             else
-                warn "chain_data not found in /grinfullmain or $HOME/.grin/main"
+                warn "chain_data not found in /opt/grin/node/mainnet-full or $HOME/.grin/main"
                 echo -e "  ${DIM}The explorer needs a full archive node — pruned nodes are not supported.${RESET}"
                 echo -ne "Enter grin_dir path (parent directory of chain_data, or 0 to skip): "
                 read -r cfg_grin_dir
@@ -735,8 +735,8 @@ configure_explorer() {
         echo -e "    api_secret_path  = ${CYAN}${API_SECRET_PATH}${RESET}"
     echo ""
 
-    if [[ "$node_choice" != "2" ]] && [[ ! -d /grinfullmain ]]; then
-        warn "A full archive node (/grinfullmain) is recommended for the explorer."
+    if [[ "$node_choice" != "2" ]] && [[ ! -d /opt/grin/node/mainnet-full ]]; then
+        warn "A full archive node (/opt/grin/node/mainnet-full) is recommended for the explorer."
         warn "Pruned nodes lack older block data. Use a remote archival node instead."
     fi
 
@@ -759,7 +759,7 @@ start_explorer() {
         if [[ -n "$grin_dir_val" && ! -d "$grin_dir_val/chain_data" ]]; then
             warn "chain_data not found at: ${grin_dir_val}/chain_data"
             echo -e "  ${DIM}The explorer reads block data directly from chain_data on disk.${RESET}"
-            echo -e "  ${DIM}Toolkit default for full archive: /grinfullmain/chain_data${RESET}"
+            echo -e "  ${DIM}Toolkit default for full archive: /opt/grin/node/mainnet-full/chain_data${RESET}"
             echo -e "  ${DIM}Run Configure (B→2) to update grin_dir to the correct path.${RESET}"
             echo ""
             echo -ne "Continue anyway? [y/N/0]: "

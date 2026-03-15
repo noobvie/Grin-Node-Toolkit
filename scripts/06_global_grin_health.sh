@@ -157,12 +157,12 @@ detect_node() {
     NODE_URL="http://127.0.0.1:${NODE_PORT}/v2/foreign"
 
     if [[ $NODE_PORT -eq $MAINNET_PORT ]]; then
-        API_SECRET_PATH="$HOME/.grin/main/.api_secret"
         NODE_DIR="/opt/grin/node/mainnet-full"
         [[ -d /opt/grin/node/mainnet-prune ]] && NODE_DIR="/opt/grin/node/mainnet-prune"
+        API_SECRET_PATH="$NODE_DIR/.api_secret"
     else
-        API_SECRET_PATH="$HOME/.grin/test/.api_secret"
         NODE_DIR="/opt/grin/node/testnet-prune"
+        API_SECRET_PATH="$NODE_DIR/.api_secret"
     fi
 }
 
@@ -256,18 +256,25 @@ install_stats() {
     # Write collector config
     detect_node
     info "Writing collector config..."
-    # Always use the standard Grin config-dir paths for API secrets.
-    # detect_node() sets API_SECRET_PATH based on whichever node was detected,
-    # but we need BOTH secrets explicitly so the collector can authenticate
-    # against both the mainnet and testnet owner APIs independently.
-    local mainnet_secret="$HOME/.grin/main/.api_secret"
-    local testnet_secret="$HOME/.grin/test/.api_secret"
+    # Use the toolkit node-directory paths for API secrets.
+    # detect_node() sets API_SECRET_PATH for the detected node, but we need
+    # BOTH secrets explicitly so the collector can authenticate against both
+    # mainnet and testnet owner APIs independently.
+    # Script 01 places .api_secret inside the node directory, not ~/.grin/main/.
+    local mainnet_secret="/opt/grin/node/mainnet-prune/.api_secret"
+    [[ ! -f "$mainnet_secret" ]] && mainnet_secret="/opt/grin/node/mainnet-full/.api_secret"
+    local testnet_secret="/opt/grin/node/testnet-prune/.api_secret"
+    local foreign_secret="/opt/grin/node/mainnet-prune/.foreign_api_secret"
+    [[ ! -f "$foreign_secret" ]] && foreign_secret="/opt/grin/node/mainnet-full/.foreign_api_secret"
+    [[ -f "$foreign_secret" ]] \
+        || warn "Foreign API secret not found: $foreign_secret — foreign API calls may fail."
     [[ -f "$mainnet_secret" ]] \
         || warn "Mainnet secret not found: $mainnet_secret — owner API calls may fail."
     [[ -f "$testnet_secret" ]] \
         || warn "Testnet secret not found: $testnet_secret — testnet peers will be skipped."
     cat > "$DATA_DIR/config.env" <<EOF
 GRIN_NODE_URL=${NODE_URL}
+GRIN_FOREIGN_SECRET_PATH=${foreign_secret}
 GRIN_API_SECRET_PATH=${mainnet_secret}
 GRIN_MAINNET_OWNER_URL=http://127.0.0.1:3413/v2/owner
 GRIN_TESTNET_OWNER_URL=http://127.0.0.1:13413/v2/owner

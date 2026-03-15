@@ -3,7 +3,7 @@
 # 08_grin_node_admin.sh - Grin Node Administration Centre
 # =============================================================================
 # Menu:
-#   8.1  Remote Node Monitor       — check peer ports via nc, log & email
+#   8.1  Remote Node Manager        — port monitor, mass deployment & remote node control
 #   8.2  Service & Port Dashboard  — local PIDs, ports, tmux, binary versions
 #   8.3  Chain Sync Status         — query local node API for current tip
 #   8.4  nginx Config & SSL Audit  — list configs, test, check cert expiry
@@ -52,7 +52,7 @@ GRIN_LOG_DIR="${GRIN_LOG_PATH:-$HOME/.grin/main/log}"
 pause() { echo ""; echo "Press Enter to return to menu..."; read -r; }
 
 # =============================================================================
-# 8.1  Remote Node Monitor
+# 8.1  Remote Node Manager
 # =============================================================================
 menu_node_monitor() {
     local monitor_script="$SCRIPT_DIR/081_host_monitor_port.sh"
@@ -1500,7 +1500,7 @@ show_menu() {
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     echo -e "${BOLD}  Monitoring${RESET}"
-    echo -e "  ${GREEN}1${RESET})   Remote Node Monitor       ${DIM}registry + custom hosts: ports, freshness, sync${RESET}"
+    echo -e "  ${GREEN}1${RESET})   Remote Node Manager       ${DIM}monitor · mass deploy · remote control${RESET}"
     echo -e "  ${GREEN}2${RESET})   Service & Port Dashboard  ${DIM}local PIDs, ports, tmux sessions${RESET}"
     echo -e "  ${GREEN}3${RESET})   Chain Sync Status         ${DIM}query local node API for current tip${RESET}"
     echo ""

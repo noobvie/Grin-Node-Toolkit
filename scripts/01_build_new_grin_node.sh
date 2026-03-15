@@ -89,10 +89,17 @@
 #                foreign_api_secret_path → <node_dir>/.foreign_api_secret
 #              Also sets peer limits and enables stratum server.
 #
-#   Step  8b — Generate API secret files
+#   Step  8b — Generate API Secret Files
 #              Creates .api_secret and .foreign_api_secret in the node
 #              directory with a 20-character random alphanumeric key.
 #              Sets permissions 600 and ownership grin:grin.
+#
+#   Step  8c — Create grin Service User
+#              Creates the 'grin' system user (no login shell, no home dir
+#              created) if it does not already exist, then sets grin:grin
+#              ownership recursively on /opt/grin so the node runs as the
+#              service account and can initialise ~/.grin/ on first start.
+#              Idempotent — safe on already-provisioned systems.
 #
 #   Step  9 — Chain Data Source & Transfer Mode
 #              User selects a download zone (America / Asia / Europe / Africa).

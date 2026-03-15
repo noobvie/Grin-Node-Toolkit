@@ -57,18 +57,21 @@ from datetime import datetime, timezone
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-# Foreign API (mainnet) — block headers, tip, tx stats.  No auth required.
+# Foreign API (mainnet) — block headers, tip, tx stats.
+# Protected by foreign_api_secret_path in grin-server.toml (toolkit default).
 NODE_URL = os.environ.get("GRIN_NODE_URL", "http://127.0.0.1:3413/v2/foreign")
 WWW_DATA = os.environ.get("GRIN_WWW_DATA", "/var/www/grin-stats/data")
 DB_PATH  = os.environ.get("GRIN_DB_PATH",  "/var/lib/grin-stats/stats.db")
 
+# Foreign API secret — set by Script 01 at <node_dir>/.foreign_api_secret
+FOREIGN_SECRET_PATH = os.environ.get("GRIN_FOREIGN_SECRET_PATH", "")
+
 # Owner APIs — get_connected_peers / get_peers require Basic Auth.
-# The secret is in ~/.grin/main/.api_secret (mainnet) and ~/.grin/test/.api_secret (testnet).
-# Both paths are written to config.env by the install script.
+# Secret paths are written to config.env by the install script.
 MAINNET_OWNER_URL   = os.environ.get("GRIN_MAINNET_OWNER_URL",  "http://127.0.0.1:3413/v2/owner")
-MAINNET_SECRET_PATH = os.environ.get("GRIN_API_SECRET_PATH",    "~/.grin/main/.api_secret")  # ~/.grin/main/.api_secret
+MAINNET_SECRET_PATH = os.environ.get("GRIN_API_SECRET_PATH",    "")
 TESTNET_OWNER_URL   = os.environ.get("GRIN_TESTNET_OWNER_URL",  "http://127.0.0.1:13413/v2/owner")
-TESTNET_SECRET_PATH = os.environ.get("GRIN_TESTNET_SECRET_PATH", "")  # ~/.grin/test/.api_secret
+TESTNET_SECRET_PATH = os.environ.get("GRIN_TESTNET_SECRET_PATH", "")
 
 # Blocks per hour / day at 60-second target
 BLOCKS_PER_HOUR = 60
@@ -104,6 +107,7 @@ def _load_secret(path):
             return f.read().strip()
     return ""
 
+FOREIGN_SECRET     = _load_secret(FOREIGN_SECRET_PATH)
 API_SECRET         = _load_secret(MAINNET_SECRET_PATH)
 TESTNET_API_SECRET = _load_secret(TESTNET_SECRET_PATH)
 
@@ -139,8 +143,8 @@ def _rpc(url, method, params=None, secret="", retries=3):
     return None
 
 def grin_rpc(method, params=None, retries=3):
-    """Foreign API call — block headers, tip, tx data.  No auth required."""
-    return _rpc(NODE_URL, method, params, secret="", retries=retries)
+    """Foreign API call — block headers, tip, tx data."""
+    return _rpc(NODE_URL, method, params, secret=FOREIGN_SECRET, retries=retries)
 
 # ── Timestamp helpers ─────────────────────────────────────────────────────────
 

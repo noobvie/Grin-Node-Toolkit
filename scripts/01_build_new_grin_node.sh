@@ -58,7 +58,7 @@
 #              disk space for the chosen location and, if the directory already
 #              exists, lists its contents (up to 20 items). A bold red warning
 #              is shown when files are present: all will be permanently removed
-#              before downloading begins. User must confirm [y/N/0] before the
+#              before downloading begins. User must confirm [Y/n/0] before the
 #              path is accepted. On confirmation, all existing files are wiped
 #              immediately so the directory is clean for the binary and chain
 #              data that follow.
@@ -902,9 +902,9 @@ select_archive_mode() {
         echo -e "  ${RED}⚠  Low disk space:${RESET} ${_free_gb} GiB free, recommended minimum is ~${_min_gb} GiB"
         echo -e "     for ${ARCHIVE_MODE} mode (archive download + extraction)."
         echo ""
-        echo -ne "  Continue anyway? [y/N]: "
+        echo -ne "  Continue anyway? [Y/n]: "
         read -r _space_ok || true
-        if [[ "${_space_ok,,}" != "y" ]]; then
+        if [[ "${_space_ok,,}" == "n" ]]; then
             exit 0
         fi
     fi
@@ -929,8 +929,8 @@ select_archive_mode() {
 #      up to 20 items with a total count if more).
 #   4. A bold red warning is displayed when files are present:
 #        "All existing files will be permanently removed before downloading."
-#   5. User confirms with [y/N/0]. N or Enter loops back to prompt for a
-#      different path; 0 exits to the main menu; y accepts and breaks.
+#   5. User confirms with [Y/n/0]. n or N loops back to prompt for a
+#      different path; 0 exits to the main menu; Enter or y accepts and breaks.
 #
 # After confirmation, any existing files are removed immediately (rm -rf) so
 # the directory is clean before the binary download begins.
@@ -1012,13 +1012,12 @@ create_node_dir() {
             echo ""
         fi
 
-        echo -ne "${BOLD}Confirm this directory and proceed? [y/N/0]: ${RESET}"
+        echo -ne "${BOLD}Confirm this directory and proceed? [Y/n/0]: ${RESET}"
         local _dir_confirm
         read -r _dir_confirm || true
         case "${_dir_confirm,,}" in
-            y) ;;
+            n) echo ""; continue ;;
             0) exit 0 ;;
-            *) echo ""; continue ;;
         esac
 
         GRIN_DIR="$chosen_dir"
@@ -1320,6 +1319,33 @@ generate_secrets() {
 }
 
 # =============================================================================
+# [8c] CREATE GRIN SERVICE USER
+# -----------------------------------------------------------------------------
+# Creates the 'grin' system user (no login shell, no home dir) if it does not
+# already exist, then sets grin:grin ownership on GRIN_DIR so the node runs
+# under the service account. Safe to call multiple times (idempotent).
+# =============================================================================
+ensure_grin_user() {
+    step_header "Step 8c: Create grin Service User"
+
+    if id grin &>/dev/null; then
+        info "System user 'grin' already exists — skipping creation."
+    else
+        if useradd -r -s /usr/sbin/nologin -d /opt/grin -M grin 2>/dev/null; then
+            success "System user grin:grin created."
+        else
+            warn "Could not create user 'grin' — node will run as current user."
+            return
+        fi
+    fi
+
+    if [[ -n "${GRIN_DIR:-}" && -d "$GRIN_DIR" ]]; then
+        chown -R grin:grin "$GRIN_DIR" 2>/dev/null || true
+        info "Ownership set: grin:grin → $GRIN_DIR"
+    fi
+}
+
+# =============================================================================
 # [9] DOWNLOAD CHAIN DATA FROM TRUSTED SOURCE
 # -----------------------------------------------------------------------------
 # Selects the correct chain data source based on network + archive mode.
@@ -1467,17 +1493,17 @@ download_chain_data() {
         echo -e "  ${RED}n${RESET}) Keep it and continue"
         echo -e "  ${DIM}0${RESET}) Return to main menu"
         echo ""
-        echo -ne "${BOLD}Remove existing archive? [y/N/0]: ${RESET}"
+        echo -ne "${BOLD}Remove existing archive? [Y/n/0]: ${RESET}"
         read -r rm_choice || true
         case "${rm_choice,,}" in
-            y)
+            0) exit 0 ;;
+            n) info "Keeping existing archive. Proceeding..." ;;
+            *)
                 rm -f "$existing_tar"
                 # Also clean up any leftover .sha256 so checksums don't mismatch
                 find "$GRIN_DIR" -maxdepth 1 -name "*.sha256" -delete 2>/dev/null || true
                 success "Existing archive removed. Downloading fresh copy..."
                 ;;
-            0) exit 0 ;;
-            *) info "Keeping existing archive. Proceeding..." ;;
         esac
     fi
 
@@ -1984,6 +2010,7 @@ setup_one_node() {
     generate_config     "$network"
     patch_config        "$network" "$ARCHIVE_MODE"
     generate_secrets
+    ensure_grin_user
     download_chain_data "$network" "$ARCHIVE_MODE"
     if [[ "$STREAM_MODE" == "true" ]]; then
         stream_extract_chain_data

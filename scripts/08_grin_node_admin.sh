@@ -882,9 +882,9 @@ self_update() {
     echo ""
 
     # ── Confirm ───────────────────────────────────────────────────────────────
-    echo -ne "${YELLOW}Pull and install from branch '${branch}'? [y/N]: ${RESET}"
+    echo -ne "${YELLOW}Pull and install from branch '${branch}'? [Y/n]: ${RESET}"
     read -r confirm
-    if [[ "${confirm,,}" != "y" ]]; then
+    if [[ "${confirm,,}" == "n" ]]; then
         info "Update cancelled."
         pause; return
     fi
@@ -1176,6 +1176,26 @@ __EOF__
             chmod 600 "$WALLETS_CONF" 2>/dev/null || true
         else
             info "All directories already at target — nothing to migrate."
+        fi
+
+        # Even when nothing moves, ensure grin user exists and owns the tree.
+        echo ""
+        if id grin &>/dev/null; then
+            info "System user 'grin' already exists."
+        else
+            useradd -r -s /usr/sbin/nologin -d "$dest_base" -M grin \
+                && success "System user grin:grin created." \
+                || warn "Failed to create user 'grin' — manual creation may be needed."
+        fi
+        if [[ -d "$dest_base" ]]; then
+            info "Setting ownership: chown -R grin:grin $dest_base"
+            chown -R grin:grin "$dest_base" 2>/dev/null || true
+            for _wdir in "$dest_base/wallet/mainnet" "$dest_base/wallet/testnet"; do
+                [[ -d "$_wdir" ]] || continue
+                chmod 700 "$_wdir" 2>/dev/null || true
+                [[ -d "$_wdir/wallet_data" ]] && chmod 700 "$_wdir/wallet_data" || true
+            done
+            success "Permissions set."
         fi
         pause; return
     fi

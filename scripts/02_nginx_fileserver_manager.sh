@@ -716,9 +716,9 @@ get_files_directory() {
 get_bandwidth_settings() {
     if [[ -z "$ENABLE_BANDWIDTH_LIMIT" ]]; then
         echo ""
-        read -r -p "Enable bandwidth limiting? (y/n/0) [default: n, 0 = cancel]: " bw_choice
+        read -r -p "Enable bandwidth limiting? (Y/n/0) [default: Y, 0 = cancel]: " bw_choice
         [[ "$bw_choice" == "0" ]] && return 1
-        if [[ "${bw_choice,,}" =~ ^y ]]; then
+        if [[ ! "${bw_choice,,}" =~ ^n ]]; then
             ENABLE_BANDWIDTH_LIMIT="yes"
 
             read -p "Download quota per IP in GB [default: 40, 0 = cancel]: " quota_input
@@ -1419,9 +1419,9 @@ remove_bandwidth_limiting() {
     local other_bandwidth_configs=$(find /etc/nginx/conf.d -name "*-bandwidth-map.conf" 2>/dev/null | wc -l)
     if [[ $other_bandwidth_configs -eq 0 ]]; then
         print_warn "This was the last domain with bandwidth limiting"
-        read -r -p "Remove bandwidth limiter script and cron job? (y/n/0) [0 = cancel]: " bw_remove_choice
+        read -r -p "Remove bandwidth limiter script and cron job? (Y/n/0) [default: Y, 0 = cancel]: " bw_remove_choice
         [[ "$bw_remove_choice" == "0" ]] && return
-        if [[ "${bw_remove_choice,,}" =~ ^y ]]; then
+        if [[ ! "${bw_remove_choice,,}" =~ ^n ]]; then
             rm -f /usr/local/bin/nginx-bandwidth-limiter.sh
             rm -f /etc/cron.d/nginx-bandwidth-limiter
             rm -rf /var/log/nginx/bandwidth
@@ -1648,11 +1648,11 @@ run_setup_grin() {
     if ! check_nginx; then
         local nginx_choice
         while true; do
-            read -r -p "Nginx is not installed. Install it now? (y/n/0) [0 = cancel]: " nginx_choice
+            read -r -p "Nginx is not installed. Install it now? (Y/n/0) [default: Y, 0 = cancel]: " nginx_choice
             [[ "$nginx_choice" == "0" ]] && return 0
-            [[ "${nginx_choice,,}" =~ ^y ]] && install_nginx && break
             [[ "${nginx_choice,,}" =~ ^n ]] && print_error "Nginx is required. Exiting." && return 0
-            # empty or unrecognised — re-prompt
+            install_nginx && break
+            # empty or unrecognised — install
         done
     fi
 
@@ -1660,11 +1660,11 @@ run_setup_grin() {
     if ! check_certbot; then
         local certbot_choice
         while true; do
-            read -r -p "Certbot is not installed. Install it now? (y/n/0) [0 = cancel]: " certbot_choice
+            read -r -p "Certbot is not installed. Install it now? (Y/n/0) [default: Y, 0 = cancel]: " certbot_choice
             [[ "$certbot_choice" == "0" ]] && return 0
-            [[ "${certbot_choice,,}" =~ ^y ]] && install_certbot && break
             [[ "${certbot_choice,,}" =~ ^n ]] && print_error "Certbot is required for SSL. Exiting." && return 0
-            # empty or unrecognised — re-prompt
+            install_certbot && break
+            # empty or unrecognised — install
         done
     fi
 
@@ -1688,13 +1688,12 @@ run_setup_grin() {
     echo ""
     local proceed_choice
     while true; do
-        read -r -p "Proceed with setup? (y/n/0) [0 = cancel]: " proceed_choice
+        read -r -p "Proceed with setup? (Y/n/0) [default: Y, 0 = cancel]: " proceed_choice
         [[ "$proceed_choice" == "0" ]] && print_info "Setup cancelled." && return 0
-        [[ "${proceed_choice,,}" =~ ^y ]] && break
         [[ "${proceed_choice,,}" =~ ^n ]] && print_info "Setup cancelled." && return 0
-        # empty or unrecognised — re-prompt
+        break
     done
-    
+
     # Execute setup steps
     create_files_directory
     create_initial_nginx_config
@@ -1702,7 +1701,7 @@ run_setup_grin() {
     enhance_nginx_config
     setup_bandwidth_limiting
     setup_auto_renewal
-    
+
     # Display summary
     display_setup_summary
     echo ""
@@ -1719,10 +1718,10 @@ run_setup_custom() {
     if ! check_nginx; then
         local nginx_choice
         while true; do
-            read -r -p "Nginx is not installed. Install it now? (y/n/0) [0 = cancel]: " nginx_choice
+            read -r -p "Nginx is not installed. Install it now? (Y/n/0) [default: Y, 0 = cancel]: " nginx_choice
             [[ "$nginx_choice" == "0" ]] && return 0
-            [[ "${nginx_choice,,}" =~ ^y ]] && install_nginx && break
             [[ "${nginx_choice,,}" =~ ^n ]] && print_error "Nginx is required. Exiting." && return 0
+            install_nginx && break
         done
     fi
 
@@ -1730,10 +1729,10 @@ run_setup_custom() {
     if ! check_certbot; then
         local certbot_choice
         while true; do
-            read -r -p "Certbot is not installed. Install it now? (y/n/0) [0 = cancel]: " certbot_choice
+            read -r -p "Certbot is not installed. Install it now? (Y/n/0) [default: Y, 0 = cancel]: " certbot_choice
             [[ "$certbot_choice" == "0" ]] && return 0
-            [[ "${certbot_choice,,}" =~ ^y ]] && install_certbot && break
             [[ "${certbot_choice,,}" =~ ^n ]] && print_error "Certbot is required for SSL. Exiting." && return 0
+            install_certbot && break
         done
     fi
 
@@ -1757,10 +1756,10 @@ run_setup_custom() {
     echo ""
     local proceed_choice
     while true; do
-        read -r -p "Proceed with setup? (y/n/0) [0 = cancel]: " proceed_choice
+        read -r -p "Proceed with setup? (Y/n/0) [default: Y, 0 = cancel]: " proceed_choice
         [[ "$proceed_choice" == "0" ]] && print_info "Setup cancelled." && return 0
-        [[ "${proceed_choice,,}" =~ ^y ]] && break
         [[ "${proceed_choice,,}" =~ ^n ]] && print_info "Setup cancelled." && return 0
+        break
     done
 
     # Execute setup steps
@@ -2111,9 +2110,9 @@ run_lift_rate() {
             fi
             ;;
         2)
-            read -r -p "Remove rate limits for ALL IPs? (y/n/0) [0 = cancel]: " all_choice
+            read -r -p "Remove rate limits for ALL IPs? (Y/n/0) [default: Y, 0 = cancel]: " all_choice
             [[ "$all_choice" == "0" ]] && return
-            if [[ "${all_choice,,}" =~ ^y ]]; then
+            if [[ ! "${all_choice,,}" =~ ^n ]]; then
                 cat > "$IP_LIMITS_CONF" << 'EOF'
 # Grin File Server - Per-IP rate limits (bytes/s, 0 = unlimited)
 # Managed by 02_nginx-fileserver-manager.sh
@@ -2157,11 +2156,11 @@ run_enhance_security() {
     echo ""
     local sec_choice
     while true; do
-        read -r -p "Proceed? (y/n/0) [0 = cancel]: " sec_choice
+        read -r -p "Proceed? (Y/n/0) [default: Y, 0 = cancel]: " sec_choice
         [[ "$sec_choice" == "0" ]] && print_info "Cancelled." && return
-        [[ "${sec_choice,,}" =~ ^y ]] && break
         [[ "${sec_choice,,}" =~ ^n ]] && print_info "Cancelled." && return
-        # empty or unrecognised — re-prompt
+        break
+        # empty or unrecognised — proceed
     done
 
     # ----- Step 1: Install fail2ban -----

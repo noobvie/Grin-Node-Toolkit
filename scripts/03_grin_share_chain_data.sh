@@ -505,10 +505,10 @@ run_ssh_setup() {
         cur_key="${!var_key:-$default_key}"
         cur_rdir="${!var_rdir:-/var/www/${ntype}${net:0:4}}"
 
-        echo -ne "  Enable SSH upload for this node type? [y/N/0]: "
+        echo -ne "  Enable SSH upload for this node type? [Y/n/0]: "
         read -r answer
         [[ "$answer" == "0" ]] && return
-        if [[ "${answer,,}" != "y" ]]; then
+        if [[ "${answer,,}" == "n" ]]; then
             printf -v "$var_enable" '%s' "false"
             echo -e "  ${DIM}Skipped.${RESET}"
             echo ""
@@ -1546,13 +1546,13 @@ add_nginx_schedule() {
 
     if echo "$existing" | grep -qF "grin_share_nginx"; then
         sched_warn "A nginx cron job already exists."
-        echo -ne "Replace it? [y/N/0]: "
+        echo -ne "Replace it? [Y/n/0]: "
         read -r rep
         [[ "$rep" == "0" ]] && return
-        if [[ "${rep,,}" == "y" ]]; then
-            existing=$(echo "$existing" | grep -v "grin_share_nginx" || true)
-        else
+        if [[ "${rep,,}" == "n" ]]; then
             sched_info "Keeping existing schedule."; echo ""; echo "Press Enter to continue..."; read -r; return
+        else
+            existing=$(echo "$existing" | grep -v "grin_share_nginx" || true)
         fi
     fi
 
@@ -1576,10 +1576,10 @@ add_nginx_schedule() {
 remove_nginx_schedule() {
     echo -e "\n${BOLD}${CYAN}── Disable Nginx Jobs ──${RESET}\n"
     show_current_schedule
-    echo -ne "${YELLOW}Remove chain_data sharing cron job only? [y/N/0]: ${RESET}"
+    echo -ne "${YELLOW}Remove chain_data sharing cron job only? [Y/n/0]: ${RESET}"
     read -r confirm
     [[ "$confirm" == "0" ]] && return
-    if [[ "${confirm,,}" == "y" ]]; then
+    if [[ "${confirm,,}" != "n" ]]; then
         local tmp_cron; tmp_cron=$(crontab -l 2>/dev/null | grep -v "grin_share_nginx" || true)
         echo "$tmp_cron" | crontab -
         sched_success "Nginx cron jobs removed."
@@ -1627,13 +1627,13 @@ add_clean_schedule() {
 
     if echo "$existing" | grep -qF "grin_clean_txhashset"; then
         sched_warn "A cleanup cron job already exists."
-        echo -ne "Replace it? [y/N/0]: "
+        echo -ne "Replace it? [Y/n/0]: "
         local rep; read -r rep
         [[ "$rep" == "0" ]] && return
-        if [[ "${rep,,}" == "y" ]]; then
-            existing=$(echo "$existing" | grep -v "grin_clean_txhashset" || true)
-        else
+        if [[ "${rep,,}" == "n" ]]; then
             sched_info "Keeping existing schedule."; echo ""; echo "Press Enter to continue..."; read -r; return
+        else
+            existing=$(echo "$existing" | grep -v "grin_clean_txhashset" || true)
         fi
     fi
 
@@ -1738,11 +1738,11 @@ add_grin_autostart() {
         # Check for existing entry
         if echo "$existing_cron" | grep -qF "$cron_marker"; then
             sched_warn "An autostart entry for $label already exists."
-            echo -ne "  Replace it? [y/N/0]: "
+            echo -ne "  Replace it? [Y/n/0]: "
             local rep=""
             read -r rep
             [[ "$rep" == "0" ]] && return
-            if [[ "${rep,,}" == "y" ]]; then
+            if [[ "${rep,,}" != "n" ]]; then
                 existing_cron=$(echo "$existing_cron" | grep -vF "$cron_marker" || true)
                 new_lines+=$'\n'"$cron_line"
                 sched_success "$label autostart replaced."
@@ -1891,9 +1891,10 @@ menu_share_nginx() {
     load_nginx_config
 
     echo -e "\n${YELLOW}[WARN]${RESET}  Grin will be stopped, chain_data compressed, then restarted."
-    echo -ne "Continue? [y/N/0]: "
+    echo -ne "Continue? [Y/n/0]: "
     read -r confirm
-    [[ "${confirm,,}" != "y" ]] && echo -e "${DIM}Cancelled.${RESET}" && return
+    [[ "$confirm" == "0" ]] && echo -e "${DIM}Cancelled.${RESET}" && return
+    [[ "${confirm,,}" == "n" ]] && echo -e "${DIM}Cancelled.${RESET}" && return
 
     echo ""
     ( run_cron_nginx )

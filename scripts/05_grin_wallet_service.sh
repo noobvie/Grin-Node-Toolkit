@@ -382,7 +382,13 @@ init_wallet() {
 
     info "Initializing wallet — write down the seed phrase that appears below!"
     echo ""
-    cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" init
+    # --testnet generates correct chain_type, api_listen_port, and
+    # check_node_api_http_addr automatically; no need to patch those fields.
+    if [[ "$NETWORK" == "testnet" ]]; then
+        cd "$WALLET_DIR" && "$WALLET_BIN" --testnet --top_level_dir "$WALLET_DIR" -p "$wallet_pass" init
+    else
+        cd "$WALLET_DIR" && "$WALLET_BIN" --top_level_dir "$WALLET_DIR" -p "$wallet_pass" init
+    fi
     local rc=$?
     unset wallet_pass wallet_pass2
     echo ""
@@ -395,24 +401,19 @@ init_wallet() {
     success "Wallet initialized: $GRIN_WALLET_TOML"
     info "Patching grin-wallet.toml for $NETWORK..."
 
-    local api_port owner_api_port socks_addr chain_type_val
+    local owner_api_port socks_addr
     if [[ "$NETWORK" == "mainnet" ]]; then
-        api_port=3415; owner_api_port=3420
-        socks_addr="127.0.0.1:59050"; chain_type_val='"Mainnet"'
+        owner_api_port=3420; socks_addr="127.0.0.1:59050"
     else
-        api_port=13415; owner_api_port=13420
-        socks_addr="127.0.0.1:59060"; chain_type_val='"Testnet"'
+        owner_api_port=13420; socks_addr="127.0.0.1:59060"
     fi
 
-    _patch_toml "$GRIN_WALLET_TOML" "chain_type"               "$chain_type_val"
-    _patch_toml "$GRIN_WALLET_TOML" "api_listen_port"          "$api_port"
-    _patch_toml "$GRIN_WALLET_TOML" "owner_api_listen_port"    "$owner_api_port"
-    _patch_toml "$GRIN_WALLET_TOML" "check_node_api_http_addr" "\"http://127.0.0.1:$NODE_PORT\""
-    _patch_toml "$GRIN_WALLET_TOML" "socks_proxy_addr"         "\"$socks_addr\""
-    _patch_toml "$GRIN_WALLET_TOML" "log_max_files"            "3"
+    _patch_toml "$GRIN_WALLET_TOML" "owner_api_listen_port" "$owner_api_port"
+    _patch_toml "$GRIN_WALLET_TOML" "socks_proxy_addr"      "\"$socks_addr\""
+    _patch_toml "$GRIN_WALLET_TOML" "log_max_files"         "3"
 
-    success "grin-wallet.toml patched: api=$api_port, owner=$owner_api_port, node=127.0.0.1:$NODE_PORT, tor=$socks_addr, log_max_files=3"
-    log "[init_wallet] network=$NETWORK node=127.0.0.1:$NODE_PORT toml=$GRIN_WALLET_TOML"
+    success "grin-wallet.toml patched: owner=$owner_api_port, tor=$socks_addr, log_max_files=3"
+    log "[init_wallet] network=$NETWORK toml=$GRIN_WALLET_TOML owner_api=$owner_api_port tor=$socks_addr"
     _harden_wallet_dir
     save_wallet_location
 }
@@ -438,10 +439,10 @@ start_wallet() {
 
     if tmux has-session -t "$session" 2>/dev/null; then
         warn "Existing tmux session '$session' found."
-        echo -ne "Kill it and restart? [y/N/0]: "
+        echo -ne "Kill it and restart? [Y/n/0]: "
         read -r restart_choice || true
         [[ "$restart_choice" == "0" ]] && info "Keeping existing session. Attach: tmux attach -t $session" && return
-        if [[ "${restart_choice,,}" == "y" ]]; then
+        if [[ "${restart_choice,,}" != "n" ]]; then
             tmux kill-session -t "$session"
             success "Existing session stopped."
         else
@@ -648,10 +649,10 @@ ww_deploy_files() {
 
     if [[ -d "$WW_DEPLOY_DIR" ]]; then
         warn "Directory already exists: $WW_DEPLOY_DIR"
-        echo -ne "Update files? (existing config.json will be preserved) [y/N/0]: "
+        echo -ne "Update files? (existing config.json will be preserved) [Y/n/0]: "
         read -r overwrite || true
         [[ "$overwrite" == "0" ]] && return
-        [[ "${overwrite,,}" != "y" ]] && info "Cancelled." && return
+        [[ "${overwrite,,}" == "n" ]] && info "Cancelled." && return
     fi
 
     info "Deploying from $WEB_WALLET_SRC_DIR → $WW_DEPLOY_DIR ..."
@@ -730,10 +731,10 @@ ww_configure_nginx() {
     info "Deploy dir : $WW_DEPLOY_DIR"
     info "PHP-FPM    : $WW_PHP_FPM_SOCK"
     echo ""
-    echo -ne "${BOLD}Write nginx config? [y/N/0]: ${RESET}"
+    echo -ne "${BOLD}Write nginx config? [Y/n/0]: ${RESET}"
     read -r confirm || true
     [[ "$confirm" == "0" ]] && return
-    [[ "${confirm,,}" != "y" ]] && info "Cancelled." && return
+    [[ "${confirm,,}" == "n" ]] && info "Cancelled." && return
 
     # Rate-limit snippet
     info "Writing rate-limit zone ..."
@@ -844,10 +845,10 @@ ww_setup_ssl() {
     [[ -z "$WW_EMAIL" ]] && warn "No email entered." && return
 
     echo ""
-    echo -ne "${BOLD}Request SSL certificate for $WW_DOMAIN? [y/N/0]: ${RESET}"
+    echo -ne "${BOLD}Request SSL certificate for $WW_DOMAIN? [Y/n/0]: ${RESET}"
     read -r confirm || true
     [[ "$confirm" == "0" ]] && return
-    [[ "${confirm,,}" != "y" ]] && info "Cancelled." && return
+    [[ "${confirm,,}" == "n" ]] && info "Cancelled." && return
 
     info "Requesting certificate for $WW_DOMAIN ..."
     certbot --nginx -d "$WW_DOMAIN" --non-interactive --agree-tos -m "$WW_EMAIL" \
@@ -919,10 +920,10 @@ ww_configure_firewall() {
     echo -e "  ${DIM}Opens port 443 (HTTPS) and 80 (HTTP → redirect + certbot renewal).${RESET}"
     echo -e "  ${DIM}Wallet API ports (3415/13415) stay on localhost — NOT opened publicly.${RESET}"
     echo ""
-    echo -ne "${BOLD}Open ports 80 and 443 in the firewall? [y/N/0]: ${RESET}"
+    echo -ne "${BOLD}Open ports 80 and 443 in the firewall? [Y/n/0]: ${RESET}"
     read -r confirm || true
     [[ "$confirm" == "0" ]] && return
-    [[ "${confirm,,}" != "y" ]] && info "Cancelled." && return
+    [[ "${confirm,,}" == "n" ]] && info "Cancelled." && return
 
     if command -v ufw &>/dev/null; then
         ufw allow 443/tcp && success "UFW: port 443 opened."

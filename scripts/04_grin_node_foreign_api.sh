@@ -424,9 +424,10 @@ _enable_node_api_nginx() {
 
     if ! ss -tlnp 2>/dev/null | grep -q ":$port "; then
         warn "Port $port is not listening. Make sure your Grin $network node is running."
-        echo -ne "Continue anyway? [y/N/0]: "
+        echo -ne "Continue anyway? [Y/n/0]: "
         read -r cont
-        [[ "${cont,,}" != "y" ]] && return
+        [[ "$cont" == "0" ]] && return
+        [[ "${cont,,}" == "n" ]] && return
     fi
 
     local _eg_domain; [[ "$network" == "mainnet" ]] && _eg_domain="api.example.com" || _eg_domain="testapi.example.com"

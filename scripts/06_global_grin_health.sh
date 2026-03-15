@@ -328,9 +328,10 @@ import_data() {
         b)
             warn "Full history import takes 6+ hours and should be run only ONCE."
             warn "Run this step inside tmux session to avoid connection interruption."
-            echo -ne "Continue? [y/N/0]: "
+            echo -ne "Continue? [Y/n/0]: "
             read -r ok || true
-            [[ "${ok,,}" != "y" ]] && info "Cancelled." && return
+            [[ "$ok" == "0" ]] && info "Cancelled." && return
+            [[ "${ok,,}" == "n" ]] && info "Cancelled." && return
             cmd="--init-history"
             desc="Full history import"
             ;;
@@ -373,12 +374,12 @@ start_updates() {
     local existing; existing=$(crontab -l 2>/dev/null || true)
     if echo "$existing" | grep -qF "grin_stats_update"; then
         warn "Stats cron job already active."
-        echo -ne "Replace it? [y/N/0]: "
+        echo -ne "Replace it? [Y/n/0]: "
         read -r rep; [[ "$rep" == "0" ]] && return
-        if [[ "${rep,,}" == "y" ]]; then
-            existing=$(echo "$existing" | grep -v "grin_stats_update" || true)
-        else
+        if [[ "${rep,,}" == "n" ]]; then
             info "Keeping existing schedule."; pause; return
+        else
+            existing=$(echo "$existing" | grep -v "grin_stats_update" || true)
         fi
     fi
 
@@ -762,18 +763,19 @@ start_explorer() {
             echo -e "  ${DIM}Toolkit default for full archive: /opt/grin/node/mainnet-full/chain_data${RESET}"
             echo -e "  ${DIM}Run Configure (B→2) to update grin_dir to the correct path.${RESET}"
             echo ""
-            echo -ne "Continue anyway? [y/N/0]: "
+            echo -ne "Continue anyway? [Y/n/0]: "
             read -r cont_anyway
-            [[ "$cont_anyway" == "0" || "${cont_anyway,,}" != "y" ]] && return
+            [[ "$cont_anyway" == "0" ]] && return
+            [[ "${cont_anyway,,}" == "n" ]] && return
             echo ""
         fi
     fi
 
     if tmux has-session -t "$EXPLORER_SESSION" 2>/dev/null; then
         warn "Explorer session '${EXPLORER_SESSION}' is already running."
-        echo -ne "Restart it? [y/N/0]: "
+        echo -ne "Restart it? [Y/n/0]: "
         read -r rep; [[ "$rep" == "0" ]] && return
-        if [[ "${rep,,}" == "y" ]]; then
+        if [[ "${rep,,}" != "n" ]]; then
             tmux kill-session -t "$EXPLORER_SESSION" 2>/dev/null || true
             sleep 1
         else
@@ -843,10 +845,10 @@ schedule_explorer_autostart() {
     # ── Check for existing entry ───────────────────────────────────────────────
     if echo "$all_cron" | grep -qF "grin_explorer"; then
         warn "An explorer auto-start cron entry already exists."
-        echo -ne "  Replace it? [y/N/0]: "
+        echo -ne "  Replace it? [Y/n/0]: "
         local rep; read -r rep
         [[ "$rep" == "0" ]] && return
-        if [[ "${rep,,}" == "y" ]]; then
+        if [[ "${rep,,}" != "n" ]]; then
             all_cron=$(echo "$all_cron" | grep -v "grin_explorer" || true)
         else
             info "Keeping existing entry."; echo ""; pause; return
@@ -1051,11 +1053,11 @@ check_dns_record() {
     echo -e "  ${BOLD}Using Cloudflare?${RESET} Change your A record from ${BOLD}Proxied${RESET} to ${BOLD}DNS only${RESET}."
     echo -e "  ${DIM}This makes your Grin node reachable as a DNSSeed and avoids certbot / Let's Encrypt issues.${RESET}"
     echo ""
-    echo -ne "${BOLD}Have you set (or confirmed) your DNS A-record? [y/N/0]: ${RESET}"
+    echo -ne "${BOLD}Have you set (or confirmed) your DNS A-record? [Y/n/0]: ${RESET}"
     read -r _dns_confirm
     [[ "$_dns_confirm" == "0" ]] && return
     echo ""
-    if [[ "${_dns_confirm,,}" == "y" ]]; then
+    if [[ "${_dns_confirm,,}" != "n" ]]; then
         success "DNS confirmed. Proceed to Setup Nginx (step 5)."
     else
         warn "Please set your DNS A-record before running Setup Nginx (step 5)."

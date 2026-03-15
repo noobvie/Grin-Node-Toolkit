@@ -39,7 +39,7 @@ Usage (commands):
 Config (env vars or /opt/grin/grin-stats/config.env):
     GRIN_NODE_URL          default: http://127.0.0.1:3413/v2/foreign
     GRIN_API_SECRET_PATH   path to .api_secret file (optional)
-    GRIN_WWW_DATA          default: /opt/grin/grin-stats/www/data
+    GRIN_WWW_DATA          default: /var/www/grin-stats/data
     GRIN_DB_PATH           default: /opt/grin/grin-stats/stats.db
 """
 
@@ -60,7 +60,7 @@ from datetime import datetime, timezone
 # Foreign API (mainnet) — block headers, tip, tx stats.
 # Protected by foreign_api_secret_path in grin-server.toml (toolkit default).
 NODE_URL = os.environ.get("GRIN_NODE_URL", "http://127.0.0.1:3413/v2/foreign")
-WWW_DATA = os.environ.get("GRIN_WWW_DATA", "/opt/grin/grin-stats/www/data")
+WWW_DATA = os.environ.get("GRIN_WWW_DATA", "/var/www/grin-stats/data")
 DB_PATH  = os.environ.get("GRIN_DB_PATH",  "/opt/grin/grin-stats/stats.db")
 
 # Foreign API secret — set by Script 01 at <node_dir>/.foreign_api_secret

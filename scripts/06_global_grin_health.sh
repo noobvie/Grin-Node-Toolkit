@@ -3,7 +3,7 @@
 # 06_global_grin_health.sh — Global Grin Health
 # =============================================================================
 #   A) Network Stats + Peer Map   (Python collector → Chart.js + Leaflet)
-#      stats.yourdomain.com       nginx serves /opt/grin/grin-stats/www/ (static)
+#      stats.yourdomain.com       nginx serves /var/www/grin-stats/ (static)
 #
 #   B) Grin Explorer              (aglkm/grin-explorer — Rust + Rocket)
 #      explorer.yourdomain.com    nginx proxy → 127.0.0.1:8000
@@ -45,7 +45,7 @@ LOG_FILE="$LOG_DIR/global_grin_health_$(date +%Y%m%d_%H%M%S).log"
 
 # ─── Runtime paths (created on install) ──────────────────────────────────────
 DATA_DIR="/opt/grin/grin-stats"
-WWW_DIR="/opt/grin/grin-stats/www"
+WWW_DIR="/var/www/grin-stats"
 COLLECTOR_BIN="/usr/local/bin/grin-stats-collector"
 DB_PATH="$DATA_DIR/stats.db"
 EXPLORER_DIR="/opt/grin/grin-explorer"
@@ -235,6 +235,7 @@ install_stats() {
     info "Creating directories..."
     mkdir -p "$DATA_DIR" "$WWW_DIR/data"
     chmod 755 "$DATA_DIR" "$WWW_DIR"
+    id grin &>/dev/null && chown -R grin:grin "$DATA_DIR" || true
 
     # Deploy collector script
     info "Installing collector script..."

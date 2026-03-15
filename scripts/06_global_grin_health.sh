@@ -725,7 +725,8 @@ configure_explorer() {
     sed -i "s|^protocol\s*=.*|protocol = \"${cfg_proto}\"|" "$toml"
 
     if [[ -n "$cfg_secret" ]]; then
-        sed -i "s|^api_secret_path\s*=.*|api_secret_path = \"${foreign_secret_path}\"|" "$toml"
+        sed -i "s|^api_secret_path\s*=.*|api_secret_path = \"${foreign_secret_path}\"|"                 "$toml"
+        sed -i "s|^foreign_api_secret_path\s*=.*|foreign_api_secret_path = \"${foreign_secret_path}\"|" "$toml"
     fi
 
     # Patch grin_dir (only for local node; remote nodes connect via API only)
@@ -742,7 +743,8 @@ configure_explorer() {
     [[ -n "$cfg_grin_dir" ]] && \
         echo -e "    grin_dir         = ${CYAN}${cfg_grin_dir}${RESET}  ${DIM}(parent of chain_data)${RESET}"
     [[ -n "$cfg_secret" ]] && \
-        echo -e "    api_secret_path  = ${CYAN}${foreign_secret_path}${RESET}"
+        echo -e "    api_secret_path          = ${CYAN}${foreign_secret_path}${RESET}" && \
+        echo -e "    foreign_api_secret_path  = ${CYAN}${foreign_secret_path}${RESET}"
     echo ""
 
     if [[ "$node_choice" != "2" ]] && [[ ! -d /opt/grin/node/mainnet-full ]]; then

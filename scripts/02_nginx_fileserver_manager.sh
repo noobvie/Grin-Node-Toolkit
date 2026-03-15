@@ -1,18 +1,49 @@
 #!/bin/bash
-
-#############################################################################
-# Nginx File Server Management Script
-# Unified script for: Grin node domains, Custom domains, Remove Domain
-# Features: SSL, HSTS, Bandwidth Limiting, Directory Listing
-#############################################################################
+################################################################################
+# Script 02 — Nginx File Server Manager
+# Part of: Grin Node Toolkit  (https://github.com/noobvie/grin-node-toolkit)
+################################################################################
+#
+# PURPOSE
+#   Manages nginx virtual hosts that serve files over HTTPS. Primarily used to
+#   host Grin chain-data archives for download by other nodes, but also supports
+#   fully custom domains for any static file directory.
+#
+# MODES
+#   grin    — Set up a file server for a detected Grin node. Auto-detects the
+#             running node type and suggests the correct web directory
+#             (fullmain / prunemain / prunetest).
+#   custom  — Set up a file server for any domain and directory.
+#   remove  — Remove a managed nginx virtual host (optionally delete files).
+#   list    — List all nginx virtual hosts managed by this script.
+#
+# FEATURES
+#   · SSL via Let's Encrypt (certbot); HSTS enforced
+#   · Optional per-IP bandwidth quota and speed limiting
+#   · IP rate limiting and fail2ban integration
+#   · Directory listing (nginx autoindex)
+#   · Firewall rules (ufw / iptables / firewalld) opened automatically
+#
+# PREREQUISITES
+#   · Must be run as root
+#   · nginx and certbot (auto-installed if missing)
+#   · DNS A record must point to this server's IP — if using Cloudflare, set
+#     the record to "DNS only" (not "Proxied") for certbot and Grin DNSSeed
+#   · Ports 80 and 443 open and reachable from the internet
+#
+# NON-INTERACTIVE MODE
+#   Set ACTION and the variables below before running to skip the interactive
+#   menu. Leave them empty to use the interactive prompt instead.
+#
+# LOG FILE
+#   <toolkit_root>/log/02_nginx_<action>_YYYYMMDD_HHMMSS.log
+#
+################################################################################
 
 set -e  # Exit on any error
 
-#############################################################################
-# Configuration Variables - EDIT THESE FOR NON-INTERACTIVE MODE
-#############################################################################
-
-# Set action here, or leave empty for interactive menu
+# ── Non-interactive configuration ────────────────────────────────────────────
+# Set ACTION here, or leave empty for interactive menu
 # Options: "grin" | "custom" | "remove" | "list"
 ACTION=""
 
@@ -21,30 +52,15 @@ DOMAIN=""                    # e.g., "files.example.com"
 EMAIL=""                     # e.g., "admin@example.com"
 FILES_DIR=""                 # e.g., "/var/www/myfiles" (leave empty for default)
 
-# Bandwidth limiting settings (optional - leave empty to disable)
+# Bandwidth limiting settings (optional — leave empty to disable)
 ENABLE_BANDWIDTH_LIMIT=""    # Set to "yes" to enable, empty to disable
-DOWNLOAD_QUOTA_GB="40"       # Download quota per IP in GB (default: 40GB)
-SPEED_LIMIT_AFTER_QUOTA="1m" # Speed limit after quota reached (e.g., 1m = 1MB/s, 500k = 500KB/s)
-NORMAL_SPEED_LIMIT="10m"     # Normal speed limit per connection (e.g., 10m = 10MB/s, empty = unlimited)
+DOWNLOAD_QUOTA_GB="40"       # Download quota per IP in GB (default: 40 GB)
+SPEED_LIMIT_AFTER_QUOTA="1m" # Speed after quota hit (e.g. 1m = 1 MB/s)
+NORMAL_SPEED_LIMIT="10m"     # Normal speed cap per connection (empty = unlimited)
 
 # Domain removal configuration
 DOMAIN_TO_REMOVE=""          # Domain to remove
-DELETE_FILES=""              # Set to "yes" to delete files, "no" to keep
-
-#############################################################################
-# IMPORTANT NOTES BEFORE RUNNING:
-#############################################################################
-# 
-# 1. DNS REQUIREMENT:
-#    Your domain A record must point directly to this server's IP address.
-#    If you use Cloudflare, change the A record from "Proxied" to "DNS only"
-#    — this makes your Grin node reachable as a DNSSeed and avoids
-#    Let's Encrypt / certbot certificate issues.
-#
-# 2. FIREWALL:
-#    Ensure ports 80 and 443 are open and accessible from the internet.
-#
-#############################################################################
+DELETE_FILES=""              # "yes" to delete files, "no" to keep
 
 #############################################################################
 # System Variables - DO NOT EDIT

@@ -44,11 +44,11 @@ LOG_DIR="$TOOLKIT_ROOT/log"
 LOG_FILE="$LOG_DIR/global_grin_health_$(date +%Y%m%d_%H%M%S).log"
 
 # ─── Runtime paths (created on install) ──────────────────────────────────────
-DATA_DIR="/var/lib/grin-stats"
+DATA_DIR="/opt/grin/grin-stats"
 WWW_DIR="/var/www/grin-stats"
 COLLECTOR_BIN="/usr/local/bin/grin-stats-collector"
 DB_PATH="$DATA_DIR/stats.db"
-EXPLORER_DIR="/opt/grin-explorer"
+EXPLORER_DIR="/opt/grin/grin-explorer"
 EXPLORER_BIN="$EXPLORER_DIR/target/release/grin-explorer"
 EXPLORER_TOML="$EXPLORER_DIR/Explorer.toml"
 
@@ -135,8 +135,33 @@ install_nginx_certbot() {
     pause
 }
 
+# ─── Resolve secret path from grin-server.toml ───────────────────────────────
+# Reads api_secret_path or foreign_api_secret_path from a grin-server.toml,
+# expands ~ to the grin user's home (/opt/grin), and returns the absolute path.
+# Falls back to $default if the field is absent or the resolved file doesn't exist.
+_resolve_secret_from_toml() {
+    local toml="$1" field="$2" default="$3"
+    local raw resolved
+    raw=$(grep -E "^[[:space:]]*${field}[[:space:]]*=" "$toml" 2>/dev/null \
+          | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
+    [[ -z "$raw" ]] && { echo "$default"; return; }
+    # Expand ~ to the grin user home (/opt/grin) — grin runs as the grin user
+    resolved="${raw/#\~//opt/grin}"
+    [[ -f "$resolved" ]] && echo "$resolved" || echo "$default"
+}
+
 # ─── Detect running Grin node ─────────────────────────────────────────────────
-# Sets: NODE_PORT  NODE_URL  API_SECRET_PATH  NODE_DIR
+# Sets: NODE_PORT  NODE_URL  NODE_DIR  NODE_TYPE  API_SECRET_PATH  FOREIGN_SECRET_PATH
+#
+# NODE_TYPE is "full" (archive — mainnet-full) or "prune" (pruned — mainnet-prune
+# or testnet-prune).  Script 06 features that require full block history (explorer,
+# incremental stats) should check NODE_TYPE and warn when only a pruned node is found.
+#
+# Detection order for mainnet (both directories may co-exist):
+#   1. tmux session grin_mainnet-full  is active  → mainnet-full  (preferred)
+#   2. tmux session grin_mainnet-prune is active  → mainnet-prune
+#   3. No session found                           → prefer mainnet-full if the
+#                                                    directory exists, else prune
 detect_node() {
     local mainnet_up=0 testnet_up=0
     ss -tlnp 2>/dev/null | grep -q ":${MAINNET_PORT} " && mainnet_up=1
@@ -157,13 +182,32 @@ detect_node() {
     NODE_URL="http://127.0.0.1:${NODE_PORT}/v2/foreign"
 
     if [[ $NODE_PORT -eq $MAINNET_PORT ]]; then
-        API_SECRET_PATH="$HOME/.grin/main/.api_secret"
-        NODE_DIR="/opt/grin/node/mainnet-full"
-        [[ -d /opt/grin/node/mainnet-prune ]] && NODE_DIR="/opt/grin/node/mainnet-prune"
+        # Script 01 names tmux sessions grin_<basename(node_dir)>, so the active
+        # session name reliably identifies which node is running on port 3413.
+        # mainnet-full (archive) is always preferred: it provides complete block
+        # history required by the explorer and the stats incremental updater.
+        if tmux has-session -t "grin_mainnet-full" 2>/dev/null; then
+            NODE_DIR="/opt/grin/node/mainnet-full"
+            NODE_TYPE="full"
+        elif tmux has-session -t "grin_mainnet-prune" 2>/dev/null; then
+            NODE_DIR="/opt/grin/node/mainnet-prune"
+            NODE_TYPE="prune"
+        elif [[ -d /opt/grin/node/mainnet-full ]]; then
+            # No active tmux session — prefer full archive if the directory exists.
+            NODE_DIR="/opt/grin/node/mainnet-full"
+            NODE_TYPE="full"
+        else
+            NODE_DIR="/opt/grin/node/mainnet-prune"
+            NODE_TYPE="prune"
+        fi
     else
-        API_SECRET_PATH="$HOME/.grin/test/.api_secret"
         NODE_DIR="/opt/grin/node/testnet-prune"
+        NODE_TYPE="prune"
     fi
+
+    local toml="$NODE_DIR/grin-server.toml"
+    API_SECRET_PATH=$(_resolve_secret_from_toml "$toml" "api_secret_path"         "$NODE_DIR/.api_secret")
+    FOREIGN_SECRET_PATH=$(_resolve_secret_from_toml "$toml" "foreign_api_secret_path" "$NODE_DIR/.foreign_api_secret")
 }
 
 # ─── Check Python 3 ───────────────────────────────────────────────────────────
@@ -191,6 +235,7 @@ install_stats() {
     info "Creating directories..."
     mkdir -p "$DATA_DIR" "$WWW_DIR/data"
     chmod 755 "$DATA_DIR" "$WWW_DIR"
+    id grin &>/dev/null && chown -R grin:grin "$DATA_DIR" || true
 
     # Deploy collector script
     info "Installing collector script..."
@@ -255,19 +300,33 @@ install_stats() {
 
     # Write collector config
     detect_node
+    if [[ "$NODE_TYPE" == "full" ]]; then
+        info "Detected node type: ${GREEN}full archive${RESET} (${NODE_DIR})  — complete block history available."
+    else
+        info "Detected node type: ${YELLOW}pruned${RESET} (${NODE_DIR})."
+        warn "A full archive node (mainnet-full) is recommended for complete stats history."
+        warn "Option B (Explorer) requires a full archive node — install one via Script 01."
+    fi
     info "Writing collector config..."
-    # Always use the standard Grin config-dir paths for API secrets.
-    # detect_node() sets API_SECRET_PATH based on whichever node was detected,
-    # but we need BOTH secrets explicitly so the collector can authenticate
-    # against both the mainnet and testnet owner APIs independently.
-    local mainnet_secret="$HOME/.grin/main/.api_secret"
-    local testnet_secret="$HOME/.grin/test/.api_secret"
+    # Read secret paths from grin-server.toml so we always match what the running
+    # node actually uses — regardless of whether secrets are in the node dir or the
+    # grin user home (/opt/grin/.grin/main/).
+    # detect_node() already resolved API_SECRET_PATH and FOREIGN_SECRET_PATH.
+    local mainnet_secret="$API_SECRET_PATH"
+    local foreign_secret="$FOREIGN_SECRET_PATH"
+    local testnet_toml="/opt/grin/node/testnet-prune/grin-server.toml"
+    local testnet_secret
+    testnet_secret=$(_resolve_secret_from_toml "$testnet_toml" "api_secret_path" \
+                     "/opt/grin/node/testnet-prune/.api_secret")
+    [[ -f "$foreign_secret" ]] \
+        || warn "Foreign API secret not found: $foreign_secret — foreign API calls may fail."
     [[ -f "$mainnet_secret" ]] \
         || warn "Mainnet secret not found: $mainnet_secret — owner API calls may fail."
     [[ -f "$testnet_secret" ]] \
         || warn "Testnet secret not found: $testnet_secret — testnet peers will be skipped."
     cat > "$DATA_DIR/config.env" <<EOF
 GRIN_NODE_URL=${NODE_URL}
+GRIN_FOREIGN_SECRET_PATH=${foreign_secret}
 GRIN_API_SECRET_PATH=${mainnet_secret}
 GRIN_MAINNET_OWNER_URL=http://127.0.0.1:3413/v2/owner
 GRIN_TESTNET_OWNER_URL=http://127.0.0.1:13413/v2/owner
@@ -649,8 +708,9 @@ configure_explorer() {
     read -r node_choice
     [[ "$node_choice" == "0" ]] && return
 
-    local cfg_host cfg_port cfg_proto cfg_secret cfg_grin_dir
+    local cfg_host cfg_port cfg_proto cfg_secret cfg_grin_dir api_secret_path foreign_secret_path
     cfg_grin_dir=""
+    foreign_secret_path=""
 
     case "${node_choice:-1}" in
         2)
@@ -677,13 +737,28 @@ configure_explorer() {
             cfg_host="127.0.0.1"
             cfg_port="$NODE_PORT"
             cfg_proto="http"
-            # Auto-detect API secret
-            if [[ -f "$API_SECRET_PATH" ]]; then
-                cfg_secret=$(cat "$API_SECRET_PATH")
-                info "API secret loaded from ${API_SECRET_PATH}"
+            # Always read secrets from mainnet-full's grin-server.toml directly.
+            # detect_node() may resolve NODE_DIR to mainnet-prune when both
+            # exist, so we bypass it here and read each field 1:1 from the
+            # node config that the explorer actually connects to.
+            local _full_toml="/opt/grin/node/mainnet-full/grin-server.toml"
+            if [[ -f "$_full_toml" ]]; then
+                api_secret_path=$(_resolve_secret_from_toml "$_full_toml" \
+                    "api_secret_path" \
+                    "/opt/grin/node/mainnet-full/.api_secret")
+                foreign_secret_path=$(_resolve_secret_from_toml "$_full_toml" \
+                    "foreign_api_secret_path" \
+                    "/opt/grin/node/mainnet-full/.foreign_api_secret")
+            else
+                api_secret_path="$API_SECRET_PATH"
+                foreign_secret_path="$FOREIGN_SECRET_PATH"
+            fi
+            if [[ -f "$foreign_secret_path" ]]; then
+                cfg_secret=$(cat "$foreign_secret_path")
+                info "Foreign API secret loaded from ${foreign_secret_path}"
             else
                 cfg_secret=""
-                warn "API secret not found at ${API_SECRET_PATH} — proceeding without auth."
+                warn "Foreign API secret not found at ${foreign_secret_path} — proceeding without auth."
             fi
             # Detect grin_dir (parent directory of chain_data, written to Explorer.toml)
             echo ""
@@ -716,7 +791,8 @@ configure_explorer() {
     sed -i "s|^protocol\s*=.*|protocol = \"${cfg_proto}\"|" "$toml"
 
     if [[ -n "$cfg_secret" ]]; then
-        sed -i "s|^api_secret_path\s*=.*|api_secret_path = \"${API_SECRET_PATH}\"|" "$toml"
+        sed -i "s|^api_secret_path\s*=.*|api_secret_path = \"${api_secret_path}\"|"                     "$toml"
+        sed -i "s|^foreign_api_secret_path\s*=.*|foreign_api_secret_path = \"${foreign_secret_path}\"|" "$toml"
     fi
 
     # Patch grin_dir (only for local node; remote nodes connect via API only)
@@ -733,7 +809,8 @@ configure_explorer() {
     [[ -n "$cfg_grin_dir" ]] && \
         echo -e "    grin_dir         = ${CYAN}${cfg_grin_dir}${RESET}  ${DIM}(parent of chain_data)${RESET}"
     [[ -n "$cfg_secret" ]] && \
-        echo -e "    api_secret_path  = ${CYAN}${API_SECRET_PATH}${RESET}"
+        echo -e "    api_secret_path          = ${CYAN}${api_secret_path}${RESET}" && \
+        echo -e "    foreign_api_secret_path  = ${CYAN}${foreign_secret_path}${RESET}"
     echo ""
 
     if [[ "$node_choice" != "2" ]] && [[ ! -d /opt/grin/node/mainnet-full ]]; then

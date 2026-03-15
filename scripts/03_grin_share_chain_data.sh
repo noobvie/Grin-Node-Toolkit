@@ -1,24 +1,49 @@
 #!/bin/bash
 
 ################################################################################
-# Script 03 — Grin Node Share & Schedule Manager
+# Script 03 — Grin Chain Data Share & Schedule Manager
 # Part of: Grin Node Toolkit  (https://github.com/noobvie/grin-node-toolkit)
-#
-# Compress Grin chain_data and distribute it via Nginx (local) and/or SSH (remote).
-# Nginx pipeline: detect node → verify sync → stop → compress → serve → restart.
-# SSH pipeline:   rsync from local nginx web dir to remote server (no node stop).
-# SSH is a lightweight consumer of what Nginx already produced.
-#
-# Interactive:  bash 03_grin_share_chain_data.sh
-# Scheduled:    bash 03_grin_share_chain_data.sh --cron-nginx
-#               bash 03_grin_share_chain_data.sh --cron-ssh
-#               bash 03_grin_share_chain_data.sh --cron-clean
 ################################################################################
-# SUGGESTION: If you have free a VPS and domain, become a public Grin master node to support the network!
-# Set your domain to following formats, then run script 01/02/03 to share your node data, other choices are optional.
-# fullmain.yourdomain.com → shares full mainnet archive node data
-# prunemain.yourdomain.com → shares mainnet pruned node data
-# prunetest.yourdomain.com → shares testnet pruned node data
+#
+# PURPOSE
+#   Compresses a synced Grin node's chain_data into a .tar.gz archive and
+#   distributes it via Nginx (local HTTP) and/or SSH (remote rsync). Designed
+#   to run on public "master nodes" that share pre-synced archives so new
+#   nodes can bootstrap without waiting days for peer sync.
+#
+# PIPELINES
+#   Nginx — detect node → verify sync → stop node → compress chain_data →
+#           write to nginx web dir → generate SHA256 → restart node.
+#           Produces a .tar.gz + .sha256 pair consumed by Script 01.
+#   SSH   — rsync the finished archive from the local nginx web dir to one or
+#           more remote servers. Does not stop the node; runs independently
+#           after the Nginx pipeline has produced the archive.
+#
+# USAGE
+#   Interactive : bash 03_grin_share_chain_data.sh
+#   Cron        : bash 03_grin_share_chain_data.sh --cron-nginx
+#                 bash 03_grin_share_chain_data.sh --cron-ssh
+#                 bash 03_grin_share_chain_data.sh --cron-clean
+#
+# NODE TYPES & WEB DIRECTORIES
+#   mainnet-full  → /var/www/fullmain   (domain: fullmain.yourdomain.com)
+#   mainnet-prune → /var/www/prunemain  (domain: prunemain.yourdomain.com)
+#   testnet-prune → /var/www/prunetest  (domain: prunetest.yourdomain.com)
+#
+# PREREQUISITES
+#   · Must be run as root
+#   · A synced Grin node built by Script 01
+#   · Script 02 nginx file server set up on the domain (for Nginx pipeline)
+#   · Required packages: tar, openssl, rsync (SSH mode), tmux
+#
+# BECOME A MASTER NODE
+#   If you have a spare VPS and domain, point subdomains to this server and
+#   run Scripts 01 → 02 → 03. Your node will share chain data publicly,
+#   helping new Grin users sync in minutes instead of days.
+#
+# LOG FILE
+#   <toolkit_root>/log/03_grin_share_YYYYMMDD_HHMMSS.log
+#
 ################################################################################
 # ============================================================================
 # PATHS & CONSTANTS

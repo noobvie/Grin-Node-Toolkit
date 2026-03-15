@@ -1,30 +1,47 @@
 #!/bin/bash
 # =============================================================================
-# 04_grin_node_foreign_api.sh — Grin Node API Services Manager
+# Script 04 — Grin Node API Services Manager
+# Part of: Grin Node Toolkit  (https://github.com/noobvie/grin-node-toolkit)
 # =============================================================================
-# Manages all public-facing services for a Grin node:
 #
-#   1 / 3)  nginx HTTPS reverse proxy  (/v2/foreign, JSON-RPC)
-#             · Exposes only the read-only foreign API — owner API stays private
-#             · CORS enabled so any website can query the endpoint from a browser
-#             · Rate-limited (10 r/s, burst 20) to protect the node
+# PURPOSE
+#   Deploys and manages all public-facing web services for a running Grin node:
+#   an nginx HTTPS reverse proxy for the Foreign API, a live status page, and
+#   a lightweight REST API — all behind a single domain with SSL.
 #
-#   5 / 7)  Live status page  (https://domain/)
-#             · HTML dashboard showing height, difficulty, supply, hash, versions
-#             · Auto-refreshes every 60 s; dark/light theme; mobile-friendly
-#             · Served as static files — zero extra server load per visitor
-#             · Includes Developer section: CORS test, fetch snippets, remote checker
+# SERVICES
+#   1/3)  nginx HTTPS reverse proxy  (/v2/foreign, JSON-RPC)
+#           · Exposes the read-only Foreign API — Owner API stays private
+#           · CORS enabled so any website can query from a browser
+#           · Rate-limited (10 r/s, burst 20) to protect the node
 #
-#   9 / 11) REST API  (https://domain/rest/)
-#             · Simple GET endpoints returning clean JSON — no JSON-RPC knowledge needed
-#             · Ideal for: CoinGecko, Google Sheets, no-code tools, website widgets
-#             · Static JSON files refreshed every 60 s by a cron job (www-data)
-#             · Endpoints: /rest/stats.json  /rest/supply.json  /rest/height.json
-#                          /rest/difficulty.json  /rest/emission.json
-#             · CORS enabled; Cache-Control: public, max-age=60
-#             · Requires: status page deployed (option 5 / 7) first
+#   5/7)  Live status page  (https://domain/)
+#           · HTML dashboard: height, difficulty, supply, hash, versions
+#           · Auto-refreshes every 60 s; dark/light theme; mobile-friendly
+#           · Static files — zero extra server load per visitor
+#           · Developer section: CORS test, fetch snippets, remote checker
 #
-# Networks:  mainnet (port 3413)  ·  testnet (port 13413)
+#   9/11) REST API  (https://domain/rest/)
+#           · Simple GET endpoints returning clean JSON
+#           · Ideal for: CoinGecko, Google Sheets, no-code tools, widgets
+#           · Static JSON refreshed every 60 s by cron (www-data)
+#           · Endpoints: /rest/stats.json  /rest/supply.json  /rest/height.json
+#                        /rest/difficulty.json  /rest/emission.json
+#           · CORS enabled; Cache-Control: public, max-age=60
+#           · Requires status page deployed (option 5/7) first
+#
+# NETWORKS
+#   mainnet (port 3413)  ·  testnet (port 13413)
+#
+# PREREQUISITES
+#   · Must be run as root
+#   · A running Grin node (Script 01) with Foreign API accessible on localhost
+#   · nginx and certbot (auto-installed if missing)
+#   · DNS A record pointing to this server; ports 80 and 443 open
+#
+# LOG FILE
+#   <toolkit_root>/log/grin_node_services_YYYYMMDD_HHMMSS.log
+#
 # =============================================================================
 
 set -euo pipefail
@@ -57,7 +74,7 @@ STATUS_PAGE_DEPLOY_TESTNET="/var/www/grin-node-api-testnet"
 REST_API_DIR_MAINNET="$STATUS_PAGE_DEPLOY_MAINNET/rest"
 REST_API_DIR_TESTNET="$STATUS_PAGE_DEPLOY_TESTNET/rest"
 REST_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/rest-collector.py"
-REST_COLLECTOR_DEST="/usr/local/lib/grin-node-toolkit/rest-collector.py"
+REST_COLLECTOR_DEST="/opt/grin/grin-api-collector/rest-collector.py"
 REST_CRON_MAINNET="/etc/cron.d/grin-node-api-rest"
 REST_CRON_TESTNET="/etc/cron.d/grin-node-api-rest-testnet"
 
@@ -67,7 +84,7 @@ REST_CRON_TESTNET="/etc/cron.d/grin-node-api-rest-testnet"
 #   · grin-server.toml for archive_mode
 # Writes node.json to the REST dir (grin user has group-write via www-data group).
 NODE_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/node-collector.py"
-NODE_COLLECTOR_DEST="/usr/local/lib/grin-node-toolkit/node-collector.py"
+NODE_COLLECTOR_DEST="/opt/grin/grin-api-collector/node-collector.py"
 NODE_CRON_MAINNET="/etc/cron.d/grin-node-api-node"
 NODE_CRON_TESTNET="/etc/cron.d/grin-node-api-node-testnet"
 
@@ -723,7 +740,7 @@ disable_testnet_status_page() { _disable_status_page testnet "$NODE_API_NGINX_CO
 # REST API — static JSON files served under /rest/, refreshed by cron every 60 s
 # ═══════════════════════════════════════════════════════════════════════════════
 # How it works:
-#   1. The Python collector (rest-collector.py) is installed to /usr/local/lib/grin-node-toolkit/
+#   1. The Python collector (rest-collector.py) is installed to /opt/grin/grin-api-collector/
 #   2. A cron job (/etc/cron.d/grin-node-api-rest*) calls it every 60 s as www-data.
 #   3. The collector queries the Grin foreign API locally (no auth) and writes five
 #      atomic JSON files into {deploy_dir}/rest/:

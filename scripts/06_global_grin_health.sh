@@ -656,8 +656,9 @@ configure_explorer() {
     read -r node_choice
     [[ "$node_choice" == "0" ]] && return
 
-    local cfg_host cfg_port cfg_proto cfg_secret cfg_grin_dir
+    local cfg_host cfg_port cfg_proto cfg_secret cfg_grin_dir foreign_secret_path
     cfg_grin_dir=""
+    foreign_secret_path=""
 
     case "${node_choice:-1}" in
         2)
@@ -684,13 +685,14 @@ configure_explorer() {
             cfg_host="127.0.0.1"
             cfg_port="$NODE_PORT"
             cfg_proto="http"
-            # Auto-detect API secret
-            if [[ -f "$API_SECRET_PATH" ]]; then
-                cfg_secret=$(cat "$API_SECRET_PATH")
-                info "API secret loaded from ${API_SECRET_PATH}"
+            # Auto-detect Foreign API secret (explorer connects to /v2/foreign, not owner)
+            foreign_secret_path="${NODE_DIR}/.foreign_api_secret"
+            if [[ -f "$foreign_secret_path" ]]; then
+                cfg_secret=$(cat "$foreign_secret_path")
+                info "Foreign API secret loaded from ${foreign_secret_path}"
             else
                 cfg_secret=""
-                warn "API secret not found at ${API_SECRET_PATH} — proceeding without auth."
+                warn "Foreign API secret not found at ${foreign_secret_path} — proceeding without auth."
             fi
             # Detect grin_dir (parent directory of chain_data, written to Explorer.toml)
             echo ""
@@ -723,7 +725,7 @@ configure_explorer() {
     sed -i "s|^protocol\s*=.*|protocol = \"${cfg_proto}\"|" "$toml"
 
     if [[ -n "$cfg_secret" ]]; then
-        sed -i "s|^api_secret_path\s*=.*|api_secret_path = \"${API_SECRET_PATH}\"|" "$toml"
+        sed -i "s|^api_secret_path\s*=.*|api_secret_path = \"${foreign_secret_path}\"|" "$toml"
     fi
 
     # Patch grin_dir (only for local node; remote nodes connect via API only)
@@ -740,7 +742,7 @@ configure_explorer() {
     [[ -n "$cfg_grin_dir" ]] && \
         echo -e "    grin_dir         = ${CYAN}${cfg_grin_dir}${RESET}  ${DIM}(parent of chain_data)${RESET}"
     [[ -n "$cfg_secret" ]] && \
-        echo -e "    api_secret_path  = ${CYAN}${API_SECRET_PATH}${RESET}"
+        echo -e "    api_secret_path  = ${CYAN}${foreign_secret_path}${RESET}"
     echo ""
 
     if [[ "$node_choice" != "2" ]] && [[ ! -d /opt/grin/node/mainnet-full ]]; then

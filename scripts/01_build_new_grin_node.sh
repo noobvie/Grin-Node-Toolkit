@@ -1340,8 +1340,13 @@ ensure_grin_user() {
     fi
 
     if [[ -n "${GRIN_DIR:-}" && -d "$GRIN_DIR" ]]; then
-        chown -R grin:grin "$GRIN_DIR" 2>/dev/null || true
-        info "Ownership set: grin:grin → $GRIN_DIR"
+        # Chown the entire base tree (/opt/grin) so grin user can create ~/.grin/main/
+        # on startup and all node/wallet dirs are consistently owned.
+        local _parent; _parent="$(dirname "$GRIN_DIR")"
+        local _grandparent; _grandparent="$(dirname "$_parent")"
+        local _base; _base="${_grandparent}"
+        [[ -d "$_base" ]] && chown -R grin:grin "$_base" 2>/dev/null || true
+        info "Ownership set: grin:grin → $_base"
     fi
 }
 
@@ -1904,7 +1909,9 @@ start_grin_tmux() {
 
     # Own the directory and run process as grin service user if available
     if id grin &>/dev/null; then
-        chown -R grin:grin "$GRIN_DIR" 2>/dev/null || true
+        local _par; _par="$(dirname "$GRIN_DIR")"
+        local _base; _base="$(dirname "$_par")"
+        [[ -d "$_base" ]] && chown -R grin:grin "$_base" 2>/dev/null || true
         tmux new-session -d -s "$session" -c "$GRIN_DIR" \
             "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$GRIN_DIR\" && ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
             || die "Failed to create tmux session '$session'. Is tmux installed and working?"
@@ -2010,7 +2017,6 @@ setup_one_node() {
     generate_config     "$network"
     patch_config        "$network" "$ARCHIVE_MODE"
     generate_secrets
-    ensure_grin_user
     download_chain_data "$network" "$ARCHIVE_MODE"
     if [[ "$STREAM_MODE" == "true" ]]; then
         stream_extract_chain_data
@@ -2019,6 +2025,7 @@ setup_one_node() {
         check_disk_space
         extract_chain_data
     fi
+    ensure_grin_user
     start_grin_tmux
     show_summary        "$network" "$ARCHIVE_MODE"
     save_instance_location "$network" "$ARCHIVE_MODE"

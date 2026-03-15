@@ -673,7 +673,7 @@ configure_explorer() {
     read -r node_choice
     [[ "$node_choice" == "0" ]] && return
 
-    local cfg_host cfg_port cfg_proto cfg_secret cfg_grin_dir foreign_secret_path
+    local cfg_host cfg_port cfg_proto cfg_secret cfg_grin_dir api_secret_path foreign_secret_path
     cfg_grin_dir=""
     foreign_secret_path=""
 
@@ -702,11 +702,22 @@ configure_explorer() {
             cfg_host="127.0.0.1"
             cfg_port="$NODE_PORT"
             cfg_proto="http"
-            # Auto-detect Foreign API secret — read from grin-server.toml so we
-            # match whichever path the node actually uses (may be node-dir or
-            # /opt/grin/.grin/main/ depending on how grin was launched).
-            # detect_node() already resolved FOREIGN_SECRET_PATH from the toml.
-            foreign_secret_path="$FOREIGN_SECRET_PATH"
+            # Always read secrets from mainnet-full's grin-server.toml directly.
+            # detect_node() may resolve NODE_DIR to mainnet-prune when both
+            # exist, so we bypass it here and read each field 1:1 from the
+            # node config that the explorer actually connects to.
+            local _full_toml="/opt/grin/node/mainnet-full/grin-server.toml"
+            if [[ -f "$_full_toml" ]]; then
+                api_secret_path=$(_resolve_secret_from_toml "$_full_toml" \
+                    "api_secret_path" \
+                    "/opt/grin/node/mainnet-full/.api_secret")
+                foreign_secret_path=$(_resolve_secret_from_toml "$_full_toml" \
+                    "foreign_api_secret_path" \
+                    "/opt/grin/node/mainnet-full/.foreign_api_secret")
+            else
+                api_secret_path="$API_SECRET_PATH"
+                foreign_secret_path="$FOREIGN_SECRET_PATH"
+            fi
             if [[ -f "$foreign_secret_path" ]]; then
                 cfg_secret=$(cat "$foreign_secret_path")
                 info "Foreign API secret loaded from ${foreign_secret_path}"
@@ -745,7 +756,7 @@ configure_explorer() {
     sed -i "s|^protocol\s*=.*|protocol = \"${cfg_proto}\"|" "$toml"
 
     if [[ -n "$cfg_secret" ]]; then
-        sed -i "s|^api_secret_path\s*=.*|api_secret_path = \"${foreign_secret_path}\"|"                 "$toml"
+        sed -i "s|^api_secret_path\s*=.*|api_secret_path = \"${api_secret_path}\"|"                     "$toml"
         sed -i "s|^foreign_api_secret_path\s*=.*|foreign_api_secret_path = \"${foreign_secret_path}\"|" "$toml"
     fi
 
@@ -763,7 +774,7 @@ configure_explorer() {
     [[ -n "$cfg_grin_dir" ]] && \
         echo -e "    grin_dir         = ${CYAN}${cfg_grin_dir}${RESET}  ${DIM}(parent of chain_data)${RESET}"
     [[ -n "$cfg_secret" ]] && \
-        echo -e "    api_secret_path          = ${CYAN}${foreign_secret_path}${RESET}" && \
+        echo -e "    api_secret_path          = ${CYAN}${api_secret_path}${RESET}" && \
         echo -e "    foreign_api_secret_path  = ${CYAN}${foreign_secret_path}${RESET}"
     echo ""
 

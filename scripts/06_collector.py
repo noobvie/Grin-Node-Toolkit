@@ -36,11 +36,11 @@ Usage (commands):
     python3 06_collector.py --backfill-stats 90  Fetch last 90 days (lighter on memory)
     python3 06_collector.py --backfill-stats all Fetch ENTIRE chain history from block 0
 
-Config (env vars or /var/lib/grin-stats/config.env):
+Config (env vars or /opt/grin/grin-stats/config.env):
     GRIN_NODE_URL          default: http://127.0.0.1:3413/v2/foreign
     GRIN_API_SECRET_PATH   path to .api_secret file (optional)
-    GRIN_WWW_DATA          default: /var/www/grin-stats/data
-    GRIN_DB_PATH           default: /var/lib/grin-stats/stats.db
+    GRIN_WWW_DATA          default: /opt/grin/grin-stats/www/data
+    GRIN_DB_PATH           default: /opt/grin/grin-stats/stats.db
 """
 
 import argparse
@@ -60,8 +60,8 @@ from datetime import datetime, timezone
 # Foreign API (mainnet) — block headers, tip, tx stats.
 # Protected by foreign_api_secret_path in grin-server.toml (toolkit default).
 NODE_URL = os.environ.get("GRIN_NODE_URL", "http://127.0.0.1:3413/v2/foreign")
-WWW_DATA = os.environ.get("GRIN_WWW_DATA", "/var/www/grin-stats/data")
-DB_PATH  = os.environ.get("GRIN_DB_PATH",  "/var/lib/grin-stats/stats.db")
+WWW_DATA = os.environ.get("GRIN_WWW_DATA", "/opt/grin/grin-stats/www/data")
+DB_PATH  = os.environ.get("GRIN_DB_PATH",  "/opt/grin/grin-stats/stats.db")
 
 # Foreign API secret — set by Script 01 at <node_dir>/.foreign_api_secret
 FOREIGN_SECRET_PATH = os.environ.get("GRIN_FOREIGN_SECRET_PATH", "")

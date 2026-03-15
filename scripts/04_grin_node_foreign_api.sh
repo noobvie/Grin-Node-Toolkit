@@ -74,7 +74,7 @@ STATUS_PAGE_DEPLOY_TESTNET="/var/www/grin-node-api-testnet"
 REST_API_DIR_MAINNET="$STATUS_PAGE_DEPLOY_MAINNET/rest"
 REST_API_DIR_TESTNET="$STATUS_PAGE_DEPLOY_TESTNET/rest"
 REST_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/rest-collector.py"
-REST_COLLECTOR_DEST="/usr/local/lib/grin-node-toolkit/rest-collector.py"
+REST_COLLECTOR_DEST="/opt/grin/grin-api-collector/rest-collector.py"
 REST_CRON_MAINNET="/etc/cron.d/grin-node-api-rest"
 REST_CRON_TESTNET="/etc/cron.d/grin-node-api-rest-testnet"
 
@@ -84,7 +84,7 @@ REST_CRON_TESTNET="/etc/cron.d/grin-node-api-rest-testnet"
 #   · grin-server.toml for archive_mode
 # Writes node.json to the REST dir (grin user has group-write via www-data group).
 NODE_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/node-collector.py"
-NODE_COLLECTOR_DEST="/usr/local/lib/grin-node-toolkit/node-collector.py"
+NODE_COLLECTOR_DEST="/opt/grin/grin-api-collector/node-collector.py"
 NODE_CRON_MAINNET="/etc/cron.d/grin-node-api-node"
 NODE_CRON_TESTNET="/etc/cron.d/grin-node-api-node-testnet"
 
@@ -740,7 +740,7 @@ disable_testnet_status_page() { _disable_status_page testnet "$NODE_API_NGINX_CO
 # REST API — static JSON files served under /rest/, refreshed by cron every 60 s
 # ═══════════════════════════════════════════════════════════════════════════════
 # How it works:
-#   1. The Python collector (rest-collector.py) is installed to /usr/local/lib/grin-node-toolkit/
+#   1. The Python collector (rest-collector.py) is installed to /opt/grin/grin-api-collector/
 #   2. A cron job (/etc/cron.d/grin-node-api-rest*) calls it every 60 s as www-data.
 #   3. The collector queries the Grin foreign API locally (no auth) and writes five
 #      atomic JSON files into {deploy_dir}/rest/:

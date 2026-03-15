@@ -3,7 +3,7 @@
 # 06_global_grin_health.sh — Global Grin Health
 # =============================================================================
 #   A) Network Stats + Peer Map   (Python collector → Chart.js + Leaflet)
-#      stats.yourdomain.com       nginx serves /var/www/grin-stats/ (static)
+#      stats.yourdomain.com       nginx serves /opt/grin/grin-stats/www/ (static)
 #
 #   B) Grin Explorer              (aglkm/grin-explorer — Rust + Rocket)
 #      explorer.yourdomain.com    nginx proxy → 127.0.0.1:8000
@@ -44,8 +44,8 @@ LOG_DIR="$TOOLKIT_ROOT/log"
 LOG_FILE="$LOG_DIR/global_grin_health_$(date +%Y%m%d_%H%M%S).log"
 
 # ─── Runtime paths (created on install) ──────────────────────────────────────
-DATA_DIR="/var/lib/grin-stats"
-WWW_DIR="/var/www/grin-stats"
+DATA_DIR="/opt/grin/grin-stats"
+WWW_DIR="/opt/grin/grin-stats/www"
 COLLECTOR_BIN="/usr/local/bin/grin-stats-collector"
 DB_PATH="$DATA_DIR/stats.db"
 EXPLORER_DIR="/opt/grin/grin-explorer"

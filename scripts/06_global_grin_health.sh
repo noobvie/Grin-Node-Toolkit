@@ -48,7 +48,7 @@ DATA_DIR="/var/lib/grin-stats"
 WWW_DIR="/var/www/grin-stats"
 COLLECTOR_BIN="/usr/local/bin/grin-stats-collector"
 DB_PATH="$DATA_DIR/stats.db"
-EXPLORER_DIR="/opt/grin-explorer"
+EXPLORER_DIR="/opt/grin/grin-explorer"
 EXPLORER_BIN="$EXPLORER_DIR/target/release/grin-explorer"
 EXPLORER_TOML="$EXPLORER_DIR/Explorer.toml"
 

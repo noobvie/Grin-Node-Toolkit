@@ -151,7 +151,17 @@ _resolve_secret_from_toml() {
 }
 
 # ─── Detect running Grin node ─────────────────────────────────────────────────
-# Sets: NODE_PORT  NODE_URL  NODE_DIR  API_SECRET_PATH  FOREIGN_SECRET_PATH
+# Sets: NODE_PORT  NODE_URL  NODE_DIR  NODE_TYPE  API_SECRET_PATH  FOREIGN_SECRET_PATH
+#
+# NODE_TYPE is "full" (archive — mainnet-full) or "prune" (pruned — mainnet-prune
+# or testnet-prune).  Script 06 features that require full block history (explorer,
+# incremental stats) should check NODE_TYPE and warn when only a pruned node is found.
+#
+# Detection order for mainnet (both directories may co-exist):
+#   1. tmux session grin_mainnet-full  is active  → mainnet-full  (preferred)
+#   2. tmux session grin_mainnet-prune is active  → mainnet-prune
+#   3. No session found                           → prefer mainnet-full if the
+#                                                    directory exists, else prune
 detect_node() {
     local mainnet_up=0 testnet_up=0
     ss -tlnp 2>/dev/null | grep -q ":${MAINNET_PORT} " && mainnet_up=1
@@ -172,10 +182,27 @@ detect_node() {
     NODE_URL="http://127.0.0.1:${NODE_PORT}/v2/foreign"
 
     if [[ $NODE_PORT -eq $MAINNET_PORT ]]; then
-        NODE_DIR="/opt/grin/node/mainnet-full"
-        [[ -d /opt/grin/node/mainnet-prune ]] && NODE_DIR="/opt/grin/node/mainnet-prune"
+        # Script 01 names tmux sessions grin_<basename(node_dir)>, so the active
+        # session name reliably identifies which node is running on port 3413.
+        # mainnet-full (archive) is always preferred: it provides complete block
+        # history required by the explorer and the stats incremental updater.
+        if tmux has-session -t "grin_mainnet-full" 2>/dev/null; then
+            NODE_DIR="/opt/grin/node/mainnet-full"
+            NODE_TYPE="full"
+        elif tmux has-session -t "grin_mainnet-prune" 2>/dev/null; then
+            NODE_DIR="/opt/grin/node/mainnet-prune"
+            NODE_TYPE="prune"
+        elif [[ -d /opt/grin/node/mainnet-full ]]; then
+            # No active tmux session — prefer full archive if the directory exists.
+            NODE_DIR="/opt/grin/node/mainnet-full"
+            NODE_TYPE="full"
+        else
+            NODE_DIR="/opt/grin/node/mainnet-prune"
+            NODE_TYPE="prune"
+        fi
     else
         NODE_DIR="/opt/grin/node/testnet-prune"
+        NODE_TYPE="prune"
     fi
 
     local toml="$NODE_DIR/grin-server.toml"
@@ -272,6 +299,13 @@ install_stats() {
 
     # Write collector config
     detect_node
+    if [[ "$NODE_TYPE" == "full" ]]; then
+        info "Detected node type: ${GREEN}full archive${RESET} (${NODE_DIR})  — complete block history available."
+    else
+        info "Detected node type: ${YELLOW}pruned${RESET} (${NODE_DIR})."
+        warn "A full archive node (mainnet-full) is recommended for complete stats history."
+        warn "Option B (Explorer) requires a full archive node — install one via Script 01."
+    fi
     info "Writing collector config..."
     # Read secret paths from grin-server.toml so we always match what the running
     # node actually uses — regardless of whether secrets are in the node dir or the

@@ -135,8 +135,23 @@ install_nginx_certbot() {
     pause
 }
 
+# ─── Resolve secret path from grin-server.toml ───────────────────────────────
+# Reads api_secret_path or foreign_api_secret_path from a grin-server.toml,
+# expands ~ to the grin user's home (/opt/grin), and returns the absolute path.
+# Falls back to $default if the field is absent or the resolved file doesn't exist.
+_resolve_secret_from_toml() {
+    local toml="$1" field="$2" default="$3"
+    local raw resolved
+    raw=$(grep -E "^[[:space:]]*${field}[[:space:]]*=" "$toml" 2>/dev/null \
+          | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
+    [[ -z "$raw" ]] && { echo "$default"; return; }
+    # Expand ~ to the grin user home (/opt/grin) — grin runs as the grin user
+    resolved="${raw/#\~//opt/grin}"
+    [[ -f "$resolved" ]] && echo "$resolved" || echo "$default"
+}
+
 # ─── Detect running Grin node ─────────────────────────────────────────────────
-# Sets: NODE_PORT  NODE_URL  API_SECRET_PATH  NODE_DIR
+# Sets: NODE_PORT  NODE_URL  NODE_DIR  API_SECRET_PATH  FOREIGN_SECRET_PATH
 detect_node() {
     local mainnet_up=0 testnet_up=0
     ss -tlnp 2>/dev/null | grep -q ":${MAINNET_PORT} " && mainnet_up=1
@@ -159,11 +174,13 @@ detect_node() {
     if [[ $NODE_PORT -eq $MAINNET_PORT ]]; then
         NODE_DIR="/opt/grin/node/mainnet-full"
         [[ -d /opt/grin/node/mainnet-prune ]] && NODE_DIR="/opt/grin/node/mainnet-prune"
-        API_SECRET_PATH="$NODE_DIR/.api_secret"
     else
         NODE_DIR="/opt/grin/node/testnet-prune"
-        API_SECRET_PATH="$NODE_DIR/.api_secret"
     fi
+
+    local toml="$NODE_DIR/grin-server.toml"
+    API_SECRET_PATH=$(_resolve_secret_from_toml "$toml" "api_secret_path"         "$NODE_DIR/.api_secret")
+    FOREIGN_SECRET_PATH=$(_resolve_secret_from_toml "$toml" "foreign_api_secret_path" "$NODE_DIR/.foreign_api_secret")
 }
 
 # ─── Check Python 3 ───────────────────────────────────────────────────────────
@@ -256,16 +273,16 @@ install_stats() {
     # Write collector config
     detect_node
     info "Writing collector config..."
-    # Use the toolkit node-directory paths for API secrets.
-    # detect_node() sets API_SECRET_PATH for the detected node, but we need
-    # BOTH secrets explicitly so the collector can authenticate against both
-    # mainnet and testnet owner APIs independently.
-    # Script 01 places .api_secret inside the node directory, not ~/.grin/main/.
-    local mainnet_secret="/opt/grin/node/mainnet-prune/.api_secret"
-    [[ ! -f "$mainnet_secret" ]] && mainnet_secret="/opt/grin/node/mainnet-full/.api_secret"
-    local testnet_secret="/opt/grin/node/testnet-prune/.api_secret"
-    local foreign_secret="/opt/grin/node/mainnet-prune/.foreign_api_secret"
-    [[ ! -f "$foreign_secret" ]] && foreign_secret="/opt/grin/node/mainnet-full/.foreign_api_secret"
+    # Read secret paths from grin-server.toml so we always match what the running
+    # node actually uses — regardless of whether secrets are in the node dir or the
+    # grin user home (/opt/grin/.grin/main/).
+    # detect_node() already resolved API_SECRET_PATH and FOREIGN_SECRET_PATH.
+    local mainnet_secret="$API_SECRET_PATH"
+    local foreign_secret="$FOREIGN_SECRET_PATH"
+    local testnet_toml="/opt/grin/node/testnet-prune/grin-server.toml"
+    local testnet_secret
+    testnet_secret=$(_resolve_secret_from_toml "$testnet_toml" "api_secret_path" \
+                     "/opt/grin/node/testnet-prune/.api_secret")
     [[ -f "$foreign_secret" ]] \
         || warn "Foreign API secret not found: $foreign_secret — foreign API calls may fail."
     [[ -f "$mainnet_secret" ]] \
@@ -685,8 +702,11 @@ configure_explorer() {
             cfg_host="127.0.0.1"
             cfg_port="$NODE_PORT"
             cfg_proto="http"
-            # Auto-detect Foreign API secret (explorer connects to /v2/foreign, not owner)
-            foreign_secret_path="${NODE_DIR}/.foreign_api_secret"
+            # Auto-detect Foreign API secret — read from grin-server.toml so we
+            # match whichever path the node actually uses (may be node-dir or
+            # /opt/grin/.grin/main/ depending on how grin was launched).
+            # detect_node() already resolved FOREIGN_SECRET_PATH from the toml.
+            foreign_secret_path="$FOREIGN_SECRET_PATH"
             if [[ -f "$foreign_secret_path" ]]; then
                 cfg_secret=$(cat "$foreign_secret_path")
                 info "Foreign API secret loaded from ${foreign_secret_path}"

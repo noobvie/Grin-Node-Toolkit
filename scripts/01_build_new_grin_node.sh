@@ -1319,6 +1319,33 @@ generate_secrets() {
 }
 
 # =============================================================================
+# [8c] CREATE GRIN SERVICE USER
+# -----------------------------------------------------------------------------
+# Creates the 'grin' system user (no login shell, no home dir) if it does not
+# already exist, then sets grin:grin ownership on GRIN_DIR so the node runs
+# under the service account. Safe to call multiple times (idempotent).
+# =============================================================================
+ensure_grin_user() {
+    step_header "Step 8c: Create grin Service User"
+
+    if id grin &>/dev/null; then
+        info "System user 'grin' already exists — skipping creation."
+    else
+        if useradd -r -s /usr/sbin/nologin -d /opt/grin -M grin 2>/dev/null; then
+            success "System user grin:grin created."
+        else
+            warn "Could not create user 'grin' — node will run as current user."
+            return
+        fi
+    fi
+
+    if [[ -n "${GRIN_DIR:-}" && -d "$GRIN_DIR" ]]; then
+        chown -R grin:grin "$GRIN_DIR" 2>/dev/null || true
+        info "Ownership set: grin:grin → $GRIN_DIR"
+    fi
+}
+
+# =============================================================================
 # [9] DOWNLOAD CHAIN DATA FROM TRUSTED SOURCE
 # -----------------------------------------------------------------------------
 # Selects the correct chain data source based on network + archive mode.
@@ -1983,6 +2010,7 @@ setup_one_node() {
     generate_config     "$network"
     patch_config        "$network" "$ARCHIVE_MODE"
     generate_secrets
+    ensure_grin_user
     download_chain_data "$network" "$ARCHIVE_MODE"
     if [[ "$STREAM_MODE" == "true" ]]; then
         stream_extract_chain_data

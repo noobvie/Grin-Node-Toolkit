@@ -37,6 +37,16 @@ LOG_FILE="$LOG_DIR/grin_mining_$(date +%Y%m%d_%H%M%S).log"
 # ─── Global state ─────────────────────────────────────────────────────────────
 FOUND_GRIN_TOML=""
 
+# tmux session name convention: grin_<nodetype>_<networktype>
+_grin_session_name() {
+    case "$(basename "${1:-}")" in
+        mainnet-full)  echo "grin_full_mainnet"   ;;
+        mainnet-prune) echo "grin_pruned_mainnet" ;;
+        testnet-prune) echo "grin_pruned_testnet" ;;
+        *)             echo "grin_$(basename "${1:-}")" ;;
+    esac
+}
+
 # ─── Logging ──────────────────────────────────────────────────────────────────
 mkdir -p "$LOG_DIR"
 log()     { echo -e "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*" >> "$LOG_FILE" 2>/dev/null || true; }
@@ -242,8 +252,8 @@ graceful_restart_grin() {
 
     success "Grin ($network) node stopped."
 
-    # Use the original session name if found; otherwise use script 01's convention.
-    local session_name="${target_session:-grin_$(basename "$grin_dir")}"
+    # Use the original session name if found; otherwise derive from directory.
+    local session_name="${target_session:-$(_grin_session_name "$grin_dir")}"
 
     # Kill the old session — it is sitting at the "Press Enter to close" read prompt.
     tmux kill-session -t "$session_name" 2>/dev/null || true

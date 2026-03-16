@@ -128,6 +128,16 @@ TMUX_SESSION=""
 # Logging helpers
 ################################################################################
 
+# tmux session name convention: grin_<nodetype>_<networktype>
+_grin_session_name() {
+    case "$(basename "${1:-}")" in
+        mainnet-full)  echo "grin_full_mainnet"   ;;
+        mainnet-prune) echo "grin_pruned_mainnet" ;;
+        testnet-prune) echo "grin_pruned_testnet" ;;
+        *)             echo "grin_$(basename "${1:-}")" ;;
+    esac
+}
+
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S UTC' -u)] $1" | tee -a "$LOG_FILE"; }
 error_exit() { log "ERROR: $1"; exit 1; }
 get_utc_timestamp() { date -u '+%Y-%m-%d %H:%M:%S UTC'; }
@@ -671,9 +681,9 @@ detect_chain_data() {
 setup_derived_variables() {
     mkdir -p "$LOG_DIR"
     LOG_FILE="$LOG_DIR/share_nginx_${NETWORK_TYPE}_${NODE_TYPE}_$(date -u '+%Y%m%d_%H%M%S').log"
-    # Session name matches script 01 convention: grin_<basename of GRIN_DIR>
-    # e.g. /opt/grin/node/mainnet-prune → grin_mainnet-prune
-    TMUX_SESSION="grin_$(basename "$GRIN_DIR")"
+    # Session name convention: grin_<nodetype>_<networktype>
+    # e.g. /opt/grin/node/mainnet-prune → grin_pruned_mainnet
+    TMUX_SESSION="$(_grin_session_name "$GRIN_DIR")"
 
     local web_dir_var="LOCAL_WEB_DIR_${NETWORK_TYPE^^}_${NODE_TYPE^^}"
     OUTPUT_DIR="${!web_dir_var}"
@@ -1224,8 +1234,8 @@ try_start_from_known_dir() {
     fi
 
     command -v tmux &>/dev/null || apt-get install -y tmux -qq
-    # Session name matches script 01: grin_<basename of dir>
-    local sess="grin_$(basename "$found_dir")"
+    # Session name convention: grin_<nodetype>_<networktype>
+    local sess; sess="$(_grin_session_name "$found_dir")"
 
     # Kill any stale session with this name before starting fresh
     tmux kill-session -t "$sess" 2>/dev/null || true

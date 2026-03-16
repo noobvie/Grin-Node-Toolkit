@@ -233,7 +233,7 @@ show_status() {
     echo -e "\n${BOLD}Status:${RESET}\n"
 
     local tmux_session
-    tmux_session="grin-wallet-${NETWORK}"
+    tmux_session="grin_wallet_${NETWORK}"
 
     # ── Grin node ──
     if ss -tlnp 2>/dev/null | grep -q ":${NODE_PORT} "; then
@@ -435,7 +435,7 @@ start_wallet() {
         warn "tmux not installed. Run: apt-get install tmux"; return
     fi
 
-    local session="grin-wallet-$NETWORK"
+    local session="grin_wallet_$NETWORK"
 
     if tmux has-session -t "$session" 2>/dev/null; then
         warn "Existing tmux session '$session' found."
@@ -995,8 +995,8 @@ ww_show_info() {
     fi
 
     # Wallet listener
-    if tmux has-session -t "grin-wallet-mainnet" 2>/dev/null || \
-       tmux has-session -t "grin-wallet-testnet" 2>/dev/null; then
+    if tmux has-session -t "grin_wallet_mainnet" 2>/dev/null || \
+       tmux has-session -t "grin_wallet_testnet" 2>/dev/null; then
         echo -e "  ${BOLD}Wallet listener${RESET}: ${GREEN}running${RESET}"
     else
         echo -e "  ${BOLD}Wallet listener${RESET}: ${RED}not running${RESET}  ${YELLOW}⚠ start via option (c)${RESET}"

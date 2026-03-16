@@ -134,7 +134,7 @@
 #              reclaim disk space.
 #
 #   Step 13 — Start Node in Tmux
-#              Creates a named tmux session (e.g. grin_mainnet-prune) and runs
+#              Creates a named tmux session (e.g. grin_pruned_mainnet) and runs
 #              './grin server run' inside it. Kills any pre-existing session with
 #              the same name first. The window stays open after grin exits so
 #              the user can read any output.
@@ -306,7 +306,7 @@ stop_grin_one() {
             sed -i '/^PRUNETEST_/d' "$INSTANCES_CONF"
         fi
         if [[ -n "$grin_dir" ]]; then
-            local sess="grin_$(basename "$grin_dir")"
+            local sess; sess="$(_grin_session_name "$grin_dir")"
             tmux kill-session -t "$sess" 2>/dev/null && info "Tmux session '$sess' closed." || true
         fi
         log "Conf entries cleared for port $target_port instance."
@@ -1886,10 +1886,21 @@ stream_extract_chain_data() {
     log "[STEP 10] On-the-fly extraction complete."
 }
 
+# tmux session name convention: grin_<nodetype>_<networktype>
+_grin_session_name() {
+    case "$(basename "${1:-}")" in
+        mainnet-full)  echo "grin_full_mainnet"   ;;
+        mainnet-prune) echo "grin_pruned_mainnet" ;;
+        testnet-prune) echo "grin_pruned_testnet" ;;
+        *)             echo "grin_$(basename "${1:-}")" ;;
+    esac
+}
+
 # =============================================================================
 # [13] START GRIN NODE IN A TMUX SESSION
 # -----------------------------------------------------------------------------
-# Creates a named tmux session: grin_<dirname>  (e.g. grin_mainnet-prune).
+# Creates a named tmux session: grin_<nodetype>_<networktype>
+#   e.g. grin_full_mainnet, grin_pruned_mainnet, grin_pruned_testnet
 # If a session with that name already exists, it is killed first.
 # Runs './grin server run' inside the session so the node starts in TUI mode.
 # The session stays open after grin exits so the user can read any output.
@@ -1897,7 +1908,7 @@ stream_extract_chain_data() {
 # =============================================================================
 start_grin_tmux() {
     step_header "Step 13: Start Grin Node (tmux)"
-    local session="grin_$(basename "$GRIN_DIR")"
+    local session; session="$(_grin_session_name "$GRIN_DIR")"
 
     if tmux has-session -t "$session" 2>/dev/null; then
         warn "Tmux session '$session' already exists — killing it first."
@@ -1939,7 +1950,7 @@ show_summary() {
     local elapsed=$(( $(date +%s) - SCRIPT_START_TIME ))
     local mins=$(( elapsed / 60 ))
     local secs=$(( elapsed % 60 ))
-    local session="grin_$(basename "$GRIN_DIR")"
+    local session; session="$(_grin_session_name "$GRIN_DIR")"
 
     echo ""
     echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"

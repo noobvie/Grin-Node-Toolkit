@@ -362,7 +362,8 @@ EOF
     echo "Select an action:"
     echo ""
     echo "  1) Build Grin Master Nodes    - Run this 2 times if you wanna share both mainnet and testnet"
-    echo "  2) Add Custom Domain          - Add new custom domains"
+    # SWITCH: restore label to "Add new custom domains" and re-enable case 2 in get_action() to re-enable this option
+    echo "  2) Add Custom Domain          - (Coming Soon)"
     echo "  3) Remove Domain              - Remove domain and its configuration"
     echo "  4) List Domains               - Show all configured domains"
     echo ""
@@ -397,7 +398,8 @@ get_action() {
 
         case $choice in
             1) ACTION="grin"                ; break ;;
-            2) ACTION="custom"              ; break ;;
+            # SWITCH: restore to "ACTION="custom"; break ;;" to re-enable Add Custom Domain
+            2) print_warn "Add Custom Domain is temporarily unavailable."; sleep 2 ;;
             3) ACTION="remove"              ; break ;;
             4) ACTION="list"                ; break ;;
             5) ACTION="limit_rate"          ; break ;;
@@ -654,7 +656,73 @@ get_domain() {
     done
 }
 
-# 5.1 - Get and validate email
+# 5.1 - Validate that the domain prefix matches the currently running Grin node type/network.
+# Must be called after get_domain() sets $DOMAIN in Grin (strict) mode.
+# On mismatch: shows alert, offers press-0 to exit to master script.
+# Returns 0 on success, 1 on mismatch/cancel.
+validate_grin_domain_match() {
+    local prefix detected_dir required_dir port _bk detected_prefix
+    prefix=$(echo "$DOMAIN" | cut -d'.' -f1)
+    required_dir="/var/www/${prefix}"
+
+    # Detect running Grin node — try mainnet port first, then testnet
+    detected_dir=""
+    for port in 3414 13414; do
+        detected_dir=$(suggest_grin_web_dir "$port" 2>/dev/null) && break
+    done
+
+    local _show_alert=false
+    local _reason=""
+
+    if [[ -z "$detected_dir" ]]; then
+        _show_alert=true
+        _reason="no_node"
+    elif [[ "$detected_dir" != "$required_dir" ]]; then
+        _show_alert=true
+        _reason="mismatch"
+        detected_prefix=$(basename "$detected_dir")
+    fi
+
+    if [[ "$_show_alert" == "true" ]]; then
+        echo ""
+        print_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        print_error "  ⚠  DOMAIN / NODE TYPE MISMATCH"
+        print_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo -e "  You entered domain prefix : ${YELLOW}${prefix}${NC}"
+        if [[ "$_reason" == "no_node" ]]; then
+            echo -e "  Running Grin node         : ${RED}None detected${NC}"
+        else
+            echo -e "  Running node type         : ${YELLOW}${detected_prefix}${NC}"
+        fi
+        echo ""
+        case "$prefix" in
+            fullmain)  echo -e "  ${YELLOW}fullmain${NC}  requires: Mainnet + archive_mode = true  (full chain)" ;;
+            prunemain) echo -e "  ${YELLOW}prunemain${NC} requires: Mainnet + archive_mode = false (pruned)" ;;
+            prunetest) echo -e "  ${YELLOW}prunetest${NC} requires: Testnet + archive_mode = false (pruned)" ;;
+        esac
+        echo ""
+        if [[ "$_reason" == "no_node" ]]; then
+            echo -e "  No active Grin node found on this server."
+            echo -e "  Run ${YELLOW}Script 01${NC} to build and start the correct node type first."
+        else
+            echo -e "  Your running node is ${YELLOW}${detected_prefix}${NC} — it does not match ${YELLOW}${prefix}${NC}."
+            echo -e "  Run ${YELLOW}Script 01${NC} to rebuild with the correct network and node type."
+        fi
+        echo ""
+        read -p "  Press 0 to return to master script, or Enter to cancel: " _bk
+        if [[ "$_bk" == "0" ]]; then
+            exit 0
+        fi
+        DOMAIN=""
+        return 1
+    fi
+
+    print_info "Node type validated: running node matches domain prefix '${prefix}'."
+    return 0
+}
+
+# 5.2 - Get and validate email
 get_email() {
     while true; do
         if [[ -z "$EMAIL" ]]; then
@@ -672,9 +740,12 @@ get_email() {
     done
 }
 
-# 5.2 - Get files directory
+# 5.3 - Get files directory
 # If Grin is running, suggest the correct dir per network/archive mode (matches script 03 defaults).
+# Pass "strict" as first argument to disable the "Enter path manually" option (used in Grin mode).
 get_files_directory() {
+    local strict_mode="${1:-false}"
+
     if [[ -n "$FILES_DIR" ]]; then
         print_info "Files directory: $FILES_DIR"
         return
@@ -706,20 +777,34 @@ get_files_directory() {
             fi
             echo "  $((i+1))) ${labels[$i]}  →  ${suggestions[$i]}${_tag}"
         done
-        local manual_opt=$(( ${#suggestions[@]} + 1 ))
-        echo "  ${manual_opt}) Enter path manually  [default: $DEFAULT_FILES_DIR]"
+        if [[ "$strict_mode" != "strict" ]]; then
+            local manual_opt=$(( ${#suggestions[@]} + 1 ))
+            echo "  ${manual_opt}) Enter path manually  [default: $DEFAULT_FILES_DIR]"
+        fi
         echo "  0) Cancel — return to main menu"
         echo ""
-        read -p "Select [0-${manual_opt}]: " sel
-        [[ "$sel" == "0" ]] && return 1
-        if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#suggestions[@]}" ]; then
-            FILES_DIR="${suggestions[$((sel-1))]}"
-        else
-            read -p "Enter directory path [$DEFAULT_FILES_DIR] or 0 to cancel: " FILES_DIR
-            [[ "$FILES_DIR" == "0" ]] && return 1
-            FILES_DIR="${FILES_DIR:-$DEFAULT_FILES_DIR}"
-        fi
+        local max_opt
+        [[ "$strict_mode" == "strict" ]] && max_opt="${#suggestions[@]}" || max_opt=$(( ${#suggestions[@]} + 1 ))
+        while true; do
+            read -p "Select [0-${max_opt}]: " sel
+            [[ "$sel" == "0" ]] && return 1
+            if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#suggestions[@]}" ]; then
+                FILES_DIR="${suggestions[$((sel-1))]}"
+                break
+            elif [[ "$strict_mode" != "strict" ]] && [[ "$sel" == "$max_opt" ]]; then
+                read -p "Enter directory path [$DEFAULT_FILES_DIR] or 0 to cancel: " FILES_DIR
+                [[ "$FILES_DIR" == "0" ]] && return 1
+                FILES_DIR="${FILES_DIR:-$DEFAULT_FILES_DIR}"
+                break
+            else
+                print_error "Invalid selection. Please choose from the options above."
+            fi
+        done
     else
+        if [[ "$strict_mode" == "strict" ]]; then
+            print_error "No running Grin node detected. Please run Script 01 to build your node first."
+            return 1
+        fi
         read -p "Enter directory for storing files [default: $DEFAULT_FILES_DIR] or 0 to cancel: " FILES_DIR
         [[ "$FILES_DIR" == "0" ]] && return 1
         FILES_DIR="${FILES_DIR:-$DEFAULT_FILES_DIR}"
@@ -1686,10 +1771,11 @@ run_setup_grin() {
 
     # Get required information
     print_section "Configuration"
-    get_domain "true"        || { print_info "Setup cancelled."; return 0; }
-    get_email                || { print_info "Setup cancelled."; return 0; }
-    get_files_directory      || { print_info "Setup cancelled."; return 0; }
-    get_bandwidth_settings   || { print_info "Setup cancelled."; return 0; }
+    get_domain "true"             || { print_info "Setup cancelled."; return 0; }
+    validate_grin_domain_match    || { print_info "Setup cancelled."; DOMAIN=""; return 0; }
+    get_email                     || { print_info "Setup cancelled."; return 0; }
+    get_files_directory "strict"  || { print_info "Setup cancelled."; return 0; }
+    get_bandwidth_settings        || { print_info "Setup cancelled."; return 0; }
 
     # Confirm before proceeding
     echo ""

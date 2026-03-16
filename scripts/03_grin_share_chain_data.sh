@@ -271,8 +271,10 @@ run_nginx_setup() {
             { [ -z "$scan_binary" ] || [ ! -f "$scan_binary" ]; } && continue
             scan_dir=$(dirname "$scan_binary")
 
+            local scan_cwd
+            scan_cwd=$(readlink -f "/proc/$scan_pid/cwd" 2>/dev/null) || scan_cwd=""
             scan_cfg=""
-            for loc in "$scan_dir/grin-server.toml" "$HOME/.grin/main/grin-server.toml" "/root/.grin/main/grin-server.toml"; do
+            for loc in "$scan_dir/grin-server.toml" "$scan_cwd/grin-server.toml"; do
                 [ -f "$loc" ] && { scan_cfg="$loc"; break; }
             done
 
@@ -626,14 +628,12 @@ detect_grin_binary() {
 }
 
 detect_config_file() {
-    for path in "$GRIN_DIR/grin-server.toml" "$HOME/.grin/main/grin-server.toml" "/root/.grin/main/grin-server.toml"; do
-        if [ -f "$path" ]; then
-            GRIN_CONFIG_FILE="$path"
-            echo "[$(date '+%Y-%m-%d %H:%M:%S UTC' -u)] Config: $GRIN_CONFIG_FILE"
-            return 0
-        fi
-    done
-    echo "[$(date '+%Y-%m-%d %H:%M:%S UTC' -u)] WARNING: grin-server.toml not found — falling back to port-based detection"
+    if [ -f "$GRIN_DIR/grin-server.toml" ]; then
+        GRIN_CONFIG_FILE="$GRIN_DIR/grin-server.toml"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S UTC' -u)] Config: $GRIN_CONFIG_FILE"
+        return 0
+    fi
+    echo "[$(date '+%Y-%m-%d %H:%M:%S UTC' -u)] WARNING: grin-server.toml not found at $GRIN_DIR — falling back to port-based detection"
 }
 
 detect_network_type() {

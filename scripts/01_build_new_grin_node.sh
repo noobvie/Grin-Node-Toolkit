@@ -681,6 +681,42 @@ check_grin_running() {
             break
         fi
     done
+
+    # ── Legacy directory check ─────────────────────────────────────────────────
+    if [[ -d "$HOME/.grin" ]]; then
+        echo ""
+        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        warn "  Legacy Grin directory detected: $HOME/.grin"
+        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo -e "  This is a non-standard path that can conflict with the new"
+        echo -e "  standardized installation under ${BOLD}/opt/grin/${RESET}."
+        local _legacy_size
+        _legacy_size=$(du -sh "$HOME/.grin" 2>/dev/null | cut -f1) || _legacy_size="?"
+        echo -e "  Size: ${YELLOW}${_legacy_size}${RESET}"
+        echo ""
+        echo -e "  ${RED}D${RESET}) Delete ${BOLD}$HOME/.grin${RESET}  ${DIM}(recommended)${RESET}"
+        echo -e "  ${DIM}Enter${RESET}) Keep it and continue  ${DIM}(may cause config conflicts)${RESET}"
+        echo -e "  ${DIM}0${RESET}) Return to master script"
+        echo ""
+        echo -ne "${BOLD}Choice [D/Enter/0]: ${RESET}"
+        local _legacy_choice
+        read -r _legacy_choice || true
+        case "${_legacy_choice,,}" in
+            d)
+                rm -rf "$HOME/.grin"
+                success "Deleted: $HOME/.grin"
+                ;;
+            0)
+                exit 0
+                ;;
+            *)
+                warn "Keeping $HOME/.grin — this may cause config conflicts."
+                ;;
+        esac
+        echo ""
+    fi
+
     log "[STEP 1] Complete. No restrictions."
 }
 

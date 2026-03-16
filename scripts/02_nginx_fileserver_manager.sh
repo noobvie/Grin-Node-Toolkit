@@ -108,10 +108,13 @@ suggest_grin_web_dir() {
     { [ -z "$binary" ] || [ ! -f "$binary" ]; } && return 1
     dir=$(dirname "$binary")
 
+    local proc_cwd
+    proc_cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null) || proc_cwd=""
     cfg=""
-    for loc in "$dir/grin-server.toml" "$HOME/.grin/main/grin-server.toml" "/root/.grin/main/grin-server.toml"; do
+    for loc in "$dir/grin-server.toml" "$proc_cwd/grin-server.toml"; do
         [ -f "$loc" ] && { cfg="$loc"; break; }
     done
+    [ -z "$cfg" ] && return 1
 
     # Read chain_type line only — broad grep would match comments
     chain_line=""

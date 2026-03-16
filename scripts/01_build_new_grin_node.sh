@@ -890,66 +890,64 @@ select_archive_mode() {
         *) die "Invalid archive mode '${arc_choice}'." ;;
     esac
 
-    # Disk space check — warn if /opt/grin has less than the recommended minimum
-    local _free_kb _free_gb _min_gb
-    _free_kb=$(df /opt/grin 2>/dev/null | awk 'NR==2{print $4}' \
-               || df / | awk 'NR==2{print $4}')
-    _free_gb=$(awk "BEGIN {printf \"%.1f\", $_free_kb/1048576}")
-    if [[ "$ARCHIVE_MODE" == "full" ]]; then
-        _min_gb=25
-    else
-        _min_gb=10
+    # Disk space advisory — skipped on rebuild (target dir + instances conf already exist).
+    # Derive the target dir for this network+mode to apply the same rebuild check as Step 5.
+    local _s4_target_dir
+    if   [[ "$ARCHIVE_MODE" == "full"    ]]; then _s4_target_dir="/opt/grin/node/mainnet-full"
+    elif [[ "$network"      == "mainnet" ]]; then _s4_target_dir="/opt/grin/node/mainnet-prune"
+    else                                          _s4_target_dir="/opt/grin/node/testnet-prune"
     fi
-    echo ""
-    echo -e "  ${DIM}Free disk (/opt/grin):${RESET}  ${BOLD}${_free_gb} GiB${RESET}"
-    if awk "BEGIN {exit ($_free_gb >= $_min_gb) ? 0 : 1}"; then
-        echo -e "  ${GREEN}✓${RESET}  Sufficient space for ${ARCHIVE_MODE} mode (min ~${_min_gb} GiB)."
+
+    if [[ -d "$_s4_target_dir" && -f "$INSTANCES_CONF" ]]; then
+        info "Existing install detected — skipping disk space advisory (rebuild in place)."
     else
+        local _free_kb _free_gb _min_gb
+        _free_kb=$(df /opt/grin 2>/dev/null | awk 'NR==2{print $4}' \
+                   || df / | awk 'NR==2{print $4}')
+        _free_gb=$(awk "BEGIN {printf \"%.1f\", $_free_kb/1048576}")
+        [[ "$ARCHIVE_MODE" == "full" ]] && _min_gb=25 || _min_gb=10
         echo ""
-        echo -e "  ${RED}⚠  Low disk space:${RESET} ${_free_gb} GiB free, recommended minimum is ~${_min_gb} GiB"
-        echo -e "     for ${ARCHIVE_MODE} mode (archive download + extraction)."
-        echo ""
-        echo -ne "  Continue anyway? [Y/n]: "
-        read -r _space_ok || true
-        if [[ "${_space_ok,,}" == "n" ]]; then
-            exit 0
+        echo -e "  ${DIM}Free disk (/opt/grin):${RESET}  ${BOLD}${_free_gb} GiB${RESET}"
+        if awk "BEGIN {exit ($_free_gb >= $_min_gb) ? 0 : 1}"; then
+            echo -e "  ${GREEN}✓${RESET}  Sufficient space for ${ARCHIVE_MODE} mode (min ~${_min_gb} GiB)."
+        else
+            echo ""
+            echo -e "  ${RED}⚠  Low disk space:${RESET} ${_free_gb} GiB free, recommended minimum is ~${_min_gb} GiB"
+            echo -e "     for ${ARCHIVE_MODE} mode (archive download + extraction)."
+            echo ""
+            echo -ne "  Continue anyway? [Y/n]: "
+            read -r _space_ok || true
+            [[ "${_space_ok,,}" == "n" ]] && exit 0
         fi
     fi
 
     info "Archive mode: $ARCHIVE_MODE"
-    log "[STEP 4] ArchiveMode=$ARCHIVE_MODE free_disk=${_free_gb}GiB"
+    log "[STEP 4] ArchiveMode=$ARCHIVE_MODE"
 }
 
 # =============================================================================
-# [5] CREATE NODE DIRECTORY
+# [5] PREPARE NODE DIRECTORY
 # -----------------------------------------------------------------------------
-# Creates the node directory at / (root, not /root) using naming convention:
+# Sets GRIN_DIR to the standardized location for the chosen network+mode:
 #   /opt/grin/node/mainnet-full   — full archive, mainnet
 #   /opt/grin/node/mainnet-prune  — pruned,       mainnet
 #   /opt/grin/node/testnet-prune  — pruned,       testnet
 #
-# Flow (repeats until user confirms):
-#   1. User enters a path (Enter = default, 0 = return to menu).
-#   2. Disk space for the nearest existing parent is shown.
-#      Loops back if available space is below the required minimum.
-#   3. If the directory already exists, its contents are listed (ls -lah,
-#      up to 20 items with a total count if more).
-#   4. A bold red warning is displayed when files are present:
-#        "All existing files will be permanently removed before downloading."
-#   5. User confirms with [Y/n/0]. n or N loops back to prompt for a
-#      different path; 0 exits to the main menu; Enter or y accepts and breaks.
+# No user prompt is shown for the path — the standardized location is always used.
 #
-# After confirmation, any existing files are removed immediately (rm -rf) so
-# the directory is clean before the binary download begins.
-# Sets the global GRIN_DIR variable used by all subsequent steps.
+# Disk space check:
+#   Skipped when this is a rebuild (GRIN_DIR already exists AND INSTANCES_CONF
+#   exists) because the install overwrites the same directory, consuming no new
+#   space. On a fresh install the check is a hard stop if space is insufficient.
+#
+# Existing files in GRIN_DIR are cleared automatically (no confirmation prompt)
+# before the binary and chain data download begins.
 # =============================================================================
 create_node_dir() {
     local network="$1"
     local mode="$2"
-    local net_short mode_short
 
-    [[ "$network" == "mainnet" ]] && net_short="main" || net_short="test"
-    [[ "$mode"    == "full"    ]] && mode_short="full" || mode_short="prune"
+    # 1. Resolve standardized path → GRIN_DIR
     local default_dir
     if [[ "$mode" == "full" ]]; then
         default_dir="/opt/grin/node/mainnet-full"
@@ -958,87 +956,43 @@ create_node_dir() {
     else
         default_dir="/opt/grin/node/testnet-prune"
     fi
+    GRIN_DIR="$default_dir"
 
-    # Minimum free space: pruned=10GB, full=25GB (in KB)
-    local min_gb; [[ "$mode" == "full" ]] && min_gb=25 || min_gb=10
-    local min_kb=$(( min_gb * 1024 * 1024 ))
-
-    step_header "Step 5: Create Node Directory"
-    echo -e "  Default directory: ${BOLD}$default_dir${RESET}"
-    echo ""
-    echo -e "  Press ${GREEN}Enter${RESET} to use the default, or type a custom path."
-    echo -e "  ${DIM}Minimum free space required: ${min_gb}GB${RESET}"
-    echo -e "  ${DIM}0${RESET}) Return to main menu"
+    step_header "Step 5: Prepare Node Directory"
+    info "Node directory: $GRIN_DIR"
     echo ""
 
-    while true; do
-        echo -ne "${BOLD}Directory [${default_dir}]: ${RESET}"
-        read -r dir_input || true
-        [[ "${dir_input}" == "0" ]] && exit 0
-        [[ -z "$dir_input" ]] && dir_input="$default_dir"
+    # 2. Disk space check — skipped on rebuild (directory + instances conf exist)
+    local _is_rebuild=false
+    [[ -d "$GRIN_DIR" && -f "$INSTANCES_CONF" ]] && _is_rebuild=true
 
-        # Resolve to absolute path
-        local chosen_dir
-        chosen_dir=$(realpath -m "$dir_input" 2>/dev/null) || chosen_dir="$dir_input"
-
-        # Show free space for the nearest existing parent
-        local check_path="$chosen_dir"
+    if [[ "$_is_rebuild" == "true" ]]; then
+        info "Existing install detected — skipping disk space check (rebuild in place)."
+    else
+        local min_gb avail_kb avail_gb
+        [[ "$mode" == "full" ]] && min_gb=25 || min_gb=10
+        local min_kb=$(( min_gb * 1024 * 1024 ))
+        local check_path="$GRIN_DIR"
         while [[ ! -d "$check_path" && "$check_path" != "/" ]]; do
             check_path=$(dirname "$check_path")
         done
-        local avail_kb
         avail_kb=$(df -k "$check_path" 2>/dev/null | awk 'NR==2{print $4}') || avail_kb=0
-        local avail_gb=$(( avail_kb / 1024 / 1024 ))
-        echo ""
+        avail_gb=$(( avail_kb / 1024 / 1024 ))
         echo -e "  ${DIM}$(df -h "$check_path" 2>/dev/null | awk 'NR==1||NR==2' | column -t)${RESET}"
-        echo -e "  Available: ${BOLD}${avail_gb}GB${RESET}  (required: ${min_gb}GB)"
+        echo -e "  Available: ${BOLD}${avail_gb} GiB${RESET}  (required: ${min_gb} GiB)"
         echo ""
-
         if (( avail_kb < min_kb )); then
-            warn "Insufficient space: ${avail_gb}GB available, ${min_gb}GB required."
-            echo -e "  Choose a different location or free up space."
-            echo ""
-            continue
+            die "Insufficient disk space: ${avail_gb} GiB available, ${min_gb} GiB required for ${mode} mode. Free up space on $(df -h "$check_path" 2>/dev/null | awk 'NR==2{print $1}') and retry."
         fi
+        success "Disk space OK."
+    fi
 
-        # Show existing directory contents so user can verify before committing
-        if [[ -d "$chosen_dir" ]]; then
-            local _item_count
-            _item_count=$(find "$chosen_dir" -mindepth 1 2>/dev/null | wc -l) || _item_count=0
-            if (( _item_count > 0 )); then
-                echo -e "  ${YELLOW}Directory already contains ${_item_count} item(s):${RESET}"
-                ls -lah "$chosen_dir" 2>/dev/null | awk 'NR>1' | head -20 | \
-                    while IFS= read -r _dl; do echo -e "    ${DIM}$_dl${RESET}"; done
-                (( _item_count > 20 )) && \
-                    echo -e "    ${DIM}... (${_item_count} items total — only first 20 shown)${RESET}"
-                echo ""
-                echo -e "  ${RED}${BOLD}All existing files will be permanently removed before downloading begins.${RESET}"
-            else
-                echo -e "  ${DIM}Directory exists and is currently empty.${RESET}"
-            fi
-            echo ""
-        fi
-
-        echo -ne "${BOLD}Confirm this directory and proceed? [Y/n/0]: ${RESET}"
-        local _dir_confirm
-        read -r _dir_confirm || true
-        case "${_dir_confirm,,}" in
-            n) echo ""; continue ;;
-            0) exit 0 ;;
-        esac
-
-        GRIN_DIR="$chosen_dir"
-        break
-    done
-
-    info "Target directory: $GRIN_DIR"
-
-    # Remove all existing files before the binary and chain data are downloaded
+    # 3. Auto-clean existing files (no confirmation — path is fixed and standardized)
     if [[ -d "$GRIN_DIR" ]]; then
         local _existing_count
         _existing_count=$(find "$GRIN_DIR" -mindepth 1 2>/dev/null | wc -l) || _existing_count=0
         if (( _existing_count > 0 )); then
-            info "Removing all existing files from $GRIN_DIR ..."
+            warn "Removing ${_existing_count} existing item(s) from $GRIN_DIR ..."
             rm -rf "${GRIN_DIR:?}"/*  2>/dev/null || true
             rm -rf "${GRIN_DIR:?}"/.[!.]* 2>/dev/null || true
             success "Directory cleaned: $GRIN_DIR"
@@ -1929,7 +1883,7 @@ start_grin_tmux() {
             || die "Failed to create tmux session '$session'. Is tmux installed and working?"
     fi
 
-    success "Grin node started in tmux session: $session"
+    success "Grin node will start shortly within 30 seconds in tmux session: $session."
     info "  Attach  : tmux attach -t $session"
     info "  Detach  : Ctrl+B, then D"
     info "  List    : tmux ls"

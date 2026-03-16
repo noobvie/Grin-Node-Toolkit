@@ -7,9 +7,10 @@
   },
 
   "america": {
-    "fullmain":  ["fullmain.grin.money",  "fullmain.grinily.com",  "fullmain.onlygrins.com"],
-    "prunemain": ["prunemain.grin.money", "prunemain.grinily.com"],
-    "prunetest": ["prunetest.grin.money", "prunetest.onlygrins.com"]
+    "fullmain":  ["fullmain.grin.money",  "fullmain.grinily.com",  "fullmain.onlygrins.com", 
+                  "fullmain.grinnode.org"],
+    "prunemain": ["prunemain.grin.money", "prunemain.grinily.com","prunemain.grinnode.org"],
+    "prunetest": ["prunetest.grin.money", "prunetest.onlygrins.com","prunetest.grinnode.org"]
   },
 
   "asia": {
@@ -32,8 +33,10 @@
 
   "_contacts": {
     "_comment": "Owner contact keyed by base domain (last two labels, e.g. grin.money). Covers all subdomains under that domain. Used by script 081 to identify who to reach if a host goes stale or offline. To add your contact when contributing hosts, add one entry per base domain.",
-    "grin.money":    { "owner": "noobvie", "contact": "https://github.com/noobvie" },
-    "grinily.com":   { "owner": "noobvie", "contact": "https://github.com/noobvie" },
-    "onlygrins.com": { "owner": "noobvie", "contact": "https://github.com/noobvie" }
+    "grin.money":    { "owner": "noobvie", "contact": "https://forum.grin.mw/u/hellogrin/ , commitment until 01-01-2030" },
+    "grinily.com":   { "owner": "noobvie", "contact": "https://github.com/noobvie commitment until 01-01-2028" },
+    "onlygrins.com": { "owner": "noobvie", "contact": "https://github.com/noobvie commitment until 01-01-2028" },
+    "grinnode.org": { "owner": "noobvie", "contact": "https://github.com/noobvie commitment until 01-01-2030" }
+
   }
 }

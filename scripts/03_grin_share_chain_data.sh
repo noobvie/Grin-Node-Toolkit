@@ -687,10 +687,8 @@ detect_chain_data() {
             [ -d "$db_root/chain_data" ] && { GRIN_DATA_DIR="$db_root/chain_data"; return 0; }
         fi
     fi
-    [ -d "$GRIN_DIR/chain_data" ]           && { GRIN_DATA_DIR="$GRIN_DIR/chain_data";             return 0; }
-    [ -d "$HOME/.grin/main/chain_data" ]    && { GRIN_DATA_DIR="$HOME/.grin/main/chain_data";      return 0; }
-    [ -d "/root/.grin/main/chain_data" ]    && { GRIN_DATA_DIR="/root/.grin/main/chain_data";      return 0; }
-    error_exit "Cannot find chain_data directory"
+    [ -d "$GRIN_DIR/chain_data" ] && { GRIN_DATA_DIR="$GRIN_DIR/chain_data"; return 0; }
+    error_exit "chain_data not found in $GRIN_DIR. Expected location: /opt/grin/node/<type>/chain_data. Ensure Script 01 was used to build the node."
 }
 
 # Resolve OUTPUT_DIR, LOG_FILE, STATUS_FILE, TMUX_SESSION from detected vars

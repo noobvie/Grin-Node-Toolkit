@@ -362,7 +362,8 @@ EOF
     echo "Select an action:"
     echo ""
     echo "  1) Build Grin Master Nodes    - Run this 2 times if you wanna share both mainnet and testnet"
-    echo "  2) Add Custom Domain          - Add new custom domains"
+    # SWITCH: restore label to "Add new custom domains" and re-enable case 2 in get_action() to re-enable this option
+    echo "  2) Add Custom Domain          - (Temporarily disable)"
     echo "  3) Remove Domain              - Remove domain and its configuration"
     echo "  4) List Domains               - Show all configured domains"
     echo ""
@@ -397,7 +398,8 @@ get_action() {
 
         case $choice in
             1) ACTION="grin"                ; break ;;
-            2) ACTION="custom"              ; break ;;
+            # SWITCH: restore to "ACTION="custom"; break ;;" to re-enable Add Custom Domain
+            2) print_warn "Add Custom Domain is temporarily unavailable."; sleep 2 ;;
             3) ACTION="remove"              ; break ;;
             4) ACTION="list"                ; break ;;
             5) ACTION="limit_rate"          ; break ;;
@@ -654,7 +656,76 @@ get_domain() {
     done
 }
 
-# 5.1 - Get and validate email
+# 5.1 - Validate that the domain prefix matches at least one currently running Grin node.
+# Supports dual-node setups (e.g. prunemain + prunetest running simultaneously).
+# Must be called after get_domain() sets $DOMAIN in Grin (strict) mode.
+# On mismatch: shows alert, offers press-0 to exit to master script.
+# Returns 0 on success, 1 on mismatch/cancel.
+validate_grin_domain_match() {
+    local prefix required_dir port _bk d
+    prefix=$(echo "$DOMAIN" | cut -d'.' -f1)
+    required_dir="/var/www/${prefix}"
+
+    # Collect ALL running Grin instances (both ports — dual-node setup supported)
+    local detected_dirs=()
+    for port in 3414 13414; do
+        d=$(suggest_grin_web_dir "$port" 2>/dev/null) && detected_dirs+=("$d")
+    done
+
+    # Check if required_dir matches any detected instance
+    local matched=false
+    for d in "${detected_dirs[@]}"; do
+        [[ "$d" == "$required_dir" ]] && matched=true && break
+    done
+
+    if [[ "$matched" == "true" ]]; then
+        print_info "Node type validated: running node matches domain prefix '${prefix}'."
+        return 0
+    fi
+
+    # ── Alert ────────────────────────────────────────────────────────────────
+    echo ""
+    print_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_error "  ⚠  DOMAIN / NODE TYPE MISMATCH"
+    print_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo -e "  You entered domain prefix : ${YELLOW}${prefix}${NC}"
+    if [[ ${#detected_dirs[@]} -eq 0 ]]; then
+        echo -e "  Running Grin nodes        : ${RED}None detected${NC}"
+    else
+        local first=true
+        for d in "${detected_dirs[@]}"; do
+            local dp; dp=$(basename "$d")
+            if [[ "$first" == "true" ]]; then
+                printf "  Running Grin node(s)      : ${YELLOW}%s${NC}\n" "$dp"
+                first=false
+            else
+                printf "                              ${YELLOW}%s${NC}\n" "$dp"
+            fi
+        done
+    fi
+    echo ""
+    case "$prefix" in
+        fullmain)  echo -e "  ${YELLOW}fullmain${NC}  requires: Mainnet + archive_mode = true  (full chain)" ;;
+        prunemain) echo -e "  ${YELLOW}prunemain${NC} requires: Mainnet + archive_mode = false (pruned)" ;;
+        prunetest) echo -e "  ${YELLOW}prunetest${NC} requires: Testnet + archive_mode = false (pruned)" ;;
+    esac
+    echo ""
+    if [[ ${#detected_dirs[@]} -eq 0 ]]; then
+        echo -e "  No active Grin node found on this server."
+        echo -e "  Run ${YELLOW}Script 01${NC} to build and start the correct node type first."
+    else
+        echo -e "  None of the running nodes match ${YELLOW}${prefix}${NC}."
+        echo -e "  Run ${YELLOW}Script 01${NC} to add or rebuild the correct node type."
+    fi
+    echo ""
+    read -p "  Press 0 to return to master script, or Enter to cancel: " _bk
+    [[ "$_bk" == "0" ]] && exit 0
+    DOMAIN=""
+    return 1
+}
+
+# 5.2 - Get and validate email
 get_email() {
     while true; do
         if [[ -z "$EMAIL" ]]; then
@@ -672,14 +743,118 @@ get_email() {
     done
 }
 
-# 5.2 - Get files directory
-# If Grin is running, suggest the correct dir per network/archive mode (matches script 03 defaults).
+# 5.3 - Given a Grin domain prefix (fullmain/prunemain/prunetest), return the
+# chain_data path of the matching running Grin instance via stdout.
+# Returns 1 if no matching instance is found.
+_chain_data_for_prefix() {
+    local prefix="$1"
+    local required_web="/var/www/${prefix}"
+    local port web_dir pid binary dir
+    for port in 3414 13414; do
+        web_dir=$(suggest_grin_web_dir "$port" 2>/dev/null) || continue
+        [[ "$web_dir" != "$required_web" ]] && continue
+        # Found the matching node — resolve its binary dir and chain_data path
+        if command -v lsof &>/dev/null; then
+            pid=$(lsof -ti :"$port" 2>/dev/null)
+        elif command -v ss &>/dev/null; then
+            pid=$(ss -tlnp 2>/dev/null | grep ":$port " | grep -oP 'pid=\K[0-9]+' | head -1)
+        elif command -v netstat &>/dev/null; then
+            pid=$(netstat -tlnp 2>/dev/null | grep ":$port " | grep -oP '[0-9]+/.*' | cut -d'/' -f1 | head -1)
+        fi
+        [ -z "$pid" ] && continue
+        binary=$(readlink -f "/proc/$pid/exe" 2>/dev/null)
+        { [ -z "$binary" ] || [ ! -f "$binary" ]; } && continue
+        dir=$(dirname "$binary")
+        [ -d "$dir/chain_data" ] && echo "$dir/chain_data" && return 0
+    done
+    return 1
+}
+
+# 5.4 - Get files directory
+# Non-strict (custom domain): shows detected Grin instances + manual entry option.
+# Strict (Grin mode): auto-sets FILES_DIR from the validated domain prefix,
+#   shows chain_data size vs available /var/www space, and offers to clean up
+#   the target directory if space is insufficient.
 get_files_directory() {
+    local strict_mode="${1:-false}"
+
     if [[ -n "$FILES_DIR" ]]; then
         print_info "Files directory: $FILES_DIR"
         return
     fi
 
+    # ── Strict (Grin) mode — auto-set from domain prefix ─────────────────────
+    if [[ "$strict_mode" == "strict" ]]; then
+        local prefix
+        prefix=$(echo "$DOMAIN" | cut -d'.' -f1)
+        FILES_DIR="/var/www/${prefix}"
+
+        echo ""
+        print_info "Files directory (auto-selected): $FILES_DIR"
+
+        # Warn if already bound to another nginx site
+        if [[ -d "$NGINX_AVAILABLE" ]] && grep -rl "root ${FILES_DIR}" "$NGINX_AVAILABLE" &>/dev/null; then
+            local _existing_site
+            _existing_site=$(grep -rl "root ${FILES_DIR}" "$NGINX_AVAILABLE" | head -1 | xargs basename 2>/dev/null)
+            print_warn "This directory is already configured for: ${_existing_site}"
+        fi
+
+        # Disk space check: chain_data size vs free space on /var/www partition
+        local _chain_data_dir _chain_data_kb _chain_data_gb _free_kb _free_gb
+        _chain_data_dir=$(_chain_data_for_prefix "$prefix" 2>/dev/null)
+
+        if [[ -n "$_chain_data_dir" ]]; then
+            _chain_data_kb=$(du -sk "$_chain_data_dir" 2>/dev/null | cut -f1) || _chain_data_kb=0
+            mkdir -p "$FILES_DIR" 2>/dev/null || true
+            _free_kb=$(df -k "$FILES_DIR" 2>/dev/null | awk 'NR==2{print $4}') || _free_kb=0
+            _chain_data_gb=$(awk "BEGIN{printf \"%.1f\", ${_chain_data_kb}/1048576}")
+            _free_gb=$(awk "BEGIN{printf \"%.1f\", ${_free_kb}/1048576}")
+
+            echo ""
+            echo -e "  chain_data size  : ${YELLOW}~${_chain_data_gb} GiB${NC}  (${_chain_data_dir})"
+            echo -e "  Free space       : ${YELLOW}${_free_gb} GiB${NC}  ($(df -h "$FILES_DIR" 2>/dev/null | awk 'NR==2{print $1}'))"
+            echo ""
+
+            if (( _chain_data_kb > 0 && _free_kb < _chain_data_kb )); then
+                print_warn "Insufficient free space — chain_data (~${_chain_data_gb} GiB) exceeds available (${_free_gb} GiB)."
+
+                local _dir_kb=0
+                [ -d "$FILES_DIR" ] && _dir_kb=$(du -sk "$FILES_DIR" 2>/dev/null | cut -f1) || true
+
+                if (( _dir_kb > 0 )); then
+                    local _dir_gb
+                    _dir_gb=$(awk "BEGIN{printf \"%.1f\", ${_dir_kb}/1048576}")
+                    echo -e "  ${FILES_DIR} currently holds ${YELLOW}${_dir_gb} GiB${NC} — cleaning it may free enough space."
+                    echo ""
+                    local _clean
+                    read -r -p "  Clean up ${FILES_DIR} now? (Y/n/0) [default: Y, 0 = cancel]: " _clean
+                    [[ "$_clean" == "0" ]] && return 1
+                    if [[ ! "${_clean,,}" =~ ^n ]]; then
+                        find "$FILES_DIR" -mindepth 1 ! -name '.htaccess' -delete 2>/dev/null || true
+                        print_info "Cleaned up ${FILES_DIR}"
+                        _free_kb=$(df -k "$FILES_DIR" 2>/dev/null | awk 'NR==2{print $4}') || _free_kb=0
+                        _free_gb=$(awk "BEGIN{printf \"%.1f\", ${_free_kb}/1048576}")
+                        if (( _free_kb >= _chain_data_kb )); then
+                            print_info "Space OK after cleanup: ${_free_gb} GiB free."
+                        else
+                            print_warn "Still low after cleanup (${_free_gb} GiB free). Script 03 may fail if space runs out."
+                        fi
+                    fi
+                else
+                    print_warn "No existing files in ${FILES_DIR} to clean. Free up space on the partition and retry."
+                fi
+            else
+                print_info "Disk space OK — ${_free_gb} GiB free, chain_data ~${_chain_data_gb} GiB."
+            fi
+        else
+            print_warn "Could not determine chain_data size — skipping disk space check."
+        fi
+
+        print_info "Files directory: $FILES_DIR"
+        return 0
+    fi
+
+    # ── Non-strict mode — show detected Grin instances + manual entry ─────────
     local suggestions=() labels=() suggested
 
     for port in 3414 13414; do
@@ -699,7 +874,6 @@ get_files_directory() {
         local i
         for i in "${!suggestions[@]}"; do
             local _tag=""
-            # Check if this directory is already used as a root in any nginx site config
             if [[ -d "$NGINX_AVAILABLE" ]] && grep -rl "root ${suggestions[$i]}" "$NGINX_AVAILABLE" &>/dev/null; then
                 local _domain; _domain=$(grep -rl "root ${suggestions[$i]}" "$NGINX_AVAILABLE" | head -1 | xargs basename 2>/dev/null)
                 _tag=" ⚠  already configured (${_domain})"
@@ -710,15 +884,21 @@ get_files_directory() {
         echo "  ${manual_opt}) Enter path manually  [default: $DEFAULT_FILES_DIR]"
         echo "  0) Cancel — return to main menu"
         echo ""
-        read -p "Select [0-${manual_opt}]: " sel
-        [[ "$sel" == "0" ]] && return 1
-        if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#suggestions[@]}" ]; then
-            FILES_DIR="${suggestions[$((sel-1))]}"
-        else
-            read -p "Enter directory path [$DEFAULT_FILES_DIR] or 0 to cancel: " FILES_DIR
-            [[ "$FILES_DIR" == "0" ]] && return 1
-            FILES_DIR="${FILES_DIR:-$DEFAULT_FILES_DIR}"
-        fi
+        while true; do
+            read -p "Select [0-${manual_opt}]: " sel
+            [[ "$sel" == "0" ]] && return 1
+            if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#suggestions[@]}" ]; then
+                FILES_DIR="${suggestions[$((sel-1))]}"
+                break
+            elif [[ "$sel" == "$manual_opt" ]]; then
+                read -p "Enter directory path [$DEFAULT_FILES_DIR] or 0 to cancel: " FILES_DIR
+                [[ "$FILES_DIR" == "0" ]] && return 1
+                FILES_DIR="${FILES_DIR:-$DEFAULT_FILES_DIR}"
+                break
+            else
+                print_error "Invalid selection. Please choose from the options above."
+            fi
+        done
     else
         read -p "Enter directory for storing files [default: $DEFAULT_FILES_DIR] or 0 to cancel: " FILES_DIR
         [[ "$FILES_DIR" == "0" ]] && return 1
@@ -842,8 +1022,6 @@ obtain_ssl_certificate() {
     
     print_info "Requesting SSL certificate for $DOMAIN — this may take a moment..."
     echo ""
-    read -rp "Press Enter to start or Ctrl+C to abort..."
-    
     # Run certbot
     if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --email "$EMAIL" --redirect; then
         print_info "SSL certificate obtained successfully"
@@ -1659,6 +1837,7 @@ finalize_log() {
 # 23.0 - Setup Grin master node domain workflow
 run_setup_grin() {
     print_section "Nginx File Server Setup — Grin Master Nodes"
+    DOMAIN=""; EMAIL=""; FILES_DIR=""
 
     # Check and install nginx if needed
     if ! check_nginx; then
@@ -1686,21 +1865,16 @@ run_setup_grin() {
 
     # Get required information
     print_section "Configuration"
-    get_domain "true"        || { print_info "Setup cancelled."; return 0; }
-    get_email                || { print_info "Setup cancelled."; return 0; }
-    get_files_directory      || { print_info "Setup cancelled."; return 0; }
-    get_bandwidth_settings   || { print_info "Setup cancelled."; return 0; }
-
+    get_domain "true"             || { print_info "Setup cancelled."; return 0; }
+    validate_grin_domain_match    || { print_info "Setup cancelled."; DOMAIN=""; return 0; }
+    get_email                     || { print_info "Setup cancelled."; return 0; }
+    get_files_directory "strict"  || { print_info "Setup cancelled."; return 0; }
     # Confirm before proceeding
     echo ""
     print_warn "About to configure:"
     echo "  Domain: $DOMAIN"
     echo "  Email: $EMAIL"
     echo "  Files Directory: $FILES_DIR"
-    if [[ "$ENABLE_BANDWIDTH_LIMIT" == "yes" ]]; then
-        echo "  Bandwidth Limit: ${DOWNLOAD_QUOTA_GB}GB per IP"
-        echo "  Speed after quota: $SPEED_LIMIT_AFTER_QUOTA"
-    fi
     echo ""
     local proceed_choice
     while true; do
@@ -1715,7 +1889,6 @@ run_setup_grin() {
     create_initial_nginx_config
     obtain_ssl_certificate
     enhance_nginx_config
-    setup_bandwidth_limiting
     setup_auto_renewal
 
     # Display summary
@@ -1723,6 +1896,28 @@ run_setup_grin() {
     echo ""
     print_info "Full log saved to: $LOG_FILE"
     echo ""
+
+    # Offer to configure other running Grin instance(s) not yet set up in nginx
+    local _unconfigured_dirs=()
+    for _port in 3414 13414; do
+        local _wdir
+        _wdir=$(suggest_grin_web_dir "$_port" 2>/dev/null) || continue
+        grep -rl "root ${_wdir}" "$NGINX_AVAILABLE" &>/dev/null && continue
+        _unconfigured_dirs+=("$_wdir")
+    done
+
+    if [[ ${#_unconfigured_dirs[@]} -gt 0 ]]; then
+        print_info "Another running Grin instance has no domain configured yet:"
+        for _d in "${_unconfigured_dirs[@]}"; do echo "  - $_d"; done
+        echo ""
+        local _more
+        read -r -p "Set up a domain for it now? (Y/n/0) [default: Y]: " _more
+        if [[ "$_more" != "0" && ! "${_more,,}" =~ ^n ]]; then
+            run_setup_grin
+            return
+        fi
+    fi
+
     read -rp "Press Enter to return to the main menu..."
 }
 

@@ -641,6 +641,11 @@ parse_arguments() {
 # 5.0 - Function to get domain input
 get_domain() {
     local mode="${1:-custom}"   # mainnet | testnet | custom
+
+    # Detect running mainnet node type once — used for both hint and validation
+    local _mn_detected=""
+    [[ "$mode" == "mainnet" ]] && _mn_detected=$(suggest_grin_web_dir 3414 2>/dev/null) || true
+
     echo ""
     echo -e "${YELLOW}[DNS]${NC} Point your A record to this server. If using Cloudflare, change"
     echo -e "      from ${RED}Proxied${NC} to ${GREEN}DNS only${NC} — makes your node become a DNSSeed and avoids"
@@ -649,8 +654,6 @@ get_domain() {
     case "$mode" in
         mainnet)
             echo -e "  ${YELLOW}Required subdomain prefix for mainnet:${NC}"
-            local _mn_detected
-            _mn_detected=$(suggest_grin_web_dir 3414 2>/dev/null) || true
             case "$_mn_detected" in
                 */fullmain)  echo -e "    fullmain.yourdomain.com   — full archive node" ;;
                 */prunemain) echo -e "    prunemain.yourdomain.com  — pruned node" ;;
@@ -679,7 +682,19 @@ get_domain() {
             _prefix=$(echo "$DOMAIN" | cut -d'.' -f1)
             case "$mode" in
                 mainnet)
-                    if [[ "$_prefix" != "fullmain" && "$_prefix" != "prunemain" ]]; then
+                    # Derive the single required prefix from the detected node type
+                    local _required_prefix=""
+                    case "$_mn_detected" in
+                        */fullmain)  _required_prefix="fullmain"  ;;
+                        */prunemain) _required_prefix="prunemain" ;;
+                    esac
+                    if [[ -n "$_required_prefix" && "$_prefix" != "$_required_prefix" ]]; then
+                        echo ""
+                        print_error "Prefix '${_prefix}' is not valid for your mainnet node."
+                        echo -e "  Must start with: ${YELLOW}${_required_prefix}${NC}"
+                        echo ""
+                        DOMAIN=""; continue
+                    elif [[ -z "$_required_prefix" && "$_prefix" != "fullmain" && "$_prefix" != "prunemain" ]]; then
                         echo ""
                         print_error "Prefix '${_prefix}' is not valid for mainnet."
                         echo -e "  Must start with: ${YELLOW}fullmain${NC} or ${YELLOW}prunemain${NC}"

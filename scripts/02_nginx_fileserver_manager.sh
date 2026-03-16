@@ -656,70 +656,73 @@ get_domain() {
     done
 }
 
-# 5.1 - Validate that the domain prefix matches the currently running Grin node type/network.
+# 5.1 - Validate that the domain prefix matches at least one currently running Grin node.
+# Supports dual-node setups (e.g. prunemain + prunetest running simultaneously).
 # Must be called after get_domain() sets $DOMAIN in Grin (strict) mode.
 # On mismatch: shows alert, offers press-0 to exit to master script.
 # Returns 0 on success, 1 on mismatch/cancel.
 validate_grin_domain_match() {
-    local prefix detected_dir required_dir port _bk detected_prefix
+    local prefix required_dir port _bk d
     prefix=$(echo "$DOMAIN" | cut -d'.' -f1)
     required_dir="/var/www/${prefix}"
 
-    # Detect running Grin node — try mainnet port first, then testnet
-    detected_dir=""
+    # Collect ALL running Grin instances (both ports — dual-node setup supported)
+    local detected_dirs=()
     for port in 3414 13414; do
-        detected_dir=$(suggest_grin_web_dir "$port" 2>/dev/null) && break
+        d=$(suggest_grin_web_dir "$port" 2>/dev/null) && detected_dirs+=("$d")
     done
 
-    local _show_alert=false
-    local _reason=""
+    # Check if required_dir matches any detected instance
+    local matched=false
+    for d in "${detected_dirs[@]}"; do
+        [[ "$d" == "$required_dir" ]] && matched=true && break
+    done
 
-    if [[ -z "$detected_dir" ]]; then
-        _show_alert=true
-        _reason="no_node"
-    elif [[ "$detected_dir" != "$required_dir" ]]; then
-        _show_alert=true
-        _reason="mismatch"
-        detected_prefix=$(basename "$detected_dir")
+    if [[ "$matched" == "true" ]]; then
+        print_info "Node type validated: running node matches domain prefix '${prefix}'."
+        return 0
     fi
 
-    if [[ "$_show_alert" == "true" ]]; then
-        echo ""
-        print_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        print_error "  ⚠  DOMAIN / NODE TYPE MISMATCH"
-        print_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        echo -e "  You entered domain prefix : ${YELLOW}${prefix}${NC}"
-        if [[ "$_reason" == "no_node" ]]; then
-            echo -e "  Running Grin node         : ${RED}None detected${NC}"
-        else
-            echo -e "  Running node type         : ${YELLOW}${detected_prefix}${NC}"
-        fi
-        echo ""
-        case "$prefix" in
-            fullmain)  echo -e "  ${YELLOW}fullmain${NC}  requires: Mainnet + archive_mode = true  (full chain)" ;;
-            prunemain) echo -e "  ${YELLOW}prunemain${NC} requires: Mainnet + archive_mode = false (pruned)" ;;
-            prunetest) echo -e "  ${YELLOW}prunetest${NC} requires: Testnet + archive_mode = false (pruned)" ;;
-        esac
-        echo ""
-        if [[ "$_reason" == "no_node" ]]; then
-            echo -e "  No active Grin node found on this server."
-            echo -e "  Run ${YELLOW}Script 01${NC} to build and start the correct node type first."
-        else
-            echo -e "  Your running node is ${YELLOW}${detected_prefix}${NC} — it does not match ${YELLOW}${prefix}${NC}."
-            echo -e "  Run ${YELLOW}Script 01${NC} to rebuild with the correct network and node type."
-        fi
-        echo ""
-        read -p "  Press 0 to return to master script, or Enter to cancel: " _bk
-        if [[ "$_bk" == "0" ]]; then
-            exit 0
-        fi
-        DOMAIN=""
-        return 1
+    # ── Alert ────────────────────────────────────────────────────────────────
+    echo ""
+    print_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_error "  ⚠  DOMAIN / NODE TYPE MISMATCH"
+    print_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo -e "  You entered domain prefix : ${YELLOW}${prefix}${NC}"
+    if [[ ${#detected_dirs[@]} -eq 0 ]]; then
+        echo -e "  Running Grin nodes        : ${RED}None detected${NC}"
+    else
+        local first=true
+        for d in "${detected_dirs[@]}"; do
+            local dp; dp=$(basename "$d")
+            if [[ "$first" == "true" ]]; then
+                printf "  Running Grin node(s)      : ${YELLOW}%s${NC}\n" "$dp"
+                first=false
+            else
+                printf "                              ${YELLOW}%s${NC}\n" "$dp"
+            fi
+        done
     fi
-
-    print_info "Node type validated: running node matches domain prefix '${prefix}'."
-    return 0
+    echo ""
+    case "$prefix" in
+        fullmain)  echo -e "  ${YELLOW}fullmain${NC}  requires: Mainnet + archive_mode = true  (full chain)" ;;
+        prunemain) echo -e "  ${YELLOW}prunemain${NC} requires: Mainnet + archive_mode = false (pruned)" ;;
+        prunetest) echo -e "  ${YELLOW}prunetest${NC} requires: Testnet + archive_mode = false (pruned)" ;;
+    esac
+    echo ""
+    if [[ ${#detected_dirs[@]} -eq 0 ]]; then
+        echo -e "  No active Grin node found on this server."
+        echo -e "  Run ${YELLOW}Script 01${NC} to build and start the correct node type first."
+    else
+        echo -e "  None of the running nodes match ${YELLOW}${prefix}${NC}."
+        echo -e "  Run ${YELLOW}Script 01${NC} to add or rebuild the correct node type."
+    fi
+    echo ""
+    read -p "  Press 0 to return to master script, or Enter to cancel: " _bk
+    [[ "$_bk" == "0" ]] && exit 0
+    DOMAIN=""
+    return 1
 }
 
 # 5.2 - Get and validate email

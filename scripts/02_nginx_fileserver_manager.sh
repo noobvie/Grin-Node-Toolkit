@@ -1022,8 +1022,6 @@ obtain_ssl_certificate() {
     
     print_info "Requesting SSL certificate for $DOMAIN — this may take a moment..."
     echo ""
-    read -rp "Press Enter to start or Ctrl+C to abort..."
-    
     # Run certbot
     if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --email "$EMAIL" --redirect; then
         print_info "SSL certificate obtained successfully"

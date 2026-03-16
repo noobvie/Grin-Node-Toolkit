@@ -5,17 +5,43 @@
 ################################################################################
 #
 # PURPOSE
-#   Manages nginx virtual hosts that serve files over HTTPS. Primarily used to
-#   host Grin chain-data archives for download by other nodes, but also supports
-#   fully custom domains for any static file directory.
+#   Manages nginx virtual hosts that serve Grin chain-data archives over HTTPS
+#   for download by other nodes, and supports custom domains for any static
+#   file directory.
 #
-# MODES
-#   grin    — Set up a file server for a detected Grin node. Auto-detects the
-#             running node type and suggests the correct web directory
-#             (fullmain / prunemain / prunetest).
-#   custom  — Set up a file server for any domain and directory.
-#   remove  — Remove a managed nginx virtual host (optionally delete files).
-#   list    — List all nginx virtual hosts managed by this script.
+# MENU OPTIONS
+#   1) Build Grin Master Nodes — Mainnet
+#         Configure a domain for a mainnet Grin node.
+#         Allowed prefixes: fullmain / prunemain
+#         Auto-maps: fullmain.* → /var/www/fullmain
+#                    prunemain.* → /var/www/prunemain
+#         If already configured: shows existing domain; use Remove Domain first.
+#
+#   2) Build Grin Master Nodes — Testnet
+#         Configure a domain for a testnet Grin node.
+#         Allowed prefix: prunetest
+#         Auto-maps: prunetest.* → /var/www/prunetest
+#         If already configured: shows existing domain; use Remove Domain first.
+#
+#   3) Add Custom Domain
+#         Configure any non-Grin domain pointing to any directory.
+#         Blocked: fullmain / prunemain / prunetest prefixes and their
+#                  corresponding /var/www/* directories are reserved for
+#                  options 1 & 2 and cannot be used here.
+#
+#   4) Remove Domain      — Remove a managed nginx virtual host (optionally delete files).
+#   5) List Domains       — Show all configured nginx virtual hosts.
+#   6) Limit Rate         — Set per-IP download speed cap (anti-DDoS / abuse).
+#   7) Lift Rate          — Remove or reset per-IP speed cap.
+#   8) Install fail2ban   — Install & configure fail2ban for nginx.
+#   9) Fail2ban Mgmt      — Status, unban IPs, list bans.
+#  10) IP Filtering       — Block / Unblock IPs via ufw or iptables.
+#
+# GRIN SUBDOMAIN CONVENTIONS
+#   fullmain.*   — Mainnet full archive node  (archive_mode = true,  ~25 GiB)
+#   prunemain.*  — Mainnet pruned node        (archive_mode = false, ~10 GiB)
+#   prunetest.*  — Testnet pruned node        (archive_mode = false, ~10 GiB)
+#   DNS record must be set to "DNS only" (not Proxied) for certbot and DNSSeed.
 #
 # FEATURES
 #   · SSL via Let's Encrypt (certbot); HSTS enforced
@@ -27,13 +53,14 @@
 # PREREQUISITES
 #   · Must be run as root
 #   · nginx and certbot (auto-installed if missing)
-#   · DNS A record must point to this server's IP — if using Cloudflare, set
-#     the record to "DNS only" (not "Proxied") for certbot and Grin DNSSeed
+#   · DNS A record pointing to this server's IP before running
 #   · Ports 80 and 443 open and reachable from the internet
 #
 # NON-INTERACTIVE MODE
 #   Set ACTION and the variables below before running to skip the interactive
-#   menu. Leave them empty to use the interactive prompt instead.
+#   menu. Valid ACTION values:
+#     grin_mainnet | grin_testnet | custom | remove | list |
+#     limit_rate | lift_rate | enhance_security | fail2ban_management | ip_filtering
 #
 # LOG FILE
 #   <toolkit_root>/log/02_nginx_<action>_YYYYMMDD_HHMMSS.log
@@ -44,7 +71,8 @@ set -e  # Exit on any error
 
 # ── Non-interactive configuration ────────────────────────────────────────────
 # Set ACTION here, or leave empty for interactive menu
-# Options: "grin" | "custom" | "remove" | "list"
+# Options: "grin_mainnet" | "grin_testnet" | "custom" | "remove" | "list" |
+#          "limit_rate" | "lift_rate" | "enhance_security" | "fail2ban_management" | "ip_filtering"
 ACTION=""
 
 # Domain configuration (for setup/add operations)
@@ -114,13 +142,15 @@ suggest_grin_web_dir() {
     for loc in "$dir/grin-server.toml" "$proc_cwd/grin-server.toml"; do
         [ -f "$loc" ] && { cfg="$loc"; break; }
     done
-    [ -z "$cfg" ] && return 1
 
     # Read chain_type line only — broad grep would match comments
     chain_line=""
     [ -f "$cfg" ] && chain_line=$(grep -E '^\s*chain_type\s*=' "$cfg" 2>/dev/null | head -1)
 
     if echo "$chain_line" | grep -qi "Testnet"; then
+        net="testnet"; ntype="pruned"
+    elif [[ -z "$chain_line" && "$port" == "13414" ]]; then
+        # Config not readable — port 13414 is exclusively Grin testnet
         net="testnet"; ntype="pruned"
     else
         net="mainnet"
@@ -360,21 +390,21 @@ show_main_menu() {
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
 EOF
-    
+
     echo ""
     echo "Select an action:"
     echo ""
-    echo "  1) Build Grin Master Nodes    - Run this 2 times if you wanna share both mainnet and testnet"
-    # SWITCH: restore label to "Add new custom domains" and re-enable case 2 in get_action() to re-enable this option
-    echo "  2) Add Custom Domain          - (Temporarily disable)"
-    echo "  3) Remove Domain              - Remove domain and its configuration"
-    echo "  4) List Domains               - Show all configured domains"
+    echo "  1) Build Grin Master Nodes — Mainnet  (fullmain / prunemain)"
+    echo "  2) Build Grin Master Nodes — Testnet  (prunetest)"
+    echo "  3) Add Custom Domain                  - Any non-Grin domain"
+    echo "  4) Remove Domain                      - Remove domain and its configuration"
+    echo "  5) List Domains                       - Show all configured domains"
     echo ""
-    echo "  5) Limit Rate / Bandwidth     - Set per-IP speed cap (anti-DDoS / abuse)"
-    echo "  6) Lift Rate / Bandwidth      - Remove or reset per-IP speed cap"
-    echo "  7) Install fail2ban           - Install & configure fail2ban for nginx"
-    echo "  8) Fail2ban Management        - Status, unban IPs, list bans"
-    echo "  9) IP Filtering               - Block / Unblock IPs via ufw or iptables"
+    echo "  6) Limit Rate / Bandwidth     - Set per-IP speed cap (anti-DDoS / abuse)"
+    echo "  7) Lift Rate / Bandwidth      - Remove or reset per-IP speed cap"
+    echo "  8) Install fail2ban           - Install & configure fail2ban for nginx"
+    echo "  9) Fail2ban Management        - Status, unban IPs, list bans"
+    echo " 10) IP Filtering               - Block / Unblock IPs via ufw or iptables"
     echo ""
     echo "  0) Exit"
     echo ""
@@ -384,39 +414,39 @@ EOF
 get_action() {
     if [[ -n "$ACTION" ]]; then
         case "$ACTION" in
-            grin|custom|remove|list|limit_rate|lift_rate|enhance_security|fail2ban_management|ip_filtering)
+            grin_mainnet|grin_testnet|custom|remove|list|limit_rate|lift_rate|enhance_security|fail2ban_management|ip_filtering)
                 return 0
                 ;;
             *)
                 print_error "Invalid ACTION: $ACTION"
-                print_info "Valid options: setup, add, remove, list, limit_rate, lift_rate, enhance_security, fail2ban_management, ip_filtering"
+                print_info "Valid options: grin_mainnet, grin_testnet, custom, remove, list, limit_rate, lift_rate, enhance_security, fail2ban_management, ip_filtering"
                 exit 1
                 ;;
         esac
     fi
-    
+
     while true; do
         show_main_menu
-        read -p "Enter choice [0-9]: " choice
+        read -p "Enter choice [0-10]: " choice
 
         case $choice in
-            1) ACTION="grin"                ; break ;;
-            # SWITCH: restore to "ACTION="custom"; break ;;" to re-enable Add Custom Domain
-            2) print_warn "Add Custom Domain is temporarily unavailable."; sleep 2 ;;
-            3) ACTION="remove"              ; break ;;
-            4) ACTION="list"                ; break ;;
-            5) ACTION="limit_rate"          ; break ;;
-            6) ACTION="lift_rate"           ; break ;;
-            7) ACTION="enhance_security"    ; break ;;
-            8) ACTION="fail2ban_management" ; break ;;
-            9) ACTION="ip_filtering"        ; break ;;
+            1)  ACTION="grin_mainnet"       ; break ;;
+            2)  ACTION="grin_testnet"       ; break ;;
+            3)  ACTION="custom"             ; break ;;
+            4)  ACTION="remove"             ; break ;;
+            5)  ACTION="list"               ; break ;;
+            6)  ACTION="limit_rate"         ; break ;;
+            7)  ACTION="lift_rate"          ; break ;;
+            8)  ACTION="enhance_security"   ; break ;;
+            9)  ACTION="fail2ban_management"; break ;;
+            10) ACTION="ip_filtering"       ; break ;;
             0)
                 print_info "Exiting..."
                 exit 0
                 ;;
             "")  ;;  # Enter with no input — refresh menu
             *)
-                print_error "Invalid choice. Please select 0-9."
+                print_error "Invalid choice. Please select 0-10."
                 sleep 2
                 ;;
         esac
@@ -610,46 +640,66 @@ parse_arguments() {
 
 # 5.0 - Function to get domain input
 get_domain() {
-    local strict="${1:-true}"
+    local mode="${1:-custom}"   # mainnet | testnet | custom
     echo ""
     echo -e "${YELLOW}[DNS]${NC} Point your A record to this server. If using Cloudflare, change"
     echo -e "      from ${RED}Proxied${NC} to ${GREEN}DNS only${NC} — makes your node become a DNSSeed and avoids"
     echo -e "      certbot / Let's Encrypt issues."
     echo ""
-    if [[ "$strict" == "true" ]]; then
-        echo -e "  ${YELLOW}Required subdomain format:${NC}"
-        echo -e "    fullmain.yourdomain.com   — full archive node, mainnet"
-        echo -e "    prunemain.yourdomain.com  — pruned node, mainnet"
-        echo -e "    prunetest.yourdomain.com  — pruned node, testnet"
-    else
-        echo -e "  Enter any valid domain or subdomain (e.g., files.yourdomain.com)"
-    fi
+    case "$mode" in
+        mainnet)
+            echo -e "  ${YELLOW}Required subdomain prefix for mainnet:${NC}"
+            echo -e "    fullmain.yourdomain.com   — full archive node"
+            echo -e "    prunemain.yourdomain.com  — pruned node"
+            ;;
+        testnet)
+            echo -e "  ${YELLOW}Required subdomain prefix for testnet:${NC}"
+            echo -e "    prunetest.yourdomain.com  — pruned node"
+            ;;
+        *)
+            echo -e "  Enter any valid domain or subdomain (e.g., files.yourdomain.com)"
+            echo -e "  ${YELLOW}Note:${NC} fullmain / prunemain / prunetest prefixes are reserved for Grin options 1 & 2."
+            ;;
+    esac
     echo ""
     while true; do
         if [[ -z "$DOMAIN" ]]; then
-            if [[ "$strict" == "true" ]]; then
-                read -p "Enter domain name (e.g., prunemain.yourdomain.com) or 0 to cancel: " DOMAIN
-            else
-                read -p "Enter domain name (e.g., files.yourdomain.com) or 0 to cancel: " DOMAIN
-            fi
+            read -p "Enter domain name or 0 to cancel: " DOMAIN
             [[ "$DOMAIN" == "0" ]] && return 1
         fi
 
         if validate_domain "$DOMAIN"; then
-            if [[ "$strict" == "true" ]]; then
-                # Hard check: subdomain prefix must be a known Grin site key
-                local _prefix
-                _prefix=$(echo "$DOMAIN" | cut -d'.' -f1)
-                if [[ "$_prefix" != "fullmain" && "$_prefix" != "prunemain" && "$_prefix" != "prunetest" ]]; then
-                    echo ""
-                    print_error "Subdomain prefix '${_prefix}' is not valid."
-                    echo -e "  Domain must start with one of: fullmain / prunemain / prunetest"
-                    echo -e "  e.g. prunemain.yourdomain.com"
-                    echo ""
-                    DOMAIN=""
-                    continue
-                fi
-            fi
+            local _prefix
+            _prefix=$(echo "$DOMAIN" | cut -d'.' -f1)
+            case "$mode" in
+                mainnet)
+                    if [[ "$_prefix" != "fullmain" && "$_prefix" != "prunemain" ]]; then
+                        echo ""
+                        print_error "Prefix '${_prefix}' is not valid for mainnet."
+                        echo -e "  Must start with: ${YELLOW}fullmain${NC} or ${YELLOW}prunemain${NC}"
+                        echo ""
+                        DOMAIN=""; continue
+                    fi
+                    ;;
+                testnet)
+                    if [[ "$_prefix" != "prunetest" ]]; then
+                        echo ""
+                        print_error "Prefix '${_prefix}' is not valid for testnet."
+                        echo -e "  Must start with: ${YELLOW}prunetest${NC}"
+                        echo ""
+                        DOMAIN=""; continue
+                    fi
+                    ;;
+                *)
+                    if [[ "$_prefix" == "fullmain" || "$_prefix" == "prunemain" || "$_prefix" == "prunetest" ]]; then
+                        echo ""
+                        print_error "Prefix '${_prefix}' is reserved for Grin Master Nodes (options 1 & 2)."
+                        echo -e "  Use options 1 or 2 to configure Grin domains."
+                        echo ""
+                        DOMAIN=""; continue
+                    fi
+                    ;;
+            esac
             print_info "Domain validated: $DOMAIN"
             break
         else
@@ -858,10 +908,19 @@ get_files_directory() {
     fi
 
     # ── Non-strict mode — show detected Grin instances + manual entry ─────────
-    local suggestions=() labels=() suggested
+    # In "custom" mode, Grin-reserved directories are excluded from suggestions
+    # and blocked from manual entry.
+    local _grin_reserved=("/var/www/fullmain" "/var/www/prunemain" "/var/www/prunetest")
 
+    local suggestions=() labels=() suggested
     for port in 3414 13414; do
         suggested=$(suggest_grin_web_dir "$port" 2>/dev/null) || continue
+        # Skip reserved dirs in custom mode
+        if [[ "$strict_mode" == "custom" ]]; then
+            local _skip=false
+            local _r; for _r in "${_grin_reserved[@]}"; do [[ "$suggested" == "$_r" ]] && _skip=true && break; done
+            [[ "$_skip" == "true" ]] && continue
+        fi
         case "$suggested" in
             */fullmain)   labels+=("Mainnet Full (archive)")   ;;
             */prunemain)  labels+=("Mainnet Pruned")           ;;
@@ -906,6 +965,19 @@ get_files_directory() {
         read -p "Enter directory for storing files [default: $DEFAULT_FILES_DIR] or 0 to cancel: " FILES_DIR
         [[ "$FILES_DIR" == "0" ]] && return 1
         FILES_DIR="${FILES_DIR:-$DEFAULT_FILES_DIR}"
+    fi
+
+    # In custom mode: reject reserved Grin directories
+    if [[ "$strict_mode" == "custom" ]]; then
+        local _r; for _r in "${_grin_reserved[@]}"; do
+            if [[ "$FILES_DIR" == "$_r" ]]; then
+                echo ""
+                print_error "Directory '${FILES_DIR}' is reserved for Grin Master Nodes (options 1 & 2)."
+                echo -e "  Use options 1 or 2 to configure Grin directories."
+                FILES_DIR=""
+                return 1
+            fi
+        done
     fi
 
     print_info "Files directory: $FILES_DIR"
@@ -1838,8 +1910,21 @@ finalize_log() {
 #############################################################################
 
 # 23.0 - Setup Grin master node domain workflow
-run_setup_grin() {
-    print_section "Nginx File Server Setup — Grin Master Nodes"
+# Shared setup flow for Grin Master Nodes (mainnet or testnet).
+# $1 = "mainnet" | "testnet"
+run_setup_grin_network() {
+    local network="$1"
+    local section_title reserved_dirs=()
+
+    if [[ "$network" == "mainnet" ]]; then
+        section_title="Nginx File Server Setup — Grin Mainnet"
+        reserved_dirs=("/var/www/fullmain" "/var/www/prunemain")
+    else
+        section_title="Nginx File Server Setup — Grin Testnet"
+        reserved_dirs=("/var/www/prunetest")
+    fi
+
+    print_section "$section_title"
     DOMAIN=""; EMAIL=""; FILES_DIR=""
 
     # Check and install nginx if needed
@@ -1850,7 +1935,6 @@ run_setup_grin() {
             [[ "$nginx_choice" == "0" ]] && return 0
             [[ "${nginx_choice,,}" =~ ^n ]] && print_error "Nginx is required. Exiting." && return 0
             install_nginx && break
-            # empty or unrecognised — install
         done
     fi
 
@@ -1862,16 +1946,40 @@ run_setup_grin() {
             [[ "$certbot_choice" == "0" ]] && return 0
             [[ "${certbot_choice,,}" =~ ^n ]] && print_error "Certbot is required for SSL. Exiting." && return 0
             install_certbot && break
-            # empty or unrecognised — install
         done
+    fi
+
+    # Check if already configured for this network
+    local _already_domain="" _already_dir=""
+    local _d
+    for _d in "${reserved_dirs[@]}"; do
+        local _conf
+        _conf=$(grep -rl "root ${_d}" "$NGINX_AVAILABLE" 2>/dev/null | head -1)
+        if [[ -n "$_conf" ]]; then
+            _already_domain=$(basename "$_conf")
+            _already_dir="$_d"
+            break
+        fi
+    done
+
+    if [[ -n "$_already_domain" ]]; then
+        echo ""
+        print_info "A Grin ${network} domain is already configured:"
+        echo "  Domain    : ${_already_domain}"
+        echo "  Directory : ${_already_dir}"
+        echo ""
+        print_warn "To reconfigure, use option 4) Remove Domain first, then run this option again."
+        echo ""
+        read -rp "Press Enter to return to the main menu..."
+        return 0
     fi
 
     # Get required information
     print_section "Configuration"
-    get_domain "true"             || { print_info "Setup cancelled."; return 0; }
-    validate_grin_domain_match    || { print_info "Setup cancelled."; DOMAIN=""; return 0; }
+    get_domain "$network"         || { print_info "Setup cancelled."; return 0; }
     get_email                     || { print_info "Setup cancelled."; return 0; }
     get_files_directory "strict"  || { print_info "Setup cancelled."; return 0; }
+
     # Confirm before proceeding
     echo ""
     print_warn "About to configure:"
@@ -1899,30 +2007,11 @@ run_setup_grin() {
     echo ""
     print_info "Full log saved to: $LOG_FILE"
     echo ""
-
-    # Offer to configure other running Grin instance(s) not yet set up in nginx
-    local _unconfigured_dirs=()
-    for _port in 3414 13414; do
-        local _wdir
-        _wdir=$(suggest_grin_web_dir "$_port" 2>/dev/null) || continue
-        grep -rl "root ${_wdir}" "$NGINX_AVAILABLE" &>/dev/null && continue
-        _unconfigured_dirs+=("$_wdir")
-    done
-
-    if [[ ${#_unconfigured_dirs[@]} -gt 0 ]]; then
-        print_info "Another running Grin instance has no domain configured yet:"
-        for _d in "${_unconfigured_dirs[@]}"; do echo "  - $_d"; done
-        echo ""
-        local _more
-        read -r -p "Set up a domain for it now? (Y/n/0) [default: Y]: " _more
-        if [[ "$_more" != "0" && ! "${_more,,}" =~ ^n ]]; then
-            run_setup_grin
-            return
-        fi
-    fi
-
     read -rp "Press Enter to return to the main menu..."
 }
+
+run_setup_grin_mainnet() { run_setup_grin_network "mainnet"; }
+run_setup_grin_testnet()  { run_setup_grin_network "testnet"; }
 
 # 23.1 - Add custom (non-Grin) domain workflow
 run_setup_custom() {
@@ -1952,10 +2041,10 @@ run_setup_custom() {
 
     # Get required information
     print_section "Configuration"
-    get_domain "false"       || { print_info "Setup cancelled."; return 0; }
-    get_email                || { print_info "Setup cancelled."; return 0; }
-    get_files_directory      || { print_info "Setup cancelled."; return 0; }
-    get_bandwidth_settings   || { print_info "Setup cancelled."; return 0; }
+    get_domain "custom"          || { print_info "Setup cancelled."; return 0; }
+    get_email                    || { print_info "Setup cancelled."; return 0; }
+    get_files_directory "custom" || { print_info "Setup cancelled."; return 0; }
+    get_bandwidth_settings       || { print_info "Setup cancelled."; return 0; }
 
     # Confirm before proceeding
     echo ""
@@ -2711,7 +2800,8 @@ run_ip_filtering() {
 # 29.0 - Dispatch a single action
 _dispatch_action() {
     case "$ACTION" in
-        grin)                run_setup_grin ;;
+        grin_mainnet)        run_setup_grin_mainnet ;;
+        grin_testnet)        run_setup_grin_testnet ;;
         custom)              run_setup_custom ;;
         remove)              run_remove ;;
         list)                run_list ;;

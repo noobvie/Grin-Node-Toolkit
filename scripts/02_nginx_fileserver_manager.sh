@@ -1837,6 +1837,7 @@ finalize_log() {
 # 23.0 - Setup Grin master node domain workflow
 run_setup_grin() {
     print_section "Nginx File Server Setup — Grin Master Nodes"
+    DOMAIN=""; EMAIL=""; FILES_DIR=""
 
     # Check and install nginx if needed
     if ! check_nginx; then
@@ -1895,6 +1896,28 @@ run_setup_grin() {
     echo ""
     print_info "Full log saved to: $LOG_FILE"
     echo ""
+
+    # Offer to configure other running Grin instance(s) not yet set up in nginx
+    local _unconfigured_dirs=()
+    for _port in 3414 13414; do
+        local _wdir
+        _wdir=$(suggest_grin_web_dir "$_port" 2>/dev/null) || continue
+        grep -rl "root ${_wdir}" "$NGINX_AVAILABLE" &>/dev/null && continue
+        _unconfigured_dirs+=("$_wdir")
+    done
+
+    if [[ ${#_unconfigured_dirs[@]} -gt 0 ]]; then
+        print_info "Another running Grin instance has no domain configured yet:"
+        for _d in "${_unconfigured_dirs[@]}"; do echo "  - $_d"; done
+        echo ""
+        local _more
+        read -r -p "Set up a domain for it now? (Y/n/0) [default: Y]: " _more
+        if [[ "$_more" != "0" && ! "${_more,,}" =~ ^n ]]; then
+            run_setup_grin
+            return
+        fi
+    fi
+
     read -rp "Press Enter to return to the main menu..."
 }
 

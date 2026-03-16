@@ -649,8 +649,14 @@ get_domain() {
     case "$mode" in
         mainnet)
             echo -e "  ${YELLOW}Required subdomain prefix for mainnet:${NC}"
-            echo -e "    fullmain.yourdomain.com   — full archive node"
-            echo -e "    prunemain.yourdomain.com  — pruned node"
+            local _mn_detected
+            _mn_detected=$(suggest_grin_web_dir 3414 2>/dev/null) || true
+            case "$_mn_detected" in
+                */fullmain)  echo -e "    fullmain.yourdomain.com   — full archive node" ;;
+                */prunemain) echo -e "    prunemain.yourdomain.com  — pruned node" ;;
+                *)           echo -e "    fullmain.yourdomain.com   — full archive node"
+                             echo -e "    prunemain.yourdomain.com  — pruned node" ;;
+            esac
             ;;
         testnet)
             echo -e "  ${YELLOW}Required subdomain prefix for testnet:${NC}"
@@ -1947,6 +1953,19 @@ run_setup_grin_network() {
             [[ "${certbot_choice,,}" =~ ^n ]] && print_error "Certbot is required for SSL. Exiting." && return 0
             install_certbot && break
         done
+    fi
+
+    # Check if the Grin node for this network is running
+    local _node_port; [[ "$network" == "mainnet" ]] && _node_port=3414 || _node_port=13414
+    local _node_detected
+    _node_detected=$(suggest_grin_web_dir "$_node_port" 2>/dev/null) || true
+    if [[ -z "$_node_detected" ]]; then
+        echo ""
+        print_warn "No ${network} Grin node detected on port ${_node_port}."
+        echo -e "  Start the node or build it via ${YELLOW}Script 01${NC} first, then return here."
+        echo ""
+        read -r -p "  Press 0 to return to main menu: "
+        return 0
     fi
 
     # Check if already configured for this network

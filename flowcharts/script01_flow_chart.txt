@@ -14,36 +14,55 @@
           │                         │                          │
   ┌───────▼──────┐         ┌────────▼────────┐       ┌────────▼────────┐
   │ [WARN] both  │         │  free slot:     │       │  free slot:     │
-  │ B/M/T/K/0 ? │         │  B / M / 1 / 0 │       │  B / T / 1 / 0 │
+  │ B/M/T/K/0 ? │         │ B/M/s/1/0       │       │ B/T/s/1/0       │
   └──────────────┘         └─────────────────┘       └─────────────────┘
    B→update_binary_only     B→update_binary_only       B→update_binary_only
    M→stop_grin_one(3414)    M→stop_grin_one(3414)      T→stop_grin_one(13414)
-     clear PRUNEMAIN/         clear PRUNEMAIN/            clear PRUNETEST
-     FULLMAIN from conf       FULLMAIN from conf          from conf
+     _remove_instance_dirs    _remove_instance_dirs       _remove_instance_dirs
+     mainnet                  mainnet                     testnet
      exec "$0" ↺              exec "$0" ↺                 exec "$0" ↺
-   T→stop_grin_one(13414)    1→RESTRICTED=testnet        1→RESTRICTED=mainnet
-     clear PRUNETEST          continue ↓                  continue ↓
-     from conf               0→exit                      0→exit
-     exec "$0" ↺
-   K→stop_grin_gracefully
-     truncate conf
+   T→stop_grin_one(13414)    s→_start_installed_node     s→_start_installed_node
+     _remove_instance_dirs     (testnet only) → exit        (mainnet only) → exit
+     testnet                  1→RESTRICTED=testnet        1→RESTRICTED=mainnet
+     exec "$0" ↺               continue ↓                  continue ↓
+   K→stop_grin_gracefully    0→exit                      0→exit
+     _remove_instance_dirs
+     all + truncate conf
      exec "$0" ↺
    0→exit
 
           │                         │                          │
           │         Neither running — stale/orphan check       │
           │         (pgrep, ss ports 3413/3414/13414/3415)     │
-          │         y→kill all + truncate conf                 │
-          │         c→continue with warning                    │
-          │         n/0→abort                                  │
+          │         also detects installed-but-not-running      │
+          │         nodes (conf file or binary on disk)         │
+          │                                                     │
+          │         k → kill all conflicting processes          │
+          │             truncate conf → continue build          │
+          │         c → continue with warning only              │
+          │         s → _start_installed_node (all nets)        │
+          │             → exit 0                                │
+          │         n/0 → abort                                 │
+          │         Enter → recheck                             │
           └─────────────────────────┴──────────────────────────┘
                                     │
+                    ┌───────────────▼────────────────────────┐
+                    │   STEP 1b — Legacy directory check     │
+                    │   detects $HOME/.grin                  │
+                    │   D → delete (recommended)             │
+                    │   Enter → keep (may cause conflicts)   │
+                    │   0 → return to master script          │
+                    └───────────────────────────────────────-┘
+                                    │
                     ┌───────────────▼───────────────┐
-                    │   STEP 2 — Dependency Check    │
-                    │   must run as root             │
-                    │   apt install: tar openssl     │
-                    │   libncurses tmux jq tor       │
-                    │   curl wget                    │
+                    │  STEP 2 — System Update &     │
+                    │  Dependency Check             │
+                    │  must run as root             │
+                    │  apt-get update + upgrade     │
+                    │  (or dnf update on Rocky/Alma)│
+                    │  apt install: tar openssl     │
+                    │  libncurses tmux jq tor       │
+                    │  curl wget                    │
                     └───────────────────────────────┘
                                     │
                     ┌───────────────▼───────────────┐
@@ -82,11 +101,15 @@
                          │
          ┌───────────────▼───────────────┐
          │   STEP 5 — Create Node Dir    │
-         │   default: /grin{mode}{net}   │
-         │   e.g. /opt/grin/node/mainnet-prune        │
+         │   default: /opt/grin/node/    │
+         │   e.g. mainnet-prune          │
+         │        mainnet-full           │
+         │        testnet-prune          │
          │   confirm if dir has files    │
          │   → rm -rf existing contents  │
          │   sets GRIN_DIR global        │
+         │   skips disk check if         │
+         │   GRIN_SKIP_DISK_CHECK=1      │
          └───────────────────────────────┘
                          │
          ┌───────────────▼───────────────┐
@@ -149,8 +172,10 @@
                          │
          ┌───────────────▼───────────────┐
          │   STEP 13 — Start in tmux     │
-         │   session: grin_<dirname>     │
-         │   e.g. grin_mainnet-prune     │
+         │   session name:               │
+         │   grin_full_mainnet           │
+         │   grin_pruned_mainnet         │
+         │   grin_pruned_testnet         │
          │   kill existing session first │
          │   if already exists           │
          └───────────────────────────────┘
@@ -191,6 +216,20 @@
 Key flows to highlight:
 
 B (binary update) — completely bypasses steps 2–14. Reads conf → downloads binary once → stop_grin_gracefully (no conf wipe) → replace binary → restart tmux per instance.
-M / T (kill one & rebuild) — stop_grin_one kills process + tmux + clears that network's conf entries → exec "$0" restarts script → now in single-running-node scenario → user picks install/rebuild → full steps 4–14.
-K (kill all & rebuild both) — stop_grin_gracefully + truncate entire conf → exec "$0" → fresh start with no restrictions.
-"both" network — runs setup_one_node twice sequentially. Binary download cached after first run (reused for testnet). Each run independently saves to conf.
+
+s (start installed) — available from all Step 1 branches:
+  • Both nodes stopped (stale/orphan check): starts all installed nodes.
+  • Only mainnet running: starts installed testnet node only (safe — won't touch running mainnet tmux).
+  • Only testnet running: starts installed mainnet node only (safe — won't touch running testnet tmux).
+  _start_installed_node accepts optional network filter ("mainnet"/"testnet") to target only that network.
+
+M / T (kill one & rebuild) — stop_grin_one kills process + tmux (conf entries left intact) →
+  _remove_instance_dirs reads conf to find dirs, deletes them, then clears conf entries →
+  GRIN_SKIP_DISK_CHECK=1 exec "$0" restarts script → now in single-running-node scenario →
+  user picks install/rebuild → full steps 4–14.
+
+K (kill all & rebuild both) — stop_grin_gracefully + _remove_instance_dirs all + truncate entire conf →
+  GRIN_SKIP_DISK_CHECK=1 exec "$0" → fresh start with no restrictions.
+
+"both" network — runs setup_one_node twice sequentially. Binary download cached after first run
+  (reused for testnet). Each run independently saves to conf.

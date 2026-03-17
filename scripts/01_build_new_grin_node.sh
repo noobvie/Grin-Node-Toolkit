@@ -38,11 +38,14 @@
 #              scripts) and occupied ports (3413 API, 3414 P2P mainnet,
 #              13414 P2P testnet, 3415 wallet).
 #              Prompts to kill conflicts before continuing.
+#              Also detects legacy $HOME/.grin directory — offers D) Delete
+#              (recommended) or Enter to keep (may cause config conflicts).
 #
-#   Step  2 — Dependency Check
-#              Installs any missing packages via apt-get (Debian/Ubuntu) or
-#              dnf (Rocky Linux / AlmaLinux 10+). OS version check is
-#              handled upstream by the master script.
+#   Step  2 — System Update & Dependency Check
+#              Runs apt-get update && upgrade (Debian/Ubuntu) or dnf update
+#              (Rocky Linux / AlmaLinux 10+) automatically — no prompt.
+#              Then installs any missing required packages. OS version check
+#              is handled upstream by the master script.
 #
 #   Step  3 — Network Selection
 #              User chooses: 1) Mainnet  2) Testnet  3) Both
@@ -723,16 +726,29 @@ check_grin_running() {
 # =============================================================================
 # [2] INSTALL DEPENDENCIES
 # -----------------------------------------------------------------------------
-# Checks the script is run as root, then installs any missing packages via
+# Runs apt-get update && upgrade (or dnf update) to ensure the system is
+# current, then installs any missing required packages:
 # apt-get: tar, openssl, libncurses5 (or libncurses6 on Ubuntu 24.04+),
-# tmux, jq, tor, curl, wget.
+#          tmux, jq, tor, curl, wget.
 # dnf (Rocky/Alma 10+): epel-release (auto), tar, openssl, ncurses-compat-libs, tmux, jq, tor, curl, wget.
 # OS version check is handled upstream by the master script.
 # =============================================================================
 check_os_and_deps() {
-    step_header "Step 2: Dependency Check"
+    step_header "Step 2: System Update & Dependency Check"
 
     [[ $EUID -ne 0 ]] && die "This script must be run as root (sudo)."
+
+    # ── System update ─────────────────────────────────────────────────────────
+    info "Updating system packages..."
+    if command -v dnf &>/dev/null; then
+        dnf update -y || warn "dnf update encountered errors — continuing."
+    else
+        apt-get update \
+            && apt-get upgrade -y \
+            || warn "apt update/upgrade encountered errors — continuing."
+    fi
+    success "System up to date."
+    echo ""
 
     local os_id
     os_id="$(grep '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || true)"

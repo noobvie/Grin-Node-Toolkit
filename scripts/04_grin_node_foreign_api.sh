@@ -851,7 +851,18 @@ _enable_rest_api() {
     chmod 775 "$rest_dir"
     info "REST directory ready: $rest_dir"
 
-    # 4. Write the main cron job — www-data queries the foreign API (no auth).
+    # If a .foreign_api_secret exists, www-data must be able to read it so the
+    # rest-collector can authenticate to the Grin foreign API (script 01 always
+    # creates this file and enables Basic Auth on the foreign API port).
+    local _foreign_secret_file="$grin_data_dir/.foreign_api_secret"
+    if [[ -f "$_foreign_secret_file" ]]; then
+        chown root:www-data "$_foreign_secret_file"
+        chmod 640 "$_foreign_secret_file"
+        info "Foreign API secret readable by www-data: $_foreign_secret_file"
+    fi
+
+    # 4. Write the main cron job — www-data queries the foreign API.
+    #    Pass the secret path so rest-collector can inject Basic Auth when needed.
     #    /etc/cron.d/ files are root-owned 644 and must declare SHELL/PATH.
     cat > "$cron_file" << EOF
 # Grin Node Toolkit — REST API updater ($network)
@@ -860,7 +871,7 @@ _enable_rest_api() {
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
-* * * * * www-data python3 $REST_COLLECTOR_DEST $port $rest_dir 2>/dev/null || true
+* * * * * www-data python3 $REST_COLLECTOR_DEST $port $rest_dir $_foreign_secret_file 2>/dev/null || true
 EOF
     chmod 644 "$cron_file"
     chown root:root "$cron_file"
@@ -904,7 +915,7 @@ EOF
 
     # 6. Run initial REST collection now so JSON files exist before nginx reload.
     info "Running initial REST collection..."
-    if sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" 2>/dev/null; then
+    if sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" "$_foreign_secret_file" 2>/dev/null; then
         success "Initial REST data collected."
     else
         warn "Initial REST collection failed (node may not be running yet)."

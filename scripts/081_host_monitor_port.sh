@@ -22,7 +22,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_DIR="/opt/grin/conf"
-LOG_DIR="$SCRIPT_DIR/../log"
+LOG_DIR="/opt/grin/logs"
 CONF_FILE="$CONF_DIR/host_monitor_port.conf"
 STATE_FILE="$CONF_DIR/host_monitor_last_state.conf"
 LOG_FILE="$LOG_DIR/grin_nodes_status_$(date +%Y%m%d_%H%M%S).log"

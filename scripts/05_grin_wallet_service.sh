@@ -55,7 +55,7 @@ WALLET_BIN_TESTNET="$WALLET_BIN_DIR_TESTNET/grin-wallet"
 GRIN_WALLET_TOML_MAINNET="$WALLET_BIN_DIR_MAINNET/grin-wallet.toml"
 GRIN_WALLET_TOML_TESTNET="$WALLET_BIN_DIR_TESTNET/grin-wallet.toml"
 
-LOG_DIR="$TOOLKIT_ROOT/log"
+LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/grin_wallet_service_$(date +%Y%m%d_%H%M%S).log"
 
 WALLET_NGINX_CONF_MAINNET="/etc/nginx/sites-available/grin-wallet-mainnet"

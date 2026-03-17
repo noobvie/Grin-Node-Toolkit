@@ -62,7 +62,7 @@ NODE_API_PORT_MAINNET=3413
 NODE_API_PORT_TESTNET=13413
 NODE_API_NGINX_CONF_MAINNET="/etc/nginx/sites-available/grin-node-api"
 NODE_API_NGINX_CONF_TESTNET="/etc/nginx/sites-available/grin-node-api-testnet"
-LOG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/log"
+LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/grin_node_services_$(date +%Y%m%d_%H%M%S).log"
 
 # Status page source (repo) and deploy (live web root) paths

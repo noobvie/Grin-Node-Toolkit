@@ -96,7 +96,7 @@ DELETE_FILES=""              # "yes" to delete files, "no" to keep
 
 # Script location (used for relative log path)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="$SCRIPT_DIR/../log"
+LOG_DIR="/opt/grin/logs"
 LOG_FILE=""   # Set dynamically in main() once the action is known
 
 # Color codes for output

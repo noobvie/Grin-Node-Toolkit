@@ -27,7 +27,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
-LOG_DIR="$SCRIPT_DIR/../log"
+LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/grin_backup_restore_$(date +%Y%m%d_%H%M%S).log"
 CONF_DIR="/opt/grin/conf"
 BACKUP_DIR="/opt/grin/backups"
@@ -119,23 +119,36 @@ _collect_web_dirs() {
     done
 }
 
+# Cron tag used to identify the backup schedule entry
+CRON_TAG="# grin-toolkit-auto-backup"
+
 # =============================================================================
 # BACKUP
 # =============================================================================
+# Pass --auto as first arg for non-interactive mode (used by cron scheduler).
+# In auto mode: uses default dest, includes wallet, skips logs, no prompts.
 run_backup() {
-    clear
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  BACKUP — Grin Node Toolkit${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    local auto=false
+    [[ "${1:-}" == "--auto" ]] && auto=true
+
+    if [[ "$auto" == false ]]; then
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  BACKUP — Grin Node Toolkit${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    fi
 
     # ── Step 1: Destination ──────────────────────────────────────────────────
-    section "Step 1: Backup destination"
-    echo -e "  Default: ${BOLD}$BACKUP_DIR${RESET}"
-    echo -ne "${BOLD}Enter destination path (or Enter for default): ${RESET}"
-    read -r _dest_input
-    local dest_dir="${_dest_input:-$BACKUP_DIR}"
+    local dest_dir="$BACKUP_DIR"
+    if [[ "$auto" == false ]]; then
+        section "Step 1: Backup destination"
+        echo -e "  Default: ${BOLD}$BACKUP_DIR${RESET}"
+        echo -ne "${BOLD}Enter destination path (or Enter for default): ${RESET}"
+        read -r _dest_input
+        dest_dir="${_dest_input:-$BACKUP_DIR}"
+    fi
     mkdir -p "$dest_dir" || { error "Cannot create $dest_dir"; return 1; }
-    success "Destination: $dest_dir"
+    [[ "$auto" == false ]] && success "Destination: $dest_dir"
 
     # ── Step 2: Collect sources ──────────────────────────────────────────────
     section "Step 2: Collecting Grin sources"
@@ -202,17 +215,21 @@ run_backup() {
     fi
 
     # ── Step 3: Wallets ──────────────────────────────────────────────────────
-    section "Step 3: Wallet data"
+    if [[ "$auto" == false ]]; then
+        section "Step 3: Wallet data"
+    fi
     if [[ ${#wallet_dirs[@]} -gt 0 ]]; then
-        echo -e "  ${YELLOW}Wallet dirs contain seed files — loss = unrecoverable.${RESET}"
-        echo ""
-        for _w in "${wallet_dirs[@]}"; do
-            echo -e "  ${DIM}$_w${RESET}"
-        done
-        echo ""
-        echo -ne "${BOLD}Include wallet data? [Y/n]: ${RESET}"
-        read -r _wallet_choice
-        if [[ "${_wallet_choice,,}" != "n" ]]; then
+        local include_wallet=true
+        if [[ "$auto" == false ]]; then
+            echo -e "  ${YELLOW}Wallet dirs contain seed files — loss = unrecoverable.${RESET}"
+            echo ""
+            for _w in "${wallet_dirs[@]}"; do echo -e "  ${DIM}$_w${RESET}"; done
+            echo ""
+            echo -ne "${BOLD}Include wallet data? [Y/n]: ${RESET}"
+            read -r _wallet_choice
+            [[ "${_wallet_choice,,}" == "n" ]] && include_wallet=false
+        fi
+        if [[ "$include_wallet" == true ]]; then
             for _w in "${wallet_dirs[@]}"; do
                 sources+=("$_w")
                 manifest_lines+=("wallet: $_w")
@@ -222,23 +239,23 @@ run_backup() {
             warn "  — Wallet data excluded. Ensure you have your seed phrase backed up separately."
         fi
     else
-        warn "  — No wallet dirs found in $wallets_conf (skipping)"
+        [[ "$auto" == false ]] && warn "  — No wallet dirs found in $wallets_conf (skipping)"
     fi
 
     # ── Step 4: Optional logs ────────────────────────────────────────────────
-    section "Step 4: Optional — include logs"
-    local include_logs=false
-    if [[ -d /opt/grin/logs ]]; then
-        echo -ne "${BOLD}Include /opt/grin/logs/? [y/N]: ${RESET}"
-        read -r _log_choice
-        if [[ "${_log_choice,,}" == "y" ]]; then
-            sources+=("/opt/grin/logs")
-            manifest_lines+=("logs: /opt/grin/logs")
-            include_logs=true
-            info "  ✓ /opt/grin/logs"
+    if [[ "$auto" == false ]]; then
+        section "Step 4: Optional — include logs"
+        if [[ -d /opt/grin/logs ]]; then
+            echo -ne "${BOLD}Include /opt/grin/logs/? [y/N]: ${RESET}"
+            read -r _log_choice
+            if [[ "${_log_choice,,}" == "y" ]]; then
+                sources+=("/opt/grin/logs")
+                manifest_lines+=("logs: /opt/grin/logs")
+                info "  ✓ /opt/grin/logs"
+            fi
+        else
+            info "  — /opt/grin/logs not found (skipping)"
         fi
-    else
-        info "  — /opt/grin/logs not found (skipping)"
     fi
 
     if [[ ${#sources[@]} -eq 0 ]]; then
@@ -247,7 +264,8 @@ run_backup() {
     fi
 
     # ── Step 5: Create archive ───────────────────────────────────────────────
-    section "Step 5: Creating archive"
+    [[ "$auto" == false ]] && section "Step 5: Creating archive"
+    [[ "$auto" == true  ]] && log "[AUTO-BACKUP] Starting automated backup to $dest_dir"
     local ts; ts=$(date +%Y%m%d_%H%M%S)
     local archive_name="grin_backup_${ts}.tar.gz"
     local tmp_dir; tmp_dir=$(mktemp -d)
@@ -323,11 +341,15 @@ run_backup() {
     fi
 
     # ── Step 6: Done ─────────────────────────────────────────────────────────
-    section "Backup complete"
-    success "Archive : $dest_dir/$archive_name"
-    success "Size    : $size"
-    log "[BACKUP] Created: $dest_dir/$archive_name ($size)"
-    pause
+    if [[ "$auto" == false ]]; then
+        section "Backup complete"
+        success "Archive : $dest_dir/$archive_name"
+        success "Size    : $size"
+        log "[BACKUP] Created: $dest_dir/$archive_name ($size)"
+        pause
+    else
+        log "[AUTO-BACKUP] Completed: $dest_dir/$archive_name ($size)"
+    fi
 }
 
 # =============================================================================
@@ -535,33 +557,160 @@ run_restore() {
 }
 
 # =============================================================================
+# SCHEDULE
+# =============================================================================
+# _active_schedule — prints the current cron line if set, else empty string
+_active_schedule() {
+    crontab -l 2>/dev/null | grep "$CRON_TAG" | grep -v '^#' || true
+}
+
+run_schedule() {
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  S  Schedule Automatic Backup${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+
+    local current; current="$(_active_schedule)"
+    if [[ -n "$current" ]]; then
+        echo -e "  ${GREEN}Active schedule:${RESET}  $current"
+        echo ""
+        echo -e "  ${BOLD}N${RESET})  Set a new schedule  ${DIM}(replaces current)${RESET}"
+        echo -e "  ${BOLD}D${RESET})  Remove schedule"
+        echo -e "  ${DIM}0)  Return${RESET}"
+        echo ""
+        echo -ne "${BOLD}Choice [N/D/0]: ${RESET}"
+        read -r _sched_action
+        case "${_sched_action,,}" in
+            d)
+                local _new_cron
+                _new_cron=$(crontab -l 2>/dev/null | grep -v "$CRON_TAG" || true)
+                echo "$_new_cron" | crontab -
+                success "Backup schedule removed."
+                log "[SCHEDULE] Removed backup cron entry."
+                pause; return
+                ;;
+            0) return ;;
+            n) : ;;  # fall through to setup below
+            *) warn "Invalid option."; sleep 1; return ;;
+        esac
+    fi
+
+    # ── Pick frequency ───────────────────────────────────────────────────────
+    echo ""
+    echo -e "  ${BOLD}1${RESET})  Daily"
+    echo -e "  ${BOLD}2${RESET})  2 days per week"
+    echo -e "  ${DIM}0)  Cancel${RESET}"
+    echo ""
+    echo -ne "${BOLD}Frequency [1/2/0]: ${RESET}"
+    read -r _freq
+
+    local cron_days="*"   # default: every day
+
+    case "$_freq" in
+        0) return ;;
+        1) cron_days="*" ;;
+        2)
+            echo ""
+            echo -e "  Pick ${BOLD}2 days${RESET} (space-separated numbers):"
+            echo -e "  1=Mon  2=Tue  3=Wed  4=Thu  5=Fri  6=Sat  7=Sun"
+            echo ""
+            echo -ne "${BOLD}Days [e.g. 1 5]: ${RESET}"
+            read -r _days_input
+            local -a _picked_days=()
+            for _d in $_days_input; do
+                if [[ "$_d" =~ ^[1-7]$ ]]; then
+                    # cron uses 0=Sun,1=Mon...6=Sat; our input is 1=Mon...7=Sun
+                    local _cron_dow=$(( _d % 7 ))
+                    _picked_days+=("$_cron_dow")
+                fi
+            done
+            if [[ ${#_picked_days[@]} -ne 2 ]]; then
+                error "Please enter exactly 2 valid day numbers (1–7)."; pause; return
+            fi
+            cron_days="${_picked_days[0]},${_picked_days[1]}"
+            ;;
+        *)
+            warn "Invalid option."; sleep 1; return ;;
+    esac
+
+    # ── Pick time (random from off-peak list) ────────────────────────────────
+    local -a _time_list=("01:00" "01:30" "02:00" "02:30" "03:00" "03:15" "03:30" "03:45" "04:00" "04:30")
+    local _picked_time="${_time_list[$RANDOM % ${#_time_list[@]}]}"
+    local _hour="${_picked_time%%:*}"
+    local _min="${_picked_time##*:}"
+
+    local this_script; this_script="$(realpath "${BASH_SOURCE[0]}")"
+    local cron_line="$_min $_hour * * $cron_days bash $this_script --auto-backup $CRON_TAG"
+
+    # ── Preview + confirm ────────────────────────────────────────────────────
+    echo ""
+    echo -e "  ${BOLD}Scheduled entry:${RESET}"
+    echo -e "  ${GREEN}$cron_line${RESET}"
+    echo ""
+    echo -e "  Backup runs at ${BOLD}${_picked_time}${RESET} on the selected day(s)."
+    echo -e "  Archives saved to ${BOLD}$BACKUP_DIR${RESET}."
+    echo ""
+    if ! confirm_step "Install this schedule?"; then
+        info "Cancelled."; return
+    fi
+
+    # ── Install cron entry ───────────────────────────────────────────────────
+    local _existing; _existing=$(crontab -l 2>/dev/null | grep -v "$CRON_TAG" || true)
+    printf '%s\n%s\n' "$_existing" "$cron_line" | crontab -
+    success "Schedule installed."
+    log "[SCHEDULE] $cron_line"
+    pause
+}
+
+# =============================================================================
 # MAIN MENU
 # =============================================================================
 main() {
+    # Non-interactive mode: called by cron via  bash 089_backup_restore.sh --auto-backup
+    if [[ "${1:-}" == "--auto-backup" ]]; then
+        run_backup --auto
+        exit $?
+    fi
+
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo -e "${BOLD}${CYAN}  9  Backup & Restore — Grin Node Toolkit${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
-        echo -e "  ${BOLD}B${RESET})  Create a backup"
-        echo -e "     ${DIM}Saves conf, nginx, SSL certs, web UIs, crontabs${RESET}"
+
+        # Show active schedule if set
+        local _sched; _sched="$(_active_schedule)"
+        if [[ -n "$_sched" ]]; then
+            echo -e "  ${GREEN}Auto-backup:${RESET} ${DIM}$_sched${RESET}"
+        else
+            echo -e "  ${DIM}Auto-backup: not scheduled${RESET}"
+        fi
+        echo ""
+
+        echo -e "  ${BOLD}B${RESET})  Backup now"
+        echo -e "     ${DIM}Saves conf, wallet, nginx, SSL certs, web UIs, crontabs${RESET}"
+        echo ""
+        echo -e "  ${BOLD}S${RESET})  Schedule automatic backup"
+        echo -e "     ${DIM}Daily or 2 days per week · random off-peak time${RESET}"
         echo ""
         echo -e "  ${BOLD}R${RESET})  Restore from a backup"
         echo -e "     ${DIM}Restores files from a previous backup archive${RESET}"
         echo ""
         echo -e "  ${DIM}0)  Return${RESET}"
         echo ""
-        echo -ne "${BOLD}Choice [B/R/0]: ${RESET}"
+        echo -ne "${BOLD}Choice [B/S/R/0]: ${RESET}"
         read -r _choice
 
         case "${_choice,,}" in
-            b) run_backup  ;;
-            r) run_restore ;;
-            0) break       ;;
+            b) run_backup    ;;
+            s) run_schedule  ;;
+            r) run_restore   ;;
+            0) break         ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done
 }
 
-main
+main "$@"

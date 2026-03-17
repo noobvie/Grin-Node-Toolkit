@@ -40,7 +40,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLKIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WEB_SRC="$TOOLKIT_ROOT/web/06_stats_map/stats"
-LOG_DIR="$TOOLKIT_ROOT/log"
+LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/global_grin_health_$(date +%Y%m%d_%H%M%S).log"
 
 # ─── Runtime paths (created on install) ──────────────────────────────────────

@@ -164,8 +164,8 @@ function applyNetwork() {
 // ── Theme ──────────────────────────────────────────────────────────────────────
 const THEME_CYCLE = ['dark', 'light', 'matrix', 'winxp'];
 
-let currentTheme = localStorage.getItem('grin-node-theme') || 'dark';
-if (!THEME_CYCLE.includes(currentTheme)) currentTheme = 'dark';
+let currentTheme = localStorage.getItem('grin-node-theme') || 'matrix';
+if (!THEME_CYCLE.includes(currentTheme)) currentTheme = 'matrix';
 
 function applyTheme(theme) {
   currentTheme = theme;

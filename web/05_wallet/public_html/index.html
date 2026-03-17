@@ -2,163 +2,208 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Grin Web Wallet</title>
     <link rel="stylesheet" href="css/wallet.css">
 </head>
 <body>
-    <div class="container">
 
-        <!-- Header -->
-        <header class="header">
-            <h1>Grin Web Wallet</h1>
-            <p class="subtitle">Self-custodial wallet interface &mdash; keys stay on your server</p>
-        </header>
+    <!-- ── Top header ──────────────────────────────────────────────────────── -->
+    <header class="header">
+        <div class="header-left">
+            <span class="logo-dot"></span>
+            <span class="header-title">GRIN<span class="header-title-accent"> WALLET</span></span>
+        </div>
+        <div class="header-right">
+            <span class="header-sub">SELF-CUSTODIAL</span>
+        </div>
+    </header>
 
-        <!-- Status Panel -->
-        <section class="panel status-panel">
-            <h2>Wallet Status</h2>
-            <div id="status" class="status-content">
-                <p class="loading">Connecting to wallet...</p>
+    <!-- ── Desktop tab nav (hidden on mobile) ──────────────────────────────── -->
+    <nav class="tab-nav-top" id="tab-nav-top">
+        <button class="tab-btn active" data-tab="dashboard">[ WALLET ]</button>
+        <button class="tab-btn" data-tab="send">[ SEND ]</button>
+        <button class="tab-btn" data-tab="receive">[ RECEIVE ]</button>
+        <button class="tab-btn" data-tab="history">[ HISTORY ]</button>
+    </nav>
+
+    <!-- ── Main content ────────────────────────────────────────────────────── -->
+    <main class="main">
+
+        <!-- ── Dashboard ───────────────────────────────────────────────────── -->
+        <section class="tab-panel active" id="tab-dashboard">
+
+            <div class="balance-grid">
+                <div class="balance-card">
+                    <div class="balance-label">SPENDABLE</div>
+                    <div id="balanceSpendable" class="balance-amount">─── ∩</div>
+                </div>
+                <div class="balance-card balance-card--dim">
+                    <div class="balance-label">PENDING</div>
+                    <div id="balancePending" class="balance-amount">─── ∩</div>
+                </div>
+                <div class="balance-card balance-card--dim">
+                    <div class="balance-label">IMMATURE</div>
+                    <div id="balanceImmature" class="balance-amount">─── ∩</div>
+                </div>
             </div>
-            <button id="refreshBtn" class="btn btn-secondary">Refresh</button>
+
+            <div id="status" class="status-box">
+                <span class="loading">CONNECTING TO WALLET...</span>
+            </div>
+
+            <button id="refreshBtn" class="btn btn-outline btn-full mt-12">[ REFRESH ]</button>
+
+            <div class="panel-footer">
+                Keys stay on your server &mdash;
+                <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer">Grin Node Toolkit</a>
+                &bull; <a href="https://grin.mw" target="_blank" rel="noopener noreferrer">grin.mw</a>
+            </div>
         </section>
 
-        <!-- Balance -->
-        <section class="panel balance-panel">
-            <h3>Balance</h3>
-            <div class="balance-display">
-                <div class="balance-item">
-                    <span class="label">Spendable</span>
-                    <span id="balanceSpendable" class="amount">-- ∩</span>
-                </div>
-                <div class="balance-item">
-                    <span class="label">Pending</span>
-                    <span id="balancePending" class="amount">-- ∩</span>
-                </div>
-                <div class="balance-item">
-                    <span class="label">Immature</span>
-                    <span id="balanceImmature" class="amount">-- ∩</span>
-                </div>
-            </div>
-        </section>
+        <!-- ── Send ────────────────────────────────────────────────────────── -->
+        <section class="tab-panel" id="tab-send">
 
-        <!-- Send -->
-        <section class="panel send-panel">
-            <h2>Send Grin</h2>
-            <form id="sendForm" class="form">
-                <div class="form-group">
-                    <label for="sendAmount">Amount (∩)</label>
-                    <input type="number" id="sendAmount" placeholder="0.0000" min="0" step="0.0001" required>
-                    <small id="feeEstimate" style="color:var(--text-secondary);margin-top:5px;"></small>
+            <form id="sendForm" autocomplete="off">
+
+                <div class="field">
+                    <label for="sendAmount">AMOUNT (∩)</label>
+                    <input type="number" id="sendAmount" class="input"
+                           placeholder="0.000000000" min="0" step="0.0001" required>
+                    <span id="feeEstimate" class="field-hint"></span>
                 </div>
 
-                <div class="form-group">
-                    <label for="sendMethod">Send Method</label>
-                    <select id="sendMethod">
-                        <option value="http">HTTP (Direct — recipient needs a public wallet endpoint)</option>
-                        <option value="slatepack">Slatepack (Exchange manually)</option>
-                    </select>
+                <div class="field">
+                    <label>SEND METHOD</label>
+                    <div class="method-toggle" role="group" aria-label="Send method">
+                        <button type="button" class="method-btn active" data-method="http">HTTP</button>
+                        <button type="button" class="method-btn" data-method="slatepack">SLATEPACK</button>
+                    </div>
+                    <!-- Hidden input — value kept in sync by method-btn click handlers -->
+                    <input type="hidden" id="sendMethod" value="http">
                 </div>
 
-                <div class="form-group" id="httpRecipientGroup">
-                    <label for="sendRecipient">Recipient HTTPS URL</label>
-                    <input type="url" id="sendRecipient" placeholder="https://recipient.example.com/v3/foreign">
-                    <small>Must be HTTPS. Leave blank with Slatepack method to get a Slatepack to share.</small>
+                <div class="field" id="httpRecipientGroup">
+                    <label for="sendRecipient">RECIPIENT URL</label>
+                    <input type="url" id="sendRecipient" class="input"
+                           placeholder="https://recipient.example.com/v3/foreign">
+                    <span class="field-hint">HTTPS only &mdash; recipient must have a public wallet endpoint.</span>
                 </div>
 
-                <button type="submit" class="btn btn-primary">Send</button>
+                <button type="submit" class="btn btn-primary btn-full mt-16">[ SEND GRIN ]</button>
+
             </form>
+
             <div id="sendResult" class="result-box" style="display:none;"></div>
+
         </section>
 
-        <!-- Receive -->
-        <section class="panel receive-panel">
-            <h2>Receive Grin</h2>
+        <!-- ── Receive ─────────────────────────────────────────────────────── -->
+        <section class="tab-panel" id="tab-receive">
 
-            <!-- Share your wallet URL -->
-            <div class="receive-share">
-                <p>Share your wallet URL so others can reach you via HTTP:</p>
-                <div class="qr-row">
-                    <div>
-                        <code id="walletUrlText" class="wallet-url-code"></code>
-                        <button onclick="wallet.copyToClipboard(document.getElementById('walletUrlText').textContent,'urlClipMsg')"
-                                class="btn btn-small" style="margin-top:8px;">Copy URL</button>
-                        <span id="urlClipMsg" class="status-msg" style="margin-left:8px;"></span>
-                    </div>
-                    <div style="text-align:center;">
-                        <img id="walletQrImg" src="" alt="QR Code" style="display:none;max-width:160px;border:2px solid var(--border-color);padding:8px;background:#fff;border-radius:4px;">
-                        <p id="walletQrError" style="display:none;font-size:0.8rem;color:var(--text-secondary);">
-                            QR unavailable &mdash; install: <code>apt-get install qrencode</code>
-                        </p>
-                    </div>
+            <!-- Your wallet URL -->
+            <div class="receive-block">
+                <div class="block-label">YOUR WALLET URL</div>
+                <code id="walletUrlText" class="url-display"></code>
+                <div class="action-row mt-8">
+                    <button onclick="wallet.copyToClipboard(document.getElementById('walletUrlText').textContent,'urlClipMsg')"
+                            class="btn btn-outline btn-sm">[ COPY URL ]</button>
+                    <span id="urlClipMsg" class="clip-msg"></span>
+                </div>
+                <div class="qr-box mt-12">
+                    <img id="walletQrImg" src="" alt="Wallet URL QR Code"
+                         style="display:none; max-width:160px; border:1px solid var(--border); padding:6px; background:#000;">
+                    <p id="walletQrError" style="display:none;" class="field-hint">
+                        QR unavailable &mdash; install: <code>apt-get install qrencode</code>
+                    </p>
                 </div>
             </div>
 
             <!-- Process incoming Slatepack -->
-            <div class="receive-slatepack" style="margin-top:20px;border-top:1px solid var(--border-color);padding-top:20px;">
-                <p><strong>Receive via Slatepack:</strong> Paste the sender's Slatepack below to process it.</p>
-                <textarea id="receiveSlateInput" class="slate-textarea" placeholder="BEGINSLATEPACK. ... ENDSLATEPACK."></textarea>
-                <button id="processSlateBtn" class="btn btn-secondary" style="margin-top:10px;">Process Slatepack</button>
+            <div class="receive-block">
+                <div class="block-label">PROCESS INCOMING SLATEPACK</div>
+                <p class="field-hint mb-8">Paste the sender's Slatepack below to sign and respond.</p>
+                <textarea id="receiveSlateInput" class="slate-input"
+                          placeholder="BEGINSLATEPACK. ... ENDSLATEPACK."></textarea>
+                <button id="processSlateBtn" class="btn btn-outline btn-full mt-10">[ PROCESS SLATEPACK ]</button>
                 <div id="receiveResult" class="result-box" style="display:none;"></div>
             </div>
+
+            <!-- Finalize -->
+            <div class="receive-block">
+                <div class="block-label">FINALIZE &amp; BROADCAST</div>
+                <p class="field-hint mb-8">After the recipient responds, paste their Slatepack here to broadcast.</p>
+                <textarea id="finalizeSlateInput" class="slate-input"
+                          placeholder="BEGINSLATEPACK. ... ENDSLATEPACK."></textarea>
+                <button id="finalizeBtn" class="btn btn-primary btn-full mt-10">[ FINALIZE &amp; BROADCAST ]</button>
+                <div id="finalizeResult" class="result-box" style="display:none;"></div>
+            </div>
+
         </section>
 
-        <!-- Finalize -->
-        <section class="panel finalize-panel">
-            <h2>Finalize Transaction</h2>
-            <p>After the recipient processes your Slatepack (send step), paste their response here to finalize and broadcast.</p>
-            <textarea id="finalizeSlateInput" class="slate-textarea" placeholder="BEGINSLATEPACK. ... ENDSLATEPACK."></textarea>
-            <button id="finalizeBtn" class="btn btn-primary" style="margin-top:10px;">Finalize &amp; Broadcast</button>
-            <div id="finalizeResult" class="result-box" style="display:none;"></div>
-        </section>
-
-        <!-- Recent Transactions -->
-        <section class="panel txs-panel">
-            <h2>Recent Transactions</h2>
-            <p class="info" style="font-size:0.85rem;margin-bottom:12px;">Click a transaction to expand details.</p>
-            <div id="transactionsList" class="transactions-list">
-                <p class="loading">Loading transactions...</p>
+        <!-- ── History ─────────────────────────────────────────────────────── -->
+        <section class="tab-panel" id="tab-history">
+            <div id="transactionsList">
+                <p class="loading">LOADING TRANSACTIONS...</p>
             </div>
         </section>
 
-        <!-- Settings (server-side only) -->
-        <section class="panel settings-panel">
-            <h2>Settings</h2>
-            <div class="settings-content">
-                <p class="info">
-                    Wallet connection is configured server-side at deploy time
-                    (<code>api/config.json</code>, written by Script 05 option m).
-                </p>
-                <p class="info" style="margin-top:8px;">
-                    To change the wallet API host or port, re-run the deploy option in Script 05.
-                </p>
-            </div>
-        </section>
+    </main>
 
-        <!-- Footer -->
-        <footer class="footer">
-            <p>Grin Web Wallet &bull;
-                <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer">Grin Node Toolkit</a>
-                &bull; <a href="https://grin.mw" target="_blank" rel="noopener noreferrer">Grin.mw</a>
-            </p>
-        </footer>
-
-    </div><!-- /.container -->
+    <!-- ── Bottom tab nav (mobile only) ────────────────────────────────────── -->
+    <nav class="tab-nav-bottom" id="tab-nav-bottom">
+        <button class="tab-btn-bottom active" data-tab="dashboard">
+            <span class="tab-icon">⬡</span>
+            <span class="tab-label">WALLET</span>
+        </button>
+        <button class="tab-btn-bottom" data-tab="send">
+            <span class="tab-icon">↑</span>
+            <span class="tab-label">SEND</span>
+        </button>
+        <button class="tab-btn-bottom" data-tab="receive">
+            <span class="tab-icon">↓</span>
+            <span class="tab-label">RECEIVE</span>
+        </button>
+        <button class="tab-btn-bottom" data-tab="history">
+            <span class="tab-icon">≡</span>
+            <span class="tab-label">HISTORY</span>
+        </button>
+    </nav>
 
     <script src="js/slate-handler.js"></script>
     <script src="js/grin-wallet-client.js"></script>
     <script>
+        // ── Tab switching ──────────────────────────────────────────────────────
+        function switchTab(name) {
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.tab-btn, .tab-btn-bottom').forEach(b => b.classList.remove('active'));
+            document.getElementById('tab-' + name)?.classList.add('active');
+            document.querySelectorAll('[data-tab="' + name + '"]').forEach(b => b.classList.add('active'));
+        }
+
+        document.querySelectorAll('.tab-btn, .tab-btn-bottom').forEach(btn => {
+            btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+        });
+
+        // ── Send method toggle ─────────────────────────────────────────────────
+        document.querySelectorAll('.method-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.method-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const method = btn.dataset.method;
+                document.getElementById('sendMethod').value = method;
+                document.getElementById('httpRecipientGroup').style.display =
+                    method === 'slatepack' ? 'none' : '';
+            });
+        });
+
+        // ── App init ───────────────────────────────────────────────────────────
         document.addEventListener('DOMContentLoaded', () => {
-            // Show wallet URL in receive section
             const urlEl = document.getElementById('walletUrlText');
             if (urlEl) urlEl.textContent = window.location.origin;
 
             wallet.init();
-            setupEventListeners();
-        });
 
-        function setupEventListeners() {
             document.getElementById('refreshBtn').addEventListener('click', () => {
                 wallet.refreshStatus();
             });
@@ -172,17 +217,12 @@
                 const amount = e.target.value;
                 const feeEl  = document.getElementById('feeEstimate');
                 if (amount && parseFloat(amount) > 0) {
-                    feeEl.textContent = 'Calculating fee...';
+                    feeEl.textContent = 'ESTIMATING FEE...';
                     const fee = await wallet.estimateFee(amount);
-                    feeEl.textContent = `Est. fee: ${fee}`;
+                    feeEl.textContent = 'EST. FEE: ' + fee;
                 } else {
                     feeEl.textContent = '';
                 }
-            });
-
-            document.getElementById('sendMethod').addEventListener('change', (e) => {
-                document.getElementById('httpRecipientGroup').style.display =
-                    e.target.value === 'slatepack' ? 'none' : '';
             });
 
             document.getElementById('processSlateBtn').addEventListener('click', async () => {
@@ -195,7 +235,7 @@
 
             // Auto-refresh balance every 15 seconds
             setInterval(() => wallet.refreshBalance(), 15000);
-        }
+        });
     </script>
 </body>
 </html>

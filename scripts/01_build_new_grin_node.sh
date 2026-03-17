@@ -1078,6 +1078,21 @@ create_node_dir() {
     info "Node directory: $GRIN_DIR"
     echo ""
 
+    # 1b. Remove the OTHER mainnet variant dir so switching fullmain↔prunemain
+    #     leaves no leftover /opt/grin/node/<old-type> directory behind.
+    if [[ "$network" == "mainnet" ]]; then
+        local _alt_dir
+        if [[ "$mode" == "full" ]]; then
+            _alt_dir="/opt/grin/node/mainnet-prune"
+        else
+            _alt_dir="/opt/grin/node/mainnet-full"
+        fi
+        if [[ -d "$_alt_dir" ]]; then
+            warn "Removing old mainnet directory: $_alt_dir"
+            rm -rf "$_alt_dir" && success "Removed: $_alt_dir" || warn "Failed to remove: $_alt_dir"
+        fi
+    fi
+
     # 2. Disk space check — skipped for rebuilds (M/T/K paths set GRIN_SKIP_DISK_CHECK=1)
     if [[ "${GRIN_SKIP_DISK_CHECK:-0}" == "1" ]]; then
         info "Rebuild mode — skipping disk space check."

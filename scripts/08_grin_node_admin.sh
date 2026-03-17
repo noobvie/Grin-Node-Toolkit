@@ -6,7 +6,7 @@
 #   8.1  Remote Node Manager        — port monitor, mass deployment & remote node control
 #   8.2  Service & Port Dashboard  — local PIDs, ports, tmux, binary versions
 #   8.3  Chain Sync Status         — query local node API for current tip
-#   8.4  nginx Config & SSL Audit  — list configs, test, check cert expiry
+#   8.4  Nginx Extended Features   — audit · reverse proxy · security · log rotation
 #   8.5  Firewall Rules Audit      — UFW/iptables review for Grin ports
 #   8.6  Top 20 Bandwidth Consumers— parse nginx logs, block/limit from menu
 #   8.7  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs
@@ -71,6 +71,18 @@ menu_node_monitor() {
         pause; return
     fi
     bash "$monitor_script"
+}
+
+# =============================================================================
+# 8.4  Nginx Extended Features  (084_nginx_extended_features.sh)
+# =============================================================================
+menu_nginx_extended() {
+    local ext_script="$SCRIPT_DIR/084_nginx_extended_features.sh"
+    if [[ ! -f "$ext_script" ]]; then
+        error "084_nginx_extended_features.sh not found in $SCRIPT_DIR"
+        pause; return
+    fi
+    bash "$ext_script"
 }
 
 # =============================================================================
@@ -232,117 +244,6 @@ show_chain_sync() {
 
     echo -e "  ${DIM}Note: Compare height against a public explorer to estimate sync progress.${RESET}"
     echo -e "  ${DIM}  Mainnet: grin.blockscan.com  |  Testnet: testnet.grin.blockscan.com${RESET}"
-    pause
-}
-
-# =============================================================================
-# 8.4  nginx Config & SSL Audit
-# =============================================================================
-show_nginx_audit() {
-    clear
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  4  nginx Config & SSL Audit${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-
-    if ! command -v nginx &>/dev/null; then
-        warn "nginx not installed. Skipping."
-        pause; return
-    fi
-
-    # ── Config test ──────────────────────────────────────────────────────────
-    echo -e "${BOLD}nginx configuration test:${RESET}"
-    if nginx -t 2>&1 | grep -q "test is successful"; then
-        success "nginx -t passed — configuration is valid."
-    else
-        echo ""
-        nginx -t 2>&1 | while IFS= read -r line; do
-            echo -e "  ${RED}▶${RESET} $line"
-        done
-        echo ""
-        warn "nginx configuration has errors. Review before proceeding."
-    fi
-
-    # ── Grin-related configs ─────────────────────────────────────────────────
-    echo ""
-    echo -e "${BOLD}Grin nginx config files:${RESET}"
-    local -a grin_confs=()
-    while IFS= read -r conf; do
-        grin_confs+=("$conf")
-    done < <(find /etc/nginx/sites-available -name '*grin*' -type f 2>/dev/null | sort || true)
-
-    if [[ ${#grin_confs[@]} -eq 0 ]]; then
-        echo -e "  ${DIM}No Grin-related nginx configs found.${RESET}"
-    else
-        printf "  ${BOLD}%-42s %-10s %-10s %s${RESET}\n" "Config" "Enabled" "Type" "Domain / Root"
-        printf "  %-42s %-10s %-10s %s\n" \
-            "──────────────────────────────────────────" "──────────" "──────────" "─────────────────────"
-        for conf in "${grin_confs[@]}"; do
-            local name enabled_str type_str detail
-            name="$(basename "$conf")"
-            local symlink="/etc/nginx/sites-enabled/$name"
-            if [[ -L "$symlink" ]]; then
-                enabled_str="${GREEN}yes${RESET}      "
-            else
-                enabled_str="${RED}no${RESET}       "
-            fi
-
-            if grep -q "proxy_pass" "$conf" 2>/dev/null; then
-                type_str="proxy    "
-                detail=$(grep -oP '(?<=proxy_pass\s)http[^;]+' "$conf" 2>/dev/null | head -1 || echo "-")
-            else
-                type_str="filesvr  "
-                detail=$(grep -oP '(?<=root\s)[^;]+' "$conf" 2>/dev/null | head -1 | xargs || echo "-")
-            fi
-
-            printf "  %-42s " "$name"
-            echo -ne "$enabled_str "
-            printf "%-10s %s\n" "$type_str" "$detail"
-        done
-    fi
-
-    # ── SSL certificate expiry ────────────────────────────────────────────────
-    echo ""
-    echo -e "${BOLD}SSL Certificate Expiry:${RESET}"
-
-    if ! command -v openssl &>/dev/null; then
-        warn "openssl not found — cannot check certificate expiry."
-    else
-        local found_ssl=false
-        for conf in "${grin_confs[@]}"; do
-            # Extract domain from server_name or ssl_certificate path
-            local domain
-            domain=$(grep -oP '(?<=server_name\s)[^\s;]+' "$conf" 2>/dev/null | head -1 || true)
-            [[ -z "$domain" || "$domain" == "_" ]] && continue
-
-            local cert_info expiry_date days_left
-            cert_info=$(echo "" | timeout 5 openssl s_client \
-                -connect "$domain:443" -servername "$domain" 2>/dev/null \
-                | openssl x509 -noout -enddate 2>/dev/null || true)
-
-            if [[ -z "$cert_info" ]]; then
-                echo -e "  ${DIM}▶ $domain — could not connect or no SSL${RESET}"
-                continue
-            fi
-
-            found_ssl=true
-            expiry_date=$(echo "$cert_info" | grep -oP '(?<=notAfter=).*' || echo "unknown")
-            days_left=$(( ( $(date -d "$expiry_date" +%s 2>/dev/null || echo 0) - $(date +%s) ) / 86400 ))
-
-            if [[ $days_left -le 0 ]]; then
-                echo -e "  ${RED}▶${RESET} $domain — ${RED}EXPIRED${RESET} ($expiry_date)"
-            elif [[ $days_left -le 14 ]]; then
-                echo -e "  ${RED}▶${RESET} $domain — expires in ${RED}$days_left days${RESET} ($expiry_date)"
-            elif [[ $days_left -le 30 ]]; then
-                echo -e "  ${YELLOW}▶${RESET} $domain — expires in ${YELLOW}$days_left days${RESET} ($expiry_date)"
-            else
-                echo -e "  ${GREEN}▶${RESET} $domain — expires in ${GREEN}$days_left days${RESET} ($expiry_date)"
-            fi
-            log "[8.4] SSL $domain — $days_left days left"
-        done
-        $found_ssl || echo -e "  ${DIM}No SSL-enabled Grin domains found.${RESET}"
-    fi
-
     pause
 }
 
@@ -1515,7 +1416,7 @@ show_menu() {
     echo -e "  ${GREEN}3${RESET})   Chain Sync Status         ${DIM}query local node API for current tip${RESET}"
     echo ""
     echo -e "${BOLD}  Security & Network${RESET}"
-    echo -e "  ${CYAN}4${RESET})   nginx Config & SSL Audit  ${DIM}configs, cert expiry, enabled check${RESET}"
+    echo -e "  ${CYAN}4${RESET})   Nginx Extended Features   ${DIM}audit · reverse proxy · security · logs${RESET}"
     echo -e "  ${CYAN}5${RESET})   Firewall Rules Audit      ${DIM}UFW / iptables review for Grin ports${RESET}"
     echo -e "  ${CYAN}6${RESET})   Top 20 Bandwidth Consumers${DIM} parse nginx logs, block/limit IP${RESET}"
     echo ""
@@ -1543,7 +1444,7 @@ main() {
             "1")   menu_node_monitor        ;;
             "2")   show_service_dashboard   ;;
             "3")   show_chain_sync          ;;
-            "4")   show_nginx_audit            ;;
+            "4")   menu_nginx_extended         ;;
             "5")   show_firewall_audit      ;;
             "6")   show_bandwidth_consumers ;;
             "7")   clean_maintenance        ;;

@@ -585,101 +585,142 @@ check_grin_running() {
         done
     fi
 
-    # ── Only mainnet running → can install testnet alongside, or rebuild mainnet ──
+    # ── Only mainnet running → can start/install testnet alongside, or rebuild mainnet ──
     if $mainnet_running; then
         echo ""
         info "Mainnet node is running on port 3414 (PID: $mainnet_pid)."
         info "This server has one free slot — testnet can be installed alongside it."
         warn "Note: full archive mode is NOT available on testnet."
         echo ""
+
+        # Show S) if testnet binary + chain data already exist; otherwise show 1) to install.
+        local _testnet_installed=false
+        if [[ -x /opt/grin/node/testnet-prune/grin && -d /opt/grin/node/testnet-prune/chain_data ]]; then
+            _testnet_installed=true
+        fi
+
         local _main_choice
         while true; do
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
             echo -e "  ${RED}M${RESET} — kill mainnet  & rebuild mainnet"
-            echo -e "  ${CYAN}S${RESET} — start installed testnet node  (no rebuild)"
-            echo -e "  ${GREEN}1${RESET} — install testnet alongside mainnet  ${DIM}(default)${RESET}"
+            if $_testnet_installed; then
+                echo -e "  ${CYAN}S${RESET} — start installed testnet node  (no rebuild)  ${DIM}(default)${RESET}"
+            else
+                echo -e "  ${GREEN}1${RESET} — install testnet alongside mainnet  ${DIM}(default)${RESET}"
+            fi
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[B/M/S/1/0, Enter = 1]: ${RESET}"
+            $_testnet_installed \
+                && echo -ne "${DIM}[B/M/S/0, Enter = S]: ${RESET}" \
+                || echo -ne "${DIM}[B/M/1/0, Enter = 1]: ${RESET}"
             read -r _main_choice || true
-            case "${_main_choice:-1}" in
-                [Bb])
+            [[ -z "$_main_choice" ]] && { $_testnet_installed && _main_choice="s" || _main_choice="1"; }
+            case "${_main_choice,,}" in
+                b)
                     update_binary_only
                     ;;
-                [Mm])
+                m)
                     stop_grin_one 3414
                     _remove_instance_dirs mainnet
                     GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
-                [Ss])
-                    if _start_installed_node testnet; then
-                        exit 0
+                s)
+                    if $_testnet_installed; then
+                        if _start_installed_node testnet; then exit 0
+                        else warn "No installed testnet node found — proceeding with new node setup."; break; fi
                     else
-                        warn "No installed testnet node found — proceeding with new node setup."
-                        break
+                        warn "Invalid input — testnet is not installed yet. Use 1 to install it."
+                        echo ""
                     fi ;;
-                1|"")
-                    RESTRICTED_NETWORK="testnet"
-                    success "Continuing with testnet installation."
-                    echo ""
-                    log "[STEP 1] Mainnet running (PID $mainnet_pid). Restricted to testnet."
-                    return
-                    ;;
+                1)
+                    if ! $_testnet_installed; then
+                        RESTRICTED_NETWORK="testnet"
+                        success "Continuing with testnet installation."
+                        echo ""
+                        log "[STEP 1] Mainnet running (PID $mainnet_pid). Restricted to testnet."
+                        return
+                    else
+                        warn "Invalid input — testnet is already installed. Use S to start it."
+                        echo ""
+                    fi ;;
                 0)
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose B, M, S, 1, or 0."
+                    $_testnet_installed \
+                        && warn "Invalid input — choose B, M, S, or 0." \
+                        || warn "Invalid input — choose B, M, 1, or 0."
                     echo ""
                     ;;
             esac
         done
     fi
 
-    # ── Only testnet running → can install mainnet alongside, or rebuild testnet ──
+    # ── Only testnet running → can start/install mainnet alongside, or rebuild testnet ──
     if $testnet_running; then
         echo ""
         info "Testnet node is running on port 13414 (PID: $testnet_pid)."
         info "This server has one free slot — mainnet can be installed alongside it."
         echo ""
+
+        # Show S) if mainnet binary + chain data already exist; otherwise show 1) to install.
+        local _mainnet_installed=false
+        if [[ ( -x /opt/grin/node/mainnet-prune/grin && -d /opt/grin/node/mainnet-prune/chain_data ) || \
+              ( -x /opt/grin/node/mainnet-full/grin  && -d /opt/grin/node/mainnet-full/chain_data  ) ]]; then
+            _mainnet_installed=true
+        fi
+
         local _test_choice
         while true; do
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
             echo -e "  ${RED}T${RESET} — kill testnet  & rebuild testnet"
-            echo -e "  ${CYAN}S${RESET} — start installed mainnet node  (no rebuild)"
-            echo -e "  ${GREEN}1${RESET} — install mainnet alongside testnet  ${DIM}(default)${RESET}"
+            if $_mainnet_installed; then
+                echo -e "  ${CYAN}S${RESET} — start installed mainnet node  (no rebuild)  ${DIM}(default)${RESET}"
+            else
+                echo -e "  ${GREEN}1${RESET} — install mainnet alongside testnet  ${DIM}(default)${RESET}"
+            fi
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[B/T/S/1/0, Enter = 1]: ${RESET}"
+            $_mainnet_installed \
+                && echo -ne "${DIM}[B/T/S/0, Enter = S]: ${RESET}" \
+                || echo -ne "${DIM}[B/T/1/0, Enter = 1]: ${RESET}"
             read -r _test_choice || true
-            case "${_test_choice:-1}" in
-                [Bb])
+            [[ -z "$_test_choice" ]] && { $_mainnet_installed && _test_choice="s" || _test_choice="1"; }
+            case "${_test_choice,,}" in
+                b)
                     update_binary_only
                     ;;
-                [Tt])
+                t)
                     stop_grin_one 13414
                     _remove_instance_dirs testnet
                     GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
-                [Ss])
-                    if _start_installed_node mainnet; then
-                        exit 0
+                s)
+                    if $_mainnet_installed; then
+                        if _start_installed_node mainnet; then exit 0
+                        else warn "No installed mainnet node found — proceeding with new node setup."; break; fi
                     else
-                        warn "No installed mainnet node found — proceeding with new node setup."
-                        break
+                        warn "Invalid input — mainnet is not installed yet. Use 1 to install it."
+                        echo ""
                     fi ;;
-                1|"")
-                    RESTRICTED_NETWORK="mainnet"
-                    success "Continuing with mainnet installation."
-                    echo ""
-                    log "[STEP 1] Testnet running (PID $testnet_pid). Restricted to mainnet."
-                    return
-                    ;;
+                1)
+                    if ! $_mainnet_installed; then
+                        RESTRICTED_NETWORK="mainnet"
+                        success "Continuing with mainnet installation."
+                        echo ""
+                        log "[STEP 1] Testnet running (PID $testnet_pid). Restricted to mainnet."
+                        return
+                    else
+                        warn "Invalid input — mainnet is already installed. Use S to start it."
+                        echo ""
+                    fi ;;
                 0)
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose B, T, S, 1, or 0."
+                    $_mainnet_installed \
+                        && warn "Invalid input — choose B, T, S, or 0." \
+                        || warn "Invalid input — choose B, T, 1, or 0."
                     echo ""
                     ;;
             esac

@@ -905,21 +905,26 @@ EOF
         info "Node cron installed: $node_cron_file (runs as root, detected data owner: $grin_user)"
 
         info "Running initial node stats collection..."
-        if python3 "$NODE_COLLECTOR_DEST" "$port" "$rest_dir" "$grin_data_dir" 2>/dev/null; then
+        local _node_err
+        _node_err=$(python3 "$NODE_COLLECTOR_DEST" "$port" "$rest_dir" "$grin_data_dir" 2>&1 >/dev/null || true)
+        if [[ -z "$_node_err" ]]; then
             success "Initial node stats collected."
         else
-            warn "Initial node stats failed (node may not be running yet)."
-            warn "Node cron will retry automatically every minute."
+            warn "Initial node stats failed — cron will retry every minute."
+            warn "Reason: $_node_err"
         fi
     fi
 
     # 6. Run initial REST collection now so JSON files exist before nginx reload.
     info "Running initial REST collection..."
-    if sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" "$_foreign_secret_file" 2>/dev/null; then
+    local _rest_err
+    _rest_err=$(sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" "$_foreign_secret_file" 2>&1 >/dev/null || true)
+    if [[ -z "$_rest_err" ]]; then
         success "Initial REST data collected."
     else
-        warn "Initial REST collection failed (node may not be running yet)."
-        warn "Cron will retry automatically every minute."
+        warn "Initial REST collection failed — cron will retry every minute."
+        warn "Reason: $_rest_err"
+        info "Common causes: node not started yet · wrong port ($port) · secret not found at $_foreign_secret_file"
     fi
 
     # 7. Patch nginx to serve /rest/*.json (location block before the catch-all).

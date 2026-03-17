@@ -475,9 +475,17 @@ setup_nginx_stats() {
     command -v nginx &>/dev/null || { die "nginx not installed. Run option N first."; return; }
     command -v certbot &>/dev/null || apt-get install -y certbot python3-certbot-nginx -qq
 
-    echo -ne "${BOLD}Stats subdomain (e.g. stats.yourdomain.com): ${RESET}"
-    read -r stats_domain
-    [[ -z "$stats_domain" || "$stats_domain" == "0" ]] && return
+    while true; do
+        echo -ne "${BOLD}Stats subdomain (e.g. stats.yourdomain.com): ${RESET}"
+        read -r stats_domain
+        [[ -z "$stats_domain" || "$stats_domain" == "0" ]] && return
+        local _lbl="${stats_domain%%.*}"
+        if [[ "$_lbl" == "fullmain" || "$_lbl" == "prunemain" || "$_lbl" == "prunetest" ]]; then
+            warn "'$_lbl' is reserved by script 02 (Grin chain data server). Choose a different subdomain."
+            continue
+        fi
+        break
+    done
 
     echo -ne "${BOLD}Email address for SSL certificate (Let's Encrypt): ${RESET}"
     read -r ssl_email
@@ -974,9 +982,17 @@ setup_nginx_explorer() {
     command -v nginx &>/dev/null || { die "nginx not installed. Run option N first."; return; }
     command -v certbot &>/dev/null || apt-get install -y certbot python3-certbot-nginx -qq
 
-    echo -ne "${BOLD}Enter domain or sub-domain for the explorer (e.g. explorer.yourdomain.com) [0 = cancel]: ${RESET}"
-    read -r expl_domain
-    [[ -z "$expl_domain" || "$expl_domain" == "0" ]] && return
+    while true; do
+        echo -ne "${BOLD}Enter domain or sub-domain for the explorer (e.g. explorer.yourdomain.com) [0 = cancel]: ${RESET}"
+        read -r expl_domain
+        [[ -z "$expl_domain" || "$expl_domain" == "0" ]] && return
+        local _lbl="${expl_domain%%.*}"
+        if [[ "$_lbl" == "fullmain" || "$_lbl" == "prunemain" || "$_lbl" == "prunetest" ]]; then
+            warn "'$_lbl' is reserved by script 02 (Grin chain data server). Choose a different subdomain."
+            continue
+        fi
+        break
+    done
 
     echo -ne "${BOLD}Email address for Let's Encrypt SSL certificate [0 = cancel]: ${RESET}"
     read -r ssl_email

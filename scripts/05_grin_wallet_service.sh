@@ -642,9 +642,18 @@ ww_deploy_files() {
         warn "Ensure the Grin Node Toolkit is complete (web/05_wallet/public_html/)."; return
     fi
 
-    echo -ne "Deploy directory [${WW_DEPLOY_DIR}]: "
-    read -r input_dir || true
-    [[ -n "$input_dir" ]] && WW_DEPLOY_DIR="$input_dir"
+    while true; do
+        echo -ne "Deploy directory [${WW_DEPLOY_DIR}]: "
+        read -r input_dir || true
+        [[ -n "$input_dir" ]] && WW_DEPLOY_DIR="$input_dir"
+        local _base; _base=$(basename "${WW_DEPLOY_DIR%/}")
+        if [[ "$_base" == "fullmain" || "$_base" == "prunemain" || "$_base" == "prunetest" ]]; then
+            warn "'/var/www/$_base' is reserved by script 02 (Grin chain data server). Choose a different directory."
+            WW_DEPLOY_DIR=""
+            continue
+        fi
+        break
+    done
     echo ""
 
     if [[ -d "$WW_DEPLOY_DIR" ]]; then
@@ -719,10 +728,19 @@ ww_configure_nginx() {
         die "Files not deployed yet — run step 2 first."; return
     fi
 
-    echo -ne "Domain name (e.g. wallet.mynode.example.com) [${WW_DOMAIN:-}]: "
-    read -r input_domain || true
-    [[ -n "$input_domain" ]] && WW_DOMAIN="$input_domain"
-    [[ -z "$WW_DOMAIN" ]] && warn "No domain entered." && return
+    while true; do
+        echo -ne "Domain name (e.g. wallet.mynode.example.com) [${WW_DOMAIN:-}]: "
+        read -r input_domain || true
+        [[ -n "$input_domain" ]] && WW_DOMAIN="$input_domain"
+        [[ -z "$WW_DOMAIN" ]] && warn "No domain entered." && continue
+        local _lbl="${WW_DOMAIN%%.*}"
+        if [[ "$_lbl" == "fullmain" || "$_lbl" == "prunemain" || "$_lbl" == "prunetest" ]]; then
+            warn "'$_lbl' is reserved by script 02 (Grin chain data server). Choose a different subdomain."
+            WW_DOMAIN=""
+            continue
+        fi
+        break
+    done
 
     # Detect PHP-FPM socket
     if [[ -z "$WW_PHP_FPM_SOCK" ]]; then

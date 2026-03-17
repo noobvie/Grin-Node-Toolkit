@@ -448,10 +448,18 @@ _enable_node_api_nginx() {
     fi
 
     local _eg_domain; [[ "$network" == "mainnet" ]] && _eg_domain="api.example.com" || _eg_domain="testapi.example.com"
-    echo -ne "Domain for the $network Node API (e.g. $_eg_domain) or 0 to cancel: "
-    read -r domain
-    [[ "$domain" == "0" ]] && return
-    [[ -z "$domain" ]] && warn "No domain entered. Aborting." && return
+    while true; do
+        echo -ne "Domain for the $network Node API (e.g. $_eg_domain) or 0 to cancel: "
+        read -r domain
+        [[ "$domain" == "0" ]] && return
+        [[ -z "$domain" ]] && warn "No domain entered." && continue
+        local _lbl="${domain%%.*}"
+        if [[ "$_lbl" == "fullmain" || "$_lbl" == "prunemain" || "$_lbl" == "prunetest" ]]; then
+            warn "'$_lbl' is reserved by script 02 (Grin chain data server). Choose a different subdomain."
+            continue
+        fi
+        break
+    done
 
     echo -ne "Email for Let's Encrypt SSL certificate (or 0 to cancel): "
     read -r email

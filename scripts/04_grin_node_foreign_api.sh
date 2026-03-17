@@ -722,7 +722,7 @@ _enable_status_page() {
         echo ""
         info "Open in browser : https://$domain/"
         info "Shows           : height, difficulty, latest block, peers, versions"
-        info "Auto-refresh    : every 10 seconds"
+        info "Auto-refresh    : every 60 seconds"
         info "To update files : run this option again"
         log  "Status page enabled: network=$network domain=$domain deploy_dir=$deploy_dir"
     else

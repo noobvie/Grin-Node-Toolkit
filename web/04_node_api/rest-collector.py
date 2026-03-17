@@ -2,7 +2,8 @@
 """
 rest-collector.py — Grin Node Toolkit · REST API updater
 =========================================================
-Queries the Grin node foreign API (locally, no auth required) and writes
+Queries the Grin node foreign API (locally; Basic Auth injected automatically
+if .foreign_api_secret is present) and writes
 static JSON files that nginx serves as a lightweight REST API.
 
 Installed by script 04 (option 9 / 11) to:

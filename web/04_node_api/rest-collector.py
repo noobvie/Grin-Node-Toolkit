@@ -2,14 +2,15 @@
 """
 rest-collector.py — Grin Node Toolkit · REST API updater
 =========================================================
-Queries the Grin node foreign API (locally, no auth required) and writes
+Queries the Grin node foreign API (locally; Basic Auth injected automatically
+if .foreign_api_secret is present) and writes
 static JSON files that nginx serves as a lightweight REST API.
 
 Installed by script 04 (option 9 / 11) to:
     /usr/local/lib/grin-node-toolkit/rest-collector.py
 
 Called every 60 s by a cron job running as www-data:
-    * * * * * www-data python3 <this file> <port> <rest_dir>
+    * * * * * www-data python3 <this file> <port> <rest_dir> [foreign_secret_path]
 
 Output files (written atomically via tmp + rename):
     {rest_dir}/stats.json       — full snapshot: height, supply, difficulty, hash, versions
@@ -27,6 +28,7 @@ import sys
 import json
 import math
 import os
+import base64
 import tempfile
 import datetime
 import urllib.request
@@ -34,9 +36,11 @@ import urllib.request
 
 # ── RPC helpers ───────────────────────────────────────────────────────────────
 
-def rpc_call(port, method):
+def rpc_call(port, method, secret_path=None):
     """
     Call a Grin foreign API v2 JSON-RPC method on localhost.
+    If secret_path is provided and the file exists, adds HTTP Basic Auth
+    (script 01 creates .foreign_api_secret and enables auth on the foreign API).
     Returns the unwrapped Ok value, or raises RuntimeError on failure.
     """
     payload = json.dumps({
@@ -46,10 +50,17 @@ def rpc_call(port, method):
         "id":      1,
     }).encode()
 
+    headers = {"Content-Type": "application/json"}
+    if secret_path and os.path.isfile(secret_path):
+        with open(secret_path) as fh:
+            secret = fh.read().strip()
+        token = base64.b64encode(f"grin:{secret}".encode()).decode()
+        headers["Authorization"] = f"Basic {token}"
+
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/v2/foreign",
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
 
     with urllib.request.urlopen(req, timeout=10) as resp:
@@ -89,16 +100,18 @@ def write_atomic(path, obj):
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <port> <rest_dir>", file=sys.stderr)
+    if len(sys.argv) < 3:
+        print(f"Usage: {sys.argv[0]} <port> <rest_dir> [foreign_secret_path]", file=sys.stderr)
         sys.exit(1)
 
-    port     = int(sys.argv[1])
-    rest_dir = sys.argv[2]
+    port        = int(sys.argv[1])
+    rest_dir    = sys.argv[2]
+    secret_path = sys.argv[3] if len(sys.argv) >= 4 else None
 
-    # Fetch live data from the node (foreign API — no auth required)
-    tip = rpc_call(port, "get_tip")
-    ver = rpc_call(port, "get_version")
+    # Fetch live data from the node foreign API.
+    # Basic Auth is injected automatically if a .foreign_api_secret file is present.
+    tip = rpc_call(port, "get_tip",     secret_path)
+    ver = rpc_call(port, "get_version", secret_path)
 
     height     = int(tip["height"])
     supply     = height * 60          # 1 GRIN/s · 60 s/block

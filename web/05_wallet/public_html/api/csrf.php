@@ -7,7 +7,19 @@
  * as X-CSRF-Token header on every subsequent API call to proxy.php.
  */
 
+ini_set('session.gc_maxlifetime', 3600);
+ini_set('session.use_strict_mode', '1');
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path'     => '/',
+    'secure'   => true,
+    'httponly' => true,
+    'samesite' => 'Strict',
+]);
 session_start();
+
+// Reset idle timeout on token fetch
+$_SESSION['last_activity'] = time();
 
 header('Content-Type: application/json');
 header('Cache-Control: no-store, no-cache, must-revalidate');

@@ -11,8 +11,9 @@
 #   __PHP_FPM_SOCK__→ /run/php/php8.x-fpm.sock
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Rate limit zone (written to /etc/nginx/conf.d/grin-wallet-ratelimit.conf)
-# limit_req_zone $binary_remote_addr zone=grin_wallet_api:10m rate=10r/m;
+# Rate limit zones (written to /etc/nginx/conf.d/grin-wallet-ratelimit.conf)
+# limit_req_zone $binary_remote_addr zone=grin_wallet_api:10m rate=10r/m;   # csrf, qr
+# limit_req_zone $binary_remote_addr zone=grin_wallet_tx:10m  rate=3r/m;    # proxy (financial ops)
 
 # HTTP → HTTPS redirect
 server {
@@ -54,13 +55,23 @@ server {
     add_header X-Content-Type-Options    "nosniff"                                      always;
     add_header X-Frame-Options           "DENY"                                         always;
     add_header Referrer-Policy           "no-referrer"                                  always;
-    add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self';" always;
+    add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self';" always;
 
     # ── Logging ─────────────────────────────────────────────────────────────
     access_log /var/log/nginx/grin-wallet-access.log;
     error_log  /var/log/nginx/grin-wallet-error.log;
 
     # ── API: PHP proxy with rate limiting ───────────────────────────────────
+    # Tighter limit on proxy.php — it handles all financial operations
+    location = /api/proxy.php {
+        limit_req zone=grin_wallet_tx burst=2 nodelay;
+        try_files $uri =404;
+        fastcgi_pass   __PHP_FPM_SOCK__;
+        fastcgi_param  SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include        fastcgi_params;
+    }
+
+    # Standard limit for csrf.php, qr.php
     location ~ ^/api/.*\.php$ {
         limit_req zone=grin_wallet_api burst=5 nodelay;
         try_files $uri =404;
@@ -81,7 +92,8 @@ server {
     }
 
     # ── Security: deny sensitive files ──────────────────────────────────────
-    location = /api/config.json { deny all; }
-    location ~ /\.              { deny all; }
-    location ~ ~$               { deny all; }
+    # Note: config.json is stored at /opt/grin/conf/grin_web_wallet_api.json
+    # (outside the webroot) so no deny rule is needed for it.
+    location ~ /\.  { deny all; }
+    location ~ ~$   { deny all; }
 }

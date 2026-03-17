@@ -6,7 +6,7 @@
 # cron), and provides mass deployment: push toolkit updates, start/stop/restart
 # remote grin nodes, run ad-hoc commands, and manage SSH keys across a fleet.
 #
-# Server fleet is configured in conf/mass_deploy.conf (pipe-delimited).
+# Server fleet is configured in /opt/grin/conf/mass_deploy.conf (pipe-delimited).
 #
 # Usage:
 #   ./081_host_monitor_port.sh                         interactive check
@@ -21,8 +21,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF_DIR="$SCRIPT_DIR/../conf"
-LOG_DIR="$SCRIPT_DIR/../log"
+CONF_DIR="/opt/grin/conf"
+LOG_DIR="/opt/grin/logs"
 CONF_FILE="$CONF_DIR/host_monitor_port.conf"
 STATE_FILE="$CONF_DIR/host_monitor_last_state.conf"
 LOG_FILE="$LOG_DIR/grin_nodes_status_$(date +%Y%m%d_%H%M%S).log"

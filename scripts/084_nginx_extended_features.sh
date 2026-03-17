@@ -38,7 +38,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="$SCRIPT_DIR/../log"
+LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/084_nginx_extended_$(date +%Y%m%d_%H%M%S).log"
 mkdir -p "$LOG_DIR"
 

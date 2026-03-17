@@ -2,7 +2,7 @@
 // Grin Node Status Page — node-status.js
 // web/04/public_html/js/node-status.js
 //
-// Calls two Grin foreign API (v2) methods — both read-only, no auth needed:
+// Calls two Grin foreign API (v2) methods — both read-only, auth handled transparently by nginx:
 //   get_tip     → height, total_difficulty, latest block hash
 //   get_version → node_version, block_header_version
 //
@@ -164,8 +164,8 @@ function applyNetwork() {
 // ── Theme ──────────────────────────────────────────────────────────────────────
 const THEME_CYCLE = ['dark', 'light', 'matrix', 'winxp'];
 
-let currentTheme = localStorage.getItem('grin-node-theme') || 'dark';
-if (!THEME_CYCLE.includes(currentTheme)) currentTheme = 'dark';
+let currentTheme = localStorage.getItem('grin-node-theme') || 'matrix';
+if (!THEME_CYCLE.includes(currentTheme)) currentTheme = 'matrix';
 
 function applyTheme(theme) {
   currentTheme = theme;
@@ -179,7 +179,7 @@ function applyTheme(theme) {
   if (sel) sel.value = theme;
 }
 
-// ── Node stats from node.json (written by node-collector as grin user) ────────
+// ── Node stats from node.json (written by node-collector (runs as root)) ────────
 async function applyNodeJson() {
   try {
     const res = await fetch('/rest/node.json');
@@ -248,7 +248,7 @@ async function applyRestLinks() {
         statusEl.className   = 'card-value dim';
       }
       if (subEl) subEl.textContent =
-        'Enable via script 04 → option 9 (mainnet) or 11 (testnet)';
+        'Enable via script 04 → select network, then option 5';
       if (pillRest)  pillRest.className  = 'api-pill pill-off';
       if (pillRestT) pillRestT.textContent = 'not deployed';
     }
@@ -258,7 +258,7 @@ async function applyRestLinks() {
       statusEl.className   = 'card-value dim';
     }
     if (subEl) subEl.textContent =
-      'Enable via script 04 → option 9 (mainnet) or 11 (testnet)';
+      'Enable via script 04 → select network, then option 5';
     if (pillRest)  pillRest.className  = 'api-pill pill-off';
     if (pillRestT) pillRestT.textContent = 'not deployed';
   }

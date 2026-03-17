@@ -29,7 +29,7 @@
 #   /opt/grin/node/mainnet-full   — full archive, mainnet  (default)
 #   /opt/grin/node/testnet-prune  — pruned,       testnet  (default)
 #   The chosen path (default or custom) is saved to:
-#     conf/grin_instances_location.conf  (used by other toolkit scripts)
+#     /opt/grin/conf/grin_instances_location.conf  (used by other toolkit scripts)
 #
 # SETUP PIPELINE  (up to 14 steps; Steps 10–12 replaced by a single stream step
 #                  when on-the-fly extraction is chosen at Step 9)
@@ -160,9 +160,9 @@ set -euo pipefail
 # --- Script metadata ---
 SCRIPT_START_TIME=$(date +%s)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="$SCRIPT_DIR/../log"
+LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/01_build_new_grin_node_$(date +%Y%m%d_%H%M%S).log"
-CONF_DIR="$SCRIPT_DIR/../conf"
+CONF_DIR="/opt/grin/conf"
 INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"
 GRIN_GITHUB_API="https://api.github.com/repos/mimblewimble/grin/releases/latest"
 
@@ -490,7 +490,7 @@ _start_installed_node() {
         return 1  # no installed nodes found — caller will fall through to build wizard
     fi
 
-    # start each node; mainnet first, 30-second gap before testnet
+    # start each node; mainnet first, 60-second gap before testnet
     local started=0
     for i in "${!found_dirs[@]}"; do
         GRIN_DIR="${found_dirs[$i]}"
@@ -506,11 +506,20 @@ _start_installed_node() {
         start_grin_tmux
         started=$(( started + 1 ))
         if [[ $(( i + 1 )) -lt ${#found_dirs[@]} ]]; then
-            info "Waiting 30 seconds before starting next instance..."
-            sleep 30
+            info "Waiting 60 seconds before starting next instance..."
+            sleep 60
         fi
     done
     success "$started node(s) started."
+    echo ""
+    echo -e "${BOLD}${YELLOW}  Be patient — the node may take up to 60 seconds to boot.${RESET}"
+    echo -e "  To monitor progress:"
+    echo -e "    ${CYAN}tmux attach -t <session>${RESET}   — view node output directly"
+    echo -e "    ${CYAN}Ctrl+B → s${RESET}                 — switch between tmux sessions"
+    echo -e "    ${CYAN}Ctrl+B → d${RESET}                 — detach (leave node running in background)"
+    echo ""
+    read -rp "  Press Enter to return to menu..." _
+    echo ""
     return 0
 }
 
@@ -576,101 +585,142 @@ check_grin_running() {
         done
     fi
 
-    # ── Only mainnet running → can install testnet alongside, or rebuild mainnet ──
+    # ── Only mainnet running → can start/install testnet alongside, or rebuild mainnet ──
     if $mainnet_running; then
         echo ""
         info "Mainnet node is running on port 3414 (PID: $mainnet_pid)."
         info "This server has one free slot — testnet can be installed alongside it."
         warn "Note: full archive mode is NOT available on testnet."
         echo ""
+
+        # Show S) if testnet binary + chain data already exist; otherwise show 1) to install.
+        local _testnet_installed=false
+        if [[ -x /opt/grin/node/testnet-prune/grin && -d /opt/grin/node/testnet-prune/chain_data ]]; then
+            _testnet_installed=true
+        fi
+
         local _main_choice
         while true; do
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
             echo -e "  ${RED}M${RESET} — kill mainnet  & rebuild mainnet"
-            echo -e "  ${CYAN}S${RESET} — start installed testnet node  (no rebuild)"
-            echo -e "  ${GREEN}1${RESET} — install testnet alongside mainnet  ${DIM}(default)${RESET}"
+            if $_testnet_installed; then
+                echo -e "  ${CYAN}S${RESET} — start installed testnet node  (no rebuild)  ${DIM}(default)${RESET}"
+            else
+                echo -e "  ${GREEN}1${RESET} — install testnet alongside mainnet  ${DIM}(default)${RESET}"
+            fi
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[B/M/S/1/0, Enter = 1]: ${RESET}"
+            $_testnet_installed \
+                && echo -ne "${DIM}[B/M/S/0, Enter = S]: ${RESET}" \
+                || echo -ne "${DIM}[B/M/1/0, Enter = 1]: ${RESET}"
             read -r _main_choice || true
-            case "${_main_choice:-1}" in
-                [Bb])
+            [[ -z "$_main_choice" ]] && { $_testnet_installed && _main_choice="s" || _main_choice="1"; }
+            case "${_main_choice,,}" in
+                b)
                     update_binary_only
                     ;;
-                [Mm])
+                m)
                     stop_grin_one 3414
                     _remove_instance_dirs mainnet
                     GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
-                [Ss])
-                    if _start_installed_node testnet; then
-                        exit 0
+                s)
+                    if $_testnet_installed; then
+                        if _start_installed_node testnet; then exit 0
+                        else warn "No installed testnet node found — proceeding with new node setup."; break; fi
                     else
-                        warn "No installed testnet node found — proceeding with new node setup."
-                        break
+                        warn "Invalid input — testnet is not installed yet. Use 1 to install it."
+                        echo ""
                     fi ;;
-                1|"")
-                    RESTRICTED_NETWORK="testnet"
-                    success "Continuing with testnet installation."
-                    echo ""
-                    log "[STEP 1] Mainnet running (PID $mainnet_pid). Restricted to testnet."
-                    return
-                    ;;
+                1)
+                    if ! $_testnet_installed; then
+                        RESTRICTED_NETWORK="testnet"
+                        success "Continuing with testnet installation."
+                        echo ""
+                        log "[STEP 1] Mainnet running (PID $mainnet_pid). Restricted to testnet."
+                        return
+                    else
+                        warn "Invalid input — testnet is already installed. Use S to start it."
+                        echo ""
+                    fi ;;
                 0)
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose B, M, S, 1, or 0."
+                    $_testnet_installed \
+                        && warn "Invalid input — choose B, M, S, or 0." \
+                        || warn "Invalid input — choose B, M, 1, or 0."
                     echo ""
                     ;;
             esac
         done
     fi
 
-    # ── Only testnet running → can install mainnet alongside, or rebuild testnet ──
+    # ── Only testnet running → can start/install mainnet alongside, or rebuild testnet ──
     if $testnet_running; then
         echo ""
         info "Testnet node is running on port 13414 (PID: $testnet_pid)."
         info "This server has one free slot — mainnet can be installed alongside it."
         echo ""
+
+        # Show S) if mainnet binary + chain data already exist; otherwise show 1) to install.
+        local _mainnet_installed=false
+        if [[ ( -x /opt/grin/node/mainnet-prune/grin && -d /opt/grin/node/mainnet-prune/chain_data ) || \
+              ( -x /opt/grin/node/mainnet-full/grin  && -d /opt/grin/node/mainnet-full/chain_data  ) ]]; then
+            _mainnet_installed=true
+        fi
+
         local _test_choice
         while true; do
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
             echo -e "  ${RED}T${RESET} — kill testnet  & rebuild testnet"
-            echo -e "  ${CYAN}S${RESET} — start installed mainnet node  (no rebuild)"
-            echo -e "  ${GREEN}1${RESET} — install mainnet alongside testnet  ${DIM}(default)${RESET}"
+            if $_mainnet_installed; then
+                echo -e "  ${CYAN}S${RESET} — start installed mainnet node  (no rebuild)  ${DIM}(default)${RESET}"
+            else
+                echo -e "  ${GREEN}1${RESET} — install mainnet alongside testnet  ${DIM}(default)${RESET}"
+            fi
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[B/T/S/1/0, Enter = 1]: ${RESET}"
+            $_mainnet_installed \
+                && echo -ne "${DIM}[B/T/S/0, Enter = S]: ${RESET}" \
+                || echo -ne "${DIM}[B/T/1/0, Enter = 1]: ${RESET}"
             read -r _test_choice || true
-            case "${_test_choice:-1}" in
-                [Bb])
+            [[ -z "$_test_choice" ]] && { $_mainnet_installed && _test_choice="s" || _test_choice="1"; }
+            case "${_test_choice,,}" in
+                b)
                     update_binary_only
                     ;;
-                [Tt])
+                t)
                     stop_grin_one 13414
                     _remove_instance_dirs testnet
                     GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
-                [Ss])
-                    if _start_installed_node mainnet; then
-                        exit 0
+                s)
+                    if $_mainnet_installed; then
+                        if _start_installed_node mainnet; then exit 0
+                        else warn "No installed mainnet node found — proceeding with new node setup."; break; fi
                     else
-                        warn "No installed mainnet node found — proceeding with new node setup."
-                        break
+                        warn "Invalid input — mainnet is not installed yet. Use 1 to install it."
+                        echo ""
                     fi ;;
-                1|"")
-                    RESTRICTED_NETWORK="mainnet"
-                    success "Continuing with mainnet installation."
-                    echo ""
-                    log "[STEP 1] Testnet running (PID $testnet_pid). Restricted to mainnet."
-                    return
-                    ;;
+                1)
+                    if ! $_mainnet_installed; then
+                        RESTRICTED_NETWORK="mainnet"
+                        success "Continuing with mainnet installation."
+                        echo ""
+                        log "[STEP 1] Testnet running (PID $testnet_pid). Restricted to mainnet."
+                        return
+                    else
+                        warn "Invalid input — mainnet is already installed. Use S to start it."
+                        echo ""
+                    fi ;;
                 0)
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose B, T, S, 1, or 0."
+                    $_mainnet_installed \
+                        && warn "Invalid input — choose B, T, S, or 0." \
+                        || warn "Invalid input — choose B, T, 1, or 0."
                     echo ""
                     ;;
             esac
@@ -1867,36 +1917,39 @@ check_disk_space() {
 }
 
 # =============================================================================
+# HELPER: PROMPT BEFORE OVERWRITING EXISTING CHAIN DATA
+# -----------------------------------------------------------------------------
+# If $GRIN_DIR/chain_data already exists, asks the user whether to remove it
+# before extraction.  Shared by extract_chain_data() and stream_extract_chain_data().
+# =============================================================================
+_prompt_remove_chain_data() {
+    [[ -d "$GRIN_DIR/chain_data" ]] || return 0
+    warn "Existing chain_data directory found: $GRIN_DIR/chain_data"
+    echo -e "  ${GREEN}Y${RESET}) Remove and extract fresh  ${DIM}(default)${RESET}"
+    echo -e "  ${RED}n${RESET}) Keep it (existing files may be overwritten)"
+    echo -e "  ${DIM}0${RESET}) Return to main menu"
+    echo ""
+    echo -ne "${BOLD}Remove existing chain_data? [Y/n/0]: ${RESET}"
+    read -r rm_choice || true
+    case "${rm_choice,,}" in
+        n) info "Keeping existing chain_data (existing files may be overwritten)..." ;;
+        0) exit 0 ;;
+        *) info "Removing existing chain_data..."
+           rm -rf "$GRIN_DIR/chain_data"
+           success "Existing chain_data removed. Starting fresh extraction..." ;;
+    esac
+}
+
+# =============================================================================
 # [12] EXTRACT CHAIN DATA INTO NODE DIRECTORY
 # -----------------------------------------------------------------------------
-# First checks if $GRIN_DIR/chain_data already exists and asks the user:
-#   Yes → remove the existing chain_data directory before extracting (clean slate)
-#   No  → proceed with extraction without removing (existing files may be overwritten)
 # After successful extraction, removes the .tar.gz and .sha256 to reclaim space.
 # Shows error with guidance if extraction fails (e.g. corrupted archive or disk error).
 # =============================================================================
 extract_chain_data() {
     step_header "Step 12: Extract Chain Data"
 
-    # Check for an existing chain_data directory before extracting
-    if [[ -d "$GRIN_DIR/chain_data" ]]; then
-        warn "Existing chain_data directory found: $GRIN_DIR/chain_data"
-        echo -e "  ${GREEN}y${RESET}) Remove and extract fresh"
-        echo -e "  ${RED}n${RESET}) Keep it (existing files may be overwritten)"
-        echo -e "  ${DIM}0${RESET}) Return to main menu"
-        echo ""
-        echo -ne "${BOLD}Remove existing chain_data? [y/N/0]: ${RESET}"
-        read -r rm_choice || true
-        case "${rm_choice,,}" in
-            y)
-                info "Removing existing chain_data..."
-                rm -rf "$GRIN_DIR/chain_data"
-                success "Existing chain_data removed. Starting fresh extraction..."
-                ;;
-            0) exit 0 ;;
-            *) info "Keeping existing chain_data. Starting extraction (existing files may be overwritten)..." ;;
-        esac
-    fi
+    _prompt_remove_chain_data
 
     info "Extracting $(basename "$TAR_FILE") → $GRIN_DIR ..."
 
@@ -1924,25 +1977,7 @@ stream_extract_chain_data() {
 
     local tar_name="${TAR_FILE##*/}"
 
-    # Handle existing chain_data directory (same prompt as full-download mode)
-    if [[ -d "$GRIN_DIR/chain_data" ]]; then
-        warn "Existing chain_data directory found: $GRIN_DIR/chain_data"
-        echo -e "  ${GREEN}y${RESET}) Remove and extract fresh"
-        echo -e "  ${RED}n${RESET}) Keep it (existing files may be overwritten)"
-        echo -e "  ${DIM}0${RESET}) Return to main menu"
-        echo ""
-        echo -ne "${BOLD}Remove existing chain_data? [y/N/0]: ${RESET}"
-        read -r rm_choice || true
-        case "${rm_choice,,}" in
-            y)
-                info "Removing existing chain_data..."
-                rm -rf "$GRIN_DIR/chain_data"
-                success "Existing chain_data removed. Starting fresh extraction..."
-                ;;
-            0) exit 0 ;;
-            *) info "Keeping existing chain_data. Continuing (existing files may be overwritten)..." ;;
-        esac
-    fi
+    _prompt_remove_chain_data
 
     local stream_ok=false
     local src_num=0 total_src=${#READY_SOURCES[@]}
@@ -2022,11 +2057,28 @@ start_grin_tmux() {
 
     # ── Boot/duplication guard ────────────────────────────────────────────────
     # If a grin process already owns this node directory (booting or running but
-    # port not yet bound), skip the launch to prevent a grin.lock conflict.
+    # port not yet bound), check whether it has a live tmux session.
+    #   • Live process  + live tmux session → truly running, skip to avoid grin.lock conflict.
+    #   • Live process  + NO  tmux session  → orphaned/stale (tmux was killed while grin kept
+    #     running, re-parented to PID 1).  Kill the stale process and proceed with a fresh start.
     if _grin_proc_for_dir "$GRIN_DIR"; then
-        warn "Grin is already starting or running in $GRIN_DIR — skipping duplicate launch."
-        info "Wait for the node to finish booting, then re-run if needed."
-        return 0
+        if tmux has-session -t "$session" 2>/dev/null; then
+            warn "Grin is already starting or running in $GRIN_DIR — skipping duplicate launch."
+            info "Wait for the node to finish booting, then re-run if needed."
+            return 0
+        else
+            warn "Orphaned Grin process detected in $GRIN_DIR (no tmux session). Killing stale process..."
+            while IFS= read -r _stale_pid; do
+                local _stale_cwd
+                _stale_cwd=$(readlink "/proc/$_stale_pid/cwd" 2>/dev/null) || continue
+                if [[ "$_stale_cwd" == "$GRIN_DIR" ]]; then
+                    info "  Killing PID $_stale_pid (cwd=$_stale_cwd)"
+                    kill -KILL "$_stale_pid" 2>/dev/null || true
+                fi
+            done < <(pgrep -f 'grin server run' 2>/dev/null || true)
+            sleep 1
+            info "Stale process cleared — proceeding with fresh start."
+        fi
     fi
 
     if tmux has-session -t "$session" 2>/dev/null; then
@@ -2043,7 +2095,7 @@ start_grin_tmux() {
             "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$GRIN_DIR\" && ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
             || die "Failed to create tmux session '$session'. Is tmux installed and working?"
     else
-        warn "User 'grin' not found — running as current user. Create it via Script 08 → option 10."
+        warn "User 'grin' not found — running as current user. Re-run Script 01 to create it."
         tmux new-session -d -s "$session" -c "$GRIN_DIR" \
             "echo 'Starting Grin node...'; cd $GRIN_DIR && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
             || die "Failed to create tmux session '$session'. Is tmux installed and working?"
@@ -2157,7 +2209,8 @@ setup_one_node() {
     show_summary        "$network" "$ARCHIVE_MODE"
     save_instance_location "$network" "$ARCHIVE_MODE"
 
-    # Reset per-node state
+    # Reset per-node state for the next network (if "both" selected).
+    # GRIN_BIN_TMP is intentionally NOT reset — reused by the second setup_one_node call.
     GRIN_DIR=""
     TAR_FILE=""
     SHA_FILE=""
@@ -2195,7 +2248,7 @@ main() {
             ;;
     esac
 
-    # Step 15: Return to main menu
+    # Return to main menu
     echo ""
     while true; do
         echo -ne "${BOLD}Enter ${GREEN}0${RESET}${BOLD} to return to the main menu: ${RESET}"

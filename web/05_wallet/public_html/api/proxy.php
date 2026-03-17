@@ -5,12 +5,32 @@
  * Security:
  *   - No CORS headers (same-origin deployment — no cross-origin callers expected)
  *   - CSRF token validated on every POST via PHP session
- *   - Wallet host/port read from server-side config.json (never trusted from headers)
+ *   - Wallet credentials read from /opt/grin/conf/grin_web_wallet_api.json (outside webroot, never exposed to browser)
  *   - Strict method whitelist — unknown methods are rejected
  *   - Server-side HTTP send (avoids browser SSRF; recipient URL validated here)
  */
 
+// Session hardening — must be set before session_start()
+ini_set('session.gc_maxlifetime', 3600);
+ini_set('session.use_strict_mode', '1');
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path'     => '/',
+    'secure'   => true,
+    'httponly' => true,
+    'samesite' => 'Strict',
+]);
 session_start();
+
+// Enforce session idle timeout (60 minutes)
+if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity']) > 3600) {
+    session_unset();
+    session_destroy();
+    http_response_code(401);
+    echo json_encode(['error' => ['code' => -32600, 'message' => 'Session expired — please reload the page']]);
+    exit;
+}
+$_SESSION['last_activity'] = time();
 
 header('Content-Type: application/json');
 
@@ -35,8 +55,8 @@ if (!validateCsrfToken()) {
     exit;
 }
 
-// ─── Load server-side config (never exposed to browser) ──────────────────────
-$config_file = __DIR__ . '/config.json';
+// ─── Load server-side config (stored outside webroot) ────────────────────────
+$config_file = '/opt/grin/conf/grin_web_wallet_api.json';
 if (!file_exists($config_file) || !is_readable($config_file)) {
     http_response_code(500);
     echo json_encode(['error' => ['code' => -32000, 'message' => 'Server configuration missing. Deploy via Script 05 option m.']]);
@@ -49,8 +69,9 @@ if (!$config) {
     exit;
 }
 
-$WALLET_HOST    = filter_var($config['walletHost'] ?? '127.0.0.1', FILTER_SANITIZE_STRING);
-$WALLET_PORT    = intval($config['walletPort'] ?? 3415);
+$WALLET_HOST      = (string)($config['walletHost'] ?? '127.0.0.1');
+$WALLET_PORT      = intval($config['walletPort'] ?? 3415);
+$WALLET_API_SECRET = (string)($config['ownerApiSecret'] ?? '');
 $REQUEST_TIMEOUT = 30;
 
 if ($WALLET_PORT < 1 || $WALLET_PORT > 65535) {
@@ -95,7 +116,7 @@ function isValidRecipientUrl(string $url): bool {
 }
 
 // ─── Forward JSON-RPC to wallet ───────────────────────────────────────────────
-function forwardToWallet(string $host, int $port, array $payload, int $timeout): array {
+function forwardToWallet(string $host, int $port, array $payload, int $timeout, string $apiSecret = ''): array {
     try {
         $socket = fsockopen($host, $port, $errno, $errstr, $timeout);
         if (!$socket) {
@@ -103,10 +124,16 @@ function forwardToWallet(string $host, int $port, array $payload, int $timeout):
         }
 
         $json    = json_encode($payload);
+        // Grin owner API requires Basic Auth: empty username, owner_api_secret as password
+        $authHeader = '';
+        if ($apiSecret !== '') {
+            $authHeader = "Authorization: Basic " . base64_encode(':' . $apiSecret) . "\r\n";
+        }
         $request = "POST /v3/wallet HTTP/1.1\r\n"
                  . "Host: $host:$port\r\n"
                  . "Content-Type: application/json\r\n"
                  . "Content-Length: " . strlen($json) . "\r\n"
+                 . $authHeader
                  . "Connection: close\r\n"
                  . "\r\n"
                  . $json;
@@ -131,7 +158,7 @@ function forwardToWallet(string $host, int $port, array $payload, int $timeout):
 }
 
 // ─── Server-side HTTP send (avoids browser SSRF) ─────────────────────────────
-function handleHttpSend(string $walletHost, int $walletPort, array $params, int $timeout): void {
+function handleHttpSend(string $walletHost, int $walletPort, array $params, int $timeout, string $apiSecret = ''): void {
     $recipientUrl = $params['recipient_url'] ?? '';
     $sendParams   = $params['send_params'] ?? [];
 
@@ -143,7 +170,7 @@ function handleHttpSend(string $walletHost, int $walletPort, array $params, int 
 
     // Step 1: init_send_tx
     $initPayload  = ['jsonrpc' => '2.0', 'method' => 'init_send_tx', 'params' => $sendParams, 'id' => 1];
-    $initResponse = forwardToWallet($walletHost, $walletPort, $initPayload, $timeout);
+    $initResponse = forwardToWallet($walletHost, $walletPort, $initPayload, $timeout, $apiSecret);
     if (isset($initResponse['error'])) { echo json_encode($initResponse); return; }
 
     $slate = $initResponse['result']['slate'] ?? $initResponse['result'] ?? null;
@@ -182,7 +209,7 @@ function handleHttpSend(string $walletHost, int $walletPort, array $params, int 
 
     // Step 3: finalize_tx
     $finalPayload  = ['jsonrpc' => '2.0', 'method' => 'finalize_tx', 'params' => ['slate' => $responseSlate, 'post_tx' => true, 'fluff' => false], 'id' => 2];
-    $finalResponse = forwardToWallet($walletHost, $walletPort, $finalPayload, $timeout);
+    $finalResponse = forwardToWallet($walletHost, $walletPort, $finalPayload, $timeout, $apiSecret);
     echo json_encode($finalResponse);
 }
 
@@ -199,7 +226,7 @@ function validateRequest(array $data): ?array {
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
 function handleRequest(): void {
-    global $WALLET_HOST, $WALLET_PORT, $REQUEST_TIMEOUT;
+    global $WALLET_HOST, $WALLET_PORT, $REQUEST_TIMEOUT, $WALLET_API_SECRET;
 
     $body = file_get_contents('php://input');
     if (empty($body)) {
@@ -222,7 +249,7 @@ function handleRequest(): void {
 
     // Server-side HTTP send (special case)
     if ($method === 'send_http') {
-        handleHttpSend($WALLET_HOST, $WALLET_PORT, $data['params'] ?? [], $REQUEST_TIMEOUT);
+        handleHttpSend($WALLET_HOST, $WALLET_PORT, $data['params'] ?? [], $REQUEST_TIMEOUT, $WALLET_API_SECRET);
         return;
     }
 
@@ -235,7 +262,7 @@ function handleRequest(): void {
     }
 
     $payload  = ['jsonrpc' => '2.0', 'method' => $mappedMethod, 'params' => $data['params'] ?? [], 'id' => $data['id'] ?? 1];
-    $response = forwardToWallet($WALLET_HOST, $WALLET_PORT, $payload, $REQUEST_TIMEOUT);
+    $response = forwardToWallet($WALLET_HOST, $WALLET_PORT, $payload, $REQUEST_TIMEOUT, $WALLET_API_SECRET);
     echo json_encode($response);
 }
 

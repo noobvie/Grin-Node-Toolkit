@@ -62,18 +62,18 @@ NODE_API_PORT_MAINNET=3413
 NODE_API_PORT_TESTNET=13413
 NODE_API_NGINX_CONF_MAINNET="/etc/nginx/sites-available/grin-node-api"
 NODE_API_NGINX_CONF_TESTNET="/etc/nginx/sites-available/grin-node-api-testnet"
-LOG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/log"
+LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/grin_node_services_$(date +%Y%m%d_%H%M%S).log"
 
 # Status page source (repo) and deploy (live web root) paths
-STATUS_PAGE_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/public_html"
+STATUS_PAGE_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04_node_api/public_html"
 STATUS_PAGE_DEPLOY_MAINNET="/var/www/grin-node-api"
 STATUS_PAGE_DEPLOY_TESTNET="/var/www/grin-node-api-testnet"
 
 # REST API — static JSON files written by cron, served by nginx under /rest/
 REST_API_DIR_MAINNET="$STATUS_PAGE_DEPLOY_MAINNET/rest"
 REST_API_DIR_TESTNET="$STATUS_PAGE_DEPLOY_TESTNET/rest"
-REST_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/rest-collector.py"
+REST_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04_node_api/rest-collector.py"
 REST_COLLECTOR_DEST="/opt/grin/grin-api-collector/rest-collector.py"
 REST_CRON_MAINNET="/etc/cron.d/grin-node-api-rest"
 REST_CRON_TESTNET="/etc/cron.d/grin-node-api-rest-testnet"
@@ -83,13 +83,13 @@ REST_CRON_TESTNET="/etc/cron.d/grin-node-api-rest-testnet"
 #   · du on chain_data/ for chain size
 #   · grin-server.toml for archive_mode
 # Writes node.json to the REST dir (grin user has group-write via www-data group).
-NODE_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/node-collector.py"
+NODE_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04_node_api/node-collector.py"
 NODE_COLLECTOR_DEST="/opt/grin/grin-api-collector/node-collector.py"
 NODE_CRON_MAINNET="/etc/cron.d/grin-node-api-node"
 NODE_CRON_TESTNET="/etc/cron.d/grin-node-api-node-testnet"
 
 # Grin instance conf — written by script 01, read here to find actual data dirs.
-CONF_DIR="$SCRIPT_DIR/../conf"
+CONF_DIR="/opt/grin/conf"
 INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"
 
 # ─── Runtime state (set by main when network is selected) ─────────────────────
@@ -131,9 +131,9 @@ show_port_guide() {
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -ne "${BOLD}Type ${GREEN}yes${RESET}${BOLD} to confirm you have read the above and want to proceed [yes/N/0]: ${RESET}"
+    echo -ne "${BOLD}Press ${GREEN}y${RESET}${BOLD} to confirm you have read the above and want to proceed [y/N/0]: ${RESET}"
     read -r _guide_confirm || true
-    if [[ "${_guide_confirm,,}" != "yes" ]]; then
+    if [[ "${_guide_confirm,,}" != "y" ]]; then
         info "Cancelled."
         return 1
     fi
@@ -448,10 +448,18 @@ _enable_node_api_nginx() {
     fi
 
     local _eg_domain; [[ "$network" == "mainnet" ]] && _eg_domain="api.example.com" || _eg_domain="testapi.example.com"
-    echo -ne "Domain for the $network Node API (e.g. $_eg_domain) or 0 to cancel: "
-    read -r domain
-    [[ "$domain" == "0" ]] && return
-    [[ -z "$domain" ]] && warn "No domain entered. Aborting." && return
+    while true; do
+        echo -ne "Domain for the $network Node API (e.g. $_eg_domain) or 0 to cancel: "
+        read -r domain
+        [[ "$domain" == "0" ]] && return
+        [[ -z "$domain" ]] && warn "No domain entered." && continue
+        local _lbl="${domain%%.*}"
+        if [[ "$_lbl" == "fullmain" || "$_lbl" == "prunemain" || "$_lbl" == "prunetest" ]]; then
+            warn "'$_lbl' is reserved by script 02 (Grin chain data server). Choose a different subdomain."
+            continue
+        fi
+        break
+    done
 
     echo -ne "Email for Let's Encrypt SSL certificate (or 0 to cancel): "
     read -r email
@@ -459,6 +467,23 @@ _enable_node_api_nginx() {
     [[ -z "$email" ]] && warn "No email entered. Aborting." && return
 
     log "Node API nginx setup started: network=$network port=$port domain=$domain"
+
+    # If script 01 created a .foreign_api_secret, Grin requires HTTP Basic Auth on its
+    # foreign API port — even for local connections.  Nginx must inject the credential
+    # so the public caller never sees a 401 or a browser auth prompt.
+    # We read the secret here and embed it as a Basic-Auth proxy header; it stays
+    # localhost-only and is never exposed to external callers.
+    local _proxy_auth_header=""
+    local _grin_dir; _grin_dir=$(_lookup_grin_dir "$network")
+    local _foreign_secret_file="$_grin_dir/.foreign_api_secret"
+    if [[ -f "$_foreign_secret_file" ]]; then
+        local _secret; _secret=$(tr -d '[:space:]' < "$_foreign_secret_file" 2>/dev/null || true)
+        if [[ -n "$_secret" ]]; then
+            local _b64; _b64=$(printf '%s' "grin:$_secret" | base64 -w 0 2>/dev/null || printf '%s' "grin:$_secret" | base64)
+            _proxy_auth_header="        proxy_set_header   Authorization \"Basic $_b64\";"
+            info "Foreign API secret found — injecting proxy auth header into nginx config."
+        fi
+    fi
 
     # Remove any legacy stream block left by old versions of this script.
     # If present, nginx -t would fail with "unknown directive stream".
@@ -471,7 +496,7 @@ server {
     listen 80;
     server_name $domain;
 
-    # Public V2 Foreign API — JSON-RPC (no auth required):
+    # Public V2 Foreign API — JSON-RPC (no auth required for callers):
     #   get_tip, get_version, get_block, get_header, get_kernel,
     #   get_outputs, push_transaction
     location /v2/foreign {
@@ -493,6 +518,7 @@ server {
         add_header Access-Control-Allow-Headers "Content-Type" always;
 
         proxy_pass         http://127.0.0.1:$port/v2/foreign;
+${_proxy_auth_header}
         proxy_http_version 1.1;
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
@@ -570,6 +596,8 @@ EOF
     info "Log file    : $LOG_FILE"
     echo ""
     info "Next step   : run option 3 to deploy the live status page at https://$domain/"
+    [[ -n "$_proxy_auth_header" ]] && \
+        warn "Note: if the node is rebuilt via Script 01, re-run option 1 here to refresh the proxy auth credential."
     log "nginx $network node API proxy configured: domain=$domain config=$nginx_conf -> 127.0.0.1:$port/v2/foreign"
     log "Test: curl -s -X POST https://$domain/v2/foreign -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"get_tip\",\"params\":[],\"id\":1}'"
     log "Test: curl -X POST https://$domain/v2/foreign -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"get_version\",\"params\":{},\"id\":1}'"
@@ -629,7 +657,7 @@ disable_testnet_node_api() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STATUS PAGE — deploy web/04/public_html, patch nginx, add rate-limiting
+# STATUS PAGE — deploy web/04_node_api/public_html, patch nginx, add rate-limiting
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _enable_status_page() {
@@ -649,7 +677,7 @@ _enable_status_page() {
 
     if [[ ! -d "$STATUS_PAGE_SRC" ]]; then
         error "Source files not found: $STATUS_PAGE_SRC"
-        error "Ensure web/04/public_html/ exists in the toolkit directory."
+        error "Ensure web/04_node_api/public_html/ exists in the toolkit directory."
         return
     fi
 
@@ -694,7 +722,7 @@ _enable_status_page() {
         echo ""
         info "Open in browser : https://$domain/"
         info "Shows           : height, difficulty, latest block, peers, versions"
-        info "Auto-refresh    : every 10 seconds"
+        info "Auto-refresh    : every 60 seconds"
         info "To update files : run this option again"
         log  "Status page enabled: network=$network domain=$domain deploy_dir=$deploy_dir"
     else
@@ -803,7 +831,7 @@ _enable_rest_api() {
     # 1. Install the Python collector to a system lib path so cron can call it directly.
     if [[ ! -f "$REST_COLLECTOR_SRC" ]]; then
         error "Collector script not found: $REST_COLLECTOR_SRC"
-        error "Ensure web/04/rest-collector.py exists in the toolkit directory."
+        error "Ensure web/04_node_api/rest-collector.py exists in the toolkit directory."
         return
     fi
     mkdir -p "$(dirname "$REST_COLLECTOR_DEST")"
@@ -823,7 +851,18 @@ _enable_rest_api() {
     chmod 775 "$rest_dir"
     info "REST directory ready: $rest_dir"
 
-    # 4. Write the main cron job — www-data queries the foreign API (no auth).
+    # If a .foreign_api_secret exists, www-data must be able to read it so the
+    # rest-collector can authenticate to the Grin foreign API (script 01 always
+    # creates this file and enables Basic Auth on the foreign API port).
+    local _foreign_secret_file="$grin_data_dir/.foreign_api_secret"
+    if [[ -f "$_foreign_secret_file" ]]; then
+        chown root:www-data "$_foreign_secret_file"
+        chmod 640 "$_foreign_secret_file"
+        info "Foreign API secret readable by www-data: $_foreign_secret_file"
+    fi
+
+    # 4. Write the main cron job — www-data queries the foreign API.
+    #    Pass the secret path so rest-collector can inject Basic Auth when needed.
     #    /etc/cron.d/ files are root-owned 644 and must declare SHELL/PATH.
     cat > "$cron_file" << EOF
 # Grin Node Toolkit — REST API updater ($network)
@@ -832,7 +871,7 @@ _enable_rest_api() {
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
-* * * * * www-data python3 $REST_COLLECTOR_DEST $port $rest_dir 2>/dev/null || true
+* * * * * www-data python3 $REST_COLLECTOR_DEST $port $rest_dir $_foreign_secret_file 2>/dev/null || true
 EOF
     chmod 644 "$cron_file"
     chown root:root "$cron_file"
@@ -876,7 +915,7 @@ EOF
 
     # 6. Run initial REST collection now so JSON files exist before nginx reload.
     info "Running initial REST collection..."
-    if sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" 2>/dev/null; then
+    if sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" "$_foreign_secret_file" 2>/dev/null; then
         success "Initial REST data collected."
     else
         warn "Initial REST collection failed (node may not be running yet)."

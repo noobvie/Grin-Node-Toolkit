@@ -96,7 +96,7 @@ DELETE_FILES=""              # "yes" to delete files, "no" to keep
 
 # Script location (used for relative log path)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="$SCRIPT_DIR/../log"
+LOG_DIR="/opt/grin/logs"
 LOG_FILE=""   # Set dynamically in main() once the action is known
 
 # Color codes for output
@@ -380,7 +380,7 @@ check_root() {
 # Menu Functions
 #############################################################################
 
-# 1.5 - Display main menu
+# 2.0 - Display main menu
 show_main_menu() {
     clear
     cat << "EOF"
@@ -410,7 +410,7 @@ EOF
     echo ""
 }
 
-# 1.6 - Get action from menu or parameter
+# 2.1 - Get action from menu or parameter
 get_action() {
     if [[ -n "$ACTION" ]]; then
         case "$ACTION" in
@@ -457,67 +457,45 @@ get_action() {
 # Common Functions (Used by Setup and Add)
 #############################################################################
 
-# 2.0 - Function to check if nginx is installed
-check_nginx() {
-    print_info "Checking for Nginx installation..."
-    if command -v nginx &> /dev/null; then
-        NGINX_VERSION=$(nginx -v 2>&1 | grep -oP '(?<=nginx/)[0-9.]+')
-        print_info "Nginx version $NGINX_VERSION is installed"
-        return 0
-    else
-        print_warn "Nginx is not installed"
-        return 1
-    fi
-}
+# Ensure nginx + certbot are installed. Single prompt if either (or both) are missing.
+# Returns 1 if the user cancels or declines.
+ensure_nginx_certbot() {
+    local need_nginx=false need_certbot=false label
+    command -v nginx   &>/dev/null || need_nginx=true
+    command -v certbot &>/dev/null || need_certbot=true
 
-# 2.1 - Function to install nginx
-install_nginx() {
-    print_section "Installing Nginx"
-    
-    # Detect OS
-    if [[ -f /etc/debian_version ]]; then
-        print_info "Detected Debian/Ubuntu system"
-        apt-get update
-        apt-get install -y nginx
-    elif [[ -f /etc/redhat-release ]]; then
-        print_info "Detected RedHat/CentOS system"
-        yum install -y epel-release
-        yum install -y nginx
-    else
-        print_error "Unsupported operating system"
-        exit 1
-    fi
-    
-    # Enable and start nginx
-    systemctl enable nginx
-    systemctl start nginx
-    print_info "Nginx installed and started successfully"
-}
+    $need_nginx || $need_certbot || return 0   # both present — nothing to do
 
-# 3.0 - Function to check if certbot is installed
-check_certbot() {
-    print_info "Checking for Certbot installation..."
-    if command -v certbot &> /dev/null; then
-        print_info "Certbot is installed"
-        return 0
-    else
-        print_warn "Certbot is not installed"
-        return 1
-    fi
-}
+    $need_nginx && $need_certbot && label="Nginx and Certbot are" \
+        || { $need_nginx && label="Nginx is" || label="Certbot is"; }
 
-# 3.1 - Function to install certbot
-install_certbot() {
-    print_section "Installing Certbot"
-    
-    if [[ -f /etc/debian_version ]]; then
-        apt-get update
-        apt-get install -y certbot python3-certbot-nginx
-    elif [[ -f /etc/redhat-release ]]; then
-        yum install -y certbot python3-certbot-nginx
+    local _choice
+    read -r -p "${label} not installed. Install now? (Y/n/0) [default: Y, 0 = cancel]: " _choice
+    [[ "$_choice" == "0" ]]        && return 1
+    [[ "${_choice,,}" =~ ^n ]]     && print_error "${label} required. Exiting." && return 1
+
+    if $need_nginx; then
+        print_section "Installing Nginx"
+        if [[ -f /etc/debian_version ]]; then
+            apt-get update && apt-get install -y nginx
+        elif [[ -f /etc/redhat-release ]]; then
+            yum install -y epel-release nginx
+        else
+            print_error "Unsupported OS"; return 1
+        fi
+        systemctl enable nginx && systemctl start nginx
+        print_info "Nginx installed and started successfully"
     fi
-    
-    print_info "Certbot installed successfully"
+
+    if $need_certbot; then
+        print_section "Installing Certbot"
+        if [[ -f /etc/debian_version ]]; then
+            apt-get update && apt-get install -y certbot python3-certbot-nginx
+        elif [[ -f /etc/redhat-release ]]; then
+            yum install -y certbot python3-certbot-nginx
+        fi
+        print_info "Certbot installed successfully"
+    fi
 }
 
 # 4.0 - Function to show help
@@ -913,7 +891,7 @@ get_files_directory() {
                     read -r -p "  Clean up ${FILES_DIR} now? (Y/n/0) [default: Y, 0 = cancel]: " _clean
                     [[ "$_clean" == "0" ]] && return 1
                     if [[ ! "${_clean,,}" =~ ^n ]]; then
-                        find "$FILES_DIR" -mindepth 1 ! -name '.htaccess' -delete 2>/dev/null || true
+                        find "$FILES_DIR" -mindepth 1 -delete 2>/dev/null || true
                         print_info "Cleaned up ${FILES_DIR}"
                         _free_kb=$(df -k "$FILES_DIR" 2>/dev/null | awk 'NR==2{print $4}') || _free_kb=0
                         _free_gb=$(awk "BEGIN{printf \"%.1f\", ${_free_kb}/1048576}")
@@ -1013,7 +991,7 @@ get_files_directory() {
     print_info "Files directory: $FILES_DIR"
 }
 
-# 5.3 - Get bandwidth limiting preferences
+# 5.5 - Get bandwidth limiting preferences
 get_bandwidth_settings() {
     if [[ -z "$ENABLE_BANDWIDTH_LIMIT" ]]; then
         echo ""
@@ -1064,14 +1042,6 @@ create_files_directory() {
     chown -R www-data:www-data "$FILES_DIR"
     chmod 755 "$FILES_DIR"
 
-    # Create .htaccess file for directory indexing
-    cat > "$FILES_DIR/.htaccess" << 'EOF'
-Options +Indexes
-EOF
-
-    chown www-data:www-data "$FILES_DIR/.htaccess"
-    chmod 644 "$FILES_DIR/.htaccess"
-    print_info "Created .htaccess file with directory indexing enabled"
 }
 
 # 7.0 - Function to create initial nginx config (without SSL)
@@ -1957,27 +1927,8 @@ run_setup_grin_network() {
     print_section "$section_title"
     DOMAIN=""; EMAIL=""; FILES_DIR=""
 
-    # Check and install nginx if needed
-    if ! check_nginx; then
-        local nginx_choice
-        while true; do
-            read -r -p "Nginx is not installed. Install it now? (Y/n/0) [default: Y, 0 = cancel]: " nginx_choice
-            [[ "$nginx_choice" == "0" ]] && return 0
-            [[ "${nginx_choice,,}" =~ ^n ]] && print_error "Nginx is required. Exiting." && return 0
-            install_nginx && break
-        done
-    fi
-
-    # Check and install certbot if needed
-    if ! check_certbot; then
-        local certbot_choice
-        while true; do
-            read -r -p "Certbot is not installed. Install it now? (Y/n/0) [default: Y, 0 = cancel]: " certbot_choice
-            [[ "$certbot_choice" == "0" ]] && return 0
-            [[ "${certbot_choice,,}" =~ ^n ]] && print_error "Certbot is required for SSL. Exiting." && return 0
-            install_certbot && break
-        done
-    fi
+    # Ensure nginx + certbot are installed (single combined prompt if either is missing)
+    ensure_nginx_certbot || return 0
 
     # Check if the Grin node for this network is running
     local _node_port; [[ "$network" == "mainnet" ]] && _node_port=3414 || _node_port=13414
@@ -2060,27 +2011,8 @@ run_setup_grin_testnet()  { run_setup_grin_network "testnet"; }
 run_setup_custom() {
     print_section "Add Custom Domain"
 
-    # Check and install nginx if needed
-    if ! check_nginx; then
-        local nginx_choice
-        while true; do
-            read -r -p "Nginx is not installed. Install it now? (Y/n/0) [default: Y, 0 = cancel]: " nginx_choice
-            [[ "$nginx_choice" == "0" ]] && return 0
-            [[ "${nginx_choice,,}" =~ ^n ]] && print_error "Nginx is required. Exiting." && return 0
-            install_nginx && break
-        done
-    fi
-
-    # Check and install certbot if needed
-    if ! check_certbot; then
-        local certbot_choice
-        while true; do
-            read -r -p "Certbot is not installed. Install it now? (Y/n/0) [default: Y, 0 = cancel]: " certbot_choice
-            [[ "$certbot_choice" == "0" ]] && return 0
-            [[ "${certbot_choice,,}" =~ ^n ]] && print_error "Certbot is required for SSL. Exiting." && return 0
-            install_certbot && break
-        done
-    fi
+    # Ensure nginx + certbot are installed (single combined prompt if either is missing)
+    ensure_nginx_certbot || return 0
 
     # Get required information
     print_section "Configuration"

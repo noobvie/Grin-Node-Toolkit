@@ -31,7 +31,7 @@ STRATUM_PORT_MAINNET=3416
 STRATUM_PORT_TESTNET=13416
 NODE_API_PORT_MAINNET=3413
 NODE_API_PORT_TESTNET=13413
-LOG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/log"
+LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/grin_mining_$(date +%Y%m%d_%H%M%S).log"
 
 # ─── Global state ─────────────────────────────────────────────────────────────

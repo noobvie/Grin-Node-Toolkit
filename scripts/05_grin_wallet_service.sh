@@ -19,7 +19,7 @@
 #  ─── Web Interface ───────────────────────────────────────────────────────────
 #   w) Web Wallet Interface             (submenu — 05 W)
 #      1) Install dependencies          (nginx, php, certbot, htpasswd, qrencode)
-#      2) Deploy files                  (copy web/05/ → deploy directory)
+#      2) Deploy files                  (copy web/05_wallet/ → deploy directory)
 #      3) Configure nginx               (vhost + rate-limit + security headers)
 #      4) Setup SSL                     (Let's Encrypt / certbot)
 #      5) Setup Basic Auth              (set / change password)
@@ -33,7 +33,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLKIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-CONF_DIR="$TOOLKIT_ROOT/conf"
+CONF_DIR="/opt/grin/conf"
 WALLETS_CONF="$CONF_DIR/grin_wallets_location.conf"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
@@ -55,17 +55,17 @@ WALLET_BIN_TESTNET="$WALLET_BIN_DIR_TESTNET/grin-wallet"
 GRIN_WALLET_TOML_MAINNET="$WALLET_BIN_DIR_MAINNET/grin-wallet.toml"
 GRIN_WALLET_TOML_TESTNET="$WALLET_BIN_DIR_TESTNET/grin-wallet.toml"
 
-LOG_DIR="$TOOLKIT_ROOT/log"
+LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/grin_wallet_service_$(date +%Y%m%d_%H%M%S).log"
 
 WALLET_NGINX_CONF_MAINNET="/etc/nginx/sites-available/grin-wallet-mainnet"
 WALLET_NGINX_CONF_TESTNET="/etc/nginx/sites-available/grin-wallet-testnet"
 
 # Web wallet
-WEB_WALLET_SRC_DIR="$TOOLKIT_ROOT/web/05/public_html"
+WEB_WALLET_SRC_DIR="$TOOLKIT_ROOT/web/05_wallet/public_html"
 WEB_WALLET_NGINX_CONF="/etc/nginx/sites-available/grin-wallet-web"
 WEB_WALLET_DEPLOY_DIR_DEFAULT="/var/www/grin-wallet"
-WW_CONF_FILE="$TOOLKIT_ROOT/conf/grin_web_wallet.conf"
+WW_CONF_FILE="/opt/grin/conf/grin_web_wallet.conf"
 
 # ─── Runtime state (set by detect_and_select_network) ─────────────────────────
 NETWORK=""
@@ -85,7 +85,7 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 die()     { error "$*"; echo ""; echo "Press Enter to continue..."; read -r || true; return 1; }
 
 # -----------------------------------------------------------------------------
-# Save wallet location to conf/grin_wallets_location.conf
+# Save wallet location to /opt/grin/conf/grin_wallets_location.conf
 # Requires: NETWORK and WALLET_DIR set (by detect_and_select_network)
 # -----------------------------------------------------------------------------
 save_wallet_location() {
@@ -121,7 +121,7 @@ _harden_wallet_dir() {
     if id grin &>/dev/null; then
         chown -R grin:grin "$dir" 2>/dev/null || true
     else
-        warn "User 'grin' not found — skipping chown. Run Script 08 → option 10 to create it."
+        warn "User 'grin' not found — skipping chown. Re-run Script 01 to create it."
     fi
     chmod 700 "$dir" 2>/dev/null || true
     [[ -d "$data_dir" ]] && chmod 700 "$data_dir" 2>/dev/null || true
@@ -463,7 +463,7 @@ start_wallet() {
         tmux new-session -d -s "$session" -c "$WALLET_DIR" \
             "su -s /bin/bash -c \"'$WALLET_BIN' --top_level_dir '$WALLET_DIR' -p '$wallet_pass' listen\" grin; echo ''; echo 'Listener exited. Press Enter to close.'; read"
     else
-        warn "User 'grin' not found — running as current user. Run Script 08 → option 10."
+        warn "User 'grin' not found — running as current user. Re-run Script 01 to create it."
         tmux new-session -d -s "$session" -c "$WALLET_DIR" \
             "bash -c \"'$WALLET_BIN' --top_level_dir '$WALLET_DIR' -p '$wallet_pass' listen; echo ''; echo 'Listener exited. Press Enter to close.'; read\""
     fi
@@ -639,17 +639,26 @@ ww_deploy_files() {
 
     if [[ ! -d "$WEB_WALLET_SRC_DIR" ]]; then
         die "Source not found: $WEB_WALLET_SRC_DIR"
-        warn "Ensure the Grin Node Toolkit is complete (web/05/public_html/)."; return
+        warn "Ensure the Grin Node Toolkit is complete (web/05_wallet/public_html/)."; return
     fi
 
-    echo -ne "Deploy directory [${WW_DEPLOY_DIR}]: "
-    read -r input_dir || true
-    [[ -n "$input_dir" ]] && WW_DEPLOY_DIR="$input_dir"
+    while true; do
+        echo -ne "Deploy directory [${WW_DEPLOY_DIR}]: "
+        read -r input_dir || true
+        [[ -n "$input_dir" ]] && WW_DEPLOY_DIR="$input_dir"
+        local _base; _base=$(basename "${WW_DEPLOY_DIR%/}")
+        if [[ "$_base" == "fullmain" || "$_base" == "prunemain" || "$_base" == "prunetest" ]]; then
+            warn "'/var/www/$_base' is reserved by script 02 (Grin chain data server). Choose a different directory."
+            WW_DEPLOY_DIR=""
+            continue
+        fi
+        break
+    done
     echo ""
 
     if [[ -d "$WW_DEPLOY_DIR" ]]; then
         warn "Directory already exists: $WW_DEPLOY_DIR"
-        echo -ne "Update files? (existing config.json will be preserved) [Y/n/0]: "
+        echo -ne "Update files? [Y/n/0]: "
         read -r overwrite || true
         [[ "$overwrite" == "0" ]] && return
         [[ "${overwrite,,}" == "n" ]] && info "Cancelled." && return
@@ -658,31 +667,44 @@ ww_deploy_files() {
     info "Deploying from $WEB_WALLET_SRC_DIR → $WW_DEPLOY_DIR ..."
     mkdir -p "$WW_DEPLOY_DIR"
 
-    # Preserve existing config.json if present
-    local tmp_config=""
-    if [[ -f "$WW_DEPLOY_DIR/api/config.json" ]]; then
-        tmp_config=$(cat "$WW_DEPLOY_DIR/api/config.json")
-        info "Preserving existing api/config.json"
-    fi
-
     cp -r "$WEB_WALLET_SRC_DIR"/. "$WW_DEPLOY_DIR/"
-
-    if [[ -n "$tmp_config" ]]; then
-        echo "$tmp_config" > "$WW_DEPLOY_DIR/api/config.json"
-    else
-        # Write default server-side config
-        cat > "$WW_DEPLOY_DIR/api/config.json" << JSON
-{
-    "walletHost": "127.0.0.1",
-    "walletPort": 3415
-}
-JSON
-    fi
+    # Remove any stale config.json that may have been deployed from an older version
+    rm -f "$WW_DEPLOY_DIR/api/config.json"
 
     chown -R www-data:www-data "$WW_DEPLOY_DIR" 2>/dev/null || \
         warn "Could not chown to www-data — set permissions manually if needed."
     chmod -R 755 "$WW_DEPLOY_DIR"
-    chmod 600 "$WW_DEPLOY_DIR/api/config.json"
+
+    # ── Write API config outside the webroot ──────────────────────────────────
+    # /opt/grin/conf/grin_web_wallet_api.json holds wallet credentials.
+    # It must NOT be inside the webroot — proxy.php reads it from this fixed path.
+    local api_conf="/opt/grin/conf/grin_web_wallet_api.json"
+    local wallet_port=3415
+    [[ "$NETWORK" == "testnet" ]] && wallet_port=13415
+
+    # Read owner API secret from wallet_data if available
+    local owner_secret=""
+    local secret_file="$WALLET_DIR/wallet_data/.owner_api_secret"
+    if [[ -f "$secret_file" ]]; then
+        owner_secret=$(cat "$secret_file" 2>/dev/null | tr -d '[:space:]' || true)
+        info "Owner API secret loaded from $secret_file"
+    else
+        warn "Owner API secret not found at $secret_file"
+        warn "Start the wallet listener (option c) first, then re-run Deploy."
+    fi
+
+    mkdir -p /opt/grin/conf
+    cat > "$api_conf" << JSON
+{
+    "walletHost": "127.0.0.1",
+    "walletPort": $wallet_port,
+    "ownerApiSecret": "$owner_secret"
+}
+JSON
+    chown root:www-data "$api_conf" 2>/dev/null || \
+        chown root "$api_conf" 2>/dev/null || true
+    chmod 640 "$api_conf"
+    info "API config written to $api_conf (outside webroot, chmod 640)"
 
     ww_save_config
     success "Files deployed to $WW_DEPLOY_DIR"
@@ -706,10 +728,19 @@ ww_configure_nginx() {
         die "Files not deployed yet — run step 2 first."; return
     fi
 
-    echo -ne "Domain name (e.g. wallet.mynode.example.com) [${WW_DOMAIN:-}]: "
-    read -r input_domain || true
-    [[ -n "$input_domain" ]] && WW_DOMAIN="$input_domain"
-    [[ -z "$WW_DOMAIN" ]] && warn "No domain entered." && return
+    while true; do
+        echo -ne "Domain name (e.g. wallet.mynode.example.com) [${WW_DOMAIN:-}]: "
+        read -r input_domain || true
+        [[ -n "$input_domain" ]] && WW_DOMAIN="$input_domain"
+        [[ -z "$WW_DOMAIN" ]] && warn "No domain entered." && continue
+        local _lbl="${WW_DOMAIN%%.*}"
+        if [[ "$_lbl" == "fullmain" || "$_lbl" == "prunemain" || "$_lbl" == "prunetest" ]]; then
+            warn "'$_lbl' is reserved by script 02 (Grin chain data server). Choose a different subdomain."
+            WW_DOMAIN=""
+            continue
+        fi
+        break
+    done
 
     # Detect PHP-FPM socket
     if [[ -z "$WW_PHP_FPM_SOCK" ]]; then
@@ -737,10 +768,13 @@ ww_configure_nginx() {
     [[ "${confirm,,}" == "n" ]] && info "Cancelled." && return
 
     # Rate-limit snippet
-    info "Writing rate-limit zone ..."
+    info "Writing rate-limit zones ..."
     mkdir -p /etc/nginx/conf.d
     cat > /etc/nginx/conf.d/grin-wallet-ratelimit.conf << 'RATELIMIT'
-# Grin Web Wallet API rate limit — 10 req/min per IP
+# Grin Web Wallet API rate limits
+# proxy.php (all wallet ops incl. financial) — 3 req/min per IP
+limit_req_zone $binary_remote_addr zone=grin_wallet_tx:10m  rate=3r/m;
+# csrf.php, qr.php — 10 req/min per IP
 limit_req_zone $binary_remote_addr zone=grin_wallet_api:10m rate=10r/m;
 RATELIMIT
 
@@ -776,10 +810,18 @@ server {
     add_header X-Content-Type-Options    "nosniff"                                      always;
     add_header X-Frame-Options           "DENY"                                         always;
     add_header Referrer-Policy           "no-referrer"                                  always;
-    add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self';" always;
+    add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self';" always;
 
     access_log /var/log/nginx/grin-wallet-access.log;
     error_log  /var/log/nginx/grin-wallet-error.log;
+
+    location = /api/proxy.php {
+        limit_req zone=grin_wallet_tx burst=2 nodelay;
+        try_files \$uri =404;
+        fastcgi_pass   $WW_PHP_FPM_SOCK;
+        fastcgi_param  SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include        fastcgi_params;
+    }
 
     location ~ ^/api/.*\\.php\$ {
         limit_req zone=grin_wallet_api burst=5 nodelay;
@@ -796,9 +838,8 @@ server {
 
     location / { try_files \$uri \$uri/ /index.html; }
 
-    location = /api/config.json { deny all; }
-    location ~ /\\.              { deny all; }
-    location ~ ~\$               { deny all; }
+    location ~ /\\.  { deny all; }
+    location ~ ~\$   { deny all; }
 }
 NGINX_CONF
 
@@ -1091,7 +1132,7 @@ web_wallet_menu() {
 
         echo -e "${DIM}  ─── First-time setup (run in order) ─────────────${RESET}"
         echo -e "  ${GREEN}1${RESET}) Install dependencies    ${DIM}(nginx, php, certbot, htpasswd, qrencode)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Deploy files            ${DIM}(copy web/05/ → deploy directory)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Deploy files            ${DIM}(copy web/05_wallet/ → deploy directory)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Configure nginx         ${DIM}(vhost + rate-limit + security headers)${RESET}"
         echo -e "  ${GREEN}4${RESET}) Setup SSL               ${DIM}(Let's Encrypt — DNS must point here first)${RESET}"
         echo -e "  ${GREEN}5${RESET}) Setup Basic Auth        ${DIM}(set / change password)${RESET}"

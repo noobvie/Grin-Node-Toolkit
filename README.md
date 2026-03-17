@@ -283,7 +283,7 @@ A self-hosted network monitoring dashboard with two components that share a sing
 - Persistent submenu: run check, reconfigure hosts, view crontab setup
 - **"Run check now" always starts with the registry scan** — reads `extensions/grinmasternodes.json`, checks every registered host for: HTTP 200 reachability, `.tar.gz` age ≤ 5 days (via `Last-Modified`), and sync-complete status (`check_status_before_download.txt`); stale/down hosts show the owner contact
 - Results logged to `grin_master_nodes_status_<datetime>.log`
-- Then checks all custom hosts from `conf/host_monitor_port.conf` via TCP (`nc`); detects state changes; logs to `grin_nodes_status_<datetime>.log`
+- Then checks all custom hosts from `/opt/grin/conf/host_monitor_port.conf` via TCP (`nc`); detects state changes; logs to `grin_nodes_status_<datetime>.log`
 - Emails on change (or always with `--force`); cron-ready standalone script
 
 **2 · Service & Port Dashboard**
@@ -307,7 +307,7 @@ A self-hosted network monitoring dashboard with two components that share a sing
 - OS & logs: `/tmp`, txhashset zips, Grin node logs, system journal, toolkit logs
 
 **8 · Self-Update**
-- Repo hardcoded to `noobvie/Grin-Node-Toolkit`; override for forks by saving a slug to `conf/github_repo.conf`
+- Repo hardcoded to `noobvie/Grin-Node-Toolkit`; override for forks by saving a slug to `/opt/grin/conf/github_repo.conf`
 - **Branch selector**: choose `main` (stable), `addons` (addon development), `corefeatures` (core development), or type any custom branch name — useful for testing in-progress features before they merge to `main`
 - Downloads tarball from `github.com/REPO/archive/refs/heads/BRANCH.tar.gz`, extracts, and overwrites toolkit files in-place
 - Works whether installed via `git clone` or zip download
@@ -324,10 +324,6 @@ A self-hosted network monitoring dashboard with two components that share a sing
 grin-node-toolkit/
 ├── grin-node-toolkit.sh                  # Main menu entry point
 ├── README.md
-├── conf/                                 # Runtime config (auto-created)
-│   ├── host_monitor_port.conf            # Hosts for option 1 (node monitor)
-│   ├── host_monitor_last_state.conf      # Last-known port status (change detection)
-│   └── github_repo.conf                  # GitHub repo slug for self-update (option 8)
 ├── log/                                  # Per-action logs (auto-created)
 │   ├── nginx-<action>-<datetime>.log
 │   ├── grin_nodes_status_<datetime>.log          # Node monitor results
@@ -348,12 +344,33 @@ grin-node-toolkit/
 │   ├── 081_host_monitor_port.sh          # Remote node port monitor (standalone / cron)
 │   └── 08del_clean_all_grin_things.sh    # Full Grin removal (nuclear cleanup)
 └── web/
-    └── 06/
-        └── stats/                        # Feature 6 static web assets
+    ├── 04_node_api/
+    │   ├── public_html/                  # Feature 4 : Node API status page assets
+    │   ├── rest-collector.py             # REST API JSON collector (deployed to /opt/grin/grin-api-collector/)
+    │   └── node-collector.py             # Node data collector   (deployed to /opt/grin/grin-api-collector/)
+    ├── 05_wallet/
+    │   ├── public_html/                  # Feature 5 : Web wallet UI assets (PHP proxy, JS, CSS)
+    │   └── nginx.conf.template           # nginx vhost template for web wallet
+    └── 06_stats_map/
+        └── stats/                        # Feature 6 : Network stats + peer map assets
             ├── index.html                # Peer Map (Leaflet 2D map)
             ├── stats.html                # Network Stats dashboard (Chart.js)
             └── chart.min.js              # Chart.js bundle (copy before deploy)
 ```
+
+**Runtime config created on first run** (stored outside the toolkit, under `/opt/grin/conf/`):
+
+| File | Purpose |
+|------|---------|
+| `/opt/grin/conf/grin_instances_location.conf` | Node install paths (written by `01`, read by `03`/`04`/`08`) |
+| `/opt/grin/conf/grin_wallets_location.conf` | Wallet install paths (written by `05`, read by `08`) |
+| `/opt/grin/conf/grin_share_nginx.conf` | Nginx share settings (written/read by `03`) |
+| `/opt/grin/conf/grin_share_ssh.conf` | SSH share settings (written/read by `03`) |
+| `/opt/grin/conf/grin_web_wallet.conf` | Web wallet deploy settings (written/read by `05`) |
+| `/opt/grin/conf/host_monitor_port.conf` | Custom hosts for node monitor (`081`) |
+| `/opt/grin/conf/host_monitor_last_state.conf` | Last-known port state for change detection (`081`) |
+| `/opt/grin/conf/mass_deploy.conf` | Fleet server list for mass deployment (`081`) |
+| `/opt/grin/conf/github_repo.conf` | GitHub repo slug override for self-update (optional) |
 
 **Runtime paths created by option 6 install:**
 

@@ -50,11 +50,11 @@
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF_DIR="$SCRIPT_DIR/../conf"
+CONF_DIR="/opt/grin/conf"
 CONF_NGINX="$CONF_DIR/grin_share_nginx.conf"
 CONF_SSH="$CONF_DIR/grin_share_ssh.conf"
 INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"
-LOG_DIR="$SCRIPT_DIR/../log"
+LOG_DIR="/opt/grin/logs"
 SCHED_LOG_FILE="$LOG_DIR/schedule.log"
 CRON_COMMENT_NGINX="# grin-node-toolkit: grin_share_nginx"
 CRON_COMMENT_AUTOSTART_MAIN="# grin-node-toolkit: grin_autostart_mainnet"
@@ -369,6 +369,38 @@ run_nginx_setup() {
         done
     fi
 
+    # ── Cross-check: nginx-configured networks must have a running node ──────
+    local _xcheck_ok=true
+    if [[ -n "$nginx_mainnet_dir" ]]; then
+        local _mn_running=false
+        for _c in "${detected_combos[@]}"; do
+            [[ "$_c" == mainnet:* ]] && _mn_running=true && break
+        done
+        if ! $_mn_running; then
+            echo -e "  ${RED}✗${RESET}  Nginx has a ${BOLD}mainnet${RESET} domain configured but no mainnet node is running."
+            _xcheck_ok=false
+        fi
+    fi
+    if [[ -n "$nginx_prunetest_dir" ]]; then
+        local _tn_running=false
+        for _c in "${detected_combos[@]}"; do
+            [[ "$_c" == testnet:* ]] && _tn_running=true && break
+        done
+        if ! $_tn_running; then
+            echo -e "  ${RED}✗${RESET}  Nginx has a ${BOLD}testnet${RESET} domain configured but no testnet node is running."
+            _xcheck_ok=false
+        fi
+    fi
+    if ! $_xcheck_ok; then
+        echo ""
+        echo -e "  Start the required node(s) first, then re-run option ${BOLD}A${RESET}:"
+        echo -e "    ${CYAN}·${RESET} Use ${BOLD}Script 01${RESET} to start an installed node"
+        echo -e "    ${CYAN}·${RESET} Or manually: ${DIM}cd /opt/grin/node/<type> && ./grin server run${RESET}"
+        echo ""
+        read -rp "  Press Enter to return to main menu: " _
+        return
+    fi
+
     # ── Guard: at least one Grin domain must be configured ───────────────────
     if [[ -z "$nginx_mainnet_dir" && -z "$nginx_prunetest_dir" ]]; then
         echo ""
@@ -448,8 +480,7 @@ run_nginx_setup() {
     echo -e "  Saved to     : ${DIM}$CONF_NGINX${RESET}"
     sched_log "Nginx config updated: SYNC_CHOICE=$SYNC_CHOICE DETECTED_NODE_TYPES=$DETECTED_NODE_TYPES"
     echo ""
-    echo -ne "Press ${BOLD}0${RESET} to return to main menu, or ${BOLD}Enter${RESET} to continue: "
-    read -r _back
+    read -rp "  Press Enter to return to main menu: " _
 }
 
 ################################################################################
@@ -910,12 +941,12 @@ validate_nginx_config() {
 # Nginx pipeline steps
 ################################################################################
 
-# Step 0: wipe output dir (keep .htaccess)
+# Step 0: wipe output dir
 clean_output_directory() {
     log "Step 0: Cleaning output directory: $OUTPUT_DIR"
     mkdir -p "$OUTPUT_DIR"
     cd "$OUTPUT_DIR" || error_exit "Cannot access $OUTPUT_DIR"
-    find . -type f ! -name '.htaccess' -delete
+    find . -type f -delete
     log "Output directory ready"
 }
 
@@ -1379,7 +1410,7 @@ run_ssh_share_for_combo() {
     # Rsync source → remote
     log "Uploading via rsync..."
     rsync -az --progress --delete \
-        --exclude='.htaccess' --exclude='.*' \
+        --exclude='.*' \
         -e "ssh -i $key -p $port" \
         "$src/" "$host:$rdir/"
 

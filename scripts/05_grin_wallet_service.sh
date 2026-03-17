@@ -649,7 +649,7 @@ ww_deploy_files() {
 
     if [[ -d "$WW_DEPLOY_DIR" ]]; then
         warn "Directory already exists: $WW_DEPLOY_DIR"
-        echo -ne "Update files? (existing config.json will be preserved) [Y/n/0]: "
+        echo -ne "Update files? [Y/n/0]: "
         read -r overwrite || true
         [[ "$overwrite" == "0" ]] && return
         [[ "${overwrite,,}" == "n" ]] && info "Cancelled." && return
@@ -658,31 +658,44 @@ ww_deploy_files() {
     info "Deploying from $WEB_WALLET_SRC_DIR → $WW_DEPLOY_DIR ..."
     mkdir -p "$WW_DEPLOY_DIR"
 
-    # Preserve existing config.json if present
-    local tmp_config=""
-    if [[ -f "$WW_DEPLOY_DIR/api/config.json" ]]; then
-        tmp_config=$(cat "$WW_DEPLOY_DIR/api/config.json")
-        info "Preserving existing api/config.json"
-    fi
-
     cp -r "$WEB_WALLET_SRC_DIR"/. "$WW_DEPLOY_DIR/"
-
-    if [[ -n "$tmp_config" ]]; then
-        echo "$tmp_config" > "$WW_DEPLOY_DIR/api/config.json"
-    else
-        # Write default server-side config
-        cat > "$WW_DEPLOY_DIR/api/config.json" << JSON
-{
-    "walletHost": "127.0.0.1",
-    "walletPort": 3415
-}
-JSON
-    fi
+    # Remove any stale config.json that may have been deployed from an older version
+    rm -f "$WW_DEPLOY_DIR/api/config.json"
 
     chown -R www-data:www-data "$WW_DEPLOY_DIR" 2>/dev/null || \
         warn "Could not chown to www-data — set permissions manually if needed."
     chmod -R 755 "$WW_DEPLOY_DIR"
-    chmod 600 "$WW_DEPLOY_DIR/api/config.json"
+
+    # ── Write API config outside the webroot ──────────────────────────────────
+    # /opt/grin/conf/grin_web_wallet_api.json holds wallet credentials.
+    # It must NOT be inside the webroot — proxy.php reads it from this fixed path.
+    local api_conf="/opt/grin/conf/grin_web_wallet_api.json"
+    local wallet_port=3415
+    [[ "$NETWORK" == "testnet" ]] && wallet_port=13415
+
+    # Read owner API secret from wallet_data if available
+    local owner_secret=""
+    local secret_file="$WALLET_DIR/wallet_data/.owner_api_secret"
+    if [[ -f "$secret_file" ]]; then
+        owner_secret=$(cat "$secret_file" 2>/dev/null | tr -d '[:space:]' || true)
+        info "Owner API secret loaded from $secret_file"
+    else
+        warn "Owner API secret not found at $secret_file"
+        warn "Start the wallet listener (option c) first, then re-run Deploy."
+    fi
+
+    mkdir -p /opt/grin/conf
+    cat > "$api_conf" << JSON
+{
+    "walletHost": "127.0.0.1",
+    "walletPort": $wallet_port,
+    "ownerApiSecret": "$owner_secret"
+}
+JSON
+    chown root:www-data "$api_conf" 2>/dev/null || \
+        chown root "$api_conf" 2>/dev/null || true
+    chmod 640 "$api_conf"
+    info "API config written to $api_conf (outside webroot, chmod 640)"
 
     ww_save_config
     success "Files deployed to $WW_DEPLOY_DIR"
@@ -737,10 +750,13 @@ ww_configure_nginx() {
     [[ "${confirm,,}" == "n" ]] && info "Cancelled." && return
 
     # Rate-limit snippet
-    info "Writing rate-limit zone ..."
+    info "Writing rate-limit zones ..."
     mkdir -p /etc/nginx/conf.d
     cat > /etc/nginx/conf.d/grin-wallet-ratelimit.conf << 'RATELIMIT'
-# Grin Web Wallet API rate limit — 10 req/min per IP
+# Grin Web Wallet API rate limits
+# proxy.php (all wallet ops incl. financial) — 3 req/min per IP
+limit_req_zone $binary_remote_addr zone=grin_wallet_tx:10m  rate=3r/m;
+# csrf.php, qr.php — 10 req/min per IP
 limit_req_zone $binary_remote_addr zone=grin_wallet_api:10m rate=10r/m;
 RATELIMIT
 
@@ -776,10 +792,18 @@ server {
     add_header X-Content-Type-Options    "nosniff"                                      always;
     add_header X-Frame-Options           "DENY"                                         always;
     add_header Referrer-Policy           "no-referrer"                                  always;
-    add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self';" always;
+    add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self';" always;
 
     access_log /var/log/nginx/grin-wallet-access.log;
     error_log  /var/log/nginx/grin-wallet-error.log;
+
+    location = /api/proxy.php {
+        limit_req zone=grin_wallet_tx burst=2 nodelay;
+        try_files \$uri =404;
+        fastcgi_pass   $WW_PHP_FPM_SOCK;
+        fastcgi_param  SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include        fastcgi_params;
+    }
 
     location ~ ^/api/.*\\.php\$ {
         limit_req zone=grin_wallet_api burst=5 nodelay;
@@ -796,9 +820,8 @@ server {
 
     location / { try_files \$uri \$uri/ /index.html; }
 
-    location = /api/config.json { deny all; }
-    location ~ /\\.              { deny all; }
-    location ~ ~\$               { deny all; }
+    location ~ /\\.  { deny all; }
+    location ~ ~\$   { deny all; }
 }
 NGINX_CONF
 

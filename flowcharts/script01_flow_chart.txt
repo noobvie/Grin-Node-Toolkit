@@ -14,14 +14,14 @@
           │                         │                          │
   ┌───────▼──────┐         ┌────────▼────────┐       ┌────────▼────────┐
   │ [WARN] both  │         │  free slot:     │       │  free slot:     │
-  │ B/M/T/K/0 ? │         │ B/M/s/1/0       │       │ B/T/s/1/0       │
+  │ B/M/T/K/0 ? │         │ B/M/S/1/0       │       │ B/T/S/1/0       │
   └──────────────┘         └─────────────────┘       └─────────────────┘
    B→update_binary_only     B→update_binary_only       B→update_binary_only
    M→stop_grin_one(3414)    M→stop_grin_one(3414)      T→stop_grin_one(13414)
      _remove_instance_dirs    _remove_instance_dirs       _remove_instance_dirs
      mainnet                  mainnet                     testnet
      exec "$0" ↺              exec "$0" ↺                 exec "$0" ↺
-   T→stop_grin_one(13414)    s→_start_installed_node     s→_start_installed_node
+   T→stop_grin_one(13414)    S→_start_installed_node     S→_start_installed_node
      _remove_instance_dirs     (testnet only) → exit        (mainnet only) → exit
      testnet                  1→RESTRICTED=testnet        1→RESTRICTED=mainnet
      exec "$0" ↺               continue ↓                  continue ↓
@@ -37,12 +37,12 @@
           │         also detects installed-but-not-running      │
           │         nodes (conf file or binary on disk)         │
           │                                                     │
-          │         k → kill all conflicting processes          │
+          │         K → kill all conflicting processes          │
           │             truncate conf → continue build          │
-          │         c → continue with warning only              │
-          │         s → _start_installed_node (all nets)        │
+          │         C → continue with warning only              │
+          │         S → _start_installed_node (all nets)        │
           │             → exit 0                                │
-          │         n/0 → abort                                 │
+          │         N/0 → abort                                 │
           │         Enter → recheck                             │
           └─────────────────────────┴──────────────────────────┘
                                     │
@@ -219,8 +219,8 @@ B (binary update) — completely bypasses steps 2–14. Reads conf → downloads
 
 s (start installed) — available from all Step 1 branches:
   • Both nodes stopped (stale/orphan check): starts all installed nodes.
-  • Only mainnet running: starts installed testnet node only (safe — won't touch running mainnet tmux).
-  • Only testnet running: starts installed mainnet node only (safe — won't touch running testnet tmux).
+  • Only mainnet running: S starts installed testnet node only (safe — won't touch running mainnet tmux).
+  • Only testnet running: S starts installed mainnet node only (safe — won't touch running testnet tmux).
   _start_installed_node accepts optional network filter ("mainnet"/"testnet") to target only that network.
 
 M / T (kill one & rebuild) — stop_grin_one kills process + tmux (conf entries left intact) →

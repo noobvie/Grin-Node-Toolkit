@@ -587,11 +587,11 @@ check_grin_running() {
         while true; do
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
             echo -e "  ${RED}M${RESET} — kill mainnet  & rebuild mainnet"
-            echo -e "  ${CYAN}s${RESET} — start installed testnet node  (no rebuild)"
+            echo -e "  ${CYAN}S${RESET} — start installed testnet node  (no rebuild)"
             echo -e "  ${GREEN}1${RESET} — install testnet alongside mainnet  ${DIM}(default)${RESET}"
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[B/M/s/1/0, Enter = 1]: ${RESET}"
+            echo -ne "${DIM}[B/M/S/1/0, Enter = 1]: ${RESET}"
             read -r _main_choice || true
             case "${_main_choice:-1}" in
                 [Bb])
@@ -620,7 +620,7 @@ check_grin_running() {
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose B, M, s, 1, or 0."
+                    warn "Invalid input — choose B, M, S, 1, or 0."
                     echo ""
                     ;;
             esac
@@ -637,11 +637,11 @@ check_grin_running() {
         while true; do
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
             echo -e "  ${RED}T${RESET} — kill testnet  & rebuild testnet"
-            echo -e "  ${CYAN}s${RESET} — start installed mainnet node  (no rebuild)"
+            echo -e "  ${CYAN}S${RESET} — start installed mainnet node  (no rebuild)"
             echo -e "  ${GREEN}1${RESET} — install mainnet alongside testnet  ${DIM}(default)${RESET}"
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[B/T/s/1/0, Enter = 1]: ${RESET}"
+            echo -ne "${DIM}[B/T/S/1/0, Enter = 1]: ${RESET}"
             read -r _test_choice || true
             case "${_test_choice:-1}" in
                 [Bb])
@@ -670,7 +670,7 @@ check_grin_running() {
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose B, T, s, 1, or 0."
+                    warn "Invalid input — choose B, T, S, 1, or 0."
                     echo ""
                     ;;
             esac
@@ -718,14 +718,14 @@ check_grin_running() {
 
         if [[ $found -eq 1 ]]; then
             echo ""
-            echo -e "  ${GREEN}k${RESET}) Kill all conflicting processes and continue"
-            echo -e "  ${YELLOW}c${RESET}) Continue anyway with warning only (if processes are unrelated to Grin)"
-            echo -e "  ${CYAN}s${RESET}) Start installed node (no rebuild)"
-            echo -e "  ${RED}n${RESET}) Abort  (resolve manually)"
+            echo -e "  ${GREEN}K${RESET}) Kill all conflicting processes and continue"
+            echo -e "  ${YELLOW}C${RESET}) Continue anyway with warning only (if processes are unrelated to Grin)"
+            echo -e "  ${CYAN}S${RESET}) Start installed node (no rebuild)"
+            echo -e "  ${RED}N${RESET}) Abort  (resolve manually)"
             echo -e "  ${DIM}0${RESET}) Return to main menu"
             echo -e "  ${DIM}Enter${RESET}) Recheck"
             echo ""
-            echo -ne "${BOLD}${RED}Choose [k/c/s/n/0]: ${RESET}"
+            echo -ne "${BOLD}${RED}Choose [K/C/S/N/0]: ${RESET}"
             read -r confirm || true
             case "${confirm,,}" in
                 k) stop_grin_gracefully

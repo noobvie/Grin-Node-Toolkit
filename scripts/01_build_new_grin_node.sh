@@ -283,19 +283,29 @@ _remove_instance_dirs() {
 
     if [[ "$_scope" == "mainnet" || "$_scope" == "all" ]]; then
         for _var in PRUNEMAIN_GRIN_DIR FULLMAIN_GRIN_DIR; do
-            _d=$(echo "$_conf_content" | grep "^${_var}=" | cut -d'"' -f2)
+            _d=$(echo "$_conf_content" | grep "^${_var}=" 2>/dev/null | cut -d'"' -f2 || true)
             [[ -n "$_d" && -d "$_d" ]] && _dirs+=("$_d")
         done
     fi
     if [[ "$_scope" == "testnet" || "$_scope" == "all" ]]; then
-        _d=$(echo "$_conf_content" | grep "^PRUNETEST_GRIN_DIR=" | cut -d'"' -f2)
+        _d=$(echo "$_conf_content" | grep "^PRUNETEST_GRIN_DIR=" 2>/dev/null | cut -d'"' -f2 || true)
         [[ -n "$_d" && -d "$_d" ]] && _dirs+=("$_d")
     fi
 
+    [[ ${#_dirs[@]} -eq 0 ]] && return 0
     for _d in "${_dirs[@]}"; do
         warn "Removing node directory: $_d"
         rm -rf "$_d" && success "Removed: $_d" || warn "Failed to remove: $_d"
     done
+
+    # Clear conf entries only after directories are deleted
+    if [[ -f "$INSTANCES_CONF" ]]; then
+        [[ "$_scope" == "mainnet" || "$_scope" == "all" ]] && \
+            sed -i '/^PRUNEMAIN_\|^FULLMAIN_/d' "$INSTANCES_CONF"
+        [[ "$_scope" == "testnet" || "$_scope" == "all" ]] && \
+            sed -i '/^PRUNETEST_/d' "$INSTANCES_CONF"
+        log "Conf entries cleared for scope: $_scope"
+    fi
 }
 
 # =============================================================================
@@ -328,24 +338,21 @@ stop_grin_one() {
         kill -KILL "$pid" 2>/dev/null || true; sleep 2
     fi
 
-    # Kill the tmux session and clear this instance's conf entries so a rebuild
-    # registers cleanly via save_instance_location
+    # Kill the tmux session — conf entries are left intact so _remove_instance_dirs
+    # can read them to find the directory path after this function returns.
     if [[ -f "$INSTANCES_CONF" ]]; then
         local grin_dir=""
         # shellcheck source=/dev/null
         source "$INSTANCES_CONF" 2>/dev/null || true
         if [[ "$target_port" == "3414" ]]; then
             grin_dir="${PRUNEMAIN_GRIN_DIR:-${FULLMAIN_GRIN_DIR:-}}"
-            sed -i '/^PRUNEMAIN_\|^FULLMAIN_/d' "$INSTANCES_CONF"
         else
             grin_dir="${PRUNETEST_GRIN_DIR:-}"
-            sed -i '/^PRUNETEST_/d' "$INSTANCES_CONF"
         fi
         if [[ -n "$grin_dir" ]]; then
             local sess; sess="$(_grin_session_name "$grin_dir")"
             tmux kill-session -t "$sess" 2>/dev/null && info "Tmux session '$sess' closed." || true
         fi
-        log "Conf entries cleared for port $target_port instance."
     fi
 
     success "Grin on port $target_port stopped."
@@ -907,7 +914,6 @@ select_network() {
                     warn "Stopping ${running_network} to rebuild with different mode..."
                     stop_grin_gracefully
                     _remove_instance_dirs mainnet
-                    [[ -f "$INSTANCES_CONF" ]] && { sed -i '/^PRUNEMAIN_\|^FULLMAIN_/d' "$INSTANCES_CONF"; log "Conf entries cleared (mainnet mode-switch rebuild)."; }
                     GRIN_SKIP_DISK_CHECK=1
                     NETWORK_TYPE="mainnet"
                     RESTRICTED_NETWORK=""

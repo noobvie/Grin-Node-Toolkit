@@ -2022,11 +2022,28 @@ start_grin_tmux() {
 
     # ── Boot/duplication guard ────────────────────────────────────────────────
     # If a grin process already owns this node directory (booting or running but
-    # port not yet bound), skip the launch to prevent a grin.lock conflict.
+    # port not yet bound), check whether it has a live tmux session.
+    #   • Live process  + live tmux session → truly running, skip to avoid grin.lock conflict.
+    #   • Live process  + NO  tmux session  → orphaned/stale (tmux was killed while grin kept
+    #     running, re-parented to PID 1).  Kill the stale process and proceed with a fresh start.
     if _grin_proc_for_dir "$GRIN_DIR"; then
-        warn "Grin is already starting or running in $GRIN_DIR — skipping duplicate launch."
-        info "Wait for the node to finish booting, then re-run if needed."
-        return 0
+        if tmux has-session -t "$session" 2>/dev/null; then
+            warn "Grin is already starting or running in $GRIN_DIR — skipping duplicate launch."
+            info "Wait for the node to finish booting, then re-run if needed."
+            return 0
+        else
+            warn "Orphaned Grin process detected in $GRIN_DIR (no tmux session). Killing stale process..."
+            while IFS= read -r _stale_pid; do
+                local _stale_cwd
+                _stale_cwd=$(readlink "/proc/$_stale_pid/cwd" 2>/dev/null) || continue
+                if [[ "$_stale_cwd" == "$GRIN_DIR" ]]; then
+                    info "  Killing PID $_stale_pid (cwd=$_stale_cwd)"
+                    kill -KILL "$_stale_pid" 2>/dev/null || true
+                fi
+            done < <(pgrep -f 'grin server run' 2>/dev/null || true)
+            sleep 1
+            info "Stale process cleared — proceeding with fresh start."
+        fi
     fi
 
     if tmux has-session -t "$session" 2>/dev/null; then

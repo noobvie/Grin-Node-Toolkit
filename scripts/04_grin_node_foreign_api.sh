@@ -468,6 +468,23 @@ _enable_node_api_nginx() {
 
     log "Node API nginx setup started: network=$network port=$port domain=$domain"
 
+    # If script 01 created a .foreign_api_secret, Grin requires HTTP Basic Auth on its
+    # foreign API port — even for local connections.  Nginx must inject the credential
+    # so the public caller never sees a 401 or a browser auth prompt.
+    # We read the secret here and embed it as a Basic-Auth proxy header; it stays
+    # localhost-only and is never exposed to external callers.
+    local _proxy_auth_header=""
+    local _grin_dir; _grin_dir=$(_lookup_grin_dir "$network")
+    local _foreign_secret_file="$_grin_dir/.foreign_api_secret"
+    if [[ -f "$_foreign_secret_file" ]]; then
+        local _secret; _secret=$(tr -d '[:space:]' < "$_foreign_secret_file" 2>/dev/null || true)
+        if [[ -n "$_secret" ]]; then
+            local _b64; _b64=$(printf '%s' "grin:$_secret" | base64 -w 0 2>/dev/null || printf '%s' "grin:$_secret" | base64)
+            _proxy_auth_header="        proxy_set_header   Authorization \"Basic $_b64\";"
+            info "Foreign API secret found — injecting proxy auth header into nginx config."
+        fi
+    fi
+
     # Remove any legacy stream block left by old versions of this script.
     # If present, nginx -t would fail with "unknown directive stream".
     _remove_legacy_stream_config
@@ -479,7 +496,7 @@ server {
     listen 80;
     server_name $domain;
 
-    # Public V2 Foreign API — JSON-RPC (no auth required):
+    # Public V2 Foreign API — JSON-RPC (no auth required for callers):
     #   get_tip, get_version, get_block, get_header, get_kernel,
     #   get_outputs, push_transaction
     location /v2/foreign {
@@ -501,6 +518,7 @@ server {
         add_header Access-Control-Allow-Headers "Content-Type" always;
 
         proxy_pass         http://127.0.0.1:$port/v2/foreign;
+${_proxy_auth_header}
         proxy_http_version 1.1;
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
@@ -578,6 +596,8 @@ EOF
     info "Log file    : $LOG_FILE"
     echo ""
     info "Next step   : run option 3 to deploy the live status page at https://$domain/"
+    [[ -n "$_proxy_auth_header" ]] && \
+        warn "Note: if the node is rebuilt via Script 01, re-run option 1 here to refresh the proxy auth credential."
     log "nginx $network node API proxy configured: domain=$domain config=$nginx_conf -> 127.0.0.1:$port/v2/foreign"
     log "Test: curl -s -X POST https://$domain/v2/foreign -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"get_tip\",\"params\":[],\"id\":1}'"
     log "Test: curl -X POST https://$domain/v2/foreign -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"get_version\",\"params\":{},\"id\":1}'"

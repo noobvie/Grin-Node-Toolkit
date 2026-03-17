@@ -817,7 +817,7 @@ _lookup_grin_dir() {
         source "$INSTANCES_CONF" 2>/dev/null
         for key in "${candidates[@]}"; do
             local varname="${key}_GRIN_DIR"
-            local grin_dir="${!varname}"
+            local grin_dir="${!varname:-}"
             [[ -n "$grin_dir" && -d "$grin_dir" ]] && echo "$grin_dir" && return 0
         done
         warn "_lookup_grin_dir: $INSTANCES_CONF exists but has no valid $network entry." >&2

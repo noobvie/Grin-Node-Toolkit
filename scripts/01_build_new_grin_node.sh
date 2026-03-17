@@ -29,7 +29,7 @@
 #   /opt/grin/node/mainnet-full   — full archive, mainnet  (default)
 #   /opt/grin/node/testnet-prune  — pruned,       testnet  (default)
 #   The chosen path (default or custom) is saved to:
-#     conf/grin_instances_location.conf  (used by other toolkit scripts)
+#     /opt/grin/conf/grin_instances_location.conf  (used by other toolkit scripts)
 #
 # SETUP PIPELINE  (up to 14 steps; Steps 10–12 replaced by a single stream step
 #                  when on-the-fly extraction is chosen at Step 9)
@@ -162,7 +162,7 @@ SCRIPT_START_TIME=$(date +%s)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/../log"
 LOG_FILE="$LOG_DIR/01_build_new_grin_node_$(date +%Y%m%d_%H%M%S).log"
-CONF_DIR="$SCRIPT_DIR/../conf"
+CONF_DIR="/opt/grin/conf"
 INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"
 GRIN_GITHUB_API="https://api.github.com/repos/mimblewimble/grin/releases/latest"
 

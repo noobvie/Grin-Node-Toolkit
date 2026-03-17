@@ -66,14 +66,14 @@ LOG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/log"
 LOG_FILE="$LOG_DIR/grin_node_services_$(date +%Y%m%d_%H%M%S).log"
 
 # Status page source (repo) and deploy (live web root) paths
-STATUS_PAGE_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/public_html"
+STATUS_PAGE_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04_node_api/public_html"
 STATUS_PAGE_DEPLOY_MAINNET="/var/www/grin-node-api"
 STATUS_PAGE_DEPLOY_TESTNET="/var/www/grin-node-api-testnet"
 
 # REST API — static JSON files written by cron, served by nginx under /rest/
 REST_API_DIR_MAINNET="$STATUS_PAGE_DEPLOY_MAINNET/rest"
 REST_API_DIR_TESTNET="$STATUS_PAGE_DEPLOY_TESTNET/rest"
-REST_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/rest-collector.py"
+REST_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04_node_api/rest-collector.py"
 REST_COLLECTOR_DEST="/opt/grin/grin-api-collector/rest-collector.py"
 REST_CRON_MAINNET="/etc/cron.d/grin-node-api-rest"
 REST_CRON_TESTNET="/etc/cron.d/grin-node-api-rest-testnet"
@@ -83,13 +83,13 @@ REST_CRON_TESTNET="/etc/cron.d/grin-node-api-rest-testnet"
 #   · du on chain_data/ for chain size
 #   · grin-server.toml for archive_mode
 # Writes node.json to the REST dir (grin user has group-write via www-data group).
-NODE_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04/node-collector.py"
+NODE_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04_node_api/node-collector.py"
 NODE_COLLECTOR_DEST="/opt/grin/grin-api-collector/node-collector.py"
 NODE_CRON_MAINNET="/etc/cron.d/grin-node-api-node"
 NODE_CRON_TESTNET="/etc/cron.d/grin-node-api-node-testnet"
 
 # Grin instance conf — written by script 01, read here to find actual data dirs.
-CONF_DIR="$SCRIPT_DIR/../conf"
+CONF_DIR="/opt/grin/conf"
 INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"
 
 # ─── Runtime state (set by main when network is selected) ─────────────────────
@@ -629,7 +629,7 @@ disable_testnet_node_api() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STATUS PAGE — deploy web/04/public_html, patch nginx, add rate-limiting
+# STATUS PAGE — deploy web/04_node_api/public_html, patch nginx, add rate-limiting
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _enable_status_page() {
@@ -649,7 +649,7 @@ _enable_status_page() {
 
     if [[ ! -d "$STATUS_PAGE_SRC" ]]; then
         error "Source files not found: $STATUS_PAGE_SRC"
-        error "Ensure web/04/public_html/ exists in the toolkit directory."
+        error "Ensure web/04_node_api/public_html/ exists in the toolkit directory."
         return
     fi
 
@@ -803,7 +803,7 @@ _enable_rest_api() {
     # 1. Install the Python collector to a system lib path so cron can call it directly.
     if [[ ! -f "$REST_COLLECTOR_SRC" ]]; then
         error "Collector script not found: $REST_COLLECTOR_SRC"
-        error "Ensure web/04/rest-collector.py exists in the toolkit directory."
+        error "Ensure web/04_node_api/rest-collector.py exists in the toolkit directory."
         return
     fi
     mkdir -p "$(dirname "$REST_COLLECTOR_DEST")"

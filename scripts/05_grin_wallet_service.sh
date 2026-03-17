@@ -19,7 +19,7 @@
 #  ─── Web Interface ───────────────────────────────────────────────────────────
 #   w) Web Wallet Interface             (submenu — 05 W)
 #      1) Install dependencies          (nginx, php, certbot, htpasswd, qrencode)
-#      2) Deploy files                  (copy web/05/ → deploy directory)
+#      2) Deploy files                  (copy web/05_wallet/ → deploy directory)
 #      3) Configure nginx               (vhost + rate-limit + security headers)
 #      4) Setup SSL                     (Let's Encrypt / certbot)
 #      5) Setup Basic Auth              (set / change password)
@@ -33,7 +33,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLKIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-CONF_DIR="$TOOLKIT_ROOT/conf"
+CONF_DIR="/opt/grin/conf"
 WALLETS_CONF="$CONF_DIR/grin_wallets_location.conf"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
@@ -62,10 +62,10 @@ WALLET_NGINX_CONF_MAINNET="/etc/nginx/sites-available/grin-wallet-mainnet"
 WALLET_NGINX_CONF_TESTNET="/etc/nginx/sites-available/grin-wallet-testnet"
 
 # Web wallet
-WEB_WALLET_SRC_DIR="$TOOLKIT_ROOT/web/05/public_html"
+WEB_WALLET_SRC_DIR="$TOOLKIT_ROOT/web/05_wallet/public_html"
 WEB_WALLET_NGINX_CONF="/etc/nginx/sites-available/grin-wallet-web"
 WEB_WALLET_DEPLOY_DIR_DEFAULT="/var/www/grin-wallet"
-WW_CONF_FILE="$TOOLKIT_ROOT/conf/grin_web_wallet.conf"
+WW_CONF_FILE="/opt/grin/conf/grin_web_wallet.conf"
 
 # ─── Runtime state (set by detect_and_select_network) ─────────────────────────
 NETWORK=""
@@ -85,7 +85,7 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 die()     { error "$*"; echo ""; echo "Press Enter to continue..."; read -r || true; return 1; }
 
 # -----------------------------------------------------------------------------
-# Save wallet location to conf/grin_wallets_location.conf
+# Save wallet location to /opt/grin/conf/grin_wallets_location.conf
 # Requires: NETWORK and WALLET_DIR set (by detect_and_select_network)
 # -----------------------------------------------------------------------------
 save_wallet_location() {
@@ -639,7 +639,7 @@ ww_deploy_files() {
 
     if [[ ! -d "$WEB_WALLET_SRC_DIR" ]]; then
         die "Source not found: $WEB_WALLET_SRC_DIR"
-        warn "Ensure the Grin Node Toolkit is complete (web/05/public_html/)."; return
+        warn "Ensure the Grin Node Toolkit is complete (web/05_wallet/public_html/)."; return
     fi
 
     echo -ne "Deploy directory [${WW_DEPLOY_DIR}]: "
@@ -1091,7 +1091,7 @@ web_wallet_menu() {
 
         echo -e "${DIM}  ─── First-time setup (run in order) ─────────────${RESET}"
         echo -e "  ${GREEN}1${RESET}) Install dependencies    ${DIM}(nginx, php, certbot, htpasswd, qrencode)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Deploy files            ${DIM}(copy web/05/ → deploy directory)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Deploy files            ${DIM}(copy web/05_wallet/ → deploy directory)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Configure nginx         ${DIM}(vhost + rate-limit + security headers)${RESET}"
         echo -e "  ${GREEN}4${RESET}) Setup SSL               ${DIM}(Let's Encrypt — DNS must point here first)${RESET}"
         echo -e "  ${GREEN}5${RESET}) Setup Basic Auth        ${DIM}(set / change password)${RESET}"

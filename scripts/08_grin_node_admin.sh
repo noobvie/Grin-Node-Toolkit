@@ -19,11 +19,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF_DIR="$SCRIPT_DIR/../conf"
+CONF_DIR="/opt/grin/conf"
 WALLETS_CONF="$CONF_DIR/grin_wallets_location.conf"
 
 # ─── GitHub self-update ───────────────────────────────────────────────────────
-# Official public repository. A fork slug saved in conf/github_repo.conf
+# Official public repository. A fork slug saved in /opt/grin/conf/github_repo.conf
 # overrides this (useful if you maintain your own fork).
 GITHUB_REPO="noobvie/Grin-Node-Toolkit"
 GITHUB_BRANCH="main"   # fallback default; branch is chosen interactively
@@ -746,7 +746,7 @@ self_update() {
     fi
 
     # ── Resolve GitHub repo ───────────────────────────────────────────────────
-    # conf/github_repo.conf overrides the default (useful for forks)
+    # /opt/grin/conf/github_repo.conf overrides the default (useful for forks)
     local repo="$GITHUB_REPO"
     local repo_conf="$CONF_DIR/github_repo.conf"
     if [[ -f "$repo_conf" ]]; then
@@ -756,7 +756,7 @@ self_update() {
     fi
 
     echo -e "  ${BOLD}Repository${RESET} : https://github.com/$repo"
-    echo -e "  ${DIM}(to use a fork, save a slug to conf/github_repo.conf)${RESET}"
+    echo -e "  ${DIM}(to use a fork, save a slug to /opt/grin/conf/github_repo.conf)${RESET}"
     echo ""
 
     # ── Branch selection ──────────────────────────────────────────────────────

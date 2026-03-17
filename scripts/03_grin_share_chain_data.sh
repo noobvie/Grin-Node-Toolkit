@@ -50,7 +50,7 @@
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF_DIR="$SCRIPT_DIR/../conf"
+CONF_DIR="/opt/grin/conf"
 CONF_NGINX="$CONF_DIR/grin_share_nginx.conf"
 CONF_SSH="$CONF_DIR/grin_share_ssh.conf"
 INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"

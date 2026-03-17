@@ -941,12 +941,12 @@ validate_nginx_config() {
 # Nginx pipeline steps
 ################################################################################
 
-# Step 0: wipe output dir (keep .htaccess)
+# Step 0: wipe output dir
 clean_output_directory() {
     log "Step 0: Cleaning output directory: $OUTPUT_DIR"
     mkdir -p "$OUTPUT_DIR"
     cd "$OUTPUT_DIR" || error_exit "Cannot access $OUTPUT_DIR"
-    find . -type f ! -name '.htaccess' -delete
+    find . -type f -delete
     log "Output directory ready"
 }
 
@@ -1410,7 +1410,7 @@ run_ssh_share_for_combo() {
     # Rsync source → remote
     log "Uploading via rsync..."
     rsync -az --progress --delete \
-        --exclude='.htaccess' --exclude='.*' \
+        --exclude='.*' \
         -e "ssh -i $key -p $port" \
         "$src/" "$host:$rdir/"
 

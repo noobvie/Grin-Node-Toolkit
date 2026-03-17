@@ -1917,36 +1917,39 @@ check_disk_space() {
 }
 
 # =============================================================================
+# HELPER: PROMPT BEFORE OVERWRITING EXISTING CHAIN DATA
+# -----------------------------------------------------------------------------
+# If $GRIN_DIR/chain_data already exists, asks the user whether to remove it
+# before extraction.  Shared by extract_chain_data() and stream_extract_chain_data().
+# =============================================================================
+_prompt_remove_chain_data() {
+    [[ -d "$GRIN_DIR/chain_data" ]] || return 0
+    warn "Existing chain_data directory found: $GRIN_DIR/chain_data"
+    echo -e "  ${GREEN}Y${RESET}) Remove and extract fresh  ${DIM}(default)${RESET}"
+    echo -e "  ${RED}n${RESET}) Keep it (existing files may be overwritten)"
+    echo -e "  ${DIM}0${RESET}) Return to main menu"
+    echo ""
+    echo -ne "${BOLD}Remove existing chain_data? [Y/n/0]: ${RESET}"
+    read -r rm_choice || true
+    case "${rm_choice,,}" in
+        n) info "Keeping existing chain_data (existing files may be overwritten)..." ;;
+        0) exit 0 ;;
+        *) info "Removing existing chain_data..."
+           rm -rf "$GRIN_DIR/chain_data"
+           success "Existing chain_data removed. Starting fresh extraction..." ;;
+    esac
+}
+
+# =============================================================================
 # [12] EXTRACT CHAIN DATA INTO NODE DIRECTORY
 # -----------------------------------------------------------------------------
-# First checks if $GRIN_DIR/chain_data already exists and asks the user:
-#   Yes → remove the existing chain_data directory before extracting (clean slate)
-#   No  → proceed with extraction without removing (existing files may be overwritten)
 # After successful extraction, removes the .tar.gz and .sha256 to reclaim space.
 # Shows error with guidance if extraction fails (e.g. corrupted archive or disk error).
 # =============================================================================
 extract_chain_data() {
     step_header "Step 12: Extract Chain Data"
 
-    # Check for an existing chain_data directory before extracting
-    if [[ -d "$GRIN_DIR/chain_data" ]]; then
-        warn "Existing chain_data directory found: $GRIN_DIR/chain_data"
-        echo -e "  ${GREEN}y${RESET}) Remove and extract fresh"
-        echo -e "  ${RED}n${RESET}) Keep it (existing files may be overwritten)"
-        echo -e "  ${DIM}0${RESET}) Return to main menu"
-        echo ""
-        echo -ne "${BOLD}Remove existing chain_data? [y/N/0]: ${RESET}"
-        read -r rm_choice || true
-        case "${rm_choice,,}" in
-            y)
-                info "Removing existing chain_data..."
-                rm -rf "$GRIN_DIR/chain_data"
-                success "Existing chain_data removed. Starting fresh extraction..."
-                ;;
-            0) exit 0 ;;
-            *) info "Keeping existing chain_data. Starting extraction (existing files may be overwritten)..." ;;
-        esac
-    fi
+    _prompt_remove_chain_data
 
     info "Extracting $(basename "$TAR_FILE") → $GRIN_DIR ..."
 
@@ -1974,25 +1977,7 @@ stream_extract_chain_data() {
 
     local tar_name="${TAR_FILE##*/}"
 
-    # Handle existing chain_data directory (same prompt as full-download mode)
-    if [[ -d "$GRIN_DIR/chain_data" ]]; then
-        warn "Existing chain_data directory found: $GRIN_DIR/chain_data"
-        echo -e "  ${GREEN}y${RESET}) Remove and extract fresh"
-        echo -e "  ${RED}n${RESET}) Keep it (existing files may be overwritten)"
-        echo -e "  ${DIM}0${RESET}) Return to main menu"
-        echo ""
-        echo -ne "${BOLD}Remove existing chain_data? [y/N/0]: ${RESET}"
-        read -r rm_choice || true
-        case "${rm_choice,,}" in
-            y)
-                info "Removing existing chain_data..."
-                rm -rf "$GRIN_DIR/chain_data"
-                success "Existing chain_data removed. Starting fresh extraction..."
-                ;;
-            0) exit 0 ;;
-            *) info "Keeping existing chain_data. Continuing (existing files may be overwritten)..." ;;
-        esac
-    fi
+    _prompt_remove_chain_data
 
     local stream_ok=false
     local src_num=0 total_src=${#READY_SOURCES[@]}
@@ -2224,7 +2209,8 @@ setup_one_node() {
     show_summary        "$network" "$ARCHIVE_MODE"
     save_instance_location "$network" "$ARCHIVE_MODE"
 
-    # Reset per-node state
+    # Reset per-node state for the next network (if "both" selected).
+    # GRIN_BIN_TMP is intentionally NOT reset — reused by the second setup_one_node call.
     GRIN_DIR=""
     TAR_FILE=""
     SHA_FILE=""
@@ -2262,7 +2248,7 @@ main() {
             ;;
     esac
 
-    # Step 15: Return to main menu
+    # Return to main menu
     echo ""
     while true; do
         echo -ne "${BOLD}Enter ${GREEN}0${RESET}${BOLD} to return to the main menu: ${RESET}"

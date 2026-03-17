@@ -380,7 +380,7 @@ check_root() {
 # Menu Functions
 #############################################################################
 
-# 1.5 - Display main menu
+# 2.0 - Display main menu
 show_main_menu() {
     clear
     cat << "EOF"
@@ -410,7 +410,7 @@ EOF
     echo ""
 }
 
-# 1.6 - Get action from menu or parameter
+# 2.1 - Get action from menu or parameter
 get_action() {
     if [[ -n "$ACTION" ]]; then
         case "$ACTION" in
@@ -891,7 +891,7 @@ get_files_directory() {
                     read -r -p "  Clean up ${FILES_DIR} now? (Y/n/0) [default: Y, 0 = cancel]: " _clean
                     [[ "$_clean" == "0" ]] && return 1
                     if [[ ! "${_clean,,}" =~ ^n ]]; then
-                        find "$FILES_DIR" -mindepth 1 ! -name '.htaccess' -delete 2>/dev/null || true
+                        find "$FILES_DIR" -mindepth 1 -delete 2>/dev/null || true
                         print_info "Cleaned up ${FILES_DIR}"
                         _free_kb=$(df -k "$FILES_DIR" 2>/dev/null | awk 'NR==2{print $4}') || _free_kb=0
                         _free_gb=$(awk "BEGIN{printf \"%.1f\", ${_free_kb}/1048576}")
@@ -991,7 +991,7 @@ get_files_directory() {
     print_info "Files directory: $FILES_DIR"
 }
 
-# 5.3 - Get bandwidth limiting preferences
+# 5.5 - Get bandwidth limiting preferences
 get_bandwidth_settings() {
     if [[ -z "$ENABLE_BANDWIDTH_LIMIT" ]]; then
         echo ""
@@ -1042,14 +1042,6 @@ create_files_directory() {
     chown -R www-data:www-data "$FILES_DIR"
     chmod 755 "$FILES_DIR"
 
-    # Create .htaccess file for directory indexing
-    cat > "$FILES_DIR/.htaccess" << 'EOF'
-Options +Indexes
-EOF
-
-    chown www-data:www-data "$FILES_DIR/.htaccess"
-    chmod 644 "$FILES_DIR/.htaccess"
-    print_info "Created .htaccess file with directory indexing enabled"
 }
 
 # 7.0 - Function to create initial nginx config (without SSL)

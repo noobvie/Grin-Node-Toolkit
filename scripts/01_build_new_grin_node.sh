@@ -513,10 +513,12 @@ _start_installed_node() {
     success "$started node(s) started."
     echo ""
     echo -e "${BOLD}${YELLOW}  Be patient — the node may take up to 60 seconds to boot.${RESET}"
-    echo -e "  To monitor progress, attach to the tmux session:"
-    echo -e "    ${CYAN}Ctrl+B → s${RESET}  switch between sessions"
-    echo -e "    ${CYAN}Ctrl+B → d${RESET}  detach (leave node running)"
-    echo -e "    ${CYAN}0${RESET}            return to the main script menu"
+    echo -e "  To monitor progress:"
+    echo -e "    ${CYAN}tmux attach -t <session>${RESET}   — view node output directly"
+    echo -e "    ${CYAN}Ctrl+B → s${RESET}                 — switch between tmux sessions"
+    echo -e "    ${CYAN}Ctrl+B → d${RESET}                 — detach (leave node running in background)"
+    echo ""
+    read -rp "  Press Enter to return to menu..." _
     echo ""
     return 0
 }

@@ -131,9 +131,9 @@ show_port_guide() {
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -ne "${BOLD}Type ${GREEN}yes${RESET}${BOLD} to confirm you have read the above and want to proceed [yes/N/0]: ${RESET}"
+    echo -ne "${BOLD}Press ${GREEN}y${RESET}${BOLD} to confirm you have read the above and want to proceed [y/N/0]: ${RESET}"
     read -r _guide_confirm || true
-    if [[ "${_guide_confirm,,}" != "yes" ]]; then
+    if [[ "${_guide_confirm,,}" != "y" ]]; then
         info "Cancelled."
         return 1
     fi

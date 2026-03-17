@@ -121,7 +121,7 @@ _harden_wallet_dir() {
     if id grin &>/dev/null; then
         chown -R grin:grin "$dir" 2>/dev/null || true
     else
-        warn "User 'grin' not found — skipping chown. Run Script 08 → option 10 to create it."
+        warn "User 'grin' not found — skipping chown. Re-run Script 01 to create it."
     fi
     chmod 700 "$dir" 2>/dev/null || true
     [[ -d "$data_dir" ]] && chmod 700 "$data_dir" 2>/dev/null || true
@@ -463,7 +463,7 @@ start_wallet() {
         tmux new-session -d -s "$session" -c "$WALLET_DIR" \
             "su -s /bin/bash -c \"'$WALLET_BIN' --top_level_dir '$WALLET_DIR' -p '$wallet_pass' listen\" grin; echo ''; echo 'Listener exited. Press Enter to close.'; read"
     else
-        warn "User 'grin' not found — running as current user. Run Script 08 → option 10."
+        warn "User 'grin' not found — running as current user. Re-run Script 01 to create it."
         tmux new-session -d -s "$session" -c "$WALLET_DIR" \
             "bash -c \"'$WALLET_BIN' --top_level_dir '$WALLET_DIR' -p '$wallet_pass' listen; echo ''; echo 'Listener exited. Press Enter to close.'; read\""
     fi

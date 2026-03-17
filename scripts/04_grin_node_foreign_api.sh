@@ -393,6 +393,11 @@ show_network_status() {
     if [[ -f "/etc/nginx/sites-enabled/$nginx_symlink" ]]; then
         local domain; domain=$(_nginx_domain "$nginx_conf")
         echo -e "  ${BOLD}nginx proxy${RESET} : ${GREEN}CONFIGURED${RESET}  ${DIM}https://$domain/v2/foreign${RESET}"
+        if grep -q 'proxy_set_header.*Authorization' "$nginx_conf" 2>/dev/null; then
+            echo -e "  ${BOLD}auth header${RESET} : ${GREEN}INJECTED${RESET}  ${DIM}(Basic Auth forwarded to node)${RESET}"
+        else
+            echo -e "  ${BOLD}auth header${RESET} : ${YELLOW}MISSING${RESET}  ${DIM}⚠ browser may show 401 prompt — re-run option 1${RESET}"
+        fi
     else
         echo -e "  ${BOLD}nginx proxy${RESET} : ${DIM}not configured${RESET}  ${DIM}(option 1)${RESET}"
     fi
@@ -475,14 +480,27 @@ _enable_node_api_nginx() {
     # localhost-only and is never exposed to external callers.
     local _proxy_auth_header=""
     local _grin_dir; _grin_dir=$(_lookup_grin_dir "$network")
+    if [[ -z "$_grin_dir" ]]; then
+        error "Cannot locate $network node directory. Install the node via Script 01 first."
+        return
+    fi
     local _foreign_secret_file="$_grin_dir/.foreign_api_secret"
+    info "Grin data dir : $_grin_dir"
     if [[ -f "$_foreign_secret_file" ]]; then
         local _secret; _secret=$(tr -d '[:space:]' < "$_foreign_secret_file" 2>/dev/null || true)
         if [[ -n "$_secret" ]]; then
             local _b64; _b64=$(printf '%s' "grin:$_secret" | base64 -w 0 2>/dev/null || printf '%s' "grin:$_secret" | base64)
             _proxy_auth_header="        proxy_set_header   Authorization \"Basic $_b64\";"
             info "Foreign API secret found — injecting proxy auth header into nginx config."
+        else
+            warn "Foreign API secret file is empty: $_foreign_secret_file"
+            warn "nginx config will be written WITHOUT an auth header — browser will show a 401 prompt."
         fi
+    else
+        warn "Foreign API secret not found at: $_foreign_secret_file"
+        warn "nginx config will be written WITHOUT an auth header — browser will show a 401 prompt."
+        warn "Fix: re-run Script 01 to rebuild the $network node (this re-creates the secret file),"
+        warn "     OR verify the node data dir is registered in $INSTANCES_CONF"
     fi
 
     # Remove any legacy stream block left by old versions of this script.
@@ -786,7 +804,12 @@ disable_testnet_status_page() { _disable_status_page testnet "$NODE_API_NGINX_CO
 # Resolve the Grin node data directory from the instance conf written by script 01.
 # Returns GRIN_DIR (e.g. /opt/grin/node/mainnet-prune) which contains .api_secret and grin-server.toml.
 _lookup_grin_dir() {
+    # NOTE: this function is called via $(...) substitution — all warn/echo messages
+    # must go to stderr (&2) so they appear on the terminal and are NOT captured
+    # as part of the returned path.
     local network="$1"
+
+    # 1. Primary: instances conf written by Script 01
     if [[ -f "$INSTANCES_CONF" ]]; then
         local candidates=()
         [[ "$network" == "mainnet" ]] && candidates=(PRUNEMAIN FULLMAIN) || candidates=(PRUNETEST)
@@ -797,9 +820,28 @@ _lookup_grin_dir() {
             local grin_dir="${!varname}"
             [[ -n "$grin_dir" && -d "$grin_dir" ]] && echo "$grin_dir" && return 0
         done
+        warn "_lookup_grin_dir: $INSTANCES_CONF exists but has no valid $network entry." >&2
+    else
+        warn "_lookup_grin_dir: $INSTANCES_CONF not found — run Script 01 to install the node." >&2
     fi
-    # Fallback — standard Grin defaults
-    [[ "$network" == "mainnet" ]] && echo "/home/grin/.grin/main" || echo "/home/grin/.grin/floo"
+
+    # 2. Fallback: toolkit standard paths (Script 01 always creates one of these)
+    local std_dirs=()
+    if [[ "$network" == "mainnet" ]]; then
+        std_dirs=("/opt/grin/node/mainnet-prune" "/opt/grin/node/mainnet-full")
+    else
+        std_dirs=("/opt/grin/node/testnet-prune")
+    fi
+    for dir in "${std_dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            warn "_lookup_grin_dir: instances conf missing/stale — found standard toolkit path $dir" >&2
+            echo "$dir"
+            return 0
+        fi
+    done
+
+    warn "_lookup_grin_dir: no $network node directory found — is the node installed via Script 01?" >&2
+    echo ""
 }
 
 _enable_rest_api() {
@@ -816,6 +858,11 @@ _enable_rest_api() {
     local deploy_dir
     deploy_dir="$( [[ "$network" == "mainnet" ]] && echo "$STATUS_PAGE_DEPLOY_MAINNET" \
                                                   || echo "$STATUS_PAGE_DEPLOY_TESTNET" )"
+    if [[ -z "$grin_data_dir" ]]; then
+        error "Cannot locate $network node directory. Install the node via Script 01 first."
+        return
+    fi
+
     if [[ ! -f "$deploy_dir/index.html" ]]; then
         warn "Status page not deployed for $network."
         warn "Run option 3 first to set up the nginx static root, then come back here."
@@ -905,26 +952,21 @@ EOF
         info "Node cron installed: $node_cron_file (runs as root, detected data owner: $grin_user)"
 
         info "Running initial node stats collection..."
-        local _node_err
-        _node_err=$(python3 "$NODE_COLLECTOR_DEST" "$port" "$rest_dir" "$grin_data_dir" 2>&1 >/dev/null || true)
-        if [[ -z "$_node_err" ]]; then
+        if python3 "$NODE_COLLECTOR_DEST" "$port" "$rest_dir" "$grin_data_dir" 2>/dev/null; then
             success "Initial node stats collected."
         else
-            warn "Initial node stats failed — cron will retry every minute."
-            warn "Reason: $_node_err"
+            warn "Initial node stats failed (node may not be running yet)."
+            warn "Node cron will retry automatically every minute."
         fi
     fi
 
     # 6. Run initial REST collection now so JSON files exist before nginx reload.
     info "Running initial REST collection..."
-    local _rest_err
-    _rest_err=$(sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" "$_foreign_secret_file" 2>&1 >/dev/null || true)
-    if [[ -z "$_rest_err" ]]; then
+    if sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" "$_foreign_secret_file" 2>/dev/null; then
         success "Initial REST data collected."
     else
-        warn "Initial REST collection failed — cron will retry every minute."
-        warn "Reason: $_rest_err"
-        info "Common causes: node not started yet · wrong port ($port) · secret not found at $_foreign_secret_file"
+        warn "Initial REST collection failed (node may not be running yet)."
+        warn "Cron will retry automatically every minute."
     fi
 
     # 7. Patch nginx to serve /rest/*.json (location block before the catch-all).

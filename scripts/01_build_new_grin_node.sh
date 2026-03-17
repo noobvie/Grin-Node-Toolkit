@@ -266,6 +266,39 @@ stop_grin_gracefully() {
 }
 
 # =============================================================================
+# HELPER: REMOVE NODE DIRECTORIES FROM CONF
+# -----------------------------------------------------------------------------
+# Reads INSTANCES_CONF, finds the stored directory paths for the given
+# networks, and deletes them from disk before a rebuild.
+#   Usage: _remove_instance_dirs mainnet|testnet|all
+# =============================================================================
+_remove_instance_dirs() {
+    [[ ! -f "$INSTANCES_CONF" ]] && return 0
+    local _scope="${1:-all}"
+    local _conf_content
+    _conf_content=$(cat "$INSTANCES_CONF" 2>/dev/null) || return 0
+
+    local _dirs=()
+    local _d
+
+    if [[ "$_scope" == "mainnet" || "$_scope" == "all" ]]; then
+        for _var in PRUNEMAIN_GRIN_DIR FULLMAIN_GRIN_DIR; do
+            _d=$(echo "$_conf_content" | grep "^${_var}=" | cut -d'"' -f2)
+            [[ -n "$_d" && -d "$_d" ]] && _dirs+=("$_d")
+        done
+    fi
+    if [[ "$_scope" == "testnet" || "$_scope" == "all" ]]; then
+        _d=$(echo "$_conf_content" | grep "^PRUNETEST_GRIN_DIR=" | cut -d'"' -f2)
+        [[ -n "$_d" && -d "$_d" ]] && _dirs+=("$_d")
+    fi
+
+    for _d in "${_dirs[@]}"; do
+        warn "Removing node directory: $_d"
+        rm -rf "$_d" && success "Removed: $_d" || warn "Failed to remove: $_d"
+    done
+}
+
+# =============================================================================
 # HELPER: STOP A SINGLE GRIN INSTANCE
 # -----------------------------------------------------------------------------
 # Stops only the instance on the given P2P port (SIGTERM → wait → SIGKILL) and
@@ -498,7 +531,7 @@ check_grin_running() {
             echo -e "  ${CYAN}B${RESET} — update binary only  (no chain data rebuild)"
             echo -e "  ${YELLOW}M${RESET} — kill mainnet  & rebuild mainnet"
             echo -e "  ${YELLOW}T${RESET} — kill testnet  & rebuild testnet"
-            echo -e "  ${RED}K${RESET} — kill all Grin processes & rebuild both"
+            echo -e "  ${RED}K${RESET} — kill all Grin processes & rebuild both networks"
             echo -e "  ${GREEN}0${RESET} — return to master script"
             echo ""
             echo -ne "${DIM}[B/M/T/K/0]: ${RESET}"
@@ -509,16 +542,19 @@ check_grin_running() {
                     ;;
                 [Mm])
                     stop_grin_one 3414
-                    exec "$0"
+                    _remove_instance_dirs mainnet
+                    GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
                 [Tt])
                     stop_grin_one 13414
-                    exec "$0"
+                    _remove_instance_dirs testnet
+                    GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
                 [Kk])
                     stop_grin_gracefully
+                    _remove_instance_dirs all
                     [[ -f "$INSTANCES_CONF" ]] && { : > "$INSTANCES_CONF"; log "Conf cleared (full rebuild)."; }
-                    exec "$0"
+                    GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
                 0)
                     exit 0
@@ -553,7 +589,8 @@ check_grin_running() {
                     ;;
                 [Mm])
                     stop_grin_one 3414
-                    exec "$0"
+                    _remove_instance_dirs mainnet
+                    GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
                 1|"")
                     RESTRICTED_NETWORK="testnet"
@@ -594,7 +631,8 @@ check_grin_running() {
                     ;;
                 [Tt])
                     stop_grin_one 13414
-                    exec "$0"
+                    _remove_instance_dirs testnet
+                    GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
                 1|"")
                     RESTRICTED_NETWORK="mainnet"
@@ -868,7 +906,9 @@ select_network() {
                 if [[ "$running_network" == "mainnet" ]]; then
                     warn "Stopping ${running_network} to rebuild with different mode..."
                     stop_grin_gracefully
+                    _remove_instance_dirs mainnet
                     [[ -f "$INSTANCES_CONF" ]] && { sed -i '/^PRUNEMAIN_\|^FULLMAIN_/d' "$INSTANCES_CONF"; log "Conf entries cleared (mainnet mode-switch rebuild)."; }
+                    GRIN_SKIP_DISK_CHECK=1
                     NETWORK_TYPE="mainnet"
                     RESTRICTED_NETWORK=""
                     info "Network: ${BOLD}${NETWORK_TYPE}${RESET} — select new mode at Step 4"
@@ -988,9 +1028,9 @@ select_archive_mode() {
 # No user prompt is shown for the path — the standardized location is always used.
 #
 # Disk space check:
-#   Skipped when this is a rebuild (GRIN_DIR already exists AND INSTANCES_CONF
-#   exists) because the install overwrites the same directory, consuming no new
-#   space. On a fresh install the check is a hard stop if space is insufficient.
+#   Skipped when GRIN_SKIP_DISK_CHECK=1 (set by M/T/K rebuild paths, which
+#   already removed the old directory before restarting). On a fresh install
+#   the check is a hard stop if space is insufficient.
 #
 # Existing files in GRIN_DIR are cleared automatically (no confirmation prompt)
 # before the binary and chain data download begins.
@@ -1014,12 +1054,9 @@ create_node_dir() {
     info "Node directory: $GRIN_DIR"
     echo ""
 
-    # 2. Disk space check — skipped on rebuild (directory + instances conf exist)
-    local _is_rebuild=false
-    [[ -d "$GRIN_DIR" && -f "$INSTANCES_CONF" ]] && _is_rebuild=true
-
-    if [[ "$_is_rebuild" == "true" ]]; then
-        info "Existing install detected — skipping disk space check (rebuild in place)."
+    # 2. Disk space check — skipped for rebuilds (M/T/K paths set GRIN_SKIP_DISK_CHECK=1)
+    if [[ "${GRIN_SKIP_DISK_CHECK:-0}" == "1" ]]; then
+        info "Rebuild mode — skipping disk space check."
     else
         local min_gb avail_kb avail_gb
         [[ "$mode" == "full" ]] && min_gb=25 || min_gb=10

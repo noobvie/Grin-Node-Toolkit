@@ -394,8 +394,8 @@ EOF
     echo ""
     echo "Select an action:"
     echo ""
-    echo "  1) Build Grin Master Nodes — Mainnet  (fullmain / prunemain)"
-    echo "  2) Build Grin Master Nodes — Testnet  (prunetest)"
+    echo "  1) Setup 1st Grin Master Node domain  - Mainnet  (fullmain / prunemain)"
+    echo "  2) Setup 2nd Grin Master Node domain  - Testnet  (prunetest)"
     echo "  3) Add Custom Domain                  - Any non-Grin domain"
     echo "  4) Remove Domain                      - Remove domain and its configuration"
     echo "  5) List Domains                       - Show all configured domains"
@@ -525,19 +525,25 @@ show_help() {
     cat << EOF
 Usage: $0 [OPTIONS]
 
-Unified Nginx File Server Management Script
+Nginx File Server Manager — Part of Grin Node Toolkit
 
 ACTIONS (choose one):
-    --action setup          Setup new file server (first domain)
-    --action add            Add additional domain
-    --action remove         Remove existing domain
-    --action list           List all configured domains
+    --action grin_mainnet        Configure a mainnet Grin domain (fullmain / prunemain prefix)
+    --action grin_testnet        Configure a testnet Grin domain (prunetest prefix)
+    --action custom              Add a custom (non-Grin) domain
+    --action remove              Remove an existing domain
+    --action list                List all configured domains
+    --action limit_rate          Set per-IP download speed cap
+    --action lift_rate           Remove / reset per-IP speed cap
+    --action enhance_security    Apply nginx security hardening
+    --action fail2ban_management Install / manage fail2ban for nginx
+    --action ip_filtering        Block / unblock IPs via ufw or iptables
 
-CONFIGURATION OPTIONS (for setup/add):
-    --domain DOMAIN         Domain name (e.g., files.example.com)
+CONFIGURATION OPTIONS (for grin_mainnet / grin_testnet / custom):
+    --domain DOMAIN         Domain name (e.g., prunemain.example.com)
     --email EMAIL           Email for Let's Encrypt notifications
     --dir DIRECTORY         Files directory (default: /var/www/fileserver)
-    
+
 BANDWIDTH OPTIONS (optional):
     --enable-bandwidth      Enable bandwidth limiting
     --quota GB              Download quota in GB (default: 40)
@@ -555,8 +561,11 @@ EXAMPLES:
     # Interactive menu mode:
     sudo $0
 
-    # Setup Grin master node domain:
-    sudo $0 --action grin --domain prunemain.example.com --email admin@example.com
+    # Configure a mainnet Grin domain:
+    sudo $0 --action grin_mainnet --domain prunemain.example.com --email admin@example.com
+
+    # Configure a testnet Grin domain:
+    sudo $0 --action grin_testnet --domain prunetest.example.com --email admin@example.com
 
     # Add custom (non-Grin) domain:
     sudo $0 --action custom --domain files.example.com --email admin@example.com
@@ -576,7 +585,7 @@ EXAMPLES:
 
 CONFIGURATION FILE:
     You can also edit variables at the top of this script:
-    - ACTION="grin|custom|remove|list"
+    - ACTION="grin_mainnet|grin_testnet|custom|remove|list|limit_rate|lift_rate|enhance_security|fail2ban_management|ip_filtering"
     - DOMAIN="files.example.com"
     - EMAIL="admin@example.com"
     - And more...

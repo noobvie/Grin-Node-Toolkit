@@ -51,6 +51,16 @@ GRIN_LOG_DIR="${GRIN_LOG_PATH:-$HOME/.grin/main/log}"
 # ─── Press-enter helper ───────────────────────────────────────────────────────
 pause() { echo ""; echo "Press Enter to return to menu..."; read -r; }
 
+# tmux session name convention: grin_<nodetype>_<networktype>
+_grin_session_name() {
+    case "$(basename "${1:-}")" in
+        mainnet-full)  echo "grin_full_mainnet"   ;;
+        mainnet-prune) echo "grin_pruned_mainnet" ;;
+        testnet-prune) echo "grin_pruned_testnet" ;;
+        *)             echo "grin_$(basename "${1:-}")" ;;
+    esac
+}
+
 # =============================================================================
 # 8.1  Remote Node Manager
 # =============================================================================
@@ -989,7 +999,7 @@ menu_full_cleanup() {
 # -----------------------------------------------------------------------------
 # _migrate_stop_grin — gracefully stop all running Grin nodes before migration.
 # Sends SIGTERM, waits up to 30 s for each process to exit, then SIGKILL if needed.
-# Kills all grin_* and grin-wallet-* tmux sessions, then does a final pgrep check.
+# Kills all grin_* tmux sessions (nodes + wallets), then does a final pgrep check.
 # -----------------------------------------------------------------------------
 _migrate_stop_grin() {
     local stop_timeout=30
@@ -1018,7 +1028,7 @@ _migrate_stop_grin() {
     local _sess
     while IFS= read -r _sess; do
         tmux kill-session -t "$_sess" 2>/dev/null && info "Tmux session '$_sess' closed." || true
-    done < <(tmux ls -F '#{session_name}' 2>/dev/null | grep -E '^(grin_|grin-wallet-)' || true)
+    done < <(tmux ls -F '#{session_name}' 2>/dev/null | grep -E '^grin_' || true)
 
     # Final process verification
     local _still
@@ -1450,7 +1460,7 @@ __EOF__
             find "$_ndst/chain_data" -maxdepth 3 -name "lock.mdb" -delete 2>/dev/null || true
 
             # Kill any lingering session with the same name before creating a new one.
-            local _nsess="grin_$(basename "$_ndst")"
+            local _nsess; _nsess="$(_grin_session_name "$_ndst")"
             if tmux has-session -t "$_nsess" 2>/dev/null; then
                 tmux kill-session -t "$_nsess" 2>/dev/null || true
             fi

@@ -128,6 +128,16 @@ TMUX_SESSION=""
 # Logging helpers
 ################################################################################
 
+# tmux session name convention: grin_<nodetype>_<networktype>
+_grin_session_name() {
+    case "$(basename "${1:-}")" in
+        mainnet-full)  echo "grin_full_mainnet"   ;;
+        mainnet-prune) echo "grin_pruned_mainnet" ;;
+        testnet-prune) echo "grin_pruned_testnet" ;;
+        *)             echo "grin_$(basename "${1:-}")" ;;
+    esac
+}
+
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S UTC' -u)] $1" | tee -a "$LOG_FILE"; }
 error_exit() { log "ERROR: $1"; exit 1; }
 get_utc_timestamp() { date -u '+%Y-%m-%d %H:%M:%S UTC'; }
@@ -248,19 +258,12 @@ run_nginx_setup() {
     echo -e "${BOLD}${CYAN}  Grin Share — Nginx Configuration Setup${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  Answers saved to: ${DIM}$CONF_NGINX${RESET}"
-    echo -e "  ${DIM}Press Enter to accept the value shown in [brackets].${RESET}"
+    echo -e "  Config saved to: ${DIM}$CONF_NGINX${RESET}"
     echo ""
 
-    # ── Ports ─────────────────────────────────────────────────────────────────
+    # ── Ports (standard — no prompt needed) ──────────────────────────────────
     local tmp
-    echo -e "${BOLD}Grin P2P ports${RESET}  ${DIM}(press Enter to keep current, 0 to cancel):${RESET}"
-    echo -ne "  Mainnet port [${GRIN_PORT_MAINNET}]: "
-    read -r tmp; [[ "$tmp" == "0" ]] && return
-    GRIN_PORT_MAINNET="${tmp:-$GRIN_PORT_MAINNET}"
-    echo -ne "  Testnet port [${GRIN_PORT_TESTNET}]: "
-    read -r tmp; [[ "$tmp" == "0" ]] && return
-    GRIN_PORT_TESTNET="${tmp:-$GRIN_PORT_TESTNET}"
+    echo -e "  ${DIM}Grin P2P ports: mainnet ${GRIN_PORT_MAINNET}, testnet ${GRIN_PORT_TESTNET}${RESET}"
     echo ""
 
     # ── Detect running nodes ──────────────────────────────────────────────────
@@ -278,8 +281,10 @@ run_nginx_setup() {
             { [ -z "$scan_binary" ] || [ ! -f "$scan_binary" ]; } && continue
             scan_dir=$(dirname "$scan_binary")
 
+            local scan_cwd
+            scan_cwd=$(readlink -f "/proc/$scan_pid/cwd" 2>/dev/null) || scan_cwd=""
             scan_cfg=""
-            for loc in "$scan_dir/grin-server.toml" "$HOME/.grin/main/grin-server.toml" "/root/.grin/main/grin-server.toml"; do
+            for loc in "$scan_dir/grin-server.toml" "$scan_cwd/grin-server.toml"; do
                 [ -f "$loc" ] && { scan_cfg="$loc"; break; }
             done
 
@@ -341,10 +346,44 @@ run_nginx_setup() {
     fi
     echo ""
 
-    # ── SYNC_CHOICE — only prompt when both node types are present ────────────
-    if [ ${#detected_combos[@]} -ge 2 ]; then
+    # ── Scan nginx for configured Grin domains ────────────────────────────────
+    local nginx_mainnet_domain="" nginx_mainnet_dir="" nginx_mainnet_type=""
+    local nginx_prunetest_domain="" nginx_prunetest_dir=""
+    local _conf _sn _rd _pfx
+    if [ -d "/etc/nginx/sites-enabled" ]; then
+        for _conf in /etc/nginx/sites-enabled/*; do
+            [ -f "$_conf" ] || continue
+            _sn=$(grep -m1 'server_name' "$_conf" 2>/dev/null | \
+                 awk '{for(i=2;i<=NF;i++) if($i!=";" && $i!="_" && $i~/[.]/) {print $i; exit}}' | tr -d ';')
+            _rd=$(grep -m1 '^\s*root\s' "$_conf" 2>/dev/null | awk '{print $2}' | tr -d ';')
+            [ -n "$_sn" ] && [ -n "$_rd" ] || continue
+            _pfx=$(basename "$_rd")
+            case "$_pfx" in
+                fullmain)
+                    nginx_mainnet_domain="$_sn"; nginx_mainnet_dir="$_rd"; nginx_mainnet_type="full" ;;
+                prunemain)
+                    nginx_mainnet_domain="$_sn"; nginx_mainnet_dir="$_rd"; nginx_mainnet_type="pruned" ;;
+                prunetest)
+                    nginx_prunetest_domain="$_sn"; nginx_prunetest_dir="$_rd" ;;
+            esac
+        done
+    fi
+
+    # ── Guard: at least one Grin domain must be configured ───────────────────
+    if [[ -z "$nginx_mainnet_dir" && -z "$nginx_prunetest_dir" ]]; then
+        echo ""
+        echo -e "  ${YELLOW}⚠${RESET}  No Grin domains configured in nginx."
+        echo -e "  Run ${BOLD}script 02 → option 1) Build Grin Master Nodes${RESET} first."
+        echo ""
+        echo -ne "  Press ${BOLD}0${RESET} to return to main menu: "
+        read -r
+        return
+    fi
+
+    # ── SYNC_CHOICE — based on configured nginx domains ───────────────────────
+    if [[ -n "$nginx_mainnet_dir" && -n "$nginx_prunetest_dir" ]]; then
         echo -e "${BOLD}Which networks to share?${RESET}"
-        echo -e "  ${GREEN}1${RESET}) both     (mainnet + testnet) !will consume more diskspace!"
+        echo -e "  ${GREEN}1${RESET}) both     (mainnet + testnet)  ${YELLOW}!will consume more diskspace!${RESET}"
         echo -e "  ${GREEN}2${RESET}) mainnet  only"
         echo -e "  ${GREEN}3${RESET}) testnet  only"
         echo -e "  ${DIM}0${RESET}) Cancel — return to main menu"
@@ -357,111 +396,60 @@ run_nginx_setup() {
             *) SYNC_CHOICE="all"     ;;
         esac
         echo ""
+    elif [[ -n "$nginx_mainnet_dir" ]]; then
+        SYNC_CHOICE="mainnet"
+        echo -e "  ${DIM}Network: mainnet (auto-selected — only mainnet domain configured)${RESET}"
+        echo ""
     else
-        # Single node detected — derive automatically, no user prompt needed
-        local auto_net="${detected_combos[0]%%:*}"
-        SYNC_CHOICE="$auto_net"
-        echo -e "  ${DIM}Network: ${auto_net} (auto-selected — only one node detected)${RESET}"
+        SYNC_CHOICE="testnet"
+        echo -e "  ${DIM}Network: testnet (auto-selected — only testnet domain configured)${RESET}"
         echo ""
     fi
 
-    # ── Web directories ───────────────────────────────────────────────────────
-    local nginx_domains=() nginx_dirs=() ni conf_file sn rd
-
-    if [ -d "/etc/nginx/sites-enabled" ]; then
-        for conf_file in /etc/nginx/sites-enabled/*; do
-            [ -f "$conf_file" ] || continue
-            sn=$(grep -m1 'server_name' "$conf_file" 2>/dev/null | \
-                 awk '{for(i=2;i<=NF;i++) if($i!=";" && $i!="_" && $i~/[.]/) {print $i; exit}}' | tr -d ';')
-            rd=$(grep -m1 '^\s*root\s' "$conf_file" 2>/dev/null | awk '{print $2}' | tr -d ';')
-            [ -n "$sn" ] && [ -n "$rd" ] && { nginx_domains+=("$sn"); nginx_dirs+=("$rd"); }
-        done
+    # ── Web directories — auto-assigned from nginx config ────────────────────
+    echo -e "${BOLD}Web directory for each node:${RESET}"
+    echo ""
+    if [[ "$SYNC_CHOICE" == "all" || "$SYNC_CHOICE" == "mainnet" ]] && [[ -n "$nginx_mainnet_dir" ]]; then
+        local _mvar="LOCAL_WEB_DIR_MAINNET_${nginx_mainnet_type^^}"
+        printf -v "$_mvar" '%s' "$nginx_mainnet_dir"
+        echo -e "  ${GREEN}✓${RESET} mainnet (${nginx_mainnet_type}) → ${nginx_mainnet_dir}  ${DIM}(from nginx: ${nginx_mainnet_domain})${RESET}"
     fi
-
-    local combo var_name current_val sel manual_opt
-    echo -e "${BOLD}Web directory for each detected node:${RESET}"
+    if [[ "$SYNC_CHOICE" == "all" || "$SYNC_CHOICE" == "testnet" ]] && [[ -n "$nginx_prunetest_dir" ]]; then
+        LOCAL_WEB_DIR_TESTNET_PRUNED="$nginx_prunetest_dir"
+        echo -e "  ${GREEN}✓${RESET} testnet (pruned) → ${nginx_prunetest_dir}  ${DIM}(from nginx: ${nginx_prunetest_domain})${RESET}"
+    fi
     echo ""
 
-    if [ ${#nginx_domains[@]} -eq 0 ]; then
-        echo -e "  ${DIM}No nginx domains found — enter paths manually.${RESET}"
-        echo -e "  ${DIM}Run script 02 first to set up a domain.${RESET}"
-        echo ""
-    fi
-
-    for combo in "${detected_combos[@]}"; do
-        scan_net="${combo%%:*}"
-        scan_ntype="${combo##*:}"
-        var_name="LOCAL_WEB_DIR_${scan_net^^}_${scan_ntype^^}"
-        current_val="${!var_name}"
-
-        echo -e "  ${BOLD}${scan_net^} / ${scan_ntype^}${RESET}"
-
-        # Try auto-match: if a scanned nginx root dir equals the current default, assign silently
-        local auto_matched=0
-        if [ ${#nginx_dirs[@]} -gt 0 ]; then
-            for ni in "${!nginx_dirs[@]}"; do
-                if [[ "${nginx_dirs[$ni]}" == "$current_val" ]]; then
-                    echo -e "  ${GREEN}✓${RESET} Auto-matched: ${nginx_domains[$ni]}  →  ${nginx_dirs[$ni]}"
-                    auto_matched=1
-                    break
-                fi
-            done
-        fi
-
-        if [ "$auto_matched" -eq 0 ]; then
-            # No auto-match — fall back to interactive selection
-            if [ ${#nginx_domains[@]} -gt 0 ]; then
-                for ni in "${!nginx_domains[@]}"; do
-                    echo -e "    ${GREEN}$((ni+1))${RESET}) ${nginx_domains[$ni]}  →  ${nginx_dirs[$ni]}"
-                done
-                manual_opt=$((${#nginx_domains[@]}+1))
-                echo -e "    ${GREEN}${manual_opt}${RESET}) Enter path manually  ${DIM}[current: ${current_val}]${RESET}"
-                echo -e "    ${DIM}0${RESET}) Cancel — return to main menu"
-                echo -ne "  Select [0-${manual_opt}]: "
-                read -r sel
-                [[ "$sel" == "0" ]] && return
-                if [[ "$sel" =~ ^[0-9]+$ ]] && \
-                   [ "$sel" -ge 1 ] && [ "$sel" -le "${#nginx_domains[@]}" ]; then
-                    printf -v "$var_name" '%s' "${nginx_dirs[$((sel-1))]}"
-                    echo -e "  ${GREEN}✓${RESET} Set to: ${!var_name}"
-                else
-                    echo -ne "  Path [${current_val}] or 0 to cancel: "
-                    read -r tmp; [[ "$tmp" == "0" ]] && return
-                    printf -v "$var_name" '%s' "${tmp:-$current_val}"
-                fi
-            else
-                echo -ne "  Path [${current_val}] or 0 to cancel: "
-                read -r tmp; [[ "$tmp" == "0" ]] && return
-                printf -v "$var_name" '%s' "${tmp:-$current_val}"
-            fi
-        fi
-        echo ""
-    done
-
-    # ── File ownership ────────────────────────────────────────────────────────
-    echo -e "${BOLD}File ownership after sync (chown):${RESET}"
-    echo -e "  ${DIM}Typical: www-data:www-data  — leave empty to skip, 0 to cancel.${RESET}"
-    echo -ne "  owner:group [${FILE_OWNER}]: "
-    read -r tmp; [[ "$tmp" == "0" ]] && return
-    FILE_OWNER="${tmp:-$FILE_OWNER}"
-    echo ""
-
-    # ── Stop timeout ──────────────────────────────────────────────────────────
-    echo -e "${BOLD}Grin node graceful-stop timeout (seconds):${RESET}"
-    echo -ne "  [${GRIN_STOP_TIMEOUT}] or 0 to cancel: "
-    read -r tmp; [[ "$tmp" == "0" ]] && return
-    GRIN_STOP_TIMEOUT="${tmp:-$GRIN_STOP_TIMEOUT}"
+    # ── File ownership & stop timeout (standard defaults) ────────────────────
+    echo -e "  ${DIM}File ownership: ${FILE_OWNER}${RESET}"
+    echo -e "  ${DIM}Graceful-stop timeout: ${GRIN_STOP_TIMEOUT}s${RESET}"
     echo ""
 
     # ── Save ──────────────────────────────────────────────────────────────────
-    DETECTED_NODE_TYPES="${detected_combos[*]}"
+    local _det_types=()
+    if [[ "$SYNC_CHOICE" == "all" || "$SYNC_CHOICE" == "mainnet" ]] && [[ -n "$nginx_mainnet_dir" ]]; then
+        _det_types+=("mainnet:${nginx_mainnet_type}")
+    fi
+    if [[ "$SYNC_CHOICE" == "all" || "$SYNC_CHOICE" == "testnet" ]] && [[ -n "$nginx_prunetest_dir" ]]; then
+        _det_types+=("testnet:pruned")
+    fi
+    DETECTED_NODE_TYPES="${_det_types[*]}"
     mkdir -p "$LOG_DIR"
     save_nginx_config
-    sched_success "Nginx config saved to: ${CYAN}$CONF_NGINX${RESET}"
+    echo ""
+    echo -e "${BOLD}${GREEN}Config saved:${RESET}"
+    echo -e "  Networks     : ${SYNC_CHOICE}"
+    [[ "$SYNC_CHOICE" == "all" || "$SYNC_CHOICE" == "mainnet" ]] && [[ -n "$nginx_mainnet_dir" ]] && \
+        echo -e "  mainnet      : ${nginx_mainnet_dir}  ${DIM}(${nginx_mainnet_domain})${RESET}"
+    [[ "$SYNC_CHOICE" == "all" || "$SYNC_CHOICE" == "testnet" ]] && [[ -n "$nginx_prunetest_dir" ]] && \
+        echo -e "  testnet      : ${nginx_prunetest_dir}  ${DIM}(${nginx_prunetest_domain})${RESET}"
+    echo -e "  Ownership    : ${FILE_OWNER}"
+    echo -e "  Stop timeout : ${GRIN_STOP_TIMEOUT}s"
+    echo -e "  Saved to     : ${DIM}$CONF_NGINX${RESET}"
     sched_log "Nginx config updated: SYNC_CHOICE=$SYNC_CHOICE DETECTED_NODE_TYPES=$DETECTED_NODE_TYPES"
     echo ""
-    echo "Press Enter to continue..."
-    read -r
+    echo -ne "Press ${BOLD}0${RESET} to return to main menu, or ${BOLD}Enter${RESET} to continue: "
+    read -r _back
 }
 
 ################################################################################
@@ -650,14 +638,12 @@ detect_grin_binary() {
 }
 
 detect_config_file() {
-    for path in "$GRIN_DIR/grin-server.toml" "$HOME/.grin/main/grin-server.toml" "/root/.grin/main/grin-server.toml"; do
-        if [ -f "$path" ]; then
-            GRIN_CONFIG_FILE="$path"
-            echo "[$(date '+%Y-%m-%d %H:%M:%S UTC' -u)] Config: $GRIN_CONFIG_FILE"
-            return 0
-        fi
-    done
-    echo "[$(date '+%Y-%m-%d %H:%M:%S UTC' -u)] WARNING: grin-server.toml not found — falling back to port-based detection"
+    if [ -f "$GRIN_DIR/grin-server.toml" ]; then
+        GRIN_CONFIG_FILE="$GRIN_DIR/grin-server.toml"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S UTC' -u)] Config: $GRIN_CONFIG_FILE"
+        return 0
+    fi
+    echo "[$(date '+%Y-%m-%d %H:%M:%S UTC' -u)] WARNING: grin-server.toml not found at $GRIN_DIR — falling back to port-based detection"
 }
 
 detect_network_type() {
@@ -695,9 +681,9 @@ detect_chain_data() {
 setup_derived_variables() {
     mkdir -p "$LOG_DIR"
     LOG_FILE="$LOG_DIR/share_nginx_${NETWORK_TYPE}_${NODE_TYPE}_$(date -u '+%Y%m%d_%H%M%S').log"
-    # Session name matches script 01 convention: grin_<basename of GRIN_DIR>
-    # e.g. /opt/grin/node/mainnet-prune → grin_mainnet-prune
-    TMUX_SESSION="grin_$(basename "$GRIN_DIR")"
+    # Session name convention: grin_<nodetype>_<networktype>
+    # e.g. /opt/grin/node/mainnet-prune → grin_pruned_mainnet
+    TMUX_SESSION="$(_grin_session_name "$GRIN_DIR")"
 
     local web_dir_var="LOCAL_WEB_DIR_${NETWORK_TYPE^^}_${NODE_TYPE^^}"
     OUTPUT_DIR="${!web_dir_var}"
@@ -1248,8 +1234,8 @@ try_start_from_known_dir() {
     fi
 
     command -v tmux &>/dev/null || apt-get install -y tmux -qq
-    # Session name matches script 01: grin_<basename of dir>
-    local sess="grin_$(basename "$found_dir")"
+    # Session name convention: grin_<nodetype>_<networktype>
+    local sess; sess="$(_grin_session_name "$found_dir")"
 
     # Kill any stale session with this name before starting fresh
     tmux kill-session -t "$sess" 2>/dev/null || true

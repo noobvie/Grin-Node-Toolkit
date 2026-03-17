@@ -38,11 +38,14 @@
 #              scripts) and occupied ports (3413 API, 3414 P2P mainnet,
 #              13414 P2P testnet, 3415 wallet).
 #              Prompts to kill conflicts before continuing.
+#              Also detects legacy $HOME/.grin directory — offers D) Delete
+#              (recommended) or Enter to keep (may cause config conflicts).
 #
-#   Step  2 — Dependency Check
-#              Installs any missing packages via apt-get (Debian/Ubuntu) or
-#              dnf (Rocky Linux / AlmaLinux 10+). OS version check is
-#              handled upstream by the master script.
+#   Step  2 — System Update & Dependency Check
+#              Runs apt-get update && upgrade (Debian/Ubuntu) or dnf update
+#              (Rocky Linux / AlmaLinux 10+) automatically — no prompt.
+#              Then installs any missing required packages. OS version check
+#              is handled upstream by the master script.
 #
 #   Step  3 — Network Selection
 #              User chooses: 1) Mainnet  2) Testnet  3) Both
@@ -134,7 +137,7 @@
 #              reclaim disk space.
 #
 #   Step 13 — Start Node in Tmux
-#              Creates a named tmux session (e.g. grin_mainnet-prune) and runs
+#              Creates a named tmux session (e.g. grin_pruned_mainnet) and runs
 #              './grin server run' inside it. Kills any pre-existing session with
 #              the same name first. The window stays open after grin exits so
 #              the user can read any output.
@@ -263,6 +266,39 @@ stop_grin_gracefully() {
 }
 
 # =============================================================================
+# HELPER: REMOVE NODE DIRECTORIES FROM CONF
+# -----------------------------------------------------------------------------
+# Reads INSTANCES_CONF, finds the stored directory paths for the given
+# networks, and deletes them from disk before a rebuild.
+#   Usage: _remove_instance_dirs mainnet|testnet|all
+# =============================================================================
+_remove_instance_dirs() {
+    [[ ! -f "$INSTANCES_CONF" ]] && return 0
+    local _scope="${1:-all}"
+    local _conf_content
+    _conf_content=$(cat "$INSTANCES_CONF" 2>/dev/null) || return 0
+
+    local _dirs=()
+    local _d
+
+    if [[ "$_scope" == "mainnet" || "$_scope" == "all" ]]; then
+        for _var in PRUNEMAIN_GRIN_DIR FULLMAIN_GRIN_DIR; do
+            _d=$(echo "$_conf_content" | grep "^${_var}=" | cut -d'"' -f2)
+            [[ -n "$_d" && -d "$_d" ]] && _dirs+=("$_d")
+        done
+    fi
+    if [[ "$_scope" == "testnet" || "$_scope" == "all" ]]; then
+        _d=$(echo "$_conf_content" | grep "^PRUNETEST_GRIN_DIR=" | cut -d'"' -f2)
+        [[ -n "$_d" && -d "$_d" ]] && _dirs+=("$_d")
+    fi
+
+    for _d in "${_dirs[@]}"; do
+        warn "Removing node directory: $_d"
+        rm -rf "$_d" && success "Removed: $_d" || warn "Failed to remove: $_d"
+    done
+}
+
+# =============================================================================
 # HELPER: STOP A SINGLE GRIN INSTANCE
 # -----------------------------------------------------------------------------
 # Stops only the instance on the given P2P port (SIGTERM → wait → SIGKILL) and
@@ -306,7 +342,7 @@ stop_grin_one() {
             sed -i '/^PRUNETEST_/d' "$INSTANCES_CONF"
         fi
         if [[ -n "$grin_dir" ]]; then
-            local sess="grin_$(basename "$grin_dir")"
+            local sess; sess="$(_grin_session_name "$grin_dir")"
             tmux kill-session -t "$sess" 2>/dev/null && info "Tmux session '$sess' closed." || true
         fi
         log "Conf entries cleared for port $target_port instance."
@@ -495,7 +531,7 @@ check_grin_running() {
             echo -e "  ${CYAN}B${RESET} — update binary only  (no chain data rebuild)"
             echo -e "  ${YELLOW}M${RESET} — kill mainnet  & rebuild mainnet"
             echo -e "  ${YELLOW}T${RESET} — kill testnet  & rebuild testnet"
-            echo -e "  ${RED}K${RESET} — kill all Grin processes & rebuild both"
+            echo -e "  ${RED}K${RESET} — kill all Grin processes & rebuild both networks"
             echo -e "  ${GREEN}0${RESET} — return to master script"
             echo ""
             echo -ne "${DIM}[B/M/T/K/0]: ${RESET}"
@@ -506,16 +542,19 @@ check_grin_running() {
                     ;;
                 [Mm])
                     stop_grin_one 3414
-                    exec "$0"
+                    _remove_instance_dirs mainnet
+                    GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
                 [Tt])
                     stop_grin_one 13414
-                    exec "$0"
+                    _remove_instance_dirs testnet
+                    GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
                 [Kk])
                     stop_grin_gracefully
+                    _remove_instance_dirs all
                     [[ -f "$INSTANCES_CONF" ]] && { : > "$INSTANCES_CONF"; log "Conf cleared (full rebuild)."; }
-                    exec "$0"
+                    GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
                 0)
                     exit 0
@@ -550,7 +589,8 @@ check_grin_running() {
                     ;;
                 [Mm])
                     stop_grin_one 3414
-                    exec "$0"
+                    _remove_instance_dirs mainnet
+                    GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
                 1|"")
                     RESTRICTED_NETWORK="testnet"
@@ -591,7 +631,8 @@ check_grin_running() {
                     ;;
                 [Tt])
                     stop_grin_one 13414
-                    exec "$0"
+                    _remove_instance_dirs testnet
+                    GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
                 1|"")
                     RESTRICTED_NETWORK="mainnet"
@@ -681,22 +722,71 @@ check_grin_running() {
             break
         fi
     done
+
+    # ── Legacy directory check ─────────────────────────────────────────────────
+    if [[ -d "$HOME/.grin" ]]; then
+        echo ""
+        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        warn "  Legacy Grin directory detected: $HOME/.grin"
+        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo -e "  This is a non-standard path that can conflict with the new"
+        echo -e "  standardized installation under ${BOLD}/opt/grin/${RESET}."
+        local _legacy_size
+        _legacy_size=$(du -sh "$HOME/.grin" 2>/dev/null | cut -f1) || _legacy_size="?"
+        echo -e "  Size: ${YELLOW}${_legacy_size}${RESET}"
+        echo ""
+        echo -e "  ${RED}D${RESET}) Delete ${BOLD}$HOME/.grin${RESET}  ${DIM}(recommended)${RESET}"
+        echo -e "  ${DIM}Enter${RESET}) Keep it and continue  ${DIM}(may cause config conflicts)${RESET}"
+        echo -e "  ${DIM}0${RESET}) Return to master script"
+        echo ""
+        echo -ne "${BOLD}Choice [D/Enter/0]: ${RESET}"
+        local _legacy_choice
+        read -r _legacy_choice || true
+        case "${_legacy_choice,,}" in
+            d)
+                rm -rf "$HOME/.grin"
+                success "Deleted: $HOME/.grin"
+                ;;
+            0)
+                exit 0
+                ;;
+            *)
+                warn "Keeping $HOME/.grin — this may cause config conflicts."
+                ;;
+        esac
+        echo ""
+    fi
+
     log "[STEP 1] Complete. No restrictions."
 }
 
 # =============================================================================
 # [2] INSTALL DEPENDENCIES
 # -----------------------------------------------------------------------------
-# Checks the script is run as root, then installs any missing packages via
+# Runs apt-get update && upgrade (or dnf update) to ensure the system is
+# current, then installs any missing required packages:
 # apt-get: tar, openssl, libncurses5 (or libncurses6 on Ubuntu 24.04+),
-# tmux, jq, tor, curl, wget.
+#          tmux, jq, tor, curl, wget.
 # dnf (Rocky/Alma 10+): epel-release (auto), tar, openssl, ncurses-compat-libs, tmux, jq, tor, curl, wget.
 # OS version check is handled upstream by the master script.
 # =============================================================================
 check_os_and_deps() {
-    step_header "Step 2: Dependency Check"
+    step_header "Step 2: System Update & Dependency Check"
 
     [[ $EUID -ne 0 ]] && die "This script must be run as root (sudo)."
+
+    # ── System update ─────────────────────────────────────────────────────────
+    info "Updating system packages..."
+    if command -v dnf &>/dev/null; then
+        dnf update -y || warn "dnf update encountered errors — continuing."
+    else
+        apt-get update \
+            && apt-get upgrade -y \
+            || warn "apt update/upgrade encountered errors — continuing."
+    fi
+    success "System up to date."
+    echo ""
 
     local os_id
     os_id="$(grep '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || true)"
@@ -816,7 +906,9 @@ select_network() {
                 if [[ "$running_network" == "mainnet" ]]; then
                     warn "Stopping ${running_network} to rebuild with different mode..."
                     stop_grin_gracefully
+                    _remove_instance_dirs mainnet
                     [[ -f "$INSTANCES_CONF" ]] && { sed -i '/^PRUNEMAIN_\|^FULLMAIN_/d' "$INSTANCES_CONF"; log "Conf entries cleared (mainnet mode-switch rebuild)."; }
+                    GRIN_SKIP_DISK_CHECK=1
                     NETWORK_TYPE="mainnet"
                     RESTRICTED_NETWORK=""
                     info "Network: ${BOLD}${NETWORK_TYPE}${RESET} — select new mode at Step 4"
@@ -936,9 +1028,9 @@ select_archive_mode() {
 # No user prompt is shown for the path — the standardized location is always used.
 #
 # Disk space check:
-#   Skipped when this is a rebuild (GRIN_DIR already exists AND INSTANCES_CONF
-#   exists) because the install overwrites the same directory, consuming no new
-#   space. On a fresh install the check is a hard stop if space is insufficient.
+#   Skipped when GRIN_SKIP_DISK_CHECK=1 (set by M/T/K rebuild paths, which
+#   already removed the old directory before restarting). On a fresh install
+#   the check is a hard stop if space is insufficient.
 #
 # Existing files in GRIN_DIR are cleared automatically (no confirmation prompt)
 # before the binary and chain data download begins.
@@ -962,12 +1054,9 @@ create_node_dir() {
     info "Node directory: $GRIN_DIR"
     echo ""
 
-    # 2. Disk space check — skipped on rebuild (directory + instances conf exist)
-    local _is_rebuild=false
-    [[ -d "$GRIN_DIR" && -f "$INSTANCES_CONF" ]] && _is_rebuild=true
-
-    if [[ "$_is_rebuild" == "true" ]]; then
-        info "Existing install detected — skipping disk space check (rebuild in place)."
+    # 2. Disk space check — skipped for rebuilds (M/T/K paths set GRIN_SKIP_DISK_CHECK=1)
+    if [[ "${GRIN_SKIP_DISK_CHECK:-0}" == "1" ]]; then
+        info "Rebuild mode — skipping disk space check."
     else
         local min_gb avail_kb avail_gb
         [[ "$mode" == "full" ]] && min_gb=25 || min_gb=10
@@ -1850,10 +1939,21 @@ stream_extract_chain_data() {
     log "[STEP 10] On-the-fly extraction complete."
 }
 
+# tmux session name convention: grin_<nodetype>_<networktype>
+_grin_session_name() {
+    case "$(basename "${1:-}")" in
+        mainnet-full)  echo "grin_full_mainnet"   ;;
+        mainnet-prune) echo "grin_pruned_mainnet" ;;
+        testnet-prune) echo "grin_pruned_testnet" ;;
+        *)             echo "grin_$(basename "${1:-}")" ;;
+    esac
+}
+
 # =============================================================================
 # [13] START GRIN NODE IN A TMUX SESSION
 # -----------------------------------------------------------------------------
-# Creates a named tmux session: grin_<dirname>  (e.g. grin_mainnet-prune).
+# Creates a named tmux session: grin_<nodetype>_<networktype>
+#   e.g. grin_full_mainnet, grin_pruned_mainnet, grin_pruned_testnet
 # If a session with that name already exists, it is killed first.
 # Runs './grin server run' inside the session so the node starts in TUI mode.
 # The session stays open after grin exits so the user can read any output.
@@ -1861,7 +1961,7 @@ stream_extract_chain_data() {
 # =============================================================================
 start_grin_tmux() {
     step_header "Step 13: Start Grin Node (tmux)"
-    local session="grin_$(basename "$GRIN_DIR")"
+    local session; session="$(_grin_session_name "$GRIN_DIR")"
 
     if tmux has-session -t "$session" 2>/dev/null; then
         warn "Tmux session '$session' already exists — killing it first."
@@ -1903,7 +2003,7 @@ show_summary() {
     local elapsed=$(( $(date +%s) - SCRIPT_START_TIME ))
     local mins=$(( elapsed / 60 ))
     local secs=$(( elapsed % 60 ))
-    local session="grin_$(basename "$GRIN_DIR")"
+    local session; session="$(_grin_session_name "$GRIN_DIR")"
 
     echo ""
     echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"

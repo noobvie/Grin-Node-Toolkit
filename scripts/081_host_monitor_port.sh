@@ -1143,7 +1143,12 @@ _md_ctrl_start() {
 started=0
 for dir in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/node/testnet-prune; do
     [[ -x "$dir/grin" ]] || continue
-    sess="grin_$(basename $dir)"
+    case "$(basename "$dir")" in
+        mainnet-full)  sess="grin_full_mainnet"   ;;
+        mainnet-prune) sess="grin_pruned_mainnet" ;;
+        testnet-prune) sess="grin_pruned_testnet" ;;
+        *)             sess="grin_$(basename "$dir")" ;;
+    esac
     if tmux has-session -t "$sess" 2>/dev/null; then
         echo "  already running: $sess"
         continue
@@ -1214,7 +1219,12 @@ echo __OK__
 started=0
 for dir in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/node/testnet-prune; do
     [[ -x "$dir/grin" ]] || continue
-    sess="grin_$(basename $dir)"
+    case "$(basename "$dir")" in
+        mainnet-full)  sess="grin_full_mainnet"   ;;
+        mainnet-prune) sess="grin_pruned_mainnet" ;;
+        testnet-prune) sess="grin_pruned_testnet" ;;
+        *)             sess="grin_$(basename "$dir")" ;;
+    esac
     if tmux has-session -t "$sess" 2>/dev/null; then
         echo "  already running: $sess"
         continue
@@ -1275,7 +1285,12 @@ done
 sleep 5
 for dir in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/node/testnet-prune; do
     [[ -x "$dir/grin" ]] || continue
-    sess="grin_$(basename $dir)"
+    case "$(basename "$dir")" in
+        mainnet-full)  sess="grin_full_mainnet"   ;;
+        mainnet-prune) sess="grin_pruned_mainnet" ;;
+        testnet-prune) sess="grin_pruned_testnet" ;;
+        *)             sess="grin_$(basename "$dir")" ;;
+    esac
     tmux has-session -t "$sess" 2>/dev/null && tmux kill-session -t "$sess" 2>/dev/null || true
     if id grin &>/dev/null; then
         tmux new-session -d -s "$sess" -c "$dir" \

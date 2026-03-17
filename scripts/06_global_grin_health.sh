@@ -158,8 +158,8 @@ _resolve_secret_from_toml() {
 # incremental stats) should check NODE_TYPE and warn when only a pruned node is found.
 #
 # Detection order for mainnet (both directories may co-exist):
-#   1. tmux session grin_mainnet-full  is active  → mainnet-full  (preferred)
-#   2. tmux session grin_mainnet-prune is active  → mainnet-prune
+#   1. tmux session grin_full_mainnet   is active  → mainnet-full  (preferred)
+#   2. tmux session grin_pruned_mainnet is active  → mainnet-prune
 #   3. No session found                           → prefer mainnet-full if the
 #                                                    directory exists, else prune
 detect_node() {
@@ -182,14 +182,14 @@ detect_node() {
     NODE_URL="http://127.0.0.1:${NODE_PORT}/v2/foreign"
 
     if [[ $NODE_PORT -eq $MAINNET_PORT ]]; then
-        # Script 01 names tmux sessions grin_<basename(node_dir)>, so the active
+        # Script 01 names tmux sessions grin_<nodetype>_<networktype>, so the active
         # session name reliably identifies which node is running on port 3413.
         # mainnet-full (archive) is always preferred: it provides complete block
         # history required by the explorer and the stats incremental updater.
-        if tmux has-session -t "grin_mainnet-full" 2>/dev/null; then
+        if tmux has-session -t "grin_full_mainnet" 2>/dev/null; then
             NODE_DIR="/opt/grin/node/mainnet-full"
             NODE_TYPE="full"
-        elif tmux has-session -t "grin_mainnet-prune" 2>/dev/null; then
+        elif tmux has-session -t "grin_pruned_mainnet" 2>/dev/null; then
             NODE_DIR="/opt/grin/node/mainnet-prune"
             NODE_TYPE="prune"
         elif [[ -d /opt/grin/node/mainnet-full ]]; then

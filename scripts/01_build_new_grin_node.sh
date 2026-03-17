@@ -473,11 +473,13 @@ update_binary_only() {
 # Returns 1 if no installed nodes found (caller should fall through to build wizard).
 # -----------------------------------------------------------------------------
 _start_installed_node() {
+    local _filter_net="${1:-}"   # optional: "mainnet" or "testnet" — start only that network
     local -a found_dirs=() found_nets=()
     local -a check_dirs=( "/opt/grin/node/mainnet-prune" "/opt/grin/node/mainnet-full" "/opt/grin/node/testnet-prune" )
     local -a check_nets=( "mainnet"                       "mainnet"                     "testnet"                      )
 
     for i in "${!check_dirs[@]}"; do
+        [[ -n "$_filter_net" && "${check_nets[$i]}" != "$_filter_net" ]] && continue
         [[ -x "${check_dirs[$i]}/grin" ]] && {
             found_dirs+=("${check_dirs[$i]}")
             found_nets+=("${check_nets[$i]}")
@@ -585,10 +587,11 @@ check_grin_running() {
         while true; do
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
             echo -e "  ${RED}M${RESET} — kill mainnet  & rebuild mainnet"
+            echo -e "  ${CYAN}s${RESET} — start installed testnet node  (no rebuild)"
             echo -e "  ${GREEN}1${RESET} — install testnet alongside mainnet  ${DIM}(default)${RESET}"
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[B/M/1/0, Enter = 1]: ${RESET}"
+            echo -ne "${DIM}[B/M/s/1/0, Enter = 1]: ${RESET}"
             read -r _main_choice || true
             case "${_main_choice:-1}" in
                 [Bb])
@@ -599,6 +602,13 @@ check_grin_running() {
                     _remove_instance_dirs mainnet
                     GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
+                [Ss])
+                    if _start_installed_node testnet; then
+                        exit 0
+                    else
+                        warn "No installed testnet node found — proceeding with new node setup."
+                        break
+                    fi ;;
                 1|"")
                     RESTRICTED_NETWORK="testnet"
                     success "Continuing with testnet installation."
@@ -610,7 +620,7 @@ check_grin_running() {
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose B, M, 1, or 0."
+                    warn "Invalid input — choose B, M, s, 1, or 0."
                     echo ""
                     ;;
             esac
@@ -627,10 +637,11 @@ check_grin_running() {
         while true; do
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
             echo -e "  ${RED}T${RESET} — kill testnet  & rebuild testnet"
+            echo -e "  ${CYAN}s${RESET} — start installed mainnet node  (no rebuild)"
             echo -e "  ${GREEN}1${RESET} — install mainnet alongside testnet  ${DIM}(default)${RESET}"
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[B/T/1/0, Enter = 1]: ${RESET}"
+            echo -ne "${DIM}[B/T/s/1/0, Enter = 1]: ${RESET}"
             read -r _test_choice || true
             case "${_test_choice:-1}" in
                 [Bb])
@@ -641,6 +652,13 @@ check_grin_running() {
                     _remove_instance_dirs testnet
                     GRIN_SKIP_DISK_CHECK=1 exec "$0"
                     ;;
+                [Ss])
+                    if _start_installed_node mainnet; then
+                        exit 0
+                    else
+                        warn "No installed mainnet node found — proceeding with new node setup."
+                        break
+                    fi ;;
                 1|"")
                     RESTRICTED_NETWORK="mainnet"
                     success "Continuing with mainnet installation."
@@ -652,7 +670,7 @@ check_grin_running() {
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose B, T, 1, or 0."
+                    warn "Invalid input — choose B, T, s, 1, or 0."
                     echo ""
                     ;;
             esac

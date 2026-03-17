@@ -49,12 +49,28 @@ section() {
     echo ""
 }
 
+# ─── Process guard ────────────────────────────────────────────────────────────
+# Returns 0 if no grin/grin-wallet processes are running, 1 otherwise.
+# Prints a warning with the surviving PIDs when returning 1.
+_require_grin_stopped() {
+    local survivors
+    survivors=$(pgrep -f 'grin server run\|grin-wallet' 2>/dev/null || true)
+    if [[ -n "$survivors" ]]; then
+        warn "Grin processes are still running (PIDs: $(echo "$survivors" | tr '\n' ' '))."
+        warn "Complete STEP 1 (stop all Grin processes) before this step."
+        log "[GUARD] Blocked — surviving PIDs: $survivors"
+        return 1
+    fi
+    return 0
+}
+
 # =============================================================================
 # STEP 1 — Stop all Grin processes
 # =============================================================================
 step_stop_processes() {
     section "STEP 1: Stop All Grin Processes"
 
+    # ── Detect by port (node + wallet ports) ──────────────────────────────────
     local found_ports=()
     for port in 3414 13414 3415 13415; do
         local pid
@@ -62,10 +78,22 @@ step_stop_processes() {
         [[ -n "$pid" ]] && found_ports+=("$port:$pid")
     done
 
+    # ── Detect by process name (catches orphans + wallet processes off-port) ──
+    local named_pids=()
+    while IFS= read -r pid; do
+        # Skip if already captured via port scan
+        local already=false
+        for entry in "${found_ports[@]}"; do
+            [[ "${entry##*:}" == "$pid" ]] && already=true && break
+        done
+        $already || named_pids+=("$pid")
+    done < <(pgrep -f 'grin server run\|grin-wallet' 2>/dev/null || true)
+
+    # ── Detect tmux sessions ───────────────────────────────────────────────────
     local tmux_sessions=""
     tmux_sessions=$(tmux ls -F '#{session_name}' 2>/dev/null | grep '^grin_' || true)
 
-    if [[ ${#found_ports[@]} -eq 0 && -z "$tmux_sessions" ]]; then
+    if [[ ${#found_ports[@]} -eq 0 && ${#named_pids[@]} -eq 0 && -z "$tmux_sessions" ]]; then
         success "No Grin processes or tmux sessions running. Skipping."
         log "[STEP 1] Nothing to stop."
         return
@@ -74,7 +102,12 @@ step_stop_processes() {
     info "Detected running Grin processes:"
     for entry in "${found_ports[@]}"; do
         local port="${entry%%:*}" pid="${entry##*:}"
-        echo -e "  ${YELLOW}→${RESET} Port $port  (PID $pid)"
+        local cmd; cmd=$(ps -p "$pid" -o comm= 2>/dev/null || echo "?")
+        echo -e "  ${YELLOW}→${RESET} Port $port  PID $pid  ($cmd)"
+    done
+    for pid in "${named_pids[@]}"; do
+        local cmd; cmd=$(ps -p "$pid" -o comm= 2>/dev/null || echo "?")
+        echo -e "  ${YELLOW}→${RESET} Orphan / wallet  PID $pid  ($cmd)"
     done
     if [[ -n "$tmux_sessions" ]]; then
         while IFS= read -r sess; do
@@ -82,8 +115,10 @@ step_stop_processes() {
         done <<< "$tmux_sessions"
     fi
 
-    if confirm_step "Stop all Grin processes and close Grin tmux sessions?"; then
+    if confirm_step "Kill all Grin processes and close Grin tmux sessions?"; then
         local stop_timeout=30
+
+        # ── Graceful SIGTERM → SIGKILL on port-bound processes ────────────────
         for entry in "${found_ports[@]}"; do
             local port="${entry%%:*}" pid="${entry##*:}"
             info "PID $pid on port $port — sending SIGTERM..."
@@ -102,6 +137,7 @@ step_stop_processes() {
             log "[STEP 1] Stopped port $port PID $pid"
         done
 
+        # ── Kill tmux sessions ────────────────────────────────────────────────
         if [[ -n "$tmux_sessions" ]]; then
             while IFS= read -r sess; do
                 tmux kill-session -t "$sess" 2>/dev/null \
@@ -110,8 +146,32 @@ step_stop_processes() {
                 log "[STEP 1] Killed tmux session: $sess"
             done <<< "$tmux_sessions"
         fi
+
+        # ── Final sweep — SIGKILL any surviving grin* processes by name ───────
+        # Catches orphaned children that survived after their tmux parent died.
+        sleep 1
+        local survivors
+        survivors=$(pgrep -f 'grin server run\|grin-wallet' 2>/dev/null || true)
+        if [[ -n "$survivors" ]]; then
+            warn "Orphaned process(es) still alive — sending SIGKILL (PIDs: $(echo "$survivors" | tr '\n' ' '))..."
+            echo "$survivors" | xargs -r kill -KILL 2>/dev/null || true
+            sleep 1
+            log "[STEP 1] SIGKILL sweep: $survivors"
+        fi
+
+        # ── Verify ────────────────────────────────────────────────────────────
+        local remaining
+        remaining=$(pgrep -f 'grin server run\|grin-wallet' 2>/dev/null || true)
+        if [[ -n "$remaining" ]]; then
+            warn "Could not kill all Grin processes (PIDs: $(echo "$remaining" | tr '\n' ' '))."
+            warn "Later steps that delete install directories may fail or leave partial files."
+            log "[STEP 1] Remaining after kill: $remaining"
+        else
+            success "All Grin processes stopped."
+            log "[STEP 1] All processes cleared."
+        fi
     else
-        info "Skipped — processes still running. Some later steps may fail."
+        info "Skipped — processes still running. Deletion steps will be blocked."
         log "[STEP 1] SKIPPED by user."
     fi
 }
@@ -120,7 +180,7 @@ step_stop_processes() {
 # STEP 2 — Remove nginx web directories
 # =============================================================================
 step_remove_web_dirs() {
-    section "STEP 2: Remove nginx Web Root Directories"
+    section "STEP 2: Remove Grin Web and Data Directories (/var/www, /var/lib)"
 
     if [[ ! -d /etc/nginx/sites-available ]]; then
         info "nginx not installed. Skipping."
@@ -128,15 +188,19 @@ step_remove_web_dirs() {
         return
     fi
 
-    # Collect unique root dirs from configs with 'grin' in name OR path
+    # Collect unique Grin web/data dirs from three sources:
+    #   A) nginx configs named *grin* or whose root path contains 'grin'
+    #   B) any directory under /var/www/ whose name contains 'grin'
+    #      (also catches fullmain/prunemain/prunetest and any custom api dirs)
+    #   C) any directory under /var/lib/ whose name contains 'grin'
     local -a web_dirs=()
     local seen=""
 
+    # Source A — scan nginx configs
     while IFS= read -r conf; do
         local root_dir
         root_dir=$(grep -oP '(?<=root\s)[^;]+' "$conf" 2>/dev/null | head -1 | xargs 2>/dev/null || true)
         [[ -z "$root_dir" || ! -d "$root_dir" ]] && continue
-        # Only include dirs that look Grin-related
         if [[ "$root_dir" == *grin* || "$conf" == *grin* ]]; then
             [[ "$seen" == *"|$root_dir|"* ]] && continue
             seen+="|$root_dir|"
@@ -144,20 +208,44 @@ step_remove_web_dirs() {
         fi
     done < <(find /etc/nginx/sites-available -type f 2>/dev/null || true)
 
+    # Source B — any dir under /var/www/ whose name contains 'grin'
+    #   Depth 1 only — catches fullmain/prunemain/prunetest and grin-api/* dirs
+    while IFS= read -r _d; do
+        [[ "$seen" == *"|$_d|"* ]] && continue
+        seen+="|$_d|"
+        web_dirs+=("$_d")
+    done < <(find /var/www -mindepth 1 -maxdepth 1 -type d -iname '*grin*' 2>/dev/null || true)
+
+    # Also catch the fixed Grin node-type dirs (fullmain/prunemain/prunetest)
+    # which don't have 'grin' in the name but are exclusively used by Grin
+    for _d in /var/www/fullmain /var/www/prunemain /var/www/prunetest; do
+        [[ -d "$_d" ]] || continue
+        [[ "$seen" == *"|$_d|"* ]] && continue
+        seen+="|$_d|"
+        web_dirs+=("$_d")
+    done
+
+    # Source C — any dir under /var/lib/ whose name contains 'grin'
+    while IFS= read -r _d; do
+        [[ "$seen" == *"|$_d|"* ]] && continue
+        seen+="|$_d|"
+        web_dirs+=("$_d")
+    done < <(find /var/lib -mindepth 1 -maxdepth 1 -type d -iname '*grin*' 2>/dev/null || true)
+
     if [[ ${#web_dirs[@]} -eq 0 ]]; then
-        info "No Grin web directories found in nginx configs. Skipping."
-        log "[STEP 2] No web dirs found. Skipped."
+        info "No Grin web/data directories found. Skipping."
+        log "[STEP 2] No web/data dirs found. Skipped."
         return
     fi
 
-    info "Web directories referenced in Grin nginx configs:"
+    info "Found Grin web/data directories:"
     for d in "${web_dirs[@]}"; do
         local sz
         sz=$(du -sh "$d" 2>/dev/null | awk '{print $1}' || echo "?")
         echo -e "  ${YELLOW}→${RESET} $d  ${DIM}($sz)${RESET}"
     done
 
-    if confirm_step "Permanently delete all web directories listed above?"; then
+    if confirm_step "Permanently delete all Grin directories listed above?"; then
         for d in "${web_dirs[@]}"; do
             info "Removing $d ..."
             rm -rf "$d"
@@ -265,6 +353,8 @@ step_remove_nginx_configs() {
 step_remove_install_dirs() {
     section "STEP 4: Remove Grin Binary and Install Directories"
 
+    _require_grin_stopped || return
+
     # Known locations script 01 creates
     local -a candidates=(
         "/opt/grin/wallet/testnet"
@@ -328,6 +418,8 @@ step_remove_install_dirs() {
 # =============================================================================
 step_remove_home_grin() {
     section "STEP 5: Remove \$HOME/.grin  (chain data and wallet files)"
+
+    _require_grin_stopped || return
 
     local grin_home="$HOME/.grin"
 
@@ -404,6 +496,46 @@ step_remove_logs() {
 }
 
 # =============================================================================
+# STEP 7 — Remove Grin crontab entries
+# =============================================================================
+step_remove_crontab() {
+    section "STEP 7: Remove Grin Crontab Entries"
+
+    local existing
+    existing=$(crontab -l 2>/dev/null || true)
+
+    local grin_lines
+    grin_lines=$(echo "$existing" | grep -i 'grin' || true)
+
+    if [[ -z "$grin_lines" ]]; then
+        info "No Grin entries found in crontab. Skipping."
+        log "[STEP 7] No Grin crontab entries found. Skipped."
+        return
+    fi
+
+    info "Found Grin entries in crontab:"
+    while IFS= read -r line; do
+        echo -e "  ${YELLOW}→${RESET} $line"
+    done <<< "$grin_lines"
+
+    if confirm_step "Remove all Grin entries from crontab?"; then
+        local cleaned
+        cleaned=$(echo "$existing" | grep -iv 'grin' || true)
+        # Write back — if nothing remains, install an empty crontab
+        if [[ -n "$cleaned" ]]; then
+            echo "$cleaned" | crontab -
+        else
+            crontab -r 2>/dev/null || true
+        fi
+        success "Grin crontab entries removed."
+        log "[STEP 7] Removed crontab entries: $grin_lines"
+    else
+        info "Skipped — crontab entries kept."
+        log "[STEP 7] SKIPPED by user."
+    fi
+}
+
+# =============================================================================
 # Main
 # =============================================================================
 main() {
@@ -418,11 +550,12 @@ main() {
     echo -e "${BOLD}${RED}║  This script will PERMANENTLY remove:                               ║${RESET}"
     echo -e "${BOLD}${RED}║                                                                      ║${RESET}"
     echo -e "${BOLD}${RED}║    1.  All running Grin node / wallet processes                      ║${RESET}"
-    echo -e "${BOLD}${RED}║    2.  nginx web root directories for Grin                          ║${RESET}"
+    echo -e "${BOLD}${RED}║    2.  Grin directories in /var/www/ and /var/lib/                  ║${RESET}"
     echo -e "${BOLD}${RED}║    3.  All Grin nginx configuration files                           ║${RESET}"
     echo -e "${BOLD}${RED}║    4.  Grin binary and install directories (/grin*, /opt/grin*)     ║${RESET}"
     echo -e "${BOLD}${RED}║    5.  Chain data and wallet files  (\$HOME/.grin/)                  ║${RESET}"
     echo -e "${BOLD}${RED}║    6.  Grin toolkit log files                                       ║${RESET}"
+    echo -e "${BOLD}${RED}║    7.  Grin crontab entries                                         ║${RESET}"
     echo -e "${BOLD}${RED}║                                                                      ║${RESET}"
     echo -e "${BOLD}${RED}║  Wallet seed phrases will be LOST if not backed up beforehand.      ║${RESET}"
     echo -e "${BOLD}${RED}║                                                                      ║${RESET}"
@@ -446,6 +579,7 @@ main() {
     step_remove_install_dirs
     step_remove_home_grin
     step_remove_logs
+    step_remove_crontab
 
     echo ""
     echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"

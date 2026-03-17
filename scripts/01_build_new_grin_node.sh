@@ -490,7 +490,7 @@ _start_installed_node() {
         return 1  # no installed nodes found — caller will fall through to build wizard
     fi
 
-    # start each node; mainnet first, 30-second gap before testnet
+    # start each node; mainnet first, 60-second gap before testnet
     local started=0
     for i in "${!found_dirs[@]}"; do
         GRIN_DIR="${found_dirs[$i]}"
@@ -506,11 +506,18 @@ _start_installed_node() {
         start_grin_tmux
         started=$(( started + 1 ))
         if [[ $(( i + 1 )) -lt ${#found_dirs[@]} ]]; then
-            info "Waiting 30 seconds before starting next instance..."
-            sleep 30
+            info "Waiting 60 seconds before starting next instance..."
+            sleep 60
         fi
     done
     success "$started node(s) started."
+    echo ""
+    echo -e "${BOLD}${YELLOW}  Be patient — the node may take up to 60 seconds to boot.${RESET}"
+    echo -e "  To monitor progress, attach to the tmux session:"
+    echo -e "    ${CYAN}Ctrl+B → s${RESET}  switch between sessions"
+    echo -e "    ${CYAN}Ctrl+B → d${RESET}  detach (leave node running)"
+    echo -e "    ${CYAN}0${RESET}            return to the main script menu"
+    echo ""
     return 0
 }
 

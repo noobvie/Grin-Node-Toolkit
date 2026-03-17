@@ -1989,6 +1989,24 @@ _grin_session_name() {
 }
 
 # =============================================================================
+# HELPER: CHECK IF A GRIN PROCESS IS RUNNING FOR A SPECIFIC NODE DIRECTORY
+# -----------------------------------------------------------------------------
+# Uses /proc/<pid>/cwd to match the process working directory so we distinguish
+# mainnet vs testnet nodes even when both are installed.
+# Returns 0 (found) or 1 (not found).
+# =============================================================================
+_grin_proc_for_dir() {
+    local dir="$1"
+    local pid
+    while IFS= read -r pid; do
+        local cwd
+        cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null) || continue
+        [[ "$cwd" == "$dir" ]] && return 0
+    done < <(pgrep -f 'grin server run' 2>/dev/null || true)
+    return 1
+}
+
+# =============================================================================
 # [13] START GRIN NODE IN A TMUX SESSION
 # -----------------------------------------------------------------------------
 # Creates a named tmux session: grin_<nodetype>_<networktype>
@@ -2001,6 +2019,15 @@ _grin_session_name() {
 start_grin_tmux() {
     step_header "Step 13: Start Grin Node (tmux)"
     local session; session="$(_grin_session_name "$GRIN_DIR")"
+
+    # ── Boot/duplication guard ────────────────────────────────────────────────
+    # If a grin process already owns this node directory (booting or running but
+    # port not yet bound), skip the launch to prevent a grin.lock conflict.
+    if _grin_proc_for_dir "$GRIN_DIR"; then
+        warn "Grin is already starting or running in $GRIN_DIR — skipping duplicate launch."
+        info "Wait for the node to finish booting, then re-run if needed."
+        return 0
+    fi
 
     if tmux has-session -t "$session" 2>/dev/null; then
         warn "Tmux session '$session' already exists — killing it first."

@@ -201,17 +201,22 @@ _nginx_domain() {
 }
 
 # Add rate-limit/connection-limit zones into the http {} block of nginx.conf.
-# Idempotent — only adds if our marker comment is absent.
+# Idempotent — skips if grin_conn zone already present.
+# Upgrades gracefully — removes any old single-zone block before inserting the new one.
 _nginx_add_limit_req_zone() {
     local nginx_conf="/etc/nginx/nginx.conf"
-    grep -q "zone=grin_api" "$nginx_conf" 2>/dev/null && return 0
+    grep -q "zone=grin_conn" "$nginx_conf" 2>/dev/null && return 0
     python3 - "$nginx_conf" << 'PYEOF'
 import sys, re
 conf_file = sys.argv[1]
 with open(conf_file) as fh:
     txt = fh.read()
-if 'zone=grin_api' in txt:
+if 'zone=grin_conn' in txt:
     sys.exit(0)
+# Remove any old single-zone block left by a previous version of this script
+txt = re.sub(
+    r'\n    # Grin Node Toolkit[^\n]*\n(?:    [^\n]+\n){1,6}',
+    '\n', txt)
 insert = (
     '\n    # Grin Node Toolkit — rate/connection-limit zones for public API\n'
     '    limit_req_zone  $binary_remote_addr zone=grin_api:10m  rate=10r/s;\n'
@@ -242,8 +247,7 @@ conf_file = sys.argv[1]
 with open(conf_file) as fh:
     txt = fh.read()
 txt = re.sub(
-    r'\n    # Grin Node Toolkit[^\n]*rate[^\n]*zones[^\n]*\n'
-    r'(?:    [^\n]+\n){1,6}',
+    r'\n    # Grin Node Toolkit[^\n]*\n(?:    [^\n]+\n){1,6}',
     '\n', txt)
 with open(conf_file, 'w') as fh:
     fh.write(txt)

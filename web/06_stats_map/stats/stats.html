@@ -994,6 +994,7 @@ function makePriceChartUSDT(id) {
         pointRadius: 0,
         fill: true,
         tension: 0.3,
+        spanGaps: false,
         yAxisID: "y",
       }]
     },
@@ -1032,17 +1033,31 @@ function makePriceChartBTC(id) {
   return new Chart(ctx, {
     type: "line",
     data: {
-      datasets: [{
-        label: "GRIN/BTC (sats)",
-        data: [],
-        borderColor: "#ffd700",
-        backgroundColor: "#ffd70018",
-        borderWidth: 1.5,
-        pointRadius: 0,
-        fill: true,
-        tension: 0.3,
-        yAxisID: "y",
-      }]
+      datasets: [
+        {
+          label: "GRIN/BTC (sats)",
+          data: [],
+          borderColor: "#ffd700",
+          backgroundColor: "#ffd70018",
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.3,
+          spanGaps: false,
+          yAxisID: "y",
+          order: 1,
+        },
+        {
+          type: "bar",
+          label: "Volume (GRIN)",
+          data: [],
+          backgroundColor: "#ffd70030",
+          borderColor: "transparent",
+          borderWidth: 0,
+          yAxisID: "yVol",
+          order: 2,
+        },
+      ]
     },
     options: {
       responsive: true,
@@ -1053,7 +1068,10 @@ function makePriceChartBTC(id) {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: ctx => ` ${fmtNum(ctx.parsed.y, 0)} sat`,
+            label: ctx => {
+              if (ctx.datasetIndex === 0) return ` ${fmtNum(ctx.parsed.y, 0)} sat`;
+              return ` Vol: ${fmtNum(ctx.parsed.y, 0)} GRIN`;
+            },
             title: items => new Date(items[0].parsed.x).toLocaleString(),
           }
         }
@@ -1068,7 +1086,14 @@ function makePriceChartBTC(id) {
           type: "linear",
           position: "left",
           ticks: { callback: v => fmtNum(v, 0) + " sat" },
-        }
+        },
+        yVol: {
+          type: "linear",
+          position: "right",
+          display: false,
+          beginAtZero: true,
+          grid: { drawOnChartArea: false },
+        },
       }
     }
   });
@@ -1181,27 +1206,71 @@ function updateActivityChart(txJson, feeJson, range, metric) {
 }
 
 // ── Price chart updates ───────────────────────────────────────────────────────
+
+// Insert y:null between consecutive points farther apart than maxGapMs so
+// Chart.js (spanGaps:false) draws a visible break instead of a flat line.
+function breakGaps(pts, maxGapMs) {
+  if (pts.length < 2) return pts;
+  const out = [];
+  for (let i = 0; i < pts.length; i++) {
+    out.push(pts[i]);
+    if (i < pts.length - 1 && pts[i + 1].x - pts[i].x > maxGapMs) {
+      out.push({ x: (pts[i].x + pts[i + 1].x) / 2, y: null });
+    }
+  }
+  return out;
+}
+
+// Max gap per range before a break is inserted (3× expected candle interval)
+const _PRICE_GAP_MS = {
+  day:   3  * 3600e3,   // 5m candles  → break if > 3h
+  week:  12 * 3600e3,   // 1h candles  → break if > 12h
+  month: 2  * 86400e3,  // 6h candles  → break if > 2d
+  year:  4  * 86400e3,  // 1d candles  → break if > 4d
+  all:   4  * 86400e3,  // 1d candles  → break if > 4d
+};
+
 function updatePriceChartUSDT(data, range) {
   if (!charts.priceUsdt || !data) return;
   const usdt = data["GRIN_USDT"];
-  const pts  = (usdt?.[`ohlcv_${range}`] || []).map(([ts, v]) => ({ x: ts * 1000, y: v }));
+  let pts = (usdt?.[`ohlcv_${range}`] || []).map(([ts, v]) => ({ x: ts * 1000, y: v }));
 
-  // Year/All need historical backfill — fewer than 3 daily points means no meaningful data
-  const needsHistory = (range === "year" || range === "all") && pts.length < 3;
-  const hide = pts.length === 0 || needsHistory;
+  // Fallback for year/all: if the ranged key is empty, extract from ohlcv_all
+  // (covers the case where 1d candles exist but fall outside the exact range window)
+  if (!pts.length && (range === "year" || range === "all")) {
+    const cutoff = range === "year" ? Date.now() - 365 * 86400000 : 0;
+    pts = (usdt?.ohlcv_all || [])
+      .filter(([ts]) => ts * 1000 >= cutoff)
+      .map(([ts, v]) => ({ x: ts * 1000, y: v }));
+  }
+
+  // Break flat lines across data gaps (Gate.io has no candles on zero-volume days)
+  pts = breakGaps(pts, _PRICE_GAP_MS[range] ?? 4 * 86400e3);
+
+  // Show point markers when data is sparse so individual candles are visible
+  const realPts = pts.filter(p => p.y !== null).length;
+  charts.priceUsdt.data.datasets[0].pointRadius = realPts < 60 ? 2 : 0;
 
   charts.priceUsdt.data.datasets[0].data = pts;
-  $("price-usdt-chart-wrap").style.display = hide ? "none"  : "block";
-  $("price-usdt-no-data").style.display    = hide ? "block" : "none";
+  $("price-usdt-no-data").style.display    = realPts ? "none"  : "block";
+  $("price-usdt-chart-wrap").style.display = realPts ? "block" : "none";
   charts.priceUsdt.update("none");
 }
 
 function updatePriceChartBTC(data, range) {
   if (!charts.priceBtc || !data) return;
   const btc = data["GRIN_BTC"];
-  const pts  = (btc?.[`ohlcv_${range}`] || []).map(([ts, v]) => ({ x: ts * 1000, y: Math.round(v * 1e8) }));
+  const raw = btc?.[`ohlcv_${range}`] || [];
+
+  const pts    = raw.map(([ts, v])    => ({ x: ts * 1000, y: Math.round(v * 1e8) }));
+  const volPts = raw.map(([ts,, vol]) => ({ x: ts * 1000, y: vol || 0 }));
+
+  // Scale volume axis so bars occupy ~20% of chart height
+  const maxVol = Math.max(...volPts.map(p => p.y), 1);
+  charts.priceBtc.options.scales.yVol.max = maxVol * 5;
 
   charts.priceBtc.data.datasets[0].data = pts;
+  charts.priceBtc.data.datasets[1].data = volPts;
   $("price-btc-no-data").style.display    = pts.length ? "none"  : "block";
   $("price-btc-chart-wrap").style.display = pts.length ? "block" : "none";
   charts.priceBtc.update("none");

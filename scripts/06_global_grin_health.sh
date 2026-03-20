@@ -589,19 +589,19 @@ server {
     }
 
     # ── Public JSON API — whitelisted endpoints only ───────────────────────────
-    # Only the three files below are intentionally public.
+    # Only the files below are intentionally public.
     # /data/ stays blocked; these exact locations are the only way in from outside.
     # Rate limiting (30 req/min/IP, burst 10) is applied via the shared snippet.
     # See /etc/nginx/snippets/grin-api.conf and /etc/nginx/conf.d/grin-rate-limit.conf
     #
     # Endpoints:
-    #   /api/price    → GRIN/USDT + GRIN/BTC price, OHLCV history  (06_price_collector.py)
-    #   /api/summary  → tip height, hashrate, difficulty, supply     (06_collector.py)
-    #   /api/peers    → peer list, country counts                    (06_collector.py)
+    #   /api/price    → GRIN/USDT price, OHLCV history  (06_price_collector.py)
+    #   /api/summary  → tip height, hashrate, difficulty, supply  (06_collector.py)
+    #   /api/peers    → disabled (privacy mode — peer data is internal only)
     #
     location = /api/price   { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/price.json;   }
     location = /api/summary { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/summary.json; }
-    location = /api/peers   { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/peers.json;   }
+    location = /api/peers   { return 404; }
 
     # Block everything else under /api/ — no directory listing, no other files
     location /api/ { return 404; }

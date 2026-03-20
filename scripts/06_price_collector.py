@@ -74,7 +74,10 @@ def _http_get(url, retries=3, timeout=15):
     """GET a JSON URL with basic retry logic."""
     for attempt in range(retries):
         try:
-            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            req = urllib.request.Request(url, headers={
+                "Accept":     "application/json",
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            })
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read())
         except (urllib.error.URLError, OSError) as exc:
@@ -197,7 +200,7 @@ def fetch_nonlogs_ticker():
             "source":       "nonlogs.io",
         }
     except Exception as exc:
-        print(f"[WARN] nonlogs.io ticker: {exc}", file=sys.stderr)
+        print(f"[WARN] nonlogs.io ticker ({url}): {exc}", file=sys.stderr)
         return None
 
 # ── Fetch: Gate.io OHLCV candles ─────────────────────────────────────────────
@@ -310,18 +313,18 @@ _TF = {
 }
 
 def _ohlcv_for_export(conn, pair, interval, since):
-    """Return [[ts, close], ...] — same format as 06_collector.py chart data."""
+    """Return [[ts, close, volume], ...] for chart data."""
     if since is None:
         rows = conn.execute(
-            "SELECT ts, close FROM ohlcv WHERE pair=? AND interval=? ORDER BY ts",
+            "SELECT ts, close, volume FROM ohlcv WHERE pair=? AND interval=? ORDER BY ts",
             (pair, interval),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT ts, close FROM ohlcv WHERE pair=? AND interval=? AND ts>=? ORDER BY ts",
+            "SELECT ts, close, volume FROM ohlcv WHERE pair=? AND interval=? AND ts>=? ORDER BY ts",
             (pair, interval, since),
         ).fetchall()
-    return [[r[0], r[1]] for r in rows]
+    return [[r[0], r[1], r[2] or 0] for r in rows]
 
 def export_price_json():
     conn  = open_db()

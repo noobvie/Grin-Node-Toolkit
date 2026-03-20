@@ -1896,6 +1896,21 @@ faucet_reset_db() {
 faucet_show_menu_status() {
     echo -e "\n${BOLD}Status:${RESET}\n"
 
+    # Prerequisites — testnet node + wallet listener must be running for faucet to work
+    if ss -tlnp 2>/dev/null | grep -q ":13413 "; then
+        echo -e "  ${BOLD}Testnet node${RESET}: ${GREEN}● running${RESET}  ${DIM}(port 13413)${RESET}"
+    else
+        echo -e "  ${BOLD}Testnet node${RESET}: ${RED}✗ not running${RESET}  ${YELLOW}⚠ required — run Script 01 in testnet mode${RESET}"
+    fi
+
+    local _wallet_session="grin_wallet_testnet"
+    if tmux has-session -t "$_wallet_session" 2>/dev/null; then
+        echo -e "  ${BOLD}Wallet${RESET}      : ${GREEN}● listening${RESET}  ${DIM}(tmux: $_wallet_session)${RESET}"
+    else
+        echo -e "  ${BOLD}Wallet${RESET}      : ${YELLOW}not listening${RESET}  ${DIM}⚠ required — run option b) Wallet Listener in this script${RESET}"
+    fi
+    echo ""
+
     # 1 Install
     if [[ -f "/etc/systemd/system/${FAUCET_SERVICE}.service" ]]; then
         echo -e "  ${BOLD}1 Install${RESET}   : ${GREEN}OK${RESET}"

@@ -1,0 +1,104 @@
+/* win98.css — Windows 98 classic UI theme */
+:root {
+  --bg-body:      #008080;
+  --bg-card:      #c0c0c0;
+  --bg-card2:     #d4d0c8;
+  --text:         #000000;
+  --text-dim:     #444444;
+  --accent:       #000080;
+  --accent2:      #0000aa;
+  --border:       #808080;
+  --btn-bg:       #c0c0c0;
+  --btn-text:     #000000;
+  --btn-hover:    #d4d0c8;
+  --input-bg:     #ffffff;
+  --input-border: #808080;
+  --error-color:  #cc0000;
+  --ok-color:     #006400;
+  --warn-color:   #cc6600;
+  --font-mono:    'Courier New', Courier, monospace;
+  --font-sans:    'Tahoma', 'MS Sans Serif', Arial, sans-serif;
+  --radius:       0px;
+  --shadow:       none;
+}
+
+/* Window chrome */
+body { font-size: 13px; }
+
+.card {
+  border: 2px solid;
+  border-color: #ffffff #808080 #808080 #ffffff;
+  box-shadow: 2px 2px 0 #000;
+}
+
+.stat-item {
+  border: 2px solid;
+  border-color: #808080 #ffffff #ffffff #808080;
+}
+
+/* Title bar style for site title */
+.site-title {
+  font-size: 1rem;
+  color: #ffffff;
+  background: linear-gradient(to right, #000080, #1084d0);
+  padding: 3px 6px;
+  font-family: var(--font-sans);
+}
+.site-title span { color: #f2c94c; }
+
+/* Buttons — raised bevel */
+.btn {
+  background: #c0c0c0;
+  color: #000;
+  border: 2px solid;
+  border-color: #ffffff #808080 #808080 #ffffff;
+  box-shadow: 1px 1px 0 #000;
+  font-family: var(--font-sans);
+  font-size: .85rem;
+  font-weight: normal;
+  border-radius: 0;
+}
+.btn:hover { background: #d4d0c8; }
+.btn:active {
+  border-color: #808080 #ffffff #ffffff #808080;
+  box-shadow: none;
+  transform: translate(1px, 1px);
+}
+.btn-outline {
+  background: #c0c0c0;
+  border-color: #ffffff #808080 #808080 #ffffff;
+  color: #000080;
+}
+
+/* Inputs */
+input[type="text"], textarea {
+  border: 2px inset #808080;
+  background: #fff;
+  color: #000;
+  font-family: var(--font-mono);
+  border-radius: 0;
+}
+input[type="text"]:focus, textarea:focus {
+  outline: 1px dotted #000;
+  border-color: #808080;
+}
+
+/* Slatepack box */
+.slatepack-box {
+  background: #fff;
+  border: 2px inset #808080;
+  color: #000080;
+}
+
+/* Headers */
+h2 { color: #000080; font-family: var(--font-sans); }
+.step-num { background: #000080; color: #fff; border-radius: 0; }
+.step-title { color: #000; }
+a { color: #000080; }
+.stat-value { color: #000080; }
+.theme-btn.active, .theme-btn:hover { border-color: #000080; color: #000080; }
+.tab-btn.active, .tab-btn:hover { border-color: #000080; color: #000080; }
+.donate-addr { color: #000080; }
+.how-steps li::before { color: #000080; }
+.how-steps code { background: #d4d0c8; color: #000; border: 1px inset #808080; }
+.info-box { border-left-color: #000080; background: #d4d0c8; color: #444; }

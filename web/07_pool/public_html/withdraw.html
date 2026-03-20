@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Withdraw | Grin Pool ツ</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" id="theme-css" href="/css/themes/matrix.css">
+</head>
+<body class="theme-matrix">
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title"><a href="/">Grin Pool <span>ツ</span></a></div>
+      <nav class="nav-links">
+        <a href="/">Home</a>
+        <a href="/dashboard.html" id="nav-dashboard" style="display:none">Dashboard</a>
+        <a href="/withdraw.html"  id="nav-withdraw"  class="active">Withdraw</a>
+        <a href="/admin/"         id="nav-admin"     style="display:none">Admin</a>
+        <a href="/login.html"     id="nav-login"     style="display:none">Login</a>
+        <span id="nav-user" style="display:none"></span>
+      </nav>
+      <div class="theme-switcher">
+        <button class="theme-btn" data-theme="matrix">Matrix</button>
+        <button class="theme-btn" data-theme="dark">Dark</button>
+        <button class="theme-btn" data-theme="light">Light</button>
+        <button class="theme-btn" data-theme="naruto">Naruto</button>
+        <button class="theme-btn" data-theme="japan">Japan ✿</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="testnet-banner" id="testnet-banner" style="display:none">
+  ⚠ TESTNET — These coins have no real value
+</div>
+
+<main>
+  <div class="container">
+
+    <!-- Withdrawal history -->
+    <section>
+      <h2>Withdrawal History</h2>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Amount ツ</th>
+                <th>Fee ツ</th>
+                <th>Status</th>
+                <th>Tx ID</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody">
+              <tr class="loading-row"><td colspan="6"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Withdraw form -->
+    <section>
+      <h2>New Withdrawal</h2>
+      <div class="card" style="max-width:540px;">
+
+        <!-- Step 1 — Request -->
+        <div id="step-1">
+          <div class="step-header">
+            <div class="step-num">1</div>
+            <div class="step-title">Enter Amount &amp; Address</div>
+          </div>
+          <p class="step-desc">
+            Withdrawals use Grin's Slatepack protocol. You will need your Grin wallet (CLI or Grim) to complete the transaction.
+          </p>
+
+          <div class="form-group">
+            <label for="withdraw-amount">
+              Amount (GRIN)
+              <span style="color:var(--text-dim);margin-left:.4rem;" id="available-label"></span>
+            </label>
+            <input type="number" id="withdraw-amount" min="0" step="0.0001" placeholder="0.0000">
+          </div>
+          <div class="form-group">
+            <label for="withdraw-address">
+              Your Grin Address
+              <span style="color:var(--text-dim);font-size:.78rem;"> (required — Slatepack address from your wallet)</span>
+            </label>
+            <input type="text" id="withdraw-address" placeholder="grin1…">
+          </div>
+
+          <p class="error-msg" id="withdraw-error"></p>
+          <button class="btn btn-full" id="withdraw-btn">Request Withdrawal</button>
+        </div>
+
+        <!-- Step 2 — Slatepack exchange -->
+        <div id="step-2" style="display:none;">
+          <div class="step-header">
+            <div class="step-num">2</div>
+            <div class="step-title">Sign with Your Wallet</div>
+          </div>
+          <p class="step-desc">
+            Copy the Slatepack below and run it through your Grin wallet (<code>grin-wallet receive</code> or Grim).
+            Then paste the response Slatepack back here.
+          </p>
+
+          <label>Slatepack from Pool</label>
+          <div class="slatepack-box" id="slatepack-display"></div>
+
+          <div class="countdown-row">
+            <span class="countdown-label">Expires in:</span>
+            <span class="countdown" id="countdown-timer">5:00</span>
+          </div>
+
+          <button class="btn btn-outline btn-sm" id="copy-slate-btn" style="margin-bottom:1rem;">Copy Slatepack</button>
+
+          <div class="info-box">
+            <strong>CLI:</strong> <code>grin-wallet receive -m &lt;paste slatepack&gt;</code><br>
+            <strong>Grim wallet:</strong> Go to Receive → Paste Slatepack → Sign
+          </div>
+
+          <div class="form-group" style="margin-top:.8rem;">
+            <label for="response-slate">Response Slatepack (from your wallet)</label>
+            <textarea id="response-slate" rows="5" placeholder="Paste the signed response slatepack here…"></textarea>
+          </div>
+
+          <p class="error-msg" id="finalize-error"></p>
+          <button class="btn btn-full" id="finalize-btn">Finalize Transaction</button>
+        </div>
+
+        <!-- Step 3 — Success -->
+        <div id="step-3" style="display:none;">
+          <div class="step-header">
+            <div class="step-num">3</div>
+            <div class="step-title">Withdrawal Complete!</div>
+          </div>
+          <div class="success-box">
+            <p style="color:var(--ok-color);font-weight:700;font-size:1.05rem;">Transaction finalized successfully ツ</p>
+            <p style="margin-top:.5rem;font-size:.88rem;color:var(--text-dim);">
+              Tx Slate ID: <span class="mono" id="success-tx-id"></span>
+            </p>
+          </div>
+          <button class="btn btn-full btn-outline" id="new-withdraw-btn" style="margin-top:1rem;">
+            New Withdrawal
+          </button>
+        </div>
+
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <p>Grin Pool ツ &nbsp;·&nbsp; <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a></p>
+  </div>
+</footer>
+
+<script src="/js/api.js"></script>
+<script src="/js/theme.js"></script>
+<script src="/js/withdraw.js"></script>
+<script>
+// ── Auth check ─────────────────────────────────────────────────────────────
+(function () {
+  if (!API.isLoggedIn()) {
+    window.location.href = '/login.html';
+    return;
+  }
+  const token = localStorage.getItem('pool-access-token');
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    document.getElementById('nav-login').style.display    = 'none';
+    document.getElementById('nav-dashboard').style.display = '';
+    document.getElementById('nav-withdraw').style.display  = '';
+    document.getElementById('nav-user').style.display = '';
+    document.getElementById('nav-user').innerHTML =
+      `<span class="nav-username">${payload.sub}</span> <a href="#" onclick="API.clearTokens();window.location='/login.html'">Logout</a>`;
+    if (payload.is_admin) document.getElementById('nav-admin').style.display = '';
+  } catch (e) {}
+
+  fetch('/api/pool/stats').then(r => r.json()).then(d => {
+    if (d.network === 'testnet') {
+      document.getElementById('testnet-banner').style.display = '';
+      document.title = '[TESTNET] ' + document.title;
+    }
+    const el = document.querySelector('.site-title a');
+    if (el && d.pool_name) el.childNodes[0].textContent = d.pool_name + ' ';
+  }).catch(() => {});
+})();
+
+// ── Init withdraw module ───────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  Withdraw.init();
+  loadWithdrawable();
+  loadHistory();
+});
+
+async function loadWithdrawable() {
+  try {
+    const d = await API.get('/api/user/dashboard');
+    const lbl = document.getElementById('available-label');
+    if (lbl) lbl.textContent = '(available: ' + (d.withdrawable || 0).toFixed(4) + ' GRIN)';
+    // Pre-fill min amount hint
+    if (d.min_withdraw) {
+      const amt = document.getElementById('withdraw-amount');
+      if (amt) amt.placeholder = 'Min: ' + d.min_withdraw;
+    }
+  } catch (_) {}
+}
+
+// ── Withdrawal history ─────────────────────────────────────────────────────
+const STATUS_BADGE = {
+  waiting_finalize: '<span class="badge badge-warn">Awaiting Finalize</span>',
+  finalized:        '<span class="badge badge-ok">Finalized</span>',
+  completed:        '<span class="badge badge-ok">Completed</span>',
+  failed:           '<span class="badge badge-error">Failed</span>',
+  expired:          '<span class="badge badge-dim">Expired</span>',
+};
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString();
+}
+
+async function loadHistory() {
+  const tbody = document.getElementById('history-tbody');
+  try {
+    const items = await API.get('/api/user/withdrawals');
+    if (!items || !items.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No withdrawals yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = items.map(w => {
+      const badge   = STATUS_BADGE[w.status] || `<span class="badge badge-dim">${escHtml(w.status)}</span>`;
+      const txId    = w.tx_slate_id
+        ? `<span class="truncate mono" title="${escHtml(w.tx_slate_id)}">${escHtml(w.tx_slate_id.slice(0,16))}…</span>`
+        : '—';
+      let actions = '';
+      if (w.status === 'waiting_finalize') {
+        actions = `
+          <button class="btn btn-sm btn-outline" onclick="Withdraw.resumeWithdrawal('${w.id}')">Get Slatepack</button>
+        `;
+      }
+      return `
+        <tr>
+          <td>${fmtDate(w.created_at)}</td>
+          <td class="mono">${(w.amount || 0).toFixed(4)}</td>
+          <td class="mono">${w.fee ? w.fee.toFixed(4) : '—'}</td>
+          <td>${badge}</td>
+          <td>${txId}</td>
+          <td>${actions}</td>
+        </tr>
+      `;
+    }).join('');
+  } catch (err) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Could not load history.</td></tr>';
+  }
+}
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+</script>
+</body>
+</html>

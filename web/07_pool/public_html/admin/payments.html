@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payments | Grin Pool ツ</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" id="theme-css" href="/css/themes/matrix.css">
+</head>
+<body class="theme-matrix">
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title"><a href="/">Grin Pool <span>ツ</span></a></div>
+      <nav class="nav-links">
+        <a href="/">Home</a>
+        <a href="/dashboard.html" id="nav-dashboard">Dashboard</a>
+        <a href="/admin/" id="nav-admin">Admin</a>
+        <a href="/admin/payments.html" class="active">Payments</a>
+        <a href="/login.html" id="nav-login" style="display:none">Login</a>
+        <span id="nav-user" style="display:none"></span>
+      </nav>
+      <div class="theme-switcher">
+        <button class="theme-btn" data-theme="matrix">Matrix</button>
+        <button class="theme-btn" data-theme="dark">Dark</button>
+        <button class="theme-btn" data-theme="light">Light</button>
+        <button class="theme-btn" data-theme="naruto">Naruto</button>
+        <button class="theme-btn" data-theme="japan">Japan ✿</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="testnet-banner" id="testnet-banner" style="display:none">
+  ⚠ TESTNET — These coins have no real value
+</div>
+
+<main>
+  <div class="container">
+    <section>
+      <h2>Payments</h2>
+
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('pending', this)">Pending</button>
+        <button class="tab-btn"        onclick="switchTab('all', this)">All</button>
+      </div>
+
+      <!-- Pending tab -->
+      <div class="tab-panel active" id="tab-pending">
+        <div class="card" style="padding:0;">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>User</th>
+                  <th>Amount ツ</th>
+                  <th>Fee ツ</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Expires</th>
+                  <th>Tx ID</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="pending-tbody">
+                <tr class="loading-row"><td colspan="9"><span class="spinner"></span>Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- All tab -->
+      <div class="tab-panel" id="tab-all">
+        <div style="display:flex;gap:.6rem;margin-bottom:.6rem;flex-wrap:wrap;align-items:center;">
+          <input type="text" id="all-search" placeholder="Filter by user or tx id…"
+                 style="max-width:260px;" oninput="filterAll()">
+        </div>
+        <div class="card" style="padding:0;">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>User</th>
+                  <th>Amount ツ</th>
+                  <th>Fee ツ</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Expires</th>
+                  <th>Tx ID</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="all-tbody">
+                <tr class="loading-row"><td colspan="9"><span class="spinner"></span>Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="pagination" id="all-pagination"></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<!-- Manual Pay Modal -->
+<div class="modal-overlay" id="pay-modal">
+  <div class="modal">
+    <h3>Manual Payment</h3>
+    <p style="font-size:.88rem;color:var(--text-dim);margin-bottom:.8rem;">
+      Manually process this pending withdrawal. This will attempt to finalize
+      the transaction using the stored response slatepack.
+    </p>
+    <p style="font-size:.92rem;margin-bottom:.6rem;">
+      Withdrawal ID: <span class="mono" id="pay-modal-id" style="color:var(--accent);"></span>
+    </p>
+    <p class="error-msg"   id="pay-error"></p>
+    <p class="success-msg" id="pay-success"></p>
+    <div class="modal-actions">
+      <button class="btn btn-outline btn-sm" onclick="closePayModal()">Close</button>
+      <button class="btn btn-sm" id="pay-confirm-btn" onclick="confirmPay()">Process Payment</button>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="container">
+    <p>Grin Pool ツ — Admin Panel</p>
+  </div>
+</footer>
+
+<script src="/js/api.js"></script>
+<script src="/js/theme.js"></script>
+<script>
+// ── Admin auth check ───────────────────────────────────────────────────────
+let _allPayments  = [];
+let _allPage      = 1;
+const PAGE_SIZE   = 30;
+
+(function () {
+  if (!API.isLoggedIn()) { window.location.href = '/login.html'; return; }
+  try {
+    const payload = API.decodePayload();
+    if (!payload || !payload.is_admin) { window.location.href = '/login.html'; return; }
+    document.getElementById('nav-user').style.display = '';
+    document.getElementById('nav-user').innerHTML =
+      `<span class="nav-username">${payload.sub}</span> <a href="#" onclick="API.clearTokens();window.location='/login.html'">Logout</a>`;
+  } catch (e) { window.location.href = '/login.html'; }
+
+  fetch('/api/pool/stats').then(r => r.json()).then(d => {
+    if (d.network === 'testnet') {
+      document.getElementById('testnet-banner').style.display = '';
+      document.title = '[TESTNET] ' + document.title;
+    }
+    const el = document.querySelector('.site-title a');
+    if (el && d.pool_name) el.childNodes[0].textContent = d.pool_name + ' ';
+  }).catch(() => {});
+})();
+
+function escHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtGrin(v)    { return (v || 0).toFixed(4); }
+function fmtDate(iso)  { return iso ? new Date(iso).toLocaleString() : '—'; }
+
+const STATUS_BADGE = {
+  waiting_finalize: '<span class="badge badge-warn">Awaiting Finalize</span>',
+  finalized:        '<span class="badge badge-ok">Finalized</span>',
+  completed:        '<span class="badge badge-ok">Completed</span>',
+  failed:           '<span class="badge badge-error">Failed</span>',
+  expired:          '<span class="badge badge-dim">Expired</span>',
+};
+
+function rowHtml(w, showManualPay) {
+  const badge  = STATUS_BADGE[w.status] || `<span class="badge badge-dim">${escHtml(w.status)}</span>`;
+  const txId   = w.tx_slate_id
+    ? `<span class="truncate mono" title="${escHtml(w.tx_slate_id)}">${escHtml(w.tx_slate_id.slice(0,16))}…</span>`
+    : '—';
+  const manPay = (showManualPay && w.status === 'waiting_finalize')
+    ? `<button class="btn btn-sm btn-warn" onclick="openPayModal('${escHtml(w.id)}')">Manual Pay</button>`
+    : '';
+  return `
+    <tr>
+      <td class="mono">${escHtml(String(w.id || ''))}</td>
+      <td>${escHtml(w.username || w.user_id || '—')}</td>
+      <td class="mono">${fmtGrin(w.amount)}</td>
+      <td class="mono">${w.fee ? fmtGrin(w.fee) : '—'}</td>
+      <td>${badge}</td>
+      <td>${fmtDate(w.created_at)}</td>
+      <td>${fmtDate(w.expires_at)}</td>
+      <td>${txId}</td>
+      <td>${manPay}</td>
+    </tr>
+  `;
+}
+
+// ── Load pending ───────────────────────────────────────────────────────────
+async function loadPending() {
+  const tbody = document.getElementById('pending-tbody');
+  try {
+    const items = await API.get('/api/admin/withdrawals?status=waiting_finalize');
+    if (!items || !items.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No pending withdrawals.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = items.map(w => rowHtml(w, true)).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">Error: ${escHtml(err.message)}</td></tr>`;
+  }
+}
+
+// ── Load all ───────────────────────────────────────────────────────────────
+async function loadAll() {
+  try {
+    const items = await API.get('/api/admin/withdrawals');
+    _allPayments = items || [];
+    renderAllPage(1);
+  } catch (err) {
+    document.getElementById('all-tbody').innerHTML =
+      `<tr class="empty-row"><td colspan="9">Error: ${escHtml(err.message)}</td></tr>`;
+  }
+}
+
+function filterAll() {
+  const q = document.getElementById('all-search').value.toLowerCase();
+  if (!q) { renderAllPage(1); return; }
+  const filtered = _allPayments.filter(w =>
+    (w.username    || '').toLowerCase().includes(q) ||
+    (w.tx_slate_id || '').toLowerCase().includes(q)
+  );
+  renderAllRows(filtered);
+  document.getElementById('all-pagination').innerHTML = '';
+}
+
+function renderAllPage(page) {
+  _allPage = page;
+  const start = (page - 1) * PAGE_SIZE;
+  renderAllRows(_allPayments.slice(start, start + PAGE_SIZE));
+  renderAllPagination(_allPayments.length, page);
+}
+
+function renderAllRows(items) {
+  const tbody = document.getElementById('all-tbody');
+  if (!items.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No payments found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = items.map(w => rowHtml(w, true)).join('');
+}
+
+function renderAllPagination(total, page) {
+  const pages = Math.ceil(total / PAGE_SIZE);
+  const pg    = document.getElementById('all-pagination');
+  if (pages <= 1) { pg.innerHTML = ''; return; }
+  let html = `<button class="page-btn" onclick="renderAllPage(${page-1})" ${page<=1?'disabled':''}>← Prev</button>`;
+  for (let i = 1; i <= pages; i++) {
+    html += `<button class="page-btn ${i===page?'active':''}" onclick="renderAllPage(${i})">${i}</button>`;
+  }
+  html += `<button class="page-btn" onclick="renderAllPage(${page+1})" ${page>=pages?'disabled':''}>Next →</button>`;
+  pg.innerHTML = html;
+}
+
+// ── Tab switch ─────────────────────────────────────────────────────────────
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  if (btn) btn.classList.add('active');
+  if (name === 'all' && !_allPayments.length) loadAll();
+}
+
+// ── Manual Pay Modal ───────────────────────────────────────────────────────
+function openPayModal(id) {
+  document.getElementById('pay-modal-id').textContent = id;
+  document.getElementById('pay-modal-id').dataset.id = id;
+  document.getElementById('pay-error').style.display   = 'none';
+  document.getElementById('pay-success').style.display = 'none';
+  const btn = document.getElementById('pay-confirm-btn');
+  btn.disabled    = false;
+  btn.textContent = 'Process Payment';
+  document.getElementById('pay-modal').classList.add('open');
+}
+
+function closePayModal() {
+  document.getElementById('pay-modal').classList.remove('open');
+}
+
+async function confirmPay() {
+  const id    = document.getElementById('pay-modal-id').dataset.id;
+  const errEl = document.getElementById('pay-error');
+  const okEl  = document.getElementById('pay-success');
+  const btn   = document.getElementById('pay-confirm-btn');
+
+  errEl.style.display = 'none';
+  okEl.style.display  = 'none';
+  btn.disabled    = true;
+  btn.textContent = 'Processing…';
+
+  try {
+    await API.post('/api/admin/withdrawals/' + id + '/pay', {});
+    okEl.textContent    = 'Payment processed successfully.';
+    okEl.style.display  = '';
+    btn.textContent     = 'Done';
+    loadPending();
+  } catch (err) {
+    errEl.textContent   = err.message;
+    errEl.style.display = '';
+    btn.disabled    = false;
+    btn.textContent = 'Process Payment';
+  }
+}
+
+document.addEventListener('DOMContentLoaded', loadPending);
+
+document.getElementById('pay-modal').addEventListener('click', function (e) {
+  if (e.target === this) closePayModal();
+});
+</script>
+</body>
+</html>

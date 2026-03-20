@@ -1,13 +1,16 @@
 #!/bin/bash
 # =============================================================================
-# 05_grin_wallet_service.sh — Grin Wallet Service
+# 05_grin_wallet_service.sh — Grin Wallet Service & Testnet Faucet
 # =============================================================================
+# v2: Added option 3 (Testnet Faucet) to Network Selection.
+#     Faucet is fully standalone — no shared DB or code with the wallet.
 #
 #  ─── Network Selection ───────────────────────────────────────────────────────
 #   1) Mainnet wallet
 #   2) Testnet wallet
+#   3) Testnet Faucet    ← NEW — standalone faucet app (Flask, port 3004)
 #
-#  ─── Wallet Menu (per network) ───────────────────────────────────────────────
+#  ─── Wallet Menu (per network, options 1 or 2) ───────────────────────────────
 #   a) Download & install grin-wallet
 #   b) Initialize wallet                (grin-wallet init)
 #   c) Start wallet listener            (grin-wallet listen, in tmux)
@@ -26,6 +29,23 @@
 #      6) Configure firewall            (open port 443)
 #      7) Status & info
 #      s) Edit saved settings           (domain, directory, email, user)
+#
+#  ─── Testnet Faucet (option 3) ───────────────────────────────────────────────
+#   0) Guided Full Setup    (1→2→3→4→5 in sequence)
+#   1) Install faucet       (Flask venv, SQLite schema, systemd service)
+#   2) Configure faucet     (subdomain, wallet dir, wallet address, password)
+#   3) Deploy web files     (web/05_faucet/public_html/ → /var/www/grin-faucet/)
+#   4) Setup nginx          (vhost + SSL + rate limiting)
+#   5) Start / Stop service (systemd grin-faucet, port 3004)
+#   6) Faucet status        (service, wallet balance, claims today, logs)
+#   7) Wallet address       (show stored address, live balance, update prompt)
+#   L) View logs            (tail -n 50 /opt/grin/logs/grin-faucet-activity.log)
+#   DEL) Reset faucet DB    (triple-confirm wipe)
+#
+#  Config: /opt/grin/conf/grin_faucet.json
+#  App:    /opt/grin/faucet/
+#  Web:    /var/www/grin-faucet/
+#  Log:    /opt/grin/logs/grin-faucet-activity.log
 #
 # =============================================================================
 
@@ -66,6 +86,17 @@ WEB_WALLET_SRC_DIR="$TOOLKIT_ROOT/web/05_wallet/public_html"
 WEB_WALLET_NGINX_CONF="/etc/nginx/sites-available/grin-wallet-web"
 WEB_WALLET_DEPLOY_DIR_DEFAULT="/var/www/grin-wallet"
 WW_CONF_FILE="/opt/grin/conf/grin_web_wallet.conf"
+
+# Testnet Faucet
+FAUCET_APP_SRC="$TOOLKIT_ROOT/web/05_faucet/app"
+FAUCET_WEB_SRC="$TOOLKIT_ROOT/web/05_faucet/public_html"
+FAUCET_APP_DIR="/opt/grin/faucet"
+FAUCET_WEB_DIR="/var/www/grin-faucet"
+FAUCET_CONF="/opt/grin/conf/grin_faucet.json"
+FAUCET_PASS="/opt/grin/faucet/.wallet_pass"
+FAUCET_LOG="/opt/grin/logs/grin-faucet-activity.log"
+FAUCET_NGINX_CONF="/etc/nginx/sites-available/grin-faucet"
+FAUCET_SERVICE="grin-faucet"
 
 # ─── Runtime state (set by detect_and_select_network) ─────────────────────────
 NETWORK=""
@@ -1182,12 +1213,23 @@ show_network_menu() {
     [[ $mainnet_up -eq 1 ]] && mn_node="${GREEN}node RUNNING${RESET}" || mn_node="${RED}node down${RESET}"
     [[ $testnet_up -eq 1 ]] && tn_node="${GREEN}node RUNNING${RESET}" || tn_node="${RED}node down${RESET}"
 
-    echo -e "  ${GREEN}1${RESET}) Mainnet wallet  ${DIM}($mn_node${DIM})${RESET}"
-    echo -e "  ${YELLOW}2${RESET}) Testnet wallet  ${DIM}($tn_node${DIM})${RESET}"
+    # Faucet service status
+    local faucet_status
+    if systemctl is-active --quiet "$FAUCET_SERVICE" 2>/dev/null; then
+        faucet_status="${GREEN}running${RESET}"
+    elif [[ -f "$FAUCET_CONF" ]]; then
+        faucet_status="${YELLOW}installed, stopped${RESET}"
+    else
+        faucet_status="${DIM}not installed${RESET}"
+    fi
+
+    echo -e "  ${GREEN}1${RESET}) Mainnet wallet      ${DIM}($mn_node${DIM})${RESET}"
+    echo -e "  ${YELLOW}2${RESET}) Testnet wallet      ${DIM}($tn_node${DIM})${RESET}"
+    echo -e "  ${CYAN}3${RESET}) Testnet Faucet      ${DIM}($faucet_status${DIM})${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select network [1/2/0]: ${RESET}"
+    echo -ne "${BOLD}Select [1/2/3/0]: ${RESET}"
 }
 
 show_wallet_menu() {
@@ -1220,6 +1262,724 @@ show_wallet_menu() {
     echo -ne "${BOLD}Select [a-e / w / 0]: ${RESET}"
 }
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 05 — 3) TESTNET FAUCET  (standalone app — /opt/grin/faucet/)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Config helpers ────────────────────────────────────────────────────────────
+
+faucet_read_conf() {
+    # Prints value of JSON key $1 from FAUCET_CONF, or $2 as default.
+    local key="$1" default="${2:-}"
+    [[ -f "$FAUCET_CONF" ]] || { echo "$default"; return; }
+    python3 - "$FAUCET_CONF" "$key" "$default" << 'PYEOF' 2>/dev/null || echo "$default"
+import json, sys
+path, key, default = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    d = json.load(open(path))
+    print(d.get(key, default))
+except Exception:
+    print(default)
+PYEOF
+}
+
+faucet_write_conf_key() {
+    # Sets key $1 to value $2 in FAUCET_CONF (creates file if missing).
+    local key="$1" val="$2"
+    mkdir -p "$(dirname "$FAUCET_CONF")"
+    python3 - "$key" "$val" "$FAUCET_CONF" << 'PYEOF'
+import json, sys, os
+key, val, path = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    d = json.load(open(path)) if os.path.isfile(path) else {}
+except:
+    d = {}
+# Preserve numeric types for known numeric fields
+NUMS = {"claim_amount_grin","claim_window_hours","wallet_port","service_port","finalize_timeout_min"}
+d[key] = float(val) if key in NUMS else val
+with open(path, "w") as f:
+    json.dump(d, f, indent=2)
+os.chmod(path, 0o600)
+PYEOF
+}
+
+faucet_ensure_defaults() {
+    # Write default keys only if not already present.
+    local defaults=(
+        "faucet_name:Grin Testnet Faucet"
+        "subdomain:"
+        "claim_amount_grin:2.0"
+        "claim_window_hours:24"
+        "wallet_dir:/opt/grin/wallet/testnet"
+        "wallet_port:13415"
+        "service_port:3004"
+        "finalize_timeout_min:5"
+        "wallet_address:"
+        "log_path:/opt/grin/logs/grin-faucet-activity.log"
+    )
+    for pair in "${defaults[@]}"; do
+        local k="${pair%%:*}" v="${pair#*:}"
+        local existing
+        existing=$(faucet_read_conf "$k" "__MISSING__")
+        [[ "$existing" == "__MISSING__" ]] && faucet_write_conf_key "$k" "$v"
+    done
+}
+
+# ── Status display ────────────────────────────────────────────────────────────
+
+faucet_show_status() {
+    echo -e "\n${BOLD}Faucet Status:${RESET}\n"
+
+    # Service
+    if systemctl is-active --quiet "$FAUCET_SERVICE" 2>/dev/null; then
+        local pid uptime_str
+        pid=$(systemctl show "$FAUCET_SERVICE" --property=MainPID --value 2>/dev/null || echo "?")
+        uptime_str=$(systemctl show "$FAUCET_SERVICE" --property=ActiveEnterTimestamp \
+            --value 2>/dev/null | awk '{print $2, $3}' || echo "")
+        echo -e "  ${BOLD}Service${RESET}    : ${GREEN}● active (running)${RESET}  pid $pid"
+    elif systemctl is-enabled --quiet "$FAUCET_SERVICE" 2>/dev/null; then
+        echo -e "  ${BOLD}Service${RESET}    : ${YELLOW}stopped${RESET}  ${DIM}(enabled)${RESET}"
+    else
+        echo -e "  ${BOLD}Service${RESET}    : ${RED}not installed${RESET}"
+    fi
+
+    # Config
+    local port; port=$(faucet_read_conf "service_port" "3004")
+    local subdomain; subdomain=$(faucet_read_conf "subdomain" "")
+    echo -e "  ${BOLD}Port${RESET}       : $port"
+    [[ -n "$subdomain" ]] && echo -e "  ${BOLD}URL${RESET}        : ${GREEN}https://$subdomain${RESET}"
+
+    # DB
+    if [[ -f "$FAUCET_APP_DIR/faucet.db" ]]; then
+        local db_size
+        db_size=$(du -sh "$FAUCET_APP_DIR/faucet.db" 2>/dev/null | cut -f1 || echo "?")
+        echo -e "  ${BOLD}Database${RESET}   : ${GREEN}$FAUCET_APP_DIR/faucet.db${RESET}  ($db_size)"
+    else
+        echo -e "  ${BOLD}Database${RESET}   : ${DIM}not created${RESET}"
+    fi
+
+    # Wallet balance
+    local wallet_dir; wallet_dir=$(faucet_read_conf "wallet_dir" "/opt/grin/wallet/testnet")
+    local wallet_bin="$wallet_dir/grin-wallet"
+    if [[ -x "$wallet_bin" ]]; then
+        local balance
+        balance=$("$wallet_bin" --floonet info 2>/dev/null \
+            | grep -i "spendable" | grep -oP '[\d.]+' | head -1 || echo "?")
+        echo -e "  ${BOLD}Balance${RESET}    : ${GREEN}${balance:-?} testnet GRIN${RESET}"
+    else
+        echo -e "  ${BOLD}Balance${RESET}    : ${DIM}wallet binary not found${RESET}"
+    fi
+
+    # Claims today (via sqlite3 if available)
+    if command -v sqlite3 &>/dev/null && [[ -f "$FAUCET_APP_DIR/faucet.db" ]]; then
+        local today
+        today=$(date -u +"%Y-%m-%d")
+        local claims_today
+        claims_today=$(sqlite3 "$FAUCET_APP_DIR/faucet.db" \
+            "SELECT COUNT(*) FROM claims WHERE created_at LIKE '${today}%' AND status='confirmed';" \
+            2>/dev/null || echo "?")
+        local pending
+        pending=$(sqlite3 "$FAUCET_APP_DIR/faucet.db" \
+            "SELECT COUNT(*) FROM claims WHERE status='waiting_finalize';" \
+            2>/dev/null || echo "?")
+        echo -e "  ${BOLD}Claims${RESET}     : today: $claims_today  pending: $pending"
+    fi
+
+    # Recent log lines
+    if [[ -f "$FAUCET_LOG" ]]; then
+        echo ""
+        echo -e "  ${DIM}── Recent activity (last 10 lines) ──${RESET}"
+        tail -n 10 "$FAUCET_LOG" 2>/dev/null | while IFS= read -r line; do
+            echo -e "  ${DIM}$line${RESET}"
+        done
+    fi
+    echo ""
+}
+
+# ── Option 1 — Install ────────────────────────────────────────────────────────
+
+faucet_install() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05-3) 1) Install Faucet Dependencies ──${RESET}\n"
+    echo -e "  ${DIM}Installs python3, pip, Flask + dependencies, creates app directory.${RESET}\n"
+
+    if ! command -v python3 &>/dev/null; then
+        info "Installing python3 and pip..."
+        apt-get install -y python3 python3-pip python3-venv \
+            || { die "apt-get failed. Run as root."; return; }
+    fi
+    success "python3 $(python3 --version 2>&1 | awk '{print $2}') found."
+
+    # Create app directory and copy source files
+    info "Creating $FAUCET_APP_DIR ..."
+    mkdir -p "$FAUCET_APP_DIR"
+
+    if [[ -d "$FAUCET_APP_SRC" ]]; then
+        info "Copying app files from $FAUCET_APP_SRC ..."
+        cp -r "$FAUCET_APP_SRC"/. "$FAUCET_APP_DIR/"
+    else
+        warn "Source dir not found: $FAUCET_APP_SRC"
+        warn "Clone the toolkit repo first, then re-run this step."
+        pause; return
+    fi
+
+    # Create virtualenv and install Python deps
+    info "Creating Python virtualenv at $FAUCET_APP_DIR/venv ..."
+    python3 -m venv "$FAUCET_APP_DIR/venv" \
+        || { die "venv creation failed."; return; }
+
+    info "Installing Python requirements ..."
+    "$FAUCET_APP_DIR/venv/bin/pip" install --quiet \
+        -r "$FAUCET_APP_DIR/requirements.txt" \
+        || { die "pip install failed."; return; }
+
+    # Ensure grin user owns everything
+    id grin &>/dev/null && chown -R grin:grin "$FAUCET_APP_DIR" 2>/dev/null || true
+    chmod 750 "$FAUCET_APP_DIR"
+
+    # Ensure defaults in config
+    faucet_ensure_defaults
+
+    # Create log directory
+    mkdir -p "$LOG_DIR"
+    touch "$FAUCET_LOG"
+    id grin &>/dev/null && chown grin:grin "$FAUCET_LOG" 2>/dev/null || true
+
+    # Install logrotate config
+    cat > /etc/logrotate.d/grin-faucet << LOGROTATE
+$FAUCET_LOG {
+    daily
+    rotate 10
+    size 20M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    postrotate
+        systemctl reload $FAUCET_SERVICE 2>/dev/null || true
+    endscript
+}
+LOGROTATE
+    success "logrotate config written: /etc/logrotate.d/grin-faucet"
+
+    # Create systemd service
+    local faucet_port; faucet_port=$(faucet_read_conf "service_port" "3004")
+    local run_user="grin"
+    id grin &>/dev/null || run_user="root"
+
+    cat > "/etc/systemd/system/${FAUCET_SERVICE}.service" << SYSTEMD
+[Unit]
+Description=Grin Testnet Faucet
+After=network.target
+
+[Service]
+Type=simple
+User=$run_user
+WorkingDirectory=$FAUCET_APP_DIR
+Environment="FAUCET_CONF=$FAUCET_CONF"
+Environment="FAUCET_DB=$FAUCET_APP_DIR/faucet.db"
+Environment="FAUCET_WALLET_PASS=$FAUCET_PASS"
+ExecStart=$FAUCET_APP_DIR/venv/bin/python app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD
+
+    systemctl daemon-reload
+    success "systemd service created: $FAUCET_SERVICE"
+    success "Installation complete."
+    log "[faucet_install] completed"
+    pause
+}
+
+# ── Option 2 — Configure ──────────────────────────────────────────────────────
+
+faucet_configure() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05-3) 2) Configure Faucet ──${RESET}\n"
+    echo -e "  ${DIM}Press Enter to keep current value.${RESET}\n"
+
+    faucet_ensure_defaults
+
+    local val
+
+    echo -ne "Faucet name      [$(faucet_read_conf faucet_name 'Grin Testnet Faucet')]: "
+    read -r val || true
+    [[ -n "$val" ]] && faucet_write_conf_key "faucet_name" "$val"
+
+    echo -ne "Subdomain        [$(faucet_read_conf subdomain '')]: "
+    read -r val || true
+    [[ -n "$val" ]] && faucet_write_conf_key "subdomain" "$val"
+
+    echo -ne "Wallet directory [$(faucet_read_conf wallet_dir '/opt/grin/wallet/testnet')]: "
+    read -r val || true
+    [[ -n "$val" ]] && faucet_write_conf_key "wallet_dir" "$val"
+
+    # Wallet address — prompt with helpful tip
+    local current_addr; current_addr=$(faucet_read_conf "wallet_address" "")
+    echo ""
+    echo -e "  ${DIM}Tip: run '${BOLD}grin-wallet --floonet address${RESET}${DIM}' to get your testnet address.${RESET}"
+    echo -ne "Wallet address   [${current_addr:-not set}]: "
+    read -r val || true
+    if [[ -n "$val" ]]; then
+        faucet_write_conf_key "wallet_address" "$val"
+        success "Wallet address saved."
+    fi
+
+    # Wallet password
+    echo ""
+    echo -e "  ${DIM}Wallet password is stored in $FAUCET_PASS (mode 600).${RESET}"
+    echo -ne "Wallet password  [Enter to skip/keep]: "
+    read -rs val || true
+    echo ""
+    if [[ -n "$val" ]]; then
+        mkdir -p "$(dirname "$FAUCET_PASS")"
+        echo "$val" > "$FAUCET_PASS"
+        chmod 600 "$FAUCET_PASS"
+        id grin &>/dev/null && chown grin:grin "$FAUCET_PASS" 2>/dev/null || true
+        success "Wallet password saved to $FAUCET_PASS"
+    fi
+
+    echo ""
+    success "Configuration saved to $FAUCET_CONF"
+
+    # Restart if running
+    if systemctl is-active --quiet "$FAUCET_SERVICE" 2>/dev/null; then
+        info "Restarting $FAUCET_SERVICE to apply new config..."
+        systemctl restart "$FAUCET_SERVICE"
+        success "Service restarted."
+    fi
+
+    log "[faucet_configure] completed"
+    pause
+}
+
+# ── Option 3 — Deploy web files ───────────────────────────────────────────────
+
+faucet_deploy_web() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05-3) 3) Deploy Web Files ──${RESET}\n"
+
+    if [[ ! -d "$FAUCET_WEB_SRC" ]]; then
+        die "Web source not found: $FAUCET_WEB_SRC  (clone the toolkit repo first)"; return
+    fi
+
+    info "Copying $FAUCET_WEB_SRC → $FAUCET_WEB_DIR ..."
+    mkdir -p "$FAUCET_WEB_DIR"
+    cp -r "$FAUCET_WEB_SRC"/. "$FAUCET_WEB_DIR/"
+    find "$FAUCET_WEB_DIR" -type f -name "*.html" -exec chmod 644 {} \;
+    find "$FAUCET_WEB_DIR" -type f \( -name "*.css" -o -name "*.js" \) -exec chmod 644 {} \;
+
+    success "Files deployed to $FAUCET_WEB_DIR"
+    log "[faucet_deploy_web] completed"
+    pause
+}
+
+# ── Option 4 — Setup nginx ────────────────────────────────────────────────────
+
+faucet_setup_nginx() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05-3) 4) Setup nginx ──${RESET}\n"
+
+    if ! command -v nginx &>/dev/null; then
+        die "nginx not installed. Install it first."; return
+    fi
+    if [[ ! -d "$FAUCET_WEB_DIR" ]]; then
+        die "Web files not deployed — run option 3 first."; return
+    fi
+
+    local domain; domain=$(faucet_read_conf "subdomain" "")
+    if [[ -z "$domain" ]]; then
+        die "Subdomain not configured — run option 2 first."; return
+    fi
+
+    local port; port=$(faucet_read_conf "service_port" "3004")
+    local email
+    echo -ne "Let's Encrypt email: "
+    read -r email || true
+    [[ -z "$email" ]] && warn "No email entered — SSL setup skipped." && email=""
+
+    info "Writing nginx config → $FAUCET_NGINX_CONF"
+    mkdir -p /var/www/letsencrypt
+    cat > "$FAUCET_NGINX_CONF" << NGINX
+# Grin Testnet Faucet — generated by 05_grin_wallet_service.sh
+limit_req_zone \$binary_remote_addr zone=faucet_api:10m rate=10r/m;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $domain;
+    location /.well-known/acme-challenge/ { root /var/www/letsencrypt; }
+    location / { return 301 https://\$host\$request_uri; }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $domain;
+
+    ssl_certificate     /etc/letsencrypt/live/$domain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    root  $FAUCET_WEB_DIR;
+    index index.html;
+
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options    "nosniff"  always;
+    add_header X-Frame-Options           "DENY"     always;
+    add_header Referrer-Policy           "strict-origin" always;
+    add_header Content-Security-Policy   "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" always;
+
+    access_log /var/log/nginx/grin-faucet-access.log;
+    error_log  /var/log/nginx/grin-faucet-error.log;
+
+    location /api/ {
+        limit_req zone=faucet_api burst=5 nodelay;
+        proxy_pass         http://127.0.0.1:$port;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 90s;
+    }
+
+    location ~* \.(css|js|ico|png|svg|woff2?)\$ {
+        expires 1h;
+        add_header Cache-Control "public";
+    }
+
+    location / { try_files \$uri \$uri/ /index.html; }
+
+    location ~ /\.  { deny all; }
+    location ~ ~\$  { deny all; }
+}
+NGINX
+
+    ln -sf "$FAUCET_NGINX_CONF" "/etc/nginx/sites-enabled/grin-faucet" 2>/dev/null || true
+
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+        success "nginx configured and reloaded."
+    else
+        warn "nginx config test failed — SSL certs may not exist yet."
+        warn "Run certbot after DNS is pointing here."
+    fi
+
+    # SSL
+    if command -v certbot &>/dev/null && [[ -n "$email" ]]; then
+        echo ""
+        echo -ne "${BOLD}Request SSL certificate for $domain now? [Y/n]: ${RESET}"
+        read -r ssl_yn || true
+        if [[ "${ssl_yn,,}" != "n" ]]; then
+            certbot --nginx -d "$domain" --non-interactive --agree-tos -m "$email" \
+                && success "SSL certificate issued." \
+                || warn "certbot failed — ensure DNS is pointing here and port 80 is open."
+            systemctl reload nginx 2>/dev/null || true
+        fi
+    fi
+
+    log "[faucet_setup_nginx] domain=$domain"
+    pause
+}
+
+# ── Option 5 — Start / Stop service ──────────────────────────────────────────
+
+faucet_service_control() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05-3) 5) Start / Stop Service ──${RESET}\n"
+
+    if ! [[ -f "/etc/systemd/system/${FAUCET_SERVICE}.service" ]]; then
+        die "Service not installed — run option 1 (Install) first."; return
+    fi
+
+    local state
+    if systemctl is-active --quiet "$FAUCET_SERVICE" 2>/dev/null; then
+        state="running"
+        echo -e "  Service is ${GREEN}running${RESET}."
+        echo ""
+        echo -e "  ${RED}1${RESET}) Stop service"
+        echo -e "  ${YELLOW}2${RESET}) Restart service"
+        echo -e "  ${DIM}0) Back${RESET}"
+    else
+        state="stopped"
+        echo -e "  Service is ${YELLOW}stopped${RESET}."
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Start service"
+        echo -e "  ${GREEN}2${RESET}) Enable + Start  ${DIM}(auto-start on boot)${RESET}"
+        echo -e "  ${DIM}0) Back${RESET}"
+    fi
+    echo ""
+    echo -ne "${BOLD}Select [1/2/0]: ${RESET}"
+    read -r sc || true
+
+    case "$sc" in
+        1)
+            if [[ "$state" == "running" ]]; then
+                systemctl stop "$FAUCET_SERVICE" && success "Service stopped."
+            else
+                systemctl start "$FAUCET_SERVICE" && success "Service started."
+            fi
+            ;;
+        2)
+            if [[ "$state" == "running" ]]; then
+                systemctl restart "$FAUCET_SERVICE" && success "Service restarted."
+            else
+                systemctl enable "$FAUCET_SERVICE" 2>/dev/null || true
+                systemctl start "$FAUCET_SERVICE" && success "Service enabled and started."
+            fi
+            ;;
+        0) return ;;
+    esac
+    pause
+}
+
+# ── Option 6 — Faucet status ──────────────────────────────────────────────────
+
+faucet_status_screen() {
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN} 05-3) Faucet Status${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    faucet_show_status
+    pause
+}
+
+# ── Option 7 — Wallet address ─────────────────────────────────────────────────
+
+faucet_wallet_address() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── 05-3) 7) Faucet Wallet Address ──${RESET}\n"
+
+    faucet_ensure_defaults
+    local addr; addr=$(faucet_read_conf "wallet_address" "")
+    local wallet_dir; wallet_dir=$(faucet_read_conf "wallet_dir" "/opt/grin/wallet/testnet")
+    local wallet_bin="$wallet_dir/grin-wallet"
+
+    echo -e "  ${BOLD}Stored address:${RESET}"
+    echo -e "  ──────────────────────────────────────────────────────────────"
+    if [[ -n "$addr" ]]; then
+        echo -e "  ${GREEN}$addr${RESET}"
+    else
+        echo -e "  ${YELLOW}(not set — run option 2 to configure)${RESET}"
+    fi
+    echo -e "  ──────────────────────────────────────────────────────────────"
+    echo -e "  ${DIM}This address is shown on the homepage donate section.${RESET}"
+    echo -e "  ${DIM}Users send testnet GRIN here to keep the faucet funded.${RESET}"
+    echo ""
+
+    # Live balance
+    if [[ -x "$wallet_bin" ]]; then
+        local balance
+        balance=$("$wallet_bin" --floonet info 2>/dev/null \
+            | grep -i "spendable" | grep -oP '[\d.]+' | head -1 || echo "?")
+        echo -e "  ${BOLD}Current balance:${RESET}        ${GREEN}${balance:-?} testnet GRIN${RESET}"
+        echo -e "  ${DIM}Recommended minimum:    500 testnet GRIN (~250 claims of 2 GRIN)${RESET}"
+    fi
+
+    echo ""
+    echo -e "  ${DIM}─── How to fund ───────────────────────────────────────────────${RESET}"
+    echo -e "  ${DIM}A) Mine on a LOCAL machine (not this VPS — avoid ToS CPU issues)${RESET}"
+    echo -e "  ${DIM}   grin-miner on laptop/desktop → send to address above${RESET}"
+    echo -e "  ${DIM}B) Community faucet — https://grin.mw or #testnet on Keybase${RESET}"
+    echo -e "  ${DIM}C) Script 01 on a local machine in testnet mode${RESET}"
+    echo ""
+
+    echo -e "  ${CYAN}U${RESET}) Update stored address"
+    echo -e "  ${DIM}0) Back${RESET}"
+    echo ""
+    echo -ne "${BOLD}Select [U/0]: ${RESET}"
+    read -r addr_choice || true
+
+    if [[ "${addr_choice,,}" == "u" ]]; then
+        echo ""
+        echo -e "  ${DIM}Tip: run '${BOLD}grin-wallet --floonet address${RESET}${DIM}' to get the address.${RESET}"
+        echo -ne "New wallet address: "
+        read -r new_addr || true
+        if [[ -n "$new_addr" ]]; then
+            faucet_write_conf_key "wallet_address" "$new_addr"
+            success "Address updated."
+            # Restart service to reload config
+            if systemctl is-active --quiet "$FAUCET_SERVICE" 2>/dev/null; then
+                systemctl restart "$FAUCET_SERVICE"
+                success "Service restarted."
+            fi
+        else
+            info "No change made."
+        fi
+    fi
+    pause
+}
+
+# ── Option L — View logs ──────────────────────────────────────────────────────
+
+faucet_view_logs() {
+    if [[ ! -f "$FAUCET_LOG" ]]; then
+        warn "Log file not found: $FAUCET_LOG"
+        warn "The faucet service may not have been started yet."
+        pause; return
+    fi
+    clear
+    echo -e "${BOLD}${CYAN}── 05-3) L) Faucet Activity Log ──${RESET}"
+    echo -e "${DIM}  $FAUCET_LOG${RESET}"
+    echo -e "${DIM}  (press q to exit)${RESET}\n"
+    tail -n 50 "$FAUCET_LOG" | less -FRX
+}
+
+# ── Option DEL — Reset DB ─────────────────────────────────────────────────────
+
+faucet_reset_db() {
+    clear
+    echo -e "\n${BOLD}${RED}── 05-3) DEL) Reset Faucet Database ──${RESET}\n"
+
+    local db_path="$FAUCET_APP_DIR/faucet.db"
+
+    if [[ ! -f "$db_path" ]]; then
+        warn "Database not found: $db_path"
+        pause; return
+    fi
+
+    # Show what will be destroyed
+    local db_size claim_count
+    db_size=$(du -sh "$db_path" 2>/dev/null | cut -f1 || echo "?")
+    if command -v sqlite3 &>/dev/null; then
+        claim_count=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM claims;" 2>/dev/null || echo "?")
+    else
+        claim_count="(sqlite3 not available)"
+    fi
+
+    echo -e "  ${RED}This will permanently destroy:${RESET}"
+    echo -e "  • Database: $db_path  (${db_size})"
+    echo -e "  • All claim records: $claim_count rows"
+    echo ""
+
+    echo -ne "${BOLD}Type ${RED}RESET FAUCET DATABASE${RESET}${BOLD} to confirm: ${RESET}"
+    read -r confirm1 || true
+    if [[ "$confirm1" != "RESET FAUCET DATABASE" ]]; then
+        info "Reset cancelled."
+        pause; return
+    fi
+
+    echo -ne "${BOLD}Type ${RED}YES${RESET}${BOLD} to proceed: ${RESET}"
+    read -r confirm2 || true
+    if [[ "$confirm2" != "YES" ]]; then
+        info "Reset cancelled."
+        pause; return
+    fi
+
+    systemctl stop "$FAUCET_SERVICE" 2>/dev/null || true
+    rm -f "$db_path"
+    success "Database deleted."
+
+    # Recreate empty DB by starting the service (app.py calls db.init_db() on startup)
+    systemctl start "$FAUCET_SERVICE" 2>/dev/null || true
+    success "Service restarted — empty database created."
+    log "[faucet_reset_db] DB wiped: $db_path"
+    pause
+}
+
+# ── Faucet menu ───────────────────────────────────────────────────────────────
+
+faucet_show_menu_status() {
+    echo -e "\n${BOLD}Status:${RESET}\n"
+
+    # 1 Install
+    if [[ -f "/etc/systemd/system/${FAUCET_SERVICE}.service" ]]; then
+        echo -e "  ${BOLD}1 Install${RESET}   : ${GREEN}OK${RESET}"
+    else
+        echo -e "  ${BOLD}1 Install${RESET}   : ${DIM}pending${RESET}"
+    fi
+
+    # 2 Configure
+    local addr; addr=$(faucet_read_conf "wallet_address" "")
+    local domain; domain=$(faucet_read_conf "subdomain" "")
+    if [[ -n "$addr" && -n "$domain" ]]; then
+        echo -e "  ${BOLD}2 Configure${RESET} : ${GREEN}OK${RESET}  ${DIM}($domain)${RESET}"
+    else
+        echo -e "  ${BOLD}2 Configure${RESET} : ${DIM}pending${RESET}"
+    fi
+
+    # 3 Web files
+    [[ -d "$FAUCET_WEB_DIR" ]] \
+        && echo -e "  ${BOLD}3 Web files${RESET} : ${GREEN}deployed${RESET}  ${DIM}($FAUCET_WEB_DIR)${RESET}" \
+        || echo -e "  ${BOLD}3 Web files${RESET} : ${DIM}not deployed${RESET}"
+
+    # 4 nginx
+    [[ -f "$FAUCET_NGINX_CONF" ]] \
+        && echo -e "  ${BOLD}4 nginx${RESET}     : ${GREEN}configured${RESET}" \
+        || echo -e "  ${BOLD}4 nginx${RESET}     : ${DIM}not configured${RESET}"
+
+    # 5 Service
+    if systemctl is-active --quiet "$FAUCET_SERVICE" 2>/dev/null; then
+        echo -e "  ${BOLD}5 Service${RESET}   : ${GREEN}● running${RESET}  ${DIM}(https://${domain:-<domain>})${RESET}"
+    elif systemctl is-enabled --quiet "$FAUCET_SERVICE" 2>/dev/null; then
+        echo -e "  ${BOLD}5 Service${RESET}   : ${YELLOW}stopped${RESET}"
+    else
+        echo -e "  ${BOLD}5 Service${RESET}   : ${DIM}not running${RESET}"
+    fi
+    echo ""
+}
+
+faucet_menu() {
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN} 05-3) TESTNET FAUCET${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        faucet_show_menu_status
+
+        echo -e "${DIM}  ─── First-time setup (run in order) ─────────────${RESET}"
+        echo -e "  ${GREEN}0${RESET}) Guided Full Setup     ${DIM}(runs 1→2→3→4→5 in sequence)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Install               ${DIM}(Python + Flask deps, systemd service)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Configure             ${DIM}(subdomain, wallet path, address, password)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Deploy web files      ${DIM}(copy to /var/www/grin-faucet/)${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Setup nginx           ${DIM}(vhost + SSL + rate limits)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Start / Stop service  ${DIM}(systemd $FAUCET_SERVICE)${RESET}"
+        echo ""
+        echo -e "${DIM}  ─── Info & maintenance ───────────────────────────${RESET}"
+        echo -e "  ${CYAN}6${RESET}) Faucet status         ${DIM}(health, balance, claims, recent logs)${RESET}"
+        echo -e "  ${CYAN}7${RESET}) Wallet address        ${DIM}(show + update donate address)${RESET}"
+        echo -e "  ${CYAN}L${RESET}) View logs             ${DIM}(tail activity log)${RESET}"
+        echo ""
+        echo -e "${DIM}  ─── Danger zone ──────────────────────────────────${RESET}"
+        echo -e "  ${RED}DEL${RESET}) Reset database      ${DIM}(wipe all claim history — triple-confirm)${RESET}"
+        echo ""
+        echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
+        echo -e "  ${RED}B${RESET}) Back to network select"
+        echo ""
+        echo -ne "${BOLD}Select [0-7 / L / DEL / B]: ${RESET}"
+        read -r faucet_choice || true
+
+        case "${faucet_choice,,}" in
+            0)
+                faucet_install
+                faucet_configure
+                faucet_deploy_web
+                faucet_setup_nginx
+                faucet_service_control
+                ;;
+            1) faucet_install ;;
+            2) faucet_configure ;;
+            3) faucet_deploy_web ;;
+            4) faucet_setup_nginx ;;
+            5) faucet_service_control ;;
+            6) faucet_status_screen ;;
+            7) faucet_wallet_address ;;
+            l) faucet_view_logs ;;
+            del) faucet_reset_db ;;
+            b) break ;;
+            "") continue ;;
+            *) warn "Invalid option." ; sleep 1 ;;
+        esac
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MENUS (continued)
+# ═══════════════════════════════════════════════════════════════════════════════
+
 main() {
     while true; do
         show_network_menu
@@ -1228,6 +1988,7 @@ main() {
         case "$net_choice" in
             0) break ;;
             "") continue ;;
+            3) faucet_menu ;;
             1|2)
                 if [[ "$net_choice" == "2" ]]; then
                     NETWORK="testnet"; NODE_PORT=13413

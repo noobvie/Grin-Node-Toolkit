@@ -1,0 +1,29 @@
+/* light.css — Clean light with green accent */
+:root {
+  --bg-body:      #f5f7fa;
+  --bg-card:      #ffffff;
+  --bg-card2:     #f0f4f8;
+  --text:         #1a202c;
+  --text-dim:     #718096;
+  --accent:       #2d6a4f;
+  --accent2:      #1e4d38;
+  --border:       #e2e8f0;
+  --btn-bg:       #2d6a4f;
+  --btn-text:     #fff;
+  --btn-hover:    #1e4d38;
+  --input-bg:     #fff;
+  --input-border: #cbd5e0;
+  --error-color:  #e53e3e;
+  --ok-color:     #2d6a4f;
+  --warn-color:   #d69e2e;
+  --font-mono:    'Courier New', Courier, monospace;
+  --font-sans:    system-ui, -apple-system, sans-serif;
+  --shadow:       0 2px 8px rgba(0,0,0,0.08);
+}
+
+.card { box-shadow: 0 2px 8px rgba(0,0,0,.07); }
+header { border-bottom: 1px solid var(--border); box-shadow: 0 1px 4px rgba(0,0,0,.05); }
+.testnet-banner { background: #744210; color: #fef3c7; border-color: #d69e2e; }
+a { color: var(--accent); }
+.slatepack-box { background: #f0f4f8; color: var(--accent); }
+th { background: #f7fafc; }

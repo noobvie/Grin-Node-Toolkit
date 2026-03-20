@@ -401,7 +401,7 @@ def cmd_init_history():
             break
         all_daily.extend(batch)
         last_ts = batch[-1][0]
-        last_dt = datetime.utcfromtimestamp(last_ts).strftime("%Y-%m-%d")
+        last_dt = datetime.fromtimestamp(last_ts, timezone.utc).strftime("%Y-%m-%d")
         print(f"  Page {page}: {len(batch)} candles up to {last_dt}")
         if len(batch) < 1000:
             break

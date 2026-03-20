@@ -1,21 +1,36 @@
 #!/bin/bash
 # =============================================================================
-# 07_grin_mining_services.sh - Grin Mining Services
+# 07_grin_mining_services.sh - Grin Mining Services & Pool Web Interface
 # =============================================================================
-# Manages the Stratum Mining server for Grin nodes:
-#   · A) Node Status      (running nodes, tmux sessions, binary path)
-#   · B) Setup Stratum    (enable_stratum_server, wallet_listener_url)
-#   · C) Configure Stratum (wallet URL, burn_reward, toggle enable)
-#   · D) Publish Stratum  — Mainnet (patch toml → 0.0.0.0:3416 + firewall)
-#   · E) Restrict Stratum — Mainnet (revert to 127.0.0.1:3416)
-#   · F) Publish Stratum  — Testnet (patch toml → 0.0.0.0:13416 + firewall)
-#   · G) Restrict Stratum — Testnet (revert to 127.0.0.1:13416)
-#   · H) Mining Status    (ports, connected miners, toml values)
+# v2: Menu reorganized — stratum split by network, pool web interface added.
+#
+# ─── Overview ─────────────────────────────────────────────────────────────────
+#   · A) Node Status        (running nodes, tmux sessions, binary path)
+#   · H) Mining Status      (ports, connected miners, toml values)
+#
+# ─── Mainnet Stratum (port 3416) ──────────────────────────────────────────────
+#   · B) Setup Stratum      (enable_stratum_server, wallet_listener_url)
+#   · C) Configure Stratum  (wallet URL, burn_reward, toggle enable)
+#   · D) Publish Stratum    (0.0.0.0:3416 + firewall — open to miners)
+#   · E) Restrict Stratum   (revert to 127.0.0.1:3416)
+#
+# ─── Testnet Stratum (port 13416) ─────────────────────────────────────────────
+#   · F) Setup Stratum      (enable_stratum_server, wallet_listener_url)
+#   · G) Configure Stratum  (wallet URL, burn_reward, toggle enable)
+#   · I) Publish Stratum    (0.0.0.0:13416 + firewall — open to miners)
+#   · J) Restrict Stratum   (revert to 127.0.0.1:13416)
+#
+# ─── Pool Web Interface ───────────────────────────────────────────────────────
+#   · W) Pool Web Interface (FastAPI app — mainnet port 3002 / testnet 3003)
+#        Submenu: 0) Guided setup  1) Install  2) Configure  3) Deploy web
+#                 4) nginx  5) Admin account  6) Start/Stop  7) Status
+#                 B) Backup  C) Cron schedules  U) Update  L) Logs  DEL) Reset
 # =============================================================================
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOOLKIT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -33,6 +48,24 @@ NODE_API_PORT_MAINNET=3413
 NODE_API_PORT_TESTNET=13413
 LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/grin_mining_$(date +%Y%m%d_%H%M%S).log"
+
+# ─── Pool Web Interface constants ─────────────────────────────────────────────
+POOL_APP_SRC="$TOOLKIT_ROOT/web/07_pool/pool-manager"
+POOL_WEB_SRC="$TOOLKIT_ROOT/web/07_pool/public_html"
+POOL_CONF_MAINNET="/opt/grin/conf/grin_pool.json"
+POOL_CONF_TESTNET="/opt/grin/conf/grin_pool_testnet.json"
+POOL_APP_DIR_MAINNET="/opt/grin/pool/mainnet"
+POOL_APP_DIR_TESTNET="/opt/grin/pool/testnet"
+POOL_WEB_DIR_MAINNET="/var/www/grin-pool"
+POOL_WEB_DIR_TESTNET="/var/www/grin-pool-testnet"
+POOL_PORT_MAINNET=3002
+POOL_PORT_TESTNET=3003
+POOL_SERVICE_MAINNET="grin-pool-manager"
+POOL_SERVICE_TESTNET="grin-pool-manager-testnet"
+POOL_NGINX_MAINNET="/etc/nginx/sites-available/grin-pool"
+POOL_NGINX_TESTNET="/etc/nginx/sites-available/grin-pool-testnet"
+POOL_LOG_MAINNET="/opt/grin/logs/grin-pool.log"
+POOL_LOG_TESTNET="/opt/grin/logs/grin-pool-testnet.log"
 
 # ─── Global state ─────────────────────────────────────────────────────────────
 FOUND_GRIN_TOML=""
@@ -373,39 +406,29 @@ show_node_status() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# B) SETUP STRATUM
+# B / F) SETUP STRATUM  (per-network wrappers around shared _do_setup_stratum)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-setup_stratum() {
+_do_setup_stratum() {
+    local network="$1" stratum_port="$2" api_port="$3"
+    local label="Mainnet"
+    [[ "$network" == "testnet" ]] && label="Testnet"
+    local publish_key="D"; [[ "$network" == "testnet" ]] && publish_key="I"
+
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  B) Setup Stratum Server${RESET}"
+    echo -e "${BOLD}${CYAN}  Setup Stratum Server — $label (port $stratum_port)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     echo -e "  Enables the stratum server in grin-server.toml and sets the"
     echo -e "  wallet listener URL for coinbase block rewards."
-    echo -e "  Use ${BOLD}D${RESET} / ${BOLD}F${RESET} to publish (open to miners) after setup."
+    echo -e "  Use ${BOLD}$publish_key${RESET} to publish (open to miners) after setup."
     echo ""
-
-    echo -e "  ${BOLD}Choose network:${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Mainnet"
-    echo -e "  ${GREEN}2${RESET}) Testnet"
-    echo -e "  ${DIM}0) Cancel${RESET}"
-    echo -ne "Network [1]: "
-    read -r net_choice
-    [[ "$net_choice" == "0" ]] && return
-
-    local network stratum_port api_port
-    case "${net_choice:-1}" in
-        2) network=testnet; stratum_port=$STRATUM_PORT_TESTNET; api_port=$NODE_API_PORT_TESTNET ;;
-        *) network=mainnet; stratum_port=$STRATUM_PORT_MAINNET; api_port=$NODE_API_PORT_MAINNET ;;
-    esac
 
     find_grin_server_toml "$network" "$api_port" || return
     local grin_toml="$FOUND_GRIN_TOML"
     echo ""
 
-    # Show current stratum settings
     echo -e "${BOLD}Current stratum settings in:${RESET} $grin_toml"
     local cur_enable cur_wallet cur_burn
     cur_enable=$(grep -E '^[[:space:]]*enable_stratum_server[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 || true)
@@ -416,7 +439,6 @@ setup_stratum() {
     echo -e "  burn_reward           : ${cur_burn:-${DIM}(not set)${RESET}}"
     echo ""
 
-    # Enable stratum
     echo -ne "Enable stratum server (enable_stratum_server = true)? [Y/n/0]: "
     read -r en_choice
     [[ "$en_choice" == "0" ]] && return
@@ -429,10 +451,9 @@ setup_stratum() {
             echo "enable_stratum_server = true" >> "$grin_toml"
         fi
         success "enable_stratum_server = true"
-        log "Setup: enable_stratum_server = true in $grin_toml"
+        log "Setup ($network): enable_stratum_server = true in $grin_toml"
     fi
 
-    # Wallet listener URL
     local default_wallet_url="http://127.0.0.1:3415/v2/foreign"
     [[ "$network" == "testnet" ]] && default_wallet_url="http://127.0.0.1:13415/v2/foreign"
     echo ""
@@ -452,10 +473,9 @@ setup_stratum() {
             echo "wallet_listener_url = \"$new_url\"" >> "$grin_toml"
         fi
         success "wallet_listener_url = \"$new_url\""
-        log "Setup: wallet_listener_url = $new_url in $grin_toml"
+        log "Setup ($network): wallet_listener_url = $new_url in $grin_toml"
     fi
 
-    # burn_reward
     echo ""
     echo -e "${BOLD}burn_reward${RESET} — set true to discard coinbase (useful for testing only)."
     echo -ne "Set burn_reward = false (keep rewards)? [Y/n/0]: "
@@ -470,48 +490,38 @@ setup_stratum() {
             echo "burn_reward = false" >> "$grin_toml"
         fi
         success "burn_reward = false"
-        log "Setup: burn_reward = false in $grin_toml"
+        log "Setup ($network): burn_reward = false in $grin_toml"
     fi
 
     echo ""
     success "Stratum setup complete for $network."
     echo ""
     info "Stratum is configured but bound to localhost by default."
-    echo -e "  Use ${BOLD}D${RESET} (Mainnet) or ${BOLD}F${RESET} (Testnet) to publish and open to miners."
+    echo -e "  Use ${BOLD}$publish_key${RESET} to publish and open to miners."
     echo -e "  Restart the grin node to apply changes."
-    info "Log file: $LOG_FILE"
 }
 
+setup_stratum_mainnet() { _do_setup_stratum mainnet "$STRATUM_PORT_MAINNET" "$NODE_API_PORT_MAINNET"; }
+setup_stratum_testnet() { _do_setup_stratum testnet "$STRATUM_PORT_TESTNET" "$NODE_API_PORT_TESTNET"; }
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# C) CONFIGURE STRATUM
+# C / G) CONFIGURE STRATUM  (per-network wrappers around _do_configure_stratum)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-configure_stratum() {
+_do_configure_stratum() {
+    local network="$1" stratum_port="$2" api_port="$3"
+    local label="Mainnet"; [[ "$network" == "testnet" ]] && label="Testnet"
+
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  C) Configure Stratum${RESET}"
+    echo -e "${BOLD}${CYAN}  Configure Stratum — $label (port $stratum_port)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-
-    echo -e "  ${BOLD}Choose network:${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Mainnet"
-    echo -e "  ${GREEN}2${RESET}) Testnet"
-    echo -e "  ${DIM}0) Cancel${RESET}"
-    echo -ne "Network [1]: "
-    read -r net_choice
-    [[ "$net_choice" == "0" ]] && return
-
-    local network stratum_port api_port
-    case "${net_choice:-1}" in
-        2) network=testnet; stratum_port=$STRATUM_PORT_TESTNET; api_port=$NODE_API_PORT_TESTNET ;;
-        *) network=mainnet; stratum_port=$STRATUM_PORT_MAINNET; api_port=$NODE_API_PORT_MAINNET ;;
-    esac
 
     find_grin_server_toml "$network" "$api_port" || return
     local grin_toml="$FOUND_GRIN_TOML"
     echo ""
 
-    # Show current settings
     echo -e "${BOLD}Current settings in:${RESET} $grin_toml"
     echo ""
     local cur_enable cur_addr cur_wallet cur_burn
@@ -541,7 +551,7 @@ configure_stratum() {
                 echo "enable_stratum_server = $new_val" >> "$grin_toml"
             fi
             success "enable_stratum_server = $new_val"
-            log "Configure: enable_stratum_server = $new_val in $grin_toml"
+            log "Configure ($network): enable_stratum_server = $new_val"
             changed=true
             ;;
         2)
@@ -555,7 +565,7 @@ configure_stratum() {
                 echo "stratum_server_addr = \"$new_addr\"" >> "$grin_toml"
             fi
             success "stratum_server_addr = \"$new_addr\""
-            log "Configure: stratum_server_addr = $new_addr in $grin_toml"
+            log "Configure ($network): stratum_server_addr = $new_addr"
             changed=true
             ;;
         3)
@@ -568,7 +578,7 @@ configure_stratum() {
                 echo "wallet_listener_url = \"$new_wallet\"" >> "$grin_toml"
             fi
             success "wallet_listener_url = \"$new_wallet\""
-            log "Configure: wallet_listener_url = $new_wallet in $grin_toml"
+            log "Configure ($network): wallet_listener_url = $new_wallet"
             changed=true
             ;;
         4)
@@ -581,7 +591,7 @@ configure_stratum() {
                 echo "burn_reward = $new_burn" >> "$grin_toml"
             fi
             success "burn_reward = $new_burn"
-            log "Configure: burn_reward = $new_burn in $grin_toml"
+            log "Configure ($network): burn_reward = $new_burn"
             changed=true
             ;;
         *)
@@ -595,6 +605,9 @@ configure_stratum() {
         graceful_restart_grin "$api_port" "$network"
     fi
 }
+
+configure_stratum_mainnet() { _do_configure_stratum mainnet "$STRATUM_PORT_MAINNET" "$NODE_API_PORT_MAINNET"; }
+configure_stratum_testnet() { _do_configure_stratum testnet "$STRATUM_PORT_TESTNET" "$NODE_API_PORT_TESTNET"; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PORT GUIDE (stratum)
@@ -733,8 +746,11 @@ _disable_stratum() {
     graceful_restart_grin "$api_port" "$network"
 }
 
+# D / E — Mainnet publish / restrict
 publish_mainnet_stratum()  { _enable_stratum  mainnet "$STRATUM_PORT_MAINNET" "$NODE_API_PORT_MAINNET"; }
 restrict_mainnet_stratum() { _disable_stratum mainnet "$STRATUM_PORT_MAINNET" "$NODE_API_PORT_MAINNET"; }
+
+# I / J — Testnet publish / restrict  (were F/G in v1)
 publish_testnet_stratum()  { _enable_stratum  testnet "$STRATUM_PORT_TESTNET" "$NODE_API_PORT_TESTNET"; }
 restrict_testnet_stratum() { _disable_stratum testnet "$STRATUM_PORT_TESTNET" "$NODE_API_PORT_TESTNET"; }
 
@@ -802,6 +818,759 @@ show_mining_status() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# W) POOL WEB INTERFACE — helper functions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Resolve per-network variables into local vars based on $1 (mainnet|testnet)
+_pool_vars() {
+    local net="$1"
+    if [[ "$net" == "testnet" ]]; then
+        POOL_CONF="$POOL_CONF_TESTNET"
+        POOL_APP_DIR="$POOL_APP_DIR_TESTNET"
+        POOL_WEB_DIR="$POOL_WEB_DIR_TESTNET"
+        POOL_PORT="$POOL_PORT_TESTNET"
+        POOL_SERVICE="$POOL_SERVICE_TESTNET"
+        POOL_NGINX_CONF="$POOL_NGINX_TESTNET"
+        POOL_LOG="$POOL_LOG_TESTNET"
+    else
+        POOL_CONF="$POOL_CONF_MAINNET"
+        POOL_APP_DIR="$POOL_APP_DIR_MAINNET"
+        POOL_WEB_DIR="$POOL_WEB_DIR_MAINNET"
+        POOL_PORT="$POOL_PORT_MAINNET"
+        POOL_SERVICE="$POOL_SERVICE_MAINNET"
+        POOL_NGINX_CONF="$POOL_NGINX_MAINNET"
+        POOL_LOG="$POOL_LOG_MAINNET"
+    fi
+}
+
+pool_read_conf() {
+    # pool_read_conf <network> <key> [default]
+    local net="$1" key="$2" default="${3:-}"
+    _pool_vars "$net"
+    [[ -f "$POOL_CONF" ]] || { echo "$default"; return; }
+    python3 - "$POOL_CONF" "$key" "$default" << 'PYEOF' 2>/dev/null || echo "$default"
+import json, sys
+path, key, default = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    d = json.load(open(path))
+    print(d.get(key, default))
+except Exception:
+    print(default)
+PYEOF
+}
+
+pool_write_conf_key() {
+    # pool_write_conf_key <network> <key> <value>
+    local net="$1" key="$2" val="$3"
+    _pool_vars "$net"
+    mkdir -p "$(dirname "$POOL_CONF")"
+    python3 - "$key" "$val" "$POOL_CONF" << 'PYEOF'
+import json, sys, os
+key, val, path = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    d = json.load(open(path)) if os.path.isfile(path) else {}
+except Exception:
+    d = {}
+NUMS = {"stratum_port","node_api_port","pool_fee_percent","min_withdrawal","withdrawal_fee","service_port"}
+d[key] = float(val) if key in NUMS else val
+with open(path, "w") as f:
+    json.dump(d, f, indent=2)
+os.chmod(path, 0o600)
+PYEOF
+}
+
+pool_ensure_defaults() {
+    local net="$1"
+    _pool_vars "$net"
+    local -A defaults=(
+        ["pool_name"]="My Grin Pool"
+        ["subdomain"]=""
+        ["network"]="$net"
+        ["stratum_port"]="$( [[ $net == testnet ]] && echo 13416 || echo 3416 )"
+        ["node_api_port"]="$( [[ $net == testnet ]] && echo 13413 || echo 3413 )"
+        ["pool_fee_percent"]="0"
+        ["min_withdrawal"]="2.0"
+        ["withdrawal_fee"]="0.0"
+        ["grin_wallet_dir"]="$( [[ $net == testnet ]] && echo /opt/grin/wallet/testnet || echo /opt/grin/wallet/mainnet )"
+        ["log_path"]="$POOL_LOG"
+        ["service_port"]="$POOL_PORT"
+        ["db_url"]="sqlite+aiosqlite:////$POOL_APP_DIR/pool.db"
+        ["wallet_pass_file"]="$POOL_APP_DIR/wallet_pass"
+    )
+    for k in "${!defaults[@]}"; do
+        local existing; existing=$(pool_read_conf "$net" "$k" "__MISSING__")
+        [[ "$existing" == "__MISSING__" ]] && pool_write_conf_key "$net" "$k" "${defaults[$k]}"
+    done
+}
+
+pool_show_status() {
+    local net="$1"
+    _pool_vars "$net"
+    local label="Mainnet"; [[ "$net" == "testnet" ]] && label="Testnet"
+
+    echo -e "\n${BOLD}Pool Manager — $label${RESET}"
+    echo -e "${DIM}────────────────────────────────────────────────${RESET}"
+
+    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        local pid; pid=$(systemctl show "$POOL_SERVICE" --property=MainPID --value 2>/dev/null || echo "?")
+        echo -e "  ${BOLD}Service${RESET}  : ${GREEN}● active${RESET}  (pid $pid)"
+    elif systemctl is-enabled --quiet "$POOL_SERVICE" 2>/dev/null; then
+        echo -e "  ${BOLD}Service${RESET}  : ${YELLOW}installed, stopped${RESET}"
+    else
+        echo -e "  ${BOLD}Service${RESET}  : ${DIM}not installed${RESET}"
+    fi
+
+    local port; port=$(pool_read_conf "$net" "service_port" "$POOL_PORT")
+    if ss -tlnp 2>/dev/null | grep -q ":$port "; then
+        echo -e "  ${BOLD}Port${RESET}     : ${GREEN}$port listening${RESET}"
+    else
+        echo -e "  ${BOLD}Port${RESET}     : ${DIM}$port — not listening${RESET}"
+    fi
+
+    [[ -f "$POOL_APP_DIR/pool.db" ]] && {
+        local dbsz; dbsz=$(du -sh "$POOL_APP_DIR/pool.db" 2>/dev/null | cut -f1 || echo "?")
+        echo -e "  ${BOLD}Database${RESET} : $POOL_APP_DIR/pool.db  ($dbsz)"
+    }
+
+    local subdomain; subdomain=$(pool_read_conf "$net" "subdomain" "")
+    [[ -n "$subdomain" ]] && echo -e "  ${BOLD}URL${RESET}      : https://$subdomain"
+
+    if [[ -f "$POOL_LOG" ]]; then
+        echo -e "\n${DIM}── Recent activity (last 15 lines) ──${RESET}"
+        tail -n 15 "$POOL_LOG" 2>/dev/null | sed 's/^/  /'
+    fi
+}
+
+pool_install() {
+    local net="$1"
+    _pool_vars "$net"
+    local label="Mainnet"; [[ "$net" == "testnet" ]] && label="Testnet"
+
+    echo -e "\n${BOLD}Installing Pool Manager ($label)...${RESET}\n"
+
+    # Check source
+    if [[ ! -d "$POOL_APP_SRC" ]]; then
+        error "Pool app source not found: $POOL_APP_SRC"
+        error "Ensure web/07_pool/pool-manager/ exists in the toolkit directory."
+        return 1
+    fi
+
+    # System packages
+    info "Checking system packages..."
+    if command -v apt-get &>/dev/null; then
+        apt-get install -y python3 python3-pip python3-venv python3-dev build-essential \
+            logrotate 2>&1 | tail -5
+    elif command -v dnf &>/dev/null; then
+        dnf install -y python3 python3-pip python3-devel gcc logrotate 2>&1 | tail -5
+    fi
+
+    # App directory
+    mkdir -p "$POOL_APP_DIR"
+    info "Copying pool manager to $POOL_APP_DIR..."
+    cp -r "$POOL_APP_SRC/"* "$POOL_APP_DIR/"
+
+    # Virtual environment
+    info "Creating Python virtual environment..."
+    python3 -m venv "$POOL_APP_DIR/venv" \
+        || { error "Failed to create venv."; return 1; }
+
+    info "Installing Python dependencies..."
+    "$POOL_APP_DIR/venv/bin/pip" install --upgrade pip -q
+    "$POOL_APP_DIR/venv/bin/pip" install -r "$POOL_APP_DIR/requirements.txt" -q \
+        || { error "pip install failed. Check $POOL_APP_DIR/requirements.txt."; return 1; }
+    success "Python dependencies installed."
+
+    # Generate JWT secret if not present
+    local jwt_secret; jwt_secret=$(pool_read_conf "$net" "jwt_secret" "")
+    if [[ -z "$jwt_secret" ]]; then
+        jwt_secret=$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || openssl rand -hex 32)
+        pool_write_conf_key "$net" "jwt_secret" "$jwt_secret"
+        success "JWT secret generated."
+    fi
+
+    pool_ensure_defaults "$net"
+
+    # Systemd service
+    local exec_start="$POOL_APP_DIR/venv/bin/uvicorn main:app --host 127.0.0.1 --port $POOL_PORT"
+    cat > "/etc/systemd/system/$POOL_SERVICE.service" << EOF
+[Unit]
+Description=Grin Pool Manager ($label)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$POOL_APP_DIR
+Environment="GRIN_POOL_CONF=$POOL_CONF"
+ExecStart=$exec_start
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable "$POOL_SERVICE" 2>/dev/null || true
+    success "Systemd service $POOL_SERVICE installed."
+
+    # Logrotate
+    mkdir -p "$(dirname "$POOL_LOG")"
+    cat > "/etc/logrotate.d/${POOL_SERVICE}" << EOF
+$POOL_LOG {
+    daily
+    rotate 10
+    size 20M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    postrotate
+        systemctl reload $POOL_SERVICE 2>/dev/null || true
+    endscript
+}
+EOF
+    success "Logrotate configured."
+    echo ""
+    success "Pool manager ($label) installed."
+    echo -e "  Next: ${BOLD}2) Configure${RESET} → ${BOLD}3) Deploy web files${RESET} → ${BOLD}4) Setup nginx${RESET} → ${BOLD}5) Admin account${RESET}"
+}
+
+pool_configure() {
+    local net="$1"
+    _pool_vars "$net"
+    local label="Mainnet"; [[ "$net" == "testnet" ]] && label="Testnet"
+
+    echo -e "\n${BOLD}Configure Pool Manager — $label${RESET}\n"
+    pool_ensure_defaults "$net"
+
+    local val
+
+    echo -ne "Pool name        [$(pool_read_conf "$net" "pool_name" "My Grin Pool")]: "
+    read -r val; [[ -n "$val" ]] && pool_write_conf_key "$net" "pool_name" "$val"
+
+    echo -ne "Subdomain        [$(pool_read_conf "$net" "subdomain" "")]: "
+    read -r val; [[ -n "$val" ]] && pool_write_conf_key "$net" "subdomain" "$val"
+
+    echo -ne "Pool fee %%       [$(pool_read_conf "$net" "pool_fee_percent" "0")]: "
+    read -r val; [[ -n "$val" ]] && pool_write_conf_key "$net" "pool_fee_percent" "$val"
+
+    echo -ne "Min withdrawal   [$(pool_read_conf "$net" "min_withdrawal" "2.0")] GRIN: "
+    read -r val; [[ -n "$val" ]] && pool_write_conf_key "$net" "min_withdrawal" "$val"
+
+    echo -ne "Wallet dir       [$(pool_read_conf "$net" "grin_wallet_dir" "/opt/grin/wallet/$net")]: "
+    read -r val; [[ -n "$val" ]] && pool_write_conf_key "$net" "grin_wallet_dir" "$val"
+
+    # Wallet password
+    local wallet_dir; wallet_dir=$(pool_read_conf "$net" "grin_wallet_dir" "/opt/grin/wallet/$net")
+    local pass_file="$POOL_APP_DIR/wallet_pass"
+    echo -ne "Wallet password  (leave blank to keep existing): "
+    read -rs val; echo ""
+    if [[ -n "$val" ]]; then
+        install -m 600 /dev/null "$pass_file"
+        echo -n "$val" > "$pass_file"
+        pool_write_conf_key "$net" "wallet_pass_file" "$pass_file"
+        success "Wallet password saved to $pass_file"
+    fi
+
+    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        info "Restarting $POOL_SERVICE to apply config..."
+        systemctl restart "$POOL_SERVICE"
+    fi
+    success "Pool manager ($label) configured."
+}
+
+pool_deploy_web() {
+    local net="$1"
+    _pool_vars "$net"
+
+    if [[ ! -d "$POOL_WEB_SRC" ]]; then
+        error "Web source not found: $POOL_WEB_SRC"
+        return 1
+    fi
+
+    info "Deploying web files to $POOL_WEB_DIR..."
+    mkdir -p "$POOL_WEB_DIR"
+    rsync -a --delete "$POOL_WEB_SRC/" "$POOL_WEB_DIR/" \
+        2>/dev/null || cp -r "$POOL_WEB_SRC/"* "$POOL_WEB_DIR/"
+
+    # Stamp network into a small config JS file for frontend detection
+    local pool_name; pool_name=$(pool_read_conf "$net" "pool_name" "My Grin Pool")
+    cat > "$POOL_WEB_DIR/js/pool-config.js" << EOF
+// Auto-generated by 07_grin_mining_services.sh
+window.POOL_NETWORK = "${net}";
+window.POOL_NAME = $(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$pool_name" 2>/dev/null || echo '"'"$pool_name"'"');
+EOF
+
+    success "Web files deployed to $POOL_WEB_DIR"
+}
+
+pool_setup_nginx() {
+    local net="$1"
+    _pool_vars "$net"
+    local label="Mainnet"; [[ "$net" == "testnet" ]] && label="Testnet"
+
+    local subdomain; subdomain=$(pool_read_conf "$net" "subdomain" "")
+    if [[ -z "$subdomain" ]]; then
+        echo -ne "Pool subdomain (e.g. pool.example.com): "
+        read -r subdomain
+        [[ -z "$subdomain" ]] && { warn "No subdomain — nginx not configured."; return 1; }
+        pool_write_conf_key "$net" "subdomain" "$subdomain"
+    fi
+
+    info "Writing nginx vhost: $POOL_NGINX_CONF"
+    mkdir -p "$(dirname "$POOL_NGINX_CONF")"
+
+    cat > "$POOL_NGINX_CONF" << EOF
+# Grin Pool Manager — $label — generated by 07_grin_mining_services.sh
+limit_req_zone \$binary_remote_addr zone=${POOL_SERVICE}_auth:10m   rate=3r/m;
+limit_req_zone \$binary_remote_addr zone=${POOL_SERVICE}_api:10m    rate=30r/m;
+limit_req_zone \$binary_remote_addr zone=${POOL_SERVICE}_static:10m rate=60r/m;
+
+server {
+    listen 80;
+    server_name $subdomain;
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $subdomain;
+
+    root $POOL_WEB_DIR;
+    index index.html;
+
+    # SSL — managed by certbot
+    ssl_certificate     /etc/letsencrypt/live/$subdomain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$subdomain/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf 2>/dev/null;
+
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" always;
+
+    location /api/auth/ {
+        limit_req zone=${POOL_SERVICE}_auth burst=5 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+
+    location /api/ {
+        limit_req zone=${POOL_SERVICE}_api burst=10 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 30s;
+    }
+
+    location / {
+        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        try_files \$uri \$uri/ \$uri.html =404;
+    }
+
+    access_log /var/log/nginx/${POOL_SERVICE}-access.log;
+    error_log  /var/log/nginx/${POOL_SERVICE}-error.log;
+}
+EOF
+
+    local sites_enabled="/etc/nginx/sites-enabled/$(basename "$POOL_NGINX_CONF")"
+    ln -sf "$POOL_NGINX_CONF" "$sites_enabled" 2>/dev/null || true
+
+    nginx -t 2>&1 && systemctl reload nginx \
+        && success "nginx configured for $subdomain" \
+        || { error "nginx config test failed. Check $POOL_NGINX_CONF"; return 1; }
+
+    echo ""
+    echo -ne "Run certbot for SSL on $subdomain? [Y/n/0]: "
+    read -r do_ssl
+    if [[ "${do_ssl,,}" != "n" && "$do_ssl" != "0" ]]; then
+        certbot --nginx -d "$subdomain" --non-interactive --agree-tos \
+            --email "admin@$subdomain" 2>&1 | tail -5 || warn "certbot failed — configure SSL manually."
+    fi
+}
+
+pool_setup_admin() {
+    local net="$1"
+    _pool_vars "$net"
+    local label="Mainnet"; [[ "$net" == "testnet" ]] && label="Testnet"
+    local port; port=$(pool_read_conf "$net" "service_port" "$POOL_PORT")
+
+    echo -e "\n${BOLD}Create Admin Account — $label${RESET}\n"
+
+    if ! ss -tlnp 2>/dev/null | grep -q ":$port "; then
+        warn "Pool manager is not running on port $port."
+        warn "Start the service (option 6) first, then run this again."
+        return 1
+    fi
+
+    echo -ne "Admin username: "
+    read -r admin_user
+    [[ -z "$admin_user" ]] && return
+
+    echo -ne "Admin password: "
+    read -rs admin_pass; echo ""
+    [[ -z "$admin_pass" ]] && return
+
+    echo -ne "Admin email (optional): "
+    read -r admin_email
+
+    local payload; payload=$(python3 -c "
+import json, sys
+d = {'username': sys.argv[1], 'password': sys.argv[2], 'email': sys.argv[3]}
+print(json.dumps(d))
+" "$admin_user" "$admin_pass" "${admin_email:-}")
+
+    local resp; resp=$(curl -s -X POST "http://127.0.0.1:$port/api/auth/register" \
+        -H "Content-Type: application/json" -d "$payload" 2>&1)
+
+    if echo "$resp" | grep -q "access_token"; then
+        success "User '$admin_user' registered."
+        # Promote to admin directly via DB (simplest approach)
+        python3 - "$POOL_APP_DIR/pool.db" "$admin_user" << 'PYEOF'
+import sqlite3, sys
+db_path, username = sys.argv[1], sys.argv[2]
+con = sqlite3.connect(db_path)
+con.execute("UPDATE users SET is_admin=1 WHERE username=?", (username,))
+con.commit()
+con.close()
+print(f"User '{username}' promoted to admin.")
+PYEOF
+    else
+        error "Registration failed: $resp"
+    fi
+}
+
+pool_service_control() {
+    local net="$1" action="$2"
+    _pool_vars "$net"
+
+    case "$action" in
+        start)
+            systemctl start "$POOL_SERVICE" \
+                && success "$POOL_SERVICE started." \
+                || error "Failed to start $POOL_SERVICE."
+            ;;
+        stop)
+            systemctl stop "$POOL_SERVICE" \
+                && success "$POOL_SERVICE stopped." \
+                || error "Failed to stop $POOL_SERVICE."
+            ;;
+        restart)
+            systemctl restart "$POOL_SERVICE" \
+                && success "$POOL_SERVICE restarted." \
+                || error "Failed to restart $POOL_SERVICE."
+            ;;
+    esac
+}
+
+pool_service_menu() {
+    local net="$1"
+    _pool_vars "$net"
+
+    echo -e "\n${BOLD}Service Control — $POOL_SERVICE${RESET}"
+    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        echo -e "  Status: ${GREEN}● running${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Stop    ${RED}2${RESET}) Restart    ${DIM}0) Back${RESET}"
+        echo -ne "Choice: "
+        read -r sc
+        case "$sc" in
+            1) pool_service_control "$net" stop ;;
+            2) pool_service_control "$net" restart ;;
+        esac
+    else
+        echo -e "  Status: ${RED}● stopped${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Start    ${DIM}0) Back${RESET}"
+        echo -ne "Choice: "
+        read -r sc
+        [[ "$sc" == "1" ]] && pool_service_control "$net" start
+    fi
+}
+
+pool_backup() {
+    local net="$1"
+    _pool_vars "$net"
+
+    local backup_dir="/opt/grin/backups/${POOL_SERVICE}"
+    mkdir -p "$backup_dir"
+    local ts; ts=$(date +%Y%m%d_%H%M%S)
+    local backup_file="$backup_dir/pool_backup_${ts}.tar.gz"
+
+    local files=()
+    [[ -f "$POOL_APP_DIR/pool.db" ]] && files+=("$POOL_APP_DIR/pool.db")
+    [[ -f "$POOL_CONF" ]]            && files+=("$POOL_CONF")
+
+    if [[ ${#files[@]} -eq 0 ]]; then
+        warn "Nothing to back up — DB and config not found."
+        return
+    fi
+
+    tar -czf "$backup_file" "${files[@]}" 2>/dev/null \
+        && success "Backup: $backup_file" \
+        || error "Backup failed."
+
+    # Keep last 30
+    ls -t "$backup_dir"/pool_backup_*.tar.gz 2>/dev/null | tail -n +31 | xargs rm -f 2>/dev/null || true
+}
+
+pool_cron_schedules() {
+    local net="$1"
+    _pool_vars "$net"
+
+    echo -e "\n${BOLD}Cron Schedules — $POOL_SERVICE${RESET}\n"
+    local cron_backup="/etc/cron.d/${POOL_SERVICE}-backup"
+    local cron_vacuum="/etc/cron.d/${POOL_SERVICE}-vacuum"
+
+    [[ -f "$cron_backup" ]] \
+        && echo -e "  Daily backup  : ${GREEN}enabled${RESET}  ($cron_backup)" \
+        || echo -e "  Daily backup  : ${DIM}disabled${RESET}"
+
+    [[ -f "$cron_vacuum" ]] \
+        && echo -e "  Weekly VACUUM : ${GREEN}enabled${RESET}  ($cron_vacuum)" \
+        || echo -e "  Weekly VACUUM : ${DIM}disabled${RESET}"
+
+    echo ""
+    echo -e "  ${GREEN}1${RESET}) Toggle daily backup (02:00 UTC)"
+    echo -e "  ${GREEN}2${RESET}) Toggle weekly SQLite VACUUM (Sunday 03:00 UTC)"
+    echo -e "  ${DIM}0) Back${RESET}"
+    echo -ne "Choice: "
+    read -r cc
+
+    case "$cc" in
+        1)
+            if [[ -f "$cron_backup" ]]; then
+                rm -f "$cron_backup"
+                success "Daily backup cron disabled."
+            else
+                cat > "$cron_backup" << EOF
+0 2 * * * root /usr/bin/bash -c "source $SCRIPT_DIR/07_grin_mining_services.sh 2>/dev/null; _pool_vars $net; pool_backup $net" >> $POOL_LOG 2>&1
+EOF
+                success "Daily backup cron enabled ($cron_backup)."
+            fi
+            ;;
+        2)
+            if [[ -f "$cron_vacuum" ]]; then
+                rm -f "$cron_vacuum"
+                success "Weekly VACUUM cron disabled."
+            else
+                cat > "$cron_vacuum" << EOF
+0 3 * * 0 root /usr/bin/sqlite3 $POOL_APP_DIR/pool.db "VACUUM;" >> $POOL_LOG 2>&1
+EOF
+                success "Weekly VACUUM cron enabled ($cron_vacuum)."
+            fi
+            ;;
+    esac
+}
+
+pool_view_logs() {
+    local net="$1"
+    _pool_vars "$net"
+
+    if [[ ! -f "$POOL_LOG" ]]; then
+        warn "Log file not found: $POOL_LOG"
+        return
+    fi
+    tail -n 50 "$POOL_LOG" | less -FRX
+}
+
+pool_reset_db() {
+    local net="$1"
+    _pool_vars "$net"
+    local label="Mainnet"; [[ "$net" == "testnet" ]] && label="Testnet"
+    local db_path="$POOL_APP_DIR/pool.db"
+
+    echo -e "\n${RED}${BOLD}━━━ DANGER ZONE — Reset Pool Database ━━━${RESET}"
+    echo ""
+
+    if [[ ! -f "$db_path" ]]; then
+        warn "Database not found: $db_path"
+        return
+    fi
+
+    local db_size; db_size=$(du -sh "$db_path" 2>/dev/null | cut -f1 || echo "?")
+    local user_count; user_count=$(python3 -c "
+import sqlite3, sys
+try:
+    con = sqlite3.connect(sys.argv[1])
+    print(con.execute('SELECT COUNT(*) FROM users').fetchone()[0])
+    con.close()
+except: print('?')
+" "$db_path" 2>/dev/null || echo "?")
+
+    echo -e "  Database : $db_path  ($db_size)"
+    echo -e "  Users    : $user_count accounts"
+    echo -e "  Network  : $label"
+    echo ""
+    warn "This will permanently DELETE all users, balances, shares, blocks, and withdrawals."
+    echo ""
+    echo -ne "Type ${RED}RESET POOL DATABASE${RESET} to confirm: "
+    read -r confirm1
+    [[ "$confirm1" != "RESET POOL DATABASE" ]] && { info "Aborted."; return; }
+
+    echo -ne "Type ${RED}YES${RESET} to proceed: "
+    read -r confirm2
+    [[ "$confirm2" != "YES" ]] && { info "Aborted."; return; }
+
+    pool_service_control "$net" stop 2>/dev/null || true
+    sleep 1
+
+    rm -f "$db_path"
+    success "Database deleted."
+
+    # Recreate schema via Python
+    if [[ -f "$POOL_APP_DIR/database.py" && -f "$POOL_APP_DIR/venv/bin/python3" ]]; then
+        info "Recreating database schema..."
+        GRIN_POOL_CONF="$POOL_CONF" "$POOL_APP_DIR/venv/bin/python3" \
+            -c "import asyncio; from database import init_db; asyncio.run(init_db())" \
+            2>&1 && success "Schema recreated." || warn "Schema recreation failed — restart service."
+    fi
+
+    pool_service_control "$net" start 2>/dev/null || true
+}
+
+pool_guided_setup() {
+    local net="$1"
+    local label="Mainnet"; [[ "$net" == "testnet" ]] && label="Testnet"
+
+    echo -e "\n${BOLD}${CYAN}═══ Guided Full Setup — Pool Manager ($label) ═══${RESET}\n"
+    echo -e "  This will run steps 1 → 2 → 3 → 4 → 5 → 6 in sequence."
+    echo -ne "  Continue? [Y/n]: "
+    read -r go; [[ "${go,,}" == "n" ]] && return
+
+    pool_install   "$net" || return
+    echo ""; echo "Press Enter to continue to Configure..."; read -r
+    pool_configure "$net"
+    echo ""; echo "Press Enter to continue to Deploy web files..."; read -r
+    pool_deploy_web "$net"
+    echo ""; echo "Press Enter to continue to Setup nginx..."; read -r
+    pool_setup_nginx "$net"
+    echo ""; echo "Press Enter to continue to Create admin account..."; read -r
+    pool_start_service "$net"
+    sleep 2
+    pool_setup_admin "$net"
+
+    echo ""
+    success "Guided setup complete. Open https://$(pool_read_conf "$net" "subdomain" "your-domain") to access the pool."
+}
+
+pool_start_service() {
+    local net="$1"
+    _pool_vars "$net"
+    if ! systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        pool_service_control "$net" start
+    else
+        info "$POOL_SERVICE is already running."
+    fi
+}
+
+_pool_menu_status_line() {
+    local net="$1"
+    _pool_vars "$net"
+    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        echo -e "${GREEN}● running${RESET}"
+    elif [[ -f "$POOL_CONF" ]]; then
+        echo -e "${YELLOW}installed, stopped${RESET}"
+    else
+        echo -e "${DIM}not installed${RESET}"
+    fi
+}
+
+pool_menu() {
+    local net="$1"
+    _pool_vars "$net"
+    local label="Mainnet"; [[ "$net" == "testnet" ]] && label="Testnet"
+
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  W) Pool Web Interface — $label${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        echo -e "  Service: $(_pool_menu_status_line "$net")"
+        echo ""
+        echo -e "${DIM}  ─── First-Time Setup ────────────────────────────${RESET}"
+        echo -e "  ${GREEN}0${RESET}) Guided Full Setup    ${DIM}(runs 1→2→3→4→5→6)${RESET}"
+        echo ""
+        echo -e "${DIM}  ─── Install & Configure ──────────────────────────${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Install dependencies ${DIM}(python3, pip, fastapi, uvicorn)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Configure pool       ${DIM}(name, domain, fee, wallet)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Deploy web files     ${DIM}(→ $POOL_WEB_DIR)${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Setup nginx          ${DIM}(vhost + SSL + rate limits)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Setup admin account  ${DIM}(create first admin user)${RESET}"
+        echo -e "  ${GREEN}6${RESET}) Start / Stop service ${DIM}($POOL_SERVICE)${RESET}"
+        echo ""
+        echo -e "${DIM}  ─── Maintenance ──────────────────────────────────${RESET}"
+        echo -e "  ${GREEN}7${RESET}) Pool status          ${DIM}(service, port, DB, recent logs)${RESET}"
+        echo -e "  ${GREEN}B${RESET}) Backup now           ${DIM}(DB + config → /opt/grin/backups/)${RESET}"
+        echo -e "  ${GREEN}C${RESET}) Cron schedules       ${DIM}(toggle daily backup + weekly VACUUM)${RESET}"
+        echo -e "  ${GREEN}L${RESET}) View logs            ${DIM}(tail -n 50 | less)${RESET}"
+        echo ""
+        echo -e "${DIM}  ─── Danger Zone ──────────────────────────────────${RESET}"
+        echo -e "  ${RED}DEL${RESET}) Reset database   ${DIM}(triple-confirm wipe)${RESET}"
+        echo ""
+        echo -e "  ${DIM}s) Edit saved settings  ($POOL_CONF)${RESET}"
+        echo -e "  ${RED}0) Back${RESET} to mining services menu"
+        echo ""
+        echo -ne "${BOLD}Select: ${RESET}"
+        read -r choice
+
+        case "${choice,,}" in
+            "")    continue ;;
+            0)     pool_guided_setup "$net" ;;
+            1)     pool_install "$net" ;;
+            2)     pool_configure "$net" ;;
+            3)     pool_deploy_web "$net" ;;
+            4)     pool_setup_nginx "$net" ;;
+            5)     pool_setup_admin "$net" ;;
+            6)     pool_service_menu "$net" ;;
+            7)     pool_show_status "$net" ;;
+            b)     pool_backup "$net" ;;
+            c)     pool_cron_schedules "$net" ;;
+            l)     pool_view_logs "$net" ;;
+            del)   pool_reset_db "$net" ;;
+            s)     ${EDITOR:-nano} "$POOL_CONF" ;;
+            back|q) break ;;
+            *)     warn "Invalid option." ; sleep 1 ; continue ;;
+        esac
+
+        [[ "${choice,,}" != "l" && "${choice,,}" != "s" ]] && {
+            echo ""
+            echo "Press Enter to continue..."
+            read -r
+        }
+    done
+}
+
+pool_web_interface() {
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  W) Pool Web Interface${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+
+    local mn_status tn_status
+    mn_status=$(_pool_menu_status_line mainnet)
+    tn_status=$(_pool_menu_status_line testnet)
+
+    echo -e "  ${GREEN}1${RESET}) Mainnet pool  ${DIM}(port $POOL_PORT_MAINNET / $POOL_SERVICE_MAINNET)${RESET}  $mn_status"
+    echo -e "  ${GREEN}2${RESET}) Testnet pool  ${DIM}(port $POOL_PORT_TESTNET / $POOL_SERVICE_TESTNET)${RESET}  $tn_status"
+    echo -e "  ${DIM}0) Cancel${RESET}"
+    echo ""
+    echo -ne "Select network [1/2/0]: "
+    read -r net_choice
+
+    case "$net_choice" in
+        1) pool_menu mainnet ;;
+        2) pool_menu testnet ;;
+        0|"") return ;;
+        *) warn "Invalid choice." ;;
+    esac
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # MENU
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -813,28 +1582,29 @@ show_menu() {
     echo ""
     show_compact_status
 
-    echo -e "${DIM}  ─── Status ──────────────────────────────────────${RESET}"
+    echo -e "${DIM}  ─── Overview ────────────────────────────────────${RESET}"
     echo -e "  ${GREEN}A${RESET}) Node Status          ${DIM}(running nodes, tmux, binary)${RESET}"
+    echo -e "  ${GREEN}H${RESET}) Mining Status        ${DIM}(ports, miners connected, toml)${RESET}"
     echo ""
-    echo -e "${DIM}  ─── Setup & Config ──────────────────────────────${RESET}"
+    echo -e "${DIM}  ─── Mainnet Stratum (port $STRATUM_PORT_MAINNET) ────────────────${RESET}"
     echo -e "  ${GREEN}B${RESET}) Setup Stratum        ${DIM}(enable server, set wallet URL)${RESET}"
     echo -e "  ${GREEN}C${RESET}) Configure Stratum    ${DIM}(wallet URL, burn_reward, toggle)${RESET}"
-    echo ""
-    echo -e "${DIM}  ─── Mainnet (port $STRATUM_PORT_MAINNET) ─────────────────────────${RESET}"
     echo -e "  ${GREEN}D${RESET}) Publish Stratum      ${DIM}(0.0.0.0:$STRATUM_PORT_MAINNET — open to miners)${RESET}"
-    echo -e "  ${RED}E${RESET}) Restrict Stratum     ${DIM}(revert to localhost)${RESET}"
+    echo -e "  ${RED}E${RESET}) Restrict Stratum     ${DIM}(revert to 127.0.0.1:$STRATUM_PORT_MAINNET)${RESET}"
     echo ""
-    echo -e "${DIM}  ─── Testnet (port $STRATUM_PORT_TESTNET) ────────────────────────${RESET}"
-    echo -e "  ${GREEN}F${RESET}) Publish Stratum      ${DIM}(0.0.0.0:$STRATUM_PORT_TESTNET — open to miners)${RESET}"
-    echo -e "  ${RED}G${RESET}) Restrict Stratum     ${DIM}(revert to localhost)${RESET}"
+    echo -e "${DIM}  ─── Testnet Stratum (port $STRATUM_PORT_TESTNET) ───────────────${RESET}"
+    echo -e "  ${GREEN}F${RESET}) Setup Stratum        ${DIM}(enable server, set wallet URL)${RESET}"
+    echo -e "  ${GREEN}G${RESET}) Configure Stratum    ${DIM}(wallet URL, burn_reward, toggle)${RESET}"
+    echo -e "  ${GREEN}I${RESET}) Publish Stratum      ${DIM}(0.0.0.0:$STRATUM_PORT_TESTNET — open to miners)${RESET}"
+    echo -e "  ${RED}J${RESET}) Restrict Stratum     ${DIM}(revert to 127.0.0.1:$STRATUM_PORT_TESTNET)${RESET}"
     echo ""
-    echo -e "${DIM}  ─── Mining Status ───────────────────────────────${RESET}"
-    echo -e "  ${GREEN}H${RESET}) Mining Status        ${DIM}(ports, miners connected, toml values)${RESET}"
+    echo -e "${DIM}  ─── Pool Web Interface ──────────────────────────${RESET}"
+    echo -e "  ${GREEN}W${RESET}) Pool Web Interface   ${DIM}(FastAPI — mainnet :3002 / testnet :3003)${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [A-H/0]: ${RESET}"
+    echo -ne "${BOLD}Select [A-J/W/0]: ${RESET}"
 }
 
 main() {
@@ -845,13 +1615,20 @@ main() {
         case "${choice,,}" in
             "")  continue ;;
             a)   show_node_status ;;
-            b)   setup_stratum ;;
-            c)   configure_stratum ;;
+            # Mainnet stratum
+            b)   setup_stratum_mainnet ;;
+            c)   configure_stratum_mainnet ;;
             d)   publish_mainnet_stratum ;;
             e)   restrict_mainnet_stratum ;;
-            f)   publish_testnet_stratum ;;
-            g)   restrict_testnet_stratum ;;
+            # Testnet stratum
+            f)   setup_stratum_testnet ;;
+            g)   configure_stratum_testnet ;;
+            i)   publish_testnet_stratum ;;
+            j)   restrict_testnet_stratum ;;
+            # Status
             h)   show_mining_status ;;
+            # Pool
+            w)   pool_web_interface ;;
             0)   break ;;
             *)   warn "Invalid option." ; sleep 1 ; continue ;;
         esac

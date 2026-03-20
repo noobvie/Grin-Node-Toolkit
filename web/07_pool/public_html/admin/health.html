@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>System Health | Grin Pool ツ</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" id="theme-css" href="/css/themes/matrix.css">
+</head>
+<body class="theme-matrix">
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title"><a href="/">Grin Pool <span>ツ</span></a></div>
+      <nav class="nav-links">
+        <a href="/">Home</a>
+        <a href="/dashboard.html" id="nav-dashboard">Dashboard</a>
+        <a href="/admin/" id="nav-admin">Admin</a>
+        <a href="/admin/health.html" class="active">Health</a>
+        <a href="/login.html" id="nav-login" style="display:none">Login</a>
+        <span id="nav-user" style="display:none"></span>
+      </nav>
+      <div class="theme-switcher">
+        <button class="theme-btn" data-theme="matrix">Matrix</button>
+        <button class="theme-btn" data-theme="dark">Dark</button>
+        <button class="theme-btn" data-theme="light">Light</button>
+        <button class="theme-btn" data-theme="naruto">Naruto</button>
+        <button class="theme-btn" data-theme="japan">Japan ✿</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="testnet-banner" id="testnet-banner" style="display:none">
+  ⚠ TESTNET — These coins have no real value
+</div>
+
+<main>
+  <div class="container">
+    <section>
+      <h2>
+        System Health
+        <span id="last-refresh" style="font-size:.75rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
+      </h2>
+
+      <!-- Services grid -->
+      <div class="health-grid" id="health-grid">
+        <div class="health-card"><div class="health-name"><span class="spinner"></span>Loading…</div></div>
+      </div>
+
+      <!-- System stats -->
+      <h2 style="margin-top:1.6rem;">System Stats</h2>
+      <div class="kpi-grid" id="sys-kpi">
+        <div class="kpi-card">
+          <div class="kpi-label">Disk Free</div>
+          <div class="kpi-value" id="sys-disk">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Memory Used</div>
+          <div class="kpi-value" id="sys-mem">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Load Average</div>
+          <div class="kpi-value" id="sys-load">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Uptime</div>
+          <div class="kpi-value" id="sys-uptime">—</div>
+        </div>
+      </div>
+
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <p>Grin Pool ツ — Admin Panel</p>
+  </div>
+</footer>
+
+<script src="/js/api.js"></script>
+<script src="/js/theme.js"></script>
+<script>
+// ── Admin auth check ───────────────────────────────────────────────────────
+(function () {
+  if (!API.isLoggedIn()) { window.location.href = '/login.html'; return; }
+  try {
+    const payload = API.decodePayload();
+    if (!payload || !payload.is_admin) { window.location.href = '/login.html'; return; }
+    document.getElementById('nav-user').style.display = '';
+    document.getElementById('nav-user').innerHTML =
+      `<span class="nav-username">${payload.sub}</span> <a href="#" onclick="API.clearTokens();window.location='/login.html'">Logout</a>`;
+  } catch (e) { window.location.href = '/login.html'; }
+
+  fetch('/api/pool/stats').then(r => r.json()).then(d => {
+    if (d.network === 'testnet') {
+      document.getElementById('testnet-banner').style.display = '';
+      document.title = '[TESTNET] ' + document.title;
+    }
+    const el = document.querySelector('.site-title a');
+    if (el && d.pool_name) el.childNodes[0].textContent = d.pool_name + ' ';
+  }).catch(() => {});
+})();
+
+// ── Service definition map ─────────────────────────────────────────────────
+// Maps API fields to display config
+const SERVICES = [
+  { key: 'pool_manager', name: 'Pool Manager' },
+  { key: 'grin_node',    name: 'Grin Node' },
+  { key: 'stratum',      name: 'Stratum Server' },
+  { key: 'grin_wallet',  name: 'Grin Wallet' },
+  { key: 'nginx',        name: 'nginx' },
+  { key: 'database',     name: 'Database' },
+];
+
+function statusClass(status) {
+  if (!status) return 'error';
+  const s = status.toLowerCase();
+  if (s === 'ok' || s === 'healthy' || s === 'running' || s === 'up') return 'ok';
+  if (s === 'degraded' || s === 'warning') return 'warn';
+  return 'error';
+}
+
+function escHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderServiceDetail(svc) {
+  const parts = [];
+  if (svc.uptime    != null) parts.push('Uptime: ' + escHtml(svc.uptime));
+  if (svc.pid       != null) parts.push('PID: ' + escHtml(svc.pid));
+  if (svc.height    != null) parts.push('Height: ' + escHtml(svc.height));
+  if (svc.synced    != null) parts.push('Synced: ' + (svc.synced ? 'Yes' : 'No'));
+  if (svc.port      != null) parts.push('Port: ' + escHtml(svc.port));
+  if (svc.miners_connected != null) parts.push('Miners: ' + escHtml(svc.miners_connected));
+  if (svc.spendable_balance != null) parts.push('Spendable: ' + parseFloat(svc.spendable_balance).toFixed(4) + ' GRIN');
+  if (svc.size_mb   != null) parts.push('Size: ' + escHtml(svc.size_mb) + ' MB');
+  if (svc.wal_mode  != null) parts.push('WAL: ' + escHtml(svc.wal_mode));
+  if (svc.message   != null) parts.push(escHtml(svc.message));
+  return parts.join('<br>');
+}
+
+async function loadHealth() {
+  try {
+    const d = await API.get('/api/admin/health');
+    const grid = document.getElementById('health-grid');
+
+    const cards = SERVICES.map(svcDef => {
+      const svc    = d.services && d.services[svcDef.key] ? d.services[svcDef.key] : {};
+      const status = svc.status || 'unknown';
+      const cls    = statusClass(status);
+      const badge  = cls === 'ok'
+        ? '<span class="badge badge-ok">OK</span>'
+        : cls === 'warn'
+          ? '<span class="badge badge-warn">Degraded</span>'
+          : '<span class="badge badge-error">Down</span>';
+      const detail = renderServiceDetail(svc);
+      return `
+        <div class="health-card ${cls}">
+          <div class="health-name">${escHtml(svcDef.name)} ${badge}</div>
+          <div class="health-detail" style="margin-top:.4rem;">${detail || 'No data'}</div>
+        </div>
+      `;
+    }).join('');
+    grid.innerHTML = cards;
+
+    // System stats
+    const sys = d.system || {};
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val ?? '—'; };
+    set('sys-disk',   sys.disk_free   != null ? sys.disk_free + ' GB free' : '—');
+    set('sys-mem',    sys.memory_pct  != null ? sys.memory_pct + '%' : '—');
+    set('sys-load',   sys.load_avg    != null ? sys.load_avg  : '—');
+    set('sys-uptime', sys.uptime      != null ? sys.uptime    : '—');
+
+    // Refresh timestamp
+    const ts = document.getElementById('last-refresh');
+    if (ts) ts.textContent = '(refreshed ' + new Date().toLocaleTimeString() + ')';
+  } catch (err) {
+    document.getElementById('health-grid').innerHTML =
+      `<div class="health-card error"><div class="health-name">Error loading health data</div><div class="health-detail">${escHtml(err.message)}</div></div>`;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', loadHealth);
+// Auto-refresh every 30s
+setInterval(loadHealth, 30000);
+</script>
+</body>
+</html>

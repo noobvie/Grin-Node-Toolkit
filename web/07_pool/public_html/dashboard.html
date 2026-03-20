@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard | Grin Pool ツ</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" id="theme-css" href="/css/themes/matrix.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+</head>
+<body class="theme-matrix">
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title"><a href="/">Grin Pool <span>ツ</span></a></div>
+      <nav class="nav-links">
+        <a href="/">Home</a>
+        <a href="/dashboard.html" id="nav-dashboard" class="active">Dashboard</a>
+        <a href="/withdraw.html"  id="nav-withdraw"  style="display:none">Withdraw</a>
+        <a href="/admin/"         id="nav-admin"     style="display:none">Admin</a>
+        <a href="/login.html"     id="nav-login"     style="display:none">Login</a>
+        <span id="nav-user" style="display:none"></span>
+      </nav>
+      <div class="theme-switcher">
+        <button class="theme-btn" data-theme="matrix">Matrix</button>
+        <button class="theme-btn" data-theme="dark">Dark</button>
+        <button class="theme-btn" data-theme="light">Light</button>
+        <button class="theme-btn" data-theme="naruto">Naruto</button>
+        <button class="theme-btn" data-theme="japan">Japan ✿</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="testnet-banner" id="testnet-banner" style="display:none">
+  ⚠ TESTNET — These coins have no real value
+</div>
+
+<main>
+  <div class="container">
+
+    <!-- KPI cards -->
+    <div class="kpi-grid" id="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">Total Mined ツ</div>
+        <div class="kpi-value" id="kpi-total">—</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Today's Reward ツ</div>
+        <div class="kpi-value" id="kpi-today">—</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Withdrawable ツ</div>
+        <div class="kpi-value" id="kpi-withdrawable">—</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Locked ツ</div>
+        <div class="kpi-value" id="kpi-locked">—</div>
+        <div class="kpi-sub">Pending confirmation</div>
+      </div>
+    </div>
+
+    <!-- Withdraw CTA -->
+    <div id="withdraw-cta" style="display:none;text-align:center;margin-bottom:1rem;">
+      <a href="/withdraw.html" class="btn btn-big">Withdraw GRIN ツ</a>
+    </div>
+
+    <!-- Miners summary -->
+    <section>
+      <h2>Your Miners</h2>
+      <div class="card">
+        <p style="margin-bottom:.6rem;">
+          <span id="miners-online-count" style="font-weight:700;color:var(--accent);">—</span>
+          miner(s) online &nbsp;·&nbsp; Total hashrate:
+          <span id="miners-hashrate" style="font-weight:700;color:var(--accent);">—</span>
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Worker</th>
+                <th>Status</th>
+                <th>Hashrate (1h)</th>
+                <th>Hashrate (24h)</th>
+                <th>Last Seen</th>
+              </tr>
+            </thead>
+            <tbody id="miners-tbody">
+              <tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Hashrate chart -->
+    <section>
+      <h2>Hashrate History</h2>
+      <div class="card">
+        <div class="period-btns">
+          <button class="period-btn active" data-period="1d" onclick="selectPeriod('1d',this)">1d</button>
+          <button class="period-btn"        data-period="7d" onclick="selectPeriod('7d',this)">7d</button>
+          <button class="period-btn"        data-period="30d" onclick="selectPeriod('30d',this)">30d</button>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="hashrate-chart"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- Recent blocks (last 24h) -->
+    <section>
+      <h2>Blocks Found (last 24h)</h2>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Height</th>
+                <th>Earned ツ</th>
+              </tr>
+            </thead>
+            <tbody id="recent-blocks-tbody">
+              <tr class="loading-row"><td colspan="3"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 30-day reward history -->
+    <section>
+      <h2>30-Day Reward History</h2>
+      <div class="card">
+        <div class="chart-wrap" style="margin-bottom:1rem;">
+          <canvas id="reward-chart"></canvas>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Reward ツ</th>
+                <th>Blocks</th>
+              </tr>
+            </thead>
+            <tbody id="reward-tbody">
+              <tr class="loading-row"><td colspan="3"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <p>Grin Pool ツ &nbsp;·&nbsp; <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a></p>
+  </div>
+</footer>
+
+<script src="/js/api.js"></script>
+<script src="/js/theme.js"></script>
+<script src="/js/matrix.js"></script>
+<script src="/js/charts.js"></script>
+<script>
+// ── Auth check ─────────────────────────────────────────────────────────────
+(function () {
+  if (!API.isLoggedIn()) {
+    window.location.href = '/login.html';
+    return;
+  }
+  const token = localStorage.getItem('pool-access-token');
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    document.getElementById('nav-login').style.display    = 'none';
+    document.getElementById('nav-dashboard').style.display = '';
+    document.getElementById('nav-withdraw').style.display  = '';
+    document.getElementById('nav-user').style.display = '';
+    document.getElementById('nav-user').innerHTML =
+      `<span class="nav-username">${payload.sub}</span> <a href="#" onclick="API.clearTokens();window.location='/login.html'">Logout</a>`;
+    if (payload.is_admin) document.getElementById('nav-admin').style.display = '';
+  } catch (e) {}
+
+  fetch('/api/pool/stats').then(r => r.json()).then(d => {
+    if (d.network === 'testnet') {
+      document.getElementById('testnet-banner').style.display = '';
+      document.title = '[TESTNET] ' + document.title;
+    }
+    const el = document.querySelector('.site-title a');
+    if (el && d.pool_name) el.childNodes[0].textContent = d.pool_name + ' ';
+  }).catch(() => {});
+})();
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function fmtHashrate(gps) {
+  if (gps === null || gps === undefined) return '—';
+  if (gps >= 1000) return (gps / 1000).toFixed(2) + ' KG/s';
+  return gps.toFixed(4) + ' G/s';
+}
+function fmtGrin(v) {
+  return (v || 0).toFixed(4);
+}
+function timeAgo(isoStr) {
+  if (!isoStr) return '—';
+  const diff = Math.floor((Date.now() - new Date(isoStr)) / 1000);
+  if (diff < 60)    return diff + 's ago';
+  if (diff < 3600)  return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
+// ── Load dashboard ─────────────────────────────────────────────────────────
+let _currentPeriod = '1d';
+let _chartsInited  = false;
+
+async function loadDashboard() {
+  try {
+    const d = await API.get('/api/user/dashboard');
+
+    // KPI
+    document.getElementById('kpi-total').textContent        = fmtGrin(d.total_mined);
+    document.getElementById('kpi-today').textContent        = fmtGrin(d.today_reward);
+    document.getElementById('kpi-withdrawable').textContent = fmtGrin(d.withdrawable);
+    document.getElementById('kpi-locked').textContent       = fmtGrin(d.locked);
+
+    // Withdraw CTA
+    if ((d.withdrawable || 0) > 0) {
+      document.getElementById('withdraw-cta').style.display = '';
+    }
+
+    // Miners summary
+    document.getElementById('miners-online-count').textContent = d.miners_online ?? '—';
+    document.getElementById('miners-hashrate').textContent     = fmtHashrate(d.total_hashrate_gps);
+
+    // Miners table
+    const tbody = document.getElementById('miners-tbody');
+    if (d.miners && d.miners.length) {
+      tbody.innerHTML = d.miners.map(m => `
+        <tr class="${m.online ? 'online-row' : ''}">
+          <td><span class="dot ${m.online ? 'dot-green' : 'dot-red'}"></span>${escHtml(m.worker)}</td>
+          <td>${m.online ? '<span class="badge badge-ok">Online</span>' : '<span class="badge badge-dim">Offline</span>'}</td>
+          <td class="mono">${fmtHashrate(m.hashrate_1h_gps)}</td>
+          <td class="mono">${fmtHashrate(m.hashrate_24h_gps)}</td>
+          <td>${timeAgo(m.last_seen)}</td>
+        </tr>
+      `).join('');
+    } else {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No miners found. Start mining to see data.</td></tr>';
+    }
+
+    // Recent blocks (24h)
+    const rbtbody = document.getElementById('recent-blocks-tbody');
+    if (d.recent_blocks && d.recent_blocks.length) {
+      rbtbody.innerHTML = d.recent_blocks.map(b => `
+        <tr>
+          <td>${timeAgo(b.found_at || b.timestamp)}</td>
+          <td><a href="https://grincoin.org/block/${b.height}" target="_blank" rel="noopener">${b.height}</a></td>
+          <td class="mono">${fmtGrin(b.earned)}</td>
+        </tr>
+      `).join('');
+    } else {
+      rbtbody.innerHTML = '<tr class="empty-row"><td colspan="3">No blocks in the last 24h.</td></tr>';
+    }
+
+    // 30-day rewards table + chart
+    if (d.reward_history && d.reward_history.length) {
+      const tbody30 = document.getElementById('reward-tbody');
+      tbody30.innerHTML = d.reward_history.map(r => `
+        <tr>
+          <td>${r.date}</td>
+          <td class="mono">${fmtGrin(r.reward)}</td>
+          <td>${r.blocks ?? 0}</td>
+        </tr>
+      `).join('');
+
+      const labels = d.reward_history.map(r => r.date);
+      const data   = d.reward_history.map(r => r.reward || 0);
+      if (typeof Chart !== 'undefined') {
+        Charts.initReward('reward-chart', labels, data);
+      }
+    } else {
+      document.getElementById('reward-tbody').innerHTML =
+        '<tr class="empty-row"><td colspan="3">No reward history yet.</td></tr>';
+    }
+
+  } catch (err) {
+    console.error('Dashboard load error:', err);
+  }
+}
+
+async function loadHashrateChart(period) {
+  try {
+    const d = await API.get('/api/user/hashrate?period=' + period);
+    if (!d || !d.labels || !d.workers) return;
+    if (typeof Chart !== 'undefined') {
+      Charts.initHashrate('hashrate-chart', d.labels, d.workers);
+    }
+  } catch (_) {}
+}
+
+function selectPeriod(period, btn) {
+  _currentPeriod = period;
+  document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  loadHashrateChart(period);
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  loadDashboard();
+  loadHashrateChart('1d');
+});
+
+// Auto-refresh every 60 s
+setInterval(() => {
+  loadDashboard();
+  loadHashrateChart(_currentPeriod);
+}, 60000);
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+</script>
+</body>
+</html>

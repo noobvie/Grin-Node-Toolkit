@@ -1,0 +1,84 @@
+/* japan.css — Pink-white bg, cherry blossom feel */
+:root {
+  --bg-body:      #fff8fa;
+  --bg-card:      #ffffff;
+  --bg-card2:     #fef0f4;
+  --text:         #2d1a23;
+  --text-dim:     #9c6b7e;
+  --accent:       #d4006a;
+  --accent2:      #b30057;
+  --border:       #f4c6d4;
+  --btn-bg:       #d4006a;
+  --btn-text:     #fff;
+  --btn-hover:    #b30057;
+  --input-bg:     #fff8fa;
+  --input-border: #f4c6d4;
+  --error-color:  #c0392b;
+  --ok-color:     #27ae60;
+  --warn-color:   #e67e22;
+  --font-mono:    'Courier New', Courier, monospace;
+  --font-sans:    system-ui, -apple-system, sans-serif;
+  --shadow:       0 2px 12px rgba(212,0,106,.08);
+}
+
+.site-title { color: var(--accent); text-shadow: 0 0 8px rgba(212,0,106,.2); }
+.site-title a { color: var(--accent); }
+header { border-bottom: 2px solid #f4c6d4; }
+a { color: var(--accent); }
+.testnet-banner { background: #7a0035; border-color: #d4006a; }
+.card { box-shadow: 0 2px 12px rgba(212,0,106,.07); }
+.slatepack-box { color: var(--accent); background: #fef0f4; }
+th { background: #fff0f5; }
+
+/* ── Sakura petal animation (pure CSS) ───────────────────────────────────── */
+body.theme-japan::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.sakura-canvas {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.sakura-petal {
+  position: absolute;
+  top: -30px;
+  width: 10px; height: 10px;
+  background: #ffb7c5;
+  border-radius: 50% 0 50% 0;
+  opacity: 0;
+  animation: sakura-fall linear infinite;
+}
+
+@keyframes sakura-fall {
+  0%   { transform: translateY(0) rotate(0deg) translateX(0); opacity: .8; }
+  25%  { transform: translateY(25vh) rotate(90deg) translateX(20px); opacity: .7; }
+  50%  { transform: translateY(50vh) rotate(180deg) translateX(-15px); opacity: .6; }
+  75%  { transform: translateY(75vh) rotate(270deg) translateX(10px); opacity: .4; }
+  100% { transform: translateY(110vh) rotate(360deg) translateX(-20px); opacity: 0; }
+}
+
+/* generate petals with nth-child delays */
+.sakura-petal:nth-child(1)  { left: 5%;   animation-duration: 8s;  animation-delay: 0s;   width: 8px;  height: 8px; }
+.sakura-petal:nth-child(2)  { left: 12%;  animation-duration: 10s; animation-delay: 1s;   width: 12px; height: 12px; background: #ffc8d5; }
+.sakura-petal:nth-child(3)  { left: 20%;  animation-duration: 7s;  animation-delay: 2.5s; width: 9px;  height: 9px; }
+.sakura-petal:nth-child(4)  { left: 30%;  animation-duration: 11s; animation-delay: 0.5s; width: 14px; height: 14px; background: #ffd4e0; }
+.sakura-petal:nth-child(5)  { left: 40%;  animation-duration: 9s;  animation-delay: 3s;   width: 10px; height: 10px; }
+.sakura-petal:nth-child(6)  { left: 50%;  animation-duration: 8.5s;animation-delay: 1.5s; width: 11px; height: 11px; background: #ffb7c5; }
+.sakura-petal:nth-child(7)  { left: 60%;  animation-duration: 12s; animation-delay: 4s;   width: 8px;  height: 8px; }
+.sakura-petal:nth-child(8)  { left: 70%;  animation-duration: 7.5s;animation-delay: 0.8s; width: 13px; height: 13px; background: #ffc8d5; }
+.sakura-petal:nth-child(9)  { left: 80%;  animation-duration: 10s; animation-delay: 2s;   width: 9px;  height: 9px; }
+.sakura-petal:nth-child(10) { left: 90%;  animation-duration: 9.5s;animation-delay: 3.5s; width: 12px; height: 12px; background: #ffd4e0; }
+.sakura-petal:nth-child(11) { left: 15%;  animation-duration: 11s; animation-delay: 5s;   width: 10px; height: 10px; }
+.sakura-petal:nth-child(12) { left: 45%;  animation-duration: 8s;  animation-delay: 6s;   width: 8px;  height: 8px; background: #ffb7c5; }
+.sakura-petal:nth-child(13) { left: 75%;  animation-duration: 9s;  animation-delay: 4.5s; width: 11px; height: 11px; }
+.sakura-petal:nth-child(14) { left: 55%;  animation-duration: 10s; animation-delay: 7s;   width: 9px;  height: 9px; background: #ffc8d5; }
+.sakura-petal:nth-child(15) { left: 25%;  animation-duration: 7s;  animation-delay: 5.5s; width: 14px; height: 14px; }

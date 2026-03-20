@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login | Grin Pool ツ</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" id="theme-css" href="/css/themes/matrix.css">
+</head>
+<body class="theme-matrix">
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title"><a href="/">Grin Pool <span>ツ</span></a></div>
+      <nav class="nav-links">
+        <a href="/">Home</a>
+        <a href="/dashboard.html" id="nav-dashboard" style="display:none">Dashboard</a>
+        <a href="/withdraw.html"  id="nav-withdraw"  style="display:none">Withdraw</a>
+        <a href="/admin/"         id="nav-admin"     style="display:none">Admin</a>
+        <a href="/login.html"     id="nav-login" class="active">Login</a>
+        <span id="nav-user" style="display:none"></span>
+      </nav>
+      <div class="theme-switcher">
+        <button class="theme-btn" data-theme="matrix">Matrix</button>
+        <button class="theme-btn" data-theme="dark">Dark</button>
+        <button class="theme-btn" data-theme="light">Light</button>
+        <button class="theme-btn" data-theme="naruto">Naruto</button>
+        <button class="theme-btn" data-theme="japan">Japan ✿</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="testnet-banner" id="testnet-banner" style="display:none">
+  ⚠ TESTNET — These coins have no real value
+</div>
+
+<main>
+  <div class="container">
+    <section>
+      <div style="max-width:440px;margin:0 auto;">
+        <h2 style="text-align:center;">Account Access</h2>
+
+        <!-- Tabs -->
+        <div class="tabs">
+          <button class="tab-btn active" id="tab-login-btn"    onclick="switchTab('login')">Login</button>
+          <button class="tab-btn"        id="tab-register-btn" onclick="switchTab('register')">Register</button>
+        </div>
+
+        <!-- Login panel -->
+        <div class="tab-panel active" id="tab-login">
+          <div class="card">
+            <div class="form-group">
+              <label for="login-username">Username</label>
+              <input type="text" id="login-username" autocomplete="username" placeholder="your_username">
+            </div>
+            <div class="form-group">
+              <label for="login-password">Password</label>
+              <input type="password" id="login-password" autocomplete="current-password" placeholder="••••••••">
+            </div>
+            <p class="error-msg" id="login-error"></p>
+            <button class="btn btn-full" id="login-btn" onclick="doLogin()">Login</button>
+            <p style="font-size:.82rem;color:var(--text-dim);margin-top:.8rem;text-align:center;">
+              Forgot your password? Contact admin.
+            </p>
+          </div>
+        </div>
+
+        <!-- Register panel -->
+        <div class="tab-panel" id="tab-register">
+          <div class="card">
+            <div class="form-group">
+              <label for="reg-username">Username</label>
+              <input type="text" id="reg-username" autocomplete="username" placeholder="choose_a_username">
+            </div>
+            <div class="form-group">
+              <label for="reg-password">Password</label>
+              <input type="password" id="reg-password" autocomplete="new-password" placeholder="at least 8 characters">
+            </div>
+            <div class="form-group">
+              <label for="reg-confirm">Confirm Password</label>
+              <input type="password" id="reg-confirm" autocomplete="new-password" placeholder="repeat password">
+            </div>
+            <div class="form-group">
+              <label for="reg-email">Email <span style="color:var(--text-dim);font-size:.8rem;">(optional)</span></label>
+              <input type="email" id="reg-email" autocomplete="email" placeholder="you@example.com">
+            </div>
+            <p class="error-msg"   id="reg-error"></p>
+            <p class="success-msg" id="reg-success"></p>
+            <button class="btn btn-full" id="reg-btn" onclick="doRegister()">Create Account</button>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <p>Grin Pool ツ &nbsp;·&nbsp; <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a></p>
+  </div>
+</footer>
+
+<script src="/js/api.js"></script>
+<script src="/js/theme.js"></script>
+<script>
+// ── Nav + testnet ──────────────────────────────────────────────────────────
+(function () {
+  // If already logged in, redirect to dashboard
+  if (API.isLoggedIn()) {
+    window.location.href = '/dashboard.html';
+    return;
+  }
+  fetch('/api/pool/stats').then(r => r.json()).then(d => {
+    if (d.network === 'testnet') {
+      document.getElementById('testnet-banner').style.display = '';
+      document.title = '[TESTNET] ' + document.title;
+    }
+    const el = document.querySelector('.site-title a');
+    if (el && d.pool_name) el.childNodes[0].textContent = d.pool_name + ' ';
+  }).catch(() => {});
+})();
+
+// ── Tab switch ─────────────────────────────────────────────────────────────
+function switchTab(name) {
+  ['login', 'register'].forEach(t => {
+    document.getElementById('tab-' + t).classList.toggle('active', t === name);
+    document.getElementById('tab-' + t + '-btn').classList.toggle('active', t === name);
+  });
+}
+
+// ── Login ──────────────────────────────────────────────────────────────────
+async function doLogin() {
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errEl    = document.getElementById('login-error');
+  const btn      = document.getElementById('login-btn');
+
+  if (!username || !password) {
+    showErr(errEl, 'Username and password are required.');
+    return;
+  }
+  showErr(errEl, '');
+
+  btn.disabled    = true;
+  btn.textContent = 'Logging in…';
+  try {
+    const data = await API.post('/api/auth/login', { username, password });
+    API.saveTokens(data.access_token, data.refresh_token);
+    window.location.href = '/dashboard.html';
+  } catch (err) {
+    showErr(errEl, err.message || 'Login failed.');
+    btn.disabled    = false;
+    btn.textContent = 'Login';
+  }
+}
+
+// ── Register ───────────────────────────────────────────────────────────────
+async function doRegister() {
+  const username = document.getElementById('reg-username').value.trim();
+  const password = document.getElementById('reg-password').value;
+  const confirm  = document.getElementById('reg-confirm').value;
+  const email    = document.getElementById('reg-email').value.trim();
+  const errEl    = document.getElementById('reg-error');
+  const okEl     = document.getElementById('reg-success');
+  const btn      = document.getElementById('reg-btn');
+
+  showErr(errEl, '');
+  showErr(okEl,  '');
+  okEl.style.display = 'none';
+
+  if (!username) { showErr(errEl, 'Username is required.'); return; }
+  if (username.length < 3) { showErr(errEl, 'Username must be at least 3 characters.'); return; }
+  if (!password) { showErr(errEl, 'Password is required.'); return; }
+  if (password.length < 8) { showErr(errEl, 'Password must be at least 8 characters.'); return; }
+  if (password !== confirm) { showErr(errEl, 'Passwords do not match.'); return; }
+
+  btn.disabled    = true;
+  btn.textContent = 'Creating account…';
+  try {
+    const body = { username, password };
+    if (email) body.email = email;
+    const data = await API.post('/api/auth/register', body);
+    API.saveTokens(data.access_token, data.refresh_token);
+    window.location.href = '/dashboard.html';
+  } catch (err) {
+    showErr(errEl, err.message || 'Registration failed.');
+    btn.disabled    = false;
+    btn.textContent = 'Create Account';
+  }
+}
+
+function showErr(el, msg) {
+  if (!el) return;
+  el.textContent  = msg;
+  el.style.display = msg ? '' : 'none';
+}
+
+// ── Enter key support ──────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const tab = document.getElementById('tab-login').classList.contains('active');
+  if (tab) doLogin(); else doRegister();
+});
+</script>
+</body>
+</html>

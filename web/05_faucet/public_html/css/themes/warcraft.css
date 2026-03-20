@@ -1,0 +1,48 @@
+/* warcraft.css — Deep purple / gold fantasy theme */
+:root {
+  --bg-body:      #0d0a1a;
+  --bg-card:      #1a0a2e;
+  --bg-card2:     #130820;
+  --text:         #e8d5a3;
+  --text-dim:     #907040;
+  --accent:       #c8a951;
+  --accent2:      #a88530;
+  --border:       #3a1e5a;
+  --btn-bg:       linear-gradient(135deg, #4a2c6e, #2a1040);
+  --btn-text:     #e8d5a3;
+  --btn-hover:    #5a3a80;
+  --input-bg:     #100820;
+  --input-border: #3a1e5a;
+  --error-color:  #ff6666;
+  --ok-color:     #c8a951;
+  --warn-color:   #ffaa33;
+  --glow:         rgba(200,169,81,.35);
+  --font-mono:    'Courier New', Courier, monospace;
+  --font-sans:    Georgia, 'Times New Roman', serif;
+  --shadow:       0 2px 20px rgba(0,0,0,.7);
+}
+
+.card {
+  box-shadow: 0 0 18px var(--glow), var(--shadow);
+  border-color: #4a1e7a;
+}
+.stat-item {
+  box-shadow: 0 0 10px var(--glow);
+  border-color: #4a1e7a;
+}
+.site-title { text-shadow: 0 0 10px var(--glow); }
+
+.btn {
+  background: linear-gradient(135deg, #4a2c6e, #2a1040);
+  border: 1px solid #c8a951;
+  color: #e8d5a3;
+}
+.btn:hover { background: linear-gradient(135deg, #5a3a80, #3a1a50); }
+.btn-outline { background: transparent; border-color: #c8a951; color: #c8a951; }
+.btn-outline:hover { background: rgba(200,169,81,.15); }
+
+.slatepack-box { color: #c8a951; }
+h2, .site-title span { color: #c8a951; }
+.step-num { background: #c8a951; color: #0d0a1a; }
+.tab-btn.active, .tab-btn:hover { border-color: #c8a951; color: #c8a951; }
+input[type="text"]:focus, textarea:focus { border-color: #c8a951; }

@@ -1,0 +1,25 @@
+/* dark.css — Clean dark navy */
+:root {
+  --bg-body:      #1e2533;
+  --bg-card:      #252d3d;
+  --bg-card2:     #2a3347;
+  --text:         #e2e8f0;
+  --text-dim:     #7a8ba5;
+  --accent:       #4a90d9;
+  --accent2:      #3578c7;
+  --border:       #33405a;
+  --btn-bg:       #4a90d9;
+  --btn-text:     #fff;
+  --btn-hover:    #3578c7;
+  --input-bg:     #1a2132;
+  --input-border: #33405a;
+  --error-color:  #f87171;
+  --ok-color:     #4ade80;
+  --warn-color:   #fbbf24;
+  --font-mono:    'Courier New', Courier, monospace;
+  --font-sans:    system-ui, -apple-system, sans-serif;
+  --shadow:       0 2px 12px rgba(0,0,0,0.4);
+}
+
+.site-title { letter-spacing: .04em; }
+.testnet-banner { background: #5a4000; }

@@ -444,7 +444,9 @@
     color: var(--grin);
     font-weight: 600;
     display: block;
+    text-decoration: none;
   }
+  .api-path:hover { text-decoration: underline; }
   .api-desc { font-size: 12px; color: var(--muted); margin-top: 2px; display: block; }
   .api-note {
     margin-top: 18px;
@@ -674,39 +676,48 @@
     </div>
   </div>
 
-  <!-- Price chart -->
+  <!-- Price chart — USDT -->
   <div class="card">
     <div class="card-header">
       <div class="card-title">
-        <span class="dot dot-green"></span>Grin Price
-        <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">
-          USDT · Gate.io &nbsp;|&nbsp; BTC · nonlogs.io
-        </span>
+        <span class="dot dot-green"></span>Grin Price · USDT
+        <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">Gate.io</span>
       </div>
-      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
-        <div style="display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted);">
-          <span style="display:inline-flex;align-items:center;gap:5px;">
-            <span style="width:12px;height:2px;background:#3fb950;display:inline-block;border-radius:2px;"></span>USDT
-          </span>
-          <span style="display:inline-flex;align-items:center;gap:5px;">
-            <span style="width:12px;height:2px;background:#ffd700;display:inline-block;border-radius:2px;"></span>BTC (sats)
-          </span>
-        </div>
-        <div class="range-btns" id="price-range">
-          <button class="range-btn" data-r="day">Day</button>
-          <button class="range-btn" data-r="week">Week</button>
-          <button class="range-btn" data-r="month">Month</button>
-          <button class="range-btn active" data-r="year">Year</button>
-          <button class="range-btn" data-r="all">All Time</button>
-        </div>
+      <div class="range-btns" id="price-usdt-range">
+        <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="week">Week</button>
+        <button class="range-btn" data-r="month">Month</button>
+        <button class="range-btn active" data-r="year">Year</button>
+        <button class="range-btn" data-r="all">All Time</button>
       </div>
     </div>
-    <div id="price-no-data" style="display:none;padding:32px;text-align:center;color:var(--muted);font-size:13px;">
-      No price data yet — run
+    <div id="price-usdt-no-data" style="display:none;padding:32px;text-align:center;color:var(--muted);font-size:13px;">
+      No USDT price data yet — run
       <code style="background:rgba(255,153,0,0.1);color:var(--grin);padding:2px 6px;border-radius:3px;font-family:monospace">06_price_collector.py --init-history</code>
       first
     </div>
-    <div class="chart-wrap" id="price-chart-wrap"><canvas id="chart-price"></canvas></div>
+    <div class="chart-wrap" id="price-usdt-chart-wrap"><canvas id="chart-price-usdt"></canvas></div>
+  </div>
+
+  <!-- Price chart — BTC -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">
+        <span class="dot" style="background:#ffd700;"></span>Grin Price · BTC (sats)
+        <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">nonlogs.io</span>
+      </div>
+      <div class="range-btns" id="price-btc-range">
+        <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn active" data-r="week">Week</button>
+        <button class="range-btn" data-r="month">Month</button>
+        <button class="range-btn" data-r="year">Year</button>
+        <button class="range-btn" data-r="all">All Time</button>
+      </div>
+    </div>
+    <div id="price-btc-no-data" style="display:none;padding:32px;text-align:center;color:var(--muted);font-size:13px;">
+      No BTC price data yet — collector builds history from live snapshots over time
+    </div>
+    <div class="chart-wrap" id="price-btc-chart-wrap"><canvas id="chart-price-btc"></canvas></div>
   </div>
 
   <!-- Node versions -->
@@ -747,21 +758,21 @@
     <div class="api-endpoint">
       <span class="api-method">GET</span>
       <div>
-        <span class="api-path" id="ep-price">/api/price</span>
+        <a class="api-path" id="ep-price" href="#" target="_blank" rel="noopener">/api/price</a>
         <span class="api-desc">GRIN/USDT (Gate.io) + GRIN/BTC (nonlogs.io) — current price, 24h stats, OHLCV history for Day / Week / Month / Year / All Time</span>
       </div>
     </div>
     <div class="api-endpoint">
       <span class="api-method">GET</span>
       <div>
-        <span class="api-path" id="ep-summary">/api/summary</span>
+        <a class="api-path" id="ep-summary" href="#" target="_blank" rel="noopener">/api/summary</a>
         <span class="api-desc">Current block height, network hashrate (GPS), mining difficulty, coin supply, inflation rate</span>
       </div>
     </div>
     <div class="api-endpoint">
       <span class="api-method">GET</span>
       <div>
-        <span class="api-path" id="ep-peers">/api/peers</span>
+        <a class="api-path" id="ep-peers" href="#" target="_blank" rel="noopener">/api/peers</a>
         <span class="api-desc">Active peer list with country, city, node version, last-seen timestamp</span>
       </div>
     </div>
@@ -977,35 +988,22 @@ function makeMultiChart(id, yFmt1, yFmt2, yFmt1Tick = null, yFmt2Tick = null) {
   });
 }
 
-function makePriceChart(id) {
+function makePriceChartUSDT(id) {
   const ctx = $(id).getContext("2d");
   return new Chart(ctx, {
     type: "line",
     data: {
-      datasets: [
-        {
-          label: "GRIN/USDT",
-          data: [],
-          borderColor: "#3fb950",
-          backgroundColor: "#3fb950" + "18",
-          borderWidth: 1.5,
-          pointRadius: 0,
-          fill: true,
-          tension: 0.3,
-          yAxisID: "y1",
-        },
-        {
-          label: "GRIN/BTC (sats)",
-          data: [],
-          borderColor: "#ffd700",
-          backgroundColor: "transparent",
-          borderWidth: 1.5,
-          pointRadius: 0,
-          fill: false,
-          tension: 0.3,
-          yAxisID: "y2",
-        },
-      ]
+      datasets: [{
+        label: "GRIN/USDT",
+        data: [],
+        borderColor: "#3fb950",
+        backgroundColor: "#3fb950" + "18",
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.3,
+        yAxisID: "y",
+      }]
     },
     options: {
       responsive: true,
@@ -1016,10 +1014,7 @@ function makePriceChart(id) {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: ctx => {
-              if (ctx.datasetIndex === 0) return ` $${fmtNum(ctx.parsed.y, 5)}`;
-              return ` ${fmtNum(ctx.parsed.y, 0)} sat`;
-            },
+            label: ctx => ` $${fmtNum(ctx.parsed.y, 5)}`,
             title: items => new Date(items[0].parsed.x).toLocaleString(),
           }
         }
@@ -1030,16 +1025,57 @@ function makePriceChart(id) {
           time: { tooltipFormat: "MMM d yyyy HH:mm" },
           ticks: { maxTicksLimit: 8 },
         },
-        y1: {
+        y: {
           type: "linear",
           position: "left",
           ticks: { callback: v => "$" + fmtNum(v, v < 0.001 ? 6 : v < 0.01 ? 5 : 4) },
+        }
+      }
+    }
+  });
+}
+
+function makePriceChartBTC(id) {
+  const ctx = $(id).getContext("2d");
+  return new Chart(ctx, {
+    type: "line",
+    data: {
+      datasets: [{
+        label: "GRIN/BTC (sats)",
+        data: [],
+        borderColor: "#ffd700",
+        backgroundColor: "#ffd70018",
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.3,
+        yAxisID: "y",
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${fmtNum(ctx.parsed.y, 0)} sat`,
+            title: items => new Date(items[0].parsed.x).toLocaleString(),
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: "time",
+          time: { tooltipFormat: "MMM d yyyy HH:mm" },
+          ticks: { maxTicksLimit: 8 },
         },
-        y2: {
+        y: {
           type: "linear",
-          position: "right",
+          position: "left",
           ticks: { callback: v => fmtNum(v, 0) + " sat" },
-          grid: { drawOnChartArea: false },
         }
       }
     }
@@ -1055,11 +1091,12 @@ function initCharts() {
   charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS,  undefined, fmtGPSTick);
   charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff, undefined, fmtDiffTick);
   charts.activity   = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee, v => fmt(v,0), fmtFeeTick);
-  charts.price      = makePriceChart("chart-price");
+  charts.priceUsdt  = makePriceChartUSDT("chart-price-usdt");
+  charts.priceBtc   = makePriceChartBTC("chart-price-btc");
 }
 
 // Range state
-const rangeState = { hr: "year", diff: "year", activity: "year", price: "year" };
+const rangeState = { hr: "year", diff: "year", activity: "year", priceUsdt: "year", priceBtc: "week" };
 
 function updateChartData(chart, json, range) {
   let pts;
@@ -1151,24 +1188,27 @@ function updateActivityChart(txJson, feeJson, range, metric) {
   charts.activity.update("none");
 }
 
-// ── Price chart update ────────────────────────────────────────────────────────
-function updatePriceChart(data, range) {
-  if (!charts.price || !data) return;
+// ── Price chart updates ───────────────────────────────────────────────────────
+function updatePriceChartUSDT(data, range) {
+  if (!charts.priceUsdt || !data) return;
   const usdt = data["GRIN_USDT"];
-  const btc  = data["GRIN_BTC"];
-  const key  = `ohlcv_${range}`;
+  const pts  = (usdt?.[`ohlcv_${range}`] || []).map(([ts, v]) => ({ x: ts * 1000, y: v }));
 
-  const usdtPts = (usdt?.[key] || []).map(([ts, v]) => ({ x: ts * 1000, y: v }));
-  const btcPts  = (btc?.[key]  || []).map(([ts, v]) => ({ x: ts * 1000, y: Math.round(v * 1e8) }));
+  charts.priceUsdt.data.datasets[0].data = pts;
+  $("price-usdt-no-data").style.display    = pts.length ? "none"  : "block";
+  $("price-usdt-chart-wrap").style.display = pts.length ? "block" : "none";
+  charts.priceUsdt.update("none");
+}
 
-  charts.price.data.datasets[0].data = usdtPts;
-  charts.price.data.datasets[1].data = btcPts;
+function updatePriceChartBTC(data, range) {
+  if (!charts.priceBtc || !data) return;
+  const btc = data["GRIN_BTC"];
+  const pts  = (btc?.[`ohlcv_${range}`] || []).map(([ts, v]) => ({ x: ts * 1000, y: Math.round(v * 1e8) }));
 
-  const noData = !usdtPts.length && !btcPts.length;
-  $("price-no-data").style.display      = noData ? "block" : "none";
-  $("price-chart-wrap").style.display   = noData ? "none"  : "block";
-
-  charts.price.update("none");
+  charts.priceBtc.data.datasets[0].data = pts;
+  $("price-btc-no-data").style.display    = pts.length ? "none"  : "block";
+  $("price-btc-chart-wrap").style.display = pts.length ? "block" : "none";
+  charts.priceBtc.update("none");
 }
 
 // ── Data store ────────────────────────────────────────────────────────────────
@@ -1226,7 +1266,8 @@ async function loadAll() {
     const btc  = price["GRIN_BTC"];
     $("h-price").textContent     = usdt?.last != null ? "$" + fmtNum(usdt.last, 4) : "$—";
     $("h-btc-price").textContent = btc?.last  != null ? Math.round(btc.last * 1e8) + " sat" : "₿—";
-    updatePriceChart(price, rangeState.price);
+    updatePriceChartUSDT(price, rangeState.priceUsdt);
+    updatePriceChartBTC(price, rangeState.priceBtc);
   }
 
   // Charts (skipped if chart.min.js didn't load)
@@ -1370,8 +1411,10 @@ function wireRangeGroup(groupId, chartKey, cacheKey) {
         if (DATA_CACHE.transactions && DATA_CACHE.fees) {
           updateActivityChart(DATA_CACHE.transactions, DATA_CACHE.fees, rangeState.activity, activityMetric);
         }
-      } else if (chartKey === "price") {
-        if (DATA_CACHE.price) updatePriceChart(DATA_CACHE.price, rangeState.price);
+      } else if (chartKey === "priceUsdt") {
+        if (DATA_CACHE.price) updatePriceChartUSDT(DATA_CACHE.price, rangeState.priceUsdt);
+      } else if (chartKey === "priceBtc") {
+        if (DATA_CACHE.price) updatePriceChartBTC(DATA_CACHE.price, rangeState.priceBtc);
       } else {
         const chartMap = { hr: "hashrate", diff: "difficulty" };
         if (DATA_CACHE[cacheKey]) {
@@ -1401,7 +1444,8 @@ async function boot() {
   wireRangeGroup("hr-range",       "hr",       "hashrate");
   wireRangeGroup("diff-range",     "diff",     "difficulty");
   wireRangeGroup("activity-range", "activity", "transactions");
-  wireRangeGroup("price-range",    "price",    "price");
+  wireRangeGroup("price-usdt-range", "priceUsdt", "price");
+  wireRangeGroup("price-btc-range",  "priceBtc",  "price");
   wireMetricToggles();
 
   try {
@@ -1428,6 +1472,10 @@ document.addEventListener("DOMContentLoaded", boot);
   function openModal() {
     const base = window.location.origin;
     $("api-base-url").innerHTML = 'Base URL: <span>' + base + '</span>';
+    ["price", "summary", "peers"].forEach(ep => {
+      const el = $("ep-" + ep);
+      if (el) el.href = base + "/api/" + ep;
+    });
     overlay.classList.add("open");
     document.body.style.overflow = "hidden";
   }

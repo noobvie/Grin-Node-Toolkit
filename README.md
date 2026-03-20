@@ -102,14 +102,28 @@ Grin Node Toolkit
 │   │   ├── 4) Remove nginx proxy         (testnet)
 │   │   └── 0) Back
 │   ├── 5) Grin Wallet Service           → 05_grin_wallet_service.sh
-│   │   ├── 1) Download & install grin-wallet  (mainnet → /opt/grin/wallet/mainnet | testnet → /opt/grin/wallet/testnet)
-│   │   ├── 2) Initialize wallet               (grin-wallet init — runs in tmux for password prompt)
-│   │   ├── 3) Start wallet listener           (grin-wallet listen, tmux)
-│   │   ├── 4) Enable Wallet Foreign API       (port 3415)
-│   │   ├── 5) Disable Wallet Foreign API
-│   │   ├── 6) Configure nginx proxy           (wallet)
-│   │   ├── 7) Configure firewall rules        (port 3415)
-│   │   └── 0) Back
+│   │   ├── Network Selection
+│   │   │   ├── 1) Mainnet wallet
+│   │   │   ├── 2) Testnet wallet
+│   │   │   └── 3) Testnet Faucet              ← standalone Flask app (port 3004)
+│   │   ├── Wallet menu (per network)
+│   │   │   ├── a) Download & install grin-wallet  (mainnet → /opt/grin/wallet/mainnet | testnet → /opt/grin/wallet/testnet)
+│   │   │   ├── b) Initialize wallet               (grin-wallet init — runs in tmux for password prompt)
+│   │   │   ├── c) Start wallet listener           (grin-wallet listen, tmux)
+│   │   │   ├── d) Enable Wallet Foreign API       (port 3415)
+│   │   │   ├── e) Disable Wallet Foreign API
+│   │   │   └── w) Web Wallet Interface
+│   │   └── Faucet submenu (option 3)
+│   │       ├── 0) Guided Full Setup
+│   │       ├── 1) Install faucet              (Flask venv + SQLite + systemd)
+│   │       ├── 2) Configure faucet            (subdomain, wallet dir, address, password)
+│   │       ├── 3) Deploy web files            (→ /var/www/grin-faucet/)
+│   │       ├── 4) Setup nginx                 (vhost + SSL + rate limiting)
+│   │       ├── 5) Start / Stop service        (grin-faucet, port 3004)
+│   │       ├── 6) Faucet status               (service, balance, claims, logs)
+│   │       ├── 7) Wallet address              (show/update donate address)
+│   │       ├── L) View logs
+│   │       └── DEL) Reset faucet DB
 │   ├── 6) Global Grin Health            → 06_global_grin_health.sh
 │   │   ├── A) Network Stats + Peer Map
 │   │   │   ├── A1) Install (Python collector, Chart.js, Leaflet)
@@ -128,13 +142,30 @@ Grin Node Toolkit
 │   │   └── 0) Back
 │   ├── 7) Grin Mining Services          → 07_grin_mining_services.sh
 │   │   ├── A) Node Status               (running nodes, tmux sessions, binary path)
-│   │   ├── B) Setup Stratum             (enable_stratum_server, wallet_listener_url)
-│   │   ├── C) Configure Stratum         (wallet URL, burn_reward, toggle enable)
-│   │   ├── D) Publish Stratum           (mainnet port 3416, 0.0.0.0 + firewall)
-│   │   ├── E) Restrict Stratum          (mainnet, revert to localhost)
-│   │   ├── F) Publish Stratum           (testnet port 13416, 0.0.0.0 + firewall)
-│   │   ├── G) Restrict Stratum          (testnet, revert to localhost)
 │   │   ├── H) Mining Status             (ports, miners connected, toml values)
+│   │   ├── Mainnet Stratum (port 3416)
+│   │   │   ├── B) Setup Stratum         (enable_stratum_server, wallet_listener_url)
+│   │   │   ├── C) Configure Stratum     (wallet URL, burn_reward, toggle enable)
+│   │   │   ├── D) Publish Stratum       (0.0.0.0:3416 + firewall)
+│   │   │   └── E) Restrict Stratum      (revert to 127.0.0.1:3416)
+│   │   ├── Testnet Stratum (port 13416)
+│   │   │   ├── F) Setup Stratum         (enable_stratum_server, wallet_listener_url)
+│   │   │   ├── G) Configure Stratum     (wallet URL, burn_reward, toggle enable)
+│   │   │   ├── I) Publish Stratum       (0.0.0.0:13416 + firewall)
+│   │   │   └── J) Restrict Stratum      (revert to 127.0.0.1:13416)
+│   │   ├── W) Pool Web Interface        → FastAPI pool manager (mainnet :3002 / testnet :3003)
+│   │   │   ├── 0) Guided Full Setup     (runs 1→2→3→4→5→6)
+│   │   │   ├── 1) Install               (python3, pip, fastapi, uvicorn, systemd)
+│   │   │   ├── 2) Configure             (pool name, domain, fee, wallet)
+│   │   │   ├── 3) Deploy web files      (→ /var/www/grin-pool/)
+│   │   │   ├── 4) Setup nginx           (vhost + SSL + rate limits)
+│   │   │   ├── 5) Setup admin account   (create first admin user)
+│   │   │   ├── 6) Start / Stop          (systemd grin-pool-manager)
+│   │   │   ├── 7) Pool status           (service, DB, recent logs)
+│   │   │   ├── B) Backup                (DB + config → /opt/grin/backups/)
+│   │   │   ├── C) Cron schedules        (daily backup + weekly VACUUM)
+│   │   │   ├── L) View logs
+│   │   │   └── DEL) Reset database      (triple-confirm wipe)
 │   │   └── 0) Back
 │   └── 8) Admin & Maintenance           → 08_grin_node_admin.sh
 │       ├── 1) Remote Node Monitor       (081_host_monitor_port.sh — also cron-ready)
@@ -222,23 +253,43 @@ Once your node is publicly sharing chain data via nginx (options A → B → E),
 
 ### 7. Grin Mining Services — `07_grin_mining_services.sh`
 
-Manages the Stratum Mining server for Grin nodes — setup, configuration, publishing, and live status — all from an alphabet menu (A–H).
+Manages Stratum Mining and the self-hosted Pool Web Interface — all from an alphabet menu (A–J, W).
 
-- **A) Node Status** — shows running node info per network: PID, binary path, tmux session, stratum port state
-- **B) Setup Stratum** — enables `enable_stratum_server = true`, sets `wallet_listener_url` (where coinbase rewards go), and optionally sets `burn_reward = false`; supports mainnet and testnet
-- **C) Configure Stratum** — interactively change any toml setting: `enable_stratum_server`, `stratum_server_addr`, `wallet_listener_url`, `burn_reward`; prompts for graceful node restart
-- **D) Publish Stratum — Mainnet** — patches `grin-server.toml` to `0.0.0.0:3416`, opens firewall port (UFW/iptables), graceful restart
-- **E) Restrict Stratum — Mainnet** — reverts bind to `127.0.0.1:3416`, closes firewall port, graceful restart
-- **F) Publish Stratum — Testnet** — same as D but for port 13416
-- **G) Restrict Stratum — Testnet** — same as E but for port 13416
-- **H) Mining Status** — shows per-network: port listening, number of connected miners (ESTAB TCP connections), full toml settings, and the miner connect URL
+**Stratum management (per-network — no shared prompts):**
+- **A) Node Status** — running node info per network: PID, binary path, tmux session, stratum port state
+- **B/F) Setup Stratum** — enables `enable_stratum_server = true`, sets `wallet_listener_url`; B = mainnet, F = testnet
+- **C/G) Configure Stratum** — change any toml setting interactively; prompts graceful node restart
+- **D/I) Publish Stratum** — patches `grin-server.toml` to `0.0.0.0:PORT`, opens firewall; D = mainnet (3416), I = testnet (13416)
+- **E/J) Restrict Stratum** — reverts bind to `127.0.0.1:PORT`, closes firewall port
+- **H) Mining Status** — per-network: port listening, connected miners (ESTAB TCP), full toml settings, miner connect URL
 - Auto-detects `grin-server.toml` via running process (`/proc/$pid/exe`) or known toolkit directories
+
+**W) Pool Web Interface — FastAPI mining pool manager:**
+- Full self-hosted Grin mining pool with share accounting, user dashboards, slatepack withdrawals, and admin panel
+- Mainnet (port 3002) and testnet (port 3003) deployed independently with separate DBs, services, and nginx vhosts
+- **Share accounting** — monitors stratum log every 10s; maps `username.N` workers to registered users; distributes 60 GRIN per block proportionally
+- **Auth** — JWT (1h access + 7d refresh), bcrypt passwords, 5-failed-login → 15min IP lockout
+- **Withdrawals** — 3-step slatepack flow identical to the testnet faucet: init_send → user finalizes in wallet → confirmed; 5-min timeout with automatic balance restore
+- **Admin panel** — KPI dashboard, live system health (30s refresh), user management, miner overview, manual payment triggers; testnet only: "Inject Balance" for UI testing
+- **5 CSS themes** — Matrix (default, canvas rain), Dark (navy), Light (white), Naruto (orange), Japan (pink + CSS sakura petals)
+- **Guided setup** — option 0 runs install → configure → deploy → nginx → admin in sequence
+- Testnet UI: permanent yellow `⚠ TESTNET` banner, `[TESTNET]` in page title, "Inject Balance" button visible
 
 ### 5. Grin Wallet Service — `05_grin_wallet_service.sh`
 
 - **Download & init** — installs `grin-wallet` binary to `/opt/grin/wallet/mainnet` or `/opt/grin/wallet/testnet`; runs `grin-wallet init` in tmux (proper TTY for password prompt); auto-patches `check_node_api_http_addr` in `grin-wallet.toml`
 - **Listen** — starts `grin-wallet listen` in a named tmux session; auto-detects running node
 - **Publish** — toggles `owner_api_include_foreign`, configures firewall (port 3415), optional nginx reverse proxy with SSL
+
+**3) Testnet Faucet — standalone Flask app (port 3004):**
+- Completely independent of the wallet and pool — separate DB, service, and nginx vhost
+- Interactive 3-step slatepack claim: user enters `tgrin1...` address → receives slatepack → finalizes in wallet → coins arrive; identical flow to mainnet pool withdrawals (educational design)
+- Rate limiting: 2 testnet GRIN per address per 24h; 5-min finalize timeout with auto-cancel
+- **Donate section** — faucet wallet address (copyable + QR code from `/api/qr`) lets anyone fund the faucet; balance updates automatically from `grin-wallet --floonet info`
+- **How it works** — tabbed CLI/Grim wallet setup guide; connects users to `prunetest.grin.money:13413` (public pruned testnet node — no chain download)
+- **Activity log** — structured events (`CLAIM_INIT`, `SLATEPACK_OK`, `FINALIZE_OK`, `CONFIRMED`, `TIMEOUT`, `WALLET_FAIL`, `RATE_LIMIT`) written to `/opt/grin/logs/grin-faucet-activity.log`
+- **3 CSS themes** — Matrix (canvas rain), Warcraft Dark (purple/gold glow), Win98 (beveled windows)
+- **SEO** — JSON-LD `WebApplication` schema, Open Graph tags, keywords: "grin faucet", "testnet grin", "slatepack tutorial"
 
 ### 6. Global Grin Health — `06_global_grin_health.sh`
 
@@ -346,16 +397,48 @@ grin-node-toolkit/
 └── web/
     ├── 04_node_api/
     │   ├── public_html/                  # Feature 4 : Node API status page assets
-    │   ├── rest-collector.py             # REST API JSON collector (deployed to /opt/grin/grin-api-collector/)
-    │   └── node-collector.py             # Node data collector   (deployed to /opt/grin/grin-api-collector/)
+    │   ├── rest-collector.py             # REST API JSON collector
+    │   └── node-collector.py             # Node data collector
+    ├── 05_faucet/                        # Feature 5b: Testnet Faucet (standalone)
+    │   ├── app/                          # Flask backend (deployed to /opt/grin/faucet/)
+    │   │   ├── app.py                    # Flask routes + activity logger
+    │   │   ├── db.py                     # SQLite schema + helpers
+    │   │   ├── wallet.py                 # grin-wallet --floonet CLI integration
+    │   │   ├── config.py                 # Reads /opt/grin/conf/grin_faucet.json
+    │   │   └── requirements.txt
+    │   └── public_html/                  # Static frontend (deployed to /var/www/grin-faucet/)
+    │       ├── index.html                # SEO homepage + 3-step claim form
+    │       ├── css/faucet.css            # Base styles + CSS variables
+    │       ├── css/themes/               # matrix.css · warcraft.css · win98.css
+    │       └── js/                       # faucet.js · theme.js · matrix.js
     ├── 05_wallet/
-    │   ├── public_html/                  # Feature 5 : Web wallet UI assets (PHP proxy, JS, CSS)
+    │   ├── public_html/                  # Feature 5a: Web wallet UI assets (PHP proxy, JS, CSS)
     │   └── nginx.conf.template           # nginx vhost template for web wallet
-    └── 06_stats_map/
-        └── stats/                        # Feature 6 : Network stats + peer map assets
-            ├── index.html                # Peer Map (Leaflet 2D map)
-            ├── stats.html                # Network Stats dashboard (Chart.js)
-            └── chart.min.js              # Chart.js bundle (copy before deploy)
+    ├── 06_stats_map/
+    │   └── stats/                        # Feature 6 : Network stats + peer map assets
+    │       ├── index.html                # Peer Map (Leaflet 2D map)
+    │       ├── stats.html                # Network Stats dashboard (Chart.js)
+    │       └── chart.min.js              # Chart.js bundle (copy before deploy)
+    └── 07_pool/                          # Feature 7 : Pool Web Interface
+        ├── pool-manager/                 # FastAPI backend (deployed to /opt/grin/pool/<net>/)
+        │   ├── main.py                   # All API routes (public + auth + user + admin)
+        │   ├── database.py               # SQLAlchemy models (aiosqlite)
+        │   ├── auth.py                   # JWT + bcrypt + brute-force lockout
+        │   ├── monitor.py                # Stratum log parser + share tracker
+        │   ├── rewards.py                # Block reward distribution (60 GRIN proportional)
+        │   ├── wallet.py                 # grin-wallet CLI slatepack send/finalize
+        │   ├── scheduler.py              # APScheduler background jobs
+        │   ├── config.py                 # Reads /opt/grin/conf/grin_pool[_testnet].json
+        │   └── requirements.txt
+        └── public_html/                  # Static frontend (deployed to /var/www/grin-pool/)
+            ├── index.html                # Public homepage (stats + mining setup)
+            ├── login.html                # Login + Register tabs
+            ├── dashboard.html            # User stats + hashrate charts
+            ├── withdraw.html             # 3-step slatepack withdrawal
+            ├── admin/                    # Admin pages (index, health, users, miners, payments)
+            ├── css/pool.css              # Base styles + CSS variables
+            ├── css/themes/               # matrix · dark · light · naruto · japan
+            └── js/                       # api.js · theme.js · charts.js · withdraw.js · matrix.js
 ```
 
 **Runtime config created on first run** (stored outside the toolkit, under `/opt/grin/conf/`):
@@ -367,6 +450,9 @@ grin-node-toolkit/
 | `/opt/grin/conf/grin_share_nginx.conf` | Nginx share settings (written/read by `03`) |
 | `/opt/grin/conf/grin_share_ssh.conf` | SSH share settings (written/read by `03`) |
 | `/opt/grin/conf/grin_web_wallet.conf` | Web wallet deploy settings (written/read by `05`) |
+| `/opt/grin/conf/grin_faucet.json` | Testnet faucet config (written/read by `05` faucet menu) |
+| `/opt/grin/conf/grin_pool.json` | Pool manager mainnet config (written/read by `07` W menu) |
+| `/opt/grin/conf/grin_pool_testnet.json` | Pool manager testnet config (written/read by `07` W menu) |
 | `/opt/grin/conf/host_monitor_port.conf` | Custom hosts for node monitor (`081`) |
 | `/opt/grin/conf/host_monitor_last_state.conf` | Last-known port state for change detection (`081`) |
 | `/opt/grin/conf/mass_deploy.conf` | Fleet server list for mass deployment (`081`) |
@@ -386,17 +472,21 @@ grin-node-toolkit/
 
 ## Port Reference
 
-| Port  | Protocol | Purpose                                           |
-|-------|----------|---------------------------------------------------|
-| 3413  | HTTP     | Grin mainnet API V2 (`/v2/foreign` via nginx)     |
-| 3414  | P2P      | Grin mainnet peer connections                     |
-| 3415  | HTTP     | Grin wallet Foreign API                           |
-| 3416  | TCP      | Grin mainnet stratum mining server                |
-| 13413 | HTTP     | Grin testnet API V2 (`/v2/foreign` via nginx)     |
-| 13414 | P2P      | Grin testnet peer connections                     |
-| 13416 | TCP      | Grin testnet stratum mining server                |
-| 80    | HTTP     | nginx (redirects to HTTPS)                        |
-| 443   | HTTPS    | nginx file server / proxy                         |
+| Port  | Protocol | Purpose                                                     |
+|-------|----------|-------------------------------------------------------------|
+| 3413  | HTTP     | Grin mainnet node API V2 (`/v2/foreign` via nginx)          |
+| 3414  | P2P      | Grin mainnet peer connections                               |
+| 3415  | HTTP     | Grin mainnet wallet Foreign API                             |
+| 3416  | TCP      | Grin mainnet stratum mining server                          |
+| 13413 | HTTP     | Grin testnet node API V2 (`/v2/foreign` via nginx)          |
+| 13414 | P2P      | Grin testnet peer connections                               |
+| 13415 | HTTP     | Grin testnet wallet Foreign API                             |
+| 13416 | TCP      | Grin testnet stratum mining server                          |
+| 3002  | HTTP     | Pool manager — mainnet (FastAPI, proxied by nginx)          |
+| 3003  | HTTP     | Pool manager — testnet (FastAPI, proxied by nginx)          |
+| 3004  | HTTP     | Testnet faucet (Flask, proxied by nginx)                    |
+| 80    | HTTP     | nginx (redirects to HTTPS)                                  |
+| 443   | HTTPS    | nginx file server / proxy                                   |
 
 ---
 

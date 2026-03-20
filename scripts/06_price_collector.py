@@ -406,8 +406,8 @@ def cmd_init_history():
         last_ts = batch[-1][0]
         last_dt = datetime.fromtimestamp(last_ts, timezone.utc).strftime("%Y-%m-%d")
         print(f"  Page {page}: {len(batch)} candles up to {last_dt}")
-        if len(batch) < 1000:
-            break
+        if last_ts >= now_ts() - 86400:
+            break  # caught up to today
         from_ts = last_ts + 86400
         page   += 1
         time.sleep(0.5)

@@ -48,6 +48,9 @@ DATA_DIR="/opt/grin/grin-stats"
 WWW_DIR="/var/www/grin-stats"
 COLLECTOR_BIN="/usr/local/bin/grin-stats-collector"
 DB_PATH="$DATA_DIR/stats.db"
+PRICE_COLLECTOR_BIN="/usr/local/bin/grin-price-collector"
+PRICE_DIR="/opt/grin/grin-price"
+PRICE_DB_PATH="$PRICE_DIR/grin-price.db"
 EXPLORER_DIR="/opt/grin/grin-explorer"
 EXPLORER_BIN="$EXPLORER_DIR/target/release/grin-explorer"
 EXPLORER_TOML="$EXPLORER_DIR/Explorer.toml"
@@ -58,6 +61,7 @@ NGINX_EXPLORER_CONF="/etc/nginx/sites-available/grin-explorer"
 
 # ─── Cron markers ─────────────────────────────────────────────────────────────
 CRON_MARKER_STATS="# grin-node-toolkit: grin_stats_update"
+CRON_MARKER_PRICE="# grin-node-toolkit: grin_price_update"
 CRON_MARKER_EXPLORER="# grin-node-toolkit: grin_explorer"
 
 # ─── Grin node ports ─────────────────────────────────────────────────────────
@@ -339,14 +343,40 @@ EOF
     info "If your secret files are in a different location, edit that file manually."
 
     # Initialise empty DB (schema only)
-    info "Initialising database..."
+    info "Initialising stats database..."
     python3 "$COLLECTOR_BIN" --init-db
+
+    # ── Install price collector ───────────────────────────────────────────────
+    info "Installing price collector..."
+    if [[ ! -f "$SCRIPT_DIR/06_price_collector.py" ]]; then
+        warn "06_price_collector.py not found in $SCRIPT_DIR — price charts will be unavailable."
+    else
+        cp "$SCRIPT_DIR/06_price_collector.py" "$PRICE_COLLECTOR_BIN"
+        chmod +x "$PRICE_COLLECTOR_BIN"
+
+        mkdir -p "$PRICE_DIR"
+        cat > "$PRICE_DIR/config.env" <<EOF
+PRICE_WWW_DATA=${WWW_DIR}/data
+PRICE_DB_PATH=${PRICE_DB_PATH}
+EOF
+        chmod 600 "$PRICE_DIR/config.env"
+
+        # Initialise price DB schema
+        python3 "$PRICE_COLLECTOR_BIN" --init-db
+
+        # Backfill Gate.io GRIN/USDT history (paginated — takes ~30 s for 6 years)
+        info "Backfilling GRIN/USDT price history from Gate.io (this may take ~30s)..."
+        python3 "$PRICE_COLLECTOR_BIN" --init-history \
+            || warn "Price history backfill failed — will complete on first --update run."
+
+        success "Price collector installed."
+    fi
 
     # Fix ownership so Nginx (www-data) can serve all web files
     info "Setting file ownership to www-data..."
     chown -R www-data:www-data "$WWW_DIR"
 
-    log "Stats installed: DATA_DIR=$DATA_DIR WWW_DIR=$WWW_DIR"
+    log "Stats installed: DATA_DIR=$DATA_DIR WWW_DIR=$WWW_DIR PRICE_DIR=$PRICE_DIR"
     success "Network Stats installed."
     echo ""
     echo -e "  ${DIM}Next steps:${RESET}"
@@ -443,9 +473,19 @@ start_updates() {
     fi
 
     local cron_line="*/5 * * * * env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $COLLECTOR_BIN --update >> $LOG_DIR/grin_stats_cron.log 2>&1 && chown -R www-data:www-data $WWW_DIR/data >> /dev/null 2>&1 $CRON_MARKER_STATS"
-    (echo "$existing"; echo "$cron_line") | grep -v '^$' | crontab -
-    success "Live updates enabled — collector runs every 5 minutes."
-    log "Stats cron added: $cron_line"
+
+    # Remove any stale price cron before re-adding
+    existing=$(echo "$existing" | grep -v "grin_price_update" || true)
+    local price_cron=""
+    if [[ -f "$PRICE_COLLECTOR_BIN" ]]; then
+        price_cron="*/5 * * * * python3 $PRICE_COLLECTOR_BIN --update >> $LOG_DIR/price_cron.log 2>&1 $CRON_MARKER_PRICE"
+    fi
+
+    (echo "$existing"; echo "$cron_line"; [[ -n "$price_cron" ]] && echo "$price_cron") \
+        | grep -v '^$' | crontab -
+    success "Live updates enabled — stats + price collectors run every 5 minutes."
+    [[ -z "$price_cron" ]] && warn "Price collector not installed — price cron skipped."
+    log "Stats cron added. Price cron: ${price_cron:-(skipped)}"
     pause
 }
 
@@ -455,13 +495,17 @@ stop_updates() {
     clear
     echo -e "\n${BOLD}${CYAN}── Stop Live Updates ──${RESET}\n"
     local existing; existing=$(crontab -l 2>/dev/null || true)
-    if ! echo "$existing" | grep -qF "grin_stats_update"; then
-        info "No stats cron job found."
+    local found=false
+    echo "$existing" | grep -qF "grin_stats_update" && found=true
+    echo "$existing" | grep -qF "grin_price_update"  && found=true
+    if [[ "$found" == false ]]; then
+        info "No stats or price cron jobs found."
         pause; return
     fi
-    echo "$existing" | grep -v "grin_stats_update" | grep -v '^$' | crontab -
-    success "Live updates disabled."
-    log "Stats cron removed."
+    echo "$existing" | grep -v "grin_stats_update" | grep -v "grin_price_update" \
+        | grep -v '^$' | crontab -
+    success "Live updates disabled (stats + price)."
+    log "Stats and price crons removed."
     pause
 }
 
@@ -517,10 +561,56 @@ server {
         try_files \$uri =404;
     }
 
+    # ── Public JSON API — whitelisted endpoints only ───────────────────────────
+    # Only the three files below are intentionally public.
+    # /data/ stays blocked; these exact locations are the only way in from outside.
+    # Rate limiting (30 req/min/IP, burst 10) is applied via the shared snippet.
+    # See /etc/nginx/snippets/grin-api.conf and /etc/nginx/conf.d/grin-rate-limit.conf
+    #
+    # Endpoints:
+    #   /api/price    → GRIN/USDT + GRIN/BTC price, OHLCV history  (06_price_collector.py)
+    #   /api/summary  → tip height, hashrate, difficulty, supply     (06_collector.py)
+    #   /api/peers    → peer list, country counts                    (06_collector.py)
+    #
+    location = /api/price   { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/price.json;   }
+    location = /api/summary { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/summary.json; }
+    location = /api/peers   { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/peers.json;   }
+
+    # Block everything else under /api/ — no directory listing, no other files
+    location /api/ { return 404; }
+
     access_log /var/log/nginx/grin-stats-access.log;
     error_log  /var/log/nginx/grin-stats-error.log;
 }
 NGINX
+
+    # Rate-limit zone (must live in http context, not server context)
+    mkdir -p /etc/nginx/conf.d
+    cat > /etc/nginx/conf.d/grin-rate-limit.conf <<'RATELIMIT'
+# Grin Node Toolkit — API rate limiting
+# 30 requests/min per IP, 10m shared memory zone (~160k IPs)
+limit_req_zone $binary_remote_addr zone=grin_api:10m rate=30r/m;
+RATELIMIT
+
+    # Shared snippet included by every /api/ location block
+    mkdir -p /etc/nginx/snippets
+    cat > /etc/nginx/snippets/grin-api.conf <<'SNIPPET'
+default_type  application/json;
+limit_req     zone=grin_api burst=10 nodelay;
+limit_req_status 429;
+
+add_header 'Access-Control-Allow-Origin'  '*'            always;
+add_header 'Access-Control-Allow-Methods' 'GET, OPTIONS' always;
+add_header 'Access-Control-Allow-Headers' 'Accept'       always;
+add_header  Cache-Control "public, max-age=300";
+
+if ($request_method = 'OPTIONS') {
+    add_header 'Access-Control-Allow-Origin'  '*';
+    add_header 'Access-Control-Allow-Methods' 'GET, OPTIONS';
+    add_header 'Content-Length' 0;
+    return 204;
+}
+SNIPPET
 
     # Logrotate: rotate at 10 MB or after 10 days
     cat > /etc/logrotate.d/grin-stats <<'LOGROTATE'
@@ -566,12 +656,23 @@ status_stats() {
         && echo -e "  Collector    ${GREEN}✓ installed${RESET}  ${DIM}($COLLECTOR_BIN)${RESET}" \
         || echo -e "  Collector    ${RED}✗ not installed${RESET}"
 
-    # Database
+    [[ -f "$PRICE_COLLECTOR_BIN" ]] \
+        && echo -e "  Price coll.  ${GREEN}✓ installed${RESET}  ${DIM}($PRICE_COLLECTOR_BIN)${RESET}" \
+        || echo -e "  Price coll.  ${YELLOW}✗ not installed${RESET}  ${DIM}(run Install → step 1)${RESET}"
+
+    # Databases
     if [[ -f "$DB_PATH" ]]; then
         local db_size; db_size=$(du -sh "$DB_PATH" 2>/dev/null | awk '{print $1}')
-        echo -e "  Database     ${GREEN}✓ exists${RESET}  ${DIM}($db_size)${RESET}"
+        echo -e "  Stats DB     ${GREEN}✓ exists${RESET}  ${DIM}($db_size)${RESET}"
     else
-        echo -e "  Database     ${RED}✗ not found${RESET}  ${DIM}($DB_PATH)${RESET}"
+        echo -e "  Stats DB     ${RED}✗ not found${RESET}  ${DIM}($DB_PATH)${RESET}"
+    fi
+
+    if [[ -f "$PRICE_DB_PATH" ]]; then
+        local pdb_size; pdb_size=$(du -sh "$PRICE_DB_PATH" 2>/dev/null | awk '{print $1}')
+        echo -e "  Price DB     ${GREEN}✓ exists${RESET}  ${DIM}($pdb_size)${RESET}"
+    else
+        echo -e "  Price DB     ${YELLOW}✗ not found${RESET}  ${DIM}($PRICE_DB_PATH)${RESET}"
     fi
 
     # JSON data files
@@ -586,12 +687,17 @@ status_stats() {
         fi
     done
 
-    # Cron job
+    # Cron jobs
     echo ""
     if crontab -l 2>/dev/null | grep -q "grin_stats_update"; then
-        echo -e "  Live updates ${GREEN}✓ active${RESET}  ${DIM}(every 5 min)${RESET}"
+        echo -e "  Stats cron   ${GREEN}✓ active${RESET}  ${DIM}(every 5 min)${RESET}"
     else
-        echo -e "  Live updates ${YELLOW}✗ inactive${RESET}"
+        echo -e "  Stats cron   ${YELLOW}✗ inactive${RESET}"
+    fi
+    if crontab -l 2>/dev/null | grep -q "grin_price_update"; then
+        echo -e "  Price cron   ${GREEN}✓ active${RESET}  ${DIM}(every 5 min)${RESET}"
+    else
+        echo -e "  Price cron   ${YELLOW}✗ inactive${RESET}"
     fi
 
     # Nginx

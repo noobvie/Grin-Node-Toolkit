@@ -10,6 +10,9 @@
 # What is backed up:
 #   · /opt/grin/conf/          — node configs, instances registry, API secrets
 #   · /opt/grin/wallet/        — wallet dirs (toml, seed, wallet_data) — optional, default Y
+#   · /opt/grin/grin-stats/stats.db    — blockchain stats DB (~100 MB, expensive to rebuild)
+#   · /opt/grin/grin-stats/config.env  — stats collector config
+#   · /opt/grin/grin-price/grin-price.db — price history DB (optional, default Y)
 #   · /etc/nginx/sites-available/*  (Grin-related configs only)
 #   · /etc/letsencrypt/live/ + renewal/  — SSL certs
 #   · /var/www/*grin*/, fullmain/, prunemain/, prunetest/  (web UIs, not archive files)
@@ -204,6 +207,50 @@ run_backup() {
         info "  ✓ www-data crontab"
     fi
 
+    # ── Step 4: Databases ────────────────────────────────────────────────────
+    # stats.db took hours of crawling to build — always include it by default.
+    # WAL checkpoint flushes any in-flight writes before we copy the file.
+    if [[ "$auto" == false ]]; then
+        section "Step 4: Database files"
+        echo -e "  ${YELLOW}stats.db contains ~100 MB of crawled blockchain data — expensive to rebuild.${RESET}"
+        echo ""
+    fi
+
+    local -A _db_labels=(
+        ["/opt/grin/grin-stats/stats.db"]="Stats DB (blockchain history)"
+        ["/opt/grin/grin-stats/config.env"]="Stats collector config"
+        ["/opt/grin/grin-price/grin-price.db"]="Price DB (GRIN/USDT + GRIN/BTC history)"
+    )
+    for _db in \
+        "/opt/grin/grin-stats/stats.db" \
+        "/opt/grin/grin-stats/config.env" \
+        "/opt/grin/grin-price/grin-price.db"
+    do
+        [[ -f "$_db" ]] || continue
+        local _db_size; _db_size=$(du -sh "$_db" 2>/dev/null | cut -f1)
+        local _label="${_db_labels[$_db]}"
+        local _include_db=true
+        if [[ "$auto" == false ]]; then
+            echo -e "  ${DIM}$_db${RESET}  ${DIM}($_db_size — $_label)${RESET}"
+            # config.env is tiny and always useful — include silently
+            if [[ "$_db" == *.db ]]; then
+                echo -ne "  ${BOLD}Include? [Y/n]: ${RESET}"
+                read -r _db_choice
+                [[ "${_db_choice,,}" == "n" ]] && _include_db=false
+            fi
+        fi
+        if [[ "$_include_db" == true ]]; then
+            # Flush any open WAL transactions to the main file before copying.
+            # 10s timeout guards against a locked DB hanging the whole backup.
+            if [[ "$_db" == *.db ]] && command -v sqlite3 &>/dev/null; then
+                timeout 10 sqlite3 "$_db" "PRAGMA wal_checkpoint(FULL);" &>/dev/null || true
+            fi
+            sources+=("$_db")
+            manifest_lines+=("database: $_db  ($_db_size)")
+            info "  ✓ $_db  ($_db_size)"
+        fi
+    done
+
     # Wallet dirs (from grin_wallets_location.conf)
     local wallets_conf="$CONF_DIR/grin_wallets_location.conf"
     local -a wallet_dirs=()
@@ -242,9 +289,9 @@ run_backup() {
         [[ "$auto" == false ]] && warn "  — No wallet dirs found in $wallets_conf (skipping)"
     fi
 
-    # ── Step 4: Optional logs ────────────────────────────────────────────────
+    # ── Step 5: Optional logs ────────────────────────────────────────────────
     if [[ "$auto" == false ]]; then
-        section "Step 4: Optional — include logs"
+        section "Step 5: Optional — include logs"
         if [[ -d /opt/grin/logs ]]; then
             echo -ne "${BOLD}Include /opt/grin/logs/? [y/N]: ${RESET}"
             read -r _log_choice
@@ -263,8 +310,8 @@ run_backup() {
         pause; return 0
     fi
 
-    # ── Step 5: Create archive ───────────────────────────────────────────────
-    [[ "$auto" == false ]] && section "Step 5: Creating archive"
+    # ── Step 6: Create archive ───────────────────────────────────────────────
+    [[ "$auto" == false ]] && section "Step 6: Creating archive"
     [[ "$auto" == true  ]] && log "[AUTO-BACKUP] Starting automated backup to $dest_dir"
     local ts; ts=$(date +%Y%m%d_%H%M%S)
     local archive_name="grin_backup_${ts}.tar.gz"
@@ -340,7 +387,7 @@ run_backup() {
         chown -R grin:grin "$dest_dir" 2>/dev/null || true
     fi
 
-    # ── Step 6: Done ─────────────────────────────────────────────────────────
+    # ── Step 7: Done ─────────────────────────────────────────────────────────
     if [[ "$auto" == false ]]; then
         section "Backup complete"
         success "Archive : $dest_dir/$archive_name"
@@ -506,6 +553,21 @@ run_restore() {
         log "[RESTORE] wallet"
     fi
 
+    # Database files (stats.db, config.env, grin-price.db)
+    for _db_rel in \
+        "opt/grin/grin-stats/stats.db" \
+        "opt/grin/grin-stats/config.env" \
+        "opt/grin/grin-price/grin-price.db"
+    do
+        if [[ -f "$tmp_dir/$_db_rel" ]]; then
+            local _db_dest="/$_db_rel"
+            mkdir -p "$(dirname "$_db_dest")"
+            cp -a "$tmp_dir/$_db_rel" "$_db_dest"
+            success "Restored: $_db_dest"
+            log "[RESTORE] $_db_dest"
+        fi
+    done
+
     # Logs
     if [[ -d "$tmp_dir/opt/grin/logs" ]]; then
         mkdir -p /opt/grin/logs
@@ -551,6 +613,8 @@ run_restore() {
     echo -e "  · If the Grin binary is missing, re-install it via ${BOLD}Script 01${RESET}"
     echo -e "  · Start the Grin node via ${BOLD}Script 01 → S) Start${RESET}"
     echo -e "  · Chain data will re-sync automatically, or use ${BOLD}Script 03${RESET} to stream it"
+    echo -e "  · If stats.db was restored, resume the stats cron — no re-crawl needed"
+    echo -e "  · If grin-price.db was restored, resume the price cron — history is intact"
     echo ""
     log "[RESTORE] Completed from: $chosen_archive"
     pause

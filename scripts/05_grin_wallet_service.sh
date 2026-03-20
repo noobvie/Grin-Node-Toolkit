@@ -1404,11 +1404,22 @@ faucet_install() {
     echo -e "  ${DIM}Installs python3, pip, Flask + dependencies, creates app directory.${RESET}\n"
 
     if ! command -v python3 &>/dev/null; then
-        info "Installing python3 and pip..."
-        apt-get install -y python3 python3-pip python3-venv \
+        local _base_pkgs="python3 python3-pip python3-venv"
+        info "python3 not found. Installing: $_base_pkgs"
+        apt-get install -y $_base_pkgs \
             || { die "apt-get failed. Run as root."; return; }
     fi
     success "python3 $(python3 --version 2>&1 | awk '{print $2}') found."
+
+    # On Debian/Ubuntu, python3-venv is a separate package per Python version
+    # (e.g. python3.12-venv) and is not installed even when python3 is present.
+    if ! python3 -m venv --help &>/dev/null 2>&1; then
+        local _pyver; _pyver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        local _venv_pkg="python3.${_pyver}-venv"
+        info "venv module missing. Installing: $_venv_pkg python3-pip"
+        apt-get install -y "$_venv_pkg" python3-pip \
+            || { die "Failed to install $_venv_pkg. Run as root."; return; }
+    fi
 
     # Create app directory and copy source files
     info "Creating $FAUCET_APP_DIR ..."

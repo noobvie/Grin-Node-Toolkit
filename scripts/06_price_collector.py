@@ -200,7 +200,7 @@ def fetch_nonlogs_ticker():
             "source":       "nonlogs.io",
         }
     except Exception as exc:
-        print(f"[WARN] nonlogs.io ticker ({url}): {exc}", file=sys.stderr)
+        print(f"[WARN] nonlogs.io ticker ({NONLOGS_URL}): {exc}", file=sys.stderr)
         return None
 
 # ── Fetch: Gate.io OHLCV candles ─────────────────────────────────────────────
@@ -240,7 +240,7 @@ def fetch_gate_candles(interval, from_ts=None, to_ts=None, limit=1000):
 
 # ── Aggregate BTC snapshots → OHLCV ──────────────────────────────────────────
 
-_INTERVAL_SECS = {"5m": 300, "1h": 3600, "6h": 21600, "1d": 86400}
+_INTERVAL_SECS = {"5m": 300, "1h": 3600, "6h": 21600, "1d": 86400, "7d": 7 * 86400}
 
 def aggregate_snapshots(conn, pair, interval):
     """
@@ -309,7 +309,7 @@ _TF = {
     "week":  ("1h",  7 * 86400),
     "month": ("6h",  30 * 86400),
     "year":  ("6h",  365 * 86400),
-    "all":   ("1d",  None),
+    "all":   ("7d",  None),
 }
 
 def _ohlcv_for_export(conn, pair, interval, since):
@@ -419,6 +419,14 @@ def cmd_init_history():
     else:
         print("[WARN] No daily candles returned — check Gate.io availability", file=sys.stderr)
 
+    # ── 7d candles: full history (~374 weeks — one page) ─────────────────────
+    print("[INFO] Fetching 7d (weekly) candles (full history)...")
+    rows = fetch_gate_candles("7d", from_ts=GRIN_LISTING_TS, limit=1000)
+    if rows:
+        n = upsert_ohlcv(conn, pair, "7d", rows)
+        conn.commit()
+        print(f"[OK] Stored {n} weekly candles")
+
     # ── 6h candles: last 365 days (paginated — 1460 candles, 2 pages) ──────────
     print("[INFO] Fetching 6h candles (last 365 days)...")
     all_6h   = []
@@ -488,7 +496,8 @@ def cmd_update():
     # ── 2. Incremental Gate.io candles for GRIN_USDT ─────────────────────────
     if usdt:
         for itvl, window in (("5m", 2 * 86400), ("1h", 7 * 86400),
-                              ("6h", 90 * 86400), ("1d", 7 * 86400)):
+                              ("6h", 90 * 86400), ("1d", 7 * 86400),
+                              ("7d", 90 * 86400)):
             last_ts = conn.execute(
                 "SELECT MAX(ts) FROM ohlcv WHERE pair='GRIN_USDT' AND interval=?", (itvl,)
             ).fetchone()[0] or 0

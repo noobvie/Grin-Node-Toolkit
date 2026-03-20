@@ -514,12 +514,19 @@ def cmd_update():
             (ts - 48 * 3600,),
         )
 
-    # ── 3. Aggregate BTC snapshots → OHLCV (full re-aggregate from 7d of data) ──
-    for itvl in ("5m", "1h", "6h", "1d"):
+    # ── 3. Aggregate BTC snapshots → OHLCV ───────────────────────────────────
+    # Only delete/replace candles inside the current snapshot window (last 7d).
+    # Candles older than the oldest snapshot are preserved so BTC OHLCV accumulates
+    # history over time as the snapshot window rolls forward.
+    oldest_snap_ts = conn.execute(
+        "SELECT MIN(ts) FROM snapshots WHERE pair='GRIN_BTC'"
+    ).fetchone()[0]
+    for itvl in ("5m", "1h", "6h", "1d", "7d"):
         rows = aggregate_snapshots(conn, "GRIN_BTC", itvl)
-        if rows:
+        if rows and oldest_snap_ts:
             conn.execute(
-                "DELETE FROM ohlcv WHERE pair='GRIN_BTC' AND interval=?", (itvl,)
+                "DELETE FROM ohlcv WHERE pair='GRIN_BTC' AND interval=? AND ts>=?",
+                (itvl, oldest_snap_ts),
             )
             n = upsert_ohlcv(conn, "GRIN_BTC", itvl, rows)
             print(f"[INFO] GRIN_BTC  {itvl}: {n} candles (aggregated)")

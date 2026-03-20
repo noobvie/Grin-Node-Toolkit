@@ -985,18 +985,31 @@ function makePriceChartUSDT(id) {
   return new Chart(ctx, {
     type: "line",
     data: {
-      datasets: [{
-        label: "GRIN/USDT",
-        data: [],
-        borderColor: "#3fb950",
-        backgroundColor: "#3fb950" + "18",
-        borderWidth: 1.5,
-        pointRadius: 0,
-        fill: true,
-        tension: 0.3,
-        spanGaps: false,
-        yAxisID: "y",
-      }]
+      datasets: [
+        {
+          label: "GRIN/USDT",
+          data: [],
+          borderColor: "#3fb950",
+          backgroundColor: "#3fb95018",
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.3,
+          spanGaps: false,
+          yAxisID: "y",
+          order: 1,
+        },
+        {
+          type: "bar",
+          label: "Volume (GRIN)",
+          data: [],
+          backgroundColor: "#3fb95030",
+          borderColor: "transparent",
+          borderWidth: 0,
+          yAxisID: "yVol",
+          order: 2,
+        },
+      ]
     },
     options: {
       responsive: true,
@@ -1007,7 +1020,10 @@ function makePriceChartUSDT(id) {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: ctx => ` $${fmtNum(ctx.parsed.y, 5)}`,
+            label: ctx => {
+              if (ctx.datasetIndex === 0) return ` $${fmtNum(ctx.parsed.y, 5)}`;
+              return ` Vol: ${fmtNum(ctx.parsed.y, 0)} GRIN`;
+            },
             title: items => new Date(items[0].parsed.x).toLocaleString(),
           }
         }
@@ -1022,7 +1038,14 @@ function makePriceChartUSDT(id) {
           type: "linear",
           position: "left",
           ticks: { callback: v => "$" + fmtNum(v, v < 0.001 ? 6 : v < 0.01 ? 5 : 4) },
-        }
+        },
+        yVol: {
+          type: "linear",
+          position: "right",
+          display: false,
+          beginAtZero: true,
+          grid: { drawOnChartArea: false },
+        },
       }
     }
   });
@@ -1233,18 +1256,19 @@ const _PRICE_GAP_MS = {
 function updatePriceChartUSDT(data, range) {
   if (!charts.priceUsdt || !data) return;
   const usdt = data["GRIN_USDT"];
-  let pts = (usdt?.[`ohlcv_${range}`] || []).map(([ts, v]) => ({ x: ts * 1000, y: v }));
+  let raw = usdt?.[`ohlcv_${range}`] || [];
 
   // Fallback for year/all: if ranged key is empty or very sparse (< 7 pts),
   // pull from ohlcv_all filtered to the same window — catches the case where
   // Gate.io has few candles for the specific interval used by the range key.
-  if (pts.length < 7 && (range === "year" || range === "all")) {
+  if (raw.length < 7 && (range === "year" || range === "all")) {
     const cutoff = range === "year" ? Date.now() - 365 * 86400000 : 0;
-    const fallback = (usdt?.ohlcv_all || [])
-      .filter(([ts]) => ts * 1000 >= cutoff)
-      .map(([ts, v]) => ({ x: ts * 1000, y: v }));
-    if (fallback.length > pts.length) pts = fallback;
+    const fallback = (usdt?.ohlcv_all || []).filter(([ts]) => ts * 1000 >= cutoff);
+    if (fallback.length > raw.length) raw = fallback;
   }
+
+  let pts      = raw.map(([ts, v])    => ({ x: ts * 1000, y: v }));
+  const volPts = raw.map(([ts,, vol]) => ({ x: ts * 1000, y: vol || 0 }));
 
   // Break flat lines across data gaps (Gate.io has no candles on zero-volume days)
   pts = breakGaps(pts, _PRICE_GAP_MS[range] ?? 4 * 86400e3);
@@ -1253,7 +1277,11 @@ function updatePriceChartUSDT(data, range) {
   const realPts = pts.filter(p => p.y !== null).length;
   charts.priceUsdt.data.datasets[0].pointRadius = realPts < 60 ? 2 : 0;
 
+  const maxVol = Math.max(...volPts.map(p => p.y).filter(v => v > 0), 1);
+  charts.priceUsdt.options.scales.yVol.max = maxVol * 5;
+
   charts.priceUsdt.data.datasets[0].data = pts;
+  charts.priceUsdt.data.datasets[1].data = volPts;
   $("price-usdt-no-data").style.display    = realPts ? "none"  : "block";
   $("price-usdt-chart-wrap").style.display = realPts ? "block" : "none";
   charts.priceUsdt.update("none");

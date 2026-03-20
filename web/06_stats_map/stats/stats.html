@@ -1226,7 +1226,7 @@ const _PRICE_GAP_MS = {
   day:   3  * 3600e3,   // 5m candles  → break if > 3h
   week:  12 * 3600e3,   // 1h candles  → break if > 12h
   month: 2  * 86400e3,  // 6h candles  → break if > 2d
-  year:  4  * 86400e3,  // 1d candles  → break if > 4d
+  year:  2  * 86400e3,  // 6h candles  → break if > 2d  (year now uses 6h)
   all:   4  * 86400e3,  // 1d candles  → break if > 4d
 };
 
@@ -1235,13 +1235,15 @@ function updatePriceChartUSDT(data, range) {
   const usdt = data["GRIN_USDT"];
   let pts = (usdt?.[`ohlcv_${range}`] || []).map(([ts, v]) => ({ x: ts * 1000, y: v }));
 
-  // Fallback for year/all: if the ranged key is empty, extract from ohlcv_all
-  // (covers the case where 1d candles exist but fall outside the exact range window)
-  if (!pts.length && (range === "year" || range === "all")) {
+  // Fallback for year/all: if ranged key is empty or very sparse (< 7 pts),
+  // pull from ohlcv_all filtered to the same window — catches the case where
+  // Gate.io has few candles for the specific interval used by the range key.
+  if (pts.length < 7 && (range === "year" || range === "all")) {
     const cutoff = range === "year" ? Date.now() - 365 * 86400000 : 0;
-    pts = (usdt?.ohlcv_all || [])
+    const fallback = (usdt?.ohlcv_all || [])
       .filter(([ts]) => ts * 1000 >= cutoff)
       .map(([ts, v]) => ({ x: ts * 1000, y: v }));
+    if (fallback.length > pts.length) pts = fallback;
   }
 
   // Break flat lines across data gaps (Gate.io has no candles on zero-volume days)

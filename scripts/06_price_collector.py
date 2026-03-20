@@ -308,7 +308,7 @@ _TF = {
     "day":   ("5m",  86400),
     "week":  ("1h",  7 * 86400),
     "month": ("6h",  30 * 86400),
-    "year":  ("1d",  365 * 86400),
+    "year":  ("6h",  365 * 86400),
     "all":   ("1d",  None),
 }
 
@@ -419,13 +419,23 @@ def cmd_init_history():
     else:
         print("[WARN] No daily candles returned — check Gate.io availability", file=sys.stderr)
 
-    # ── 6h candles: last 90 days ──────────────────────────────────────────────
-    print("[INFO] Fetching 6h candles (last 90 days)...")
-    rows = fetch_gate_candles("6h", from_ts=now_ts() - 90 * 86400, limit=1000)
-    if rows:
-        n = upsert_ohlcv(conn, pair, "6h", rows)
+    # ── 6h candles: last 365 days (paginated — 1460 candles, 2 pages) ──────────
+    print("[INFO] Fetching 6h candles (last 365 days)...")
+    all_6h   = []
+    from_6h  = now_ts() - 365 * 86400
+    while True:
+        batch = fetch_gate_candles("6h", from_ts=from_6h, limit=1000)
+        if not batch:
+            break
+        all_6h.extend(batch)
+        if len(batch) < 1000:
+            break
+        from_6h = batch[-1][0] + 6 * 3600
+        time.sleep(0.3)
+    if all_6h:
+        n = upsert_ohlcv(conn, pair, "6h", all_6h)
         conn.commit()
-        print(f"[OK] Stored {n} 6h candles")
+        print(f"[OK] Stored {n} 6h candles (last 365 days)")
 
     # ── 1h candles: last 30 days ──────────────────────────────────────────────
     print("[INFO] Fetching 1h candles (last 30 days)...")
@@ -478,7 +488,7 @@ def cmd_update():
     # ── 2. Incremental Gate.io candles for GRIN_USDT ─────────────────────────
     if usdt:
         for itvl, window in (("5m", 2 * 86400), ("1h", 7 * 86400),
-                              ("6h", 30 * 86400), ("1d", 7 * 86400)):
+                              ("6h", 90 * 86400), ("1d", 7 * 86400)):
             last_ts = conn.execute(
                 "SELECT MAX(ts) FROM ohlcv WHERE pair='GRIN_USDT' AND interval=?", (itvl,)
             ).fetchone()[0] or 0

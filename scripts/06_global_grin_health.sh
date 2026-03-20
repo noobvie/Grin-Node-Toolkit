@@ -394,26 +394,38 @@ import_data() {
     detect_node
     echo -e "  ${DIM}Node : ${NODE_URL}${RESET}"
     echo ""
-    echo -e "  ${BOLD}Select what to import:${RESET}"
+    echo -e "  ${BOLD}── Stats Collector  (node data: hashrate, TX, fees, peers) ──${RESET}"
     echo ""
     echo -e "  ${GREEN}a${RESET}) Init DB schema only          ${DIM}(RUN ONCE! First-time setup without data)${RESET}"
     echo -e "  ${GREEN}b${RESET}) Full history import          ${DIM}(RUN ONCE! Import headers + TX/fees — 6+ hours)${RESET}"
-    echo -e "  ${DIM}  ─── Optional ───────────────────────────────────${RESET}"
+    echo -e "  ${DIM}  ─── Optional ───────────────────────────────────────────${RESET}"
     echo -e "  ${GREEN}c${RESET}) Backfill last 180 days       ${DIM}(TX + fees — ~30 min, recommended first run)${RESET}"
     echo -e "  ${GREEN}d${RESET}) Backfill last 90 days        ${DIM}(TX + fees — lighter on memory)${RESET}"
     echo -e "  ${GREEN}e${RESET}) Backfill entire chain        ${DIM}(TX + fees from block 0 — several hours)${RESET}"
     echo -e "  ${GREEN}f${RESET}) Incremental update only      ${DIM}(new blocks since last run)${RESET}"
     echo -e "  ${GREEN}g${RESET}) Peers geolocation only       ${DIM}(refresh peer map, no blockchain data)${RESET}"
     echo ""
+    echo -e "  ${BOLD}── Price Collector  (GRIN/USDT from Gate.io) ──${RESET}"
+    echo ""
+    if [[ ! -f "$PRICE_COLLECTOR_BIN" ]]; then
+        echo -e "  ${YELLOW}  Price collector not installed — run Install (1) first.${RESET}"
+        echo ""
+    else
+        echo -e "  ${GREEN}h${RESET}) Init price DB + backfill USDT ${DIM}(RUN ONCE! Creates DB + imports Gate.io history ~30s)${RESET}"
+        echo -e "  ${GREEN}i${RESET}) Price incremental update      ${DIM}(fetch latest price + export price.json)${RESET}"
+        echo -e "  ${GREEN}j${RESET}) Re-export price JSON only     ${DIM}(no fetch — regenerate price.json from existing DB)${RESET}"
+        echo ""
+    fi
     echo -e "  ${DIM}0) Cancel${RESET}"
     echo ""
-    echo -ne "${BOLD}Select [a-g / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [a-j / 0]: ${RESET}"
     read -r imp_choice
     [[ "$imp_choice" == "0" || -z "$imp_choice" ]] && return
 
-    local cmd="" desc=""
+    local cmd="" desc="" bin=""
     case "$imp_choice" in
-        a) cmd="--init-db";            desc="Init DB schema only" ;;
+        # ── Stats collector ──────────────────────────────────────────────────
+        a) bin="$COLLECTOR_BIN"; cmd="--init-db";            desc="Stats: Init DB schema only" ;;
         b)
             warn "Full history import takes 6+ hours and should be run only ONCE."
             warn "Run this step inside tmux session to avoid connection interruption."
@@ -421,14 +433,26 @@ import_data() {
             read -r ok || true
             [[ "$ok" == "0" ]] && info "Cancelled." && return
             [[ "${ok,,}" == "n" ]] && info "Cancelled." && return
-            cmd="--init-history"
-            desc="Full history import"
+            bin="$COLLECTOR_BIN"; cmd="--init-history"; desc="Stats: Full history import"
             ;;
-        c) cmd="--backfill-stats";     desc="Backfill last 180 days" ;;
-        d) cmd="--backfill-stats 90";  desc="Backfill last 90 days" ;;
-        e) cmd="--backfill-stats all"; desc="Backfill entire chain TX/fees" ;;
-        f) cmd="--update";             desc="Incremental update" ;;
-        g) cmd="--peers-only";         desc="Peers geolocation update" ;;
+        c) bin="$COLLECTOR_BIN"; cmd="--backfill-stats";     desc="Stats: Backfill last 180 days" ;;
+        d) bin="$COLLECTOR_BIN"; cmd="--backfill-stats 90";  desc="Stats: Backfill last 90 days" ;;
+        e) bin="$COLLECTOR_BIN"; cmd="--backfill-stats all"; desc="Stats: Backfill entire chain TX/fees" ;;
+        f) bin="$COLLECTOR_BIN"; cmd="--update";             desc="Stats: Incremental update" ;;
+        g) bin="$COLLECTOR_BIN"; cmd="--peers-only";         desc="Stats: Peers geolocation update" ;;
+        # ── Price collector ──────────────────────────────────────────────────
+        h)
+            [[ ! -f "$PRICE_COLLECTOR_BIN" ]] && { warn "Price collector not installed."; sleep 1; return; }
+            bin="$PRICE_COLLECTOR_BIN"; cmd="--init-history"; desc="Price: Init DB + backfill Gate.io USDT history"
+            ;;
+        i)
+            [[ ! -f "$PRICE_COLLECTOR_BIN" ]] && { warn "Price collector not installed."; sleep 1; return; }
+            bin="$PRICE_COLLECTOR_BIN"; cmd="--update"; desc="Price: Incremental update"
+            ;;
+        j)
+            [[ ! -f "$PRICE_COLLECTOR_BIN" ]] && { warn "Price collector not installed."; sleep 1; return; }
+            bin="$PRICE_COLLECTOR_BIN"; cmd="--export"; desc="Price: Re-export price.json only"
+            ;;
         *) warn "Invalid choice."; sleep 1; return ;;
     esac
 
@@ -437,17 +461,20 @@ import_data() {
     echo -e "  ${DIM}Progress will appear below — do not close this window.${RESET}"
     echo ""
     local rc=0
-    # shellcheck disable=SC2046
-    env $(cat "$DATA_DIR/config.env" | tr '\n' ' ') \
-        python3 "$COLLECTOR_BIN" $cmd || rc=$?
+    if [[ "$bin" == "$COLLECTOR_BIN" ]]; then
+        # shellcheck disable=SC2046
+        env $(cat "$DATA_DIR/config.env" | tr '\n' ' ') \
+            python3 "$bin" $cmd || rc=$?
+    else
+        python3 "$bin" $cmd || rc=$?
+    fi
     echo ""
     if [[ $rc -eq 0 ]]; then
         success "$desc completed."
-        # Fix ownership so nginx (www-data) can serve any newly written files
         chown -R www-data:www-data "$WWW_DIR" 2>/dev/null || true
         log "$desc completed successfully."
     else
-        error "$desc failed (exit $rc). Check node is running and config.env is valid."
+        error "$desc failed (exit $rc)."
         log "$desc failed: exit $rc"
     fi
     pause
@@ -1286,7 +1313,7 @@ show_menu_a() {
     [[ -f "$NGINX_STATS_CONF" ]]                                   && ngnx="${GREEN}✓ configured${RESET}"
 
     echo -e "  ${GREEN}1${RESET})   Install          ${DIM}collector + Chart.js + Leaflet${RESET}   [$inst]"
-    echo -e "  ${GREEN}2${RESET})   Import Data      ${DIM}init DB / backfill / update / peers${RESET}"
+    echo -e "  ${GREEN}2${RESET})   Import Data      ${DIM}stats: init / backfill / update  |  price: init / update${RESET}"
     echo -e "  ${GREEN}3${RESET})   Start Updates    ${DIM}cron every 5 min${RESET}  [$cron]"
     echo -e "  ${GREEN}4${RESET})   Check DNS        ${DIM}confirm A-record before nginx setup${RESET}"
     echo -e "  ${GREEN}5${RESET})   Setup Nginx      ${DIM}HTTPS subdomain${RESET}  [$ngnx]"

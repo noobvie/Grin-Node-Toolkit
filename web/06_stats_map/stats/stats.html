@@ -759,7 +759,7 @@
       <span class="api-method">GET</span>
       <div>
         <a class="api-path" id="ep-price" href="#" target="_blank" rel="noopener">/api/price</a>
-        <span class="api-desc">GRIN/USDT (Gate.io) + GRIN/BTC (nonlogs.io) — current price, 24h stats, OHLCV history for Day / Week / Month / Year / All Time</span>
+        <span class="api-desc">GRIN/USDT (Gate.io) — current price, 24h stats, OHLCV history for Day / Week / Month / Year / All Time</span>
       </div>
     </div>
     <div class="api-endpoint">
@@ -769,14 +769,6 @@
         <span class="api-desc">Current block height, network hashrate (GPS), mining difficulty, coin supply, inflation rate</span>
       </div>
     </div>
-    <div class="api-endpoint">
-      <span class="api-method">GET</span>
-      <div>
-        <a class="api-path" id="ep-peers" href="#" target="_blank" rel="noopener">/api/peers</a>
-        <span class="api-desc">Active peer list with country, city, node version, last-seen timestamp</span>
-      </div>
-    </div>
-
     <div class="api-note">
       <strong>Rate limit:</strong> 30 req / min per IP &nbsp;·&nbsp;
       <strong>Cache:</strong> 5 min &nbsp;·&nbsp;
@@ -1194,9 +1186,13 @@ function updatePriceChartUSDT(data, range) {
   const usdt = data["GRIN_USDT"];
   const pts  = (usdt?.[`ohlcv_${range}`] || []).map(([ts, v]) => ({ x: ts * 1000, y: v }));
 
+  // Year/All need historical backfill — fewer than 3 daily points means no meaningful data
+  const needsHistory = (range === "year" || range === "all") && pts.length < 3;
+  const hide = pts.length === 0 || needsHistory;
+
   charts.priceUsdt.data.datasets[0].data = pts;
-  $("price-usdt-no-data").style.display    = pts.length ? "none"  : "block";
-  $("price-usdt-chart-wrap").style.display = pts.length ? "block" : "none";
+  $("price-usdt-chart-wrap").style.display = hide ? "none"  : "block";
+  $("price-usdt-no-data").style.display    = hide ? "block" : "none";
   charts.priceUsdt.update("none");
 }
 
@@ -1472,7 +1468,7 @@ document.addEventListener("DOMContentLoaded", boot);
   function openModal() {
     const base = window.location.origin;
     $("api-base-url").innerHTML = 'Base URL: <span>' + base + '</span>';
-    ["price", "summary", "peers"].forEach(ep => {
+    ["price", "summary"].forEach(ep => {
       const el = $("ep-" + ep);
       if (el) el.href = base + "/api/" + ep;
     });

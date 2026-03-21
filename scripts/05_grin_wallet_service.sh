@@ -413,8 +413,11 @@ init_wallet() {
 
     info "Initializing wallet — write down the seed phrase that appears below!"
     echo ""
-    # --testnet generates correct chain_type, api_listen_port, and
-    # check_node_api_http_addr automatically; no need to patch those fields.
+    # grin-wallet init writes grin-wallet.toml with sensible defaults, including:
+    #   check_node_api_http_addr = "http://127.0.0.1:3413"   (mainnet)
+    #   check_node_api_http_addr = "http://127.0.0.1:13413"  (testnet, via --testnet flag)
+    # These default values are already correct for a local node, so we do NOT patch them.
+    # The --testnet flag also sets chain_type = "Testnet" and the right listen ports.
     if [[ "$NETWORK" == "testnet" ]]; then
         cd "$WALLET_DIR" && "$WALLET_BIN" --testnet --top_level_dir "$WALLET_DIR" -p "$wallet_pass" init
     else
@@ -442,6 +445,31 @@ init_wallet() {
     _patch_toml "$GRIN_WALLET_TOML" "owner_api_listen_port" "$owner_api_port"
     _patch_toml "$GRIN_WALLET_TOML" "socks_proxy_addr"      "\"$socks_addr\""
     _patch_toml "$GRIN_WALLET_TOML" "log_max_files"         "3"
+
+    # Configure node_api_secret_path so the wallet can authenticate to the node
+    # when the node has foreign_api_secret_path set in grin-server.toml.
+    # Without this, the wallet gets a 401 response it cannot parse → "Cannot parse response".
+    local _node_dir="" _secret_file=""
+    local _instances_conf="/opt/grin/conf/grin_instances_location.conf"
+    if [[ -f "$_instances_conf" ]]; then
+        # shellcheck source=/dev/null
+        source "$_instances_conf" 2>/dev/null
+        if [[ "$NETWORK" == "testnet" ]]; then
+            _node_dir="${PRUNETEST_GRIN_DIR:-}"
+        else
+            _node_dir="${PRUNEMAIN_GRIN_DIR:-${FULLMAIN_GRIN_DIR:-}}"
+        fi
+    fi
+    [[ -z "$_node_dir" || ! -d "$_node_dir" ]] && \
+        _node_dir="/opt/grin/node/$( [[ "$NETWORK" == "testnet" ]] && echo testnet-prune || echo mainnet-prune )"
+    if [[ -f "$_node_dir/.foreign_api_secret" ]]; then
+        _secret_file="$_node_dir/.foreign_api_secret"
+        _patch_toml "$GRIN_WALLET_TOML" "node_api_secret_path" "\"$_secret_file\""
+        info "node_api_secret_path → $_secret_file"
+    else
+        warn "No .foreign_api_secret found at $_node_dir — node_api_secret_path not set."
+        warn "If wallet shows auth errors, add node_api_secret_path manually to $GRIN_WALLET_TOML"
+    fi
 
     success "grin-wallet.toml patched: owner=$owner_api_port, tor=$socks_addr, log_max_files=3"
     log "[init_wallet] network=$NETWORK toml=$GRIN_WALLET_TOML owner_api=$owner_api_port tor=$socks_addr"

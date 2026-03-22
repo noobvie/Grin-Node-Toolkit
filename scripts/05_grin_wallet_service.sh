@@ -1876,26 +1876,20 @@ faucet_setup_nginx() {
         die "Web files not deployed — run option 5 first."; return
     fi
 
-    # ── Subdomain: read from config, confirm or update ─────────────────────────
+    # ── Subdomain: read from config (read-only here) ───────────────────────────
     local domain; domain=$(faucet_read_conf "subdomain" "")
     echo ""
-    if [[ -n "$domain" ]]; then
-        echo -e "  ${BOLD}Domain from Configure step:${RESET} ${GREEN}$domain${RESET}"
-        echo -ne "  Use this domain? [Enter to confirm / type new domain]: "
-        read -r new_domain || true
-        if [[ -n "$new_domain" && "$new_domain" != "$domain" ]]; then
-            domain="$new_domain"
-            faucet_write_conf_key "subdomain" "$domain"
-            success "Domain updated to: $domain"
-        fi
+    if [[ -z "$domain" ]]; then
+        warn "No domain configured — go back and set it in option 4) Configure."
+        echo -ne "  Press 0 to return, or Enter to continue anyway: "
+        read -r _confirm || true
+        [[ "$_confirm" == "0" ]] && return
     else
-        echo -ne "  Domain not set in Configure. Enter domain now: "
-        read -r domain || true
-        if [[ -z "$domain" ]]; then
-            die "Domain required — set it in option 4) Configure first."; return
-        fi
-        faucet_write_conf_key "subdomain" "$domain"
-        success "Domain saved: $domain"
+        echo -e "  ${BOLD}Domain:${RESET} ${GREEN}$domain${RESET}"
+        echo -e "  ${DIM}To change it, press 0 and update it in option 4) Configure.${RESET}"
+        echo -ne "  Press Enter to confirm, or 0 to return: "
+        read -r _confirm || true
+        [[ "$_confirm" == "0" ]] && return
     fi
     echo ""
 

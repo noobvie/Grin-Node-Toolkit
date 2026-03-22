@@ -1550,6 +1550,12 @@ faucet_setup_wallet() {
         warn "If wallet shows auth errors, add node_api_secret_path manually to $_toml"
     fi
 
+    # Disable Tor listener — faucet uses HTTP only (127.0.0.1:13415).
+    # Without this, grin-wallet listen times out on Tor startup and delays the
+    # address command. HTTP listener still starts normally.
+    _patch_toml "$_toml" "use_tor_listener" "false"
+    info "use_tor_listener → false  (faucet uses HTTP only)"
+
     # ── Harden permissions ────────────────────────────────────────────────────
     chown -R grin:grin "$FAUCET_WALLET_DIR" 2>/dev/null || true
     chmod 700 "$FAUCET_WALLET_DIR"

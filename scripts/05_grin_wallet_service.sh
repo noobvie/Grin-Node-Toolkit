@@ -93,7 +93,7 @@ FAUCET_WEB_SRC="$TOOLKIT_ROOT/web/05_faucet/public_html"
 FAUCET_APP_DIR="/opt/grin/faucet"
 FAUCET_WEB_DIR="/var/www/grin-faucet"
 FAUCET_CONF="/opt/grin/conf/grin_faucet.json"
-FAUCET_PASS="/opt/grin/faucet/.wallet_pass"
+FAUCET_PASS="/opt/grin/faucet/.wallet_pass_faucet"
 FAUCET_LOG="/opt/grin/logs/grin-faucet-activity.log"
 FAUCET_NGINX_CONF="/etc/nginx/sites-available/grin-faucet"
 FAUCET_SERVICE="grin-faucet"
@@ -1758,15 +1758,42 @@ faucet_configure() {
     read -r val || true
     [[ -n "$val" ]] && faucet_write_conf_key "wallet_dir" "$val"
 
-    # Wallet address — prompt with helpful tip
+    # Wallet address — auto-fetch from wallet binary
     local current_addr; current_addr=$(faucet_read_conf "wallet_address" "")
     echo ""
-    echo -e "  ${DIM}Tip: run '${BOLD}grin-wallet --testnet address${RESET}${DIM}' to get your testnet address.${RESET}"
-    echo -ne "Wallet address   [${current_addr:-not set}]: "
-    read -r val || true
-    if [[ -n "$val" ]]; then
-        faucet_write_conf_key "wallet_address" "$val"
-        success "Wallet address saved."
+    local auto_addr=""
+    if [[ -x "$FAUCET_WALLET_BIN" && -f "$FAUCET_WALLET_DIR/grin-wallet.toml" ]]; then
+        info "Fetching wallet address from $FAUCET_WALLET_BIN ..."
+        local _pass=""
+        [[ -f "$FAUCET_PASS" ]] && _pass=$(cat "$FAUCET_PASS")
+        if [[ -n "$_pass" ]]; then
+            local _addr_out
+            _addr_out=$("$FAUCET_WALLET_BIN" --testnet --top_level_dir "$FAUCET_WALLET_DIR" \
+                -p "$_pass" address 2>&1) || true
+            auto_addr=$(echo "$_addr_out" | grep -oP 'tgrin1\S+' | head -1)
+        fi
+        unset _pass
+    fi
+    if [[ -n "$auto_addr" ]]; then
+        success "Address detected: $auto_addr"
+        echo -ne "Wallet address   [${auto_addr}] (Enter to accept): "
+        read -r val || true
+        local chosen_addr="${val:-$auto_addr}"
+        faucet_write_conf_key "wallet_address" "$chosen_addr"
+        success "Wallet address saved: $chosen_addr"
+    else
+        warn "Could not fetch wallet address automatically."
+        echo -e "  ${YELLOW}Make sure the wallet listener is running (option 2) and tmux session${RESET}"
+        echo -e "  ${YELLOW}grin-wallet-testnet-faucet is active, then re-run step 4) Configure.${RESET}"
+        echo -e "  ${DIM}Press 0 to return to previous menu or Enter to enter address manually.${RESET}"
+        echo -ne "Wallet address   [${current_addr:-not set}]: "
+        read -r val || true
+        if [[ "$val" == "0" ]]; then
+            return
+        elif [[ -n "$val" ]]; then
+            faucet_write_conf_key "wallet_address" "$val"
+            success "Wallet address saved."
+        fi
     fi
 
     # Wallet password

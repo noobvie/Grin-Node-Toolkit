@@ -98,7 +98,7 @@ FAUCET_LOG="/opt/grin/logs/grin-faucet-activity.log"
 FAUCET_NGINX_CONF="/etc/nginx/sites-available/grin-faucet"
 FAUCET_SERVICE="grin-faucet"
 FAUCET_WALLET_DIR="/opt/grin/wallet/testnet_faucet"
-FAUCET_WALLET_BIN="$FAUCET_WALLET_DIR/grin-wallet"
+FAUCET_WALLET_BIN="$FAUCET_WALLET_DIR/grin-wallet-faucet-bin"
 
 # ─── Runtime state (set by detect_and_select_network) ─────────────────────────
 NETWORK=""
@@ -1393,7 +1393,7 @@ faucet_show_status() {
     local wallet_bin="$wallet_dir/grin-wallet"
     if [[ -x "$wallet_bin" ]]; then
         local balance
-        balance=$("$wallet_bin" --floonet info 2>/dev/null \
+        balance=$("$wallet_bin" --testnet info 2>/dev/null \
             | grep -i "spendable" | grep -oP '[\d.]+' | head -1 || echo "?")
         echo -e "  ${BOLD}Balance${RESET}    : ${GREEN}${balance:-?} testnet GRIN${RESET}"
     else
@@ -1498,12 +1498,12 @@ faucet_setup_wallet() {
         warn "Password cannot be empty."; unset wallet_pass wallet_pass2; return
     fi
 
-    info "Initializing faucet wallet (--floonet) — write down the seed phrase!"
+    info "Initializing faucet wallet (--testnet) — write down the seed phrase!"
     echo -e "  ${DIM}Seed phrase will also be saved to $FAUCET_WALLET_DIR/seed-faucet.txt${RESET}\n"
 
     local seed_file="$FAUCET_WALLET_DIR/seed-faucet.txt"
     cd "$FAUCET_WALLET_DIR" && "$FAUCET_WALLET_BIN" \
-        --floonet --top_level_dir "$FAUCET_WALLET_DIR" -p "$wallet_pass" init \
+        --testnet -p "$wallet_pass" init -h \
         2>&1 | tee "$seed_file"
     local rc=${PIPESTATUS[0]}
     echo ""
@@ -1601,11 +1601,11 @@ faucet_start_listener() {
     info "Starting faucet wallet listener in tmux session: $session"
     if id grin &>/dev/null; then
         tmux new-session -d -s "$session" -c "$FAUCET_WALLET_DIR" \
-            "su -s /bin/bash -c \"'$FAUCET_WALLET_BIN' --floonet --top_level_dir '$FAUCET_WALLET_DIR' -p '$wallet_pass' listen\" grin; echo ''; echo 'Listener exited. Press Enter to close.'; read"
+            "su -s /bin/bash -c \"'$FAUCET_WALLET_BIN' --testnet --top_level_dir '$FAUCET_WALLET_DIR' -p '$wallet_pass' listen\" grin; echo ''; echo 'Listener exited. Press Enter to close.'; read"
     else
         warn "User 'grin' not found — running as current user. Re-run Script 01 to create it."
         tmux new-session -d -s "$session" -c "$FAUCET_WALLET_DIR" \
-            "bash -c \"'$FAUCET_WALLET_BIN' --floonet --top_level_dir '$FAUCET_WALLET_DIR' -p '$wallet_pass' listen; echo ''; echo 'Listener exited. Press Enter to close.'; read\""
+            "bash -c \"'$FAUCET_WALLET_BIN' --testnet --top_level_dir '$FAUCET_WALLET_DIR' -p '$wallet_pass' listen; echo ''; echo 'Listener exited. Press Enter to close.'; read\""
     fi
     unset wallet_pass
 
@@ -1755,7 +1755,7 @@ faucet_configure() {
     # Wallet address — prompt with helpful tip
     local current_addr; current_addr=$(faucet_read_conf "wallet_address" "")
     echo ""
-    echo -e "  ${DIM}Tip: run '${BOLD}grin-wallet --floonet address${RESET}${DIM}' to get your testnet address.${RESET}"
+    echo -e "  ${DIM}Tip: run '${BOLD}grin-wallet --testnet address${RESET}${DIM}' to get your testnet address.${RESET}"
     echo -ne "Wallet address   [${current_addr:-not set}]: "
     read -r val || true
     if [[ -n "$val" ]]; then
@@ -2008,7 +2008,7 @@ faucet_wallet_address() {
     # Live balance
     if [[ -x "$wallet_bin" ]]; then
         local balance
-        balance=$("$wallet_bin" --floonet info 2>/dev/null \
+        balance=$("$wallet_bin" --testnet info 2>/dev/null \
             | grep -i "spendable" | grep -oP '[\d.]+' | head -1 || echo "?")
         echo -e "  ${BOLD}Current balance:${RESET}        ${GREEN}${balance:-?} testnet GRIN${RESET}"
         echo -e "  ${DIM}Recommended minimum:    500 testnet GRIN (~250 claims of 2 GRIN)${RESET}"
@@ -2030,7 +2030,7 @@ faucet_wallet_address() {
 
     if [[ "${addr_choice,,}" == "u" ]]; then
         echo ""
-        echo -e "  ${DIM}Tip: run '${BOLD}grin-wallet --floonet address${RESET}${DIM}' to get the address.${RESET}"
+        echo -e "  ${DIM}Tip: run '${BOLD}grin-wallet --testnet address${RESET}${DIM}' to get the address.${RESET}"
         echo -ne "New wallet address: "
         read -r new_addr || true
         if [[ -n "$new_addr" ]]; then

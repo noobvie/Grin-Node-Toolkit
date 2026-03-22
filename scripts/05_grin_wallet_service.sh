@@ -1390,7 +1390,7 @@ faucet_show_status() {
 
     # Wallet balance
     local wallet_dir; wallet_dir=$(faucet_read_conf "wallet_dir" "$FAUCET_WALLET_DIR")
-    local wallet_bin="$wallet_dir/grin-wallet"
+    local wallet_bin="$wallet_dir/grin-wallet-faucet-bin"
     if [[ -x "$wallet_bin" ]]; then
         local balance
         balance=$("$wallet_bin" --testnet info 2>/dev/null \
@@ -1726,7 +1726,7 @@ WorkingDirectory=$FAUCET_APP_DIR
 Environment="FAUCET_CONF=$FAUCET_CONF"
 Environment="FAUCET_DB=$FAUCET_APP_DIR/faucet.db"
 Environment="FAUCET_WALLET_PASS=$FAUCET_PASS"
-ExecStart=$FAUCET_APP_DIR/venv/bin/python app.py
+ExecStart=$FAUCET_APP_DIR/venv/bin/python $FAUCET_APP_DIR/app_faucet.py
 Restart=always
 RestartSec=5
 
@@ -1857,23 +1857,53 @@ faucet_setup_nginx() {
     clear
     echo -e "\n${BOLD}${CYAN}── 05-3) 6) Setup nginx ──${RESET}\n"
 
+    # ── Install nginx if missing ───────────────────────────────────────────────
     if ! command -v nginx &>/dev/null; then
-        die "nginx not installed. Install it first."; return
-    fi
-    if [[ ! -d "$FAUCET_WEB_DIR" ]]; then
-        die "Web files not deployed — run option 3 first."; return
+        info "nginx not found — installing..."
+        apt-get install -y nginx \
+            || { die "apt-get install nginx failed. Run as root."; return; }
+        success "nginx installed."
     fi
 
-    local domain; domain=$(faucet_read_conf "subdomain" "")
-    if [[ -z "$domain" ]]; then
-        die "Subdomain not configured — run option 2 first."; return
+    # ── Install certbot if missing ─────────────────────────────────────────────
+    if ! command -v certbot &>/dev/null; then
+        info "certbot not found — installing..."
+        apt-get install -y certbot python3-certbot-nginx \
+            || warn "certbot install failed — SSL setup will be skipped."
     fi
+
+    if [[ ! -d "$FAUCET_WEB_DIR" ]]; then
+        die "Web files not deployed — run option 5 first."; return
+    fi
+
+    # ── Subdomain: read from config, confirm or update ─────────────────────────
+    local domain; domain=$(faucet_read_conf "subdomain" "")
+    echo ""
+    if [[ -n "$domain" ]]; then
+        echo -e "  ${BOLD}Domain from Configure step:${RESET} ${GREEN}$domain${RESET}"
+        echo -ne "  Use this domain? [Enter to confirm / type new domain]: "
+        read -r new_domain || true
+        if [[ -n "$new_domain" && "$new_domain" != "$domain" ]]; then
+            domain="$new_domain"
+            faucet_write_conf_key "subdomain" "$domain"
+            success "Domain updated to: $domain"
+        fi
+    else
+        echo -ne "  Domain not set in Configure. Enter domain now: "
+        read -r domain || true
+        if [[ -z "$domain" ]]; then
+            die "Domain required — set it in option 4) Configure first."; return
+        fi
+        faucet_write_conf_key "subdomain" "$domain"
+        success "Domain saved: $domain"
+    fi
+    echo ""
 
     local port; port=$(faucet_read_conf "service_port" "3004")
     local email
-    echo -ne "Let's Encrypt email: "
+    echo -ne "Let's Encrypt email (Enter to skip SSL): "
     read -r email || true
-    [[ -z "$email" ]] && warn "No email entered — SSL setup skipped." && email=""
+    [[ -z "$email" ]] && warn "No email entered — SSL cert will not be requested." && email=""
 
     info "Writing nginx config → $FAUCET_NGINX_CONF"
     mkdir -p /var/www/letsencrypt
@@ -1934,12 +1964,32 @@ NGINX
 
     ln -sf "$FAUCET_NGINX_CONF" "/etc/nginx/sites-enabled/grin-faucet" 2>/dev/null || true
 
+    # ── nginx log rotation (5 days / 5 MB) ────────────────────────────────────
+    cat > /etc/logrotate.d/nginx-grin-faucet << 'LOGROTATE'
+/var/log/nginx/grin-faucet-access.log
+/var/log/nginx/grin-faucet-error.log {
+    daily
+    rotate 5
+    size 5M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    sharedscripts
+    postrotate
+        [ -f /var/run/nginx.pid ] && kill -USR1 $(cat /var/run/nginx.pid) 2>/dev/null || true
+    endscript
+}
+LOGROTATE
+    success "nginx logrotate config written (5 days / 5 MB)"
+
     if nginx -t 2>/dev/null; then
         systemctl reload nginx
         success "nginx configured and reloaded."
     else
-        warn "nginx config test failed — SSL certs may not exist yet."
-        warn "Run certbot after DNS is pointing here."
+        warn "nginx config test failed — SSL certs may not exist yet (normal before certbot runs)."
+        warn "nginx will load correctly after certbot issues the certificate."
+        systemctl enable nginx 2>/dev/null || true
     fi
 
     # SSL
@@ -2030,7 +2080,7 @@ faucet_wallet_address() {
     faucet_ensure_defaults
     local addr; addr=$(faucet_read_conf "wallet_address" "")
     local wallet_dir; wallet_dir=$(faucet_read_conf "wallet_dir" "$FAUCET_WALLET_DIR")
-    local wallet_bin="$wallet_dir/grin-wallet"
+    local wallet_bin="$wallet_dir/grin-wallet-faucet-bin"
 
     echo -e "  ${BOLD}Stored address:${RESET}"
     echo -e "  ──────────────────────────────────────────────────────────────"

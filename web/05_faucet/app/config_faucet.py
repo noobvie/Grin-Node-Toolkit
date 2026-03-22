@@ -1,19 +1,19 @@
 """
-config.py — Load and update /opt/grin/conf/grin_faucet.json
+config_faucet.py — Load and update /opt/grin/conf/grin_faucet.json
 """
 
 import json
 import os
 
 CONF_PATH = os.environ.get("FAUCET_CONF", "/opt/grin/conf/grin_faucet.json")
-PASS_PATH = os.environ.get("FAUCET_WALLET_PASS", "/opt/grin/faucet/.wallet_pass")
+PASS_PATH = os.environ.get("FAUCET_WALLET_PASS", "/opt/grin/faucet/.wallet_pass_faucet")
 
 DEFAULTS = {
     "faucet_name":          "Grin Testnet Faucet",
     "subdomain":            "",
     "claim_amount_grin":    2.0,
     "claim_window_hours":   24,
-    "wallet_dir":           "/opt/grin/wallet/testnet",
+    "wallet_dir":           "/opt/grin/wallet/testnet_faucet",
     "wallet_port":          13415,
     "service_port":         3004,
     "finalize_timeout_min": 5,

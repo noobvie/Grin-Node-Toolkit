@@ -1,5 +1,5 @@
 """
-db.py — SQLite schema and helpers for the Grin Testnet Faucet.
+db_faucet.py — SQLite schema and helpers for the Grin Testnet Faucet.
 
 DB path: /opt/grin/faucet/faucet.db  (overridden by DB_PATH env var)
 

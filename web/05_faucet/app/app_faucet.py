@@ -1,5 +1,5 @@
 """
-app.py — Grin Testnet Faucet — Flask application
+app_faucet.py — Grin Testnet Faucet — Flask application
 =========================================================
 
 Endpoints:
@@ -21,9 +21,9 @@ from datetime import datetime, timedelta, timezone
 
 from flask import Flask, jsonify, request, send_file, abort
 
-import config as cfg_mod
-import db
-import wallet as w
+import config_faucet as cfg_mod
+import db_faucet as db
+import wallet_faucet as w
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 

@@ -1,20 +1,20 @@
 """
-wallet.py — grin-wallet CLI integration for the testnet faucet.
+wallet_faucet.py — grin-wallet CLI integration for the testnet faucet.
 
-All commands use --floonet (testnet). The wallet binary is expected at:
-    <cfg["wallet_dir"]>/grin-wallet
+All commands use --testnet. The wallet binary is expected at:
+    <cfg["wallet_dir"]>/grin-wallet-faucet-bin
 
-Password is read from /opt/grin/faucet/.wallet_pass (600 perms).
+Password is read from /opt/grin/faucet/.wallet_pass_faucet (600 perms).
 """
 
 import os
 import re
 import subprocess
-from config import get_wallet_password
+from config_faucet import get_wallet_password
 
 
 def _bin(cfg: dict) -> str:
-    return os.path.join(cfg["wallet_dir"], "grin-wallet")
+    return os.path.join(cfg["wallet_dir"], "grin-wallet-faucet-bin")
 
 
 def _run(cmd: list, cwd: str, timeout: int = 60) -> subprocess.CompletedProcess:
@@ -29,7 +29,7 @@ def _run(cmd: list, cwd: str, timeout: int = 60) -> subprocess.CompletedProcess:
 
 def _base_cmd(cfg: dict) -> list:
     password = get_wallet_password()
-    cmd = [_bin(cfg), "--floonet"]
+    cmd = [_bin(cfg), "--testnet"]
     if password:
         cmd += ["-p", password]
     return cmd

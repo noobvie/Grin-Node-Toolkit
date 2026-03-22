@@ -1636,16 +1636,6 @@ faucet_install() {
     fi
     success "python3 $(python3 --version 2>&1 | awk '{print $2}') found."
 
-    # On Debian/Ubuntu, python3-venv is a separate package per Python version
-    # (e.g. python3.12-venv) and is not installed even when python3 is present.
-    if ! python3 -m venv --help &>/dev/null 2>&1; then
-        local _pyver; _pyver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        local _venv_pkg="python3.${_pyver}-venv"
-        info "venv module missing. Installing: $_venv_pkg python3-pip"
-        apt-get install -y "$_venv_pkg" python3-pip \
-            || { die "Failed to install $_venv_pkg. Run as root."; return; }
-    fi
-
     # Create app directory and copy source files
     info "Creating $FAUCET_APP_DIR ..."
     mkdir -p "$FAUCET_APP_DIR"
@@ -1659,10 +1649,19 @@ faucet_install() {
         pause; return
     fi
 
-    # Create virtualenv and install Python deps
+    # Create virtualenv — on Debian/Ubuntu, python3-venv is a separate per-version package
+    # (e.g. python3.12-venv). python3 -m venv --help returns 0 even when the package is
+    # missing, so we try first and install + retry on failure.
     info "Creating Python virtualenv at $FAUCET_APP_DIR/venv ..."
-    python3 -m venv "$FAUCET_APP_DIR/venv" \
-        || { die "venv creation failed."; return; }
+    if ! python3 -m venv "$FAUCET_APP_DIR/venv" 2>/dev/null; then
+        local _pyver; _pyver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        local _venv_pkg="python${_pyver}-venv"
+        info "venv failed — installing: $_venv_pkg python3-pip"
+        apt-get install -y "$_venv_pkg" python3-pip \
+            || { die "Failed to install $_venv_pkg. Run as root."; return; }
+        python3 -m venv "$FAUCET_APP_DIR/venv" \
+            || { die "venv creation failed after installing $_venv_pkg."; return; }
+    fi
 
     info "Installing Python requirements ..."
     "$FAUCET_APP_DIR/venv/bin/pip" install --quiet \
@@ -2129,10 +2128,20 @@ faucet_show_menu_status() {
     fi
 
     local _wallet_session="grin-wallet-testnet-faucet"
-    if tmux has-session -t "$_wallet_session" 2>/dev/null; then
-        echo -e "  ${BOLD}Wallet${RESET}      : ${GREEN}● listening${RESET}  ${DIM}(tmux: $_wallet_session)${RESET}"
+    if [[ ! -x "$FAUCET_WALLET_BIN" ]]; then
+        echo -e "  ${BOLD}Wallet${RESET}      : ${RED}✗ not installed${RESET}  ${DIM}⚠ run option 1) Setup wallet${RESET}"
+    elif [[ ! -f "$FAUCET_WALLET_DIR/grin-wallet.toml" ]] \
+      || [[ ! -f "$FAUCET_WALLET_DIR/.foreign_api_secret" ]] \
+      || [[ ! -f "$FAUCET_WALLET_DIR/.owner_api_secret" ]] \
+      || [[ ! -d "$FAUCET_WALLET_DIR/wallet_data" ]]; then
+        echo -e "  ${BOLD}Wallet${RESET}      : ${RED}✗ not initialized${RESET}  ${DIM}⚠ run option 1) Setup wallet${RESET}"
+    elif tmux has-session -t "$_wallet_session" 2>/dev/null \
+      && ss -tlnp 2>/dev/null | grep -q ":13415 "; then
+        echo -e "  ${BOLD}Wallet${RESET}      : ${GREEN}● listening${RESET}  ${DIM}(tmux: $_wallet_session, port 13415)${RESET}"
+    elif tmux has-session -t "$_wallet_session" 2>/dev/null; then
+        echo -e "  ${BOLD}Wallet${RESET}      : ${YELLOW}starting…${RESET}  ${DIM}(tmux: $_wallet_session — port 13415 not open yet)${RESET}"
     else
-        echo -e "  ${BOLD}Wallet${RESET}      : ${YELLOW}not listening${RESET}  ${DIM}⚠ required — run option 2) in this menu${RESET}"
+        echo -e "  ${BOLD}Wallet${RESET}      : ${YELLOW}not listening${RESET}  ${DIM}⚠ run option 2) Wallet listening${RESET}"
     fi
     echo ""
 
@@ -2214,17 +2223,17 @@ faucet_menu() {
         read -r faucet_choice || true
 
         case "${faucet_choice,,}" in
-            1) faucet_setup_wallet ;;
-            2) faucet_start_listener ;;
-            3) faucet_install ;;
-            4) faucet_configure ;;
-            5) faucet_deploy_web ;;
-            6) faucet_setup_nginx ;;
-            7) faucet_service_control ;;
-            8) faucet_status_screen ;;
-            9) faucet_wallet_address ;;
-            l) faucet_view_logs ;;
-            del) faucet_reset_db ;;
+            1) faucet_setup_wallet    || true ;;
+            2) faucet_start_listener  || true ;;
+            3) faucet_install         || true ;;
+            4) faucet_configure       || true ;;
+            5) faucet_deploy_web      || true ;;
+            6) faucet_setup_nginx     || true ;;
+            7) faucet_service_control || true ;;
+            8) faucet_status_screen   || true ;;
+            9) faucet_wallet_address  || true ;;
+            l) faucet_view_logs       || true ;;
+            del) faucet_reset_db      || true ;;
             0) break ;;
             "") continue ;;
             *) warn "Invalid option." ; sleep 1 ;;

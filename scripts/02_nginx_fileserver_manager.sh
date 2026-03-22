@@ -634,12 +634,13 @@ get_domain() {
     [[ "$mode" == "mainnet" ]] && _mn_detected=$(suggest_grin_web_dir 3414 2>/dev/null) || true
 
     echo ""
-    echo -e "${YELLOW}[DNS]${NC} Point your A record to this server. If using Cloudflare, change"
-    echo -e "      from ${RED}Proxied${NC} to ${GREEN}DNS only${NC} — makes your node become a DNSSeed and avoids"
-    echo -e "      certbot / Let's Encrypt issues."
-    echo ""
     case "$mode" in
         mainnet)
+            echo -e "${YELLOW}[DNS]${NC} Point your A record to this server."
+            echo -e "      If using Cloudflare, set to ${GREEN}DNS only${NC} (grey cloud) — ${BOLD}keep it permanent.${RESET}"
+            echo -e "      ${DIM}Reason: Proxied hides your real IP. Grin peers connect directly to your IP"
+            echo -e "      to use your node as a DNSSeed. Cloudflare proxy breaks this.${RESET}"
+            echo ""
             echo -e "  ${YELLOW}Required subdomain prefix for mainnet:${NC}"
             case "$_mn_detected" in
                 */fullmain)  echo -e "    fullmain.yourdomain.com   — full archive node" ;;
@@ -649,10 +650,19 @@ get_domain() {
             esac
             ;;
         testnet)
+            echo -e "${YELLOW}[DNS]${NC} Point your A record to this server."
+            echo -e "      If using Cloudflare, set to ${GREEN}DNS only${NC} (grey cloud) — ${BOLD}keep it permanent.${RESET}"
+            echo -e "      ${DIM}Reason: Proxied hides your real IP. Grin peers connect directly to your IP"
+            echo -e "      to use your node as a DNSSeed. Cloudflare proxy breaks this.${RESET}"
+            echo ""
             echo -e "  ${YELLOW}Required subdomain prefix for testnet:${NC}"
             echo -e "    prunetest.yourdomain.com  — pruned node"
             ;;
         *)
+            echo -e "${YELLOW}[DNS]${NC} Point your A record to this server."
+            echo -e "      If using Cloudflare, set to ${GREEN}DNS only${NC} (grey cloud) for certbot to work."
+            echo -e "      ${DIM}You can switch back to Proxied after the SSL certificate is issued.${RESET}"
+            echo ""
             echo -e "  Enter any valid domain or subdomain (e.g., files.yourdomain.com)"
             echo -e "  ${YELLOW}Note:${NC} fullmain / prunemain / prunetest prefixes are reserved for Grin options 1 & 2."
             ;;

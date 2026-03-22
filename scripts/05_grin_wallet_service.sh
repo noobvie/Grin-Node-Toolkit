@@ -1487,32 +1487,38 @@ faucet_setup_wallet() {
 
     echo ""
     local wallet_pass wallet_pass2
-    read -rs -p "  Enter wallet password: " wallet_pass; echo ""
-    read -rs -p "  Confirm wallet password: " wallet_pass2; echo ""
+    while true; do
+        read -rs -p "  Enter wallet password (min 1 char): " wallet_pass; echo ""
+        if [[ -z "$wallet_pass" ]]; then
+            warn "Password cannot be empty. Try again."; continue
+        fi
+        read -rs -p "  Confirm wallet password: " wallet_pass2; echo ""
+        if [[ "$wallet_pass" != "$wallet_pass2" ]]; then
+            error "Passwords do not match. Try again."; unset wallet_pass2; continue
+        fi
+        break
+    done
     echo ""
 
-    if [[ "$wallet_pass" != "$wallet_pass2" ]]; then
-        error "Passwords do not match."; unset wallet_pass wallet_pass2; return
-    fi
-    if [[ -z "$wallet_pass" ]]; then
-        warn "Password cannot be empty."; unset wallet_pass wallet_pass2; return
-    fi
-
+    local seed_file="$FAUCET_APP_DIR/seed-faucet.txt"
     info "Initializing faucet wallet (--testnet) — write down the seed phrase!"
-    echo -e "  ${DIM}Seed phrase will also be saved to $FAUCET_WALLET_DIR/seed-faucet.txt${RESET}\n"
+    echo -e "  ${DIM}Seed phrase (last 6 lines) will be saved to $seed_file${RESET}\n"
 
-    local seed_file="$FAUCET_WALLET_DIR/seed-faucet.txt"
+    local tmp_init="/tmp/grin_faucet_init_$$"
     cd "$FAUCET_WALLET_DIR" && "$FAUCET_WALLET_BIN" \
         --testnet -p "$wallet_pass" init -h \
-        2>&1 | tee "$seed_file"
+        2>&1 | tee "$tmp_init"
     local rc=${PIPESTATUS[0]}
     echo ""
 
     if [[ $rc -ne 0 || ! -f "$FAUCET_WALLET_DIR/grin-wallet.toml" ]]; then
         warn "Init may have failed (exit code $rc). Check output above."
-        unset wallet_pass wallet_pass2; return
+        rm -f "$tmp_init"; unset wallet_pass wallet_pass2; return
     fi
 
+    mkdir -p "$FAUCET_APP_DIR"
+    tail -6 "$tmp_init" > "$seed_file"
+    rm -f "$tmp_init"
     chmod 600 "$seed_file"
     success "Seed phrase saved to $seed_file (mode 600)"
 

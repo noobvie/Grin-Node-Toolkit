@@ -1,0 +1,27 @@
+/* naruto.css — Dark bg with orange accent, slightly Japanese feel */
+:root {
+  --bg-body:      #1a0a00;
+  --bg-card:      #221200;
+  --bg-card2:     #2a1800;
+  --text:         #f5e6cc;
+  --text-dim:     #a07040;
+  --accent:       #f57c00;
+  --accent2:      #e65c00;
+  --border:       #4a2800;
+  --btn-bg:       #f57c00;
+  --btn-text:     #fff;
+  --btn-hover:    #e65c00;
+  --input-bg:     #130800;
+  --input-border: #4a2800;
+  --error-color:  #ff4444;
+  --ok-color:     #66bb6a;
+  --warn-color:   #ffcc02;
+  --font-mono:    'Courier New', Courier, monospace;
+  --font-sans:    system-ui, -apple-system, sans-serif;
+  --shadow:       0 2px 16px rgba(245,124,0,.1);
+}
+
+.site-title { text-shadow: 0 0 10px rgba(245,124,0,.5); }
+.card { box-shadow: 0 0 12px rgba(245,124,0,.06); }
+.testnet-banner { background: #4a2800; border-color: #f57c00; color: var(--grin-yellow); }
+header { border-bottom: 1px solid #4a2800; }

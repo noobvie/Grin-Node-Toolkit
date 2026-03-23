@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin | Grin Pool ツ</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" id="theme-css" href="/css/themes/matrix.css">
+</head>
+<body class="theme-matrix">
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title"><a href="/">Grin Pool <span>ツ</span></a></div>
+      <nav class="nav-links">
+        <a href="/">Home</a>
+        <a href="/dashboard.html" id="nav-dashboard">Dashboard</a>
+        <a href="/admin/" class="active" id="nav-admin">Admin</a>
+        <a href="/login.html" id="nav-login" style="display:none">Login</a>
+        <span id="nav-user" style="display:none"></span>
+      </nav>
+      <div class="theme-switcher">
+        <button class="theme-btn" data-theme="matrix">Matrix</button>
+        <button class="theme-btn" data-theme="dark">Dark</button>
+        <button class="theme-btn" data-theme="light">Light</button>
+        <button class="theme-btn" data-theme="naruto">Naruto</button>
+        <button class="theme-btn" data-theme="japan">Japan ✿</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="testnet-banner" id="testnet-banner" style="display:none">
+  ⚠ TESTNET — These coins have no real value
+</div>
+
+<main>
+  <div class="container">
+    <section>
+      <h2>Admin Dashboard</h2>
+
+      <!-- KPI cards -->
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">Total Users</div>
+          <div class="kpi-value" id="kpi-users">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Active Miners</div>
+          <div class="kpi-value" id="kpi-miners">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Pool Hashrate</div>
+          <div class="kpi-value" id="kpi-hashrate">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Unclaimed Balance ツ</div>
+          <div class="kpi-value" id="kpi-unclaimed">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Pending Withdrawals</div>
+          <div class="kpi-value" id="kpi-pending">—</div>
+        </div>
+      </div>
+
+      <!-- Quick actions -->
+      <h2>Quick Actions</h2>
+      <div class="action-grid">
+        <a href="/admin/users.html" class="action-btn">
+          <span class="action-icon">👥</span>
+          Manage Users
+        </a>
+        <a href="/admin/miners.html" class="action-btn">
+          <span class="action-icon">⛏</span>
+          View Miners
+        </a>
+        <a href="/admin/payments.html" class="action-btn">
+          <span class="action-icon">💸</span>
+          Pending Payments
+        </a>
+        <a href="/admin/health.html" class="action-btn">
+          <span class="action-icon">🩺</span>
+          System Health
+        </a>
+      </div>
+
+      <!-- Recent withdrawals -->
+      <h2 style="margin-top:1rem;">Recent Withdrawals</h2>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>User</th>
+                <th>Amount ツ</th>
+                <th>Status</th>
+                <th>Tx ID</th>
+              </tr>
+            </thead>
+            <tbody id="recent-tbody">
+              <tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <p>Grin Pool ツ — Admin Panel</p>
+  </div>
+</footer>
+
+<script src="/js/api.js"></script>
+<script src="/js/theme.js"></script>
+<script>
+// ── Admin auth check ───────────────────────────────────────────────────────
+(function () {
+  if (!API.isLoggedIn()) { window.location.href = '/login.html'; return; }
+  try {
+    const payload = API.decodePayload();
+    if (!payload || !payload.is_admin) { window.location.href = '/login.html'; return; }
+    document.getElementById('nav-user').style.display = '';
+    document.getElementById('nav-user').innerHTML =
+      `<span class="nav-username">${payload.sub}</span> <a href="#" onclick="API.clearTokens();window.location='/login.html'">Logout</a>`;
+  } catch (e) { window.location.href = '/login.html'; }
+
+  fetch('/api/pool/stats').then(r => r.json()).then(d => {
+    if (d.network === 'testnet') {
+      document.getElementById('testnet-banner').style.display = '';
+      document.title = '[TESTNET] ' + document.title;
+    }
+    const el = document.querySelector('.site-title a');
+    if (el && d.pool_name) el.childNodes[0].textContent = d.pool_name + ' ';
+  }).catch(() => {});
+})();
+
+function fmtGrin(v) { return (v || 0).toFixed(4); }
+function fmtHashrate(gps) {
+  if (!gps) return '—';
+  if (gps >= 1000) return (gps / 1000).toFixed(2) + ' KG/s';
+  return gps.toFixed(2) + ' G/s';
+}
+function fmtDate(iso) { return iso ? new Date(iso).toLocaleString() : '—'; }
+function escHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+const STATUS_BADGE = {
+  waiting_finalize: '<span class="badge badge-warn">Awaiting Finalize</span>',
+  finalized:        '<span class="badge badge-ok">Finalized</span>',
+  completed:        '<span class="badge badge-ok">Completed</span>',
+  failed:           '<span class="badge badge-error">Failed</span>',
+  expired:          '<span class="badge badge-dim">Expired</span>',
+};
+
+async function loadAdminDashboard() {
+  try {
+    const d = await API.get('/api/admin/dashboard');
+    document.getElementById('kpi-users').textContent    = d.total_users    ?? '—';
+    document.getElementById('kpi-miners').textContent   = d.active_miners  ?? '—';
+    document.getElementById('kpi-hashrate').textContent = fmtHashrate(d.pool_hashrate_gps);
+    document.getElementById('kpi-unclaimed').textContent = fmtGrin(d.unclaimed_balance);
+    document.getElementById('kpi-pending').textContent  = d.pending_withdrawals ?? '—';
+  } catch (e) {}
+
+  try {
+    const items = await API.get('/api/admin/withdrawals?limit=10');
+    const tbody = document.getElementById('recent-tbody');
+    if (!items || !items.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No withdrawals yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = items.map(w => {
+      const badge = STATUS_BADGE[w.status] || `<span class="badge badge-dim">${escHtml(w.status)}</span>`;
+      const txId  = w.tx_slate_id
+        ? `<span class="truncate mono" title="${escHtml(w.tx_slate_id)}">${escHtml(w.tx_slate_id.slice(0,16))}…</span>`
+        : '—';
+      return `<tr>
+        <td>${fmtDate(w.created_at)}</td>
+        <td>${escHtml(w.username || w.user_id)}</td>
+        <td class="mono">${fmtGrin(w.amount)}</td>
+        <td>${badge}</td>
+        <td>${txId}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {}
+}
+
+document.addEventListener('DOMContentLoaded', loadAdminDashboard);
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+/* matrix.css — Green phosphor on black */
+:root {
+  --bg-body:      #000000;
+  --bg-card:      #050505;
+  --bg-card2:     #0a0a0a;
+  --text:         #c0ffc0;
+  --text-dim:     #4a8a4a;
+  --accent:       #00ff41;
+  --accent2:      #00cc33;
+  --border:       #0d2e0d;
+  --btn-bg:       #00ff41;
+  --btn-text:     #000;
+  --btn-hover:    #00cc33;
+  --input-bg:     #040d04;
+  --input-border: #0d2e0d;
+  --error-color:  #ff4444;
+  --ok-color:     #00ff41;
+  --warn-color:   #f2c94c;
+  --font-mono:    'Courier New', Courier, monospace;
+  --font-sans:    'Courier New', Courier, monospace;
+  --shadow:       0 2px 20px rgba(0,255,65,.08);
+}
+
+.site-title { text-shadow: 0 0 8px rgba(0,255,65,.6); }
+.card { box-shadow: 0 0 12px rgba(0,255,65,.05); }
+.slatepack-box { color: #00ff41; }

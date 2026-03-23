@@ -13,7 +13,8 @@
 #   1/3)  nginx HTTPS reverse proxy  (/v2/foreign, JSON-RPC)
 #           · Exposes the read-only Foreign API — Owner API stays private
 #           · CORS enabled so any website can query from a browser
-#           · Rate-limited (10 r/s, burst 20) to protect the node
+#           · Rate-limited (10 r/s, burst 20) and connection-limited (20 conn/IP)
+#           · Returns HTTP 429 on excess; active from proxy setup, no status page required
 #
 #   5/7)  Live status page  (https://domain/)
 #           · HTML dashboard: height, difficulty, supply, hash, versions
@@ -199,21 +200,29 @@ _nginx_domain() {
     grep -m1 'server_name' "$1" 2>/dev/null | awk '{print $2}' | tr -d ';'
 }
 
-# Add limit_req_zone for grin_api into the http {} block of nginx.conf.
-# Idempotent — only adds if our marker comment is absent.
+# Add rate-limit/connection-limit zones into the http {} block of nginx.conf.
+# Idempotent — skips if grin_conn zone already present.
+# Upgrades gracefully — removes any old single-zone block before inserting the new one.
 _nginx_add_limit_req_zone() {
     local nginx_conf="/etc/nginx/nginx.conf"
-    grep -q "zone=grin_api" "$nginx_conf" 2>/dev/null && return 0
+    grep -q "zone=grin_conn" "$nginx_conf" 2>/dev/null && return 0
     python3 - "$nginx_conf" << 'PYEOF'
 import sys, re
 conf_file = sys.argv[1]
 with open(conf_file) as fh:
     txt = fh.read()
-if 'zone=grin_api' in txt:
+if 'zone=grin_conn' in txt:
     sys.exit(0)
+# Remove any old single-zone block left by a previous version of this script
+txt = re.sub(
+    r'\n    # Grin Node Toolkit[^\n]*\n(?:    [^\n]+\n){1,6}',
+    '\n', txt)
 insert = (
-    '\n    # Grin Node Toolkit — rate-limit zone for /v2/foreign\n'
-    '    limit_req_zone $binary_remote_addr zone=grin_api:10m rate=10r/s;\n'
+    '\n    # Grin Node Toolkit — rate/connection-limit zones for public API\n'
+    '    limit_req_zone  $binary_remote_addr zone=grin_api:10m  rate=10r/s;\n'
+    '    limit_conn_zone $binary_remote_addr zone=grin_conn:10m;\n'
+    '    limit_req_status  429;\n'
+    '    limit_req_log_level warn;\n'
 )
 idx = txt.find('http {')
 if idx == -1:
@@ -238,7 +247,7 @@ conf_file = sys.argv[1]
 with open(conf_file) as fh:
     txt = fh.read()
 txt = re.sub(
-    r'\n    # Grin Node Toolkit[^\n]*rate-limit zone[^\n]*\n    limit_req_zone[^\n]*zone=grin_api[^\n]*\n',
+    r'\n    # Grin Node Toolkit[^\n]*\n(?:    [^\n]+\n){1,6}',
     '\n', txt)
 with open(conf_file, 'w') as fh:
     fh.write(txt)
@@ -296,14 +305,9 @@ NEW_LOC = (
     '        return 403;\n'
     '    }')
 
-OLD_PROXY_TAIL = '        proxy_read_timeout 60;\n    }'
-NEW_PROXY_TAIL = '        proxy_read_timeout 60;\n        limit_req          zone=grin_api burst=20 nodelay;\n    }'
-
 if action == 'enable':
     if OLD_LOC in txt:
         txt = txt.replace(OLD_LOC, NEW_LOC)
-    if OLD_PROXY_TAIL in txt and NEW_PROXY_TAIL not in txt:
-        txt = txt.replace(OLD_PROXY_TAIL, NEW_PROXY_TAIL)
 elif action == 'disable':
     if NEW_LOC in txt:
         txt = txt.replace(NEW_LOC, OLD_LOC)
@@ -348,6 +352,7 @@ REST_BLOCK = (
     '        add_header Access-Control-Allow-Origin  "*" always;\n'
     '        add_header Access-Control-Allow-Methods "GET, OPTIONS" always;\n'
     '        add_header Cache-Control        "public, max-age=60" always;\n'
+    '        limit_req  zone=grin_api burst=30 nodelay;\n'
     '        try_files $uri =404;\n'
     '    }\n'
     '\n'
@@ -507,12 +512,19 @@ _enable_node_api_nginx() {
     # If present, nginx -t would fail with "unknown directive stream".
     _remove_legacy_stream_config
 
+    # Ensure rate/connection-limit zones are in nginx.conf before writing the site config.
+    _nginx_add_limit_req_zone
+
     # Write HTTP-only config first — certbot will add the SSL block itself.
     # Writing SSL cert paths before certbot runs causes nginx -t to fail.
     cat > "$nginx_conf" << EOF
 server {
     listen 80;
     server_name $domain;
+
+    # Dedicated log files — rotated by /etc/logrotate.d/$nginx_symlink (5 days / 5 MB)
+    access_log /var/log/nginx/$nginx_symlink.access.log;
+    error_log  /var/log/nginx/$nginx_symlink.error.log warn;
 
     # Public V2 Foreign API — JSON-RPC (no auth required for callers):
     #   get_tip, get_version, get_block, get_header, get_kernel,
@@ -543,6 +555,9 @@ ${_proxy_auth_header}
         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto \$scheme;
         proxy_read_timeout 60;
+        client_max_body_size 8k;
+        limit_req  zone=grin_api  burst=20 nodelay;
+        limit_conn grin_conn 20;
     }
 
     # Block all other paths — owner/admin API stays private
@@ -551,6 +566,25 @@ ${_proxy_auth_header}
     }
 }
 EOF
+
+    # Deploy logrotate config — 5-day / 5 MB rotation for dedicated API log files
+    cat > "/etc/logrotate.d/$nginx_symlink" << 'LREOF'
+/var/log/nginx/NGINX_SYMLINK.access.log /var/log/nginx/NGINX_SYMLINK.error.log {
+    daily
+    rotate 5
+    size 5M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    sharedscripts
+    postrotate
+        nginx -s reopen 2>/dev/null || true
+    endscript
+}
+LREOF
+    sed -i "s/NGINX_SYMLINK/$nginx_symlink/g" "/etc/logrotate.d/$nginx_symlink"
+    log "logrotate config deployed: /etc/logrotate.d/$nginx_symlink"
 
     ln -sf "$nginx_conf" "/etc/nginx/sites-enabled/$nginx_symlink" 2>/dev/null || true
 
@@ -653,8 +687,10 @@ _disable_node_api_nginx() {
         log "Status page files removed (cascade from proxy removal): $deploy_dir"
     fi
 
+    _nginx_remove_limit_req_zone
     rm -f "/etc/nginx/sites-enabled/$nginx_symlink"
     rm -f "$nginx_conf"
+    rm -f "/etc/logrotate.d/$nginx_symlink"
 
     if nginx -t; then
         systemctl reload nginx

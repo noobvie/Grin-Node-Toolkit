@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Miners | Grin Pool ツ</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" id="theme-css" href="/css/themes/matrix.css">
+</head>
+<body class="theme-matrix">
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title"><a href="/">Grin Pool <span>ツ</span></a></div>
+      <nav class="nav-links">
+        <a href="/">Home</a>
+        <a href="/dashboard.html" id="nav-dashboard">Dashboard</a>
+        <a href="/admin/" id="nav-admin">Admin</a>
+        <a href="/admin/miners.html" class="active">Miners</a>
+        <a href="/login.html" id="nav-login" style="display:none">Login</a>
+        <span id="nav-user" style="display:none"></span>
+      </nav>
+      <div class="theme-switcher">
+        <button class="theme-btn" data-theme="matrix">Matrix</button>
+        <button class="theme-btn" data-theme="dark">Dark</button>
+        <button class="theme-btn" data-theme="light">Light</button>
+        <button class="theme-btn" data-theme="naruto">Naruto</button>
+        <button class="theme-btn" data-theme="japan">Japan ✿</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="testnet-banner" id="testnet-banner" style="display:none">
+  ⚠ TESTNET — These coins have no real value
+</div>
+
+<main>
+  <div class="container">
+    <section>
+      <h2>
+        All Miners
+        <span id="miner-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
+      </h2>
+
+      <div style="display:flex;gap:.6rem;align-items:center;margin-bottom:.8rem;flex-wrap:wrap;">
+        <input type="text" id="search-input" placeholder="Filter by worker or username…"
+               style="max-width:280px;" oninput="filterMiners()">
+        <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;margin-bottom:0;">
+          <input type="checkbox" id="online-only" onchange="filterMiners()"> Online only
+        </label>
+      </div>
+
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Worker</th>
+                <th>User</th>
+                <th>Online</th>
+                <th>Hashrate (1h)</th>
+                <th>Hashrate (24h)</th>
+                <th>Last Seen</th>
+                <th>First Seen</th>
+              </tr>
+            </thead>
+            <tbody id="miners-tbody">
+              <tr class="loading-row"><td colspan="7"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <p>Grin Pool ツ — Admin Panel</p>
+  </div>
+</footer>
+
+<script src="/js/api.js"></script>
+<script src="/js/theme.js"></script>
+<script>
+// ── Admin auth check ───────────────────────────────────────────────────────
+let _allMiners = [];
+
+(function () {
+  if (!API.isLoggedIn()) { window.location.href = '/login.html'; return; }
+  try {
+    const payload = API.decodePayload();
+    if (!payload || !payload.is_admin) { window.location.href = '/login.html'; return; }
+    document.getElementById('nav-user').style.display = '';
+    document.getElementById('nav-user').innerHTML =
+      `<span class="nav-username">${payload.sub}</span> <a href="#" onclick="API.clearTokens();window.location='/login.html'">Logout</a>`;
+  } catch (e) { window.location.href = '/login.html'; }
+
+  fetch('/api/pool/stats').then(r => r.json()).then(d => {
+    if (d.network === 'testnet') {
+      document.getElementById('testnet-banner').style.display = '';
+      document.title = '[TESTNET] ' + document.title;
+    }
+    const el = document.querySelector('.site-title a');
+    if (el && d.pool_name) el.childNodes[0].textContent = d.pool_name + ' ';
+  }).catch(() => {});
+})();
+
+function escHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtHashrate(gps) {
+  if (gps === null || gps === undefined) return '—';
+  if (gps >= 1000) return (gps / 1000).toFixed(2) + ' KG/s';
+  return gps.toFixed(4) + ' G/s';
+}
+function timeAgo(iso) {
+  if (!iso) return '—';
+  const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (diff < 60)    return diff + 's ago';
+  if (diff < 3600)  return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+function fmtDate(iso) {
+  return iso ? new Date(iso).toLocaleDateString() : '—';
+}
+
+// ── Load miners ─────────────────────────────────────────────────────────────
+async function loadMiners() {
+  try {
+    const data = await API.get('/api/admin/miners');
+    _allMiners = data || [];
+    const online = _allMiners.filter(m => m.online).length;
+    document.getElementById('miner-summary').textContent =
+      `${_allMiners.length} total, ${online} online`;
+    renderMiners(_allMiners);
+  } catch (err) {
+    document.getElementById('miners-tbody').innerHTML =
+      `<tr class="empty-row"><td colspan="7">Failed to load: ${escHtml(err.message)}</td></tr>`;
+  }
+}
+
+function filterMiners() {
+  const q          = document.getElementById('search-input').value.toLowerCase();
+  const onlineOnly = document.getElementById('online-only').checked;
+  let filtered = _allMiners;
+  if (onlineOnly) filtered = filtered.filter(m => m.online);
+  if (q) {
+    filtered = filtered.filter(m =>
+      (m.worker   || '').toLowerCase().includes(q) ||
+      (m.username || '').toLowerCase().includes(q)
+    );
+  }
+  renderMiners(filtered);
+}
+
+function renderMiners(miners) {
+  const tbody = document.getElementById('miners-tbody');
+  if (!miners.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No miners found.</td></tr>';
+    return;
+  }
+
+  // Group by user for display — sort: online first, then by username
+  const sorted = [...miners].sort((a, b) => {
+    if (a.online !== b.online) return a.online ? -1 : 1;
+    return (a.username || '').localeCompare(b.username || '');
+  });
+
+  tbody.innerHTML = sorted.map(m => `
+    <tr class="${m.online ? 'online-row' : ''}">
+      <td>
+        <span class="dot ${m.online ? 'dot-green' : 'dot-red'}"></span>
+        <span class="mono">${escHtml(m.worker)}</span>
+      </td>
+      <td>${escHtml(m.username || m.user_id || '—')}</td>
+      <td>
+        ${m.online
+          ? '<span class="badge badge-ok">Online</span>'
+          : '<span class="badge badge-dim">Offline</span>'}
+      </td>
+      <td class="mono">${fmtHashrate(m.hashrate_1h_gps)}</td>
+      <td class="mono">${fmtHashrate(m.hashrate_24h_gps)}</td>
+      <td>${timeAgo(m.last_seen)}</td>
+      <td>${fmtDate(m.first_seen || m.created_at)}</td>
+    </tr>
+  `).join('');
+}
+
+document.addEventListener('DOMContentLoaded', loadMiners);
+// Auto-refresh every 30s
+setInterval(loadMiners, 30000);
+</script>
+</body>
+</html>

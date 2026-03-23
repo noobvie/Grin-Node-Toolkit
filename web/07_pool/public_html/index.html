@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Home | Grin Pool ツ</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" id="theme-css" href="/css/themes/matrix.css">
+</head>
+<body class="theme-matrix">
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title"><a href="/">Grin Pool <span>ツ</span></a></div>
+      <nav class="nav-links">
+        <a href="/" class="active">Home</a>
+        <a href="/dashboard.html" id="nav-dashboard" style="display:none">Dashboard</a>
+        <a href="/withdraw.html"  id="nav-withdraw"  style="display:none">Withdraw</a>
+        <a href="/admin/"         id="nav-admin"     style="display:none">Admin</a>
+        <a href="/login.html"     id="nav-login">Login</a>
+        <span id="nav-user" style="display:none"></span>
+      </nav>
+      <div class="theme-switcher">
+        <button class="theme-btn" data-theme="matrix">Matrix</button>
+        <button class="theme-btn" data-theme="dark">Dark</button>
+        <button class="theme-btn" data-theme="light">Light</button>
+        <button class="theme-btn" data-theme="naruto">Naruto</button>
+        <button class="theme-btn" data-theme="japan">Japan ✿</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="testnet-banner" id="testnet-banner" style="display:none">
+  ⚠ TESTNET — These coins have no real value
+</div>
+
+<main>
+  <div class="container">
+
+    <!-- Live stats bar -->
+    <div class="stats-bar" id="stats-bar">
+      <div class="stat-item">
+        <div class="stat-label">Pool Hashrate</div>
+        <div class="stat-value" id="stat-hashrate">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">Network Miners</div>
+        <div class="stat-value" id="stat-net-miners">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">Active Miners</div>
+        <div class="stat-value" id="stat-active-miners">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">Locations</div>
+        <div class="stat-value" id="stat-locations">—</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">Last Block</div>
+        <div class="stat-value" id="stat-last-block">—</div>
+      </div>
+    </div>
+
+    <!-- Mining instructions -->
+    <section>
+      <h2>Start Mining Grin ツ</h2>
+      <div class="card">
+        <div class="mine-grid">
+          <div class="mine-box">
+            <h3>iPollo G1 Mini</h3>
+            <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:.6rem;">Set your miner stratum settings:</p>
+            <label>Stratum URL</label>
+            <div class="code-block" id="stratum-url-ipollo">stratum+tcp://pool.example.com:3333</div>
+            <label style="margin-top:.6rem;">Worker Name</label>
+            <div class="code-block">username.1</div>
+            <p style="font-size:.8rem;color:var(--text-dim);margin-top:.5rem;">
+              Use <code>username.N</code> format — replace <code>N</code> with worker number (1, 2, 3…)
+            </p>
+          </div>
+          <div class="mine-box">
+            <h3>Other Miners</h3>
+            <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:.6rem;">Generic Cuckatoo32 stratum:</p>
+            <label>Stratum URL</label>
+            <div class="code-block" id="stratum-url-generic">stratum+tcp://pool.example.com:3333</div>
+            <label style="margin-top:.6rem;">Worker / Login</label>
+            <div class="code-block">username.workerN</div>
+            <p style="font-size:.8rem;color:var(--text-dim);margin-top:.5rem;">
+              Password field can be anything (e.g. <code>x</code>).
+            </p>
+          </div>
+        </div>
+        <div style="text-align:center;margin-top:1.2rem;">
+          <a href="/login.html" class="btn btn-big">Register &amp; Start Mining</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Recent blocks -->
+    <section>
+      <h2>Recent Blocks</h2>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Height</th>
+                <th>Reward ツ</th>
+                <th>Location</th>
+              </tr>
+            </thead>
+            <tbody id="blocks-tbody">
+              <tr class="loading-row"><td colspan="4"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <p id="footer-pool-name">Grin Pool ツ</p>
+    <p style="margin-top:.4rem;">
+      <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a>
+      &nbsp;·&nbsp;
+      <a href="https://github.com/mimblewimble/grin" target="_blank" rel="noopener">GitHub</a>
+      &nbsp;·&nbsp;
+      <a href="/login.html">Login</a>
+    </p>
+  </div>
+</footer>
+
+<script src="/js/api.js"></script>
+<script src="/js/theme.js"></script>
+<script src="/js/matrix.js"></script>
+<script>
+// ── Nav + Testnet init ─────────────────────────────────────────────────────
+(function () {
+  const token = localStorage.getItem('pool-access-token');
+  if (token) {
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      document.getElementById('nav-login').style.display = 'none';
+      document.getElementById('nav-dashboard').style.display = '';
+      document.getElementById('nav-withdraw').style.display  = '';
+      document.getElementById('nav-user').style.display = '';
+      document.getElementById('nav-user').innerHTML =
+        `<span class="nav-username">${payload.sub}</span> <a href="#" onclick="API.clearTokens();window.location='/login.html'">Logout</a>`;
+      if (payload.is_admin) document.getElementById('nav-admin').style.display = '';
+    } catch (e) {}
+  }
+
+  fetch('/api/pool/stats').then(r => r.json()).then(d => {
+    if (d.network === 'testnet') {
+      document.getElementById('testnet-banner').style.display = '';
+      document.title = '[TESTNET] ' + document.title;
+    }
+    const el = document.querySelector('.site-title a');
+    if (el && d.pool_name) el.childNodes[0].textContent = d.pool_name + ' ';
+    const fp = document.getElementById('footer-pool-name');
+    if (fp && d.pool_name) fp.textContent = d.pool_name + ' ツ';
+
+    // Populate stratum URLs
+    if (d.stratum_host) {
+      const port = d.stratum_port || 3333;
+      const url  = 'stratum+tcp://' + d.stratum_host + ':' + port;
+      ['stratum-url-ipollo', 'stratum-url-generic'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = url;
+      });
+    }
+
+    renderStats(d);
+  }).catch(() => {});
+})();
+
+// ── Stats ──────────────────────────────────────────────────────────────────
+function fmtHashrate(gps) {
+  if (gps === undefined || gps === null) return '—';
+  if (gps >= 1000) return (gps / 1000).toFixed(2) + ' KG/s';
+  return gps.toFixed(2) + ' G/s';
+}
+
+function renderStats(d) {
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val ?? '—';
+  };
+  set('stat-hashrate',      fmtHashrate(d.pool_hashrate_gps));
+  set('stat-net-miners',    d.network_miners ?? '—');
+  set('stat-active-miners', d.active_miners  ?? '—');
+  set('stat-locations',     d.locations      ?? '—');
+  set('stat-last-block',    d.last_block_height ? '#' + d.last_block_height : '—');
+}
+
+async function loadStats() {
+  try {
+    const d = await API.get('/api/pool/stats');
+    renderStats(d);
+  } catch (_) {}
+}
+
+// ── Recent blocks ──────────────────────────────────────────────────────────
+function timeAgo(isoStr) {
+  if (!isoStr) return '—';
+  const diff = Math.floor((Date.now() - new Date(isoStr)) / 1000);
+  if (diff < 60)   return diff + 's ago';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
+async function loadBlocks() {
+  const tbody = document.getElementById('blocks-tbody');
+  try {
+    const blocks = await API.get('/api/pool/blocks?limit=10');
+    if (!blocks || !blocks.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="4">No blocks found yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = blocks.map(b => `
+      <tr>
+        <td>${timeAgo(b.found_at || b.timestamp)}</td>
+        <td><a href="https://grincoin.org/block/${b.height}" target="_blank" rel="noopener">${b.height}</a></td>
+        <td class="mono">${b.reward ? b.reward.toFixed(4) : '—'}</td>
+        <td>${b.location || '—'}</td>
+      </tr>
+    `).join('');
+  } catch (_) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Could not load blocks.</td></tr>';
+  }
+}
+
+loadBlocks();
+
+// Auto-refresh every 60 s
+setInterval(() => { loadStats(); loadBlocks(); }, 60000);
+</script>
+</body>
+</html>

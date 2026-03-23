@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Grin Testnet Faucet — Free Testnet GRIN Coins</title>
+  <meta name="description" content="Free testnet GRIN faucet. Claim 2 GRIN every 24 hours to test your Grin wallet and learn the slatepack transaction process. No sign-up required.">
+  <meta name="keywords" content="grin faucet, testnet grin, grin testnet faucet, free grin coins, grin cryptocurrency testnet, grin-wallet test, slatepack tutorial">
+  <link rel="canonical" href=""><!-- set at deploy time -->
+
+  <!-- Open Graph -->
+  <meta property="og:title"       content="Grin Testnet Faucet — Free Testnet GRIN Coins">
+  <meta property="og:description" content="Claim 2 testnet GRIN every 24 hours. Practice the slatepack transaction process. No sign-up required.">
+  <meta property="og:type"        content="website">
+
+  <!-- JSON-LD -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "Grin Testnet Faucet",
+    "description": "Free testnet GRIN faucet for learning slatepack transactions",
+    "applicationCategory": "Finance",
+    "operatingSystem": "Any"
+  }
+  </script>
+
+  <link rel="stylesheet" href="/css/faucet.css">
+  <link rel="stylesheet" id="theme-css" href="/css/themes/matrix.css">
+</head>
+
+<body class="theme-matrix">
+<!-- theme-css and body class are overridden by theme.js on load -->
+
+<!-- ── Header ──────────────────────────────────────────────────────────────── -->
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title">Grin Testnet Faucet <span>ツ</span></div>
+      <div class="theme-switcher" role="navigation" aria-label="Theme selector">
+        <button class="theme-btn" data-theme="matrix"  title="Matrix theme">Matrix</button>
+        <button class="theme-btn" data-theme="warcraft" title="Warcraft Dark theme">Warcraft</button>
+        <button class="theme-btn" data-theme="win98"   title="Windows 98 theme">Win98</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ── Live stats bar ──────────────────────────────────────────────────────── -->
+<div class="container">
+  <div class="stats-bar" role="region" aria-label="Faucet statistics">
+    <div class="stat-item">
+      <div class="stat-label">Faucet Balance</div>
+      <div class="stat-value" id="stat-balance">…</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-label">Claims Today</div>
+      <div class="stat-value" id="stat-today">…</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-label">Total Claims</div>
+      <div class="stat-value" id="stat-total">…</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-label">Your Next Claim</div>
+      <div class="stat-value" id="stat-next">…</div>
+    </div>
+  </div>
+</div>
+
+<main class="container">
+
+  <!-- ── Claim section ──────────────────────────────────────────────────────── -->
+  <section aria-label="Claim testnet GRIN">
+    <h2>Claim 2 Testnet GRIN</h2>
+    <div class="card">
+      <!-- Step 1 — Enter address -->
+      <div id="step-1" class="step">
+        <label for="claim-address">Your Grin Address (grin1... or tgrin1...)</label>
+        <input type="text" id="claim-address" placeholder="grin1..." autocomplete="off" spellcheck="false">
+        <p class="error-msg" id="claim-error"></p>
+        <button class="btn btn-full" id="claim-btn">Claim 2 testnet GRIN</button>
+        <p style="margin-top:.7rem;font-size:.8rem;color:var(--text-dim);">
+          2 GRIN per address per 24 hours &nbsp;·&nbsp; No sign-up required &nbsp;·&nbsp;
+          This simulates exactly how <strong>pool mainnet withdrawals</strong> work.
+        </p>
+      </div>
+
+      <!-- Step 2 — Copy slatepack -->
+      <div id="step-2" class="step">
+        <div class="step-header">
+          <div class="step-num">2</div>
+          <div class="step-title">Copy this slatepack into your wallet</div>
+        </div>
+        <div class="countdown-row">
+          <span class="countdown-label">Expires in:</span>
+          <span class="countdown" id="slatepack-countdown">5:00</span>
+        </div>
+        <div class="slatepack-box" id="slatepack-text"></div>
+        <button class="btn btn-outline btn-sm" id="copy-slatepack-btn">Copy Slatepack</button>
+
+        <div class="info-box" style="margin-top:1rem;">
+          <strong>CLI:</strong> <code>grin-wallet --floonet receive</code> → paste slatepack → press Enter → copy the response<br>
+          <strong>Grim:</strong> Receive tab → paste slatepack → confirm → copy response
+        </div>
+
+        <div style="margin-top:1.2rem;">
+          <div class="step-header">
+            <div class="step-num">3</div>
+            <div class="step-title">Paste your wallet's response below</div>
+          </div>
+          <label for="response-slate">Response slatepack from your wallet</label>
+          <textarea id="response-slate" placeholder="Paste BEGINSLATEPACK...ENDSLATEPACK here" rows="5"></textarea>
+          <p class="error-msg" id="finalize-error"></p>
+          <button class="btn btn-full" id="finalize-btn">Finalize Transaction</button>
+        </div>
+      </div>
+
+      <!-- Step 3 — Confirmed -->
+      <div id="step-3" class="step">
+        <div class="success-box">
+          <h3 style="color:var(--ok-color);margin-bottom:.5rem;">Transaction Submitted!</h3>
+          <p>Your <strong id="confirm-amount"></strong> will be confirmed after ~10 blocks (~10 minutes).</p>
+          <p style="margin-top:.5rem;font-size:.85rem;color:var(--text-dim);">
+            Tx Slate ID: <code id="confirm-tx-id"></code>
+          </p>
+        </div>
+        <button class="btn btn-outline btn-full" id="new-claim-btn" style="margin-top:1rem;">
+          New Claim
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Donate section ─────────────────────────────────────────────────────── -->
+  <section aria-label="Donate to keep the faucet running">
+    <h2>Help Keep This Faucet Running</h2>
+    <div class="card">
+      <p style="margin-bottom:1rem;font-size:.9rem;color:var(--text-dim);">
+        Send testnet GRIN to this address to contribute to the faucet balance.
+        Donations appear automatically — no sign-up needed.
+      </p>
+      <div class="donate-addr-row">
+        <span class="donate-addr" id="donate-address">Loading…</span>
+        <button class="btn btn-outline btn-sm" id="copy-donate-addr-btn">Copy</button>
+      </div>
+      <div class="donate-qr" id="donate-qr">
+        <img src="/api/qr" alt="Faucet wallet QR code" width="140" height="140" loading="lazy">
+      </div>
+      <p style="margin-top:.8rem;font-size:.85rem;color:var(--text-dim);">
+        Current balance: <strong id="donate-balance">…</strong>
+      </p>
+    </div>
+  </section>
+
+  <!-- ── How it works ───────────────────────────────────────────────────────── -->
+  <section aria-label="How to use the Grin testnet faucet">
+    <h2>How It Works</h2>
+
+    <!-- Section A — Setup wallet -->
+    <h3>A) Set up your testnet wallet</h3>
+    <div class="tabs" role="tablist">
+      <button class="tab-btn" data-tab="cli"  role="tab">grin-wallet CLI</button>
+      <button class="tab-btn" data-tab="grim" role="tab">Grim (GUI)</button>
+    </div>
+
+    <div id="tab-cli" class="tab-panel card" role="tabpanel">
+      <ol class="how-steps">
+        <li data-n="1">
+          <strong>Download grin-wallet</strong><br>
+          Get the latest release from
+          <a href="https://github.com/mimblewimble/grin-wallet/releases" target="_blank" rel="noopener">
+            github.com/mimblewimble/grin-wallet/releases
+          </a>.
+          No blockchain download required.
+        </li>
+        <li data-n="2">
+          <strong>Initialize a testnet wallet</strong><br>
+          <code>grin-wallet --floonet init</code><br>
+          Set a password when prompted. Save your seed phrase somewhere safe.
+        </li>
+        <li data-n="3">
+          <strong>Connect to a public testnet node (no sync needed)</strong><br>
+          Edit <code>grin-wallet.toml</code> — find <code>check_node_api_http_addr</code> and set:<br>
+          <code>check_node_api_http_addr = "http://prunetest.grin.money:13413"</code><br>
+          This connects to a public pruned testnet node — ready in seconds, no chain download.
+        </li>
+        <li data-n="4">
+          <strong>Verify connection</strong><br>
+          <code>grin-wallet --floonet info</code><br>
+          You should see your balance and "Node version" — you are connected.
+        </li>
+        <li data-n="5">
+          <strong>Get your address</strong><br>
+          <code>grin-wallet --floonet address</code><br>
+          Copy the <code>tgrin1...</code> address and paste it into the claim form above.
+        </li>
+      </ol>
+    </div>
+
+    <div id="tab-grim" class="tab-panel card" role="tabpanel">
+      <ol class="how-steps">
+        <li data-n="1">
+          <strong>Download Grim</strong><br>
+          Get the latest release from
+          <a href="https://github.com/GetGrin/grim/releases" target="_blank" rel="noopener">
+            github.com/GetGrin/grim/releases
+          </a>
+          (Windows / macOS / Linux).
+        </li>
+        <li data-n="2">
+          <strong>First launch setup wizard</strong><br>
+          · Select network: <strong>Testnet</strong><br>
+          · Node connection: <strong>External node</strong><br>
+          · Node URL: <code>http://prunetest.grin.money:13413</code><br>
+          · Create new wallet → set password → save your seed phrase
+        </li>
+        <li data-n="3">
+          <strong>Ready</strong><br>
+          Grim connects automatically — no sync wait. Open the Receive tab to get your address.
+        </li>
+      </ol>
+    </div>
+
+    <!-- Section B — Claim steps -->
+    <h3 style="margin-top:1.5rem;">B) Claim from this faucet</h3>
+    <div class="card">
+      <ol class="how-steps">
+        <li data-n="1">Enter your Grin address above and click <strong>Claim 2 testnet GRIN</strong>.</li>
+        <li data-n="2">Copy the <strong>SLATEPACK</strong> text shown on screen.</li>
+        <li data-n="3">
+          Paste slatepack into your wallet:<br>
+          <strong>CLI:</strong> <code>grin-wallet --floonet receive</code> → paste → press Enter → wallet outputs a response slatepack<br>
+          <strong>Grim:</strong> Receive tab → paste slatepack → confirm → copy the response
+        </li>
+        <li data-n="4">Copy the <strong>response slatepack</strong> from your wallet.</li>
+        <li data-n="5">Paste the response back into the field on this page and click <strong>Finalize</strong>.</li>
+        <li data-n="6">Wait ~10 minutes (~10 blocks) — coins confirmed in your wallet.</li>
+      </ol>
+    </div>
+
+    <!-- Section C — Why testnet -->
+    <h3 style="margin-top:1.5rem;">C) Why testnet? Why this matters</h3>
+    <div class="card">
+      <div class="info-box">
+        Testnet GRIN has no real value — it is a safe sandbox for learning.
+      </div>
+      <ul style="list-style:none;padding:0;font-size:.9rem;">
+        <li style="padding:.4rem 0;border-bottom:1px solid var(--border);">
+          This interactive 3-step transaction process (slatepack) is
+          <strong>identical to how real Grin withdrawals work</strong> on mining pools and exchanges.
+        </li>
+        <li style="padding:.4rem 0;border-bottom:1px solid var(--border);">
+          Once you complete a faucet claim, you understand Grin transactions end-to-end.
+        </li>
+        <li style="padding:.4rem 0;border-bottom:1px solid var(--border);">
+          The public pruned testnet node (<code>prunetest.grin.money:13413</code>)
+          means you do not need to download the full blockchain.
+        </li>
+        <li style="padding:.4rem 0;">
+          Links:
+          <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a> &nbsp;·&nbsp;
+          <a href="https://github.com/mimblewimble/grin-wallet/releases" target="_blank" rel="noopener">grin-wallet releases</a> &nbsp;·&nbsp;
+          <a href="https://github.com/GetGrin/grim/releases" target="_blank" rel="noopener">Grim releases</a>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+</main>
+
+<!-- ── Footer ──────────────────────────────────────────────────────────────── -->
+<footer>
+  <div class="container">
+    <p>
+      Grin Testnet Faucet &nbsp;·&nbsp;
+      <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a> &nbsp;·&nbsp;
+      <a href="https://github.com/mimblewimble/grin" target="_blank" rel="noopener">GitHub</a>
+      &nbsp;·&nbsp; Testnet GRIN has no real value.
+    </p>
+    <p style="margin-top:.4rem;">
+      Keywords: grin faucet · testnet grin · grin testnet faucet · free grin coins · slatepack tutorial
+    </p>
+  </div>
+</footer>
+
+<script src="/js/matrix.js"></script>
+<script src="/js/theme.js"></script>
+<script src="/js/faucet.js"></script>
+
+<!-- Dynamic theme CSS injection (theme.js will update the link href) -->
+<script>
+(function(){
+  const link = document.getElementById("theme-css");
+  const THEME_CSSS = {
+    matrix:  "/css/themes/matrix.css",
+    warcraft:"/css/themes/warcraft.css",
+    win98:   "/css/themes/win98.css",
+  };
+  // Listen for body class changes to swap CSS file
+  const saved = localStorage.getItem("grin-faucet-theme") || "matrix";
+  if (link && THEME_CSSS[saved]) link.href = THEME_CSSS[saved];
+
+  // Patch applyTheme to also swap CSS link
+  const _origApply = window.applyTheme;
+  document.addEventListener("DOMContentLoaded", function() {
+    document.querySelectorAll("[data-theme]").forEach(btn => {
+      btn.addEventListener("click", function() {
+        const t = this.dataset.theme;
+        if (link && THEME_CSSS[t]) link.href = THEME_CSSS[t];
+      });
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

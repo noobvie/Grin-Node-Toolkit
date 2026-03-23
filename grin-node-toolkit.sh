@@ -277,7 +277,7 @@ show_main_menu() {
     echo -e "${BOLD}  Addons${RESET} "
     echo ""
     echo -e "  ${GREEN}4${RESET}) Publish Grin Node API" 
-    echo -e "  ${GREEN}5${RESET}) Grin Wallet Services"
+    echo -e "  ${GREEN}5${RESET}) Grin Wallet Services (Being developed)"
     echo -e "  ${GREEN}6${RESET}) Global Grin Health"
     echo -e "  ${GREEN}7${RESET}) Grin Mining Services (Being developed)"
     echo -e "  ${GREEN}8${RESET}) Admin & Maintenance"

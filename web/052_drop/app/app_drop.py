@@ -21,9 +21,9 @@ from datetime import datetime, timedelta, timezone
 
 from flask import Flask, jsonify, request, send_file, abort
 
-import config_faucet as cfg_mod
-import db_faucet as db
-import wallet_faucet as w
+import config_drop as cfg_mod
+import db_drop as db
+import wallet_drop as w
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 

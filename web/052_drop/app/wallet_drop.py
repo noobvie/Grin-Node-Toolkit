@@ -10,7 +10,7 @@ Password is read from /opt/grin/faucet/.wallet_pass_faucet (600 perms).
 import os
 import re
 import subprocess
-from config_faucet import get_wallet_password
+from config_drop import get_wallet_password
 
 
 def _bin(cfg: dict) -> str:

@@ -17,6 +17,17 @@ This toolkit can turn your Grin node into a community 'master' node — sharing 
 My goal is simple: **make it easy for anyone to join the Grin network and keep their node alive.**
 
 ---
+## Demo sites were created by this toolkit semi-automatically:
+Archived full node mainnet: https://fullmain.grin.money 
+Prune node mainnet: https://prunemain.grin.money
+Prune node testnet: https://prunetest.grin.money
+Grin explorer (clone of grincoin.org) https://scan.grin.money
+Publish API mainnet: https://api.grin.money
+Publish API testnet: https://testapi.grin.money
+Grin Global Health mainnet: https://world.grin.money
+...
+
+---
 
 ## Requirements
 
@@ -101,29 +112,17 @@ Grin Node Toolkit
 │   │   ├── 3) Enable Node API via nginx  (testnet port 13413, /v2/foreign, HTTPS)
 │   │   ├── 4) Remove nginx proxy         (testnet)
 │   │   └── 0) Back
-│   ├── 5) Grin Wallet Service           → 05_grin_wallet_service.sh
-│   │   ├── Network Selection
-│   │   │   ├── 1) Mainnet wallet
-│   │   │   ├── 2) Testnet wallet
-│   │   │   └── 3) Testnet Faucet              ← standalone Flask app (port 3004)
-│   │   ├── Wallet menu (per network)
-│   │   │   ├── a) Download & install grin-wallet  (mainnet → /opt/grin/wallet/mainnet | testnet → /opt/grin/wallet/testnet)
-│   │   │   ├── b) Initialize wallet               (grin-wallet init — runs in tmux for password prompt)
-│   │   │   ├── c) Start wallet listener           (grin-wallet listen, tmux)
-│   │   │   ├── d) Enable Wallet Foreign API       (port 3415)
-│   │   │   ├── e) Disable Wallet Foreign API
-│   │   │   └── w) Web Wallet Interface
-│   │   └── Faucet submenu (option 3)
-│   │       ├── 0) Guided Full Setup
-│   │       ├── 1) Install faucet              (Flask venv + SQLite + systemd)
-│   │       ├── 2) Configure faucet            (subdomain, wallet dir, address, password)
-│   │       ├── 3) Deploy web files            (→ /var/www/grin-faucet/)
-│   │       ├── 4) Setup nginx                 (vhost + SSL + rate limiting)
-│   │       ├── 5) Start / Stop service        (grin-faucet, port 3004)
-│   │       ├── 6) Faucet status               (service, balance, claims, logs)
-│   │       ├── 7) Wallet address              (show/update donate address)
-│   │       ├── L) View logs
-│   │       └── DEL) Reset faucet DB
+│   ├── 5) Grin Wallet Services          → 05_grin_wallet_service.sh (hub launcher)
+│   │   ├── Status overview              (shows installed / running services per network)
+│   │   ├── 1) Private Web Wallet        → 051_grin_private_web_wallet.sh
+│   │   │   └── Network → install deps → deploy → nginx → SSL → Basic Auth → firewall → status
+│   │   ├── 2) Grin Drop                 → 052_grin_drop.sh
+│   │   │   └── Network → wallet setup → listener → install → configure → nginx → start/stop → status
+│   │   ├── 3) WooCommerce Gateway       → 053_grin_woocommerce.sh
+│   │   │   └── install bridge → install WP plugin → configure → start/stop → status
+│   │   ├── 4) Payment Pro               → 054_grin_payment_pro.sh  (coming soon)
+│   │   ├── 5) Public Web Wallet         → 055_grin_public_web_wallet.sh  (coming soon)
+│   │   └── 0) Back to main menu
 │   ├── 6) Global Grin Health            → 06_global_grin_health.sh
 │   │   ├── A) Network Stats + Peer Map
 │   │   │   ├── A1) Install (Python collector, Chart.js, Leaflet)
@@ -275,21 +274,37 @@ Manages Stratum Mining and the self-hosted Pool Web Interface — all from an al
 - **Guided setup** — option 0 runs install → configure → deploy → nginx → admin in sequence
 - Testnet UI: permanent yellow `⚠ TESTNET` banner, `[TESTNET]` in page title, "Inject Balance" button visible
 
-### 5. Grin Wallet Service — `05_grin_wallet_service.sh`
+### 5. Grin Wallet Services — `05_grin_wallet_service.sh` (hub) + `051`–`055`
 
-- **Download & init** — installs `grin-wallet` binary to `/opt/grin/wallet/mainnet` or `/opt/grin/wallet/testnet`; runs `grin-wallet init` in tmux (proper TTY for password prompt); auto-patches `check_node_api_http_addr` in `grin-wallet.toml`
-- **Listen** — starts `grin-wallet listen` in a named tmux session; auto-detects running node
-- **Publish** — toggles `owner_api_include_foreign`, configures firewall (port 3415), optional nginx reverse proxy with SSL
+`05_grin_wallet_service.sh` is a **hub launcher** — it shows the live status of all installed wallet services and dispatches to each sub-script. Each sub-script is fully self-contained with its own wallet binary, config, and systemd service.
 
-**3) Testnet Faucet — standalone Flask app (port 3004):**
-- Completely independent of the wallet and pool — separate DB, service, and nginx vhost
-- Interactive 3-step slatepack claim: user enters `tgrin1...` address → receives slatepack → finalizes in wallet → coins arrive; identical flow to mainnet pool withdrawals (educational design)
-- Rate limiting: 2 testnet GRIN per address per 24h; 5-min finalize timeout with auto-cancel
-- **Donate section** — faucet wallet address (copyable + QR code from `/api/qr`) lets anyone fund the faucet; balance updates automatically from `grin-wallet --floonet info`
-- **How it works** — tabbed CLI/Grim wallet setup guide; connects users to `prunetest.grin.money:13413` (public pruned testnet node — no chain download)
-- **Activity log** — structured events (`CLAIM_INIT`, `SLATEPACK_OK`, `FINALIZE_OK`, `CONFIRMED`, `TIMEOUT`, `WALLET_FAIL`, `RATE_LIMIT`) written to `/opt/grin/logs/grin-faucet-activity.log`
-- **3 CSS themes** — Matrix (canvas rain), Warcraft Dark (purple/gold glow), Win98 (beveled windows)
-- **SEO** — JSON-LD `WebApplication` schema, Open Graph tags, keywords: "grin faucet", "testnet grin", "slatepack tutorial"
+> **Tip:** Install each service on its own dedicated server to avoid port conflicts and config collisions. Each server can run both mainnet and testnet simultaneously.
+
+**051 — Private Web Wallet** (`051_grin_private_web_wallet.sh`)
+- Personal browser UI for your own wallet — nginx + PHP + Basic Auth (owner-only, not public)
+- Mainnet wallet at `/opt/grin/webwallet/mainnet/`, testnet at `/opt/grin/webwallet/testnet/`
+- Setup: install deps → deploy web files → configure nginx → SSL → Basic Auth → firewall
+
+**052 — Grin Drop** (`052_grin_drop.sh`)
+- Configurable GRIN giveaway + donation portal — Flask + systemd
+- **Giveaway mode**: interactive 3-step slatepack claim, rate-limited per address per 24h
+- **Donation mode**: shows wallet address + QR code for receiving GRIN
+- Both modes are independently toggleable; works on testnet (default) or mainnet
+- Testnet service: `grin-drop-test` (port 3004); mainnet: `grin-drop-main` (port 3005)
+
+**053 — WooCommerce Payment Gateway** (`053_grin_woocommerce.sh`)
+- Grin payment plugin for WordPress / WooCommerce
+- Stateless Flask bridge (`grin-wallet-bridge.py`) on `127.0.0.1:3006` (mainnet) / `3007` (testnet)
+- Slatepack invoice flow: buyer copies invoice slate → pastes response → auto-confirmed
+
+**054 — Payment Pro** (`054_grin_payment_pro.sh`) — *coming soon*
+- Grin payment processor for Shopify, custom APIs, and other non-WooCommerce platforms
+
+**055 — Public Web Wallet** (`055_grin_public_web_wallet.sh`) — *coming soon*
+- Self-custodial, client-side wallet — all crypto runs in the browser via WebAssembly
+- Private keys never leave the user's device; `wallet_data` stored in browser IndexedDB (AES-GCM / PBKDF2)
+- Server role: nginx static file host only — no keys, no wallet processes, scales to any number of users
+- Inspired by [mwcwallet.com](https://mwcwallet.com/) and [MWC-Wallet-Standalone](https://github.com/NicolasFlamel1/MWC-Wallet-Standalone)
 
 ### 6. Global Grin Health — `06_global_grin_health.sh`
 
@@ -347,7 +362,7 @@ A self-hosted network monitoring dashboard with two components that share a sing
 - Lists `*grin*` nginx configs (enabled, proxy vs fileserver), SSL certificate expiry with color-coded days remaining
 
 **5 · Firewall Rules Audit**
-- UFW / iptables review for all 8 Grin ports; flags wallet ports (3415/13415) as dangerous if exposed
+- UFW / iptables review for all Grin ports; flags wallet ports (3415/13415) as dangerous if exposed; flags bridge ports (3006/3007) as localhost-only
 
 **6 · Top 20 Bandwidth Consumers**
 - Parses nginx access logs; shows top IPs by bytes served; block (UFW) or rate-limit (iptables hashlimit) from the results
@@ -387,7 +402,12 @@ grin-node-toolkit/
 │   ├── 02_nginx_fileserver_manager.sh    # Feature 2 : nginx management
 │   ├── 03_grin_share_chain_data.sh       # Feature 3 : chain data sharing + schedule
 │   ├── 04_grin_node_foreign_api.sh       # Feature 4 : node services (Node API)
-│   ├── 05_grin_wallet_service.sh         # Feature 5 : wallet service
+│   ├── 05_grin_wallet_service.sh         # Feature 5 : wallet services hub launcher
+│   ├── 051_grin_private_web_wallet.sh    # Feature 5a: personal browser wallet UI
+│   ├── 052_grin_drop.sh                  # Feature 5b: GRIN giveaway + donation portal
+│   ├── 053_grin_woocommerce.sh           # Feature 5c: WooCommerce payment gateway
+│   ├── 054_grin_payment_pro.sh           # Feature 5d: payment pro (coming soon)
+│   ├── 055_grin_public_web_wallet.sh     # Feature 5e: public WASM wallet (coming soon)
 │   ├── 06_global_grin_health.sh          # Feature 6 : Global Grin Health menu
 │   ├── 06_collector.py                   # Feature 6 : Python stats + peer collector
 │   ├── 07_grin_mining_services.sh        # Feature 7 : stratum mining services
@@ -399,21 +419,31 @@ grin-node-toolkit/
     │   ├── public_html/                  # Feature 4 : Node API status page assets
     │   ├── rest-collector.py             # REST API JSON collector
     │   └── node-collector.py             # Node data collector
-    ├── 05_faucet/                        # Feature 5b: Testnet Faucet (standalone)
-    │   ├── app/                          # Flask backend (deployed to /opt/grin/faucet/)
-    │   │   ├── app.py                    # Flask routes + activity logger
-    │   │   ├── db.py                     # SQLite schema + helpers
-    │   │   ├── wallet.py                 # grin-wallet --floonet CLI integration
-    │   │   ├── config.py                 # Reads /opt/grin/conf/grin_faucet.json
+    ├── 051_wallet/                       # Feature 5a: Private Web Wallet
+    │   ├── public_html/                  # PHP proxy + JS + CSS (deployed to /var/www/web-wallet-{main,test}/)
+    │   └── nginx.conf.template           # nginx vhost template
+    ├── 052_drop/                         # Feature 5b: Grin Drop (giveaway + donation)
+    │   ├── app/                          # Flask backend (deployed to /opt/grin/drop-{main,test}/)
+    │   │   ├── app_drop.py               # Flask routes + activity logger
+    │   │   ├── db_drop.py                # SQLite schema + helpers
+    │   │   ├── wallet_drop.py            # grin-wallet CLI integration
+    │   │   ├── config_drop.py            # Reads /opt/grin/drop-{net}/grin_drop.conf
     │   │   └── requirements.txt
-    │   └── public_html/                  # Static frontend (deployed to /var/www/grin-faucet/)
-    │       ├── index.html                # SEO homepage + 3-step claim form
-    │       ├── css/faucet.css            # Base styles + CSS variables
-    │       ├── css/themes/               # matrix.css · warcraft.css · win98.css
-    │       └── js/                       # faucet.js · theme.js · matrix.js
-    ├── 05_wallet/
-    │   ├── public_html/                  # Feature 5a: Web wallet UI assets (PHP proxy, JS, CSS)
-    │   └── nginx.conf.template           # nginx vhost template for web wallet
+    │   └── public_html/                  # Static frontend (deployed to /var/www/grin-drop-{main,test}/)
+    │       ├── index.html                # 3-step claim form + donation section
+    │       ├── css/                      # Base styles + CSS variables + themes
+    │       └── js/                       # drop.js · theme.js · matrix.js
+    ├── 053_woocommerce/                  # Feature 5c: WooCommerce payment gateway
+    │   ├── bridge/                       # Flask bridge (deployed to /opt/grin/woo-{main,test}/)
+    │   │   ├── grin-wallet-bridge.py     # Stateless Flask bridge (127.0.0.1:3006/3007)
+    │   │   └── requirements.txt
+    │   └── wp-plugin/                    # WordPress plugin (copy to wp-content/plugins/)
+    ├── 054_payment_pro/                  # Feature 5d: Payment Pro (coming soon)
+    └── 055_public_wallet/               # Feature 5e: Public WASM Wallet (coming soon)
+        └── public_html/                  # Static HTML/JS/CSS/WASM (deployed to /var/www/grin-public-wallet/)
+            ├── index.html
+            ├── css/
+            └── js/                       # grin-wallet-wasm.js · grin-wallet-wasm.wasm · wallet-ui.js
     ├── 06_stats_map/
     │   └── stats/                        # Feature 6 : Network stats + peer map assets
     │       ├── index.html                # Peer Map (Leaflet 2D map)
@@ -446,17 +476,16 @@ grin-node-toolkit/
 | File | Purpose |
 |------|---------|
 | `/opt/grin/conf/grin_instances_location.conf` | Node install paths (written by `01`, read by `03`/`04`/`08`) |
-| `/opt/grin/conf/grin_wallets_location.conf` | Wallet install paths (written by `05`, read by `08`) |
 | `/opt/grin/conf/grin_share_nginx.conf` | Nginx share settings (written/read by `03`) |
 | `/opt/grin/conf/grin_share_ssh.conf` | SSH share settings (written/read by `03`) |
-| `/opt/grin/conf/grin_web_wallet.conf` | Web wallet deploy settings (written/read by `05`) |
-| `/opt/grin/conf/grin_faucet.json` | Testnet faucet config (written/read by `05` faucet menu) |
 | `/opt/grin/conf/grin_pool.json` | Pool manager mainnet config (written/read by `07` W menu) |
 | `/opt/grin/conf/grin_pool_testnet.json` | Pool manager testnet config (written/read by `07` W menu) |
 | `/opt/grin/conf/host_monitor_port.conf` | Custom hosts for node monitor (`081`) |
 | `/opt/grin/conf/host_monitor_last_state.conf` | Last-known port state for change detection (`081`) |
 | `/opt/grin/conf/mass_deploy.conf` | Fleet server list for mass deployment (`081`) |
 | `/opt/grin/conf/github_repo.conf` | GitHub repo slug override for self-update (optional) |
+| `/opt/grin/webwallet/{mainnet,testnet}/config.conf` | Private web wallet settings (written/read by `051`) |
+| `/opt/grin/drop-{main,test}/grin_drop.conf` | Grin Drop config — domain, modes, claim amount (written/read by `052`) |
 
 **Runtime paths created by option 6 install:**
 
@@ -484,7 +513,10 @@ grin-node-toolkit/
 | 13416 | TCP      | Grin testnet stratum mining server                          |
 | 3002  | HTTP     | Pool manager — mainnet (FastAPI, proxied by nginx)          |
 | 3003  | HTTP     | Pool manager — testnet (FastAPI, proxied by nginx)          |
-| 3004  | HTTP     | Testnet faucet (Flask, proxied by nginx)                    |
+| 3004  | HTTP     | Grin Drop — testnet (Flask, proxied by nginx)               |
+| 3005  | HTTP     | Grin Drop — mainnet (Flask, proxied by nginx)               |
+| 3006  | HTTP     | WooCommerce wallet bridge — mainnet (Flask, localhost only) |
+| 3007  | HTTP     | WooCommerce wallet bridge — testnet (Flask, localhost only) |
 | 80    | HTTP     | nginx (redirects to HTTPS)                                  |
 | 443   | HTTPS    | nginx file server / proxy                                   |
 
@@ -502,12 +534,16 @@ The setup script creates a dedicated directory per node based on its type:
 
 > Full archive mode on testnet is blocked — testnet chain data is too large for a practical full archive setup.
 
-The wallet service uses separate directories per network:
+Each wallet service sub-script manages its own wallet in an isolated directory:
 
-| Network | Directory                   | Wallet config                                        |
-|---------|-----------------------------|------------------------------------------------------|
-| Mainnet | `/opt/grin/wallet/mainnet`  | `/opt/grin/wallet/mainnet/grin-wallet.toml`          |
-| Testnet | `/opt/grin/wallet/testnet`  | `/opt/grin/wallet/testnet/grin-wallet.toml`          |
+| Script | Network | Wallet directory                        |
+|--------|---------|-----------------------------------------|
+| 051 — Private Web Wallet | Mainnet | `/opt/grin/webwallet/mainnet/` |
+| 051 — Private Web Wallet | Testnet | `/opt/grin/webwallet/testnet/` |
+| 052 — Grin Drop          | Mainnet | `/opt/grin/drop-main/wallet/`  |
+| 052 — Grin Drop          | Testnet | `/opt/grin/drop-test/wallet/`  |
+| 053 — WooCommerce bridge | Mainnet | uses existing node wallet (port 3415)   |
+| 053 — WooCommerce bridge | Testnet | uses existing node wallet (port 13415)  |
 
 ---
 

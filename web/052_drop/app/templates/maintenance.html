@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ drop_name }} — Maintenance</title>
+  <meta name="robots" content="noindex, nofollow">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d1117;
+      color: #e0e0e0;
+      font-family: system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 3rem 2.5rem;
+      max-width: 480px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+    }
+    .icon {
+      font-size: 3rem;
+      margin-bottom: 1.2rem;
+      line-height: 1;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #00e676;
+      margin-bottom: 1rem;
+      letter-spacing: 0.02em;
+    }
+    p {
+      color: #8b949e;
+      font-size: 1rem;
+      line-height: 1.7;
+    }
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #f2c94c;
+      margin-right: 6px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+    .footer {
+      margin-top: 2rem;
+      font-size: 0.75rem;
+      color: #484f58;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">⚙</div>
+    <h1>{{ drop_name }}</h1>
+    <p>
+      <span class="status-dot"></span>
+      {{ message }}
+    </p>
+    <div class="footer">Please check back shortly.</div>
+  </div>
+</body>
+</html>

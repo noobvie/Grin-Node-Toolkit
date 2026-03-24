@@ -1,11 +1,12 @@
 """
-db_faucet.py — SQLite schema and helpers for the Grin Testnet Faucet.
+db_drop.py — SQLite schema and helpers for Grin Drop.
 
-DB path: /opt/grin/faucet/faucet.db  (overridden by DB_PATH env var)
+DB path: /opt/grin/drop-<net>/drop.db  (overridden by DROP_DB env var)
 
 Tables:
-  claims — one row per claim attempt (pending, waiting_finalize, confirmed,
-            failed, cancelled)
+  claims    — one row per claim attempt (pending, waiting_finalize, confirmed,
+              failed, cancelled)
+  donations — recorded incoming donations for display / accounting
 """
 
 import os
@@ -13,7 +14,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-DB_PATH = os.environ.get("FAUCET_DB", "/opt/grin/faucet/faucet.db")
+DB_PATH = os.environ.get("DROP_DB", "/opt/grin/drop-test/drop.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS claims (
@@ -31,6 +32,17 @@ CREATE TABLE IF NOT EXISTS claims (
 
 CREATE INDEX IF NOT EXISTS idx_claims_address ON claims(grin_address);
 CREATE INDEX IF NOT EXISTS idx_claims_status  ON claims(status);
+
+CREATE TABLE IF NOT EXISTS donations (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    amount       REAL    NOT NULL,
+    tx_id        TEXT    DEFAULT '',
+    from_address TEXT    DEFAULT '',
+    note         TEXT    DEFAULT '',
+    created_at   TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_donations_created ON donations(created_at);
 """
 
 
@@ -57,7 +69,7 @@ def _connect():
         conn.close()
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -67,7 +79,7 @@ def _row_to_dict(row) -> dict:
     return dict(row) if row else {}
 
 
-# ── Reads ─────────────────────────────────────────────────────────────────────
+# ── Reads — claims ─────────────────────────────────────────────────────────────
 
 def get_claim(claim_id: int) -> dict:
     with _connect() as conn:
@@ -119,7 +131,106 @@ def get_expired_claims() -> list:
     return [_row_to_dict(r) for r in rows]
 
 
-# ── Writes ────────────────────────────────────────────────────────────────────
+def get_total_grin_given() -> float:
+    """Return the total GRIN given out via confirmed claims."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0.0) FROM claims WHERE status = 'confirmed'"
+        ).fetchone()
+    return float(row[0]) if row else 0.0
+
+
+def get_total_grin_received() -> float:
+    """Return the total GRIN recorded in donations."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0.0) FROM donations"
+        ).fetchone()
+    return float(row[0]) if row else 0.0
+
+
+def stats_summary() -> dict:
+    """Return a summary dict for the admin dashboard."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    with _connect() as conn:
+        claims_today = conn.execute(
+            "SELECT COUNT(*) FROM claims WHERE created_at LIKE ? AND status = 'confirmed'",
+            (today + "%",),
+        ).fetchone()[0]
+        claims_total = conn.execute(
+            "SELECT COUNT(*) FROM claims WHERE status = 'confirmed'"
+        ).fetchone()[0]
+        pending_count = conn.execute(
+            "SELECT COUNT(*) FROM claims WHERE status IN ('waiting_finalize', 'pending')"
+        ).fetchone()[0]
+        failed_count = conn.execute(
+            "SELECT COUNT(*) FROM claims WHERE status = 'failed'"
+        ).fetchone()[0]
+        total_given_row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0.0) FROM claims WHERE status = 'confirmed'"
+        ).fetchone()
+        total_received_row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0.0) FROM donations"
+        ).fetchone()
+        donations_count = conn.execute(
+            "SELECT COUNT(*) FROM donations"
+        ).fetchone()[0]
+
+    return {
+        "claims_today":    int(claims_today),
+        "claims_total":    int(claims_total),
+        "pending_count":   int(pending_count),
+        "failed_count":    int(failed_count),
+        "total_given":     float(total_given_row[0]),
+        "total_received":  float(total_received_row[0]),
+        "donations_count": int(donations_count),
+    }
+
+
+def get_claims_paginated(page: int, per_page: int, status_filter: str = "") -> list:
+    """Return a paginated list of claims, optionally filtered by status."""
+    offset = (page - 1) * per_page
+    with _connect() as conn:
+        if status_filter:
+            rows = conn.execute(
+                """SELECT * FROM claims WHERE status = ?
+                   ORDER BY id DESC LIMIT ? OFFSET ?""",
+                (status_filter, per_page, offset),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM claims ORDER BY id DESC LIMIT ? OFFSET ?",
+                (per_page, offset),
+            ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def count_claims_filtered(status_filter: str = "") -> int:
+    """Return total count of claims, optionally filtered by status."""
+    with _connect() as conn:
+        if status_filter:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM claims WHERE status = ?",
+                (status_filter,),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT COUNT(*) FROM claims").fetchone()
+    return int(row[0]) if row else 0
+
+
+# ── Reads — donations ──────────────────────────────────────────────────────────
+
+def get_donations_list(limit: int = 50) -> list:
+    """Return the most recent donations."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM donations ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+# ── Writes — claims ────────────────────────────────────────────────────────────
 
 def create_claim(grin_address: str, amount: float, timeout_min: int) -> int:
     """Insert a new pending claim. Returns the new claim id."""
@@ -169,3 +280,16 @@ def cancel_expired(claim_id: int) -> None:
             "UPDATE claims SET status = 'cancelled' WHERE id = ? AND status = 'waiting_finalize'",
             (claim_id,),
         )
+
+
+# ── Writes — donations ─────────────────────────────────────────────────────────
+
+def add_donation(amount: float, tx_id: str = "", from_address: str = "", note: str = "") -> int:
+    """Record a donation. Returns the new row id."""
+    with _connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO donations (amount, tx_id, from_address, note, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (amount, tx_id, from_address, note, _now_iso()),
+        )
+    return cur.lastrowid

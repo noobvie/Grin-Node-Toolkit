@@ -1,0 +1,165 @@
+{% extends "admin/base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Dashboard</h1>
+  <p>Overview of {{ drop_name }} — {{ network }}</p>
+</div>
+
+<!-- Stats row -->
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="stat-label">Wallet Balance</div>
+    <div class="stat-value">{{ "%.3f"|format(wallet_balance) }}</div>
+    <div class="stat-sub">GRIN</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Claims Today</div>
+    <div class="stat-value">{{ stats.claims_today }}</div>
+    <div class="stat-sub">confirmed</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total Given</div>
+    <div class="stat-value">{{ "%.3f"|format(stats.total_given) }}</div>
+    <div class="stat-sub">GRIN all-time</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Total Received</div>
+    <div class="stat-value">{{ "%.3f"|format(stats.total_received) }}</div>
+    <div class="stat-sub">GRIN donated</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Pending</div>
+    <div class="stat-value">{{ stats.pending_count }}</div>
+    <div class="stat-sub">awaiting finalize</div>
+  </div>
+</div>
+
+<!-- Quick actions -->
+<div class="card">
+  <div class="card-title">Quick Actions</div>
+  <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center;">
+    <button class="btn btn-warn btn-sm" id="btn-maintenance"
+            onclick="toggleMaintenance()">
+      {% if cfg.maintenance_mode %}Disable Maintenance{% else %}Enable Maintenance{% endif %}
+    </button>
+    <span id="maintenance-status"
+          style="font-size:.82rem;color:{% if cfg.maintenance_mode %}var(--warn){% else %}var(--text-dim){% endif %};">
+      Maintenance: {% if cfg.maintenance_mode %}ON{% else %}off{% endif %}
+    </span>
+
+    <span style="margin-left:1rem;font-size:.82rem;color:var(--text-dim);">
+      Theme: <strong style="color:var(--text);">{{ cfg.theme_default }}</strong>
+      &nbsp;—&nbsp;
+      <a href="/{{ admin_path }}/settings">Change in Settings</a>
+    </span>
+
+    <span style="margin-left:auto;font-size:.82rem;color:var(--text-dim);">
+      Service: <strong style="color:{% if service_status == 'running' %}var(--ok){% else %}var(--error){% endif %};">
+        {{ service_status }}
+      </strong>
+    </span>
+  </div>
+</div>
+
+<!-- Recent transactions -->
+<div class="card">
+  <div class="card-title">
+    Recent Transactions
+    <a href="/{{ admin_path }}/transactions" style="float:right;font-size:.78rem;font-weight:400;text-transform:none;letter-spacing:0;">View all →</a>
+  </div>
+  {% if recent_claims %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Address</th>
+          <th>Amount</th>
+          <th>Status</th>
+          <th>Date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in recent_claims %}
+        <tr>
+          <td class="mono text-dim">#{{ c.id }}</td>
+          <td class="mono">
+            {% set addr = c.grin_address %}
+            {% if addr|length > 12 %}{{ addr[:8] }}…{{ addr[-4:] }}{% else %}{{ addr }}{% endif %}
+          </td>
+          <td class="mono">{{ "%.3f"|format(c.amount) }}</td>
+          <td><span class="badge badge-{{ c.status }}">{{ c.status }}</span></td>
+          <td class="text-dim" style="font-size:.8rem;">
+            {{ c.created_at[:16] if c.created_at else '—' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-dim" style="font-size:.88rem;">No transactions yet.</p>
+  {% endif %}
+</div>
+
+<!-- Donations summary -->
+<div class="card">
+  <div class="card-title">
+    Donations
+    <a href="/{{ admin_path }}/donations" style="float:right;font-size:.78rem;font-weight:400;text-transform:none;letter-spacing:0;">Manage →</a>
+  </div>
+  <div style="display:flex;gap:2rem;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;">Count</div>
+      <div style="font-size:1.2rem;font-weight:700;color:var(--accent);font-family:var(--font-mono);">{{ stats.donations_count }}</div>
+    </div>
+    <div>
+      <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;">Total Received</div>
+      <div style="font-size:1.2rem;font-weight:700;color:var(--accent);font-family:var(--font-mono);">{{ "%.3f"|format(stats.total_received) }} GRIN</div>
+    </div>
+    <div>
+      <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;">Failed Claims</div>
+      <div style="font-size:1.2rem;font-weight:700;color:{% if stats.failed_count > 0 %}var(--error){% else %}var(--text-dim){% endif %};font-family:var(--font-mono);">{{ stats.failed_count }}</div>
+    </div>
+    <div>
+      <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;">Total Claims</div>
+      <div style="font-size:1.2rem;font-weight:700;color:var(--accent);font-family:var(--font-mono);">{{ stats.claims_total }}</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function toggleMaintenance() {
+  const btn = document.getElementById("btn-maintenance");
+  const st  = document.getElementById("maintenance-status");
+  btn.disabled = true;
+  btn.textContent = "Toggling…";
+  try {
+    const resp = await fetch("/{{ admin_path }}/api/maintenance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": window._CSRF },
+      body: JSON.stringify({ _csrf: window._CSRF }),
+    });
+    const data = await resp.json();
+    if (data.maintenance_mode) {
+      btn.textContent = "Disable Maintenance";
+      st.textContent  = "Maintenance: ON";
+      st.style.color  = "var(--warn)";
+    } else {
+      btn.textContent = "Enable Maintenance";
+      st.textContent  = "Maintenance: off";
+      st.style.color  = "var(--text-dim)";
+    }
+  } catch (e) {
+    alert("Error: " + e.message);
+    btn.textContent = "Enable/Disable Maintenance";
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+{% endblock %}

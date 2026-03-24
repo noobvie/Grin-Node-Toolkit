@@ -1,0 +1,120 @@
+{% extends "admin/base.html" %}
+{% block title %}Transactions{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Transactions</h1>
+  <p>All claim attempts — {{ total }} total</p>
+</div>
+
+<!-- Filter bar -->
+<form method="get" action="/{{ admin_path }}/transactions" style="margin-bottom:1rem;">
+  <div class="filter-bar">
+    <div>
+      <label style="font-size:.78rem;color:var(--text-dim);display:block;margin-bottom:.25rem;">Status</label>
+      <select name="status" onchange="this.form.submit()">
+        <option value=""              {% if status_filter == '' %}selected{% endif %}>All statuses</option>
+        <option value="confirmed"     {% if status_filter == 'confirmed' %}selected{% endif %}>Confirmed</option>
+        <option value="pending"       {% if status_filter == 'pending' %}selected{% endif %}>Pending</option>
+        <option value="waiting_finalize" {% if status_filter == 'waiting_finalize' %}selected{% endif %}>Waiting Finalize</option>
+        <option value="failed"        {% if status_filter == 'failed' %}selected{% endif %}>Failed</option>
+        <option value="cancelled"     {% if status_filter == 'cancelled' %}selected{% endif %}>Cancelled</option>
+      </select>
+    </div>
+    <div>
+      <label style="font-size:.78rem;color:var(--text-dim);display:block;margin-bottom:.25rem;">Search address</label>
+      <input type="text" name="search" value="{{ search }}" placeholder="grin1..." style="min-width:200px;">
+    </div>
+    <button type="submit" class="btn btn-sm">Filter</button>
+    {% if status_filter or search %}
+    <a href="/{{ admin_path }}/transactions" class="btn btn-outline btn-sm">Clear</a>
+    {% endif %}
+    <a href="/{{ admin_path }}/export/claims.csv" class="btn btn-outline btn-sm" style="margin-left:auto;">
+      ↓ Export CSV
+    </a>
+  </div>
+</form>
+
+<!-- Table -->
+<div class="card" style="padding:0;">
+  <div class="table-wrap">
+    {% if claims %}
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Address</th>
+          <th>Amount</th>
+          <th>Status</th>
+          <th>Created</th>
+          <th>Confirmed</th>
+          <th>TX ID</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in claims %}
+        <tr>
+          <td class="mono text-dim">#{{ c.id }}</td>
+          <td class="mono" title="{{ c.grin_address }}">
+            {% set addr = c.grin_address %}
+            {% if addr|length > 12 %}{{ addr[:8] }}…{{ addr[-4:] }}{% else %}{{ addr }}{% endif %}
+          </td>
+          <td class="mono">{{ "%.3f"|format(c.amount) }}</td>
+          <td><span class="badge badge-{{ c.status }}">{{ c.status }}</span></td>
+          <td class="text-dim" style="font-size:.8rem;white-space:nowrap;">
+            {{ c.created_at[:16] if c.created_at else '—' }}
+          </td>
+          <td class="text-dim" style="font-size:.8rem;white-space:nowrap;">
+            {{ c.confirmed_at[:16] if c.confirmed_at else '—' }}
+          </td>
+          <td class="mono text-dim" style="font-size:.78rem;">
+            {{ c.tx_slate_id[:8] if c.tx_slate_id else '—' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div style="padding:2rem;text-align:center;color:var(--text-dim);">No transactions found.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Running total -->
+{% if claims %}
+<div style="text-align:right;font-size:.82rem;color:var(--text-dim);margin-bottom:.5rem;">
+  Shown: <strong style="color:var(--text);">{{ "%.3f"|format(running_total) }} GRIN</strong> confirmed on this page
+</div>
+{% endif %}
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}
+    <a href="?page={{ page - 1 }}&status={{ status_filter }}&search={{ search }}">← Prev</a>
+  {% else %}
+    <span class="disabled">← Prev</span>
+  {% endif %}
+
+  {% for p in range(1, total_pages + 1) %}
+    {% if p == page %}
+      <span class="current">{{ p }}</span>
+    {% elif p == 1 or p == total_pages or (p >= page - 2 and p <= page + 2) %}
+      <a href="?page={{ p }}&status={{ status_filter }}&search={{ search }}">{{ p }}</a>
+    {% elif p == page - 3 or p == page + 3 %}
+      <span>…</span>
+    {% endif %}
+  {% endfor %}
+
+  {% if page < total_pages %}
+    <a href="?page={{ page + 1 }}&status={{ status_filter }}&search={{ search }}">Next →</a>
+  {% else %}
+    <span class="disabled">Next →</span>
+  {% endif %}
+
+  <span style="margin-left:.5rem;font-size:.78rem;color:var(--text-dim);">
+    Page {{ page }} of {{ total_pages }} &nbsp;({{ total }} total)
+  </span>
+</div>
+{% endif %}
+{% endblock %}

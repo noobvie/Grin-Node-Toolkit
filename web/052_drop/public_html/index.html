@@ -4,14 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <title>Grin Testnet Faucet — Free Testnet GRIN Coins</title>
-  <meta name="description" content="Free testnet GRIN faucet. Claim 2 GRIN every 24 hours to test your Grin wallet and learn the slatepack transaction process. No sign-up required.">
+  <title>Grin Drop — Free GRIN Coins</title>
+  <meta name="description" content="Claim free GRIN or donate to keep the drop running. No sign-up required.">
   <meta name="keywords" content="grin faucet, testnet grin, grin testnet faucet, free grin coins, grin cryptocurrency testnet, grin-wallet test, slatepack tutorial">
   <link rel="canonical" href=""><!-- set at deploy time -->
 
   <!-- Open Graph -->
-  <meta property="og:title"       content="Grin Testnet Faucet — Free Testnet GRIN Coins">
-  <meta property="og:description" content="Claim 2 testnet GRIN every 24 hours. Practice the slatepack transaction process. No sign-up required.">
+  <meta property="og:title"       content="Grin Drop — Free GRIN Coins">
+  <meta property="og:description" content="Claim free GRIN or donate to keep the drop running. No sign-up required.">
   <meta property="og:type"        content="website">
 
   <!-- JSON-LD -->
@@ -19,8 +19,8 @@
   {
     "@context": "https://schema.org",
     "@type": "WebApplication",
-    "name": "Grin Testnet Faucet",
-    "description": "Free testnet GRIN faucet for learning slatepack transactions",
+    "name": "Grin Drop",
+    "description": "Claim free GRIN or donate to keep the drop running. No sign-up required.",
     "applicationCategory": "Finance",
     "operatingSystem": "Any"
   }
@@ -33,15 +33,27 @@
 <body class="theme-matrix">
 <!-- theme-css and body class are overridden by theme.js on load -->
 
+<!-- ── Maintenance overlay (shown by JS if maintenance_mode=true) ───────────── -->
+<div id="maintenance-overlay"
+     style="display:none;position:fixed;inset:0;z-index:9999;background:#0d1117;align-items:center;justify-content:center;">
+  <div style="text-align:center;padding:2rem;max-width:480px;">
+    <h2 id="maintenance-title" style="color:#00e676;font-size:1.5rem;margin-bottom:1rem;">Grin Drop</h2>
+    <p id="maintenance-msg" style="color:#8b949e;font-size:1rem;line-height:1.7;">We'll be back soon.</p>
+  </div>
+</div>
+
 <!-- ── Header ──────────────────────────────────────────────────────────────── -->
 <header>
   <div class="container">
     <div class="header-inner">
-      <div class="site-title">Grin Testnet Faucet <span>ツ</span></div>
+      <div class="site-title">Grin Drop <span>ツ</span></div>
       <div class="theme-switcher" role="navigation" aria-label="Theme selector">
         <button class="theme-btn" data-theme="matrix"  title="Matrix theme">Matrix</button>
         <button class="theme-btn" data-theme="warcraft" title="Warcraft Dark theme">Warcraft</button>
         <button class="theme-btn" data-theme="win98"   title="Windows 98 theme">Win98</button>
+        <button class="theme-btn" data-theme="light"   title="Light theme">Light</button>
+        <button class="theme-btn" data-theme="dark"    title="Dark theme">Dark</button>
+        <button class="theme-btn" data-theme="cute"    title="Cute theme">Cute</button>
       </div>
     </div>
   </div>
@@ -49,9 +61,9 @@
 
 <!-- ── Live stats bar ──────────────────────────────────────────────────────── -->
 <div class="container">
-  <div class="stats-bar" role="region" aria-label="Faucet statistics">
+  <div class="stats-bar" role="region" aria-label="Drop statistics">
     <div class="stat-item">
-      <div class="stat-label">Faucet Balance</div>
+      <div class="stat-label">Balance</div>
       <div class="stat-value" id="stat-balance">…</div>
     </div>
     <div class="stat-item">
@@ -61,6 +73,14 @@
     <div class="stat-item">
       <div class="stat-label">Total Claims</div>
       <div class="stat-value" id="stat-total">…</div>
+    </div>
+    <div class="stat-item" id="stat-item-given" style="display:none;">
+      <div class="stat-label">Total Given</div>
+      <div class="stat-value" id="stat-total-given">…</div>
+    </div>
+    <div class="stat-item" id="stat-item-received" style="display:none;">
+      <div class="stat-label">Total Received</div>
+      <div class="stat-value" id="stat-total-received">…</div>
     </div>
     <div class="stat-item">
       <div class="stat-label">Your Next Claim</div>
@@ -72,15 +92,15 @@
 <main class="container">
 
   <!-- ── Claim section ──────────────────────────────────────────────────────── -->
-  <section aria-label="Claim testnet GRIN">
-    <h2>Claim 2 Testnet GRIN</h2>
+  <section id="section-giveaway" aria-label="Claim GRIN">
+    <h2>Claim 2 GRIN</h2>
     <div class="card">
       <!-- Step 1 — Enter address -->
       <div id="step-1" class="step">
         <label for="claim-address">Your Grin Address (grin1... or tgrin1...)</label>
         <input type="text" id="claim-address" placeholder="grin1..." autocomplete="off" spellcheck="false">
         <p class="error-msg" id="claim-error"></p>
-        <button class="btn btn-full" id="claim-btn">Claim 2 testnet GRIN</button>
+        <button class="btn btn-full" id="claim-btn">Claim 2 GRIN</button>
         <p style="margin-top:.7rem;font-size:.8rem;color:var(--text-dim);">
           2 GRIN per address per 24 hours &nbsp;·&nbsp; No sign-up required &nbsp;·&nbsp;
           This simulates exactly how <strong>pool mainnet withdrawals</strong> work.
@@ -134,11 +154,11 @@
   </section>
 
   <!-- ── Donate section ─────────────────────────────────────────────────────── -->
-  <section aria-label="Donate to keep the faucet running">
-    <h2>Help Keep This Faucet Running</h2>
+  <section id="section-donation" aria-label="Donate to keep the drop running">
+    <h2>Help Keep This Drop Running</h2>
     <div class="card">
       <p style="margin-bottom:1rem;font-size:.9rem;color:var(--text-dim);">
-        Send testnet GRIN to this address to contribute to the faucet balance.
+        Send GRIN to this address to contribute to the drop balance.
         Donations appear automatically — no sign-up needed.
       </p>
       <div class="donate-addr-row">
@@ -146,7 +166,7 @@
         <button class="btn btn-outline btn-sm" id="copy-donate-addr-btn">Copy</button>
       </div>
       <div class="donate-qr" id="donate-qr">
-        <img src="/api/qr" alt="Faucet wallet QR code" width="140" height="140" loading="lazy">
+        <img src="/api/qr" alt="Drop wallet QR code" width="140" height="140" loading="lazy">
       </div>
       <p style="margin-top:.8rem;font-size:.85rem;color:var(--text-dim);">
         Current balance: <strong id="donate-balance">…</strong>
@@ -155,7 +175,7 @@
   </section>
 
   <!-- ── How it works ───────────────────────────────────────────────────────── -->
-  <section aria-label="How to use the Grin testnet faucet">
+  <section aria-label="How to use the Grin drop">
     <h2>How It Works</h2>
 
     <!-- Section A — Setup wallet -->
@@ -224,10 +244,10 @@
     </div>
 
     <!-- Section B — Claim steps -->
-    <h3 style="margin-top:1.5rem;">B) Claim from this faucet</h3>
+    <h3 style="margin-top:1.5rem;">B) Claim from this drop</h3>
     <div class="card">
       <ol class="how-steps">
-        <li data-n="1">Enter your Grin address above and click <strong>Claim 2 testnet GRIN</strong>.</li>
+        <li data-n="1">Enter your Grin address above and click <strong>Claim 2 GRIN</strong>.</li>
         <li data-n="2">Copy the <strong>SLATEPACK</strong> text shown on screen.</li>
         <li data-n="3">
           Paste slatepack into your wallet:<br>
@@ -252,7 +272,7 @@
           <strong>identical to how real Grin withdrawals work</strong> on mining pools and exchanges.
         </li>
         <li style="padding:.4rem 0;border-bottom:1px solid var(--border);">
-          Once you complete a faucet claim, you understand Grin transactions end-to-end.
+          Once you complete a drop claim, you understand Grin transactions end-to-end.
         </li>
         <li style="padding:.4rem 0;border-bottom:1px solid var(--border);">
           The public pruned testnet node (<code>prunetest.grin.money:13413</code>)
@@ -274,13 +294,13 @@
 <footer>
   <div class="container">
     <p>
-      Grin Testnet Faucet &nbsp;·&nbsp;
+      Grin Drop &nbsp;·&nbsp;
       <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a> &nbsp;·&nbsp;
       <a href="https://github.com/mimblewimble/grin" target="_blank" rel="noopener">GitHub</a>
       &nbsp;·&nbsp; Testnet GRIN has no real value.
     </p>
     <p style="margin-top:.4rem;">
-      Keywords: grin faucet · testnet grin · grin testnet faucet · free grin coins · slatepack tutorial
+      Keywords: grin drop · grin faucet · testnet grin · free grin coins · slatepack tutorial
     </p>
   </div>
 </footer>
@@ -297,13 +317,15 @@
     matrix:  "/css/themes/matrix.css",
     warcraft:"/css/themes/warcraft.css",
     win98:   "/css/themes/win98.css",
+    light:   "/css/themes/light.css",
+    dark:    "/css/themes/dark.css",
+    cute:    "/css/themes/cute.css",
   };
-  // Listen for body class changes to swap CSS file
+  // Apply saved theme on load
   const saved = localStorage.getItem("grin-faucet-theme") || "matrix";
   if (link && THEME_CSSS[saved]) link.href = THEME_CSSS[saved];
 
-  // Patch applyTheme to also swap CSS link
-  const _origApply = window.applyTheme;
+  // Swap CSS file when theme button is clicked
   document.addEventListener("DOMContentLoaded", function() {
     document.querySelectorAll("[data-theme]").forEach(btn => {
       btn.addEventListener("click", function() {

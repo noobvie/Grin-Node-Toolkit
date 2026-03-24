@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Admin{% endblock %} — {{ drop_name }}</title>
+  <meta name="robots" content="noindex, nofollow">
+  <style>
+    /* ── CSS Variables ─────────────────────────────────────────────────────── */
+    :root {
+      --bg:         #1a1d23;
+      --bg-card:    #242830;
+      --bg-input:   #1a1d23;
+      --accent:     #00e676;
+      --accent2:    #00b854;
+      --text:       #e0e0e0;
+      --text-dim:   #8b929a;
+      --border:     #333;
+      --error:      #ff4d4d;
+      --warn:       #f2c94c;
+      --ok:         #00e676;
+      --radius:     6px;
+      --shadow:     0 2px 12px rgba(0,0,0,0.4);
+      --font:       system-ui, -apple-system, sans-serif;
+      --font-mono:  'Courier New', Courier, monospace;
+    }
+
+    /* ── Status badge colors ───────────────────────────────────────────────── */
+    .badge { display: inline-block; padding: .2rem .55rem; border-radius: 3px; font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+    .badge-confirmed        { background: rgba(0,230,118,.15); color: #00e676; border: 1px solid rgba(0,230,118,.3); }
+    .badge-pending          { background: rgba(242,201,76,.15); color: #f2c94c; border: 1px solid rgba(242,201,76,.3); }
+    .badge-waiting_finalize { background: rgba(100,150,255,.15); color: #6496ff; border: 1px solid rgba(100,150,255,.3); }
+    .badge-failed           { background: rgba(255,77,77,.15); color: #ff4d4d; border: 1px solid rgba(255,77,77,.3); }
+    .badge-cancelled        { background: rgba(100,100,100,.15); color: #888; border: 1px solid rgba(100,100,100,.3); }
+
+    /* ── Reset ─────────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.6; min-height: 100vh; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Layout ────────────────────────────────────────────────────────────── */
+    .admin-wrap { display: flex; min-height: 100vh; }
+
+    /* ── Sidebar ───────────────────────────────────────────────────────────── */
+    .sidebar {
+      width: 220px;
+      flex-shrink: 0;
+      background: var(--bg-card);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+    }
+    .sidebar-header {
+      padding: 1.2rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .sidebar-logo {
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 1rem;
+      font-family: var(--font-mono);
+      letter-spacing: .02em;
+    }
+    .sidebar-net {
+      font-size: .72rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-top: .2rem;
+    }
+    .sidebar-nav { padding: .6rem 0; flex: 1; }
+    .nav-link {
+      display: block;
+      padding: .55rem 1.1rem;
+      color: var(--text-dim);
+      font-size: .88rem;
+      border-left: 3px solid transparent;
+      transition: color .15s, border-color .15s, background .15s;
+    }
+    .nav-link:hover, .nav-link.active {
+      color: var(--accent);
+      border-left-color: var(--accent);
+      background: rgba(0,230,118,.05);
+      text-decoration: none;
+    }
+    .nav-link .nav-icon { margin-right: .55rem; font-style: normal; }
+    .sidebar-footer {
+      padding: .8rem 1rem;
+      border-top: 1px solid var(--border);
+      font-size: .72rem;
+      color: var(--text-dim);
+    }
+    .sidebar-footer a { color: var(--text-dim); }
+    .sidebar-footer a:hover { color: var(--accent); }
+
+    /* ── Main content ──────────────────────────────────────────────────────── */
+    .main-content { flex: 1; min-width: 0; padding: 1.5rem 2rem; }
+
+    /* ── Page header ───────────────────────────────────────────────────────── */
+    .page-header { margin-bottom: 1.5rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem; }
+    .page-header h1 { font-size: 1.3rem; font-weight: 700; color: var(--text); }
+    .page-header p  { color: var(--text-dim); font-size: .85rem; margin-top: .2rem; }
+
+    /* ── Cards ─────────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.2rem 1.4rem;
+      box-shadow: var(--shadow);
+      margin-bottom: 1.2rem;
+    }
+    .card-title {
+      font-size: .78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--text-dim);
+      margin-bottom: .8rem;
+    }
+
+    /* ── Stat cards ────────────────────────────────────────────────────────── */
+    .stats-row { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.2rem; }
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.2rem;
+      flex: 1;
+      min-width: 140px;
+      box-shadow: var(--shadow);
+    }
+    .stat-card .stat-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
+    .stat-card .stat-value { font-size: 1.4rem; font-weight: 700; color: var(--accent); margin-top: .2rem; font-family: var(--font-mono); }
+    .stat-card .stat-sub   { font-size: .72rem; color: var(--text-dim); margin-top: .1rem; }
+
+    /* ── Tables ────────────────────────────────────────────────────────────── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    th {
+      text-align: left;
+      padding: .5rem .75rem;
+      font-size: .72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: .55rem .75rem;
+      border-bottom: 1px solid rgba(51,51,51,.5);
+      color: var(--text);
+      vertical-align: middle;
+    }
+    tr:hover td { background: rgba(255,255,255,.02); }
+    tr:last-child td { border-bottom: none; }
+    .mono { font-family: var(--font-mono); font-size: .82rem; }
+    .text-dim { color: var(--text-dim); }
+
+    /* ── Forms ─────────────────────────────────────────────────────────────── */
+    .form-group { margin-bottom: 1rem; }
+    .form-group label { display: block; font-size: .82rem; color: var(--text-dim); margin-bottom: .35rem; }
+    .form-group input[type="text"],
+    .form-group input[type="number"],
+    .form-group input[type="password"],
+    .form-group textarea,
+    .form-group select {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      padding: .55rem .8rem;
+      font-size: .9rem;
+      font-family: var(--font);
+      transition: border-color .15s;
+    }
+    .form-group input:focus,
+    .form-group textarea:focus,
+    .form-group select:focus { outline: none; border-color: var(--accent); }
+    .form-group textarea { resize: vertical; min-height: 80px; }
+    .form-section-title {
+      font-size: .78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--accent);
+      margin: 1.4rem 0 .8rem;
+      padding-bottom: .4rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .checkbox-row { display: flex; align-items: center; gap: .5rem; }
+    .checkbox-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+    .checkbox-row label { font-size: .9rem; color: var(--text); margin: 0; cursor: pointer; }
+    .hint { font-size: .77rem; color: var(--text-dim); margin-top: .3rem; }
+
+    /* ── Buttons ───────────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-block;
+      background: var(--accent);
+      color: #000;
+      border: none;
+      border-radius: var(--radius);
+      padding: .55rem 1.2rem;
+      font-weight: 700;
+      font-size: .88rem;
+      cursor: pointer;
+      transition: background .15s, opacity .15s;
+    }
+    .btn:hover { background: var(--accent2); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+    }
+    .btn-outline:hover { background: var(--accent); color: #000; }
+    .btn-danger { background: var(--error); color: #fff; }
+    .btn-danger:hover { background: #cc0000; }
+    .btn-sm { padding: .3rem .7rem; font-size: .8rem; }
+    .btn-warn { background: var(--warn); color: #000; }
+    .btn-warn:hover { background: #c9a01a; }
+
+    /* ── Alerts ────────────────────────────────────────────────────────────── */
+    .alert { padding: .8rem 1rem; border-radius: var(--radius); margin-bottom: 1rem; font-size: .88rem; }
+    .alert-ok   { background: rgba(0,230,118,.1); border: 1px solid rgba(0,230,118,.3); color: var(--ok); }
+    .alert-warn { background: rgba(242,201,76,.1); border: 1px solid rgba(242,201,76,.3); color: var(--warn); }
+    .alert-err  { background: rgba(255,77,77,.1);  border: 1px solid rgba(255,77,77,.3);  color: var(--error); }
+
+    /* ── Pagination ────────────────────────────────────────────────────────── */
+    .pagination { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin-top: 1rem; }
+    .pagination a, .pagination span {
+      display: inline-block;
+      padding: .35rem .7rem;
+      border-radius: var(--radius);
+      font-size: .82rem;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+    }
+    .pagination a { color: var(--text); }
+    .pagination a:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+    .pagination .current { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700; }
+    .pagination .disabled { opacity: .4; pointer-events: none; }
+
+    /* ── Filter bar ────────────────────────────────────────────────────────── */
+    .filter-bar { display: flex; gap: .8rem; flex-wrap: wrap; align-items: flex-end; margin-bottom: 1rem; }
+    .filter-bar select, .filter-bar input[type="text"] {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      padding: .45rem .75rem;
+      font-size: .85rem;
+    }
+    .filter-bar select:focus, .filter-bar input[type="text"]:focus { outline: none; border-color: var(--accent); }
+
+    /* ── Mobile responsive ─────────────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .admin-wrap { flex-direction: column; }
+      .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
+      .sidebar-nav { display: flex; overflow-x: auto; padding: .2rem 0; }
+      .nav-link { border-left: none; border-bottom: 3px solid transparent; white-space: nowrap; }
+      .nav-link:hover, .nav-link.active { border-left-color: transparent; border-bottom-color: var(--accent); }
+      .main-content { padding: 1rem; }
+      .stats-row { gap: .6rem; }
+      .stat-card { min-width: 120px; }
+    }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+<script>window._CSRF = "{{ csrf }}";</script>
+
+<div class="admin-wrap">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">{{ drop_name }}</div>
+      <div class="sidebar-net">Admin · {{ network }}</div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-link {% if request.path == '/' + admin_path + '/' %}active{% endif %}"
+         href="/{{ admin_path }}/">
+        <i class="nav-icon">◈</i> Dashboard
+      </a>
+      <a class="nav-link {% if '/transactions' in request.path %}active{% endif %}"
+         href="/{{ admin_path }}/transactions">
+        <i class="nav-icon">⇄</i> Transactions
+      </a>
+      <a class="nav-link {% if '/donations' in request.path %}active{% endif %}"
+         href="/{{ admin_path }}/donations">
+        <i class="nav-icon">♥</i> Donations
+      </a>
+      <a class="nav-link {% if '/settings' in request.path %}active{% endif %}"
+         href="/{{ admin_path }}/settings">
+        <i class="nav-icon">⚙</i> Settings
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <a href="/" target="_blank">← Public site</a>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div class="main-content">
+    {% block content %}{% endblock %}
+  </div>
+</div>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

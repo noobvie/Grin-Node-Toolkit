@@ -1,0 +1,145 @@
+{% extends "admin/base.html" %}
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Settings</h1>
+  <p>Configure {{ drop_name }}</p>
+</div>
+
+{% if saved %}
+<div class="alert alert-ok">{{ restart_msg }}</div>
+{% endif %}
+
+<form method="post" action="/{{ admin_path }}/settings">
+  <input type="hidden" name="_csrf" value="{{ csrf }}">
+
+  <!-- ── Site ──────────────────────────────────────────────────────────────── -->
+  <div class="form-section-title">Site</div>
+  <div class="card">
+    <div class="form-group">
+      <label>Drop Name</label>
+      <input type="text" name="drop_name" value="{{ cfg.drop_name }}">
+      <div class="hint">Displayed in the page title and header.</div>
+    </div>
+    <div class="form-group">
+      <label>Site Description</label>
+      <input type="text" name="site_description" value="{{ cfg.site_description }}">
+      <div class="hint">Used in meta description and Open Graph tags.</div>
+    </div>
+    <div class="form-group">
+      <label>OG Image URL</label>
+      <input type="text" name="og_image_url" value="{{ cfg.og_image_url }}" placeholder="https://example.com/preview.png">
+      <div class="hint">Optional Open Graph image for link previews. Leave blank to omit.</div>
+    </div>
+  </div>
+
+  <!-- ── Giveaway ──────────────────────────────────────────────────────────── -->
+  <div class="form-section-title">Giveaway</div>
+  <div class="card">
+    <div class="form-group">
+      <div class="checkbox-row">
+        <input type="checkbox" id="giveaway_enabled" name="giveaway_enabled"
+               {% if cfg.giveaway_enabled %}checked{% endif %}>
+        <label for="giveaway_enabled">Enable Giveaway (slatepack claim flow)</label>
+      </div>
+      <div class="hint">When disabled, the claim form is hidden and /api/claim returns 503.</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;">
+      <div class="form-group">
+        <label>Claim Amount (GRIN)</label>
+        <input type="number" name="claim_amount_grin" step="0.001" min="0.001"
+               value="{{ cfg.claim_amount_grin }}">
+      </div>
+      <div class="form-group">
+        <label>Claim Window (hours)</label>
+        <input type="number" name="claim_window_hours" step="1" min="1"
+               value="{{ cfg.claim_window_hours | int }}">
+        <div class="hint">How long between allowed claims per address.</div>
+      </div>
+      <div class="form-group">
+        <label>Finalize Timeout (minutes)</label>
+        <input type="number" name="finalize_timeout_min" step="1" min="1"
+               value="{{ cfg.finalize_timeout_min | int }}">
+        <div class="hint">How long the user has to finalize a slatepack.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Donation ──────────────────────────────────────────────────────────── -->
+  <div class="form-section-title">Donation</div>
+  <div class="card">
+    <div class="form-group">
+      <div class="checkbox-row">
+        <input type="checkbox" id="donation_enabled" name="donation_enabled"
+               {% if cfg.donation_enabled %}checked{% endif %}>
+        <label for="donation_enabled">Enable Donation (show wallet address + QR)</label>
+      </div>
+      <div class="hint">When disabled, the donation section is hidden on the public page.</div>
+    </div>
+  </div>
+
+  <!-- ── Public Stats ──────────────────────────────────────────────────────── -->
+  <div class="form-section-title">Public Statistics</div>
+  <div class="card">
+    <div class="form-group">
+      <div class="checkbox-row">
+        <input type="checkbox" id="show_public_stats" name="show_public_stats"
+               {% if cfg.show_public_stats %}checked{% endif %}>
+        <label for="show_public_stats">Show public stats (total given / total received)</label>
+      </div>
+      <div class="hint">When enabled, /api/status includes total_given and total_received fields.</div>
+    </div>
+  </div>
+
+  <!-- ── Maintenance ───────────────────────────────────────────────────────── -->
+  <div class="form-section-title">Maintenance Mode</div>
+  <div class="card">
+    <div class="form-group">
+      <div class="checkbox-row">
+        <input type="checkbox" id="maintenance_mode" name="maintenance_mode"
+               {% if cfg.maintenance_mode %}checked{% endif %}>
+        <label for="maintenance_mode">Enable Maintenance Mode</label>
+      </div>
+      <div class="hint">When enabled, all public pages (except /api/ and the admin path) return a 503 maintenance page.</div>
+    </div>
+    <div class="form-group">
+      <label>Maintenance Message</label>
+      <textarea name="maintenance_message" rows="3">{{ cfg.maintenance_message }}</textarea>
+      <div class="hint">Shown to visitors when maintenance mode is active.</div>
+    </div>
+  </div>
+
+  <!-- ── Theme ─────────────────────────────────────────────────────────────── -->
+  <div class="form-section-title">Theme</div>
+  <div class="card">
+    <div class="form-group">
+      <label>Default Theme</label>
+      <select name="theme_default" style="max-width:260px;">
+        {% for t in ["matrix", "warcraft", "win98", "light", "dark", "cute"] %}
+        <option value="{{ t }}" {% if cfg.theme_default == t %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+      <div class="hint">Applied as the initial theme for new visitors. Users can override via the theme switcher.</div>
+    </div>
+  </div>
+
+  <!-- ── Admin path ────────────────────────────────────────────────────────── -->
+  <div class="form-section-title">Admin Path</div>
+  <div class="card">
+    <div class="form-group">
+      <label>Current Admin Path (read-only)</label>
+      <input type="text" value="/{{ cfg.admin_secret_path }}/" readonly
+             style="background:rgba(0,0,0,.2);cursor:default;font-family:var(--font-mono);">
+      <div class="hint">
+        To change the admin path, re-run option 4 (Configure) in the Grin Node Toolkit shell script.
+        After changing, re-run option 6 (Setup nginx) to update the nginx config.
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:1.5rem;">
+    <button type="submit" class="btn">Save Settings</button>
+  </div>
+</form>
+{% endblock %}

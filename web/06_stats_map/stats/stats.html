@@ -1392,12 +1392,13 @@ function updatePeersChart(json, range, network) {
     return [...byTs.entries()].sort((a, b) => a[0] - b[0]).map(([ts, v]) => ({x: ts * 1000, y: v}));
   };
 
-  // Force x-axis time unit + window so tick labels match the selected range
-  const _peerUnit    = { day: "hour", week: "day", month: "day", year: "month", all: "month" };
-  const _peerRangeMs = { day: 86400e3, week: 7*86400e3, month: 30*86400e3, year: 365*86400e3 };
+  // Set time unit per range so tick labels match the selected timeframe.
+  // Do NOT force x.min/x.max — let the axis auto-fit to the actual data bounds.
+  // This prevents an empty left-side gap when peer history is shorter than the range.
+  const _peerUnit = { day: "hour", week: "day", month: "day", year: "month", all: "month" };
   charts.activePeers.options.scales.x.time.unit = _peerUnit[range] ?? "month";
-  charts.activePeers.options.scales.x.min = _peerRangeMs[range] ? nowMs - _peerRangeMs[range] : undefined;
-  charts.activePeers.options.scales.x.max = nowMs;
+  delete charts.activePeers.options.scales.x.min;
+  delete charts.activePeers.options.scales.x.max;
 
   charts.activePeers.data.datasets[0].data   = getPoints("mainnet");
   charts.activePeers.data.datasets[1].data   = getPoints("testnet");

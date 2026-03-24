@@ -31,7 +31,7 @@ Usage (commands):
     python3 06_collector.py --init-db            Create DB schema only
     python3 06_collector.py --init-history       Backfill ENTIRE chain (headers + all TX/fees, 6 hours)
     python3 06_collector.py --update             Fetch new blocks + TX stats (incremental)
-    python3 06_collector.py --peers-only         Update peer geolocation only
+    python3 06_collector.py --peers-only         Update peer geolocation + active_peers.json only
     python3 06_collector.py --backfill-stats     Fetch last 180 days (default)
     python3 06_collector.py --backfill-stats 90  Fetch last 90 days (lighter on memory)
     python3 06_collector.py --backfill-stats all Fetch ENTIRE chain history from block 0
@@ -230,12 +230,23 @@ def init_schema(conn):
         CREATE INDEX IF NOT EXISTS idx_kp_country   ON known_peers(country);
 
         CREATE TABLE IF NOT EXISTS peer_count_history (
-            sampled_at  INTEGER NOT NULL,
-            count       INTEGER NOT NULL
+            sampled_at      INTEGER NOT NULL,
+            mainnet_count   INTEGER NOT NULL DEFAULT 0,
+            testnet_count   INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_pch_ts ON peer_count_history(sampled_at);
     """)
     conn.commit()
+
+    # Migrate old single-column peer_count_history → mainnet_count / testnet_count
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(peer_count_history)")}
+    if "count" in cols and "mainnet_count" not in cols:
+        conn.executescript("""
+            ALTER TABLE peer_count_history ADD COLUMN mainnet_count INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE peer_count_history ADD COLUMN testnet_count INTEGER NOT NULL DEFAULT 0;
+            UPDATE peer_count_history SET mainnet_count = count;
+        """)
+        conn.commit()
 
 def get_meta(conn, key, default=None):
     row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
@@ -1003,10 +1014,11 @@ def _update_peers():
         ORDER BY last_seen DESC
     """, (history_cutoff,)).fetchall()
     # ── 9. Record peer count snapshot for history chart ──────────────────────
-    mnet_count_now = sum(1 for r in rows if r[1] == "mainnet")
+    mnet_count = sum(1 for r in rows if r[1] == "mainnet")
+    tnet_count = sum(1 for r in rows if r[1] == "testnet")
     conn.execute(
-        "INSERT INTO peer_count_history(sampled_at, count) VALUES(?,?)",
-        (ts, mnet_count_now),
+        "INSERT INTO peer_count_history(sampled_at, mainnet_count, testnet_count) VALUES(?,?,?)",
+        (ts, mnet_count, tnet_count),
     )
     conn.execute(
         "DELETE FROM peer_count_history WHERE sampled_at < ?",
@@ -1215,32 +1227,37 @@ def export_all_json():
     })
 
     # ── active peers history ──────────────────────────────────────────────────
-    peer_daily = conn.execute("""
-        SELECT (sampled_at/86400)*86400 AS day_ts, CAST(ROUND(AVG(count)) AS INTEGER)
-        FROM peer_count_history
-        WHERE sampled_at < ?
-        GROUP BY day_ts ORDER BY day_ts
-    """, (ts_now - 30 * 86400,)).fetchall()
+    cutoff_peer_30d = ts_now - 30 * 86400
+    cutoff_peer_24h = ts_now - 86400
 
-    peer_hourly = conn.execute("""
-        SELECT (sampled_at/3600)*3600 AS hour_ts, CAST(ROUND(AVG(count)) AS INTEGER)
-        FROM peer_count_history
-        WHERE sampled_at >= ?
-        GROUP BY hour_ts ORDER BY hour_ts
-    """, (ts_now - 30 * 86400,)).fetchall()
-
-    peer_recent = conn.execute("""
-        SELECT sampled_at, count
-        FROM peer_count_history
-        WHERE sampled_at >= ?
-        ORDER BY sampled_at
-    """, (ts_now - 86400,)).fetchall()
+    def _peer_series(col):
+        daily = conn.execute(f"""
+            SELECT (sampled_at/86400)*86400 AS day_ts,
+                   CAST(ROUND(AVG({col})) AS INTEGER)
+            FROM peer_count_history WHERE sampled_at < ?
+            GROUP BY day_ts ORDER BY day_ts
+        """, (cutoff_peer_30d,)).fetchall()
+        hourly = conn.execute(f"""
+            SELECT (sampled_at/3600)*3600 AS hour_ts,
+                   CAST(ROUND(AVG({col})) AS INTEGER)
+            FROM peer_count_history WHERE sampled_at >= ?
+            GROUP BY hour_ts ORDER BY hour_ts
+        """, (cutoff_peer_30d,)).fetchall()
+        recent = conn.execute(f"""
+            SELECT sampled_at, {col}
+            FROM peer_count_history WHERE sampled_at >= ?
+            ORDER BY sampled_at
+        """, (cutoff_peer_24h,)).fetchall()
+        return {
+            "daily":  [[r[0], r[1]] for r in daily],
+            "hourly": [[r[0], r[1]] for r in hourly],
+            "recent": [[r[0], r[1]] for r in recent],
+        }
 
     _write_json("active_peers.json", {
-        "updated": ts_now,
-        "daily":   [[r[0], r[1]] for r in peer_daily],
-        "hourly":  [[r[0], r[1]] for r in peer_hourly],
-        "recent":  [[r[0], r[1]] for r in peer_recent],
+        "updated":  ts_now,
+        "mainnet":  _peer_series("mainnet_count"),
+        "testnet":  _peer_series("testnet_count"),
     })
 
     # ── summary (for the header stats bar) ───────────────────────────────────
@@ -1277,7 +1294,8 @@ def export_all_json():
     })
 
     conn.close()
-    print("[OK] JSON exported to:", WWW_DATA)
+    print("[OK] JSON exported to:", WWW_DATA,
+          "(hashrate, difficulty, transactions, fees, active_peers, versions, summary)")
 
 def _write_json(filename, data):
     path = os.path.join(WWW_DATA, filename)

@@ -406,6 +406,8 @@
     width: 100%;
     position: relative;
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    max-height: 90vh;
+    overflow-y: auto;
   }
   .api-modal h2 {
     font-size: 15px;
@@ -424,8 +426,11 @@
     gap: 12px;
     padding: 10px 0;
     border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
   }
   .api-endpoint:last-of-type { border-bottom: none; }
+  .api-endpoint:hover .api-path { text-decoration: underline; }
   .api-method {
     font-size: 11px;
     font-weight: 700;
@@ -447,7 +452,11 @@
     text-decoration: none;
   }
   .api-path:hover { text-decoration: underline; }
-  .api-desc { font-size: 12px; color: var(--muted); margin-top: 2px; display: block; }
+  .api-desc { font-size: 12px; color: var(--muted); margin-top: 6px; display: none; line-height: 1.5; }
+  .api-endpoint.open .api-desc { display: block; }
+  .api-row { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+  .api-chevron { font-size: 9px; color: var(--muted); flex-shrink: 0; margin-left: auto; transition: transform 0.15s; }
+  .api-endpoint.open .api-chevron { transform: rotate(90deg); color: var(--text); }
   .api-note {
     margin-top: 18px;
     padding: 10px 14px;
@@ -778,62 +787,86 @@
   <div class="api-modal" role="dialog" aria-modal="true" aria-label="Public API">
     <button class="api-close" id="api-close" aria-label="Close">✕</button>
     <h2>Public JSON API</h2>
-    <p class="api-sub">Free to use · CORS enabled · No authentication required</p>
+    <p class="api-sub">Free to use · CORS enabled · No authentication required · tap row to expand</p>
     <p class="api-base" id="api-base-url"></p>
 
     <div class="api-endpoint">
       <span class="api-method">GET</span>
-      <div>
-        <a class="api-path" id="ep-summary" href="#" target="_blank" rel="noopener">/api/summary</a>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-summary" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/summary</a>
+          <span class="api-chevron">▶</span>
+        </div>
         <span class="api-desc">Current block height, network hashrate (GPS), mining difficulty, coin supply, inflation rate</span>
       </div>
     </div>
     <div class="api-endpoint">
       <span class="api-method">GET</span>
-      <div>
-        <a class="api-path" id="ep-hashrate" href="#" target="_blank" rel="noopener">/api/hashrate</a>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-hashrate" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/hashrate</a>
+          <span class="api-chevron">▶</span>
+        </div>
         <span class="api-desc">Network hashrate (GPS) — <code>daily</code> / <code>hourly</code> / <code>recent</code> arrays of <code>[timestamp, value]</code> pairs</span>
       </div>
     </div>
     <div class="api-endpoint">
       <span class="api-method">GET</span>
-      <div>
-        <a class="api-path" id="ep-difficulty" href="#" target="_blank" rel="noopener">/api/difficulty</a>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-difficulty" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/difficulty</a>
+          <span class="api-chevron">▶</span>
+        </div>
         <span class="api-desc">Network mining difficulty — <code>daily</code> / <code>hourly</code> / <code>recent</code> history</span>
       </div>
     </div>
     <div class="api-endpoint">
       <span class="api-method">GET</span>
-      <div>
-        <a class="api-path" id="ep-transactions" href="#" target="_blank" rel="noopener">/api/transactions</a>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-transactions" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/transactions</a>
+          <span class="api-chevron">▶</span>
+        </div>
         <span class="api-desc">Transactions per block — <code>daily</code> / <code>hourly</code> / <code>recent</code> history</span>
       </div>
     </div>
     <div class="api-endpoint">
       <span class="api-method">GET</span>
-      <div>
-        <a class="api-path" id="ep-fees" href="#" target="_blank" rel="noopener">/api/fees</a>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-fees" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/fees</a>
+          <span class="api-chevron">▶</span>
+        </div>
         <span class="api-desc">Total fees per block (nGrin) — <code>daily</code> / <code>hourly</code> / <code>recent</code> history</span>
       </div>
     </div>
     <div class="api-endpoint">
       <span class="api-method">GET</span>
-      <div>
-        <a class="api-path" id="ep-active_peers" href="#" target="_blank" rel="noopener">/api/active_peers</a>
-        <span class="api-desc">Active peer count by network — <code>{"mainnet": {daily, hourly, recent}, "testnet": {daily, hourly, recent}}</code> — each array contains <code>[timestamp, count]</code> pairs, one reading per collector run (~1 min)</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-active_peers" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/active_peers</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Active peer count by network — <code>{"mainnet": {daily, hourly, recent}, "testnet": {…}}</code> — each array contains <code>[timestamp, count]</code> pairs, sampled every ~5 min</span>
       </div>
     </div>
     <div class="api-endpoint">
       <span class="api-method">GET</span>
-      <div>
-        <a class="api-path" id="ep-versions" href="#" target="_blank" rel="noopener">/api/versions</a>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-versions" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/versions</a>
+          <span class="api-chevron">▶</span>
+        </div>
         <span class="api-desc">Node version distribution — label + count for each Grin client version seen in the last 7 days</span>
       </div>
     </div>
     <div class="api-endpoint">
       <span class="api-method">GET</span>
-      <div>
-        <a class="api-path" id="ep-price" href="#" target="_blank" rel="noopener">/api/price</a>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-price" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/price</a>
+          <span class="api-chevron">▶</span>
+        </div>
         <span class="api-desc">GRIN/USDT (Gate.io) — current price, 24h stats, OHLCV history for Day / Week / Month / Year / All Time</span>
       </div>
     </div>
@@ -1748,6 +1781,13 @@ document.addEventListener("DOMContentLoaded", boot);
   closeBtn.addEventListener("click", closeModal);
   overlay.addEventListener("click", e => { if (e.target === overlay) closeModal(); });
   document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+  // Collapsible endpoint descriptions
+  overlay.addEventListener("click", e => {
+    const ep = e.target.closest(".api-endpoint");
+    if (!ep || e.target.closest("a")) return;
+    ep.classList.toggle("open");
+  });
 })();
 </script>
 </body>

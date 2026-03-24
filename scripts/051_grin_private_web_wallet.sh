@@ -719,7 +719,7 @@ PHP
     local owner_secret=""
 
     # 051 manages its own wallet under $WW_CONF_DIR (installed by step 1)
-    local secret_file="$WW_CONF_DIR/wallet_data/.owner_api_secret"
+    local secret_file="$WW_CONF_DIR/.owner_api_secret"
     if [[ -f "$secret_file" ]]; then
         owner_secret=$(tr -d '[:space:]' < "$secret_file" 2>/dev/null || true)
         info "Owner API secret loaded from $secret_file"

@@ -15,16 +15,18 @@
 #   2) Testnet  →  port 13415, /var/www/web-wallet-test, /opt/grin/webwallet/testnet
 #
 #  ─── Menu ────────────────────────────────────────────────────────────────────
-#   1) Install dependencies    (nginx, php, certbot, htpasswd, qrencode)
-#   2) Deploy files            (web/051_wallet/ → deploy dir, write config.php)
-#   3) Configure nginx         (HTTP vhost — certbot handles HTTPS in step 4)
-#   4) Setup SSL               (Let's Encrypt or Cloudflare Origin Cert)
-#   5) Setup Basic Auth        (htpasswd)
-#   6) Configure firewall      (ports 80 + 443)
-#   7) Status & info
-#   s) Edit saved settings     (domain, email, auth user)
+#   1) Install wallet binary   (download grin-wallet, init, start listener)
+#   2) Install dependencies    (nginx, php, certbot, htpasswd, qrencode)
+#   3) Deploy files            (web/051_wallet/ → deploy dir, write config.php)
+#   4) Configure nginx         (HTTP vhost — certbot handles HTTPS in step 5)
+#   5) Setup SSL               (Let's Encrypt or Cloudflare Origin Cert)
+#   6) Setup Basic Auth        (htpasswd)
+#   7) Configure firewall      (ports 80 + 443)
+#   8) Status & info
+#   9) Edit saved settings     (domain, email, auth user)
 #   0) Back to network select
 #
+#  Binary:   /opt/grin/webwallet/{mainnet,testnet}/grin-wallet
 #  Config:   /opt/grin/webwallet/{mainnet,testnet}/config.conf
 #  Deploy:   /var/www/web-wallet-{main,test}/
 #  nginx:    /etc/nginx/sites-available/web-wallet-{main,test}
@@ -80,6 +82,9 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 DIM='\033[2m'
 RESET='\033[0m'
+
+# GitHub API for grin-wallet releases
+_WW_GITHUB_API="https://api.github.com/repos/mimblewimble/grin-wallet/releases/latest"
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 LOG_DIR="/opt/grin/logs"
@@ -194,6 +199,330 @@ _set_network() {
 }
 
 # =============================================================================
+# STEP 1 — Install grin-wallet binary
+# =============================================================================
+
+_ww_patch_toml() {
+    local toml="$1" key="$2" val="$3"
+    if grep -q "^${key}\s*=" "$toml" 2>/dev/null; then
+        sed -i "s|^${key}\s*=.*|${key} = ${val}|" "$toml"
+    else
+        echo "${key} = ${val}" >> "$toml"
+    fi
+}
+
+ww_install_wallet() {
+    local wallet_bin="$WW_CONF_DIR/grin-wallet"
+    local toml_file="$WW_CONF_DIR/grin-wallet.toml"
+    local pass_file="$WW_CONF_DIR/${WW_NETWORK}_pass_wallet.txt"
+    local seed_file="$WW_CONF_DIR/${WW_NETWORK}_seed.txt"
+    local tmux_name="grin_wallet_${WW_NETWORK}"
+    local _node_port; [[ "$WW_NETWORK" == "mainnet" ]] && _node_port="3413" || _node_port="13413"
+
+    local _did_download="no" _did_init="no" _saved_pass="no" _saved_seed="no"
+    local _did_patch="no" _patch_node_dir=""
+
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN} 051) Web Wallet — 1) Install Wallet Binary [$WW_NET_LABEL]${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    [[ "$WW_NETWORK" == "mainnet" ]] && \
+        echo -e "  ${BOLD}${YELLOW}⚠  MAINNET — operates with real GRIN (monetary value)${RESET}\n"
+    echo -e "  ${DIM}─── Setup target ─────────────────────────────────────${RESET}"
+    echo ""
+    echo -e "  Network      : ${BOLD}$WW_NET_LABEL${RESET}"
+    echo -e "  Node port    : ${DIM}$_node_port${RESET}"
+    echo -e "  Wallet dir   : ${DIM}$WW_CONF_DIR${RESET}"
+    echo -e "  Binary       : ${DIM}$wallet_bin${RESET}"
+    echo -e "  Pass file    : ${DIM}$pass_file${RESET}"
+    echo -e "  Seed file    : ${DIM}$seed_file${RESET}"
+    echo -e "  tmux session : ${DIM}$tmux_name${RESET}"
+    echo ""
+
+    # ── Download ──────────────────────────────────────────────────────────────
+    local needs_download=1
+    if [[ -x "$wallet_bin" ]]; then
+        local ver; ver=$("$wallet_bin" --version 2>/dev/null | head -1 || echo "?")
+        success "Binary already installed  ${DIM}($ver)${RESET}"
+        echo -ne "  Re-download latest? [y/N/0 cancel]: "
+        local redown; read -r redown || true
+        [[ "$redown" == "0" ]] && return
+        [[ "${redown,,}" == "y" ]] || needs_download=0
+    fi
+    echo ""
+
+    if [[ $needs_download -eq 1 ]]; then
+        info "Fetching latest release from GitHub..."
+        local release_json
+        release_json=$(curl -fsSL --max-time 30 "$_WW_GITHUB_API") \
+            || { error "Failed to reach GitHub API."; pause; return; }
+
+        local version download_url
+        version=$(echo "$release_json" | jq -r '.tag_name')
+        download_url=$(echo "$release_json" \
+            | jq -r '.assets[] | select(.name | test("linux-x86_64\\.tar\\.gz$"; "i")) | .browser_download_url' \
+            | head -1)
+
+        if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+            error "No linux-x86_64 asset found for $version."
+            pause; return
+        fi
+
+        mkdir -p "$WW_CONF_DIR"
+        local tmp_tar="/tmp/grin_wwallet_$$.tar.gz"
+        local tmp_dir="/tmp/grin_wwallet_extract_$$"
+        mkdir -p "$tmp_dir"
+
+        info "Version : $version"
+        info "Target  : $wallet_bin"
+        echo ""
+        wget -c --progress=bar:force -O "$tmp_tar" "$download_url" \
+            || { error "Download failed."; rm -rf "$tmp_tar" "$tmp_dir"; pause; return; }
+
+        tar -xzf "$tmp_tar" -C "$tmp_dir" \
+            || { error "Extraction failed."; rm -rf "$tmp_tar" "$tmp_dir"; pause; return; }
+        rm -f "$tmp_tar"
+
+        local bin_src
+        bin_src=$(find "$tmp_dir" -type f -name "grin-wallet" | head -1)
+        if [[ -z "$bin_src" ]]; then
+            error "grin-wallet binary not found in archive."
+            rm -rf "$tmp_dir"; pause; return
+        fi
+        install -m 755 "$bin_src" "$wallet_bin"
+        rm -rf "$tmp_dir"
+        success "grin-wallet $version installed → $wallet_bin"
+        _did_download="$version"
+    fi
+    echo ""
+
+    # ── Init ──────────────────────────────────────────────────────────────────
+    if [[ -f "$toml_file" ]]; then
+        warn "Wallet already initialized at $WW_CONF_DIR"
+        echo -ne "  Re-initialize? ${RED}(overwrites existing wallet!)${RESET} [y/N/0 cancel]: "
+        local reinit; read -r reinit || true
+        [[ "$reinit" == "0" ]] && return
+        if [[ "${reinit,,}" != "y" ]]; then
+            info "Skipping init — existing wallet kept."
+            echo ""
+            _ww_start_listener "$wallet_bin" "$tmux_name" "$pass_file" || return
+            local _ls="no"
+            tmux has-session -t "$tmux_name" 2>/dev/null && _ls="yes" || true
+            echo ""
+            echo -e "  ${BOLD}${GREEN}Summary — $WW_NET_LABEL${RESET}"
+            echo ""
+            echo -e "  ${DIM}─  Init       : skipped — existing wallet kept${RESET}"
+            echo -e "  ${DIM}─  Wallet dir : $WW_CONF_DIR${RESET}"
+            [[ "$_ls" == "yes" ]] \
+                && echo -e "  ${GREEN}✔${RESET}  ${DIM}Listener   : running  (tmux: $tmux_name)${RESET}" \
+                || echo -e "  ${DIM}─  Listener   : not started${RESET}"
+            echo ""
+            pause; return
+        fi
+    fi
+
+    echo -e "  Enter wallet password for init  ${DIM}(0 at any prompt to cancel)${RESET}:"
+    local wallet_pass=""
+    while true; do
+        echo -ne "    Password : "
+        read -rs wallet_pass; echo ""
+        [[ "$wallet_pass" == "0" ]] && unset wallet_pass && return
+        [[ -z "$wallet_pass" ]] && warn "Password cannot be empty." && continue
+        echo -ne "    Confirm  : "
+        local wallet_pass2; read -rs wallet_pass2; echo ""
+        [[ "$wallet_pass2" == "0" ]] && unset wallet_pass wallet_pass2 && return
+        if [[ "$wallet_pass" != "$wallet_pass2" ]]; then
+            error "Passwords do not match."; unset wallet_pass2; continue
+        fi
+        unset wallet_pass2; break
+    done
+    echo ""
+    info "Running grin-wallet init -h  ${DIM}(write down your seed phrase!)${RESET}"
+    echo ""
+
+    local tmp_init="/tmp/grin_ww_init_${WW_NETWORK}_$$"
+    mkdir -p "$WW_CONF_DIR"
+    cd "$WW_CONF_DIR" && "$wallet_bin" $WW_NET_FLAG -p "$wallet_pass" init -h \
+        2>&1 | tee "$tmp_init" || true
+    echo ""
+
+    if [[ ! -f "$toml_file" ]]; then
+        warn "Init may have failed — grin-wallet.toml not found."
+        warn "Check output above."
+        rm -f "$tmp_init"; unset wallet_pass
+        pause; return
+    fi
+    success "Wallet initialized."
+    _did_init="yes"
+    echo ""
+
+    # ── Save passphrase ───────────────────────────────────────────────────────
+    echo -ne "  Save passphrase to ${BOLD}$(basename "$pass_file")${RESET}? [y/N/0 cancel]: "
+    local save_pass; read -r save_pass || true
+    if [[ "$save_pass" == "0" ]]; then
+        rm -f "$tmp_init"; unset wallet_pass; return
+    fi
+    if [[ "${save_pass,,}" == "y" ]]; then
+        echo "$wallet_pass" > "$pass_file"
+        chmod 600 "$pass_file"
+        success "Saved → $pass_file  ${DIM}(mode 600)${RESET}"
+        _saved_pass="yes"
+    else
+        info "Passphrase not saved."
+    fi
+    unset wallet_pass
+    echo ""
+
+    # ── Save seed ─────────────────────────────────────────────────────────────
+    echo -ne "  Save seed phrase to ${BOLD}$(basename "$seed_file")${RESET}? [y/N/0 cancel]: "
+    local save_seed; read -r save_seed || true
+    if [[ "$save_seed" == "0" ]]; then
+        rm -f "$tmp_init"; return
+    fi
+    if [[ "${save_seed,,}" == "y" ]]; then
+        tail -6 "$tmp_init" > "$seed_file"
+        chmod 600 "$seed_file"
+        success "Saved → $seed_file  ${DIM}(mode 600)${RESET}"
+        _saved_seed="yes"
+    else
+        info "Seed not saved."
+    fi
+    rm -f "$tmp_init"
+    echo ""
+
+    # ── Patch grin-wallet.toml ────────────────────────────────────────────────
+    local instances_conf="/opt/grin/conf/grin_instances_location.conf"
+    local node_dir=""
+    if [[ -f "$instances_conf" ]]; then
+        # shellcheck source=/dev/null
+        source "$instances_conf" 2>/dev/null || true
+        if [[ "$WW_NETWORK" == "testnet" ]]; then
+            node_dir="${PRUNETEST_GRIN_DIR:-}"
+        else
+            node_dir="${PRUNEMAIN_GRIN_DIR:-${FULLMAIN_GRIN_DIR:-}}"
+        fi
+    fi
+    if [[ -z "$node_dir" || ! -d "$node_dir" ]]; then
+        node_dir="/opt/grin/node/$( [[ "$WW_NETWORK" == "testnet" ]] && echo testnet-prune || echo mainnet-prune )"
+    fi
+    _patch_node_dir="$node_dir"
+    if [[ -f "$node_dir/.foreign_api_secret" ]]; then
+        _ww_patch_toml "$toml_file" "node_api_secret_path" "\"$node_dir/.foreign_api_secret\""
+        _did_patch="$node_dir"
+    fi
+
+    # ── Start listener ────────────────────────────────────────────────────────
+    _ww_start_listener "$wallet_bin" "$tmux_name" "$pass_file" || true
+
+    local _did_listen="no"
+    tmux has-session -t "$tmux_name" 2>/dev/null && _did_listen="yes" || true
+
+    local _tick="${GREEN}✔${RESET}" _skip="${DIM}─${RESET}"
+    echo ""
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${GREEN} Summary — $WW_NET_LABEL${RESET}"
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  ${DIM}─── Steps ────────────────────────────────────────────${RESET}"
+    echo ""
+    if [[ "$_did_download" != "no" ]]; then
+        echo -e "  $_tick  1. Binary downloaded    ${DIM}$wallet_bin  [$_did_download]${RESET}"
+    else
+        echo -e "  $_skip  1. Binary download       ${DIM}skipped — already installed${RESET}"
+    fi
+    if [[ "$_did_init" == "yes" ]]; then
+        echo -e "  $_tick  2. Wallet initialized   ${DIM}$toml_file${RESET}"
+    else
+        echo -e "  $_skip  2. Init                  ${DIM}skipped — existing wallet kept${RESET}"
+    fi
+    if [[ "$_saved_pass" == "yes" ]]; then
+        echo -e "  $_tick  3. Passphrase saved     ${DIM}$pass_file${RESET}"
+    else
+        echo -e "  $_skip  3. Passphrase            ${DIM}not saved${RESET}"
+    fi
+    if [[ "$_saved_seed" == "yes" ]]; then
+        echo -e "  $_tick  4. Seed phrase saved    ${DIM}$seed_file${RESET}"
+    else
+        echo -e "  $_skip  4. Seed phrase           ${DIM}not saved${RESET}"
+    fi
+    if [[ "$_did_patch" != "no" ]]; then
+        echo -e "  $_tick  5. TOML patched         ${DIM}node_api_secret_path → $_did_patch/.foreign_api_secret${RESET}"
+    else
+        echo -e "  ${YELLOW}!${RESET}  5. TOML patch            ${YELLOW}secret not found at $_patch_node_dir — edit $toml_file${RESET}"
+    fi
+    if [[ "$_did_listen" == "yes" ]]; then
+        echo -e "  $_tick  6. Listener started     ${DIM}tmux: $tmux_name${RESET}"
+    else
+        echo -e "  $_skip  6. Listener              ${DIM}not started${RESET}"
+    fi
+    echo ""
+    echo -e "  ${DIM}─── Quick reference ──────────────────────────────────${RESET}"
+    echo ""
+    echo -e "  ${DIM}  cd $WW_CONF_DIR && ./grin-wallet $WW_NET_FLAG info${RESET}"
+    echo -e "  ${DIM}  tmux attach -t $tmux_name${RESET}"
+    echo ""
+    log "[ww_install_wallet] network=$WW_NETWORK download=$_did_download init=$_did_init"
+    pause
+}
+
+_ww_start_listener() {
+    local wallet_bin="$1" tmux_name="$2" pass_file="$3"
+
+    local pass_arg=""
+    if [[ -f "$pass_file" ]]; then
+        pass_arg=$(<"$pass_file")
+        info "Using saved passphrase."
+    else
+        echo -ne "  Enter wallet password to start listener  ${DIM}(0 to skip)${RESET}: "
+        read -rs pass_arg; echo ""
+        if [[ "$pass_arg" == "0" || -z "$pass_arg" ]]; then
+            info "Listener not started."; return 0
+        fi
+    fi
+
+    if tmux has-session -t "$tmux_name" 2>/dev/null; then
+        warn "Session '$tmux_name' already running."
+        echo -ne "  Kill and restart? [y/N/0 skip]: "
+        local restart; read -r restart || true
+        if [[ "$restart" == "0" ]]; then unset pass_arg; return 1; fi
+        if [[ "${restart,,}" == "y" ]]; then
+            tmux kill-session -t "$tmux_name" 2>/dev/null || true
+            sleep 1
+        else
+            info "Listener not restarted."; unset pass_arg; return 0
+        fi
+    fi
+
+    local launcher="$WW_CONF_DIR/.${WW_NETWORK}_listener.sh"
+    local pass_tmp="$WW_CONF_DIR/.${WW_NETWORK}_pass_tmp_$$"
+    mkdir -p "$WW_CONF_DIR"
+    echo "$pass_arg" > "$pass_tmp"
+    chmod 600 "$pass_tmp"
+    unset pass_arg
+    cat > "$launcher" << LAUNCHER_EOF
+#!/bin/bash
+cd "$WW_CONF_DIR"
+_p=\$(cat "$pass_tmp" 2>/dev/null || echo "")
+rm -f "$pass_tmp"
+exec "$wallet_bin" $WW_NET_FLAG -p "\$_p" listen
+LAUNCHER_EOF
+    chmod 700 "$launcher"
+    tmux new-session -d -s "$tmux_name" "$launcher"
+    sleep 1
+
+    if tmux has-session -t "$tmux_name" 2>/dev/null; then
+        success "Listener started  ${DIM}(tmux: $tmux_name)${RESET}"
+        info "Attach: tmux attach -t $tmux_name"
+    else
+        rm -f "$pass_tmp"
+        warn "Session not found after start — may have exited immediately."
+        warn "Try manually: tmux new -s $tmux_name"
+    fi
+    return 0
+}
+
+# =============================================================================
 # CONFIG HELPERS
 # =============================================================================
 
@@ -227,34 +556,46 @@ ww_menu_status() {
     ww_load_config
     echo ""
 
+    # Step 1 — wallet binary
+    local wallet_bin="$WW_CONF_DIR/grin-wallet"
+    local toml_file="$WW_CONF_DIR/grin-wallet.toml"
+    if [[ -x "$wallet_bin" && -f "$toml_file" ]]; then
+        local ver; ver=$("$wallet_bin" --version 2>/dev/null | head -1 || echo "?")
+        echo -e "  ${BOLD}1 Wallet binary${RESET}: ${GREEN}installed + initialized${RESET}  ${DIM}($ver)${RESET}"
+    elif [[ -x "$wallet_bin" ]]; then
+        echo -e "  ${BOLD}1 Wallet binary${RESET}: ${YELLOW}downloaded, not initialized${RESET}  ${DIM}→ step 1${RESET}"
+    else
+        echo -e "  ${BOLD}1 Wallet binary${RESET}: ${RED}not installed${RESET}  ${DIM}→ step 1${RESET}"
+    fi
+
     # Dependencies
     local deps_ok=1
     for cmd in nginx php certbot htpasswd; do
         command -v "$cmd" &>/dev/null || { deps_ok=0; break; }
     done
     [[ $deps_ok -eq 1 ]] \
-        && echo -e "  ${BOLD}1 Dependencies${RESET} : ${GREEN}OK${RESET}" \
-        || echo -e "  ${BOLD}1 Dependencies${RESET} : ${RED}missing${RESET}  ${DIM}→ step 1${RESET}"
+        && echo -e "  ${BOLD}2 Dependencies${RESET} : ${GREEN}OK${RESET}" \
+        || echo -e "  ${BOLD}2 Dependencies${RESET} : ${RED}missing${RESET}  ${DIM}→ step 2${RESET}"
 
     [[ -d "$WW_DEPLOY_DIR" ]] \
-        && echo -e "  ${BOLD}2 Files${RESET}        : ${GREEN}deployed${RESET}  ${DIM}($WW_DEPLOY_DIR)${RESET}" \
-        || echo -e "  ${BOLD}2 Files${RESET}        : ${DIM}not deployed${RESET}  ${DIM}→ step 2${RESET}"
+        && echo -e "  ${BOLD}3 Files${RESET}        : ${GREEN}deployed${RESET}  ${DIM}($WW_DEPLOY_DIR)${RESET}" \
+        || echo -e "  ${BOLD}3 Files${RESET}        : ${DIM}not deployed${RESET}  ${DIM}→ step 3${RESET}"
 
     [[ -f "$WW_NGINX_CONF" ]] \
-        && echo -e "  ${BOLD}3 nginx vhost${RESET}  : ${GREEN}configured${RESET}  ${DIM}($WW_NGINX_CONF)${RESET}" \
-        || echo -e "  ${BOLD}3 nginx vhost${RESET}  : ${DIM}not configured${RESET}  ${DIM}→ step 3${RESET}"
+        && echo -e "  ${BOLD}4 nginx vhost${RESET}  : ${GREEN}configured${RESET}  ${DIM}($WW_NGINX_CONF)${RESET}" \
+        || echo -e "  ${BOLD}4 nginx vhost${RESET}  : ${DIM}not configured${RESET}  ${DIM}→ step 4${RESET}"
 
     if [[ -n "$WW_DOMAIN" && -f "/etc/letsencrypt/live/$WW_DOMAIN/fullchain.pem" ]]; then
-        echo -e "  ${BOLD}4 SSL${RESET}          : ${GREEN}Let's Encrypt${RESET}  ${DIM}($WW_DOMAIN)${RESET}"
+        echo -e "  ${BOLD}5 SSL${RESET}          : ${GREEN}Let's Encrypt${RESET}  ${DIM}($WW_DOMAIN)${RESET}"
     elif [[ -n "$WW_DOMAIN" && -f "/etc/ssl/cloudflare-origin/$WW_DOMAIN.pem" ]]; then
-        echo -e "  ${BOLD}4 SSL${RESET}          : ${GREEN}Cloudflare Origin${RESET}  ${DIM}($WW_DOMAIN)${RESET}"
+        echo -e "  ${BOLD}5 SSL${RESET}          : ${GREEN}Cloudflare Origin${RESET}  ${DIM}($WW_DOMAIN)${RESET}"
     else
-        echo -e "  ${BOLD}4 SSL${RESET}          : ${DIM}not configured${RESET}  ${DIM}→ step 4${RESET}"
+        echo -e "  ${BOLD}5 SSL${RESET}          : ${DIM}not configured${RESET}  ${DIM}→ step 5${RESET}"
     fi
 
     [[ -f "$WW_HTPASSWD" ]] \
-        && echo -e "  ${BOLD}5 Basic Auth${RESET}   : ${GREEN}configured${RESET}  ${DIM}(user: ${WW_AUTH_USER:-grin})${RESET}" \
-        || echo -e "  ${BOLD}5 Basic Auth${RESET}   : ${DIM}not configured${RESET}  ${DIM}→ step 5${RESET}"
+        && echo -e "  ${BOLD}6 Basic Auth${RESET}   : ${GREEN}configured${RESET}  ${DIM}(user: ${WW_AUTH_USER:-grin})${RESET}" \
+        || echo -e "  ${BOLD}6 Basic Auth${RESET}   : ${DIM}not configured${RESET}  ${DIM}→ step 6${RESET}"
 
     if [[ -L "$WW_NGINX_LINK" ]]; then
         echo -e "  ${BOLD}Web UI${RESET}         : ${GREEN}LIVE${RESET}  ${DIM}→ https://${WW_DOMAIN:-<domain>}${RESET}"
@@ -267,7 +608,7 @@ ww_menu_status() {
     if tmux has-session -t "$wallet_session" 2>/dev/null; then
         echo -e "  ${BOLD}Wallet${RESET}         : ${GREEN}listening${RESET}  ${DIM}(tmux: $wallet_session)${RESET}"
     else
-        echo -e "  ${BOLD}Wallet${RESET}         : ${RED}not listening${RESET}  ${YELLOW}⚠ start via script 05 option c${RESET}"
+        echo -e "  ${BOLD}Wallet${RESET}         : ${RED}not listening${RESET}  ${YELLOW}⚠ run step 1 to install and start${RESET}"
     fi
     echo ""
 }
@@ -278,7 +619,7 @@ ww_menu_status() {
 
 ww_install_deps() {
     clear
-    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 1) Install Dependencies ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 2) Install Dependencies ──${RESET}\n"
 
     local all_ok=1
     for pkg_cmd in "nginx:nginx" "php:php" "certbot:certbot" "htpasswd:apache2-utils" "qrencode:qrencode"; do
@@ -335,7 +676,7 @@ ww_install_deps() {
 ww_deploy_files() {
     ww_load_config
     clear
-    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 2) Deploy Files ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 3) Deploy Files ──${RESET}\n"
 
     if [[ ! -d "$WW_SRC_DIR" ]]; then
         die "Source not found: $WW_SRC_DIR"
@@ -390,7 +731,7 @@ PHP
         info "Owner API secret loaded from $secret_file"
     else
         warn "Owner API secret not found at $secret_file"
-        warn "Start the wallet listener (script 05 option c) first, then re-run Deploy."
+        warn "Run step 1 to install and start the wallet first, then re-run Deploy."
     fi
 
     mkdir -p "$WW_CONF_DIR"
@@ -418,7 +759,7 @@ JSON
 ww_configure_nginx() {
     ww_load_config
     clear
-    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 3) Configure nginx ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 4) Configure nginx ──${RESET}\n"
 
     if ! command -v nginx &>/dev/null; then
         die "nginx not installed — run step 1 first."; pause; return
@@ -491,13 +832,13 @@ NGINX_HTTP
 }
 
 # =============================================================================
-# STEP 4 — Setup SSL
+# STEP 5 — Setup SSL
 # =============================================================================
 
 ww_setup_ssl() {
     ww_load_config
     clear
-    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 4) Setup SSL ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 5) Setup SSL ──${RESET}\n"
 
     if ! command -v certbot &>/dev/null; then
         die "certbot not installed — run step 1 first."; pause; return
@@ -751,13 +1092,13 @@ NGINX_CF
 }
 
 # =============================================================================
-# STEP 5 — Setup Basic Auth
+# STEP 6 — Setup Basic Auth
 # =============================================================================
 
 ww_setup_auth() {
     ww_load_config
     clear
-    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 5) Setup Basic Auth ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 6) Setup Basic Auth ──${RESET}\n"
 
     if ! command -v htpasswd &>/dev/null; then
         die "htpasswd not installed — run step 1 first."; pause; return
@@ -797,12 +1138,12 @@ ww_setup_auth() {
 }
 
 # =============================================================================
-# STEP 6 — Configure firewall
+# STEP 7 — Configure firewall
 # =============================================================================
 
 ww_configure_firewall() {
     clear
-    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 6) Configure Firewall ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 7) Configure Firewall ──${RESET}\n"
     echo -e "  ${DIM}Opens ports 80 and 443 (HTTPS). Wallet API ports stay localhost-only.${RESET}"
     echo ""
     echo -ne "${BOLD}Open ports 80 and 443? [Y/n/0]: ${RESET}"
@@ -826,13 +1167,13 @@ ww_configure_firewall() {
 }
 
 # =============================================================================
-# STEP 7 — Status & info
+# STEP 8 — Status & info
 # =============================================================================
 
 ww_show_info() {
     ww_load_config
     clear
-    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 7) Status & Info ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 8) Status & Info ──${RESET}\n"
 
     local deps_ok=1
     for cmd in nginx php certbot htpasswd; do
@@ -879,7 +1220,7 @@ ww_show_info() {
     if tmux has-session -t "$wallet_session" 2>/dev/null; then
         echo -e "  ${BOLD}Wallet listener${RESET}: ${GREEN}running${RESET}  ${DIM}(tmux: $wallet_session)${RESET}"
     else
-        echo -e "  ${BOLD}Wallet listener${RESET}: ${RED}not running${RESET}  ${YELLOW}⚠ start via script 05 option c${RESET}"
+        echo -e "  ${BOLD}Wallet listener${RESET}: ${RED}not running${RESET}  ${YELLOW}⚠ run step 1 to install and start${RESET}"
     fi
 
     echo ""
@@ -898,7 +1239,7 @@ ww_show_info() {
 ww_edit_settings() {
     ww_load_config
     clear
-    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — s) Edit Saved Settings ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Web Wallet [$WW_NET_LABEL] — 9) Edit Saved Settings ──${RESET}\n"
     echo -e "  ${DIM}Press Enter to keep the current value.${RESET}"
     echo ""
 
@@ -932,32 +1273,34 @@ wallet_menu() {
         ww_menu_status
 
         echo -e "${DIM}  ─── First-time setup (run in order) ─────────────${RESET}"
-        echo -e "  ${GREEN}1${RESET}) Install dependencies    ${DIM}(nginx, php, certbot, htpasswd, qrencode)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Deploy files            ${DIM}(web/051_wallet/ → $WW_DEPLOY_DIR)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Configure nginx         ${DIM}(HTTP vhost — step 4 adds HTTPS)${RESET}"
-        echo -e "  ${GREEN}4${RESET}) Setup SSL               ${DIM}(Let's Encrypt or Cloudflare Origin Cert)${RESET}"
-        echo -e "  ${GREEN}5${RESET}) Setup Basic Auth        ${DIM}(set / change password)${RESET}"
-        echo -e "  ${GREEN}6${RESET}) Configure firewall      ${DIM}(open ports 80 and 443)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Install wallet binary   ${DIM}(download, init, start listener)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Install dependencies    ${DIM}(nginx, php, certbot, htpasswd, qrencode)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Deploy files            ${DIM}(web/051_wallet/ → $WW_DEPLOY_DIR)${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Configure nginx         ${DIM}(HTTP vhost — step 5 adds HTTPS)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Setup SSL               ${DIM}(Let's Encrypt or Cloudflare Origin Cert)${RESET}"
+        echo -e "  ${GREEN}6${RESET}) Setup Basic Auth        ${DIM}(set / change password)${RESET}"
+        echo -e "  ${GREEN}7${RESET}) Configure firewall      ${DIM}(open ports 80 and 443)${RESET}"
         echo ""
         echo -e "${DIM}  ─── Info ─────────────────────────────────────────${RESET}"
-        echo -e "  ${CYAN}7${RESET}) Status & info"
-        echo -e "  ${CYAN}s${RESET}) Edit saved settings     ${DIM}(domain, email, auth user)${RESET}"
+        echo -e "  ${CYAN}8${RESET}) Status & info"
+        echo -e "  ${CYAN}9${RESET}) Edit saved settings     ${DIM}(domain, email, auth user)${RESET}"
         echo ""
         echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
         echo -e "  ${RED}0${RESET}) Back to network select"
         echo ""
-        echo -ne "${BOLD}Select [1-7 / s / 0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-9 / 0]: ${RESET}"
         read -r choice || true
 
         case "$choice" in
-            1) ww_install_deps        || true ;;
-            2) ww_deploy_files        || true ;;
-            3) ww_configure_nginx     || true ;;
-            4) ww_setup_ssl           || true ;;
-            5) ww_setup_auth          || true ;;
-            6) ww_configure_firewall  || true ;;
-            7) ww_show_info           || true ;;
-            s) ww_edit_settings       || true ;;
+            1) ww_install_wallet      || true ;;
+            2) ww_install_deps        || true ;;
+            3) ww_deploy_files        || true ;;
+            4) ww_configure_nginx     || true ;;
+            5) ww_setup_ssl           || true ;;
+            6) ww_setup_auth          || true ;;
+            7) ww_configure_firewall  || true ;;
+            8) ww_show_info           || true ;;
+            9) ww_edit_settings       || true ;;
             0) break ;;
             "") continue ;;
             *) warn "Invalid option."; sleep 1 ;;

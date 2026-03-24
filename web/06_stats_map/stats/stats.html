@@ -692,8 +692,8 @@
       <div class="range-btns" id="peers-range">
         <button class="range-btn" data-r="day">Day</button>
         <button class="range-btn" data-r="week">Week</button>
-        <button class="range-btn" data-r="month">Month</button>
-        <button class="range-btn active" data-r="year">Year</button>
+        <button class="range-btn active" data-r="month">Month</button>
+        <button class="range-btn" data-r="year">Year</button>
         <button class="range-btn" data-r="all">All Time</button>
       </div>
     </div>
@@ -743,8 +743,8 @@
       </div>
       <div class="range-btns" id="price-btc-range">
         <button class="range-btn" data-r="day">Day</button>
-        <button class="range-btn active" data-r="week">Week</button>
-        <button class="range-btn" data-r="month">Month</button>
+        <button class="range-btn" data-r="week">Week</button>
+        <button class="range-btn active" data-r="month">Month</button>
         <button class="range-btn" data-r="year">Year</button>
         <button class="range-btn" data-r="all">All Time</button>
       </div>
@@ -1276,7 +1276,7 @@ function initCharts() {
 }
 
 // Range state
-const rangeState = { hr: "year", diff: "year", activity: "year", activePeers: "year", priceUsdt: "year", priceBtc: "week" };
+const rangeState = { hr: "year", diff: "year", activity: "year", activePeers: "month", priceUsdt: "year", priceBtc: "month" };
 
 function updateChartData(chart, json, range) {
   let pts;
@@ -1391,6 +1391,13 @@ function updatePeersChart(json, range, network) {
     pts.forEach(([ts, v]) => byTs.set(ts, v));
     return [...byTs.entries()].sort((a, b) => a[0] - b[0]).map(([ts, v]) => ({x: ts * 1000, y: v}));
   };
+
+  // Force x-axis time unit + window so tick labels match the selected range
+  const _peerUnit    = { day: "hour", week: "day", month: "day", year: "month", all: "month" };
+  const _peerRangeMs = { day: 86400e3, week: 7*86400e3, month: 30*86400e3, year: 365*86400e3 };
+  charts.activePeers.options.scales.x.time.unit = _peerUnit[range] ?? "month";
+  charts.activePeers.options.scales.x.min = _peerRangeMs[range] ? nowMs - _peerRangeMs[range] : undefined;
+  charts.activePeers.options.scales.x.max = nowMs;
 
   charts.activePeers.data.datasets[0].data   = getPoints("mainnet");
   charts.activePeers.data.datasets[1].data   = getPoints("testnet");

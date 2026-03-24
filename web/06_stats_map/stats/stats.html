@@ -1474,15 +1474,12 @@ function updatePriceChartBTC(data, range) {
   const pts    = raw.map(([ts, v])    => ({ x: ts * 1000, y: Math.round(v * 1e8) }));
   const volPts = raw.map(([ts,, vol]) => ({ x: ts * 1000, y: vol || 0 }));
 
-  // Force x-axis time window and unit — prevents millisecond-precision labels when
-  // BTC data is sparse (few candles for month/year/all while history accumulates).
-  const _btcRangeMs = { day: 86400e3, week: 7*86400e3, month: 30*86400e3, year: 365*86400e3 };
-  const _btcUnit    = { day: "hour", week: "day", month: "week", year: "month", all: "month" };
-  const now = Date.now();
-  const xsMin = _btcRangeMs[range] ? now - _btcRangeMs[range] : undefined;
-  charts.priceBtc.options.scales.x.min = xsMin;
-  charts.priceBtc.options.scales.x.max = now;
+  // Set time unit per range for readable tick labels.
+  // Do NOT force x.min/x.max — auto-fit to actual data so empty date ranges are hidden.
+  const _btcUnit = { day: "hour", week: "day", month: "week", year: "month", all: "month" };
   charts.priceBtc.options.scales.x.time.unit = _btcUnit[range] ?? "month";
+  delete charts.priceBtc.options.scales.x.min;
+  delete charts.priceBtc.options.scales.x.max;
 
   // Scale volume axis so bars occupy ~20% of chart height
   const maxVol = Math.max(...volPts.map(p => p.y), 1);

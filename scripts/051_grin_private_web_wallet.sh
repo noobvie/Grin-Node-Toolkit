@@ -174,7 +174,7 @@ _launch_xp_wallet() {
 _set_network() {
     WW_NETWORK="$1"
     if [[ "$WW_NETWORK" == "mainnet" ]]; then
-        WW_WALLET_API_PORT=3415
+        WW_WALLET_API_PORT=3420
         WW_DEPLOY_DIR="/var/www/web-wallet-main"
         WW_CONF_DIR="/opt/grin/webwallet/mainnet"
         WW_CONF_FILE="/opt/grin/webwallet/mainnet/config.conf"
@@ -185,7 +185,7 @@ _set_network() {
         WW_NET_LABEL="MAINNET"
         WW_RATELIMIT_ZONE="grin_ww_main"
     else
-        WW_WALLET_API_PORT=13415
+        WW_WALLET_API_PORT=13420
         WW_DEPLOY_DIR="/var/www/web-wallet-test"
         WW_CONF_DIR="/opt/grin/webwallet/testnet"
         WW_CONF_FILE="/opt/grin/webwallet/testnet/config.conf"
@@ -505,7 +505,7 @@ _ww_start_listener() {
 cd "$WW_CONF_DIR"
 _p=\$(cat "$pass_tmp" 2>/dev/null || echo "")
 rm -f "$pass_tmp"
-exec "$wallet_bin" $WW_NET_FLAG -p "\$_p" listen
+exec "$wallet_bin" $WW_NET_FLAG -p "\$_p" owner_api
 LAUNCHER_EOF
     chmod 700 "$launcher"
     tmux new-session -d -s "$tmux_name" "$launcher"
@@ -714,18 +714,12 @@ PHP
     chmod -R 755 "$WW_DEPLOY_DIR"
 
     # ── API credential config outside webroot ──────────────────────────────────
-    local api_conf="$WW_CONF_DIR/grin_web_wallet_api.json"
+    # proxy.php reads from /opt/grin/conf/grin_web_wallet_api.json (hardcoded path)
+    local api_conf="/opt/grin/conf/grin_web_wallet_api.json"
     local owner_secret=""
-    local wallets_conf="/opt/grin/conf/grin_wallets_location.conf"
-    local wallet_dir=""
-    if [[ -f "$wallets_conf" ]]; then
-        if [[ "$WW_NETWORK" == "mainnet" ]]; then
-            wallet_dir=$( (source "$wallets_conf" 2>/dev/null; echo "${MAINNET_WALLET_DIR:-}") 2>/dev/null || true)
-        else
-            wallet_dir=$( (source "$wallets_conf" 2>/dev/null; echo "${TESTNET_WALLET_DIR:-}") 2>/dev/null || true)
-        fi
-    fi
-    local secret_file="${wallet_dir:-/opt/grin/wallet/${WW_NETWORK}}/wallet_data/.owner_api_secret"
+
+    # 051 manages its own wallet under $WW_CONF_DIR (installed by step 1)
+    local secret_file="$WW_CONF_DIR/wallet_data/.owner_api_secret"
     if [[ -f "$secret_file" ]]; then
         owner_secret=$(tr -d '[:space:]' < "$secret_file" 2>/dev/null || true)
         info "Owner API secret loaded from $secret_file"
@@ -734,7 +728,7 @@ PHP
         warn "Run step 1 to install and start the wallet first, then re-run Deploy."
     fi
 
-    mkdir -p "$WW_CONF_DIR"
+    mkdir -p /opt/grin/conf
     cat > "$api_conf" << JSON
 {
     "walletHost": "127.0.0.1",

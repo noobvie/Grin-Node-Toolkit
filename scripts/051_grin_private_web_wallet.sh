@@ -30,6 +30,41 @@
 #  nginx:    /etc/nginx/sites-available/web-wallet-{main,test}
 #  htpasswd: /etc/nginx/web-wallet-{main,test}.htpasswd
 #
+#  ─── Security hardening — already implemented ────────────────────────────────
+#   nginx : server_tokens off, client_max_body_size 64k
+#   nginx : HSTS + CSP + X-Content-Type-Options + Referrer-Policy + X-Frame-Options
+#   nginx : Permissions-Policy, X-XSS-Protection: 0
+#   nginx : fastcgi_hide_header X-Powered-By (hides PHP version)
+#   nginx : Security headers repeated in static-file location (inheritance fix)
+#   nginx : rate-limit zones _tx(3r/m) _api(10r/m) _http(20r/m)
+#   PHP   : CSRF token via hash_equals(), samesite=Strict session cookie
+#   PHP   : session_regenerate_id() on new session (session fixation defense)
+#   PHP   : WALLET_HOST asserted to loopback only (config-tampering defense)
+#   PHP   : SSRF blocklist — private ranges, 0.0.0.0, fe80:, ::ffff: blocked
+#   PHP   : method allowlist, POST-only, 60-min idle session timeout
+#   Files : grin_web_wallet_api.json outside webroot, chmod 640 root:www-data
+#
+#  ─── TODO: security recommendations for future integration ───────────────────
+#   [ ] fail2ban  — watch nginx access log for HTTP 401 responses and auto-ban
+#                   offending IPs after N failures (recommended: 5 fails / 10 min).
+#                   Rule: /etc/fail2ban/filter.d/nginx-auth.conf
+#                         failregex = <HOST>.*" 401
+#                         jail: nginx-auth, maxretry=5, findtime=600, bantime=3600
+#
+#   [ ] IP allowlist — add to nginx server block (strongest brute-force defense):
+#                   allow <YOUR_IP>;
+#                   deny  all;
+#                   Place before auth_basic directives.
+#
+#   [ ] PHP expose_php — set in /etc/php/x.y/fpm/php.ini:
+#                   expose_php = Off
+#                   Redundant with fastcgi_hide_header but defense-in-depth.
+#
+#   [ ] CSP nonce/hash — current CSP uses script-src 'self' (no inline JS).
+#                   If inline scripts are ever added, use nonces instead of
+#                   'unsafe-inline'. Generate per-request nonce in PHP and
+#                   pass to nginx via fastcgi_param.
+#
 # =============================================================================
 
 set -euo pipefail
@@ -101,18 +136,34 @@ select_network() {
     echo -e "  ${GREEN}1${RESET}) Mainnet  ${DIM}(port 3415  — $mn_lbl${DIM})${RESET}"
     echo -e "  ${YELLOW}2${RESET}) Testnet  ${DIM}(port 13415 — $tn_lbl${DIM})${RESET}"
     echo ""
+    echo -e "  ${BOLD}${YELLOW}xp${RESET}${DIM}) XP Wallet  ← fun/nostalgia, mainnet only${RESET}"
+    echo -e "     ${DIM}${RED}⚠ runs real MAINNET wallet inside a WinXP simulator${RESET}"
+    echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [1/2/0]: ${RESET}"
+    echo -ne "${BOLD}Select [1/2/xp/0]: ${RESET}"
     local sel
     read -r sel || true
     case "$sel" in
-        1) _set_network mainnet ;;
-        2) _set_network testnet ;;
-        0) return 1 ;;
-        *) warn "Invalid option."; return 1 ;;
+        1)     _set_network mainnet ;;
+        2)     _set_network testnet ;;
+        xp|XP) _launch_xp_wallet || true
+               select_network
+               return $? ;;
+        0)     return 1 ;;
+        *)     warn "Invalid option."; return 1 ;;
     esac
     return 0
+}
+
+_launch_xp_wallet() {
+    local xp_script="$SCRIPT_DIR/051x_grin_xp_wallet.sh"
+    if [[ ! -f "$xp_script" ]]; then
+        error "051x_grin_xp_wallet.sh not found in $SCRIPT_DIR"
+        pause
+        return 1
+    fi
+    bash "$xp_script"
 }
 
 _set_network() {
@@ -413,8 +464,9 @@ ww_configure_nginx() {
     mkdir -p /etc/nginx/conf.d
     cat > "/etc/nginx/conf.d/grin-web-wallet-${WW_NETWORK}-ratelimit.conf" << RATELIMIT
 # Grin Web Wallet [$WW_NET_LABEL] rate limits
-limit_req_zone \$binary_remote_addr zone=${WW_RATELIMIT_ZONE}_tx:10m  rate=3r/m;
-limit_req_zone \$binary_remote_addr zone=${WW_RATELIMIT_ZONE}_api:10m rate=10r/m;
+limit_req_zone \$binary_remote_addr zone=${WW_RATELIMIT_ZONE}_tx:10m   rate=3r/m;
+limit_req_zone \$binary_remote_addr zone=${WW_RATELIMIT_ZONE}_api:10m  rate=10r/m;
+limit_req_zone \$binary_remote_addr zone=${WW_RATELIMIT_ZONE}_http:10m rate=20r/m;
 RATELIMIT
 
     # HTTP-only vhost — certbot --nginx (step 4) adds HTTPS automatically
@@ -511,6 +563,9 @@ server {
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
+    server_tokens off;
+    client_max_body_size 64k;
+
     root  $WW_DEPLOY_DIR;
     index index.html;
 
@@ -522,6 +577,8 @@ server {
     add_header X-Frame-Options           "DENY"       always;
     add_header Referrer-Policy           "no-referrer" always;
     add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self';" always;
+    add_header Permissions-Policy        "geolocation=(), microphone=(), camera=()" always;
+    add_header X-XSS-Protection          "0" always;
 
     access_log /var/log/nginx/web-wallet-${WW_NETWORK}-access.log;
     error_log  /var/log/nginx/web-wallet-${WW_NETWORK}-error.log;
@@ -529,25 +586,32 @@ server {
     location = /api/proxy.php {
         limit_req zone=${WW_RATELIMIT_ZONE}_tx burst=2 nodelay;
         try_files \$uri =404;
-        fastcgi_pass   $WW_PHP_FPM_SOCK;
-        fastcgi_param  SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        include        fastcgi_params;
+        fastcgi_pass            $WW_PHP_FPM_SOCK;
+        fastcgi_param           SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_hide_header     X-Powered-By;
+        include                 fastcgi_params;
     }
 
     location ~ ^/api/.*\.php\$ {
         limit_req zone=${WW_RATELIMIT_ZONE}_api burst=5 nodelay;
         try_files \$uri =404;
-        fastcgi_pass   $WW_PHP_FPM_SOCK;
-        fastcgi_param  SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        include        fastcgi_params;
+        fastcgi_pass            $WW_PHP_FPM_SOCK;
+        fastcgi_param           SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_hide_header     X-Powered-By;
+        include                 fastcgi_params;
     }
 
     location ~* \.(css|js|ico|png|svg)\$ {
         expires 1h;
-        add_header Cache-Control "public";
+        add_header Cache-Control             "public";
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Content-Type-Options    "nosniff" always;
     }
 
-    location / { try_files \$uri \$uri/ /index.html; }
+    location / {
+        limit_req zone=${WW_RATELIMIT_ZONE}_http burst=10 nodelay;
+        try_files \$uri \$uri/ /index.html;
+    }
 
     location ~ /\.  { deny all; }
     location ~ ~\$  { deny all; }
@@ -620,6 +684,9 @@ server {
     ssl_session_cache   shared:SSL:10m;
     ssl_session_timeout 1d;
 
+    server_tokens off;
+    client_max_body_size 64k;
+
     root  $WW_DEPLOY_DIR;
     index index.html;
 
@@ -631,6 +698,8 @@ server {
     add_header X-Frame-Options           "DENY"       always;
     add_header Referrer-Policy           "no-referrer" always;
     add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self';" always;
+    add_header Permissions-Policy        "geolocation=(), microphone=(), camera=()" always;
+    add_header X-XSS-Protection          "0" always;
 
     access_log /var/log/nginx/web-wallet-${WW_NETWORK}-access.log;
     error_log  /var/log/nginx/web-wallet-${WW_NETWORK}-error.log;
@@ -638,25 +707,32 @@ server {
     location = /api/proxy.php {
         limit_req zone=${WW_RATELIMIT_ZONE}_tx burst=2 nodelay;
         try_files \$uri =404;
-        fastcgi_pass   $WW_PHP_FPM_SOCK;
-        fastcgi_param  SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        include        fastcgi_params;
+        fastcgi_pass            $WW_PHP_FPM_SOCK;
+        fastcgi_param           SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_hide_header     X-Powered-By;
+        include                 fastcgi_params;
     }
 
     location ~ ^/api/.*\.php\$ {
         limit_req zone=${WW_RATELIMIT_ZONE}_api burst=5 nodelay;
         try_files \$uri =404;
-        fastcgi_pass   $WW_PHP_FPM_SOCK;
-        fastcgi_param  SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        include        fastcgi_params;
+        fastcgi_pass            $WW_PHP_FPM_SOCK;
+        fastcgi_param           SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_hide_header     X-Powered-By;
+        include                 fastcgi_params;
     }
 
     location ~* \.(css|js|ico|png|svg)\$ {
         expires 1h;
-        add_header Cache-Control "public";
+        add_header Cache-Control             "public";
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Content-Type-Options    "nosniff" always;
     }
 
-    location / { try_files \$uri \$uri/ /index.html; }
+    location / {
+        limit_req zone=${WW_RATELIMIT_ZONE}_http burst=10 nodelay;
+        try_files \$uri \$uri/ /index.html;
+    }
 
     location ~ /\.  { deny all; }
     location ~ ~\$  { deny all; }

@@ -228,6 +228,12 @@ def init_schema(conn):
         );
         CREATE INDEX IF NOT EXISTS idx_kp_last_seen ON known_peers(last_seen);
         CREATE INDEX IF NOT EXISTS idx_kp_country   ON known_peers(country);
+
+        CREATE TABLE IF NOT EXISTS peer_count_history (
+            sampled_at  INTEGER NOT NULL,
+            count       INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_pch_ts ON peer_count_history(sampled_at);
     """)
     conn.commit()
 
@@ -996,6 +1002,17 @@ def _update_peers():
           AND (user_agent LIKE '%MW/Grin%' OR user_agent LIKE '%Grin++%')
         ORDER BY last_seen DESC
     """, (history_cutoff,)).fetchall()
+    # ── 9. Record peer count snapshot for history chart ──────────────────────
+    mnet_count_now = sum(1 for r in rows if r[1] == "mainnet")
+    conn.execute(
+        "INSERT INTO peer_count_history(sampled_at, count) VALUES(?,?)",
+        (ts, mnet_count_now),
+    )
+    conn.execute(
+        "DELETE FROM peer_count_history WHERE sampled_at < ?",
+        (ts - 730 * 86400,),  # keep 2 years
+    )
+    conn.commit()
     conn.close()
 
     output_peers = [
@@ -1195,6 +1212,35 @@ def export_all_json():
         "updated":      ts_now,
         "sampled_from": total_peers,
         "versions":     versions,
+    })
+
+    # ── active peers history ──────────────────────────────────────────────────
+    peer_daily = conn.execute("""
+        SELECT (sampled_at/86400)*86400 AS day_ts, CAST(ROUND(AVG(count)) AS INTEGER)
+        FROM peer_count_history
+        WHERE sampled_at < ?
+        GROUP BY day_ts ORDER BY day_ts
+    """, (ts_now - 30 * 86400,)).fetchall()
+
+    peer_hourly = conn.execute("""
+        SELECT (sampled_at/3600)*3600 AS hour_ts, CAST(ROUND(AVG(count)) AS INTEGER)
+        FROM peer_count_history
+        WHERE sampled_at >= ?
+        GROUP BY hour_ts ORDER BY hour_ts
+    """, (ts_now - 30 * 86400,)).fetchall()
+
+    peer_recent = conn.execute("""
+        SELECT sampled_at, count
+        FROM peer_count_history
+        WHERE sampled_at >= ?
+        ORDER BY sampled_at
+    """, (ts_now - 86400,)).fetchall()
+
+    _write_json("active_peers.json", {
+        "updated": ts_now,
+        "daily":   [[r[0], r[1]] for r in peer_daily],
+        "hourly":  [[r[0], r[1]] for r in peer_hourly],
+        "recent":  [[r[0], r[1]] for r in peer_recent],
     })
 
     # ── summary (for the header stats bar) ───────────────────────────────────

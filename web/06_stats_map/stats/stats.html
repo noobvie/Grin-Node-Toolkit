@@ -4,11 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Grin Network Stats — Hashrate, Difficulty &amp; Blockchain Data</title>
-<meta name="description" content="Live Grin network statistics: real-time hashrate (GPS), mining difficulty, block height, coin supply, annual inflation rate, connected peers, node version distribution, transactions per block, and fee history. Monitor the Grin (ツ) MimbleWimble blockchain.">
-<meta name="keywords" content="grin network stats, grin hashrate, grin mining difficulty, grin block height, grin blockchain statistics, grin node monitor, grin coin supply, grin inflation rate, grin GPS, grin transactions, grin fees, mimblewimble stats, grin cryptocurrency data, grin blockchain explorer, grin network health, grin mining monitor, grin node version, cuckatoo32">
+<meta name="description" content="Live Grin network statistics: real-time hashrate (GPS), mining difficulty, block height, coin supply, inflation rate, active peer count, node version distribution, transactions per block, and fee history. Monitor the Grin (ツ) MimbleWimble blockchain.">
+<meta name="keywords" content="grin network stats, grin hashrate, grin mining difficulty, grin block height, grin blockchain statistics, grin node monitor, grin coin supply, grin inflation rate, grin GPS, grin transactions, grin fees, grin active peers, grin peer count, grin node count, mimblewimble stats, grin cryptocurrency data, grin blockchain explorer, grin network health, grin mining monitor, grin node version, cuckatoo32">
 <meta name="robots" content="index, follow">
 <meta property="og:title" content="Grin Network Stats — Hashrate, Difficulty &amp; Blockchain Data">
-<meta property="og:description" content="Real-time Grin network stats: hashrate (GPS), mining difficulty, block height, coin supply, inflation, and transaction history. Live MimbleWimble blockchain data.">
+<meta property="og:description" content="Real-time Grin network stats: hashrate (GPS), mining difficulty, block height, coin supply, inflation, active peer count, and transaction history. Live MimbleWimble blockchain data.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Grin Network Stats — Hashrate &amp; Difficulty">
@@ -676,6 +676,21 @@
     </div>
   </div>
 
+  <!-- Active Peers chart -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-green"></span>Active Peers</div>
+      <div class="range-btns" id="peers-range">
+        <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="week">Week</button>
+        <button class="range-btn" data-r="month">Month</button>
+        <button class="range-btn active" data-r="year">Year</button>
+        <button class="range-btn" data-r="all">All Time</button>
+      </div>
+    </div>
+    <div class="chart-wrap"><canvas id="chart-peers"></canvas></div>
+  </div>
+
   <!-- Price chart — USDT -->
   <div class="card">
     <div class="card-header">
@@ -758,15 +773,57 @@
     <div class="api-endpoint">
       <span class="api-method">GET</span>
       <div>
-        <a class="api-path" id="ep-price" href="#" target="_blank" rel="noopener">/api/price</a>
-        <span class="api-desc">GRIN/USDT (Gate.io) — current price, 24h stats, OHLCV history for Day / Week / Month / Year / All Time</span>
+        <a class="api-path" id="ep-summary" href="#" target="_blank" rel="noopener">/api/summary</a>
+        <span class="api-desc">Current block height, network hashrate (GPS), mining difficulty, coin supply, inflation rate</span>
       </div>
     </div>
     <div class="api-endpoint">
       <span class="api-method">GET</span>
       <div>
-        <a class="api-path" id="ep-summary" href="#" target="_blank" rel="noopener">/api/summary</a>
-        <span class="api-desc">Current block height, network hashrate (GPS), mining difficulty, coin supply, inflation rate</span>
+        <a class="api-path" id="ep-hashrate" href="#" target="_blank" rel="noopener">/api/hashrate</a>
+        <span class="api-desc">Network hashrate (GPS) — <code>daily</code> / <code>hourly</code> / <code>recent</code> arrays of <code>[timestamp, value]</code> pairs</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div>
+        <a class="api-path" id="ep-difficulty" href="#" target="_blank" rel="noopener">/api/difficulty</a>
+        <span class="api-desc">Network mining difficulty — <code>daily</code> / <code>hourly</code> / <code>recent</code> history</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div>
+        <a class="api-path" id="ep-transactions" href="#" target="_blank" rel="noopener">/api/transactions</a>
+        <span class="api-desc">Transactions per block — <code>daily</code> / <code>hourly</code> / <code>recent</code> history</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div>
+        <a class="api-path" id="ep-fees" href="#" target="_blank" rel="noopener">/api/fees</a>
+        <span class="api-desc">Total fees per block (nGrin) — <code>daily</code> / <code>hourly</code> / <code>recent</code> history</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div>
+        <a class="api-path" id="ep-active_peers" href="#" target="_blank" rel="noopener">/api/active_peers</a>
+        <span class="api-desc">Active mainnet peer count — <code>daily</code> / <code>hourly</code> / <code>recent</code> history, one reading per collector run (~1 min)</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div>
+        <a class="api-path" id="ep-versions" href="#" target="_blank" rel="noopener">/api/versions</a>
+        <span class="api-desc">Node version distribution — label + count for each Grin client version seen in the last 7 days</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div>
+        <a class="api-path" id="ep-price" href="#" target="_blank" rel="noopener">/api/price</a>
+        <span class="api-desc">GRIN/USDT (Gate.io) — current price, 24h stats, OHLCV history for Day / Week / Month / Year / All Time</span>
       </div>
     </div>
     <div class="api-note">
@@ -1130,13 +1187,14 @@ function initCharts() {
   // Chart.defaults (color, borderColor, font) are set by initTheme() before this runs
   charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS,  undefined, fmtGPSTick);
   charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff, undefined, fmtDiffTick);
-  charts.activity   = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee, v => fmt(v,0), fmtFeeTick);
-  charts.priceUsdt  = makePriceChartUSDT("chart-price-usdt");
+  charts.activity    = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee, v => fmt(v,0), fmtFeeTick);
+  charts.activePeers = makeLineChart("chart-peers", "Active Peers", "#3fb950", v => fmt(v, 0));
+  charts.priceUsdt   = makePriceChartUSDT("chart-price-usdt");
   charts.priceBtc   = makePriceChartBTC("chart-price-btc");
 }
 
 // Range state
-const rangeState = { hr: "year", diff: "year", activity: "year", priceUsdt: "year", priceBtc: "week" };
+const rangeState = { hr: "year", diff: "year", activity: "year", activePeers: "year", priceUsdt: "year", priceBtc: "week" };
 
 function updateChartData(chart, json, range) {
   let pts;
@@ -1320,7 +1378,7 @@ function updatePriceChartBTC(data, range) {
 let DATA_CACHE = {};
 
 async function loadAll() {
-  const [summary, hashrate, difficulty, transactions, fees, versions, peers, price] =
+  const [summary, hashrate, difficulty, transactions, fees, versions, peers, activePeers, price] =
     await Promise.all([
       tryFetchJSON(DATA + "summary.json"),
       tryFetchJSON(DATA + "hashrate.json"),
@@ -1329,6 +1387,7 @@ async function loadAll() {
       tryFetchJSON(DATA + "fees.json"),
       tryFetchJSON(DATA + "versions.json"),
       tryFetchJSON(DATA + "peers.json"),
+      tryFetchJSON(DATA + "active_peers.json"),
       tryFetchJSON(DATA + "price.json"),
     ]);
 
@@ -1338,7 +1397,7 @@ async function loadAll() {
     return;
   }
 
-  DATA_CACHE = { hashrate, difficulty, transactions, fees, versions, price };
+  DATA_CACHE = { hashrate, difficulty, transactions, fees, versions, price, activePeers };
 
   // Stats bar
   if (summary) {
@@ -1378,7 +1437,8 @@ async function loadAll() {
   // Charts (skipped if chart.min.js didn't load)
   if (charts.hashrate   && hashrate)     updateChartData(charts.hashrate,   hashrate,     rangeState.hr);
   if (charts.difficulty && difficulty)   updateChartData(charts.difficulty, difficulty,   rangeState.diff);
-  if (charts.activity   && transactions && fees) updateActivityChart(transactions, fees, rangeState.activity, activityMetric);
+  if (charts.activity    && transactions && fees) updateActivityChart(transactions, fees, rangeState.activity, activityMetric);
+  if (charts.activePeers && activePeers)         updateChartData(charts.activePeers, activePeers, rangeState.activePeers);
 
   // Versions donut
   if (versions) renderVersions(versions);
@@ -1521,7 +1581,7 @@ function wireRangeGroup(groupId, chartKey, cacheKey) {
       } else if (chartKey === "priceBtc") {
         if (DATA_CACHE.price) updatePriceChartBTC(DATA_CACHE.price, rangeState.priceBtc);
       } else {
-        const chartMap = { hr: "hashrate", diff: "difficulty" };
+        const chartMap = { hr: "hashrate", diff: "difficulty", activePeers: "activePeers" };
         if (DATA_CACHE[cacheKey]) {
           updateChartData(charts[chartMap[chartKey]], DATA_CACHE[cacheKey], rangeState[chartKey]);
         }
@@ -1548,8 +1608,9 @@ async function boot() {
   initTheme();   // apply saved theme before charts are created
   wireRangeGroup("hr-range",       "hr",       "hashrate");
   wireRangeGroup("diff-range",     "diff",     "difficulty");
-  wireRangeGroup("activity-range", "activity", "transactions");
-  wireRangeGroup("price-usdt-range", "priceUsdt", "price");
+  wireRangeGroup("activity-range", "activity",     "transactions");
+  wireRangeGroup("peers-range",    "activePeers",  "activePeers");
+  wireRangeGroup("price-usdt-range", "priceUsdt",  "price");
   wireRangeGroup("price-btc-range",  "priceBtc",  "price");
   wireMetricToggles();
 
@@ -1577,7 +1638,7 @@ document.addEventListener("DOMContentLoaded", boot);
   function openModal() {
     const base = window.location.origin;
     $("api-base-url").innerHTML = 'Base URL: <span>' + base + '</span>';
-    ["price", "summary"].forEach(ep => {
+    ["summary", "hashrate", "difficulty", "transactions", "fees", "active_peers", "versions", "price"].forEach(ep => {
       const el = $("ep-" + ep);
       if (el) el.href = base + "/api/" + ep;
     });

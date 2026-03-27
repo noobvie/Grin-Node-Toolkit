@@ -1,16 +1,12 @@
 <?php
 /**
- * Grin Wallet REST API Proxy
+ * Grin Wallet API Proxy — Owner API v3 (encrypted)
  *
- * Security:
- *   - No CORS headers (same-origin deployment — no cross-origin callers expected)
- *   - CSRF token validated on every POST via PHP session
- *   - Wallet credentials read from /opt/grin/conf/grin_web_wallet_api.json (outside webroot, never exposed to browser)
- *   - Strict method whitelist — unknown methods are rejected
- *   - Server-side HTTP send (avoids browser SSRF; recipient URL validated here)
+ * Wraps every JSON-RPC call in encrypted_request_v3 using the AES key
+ * and wallet token established during login (stored in PHP session).
+ * receive_tx is routed to the Foreign API v2 (plaintext).
  */
 
-// Session hardening — must be set before session_start()
 ini_set('session.gc_maxlifetime', 3600);
 ini_set('session.use_strict_mode', '1');
 session_set_cookie_params([
@@ -22,178 +18,281 @@ session_set_cookie_params([
 ]);
 session_start();
 
-// Enforce session idle timeout (60 minutes)
+header('Content-Type: application/json');
+header('Cache-Control: no-store');
+
+// ── Session idle timeout ──────────────────────────────────────────────────────
 if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity']) > 3600) {
     session_unset();
     session_destroy();
     http_response_code(401);
-    echo json_encode(['error' => ['code' => -32600, 'message' => 'Session expired — please reload the page']]);
+    echo json_encode(['error' => ['code' => -32600, 'message' => 'Session expired — please log in again']]);
+    exit;
+}
+
+// ── Auth check ────────────────────────────────────────────────────────────────
+if (empty($_SESSION['wallet_token']) || empty($_SESSION['aes_key'])) {
+    http_response_code(401);
+    echo json_encode(['error' => ['code' => -32600, 'message' => 'Not authenticated']]);
     exit;
 }
 $_SESSION['last_activity'] = time();
 
-header('Content-Type: application/json');
-
-// ─── CSRF validation ─────────────────────────────────────────────────────────
-function validateCsrfToken(): bool {
-    if (empty($_SESSION['csrf_token'])) return false;
-    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
-    return strlen($token) > 0 && hash_equals($_SESSION['csrf_token'], $token);
-}
-
-// ─── Only POST allowed ────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
     echo json_encode(['error' => ['code' => -32600, 'message' => 'Method Not Allowed']]);
     exit;
 }
 
-// ─── CSRF check ───────────────────────────────────────────────────────────────
-if (!validateCsrfToken()) {
-    http_response_code(403);
-    echo json_encode(['error' => ['code' => -32600, 'message' => 'Invalid or missing CSRF token']]);
-    exit;
-}
-
-// ─── Load server-side config (stored outside webroot) ────────────────────────
-$config_file = '/opt/grin/conf/grin_web_wallet_api.json';
-if (!file_exists($config_file) || !is_readable($config_file)) {
+// ── Load config ───────────────────────────────────────────────────────────────
+$cfgFile = '/opt/grin/conf/grin_web_wallet_api.json';
+if (!file_exists($cfgFile) || !is_readable($cfgFile)) {
     http_response_code(500);
-    echo json_encode(['error' => ['code' => -32000, 'message' => 'Server configuration missing. Deploy via Script 05 option m.']]);
+    echo json_encode(['error' => ['code' => -32000, 'message' => 'Server config missing']]);
     exit;
 }
-$config = json_decode(file_get_contents($config_file), true);
-if (!$config) {
-    http_response_code(500);
-    echo json_encode(['error' => ['code' => -32000, 'message' => 'Server configuration invalid']]);
-    exit;
-}
+$config = json_decode(file_get_contents($cfgFile), true);
+$host   = (string)($config['walletHost']     ?? '127.0.0.1');
+$port   = (int)   ($config['walletPort']     ?? 3415);
+$secret = (string)($config['ownerApiSecret'] ?? '');
 
-$WALLET_HOST       = (string)($config['walletHost'] ?? '127.0.0.1');
-$WALLET_PORT       = intval($config['walletPort'] ?? 3415);
-$WALLET_API_SECRET = (string)($config['ownerApiSecret'] ?? '');
-$REQUEST_TIMEOUT   = 30;
-
-// Wallet must be localhost — defense-in-depth against config tampering
-if (!in_array($WALLET_HOST, ['127.0.0.1', 'localhost', '::1'], true)) {
+if (!in_array($host, ['127.0.0.1', 'localhost', '::1'], true)) {
     http_response_code(500);
     echo json_encode(['error' => ['code' => -32000, 'message' => 'Wallet host must be localhost']]);
     exit;
 }
 
-if ($WALLET_PORT < 1 || $WALLET_PORT > 65535) {
-    http_response_code(500);
-    echo json_encode(['error' => ['code' => -32000, 'message' => 'Invalid wallet port in server config']]);
+$token  = $_SESSION['wallet_token'];
+$aesKey = base64_decode($_SESSION['aes_key']);
+
+// ── Method routing ────────────────────────────────────────────────────────────
+// Owner API v3 methods (encrypted)
+$ownerMethods = [
+    'get_info'     => 'retrieve_summary_info',
+    'get_balance'  => 'retrieve_summary_info',
+    'retrieve_txs' => 'retrieve_txs',
+    'init_send_tx' => 'init_send_tx',
+    'finalize_tx'  => 'finalize_tx',
+    'cancel_tx'    => 'cancel_tx',
+    'estimate_fee' => 'estimate_fee',
+];
+// Foreign API v2 methods (plaintext)
+$foreignMethods = [
+    'receive_tx' => 'receive_tx',
+];
+
+// ── Parse request ─────────────────────────────────────────────────────────────
+$body = file_get_contents('php://input');
+if (empty($body)) {
+    http_response_code(400);
+    echo json_encode(['error' => ['code' => -32700, 'message' => 'Empty request body']]);
+    exit;
+}
+$data = json_decode($body, true);
+if (!$data || ($data['jsonrpc'] ?? '') !== '2.0' || !isset($data['method'])) {
+    http_response_code(400);
+    echo json_encode(['error' => ['code' => -32600, 'message' => 'Invalid JSON-RPC 2.0 request']]);
     exit;
 }
 
-// ─── Method whitelist ─────────────────────────────────────────────────────────
-function mapMethodName(string $method): ?string {
-    $map = [
-        'get_info'     => 'retrieve_summary_info',
-        'get_balance'  => 'retrieve_summary_info',
-        'retrieve_txs' => 'retrieve_txs',
-        'init_send_tx' => 'init_send_tx',
-        'receive_tx'   => 'receive_tx',
-        'finalize_tx'  => 'finalize_tx',
-        'cancel_tx'    => 'cancel_tx',
-        'verify_slate' => 'verify_slate',
-        'estimate_fee' => 'estimate_fee',
+$method = $data['method'];
+$params = $data['params'] ?? [];
+$id     = $data['id'] ?? 1;
+
+// ── Dispatch ──────────────────────────────────────────────────────────────────
+
+if ($method === 'send_http') {
+    handleHttpSend($host, $port, $secret, $aesKey, $token, $params);
+    exit;
+}
+
+if (isset($ownerMethods[$method])) {
+    $mapped  = $ownerMethods[$method];
+    $payload = ['jsonrpc' => '2.0', 'method' => $mapped, 'params' => array_merge(['token' => $token], $params), 'id' => $id];
+    echo json_encode(ownerCall($host, $port, $secret, $aesKey, $payload));
+    exit;
+}
+
+if (isset($foreignMethods[$method])) {
+    $mapped  = $foreignMethods[$method];
+    $payload = ['jsonrpc' => '2.0', 'method' => $mapped, 'params' => $params, 'id' => $id];
+    echo json_encode(foreignCall($host, $port, $secret, $payload));
+    exit;
+}
+
+http_response_code(400);
+echo json_encode(['error' => ['code' => -32601, 'message' => "Method not allowed: $method"]]);
+
+// ── Owner API (encrypted) call ────────────────────────────────────────────────
+function ownerCall(string $host, int $port, string $secret, string $aesKey, array $payload): array {
+    $nonce = random_bytes(12);
+    $tag   = '';
+    $ct    = openssl_encrypt(json_encode($payload), 'aes-256-gcm', $aesKey, OPENSSL_RAW_DATA, $nonce, $tag, '', 16);
+    if ($ct === false) return ['error' => ['code' => -32000, 'message' => 'Encryption failed']];
+
+    $encReq = [
+        'jsonrpc' => '2.0',
+        'method'  => 'encrypted_request_v3',
+        'params'  => [
+            'nonce'    => bin2hex($nonce),
+            'body_enc' => base64_encode($ct . $tag),
+        ],
+        'id' => $payload['id'] ?? 1,
     ];
-    return $map[$method] ?? null;
+
+    $raw = rawOwnerCall($host, $port, $secret, $encReq);
+    if (isset($raw['error'])) return $raw;
+
+    $encBody = $raw['result']['Ok'] ?? null;
+    if (!$encBody || !is_array($encBody)) {
+        return ['error' => ['code' => -32000, 'message' => 'No encrypted body in wallet response']];
+    }
+
+    $plain = decryptBody($encBody, $aesKey);
+    if ($plain === null) return ['error' => ['code' => -32000, 'message' => 'Response decryption failed']];
+
+    $resp = json_decode($plain, true);
+    if (!$resp) return ['error' => ['code' => -32700, 'message' => 'Invalid JSON in decrypted response']];
+
+    return normalizeResponse($resp);
 }
 
-// ─── Recipient URL validation (for server-side HTTP send) ────────────────────
-function isValidRecipientUrl(string $url): bool {
-    $parsed = parse_url($url);
-    if (!$parsed || ($parsed['scheme'] ?? '') !== 'https') return false;
-    $host = strtolower($parsed['host'] ?? '');
-    if (empty($host)) return false;
-
-    // Block private/loopback/link-local ranges
-    $banned_exact    = ['localhost', '::1', '[::1]', '0.0.0.0'];
-    $banned_prefixes = ['127.', '10.', '192.168.', '169.254.', 'fe80:', '::ffff:'];
-    foreach ($banned_exact    as $b) { if ($host === $b) return false; }
-    foreach ($banned_prefixes as $p) { if (strncmp($host, $p, strlen($p)) === 0) return false; }
-
-    // Block 172.16.0.0/12
-    if (preg_match('/^172\.(1[6-9]|2[0-9]|3[01])\./', $host)) return false;
-
-    return true;
-}
-
-// ─── Forward JSON-RPC to wallet ───────────────────────────────────────────────
-function forwardToWallet(string $host, int $port, array $payload, int $timeout, string $apiSecret = ''): array {
+// ── Foreign API (plaintext) call ──────────────────────────────────────────────
+function foreignCall(string $host, int $port, string $secret, array $payload): array {
     try {
-        $socket = fsockopen($host, $port, $errno, $errstr, $timeout);
-        if (!$socket) {
-            throw new Exception("Cannot connect to wallet at $host:$port — $errstr ($errno)");
-        }
-
-        $json    = json_encode($payload);
-        // Grin owner API requires Basic Auth: empty username, owner_api_secret as password
-        $authHeader = '';
-        if ($apiSecret !== '') {
-            $authHeader = "Authorization: Basic " . base64_encode(':' . $apiSecret) . "\r\n";
-        }
-        $request = "POST /v3/wallet HTTP/1.1\r\n"
-                 . "Host: $host:$port\r\n"
-                 . "Content-Type: application/json\r\n"
-                 . "Content-Length: " . strlen($json) . "\r\n"
-                 . $authHeader
-                 . "Connection: close\r\n"
-                 . "\r\n"
-                 . $json;
-
-        fwrite($socket, $request);
-        stream_set_timeout($socket, $timeout);
-
-        $response = '';
-        while (!feof($socket)) { $response .= fgets($socket, 4096); }
+        $socket = fsockopen($host, $port, $errno, $errstr, 10);
+        if (!$socket) throw new Exception("Cannot connect to wallet: $errstr ($errno)");
+        $json = json_encode($payload);
+        $auth = $secret !== '' ? "Authorization: Basic " . base64_encode(':' . $secret) . "\r\n" : '';
+        $req  = "POST /v2/foreign HTTP/1.1\r\n"
+              . "Host: $host:$port\r\n"
+              . "Content-Type: application/json\r\n"
+              . "Content-Length: " . strlen($json) . "\r\n"
+              . $auth
+              . "Connection: close\r\n"
+              . "\r\n"
+              . $json;
+        fwrite($socket, $req);
+        stream_set_timeout($socket, 30);
+        $raw = '';
+        while (!feof($socket)) $raw .= fgets($socket, 4096);
         fclose($socket);
+        $parts = explode("\r\n\r\n", $raw, 2);
+        if (count($parts) !== 2) throw new Exception('Invalid HTTP response from wallet');
+        $status = (int)(explode(' ', $parts[0])[1] ?? 0);
+        if ($status !== 200) throw new Exception("Wallet returned HTTP $status");
+        $resp = json_decode($parts[1], true);
+        if (!$resp) throw new Exception('Invalid JSON from wallet');
+        return normalizeResponse($resp);
+    } catch (Exception $e) {
+        return ['error' => ['code' => -32000, 'message' => $e->getMessage()]];
+    }
+}
 
-        $parts = explode("\r\n\r\n", $response, 2);
-        if (count($parts) !== 2) throw new Exception('Invalid response from wallet');
-        if (strpos($parts[0], '200') === false) throw new Exception('Wallet returned non-200: ' . explode("\r\n", $parts[0])[0]);
-
+// ── Raw HTTP call to /v3/owner ────────────────────────────────────────────────
+function rawOwnerCall(string $host, int $port, string $secret, array $payload): array {
+    try {
+        $socket = fsockopen($host, $port, $errno, $errstr, 10);
+        if (!$socket) throw new Exception("Cannot connect to wallet: $errstr ($errno)");
+        $json = json_encode($payload);
+        $auth = $secret !== '' ? "Authorization: Basic " . base64_encode(':' . $secret) . "\r\n" : '';
+        $req  = "POST /v3/owner HTTP/1.1\r\n"
+              . "Host: $host:$port\r\n"
+              . "Content-Type: application/json\r\n"
+              . "Content-Length: " . strlen($json) . "\r\n"
+              . $auth
+              . "Connection: close\r\n"
+              . "\r\n"
+              . $json;
+        fwrite($socket, $req);
+        stream_set_timeout($socket, 30);
+        $raw = '';
+        while (!feof($socket)) $raw .= fgets($socket, 4096);
+        fclose($socket);
+        $parts = explode("\r\n\r\n", $raw, 2);
+        if (count($parts) !== 2) throw new Exception('Invalid HTTP response from wallet');
+        $status = (int)(explode(' ', $parts[0])[1] ?? 0);
+        if ($status !== 200) throw new Exception("Wallet returned HTTP $status");
         $data = json_decode($parts[1], true);
-        if ($data === null) throw new Exception('Failed to parse wallet response');
+        if ($data === null) throw new Exception('Invalid JSON from wallet');
         return $data;
     } catch (Exception $e) {
         return ['error' => ['code' => -32000, 'message' => $e->getMessage()]];
     }
 }
 
-// ─── Server-side HTTP send (avoids browser SSRF) ─────────────────────────────
-function handleHttpSend(string $walletHost, int $walletPort, array $params, int $timeout, string $apiSecret = ''): void {
+// ── Decrypt response body ─────────────────────────────────────────────────────
+function decryptBody(array $encBody, string $aesKey): ?string {
+    $nonce = hex2bin($encBody['nonce'] ?? '');
+    $full  = base64_decode($encBody['body_enc'] ?? '');
+    if (!$nonce || !$full || strlen($full) < 16) return null;
+    $tag   = substr($full, -16);
+    $ct    = substr($full, 0, -16);
+    $plain = openssl_decrypt($ct, 'aes-256-gcm', $aesKey, OPENSSL_RAW_DATA, $nonce, $tag);
+    return $plain === false ? null : $plain;
+}
+
+// ── Normalize JSON-RPC response ───────────────────────────────────────────────
+// Converts {"result":{"Ok":value}} → {"result":value}
+// Converts {"result":{"Err":msg}}  → {"error":{...}}
+function normalizeResponse(array $resp): array {
+    if (!isset($resp['result'])) return $resp;
+    $result = $resp['result'];
+
+    if (isset($result['Err'])) {
+        $err = $result['Err'];
+        $msg = is_string($err) ? $err : json_encode($err);
+        return ['error' => ['code' => -32000, 'message' => $msg], 'id' => $resp['id'] ?? null];
+    }
+    if (array_key_exists('Ok', $result)) {
+        $resp['result'] = $result['Ok'];
+    }
+    return $resp;
+}
+
+// ── Server-side HTTP send (avoids browser SSRF) ───────────────────────────────
+function isValidRecipientUrl(string $url): bool {
+    $p = parse_url($url);
+    if (!$p || ($p['scheme'] ?? '') !== 'https') return false;
+    $h = strtolower($p['host'] ?? '');
+    if (!$h) return false;
+    foreach (['localhost', '::1', '[::1]', '0.0.0.0'] as $b) {
+        if ($h === $b) return false;
+    }
+    foreach (['127.', '10.', '192.168.', '169.254.', 'fe80:', '::ffff:'] as $pfx) {
+        if (strncmp($h, $pfx, strlen($pfx)) === 0) return false;
+    }
+    if (preg_match('/^172\.(1[6-9]|2[0-9]|3[01])\./', $h)) return false;
+    return true;
+}
+
+function handleHttpSend(string $host, int $port, string $secret, string $aesKey, string $token, array $params): void {
     $recipientUrl = $params['recipient_url'] ?? '';
     $sendParams   = $params['send_params'] ?? [];
 
     if (!isValidRecipientUrl($recipientUrl)) {
         http_response_code(400);
-        echo json_encode(['error' => ['code' => -32602, 'message' => 'Invalid recipient URL (must be HTTPS and non-private)']]);
+        echo json_encode(['error' => ['code' => -32602, 'message' => 'Invalid recipient URL (HTTPS only, no private addresses)']]);
         return;
     }
 
     // Step 1: init_send_tx
-    $initPayload  = ['jsonrpc' => '2.0', 'method' => 'init_send_tx', 'params' => $sendParams, 'id' => 1];
-    $initResponse = forwardToWallet($walletHost, $walletPort, $initPayload, $timeout, $apiSecret);
-    if (isset($initResponse['error'])) { echo json_encode($initResponse); return; }
+    $initPayload = ['jsonrpc' => '2.0', 'method' => 'init_send_tx',
+        'params' => array_merge(['token' => $token], $sendParams), 'id' => 1];
+    $initResp = ownerCall($host, $port, $secret, $aesKey, $initPayload);
+    if (isset($initResp['error'])) { echo json_encode($initResp); return; }
 
-    $slate = $initResponse['result']['slate'] ?? $initResponse['result'] ?? null;
-    if (!$slate) {
-        echo json_encode(['error' => ['code' => -32000, 'message' => 'init_send_tx returned no slate']]);
-        return;
-    }
+    $slate = $initResp['result']['slate'] ?? $initResp['result'] ?? null;
+    if (!$slate) { echo json_encode(['error' => ['code' => -32000, 'message' => 'init_send_tx returned no slate']]); return; }
 
-    // Step 2: POST slate to recipient wallet via curl
+    // Step 2: POST slate to recipient
     $ch = curl_init($recipientUrl);
     curl_setopt_array($ch, [
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => json_encode(['slate' => $slate]),
         CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_TIMEOUT        => 30,
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
     ]);
@@ -207,71 +306,16 @@ function handleHttpSend(string $walletHost, int $walletPort, array $params, int 
         return;
     }
 
-    $recipientResp = json_decode($curlBody, true);
-    $responseSlate = $recipientResp['slate'] ?? $recipientResp['result']['slate'] ?? null;
+    $recipResp     = json_decode($curlBody, true);
+    $responseSlate = $recipResp['slate'] ?? $recipResp['result']['slate'] ?? null;
     if (!$responseSlate) {
         echo json_encode(['error' => ['code' => -32000, 'message' => 'Recipient returned no response slate']]);
         return;
     }
 
     // Step 3: finalize_tx
-    $finalPayload  = ['jsonrpc' => '2.0', 'method' => 'finalize_tx', 'params' => ['slate' => $responseSlate, 'post_tx' => true, 'fluff' => false], 'id' => 2];
-    $finalResponse = forwardToWallet($walletHost, $walletPort, $finalPayload, $timeout, $apiSecret);
-    echo json_encode($finalResponse);
+    $finalPayload = ['jsonrpc' => '2.0', 'method' => 'finalize_tx',
+        'params' => ['token' => $token, 'slate' => $responseSlate, 'post_tx' => true, 'fluff' => false], 'id' => 2];
+    echo json_encode(ownerCall($host, $port, $secret, $aesKey, $finalPayload));
 }
-
-// ─── Request validation ───────────────────────────────────────────────────────
-function validateRequest(array $data): ?array {
-    if (($data['jsonrpc'] ?? '') !== '2.0') {
-        return ['error' => ['code' => -32600, 'message' => 'Invalid JSON-RPC 2.0 request']];
-    }
-    if (!isset($data['method'])) {
-        return ['error' => ['code' => -32600, 'message' => 'Missing method']];
-    }
-    return null;
-}
-
-// ─── Main handler ─────────────────────────────────────────────────────────────
-function handleRequest(): void {
-    global $WALLET_HOST, $WALLET_PORT, $REQUEST_TIMEOUT, $WALLET_API_SECRET;
-
-    $body = file_get_contents('php://input');
-    if (empty($body)) {
-        http_response_code(400);
-        echo json_encode(['error' => ['code' => -32700, 'message' => 'Empty request body']]);
-        return;
-    }
-
-    $data = json_decode($body, true);
-    if ($data === null) {
-        http_response_code(400);
-        echo json_encode(['error' => ['code' => -32700, 'message' => 'Invalid JSON']]);
-        return;
-    }
-
-    $err = validateRequest($data);
-    if ($err) { http_response_code(400); echo json_encode($err); return; }
-
-    $method = $data['method'];
-
-    // Server-side HTTP send (special case)
-    if ($method === 'send_http') {
-        handleHttpSend($WALLET_HOST, $WALLET_PORT, $data['params'] ?? [], $REQUEST_TIMEOUT, $WALLET_API_SECRET);
-        return;
-    }
-
-    // Map and whitelist check
-    $mappedMethod = mapMethodName($method);
-    if ($mappedMethod === null) {
-        http_response_code(400);
-        echo json_encode(['error' => ['code' => -32601, 'message' => "Method not allowed: $method"]]);
-        return;
-    }
-
-    $payload  = ['jsonrpc' => '2.0', 'method' => $mappedMethod, 'params' => $data['params'] ?? [], 'id' => $data['id'] ?? 1];
-    $response = forwardToWallet($WALLET_HOST, $WALLET_PORT, $payload, $REQUEST_TIMEOUT, $WALLET_API_SECRET);
-    echo json_encode($response);
-}
-
-handleRequest();
 ?>

@@ -8,167 +8,191 @@
 </head>
 <body>
 
-    <!-- ── Top header ──────────────────────────────────────────────────────── -->
-    <header class="header">
-        <div class="header-left">
-            <span class="logo-dot"></span>
-            <span class="header-title">GRIN<span class="header-title-accent"> WALLET</span></span>
-        </div>
-        <div class="header-right">
-            <span class="header-sub">SELF-CUSTODIAL</span>
-        </div>
-    </header>
-
-    <!-- ── Desktop tab nav (hidden on mobile) ──────────────────────────────── -->
-    <nav class="tab-nav-top" id="tab-nav-top">
-        <button class="tab-btn active" data-tab="dashboard">[ WALLET ]</button>
-        <button class="tab-btn" data-tab="send">[ SEND ]</button>
-        <button class="tab-btn" data-tab="receive">[ RECEIVE ]</button>
-        <button class="tab-btn" data-tab="history">[ HISTORY ]</button>
-    </nav>
-
-    <!-- ── Main content ────────────────────────────────────────────────────── -->
-    <main class="main">
-
-        <!-- ── Dashboard ───────────────────────────────────────────────────── -->
-        <section class="tab-panel active" id="tab-dashboard">
-
-            <div class="balance-grid">
-                <div class="balance-card">
-                    <div class="balance-label">SPENDABLE</div>
-                    <div id="balanceSpendable" class="balance-amount">─── ∩</div>
-                </div>
-                <div class="balance-card balance-card--dim">
-                    <div class="balance-label">PENDING</div>
-                    <div id="balancePending" class="balance-amount">─── ∩</div>
-                </div>
-                <div class="balance-card balance-card--dim">
-                    <div class="balance-label">IMMATURE</div>
-                    <div id="balanceImmature" class="balance-amount">─── ∩</div>
-                </div>
+    <!-- ── Login screen (shown before wallet UI) ────────────────────────────── -->
+    <div id="loginScreen" class="login-screen">
+        <div class="login-box">
+            <div class="login-logo">
+                <span class="logo-dot"></span>
+                <span class="login-title">GRIN<span class="login-title-accent"> WALLET</span></span>
             </div>
-
-            <div id="status" class="status-box">
-                <span class="loading">CONNECTING TO WALLET...</span>
-            </div>
-
-            <button id="refreshBtn" class="btn btn-outline btn-full mt-12">[ REFRESH ]</button>
-
-            <div class="panel-footer">
+            <p class="login-sub">SELF-CUSTODIAL</p>
+            <form id="loginForm" autocomplete="off" novalidate>
+                <div class="field">
+                    <label for="walletPassword">WALLET PASSWORD</label>
+                    <input type="password" id="walletPassword" class="input" placeholder="••••••••••••" required autofocus>
+                </div>
+                <div id="loginError" class="login-error" style="display:none;"></div>
+                <button type="submit" id="loginBtn" class="btn btn-primary btn-full mt-16">[ UNLOCK WALLET ]</button>
+            </form>
+            <p class="login-footer">
                 Keys stay on your server &mdash;
                 <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer">Grin Node Toolkit</a>
-                &bull; <a href="https://grin.mw" target="_blank" rel="noopener noreferrer">grin.mw</a>
+            </p>
+        </div>
+    </div>
+
+    <!-- ── Wallet UI (hidden until logged in) ───────────────────────────────── -->
+    <div id="walletApp" style="display:none;">
+
+        <!-- ── Top header ──────────────────────────────────────────────────── -->
+        <header class="header">
+            <div class="header-left">
+                <span class="logo-dot"></span>
+                <span class="header-title">GRIN<span class="header-title-accent"> WALLET</span></span>
             </div>
-        </section>
+            <div class="header-right">
+                <span class="header-sub">SELF-CUSTODIAL</span>
+            </div>
+        </header>
 
-        <!-- ── Send ────────────────────────────────────────────────────────── -->
-        <section class="tab-panel" id="tab-send">
+        <!-- ── Desktop tab nav (hidden on mobile) ──────────────────────────── -->
+        <nav class="tab-nav-top" id="tab-nav-top">
+            <button class="tab-btn active" data-tab="dashboard">[ WALLET ]</button>
+            <button class="tab-btn" data-tab="send">[ SEND ]</button>
+            <button class="tab-btn" data-tab="receive">[ RECEIVE ]</button>
+            <button class="tab-btn" data-tab="history">[ HISTORY ]</button>
+        </nav>
 
-            <form id="sendForm" autocomplete="off">
+        <!-- ── Main content ────────────────────────────────────────────────── -->
+        <main class="main">
 
-                <div class="field">
-                    <label for="sendAmount">AMOUNT (∩)</label>
-                    <input type="number" id="sendAmount" class="input"
-                           placeholder="0.000000000" min="0" step="0.0001" required>
-                    <span id="feeEstimate" class="field-hint"></span>
-                </div>
+            <!-- ── Dashboard ───────────────────────────────────────────────── -->
+            <section class="tab-panel active" id="tab-dashboard">
 
-                <div class="field">
-                    <label>SEND METHOD</label>
-                    <div class="method-toggle" role="group" aria-label="Send method">
-                        <button type="button" class="method-btn active" data-method="http">HTTP</button>
-                        <button type="button" class="method-btn" data-method="slatepack">SLATEPACK</button>
+                <div class="balance-grid">
+                    <div class="balance-card">
+                        <div class="balance-label">SPENDABLE</div>
+                        <div id="balanceSpendable" class="balance-amount">─── ∩</div>
                     </div>
-                    <!-- Hidden input — value kept in sync by method-btn click handlers -->
-                    <input type="hidden" id="sendMethod" value="http">
+                    <div class="balance-card balance-card--dim">
+                        <div class="balance-label">PENDING</div>
+                        <div id="balancePending" class="balance-amount">─── ∩</div>
+                    </div>
+                    <div class="balance-card balance-card--dim">
+                        <div class="balance-label">IMMATURE</div>
+                        <div id="balanceImmature" class="balance-amount">─── ∩</div>
+                    </div>
                 </div>
 
-                <div class="field" id="httpRecipientGroup">
-                    <label for="sendRecipient">RECIPIENT URL</label>
-                    <input type="url" id="sendRecipient" class="input"
-                           placeholder="https://recipient.example.com/v3/foreign">
-                    <span class="field-hint">HTTPS only &mdash; recipient must have a public wallet endpoint.</span>
+                <div id="status" class="status-box">
+                    <span class="loading">CONNECTING TO WALLET...</span>
                 </div>
 
-                <button type="submit" class="btn btn-primary btn-full mt-16">[ SEND GRIN ]</button>
+                <button id="refreshBtn" class="btn btn-outline btn-full mt-12">[ REFRESH ]</button>
 
-            </form>
-
-            <div id="sendResult" class="result-box" style="display:none;"></div>
-
-        </section>
-
-        <!-- ── Receive ─────────────────────────────────────────────────────── -->
-        <section class="tab-panel" id="tab-receive">
-
-            <!-- Your wallet URL -->
-            <div class="receive-block">
-                <div class="block-label">YOUR WALLET URL</div>
-                <code id="walletUrlText" class="url-display"></code>
-                <div class="action-row mt-8">
-                    <button onclick="wallet.copyToClipboard(document.getElementById('walletUrlText').textContent,'urlClipMsg')"
-                            class="btn btn-outline btn-sm">[ COPY URL ]</button>
-                    <span id="urlClipMsg" class="clip-msg"></span>
+                <div class="panel-footer">
+                    Keys stay on your server &mdash;
+                    <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer">Grin Node Toolkit</a>
+                    &bull; <a href="https://grin.mw" target="_blank" rel="noopener noreferrer">grin.mw</a>
                 </div>
-                <div class="qr-box mt-12">
-                    <img id="walletQrImg" src="" alt="Wallet URL QR Code"
-                         style="display:none; max-width:160px; border:1px solid var(--border); padding:6px; background:#000;">
-                    <p id="walletQrError" style="display:none;" class="field-hint">
-                        QR unavailable &mdash; install: <code>apt-get install qrencode</code>
-                    </p>
+            </section>
+
+            <!-- ── Send ────────────────────────────────────────────────────── -->
+            <section class="tab-panel" id="tab-send">
+
+                <form id="sendForm" autocomplete="off">
+
+                    <div class="field">
+                        <label for="sendAmount">AMOUNT (∩)</label>
+                        <input type="number" id="sendAmount" class="input"
+                               placeholder="0.000000000" min="0" step="0.0001" required>
+                        <span id="feeEstimate" class="field-hint"></span>
+                    </div>
+
+                    <div class="field">
+                        <label>SEND METHOD</label>
+                        <div class="method-toggle" role="group" aria-label="Send method">
+                            <button type="button" class="method-btn active" data-method="http">HTTP</button>
+                            <button type="button" class="method-btn" data-method="slatepack">SLATEPACK</button>
+                        </div>
+                        <input type="hidden" id="sendMethod" value="http">
+                    </div>
+
+                    <div class="field" id="httpRecipientGroup">
+                        <label for="sendRecipient">RECIPIENT URL</label>
+                        <input type="url" id="sendRecipient" class="input"
+                               placeholder="https://recipient.example.com/v2/foreign">
+                        <span class="field-hint">HTTPS only &mdash; recipient must have a public wallet endpoint.</span>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary btn-full mt-16">[ SEND GRIN ]</button>
+
+                </form>
+
+                <div id="sendResult" class="result-box" style="display:none;"></div>
+
+            </section>
+
+            <!-- ── Receive ─────────────────────────────────────────────────── -->
+            <section class="tab-panel" id="tab-receive">
+
+                <div class="receive-block">
+                    <div class="block-label">YOUR WALLET URL</div>
+                    <code id="walletUrlText" class="url-display"></code>
+                    <div class="action-row mt-8">
+                        <button onclick="wallet.copyToClipboard(document.getElementById('walletUrlText').textContent,'urlClipMsg')"
+                                class="btn btn-outline btn-sm">[ COPY URL ]</button>
+                        <span id="urlClipMsg" class="clip-msg"></span>
+                    </div>
+                    <div class="qr-box mt-12">
+                        <img id="walletQrImg" src="" alt="Wallet URL QR Code"
+                             style="display:none; max-width:160px; border:1px solid var(--border); padding:6px; background:#000;">
+                        <p id="walletQrError" style="display:none;" class="field-hint">
+                            QR unavailable &mdash; install: <code>apt-get install qrencode</code>
+                        </p>
+                    </div>
                 </div>
-            </div>
 
-            <!-- Process incoming Slatepack -->
-            <div class="receive-block">
-                <div class="block-label">PROCESS INCOMING SLATEPACK</div>
-                <p class="field-hint mb-8">Paste the sender's Slatepack below to sign and respond.</p>
-                <textarea id="receiveSlateInput" class="slate-input"
-                          placeholder="BEGINSLATEPACK. ... ENDSLATEPACK."></textarea>
-                <button id="processSlateBtn" class="btn btn-outline btn-full mt-10">[ PROCESS SLATEPACK ]</button>
-                <div id="receiveResult" class="result-box" style="display:none;"></div>
-            </div>
+                <div class="receive-block">
+                    <div class="block-label">PROCESS INCOMING SLATEPACK</div>
+                    <p class="field-hint mb-8">Paste the sender's Slatepack below to sign and respond.</p>
+                    <textarea id="receiveSlateInput" class="slate-input"
+                              placeholder="BEGINSLATEPACK. ... ENDSLATEPACK."></textarea>
+                    <button id="processSlateBtn" class="btn btn-outline btn-full mt-10">[ PROCESS SLATEPACK ]</button>
+                    <div id="receiveResult" class="result-box" style="display:none;"></div>
+                </div>
 
-            <!-- Finalize -->
-            <div class="receive-block">
-                <div class="block-label">FINALIZE &amp; BROADCAST</div>
-                <p class="field-hint mb-8">After the recipient responds, paste their Slatepack here to broadcast.</p>
-                <textarea id="finalizeSlateInput" class="slate-input"
-                          placeholder="BEGINSLATEPACK. ... ENDSLATEPACK."></textarea>
-                <button id="finalizeBtn" class="btn btn-primary btn-full mt-10">[ FINALIZE &amp; BROADCAST ]</button>
-                <div id="finalizeResult" class="result-box" style="display:none;"></div>
-            </div>
+                <div class="receive-block">
+                    <div class="block-label">FINALIZE &amp; BROADCAST</div>
+                    <p class="field-hint mb-8">After the recipient responds, paste their Slatepack here to broadcast.</p>
+                    <textarea id="finalizeSlateInput" class="slate-input"
+                              placeholder="BEGINSLATEPACK. ... ENDSLATEPACK."></textarea>
+                    <button id="finalizeBtn" class="btn btn-primary btn-full mt-10">[ FINALIZE &amp; BROADCAST ]</button>
+                    <div id="finalizeResult" class="result-box" style="display:none;"></div>
+                </div>
 
-        </section>
+            </section>
 
-        <!-- ── History ─────────────────────────────────────────────────────── -->
-        <section class="tab-panel" id="tab-history">
-            <div id="transactionsList">
-                <p class="loading">LOADING TRANSACTIONS...</p>
-            </div>
-        </section>
+            <!-- ── History ─────────────────────────────────────────────────── -->
+            <section class="tab-panel" id="tab-history">
+                <div id="transactionsList">
+                    <p class="loading">LOADING TRANSACTIONS...</p>
+                </div>
+            </section>
 
-    </main>
+        </main>
 
-    <!-- ── Bottom tab nav (mobile only) ────────────────────────────────────── -->
-    <nav class="tab-nav-bottom" id="tab-nav-bottom">
-        <button class="tab-btn-bottom active" data-tab="dashboard">
-            <span class="tab-icon">⬡</span>
-            <span class="tab-label">WALLET</span>
-        </button>
-        <button class="tab-btn-bottom" data-tab="send">
-            <span class="tab-icon">↑</span>
-            <span class="tab-label">SEND</span>
-        </button>
-        <button class="tab-btn-bottom" data-tab="receive">
-            <span class="tab-icon">↓</span>
-            <span class="tab-label">RECEIVE</span>
-        </button>
-        <button class="tab-btn-bottom" data-tab="history">
-            <span class="tab-icon">≡</span>
-            <span class="tab-label">HISTORY</span>
-        </button>
-    </nav>
+        <!-- ── Bottom tab nav (mobile only) ────────────────────────────────── -->
+        <nav class="tab-nav-bottom" id="tab-nav-bottom">
+            <button class="tab-btn-bottom active" data-tab="dashboard">
+                <span class="tab-icon">⬡</span>
+                <span class="tab-label">WALLET</span>
+            </button>
+            <button class="tab-btn-bottom" data-tab="send">
+                <span class="tab-icon">↑</span>
+                <span class="tab-label">SEND</span>
+            </button>
+            <button class="tab-btn-bottom" data-tab="receive">
+                <span class="tab-icon">↓</span>
+                <span class="tab-label">RECEIVE</span>
+            </button>
+            <button class="tab-btn-bottom" data-tab="history">
+                <span class="tab-icon">≡</span>
+                <span class="tab-label">HISTORY</span>
+            </button>
+        </nav>
+
+    </div><!-- #walletApp -->
 
     <script src="js/slate-handler.js"></script>
     <script src="js/grin-wallet-client.js"></script>
@@ -197,12 +221,43 @@
             });
         });
 
+        // ── Login form ─────────────────────────────────────────────────────────
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn     = document.getElementById('loginBtn');
+            const errEl   = document.getElementById('loginError');
+            const password = document.getElementById('walletPassword').value;
+            btn.disabled  = true;
+            btn.textContent = '[ UNLOCKING... ]';
+            errEl.style.display = 'none';
+            try {
+                await wallet.login(password);
+                document.getElementById('loginScreen').style.display = 'none';
+                document.getElementById('walletApp').style.display   = '';
+                wallet.initApp();
+            } catch (err) {
+                errEl.textContent   = err.message;
+                errEl.style.display = 'block';
+                btn.disabled        = false;
+                btn.textContent     = '[ UNLOCK WALLET ]';
+                document.getElementById('walletPassword').value = '';
+                document.getElementById('walletPassword').focus();
+            }
+        });
+
         // ── App init ───────────────────────────────────────────────────────────
         document.addEventListener('DOMContentLoaded', () => {
             const urlEl = document.getElementById('walletUrlText');
             if (urlEl) urlEl.textContent = window.location.origin;
 
-            wallet.init();
+            // Check if already authenticated
+            wallet.init().then(authenticated => {
+                if (authenticated) {
+                    document.getElementById('loginScreen').style.display = 'none';
+                    document.getElementById('walletApp').style.display   = '';
+                    wallet.initApp();
+                }
+            });
 
             document.getElementById('refreshBtn').addEventListener('click', () => {
                 wallet.refreshStatus();
@@ -233,8 +288,12 @@
                 await wallet.finalizeTransaction();
             });
 
-            // Auto-refresh balance every 15 seconds
-            setInterval(() => wallet.refreshBalance(), 15000);
+            // Auto-refresh balance every 15 seconds (only when app is visible)
+            setInterval(() => {
+                if (document.getElementById('walletApp').style.display !== 'none') {
+                    wallet.refreshBalance();
+                }
+            }, 15000);
         });
     </script>
 </body>

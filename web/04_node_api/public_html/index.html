@@ -133,6 +133,46 @@
 
   </div>
 
+  <!-- ── Connect Your Wallet section ─────────────────────────────────── -->
+  <div class="section-label">
+    <span class="section-dot" style="background:var(--blue)"></span>
+    Connect Your Wallet to This Node
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label"><a href="https://github.com/mimblewimble/grin-wallet" target="_blank" rel="noopener">grin-wallet</a> &nbsp;·&nbsp; Edit <code>grin-wallet.toml</code></div>
+      <pre class="curl-block" id="wallet-toml-snippet">check_node_api_http_addr = "https://…"</pre>
+      <div class="card-sub">
+        Set <code>check_node_api_http_addr</code> to this node's URL, then restart your wallet.
+        No local node required — the wallet will sync directly via this HTTPS endpoint.
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-label"><a href="https://github.com/GetGrin/grim" target="_blank" rel="noopener">Grim GUI Wallet</a> &nbsp;·&nbsp; External Connections</div>
+      <pre class="curl-block" id="wallet-grim-snippet">https://…</pre>
+      <ol class="dev-steps">
+        <li>Open <strong>Grim</strong> → go to <strong>External Connections</strong></li>
+        <li>Click <strong>ADD NODE</strong></li>
+        <li>Paste the URL shown above and click <strong>ADD</strong></li>
+        <li>The node should appear with status <strong style="color:var(--green)">Available</strong></li>
+      </ol>
+      <div class="card-sub">
+        External connections let Grim use a remote node — no local Grin node process needed.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var origin = window.location.origin;
+      var tomlEl = document.getElementById('wallet-toml-snippet');
+      var grimEl = document.getElementById('wallet-grim-snippet');
+      if (tomlEl) tomlEl.textContent = 'check_node_api_http_addr = "' + origin + '"';
+      if (grimEl) grimEl.textContent = origin;
+    })();
+  </script>
+
   <!-- ── REST API section ───────────────────────────────────────────────── -->
   <div class="section-label">
     <span class="section-dot" style="background:var(--green)"></span>
@@ -144,7 +184,7 @@
       <div class="card-label">REST API status — simple GET endpoints updated every 60 s</div>
       <div class="card-value dim" id="v-rest-status">Checking…</div>
       <div class="card-sub" id="v-rest-sub">
-        Enable via script 04 → select network, then option 5
+        Enable via script 04 → select network, then option 7
       </div>
     </div>
     <div class="card">

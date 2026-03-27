@@ -5,12 +5,35 @@
 # =============================================================================
 #
 # PURPOSE
-#   Deploys and manages all public-facing web services for a running Grin node:
-#   an nginx HTTPS reverse proxy for the Foreign API, a live status page, and
-#   a lightweight REST API — all behind a single domain with SSL.
+#   Deploys and manages public-facing API access for a running Grin node.
+#   Two exclusive modes are available — choose ONE, not both.
+#
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │  TWO MODES — PICK ONE, NOT BOTH                                      │
+# │  Activating both modes will cause port conflicts.                    │
+# │                                                                       │
+# │  MODE A — Raw TCP Direct Access  (menu options 1/2)                  │
+# │    Opens port 3413 directly on the firewall. No SSL.                 │
+# │    Simplest setup — for nodes that serve external wallets directly.  │
+# │    External wallets connect via plain HTTP:                          │
+# │      check_node_api_http_addr = "http://prunemain.example.com:3413"  │
+# │    Port 3413 bypasses nginx entirely — script 02 HTTP→HTTPS          │
+# │    redirect does NOT interfere (it only applies to ports 80/443).    │
+# │                                                                       │
+# │  MODE B — nginx HTTPS Proxy  (menu options 3/4)                      │
+# │    Exposes /v2/foreign behind HTTPS (Let's Encrypt). Rate limited.   │
+# │    Includes optional live status page and REST API endpoints.        │
+# │    Best for public-facing community nodes:                           │
+# │      https://api.grin.money/   https://api.grinily.com/              │
+# └──────────────────────────────────────────────────────────────────────┘
 #
 # SERVICES
-#   1/3)  nginx HTTPS reverse proxy  (/v2/foreign, JSON-RPC)
+#   1/2)  Raw TCP Direct Access  (MODE A)
+#           · Patches grin-server.toml to bind Foreign API on 0.0.0.0:3413
+#           · Opens ufw firewall rule for port 3413
+#           · Restarts the Grin node in its tmux session to apply changes
+#
+#   3/5)  nginx HTTPS reverse proxy  (/v2/foreign, JSON-RPC)  (MODE B)
 #           · Exposes the read-only Foreign API — Owner API stays private
 #           · CORS enabled so any website can query from a browser
 #           · Rate-limited (10 r/s, burst 20) and connection-limited (20 conn/IP)
@@ -22,14 +45,14 @@
 #           · Static files — zero extra server load per visitor
 #           · Developer section: CORS test, fetch snippets, remote checker
 #
-#   9/11) REST API  (https://domain/rest/)
+#   7/9)  REST API  (https://domain/rest/)
 #           · Simple GET endpoints returning clean JSON
 #           · Ideal for: CoinGecko, Google Sheets, no-code tools, widgets
 #           · Static JSON refreshed every 60 s by cron (www-data)
 #           · Endpoints: /rest/stats.json  /rest/supply.json  /rest/height.json
 #                        /rest/difficulty.json  /rest/emission.json
 #           · CORS enabled; Cache-Control: public, max-age=60
-#           · Requires status page deployed (option 5/7) first
+#           · Requires status page deployed (option 6/7) first
 #
 # NETWORKS
 #   mainnet (port 3413)  ·  testnet (port 13413)
@@ -37,8 +60,8 @@
 # PREREQUISITES
 #   · Must be run as root
 #   · A running Grin node (Script 01) with Foreign API accessible on localhost
-#   · nginx and certbot (auto-installed if missing)
-#   · DNS A record pointing to this server; ports 80 and 443 open
+#   · MODE B only: nginx and certbot (auto-installed if missing)
+#   · MODE B only: DNS A record pointing to this server; ports 80 and 443 open
 #
 # LOG FILE
 #   <toolkit_root>/log/grin_node_services_YYYYMMDD_HHMMSS.log
@@ -395,23 +418,33 @@ show_network_status() {
         echo -e "  ${BOLD}Grin node${RESET}   : ${RED}NOT RUNNING${RESET}  ${YELLOW}⚠ run Script 01${RESET}"
     fi
 
+    # MODE A — Raw TCP status
+    if _raw_tcp_active "$NODE_PORT" 2>/dev/null; then
+        local raw_domain; raw_domain=$(_detect_grin_domain)
+        local raw_addr="${raw_domain:-YOUR_SERVER_IP}"
+        echo -e "  ${BOLD}raw TCP     ${RESET} : ${GREEN}ACTIVE${RESET}  ${DIM}http://$raw_addr:$NODE_PORT${RESET}  ${YELLOW}(MODE A)${RESET}"
+    else
+        echo -e "  ${BOLD}raw TCP     ${RESET} : ${DIM}disabled${RESET}  ${DIM}(option 1)${RESET}"
+    fi
+
+    # MODE B — nginx proxy status
     if [[ -f "/etc/nginx/sites-enabled/$nginx_symlink" ]]; then
         local domain; domain=$(_nginx_domain "$nginx_conf")
-        echo -e "  ${BOLD}nginx proxy${RESET} : ${GREEN}CONFIGURED${RESET}  ${DIM}https://$domain/v2/foreign${RESET}"
+        echo -e "  ${BOLD}nginx proxy${RESET} : ${GREEN}CONFIGURED${RESET}  ${DIM}https://$domain/v2/foreign${RESET}  ${YELLOW}(MODE B)${RESET}"
         if grep -q 'proxy_set_header.*Authorization' "$nginx_conf" 2>/dev/null; then
             echo -e "  ${BOLD}auth header${RESET} : ${GREEN}INJECTED${RESET}  ${DIM}(Basic Auth forwarded to node)${RESET}"
         else
-            echo -e "  ${BOLD}auth header${RESET} : ${YELLOW}MISSING${RESET}  ${DIM}⚠ browser may show 401 prompt — re-run option 1${RESET}"
+            echo -e "  ${BOLD}auth header${RESET} : ${YELLOW}MISSING${RESET}  ${DIM}⚠ browser may show 401 prompt — re-run option 4${RESET}"
         fi
     else
-        echo -e "  ${BOLD}nginx proxy${RESET} : ${DIM}not configured${RESET}  ${DIM}(option 1)${RESET}"
+        echo -e "  ${BOLD}nginx proxy${RESET} : ${DIM}not configured${RESET}  ${DIM}(option 4)${RESET}"
     fi
 
     if [[ -f "$status_deploy/index.html" ]]; then
         local domain2; domain2=$(_nginx_domain "$nginx_conf")
         echo -e "  ${BOLD}status page${RESET} : ${GREEN}DEPLOYED${RESET}  ${DIM}https://$domain2/${RESET}"
     else
-        echo -e "  ${BOLD}status page${RESET} : ${DIM}not deployed${RESET}  ${DIM}(option 3)${RESET}"
+        echo -e "  ${BOLD}status page${RESET} : ${DIM}not deployed${RESET}  ${DIM}(option 6)${RESET}"
     fi
 
     if [[ -f "$rest_dir/stats.json" ]]; then
@@ -419,9 +452,9 @@ show_network_status() {
         echo -e "  ${BOLD}REST API${RESET}    : ${GREEN}ENABLED${RESET}  ${DIM}https://$domain3/rest/${RESET}"
         [[ -f "$rest_cron" ]] \
             && echo -e "  ${BOLD}REST cron${RESET}   : ${GREEN}ACTIVE${RESET}  ${DIM}every 60 s${RESET}" \
-            || echo -e "  ${BOLD}REST cron${RESET}   : ${YELLOW}MISSING${RESET}  ${DIM}(re-run option 5)${RESET}"
+            || echo -e "  ${BOLD}REST cron${RESET}   : ${YELLOW}MISSING${RESET}  ${DIM}(re-run option 8)${RESET}"
     else
-        echo -e "  ${BOLD}REST API${RESET}    : ${DIM}not deployed${RESET}  ${DIM}(option 5)${RESET}"
+        echo -e "  ${BOLD}REST API${RESET}    : ${DIM}not deployed${RESET}  ${DIM}(option 8)${RESET}"
     fi
     echo ""
 }
@@ -432,6 +465,16 @@ show_network_status() {
 
 _enable_node_api_nginx() {
     local network="$1" port="$2" nginx_conf="$3" nginx_symlink="$4"
+
+    # Conflict check — abort if MODE A raw TCP is active
+    local _nginx_sym="$4"
+    local _check_port="$port"
+    if _raw_tcp_active "$_check_port" 2>/dev/null; then
+        error "MODE A Raw TCP is currently active for $network (port $_check_port)."
+        error "Activating both modes will cause port conflicts."
+        error "Disable Raw TCP first (option 2), then enable nginx proxy (option 4)."
+        return
+    fi
 
     show_port_guide "$port" || return
     echo -e "\n${BOLD}${CYAN}── Node Public API ($network, port $port) — nginx HTTPS Setup ──${RESET}\n"
@@ -600,7 +643,7 @@ LREOF
 
     # Re-apply status page + REST patches if they were active before this rebuild.
     # Writing a fresh config above wipes those patches; restore them here so the
-    # status page (/) and REST endpoints (/rest/) keep working after option 1 is re-run.
+    # status page (/) and REST endpoints (/rest/) keep working after option 4 is re-run.
     local _deploy_dir _rest_dir _rest_cron
     if [[ "$network" == "mainnet" ]]; then
         _deploy_dir="$STATUS_PAGE_DEPLOY_MAINNET"
@@ -647,9 +690,9 @@ LREOF
     echo ""
     info "Log file    : $LOG_FILE"
     echo ""
-    info "Next step   : run option 3 to deploy the live status page at https://$domain/"
+    info "Next step   : run option 6 to deploy the live status page at https://$domain/"
     [[ -n "$_proxy_auth_header" ]] && \
-        warn "Note: if the node is rebuilt via Script 01, re-run option 1 here to refresh the proxy auth credential."
+        warn "Note: if the node is rebuilt via Script 01, re-run option 4 here to refresh the proxy auth credential."
     log "nginx $network node API proxy configured: domain=$domain config=$nginx_conf -> 127.0.0.1:$port/v2/foreign"
     log "Test: curl -s -X POST https://$domain/v2/foreign -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"get_tip\",\"params\":[],\"id\":1}'"
     log "Test: curl -X POST https://$domain/v2/foreign -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"get_version\",\"params\":{},\"id\":1}'"
@@ -725,7 +768,7 @@ _enable_status_page() {
 
     if [[ ! -f "$nginx_conf" ]]; then
         warn "nginx proxy not set up for $network yet."
-        warn "Run 'Enable via nginx' (option 1 or 3) first, then come back here."
+        warn "Run 'Enable via nginx' (option 4) first, then come back here."
         return
     fi
 
@@ -833,7 +876,7 @@ disable_testnet_status_page() { _disable_status_page testnet "$NODE_API_NGINX_CO
 #        emission.json     static emission schedule (no node call needed)
 #   4. nginx serves these files under /rest/ with CORS * and Cache-Control 60 s.
 #
-# Requires: status page deployed (option 5 / 7) — the nginx config needs the
+# Requires: status page deployed (option 6) — the nginx config needs the
 #           static root already set by _nginx_patch_status before REST blocks can be added.
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -880,6 +923,284 @@ _lookup_grin_dir() {
     echo ""
 }
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# MODE DETECTION HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Returns 0 (true) if Raw TCP mode is active for the given port:
+#   · ufw has an ALLOW rule for the port, AND
+#   · grin-server.toml has check_node_api_http_addr bound to 0.0.0.0
+_raw_tcp_active() {
+    local port="$1"
+    local grin_dir; grin_dir=$(_lookup_grin_dir "$NETWORK" 2>/dev/null)
+    [[ -z "$grin_dir" ]] && return 1
+    local toml="$grin_dir/grin-server.toml"
+    ufw status 2>/dev/null | grep -q "^${port}/tcp.*ALLOW" \
+        && grep -q "check_node_api_http_addr.*0\.0\.0\.0" "$toml" 2>/dev/null
+}
+
+# Returns 0 (true) if MODE B nginx proxy is active for the given symlink name
+_nginx_proxy_active() {
+    local symlink="$1"
+    [[ -L "/etc/nginx/sites-enabled/$symlink" ]]
+}
+
+# Returns the tmux session name for a given grin node directory
+# Mirrors the naming convention in Script 01.
+_grin_session_name_local() {
+    case "$(basename "${1:-}")" in
+        mainnet-full)  echo "grin_full_mainnet"   ;;
+        mainnet-prune) echo "grin_pruned_mainnet" ;;
+        testnet-prune) echo "grin_pruned_testnet" ;;
+        *)             echo "grin_$(basename "${1:-}")" ;;
+    esac
+}
+
+# Detect the domain from script 02 nginx configs (fullmain/prunemain/prunetest convention).
+# Returns the first matching domain name or empty string if none found.
+_detect_grin_domain() {
+    local conf
+    for conf in /etc/nginx/sites-available/*; do
+        [[ -f "$conf" ]] || continue
+        local base; base="$(basename "$conf")"
+        case "$base" in fullmain.*|prunemain.*|prunetest.*|api.*|grin.*)
+            local domain; domain=$(grep -m1 'server_name' "$conf" 2>/dev/null | awk '{print $2}' | tr -d ';')
+            [[ -n "$domain" ]] && echo "$domain" && return 0
+            ;;
+        esac
+    done
+    # Fallback: try to get public IP
+    hostname -I 2>/dev/null | awk '{print $1}' || true
+}
+
+# Ask user whether to restart the Grin node in tmux, then do it.
+_offer_node_restart() {
+    local network="$1"
+    local grin_dir; grin_dir=$(_lookup_grin_dir "$network" 2>/dev/null)
+    if [[ -z "$grin_dir" ]]; then
+        warn "Cannot locate $network node directory — restart manually."
+        return
+    fi
+
+    local session; session=$(_grin_session_name_local "$grin_dir")
+
+    echo ""
+    echo -ne "${BOLD}Restart Grin node in tmux session '${CYAN}${session}${RESET}${BOLD}' now? [Y/n]: ${RESET}"
+    read -r _restart_confirm || true
+    _restart_confirm="${_restart_confirm:-y}"
+
+    if [[ "${_restart_confirm,,}" == "n" ]]; then
+        warn "Node not restarted — restart manually for changes to take effect:"
+        echo "    tmux kill-session -t $session"
+        echo "    cd $grin_dir && tmux new-session -d -s $session './grin server run'"
+        return
+    fi
+
+    info "Stopping Grin node tmux session '$session'..."
+    tmux kill-session -t "$session" 2>/dev/null || true
+    sleep 1
+
+    info "Starting Grin node in tmux session '$session'..."
+    if id grin &>/dev/null; then
+        tmux new-session -d -s "$session" -c "$grin_dir" \
+            "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$grin_dir\" && ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            2>/dev/null || true
+    else
+        tmux new-session -d -s "$session" -c "$grin_dir" \
+            "echo 'Starting Grin node...'; cd \"$grin_dir\" && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            2>/dev/null || true
+    fi
+
+    sleep 1
+    if tmux has-session -t "$session" 2>/dev/null; then
+        success "Grin node restarted in tmux session '$session'."
+        info "Attach with: tmux attach -t $session"
+    else
+        warn "tmux session '$session' not found after restart attempt."
+        warn "Restart manually: cd $grin_dir && ./grin server run"
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MODE A — Raw TCP Direct Access (options 1/2)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_enable_raw_tcp() {
+    local network="$1" port="$2" nginx_symlink="$3"
+
+    echo -e "\n${BOLD}${CYAN}── Enable Raw TCP Direct Access ($network, port $port) ──${RESET}\n"
+    echo -e "  Opens port ${BOLD}$port${RESET} directly on the firewall."
+    echo -e "  External wallets connect via plain HTTP — no SSL, no nginx."
+    echo ""
+
+    # Conflict check — abort if MODE B nginx proxy is active
+    if _nginx_proxy_active "$nginx_symlink"; then
+        error "MODE B nginx proxy is currently active for $network."
+        error "Activating both modes will cause port conflicts."
+        error "Remove the nginx proxy first (option 5), then enable Raw TCP."
+        return
+    fi
+
+    # Locate grin node data directory and toml
+    local grin_dir; grin_dir=$(_lookup_grin_dir "$network")
+    if [[ -z "$grin_dir" ]]; then
+        error "Cannot locate $network node directory. Install the node via Script 01 first."
+        return
+    fi
+    local toml="$grin_dir/grin-server.toml"
+    if [[ ! -f "$toml" ]]; then
+        error "grin-server.toml not found at: $toml"
+        return
+    fi
+
+    info "Grin data dir : $grin_dir"
+    info "Config file   : $toml"
+    echo ""
+
+    # Patch check_node_api_http_addr to 0.0.0.0:<port>
+    if grep -q "check_node_api_http_addr" "$toml" 2>/dev/null; then
+        sed -i -E "s|check_node_api_http_addr[[:space:]]*=[[:space:]]*\"[^\"]*\"|check_node_api_http_addr = \"0.0.0.0:$port\"|g" "$toml"
+        success "Patched grin-server.toml: check_node_api_http_addr = \"0.0.0.0:$port\""
+    else
+        # Field not present — append to [server] section
+        echo "" >> "$toml"
+        echo "check_node_api_http_addr = \"0.0.0.0:$port\"" >> "$toml"
+        success "Added to grin-server.toml: check_node_api_http_addr = \"0.0.0.0:$port\""
+    fi
+
+    # Open ufw firewall port
+    if command -v ufw &>/dev/null; then
+        ufw allow "$port/tcp" comment "Grin Foreign API (raw TCP, $network)" 2>/dev/null || true
+        success "ufw rule added: allow $port/tcp"
+    else
+        warn "ufw not found — open port $port manually in your firewall."
+    fi
+
+    log "Raw TCP enabled: network=$network port=$port toml=$toml"
+
+    # Detect node domain from script 02 for wallet config example
+    local node_domain; node_domain=$(_detect_grin_domain)
+    local wallet_addr
+    if [[ -n "$node_domain" ]]; then
+        wallet_addr="http://$node_domain:$port"
+    else
+        wallet_addr="http://YOUR_SERVER_IP:$port"
+    fi
+
+    echo ""
+    success "Raw TCP Direct Access enabled for $network!"
+    echo ""
+    info "External wallets can now connect using:"
+    echo ""
+    echo "    check_node_api_http_addr = \"$wallet_addr\""
+    echo ""
+    info "In grin-wallet.toml set this value and restart the wallet."
+    echo ""
+
+    _offer_node_restart "$network"
+}
+
+_disable_raw_tcp() {
+    local network="$1" port="$2"
+
+    echo -e "\n${BOLD}${CYAN}── Disable Raw TCP Direct Access ($network, port $port) ──${RESET}\n"
+
+    # Locate grin node data directory and toml
+    local grin_dir; grin_dir=$(_lookup_grin_dir "$network")
+    if [[ -z "$grin_dir" ]]; then
+        error "Cannot locate $network node directory."
+        return
+    fi
+    local toml="$grin_dir/grin-server.toml"
+
+    # Revert check_node_api_http_addr to 127.0.0.1:<port>
+    if [[ -f "$toml" ]] && grep -q "check_node_api_http_addr" "$toml" 2>/dev/null; then
+        sed -i -E "s|check_node_api_http_addr[[:space:]]*=[[:space:]]*\"[^\"]*\"|check_node_api_http_addr = \"127.0.0.1:$port\"|g" "$toml"
+        success "Reverted grin-server.toml: check_node_api_http_addr = \"127.0.0.1:$port\""
+    else
+        warn "check_node_api_http_addr not found in $toml — no change made."
+    fi
+
+    # Remove ufw rule
+    if command -v ufw &>/dev/null; then
+        ufw delete allow "$port/tcp" 2>/dev/null || true
+        success "ufw rule removed: $port/tcp"
+    fi
+
+    log "Raw TCP disabled: network=$network port=$port"
+
+    _offer_node_restart "$network"
+    success "Raw TCP Direct Access disabled for $network."
+}
+
+_status_raw_tcp() {
+    local network="$1" port="$2"
+
+    echo -e "\n${BOLD}${CYAN}── Raw TCP Status ($network, port $port) ──${RESET}\n"
+
+    local grin_dir; grin_dir=$(_lookup_grin_dir "$network" 2>/dev/null)
+    if [[ -z "$grin_dir" ]]; then
+        warn "Cannot locate $network node directory. Install the node via Script 01 first."
+        return
+    fi
+    local toml="$grin_dir/grin-server.toml"
+
+    echo -e "  ${BOLD}Grin data dir${RESET} : $grin_dir"
+    echo -e "  ${BOLD}Config file  ${RESET} : $toml"
+    echo ""
+
+    if [[ -f "$toml" ]]; then
+        local current_bind
+        current_bind=$(grep 'check_node_api_http_addr' "$toml" 2>/dev/null | head -1 | sed 's/.*= *//' | tr -d '"' || true)
+        if [[ -n "$current_bind" ]]; then
+            if echo "$current_bind" | grep -q "^0\.0\.0\.0"; then
+                echo -e "  ${BOLD}Bind address ${RESET} : ${GREEN}$current_bind${RESET}  ${YELLOW}← MODE A (externally reachable)${RESET}"
+            else
+                echo -e "  ${BOLD}Bind address ${RESET} : ${DIM}$current_bind${RESET}  ${DIM}← localhost only (MODE A not active)${RESET}"
+            fi
+        else
+            echo -e "  ${BOLD}Bind address ${RESET} : ${DIM}(field not set — using Grin default: 127.0.0.1:$port)${RESET}"
+        fi
+    else
+        warn "grin-server.toml not found at: $toml"
+    fi
+
+    echo ""
+    if command -v ufw &>/dev/null; then
+        if ufw status 2>/dev/null | grep -q "^${port}/tcp.*ALLOW"; then
+            echo -e "  ${BOLD}ufw rule     ${RESET} : ${GREEN}OPEN${RESET}  (port $port/tcp is allowed)"
+        else
+            echo -e "  ${BOLD}ufw rule     ${RESET} : ${DIM}no rule for port $port/tcp${RESET}"
+        fi
+    else
+        echo -e "  ${BOLD}ufw         ${RESET} : ${DIM}ufw not installed — check firewall manually${RESET}"
+    fi
+
+    echo ""
+    if ss -tlnp 2>/dev/null | grep -q ":$port "; then
+        local bind_ip; bind_ip=$(ss -tlnp 2>/dev/null | grep ":$port " | awk '{print $4}' | head -1)
+        if echo "$bind_ip" | grep -q "^0\.0\.0\.0\|^\*"; then
+            echo -e "  ${BOLD}Socket       ${RESET} : ${GREEN}LISTENING${RESET} on $bind_ip  ${YELLOW}← MODE A active${RESET}"
+        else
+            echo -e "  ${BOLD}Socket       ${RESET} : ${CYAN}LISTENING${RESET} on $bind_ip  ${DIM}(localhost only)${RESET}"
+        fi
+    else
+        echo -e "  ${BOLD}Socket       ${RESET} : ${RED}NOT LISTENING${RESET}  ${YELLOW}⚠ Grin node not running on port $port${RESET}"
+    fi
+    echo ""
+}
+
+enable_mainnet_raw_tcp()  { _enable_raw_tcp  mainnet "$NODE_API_PORT_MAINNET" "grin-node-api"; }
+disable_mainnet_raw_tcp() { _disable_raw_tcp mainnet "$NODE_API_PORT_MAINNET"; }
+status_mainnet_raw_tcp()  { _status_raw_tcp  mainnet "$NODE_API_PORT_MAINNET"; }
+enable_testnet_raw_tcp()  { _enable_raw_tcp  testnet "$NODE_API_PORT_TESTNET" "grin-node-api-testnet"; }
+disable_testnet_raw_tcp() { _disable_raw_tcp testnet "$NODE_API_PORT_TESTNET"; }
+status_testnet_raw_tcp()  { _status_raw_tcp  testnet "$NODE_API_PORT_TESTNET"; }
+
+_call_enable_raw_tcp()  { [[ "$NETWORK" == "mainnet" ]] && enable_mainnet_raw_tcp  || enable_testnet_raw_tcp; }
+_call_disable_raw_tcp() { [[ "$NETWORK" == "mainnet" ]] && disable_mainnet_raw_tcp || disable_testnet_raw_tcp; }
+_call_status_raw_tcp()  { [[ "$NETWORK" == "mainnet" ]] && status_mainnet_raw_tcp  || status_testnet_raw_tcp; }
+
 _enable_rest_api() {
     local network="$1" port="$2" nginx_conf="$3" rest_dir="$4" cron_file="$5" grin_data_dir="$6"
 
@@ -901,7 +1222,7 @@ _enable_rest_api() {
 
     if [[ ! -f "$deploy_dir/index.html" ]]; then
         warn "Status page not deployed for $network."
-        warn "Run option 3 first to set up the nginx static root, then come back here."
+        warn "Run option 6 first to set up the nginx static root, then come back here."
         return
     fi
 
@@ -1137,46 +1458,69 @@ show_api_menu() {
         rest_cron="$REST_CRON_TESTNET"
     fi
 
-    local label_1 label_3 label_5
-    if [[ -f "/etc/nginx/sites-enabled/$nginx_symlink" ]]; then
-        local _d1; _d1=$(_nginx_domain "$nginx_conf")
-        label_1="${GREEN}[CONFIGURED]${RESET} ${BOLD}$_d1${RESET}  ${DIM}(re-run to change domain)${RESET}"
+    # MODE A status labels
+    local label_1a label_2a
+    if _raw_tcp_active "$NODE_PORT" 2>/dev/null; then
+        local _raw_dom; _raw_dom=$(_detect_grin_domain)
+        local _raw_addr="${_raw_dom:-YOUR_SERVER_IP}"
+        label_1a="${GREEN}[ACTIVE]${RESET}  ${BOLD}http://$_raw_addr:$NODE_PORT${RESET}  ${DIM}(re-run to re-apply)${RESET}"
+        label_2a="${DIM}(close port + revert toml bind)${RESET}"
     else
-        label_1="${DIM}(/v2/foreign, HTTPS + Let's Encrypt)${RESET}"
+        label_1a="${DIM}(opens port $NODE_PORT, patches grin-server.toml)${RESET}"
+        label_2a="${DIM}(nothing active)${RESET}"
+    fi
+
+    # MODE B status labels
+    local label_3 label_5 label_7
+    if [[ -f "/etc/nginx/sites-enabled/$nginx_symlink" ]]; then
+        local _d3; _d3=$(_nginx_domain "$nginx_conf")
+        label_3="${GREEN}[CONFIGURED]${RESET} ${BOLD}$_d3${RESET}  ${DIM}(re-run to change domain)${RESET}"
+    else
+        label_3="${DIM}(/v2/foreign, HTTPS + Let's Encrypt)${RESET}"
     fi
 
     if [[ -f "$status_deploy/index.html" ]]; then
-        local _d3; _d3=$(_nginx_domain "$nginx_conf")
-        label_3="${GREEN}[DEPLOYED]${RESET}   ${BOLD}https://$_d3/${RESET}  ${DIM}(re-run to push updates)${RESET}"
+        local _d5; _d5=$(_nginx_domain "$nginx_conf")
+        label_5="${GREEN}[DEPLOYED]${RESET}   ${BOLD}https://$_d5/${RESET}  ${DIM}(re-run to push updates)${RESET}"
     else
-        label_3="${DIM}(requires option 1 first)${RESET}"
+        label_5="${DIM}(requires option 4 first)${RESET}"
     fi
 
     if [[ -f "$rest_dir/stats.json" ]]; then
-        local _d5; _d5=$(_nginx_domain "$nginx_conf")
-        label_5="${GREEN}[ENABLED]${RESET}    ${BOLD}https://$_d5/rest/${RESET}  ${DIM}(re-run to reinstall collector)${RESET}"
+        local _d7; _d7=$(_nginx_domain "$nginx_conf")
+        label_7="${GREEN}[ENABLED]${RESET}    ${BOLD}https://$_d7/rest/${RESET}  ${DIM}(re-run to reinstall collector)${RESET}"
     elif [[ -f "$status_deploy/index.html" ]]; then
-        label_5="${DIM}(status page deployed ✓ — ready to enable)${RESET}"
+        label_7="${DIM}(status page deployed ✓ — ready to enable)${RESET}"
     else
-        label_5="${DIM}(requires option 3 first)${RESET}"
+        label_7="${DIM}(requires option 6 first)${RESET}"
     fi
 
-    echo -e "${DIM}  ─── Node Public API ─────────────────────────────${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Enable via nginx     $label_1"
-    echo -e "  ${RED}2${RESET}) Remove nginx proxy"
+    echo -e "${BOLD}${YELLOW}  ╔══════════════════════════════════════════════════╗${RESET}"
+    echo -e "${BOLD}${YELLOW}  ║  IMPORTANT — Choose ONE mode only.               ║${RESET}"
+    echo -e "${BOLD}${YELLOW}  ║  Activating both modes will cause port conflicts. ║${RESET}"
+    echo -e "${BOLD}${YELLOW}  ╚══════════════════════════════════════════════════╝${RESET}"
     echo ""
-    echo -e "${DIM}  ─── Live Status Page (requires option 1) ─────────${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Deploy / Update page $label_3"
-    echo -e "  ${RED}4${RESET}) Remove status page"
+    echo -e "${DIM}  ─── MODE A: Raw TCP Direct Access ──────────────────${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Enable Raw TCP       $label_1a"
+    echo -e "  ${RED}2${RESET}) Disable Raw TCP      $label_2a"
+    echo -e "  ${CYAN}3${RESET}) Status Raw TCP       ${DIM}(show current bind address + firewall rule)${RESET}"
     echo ""
-    echo -e "${DIM}  ─── REST API /rest/*.json (requires option 3) ────${RESET}"
-    echo -e "  ${GREEN}5${RESET}) Enable REST API      $label_5"
-    echo -e "  ${RED}6${RESET}) Disable REST API      ${DIM}(removes cron + JSON files)${RESET}"
+    echo -e "${DIM}  ─── MODE B: nginx HTTPS Proxy ───────────────────────${RESET}"
+    echo -e "  ${GREEN}4${RESET}) Enable via nginx     $label_3"
+    echo -e "  ${RED}5${RESET}) Remove nginx proxy"
+    echo ""
+    echo -e "${DIM}  ─── Live Status Page (requires option 4) ─────────────${RESET}"
+    echo -e "  ${GREEN}6${RESET}) Deploy / Update page $label_5"
+    echo -e "  ${RED}7${RESET}) Remove status page"
+    echo ""
+    echo -e "${DIM}  ─── REST API /rest/*.json (requires option 6) ────────${RESET}"
+    echo -e "  ${GREEN}8${RESET}) Enable REST API      $label_7"
+    echo -e "  ${RED}9${RESET}) Disable REST API      ${DIM}(removes cron + JSON files)${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh status${RESET}"
     echo -e "  ${RED}0${RESET}) Back to network select"
     echo ""
-    echo -ne "${BOLD}Select [1-6 / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [1-9 / 0]: ${RESET}"
 }
 
 # ─── Network-aware dispatch ────────────────────────────────────────────────────
@@ -1207,12 +1551,15 @@ main() {
                     read -r choice
 
                     case "$choice" in
-                        1) _call_enable_node_api  || true ;;
-                        2) _call_disable_node_api || true ;;
-                        3) _call_enable_status    || true ;;
-                        4) _call_disable_status   || true ;;
-                        5) _call_enable_rest      || true ;;
-                        6) _call_disable_rest     || true ;;
+                        1) _call_enable_raw_tcp   || true ;;
+                        2) _call_disable_raw_tcp  || true ;;
+                        3) _call_status_raw_tcp   || true ;;
+                        4) _call_enable_node_api  || true ;;
+                        5) _call_disable_node_api || true ;;
+                        6) _call_enable_status    || true ;;
+                        7) _call_disable_status   || true ;;
+                        8) _call_enable_rest      || true ;;
+                        9) _call_disable_rest     || true ;;
                         0) break ;;
                         "") continue ;;
                         *) warn "Invalid option." ; sleep 1 ;;

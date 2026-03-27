@@ -1,58 +1,74 @@
 /**
  * Grin Wallet Client
  *
- * Security changes vs. original:
- *   - CSRF token fetched on init, attached to every API request
- *   - X-Wallet-Host / X-Wallet-Port headers removed (now server-side config)
- *   - Recipient URL validated before HTTP send (https only, no private ranges)
- *   - escapeHtml() used wherever user/API data is interpolated into innerHTML
- *   - HTTP send routed through proxy (server-side) to avoid browser SSRF
+ * Login flow: wallet.init() checks session → if not authenticated, login screen stays.
+ * wallet.login(password) POSTs to api/login.php (ECDH + open_wallet server-side).
+ * After login, all API calls go through api/proxy.php (encrypted_request_v3).
  *
- * Feature additions:
- *   - receive_tx: paste sender's Slatepack → process → response Slatepack
- *   - finalize_tx: paste receiver's Slatepack → finalize → broadcast
- *   - Transaction detail accordion (click to expand)
- *   - Server-side QR code via /api/qr.php (no external service)
+ * Security:
+ *   - No CSRF token (session cookie with SameSite=Strict + HttpOnly replaces it)
+ *   - Password never stored in JS; sent once to login.php and discarded
+ *   - escapeHtml() on all user/API data in innerHTML
+ *   - HTTP send routed server-side (avoids browser SSRF)
  */
 
 class GrinWallet {
     constructor() {
-        this.baseUrl    = `${window.location.protocol}//${window.location.host}/api/proxy.php`;
-        this.csrfToken  = null;
+        this.baseUrl = `${window.location.protocol}//${window.location.host}/api/proxy.php`;
     }
 
-    // ── Init ────────────────────────────────────────────────────────────────
+    // ── Auth ─────────────────────────────────────────────────────────────────
 
+    // Returns true if server says session is valid (proxy returns non-401)
     async init() {
-        await this.fetchCsrfToken();
+        try {
+            const res = await fetch(this.baseUrl, {
+                method:      'POST',
+                credentials: 'same-origin',
+                headers:     { 'Content-Type': 'application/json' },
+                body:        JSON.stringify({ jsonrpc: '2.0', method: 'get_info', params: {}, id: 0 }),
+            });
+            return res.status !== 401;
+        } catch {
+            return false;
+        }
+    }
+
+    async login(password) {
+        const res  = await fetch('/api/login.php', {
+            method:      'POST',
+            credentials: 'same-origin',
+            headers:     { 'Content-Type': 'application/json' },
+            body:        JSON.stringify({ password }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+            throw new Error(data.error || `Login failed (HTTP ${res.status})`);
+        }
+    }
+
+    // Called after login screen is dismissed
+    initApp() {
         this.refreshStatus();
         this.showWalletQr();
-    }
-
-    async fetchCsrfToken() {
-        try {
-            const res  = await fetch('/api/csrf.php', { credentials: 'same-origin' });
-            const data = await res.json();
-            this.csrfToken = data.csrfToken || null;
-        } catch (e) {
-            console.error('[Wallet] CSRF fetch failed:', e);
-        }
     }
 
     // ── Core API call ────────────────────────────────────────────────────────
 
     async apiCall(method, params = {}) {
         try {
-            const headers = { 'Content-Type': 'application/json' };
-            if (this.csrfToken) headers['X-CSRF-Token'] = this.csrfToken;
-
             const response = await fetch(this.baseUrl, {
                 method:      'POST',
                 credentials: 'same-origin',
-                headers,
-                body: JSON.stringify({ jsonrpc: '2.0', method, params, id: Math.random() })
+                headers:     { 'Content-Type': 'application/json' },
+                body:        JSON.stringify({ jsonrpc: '2.0', method, params, id: Math.random() }),
             });
 
+            if (response.status === 401) {
+                // Session expired — reload to show login screen
+                window.location.reload();
+                throw new Error('Session expired');
+            }
             if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 
             const data = await response.json();
@@ -74,8 +90,8 @@ class GrinWallet {
             if (info) {
                 statusEl.className = 'status-content success';
                 statusEl.innerHTML = `
-                    <p><strong>Connected</strong> &mdash; Height: <code>${this.escapeHtml(String(info.height))}</code>
-                    &nbsp;|&nbsp; Network: <strong>${this.escapeHtml(String(info.network))}</strong></p>
+                    <p><strong>Connected</strong> &mdash; Height: <code>${this.escapeHtml(String(info.height ?? info.last_confirmed_height ?? '?'))}</code>
+                    &nbsp;|&nbsp; Network: <strong>${this.escapeHtml(String(info.network ?? 'mainnet'))}</strong></p>
                 `;
             }
             await this.refreshBalance();
@@ -87,7 +103,7 @@ class GrinWallet {
                 <p><small>${this.escapeHtml(error.message)}</small></p>
                 <p style="margin-top:8px;font-size:0.85rem;color:var(--text-secondary);">
                     Ensure the wallet listener is running (Script 05 &rarr; option c)
-                    and the Foreign API is enabled (option d).
+                    and the Owner API is enabled (option d).
                 </p>
             `;
         }
@@ -110,7 +126,9 @@ class GrinWallet {
         const txsEl = document.getElementById('transactionsList');
         txsEl.innerHTML = '<p class="loading">Loading transactions...</p>';
         try {
-            const txs = await this.apiCall('retrieve_txs');
+            const result = await this.apiCall('retrieve_txs');
+            // Owner API v3 returns [refresh_from_node, txs_array]
+            const txs = Array.isArray(result) && Array.isArray(result[1]) ? result[1] : result;
             if (!txs || txs.length === 0) {
                 txsEl.innerHTML = '<p class="info">No transactions yet.</p>';
                 return;
@@ -164,10 +182,11 @@ class GrinWallet {
                 minimum_confirmations:         10,
                 max_outputs:                   500,
                 num_change_outputs:            1,
-                selection_strategy_is_use_all: false
+                selection_strategy_is_use_all: false,
             });
-            return result && result.fee ? this.formatGrin(result.fee.toString()) : 'calculating…';
-        } catch (e) {
+            const fee = result?.fee ?? result?.required_fee ?? null;
+            return fee ? this.formatGrin(fee.toString()) : 'calculating…';
+        } catch {
             return '(unavailable)';
         }
     }
@@ -178,7 +197,6 @@ class GrinWallet {
         let parsed;
         try { parsed = new URL(url); } catch { return false; }
         if (parsed.protocol !== 'https:') return false;
-
         const h = parsed.hostname.toLowerCase();
         const privateRanges = [
             'localhost', '127.', '10.', '192.168.', '169.254.', '::1', '[::1]',
@@ -214,23 +232,19 @@ class GrinWallet {
             const estimatedFee = await this.estimateFee(amount);
             resultEl.innerHTML = `<p class="info">Est. fee: <strong>${this.escapeHtml(estimatedFee)}</strong></p><p class="loading">Initializing transaction…</p>`;
 
-            const amountNgrin  = BigInt(Math.floor(parseFloat(amount) * 1e9));
-            const baseParams   = {
+            const amountNgrin = BigInt(Math.floor(parseFloat(amount) * 1e9));
+            const baseParams  = {
                 amount:                        amountNgrin.toString(),
                 minimum_confirmations:         10,
                 max_outputs:                   500,
                 num_change_outputs:            1,
                 selection_strategy_is_use_all: false,
-                message:                       null
+                message:                       null,
             };
 
             if (method === 'http' && recipient) {
-                // Route through PHP proxy (server-side) to avoid browser SSRF
                 resultEl.innerHTML = '<p class="loading">Sending to recipient via server…</p>';
-                await this.apiCall('send_http', {
-                    recipient_url: recipient,
-                    send_params:   baseParams
-                });
+                await this.apiCall('send_http', { recipient_url: recipient, send_params: baseParams });
                 resultEl.className = 'result-box success';
                 resultEl.innerHTML = `
                     <p><strong>Transaction Sent</strong></p>
@@ -239,7 +253,6 @@ class GrinWallet {
                 `;
                 document.getElementById('sendForm').reset();
             } else {
-                // Slatepack method
                 const initResult = await this.apiCall('init_send_tx', baseParams);
                 const slate      = (initResult && initResult.slate) ? initResult.slate : initResult;
                 const slateStr   = typeof slate === 'string' ? slate : JSON.stringify(slate, null, 2);
@@ -339,7 +352,7 @@ class GrinWallet {
         qrImg.src      = `/api/qr.php?data=${encodeURIComponent(url)}`;
         qrImg.alt      = 'Wallet URL QR Code';
         qrImg.onerror  = () => {
-            qrImg.style.display  = 'none';
+            qrImg.style.display = 'none';
             if (qrNote) qrNote.style.display = 'block';
         };
         qrImg.style.display = 'block';

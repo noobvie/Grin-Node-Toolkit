@@ -99,8 +99,9 @@ html[data-theme="winxp"] .card-sub code         { color: #0044aa; }
 /* dev-steps list (on beige surface) */
 html[data-theme="winxp"] .dev-steps             { color: #333333; }
 html[data-theme="winxp"] .dev-steps code        { color: #000000; }
-/* endpoint links → yellow for visibility on blue bg */
-html[data-theme="winxp"] .endpoint-list a       { color: #ffdd44; }
+/* endpoint links + wallet URL links → yellow for visibility on blue bg */
+html[data-theme="winxp"] .endpoint-list a,
+html[data-theme="winxp"] .wallet-url            { color: #ffdd44; }
 html[data-theme="winxp"] .endpoint-list .ep-desc { color: #c8dff8; }
 html[data-theme="winxp"] .network-badge {
   color: #ffffff;
@@ -358,12 +359,14 @@ main {
   overflow-x: auto;
 }
 
-.endpoint-list a {
+.endpoint-list a,
+.wallet-url {
   color: var(--grin);
   text-decoration: none;
   white-space: nowrap;
 }
-.endpoint-list a:hover { text-decoration: underline; }
+.endpoint-list a:hover,
+.wallet-url:hover { text-decoration: underline; }
 
 .endpoint-list .ep-desc {
   color: var(--muted);

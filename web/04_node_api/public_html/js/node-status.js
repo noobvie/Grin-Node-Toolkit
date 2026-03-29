@@ -191,6 +191,46 @@ async function applyNodeJson() {
   }
 }
 
+// ── Wallet connection links ────────────────────────────────────────────────────
+function applyWalletLinks() {
+  const origin  = window.location.origin;
+  const network = (typeof GRIN_NETWORK !== 'undefined' ? GRIN_NETWORK : '').toLowerCase();
+
+  // Network label appended to card titles  e.g.  " · mainnet"
+  const netLabel = network ? ' \u00b7 ' + network : '';
+  const tomlLabelEl = document.getElementById('net-label-toml');
+  if (tomlLabelEl) tomlLabelEl.textContent = netLabel;
+  const grimLabelEl = document.getElementById('net-label-grim');
+  if (grimLabelEl) grimLabelEl.textContent = netLabel;
+
+  // grin-wallet.toml snippet — URL styled like REST endpoint links
+  const tomlEl = document.getElementById('wallet-toml-snippet');
+  if (tomlEl) {
+    const a = document.createElement('a');
+    a.href        = origin;
+    a.target      = '_blank';
+    a.rel         = 'noopener';
+    a.textContent = origin;
+    a.className   = 'wallet-url';
+    tomlEl.textContent = 'check_node_api_http_addr = "';
+    tomlEl.appendChild(a);
+    tomlEl.appendChild(document.createTextNode('"'));
+  }
+
+  // Grim snippet — just the URL as a link
+  const grimEl = document.getElementById('wallet-grim-snippet');
+  if (grimEl) {
+    const a = document.createElement('a');
+    a.href        = origin;
+    a.target      = '_blank';
+    a.rel         = 'noopener';
+    a.textContent = origin;
+    a.className   = 'wallet-url';
+    grimEl.textContent = '';
+    grimEl.appendChild(a);
+  }
+}
+
 // ── REST endpoints ─────────────────────────────────────────────────────────────
 async function applyRestLinks() {
   const origin = window.location.origin;
@@ -391,6 +431,7 @@ document.addEventListener('DOMContentLoaded', () => {
   applyTheme(currentTheme);
   applyNetwork();
 
+  applyWalletLinks();
   applyRestLinks();
   applyCurlTip();
   applyFetchTip();

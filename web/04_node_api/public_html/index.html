@@ -141,7 +141,7 @@
 
   <div class="grid">
     <div class="card">
-      <div class="card-label"><a href="https://github.com/mimblewimble/grin-wallet" target="_blank" rel="noopener">grin-wallet</a> &nbsp;·&nbsp; Edit <code>grin-wallet.toml</code></div>
+      <div class="card-label"><a href="https://github.com/mimblewimble/grin-wallet" target="_blank" rel="noopener">grin-wallet</a> &nbsp;·&nbsp; Edit <code>grin-wallet.toml</code><span id="net-label-toml"></span></div>
       <pre class="curl-block" id="wallet-toml-snippet">check_node_api_http_addr = "https://…"</pre>
       <div class="card-sub">
         Set <code>check_node_api_http_addr</code> to this node's URL, then restart your wallet.
@@ -149,7 +149,7 @@
       </div>
     </div>
     <div class="card">
-      <div class="card-label"><a href="https://github.com/GetGrin/grim" target="_blank" rel="noopener">Grim GUI Wallet</a> &nbsp;·&nbsp; External Connections</div>
+      <div class="card-label"><a href="https://github.com/GetGrin/grim" target="_blank" rel="noopener">Grim GUI Wallet</a> &nbsp;·&nbsp; External Connections<span id="net-label-grim"></span></div>
       <pre class="curl-block" id="wallet-grim-snippet">https://…</pre>
       <ol class="dev-steps">
         <li>Open <strong>Grim</strong> → go to <strong>External Connections</strong></li>
@@ -162,16 +162,6 @@
       </div>
     </div>
   </div>
-
-  <script>
-    (function () {
-      var origin = window.location.origin;
-      var tomlEl = document.getElementById('wallet-toml-snippet');
-      var grimEl = document.getElementById('wallet-grim-snippet');
-      if (tomlEl) tomlEl.textContent = 'check_node_api_http_addr = "' + origin + '"';
-      if (grimEl) grimEl.textContent = origin;
-    })();
-  </script>
 
   <!-- ── REST API section ───────────────────────────────────────────────── -->
   <div class="section-label">

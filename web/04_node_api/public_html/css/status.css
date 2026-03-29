@@ -100,9 +100,9 @@ html[data-theme="winxp"] .card-sub code         { color: #0044aa; }
 /* dev-steps list (on beige surface) */
 html[data-theme="winxp"] .dev-steps             { color: #333333; }
 html[data-theme="winxp"] .dev-steps code        { color: #000000; }
-/* endpoint links + wallet URL links → yellow for visibility on blue bg */
-html[data-theme="winxp"] .endpoint-list a       { color: #ffdd44; }
-html[data-theme="winxp"] .curl-block a.wallet-url { color: #ffdd44; }
+/* links on blue page bg → yellow for visibility */
+html[data-theme="winxp"] a                      { color: #ffdd44; }
+html[data-theme="winxp"] footer a               { color: #add8ff; }
 html[data-theme="winxp"] .curl-copy-btn         { background: #d4e8ff; color: #000033; border-color: #7baee8; }
 html[data-theme="winxp"] .curl-copy-btn:hover,
 html[data-theme="winxp"] .curl-copy-btn.copied  { background: #007700; color: #ffffff; border-color: #007700; }
@@ -117,9 +117,10 @@ html[data-theme="winxp"] footer {
   border-top: 2px solid #0054e3;
   color: #ffffff;
 }
-html[data-theme="winxp"] footer a { color: #add8ff; }
-
 * { box-sizing: border-box; margin: 0; padding: 0; }
+
+a { color: var(--grin); text-decoration: none; }
+a:hover { text-decoration: underline; }
 
 body {
   background: var(--bg);
@@ -370,13 +371,6 @@ main {
 }
 .endpoint-list a:hover { text-decoration: underline; }
 
-.curl-block a.wallet-url {
-  color: var(--grin);
-  text-decoration: none;
-  white-space: nowrap;
-  font-weight: 600;
-}
-.curl-block a.wallet-url:hover { text-decoration: underline; }
 
 .endpoint-list .ep-desc {
   color: var(--muted);

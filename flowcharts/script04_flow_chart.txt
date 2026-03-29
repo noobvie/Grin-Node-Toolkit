@@ -250,12 +250,21 @@
   │  "unknown zone 'grin_api'"   → zone not in nginx.conf             │
   │                                 (step 7 fix added — should not    │
   │                                  happen any more)                  │
+  │  "duplicate location /rest/" → stale REST block from a previous   │
+  │                                 partial run is still in the config │
+  │                                 FIX: run option 9 first, then 8   │
+  │                                 (disable now strips legacy blocks) │
   │  "duplicate directive"       → limit_req_status defined twice     │
   │                                 check: grep -rn limit_req_status   │
   │                                        /etc/nginx/                 │
   │  nginx -t passes but         → CATCH_ALL anchor not found         │
   │  REST endpoints 404           (run option 6 first, then option 8) │
   └────────────────────────────────────────────────────────────────────┘
+
+  Idempotency guard (enable):
+    Checks for "location /rest/" in the config — NOT the full block text.
+    This prevents duplicate insertion even if the block was written by an
+    older version of the script (different whitespace or comments).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   OPTION 4 REBUILD BEHAVIOUR

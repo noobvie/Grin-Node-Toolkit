@@ -383,11 +383,23 @@ REST_BLOCK = (
     '\n')
 
 if action == 'enable':
-    if REST_BLOCK not in txt and CATCH_ALL in txt:
+    # Use a stable sentinel instead of the full block for idempotency — the exact
+    # block text may differ from a previous script version, causing a false "not found"
+    # and a duplicate insertion.  Presence of any /rest/ location means it's done.
+    if 'location /rest/' not in txt and CATCH_ALL in txt:
         txt = txt.replace(CATCH_ALL, REST_BLOCK + CATCH_ALL)
 elif action == 'disable':
+    # Remove current REST_BLOCK if present (exact match)
     if REST_BLOCK in txt:
         txt = txt.replace(REST_BLOCK, '')
+    # Also remove any legacy REST block variant left by an older script version.
+    # Matches everything from the REST API comment header to the /rest/ location line.
+    import re
+    txt = re.sub(
+        r'[ \t]*# ── REST API[^\n]*\n(?:[ \t]*#[^\n]*\n)*'
+        r'(?:[ \t]+[^\n]+\n)*?'
+        r'[ \t]+location /rest/[^\n]*\n\n',
+        '', txt)
 
 with open(conf_file, 'w') as fh:
     fh.write(txt)

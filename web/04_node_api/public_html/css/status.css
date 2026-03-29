@@ -48,6 +48,7 @@ html[data-theme="matrix"] body {
 }
 html[data-theme="matrix"] .logo-dot { animation: matrix-pulse 0.5s step-start infinite; }
 @keyframes matrix-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+html[data-theme="matrix"] .wallet-url { color: #ffffff; }
 
 /* ── Windows XP theme — retro Tahoma, silver + XP blue ──────────────────── */
 html[data-theme="winxp"] {
@@ -371,12 +372,13 @@ main {
 .endpoint-list a:hover { text-decoration: underline; }
 
 .wallet-url {
-  color: var(--blue);
+  color: #ffffff;
   text-decoration: none;
   white-space: nowrap;
   font-weight: 600;
 }
 .wallet-url:hover { text-decoration: underline; }
+html[data-theme="light"] .wallet-url { color: #111111; }
 
 .endpoint-list .ep-desc {
   color: var(--muted);

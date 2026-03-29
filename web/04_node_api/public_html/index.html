@@ -142,7 +142,10 @@
   <div class="grid">
     <div class="card">
       <div class="card-label"><a href="https://github.com/mimblewimble/grin-wallet" target="_blank" rel="noopener">grin-wallet</a> &nbsp;·&nbsp; Edit <code>grin-wallet.toml</code><span id="net-label-toml"></span></div>
-      <pre class="curl-block" id="wallet-toml-snippet">check_node_api_http_addr = "https://…"</pre>
+      <div class="curl-wrap">
+        <pre class="curl-block" id="wallet-toml-snippet">check_node_api_http_addr = "https://…"</pre>
+        <button class="curl-copy-btn" data-target="wallet-toml-snippet" title="Copy">Copy</button>
+      </div>
       <div class="card-sub">
         Set <code>check_node_api_http_addr</code> to this node's URL, then restart your wallet.
         No local node required — the wallet will sync directly via this HTTPS endpoint.
@@ -150,7 +153,10 @@
     </div>
     <div class="card">
       <div class="card-label"><a href="https://github.com/GetGrin/grim" target="_blank" rel="noopener">Grim GUI Wallet</a> &nbsp;·&nbsp; External Connections<span id="net-label-grim"></span></div>
-      <pre class="curl-block" id="wallet-grim-snippet">https://…</pre>
+      <div class="curl-wrap">
+        <pre class="curl-block" id="wallet-grim-snippet">https://…</pre>
+        <button class="curl-copy-btn" data-target="wallet-grim-snippet" title="Copy">Copy</button>
+      </div>
       <ol class="dev-steps">
         <li>Open <strong>Grim</strong> → go to <strong>External Connections</strong></li>
         <li>Click <strong>ADD NODE</strong></li>

@@ -100,8 +100,11 @@ html[data-theme="winxp"] .card-sub code         { color: #0044aa; }
 html[data-theme="winxp"] .dev-steps             { color: #333333; }
 html[data-theme="winxp"] .dev-steps code        { color: #000000; }
 /* endpoint links + wallet URL links → yellow for visibility on blue bg */
-html[data-theme="winxp"] .endpoint-list a,
-html[data-theme="winxp"] .wallet-url            { color: #ffdd44; }
+html[data-theme="winxp"] .endpoint-list a       { color: #ffdd44; }
+html[data-theme="winxp"] .wallet-url            { color: #ffffff; }
+html[data-theme="winxp"] .curl-copy-btn         { background: #d4e8ff; color: #000033; border-color: #7baee8; }
+html[data-theme="winxp"] .curl-copy-btn:hover,
+html[data-theme="winxp"] .curl-copy-btn.copied  { background: #007700; color: #ffffff; border-color: #007700; }
 html[data-theme="winxp"] .endpoint-list .ep-desc { color: #c8dff8; }
 html[data-theme="winxp"] .network-badge {
   color: #ffffff;
@@ -359,13 +362,19 @@ main {
   overflow-x: auto;
 }
 
-.endpoint-list a,
-.wallet-url {
+.endpoint-list a {
   color: var(--grin);
   text-decoration: none;
   white-space: nowrap;
 }
-.endpoint-list a:hover,
+.endpoint-list a:hover { text-decoration: underline; }
+
+.wallet-url {
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+  font-weight: 600;
+}
 .wallet-url:hover { text-decoration: underline; }
 
 .endpoint-list .ep-desc {
@@ -379,6 +388,42 @@ main {
   color: var(--muted);
   margin-top: 5px;
   font-family: inherit;
+}
+
+/* Curl-wrap: positions the copy button over the pre block */
+.curl-wrap {
+  position: relative;
+  margin: 10px 0 6px;
+}
+.curl-wrap .curl-block {
+  margin: 0;
+  padding-right: 70px; /* leave room for the copy button */
+}
+.curl-copy-btn {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.curl-copy-btn:hover {
+  background: var(--green);
+  color: #000;
+  border-color: var(--green);
+}
+.curl-copy-btn.copied {
+  background: var(--green);
+  color: #000;
+  border-color: var(--green);
 }
 
 /* Curl / code block inside a card */

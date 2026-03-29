@@ -426,6 +426,40 @@ function initDevCollapse() {
   });
 }
 
+// ── Copy buttons on curl-wrap blocks ──────────────────────────────────────────
+function initCurlCopyButtons() {
+  document.querySelectorAll('.curl-copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.getAttribute('data-target');
+      const pre = document.getElementById(targetId);
+      if (!pre) return;
+      navigator.clipboard.writeText(pre.textContent.trim()).then(() => {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      }).catch(() => {
+        // Fallback for older browsers
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(pre);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand('copy');
+        sel.removeAllRanges();
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    });
+  });
+}
+
 // ── Boot ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(currentTheme);
@@ -436,6 +470,7 @@ document.addEventListener('DOMContentLoaded', () => {
   applyCurlTip();
   applyFetchTip();
   initDevCollapse();
+  initCurlCopyButtons();
 
   // Attach button listeners here — inline onclick is blocked by CSP script-src 'self'
   document.getElementById('test-btn')?.addEventListener('click', runSelfTest);

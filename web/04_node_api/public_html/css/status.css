@@ -100,8 +100,12 @@ html[data-theme="winxp"] .card-sub code         { color: #0044aa; }
 /* dev-steps list (on beige surface) */
 html[data-theme="winxp"] .dev-steps             { color: #333333; }
 html[data-theme="winxp"] .dev-steps code        { color: #000000; }
-/* links on blue page bg → yellow for visibility */
-html[data-theme="winxp"] a                      { color: #ffdd44; }
+/* links on beige card surface → dark blue */
+html[data-theme="winxp"] a                      { color: #0044aa; }
+/* links on blue bg (curl-block, endpoint-list) → yellow */
+html[data-theme="winxp"] .curl-block a,
+html[data-theme="winxp"] .endpoint-list a       { color: #ffdd44; }
+/* footer links on blue gradient */
 html[data-theme="winxp"] footer a               { color: #add8ff; }
 html[data-theme="winxp"] .curl-copy-btn         { background: #d4e8ff; color: #000033; border-color: #7baee8; }
 html[data-theme="winxp"] .curl-copy-btn:hover,

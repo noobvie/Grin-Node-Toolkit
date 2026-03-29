@@ -85,11 +85,12 @@ html[data-theme="winxp"] header .refresh-badge { color: #ffffff; }
 html[data-theme="winxp"] .section-label         { color: #ffffff; }
 html[data-theme="winxp"] .section-dot           { background: #ffffff !important; }
 /* API status bar pills */
-html[data-theme="winxp"] .api-pill              { color: #dddddd; }
-html[data-theme="winxp"] .api-pill code         { color: #ffffff; }
-html[data-theme="winxp"] .api-pill.pill-ok      { color: #ffffff; }
-html[data-theme="winxp"] .api-pill.pill-ok .pill-dot,
-html[data-theme="winxp"] .api-pill.pill-off .pill-dot { background: #ffffff !important; }
+html[data-theme="winxp"] .api-pill              { color: #333333; }
+html[data-theme="winxp"] .api-pill code         { color: #000066; }
+html[data-theme="winxp"] .api-pill.pill-ok      { color: #1a5c1a; }
+html[data-theme="winxp"] .api-pill.pill-ok .pill-dot { background: #1a5c1a !important; }
+html[data-theme="winxp"] .api-pill.pill-off     { color: #8b0000; }
+html[data-theme="winxp"] .api-pill.pill-off .pill-dot { background: #8b0000 !important; }
 /* curl-block uses --bg as its background → text must be light */
 html[data-theme="winxp"] .curl-block            { color: #f0f0f0; border-color: #7baee8; }
 html[data-theme="winxp"] .fetch-result.ok       { color: #aaffaa; border-color: #aaffaa; }
@@ -101,7 +102,7 @@ html[data-theme="winxp"] .dev-steps             { color: #333333; }
 html[data-theme="winxp"] .dev-steps code        { color: #000000; }
 /* endpoint links + wallet URL links → yellow for visibility on blue bg */
 html[data-theme="winxp"] .endpoint-list a       { color: #ffdd44; }
-html[data-theme="winxp"] .wallet-url            { color: #ffffff; }
+html[data-theme="winxp"] .wallet-url            { color: #ffdd44; }
 html[data-theme="winxp"] .curl-copy-btn         { background: #d4e8ff; color: #000033; border-color: #7baee8; }
 html[data-theme="winxp"] .curl-copy-btn:hover,
 html[data-theme="winxp"] .curl-copy-btn.copied  { background: #007700; color: #ffffff; border-color: #007700; }
@@ -370,7 +371,7 @@ main {
 .endpoint-list a:hover { text-decoration: underline; }
 
 .wallet-url {
-  color: var(--text);
+  color: var(--blue);
   text-decoration: none;
   white-space: nowrap;
   font-weight: 600;

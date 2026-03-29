@@ -394,7 +394,7 @@ import_data() {
     detect_node
     echo -e "  ${DIM}Node : ${NODE_URL}${RESET}"
     echo ""
-    echo -e "  ${BOLD}── Stats Collector  (node data: hashrate, TX, fees, peers) ──${RESET}"
+    echo -e "  ${BOLD}── Stats Collector  (node data: hashrate, TX, fees, active peers) ──${RESET}"
     echo ""
     echo -e "  ${GREEN}a${RESET}) Init DB schema only          ${DIM}(RUN ONCE! First-time setup without data)${RESET}"
     echo -e "  ${GREEN}b${RESET}) Full history import          ${DIM}(RUN ONCE! Import headers + TX/fees — 6+ hours)${RESET}"
@@ -403,7 +403,7 @@ import_data() {
     echo -e "  ${GREEN}d${RESET}) Backfill last 90 days        ${DIM}(TX + fees — lighter on memory)${RESET}"
     echo -e "  ${GREEN}e${RESET}) Backfill entire chain        ${DIM}(TX + fees from block 0 — several hours)${RESET}"
     echo -e "  ${GREEN}f${RESET}) Incremental update only      ${DIM}(new blocks since last run)${RESET}"
-    echo -e "  ${GREEN}g${RESET}) Peers geolocation only       ${DIM}(refresh peer map, no blockchain data)${RESET}"
+    echo -e "  ${GREEN}g${RESET}) Peers geolocation only       ${DIM}(refresh peer map + active peers chart, no blockchain data)${RESET}"
     echo ""
     echo -e "  ${BOLD}── Price Collector  (GRIN/USDT from Gate.io) ──${RESET}"
     echo ""
@@ -439,7 +439,7 @@ import_data() {
         d) bin="$COLLECTOR_BIN"; cmd="--backfill-stats 90";  desc="Stats: Backfill last 90 days" ;;
         e) bin="$COLLECTOR_BIN"; cmd="--backfill-stats all"; desc="Stats: Backfill entire chain TX/fees" ;;
         f) bin="$COLLECTOR_BIN"; cmd="--update";             desc="Stats: Incremental update" ;;
-        g) bin="$COLLECTOR_BIN"; cmd="--peers-only";         desc="Stats: Peers geolocation update" ;;
+        g) bin="$COLLECTOR_BIN"; cmd="--peers-only";         desc="Stats: Peers geolocation + active peers chart update" ;;
         # ── Price collector ──────────────────────────────────────────────────
         h)
             [[ ! -f "$PRICE_COLLECTOR_BIN" ]] && { warn "Price collector not installed."; sleep 1; return; }
@@ -595,13 +595,25 @@ server {
     # See /etc/nginx/snippets/grin-api.conf and /etc/nginx/conf.d/grin-rate-limit.conf
     #
     # Endpoints:
-    #   /api/price    → GRIN/USDT price, OHLCV history  (06_price_collector.py)
-    #   /api/summary  → tip height, hashrate, difficulty, supply  (06_collector.py)
-    #   /api/peers    → disabled (privacy mode — peer data is internal only)
+    #   /api/summary      → tip height, hashrate, difficulty, supply  (06_collector.py)
+    #   /api/hashrate     → GPS history daily/hourly/recent           (06_collector.py)
+    #   /api/difficulty   → difficulty history                        (06_collector.py)
+    #   /api/transactions → tx-per-block history                      (06_collector.py)
+    #   /api/fees         → fees-per-block history                    (06_collector.py)
+    #   /api/active_peers → mainnet+testnet peer count history        (06_collector.py)
+    #   /api/versions     → node version distribution                 (06_collector.py)
+    #   /api/price        → GRIN/USDT price, OHLCV history            (06_price_collector.py)
+    #   /api/peers        → disabled (privacy mode — peer data is internal only)
     #
-    location = /api/price   { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/price.json;   }
-    location = /api/summary { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/summary.json; }
-    location = /api/peers   { return 404; }
+    location = /api/summary      { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/summary.json;      }
+    location = /api/hashrate     { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/hashrate.json;     }
+    location = /api/difficulty   { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/difficulty.json;   }
+    location = /api/transactions { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/transactions.json; }
+    location = /api/fees         { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/fees.json;         }
+    location = /api/active_peers { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/active_peers.json; }
+    location = /api/versions     { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/versions.json;     }
+    location = /api/price        { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/price.json;        }
+    location = /api/peers        { return 404; }
 
     # Block everything else under /api/ — no directory listing, no other files
     location /api/ { return 404; }
@@ -704,7 +716,7 @@ status_stats() {
 
     # JSON data files
     echo -e "  JSON exports"
-    for f in hashrate difficulty transactions fees versions peers; do
+    for f in summary hashrate difficulty transactions fees active_peers versions peers price; do
         local jf="$WWW_DIR/data/${f}.json"
         if [[ -f "$jf" ]]; then
             local age; age=$(( ($(date +%s) - $(stat -c %Y "$jf" 2>/dev/null || echo 0)) / 60 ))

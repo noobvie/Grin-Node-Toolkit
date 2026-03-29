@@ -1,0 +1,133 @@
+{% extends "admin/base.html" %}
+{% block title %}Donations{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Donations</h1>
+  <p>Total received: {{ "%.4f"|format(total_received) }} GRIN from {{ donations|length }} donations</p>
+</div>
+
+<!-- Add donation form -->
+<div class="card">
+  <div class="card-title">Record a Donation</div>
+  <p style="font-size:.82rem;color:var(--text-dim);margin-bottom:1rem;">
+    Manually record a donation that was received (e.g., verified on-chain but not auto-detected).
+  </p>
+  <form id="add-donation-form">
+    <input type="hidden" name="_csrf" value="{{ csrf }}">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;">
+      <div class="form-group">
+        <label>Amount (GRIN) <span style="color:var(--error);">*</span></label>
+        <input type="number" id="don-amount" name="amount" step="0.001" min="0.001" placeholder="2.000" required>
+      </div>
+      <div class="form-group">
+        <label>TX ID (optional)</label>
+        <input type="text" id="don-txid" name="tx_id" placeholder="tx slate id or hash">
+      </div>
+      <div class="form-group">
+        <label>From Address (optional)</label>
+        <input type="text" id="don-addr" name="from_address" placeholder="grin1...">
+      </div>
+      <div class="form-group">
+        <label>Note (optional)</label>
+        <input type="text" id="don-note" name="note" placeholder="e.g., community donation">
+      </div>
+    </div>
+    <div id="don-error" class="alert alert-err" style="display:none;"></div>
+    <div id="don-ok" class="alert alert-ok" style="display:none;"></div>
+    <button type="submit" class="btn">Record Donation</button>
+  </form>
+</div>
+
+<!-- Donations table -->
+<div class="card" style="padding:0;">
+  <div class="card-title" style="padding:1rem 1.4rem .6rem;">Donation History</div>
+  <div class="table-wrap">
+    {% if donations %}
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Amount</th>
+          <th>From Address</th>
+          <th>TX ID</th>
+          <th>Note</th>
+          <th>Date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in donations %}
+        <tr>
+          <td class="mono text-dim">#{{ d.id }}</td>
+          <td class="mono"><strong>{{ "%.4f"|format(d.amount) }}</strong> GRIN</td>
+          <td class="mono text-dim" title="{{ d.from_address }}">
+            {% set fa = d.from_address %}
+            {% if fa and fa|length > 12 %}{{ fa[:8] }}…{{ fa[-4:] }}{% else %}{{ fa or '—' }}{% endif %}
+          </td>
+          <td class="mono text-dim" style="font-size:.78rem;">
+            {{ d.tx_id[:16] if d.tx_id else '—' }}
+          </td>
+          <td style="font-size:.82rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            {{ d.note or '—' }}
+          </td>
+          <td class="text-dim" style="font-size:.8rem;white-space:nowrap;">
+            {{ d.created_at[:16] if d.created_at else '—' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div style="padding:2rem;text-align:center;color:var(--text-dim);">No donations recorded yet.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById("add-donation-form").addEventListener("submit", async function(e) {
+  e.preventDefault();
+  const errEl = document.getElementById("don-error");
+  const okEl  = document.getElementById("don-ok");
+  errEl.style.display = "none";
+  okEl.style.display  = "none";
+
+  const btn = this.querySelector("button[type=submit]");
+  btn.disabled = true;
+
+  const amount = parseFloat(document.getElementById("don-amount").value);
+  if (isNaN(amount) || amount <= 0) {
+    errEl.textContent = "Amount must be a positive number.";
+    errEl.style.display = "block";
+    btn.disabled = false;
+    return;
+  }
+
+  const payload = {
+    _csrf:        window._CSRF,
+    amount:       amount,
+    tx_id:        document.getElementById("don-txid").value.trim(),
+    from_address: document.getElementById("don-addr").value.trim(),
+    note:         document.getElementById("don-note").value.trim(),
+  };
+
+  try {
+    const resp = await fetch("/{{ admin_path }}/api/add-donation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": window._CSRF },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "Server error");
+    okEl.textContent = "Donation recorded (id #" + data.id + ", " + data.amount.toFixed(4) + " GRIN). Reloading…";
+    okEl.style.display = "block";
+    setTimeout(() => location.reload(), 1500);
+  } catch (ex) {
+    errEl.textContent = "Error: " + ex.message;
+    errEl.style.display = "block";
+    btn.disabled = false;
+  }
+});
+</script>
+{% endblock %}

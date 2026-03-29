@@ -250,14 +250,28 @@ _cmd_wallet_setup_for_net() {
     local pass_file="$wallet_dir/${net}_pass_wallet.txt"
     local seed_file="$wallet_dir/${net}_seed.txt"
     local toml_file="$wallet_dir/grin-wallet.toml"
+    local _node_port; [[ "$net" == "mainnet" ]] && _node_port="3413" || _node_port="13413"
+
+    # Step tracking for end summary
+    local _did_download="no" _did_init="no" _saved_pass="no" _saved_seed="no"
+    local _did_patch="no" _patch_node_dir=""
 
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -e "${BOLD}${CYAN} CMD Wallet Quick Setup — ${net_label}${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  ${DIM}Directory : $wallet_dir${RESET}"
-    echo -e "  ${DIM}Binary    : $wallet_bin${RESET}"
+    [[ "$net" == "mainnet" ]] && \
+        echo -e "  ${BOLD}${YELLOW}⚠  MAINNET — operates with real GRIN (monetary value)${RESET}\n"
+    echo -e "  ${DIM}─── Setup target ─────────────────────────────────────${RESET}"
+    echo ""
+    echo -e "  Network      : ${BOLD}$net_label${RESET}"
+    echo -e "  Node port    : ${DIM}$_node_port${RESET}"
+    echo -e "  Wallet dir   : ${DIM}$wallet_dir${RESET}"
+    echo -e "  Binary       : ${DIM}$wallet_bin${RESET}"
+    echo -e "  Pass file    : ${DIM}$pass_file${RESET}"
+    echo -e "  Seed file    : ${DIM}$seed_file${RESET}"
+    echo -e "  tmux session : ${DIM}$tmux_name${RESET}"
     echo ""
 
     # ── Step 1: Download ──────────────────────────────────────────────────────
@@ -313,6 +327,7 @@ _cmd_wallet_setup_for_net() {
         install -m 755 "$bin_src" "$wallet_bin"
         rm -rf "$tmp_dir"
         echo -e "\n  ${GREEN}[OK]${RESET}  grin-wallet $version installed."
+        _did_download="$version"
     fi
     echo ""
 
@@ -327,8 +342,18 @@ _cmd_wallet_setup_for_net() {
             echo ""
             _cmd_start_listener "$wallet_dir" "$wallet_bin" "$net_flag" \
                                  "$tmux_name" "$net_label" "$pass_file" || return 1
+            local _ls="no"
+            tmux has-session -t "$tmux_name" 2>/dev/null && _ls="yes" || true
             echo ""
-            echo -e "  ${GREEN}${BOLD}Done for ${net_label}.${RESET}"
+            echo -e "  ${BOLD}${GREEN}Summary — ${net_label}${RESET}"
+            echo ""
+            echo -e "  ${DIM}─  Init       : skipped — existing wallet kept${RESET}"
+            echo -e "  ${DIM}─  Wallet dir : $wallet_dir${RESET}"
+            if [[ "$_ls" == "yes" ]]; then
+                echo -e "  ${GREEN}✔${RESET}  ${DIM}Listener   : running  (tmux: $tmux_name)${RESET}"
+            else
+                echo -e "  ${DIM}─  Listener   : not started${RESET}"
+            fi
             echo ""
             echo -ne "  ${DIM}Press Enter to return to menu...${RESET}"
             read -r || true
@@ -368,6 +393,7 @@ _cmd_wallet_setup_for_net() {
         echo -ne "  Press Enter to return..."; read -r || true; return 0
     fi
     echo -e "  ${GREEN}[OK]${RESET}  Wallet initialized."
+    _did_init="yes"
     echo ""
 
     # ── Step 3: Save passphrase ───────────────────────────────────────────────
@@ -380,6 +406,7 @@ _cmd_wallet_setup_for_net() {
         echo "$wallet_pass" > "$pass_file"
         chmod 600 "$pass_file"
         echo -e "  ${GREEN}[OK]${RESET}  Saved → $pass_file  ${DIM}(mode 600)${RESET}"
+        _saved_pass="yes"
     else
         echo -e "  ${DIM}       Passphrase not saved.${RESET}"
     fi
@@ -396,13 +423,14 @@ _cmd_wallet_setup_for_net() {
         tail -6 "$tmp_init" > "$seed_file"
         chmod 600 "$seed_file"
         echo -e "  ${GREEN}[OK]${RESET}  Saved → $seed_file  ${DIM}(mode 600)${RESET}"
+        _saved_seed="yes"
     else
         echo -e "  ${DIM}       Seed not saved.${RESET}"
     fi
     rm -f "$tmp_init"
     echo ""
 
-    # ── Step 5: Patch grin-wallet.toml ───────────────────────────────────────
+    # ── Step 5: Patch grin-wallet.toml (silent — result shown in summary) ─────
     local instances_conf="/opt/grin/conf/grin_instances_location.conf"
     local node_dir=""
     if [[ -f "$instances_conf" ]]; then
@@ -415,33 +443,63 @@ _cmd_wallet_setup_for_net() {
         fi
     fi
     if [[ -z "$node_dir" || ! -d "$node_dir" ]]; then
-        local _fallback="/opt/grin/node/$( [[ "$net" == "testnet" ]] && echo testnet-prune || echo mainnet-prune )"
-        node_dir="$_fallback"
+        node_dir="/opt/grin/node/$( [[ "$net" == "testnet" ]] && echo testnet-prune || echo mainnet-prune )"
     fi
+    _patch_node_dir="$node_dir"
     if [[ -f "$node_dir/.foreign_api_secret" ]]; then
         _cmd_patch_toml "$toml_file" "node_api_secret_path" "\"$node_dir/.foreign_api_secret\""
-        echo -e "  ${GREEN}[OK]${RESET}  Patched node_api_secret_path"
-        echo -e "         ${DIM}→ $node_dir/.foreign_api_secret${RESET}"
-    else
-        echo -e "  ${YELLOW}[WARN]${RESET}  .foreign_api_secret not found at $node_dir"
-        echo -e "         ${DIM}Edit node_api_secret_path in $toml_file if needed.${RESET}"
+        _did_patch="$node_dir"
     fi
-    echo ""
 
     # ── Step 6: Start listener ────────────────────────────────────────────────
     _cmd_start_listener "$wallet_dir" "$wallet_bin" "$net_flag" \
                          "$tmux_name" "$net_label" "$pass_file" || return 1
 
+    # Check listener state for summary
+    local _did_listen="no"
+    tmux has-session -t "$tmux_name" 2>/dev/null && _did_listen="yes" || true
+
+    local _tick="${GREEN}✔${RESET}" _skip="${DIM}─${RESET}"
     echo ""
-    echo -e "  ${GREEN}${BOLD}Setup complete for ${net_label}.${RESET}"
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${GREEN} Summary — ${net_label}${RESET}"
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  ${DIM}Wallet dir : $wallet_dir${RESET}"
-    echo -e "  ${DIM}Binary     : $wallet_bin${RESET}"
-    [[ -f "$pass_file" ]] && echo -e "  ${DIM}Pass file  : $pass_file${RESET}"
-    [[ -f "$seed_file" ]] && echo -e "  ${DIM}Seed file  : $seed_file${RESET}"
-    echo -e "  ${DIM}tmux       : $tmux_name${RESET}"
+    echo -e "  ${DIM}─── Steps ────────────────────────────────────────────${RESET}"
     echo ""
-    echo -e "  ${DIM}Direct commands:${RESET}"
+    if [[ "$_did_download" != "no" ]]; then
+        echo -e "  $_tick  1. Binary downloaded    ${DIM}$wallet_bin  [$_did_download]${RESET}"
+    else
+        echo -e "  $_skip  1. Binary download       ${DIM}skipped — already installed${RESET}"
+    fi
+    if [[ "$_did_init" == "yes" ]]; then
+        echo -e "  $_tick  2. Wallet initialized   ${DIM}$toml_file${RESET}"
+    else
+        echo -e "  $_skip  2. Init                  ${DIM}skipped — existing wallet kept${RESET}"
+    fi
+    if [[ "$_saved_pass" == "yes" ]]; then
+        echo -e "  $_tick  3. Passphrase saved     ${DIM}$pass_file${RESET}"
+    else
+        echo -e "  $_skip  3. Passphrase            ${DIM}not saved${RESET}"
+    fi
+    if [[ "$_saved_seed" == "yes" ]]; then
+        echo -e "  $_tick  4. Seed phrase saved    ${DIM}$seed_file${RESET}"
+    else
+        echo -e "  $_skip  4. Seed phrase           ${DIM}not saved${RESET}"
+    fi
+    if [[ "$_did_patch" != "no" ]]; then
+        echo -e "  $_tick  5. TOML patched         ${DIM}node_api_secret_path → $_did_patch/.foreign_api_secret${RESET}"
+    else
+        echo -e "  ${YELLOW}!${RESET}  5. TOML patch            ${YELLOW}secret not found at $_patch_node_dir — edit $toml_file${RESET}"
+    fi
+    if [[ "$_did_listen" == "yes" ]]; then
+        echo -e "  $_tick  6. Listener started     ${DIM}tmux: $tmux_name${RESET}"
+    else
+        echo -e "  $_skip  6. Listener              ${DIM}not started${RESET}"
+    fi
+    echo ""
+    echo -e "  ${DIM}─── Quick reference ──────────────────────────────────${RESET}"
+    echo ""
     echo -e "  ${DIM}  cd $wallet_dir && ./grin-wallet $net_flag info${RESET}"
     echo -e "  ${DIM}  tmux attach -t $tmux_name${RESET}"
     echo ""

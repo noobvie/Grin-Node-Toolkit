@@ -1,0 +1,107 @@
+/* cute.css — Pastel kawaii theme */
+:root {
+  --bg-body:      #fff0f5;
+  --bg-card:      #ffffff;
+  --bg-card2:     #fce4ec;
+  --text:         #4a1a4a;
+  --text-dim:     #9b5b9b;
+  --accent:       #e91e8c;
+  --accent2:      #c2185b;
+  --border:       #f8bbd0;
+  --btn-bg:       #e91e8c;
+  --btn-text:     #ffffff;
+  --btn-hover:    #c2185b;
+  --input-bg:     #fff8fb;
+  --input-border: #f48fb1;
+  --error-color:  #d32f2f;
+  --ok-color:     #e91e8c;
+  --warn-color:   #9c27b0;
+  --grin-yellow:  #ff80ab;
+  --font-mono:    'Courier New', Courier, monospace;
+  --font-sans:    'Segoe UI', Tahoma, Geneva, Verdana, system-ui, sans-serif;
+  --radius:       12px;
+  --shadow:       0 4px 16px rgba(233,30,140,.12);
+}
+
+body {
+  background: linear-gradient(135deg, #fff0f5 0%, #fce4ec 100%);
+  min-height: 100vh;
+}
+
+header {
+  background: rgba(255,255,255,.85);
+  backdrop-filter: blur(8px);
+  border-bottom-color: var(--border);
+}
+
+.site-title {
+  color: var(--accent);
+  text-shadow: 0 0 10px rgba(233,30,140,.3);
+}
+
+.site-title span {
+  color: var(--warn-color);
+}
+
+.card {
+  border-color: var(--border);
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(233,30,140,.08);
+}
+
+.stat-item {
+  border-color: var(--border);
+  border-radius: 12px;
+}
+
+.slatepack-box {
+  color: var(--accent);
+  background: #fce4ec;
+  border-color: var(--border);
+  border-radius: 10px;
+}
+
+.step-num {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn {
+  border-radius: 20px;
+}
+
+.btn-outline {
+  border-color: var(--accent);
+  color: var(--accent);
+  border-radius: 20px;
+}
+
+.btn-outline:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.theme-btn {
+  border-radius: 16px;
+}
+
+input[type="text"]:focus, textarea:focus {
+  box-shadow: 0 0 0 3px rgba(233,30,140,.2);
+}
+
+.info-box {
+  background: #fce4ec;
+  border-left-color: var(--accent);
+}
+
+.success-box {
+  background: rgba(233,30,140,.06);
+  border-color: var(--accent);
+}
+
+footer {
+  border-top-color: var(--border);
+}
+
+a { color: var(--accent2); }
+a:hover { color: var(--accent); }

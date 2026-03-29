@@ -202,7 +202,7 @@ try:
 except Exception:
     d = {}
 NUMS = {"claim_amount_grin","claim_window_hours","wallet_port","service_port","finalize_timeout_min"}
-BOOLS = {"giveaway_enabled","donation_enabled"}
+BOOLS = {"giveaway_enabled","donation_enabled","show_public_stats","maintenance_mode"}
 if key in NUMS:
     d[key] = float(val)
 elif key in BOOLS:
@@ -228,6 +228,14 @@ drop_ensure_defaults() {
         "wallet_address:"
         "giveaway_enabled:true"
         "donation_enabled:true"
+        "show_public_stats:true"
+        "site_description:Claim free GRIN or donate to keep the drop running."
+        "og_image_url:"
+        "admin_secret_path:"
+        "admin_htuser:admin"
+        "maintenance_mode:false"
+        "maintenance_message:We'll be back soon."
+        "theme_default:matrix"
         "log_path:$DROP_LOG"
     )
     for pair in "${defaults[@]}"; do
@@ -727,6 +735,97 @@ drop_configure() {
         success "Wallet password saved to $DROP_PASS"
     fi
 
+    # ── Admin panel ───────────────────────────────────────────────────────────
+    echo ""
+    echo -e "  ${BOLD}Admin panel:${RESET}"
+
+    # Read/generate admin_secret_path
+    local cur_ap; cur_ap=$(drop_read_conf "admin_secret_path" "")
+    local _rnd; _rnd=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 10)
+
+    if [[ -z "$cur_ap" ]]; then
+        echo -e "  ${DIM}Admin URL path — choose your own or generate a random one.${RESET}"
+        echo -e "  ${DIM}Example: mywallet2025  →  https://domain/mywallet2025/${RESET}"
+        echo -ne "  Admin path [Enter for random ${BOLD}$_rnd${RESET}]: "
+        read -r val || true
+        if [[ -n "$val" ]]; then
+            # Sanitise: lowercase alphanumeric + hyphens only
+            cur_ap=$(echo "$val" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')
+            [[ -z "$cur_ap" ]] && cur_ap="$_rnd"
+        else
+            cur_ap="$_rnd"
+        fi
+        drop_write_conf_key "admin_secret_path" "$cur_ap"
+        success "Admin path set: /$cur_ap/"
+    else
+        info "Current admin path: /$cur_ap/"
+        echo -e "  ${DIM}1) Keep current   2) Enter new   3) Generate random${RESET}"
+        echo -ne "  Choice [1/2/3]: "
+        read -r val || true
+        case "$val" in
+            2)
+                echo -ne "  New admin path: "
+                read -r val || true
+                local new_ap; new_ap=$(echo "$val" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')
+                if [[ -n "$new_ap" ]]; then
+                    cur_ap="$new_ap"
+                    drop_write_conf_key "admin_secret_path" "$cur_ap"
+                    success "Admin path updated: /$cur_ap/"
+                    warn "Re-run option 6 (nginx) to apply the new path."
+                else
+                    warn "Invalid input — keeping current path."
+                fi
+                ;;
+            3)
+                cur_ap="$_rnd"
+                drop_write_conf_key "admin_secret_path" "$cur_ap"
+                success "Admin path regenerated: /$cur_ap/"
+                warn "Re-run option 6 (nginx) to apply the new path."
+                ;;
+            *) info "Admin path unchanged: /$cur_ap/" ;;
+        esac
+    fi
+
+    # Admin htpasswd
+    local htpasswd_file="/etc/nginx/.htpasswd-grin-drop-${DROP_NETWORK}"
+    echo -ne "Admin username  [$(drop_read_conf admin_htuser 'admin')]: "
+    read -r val || true
+    [[ -n "$val" ]] && drop_write_conf_key "admin_htuser" "$val"
+    local admin_user; admin_user=$(drop_read_conf "admin_htuser" "admin")
+
+    echo -ne "Admin password  (Enter to skip if already set): "
+    read -rs val || true
+    echo ""
+    if [[ -n "$val" ]]; then
+        local hashed; hashed=$(openssl passwd -apr1 "$val" 2>/dev/null) \
+            || hashed=$(python3 -c "import crypt; print(crypt.crypt('$val', crypt.mksalt(crypt.METHOD_MD5)))" 2>/dev/null) \
+            || { warn "Could not hash password (need openssl or python3)."; hashed=""; }
+        if [[ -n "$hashed" ]]; then
+            echo "${admin_user}:${hashed}" > "$htpasswd_file"
+            chmod 600 "$htpasswd_file"
+            id www-data &>/dev/null && chown www-data:www-data "$htpasswd_file" 2>/dev/null || true
+            success "htpasswd saved: $htpasswd_file"
+        fi
+    fi
+
+    # ── Site / SEO ────────────────────────────────────────────────────────────
+    echo ""
+    echo -e "  ${BOLD}Site / SEO:${RESET}"
+    echo -ne "Site description [$(drop_read_conf site_description 'Claim free GRIN...')]: "
+    read -r val || true
+    [[ -n "$val" ]] && drop_write_conf_key "site_description" "$val"
+
+    echo -ne "OG image URL     [$(drop_read_conf og_image_url '')]: "
+    read -r val || true
+    [[ -n "$val" ]] && drop_write_conf_key "og_image_url" "$val"
+
+    # ── Maintenance ───────────────────────────────────────────────────────────
+    echo ""
+    echo -e "  ${BOLD}Maintenance:${RESET}"
+    echo -ne "Maintenance message [$(drop_read_conf maintenance_message 'We will be back soon.')]: "
+    read -r val || true
+    [[ -n "$val" ]] && drop_write_conf_key "maintenance_message" "$val"
+
     echo ""
     success "Configuration saved to $DROP_CONF"
 
@@ -759,6 +858,18 @@ drop_deploy_web() {
     find "$DROP_WEB_DIR" -type f \( -name "*.html" -o -name "*.css" -o -name "*.js" \) -exec chmod 644 {} \;
 
     success "Files deployed to $DROP_WEB_DIR"
+
+    # Generate robots.txt (never expose admin path)
+    local domain_val; domain_val=$(drop_read_conf "subdomain" "")
+    cat > "$DROP_WEB_DIR/robots.txt" << ROBOTS_EOF
+User-agent: *
+Disallow: /api/
+Allow: /
+
+Sitemap: https://${domain_val}/sitemap.xml
+ROBOTS_EOF
+    success "robots.txt generated at $DROP_WEB_DIR/robots.txt"
+
     log "[drop_deploy_web] network=$DROP_NETWORK"
     pause
 }
@@ -808,6 +919,8 @@ drop_setup_nginx() {
 
     local port; port=$(drop_read_conf "service_port" "$DROP_PORT")
     local zone="drop_${DROP_NETWORK}"
+    local admin_path; admin_path=$(drop_read_conf "admin_secret_path" "")
+    local htpasswd_file="/etc/nginx/.htpasswd-grin-drop-${DROP_NETWORK}"
 
     # ── SSL method ────────────────────────────────────────────────────────────
     echo -e "  ${BOLD}SSL Certificate method:${RESET}"
@@ -860,6 +973,7 @@ NGINX_HTTP
         cat > "$DROP_NGINX_CONF" << NGINX
 # Grin Drop [$DROP_NET_LABEL] — generated by 052_grin_drop.sh (Let's Encrypt)
 limit_req_zone \$binary_remote_addr zone=${zone}_api:10m rate=10r/m;
+limit_req_zone \$binary_remote_addr zone=${zone}_admin:5m rate=6r/m;
 
 server {
     listen 80;
@@ -903,6 +1017,23 @@ server {
         expires 1h;
         add_header Cache-Control "public";
     }
+
+$(if [[ -n "$admin_path" ]]; then
+cat << ADMIN_BLOCK
+    location /${admin_path}/ {
+        limit_req zone=${zone}_admin burst=3 nodelay;
+        auth_basic "Restricted";
+        auth_basic_user_file $htpasswd_file;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        proxy_pass         http://127.0.0.1:$port;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 30s;
+    }
+ADMIN_BLOCK
+fi)
 
     location / { try_files \$uri \$uri/ /index.html; }
 
@@ -958,6 +1089,7 @@ NGINX
         cat > "$DROP_NGINX_CONF" << NGINX_CF
 # Grin Drop [$DROP_NET_LABEL] — generated by 052_grin_drop.sh (Cloudflare Origin Cert)
 limit_req_zone \$binary_remote_addr zone=${zone}_api:10m rate=10r/m;
+limit_req_zone \$binary_remote_addr zone=${zone}_admin:5m rate=6r/m;
 
 server {
     listen 80;
@@ -1004,6 +1136,23 @@ server {
         expires 1h;
         add_header Cache-Control "public";
     }
+
+$(if [[ -n "$admin_path" ]]; then
+cat << ADMIN_BLOCK_CF
+    location /${admin_path}/ {
+        limit_req zone=${zone}_admin burst=3 nodelay;
+        auth_basic "Restricted";
+        auth_basic_user_file $htpasswd_file;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        proxy_pass         http://127.0.0.1:$port;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 30s;
+    }
+ADMIN_BLOCK_CF
+fi)
 
     location / { try_files \$uri \$uri/ /index.html; }
 
@@ -1119,6 +1268,10 @@ drop_status_screen() {
     local subdomain; subdomain=$(drop_read_conf "subdomain" "")
     echo -e "  ${BOLD}Port${RESET}       : $port"
     [[ -n "$subdomain" ]] && echo -e "  ${BOLD}URL${RESET}        : ${GREEN}https://$subdomain${RESET}"
+    local admin_path; admin_path=$(drop_read_conf "admin_secret_path" "")
+    if [[ -n "$admin_path" && -n "$subdomain" ]]; then
+        echo -e "  ${BOLD}Admin URL${RESET}  : ${YELLOW}https://$subdomain/$admin_path/${RESET}  ${DIM}(keep secret)${RESET}"
+    fi
 
     # DB
     if [[ -f "$DROP_DB" ]]; then

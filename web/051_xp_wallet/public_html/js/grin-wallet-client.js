@@ -1,76 +1,44 @@
 /**
- * Grin Wallet Client
+ * Grin Wallet Client — XP Edition
  *
- * Login flow: wallet.init() checks session → if not authenticated, login screen stays.
- * wallet.login(password) POSTs to api/login.php (ECDH + open_wallet server-side).
- * After login, all API calls go through api/proxy.php (encrypted_request_v3).
- *
- * Security:
- *   - No CSRF token (session cookie with SameSite=Strict + HttpOnly replaces it)
- *   - Password never stored in JS; sent once to login.php and discarded
- *   - escapeHtml() on all user/API data in innerHTML
- *   - HTTP send routed server-side (avoids browser SSRF)
+ * Identical to the standard wallet client except API paths use /wallet/api/
+ * because this app is deployed as an iframe at /wallet/ under the XP shell.
  */
 
 class GrinWallet {
     constructor() {
-        this.baseUrl = `${window.location.protocol}//${window.location.host}/api/proxy.php`;
+        // Deployed under /wallet/ — API lives at /wallet/api/
+        this.baseUrl   = `${window.location.protocol}//${window.location.host}/wallet/api/proxy.php`;
+        this.csrfToken = null;
     }
 
-    // ── Auth ─────────────────────────────────────────────────────────────────
-
-    // Returns true if server says session is valid (proxy returns non-401)
     async init() {
-        try {
-            const res = await fetch(this.baseUrl, {
-                method:      'POST',
-                credentials: 'same-origin',
-                headers:     { 'Content-Type': 'application/json' },
-                body:        JSON.stringify({ jsonrpc: '2.0', method: 'get_info', params: {}, id: 0 }),
-            });
-            return res.status !== 401;
-        } catch {
-            return false;
-        }
-    }
-
-    async login(password) {
-        const res  = await fetch('/api/login.php', {
-            method:      'POST',
-            credentials: 'same-origin',
-            headers:     { 'Content-Type': 'application/json' },
-            body:        JSON.stringify({ password }),
-        });
-        const data = await res.json();
-        if (!res.ok || data.error) {
-            throw new Error(data.error || `Login failed (HTTP ${res.status})`);
-        }
-    }
-
-    // Called after login screen is dismissed
-    initApp() {
+        await this.fetchCsrfToken();
         this.refreshStatus();
         this.showWalletQr();
     }
 
-    // ── Core API call ────────────────────────────────────────────────────────
+    async fetchCsrfToken() {
+        try {
+            const res  = await fetch('/wallet/api/csrf.php', { credentials: 'same-origin' });
+            const data = await res.json();
+            this.csrfToken = data.csrfToken || null;
+        } catch (e) {
+            console.error('[Wallet] CSRF fetch failed:', e);
+        }
+    }
 
     async apiCall(method, params = {}) {
         try {
+            const headers = { 'Content-Type': 'application/json' };
+            if (this.csrfToken) headers['X-CSRF-Token'] = this.csrfToken;
             const response = await fetch(this.baseUrl, {
                 method:      'POST',
                 credentials: 'same-origin',
-                headers:     { 'Content-Type': 'application/json' },
-                body:        JSON.stringify({ jsonrpc: '2.0', method, params, id: Math.random() }),
+                headers,
+                body: JSON.stringify({ jsonrpc: '2.0', method, params, id: Math.random() })
             });
-
-            if (response.status === 401) {
-                // Session expired — reload to show login screen
-                window.location.reload();
-                throw new Error('Session expired');
-            }
             if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-
             const data = await response.json();
             if (data.error) throw new Error(data.error.message || 'API error');
             return data.result;
@@ -80,8 +48,6 @@ class GrinWallet {
         }
     }
 
-    // ── Status / Balance / Transactions ─────────────────────────────────────
-
     async refreshStatus() {
         const statusEl = document.getElementById('status');
         statusEl.innerHTML = '<p class="loading">Connecting to wallet...</p>';
@@ -90,8 +56,8 @@ class GrinWallet {
             if (info) {
                 statusEl.className = 'status-content success';
                 statusEl.innerHTML = `
-                    <p><strong>Connected</strong> &mdash; Height: <code>${this.escapeHtml(String(info.height ?? info.last_confirmed_height ?? '?'))}</code>
-                    &nbsp;|&nbsp; Network: <strong>${this.escapeHtml(String(info.network ?? 'mainnet'))}</strong></p>
+                    <p><strong>Connected</strong> &mdash; Height: <code>${this.escapeHtml(String(info.height))}</code>
+                    &nbsp;|&nbsp; Network: <strong>${this.escapeHtml(String(info.network))}</strong></p>
                 `;
             }
             await this.refreshBalance();
@@ -101,9 +67,8 @@ class GrinWallet {
             statusEl.innerHTML = `
                 <p><strong>Connection Failed</strong></p>
                 <p><small>${this.escapeHtml(error.message)}</small></p>
-                <p style="margin-top:8px;font-size:0.85rem;color:var(--text-secondary);">
-                    Ensure the wallet listener is running (Script 05 &rarr; option c)
-                    and the Owner API is enabled (option d).
+                <p style="margin-top:6px;font-size:10px;color:var(--text-muted);">
+                    Ensure the wallet listener is running (Script 05 &rarr; option c).
                 </p>
             `;
         }
@@ -126,14 +91,11 @@ class GrinWallet {
         const txsEl = document.getElementById('transactionsList');
         txsEl.innerHTML = '<p class="loading">Loading transactions...</p>';
         try {
-            const result = await this.apiCall('retrieve_txs');
-            // Owner API v3 returns [refresh_from_node, txs_array]
-            const txs = Array.isArray(result) && Array.isArray(result[1]) ? result[1] : result;
+            const txs = await this.apiCall('retrieve_txs');
             if (!txs || txs.length === 0) {
                 txsEl.innerHTML = '<p class="info">No transactions yet.</p>';
                 return;
             }
-
             let html = '';
             txs.slice(0, 10).forEach(tx => {
                 const statusClass = tx.confirmed ? 'confirmed' : 'pending';
@@ -142,9 +104,7 @@ class GrinWallet {
                 const createdAt   = tx.creation_ts     ? new Date(tx.creation_ts).toLocaleString()     : '—';
                 const confirmedAt = tx.confirmation_ts ? new Date(tx.confirmation_ts).toLocaleString() : '—';
                 const kernel      = tx.kernel_excess
-                    ? `<code class="tx-kernel">${this.escapeHtml(tx.kernel_excess)}</code>`
-                    : '—';
-
+                    ? `<code class="tx-kernel">${this.escapeHtml(tx.kernel_excess)}</code>` : '—';
                 html += `
                     <details class="transaction-item">
                         <summary class="tx-summary">
@@ -172,26 +132,21 @@ class GrinWallet {
         }
     }
 
-    // ── Fee estimation ───────────────────────────────────────────────────────
-
     async estimateFee(amount) {
         try {
             const amountNgrin = BigInt(Math.floor(parseFloat(amount) * 1e9));
             const result      = await this.apiCall('estimate_fee', {
-                amount:                        amountNgrin.toString(),
-                minimum_confirmations:         10,
-                max_outputs:                   500,
-                num_change_outputs:            1,
-                selection_strategy_is_use_all: false,
+                amount: amountNgrin.toString(),
+                minimum_confirmations: 10,
+                max_outputs: 500,
+                num_change_outputs: 1,
+                selection_strategy_is_use_all: false
             });
-            const fee = result?.fee ?? result?.required_fee ?? null;
-            return fee ? this.formatGrin(fee.toString()) : 'calculating…';
-        } catch {
+            return result && result.fee ? this.formatGrin(result.fee.toString()) : 'calculating…';
+        } catch (e) {
             return '(unavailable)';
         }
     }
-
-    // ── Recipient URL validation ─────────────────────────────────────────────
 
     validateRecipientUrl(url) {
         let parsed;
@@ -207,18 +162,13 @@ class GrinWallet {
         return !privateRanges.some(r => h === r || h.startsWith(r));
     }
 
-    // ── Send ─────────────────────────────────────────────────────────────────
-
     async sendTransaction() {
         const amount    = document.getElementById('sendAmount').value;
         const method    = document.getElementById('sendMethod').value;
         const recipient = document.getElementById('sendRecipient').value.trim();
         const resultEl  = document.getElementById('sendResult');
 
-        if (!amount || parseFloat(amount) <= 0) {
-            this.showResultError(resultEl, 'Please enter a valid amount.');
-            return;
-        }
+        if (!amount || parseFloat(amount) <= 0) { this.showResultError(resultEl, 'Please enter a valid amount.'); return; }
         if (method === 'http' && recipient && !this.validateRecipientUrl(recipient)) {
             this.showResultError(resultEl, 'Recipient URL must be HTTPS and cannot be a private/local address.');
             return;
@@ -234,12 +184,12 @@ class GrinWallet {
 
             const amountNgrin = BigInt(Math.floor(parseFloat(amount) * 1e9));
             const baseParams  = {
-                amount:                        amountNgrin.toString(),
-                minimum_confirmations:         10,
-                max_outputs:                   500,
-                num_change_outputs:            1,
+                amount: amountNgrin.toString(),
+                minimum_confirmations: 10,
+                max_outputs: 500,
+                num_change_outputs: 1,
                 selection_strategy_is_use_all: false,
-                message:                       null,
+                message: null
             };
 
             if (method === 'http' && recipient) {
@@ -256,85 +206,57 @@ class GrinWallet {
                 const initResult = await this.apiCall('init_send_tx', baseParams);
                 const slate      = (initResult && initResult.slate) ? initResult.slate : initResult;
                 const slateStr   = typeof slate === 'string' ? slate : JSON.stringify(slate, null, 2);
-
                 resultEl.className = 'result-box success';
                 resultEl.innerHTML = `
                     <p><strong>Slatepack Generated — share with recipient:</strong></p>
-                    <textarea readonly id="sendSlateText" class="slate-textarea">${this.escapeHtml(slateStr)}</textarea>
-                    <button onclick="wallet.copyToClipboard(document.getElementById('sendSlateText').value,'sendClipMsg')" class="btn btn-small" style="margin-top:8px;">Copy</button>
-                    <span id="sendClipMsg" class="status-msg" style="margin-left:10px;"></span>
-                    <p class="info" style="margin-top:8px;">After the recipient processes it, paste their response in the <strong>Finalize</strong> panel below.</p>
+                    <textarea readonly id="sendSlateText" class="slate-input">${this.escapeHtml(slateStr)}</textarea>
+                    <button onclick="wallet.copyToClipboard(document.getElementById('sendSlateText').value,'sendClipMsg')" class="btn btn-outline btn-sm mt-6">Copy</button>
+                    <span id="sendClipMsg" class="clip-msg" style="margin-left:8px;"></span>
                 `;
             }
-
             setTimeout(() => this.refreshBalance(), 2000);
         } catch (error) {
             this.showResultError(resultEl, error.message);
         }
     }
 
-    // ── Receive (process incoming Slatepack) ─────────────────────────────────
-
     async processIncomingSlate() {
         const slateText = document.getElementById('receiveSlateInput').value.trim();
         const resultEl  = document.getElementById('receiveResult');
-
-        if (!slateText) {
-            this.showResultError(resultEl, "Paste the sender's Slatepack first.");
-            return;
-        }
-        if (!slateHandler.isValidSlatepack(slateText)) {
-            this.showResultError(resultEl, 'Invalid Slatepack — must start with BEGINSLATEPACK.');
-            return;
-        }
-
+        if (!slateText) { this.showResultError(resultEl, "Paste the sender's Slatepack first."); return; }
+        if (!slateHandler.isValidSlatepack(slateText)) { this.showResultError(resultEl, 'Invalid Slatepack — must start with BEGINSLATEPACK.'); return; }
         resultEl.style.display = 'block';
         resultEl.className     = 'result-box';
         resultEl.innerHTML     = '<p class="loading">Processing Slatepack…</p>';
-
         try {
             const result        = await this.apiCall('receive_tx', { slate: slateText, dest_acct_name: null, message: null });
             const responseSlate = (result && result.slate) ? result.slate : result;
             const slateStr      = typeof responseSlate === 'string' ? responseSlate : JSON.stringify(responseSlate, null, 2);
-
             resultEl.className = 'result-box success';
             resultEl.innerHTML = `
                 <p><strong>Processed — send this response Slatepack back to the sender:</strong></p>
-                <textarea readonly id="responseSlateText" class="slate-textarea">${this.escapeHtml(slateStr)}</textarea>
-                <button onclick="wallet.copyToClipboard(document.getElementById('responseSlateText').value,'receiveClipMsg')" class="btn btn-small" style="margin-top:8px;">Copy</button>
-                <span id="receiveClipMsg" class="status-msg" style="margin-left:10px;"></span>
+                <textarea readonly id="responseSlateText" class="slate-input">${this.escapeHtml(slateStr)}</textarea>
+                <button onclick="wallet.copyToClipboard(document.getElementById('responseSlateText').value,'receiveClipMsg')" class="btn btn-outline btn-sm mt-6">Copy</button>
+                <span id="receiveClipMsg" class="clip-msg" style="margin-left:8px;"></span>
             `;
         } catch (error) {
             this.showResultError(resultEl, error.message);
         }
     }
 
-    // ── Finalize ──────────────────────────────────────────────────────────────
-
     async finalizeTransaction() {
         const slateText = document.getElementById('finalizeSlateInput').value.trim();
         const resultEl  = document.getElementById('finalizeResult');
-
-        if (!slateText) {
-            this.showResultError(resultEl, "Paste the receiver's Slatepack first.");
-            return;
-        }
-        if (!slateHandler.isValidSlatepack(slateText)) {
-            this.showResultError(resultEl, 'Invalid Slatepack — must start with BEGINSLATEPACK.');
-            return;
-        }
-
+        if (!slateText) { this.showResultError(resultEl, "Paste the receiver's Slatepack first."); return; }
+        if (!slateHandler.isValidSlatepack(slateText)) { this.showResultError(resultEl, 'Invalid Slatepack — must start with BEGINSLATEPACK.'); return; }
         resultEl.style.display = 'block';
         resultEl.className     = 'result-box';
         resultEl.innerHTML     = '<p class="loading">Finalizing and broadcasting…</p>';
-
         try {
             await this.apiCall('finalize_tx', { slate: slateText, post_tx: true, fluff: false });
-
             resultEl.className = 'result-box success';
             resultEl.innerHTML = '<p><strong>Transaction finalized and broadcast to the network.</strong></p>';
             document.getElementById('finalizeSlateInput').value = '';
-
             setTimeout(() => this.refreshBalance(), 3000);
             setTimeout(() => this.refreshTransactions(), 5000);
         } catch (error) {
@@ -342,23 +264,19 @@ class GrinWallet {
         }
     }
 
-    // ── QR code (server-side, same origin) ───────────────────────────────────
-
     showWalletQr() {
         const url    = window.location.origin;
         const qrImg  = document.getElementById('walletQrImg');
         const qrNote = document.getElementById('walletQrError');
         if (!qrImg) return;
-        qrImg.src      = `/api/qr.php?data=${encodeURIComponent(url)}`;
-        qrImg.alt      = 'Wallet URL QR Code';
-        qrImg.onerror  = () => {
+        qrImg.src     = `/wallet/api/qr.php?data=${encodeURIComponent(url)}`;
+        qrImg.alt     = 'Wallet URL QR Code';
+        qrImg.onerror = () => {
             qrImg.style.display = 'none';
             if (qrNote) qrNote.style.display = 'block';
         };
         qrImg.style.display = 'block';
     }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
 
     formatGrin(nGrin) {
         if (typeof nGrin === 'string') nGrin = BigInt(nGrin);
@@ -369,11 +287,8 @@ class GrinWallet {
 
     escapeHtml(str) {
         return String(str)
-            .replace(/&/g,  '&amp;')
-            .replace(/</g,  '&lt;')
-            .replace(/>/g,  '&gt;')
-            .replace(/"/g,  '&quot;')
-            .replace(/'/g,  '&#039;');
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     }
 
     showResultError(el, message) {
@@ -387,12 +302,11 @@ class GrinWallet {
             const msg = document.getElementById(msgId);
             if (msg) {
                 msg.textContent = 'Copied!';
-                msg.className   = 'status-msg success';
-                setTimeout(() => { msg.textContent = ''; msg.className = 'status-msg'; }, 2000);
+                msg.className   = 'clip-msg';
+                setTimeout(() => { msg.textContent = ''; }, 2000);
             }
         }).catch(err => console.error('[Wallet] Copy failed:', err));
     }
 }
 
-// Global instance
 const wallet = new GrinWallet();

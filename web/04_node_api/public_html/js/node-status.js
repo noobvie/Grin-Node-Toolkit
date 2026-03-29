@@ -191,6 +191,46 @@ async function applyNodeJson() {
   }
 }
 
+// ── Wallet connection links ────────────────────────────────────────────────────
+function applyWalletLinks() {
+  const origin  = window.location.origin;
+  const network = (typeof GRIN_NETWORK !== 'undefined' ? GRIN_NETWORK : '').toLowerCase();
+
+  // Network label appended to card titles  e.g.  " · mainnet"
+  const netLabel = network ? ' \u00b7 ' + network : '';
+  const tomlLabelEl = document.getElementById('net-label-toml');
+  if (tomlLabelEl) tomlLabelEl.textContent = netLabel;
+  const grimLabelEl = document.getElementById('net-label-grim');
+  if (grimLabelEl) grimLabelEl.textContent = netLabel;
+
+  // grin-wallet.toml snippet — URL styled like REST endpoint links
+  const tomlEl = document.getElementById('wallet-toml-snippet');
+  if (tomlEl) {
+    const a = document.createElement('a');
+    a.href        = origin;
+    a.target      = '_blank';
+    a.rel         = 'noopener';
+    a.textContent = origin;
+    a.className   = 'wallet-url';
+    tomlEl.textContent = 'check_node_api_http_addr = "';
+    tomlEl.appendChild(a);
+    tomlEl.appendChild(document.createTextNode('"'));
+  }
+
+  // Grim snippet — just the URL as a link
+  const grimEl = document.getElementById('wallet-grim-snippet');
+  if (grimEl) {
+    const a = document.createElement('a');
+    a.href        = origin;
+    a.target      = '_blank';
+    a.rel         = 'noopener';
+    a.textContent = origin;
+    a.className   = 'wallet-url';
+    grimEl.textContent = '';
+    grimEl.appendChild(a);
+  }
+}
+
 // ── REST endpoints ─────────────────────────────────────────────────────────────
 async function applyRestLinks() {
   const origin = window.location.origin;
@@ -386,15 +426,51 @@ function initDevCollapse() {
   });
 }
 
+// ── Copy buttons on curl-wrap blocks ──────────────────────────────────────────
+function initCurlCopyButtons() {
+  document.querySelectorAll('.curl-copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.getAttribute('data-target');
+      const pre = document.getElementById(targetId);
+      if (!pre) return;
+      navigator.clipboard.writeText(pre.textContent.trim()).then(() => {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      }).catch(() => {
+        // Fallback for older browsers
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(pre);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand('copy');
+        sel.removeAllRanges();
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    });
+  });
+}
+
 // ── Boot ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(currentTheme);
   applyNetwork();
 
+  applyWalletLinks();
   applyRestLinks();
   applyCurlTip();
   applyFetchTip();
   initDevCollapse();
+  initCurlCopyButtons();
 
   // Attach button listeners here — inline onclick is blocked by CSP script-src 'self'
   document.getElementById('test-btn')?.addEventListener('click', runSelfTest);

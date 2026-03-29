@@ -1,24 +1,34 @@
 """
-config_faucet.py — Load and update /opt/grin/conf/grin_faucet.json
+config_drop.py — Load and update /opt/grin/drop-<net>/grin_drop.conf
 """
 
 import json
 import os
 
-CONF_PATH = os.environ.get("FAUCET_CONF", "/opt/grin/conf/grin_faucet.json")
-PASS_PATH = os.environ.get("FAUCET_WALLET_PASS", "/opt/grin/faucet/.wallet_pass_faucet")
+CONF_PATH = os.environ.get("DROP_CONF", "/opt/grin/drop-test/grin_drop.conf")
+PASS_PATH = os.environ.get("DROP_WALLET_PASS", "/opt/grin/drop-test/.wallet_pass")
 
 DEFAULTS = {
-    "faucet_name":          "Grin Testnet Faucet",
-    "subdomain":            "",
-    "claim_amount_grin":    2.0,
-    "claim_window_hours":   24,
-    "wallet_dir":           "/opt/grin/wallet/testnet_faucet",
-    "wallet_port":          13415,
-    "service_port":         3004,
-    "finalize_timeout_min": 5,
-    "wallet_address":       "",
-    "log_path":             "/opt/grin/logs/grin-faucet-activity.log",
+    "drop_name":              "Grin Drop",
+    "site_description":       "Claim free GRIN or donate to keep the drop running.",
+    "og_image_url":           "",
+    "subdomain":              "",
+    "claim_amount_grin":      2.0,
+    "claim_window_hours":     24,
+    "wallet_dir":             "/opt/grin/drop-test/wallet",
+    "wallet_port":            3004,
+    "service_port":           3004,
+    "finalize_timeout_min":   5,
+    "wallet_address":         "",
+    "giveaway_enabled":       True,
+    "donation_enabled":       True,
+    "show_public_stats":      True,
+    "admin_secret_path":      "",
+    "admin_htuser":           "admin",
+    "maintenance_mode":       False,
+    "maintenance_message":    "We'll be back soon. Thank you for your patience.",
+    "theme_default":          "matrix",
+    "log_path":               "/opt/grin/drop-test/drop-activity.log",
 }
 
 

@@ -1,0 +1,40 @@
+/* dark.css — Charcoal dark theme */
+:root {
+  --bg-body:      #121212;
+  --bg-card:      #1e1e1e;
+  --bg-card2:     #252525;
+  --text:         #e0e0e0;
+  --text-dim:     #888888;
+  --accent:       #00e676;
+  --accent2:      #00b854;
+  --border:       #333333;
+  --btn-bg:       #00e676;
+  --btn-text:     #000000;
+  --btn-hover:    #00b854;
+  --input-bg:     #1a1a1a;
+  --input-border: #3a3a3a;
+  --error-color:  #ff5252;
+  --ok-color:     #00e676;
+  --warn-color:   #ffca28;
+  --grin-yellow:  #ffca28;
+  --font-mono:    'Courier New', Courier, monospace;
+  --font-sans:    system-ui, -apple-system, sans-serif;
+  --radius:       6px;
+  --shadow:       0 2px 12px rgba(0,0,0,0.5);
+}
+
+.site-title {
+  color: var(--accent);
+}
+
+.card {
+  box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+}
+
+.slatepack-box {
+  color: var(--accent);
+}
+
+input[type="text"]:focus, textarea:focus {
+  box-shadow: 0 0 0 2px rgba(0,230,118,.15);
+}

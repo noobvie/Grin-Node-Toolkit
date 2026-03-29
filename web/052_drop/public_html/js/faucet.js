@@ -1,4 +1,4 @@
-// faucet.js — Grin Testnet Faucet claim flow + live stats
+// faucet.js — Grin Drop claim flow + live stats
 // =============================================================================
 
 const REFRESH_SEC = 60;
@@ -58,6 +58,17 @@ function copyText(text, btnId) {
   });
 }
 
+// ── Maintenance overlay ───────────────────────────────────────────────────────
+function showMaintenanceOverlay(dropName, message) {
+  const overlay = $("maintenance-overlay");
+  if (!overlay) return;
+  const titleEl = $("maintenance-title");
+  const msgEl   = $("maintenance-msg");
+  if (titleEl && dropName) titleEl.textContent = dropName;
+  if (msgEl && message)    msgEl.textContent   = message;
+  overlay.style.display = "flex";
+}
+
 // ── Live stats ────────────────────────────────────────────────────────────────
 async function loadStats() {
   const addrInput = $("claim-address");
@@ -66,9 +77,47 @@ async function loadStats() {
     : "";
   try {
     const data = await apiGet("/api/status" + addrParam);
-    setText("stat-balance",  formatGrin(data.wallet_balance));
-    setText("stat-today",    String(data.claims_today));
-    setText("stat-total",    String(data.claims_total));
+
+    // Maintenance mode — show overlay and stop normal rendering
+    if (data.maintenance_mode) {
+      showMaintenanceOverlay(data.drop_name, data.maintenance_message);
+      return;
+    }
+
+    // Giveaway section visibility
+    const giveawaySection = $("section-giveaway");
+    if (giveawaySection) {
+      giveawaySection.style.display = (data.giveaway_enabled === false) ? "none" : "";
+    }
+
+    // Donation section visibility
+    const donationSection = $("section-donation");
+    if (donationSection) {
+      donationSection.style.display = (data.donation_enabled === false) ? "none" : "";
+    }
+
+    setText("stat-balance", formatGrin(data.wallet_balance));
+    setText("stat-today",   String(data.claims_today));
+    setText("stat-total",   String(data.claims_total));
+
+    // Public stats (total given / received)
+    if (data.show_public_stats) {
+      if (typeof data.total_given !== "undefined") {
+        setText("stat-total-given", formatGrinShort(data.total_given));
+        const givenItem = $("stat-item-given");
+        if (givenItem) givenItem.style.display = "";
+      }
+      if (typeof data.total_received !== "undefined") {
+        setText("stat-total-received", formatGrinShort(data.total_received));
+        const receivedItem = $("stat-item-received");
+        if (receivedItem) receivedItem.style.display = "";
+      }
+    } else {
+      const gi = $("stat-item-given");
+      const ri = $("stat-item-received");
+      if (gi) gi.style.display = "none";
+      if (ri) ri.style.display = "none";
+    }
 
     if (data.next_claim_at) {
       const dt   = new Date(data.next_claim_at);
@@ -83,7 +132,12 @@ async function loadStats() {
 }
 
 function formatGrin(n) {
-  return (typeof n === "number" ? n : parseFloat(n) || 0).toFixed(3) + " testnet ツ";
+  return (typeof n === "number" ? n : parseFloat(n) || 0).toFixed(3) + " GRIN";
+}
+
+function formatGrinShort(n) {
+  const v = typeof n === "number" ? n : parseFloat(n) || 0;
+  return v.toFixed(2) + " GRIN";
 }
 
 // ── Countdown timer (5-min window) ────────────────────────────────────────────
@@ -154,7 +208,7 @@ async function submitClaim() {
       showError("claim-error", "Error: " + err.message);
     }
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "Claim 2 testnet GRIN"; }
+    if (btn) { btn.disabled = false; btn.textContent = "Claim 2 GRIN"; }
   }
 }
 

@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grin XP Wallet — Self-Custodial GRIN Mainnet Wallet</title>
+    <meta name="description" content="A self-custodial Grin (GRIN) mainnet wallet with a nostalgic Windows XP interface. Send, receive, and manage your GRIN cryptocurrency securely from your own node.">
+    <meta name="keywords" content="Grin wallet, GRIN cryptocurrency, self-custodial wallet, mainnet wallet, MimbleWimble, Grin Node Toolkit, privacy coin wallet, send GRIN, receive GRIN">
+    <meta name="author" content="Grin Node Toolkit">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#1a6abd">
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Grin XP Wallet — Self-Custodial GRIN Mainnet Wallet">
+    <meta property="og:description" content="A self-custodial Grin (GRIN) mainnet wallet with a nostalgic Windows XP interface. Send, receive, and manage your GRIN securely from your own node.">
+    <meta property="og:site_name" content="Grin Node Toolkit">
+    <meta property="og:locale" content="en_US">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Grin XP Wallet — Self-Custodial GRIN Wallet">
+    <meta name="twitter:description" content="Self-custodial Grin mainnet wallet with a nostalgic Windows XP desktop simulator. Your keys, your GRIN.">
+
+    <link rel="canonical" href="/">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html, body {
+            width: 100%; height: 100%;
+            overflow: hidden;
+            font-family: 'Tahoma', 'Arial', sans-serif;
+            font-size: 11px;
+        }
+
+        /* ── Bliss-style desktop background ─────────────────────────────── */
+        .desktop {
+            width: 100%;
+            height: calc(100% - 30px);
+            background: linear-gradient(
+                180deg,
+                #4a90d9 0%, #6bb5f5 35%,
+                #88c760 62%, #5aa030 100%
+            );
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* ── WinXP window ────────────────────────────────────────────────── */
+        .window {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 840px;
+            height: 570px;
+            border: 1px solid #003c74;
+            border-radius: 6px 6px 0 0;
+            box-shadow: 3px 3px 12px rgba(0,0,0,0.55);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Luna blue title bar */
+        .titlebar {
+            height: 30px;
+            background: linear-gradient(
+                180deg,
+                #4ea6e4 0%, #2880cc 45%, #1965bb 46%, #2070c8 100%
+            );
+            display: flex;
+            align-items: center;
+            padding: 0 5px;
+            cursor: default;
+            user-select: none;
+            flex-shrink: 0;
+        }
+
+        .titlebar-icon { font-size: 14px; margin-right: 5px; }
+
+        .titlebar-title {
+            color: #fff;
+            font-size: 12px;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.55);
+            flex: 1;
+        }
+
+        /* Window control buttons */
+        .win-controls { display: flex; gap: 2px; }
+
+        .win-btn {
+            width: 22px; height: 22px;
+            border-radius: 3px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 1px 1px 1px rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        .win-btn:hover { filter: brightness(1.2); }
+        .win-btn:active { filter: brightness(0.85); }
+
+        .win-btn-min  { background: linear-gradient(180deg, #6bbce8 0%, #3a90d0 100%); }
+        .win-btn-max  { background: linear-gradient(180deg, #6bbce8 0%, #3a90d0 100%); }
+        .win-btn-close {
+            background: linear-gradient(180deg, #e87878 0%, #c03030 100%);
+            border-color: rgba(180,60,60,0.7);
+        }
+
+        /* IE-style menu bar (decorative) */
+        .menubar {
+            height: 22px;
+            background: linear-gradient(180deg, #ecf1fa 0%, #d8e2f2 100%);
+            border-bottom: 1px solid #b0bcd0;
+            display: flex;
+            align-items: center;
+            padding: 0 4px;
+            gap: 1px;
+            flex-shrink: 0;
+        }
+
+        .menu-item {
+            padding: 2px 8px;
+            font-size: 11px;
+            cursor: default;
+            border-radius: 2px;
+            color: #000;
+        }
+        .menu-item:hover { background: #316ac5; color: #fff; }
+
+        /* Address bar */
+        .addressbar {
+            height: 25px;
+            background: #f0f0f0;
+            border-bottom: 1px solid #c0c8d8;
+            display: flex;
+            align-items: center;
+            padding: 0 6px;
+            gap: 5px;
+            flex-shrink: 0;
+        }
+
+        .addr-label { font-size: 11px; color: #444; white-space: nowrap; }
+
+        .addr-box {
+            flex: 1;
+            height: 17px;
+            border: 1px solid #8898b8;
+            background: #fff;
+            padding: 0 4px;
+            font-size: 11px;
+            font-family: 'Tahoma', sans-serif;
+            color: #000;
+            outline: none;
+        }
+
+        .addr-go {
+            height: 17px;
+            padding: 0 8px;
+            background: linear-gradient(180deg, #f8f8f8 0%, #e0e0e0 100%);
+            border: 1px solid #8898b8;
+            font-size: 11px;
+            cursor: pointer;
+            color: #000;
+        }
+        .addr-go:hover { background: linear-gradient(180deg, #e8f0ff 0%, #ccd8f0 100%); }
+
+        /* Wallet iframe */
+        .window-content { flex: 1; background: #fff; overflow: hidden; }
+
+        .wallet-frame { width: 100%; height: 100%; border: none; }
+
+        /* ── Taskbar ──────────────────────────────────────────────────────── */
+        .taskbar {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            height: 30px;
+            background: linear-gradient(
+                180deg,
+                #1a6abd 0%, #1050a0 3%,
+                #2070c8 8%, #2070c8 92%,
+                #1860b0 97%, #0e3888 100%
+            );
+            display: flex;
+            align-items: center;
+            padding: 0 2px;
+            z-index: 1000;
+        }
+
+        /* Start button */
+        .start-btn {
+            height: 26px;
+            background: linear-gradient(180deg, #74ba3c 0%, #4a9c1a 40%, #3a8810 60%, #4a9c1a 100%);
+            border: 1px solid #2a6808;
+            border-radius: 10px 0 0 10px;
+            padding: 0 14px 0 8px;
+            color: #fff;
+            font-weight: bold;
+            font-size: 13px;
+            font-family: 'Tahoma', sans-serif;
+            cursor: pointer;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            letter-spacing: 0.5px;
+        }
+        .start-btn:hover { filter: brightness(1.1); }
+        .start-btn:active { filter: brightness(0.9); }
+
+        .start-logo { font-size: 16px; }
+
+        /* Taskbar separator */
+        .taskbar-sep {
+            width: 2px;
+            height: 20px;
+            background: linear-gradient(180deg, #0a3888, #2c6ac0, #0a3888);
+            margin: 0 3px;
+        }
+
+        /* Active window button */
+        .taskbar-win {
+            height: 22px;
+            background: linear-gradient(180deg, #3a7ad0 0%, #1a4a9c 100%);
+            border: 1px inset rgba(60,100,180,0.6);
+            padding: 0 10px;
+            color: #fff;
+            font-size: 11px;
+            font-family: 'Tahoma', sans-serif;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            max-width: 200px;
+            border-radius: 3px;
+        }
+        .taskbar-win:hover { background: linear-gradient(180deg, #4a88e0 0%, #2a5aac 100%); }
+
+        /* System tray */
+        .systray {
+            margin-left: auto;
+            height: 24px;
+            background: linear-gradient(180deg, #1060aa 0%, #1050a0 100%);
+            border: 1px solid #0a3870;
+            border-radius: 2px;
+            padding: 0 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #fff;
+            font-size: 11px;
+            font-family: 'Tahoma', sans-serif;
+        }
+
+        #clock { min-width: 48px; text-align: right; }
+    </style>
+</head>
+<body>
+
+    <!-- Desktop -->
+    <div class="desktop">
+
+        <!-- WinXP Window -->
+        <div class="window" id="mainWindow">
+
+            <!-- Title bar -->
+            <div class="titlebar" id="titlebar">
+                <span class="titlebar-icon">⬡</span>
+                <span class="titlebar-title">Grin XP Wallet — Mainnet</span>
+                <div class="win-controls">
+                    <div class="win-btn win-btn-min" onclick="minimizeWindow()" title="Minimize">_</div>
+                    <div class="win-btn win-btn-max" title="Maximize (drag title bar to move)">&#9633;</div>
+                    <div class="win-btn win-btn-close" onclick="alert('Close your browser tab to exit.')" title="Close">&#x2715;</div>
+                </div>
+            </div>
+
+            <!-- Simulated IE toolbar (decorative) -->
+            <div class="menubar">
+                <span class="menu-item">File</span>
+                <span class="menu-item">Edit</span>
+                <span class="menu-item">View</span>
+                <span class="menu-item">Favorites</span>
+                <span class="menu-item">Tools</span>
+                <span class="menu-item">Help</span>
+            </div>
+
+            <!-- Address bar -->
+            <div class="addressbar">
+                <span class="addr-label">Address</span>
+                <input class="addr-box" type="text" value="https://grin-wallet/mainnet" readonly>
+                <button class="addr-go">Go</button>
+            </div>
+
+            <!-- Wallet iframe -->
+            <div class="window-content">
+                <iframe class="wallet-frame" id="walletFrame"
+                        src="/wallet/"
+                        title="Grin Wallet"
+                        sandbox="allow-same-origin allow-scripts allow-forms">
+                </iframe>
+            </div>
+
+        </div><!-- /.window -->
+
+    </div><!-- /.desktop -->
+
+    <!-- Taskbar -->
+    <div class="taskbar">
+        <button class="start-btn" onclick="toggleStartMenu()">
+            <span class="start-logo">&#x229E;</span>
+            <em>start</em>
+        </button>
+        <div class="taskbar-sep"></div>
+        <div class="taskbar-win" id="taskbarBtn" onclick="restoreWindow()">
+            <span>&#x29E6;</span>
+            <span>Grin Wallet</span>
+        </div>
+        <div class="systray">
+            <span title="Secured with Basic Auth">&#x1F512;</span>
+            <span id="clock"></span>
+        </div>
+    </div>
+
+    <script>
+        // ── Clock ──────────────────────────────────────────────────────────
+        function tick() {
+            const now = new Date();
+            document.getElementById('clock').textContent =
+                now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        tick();
+        setInterval(tick, 10000);
+
+        // ── Minimize / Restore ─────────────────────────────────────────────
+        const win = document.getElementById('mainWindow');
+        let minimized = false;
+
+        function minimizeWindow() {
+            win.style.display = 'none';
+            minimized = true;
+        }
+
+        function restoreWindow() {
+            if (minimized) {
+                win.style.display = 'flex';
+                minimized = false;
+            }
+        }
+
+        // ── Drag (title bar) ───────────────────────────────────────────────
+        const titlebar = document.getElementById('titlebar');
+        let dragging = false, ox = 0, oy = 0;
+
+        titlebar.addEventListener('mousedown', function(e) {
+            if (e.target.classList.contains('win-btn')) return;
+            dragging = true;
+            const r = win.getBoundingClientRect();
+            win.style.transform = 'none';
+            win.style.left = r.left + 'px';
+            win.style.top  = r.top  + 'px';
+            ox = e.clientX - r.left;
+            oy = e.clientY - r.top;
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            if (!dragging) return;
+            win.style.left = Math.max(0, e.clientX - ox) + 'px';
+            win.style.top  = Math.max(0, e.clientY - oy) + 'px';
+        });
+
+        document.addEventListener('mouseup', function() { dragging = false; });
+
+        // ── Start menu stub ────────────────────────────────────────────────
+        function toggleStartMenu() {
+            // Could expand into a full start menu later — for now, just focus wallet
+            restoreWindow();
+        }
+    </script>
+
+</body>
+</html>

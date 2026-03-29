@@ -19,11 +19,17 @@ My goal is simple: **make it easy for anyone to join the Grin network and keep t
 ---
 ## Demo sites were created by this toolkit semi-automatically:
 Archived full node mainnet: https://fullmain.grin.money 
+
 Prune node mainnet: https://prunemain.grin.money
+
 Prune node testnet: https://prunetest.grin.money
+
 Grin explorer (clone of grincoin.org) https://scan.grin.money
+
 Publish API mainnet: https://api.grin.money
+
 Publish API testnet: https://testapi.grin.money
+
 Grin Global Health mainnet: https://world.grin.money
 ...
 

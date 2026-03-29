@@ -4,11 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Grin Network Stats — Hashrate, Difficulty &amp; Blockchain Data</title>
-<meta name="description" content="Live Grin network statistics: real-time hashrate (GPS), mining difficulty, block height, coin supply, annual inflation rate, connected peers, node version distribution, transactions per block, and fee history. Monitor the Grin (ツ) MimbleWimble blockchain.">
-<meta name="keywords" content="grin network stats, grin hashrate, grin mining difficulty, grin block height, grin blockchain statistics, grin node monitor, grin coin supply, grin inflation rate, grin GPS, grin transactions, grin fees, mimblewimble stats, grin cryptocurrency data, grin blockchain explorer, grin network health, grin mining monitor, grin node version, cuckatoo32">
+<meta name="description" content="Live Grin network statistics: real-time hashrate (GPS), mining difficulty, block height, coin supply, inflation rate, active peer count, node version distribution, transactions per block, and fee history. Monitor the Grin (ツ) MimbleWimble blockchain.">
+<meta name="keywords" content="grin network stats, grin hashrate, grin mining difficulty, grin block height, grin blockchain statistics, grin node monitor, grin coin supply, grin inflation rate, grin GPS, grin transactions, grin fees, grin active peers, grin peer count, grin node count, mimblewimble stats, grin cryptocurrency data, grin blockchain explorer, grin network health, grin mining monitor, grin node version, cuckatoo32">
 <meta name="robots" content="index, follow">
 <meta property="og:title" content="Grin Network Stats — Hashrate, Difficulty &amp; Blockchain Data">
-<meta property="og:description" content="Real-time Grin network stats: hashrate (GPS), mining difficulty, block height, coin supply, inflation, and transaction history. Live MimbleWimble blockchain data.">
+<meta property="og:description" content="Real-time Grin network stats: hashrate (GPS), mining difficulty, block height, coin supply, inflation, active peer count, and transaction history. Live MimbleWimble blockchain data.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Grin Network Stats — Hashrate &amp; Difficulty">
@@ -296,7 +296,7 @@
   .range-btn.active { background: var(--grin); border-color: var(--grin); color: #000; font-weight: 600; }
 
   /* ── Metric toggle buttons ───────────────────────────────────────────────── */
-  .metric-toggle {
+  .metric-toggle, .peers-toggle {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--muted);
@@ -310,14 +310,14 @@
     gap: 6px;
     white-space: nowrap;
   }
-  .metric-toggle:hover { border-color: var(--text); color: var(--text); }
-  .metric-toggle.active {
+  .metric-toggle:hover, .peers-toggle:hover { border-color: var(--text); color: var(--text); }
+  .metric-toggle.active, .peers-toggle.active {
     background: rgba(88,166,255,0.15);
     border-color: var(--blue);
     color: var(--blue);
     font-weight: 600;
   }
-  .metric-toggle .dot {
+  .metric-toggle .dot, .peers-toggle .dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
@@ -406,6 +406,8 @@
     width: 100%;
     position: relative;
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    max-height: 90vh;
+    overflow-y: auto;
   }
   .api-modal h2 {
     font-size: 15px;
@@ -424,8 +426,11 @@
     gap: 12px;
     padding: 10px 0;
     border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
   }
   .api-endpoint:last-of-type { border-bottom: none; }
+  .api-endpoint:hover .api-path { text-decoration: underline; }
   .api-method {
     font-size: 11px;
     font-weight: 700;
@@ -447,7 +452,11 @@
     text-decoration: none;
   }
   .api-path:hover { text-decoration: underline; }
-  .api-desc { font-size: 12px; color: var(--muted); margin-top: 2px; display: block; }
+  .api-desc { font-size: 12px; color: var(--muted); margin-top: 6px; display: none; line-height: 1.5; }
+  .api-endpoint.open .api-desc { display: block; }
+  .api-row { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+  .api-chevron { font-size: 9px; color: var(--muted); flex-shrink: 0; margin-left: auto; transition: transform 0.15s; }
+  .api-endpoint.open .api-chevron { transform: rotate(90deg); color: var(--text); }
   .api-note {
     margin-top: 18px;
     padding: 10px 14px;
@@ -676,6 +685,32 @@
     </div>
   </div>
 
+  <!-- Active Peers chart -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-green"></span>Active Peers</div>
+      <div class="range-btns" id="peers-range">
+        <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="week">Week</button>
+        <button class="range-btn active" data-r="month">Month</button>
+        <button class="range-btn" data-r="year">Year</button>
+        <button class="range-btn" data-r="all">All Time</button>
+      </div>
+    </div>
+    <div style="display: flex; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--border); flex-wrap: wrap;">
+      <button class="peers-toggle active" data-net="both">
+        <span class="dot dot-green"></span>Both
+      </button>
+      <button class="peers-toggle" data-net="mainnet">
+        <span class="dot dot-grin"></span>Mainnet
+      </button>
+      <button class="peers-toggle" data-net="testnet">
+        <span class="dot dot-blue"></span>Testnet
+      </button>
+    </div>
+    <div class="chart-wrap"><canvas id="chart-peers"></canvas></div>
+  </div>
+
   <!-- Price chart — USDT -->
   <div class="card">
     <div class="card-header">
@@ -708,8 +743,8 @@
       </div>
       <div class="range-btns" id="price-btc-range">
         <button class="range-btn" data-r="day">Day</button>
-        <button class="range-btn active" data-r="week">Week</button>
-        <button class="range-btn" data-r="month">Month</button>
+        <button class="range-btn" data-r="week">Week</button>
+        <button class="range-btn active" data-r="month">Month</button>
         <button class="range-btn" data-r="year">Year</button>
         <button class="range-btn" data-r="all">All Time</button>
       </div>
@@ -752,21 +787,87 @@
   <div class="api-modal" role="dialog" aria-modal="true" aria-label="Public API">
     <button class="api-close" id="api-close" aria-label="Close">✕</button>
     <h2>Public JSON API</h2>
-    <p class="api-sub">Free to use · CORS enabled · No authentication required</p>
+    <p class="api-sub">Free to use · CORS enabled · No authentication required · tap row to expand</p>
     <p class="api-base" id="api-base-url"></p>
 
     <div class="api-endpoint">
       <span class="api-method">GET</span>
-      <div>
-        <a class="api-path" id="ep-price" href="#" target="_blank" rel="noopener">/api/price</a>
-        <span class="api-desc">GRIN/USDT (Gate.io) — current price, 24h stats, OHLCV history for Day / Week / Month / Year / All Time</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-summary" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/summary</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Current block height, network hashrate (GPS), mining difficulty, coin supply, inflation rate</span>
       </div>
     </div>
     <div class="api-endpoint">
       <span class="api-method">GET</span>
-      <div>
-        <a class="api-path" id="ep-summary" href="#" target="_blank" rel="noopener">/api/summary</a>
-        <span class="api-desc">Current block height, network hashrate (GPS), mining difficulty, coin supply, inflation rate</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-hashrate" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/hashrate</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Network hashrate (GPS) — <code>daily</code> / <code>hourly</code> / <code>recent</code> arrays of <code>[timestamp, value]</code> pairs</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-difficulty" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/difficulty</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Network mining difficulty — <code>daily</code> / <code>hourly</code> / <code>recent</code> history</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-transactions" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/transactions</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Transactions per block — <code>daily</code> / <code>hourly</code> / <code>recent</code> history</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-fees" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/fees</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Total fees per block (nGrin) — <code>daily</code> / <code>hourly</code> / <code>recent</code> history</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-active_peers" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/active_peers</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Active peer count by network — <code>{"mainnet": {daily, hourly, recent}, "testnet": {…}}</code> — each array contains <code>[timestamp, count]</code> pairs, sampled every ~5 min</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-versions" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/versions</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Node version distribution — label + count for each Grin client version seen in the last 7 days</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-price" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/price</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">GRIN/USDT (Gate.io) — current price, 24h stats, OHLCV history for Day / Week / Month / Year / All Time</span>
       </div>
     </div>
     <div class="api-note">
@@ -1122,21 +1223,60 @@ function makePriceChartBTC(id) {
   });
 }
 
+function makePeersChart(id) {
+  const ctx = $(id).getContext("2d");
+  const mkDs = (label, color) => ({
+    label,
+    data: [],
+    borderColor: color,
+    backgroundColor: color + "18",
+    borderWidth: 1.5,
+    pointRadius: 0,
+    fill: false,
+    tension: 0.3,
+  });
+  return new Chart(ctx, {
+    type: "line",
+    data: { datasets: [mkDs("Mainnet", "#ff9900"), mkDs("Testnet", "#58a6ff")] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.parsed.y, 0)} peers`,
+            title: items => new Date(items[0].parsed.x).toLocaleString(),
+          }
+        }
+      },
+      scales: {
+        x: { type: "time", time: { tooltipFormat: "MMM d yyyy HH:mm" }, ticks: { maxTicksLimit: 8 } },
+        y: { ticks: { callback: v => fmt(v, 0) } }
+      }
+    }
+  });
+}
+
 // ── Chart instances ───────────────────────────────────────────────────────────
 const charts = {};
 let activityMetric = "both";  // "tx", "fee", or "both"
+let peersNetwork   = "both";  // "mainnet", "testnet", or "both"
 
 function initCharts() {
   // Chart.defaults (color, borderColor, font) are set by initTheme() before this runs
   charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS,  undefined, fmtGPSTick);
   charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff, undefined, fmtDiffTick);
-  charts.activity   = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee, v => fmt(v,0), fmtFeeTick);
-  charts.priceUsdt  = makePriceChartUSDT("chart-price-usdt");
+  charts.activity    = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee, v => fmt(v,0), fmtFeeTick);
+  charts.activePeers = makePeersChart("chart-peers");
+  charts.priceUsdt   = makePriceChartUSDT("chart-price-usdt");
   charts.priceBtc   = makePriceChartBTC("chart-price-btc");
 }
 
 // Range state
-const rangeState = { hr: "year", diff: "year", activity: "year", priceUsdt: "year", priceBtc: "week" };
+const rangeState = { hr: "year", diff: "year", activity: "year", activePeers: "month", priceUsdt: "year", priceBtc: "month" };
 
 function updateChartData(chart, json, range) {
   let pts;
@@ -1228,6 +1368,45 @@ function updateActivityChart(txJson, feeJson, range, metric) {
   charts.activity.update("none");
 }
 
+function updatePeersChart(json, range, network) {
+  if (!charts.activePeers || !json) return;
+  const nowMs = Date.now();
+
+  const getPoints = (series) => {
+    const s = json[series] || {};
+    let pts;
+    if (range === "all") {
+      pts = [...(s.daily||[]), ...aggToDaily(s.hourly||[])];
+    } else if (range === "year") {
+      const cutoff = nowMs - 365 * 86400000;
+      pts = [...(s.daily||[]).filter(([ts]) => ts*1000 >= cutoff), ...aggToDaily(s.hourly||[])];
+    } else if (range === "month") {
+      pts = (s.hourly||[]).filter(([ts]) => ts*1000 >= nowMs - 30 * 86400000);
+    } else if (range === "week") {
+      pts = (s.hourly||[]).filter(([ts]) => ts*1000 >= nowMs - 7 * 86400000);
+    } else {
+      pts = [...(s.recent||[])];
+    }
+    const byTs = new Map();
+    pts.forEach(([ts, v]) => byTs.set(ts, v));
+    return [...byTs.entries()].sort((a, b) => a[0] - b[0]).map(([ts, v]) => ({x: ts * 1000, y: v}));
+  };
+
+  // Set time unit per range so tick labels match the selected timeframe.
+  // Do NOT force x.min/x.max — let the axis auto-fit to the actual data bounds.
+  // This prevents an empty left-side gap when peer history is shorter than the range.
+  const _peerUnit = { day: "hour", week: "day", month: "day", year: "month", all: "month" };
+  charts.activePeers.options.scales.x.time.unit = _peerUnit[range] ?? "month";
+  delete charts.activePeers.options.scales.x.min;
+  delete charts.activePeers.options.scales.x.max;
+
+  charts.activePeers.data.datasets[0].data   = getPoints("mainnet");
+  charts.activePeers.data.datasets[1].data   = getPoints("testnet");
+  charts.activePeers.data.datasets[0].hidden = network === "testnet";
+  charts.activePeers.data.datasets[1].hidden = network === "mainnet";
+  charts.activePeers.update("none");
+}
+
 // ── Price chart updates ───────────────────────────────────────────────────────
 
 // Insert y:null between consecutive points farther apart than maxGapMs so
@@ -1295,15 +1474,12 @@ function updatePriceChartBTC(data, range) {
   const pts    = raw.map(([ts, v])    => ({ x: ts * 1000, y: Math.round(v * 1e8) }));
   const volPts = raw.map(([ts,, vol]) => ({ x: ts * 1000, y: vol || 0 }));
 
-  // Force x-axis time window and unit — prevents millisecond-precision labels when
-  // BTC data is sparse (few candles for month/year/all while history accumulates).
-  const _btcRangeMs = { day: 86400e3, week: 7*86400e3, month: 30*86400e3, year: 365*86400e3 };
-  const _btcUnit    = { day: "hour", week: "day", month: "week", year: "month", all: "month" };
-  const now = Date.now();
-  const xsMin = _btcRangeMs[range] ? now - _btcRangeMs[range] : undefined;
-  charts.priceBtc.options.scales.x.min = xsMin;
-  charts.priceBtc.options.scales.x.max = now;
+  // Set time unit per range for readable tick labels.
+  // Do NOT force x.min/x.max — auto-fit to actual data so empty date ranges are hidden.
+  const _btcUnit = { day: "hour", week: "day", month: "week", year: "month", all: "month" };
   charts.priceBtc.options.scales.x.time.unit = _btcUnit[range] ?? "month";
+  delete charts.priceBtc.options.scales.x.min;
+  delete charts.priceBtc.options.scales.x.max;
 
   // Scale volume axis so bars occupy ~20% of chart height
   const maxVol = Math.max(...volPts.map(p => p.y), 1);
@@ -1320,7 +1496,7 @@ function updatePriceChartBTC(data, range) {
 let DATA_CACHE = {};
 
 async function loadAll() {
-  const [summary, hashrate, difficulty, transactions, fees, versions, peers, price] =
+  const [summary, hashrate, difficulty, transactions, fees, versions, peers, activePeers, price] =
     await Promise.all([
       tryFetchJSON(DATA + "summary.json"),
       tryFetchJSON(DATA + "hashrate.json"),
@@ -1329,6 +1505,7 @@ async function loadAll() {
       tryFetchJSON(DATA + "fees.json"),
       tryFetchJSON(DATA + "versions.json"),
       tryFetchJSON(DATA + "peers.json"),
+      tryFetchJSON(DATA + "active_peers.json"),
       tryFetchJSON(DATA + "price.json"),
     ]);
 
@@ -1338,7 +1515,7 @@ async function loadAll() {
     return;
   }
 
-  DATA_CACHE = { hashrate, difficulty, transactions, fees, versions, price };
+  DATA_CACHE = { hashrate, difficulty, transactions, fees, versions, price, activePeers };
 
   // Stats bar
   if (summary) {
@@ -1378,7 +1555,8 @@ async function loadAll() {
   // Charts (skipped if chart.min.js didn't load)
   if (charts.hashrate   && hashrate)     updateChartData(charts.hashrate,   hashrate,     rangeState.hr);
   if (charts.difficulty && difficulty)   updateChartData(charts.difficulty, difficulty,   rangeState.diff);
-  if (charts.activity   && transactions && fees) updateActivityChart(transactions, fees, rangeState.activity, activityMetric);
+  if (charts.activity    && transactions && fees) updateActivityChart(transactions, fees, rangeState.activity, activityMetric);
+  if (charts.activePeers && activePeers)         updatePeersChart(activePeers, rangeState.activePeers, peersNetwork);
 
   // Versions donut
   if (versions) renderVersions(versions);
@@ -1516,6 +1694,8 @@ function wireRangeGroup(groupId, chartKey, cacheKey) {
         if (DATA_CACHE.transactions && DATA_CACHE.fees) {
           updateActivityChart(DATA_CACHE.transactions, DATA_CACHE.fees, rangeState.activity, activityMetric);
         }
+      } else if (chartKey === "activePeers") {
+        if (DATA_CACHE.activePeers) updatePeersChart(DATA_CACHE.activePeers, rangeState.activePeers, peersNetwork);
       } else if (chartKey === "priceUsdt") {
         if (DATA_CACHE.price) updatePriceChartUSDT(DATA_CACHE.price, rangeState.priceUsdt);
       } else if (chartKey === "priceBtc") {
@@ -1526,6 +1706,17 @@ function wireRangeGroup(groupId, chartKey, cacheKey) {
           updateChartData(charts[chartMap[chartKey]], DATA_CACHE[cacheKey], rangeState[chartKey]);
         }
       }
+    });
+  });
+}
+
+function wirePeersToggles() {
+  document.querySelectorAll(".peers-toggle").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".peers-toggle").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      peersNetwork = btn.dataset.net;
+      if (DATA_CACHE.activePeers) updatePeersChart(DATA_CACHE.activePeers, rangeState.activePeers, peersNetwork);
     });
   });
 }
@@ -1548,10 +1739,12 @@ async function boot() {
   initTheme();   // apply saved theme before charts are created
   wireRangeGroup("hr-range",       "hr",       "hashrate");
   wireRangeGroup("diff-range",     "diff",     "difficulty");
-  wireRangeGroup("activity-range", "activity", "transactions");
-  wireRangeGroup("price-usdt-range", "priceUsdt", "price");
+  wireRangeGroup("activity-range", "activity",     "transactions");
+  wireRangeGroup("peers-range",    "activePeers",  "activePeers");
+  wireRangeGroup("price-usdt-range", "priceUsdt",  "price");
   wireRangeGroup("price-btc-range",  "priceBtc",  "price");
   wireMetricToggles();
+  wirePeersToggles();
 
   try {
     if (typeof Chart !== "undefined") initCharts();
@@ -1577,7 +1770,7 @@ document.addEventListener("DOMContentLoaded", boot);
   function openModal() {
     const base = window.location.origin;
     $("api-base-url").innerHTML = 'Base URL: <span>' + base + '</span>';
-    ["price", "summary"].forEach(ep => {
+    ["summary", "hashrate", "difficulty", "transactions", "fees", "active_peers", "versions", "price"].forEach(ep => {
       const el = $("ep-" + ep);
       if (el) el.href = base + "/api/" + ep;
     });
@@ -1593,6 +1786,13 @@ document.addEventListener("DOMContentLoaded", boot);
   closeBtn.addEventListener("click", closeModal);
   overlay.addEventListener("click", e => { if (e.target === overlay) closeModal(); });
   document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+  // Collapsible endpoint descriptions
+  overlay.addEventListener("click", e => {
+    const ep = e.target.closest(".api-endpoint");
+    if (!ep || e.target.closest("a")) return;
+    ep.classList.toggle("open");
+  });
 })();
 </script>
 </body>

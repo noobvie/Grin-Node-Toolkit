@@ -1,0 +1,60 @@
+/* light.css — Clean white / light theme */
+:root {
+  --bg-body:      #f5f5f5;
+  --bg-card:      #ffffff;
+  --bg-card2:     #f0f0f0;
+  --text:         #1a1a1a;
+  --text-dim:     #666666;
+  --accent:       #00aa55;
+  --accent2:      #007a3d;
+  --border:       #dddddd;
+  --btn-bg:       #00aa55;
+  --btn-text:     #ffffff;
+  --btn-hover:    #007a3d;
+  --input-bg:     #ffffff;
+  --input-border: #cccccc;
+  --error-color:  #cc0000;
+  --ok-color:     #00aa55;
+  --warn-color:   #b37a00;
+  --grin-yellow:  #b37a00;
+  --font-mono:    'Courier New', Courier, monospace;
+  --font-sans:    system-ui, -apple-system, sans-serif;
+  --radius:       6px;
+  --shadow:       0 2px 8px rgba(0,0,0,0.08);
+}
+
+body { background: #f5f5f5; }
+
+header {
+  background: #eeeeee;
+  border-bottom-color: #dddddd;
+}
+
+.card {
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+.slatepack-box {
+  color: #007a3d;
+  background: #f8f8f8;
+  border-color: #dddddd;
+}
+
+.btn-outline {
+  border-color: #00aa55;
+  color: #00aa55;
+}
+
+.btn-outline:hover {
+  background: #00aa55;
+  color: #ffffff;
+}
+
+footer {
+  background: #eeeeee;
+  border-top-color: #dddddd;
+}
+
+input[type="text"]:focus, textarea:focus {
+  box-shadow: 0 0 0 3px rgba(0,170,85,.15);
+}

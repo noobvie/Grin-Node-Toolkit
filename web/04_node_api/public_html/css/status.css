@@ -85,11 +85,12 @@ html[data-theme="winxp"] header .refresh-badge { color: #ffffff; }
 html[data-theme="winxp"] .section-label         { color: #ffffff; }
 html[data-theme="winxp"] .section-dot           { background: #ffffff !important; }
 /* API status bar pills */
-html[data-theme="winxp"] .api-pill              { color: #dddddd; }
-html[data-theme="winxp"] .api-pill code         { color: #ffffff; }
-html[data-theme="winxp"] .api-pill.pill-ok      { color: #ffffff; }
-html[data-theme="winxp"] .api-pill.pill-ok .pill-dot,
-html[data-theme="winxp"] .api-pill.pill-off .pill-dot { background: #ffffff !important; }
+html[data-theme="winxp"] .api-pill              { color: #333333; }
+html[data-theme="winxp"] .api-pill code         { color: #000066; }
+html[data-theme="winxp"] .api-pill.pill-ok      { color: #1a5c1a; }
+html[data-theme="winxp"] .api-pill.pill-ok .pill-dot { background: #1a5c1a !important; }
+html[data-theme="winxp"] .api-pill.pill-off     { color: #8b0000; }
+html[data-theme="winxp"] .api-pill.pill-off .pill-dot { background: #8b0000 !important; }
 /* curl-block uses --bg as its background → text must be light */
 html[data-theme="winxp"] .curl-block            { color: #f0f0f0; border-color: #7baee8; }
 html[data-theme="winxp"] .fetch-result.ok       { color: #aaffaa; border-color: #aaffaa; }
@@ -99,9 +100,21 @@ html[data-theme="winxp"] .card-sub code         { color: #0044aa; }
 /* dev-steps list (on beige surface) */
 html[data-theme="winxp"] .dev-steps             { color: #333333; }
 html[data-theme="winxp"] .dev-steps code        { color: #000000; }
-/* endpoint links → yellow for visibility on blue bg */
+/* links on beige card surface → dark blue */
+html[data-theme="winxp"] a                      { color: #0044aa; }
+/* links on blue bg (curl-block, endpoint-list) → yellow */
+html[data-theme="winxp"] .curl-block a,
 html[data-theme="winxp"] .endpoint-list a       { color: #ffdd44; }
+/* footer links on blue gradient */
+html[data-theme="winxp"] footer a               { color: #add8ff; }
+html[data-theme="winxp"] .curl-copy-btn         { background: #d4e8ff; color: #000033; border-color: #7baee8; }
+html[data-theme="winxp"] .curl-copy-btn:hover,
+html[data-theme="winxp"] .curl-copy-btn.copied  { background: #007700; color: #ffffff; border-color: #007700; }
 html[data-theme="winxp"] .endpoint-list .ep-desc { color: #c8dff8; }
+/* api-compare table: thead + odd rows use --bg (blue) → light text */
+html[data-theme="winxp"] .api-compare thead th        { color: #ffffff; }
+html[data-theme="winxp"] .api-compare thead th code   { color: #ffdd44; }
+html[data-theme="winxp"] .api-compare tbody tr:nth-child(odd) code { color: #ffdd44; }
 html[data-theme="winxp"] .network-badge {
   color: #ffffff;
   border-color: #7baee8;
@@ -112,9 +125,10 @@ html[data-theme="winxp"] footer {
   border-top: 2px solid #0054e3;
   color: #ffffff;
 }
-html[data-theme="winxp"] footer a { color: #add8ff; }
-
 * { box-sizing: border-box; margin: 0; padding: 0; }
+
+a { color: var(--grin); text-decoration: none; }
+a:hover { text-decoration: underline; }
 
 body {
   background: var(--bg);
@@ -365,6 +379,7 @@ main {
 }
 .endpoint-list a:hover { text-decoration: underline; }
 
+
 .endpoint-list .ep-desc {
   color: var(--muted);
   font-size: 11px;
@@ -376,6 +391,42 @@ main {
   color: var(--muted);
   margin-top: 5px;
   font-family: inherit;
+}
+
+/* Curl-wrap: positions the copy button over the pre block */
+.curl-wrap {
+  position: relative;
+  margin: 10px 0 6px;
+}
+.curl-wrap .curl-block {
+  margin: 0;
+  padding-right: 70px; /* leave room for the copy button */
+}
+.curl-copy-btn {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.curl-copy-btn:hover {
+  background: var(--green);
+  color: #000;
+  border-color: var(--green);
+}
+.curl-copy-btn.copied {
+  background: var(--green);
+  color: #000;
+  border-color: var(--green);
 }
 
 /* Curl / code block inside a card */

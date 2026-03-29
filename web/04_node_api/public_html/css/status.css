@@ -48,7 +48,6 @@ html[data-theme="matrix"] body {
 }
 html[data-theme="matrix"] .logo-dot { animation: matrix-pulse 0.5s step-start infinite; }
 @keyframes matrix-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
-html[data-theme="matrix"] a.wallet-url { color: #00ff41 !important; }
 
 /* ── Windows XP theme — retro Tahoma, silver + XP blue ──────────────────── */
 html[data-theme="winxp"] {
@@ -103,7 +102,7 @@ html[data-theme="winxp"] .dev-steps             { color: #333333; }
 html[data-theme="winxp"] .dev-steps code        { color: #000000; }
 /* endpoint links + wallet URL links → yellow for visibility on blue bg */
 html[data-theme="winxp"] .endpoint-list a       { color: #ffdd44; }
-html[data-theme="winxp"] a.wallet-url            { color: #ffdd44 !important; }
+html[data-theme="winxp"] .curl-block a.wallet-url { color: #ffdd44; }
 html[data-theme="winxp"] .curl-copy-btn         { background: #d4e8ff; color: #000033; border-color: #7baee8; }
 html[data-theme="winxp"] .curl-copy-btn:hover,
 html[data-theme="winxp"] .curl-copy-btn.copied  { background: #007700; color: #ffffff; border-color: #007700; }
@@ -371,14 +370,13 @@ main {
 }
 .endpoint-list a:hover { text-decoration: underline; }
 
-a.wallet-url {
-  color: #ffffff !important;
+.curl-block a.wallet-url {
+  color: var(--grin);
   text-decoration: none;
   white-space: nowrap;
   font-weight: 600;
 }
-a.wallet-url:hover { text-decoration: underline; }
-html[data-theme="light"] a.wallet-url { color: #111111 !important; }
+.curl-block a.wallet-url:hover { text-decoration: underline; }
 
 .endpoint-list .ep-desc {
   color: var(--muted);

@@ -111,6 +111,10 @@ html[data-theme="winxp"] .curl-copy-btn         { background: #d4e8ff; color: #0
 html[data-theme="winxp"] .curl-copy-btn:hover,
 html[data-theme="winxp"] .curl-copy-btn.copied  { background: #007700; color: #ffffff; border-color: #007700; }
 html[data-theme="winxp"] .endpoint-list .ep-desc { color: #c8dff8; }
+/* api-compare table: thead + odd rows use --bg (blue) → light text */
+html[data-theme="winxp"] .api-compare thead th        { color: #ffffff; }
+html[data-theme="winxp"] .api-compare thead th code   { color: #ffdd44; }
+html[data-theme="winxp"] .api-compare tbody tr:nth-child(odd) code { color: #ffdd44; }
 html[data-theme="winxp"] .network-badge {
   color: #ffffff;
   border-color: #7baee8;

@@ -1326,10 +1326,14 @@ EOF
         warn "Cron will retry automatically every minute."
     fi
 
-    # 7. Patch nginx to serve /rest/*.json (location block before the catch-all).
+    # 7. Ensure rate-limit zone exists in nginx.conf (may have been cleaned or skipped).
+    _nginx_add_limit_req_zone
+
+    # 8. Patch nginx to serve /rest/*.json (location block before the catch-all).
     _nginx_patch_rest "$nginx_conf" enable
 
-    if nginx -t 2>/dev/null; then
+    local _nginx_err; _nginx_err=$(nginx -t 2>&1)
+    if echo "$_nginx_err" | grep -q "successful"; then
         systemctl reload nginx
         local domain; domain=$(_nginx_domain "$nginx_conf")
         success "REST API enabled for $network!"
@@ -1357,6 +1361,7 @@ EOF
         log "REST API enabled: network=$network domain=$domain port=$port rest_dir=$rest_dir cron=$cron_file node_cron=$node_cron_file"
     else
         error "nginx config test failed — reverting REST changes."
+        echo "$_nginx_err"
         _nginx_patch_rest "$nginx_conf" disable
         rm -f "$cron_file"
         nginx -t 2>/dev/null && systemctl reload nginx || true

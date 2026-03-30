@@ -578,6 +578,119 @@ woo_status() {
 }
 
 # =============================================================================
+# OPTION 6 — Package plugin as distributable zip
+# =============================================================================
+
+woo_package_plugin() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── WooCommerce — 6) Package Plugin ──${RESET}\n"
+    echo -e "  ${DIM}Creates a distributable zip (excludes server-specific bridge-config.php).${RESET}\n"
+
+    if [[ ! -d "$WOO_PLUGIN_SRC" ]]; then
+        die "Plugin source not found: $WOO_PLUGIN_SRC"; pause; return
+    fi
+
+    local plugin_main="$WOO_PLUGIN_SRC/grin-payment.php"
+    if [[ ! -f "$plugin_main" ]]; then
+        warn "grin-payment.php not found in $WOO_PLUGIN_SRC"
+        warn "Cannot read version — using 0.0.0"
+        local version="0.0.0"
+    else
+        local version
+        version=$(grep -i "^\s*\*\s*Version:" "$plugin_main" 2>/dev/null \
+            | head -1 | awk -F: '{print $2}' | tr -d ' ')
+        version="${version:-0.0.0}"
+    fi
+
+    local releases_dir="$TOOLKIT_ROOT/web/053_woocommerce/releases"
+    mkdir -p "$releases_dir"
+
+    local zip_name="grin-payment-v${version}.zip"
+    local zip_path="$releases_dir/$zip_name"
+
+    if [[ -f "$zip_path" ]]; then
+        warn "File already exists: $zip_path"
+        echo -ne "  Overwrite? [y/N]: "
+        read -r ow || true
+        [[ "${ow,,}" != "y" ]] && info "Cancelled." && pause && return
+        rm -f "$zip_path"
+    fi
+
+    info "Packaging version ${BOLD}$version${RESET} ..."
+
+    # Build zip with correct internal folder name grin-payment/
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    cp -r "$WOO_PLUGIN_SRC" "$tmp_dir/grin-payment"
+
+    # Remove server-specific and development files
+    rm -f  "$tmp_dir/grin-payment/bridge-config.php"
+    find   "$tmp_dir/grin-payment" -name ".DS_Store" -delete 2>/dev/null || true
+    find   "$tmp_dir/grin-payment" -name "*.log"     -delete 2>/dev/null || true
+
+    ( cd "$tmp_dir" && zip -qr "$zip_path" "grin-payment/" )
+    rm -rf "$tmp_dir"
+
+    if [[ -f "$zip_path" ]]; then
+        local size
+        size=$(du -sh "$zip_path" | awk '{print $1}')
+        success "Plugin packaged: ${BOLD}$zip_path${RESET}  ($size)"
+        echo ""
+        echo -e "  ${DIM}Install via: WordPress Admin → Plugins → Add New → Upload Plugin${RESET}"
+    else
+        die "zip failed — is the zip command installed?"
+    fi
+
+    log "[woo_package_plugin] version=$version path=$zip_path"
+    pause
+}
+
+# =============================================================================
+# OPTION 7 — Pull latest from GitHub and exit
+# =============================================================================
+
+woo_pull_update() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── WooCommerce — 7) Pull Latest from GitHub ──${RESET}\n"
+    echo -e "  ${DIM}Runs git pull in toolkit root, then exits so changes take effect.${RESET}\n"
+    echo -e "  ${BOLD}Toolkit root:${RESET} $TOOLKIT_ROOT"
+    echo ""
+
+    if ! command -v git &>/dev/null; then
+        die "git not found."; pause; return
+    fi
+
+    if [[ ! -d "$TOOLKIT_ROOT/.git" ]]; then
+        die "$TOOLKIT_ROOT is not a git repository."; pause; return
+    fi
+
+    # Show current branch
+    local branch
+    branch=$(git -C "$TOOLKIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    echo -e "  Current branch: ${BOLD}$branch${RESET}"
+    echo ""
+
+    echo -ne "  Pull from origin/${branch}? [Y/n]: "
+    read -r confirm || true
+    [[ "${confirm,,}" == "n" ]] && info "Cancelled." && pause && return
+
+    echo ""
+    info "Running git pull ..."
+    echo ""
+
+    if git -C "$TOOLKIT_ROOT" pull origin "$branch"; then
+        echo ""
+        success "Pull complete. Exiting script so new version takes effect."
+        log "[woo_pull_update] branch=$branch pulled OK — exiting"
+        exit 0
+    else
+        echo ""
+        die "git pull failed — check output above for conflicts or errors."
+        pause
+    fi
+}
+
+# =============================================================================
 # MENU
 # =============================================================================
 
@@ -604,10 +717,14 @@ woo_menu() {
         echo -e "${DIM}  ─── Info ─────────────────────────────────────────${RESET}"
         echo -e "  ${CYAN}5${RESET}) Status"
         echo ""
+        echo -e "${DIM}  ─── Distribution ─────────────────────────────────${RESET}"
+        echo -e "  ${YELLOW}6${RESET}) Package plugin        ${DIM}(create distributable .zip)${RESET}"
+        echo -e "  ${YELLOW}7${RESET}) Pull latest & exit    ${DIM}(git pull origin, then exit)${RESET}"
+        echo ""
         echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
         echo -e "  ${RED}0${RESET}) Back to network select"
         echo ""
-        echo -ne "${BOLD}Select [1-5 / 0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-7 / 0]: ${RESET}"
         read -r choice || true
 
         case "$choice" in
@@ -616,6 +733,8 @@ woo_menu() {
             3) woo_configure       || true ;;
             4) woo_service_control || true ;;
             5) woo_status          || true ;;
+            6) woo_package_plugin  || true ;;
+            7) woo_pull_update     || true ;;
             0) break ;;
             "") continue ;;
             *) warn "Invalid option."; sleep 1 ;;

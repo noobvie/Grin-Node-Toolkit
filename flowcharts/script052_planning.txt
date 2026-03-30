@@ -2,7 +2,7 @@
 ║           052_grin_drop.sh  —  UPGRADE PLAN  (Flask + HTTP API)             ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
-  Version:  planning v1
+  Version:  planning v3
   Date:     2026-03-29
   Scope:    - Replace CLI subprocess wallet calls with HTTP API (Owner + Foreign)
             - Add interactive donation slatepack flow (3 tabs)
@@ -492,10 +492,267 @@
   7     052_grin_drop.sh      Add: unified homepage deploy step
                               Add: nginx unified vhost with path routing
                               Add: wallet API secret path config prompts
+                              Add: B) Backup — encrypt with openssl aes-256-cbc
+                                   includes DB + config + wallet seed + pass file
+                                   password prompt, chown root:root, chmod 600
+                                   keep last 10, wipe temp dir after
+                              Add: R) Restore — decrypt test before stop,
+                                   confirm prompt, restore files + perms,
+                                   restart service, warn about wallet listener
+                              Remove: DEL) Reset database
                               Modify: select_network() → add option 3 (both)
+                              Modify: menu prompt → [1-9 / L / B / R / 0]
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  11. PORTS & PATHS REFERENCE
+  11. BASH MENU STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ── Entry Point — Network Select ─────────────────────────────────────────────
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                        │
+  │   052) GRIN DROP                                                        │
+  │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                        │
+  │                                                                         │
+  │    1) Testnet  (tGRIN — no monetary value)  drop: [running|not running] │
+  │    2) Mainnet  ⚠ sends/receives real GRIN   drop: [running|not running] │
+  │    3) Unified Homepage  (aggregated stats for both networks)            │
+  │                                                                         │
+  │    0) Back to main menu                                                 │
+  │                                                                         │
+  │  Select [1/2/3/0]:                                                      │
+  └─────────────────────────────────────────────────────────────────────────┘
+       │              │              │
+       ▼              ▼              ▼
+  [Testnet menu] [Mainnet menu] [Unified homepage menu]
+  (same layout)  (shown below)  (shown below)
+
+  NOTE: Picking 2 (Mainnet) requires typing MAINNET to confirm — prevents
+        accidental real-GRIN operations.
+
+  ── Mainnet Submenu  (Testnet is identical — labels/paths differ) ─────────
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                        │
+  │   052) GRIN DROP  [MAINNET — REAL GRIN]                                 │
+  │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                        │
+  │                                                                         │
+  │  Mode: giveaway ● ON  |  donation ● ON                                  │
+  │                                                                         │
+  │  Grin node  : ● running  (port 3413)            ← script 01 dependency │
+  │  Wallet     : ● listening  (tmux: grin-drop-mainnet)                    │
+  │  3 Install  : OK                                                        │
+  │  4 Configure: OK  (drop.example.com)                                    │
+  │  5 Web files: deployed  (/var/www/grin-drop-main)                       │
+  │  6 nginx    : configured                                                │
+  │  7 Service  : ● running  (https://drop.example.com/mainnet/)            │
+  │                                                                         │
+  │  ─── First-time setup (run in order) ───────────────                    │
+  │  1) Setup wallet          (download + init drop wallet)                 │
+  │  2) Wallet listening      (start tmux: grin-drop-mainnet)               │
+  │  3) Install               (Python + Flask + gunicorn, systemd service)  │
+  │  4) Configure             (domain, modes, claim amount,                 │
+  │                            wallet address, API ports + secrets,         │
+  │                            donation invoice timeout)          [UPDATED] │
+  │  5) Deploy web files      (copy to /var/www/grin-drop-main)             │
+  │  6) Setup nginx           (vhost + SSL + rate limits)                   │
+  │  7) Start / Stop service  (systemd grin-drop-main)                      │
+  │                                                                         │
+  │  ─── Info & maintenance ─────────────────────────────                   │
+  │  8) Drop status           (health, balance, claims, logs)               │
+  │  9) Wallet address        (show + update address)                       │
+  │  L) View logs             (tail activity log)                           │
+  │                                                                         │
+  │  ─── Admin tasks ────────────────────────────────────                   │
+  │  B) Backup                (DB + config + wallet seed → encrypted        │
+  │                            archive, password prompt, chmod 600)         │
+  │  R) Restore               (list backups, pick one, confirm, restore)    │
+  │                                                                         │
+  │  ↩  Press Enter to refresh                                              │
+  │  0) Back to network select                                              │
+  │                                                                         │
+  │  Select [1-9 / L / B / R / 0]:                                          │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  Testnet menu: identical layout.
+    - Header shows [TESTNET] in cyan instead of red
+    - No MAINNET confirmation prompt on entry
+    - Paths: /opt/grin/drop-test/  /var/www/grin-drop-test/
+    - Service: grin-drop-test  port: 3004
+    - tmux: grin-drop-testnet
+    - Wallet ports: Foreign :13415  Owner :13420
+    - Status URL: https://drop.example.com/testnet/
+
+  Step 4) Configure — expanded prompts after upgrade:
+    ┌───────────────────────────────────────────────────────────────────┐
+    │  Current prompts (existing):                                      │
+    │    Domain / subdomain                                             │
+    │    Site title (drop_name)                                         │
+    │    Claim amount (GRIN)                                            │
+    │    Claim window (hours)                                           │
+    │    Finalize timeout (minutes)                                     │
+    │    Giveaway enabled  [y/n]                                        │
+    │    Donation enabled  [y/n]                                        │
+    │    Show public stats [y/n]                                        │
+    │    Admin secret path                                              │
+    │    Default theme                                                  │
+    │                                                                   │
+    │  New prompts added for HTTP API upgrade:                          │
+    │    Wallet Foreign API port  [default: 3415 / testnet: 13415]     │
+    │    Wallet Owner API port    [default: 3420 / testnet: 13420]     │
+    │    Foreign API secret file  [default: <wallet_dir>/.api_secret]  │
+    │    Owner API secret file    [default: <wallet_dir>/.owner_api_secret] │
+    │    Donation invoice timeout [default: 30 min]                    │
+    └───────────────────────────────────────────────────────────────────┘
+
+  B) Backup — step detail
+    ┌───────────────────────────────────────────────────────────────────┐
+    │  Files included in backup archive:                                │
+    │    drop.db                  SQLite database (claims + donations)  │
+    │    grin_drop.conf           site config (JSON, chmod 600)         │
+    │    wallet/wallet_data/      wallet seed + keys directory          │
+    │      seed-drop.txt          plaintext seed phrase (if exists)     │
+    │      .api_secret            Foreign API secret                    │
+    │      .owner_api_secret      Owner API secret                      │
+    │    .wallet_pass             wallet passphrase file                │
+    │                                                                   │
+    │  Backup flow:                                                      │
+    │    1. Prompt: "Enter backup password (min 8 chars):"              │
+    │       Confirm password — must match before proceeding             │
+    │    2. Service does NOT need to stop — SQLite WAL safe to copy     │
+    │    3. Stage files into temp dir /tmp/drop_backup_<timestamp>/     │
+    │    4. Compress + encrypt:                                         │
+    │         openssl enc -aes-256-cbc -pbkdf2 -iter 600000            │
+    │           -in  <staged.tar>                                       │
+    │           -out <backup_file>.tar.gz.enc                           │
+    │         (password entered interactively via -pass stdin)          │
+    │    5. chown root:root  backup file                                │
+    │       chmod 600        backup file                                │
+    │    6. Move to: /opt/grin/drop-main/backups/                       │
+    │         drop-main_backup_2026-03-29_14-30-00.tar.gz.enc          │
+    │    7. Purge oldest — keep last 10 backups only                    │
+    │    8. Print full path + file size when done                       │
+    │    9. Wipe temp dir (rm -rf /tmp/drop_backup_<timestamp>/)        │
+    │                                                                   │
+    │  Security notes:                                                  │
+    │    - AES-256-CBC with PBKDF2 (600k iterations) — strong at rest  │
+    │    - Temp dir wiped immediately after encryption                  │
+    │    - Backup file owned root:root, chmod 600 — service user        │
+    │      cannot read it, only root or sudo                            │
+    │    - Password never written to disk, never logged                 │
+    │    - Admin should scp the file off-server after backup            │
+    └───────────────────────────────────────────────────────────────────┘
+
+  R) Restore — step detail
+    ┌───────────────────────────────────────────────────────────────────┐
+    │  Restore flow:                                                    │
+    │    1. List available backups with size + date:                    │
+    │         1) drop-main_backup_2026-03-29_14-30-00.tar.gz.enc  2.1M │
+    │         2) drop-main_backup_2026-03-28_09-15-00.tar.gz.enc  1.9M │
+    │         0) Cancel                                                 │
+    │    2. User picks backup number                                    │
+    │    3. Prompt: "Enter backup password:"                            │
+    │    4. Test decrypt (openssl -out /dev/null) — fail fast on wrong  │
+    │       password before touching any live files                     │
+    │    5. Confirm warning:                                            │
+    │         ⚠ This will STOP the service, overwrite DB, config,      │
+    │           and wallet files. Type RESTORE to confirm:              │
+    │    6. Stop systemd service                                        │
+    │    7. Decrypt + extract to temp dir                               │
+    │    8. Overwrite:                                                  │
+    │         drop.db           → /opt/grin/drop-main/drop.db          │
+    │         grin_drop.conf    → /opt/grin/drop-main/grin_drop.conf   │
+    │         wallet/wallet_data/ → /opt/grin/drop-main/wallet/        │
+    │         .wallet_pass      → /opt/grin/drop-main/.wallet_pass     │
+    │    9. Restore ownership + permissions on all restored files       │
+    │   10. Wipe temp dir                                               │
+    │   11. Restart systemd service                                     │
+    │   12. Print success + remind user to verify wallet listener       │
+    │                                                                   │
+    │  Safety notes:                                                    │
+    │    - Password tested against archive BEFORE service stops         │
+    │    - Wallet listener (tmux) not restarted automatically —         │
+    │      user must run option 2) Wallet listening after restore       │
+    │    - Restore does not touch nginx config — domain/SSL unchanged   │
+    └───────────────────────────────────────────────────────────────────┘
+
+  ── Unified Homepage Submenu ──────────────────────────────────────────────
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                        │
+  │   052) GRIN DROP  [UNIFIED HOMEPAGE]                                    │
+  │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                        │
+  │                                                                         │
+  │  Testnet portal : ● running   (http://127.0.0.1:3004)                  │
+  │  Mainnet portal : ✗ not running                                         │
+  │  Web files      : not deployed                                          │
+  │  nginx          : not configured                                        │
+  │                                                                         │
+  │  ─── Setup (run in order) ───────────────────────────                   │
+  │  1) Prerequisites check   (verify testnet/mainnet portals respond)      │
+  │  2) Configure             (domain, site title, networks to show)        │
+  │  3) Deploy web files      (home/ → /var/www/grin-drop-home/)            │
+  │  4) Setup nginx           (unified vhost: / + /testnet/ + /mainnet/     │
+  │                            + SSL: Let's Encrypt or Cloudflare)          │
+  │                                                                         │
+  │  ─── Info ───────────────────────────────────────────                   │
+  │  5) Status                (nginx config, URLs, live stats from both     │
+  │                            portals via /api/public-stats)               │
+  │                                                                         │
+  │  ↩  Press Enter to refresh                                              │
+  │  0) Back to network select                                              │
+  │                                                                         │
+  │  Select [1-5 / 0]:                                                      │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  Step details:
+
+  1) Prerequisites check
+       - Checks grin-drop-test  responds at http://127.0.0.1:3004/api/public-stats
+       - Checks grin-drop-main  responds at http://127.0.0.1:3005/api/public-stats
+       - Warns (not blocks) if either is missing — homepage can run with one
+       - Warns if /var/www/grin-drop-home already exists (offer to overwrite)
+
+  2) Configure
+       Prompts:
+         Unified domain        (e.g. drop.example.com)
+         Site title            (e.g. "Grin Drop")
+         Show testnet block?   [y/n]  (can hide if testnet not deployed)
+         Show mainnet block?   [y/n]
+       Writes: /opt/grin/drop-home/grin_drop_home.conf  (chmod 600)
+
+  3) Deploy web files
+       - Copies web/052_drop/home/ → /var/www/grin-drop-home/
+       - Injects configured domain + title + network toggles into HTML
+       - Sets ownership: www-data:www-data
+       - No Flask, no Python — purely static files served by nginx
+
+  4) Setup nginx
+       - Writes /etc/nginx/sites-available/grin-drop-home
+       - Single server block, three location blocks:
+           location /          → static /var/www/grin-drop-home/
+           location /testnet/  → proxy_pass http://127.0.0.1:3004/
+           location /mainnet/  → proxy_pass http://127.0.0.1:3005/
+       - SSL prompt: 1) Let's Encrypt  2) Cloudflare Origin Cert
+       - Adds rate-limit zones for /testnet/ and /mainnet/ proxy paths
+       - Symlinks to sites-enabled, reloads nginx
+
+  5) Status
+       - Shows nginx config path + enabled status
+       - Shows live URL: https://<domain>/
+       - Fetches /testnet/api/public-stats → prints testnet totals
+       - Fetches /mainnet/api/public-stats → prints mainnet totals
+       - Shows combined totals (sum of both)
+       Example output:
+         Testnet  given: 4,200 GRIN  received: 120 GRIN  claims: 2,100
+         Mainnet  given:   500 GRIN  received:  42 GRIN  claims:   250
+         ─────────────────────────────────────────────────────────
+         Combined given: 4,700 GRIN  received: 162 GRIN
+
+  No wallet binary, no passphrase, no tmux — homepage menu is config only.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  12. PORTS & PATHS REFERENCE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Service            Port    Path

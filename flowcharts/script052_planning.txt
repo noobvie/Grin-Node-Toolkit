@@ -1,0 +1,517 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║           052_grin_drop.sh  —  UPGRADE PLAN  (Flask + HTTP API)             ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+  Version:  planning v1
+  Date:     2026-03-29
+  Scope:    - Replace CLI subprocess wallet calls with HTTP API (Owner + Foreign)
+            - Add interactive donation slatepack flow (3 tabs)
+            - Add unified homepage aggregating testnet + mainnet stats
+            - Document limitations for high-load scenarios
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  1. ARCHITECTURE OVERVIEW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Three independent deployments on one server, one nginx vhost:
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  drop.example.com                                                       │
+  │                                                                         │
+  │   /                → Unified homepage  (static HTML, nginx served)      │
+  │   /testnet/        → Testnet portal    (proxy → Flask :3004)            │
+  │   /mainnet/        → Mainnet portal    (proxy → Flask :3005)            │
+  │   /testnet/<secret>/ → Testnet admin   (proxy → Flask :3004)            │
+  │   /mainnet/<secret>/ → Mainnet admin   (proxy → Flask :3005)            │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  Each portal (testnet/mainnet) is a completely isolated stack:
+    - Own grin-wallet binary + data
+    - Own Flask/gunicorn process
+    - Own SQLite database
+    - Own config file
+    - Own wallet listener (tmux)
+    - Wallets never share memory, files, or processes
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  2. FULL STACK DIAGRAM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Internet
+     │
+     │  HTTPS :443
+     ▼
+  ┌──────────────────────────────────────────────────────┐
+  │  nginx                                               │
+  │  - SSL termination (Let's Encrypt / Cloudflare)      │
+  │  - Rate limiting (per zone, per IP)                  │
+  │  - Static file serving (unified homepage)            │
+  │  - Reverse proxy routing by path prefix              │
+  │  - Security headers (HSTS, CSP, X-Frame-Options)     │
+  └──────┬───────────────────────────┬───────────────────┘
+         │ /testnet/                 │ /mainnet/
+         │ HTTP :3004 (localhost)    │ HTTP :3005 (localhost)
+         ▼                           ▼
+  ┌─────────────────┐         ┌─────────────────┐
+  │ gunicorn        │         │ gunicorn        │
+  │ (4 workers)     │         │ (4 workers)     │
+  │ grin-drop-test  │         │ grin-drop-main  │
+  └───────┬─────────┘         └───────┬─────────┘
+          │ Python call                │ Python call
+          ▼                            ▼
+  ┌─────────────────┐         ┌─────────────────┐
+  │ Flask           │         │ Flask           │
+  │ app_drop.py     │         │ app_drop.py     │
+  │ wallet_drop.py  │         │ wallet_drop.py  │
+  │ db_drop.py      │         │ db_drop.py      │
+  └───────┬─────────┘         └───────┬─────────┘
+          │ requests.post()            │ requests.post()
+          │ HTTP JSON-RPC              │ HTTP JSON-RPC
+          ▼                            ▼
+  ┌─────────────────┐         ┌─────────────────┐
+  │ grin-wallet     │         │ grin-wallet     │
+  │ daemon (testnet)│         │ daemon (mainnet)│
+  │ Owner  :13420   │         │ Owner  :3420    │
+  │ Foreign:13415   │         │ Foreign:3415    │
+  └─────────────────┘         └─────────────────┘
+          │                            │
+          ▼                            ▼
+  ┌─────────────────┐         ┌─────────────────┐
+  │ SQLite          │         │ SQLite          │
+  │ drop-test.db    │         │ drop-main.db    │
+  └─────────────────┘         └─────────────────┘
+
+  Unified homepage (static, no backend):
+  ┌─────────────────────────────────────────────────────┐
+  │  /var/www/grin-drop-home/index.html                 │
+  │  JS fetch('/testnet/api/public-stats')  ─────────┐  │
+  │  JS fetch('/mainnet/api/public-stats')  ──────┐  │  │
+  └──────────────────────────────────────────┼───┼──┘  │
+                                             │   │
+                          Flask :3005 ───────┘   │
+                          Flask :3004 ────────────┘
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  3. WALLET HTTP API INTEGRATION  (replaces CLI subprocess)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  CURRENT (CLI subprocess — to be removed):
+    subprocess.run(["grin-wallet", "send", ...])
+    subprocess.run(["grin-wallet", "finalize", ...])
+    → parse regex from stdout  ← fragile, slow, blocking
+
+  NEW (HTTP API — requests library):
+    requests.post(OWNER_API_URL,  auth=('', owner_secret),  json={...})
+    requests.post(FOREIGN_API_URL, auth=('', foreign_secret), json={...})
+    → structured JSON response  ← clean, fast, no process spawn
+
+  ── Wallet API Ports ────────────────────────────────────────────────────────
+
+    Network   Foreign API           Owner API
+    ────────  ────────────────────  ────────────────────
+    Testnet   127.0.0.1:13415       127.0.0.1:13420
+    Mainnet   127.0.0.1:3415        127.0.0.1:3420
+
+    Both require HTTP Basic Auth:
+      Foreign: username="" password=<content of .foreign_api_secret>
+      Owner:   username="" password=<content of .owner_api_secret>
+              + open_wallet call with wallet passphrase first
+
+  ── HTTP API method map ──────────────────────────────────────────────────────
+
+    Operation            API          Method                    Used by
+    ─────────────────    ──────────   ───────────────────────   ─────────────
+    Get wallet balance   Owner v3     retrieve_summary_info     /api/status
+    Get wallet address   Owner v3     get_slatepack_address     /api/status
+    Giveaway: init send  Owner v3     init_send_tx              /api/claim
+    Giveaway: finalize   Owner v3     finalize_tx               /api/finalize
+    Donate tab2: receive Foreign v2   receive_tx                /api/donate/receive
+    Donate tab3: invoice Owner v3     issue_invoice_tx          /api/donate/invoice
+    Donate tab3: finalize Owner v3    finalize_tx               /api/donate/finalize
+
+  ── wallet_drop.py function changes ─────────────────────────────────────────
+
+    REMOVE (CLI subprocess):          ADD (HTTP API):
+    ─────────────────────────         ──────────────────────────────────────
+    get_balance(cfg)              →   api_get_balance(cfg)
+    get_address(cfg)              →   api_get_address(cfg)
+    init_send(cfg, addr, amount)  →   api_init_send(cfg, addr, amount)
+    finalize(cfg, response_slate) →   api_finalize(cfg, slatepack)
+                                      api_receive(cfg, send_slatepack)   [NEW]
+                                      api_issue_invoice(cfg, amount)     [NEW]
+                                      api_finalize_invoice(cfg, slatepack) [NEW]
+
+    All functions share a common _owner_post(cfg, method, params) helper
+    and _foreign_post(cfg, method, params) helper that handle auth,
+    open_wallet token, and JSON-RPC envelope.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  4. WORKFLOW DIAGRAMS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ── A. Giveaway Flow (existing, migrated to HTTP API) ───────────────────────
+
+    User                   Flask                  grin-wallet Owner API
+    ────                   ─────                  ─────────────────────
+    POST /api/claim ──────► validate address
+                            check rate limit (DB)
+                            create_claim() → DB
+                            open_wallet()  ───────► token
+                            init_send_tx() ───────► returns slatepack_out
+                           ◄── {claim_id, slatepack, expires_at}
+    (copies slatepack to wallet)
+    POST /api/finalize ───► validate claim_id
+    {response_slate}        check not expired (DB)
+                            finalize_tx()  ───────► broadcasts tx
+                           ◄── {status: "confirmed"}
+    (done)
+
+  ── B. Donation Tab 1 — TOR Direct (static, no API call) ────────────────────
+
+    User                   Frontend only
+    ────                   ─────────────
+    clicks Tab 1           show wallet address from /api/status
+                           show copy button
+                           user sends directly via TOR wallet
+                           (no slatepack exchange needed)
+
+  ── C. Donation Tab 2 — Slatepack Receive (You Send / We Receive) ───────────
+
+    User                   Flask                  grin-wallet APIs
+    ────                   ─────                  ────────────────
+    picks amount           (JS shows send command)
+    runs: grin-wallet send -d <our_address> -a <amount>
+    pastes send_slate
+    POST /donate/receive ─► validate BEGINSLATEPACK format
+    {send_slate}             open_wallet (Owner)  ─► token
+                             receive_tx (Foreign) ─► response_slatepack
+                             record pending donation (DB)
+                            ◄── {response_slatepack}
+    saves to file
+    runs: grin-wallet finalize -i response.slatepack
+    (tx broadcasts — done)
+    Admin manually confirms donation amount in admin panel.
+
+    NOTE: grin-wallet Foreign API receive_tx processes the send slate
+          and returns a response slate. The user then finalizes locally.
+          Flask never calls finalize here — user's wallet does.
+
+  ── D. Donation Tab 3 — Invoice (We Request / You Pay) ──────────────────────
+
+    User                   Flask                  grin-wallet Owner API
+    ────                   ─────                  ─────────────────────
+    picks amount
+    enters their address
+    POST /donate/invoice ─► validate amount + address
+    {amount, address}        open_wallet()        ─► token
+                             issue_invoice_tx()   ─► invoice_slatepack
+                             store pending invoice (DB: donations table)
+                            ◄── {invoice_id, invoice_slatepack}
+    saves to file
+    runs: grin-wallet pay -i invoice.slatepack
+    pastes response
+    POST /donate/finalize ─► validate invoice_id
+    {invoice_id,              check not expired (DB)
+     response_slate}          finalize_tx()        ─► broadcasts tx
+                              update donation (DB: status=confirmed, tx_id)
+                            ◄── {status: "confirmed"}
+    (done — donation recorded)
+
+  ── E. Unified Homepage Aggregation ─────────────────────────────────────────
+
+    Browser loads /index.html (static)
+         │
+         ├─► fetch('/testnet/api/public-stats')
+         │     returns: { total_given, total_received,
+         │                claims_total, donations_total }
+         │
+         └─► fetch('/mainnet/api/public-stats')
+               returns: { total_given, total_received,
+                          claims_total, donations_total }
+
+    JS merges both responses:
+      - Shows testnet + mainnet stats side by side
+      - Shows combined totals (sum of both)
+      - Links to /testnet/ and /mainnet/ portals
+      - No backend needed — pure static HTML + JS
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  5. DATABASE CHANGES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  EXISTING tables (unchanged):
+    claims       — giveaway transactions (pending → waiting_finalize → confirmed)
+    donations    — recorded donations (currently manual/admin-added only)
+
+  CHANGES to donations table — add columns:
+    type          TEXT  DEFAULT 'manual'   -- 'manual' | 'slatepack' | 'invoice'
+    status        TEXT  DEFAULT 'confirmed'-- 'pending' | 'confirmed' | 'expired'
+    invoice_id    TEXT  DEFAULT ''         -- UUID for invoice flow correlation
+    slatepack_in  TEXT  DEFAULT ''         -- the receive/pay slatepack (tab2/tab3)
+    expires_at    TEXT  DEFAULT ''         -- invoice expiry (tab3 only)
+
+  NOTE: SQLite ALTER TABLE ADD COLUMN handles migration without data loss.
+        Migration runs automatically on first startup after upgrade.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  6. NEW API ENDPOINTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Existing endpoints (keep, migrate wallet calls to HTTP API):
+    GET  /api/status          unchanged
+    GET  /api/public-stats    unchanged
+    GET  /api/qr              unchanged
+    POST /api/claim           unchanged (wallet call → HTTP API)
+    POST /api/finalize        unchanged (wallet call → HTTP API)
+
+  New donation endpoints:
+    POST /api/donate/receive
+         body:    { send_slate: "BEGINSLATEPACK...ENDSLATEPACK." }
+         returns: { response_slatepack: "BEGINSLATEPACK...ENDSLATEPACK." }
+         action:  Foreign API receive_tx → return response to user
+
+    POST /api/donate/invoice
+         body:    { amount: 10.0, address: "grin1..." }
+         returns: { invoice_id: "uuid", invoice_slatepack: "BEGINSLATEPACK..." }
+         action:  Owner API issue_invoice_tx → store pending in DB
+
+    POST /api/donate/finalize
+         body:    { invoice_id: "uuid", response_slate: "BEGINSLATEPACK..." }
+         returns: { status: "confirmed", tx_id: "..." }
+         action:  Owner API finalize_tx → mark donation confirmed in DB
+
+  Admin endpoint additions:
+    GET  /<secret>/donations   — already exists, gains: type, status columns
+    POST /<secret>/api/expire-invoices  — manually expire old pending invoices
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  7. FILE STRUCTURE CHANGES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  web/052_drop/
+  ├── app/
+  │   ├── app_drop.py          MODIFY  — add 3 donate endpoints
+  │   ├── wallet_drop.py       REWRITE — replace subprocess with HTTP API
+  │   ├── db_drop.py           MODIFY  — add donation status/type/invoice columns
+  │   ├── config_drop.py       MODIFY  — add wallet API port/secret config keys
+  │   └── requirements.txt     MODIFY  — add: requests (remove: nothing extra)
+  │
+  ├── public_html/
+  │   ├── index.html           MODIFY  — upgrade donate section to 3-tab flow
+  │   └── js/faucet.js         MODIFY  — add donate flow JS logic
+  │
+  └── home/                    NEW DIR — unified homepage
+      ├── index.html           NEW     — unified stats page
+      └── css/home.css         NEW     — minimal styles for homepage
+
+  config keys added to grin_drop.conf:
+    wallet_foreign_api_port   3415  (testnet: 13415)
+    wallet_owner_api_port     3420  (testnet: 13420)
+    wallet_foreign_secret     ""    (path to .foreign_api_secret file)
+    wallet_owner_secret       ""    (path to .owner_api_secret file)
+    donation_invoice_timeout  30    (minutes before invoice expires)
+
+  Script changes (052_grin_drop.sh):
+    - select_network() gains option: 3) Deploy unified homepage
+    - Step 4 (Configure) gains: wallet API port + secret path inputs
+    - Step 5 (Deploy) gains: deploy web/052_drop/home/ → /var/www/grin-drop-home/
+    - Step 6 (nginx) gains: unified vhost with /testnet/ + /mainnet/ locations
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  8. SECURITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ── Existing (keep) ──────────────────────────────────────────────────────────
+    nginx:  server_tokens off, HSTS, CSP, X-Frame-Options, Referrer-Policy
+    nginx:  rate-limit zones  _claim(3r/m)  _api(10r/m)  _http(20r/m)
+    Flask:  CSRF token (X-CSRF-Token header, compare_digest)
+    Flask:  grin address regex validation before any wallet call
+    Flask:  maintenance_mode gate
+    Admin:  secret path via secrets.compare_digest (timing-safe)
+    Files:  grin_drop.conf chmod 600, .wallet_pass chmod 600
+
+  ── New additions for donation endpoints ─────────────────────────────────────
+    Slatepack input:
+      - Validate BEGINSLATEPACK / ENDSLATEPACK envelope before sending to wallet
+      - Max input length cap (e.g. 4096 bytes) to prevent oversized payloads
+      - nginx: client_max_body_size 8k (sufficient for slatepack + envelope)
+
+    Wallet HTTP API calls (wallet_drop.py):
+      - API secrets read from files (never stored in config or env plaintext)
+      - Both secret files: chmod 600, owned by service user
+      - Requests timeout: 30s per call (prevent worker hang on wallet freeze)
+      - Owner API: open_wallet token cached per-process, refreshed on 401
+      - SSRF: hardcode wallet host to 127.0.0.1 only — never user-supplied
+
+    Donation invoice:
+      - invoice_id is a server-generated UUID — never user-supplied
+      - Invoice expires after configurable timeout (default 30 min)
+      - Background thread cancels expired pending invoices (same pattern as claims)
+      - Double-finalize guard: check status='pending' before finalize_tx call
+
+    Rate limiting (new nginx zones):
+      _donate_receive:  5r/m per IP   (receive_tx is a write op)
+      _donate_invoice:  5r/m per IP   (issue_invoice_tx is a write op)
+      _donate_finalize: 10r/m per IP  (finalize is less risky)
+
+    Unified homepage:
+      - Served as pure static files by nginx — no Flask involved
+      - fetch() calls go to /testnet/ and /mainnet/ paths — same origin, no CORS
+      - No secrets, no admin data exposed
+
+  ── Wallet API secret storage on server ──────────────────────────────────────
+    /opt/grin/drop-test/.foreign_api_secret   (600, grin-drop-test user)
+    /opt/grin/drop-test/.owner_api_secret     (600, grin-drop-test user)
+    /opt/grin/drop-main/.foreign_api_secret   (600, grin-drop-main user)
+    /opt/grin/drop-main/.owner_api_secret     (600, grin-drop-main user)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  9. KNOWN LIMITATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ── A. grin-wallet Operation Concurrency ─────────────────────────────────────
+
+    Operation type         Concurrent?   Reason
+    ─────────────────────  ────────────  ─────────────────────────────────────
+    get_slatepack_address  YES           read-only, LMDB read lock
+    retrieve_summary_info  YES           read-only, LMDB read lock
+    retrieve_txs           YES           read-only, LMDB read lock
+    init_send_tx           NO            writes LMDB — serialized
+    receive_tx             NO            writes LMDB — serialized
+    issue_invoice_tx       NO            writes LMDB — serialized
+    finalize_tx            NO            writes LMDB — serialized
+
+    Impact: If 3 users submit a claim + 2 users submit a donation receive
+    simultaneously, the 5 write calls queue at the LMDB lock. Each may add
+    ~1-3s delay. Under normal faucet traffic this is acceptable.
+    Under viral spike, users experience slow responses, not errors.
+
+  ── B. High Load Scenarios ────────────────────────────────────────────────────
+
+    Scenario                 Symptom               Mitigation
+    ────────────────────     ──────────────────     ─────────────────────────────
+    Many concurrent claims   gunicorn workers       Increase gunicorn workers
+                             block waiting for      (--workers=8) — each worker
+                             LMDB write lock        waits independently, no crash
+
+    Wallet daemon overload   HTTP 500 or timeout    nginx rate limiting
+                             from wallet API        (_claim: 3r/m) already caps
+                                                    write volume
+
+    Wallet daemon crash      All wallet calls fail  Systemd wallet service with
+                             (connection refused)   Restart=on-failure; Flask
+                                                    returns 503 gracefully
+
+    Disk full (LMDB growth)  Wallet API errors      Monitor /opt/grin/drop-*/
+                                                    Alert at 80% disk usage
+
+    SQLite contention        Rare under WAL mode    WAL journal already enabled
+                             (WAL allows concurrent in db_drop.py — readers
+                             readers + one writer)  never block writers
+
+  ── C. grin-wallet Daemon Dependency ─────────────────────────────────────────
+
+    The wallet daemon (tmux session) must be running BEFORE Flask can serve
+    any wallet API call. If it stops:
+      - /api/status      → returns balance=0.0, logs error (non-fatal)
+      - /api/claim       → returns HTTP 503
+      - /api/donate/*    → returns HTTP 503
+    Flask never crashes — it catches wallet call exceptions and returns errors.
+
+    Current: wallet starts manually via script menu option 2 (tmux).
+    Future:  consider systemd service for wallet daemon so it auto-restarts.
+
+  ── D. Invoice Race Condition (minor) ────────────────────────────────────────
+
+    If a user calls /donate/finalize after the invoice expires but before
+    the background expiry thread has run, the finalize may succeed at the
+    wallet level but the DB shows expired. Guard: check expires_at in DB
+    before calling finalize_tx, reject if past expiry.
+
+  ── E. Donation Tab 2 Receive — No Auto-Confirmation ─────────────────────────
+
+    Tab 2 (slatepack receive): Flask calls receive_tx and returns the
+    response slatepack. The user finalizes in their own wallet. Flask never
+    sees the broadcast — it has no way to know the tx was confirmed on-chain.
+    Solution: donations from Tab 2 are recorded as 'pending' in DB and
+    require admin manual confirmation (same as current behavior).
+
+    Tab 3 (invoice): Flask calls finalize_tx itself, so it knows the tx
+    was broadcast. Recorded as 'confirmed' automatically.
+
+  ── F. Unified Homepage — Stats Staleness ────────────────────────────────────
+
+    Unified homepage fetches live from /api/public-stats on each page load.
+    If testnet or mainnet service is down, that half of the stats shows
+    a fetch error or zeros. Homepage JS should handle this gracefully with
+    a fallback "service unavailable" label per network, not a broken page.
+
+  ── G. Future Scaling Path (if needed) ──────────────────────────────────────
+
+    Level 1 (current):   gunicorn 4 workers, direct wallet API calls
+    Level 2 (if needed): gunicorn 8 workers + nginx rate-limit tighten
+    Level 3 (if needed): Redis queue for write operations — serialize all
+                         LMDB writes through a single worker, others wait
+                         in queue. Prevents thundering herd on LMDB lock.
+    Level 4 (future):    Multiple wallet instances (separate wallets per
+                         network not feasible with one set of funds — would
+                         require wallet sharding, not currently supported
+                         by grin-wallet)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  10. IMPLEMENTATION ORDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Step  File                  Task
+  ────  ─────────────────     ──────────────────────────────────────────────────
+  1     wallet_drop.py        Rewrite: replace all subprocess with HTTP API calls
+                              Add: _owner_post(), _foreign_post() helpers
+                              Add: api_receive(), api_issue_invoice(),
+                                   api_finalize_invoice()
+
+  2     config_drop.py        Add: wallet_foreign_api_port, wallet_owner_api_port,
+                                   wallet_foreign_secret, wallet_owner_secret,
+                                   donation_invoice_timeout config keys
+
+  3     db_drop.py            Add: type, status, invoice_id, slatepack_in,
+                                   expires_at columns to donations table
+                              Add: migration helper for existing installs
+
+  4     app_drop.py           Add: POST /api/donate/receive
+                              Add: POST /api/donate/invoice
+                              Add: POST /api/donate/finalize
+                              Add: invoice expiry background thread
+                              Modify: existing wallet calls → new HTTP API fns
+
+  5     index.html            Upgrade donate section → 3-tab flow
+        faucet.js             Add donation tab JS (same pattern as Office Tools
+                              donate.html but calling /api/donate/* endpoints)
+
+  6     web/052_drop/home/    Create unified homepage HTML + CSS
+
+  7     052_grin_drop.sh      Add: unified homepage deploy step
+                              Add: nginx unified vhost with path routing
+                              Add: wallet API secret path config prompts
+                              Modify: select_network() → add option 3 (both)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  11. PORTS & PATHS REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Service            Port    Path
+  ─────────────────  ──────  ──────────────────────────────────────────
+  grin-drop-test     3004    /opt/grin/drop-test/   /var/www/grin-drop-test/
+  grin-drop-main     3005    /opt/grin/drop-main/   /var/www/grin-drop-main/
+  unified homepage   —       /var/www/grin-drop-home/
+  wallet Foreign     13415   testnet   3415   mainnet
+  wallet Owner       13420   testnet   3420   mainnet
+  nginx              443     drop.example.com  (unified vhost)
+
+  nginx location routing:
+    location /              → /var/www/grin-drop-home/ (static)
+    location /testnet/      → proxy_pass http://127.0.0.1:3004/
+    location /mainnet/      → proxy_pass http://127.0.0.1:3005/
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  END OF PLAN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

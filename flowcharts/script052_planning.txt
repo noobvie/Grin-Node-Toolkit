@@ -1,13 +1,26 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║           052_grin_drop.sh  —  UPGRADE PLAN  (Flask + HTTP API)             ║
+║         052_grin_drop.sh  —  UPGRADE PLAN  (Node.js + HTTP API)             ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
-  Version:  planning v3
+  Version:  planning v11
   Date:     2026-03-29
-  Scope:    - Replace CLI subprocess wallet calls with HTTP API (Owner + Foreign)
+  Scope:    - Rewrite backend from Flask/Python to Node.js/Express
+            - Replace CLI subprocess wallet calls with HTTP API (Owner + Foreign)
+            - Inherit proven wallet API patterns from Office Tools
+              grin-payment-server.js (ECDH session, encrypt/decrypt, routes)
             - Add interactive donation slatepack flow (3 tabs)
             - Add unified homepage aggregating testnet + mainnet stats
             - Document limitations for high-load scenarios
+
+  Language decision rationale:
+    - wallet_drop.py was being fully rewritten anyway (subprocess → HTTP API)
+    - Office Tools grin-payment-server.js already proves every wallet API
+      pattern needed: ECDH handshake, AES-256-GCM session, all 3 donate routes
+    - Unified language across both projects reduces long-term maintenance cost
+    - Node.js native async handles concurrent wallet API waits without blocking
+    - Admin templates → static HTML + fetch() — removes Jinja2 dependency
+    - best-sqlite3 (sync, fast) already proven in Office Tools
+    - Timing: rewriting wallet layer anyway — least disruptive moment to switch
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   1. ARCHITECTURE OVERVIEW
@@ -92,58 +105,107 @@
                           Flask :3004 ────────────┘
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  3. WALLET HTTP API INTEGRATION  (replaces CLI subprocess)
+  3. WALLET HTTP API INTEGRATION  (Node.js — inherited from Office Tools)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  CURRENT (CLI subprocess — to be removed):
-    subprocess.run(["grin-wallet", "send", ...])
+  REMOVED (CLI subprocess — Python):
+    subprocess.run(["grin-wallet", "send", ...])   ← fragile, slow, blocking
     subprocess.run(["grin-wallet", "finalize", ...])
-    → parse regex from stdout  ← fragile, slow, blocking
 
-  NEW (HTTP API — requests library):
-    requests.post(OWNER_API_URL,  auth=('', owner_secret),  json={...})
-    requests.post(FOREIGN_API_URL, auth=('', foreign_secret), json={...})
-    → structured JSON response  ← clean, fast, no process spawn
+  NEW (Node.js — inherited from grin-payment-server.js):
+    foreignApiCall(method, params)        plain JSON-RPC, no encryption
+    ownerApiSession()                     ECDH handshake + open_wallet
+    encryptedOwnerCall(session, method)   AES-256-GCM encrypted JSON-RPC
 
-  ── Wallet API Ports ────────────────────────────────────────────────────────
+  ── CRITICAL: Owner API v3 requires ECDH encrypted session ──────────────────
+
+    The Owner API is NOT plain JSON-RPC. Every call requires:
+
+    Step 1 — ECDH handshake (unencrypted, one-time per session):
+      POST /v3/owner  { method: "init_secure_api", params: { ecdh_pubkey } }
+      Server returns its pubkey → compute secp256k1 shared secret (32 bytes)
+
+    Step 2 — open_wallet (encrypted with shared key):
+      AES-256-GCM encrypt { method: "open_wallet", params: { password } }
+      POST as encrypted_request_v3 → server returns session token
+
+    Step 3 — all subsequent Owner API calls (encrypted):
+      AES-256-GCM encrypt { method, params: { token, ...args } }
+      POST as encrypted_request_v3 → decrypt response
+
+    Body encoding:  base64(ciphertext + 16-byte auth_tag)
+    Nonce:          12 random bytes, also used as JSON-RPC id (hex)
+    Curve:          secp256k1  (Node.js crypto.createECDH)
+
+    Foreign API is plain JSON-RPC — no encryption needed.
+    One session opened per request — no session caching needed at this scale.
+
+  ── Wallet API ports ─────────────────────────────────────────────────────────
 
     Network   Foreign API           Owner API
     ────────  ────────────────────  ────────────────────
-    Testnet   127.0.0.1:13415       127.0.0.1:13420
     Mainnet   127.0.0.1:3415        127.0.0.1:3420
+    Testnet   127.0.0.1:13415       127.0.0.1:13420
 
-    Both require HTTP Basic Auth:
-      Foreign: username="" password=<content of .foreign_api_secret>
-      Owner:   username="" password=<content of .owner_api_secret>
-              + open_wallet call with wallet passphrase first
+    Auth: HTTP Basic  username="grin"  password=<api_secret file content>
+    Foreign: .api_secret   Owner: .owner_api_secret   (read from disk per call)
 
   ── HTTP API method map ──────────────────────────────────────────────────────
 
-    Operation            API          Method                    Used by
-    ─────────────────    ──────────   ───────────────────────   ─────────────
-    Get wallet balance   Owner v3     retrieve_summary_info     /api/status
-    Get wallet address   Owner v3     get_slatepack_address     /api/status
-    Giveaway: init send  Owner v3     init_send_tx              /api/claim
-    Giveaway: finalize   Owner v3     finalize_tx               /api/finalize
-    Donate tab2: receive Foreign v2   receive_tx                /api/donate/receive
-    Donate tab3: invoice Owner v3     issue_invoice_tx          /api/donate/invoice
-    Donate tab3: finalize Owner v3    finalize_tx               /api/donate/finalize
+    Operation              API        Method                     Route
+    ─────────────────────  ─────────  ─────────────────────────  ──────────────────
+    Decode slatepack       Owner v3   slate_from_slatepack_message  (internal)
+    Encode slatepack       Owner v3   create_slatepack_message      (internal)
+    Get wallet balance     Owner v3   retrieve_summary_info      GET /api/status
+    Get wallet address     Owner v3   get_slatepack_address      GET /api/status
+    Giveaway: init send    Owner v3   init_send_tx               POST /api/claim
+    Giveaway: finalize     Owner v3   finalize_tx                POST /api/finalize
+    Donate tab2: receive   Foreign    receive_tx                 POST /api/donate/receive
+    Donate tab3: invoice   Owner v3   issue_invoice_tx           POST /api/donate/invoice
+    Donate tab3: finalize  Owner v3   finalize_tx                POST /api/donate/finalize
 
-  ── wallet_drop.py function changes ─────────────────────────────────────────
+  ── wallet.js helper functions (ported from grin-payment-server.js) ──────────
 
-    REMOVE (CLI subprocess):          ADD (HTTP API):
-    ─────────────────────────         ──────────────────────────────────────
-    get_balance(cfg)              →   api_get_balance(cfg)
-    get_address(cfg)              →   api_get_address(cfg)
-    init_send(cfg, addr, amount)  →   api_init_send(cfg, addr, amount)
-    finalize(cfg, response_slate) →   api_finalize(cfg, slatepack)
-                                      api_receive(cfg, send_slatepack)   [NEW]
-                                      api_issue_invoice(cfg, amount)     [NEW]
-                                      api_finalize_invoice(cfg, slatepack) [NEW]
+    foreignApiCall(method, params)
+      — direct JSON-RPC POST to Foreign API
+      — reads .api_secret from disk on each call
+      — 30s AbortSignal timeout
+      — throws on json.error or result.Err
 
-    All functions share a common _owner_post(cfg, method, params) helper
-    and _foreign_post(cfg, method, params) helper that handle auth,
-    open_wallet token, and JSON-RPC envelope.
+    ownerApiSession()
+      — ECDH handshake → open_wallet → returns { headers, sharedKey, token }
+      — reads .owner_api_secret + wallet passphrase from disk
+      — called once at the start of each wallet-touching request
+
+    encryptedOwnerCall(headers, sharedKey, method, params)
+      — AES-256-GCM encrypt inner JSON-RPC
+      — POST as encrypted_request_v3
+      — decrypt + verify auth tag on response
+      — throws on any error at any layer
+
+  ── Donate route flows (copy from grin-payment-server.js) ────────────────────
+
+    POST /api/donate/receive  (Tab 2 — You Send / We Receive)
+      1. ownerApiSession()
+      2. slate_from_slatepack_message (Owner) — decode user's send slatepack
+      3. receive_tx (Foreign) — process, get response slate
+      4. create_slatepack_message (Owner) — encode response → slatepack
+      5. return { slatepack: responseSlatepack }
+
+    POST /api/donate/invoice  (Tab 3 step 1 — We Request / You Pay)
+      1. ownerApiSession()
+      2. issue_invoice_tx (Owner) — create invoice slate
+      3. create_slatepack_message (Owner) — encode invoice → slatepack
+      4. store pending in DB with invoice_id + expires_at
+      5. return { invoice_id, slatepack: invoiceSlatepack }
+
+    POST /api/donate/finalize  (Tab 3 step 2)
+      1. validate invoice_id in DB, check not expired
+      2. ownerApiSession()
+      3. slate_from_slatepack_message (Owner) — decode user's pay response
+      4. finalize_tx (Owner) — finalize + broadcast
+      5. update DB: status = confirmed, tx_id
+      6. return { success: true }
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   4. WORKFLOW DIAGRAMS
@@ -151,7 +213,7 @@
 
   ── A. Giveaway Flow (existing, migrated to HTTP API) ───────────────────────
 
-    User                   Flask                  grin-wallet Owner API
+    User                   Node.js                grin-wallet Owner API
     ────                   ─────                  ─────────────────────
     POST /api/claim ──────► validate address
                             check rate limit (DB)
@@ -177,44 +239,46 @@
 
   ── C. Donation Tab 2 — Slatepack Receive (You Send / We Receive) ───────────
 
-    User                   Flask                  grin-wallet APIs
+    User                   Node.js                grin-wallet APIs
     ────                   ─────                  ────────────────
     picks amount           (JS shows send command)
     runs: grin-wallet send -d <our_address> -a <amount>
     pastes send_slate
     POST /donate/receive ─► validate BEGINSLATEPACK format
-    {send_slate}             open_wallet (Owner)  ─► token
-                             receive_tx (Foreign) ─► response_slatepack
+    {send_slate}             ownerApiSession() ECDH ──► sharedKey + token
+                             slate_from_slatepack_message (Owner)
+                             receive_tx (Foreign)    ──► response slate
+                             create_slatepack_message (Owner)
                              record pending donation (DB)
-                            ◄── {response_slatepack}
+                            ◄── {slatepack: responseSlatepack}
     saves to file
     runs: grin-wallet finalize -i response.slatepack
     (tx broadcasts — done)
     Admin manually confirms donation amount in admin panel.
 
-    NOTE: grin-wallet Foreign API receive_tx processes the send slate
-          and returns a response slate. The user then finalizes locally.
-          Flask never calls finalize here — user's wallet does.
+    NOTE: Node.js never calls finalize here — user's wallet does.
 
   ── D. Donation Tab 3 — Invoice (We Request / You Pay) ──────────────────────
 
-    User                   Flask                  grin-wallet Owner API
+    User                   Node.js                grin-wallet Owner API
     ────                   ─────                  ─────────────────────
     picks amount
     enters their address
     POST /donate/invoice ─► validate amount + address
-    {amount, address}        open_wallet()        ─► token
-                             issue_invoice_tx()   ─► invoice_slatepack
+    {amount, address}        ownerApiSession() ECDH ──► sharedKey + token
+                             issue_invoice_tx (Owner)
+                             create_slatepack_message (Owner)
                              store pending invoice (DB: donations table)
-                            ◄── {invoice_id, invoice_slatepack}
+                            ◄── {invoice_id, slatepack: invoiceSlatepack}
     saves to file
     runs: grin-wallet pay -i invoice.slatepack
     pastes response
-    POST /donate/finalize ─► validate invoice_id
-    {invoice_id,              check not expired (DB)
-     response_slate}          finalize_tx()        ─► broadcasts tx
+    POST /donate/finalize ─► validate invoice_id, check not expired (DB)
+    {invoice_id,              ownerApiSession() ECDH ──► sharedKey + token
+     response_slate}          slate_from_slatepack_message (Owner)
+                              finalize_tx (Owner)    ──► broadcasts tx
                               update donation (DB: status=confirmed, tx_id)
-                            ◄── {status: "confirmed"}
+                            ◄── {success: true}
     (done — donation recorded)
 
   ── E. Unified Homepage Aggregation ─────────────────────────────────────────
@@ -285,37 +349,64 @@
     POST /<secret>/api/expire-invoices  — manually expire old pending invoices
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  7. FILE STRUCTURE CHANGES
+  7. FILE STRUCTURE CHANGES  (Flask → Node.js rewrite)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   web/052_drop/
-  ├── app/
-  │   ├── app_drop.py          MODIFY  — add 3 donate endpoints
-  │   ├── wallet_drop.py       REWRITE — replace subprocess with HTTP API
-  │   ├── db_drop.py           MODIFY  — add donation status/type/invoice columns
-  │   ├── config_drop.py       MODIFY  — add wallet API port/secret config keys
-  │   └── requirements.txt     MODIFY  — add: requests (remove: nothing extra)
+  ├── app/                         OLD (Flask/Python — removed)
+  │   ├── app_drop.py              REPLACED by app.js
+  │   ├── wallet_drop.py           REPLACED by wallet.js
+  │   ├── db_drop.py               REPLACED by db.js
+  │   ├── config_drop.py           REPLACED by config.js
+  │   ├── requirements.txt         REPLACED by package.json
+  │   └── templates/               REPLACED by static HTML + fetch()
+  │
+  ├── server/                      NEW (Node.js/Express)
+  │   ├── app.js                   Express app — all routes, CSRF, maintenance,
+  │   │                            invoice expiry setInterval, rate limiting
+  │   ├── wallet.js                Wallet HTTP API helpers — inherited from
+  │   │                            grin-payment-server.js:
+  │   │                            foreignApiCall(), ownerApiSession(),
+  │   │                            encryptedOwnerCall(), checkWalletPort()
+  │   ├── db.js                    better-sqlite3 — schema + query helpers
+  │   │                            (same tables as db_drop.py, updated columns)
+  │   ├── config.js                JSON config read/write (grin_drop_<net>.conf)
+  │   └── package.json             dependencies:
+  │                                  express, better-sqlite3, dotenv,
+  │                                  qrcode (PNG generation), uuid
+  │                                  (no extra HTTP client — uses built-in fetch)
   │
   ├── public_html/
-  │   ├── index.html           MODIFY  — upgrade donate section to 3-tab flow
-  │   └── js/faucet.js         MODIFY  — add donate flow JS logic
+  │   ├── index.html               MODIFY  — upgrade donate section to 3-tab flow
+  │   ├── js/faucet.js             MODIFY  — add donate tab JS logic
+  │   └── admin/                   NEW DIR — static admin HTML (replaces Jinja2)
+  │       ├── index.html           dashboard (fetch /api/admin/stats)
+  │       ├── transactions.html    claims list (fetch /api/admin/transactions)
+  │       ├── donations.html       donations list (fetch /api/admin/donations)
+  │       └── settings.html        settings form (fetch /api/admin/settings)
   │
-  └── home/                    NEW DIR — unified homepage
-      ├── index.html           NEW     — unified stats page
-      └── css/home.css         NEW     — minimal styles for homepage
+  └── home/                        NEW DIR — unified homepage
+      ├── index.html               unified stats (fetch both /api/public-stats)
+      └── css/home.css             minimal styles
 
-  config keys added to grin_drop.conf:
+  config keys added to grin_drop_<net>.conf:
     wallet_foreign_api_port   3415  (testnet: 13415)
     wallet_owner_api_port     3420  (testnet: 13420)
-    wallet_foreign_secret     ""    (path to .foreign_api_secret file)
+    wallet_foreign_secret     ""    (path to .api_secret file)
     wallet_owner_secret       ""    (path to .owner_api_secret file)
     donation_invoice_timeout  30    (minutes before invoice expires)
 
-  Script changes (052_grin_drop.sh):
-    - select_network() gains option: 3) Deploy unified homepage
-    - Step 4 (Configure) gains: wallet API port + secret path inputs
-    - Step 5 (Deploy) gains: deploy web/052_drop/home/ → /var/www/grin-drop-home/
-    - Step 6 (nginx) gains: unified vhost with /testnet/ + /mainnet/ locations
+  systemd service change:
+    OLD:  ExecStart=/opt/grin/drop-main/venv/bin/gunicorn app_drop:app
+    NEW:  ExecStart=/usr/bin/node /opt/grin/drop-main/server/app.js
+    WorkingDirectory=/opt/grin/drop-main/server
+
+  Script changes (052_grin_drop.sh / lib files):
+    - Step 3 Install: node + npm instead of python3 + venv + gunicorn
+    - Step 4 Configure: add wallet API port + secret path inputs
+    - Step 5 Deploy: copy server/ dir, npm install --omit=dev
+    - Step 6 nginx: unified vhost with /testnet/ + /mainnet/ locations
+    - select_network() gains option: 3) Unified Homepage
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   8. SECURITY
@@ -324,24 +415,24 @@
   ── Existing (keep) ──────────────────────────────────────────────────────────
     nginx:  server_tokens off, HSTS, CSP, X-Frame-Options, Referrer-Policy
     nginx:  rate-limit zones  _claim(3r/m)  _api(10r/m)  _http(20r/m)
-    Flask:  CSRF token (X-CSRF-Token header, compare_digest)
-    Flask:  grin address regex validation before any wallet call
-    Flask:  maintenance_mode gate
-    Admin:  secret path via secrets.compare_digest (timing-safe)
-    Files:  grin_drop.conf chmod 600, .wallet_pass chmod 600
+    Node.js: CSRF token (X-CSRF-Token header, crypto.timingSafeEqual)
+    Node.js: grin address regex validation before any wallet call
+    Node.js: maintenance_mode gate (middleware)
+    Admin:  secret path via crypto.timingSafeEqual (timing-safe)
+    Files:  grin_drop_<net>.conf chmod 600, .wallet_pass_<net> chmod 600
 
   ── New additions for donation endpoints ─────────────────────────────────────
     Slatepack input:
-      - Validate BEGINSLATEPACK / ENDSLATEPACK envelope before sending to wallet
-      - Max input length cap (e.g. 4096 bytes) to prevent oversized payloads
-      - nginx: client_max_body_size 8k (sufficient for slatepack + envelope)
+      - Validate BEGINSLATEPACK / ENDSLATEPACK envelope before wallet call
+      - Max input length cap (4096 bytes) — reject oversized payloads
+      - nginx: client_max_body_size 8k
 
-    Wallet HTTP API calls (wallet_drop.py):
-      - API secrets read from files (never stored in config or env plaintext)
+    Wallet HTTP API calls (wallet.js):
+      - API secrets read from disk on each call — never in memory long-term
       - Both secret files: chmod 600, owned by service user
-      - Requests timeout: 30s per call (prevent worker hang on wallet freeze)
-      - Owner API: open_wallet token cached per-process, refreshed on 401
-      - SSRF: hardcode wallet host to 127.0.0.1 only — never user-supplied
+      - AbortSignal.timeout(30000) on every fetch — no hung requests
+      - ECDH session opened per request — no stale token issues
+      - SSRF: wallet host hardcoded to 127.0.0.1 — never user-supplied
 
     Donation invoice:
       - invoice_id is a server-generated UUID — never user-supplied
@@ -459,37 +550,88 @@
                          by grin-wallet)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  10. IMPLEMENTATION ORDER
+  10. SCRIPT STRUCTURE  (one entry point + sourced lib files)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Step  File                  Task
-  ────  ─────────────────     ──────────────────────────────────────────────────
-  1     wallet_drop.py        Rewrite: replace all subprocess with HTTP API calls
-                              Add: _owner_post(), _foreign_post() helpers
-                              Add: api_receive(), api_issue_invoice(),
-                                   api_finalize_invoice()
+  Decision: keep ONE entry script for user-facing consistency with the rest
+  of the toolkit. Large function groups split into sourced lib files so each
+  file stays focused and navigable. Testnet/mainnet differences are pure
+  variable substitution — no separate scripts needed.
 
-  2     config_drop.py        Add: wallet_foreign_api_port, wallet_owner_api_port,
-                                   wallet_foreign_secret, wallet_owner_secret,
-                                   donation_invoice_timeout config keys
+  scripts/
+    052_grin_drop.sh              entry point — menu routing only (~200 lines)
+    lib/
+      052_lib_wallet.sh           step 1 setup wallet + step 2 listening
+                                  (download, init, recover, toml, node select,
+                                   tmux sessions, cron, watchdog)      ~800 lines
+      052_lib_app.sh              step 3 install + step 4 configure
+                                  (Python/Flask/gunicorn, systemd service,
+                                   all config prompts)                  ~600 lines
+      052_lib_nginx.sh            step 6 nginx + unified homepage setup
+                                  (vhost generation, SSL, path routing)  ~600 lines
+      052_lib_admin.sh            backup, restore, status, logs, wallet addr
+                                  (B/R menu, openssl encrypt/decrypt,
+                                   step 5 deploy web files)             ~500 lines
 
-  3     db_drop.py            Add: type, status, invoice_id, slatepack_in,
-                                   expires_at columns to donations table
-                              Add: migration helper for existing installs
+  052_grin_drop.sh sources all lib files at startup:
+    source "$SCRIPT_DIR/lib/052_lib_wallet.sh"
+    source "$SCRIPT_DIR/lib/052_lib_app.sh"
+    source "$SCRIPT_DIR/lib/052_lib_nginx.sh"
+    source "$SCRIPT_DIR/lib/052_lib_admin.sh"
 
-  4     app_drop.py           Add: POST /api/donate/receive
-                              Add: POST /api/donate/invoice
-                              Add: POST /api/donate/finalize
-                              Add: invoice expiry background thread
-                              Modify: existing wallet calls → new HTTP API fns
+  Shared constants (colors, log helpers, _set_network, conf helpers) stay
+  in 052_grin_drop.sh so all lib files inherit them after sourcing.
 
-  5     index.html            Upgrade donate section → 3-tab flow
-        faucet.js             Add donation tab JS (same pattern as Office Tools
-                              donate.html but calling /api/donate/* endpoints)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  11. IMPLEMENTATION ORDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  6     web/052_drop/home/    Create unified homepage HTML + CSS
+  Step  File                     Task
+  ────  ──────────────────────   ──────────────────────────────────────────────────
+  1     server/wallet.js         NEW — port from grin-payment-server.js:
+                                   foreignApiCall(), ownerApiSession(),
+                                   encryptedOwnerCall(), checkWalletPort()
+                                   Adapt: read config from grin_drop_<net>.conf
+                                   instead of .env; support testnet ports
 
-  7     052_grin_drop.sh      Add: unified homepage deploy step
+  2     server/config.js         NEW — JSON read/write for grin_drop_<net>.conf
+                                   Add keys: wallet_foreign_api_port,
+                                   wallet_owner_api_port, wallet_foreign_secret,
+                                   wallet_owner_secret, donation_invoice_timeout
+
+  3     server/db.js             NEW — better-sqlite3 schema + helpers
+                                   Port tables from db_drop.py (same schema)
+                                   Add to donations: type, status, invoice_id,
+                                   slatepack_in, expires_at columns
+
+  4     server/app.js            NEW — Express app, port all routes from app_drop.py
+                                   Add: POST /api/donate/receive   (from grin-payment-server.js)
+                                   Add: POST /api/donate/invoice   (from grin-payment-server.js)
+                                   Add: POST /api/donate/finalize  (from grin-payment-server.js)
+                                   Add: invoice expiry setInterval (replaces Python thread)
+                                   Add: GET  /api/wallet/status    (from grin-payment-server.js)
+                                   Admin routes: serve static HTML, JSON API endpoints
+
+  5     server/package.json      NEW — dependencies:
+                                   express, better-sqlite3, uuid, qrcode, dotenv
+
+  6     public_html/index.html   Upgrade donate section → 3-tab flow
+        public_html/js/faucet.js Add donation tab JS
+        public_html/admin/       NEW — static admin HTML pages (replaces Jinja2)
+
+  7     web/052_drop/home/       NEW — unified homepage HTML + CSS
+
+  8     052_grin_drop.sh         Expand: option 2 Wallet Listening →
+                                   two tmux sessions (listen + owner_api)
+                                   network-aware session names
+                                   per-session start/stop/attach
+                                   @reboot cron toggle (both sessions)
+                                   watchdog cron toggle (ports 3415+3420
+                                   or 13415+13420 for testnet)
+                                   wrapper scripts (pass not in ps args)
+                                   ported watchdog logic from Office Tools
+                                   deploy_grinwallet.sh
+                              Add: unified homepage deploy step
                               Add: nginx unified vhost with path routing
                               Add: wallet API secret path config prompts
                               Add: B) Backup — encrypt with openssl aes-256-cbc
@@ -500,11 +642,15 @@
                                    confirm prompt, restore files + perms,
                                    restart service, warn about wallet listener
                               Remove: DEL) Reset database
+                              Modify: Step 3 Install → node + npm instead of
+                                      python3 + venv + gunicorn
+                              Modify: Step 5 Deploy → copy server/, npm install
+                              Modify: systemd service → node app.js
                               Modify: select_network() → add option 3 (both)
                               Modify: menu prompt → [1-9 / L / B / R / 0]
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  11. BASH MENU STRUCTURE
+  12. BASH MENU STRUCTURE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   ── Entry Point — Network Select ─────────────────────────────────────────────
@@ -549,7 +695,7 @@
   │                                                                         │
   │  ─── First-time setup (run in order) ───────────────                    │
   │  1) Setup wallet          (download + init drop wallet)                 │
-  │  2) Wallet listening      (start tmux: grin-drop-mainnet)               │
+  │  2) Wallet listening      (Foreign API + Owner API tmux, cron, watchdog) │
   │  3) Install               (Python + Flask + gunicorn, systemd service)  │
   │  4) Configure             (domain, modes, claim amount,                 │
   │                            wallet address, API ports + secrets,         │
@@ -582,6 +728,190 @@
     - tmux: grin-drop-testnet
     - Wallet ports: Foreign :13415  Owner :13420
     - Status URL: https://drop.example.com/testnet/
+
+  Step 1) Setup Wallet — expanded flow (ported from Office Tools deploy_grinwallet.sh):
+
+    Runs sequentially in 5 steps — same pattern as Office Tools option_integrate():
+
+    ┌───────────────────────────────────────────────────────────────────┐
+    │  Step 0/5 — System user                                           │
+    │    Create grin:grin system user + group if not exist              │
+    │    chown -R grin:grin  <wallet_dir>                               │
+    │    chmod 750           <wallet_dir>                               │
+    │                                                                   │
+    │  Step 1/5 — Binary                                                │
+    │    If grin-wallet already installed → show version, offer         │
+    │    re-download. Otherwise download latest from GitHub.            │
+    │    Source: github.com/mimblewimble/grin-wallet/releases/latest    │
+    │    Install to:                                                     │
+    │      Mainnet: /opt/grin/drop-main/wallet/grin-wallet              │
+    │      Testnet: /opt/grin/drop-test/wallet/grin-wallet              │
+    │                                                                   │
+    │  Step 2/5 — Select Grin node                                      │
+    │    Check external nodes for availability (curl, 5s timeout):      │
+    │                                                                   │
+    │    Mainnet nodes:                                                  │
+    │      1) api.grin.money          ● online / ○ offline              │
+    │      2) api.grinily.com         ● online / ○ offline              │
+    │      3) api.grinnode.org        ● online / ○ offline              │
+    │      4) main.gri.mw             ● online / ○ offline              │
+    │      5) grincoin.org            ● online / ○ offline              │
+    │      6) Local node 127.0.0.1:3413  ● running / ○ not running      │
+    │      0) Back                                                       │
+    │                                                                   │
+    │    Testnet nodes:                                                  │
+    │      [TODO — testnet remote node list to be confirmed later]       │
+    │      ?) Local node 127.0.0.1:13413  ● running / ○ not running     │
+    │      0) Back                                                       │
+    │    NOTE: testnet node list may differ from mainnet — placeholder   │
+    │    until confirmed. Local node always included as last option.     │
+    │                                                                   │
+    │    Selecting an offline node warns but does not block.            │
+    │    Node URL stored — written to grin-wallet.toml in Step 2b.      │
+    │                                                                   │
+    │  Step 3/5 — Wallet init or recovery                               │
+    │    1) Create NEW wallet   (grin-wallet init -h)                   │
+    │    2) Recover from seed   (grin-wallet init -hr)                  │
+    │    0) Skip                (wallet already initialized)            │
+    │                                                                   │
+    │    Both 1 and 2:                                                  │
+    │      - Passphrase prompt (min 3 chars, confirm, 0 to cancel)      │
+    │      - Blank passphrase accepted (no-pass wallet)                 │
+    │      - After init/recover, show security warning box:             │
+    │          ⚠ Passphrase stored PLAIN TEXT on server                 │
+    │            Hosting provider + root can read it                    │
+    │            Keep balance low — transfer funds regularly            │
+    │      - Prompt: Save passphrase for auto-start? [y/N]             │
+    │          → yes: write to .wallet_pass_main / .wallet_pass_test    │
+    │                 chown root:grin  chmod 640                        │
+    │      - Option 1 only (new wallet):                                │
+    │        Prompt: Save encrypted seed backup? [y/N]                  │
+    │          → yes: show seed briefly, prompt seed-backup password,   │
+    │                 encrypt with openssl aes-256-cbc -pbkdf2          │
+    │                 -iter 600000 → seed-drop.txt                      │
+    │                 chown root:root  chmod 600                        │
+    │                 print decrypt command for reference               │
+    │                                                                   │
+    │  Step 2b/5 — Write grin-wallet.toml                               │
+    │    Written AFTER init so grin-wallet doesn't overwrite it.        │
+    │    Sets:                                                           │
+    │      api_listen_port       = 3415  (mainnet) / 13415 (testnet)    │
+    │      owner_api_listen_port = 3420  (mainnet) / 13420 (testnet)    │
+    │      api_secret_path       = <wallet_dir>/wallet_data/.api_secret │
+    │      owner_api_secret_path = <wallet_dir>/.owner_api_secret       │
+    │      check_node_api_http_addr = <chosen node from step 2>         │
+    │      data_file_dir         = <wallet_dir>/wallet_data/            │
+    │      log_file_path         = <wallet_dir>/grin-wallet.log         │
+    │    Mainnet: chain_type = "Mainnet"                                 │
+    │    Testnet: chain_type = "Testnet"                                 │
+    │                                                                   │
+    │  Step 4/5 — Fix ownership                                         │
+    │    chown -R grin:grin  <wallet_dir>                               │
+    │    chmod 750           <wallet_dir>                               │
+    │                                                                   │
+    │  Step 5/5 — Summary                                               │
+    │    Print final summary:                                           │
+    │      Wallet dir  : /opt/grin/drop-main/wallet/                    │
+    │      Binary      : /opt/grin/drop-main/wallet/grin-wallet         │
+    │      Config      : /opt/grin/drop-main/wallet/grin-wallet.toml    │
+    │      Node        : https://api.grin.money                         │
+    │      Passphrase  : /opt/grin/drop-main/.wallet_pass_main (plain)  │
+    │      Seed backup : /opt/grin/drop-main/seed-drop.txt (encrypted)  │
+    │    Remind user: run option 2) Wallet Listening next               │
+    └───────────────────────────────────────────────────────────────────┘
+
+    Key differences from Office Tools deploy_grinwallet.sh:
+      - No Step 5 ".env update" — 052 uses grin_drop_<net>.conf instead
+      - Passphrase file named .wallet_pass_main / .wallet_pass_test
+      - Seed file named seed-drop.txt (in app dir, not wallet dir)
+      - Testnet: --testnet flag on all grin-wallet commands
+      - Testnet: chain_type = "Testnet", ports 13415/13420
+      - Testnet: node list TBD — placeholder until confirmed by user
+      - toml ports set explicitly per network (see toml port table below)
+      - Seed encryption uses iter 600000 (vs 100000 in Office Tools)
+
+    grin-wallet.toml port + chain differences per network:
+      Key                        Mainnet          Testnet
+      ─────────────────────────  ───────────────  ───────────────
+      chain_type                 "Mainnet"        "Testnet"
+      api_listen_port            3415             13415
+      owner_api_listen_port      3420             13420
+      check_node_api_http_addr   127.0.0.1:3413   127.0.0.1:13413
+                                 (or remote node) (or remote node)
+      api_secret_path            wallet_data/     wallet_data/
+                                 .api_secret      .api_secret
+      owner_api_secret_path      .owner_api_      .owner_api_
+                                 secret           secret
+
+    Toml is written by create_wallet_toml() using $DROP_NETWORK variable
+    — no branching, just variable substitution for the 4 differing values.
+    Written AFTER init so grin-wallet does not overwrite it.
+
+  Step 2) Wallet Listening — expanded submenu:
+
+    Two tmux sessions are required for HTTP API operation:
+      Foreign API  →  grin-wallet listen      →  port 3415 (mainnet) / 13415 (testnet)
+      Owner API    →  grin-wallet owner_api   →  port 3420 (mainnet) / 13420 (testnet)
+
+    Both must be running for claim, donate/receive, donate/invoice, donate/finalize
+    to work. Flask calls Foreign API for receive_tx, Owner API for everything else.
+
+    tmux session names (network-aware, no collision between test/main):
+      Mainnet:  drop-main-tor   drop-main-ownerapi
+      Testnet:  drop-test-tor   drop-test-ownerapi
+
+    Passphrase handling (same as Office Tools pattern):
+      - Passphrase read from .wallet_pass_main / .wallet_pass_test on disk
+      - Written into wrapper shell script — never appears in `ps` args
+      - Wrapper owned root:grin, chmod 750
+
+    Watchdog logic (same as Office Tools — ported from deploy_grinwallet.sh):
+      Every 30 min via cron:
+        1. Check if port is accepting connections (timeout 5s)
+        2. If port OK → exit (nothing to do)
+        3. If port down + no tmux session → start session
+        4. If port down + session exists + session age < 5 min → leave it
+           (wallet still initializing / syncing)
+        5. If port down + session exists + session age > 5 min → stale,
+           pkill grin-wallet FIRST, then kill tmux, then restart
+
+    Submenu layout:
+    ┌───────────────────────────────────────────────────────────────────┐
+    │  ── Grin Drop [MAINNET] — 2) Wallet Listening ──                  │
+    │                                                                   │
+    │  Foreign API  (grin-wallet listen)    :                           │
+    │    ● running   tmux: drop-main-tor   port: 3415                │
+    │  Owner API    (grin-wallet owner_api)  :                          │
+    │    ✗ not running   tmux: drop-main-ownerapi   port: 3420             │
+    │  @reboot cron : ● enabled                                         │
+    │  Watchdog     : ● enabled  (every 30 min, ports 3415 + 3420)      │
+    │                                                                   │
+    │  ─── Both sessions ─────────────────────────                      │
+    │  1) Start both      (Foreign API + Owner API)                     │
+    │  2) Stop  both                                                    │
+    │  3) Restart both                                                  │
+    │                                                                   │
+    │  ─── Foreign API  (grin-wallet listen  :3415) ──                  │
+    │  4) Start Foreign API                                             │
+    │  5) Stop  Foreign API                                             │
+    │  6) Attach tmux  (tmux attach -t drop-main-tor)                │
+    │                                                                   │
+    │  ─── Owner API  (grin-wallet owner_api  :3420) ─                  │
+    │  7) Start Owner API                                               │
+    │  8) Stop  Owner API                                               │
+    │  9) Attach tmux  (tmux attach -t drop-main-ownerapi)                 │
+    │                                                                   │
+    │  ─── Auto-start & reliability ──────────────────                  │
+    │  A) @reboot cron   [toggle]  (start both sessions on boot)        │
+    │  W) Watchdog cron  [toggle]  (every 30 min, restart if stale)     │
+    │                                                                   │
+    │  0) Back                                                          │
+    │                                                                   │
+    │  Select [1-9 / A / W / 0]:                                        │
+    └───────────────────────────────────────────────────────────────────┘
+
+    Testnet: identical layout — session names drop-test-tor / drop-test-ownerapi,
+    ports 13415 / 13420, watchdog checks those ports instead.
 
   Step 4) Configure — expanded prompts after upgrade:
     ┌───────────────────────────────────────────────────────────────────┐
@@ -752,20 +1082,125 @@
   No wallet binary, no passphrase, no tmux — homepage menu is config only.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  12. PORTS & PATHS REFERENCE
+  13. FILE NAMING CONVENTION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Service            Port    Path
-  ─────────────────  ──────  ──────────────────────────────────────────
-  grin-drop-test     3004    /opt/grin/drop-test/   /var/www/grin-drop-test/
-  grin-drop-main     3005    /opt/grin/drop-main/   /var/www/grin-drop-main/
-  unified homepage   —       /var/www/grin-drop-home/
-  wallet Foreign     13415   testnet   3415   mainnet
-  wallet Owner       13420   testnet   3420   mainnet
+  Rule: all generated files include the network name so they are
+  self-documenting when copied, scp'd, or extracted from a backup.
+  Pattern: grin_drop_<network>.<ext>
+
+  ── Runtime files ────────────────────────────────────────────────────────
+
+    File                 Old name              New name
+    ─────────────────    ──────────────────    ──────────────────────────
+    SQLite database      drop.db               grin_drop_main.db
+                                               grin_drop_test.db
+    Site config          grin_drop.conf        grin_drop_main.conf
+                                               grin_drop_test.conf
+    Activity log         drop-activity.log     grin_drop_main.log
+                                               grin_drop_test.log
+    Wallet passphrase    .wallet_pass          .wallet_pass_main
+                                               .wallet_pass_test
+    Unified homepage     grin_drop_home.conf   (no network — unchanged)
+    config
+
+  ── Wallet binary & data (per network, already isolated by directory) ────
+
+    Both networks download the SAME binary from the same GitHub release:
+      https://api.github.com/repos/mimblewimble/grin-wallet/releases/latest
+
+    The binary is identical — network is selected at runtime via flag:
+      Mainnet: no flag           (default)
+      Testnet: --testnet flag
+
+    Installed using the default binary name grin-wallet:
+
+    Network   Binary path
+    ────────  ──────────────────────────────────────────────────────
+    Mainnet   /opt/grin/drop-main/wallet/grin-wallet
+    Testnet   /opt/grin/drop-test/wallet/grin-wallet
+
+    Wallet data directories:
+    Network   Wallet dir                           Init toml
+    ────────  ───────────────────────────────────  ────────────────────────────
+    Mainnet   /opt/grin/drop-main/wallet/          grin-wallet.toml
+    Testnet   /opt/grin/drop-test/wallet/          grin-wallet.toml (--testnet)
+
+    API secret files (read by wallet_drop.py for HTTP API auth):
+    Network   Foreign secret                       Owner secret
+    ────────  ───────────────────────────────────  ────────────────────────────
+    Mainnet   /opt/grin/drop-main/wallet/          /opt/grin/drop-main/wallet/
+              wallet_data/.api_secret              .owner_api_secret
+    Testnet   /opt/grin/drop-test/wallet/          /opt/grin/drop-test/wallet/
+              wallet_data/.api_secret              .owner_api_secret
+
+    Seed backup file (written during wallet init, store securely):
+    Network   Path
+    ────────  ───────────────────────────────────────────────────────
+    Mainnet   /opt/grin/drop-main/seed-drop.txt   (chmod 600, root only)
+    Testnet   /opt/grin/drop-test/seed-drop.txt   (chmod 600, root only)
+
+  ── Backup archive contents (structured directory inside archive) ─────────
+
+    Archive filename (outside):
+      drop-main_backup_2026-03-29_14-30-00.tar.gz.enc
+      drop-test_backup_2026-03-29_14-30-00.tar.gz.enc
+
+    Contents (inside archive — network dir preserves context on extract):
+      drop-main/
+        grin_drop_main.db
+        grin_drop_main.conf
+        .wallet_pass_main
+        seed-drop.txt
+        wallet_data/
+          .api_secret
+          .owner_api_secret
+          (wallet key files)
+
+  ── config_drop.py env vars (updated to match new names) ─────────────────
+
+    Variable          Old default                    New default
+    ────────────────  ─────────────────────────────  ──────────────────────────────
+    DROP_CONF         /opt/grin/drop-test/           /opt/grin/drop-<net>/
+                      grin_drop.conf                 grin_drop_<net>.conf
+    DROP_WALLET_PASS  /opt/grin/drop-test/           /opt/grin/drop-<net>/
+                      .wallet_pass                   .wallet_pass_<net>
+    DROP_DB           /opt/grin/drop-test/           /opt/grin/drop-<net>/
+                      drop.db                        grin_drop_<net>.db
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  14. PORTS & PATHS REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Services & ports:
+  Service            Port    App dir                  Web dir
+  ─────────────────  ──────  ───────────────────────  ──────────────────────────
+  grin-drop-test     3004    /opt/grin/drop-test/     /var/www/grin-drop-test/
+  grin-drop-main     3005    /opt/grin/drop-main/     /var/www/grin-drop-main/
+  unified homepage   —       /opt/grin/drop-home/     /var/www/grin-drop-home/
+  wallet Foreign     13415   testnet    3415   mainnet
+  wallet Owner       13420   testnet    3420   mainnet
   nginx              443     drop.example.com  (unified vhost)
 
-  nginx location routing:
-    location /              → /var/www/grin-drop-home/ (static)
+  Full path reference — mainnet (testnet: swap -main→-test, 3005→3004):
+  ────────────────────────────────────────────────────────────────────────
+  Database          /opt/grin/drop-main/grin_drop_main.db
+  Config            /opt/grin/drop-main/grin_drop_main.conf
+  Activity log      /opt/grin/drop-main/grin_drop_main.log
+  Wallet pass       /opt/grin/drop-main/.wallet_pass_main
+  Wallet binary     /opt/grin/drop-main/wallet/grin-wallet
+  Wallet toml       /opt/grin/drop-main/wallet/grin-wallet.toml
+  Wallet data       /opt/grin/drop-main/wallet/wallet_data/
+  Foreign secret    /opt/grin/drop-main/wallet/wallet_data/.api_secret
+  Owner secret      /opt/grin/drop-main/wallet/.owner_api_secret
+  Seed file         /opt/grin/drop-main/seed-drop.txt
+  Backups dir       /opt/grin/drop-main/backups/
+  systemd service   /etc/systemd/system/grin-drop-main.service
+  nginx config      /etc/nginx/sites-available/grin-drop-main
+  nginx vhost       /etc/nginx/sites-available/grin-drop-home  (unified)
+
+  nginx location routing (unified vhost):
+    location /              → /var/www/grin-drop-home/  (static)
     location /testnet/      → proxy_pass http://127.0.0.1:3004/
     location /mainnet/      → proxy_pass http://127.0.0.1:3005/
 

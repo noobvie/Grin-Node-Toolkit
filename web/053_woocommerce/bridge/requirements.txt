@@ -1,0 +1,11 @@
+# GrinPay Bridge — Python dependencies
+# Requires Python >= 3.10
+#
+# Install:
+#   pip install -r requirements.txt
+#
+# Production (with gunicorn):
+#   gunicorn -w 1 -b 127.0.0.1:3006 grin_wallet_bridge:app
+
+flask>=3.0,<4.0
+gunicorn>=21.0,<24.0

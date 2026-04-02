@@ -37,25 +37,26 @@
 	var apiKeyToggle        = null;  // <button id="grinpay-apikey-toggle">
 
 	// ── Auto-config field mapping ─────────────────────────────────────────────
-	// Maps data keys from selfHostedConf to td#grinpay-ac-{key}
-	var autoConfigFields = [
-		'bridge_url',
-		'bridge_port',
-		'net_flag',
-		'wallet_path',
-	];
+	// Maps data keys from selfHostedConf to the exact element IDs used in the PHP template.
+	var autoConfigFields = {
+		bridge_url:  'grinpay_bridge_url',
+		bridge_port: 'grinpay_bridge_port',
+		net_flag:    'grinpay_net_flag',
+		wallet_path: 'grinpay_wallet_path',
+	};
 
 	// ── Initialise ────────────────────────────────────────────────────────────
 	document.addEventListener( 'DOMContentLoaded', function () {
 		modeRadios      = document.querySelectorAll( 'input[name="woocommerce_grinpay_connection_mode"]' );
-		networkSelect   = document.getElementById( 'woocommerce_grinpay_network' );
+		// Network uses radio buttons — no single element; use querySelectorAll.
+		networkSelect   = document.querySelectorAll( 'input[name="woocommerce_grinpay_network"]' );
 		selfHostedRows  = document.querySelectorAll( '.grinpay-self-hosted' );
 		serverModeRows  = document.querySelectorAll( '.grinpay-server-mode' );
-		autoConfigTable = document.getElementById( 'grinpay-auto-config' );
-		testBtn         = document.getElementById( 'grinpay-test-btn' );
-		testResult      = document.getElementById( 'grinpay-test-result' );
-		apiKeyInput     = document.getElementById( 'woocommerce_grinpay_api_key' );
-		apiKeyToggle    = document.getElementById( 'grinpay-apikey-toggle' );
+		autoConfigTable = document.getElementById( 'grinpay_auto_config' );
+		testBtn         = document.getElementById( 'grinpay_test_connection' );
+		testResult      = document.getElementById( 'grinpay_connection_result' );
+		apiKeyInput     = document.getElementById( 'grinpay_api_key' );
+		apiKeyToggle    = document.getElementById( 'grinpay_toggle_key' );
 
 		bindModeRadios();
 		bindNetworkSelect();
@@ -67,8 +68,9 @@
 		if ( checkedMode ) {
 			applyConnectionMode( checkedMode.value );
 		}
-		if ( networkSelect ) {
-			updateAutoConfig( networkSelect.value );
+		var checkedNetwork = document.querySelector( 'input[name="woocommerce_grinpay_network"]:checked' );
+		if ( checkedNetwork ) {
+			updateAutoConfig( checkedNetwork.value );
 		}
 	} );
 
@@ -113,9 +115,11 @@
 	// ── Network auto-config ───────────────────────────────────────────────────
 
 	function bindNetworkSelect() {
-		if ( ! networkSelect ) return;
-		networkSelect.addEventListener( 'change', function () {
-			updateAutoConfig( this.value );
+		if ( ! networkSelect || ! networkSelect.length ) return;
+		networkSelect.forEach( function ( radio ) {
+			radio.addEventListener( 'change', function () {
+				updateAutoConfig( this.value );
+			} );
 		} );
 	}
 
@@ -128,8 +132,8 @@
 		if ( ! selfHostedConf || ! selfHostedConf[ network ] ) return;
 		var conf = selfHostedConf[ network ];
 
-		autoConfigFields.forEach( function ( key ) {
-			var cell = document.getElementById( 'grinpay-ac-' + key );
+		Object.keys( autoConfigFields ).forEach( function ( key ) {
+			var cell = document.getElementById( autoConfigFields[ key ] );
 			if ( cell && undefined !== conf[ key ] ) {
 				cell.textContent = conf[ key ];
 			}
@@ -144,9 +148,10 @@
 	}
 
 	function handleTestConnection() {
-		var checkedMode = document.querySelector( 'input[name="woocommerce_grinpay_connection_mode"]:checked' );
-		var mode        = checkedMode ? checkedMode.value : 'self_hosted';
-		var network     = networkSelect ? networkSelect.value : 'mainnet';
+		var checkedMode    = document.querySelector( 'input[name="woocommerce_grinpay_connection_mode"]:checked' );
+		var mode           = checkedMode ? checkedMode.value : 'self_hosted';
+		var checkedNetwork = document.querySelector( 'input[name="woocommerce_grinpay_network"]:checked' );
+		var network        = checkedNetwork ? checkedNetwork.value : 'mainnet';
 		var serverUrl   = getFieldValue( 'woocommerce_grinpay_server_url' );
 		var apiKey      = getFieldValue( 'woocommerce_grinpay_api_key' );
 

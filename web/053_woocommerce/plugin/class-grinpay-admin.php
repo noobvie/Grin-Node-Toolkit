@@ -59,11 +59,15 @@ class Grinpay_Admin {
 			'ajaxUrl' => admin_url( 'admin-ajax.php' ),
 			'nonce'   => wp_create_nonce( 'grinpay_admin' ),
 			'i18n'    => [
-				'testing'     => __( 'Testing…', 'grinpay-woocommerce' ),
-				'connected'   => __( 'Connected', 'grinpay-woocommerce' ),
-				'failed'      => __( 'Failed', 'grinpay-woocommerce' ),
-				'copied'      => __( 'Copied!', 'grinpay-woocommerce' ),
-				'copy'        => __( 'Copy', 'grinpay-woocommerce' ),
+				'testing'        => __( 'Testing…', 'grinpay-woocommerce' ),
+				'testConnection' => __( 'Test Connection', 'grinpay-woocommerce' ),
+				'connected'      => __( 'Connected ✔', 'grinpay-woocommerce' ),
+				'failed'         => __( 'Failed', 'grinpay-woocommerce' ),
+				'unknownError'   => __( 'Unknown error', 'grinpay-woocommerce' ),
+				'copied'         => __( 'Copied!', 'grinpay-woocommerce' ),
+				'copy'           => __( 'Copy', 'grinpay-woocommerce' ),
+				'show'           => __( 'Show', 'grinpay-woocommerce' ),
+				'hide'           => __( 'Hide', 'grinpay-woocommerce' ),
 			],
 		] );
 	}

@@ -246,7 +246,7 @@ $js_data = [
 					stopPolling();
 					if ( data.data && data.data.redirect ) {
 						setTimeout( function () {
-							window.location.href = data.data.redirect;
+							safeRedirect( data.data.redirect );
 						}, 2000 );
 					}
 				} else {
@@ -292,7 +292,7 @@ $js_data = [
 				stopPolling();
 				showBanner( GP.i18n.pollConfirmed, 'success' );
 				if ( data.data.redirect ) {
-					setTimeout( function () { window.location.href = data.data.redirect; }, 1500 );
+					setTimeout( function () { safeRedirect( data.data.redirect ); }, 1500 );
 				}
 			} else if ( 'expired' === status || 'cancelled' === status ) {
 				stopPolling();
@@ -307,6 +307,20 @@ $js_data = [
 		if ( pollTimer ) {
 			clearInterval( pollTimer );
 			pollTimer = null;
+		}
+	}
+
+	// ── URL safety helper ────────────────────────────────────────────────────
+	/**
+	 * Safely redirect to a URL that must be same-origin or a relative path.
+	 * Prevents open redirect / javascript: injection from server responses.
+	 */
+	function safeRedirect( url ) {
+		if ( ! url || typeof url !== 'string' ) return;
+		var u = String( url ).trim();
+		// Allow only relative paths or same-origin absolute URLs.
+		if ( /^\/[^/]/i.test( u ) || u.indexOf( window.location.origin + '/' ) === 0 ) {
+			window.location.href = u;
 		}
 	}
 

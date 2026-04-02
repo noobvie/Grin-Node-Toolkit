@@ -4,8 +4,11 @@
 # Install:
 #   pip install -r requirements.txt
 #
-# Production (with gunicorn):
+# Production (with gunicorn, single worker — owner_api token is process-local):
 #   gunicorn -w 1 -b 127.0.0.1:3006 grin_wallet_bridge:app
 
 flask>=3.0,<4.0
 gunicorn>=21.0,<24.0
+
+# ECDH handshake for grin-wallet owner_api secure channel
+cryptography>=41.0

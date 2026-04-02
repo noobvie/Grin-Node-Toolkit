@@ -11,7 +11,7 @@
 Goal:
   Accept Grin (GRIN / tGRIN) payments on a WooCommerce store using a locally
   running grin-wallet. The system uses a local Flask bridge as the middleware
-  layer between the PHP WooCommerce plugin and the grin-wallet CLI.
+  layer between the PHP WooCommerce plugin and the grin-wallet owner_api.
 
 Approach:
   Block-first. The plugin targets the WooCommerce Checkout Block (default for
@@ -94,25 +94,31 @@ Out of scope for Phase 1:
   │                                                                           │
   │   Port 3007  (testnet)  / Port 3006 (mainnet)                            │
   │   Listens on 127.0.0.1 ONLY                                              │
-  │   Managed by systemd: grin-woo-bridge-test                               │
+  │   Managed by systemd: grin-woo-bridge-{test,main}                        │
   │                                                                           │
-  │   - Receives API calls from PHP                                           │
-  │   - Translates to grin-wallet CLI commands                               │
-  │   - Returns JSON responses                                                │
-  │   - No state kept (stateless)                                             │
+  │   - Receives API calls from PHP plugin                                    │
+  │   - Translates to grin-wallet owner_api JSON-RPC calls                   │
+  │   - ECDH handshake + session token (in-memory, never on disk)            │
+  │   - No subprocess spawning, no password file                             │
   └───────────────────────────────────────────────────────────────────────────┘
-                     │  subprocess / CLI
+                     │  HTTP JSON-RPC  (127.0.0.1 only)
                      ▼
   ┌───────────────────────────────────────────────────────────────────────────┐
-  │  GRIN-WALLET CLI  (local binary)                                         │
+  │  GRIN-WALLET OWNER_API DAEMON                                            │
   │                                                                           │
-  │   ~/.grin/test/wallet_data/   (testnet wallet)                           │
-  │   Commands used:                                                          │
-  │     grin-wallet --testnet invoice -a <amount> -d <description>           │
-  │     grin-wallet --testnet receive -m <response_slate>                     │
-  │     grin-wallet --testnet finalize -m <response_slate>                   │
-  │     grin-wallet --testnet info --output-format json                      │
-  │     grin-wallet --testnet address                                         │
+  │   Port 3420 (mainnet) / Port 13420 (testnet)                             │
+  │   Managed by systemd: grin-woo-wallet-{main,test}                        │
+  │   Started by merchant (password entered once at daemon startup)           │
+  │                                                                           │
+  │   owner_api methods used:                                                 │
+  │     get_version          → health / version info                          │
+  │     get_slatepack_address → merchant Slatepack address                   │
+  │     issue_invoice_tx     → create invoice slate                           │
+  │     encode_slatepack_message → slate → Slatepack string                  │
+  │     decode_slatepack_message → buyer response → slate object             │
+  │     finalize_tx          → finalize signed slate                          │
+  │     post_tx              → broadcast to network                           │
+  │     retrieve_txs         → poll confirmation status                       │
   └───────────────────────────────────────────────────────────────────────────┘
                      │  P2P / local IPC
                      ▼
@@ -135,9 +141,9 @@ Out of scope for Phase 1:
       → WooCommerce PHP calls process_payment($order_id)
 
   [2] PHP → Bridge: POST /api/invoice
-      Body: { "amount": "0.5", "description": "Order #123" }
-      Bridge runs: grin-wallet --testnet invoice -a 0.5
-      Bridge returns: { "slatepack": "BEGINSLATEPACK...ENDSLATEPACK", "tx_id": "..." }
+      Body: { "amount": "0.5", "order_id": "123" }
+      Bridge calls owner_api: issue_invoice_tx + encode_slatepack_message
+      Bridge returns: { "slate": "BEGINSLATEPACK...ENDSLATEPACK", "tx_id": "uuid" }
 
   [3] WooCommerce saves Slatepack + tx_id in order meta
       Order status → "pending-grin"
@@ -153,9 +159,9 @@ Out of scope for Phase 1:
 
   [5] Buyer submits response → WooCommerce AJAX handler
       PHP → Bridge: POST /api/finalize
-      Body: { "response_slate": "BEGINSLATEPACK...ENDSLATEPACK", "tx_id": "..." }
-      Bridge runs: grin-wallet --testnet finalize -m <response_slate>
-      Bridge returns: { "status": "confirmed", "tx_id": "..." }
+      Body: { "slate_response": "BEGINSLATEPACK...ENDSLATEPACK", "order_id": "123" }
+      Bridge calls owner_api: decode_slatepack_message → finalize_tx → post_tx
+      Bridge returns: { "success": true, "tx_id": "uuid" }
 
   [6] PHP updates order:
       - Order status → "processing" (payment received)
@@ -280,16 +286,18 @@ Out of scope for Phase 1:
                No auth token needed for localhost-only in testnet phase
 
   [B] Wallet Password Exposure
-      RISK:    grin-wallet requires password; storing in plaintext is risky
-      CONTROL: Store in /opt/grin/woocommerce/testnet/.wallet_pass
-               chmod 600 — readable only by service user (www-data)
-               Never log or echo the password
+      RISK:    grin-wallet requires password to unlock the wallet
+      CONTROL: Bridge uses owner_api ECDH secure channel — password transmitted
+               encrypted (AES-256-GCM), never in plaintext CLI args or disk files.
+               Session token kept in process memory only (never written to disk).
+               For testnet: empty password → no GRINPAY_WALLET_PASS needed at all.
+               For mainnet: merchant enters password at wallet daemon startup.
 
   [C] Slatepack Tampering
       RISK:    Buyer could submit a manipulated response slatepack
-      CONTROL: grin-wallet finalize validates the slate cryptographically
-               If validation fails → CLI returns non-zero → bridge returns error
-               PHP treats non-200 as payment failure, does NOT mark order paid
+      CONTROL: owner_api finalize_tx validates the slate cryptographically.
+               If validation fails → owner_api returns Err → bridge returns HTTP error.
+               PHP treats non-200 as payment failure, does NOT mark order paid.
 
   [D] Replay / Double-Spend
       RISK:    Buyer reuses same response slatepack for multiple orders
@@ -310,11 +318,12 @@ Out of scope for Phase 1:
 
   SECURITY CHECKLIST (before testnet go-live):
   [ ] Bridge binds to 127.0.0.1 only — verified with: ss -tlnp | grep 3007
-  [ ] .wallet_pass is chmod 600, owned by www-data
+  [ ] owner_api daemon binds to 127.0.0.1 only (port 13420)
+  [ ] No .wallet_pass file on disk — password handled by owner_api ECDH only
   [ ] bridge.conf is chmod 600, owned by www-data
   [ ] WordPress debug mode OFF (WP_DEBUG=false in wp-config.php)
   [ ] No GRIN credentials in PHP plugin files (use bridge-config.php only)
-  [ ] grin-woo-bridge-test runs as www-data, not root
+  [ ] grin-woo-bridge-test and grin-woo-wallet-test run as www-data, not root
   [ ] Wallet directory not accessible via webserver (outside web root)
 
 
@@ -380,7 +389,7 @@ Out of scope for Phase 1:
       Mainnet: grin-wallet init           → ~/.grin/main/
       Testnet: grin-wallet --testnet init → ~/.grin/test/
   - Wallet funded per network (testnet: faucet / mainnet: real GRIN)
-  - grin-wallet owner API not required (we use CLI subprocess)
+  - grin-wallet CLI subprocess not used (we use owner_api JSON-RPC)
   - grin-wallet binary path known and set in bridge.conf
 
 
@@ -500,7 +509,7 @@ Out of scope for Phase 1:
     - Flask app with endpoints: /api/status, /api/address,
       /api/invoice, /api/finalize, /api/tx_status/<tx_id>
     - Reads config from BRIDGE_CONF env var
-    - All wallet calls via subprocess (grin-wallet CLI)
+    - All wallet calls via grin-wallet owner_api JSON-RPC (no subprocess)
 
   web/053_woocommerce/bridge/requirements.txt
     - flask>=3.0

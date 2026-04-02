@@ -62,7 +62,9 @@ WOO_NET_LABEL=""
 WOO_APP_DIR=""
 WOO_CONF=""
 WOO_BRIDGE_PORT=""
-WOO_SERVICE=""
+WOO_OWNER_API_PORT=""
+WOO_SERVICE=""           # Flask bridge systemd service
+WOO_WALLET_SERVICE=""    # grin-wallet owner_api systemd service
 WOO_LOG=""
 
 WOO_PLUGIN_SRC="$TOOLKIT_ROOT/web/053_woocommerce/plugin"
@@ -78,14 +80,18 @@ select_network() {
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
 
-    local main_st test_st
+    local main_wallet_st main_bridge_st test_wallet_st test_bridge_st
+    systemctl is-active --quiet "grin-woo-wallet-main" 2>/dev/null \
+        && main_wallet_st="${GREEN}wallet●${RESET}" || main_wallet_st="${DIM}wallet○${RESET}"
     systemctl is-active --quiet "grin-woo-bridge-main" 2>/dev/null \
-        && main_st="${GREEN}running${RESET}" || main_st="${DIM}not running${RESET}"
+        && main_bridge_st="${GREEN}bridge●${RESET}" || main_bridge_st="${DIM}bridge○${RESET}"
+    systemctl is-active --quiet "grin-woo-wallet-test" 2>/dev/null \
+        && test_wallet_st="${GREEN}wallet●${RESET}" || test_wallet_st="${DIM}wallet○${RESET}"
     systemctl is-active --quiet "grin-woo-bridge-test" 2>/dev/null \
-        && test_st="${GREEN}running${RESET}" || test_st="${DIM}not running${RESET}"
+        && test_bridge_st="${GREEN}bridge●${RESET}" || test_bridge_st="${DIM}bridge○${RESET}"
 
-    echo -e "  ${GREEN}1${RESET}) Mainnet  ${RED}⚠ real GRIN${RESET}  bridge: $main_st  ${DIM}(port 3006)${RESET}"
-    echo -e "  ${YELLOW}2${RESET}) Testnet  ${DIM}tGRIN — for testing  bridge: $test_st  (port 3007)${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Mainnet  ${RED}⚠ real GRIN${RESET}  $main_wallet_st $main_bridge_st  ${DIM}(ports 3420/3006)${RESET}"
+    echo -e "  ${YELLOW}2${RESET}) Testnet  ${DIM}tGRIN — for testing  $test_wallet_st $test_bridge_st  (ports 13420/3007)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
@@ -128,15 +134,19 @@ _set_network() {
         WOO_APP_DIR="/opt/grin/woocommerce/mainnet"
         WOO_CONF="/opt/grin/woocommerce/mainnet/bridge.conf"
         WOO_BRIDGE_PORT="3006"
+        WOO_OWNER_API_PORT="3420"
         WOO_SERVICE="grin-woo-bridge-main"
+        WOO_WALLET_SERVICE="grin-woo-wallet-main"
         WOO_LOG="/opt/grin/woocommerce/mainnet/bridge.log"
     else
-        WOO_NET_FLAG="--testnet"
+        WOO_NET_FLAG="-e floonet"
         WOO_NET_LABEL="TESTNET"
         WOO_APP_DIR="/opt/grin/woocommerce/testnet"
         WOO_CONF="/opt/grin/woocommerce/testnet/bridge.conf"
         WOO_BRIDGE_PORT="3007"
+        WOO_OWNER_API_PORT="13420"
         WOO_SERVICE="grin-woo-bridge-test"
+        WOO_WALLET_SERVICE="grin-woo-wallet-test"
         WOO_LOG="/opt/grin/woocommerce/testnet/bridge.log"
     fi
 }
@@ -146,8 +156,8 @@ _set_network() {
 # =============================================================================
 
 woo_load_conf() {
-    WOO_WALLET_DIR=""
-    WOO_WALLET_PASS=""
+    WOO_OWNER_API_URL=""
+    WOO_API_KEY=""
     WOO_EXPIRY_MIN="30"
     WOO_WP_DIR="/var/www/html"
     if [[ -f "$WOO_CONF" ]]; then
@@ -159,9 +169,10 @@ woo_load_conf() {
 woo_save_conf() {
     mkdir -p "$(dirname "$WOO_CONF")"
     cat > "$WOO_CONF" << CONF
-WOO_WALLET_DIR="${WOO_WALLET_DIR:-}"
+WOO_OWNER_API_URL="${WOO_OWNER_API_URL:-}"
 WOO_EXPIRY_MIN="${WOO_EXPIRY_MIN:-30}"
 WOO_WP_DIR="${WOO_WP_DIR:-/var/www/html}"
+WOO_API_KEY="${WOO_API_KEY:-}"
 CONF
     chmod 600 "$WOO_CONF"
 }
@@ -178,8 +189,8 @@ woo_menu_status() {
         && echo -e "  ${BOLD}1 Bridge venv${RESET}: ${GREEN}installed${RESET}  ${DIM}($WOO_APP_DIR)${RESET}" \
         || echo -e "  ${BOLD}1 Bridge venv${RESET}: ${DIM}not installed${RESET}  ${DIM}→ step 1${RESET}"
 
-    if [[ -n "$WOO_WP_DIR" && -d "$WOO_WP_DIR/wp-content/plugins/grin-payment" ]]; then
-        echo -e "  ${BOLD}2 WP plugin${RESET}  : ${GREEN}installed${RESET}  ${DIM}($WOO_WP_DIR/wp-content/plugins/grin-payment)${RESET}"
+    if [[ -n "$WOO_WP_DIR" && -d "$WOO_WP_DIR/wp-content/plugins/grinpay-woocommerce" ]]; then
+        echo -e "  ${BOLD}2 WP plugin${RESET}  : ${GREEN}installed${RESET}  ${DIM}($WOO_WP_DIR/wp-content/plugins/grinpay-woocommerce)${RESET}"
     else
         echo -e "  ${BOLD}2 WP plugin${RESET}  : ${DIM}not installed${RESET}  ${DIM}→ step 2${RESET}"
     fi
@@ -188,12 +199,22 @@ woo_menu_status() {
         && echo -e "  ${BOLD}3 Config${RESET}     : ${GREEN}saved${RESET}  ${DIM}($WOO_CONF)${RESET}" \
         || echo -e "  ${BOLD}3 Config${RESET}     : ${DIM}not configured${RESET}  ${DIM}→ step 3${RESET}"
 
-    if systemctl is-active --quiet "$WOO_SERVICE" 2>/dev/null; then
-        echo -e "  ${BOLD}4 Bridge${RESET}     : ${GREEN}● running${RESET}  ${DIM}(port $WOO_BRIDGE_PORT, localhost only)${RESET}"
-    elif systemctl is-enabled --quiet "$WOO_SERVICE" 2>/dev/null; then
-        echo -e "  ${BOLD}4 Bridge${RESET}     : ${YELLOW}stopped (enabled)${RESET}"
+    # Wallet daemon (grin-wallet owner_api)
+    if systemctl is-active --quiet "$WOO_WALLET_SERVICE" 2>/dev/null; then
+        echo -e "  ${BOLD}4 Wallet daemon${RESET}: ${GREEN}● running${RESET}  ${DIM}(owner_api port $WOO_OWNER_API_PORT)${RESET}"
+    elif systemctl is-enabled --quiet "$WOO_WALLET_SERVICE" 2>/dev/null; then
+        echo -e "  ${BOLD}4 Wallet daemon${RESET}: ${YELLOW}stopped (enabled)${RESET}"
     else
-        echo -e "  ${BOLD}4 Bridge${RESET}     : ${DIM}not running${RESET}"
+        echo -e "  ${BOLD}4 Wallet daemon${RESET}: ${DIM}not running${RESET}"
+    fi
+
+    # Flask bridge
+    if systemctl is-active --quiet "$WOO_SERVICE" 2>/dev/null; then
+        echo -e "  ${BOLD}  Bridge${RESET}      : ${GREEN}● running${RESET}  ${DIM}(port $WOO_BRIDGE_PORT, localhost only)${RESET}"
+    elif systemctl is-enabled --quiet "$WOO_SERVICE" 2>/dev/null; then
+        echo -e "  ${BOLD}  Bridge${RESET}      : ${YELLOW}stopped (enabled)${RESET}"
+    else
+        echo -e "  ${BOLD}  Bridge${RESET}      : ${DIM}not running${RESET}"
     fi
     echo ""
 }
@@ -205,7 +226,9 @@ woo_menu_status() {
 woo_install_bridge() {
     clear
     echo -e "\n${BOLD}${CYAN}── WooCommerce [$WOO_NET_LABEL] — 1) Install Bridge ──${RESET}\n"
-    echo -e "  ${DIM}Installs Python venv + Flask + creates the grin-wallet bridge service.${RESET}\n"
+    echo -e "  ${DIM}Installs Python venv (Flask + cryptography) and creates two systemd services:${RESET}"
+    echo -e "  ${DIM}  $WOO_WALLET_SERVICE  — grin-wallet owner_api daemon${RESET}"
+    echo -e "  ${DIM}  $WOO_SERVICE         — GrinPay Flask bridge${RESET}\n"
 
     local bridge_src="$TOOLKIT_ROOT/web/053_woocommerce/bridge"
 
@@ -216,134 +239,18 @@ woo_install_bridge() {
     fi
     success "python3 $(python3 --version 2>&1 | awk '{print $2}') found."
 
+    if ! command -v grin-wallet &>/dev/null; then
+        warn "grin-wallet binary not found on PATH."
+        warn "Install grin-wallet 5.4+ before starting the wallet daemon service."
+    fi
+
     mkdir -p "$WOO_APP_DIR"
 
     if [[ -d "$bridge_src" ]]; then
         info "Copying bridge files from $bridge_src ..."
         cp -r "$bridge_src"/. "$WOO_APP_DIR/"
     else
-        warn "Bridge source not found at $bridge_src"
-        warn "Creating a placeholder bridge — replace with the real bridge script."
-        cat > "$WOO_APP_DIR/grin_wallet_bridge.py" << 'BRIDGE'
-"""
-grin_wallet_bridge.py — Grin Wallet Bridge for WooCommerce
-===========================================================
-Stateless Flask bridge: proxies WooCommerce plugin calls to local grin-wallet CLI.
-Listens on 127.0.0.1 only (not publicly exposed).
-
-Endpoints:
-  GET  /api/status          wallet balance + info
-  POST /api/init_send       {recipient, amount} → {slatepack, tx_id}
-  POST /api/finalize        {response_slate} → {tx_id}
-  GET  /api/address         wallet slatepack address
-
-Config read from environment:
-  BRIDGE_CONF   — path to bridge.conf (sourced as shell vars)
-"""
-import os, subprocess, re, json
-from flask import Flask, jsonify, request
-
-app = Flask(__name__)
-
-def _cfg():
-    conf = os.environ.get("BRIDGE_CONF", "")
-    d = {"wallet_dir": "", "expiry_min": "30", "net_flag": ""}
-    if conf and os.path.isfile(conf):
-        for line in open(conf):
-            if "=" in line:
-                k, _, v = line.strip().partition("=")
-                d[k.strip().lower().replace("woo_", "")] = v.strip().strip('"')
-    return d
-
-def _bin(cfg):
-    return os.path.join(cfg.get("wallet_dir", ""), "grin-wallet")
-
-def _pass(cfg):
-    pp = os.path.join(cfg.get("wallet_dir", ""), ".wallet_pass")
-    return open(pp).read().strip() if os.path.isfile(pp) else ""
-
-def _run(cmd, cwd, timeout=90):
-    return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=timeout)
-
-@app.get("/api/status")
-def api_status():
-    cfg = _cfg()
-    cmd = [_bin(cfg)] + (["--testnet"] if cfg.get("net_flag") else []) + ["-p", _pass(cfg), "info", "--output-format", "json"]
-    r = _run(cmd, cfg.get("wallet_dir", "/tmp"))
-    if r.returncode != 0:
-        return jsonify({"error": r.stderr.strip()}), 500
-    try:
-        data = json.loads(r.stdout)
-        nano = int(data.get("amount_currently_spendable", 0))
-        return jsonify({"balance": nano / 1_000_000_000, "network": cfg.get("net_flag", "mainnet")})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.post("/api/init_send")
-def api_init_send():
-    cfg = _cfg()
-    body = request.get_json(silent=True) or {}
-    recipient = body.get("recipient", "")
-    amount = str(body.get("amount", ""))
-    if not recipient or not amount:
-        return jsonify({"error": "recipient and amount required"}), 400
-    cmd = [_bin(cfg)] + (["--testnet"] if cfg.get("net_flag") else []) + \
-          ["-p", _pass(cfg), "send", "-d", recipient, "-a", amount]
-    r = _run(cmd, cfg.get("wallet_dir", "/tmp"), timeout=120)
-    if r.returncode != 0:
-        return jsonify({"error": r.stderr.strip()}), 500
-    out = r.stdout
-    start = out.find("BEGINSLATEPACK")
-    end = out.find("ENDSLATEPACK")
-    if start == -1 or end == -1:
-        return jsonify({"error": "No slatepack in output"}), 500
-    slatepack = out[start:end + len("ENDSLATEPACK")].strip()
-    tx_id = ""
-    m = re.search(r"[Tt]x [Ss]late [Ii][Dd]:\s*([0-9a-f-]{36})", out)
-    if m:
-        tx_id = m.group(1)
-    return jsonify({"slatepack": slatepack, "tx_id": tx_id})
-
-@app.post("/api/finalize")
-def api_finalize():
-    cfg = _cfg()
-    body = request.get_json(silent=True) or {}
-    response_slate = (body.get("response_slate") or "").strip()
-    if not response_slate:
-        return jsonify({"error": "response_slate required"}), 400
-    cmd = [_bin(cfg)] + (["--testnet"] if cfg.get("net_flag") else []) + \
-          ["-p", _pass(cfg), "finalize", "-m", response_slate]
-    r = _run(cmd, cfg.get("wallet_dir", "/tmp"), timeout=120)
-    if r.returncode != 0:
-        return jsonify({"error": r.stderr.strip()}), 500
-    tx_id = ""
-    m = re.search(r"[Tt]x [Ss]late [Ii][Dd]:\s*([0-9a-f-]{36})", r.stdout)
-    if m:
-        tx_id = m.group(1)
-    return jsonify({"status": "confirmed", "tx_id": tx_id})
-
-@app.get("/api/address")
-def api_address():
-    cfg = _cfg()
-    cmd = [_bin(cfg)] + (["--testnet"] if cfg.get("net_flag") else []) + \
-          ["-p", _pass(cfg), "address"]
-    r = _run(cmd, cfg.get("wallet_dir", "/tmp"))
-    if r.returncode != 0:
-        return jsonify({"error": r.stderr.strip()}), 500
-    for line in r.stdout.splitlines():
-        line = line.strip()
-        if re.match(r"^(grin1|tgrin1)[a-z0-9]+$", line):
-            return jsonify({"address": line})
-    return jsonify({"error": "Could not parse wallet address"}), 500
-
-if __name__ == "__main__":
-    port = int(os.environ.get("BRIDGE_PORT", "3006"))
-    app.run(host="127.0.0.1", port=port, debug=False)
-BRIDGE
-        cat > "$WOO_APP_DIR/requirements.txt" << 'REQS'
-flask>=3.0
-gunicorn>=21.0
-REQS
+        die "Bridge source not found at $bridge_src — run git pull first."; pause; return
     fi
 
     info "Creating Python virtualenv at $WOO_APP_DIR/venv ..."
@@ -355,27 +262,56 @@ REQS
             || { die "venv creation failed."; pause; return; }
     fi
 
-    info "Installing Python requirements ..."
+    info "Installing Python requirements (flask, gunicorn, cryptography) ..."
     "$WOO_APP_DIR/venv/bin/pip" install --quiet \
         -r "$WOO_APP_DIR/requirements.txt" \
         || { die "pip install failed."; pause; return; }
 
-    # Create systemd service
+    woo_load_conf
+    local _ak="${WOO_API_KEY:-}"
+    local _owner_url="${WOO_OWNER_API_URL:-http://127.0.0.1:${WOO_OWNER_API_PORT}/v2/owner}"
     local run_user="www-data"
     id www-data &>/dev/null || run_user="root"
 
-    cat > "/etc/systemd/system/${WOO_SERVICE}.service" << SYSTEMD
+    # ── Service 1: grin-wallet owner_api daemon ────────────────────────────────
+    # NOTE: No password in the service file. The merchant starts this daemon
+    # interactively (or adds GRINPAY_WALLET_PASS via 'systemctl edit' override)
+    # For testnet wallets with empty password no env var is needed at all.
+    local grin_wallet_bin
+    grin_wallet_bin=$(command -v grin-wallet 2>/dev/null || echo "grin-wallet")
+
+    cat > "/etc/systemd/system/${WOO_WALLET_SERVICE}.service" << SYSTEMD
 [Unit]
-Description=Grin Wallet Bridge for WooCommerce [$WOO_NET_LABEL]
+Description=GrinPay grin-wallet owner_api daemon [$WOO_NET_LABEL]
 After=network.target
 
 [Service]
 Type=simple
 User=$run_user
+ExecStart=$grin_wallet_bin $WOO_NET_FLAG owner_api
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD
+
+    # ── Service 2: Flask bridge ────────────────────────────────────────────────
+    cat > "/etc/systemd/system/${WOO_SERVICE}.service" << SYSTEMD
+[Unit]
+Description=GrinPay Flask Bridge for WooCommerce [$WOO_NET_LABEL]
+After=network.target ${WOO_WALLET_SERVICE}.service
+Wants=${WOO_WALLET_SERVICE}.service
+
+[Service]
+Type=simple
+User=$run_user
 WorkingDirectory=$WOO_APP_DIR
-Environment="BRIDGE_CONF=$WOO_CONF"
-Environment="BRIDGE_PORT=$WOO_BRIDGE_PORT"
-ExecStart=$WOO_APP_DIR/venv/bin/python $WOO_APP_DIR/grin_wallet_bridge.py
+Environment="GRINPAY_NETWORK=$WOO_NETWORK"
+Environment="GRINPAY_PORT=$WOO_BRIDGE_PORT"
+Environment="GRINPAY_OWNER_API_URL=$_owner_url"
+Environment="GRINPAY_API_KEY=$_ak"
+ExecStart=$WOO_APP_DIR/venv/bin/gunicorn -w 1 -b 127.0.0.1:$WOO_BRIDGE_PORT grin_wallet_bridge:app
 Restart=always
 RestartSec=5
 
@@ -385,7 +321,13 @@ SYSTEMD
 
     systemctl daemon-reload
     touch "$WOO_LOG"
-    success "Bridge installed: $WOO_SERVICE  (port $WOO_BRIDGE_PORT, localhost only)"
+    success "Services installed:"
+    echo -e "    ${GREEN}✓${RESET} $WOO_WALLET_SERVICE  (grin-wallet owner_api, port $WOO_OWNER_API_PORT)"
+    echo -e "    ${GREEN}✓${RESET} $WOO_SERVICE         (Flask bridge, port $WOO_BRIDGE_PORT)"
+    echo ""
+    info "Start wallet daemon first: systemctl start $WOO_WALLET_SERVICE"
+    info "Then start bridge:         systemctl start $WOO_SERVICE"
+    info "Or use Option 4 from this menu."
     log "[woo_install_bridge] network=$WOO_NETWORK"
     pause
 }
@@ -410,7 +352,7 @@ woo_install_plugin() {
     [[ -n "$input" ]] && WOO_WP_DIR="$input"
     WOO_WP_DIR="${WOO_WP_DIR:-/var/www/html}"
 
-    local plugin_dir="$WOO_WP_DIR/wp-content/plugins/grin-payment"
+    local plugin_dir="$WOO_WP_DIR/wp-content/plugins/grinpay-woocommerce"
 
     if [[ ! -d "$WOO_WP_DIR/wp-content" ]]; then
         die "WordPress not found at $WOO_WP_DIR — check the path."; pause; return
@@ -428,22 +370,24 @@ woo_install_plugin() {
     mkdir -p "$plugin_dir"
     cp -r "$WOO_PLUGIN_SRC"/. "$plugin_dir/"
 
-    # Write bridge URL config into plugin
+    # Write bridge URL config into plugin (pre-populates WooCommerce settings on first install)
     local bridge_url="http://127.0.0.1:$WOO_BRIDGE_PORT"
     local plugin_conf="$plugin_dir/bridge-config.php"
     cat > "$plugin_conf" << PHP
 <?php
-// Generated by 053_grin_woocommerce.sh — do not edit manually
-define('GRIN_BRIDGE_URL', '$bridge_url');
-define('GRIN_NETWORK',    '$WOO_NET_LABEL');
-define('GRIN_EXPIRY_MIN', ${WOO_EXPIRY_MIN:-30});
+// Generated by 053_grin_woocommerce.sh — do not edit manually.
+// Pre-populates the GrinPay gateway settings on first activation.
+// This file is excluded from the distributable plugin zip.
+define( 'GRINPAY_BRIDGE_URL',     '$bridge_url' );
+define( 'GRINPAY_BRIDGE_NETWORK', strtolower( '${WOO_NETWORK}' ) );
+define( 'GRINPAY_EXPIRY_MIN',     ${WOO_EXPIRY_MIN:-30} );
 PHP
 
     chown -R www-data:www-data "$plugin_dir" 2>/dev/null || true
     woo_save_conf
 
     success "Plugin installed at $plugin_dir"
-    info "Activate it in WordPress Admin → Plugins → Grin Payment Gateway"
+    info "Activate it in WordPress Admin → Plugins → GrinPay for WooCommerce"
     log "[woo_install_plugin] wp_dir=$WOO_WP_DIR network=$WOO_NETWORK"
     pause
 }
@@ -456,10 +400,20 @@ woo_configure() {
     woo_load_conf
     clear
     echo -e "\n${BOLD}${CYAN}── WooCommerce [$WOO_NET_LABEL] — 3) Configure ──${RESET}\n"
-    echo -e "  ${DIM}Press Enter to keep current value.${RESET}\n"
+    echo -e "  ${DIM}Press Enter to keep current value.  Auto-detected values shown in brackets.${RESET}\n"
 
-    echo -ne "Wallet directory   [${WOO_WALLET_DIR:-}]: "
-    read -r v || true; [[ -n "$v" ]] && WOO_WALLET_DIR="$v"
+    local default_owner_url="http://127.0.0.1:${WOO_OWNER_API_PORT}/v2/owner"
+    echo -ne "owner_api URL      [${WOO_OWNER_API_URL:-$default_owner_url}]: "
+    read -r v || true
+    if [[ -n "$v" ]]; then
+        WOO_OWNER_API_URL="$v"
+    else
+        WOO_OWNER_API_URL="${WOO_OWNER_API_URL:-$default_owner_url}"
+    fi
+
+    echo -ne "Bridge API key     [${WOO_API_KEY:+(set)}${WOO_API_KEY:-leave blank to disable auth}]: "
+    read -rs v || true; echo ""
+    [[ -n "$v" ]] && WOO_API_KEY="$v"
 
     echo -ne "Invoice expiry     [${WOO_EXPIRY_MIN:-30} min]: "
     read -r v || true; [[ -n "$v" ]] && WOO_EXPIRY_MIN="$v"
@@ -470,62 +424,93 @@ woo_configure() {
     woo_save_conf
     success "Configuration saved to $WOO_CONF"
 
-    # Restart bridge if running
-    if systemctl is-active --quiet "$WOO_SERVICE" 2>/dev/null; then
-        info "Restarting $WOO_SERVICE ..."
-        systemctl restart "$WOO_SERVICE"
-        success "Bridge restarted."
+    # Regenerate bridge systemd unit with updated env vars (full rewrite — no sed injection risk)
+    if [[ -f "/etc/systemd/system/${WOO_SERVICE}.service" ]]; then
+        local _ak="${WOO_API_KEY:-}"
+        local _owner_url="${WOO_OWNER_API_URL}"
+        local run_user="www-data"
+        id www-data &>/dev/null || run_user="root"
+        cat > "/etc/systemd/system/${WOO_SERVICE}.service" << SYSTEMD
+[Unit]
+Description=GrinPay Flask Bridge for WooCommerce [$WOO_NET_LABEL]
+After=network.target ${WOO_WALLET_SERVICE}.service
+Wants=${WOO_WALLET_SERVICE}.service
+
+[Service]
+Type=simple
+User=$run_user
+WorkingDirectory=$WOO_APP_DIR
+Environment="GRINPAY_NETWORK=$WOO_NETWORK"
+Environment="GRINPAY_PORT=$WOO_BRIDGE_PORT"
+Environment="GRINPAY_OWNER_API_URL=$_owner_url"
+Environment="GRINPAY_API_KEY=$_ak"
+ExecStart=$WOO_APP_DIR/venv/bin/gunicorn -w 1 -b 127.0.0.1:$WOO_BRIDGE_PORT grin_wallet_bridge:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD
+        systemctl daemon-reload
+
+        if systemctl is-active --quiet "$WOO_SERVICE" 2>/dev/null; then
+            info "Restarting bridge with new config ..."
+            systemctl restart "$WOO_SERVICE"
+            success "Bridge restarted."
+        fi
     fi
     log "[woo_configure] network=$WOO_NETWORK"
     pause
 }
 
 # =============================================================================
-# OPTION 4 — Start / Stop bridge
+# OPTION 4 — Start / Stop wallet daemon + bridge
 # =============================================================================
 
 woo_service_control() {
     clear
-    echo -e "\n${BOLD}${CYAN}── WooCommerce [$WOO_NET_LABEL] — 4) Start / Stop Bridge ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── WooCommerce [$WOO_NET_LABEL] — 4) Start / Stop Services ──${RESET}\n"
 
     if [[ ! -f "/etc/systemd/system/${WOO_SERVICE}.service" ]]; then
-        die "Bridge not installed — run option 1 (Install bridge) first."; pause; return
+        die "Services not installed — run option 1 (Install bridge) first."; pause; return
     fi
 
-    local state="stopped"
-    if systemctl is-active --quiet "$WOO_SERVICE" 2>/dev/null; then
-        state="running"
-        echo -e "  Bridge is ${GREEN}running${RESET}  ${DIM}(port $WOO_BRIDGE_PORT, localhost only)${RESET}"
-        echo ""
-        echo -e "  ${RED}1${RESET}) Stop bridge"
-        echo -e "  ${YELLOW}2${RESET}) Restart bridge"
-        echo -e "  ${DIM}0) Back${RESET}"
-    else
-        echo -e "  Bridge is ${YELLOW}stopped${RESET}"
-        echo ""
-        echo -e "  ${GREEN}1${RESET}) Start bridge"
-        echo -e "  ${GREEN}2${RESET}) Enable + Start  ${DIM}(auto-start on boot)${RESET}"
-        echo -e "  ${DIM}0) Back${RESET}"
-    fi
+    # Show current state of both services
+    local wallet_st bridge_st
+    systemctl is-active --quiet "$WOO_WALLET_SERVICE" 2>/dev/null \
+        && wallet_st="${GREEN}running${RESET}" || wallet_st="${YELLOW}stopped${RESET}"
+    systemctl is-active --quiet "$WOO_SERVICE" 2>/dev/null \
+        && bridge_st="${GREEN}running${RESET}" || bridge_st="${YELLOW}stopped${RESET}"
+
+    echo -e "  Wallet daemon  ($WOO_WALLET_SERVICE): $wallet_st  ${DIM}(owner_api port $WOO_OWNER_API_PORT)${RESET}"
+    echo -e "  Flask bridge   ($WOO_SERVICE):  $bridge_st  ${DIM}(port $WOO_BRIDGE_PORT)${RESET}"
     echo ""
-    echo -ne "${BOLD}Select [1/2/0]: ${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Start both      ${DIM}(wallet daemon first, then bridge)${RESET}"
+    echo -e "  ${RED}2${RESET}) Stop both       ${DIM}(bridge first, then wallet daemon)${RESET}"
+    echo -e "  ${YELLOW}3${RESET}) Restart bridge  ${DIM}(keeps wallet daemon running)${RESET}"
+    echo -e "  ${GREEN}4${RESET}) Enable both     ${DIM}(auto-start on boot)${RESET}"
+    echo -e "  ${DIM}0) Back${RESET}"
+    echo ""
+    echo -ne "${BOLD}Select [1-4 / 0]: ${RESET}"
     read -r sc || true
 
     case "$sc" in
         1)
-            if [[ "$state" == "running" ]]; then
-                systemctl stop "$WOO_SERVICE" && success "Bridge stopped."
-            else
-                systemctl start "$WOO_SERVICE" && success "Bridge started."
-            fi
+            systemctl start "$WOO_WALLET_SERVICE" && success "Wallet daemon started."
+            sleep 2
+            systemctl start "$WOO_SERVICE" && success "Bridge started."
             ;;
         2)
-            if [[ "$state" == "running" ]]; then
-                systemctl restart "$WOO_SERVICE" && success "Bridge restarted."
-            else
-                systemctl enable "$WOO_SERVICE" 2>/dev/null || true
-                systemctl start "$WOO_SERVICE" && success "Bridge enabled and started."
-            fi
+            systemctl stop "$WOO_SERVICE" && success "Bridge stopped."
+            systemctl stop "$WOO_WALLET_SERVICE" && success "Wallet daemon stopped."
+            ;;
+        3)
+            systemctl restart "$WOO_SERVICE" && success "Bridge restarted."
+            ;;
+        4)
+            systemctl enable "$WOO_WALLET_SERVICE" 2>/dev/null || true
+            systemctl enable "$WOO_SERVICE"         2>/dev/null || true
+            success "Both services enabled for auto-start."
             ;;
         0) return ;;
     esac
@@ -541,24 +526,34 @@ woo_status() {
     clear
     echo -e "\n${BOLD}${CYAN}── WooCommerce [$WOO_NET_LABEL] — 5) Status ──${RESET}\n"
 
+    if systemctl is-active --quiet "$WOO_WALLET_SERVICE" 2>/dev/null; then
+        local wpid
+        wpid=$(systemctl show "$WOO_WALLET_SERVICE" --property=MainPID --value 2>/dev/null || echo "?")
+        echo -e "  ${BOLD}Wallet daemon${RESET}: ${GREEN}● running${RESET}  pid $wpid  owner_api port $WOO_OWNER_API_PORT"
+    elif systemctl is-enabled --quiet "$WOO_WALLET_SERVICE" 2>/dev/null; then
+        echo -e "  ${BOLD}Wallet daemon${RESET}: ${YELLOW}stopped (enabled)${RESET}"
+    else
+        echo -e "  ${BOLD}Wallet daemon${RESET}: ${RED}not installed${RESET}  ${DIM}(step 1)${RESET}"
+    fi
+
     if systemctl is-active --quiet "$WOO_SERVICE" 2>/dev/null; then
         local pid
         pid=$(systemctl show "$WOO_SERVICE" --property=MainPID --value 2>/dev/null || echo "?")
-        echo -e "  ${BOLD}Bridge${RESET}     : ${GREEN}● running${RESET}  pid $pid  port $WOO_BRIDGE_PORT (localhost only)"
+        echo -e "  ${BOLD}Flask bridge${RESET} : ${GREEN}● running${RESET}  pid $pid  port $WOO_BRIDGE_PORT (localhost only)"
     elif systemctl is-enabled --quiet "$WOO_SERVICE" 2>/dev/null; then
-        echo -e "  ${BOLD}Bridge${RESET}     : ${YELLOW}stopped (enabled)${RESET}"
+        echo -e "  ${BOLD}Flask bridge${RESET} : ${YELLOW}stopped (enabled)${RESET}"
     else
-        echo -e "  ${BOLD}Bridge${RESET}     : ${RED}not installed${RESET}  ${DIM}(step 1)${RESET}"
+        echo -e "  ${BOLD}Flask bridge${RESET} : ${RED}not installed${RESET}  ${DIM}(step 1)${RESET}"
     fi
 
-    echo -e "  ${BOLD}Network${RESET}    : $WOO_NET_LABEL"
-    echo -e "  ${BOLD}App dir${RESET}    : $WOO_APP_DIR"
-    echo -e "  ${BOLD}Config${RESET}     : $WOO_CONF"
-    echo -e "  ${BOLD}Wallet dir${RESET} : ${WOO_WALLET_DIR:-not set}"
-    echo -e "  ${BOLD}WP root${RESET}    : ${WOO_WP_DIR:-/var/www/html}"
+    echo -e "  ${BOLD}Network${RESET}      : $WOO_NET_LABEL"
+    echo -e "  ${BOLD}App dir${RESET}      : $WOO_APP_DIR"
+    echo -e "  ${BOLD}Config${RESET}       : $WOO_CONF"
+    echo -e "  ${BOLD}owner_api URL${RESET}: ${WOO_OWNER_API_URL:-http://127.0.0.1:${WOO_OWNER_API_PORT}/v2/owner}"
+    echo -e "  ${BOLD}WP root${RESET}      : ${WOO_WP_DIR:-/var/www/html}"
 
-    if [[ -n "$WOO_WP_DIR" && -d "$WOO_WP_DIR/wp-content/plugins/grin-payment" ]]; then
-        echo -e "  ${BOLD}WP plugin${RESET}  : ${GREEN}installed${RESET}  ${DIM}($WOO_WP_DIR/wp-content/plugins/grin-payment)${RESET}"
+    if [[ -n "$WOO_WP_DIR" && -d "$WOO_WP_DIR/wp-content/plugins/grinpay-woocommerce" ]]; then
+        echo -e "  ${BOLD}WP plugin${RESET}  : ${GREEN}installed${RESET}  ${DIM}($WOO_WP_DIR/wp-content/plugins/grinpay-woocommerce)${RESET}"
     else
         echo -e "  ${BOLD}WP plugin${RESET}  : ${DIM}not installed  (step 2)${RESET}"
     fi
@@ -590,9 +585,9 @@ woo_package_plugin() {
         die "Plugin source not found: $WOO_PLUGIN_SRC"; pause; return
     fi
 
-    local plugin_main="$WOO_PLUGIN_SRC/grin-payment.php"
+    local plugin_main="$WOO_PLUGIN_SRC/grinpay-woocommerce.php"
     if [[ ! -f "$plugin_main" ]]; then
-        warn "grin-payment.php not found in $WOO_PLUGIN_SRC"
+        warn "grinpay-woocommerce.php not found in $WOO_PLUGIN_SRC"
         warn "Cannot read version — using 0.0.0"
         local version="0.0.0"
     else
@@ -605,7 +600,7 @@ woo_package_plugin() {
     local releases_dir="$TOOLKIT_ROOT/web/053_woocommerce/releases"
     mkdir -p "$releases_dir"
 
-    local zip_name="grin-payment-v${version}.zip"
+    local zip_name="grinpay-woocommerce-v${version}.zip"
     local zip_path="$releases_dir/$zip_name"
 
     if [[ -f "$zip_path" ]]; then
@@ -618,17 +613,17 @@ woo_package_plugin() {
 
     info "Packaging version ${BOLD}$version${RESET} ..."
 
-    # Build zip with correct internal folder name grin-payment/
+    # Build zip with correct internal folder name grinpay-woocommerce/
     local tmp_dir
     tmp_dir=$(mktemp -d)
-    cp -r "$WOO_PLUGIN_SRC" "$tmp_dir/grin-payment"
+    cp -r "$WOO_PLUGIN_SRC" "$tmp_dir/grinpay-woocommerce"
 
     # Remove server-specific and development files
-    rm -f  "$tmp_dir/grin-payment/bridge-config.php"
-    find   "$tmp_dir/grin-payment" -name ".DS_Store" -delete 2>/dev/null || true
-    find   "$tmp_dir/grin-payment" -name "*.log"     -delete 2>/dev/null || true
+    rm -f  "$tmp_dir/grinpay-woocommerce/bridge-config.php"
+    find   "$tmp_dir/grinpay-woocommerce" -name ".DS_Store" -delete 2>/dev/null || true
+    find   "$tmp_dir/grinpay-woocommerce" -name "*.log"     -delete 2>/dev/null || true
 
-    ( cd "$tmp_dir" && zip -qr "$zip_path" "grin-payment/" )
+    ( cd "$tmp_dir" && zip -qr "$zip_path" "grinpay-woocommerce/" )
     rm -rf "$tmp_dir"
 
     if [[ -f "$zip_path" ]]; then

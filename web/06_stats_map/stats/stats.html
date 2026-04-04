@@ -695,7 +695,7 @@
   <!-- Hashrate chart -->
   <div class="card">
     <div class="card-header">
-      <div class="card-title"><span class="dot dot-grin"></span>Network Hashrate (GPS)</div>
+      <div class="card-title"><span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleChartInfo('hr-info')" id="hr-info-btn">Network Hashrate (GPS)</span></div>
       <div class="range-btns" id="hr-range">
         <button class="range-btn" data-r="day">Day</button>
         <button class="range-btn" data-r="week">Week</button>
@@ -704,13 +704,25 @@
         <button class="range-btn" data-r="all">All Time</button>
       </div>
     </div>
+    <div class="chart-info-panel" id="hr-info-panel">
+      <div class="chart-info-panel-inner">
+        <h4>What is GPS?</h4>
+        <b>Grams Per Second</b> — the estimated rate at which miners solve Cuckoo Cycle C32 proofs of work. Higher GPS = more mining power securing the network.
+        <hr class="chart-info-sep">
+        <h4>How it's calculated</h4>
+        Derived from block difficulty and the 60-second block target: <code>hashrate ≈ difficulty / 60</code>. The stats collector polls the node every ~5 min and stores daily/hourly/recent aggregates.
+        <hr class="chart-info-sep">
+        <h4>Data source</h4>
+        Local Grin node API — block header difficulty, sampled every ~5 min by the stats collector.
+      </div>
+    </div>
     <div class="chart-wrap"><canvas id="chart-hashrate"></canvas></div>
   </div>
 
   <!-- Difficulty chart -->
   <div class="card">
     <div class="card-header">
-      <div class="card-title"><span class="dot dot-blue"></span>Network Difficulty</div>
+      <div class="card-title"><span class="dot dot-blue"></span><span class="chart-info-toggle" onclick="toggleChartInfo('diff-info')" id="diff-info-btn">Network Difficulty</span></div>
       <div class="range-btns" id="diff-range">
         <button class="range-btn" data-r="day">Day</button>
         <button class="range-btn" data-r="week">Week</button>
@@ -719,19 +731,41 @@
         <button class="range-btn" data-r="all">All Time</button>
       </div>
     </div>
+    <div class="chart-info-panel" id="diff-info-panel">
+      <div class="chart-info-panel-inner">
+        <h4>What is difficulty?</h4>
+        The Cuckatoo32 proof-of-work difficulty — a unitless number representing how hard it is to find a valid block solution. Adjusts after every block to maintain a ~60-second block time.
+        <hr class="chart-info-sep">
+        <h4>Adjustment algorithm</h4>
+        Grin uses <b>LWMA</b> (Linear Weighted Moving Average) over a ~60-block window. More recent blocks have higher weight, making the adjustment fast and smooth without wild oscillations.
+        <hr class="chart-info-sep">
+        <h4>Data source</h4>
+        Local Grin node API — block header difficulty, sampled every ~5 min by the stats collector.
+      </div>
+    </div>
     <div class="chart-wrap"><canvas id="chart-difficulty"></canvas></div>
   </div>
 
   <!-- Transactions + Fees (Combined) -->
   <div class="card">
     <div class="card-header">
-      <div class="card-title"><span class="dot dot-green"></span>Block Activity</div>
+      <div class="card-title"><span class="dot dot-green"></span><span class="chart-info-toggle" onclick="toggleChartInfo('activity-info')" id="activity-info-btn">Block Activity</span></div>
       <div class="range-btns" id="activity-range">
         <button class="range-btn" data-r="day">Day</button>
         <button class="range-btn" data-r="week">Week</button>
         <button class="range-btn" data-r="month">Month</button>
         <button class="range-btn active" data-r="year">Year</button>
         <button class="range-btn" data-r="all">All Time</button>
+      </div>
+    </div>
+    <div class="chart-info-panel" id="activity-info-panel">
+      <div class="chart-info-panel-inner">
+        <h4>What's shown</h4>
+        <b>Transactions per block</b> — kernel count from block headers (a lower bound: Grin supports CoinJoin-style aggregation, so multiple user transactions may merge into one kernel).<br>
+        <b>Fees per block</b> — total transaction fees in nano-Grin (1 GRIN = 1,000,000,000 nGrin).
+        <hr class="chart-info-sep">
+        <h4>Data source</h4>
+        Local Grin node API — block headers imported by the stats collector. Run <code>--backfill-stats</code> to populate history.
       </div>
     </div>
     <div style="display: flex; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--border); flex-wrap: wrap;">
@@ -757,13 +791,25 @@
   <!-- Active Peers chart -->
   <div class="card">
     <div class="card-header">
-      <div class="card-title"><span class="dot dot-green"></span>Active Peers</div>
+      <div class="card-title"><span class="dot dot-green"></span><span class="chart-info-toggle" onclick="toggleChartInfo('peers-info')" id="peers-info-btn">Active Peers</span></div>
       <div class="range-btns" id="peers-range">
         <button class="range-btn" data-r="day">Day</button>
         <button class="range-btn" data-r="week">Week</button>
         <button class="range-btn active" data-r="month">Month</button>
         <button class="range-btn" data-r="year">Year</button>
         <button class="range-btn" data-r="all">All Time</button>
+      </div>
+    </div>
+    <div class="chart-info-panel" id="peers-info-panel">
+      <div class="chart-info-panel-inner">
+        <h4>What's shown</h4>
+        The number of Grin peers directly connected to this monitoring node at each sample point — a proxy for network participation and health over time.
+        <hr class="chart-info-sep">
+        <h4>Sampling</h4>
+        Polled every ~5 min from the node's <code>/v1/peers/connected</code> endpoint. Mainnet and Testnet peers are tracked separately. Stored as daily/hourly/recent series.
+        <hr class="chart-info-sep">
+        <h4>Note</h4>
+        Reflects only the peers visible to <i>this</i> node — the true network size is larger. Peer counts fluctuate naturally as nodes go online/offline.
       </div>
     </div>
     <div style="display: flex; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--border); flex-wrap: wrap;">
@@ -784,7 +830,7 @@
   <div class="card">
     <div class="card-header">
       <div class="card-title">
-        <span class="dot dot-green"></span>Grin Price · USDT
+        <span class="dot dot-green"></span><span class="chart-info-toggle" onclick="toggleChartInfo('price-usdt-info')" id="price-usdt-info-btn">Grin Price · USDT</span>
         <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">Gate.io</span>
       </div>
       <div class="range-btns" id="price-usdt-range">
@@ -793,6 +839,15 @@
         <button class="range-btn" data-r="month">Month</button>
         <button class="range-btn active" data-r="year">Year</button>
         <button class="range-btn" data-r="all">All Time</button>
+      </div>
+    </div>
+    <div class="chart-info-panel" id="price-usdt-info-panel">
+      <div class="chart-info-panel-inner">
+        <h4>What's shown</h4>
+        GRIN/USDT closing price with volume bars. USDT (Tether) is a USD-pegged stablecoin — this chart is effectively the GRIN USD price on the Gate.io exchange.
+        <hr class="chart-info-sep">
+        <h4>Data source</h4>
+        <a href="https://www.gate.io/trade/GRIN_USDT" target="_blank" rel="noopener">Gate.io GRIN/USDT</a> — OHLCV candles fetched by the price collector, stored locally in SQLite, and refreshed every ~5 min.
       </div>
     </div>
     <div id="price-usdt-no-data" style="display:none;padding:32px;text-align:center;color:var(--muted);font-size:13px;">
@@ -807,7 +862,7 @@
   <div class="card">
     <div class="card-header">
       <div class="card-title">
-        <span class="dot" style="background:#ffd700;"></span>Grin Price · BTC (sats)
+        <span class="dot" style="background:#ffd700;"></span><span class="chart-info-toggle" onclick="toggleChartInfo('price-btc-info')" id="price-btc-info-btn">Grin Price · BTC (sats)</span>
         <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">nonlogs.io</span>
       </div>
       <div class="range-btns" id="price-btc-range">
@@ -816,6 +871,15 @@
         <button class="range-btn active" data-r="month">Month</button>
         <button class="range-btn" data-r="year">Year</button>
         <button class="range-btn" data-r="all">All Time</button>
+      </div>
+    </div>
+    <div class="chart-info-panel" id="price-btc-info-panel">
+      <div class="chart-info-panel-inner">
+        <h4>What's shown</h4>
+        GRIN price expressed in <b>satoshis</b> (1 sat = 0.00000001 BTC) — useful for measuring GRIN's value relative to Bitcoin independent of USD price movements.
+        <hr class="chart-info-sep">
+        <h4>Data source</h4>
+        <a href="https://nonlogs.io" target="_blank" rel="noopener">nonlogs.io</a> — GRIN/BTC rate fetched as live snapshots. History is built incrementally over time from the first run of the stats collector.
       </div>
     </div>
     <div id="price-btc-no-data" style="display:none;padding:32px;text-align:center;color:var(--muted);font-size:13px;">
@@ -875,7 +939,7 @@
     <div class="chart-wrap"><canvas id="chart-inflation"></canvas></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;padding:6px 0 2px;font-size:11px;color:var(--muted);">
       <span>GRIN &amp; BTC: deterministic emission — projected to 2050</span>
-      <span>USD M2 · Global M2 · Gold: ends at last available data year</span>
+      <span>USD M2 · Global M2 · Gold: ends at last available data year · negative values hidden (log scale)</span>
       <span style="font-style:italic">── actual &nbsp;·&nbsp; - - projected (GRIN &amp; BTC)</span>
     </div>
   </div>
@@ -883,8 +947,20 @@
   <!-- Node versions -->
   <div class="card">
     <div class="card-header">
-      <div class="card-title"><span class="dot dot-grin"></span>Node Version Distribution</div>
+      <div class="card-title"><span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleChartInfo('versions-info')" id="versions-info-btn">Node Version Distribution</span></div>
       <span id="versions-sample" style="color:var(--muted);font-size:12px;"></span>
+    </div>
+    <div class="chart-info-panel" id="versions-info-panel">
+      <div class="chart-info-panel-inner">
+        <h4>What's shown</h4>
+        Distribution of Grin node client versions among peers connected to this monitoring node — a live snapshot of software adoption across the network.
+        <hr class="chart-info-sep">
+        <h4>How it works</h4>
+        Version strings are extracted from peer user-agent handshakes during the <code>/v1/peers/connected</code> poll. The chart reflects unique versions seen in the last 7 days.
+        <hr class="chart-info-sep">
+        <h4>Note</h4>
+        Only peers directly connected to this node are counted. Peers running behind NAT or not reachable may be under-represented.
+      </div>
     </div>
     <div class="versions-wrap">
       <div class="donut-wrap">
@@ -1563,11 +1639,16 @@ function _applyInflRange() {
   charts.inflation.update("none");
 }
 
-function toggleInflInfo() {
-  const panel = document.getElementById("infl-info-panel");
-  const btn   = document.getElementById("infl-info-btn");
-  const open  = panel.classList.toggle("open");
+function toggleChartInfo(baseId) {
+  const panel = document.getElementById(baseId + "-panel");
+  const btn   = document.getElementById(baseId + "-btn");
+  if (!panel || !btn) return;
+  const open = panel.classList.toggle("open");
   btn.classList.toggle("open", open);
+}
+
+function toggleInflInfo() {
+  toggleChartInfo("infl-info");
   // Set API link href to absolute URL on first open
   const link = document.getElementById("infl-api-link");
   if (link && link.getAttribute("href") === "#") {
@@ -1579,8 +1660,10 @@ function toggleInflInfo() {
 function updateInflationM2Gold(inflJson) {
   if (!charts.inflation || !inflJson) return;
   // dataset index 2=USD M2, 3=Gold, 4=Global M2
+  // Log scale cannot render zero or negative values — filter them out.
+  // US M2 went negative in 2023 (~-3%); those years are intentionally absent from the chart.
   const toPoints = arr => arr
-    .filter(d => d.rate_pct !== null && d.rate_pct !== undefined)
+    .filter(d => d.rate_pct !== null && d.rate_pct !== undefined && d.rate_pct > 0)
     .map(d => ({ x: Date.UTC(d.year, 6, 1), y: d.rate_pct }));
   if (inflJson.usd_m2?.length)    _inflAll[2] = toPoints(inflJson.usd_m2);
   if (inflJson.gold?.length)      _inflAll[3] = toPoints(inflJson.gold);

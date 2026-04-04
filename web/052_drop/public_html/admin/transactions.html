@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grin Drop — Transactions</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="stylesheet" href="../../css/faucet.css">
+  <style>
+    .admin-nav { display:flex; gap:.5rem; margin-bottom:1.5rem; flex-wrap:wrap; }
+    .admin-nav a { padding:.4rem .9rem; border-radius:4px; border:1px solid var(--border);
+                   color:var(--text); text-decoration:none; font-size:.85rem; }
+    .admin-nav a.active, .admin-nav a:hover { background:var(--accent); color:#000; border-color:var(--accent); }
+    table { width:100%; border-collapse:collapse; font-size:.82rem; }
+    th, td { padding:.45rem .7rem; text-align:left; border-bottom:1px solid var(--border); }
+    th { color:var(--text-dim); font-weight:600; background:var(--card-bg); }
+    tr:hover td { background:rgba(255,255,255,.03); }
+    .badge { display:inline-block; padding:.1rem .45rem; border-radius:3px; font-size:.75rem; font-weight:600; }
+    .badge-confirmed   { background:#1a4d2a; color:#6fcf97; }
+    .badge-pending     { background:#4d3d1a; color:#f2c94c; }
+    .badge-waiting     { background:#1a3a4d; color:#56ccf2; }
+    .badge-expired     { background:#2d2d2d; color:#888; }
+    .pager { display:flex; gap:.5rem; align-items:center; margin-top:.8rem; }
+    .pager button { padding:.3rem .7rem; font-size:.82rem; }
+    .filter-row { display:flex; gap:.5rem; align-items:center; margin-bottom:.8rem; flex-wrap:wrap; }
+    .filter-row select, .filter-row input { padding:.3rem .5rem; font-size:.82rem; border:1px solid var(--border);
+      background:var(--card-bg); color:var(--text); border-radius:3px; }
+    .export-link { font-size:.82rem; margin-left:auto; }
+    .export-link a { color:var(--accent); }
+    code { font-size:.78rem; word-break:break-all; }
+  </style>
+</head>
+<body class="theme-matrix">
+<script src="../../js/theme.js" defer></script>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title">Grin Drop <span>ツ</span> — Admin</div>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+
+  <nav class="admin-nav" id="admin-nav"></nav>
+
+  <section>
+    <h2>Transactions (Claims)</h2>
+
+    <div class="filter-row">
+      <label>Status:
+        <select id="filter-status">
+          <option value="">All</option>
+          <option value="confirmed">Confirmed</option>
+          <option value="waiting_finalize">Waiting Finalize</option>
+          <option value="pending">Pending</option>
+          <option value="expired">Expired</option>
+        </select>
+      </label>
+      <label>Search address:
+        <input type="text" id="filter-addr" placeholder="grin1…" style="width:200px;">
+      </label>
+      <button class="btn btn-sm btn-outline" id="btn-filter">Filter</button>
+      <span class="export-link" id="export-link"></span>
+    </div>
+
+    <div class="card" style="padding:0;overflow-x:auto;">
+      <table id="tx-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Created</th>
+            <th>Address</th>
+            <th>Amount</th>
+            <th>Status</th>
+            <th>Tx Slate ID</th>
+          </tr>
+        </thead>
+        <tbody id="tx-body">
+          <tr><td colspan="6" style="color:var(--text-dim);">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pager">
+      <button class="btn btn-outline btn-sm" id="btn-prev" disabled>← Prev</button>
+      <span id="pager-info" style="font-size:.82rem;color:var(--text-dim);"></span>
+      <button class="btn btn-outline btn-sm" id="btn-next" disabled>Next →</button>
+    </div>
+  </section>
+
+</main>
+
+<script>
+(function() {
+  const pathParts = location.pathname.split('/').filter(Boolean);
+  const secret = pathParts[0];
+  const base = '/' + secret;
+
+  const navLinks = [
+    ['Dashboard',     base + '/admin/'],
+    ['Transactions',  base + '/admin/transactions.html'],
+    ['Donations',     base + '/admin/donations.html'],
+    ['Settings',      base + '/admin/settings.html'],
+  ];
+  const nav = document.getElementById('admin-nav');
+  navLinks.forEach(([label, href]) => {
+    const a = document.createElement('a');
+    a.href = href;
+    a.textContent = label;
+    if (label === 'Transactions') a.className = 'active';
+    nav.appendChild(a);
+  });
+
+  document.getElementById('export-link').innerHTML =
+    `<a href="${base}/export/claims.csv" download>Export CSV</a>`;
+
+  let page = 1;
+  const limit = 50;
+
+  function badgeClass(status) {
+    if (status === 'confirmed')       return 'badge-confirmed';
+    if (status === 'waiting_finalize') return 'badge-waiting';
+    if (status === 'expired')          return 'badge-expired';
+    return 'badge-pending';
+  }
+
+  function fmt(iso) {
+    if (!iso) return '-';
+    return iso.replace('T', ' ').slice(0, 16) + ' UTC';
+  }
+
+  function truncAddr(a) {
+    return a && a.length > 16 ? a.slice(0, 8) + '…' + a.slice(-6) : (a || '-');
+  }
+
+  async function load() {
+    const status = document.getElementById('filter-status').value;
+    const addr   = document.getElementById('filter-addr').value.trim();
+    const params = new URLSearchParams({ page, limit });
+    if (status) params.set('status', status);
+    if (addr)   params.set('addr', addr);
+
+    const tbody = document.getElementById('tx-body');
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-dim);">Loading…</td></tr>';
+
+    try {
+      const r = await fetch(base + '/api/transactions?' + params);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      const rows = d.rows || d.transactions || [];
+      const total = d.total || rows.length;
+
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-dim);">No records found.</td></tr>';
+      } else {
+        tbody.innerHTML = rows.map((tx, i) => `
+          <tr>
+            <td>${(page - 1) * limit + i + 1}</td>
+            <td>${fmt(tx.created_at)}</td>
+            <td title="${tx.grin_address || ''}">${truncAddr(tx.grin_address)}</td>
+            <td>${(tx.amount ?? '?')} GRIN</td>
+            <td><span class="badge ${badgeClass(tx.status)}">${tx.status || '-'}</span></td>
+            <td><code>${tx.tx_slate_id ? tx.tx_slate_id.slice(0, 12) + '…' : '-'}</code></td>
+          </tr>
+        `).join('');
+      }
+
+      const info = document.getElementById('pager-info');
+      info.textContent = `Page ${page} · ${total} total`;
+      document.getElementById('btn-prev').disabled = page <= 1;
+      document.getElementById('btn-next').disabled = rows.length < limit;
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="6" style="color:#eb5757;">Error: ${e.message}</td></tr>`;
+    }
+  }
+
+  document.getElementById('btn-filter').addEventListener('click', () => { page = 1; load(); });
+  document.getElementById('btn-prev').addEventListener('click', () => { page--; load(); });
+  document.getElementById('btn-next').addEventListener('click', () => { page++; load(); });
+
+  load();
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grin Drop — Settings</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="stylesheet" href="../../css/faucet.css">
+  <style>
+    .admin-nav { display:flex; gap:.5rem; margin-bottom:1.5rem; flex-wrap:wrap; }
+    .admin-nav a { padding:.4rem .9rem; border-radius:4px; border:1px solid var(--border);
+                   color:var(--text); text-decoration:none; font-size:.85rem; }
+    .admin-nav a.active, .admin-nav a:hover { background:var(--accent); color:#000; border-color:var(--accent); }
+    .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+    @media (max-width:600px) { .settings-grid { grid-template-columns:1fr; } }
+    .field { display:flex; flex-direction:column; gap:.3rem; }
+    .field label { font-size:.82rem; color:var(--text-dim); }
+    .field input, .field select, .field textarea {
+      padding:.45rem .6rem; border:1px solid var(--border); border-radius:3px;
+      background:var(--card-bg); color:var(--text); font-size:.88rem;
+    }
+    .field input[type=checkbox] { width:auto; margin-top:.2rem; }
+    .section-title { font-size:.9rem; font-weight:600; color:var(--accent);
+                     margin:1rem 0 .5rem; border-bottom:1px solid var(--border); padding-bottom:.3rem; }
+    #status-msg { padding:.6rem 1rem; border-radius:4px; margin-bottom:1rem; display:none; }
+    #status-msg.ok  { background:#1a4d2a; color:#6fcf97; }
+    #status-msg.err { background:#4d1a1a; color:#eb5757; }
+    .btn-row { display:flex; gap:.5rem; margin-top:1.2rem; }
+    .check-row { display:flex; align-items:center; gap:.5rem; }
+    .check-row label { font-size:.88rem; color:var(--text); margin:0; }
+  </style>
+</head>
+<body class="theme-matrix">
+<script src="../../js/theme.js" defer></script>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title">Grin Drop <span>ツ</span> — Admin</div>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+
+  <nav class="admin-nav" id="admin-nav"></nav>
+
+  <div id="status-msg"></div>
+
+  <section>
+    <h2>Settings</h2>
+    <div class="card">
+
+      <div class="section-title">Site</div>
+      <div class="settings-grid">
+        <div class="field">
+          <label>Drop name</label>
+          <input type="text" id="s-drop-name" placeholder="Grin Drop">
+        </div>
+        <div class="field">
+          <label>Domain / subdomain</label>
+          <input type="text" id="s-subdomain" placeholder="drop.example.com">
+        </div>
+        <div class="field" style="grid-column:1/-1;">
+          <label>Site description</label>
+          <input type="text" id="s-description" placeholder="Claim free GRIN or donate…">
+        </div>
+        <div class="field">
+          <label>Default theme</label>
+          <select id="s-theme">
+            <option value="matrix">Matrix</option>
+            <option value="warcraft">Warcraft</option>
+            <option value="win98">Win98</option>
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="cute">Cute</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>OG image URL (optional)</label>
+          <input type="text" id="s-og-image" placeholder="https://...">
+        </div>
+      </div>
+
+      <div class="section-title">Modes</div>
+      <div class="settings-grid">
+        <div class="field">
+          <div class="check-row">
+            <input type="checkbox" id="s-giveaway">
+            <label for="s-giveaway">Giveaway enabled</label>
+          </div>
+        </div>
+        <div class="field">
+          <div class="check-row">
+            <input type="checkbox" id="s-donation">
+            <label for="s-donation">Donation enabled</label>
+          </div>
+        </div>
+        <div class="field">
+          <div class="check-row">
+            <input type="checkbox" id="s-public-stats">
+            <label for="s-public-stats">Show public stats</label>
+          </div>
+        </div>
+        <div class="field">
+          <div class="check-row">
+            <input type="checkbox" id="s-maintenance">
+            <label for="s-maintenance">Maintenance mode</label>
+          </div>
+        </div>
+        <div class="field" style="grid-column:1/-1;">
+          <label>Maintenance message</label>
+          <input type="text" id="s-maint-msg" placeholder="We'll be back soon.">
+        </div>
+      </div>
+
+      <div class="section-title">Giveaway</div>
+      <div class="settings-grid">
+        <div class="field">
+          <label>Claim amount (GRIN)</label>
+          <input type="number" id="s-claim-amount" min="0.001" step="any">
+        </div>
+        <div class="field">
+          <label>Claim window (hours)</label>
+          <input type="number" id="s-claim-window" min="1" step="1">
+        </div>
+        <div class="field">
+          <label>Finalize timeout (minutes)</label>
+          <input type="number" id="s-finalize-timeout" min="1" step="1">
+        </div>
+      </div>
+
+      <div class="section-title">Donation</div>
+      <div class="settings-grid">
+        <div class="field">
+          <label>Invoice timeout (minutes)</label>
+          <input type="number" id="s-invoice-timeout" min="5" step="1">
+        </div>
+      </div>
+
+      <div class="section-title">Wallet</div>
+      <div class="settings-grid">
+        <div class="field" style="grid-column:1/-1;">
+          <label>Wallet address</label>
+          <input type="text" id="s-wallet-addr" placeholder="grin1…" autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn" id="btn-save">Save Settings</button>
+        <button class="btn btn-outline" id="btn-reload">Reload</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+(function() {
+  const pathParts = location.pathname.split('/').filter(Boolean);
+  const secret = pathParts[0];
+  const base = '/' + secret;
+
+  const navLinks = [
+    ['Dashboard',     base + '/admin/'],
+    ['Transactions',  base + '/admin/transactions.html'],
+    ['Donations',     base + '/admin/donations.html'],
+    ['Settings',      base + '/admin/settings.html'],
+  ];
+  const nav = document.getElementById('admin-nav');
+  navLinks.forEach(([label, href]) => {
+    const a = document.createElement('a');
+    a.href = href;
+    a.textContent = label;
+    if (label === 'Settings') a.className = 'active';
+    nav.appendChild(a);
+  });
+
+  const msg = document.getElementById('status-msg');
+  function showMsg(text, type) {
+    msg.textContent = text;
+    msg.className = type;
+    msg.style.display = 'block';
+    setTimeout(() => { msg.style.display = 'none'; }, 4000);
+  }
+
+  function val(id)     { return document.getElementById(id); }
+  function setVal(id, v) { const el = val(id); if (el) el.value = v ?? ''; }
+  function setChk(id, v) { const el = val(id); if (el) el.checked = !!v; }
+  function getChk(id)    { const el = val(id); return el ? el.checked : false; }
+
+  async function load() {
+    try {
+      const r = await fetch(base + '/api/settings');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+
+      setVal('s-drop-name',         d.drop_name);
+      setVal('s-subdomain',         d.subdomain);
+      setVal('s-description',       d.site_description);
+      setVal('s-og-image',          d.og_image_url);
+      setVal('s-wallet-addr',       d.wallet_address);
+      setVal('s-maint-msg',         d.maintenance_message);
+      setVal('s-claim-amount',      d.claim_amount_grin);
+      setVal('s-claim-window',      d.claim_window_hours);
+      setVal('s-finalize-timeout',  d.finalize_timeout_min);
+      setVal('s-invoice-timeout',   d.donation_invoice_timeout);
+
+      const themeEl = val('s-theme');
+      if (themeEl && d.theme_default) themeEl.value = d.theme_default;
+
+      setChk('s-giveaway',    d.giveaway_enabled);
+      setChk('s-donation',    d.donation_enabled);
+      setChk('s-public-stats',d.show_public_stats);
+      setChk('s-maintenance', d.maintenance_mode);
+    } catch (e) {
+      showMsg('Failed to load settings: ' + e.message, 'err');
+    }
+  }
+
+  document.getElementById('btn-reload').addEventListener('click', load);
+
+  document.getElementById('btn-save').addEventListener('click', async () => {
+    const body = {
+      drop_name:                  val('s-drop-name').value.trim(),
+      subdomain:                  val('s-subdomain').value.trim(),
+      site_description:           val('s-description').value.trim(),
+      og_image_url:               val('s-og-image').value.trim(),
+      wallet_address:             val('s-wallet-addr').value.trim(),
+      maintenance_message:        val('s-maint-msg').value.trim(),
+      claim_amount_grin:          parseFloat(val('s-claim-amount').value) || undefined,
+      claim_window_hours:         parseFloat(val('s-claim-window').value) || undefined,
+      finalize_timeout_min:       parseFloat(val('s-finalize-timeout').value) || undefined,
+      donation_invoice_timeout:   parseFloat(val('s-invoice-timeout').value) || undefined,
+      theme_default:              val('s-theme').value,
+      giveaway_enabled:           getChk('s-giveaway'),
+      donation_enabled:           getChk('s-donation'),
+      show_public_stats:          getChk('s-public-stats'),
+      maintenance_mode:           getChk('s-maintenance'),
+    };
+    // Remove undefined keys
+    Object.keys(body).forEach(k => body[k] === undefined && delete body[k]);
+
+    try {
+      const r = await fetch(base + '/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+      showMsg('Settings saved.', 'ok');
+      load();
+    } catch (e) {
+      showMsg('Error: ' + e.message, 'err');
+    }
+  });
+
+  load();
+})();
+</script>
+
+</body>
+</html>

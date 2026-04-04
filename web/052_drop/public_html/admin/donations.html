@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grin Drop — Donations</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="stylesheet" href="../../css/faucet.css">
+  <style>
+    .admin-nav { display:flex; gap:.5rem; margin-bottom:1.5rem; flex-wrap:wrap; }
+    .admin-nav a { padding:.4rem .9rem; border-radius:4px; border:1px solid var(--border);
+                   color:var(--text); text-decoration:none; font-size:.85rem; }
+    .admin-nav a.active, .admin-nav a:hover { background:var(--accent); color:#000; border-color:var(--accent); }
+    table { width:100%; border-collapse:collapse; font-size:.82rem; }
+    th, td { padding:.45rem .7rem; text-align:left; border-bottom:1px solid var(--border); }
+    th { color:var(--text-dim); font-weight:600; background:var(--card-bg); }
+    tr:hover td { background:rgba(255,255,255,.03); }
+    .badge { display:inline-block; padding:.1rem .45rem; border-radius:3px; font-size:.75rem; font-weight:600; }
+    .badge-confirmed  { background:#1a4d2a; color:#6fcf97; }
+    .badge-pending    { background:#4d3d1a; color:#f2c94c; }
+    .badge-expired    { background:#2d2d2d; color:#888; }
+    .type-manual    { color:var(--text-dim); }
+    .type-slatepack { color:#56ccf2; }
+    .type-invoice   { color:#bb86fc; }
+    .pager { display:flex; gap:.5rem; align-items:center; margin-top:.8rem; }
+    .pager button { padding:.3rem .7rem; font-size:.82rem; }
+    .filter-row { display:flex; gap:.5rem; align-items:center; margin-bottom:.8rem; flex-wrap:wrap; }
+    .filter-row select { padding:.3rem .5rem; font-size:.82rem; border:1px solid var(--border);
+      background:var(--card-bg); color:var(--text); border-radius:3px; }
+    .summary-row { display:flex; gap:1.5rem; margin-bottom:1rem; font-size:.88rem; }
+    .summary-row span { color:var(--text-dim); }
+    .summary-row strong { color:var(--accent); }
+  </style>
+</head>
+<body class="theme-matrix">
+<script src="../../js/theme.js" defer></script>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title">Grin Drop <span>ツ</span> — Admin</div>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+
+  <nav class="admin-nav" id="admin-nav"></nav>
+
+  <section>
+    <h2>Donations</h2>
+
+    <div class="summary-row" id="summary-row">
+      <span>Loading…</span>
+    </div>
+
+    <div class="filter-row">
+      <label>Type:
+        <select id="filter-type">
+          <option value="">All</option>
+          <option value="manual">Manual</option>
+          <option value="slatepack">Slatepack (Tab 2)</option>
+          <option value="invoice">Invoice (Tab 3)</option>
+        </select>
+      </label>
+      <label>Status:
+        <select id="filter-status">
+          <option value="">All</option>
+          <option value="confirmed">Confirmed</option>
+          <option value="pending">Pending</option>
+          <option value="expired">Expired</option>
+        </select>
+      </label>
+      <button class="btn btn-sm btn-outline" id="btn-filter">Filter</button>
+    </div>
+
+    <div class="card" style="padding:0;overflow-x:auto;">
+      <table id="don-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Date</th>
+            <th>Amount</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Address</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody id="don-body">
+          <tr><td colspan="7" style="color:var(--text-dim);">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pager">
+      <button class="btn btn-outline btn-sm" id="btn-prev" disabled>← Prev</button>
+      <span id="pager-info" style="font-size:.82rem;color:var(--text-dim);"></span>
+      <button class="btn btn-outline btn-sm" id="btn-next" disabled>Next →</button>
+    </div>
+  </section>
+
+</main>
+
+<script>
+(function() {
+  const pathParts = location.pathname.split('/').filter(Boolean);
+  const secret = pathParts[0];
+  const base = '/' + secret;
+
+  const navLinks = [
+    ['Dashboard',     base + '/admin/'],
+    ['Transactions',  base + '/admin/transactions.html'],
+    ['Donations',     base + '/admin/donations.html'],
+    ['Settings',      base + '/admin/settings.html'],
+  ];
+  const nav = document.getElementById('admin-nav');
+  navLinks.forEach(([label, href]) => {
+    const a = document.createElement('a');
+    a.href = href;
+    a.textContent = label;
+    if (label === 'Donations') a.className = 'active';
+    nav.appendChild(a);
+  });
+
+  let page = 1;
+  const limit = 50;
+
+  function fmt(iso) {
+    if (!iso) return '-';
+    return iso.replace('T', ' ').slice(0, 16) + ' UTC';
+  }
+
+  function truncAddr(a) {
+    return a && a.length > 16 ? a.slice(0, 8) + '…' + a.slice(-6) : (a || '-');
+  }
+
+  function typeCls(t) {
+    if (t === 'slatepack') return 'type-slatepack';
+    if (t === 'invoice')   return 'type-invoice';
+    return 'type-manual';
+  }
+
+  function statusCls(s) {
+    if (s === 'confirmed') return 'badge-confirmed';
+    if (s === 'expired')   return 'badge-expired';
+    return 'badge-pending';
+  }
+
+  async function load() {
+    const type   = document.getElementById('filter-type').value;
+    const status = document.getElementById('filter-status').value;
+    const params = new URLSearchParams({ page, limit });
+    if (type)   params.set('type', type);
+    if (status) params.set('status', status);
+
+    const tbody = document.getElementById('don-body');
+    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text-dim);">Loading…</td></tr>';
+
+    try {
+      const r = await fetch(base + '/api/donations?' + params);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      const rows  = d.rows || d.donations || [];
+      const total = d.total || rows.length;
+
+      // Summary
+      if (d.summary) {
+        document.getElementById('summary-row').innerHTML =
+          `<span>Total confirmed: <strong>${d.summary.total_confirmed ?? '-'} GRIN</strong></span>
+           <span>Count: <strong>${d.summary.count ?? '-'}</strong></span>
+           <span>Pending: <strong>${d.summary.pending ?? '-'}</strong></span>`;
+      } else {
+        document.getElementById('summary-row').innerHTML = '';
+      }
+
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text-dim);">No records found.</td></tr>';
+      } else {
+        tbody.innerHTML = rows.map((don, i) => `
+          <tr>
+            <td>${(page - 1) * limit + i + 1}</td>
+            <td>${fmt(don.timestamp || don.created_at)}</td>
+            <td>${don.amount ?? '?'} GRIN</td>
+            <td><span class="${typeCls(don.type)}">${don.type || 'manual'}</span></td>
+            <td><span class="badge ${statusCls(don.status)}">${don.status || 'confirmed'}</span></td>
+            <td title="${don.address || ''}">${truncAddr(don.address)}</td>
+            <td style="color:var(--text-dim);">${don.note || '-'}</td>
+          </tr>
+        `).join('');
+      }
+
+      const info = document.getElementById('pager-info');
+      info.textContent = `Page ${page} · ${total} total`;
+      document.getElementById('btn-prev').disabled = page <= 1;
+      document.getElementById('btn-next').disabled = rows.length < limit;
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="7" style="color:#eb5757;">Error: ${e.message}</td></tr>`;
+    }
+  }
+
+  document.getElementById('btn-filter').addEventListener('click', () => { page = 1; load(); });
+  document.getElementById('btn-prev').addEventListener('click', () => { page--; load(); });
+  document.getElementById('btn-next').addEventListener('click', () => { page++; load(); });
+
+  load();
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,102 @@
+/* home.css — Unified Grin Drop homepage */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #0d1117;
+  --card-bg:     #161b22;
+  --border:      #30363d;
+  --text:        #c9d1d9;
+  --text-dim:    #8b949e;
+  --accent:      #00e676;
+  --accent-dim:  #00b05a;
+  --testnet-clr: #56ccf2;
+  --mainnet-clr: #f2994a;
+  --danger:      #eb5757;
+  --ok:          #6fcf97;
+  --font:        "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono:        "Cascadia Code", "Fira Code", "Consolas", monospace;
+}
+
+body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.65; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code { font-family: var(--mono); font-size: .85em; background: rgba(255,255,255,.07);
+       padding: .1em .35em; border-radius: 3px; }
+
+.container { max-width: 900px; margin: 0 auto; padding: 0 1.2rem; }
+
+/* ── Header ─────────────────────────────────────────────────────────────────── */
+header { border-bottom: 1px solid var(--border); padding: 1.1rem 0; margin-bottom: 2rem; }
+.header-inner { display: flex; align-items: center; justify-content: space-between; }
+.site-title { font-size: 1.25rem; font-weight: 700; color: var(--accent); letter-spacing: .02em; }
+.site-title span { color: var(--text-dim); }
+.header-sub { font-size: .82rem; color: var(--text-dim); }
+
+/* ── Hero ───────────────────────────────────────────────────────────────────── */
+.hero { text-align: center; padding: 1.5rem 0 2rem; }
+.hero h1 { font-size: 2rem; font-weight: 700; color: var(--accent); }
+.hero p { color: var(--text-dim); margin-top: .5rem; font-size: 1rem; }
+
+/* ── Network cards ──────────────────────────────────────────────────────────── */
+.network-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2.5rem; }
+@media (max-width: 560px) { .network-grid { grid-template-columns: 1fr; } }
+
+.network-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+                padding: 1.4rem; }
+.network-card.testnet { border-top: 3px solid var(--testnet-clr); }
+.network-card.mainnet { border-top: 3px solid var(--mainnet-clr); }
+
+.net-label { font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+             margin-bottom: .5rem; }
+.net-label.testnet { color: var(--testnet-clr); }
+.net-label.mainnet { color: var(--mainnet-clr); }
+
+.net-stat-row { display: flex; gap: 1rem; flex-wrap: wrap; margin: .8rem 0 1rem; }
+.net-stat { flex: 1; min-width: 80px; }
+.net-stat .val { font-size: 1.3rem; font-weight: 700; color: var(--text); }
+.net-stat .lbl { font-size: .74rem; color: var(--text-dim); margin-top: .1rem; }
+
+.net-status { font-size: .8rem; margin-bottom: .8rem; }
+.dot-on  { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+           background: var(--ok); margin-right: .4rem; }
+.dot-off { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+           background: var(--danger); margin-right: .4rem; }
+.dot-unknown { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+               background: var(--text-dim); margin-right: .4rem; }
+
+.btn-visit { display: inline-block; padding: .55rem 1.2rem; border-radius: 4px; font-size: .9rem;
+             font-weight: 600; text-decoration: none; transition: opacity .15s; }
+.btn-visit:hover { opacity: .85; text-decoration: none; }
+.btn-visit.testnet { background: var(--testnet-clr); color: #000; }
+.btn-visit.mainnet { background: var(--mainnet-clr); color: #000; }
+
+/* ── Combined totals ────────────────────────────────────────────────────────── */
+.totals-section { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+                  padding: 1.4rem; margin-bottom: 2.5rem; }
+.totals-section h2 { font-size: 1rem; color: var(--text-dim); margin-bottom: 1rem; font-weight: 600; }
+.totals-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1rem; }
+.total-item .val { font-size: 1.5rem; font-weight: 700; color: var(--accent); }
+.total-item .lbl { font-size: .76rem; color: var(--text-dim); margin-top: .2rem; }
+
+/* ── About section ──────────────────────────────────────────────────────────── */
+.about-section { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+                 padding: 1.4rem; margin-bottom: 2rem; font-size: .9rem; }
+.about-section h2 { font-size: 1rem; color: var(--text-dim); margin-bottom: .8rem; font-weight: 600; }
+.about-section p { margin-bottom: .6rem; color: var(--text-dim); }
+.about-section p:last-child { margin-bottom: 0; }
+
+/* ── Footer ─────────────────────────────────────────────────────────────────── */
+footer { border-top: 1px solid var(--border); padding: 1.2rem 0; margin-top: 2rem;
+         text-align: center; font-size: .82rem; color: var(--text-dim); }
+footer a { color: var(--text-dim); }
+footer a:hover { color: var(--accent); }
+
+/* ── Loading / error states ─────────────────────────────────────────────────── */
+.loading { color: var(--text-dim); font-size: .9rem; }
+.error-note { color: var(--danger); font-size: .82rem; }
+
+/* ── Last updated ────────────────────────────────────────────────────────────── */
+.last-updated { text-align: right; font-size: .75rem; color: var(--text-dim); margin-top: .5rem; }

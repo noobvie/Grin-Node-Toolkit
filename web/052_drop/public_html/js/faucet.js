@@ -1,4 +1,4 @@
-// faucet.js — Grin Drop claim flow + live stats
+// faucet.js — Grin Drop claim flow + donation tabs + live stats
 // =============================================================================
 
 const REFRESH_SEC = 60;
@@ -6,6 +6,8 @@ const REFRESH_SEC = 60;
 // ── State ─────────────────────────────────────────────────────────────────────
 let _claimId   = null;
 let _countdown = null;
+let _invoiceId = null;
+let _donateWalletAddr = '';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function $(id) { return document.getElementById(id); }
@@ -46,7 +48,6 @@ function copyText(text, btnId) {
     btn.textContent = "Copied!";
     setTimeout(() => { btn.textContent = orig; }, 2000);
   }).catch(() => {
-    // Fallback for older browsers
     const ta = document.createElement("textarea");
     ta.value = text;
     ta.style.position = "fixed";
@@ -78,19 +79,16 @@ async function loadStats() {
   try {
     const data = await apiGet("/api/status" + addrParam);
 
-    // Maintenance mode — show overlay and stop normal rendering
     if (data.maintenance_mode) {
       showMaintenanceOverlay(data.drop_name, data.maintenance_message);
       return;
     }
 
-    // Giveaway section visibility
     const giveawaySection = $("section-giveaway");
     if (giveawaySection) {
       giveawaySection.style.display = (data.giveaway_enabled === false) ? "none" : "";
     }
 
-    // Donation section visibility
     const donationSection = $("section-donation");
     if (donationSection) {
       donationSection.style.display = (data.donation_enabled === false) ? "none" : "";
@@ -100,7 +98,6 @@ async function loadStats() {
     setText("stat-today",   String(data.claims_today));
     setText("stat-total",   String(data.claims_total));
 
-    // Public stats (total given / received)
     if (data.show_public_stats) {
       if (typeof data.total_given !== "undefined") {
         setText("stat-total-given", formatGrinShort(data.total_given));
@@ -164,7 +161,7 @@ function stopCountdown() {
   if (_countdown) { clearInterval(_countdown); _countdown = null; }
 }
 
-// ── Step management ───────────────────────────────────────────────────────────
+// ── Step management (claim flow) ──────────────────────────────────────────────
 function setStep(n) {
   [1, 2, 3].forEach(i => {
     const el = $("step-" + i);
@@ -189,13 +186,13 @@ async function submitClaim() {
   if (!address) { showError("claim-error", "Please enter your Grin address."); return; }
 
   const btn = $("claim-btn");
+  const origBtnText = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = "Requesting…"; }
 
   try {
     const data = await apiPost("/api/claim", { grin_address: address });
     _claimId = data.claim_id;
 
-    // Show slatepack in step 2
     const sp = $("slatepack-text");
     if (sp) sp.textContent = data.slatepack;
     startCountdown(data.expires_at);
@@ -208,7 +205,7 @@ async function submitClaim() {
       showError("claim-error", "Error: " + err.message);
     }
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "Claim 2 GRIN"; }
+    if (btn) { btn.disabled = false; btn.textContent = origBtnText || "Claim"; }
   }
 }
 
@@ -228,7 +225,6 @@ async function submitFinalize() {
       response_slate: response,
     });
     stopCountdown();
-
     setText("confirm-tx-id",  data.tx_slate_id || "(not available)");
     setText("confirm-amount", formatGrin(data.amount));
     setStep(3);
@@ -255,21 +251,173 @@ function resetClaim() {
   setStep(1);
 }
 
-// ── Donate section ─────────────────────────────────────────────────────────────
+// ── Donate: load wallet info ───────────────────────────────────────────────────
 async function loadDonate() {
   try {
     const data = await apiGet("/api/status");
     const addr = data.wallet_address || "";
+    _donateWalletAddr = addr;
+
+    // Tab 1 — address display
     const addrEl = $("donate-address");
     if (addrEl) addrEl.textContent = addr || "Not configured";
 
     const balEl = $("donate-balance");
     if (balEl) balEl.textContent = formatGrin(data.wallet_balance);
 
-    // QR code — only show if address is set
     const qrEl = $("donate-qr");
     if (qrEl) qrEl.style.display = addr ? "" : "none";
-  } catch { /* donate section is non-critical */ }
+
+    // Tab 2 — update the send command with our address
+    _updateReceiveCmd();
+  } catch { /* non-critical */ }
+}
+
+function _updateReceiveCmd() {
+  const amtInput = $("donate-receive-amount");
+  const amt = amtInput ? amtInput.value.trim() || "5" : "5";
+  const addr = _donateWalletAddr || "<our_address>";
+  const cmdEl = $("donate-receive-cmd");
+  if (cmdEl) cmdEl.textContent = `grin-wallet send -d ${addr} -a ${amt}`;
+}
+
+// ── Donate: tab switching ─────────────────────────────────────────────────────
+function initDonateTabs() {
+  document.querySelectorAll(".donate-tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const tab = btn.dataset.donateTab;
+      document.querySelectorAll(".donate-tab-btn").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".donate-tab-panel").forEach(p => { p.style.display = "none"; });
+      btn.classList.add("active");
+      const panel = $("donate-tab-" + tab);
+      if (panel) panel.style.display = "";
+    });
+  });
+  // Activate first tab
+  const first = document.querySelector(".donate-tab-btn");
+  if (first) first.click();
+}
+
+// ── Donate Tab 2 — Slatepack Receive (You Send / We Receive) ─────────────────
+function setDonateReceiveStep(n) {
+  [1, 2].forEach(i => {
+    const el = $("donate-receive-step-" + i);
+    if (el) el.style.display = i === n ? "" : "none";
+  });
+}
+
+async function submitDonateReceive() {
+  clearError("donate-receive-error");
+  const slate = ($("donate-send-slate")?.value || "").trim();
+  if (!slate) { showError("donate-receive-error", "Please paste your send slatepack."); return; }
+  if (!slate.includes("BEGINSLATEPACK") || !slate.includes("ENDSLATEPACK")) {
+    showError("donate-receive-error", "Invalid slatepack — must start with BEGINSLATEPACK.");
+    return;
+  }
+
+  const btn = $("donate-receive-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Processing…"; }
+
+  try {
+    const data = await apiPost("/api/donate/receive", { send_slate: slate });
+    const sp = data.response_slatepack || data.slatepack || "";
+    const spEl = $("donate-response-slatepack");
+    if (spEl) spEl.textContent = sp;
+    setDonateReceiveStep(2);
+  } catch (err) {
+    showError("donate-receive-error", "Error: " + err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Submit Slatepack"; }
+  }
+}
+
+function resetDonateReceive() {
+  const ta = $("donate-send-slate");
+  if (ta) ta.value = "";
+  clearError("donate-receive-error");
+  setDonateReceiveStep(1);
+}
+
+// ── Donate Tab 3 — Invoice (We Request / You Pay) ────────────────────────────
+function setDonateInvoiceStep(n) {
+  [1, 2, 3].forEach(i => {
+    const el = $("donate-invoice-step-" + i);
+    if (el) el.style.display = i === n ? "" : "none";
+  });
+}
+
+async function submitDonateInvoice() {
+  clearError("donate-invoice-error");
+  const amtRaw = ($("donate-invoice-amount")?.value || "").trim();
+  const address = ($("donate-invoice-address")?.value || "").trim();
+  const amount = parseFloat(amtRaw);
+
+  if (!amtRaw || isNaN(amount) || amount <= 0) {
+    showError("donate-invoice-error", "Please enter a valid amount greater than 0."); return;
+  }
+  if (!address) {
+    showError("donate-invoice-error", "Please enter your Grin address."); return;
+  }
+
+  const btn = $("donate-invoice-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Generating…"; }
+
+  try {
+    const data = await apiPost("/api/donate/invoice", { amount, address });
+    _invoiceId = data.invoice_id;
+    const sp = data.invoice_slatepack || data.slatepack || "";
+    const spEl = $("donate-invoice-slatepack");
+    if (spEl) spEl.textContent = sp;
+    setDonateInvoiceStep(2);
+  } catch (err) {
+    showError("donate-invoice-error", "Error: " + err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Generate Invoice"; }
+  }
+}
+
+async function submitDonateFinalize() {
+  clearError("donate-invoice-error");
+  const response = ($("donate-pay-slate")?.value || "").trim();
+  if (!response) { showError("donate-invoice-error", "Please paste your payment response."); return; }
+  if (!_invoiceId)  { showError("donate-invoice-error", "No active invoice. Please start again."); return; }
+  if (!response.includes("BEGINSLATEPACK") || !response.includes("ENDSLATEPACK")) {
+    showError("donate-invoice-error", "Invalid slatepack format.");
+    return;
+  }
+
+  const btn = $("donate-invoice-finalize-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Finalizing…"; }
+
+  try {
+    await apiPost("/api/donate/finalize", {
+      invoice_id:     _invoiceId,
+      response_slate: response,
+    });
+    setDonateInvoiceStep(3);
+    loadStats();
+  } catch (err) {
+    if (err.status === 410) {
+      showError("donate-invoice-error", "Invoice expired. Please generate a new one.");
+      setDonateInvoiceStep(1);
+    } else {
+      showError("donate-invoice-error", "Error: " + err.message);
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Submit Payment"; }
+  }
+}
+
+function resetDonateInvoice() {
+  _invoiceId = null;
+  const af = $("donate-invoice-amount");
+  const adr = $("donate-invoice-address");
+  const ta = $("donate-pay-slate");
+  if (af) af.value = "";
+  if (adr) adr.value = "";
+  if (ta) ta.value = "";
+  clearError("donate-invoice-error");
+  setDonateInvoiceStep(1);
 }
 
 // ── How it works tabs ─────────────────────────────────────────────────────────
@@ -284,7 +432,6 @@ function initTabs() {
       if (panel) panel.classList.add("active");
     });
   });
-  // Default: activate first tab
   document.querySelector(".tab-btn")?.click();
 }
 
@@ -298,29 +445,49 @@ function startStatsRefresh() {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
   setStep(1);
+  setDonateReceiveStep(1);
+  setDonateInvoiceStep(1);
   startStatsRefresh();
   loadDonate();
   initTabs();
+  initDonateTabs();
 
+  // ── Claim flow ──
   $("claim-btn")?.addEventListener("click", submitClaim);
   $("claim-address")?.addEventListener("keydown", e => {
     if (e.key === "Enter") submitClaim();
   });
-
   $("copy-slatepack-btn")?.addEventListener("click", () => {
     const sp = $("slatepack-text");
     if (sp) copyText(sp.textContent, "copy-slatepack-btn");
   });
-
   $("finalize-btn")?.addEventListener("click", submitFinalize);
-
   $("new-claim-btn")?.addEventListener("click", resetClaim);
 
+  // Re-check next_claim_at when address is typed
+  $("claim-address")?.addEventListener("blur", loadStats);
+
+  // ── Donate tab 1 ──
   $("copy-donate-addr-btn")?.addEventListener("click", () => {
     const el = $("donate-address");
     if (el) copyText(el.textContent, "copy-donate-addr-btn");
   });
 
-  // Re-check next_claim_at when address is typed
-  $("claim-address")?.addEventListener("blur", loadStats);
+  // ── Donate tab 2 ──
+  $("donate-receive-amount")?.addEventListener("input", _updateReceiveCmd);
+  $("donate-receive-btn")?.addEventListener("click", submitDonateReceive);
+  $("copy-donate-response-btn")?.addEventListener("click", () => {
+    const el = $("donate-response-slatepack");
+    if (el) copyText(el.textContent, "copy-donate-response-btn");
+  });
+  $("donate-receive-reset-btn")?.addEventListener("click", resetDonateReceive);
+
+  // ── Donate tab 3 ──
+  $("donate-invoice-btn")?.addEventListener("click", submitDonateInvoice);
+  $("copy-donate-invoice-btn")?.addEventListener("click", () => {
+    const el = $("donate-invoice-slatepack");
+    if (el) copyText(el.textContent, "copy-donate-invoice-btn");
+  });
+  $("donate-invoice-finalize-btn")?.addEventListener("click", submitDonateFinalize);
+  $("donate-invoice-reset-btn")?.addEventListener("click", resetDonateInvoice);
 });

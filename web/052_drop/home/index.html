@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Grin Drop — Free GRIN Faucet</title>
+  <meta name="description" content="Grin Drop — claim free GRIN on testnet or mainnet. Interactive slatepack transaction practice. No sign-up required.">
+  <meta name="keywords" content="grin faucet, grin drop, free grin, grin testnet, grin mainnet, slatepack, grin-wallet">
+  <link rel="canonical" href=""><!-- set at deploy time -->
+
+  <meta property="og:title"       content="Grin Drop — Free GRIN Faucet">
+  <meta property="og:description" content="Claim free GRIN on testnet or mainnet. Practice real slatepack transactions. No sign-up required.">
+  <meta property="og:type"        content="website">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "Grin Drop",
+    "description": "Claim free GRIN on testnet or mainnet. Interactive slatepack practice.",
+    "applicationCategory": "Finance",
+    "operatingSystem": "Any"
+  }
+  </script>
+
+  <link rel="stylesheet" href="/css/home.css">
+</head>
+
+<body>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title">Grin Drop <span>ツ</span></div>
+      <div class="header-sub">Testnet &amp; Mainnet GRIN Faucet</div>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+
+  <!-- ── Hero ──────────────────────────────────────────────────────────────── -->
+  <div class="hero">
+    <h1>Free GRIN for Everyone</h1>
+    <p>Practice real slatepack transactions on testnet or mainnet — no sign-up, no fees.</p>
+  </div>
+
+  <!-- ── Network cards ────────────────────────────────────────────────────── -->
+  <div class="network-grid">
+
+    <!-- Testnet -->
+    <div class="network-card testnet">
+      <div class="net-label testnet">Testnet</div>
+      <div class="net-status" id="test-status">
+        <span class="dot-unknown"></span><span>Checking…</span>
+      </div>
+      <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:.8rem;">
+        tGRIN has no monetary value — safe for learning and testing
+        the Grin slatepack transaction flow.
+      </p>
+      <div class="net-stat-row">
+        <div class="net-stat">
+          <div class="val" id="test-given">—</div>
+          <div class="lbl">Total Given</div>
+        </div>
+        <div class="net-stat">
+          <div class="val" id="test-received">—</div>
+          <div class="lbl">Received</div>
+        </div>
+        <div class="net-stat">
+          <div class="val" id="test-claims">—</div>
+          <div class="lbl">Claims</div>
+        </div>
+        <div class="net-stat">
+          <div class="val" id="test-donations">—</div>
+          <div class="lbl">Donations</div>
+        </div>
+      </div>
+      <a class="btn-visit testnet" href="/testnet/" id="test-link">Visit Testnet Drop →</a>
+    </div>
+
+    <!-- Mainnet -->
+    <div class="network-card mainnet">
+      <div class="net-label mainnet">Mainnet ⚠</div>
+      <div class="net-status" id="main-status">
+        <span class="dot-unknown"></span><span>Checking…</span>
+      </div>
+      <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:.8rem;">
+        Real GRIN with real value. Claim to receive actual GRIN coins
+        via the same slatepack flow used by exchanges and pools.
+      </p>
+      <div class="net-stat-row">
+        <div class="net-stat">
+          <div class="val" id="main-given">—</div>
+          <div class="lbl">Total Given</div>
+        </div>
+        <div class="net-stat">
+          <div class="val" id="main-received">—</div>
+          <div class="lbl">Received</div>
+        </div>
+        <div class="net-stat">
+          <div class="val" id="main-claims">—</div>
+          <div class="lbl">Claims</div>
+        </div>
+        <div class="net-stat">
+          <div class="val" id="main-donations">—</div>
+          <div class="lbl">Donations</div>
+        </div>
+      </div>
+      <a class="btn-visit mainnet" href="/mainnet/" id="main-link">Visit Mainnet Drop →</a>
+    </div>
+
+  </div>
+
+  <!-- ── Combined totals ──────────────────────────────────────────────────── -->
+  <div class="totals-section">
+    <h2>Combined Totals (Testnet + Mainnet)</h2>
+    <div class="totals-grid">
+      <div class="total-item">
+        <div class="val" id="tot-given">—</div>
+        <div class="lbl">Total GRIN Given</div>
+      </div>
+      <div class="total-item">
+        <div class="val" id="tot-received">—</div>
+        <div class="lbl">Total GRIN Received</div>
+      </div>
+      <div class="total-item">
+        <div class="val" id="tot-claims">—</div>
+        <div class="lbl">Total Claims</div>
+      </div>
+      <div class="total-item">
+        <div class="val" id="tot-donations">—</div>
+        <div class="lbl">Total Donations</div>
+      </div>
+    </div>
+    <p class="last-updated" id="last-updated"></p>
+  </div>
+
+  <!-- ── About ────────────────────────────────────────────────────────────── -->
+  <div class="about-section">
+    <h2>About Grin Drop</h2>
+    <p>
+      Grin Drop is an open-source GRIN faucet that teaches you how real Grin
+      transactions work. Unlike most cryptocurrencies, Grin uses
+      <strong>interactive transactions</strong> (slatepacks) — both parties
+      must participate to complete a transfer. This is the same flow used by
+      mining pools and exchanges.
+    </p>
+    <p>
+      The testnet drop is a risk-free sandbox: claim tGRIN, run through the
+      full 3-step slatepack flow, and understand Grin before using real funds.
+    </p>
+    <p>
+      Links:
+      <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a> ·
+      <a href="https://github.com/mimblewimble/grin-wallet/releases" target="_blank" rel="noopener">grin-wallet</a> ·
+      <a href="https://github.com/GetGrin/grim/releases" target="_blank" rel="noopener">Grim GUI</a> ·
+      <a href="https://github.com/mimblewimble/grin" target="_blank" rel="noopener">GitHub</a>
+    </p>
+  </div>
+
+</main>
+
+<footer>
+  <div class="container">
+    <p>
+      Grin Drop ·
+      <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a> ·
+      <a href="https://github.com/mimblewimble/grin" target="_blank" rel="noopener">GitHub</a>
+    </p>
+    <p style="margin-top:.3rem;">Testnet GRIN has no monetary value.</p>
+  </div>
+</footer>
+
+<script>
+(function() {
+  function fmtGrin(n) {
+    if (n === null || n === undefined) return '—';
+    return parseFloat(n).toFixed(2) + ' G';
+  }
+  function fmtNum(n) {
+    if (n === null || n === undefined) return '—';
+    return String(n);
+  }
+
+  function setStatus(prefix, online) {
+    const el = document.getElementById(prefix + '-status');
+    if (!el) return;
+    el.innerHTML = online
+      ? '<span class="dot-on"></span><span>Online</span>'
+      : '<span class="dot-off"></span><span>Offline</span>';
+  }
+
+  async function fetchStats(path) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const r = await fetch(path, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!r.ok) return null;
+      return await r.json();
+    } catch {
+      clearTimeout(timer);
+      return null;
+    }
+  }
+
+  async function load() {
+    const [testData, mainData] = await Promise.all([
+      fetchStats('/testnet/api/public-stats'),
+      fetchStats('/mainnet/api/public-stats'),
+    ]);
+
+    // Testnet card
+    if (testData) {
+      setStatus('test', true);
+      document.getElementById('test-given').textContent     = fmtGrin(testData.total_given);
+      document.getElementById('test-received').textContent  = fmtGrin(testData.total_received);
+      document.getElementById('test-claims').textContent    = fmtNum(testData.claims_total);
+      document.getElementById('test-donations').textContent = fmtNum(testData.donations_total);
+    } else {
+      setStatus('test', false);
+      ['test-given','test-received','test-claims','test-donations']
+        .forEach(id => { document.getElementById(id).textContent = '—'; });
+    }
+
+    // Mainnet card
+    if (mainData) {
+      setStatus('main', true);
+      document.getElementById('main-given').textContent     = fmtGrin(mainData.total_given);
+      document.getElementById('main-received').textContent  = fmtGrin(mainData.total_received);
+      document.getElementById('main-claims').textContent    = fmtNum(mainData.claims_total);
+      document.getElementById('main-donations').textContent = fmtNum(mainData.donations_total);
+    } else {
+      setStatus('main', false);
+      ['main-given','main-received','main-claims','main-donations']
+        .forEach(id => { document.getElementById(id).textContent = '—'; });
+    }
+
+    // Combined totals
+    const tg = (testData?.total_given  || 0) + (mainData?.total_given  || 0);
+    const tr = (testData?.total_received || 0) + (mainData?.total_received || 0);
+    const tc = (testData?.claims_total   || 0) + (mainData?.claims_total   || 0);
+    const td = (testData?.donations_total || 0) + (mainData?.donations_total || 0);
+
+    document.getElementById('tot-given').textContent     = (tg || !testData && !mainData) ? fmtGrin(tg)  : '—';
+    document.getElementById('tot-received').textContent  = (tr || !testData && !mainData) ? fmtGrin(tr)  : '—';
+    document.getElementById('tot-claims').textContent    = (tc || !testData && !mainData) ? fmtNum(tc)   : '—';
+    document.getElementById('tot-donations').textContent = (td || !testData && !mainData) ? fmtNum(td)   : '—';
+
+    const lu = document.getElementById('last-updated');
+    if (lu) lu.textContent = 'Updated ' + new Date().toLocaleTimeString();
+  }
+
+  load();
+  setInterval(load, 120000); // refresh every 2 minutes
+})();
+</script>
+
+</body>
+</html>

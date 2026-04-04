@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grin Drop — Admin Dashboard</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="stylesheet" href="../../css/faucet.css">
+  <style>
+    .admin-nav { display:flex; gap:.5rem; margin-bottom:1.5rem; flex-wrap:wrap; }
+    .admin-nav a { padding:.4rem .9rem; border-radius:4px; border:1px solid var(--border);
+                   color:var(--text); text-decoration:none; font-size:.85rem; }
+    .admin-nav a.active, .admin-nav a:hover { background:var(--accent); color:#000; border-color:var(--accent); }
+    .stat-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:1rem; margin-bottom:1.5rem; }
+    .stat-box  { background:var(--card-bg); border:1px solid var(--border); border-radius:6px;
+                 padding:1rem; text-align:center; }
+    .stat-box .val { font-size:1.6rem; font-weight:700; color:var(--accent); }
+    .stat-box .lbl { font-size:.78rem; color:var(--text-dim); margin-top:.3rem; }
+    .action-row { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:1rem; }
+    .tag-on  { display:inline-block; padding:.15rem .5rem; border-radius:3px;
+               background:#1a4d2a; color:#6fcf97; font-size:.75rem; }
+    .tag-off { display:inline-block; padding:.15rem .5rem; border-radius:3px;
+               background:#4d1a1a; color:#eb5757; font-size:.75rem; }
+    #status-msg { padding:.6rem 1rem; border-radius:4px; margin-bottom:1rem; display:none; }
+    #status-msg.ok  { background:#1a4d2a; color:#6fcf97; }
+    #status-msg.err { background:#4d1a1a; color:#eb5757; }
+  </style>
+</head>
+<body class="theme-matrix">
+<script src="../../js/theme.js" defer></script>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title">Grin Drop <span>ツ</span> — Admin</div>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+
+  <nav class="admin-nav" id="admin-nav"></nav>
+
+  <div id="status-msg"></div>
+
+  <section>
+    <h2>Dashboard</h2>
+    <div class="stat-grid" id="stat-grid">
+      <div class="stat-box"><div class="val" id="s-balance">…</div><div class="lbl">Wallet Balance</div></div>
+      <div class="stat-box"><div class="val" id="s-claims-today">…</div><div class="lbl">Claims Today</div></div>
+      <div class="stat-box"><div class="val" id="s-claims-total">…</div><div class="lbl">Total Claims</div></div>
+      <div class="stat-box"><div class="val" id="s-pending">…</div><div class="lbl">Pending Claims</div></div>
+      <div class="stat-box"><div class="val" id="s-given">…</div><div class="lbl">Total Given</div></div>
+      <div class="stat-box"><div class="val" id="s-received">…</div><div class="lbl">Total Received</div></div>
+      <div class="stat-box"><div class="val" id="s-donations">…</div><div class="lbl">Total Donations</div></div>
+      <div class="stat-box"><div class="val" id="s-invoices">…</div><div class="lbl">Pending Invoices</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Quick Actions</h2>
+    <div class="card">
+      <div class="action-row">
+        <div>
+          <strong>Giveaway:</strong> <span id="mode-giveaway">…</span>
+          &nbsp;&nbsp;<strong>Donation:</strong> <span id="mode-donation">…</span>
+          &nbsp;&nbsp;<strong>Maintenance:</strong> <span id="mode-maint">…</span>
+        </div>
+      </div>
+      <div class="action-row">
+        <button class="btn btn-outline btn-sm" id="btn-toggle-maint">Toggle Maintenance</button>
+        <button class="btn btn-outline btn-sm" id="btn-expire-invoices">Expire Pending Invoices</button>
+        <button class="btn btn-outline btn-sm" id="btn-add-donation">Record Manual Donation</button>
+      </div>
+
+      <div id="add-donation-form" style="display:none;margin-top:1rem;padding:1rem;border:1px solid var(--border);border-radius:4px;">
+        <strong>Record Manual Donation</strong>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.5rem;">
+          <div>
+            <label>Amount (GRIN)</label>
+            <input type="number" id="don-amount" placeholder="e.g. 5" step="any" min="0">
+          </div>
+          <div>
+            <label>Address (optional)</label>
+            <input type="text" id="don-address" placeholder="grin1...">
+          </div>
+        </div>
+        <div style="margin-top:.5rem;">
+          <label>Note (optional)</label>
+          <input type="text" id="don-note" placeholder="e.g. anonymous donation">
+        </div>
+        <div class="action-row" style="margin-top:.8rem;">
+          <button class="btn btn-sm" id="btn-don-submit">Save Donation</button>
+          <button class="btn btn-outline btn-sm" id="btn-don-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Service</h2>
+    <div class="card" id="service-info" style="font-size:.9rem;color:var(--text-dim);">Loading…</div>
+  </section>
+
+</main>
+
+<script>
+(function() {
+  const pathParts = location.pathname.split('/').filter(Boolean);
+  const secret = pathParts[0];
+  const base = '/' + secret;
+
+  // Build nav
+  const navLinks = [
+    ['Dashboard',     base + '/admin/'],
+    ['Transactions',  base + '/admin/transactions.html'],
+    ['Donations',     base + '/admin/donations.html'],
+    ['Settings',      base + '/admin/settings.html'],
+  ];
+  const nav = document.getElementById('admin-nav');
+  navLinks.forEach(([label, href]) => {
+    const a = document.createElement('a');
+    a.href = href;
+    a.textContent = label;
+    if (label === 'Dashboard') a.className = 'active';
+    nav.appendChild(a);
+  });
+
+  const msg = document.getElementById('status-msg');
+  function showMsg(text, type) {
+    msg.textContent = text;
+    msg.className = type;
+    msg.style.display = 'block';
+    setTimeout(() => { msg.style.display = 'none'; }, 4000);
+  }
+
+  function tag(on) {
+    const s = document.createElement('span');
+    s.className = on ? 'tag-on' : 'tag-off';
+    s.textContent = on ? 'ON' : 'OFF';
+    return s;
+  }
+
+  async function load() {
+    try {
+      const r = await fetch(base + '/api/stats');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+
+      document.getElementById('s-balance').textContent      = (d.wallet_balance ?? '?') + ' GRIN';
+      document.getElementById('s-claims-today').textContent = d.claims_today ?? '?';
+      document.getElementById('s-claims-total').textContent = d.claims_total ?? '?';
+      document.getElementById('s-pending').textContent      = d.claims_pending ?? '?';
+      document.getElementById('s-given').textContent        = (d.total_given ?? '?') + ' GRIN';
+      document.getElementById('s-received').textContent     = (d.total_received ?? '?') + ' GRIN';
+      document.getElementById('s-donations').textContent    = d.donations_total ?? '?';
+      document.getElementById('s-invoices').textContent     = d.invoices_pending ?? '?';
+
+      const mg = document.getElementById('mode-giveaway');
+      const md = document.getElementById('mode-donation');
+      const mm = document.getElementById('mode-maint');
+      mg.innerHTML = ''; mg.appendChild(tag(d.giveaway_enabled));
+      md.innerHTML = ''; md.appendChild(tag(d.donation_enabled));
+      mm.innerHTML = ''; mm.appendChild(tag(d.maintenance_mode));
+
+      const si = document.getElementById('service-info');
+      si.innerHTML = `
+        <p>Drop name: <strong>${d.drop_name || '-'}</strong>
+        &nbsp;·&nbsp; Domain: <strong>${d.subdomain || '-'}</strong>
+        &nbsp;·&nbsp; Port: <strong>${d.service_port || '-'}</strong></p>
+        <p style="margin-top:.4rem;">
+          Wallet address: <code style="word-break:break-all;">${d.wallet_address || '(not set)'}</code>
+        </p>
+        <p style="margin-top:.4rem;">
+          Claim amount: <strong>${d.claim_amount_grin ?? '-'} GRIN</strong>
+          &nbsp;·&nbsp; Window: <strong>${d.claim_window_hours ?? '-'} hours</strong>
+          &nbsp;·&nbsp; Finalize timeout: <strong>${d.finalize_timeout_min ?? '-'} min</strong>
+        </p>
+      `;
+    } catch (e) {
+      document.getElementById('service-info').textContent = 'Failed to load stats: ' + e.message;
+    }
+  }
+
+  async function adminPost(path, body) {
+    const r = await fetch(base + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+    return j;
+  }
+
+  document.getElementById('btn-toggle-maint').addEventListener('click', async () => {
+    try {
+      const j = await adminPost('/api/maintenance', {});
+      showMsg('Maintenance mode: ' + (j.maintenance_mode ? 'ON' : 'OFF'), 'ok');
+      load();
+    } catch (e) { showMsg(e.message, 'err'); }
+  });
+
+  document.getElementById('btn-expire-invoices').addEventListener('click', async () => {
+    try {
+      const j = await adminPost('/api/expire-invoices', {});
+      showMsg('Expired ' + (j.expired ?? 0) + ' pending invoice(s).', 'ok');
+      load();
+    } catch (e) { showMsg(e.message, 'err'); }
+  });
+
+  document.getElementById('btn-add-donation').addEventListener('click', () => {
+    document.getElementById('add-donation-form').style.display = '';
+  });
+  document.getElementById('btn-don-cancel').addEventListener('click', () => {
+    document.getElementById('add-donation-form').style.display = 'none';
+  });
+  document.getElementById('btn-don-submit').addEventListener('click', async () => {
+    const amount  = parseFloat(document.getElementById('don-amount').value);
+    const address = document.getElementById('don-address').value.trim();
+    const note    = document.getElementById('don-note').value.trim();
+    if (!amount || isNaN(amount) || amount <= 0) {
+      showMsg('Enter a valid amount.', 'err'); return;
+    }
+    try {
+      await adminPost('/api/add-donation', { amount, address, note });
+      showMsg('Donation recorded.', 'ok');
+      document.getElementById('add-donation-form').style.display = 'none';
+      load();
+    } catch (e) { showMsg(e.message, 'err'); }
+  });
+
+  load();
+  setInterval(load, 60000);
+})();
+</script>
+
+</body>
+</html>

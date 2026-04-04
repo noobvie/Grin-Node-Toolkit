@@ -280,6 +280,75 @@
   .dot-green  { background: var(--green); }
   .dot-purple { background: var(--purple); }
 
+  /* ── Collapsible chart info panel ───────────────────────────────────────── */
+  .chart-info-toggle {
+    cursor: pointer;
+    user-select: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .chart-info-toggle::after {
+    content: "ⓘ";
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--muted);
+    opacity: 0.7;
+    margin-left: 4px;
+    transition: opacity 0.15s;
+  }
+  .chart-info-toggle:hover::after { opacity: 1; }
+  .chart-info-toggle.open::after  { opacity: 1; color: var(--grin); }
+
+  .chart-info-panel {
+    overflow: hidden;
+    max-height: 0;
+    transition: max-height 0.25s ease, opacity 0.2s ease;
+    opacity: 0;
+    margin-bottom: 0;
+  }
+  .chart-info-panel.open {
+    max-height: 600px;
+    opacity: 1;
+    margin-bottom: 12px;
+  }
+  .chart-info-panel-inner {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.7;
+    background: var(--bg);
+  }
+  .chart-info-panel-inner h4 {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text);
+    margin: 0 0 6px;
+  }
+  .chart-info-panel-inner h4 + h4 { margin-top: 10px; }
+  .chart-info-panel-inner code {
+    font-family: monospace;
+    font-size: 11px;
+    background: var(--border);
+    border-radius: 3px;
+    padding: 1px 4px;
+    color: var(--text);
+  }
+  .chart-info-panel-inner a {
+    color: var(--grin);
+    text-decoration: none;
+  }
+  .chart-info-panel-inner a:hover { text-decoration: underline; }
+  .chart-info-sep {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 8px 0;
+  }
+
   /* ── Time range buttons ──────────────────────────────────────────────────── */
   .range-btns { display: flex; gap: 4px; }
   .range-btn {
@@ -757,23 +826,57 @@
 
   <!-- Inflation Rate Comparison -->
   <div class="card">
-    <div class="card-header">
+    <div class="card-header" style="align-items:flex-start;">
       <div class="card-title">
-        <span class="dot dot-grin"></span>Inflation Rate Comparison
-        <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">Annual supply dilution · log scale</span>
+        <span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleInflInfo()" id="infl-info-btn">Inflation Rate Comparison</span>
+        <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">Annual supply dilution · log scale · GRIN &amp; BTC projected to 2050</span>
       </div>
-      <div class="range-btns" id="infl-toggles">
-        <button class="range-btn active" data-ds="0" onclick="toggleInflDs(0)">GRIN</button>
-        <button class="range-btn active" data-ds="1" onclick="toggleInflDs(1)">BTC</button>
-        <button class="range-btn active" data-ds="2" onclick="toggleInflDs(2)">USD CPI</button>
-        <button class="range-btn active" data-ds="3" onclick="toggleInflDs(3)">Gold</button>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
+        <div class="range-btns" id="infl-toggles">
+          <button class="range-btn active" data-ds="0" onclick="toggleInflDs(0)">GRIN</button>
+          <button class="range-btn active" data-ds="1" onclick="toggleInflDs(1)">BTC</button>
+          <button class="range-btn active" data-ds="2" onclick="toggleInflDs(2)">USD M2</button>
+          <button class="range-btn active" data-ds="3" onclick="toggleInflDs(3)">Gold</button>
+          <button class="range-btn active" data-ds="4" onclick="toggleInflDs(4)">Global M2</button>
+        </div>
+        <div class="range-btns" id="infl-range">
+          <button class="range-btn" data-r="3" onclick="setInflRange(3,this)">3Y</button>
+          <button class="range-btn" data-r="5" onclick="setInflRange(5,this)">5Y</button>
+          <button class="range-btn active" data-r="all" onclick="setInflRange(null,this)">All</button>
+        </div>
+      </div>
+    </div>
+    <!-- Collapsible info panel -->
+    <div class="chart-info-panel" id="infl-info-panel">
+      <div class="chart-info-panel-inner">
+        <h4>How it works</h4>
+        Each series shows the annual rate of new supply added relative to existing stock — the same question answered across five different assets.
+        <hr class="chart-info-sep">
+        <h4>Formulas</h4>
+        <b>GRIN</b> — <code>1 GRIN/second</code> constant emission since mainnet (Jan 15 2019).
+        Rate = <code>31,557,600 / supply_at_jan1 × 100</code>. Projected to 2050 (~3.2% by then).<br>
+        <b>BTC</b> — deterministic halving schedule (halvings every ~4 years). Rate = <code>block_subsidy × blocks_per_year / supply_at_jan1 × 100</code>. Projected to 2050 via estimated halving timestamps.<br>
+        <b>USD M2</b> — annual % change in US broad money stock (M2).<br>
+        <b>Gold</b> — mine production ÷ estimated above-ground stock (~190,000 t base in 2000).<br>
+        <b>Global M2</b> — annual % change in world aggregate broad money stock.
+        <hr class="chart-info-sep">
+        <h4>Data sources</h4>
+        GRIN &amp; BTC: deterministic emission math — no external API needed.<br>
+        USD M2: <a href="https://data.worldbank.org/indicator/FM.LBL.BMNY.ZG" target="_blank" rel="noopener">World Bank — US · FM.LBL.BMNY.ZG</a> (broad money growth %).<br>
+        Global M2: <a href="https://data.worldbank.org/indicator/FM.LBL.BMNY.ZG?locations=1W" target="_blank" rel="noopener">World Bank — World aggregate · FM.LBL.BMNY.ZG</a>.<br>
+        Gold: <a href="https://www.gold.org/goldhub/data/gold-supply-and-demand-statistics" target="_blank" rel="noopener">World Gold Council</a> mine production statistics.
+        <hr class="chart-info-sep">
+        <h4>API</h4>
+        This data is publicly available via our API — other sites are welcome to consume it:<br>
+        <a id="infl-api-link" href="#" target="_blank" rel="noopener">/api/inflation</a>
+        — returns <code>grin[]</code>, <code>usd_m2[]</code>, <code>global_m2[]</code>, <code>gold[]</code> arrays, each entry <code>{year, rate_pct}</code>.
       </div>
     </div>
     <div class="chart-wrap"><canvas id="chart-inflation"></canvas></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;padding:6px 0 2px;font-size:11px;color:var(--muted);">
-      <span>GRIN &amp; BTC: deterministic emission math</span>
-      <span>USD: World Bank (FP.CPI.TOTL.ZG)</span>
-      <span>Gold: World Gold Council supply data</span>
+      <span>GRIN &amp; BTC: deterministic emission — projected to 2050</span>
+      <span>USD M2 · Global M2 · Gold: ends at last available data year</span>
+      <span style="font-style:italic">── actual &nbsp;·&nbsp; - - projected (GRIN &amp; BTC)</span>
     </div>
   </div>
 
@@ -899,7 +1002,7 @@
           <a class="api-path" id="ep-inflation" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/inflation</a>
           <span class="api-chevron">▶</span>
         </div>
-        <span class="api-desc">Grin annual supply inflation rate since mainnet (2019→present) — deterministic 1 GRIN/sec constant emission. Each entry: <code>{year, supply_start, new_coins, rate_pct}</code></span>
+        <span class="api-desc">Annual supply inflation comparison since Grin mainnet (2019–present) — <code>grin</code> (deterministic emission math), <code>usd_m2</code> (World Bank US FM.LBL.BMNY.ZG), <code>global_m2</code> (World Bank world aggregate FM.LBL.BMNY.ZG), <code>gold</code> (WGC mine production ÷ above-ground stock). Each entry: <code>{year, rate_pct}</code></span>
       </div>
     </div>
     <div class="api-note">
@@ -1258,38 +1361,44 @@ function makePriceChartBTC(id) {
 // ── Inflation comparison chart ────────────────────────────────────────────────
 const MAINNET_TS = 1547510400; // 2019-01-15 00:00 UTC (seconds)
 
+const _PROJ_YEAR   = new Date().getUTCFullYear(); // current year and beyond = projected (dashed)
+const _INFL_END_YR = 2050;                        // projection horizon
+
 function grinInflationByYear() {
   // 2019 is excluded: mainnet launched Jan 15 so supply ≈ 0 at year start → undefined rate.
-  // Current year uses projected annual rate (same formula as the stat bar) rather than
-  // partial-year actuals, so the point represents a full-year estimate.
+  // Completed years use actual seconds-per-year; current year and beyond use projected
+  // full-year emission (GRINS_PER_YEAR) so the chart shows the expected annual dilution rate.
   const GRINS_PER_YEAR = 365.25 * 86400;
   const pts = [];
   const currentYear = new Date().getUTCFullYear();
-  for (let y = 2020; y <= currentYear; y++) {
+  for (let y = 2020; y <= _INFL_END_YR; y++) {
     const tsStart = Date.UTC(y, 0, 1) / 1000;
-    const supply  = tsStart - MAINNET_TS;        // GRIN emitted up to Jan 1 of year y
-    let rate;
-    if (y === currentYear) {
-      rate = (GRINS_PER_YEAR / supply) * 100;    // projected: what the full year will be
-    } else {
-      rate = ((Date.UTC(y + 1, 0, 1) / 1000 - tsStart) / supply) * 100;
-    }
+    const supply  = tsStart - MAINNET_TS;
+    const rate = y < currentYear
+      ? ((Date.UTC(y + 1, 0, 1) / 1000 - tsStart) / supply) * 100  // completed year
+      : (GRINS_PER_YEAR / supply) * 100;                             // projected (current + future)
     pts.push({ x: Date.UTC(y, 6, 1), y: Math.round(rate * 10) / 10 });
   }
   return pts;
 }
 
 function btcInflationByYear() {
-  // Known halving timestamps (seconds UTC, approximate)
+  // Halving timestamps (seconds UTC). Halvings 1-4 are actual; 5-10 estimated at
+  // 4 Julian-year intervals (365.25 × 86400 × 4 = 126,144,000 s) from Halving 4.
   const halvings = [
-    { ts: 1231006505, subsidy: 50 },    // Genesis   Jan  3 2009
-    { ts: 1354116278, subsidy: 25 },    // Halving 1 Nov 28 2012
-    { ts: 1468082773, subsidy: 12.5 },  // Halving 2 Jul  9 2016
-    { ts: 1589225023, subsidy: 6.25 },  // Halving 3 May 11 2020
-    { ts: 1713571767, subsidy: 3.125 }, // Halving 4 Apr 19 2024
-    { ts: 1808000000, subsidy: 1.5625 },// Halving 5 ~2028 (est.)
+    { ts: 1231006505, subsidy: 50           }, // Genesis    Jan  3 2009
+    { ts: 1354116278, subsidy: 25           }, // Halving 1  Nov 28 2012
+    { ts: 1468082773, subsidy: 12.5         }, // Halving 2  Jul  9 2016
+    { ts: 1589225023, subsidy: 6.25         }, // Halving 3  May 11 2020
+    { ts: 1713571767, subsidy: 3.125        }, // Halving 4  Apr 19 2024 (actual)
+    { ts: 1839715767, subsidy: 1.5625       }, // Halving 5  ~Apr 2028 (est.)
+    { ts: 1965859767, subsidy: 0.78125      }, // Halving 6  ~Apr 2032 (est.)
+    { ts: 2092003767, subsidy: 0.390625     }, // Halving 7  ~Apr 2036 (est.)
+    { ts: 2218147767, subsidy: 0.1953125    }, // Halving 8  ~Apr 2040 (est.)
+    { ts: 2344291767, subsidy: 0.09765625   }, // Halving 9  ~Apr 2044 (est.)
+    { ts: 2470435767, subsidy: 0.048828125  }, // Halving 10 ~Apr 2048 (est.)
   ];
-  const BLOCK_SEC = 600; // 10-min avg
+  const BLOCK_SEC = 600;
 
   function subsidyAt(ts) {
     for (let i = halvings.length - 1; i >= 0; i--)
@@ -1307,19 +1416,18 @@ function btcInflationByYear() {
     return supply;
   }
 
-  // Current year: project the full-year expected new supply rather than counting partial blocks.
   const BTC_BLOCKS_PER_YEAR = 365.25 * 144;
   const pts = [];
   const currentYear = new Date().getUTCFullYear();
-  for (let y = 2019; y <= currentYear; y++) {
+  for (let y = 2019; y <= _INFL_END_YR; y++) {
     const tsStart     = Date.UTC(y, 0, 1) / 1000;
     const tsEnd       = Date.UTC(y + 1, 0, 1) / 1000;
     const supplyStart = supplyAt(tsStart);
     let newBtc;
-    if (y === currentYear) {
-      // Projected annual: expected blocks × subsidy (handle halving if one falls this year)
-      const yearEndEst  = tsStart + 365.25 * 86400;
-      const midHalving  = halvings.find(h => h.ts >= tsStart && h.ts < yearEndEst);
+    if (y >= currentYear) {
+      // Current or future year: project full-year expected new supply
+      const yearEndEst = tsStart + 365.25 * 86400;
+      const midHalving = halvings.find(h => h.ts >= tsStart && h.ts < yearEndEst);
       if (midHalving) {
         const dPre  = (midHalving.ts - tsStart) / 86400;
         const dPost = 365.25 - dPre;
@@ -1343,63 +1451,42 @@ function btcInflationByYear() {
   return pts;
 }
 
-// USD CPI and Gold are loaded from /api/inflation (inflation.json, built by 06_collector.py).
-// Datasets start empty and are populated by updateInflationCpiGold() once loadAll() fetches the JSON.
+// USD M2, Global M2 and Gold are loaded from /api/inflation (inflation.json, built by 06_collector.py).
+// Datasets start empty and are populated by updateInflationM2Gold() once loadAll() fetches the JSON.
+// _inflAll stores the full unfiltered data for each dataset so time-range filtering can slice it.
+
+const _inflAll = [[], [], [], [], []];
+let _inflRangeYrs = null;
 
 function makeInflationChart(id) {
+  _inflAll[0] = grinInflationByYear();
+  _inflAll[1] = btcInflationByYear();
   const ctx = $(id).getContext("2d");
+  const mkDs = (label, border, order) => ({
+    label,
+    data: [],
+    borderColor: border,
+    backgroundColor: border.slice(0, 7) + "18",
+    borderWidth: 1.5,
+    pointRadius: 4,
+    pointHoverRadius: 6,
+    fill: false,
+    tension: 0.3,
+    order,
+  });
+  // GRIN and BTC are deterministic to 2050 — dash segments at currentYear and beyond.
+  const projSeg = { segment: {
+    borderDash: ctx => new Date(ctx.p0.parsed.x).getUTCFullYear() >= _PROJ_YEAR ? [5, 4] : undefined,
+  }};
   return new Chart(ctx, {
     type: "line",
     data: {
       datasets: [
-        {
-          label: "GRIN",
-          data: grinInflationByYear(),
-          borderColor: "#ff9900",
-          backgroundColor: "#ff990018",
-          borderWidth: 1.5,
-          pointRadius: 4,
-          pointHoverRadius: 6,
-          fill: false,
-          tension: 0.3,
-          order: 1,
-        },
-        {
-          label: "BTC",
-          data: btcInflationByYear(),
-          borderColor: "#ffd700",
-          backgroundColor: "#ffd70018",
-          borderWidth: 1.5,
-          pointRadius: 4,
-          pointHoverRadius: 6,
-          fill: false,
-          tension: 0.3,
-          order: 2,
-        },
-        {
-          label: "USD CPI",
-          data: [],
-          borderColor: "#58a6ff",
-          backgroundColor: "#58a6ff18",
-          borderWidth: 1.5,
-          pointRadius: 4,
-          pointHoverRadius: 6,
-          fill: false,
-          tension: 0.3,
-          order: 3,
-        },
-        {
-          label: "Gold",
-          data: [],
-          borderColor: "#c0c0c0",
-          backgroundColor: "#c0c0c018",
-          borderWidth: 1.5,
-          pointRadius: 4,
-          pointHoverRadius: 6,
-          fill: false,
-          tension: 0.3,
-          order: 4,
-        },
+        { ...mkDs("GRIN",      "#ff9900", 1), ...projSeg },
+        { ...mkDs("BTC",       "#ffd700", 2), ...projSeg },
+        mkDs("USD M2",    "#58a6ff", 3),
+        mkDs("Gold",      "#c0c0c0", 4),
+        mkDs("Global M2", "#c084fc", 5),
       ]
     },
     options: {
@@ -1453,18 +1540,52 @@ function toggleInflDs(idx) {
   charts.inflation.update("none");
 }
 
-function updateInflationCpiGold(inflJson) {
-  if (!charts.inflation || !inflJson) return;
-  // dataset index 2 = USD CPI, index 3 = Gold
-  if (inflJson.usd_cpi?.length) {
-    charts.inflation.data.datasets[2].data =
-      inflJson.usd_cpi.map(d => ({ x: Date.UTC(d.year, 6, 1), y: d.rate_pct }));
-  }
-  if (inflJson.gold?.length) {
-    charts.inflation.data.datasets[3].data =
-      inflJson.gold.map(d => ({ x: Date.UTC(d.year, 6, 1), y: d.rate_pct }));
-  }
+function setInflRange(yrs, btn) {
+  _inflRangeYrs = yrs;
+  document.querySelectorAll('#infl-range .range-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _applyInflRange();
+}
+
+function _applyInflRange() {
+  if (!charts.inflation) return;
+  const now  = new Date().getUTCFullYear();
+  const minY = _inflRangeYrs ? now - _inflRangeYrs + 1 : 0;
+  // 3Y/5Y cap at current year so range buttons show only actual/current data.
+  // "All" (null) shows full history + projections to 2050.
+  const maxY = _inflRangeYrs ? now : 9999;
+  charts.inflation.data.datasets.forEach((ds, i) => {
+    ds.data = _inflAll[i].filter(p => {
+      const y = new Date(p.x).getUTCFullYear();
+      return y >= minY && y <= maxY;
+    });
+  });
   charts.inflation.update("none");
+}
+
+function toggleInflInfo() {
+  const panel = document.getElementById("infl-info-panel");
+  const btn   = document.getElementById("infl-info-btn");
+  const open  = panel.classList.toggle("open");
+  btn.classList.toggle("open", open);
+  // Set API link href to absolute URL on first open
+  const link = document.getElementById("infl-api-link");
+  if (link && link.getAttribute("href") === "#") {
+    link.href = window.location.origin + "/api/inflation";
+    link.textContent = window.location.origin + "/api/inflation";
+  }
+}
+
+function updateInflationM2Gold(inflJson) {
+  if (!charts.inflation || !inflJson) return;
+  // dataset index 2=USD M2, 3=Gold, 4=Global M2
+  const toPoints = arr => arr
+    .filter(d => d.rate_pct !== null && d.rate_pct !== undefined)
+    .map(d => ({ x: Date.UTC(d.year, 6, 1), y: d.rate_pct }));
+  if (inflJson.usd_m2?.length)    _inflAll[2] = toPoints(inflJson.usd_m2);
+  if (inflJson.gold?.length)      _inflAll[3] = toPoints(inflJson.gold);
+  if (inflJson.global_m2?.length) _inflAll[4] = toPoints(inflJson.global_m2);
+  _applyInflRange();
 }
 
 function makePeersChart(id) {
@@ -1518,6 +1639,7 @@ function initCharts() {
   charts.priceUsdt   = makePriceChartUSDT("chart-price-usdt");
   charts.priceBtc    = makePriceChartBTC("chart-price-btc");
   charts.inflation   = makeInflationChart("chart-inflation");
+  _applyInflRange(); // seed GRIN & BTC data with current range (All by default)
 }
 
 // Range state
@@ -1803,7 +1925,7 @@ async function loadAll() {
   if (charts.difficulty && difficulty)   updateChartData(charts.difficulty, difficulty,   rangeState.diff);
   if (charts.activity    && transactions && fees) updateActivityChart(transactions, fees, rangeState.activity, activityMetric);
   if (charts.activePeers && activePeers)         updatePeersChart(activePeers, rangeState.activePeers, peersNetwork);
-  if (charts.inflation   && inflation)           updateInflationCpiGold(inflation);
+  if (charts.inflation   && inflation)           updateInflationM2Gold(inflation);
 
   // Versions donut
   if (versions) renderVersions(versions);

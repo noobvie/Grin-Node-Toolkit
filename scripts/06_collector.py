@@ -238,9 +238,9 @@ def init_schema(conn):
 
         CREATE TABLE IF NOT EXISTS inflation_ext (
             year     INTEGER NOT NULL,
-            asset    TEXT    NOT NULL,   -- 'usd_cpi' | 'gold'
+            asset    TEXT    NOT NULL,   -- 'usd_m2' | 'global_m2' | 'gold'
             rate_pct REAL,               -- null = not available / undefined
-            source   TEXT,               -- e.g. 'worldbank:FP.CPI.TOTL.ZG' or 'wgc:calc'
+            source   TEXT,               -- e.g. 'worldbank:FM.LBL.BMNY.ZG' or 'wgc:calc'
             fetched  INTEGER NOT NULL,   -- unix ts when this row was last written
             PRIMARY KEY (year, asset)
         );
@@ -1355,14 +1355,16 @@ def _refresh_gold_in_db(conn):
         stock += prod
     conn.commit()
 
-def _refresh_usd_cpi_in_db(conn):
+def _refresh_usd_m2_in_db(conn):
     """
-    Fetch US CPI YoY % from World Bank API and upsert into inflation_ext.
+    Fetch US broad money supply growth (annual %) from World Bank API and upsert into inflation_ext.
+    Indicator FM.LBL.BMNY.ZG — Broad money growth (annual %) — direct analog to crypto/gold
+    supply inflation: how fast new USD units enter circulation relative to existing supply.
     If the fetch fails, existing DB rows are untouched — history is preserved.
-    Source: api.worldbank.org — indicator FP.CPI.TOTL.ZG (free, no key, CORS-enabled).
+    Source: api.worldbank.org — free, no key required, CORS-enabled.
     """
     url = (
-        "https://api.worldbank.org/v2/country/US/indicator/FP.CPI.TOTL.ZG"
+        "https://api.worldbank.org/v2/country/US/indicator/FM.LBL.BMNY.ZG"
         "?format=json&per_page=20&mrv=15"
     )
     try:
@@ -1376,15 +1378,47 @@ def _refresh_usd_cpi_in_db(conn):
                 year = int(item["date"])
                 if year >= 2019:
                     _upsert_inflation_ext(
-                        conn, year, "usd_cpi",
+                        conn, year, "usd_m2",
                         round(float(item["value"]), 2),
-                        "worldbank:FP.CPI.TOTL.ZG",
+                        "worldbank:FM.LBL.BMNY.ZG",
                     )
                     count += 1
         conn.commit()
-        print(f"[OK] USD CPI: {count} year(s) upserted from World Bank.")
+        print(f"[OK] USD M2: {count} year(s) upserted from World Bank.")
     except Exception as exc:
-        print(f"[WARN] USD CPI fetch from World Bank failed: {exc} — using cached DB rows.")
+        print(f"[WARN] USD M2 fetch from World Bank failed: {exc} — using cached DB rows.")
+
+def _refresh_global_m2_in_db(conn):
+    """
+    Fetch world-aggregate broad money supply growth (annual %) from World Bank API.
+    Uses country code '1W' (World) with the same indicator FM.LBL.BMNY.ZG as USD M2,
+    giving a global monetary expansion rate directly comparable to GRIN/BTC/Gold supply inflation.
+    If the fetch fails, existing DB rows are untouched — history is preserved.
+    """
+    url = (
+        "https://api.worldbank.org/v2/country/1W/indicator/FM.LBL.BMNY.ZG"
+        "?format=json&per_page=20&mrv=15"
+    )
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "grin-stats/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = json.loads(resp.read())
+        items = raw[1] if isinstance(raw, list) and len(raw) > 1 else []
+        count = 0
+        for item in items:
+            if item.get("value") is not None:
+                year = int(item["date"])
+                if year >= 2019:
+                    _upsert_inflation_ext(
+                        conn, year, "global_m2",
+                        round(float(item["value"]), 2),
+                        "worldbank:1W:FM.LBL.BMNY.ZG",
+                    )
+                    count += 1
+        conn.commit()
+        print(f"[OK] Global M2: {count} year(s) upserted from World Bank (1W).")
+    except Exception as exc:
+        print(f"[WARN] Global M2 fetch from World Bank failed: {exc} — using cached DB rows.")
 
 def _read_inflation_ext(conn, asset):
     """Read all stored rows for an asset from DB, sorted by year."""
@@ -1398,10 +1432,11 @@ def export_inflation_json():
     """
     Generate inflation.json — annual supply inflation comparison since Grin mainnet.
       grin    : deterministic math (1 GRIN/sec emission) — always recalculated
-      usd_cpi : World Bank API → persisted in inflation_ext → served from DB
-      gold    : WGC mine production calc → persisted in inflation_ext → served from DB
+      usd_m2    : World Bank API (US) → persisted in inflation_ext → served from DB
+      global_m2 : World Bank API (1W world aggregate) → persisted in inflation_ext → served from DB
+      gold      : WGC mine production calc → persisted in inflation_ext → served from DB
 
-    USD CPI and Gold are DB-backed: a source outage only prevents new rows from being
+    USD M2, Global M2 and Gold are DB-backed: a source outage only prevents new rows from being
     added — all historical rows already in the DB are preserved and still exported.
     """
     ts_now       = now_ts()
@@ -1410,12 +1445,14 @@ def export_inflation_json():
 
     # ── Open DB, refresh external data, read back ─────────────────────────────
     conn = open_db()
-    init_schema(conn)           # ensures inflation_ext table exists (safe migration)
-    _refresh_gold_in_db(conn)   # deterministic — always safe to run
-    _refresh_usd_cpi_in_db(conn)  # fetches World Bank; falls back to cached rows on failure
+    init_schema(conn)                # ensures inflation_ext table exists (safe migration)
+    _refresh_gold_in_db(conn)        # deterministic — always safe to run
+    _refresh_usd_m2_in_db(conn)      # fetches World Bank US; falls back to cached rows on failure
+    _refresh_global_m2_in_db(conn)   # fetches World Bank 1W; falls back to cached rows on failure
 
-    usd_cpi_rows = _read_inflation_ext(conn, "usd_cpi")
-    gold_rows    = _read_inflation_ext(conn, "gold")
+    usd_m2_rows    = _read_inflation_ext(conn, "usd_m2")
+    global_m2_rows = _read_inflation_ext(conn, "global_m2")
+    gold_rows      = _read_inflation_ext(conn, "gold")
     conn.close()
 
     # ── Grin (pure math, no DB) ───────────────────────────────────────────────
@@ -1451,14 +1488,16 @@ def export_inflation_json():
         "mainnet_ts":   _MAINNET_TS,
         "mainnet_date": "2019-01-15",
         "notes": {
-            "grin_2019":       "Partial year — mainnet launched Jan 15. supply_start=0, rate_pct=null.",
-            "grin_current_yr": "Projected full-year rate (GRINS_PER_YEAR / supply_at_jan1).",
-            "usd_cpi_source":  "World Bank API — FP.CPI.TOTL.ZG. DB-backed: history survives outages.",
-            "gold_source":     "WGC mine production / cumulative stock. DB-backed: history survives.",
+            "grin_2019":          "Partial year — mainnet launched Jan 15. supply_start=0, rate_pct=null.",
+            "grin_current_yr":    "Projected full-year rate (GRINS_PER_YEAR / supply_at_jan1).",
+            "usd_m2_source":      "World Bank API — US (country=US) FM.LBL.BMNY.ZG. DB-backed: history survives outages.",
+            "global_m2_source":   "World Bank API — World aggregate (country=1W) FM.LBL.BMNY.ZG. DB-backed: history survives outages.",
+            "gold_source":        "WGC mine production / cumulative stock. DB-backed: history survives.",
         },
-        "grin":    grin_data,
-        "usd_cpi": usd_cpi_rows,
-        "gold":    gold_rows,
+        "grin":      grin_data,
+        "usd_m2":    usd_m2_rows,
+        "global_m2": global_m2_rows,
+        "gold":      gold_rows,
     })
 
 def _write_json(filename, data):

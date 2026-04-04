@@ -372,7 +372,7 @@ EOF
         success "Price collector installed."
     fi
 
-    # Generate inflation.json immediately — pure math + World Bank CPI, no blockchain DB needed.
+    # Generate inflation.json immediately — pure math + World Bank M2, no blockchain DB needed.
     # This makes the Inflation Rate Comparison chart visible right after install,
     # without waiting for the first Import Data / --update run.
     info "Generating inflation.json (pure math — no import needed)..."
@@ -402,7 +402,7 @@ import_data() {
     echo -e "  ${DIM}Node : ${NODE_URL}${RESET}"
     echo ""
     echo -e "  ${BOLD}── Stats Collector  (node data: hashrate, TX, fees, active peers) ──${RESET}"
-    echo -e "  ${DIM}  Options b-g also fetch inflation comparison data (USD CPI + Gold → stored in DB)${RESET}"
+    echo -e "  ${DIM}  Options b-g also fetch inflation comparison data (USD M2 + Gold → stored in DB)${RESET}"
     echo ""
     echo -e "  ${GREEN}a${RESET}) Init DB schema only          ${DIM}(RUN ONCE! Creates tables — no data fetched)${RESET}"
     echo -e "  ${GREEN}b${RESET}) Full history import          ${DIM}(RUN ONCE! Import headers + TX/fees — 6+ hours)${RESET}"
@@ -413,9 +413,9 @@ import_data() {
     echo -e "  ${GREEN}f${RESET}) Incremental update only      ${DIM}(new blocks since last run)${RESET}"
     echo -e "  ${GREEN}g${RESET}) Peers geolocation only       ${DIM}(refresh peer map + active peers chart, no blockchain data)${RESET}"
     echo ""
-    echo -e "  ${BOLD}── Inflation Comparison  (USD CPI + Gold supply inflation → SQLite) ──${RESET}"
+    echo -e "  ${BOLD}── Inflation Comparison  (USD M2 + Gold supply inflation → SQLite) ──${RESET}"
     echo ""
-    echo -e "  ${GREEN}k${RESET}) Fetch inflation data only    ${DIM}(USD CPI from World Bank + Gold from WGC — no node needed)${RESET}"
+    echo -e "  ${GREEN}k${RESET}) Fetch inflation data only    ${DIM}(USD M2 from World Bank + Gold from WGC — no node needed)${RESET}"
     echo -e "  ${DIM}  Use after init-DB (a) or if World Bank was unreachable during a previous run.${RESET}"
     echo ""
     echo -e "  ${BOLD}── Price Collector  (GRIN/USDT from Gate.io) ──${RESET}"
@@ -454,7 +454,7 @@ import_data() {
         f) bin="$COLLECTOR_BIN"; cmd="--update";             desc="Stats: Incremental update" ;;
         g) bin="$COLLECTOR_BIN"; cmd="--peers-only";          desc="Stats: Peers geolocation + active peers chart update" ;;
         # ── Inflation comparison ─────────────────────────────────────────────
-        k) bin="$COLLECTOR_BIN"; cmd="--export-inflation";   desc="Inflation: Fetch USD CPI (World Bank) + Gold (WGC) → store in DB + write inflation.json" ;;
+        k) bin="$COLLECTOR_BIN"; cmd="--export-inflation";   desc="Inflation: Fetch USD M2 (World Bank FM.LBL.BMNY.ZG) + Gold (WGC) → store in DB + write inflation.json" ;;
         # ── Price collector ──────────────────────────────────────────────────
         h)
             [[ ! -f "$PRICE_COLLECTOR_BIN" ]] && { warn "Price collector not installed."; sleep 1; return; }
@@ -618,7 +618,7 @@ server {
     #   /api/active_peers → mainnet+testnet peer count history        (06_collector.py)
     #   /api/versions     → node version distribution                 (06_collector.py)
     #   /api/price        → GRIN/USDT price, OHLCV history            (06_price_collector.py)
-    #   /api/inflation    → annual supply inflation: grin/usd_cpi/gold (06_collector.py)
+    #   /api/inflation    → annual supply inflation: grin/usd_m2/gold  (06_collector.py)
     #   /api/peers        → disabled (privacy mode — peer data is internal only)
     #
     location = /api/summary      { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/summary.json;      }

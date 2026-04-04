@@ -707,7 +707,7 @@
     <div class="chart-info-panel" id="hr-info-panel">
       <div class="chart-info-panel-inner">
         <h4>What is GPS?</h4>
-        <b>Grams Per Second</b> — the estimated rate at which miners solve Cuckoo Cycle C32 proofs of work. Higher GPS = more mining power securing the network.
+        <b>Graphs Per Second</b> — the estimated rate at which miners find valid Cuckoo Cycle graph solutions (C32 proofs of work). Higher GPS = more mining power securing the network.
         <hr class="chart-info-sep">
         <h4>How it's calculated</h4>
         Derived from block difficulty and the 60-second block target: <code>hashrate ≈ difficulty / 60</code>. The stats collector polls the node every ~5 min and stores daily/hourly/recent aggregates.
@@ -901,7 +901,6 @@
           <button class="range-btn active" data-ds="1" onclick="toggleInflDs(1)">BTC</button>
           <button class="range-btn active" data-ds="2" onclick="toggleInflDs(2)">USD M2</button>
           <button class="range-btn active" data-ds="3" onclick="toggleInflDs(3)">Gold</button>
-          <button class="range-btn active" data-ds="4" onclick="toggleInflDs(4)">Global M2</button>
         </div>
         <div class="range-btns" id="infl-range">
           <button class="range-btn" data-r="3" onclick="setInflRange(3,this)">3Y</button>
@@ -920,26 +919,24 @@
         <b>GRIN</b> — <code>1 GRIN/second</code> constant emission since mainnet (Jan 15 2019).
         Rate = <code>31,557,600 / supply_at_jan1 × 100</code>. Projected to 2050 (~3.2% by then).<br>
         <b>BTC</b> — deterministic halving schedule (halvings every ~4 years). Rate = <code>block_subsidy × blocks_per_year / supply_at_jan1 × 100</code>. Projected to 2050 via estimated halving timestamps.<br>
-        <b>USD M2</b> — annual % change in US broad money stock (M2).<br>
+        <b>USD M2</b> — annual % change in US broad money stock using <b>annual averages</b> (World Bank methodology): average M2 level of year N vs average of year N−1. This differs from the Fed's Dec→Dec measure — e.g. 2023 shows ~+1.8% here vs ~−3% Dec→Dec, because M2 was still elevated early in 2023.<br>
         <b>Gold</b> — mine production ÷ estimated above-ground stock (~190,000 t base in 2000).<br>
-        <b>Global M2</b> — annual % change in world aggregate broad money stock.
         <hr class="chart-info-sep">
         <h4>Data sources</h4>
         GRIN &amp; BTC: deterministic emission math — no external API needed.<br>
-        USD M2: <a href="https://data.worldbank.org/indicator/FM.LBL.BMNY.ZG" target="_blank" rel="noopener">World Bank — US · FM.LBL.BMNY.ZG</a> (broad money growth %).<br>
-        Global M2: <a href="https://data.worldbank.org/indicator/FM.LBL.BMNY.ZG?locations=1W" target="_blank" rel="noopener">World Bank — World aggregate · FM.LBL.BMNY.ZG</a>.<br>
+        USD M2: <a href="https://data.worldbank.org/indicator/FM.LBL.BMNY.ZG" target="_blank" rel="noopener">World Bank — FM.LBL.BMNY.ZG</a> (US broad money growth %, annual average basis). Data lags ~12 months. Only truly negative years are absent from the log-scale chart.<br>
         Gold: <a href="https://www.gold.org/goldhub/data/gold-supply-and-demand-statistics" target="_blank" rel="noopener">World Gold Council</a> mine production statistics.
         <hr class="chart-info-sep">
         <h4>API</h4>
         This data is publicly available via our API — other sites are welcome to consume it:<br>
         <a id="infl-api-link" href="#" target="_blank" rel="noopener">/api/inflation</a>
-        — returns <code>grin[]</code>, <code>usd_m2[]</code>, <code>global_m2[]</code>, <code>gold[]</code> arrays, each entry <code>{year, rate_pct}</code>.
+        — returns <code>grin[]</code>, <code>usd_m2[]</code>, <code>gold[]</code> arrays, each entry <code>{year, rate_pct}</code>.
       </div>
     </div>
     <div class="chart-wrap"><canvas id="chart-inflation"></canvas></div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;padding:6px 0 2px;font-size:11px;color:var(--muted);">
       <span>GRIN &amp; BTC: deterministic emission — projected to 2050</span>
-      <span>USD M2 · Global M2 · Gold: ends at last available data year · negative values hidden (log scale)</span>
+      <span>USD M2 · Gold: ends at last available data year · USD M2 uses annual-average basis (World Bank)</span>
       <span style="font-style:italic">── actual &nbsp;·&nbsp; - - projected (GRIN &amp; BTC)</span>
     </div>
   </div>
@@ -1078,7 +1075,7 @@
           <a class="api-path" id="ep-inflation" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/inflation</a>
           <span class="api-chevron">▶</span>
         </div>
-        <span class="api-desc">Annual supply inflation comparison since Grin mainnet (2019–present) — <code>grin</code> (deterministic emission math), <code>usd_m2</code> (World Bank US FM.LBL.BMNY.ZG), <code>global_m2</code> (World Bank world aggregate FM.LBL.BMNY.ZG), <code>gold</code> (WGC mine production ÷ above-ground stock). Each entry: <code>{year, rate_pct}</code></span>
+        <span class="api-desc">Annual supply inflation comparison since Grin mainnet (2019–present) — <code>grin</code> (deterministic emission math), <code>usd_m2</code> (World Bank FM.LBL.BMNY.ZG), <code>gold</code> (WGC mine production ÷ above-ground stock). Each entry: <code>{year, rate_pct}</code></span>
       </div>
     </div>
     <div class="api-note">
@@ -1527,11 +1524,11 @@ function btcInflationByYear() {
   return pts;
 }
 
-// USD M2, Global M2 and Gold are loaded from /api/inflation (inflation.json, built by 06_collector.py).
+// USD M2 and Gold are loaded from /api/inflation (inflation.json, built by 06_collector.py).
 // Datasets start empty and are populated by updateInflationM2Gold() once loadAll() fetches the JSON.
 // _inflAll stores the full unfiltered data for each dataset so time-range filtering can slice it.
 
-const _inflAll = [[], [], [], [], []];
+const _inflAll = [[], [], [], []];
 let _inflRangeYrs = null;
 
 function makeInflationChart(id) {
@@ -1561,8 +1558,7 @@ function makeInflationChart(id) {
         { ...mkDs("GRIN",      "#ff9900", 1), ...projSeg },
         { ...mkDs("BTC",       "#ffd700", 2), ...projSeg },
         mkDs("USD M2",    "#58a6ff", 3),
-        mkDs("Gold",      "#c0c0c0", 4),
-        mkDs("Global M2", "#c084fc", 5),
+        mkDs("Gold",   "#c0c0c0", 4),
       ]
     },
     options: {
@@ -1659,15 +1655,14 @@ function toggleInflInfo() {
 
 function updateInflationM2Gold(inflJson) {
   if (!charts.inflation || !inflJson) return;
-  // dataset index 2=USD M2, 3=Gold, 4=Global M2
+  // dataset index 2=USD M2, 3=Gold
   // Log scale cannot render zero or negative values — filter them out.
-  // US M2 went negative in 2023 (~-3%); those years are intentionally absent from the chart.
+  // US M2 contracted in 2023 (~-3%); that year is intentionally absent.
   const toPoints = arr => arr
     .filter(d => d.rate_pct !== null && d.rate_pct !== undefined && d.rate_pct > 0)
     .map(d => ({ x: Date.UTC(d.year, 6, 1), y: d.rate_pct }));
-  if (inflJson.usd_m2?.length)    _inflAll[2] = toPoints(inflJson.usd_m2);
-  if (inflJson.gold?.length)      _inflAll[3] = toPoints(inflJson.gold);
-  if (inflJson.global_m2?.length) _inflAll[4] = toPoints(inflJson.global_m2);
+  if (inflJson.usd_m2?.length) _inflAll[2] = toPoints(inflJson.usd_m2);
+  if (inflJson.gold?.length)   _inflAll[3] = toPoints(inflJson.gold);
   _applyInflRange();
 }
 

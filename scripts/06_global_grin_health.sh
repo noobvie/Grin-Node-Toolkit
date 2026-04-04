@@ -603,6 +603,7 @@ server {
     #   /api/active_peers → mainnet+testnet peer count history        (06_collector.py)
     #   /api/versions     → node version distribution                 (06_collector.py)
     #   /api/price        → GRIN/USDT price, OHLCV history            (06_price_collector.py)
+    #   /api/inflation    → annual supply inflation: grin/usd_cpi/gold (06_collector.py)
     #   /api/peers        → disabled (privacy mode — peer data is internal only)
     #
     location = /api/summary      { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/summary.json;      }
@@ -613,6 +614,7 @@ server {
     location = /api/active_peers { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/active_peers.json; }
     location = /api/versions     { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/versions.json;     }
     location = /api/price        { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/price.json;        }
+    location = /api/inflation    { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/inflation.json;    }
     location = /api/peers        { return 404; }
 
     # Block everything else under /api/ — no directory listing, no other files
@@ -716,7 +718,7 @@ status_stats() {
 
     # JSON data files
     echo -e "  JSON exports"
-    for f in summary hashrate difficulty transactions fees active_peers versions peers price; do
+    for f in summary hashrate difficulty transactions fees active_peers versions peers price inflation; do
         local jf="$WWW_DIR/data/${f}.json"
         if [[ -f "$jf" ]]; then
             local age; age=$(( ($(date +%s) - $(stat -c %Y "$jf" 2>/dev/null || echo 0)) / 60 ))

@@ -1294,8 +1294,126 @@ def export_all_json():
     })
 
     conn.close()
+
+    export_inflation_json()
     print("[OK] JSON exported to:", WWW_DATA,
-          "(hashrate, difficulty, transactions, fees, active_peers, versions, summary)")
+          "(hashrate, difficulty, transactions, fees, active_peers, versions, summary, inflation)")
+
+# ── Inflation history export ──────────────────────────────────────────────────
+
+# Grin mainnet genesis: 2019-01-15 00:00 UTC
+_MAINNET_TS = 1547510400
+
+# ── Gold supply: World Gold Council annual mine production data ────────────────
+# Source: WGC Gold Demand Trends annual reports (https://www.gold.org/goldhub/data)
+# Annual mine production in tonnes.  Update each February when WGC publishes Q4 figures.
+_GOLD_MINE_PROD_T = {
+    2019: 3534,
+    2020: 3401,
+    2021: 3561,
+    2022: 3612,
+    2023: 3644,
+    2024: 3661,
+}
+_GOLD_STOCK_END_2018 = 190_000   # tonnes above-ground stock at end of 2018 (WGC)
+_GOLD_DEFAULT_PROD   = 3_650     # tonne/yr fallback for years not yet in WGC report
+
+def _calc_gold_inflation():
+    """Derive annual gold supply inflation from WGC mine production + cumulative stock."""
+    current_year = datetime.now(tz=timezone.utc).year
+    stock = _GOLD_STOCK_END_2018
+    result = []
+    for year in range(2019, current_year + 1):
+        prod = _GOLD_MINE_PROD_T.get(year, _GOLD_DEFAULT_PROD)
+        rate = round((prod / stock) * 100, 2)
+        result.append({"year": year, "mine_prod_t": prod, "stock_start_t": stock, "rate_pct": rate})
+        stock += prod
+    return result
+
+def _fetch_usd_cpi():
+    """
+    Fetch US CPI year-over-year % from World Bank API (indicator FP.CPI.TOTL.ZG).
+    Free, no key required, CORS-enabled.  Returns list of {year, rate_pct} dicts.
+    """
+    url = (
+        "https://api.worldbank.org/v2/country/US/indicator/FP.CPI.TOTL.ZG"
+        "?format=json&per_page=20&mrv=15"
+    )
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "grin-stats/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = json.loads(resp.read())
+        items = raw[1] if isinstance(raw, list) and len(raw) > 1 else []
+        data = []
+        for item in items:
+            if item.get("value") is not None:
+                year = int(item["date"])
+                if year >= 2019:
+                    data.append({"year": year, "rate_pct": round(float(item["value"]), 2)})
+        return sorted(data, key=lambda x: x["year"])
+    except Exception as exc:
+        print(f"[WARN] USD CPI fetch from World Bank failed: {exc}")
+        return []
+
+def export_inflation_json():
+    """
+    Generate inflation.json — annual supply inflation comparison since Grin mainnet.
+      grin     : deterministic math (1 GRIN/sec emission)
+      usd_cpi  : fetched live from World Bank API (FP.CPI.TOTL.ZG)
+      gold     : calculated from WGC annual mine production + cumulative stock
+    Published at /api/inflation for external consumers.
+    """
+    ts_now       = now_ts()
+    current_year = datetime.fromtimestamp(ts_now, tz=timezone.utc).year
+
+    # ── Grin ──────────────────────────────────────────────────────────────────
+    # 2019: partial year (mainnet Jan 15).  supply_start = 0 → rate undefined → null.
+    # Current year: projected annual rate (GRINS_PER_YEAR / supply_at_jan1) so
+    # consumers always get a full-year estimate rather than a partial accumulation.
+    GRINS_PER_YEAR = 365.25 * 86400  # 31,557,600
+
+    grin_data = []
+    for year in range(2019, current_year + 1):
+        ts_jan1      = int(datetime(year, 1, 1, tzinfo=timezone.utc).timestamp())
+        ts_jan1_next = int(datetime(year + 1, 1, 1, tzinfo=timezone.utc).timestamp())
+
+        if year == 2019:
+            # Mainnet launched mid-January; supply at year start = 0.
+            supply_start = 0
+            new_coins    = ts_jan1_next - _MAINNET_TS   # coins mined Jan 15 – Dec 31
+            rate_pct     = None                          # undefined: started from 0
+        elif year == current_year:
+            supply_start = ts_jan1 - _MAINNET_TS
+            new_coins    = round(GRINS_PER_YEAR)        # projected full-year emission
+            rate_pct     = round((GRINS_PER_YEAR / supply_start) * 100, 2)
+        else:
+            supply_start = ts_jan1 - _MAINNET_TS
+            new_coins    = ts_jan1_next - ts_jan1
+            rate_pct     = round((new_coins / supply_start) * 100, 2)
+
+        grin_data.append({
+            "year":         year,
+            "supply_start": supply_start,
+            "new_coins":    new_coins,
+            "rate_pct":     rate_pct,
+        })
+
+    _write_json("inflation.json", {
+        "updated":     ts_now,
+        "description": "Annual supply inflation comparison since Grin mainnet (2019-present)",
+        "unit":        "percent",
+        "mainnet_ts":  _MAINNET_TS,
+        "mainnet_date": "2019-01-15",
+        "notes": {
+            "grin_2019":       "Partial year — mainnet launched Jan 15. supply_start=0, rate_pct=null (undefined).",
+            "grin_current_yr": "Projected full-year rate (GRINS_PER_YEAR / supply_at_jan1). Updates every 5 min.",
+            "usd_cpi_source":  "World Bank API — indicator FP.CPI.TOTL.ZG (year-over-year %)",
+            "gold_source":     "World Gold Council annual mine production / cumulative above-ground stock",
+        },
+        "grin":    grin_data,
+        "usd_cpi": _fetch_usd_cpi(),
+        "gold":    _calc_gold_inflation(),
+    })
 
 def _write_json(filename, data):
     path = os.path.join(WWW_DATA, filename)

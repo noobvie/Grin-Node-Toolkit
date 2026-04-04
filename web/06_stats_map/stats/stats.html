@@ -755,6 +755,28 @@
     <div class="chart-wrap" id="price-btc-chart-wrap"><canvas id="chart-price-btc"></canvas></div>
   </div>
 
+  <!-- Inflation Rate Comparison -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">
+        <span class="dot dot-grin"></span>Inflation Rate Comparison
+        <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">Annual supply dilution · log scale</span>
+      </div>
+      <div class="range-btns" id="infl-toggles">
+        <button class="range-btn active" data-ds="0" onclick="toggleInflDs(0)">GRIN</button>
+        <button class="range-btn active" data-ds="1" onclick="toggleInflDs(1)">BTC</button>
+        <button class="range-btn active" data-ds="2" onclick="toggleInflDs(2)">USD CPI</button>
+        <button class="range-btn active" data-ds="3" onclick="toggleInflDs(3)">Gold</button>
+      </div>
+    </div>
+    <div class="chart-wrap"><canvas id="chart-inflation"></canvas></div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;padding:6px 0 2px;font-size:11px;color:var(--muted);">
+      <span>GRIN &amp; BTC: deterministic emission math</span>
+      <span>USD: World Bank (FP.CPI.TOTL.ZG)</span>
+      <span>Gold: World Gold Council supply data</span>
+    </div>
+  </div>
+
   <!-- Node versions -->
   <div class="card">
     <div class="card-header">
@@ -868,6 +890,16 @@
           <span class="api-chevron">▶</span>
         </div>
         <span class="api-desc">GRIN/USDT (Gate.io) — current price, 24h stats, OHLCV history for Day / Week / Month / Year / All Time</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-inflation" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/inflation</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Grin annual supply inflation rate since mainnet (2019→present) — deterministic 1 GRIN/sec constant emission. Each entry: <code>{year, supply_start, new_coins, rate_pct}</code></span>
       </div>
     </div>
     <div class="api-note">
@@ -1223,6 +1255,218 @@ function makePriceChartBTC(id) {
   });
 }
 
+// ── Inflation comparison chart ────────────────────────────────────────────────
+const MAINNET_TS = 1547510400; // 2019-01-15 00:00 UTC (seconds)
+
+function grinInflationByYear() {
+  // 2019 is excluded: mainnet launched Jan 15 so supply ≈ 0 at year start → undefined rate.
+  // Current year uses projected annual rate (same formula as the stat bar) rather than
+  // partial-year actuals, so the point represents a full-year estimate.
+  const GRINS_PER_YEAR = 365.25 * 86400;
+  const pts = [];
+  const currentYear = new Date().getUTCFullYear();
+  for (let y = 2020; y <= currentYear; y++) {
+    const tsStart = Date.UTC(y, 0, 1) / 1000;
+    const supply  = tsStart - MAINNET_TS;        // GRIN emitted up to Jan 1 of year y
+    let rate;
+    if (y === currentYear) {
+      rate = (GRINS_PER_YEAR / supply) * 100;    // projected: what the full year will be
+    } else {
+      rate = ((Date.UTC(y + 1, 0, 1) / 1000 - tsStart) / supply) * 100;
+    }
+    pts.push({ x: Date.UTC(y, 6, 1), y: Math.round(rate * 10) / 10 });
+  }
+  return pts;
+}
+
+function btcInflationByYear() {
+  // Known halving timestamps (seconds UTC, approximate)
+  const halvings = [
+    { ts: 1231006505, subsidy: 50 },    // Genesis   Jan  3 2009
+    { ts: 1354116278, subsidy: 25 },    // Halving 1 Nov 28 2012
+    { ts: 1468082773, subsidy: 12.5 },  // Halving 2 Jul  9 2016
+    { ts: 1589225023, subsidy: 6.25 },  // Halving 3 May 11 2020
+    { ts: 1713571767, subsidy: 3.125 }, // Halving 4 Apr 19 2024
+    { ts: 1808000000, subsidy: 1.5625 },// Halving 5 ~2028 (est.)
+  ];
+  const BLOCK_SEC = 600; // 10-min avg
+
+  function subsidyAt(ts) {
+    for (let i = halvings.length - 1; i >= 0; i--)
+      if (ts >= halvings[i].ts) return halvings[i].subsidy;
+    return 50;
+  }
+
+  function supplyAt(ts) {
+    let supply = 0;
+    for (let i = 0; i < halvings.length; i++) {
+      if (ts <= halvings[i].ts) break;
+      const pEnd = i + 1 < halvings.length ? Math.min(ts, halvings[i + 1].ts) : ts;
+      supply += Math.floor((pEnd - halvings[i].ts) / BLOCK_SEC) * halvings[i].subsidy;
+    }
+    return supply;
+  }
+
+  // Current year: project the full-year expected new supply rather than counting partial blocks.
+  const BTC_BLOCKS_PER_YEAR = 365.25 * 144;
+  const pts = [];
+  const currentYear = new Date().getUTCFullYear();
+  for (let y = 2019; y <= currentYear; y++) {
+    const tsStart     = Date.UTC(y, 0, 1) / 1000;
+    const tsEnd       = Date.UTC(y + 1, 0, 1) / 1000;
+    const supplyStart = supplyAt(tsStart);
+    let newBtc;
+    if (y === currentYear) {
+      // Projected annual: expected blocks × subsidy (handle halving if one falls this year)
+      const yearEndEst  = tsStart + 365.25 * 86400;
+      const midHalving  = halvings.find(h => h.ts >= tsStart && h.ts < yearEndEst);
+      if (midHalving) {
+        const dPre  = (midHalving.ts - tsStart) / 86400;
+        const dPost = 365.25 - dPre;
+        newBtc = dPre  * 144 * subsidyAt(tsStart)
+               + dPost * 144 * subsidyAt(midHalving.ts + 1);
+      } else {
+        newBtc = BTC_BLOCKS_PER_YEAR * subsidyAt(tsStart);
+      }
+    } else {
+      // Completed year: count actual blocks mined, split at any halving boundary
+      const midHalving = halvings.find(h => h.ts >= tsStart && h.ts < tsEnd);
+      if (midHalving) {
+        newBtc = Math.floor((midHalving.ts - tsStart) / BLOCK_SEC) * subsidyAt(tsStart)
+               + Math.floor((tsEnd - midHalving.ts)   / BLOCK_SEC) * subsidyAt(tsEnd - 1);
+      } else {
+        newBtc = Math.floor((tsEnd - tsStart) / BLOCK_SEC) * subsidyAt(tsStart);
+      }
+    }
+    pts.push({ x: Date.UTC(y, 6, 1), y: Math.round((newBtc / supplyStart) * 10000) / 100 });
+  }
+  return pts;
+}
+
+// USD CPI and Gold are loaded from /api/inflation (inflation.json, built by 06_collector.py).
+// Datasets start empty and are populated by updateInflationCpiGold() once loadAll() fetches the JSON.
+
+function makeInflationChart(id) {
+  const ctx = $(id).getContext("2d");
+  return new Chart(ctx, {
+    type: "line",
+    data: {
+      datasets: [
+        {
+          label: "GRIN",
+          data: grinInflationByYear(),
+          borderColor: "#ff9900",
+          backgroundColor: "#ff990018",
+          borderWidth: 1.5,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          fill: false,
+          tension: 0.3,
+          order: 1,
+        },
+        {
+          label: "BTC",
+          data: btcInflationByYear(),
+          borderColor: "#ffd700",
+          backgroundColor: "#ffd70018",
+          borderWidth: 1.5,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          fill: false,
+          tension: 0.3,
+          order: 2,
+        },
+        {
+          label: "USD CPI",
+          data: [],
+          borderColor: "#58a6ff",
+          backgroundColor: "#58a6ff18",
+          borderWidth: 1.5,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          fill: false,
+          tension: 0.3,
+          order: 3,
+        },
+        {
+          label: "Gold",
+          data: [],
+          borderColor: "#c0c0c0",
+          backgroundColor: "#c0c0c018",
+          borderWidth: 1.5,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          fill: false,
+          tension: 0.3,
+          order: 4,
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              if (ctx.dataset.hidden) return null;
+              const v = ctx.parsed.y;
+              return ` ${ctx.dataset.label}: ${fmtNum(v, v < 1 ? 2 : v < 10 ? 1 : 0)}%`;
+            },
+            title: items => {
+              const d = new Date(items[0].parsed.x);
+              return d.getUTCFullYear().toString();
+            },
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: "time",
+          time: { unit: "year", tooltipFormat: "yyyy" },
+          ticks: { maxTicksLimit: 8 },
+        },
+        y: {
+          type: "logarithmic",
+          ticks: {
+            callback: v => {
+              // Only label clean powers/multiples to avoid clutter on log scale
+              const labels = [0.5, 1, 2, 5, 10, 20, 50, 100, 200];
+              return labels.includes(v) ? fmtNum(v, v < 1 ? 1 : 0) + "%" : "";
+            },
+          }
+        }
+      }
+    }
+  });
+}
+
+function toggleInflDs(idx) {
+  if (!charts.inflation) return;
+  const ds  = charts.inflation.data.datasets[idx];
+  ds.hidden = !ds.hidden;
+  const btn = document.querySelector(`#infl-toggles [data-ds="${idx}"]`);
+  if (btn) btn.classList.toggle("active", !ds.hidden);
+  charts.inflation.update("none");
+}
+
+function updateInflationCpiGold(inflJson) {
+  if (!charts.inflation || !inflJson) return;
+  // dataset index 2 = USD CPI, index 3 = Gold
+  if (inflJson.usd_cpi?.length) {
+    charts.inflation.data.datasets[2].data =
+      inflJson.usd_cpi.map(d => ({ x: Date.UTC(d.year, 6, 1), y: d.rate_pct }));
+  }
+  if (inflJson.gold?.length) {
+    charts.inflation.data.datasets[3].data =
+      inflJson.gold.map(d => ({ x: Date.UTC(d.year, 6, 1), y: d.rate_pct }));
+  }
+  charts.inflation.update("none");
+}
+
 function makePeersChart(id) {
   const ctx = $(id).getContext("2d");
   const mkDs = (label, color) => ({
@@ -1272,7 +1516,8 @@ function initCharts() {
   charts.activity    = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee, v => fmt(v,0), fmtFeeTick);
   charts.activePeers = makePeersChart("chart-peers");
   charts.priceUsdt   = makePriceChartUSDT("chart-price-usdt");
-  charts.priceBtc   = makePriceChartBTC("chart-price-btc");
+  charts.priceBtc    = makePriceChartBTC("chart-price-btc");
+  charts.inflation   = makeInflationChart("chart-inflation");
 }
 
 // Range state
@@ -1496,7 +1741,7 @@ function updatePriceChartBTC(data, range) {
 let DATA_CACHE = {};
 
 async function loadAll() {
-  const [summary, hashrate, difficulty, transactions, fees, versions, peers, activePeers, price] =
+  const [summary, hashrate, difficulty, transactions, fees, versions, peers, activePeers, price, inflation] =
     await Promise.all([
       tryFetchJSON(DATA + "summary.json"),
       tryFetchJSON(DATA + "hashrate.json"),
@@ -1507,6 +1752,7 @@ async function loadAll() {
       tryFetchJSON(DATA + "peers.json"),
       tryFetchJSON(DATA + "active_peers.json"),
       tryFetchJSON(DATA + "price.json"),
+      tryFetchJSON(DATA + "inflation.json"),
     ]);
 
   const anyData = summary || hashrate || difficulty;
@@ -1515,7 +1761,7 @@ async function loadAll() {
     return;
   }
 
-  DATA_CACHE = { hashrate, difficulty, transactions, fees, versions, price, activePeers };
+  DATA_CACHE = { hashrate, difficulty, transactions, fees, versions, price, activePeers, inflation };
 
   // Stats bar
   if (summary) {
@@ -1557,6 +1803,7 @@ async function loadAll() {
   if (charts.difficulty && difficulty)   updateChartData(charts.difficulty, difficulty,   rangeState.diff);
   if (charts.activity    && transactions && fees) updateActivityChart(transactions, fees, rangeState.activity, activityMetric);
   if (charts.activePeers && activePeers)         updatePeersChart(activePeers, rangeState.activePeers, peersNetwork);
+  if (charts.inflation   && inflation)           updateInflationCpiGold(inflation);
 
   // Versions donut
   if (versions) renderVersions(versions);
@@ -1770,7 +2017,7 @@ document.addEventListener("DOMContentLoaded", boot);
   function openModal() {
     const base = window.location.origin;
     $("api-base-url").innerHTML = 'Base URL: <span>' + base + '</span>';
-    ["summary", "hashrate", "difficulty", "transactions", "fees", "active_peers", "versions", "price"].forEach(ep => {
+    ["summary", "hashrate", "difficulty", "transactions", "fees", "active_peers", "versions", "price", "inflation"].forEach(ep => {
       const el = $("ep-" + ep);
       if (el) el.href = base + "/api/" + ep;
     });

@@ -846,6 +846,16 @@
         <span class="api-desc">GRIN/USDT (Gate.io) — current price, 24h stats, OHLCV history for Day / Week / Month / Year / All Time</span>
       </div>
     </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-inflation" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/inflation</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Annual supply inflation comparison since Grin mainnet (2019–present) — <code>grin</code> (deterministic emission math), <code>usd_cpi</code> (World Bank FP.CPI.TOTL.ZG), <code>gold</code> (WGC mine production ÷ above-ground stock). Each entry: <code>{year, rate_pct}</code></span>
+      </div>
+    </div>
     <div class="api-note">
       <strong>Rate limit:</strong> 30 req / min per IP &nbsp;·&nbsp;
       <strong>Cache:</strong> 5 min &nbsp;·&nbsp;
@@ -1259,7 +1269,7 @@ boot();
   function openModal() {
     const base = window.location.origin;
     $("api-base-url").innerHTML = 'Base URL: <span>' + base + '</span>';
-    ["summary", "hashrate", "difficulty", "transactions", "fees", "active_peers", "versions", "price"].forEach(ep => {
+    ["summary", "hashrate", "difficulty", "transactions", "fees", "active_peers", "versions", "price", "inflation"].forEach(ep => {
       const el = $("ep-" + ep);
       if (el) el.href = base + "/api/" + ep;
     });

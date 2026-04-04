@@ -1527,7 +1527,7 @@ def main():
     group.add_argument("--backfill-stats", nargs="?", const=180, metavar="DAYS|all",
                        help="Fetch TX/fee stats for last N days or 'all' for complete history (default: 180)")
     group.add_argument("--export-inflation", action="store_true",
-                       help="Write inflation.json only (pure math + World Bank CPI fetch, no DB needed)")
+                       help="Write inflation.json — fetches USD M2 + Global M2 from World Bank, Gold from WGC, stores in DB, exports JSON")
     args = parser.parse_args()
 
     if args.init_db:

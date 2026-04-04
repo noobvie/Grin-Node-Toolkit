@@ -372,12 +372,12 @@ EOF
         success "Price collector installed."
     fi
 
-    # Generate inflation.json immediately — pure math + World Bank M2, no blockchain DB needed.
+    # Generate issuance.json immediately — pure math + World Bank M2, no blockchain DB needed.
     # This makes the Inflation Rate Comparison chart visible right after install,
     # without waiting for the first Import Data / --update run.
-    info "Generating inflation.json (pure math — no import needed)..."
+    info "Generating issuance.json (pure math — no import needed)..."
     env $(cat "$DATA_DIR/config.env" | tr '\n' ' ') python3 "$COLLECTOR_BIN" --export-inflation \
-        || warn "inflation.json generation skipped — will be created on first --update run."
+        || warn "issuance.json generation skipped — will be created on first --update run."
 
     # Fix ownership so Nginx (www-data) can serve all web files
     info "Setting file ownership to www-data..."
@@ -454,7 +454,7 @@ import_data() {
         f) bin="$COLLECTOR_BIN"; cmd="--update";             desc="Stats: Incremental update" ;;
         g) bin="$COLLECTOR_BIN"; cmd="--peers-only";          desc="Stats: Peers geolocation + active peers chart update" ;;
         # ── Inflation comparison ─────────────────────────────────────────────
-        k) bin="$COLLECTOR_BIN"; cmd="--export-inflation";   desc="Inflation: Fetch USD M2 (World Bank FM.LBL.BMNY.ZG) + Gold (WGC) → store in DB + write inflation.json" ;;
+        k) bin="$COLLECTOR_BIN"; cmd="--export-inflation";   desc="Inflation: Fetch USD M2 (World Bank FM.LBL.BMNY.ZG) + Gold (WGC) → store in DB + write issuance.json" ;;
         # ── Price collector ──────────────────────────────────────────────────
         h)
             [[ ! -f "$PRICE_COLLECTOR_BIN" ]] && { warn "Price collector not installed."; sleep 1; return; }
@@ -618,7 +618,7 @@ server {
     #   /api/active_peers → mainnet+testnet peer count history        (06_collector.py)
     #   /api/versions     → node version distribution                 (06_collector.py)
     #   /api/price        → GRIN/USDT price, OHLCV history            (06_price_collector.py)
-    #   /api/inflation    → annual supply inflation: grin/usd_m2/gold  (06_collector.py)
+    #   /api/issuance    → annual supply inflation: grin/usd_m2/gold  (06_collector.py)
     #   /api/peers        → disabled (privacy mode — peer data is internal only)
     #
     location = /api/summary      { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/summary.json;      }
@@ -629,7 +629,7 @@ server {
     location = /api/active_peers { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/active_peers.json; }
     location = /api/versions     { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/versions.json;     }
     location = /api/price        { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/price.json;        }
-    location = /api/inflation    { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/inflation.json;    }
+    location = /api/issuance    { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/issuance.json;    }
     location = /api/peers        { return 404; }
 
     # Block everything else under /api/ — no directory listing, no other files

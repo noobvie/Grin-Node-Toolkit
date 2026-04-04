@@ -1398,7 +1398,7 @@ def _read_inflation_ext(conn, asset):
 
 def export_inflation_json():
     """
-    Generate inflation.json — annual supply inflation comparison since Grin mainnet.
+    Generate issuance.json — annual supply inflation comparison since Grin mainnet.
       grin    : deterministic math (1 GRIN/sec emission) — always recalculated
       usd_m2 : World Bank API (US) → persisted in inflation_ext → served from DB
       gold   : WGC mine production calc → persisted in inflation_ext → served from DB
@@ -1446,7 +1446,7 @@ def export_inflation_json():
             "rate_pct":     rate_pct,
         })
 
-    _write_json("inflation.json", {
+    _write_json("issuance.json", {
         "updated":      ts_now,
         "description":  "Annual supply inflation comparison since Grin mainnet (2019-present)",
         "unit":         "percent",
@@ -1490,7 +1490,7 @@ def main():
     group.add_argument("--backfill-stats", nargs="?", const=180, metavar="DAYS|all",
                        help="Fetch TX/fee stats for last N days or 'all' for complete history (default: 180)")
     group.add_argument("--export-inflation", action="store_true",
-                       help="Write inflation.json — fetches USD M2 from World Bank + Gold from WGC, stores in DB, exports JSON")
+                       help="Write issuance.json — fetches USD M2 from World Bank + Gold from WGC, stores in DB, exports JSON")
     args = parser.parse_args()
 
     if args.init_db:
@@ -1506,7 +1506,7 @@ def main():
     elif args.export_inflation:
         os.makedirs(WWW_DATA, exist_ok=True)
         export_inflation_json()
-        print("[OK] inflation.json written to:", WWW_DATA)
+        print("[OK] issuance.json written to:", WWW_DATA)
     elif args.backfill_stats is not None:
         # Handle "all" keyword or numeric days
         if isinstance(args.backfill_stats, str) and args.backfill_stats.lower() == "all":

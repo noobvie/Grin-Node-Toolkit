@@ -773,7 +773,7 @@
           <a class="api-path" id="ep-summary" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/summary</a>
           <span class="api-chevron">▶</span>
         </div>
-        <span class="api-desc">Current block height, network hashrate (GPS), mining difficulty, coin supply, inflation rate</span>
+        <span class="api-desc">Current block height, network hashrate (GPS), mining difficulty, coin supply, issuance rate</span>
       </div>
     </div>
     <div class="api-endpoint">
@@ -850,7 +850,7 @@
       <span class="api-method">GET</span>
       <div style="flex:1;min-width:0">
         <div class="api-row">
-          <a class="api-path" id="ep-inflation" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/inflation</a>
+          <a class="api-path" id="ep-issuance" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/issuance</a>
           <span class="api-chevron">▶</span>
         </div>
         <span class="api-desc">Annual supply issuance rate (new units ÷ existing stock) since Grin mainnet (2019–present) — <code>grin</code> (deterministic emission math), <code>usd_m2</code> (World Bank FM.LBL.BMNY.ZG broad money growth), <code>gold</code> (WGC mine production ÷ above-ground stock). Each entry: <code>{year, rate_pct}</code>. Note: monetary supply growth, not CPI price inflation.</span>
@@ -1269,7 +1269,7 @@ boot();
   function openModal() {
     const base = window.location.origin;
     $("api-base-url").innerHTML = 'Base URL: <span>' + base + '</span>';
-    ["summary", "hashrate", "difficulty", "transactions", "fees", "active_peers", "versions", "price", "inflation"].forEach(ep => {
+    ["summary", "hashrate", "difficulty", "transactions", "fees", "active_peers", "versions", "price", "issuance"].forEach(ep => {
       const el = $("ep-" + ep);
       if (el) el.href = base + "/api/" + ep;
     });

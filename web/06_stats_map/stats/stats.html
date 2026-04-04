@@ -4,15 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Grin Network Stats — Hashrate, Difficulty &amp; Blockchain Data</title>
-<meta name="description" content="Live Grin network statistics: real-time hashrate (GPS), mining difficulty, block height, coin supply, inflation rate, active peer count, node version distribution, transactions per block, and fee history. Monitor the Grin (ツ) MimbleWimble blockchain.">
-<meta name="keywords" content="grin network stats, grin hashrate, grin mining difficulty, grin block height, grin blockchain statistics, grin node monitor, grin coin supply, grin inflation rate, grin GPS, grin transactions, grin fees, grin active peers, grin peer count, grin node count, mimblewimble stats, grin cryptocurrency data, grin blockchain explorer, grin network health, grin mining monitor, grin node version, cuckatoo32">
+<meta name="description" content="Live Grin network statistics: real-time hashrate (GPS), mining difficulty, block height, coin supply, supply issuance rate, active peer count, node version distribution, transactions per block, and fee history. Compare Grin supply issuance against Bitcoin, USD M2 and Gold. Monitor the Grin (ツ) MimbleWimble blockchain.">
+<meta name="keywords" content="grin network stats, grin hashrate, grin mining difficulty, grin block height, grin blockchain statistics, grin node monitor, grin coin supply, grin issuance rate, grin supply inflation, grin GPS, grin graphs per second, grin transactions, grin fees, grin active peers, grin peer count, grin node count, mimblewimble stats, grin cryptocurrency data, grin blockchain explorer, grin network health, grin mining monitor, grin node version, cuckatoo32, bitcoin supply issuance, crypto supply growth, monetary inflation comparison">
 <meta name="robots" content="index, follow">
 <meta property="og:title" content="Grin Network Stats — Hashrate, Difficulty &amp; Blockchain Data">
-<meta property="og:description" content="Real-time Grin network stats: hashrate (GPS), mining difficulty, block height, coin supply, inflation, active peer count, and transaction history. Live MimbleWimble blockchain data.">
+<meta property="og:description" content="Real-time Grin network stats: hashrate (GPS), mining difficulty, block height, coin supply, supply issuance rate vs Bitcoin, USD M2 and Gold, active peer count, and transaction history. Live MimbleWimble blockchain data.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Grin Network Stats — Hashrate &amp; Difficulty">
-<meta name="twitter:description" content="Live Grin blockchain stats: hashrate, difficulty, block height, coin supply, inflation rate, and peer count. Real-time MimbleWimble network data.">
+<meta name="twitter:description" content="Live Grin blockchain stats: hashrate, difficulty, block height, coin supply issuance rate, and peer count. Compare supply growth against Bitcoin, USD M2 and Gold. Real-time MimbleWimble network data.">
 <link rel="icon" href="grin-logo.svg" type="image/svg+xml">
 <script src="chart.min.js"></script>
 <script src="chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -678,7 +678,7 @@
     <div class="stat-value" id="s-supply">—</div>
   </div>
   <div class="stat-item">
-    <div class="stat-label">Inflation Rate</div>
+    <div class="stat-label">Issuance Rate</div>
     <div class="stat-value" id="s-inflation">—</div>
   </div>
   <div class="stat-item">
@@ -888,7 +888,7 @@
     <div class="chart-wrap" id="price-btc-chart-wrap"><canvas id="chart-price-btc"></canvas></div>
   </div>
 
-  <!-- Inflation Rate Comparison -->
+  <!-- Supply Issuance Rate -->
   <div class="card">
     <div class="card-header" style="align-items:flex-start;">
       <div class="card-title">
@@ -930,7 +930,7 @@
         <hr class="chart-info-sep">
         <h4>API</h4>
         This data is publicly available via our API — other sites are welcome to consume it:<br>
-        <a id="infl-api-link" href="#" target="_blank" rel="noopener">/api/inflation</a>
+        <a id="infl-api-link" href="#" target="_blank" rel="noopener">/api/issuance</a>
         — returns <code>grin[]</code>, <code>usd_m2[]</code>, <code>gold[]</code> arrays, each entry <code>{year, rate_pct}</code>.
       </div>
     </div>
@@ -974,6 +974,28 @@
 
 </main>
 
+<section style="max-width:860px;margin:0 auto;padding:24px 24px 8px;font-size:12px;color:var(--muted);line-height:1.8;">
+  <p>
+    <strong style="color:var(--text);">Grin (ツ) Network Statistics</strong> — live monitoring of the
+    <a href="https://grin.mw/" target="_blank" rel="noopener" style="color:var(--grin);">Grin MimbleWimble blockchain</a>.
+    Track real-time <strong>network hashrate</strong> (graphs per second, GPS), <strong>mining difficulty</strong> (Cuckatoo32, LWMA adjustment),
+    <strong>block height</strong>, <strong>coin supply</strong>, <strong>transactions per block</strong>, <strong>fees</strong>,
+    and <strong>active peer count</strong> across mainnet and testnet.
+  </p>
+  <p>
+    The <strong>Supply Issuance Rate</strong> chart compares annual new-supply growth across
+    <strong>Grin</strong> (constant 1 GRIN/second emission),
+    <strong>Bitcoin</strong> (halving schedule, projected to 2050),
+    <strong>USD M2</strong> (US broad money supply growth, World Bank data), and
+    <strong>Gold</strong> (mine production ÷ above-ground stock).
+    This is monetary supply dilution — distinct from CPI price inflation.
+  </p>
+  <p>
+    All data is available via a free <strong>public JSON API</strong> — CORS enabled, no authentication required.
+    Built with the open-source <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener" style="color:var(--grin);">Grin Node Toolkit</a>.
+  </p>
+</section>
+
 <footer>
   Data sourced from local Grin node &nbsp;·&nbsp;
   <a href="https://grin.mw/"                             target="_blank" rel="noopener">grin.mw</a>
@@ -996,7 +1018,7 @@
           <a class="api-path" id="ep-summary" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/summary</a>
           <span class="api-chevron">▶</span>
         </div>
-        <span class="api-desc">Current block height, network hashrate (GPS), mining difficulty, coin supply, inflation rate</span>
+        <span class="api-desc">Current block height, network hashrate (GPS), mining difficulty, coin supply, issuance rate</span>
       </div>
     </div>
     <div class="api-endpoint">
@@ -1073,7 +1095,7 @@
       <span class="api-method">GET</span>
       <div style="flex:1;min-width:0">
         <div class="api-row">
-          <a class="api-path" id="ep-inflation" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/inflation</a>
+          <a class="api-path" id="ep-issuance" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/issuance</a>
           <span class="api-chevron">▶</span>
         </div>
         <span class="api-desc">Annual supply issuance rate (new units ÷ existing stock) since Grin mainnet (2019–present) — <code>grin</code> (deterministic emission math), <code>usd_m2</code> (World Bank FM.LBL.BMNY.ZG broad money growth), <code>gold</code> (WGC mine production ÷ above-ground stock). Each entry: <code>{year, rate_pct}</code>. Note: this is monetary supply growth, not CPI price inflation.</span>
@@ -1525,7 +1547,7 @@ function btcInflationByYear() {
   return pts;
 }
 
-// USD M2 and Gold are loaded from /api/inflation (inflation.json, built by 06_collector.py).
+// USD M2 and Gold are loaded from /api/issuance (issuance.json, built by 06_collector.py).
 // Datasets start empty and are populated by updateInflationM2Gold() once loadAll() fetches the JSON.
 // _inflAll stores the full unfiltered data for each dataset so time-range filtering can slice it.
 
@@ -1649,8 +1671,8 @@ function toggleInflInfo() {
   // Set API link href to absolute URL on first open
   const link = document.getElementById("infl-api-link");
   if (link && link.getAttribute("href") === "#") {
-    link.href = window.location.origin + "/api/inflation";
-    link.textContent = window.location.origin + "/api/inflation";
+    link.href = window.location.origin + "/api/issuance";
+    link.textContent = window.location.origin + "/api/issuance";
   }
 }
 
@@ -1953,7 +1975,7 @@ async function loadAll() {
       tryFetchJSON(DATA + "peers.json"),
       tryFetchJSON(DATA + "active_peers.json"),
       tryFetchJSON(DATA + "price.json"),
-      tryFetchJSON(DATA + "inflation.json"),
+      tryFetchJSON(DATA + "issuance.json"),
     ]);
 
   const anyData = summary || hashrate || difficulty;
@@ -2218,7 +2240,7 @@ document.addEventListener("DOMContentLoaded", boot);
   function openModal() {
     const base = window.location.origin;
     $("api-base-url").innerHTML = 'Base URL: <span>' + base + '</span>';
-    ["summary", "hashrate", "difficulty", "transactions", "fees", "active_peers", "versions", "price", "inflation"].forEach(ep => {
+    ["summary", "hashrate", "difficulty", "transactions", "fees", "active_peers", "versions", "price", "issuance"].forEach(ep => {
       const el = $("ep-" + ep);
       if (el) el.href = base + "/api/" + ep;
     });

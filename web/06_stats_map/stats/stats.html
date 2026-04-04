@@ -806,7 +806,7 @@
         The number of Grin peers directly connected to this monitoring node at each sample point — a proxy for network participation and health over time.
         <hr class="chart-info-sep">
         <h4>Sampling</h4>
-        Polled every ~5 min from the node's <code>/v1/peers/connected</code> endpoint. Mainnet and Testnet peers are tracked separately. Stored as daily/hourly/recent series.
+        Polled every ~5 min via the node's owner API: <code>v2/owner → get_connected_peers</code> (JSON-RPC, requires Basic Auth). Mainnet and Testnet nodes are queried separately. Stored as daily/hourly/recent series.
         <hr class="chart-info-sep">
         <h4>Note</h4>
         Reflects only the peers visible to <i>this</i> node — the true network size is larger. Peer counts fluctuate naturally as nodes go online/offline.
@@ -953,7 +953,7 @@
         Distribution of Grin node client versions among peers connected to this monitoring node — a live snapshot of software adoption across the network.
         <hr class="chart-info-sep">
         <h4>How it works</h4>
-        Version strings are extracted from peer user-agent handshakes during the <code>/v1/peers/connected</code> poll. The chart reflects unique versions seen in the last 7 days.
+        Version strings are extracted from the <code>user_agent</code> field returned by <code>v2/owner → get_peers</code> (routing-table query, Healthy peers only). The chart reflects unique versions seen in the last 7 days.
         <hr class="chart-info-sep">
         <h4>Note</h4>
         Only peers directly connected to this node are counted. Peers running behind NAT or not reachable may be under-represented.
@@ -1565,7 +1565,7 @@ function makeInflationChart(id) {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      interaction: { mode: "index", intersect: false },
+      interaction: { mode: "x", intersect: false },
       plugins: {
         legend: { display: false },
         tooltip: {

@@ -803,13 +803,13 @@
     <div class="chart-info-panel" id="peers-info-panel">
       <div class="chart-info-panel-inner">
         <h4>What's shown</h4>
-        The number of Grin peers directly connected to this monitoring node at each sample point — a proxy for network participation and health over time.
+        The number of Grin peers with an <b>active TCP connection to this monitoring node</b> at each sample point. Grin nodes maintain 8–30 outbound connections — this chart tracks that count over time as a health indicator, not a census of the full network.
         <hr class="chart-info-sep">
         <h4>Sampling</h4>
-        Polled every ~5 min via the node's owner API: <code>v2/owner → get_connected_peers</code> (JSON-RPC, requires Basic Auth). Mainnet and Testnet nodes are queried separately. Stored as daily/hourly/recent series.
+        Queried every ~5 min via <code>v2/owner → get_connected_peers</code> (live sessions only). Mainnet and Testnet are tracked separately. The <b>Peer Map</b> tab gives the broader global view — it uses the full routing table (<code>get_peers</code>) to discover and geolocate nodes worldwide.
         <hr class="chart-info-sep">
         <h4>Note</h4>
-        Reflects only the peers visible to <i>this</i> node — the true network size is larger. Peer counts fluctuate naturally as nodes go online/offline.
+        Fluctuations are normal — peers connect and disconnect continuously. A sustained drop may indicate network issues or low node count.
       </div>
     </div>
     <div style="display: flex; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--border); flex-wrap: wrap;">
@@ -892,8 +892,8 @@
   <div class="card">
     <div class="card-header" style="align-items:flex-start;">
       <div class="card-title">
-        <span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleInflInfo()" id="infl-info-btn">Inflation Rate Comparison</span>
-        <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">Annual supply dilution · log scale · GRIN &amp; BTC projected to 2050</span>
+        <span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleInflInfo()" id="infl-info-btn">Supply Issuance Rate</span>
+        <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">New supply ÷ existing stock · log scale · GRIN &amp; BTC projected to 2050</span>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
         <div class="range-btns" id="infl-toggles">
@@ -912,8 +912,9 @@
     <!-- Collapsible info panel -->
     <div class="chart-info-panel" id="infl-info-panel">
       <div class="chart-info-panel-inner">
-        <h4>How it works</h4>
-        Each series shows the annual rate of new supply added relative to existing stock — the same question answered across five different assets.
+        <h4>What this is — and what it is not</h4>
+        This chart shows <b>supply issuance rate</b>: how fast new units enter circulation relative to the existing stock (<code>new_units / total_supply × 100</code>). It is the same concept applied across four different assets.<br><br>
+        This is <b>not</b> price inflation (CPI). CPI measures how fast consumer prices rise — a downstream effect shaped by demand, velocity, and many other factors. Supply issuance rate is the upstream cause: how aggressively an asset is being diluted. A high issuance rate <i>can</i> contribute to price inflation, but the two are distinct metrics. USD M2 and Gold are included here as the monetary-supply equivalents for comparison — not as price-level indicators.
         <hr class="chart-info-sep">
         <h4>Formulas</h4>
         <b>GRIN</b> — <code>1 GRIN/second</code> constant emission since mainnet (Jan 15 2019).
@@ -1075,7 +1076,7 @@
           <a class="api-path" id="ep-inflation" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/inflation</a>
           <span class="api-chevron">▶</span>
         </div>
-        <span class="api-desc">Annual supply inflation comparison since Grin mainnet (2019–present) — <code>grin</code> (deterministic emission math), <code>usd_m2</code> (World Bank FM.LBL.BMNY.ZG), <code>gold</code> (WGC mine production ÷ above-ground stock). Each entry: <code>{year, rate_pct}</code></span>
+        <span class="api-desc">Annual supply issuance rate (new units ÷ existing stock) since Grin mainnet (2019–present) — <code>grin</code> (deterministic emission math), <code>usd_m2</code> (World Bank FM.LBL.BMNY.ZG broad money growth), <code>gold</code> (WGC mine production ÷ above-ground stock). Each entry: <code>{year, rate_pct}</code>. Note: this is monetary supply growth, not CPI price inflation.</span>
       </div>
     </div>
     <div class="api-note">

@@ -235,6 +235,15 @@ def init_schema(conn):
             testnet_count   INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_pch_ts ON peer_count_history(sampled_at);
+
+        CREATE TABLE IF NOT EXISTS inflation_ext (
+            year     INTEGER NOT NULL,
+            asset    TEXT    NOT NULL,   -- 'usd_cpi' | 'gold'
+            rate_pct REAL,               -- null = not available / undefined
+            source   TEXT,               -- e.g. 'worldbank:FP.CPI.TOTL.ZG' or 'wgc:calc'
+            fetched  INTEGER NOT NULL,   -- unix ts when this row was last written
+            PRIMARY KEY (year, asset)
+        );
     """)
     conn.commit()
 
@@ -1318,22 +1327,39 @@ _GOLD_MINE_PROD_T = {
 _GOLD_STOCK_END_2018 = 190_000   # tonnes above-ground stock at end of 2018 (WGC)
 _GOLD_DEFAULT_PROD   = 3_650     # tonne/yr fallback for years not yet in WGC report
 
-def _calc_gold_inflation():
-    """Derive annual gold supply inflation from WGC mine production + cumulative stock."""
-    current_year = datetime.now(tz=timezone.utc).year
-    stock = _GOLD_STOCK_END_2018
-    result = []
-    for year in range(2019, current_year + 1):
-        prod = _GOLD_MINE_PROD_T.get(year, _GOLD_DEFAULT_PROD)
-        rate = round((prod / stock) * 100, 2)
-        result.append({"year": year, "mine_prod_t": prod, "stock_start_t": stock, "rate_pct": rate})
-        stock += prod
-    return result
+def _upsert_inflation_ext(conn, year, asset, rate_pct, source):
+    conn.execute(
+        """INSERT INTO inflation_ext (year, asset, rate_pct, source, fetched)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(year, asset) DO UPDATE SET
+               rate_pct = excluded.rate_pct,
+               source   = excluded.source,
+               fetched  = excluded.fetched""",
+        (year, asset, rate_pct, source, now_ts()),
+    )
 
-def _fetch_usd_cpi():
+def _refresh_gold_in_db(conn):
     """
-    Fetch US CPI year-over-year % from World Bank API (indicator FP.CPI.TOTL.ZG).
-    Free, no key required, CORS-enabled.  Returns list of {year, rate_pct} dicts.
+    Upsert gold supply inflation rows into inflation_ext using WGC production data.
+    Deterministic — safe to re-run any time; only updates rows where WGC data exists.
+    """
+    stock = _GOLD_STOCK_END_2018
+    current_year = datetime.now(tz=timezone.utc).year
+    for year in range(2019, current_year + 1):
+        prod = _GOLD_MINE_PROD_T.get(year)
+        if prod is None:
+            stock += _GOLD_DEFAULT_PROD   # advance stock estimate even for unknown years
+            continue                      # don't write speculative rows
+        rate = round((prod / stock) * 100, 2)
+        _upsert_inflation_ext(conn, year, "gold", rate, "wgc:calc")
+        stock += prod
+    conn.commit()
+
+def _refresh_usd_cpi_in_db(conn):
+    """
+    Fetch US CPI YoY % from World Bank API and upsert into inflation_ext.
+    If the fetch fails, existing DB rows are untouched — history is preserved.
+    Source: api.worldbank.org — indicator FP.CPI.TOTL.ZG (free, no key, CORS-enabled).
     """
     url = (
         "https://api.worldbank.org/v2/country/US/indicator/FP.CPI.TOTL.ZG"
@@ -1344,47 +1370,67 @@ def _fetch_usd_cpi():
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = json.loads(resp.read())
         items = raw[1] if isinstance(raw, list) and len(raw) > 1 else []
-        data = []
+        count = 0
         for item in items:
             if item.get("value") is not None:
                 year = int(item["date"])
                 if year >= 2019:
-                    data.append({"year": year, "rate_pct": round(float(item["value"]), 2)})
-        return sorted(data, key=lambda x: x["year"])
+                    _upsert_inflation_ext(
+                        conn, year, "usd_cpi",
+                        round(float(item["value"]), 2),
+                        "worldbank:FP.CPI.TOTL.ZG",
+                    )
+                    count += 1
+        conn.commit()
+        print(f"[OK] USD CPI: {count} year(s) upserted from World Bank.")
     except Exception as exc:
-        print(f"[WARN] USD CPI fetch from World Bank failed: {exc}")
-        return []
+        print(f"[WARN] USD CPI fetch from World Bank failed: {exc} — using cached DB rows.")
+
+def _read_inflation_ext(conn, asset):
+    """Read all stored rows for an asset from DB, sorted by year."""
+    rows = conn.execute(
+        "SELECT year, rate_pct, source FROM inflation_ext WHERE asset = ? ORDER BY year",
+        (asset,),
+    ).fetchall()
+    return [{"year": r[0], "rate_pct": r[1], "source": r[2]} for r in rows]
 
 def export_inflation_json():
     """
     Generate inflation.json — annual supply inflation comparison since Grin mainnet.
-      grin     : deterministic math (1 GRIN/sec emission)
-      usd_cpi  : fetched live from World Bank API (FP.CPI.TOTL.ZG)
-      gold     : calculated from WGC annual mine production + cumulative stock
-    Published at /api/inflation for external consumers.
+      grin    : deterministic math (1 GRIN/sec emission) — always recalculated
+      usd_cpi : World Bank API → persisted in inflation_ext → served from DB
+      gold    : WGC mine production calc → persisted in inflation_ext → served from DB
+
+    USD CPI and Gold are DB-backed: a source outage only prevents new rows from being
+    added — all historical rows already in the DB are preserved and still exported.
     """
     ts_now       = now_ts()
     current_year = datetime.fromtimestamp(ts_now, tz=timezone.utc).year
-
-    # ── Grin ──────────────────────────────────────────────────────────────────
-    # 2019: partial year (mainnet Jan 15).  supply_start = 0 → rate undefined → null.
-    # Current year: projected annual rate (GRINS_PER_YEAR / supply_at_jan1) so
-    # consumers always get a full-year estimate rather than a partial accumulation.
     GRINS_PER_YEAR = 365.25 * 86400  # 31,557,600
 
+    # ── Open DB, refresh external data, read back ─────────────────────────────
+    conn = open_db()
+    init_schema(conn)           # ensures inflation_ext table exists (safe migration)
+    _refresh_gold_in_db(conn)   # deterministic — always safe to run
+    _refresh_usd_cpi_in_db(conn)  # fetches World Bank; falls back to cached rows on failure
+
+    usd_cpi_rows = _read_inflation_ext(conn, "usd_cpi")
+    gold_rows    = _read_inflation_ext(conn, "gold")
+    conn.close()
+
+    # ── Grin (pure math, no DB) ───────────────────────────────────────────────
     grin_data = []
     for year in range(2019, current_year + 1):
         ts_jan1      = int(datetime(year, 1, 1, tzinfo=timezone.utc).timestamp())
         ts_jan1_next = int(datetime(year + 1, 1, 1, tzinfo=timezone.utc).timestamp())
 
         if year == 2019:
-            # Mainnet launched mid-January; supply at year start = 0.
             supply_start = 0
-            new_coins    = ts_jan1_next - _MAINNET_TS   # coins mined Jan 15 – Dec 31
-            rate_pct     = None                          # undefined: started from 0
+            new_coins    = ts_jan1_next - _MAINNET_TS
+            rate_pct     = None
         elif year == current_year:
             supply_start = ts_jan1 - _MAINNET_TS
-            new_coins    = round(GRINS_PER_YEAR)        # projected full-year emission
+            new_coins    = round(GRINS_PER_YEAR)
             rate_pct     = round((GRINS_PER_YEAR / supply_start) * 100, 2)
         else:
             supply_start = ts_jan1 - _MAINNET_TS
@@ -1399,20 +1445,20 @@ def export_inflation_json():
         })
 
     _write_json("inflation.json", {
-        "updated":     ts_now,
-        "description": "Annual supply inflation comparison since Grin mainnet (2019-present)",
-        "unit":        "percent",
-        "mainnet_ts":  _MAINNET_TS,
+        "updated":      ts_now,
+        "description":  "Annual supply inflation comparison since Grin mainnet (2019-present)",
+        "unit":         "percent",
+        "mainnet_ts":   _MAINNET_TS,
         "mainnet_date": "2019-01-15",
         "notes": {
-            "grin_2019":       "Partial year — mainnet launched Jan 15. supply_start=0, rate_pct=null (undefined).",
-            "grin_current_yr": "Projected full-year rate (GRINS_PER_YEAR / supply_at_jan1). Updates every 5 min.",
-            "usd_cpi_source":  "World Bank API — indicator FP.CPI.TOTL.ZG (year-over-year %)",
-            "gold_source":     "World Gold Council annual mine production / cumulative above-ground stock",
+            "grin_2019":       "Partial year — mainnet launched Jan 15. supply_start=0, rate_pct=null.",
+            "grin_current_yr": "Projected full-year rate (GRINS_PER_YEAR / supply_at_jan1).",
+            "usd_cpi_source":  "World Bank API — FP.CPI.TOTL.ZG. DB-backed: history survives outages.",
+            "gold_source":     "WGC mine production / cumulative stock. DB-backed: history survives.",
         },
         "grin":    grin_data,
-        "usd_cpi": _fetch_usd_cpi(),
-        "gold":    _calc_gold_inflation(),
+        "usd_cpi": usd_cpi_rows,
+        "gold":    gold_rows,
     })
 
 def _write_json(filename, data):
@@ -1441,6 +1487,8 @@ def main():
     group.add_argument("--peers-only",     action="store_true", help="Update peer data only")
     group.add_argument("--backfill-stats", nargs="?", const=180, metavar="DAYS|all",
                        help="Fetch TX/fee stats for last N days or 'all' for complete history (default: 180)")
+    group.add_argument("--export-inflation", action="store_true",
+                       help="Write inflation.json only (pure math + World Bank CPI fetch, no DB needed)")
     args = parser.parse_args()
 
     if args.init_db:
@@ -1453,6 +1501,10 @@ def main():
         conn.close()
         _update_peers()
         export_all_json()
+    elif args.export_inflation:
+        os.makedirs(WWW_DATA, exist_ok=True)
+        export_inflation_json()
+        print("[OK] inflation.json written to:", WWW_DATA)
     elif args.backfill_stats is not None:
         # Handle "all" keyword or numeric days
         if isinstance(args.backfill_stats, str) and args.backfill_stats.lower() == "all":

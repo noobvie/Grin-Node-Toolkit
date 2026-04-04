@@ -372,6 +372,13 @@ EOF
         success "Price collector installed."
     fi
 
+    # Generate inflation.json immediately — pure math + World Bank CPI, no blockchain DB needed.
+    # This makes the Inflation Rate Comparison chart visible right after install,
+    # without waiting for the first Import Data / --update run.
+    info "Generating inflation.json (pure math — no import needed)..."
+    env $(cat "$DATA_DIR/config.env" | tr '\n' ' ') python3 "$COLLECTOR_BIN" --export-inflation \
+        || warn "inflation.json generation skipped — will be created on first --update run."
+
     # Fix ownership so Nginx (www-data) can serve all web files
     info "Setting file ownership to www-data..."
     chown -R www-data:www-data "$WWW_DIR"
@@ -395,8 +402,9 @@ import_data() {
     echo -e "  ${DIM}Node : ${NODE_URL}${RESET}"
     echo ""
     echo -e "  ${BOLD}── Stats Collector  (node data: hashrate, TX, fees, active peers) ──${RESET}"
+    echo -e "  ${DIM}  Options b-g also fetch inflation comparison data (USD CPI + Gold → stored in DB)${RESET}"
     echo ""
-    echo -e "  ${GREEN}a${RESET}) Init DB schema only          ${DIM}(RUN ONCE! First-time setup without data)${RESET}"
+    echo -e "  ${GREEN}a${RESET}) Init DB schema only          ${DIM}(RUN ONCE! Creates tables — no data fetched)${RESET}"
     echo -e "  ${GREEN}b${RESET}) Full history import          ${DIM}(RUN ONCE! Import headers + TX/fees — 6+ hours)${RESET}"
     echo -e "  ${DIM}  ─── Optional ───────────────────────────────────────────${RESET}"
     echo -e "  ${GREEN}c${RESET}) Backfill last 180 days       ${DIM}(TX + fees — ~30 min, recommended first run)${RESET}"
@@ -404,6 +412,11 @@ import_data() {
     echo -e "  ${GREEN}e${RESET}) Backfill entire chain        ${DIM}(TX + fees from block 0 — several hours)${RESET}"
     echo -e "  ${GREEN}f${RESET}) Incremental update only      ${DIM}(new blocks since last run)${RESET}"
     echo -e "  ${GREEN}g${RESET}) Peers geolocation only       ${DIM}(refresh peer map + active peers chart, no blockchain data)${RESET}"
+    echo ""
+    echo -e "  ${BOLD}── Inflation Comparison  (USD CPI + Gold supply inflation → SQLite) ──${RESET}"
+    echo ""
+    echo -e "  ${GREEN}k${RESET}) Fetch inflation data only    ${DIM}(USD CPI from World Bank + Gold from WGC — no node needed)${RESET}"
+    echo -e "  ${DIM}  Use after init-DB (a) or if World Bank was unreachable during a previous run.${RESET}"
     echo ""
     echo -e "  ${BOLD}── Price Collector  (GRIN/USDT from Gate.io) ──${RESET}"
     echo ""
@@ -418,7 +431,7 @@ import_data() {
     fi
     echo -e "  ${DIM}0) Cancel${RESET}"
     echo ""
-    echo -ne "${BOLD}Select [a-j / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [a-k / 0]: ${RESET}"
     read -r imp_choice
     [[ "$imp_choice" == "0" || -z "$imp_choice" ]] && return
 
@@ -439,7 +452,9 @@ import_data() {
         d) bin="$COLLECTOR_BIN"; cmd="--backfill-stats 90";  desc="Stats: Backfill last 90 days" ;;
         e) bin="$COLLECTOR_BIN"; cmd="--backfill-stats all"; desc="Stats: Backfill entire chain TX/fees" ;;
         f) bin="$COLLECTOR_BIN"; cmd="--update";             desc="Stats: Incremental update" ;;
-        g) bin="$COLLECTOR_BIN"; cmd="--peers-only";         desc="Stats: Peers geolocation + active peers chart update" ;;
+        g) bin="$COLLECTOR_BIN"; cmd="--peers-only";          desc="Stats: Peers geolocation + active peers chart update" ;;
+        # ── Inflation comparison ─────────────────────────────────────────────
+        k) bin="$COLLECTOR_BIN"; cmd="--export-inflation";   desc="Inflation: Fetch USD CPI (World Bank) + Gold (WGC) → store in DB + write inflation.json" ;;
         # ── Price collector ──────────────────────────────────────────────────
         h)
             [[ ! -f "$PRICE_COLLECTOR_BIN" ]] && { warn "Price collector not installed."; sleep 1; return; }

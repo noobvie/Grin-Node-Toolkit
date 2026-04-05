@@ -75,12 +75,14 @@ drop_setup_wallet() {
     # ── Step 3/5 — Init or recover ────────────────────────────────────────────
     echo -e "  ${BOLD}Step 3/5 — Wallet init / recovery${RESET}"
     local wallet_pass=""
-    local is_new_wallet=false
-    if [[ -f "$DROP_WALLET_DIR/grin-wallet.toml" ]]; then
-        info "Wallet already initialized at $DROP_WALLET_DIR"
+    local wallet_seed_exists=false
+    [[ -f "$DROP_WALLET_DIR/wallet_data/wallet.seed" ]] && wallet_seed_exists=true
+
+    if $wallet_seed_exists; then
+        info "Existing wallet found: $DROP_WALLET_DIR/wallet_data/wallet.seed"
         echo -e "  ${GREEN}1${RESET}) Keep existing wallet  ${DIM}(skip init)${RESET}"
-        echo -e "  ${YELLOW}2${RESET}) Recover from seed"
-        echo -e "  ${RED}3${RESET}) Create NEW wallet  ${DIM}(overwrites existing data!)${RESET}"
+        echo -e "  ${YELLOW}2${RESET}) Recover from seed    ${DIM}(overwrites existing wallet!)${RESET}"
+        echo -e "  ${RED}3${RESET}) Create NEW wallet     ${DIM}(overwrites existing wallet!)${RESET}"
         echo -e "  ${DIM}0) Cancel${RESET}"
         echo -ne "  Select [1/2/3/0]: "
         read -r init_choice || true
@@ -90,28 +92,32 @@ drop_setup_wallet() {
         echo -e "  ${DIM}0) Cancel${RESET}"
         echo -ne "  Select [1/2/0]: "
         read -r init_choice || true
-        [[ "$init_choice" == "3" ]] && init_choice="1"  # remap if toml exists path
+        [[ "$init_choice" == "3" ]] && init_choice="1"
     fi
 
     case "$init_choice" in
         0) info "Cancelled."; return ;;
         1)
-            if [[ -f "$DROP_WALLET_DIR/grin-wallet.toml" ]]; then
+            if $wallet_seed_exists; then
                 info "Keeping existing wallet. Reading passphrase..."
                 wallet_pass=$(_drop_read_pass_prompt) || { pause; return; }
             else
-                wallet_pass=$(_drop_init_wallet "new") || { pause; return; }
-                is_new_wallet=true
+                _drop_init_wallet "new" || { pause; return; }
+                wallet_pass=$(cat "$DROP_PASS" 2>/dev/null || echo "")
             fi
             ;;
-        2) wallet_pass=$(_drop_init_wallet "recover") || { pause; return; } ;;
-        3) wallet_pass=$(_drop_init_wallet "new")    || { pause; return; }; is_new_wallet=true ;;
+        2) _drop_init_wallet "recover" || { pause; return; }
+           wallet_pass=$(cat "$DROP_PASS" 2>/dev/null || echo "") ;;
+        3) _drop_init_wallet "new" || { pause; return; }
+           wallet_pass=$(cat "$DROP_PASS" 2>/dev/null || echo "") ;;
         *) warn "Invalid choice."; pause; return ;;
     esac
     echo ""
 
-    # ── Step 2b/5 — Write grin-wallet.toml ───────────────────────────────────
-    echo -e "  ${BOLD}Step 2b/5 — Write grin-wallet.toml${RESET}"
+    # ── Step 2b/5 — Patch grin-wallet.toml with selected node ────────────────
+    # grin-wallet init creates a fresh toml; we only need to patch the node URL
+    # (and ports/paths). No delete — just update keys in the existing file.
+    echo -e "  ${BOLD}Step 2b/5 — Configure grin-wallet.toml${RESET}"
     _drop_write_toml "$chosen_node"
     echo ""
 
@@ -278,99 +284,156 @@ _drop_read_pass_prompt() {
     echo "$p"
 }
 
+_drop_read_pass_new() {
+    # Returns passphrase via stdout. Min 3 chars. Enter "0" to cancel (exit 1).
+    # All UI goes to >&2 so stdout stays clean for $() capture.
+    local pass pass2
+    while true; do
+        read -rs -p "  Passphrase (min 3 chars, 0 to cancel): " pass; echo "" >&2
+        [[ "$pass" == "0" ]] && return 1
+        if [[ ${#pass} -lt 3 ]]; then
+            echo "  Passphrase must be at least 3 characters." >&2
+            continue
+        fi
+        read -rs -p "  Confirm passphrase: " pass2; echo "" >&2
+        if [[ "$pass" != "$pass2" ]]; then
+            echo "  Passphrases do not match. Try again." >&2
+            unset pass pass2
+            continue
+        fi
+        unset pass2
+        break
+    done
+    printf '%s' "$pass"
+}
+
 _drop_init_wallet() {
     local mode="$1"  # "new" or "recover"
-    local wallet_pass wallet_pass2
+    # Writes passphrase to DROP_PASS directly.
+    # Must NOT be called via $() — grin-wallet needs a live TTY.
 
-    while true; do
-        read -rs -p "  Wallet passphrase (blank = no passphrase): " wallet_pass; echo "" >&2
-        read -rs -p "  Confirm passphrase: " wallet_pass2; echo "" >&2
-        if [[ "$wallet_pass" == "$wallet_pass2" ]]; then break; fi
-        error "Passphrases do not match. Try again."
-    done
+    # ── Overwrite guard ──────────────────────────────────────────────────────
+    if [[ -f "$DROP_WALLET_DIR/wallet_data/wallet.seed" ]]; then
+        echo ""
+        warn "Existing wallet detected: $DROP_WALLET_DIR/wallet_data/wallet.seed"
+        echo -e "  ${YELLOW}This will permanently delete the current wallet seed and config.${RESET}"
+        echo -e "  ${YELLOW}Make sure you have your seed phrase backed up before continuing.${RESET}"
+        echo -ne "  Continue? [y/N]: "
+        local overwrite_ok
+        read -r overwrite_ok || true
+        [[ "${overwrite_ok,,}" != "y" ]] && { info "Cancelled."; return 1; }
+    fi
 
+    # ── Remove existing wallet files ─────────────────────────────────────────
+    rm -f "$DROP_WALLET_DIR/grin-wallet.toml" \
+          "$DROP_WALLET_DIR/wallet_data/wallet.seed"
     mkdir -p "$DROP_WALLET_DIR"
+
+    # ── Passphrase ───────────────────────────────────────────────────────────
+    local wallet_pass
+    wallet_pass=$(_drop_read_pass_new) || { info "Cancelled."; return 1; }
+
+    # ── Run grin-wallet init ─────────────────────────────────────────────────
     local init_flag="-h"
     [[ "$mode" == "recover" ]] && init_flag="-hr"
 
-    local init_log="/tmp/grin_drop_init_$$"
     info "Running: grin-wallet $DROP_NET_FLAG init $init_flag"
-    echo -e "  ${YELLOW}Write down the seed phrase!${RESET}\n" >&2
+    [[ "$mode" == "new" ]] && echo -e "\n  ${YELLOW}Write down the seed phrase shown below!${RESET}\n"
 
-    local pass_arg=""
-    [[ -n "$wallet_pass" ]] && pass_arg="-p $wallet_pass"
+    # Run directly — no pipe, full TTY for grin-wallet's seed prompt
+    # Security trade-off: -p exposes the passphrase in the process argument list
+    # (visible via `ps aux` / /proc/<pid>/cmdline) for the duration of this call.
+    # grin-wallet has no stdin or env-var passphrase input — -p is the only option.
+    # Exposure is brief (one-time during init) and limited to users with root/ps access.
     # shellcheck disable=SC2086
     cd "$DROP_WALLET_DIR" && "$DROP_WALLET_BIN" \
         $DROP_NET_FLAG --top_level_dir "$DROP_WALLET_DIR" \
-        $pass_arg init $init_flag \
-        2>&1 | tee "$init_log" >&2
-    local rc=${PIPESTATUS[0]}
-
+        -p "$wallet_pass" init $init_flag
+    local rc=$?
     if [[ $rc -ne 0 ]]; then
         warn "Init exited with code $rc — check output above."
-        rm -f "$init_log"; return 1
+        return 1
     fi
 
-    # Save passphrase file
+    [[ "$mode" == "new" ]] && warn "IMPORTANT: Write down the seed phrase shown above on paper."
+    echo ""
+
+    # ── Save passphrase ──────────────────────────────────────────────────────
+    echo -e "  ${BOLD}${RED}⚠  Security warning:${RESET}"
+    echo -e "  ${YELLOW}  Saving the passphrase allows the wallet listener to auto-start on reboot${RESET}"
+    echo -e "  ${YELLOW}  and restart automatically if the wallet process crashes.${RESET}"
+    echo -e "  ${YELLOW}  It will be stored in PLAIN TEXT on this server.${RESET}"
+    echo -e "  ${YELLOW}  Your hosting provider and anyone with root access can read it.${RESET}"
+    echo -e "  ${YELLOW}  Recommendation: keep balance low, transfer funds to a personal wallet regularly.${RESET}"
+    echo ""
+    echo -ne "  Save passphrase for auto-start? [y/N]: "
+    local save_pass
+    read -r save_pass || true
+    [[ "${save_pass,,}" == "y" ]] && _drop_save_pass "$wallet_pass"
+    echo ""
+
+    # ── Seed backup ──────────────────────────────────────────────────────────
+    echo -ne "  Save encrypted seed backup? [y/N]: "
+    local save_seed
+    read -r save_seed || true
+    [[ "${save_seed,,}" == "y" ]] && _drop_backup_seed "$wallet_pass"
+
+    return 0
+}
+
+_drop_save_pass() {
+    local wallet_pass="$1"
     mkdir -p "$(dirname "$DROP_PASS")"
     echo "$wallet_pass" > "$DROP_PASS"
     chmod 600 "$DROP_PASS"
     id grin &>/dev/null && chown grin:grin "$DROP_PASS" 2>/dev/null || true
     success "Passphrase saved to $DROP_PASS (mode 600)"
-
-    echo "" >&2
-    echo -e "  ${BOLD}${RED}⚠ Security warning:${RESET}" >&2
-    echo -e "  ${YELLOW}Passphrase is stored plain text on server.${RESET}" >&2
-    echo -e "  ${YELLOW}Hosting provider + root can read it. Keep balance low.${RESET}" >&2
-    echo "" >&2
-
-    # Offer seed backup (new wallet only)
-    if [[ "$mode" == "new" ]]; then
-        echo -ne "  Save encrypted seed backup? [y/N]: " >&2
-        read -r do_backup || true
-        if [[ "${do_backup,,}" == "y" ]]; then
-            _drop_backup_seed "$init_log"
-        fi
-    fi
-    rm -f "$init_log"
-
-    echo "$wallet_pass"
 }
 
 _drop_backup_seed() {
-    local src_log="$1"
+    local wallet_pass="$1"
     local seed_file="$DROP_APP_DIR/seed-drop.txt"
 
     echo ""
-    echo -e "  ${BOLD}Encrypt seed backup${RESET}"
+    info "Retrieving seed phrase from wallet..."
+    local seed_output
+    # Security trade-off: same as init — -p exposes the passphrase in `ps aux`
+    # for the duration of this call. One-time, brief.
+    # shellcheck disable=SC2086
+    seed_output=$(cd "$DROP_WALLET_DIR" && "$DROP_WALLET_BIN" \
+        $DROP_NET_FLAG --top_level_dir "$DROP_WALLET_DIR" \
+        -p "$wallet_pass" recover 2>&1) || true
+
+    echo ""
+    warn "The seed phrase will be printed briefly. Make sure you are alone."
+    read -rs -p "  Press Enter to view seed — we will encrypt it immediately afterwards..."; echo ""
+    echo "  ─── SEED PHRASE ───────────────────────────────────────────"
+    echo "$seed_output"
+    echo "  ───────────────────────────────────────────────────────────"
+    echo ""
+    warn "Write it down on paper NOW if you have not already done so."
+    echo ""
+
     local seed_pass seed_pass2
     while true; do
         read -rs -p "  Seed backup password: " seed_pass; echo ""
-        [[ -z "$seed_pass" ]] && warn "Password cannot be empty." && continue
+        [[ -z "$seed_pass" ]] && { warn "Password cannot be empty."; continue; }
         read -rs -p "  Confirm password: " seed_pass2; echo ""
         [[ "$seed_pass" == "$seed_pass2" ]] && break
         error "Passwords do not match."
     done
 
-    # Extract seed lines (last ~6 lines containing words)
-    local seed_content
-    seed_content=$(tail -10 "$src_log" | grep -v "^\s*$" || true)
-
-    local tmp_plain="/tmp/grin_seed_plain_$$"
-    echo "$seed_content" > "$tmp_plain"
-    openssl enc -aes-256-cbc -pbkdf2 -iter 600000 \
-        -pass "pass:${seed_pass}" \
-        -in  "$tmp_plain" \
-        -out "$seed_file" 2>/dev/null \
-        || { warn "openssl encryption failed — seed not saved."; rm -f "$tmp_plain"; return; }
-    rm -f "$tmp_plain"
+    mkdir -p "$DROP_APP_DIR"
+    printf '%s\n' "$seed_output" | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 \
+        -pass "pass:${seed_pass}" -out "$seed_file" 2>/dev/null \
+        || { warn "openssl encryption failed — seed not saved."; unset seed_pass seed_pass2; return; }
     unset seed_pass seed_pass2
 
     chmod 600 "$seed_file"
     chown root:root "$seed_file" 2>/dev/null || true
     success "Encrypted seed backup → $seed_file (mode 600, owned root)"
-    echo ""
     echo -e "  ${DIM}Decrypt: openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in seed-drop.txt${RESET}"
+    echo ""
 }
 
 _drop_write_toml() {
@@ -536,6 +599,10 @@ _drop_start_both_sessions() {
     local wallet_pass
     wallet_pass=$(_drop_read_saved_pass)
 
+    # Security trade-off: -p embeds the passphrase as a literal string in the tmux
+    # command and exposes it in `ps aux` / /proc/<pid>/cmdline for the full lifetime
+    # of the grin-wallet listen/owner_api process (persistent, not just during startup).
+    # grin-wallet has no stdin or env-var passphrase input — -p is the only option.
     local pass_arg=""
     [[ -n "$wallet_pass" ]] && pass_arg="-p '$wallet_pass'"
     local base_cmd="'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg"

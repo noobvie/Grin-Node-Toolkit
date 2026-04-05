@@ -382,6 +382,9 @@ _cmd_wallet_setup_for_net() {
 
     local tmp_init="/tmp/grin_cmd_init_${net}_$$"
     mkdir -p "$wallet_dir"
+    # Security trade-off: -p exposes the passphrase in `ps aux` / /proc/<pid>/cmdline
+    # for the duration of this call. grin-wallet has no stdin or env-var passphrase
+    # input — -p is the only option. Exposure is brief (one-time during init).
     cd "$wallet_dir" && "$wallet_bin" $net_flag -p "$wallet_pass" init -h \
         2>&1 | tee "$tmp_init" || true
     echo ""
@@ -537,7 +540,13 @@ _cmd_start_listener() {
         fi
     fi
 
-    # Write launcher script to avoid embedding the password in the tmux command string
+    # Write launcher script to avoid embedding the password in the tmux command string.
+    # The passphrase is written to a root-only temp file (chmod 600), the shell variable
+    # is unset, and the launcher reads + deletes the file before exec-ing grin-wallet.
+    # This prevents the passphrase from appearing in the tmux session title or command.
+    # Security trade-off: -p still exposes the passphrase in `ps aux` / /proc/<pid>/cmdline
+    # for the full lifetime of the grin-wallet listen process (persistent, not just startup).
+    # grin-wallet has no stdin or env-var passphrase input — -p is the only option.
     local launcher="/opt/grin/cmdwallet/.${net_label,,}_listener.sh"
     local pass_tmp="/opt/grin/cmdwallet/.${net_label,,}_pass_tmp_$$"
     mkdir -p /opt/grin/cmdwallet

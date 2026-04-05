@@ -10,15 +10,18 @@
 # ─── Public nodes ─────────────────────────────────────────────────────────────
 
 MAINNET_NODES=(
-    "api.grin.money:3413"
-    "api.grinily.com:3413"
-    "api.grinnode.org:3413"
-    "main.gri.mw:3413"
-    "grincoin.org:3413"
+    "api.grin.money"
+    "api.grinily.com"
+    "api.grinnode.org"
+    "main.gri.mw"
+    "grincoin.org"
 )
 
 TESTNET_NODES=(
-    "prunetest.grin.money:13413"
+    "testapi.grin.money"
+    "testapi.grinily.com"
+    "testnet.grincoin.org"
+    "test.gri.mw"
 )
 
 # =============================================================================

@@ -156,8 +156,8 @@ _set_network() {
     if [[ "$DROP_NETWORK" == "mainnet" ]]; then
         DROP_NET_FLAG=""
         DROP_NET_LABEL="MAINNET"
-        DROP_WALLET_DIR="/opt/grin/drop-main/wallet"
-        DROP_WALLET_BIN="/opt/grin/drop-main/wallet/grin-wallet"
+        DROP_WALLET_DIR="/opt/grin/drop-main"
+        DROP_WALLET_BIN="/opt/grin/drop-main/grin-wallet"
         DROP_PASS="/opt/grin/drop-main/.wallet_pass_main"
         DROP_APP_DIR="/opt/grin/drop-main"
         DROP_WEB_DIR="/var/www/grin-drop-main"
@@ -173,8 +173,8 @@ _set_network() {
     else
         DROP_NET_FLAG="--testnet"
         DROP_NET_LABEL="TESTNET"
-        DROP_WALLET_DIR="/opt/grin/drop-test/wallet"
-        DROP_WALLET_BIN="/opt/grin/drop-test/wallet/grin-wallet"
+        DROP_WALLET_DIR="/opt/grin/drop-test"
+        DROP_WALLET_BIN="/opt/grin/drop-test/grin-wallet"
         DROP_PASS="/opt/grin/drop-test/.wallet_pass_test"
         DROP_APP_DIR="/opt/grin/drop-test"
         DROP_WEB_DIR="/var/www/grin-drop-test"

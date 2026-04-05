@@ -207,12 +207,13 @@ _drop_select_node() {
     fi
 
     echo -e "\n  ${BOLD}Available Grin nodes:${RESET}" >&2
-    local i=1
+    local i=1 first_online=0
     for node in "${nodes[@]}"; do
         local status http_code
         http_code=$(curl -o /dev/null -s -w "%{http_code}" --max-time 5 "https://$node/v2/foreign" 2>/dev/null || echo "000")
         if [[ "$http_code" =~ ^(2|3)[0-9]{2}$ ]] || [[ "$http_code" == "405" ]] || [[ "$http_code" == "404" ]]; then
             status="${GREEN}● online${RESET}"
+            [[ $first_online -eq 0 ]] && first_online=$i
         else
             status="${RED}○ offline${RESET}"
         fi
@@ -221,18 +222,33 @@ _drop_select_node() {
     done
 
     # Local node
-    local local_status
+    local local_status local_running=false
     if ss -tlnp 2>/dev/null | grep -q ":${local_port} "; then
         local_status="${GREEN}● running${RESET}"
+        local_running=true
     else
         local_status="${DIM}○ not running${RESET}"
     fi
     echo -e "  ${GREEN}$i${RESET}) Local node 127.0.0.1:${local_port}  $local_status" >&2
     echo -e "  ${DIM}0) Back${RESET}" >&2
-    echo ""  >&2
-    echo -ne "  Select node [1-$i/0]: " >&2
+    echo "" >&2
+
+    # Default: local if running, else first online public node
+    local default_sel=""
+    if $local_running; then
+        default_sel="$i"
+    elif [[ $first_online -gt 0 ]]; then
+        default_sel="$first_online"
+    fi
+
+    if [[ -n "$default_sel" ]]; then
+        echo -ne "  Select node [1-$i/0] (default $default_sel): " >&2
+    else
+        echo -ne "  Select node [1-$i/0]: " >&2
+    fi
     local sel
     read -r sel || true
+    [[ -z "$sel" && -n "$default_sel" ]] && sel="$default_sel"
     [[ "$sel" == "0" ]] && return 1
 
     local chosen=""
@@ -267,8 +283,8 @@ _drop_init_wallet() {
     local wallet_pass wallet_pass2
 
     while true; do
-        read -rs -p "  Wallet passphrase (blank = no passphrase): " wallet_pass; echo ""
-        read -rs -p "  Confirm passphrase: " wallet_pass2; echo ""
+        read -rs -p "  Wallet passphrase (blank = no passphrase): " wallet_pass; echo "" >&2
+        read -rs -p "  Confirm passphrase: " wallet_pass2; echo "" >&2
         if [[ "$wallet_pass" == "$wallet_pass2" ]]; then break; fi
         error "Passphrases do not match. Try again."
     done
@@ -279,7 +295,7 @@ _drop_init_wallet() {
 
     local init_log="/tmp/grin_drop_init_$$"
     info "Running: grin-wallet $DROP_NET_FLAG init $init_flag"
-    echo -e "  ${YELLOW}Write down the seed phrase!${RESET}\n"
+    echo -e "  ${YELLOW}Write down the seed phrase!${RESET}\n" >&2
 
     local pass_arg=""
     [[ -n "$wallet_pass" ]] && pass_arg="-p $wallet_pass"
@@ -287,7 +303,7 @@ _drop_init_wallet() {
     cd "$DROP_WALLET_DIR" && "$DROP_WALLET_BIN" \
         $DROP_NET_FLAG --top_level_dir "$DROP_WALLET_DIR" \
         $pass_arg init $init_flag \
-        2>&1 | tee "$init_log"
+        2>&1 | tee "$init_log" >&2
     local rc=${PIPESTATUS[0]}
 
     if [[ $rc -ne 0 ]]; then
@@ -302,15 +318,15 @@ _drop_init_wallet() {
     id grin &>/dev/null && chown grin:grin "$DROP_PASS" 2>/dev/null || true
     success "Passphrase saved to $DROP_PASS (mode 600)"
 
-    echo ""
-    echo -e "  ${BOLD}${RED}⚠ Security warning:${RESET}"
-    echo -e "  ${YELLOW}Passphrase is stored plain text on server.${RESET}"
-    echo -e "  ${YELLOW}Hosting provider + root can read it. Keep balance low.${RESET}"
-    echo ""
+    echo "" >&2
+    echo -e "  ${BOLD}${RED}⚠ Security warning:${RESET}" >&2
+    echo -e "  ${YELLOW}Passphrase is stored plain text on server.${RESET}" >&2
+    echo -e "  ${YELLOW}Hosting provider + root can read it. Keep balance low.${RESET}" >&2
+    echo "" >&2
 
     # Offer seed backup (new wallet only)
     if [[ "$mode" == "new" ]]; then
-        echo -ne "  Save encrypted seed backup? [y/N]: "
+        echo -ne "  Save encrypted seed backup? [y/N]: " >&2
         read -r do_backup || true
         if [[ "${do_backup,,}" == "y" ]]; then
             _drop_backup_seed "$init_log"

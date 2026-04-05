@@ -209,14 +209,14 @@ _drop_select_node() {
     echo -e "\n  ${BOLD}Available Grin nodes:${RESET}" >&2
     local i=1
     for node in "${nodes[@]}"; do
-        local host="${node%%:*}" port="${node##*:}"
-        local status
-        if curl -sf --max-time 5 "http://$host:$port/v1/version" &>/dev/null; then
+        local status http_code
+        http_code=$(curl -o /dev/null -s -w "%{http_code}" --max-time 5 "https://$node/v2/foreign" 2>/dev/null || echo "000")
+        if [[ "$http_code" =~ ^(2|3)[0-9]{2}$ ]] || [[ "$http_code" == "405" ]] || [[ "$http_code" == "404" ]]; then
             status="${GREEN}● online${RESET}"
         else
             status="${RED}○ offline${RESET}"
         fi
-        echo -e "  ${GREEN}$i${RESET}) $host  $status" >&2
+        echo -e "  ${GREEN}$i${RESET}) $node  $status" >&2
         ((i++))
     done
 
@@ -237,8 +237,7 @@ _drop_select_node() {
 
     local chosen=""
     if [[ "$sel" =~ ^[0-9]+$ && "$sel" -le "${#nodes[@]}" && "$sel" -ge 1 ]]; then
-        local node="${nodes[$((sel-1))]}"
-        chosen="http://${node%%:*}:${node##*:}"
+        chosen="https://${nodes[$((sel-1))]}"
     elif [[ "$sel" == "$i" ]]; then
         chosen="http://127.0.0.1:${local_port}"
     else

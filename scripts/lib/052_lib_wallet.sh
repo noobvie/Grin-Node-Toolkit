@@ -634,9 +634,9 @@ _drop_save_seed() {
 }
 
 _drop_write_toml() {
-    # grin-wallet init already wrote chain_type, ports, data_file_dir, log_file_path,
-    # use_tor_listener, etc. based on whether --testnet was passed.
-    # We only patch what init cannot know.
+    # grin-wallet init writes chain_type correctly based on --testnet, but the
+    # listen ports (api_listen_port, owner_api_listen_port) default to 3415/3420
+    # even on testnet — they must be explicitly patched here.
     local node_url="$1"
     local toml="$DROP_WALLET_DIR/grin-wallet.toml"
 
@@ -677,12 +677,16 @@ _drop_write_toml() {
         fi
     fi
 
-    # 3. Wallet own API secrets (foreign + owner)
+    # 3. Listen ports — enforce network-correct values (init defaults to 3415/3420 even for testnet)
+    _patch_toml "$toml" "api_listen_port"       "$DROP_TOR_PORT"
+    _patch_toml "$toml" "owner_api_listen_port" "$DROP_OWNER_PORT"
+
+    # 4. Wallet own API secrets (foreign + owner)
     # api_secret_path lives inside wallet_data/ — matches toolkit conf default
     _patch_toml "$toml" "api_secret_path"       "\"$DROP_WALLET_DIR/wallet_data/.api_secret\""
     _patch_toml "$toml" "owner_api_secret_path" "\"$DROP_WALLET_DIR/.owner_api_secret\""
 
-    # 4. Limit log rotation
+    # 5. Limit log rotation
     _patch_toml "$toml" "log_max_files" "3"
 
     local node_label="$node_url"

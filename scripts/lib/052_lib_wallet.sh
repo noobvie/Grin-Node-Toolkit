@@ -86,29 +86,19 @@ _drop_ensure_system_user() {
 }
 
 _drop_kill_wallet_processes() {
-    # Scan network-scoped ports and force-kill any running grin-wallet processes.
-    # Populates caller's running_pids array if declared before calling.
-    local wallet_ports=("$DROP_TOR_PORT" "$DROP_OWNER_PORT")
-    local _pids=()
-    for port in "${wallet_ports[@]}"; do
+    # Kill OS processes on wallet ports. No args = both network-scoped ports.
+    # Pass specific port(s) to target only those (e.g. during start/stop of one session).
+    local ports=("$@")
+    [[ ${#ports[@]} -eq 0 ]] && ports=("$DROP_TOR_PORT" "$DROP_OWNER_PORT")
+    for port in "${ports[@]}"; do
         local pids
         pids=$(ss -tlnp 2>/dev/null | awk "/:${port} /{print}" \
             | grep -oP 'pid=\K[0-9]+' || true)
         for pid in $pids; do
-            [[ -n "$pid" ]] && _pids+=("$pid (port $port)")
+            [[ -n "$pid" ]] || continue
+            kill -9 "$pid" 2>/dev/null && info "Killed PID $pid (port $port)" || true
         done
     done
-    if [[ ${#_pids[@]} -gt 0 ]]; then
-        echo -e "  ${YELLOW}Running grin-wallet processes detected:${RESET}"
-        for p in "${_pids[@]}"; do
-            echo -e "  ${YELLOW}  ● PID $p${RESET}"
-        done
-        echo ""
-        for p in "${_pids[@]}"; do
-            local pid="${p%% *}"
-            kill -9 "$pid" 2>/dev/null && info "Killed PID $pid" || true
-        done
-    fi
 }
 
 _drop_fix_ownership() {
@@ -816,6 +806,7 @@ _drop_start_session() {
 
     if [[ "$target" == "tor" || "$target" == "both" ]]; then
         tmux kill-session -t "$DROP_TMUX_TOR" 2>/dev/null || true
+        _drop_kill_wallet_processes "$DROP_TOR_PORT"
         _drop_launch_session "$DROP_TMUX_TOR" "$base_cmd listen"
         sleep 1
         if tmux has-session -t "$DROP_TMUX_TOR" 2>/dev/null; then
@@ -827,6 +818,7 @@ _drop_start_session() {
 
     if [[ "$target" == "owner" || "$target" == "both" ]]; then
         tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null || true
+        _drop_kill_wallet_processes "$DROP_OWNER_PORT"
         _drop_launch_session "$DROP_TMUX_OWNER" "$base_cmd owner_api"
         sleep 1
         if tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null; then
@@ -845,10 +837,16 @@ _drop_stop_session() {
     # $1 = "tor" | "owner" | "both"
     local target="$1"
     if [[ "$target" == "tor" || "$target" == "both" ]]; then
-        tmux kill-session -t "$DROP_TMUX_TOR"   2>/dev/null && success "Stopped $DROP_TMUX_TOR"   || info "Not running: $DROP_TMUX_TOR"
+        tmux kill-session -t "$DROP_TMUX_TOR" 2>/dev/null \
+            && success "Stopped tmux: $DROP_TMUX_TOR" \
+            || info "Tmux not running: $DROP_TMUX_TOR"
+        _drop_kill_wallet_processes "$DROP_TOR_PORT"
     fi
     if [[ "$target" == "owner" || "$target" == "both" ]]; then
-        tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null && success "Stopped $DROP_TMUX_OWNER" || info "Not running: $DROP_TMUX_OWNER"
+        tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null \
+            && success "Stopped tmux: $DROP_TMUX_OWNER" \
+            || info "Tmux not running: $DROP_TMUX_OWNER"
+        _drop_kill_wallet_processes "$DROP_OWNER_PORT"
     fi
     log "[drop_stop_session:$target] network=$DROP_NETWORK"
     pause

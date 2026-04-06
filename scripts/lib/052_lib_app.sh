@@ -17,26 +17,35 @@ drop_install() {
     echo -e "  ${DIM}Installs Node.js/npm, copies server files, creates systemd service.${RESET}\n"
 
     # ── Node.js ────────────────────────────────────────────────────────────────
+    local _do_install=false
     if command -v node &>/dev/null; then
         local node_ver; node_ver=$(node --version 2>&1)
-        success "Node.js $node_ver already installed."
         local major; major=$(echo "$node_ver" | tr -d 'v' | cut -d. -f1)
-        if [[ "$major" -lt 18 ]]; then
-            warn "Node.js $node_ver is old (need v18+). Consider upgrading."
-            echo -ne "  Continue anyway? [y/N]: "
+        if [[ "$major" -lt 22 ]]; then
+            warn "Node.js $node_ver is too old (need v22+)."
+            echo -ne "  Remove it and install v22 LTS now? [y/N]: "
             read -r ok || true
-            [[ "${ok,,}" != "y" ]] && { info "Cancelled."; pause; return; }
+            if [[ "${ok,,}" == "y" ]]; then
+                info "Removing old Node.js..."
+                apt-get remove -y nodejs npm 2>/dev/null || true
+                apt-get autoremove -y 2>/dev/null || true
+                success "Old Node.js removed."
+                _do_install=true
+            else
+                info "Cancelled."; pause; return
+            fi
+        else
+            success "Node.js $node_ver already installed."
         fi
     else
-        info "Node.js not found — installing via NodeSource (LTS)..."
-        if command -v curl &>/dev/null; then
-            curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
-                || { die "NodeSource setup failed."; pause; return; }
-        else
-            apt-get install -y curl
-            curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
-                || { die "NodeSource setup failed."; pause; return; }
-        fi
+        _do_install=true
+    fi
+
+    if [[ "$_do_install" == true ]]; then
+        info "Installing Node.js v22 LTS via NodeSource..."
+        command -v curl &>/dev/null || apt-get install -y curl
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+            || { die "NodeSource setup failed."; pause; return; }
         apt-get install -y nodejs \
             || { die "apt-get install nodejs failed."; pause; return; }
         success "Node.js $(node --version) installed."

@@ -334,7 +334,7 @@ drop_backup() {
     echo -e "  ${DIM}Creates an AES-256-CBC encrypted archive of:${RESET}"
     echo -e "  ${DIM}  - SQLite database ($DROP_DB)${RESET}"
     echo -e "  ${DIM}  - Config file ($DROP_CONF)${RESET}"
-    echo -e "  ${DIM}  - Seed backup ($DROP_APP_DIR/seed-drop.txt)${RESET}"
+    echo -e "  ${DIM}  - Seed words ($DROP_WORD)${RESET}"
     echo -e "  ${DIM}  - Wallet passphrase file ($DROP_PASS)${RESET}"
     echo ""
 
@@ -351,8 +351,7 @@ drop_backup() {
     [[ -f "$DROP_DB"   ]] && cp "$DROP_DB"   "$tmp_dir/drop.db"        || warn "DB not found — skipping"
     [[ -f "$DROP_CONF" ]] && cp "$DROP_CONF" "$tmp_dir/grin_drop.conf" || warn "Config not found — skipping"
     [[ -f "$DROP_PASS" ]] && cp "$DROP_PASS" "$tmp_dir/wallet_pass"    || warn "Pass file not found — skipping"
-    local seed_f="$DROP_APP_DIR/seed-drop.txt"
-    [[ -f "$seed_f"    ]] && cp "$seed_f"    "$tmp_dir/seed-drop.txt"  || info "No seed backup found."
+    [[ -f "$DROP_WORD" ]] && cp "$DROP_WORD" "$tmp_dir/seed-words"     || info "No seed words file found."
 
     echo -ne "  Backup password: "
     local bak_pass bak_pass2
@@ -493,11 +492,11 @@ drop_restore() {
         id grin &>/dev/null && chown grin:grin "$DROP_PASS" 2>/dev/null || true
         success "Wallet passphrase file restored."
     }
-    [[ -f "$tmp_dir/seed-drop.txt" ]] && {
-        cp "$tmp_dir/seed-drop.txt" "$DROP_APP_DIR/seed-drop.txt"
-        chmod 600 "$DROP_APP_DIR/seed-drop.txt"
-        chown root:root "$DROP_APP_DIR/seed-drop.txt" 2>/dev/null || true
-        success "Seed backup restored."
+    [[ -f "$tmp_dir/seed-words" ]] && {
+        cp "$tmp_dir/seed-words" "$DROP_WORD"
+        chmod 600 "$DROP_WORD"
+        chown root:root "$DROP_WORD" 2>/dev/null || true
+        success "Seed words file restored."
     }
 
     rm -rf "$tmp_dir"

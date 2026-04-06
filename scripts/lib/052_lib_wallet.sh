@@ -728,22 +728,21 @@ drop_wallet_listener() {
         echo ""
 
         echo -e "  ${GREEN}1${RESET}) Start / restart TOR session   ${DIM}($DROP_TMUX_TOR)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Start / restart Owner session  ${DIM}($DROP_TMUX_OWNER)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Start both"
+        echo -e "  ${GREEN}2${RESET}) Start / restart Owner API session  ${DIM}($DROP_TMUX_OWNER)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Start / restart Both"
         echo -e "  ${DIM}──────────────────────────────────────────${RESET}"
         echo -e "  ${GREEN}4${RESET}) Stop TOR session"
-        echo -e "  ${GREEN}5${RESET}) Stop Owner session"
+        echo -e "  ${GREEN}5${RESET}) Stop Owner API session"
         echo -e "  ${GREEN}6${RESET}) Stop both"
         echo -e "  ${DIM}──────────────────────────────────────────${RESET}"
-        echo -e "  ${GREEN}7${RESET}) Attach TOR session   ${DIM}($DROP_TMUX_TOR)${RESET}"
-        echo -e "  ${GREEN}8${RESET}) Attach Owner session ${DIM}($DROP_TMUX_OWNER)${RESET}"
+        echo -e "  ${GREEN}7${RESET}) Auto-start TOR/API wallets @reboot    ${DIM}[$cron_reboot_note${DIM}]${RESET}"
+        echo -e "  ${GREEN}8${RESET}) Watchdog: auto-restart wallet on crash ${DIM}[$watchdog_note${DIM}]${RESET}"
         echo -e "  ${DIM}──────────────────────────────────────────${RESET}"
-        echo -e "  ${GREEN}9${RESET}) Auto-start TOR/API wallets @reboot    ${DIM}[$cron_reboot_note${DIM}]${RESET}"
-        echo -e "  ${GREEN}10${RESET}) Watchdog: auto-restart wallet on crash ${DIM}[$watchdog_note${DIM}]${RESET}"
+        echo -e "  ${DIM}To view wallet output: Ctrl+B then S to switch tmux sessions${RESET}"
         echo -e "  ${DIM}↩  Refresh status${RESET}"
         echo -e "  ${DIM}0) Back${RESET}"
         echo ""
-        echo -ne "${BOLD}Select [1-10/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-8/0]: ${RESET}"
         local choice
         read -r choice || true
 
@@ -754,10 +753,8 @@ drop_wallet_listener() {
             4)  _drop_stop_session  tor   ;;
             5)  _drop_stop_session  owner ;;
             6)  _drop_stop_session  both  ;;
-            7)  tmux attach -t "$DROP_TMUX_TOR"   2>/dev/null || warn "Session not running." ;;
-            8)  tmux attach -t "$DROP_TMUX_OWNER" 2>/dev/null || warn "Session not running." ;;
-            9)  _drop_toggle_reboot_cron   ;;
-            10) _drop_toggle_watchdog_cron ;;
+            7)  _drop_toggle_reboot_cron   ;;
+            8)  _drop_toggle_watchdog_cron ;;
             0)  break ;;
             "")  continue ;;
             *)  warn "Invalid option."; sleep 1 ;;

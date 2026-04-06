@@ -120,12 +120,22 @@ _drop_fix_ownership() {
     chown -R grin:grin "$DROP_WALLET_DIR" 2>/dev/null || true
     chmod 750 "$DROP_WALLET_DIR"
     chmod 600 "$DROP_WALLET_DIR/grin-wallet.toml" 2>/dev/null || true
-    touch "$DROP_WALLET_DIR/.api_secret" \
-          "$DROP_WALLET_DIR/.owner_api_secret" 2>/dev/null || true
-    chown grin:grin "$DROP_WALLET_DIR/.api_secret" \
-                    "$DROP_WALLET_DIR/.owner_api_secret" 2>/dev/null || true
-    chmod 600 "$DROP_WALLET_DIR/.api_secret" \
-              "$DROP_WALLET_DIR/.owner_api_secret" 2>/dev/null || true
+
+    # Generate API secrets if missing or empty — grin-wallet fails to open with empty files
+    # api_secret_path → wallet_data/.api_secret  (wallet Foreign API, matches toolkit conf)
+    # owner_api_secret_path → .owner_api_secret  (wallet Owner API)
+    mkdir -p "$DROP_WALLET_DIR/wallet_data"
+    local secret_file
+    for secret_file in "$DROP_WALLET_DIR/wallet_data/.api_secret" \
+                       "$DROP_WALLET_DIR/.owner_api_secret"; do
+        if [[ ! -s "$secret_file" ]]; then
+            tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20 > "$secret_file"
+            info "Generated API secret: $secret_file"
+        fi
+        chown grin:grin "$secret_file" 2>/dev/null || true
+        chmod 600 "$secret_file"
+    done
+
     success "Ownership fixed."
 }
 
@@ -651,7 +661,11 @@ _drop_write_toml() {
         _patch_toml "$toml" "check_node_api_http_addr" "\"${node_url}\""
     fi
 
-    # 2. Local grin node API secret — only needed when connecting to a local node
+    # 2. Local grin node API secret — only needed when connecting to a local node.
+    #    grin-wallet calls the node's Foreign API (port 3413/13413) for get_version,
+    #    broadcast, etc. Without the correct secret the node returns 403 →
+    #    "Cannot parse response" / get_version error.
+    #    Node is always installed via script 01 → secret at <node_dir>/.foreign_api_secret
     if [[ "$node_url" == *"127.0.0.1"* ]]; then
         local node_secret_path=""
         local instances_conf="/opt/grin/conf/grin_instances_location.conf"
@@ -666,15 +680,18 @@ _drop_write_toml() {
             fi
             [[ -f "$node_dir/.foreign_api_secret" ]] && node_secret_path="$node_dir/.foreign_api_secret"
         fi
+
         if [[ -n "$node_secret_path" ]]; then
             _patch_toml "$toml" "node_api_secret_path" "\"$node_secret_path\""
+            info "Node API secret: $node_secret_path"
         else
-            info "Local node API secret not found — wallet will connect without auth."
+            warn "Node secret not found — run script 01 to build the node first."
         fi
     fi
 
     # 3. Wallet own API secrets (foreign + owner)
-    _patch_toml "$toml" "api_secret_path"       "\"$DROP_WALLET_DIR/.api_secret\""
+    # api_secret_path lives inside wallet_data/ — matches toolkit conf default
+    _patch_toml "$toml" "api_secret_path"       "\"$DROP_WALLET_DIR/wallet_data/.api_secret\""
     _patch_toml "$toml" "owner_api_secret_path" "\"$DROP_WALLET_DIR/.owner_api_secret\""
 
     # 4. Limit log rotation

@@ -730,32 +730,43 @@ drop_wallet_listener() {
         local watchdog_note="${DIM}not set${RESET}"
         crontab -l 2>/dev/null | grep -q "052_watchdog_${DROP_NETWORK}" \
             && watchdog_note="${GREEN}enabled${RESET}"
-        echo -e "  @reboot cron : $cron_reboot_note   watchdog cron : $watchdog_note"
+        echo -e "  Auto-start @reboot : $cron_reboot_note   Watchdog : $watchdog_note"
         echo ""
 
-        echo -e "  ${GREEN}1${RESET}) Start both sessions"
-        echo -e "  ${GREEN}2${RESET}) Stop  both sessions"
-        echo -e "  ${GREEN}3${RESET}) Attach TOR session   ${DIM}($DROP_TMUX_TOR)${RESET}"
-        echo -e "  ${GREEN}4${RESET}) Attach Owner session ${DIM}($DROP_TMUX_OWNER)${RESET}"
-        echo -e "  ${GREEN}5${RESET}) Toggle @reboot cron  ${DIM}(auto-restart on server reboot)${RESET}"
-        echo -e "  ${GREEN}6${RESET}) Toggle watchdog cron ${DIM}(check ports every 5 min)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Start / restart TOR session   ${DIM}($DROP_TMUX_TOR)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Start / restart Owner session  ${DIM}($DROP_TMUX_OWNER)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Start both"
+        echo -e "  ${DIM}──────────────────────────────────────────${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Stop TOR session"
+        echo -e "  ${GREEN}5${RESET}) Stop Owner session"
+        echo -e "  ${GREEN}6${RESET}) Stop both"
+        echo -e "  ${DIM}──────────────────────────────────────────${RESET}"
+        echo -e "  ${GREEN}7${RESET}) Attach TOR session   ${DIM}($DROP_TMUX_TOR)${RESET}"
+        echo -e "  ${GREEN}8${RESET}) Attach Owner session ${DIM}($DROP_TMUX_OWNER)${RESET}"
+        echo -e "  ${DIM}──────────────────────────────────────────${RESET}"
+        echo -e "  ${GREEN}9${RESET}) Auto-start TOR/API wallets @reboot    ${DIM}[$cron_reboot_note${DIM}]${RESET}"
+        echo -e "  ${GREEN}10${RESET}) Watchdog: auto-restart wallet on crash ${DIM}[$watchdog_note${DIM}]${RESET}"
         echo -e "  ${DIM}↩  Refresh status${RESET}"
         echo -e "  ${DIM}0) Back${RESET}"
         echo ""
-        echo -ne "${BOLD}Select [1-6/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-10/0]: ${RESET}"
         local choice
         read -r choice || true
 
         case "$choice" in
-            1) _drop_start_both_sessions ;;
-            2) _drop_stop_both_sessions  ;;
-            3) tmux attach -t "$DROP_TMUX_TOR"   2>/dev/null || warn "Session not running." ;;
-            4) tmux attach -t "$DROP_TMUX_OWNER" 2>/dev/null || warn "Session not running." ;;
-            5) _drop_toggle_reboot_cron  ;;
-            6) _drop_toggle_watchdog_cron ;;
-            0) break ;;
-            "") continue ;;
-            *) warn "Invalid option."; sleep 1 ;;
+            1)  _drop_start_session tor   ;;
+            2)  _drop_start_session owner ;;
+            3)  _drop_start_session both  ;;
+            4)  _drop_stop_session  tor   ;;
+            5)  _drop_stop_session  owner ;;
+            6)  _drop_stop_session  both  ;;
+            7)  tmux attach -t "$DROP_TMUX_TOR"   2>/dev/null || warn "Session not running." ;;
+            8)  tmux attach -t "$DROP_TMUX_OWNER" 2>/dev/null || warn "Session not running." ;;
+            9)  _drop_toggle_reboot_cron   ;;
+            10) _drop_toggle_watchdog_cron ;;
+            0)  break ;;
+            "")  continue ;;
+            *)  warn "Invalid option."; sleep 1 ;;
         esac
     done
 }
@@ -785,7 +796,9 @@ _drop_launch_session() {
     fi
 }
 
-_drop_start_both_sessions() {
+_drop_start_session() {
+    # $1 = "tor" | "owner" | "both"
+    local target="$1"
     local wallet_pass
     wallet_pass=$(_drop_read_saved_pass)
 
@@ -797,39 +810,43 @@ _drop_start_both_sessions() {
     [[ -n "$wallet_pass" ]] && pass_arg="-p '$wallet_pass'"
     local base_cmd="'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg"
 
-    # TOR / Foreign API session (grin-wallet listen)
-    if tmux has-session -t "$DROP_TMUX_TOR" 2>/dev/null; then
+    if [[ "$target" == "tor" || "$target" == "both" ]]; then
         tmux kill-session -t "$DROP_TMUX_TOR" 2>/dev/null || true
-    fi
-    _drop_launch_session "$DROP_TMUX_TOR" "$base_cmd listen"
-    sleep 1
-    if tmux has-session -t "$DROP_TMUX_TOR" 2>/dev/null; then
-        success "TOR/Foreign session started: $DROP_TMUX_TOR"
-    else
-        warn "TOR session may have exited — check wallet config."
+        _drop_launch_session "$DROP_TMUX_TOR" "$base_cmd listen"
+        sleep 1
+        if tmux has-session -t "$DROP_TMUX_TOR" 2>/dev/null; then
+            success "TOR/Foreign session started: $DROP_TMUX_TOR"
+        else
+            warn "TOR session may have exited — check wallet config."
+        fi
     fi
 
-    # Owner API session (grin-wallet owner_api)
-    if tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null; then
+    if [[ "$target" == "owner" || "$target" == "both" ]]; then
         tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null || true
-    fi
-    _drop_launch_session "$DROP_TMUX_OWNER" "$base_cmd owner_api"
-    sleep 1
-    if tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null; then
-        success "Owner API session started: $DROP_TMUX_OWNER"
-    else
-        warn "Owner API session may have exited — check wallet config."
+        _drop_launch_session "$DROP_TMUX_OWNER" "$base_cmd owner_api"
+        sleep 1
+        if tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null; then
+            success "Owner API session started: $DROP_TMUX_OWNER"
+        else
+            warn "Owner API session may have exited — check wallet config."
+        fi
     fi
 
     unset wallet_pass pass_arg base_cmd
-    log "[drop_start_both_sessions] network=$DROP_NETWORK"
+    log "[drop_start_session:$target] network=$DROP_NETWORK"
     pause
 }
 
-_drop_stop_both_sessions() {
-    tmux kill-session -t "$DROP_TMUX_TOR"   2>/dev/null && success "Stopped $DROP_TMUX_TOR"   || info "Not running: $DROP_TMUX_TOR"
-    tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null && success "Stopped $DROP_TMUX_OWNER" || info "Not running: $DROP_TMUX_OWNER"
-    log "[drop_stop_both_sessions] network=$DROP_NETWORK"
+_drop_stop_session() {
+    # $1 = "tor" | "owner" | "both"
+    local target="$1"
+    if [[ "$target" == "tor" || "$target" == "both" ]]; then
+        tmux kill-session -t "$DROP_TMUX_TOR"   2>/dev/null && success "Stopped $DROP_TMUX_TOR"   || info "Not running: $DROP_TMUX_TOR"
+    fi
+    if [[ "$target" == "owner" || "$target" == "both" ]]; then
+        tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null && success "Stopped $DROP_TMUX_OWNER" || info "Not running: $DROP_TMUX_OWNER"
+    fi
+    log "[drop_stop_session:$target] network=$DROP_NETWORK"
     pause
 }
 
@@ -840,7 +857,7 @@ _drop_toggle_reboot_cron() {
     if echo "$cur_cron" | grep -q "$tag"; then
         # Remove
         echo "$cur_cron" | grep -v "$tag" | crontab - 2>/dev/null || true
-        success "@reboot cron removed for $DROP_NET_LABEL."
+        success "Auto-start @reboot disabled for $DROP_NET_LABEL."
     else
         # Add — wrapper script reads pass from file, never appears in ps
         local wrapper="/opt/grin/drop-${DROP_NETWORK}-start.sh"
@@ -859,7 +876,7 @@ WRAPPER_EOF
         id grin &>/dev/null && chown root:grin "$wrapper" 2>/dev/null || true
 
         (echo "$cur_cron"; echo "@reboot $wrapper  $tag") | crontab - 2>/dev/null || true
-        success "@reboot cron enabled for $DROP_NET_LABEL. Wrapper: $wrapper"
+        success "Auto-start @reboot enabled for $DROP_NET_LABEL. Wrapper: $wrapper"
     fi
     pause
 }
@@ -870,7 +887,7 @@ _drop_toggle_watchdog_cron() {
 
     if echo "$cur_cron" | grep -q "$tag"; then
         echo "$cur_cron" | grep -v "$tag" | crontab - 2>/dev/null || true
-        success "Watchdog cron removed for $DROP_NET_LABEL."
+        success "Watchdog disabled for $DROP_NET_LABEL."
     else
         local wrapper="/opt/grin/drop-${DROP_NETWORK}-watchdog.sh"
         local pass_arg=""
@@ -889,7 +906,7 @@ WATCHDOG_EOF
         id grin &>/dev/null && chown root:grin "$wrapper" 2>/dev/null || true
 
         (echo "$cur_cron"; echo "*/5 * * * * $wrapper  # $tag") | crontab - 2>/dev/null || true
-        success "Watchdog cron enabled (every 5 min). Wrapper: $wrapper"
+        success "Watchdog enabled (checks every 5 min). Wrapper: $wrapper"
     fi
     pause
 }

@@ -82,6 +82,9 @@ DROP_NGINX_CONF=""
 DROP_NGINX_LINK=""
 DROP_TMUX_TOR=""    # tmux: wallet listen  (Foreign API)
 DROP_TMUX_OWNER=""  # tmux: wallet owner_api (Owner API v3)
+DROP_NODE_PORT=""   # Grin node Foreign API port (3413 mainnet / 13413 testnet)
+DROP_TOR_PORT=""    # wallet Foreign API port  (3415 mainnet / 13415 testnet)
+DROP_OWNER_PORT=""  # wallet Owner API port    (3420 mainnet / 13420 testnet)
 
 # Source dirs (single copy, both networks)
 DROP_APP_SRC="$TOOLKIT_ROOT/web/052_drop/server"
@@ -172,6 +175,9 @@ _set_network() {
         DROP_NGINX_LINK="/etc/nginx/sites-enabled/grin-drop-main"
         DROP_TMUX_TOR="drop-main-tor"
         DROP_TMUX_OWNER="drop-main-ownerapi"
+        DROP_NODE_PORT="3413"
+        DROP_TOR_PORT="3415"
+        DROP_OWNER_PORT="3420"
     else
         DROP_NET_FLAG="--testnet"
         DROP_NET_LABEL="TESTNET"
@@ -190,6 +196,9 @@ _set_network() {
         DROP_NGINX_LINK="/etc/nginx/sites-enabled/grin-drop-test"
         DROP_TMUX_TOR="drop-test-tor"
         DROP_TMUX_OWNER="drop-test-ownerapi"
+        DROP_NODE_PORT="13413"
+        DROP_TOR_PORT="13415"
+        DROP_OWNER_PORT="13420"
     fi
 }
 
@@ -268,8 +277,8 @@ drop_ensure_defaults() {
         "finalize_timeout_min:5"
         "service_port:$DROP_PORT"
         "wallet_address:"
-        "wallet_foreign_api_port:$( [[ $DROP_NETWORK == mainnet ]] && echo 3415 || echo 13415)"
-        "wallet_owner_api_port:$( [[ $DROP_NETWORK == mainnet ]]  && echo 3420 || echo 13420)"
+        "wallet_foreign_api_port:$DROP_TOR_PORT"
+        "wallet_owner_api_port:$DROP_OWNER_PORT"
         "wallet_foreign_secret:${DROP_WALLET_DIR}/wallet_data/.api_secret"
         "wallet_owner_secret:${DROP_WALLET_DIR}/.owner_api_secret"
         "wallet_pass_file:$DROP_PASS"
@@ -317,10 +326,8 @@ drop_menu_status() {
     echo ""
 
     # Grin node
-    local node_port=13413
-    [[ "$DROP_NETWORK" == "mainnet" ]] && node_port=3413
-    if ss -tlnp 2>/dev/null | grep -q ":${node_port} "; then
-        echo -e "  ${BOLD}Grin node${RESET}  : ${GREEN}● running${RESET}  ${DIM}(port $node_port)${RESET}"
+    if ss -tlnp 2>/dev/null | grep -q ":${DROP_NODE_PORT} "; then
+        echo -e "  ${BOLD}Grin node${RESET}  : ${GREEN}● running${RESET}  ${DIM}(port $DROP_NODE_PORT)${RESET}"
     else
         echo -e "  ${BOLD}Grin node${RESET}  : ${RED}✗ not running${RESET}  ${YELLOW}⚠ run Script 01${RESET}"
     fi

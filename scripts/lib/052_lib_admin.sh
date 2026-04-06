@@ -157,9 +157,6 @@ drop_status_screen() {
 
     # Wallet tmux sessions
     echo ""
-    local tor_port owner_port
-    [[ "$DROP_NETWORK" == "mainnet" ]] && { tor_port=3415; owner_port=3420; } \
-                                       || { tor_port=13415; owner_port=13420; }
     tmux has-session -t "$DROP_TMUX_TOR" 2>/dev/null \
         && echo -e "  ${BOLD}TOR session${RESET}  : ${GREEN}● running${RESET}  (tmux: $DROP_TMUX_TOR)" \
         || echo -e "  ${BOLD}TOR session${RESET}  : ${RED}not running${RESET}  ${DIM}(run option 2)${RESET}"
@@ -167,12 +164,12 @@ drop_status_screen() {
         && echo -e "  ${BOLD}Owner session${RESET}: ${GREEN}● running${RESET}  (tmux: $DROP_TMUX_OWNER)" \
         || echo -e "  ${BOLD}Owner session${RESET}: ${RED}not running${RESET}  ${DIM}(run option 2)${RESET}"
 
-    ss -tlnp 2>/dev/null | grep -q ":${tor_port} " \
-        && echo -e "  ${BOLD}Port :${tor_port}${RESET}   : ${GREEN}listening${RESET}" \
-        || echo -e "  ${BOLD}Port :${tor_port}${RESET}   : ${DIM}not listening${RESET}"
-    ss -tlnp 2>/dev/null | grep -q ":${owner_port} " \
-        && echo -e "  ${BOLD}Port :${owner_port}${RESET}  : ${GREEN}listening${RESET}" \
-        || echo -e "  ${BOLD}Port :${owner_port}${RESET}  : ${DIM}not listening${RESET}"
+    ss -tlnp 2>/dev/null | grep -q ":${DROP_TOR_PORT} " \
+        && echo -e "  ${BOLD}Port :${DROP_TOR_PORT}${RESET}   : ${GREEN}listening${RESET}" \
+        || echo -e "  ${BOLD}Port :${DROP_TOR_PORT}${RESET}   : ${DIM}not listening${RESET}"
+    ss -tlnp 2>/dev/null | grep -q ":${DROP_OWNER_PORT} " \
+        && echo -e "  ${BOLD}Port :${DROP_OWNER_PORT}${RESET}  : ${GREEN}listening${RESET}" \
+        || echo -e "  ${BOLD}Port :${DROP_OWNER_PORT}${RESET}  : ${DIM}not listening${RESET}"
 
     # DB
     echo ""

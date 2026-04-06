@@ -220,11 +220,11 @@ drop_configure() {
     echo ""
     echo -e "  ${BOLD}Wallet HTTP API:${RESET}"
 
-    local def_foreign; def_foreign=$(drop_read_conf "wallet_foreign_api_port" "$([[ $DROP_NETWORK == mainnet ]] && echo 3415 || echo 13415)")
+    local def_foreign; def_foreign=$(drop_read_conf "wallet_foreign_api_port" "$DROP_TOR_PORT")
     echo -ne "Foreign API port [${def_foreign}]: "
     read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "wallet_foreign_api_port" "$val"
 
-    local def_owner; def_owner=$(drop_read_conf "wallet_owner_api_port" "$([[ $DROP_NETWORK == mainnet ]] && echo 3420 || echo 13420)")
+    local def_owner; def_owner=$(drop_read_conf "wallet_owner_api_port" "$DROP_OWNER_PORT")
     echo -ne "Owner API port   [${def_owner}]: "
     read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "wallet_owner_api_port" "$val"
 

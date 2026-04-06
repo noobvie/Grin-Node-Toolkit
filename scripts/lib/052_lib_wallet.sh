@@ -779,9 +779,9 @@ _drop_read_saved_pass() {
     local wallet_pass=""
     if [[ -f "$DROP_PASS" ]]; then
         wallet_pass=$(cat "$DROP_PASS")
-        info "Using saved passphrase from $DROP_PASS"
+        info "Using saved passphrase from $DROP_PASS" >&2
     else
-        read -rs -p "  Wallet passphrase (blank if none): " wallet_pass; echo ""
+        read -rs -p "  Wallet passphrase (blank if none): " wallet_pass; echo "" >&2
     fi
     echo "$wallet_pass"
 }

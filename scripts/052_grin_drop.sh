@@ -8,7 +8,7 @@
 #    • Donation  — 3-tab donation flow (Direct / Slatepack Receive / Invoice)
 #
 #  Backend: Node.js/Express + grin-wallet HTTP API (Owner v3 ECDH + Foreign)
-#  Database: SQLite (better-sqlite3)
+#  Database: SQLite (node:sqlite — built-in, no native compilation)
 #
 #  ─── Network Selection ───────────────────────────────────────────────────────
 #   1) Testnet  (tGRIN — no monetary value, safe for testing)

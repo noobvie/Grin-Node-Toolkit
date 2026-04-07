@@ -20,7 +20,7 @@
 
 const fs       = require('fs');
 const path     = require('path');
-const Database = require('better-sqlite3');
+const { DatabaseSync: Database } = require('node:sqlite');
 
 const DB_PATH = process.env.DROP_DB
   || '/opt/grin/drop-test/grin_drop_test.db';
@@ -31,8 +31,8 @@ function getDb() {
   if (_db) return _db;
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   _db = new Database(DB_PATH);
-  _db.pragma('journal_mode = WAL');
-  _db.pragma('foreign_keys = ON');
+  _db.exec('PRAGMA journal_mode = WAL');
+  _db.exec('PRAGMA foreign_keys = ON');
   _initSchema(_db);
   return _db;
 }

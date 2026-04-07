@@ -21,9 +21,9 @@ drop_install() {
     if command -v node &>/dev/null; then
         local node_ver; node_ver=$(node --version 2>&1)
         local major; major=$(echo "$node_ver" | tr -d 'v' | cut -d. -f1)
-        if [[ "$major" -lt 22 ]]; then
-            warn "Node.js $node_ver is too old (need v22+)."
-            echo -ne "  Remove it and install v22 LTS now? [y/N]: "
+        if [[ "$major" -lt 24 ]]; then
+            warn "Node.js $node_ver is too old (need v24+)."
+            echo -ne "  Remove it and install v24 LTS now? [y/N]: "
             read -r ok || true
             if [[ "${ok,,}" == "y" ]]; then
                 info "Removing old Node.js..."
@@ -42,18 +42,18 @@ drop_install() {
     fi
 
     if [[ "$_do_install" == true ]]; then
-        info "Installing Node.js v22 LTS via NodeSource..."
+        info "Installing Node.js v24 LTS via NodeSource..."
         command -v curl &>/dev/null || apt-get install -y curl
-        curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+        curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
             || { die "NodeSource setup failed."; pause; return; }
         apt-get install -y nodejs \
             || { die "apt-get install nodejs failed."; pause; return; }
         success "Node.js $(node --version) installed."
     fi
 
-    if ! command -v npm &>/dev/null; then
-        apt-get install -y npm || { die "npm install failed."; pause; return; }
-    fi
+    info "Updating npm to latest..."
+    npm install -g npm@latest --no-audit --no-fund \
+        || { die "npm upgrade failed."; pause; return; }
     success "npm $(npm --version) ready."
     echo ""
 

@@ -78,13 +78,14 @@ DROP_DB=""
 DROP_SERVICE=""
 DROP_PORT=""
 DROP_LOG=""
-DROP_NGINX_CONF=""
-DROP_NGINX_LINK=""
 DROP_TMUX_TOR=""    # tmux: wallet listen  (Foreign API)
 DROP_TMUX_OWNER=""  # tmux: wallet owner_api (Owner API v3)
 DROP_NODE_PORT=""   # Grin node Foreign API port (3413 mainnet / 13413 testnet)
 DROP_TOR_PORT=""    # wallet Foreign API port  (3415 mainnet / 13415 testnet)
 DROP_OWNER_PORT=""  # wallet Owner API port    (3420 mainnet / 13420 testnet)
+
+# Shared (cross-network) config — stores unified domain + ssl_type
+DROP_SHARED_CONF="/opt/grin/drop_shared.conf"
 
 # Source dirs (single copy, both networks)
 DROP_APP_SRC="$TOOLKIT_ROOT/web/052_drop/server"
@@ -111,25 +112,46 @@ select_network() {
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
 
+    local _dom; _dom=$(_shared_read "subdomain" "")
+    if [[ -n "$_dom" ]]; then
+        echo -e "  ${DIM}Domain: ${GREEN}$_dom${RESET}"
+    else
+        echo -e "  ${DIM}Domain: ${YELLOW}not configured${RESET}  ${DIM}(run option 1)${RESET}"
+    fi
+    echo ""
+
     local test_st main_st
     systemctl is-active --quiet "grin-drop-test" 2>/dev/null \
         && test_st="${GREEN}running${RESET}" || test_st="${DIM}not running${RESET}"
     systemctl is-active --quiet "grin-drop-main" 2>/dev/null \
         && main_st="${GREEN}running${RESET}" || main_st="${DIM}not running${RESET}"
 
-    echo -e "  ${GREEN}1${RESET}) Testnet  ${DIM}(tGRIN — no monetary value)  drop: $test_st${RESET}"
-    echo -e "  ${YELLOW}2${RESET}) Mainnet  ${RED}⚠ sends/receives real GRIN${RESET}  drop: $main_st${RESET}"
-    echo -e "  ${CYAN}3${RESET}) Unified Homepage  ${DIM}(aggregated stats for both networks)${RESET}"
+    echo -e "${DIM}  ─── Domain & nginx ───────────────────────────────${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Create / Update domain  ${DIM}(nginx + SSL for unified drop)${RESET}"
+    echo -e "  ${GREEN}5${RESET}) Remove current domain   ${DIM}(delete nginx config + SSL)${RESET}"
+    echo ""
+    echo -e "${DIM}  ─── Networks ─────────────────────────────────────${RESET}"
+    echo -e "  ${GREEN}2${RESET}) Testnet  ${DIM}(tGRIN — no monetary value)  drop: $test_st${RESET}"
+    echo -e "  ${YELLOW}3${RESET}) Mainnet  ${RED}⚠ sends/receives real GRIN${RESET}  drop: $main_st${RESET}"
+    echo -e "  ${CYAN}4${RESET}) Unified Homepage  ${DIM}(aggregated stats for both networks)${RESET}"
+    echo ""
+    echo -e "${DIM}  ─── Admin (both networks) ────────────────────────${RESET}"
+    echo -e "  ${YELLOW}B${RESET}) Backup   ${DIM}(encrypted archive: testnet + mainnet)${RESET}"
+    echo -e "  ${YELLOW}R${RESET}) Restore  ${DIM}(decrypt + restore backup)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [1/2/3/0]: ${RESET}"
+    echo -ne "${BOLD}Select [1-5 / B / R / 0]: ${RESET}"
     local sel
     read -r sel || true
-    case "$sel" in
-        1) _set_network testnet ;;
-        2) _confirm_mainnet || return 1 ;;
-        3) _unified_homepage_menu; return 1 ;;
+    case "${sel,,}" in
+        1) drop_create_domain; return 1 ;;
+        2) _set_network testnet ;;
+        3) _confirm_mainnet || return 1 ;;
+        4) _unified_homepage_menu; return 1 ;;
+        5) drop_remove_domain; return 1 ;;
+        b) drop_backup; return 1 ;;
+        r) drop_restore; return 1 ;;
         0) return 1 ;;
         *) warn "Invalid option."; return 1 ;;
     esac
@@ -171,8 +193,6 @@ _set_network() {
         DROP_SERVICE="grin-drop-main"
         DROP_PORT="3005"
         DROP_LOG="/opt/grin/drop-main/grin_drop_main.log"
-        DROP_NGINX_CONF="/etc/nginx/sites-available/grin-drop-main"
-        DROP_NGINX_LINK="/etc/nginx/sites-enabled/grin-drop-main"
         DROP_TMUX_TOR="drop-main-tor"
         DROP_TMUX_OWNER="drop-main-ownerapi"
         DROP_NODE_PORT="3413"
@@ -192,8 +212,6 @@ _set_network() {
         DROP_SERVICE="grin-drop-test"
         DROP_PORT="3004"
         DROP_LOG="/opt/grin/drop-test/grin_drop_test.log"
-        DROP_NGINX_CONF="/etc/nginx/sites-available/grin-drop-test"
-        DROP_NGINX_LINK="/etc/nginx/sites-enabled/grin-drop-test"
         DROP_TMUX_TOR="drop-test-tor"
         DROP_TMUX_OWNER="drop-test-ownerapi"
         DROP_NODE_PORT="13413"
@@ -203,25 +221,23 @@ _set_network() {
 }
 
 _unified_homepage_menu() {
-    while true; do
-        clear
-        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN} 052) GRIN DROP — Unified Homepage${RESET}"
-        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo ""
-        echo -e "  ${DIM}Serves / → unified homepage, /testnet/ → :3004, /mainnet/ → :3005${RESET}"
-        echo ""
-        echo -e "  ${GREEN}1${RESET}) Setup nginx  ${DIM}(unified vhost + SSL)${RESET}"
-        echo -e "  ${DIM}0) Back${RESET}"
-        echo ""
-        echo -ne "${BOLD}Select [1/0]: ${RESET}"
-        local choice; read -r choice || true
-        case "$choice" in
-            1) drop_setup_unified_nginx || true ;;
-            0) break ;;
-            "") continue ;;
-        esac
-    done
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN} 052) GRIN DROP — Unified Homepage${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    local _dom; _dom=$(_shared_read "subdomain" "")
+    if [[ -n "$_dom" ]]; then
+        echo -e "  ${DIM}Homepage : ${GREEN}https://$_dom/${RESET}"
+        echo -e "  ${DIM}Testnet  : https://$_dom/testnet/${RESET}"
+        echo -e "  ${DIM}Mainnet  : https://$_dom/mainnet/${RESET}"
+    else
+        echo -e "  ${YELLOW}No domain configured.${RESET}"
+        echo -e "  ${DIM}Run option 1 (Create / Update domain) to set up nginx + SSL.${RESET}"
+    fi
+    echo ""
+    echo -ne "${BOLD}Press Enter to return...${RESET}"
+    read -r || true
 }
 
 # =============================================================================
@@ -302,6 +318,42 @@ drop_ensure_defaults() {
     done
 }
 
+# =============================================================================
+# SHARED CONFIG HELPERS (cross-network: domain, ssl_type)
+# =============================================================================
+
+_shared_read() {
+    local key="$1" default="${2:-}"
+    [[ -f "$DROP_SHARED_CONF" ]] || { echo "$default"; return; }
+    python3 - "$DROP_SHARED_CONF" "$key" "$default" << 'PYEOF' 2>/dev/null || echo "$default"
+import json, sys
+path, key, default = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    d = json.load(open(path))
+    v = d.get(key, default)
+    print(str(v).lower() if isinstance(v, bool) else v)
+except Exception:
+    print(default)
+PYEOF
+}
+
+_shared_write() {
+    local key="$1" val="$2"
+    mkdir -p "$(dirname "$DROP_SHARED_CONF")"
+    python3 - "$key" "$val" "$DROP_SHARED_CONF" << 'PYEOF'
+import json, sys, os
+key, val, path = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    d = json.load(open(path)) if os.path.isfile(path) else {}
+except Exception:
+    d = {}
+d[key] = val
+with open(path, "w") as f:
+    json.dump(d, f, indent=2)
+os.chmod(path, 0o600)
+PYEOF
+}
+
 _patch_toml() {
     local toml="$1" key="$2" val="$3"
     if grep -q "^${key}\s*=" "$toml" 2>/dev/null; then
@@ -317,6 +369,13 @@ _patch_toml() {
 
 drop_menu_status() {
     echo ""
+    local _dom; _dom=$(_shared_read "subdomain" "")
+    if [[ -n "$_dom" ]]; then
+        echo -e "  ${DIM}Domain: ${GREEN}$_dom${RESET}  ${DIM}(https://$_dom/${DROP_NETWORK}/)${RESET}"
+    else
+        echo -e "  ${DIM}Domain: ${YELLOW}not configured${RESET}  ${DIM}(set from main menu → option 1)${RESET}"
+    fi
+
     local giveaway_on; giveaway_on=$(drop_read_conf "giveaway_enabled" "true")
     local donation_on;  donation_on=$(drop_read_conf "donation_enabled" "true")
     local g_lbl d_lbl
@@ -345,33 +404,26 @@ drop_menu_status() {
         echo -e "  ${BOLD}Wallet OWN${RESET} : $owner_st  ${DIM}($DROP_TMUX_OWNER)${RESET}"
     fi
 
-    # Steps 3–7
+    # Steps 3–6
     [[ -f "/etc/systemd/system/${DROP_SERVICE}.service" ]] \
         && echo -e "  ${BOLD}3 Install${RESET}  : ${GREEN}OK${RESET}" \
         || echo -e "  ${BOLD}3 Install${RESET}  : ${DIM}pending${RESET}"
 
     local addr; addr=$(drop_read_conf "wallet_address" "")
-    local domain; domain=$(drop_read_conf "subdomain" "")
-    if [[ -n "$addr" && -n "$domain" ]]; then
-        echo -e "  ${BOLD}4 Configure${RESET}: ${GREEN}OK${RESET}  ${DIM}($domain)${RESET}"
-    else
-        echo -e "  ${BOLD}4 Configure${RESET}: ${DIM}pending${RESET}"
-    fi
+    [[ -n "$addr" ]] \
+        && echo -e "  ${BOLD}4 Configure${RESET}: ${GREEN}OK${RESET}" \
+        || echo -e "  ${BOLD}4 Configure${RESET}: ${DIM}pending${RESET}"
 
     [[ -d "$DROP_WEB_DIR" ]] \
         && echo -e "  ${BOLD}5 Web files${RESET}: ${GREEN}deployed${RESET}  ${DIM}($DROP_WEB_DIR)${RESET}" \
         || echo -e "  ${BOLD}5 Web files${RESET}: ${DIM}not deployed${RESET}"
 
-    [[ -f "$DROP_NGINX_CONF" ]] \
-        && echo -e "  ${BOLD}6 nginx${RESET}    : ${GREEN}configured${RESET}" \
-        || echo -e "  ${BOLD}6 nginx${RESET}    : ${DIM}not configured${RESET}"
-
     if systemctl is-active --quiet "$DROP_SERVICE" 2>/dev/null; then
-        echo -e "  ${BOLD}7 Service${RESET}  : ${GREEN}● running${RESET}  ${DIM}(https://${domain:-<domain>}/${DROP_NETWORK}/)${RESET}"
+        echo -e "  ${BOLD}6 Service${RESET}  : ${GREEN}● running${RESET}  ${DIM}(https://${_dom:-<domain>}/${DROP_NETWORK}/)${RESET}"
     elif systemctl is-enabled --quiet "$DROP_SERVICE" 2>/dev/null; then
-        echo -e "  ${BOLD}7 Service${RESET}  : ${YELLOW}stopped${RESET}"
+        echo -e "  ${BOLD}6 Service${RESET}  : ${YELLOW}stopped${RESET}"
     else
-        echo -e "  ${BOLD}7 Service${RESET}  : ${DIM}not running${RESET}"
+        echo -e "  ${BOLD}6 Service${RESET}  : ${DIM}not running${RESET}"
     fi
     echo ""
 }
@@ -398,24 +450,19 @@ drop_menu() {
         echo -e "  ${GREEN}1${RESET}) Setup wallet          ${DIM}(download + 5-step init flow)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Wallet listening      ${DIM}(TOR: $DROP_TMUX_TOR + Owner: $DROP_TMUX_OWNER)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Install               ${DIM}(Node.js + npm + systemd service)${RESET}"
-        echo -e "  ${GREEN}4${RESET}) Configure             ${DIM}(domain, modes, wallet API ports/secrets)${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Configure             ${DIM}(modes, wallet API ports/secrets)${RESET}"
         echo -e "  ${GREEN}5${RESET}) Deploy web files      ${DIM}(copy to $DROP_WEB_DIR)${RESET}"
-        echo -e "  ${GREEN}6${RESET}) Setup nginx           ${DIM}(vhost + SSL + /${DROP_NETWORK}/ path routing)${RESET}"
-        echo -e "  ${GREEN}7${RESET}) Start / Stop service  ${DIM}(systemd $DROP_SERVICE)${RESET}"
+        echo -e "  ${GREEN}6${RESET}) Start / Stop service  ${DIM}(systemd $DROP_SERVICE)${RESET}"
         echo ""
         echo -e "${DIM}  ─── Info & maintenance ───────────────────────────${RESET}"
-        echo -e "  ${CYAN}8${RESET}) Drop status           ${DIM}(health, balance, claims)${RESET}"
-        echo -e "  ${CYAN}9${RESET}) Wallet address        ${DIM}(show + update)${RESET}"
+        echo -e "  ${CYAN}7${RESET}) Drop status           ${DIM}(health, balance, claims)${RESET}"
+        echo -e "  ${CYAN}8${RESET}) Wallet address        ${DIM}(show + update)${RESET}"
         echo -e "  ${CYAN}L${RESET}) View logs             ${DIM}(activity / journal / nginx)${RESET}"
-        echo ""
-        echo -e "${DIM}  ─── Admin tasks ──────────────────────────────────${RESET}"
-        echo -e "  ${YELLOW}B${RESET}) Backup                ${DIM}(encrypted: DB + config + seed)${RESET}"
-        echo -e "  ${YELLOW}R${RESET}) Restore               ${DIM}(decrypt + restore backup)${RESET}"
         echo ""
         echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
         echo -e "  ${RED}0${RESET}) Back to network select"
         echo ""
-        echo -ne "${BOLD}Select [1-9 / L / B / R / 0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-8 / L / 0]: ${RESET}"
         read -r choice || true
 
         case "${choice,,}" in
@@ -424,13 +471,10 @@ drop_menu() {
             3) drop_install         || true ;;
             4) drop_configure       || true ;;
             5) drop_deploy_web      || true ;;
-            6) drop_setup_nginx     || true ;;
-            7) drop_service_control || true ;;
-            8) drop_status_screen   || true ;;
-            9) drop_wallet_address  || true ;;
+            6) drop_service_control || true ;;
+            7) drop_status_screen   || true ;;
+            8) drop_wallet_address  || true ;;
             l) drop_view_logs       || true ;;
-            b) drop_backup          || true ;;
-            r) drop_restore         || true ;;
             0) break ;;
             "") continue ;;
             *) warn "Invalid option."; sleep 1 ;;

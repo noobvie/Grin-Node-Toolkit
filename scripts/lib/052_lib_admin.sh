@@ -4,12 +4,12 @@
 #
 #  Functions exported:
 #    drop_deploy_web       — step 5: copy web files + npm install
-#    drop_service_control  — step 7: start/stop/enable systemd service
-#    drop_status_screen    — step 8: detailed health + stats
-#    drop_wallet_address   — step 9: show + update wallet address
+#    drop_service_control  — step 6: start/stop/enable systemd service
+#    drop_status_screen    — step 7: detailed health + stats
+#    drop_wallet_address   — step 8: show + update wallet address
 #    drop_view_logs        — L) tail activity log
-#    drop_backup           — B) encrypt DB + config + seed → archive
-#    drop_restore          — R) decrypt + restore archive
+#    drop_backup           — B) encrypt both networks → single archive
+#    drop_restore          — R) decrypt + restore archive (both networks)
 #
 
 BACKUP_DIR="/opt/grin/backups"
@@ -51,7 +51,7 @@ drop_deploy_web() {
     fi
 
     # robots.txt
-    local domain_val; domain_val=$(drop_read_conf "subdomain" "")
+    local domain_val; domain_val=$(_shared_read "subdomain" "")
     cat > "$DROP_WEB_DIR/robots.txt" << ROBOTS_EOF
 User-agent: *
 Disallow: /api/
@@ -71,12 +71,12 @@ ROBOTS_EOF
 }
 
 # =============================================================================
-# OPTION 7 — Start / Stop service
+# OPTION 6 — Start / Stop service
 # =============================================================================
 
 drop_service_control() {
     clear
-    echo -e "\n${BOLD}${CYAN}── Grin Drop [$DROP_NET_LABEL] — 7) Start / Stop Service ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Grin Drop [$DROP_NET_LABEL] — 6) Start / Stop Service ──${RESET}\n"
 
     if [[ ! -f "/etc/systemd/system/${DROP_SERVICE}.service" ]]; then
         die "Service not installed — run option 3 (Install) first."; pause; return
@@ -125,13 +125,13 @@ drop_service_control() {
 }
 
 # =============================================================================
-# OPTION 8 — Drop status
+# OPTION 7 — Drop status
 # =============================================================================
 
 drop_status_screen() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN} Grin Drop [$DROP_NET_LABEL] — Status${RESET}"
+    echo -e "${BOLD}${CYAN} Grin Drop [$DROP_NET_LABEL] — 7) Status${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
 
@@ -146,7 +146,7 @@ drop_status_screen() {
     fi
 
     local port; port=$(drop_read_conf "service_port" "$DROP_PORT")
-    local subdomain; subdomain=$(drop_read_conf "subdomain" "")
+    local subdomain; subdomain=$(_shared_read "subdomain" "")
     echo -e "  ${BOLD}Port${RESET}       : $port"
     [[ -n "$subdomain" ]] && echo -e "  ${BOLD}URL${RESET}        : ${GREEN}https://$subdomain/${DROP_NETWORK}/${RESET}"
 
@@ -223,12 +223,12 @@ drop_status_screen() {
 }
 
 # =============================================================================
-# OPTION 9 — Wallet address
+# OPTION 8 — Wallet address
 # =============================================================================
 
 drop_wallet_address() {
     clear
-    echo -e "\n${BOLD}${CYAN}── Grin Drop [$DROP_NET_LABEL] — 9) Wallet Address ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Grin Drop [$DROP_NET_LABEL] — 8) Wallet Address ──${RESET}\n"
 
     drop_ensure_defaults
     local addr; addr=$(drop_read_conf "wallet_address" "")
@@ -310,11 +310,13 @@ drop_view_logs() {
             ;;
         2) journalctl -u "$DROP_SERVICE" -n 100 --no-pager | less -FRX ;;
         3)
-            local f="/var/log/nginx/grin-drop-${DROP_NETWORK}-access.log"
+            local _d; _d=$(_shared_read "subdomain" "")
+            local f="/var/log/nginx/grin-drop-${_d:-unknown}-access.log"
             [[ -f "$f" ]] && tail -n 100 "$f" | less -FRX || { warn "Not found: $f"; pause; }
             ;;
         4)
-            local f="/var/log/nginx/grin-drop-${DROP_NETWORK}-error.log"
+            local _d; _d=$(_shared_read "subdomain" "")
+            local f="/var/log/nginx/grin-drop-${_d:-unknown}-error.log"
             [[ -f "$f" ]] && tail -n 100 "$f" | less -FRX || { warn "Not found: $f"; pause; }
             ;;
         0) return ;;
@@ -322,33 +324,53 @@ drop_view_logs() {
 }
 
 # =============================================================================
-# OPTION B — Backup
+# OPTION B (top-level) — Backup both networks
 # =============================================================================
 
 drop_backup() {
     clear
-    echo -e "\n${BOLD}${CYAN}── Grin Drop [$DROP_NET_LABEL] — B) Backup ──${RESET}\n"
-    echo -e "  ${DIM}Creates an AES-256-CBC encrypted archive of:${RESET}"
-    echo -e "  ${DIM}  - SQLite database ($DROP_DB)${RESET}"
-    echo -e "  ${DIM}  - Config file ($DROP_CONF)${RESET}"
-    echo -e "  ${DIM}  - Seed words ($DROP_WORD)${RESET}"
-    echo -e "  ${DIM}  - Wallet passphrase file ($DROP_PASS)${RESET}"
+    echo -e "\n${BOLD}${CYAN}── Grin Drop — B) Backup (Testnet + Mainnet) ──${RESET}\n"
+    echo -e "  ${DIM}Creates a single AES-256-CBC encrypted archive containing:${RESET}"
+    echo -e "  ${DIM}  Testnet : DB, config, wallet passphrase, seed words${RESET}"
+    echo -e "  ${DIM}  Mainnet : DB, config, wallet passphrase, seed words${RESET}"
+    echo -e "  ${DIM}  Shared  : drop_shared.conf (domain settings)${RESET}"
     echo ""
 
     mkdir -p "$BACKUP_DIR"
 
     local ts; ts=$(date +%Y%m%d_%H%M%S)
-    local archive_name="grin_drop_${DROP_NETWORK}_backup_${ts}.tar.gz.enc"
+    local archive_name="grin_drop_all_backup_${ts}.tar.gz.enc"
     local archive_path="$BACKUP_DIR/$archive_name"
-
-    # Gather files to include
     local tmp_dir="/tmp/grin_drop_backup_$$"
-    mkdir -p "$tmp_dir"
+    mkdir -p "$tmp_dir/testnet" "$tmp_dir/mainnet" "$tmp_dir/shared"
 
-    [[ -f "$DROP_DB"   ]] && cp "$DROP_DB"   "$tmp_dir/drop.db"        || warn "DB not found — skipping"
-    [[ -f "$DROP_CONF" ]] && cp "$DROP_CONF" "$tmp_dir/grin_drop.conf" || warn "Config not found — skipping"
-    [[ -f "$DROP_PASS" ]] && cp "$DROP_PASS" "$tmp_dir/wallet_pass"    || warn "Pass file not found — skipping"
-    [[ -f "$DROP_WORD" ]] && cp "$DROP_WORD" "$tmp_dir/seed-words"     || info "No seed words file found."
+    # Testnet files
+    [[ -f "/opt/grin/drop-test/drop-test.db" ]]          && cp "/opt/grin/drop-test/drop-test.db"          "$tmp_dir/testnet/drop.db"
+    [[ -f "/opt/grin/drop-test/grin_drop_test.conf" ]]   && cp "/opt/grin/drop-test/grin_drop_test.conf"   "$tmp_dir/testnet/grin_drop.conf"
+    [[ -f "/opt/grin/drop-test/.temp_test" ]]            && cp "/opt/grin/drop-test/.temp_test"            "$tmp_dir/testnet/wallet_pass"
+    [[ -f "/opt/grin/drop-test/.word_test" ]]            && cp "/opt/grin/drop-test/.word_test"            "$tmp_dir/testnet/seed-words"
+
+    # Mainnet files
+    [[ -f "/opt/grin/drop-main/drop-main.db" ]]          && cp "/opt/grin/drop-main/drop-main.db"          "$tmp_dir/mainnet/drop.db"
+    [[ -f "/opt/grin/drop-main/grin_drop_main.conf" ]]   && cp "/opt/grin/drop-main/grin_drop_main.conf"   "$tmp_dir/mainnet/grin_drop.conf"
+    [[ -f "/opt/grin/drop-main/.temp_main" ]]            && cp "/opt/grin/drop-main/.temp_main"            "$tmp_dir/mainnet/wallet_pass"
+    [[ -f "/opt/grin/drop-main/.word_main" ]]            && cp "/opt/grin/drop-main/.word_main"            "$tmp_dir/mainnet/seed-words"
+
+    # Shared config
+    [[ -f "$DROP_SHARED_CONF" ]] && cp "$DROP_SHARED_CONF" "$tmp_dir/shared/drop_shared.conf"
+
+    local has_files=0
+    find "$tmp_dir" -type f | grep -q . && has_files=1
+    if [[ "$has_files" -eq 0 ]]; then
+        warn "No files found to backup — run setup for at least one network first."
+        rm -rf "$tmp_dir"; pause; return
+    fi
+
+    echo -e "  ${DIM}Files staged:${RESET}"
+    find "$tmp_dir" -type f | sort | while read -r f; do
+        echo -e "    ${DIM}${f#$tmp_dir/}${RESET}"
+    done
+    echo ""
 
     echo -ne "  Backup password: "
     local bak_pass bak_pass2
@@ -379,32 +401,31 @@ drop_backup() {
     success "Backup created: $archive_path  (mode 600)"
 
     # Keep last N backups
-    local count; count=$(ls "$BACKUP_DIR/grin_drop_${DROP_NETWORK}_backup_"*.enc 2>/dev/null | wc -l)
+    local count; count=$(ls "$BACKUP_DIR/grin_drop_all_backup_"*.enc 2>/dev/null | wc -l)
     if [[ "$count" -gt "$BACKUP_KEEP" ]]; then
-        ls -t "$BACKUP_DIR/grin_drop_${DROP_NETWORK}_backup_"*.enc \
+        ls -t "$BACKUP_DIR/grin_drop_all_backup_"*.enc \
             | tail -n +"$((BACKUP_KEEP + 1))" \
             | xargs rm -f 2>/dev/null || true
         info "Old backups pruned (kept last $BACKUP_KEEP)."
     fi
 
-    log "[drop_backup] network=$DROP_NETWORK archive=$archive_name"
+    log "[drop_backup] archive=$archive_name"
     pause
 }
 
 # =============================================================================
-# OPTION R — Restore
+# OPTION R (top-level) — Restore both networks
 # =============================================================================
 
 drop_restore() {
     clear
-    echo -e "\n${BOLD}${CYAN}── Grin Drop [$DROP_NET_LABEL] — R) Restore ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Grin Drop — R) Restore (Testnet + Mainnet) ──${RESET}\n"
 
-    # List available backups
     local -a bak_files
-    mapfile -t bak_files < <(ls -t "$BACKUP_DIR/grin_drop_${DROP_NETWORK}_backup_"*.enc 2>/dev/null || true)
+    mapfile -t bak_files < <(ls -t "$BACKUP_DIR/grin_drop_all_backup_"*.enc 2>/dev/null || true)
 
     if [[ "${#bak_files[@]}" -eq 0 ]]; then
-        warn "No backups found in $BACKUP_DIR for $DROP_NET_LABEL."
+        warn "No backups found in $BACKUP_DIR."
         pause; return
     fi
 
@@ -428,28 +449,25 @@ drop_restore() {
     echo ""
     info "Selected: $(basename "$chosen")"
 
-    # Decrypt test (validate password before stopping service)
+    # Decrypt + validate
     echo -ne "  Backup password: "
     local bak_pass; read -rs bak_pass; echo ""
     local tmp_test="/tmp/grin_drop_restore_test_$$"
     if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
         -pass "pass:${bak_pass}" -in "$chosen" -out "$tmp_test" 2>/dev/null; then
-        rm -f "$tmp_test"
-        error "Wrong password or corrupt backup."; unset bak_pass; pause; return
+        rm -f "$tmp_test"; error "Wrong password or corrupt backup."; unset bak_pass; pause; return
     fi
-
-    # Verify it's a valid tar
     if ! tar -tzf "$tmp_test" &>/dev/null; then
-        rm -f "$tmp_test"
-        error "Decrypted archive is not a valid tar.gz."; unset bak_pass; pause; return
+        rm -f "$tmp_test"; error "Decrypted archive is not a valid tar.gz."; unset bak_pass; pause; return
     fi
     success "Password verified — archive is valid."
     echo ""
 
-    echo -e "  ${RED}${BOLD}⚠ This will overwrite:${RESET}"
-    echo -e "  ${RED}  $DROP_DB${RESET}"
-    echo -e "  ${RED}  $DROP_CONF${RESET}"
-    [[ -f "$DROP_PASS" ]] && echo -e "  ${RED}  $DROP_PASS${RESET}"
+    # Show what will be restored
+    echo -e "  ${RED}${BOLD}⚠ This will overwrite existing data for any networks found in the backup:${RESET}"
+    tar -tzf "$tmp_test" 2>/dev/null | grep -v '/$' | while read -r f; do
+        echo -e "  ${RED}  → $f${RESET}"
+    done
     echo ""
     echo -ne "  Type ${BOLD}RESTORE${RESET} to confirm: "
     local confirm; read -r confirm || true
@@ -457,55 +475,56 @@ drop_restore() {
         rm -f "$tmp_test"; unset bak_pass; info "Cancelled."; pause; return
     fi
 
-    # Stop service
-    if systemctl is-active --quiet "$DROP_SERVICE" 2>/dev/null; then
-        info "Stopping $DROP_SERVICE ..."
-        systemctl stop "$DROP_SERVICE"
-    fi
+    # Stop both services
+    for svc in "grin-drop-test" "grin-drop-main"; do
+        systemctl is-active --quiet "$svc" 2>/dev/null && {
+            info "Stopping $svc ..."; systemctl stop "$svc"
+        }
+    done
 
-    # Extract
     local tmp_dir="/tmp/grin_drop_restore_$$"
     mkdir -p "$tmp_dir"
     tar -xzf "$tmp_test" -C "$tmp_dir" 2>/dev/null
     rm -f "$tmp_test"
     unset bak_pass
 
-    # Restore files
-    [[ -f "$tmp_dir/drop.db" ]] && {
-        cp "$tmp_dir/drop.db" "$DROP_DB"
-        chmod 600 "$DROP_DB"
-        id grin &>/dev/null && chown grin:grin "$DROP_DB" 2>/dev/null || true
-        success "Database restored."
-    }
-    [[ -f "$tmp_dir/grin_drop.conf" ]] && {
-        cp "$tmp_dir/grin_drop.conf" "$DROP_CONF"
-        chmod 600 "$DROP_CONF"
-        id grin &>/dev/null && chown grin:grin "$DROP_CONF" 2>/dev/null || true
-        success "Config restored."
-    }
-    [[ -f "$tmp_dir/wallet_pass" ]] && {
-        cp "$tmp_dir/wallet_pass" "$DROP_PASS"
-        chmod 600 "$DROP_PASS"
-        id grin &>/dev/null && chown grin:grin "$DROP_PASS" 2>/dev/null || true
-        success "Wallet passphrase file restored."
-    }
-    [[ -f "$tmp_dir/seed-words" ]] && {
-        cp "$tmp_dir/seed-words" "$DROP_WORD"
-        chmod 600 "$DROP_WORD"
-        chown root:root "$DROP_WORD" 2>/dev/null || true
-        success "Seed words file restored."
+    # Restore testnet
+    if [[ -d "$tmp_dir/testnet" ]]; then
+        info "Restoring testnet ..."
+        [[ -f "$tmp_dir/testnet/drop.db" ]]       && { cp "$tmp_dir/testnet/drop.db"       "/opt/grin/drop-test/drop-test.db";         chmod 600 "/opt/grin/drop-test/drop-test.db";         id grin &>/dev/null && chown grin:grin "/opt/grin/drop-test/drop-test.db" 2>/dev/null || true; success "Testnet DB restored."; }
+        [[ -f "$tmp_dir/testnet/grin_drop.conf" ]] && { cp "$tmp_dir/testnet/grin_drop.conf" "/opt/grin/drop-test/grin_drop_test.conf"; chmod 600 "/opt/grin/drop-test/grin_drop_test.conf"; id grin &>/dev/null && chown grin:grin "/opt/grin/drop-test/grin_drop_test.conf" 2>/dev/null || true; success "Testnet config restored."; }
+        [[ -f "$tmp_dir/testnet/wallet_pass" ]]   && { cp "$tmp_dir/testnet/wallet_pass"   "/opt/grin/drop-test/.temp_test";           chmod 600 "/opt/grin/drop-test/.temp_test";           id grin &>/dev/null && chown grin:grin "/opt/grin/drop-test/.temp_test" 2>/dev/null || true; success "Testnet wallet pass restored."; }
+        [[ -f "$tmp_dir/testnet/seed-words" ]]    && { cp "$tmp_dir/testnet/seed-words"    "/opt/grin/drop-test/.word_test";           chmod 600 "/opt/grin/drop-test/.word_test";           chown root:root "/opt/grin/drop-test/.word_test" 2>/dev/null || true; success "Testnet seed words restored."; }
+    fi
+
+    # Restore mainnet
+    if [[ -d "$tmp_dir/mainnet" ]]; then
+        info "Restoring mainnet ..."
+        [[ -f "$tmp_dir/mainnet/drop.db" ]]       && { cp "$tmp_dir/mainnet/drop.db"       "/opt/grin/drop-main/drop-main.db";         chmod 600 "/opt/grin/drop-main/drop-main.db";         id grin &>/dev/null && chown grin:grin "/opt/grin/drop-main/drop-main.db" 2>/dev/null || true; success "Mainnet DB restored."; }
+        [[ -f "$tmp_dir/mainnet/grin_drop.conf" ]] && { cp "$tmp_dir/mainnet/grin_drop.conf" "/opt/grin/drop-main/grin_drop_main.conf"; chmod 600 "/opt/grin/drop-main/grin_drop_main.conf"; id grin &>/dev/null && chown grin:grin "/opt/grin/drop-main/grin_drop_main.conf" 2>/dev/null || true; success "Mainnet config restored."; }
+        [[ -f "$tmp_dir/mainnet/wallet_pass" ]]   && { cp "$tmp_dir/mainnet/wallet_pass"   "/opt/grin/drop-main/.temp_main";           chmod 600 "/opt/grin/drop-main/.temp_main";           id grin &>/dev/null && chown grin:grin "/opt/grin/drop-main/.temp_main" 2>/dev/null || true; success "Mainnet wallet pass restored."; }
+        [[ -f "$tmp_dir/mainnet/seed-words" ]]    && { cp "$tmp_dir/mainnet/seed-words"    "/opt/grin/drop-main/.word_main";           chmod 600 "/opt/grin/drop-main/.word_main";           chown root:root "/opt/grin/drop-main/.word_main" 2>/dev/null || true; success "Mainnet seed words restored."; }
+    fi
+
+    # Restore shared config
+    [[ -f "$tmp_dir/shared/drop_shared.conf" ]] && {
+        cp "$tmp_dir/shared/drop_shared.conf" "$DROP_SHARED_CONF"
+        chmod 600 "$DROP_SHARED_CONF"
+        success "Shared config (domain settings) restored."
     }
 
     rm -rf "$tmp_dir"
 
-    # Restart service
-    if [[ -f "/etc/systemd/system/${DROP_SERVICE}.service" ]]; then
-        systemctl start "$DROP_SERVICE" && success "Service restarted." \
-            || warn "Service failed to start — check logs."
-    fi
+    # Restart services that have a service file
+    for svc in "grin-drop-test" "grin-drop-main"; do
+        [[ -f "/etc/systemd/system/${svc}.service" ]] && {
+            systemctl start "$svc" && success "$svc restarted." \
+                || warn "$svc failed to start — check logs."
+        }
+    done
 
     echo ""
-    warn "Note: wallet listener sessions are NOT restored — run option 2) Wallet Listening."
-    log "[drop_restore] network=$DROP_NETWORK backup=$(basename "$chosen")"
+    warn "Note: wallet listener sessions are NOT restored — run option 2) Wallet Listening for each network."
+    log "[drop_restore] backup=$(basename "$chosen")"
     pause
 }

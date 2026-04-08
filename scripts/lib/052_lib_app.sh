@@ -144,54 +144,59 @@ SYSTEMD
 drop_configure() {
     clear
     echo -e "\n${BOLD}${CYAN}── Grin Drop [$DROP_NET_LABEL] — 4) Configure ──${RESET}\n"
-    echo -e "  ${DIM}Press Enter to keep the current value shown in [brackets].${RESET}\n"
+    echo -e "  ${DIM}Press Enter to keep the current value shown in [brackets].${RESET}"
+    echo -e "  ${DIM}Type ${BOLD}0${DIM} at any prompt to cancel and return to the menu.${RESET}"
+    echo -e "  ${DIM}Domain is configured from the main 052 menu (option 1).${RESET}\n"
 
     drop_ensure_defaults
 
     local val
 
-    # ── Site identity ──────────────────────────────────────────────────────────
-    echo -e "  ${BOLD}Site:${RESET}"
-    echo -ne "Drop name        [$(drop_read_conf drop_name 'Grin Drop')]: "
-    read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "drop_name" "$val"
-
-    echo -ne "Domain           [$(drop_read_conf subdomain '')]: "
-    read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "subdomain" "$val"
+    # ── Domain info (read-only — managed from top-level menu option 1) ──────────
+    local _dom; _dom=$(python3 -c \
+        "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('subdomain','not set'))" \
+        "$DROP_SHARED_CONF" 2>/dev/null || echo "not set")
+    echo -e "  ${DIM}Domain: ${BOLD}$_dom${RESET}  ${DIM}(manage via 052 main menu → option 1)${RESET}"
+    echo ""
 
     # ── Mode toggles ──────────────────────────────────────────────────────────
     echo ""
-    echo -e "  ${BOLD}Mode toggles:${RESET}"
+    echo -e "  ${BOLD}Mode Toggles [$DROP_NET_LABEL]:${RESET}"
     _conf_bool_prompt "giveaway_enabled" "Giveaway enabled (give GRIN via slatepack claim flow)"
     _conf_bool_prompt "donation_enabled" "Donation enabled (Tab 1/2/3 receive flows)"
     _conf_bool_prompt "show_public_stats" "Show public stats (total given/received on homepage)"
 
     # ── Giveaway ──────────────────────────────────────────────────────────────
     echo ""
-    echo -e "  ${BOLD}Giveaway:${RESET}"
+    echo -e "  ${BOLD}Giveaway Settings [$DROP_NET_LABEL]:${RESET}"
     echo -ne "Claim amount     [$(drop_read_conf claim_amount_grin '2.0') GRIN]: "
-    read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "claim_amount_grin" "$val"
+    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
+    [[ -n "$val" ]] && drop_write_conf_key "claim_amount_grin" "$val"
 
     echo -ne "Claim window     [$(drop_read_conf claim_window_hours '24') hours]: "
-    read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "claim_window_hours" "$val"
+    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
+    [[ -n "$val" ]] && drop_write_conf_key "claim_window_hours" "$val"
 
     echo -ne "Finalize timeout [$(drop_read_conf finalize_timeout_min '5') min]: "
-    read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "finalize_timeout_min" "$val"
+    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
+    [[ -n "$val" ]] && drop_write_conf_key "finalize_timeout_min" "$val"
 
     # ── Donation invoice ──────────────────────────────────────────────────────
     echo ""
-    echo -e "  ${BOLD}Donation:${RESET}"
+    echo -e "  ${BOLD}Donation Settings [$DROP_NET_LABEL]:${RESET}"
     echo -ne "Invoice timeout  [$(drop_read_conf donation_invoice_timeout '30') min]: "
-    read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "donation_invoice_timeout" "$val"
+    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
+    [[ -n "$val" ]] && drop_write_conf_key "donation_invoice_timeout" "$val"
 
     # ── Wallet address ────────────────────────────────────────────────────────
     echo ""
-    echo -e "  ${BOLD}Wallet:${RESET}"
+    echo -e "  ${BOLD}Wallet Address [$DROP_NET_LABEL]:${RESET}"
     local current_addr; current_addr=$(drop_read_conf "wallet_address" "")
     local auto_addr=""
     local addr_prefix="grin1"; [[ "$DROP_NETWORK" == "testnet" ]] && addr_prefix="tgrin1"
 
     # Try HTTP API first (Node.js server must be running)
-    local domain; domain=$(drop_read_conf "subdomain" "")
+    local domain; domain=$(_shared_read "subdomain" "")
     if [[ -n "$domain" ]]; then
         auto_addr=$(curl -sf --max-time 5 "http://127.0.0.1:${DROP_PORT}/api/status" \
             | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('wallet_address',''))" \
@@ -213,13 +218,15 @@ drop_configure() {
         success "Address detected: $auto_addr"
         echo -ne "Wallet address   [${auto_addr}] (Enter to accept): "
         read -r val || true
+        [[ "$val" == "0" ]] && { info "Cancelled."; return; }
         drop_write_conf_key "wallet_address" "${val:-$auto_addr}"
     else
         warn "Could not auto-fetch wallet address."
         echo -e "  ${DIM}(Ensure wallet listener is running — option 2)${RESET}"
         echo -ne "Wallet address   [${current_addr:-not set}]: "
         read -r val || true
-        if [[ -n "$val" && "$val" != "0" ]]; then
+        [[ "$val" == "0" ]] && { info "Cancelled."; return; }
+        if [[ -n "$val" ]]; then
             drop_write_conf_key "wallet_address" "$val"
             success "Wallet address saved."
         fi
@@ -227,30 +234,37 @@ drop_configure() {
 
     # ── Wallet API ports + secret paths ───────────────────────────────────────
     echo ""
-    echo -e "  ${BOLD}Wallet HTTP API:${RESET}"
+    echo -e "  ${BOLD}Wallet HTTP API [$DROP_NET_LABEL]:${RESET}"
 
     local def_foreign; def_foreign=$(drop_read_conf "wallet_foreign_api_port" "$DROP_TOR_PORT")
     echo -ne "Foreign API port [${def_foreign}]: "
-    read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "wallet_foreign_api_port" "$val"
+    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
+    [[ -n "$val" ]] && drop_write_conf_key "wallet_foreign_api_port" "$val"
 
     local def_owner; def_owner=$(drop_read_conf "wallet_owner_api_port" "$DROP_OWNER_PORT")
     echo -ne "Owner API port   [${def_owner}]: "
-    read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "wallet_owner_api_port" "$val"
+    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
+    [[ -n "$val" ]] && drop_write_conf_key "wallet_owner_api_port" "$val"
 
     local def_fsec; def_fsec=$(drop_read_conf "wallet_foreign_secret" "${DROP_WALLET_DIR}/wallet_data/.api_secret")
     echo -ne "Foreign secret   [${def_fsec}]: "
-    read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "wallet_foreign_secret" "$val"
+    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
+    [[ -n "$val" ]] && drop_write_conf_key "wallet_foreign_secret" "$val"
 
     local def_osec; def_osec=$(drop_read_conf "wallet_owner_secret" "${DROP_WALLET_DIR}/.owner_api_secret")
     echo -ne "Owner secret     [${def_osec}]: "
-    read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "wallet_owner_secret" "$val"
+    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
+    [[ -n "$val" ]] && drop_write_conf_key "wallet_owner_secret" "$val"
 
     # ── Wallet passphrase ─────────────────────────────────────────────────────
     echo ""
-    echo -e "  ${DIM}Wallet passphrase stored at $DROP_PASS (mode 600).${RESET}"
+    echo -e "  ${BOLD}Wallet Passphrase [$DROP_NET_LABEL]:${RESET}"
+    echo -e "  ${DIM}Stored at $DROP_PASS (mode 600). Type 0 to skip.${RESET}"
     echo -ne "Wallet passphrase [Enter to keep]: "
     read -rs val || true; echo ""
-    if [[ -n "$val" ]]; then
+    if [[ "$val" == "0" ]]; then
+        info "Passphrase unchanged."
+    elif [[ -n "$val" ]]; then
         mkdir -p "$(dirname "$DROP_PASS")"
         echo "$val" > "$DROP_PASS"; chmod 600 "$DROP_PASS"
         id grin &>/dev/null && chown grin:grin "$DROP_PASS" 2>/dev/null || true
@@ -259,23 +273,26 @@ drop_configure() {
 
     # ── Admin panel ───────────────────────────────────────────────────────────
     echo ""
-    echo -e "  ${BOLD}Admin panel:${RESET}"
+    echo -e "  ${BOLD}Admin Panel [$DROP_NET_LABEL]:${RESET}"
     _configure_admin_path
 
     # ── SEO / appearance ──────────────────────────────────────────────────────
     echo ""
-    echo -e "  ${BOLD}SEO / appearance:${RESET}"
+    echo -e "  ${BOLD}SEO / Appearance [$DROP_NET_LABEL]:${RESET}"
     echo -ne "Site description [$(drop_read_conf site_description 'Claim free GRIN…')]: "
-    read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "site_description" "$val"
+    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
+    [[ -n "$val" ]] && drop_write_conf_key "site_description" "$val"
 
     echo -ne "OG image URL     [$(drop_read_conf og_image_url '')]: "
-    read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "og_image_url" "$val"
+    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
+    [[ -n "$val" ]] && drop_write_conf_key "og_image_url" "$val"
 
     # ── Maintenance ───────────────────────────────────────────────────────────
     echo ""
-    echo -e "  ${BOLD}Maintenance:${RESET}"
+    echo -e "  ${BOLD}Maintenance [$DROP_NET_LABEL]:${RESET}"
     echo -ne "Maintenance message [$(drop_read_conf maintenance_message 'We will be back soon.')]: "
-    read -r val || true; [[ -n "$val" ]] && drop_write_conf_key "maintenance_message" "$val"
+    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
+    [[ -n "$val" ]] && drop_write_conf_key "maintenance_message" "$val"
 
     echo ""
     success "Configuration saved to $DROP_CONF"
@@ -327,7 +344,7 @@ _configure_admin_path() {
                 if [[ -n "$new_ap" ]]; then
                     drop_write_conf_key "admin_secret_path" "$new_ap"
                     success "Admin path updated: /$new_ap/"
-                    warn "Re-run option 6 (nginx) to apply."
+                    warn "Re-run main menu option 1 → 3 (Re-apply nginx config) to apply."
                 else
                     warn "Invalid — keeping current."
                 fi

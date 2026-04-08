@@ -232,44 +232,13 @@ drop_configure() {
         fi
     fi
 
-    # ── Wallet API ports + secret paths ───────────────────────────────────────
+    # ── Wallet API ports + secret paths (info only) ───────────────────────────
     echo ""
     echo -e "  ${BOLD}Wallet HTTP API [$DROP_NET_LABEL]:${RESET}"
-
-    local def_foreign; def_foreign=$(drop_read_conf "wallet_foreign_api_port" "$DROP_TOR_PORT")
-    echo -ne "Foreign API port [${def_foreign}]: "
-    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
-    [[ -n "$val" ]] && drop_write_conf_key "wallet_foreign_api_port" "$val"
-
-    local def_owner; def_owner=$(drop_read_conf "wallet_owner_api_port" "$DROP_OWNER_PORT")
-    echo -ne "Owner API port   [${def_owner}]: "
-    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
-    [[ -n "$val" ]] && drop_write_conf_key "wallet_owner_api_port" "$val"
-
-    local def_fsec; def_fsec=$(drop_read_conf "wallet_foreign_secret" "${DROP_WALLET_DIR}/wallet_data/.api_secret")
-    echo -ne "Foreign secret   [${def_fsec}]: "
-    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
-    [[ -n "$val" ]] && drop_write_conf_key "wallet_foreign_secret" "$val"
-
-    local def_osec; def_osec=$(drop_read_conf "wallet_owner_secret" "${DROP_WALLET_DIR}/.owner_api_secret")
-    echo -ne "Owner secret     [${def_osec}]: "
-    read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
-    [[ -n "$val" ]] && drop_write_conf_key "wallet_owner_secret" "$val"
-
-    # ── Wallet passphrase ─────────────────────────────────────────────────────
-    echo ""
-    echo -e "  ${BOLD}Wallet Passphrase [$DROP_NET_LABEL]:${RESET}"
-    echo -e "  ${DIM}Stored at $DROP_PASS (mode 600). Type 0 to skip.${RESET}"
-    echo -ne "Wallet passphrase [Enter to keep]: "
-    read -rs val || true; echo ""
-    if [[ "$val" == "0" ]]; then
-        info "Passphrase unchanged."
-    elif [[ -n "$val" ]]; then
-        mkdir -p "$(dirname "$DROP_PASS")"
-        echo "$val" > "$DROP_PASS"; chmod 600 "$DROP_PASS"
-        id grin &>/dev/null && chown grin:grin "$DROP_PASS" 2>/dev/null || true
-        success "Passphrase saved to $DROP_PASS"
-    fi
+    echo -e "  ${DIM}Foreign API port : $(drop_read_conf "wallet_foreign_api_port" "$DROP_TOR_PORT")${RESET}"
+    echo -e "  ${DIM}Owner API port   : $(drop_read_conf "wallet_owner_api_port" "$DROP_OWNER_PORT")${RESET}"
+    echo -e "  ${DIM}Foreign secret   : ${DROP_WALLET_DIR}/wallet_data/.api_secret${RESET}"
+    echo -e "  ${DIM}Owner secret     : ${DROP_WALLET_DIR}/.owner_api_secret${RESET}"
 
     # ── Admin panel ───────────────────────────────────────────────────────────
     echo ""

@@ -108,14 +108,7 @@ _drop_set_domain() {
     success "Saved: site='$new_name'  domain='$new_dom'"
     echo ""
 
-    echo -ne "Set up nginx + SSL now? [y/N]: "
-    read -r ok || true
-    if [[ "${ok,,}" == "y" ]]; then
-        _drop_reapply_nginx
-    else
-        info "Run option 1 → 3 when ready to set up nginx + SSL."
-        pause
-    fi
+    _drop_reapply_nginx
 }
 
 _drop_renew_ssl() {
@@ -168,7 +161,7 @@ _drop_reapply_nginx() {
     local nginx_link="/etc/nginx/sites-enabled/$domain"
 
     echo -e "  ${BOLD}SSL Certificate:${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Let's Encrypt  ${DIM}(DNS must be grey-cloud / DNS-only during issuance)${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Let's Encrypt  ${DIM}(set DNS-only in Cloudflare if issuance fails)${RESET}"
     echo -e "  ${GREEN}2${RESET}) Cloudflare Origin Certificate  ${DIM}(domain can stay Proxied)${RESET}"
     echo -ne "  Choice [1/2/0 to cancel]: "
     local ssl_choice; read -r ssl_choice || true
@@ -339,6 +332,18 @@ server {
         add_header Cache-Control "public";
     }
 
+    # ── Testnet API (:${test_port}) — explicit block, longer prefix wins ────────
+    location /testnet/api/ {
+        limit_req zone=drop_test burst=10 nodelay;
+        proxy_pass         http://127.0.0.1:${test_port}/api/;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Prefix /testnet;
+        proxy_read_timeout 90s;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+    }
+
     # ── Testnet portal (:${test_port}) ───────────────────────────────────────
     location /testnet/ {
         limit_req zone=drop_test burst=5 nodelay;
@@ -362,6 +367,18 @@ $([ -n "$test_admin" ] && cat << TESTADMIN
     }
 TESTADMIN
 )
+
+    # ── Mainnet API (:${main_port}) — explicit block, longer prefix wins ────────
+    location /mainnet/api/ {
+        limit_req zone=drop_main burst=10 nodelay;
+        proxy_pass         http://127.0.0.1:${main_port}/api/;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Prefix /mainnet;
+        proxy_read_timeout 90s;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+    }
 
     # ── Mainnet portal (:${main_port}) ───────────────────────────────────────
     location /mainnet/ {
@@ -432,8 +449,8 @@ HTTP_CONF
     certbot --nginx -d "$domain" --non-interactive --agree-tos -m "$email" \
         && success "SSL certificate issued." \
         || {
-            warn "certbot failed — check DNS is pointing to this server, port 80 open."
-            warn "Using Cloudflare? Set DNS to 'DNS only' (grey cloud) for cert issuance."
+            warn "certbot failed — check DNS points to this server and port 80 is open."
+            warn "Using Cloudflare? Go to Cloudflare DNS records, set this domain to 'DNS only' (grey cloud icon), then retry."
             return 1
         }
 }

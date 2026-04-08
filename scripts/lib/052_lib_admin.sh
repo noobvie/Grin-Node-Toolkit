@@ -28,13 +28,14 @@ drop_deploy_web() {
         pause; return
     fi
 
-    # Deploy public_html
-    info "Copying $DROP_WEB_SRC → $DROP_WEB_DIR ..."
-    mkdir -p "$DROP_WEB_DIR"
-    cp -r "$DROP_WEB_SRC"/. "$DROP_WEB_DIR/"
-    find "$DROP_WEB_DIR" -type f \( -name "*.html" -o -name "*.css" -o -name "*.js" \) \
+    # Deploy public_html — app.js resolves PUBLIC_DIR as $DROP_APP_DIR/public_html/
+    local pub_dir="$DROP_APP_DIR/public_html"
+    info "Copying $DROP_WEB_SRC → $pub_dir ..."
+    mkdir -p "$pub_dir"
+    cp -r "$DROP_WEB_SRC"/. "$pub_dir/"
+    find "$pub_dir" -type f \( -name "*.html" -o -name "*.css" -o -name "*.js" \) \
         -exec chmod 644 {} \;
-    success "Web files deployed to $DROP_WEB_DIR"
+    success "Web files deployed to $pub_dir"
 
     # Deploy server files + npm install
     if [[ -d "$DROP_APP_SRC" ]]; then
@@ -52,7 +53,7 @@ drop_deploy_web() {
 
     # robots.txt
     local domain_val; domain_val=$(_shared_read "subdomain" "")
-    cat > "$DROP_WEB_DIR/robots.txt" << ROBOTS_EOF
+    cat > "$pub_dir/robots.txt" << ROBOTS_EOF
 User-agent: *
 Disallow: /api/
 Allow: /
@@ -83,22 +84,39 @@ drop_service_control() {
     fi
 
     local state="stopped"
-    if systemctl is-active --quiet "$DROP_SERVICE" 2>/dev/null; then
-        state="running"
-        echo -e "  Service: ${GREEN}running${RESET}"
-        echo ""
+    systemctl is-active  --quiet "$DROP_SERVICE" 2>/dev/null && state="running"
+
+    local boot_enabled="no"
+    systemctl is-enabled --quiet "$DROP_SERVICE" 2>/dev/null && boot_enabled="yes"
+
+    local boot_label
+    [[ "$boot_enabled" == "yes" ]] \
+        && boot_label="${GREEN}enabled${RESET}" \
+        || boot_label="${YELLOW}disabled${RESET}"
+
+    if [[ "$state" == "running" ]]; then
+        echo -e "  Service   : ${GREEN}● running${RESET}"
+    else
+        echo -e "  Service   : ${YELLOW}stopped${RESET}"
+    fi
+    echo -e "  Boot start: $boot_label"
+    echo ""
+
+    if [[ "$state" == "running" ]]; then
         echo -e "  ${RED}1${RESET}) Stop service"
         echo -e "  ${YELLOW}2${RESET}) Restart service"
-        echo -e "  ${DIM}0) Back${RESET}"
     else
-        echo -e "  Service: ${YELLOW}stopped${RESET}"
-        echo ""
         echo -e "  ${GREEN}1${RESET}) Start service"
-        echo -e "  ${GREEN}2${RESET}) Enable + Start  ${DIM}(auto-start on boot)${RESET}"
-        echo -e "  ${DIM}0) Back${RESET}"
     fi
+
+    if [[ "$boot_enabled" == "yes" ]]; then
+        echo -e "  ${YELLOW}e${RESET}) Disable auto-start on boot"
+    else
+        echo -e "  ${GREEN}e${RESET}) Enable auto-start on boot"
+    fi
+    echo -e "  ${DIM}0) Back${RESET}"
     echo ""
-    echo -ne "${BOLD}Select [1/2/0]: ${RESET}"
+    echo -ne "${BOLD}Select [1/2/e/0]: ${RESET}"
     read -r sc || true
 
     case "$sc" in
@@ -107,16 +125,19 @@ drop_service_control() {
                 systemctl stop "$DROP_SERVICE" && success "Service stopped."
             else
                 systemctl start "$DROP_SERVICE" && success "Service started." \
-                    || { warn "Start failed — check: journalctl -u $DROP_SERVICE -n 30"; }
+                    || warn "Start failed — check: journalctl -u $DROP_SERVICE -n 30"
             fi
             ;;
         2)
             if [[ "$state" == "running" ]]; then
                 systemctl restart "$DROP_SERVICE" && success "Service restarted."
+            fi
+            ;;
+        e|E)
+            if [[ "$boot_enabled" == "yes" ]]; then
+                systemctl disable "$DROP_SERVICE" 2>/dev/null && success "Auto-start on boot disabled."
             else
-                systemctl enable "$DROP_SERVICE" 2>/dev/null || true
-                systemctl start  "$DROP_SERVICE" && success "Service enabled and started." \
-                    || { warn "Start failed — check: journalctl -u $DROP_SERVICE -n 30"; }
+                systemctl enable  "$DROP_SERVICE" 2>/dev/null && success "Auto-start on boot enabled."
             fi
             ;;
         0) return ;;

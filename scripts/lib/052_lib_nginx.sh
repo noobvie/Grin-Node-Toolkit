@@ -324,7 +324,7 @@ server {
     # ── Unified homepage ─────────────────────────────────────────────────────
     location / {
         limit_req zone=drop_home burst=10 nodelay;
-        try_files \$uri \$uri/ /index.html;
+        try_files \$uri \$uri/ =404;
     }
 
     location ~* \.(css|js|ico|png|svg|woff2?)\$ {

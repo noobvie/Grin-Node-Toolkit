@@ -253,7 +253,12 @@ path, key, default = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     d = json.load(open(path))
     v = d.get(key, default)
-    print(str(v).lower() if isinstance(v, bool) else v)
+    if isinstance(v, bool):
+        print(str(v).lower())
+    elif isinstance(v, float) and v == int(v):
+        print(int(v))
+    else:
+        print(v)
 except Exception:
     print(default)
 PYEOF
@@ -269,11 +274,14 @@ try:
     d = json.load(open(path)) if os.path.isfile(path) else {}
 except Exception:
     d = {}
-NUMS  = {"claim_amount_grin","claim_window_hours","service_port","finalize_timeout_min",
+FLOATS = {"claim_amount_grin"}
+INTS   = {"claim_window_hours","service_port","finalize_timeout_min",
           "wallet_foreign_api_port","wallet_owner_api_port","donation_invoice_timeout"}
-BOOLS = {"giveaway_enabled","donation_enabled","show_public_stats","maintenance_mode"}
-if key in NUMS:
+BOOLS  = {"giveaway_enabled","donation_enabled","show_public_stats","maintenance_mode"}
+if key in FLOATS:
     d[key] = float(val)
+elif key in INTS:
+    d[key] = int(float(val))
 elif key in BOOLS:
     d[key] = (val.lower() in ("true","1","yes"))
 else:

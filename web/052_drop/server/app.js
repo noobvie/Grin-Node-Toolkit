@@ -160,11 +160,6 @@ function requireAdmin(req, res, next) {
 // PUBLIC ENDPOINTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// GET /api/csrf ────────────────────────────────────────────────────────────────
-app.get('/api/csrf', (req, res) => {
-  res.json({ token: CSRF_TOKEN });
-});
-
 // GET /api/status ──────────────────────────────────────────────────────────────
 app.get('/api/status', async (req, res) => {
   const cfg = loadConfig();

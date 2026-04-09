@@ -240,11 +240,6 @@ drop_configure() {
     echo -e "  ${DIM}Foreign secret   : ${DROP_WALLET_DIR}/wallet_data/.api_secret${RESET}"
     echo -e "  ${DIM}Owner secret     : ${DROP_WALLET_DIR}/.owner_api_secret${RESET}"
 
-    # ── Admin panel ───────────────────────────────────────────────────────────
-    echo ""
-    echo -e "  ${BOLD}Admin Panel [$DROP_NET_LABEL]:${RESET}"
-    _configure_admin_path
-
     # ── SEO / appearance ──────────────────────────────────────────────────────
     echo ""
     echo -e "  ${BOLD}SEO / Appearance [$DROP_NET_LABEL]:${RESET}"
@@ -284,46 +279,3 @@ _conf_bool_prompt() {
     [[ "$val" == "true" || "$val" == "false" ]] && drop_write_conf_key "$key" "$val"
 }
 
-_configure_admin_path() {
-    local cur_ap; cur_ap=$(drop_read_conf "admin_secret_path" "")
-    local _rnd; _rnd=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 10 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' | head -c 10)
-
-    if [[ -z "$cur_ap" ]]; then
-        echo -e "  ${DIM}Admin URL path — random or custom.  Example: mykey2025 → https://domain/mykey2025/${RESET}"
-        echo -ne "  Admin path [Enter for random ${BOLD}$_rnd${RESET}]: "
-        read -r val || true
-        if [[ -n "$val" ]]; then
-            cur_ap=$(echo "$val" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')
-            [[ -z "$cur_ap" ]] && cur_ap="$_rnd"
-        else
-            cur_ap="$_rnd"
-        fi
-        drop_write_conf_key "admin_secret_path" "$cur_ap"
-        success "Admin path set: /$cur_ap/"
-    else
-        info "Current admin path: /$cur_ap/"
-        echo -e "  ${DIM}1) Keep   2) Enter new   3) Random${RESET}"
-        echo -ne "  Choice [1/2/3]: "
-        read -r val || true
-        case "$val" in
-            2)
-                echo -ne "  New admin path: "
-                read -r val || true
-                local new_ap; new_ap=$(echo "$val" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')
-                if [[ -n "$new_ap" ]]; then
-                    drop_write_conf_key "admin_secret_path" "$new_ap"
-                    success "Admin path updated: /$new_ap/"
-                    warn "Re-run main menu option 1 → 3 (Re-apply nginx config) to apply."
-                else
-                    warn "Invalid — keeping current."
-                fi
-                ;;
-            3)
-                drop_write_conf_key "admin_secret_path" "$_rnd"
-                success "Admin path regenerated: /$_rnd/"
-                warn "Re-run option 6 (nginx) to apply."
-                ;;
-            *) info "Admin path unchanged: /$cur_ap/" ;;
-        esac
-    fi
-}

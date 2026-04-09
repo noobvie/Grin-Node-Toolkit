@@ -7,7 +7,6 @@
  *   GET  /api/status          wallet balance + site config + ?addr= next_claim_at
  *   GET  /api/public-stats    total given/received, claim/donation counts
  *   GET  /api/qr              PNG QR code for drop wallet address
- *   GET  /api/csrf            ephemeral CSRF token for frontend forms
  *   POST /api/claim           {grin_address} → {claim_id, slatepack, expires_at}
  *   POST /api/finalize        {claim_id, response_slate} → {status, tx_slate_id}
  *
@@ -16,38 +15,23 @@
  *   POST /api/donate/invoice  {amount, address} → {invoice_id, slatepack}  Tab 3 step 1
  *   POST /api/donate/finalize {invoice_id, response_slate} → {status}      Tab 3 step 2
  *
- * Admin endpoints (all under /<admin_secret_path>/):
- *   GET  /<secret>/                       redirect → /<secret>/admin/
- *   GET  /<secret>/admin/:page            serve static admin HTML (secret validated)
- *   GET  /<secret>/api/stats              JSON stats summary
- *   GET  /<secret>/api/transactions       JSON paginated claims
- *   GET  /<secret>/api/donations          JSON donations list
- *   GET  /<secret>/api/settings           JSON current settings
- *   POST /<secret>/api/settings           save settings
- *   POST /<secret>/api/maintenance        toggle maintenance mode
- *   POST /<secret>/api/add-donation       record manual donation
- *   POST /<secret>/api/expire-invoices    manually expire old pending invoices
- *   GET  /<secret>/export/claims.csv      CSV export of confirmed claims
- *
  * Background intervals:
  *   Every 30s  — cancel expired waiting_finalize claims
  *   Every 60s  — expire timed-out pending invoices
  */
 
-const crypto  = require('crypto');
 const fs      = require('fs');
 const path    = require('path');
 const express = require('express');
 const QRCode  = require('qrcode');
 const { v4: uuidv4 } = require('uuid');
 
-const { loadConfig, writeConfigKey, saveConfig } = require('./config');
+const { loadConfig } = require('./config');
 const db = require('./db');
 const {
   foreignApiCall,
   ownerApiSession,
   encryptedOwnerCall,
-  checkWalletPort,
 } = require('./wallet');
 
 // ── App setup ──────────────────────────────────────────────────────────────────
@@ -59,19 +43,6 @@ app.use(express.json({ limit: '16kb' }));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public_html');
 app.use(express.static(PUBLIC_DIR));
 
-// ── CSRF ────────────────────────────────────────────────────────────────────────
-
-// Ephemeral token — regenerated on each process restart. Frontend fetches it
-// from GET /api/csrf before any state-changing request.
-const CSRF_TOKEN = crypto.randomBytes(16).toString('hex');
-
-function csrfOk(req) {
-  const token = String((req.body && req.body._csrf) || req.headers['x-csrf-token'] || '');
-  if (token.length !== CSRF_TOKEN.length) return false;
-  try {
-    return crypto.timingSafeEqual(Buffer.from(token), Buffer.from(CSRF_TOKEN));
-  } catch { return false; }
-}
 
 // ── Activity log ───────────────────────────────────────────────────────────────
 
@@ -126,11 +97,8 @@ function nextClaimIso(address) {
 app.use((req, res, next) => {
   const cfg = loadConfig();
   if (!cfg.maintenance_mode) return next();
-  const adminP = cfg.admin_secret_path || '';
-  // Always allow: /api/*, /<secret>/*
-  if (req.path.startsWith('/api/') || (adminP && req.path.startsWith('/' + adminP + '/'))) {
-    return next();
-  }
+  // Allow status endpoints so the frontend can display the maintenance overlay
+  if (req.path === '/api/status' || req.path === '/api/public-stats') return next();
   // For HTML requests return 503 with maintenance message
   if (req.accepts('html')) {
     return res.status(503).send(`<!doctype html><html><body style="font-family:sans-serif;text-align:center;padding:4rem">
@@ -141,20 +109,6 @@ app.use((req, res, next) => {
   return res.status(503).json({ error: cfg.maintenance_message || 'Maintenance mode' });
 });
 
-// ── Admin path guard ────────────────────────────────────────────────────────────
-
-function requireAdmin(req, res, next) {
-  const cfg = loadConfig();
-  const expected = cfg.admin_secret_path || '';
-  const provided  = req.params.secret || '';
-  if (!expected || !crypto.timingSafeEqual(
-    Buffer.from(provided.padEnd(64)),
-    Buffer.from(expected.padEnd(64)),
-  )) {
-    return res.status(404).json({ error: 'Not found' });
-  }
-  next();
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PUBLIC ENDPOINTS
@@ -176,6 +130,10 @@ app.get('/api/status', async (req, res) => {
       refresh_from_node: false,
     });
     balance = (parseInt(info.amount_currently_spendable || 0, 10)) / 1_000_000_000;
+    const alertThreshold = parseFloat(cfg.low_balance_alert_grin) || 0;
+    if (alertThreshold > 0 && balance < alertThreshold) {
+      actLog('WARN', `LOW_BALANCE balance=${balance} threshold=${alertThreshold}`);
+    }
     // Also refresh address
     try {
       const addrResult = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'get_slatepack_address', {
@@ -216,7 +174,7 @@ app.get('/api/status', async (req, res) => {
 });
 
 // GET /api/public-stats ────────────────────────────────────────────────────────
-app.get('/api/public-stats', (req, res) => {
+app.get('/api/public-stats', (_req, res) => {
   const cfg = loadConfig();
   if (!cfg.show_public_stats) {
     return res.status(403).json({ error: 'Public stats are disabled' });
@@ -231,7 +189,7 @@ app.get('/api/public-stats', (req, res) => {
 });
 
 // GET /api/qr ──────────────────────────────────────────────────────────────────
-app.get('/api/qr', async (req, res) => {
+app.get('/api/qr', async (_req, res) => {
   const cfg = loadConfig();
   const address = cfg.wallet_address || '';
   if (!address) return res.status(404).end();
@@ -261,6 +219,12 @@ app.post('/api/claim', async (req, res) => {
   if (nextAt) {
     actLog('WARN', `RATE_LIMIT addr=${truncAddr(address)} next_claim=${nextAt}`);
     return err(res, `Already claimed. Next claim available at ${nextAt}`, 429);
+  }
+
+  const maxClaims = parseInt(cfg.max_claims_per_window, 10) || 0;
+  if (maxClaims > 0 && db.countClaimsToday() >= maxClaims) {
+    actLog('WARN', `CLAIMS_CAP_REACHED max=${maxClaims}`);
+    return err(res, 'Daily claim limit reached. Try again later.', 503);
   }
 
   const amount     = parseFloat(cfg.claim_amount_grin) || 2.0;
@@ -300,7 +264,7 @@ app.post('/api/claim', async (req, res) => {
   } catch (e) {
     db.setClaimStatus(claimId, 'failed');
     actLog('ERROR', `WALLET_FAIL cmd=init_send claim_id=${claimId} err=${e.message}`);
-    return err(res, `Wallet error: ${e.message}`, 503);
+    return err(res, 'Wallet temporarily unavailable — please try again shortly.', 503);
   }
 
   db.setSlatepackOut(claimId, slatepack);
@@ -361,7 +325,7 @@ app.post('/api/finalize', async (req, res) => {
     txSlateId = (finalResult && finalResult.id) ? String(finalResult.id) : '';
   } catch (e) {
     actLog('ERROR', `WALLET_FAIL cmd=finalize claim_id=${claimId} err=${e.message}`);
-    return err(res, `Wallet error: ${e.message}`, 503);
+    return err(res, 'Wallet temporarily unavailable — please try again shortly.', 503);
   }
 
   db.setClaimFinalized(claimId, responseSplate, txSlateId);
@@ -422,7 +386,7 @@ app.post('/api/donate/receive', async (req, res) => {
     res.json({ response_slatepack: responseSlatepack });
   } catch (e) {
     actLog('ERROR', `DONATE_RECEIVE_FAIL err=${e.message}`);
-    return err(res, `Wallet error: ${e.message}`, 503);
+    return err(res, 'Wallet temporarily unavailable — please try again shortly.', 503);
   }
 });
 
@@ -474,7 +438,7 @@ app.post('/api/donate/invoice', async (req, res) => {
     res.json({ invoice_id: invoiceId, invoice_slatepack: invoiceSlatepack });
   } catch (e) {
     actLog('ERROR', `DONATE_INVOICE_FAIL err=${e.message}`);
-    return err(res, `Wallet error: ${e.message}`, 503);
+    return err(res, 'Wallet temporarily unavailable — please try again shortly.', 503);
   }
 });
 
@@ -521,137 +485,13 @@ app.post('/api/donate/finalize', async (req, res) => {
     txId = (finalResult && finalResult.id) ? String(finalResult.id) : '';
   } catch (e) {
     actLog('ERROR', `DONATE_FINALIZE_FAIL invoice_id=${invoiceId} err=${e.message}`);
-    return err(res, `Wallet error: ${e.message}`, 503);
+    return err(res, 'Wallet temporarily unavailable — please try again shortly.', 503);
   }
 
   db.confirmInvoiceDonation(invoiceId, txId);
   actLog('INFO', `DONATE_FINALIZE_OK invoice_id=${invoiceId} tx=${txId || '(unknown)'}`);
 
   res.json({ status: 'confirmed', tx_id: txId });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ADMIN ENDPOINTS  (all require /:secret/ prefix, timing-safe comparison)
-// ─────────────────────────────────────────────────────────────────────────────
-
-// GET /:secret/ — redirect to admin dashboard
-app.get('/:secret/', requireAdmin, (req, res) => {
-  res.redirect(`/${req.params.secret}/admin/`);
-});
-
-// GET /:secret/admin/:page — serve static admin HTML pages
-app.get('/:secret/admin/:page?', requireAdmin, (req, res) => {
-  const page = req.params.page || 'index.html';
-  const adminDir = path.resolve(PUBLIC_DIR, 'admin');
-  const file = path.resolve(adminDir, page.endsWith('.html') ? page : page + '.html');
-  if (!file.startsWith(adminDir + path.sep)) return res.status(400).send('Bad request');
-  if (!fs.existsSync(file)) return res.status(404).send('Not found');
-  res.sendFile(file);
-});
-
-// GET /:secret/api/stats
-app.get('/:secret/api/stats', requireAdmin, (req, res) => {
-  const cfg   = loadConfig();
-  const stats = db.getStatsSummary();
-  res.json({ ...stats, network: cfg.network || 'testnet', drop_name: cfg.drop_name });
-});
-
-// GET /:secret/api/transactions
-app.get('/:secret/api/transactions', requireAdmin, (req, res) => {
-  const perPage = 25;
-  const page    = Math.max(1, parseInt(req.query.page, 10) || 1);
-  const filter  = (req.query.status || '').trim();
-  const search  = (req.query.search || '').trim();
-
-  let rows, total;
-  if (search) {
-    const result = db.searchClaims(search, page, perPage);
-    rows  = result.rows;
-    total = result.total;
-  } else {
-    rows  = db.getClaimsPaginated(page, perPage, filter);
-    total = db.countClaimsFiltered(filter);
-  }
-
-  res.json({ claims: rows, page, total_pages: Math.max(1, Math.ceil(total / perPage)), total });
-});
-
-// GET /:secret/api/donations
-app.get('/:secret/api/donations', requireAdmin, (req, res) => {
-  const donations = db.getDonationsList(100);
-  res.json({ donations, total_received: db.getTotalReceivedGrin() });
-});
-
-// GET /:secret/api/settings
-app.get('/:secret/api/settings', requireAdmin, (req, res) => {
-  res.json({ settings: loadConfig(), csrf: CSRF_TOKEN });
-});
-
-// POST /:secret/api/settings
-app.post('/:secret/api/settings', requireAdmin, (req, res) => {
-  if (!csrfOk(req)) return res.status(403).json({ error: 'CSRF validation failed' });
-  const body = req.body || {};
-  const cfg  = loadConfig();
-
-  const strings = ['drop_name','site_description','og_image_url','maintenance_message','theme_default'];
-  const numbers = ['claim_amount_grin','claim_window_hours','finalize_timeout_min','donation_invoice_timeout'];
-  const bools   = ['giveaway_enabled','donation_enabled','maintenance_mode','show_public_stats'];
-
-  for (const k of strings) if (body[k] !== undefined) cfg[k] = String(body[k]).trim();
-  for (const k of numbers) if (body[k] !== undefined) { const n = parseFloat(body[k]); if (!isNaN(n)) cfg[k] = n; }
-  for (const k of bools)   if (body[k] !== undefined) cfg[k] = (body[k] === true || body[k] === 'true' || body[k] === 'on');
-
-  saveConfig(cfg);
-  actLog('INFO', 'ADMIN_SETTINGS_SAVED');
-  res.json({ saved: true, settings: cfg });
-});
-
-// POST /:secret/api/maintenance — toggle maintenance mode
-app.post('/:secret/api/maintenance', requireAdmin, (req, res) => {
-  if (!csrfOk(req)) return res.status(403).json({ error: 'CSRF validation failed' });
-  const cfg = loadConfig();
-  cfg.maintenance_mode = !cfg.maintenance_mode;
-  saveConfig(cfg);
-  actLog('INFO', `ADMIN_MAINTENANCE mode=${cfg.maintenance_mode}`);
-  res.json({ maintenance_mode: cfg.maintenance_mode });
-});
-
-// POST /:secret/api/add-donation — record a manual donation
-app.post('/:secret/api/add-donation', requireAdmin, (req, res) => {
-  if (!csrfOk(req)) return res.status(403).json({ error: 'CSRF validation failed' });
-  const body   = req.body || {};
-  const amount = parseFloat(body.amount);
-  if (!amount || amount <= 0) return err(res, 'amount must be > 0');
-  const id = db.addManualDonation(
-    amount,
-    String(body.tx_id       || ''),
-    String(body.from_address || ''),
-    String(body.note        || ''),
-  );
-  actLog('INFO', `ADMIN_DONATION_ADDED id=${id} amount=${amount}`);
-  res.json({ id, amount });
-});
-
-// POST /:secret/api/expire-invoices — manually expire stale pending invoices
-app.post('/:secret/api/expire-invoices', requireAdmin, (req, res) => {
-  if (!csrfOk(req)) return res.status(403).json({ error: 'CSRF validation failed' });
-  const expired = db.expireOldInvoices();
-  actLog('INFO', `ADMIN_EXPIRE_INVOICES count=${expired}`);
-  res.json({ expired });
-});
-
-// GET /:secret/export/claims.csv
-app.get('/:secret/export/claims.csv', requireAdmin, (req, res) => {
-  const rows = db.getConfirmedClaimsForExport();
-  const lines = [
-    'id,address,amount,confirmed_at,tx_slate_id',
-    ...rows.map(r =>
-      [r.id, r.grin_address, r.amount, r.confirmed_at || '', r.tx_slate_id || ''].join(',')
-    ),
-  ];
-  res.set('Content-Type', 'text/csv');
-  res.set('Content-Disposition', 'attachment; filename=claims.csv');
-  res.send(lines.join('\n'));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

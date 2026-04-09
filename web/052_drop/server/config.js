@@ -17,50 +17,48 @@ const CONF_PATH = process.env.DROP_CONF
   || '/opt/grin/drop-test/grin_drop_test.conf';
 
 const DEFAULTS = {
-  // ── Site ──────────────────────────────────────────────────────────────────
+  // ── Identity ──────────────────────────────────────────────────────────────
   drop_name:              'Grin Drop',
-  site_description:       'Claim free GRIN or donate to keep the drop running.',
-  og_image_url:           '',
-  subdomain:              '',
   theme_default:          'matrix',
+  network:                'testnet',     // 'testnet' | 'mainnet'
 
   // ── Giveaway ──────────────────────────────────────────────────────────────
-  claim_amount_grin:      2.0,
-  claim_window_hours:     24,
-  finalize_timeout_min:   5,
-  giveaway_enabled:       true,
+  giveaway_enabled:          true,
+  claim_amount_grin:         2.0,
+  claim_window_hours:        24,
+  finalize_timeout_min:      5,
+  max_claims_per_window:     0,    // 0 = unlimited; total claims allowed per claim_window_hours
 
   // ── Donation ──────────────────────────────────────────────────────────────
-  donation_enabled:       true,
-  donation_invoice_timeout: 30,   // minutes before invoice expires
+  donation_enabled:          true,
+  donation_invoice_timeout:  30,   // minutes before invoice expires
 
   // ── Wallet identity ───────────────────────────────────────────────────────
-  wallet_address:         '',
+  wallet_address:            '',
 
   // ── Wallet HTTP API ports (set by bash option 4 Configure) ────────────────
-  wallet_foreign_api_port: 13415,
-  wallet_owner_api_port:   13420,
+  wallet_foreign_api_port:   13415,
+  wallet_owner_api_port:     13420,
 
   // ── Wallet API secret files (absolute paths, chmod 600) ───────────────────
-  wallet_foreign_secret:  '/opt/grin/drop-test/wallet/wallet_data/.api_secret',
-  wallet_owner_secret:    '/opt/grin/drop-test/wallet/.owner_api_secret',
+  wallet_foreign_secret:  '/opt/grin/drop-test/wallet_data/.api_secret',
+  wallet_owner_secret:    '/opt/grin/drop-test/.owner_api_secret',
 
   // ── Wallet pass file (read by wallet.js, never logged) ────────────────────
-  wallet_pass_file:       '/opt/grin/drop-test/.wallet_pass_test',
+  wallet_pass_file:       '/opt/grin/drop-test/.temp_test',
 
   // ── Service ───────────────────────────────────────────────────────────────
   service_port:           3004,
-  network:                'testnet',     // 'testnet' | 'mainnet'
 
   // ── Public stats ──────────────────────────────────────────────────────────
   show_public_stats:      true,
 
-  // ── Admin ─────────────────────────────────────────────────────────────────
-  admin_secret_path:      '',
-
   // ── Maintenance ───────────────────────────────────────────────────────────
   maintenance_mode:       false,
   maintenance_message:    "We'll be back soon. Thank you for your patience.",
+
+  // ── Alerts (logged to journal; use fail2ban / monitoring to act on them) ──
+  low_balance_alert_grin: 5,     // log WARN LOW_BALANCE when spendable drops below this
 
   // ── Logging ───────────────────────────────────────────────────────────────
   log_path:               '/opt/grin/drop-test/grin_drop_test.log',
@@ -89,7 +87,7 @@ function writeConfigKey(key, value) {
   const numKeys = new Set([
     'claim_amount_grin', 'claim_window_hours', 'finalize_timeout_min',
     'service_port', 'wallet_foreign_api_port', 'wallet_owner_api_port',
-    'donation_invoice_timeout',
+    'donation_invoice_timeout', 'max_claims_per_window', 'low_balance_alert_grin',
   ]);
   const boolKeys = new Set([
     'giveaway_enabled', 'donation_enabled', 'show_public_stats',
@@ -112,4 +110,4 @@ function saveConfig(cfg) {
   fs.writeFileSync(CONF_PATH, JSON.stringify(cfg, null, 2), { mode: 0o600 });
 }
 
-module.exports = { loadConfig, writeConfigKey, saveConfig, CONF_PATH };
+module.exports = { loadConfig, writeConfigKey, CONF_PATH };

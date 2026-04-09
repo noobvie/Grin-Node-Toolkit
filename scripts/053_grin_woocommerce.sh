@@ -139,7 +139,7 @@ _set_network() {
         WOO_WALLET_SERVICE="grin-woo-wallet-main"
         WOO_LOG="/opt/grin/woocommerce/mainnet/bridge.log"
     else
-        WOO_NET_FLAG="-e floonet"
+        WOO_NET_FLAG="--testnet"
         WOO_NET_LABEL="TESTNET"
         WOO_APP_DIR="/opt/grin/woocommerce/testnet"
         WOO_CONF="/opt/grin/woocommerce/testnet/bridge.conf"

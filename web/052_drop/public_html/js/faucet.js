@@ -3,6 +3,10 @@
 
 const REFRESH_SEC = 60;
 
+// ── Network context (injected by nginx sub_filter) ────────────────────────────
+const API  = window.APP_BASE  || '';
+const COIN = window.DROP_NETWORK === 'testnet' ? 'tGRIN' : 'GRIN';
+
 // ── State ─────────────────────────────────────────────────────────────────────
 let _claimId   = null;
 let _countdown = null;
@@ -77,7 +81,7 @@ async function loadStats() {
     ? "?addr=" + encodeURIComponent(addrInput.value.trim())
     : "";
   try {
-    const data = await apiGet("/api/status" + addrParam);
+    const data = await apiGet(API + "/api/status" + addrParam);
 
     if (data.maintenance_mode) {
       showMaintenanceOverlay(data.drop_name, data.maintenance_message);
@@ -97,6 +101,15 @@ async function loadStats() {
     setText("stat-balance", formatGrin(data.wallet_balance));
     setText("stat-today",   String(data.claims_today));
     setText("stat-total",   String(data.claims_total));
+
+    if (data.claim_amount != null) {
+      const v = parseFloat(data.claim_amount) || 2;
+      const amtLabel = (Number.isInteger(v) ? v : v.toFixed(2)) + " " + COIN;
+      const titleEl = $("claim-title");
+      if (titleEl) titleEl.textContent = "Claim " + amtLabel;
+      const claimBtn = $("claim-btn");
+      if (claimBtn && !claimBtn.disabled) claimBtn.textContent = "Claim " + amtLabel;
+    }
 
     if (data.show_public_stats) {
       if (typeof data.total_given !== "undefined") {
@@ -129,12 +142,12 @@ async function loadStats() {
 }
 
 function formatGrin(n) {
-  return (typeof n === "number" ? n : parseFloat(n) || 0).toFixed(3) + " GRIN";
+  return (typeof n === "number" ? n : parseFloat(n) || 0).toFixed(3) + " " + COIN;
 }
 
 function formatGrinShort(n) {
   const v = typeof n === "number" ? n : parseFloat(n) || 0;
-  return v.toFixed(2) + " GRIN";
+  return v.toFixed(2) + " " + COIN;
 }
 
 // ── Countdown timer (5-min window) ────────────────────────────────────────────
@@ -190,7 +203,7 @@ async function submitClaim() {
   if (btn) { btn.disabled = true; btn.textContent = "Requesting…"; }
 
   try {
-    const data = await apiPost("/api/claim", { grin_address: address });
+    const data = await apiPost(API + "/api/claim", { grin_address: address });
     _claimId = data.claim_id;
 
     const sp = $("slatepack-text");
@@ -205,7 +218,7 @@ async function submitClaim() {
       showError("claim-error", "Error: " + err.message);
     }
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = origBtnText || "Claim"; }
+    if (btn) { btn.disabled = false; btn.textContent = origBtnText || "Claim GRIN"; }
   }
 }
 
@@ -220,7 +233,7 @@ async function submitFinalize() {
   if (btn) { btn.disabled = true; btn.textContent = "Finalizing…"; }
 
   try {
-    const data = await apiPost("/api/finalize", {
+    const data = await apiPost(API + "/api/finalize", {
       claim_id:       _claimId,
       response_slate: response,
     });
@@ -254,7 +267,7 @@ function resetClaim() {
 // ── Donate: load wallet info ───────────────────────────────────────────────────
 async function loadDonate() {
   try {
-    const data = await apiGet("/api/status");
+    const data = await apiGet(API + "/api/status");
     const addr = data.wallet_address || "";
     _donateWalletAddr = addr;
 
@@ -265,6 +278,8 @@ async function loadDonate() {
     const balEl = $("donate-balance");
     if (balEl) balEl.textContent = formatGrin(data.wallet_balance);
 
+    const qrImg = $("qr-img");
+    if (qrImg) qrImg.src = addr ? API + "/api/qr" : "";
     const qrEl = $("donate-qr");
     if (qrEl) qrEl.style.display = addr ? "" : "none";
 
@@ -319,7 +334,7 @@ async function submitDonateReceive() {
   if (btn) { btn.disabled = true; btn.textContent = "Processing…"; }
 
   try {
-    const data = await apiPost("/api/donate/receive", { send_slate: slate });
+    const data = await apiPost(API + "/api/donate/receive", { send_slate: slate });
     const sp = data.response_slatepack || data.slatepack || "";
     const spEl = $("donate-response-slatepack");
     if (spEl) spEl.textContent = sp;
@@ -363,7 +378,7 @@ async function submitDonateInvoice() {
   if (btn) { btn.disabled = true; btn.textContent = "Generating…"; }
 
   try {
-    const data = await apiPost("/api/donate/invoice", { amount, address });
+    const data = await apiPost(API + "/api/donate/invoice", { amount, address });
     _invoiceId = data.invoice_id;
     const sp = data.invoice_slatepack || data.slatepack || "";
     const spEl = $("donate-invoice-slatepack");
@@ -377,12 +392,12 @@ async function submitDonateInvoice() {
 }
 
 async function submitDonateFinalize() {
-  clearError("donate-invoice-error");
+  clearError("donate-invoice-finalize-error");
   const response = ($("donate-pay-slate")?.value || "").trim();
-  if (!response) { showError("donate-invoice-error", "Please paste your payment response."); return; }
-  if (!_invoiceId)  { showError("donate-invoice-error", "No active invoice. Please start again."); return; }
+  if (!response) { showError("donate-invoice-finalize-error", "Please paste your payment response."); return; }
+  if (!_invoiceId)  { showError("donate-invoice-finalize-error", "No active invoice. Please start again."); return; }
   if (!response.includes("BEGINSLATEPACK") || !response.includes("ENDSLATEPACK")) {
-    showError("donate-invoice-error", "Invalid slatepack format.");
+    showError("donate-invoice-finalize-error", "Invalid slatepack format.");
     return;
   }
 
@@ -390,7 +405,7 @@ async function submitDonateFinalize() {
   if (btn) { btn.disabled = true; btn.textContent = "Finalizing…"; }
 
   try {
-    await apiPost("/api/donate/finalize", {
+    await apiPost(API + "/api/donate/finalize", {
       invoice_id:     _invoiceId,
       response_slate: response,
     });
@@ -398,10 +413,10 @@ async function submitDonateFinalize() {
     loadStats();
   } catch (err) {
     if (err.status === 410) {
-      showError("donate-invoice-error", "Invoice expired. Please generate a new one.");
+      showError("donate-invoice-finalize-error", "Invoice expired. Please generate a new one.");
       setDonateInvoiceStep(1);
     } else {
-      showError("donate-invoice-error", "Error: " + err.message);
+      showError("donate-invoice-finalize-error", "Error: " + err.message);
     }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "Submit Payment"; }
@@ -417,6 +432,7 @@ function resetDonateInvoice() {
   if (adr) adr.value = "";
   if (ta) ta.value = "";
   clearError("donate-invoice-error");
+  clearError("donate-invoice-finalize-error");
   setDonateInvoiceStep(1);
 }
 
@@ -444,6 +460,17 @@ function startStatsRefresh() {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
+  // Network badge
+  if (window.DROP_NETWORK) {
+    const titleEl = document.querySelector(".site-title");
+    if (titleEl) {
+      const badge = document.createElement("span");
+      badge.style.cssText = "margin-left:.5rem;font-size:.6rem;font-weight:700;padding:.15rem .4rem;border-radius:3px;vertical-align:middle;background:var(--accent,#00e676);color:#000;letter-spacing:.05em;";
+      badge.textContent = window.DROP_NETWORK.toUpperCase();
+      titleEl.appendChild(badge);
+    }
+  }
+
   setStep(1);
   setDonateReceiveStep(1);
   setDonateInvoiceStep(1);

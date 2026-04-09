@@ -7,8 +7,6 @@
   <title>Grin Drop — Free GRIN Coins</title>
   <meta name="description" content="Claim free GRIN or donate to keep the drop running. No sign-up required.">
   <meta name="keywords" content="grin faucet, testnet grin, grin testnet faucet, free grin coins, grin cryptocurrency testnet, grin-wallet test, slatepack tutorial">
-  <link rel="canonical" href=""><!-- set at deploy time -->
-
   <!-- Open Graph -->
   <meta property="og:title"       content="Grin Drop — Free GRIN Coins">
   <meta property="og:description" content="Claim free GRIN or donate to keep the drop running. No sign-up required.">
@@ -26,8 +24,8 @@
   }
   </script>
 
-  <link rel="stylesheet" href="/css/faucet.css">
-  <link rel="stylesheet" id="theme-css" href="/css/themes/matrix.css">
+  <link rel="stylesheet" href="css/faucet.css">
+  <link rel="stylesheet" id="theme-css" href="css/themes/matrix.css">
 </head>
 
 <body class="theme-matrix">
@@ -93,14 +91,14 @@
 
   <!-- ── Claim section ──────────────────────────────────────────────────────── -->
   <section id="section-giveaway" aria-label="Claim GRIN">
-    <h2>Claim 2 GRIN</h2>
+    <h2 id="claim-title">Claim GRIN</h2>
     <div class="card">
       <!-- Step 1 — Enter address -->
       <div id="step-1" class="step">
         <label for="claim-address">Your Grin Address (grin1... or tgrin1...)</label>
         <input type="text" id="claim-address" placeholder="grin1..." autocomplete="off" spellcheck="false">
         <p class="error-msg" id="claim-error"></p>
-        <button class="btn btn-full" id="claim-btn">Claim 2 GRIN</button>
+        <button class="btn btn-full" id="claim-btn">Claim GRIN</button>
         <p style="margin-top:.7rem;font-size:.8rem;color:var(--text-dim);">
           2 GRIN per address per 24 hours &nbsp;·&nbsp; No sign-up required &nbsp;·&nbsp;
           This simulates exactly how <strong>pool mainnet withdrawals</strong> work.
@@ -121,7 +119,7 @@
         <button class="btn btn-outline btn-sm" id="copy-slatepack-btn">Copy Slatepack</button>
 
         <div class="info-box" style="margin-top:1rem;">
-          <strong>CLI:</strong> <code>grin-wallet --floonet receive</code> → paste slatepack → press Enter → copy the response<br>
+          <strong>CLI:</strong> <code>grin-wallet --testnet receive</code> → paste slatepack → press Enter → copy the response<br>
           <strong>Grim:</strong> Receive tab → paste slatepack → confirm → copy response
         </div>
 
@@ -174,7 +172,7 @@
         <button class="btn btn-outline btn-sm" id="copy-donate-addr-btn">Copy</button>
       </div>
       <div class="donate-qr" id="donate-qr">
-        <img src="/api/qr" alt="Drop wallet QR code" width="140" height="140" loading="lazy">
+        <img id="qr-img" src="" alt="Drop wallet QR code" width="140" height="140" loading="lazy">
       </div>
       <p style="margin-top:.8rem;font-size:.85rem;color:var(--text-dim);">
         Current balance: <strong id="donate-balance">…</strong>
@@ -258,7 +256,7 @@
         </div>
         <label for="donate-pay-slate">Paste your payment response slatepack</label>
         <textarea id="donate-pay-slate" placeholder="BEGINSLATEPACK…ENDSLATEPACK." rows="5"></textarea>
-        <p class="error-msg" id="donate-invoice-error"></p>
+        <p class="error-msg" id="donate-invoice-finalize-error"></p>
         <button class="btn btn-full" id="donate-invoice-finalize-btn" style="margin-top:.8rem;">Submit Payment</button>
       </div>
 
@@ -299,7 +297,7 @@
         </li>
         <li data-n="2">
           <strong>Initialize a testnet wallet</strong><br>
-          <code>grin-wallet --floonet init</code><br>
+          <code>grin-wallet --testnet init</code><br>
           Set a password when prompted. Save your seed phrase somewhere safe.
         </li>
         <li data-n="3">
@@ -310,12 +308,12 @@
         </li>
         <li data-n="4">
           <strong>Verify connection</strong><br>
-          <code>grin-wallet --floonet info</code><br>
+          <code>grin-wallet --testnet info</code><br>
           You should see your balance and "Node version" — you are connected.
         </li>
         <li data-n="5">
           <strong>Get your address</strong><br>
-          <code>grin-wallet --floonet address</code><br>
+          <code>grin-wallet --testnet address</code><br>
           Copy the <code>tgrin1...</code> address and paste it into the claim form above.
         </li>
       </ol>
@@ -353,7 +351,7 @@
         <li data-n="2">Copy the <strong>SLATEPACK</strong> text shown on screen.</li>
         <li data-n="3">
           Paste slatepack into your wallet:<br>
-          <strong>CLI:</strong> <code>grin-wallet --floonet receive</code> → paste → press Enter → wallet outputs a response slatepack<br>
+          <strong>CLI:</strong> <code>grin-wallet --testnet receive</code> → paste → press Enter → wallet outputs a response slatepack<br>
           <strong>Grim:</strong> Receive tab → paste slatepack → confirm → copy the response
         </li>
         <li data-n="4">Copy the <strong>response slatepack</strong> from your wallet.</li>
@@ -407,21 +405,21 @@
   </div>
 </footer>
 
-<script src="/js/matrix.js"></script>
-<script src="/js/theme.js"></script>
-<script src="/js/faucet.js"></script>
+<script src="js/matrix.js"></script>
+<script src="js/theme.js"></script>
+<script src="js/faucet.js"></script>
 
 <!-- Dynamic theme CSS injection (theme.js will update the link href) -->
 <script>
 (function(){
   const link = document.getElementById("theme-css");
   const THEME_CSSS = {
-    matrix:  "/css/themes/matrix.css",
-    warcraft:"/css/themes/warcraft.css",
-    win98:   "/css/themes/win98.css",
-    light:   "/css/themes/light.css",
-    dark:    "/css/themes/dark.css",
-    cute:    "/css/themes/cute.css",
+    matrix:  "css/themes/matrix.css",
+    warcraft:"css/themes/warcraft.css",
+    win98:   "css/themes/win98.css",
+    light:   "css/themes/light.css",
+    dark:    "css/themes/dark.css",
+    cute:    "css/themes/cute.css",
   };
   // Apply saved theme on load
   const saved = localStorage.getItem("grin-faucet-theme") || "matrix";

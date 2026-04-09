@@ -94,6 +94,11 @@ _drop_set_domain() {
         [[ "$val" == "0" ]] && { info "Cancelled."; return; }
         new_dom="${val:-$cur_dom}"
         [[ -z "$new_dom" ]] && { warn "Domain cannot be empty."; continue; }
+        # Validate: hostname characters only
+        if [[ ! "$new_dom" =~ ^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$ ]]; then
+            warn "Invalid domain — use only letters, numbers, hyphens, underscores, and dots."
+            continue
+        fi
         # Validate: reserved prefixes (script 02)
         local _prefix="${new_dom%%.*}"
         if [[ "$_prefix" == "fullmain" || "$_prefix" == "prunemain" || "$_prefix" == "prunetest" ]]; then
@@ -262,18 +267,8 @@ _drop_write_unified_conf() {
     local domain="$1" ssl_cert="$2" ssl_key="$3" ssl_params="$4" nginx_conf="$5"
 
     local test_port=3004 main_port=3005
-    local test_admin="" main_admin=""
-    local test_conf="/opt/grin/drop-test/grin_drop_test.conf"
-    local main_conf="/opt/grin/drop-main/grin_drop_main.conf"
     local home_web_dir="/var/www/grin-drop-home"
     local home_src="$TOOLKIT_ROOT/web/052_drop/home"
-
-    [[ -f "$test_conf" ]] && test_admin=$(python3 -c \
-        "import json; d=json.load(open('$test_conf')); print(d.get('admin_secret_path',''))" \
-        2>/dev/null || true)
-    [[ -f "$main_conf" ]] && main_admin=$(python3 -c \
-        "import json; d=json.load(open('$main_conf')); print(d.get('admin_secret_path',''))" \
-        2>/dev/null || true)
 
     # Deploy unified homepage static files if source exists
     if [[ -d "$home_src" ]]; then
@@ -352,21 +347,11 @@ server {
         proxy_set_header   X-Real-IP \$remote_addr;
         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Prefix /testnet;
+        proxy_set_header   Accept-Encoding "";
         proxy_read_timeout 90s;
+        sub_filter '<head>' '<head><script>window.APP_BASE="/testnet";window.DROP_NETWORK="testnet";</script>';
+        sub_filter_once on;
     }
-
-$([ -n "$test_admin" ] && cat << TESTADMIN
-    location /testnet/${test_admin}/ {
-        limit_req zone=drop_api burst=3 nodelay;
-        proxy_pass         http://127.0.0.1:${test_port}/;
-        proxy_set_header   Host \$host;
-        proxy_set_header   X-Real-IP \$remote_addr;
-        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_read_timeout 30s;
-        add_header X-Robots-Tag "noindex, nofollow" always;
-    }
-TESTADMIN
-)
 
     # ── Mainnet API (:${main_port}) — explicit block, longer prefix wins ────────
     location /mainnet/api/ {
@@ -388,21 +373,11 @@ TESTADMIN
         proxy_set_header   X-Real-IP \$remote_addr;
         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Prefix /mainnet;
+        proxy_set_header   Accept-Encoding "";
         proxy_read_timeout 90s;
+        sub_filter '<head>' '<head><script>window.APP_BASE="/mainnet";window.DROP_NETWORK="mainnet";</script>';
+        sub_filter_once on;
     }
-
-$([ -n "$main_admin" ] && cat << MAINADMIN
-    location /mainnet/${main_admin}/ {
-        limit_req zone=drop_api burst=3 nodelay;
-        proxy_pass         http://127.0.0.1:${main_port}/;
-        proxy_set_header   Host \$host;
-        proxy_set_header   X-Real-IP \$remote_addr;
-        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_read_timeout 30s;
-        add_header X-Robots-Tag "noindex, nofollow" always;
-    }
-MAINADMIN
-)
 
     location ~ /\.  { deny all; }
     location ~ ~\$  { deny all; }

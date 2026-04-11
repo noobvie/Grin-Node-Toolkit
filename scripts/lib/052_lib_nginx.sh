@@ -328,8 +328,8 @@ server {
         add_header Cache-Control "public";
     }
 
-    # ── Testnet API (:${test_port}) — explicit block, longer prefix wins ────────
-    location /testnet/api/ {
+    # ── Testnet API (:${test_port}) — ^~ beats regex, longer prefix beats /testnet/ ──
+    location ^~ /testnet/api/ {
         limit_req zone=drop_test burst=10 nodelay;
         proxy_pass         http://127.0.0.1:${test_port}/api/;
         proxy_set_header   Host \$host;
@@ -340,8 +340,8 @@ server {
         add_header X-Robots-Tag "noindex, nofollow" always;
     }
 
-    # ── Testnet portal (:${test_port}) ───────────────────────────────────────
-    location /testnet/ {
+    # ── Testnet portal (:${test_port}) — ^~ prevents CSS/JS regex from intercepting ──
+    location ^~ /testnet/ {
         limit_req zone=drop_test burst=5 nodelay;
         proxy_pass         http://127.0.0.1:${test_port}/;
         proxy_set_header   Host \$host;
@@ -354,8 +354,8 @@ server {
         sub_filter_once on;
     }
 
-    # ── Mainnet API (:${main_port}) — explicit block, longer prefix wins ────────
-    location /mainnet/api/ {
+    # ── Mainnet API (:${main_port}) — ^~ beats regex, longer prefix beats /mainnet/ ──
+    location ^~ /mainnet/api/ {
         limit_req zone=drop_main burst=10 nodelay;
         proxy_pass         http://127.0.0.1:${main_port}/api/;
         proxy_set_header   Host \$host;
@@ -366,8 +366,8 @@ server {
         add_header X-Robots-Tag "noindex, nofollow" always;
     }
 
-    # ── Mainnet portal (:${main_port}) ───────────────────────────────────────
-    location /mainnet/ {
+    # ── Mainnet portal (:${main_port}) — ^~ prevents CSS/JS regex from intercepting ──
+    location ^~ /mainnet/ {
         limit_req zone=drop_main burst=5 nodelay;
         proxy_pass         http://127.0.0.1:${main_port}/;
         proxy_set_header   Host \$host;

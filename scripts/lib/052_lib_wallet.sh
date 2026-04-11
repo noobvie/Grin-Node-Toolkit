@@ -859,7 +859,7 @@ _drop_toggle_reboot_cron() {
         success "Auto-start @reboot disabled for $DROP_NET_LABEL."
     else
         # Add — wrapper script reads pass from file, never appears in ps
-        local wrapper="/opt/grin/drop-${DROP_NETWORK}-start.sh"
+        local wrapper="$DROP_APP_DIR/drop-${DROP_NETWORK}-start.sh"
         local pass_arg=""
         [[ -f "$DROP_PASS" ]] && pass_arg="-p \"\$(cat '$DROP_PASS')\""
         cat > "$wrapper" << WRAPPER_EOF
@@ -888,7 +888,7 @@ _drop_toggle_watchdog_cron() {
         echo "$cur_cron" | grep -v "$tag" | crontab - 2>/dev/null || true
         success "Watchdog disabled for $DROP_NET_LABEL."
     else
-        local wrapper="/opt/grin/drop-${DROP_NETWORK}-watchdog.sh"
+        local wrapper="$DROP_APP_DIR/drop-${DROP_NETWORK}-watchdog.sh"
         local pass_arg=""
         [[ -f "$DROP_PASS" ]] && pass_arg="-p \"\$(cat '$DROP_PASS')\""
         cat > "$wrapper" << WATCHDOG_EOF

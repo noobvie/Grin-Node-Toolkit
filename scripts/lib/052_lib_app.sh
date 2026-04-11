@@ -68,6 +68,15 @@ drop_install() {
     cp -r "$DROP_APP_SRC"/. "$DROP_APP_DIR/server/"
     success "Server files copied."
 
+    # ── Copy public_html ───────────────────────────────────────────────────────
+    local pub_dir="$DROP_APP_DIR/public_html"
+    info "Copying $DROP_WEB_SRC → $pub_dir ..."
+    mkdir -p "$pub_dir"
+    cp -r "$DROP_WEB_SRC"/. "$pub_dir/"
+    find "$pub_dir" -type f \( -name "*.html" -o -name "*.css" -o -name "*.js" \) \
+        -exec chmod 644 {} \;
+    success "Web files deployed to $pub_dir"
+
     # ── npm install ────────────────────────────────────────────────────────────
     info "Running npm install --omit=dev ..."
     (cd "$DROP_APP_DIR/server" && npm install --omit=dev --no-audit --no-fund) \

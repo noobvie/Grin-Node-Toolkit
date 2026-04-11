@@ -89,7 +89,8 @@ DROP_TOR_PORT=""    # wallet Foreign API port  (3415 mainnet / 13415 testnet)
 DROP_OWNER_PORT=""  # wallet Owner API port    (3420 mainnet / 13420 testnet)
 
 # Shared (cross-network) config — stores unified domain + ssl_type
-DROP_SHARED_CONF="/opt/grin/drop_shared.conf"
+DROP_SHARED_CONF="/opt/grin/conf/drop_shared.conf"
+mkdir -p "/opt/grin/conf"
 
 # Source dirs (single copy, both networks)
 DROP_APP_SRC="$TOOLKIT_ROOT/web/052_drop/server"
@@ -544,7 +545,7 @@ drop_nuke() {
     echo -e "  ${DIM}● App directories (wallets, DB, config, logs)${RESET}"
     echo -e "    /opt/grin/drop-test/"
     echo -e "    /opt/grin/drop-main/"
-    echo -e "    /opt/grin/drop_shared.conf"
+    echo -e "    /opt/grin/conf/drop_shared.conf"
     echo -e "    /opt/grin/logs/grin_drop_*.log"
 
     # ── Nginx ──
@@ -597,11 +598,15 @@ drop_nuke() {
         rm -f "/etc/nginx/sites-enabled/$domain"  && info "Removed nginx symlink: $domain"
         rm -f "/etc/nginx/sites-available/$domain" && info "Removed nginx config:  $domain"
         rm -f "/etc/logrotate.d/nginx-grin-drop"   && info "Removed logrotate config"
-        rm -rf "/var/www/grin-drop-home"            && info "Removed /var/www/grin-drop-home/"
         if command -v nginx &>/dev/null && systemctl is-active --quiet nginx 2>/dev/null; then
             nginx -t 2>/dev/null && systemctl reload nginx && info "nginx reloaded."
         fi
     fi
+
+    # ── Remove /var/www drop files (always, regardless of domain) ────────────
+    for _d in /var/www/grin-drop*; do
+        [[ -d "$_d" ]] && rm -rf "$_d" && info "Removed $_d"
+    done
 
     # ── Remove app + wallet directories ──────────────────────────────────────
     for dir in /opt/grin/drop-test /opt/grin/drop-main; do

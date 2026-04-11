@@ -275,6 +275,7 @@ _drop_write_unified_conf() {
         mkdir -p "$home_web_dir"
         cp -r "$home_src"/. "$home_web_dir/"
         find "$home_web_dir" -type f \( -name "*.html" -o -name "*.css" \) -exec chmod 644 {} \;
+        chown -R www-data:www-data "$home_web_dir"
         info "Unified homepage files deployed to $home_web_dir"
     fi
 

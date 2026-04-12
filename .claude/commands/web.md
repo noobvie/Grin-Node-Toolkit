@@ -51,7 +51,27 @@ Check the file(s) or service directory specified as $ARGUMENTS, or all of web/ i
 - Images should have explicit `width`/`height` to prevent layout shift.
 - CSS and JS files should not be inlined in HTML if they exceed ~20 lines (move to external file).
 
-## 6. Consistency Across Services
+## 6. Deployment Permissions
+
+After copying files to the server, ownership and permissions must be set correctly.
+Check that any deploy step in the corresponding bash script includes these after copying:
+
+```bash
+# Correct ownership — nginx and php-fpm run as www-data
+chown -R www-data:www-data /opt/grin/<service>/public_html/
+
+# Correct permissions
+find /opt/grin/<service>/public_html/ -type d -exec chmod 755 {} \;   # dirs: rwxr-xr-x
+find /opt/grin/<service>/public_html/ -type f -exec chmod 644 {} \;   # files: rw-r--r--
+```
+
+Flag any deploy function that copies files but is missing the `chown`/`chmod` block.
+Also flag:
+- PHP files with execute bit set (`chmod 755` on `.php`) — they should be 644.
+- Config or secret files world-readable (`chmod 644` on files containing credentials) — should be 640 or 600.
+- Directories set to 777 — never acceptable.
+
+## 7. Consistency Across Services
 
 - Favicon usage consistent across all `public_html/` directories.
 - Theme switcher pattern (css/themes/ + theme.js) is used in 052 and 07 — check it works the same way in both.

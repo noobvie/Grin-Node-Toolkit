@@ -49,8 +49,8 @@ drop_setup_wallet() {
         echo ""
 
         echo -e "  ${GREEN}1${RESET}) Install new wallet      ${DIM}(first-time setup)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Scan wallet             ${DIM}(reconcile outputs against chain — first time setup or recover wallet)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Re-install wallet       ${DIM}(clean + full reinstall)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Re-install wallet       ${DIM}(clean + full reinstall)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Scan wallet             ${DIM}(reconcile outputs against chain — first time setup or recover wallet)${RESET}"
         echo -e "  ${GREEN}4${RESET}) Update binary           ${DIM}(download latest grin-wallet, keep wallet data)${RESET}"
         echo -e "  ${GREEN}5${RESET}) Switch Grin node        ${DIM}(change node without reinstalling)${RESET}"
         echo -e "  ${GREEN}6${RESET}) View / recover seed     ${DIM}(display seed phrase, optionally save)${RESET}"
@@ -62,8 +62,8 @@ drop_setup_wallet() {
 
         case "$choice" in
             1) _drop_wallet_install_new  ;;
-            2) _drop_wallet_scan         ;;
-            3) _drop_wallet_reinstall    ;;
+            2) _drop_wallet_reinstall    ;;
+            3) _drop_wallet_scan         ;;
             4) _drop_wallet_update_bin   ;;
             5) _drop_wallet_switch_node  ;;
             6) _drop_wallet_view_seed    ;;

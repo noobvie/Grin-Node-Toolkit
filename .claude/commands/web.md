@@ -71,7 +71,37 @@ Also flag:
 - Config or secret files world-readable (`chmod 644` on files containing credentials) — should be 640 or 600.
 - Directories set to 777 — never acceptable.
 
-## 7. Consistency Across Services
+## 7. Theme Color Contrast
+
+All themes use a shared set of CSS variables. For each theme file in `css/themes/`,
+extract the variable values and check the following pairs against WCAG AA contrast ratios:
+
+| Pair | Used for | Min ratio |
+|---|---|---|
+| `--text` on `--bg-body` | Body text | 4.5 : 1 |
+| `--text` on `--bg-card` | Card text | 4.5 : 1 |
+| `--text` on `--bg-card2` | Secondary card text | 4.5 : 1 |
+| `--text-dim` on `--bg-body` | Dimmed/muted text | 4.5 : 1 |
+| `--text-dim` on `--bg-card` | Dimmed text on cards | 4.5 : 1 |
+| `--accent` on `--bg-body` | Highlighted values, links | 3 : 1 |
+| `--accent` on `--bg-card` | Accent text on cards | 3 : 1 |
+| `--btn-text` on `--btn-bg` | Button labels | 4.5 : 1 |
+| `--error-color` on `--bg-card` | Error messages | 4.5 : 1 |
+| `--ok-color` on `--bg-card` | Success messages | 4.5 : 1 |
+| `a` color on its background | Links | 4.5 : 1 |
+
+**How to calculate:** use the WCAG relative luminance formula.
+For a hex color `#RRGGBB`, convert each channel: `c = c/255`, then
+`c_lin = c <= 0.04045 ? c/12.92 : ((c+0.055)/1.055)^2.4`.
+Luminance `L = 0.2126*R + 0.7152*G + 0.0722*B`.
+Contrast ratio = `(L_lighter + 0.05) / (L_darker + 0.05)`.
+
+Flag any pair that falls below the minimum. For each failure, suggest the
+minimum adjustment needed (e.g. lighten/darken by how much) rather than
+proposing a full color redesign — preserve the theme's visual identity.
+Only report failures, not passing pairs.
+
+## 8. Consistency Across Services
 
 - Favicon usage consistent across all `public_html/` directories.
 - Theme switcher pattern (css/themes/ + theme.js) is used in 052 and 07 — check it works the same way in both.

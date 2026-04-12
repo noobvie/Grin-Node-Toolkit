@@ -26,7 +26,7 @@ const express = require('express');
 const QRCode  = require('qrcode');
 const { v4: uuidv4 } = require('uuid');
 
-const { loadConfig } = require('./config');
+const { loadConfig, writeConfigKey } = require('./config');
 const db = require('./db');
 const {
   foreignApiCall,
@@ -118,33 +118,51 @@ app.use((req, res, next) => {
 app.get('/api/status', async (req, res) => {
   const cfg = loadConfig();
 
-  // Wallet balance via Owner API (non-fatal if wallet is down)
+  // Wallet balance + address via Owner API (non-fatal if wallet is down)
   // balance stays null when wallet is unreachable — frontend shows "—" not "0"
+  // Balance and address are fetched in separate inner try/catch blocks so that
+  // a node-timeout on retrieve_summary_info never prevents the address from
+  // being fetched and persisted.
   let balance = null;
   let walletAddress = cfg.wallet_address || '';
   try {
     const session = await ownerApiSession();
     const { headers, sharedKey, ownerUrl, token } = session;
+
+    // Balance (non-fatal — may fail when the grin node is unreachable)
     // retrieve_summary_info returns [refreshed_from_node, WalletInfo] — summary is at [1]
-    const infoResult = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'retrieve_summary_info', {
-      token,
-      minimum_confirmations: 1,
-      refresh_from_node: true,
-    });
-    const info = Array.isArray(infoResult) ? infoResult[1] : infoResult;
-    balance = parseInt(info?.amount_currently_spendable || '0', 10) / 1_000_000_000;
-    const alertThreshold = parseFloat(cfg.low_balance_alert_grin) || 0;
-    if (alertThreshold > 0 && balance < alertThreshold) {
-      actLog('WARN', `LOW_BALANCE balance=${balance} threshold=${alertThreshold}`);
+    try {
+      const infoResult = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'retrieve_summary_info', {
+        token,
+        minimum_confirmations: 1,
+        refresh_from_node: true,
+      });
+      const info = Array.isArray(infoResult) ? infoResult[1] : infoResult;
+      balance = parseInt(info?.amount_currently_spendable || '0', 10) / 1_000_000_000;
+      const alertThreshold = parseFloat(cfg.low_balance_alert_grin) || 0;
+      if (alertThreshold > 0 && balance < alertThreshold) {
+        actLog('WARN', `LOW_BALANCE balance=${balance} threshold=${alertThreshold}`);
+      }
+    } catch (balErr) {
+      actLog('WARN', `BALANCE_FAIL err=${balErr.message}`);
     }
-    // Also refresh address
+
+    // Address — independent of balance, persisted to config so the donate tab
+    // continues to show the address even when the Owner API is temporarily down.
     try {
       const addrResult = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'get_slatepack_address', {
         token,
         derivation_index: 0,
       });
-      if (addrResult) walletAddress = addrResult;
-    } catch {}
+      if (addrResult) {
+        walletAddress = addrResult;
+        if (addrResult !== cfg.wallet_address) {
+          writeConfigKey('wallet_address', addrResult);
+        }
+      }
+    } catch (addrErr) {
+      actLog('WARN', `ADDR_FAIL err=${addrErr.message}`);
+    }
   } catch (e) {
     actLog('WARN', `WALLET_FAIL cmd=status err=${e.message}`);
   }

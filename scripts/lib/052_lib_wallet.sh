@@ -771,6 +771,18 @@ drop_wallet_listener() {
         echo -e "  Auto-start @reboot : $cron_reboot_note   Watchdog : $watchdog_note"
         echo ""
 
+        # Passphrase file — required by the Node.js server to call Owner API open_wallet
+        local pass_note
+        if [[ -s "$DROP_PASS" ]]; then
+            pass_note="${GREEN}✓ exists${RESET}"
+        else
+            pass_note="${RED}✗ MISSING${RESET} — ${YELLOW}Node.js server cannot open the wallet (balance/claim/donate will fail)${RESET}"
+            echo -e "  ${RED}⚠  Passphrase file: $pass_note${RESET}"
+            echo -e "  ${DIM}   Fix: re-run 'Setup wallet' (option 1) and choose 'Save passphrase for auto-start'.${RESET}"
+        fi
+        [[ -s "$DROP_PASS" ]] && echo -e "  Passphrase file    : $pass_note  ${DIM}($DROP_PASS)${RESET}"
+        echo ""
+
         echo -e "  ${GREEN}1${RESET}) Start / restart TOR session   ${DIM}($DROP_TMUX_TOR)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Start / restart Owner API session  ${DIM}($DROP_TMUX_OWNER)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Start / restart Both"
@@ -882,6 +894,31 @@ _drop_start_session() {
             success "Wallet address saved to config: $fetched_addr"
         else
             info "Could not auto-fetch wallet address — set it manually via option 4 Configure."
+        fi
+    fi
+
+    # Warn if passphrase file is missing — the Node.js server reads it to call
+    # open_wallet on the Owner API. Without it, balance/claim/donate all fail.
+    if [[ "$target" == "owner" || "$target" == "both" ]]; then
+        if [[ ! -s "$DROP_PASS" ]]; then
+            echo ""
+            warn "Passphrase file not found: $DROP_PASS"
+            warn "The Node.js server (grin-drop service) calls the Owner API on every request."
+            warn "It reads the wallet passphrase from this file to call open_wallet."
+            warn "Without it, balance / claim / donate features will all fail."
+            echo ""
+            echo -ne "  Save the passphrase to $DROP_PASS now? [y/N]: "
+            local save_now; read -r save_now || true
+            if [[ "${save_now,,}" == "y" ]]; then
+                echo -ne "  Enter wallet passphrase: "
+                local manual_pass; read -rs manual_pass; echo ""
+                if [[ -n "$manual_pass" ]]; then
+                    _drop_save_pass "$manual_pass"
+                    unset manual_pass
+                else
+                    warn "Empty passphrase — not saved."
+                fi
+            fi
         fi
     fi
 

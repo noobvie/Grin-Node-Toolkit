@@ -27,7 +27,7 @@ const DEFAULTS = {
   claim_amount_grin:         2.0,
   claim_window_hours:        24,
   finalize_timeout_min:      5,
-  max_claims_per_window:     0,    // 0 = unlimited; total claims allowed per claim_window_hours
+  max_claims_per_window:     8,    // 0 = unlimited; total claims allowed per claim_window_hours
 
   // ── Donation ──────────────────────────────────────────────────────────────
   donation_enabled:          true,

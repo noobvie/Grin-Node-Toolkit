@@ -129,7 +129,8 @@ Environment="DROP_CONF=$DROP_CONF"
 Environment="DROP_DB=$DROP_DB"
 ExecStart=$node_bin $DROP_APP_DIR/server/app.js
 Restart=always
-RestartSec=5
+RestartSec=15
+StartLimitIntervalSec=0
 StandardOutput=journal
 StandardError=journal
 

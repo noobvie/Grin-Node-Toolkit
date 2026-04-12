@@ -45,13 +45,16 @@
   <div class="container">
     <div class="header-inner">
       <div class="site-title">Grin Drop <span>ツ</span></div>
-      <div class="theme-switcher" role="navigation" aria-label="Theme selector">
-        <button class="theme-btn" data-theme="matrix"  title="Matrix theme">Matrix</button>
-        <button class="theme-btn" data-theme="warcraft" title="Warcraft Dark theme">Warcraft</button>
-        <button class="theme-btn" data-theme="win98"   title="Windows 98 theme">Win98</button>
-        <button class="theme-btn" data-theme="light"   title="Light theme">Light</button>
-        <button class="theme-btn" data-theme="dark"    title="Dark theme">Dark</button>
-        <button class="theme-btn" data-theme="cute"    title="Cute theme">Cute</button>
+      <div class="theme-picker" role="navigation" aria-label="Theme selector">
+        <button class="theme-picker-btn" id="theme-toggle-btn" title="Switch theme" aria-haspopup="true" aria-expanded="false">&#x1F3A8;</button>
+        <div class="theme-dropdown" id="theme-dropdown" hidden>
+          <button class="theme-btn" data-theme="matrix"  title="Matrix theme">Matrix</button>
+          <button class="theme-btn" data-theme="warcraft" title="Warcraft Dark theme">Warcraft</button>
+          <button class="theme-btn" data-theme="win98"   title="Windows 98 theme">Win98</button>
+          <button class="theme-btn" data-theme="light"   title="Light theme">Light</button>
+          <button class="theme-btn" data-theme="dark"    title="Dark theme">Dark</button>
+          <button class="theme-btn" data-theme="cute"    title="Cute theme">Cute</button>
+        </div>
       </div>
     </div>
   </div>
@@ -153,7 +156,7 @@
 
   <!-- ── Donate section ─────────────────────────────────────────────────────── -->
   <section id="section-donation" aria-label="Donate to keep the drop running">
-    <h2>Help Keep This Drop Running</h2>
+    <h2>Donate to Keep This Drop Running</h2>
 
     <div class="tabs" role="tablist" aria-label="Donation method">
       <button class="donate-tab-btn" data-donate-tab="1" role="tab">Direct</button>
@@ -409,33 +412,6 @@
 <script src="js/theme.js"></script>
 <script src="js/faucet.js"></script>
 
-<!-- Dynamic theme CSS injection (theme.js will update the link href) -->
-<script>
-(function(){
-  const link = document.getElementById("theme-css");
-  const THEME_CSSS = {
-    matrix:  "css/themes/matrix.css",
-    warcraft:"css/themes/warcraft.css",
-    win98:   "css/themes/win98.css",
-    light:   "css/themes/light.css",
-    dark:    "css/themes/dark.css",
-    cute:    "css/themes/cute.css",
-  };
-  // Apply saved theme on load
-  const saved = localStorage.getItem("grin-faucet-theme") || "matrix";
-  if (link && THEME_CSSS[saved]) link.href = THEME_CSSS[saved];
-
-  // Swap CSS file when theme button is clicked
-  document.addEventListener("DOMContentLoaded", function() {
-    document.querySelectorAll("[data-theme]").forEach(btn => {
-      btn.addEventListener("click", function() {
-        const t = this.dataset.theme;
-        if (link && THEME_CSSS[t]) link.href = THEME_CSSS[t];
-      });
-    });
-  });
-})();
-</script>
 
 </body>
 </html>

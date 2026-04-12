@@ -124,12 +124,14 @@ app.get('/api/status', async (req, res) => {
   try {
     const session = await ownerApiSession();
     const { headers, sharedKey, ownerUrl, token } = session;
-    const info = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'retrieve_summary_info', {
+    // retrieve_summary_info returns [refreshed_from_node, WalletInfo] — summary is at [1]
+    const infoResult = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'retrieve_summary_info', {
       token,
       minimum_confirmations: 1,
-      refresh_from_node: false,
+      refresh_from_node: true,
     });
-    balance = (parseInt(info.amount_currently_spendable || 0, 10)) / 1_000_000_000;
+    const info = Array.isArray(infoResult) ? infoResult[1] : infoResult;
+    balance = (parseInt(info?.amount_currently_spendable || '0', 10)) / 1_000_000_000;
     const alertThreshold = parseFloat(cfg.low_balance_alert_grin) || 0;
     if (alertThreshold > 0 && balance < alertThreshold) {
       actLog('WARN', `LOW_BALANCE balance=${balance} threshold=${alertThreshold}`);

@@ -111,7 +111,11 @@ async function ownerApiSession() {
     body:    JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'init_secure_api', params: { ecdh_pubkey: ourPubKey } }),
     signal:  AbortSignal.timeout(10000),
   });
-  const initJson = await initRes.json();
+  const initText = await initRes.text();
+  if (!initText.trim()) {
+    throw new Error(`init_secure_api: empty response (HTTP ${initRes.status}) — owner_api may be starting up`);
+  }
+  const initJson = JSON.parse(initText);
   if (initJson.error) {
     throw new Error('init_secure_api: ' + (initJson.error.message || JSON.stringify(initJson.error)));
   }
@@ -157,7 +161,11 @@ async function encryptedOwnerCall(headers, sharedKey, ownerUrl, method, params) 
     }),
     signal: AbortSignal.timeout(30000),
   });
-  const encJson = await encRes.json();
+  const encText = await encRes.text();
+  if (!encText.trim()) {
+    throw new Error(`${method}: empty response (HTTP ${encRes.status}) — owner_api may be busy or restarting`);
+  }
+  const encJson = JSON.parse(encText);
   if (encJson.error) {
     throw new Error(`encrypted_request_v3 (${method}): ${encJson.error.message || JSON.stringify(encJson.error)}`);
   }

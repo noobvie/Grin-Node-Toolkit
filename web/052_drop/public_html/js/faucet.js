@@ -113,12 +113,9 @@ async function refreshStatus() {
       const maxLabel = (Number.isInteger(v) ? v : v.toFixed(2)) + " " + COIN;
       const hintEl = $("claim-hint");
       if (hintEl) {
-        hintEl.innerHTML = `Max ${maxLabel} per address per ${data.claim_window_hours || 24}h &nbsp;·&nbsp; No sign-up required &nbsp;·&nbsp; `
+        hintEl.innerHTML = `Up to ${maxLabel} per address per ${data.claim_window_hours || 24}h &nbsp;·&nbsp; No sign-up required &nbsp;·&nbsp; `
           + `This simulates exactly how <strong>mainnet withdrawals</strong> work.`;
       }
-      // Update "Max" button label to show the configured max
-      const maxBtn = document.querySelector('#claim-amount-grid .amount-btn[data-amount="max"]');
-      if (maxBtn) maxBtn.textContent = `Max (${maxLabel})`;
     }
 
     if (data.show_public_stats) {
@@ -232,7 +229,7 @@ function _initClaimAmountButtons() {
     btn.addEventListener("click", () => {
       document.querySelectorAll("#claim-amount-grid .amount-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
-      _claimAmount = btn.dataset.amount === "max" ? null : parseFloat(btn.dataset.amount);
+      _claimAmount = parseFloat(btn.dataset.amount);
     });
   });
 }
@@ -572,7 +569,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Network-specific amount button labels (donate + claim preset)
   document.querySelectorAll(".amount-btn[data-amount]").forEach(btn => {
     const amt = btn.dataset.amount;
-    if (amt !== "custom" && amt !== "max") {
+    if (amt !== "custom") {
       btn.textContent = amt + " " + COIN;
     }
   });

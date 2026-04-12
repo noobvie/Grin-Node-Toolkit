@@ -75,8 +75,29 @@ _check_nginx() {
     command -v nginx &>/dev/null
 }
 
+_evict_apache2() {
+    if systemctl is-active --quiet apache2 2>/dev/null; then
+        warn "apache2 is running and occupies port 80 — nginx cannot start."
+        local yn
+        echo -ne "  Stop and disable apache2 now? [Y/n]: "
+        read -r yn || true
+        if [[ "${yn,,}" != "n" ]]; then
+            systemctl stop    apache2 2>/dev/null || true
+            systemctl disable apache2 2>/dev/null || true
+            success "apache2 stopped and disabled."
+        else
+            warn "Skipping — nginx may fail to bind port 80/443."
+        fi
+    elif systemctl is-enabled --quiet apache2 2>/dev/null; then
+        warn "apache2 is enabled at boot (not running now) — disabling to avoid port conflict on reboot."
+        systemctl disable apache2 2>/dev/null || true
+        success "apache2 boot-start disabled."
+    fi
+}
+
 _install_nginx() {
     info "Installing nginx..."
+    _evict_apache2
     if command -v dnf &>/dev/null; then
         dnf install -y nginx || die "Failed to install nginx."
     else

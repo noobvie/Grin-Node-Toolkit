@@ -392,6 +392,25 @@ NGINX_UNIFIED
 # Shared nginx helpers
 # =============================================================================
 
+_drop_evict_apache2() {
+    if systemctl is-active --quiet apache2 2>/dev/null; then
+        warn "apache2 is running and occupies port 80 — nginx cannot start."
+        echo -ne "  Stop and disable apache2 now? [Y/n]: "
+        local yn; read -r yn || true
+        if [[ "${yn,,}" != "n" ]]; then
+            systemctl stop    apache2 2>/dev/null || true
+            systemctl disable apache2 2>/dev/null || true
+            success "apache2 stopped and disabled."
+        else
+            warn "Skipping — nginx may fail to bind port 80/443."
+        fi
+    elif systemctl is-enabled --quiet apache2 2>/dev/null; then
+        warn "apache2 is enabled at boot (not running now) — disabling to avoid port conflict on reboot."
+        systemctl disable apache2 2>/dev/null || true
+        success "apache2 boot-start disabled."
+    fi
+}
+
 _drop_nginx_ensure_installed() {
     local need_nginx=false need_certbot=false
     command -v nginx   &>/dev/null || need_nginx=true
@@ -400,6 +419,7 @@ _drop_nginx_ensure_installed() {
     $need_nginx   && pkg="$pkg nginx"
     $need_certbot && pkg="$pkg certbot python3-certbot-nginx"
     if [[ -n "$pkg" ]]; then
+        $need_nginx && _drop_evict_apache2
         info "Installing:$pkg ..."
         apt-get install -y $pkg || { die "apt-get failed — run as root."; return 1; }
     fi

@@ -457,6 +457,27 @@ get_action() {
 # Common Functions (Used by Setup and Add)
 #############################################################################
 
+# Stop apache2 if running so it cannot block nginx on port 80/443.
+# Also disables it at boot if it is enabled-but-stopped.
+_evict_apache2() {
+    if systemctl is-active --quiet apache2 2>/dev/null; then
+        print_warning "apache2 is running and occupies port 80 — nginx cannot start."
+        local yn
+        read -r -p "  Stop and disable apache2 now? [Y/n]: " yn
+        if [[ "${yn,,}" != "n" ]]; then
+            systemctl stop    apache2 2>/dev/null || true
+            systemctl disable apache2 2>/dev/null || true
+            print_info "apache2 stopped and disabled."
+        else
+            print_warning "Skipping — nginx may fail to bind port 80/443."
+        fi
+    elif systemctl is-enabled --quiet apache2 2>/dev/null; then
+        print_warning "apache2 is enabled at boot (not running now) — disabling to avoid port conflict on reboot."
+        systemctl disable apache2 2>/dev/null || true
+        print_info "apache2 boot-start disabled."
+    fi
+}
+
 # Ensure nginx + certbot are installed. Single prompt if either (or both) are missing.
 # Returns 1 if the user cancels or declines.
 ensure_nginx_certbot() {
@@ -476,6 +497,7 @@ ensure_nginx_certbot() {
 
     if $need_nginx; then
         print_section "Installing Nginx"
+        _evict_apache2
         if [[ -f /etc/debian_version ]]; then
             apt-get update && apt-get install -y nginx
         elif [[ -f /etc/redhat-release ]]; then

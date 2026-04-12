@@ -141,8 +141,23 @@ SYSTEMD
     systemctl daemon-reload
     success "systemd service created: /etc/systemd/system/${DROP_SERVICE}.service"
     echo ""
-    echo -e "  ${DIM}Start with: systemctl start $DROP_SERVICE${RESET}"
-    echo -e "  ${DIM}Enable autostart: systemctl enable $DROP_SERVICE${RESET}"
+
+    echo -ne "  Enable autostart on boot? [Y/n]: "
+    local en_choice; read -r en_choice || true
+    if [[ "${en_choice,,}" != "n" ]]; then
+        systemctl enable "$DROP_SERVICE" 2>/dev/null && success "Service enabled (autostart on boot)."
+    fi
+
+    echo -ne "  Start service now? [Y/n]: "
+    local st_choice; read -r st_choice || true
+    if [[ "${st_choice,,}" != "n" ]]; then
+        systemctl start "$DROP_SERVICE" \
+            && success "Service started — DB will be created on first startup." \
+            || warn "Service failed to start — check: journalctl -u $DROP_SERVICE -n 30"
+    else
+        echo -e "  ${DIM}Start later: systemctl start $DROP_SERVICE${RESET}"
+    fi
+
     log "[drop_install] network=$DROP_NETWORK node=$(node --version 2>/dev/null)"
     pause
 }

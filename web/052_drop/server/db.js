@@ -309,6 +309,9 @@ function getConfirmedClaimsForExport() {
   ).all();
 }
 
+// Initialise DB eagerly at module load — creates the file and schema on first run.
+getDb();
+
 module.exports = {
   // Claims
   getClaim,

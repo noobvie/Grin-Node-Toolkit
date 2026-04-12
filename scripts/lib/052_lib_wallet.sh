@@ -717,8 +717,8 @@ _drop_write_toml() {
 
     # 4. Wallet own API secrets (foreign + owner)
     # api_secret_path lives inside wallet_data/ — matches toolkit conf default
-    _patch_toml "$toml" "api_secret_path"       "\"$DROP_WALLET_DIR/wallet_data/.api_secret\""
-    _patch_toml "$toml" "owner_api_secret_path" "\"$DROP_WALLET_DIR/.owner_api_secret\""
+    _patch_toml_in_section "$toml" "wallet" "api_secret_path"       "\"$DROP_WALLET_DIR/wallet_data/.api_secret\""
+    _patch_toml_in_section "$toml" "wallet" "owner_api_secret_path" "\"$DROP_WALLET_DIR/.owner_api_secret\""
 
     # 5. Limit log rotation
     _patch_toml "$toml" "log_max_files" "3"

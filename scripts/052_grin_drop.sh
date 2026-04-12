@@ -405,6 +405,16 @@ _patch_toml() {
     fi
 }
 
+_patch_toml_in_section() {
+    # Like _patch_toml but guarantees the key lands inside [section].
+    # Removes ALL occurrences (commented or not), then inserts the key
+    # immediately after the [section] header — safe even when a previous
+    # run placed the key in the wrong section (e.g. [tor] instead of [wallet]).
+    local toml="$1" section="$2" key="$3" val="$4"
+    sed -i "/^#\?\s*${key}\s*=/d" "$toml"
+    sed -i "/^\[${section}\]/a ${key} = ${val}" "$toml"
+}
+
 # =============================================================================
 # MENU STATUS HEADER
 # =============================================================================

@@ -317,7 +317,7 @@ drop_ensure_defaults() {
         "theme_default:matrix"
         # Giveaway
         "giveaway_enabled:true"
-        "claim_amount_grin:2.0"
+        "claim_amount_grin:0.1"
         "claim_window_hours:24"
         "finalize_timeout_min:5"
         "max_claims_per_window:$max_claims_default"
@@ -546,8 +546,17 @@ drop_nuke() {
 
     # ── Tmux sessions ──
     echo -e "  ${DIM}● Tmux sessions${RESET}"
-    echo -e "    drop-test-tor   drop-test-ownerapi"
-    echo -e "    drop-main-tor   drop-main-ownerapi"
+    echo -e "    drop-test-tor   drop-test-ownerapi   drop-test-scan"
+    echo -e "    drop-main-tor   drop-main-ownerapi   drop-main-scan"
+
+    # ── Cron entries ──
+    echo -e "  ${DIM}● Cron entries (reboot auto-start + watchdog)${RESET}"
+    local _cron_test _cron_main
+    crontab -l 2>/dev/null | grep -q "grin-drop-test-reboot\|052_watchdog_test" \
+        && _cron_test="${GREEN}set${RESET}" || _cron_test="${DIM}none${RESET}"
+    crontab -l 2>/dev/null | grep -q "grin-drop-main-reboot\|052_watchdog_main" \
+        && _cron_main="${GREEN}set${RESET}" || _cron_main="${DIM}none${RESET}"
+    echo -e "    testnet: $_cron_test   mainnet: $_cron_main"
 
     # ── Filesystem ──
     echo -e "  ${DIM}● App directories (wallets, DB, config, logs)${RESET}"
@@ -593,13 +602,30 @@ drop_nuke() {
     done
     systemctl daemon-reload 2>/dev/null || true
 
-    # ── Kill tmux sessions ────────────────────────────────────────────────────
-    for sess in drop-test-tor drop-test-ownerapi drop-main-tor drop-main-ownerapi; do
+    # ── Kill tmux sessions (wallet + scan) ───────────────────────────────────
+    for sess in drop-test-tor drop-test-ownerapi drop-test-scan \
+                drop-main-tor drop-main-ownerapi drop-main-scan; do
         if tmux has-session -t "$sess" 2>/dev/null; then
             tmux kill-session -t "$sess" 2>/dev/null || true
             info "Killed tmux session: $sess"
         fi
     done
+
+    # ── Remove cron entries (@reboot auto-start + watchdog) ───────────────────
+    local cur_cron; cur_cron=$(crontab -l 2>/dev/null || true)
+    if [[ -n "$cur_cron" ]]; then
+        local new_cron
+        new_cron=$(echo "$cur_cron" \
+            | grep -v "# grin-drop-test-reboot" \
+            | grep -v "# grin-drop-main-reboot" \
+            | grep -v "052_watchdog_test" \
+            | grep -v "052_watchdog_main" \
+            || true)
+        if [[ "$new_cron" != "$cur_cron" ]]; then
+            echo "$new_cron" | crontab - 2>/dev/null || true
+            info "Removed drop cron entries (reboot + watchdog)."
+        fi
+    fi
 
     # ── Remove nginx vhost ────────────────────────────────────────────────────
     if [[ -n "$domain" ]]; then

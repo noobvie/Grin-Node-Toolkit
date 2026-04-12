@@ -24,7 +24,7 @@ const DEFAULTS = {
 
   // ── Giveaway ──────────────────────────────────────────────────────────────
   giveaway_enabled:          true,
-  claim_amount_grin:         2.0,
+  claim_amount_grin:         0.1,
   claim_window_hours:        24,
   finalize_timeout_min:      5,
   max_claims_per_window:     8,    // 0 = unlimited; total claims allowed per claim_window_hours

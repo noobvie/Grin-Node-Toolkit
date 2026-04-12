@@ -179,7 +179,7 @@ drop_configure() {
     # ── Giveaway ──────────────────────────────────────────────────────────────
     echo ""
     echo -e "  ${BOLD}Giveaway Settings [$DROP_NET_LABEL]:${RESET}"
-    echo -ne "Claim amount     [$(drop_read_conf claim_amount_grin '2.0') GRIN]: "
+    echo -ne "Claim amount     [$(drop_read_conf claim_amount_grin '0.1') GRIN]: "
     read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
     [[ -n "$val" ]] && drop_write_conf_key "claim_amount_grin" "$val"
 
@@ -247,8 +247,16 @@ drop_configure() {
     echo -e "  ${BOLD}Wallet HTTP API [$DROP_NET_LABEL]:${RESET}"
     echo -e "  ${DIM}Foreign API port : $(drop_read_conf "wallet_foreign_api_port" "$DROP_TOR_PORT")${RESET}"
     echo -e "  ${DIM}Owner API port   : $(drop_read_conf "wallet_owner_api_port" "$DROP_OWNER_PORT")${RESET}"
-    echo -e "  ${DIM}Foreign secret   : ${DROP_WALLET_DIR}/wallet_data/.api_secret${RESET}"
-    echo -e "  ${DIM}Owner secret     : ${DROP_WALLET_DIR}/.owner_api_secret${RESET}"
+    local fsec; fsec=$(drop_read_conf "wallet_foreign_secret" "${DROP_WALLET_DIR}/wallet_data/.api_secret")
+    local osec; osec=$(drop_read_conf "wallet_owner_secret"   "${DROP_WALLET_DIR}/.owner_api_secret")
+    local fsec_st osec_st
+    [[ -s "$fsec" ]] && fsec_st="${GREEN}✓ exists${RESET}" || fsec_st="${RED}✗ missing${RESET}"
+    [[ -s "$osec" ]] && osec_st="${GREEN}✓ exists${RESET}" || osec_st="${RED}✗ missing${RESET}"
+    echo -e "  Foreign secret   : ${DIM}$fsec${RESET}  $fsec_st"
+    echo -e "  Owner secret     : ${DIM}$osec${RESET}  $osec_st"
+    if [[ ! -s "$osec" ]]; then
+        warn "Owner API secret missing — run option 1 (Install) or fix ownership to regenerate it."
+    fi
 
     # ── SEO / appearance ──────────────────────────────────────────────────────
     echo ""

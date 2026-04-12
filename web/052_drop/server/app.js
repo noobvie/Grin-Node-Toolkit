@@ -119,7 +119,8 @@ app.get('/api/status', async (req, res) => {
   const cfg = loadConfig();
 
   // Wallet balance via Owner API (non-fatal if wallet is down)
-  let balance = 0.0;
+  // balance stays null when wallet is unreachable — frontend shows "—" not "0"
+  let balance = null;
   let walletAddress = cfg.wallet_address || '';
   try {
     const session = await ownerApiSession();
@@ -131,7 +132,7 @@ app.get('/api/status', async (req, res) => {
       refresh_from_node: true,
     });
     const info = Array.isArray(infoResult) ? infoResult[1] : infoResult;
-    balance = (parseInt(info?.amount_currently_spendable || '0', 10)) / 1_000_000_000;
+    balance = parseInt(info?.amount_currently_spendable || '0', 10) / 1_000_000_000;
     const alertThreshold = parseFloat(cfg.low_balance_alert_grin) || 0;
     if (alertThreshold > 0 && balance < alertThreshold) {
       actLog('WARN', `LOW_BALANCE balance=${balance} threshold=${alertThreshold}`);
@@ -152,7 +153,7 @@ app.get('/api/status', async (req, res) => {
     drop_name:           cfg.drop_name,
     claim_amount:        cfg.claim_amount_grin,
     wallet_address:      walletAddress,
-    wallet_balance:      Math.round(balance * 1e9) / 1e9,
+    wallet_balance:      balance !== null ? Math.round(balance * 1e9) / 1e9 : null,
     claims_today:        db.countClaimsToday(),
     claims_total:        db.countClaimsTotal(),
     next_claim_at:       null,

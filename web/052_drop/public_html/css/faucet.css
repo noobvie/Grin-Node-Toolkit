@@ -268,24 +268,98 @@ textarea { resize: vertical; min-height: 100px; }
 .countdown-label { font-size: .8rem; color: var(--text-dim); }
 
 /* ── Donate section ───────────────────────────────────────────────────────── */
-.donate-card { display: grid; gap: 1rem; }
-.donate-addr-row {
-  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+
+/* Underline-style tab bar (donate section only) */
+.donate-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1.25rem;
+  border-bottom: 2px solid var(--border);
+  flex-wrap: wrap;
 }
-.donate-addr {
+.donate-tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  padding: .6rem 1rem;
+  font-size: .88rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: color .15s, border-color .15s;
+  white-space: nowrap;
+}
+.donate-tab-btn:hover  { color: var(--accent); }
+.donate-tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Donate panes — CSS class toggled by JS */
+.donate-pane { display: none; }
+.donate-pane.active { display: block; }
+
+/* cmd-box — address / command display */
+.cmd-box {
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .6rem 1rem;
   font-family: var(--font-mono);
-  font-size: .85rem;
+  font-size: .82rem;
   word-break: break-all;
-  flex: 1;
   color: var(--accent);
 }
-.donate-qr { margin-top: .6rem; }
-.donate-qr img { max-width: 140px; border: 3px solid var(--bg-card2); border-radius: 4px; }
+
+/* Amount preset buttons */
+.amount-grid { display: flex; flex-wrap: wrap; gap: .5rem; margin: .75rem 0; }
+.amount-btn {
+  padding: .45rem 1.1rem;
+  border: 2px solid var(--border);
+  border-radius: 50px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: .85rem;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: border-color .15s, color .15s, background .15s;
+}
+.amount-btn:hover  { border-color: var(--accent); color: var(--accent); }
+.amount-btn.active { border-color: var(--accent); color: var(--accent);
+                     background: rgba(0,255,65,.07); }
+
+/* Step label inside donate cards */
+.donate-step-label {
+  font-size: .72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+  margin-bottom: .35rem;
+  margin-top: .6rem;
+}
+
+/* Wallet status badge */
+#donate-wallet-status {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  font-size: .78rem;
+  font-weight: 700;
+  padding: .25rem .75rem;
+  border-radius: 50px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-dim);
+  transition: color .2s, border-color .2s, background .2s;
+}
+#donate-wallet-status.ok    { border-color: var(--ok-color);    color: var(--ok-color);    background: rgba(0,255,65,.06); }
+#donate-wallet-status.error { border-color: var(--error-color); color: var(--error-color); background: rgba(255,68,68,.06); }
+.ws-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
 
 /* ── How it works ─────────────────────────────────────────────────────────── */
 .tabs { display: flex; gap: .4rem; margin-bottom: 1rem; flex-wrap: wrap; }
-.tab-btn,
-.donate-tab-btn {
+.tab-btn {
   background: var(--bg-card);
   border: 1px solid var(--border);
   color: var(--text-dim);
@@ -296,8 +370,7 @@ textarea { resize: vertical; min-height: 100px; }
   font-family: var(--font-sans);
   transition: border-color .15s, color .15s;
 }
-.tab-btn.active, .tab-btn:hover,
-.donate-tab-btn.active, .donate-tab-btn:hover {
+.tab-btn.active, .tab-btn:hover {
   border-color: var(--accent);
   color: var(--accent);
 }

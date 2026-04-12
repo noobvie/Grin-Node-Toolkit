@@ -49,22 +49,24 @@ drop_setup_wallet() {
         echo ""
 
         echo -e "  ${GREEN}1${RESET}) Install new wallet      ${DIM}(first-time setup)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Re-install wallet       ${DIM}(clean + full reinstall)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Update binary           ${DIM}(download latest grin-wallet, keep wallet data)${RESET}"
-        echo -e "  ${GREEN}4${RESET}) Switch Grin node        ${DIM}(change node without reinstalling)${RESET}"
-        echo -e "  ${GREEN}5${RESET}) View / recover seed     ${DIM}(display seed phrase, optionally save)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Scan wallet             ${DIM}(reconcile outputs against chain — first time setup or recover wallet)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Re-install wallet       ${DIM}(clean + full reinstall)${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Update binary           ${DIM}(download latest grin-wallet, keep wallet data)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Switch Grin node        ${DIM}(change node without reinstalling)${RESET}"
+        echo -e "  ${GREEN}6${RESET}) View / recover seed     ${DIM}(display seed phrase, optionally save)${RESET}"
         echo -e "  ${DIM}0) Back${RESET}"
         echo ""
-        echo -ne "${BOLD}Select [1-5/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-6/0]: ${RESET}"
         local choice
         read -r choice || true
 
         case "$choice" in
             1) _drop_wallet_install_new  ;;
-            2) _drop_wallet_reinstall    ;;
-            3) _drop_wallet_update_bin   ;;
-            4) _drop_wallet_switch_node  ;;
-            5) _drop_wallet_view_seed    ;;
+            2) _drop_wallet_scan         ;;
+            3) _drop_wallet_reinstall    ;;
+            4) _drop_wallet_update_bin   ;;
+            5) _drop_wallet_switch_node  ;;
+            6) _drop_wallet_view_seed    ;;
             0) break ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
@@ -201,6 +203,57 @@ _drop_wallet_install_new() {
     _drop_print_summary "$chosen_node"
     log "[drop_wallet_install_new] network=$DROP_NETWORK node=$chosen_node"
     drop_ensure_defaults
+    pause
+}
+
+_drop_wallet_scan() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── Scan Wallet [$DROP_NET_LABEL] ──${RESET}\n"
+    echo -e "  Reconciles all outputs against the node — needed after wallet restore"
+    echo -e "  or if the balance looks wrong. Scan runs in a background tmux session.\n"
+    echo -e "  ${BOLD}${YELLOW}⚠  Owner API and TOR sessions will be stopped first, then restarted.${RESET}\n"
+
+    if [[ ! -d "$DROP_WALLET_DIR/wallet_data" ]]; then
+        warn "No wallet data found at $DROP_WALLET_DIR/wallet_data — install wallet first."
+        pause; return
+    fi
+
+    echo -ne "  Continue? [y/N]: "
+    local ans; read -r ans || true
+    [[ "$ans" =~ ^[Yy]$ ]] || { info "Cancelled."; pause; return; }
+
+    local wallet_pass
+    wallet_pass=$(_drop_read_saved_pass)
+
+    # Stop both sessions so grin-wallet scan can acquire the DB lock
+    info "Stopping wallet sessions…"
+    tmux kill-session -t "$DROP_TMUX_TOR"   2>/dev/null || true
+    tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null || true
+    _drop_kill_wallet_processes "$DROP_TOR_PORT"
+    _drop_kill_wallet_processes "$DROP_OWNER_PORT"
+    sleep 1
+
+    # Build scan command (same -p quoting as _drop_start_session)
+    local pass_arg=""
+    [[ -n "$wallet_pass" ]] && pass_arg="-p '$wallet_pass'"
+    local scan_tmux="drop-${DROP_NETWORK}-scan"
+    local scan_cmd="'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg scan; echo; echo '--- scan complete, press any key ---'; read -rn1"
+
+    tmux kill-session -t "$scan_tmux" 2>/dev/null || true
+    _drop_launch_session "$scan_tmux" "$scan_cmd"
+    sleep 1
+
+    if tmux has-session -t "$scan_tmux" 2>/dev/null; then
+        success "Scan running in tmux session: $scan_tmux"
+        echo -e "\n  Monitor progress:  ${BOLD}tmux attach -t $scan_tmux${RESET}"
+        echo -e "  The session closes automatically when scan finishes.\n"
+        echo -e "  ${DIM}After scan completes, restart wallet sessions via option 2 → Wallet Listener.${RESET}"
+    else
+        warn "Scan session failed to start — check wallet config and passphrase."
+    fi
+
+    unset wallet_pass pass_arg
+    log "[drop_wallet_scan] network=$DROP_NETWORK"
     pause
 }
 

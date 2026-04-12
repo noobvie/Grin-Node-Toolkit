@@ -99,7 +99,7 @@
     <div class="card">
       <!-- Step 1 — Enter address -->
       <div id="step-1" class="step">
-        <label for="claim-address">Your Grin Address (grin1... or tgrin1...)</label>
+        <label for="claim-address" id="claim-address-label">Your Grin Address</label>
         <input type="text" id="claim-address" placeholder="grin1..." autocomplete="off" spellcheck="false">
         <p class="error-msg" id="claim-error"></p>
         <button class="btn btn-full" id="claim-btn">Claim GRIN</button>
@@ -159,120 +159,153 @@
   <section id="section-donation" aria-label="Donate to keep the drop running">
     <h2>Donate to Keep This Drop Running</h2>
 
-    <div class="tabs" role="tablist" aria-label="Donation method">
-      <button class="donate-tab-btn" data-donate-tab="1" role="tab">Direct</button>
-      <button class="donate-tab-btn" data-donate-tab="2" role="tab">You Send</button>
-      <button class="donate-tab-btn" data-donate-tab="3" role="tab">We Invoice</button>
+    <div style="margin-bottom:1rem;">
+      <span id="donate-wallet-status"><span class="ws-dot"></span> Checking wallet…</span>
     </div>
 
-    <!-- Tab 1 — Direct (TOR wallet send) -->
-    <div id="donate-tab-1" class="donate-tab-panel card" role="tabpanel">
-      <p style="margin-bottom:1rem;font-size:.9rem;color:var(--text-dim);">
-        Open your wallet, send GRIN directly to this address via TOR.
-        No interactive exchange needed.
-      </p>
-      <div class="donate-addr-row">
-        <span class="donate-addr" id="donate-address">Loading…</span>
-        <button class="btn btn-outline btn-sm" id="copy-donate-addr-btn">Copy</button>
-      </div>
-      <div class="donate-qr" id="donate-qr">
-        <img id="qr-img" src="" alt="Drop wallet QR code" width="140" height="140" loading="lazy">
-      </div>
-      <p style="margin-top:.8rem;font-size:.85rem;color:var(--text-dim);">
-        Current balance: <strong id="donate-balance">…</strong>
-      </p>
-      <div class="info-box" style="margin-top:1rem;">
-        <strong>CLI:</strong> <code>grin-wallet send -d <em>&lt;address above&gt;</em> -a &lt;amount&gt;</code><br>
-        <strong>Grim:</strong> Send tab → paste address → enter amount → confirm
-      </div>
+    <!-- Tab switcher — underline style -->
+    <div class="donate-tabs" role="tablist" aria-label="Donation method">
+      <button class="donate-tab-btn active" data-pane="donate-pane-1" role="tab">1. TOR Direct</button>
+      <button class="donate-tab-btn"        data-pane="donate-pane-2" role="tab">2. Slatepack — You Send</button>
+      <button class="donate-tab-btn"        data-pane="donate-pane-3" role="tab">3. Invoice — We Request</button>
     </div>
 
-    <!-- Tab 2 — You Send / We Receive (slatepack receive) -->
-    <div id="donate-tab-2" class="donate-tab-panel card" role="tabpanel">
-
-      <!-- Step 1 — run send, paste send slatepack -->
-      <div id="donate-receive-step-1">
-        <p style="margin-bottom:.8rem;font-size:.9rem;color:var(--text-dim);">
-          Enter an amount, run the command in your wallet, then paste the
-          <strong>send slatepack</strong> below.
+    <!-- Pane 1 — TOR Direct -->
+    <div id="donate-pane-1" class="donate-pane active">
+      <div class="card">
+        <strong>Send directly from your Grin wallet via TOR</strong>
+        <p style="font-size:.88rem;color:var(--text-dim);margin:.75rem 0;">
+          The simplest method — paste the address below into your wallet and send any amount.
+          TOR must be running. If the connection is unstable, use one of the other tabs.
         </p>
-        <label for="donate-receive-amount">Amount (GRIN)</label>
-        <input type="number" id="donate-receive-amount" placeholder="e.g. 5" min="0.001" step="any"
-               style="width:120px;margin-bottom:.8rem;">
-        <div class="info-box" style="margin-bottom:1rem;">
-          <strong>CLI:</strong> <code id="donate-receive-cmd">grin-wallet send -d &lt;address&gt; -a 5</code>
+        <div class="donate-step-label">Our Grin Address</div>
+        <div class="cmd-box" id="donate-address">Loading…</div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem;">
+          <button class="btn btn-outline btn-sm" id="copy-donate-addr-btn">Copy Address</button>
         </div>
-        <label for="donate-send-slate">Paste the send slatepack from your wallet</label>
-        <textarea id="donate-send-slate" placeholder="BEGINSLATEPACK…ENDSLATEPACK." rows="5"></textarea>
+        <p style="margin-top:.8rem;font-size:.85rem;color:var(--text-dim);">
+          Current balance: <strong id="donate-balance" style="color:var(--accent);">…</strong>
+        </p>
+      </div>
+      <div class="card" style="margin-top:.8rem;background:var(--bg-card2);">
+        <strong>Quick steps</strong>
+        <ol style="font-size:.86rem;color:var(--text-dim);margin:.6rem 0;padding-left:1.2rem;line-height:2;">
+          <li>Make sure TOR is running (or built into your wallet)</li>
+          <li>In your wallet: <strong>Send → paste address above → enter amount</strong></li>
+          <li>Confirm. Done!</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- Pane 2 — Slatepack: You Send / We Receive -->
+    <div id="donate-pane-2" class="donate-pane">
+
+      <div class="card" id="donate-rcv-s1">
+        <strong>Step 1 — Choose amount &amp; generate a send slate</strong>
+        <p style="font-size:.88rem;color:var(--text-dim);margin:.75rem 0;">
+          Pick a donation amount, then run the command shown in your terminal.
+        </p>
+        <div class="amount-grid" id="donate-rcv-amount-grid">
+          <button class="amount-btn" data-amount="10">10 GRIN</button>
+          <button class="amount-btn" data-amount="50">50 GRIN</button>
+          <button class="amount-btn" data-amount="100">100 GRIN</button>
+          <button class="amount-btn" data-amount="custom">Custom…</button>
+        </div>
+        <div id="donate-rcv-custom-wrap" style="display:none;margin-bottom:.75rem;">
+          <input type="number" id="donate-rcv-custom-amt" min="1" step="1"
+                 placeholder="Min 1 GRIN" style="max-width:200px;">
+        </div>
+        <div class="donate-step-label">Run in your terminal</div>
+        <div class="cmd-box" id="donate-send-cmd">grin-wallet send -m -d &lt;address&gt; &lt;amount&gt;</div>
+        <button class="btn btn-outline btn-sm" style="margin-top:.5rem;" id="donate-copy-send-cmd">Copy Command</button>
+        <div style="margin-top:1rem;">
+          <label for="donate-send-slate">Paste the output slatepack from your wallet:</label>
+          <textarea id="donate-send-slate" rows="5"
+                    placeholder="BEGINSLATEPACK...ENDSLATEPACK."
+                    style="font-family:var(--font-mono);font-size:.78rem;margin-top:.35rem;"></textarea>
+        </div>
         <p class="error-msg" id="donate-receive-error"></p>
-        <button class="btn btn-full" id="donate-receive-btn">Submit Slatepack</button>
+        <button class="btn btn-full" id="donate-receive-btn" style="margin-top:.8rem;">Process Donation →</button>
       </div>
 
-      <!-- Step 2 — copy response, finalize in wallet -->
-      <div id="donate-receive-step-2" style="display:none;">
-        <p style="margin-bottom:.6rem;font-size:.9rem;">
-          Copy this <strong>response slatepack</strong> and finalize in your wallet:
+      <div class="card" id="donate-rcv-s2" style="display:none;">
+        <strong>Step 2 — Finalize from your wallet</strong>
+        <p style="font-size:.88rem;color:var(--text-dim);margin:.75rem 0;">
+          Copy the response slatepack below, save it to a file, then finalize.
         </p>
+        <div class="donate-step-label">Our Response Slatepack</div>
         <div class="slatepack-box" id="donate-response-slatepack"></div>
-        <button class="btn btn-outline btn-sm" id="copy-donate-response-btn"
-                style="margin-top:.5rem;">Copy Response</button>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem;">
+          <button class="btn btn-outline btn-sm" id="copy-donate-response-btn">Copy Response</button>
+          <button class="btn btn-outline btn-sm" id="download-donate-response-btn">Download .slatepack</button>
+        </div>
         <div class="info-box" style="margin-top:1rem;">
           <strong>CLI:</strong> <code>grin-wallet finalize -i response.slatepack</code><br>
           <strong>Grim:</strong> Receive tab → paste response → confirm
         </div>
-        <div class="success-box" style="margin-top:1rem;">
-          Thank you! Once you finalize, your donation will be recorded.
+        <div class="success-box" style="margin-top:1rem;text-align:center;">
+          <p>🙏 Almost there! Run the finalize command to complete your donation. Thank you!</p>
         </div>
-        <button class="btn btn-outline btn-full" id="donate-receive-reset-btn"
-                style="margin-top:.8rem;">Donate Again</button>
+        <button class="btn btn-outline btn-full btn-sm" id="donate-receive-reset-btn" style="margin-top:.8rem;">Donate Again</button>
       </div>
     </div>
 
-    <!-- Tab 3 — We Invoice / You Pay -->
-    <div id="donate-tab-3" class="donate-tab-panel card" role="tabpanel">
+    <!-- Pane 3 — Invoice: We Request / You Pay -->
+    <div id="donate-pane-3" class="donate-pane">
 
-      <!-- Step 1 — enter amount + your address -->
-      <div id="donate-invoice-step-1">
-        <p style="margin-bottom:.8rem;font-size:.9rem;color:var(--text-dim);">
-          We generate an invoice slatepack for you to pay with
-          <code>grin-wallet pay</code>.
-        </p>
-        <label for="donate-invoice-amount">Amount (GRIN)</label>
-        <input type="number" id="donate-invoice-amount" placeholder="e.g. 10" min="0.001" step="any"
-               style="margin-bottom:.8rem;">
-        <label for="donate-invoice-address">Your Grin address <span style="color:var(--text-dim);font-size:.85rem;">(grin1… or tgrin1…)</span></label>
-        <input type="text" id="donate-invoice-address" placeholder="grin1..." autocomplete="off" spellcheck="false">
+      <div class="card" id="donate-inv-s1">
+        <strong>Step 1 — Choose donation amount</strong>
+        <div class="amount-grid" id="donate-inv-amount-grid">
+          <button class="amount-btn" data-amount="10">10 GRIN</button>
+          <button class="amount-btn" data-amount="50">50 GRIN</button>
+          <button class="amount-btn" data-amount="100">100 GRIN</button>
+          <button class="amount-btn" data-amount="custom">Custom…</button>
+        </div>
+        <div id="donate-inv-custom-wrap" style="display:none;margin-bottom:.75rem;">
+          <input type="number" id="donate-inv-custom-amt" min="1" step="1"
+                 placeholder="Min 1 GRIN" style="max-width:200px;">
+        </div>
+        <div style="margin-top:.75rem;">
+          <label for="donate-invoice-address">Your Grin address <span style="font-size:.85rem;color:var(--text-dim);">(so we direct the invoice to you)</span></label>
+          <input type="text" id="donate-invoice-address" placeholder="grin1..."
+                 autocomplete="off" spellcheck="false" style="margin-top:.35rem;">
+        </div>
         <p class="error-msg" id="donate-invoice-error"></p>
-        <button class="btn btn-full" id="donate-invoice-btn" style="margin-top:.8rem;">Generate Invoice</button>
+        <button class="btn btn-full" id="donate-invoice-btn" style="margin-top:.8rem;" disabled>Create Invoice →</button>
       </div>
 
-      <!-- Step 2 — copy invoice, pay in wallet, paste response -->
-      <div id="donate-invoice-step-2" style="display:none;">
-        <p style="margin-bottom:.6rem;font-size:.9rem;">
-          Copy this <strong>invoice slatepack</strong>, pay it in your wallet, then paste the response:
+      <div class="card" id="donate-inv-s2" style="display:none;">
+        <strong>Step 2 — Pay the invoice from your wallet</strong>
+        <p style="font-size:.88rem;color:var(--text-dim);margin:.75rem 0;">
+          Copy the invoice slatepack, save it to a file, then pay it.
         </p>
+        <div class="donate-step-label">Invoice Slatepack — copy into your wallet</div>
         <div class="slatepack-box" id="donate-invoice-slatepack"></div>
-        <button class="btn btn-outline btn-sm" id="copy-donate-invoice-btn"
-                style="margin-top:.5rem;">Copy Invoice</button>
-        <div class="info-box" style="margin-top:.8rem;margin-bottom:.8rem;">
-          <strong>CLI:</strong> <code>grin-wallet pay -i invoice.slatepack</code><br>
-          Copy the response slatepack your wallet outputs.
+        <button class="btn btn-outline btn-sm" style="margin-top:.5rem;" id="copy-donate-invoice-btn">Copy Invoice</button>
+        <div class="info-box" style="margin-top:.8rem;">
+          <strong>CLI:</strong> <code id="donate-pay-cmd">grin-wallet pay -i invoice.slatepack</code>
         </div>
-        <label for="donate-pay-slate">Paste your payment response slatepack</label>
-        <textarea id="donate-pay-slate" placeholder="BEGINSLATEPACK…ENDSLATEPACK." rows="5"></textarea>
+        <div style="margin-top:.75rem;">
+          <label for="donate-pay-slate">Paste your wallet's payment response:</label>
+          <textarea id="donate-pay-slate" rows="5"
+                    placeholder="BEGINSLATEPACK...ENDSLATEPACK."
+                    style="font-family:var(--font-mono);font-size:.78rem;margin-top:.35rem;"></textarea>
+        </div>
         <p class="error-msg" id="donate-invoice-finalize-error"></p>
-        <button class="btn btn-full" id="donate-invoice-finalize-btn" style="margin-top:.8rem;">Submit Payment</button>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.8rem;">
+          <button class="btn btn-full" id="donate-invoice-finalize-btn">Finalize Donation →</button>
+          <button class="btn btn-outline btn-sm" id="donate-invoice-back-btn">← Back</button>
+        </div>
       </div>
 
-      <!-- Step 3 — confirmed -->
-      <div id="donate-invoice-step-3" style="display:none;">
-        <div class="success-box">
+      <div class="card" id="donate-inv-s3" style="display:none;">
+        <div class="success-box" style="text-align:center;padding:2rem 1rem;">
+          <div style="font-size:3rem;margin-bottom:.5rem;">✅</div>
           <h3 style="color:var(--ok-color);margin-bottom:.5rem;">Thank You!</h3>
-          <p>Your donation has been received and recorded. We appreciate your support!</p>
+          <p>Your donation has been received and broadcast to the Grin network.</p>
+          <p style="font-size:.85rem;color:var(--text-dim);margin-top:.5rem;">You're awesome. Grin on! ツ</p>
         </div>
-        <button class="btn btn-outline btn-full" id="donate-invoice-reset-btn" style="margin-top:1rem;">
-          Donate Again
-        </button>
+        <button class="btn btn-outline btn-full btn-sm" id="donate-invoice-reset-btn" style="margin-top:1rem;">Donate Again</button>
       </div>
     </div>
 

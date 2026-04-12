@@ -823,6 +823,22 @@ _drop_start_session() {
         else
             warn "Owner API session may have exited — check wallet config."
         fi
+
+        # Auto-fetch wallet address and save to config so the donate tab shows
+        # the correct address even if the owner API is temporarily unreachable.
+        info "Fetching wallet address (waiting 5s for owner_api to initialise)…"
+        sleep 5
+        local fetched_addr=""
+        fetched_addr=$("$DROP_WALLET_BIN" $DROP_NET_FLAG \
+            --top_level_dir "$DROP_WALLET_DIR" \
+            ${wallet_pass:+-p "$wallet_pass"} address 2>/dev/null \
+            | grep -oE '(tgrin1|grin1)[a-z0-9]{40,}' | head -1 || true)
+        if [[ -n "$fetched_addr" ]]; then
+            drop_write_conf_key "wallet_address" "$fetched_addr"
+            success "Wallet address saved to config: $fetched_addr"
+        else
+            info "Could not auto-fetch wallet address — set it manually via option 4 Configure."
+        fi
     fi
 
     unset wallet_pass pass_arg base_cmd

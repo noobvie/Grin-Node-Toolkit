@@ -113,6 +113,12 @@ async function ownerApiSession() {
   });
   const initText = await initRes.text();
   if (!initText.trim()) {
+    if (initRes.status === 401) {
+      throw new Error(
+        `init_secure_api: HTTP 401 — owner API auth failed. ` +
+        `Check secret file: ${cfg.wallet_owner_secret} and that the owner_api session is running.`
+      );
+    }
     throw new Error(`init_secure_api: empty response (HTTP ${initRes.status}) — owner_api may be starting up`);
   }
   const initJson = JSON.parse(initText);

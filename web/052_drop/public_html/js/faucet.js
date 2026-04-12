@@ -178,7 +178,7 @@ function stopCountdown() {
 function setStep(n) {
   [1, 2, 3].forEach(i => {
     const el = $("step-" + i);
-    if (el) el.style.display = i === n ? "" : "none";
+    if (el) el.style.display = i === n ? "block" : "none";
   });
   if (n !== 2) stopCountdown();
 }

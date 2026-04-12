@@ -284,7 +284,8 @@ textarea { resize: vertical; min-height: 100px; }
 
 /* ── How it works ─────────────────────────────────────────────────────────── */
 .tabs { display: flex; gap: .4rem; margin-bottom: 1rem; flex-wrap: wrap; }
-.tab-btn {
+.tab-btn,
+.donate-tab-btn {
   background: var(--bg-card);
   border: 1px solid var(--border);
   color: var(--text-dim);
@@ -295,7 +296,8 @@ textarea { resize: vertical; min-height: 100px; }
   font-family: var(--font-sans);
   transition: border-color .15s, color .15s;
 }
-.tab-btn.active, .tab-btn:hover {
+.tab-btn.active, .tab-btn:hover,
+.donate-tab-btn.active, .donate-tab-btn:hover {
   border-color: var(--accent);
   color: var(--accent);
 }

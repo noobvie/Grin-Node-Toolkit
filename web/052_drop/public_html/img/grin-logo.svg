@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Grin logo — yellow circle with smiley face -->
+  <circle cx="100" cy="100" r="96" fill="#f2c94c"/>
+  <!-- Eyes -->
+  <circle cx="68" cy="82" r="10" fill="#1a1a1a"/>
+  <circle cx="132" cy="82" r="10" fill="#1a1a1a"/>
+  <!-- Smile -->
+  <path d="M 55 118 Q 100 158 145 118" stroke="#1a1a1a" stroke-width="8"
+        fill="none" stroke-linecap="round"/>
+</svg>

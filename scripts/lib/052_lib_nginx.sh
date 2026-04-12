@@ -351,6 +351,7 @@ server {
         proxy_set_header   Accept-Encoding "";
         proxy_read_timeout 90s;
         sub_filter '<head>' '<head><script>window.APP_BASE="/testnet";window.DROP_NETWORK="testnet";</script>';
+        sub_filter '__SITE_URL__' 'https://$domain';
         sub_filter_once on;
     }
 
@@ -377,6 +378,7 @@ server {
         proxy_set_header   Accept-Encoding "";
         proxy_read_timeout 90s;
         sub_filter '<head>' '<head><script>window.APP_BASE="/mainnet";window.DROP_NETWORK="mainnet";</script>';
+        sub_filter '__SITE_URL__' 'https://$domain';
         sub_filter_once on;
     }
 

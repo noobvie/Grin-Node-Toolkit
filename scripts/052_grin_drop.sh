@@ -389,9 +389,17 @@ PYEOF
 }
 
 _patch_toml() {
+    # Patch a key in a TOML file.
+    # Handles three cases:
+    #   1. Key exists uncommented       → sed replace in-place
+    #   2. Key is commented out (# key) → uncomment + set value in-place
+    #                                     (preserves position inside correct [section])
+    #   3. Key absent entirely          → append to end of file
     local toml="$1" key="$2" val="$3"
     if grep -q "^${key}\s*=" "$toml" 2>/dev/null; then
         sed -i "s|^${key}\s*=.*|${key} = ${val}|" "$toml"
+    elif grep -q "^#\s*${key}\s*=" "$toml" 2>/dev/null; then
+        sed -i "s|^#\s*${key}\s*=.*|${key} = ${val}|" "$toml"
     else
         echo "${key} = ${val}" >> "$toml"
     fi

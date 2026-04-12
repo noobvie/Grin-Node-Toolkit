@@ -152,6 +152,7 @@ app.get('/api/status', async (req, res) => {
   const payload = {
     drop_name:           cfg.drop_name,
     claim_amount:        cfg.claim_amount_grin,
+    claim_window_hours:  cfg.claim_window_hours,
     wallet_address:      walletAddress,
     wallet_balance:      balance !== null ? Math.round(balance * 1e9) / 1e9 : null,
     claims_today:        db.countClaimsToday(),
@@ -230,7 +231,12 @@ app.post('/api/claim', async (req, res) => {
     return err(res, 'Daily claim limit reached. Try again later.', 503);
   }
 
-  const amount     = parseFloat(cfg.claim_amount_grin) || 2.0;
+  const maxAmount       = parseFloat(cfg.claim_amount_grin) || 2.0;
+  const requestedAmount = body.amount != null ? parseFloat(body.amount) : null;
+  const amount = (requestedAmount != null && requestedAmount > 0)
+    ? Math.min(Math.max(requestedAmount, 0.001), maxAmount)
+    : maxAmount;
+
   const timeoutMin = parseInt(cfg.finalize_timeout_min, 10) || 5;
   const claimId    = db.createClaim(address, amount, timeoutMin);
   actLog('INFO', `CLAIM_INIT addr=${truncAddr(address)} claim_id=${claimId}`);

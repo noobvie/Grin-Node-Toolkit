@@ -10,9 +10,10 @@ const NET_FLAG = window.DROP_NETWORK === 'testnet' ? '--testnet ' : '';
 const ADDR_PFX = window.DROP_NETWORK === 'testnet' ? 'tgrin1' : 'grin1';
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let _claimId   = null;
-let _countdown = null;
-let _invoiceId = null;
+let _claimId          = null;
+let _claimAmount      = null;   // null = use server max; number = override
+let _countdown        = null;
+let _invoiceId        = null;
 let _donateWalletAddr = '';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -106,13 +107,18 @@ async function refreshStatus() {
     setText("stat-today",   String(data.claims_today));
     setText("stat-total",   String(data.claims_total));
 
+    // Update claim hint with server-configured max amount
     if (data.claim_amount != null) {
       const v = parseFloat(data.claim_amount) || 2;
-      const amtLabel = (Number.isInteger(v) ? v : v.toFixed(2)) + " " + COIN;
-      const titleEl = $("claim-title");
-      if (titleEl) titleEl.textContent = "Claim " + amtLabel;
-      const claimBtn = $("claim-btn");
-      if (claimBtn && !claimBtn.disabled) claimBtn.textContent = "Claim " + amtLabel;
+      const maxLabel = (Number.isInteger(v) ? v : v.toFixed(2)) + " " + COIN;
+      const hintEl = $("claim-hint");
+      if (hintEl) {
+        hintEl.innerHTML = `Max ${maxLabel} per address per ${data.claim_window_hours || 24}h &nbsp;·&nbsp; No sign-up required &nbsp;·&nbsp; `
+          + `This simulates exactly how <strong>mainnet withdrawals</strong> work.`;
+      }
+      // Update "Max" button label to show the configured max
+      const maxBtn = document.querySelector('#claim-amount-grid .amount-btn[data-amount="max"]');
+      if (maxBtn) maxBtn.textContent = `Max (${maxLabel})`;
     }
 
     if (data.show_public_stats) {
@@ -220,6 +226,17 @@ function showError(id, msg) {
 
 function clearError(id) { showError(id, ""); }
 
+// ── Claim amount buttons ──────────────────────────────────────────────────────
+function _initClaimAmountButtons() {
+  document.querySelectorAll("#claim-amount-grid .amount-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#claim-amount-grid .amount-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      _claimAmount = btn.dataset.amount === "max" ? null : parseFloat(btn.dataset.amount);
+    });
+  });
+}
+
 // ── Step 1 — Claim ────────────────────────────────────────────────────────────
 async function submitClaim() {
   clearError("claim-error");
@@ -231,7 +248,9 @@ async function submitClaim() {
   if (btn) { btn.disabled = true; btn.textContent = "Requesting…"; }
 
   try {
-    const data = await apiPost(API + "/api/claim", { grin_address: address });
+    const claimBody = { grin_address: address };
+    if (_claimAmount !== null) claimBody.amount = _claimAmount;
+    const data = await apiPost(API + "/api/claim", claimBody);
     _claimId = data.claim_id;
 
     const sp = $("slatepack-text");
@@ -539,7 +558,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Network-specific address placeholder + label
+  // Network-specific title + address placeholder + label
+  const titleEl = $("claim-title");
+  if (titleEl) titleEl.textContent = `Claim free ${COIN}`;
   const addrInput = $("claim-address");
   if (addrInput) addrInput.placeholder = ADDR_PFX + "1...";
   const addrLabel = $("claim-address-label");
@@ -548,10 +569,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const invAddrInput = $("donate-invoice-address");
   if (invAddrInput) invAddrInput.placeholder = ADDR_PFX + "1...";
 
-  // Network-specific amount button labels
+  // Network-specific amount button labels (donate + claim preset)
   document.querySelectorAll(".amount-btn[data-amount]").forEach(btn => {
-    if (btn.dataset.amount !== "custom") {
-      btn.textContent = btn.dataset.amount + " " + COIN;
+    const amt = btn.dataset.amount;
+    if (amt !== "custom" && amt !== "max") {
+      btn.textContent = amt + " " + COIN;
     }
   });
   // Network-specific custom amount placeholders
@@ -568,6 +590,7 @@ document.addEventListener("DOMContentLoaded", () => {
   startStatsRefresh(); // single shared poll every 5 min
   initTabs();
   initDonateTabs();
+  _initClaimAmountButtons();
   _initRcvAmountButtons();
   _initInvAmountButtons();
   _updateSendCmd();

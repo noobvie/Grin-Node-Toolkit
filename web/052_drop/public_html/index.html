@@ -95,17 +95,24 @@
 
   <!-- ── Claim section ──────────────────────────────────────────────────────── -->
   <section id="section-giveaway" aria-label="Claim GRIN">
-    <h2 id="claim-title">Claim GRIN</h2>
+    <h2 id="claim-title">Claim free GRIN</h2>
     <div class="card">
       <!-- Step 1 — Enter address -->
       <div id="step-1" class="step">
+        <div class="amount-grid" id="claim-amount-grid" style="margin-bottom:.9rem;">
+          <button class="amount-btn" data-amount="0.1">0.1</button>
+          <button class="amount-btn" data-amount="0.2">0.2</button>
+          <button class="amount-btn" data-amount="0.5">0.5</button>
+          <button class="amount-btn" data-amount="1.0">1.0</button>
+          <button class="amount-btn active" data-amount="max">Max</button>
+        </div>
         <label for="claim-address" id="claim-address-label">Your Grin Address</label>
         <input type="text" id="claim-address" placeholder="" autocomplete="off" spellcheck="false">
         <p class="error-msg" id="claim-error"></p>
-        <button class="btn btn-full" id="claim-btn">Claim GRIN</button>
-        <p style="margin-top:.7rem;font-size:.8rem;color:var(--text-dim);">
-          2 GRIN per address per 24 hours &nbsp;·&nbsp; No sign-up required &nbsp;·&nbsp;
-          This simulates exactly how <strong>pool mainnet withdrawals</strong> work.
+        <button class="btn btn-full" id="claim-btn">Claim</button>
+        <p style="margin-top:.7rem;font-size:.8rem;color:var(--text-dim);" id="claim-hint">
+          No sign-up required &nbsp;·&nbsp;
+          This simulates exactly how <strong>mainnet withdrawals</strong> work.
         </p>
       </div>
 

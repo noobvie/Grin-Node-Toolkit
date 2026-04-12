@@ -75,11 +75,34 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
 ```
 
 ## Grin Network Details
-- Mainnet P2P port: 3414 | API port: 3413
-- Testnet P2P port: 13414 | API port: 13413
-- Wallet Foreign API: 3415 (mainnet) / 13415 (testnet)
-- Wallet Owner API: 3420 (mainnet) / 13420 (testnet)
-- Currency label: `GRIN` (mainnet), `tGRIN` (testnet) — never swap these
+
+| | Mainnet | Testnet |
+|---|---|---|
+| CLI flag | *(none)* | `--testnet` |
+| Currency label | `GRIN` | `tGRIN` |
+| P2P port | 3414 | 13414 |
+| Node API port | 3413 | 13413 |
+| Node API (nginx) | `https://api.grin.money` | `https://testapi.grin.money` |
+| Wallet Foreign API | 3415 | 13415 |
+| Wallet Owner API | 3420 | 13420 |
+
+Secret files:
+- Foreign API: `$WALLET_DIR/wallet_data/.api_secret`
+- Owner API: `$WALLET_DIR/.owner_api_secret`
+
+## Grin API References
+
+- **Wallet API tutorial**: https://github.com/grincc/grin-wallet-api-tutorial
+  — JSON-RPC examples for Owner API v3 (ECDH flow) and Foreign API v2
+- **Wallet API Rust docs**: https://docs.rs/grin_wallet_api/latest/grin_wallet_api/
+  — Authoritative method signatures and parameter types
+- **grin-wallet repo**: https://github.com/mimblewimble/grin-wallet — binary releases
+- **grin node repo**: https://github.com/mimblewimble/grin — node config, API
+- **Official docs**: https://docs.grin.mw — slatepack spec, transaction lifecycle
+- **Grin forum**: https://forum.grin.mw — ecosystem announcements, known issues
+
+Owner API v3 session flow: `init_secure_api` → ECDH key exchange → `open_wallet` → AES-256-GCM encrypted calls.
+Foreign API v2: Basic Auth + secret file, no ECDH.
 
 ## Do Not
 - Never run the toolkit scripts locally — they assume a Linux VPS with root access

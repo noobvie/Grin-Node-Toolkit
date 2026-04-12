@@ -33,10 +33,23 @@ Perform a deep logic and security review on shell scripts. Review the file(s) sp
 - Port number inputs: are they checked to be numeric and in valid range?
 - Wallet passphrase inputs: are they handled with `read -r -s` (no echo)?
 
-### 5. Mainnet/Testnet Isolation
+### 5. Dead & Obsolete Code
+- **Commented-out code blocks** — large blocks of commented code that were never
+  re-enabled. Flag with line numbers and ask whether to remove or restore.
+- **Orphaned functions** — functions defined but never called within the file or
+  sourced lib. Check by grepping all scripts for the function name.
+- **Unreachable menu options** — options listed in the header comment but missing
+  from the `case` statement, or vice versa.
+- **TODO/FIXME older than current feature scope** — flag any `TODO`/`FIXME` comments
+  and note if the surrounding code looks already implemented or superseded.
+- **Duplicate logic** — near-identical blocks that could be a shared function,
+  or functions that do the same thing under different names.
+
+### 6. Mainnet/Testnet Isolation
 - Confirm service names, ports, and directories are fully distinct per network.
   Mainnet and testnet must never share a port, dir, or systemd unit name.
 - Check that `tGRIN` label is used in all testnet-facing output, never `GRIN`.
 
 Report by category with file:line references and a concrete fix for each issue.
-End with a risk summary: critical / medium / low counts.
+End with a risk summary: critical / medium / low counts, and a separate list of
+dead code candidates that are safe to delete.

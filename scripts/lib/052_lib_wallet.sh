@@ -211,7 +211,7 @@ _drop_wallet_scan() {
     echo -e "\n${BOLD}${CYAN}── Scan Wallet [$DROP_NET_LABEL] ──${RESET}\n"
     echo -e "  Reconciles all outputs against the node — needed after wallet restore"
     echo -e "  or if the balance looks wrong. Scan runs in a background tmux session.\n"
-    echo -e "  ${BOLD}${YELLOW}⚠  Owner API and TOR sessions will be stopped first, then restarted.${RESET}\n"
+    echo -e "  ${DIM}TOR and Owner API sessions remain running — scan runs alongside them.${RESET}\n"
 
     if [[ ! -d "$DROP_WALLET_DIR/wallet_data" ]]; then
         warn "No wallet data found at $DROP_WALLET_DIR/wallet_data — install wallet first."
@@ -224,14 +224,6 @@ _drop_wallet_scan() {
 
     local wallet_pass
     wallet_pass=$(_drop_read_saved_pass)
-
-    # Stop both sessions so grin-wallet scan can acquire the DB lock
-    info "Stopping wallet sessions…"
-    tmux kill-session -t "$DROP_TMUX_TOR"   2>/dev/null || true
-    tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null || true
-    _drop_kill_wallet_processes "$DROP_TOR_PORT"
-    _drop_kill_wallet_processes "$DROP_OWNER_PORT"
-    sleep 1
 
     # Build scan command (same -p quoting as _drop_start_session)
     local pass_arg=""
@@ -247,7 +239,6 @@ _drop_wallet_scan() {
         success "Scan running in tmux session: $scan_tmux"
         echo -e "\n  Monitor progress:  ${BOLD}tmux attach -t $scan_tmux${RESET}"
         echo -e "  The session closes automatically when scan finishes.\n"
-        echo -e "  ${DIM}After scan completes, restart wallet sessions via option 2 → Wallet Listener.${RESET}"
     else
         warn "Scan session failed to start — check wallet config and passphrase."
     fi

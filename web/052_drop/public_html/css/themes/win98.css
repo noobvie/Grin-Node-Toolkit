@@ -71,17 +71,18 @@ body { font-size: 13px; }
 }
 
 /* Inputs */
-input[type="text"], textarea {
+input[type="text"], input[type="number"], textarea {
   border: 2px inset #808080;
   background: #fff;
   color: #000;
   font-family: var(--font-mono);
   border-radius: 0;
 }
-input[type="text"]:focus, textarea:focus {
+input[type="text"]:focus, input[type="number"]:focus, textarea:focus {
   outline: 1px dotted #000;
   border-color: #808080;
 }
+.donate-tab-btn.active { color: #000080; border-bottom-color: #000080; }
 
 /* Slatepack box */
 .slatepack-box {

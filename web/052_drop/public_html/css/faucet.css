@@ -163,7 +163,7 @@ h3 { font-size: 1rem; font-weight: 600; margin-bottom: .6rem; }
 /* ── Form elements ────────────────────────────────────────────────────────── */
 label { font-size: .85rem; color: var(--text-dim); display: block; margin-bottom: .35rem; }
 
-input[type="text"], textarea {
+input[type="text"], input[type="number"], textarea {
   width: 100%;
   background: var(--input-bg);
   border: 1px solid var(--input-border);
@@ -174,10 +174,11 @@ input[type="text"], textarea {
   font-size: .9rem;
   transition: border-color .15s;
 }
-input[type="text"]:focus, textarea:focus {
+input[type="text"]:focus, input[type="number"]:focus, textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
+input[type="number"] { max-width: 200px; }
 textarea { resize: vertical; min-height: 100px; }
 
 /* ── Buttons ──────────────────────────────────────────────────────────────── */
@@ -326,7 +327,7 @@ textarea { resize: vertical; min-height: 100px; }
 }
 .amount-btn:hover  { border-color: var(--accent); color: var(--accent); }
 .amount-btn.active { border-color: var(--accent); color: var(--accent);
-                     background: rgba(0,255,65,.07); }
+                     background: color-mix(in srgb, var(--accent) 8%, transparent); }
 
 /* Step label inside donate cards */
 .donate-step-label {

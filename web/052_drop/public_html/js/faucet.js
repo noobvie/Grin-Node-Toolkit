@@ -294,10 +294,14 @@ function resetClaim() {
 
 
 function _updateSendCmd() {
-  const addr = _donateWalletAddr || "<address>";
-  const amt  = _rcvAmount != null ? _rcvAmount : "<amount>";
-  const el   = $("donate-send-cmd");
-  if (el) el.textContent = `grin-wallet ${NET_FLAG}send -m -d ${addr} ${amt}`;
+  const el = $("donate-send-cmd");
+  if (!el) return;
+  if (!_donateWalletAddr) {
+    el.textContent = "Wallet offline — address unavailable";
+    return;
+  }
+  const amt = _rcvAmount != null ? _rcvAmount : "<amount>";
+  el.textContent = `grin-wallet ${NET_FLAG}send -m -d ${_donateWalletAddr} ${amt}`;
 }
 
 // ── Donate: tab switching (CSS class toggle) ───────────────────────────────────

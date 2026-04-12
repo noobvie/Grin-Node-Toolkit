@@ -100,7 +100,7 @@
       <!-- Step 1 — Enter address -->
       <div id="step-1" class="step">
         <label for="claim-address" id="claim-address-label">Your Grin Address</label>
-        <input type="text" id="claim-address" placeholder="grin1..." autocomplete="off" spellcheck="false">
+        <input type="text" id="claim-address" placeholder="" autocomplete="off" spellcheck="false">
         <p class="error-msg" id="claim-error"></p>
         <button class="btn btn-full" id="claim-btn">Claim GRIN</button>
         <p style="margin-top:.7rem;font-size:.8rem;color:var(--text-dim);">
@@ -267,7 +267,7 @@
         </div>
         <div style="margin-top:.75rem;">
           <label for="donate-invoice-address">Your Grin address <span style="font-size:.85rem;color:var(--text-dim);">(so we direct the invoice to you)</span></label>
-          <input type="text" id="donate-invoice-address" placeholder="grin1..."
+          <input type="text" id="donate-invoice-address" placeholder=""
                  autocomplete="off" spellcheck="false" style="margin-top:.35rem;">
         </div>
         <p class="error-msg" id="donate-invoice-error"></p>
@@ -340,7 +340,7 @@
         <li data-n="3">
           <strong>Connect to a public testnet node (no sync needed)</strong><br>
           Edit <code>grin-wallet.toml</code> — find <code>check_node_api_http_addr</code> and set:<br>
-          <code>check_node_api_http_addr = "http://prunetest.grin.money:13413"</code><br>
+          <code>check_node_api_http_addr = "https://testapi.grin.money"</code><br>
           This connects to a public pruned testnet node — ready in seconds, no chain download.
         </li>
         <li data-n="4">
@@ -370,7 +370,7 @@
           <strong>First launch setup wizard</strong><br>
           · Select network: <strong>Testnet</strong><br>
           · Node connection: <strong>External node</strong><br>
-          · Node URL: <code>http://prunetest.grin.money:13413</code><br>
+          · Node URL: <code>https://testapi.grin.money</code><br>
           · Create new wallet → set password → save your seed phrase
         </li>
         <li data-n="3">
@@ -412,14 +412,8 @@
           Once you complete a drop claim, you understand Grin transactions end-to-end.
         </li>
         <li style="padding:.4rem 0;border-bottom:1px solid var(--border);">
-          The public pruned testnet node (<code>prunetest.grin.money:13413</code>)
+          The public pruned testnet node (<code>testapi.grin.money</code>)
           means you do not need to download the full blockchain.
-        </li>
-        <li style="padding:.4rem 0;">
-          Links:
-          <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a> &nbsp;·&nbsp;
-          <a href="https://github.com/mimblewimble/grin-wallet/releases" target="_blank" rel="noopener">grin-wallet releases</a> &nbsp;·&nbsp;
-          <a href="https://github.com/GetGrin/grim/releases" target="_blank" rel="noopener">Grim releases</a>
         </li>
       </ul>
     </div>

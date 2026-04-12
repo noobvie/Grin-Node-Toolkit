@@ -34,5 +34,14 @@ Perform a code quality check on shell scripts. Check the file(s) specified as $A
 
 8. **Long lines** — flag lines over 100 characters (except heredocs and comments).
 
+9. **Back/exit options in menus** — every `case` menu must have:
+   - `0)` option to go back to the parent menu or exit to the master script
+   - The `0)` handler must actually `return` or call the parent function — not just `break`
+     or fall through silently.
+   - Sub-menus (e.g. network select → option submenu) must each have their own `0)` back option.
+   - The header comment's menu overview must list `0) Back` matching what the `case` implements.
+   Flag any menu missing `0)`, any `0)` that does nothing, and any mismatch between the
+   header comment and the actual case options.
+
 Report findings grouped by category with file:line references. Suggest fixes inline.
 At the end, give a short summary: X issues found across Y files.

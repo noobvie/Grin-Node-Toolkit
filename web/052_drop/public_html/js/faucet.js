@@ -29,15 +29,29 @@ function hide(id)   { const el = $(id); if (el) el.style.display = "none"; }
 function addClass(id, cls) { const el = $(id); if (el) el.classList.add(cls); }
 function rmClass(id, cls)  { const el = $(id); if (el) el.classList.remove(cls); }
 
-async function apiPost(path, body) {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(json.error || `HTTP ${res.status}`), { status: res.status });
-  return json;
+async function apiPost(path, body, timeoutMs) {
+  const ctrl = timeoutMs ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  try {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctrl ? ctrl.signal : undefined,
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(json.error || `HTTP ${res.status}`), { status: res.status });
+    return json;
+  } catch (e) {
+    if (e.name === "AbortError") {
+      const te = new Error("Request timed out");
+      te.timedOut = true;
+      throw te;
+    }
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function apiGet(path) {
@@ -336,7 +350,6 @@ function initDonateTabs() {
 // ── Donate Pane 2 — Slatepack: You Send / We Receive ──────────────────────────
 let _rcvAmount = null;
 let _invAmount = null;
-let _invCooldown = null;
 
 function _initRcvAmountButtons() {
   document.querySelectorAll("#donate-rcv-amount-grid .amount-btn").forEach(btn => {
@@ -372,17 +385,16 @@ async function submitDonateReceive() {
   const btn = $("donate-receive-btn");
   if (btn) { btn.disabled = true; btn.textContent = "Processing…"; }
 
+  const SCAN_MSG = "Wallet is busy (full scan / LMDB write lock) — Slatepack is unavailable right now. Try again in a minute, or switch to Tab 1 · TOR Direct which always works during a scan.";
   try {
-    const data = await apiPost(API + "/api/donate/receive", { send_slate: slate });
+    const data = await apiPost(API + "/api/donate/receive", { send_slate: slate }, 25000);
     const sp = data.response_slatepack || data.slatepack || "";
     const spEl = $("donate-response-slatepack");
     if (spEl) spEl.textContent = sp;
     hide("donate-rcv-s1");
     show("donate-rcv-s2");
   } catch (err) {
-    const msg = (err.status === 503)
-      ? "Slatepack unavailable — wallet is doing a full scan (LMDB write lock). Try again in a minute, or use Tab 1 · TOR Direct which is always available during a scan."
-      : "Error: " + err.message;
+    const msg = (err.timedOut || err.status === 503) ? SCAN_MSG : "Error: " + err.message;
     showError("donate-receive-error", msg);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "Process Donation →"; }
@@ -443,8 +455,9 @@ async function submitDonateInvoice() {
   const btn = $("donate-invoice-btn");
   if (btn) { btn.disabled = true; btn.textContent = "Creating invoice…"; }
 
+  const SCAN_MSG_INV = "Wallet is busy (full scan / LMDB write lock) — Invoice is unavailable right now. Try again in a minute, or switch to Tab 1 · TOR Direct which always works during a scan.";
   try {
-    const data = await apiPost(API + "/api/donate/invoice", { amount: _invAmount, address });
+    const data = await apiPost(API + "/api/donate/invoice", { amount: _invAmount, address }, 25000);
     _invoiceId = data.invoice_id;
     const sp = data.invoice_slatepack || data.slatepack || "";
     const spEl = $("donate-invoice-slatepack");
@@ -453,25 +466,11 @@ async function submitDonateInvoice() {
     show("donate-inv-s2");
     return; // success — leave button hidden with step
   } catch (err) {
-    const msg = (err.status === 503)
-      ? "Invoice unavailable — wallet is doing a full scan (LMDB write lock). Try again in a minute, or use Tab 1 · TOR Direct which is always available during a scan."
-      : "Error: " + err.message;
+    const msg = (err.timedOut || err.status === 503) ? SCAN_MSG_INV : "Error: " + err.message;
     showError("donate-invoice-error", msg);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Create Invoice →"; }
   }
-
-  // On error: 120-second cooldown before retry
-  let secs = 120;
-  if (btn) btn.textContent = `Create invoice in ${secs}s`;
-  clearInterval(_invCooldown);
-  _invCooldown = setInterval(() => {
-    secs--;
-    if (secs <= 0) {
-      clearInterval(_invCooldown);
-      if (btn) { btn.disabled = false; btn.textContent = "Create Invoice →"; }
-    } else {
-      if (btn) btn.textContent = `Create invoice in ${secs}s`;
-    }
-  }, 1000);
 }
 
 async function submitDonateFinalize() {
@@ -510,7 +509,6 @@ async function submitDonateFinalize() {
 function resetDonateInvoice() {
   _invoiceId = null;
   _invAmount = null;
-  clearInterval(_invCooldown);
   const af = $("donate-invoice-address");
   const ta = $("donate-pay-slate");
   if (af) af.value = "";

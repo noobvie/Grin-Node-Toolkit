@@ -623,6 +623,12 @@ drop_nuke() {
         fi
     done
 
+    # ── Kill remaining wallet processes (scan, orphaned — PPID=1 survivors) ───
+    for _wallet_bin in "/opt/grin/drop-test/grin-wallet" "/opt/grin/drop-main/grin-wallet"; do
+        pkill -9 -f "$_wallet_bin" 2>/dev/null \
+            && info "Killed remaining processes: $_wallet_bin" || true
+    done
+
     # ── Remove cron entries (@reboot auto-start + watchdog) ───────────────────
     local cur_cron; cur_cron=$(crontab -l 2>/dev/null || true)
     if [[ -n "$cur_cron" ]]; then

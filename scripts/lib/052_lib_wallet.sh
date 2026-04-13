@@ -101,6 +101,12 @@ _drop_kill_wallet_processes() {
             kill -9 "$pid" 2>/dev/null && info "Killed PID $pid (port $port)" || true
         done
     done
+    # Full stop (no specific port): also kill scan and orphaned wallet processes.
+    # Port-based kill misses scan (no listening socket) and PPID=1 orphans.
+    if [[ $# -eq 0 ]]; then
+        pkill -9 -f "${DROP_WALLET_BIN}" 2>/dev/null \
+            && info "Killed remaining wallet processes (scan/orphaned)" || true
+    fi
 }
 
 _drop_fix_ownership() {
@@ -941,6 +947,13 @@ _drop_stop_session() {
             && success "Stopped tmux: $DROP_TMUX_OWNER" \
             || info "Tmux not running: $DROP_TMUX_OWNER"
         _drop_kill_wallet_processes "$DROP_OWNER_PORT"
+    fi
+    if [[ "$target" == "both" ]]; then
+        # Kill the scan session and any surviving wallet processes (orphaned or scan)
+        local scan_tmux="drop-${DROP_NETWORK}-scan"
+        tmux kill-session -t "$scan_tmux" 2>/dev/null \
+            && info "Stopped tmux: $scan_tmux" || true
+        _drop_kill_wallet_processes  # full stop — catches scan + PPID=1 orphans
     fi
     log "[drop_stop_session:$target] network=$DROP_NETWORK"
     pause

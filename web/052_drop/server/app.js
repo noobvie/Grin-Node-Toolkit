@@ -554,6 +554,15 @@ setInterval(() => {
 const cfg  = loadConfig();
 const PORT = parseInt(cfg.service_port, 10) || 3004;
 
+// ── Startup config visibility ──────────────────────────────────────────────────
+{
+  const confPath = process.env.DROP_CONF || '(default)';
+  const addrSnip = cfg.wallet_address ? cfg.wallet_address.slice(0, 16) + '…' : '(empty)';
+  actLog('INFO', `CONFIG_LOAD conf=${confPath} addr=${addrSnip} giveaway=${cfg.giveaway_enabled} donation=${cfg.donation_enabled}`);
+  if (!cfg.wallet_address)
+    actLog('WARN', `CONFIG_NO_ADDR conf=${confPath} — if conf exists, fix ownership: chown grin:grin ${process.env.DROP_CONF || confPath}`);
+}
+
 app.listen(PORT, '127.0.0.1', () => {
   actLog('INFO', `Grin Drop [${(cfg.network || 'testnet').toUpperCase()}] listening on 127.0.0.1:${PORT}`);
 });

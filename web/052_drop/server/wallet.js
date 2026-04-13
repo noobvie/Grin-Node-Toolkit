@@ -33,16 +33,28 @@ function _readForeignSecret(cfg) {
   try {
     const secret = fs.readFileSync(cfg.wallet_foreign_secret, 'utf8').trim();
     if (secret) return { Authorization: 'Basic ' + Buffer.from('grin:' + secret).toString('base64') };
-  } catch {}
-  return {};
+    throw Object.assign(new Error(`foreign API secret file is empty: ${cfg.wallet_foreign_secret}`), { code: 'EMPTY' });
+  } catch (e) {
+    if (e.code === 'ENOENT')
+      throw new Error(`FOREIGN_SECRET_MISSING path=${cfg.wallet_foreign_secret} — run option 1 (Setup wallet)`);
+    if (e.code === 'EACCES')
+      throw new Error(`FOREIGN_SECRET_UNREADABLE path=${cfg.wallet_foreign_secret} — run option 5 (Deploy web files) to fix ownership`);
+    throw e;
+  }
 }
 
 function _readOwnerSecret(cfg) {
   try {
     const secret = fs.readFileSync(cfg.wallet_owner_secret, 'utf8').trim();
     if (secret) return { Authorization: 'Basic ' + Buffer.from('grin:' + secret).toString('base64') };
-  } catch {}
-  return {};
+    throw Object.assign(new Error(`owner API secret file is empty: ${cfg.wallet_owner_secret}`), { code: 'EMPTY' });
+  } catch (e) {
+    if (e.code === 'ENOENT')
+      throw new Error(`OWNER_SECRET_MISSING path=${cfg.wallet_owner_secret} — run option 1 (Setup wallet) to generate it`);
+    if (e.code === 'EACCES')
+      throw new Error(`OWNER_SECRET_UNREADABLE path=${cfg.wallet_owner_secret} — run option 5 (Deploy web files) to fix ownership`);
+    throw e;
+  }
 }
 
 function _readWalletPass(cfg) {
@@ -105,12 +117,21 @@ async function ownerApiSession() {
   ecdh.generateKeys();
   const ourPubKey = ecdh.getPublicKey('hex', 'compressed');
 
-  const initRes = await fetch(ownerUrl, {
-    method:  'POST',
-    headers,
-    body:    JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'init_secure_api', params: { ecdh_pubkey: ourPubKey } }),
-    signal:  AbortSignal.timeout(10000),
-  });
+  let initRes;
+  try {
+    initRes = await fetch(ownerUrl, {
+      method:  'POST',
+      headers,
+      body:    JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'init_secure_api', params: { ecdh_pubkey: ourPubKey } }),
+      signal:  AbortSignal.timeout(10000),
+    });
+  } catch (connErr) {
+    if (connErr.cause?.code === 'ECONNREFUSED' || connErr.code === 'ECONNREFUSED')
+      throw new Error(`OWNER_API_DOWN url=${ownerUrl} — start wallet owner_api from menu option 2 (Wallet listening)`);
+    if (connErr.name === 'TimeoutError' || connErr.cause?.code === 'UND_ERR_CONNECT_TIMEOUT')
+      throw new Error(`OWNER_API_TIMEOUT url=${ownerUrl} — owner_api tmux session may have crashed`);
+    throw connErr;
+  }
   const initText = await initRes.text();
   if (!initText.trim()) {
     if (initRes.status === 401) {

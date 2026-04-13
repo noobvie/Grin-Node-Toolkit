@@ -108,20 +108,21 @@ _drop_fix_ownership() {
     chmod 750 "$DROP_WALLET_DIR"
     chmod 600 "$DROP_WALLET_DIR/grin-wallet.toml" 2>/dev/null || true
 
-    # Generate API secrets if missing or empty — grin-wallet fails to open with empty files
-    # api_secret_path → wallet_data/.api_secret  (wallet Foreign API, matches toolkit conf)
-    # owner_api_secret_path → .owner_api_secret  (wallet Owner API)
-    mkdir -p "$DROP_WALLET_DIR/wallet_data"
+    # Fix ownership on grin-wallet's auto-generated secret files.
+    # grin-wallet init/recover creates both files in $DROP_WALLET_DIR:
+    #   .foreign_api_secret → wallet Foreign API  (grin-wallet default api_secret_path)
+    #   .owner_api_secret   → wallet Owner API    (grin-wallet default owner_api_secret_path)
     local secret_file
-    for secret_file in "$DROP_WALLET_DIR/wallet_data/.api_secret" \
+    for secret_file in "$DROP_WALLET_DIR/.foreign_api_secret" \
                        "$DROP_WALLET_DIR/.owner_api_secret"; do
         if [[ ! -s "$secret_file" ]]; then
-            tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20 > "$secret_file"
-            info "Generated API secret: $secret_file"
+            warn "Secret file missing — wallet may not be initialized yet: $secret_file"
         fi
         chown grin:grin "$secret_file" 2>/dev/null || true
-        chmod 600 "$secret_file"
+        chmod 600 "$secret_file" 2>/dev/null || true
     done
+    # wallet_data/ dir is needed for the wallet database
+    mkdir -p "$DROP_WALLET_DIR/wallet_data"
 
     success "Ownership fixed."
 }
@@ -715,9 +716,8 @@ _drop_write_toml() {
     _patch_toml "$toml" "api_listen_port"       "$DROP_TOR_PORT"
     _patch_toml "$toml" "owner_api_listen_port" "$DROP_OWNER_PORT"
 
-    # 4. Wallet own API secrets (foreign + owner)
-    # api_secret_path lives inside wallet_data/ — matches toolkit conf default
-    _patch_toml_in_section "$toml" "wallet" "api_secret_path"       "\"$DROP_WALLET_DIR/wallet_data/.api_secret\""
+    # 4. Wallet Owner API secret — absolute path (grin-wallet default is relative)
+    # Foreign API secret (.foreign_api_secret) is left at grin-wallet's own default — no override needed.
     _patch_toml_in_section "$toml" "wallet" "owner_api_secret_path" "\"$DROP_WALLET_DIR/.owner_api_secret\""
 
     # 5. Limit log rotation

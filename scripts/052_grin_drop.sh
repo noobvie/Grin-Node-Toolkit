@@ -296,6 +296,8 @@ with open(path, "w") as f:
     json.dump(d, f, indent=2)
 os.chmod(path, 0o600)
 PYEOF
+    # Ensure the grin service user can always read the conf file
+    id grin &>/dev/null && chown grin:grin "$DROP_CONF" 2>/dev/null || true
 }
 
 drop_ensure_defaults() {
@@ -328,7 +330,7 @@ drop_ensure_defaults() {
         "wallet_address:"
         "wallet_foreign_api_port:$DROP_TOR_PORT"
         "wallet_owner_api_port:$DROP_OWNER_PORT"
-        "wallet_foreign_secret:${DROP_WALLET_DIR}/wallet_data/.api_secret"
+        "wallet_foreign_secret:${DROP_WALLET_DIR}/.foreign_api_secret"
         "wallet_owner_secret:${DROP_WALLET_DIR}/.owner_api_secret"
         "wallet_pass_file:$DROP_PASS"
         # Service

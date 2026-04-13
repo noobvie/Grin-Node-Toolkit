@@ -86,9 +86,22 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
 | Wallet Foreign API | 3415 | 13415 |
 | Wallet Owner API | 3420 | 13420 |
 
-Secret files:
-- Foreign API: `$WALLET_DIR/wallet_data/.api_secret`
-- Owner API: `$WALLET_DIR/.owner_api_secret`
+Secret files — two per service, each with a Foreign and Owner secret:
+
+**Grin node** (`/opt/grin/node/<net>-prune/`) — created by script 01
+| File | API | Who reads it | Key in grin.toml |
+|------|-----|-------------|------------------|
+| `.api_secret` | Node Owner API | Script 04, Python collectors | `api_secret_path` |
+| `.foreign_api_secret` | Node Foreign API | grin-wallet via `node_api_secret_path` | `foreign_api_secret_path` |
+
+**grin-wallet** (`$WALLET_DIR/`) — both created by `grin-wallet init/recover`
+| File | API | Who reads it | Key in grin-wallet.toml |
+|------|-----|-------------|--------------------------|
+| `.foreign_api_secret` | Wallet Foreign API (3415/13415) | Node.js `foreignApiCall()`, external senders | `api_secret_path` |
+| `.owner_api_secret` | Wallet Owner API (3420/13420) | Node.js `ownerApiSession()` (ECDH) | `owner_api_secret_path` |
+
+Note: `wallet_data/.api_secret` was a previous toolkit override — no longer used.
+The toolkit no longer patches `api_secret_path` in grin-wallet.toml; grin-wallet's own default is used.
 
 ## Grin API References
 

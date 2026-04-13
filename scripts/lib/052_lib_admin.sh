@@ -62,6 +62,38 @@ Sitemap: https://${domain_val}/sitemap.xml
 ROBOTS_EOF
     success "robots.txt generated."
 
+    # ── Permissions — entire app directory ────────────────────────────────────
+    if id grin &>/dev/null; then
+        info "Fixing ownership: chown -R grin:grin $DROP_APP_DIR ..."
+        chown -R grin:grin "$DROP_APP_DIR"
+
+        # public_html served by nginx (needs traverse): dirs 755, files 644
+        find "$DROP_APP_DIR/public_html" -type d -exec chmod 755 {} \; 2>/dev/null || true
+        find "$DROP_APP_DIR/public_html" -type f -exec chmod 644 {} \; 2>/dev/null || true
+
+        # Sensitive files — owner-only (grin:grin 600/640)
+        chmod 600 "$DROP_CONF"                                       2>/dev/null || true
+        chmod 600 "$DROP_DB"                                         2>/dev/null || true
+        chmod 640 "$DROP_LOG"                                        2>/dev/null || true
+        chmod 600 "$DROP_WALLET_DIR/.foreign_api_secret"              2>/dev/null || true
+        chmod 600 "$DROP_WALLET_DIR/.owner_api_secret"               2>/dev/null || true
+
+        success "Ownership/permissions applied to $DROP_APP_DIR"
+    else
+        warn "User 'grin' not found — skipping chown (running as $USER)"
+    fi
+
+    # Unified homepage — served directly by nginx (www-data), not by Node.js
+    # /var/www/grin-drop-home/ → https://domain/  (nginx root)
+    # /opt/grin/drop-test/public_html/ → https://domain/testnet/  (Node.js proxy)
+    local _home_dir="/var/www/grin-drop-home"
+    if [[ -d "$_home_dir" ]]; then
+        chown -R www-data:www-data "$_home_dir" 2>/dev/null || true
+        find "$_home_dir" -type d -exec chmod 755 {} \;
+        find "$_home_dir" -type f -exec chmod 644 {} \;
+        success "Unified homepage permissions fixed: $_home_dir"
+    fi
+
     if systemctl is-active --quiet "$DROP_SERVICE" 2>/dev/null; then
         info "Restarting $DROP_SERVICE to pick up new files..."
         systemctl restart "$DROP_SERVICE" && success "Service restarted."

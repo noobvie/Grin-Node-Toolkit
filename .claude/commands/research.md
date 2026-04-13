@@ -19,7 +19,7 @@ Key facts to recall:
 - Foreign API v2: `receive_tx`, `build_coinbase` — Basic Auth + secret file, no ECDH
 - Foreign port: 3415 (mainnet) / 13415 (testnet)
 - Owner port: 3420 (mainnet) / 13420 (testnet)
-- Secret files: `wallet_data/.api_secret` (foreign), `.owner_api_secret` (owner)
+- Secret files: `.foreign_api_secret` (foreign), `.owner_api_secret` (owner) — both in `$WALLET_DIR/`, created by `grin-wallet init -h`
 
 ## 3. Grin ecosystem repos
 

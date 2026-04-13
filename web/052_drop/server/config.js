@@ -41,7 +41,7 @@ const DEFAULTS = {
   wallet_owner_api_port:     13420,
 
   // ── Wallet API secret files (absolute paths, chmod 600) ───────────────────
-  wallet_foreign_secret:  '/opt/grin/drop-test/wallet_data/.api_secret',
+  wallet_foreign_secret:  '/opt/grin/drop-test/.foreign_api_secret',
   wallet_owner_secret:    '/opt/grin/drop-test/.owner_api_secret',
 
   // ── Wallet pass file (read by wallet.js, never logged) ────────────────────

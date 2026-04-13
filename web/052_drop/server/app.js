@@ -131,11 +131,13 @@ app.get('/api/status', async (req, res) => {
 
     // Balance (non-fatal — may fail when the grin node is unreachable)
     // retrieve_summary_info returns [refreshed_from_node, WalletInfo] — summary is at [1]
+    // Use refresh_from_node: false to read from local cache — avoids triggering a node
+    // scan that holds LMDB write locks and blocks concurrent donate/receive calls.
     try {
       const infoResult = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'retrieve_summary_info', {
         token,
         minimum_confirmations: 1,
-        refresh_from_node: true,
+        refresh_from_node: false,
       });
       const info = Array.isArray(infoResult) ? infoResult[1] : infoResult;
       balance = parseInt(info?.amount_currently_spendable || '0', 10) / 1_000_000_000;
@@ -429,6 +431,13 @@ app.post('/api/donate/invoice', async (req, res) => {
 
   if (!amount || isNaN(amount) || amount < 0.1) return err(res, 'Amount must be at least 0.1 GRIN');
   if (!address || !GRIN_ADDR_RE.test(address)) return err(res, 'Invalid grin address');
+
+  // Security: block our own wallet address — invoice must be directed to the payer, not ourselves
+  const ownAddress = cfg.wallet_address || '';
+  if (ownAddress && address === ownAddress) {
+    actLog('WARN', `DONATE_INVOICE_SELF_ADDR addr=${truncAddr(address)}`);
+    return err(res, 'Invalid address — you cannot use the drop wallet address as the payer');
+  }
 
   const invoiceId  = uuidv4();
   const timeoutMin = parseInt(cfg.donation_invoice_timeout, 10) || 30;

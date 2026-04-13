@@ -380,7 +380,10 @@ async function submitDonateReceive() {
     hide("donate-rcv-s1");
     show("donate-rcv-s2");
   } catch (err) {
-    showError("donate-receive-error", "Error: " + err.message);
+    const msg = (err.status === 503)
+      ? "Slatepack unavailable — wallet is doing a full scan (LMDB write lock). Try again in a minute, or use Tab 1 · TOR Direct which is always available during a scan."
+      : "Error: " + err.message;
+    showError("donate-receive-error", msg);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "Process Donation →"; }
   }
@@ -450,7 +453,10 @@ async function submitDonateInvoice() {
     show("donate-inv-s2");
     return; // success — leave button hidden with step
   } catch (err) {
-    showError("donate-invoice-error", "Error: " + err.message);
+    const msg = (err.status === 503)
+      ? "Invoice unavailable — wallet is doing a full scan (LMDB write lock). Try again in a minute, or use Tab 1 · TOR Direct which is always available during a scan."
+      : "Error: " + err.message;
+    showError("donate-invoice-error", msg);
   }
 
   // On error: 120-second cooldown before retry

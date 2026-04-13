@@ -50,7 +50,7 @@ drop_setup_wallet() {
 
         echo -e "  ${GREEN}1${RESET}) Install new wallet      ${DIM}(first-time setup)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Re-install wallet       ${DIM}(clean + full reinstall)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Scan wallet             ${DIM}(reconcile outputs against chain — first time setup or recover wallet)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Scan wallet             ${DIM}(recover wallet from seed · balance wrong · after node switch)${RESET}"
         echo -e "  ${GREEN}4${RESET}) Update binary           ${DIM}(download latest grin-wallet, keep wallet data)${RESET}"
         echo -e "  ${GREEN}5${RESET}) Switch Grin node        ${DIM}(change node without reinstalling)${RESET}"
         echo -e "  ${GREEN}6${RESET}) View / recover seed     ${DIM}(display seed phrase, optionally save)${RESET}"
@@ -216,9 +216,29 @@ _drop_wallet_install_new() {
 _drop_wallet_scan() {
     clear
     echo -e "\n${BOLD}${CYAN}── Scan Wallet [$DROP_NET_LABEL] ──${RESET}\n"
-    echo -e "  Reconciles all outputs against the node — needed after wallet restore"
-    echo -e "  or if the balance looks wrong. Scan runs in a background tmux session.\n"
-    echo -e "  ${DIM}TOR and Owner API sessions remain running — scan runs alongside them.${RESET}\n"
+    echo -e "  Walks the full chain to re-discover all outputs — required after restoring"
+    echo -e "  from seed phrase, or if the balance is wrong / outputs are missing."
+    echo -e "  ${DIM}Not needed for a brand-new wallet — the Owner API startup refresh is sufficient.${RESET}\n"
+    echo -e "  ${YELLOW}⚠  Stop the Owner API session ($DROP_TMUX_OWNER) before scanning.${RESET}"
+    echo -e "  ${YELLOW}   The Owner API auto-triggers its own scan — running both at once${RESET}"
+    echo -e "  ${YELLOW}   causes LMDB conflicts and can corrupt in-flight transactions.${RESET}"
+    echo -e "  ${DIM}   Stop wallet listening from option 2 (Wallet listening) → Stop Owner API, then return here.${RESET}\n"
+
+    # Check if Owner API is already running and warn loudly
+    if tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null; then
+        echo -e "  ${RED}[!] Owner API session '$DROP_TMUX_OWNER' is currently running.${RESET}"
+        echo -ne "  Stop it now before continuing? [y/N]: "
+        local stop_ans; read -r stop_ans || true
+        if [[ "$stop_ans" =~ ^[Yy]$ ]]; then
+            tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null \
+                && success "Stopped tmux: $DROP_TMUX_OWNER" || true
+            _drop_kill_wallet_processes "$DROP_OWNER_PORT"
+            echo ""
+        else
+            warn "Scan cancelled — stop the Owner API session first to avoid conflicts."
+            pause; return
+        fi
+    fi
 
     if [[ ! -d "$DROP_WALLET_DIR/wallet_data" ]]; then
         warn "No wallet data found at $DROP_WALLET_DIR/wallet_data — install wallet first."

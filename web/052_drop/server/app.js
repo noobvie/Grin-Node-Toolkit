@@ -399,12 +399,27 @@ app.post('/api/finalize', async (req, res) => {
       slate,
     });
 
-    // Finalize and broadcast
+    // Finalize — signs the transaction but does NOT broadcast (per grin-wallet docs).
     const finalResult = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'finalize_tx', {
       token,
       slate,
     });
     txSlateId = (finalResult && finalResult.id) ? String(finalResult.id) : '';
+
+    // Post (broadcast) to network — separate required step.
+    // fluff: true  →  skip Dandelion++ stem phase and broadcast immediately.
+    // Non-fatal: if the node is temporarily unreachable the tx is fully signed in
+    // the wallet's LMDB and can be re-broadcast manually; the claim is still recorded.
+    try {
+      await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'post_tx', {
+        token,
+        tx:    finalResult.tx,
+        fluff: true,
+      });
+      actLog('INFO', `BROADCAST_OK claim_id=${claimId} tx=${txSlateId || '(unknown)'}`);
+    } catch (postErr) {
+      actLog('WARN', `BROADCAST_FAIL claim_id=${claimId} tx=${txSlateId} err=${postErr.message} — tx signed in wallet, re-broadcast manually`);
+    }
   } catch (e) {
     actLog('ERROR', `WALLET_FAIL cmd=finalize claim_id=${claimId} err=${e.message}`);
     return err(res, e.message, 503);
@@ -568,7 +583,10 @@ app.post('/api/donate/finalize', async (req, res) => {
       message:        responseSplate,
     });
 
-    // 2. Finalize and broadcast
+    // 2. Finalize and broadcast.
+    // For invoice transactions the server is the receiver — grin-wallet auto-broadcasts
+    // on the receiver's finalize_tx (unlike the standard-send flow where post_tx is
+    // a separate required step).
     const finalResult = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'finalize_tx', {
       token,
       slate,

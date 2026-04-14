@@ -307,17 +307,23 @@ app.post('/api/claim', async (req, res) => {
         num_change_outputs:               1,
         selection_strategy_is_use_all:    false,
         target_slate_version:             null,
-        payment_proof_recipient_address:  address,
+        // payment_proof_recipient_address: null — omit proof entirely.
+        // A proof embeds payment_proof.sender_address (our key) inside the slate
+        // content itself.  Newer grin-wallet builds extract that address and call
+        // our Foreign API with receive_tx even when sender_index is null in the
+        // slatepack envelope.  That receive_tx on our own outgoing tx corrupts the
+        // LMDB context and causes KernelSumMismatch on finalize_tx.  For a giveaway
+        // faucet a cryptographic receipt is unnecessary — drop it.
+        payment_proof_recipient_address:  null,
         ttl_blocks:                       null,
         send_args:                        null,
       },
     });
 
     // create_slatepack_message — encode to BEGINSLATEPACK...ENDSLATEPACK
-    // sender_index: null — omit the server's slatepack address from the envelope so
-    // the receiver's wallet has no TOR address to auto-respond to.  With sender_index:0
-    // the receiver would send S2 back to our Foreign API (receive_tx on our own outgoing
-    // tx) → keychain error + LMDB write-lock that blocks the subsequent finalize_tx.
+    // sender_index: null — omit the server's slatepack address from the envelope.
+    // Without payment_proof, the slate contains no server address at all, so the
+    // receiver's wallet has nothing to auto-respond to via Tor.
     slatepack = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'create_slatepack_message', {
       token,
       sender_index: null,

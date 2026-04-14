@@ -206,6 +206,10 @@ drop_configure() {
     read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
     [[ -n "$val" ]] && drop_write_conf_key "finalize_timeout_min" "$val"
 
+    echo -ne "Daily claim cap  [$(drop_read_conf max_claims_per_window '8')] claims/day  (0 = unlimited, resets at midnight UTC): "
+    read -r val || true; [[ "$val" == "0" ]] && drop_write_conf_key "max_claims_per_window" "0"
+    [[ -n "$val" && "$val" != "0" ]] && drop_write_conf_key "max_claims_per_window" "$val"
+
     # ── Donation invoice ──────────────────────────────────────────────────────
     echo ""
     echo -e "  ${BOLD}Donation Settings [$DROP_NET_LABEL]:${RESET}"

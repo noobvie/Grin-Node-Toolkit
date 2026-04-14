@@ -149,7 +149,33 @@ h2 {
   margin-bottom: 1rem;
   font-family: var(--font-mono);
 }
+h2.section-hero {
+  font-size: 1.5rem;
+  letter-spacing: .03em;
+  border-left: 3px solid var(--accent);
+  padding-left: .65rem;
+  text-shadow: 0 0 18px var(--accent);
+}
 h3 { font-size: 1rem; font-weight: 600; margin-bottom: .6rem; }
+
+/* ── Node status list (How It Works) ─────────────────────────────────────── */
+.node-status-list {
+  margin: .55rem 0 .35rem;
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+}
+.node-item {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-family: var(--font-mono);
+  font-size: .82rem;
+}
+.node-item code { font-size: .82rem; }
+.node-ok  { color: var(--ok-color); }
+.node-err { color: var(--error-color); }
+.node-ms  { color: var(--text-dim); font-size: .75rem; }
 
 /* ── Card ─────────────────────────────────────────────────────────────────── */
 .card {

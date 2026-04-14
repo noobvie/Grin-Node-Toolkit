@@ -218,11 +218,15 @@ _drop_wallet_scan() {
     echo -e "\n${BOLD}${CYAN}── Scan Wallet [$DROP_NET_LABEL] ──${RESET}\n"
     echo -e "  Walks the full chain to re-discover all outputs — required after restoring"
     echo -e "  from seed phrase, or if the balance is wrong / outputs are missing."
+    echo -e "  ${DIM}After seed recovery, wallet commands like 'grin-wallet info' also trigger a${RESET}"
+    echo -e "  ${DIM}full scan automatically — this is normal. Run this option once to complete it${RESET}"
+    echo -e "  ${DIM}in a controlled tmux session before starting the Owner API.${RESET}"
     echo -e "  ${DIM}Not needed for a brand-new wallet — the Owner API startup refresh is sufficient.${RESET}\n"
     echo -e "  ${YELLOW}⚠  Stop the Owner API session ($DROP_TMUX_OWNER) before scanning.${RESET}"
-    echo -e "  ${YELLOW}   The Owner API auto-triggers its own scan — running both at once${RESET}"
-    echo -e "  ${YELLOW}   causes LMDB conflicts and can corrupt in-flight transactions.${RESET}"
-    echo -e "  ${DIM}   Stop wallet listening from option 2 (Wallet listening) → Stop Owner API, then return here.${RESET}\n"
+    echo -e "  ${YELLOW}   Both scan and owner_api run as separate wallet processes on the same${RESET}"
+    echo -e "  ${YELLOW}   wallet data directory — concurrent LMDB writes cause conflicts and${RESET}"
+    echo -e "  ${YELLOW}   can leave in-flight transactions in an inconsistent state.${RESET}"
+    echo -e "  ${DIM}   Stop it from option 2 (Wallet listening) → Stop Owner API, then return here.${RESET}\n"
 
     # Check if Owner API is already running and warn loudly
     if tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null; then

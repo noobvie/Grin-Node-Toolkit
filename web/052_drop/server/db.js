@@ -245,11 +245,11 @@ function addManualDonation(amount, txId = '', fromAddress = '', note = '') {
   ).run(amount, txId, fromAddress, note, _nowIso()).lastInsertRowid;
 }
 
-function createSlatepackDonation(address) {
+function createSlatepackDonation(address, amount = 0) {
   return getDb().prepare(
     `INSERT INTO donations (amount, from_address, type, status, created_at)
-     VALUES (0, ?, 'slatepack', 'pending', ?)`
-  ).run(address, _nowIso()).lastInsertRowid;
+     VALUES (?, ?, 'slatepack', 'confirmed', ?)`
+  ).run(amount, address, _nowIso()).lastInsertRowid;
 }
 
 function createInvoiceDonation(amount, address, invoiceId, timeoutMin) {

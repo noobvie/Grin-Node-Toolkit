@@ -7,6 +7,7 @@
  *   GET  /api/status          wallet balance + site config + ?addr= next_claim_at
  *   GET  /api/public-stats    total given/received, claim/donation counts
  *   GET  /api/qr              PNG QR code for drop wallet address
+ *   GET  /api/nodes           online/offline status of public Grin nodes
  *   POST /api/claim           {grin_address} → {claim_id, slatepack, expires_at}
  *   POST /api/finalize        {claim_id, response_slate} → {status, tx_slate_id}
  *
@@ -212,6 +213,33 @@ app.get('/api/public-stats', (_req, res) => {
   });
 });
 
+// GET /api/nodes ───────────────────────────────────────────────────────────────
+// Returns online/offline status for all known public Grin nodes.
+// Technique: GET https://<node>/v2/foreign — 2xx/3xx/404/405 = online.
+const NODES_MAINNET = ['api.grin.money', 'api.grinily.com', 'api.grinnode.org', 'main.gri.mw', 'grincoin.org'];
+const NODES_TESTNET = ['testapi.grin.money', 'testapi.grinily.com', 'testnet.grincoin.org', 'test.gri.mw'];
+
+app.get('/api/nodes', async (_req, res) => {
+  const cfg  = loadConfig();
+  const list = cfg.network === 'mainnet' ? NODES_MAINNET : NODES_TESTNET;
+
+  const results = await Promise.all(list.map(async (node) => {
+    const t0 = Date.now();
+    try {
+      const r = await fetch(`https://${node}/v2/foreign`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000),
+      });
+      const online = (r.status >= 200 && r.status < 400) || r.status === 404 || r.status === 405;
+      return { url: `https://${node}`, online, ms: Date.now() - t0 };
+    } catch {
+      return { url: `https://${node}`, online: false, ms: null };
+    }
+  }));
+
+  res.json({ nodes: results, network: cfg.network });
+});
+
 // GET /api/qr ──────────────────────────────────────────────────────────────────
 app.get('/api/qr', async (_req, res) => {
   const cfg = loadConfig();
@@ -284,9 +312,13 @@ app.post('/api/claim', async (req, res) => {
     });
 
     // create_slatepack_message — encode to BEGINSLATEPACK...ENDSLATEPACK
+    // sender_index: null — omit the server's slatepack address from the envelope so
+    // the receiver's wallet has no TOR address to auto-respond to.  With sender_index:0
+    // the receiver would send S2 back to our Foreign API (receive_tx on our own outgoing
+    // tx) → keychain error + LMDB write-lock that blocks the subsequent finalize_tx.
     slatepack = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'create_slatepack_message', {
       token,
-      sender_index: 0,
+      sender_index: null,
       recipients:   [],
       slate,
     });
@@ -408,9 +440,11 @@ app.post('/api/donate/receive', async (req, res) => {
       slate:        responseSlate,
     });
 
-    // Record pending donation — amount confirmed manually by admin
-    db.createSlatepackDonation('');
-    actLog('INFO', 'DONATE_RECEIVE_OK (pending admin confirmation)');
+    // Record donation as confirmed — receive_tx succeeded so the wallet has accepted it.
+    // Amount is in nanogrin in the slate; convert to GRIN for storage.
+    const amountGrin = slate && slate.amount ? parseInt(slate.amount) / 1_000_000_000 : 0;
+    db.createSlatepackDonation('', amountGrin);
+    actLog('INFO', `DONATE_RECEIVE_OK amount=${amountGrin} GRIN`);
 
     res.json({ response_slatepack: responseSlatepack });
   } catch (e) {

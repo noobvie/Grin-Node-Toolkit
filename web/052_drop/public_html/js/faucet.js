@@ -171,7 +171,7 @@ async function refreshStatus() {
       _updateSendCmd();
       if (addr) {
         badge.className = "ok";
-        badge.innerHTML = '<span class="ws-dot"></span> Wallet online — ready to receive donations';
+        badge.innerHTML = `<span class="ws-dot"></span> Wallet online — giveaways active &nbsp;·&nbsp; accepting donations`;
       } else {
         badge.className = "error";
         badge.innerHTML = '<span class="ws-dot"></span> Wallet address not configured';
@@ -180,7 +180,7 @@ async function refreshStatus() {
   } catch {
     if (badge) {
       badge.className = "error";
-      badge.innerHTML = '<span class="ws-dot"></span> Wallet offline — donations unavailable';
+      badge.innerHTML = '<span class="ws-dot"></span> Wallet offline — giveaways &amp; donations unavailable';
     }
   }
 }
@@ -546,6 +546,36 @@ function startStatsRefresh() {
   _statsTimer = setInterval(refreshStatus, REFRESH_SEC * 1000);
 }
 
+// ── Node status — How It Works ────────────────────────────────────────────────
+async function loadNodeStatus() {
+  const targetIds = ["node-list-cli", "node-list-grim"];
+  try {
+    const data = await apiGet(API + "/api/nodes");
+    const nodes = data.nodes || [];
+    const html = nodes.map(n => {
+      const dot   = n.online ? '●' : '○';
+      const cls   = n.online ? 'node-ok' : 'node-err';
+      const label = n.online ? 'online' : 'offline';
+      const ms    = n.online && n.ms != null ? `<span class="node-ms">(${n.ms}ms)</span>` : '';
+      return `<div class="node-item">
+        <span class="${cls}">${dot}</span>
+        <code>${n.url}</code>
+        <span class="${cls}">${label}</span>
+        ${ms}
+      </div>`;
+    }).join('');
+    targetIds.forEach(id => {
+      const el = $(id);
+      if (el) el.innerHTML = html || '<span style="color:var(--text-dim);font-size:.82rem;">No nodes found</span>';
+    });
+  } catch {
+    targetIds.forEach(id => {
+      const el = $(id);
+      if (el) el.innerHTML = '<span style="color:var(--text-dim);font-size:.82rem;">Could not load node status</span>';
+    });
+  }
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
   // Network badge in header
@@ -589,6 +619,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   setStep(1);
   startStatsRefresh(); // single shared poll every 5 min
+  loadNodeStatus();    // one-shot node ping for How It Works section
   initTabs();
   initDonateTabs();
   _initClaimAmountButtons();

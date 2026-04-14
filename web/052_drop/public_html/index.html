@@ -89,13 +89,17 @@
       <div class="stat-value" id="stat-next">…</div>
     </div>
   </div>
+  <!-- Wallet status — covers both giveaway and donation roles -->
+  <div style="margin-top:.6rem;padding:0 .25rem;">
+    <span id="donate-wallet-status"><span class="ws-dot"></span> Checking wallet…</span>
+  </div>
 </div>
 
 <main class="container">
 
   <!-- ── Claim section ──────────────────────────────────────────────────────── -->
   <section id="section-giveaway" aria-label="Claim GRIN">
-    <h2 id="claim-title">Claim free GRIN</h2>
+    <h2 id="claim-title" class="section-hero">Claim free GRIN</h2>
     <div class="card">
       <!-- Step 1 — Enter address -->
       <div id="step-1" class="step">
@@ -163,11 +167,7 @@
 
   <!-- ── Donate section ─────────────────────────────────────────────────────── -->
   <section id="section-donation" aria-label="Donate to keep the drop running">
-    <h2>Donate to Keep This Drop Running</h2>
-
-    <div style="margin-bottom:1rem;">
-      <span id="donate-wallet-status"><span class="ws-dot"></span> Checking wallet…</span>
-    </div>
+    <h2 class="section-hero">Donate to Keep This Drop Running</h2>
 
     <!-- Tab switcher — underline style -->
     <div class="donate-tabs" role="tablist" aria-label="Donation method">
@@ -344,10 +344,10 @@
           Set a password when prompted. Save your seed phrase somewhere safe.
         </li>
         <li data-n="3">
-          <strong>Connect to a public testnet node (no sync needed)</strong><br>
-          Edit <code>grin-wallet.toml</code> — find <code>check_node_api_http_addr</code> and set:<br>
-          <code>check_node_api_http_addr = "https://testapi.grin.money"</code><br>
-          This connects to a public pruned testnet node — ready in seconds, no chain download.
+          <strong>Connect to a public node (no sync needed)</strong><br>
+          Edit <code>grin-wallet.toml</code> — find <code>check_node_api_http_addr</code> and set it to any online node below:<br>
+          <div id="node-list-cli" class="node-status-list"><span style="color:var(--text-dim);font-size:.82rem;">Checking nodes…</span></div>
+          Ready in seconds — no chain download needed.
         </li>
         <li data-n="4">
           <strong>Verify connection</strong><br>
@@ -376,7 +376,8 @@
           <strong>First launch setup wizard</strong><br>
           · Select network: <strong>Testnet</strong><br>
           · Node connection: <strong>External node</strong><br>
-          · Node URL: <code>https://testapi.grin.money</code><br>
+          · Node URL: pick any online node below:<br>
+          <div id="node-list-grim" class="node-status-list"><span style="color:var(--text-dim);font-size:.82rem;">Checking nodes…</span></div>
           · Create new wallet → set password → save your seed phrase
         </li>
         <li data-n="3">
@@ -433,7 +434,7 @@
     <p>
       Grin Drop &nbsp;·&nbsp;
       <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a> &nbsp;·&nbsp;
-      <a href="https://github.com/mimblewimble/grin" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">GitHub</a>
       &nbsp;·&nbsp; Testnet GRIN has no real value.
     </p>
     <p style="margin-top:.4rem;">

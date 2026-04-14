@@ -250,7 +250,7 @@ function showError(id, msg) {
   const el = $(id);
   if (!el) return;
   el.textContent = msg;
-  el.style.display = msg ? "" : "none";
+  el.style.display = msg ? "block" : "none";
 }
 
 function clearError(id) { showError(id, ""); }

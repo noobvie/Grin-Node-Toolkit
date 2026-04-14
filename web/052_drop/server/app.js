@@ -379,12 +379,24 @@ app.post('/api/finalize', async (req, res) => {
     const session = await ownerApiSession();
     const { headers, sharedKey, ownerUrl, token } = session;
 
-    // Decode user's response slatepack — the claim S1 was plain (sender_index: null),
-    // so the response from grin-wallet receive is also plain; no decryption key needed.
+    // Decode user's response slatepack.
+    // secret_indices: [0] — try key at derivation index 0 first, then fall through
+    // to unencrypted.  Use [0] (not []) so that if the receiver's wallet happened to
+    // encrypt S2 back to us the decryption still works.
     const slate = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'slate_from_slatepack_message', {
       token,
-      secret_indices: [],
+      secret_indices: [0],
       message:        responseSplate,
+    });
+
+    // Lock outputs — REQUIRED before finalize_tx when the server is the SENDER.
+    // init_send_tx selects inputs but leaves the transaction "pending/unlocked" in LMDB.
+    // tx_lock_outputs commits that input selection so finalize_tx can derive the signing
+    // key.  Skipping this call leaves the context unlocked → "keychain error" →
+    // KernelSumMismatch.  (Official API tutorial: init_send_tx → tx_lock_outputs → finalize_tx)
+    await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'tx_lock_outputs', {
+      token,
+      slate,
     });
 
     // Finalize and broadcast

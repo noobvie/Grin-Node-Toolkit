@@ -134,9 +134,11 @@ async function refreshStatus() {
       donationSection.style.display = (data.donation_enabled === false) ? "none" : "";
     }
 
-    setText("stat-balance", formatGrin(data.wallet_balance));
-    setText("stat-today",   String(data.claims_today));
-    setText("stat-total",   String(data.claims_total));
+    setText("stat-balance",          formatGrin(data.wallet_balance));
+    setText("stat-today",            String(data.claims_today));
+    setText("stat-donations-today",  String(data.donations_today  ?? 0));
+    setText("stat-total",            String(data.claims_total));
+    setText("stat-donations-total",  String(data.donations_total  ?? 0));
 
     // Update claim hint with server-configured max amount
     if (data.claim_amount != null) {
@@ -255,6 +257,25 @@ function showError(id, msg) {
 
 function clearError(id) { showError(id, ""); }
 
+// ── Address prefix validation ─────────────────────────────────────────────────
+// Minimum full address length = prefix (5-6) + 40 alphanumeric chars = 45-46
+const ADDR_MIN_LEN = ADDR_PFX.length + 40;
+
+function _validateAddrPrefix(addr, errorId) {
+  if (!addr) return true;
+  const net = window.DROP_NETWORK === 'testnet' ? 'testnet' : 'mainnet';
+  if (!addr.startsWith(ADDR_PFX)) {
+    showError(errorId, `Invalid address — ${net} addresses start with ${ADDR_PFX}`);
+    return false;
+  }
+  if (addr.length < ADDR_MIN_LEN) {
+    showError(errorId, `Address too short — ${net} addresses are at least ${ADDR_MIN_LEN} characters`);
+    return false;
+  }
+  clearError(errorId);
+  return true;
+}
+
 // ── Claim amount buttons ──────────────────────────────────────────────────────
 function _initClaimAmountButtons() {
   document.querySelectorAll("#claim-amount-grid .amount-btn").forEach(btn => {
@@ -271,6 +292,7 @@ async function submitClaim() {
   clearError("claim-error");
   const address = ($("claim-address")?.value || "").trim();
   if (!address) { showError("claim-error", "Please enter your Grin address."); return; }
+  if (!_validateAddrPrefix(address, "claim-error")) return;
 
   const btn = $("claim-btn");
   const origBtnText = btn ? btn.textContent : '';
@@ -464,7 +486,7 @@ function _initInvAmountButtons() {
 
 function _updateInvBtn() {
   const addr  = ($("donate-invoice-address")?.value || "").trim();
-  const valid = _invAmount != null && _invAmount >= 1 && addr.length > 5;
+  const valid = _invAmount != null && _invAmount >= 1 && addr.length >= ADDR_MIN_LEN && addr.startsWith(ADDR_PFX);
   const btn   = $("donate-invoice-btn");
   if (btn) btn.disabled = !valid;
 }
@@ -473,6 +495,7 @@ async function submitDonateInvoice() {
   clearError("donate-invoice-error");
   const address = ($("donate-invoice-address")?.value || "").trim();
   if (!address) { showError("donate-invoice-error", "Please enter your Grin address."); return; }
+  if (!_validateAddrPrefix(address, "donate-invoice-error")) return;
   if (_invAmount == null || _invAmount < 1) {
     showError("donate-invoice-error", "Please select a donation amount."); return;
   }
@@ -703,7 +726,12 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("finalize-btn")?.addEventListener("click", submitFinalize);
   $("new-claim-btn")?.addEventListener("click", resetClaim);
-  $("claim-address")?.addEventListener("blur", refreshStatus);
+  $("claim-address")?.addEventListener("blur", () => {
+    const addr = ($("claim-address")?.value || "").trim();
+    if (addr) _validateAddrPrefix(addr, "claim-error");
+    else clearError("claim-error");
+    refreshStatus();
+  });
 
   // ── Donate pane 1 ──
   $("copy-donate-addr-btn")?.addEventListener("click", () => {
@@ -733,6 +761,11 @@ document.addEventListener("DOMContentLoaded", () => {
   $("donate-receive-reset-btn")?.addEventListener("click", resetDonateReceive);
 
   // ── Donate pane 3 ──
+  $("donate-invoice-address")?.addEventListener("blur", () => {
+    const addr = ($("donate-invoice-address")?.value || "").trim();
+    if (addr) _validateAddrPrefix(addr, "donate-invoice-error");
+    else clearError("donate-invoice-error");
+  });
   $("donate-invoice-btn")?.addEventListener("click", submitDonateInvoice);
   $("copy-donate-invoice-btn")?.addEventListener("click", () => {
     const el = $("donate-invoice-slatepack");

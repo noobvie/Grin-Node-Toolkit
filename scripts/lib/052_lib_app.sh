@@ -194,22 +194,22 @@ drop_configure() {
     # ── Giveaway ──────────────────────────────────────────────────────────────
     echo ""
     echo -e "  ${BOLD}Giveaway Settings [$DROP_NET_LABEL]:${RESET}"
-    echo -ne "Claim amount     [$(drop_read_conf claim_amount_grin '0.1') GRIN]: "
+    echo -ne "Max claim per tx [$(drop_read_conf claim_amount_grin '0.1') GRIN]  (max GRIN sent in one claim): "
     read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
     [[ -n "$val" ]] && drop_write_conf_key "claim_amount_grin" "$val"
 
-    echo -ne "Claim window     [$(drop_read_conf claim_window_hours '24') hours]: "
+    echo -ne "Address cooldown [$(drop_read_conf claim_window_hours '24') hours] (wait per address before next claim): "
     read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
     [[ -n "$val" ]] && drop_write_conf_key "claim_window_hours" "$val"
 
-    echo -ne "Finalize timeout [$(drop_read_conf finalize_timeout_min '5') min]: "
+    echo -ne "Finalize window  [$(drop_read_conf finalize_timeout_min '30') min]   (time for user to paste response slatepack): "
     read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
     [[ -n "$val" ]] && drop_write_conf_key "finalize_timeout_min" "$val"
 
     # ── Donation invoice ──────────────────────────────────────────────────────
     echo ""
     echo -e "  ${BOLD}Donation Settings [$DROP_NET_LABEL]:${RESET}"
-    echo -ne "Invoice timeout  [$(drop_read_conf donation_invoice_timeout '30') min]: "
+    echo -ne "Invoice expiry   [$(drop_read_conf donation_invoice_timeout '30') min]   (time before invoice expires): "
     read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
     [[ -n "$val" ]] && drop_write_conf_key "donation_invoice_timeout" "$val"
 

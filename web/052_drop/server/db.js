@@ -134,6 +134,19 @@ function countClaimsTotal() {
     .get().c;
 }
 
+function countDonationsToday() {
+  const today = new Date().toISOString().slice(0, 10);
+  return getDb()
+    .prepare("SELECT COUNT(*) as c FROM donations WHERE created_at LIKE ? AND status = 'confirmed'")
+    .get(today + '%').c;
+}
+
+function countDonationsTotal() {
+  return getDb()
+    .prepare("SELECT COUNT(*) as c FROM donations WHERE status = 'confirmed'")
+    .get().c;
+}
+
 function getExpiredClaims() {
   const now = _nowIso();
   return getDb().prepare(
@@ -318,6 +331,8 @@ module.exports = {
   lastActiveClaim,
   countClaimsToday,
   countClaimsTotal,
+  countDonationsToday,
+  countDonationsTotal,
   getExpiredClaims,
   getTotalGivenGrin,
   getClaimsPaginated,

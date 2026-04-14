@@ -178,6 +178,8 @@ app.get('/api/status', async (req, res) => {
     wallet_balance:      balance !== null ? Math.round(balance * 1e9) / 1e9 : null,
     claims_today:        db.countClaimsToday(),
     claims_total:        db.countClaimsTotal(),
+    donations_today:     db.countDonationsToday(),
+    donations_total:     db.countDonationsTotal(),
     next_claim_at:       null,
     giveaway_enabled:    cfg.giveaway_enabled,
     donation_enabled:    cfg.donation_enabled,

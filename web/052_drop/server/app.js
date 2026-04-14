@@ -86,7 +86,7 @@ function nextClaimIso(address) {
   const last = db.lastActiveClaim(address);
   if (!last) return null;
   const cfg = loadConfig();
-  const windowMs = (cfg.claim_window_hours || 24) * 3_600_000;
+  const windowMs = (cfg.claim_window_hours ?? 24) * 3_600_000;
   const created  = new Date(last.created_at).getTime();
   const nextAllowed = new Date(created + windowMs);
   if (Date.now() >= nextAllowed.getTime()) return null;

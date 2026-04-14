@@ -95,6 +95,9 @@ Secret files — two per service, each with a Foreign and Owner secret:
 | `.foreign_api_secret` | Node Foreign API | grin-wallet via `node_api_secret_path` | `foreign_api_secret_path` |
 
 **grin-wallet** (`$WALLET_DIR/`) — both created by `grin-wallet init/recover`
+`grin-wallet init -hr` to recover wallet from seed and store config/secret files in same dir.
+`grin-wallet recover` to display seed
+
 | File | API | Who reads it | Key in grin-wallet.toml |
 |------|-----|-------------|--------------------------|
 | `.foreign_api_secret` | Wallet Foreign API (3415/13415) | Node.js `foreignApiCall()`, external senders | `api_secret_path` |

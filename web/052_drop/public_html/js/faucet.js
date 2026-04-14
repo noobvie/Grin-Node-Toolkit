@@ -16,6 +16,23 @@ let _countdown        = null;
 let _invoiceId        = null;
 let _donateWalletAddr = '';
 
+// ── Session storage helpers (survive page refresh within same tab) ────────────
+function clearClaimSession() {
+  sessionStorage.removeItem('grin_drop_claim_id');
+  sessionStorage.removeItem('grin_drop_slatepack');
+  sessionStorage.removeItem('grin_drop_expires_at');
+}
+
+function clearDonateRcvSession() {
+  sessionStorage.removeItem('grin_drop_donate_rcv_sp');
+}
+
+function clearDonateInvSession() {
+  sessionStorage.removeItem('grin_drop_invoice_id');
+  sessionStorage.removeItem('grin_drop_invoice_sp');
+  sessionStorage.removeItem('grin_drop_invoice_exp');
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function $(id) { return document.getElementById(id); }
 
@@ -207,7 +224,8 @@ function startCountdown(expiresIso) {
     if (left <= 0) {
       stopCountdown();
       if (el) el.textContent = "Expired";
-      showError("claim-error", "The 5-minute window has expired. Please start a new claim.");
+      clearClaimSession();
+      showError("claim-error", "The claim window has expired. Please start a new claim.");
       setStep(1);
     }
   }
@@ -266,6 +284,9 @@ async function submitClaim() {
 
     const sp = $("slatepack-text");
     if (sp) sp.textContent = data.slatepack;
+    sessionStorage.setItem('grin_drop_claim_id',   String(data.claim_id));
+    sessionStorage.setItem('grin_drop_slatepack',  data.slatepack);
+    sessionStorage.setItem('grin_drop_expires_at', data.expires_at);
     startCountdown(data.expires_at);
     setStep(2);
     refreshStatus();
@@ -296,6 +317,7 @@ async function submitFinalize() {
       response_slate: response,
     });
     stopCountdown();
+    clearClaimSession();
     setText("confirm-tx-id",  data.tx_slate_id || "(not available)");
     setText("confirm-amount", formatGrin(data.amount));
     setStep(3);
@@ -314,6 +336,7 @@ async function submitFinalize() {
 
 function resetClaim() {
   _claimId = null;
+  clearClaimSession();
   stopCountdown();
   const ra = $("response-slate");
   if (ra) ra.value = "";
@@ -391,6 +414,7 @@ async function submitDonateReceive() {
     const sp = data.response_slatepack || data.slatepack || "";
     const spEl = $("donate-response-slatepack");
     if (spEl) spEl.textContent = sp;
+    sessionStorage.setItem('grin_drop_donate_rcv_sp', sp);
     hide("donate-rcv-s1");
     show("donate-rcv-s2");
   } catch (err) {
@@ -402,6 +426,7 @@ async function submitDonateReceive() {
 }
 
 function resetDonateReceive() {
+  clearDonateRcvSession();
   const ta = $("donate-send-slate");
   if (ta) ta.value = "";
   clearError("donate-receive-error");
@@ -462,6 +487,9 @@ async function submitDonateInvoice() {
     const sp = data.invoice_slatepack || data.slatepack || "";
     const spEl = $("donate-invoice-slatepack");
     if (spEl) spEl.textContent = sp;
+    sessionStorage.setItem('grin_drop_invoice_id', _invoiceId);
+    sessionStorage.setItem('grin_drop_invoice_sp', sp);
+    if (data.expires_at) sessionStorage.setItem('grin_drop_invoice_exp', data.expires_at);
     hide("donate-inv-s1");
     show("donate-inv-s2");
     return; // success — leave button hidden with step
@@ -490,6 +518,7 @@ async function submitDonateFinalize() {
       invoice_id:     _invoiceId,
       response_slate: response,
     });
+    clearDonateInvSession();
     hide("donate-inv-s2");
     show("donate-inv-s3");
     refreshStatus();
@@ -507,6 +536,7 @@ async function submitDonateFinalize() {
 }
 
 function resetDonateInvoice() {
+  clearDonateInvSession();
   _invoiceId = null;
   _invAmount = null;
   const af = $("donate-invoice-address");
@@ -618,6 +648,41 @@ document.addEventListener("DOMContentLoaded", () => {
   if (payCmd) payCmd.textContent = `grin-wallet ${NET_FLAG}pay -i invoice.slatepack`;
 
   setStep(1);
+
+  // ── Restore claim state from sessionStorage (survives page refresh) ──
+  const _savedId  = sessionStorage.getItem('grin_drop_claim_id');
+  const _savedSp  = sessionStorage.getItem('grin_drop_slatepack');
+  const _savedExp = sessionStorage.getItem('grin_drop_expires_at');
+  if (_savedId && _savedSp && _savedExp && Date.now() < new Date(_savedExp).getTime()) {
+    _claimId = parseInt(_savedId, 10);
+    const sp = $('slatepack-text');
+    if (sp) sp.textContent = _savedSp;
+    startCountdown(_savedExp);
+    setStep(2);
+  }
+
+  // ── Restore donate pane 2 (receive) response slatepack ──
+  const _savedRcvSp = sessionStorage.getItem('grin_drop_donate_rcv_sp');
+  if (_savedRcvSp) {
+    const spEl = $('donate-response-slatepack');
+    if (spEl) spEl.textContent = _savedRcvSp;
+    hide('donate-rcv-s1');
+    show('donate-rcv-s2');
+  }
+
+  // ── Restore donate pane 3 (invoice) state ──
+  const _savedInvId  = sessionStorage.getItem('grin_drop_invoice_id');
+  const _savedInvSp  = sessionStorage.getItem('grin_drop_invoice_sp');
+  const _savedInvExp = sessionStorage.getItem('grin_drop_invoice_exp');
+  const _invStillValid = _savedInvExp ? Date.now() < new Date(_savedInvExp).getTime() : true;
+  if (_savedInvId && _savedInvSp && _invStillValid) {
+    _invoiceId = _savedInvId;
+    const spEl = $('donate-invoice-slatepack');
+    if (spEl) spEl.textContent = _savedInvSp;
+    hide('donate-inv-s1');
+    show('donate-inv-s2');
+  }
+
   startStatsRefresh(); // single shared poll every 5 min
   loadNodeStatus();    // one-shot node ping for How It Works section
   initTabs();

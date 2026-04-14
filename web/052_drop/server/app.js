@@ -78,7 +78,7 @@ const GRIN_ADDR_RE = /^(grin1|tgrin1)[a-z0-9]{40,}$/;
 
 function validateSlatepack(input) {
   if (!input || typeof input !== 'string') return false;
-  if (input.length > 4096) return false;
+  if (input.length > 8192) return false;
   return input.includes('BEGINSLATEPACK') && input.includes('ENDSLATEPACK');
 }
 
@@ -325,7 +325,7 @@ app.post('/api/claim', async (req, res) => {
   } catch (e) {
     db.setClaimStatus(claimId, 'failed');
     actLog('ERROR', `WALLET_FAIL cmd=init_send claim_id=${claimId} err=${e.message}`);
-    return err(res, 'Wallet temporarily unavailable — please try again shortly.', 503);
+    return err(res, e.message, 503);
   }
 
   db.setSlatepackOut(claimId, slatepack);
@@ -371,10 +371,11 @@ app.post('/api/finalize', async (req, res) => {
     const session = await ownerApiSession();
     const { headers, sharedKey, ownerUrl, token } = session;
 
-    // Decode user's response slatepack
+    // Decode user's response slatepack — the claim S1 was plain (sender_index: null),
+    // so the response from grin-wallet receive is also plain; no decryption key needed.
     const slate = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'slate_from_slatepack_message', {
       token,
-      secret_indices: [0],
+      secret_indices: [],
       message:        responseSplate,
     });
 
@@ -386,7 +387,7 @@ app.post('/api/finalize', async (req, res) => {
     txSlateId = (finalResult && finalResult.id) ? String(finalResult.id) : '';
   } catch (e) {
     actLog('ERROR', `WALLET_FAIL cmd=finalize claim_id=${claimId} err=${e.message}`);
-    return err(res, 'Wallet temporarily unavailable — please try again shortly.', 503);
+    return err(res, e.message, 503);
   }
 
   db.setClaimFinalized(claimId, responseSplate, txSlateId);
@@ -449,7 +450,7 @@ app.post('/api/donate/receive', async (req, res) => {
     res.json({ response_slatepack: responseSlatepack });
   } catch (e) {
     actLog('ERROR', `DONATE_RECEIVE_FAIL err=${e.message}`);
-    return err(res, 'Wallet temporarily unavailable — please try again shortly.', 503);
+    return err(res, e.message, 503);
   }
 });
 
@@ -508,7 +509,7 @@ app.post('/api/donate/invoice', async (req, res) => {
     res.json({ invoice_id: invoiceId, invoice_slatepack: invoiceSlatepack });
   } catch (e) {
     actLog('ERROR', `DONATE_INVOICE_FAIL err=${e.message}`);
-    return err(res, 'Wallet temporarily unavailable — please try again shortly.', 503);
+    return err(res, e.message, 503);
   }
 });
 
@@ -555,7 +556,7 @@ app.post('/api/donate/finalize', async (req, res) => {
     txId = (finalResult && finalResult.id) ? String(finalResult.id) : '';
   } catch (e) {
     actLog('ERROR', `DONATE_FINALIZE_FAIL invoice_id=${invoiceId} err=${e.message}`);
-    return err(res, 'Wallet temporarily unavailable — please try again shortly.', 503);
+    return err(res, e.message, 503);
   }
 
   db.confirmInvoiceDonation(invoiceId, txId);

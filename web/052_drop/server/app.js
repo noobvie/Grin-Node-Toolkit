@@ -23,6 +23,7 @@
 
 const fs      = require('fs');
 const path    = require('path');
+const crypto  = require('crypto');
 const express = require('express');
 const QRCode  = require('qrcode');
 const { v4: uuidv4 } = require('uuid');
@@ -74,7 +75,19 @@ function truncAddr(addr) {
   return addr.length > 12 ? addr.slice(0, 6) + '...' + addr.slice(-4) : addr;
 }
 
-const GRIN_ADDR_RE = /^(grin1|tgrin1)[a-z0-9]{40,}$/;
+const GRIN_ADDR_RE    = /^(grin1|tgrin1)[a-z0-9]{40,}$/;
+const ANON_CLAIM_GRIN = 0.09;
+
+// IP helpers — nginx must set: proxy_set_header X-Real-IP $remote_addr;
+// Only X-Real-IP is trusted — X-Forwarded-For is client-controlled and spoofable.
+function getClientIp(req) {
+  return (req.headers['x-real-ip'] || '').trim();
+}
+
+function hashIp(ip) {
+  const salt = process.env.IP_SALT || 'grin-anon-claim';
+  return 'anon:' + crypto.createHash('sha256').update(ip + salt).digest('hex').slice(0, 24);
+}
 
 function validateSlatepack(input) {
   if (!input || typeof input !== 'string') return false;
@@ -348,6 +361,73 @@ app.post('/api/claim', async (req, res) => {
   });
 });
 
+// POST /api/claim/anonymous ────────────────────────────────────────────────────
+// No address required — rate-limited by hashed client IP.
+// Amount is fixed to ANON_CLAIM_GRIN (0.09) regardless of body.
+app.post('/api/claim/anonymous', async (req, res) => {
+  const cfg = loadConfig();
+  if (!cfg.giveaway_enabled) return err(res, 'Giveaway is currently disabled', 503);
+
+  const ip = getClientIp(req);
+  if (!ip) return err(res, 'Could not determine client IP', 400);
+  const anonAddr = hashIp(ip);
+
+  const nextAt = nextClaimIso(anonAddr);
+  if (nextAt) {
+    actLog('WARN', `ANON_RATE_LIMIT ip_hash=${anonAddr.slice(0, 12)} next_claim=${nextAt}`);
+    return err(res, `Already claimed. Next claim available at ${nextAt}`, 429);
+  }
+
+  const maxClaims = parseInt(cfg.max_claims_per_window, 10) || 0;
+  if (maxClaims > 0 && db.countClaimsToday() >= maxClaims) {
+    actLog('WARN', `CLAIMS_CAP_REACHED max=${maxClaims}`);
+    return err(res, 'Daily claim limit reached. Try again later.', 503);
+  }
+
+  const timeoutMin = parseInt(cfg.finalize_timeout_min, 10) || 5;
+  const claimId    = db.createClaim(anonAddr, ANON_CLAIM_GRIN, timeoutMin);
+  actLog('INFO', `ANON_CLAIM_INIT ip_hash=${anonAddr.slice(0, 12)} claim_id=${claimId}`);
+
+  let slatepack = '';
+  try {
+    const session = await ownerApiSession();
+    const { headers, sharedKey, ownerUrl, token } = session;
+
+    const slate = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'init_send_tx', {
+      token,
+      args: {
+        src_acct_name:                   null,
+        amount:                          String(Math.round(ANON_CLAIM_GRIN * 1_000_000_000)),
+        minimum_confirmations:           10,
+        max_outputs:                     500,
+        num_change_outputs:              1,
+        selection_strategy_is_use_all:   false,
+        target_slate_version:            null,
+        payment_proof_recipient_address: null,
+        ttl_blocks:                      null,
+        send_args:                       null,
+      },
+    });
+
+    slatepack = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'create_slatepack_message', {
+      token,
+      sender_index: null,
+      recipients:   [],
+      slate,
+    });
+  } catch (e) {
+    db.setClaimStatus(claimId, 'failed');
+    actLog('ERROR', `WALLET_FAIL cmd=anon_claim claim_id=${claimId} err=${e.message}`);
+    return err(res, e.message, 503);
+  }
+
+  db.setSlatepackOut(claimId, slatepack);
+  actLog('INFO', `ANON_SLATEPACK_OUT claim_id=${claimId}`);
+
+  const claim = db.getClaim(claimId);
+  res.json({ claim_id: claimId, slatepack, amount: ANON_CLAIM_GRIN, expires_at: claim.expires_at });
+});
+
 // POST /api/finalize ───────────────────────────────────────────────────────────
 app.post('/api/finalize', async (req, res) => {
   const body           = req.body || {};
@@ -411,6 +491,7 @@ app.post('/api/finalize', async (req, res) => {
     // Non-fatal: if the node is temporarily unreachable the tx is fully signed in
     // the wallet's LMDB and can be re-broadcast manually; the claim is still recorded.
     try {
+      actLog('INFO', `POST_TX_ATTEMPT claim_id=${claimId} has_tx=${!!finalResult?.tx}`);
       await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'post_tx', {
         token,
         tx:    finalResult.tx,
@@ -530,9 +611,11 @@ app.post('/api/donate/invoice', async (req, res) => {
     });
 
     // 2. Encode invoice → slatepack
+    // sender_index: null — omit server's address from envelope so donor's wallet
+    // won't attempt TOR auto-send (same reasoning as the claim flow).
     const invoiceSlatepack = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'create_slatepack_message', {
       token,
-      sender_index: 0,
+      sender_index: null,
       recipients:   [],
       slate,
     });
@@ -583,15 +666,25 @@ app.post('/api/donate/finalize', async (req, res) => {
       message:        responseSplate,
     });
 
-    // 2. Finalize and broadcast.
-    // For invoice transactions the server is the receiver — grin-wallet auto-broadcasts
-    // on the receiver's finalize_tx (unlike the standard-send flow where post_tx is
-    // a separate required step).
+    // 2. Finalize — signs the transaction.
     const finalResult = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'finalize_tx', {
       token,
       slate,
     });
     txId = (finalResult && finalResult.id) ? String(finalResult.id) : '';
+
+    // 3. Broadcast — explicit post_tx for reliability across grin-wallet versions.
+    // Non-fatal: tx is fully signed in wallet LMDB; can be re-broadcast manually.
+    try {
+      await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'post_tx', {
+        token,
+        tx:    finalResult.tx,
+        fluff: true,
+      });
+      actLog('INFO', `DONATE_BROADCAST_OK invoice_id=${invoiceId} tx=${txId || '(unknown)'}`);
+    } catch (postErr) {
+      actLog('WARN', `DONATE_BROADCAST_FAIL invoice_id=${invoiceId} tx=${txId} err=${postErr.message}`);
+    }
   } catch (e) {
     actLog('ERROR', `DONATE_FINALIZE_FAIL invoice_id=${invoiceId} err=${e.message}`);
     return err(res, e.message, 503);

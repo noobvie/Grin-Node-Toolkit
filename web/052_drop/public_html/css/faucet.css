@@ -296,15 +296,19 @@ textarea { resize: vertical; min-height: 100px; }
 
 /* ── Donate section ───────────────────────────────────────────────────────── */
 
-/* Underline-style tab bar (donate section only) */
-.donate-tabs {
+/* Underline-style tab bar (claim + donate sections) */
+.donate-tabs,
+.claim-tabs {
   display: flex;
   gap: 0;
   margin-bottom: 1.25rem;
   border-bottom: 2px solid var(--border);
   flex-wrap: wrap;
 }
-.donate-tab-btn {
+.claim-tabs { margin-bottom: 4px; }
+
+.donate-tab-btn,
+.claim-tab-btn {
   background: none;
   border: none;
   border-bottom: 3px solid transparent;
@@ -318,12 +322,16 @@ textarea { resize: vertical; min-height: 100px; }
   transition: color .15s, border-color .15s;
   white-space: nowrap;
 }
-.donate-tab-btn:hover  { color: var(--accent); }
-.donate-tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.donate-tab-btn:hover,
+.claim-tab-btn:hover  { color: var(--accent); }
+.donate-tab-btn.active,
+.claim-tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 
-/* Donate panes — CSS class toggled by JS */
-.donate-pane { display: none; }
-.donate-pane.active { display: block; }
+/* Donate + claim panes — CSS class toggled by JS */
+.donate-pane,
+.claim-pane { display: none; }
+.donate-pane.active,
+.claim-pane.active { display: block; }
 
 /* cmd-box — address / command display */
 .cmd-box {

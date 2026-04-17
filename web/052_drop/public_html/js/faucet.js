@@ -12,9 +12,12 @@ const ADDR_PFX = window.DROP_NETWORK === 'testnet' ? 'tgrin1' : 'grin1';
 // ── State ─────────────────────────────────────────────────────────────────────
 let _claimId          = null;
 let _claimAmount      = null;   // null = use server max; number = override
+let _activeClaimPane  = 'addr'; // 'addr' | 'anon' — tracks which claim tab is open
 let _countdown        = null;
 let _invoiceId        = null;
 let _donateWalletAddr = '';
+
+const ANON_CLAIM_AMOUNT = 0.09;
 
 // ── Session storage helpers (survive page refresh within same tab) ────────────
 function clearClaimSession() {
@@ -364,9 +367,57 @@ function resetClaim() {
   if (ra) ra.value = "";
   clearError("claim-error");
   clearError("finalize-error");
+  clearError("anon-claim-error");
   setStep(1);
+  // Restore whichever claim tab was last active
+  document.querySelectorAll(".claim-pane").forEach(p => p.classList.remove("active"));
+  const paneId = _activeClaimPane === 'anon' ? 'claim-pane-anon' : 'claim-pane-addr';
+  const pane = $(paneId);
+  if (pane) pane.classList.add("active");
 }
 
+
+// ── Claim tab switching ───────────────────────────────────────────────────────
+function initClaimTabs() {
+  document.querySelectorAll(".claim-tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".claim-tab-btn").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".claim-pane").forEach(p => p.classList.remove("active"));
+      btn.classList.add("active");
+      const pane = $(btn.dataset.pane);
+      if (pane) pane.classList.add("active");
+      _activeClaimPane = btn.dataset.pane === 'claim-pane-anon' ? 'anon' : 'addr';
+    });
+  });
+}
+
+// ── Anonymous claim (no address — IP rate limited) ────────────────────────────
+async function submitClaimAnon() {
+  clearError("anon-claim-error");
+  const btn = $("anon-claim-btn");
+  const origText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = "Requesting…"; }
+  try {
+    const data = await apiPost(API + "/api/claim/anonymous", { amount: ANON_CLAIM_AMOUNT });
+    _claimId = data.claim_id;
+    const sp = $("slatepack-text");
+    if (sp) sp.textContent = data.slatepack;
+    sessionStorage.setItem('grin_drop_claim_id',   String(data.claim_id));
+    sessionStorage.setItem('grin_drop_slatepack',  data.slatepack);
+    sessionStorage.setItem('grin_drop_expires_at', data.expires_at);
+    startCountdown(data.expires_at);
+    setStep(2);
+    refreshStatus();
+  } catch (err) {
+    if (err.status === 429) {
+      showError("anon-claim-error", "You already claimed recently. " + err.message);
+    } else {
+      showError("anon-claim-error", "Error: " + err.message);
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origText || "Claim — No Address Needed"; }
+  }
+}
 
 function _updateSendCmd() {
   const el = $("donate-send-cmd");
@@ -376,7 +427,7 @@ function _updateSendCmd() {
     return;
   }
   const amt = _rcvAmount != null ? _rcvAmount : "<amount>";
-  el.textContent = `grin-wallet ${NET_FLAG}send -m -d ${_donateWalletAddr} ${amt}`;
+  el.textContent = `./grin-wallet ${NET_FLAG}send -m -d ${_donateWalletAddr} ${amt}`;
 }
 
 // ── Donate: tab switching (CSS class toggle) ───────────────────────────────────
@@ -649,6 +700,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (addrInput) addrInput.placeholder = ADDR_PFX + "1...";
   const addrLabel = $("claim-address-label");
   if (addrLabel) addrLabel.textContent = `Your ${COIN} Address (${ADDR_PFX}1...)`;
+  const anonCoinLabel = $("anon-coin-label");
+  if (anonCoinLabel) anonCoinLabel.textContent = COIN;
 
   const invAddrInput = $("donate-invoice-address");
   if (invAddrInput) invAddrInput.placeholder = ADDR_PFX + "1...";
@@ -668,7 +721,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Network-specific wallet pay command in pane 3
   const payCmd = $("donate-pay-cmd");
-  if (payCmd) payCmd.textContent = `grin-wallet ${NET_FLAG}pay -i invoice.slatepack`;
+  if (payCmd) payCmd.textContent = `./grin-wallet ${NET_FLAG}pay -i invoice.slatepack`;
 
   setStep(1);
 
@@ -710,12 +763,14 @@ document.addEventListener("DOMContentLoaded", () => {
   loadNodeStatus();    // one-shot node ping for How It Works section
   initTabs();
   initDonateTabs();
+  initClaimTabs();
   _initClaimAmountButtons();
   _initRcvAmountButtons();
   _initInvAmountButtons();
   _updateSendCmd();
 
   // ── Claim flow ──
+  $("anon-claim-btn")?.addEventListener("click", submitClaimAnon);
   $("claim-btn")?.addEventListener("click", submitClaim);
   $("claim-address")?.addEventListener("keydown", e => {
     if (e.key === "Enter") submitClaim();

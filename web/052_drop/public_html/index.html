@@ -108,23 +108,59 @@
   <!-- ── Claim section ──────────────────────────────────────────────────────── -->
   <section id="section-giveaway" aria-label="Claim GRIN">
     <h2 id="claim-title" class="section-hero">Claim free GRIN</h2>
+
+    <!-- Claim method tabs -->
+    <div class="claim-tabs" role="tablist" aria-label="Claim method">
+      <button class="claim-tab-btn active" data-pane="claim-pane-addr" role="tab">With Address</button>
+      <button class="claim-tab-btn"        data-pane="claim-pane-anon" role="tab">Without Address ✦</button>
+    </div>
+
     <div class="card">
-      <!-- Step 1 — Enter address -->
+      <!-- Step 1 — tabbed -->
       <div id="step-1" class="step">
-        <div class="amount-grid" id="claim-amount-grid" style="margin-bottom:.9rem;">
-          <button class="amount-btn" data-amount="0.1">0.1</button>
-          <button class="amount-btn" data-amount="0.2">0.2</button>
-          <button class="amount-btn" data-amount="0.5">0.5</button>
-          <button class="amount-btn" data-amount="1.0">1.0</button>
+
+        <!-- Pane A: With Address (standard flow) -->
+        <div id="claim-pane-addr" class="claim-pane active">
+          <div class="amount-grid" id="claim-amount-grid" style="margin-bottom:.9rem;">
+            <button class="amount-btn" data-amount="0.1">0.1</button>
+            <button class="amount-btn" data-amount="0.2">0.2</button>
+            <button class="amount-btn" data-amount="0.5">0.5</button>
+            <button class="amount-btn" data-amount="1.0">1.0</button>
+          </div>
+          <label for="claim-address" id="claim-address-label">Your Grin Address</label>
+          <input type="text" id="claim-address" placeholder="" autocomplete="off" spellcheck="false">
+          <p class="error-msg" id="claim-error"></p>
+          <button class="btn btn-full" id="claim-btn">Claim</button>
+          <p style="margin-top:.7rem;font-size:.8rem;color:var(--text-dim);" id="claim-hint">
+            No sign-up required &nbsp;·&nbsp;
+            This simulates exactly how <strong>mainnet withdrawals</strong> work.
+          </p>
         </div>
-        <label for="claim-address" id="claim-address-label">Your Grin Address</label>
-        <input type="text" id="claim-address" placeholder="" autocomplete="off" spellcheck="false">
-        <p class="error-msg" id="claim-error"></p>
-        <button class="btn btn-full" id="claim-btn">Claim</button>
-        <p style="margin-top:.7rem;font-size:.8rem;color:var(--text-dim);" id="claim-hint">
-          No sign-up required &nbsp;·&nbsp;
-          This simulates exactly how <strong>mainnet withdrawals</strong> work.
-        </p>
+
+        <!-- Pane B: Without Address (newcomer showcase) -->
+        <div id="claim-pane-anon" class="claim-pane">
+          <div class="info-box" style="margin-bottom:1rem;">
+            <strong style="color:var(--accent);">Grin's magic — receive without sharing an address</strong>
+            <p style="margin-top:.5rem;font-size:.87rem;line-height:1.75;">
+              In Bitcoin or Ethereum you publish a fixed address — anyone can look it up and see
+              your full transaction history. <strong>Grin works differently:</strong> the sender
+              creates the transaction first and hands you a slatepack message. You respond from
+              your wallet. <em>No address posted publicly. No balance exposed. No history linked
+              to you.</em> This is Grin's interactive model — unique in all of crypto.
+            </p>
+          </div>
+          <div style="text-align:center;padding:.4rem 0 1rem;">
+            <div style="font-size:2.2rem;font-weight:700;color:var(--accent);font-family:var(--font-mono);">
+              0.09 <span id="anon-coin-label">tGRIN</span>
+            </div>
+            <div style="font-size:.78rem;color:var(--text-dim);margin-top:.25rem;">
+              fixed amount &nbsp;·&nbsp; 1 claim per IP per 24 h
+            </div>
+          </div>
+          <p class="error-msg" id="anon-claim-error"></p>
+          <button class="btn btn-full" id="anon-claim-btn">Claim — No Address Needed</button>
+        </div>
+
       </div>
 
       <!-- Step 2 — Copy slatepack -->
@@ -141,7 +177,7 @@
         <button class="btn btn-outline btn-sm" id="copy-slatepack-btn">Copy Slatepack</button>
 
         <div class="info-box" style="margin-top:1rem;">
-          <strong>CLI:</strong> <code>grin-wallet --testnet receive</code> → paste slatepack → press Enter → copy the response<br>
+          <strong>CLI:</strong> <code>./grin-wallet --testnet receive</code> → paste slatepack → press Enter → copy the response<br>
           <strong>Grim:</strong> Receive tab → paste slatepack → confirm → copy response
         </div>
 
@@ -230,7 +266,7 @@
                  placeholder="Min 1 GRIN" style="max-width:200px;">
         </div>
         <div class="donate-step-label">Run in your terminal</div>
-        <div class="cmd-box" id="donate-send-cmd">grin-wallet send -m -d &lt;address&gt; &lt;amount&gt;</div>
+        <div class="cmd-box" id="donate-send-cmd">./grin-wallet send -m -d &lt;address&gt; &lt;amount&gt;</div>
         <button class="btn btn-outline btn-sm" style="margin-top:.5rem;" id="donate-copy-send-cmd">Copy Command</button>
         <div style="margin-top:1rem;">
           <label for="donate-send-slate">Paste the output slatepack from your wallet:</label>
@@ -254,7 +290,7 @@
           <button class="btn btn-outline btn-sm" id="download-donate-response-btn">Download .slatepack</button>
         </div>
         <div class="info-box" style="margin-top:1rem;">
-          <strong>CLI:</strong> <code>grin-wallet finalize -i response.slatepack</code><br>
+          <strong>CLI:</strong> <code>./grin-wallet finalize -i response.slatepack</code><br>
           <strong>Grim:</strong> Receive tab → paste response → confirm
         </div>
         <div class="success-box" style="margin-top:1rem;text-align:center;">
@@ -297,7 +333,7 @@
         <div class="slatepack-box" id="donate-invoice-slatepack"></div>
         <button class="btn btn-outline btn-sm" style="margin-top:.5rem;" id="copy-donate-invoice-btn">Copy Invoice</button>
         <div class="info-box" style="margin-top:.8rem;">
-          <strong>CLI:</strong> <code id="donate-pay-cmd">grin-wallet pay -i invoice.slatepack</code>
+          <strong>CLI:</strong> <code id="donate-pay-cmd">./grin-wallet pay -i invoice.slatepack</code>
         </div>
         <div style="margin-top:.75rem;">
           <label for="donate-pay-slate">Paste your wallet's payment response:</label>
@@ -348,7 +384,7 @@
         </li>
         <li data-n="2">
           <strong>Initialize a testnet wallet</strong><br>
-          <code>grin-wallet --testnet init</code><br>
+          <code>./grin-wallet --testnet init</code><br>
           Set a password when prompted. Save your seed phrase somewhere safe.
         </li>
         <li data-n="3">
@@ -359,12 +395,12 @@
         </li>
         <li data-n="4">
           <strong>Verify connection</strong><br>
-          <code>grin-wallet --testnet info</code><br>
+          <code>./grin-wallet --testnet info</code><br>
           You should see your balance and "Node version" — you are connected.
         </li>
         <li data-n="5">
           <strong>Get your address</strong><br>
-          <code>grin-wallet --testnet address</code><br>
+          <code>./grin-wallet --testnet address</code><br>
           Copy the <code>tgrin1...</code> address and paste it into the claim form above.
         </li>
       </ol>
@@ -403,7 +439,7 @@
         <li data-n="2">Copy the <strong>SLATEPACK</strong> text shown on screen.</li>
         <li data-n="3">
           Paste slatepack into your wallet:<br>
-          <strong>CLI:</strong> <code>grin-wallet --testnet receive</code> → paste → press Enter → wallet outputs a response slatepack<br>
+          <strong>CLI:</strong> <code>./grin-wallet --testnet receive</code> → paste → press Enter → wallet outputs a response slatepack<br>
           <strong>Grim:</strong> Receive tab → paste slatepack → confirm → copy the response
         </li>
         <li data-n="4">Copy the <strong>response slatepack</strong> from your wallet.</li>
@@ -432,6 +468,35 @@
         </li>
       </ul>
     </div>
+
+    <!-- Section D — Why this site was created -->
+    <h3 style="margin-top:1.5rem;">D) Why this site was created</h3>
+    <div class="card">
+      <ul style="list-style:none;padding:0;font-size:.9rem;">
+        <li style="padding:.5rem 0;border-bottom:1px solid var(--border);">
+          <strong style="color:var(--accent);">Education</strong> — Grin's interactive slatepack model
+          is unlike any other cryptocurrency. Many newcomers don't know where to start. This drop lets
+          anyone experience a complete, mainnet-equivalent Grin payment for free — no sign-up,
+          no KYC, no barriers.
+        </li>
+        <li style="padding:.5rem 0;border-bottom:1px solid var(--border);">
+          <strong style="color:var(--accent);">Developer bootstrap</strong> — Building on Grin requires
+          testnet coins to create and test payment flows, wallets, and integrations. This drop gives
+          new developers a small fund to start experimenting from day one.
+        </li>
+        <li style="padding:.5rem 0;border-bottom:1px solid var(--border);">
+          <strong style="color:var(--accent);">Accessibility</strong> — In some countries, buying or
+          selling privacy-preserving cryptocurrencies is restricted or heavily regulated. Testnet GRIN
+          has no monetary value — it exists purely for learning and development, freely available to
+          everyone regardless of jurisdiction.
+        </li>
+        <li style="padding:.5rem 0;">
+          <strong style="color:var(--accent);">Donations are genuinely appreciated</strong> — they keep
+          the wallet funded and the server running. If this drop helped you, please consider giving back
+          via the <a href="#section-donation">Donate</a> section above. Every contribution counts. ツ
+        </li>
+      </ul>
+    </div>
   </section>
 
 </main>
@@ -446,6 +511,7 @@
       &nbsp;·&nbsp; Testnet GRIN has no real value.
     </p>
     <p style="margin-top:.4rem;">
+      * Donation counts and amounts reflect slatepack and invoice transactions only — TOR direct donations are not automatically tracked.<br>
       Keywords: grin drop · grin faucet · testnet grin · free grin coins · slatepack tutorial
     </p>
   </div>

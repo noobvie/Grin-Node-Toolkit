@@ -491,10 +491,10 @@ app.post('/api/finalize', async (req, res) => {
     // Non-fatal: if the node is temporarily unreachable the tx is fully signed in
     // the wallet's LMDB and can be re-broadcast manually; the claim is still recorded.
     try {
-      actLog('INFO', `POST_TX_ATTEMPT claim_id=${claimId} has_tx=${!!finalResult?.tx}`);
+      actLog('INFO', `POST_TX_ATTEMPT claim_id=${claimId} has_slate=${!!finalResult}`);
       await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'post_tx', {
         token,
-        tx:    finalResult.tx,
+        slate: finalResult,
         fluff: true,
       });
       actLog('INFO', `BROADCAST_OK claim_id=${claimId} tx=${txSlateId || '(unknown)'}`);
@@ -676,9 +676,10 @@ app.post('/api/donate/finalize', async (req, res) => {
     // 3. Broadcast — explicit post_tx for reliability across grin-wallet versions.
     // Non-fatal: tx is fully signed in wallet LMDB; can be re-broadcast manually.
     try {
+      actLog('INFO', `DONATE_POST_TX_ATTEMPT invoice_id=${invoiceId} has_slate=${!!finalResult}`);
       await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'post_tx', {
         token,
-        tx:    finalResult.tx,
+        slate: finalResult,
         fluff: true,
       });
       actLog('INFO', `DONATE_BROADCAST_OK invoice_id=${invoiceId} tx=${txId || '(unknown)'}`);

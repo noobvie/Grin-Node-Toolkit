@@ -282,7 +282,7 @@ except Exception:
 FLOATS = {"claim_grin_per_tx"}
 INTS   = {"claim_cooldown_hours","service_port","slatepack_expire_min",
           "wallet_foreign_api_port","wallet_owner_api_port","donation_invoice_timeout",
-          "daily_claims_cap","hourly_claims_cap","low_balance_alert_grin","wallet_cleanup_hours"}
+          "global_daily_claims_cap","global_hourly_claims_cap","low_balance_alert_grin","wallet_cleanup_hours"}
 BOOLS  = {"giveaway_enabled","donation_enabled","show_public_stats","maintenance_mode"}
 if key in FLOATS:
     d[key] = float(val)
@@ -302,17 +302,19 @@ PYEOF
 
 drop_ensure_defaults() {
     # Network-specific defaults
-    local net_label drop_name_default max_claims_default claim_grin_default
+    local net_label drop_name_default global_daily_cap_default global_hourly_cap_default claim_grin_default
     if [[ "$DROP_NETWORK" == "mainnet" ]]; then
         net_label="mainnet"
         drop_name_default="Grin Drop"
-        max_claims_default="1"
-        claim_grin_default="0.1"   # max claim button on mainnet
+        global_daily_cap_default="2000"   # site-wide ceiling; mainnet wallet balance is the real constraint
+        global_hourly_cap_default="100"
+        claim_grin_default="0.1"          # max claim amount on mainnet
     else
         net_label="testnet"
         drop_name_default="Grin Drop [TESTNET]"
-        max_claims_default="2"
-        claim_grin_default="1.0"   # max claim button on testnet
+        global_daily_cap_default="2000"
+        global_hourly_cap_default="100"
+        claim_grin_default="1.0"          # max claim amount on testnet
     fi
 
     local defaults=(
@@ -324,8 +326,8 @@ drop_ensure_defaults() {
         "claim_grin_per_tx:$claim_grin_default"
         "claim_cooldown_hours:24"
         "slatepack_expire_min:30"
-        "daily_claims_cap:$max_claims_default"
-        "hourly_claims_cap:0"
+        "global_daily_claims_cap:$global_daily_cap_default"
+        "global_hourly_claims_cap:$global_hourly_cap_default"
         # Donation
         "donation_enabled:true"
         "donation_invoice_timeout:30"

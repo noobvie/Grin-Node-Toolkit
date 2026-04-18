@@ -192,11 +192,11 @@ app.get('/api/status', async (req, res) => {
     drop_name:           cfg.drop_name,
     claim_grin_per_tx:    cfg.claim_grin_per_tx,
     claim_cooldown_hours: cfg.claim_cooldown_hours,
-    daily_claims_cap:     cfg.daily_claims_cap,
-    hourly_claims_cap:    cfg.hourly_claims_cap,
+    global_daily_claims_cap:     cfg.global_daily_claims_cap,
+    global_hourly_claims_cap:    cfg.global_hourly_claims_cap,
     claims_this_hour:     db.countClaimsThisHour(),
-    daily_cap_reached:    cfg.daily_claims_cap  > 0 && db.countClaimsToday()      >= cfg.daily_claims_cap,
-    hourly_cap_reached:   cfg.hourly_claims_cap > 0 && db.countClaimsThisHour()   >= cfg.hourly_claims_cap,
+    daily_cap_reached:    cfg.global_daily_claims_cap  > 0 && db.countClaimsToday()      >= cfg.global_daily_claims_cap,
+    hourly_cap_reached:   cfg.global_hourly_claims_cap > 0 && db.countClaimsThisHour()   >= cfg.global_hourly_claims_cap,
     wallet_address:      walletAddress,
     wallet_balance:      balance !== null ? Math.round(balance * 1e9) / 1e9 : null,
     low_balance:         lowBalance,
@@ -299,8 +299,8 @@ app.post('/api/claim', async (req, res) => {
     return err(res, `Already claimed. Next claim available at ${nextAt}`, 429);
   }
 
-  const dailyCap  = parseInt(cfg.daily_claims_cap,  10) || 0;
-  const hourlyCap = parseInt(cfg.hourly_claims_cap, 10) || 0;
+  const dailyCap  = parseInt(cfg.global_daily_claims_cap,  10) || 0;
+  const hourlyCap = parseInt(cfg.global_hourly_claims_cap, 10) || 0;
   if (dailyCap  > 0 && db.countClaimsToday()     >= dailyCap)  {
     actLog('WARN', `DAILY_CAP_REACHED cap=${dailyCap}`);
     return err(res, 'Daily claim limit reached. Try again tomorrow.', 503);
@@ -394,8 +394,8 @@ app.post('/api/claim/anonymous', async (req, res) => {
     return err(res, `Already claimed. Next claim available at ${nextAt}`, 429);
   }
 
-  const dailyCap  = parseInt(cfg.daily_claims_cap,  10) || 0;
-  const hourlyCap = parseInt(cfg.hourly_claims_cap, 10) || 0;
+  const dailyCap  = parseInt(cfg.global_daily_claims_cap,  10) || 0;
+  const hourlyCap = parseInt(cfg.global_hourly_claims_cap, 10) || 0;
   if (dailyCap  > 0 && db.countClaimsToday()    >= dailyCap)  {
     actLog('WARN', `DAILY_CAP_REACHED cap=${dailyCap}`);
     return err(res, 'Daily claim limit reached. Try again tomorrow.', 503);

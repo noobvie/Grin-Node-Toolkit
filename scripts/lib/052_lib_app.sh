@@ -206,13 +206,13 @@ drop_configure() {
     read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
     [[ -n "$val" ]] && drop_write_conf_key "slatepack_expire_min" "$val"
 
-    echo -ne "Daily claim cap  [$(drop_read_conf daily_claims_cap '8')] claims/day  (0 = unlimited, resets at midnight UTC): "
-    read -r val || true; [[ "$val" == "0" ]] && drop_write_conf_key "daily_claims_cap" "0"
-    [[ -n "$val" && "$val" != "0" ]] && drop_write_conf_key "daily_claims_cap" "$val"
+    echo -ne "Global daily cap  [$(drop_read_conf global_daily_claims_cap '2000')] claims/day  (site-wide total across ALL users; 0 = unlimited; resets midnight UTC): "
+    read -r val || true; [[ "$val" == "0" ]] && drop_write_conf_key "global_daily_claims_cap" "0"
+    [[ -n "$val" && "$val" != "0" ]] && drop_write_conf_key "global_daily_claims_cap" "$val"
 
-    echo -ne "Hourly claim cap [$(drop_read_conf hourly_claims_cap '0')] claims/hour (0 = unlimited): "
-    read -r val || true; [[ "$val" == "0" ]] && drop_write_conf_key "hourly_claims_cap" "0"
-    [[ -n "$val" && "$val" != "0" ]] && drop_write_conf_key "hourly_claims_cap" "$val"
+    echo -ne "Global hourly cap [$(drop_read_conf global_hourly_claims_cap '100')] claims/hour (site-wide total across ALL users; 0 = unlimited): "
+    read -r val || true; [[ "$val" == "0" ]] && drop_write_conf_key "global_hourly_claims_cap" "0"
+    [[ -n "$val" && "$val" != "0" ]] && drop_write_conf_key "global_hourly_claims_cap" "$val"
 
     # ── Donation invoice ──────────────────────────────────────────────────────
     echo ""

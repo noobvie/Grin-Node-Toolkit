@@ -25,10 +25,10 @@ const DEFAULTS = {
   // ── Giveaway ──────────────────────────────────────────────────────────────
   giveaway_enabled:          true,
   claim_grin_per_tx:         1.0,        // max GRIN sent in one claim transaction (server-side cap)
-  claim_cooldown_hours:      24,         // per-address cooldown before reclaiming
-  slatepack_expire_min:      30,         // minutes user has to paste response slatepack
-  daily_claims_cap:          8,          // 0 = unlimited; total confirmed claims per day
-  hourly_claims_cap:         0,          // 0 = unlimited; total confirmed claims per hour
+  claim_cooldown_hours:         24,       // per-address/IP: hours before the same address can claim again (1 claim per window)
+  slatepack_expire_min:         30,       // minutes user has to paste response slatepack
+  global_daily_claims_cap:      2000,     // 0 = unlimited; max total claims site-wide per day (all users combined, resets midnight UTC)
+  global_hourly_claims_cap:     100,      // 0 = unlimited; max total claims site-wide per hour (all users combined)
 
   // ── Donation ──────────────────────────────────────────────────────────────
   donation_enabled:          true,
@@ -93,7 +93,7 @@ function writeConfigKey(key, value) {
   const cfg = loadConfig();
   const numKeys = new Set([
     'claim_grin_per_tx', 'claim_cooldown_hours', 'slatepack_expire_min',
-    'daily_claims_cap', 'hourly_claims_cap',
+    'global_daily_claims_cap', 'global_hourly_claims_cap',
     'service_port', 'wallet_foreign_api_port', 'wallet_owner_api_port',
     'donation_invoice_timeout', 'low_balance_alert_grin', 'wallet_cleanup_hours',
   ]);

@@ -64,6 +64,9 @@ const DEFAULTS = {
   // ── Wallet cleanup ────────────────────────────────────────────────────────
   wallet_cleanup_hours:   1,     // auto-cancel unfinalized wallet txs older than this; 0 = disabled
 
+  // ── Anonymous claim IP salt (set once by bash drop_ensure_defaults) ──────
+  ip_salt:                '',    // empty = falls back to env IP_SALT or built-in default
+
   // ── Logging ───────────────────────────────────────────────────────────────
   log_path:               '/opt/grin/drop-test/grin_drop_test.log',
 };

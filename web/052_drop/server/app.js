@@ -84,9 +84,9 @@ function getClientIp(req) {
   return (req.headers['x-real-ip'] || '').trim();
 }
 
-function hashIp(ip) {
-  const salt = process.env.IP_SALT || 'grin-anon-claim';
-  return 'anon:' + crypto.createHash('sha256').update(ip + salt).digest('hex').slice(0, 24);
+function hashIp(ip, salt) {
+  const s = salt || process.env.IP_SALT || 'grin-anon-claim';
+  return 'anon:' + crypto.createHash('sha256').update(ip + s).digest('hex').slice(0, 24);
 }
 
 function validateSlatepack(input) {
@@ -362,7 +362,7 @@ app.post('/api/claim', async (req, res) => {
   } catch (e) {
     db.setClaimStatus(claimId, 'failed');
     actLog('ERROR', `WALLET_FAIL cmd=init_send claim_id=${claimId} err=${e.message}`);
-    return err(res, e.message, 503);
+    return err(res, 'Wallet temporarily unavailable — try again shortly', 503);
   }
 
   db.setSlatepackOut(claimId, slatepack);
@@ -386,7 +386,7 @@ app.post('/api/claim/anonymous', async (req, res) => {
 
   const ip = getClientIp(req);
   if (!ip) return err(res, 'Could not determine client IP', 400);
-  const anonAddr = hashIp(ip);
+  const anonAddr = hashIp(ip, cfg.ip_salt);
 
   const nextAt = nextClaimIso(anonAddr);
   if (nextAt) {
@@ -439,7 +439,7 @@ app.post('/api/claim/anonymous', async (req, res) => {
   } catch (e) {
     db.setClaimStatus(claimId, 'failed');
     actLog('ERROR', `WALLET_FAIL cmd=anon_claim claim_id=${claimId} err=${e.message}`);
-    return err(res, e.message, 503);
+    return err(res, 'Wallet temporarily unavailable — try again shortly', 503);
   }
 
   db.setSlatepackOut(claimId, slatepack);
@@ -524,7 +524,7 @@ app.post('/api/finalize', async (req, res) => {
     }
   } catch (e) {
     actLog('ERROR', `WALLET_FAIL cmd=finalize claim_id=${claimId} err=${e.message}`);
-    return err(res, e.message, 503);
+    return err(res, 'Wallet temporarily unavailable — try again shortly', 503);
   }
 
   db.setClaimFinalized(claimId, responseSplate, txSlateId);
@@ -552,7 +552,7 @@ app.post('/api/donate/receive', async (req, res) => {
   if (!cfg.donation_enabled) return err(res, 'Donations are currently disabled', 503);
 
   const sendSlate = (req.body.send_slate || '').trim();
-  if (!validateSlatepack(sendSlate)) return err(res, 'Invalid slatepack — must be BEGINSLATEPACK...ENDSLATEPACK (max 4096 bytes)');
+  if (!validateSlatepack(sendSlate)) return err(res, 'Invalid slatepack — must be BEGINSLATEPACK...ENDSLATEPACK (max 8192 bytes)');
 
   actLog('INFO', 'DONATE_RECEIVE_ATTEMPT');
 
@@ -566,6 +566,12 @@ app.post('/api/donate/receive', async (req, res) => {
       secret_indices: [0],
       message:        sendSlate,
     });
+
+    // Sanity cap — reject absurdly large slates before touching wallet state
+    const slateAmountGrin = slate && slate.amount ? parseInt(slate.amount) / 1_000_000_000 : 0;
+    if (slateAmountGrin > 10000) {
+      return err(res, 'Donation amount exceeds maximum of 10000 GRIN');
+    }
 
     // 2. Foreign API receive_tx — no LMDB conflict with Owner API calls
     const responseSlate = await foreignApiCall('receive_tx', [slate, null, null]);
@@ -587,7 +593,7 @@ app.post('/api/donate/receive', async (req, res) => {
     res.json({ response_slatepack: responseSlatepack });
   } catch (e) {
     actLog('ERROR', `DONATE_RECEIVE_FAIL err=${e.message}`);
-    return err(res, e.message, 503);
+    return err(res, 'Wallet temporarily unavailable — try again shortly', 503);
   }
 });
 
@@ -602,6 +608,7 @@ app.post('/api/donate/invoice', async (req, res) => {
   const address = (req.body.address || '').trim();
 
   if (!amount || isNaN(amount) || amount < 0.1) return err(res, 'Amount must be at least 0.1 GRIN');
+  if (amount > 10000) return err(res, 'Amount exceeds maximum of 10000 GRIN');
   if (!address || !GRIN_ADDR_RE.test(address)) return err(res, 'Invalid grin address');
 
   // Security: block our own wallet address — invoice must be directed to the payer, not ourselves
@@ -652,7 +659,7 @@ app.post('/api/donate/invoice', async (req, res) => {
     res.json({ invoice_id: invoiceId, invoice_slatepack: invoiceSlatepack });
   } catch (e) {
     actLog('ERROR', `DONATE_INVOICE_FAIL err=${e.message}`);
-    return err(res, e.message, 503);
+    return err(res, 'Wallet temporarily unavailable — try again shortly', 503);
   }
 });
 
@@ -713,7 +720,7 @@ app.post('/api/donate/finalize', async (req, res) => {
     }
   } catch (e) {
     actLog('ERROR', `DONATE_FINALIZE_FAIL invoice_id=${invoiceId} err=${e.message}`);
-    return err(res, e.message, 503);
+    return err(res, 'Wallet temporarily unavailable — try again shortly', 503);
   }
 
   db.confirmInvoiceDonation(invoiceId, txId);

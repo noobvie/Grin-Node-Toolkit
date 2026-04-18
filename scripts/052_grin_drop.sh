@@ -159,7 +159,7 @@ select_network() {
         b) drop_backup; return 1 ;;
         r) drop_restore; return 1 ;;
         d) drop_nuke; return 1 ;;
-        0) return 1 ;;
+        0) return 2 ;;
         *) warn "Invalid option."; return 1 ;;
     esac
     return 0
@@ -347,6 +347,8 @@ drop_ensure_defaults() {
         "low_balance_alert_grin:-1"
         # Wallet cleanup
         "wallet_cleanup_hours:1"
+        # Anonymous claim IP hashing — unique per installation, generated once
+        "ip_salt:$(openssl rand -hex 32)"
         # Logging
         "log_path:$DROP_LOG"
     )
@@ -689,11 +691,13 @@ drop_nuke() {
 
 main() {
     while true; do
-        if select_network; then
-            drop_menu
-        else
-            break
-        fi
+        local rc=0
+        select_network || rc=$?
+        case $rc in
+            0) drop_menu || true ;;  # network selected → enter submenu
+            2) break ;;              # user pressed 0   → exit script
+        esac
+        # rc=1 (admin op completed) → loop back to select_network
     done
 }
 

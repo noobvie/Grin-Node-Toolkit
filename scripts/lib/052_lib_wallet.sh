@@ -298,7 +298,7 @@ _drop_wallet_reinstall() {
         if [[ "${clean_ok,,}" != "y" ]]; then
             info "Cancelled."; pause; return
         fi
-        rm -rf "$DROP_WALLET_DIR"
+        rm -rf "${DROP_WALLET_DIR:?}/"
         mkdir -p "$DROP_WALLET_DIR"
         success "Wallet directory cleaned."
     else

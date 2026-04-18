@@ -24,7 +24,7 @@ drop_deploy_web() {
     echo -e "\n${BOLD}${CYAN}── Grin Drop [$DROP_NET_LABEL] — 5) Deploy Web Files ──${RESET}\n"
 
     if [[ ! -d "$DROP_WEB_SRC" ]]; then
-        die "Web source not found: $DROP_WEB_SRC  (ensure toolkit repo is complete)."
+        error "Web source not found: $DROP_WEB_SRC  (ensure toolkit repo is complete)."
         pause; return
     fi
 
@@ -112,7 +112,7 @@ drop_service_control() {
     echo -e "\n${BOLD}${CYAN}── Grin Drop [$DROP_NET_LABEL] — 6) Start / Stop Service ──${RESET}\n"
 
     if [[ ! -f "/etc/systemd/system/${DROP_SERVICE}.service" ]]; then
-        die "Service not installed — run option 3 (Install) first."; pause; return
+        error "Service not installed — run option 3 (Install) first."; pause; return
     fi
 
     local state="stopped"
@@ -436,11 +436,12 @@ drop_backup() {
         || { die "tar failed."; rm -rf "$tmp_dir" "$tmp_tar"; unset bak_pass; pause; return; }
     rm -rf "$tmp_dir"
 
+    # -pass fd:3 keeps the password off the process list (not visible in ps aux)
     openssl enc -aes-256-cbc -pbkdf2 -iter 600000 \
-        -pass "pass:${bak_pass}" \
+        -pass fd:3 \
         -in  "$tmp_tar" \
-        -out "$archive_path" 2>/dev/null \
-        || { die "openssl encryption failed."; rm -f "$tmp_tar" "$archive_path"; unset bak_pass; pause; return; }
+        -out "$archive_path" 3<<<"$bak_pass" 2>/dev/null \
+        || { rm -f "$tmp_tar" "$archive_path"; unset bak_pass; error "openssl encryption failed."; pause; return; }
     rm -f "$tmp_tar"
     unset bak_pass bak_pass2
 
@@ -502,7 +503,7 @@ drop_restore() {
     local bak_pass; read -rs bak_pass; echo ""
     local tmp_test="/tmp/grin_drop_restore_test_$$"
     if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
-        -pass "pass:${bak_pass}" -in "$chosen" -out "$tmp_test" 2>/dev/null; then
+        -pass fd:3 -in "$chosen" -out "$tmp_test" 3<<<"$bak_pass" 2>/dev/null; then
         rm -f "$tmp_test"; error "Wrong password or corrupt backup."; unset bak_pass; pause; return
     fi
     if ! tar -tzf "$tmp_test" &>/dev/null; then

@@ -45,21 +45,21 @@ drop_install() {
         info "Installing Node.js v24 LTS via NodeSource..."
         command -v curl &>/dev/null || apt-get install -y curl
         curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
-            || { die "NodeSource setup failed."; pause; return; }
+            || { error "NodeSource setup failed."; pause; return; }
         apt-get install -y nodejs \
-            || { die "apt-get install nodejs failed."; pause; return; }
+            || { error "apt-get install nodejs failed."; pause; return; }
         success "Node.js $(node --version) installed."
     fi
 
     info "Updating npm to latest..."
     npm install -g npm@latest --no-audit --no-fund \
-        || { die "npm upgrade failed."; pause; return; }
+        || { error "npm upgrade failed."; pause; return; }
     success "npm $(npm --version) ready."
     echo ""
 
     # ── Copy server files ──────────────────────────────────────────────────────
     if [[ ! -d "$DROP_APP_SRC" ]]; then
-        die "Server source not found: $DROP_APP_SRC  (ensure toolkit repo is complete)."
+        error "Server source not found: $DROP_APP_SRC  (ensure toolkit repo is complete)."
         pause; return
     fi
 
@@ -80,7 +80,7 @@ drop_install() {
     # ── npm install ────────────────────────────────────────────────────────────
     info "Running npm install --omit=dev ..."
     (cd "$DROP_APP_DIR/server" && npm install --omit=dev --no-audit --no-fund) \
-        || { die "npm install failed."; pause; return; }
+        || { error "npm install failed."; pause; return; }
     success "Node.js dependencies installed."
     echo ""
 

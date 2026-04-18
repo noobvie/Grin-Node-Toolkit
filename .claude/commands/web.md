@@ -43,6 +43,11 @@ Check the file(s) or service directory specified as $ARGUMENTS, or all of web/ i
 - No unused functions or variables.
 - Event listeners should be removed or scoped — flag global listeners added inside loops.
 - `async/await` preferred over raw `.then()` chains for readability.
+- **No inline `style.cssText` or `style.color`/`style.background` that hardcode colors or embed `var(--accent)`.**
+  Inline styles cannot be overridden by theme CSS without `!important`. Dynamically created elements
+  (badges, tooltips, status indicators) must use a CSS class so each theme can control colors.
+  Pattern to flag: `element.style.cssText = "...background:var(--accent)...color:#000..."`.
+  Correct pattern: `element.className = "my-badge"` + rule in faucet.css + per-theme override.
 
 ## 5. Performance
 

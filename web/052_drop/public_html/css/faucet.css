@@ -84,6 +84,19 @@ section[id] { scroll-margin-top: 3.8rem; }
 .site-title span { color: var(--grin-yellow); }
 .site-logo { width: 26px; height: 26px; flex-shrink: 0; }
 
+/* Network badge injected by faucet.js — colors controlled by theme */
+.net-badge {
+  margin-left: .5rem;
+  font-size: .6rem;
+  font-weight: 700;
+  padding: .15rem .4rem;
+  border-radius: 3px;
+  vertical-align: middle;
+  letter-spacing: .05em;
+  background: var(--accent);
+  color: var(--btn-text);
+}
+
 /* ── Header nav pills ─────────────────────────────────────────────────────── */
 .header-nav { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
 .header-nav-pill {

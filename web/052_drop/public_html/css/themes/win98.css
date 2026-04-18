@@ -54,6 +54,14 @@ header {
 /* Lime logo on navy gradient — invert to white for visibility */
 .site-logo { filter: brightness(0) invert(1); opacity: .9; }
 
+/* Network badge — yellow label, black text, square Win98 style */
+.net-badge {
+  background: var(--grin-yellow);
+  color: #000000;
+  border-radius: 0;
+  border: 1px solid #808080;
+}
+
 /* ── Nav pills — Win98 push-buttons ───────────────────────────────────────── */
 .header-nav-pill {
   background: #d4d0c8;

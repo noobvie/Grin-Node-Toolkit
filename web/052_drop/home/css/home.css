@@ -254,6 +254,7 @@ footer a:hover { color: var(--accent); }
   border: 2px solid; border-radius: 0; font-weight: normal;
   border-color: #fff #808080 #808080 #fff;
   box-shadow: 1px 1px 0 #000; font-family: 'Tahoma', Arial, sans-serif;
+  color: #ffffff;
 }
 [data-theme="win98"] .btn-visit:hover {
   border-color: #808080 #fff #fff #808080; box-shadow: none;

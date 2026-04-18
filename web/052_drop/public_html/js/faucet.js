@@ -708,7 +708,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const titleEl = document.querySelector(".site-title");
     if (titleEl) {
       const badge = document.createElement("span");
-      badge.style.cssText = "margin-left:.5rem;font-size:.6rem;font-weight:700;padding:.15rem .4rem;border-radius:3px;vertical-align:middle;background:var(--accent,#00e676);color:#000;letter-spacing:.05em;";
+      badge.className = "net-badge";
       badge.textContent = window.DROP_NETWORK.toUpperCase();
       titleEl.appendChild(badge);
     }

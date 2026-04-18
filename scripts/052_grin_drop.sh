@@ -153,7 +153,7 @@ select_network() {
     case "${sel,,}" in
         1) drop_create_domain; return 1 ;;
         2) _set_network testnet ;;
-        3) _confirm_mainnet || return 1 ;;
+        3) _set_network mainnet ;;
         4) _unified_homepage_menu; return 1 ;;
         5) drop_remove_domain; return 1 ;;
         b) drop_backup; return 1 ;;
@@ -162,25 +162,6 @@ select_network() {
         0) return 2 ;;
         *) warn "Invalid option."; return 1 ;;
     esac
-    return 0
-}
-
-_confirm_mainnet() {
-    clear
-    echo -e "\n${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${RED} ⚠  MAINNET — REAL GRIN${RESET}"
-    echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-    echo -e "  Mainnet Grin Drop uses ${BOLD}real GRIN with real monetary value${RESET}."
-    echo -e "  ${RED}Mistakes cannot be reversed.${RESET}"
-    echo ""
-    echo -ne "  Type ${BOLD}MAINNET${RESET} to confirm, or press Enter to cancel: "
-    local confirm
-    read -r confirm || true
-    if [[ "$confirm" != "MAINNET" ]]; then
-        info "Cancelled."; return 1
-    fi
-    _set_network mainnet
     return 0
 }
 

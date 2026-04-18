@@ -5,16 +5,16 @@
   --bg-card2:     #f0f0f0;
   --text:         #1a1a1a;
   --text-dim:     #666666;
-  --accent:       #00aa55;
-  --accent2:      #007a3d;
+  --accent:       #008844;
+  --accent2:      #006633;
   --border:       #dddddd;
-  --btn-bg:       #00aa55;
+  --btn-bg:       #008844;
   --btn-text:     #ffffff;
-  --btn-hover:    #007a3d;
+  --btn-hover:    #006633;
   --input-bg:     #ffffff;
   --input-border: #cccccc;
   --error-color:  #cc0000;
-  --ok-color:     #00aa55;
+  --ok-color:     #007a3d;
   --warn-color:   #b37a00;
   --grin-yellow:  #b37a00;
   --font-mono:    'Courier New', Courier, monospace;
@@ -46,12 +46,12 @@ header {
 }
 
 .btn-outline {
-  border-color: #00aa55;
-  color: #00aa55;
+  border-color: #008844;
+  color: #008844;
 }
 
 .btn-outline:hover {
-  background: #00aa55;
+  background: #008844;
   color: #ffffff;
 }
 
@@ -61,5 +61,5 @@ footer {
 }
 
 input[type="text"]:focus, textarea:focus {
-  box-shadow: 0 0 0 3px rgba(0,170,85,.15);
+  box-shadow: 0 0 0 3px rgba(0,136,68,.15);
 }

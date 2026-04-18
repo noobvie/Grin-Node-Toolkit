@@ -107,5 +107,88 @@ Only report failures, not passing pairs.
 - Theme switcher pattern (css/themes/ + theme.js) is used in 052 and 07 — check it works the same way in both.
 - Error message tone consistent: user-facing errors should not expose internal paths or stack traces.
 
+## 9. Mobile & Responsive (Phone Display)
+
+Target: **390–430px CSS width** (iPhone 15/16 Pro, standard Android flagship portrait).
+These are general rules — apply them to every page regardless of theme or framework.
+
+### 9a. Header & Navigation
+- **Fixed header height vs body padding-top must match.** Measure the header's worst-case
+  height at 390px (count rows if content wraps) and confirm `body { padding-top }` ≥ that
+  height. A mismatch hides the top of the page content behind the fixed bar.
+- **`scroll-margin-top` on anchored sections must equal the fixed header height**, not a
+  hardcoded guess. Flag any hardcoded value that isn't updated when the header shrinks on mobile.
+- **Nav pills / link bars inside a fixed header must not wrap to a second row.**
+  Options: hide them on ≤480px (scrolling is fine for short pages), collapse to a hamburger,
+  or use `overflow-x: auto; flex-wrap: nowrap` for a scrollable strip. Wrapping is not acceptable.
+- **Touch targets must be ≥ 44×44 px** (Apple HIG / WCAG 2.5.5). Check buttons, nav pills,
+  theme-picker button, tab buttons, and any `<a>` used as a button. Flag anything with
+  `padding` that results in a hit area below 44px.
+- Theme-picker dropdown must not overflow the right edge of the screen on mobile.
+  Confirm `right: 0` or similar anchoring.
+
+### 9b. Layout & Overflow
+- **No horizontal scroll on the page body.** Any `min-width` value on flex/grid children
+  that exceeds the container width will cause this. Check `min-width` values on stat items,
+  cards, and input fields — at 390px the container inner width is roughly 358px.
+- **Flex rows that wrap must be intentional.** Unintended wrapping on stat bars, tab rows,
+  and amount-button grids can make pages look broken. Verify each flex row either:
+  - fits in one row at 390px, or
+  - wraps into a clean 2-column grid (not 3+1 or other orphan layouts), or
+  - uses `overflow-x: auto; flex-wrap: nowrap` for horizontal scroll.
+- **Tabs (donate/claim/how-it-works) must not wrap.** Long tab labels cause 2-row tab bars
+  that break the visual connection between the active tab and its content panel. Use
+  `overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch` on the tab
+  container, and `white-space: nowrap; flex-shrink: 0` on each tab button.
+- **`position: fixed` and `position: sticky` elements must not clip content.** Check that
+  all sections below a fixed header have sufficient top offset.
+- Code/monospace boxes (`slatepack-box`, `cmd-box`, pre/code) must have
+  `word-break: break-all` or `overflow-x: auto` — long strings like slatepack messages
+  will overflow on narrow screens without this.
+
+### 9c. Text & Readability
+- **Minimum font size 14px for body text** on mobile. `0.75rem` base = 12px — too small.
+  Theme overrides that reduce `font-size` below 13px on mobile should be flagged.
+- **Line length should be ≤ 75ch** — constrained by the container max-width and page padding.
+  On mobile the container padding (e.g. `padding: 0 1rem`) effectively limits this. Confirm
+  `1rem` padding is applied on both sides so text does not run edge-to-edge.
+- Labels above form inputs must remain visible and not overlap the input on mobile.
+  Check `label` elements are block-level with adequate bottom margin.
+
+### 9d. Forms & Inputs
+- `input[type="text"]`, `input[type="number"]`, `textarea` must have `font-size ≥ 16px`
+  (or `font-size: 1rem` with base 16px) on iOS — anything smaller triggers auto-zoom on focus,
+  which breaks the page layout. Flag inputs with `font-size: .9rem` or smaller.
+- `input[type="number"]` with `max-width: 200px` is safe on mobile (fits within 358px).
+- Textarea `resize: vertical` — confirm `resize: horizontal` and `resize: both` are not set,
+  as horizontal resize can break the layout on mobile.
+
+### 9e. Theme-Specific Mobile Checks
+- **Win98 theme:** Raised bevel tab chrome (`border-bottom` active-tab trick) breaks
+  when tabs are in a horizontal scroll container. Confirm a `@media` override re-applies
+  the tab bar border and background for the scroll case.
+- **Win98 theme:** `box-shadow: 2px 2px 0 #000` on cards adds 2px overflow right/bottom —
+  confirm the container has enough padding-right to absorb this without triggering body scroll.
+- **Cute theme:** `backdrop-filter: blur()` must include `-webkit-backdrop-filter` for Safari.
+  Header background must remain opaque enough (≥ 85% alpha) to keep title readable over
+  content that scrolls beneath it.
+- **Matrix theme:** The canvas rain animation must not cause horizontal overflow or affect
+  touch scrolling. Confirm `canvas` has `position: fixed` and `pointer-events: none`.
+- **All dark themes:** Check that the fixed header's background color exactly matches or
+  is slightly darker than `--bg-body` — a transparent or wrong-color header will show a
+  visible seam as the page scrolls underneath it.
+
+### 9f. General Phone Display Checklist (run for every page)
+1. `<meta name="viewport" content="width=device-width, initial-scale=1.0">` present — prevents
+   the browser from scaling down the page to fit, which makes text tiny.
+2. No element wider than the viewport (check with `* { max-width: 100% }` mental model).
+3. Buttons and links spaced at least 8px apart — adjacent touch targets cause mis-taps.
+4. Page scrolls vertically without horizontal scroll at 390px.
+5. Above-the-fold content (first screenful) is useful — stat bars and hero content should
+   be visible without scrolling; a 3-row header eating 30% of the screen is not acceptable.
+6. Images and SVGs have `max-width: 100%` or explicit responsive sizing.
+7. No `position: fixed` element with `width: auto` — always set `left: 0; right: 0` or an
+   explicit width, otherwise it sizes to content and may not span the viewport.
+
 Report by category with file:line references. Flag critical security issues first.
 End with a per-service summary table: which services pass, which need attention, and the top issue per service.

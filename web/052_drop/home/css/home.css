@@ -181,6 +181,12 @@ footer a:hover { color: var(--accent); }
 /* ── Last updated ────────────────────────────────────────────────────────────── */
 .last-updated { text-align: right; font-size: .75rem; color: var(--text-dim); margin-top: .5rem; }
 
+/* ── Mobile touch targets ────────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .theme-picker-btn { width: 2.75rem; height: 2.75rem; font-size: 1.2rem; }
+  input[type="text"], input[type="number"], textarea { font-size: 1rem; }
+}
+
 /* ── Light theme: lime logo needs shadow to be visible on white ──────────────── */
 [data-theme="light"] .site-logo {
   filter: drop-shadow(0 0 1px rgba(0,0,0,0.45)) drop-shadow(0 0 2px rgba(0,0,0,0.2));
@@ -217,6 +223,7 @@ footer a:hover { color: var(--accent); }
   font-size: .95rem;
 }
 [data-theme="win98"] .site-title span { color: #f2c94c; }
+[data-theme="win98"] .site-logo { filter: brightness(0) invert(1); opacity: .9; }
 [data-theme="win98"] .theme-picker-btn {
   background: #d4d0c8; border: 2px solid;
   border-color: #fff #808080 #808080 #fff; border-radius: 0;

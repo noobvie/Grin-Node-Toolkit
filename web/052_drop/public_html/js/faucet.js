@@ -274,6 +274,15 @@ function showError(id, msg) {
 
 function clearError(id) { showError(id, ""); }
 
+// Force-clamp an <input> field to at most 3 decimal places in-place.
+function _clamp3dec(el) {
+  if (!el) return;
+  const dot = el.value.indexOf('.');
+  if (dot !== -1 && el.value.length - dot > 4) {
+    el.value = el.value.slice(0, dot + 4);
+  }
+}
+
 // ── Address prefix validation ─────────────────────────────────────────────────
 // Minimum full address length = prefix (5-6) + 40 alphanumeric chars = 45-46
 const ADDR_MIN_LEN = ADDR_PFX.length + 40;
@@ -310,7 +319,9 @@ function _initClaimAmountButtons() {
     });
   });
   $("claim-custom-amt")?.addEventListener("input", () => {
-    const v = parseFloat($("claim-custom-amt")?.value);
+    const el = $("claim-custom-amt");
+    _clamp3dec(el);
+    const v = parseFloat(el?.value);
     _claimAmount = (v >= 0.001 && v < 1) ? parseFloat(v.toFixed(3)) : null;
   });
 }
@@ -332,7 +343,9 @@ function _initAnonAmountButtons() {
     });
   });
   $("anon-custom-amt")?.addEventListener("input", () => {
-    const v = parseFloat($("anon-custom-amt")?.value);
+    const el = $("anon-custom-amt");
+    _clamp3dec(el);
+    const v = parseFloat(el?.value);
     _claimAnonAmount = (v >= 0.001 && v <= ANON_CLAIM_AMOUNT) ? parseFloat(v.toFixed(3)) : null;
   });
 }
@@ -518,8 +531,10 @@ function _initRcvAmountButtons() {
     });
   });
   $("donate-rcv-custom-amt")?.addEventListener("input", () => {
-    const v = parseFloat($("donate-rcv-custom-amt")?.value);
-    _rcvAmount = (v >= 1) ? v : null;
+    const el = $("donate-rcv-custom-amt");
+    _clamp3dec(el);
+    const v = parseFloat(el?.value);
+    _rcvAmount = (v >= 1) ? parseFloat(v.toFixed(3)) : null;
     _updateSendCmd();
   });
 }
@@ -582,8 +597,10 @@ function _initInvAmountButtons() {
     });
   });
   $("donate-inv-custom-amt")?.addEventListener("input", () => {
-    const v = parseFloat($("donate-inv-custom-amt")?.value);
-    _invAmount = (v >= 1) ? v : null;
+    const el = $("donate-inv-custom-amt");
+    _clamp3dec(el);
+    const v = parseFloat(el?.value);
+    _invAmount = (v >= 1) ? parseFloat(v.toFixed(3)) : null;
     _updateInvBtn();
   });
   $("donate-invoice-address")?.addEventListener("input", _updateInvBtn);

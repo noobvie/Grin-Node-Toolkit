@@ -12,7 +12,7 @@
   <meta property="og:description" content="Claim free GRIN or donate to keep the drop running. No sign-up required.">
   <meta property="og:type"        content="website">
   <meta property="og:image"       content="__SITE_URL__/img/grin-logo.svg">
-  <link rel="icon" href="img/grin-logo.svg">
+  <link rel="icon" href="img/grin-logo-lime.svg">
 
   <!-- JSON-LD -->
   <script type="application/ld+json">
@@ -54,7 +54,7 @@
   <div class="container">
     <div class="header-inner">
       <div class="header-left">
-        <div class="site-title"><img src="img/grin-logo.svg" alt="" class="site-logo" width="26" height="26">Grin Drop <span>ツ</span></div>
+        <div class="site-title"><img src="img/grin-logo-lime.svg" alt="" class="site-logo" width="26" height="26">Grin Drop <span>ツ</span></div>
         <nav class="header-nav" aria-label="Page navigation">
           <a class="header-nav-pill" href="/">← Home</a>
           <a class="header-nav-pill" href="#section-giveaway">Claim</a>
@@ -147,15 +147,16 @@
             <button class="amount-btn" data-amount="0.2">0.2</button>
             <button class="amount-btn" data-amount="0.5">0.5</button>
             <button class="amount-btn" data-amount="1.0">1.0</button>
+            <button class="amount-btn" data-amount="custom">Custom…</button>
+          </div>
+          <div id="claim-custom-wrap" style="display:none;margin-bottom:.75rem;">
+            <input type="number" id="claim-custom-amt" min="0.001" max="0.999" step="0.001"
+                   placeholder="0.001 – 0.999" style="max-width:200px;">
           </div>
           <label for="claim-address" id="claim-address-label">Your Grin Address</label>
           <input type="text" id="claim-address" placeholder="" autocomplete="off" spellcheck="false">
           <p class="error-msg" id="claim-error"></p>
           <button class="btn btn-full" id="claim-btn">Claim</button>
-          <p style="margin-top:.7rem;font-size:.8rem;color:var(--text-dim);" id="claim-hint">
-            No sign-up required &nbsp;·&nbsp;
-            This simulates exactly how <strong>mainnet withdrawals</strong> work.
-          </p>
         </div>
 
         <!-- Pane B: Without Address (newcomer showcase) -->
@@ -170,13 +171,15 @@
               to you.</em> This is Grin's interactive model — unique in all of crypto.
             </p>
           </div>
-          <div style="text-align:center;padding:.4rem 0 1rem;">
-            <div style="font-size:2.2rem;font-weight:700;color:var(--accent);font-family:var(--font-mono);">
-              0.09 <span id="anon-coin-label">tGRIN</span>
-            </div>
-            <div style="font-size:.78rem;color:var(--text-dim);margin-top:.25rem;">
-              fixed amount &nbsp;·&nbsp; 1 claim per IP per 24 h
-            </div>
+          <div class="amount-grid" id="anon-amount-grid" style="margin-bottom:.9rem;">
+            <button class="amount-btn" data-amount="0.01">0.01</button>
+            <button class="amount-btn" data-amount="0.05">0.05</button>
+            <button class="amount-btn" data-amount="0.09">0.09</button>
+            <button class="amount-btn" data-amount="custom">Custom…</button>
+          </div>
+          <div id="anon-custom-wrap" style="display:none;margin-bottom:.75rem;">
+            <input type="number" id="anon-custom-amt" min="0.001" max="0.09" step="0.001"
+                   placeholder="0.001 – 0.09" style="max-width:200px;">
           </div>
           <p class="error-msg" id="anon-claim-error"></p>
           <button class="btn btn-full" id="anon-claim-btn">Claim — No Address Needed</button>
@@ -283,7 +286,7 @@
           <button class="amount-btn" data-amount="custom">Custom…</button>
         </div>
         <div id="donate-rcv-custom-wrap" style="display:none;margin-bottom:.75rem;">
-          <input type="number" id="donate-rcv-custom-amt" min="1" step="1"
+          <input type="number" id="donate-rcv-custom-amt" min="1" step="0.001"
                  placeholder="Min 1 GRIN" style="max-width:200px;">
         </div>
         <div class="donate-step-label">Run in your terminal</div>
@@ -333,7 +336,7 @@
           <button class="amount-btn" data-amount="custom">Custom…</button>
         </div>
         <div id="donate-inv-custom-wrap" style="display:none;margin-bottom:.75rem;">
-          <input type="number" id="donate-inv-custom-amt" min="1" step="1"
+          <input type="number" id="donate-inv-custom-amt" min="1" step="0.001"
                  placeholder="Min 1 GRIN" style="max-width:200px;">
         </div>
         <div style="margin-top:.75rem;">

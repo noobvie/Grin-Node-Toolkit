@@ -8,7 +8,7 @@
   <meta name="description" content="Grin Drop — claim free GRIN on testnet or mainnet. Interactive slatepack transaction practice. No sign-up required.">
   <meta name="keywords" content="grin faucet, grin drop, free grin, grin testnet, grin mainnet, slatepack, grin-wallet">
   <link rel="canonical" href=""><!-- set at deploy time -->
-  <link rel="icon" href="/img/grin-logo.svg">
+  <link rel="icon" href="/img/grin-logo-lime.svg">
 
   <meta property="og:title"       content="Grin Drop — Free GRIN Faucet">
   <meta property="og:description" content="Claim free GRIN on testnet or mainnet. Practice real slatepack transactions. No sign-up required.">
@@ -41,15 +41,17 @@
 <header>
   <div class="container">
     <div class="header-inner">
-      <div class="site-title"><img src="/img/grin-logo.svg" alt="" class="site-logo" width="26" height="26">Grin Drop <span>ツ</span></div>
+      <div class="site-title"><img src="/img/grin-logo-lime.svg" alt="" class="site-logo" width="26" height="26">Grin Drop <span>ツ</span></div>
       <div class="theme-picker">
         <button class="theme-picker-btn" id="theme-toggle-btn" title="Switch theme"
                 aria-haspopup="true" aria-expanded="false">🎨</button>
         <div class="theme-dropdown" id="theme-dropdown" hidden>
           <button class="theme-opt" data-theme="">Matrix</button>
-          <button class="theme-opt" data-theme="dark">Dark</button>
+          <button class="theme-opt" data-theme="warcraft">Warcraft</button>
+          <button class="theme-opt" data-theme="win98">Win98</button>
           <button class="theme-opt" data-theme="light">Light</button>
-          <button class="theme-opt" data-theme="win98">Windows 98</button>
+          <button class="theme-opt" data-theme="dark">Dark</button>
+          <button class="theme-opt" data-theme="cute">Cute</button>
         </div>
       </div>
     </div>
@@ -205,11 +207,21 @@
   // ── Theme picker ──────────────────────────────────────────────────────────
   const THEME_KEY = 'grin_home_theme';
   const html      = document.documentElement;
+  const THEME_LOGO = {
+    '':         '/img/grin-logo-lime.svg',
+    'dark':     '/img/grin-logo-lime.svg',
+    'light':    '/img/grin-logo-gold.svg',
+    'win98':    '/img/grin-logo-gray.svg',
+    'warcraft': '/img/grin-logo-purple.svg',
+    'cute':     '/img/grin-logo-pink.svg',
+  };
 
   function applyTheme(t) {
     if (t) html.setAttribute('data-theme', t);
     else   html.removeAttribute('data-theme');
     try { localStorage.setItem(THEME_KEY, t || ''); } catch {}
+    const logo = document.querySelector('.site-logo');
+    if (logo) logo.src = THEME_LOGO[t] || '/img/grin-logo-lime.svg';
   }
 
   // Restore saved theme

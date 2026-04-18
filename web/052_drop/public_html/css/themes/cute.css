@@ -35,10 +35,6 @@ header {
   border-bottom-color: var(--border);
 }
 
-/* Lime logo is near-invisible on white/pastel bg */
-.site-logo {
-  filter: drop-shadow(0 0 1px rgba(0,0,0,0.35)) drop-shadow(0 0 2px rgba(0,0,0,0.15));
-}
 
 .site-title {
   color: var(--accent);

@@ -198,9 +198,9 @@ drop_configure() {
     read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
     [[ -n "$val" ]] && drop_write_conf_key "claim_grin_per_tx" "$val"
 
-    echo -ne "Address cooldown [$(drop_read_conf claim_cooldown_hours '24') hours] (per-address wait before next claim): "
+    echo -ne "Address cooldown [$(drop_read_conf claim_cooldown_minutes '240') min] (per-address wait before next claim, 240=4h, 1440=24h): "
     read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
-    [[ -n "$val" ]] && drop_write_conf_key "claim_cooldown_hours" "$val"
+    [[ -n "$val" ]] && drop_write_conf_key "claim_cooldown_minutes" "$val"
 
     echo -ne "Finalize window  [$(drop_read_conf slatepack_expire_min '30') min]   (time for user to paste response slatepack): "
     read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }

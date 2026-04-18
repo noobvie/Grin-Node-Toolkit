@@ -12,6 +12,7 @@ const ADDR_PFX = window.DROP_NETWORK === 'testnet' ? 'tgrin1' : 'grin1';
 // ── State ─────────────────────────────────────────────────────────────────────
 let _claimId          = null;
 let _claimAmount      = null;   // null = use server max; number = override
+let _claimAnonAmount  = null;   // null = use ANON_CLAIM_AMOUNT; number = override
 let _activeClaimPane  = 'addr'; // 'addr' | 'anon' — tracks which claim tab is open
 let _countdown        = null;
 let _invoiceId        = null;
@@ -21,7 +22,10 @@ let _donateWalletAddr = '';
 const CLAIM_AMOUNTS   = window.DROP_NETWORK === 'mainnet'
   ? [0.01, 0.02, 0.05, 0.1]
   : [0.1,  0.2,  0.5,  1.0];
-const ANON_CLAIM_AMOUNT = window.DROP_NETWORK === 'mainnet' ? 0.009 : 0.09;
+const ANON_CLAIM_AMOUNT  = window.DROP_NETWORK === 'mainnet' ? 0.009 : 0.09;
+const ANON_CLAIM_AMOUNTS = window.DROP_NETWORK === 'mainnet'
+  ? [0.001, 0.005, 0.009]
+  : [0.01,  0.05,  0.09];
 
 // ── Session storage helpers (survive page refresh within same tab) ────────────
 function clearClaimSession() {
@@ -148,17 +152,6 @@ async function refreshStatus() {
     setText("stat-donations-today",  String(data.donations_today  ?? 0));
     setText("stat-total",            String(data.claims_total));
     setText("stat-donations-total",  String(data.donations_total  ?? 0));
-
-    // Update claim hint with server-configured max amount
-    if (data.claim_grin_per_tx != null) {
-      const v = parseFloat(data.claim_grin_per_tx) || 2;
-      const maxLabel = (Number.isInteger(v) ? v : v.toFixed(2)) + " " + COIN;
-      const hintEl = $("claim-hint");
-      if (hintEl) {
-        hintEl.innerHTML = `Up to ${maxLabel} per address per ${data.claim_cooldown_hours || 24}h &nbsp;·&nbsp; No sign-up required &nbsp;·&nbsp; `
-          + `This simulates exactly how <strong>mainnet withdrawals</strong> work.`;
-      }
-    }
 
     // Cap warnings
     const capWarn = $("claim-cap-warning");
@@ -306,8 +299,41 @@ function _initClaimAmountButtons() {
     btn.addEventListener("click", () => {
       document.querySelectorAll("#claim-amount-grid .amount-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
-      _claimAmount = parseFloat(btn.dataset.amount);
+      if (btn.dataset.amount === "custom") {
+        show("claim-custom-wrap");
+        const v = parseFloat($("claim-custom-amt")?.value);
+        _claimAmount = (v >= 0.001 && v < 1) ? parseFloat(v.toFixed(3)) : null;
+      } else {
+        hide("claim-custom-wrap");
+        _claimAmount = parseFloat(btn.dataset.amount);
+      }
     });
+  });
+  $("claim-custom-amt")?.addEventListener("input", () => {
+    const v = parseFloat($("claim-custom-amt")?.value);
+    _claimAmount = (v >= 0.001 && v < 1) ? parseFloat(v.toFixed(3)) : null;
+  });
+}
+
+// ── Anon claim amount buttons ─────────────────────────────────────────────────
+function _initAnonAmountButtons() {
+  document.querySelectorAll("#anon-amount-grid .amount-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#anon-amount-grid .amount-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      if (btn.dataset.amount === "custom") {
+        show("anon-custom-wrap");
+        const v = parseFloat($("anon-custom-amt")?.value);
+        _claimAnonAmount = (v >= 0.001 && v <= ANON_CLAIM_AMOUNT) ? parseFloat(v.toFixed(3)) : null;
+      } else {
+        hide("anon-custom-wrap");
+        _claimAnonAmount = parseFloat(btn.dataset.amount);
+      }
+    });
+  });
+  $("anon-custom-amt")?.addEventListener("input", () => {
+    const v = parseFloat($("anon-custom-amt")?.value);
+    _claimAnonAmount = (v >= 0.001 && v <= ANON_CLAIM_AMOUNT) ? parseFloat(v.toFixed(3)) : null;
   });
 }
 
@@ -381,11 +407,17 @@ async function submitFinalize() {
 }
 
 function resetClaim() {
-  _claimId = null;
+  _claimId         = null;
+  _claimAmount     = null;
+  _claimAnonAmount = null;
   clearClaimSession();
   stopCountdown();
   const ra = $("response-slate");
   if (ra) ra.value = "";
+  hide("claim-custom-wrap");
+  hide("anon-custom-wrap");
+  document.querySelectorAll("#claim-amount-grid .amount-btn, #anon-amount-grid .amount-btn")
+    .forEach(b => b.classList.remove("active"));
   clearError("claim-error");
   clearError("finalize-error");
   clearError("anon-claim-error");
@@ -419,7 +451,8 @@ async function submitClaimAnon() {
   const origText = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = "Requesting…"; }
   try {
-    const data = await apiPost(API + "/api/claim/anonymous", { amount: ANON_CLAIM_AMOUNT });
+    const amount = _claimAnonAmount !== null ? _claimAnonAmount : ANON_CLAIM_AMOUNT;
+    const data = await apiPost(API + "/api/claim/anonymous", { amount });
     _claimId = data.claim_id;
     const sp = $("slatepack-text");
     if (sp) sp.textContent = data.slatepack;
@@ -721,15 +754,23 @@ document.addEventListener("DOMContentLoaded", () => {
   if (addrInput) addrInput.placeholder = ADDR_PFX + "1...";
   const addrLabel = $("claim-address-label");
   if (addrLabel) addrLabel.textContent = `Your ${COIN} Address (${ADDR_PFX}1...)`;
-  const anonCoinLabel = $("anon-coin-label");
-  if (anonCoinLabel) anonCoinLabel.textContent = COIN;
-
   const invAddrInput = $("donate-invoice-address");
   if (invAddrInput) invAddrInput.placeholder = ADDR_PFX + "1...";
 
   // Apply network-specific claim amounts to the claim grid buttons
   [...document.querySelectorAll('#claim-amount-grid .amount-btn[data-amount]')]
     .forEach((btn, i) => { if (CLAIM_AMOUNTS[i] != null) btn.dataset.amount = String(CLAIM_AMOUNTS[i]); });
+
+  // Apply network-specific anon claim amounts to the anon grid buttons
+  [...document.querySelectorAll('#anon-amount-grid .amount-btn[data-amount]')]
+    .forEach((btn, i) => { if (ANON_CLAIM_AMOUNTS[i] != null) btn.dataset.amount = String(ANON_CLAIM_AMOUNTS[i]); });
+
+  // Update anon custom input max for network
+  const anonCustomEl = $("anon-custom-amt");
+  if (anonCustomEl) {
+    anonCustomEl.max         = String(ANON_CLAIM_AMOUNT);
+    anonCustomEl.placeholder = `0.001 – ${ANON_CLAIM_AMOUNT}`;
+  }
 
   // Update all amount button labels (donate + claim) using the (now-patched) data-amount values
   document.querySelectorAll(".amount-btn[data-amount]").forEach(btn => {
@@ -790,6 +831,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initDonateTabs();
   initClaimTabs();
   _initClaimAmountButtons();
+  _initAnonAmountButtons();
   _initRcvAmountButtons();
   _initInvAmountButtons();
   _updateSendCmd();

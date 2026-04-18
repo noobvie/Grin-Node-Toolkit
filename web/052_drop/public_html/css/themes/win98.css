@@ -51,11 +51,8 @@ header {
 }
 .site-title span { color: #f2c94c; }
 
-/* Lime logo on navy gradient — invert to white for visibility */
-.site-logo { filter: brightness(0) invert(1); opacity: .9; }
-
-/* Network badge — yellow label, black text, square Win98 style */
-.net-badge {
+/* Network badge — yellow label on Win98 silver, square corners */
+.site-title .net-badge {
   background: var(--grin-yellow);
   color: #000000;
   border-radius: 0;

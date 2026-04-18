@@ -53,6 +53,38 @@
   --mono:        "Cascadia Code", "Fira Code", "Consolas", monospace;
 }
 
+:root[data-theme="cute"] {
+  --bg:          #fff0f5;
+  --card-bg:     #ffffff;
+  --border:      #f8bbd0;
+  --text:        #4a1a4a;
+  --text-dim:    #854585;
+  --accent:      #e91e8c;
+  --accent-dim:  #c2185b;
+  --testnet-clr: #e91e8c;
+  --mainnet-clr: #c2185b;
+  --danger:      #d32f2f;
+  --ok:          #c2185b;
+  --font:        "Segoe UI", Tahoma, Geneva, Verdana, system-ui, sans-serif;
+  --mono:        "Courier New", Courier, monospace;
+}
+
+:root[data-theme="warcraft"] {
+  --bg:          #0d0a1a;
+  --card-bg:     #1a0a2e;
+  --border:      #3a1e5a;
+  --text:        #e8d5a3;
+  --text-dim:    #b08050;
+  --accent:      #c8a951;
+  --accent-dim:  #a88530;
+  --testnet-clr: #c8a951;
+  --mainnet-clr: #a88530;
+  --danger:      #ff6666;
+  --ok:          #c8a951;
+  --font:        Georgia, "Times New Roman", serif;
+  --mono:        "Courier New", Courier, monospace;
+}
+
 :root[data-theme="win98"] {
   --bg:          #008080;
   --card-bg:     #c0c0c0;
@@ -187,10 +219,6 @@ footer a:hover { color: var(--accent); }
   input[type="text"], input[type="number"], textarea { font-size: 1rem; }
 }
 
-/* ── Light theme: lime logo needs shadow to be visible on white ──────────────── */
-[data-theme="light"] .site-logo {
-  filter: drop-shadow(0 0 1px rgba(0,0,0,0.45)) drop-shadow(0 0 2px rgba(0,0,0,0.2));
-}
 /* ── Dark theme: brighten the test banner so it reads against near-black ─────── */
 [data-theme="dark"] .test-banner {
   background: #1e3a5c; color: #c9d1d9; border-bottom: 1px solid #30363d;
@@ -223,7 +251,6 @@ footer a:hover { color: var(--accent); }
   font-size: .95rem;
 }
 [data-theme="win98"] .site-title span { color: #f2c94c; }
-[data-theme="win98"] .site-logo { filter: brightness(0) invert(1); opacity: .9; }
 [data-theme="win98"] .theme-picker-btn {
   background: #d4d0c8; border: 2px solid;
   border-color: #fff #808080 #808080 #fff; border-radius: 0;
@@ -267,3 +294,46 @@ footer a:hover { color: var(--accent); }
 [data-theme="win98"] code { background: #d4d0c8; border: 1px inset #808080; border-radius: 0; }
 [data-theme="win98"] .dot-on  { background: #008000; }
 [data-theme="win98"] .dot-off { background: #cc0000; }
+
+/* ── Cute theme overrides ────────────────────────────────────────────────────── */
+[data-theme="cute"] body {
+  background: linear-gradient(135deg, #fff0f5 0%, #fce4ec 100%);
+  min-height: 100vh;
+}
+[data-theme="cute"] header {
+  background: rgba(255,255,255,.85);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border-bottom-color: #f8bbd0;
+}
+[data-theme="cute"] .site-title { color: #e91e8c; text-shadow: 0 0 10px rgba(233,30,140,.3); }
+[data-theme="cute"] .hero h1 { color: #e91e8c; }
+[data-theme="cute"] h2 { color: #e91e8c; }
+[data-theme="cute"] a { color: #c2185b; }
+[data-theme="cute"] .network-card { border-radius: 16px; box-shadow: 0 4px 20px rgba(233,30,140,.08); }
+[data-theme="cute"] .totals-section,
+[data-theme="cute"] .about-section { border-radius: 12px; box-shadow: 0 4px 20px rgba(233,30,140,.08); }
+[data-theme="cute"] .btn-visit { border-radius: 20px; }
+[data-theme="cute"] footer { border-top-color: #f8bbd0; }
+
+/* ── Warcraft theme overrides ────────────────────────────────────────────────── */
+[data-theme="warcraft"] header {
+  background: #0d0a1a;
+  border-bottom-color: #3a1e5a;
+}
+[data-theme="warcraft"] .site-title { text-shadow: 0 0 10px rgba(200,169,81,.35); }
+[data-theme="warcraft"] .hero h1 { color: #c8a951; font-family: Georgia, serif; }
+[data-theme="warcraft"] h2 { color: #c8a951; font-family: Georgia, serif; }
+[data-theme="warcraft"] a { color: #c8a951; }
+[data-theme="warcraft"] .network-card {
+  border-color: #4a1e7a;
+  box-shadow: 0 0 18px rgba(200,169,81,.35), 0 2px 20px rgba(0,0,0,.7);
+}
+[data-theme="warcraft"] .totals-section,
+[data-theme="warcraft"] .about-section {
+  border-color: #4a1e7a;
+  box-shadow: 0 0 18px rgba(200,169,81,.35), 0 2px 20px rgba(0,0,0,.7);
+}
+[data-theme="warcraft"] .btn-visit.testnet { background: #c8a951; color: #0d0a1a; }
+[data-theme="warcraft"] .btn-visit.mainnet { background: #a88530; color: #0d0a1a; }
+[data-theme="warcraft"] footer { border-top-color: #3a1e5a; }

@@ -25,7 +25,7 @@ const DEFAULTS = {
   // ── Giveaway ──────────────────────────────────────────────────────────────
   giveaway_enabled:          true,
   claim_grin_per_tx:         1.0,        // max GRIN sent in one claim transaction (server-side cap)
-  claim_cooldown_hours:         24,       // per-address/IP: hours before the same address can claim again (1 claim per window)
+  claim_cooldown_minutes:       240,      // per-address/IP: minutes before the same address can claim again (240 = 4h)
   slatepack_expire_min:         30,       // minutes user has to paste response slatepack
   global_daily_claims_cap:      2000,     // 0 = unlimited; max total claims site-wide per day (all users combined, resets midnight UTC)
   global_hourly_claims_cap:     100,      // 0 = unlimited; max total claims site-wide per hour (all users combined)
@@ -77,7 +77,13 @@ function loadConfig() {
   if (fs.existsSync(CONF_PATH)) {
     try {
       const raw = fs.readFileSync(CONF_PATH, 'utf8');
-      Object.assign(cfg, JSON.parse(raw));
+      const fileData = JSON.parse(raw);
+      // Migrate old claim_cooldown_hours → claim_cooldown_minutes
+      if (fileData.claim_cooldown_hours != null && fileData.claim_cooldown_minutes == null) {
+        fileData.claim_cooldown_minutes = Math.round(fileData.claim_cooldown_hours * 60);
+        delete fileData.claim_cooldown_hours;
+      }
+      Object.assign(cfg, fileData);
     } catch {
       // Corrupted config — fall back to defaults
     }
@@ -92,7 +98,7 @@ function loadConfig() {
 function writeConfigKey(key, value) {
   const cfg = loadConfig();
   const numKeys = new Set([
-    'claim_grin_per_tx', 'claim_cooldown_hours', 'slatepack_expire_min',
+    'claim_grin_per_tx', 'claim_cooldown_minutes', 'slatepack_expire_min',
     'global_daily_claims_cap', 'global_hourly_claims_cap',
     'service_port', 'wallet_foreign_api_port', 'wallet_owner_api_port',
     'donation_invoice_timeout', 'low_balance_alert_grin', 'wallet_cleanup_hours',

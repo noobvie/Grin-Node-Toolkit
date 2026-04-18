@@ -9,14 +9,24 @@ const THEME_CSS = {
   dark:    "css/themes/dark.css",
   cute:    "css/themes/cute.css",
 };
+const THEME_LOGO = {
+  matrix:  "img/grin-logo-lime.svg",
+  warcraft:"img/grin-logo-purple.svg",
+  win98:   "img/grin-logo-gray.svg",
+  light:   "img/grin-logo-gold.svg",
+  dark:    "img/grin-logo-lime.svg",
+  cute:    "img/grin-logo-pink.svg",
+};
 const STORAGE_KEY = "grin-faucet-theme";
 let _current = null;
 
-// Apply CSS link early (before DOMContentLoaded) to avoid flash of wrong theme.
+// Apply CSS + logo early (before DOMContentLoaded) to avoid flash of wrong theme/logo.
 (function() {
   const link = document.getElementById("theme-css");
   const saved = localStorage.getItem(STORAGE_KEY) || "matrix";
   if (link && THEME_CSS[saved]) link.href = THEME_CSS[saved];
+  // Logo swap runs after DOM is parsed — img element not available yet.
+  // initTheme() handles it on DOMContentLoaded.
 })();
 
 function applyTheme(name) {
@@ -32,6 +42,10 @@ function applyTheme(name) {
   // Swap CSS file
   const link = document.getElementById("theme-css");
   if (link && THEME_CSS[name]) link.href = THEME_CSS[name];
+
+  // Swap logo
+  const logo = document.querySelector(".site-logo");
+  if (logo && THEME_LOGO[name]) logo.src = THEME_LOGO[name];
 
   // Matrix rain
   if (name === "matrix") {

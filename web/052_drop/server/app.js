@@ -99,7 +99,7 @@ function nextClaimIso(address) {
   const last = db.lastActiveClaim(address);
   if (!last) return null;
   const cfg = loadConfig();
-  const windowMs = (cfg.claim_cooldown_hours ?? 24) * 3_600_000;
+  const windowMs = (cfg.claim_cooldown_minutes ?? 240) * 60_000;
   const created  = new Date(last.created_at).getTime();
   const nextAllowed = new Date(created + windowMs);
   if (Date.now() >= nextAllowed.getTime()) return null;
@@ -191,7 +191,7 @@ app.get('/api/status', async (req, res) => {
   const payload = {
     drop_name:           cfg.drop_name,
     claim_grin_per_tx:    cfg.claim_grin_per_tx,
-    claim_cooldown_hours: cfg.claim_cooldown_hours,
+    claim_cooldown_minutes: cfg.claim_cooldown_minutes,
     global_daily_claims_cap:     cfg.global_daily_claims_cap,
     global_hourly_claims_cap:    cfg.global_hourly_claims_cap,
     claims_this_hour:     db.countClaimsThisHour(),
@@ -293,6 +293,12 @@ app.post('/api/claim', async (req, res) => {
   if (!address) return err(res, 'grin_address is required');
   if (!GRIN_ADDR_RE.test(address)) return err(res, 'Invalid grin address — expected grin1... or tgrin1... (52+ chars)');
 
+  const ownAddress = cfg.wallet_address || '';
+  if (ownAddress && address === ownAddress) {
+    actLog('WARN', `CLAIM_SELF_ADDR addr=${truncAddr(address)}`);
+    return err(res, 'Invalid address — you cannot use the drop wallet address to claim');
+  }
+
   const nextAt = nextClaimIso(address);
   if (nextAt) {
     actLog('WARN', `RATE_LIMIT addr=${truncAddr(address)} next_claim=${nextAt}`);
@@ -379,9 +385,10 @@ app.post('/api/claim', async (req, res) => {
 
 // POST /api/claim/anonymous ────────────────────────────────────────────────────
 // No address required — rate-limited by hashed client IP.
-// Amount is fixed to ANON_CLAIM_GRIN (0.009 mainnet / 0.09 testnet) regardless of body.
+// Amount is capped to ANON_CLAIM_GRIN max (0.009 mainnet / 0.09 testnet); min 0.001.
 app.post('/api/claim/anonymous', async (req, res) => {
-  const cfg = loadConfig();
+  const cfg  = loadConfig();
+  const body = req.body || {};
   if (!cfg.giveaway_enabled) return err(res, 'Giveaway is currently disabled', 503);
 
   const ip = getClientIp(req);
@@ -405,9 +412,14 @@ app.post('/api/claim/anonymous', async (req, res) => {
     return err(res, 'Hourly claim limit reached. Try again in a few minutes.', 503);
   }
 
+  const requestedAnonAmount = body.amount != null ? parseFloat(body.amount) : null;
+  const anonAmount = (requestedAnonAmount != null && requestedAnonAmount > 0)
+    ? Math.min(Math.max(requestedAnonAmount, 0.001), ANON_CLAIM_GRIN)
+    : ANON_CLAIM_GRIN;
+
   const timeoutMin = parseInt(cfg.slatepack_expire_min, 10) || 5;
-  const claimId    = db.createClaim(anonAddr, ANON_CLAIM_GRIN, timeoutMin);
-  actLog('INFO', `ANON_CLAIM_INIT ip_hash=${anonAddr.slice(0, 12)} claim_id=${claimId}`);
+  const claimId    = db.createClaim(anonAddr, anonAmount, timeoutMin);
+  actLog('INFO', `ANON_CLAIM_INIT ip_hash=${anonAddr.slice(0, 12)} claim_id=${claimId} amount=${anonAmount}`);
 
   let slatepack = '';
   try {
@@ -418,7 +430,7 @@ app.post('/api/claim/anonymous', async (req, res) => {
       token,
       args: {
         src_acct_name:                   null,
-        amount:                          String(Math.round(ANON_CLAIM_GRIN * 1_000_000_000)),
+        amount:                          String(Math.round(anonAmount * 1_000_000_000)),
         minimum_confirmations:           10,
         max_outputs:                     500,
         num_change_outputs:              1,
@@ -446,7 +458,7 @@ app.post('/api/claim/anonymous', async (req, res) => {
   actLog('INFO', `ANON_SLATEPACK_OUT claim_id=${claimId}`);
 
   const claim = db.getClaim(claimId);
-  res.json({ claim_id: claimId, slatepack, amount: ANON_CLAIM_GRIN, expires_at: claim.expires_at });
+  res.json({ claim_id: claimId, slatepack, amount: anonAmount, expires_at: claim.expires_at });
 });
 
 // POST /api/finalize ───────────────────────────────────────────────────────────

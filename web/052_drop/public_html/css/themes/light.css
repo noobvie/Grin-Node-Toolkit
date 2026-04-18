@@ -30,10 +30,6 @@ header {
   border-bottom-color: #dddddd;
 }
 
-/* Lime logo (#00ff41) is near-invisible on light bg — add shadow outline */
-.site-logo {
-  filter: drop-shadow(0 0 1px rgba(0,0,0,0.45)) drop-shadow(0 0 2px rgba(0,0,0,0.2));
-}
 
 .card {
   box-shadow: 0 1px 4px rgba(0,0,0,0.08);

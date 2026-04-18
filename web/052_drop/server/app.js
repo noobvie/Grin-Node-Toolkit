@@ -76,7 +76,7 @@ function truncAddr(addr) {
 }
 
 const GRIN_ADDR_RE    = /^(grin1|tgrin1)[a-z0-9]{40,}$/;
-const ANON_CLAIM_GRIN = 0.09;
+const ANON_CLAIM_GRIN = loadConfig().network === 'mainnet' ? 0.009 : 0.09;
 
 // IP helpers — nginx must set: proxy_set_header X-Real-IP $remote_addr;
 // Only X-Real-IP is trusted — X-Forwarded-For is client-controlled and spoofable.
@@ -99,7 +99,7 @@ function nextClaimIso(address) {
   const last = db.lastActiveClaim(address);
   if (!last) return null;
   const cfg = loadConfig();
-  const windowMs = (cfg.claim_window_hours ?? 24) * 3_600_000;
+  const windowMs = (cfg.claim_cooldown_hours ?? 24) * 3_600_000;
   const created  = new Date(last.created_at).getTime();
   const nextAllowed = new Date(created + windowMs);
   if (Date.now() >= nextAllowed.getTime()) return null;
@@ -137,7 +137,8 @@ app.get('/api/status', async (req, res) => {
   // Balance and address are fetched in separate inner try/catch blocks so that
   // a node-timeout on retrieve_summary_info never prevents the address from
   // being fetched and persisted.
-  let balance = null;
+  let balance     = null;
+  let lowBalance  = false;
   let walletAddress = cfg.wallet_address || '';
   try {
     const session = await ownerApiSession();
@@ -153,11 +154,15 @@ app.get('/api/status', async (req, res) => {
         minimum_confirmations: 1,
         refresh_from_node: false,
       });
-      const info = Array.isArray(infoResult) ? infoResult[1] : infoResult;
-      balance = parseInt(info?.amount_currently_spendable || '0', 10) / 1_000_000_000;
-      const alertThreshold = parseFloat(cfg.low_balance_alert_grin) || 0;
+      const info    = Array.isArray(infoResult) ? infoResult[1] : infoResult;
+      balance       = parseInt(info?.amount_currently_spendable || '0', 10) / 1_000_000_000;
+      const cfgVal  = parseFloat(cfg.low_balance_alert_grin);
+      const alertThreshold = cfgVal > 0  ? cfgVal
+                           : cfgVal === 0 ? 0
+                           : (cfg.network === 'mainnet' ? 100 : 1000); // -1 = auto
       if (alertThreshold > 0 && balance < alertThreshold) {
-        actLog('WARN', `LOW_BALANCE balance=${balance} threshold=${alertThreshold}`);
+        lowBalance = true;
+        actLog('WARN', `LOW_BALANCE spendable=${balance} threshold=${alertThreshold} network=${cfg.network}`);
       }
     } catch (balErr) {
       actLog('WARN', `BALANCE_FAIL err=${balErr.message}`);
@@ -185,10 +190,16 @@ app.get('/api/status', async (req, res) => {
 
   const payload = {
     drop_name:           cfg.drop_name,
-    claim_amount:        cfg.claim_amount_grin,
-    claim_window_hours:  cfg.claim_window_hours,
+    claim_grin_per_tx:    cfg.claim_grin_per_tx,
+    claim_cooldown_hours: cfg.claim_cooldown_hours,
+    daily_claims_cap:     cfg.daily_claims_cap,
+    hourly_claims_cap:    cfg.hourly_claims_cap,
+    claims_this_hour:     db.countClaimsThisHour(),
+    daily_cap_reached:    cfg.daily_claims_cap  > 0 && db.countClaimsToday()      >= cfg.daily_claims_cap,
+    hourly_cap_reached:   cfg.hourly_claims_cap > 0 && db.countClaimsThisHour()   >= cfg.hourly_claims_cap,
     wallet_address:      walletAddress,
     wallet_balance:      balance !== null ? Math.round(balance * 1e9) / 1e9 : null,
+    low_balance:         lowBalance,
     claims_today:        db.countClaimsToday(),
     claims_total:        db.countClaimsTotal(),
     donations_today:     db.countDonationsToday(),
@@ -288,19 +299,24 @@ app.post('/api/claim', async (req, res) => {
     return err(res, `Already claimed. Next claim available at ${nextAt}`, 429);
   }
 
-  const maxClaims = parseInt(cfg.max_claims_per_window, 10) || 0;
-  if (maxClaims > 0 && db.countClaimsToday() >= maxClaims) {
-    actLog('WARN', `CLAIMS_CAP_REACHED max=${maxClaims}`);
-    return err(res, 'Daily claim limit reached. Try again later.', 503);
+  const dailyCap  = parseInt(cfg.daily_claims_cap,  10) || 0;
+  const hourlyCap = parseInt(cfg.hourly_claims_cap, 10) || 0;
+  if (dailyCap  > 0 && db.countClaimsToday()     >= dailyCap)  {
+    actLog('WARN', `DAILY_CAP_REACHED cap=${dailyCap}`);
+    return err(res, 'Daily claim limit reached. Try again tomorrow.', 503);
+  }
+  if (hourlyCap > 0 && db.countClaimsThisHour()  >= hourlyCap) {
+    actLog('WARN', `HOURLY_CAP_REACHED cap=${hourlyCap}`);
+    return err(res, 'Hourly claim limit reached. Try again in a few minutes.', 503);
   }
 
-  const maxAmount       = parseFloat(cfg.claim_amount_grin) || 2.0;
+  const maxAmount       = parseFloat(cfg.claim_grin_per_tx) || 2.0;
   const requestedAmount = body.amount != null ? parseFloat(body.amount) : null;
   const amount = (requestedAmount != null && requestedAmount > 0)
     ? Math.min(Math.max(requestedAmount, 0.001), maxAmount)
     : maxAmount;
 
-  const timeoutMin = parseInt(cfg.finalize_timeout_min, 10) || 5;
+  const timeoutMin = parseInt(cfg.slatepack_expire_min, 10) || 5;
   const claimId    = db.createClaim(address, amount, timeoutMin);
   actLog('INFO', `CLAIM_INIT addr=${truncAddr(address)} claim_id=${claimId}`);
 
@@ -363,7 +379,7 @@ app.post('/api/claim', async (req, res) => {
 
 // POST /api/claim/anonymous ────────────────────────────────────────────────────
 // No address required — rate-limited by hashed client IP.
-// Amount is fixed to ANON_CLAIM_GRIN (0.09) regardless of body.
+// Amount is fixed to ANON_CLAIM_GRIN (0.009 mainnet / 0.09 testnet) regardless of body.
 app.post('/api/claim/anonymous', async (req, res) => {
   const cfg = loadConfig();
   if (!cfg.giveaway_enabled) return err(res, 'Giveaway is currently disabled', 503);
@@ -378,13 +394,18 @@ app.post('/api/claim/anonymous', async (req, res) => {
     return err(res, `Already claimed. Next claim available at ${nextAt}`, 429);
   }
 
-  const maxClaims = parseInt(cfg.max_claims_per_window, 10) || 0;
-  if (maxClaims > 0 && db.countClaimsToday() >= maxClaims) {
-    actLog('WARN', `CLAIMS_CAP_REACHED max=${maxClaims}`);
-    return err(res, 'Daily claim limit reached. Try again later.', 503);
+  const dailyCap  = parseInt(cfg.daily_claims_cap,  10) || 0;
+  const hourlyCap = parseInt(cfg.hourly_claims_cap, 10) || 0;
+  if (dailyCap  > 0 && db.countClaimsToday()    >= dailyCap)  {
+    actLog('WARN', `DAILY_CAP_REACHED cap=${dailyCap}`);
+    return err(res, 'Daily claim limit reached. Try again tomorrow.', 503);
+  }
+  if (hourlyCap > 0 && db.countClaimsThisHour() >= hourlyCap) {
+    actLog('WARN', `HOURLY_CAP_REACHED cap=${hourlyCap}`);
+    return err(res, 'Hourly claim limit reached. Try again in a few minutes.', 503);
   }
 
-  const timeoutMin = parseInt(cfg.finalize_timeout_min, 10) || 5;
+  const timeoutMin = parseInt(cfg.slatepack_expire_min, 10) || 5;
   const claimId    = db.createClaim(anonAddr, ANON_CLAIM_GRIN, timeoutMin);
   actLog('INFO', `ANON_CLAIM_INIT ip_hash=${anonAddr.slice(0, 12)} claim_id=${claimId}`);
 
@@ -726,6 +747,55 @@ setInterval(() => {
     actLog('ERROR', `INVOICE_EXPIRE_ERR err=${e.message}`);
   }
 }, 60_000);
+
+// Cancel abandoned unfinalized wallet txs every 10 minutes.
+// Targets TxSent (stuck claims) and TxReceived (unpaid invoices) older than
+// wallet_cleanup_hours.  Frees locked inputs so the balance stays accurate.
+async function cancelAbandonedWalletTxs() {
+  const cfg           = loadConfig();
+  const thresholdHours = parseFloat(cfg.wallet_cleanup_hours) || 0;
+  if (!thresholdHours) return;                   // 0 = disabled
+
+  const cutoff = new Date(Date.now() - thresholdHours * 3_600_000);
+
+  const session = await ownerApiSession();
+  const { headers, sharedKey, ownerUrl, token } = session;
+
+  const result = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'retrieve_txs', {
+    token,
+    refresh_from_node: false,
+    tx_id:             null,
+    tx_slate_id:       null,
+  });
+  const txs = Array.isArray(result) ? result[1] : (result || []);
+
+  const candidates = txs.filter(tx =>
+    !tx.confirmed &&
+    (tx.tx_type === 'TxSent' || tx.tx_type === 'TxReceived') &&
+    new Date(tx.creation_ts) < cutoff
+  );
+
+  for (const tx of candidates) {
+    try {
+      await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'cancel_tx', {
+        token,
+        tx_id:       tx.id,
+        tx_slate_id: null,
+      });
+      actLog('INFO', `WALLET_TX_CANCELLED id=${tx.id} slate=${tx.tx_slate_id} type=${tx.tx_type} created=${tx.creation_ts}`);
+    } catch (e) {
+      actLog('WARN', `WALLET_TX_CANCEL_FAIL id=${tx.id} err=${e.message}`);
+    }
+  }
+
+  if (candidates.length > 0)
+    actLog('INFO', `WALLET_CLEANUP_SWEEP cancelled=${candidates.length} threshold=${thresholdHours}h`);
+}
+
+setInterval(async () => {
+  try { await cancelAbandonedWalletTxs(); }
+  catch (e) { actLog('WARN', `WALLET_CLEANUP_ERR err=${e.message}`); }
+}, 600_000);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // START

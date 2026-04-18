@@ -37,7 +37,16 @@
   <div class="container">
     <div class="header-inner">
       <div class="site-title">Grin Drop <span>ツ</span></div>
-      <div class="header-sub">Testnet &amp; Mainnet GRIN Faucet</div>
+      <div class="theme-picker">
+        <button class="theme-picker-btn" id="theme-toggle-btn" title="Switch theme"
+                aria-haspopup="true" aria-expanded="false">🎨</button>
+        <div class="theme-dropdown" id="theme-dropdown" hidden>
+          <button class="theme-opt" data-theme="">Matrix</button>
+          <button class="theme-opt" data-theme="dark">Dark</button>
+          <button class="theme-opt" data-theme="light">Light</button>
+          <button class="theme-opt" data-theme="win98">Windows 98</button>
+        </div>
+      </div>
     </div>
   </div>
 </header>
@@ -60,8 +69,8 @@
         <span class="dot-unknown"></span><span>Checking…</span>
       </div>
       <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:.8rem;">
-        tGRIN has no monetary value — safe for learning and testing
-        the Grin slatepack transaction flow.
+        Risk-free sandbox using tGRIN — ideal for learning the full slatepack
+        transaction flow before touching real funds.
       </p>
       <div class="net-stat-row">
         <div class="net-stat">
@@ -141,26 +150,26 @@
     <p class="last-updated" id="last-updated"></p>
   </div>
 
-  <!-- ── About ────────────────────────────────────────────────────────────── -->
+  <!-- ── Why this site was created ────────────────────────────────────────── -->
   <div class="about-section">
-    <h2>About Grin Drop</h2>
+    <h2>Why This Site Was Created</h2>
     <p>
-      Grin Drop is an open-source GRIN faucet that teaches you how real Grin
-      transactions work. Unlike most cryptocurrencies, Grin uses
-      <strong>interactive transactions</strong> (slatepacks) — both parties
-      must participate to complete a transfer. This is the same flow used by
-      mining pools and exchanges.
+      Learning Grin's interactive transaction model shouldn't require running your own
+      node, finding someone willing to send you test coins, or reading through dense
+      technical documentation before you understand anything. The barrier was too high
+      for newcomers, and that was worth fixing.
     </p>
     <p>
-      The testnet drop is a risk-free sandbox: claim tGRIN, run through the
-      full 3-step slatepack flow, and understand Grin before using real funds.
+      Grin's slatepack flow is unlike any other cryptocurrency — both parties must
+      actively participate to complete a transfer. That's powerful for privacy (no
+      public address, no on-chain history linked to you), but it's genuinely confusing
+      the first time. Grin Drop exists so anyone can practice the full 3-step flow
+      with real wallet software, in a safe environment, before touching real funds.
     </p>
     <p>
-      Links:
-      <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a> ·
-      <a href="https://github.com/mimblewimble/grin-wallet/releases" target="_blank" rel="noopener">grin-wallet</a> ·
-      <a href="https://github.com/GetGrin/grim/releases" target="_blank" rel="noopener">Grim GUI</a> ·
-      <a href="https://github.com/mimblewimble/grin" target="_blank" rel="noopener">GitHub</a>
+      The mainnet drop takes it further: it's the same flow used by mining pools,
+      exchanges, and everyday Grin users. If you can claim from this faucet, you
+      understand how Grin actually works — not just in theory.
     </p>
   </div>
 
@@ -171,14 +180,55 @@
     <p>
       Grin Drop ·
       <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a> ·
-      <a href="https://github.com/mimblewimble/grin" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/Noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>
     </p>
-    <p style="margin-top:.3rem;">Testnet GRIN has no monetary value.</p>
   </div>
 </footer>
 
 <script>
 (function() {
+
+  // ── Theme picker ──────────────────────────────────────────────────────────
+  const THEME_KEY = 'grin_home_theme';
+  const html      = document.documentElement;
+
+  function applyTheme(t) {
+    if (t) html.setAttribute('data-theme', t);
+    else   html.removeAttribute('data-theme');
+    try { localStorage.setItem(THEME_KEY, t || ''); } catch {}
+  }
+
+  // Restore saved theme
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved !== null) applyTheme(saved);
+  } catch {}
+
+  const toggleBtn  = document.getElementById('theme-toggle-btn');
+  const dropdown   = document.getElementById('theme-dropdown');
+
+  toggleBtn.addEventListener('click', () => {
+    const open = !dropdown.hidden;
+    dropdown.hidden = open;
+    toggleBtn.setAttribute('aria-expanded', String(!open));
+  });
+
+  document.addEventListener('click', e => {
+    if (!toggleBtn.contains(e.target) && !dropdown.contains(e.target)) {
+      dropdown.hidden = true;
+      toggleBtn.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  dropdown.addEventListener('click', e => {
+    const btn = e.target.closest('.theme-opt');
+    if (!btn) return;
+    applyTheme(btn.dataset.theme);
+    dropdown.hidden = true;
+    toggleBtn.setAttribute('aria-expanded', 'false');
+  });
+
+  // ── Stats loader ──────────────────────────────────────────────────────────
   function fmtGrin(n) {
     if (n === null || n === undefined) return '—';
     return parseFloat(n).toFixed(2) + ' G';
@@ -197,7 +247,7 @@
   }
 
   async function fetchStats(path) {
-    const ctrl = new AbortController();
+    const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
     try {
       const r = await fetch(path, { signal: ctrl.signal });
@@ -243,22 +293,23 @@
     }
 
     // Combined totals
-    const tg = (testData?.total_given  || 0) + (mainData?.total_given  || 0);
-    const tr = (testData?.total_received || 0) + (mainData?.total_received || 0);
-    const tc = (testData?.claims_total   || 0) + (mainData?.claims_total   || 0);
+    const tg = (testData?.total_given     || 0) + (mainData?.total_given     || 0);
+    const tr = (testData?.total_received  || 0) + (mainData?.total_received  || 0);
+    const tc = (testData?.claims_total    || 0) + (mainData?.claims_total    || 0);
     const td = (testData?.donations_total || 0) + (mainData?.donations_total || 0);
 
-    document.getElementById('tot-given').textContent     = (tg || !testData && !mainData) ? fmtGrin(tg)  : '—';
-    document.getElementById('tot-received').textContent  = (tr || !testData && !mainData) ? fmtGrin(tr)  : '—';
-    document.getElementById('tot-claims').textContent    = (tc || !testData && !mainData) ? fmtNum(tc)   : '—';
-    document.getElementById('tot-donations').textContent = (td || !testData && !mainData) ? fmtNum(td)   : '—';
+    const either = testData || mainData;
+    document.getElementById('tot-given').textContent     = either ? fmtGrin(tg) : '—';
+    document.getElementById('tot-received').textContent  = either ? fmtGrin(tr) : '—';
+    document.getElementById('tot-claims').textContent    = either ? fmtNum(tc)  : '—';
+    document.getElementById('tot-donations').textContent = either ? fmtNum(td)  : '—';
 
     const lu = document.getElementById('last-updated');
     if (lu) lu.textContent = 'Updated ' + new Date().toLocaleTimeString();
   }
 
   load();
-  setInterval(load, 120000); // refresh every 2 minutes
+  setInterval(load, 120000);
 })();
 </script>
 

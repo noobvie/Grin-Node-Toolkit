@@ -128,6 +128,13 @@ function countClaimsToday() {
     .get(today + '%').c;
 }
 
+function countClaimsThisHour() {
+  const since = new Date(Date.now() - 3_600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  return getDb()
+    .prepare("SELECT COUNT(*) as c FROM claims WHERE created_at >= ? AND status = 'confirmed'")
+    .get(since).c;
+}
+
 function countClaimsTotal() {
   return getDb()
     .prepare("SELECT COUNT(*) as c FROM claims WHERE status = 'confirmed'")
@@ -330,6 +337,7 @@ module.exports = {
   getClaim,
   lastActiveClaim,
   countClaimsToday,
+  countClaimsThisHour,
   countClaimsTotal,
   countDonationsToday,
   countDonationsTotal,

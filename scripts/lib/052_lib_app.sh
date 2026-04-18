@@ -194,21 +194,25 @@ drop_configure() {
     # ── Giveaway ──────────────────────────────────────────────────────────────
     echo ""
     echo -e "  ${BOLD}Giveaway Settings [$DROP_NET_LABEL]:${RESET}"
-    echo -ne "Max claim per tx [$(drop_read_conf claim_amount_grin '0.1') GRIN]  (max GRIN sent in one claim): "
+    echo -ne "GRIN per tx      [$(drop_read_conf claim_grin_per_tx '0.1') GRIN]  (max GRIN sent in a single claim tx): "
     read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
-    [[ -n "$val" ]] && drop_write_conf_key "claim_amount_grin" "$val"
+    [[ -n "$val" ]] && drop_write_conf_key "claim_grin_per_tx" "$val"
 
-    echo -ne "Address cooldown [$(drop_read_conf claim_window_hours '24') hours] (wait per address before next claim): "
+    echo -ne "Address cooldown [$(drop_read_conf claim_cooldown_hours '24') hours] (per-address wait before next claim): "
     read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
-    [[ -n "$val" ]] && drop_write_conf_key "claim_window_hours" "$val"
+    [[ -n "$val" ]] && drop_write_conf_key "claim_cooldown_hours" "$val"
 
-    echo -ne "Finalize window  [$(drop_read_conf finalize_timeout_min '30') min]   (time for user to paste response slatepack): "
+    echo -ne "Finalize window  [$(drop_read_conf slatepack_expire_min '30') min]   (time for user to paste response slatepack): "
     read -r val || true; [[ "$val" == "0" ]] && { info "Cancelled."; return; }
-    [[ -n "$val" ]] && drop_write_conf_key "finalize_timeout_min" "$val"
+    [[ -n "$val" ]] && drop_write_conf_key "slatepack_expire_min" "$val"
 
-    echo -ne "Daily claim cap  [$(drop_read_conf max_claims_per_window '8')] claims/day  (0 = unlimited, resets at midnight UTC): "
-    read -r val || true; [[ "$val" == "0" ]] && drop_write_conf_key "max_claims_per_window" "0"
-    [[ -n "$val" && "$val" != "0" ]] && drop_write_conf_key "max_claims_per_window" "$val"
+    echo -ne "Daily claim cap  [$(drop_read_conf daily_claims_cap '8')] claims/day  (0 = unlimited, resets at midnight UTC): "
+    read -r val || true; [[ "$val" == "0" ]] && drop_write_conf_key "daily_claims_cap" "0"
+    [[ -n "$val" && "$val" != "0" ]] && drop_write_conf_key "daily_claims_cap" "$val"
+
+    echo -ne "Hourly claim cap [$(drop_read_conf hourly_claims_cap '0')] claims/hour (0 = unlimited): "
+    read -r val || true; [[ "$val" == "0" ]] && drop_write_conf_key "hourly_claims_cap" "0"
+    [[ -n "$val" && "$val" != "0" ]] && drop_write_conf_key "hourly_claims_cap" "$val"
 
     # ── Donation invoice ──────────────────────────────────────────────────────
     echo ""

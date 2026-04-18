@@ -45,7 +45,15 @@
 <header>
   <div class="container">
     <div class="header-inner">
-      <div class="site-title">Grin Drop <span>ツ</span></div>
+      <div class="header-left">
+        <div class="site-title">Grin Drop <span>ツ</span></div>
+        <nav class="header-nav" aria-label="Page navigation">
+          <a class="header-nav-pill" href="/">← Home</a>
+          <a class="header-nav-pill" href="#section-giveaway">Claim</a>
+          <a class="header-nav-pill" href="#section-donation">Donate</a>
+          <a class="header-nav-pill" href="#section-how-it-works">How it works</a>
+        </nav>
+      </div>
       <div class="theme-picker" role="navigation" aria-label="Theme selector">
         <button class="theme-picker-btn" id="theme-toggle-btn" title="Switch theme" aria-haspopup="true" aria-expanded="false">&#x1F3A8;</button>
         <div class="theme-dropdown" id="theme-dropdown" hidden>
@@ -116,6 +124,11 @@
     </div>
 
     <div class="card">
+      <!-- Cap warning — shown by JS when daily/hourly limit is reached -->
+      <div id="claim-cap-warning" style="display:none;padding:.6rem .9rem;margin-bottom:.75rem;
+           background:rgba(242,201,76,.1);border:1px solid var(--warn-color);border-radius:6px;
+           color:var(--warn-color);font-size:.85rem;"></div>
+
       <!-- Step 1 — tabbed -->
       <div id="step-1" class="step">
 
@@ -142,7 +155,7 @@
           <div class="info-box" style="margin-bottom:1rem;">
             <strong style="color:var(--accent);">Grin's magic — receive without sharing an address</strong>
             <p style="margin-top:.5rem;font-size:.87rem;line-height:1.75;">
-              In Bitcoin or Ethereum you publish a fixed address — anyone can look it up and see
+              In BTC/ETH/USDT... or other privacy cryptos, you publish a fixed address — anyone can look it up and see
               your full transaction history. <strong>Grin works differently:</strong> the sender
               creates the transaction first and hands you a slatepack message. You respond from
               your wallet. <em>No address posted publicly. No balance exposed. No history linked
@@ -367,7 +380,7 @@
   </section>
 
   <!-- ── How it works ───────────────────────────────────────────────────────── -->
-  <section aria-label="How to use the Grin drop">
+  <section id="section-how-it-works" aria-label="How to use the Grin drop">
     <h2>How It Works</h2>
 
     <!-- Section A — Setup wallet -->
@@ -516,8 +529,8 @@
       &nbsp;·&nbsp; Testnet GRIN has no real value.
     </p>
     <p style="margin-top:.4rem;">
-      * Donation counts and amounts reflect slatepack and invoice transactions only — TOR direct donations are not automatically tracked.<br>
       Keywords: grin drop · grin faucet · testnet grin · free grin coins · slatepack tutorial
+    * Donation counts and amounts reflect slatepack and invoice transactions (without TOR finalization) only — TOR direct donations are not automatically tracked.<br>
     </p>
   </div>
 </footer>

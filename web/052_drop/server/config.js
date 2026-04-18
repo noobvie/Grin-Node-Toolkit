@@ -24,10 +24,11 @@ const DEFAULTS = {
 
   // ── Giveaway ──────────────────────────────────────────────────────────────
   giveaway_enabled:          true,
-  claim_amount_grin:         0.1,
-  claim_window_hours:        24,
-  finalize_timeout_min:      30,
-  max_claims_per_window:     8,    // 0 = unlimited; total claims allowed per claim_window_hours
+  claim_grin_per_tx:         1.0,        // max GRIN sent in one claim transaction (server-side cap)
+  claim_cooldown_hours:      24,         // per-address cooldown before reclaiming
+  slatepack_expire_min:      30,         // minutes user has to paste response slatepack
+  daily_claims_cap:          8,          // 0 = unlimited; total confirmed claims per day
+  hourly_claims_cap:         0,          // 0 = unlimited; total confirmed claims per hour
 
   // ── Donation ──────────────────────────────────────────────────────────────
   donation_enabled:          true,
@@ -58,7 +59,10 @@ const DEFAULTS = {
   maintenance_message:    "We'll be back soon. Thank you for your patience.",
 
   // ── Alerts (logged to journal; use fail2ban / monitoring to act on them) ──
-  low_balance_alert_grin: 5,     // log WARN LOW_BALANCE when spendable drops below this
+  low_balance_alert_grin: -1,   // -1 = auto (1000 testnet / 100 mainnet), 0 = disabled, >0 = fixed floor
+
+  // ── Wallet cleanup ────────────────────────────────────────────────────────
+  wallet_cleanup_hours:   1,     // auto-cancel unfinalized wallet txs older than this; 0 = disabled
 
   // ── Logging ───────────────────────────────────────────────────────────────
   log_path:               '/opt/grin/drop-test/grin_drop_test.log',
@@ -85,9 +89,10 @@ function loadConfig() {
 function writeConfigKey(key, value) {
   const cfg = loadConfig();
   const numKeys = new Set([
-    'claim_amount_grin', 'claim_window_hours', 'finalize_timeout_min',
+    'claim_grin_per_tx', 'claim_cooldown_hours', 'slatepack_expire_min',
+    'daily_claims_cap', 'hourly_claims_cap',
     'service_port', 'wallet_foreign_api_port', 'wallet_owner_api_port',
-    'donation_invoice_timeout', 'max_claims_per_window', 'low_balance_alert_grin',
+    'donation_invoice_timeout', 'low_balance_alert_grin', 'wallet_cleanup_hours',
   ]);
   const boolKeys = new Set([
     'giveaway_enabled', 'donation_enabled', 'show_public_stats',

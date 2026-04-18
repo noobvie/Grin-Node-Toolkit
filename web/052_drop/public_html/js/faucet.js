@@ -17,7 +17,11 @@ let _countdown        = null;
 let _invoiceId        = null;
 let _donateWalletAddr = '';
 
-const ANON_CLAIM_AMOUNT = 0.09;
+// Claim amount presets — 10× smaller on mainnet to conserve real GRIN
+const CLAIM_AMOUNTS   = window.DROP_NETWORK === 'mainnet'
+  ? [0.01, 0.02, 0.05, 0.1]
+  : [0.1,  0.2,  0.5,  1.0];
+const ANON_CLAIM_AMOUNT = window.DROP_NETWORK === 'mainnet' ? 0.009 : 0.09;
 
 // ── Session storage helpers (survive page refresh within same tab) ────────────
 function clearClaimSession() {
@@ -137,20 +141,37 @@ async function refreshStatus() {
       donationSection.style.display = (data.donation_enabled === false) ? "none" : "";
     }
 
-    setText("stat-balance",          formatGrin(data.wallet_balance));
+    setText("stat-balance", (data.low_balance ? '⚠ ' : '') + formatGrin(data.wallet_balance));
+    const balEl = $('stat-balance');
+    if (balEl) balEl.classList.toggle('stat-value--warn', !!data.low_balance);
     setText("stat-today",            String(data.claims_today));
     setText("stat-donations-today",  String(data.donations_today  ?? 0));
     setText("stat-total",            String(data.claims_total));
     setText("stat-donations-total",  String(data.donations_total  ?? 0));
 
     // Update claim hint with server-configured max amount
-    if (data.claim_amount != null) {
-      const v = parseFloat(data.claim_amount) || 2;
+    if (data.claim_grin_per_tx != null) {
+      const v = parseFloat(data.claim_grin_per_tx) || 2;
       const maxLabel = (Number.isInteger(v) ? v : v.toFixed(2)) + " " + COIN;
       const hintEl = $("claim-hint");
       if (hintEl) {
-        hintEl.innerHTML = `Up to ${maxLabel} per address per ${data.claim_window_hours || 24}h &nbsp;·&nbsp; No sign-up required &nbsp;·&nbsp; `
+        hintEl.innerHTML = `Up to ${maxLabel} per address per ${data.claim_cooldown_hours || 24}h &nbsp;·&nbsp; No sign-up required &nbsp;·&nbsp; `
           + `This simulates exactly how <strong>mainnet withdrawals</strong> work.`;
+      }
+    }
+
+    // Cap warnings
+    const capWarn = $("claim-cap-warning");
+    if (capWarn) {
+      if (data.hourly_cap_reached) {
+        capWarn.style.display = '';
+        capWarn.textContent   = '⚠ Hourly claim limit reached — please try again in a few minutes.';
+      } else if (data.daily_cap_reached) {
+        capWarn.style.display = '';
+        capWarn.textContent   = '⚠ Daily claim limit reached — please try again tomorrow.';
+      } else {
+        capWarn.style.display = 'none';
+        capWarn.textContent   = '';
       }
     }
 
@@ -706,7 +727,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const invAddrInput = $("donate-invoice-address");
   if (invAddrInput) invAddrInput.placeholder = ADDR_PFX + "1...";
 
-  // Network-specific amount button labels (donate + claim preset)
+  // Apply network-specific claim amounts to the claim grid buttons
+  [...document.querySelectorAll('#claim-amount-grid .amount-btn[data-amount]')]
+    .forEach((btn, i) => { if (CLAIM_AMOUNTS[i] != null) btn.dataset.amount = String(CLAIM_AMOUNTS[i]); });
+
+  // Update all amount button labels (donate + claim) using the (now-patched) data-amount values
   document.querySelectorAll(".amount-btn[data-amount]").forEach(btn => {
     const amt = btn.dataset.amount;
     if (amt !== "custom") {

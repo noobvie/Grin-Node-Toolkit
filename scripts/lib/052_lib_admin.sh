@@ -203,11 +203,6 @@ drop_status_screen() {
     echo -e "  ${BOLD}Port${RESET}       : $port"
     [[ -n "$subdomain" ]] && echo -e "  ${BOLD}URL${RESET}        : ${GREEN}https://$subdomain/${DROP_NETWORK}/${RESET}"
 
-    local admin_path; admin_path=$(drop_read_conf "admin_secret_path" "")
-    if [[ -n "$admin_path" && -n "$subdomain" ]]; then
-        echo -e "  ${BOLD}Admin URL${RESET}  : ${YELLOW}https://$subdomain/${DROP_NETWORK}/$admin_path/admin/${RESET}"
-    fi
-
     # Wallet tmux sessions
     echo ""
     tmux has-session -t "$DROP_TMUX_TOR" 2>/dev/null \

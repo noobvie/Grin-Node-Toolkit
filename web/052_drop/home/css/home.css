@@ -77,13 +77,23 @@ a:hover { text-decoration: underline; }
 code { font-family: var(--mono); font-size: .85em; background: rgba(255,255,255,.07);
        padding: .1em .35em; border-radius: 3px; }
 
+/* ── Testing phase banner ────────────────────────────────────────────────── */
+.test-banner {
+  background: #1a3a5c; color: #e0e0e0; text-align: center;
+  padding: .55rem 1rem; font-size: .85rem; letter-spacing: .02em;
+}
+.test-banner a { color: #74b9ff; text-decoration: underline; }
+
+/* ── Grin logo in header ─────────────────────────────────────────────────── */
+.site-logo { width: 26px; height: 26px; flex-shrink: 0; }
+
 .container { max-width: 900px; margin: 0 auto; padding: 0 1.2rem; }
 
 /* ── Header ─────────────────────────────────────────────────────────────────── */
 header { border-bottom: 1px solid var(--border); padding: 1.1rem 0; margin-bottom: 2rem; }
 .header-inner { display: flex; align-items: center; justify-content: space-between; }
 .site-title { font-size: 1.25rem; font-weight: 700; color: var(--accent); letter-spacing: .02em;
-              font-family: var(--mono); }
+              font-family: var(--mono); display: inline-flex; align-items: center; gap: .35rem; }
 .site-title span { color: var(--text-dim); }
 
 /* ── Theme picker ───────────────────────────────────────────────────────────── */
@@ -116,6 +126,7 @@ header { border-bottom: 1px solid var(--border); padding: 1.1rem 0; margin-botto
 /* ── Network cards ──────────────────────────────────────────────────────────── */
 .network-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2.5rem; }
 @media (max-width: 560px) { .network-grid { grid-template-columns: 1fr; } }
+@media (max-width: 400px) { .net-stat { min-width: 60px; } }
 
 .network-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
                 padding: 1.4rem; }
@@ -169,3 +180,82 @@ footer a:hover { color: var(--accent); }
 
 /* ── Last updated ────────────────────────────────────────────────────────────── */
 .last-updated { text-align: right; font-size: .75rem; color: var(--text-dim); margin-top: .5rem; }
+
+/* ── Light theme: lime logo needs shadow to be visible on white ──────────────── */
+[data-theme="light"] .site-logo {
+  filter: drop-shadow(0 0 1px rgba(0,0,0,0.45)) drop-shadow(0 0 2px rgba(0,0,0,0.2));
+}
+/* ── Dark theme: brighten the test banner so it reads against near-black ─────── */
+[data-theme="dark"] .test-banner {
+  background: #1e3a5c; color: #c9d1d9; border-bottom: 1px solid #30363d;
+}
+[data-theme="dark"] .test-banner a { color: #58a6ff; }
+
+/* ── Win98 theme overrides ───────────────────────────────────────────────────── */
+[data-theme="win98"] body {
+  font-size: 13px;
+  -webkit-font-smoothing: none;
+  font-smooth: never;
+}
+[data-theme="win98"] .test-banner {
+  background: #d4d0c8; color: #000; border-bottom: 2px solid #808080;
+}
+[data-theme="win98"] .test-banner a { color: #000080; }
+[data-theme="win98"] header {
+  background: #d4d0c8;
+  border-bottom: 2px solid #808080;
+  box-shadow: 0 2px 0 #fff;
+}
+[data-theme="win98"] footer {
+  background: #d4d0c8;
+  border-top: 2px solid #808080;
+}
+[data-theme="win98"] .site-title {
+  background: linear-gradient(to right, #000080, #1084d0);
+  color: #fff; padding: 3px 8px;
+  font-family: 'Tahoma', 'MS Sans Serif', Arial, sans-serif;
+  font-size: .95rem;
+}
+[data-theme="win98"] .site-title span { color: #f2c94c; }
+[data-theme="win98"] .theme-picker-btn {
+  background: #d4d0c8; border: 2px solid;
+  border-color: #fff #808080 #808080 #fff; border-radius: 0;
+  box-shadow: 1px 1px 0 #000;
+}
+[data-theme="win98"] .theme-dropdown {
+  background: #d4d0c8; border: 2px solid;
+  border-color: #fff #808080 #808080 #fff;
+  border-radius: 0; box-shadow: 4px 4px 0 #000;
+}
+[data-theme="win98"] .theme-opt { font-family: 'Tahoma', Arial, sans-serif; color: #000; }
+[data-theme="win98"] .theme-opt:hover { background: #000080; color: #fff; }
+[data-theme="win98"] .hero h1 { color: #000080; text-shadow: none; font-family: 'Tahoma', Arial, sans-serif; }
+[data-theme="win98"] .network-card {
+  border: 2px solid; border-radius: 0;
+  border-color: #fff #808080 #808080 #fff;
+  box-shadow: 2px 2px 0 #000;
+}
+[data-theme="win98"] .network-card.testnet,
+[data-theme="win98"] .network-card.mainnet { border-top: 2px solid #fff; }
+[data-theme="win98"] .totals-section,
+[data-theme="win98"] .about-section {
+  border: 2px solid; border-radius: 0;
+  border-color: #fff #808080 #808080 #fff;
+  box-shadow: 2px 2px 0 #000;
+}
+[data-theme="win98"] .btn-visit {
+  border: 2px solid; border-radius: 0; font-weight: normal;
+  border-color: #fff #808080 #808080 #fff;
+  box-shadow: 1px 1px 0 #000; font-family: 'Tahoma', Arial, sans-serif;
+}
+[data-theme="win98"] .btn-visit:hover {
+  border-color: #808080 #fff #fff #808080; box-shadow: none;
+  opacity: 1; transform: translate(1px,1px);
+}
+[data-theme="win98"] .net-label.testnet,
+[data-theme="win98"] .net-label.mainnet { font-family: 'Tahoma', Arial, sans-serif; }
+[data-theme="win98"] .total-item .val { color: #000080; }
+[data-theme="win98"] h2 { color: #000080; font-family: 'Tahoma', Arial, sans-serif; }
+[data-theme="win98"] code { background: #d4d0c8; border: 1px inset #808080; border-radius: 0; }
+[data-theme="win98"] .dot-on  { background: #008000; }
+[data-theme="win98"] .dot-off { background: #cc0000; }

@@ -52,7 +52,7 @@ header {
   z-index: 1000;
   padding: .65rem 0;
   border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--bg-card);
 }
 body { padding-top: 3.6rem; }
 /* offset anchor jumps so sections don't hide behind the fixed header */
@@ -77,8 +77,12 @@ section[id] { scroll-margin-top: 3.8rem; }
   color: var(--accent);
   font-family: var(--font-mono);
   letter-spacing: .02em;
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
 }
 .site-title span { color: var(--grin-yellow); }
+.site-logo { width: 26px; height: 26px; flex-shrink: 0; }
 
 /* ── Header nav pills ─────────────────────────────────────────────────────── */
 .header-nav { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
@@ -495,8 +499,46 @@ footer a:hover { color: var(--accent); }
 
 /* ── Mobile ───────────────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
-  .header-inner { flex-direction: row; align-items: center; }
-  .header-nav-pill { font-size: .7rem; padding: .18rem .45rem; }
-  .stats-bar { gap: .6rem; }
-  .stat-item { min-width: 110px; }
+  .stats-bar { gap: .5rem; }
+  .stat-item { min-width: 90px; padding: .35rem .7rem; }
+  .stat-label { font-size: .68rem; }
+  .stat-value { font-size: 1rem; }
+}
+
+/* ── Phone (≤480px) — single-row header, compact stats, scrollable tabs ──── */
+@media (max-width: 480px) {
+  /* Hide nav pills — page is short enough to scroll; title + theme-picker stay */
+  .header-nav { display: none; }
+
+  /* Header is now single-row → reduce padding-top */
+  body { padding-top: 3rem; }
+  section[id] { scroll-margin-top: 3.2rem; }
+
+  /* Stats: 2-column flex grid */
+  .stat-item { flex: 1 1 calc(50% - .5rem); min-width: 0; }
+
+  /* Tabs: horizontal scroll instead of wrapping — preserves chrome in all themes */
+  .donate-tabs,
+  .claim-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .donate-tabs::-webkit-scrollbar,
+  .claim-tabs::-webkit-scrollbar { display: none; }
+
+  .donate-tab-btn,
+  .claim-tab-btn { white-space: nowrap; flex-shrink: 0; font-size: .78rem; padding: .28rem .7rem; }
+
+  /* Amount grid: 2 per row */
+  .amount-grid { gap: .4rem; }
+  .amount-btn { flex: 1 1 calc(50% - .4rem); text-align: center; }
+
+  /* Slatepack + cmd boxes: prevent horizontal overflow */
+  .slatepack-box,
+  .cmd-box { font-size: .72rem; }
+
+  /* How-steps code snippets: allow break */
+  .how-steps code { word-break: break-all; }
 }

@@ -26,7 +26,14 @@
   </script>
 
   <link rel="stylesheet" href="css/faucet.css">
-  <link rel="stylesheet" id="theme-css" href="css/themes/matrix.css">
+  <link rel="stylesheet" id="theme-css" href="">
+  <script>
+  (function(){
+    var t=localStorage.getItem('grin-faucet-theme')||'matrix';
+    var m={matrix:'css/themes/matrix.css',warcraft:'css/themes/warcraft.css',win98:'css/themes/win98.css',light:'css/themes/light.css',dark:'css/themes/dark.css',cute:'css/themes/cute.css'};
+    document.getElementById('theme-css').href=m[t]||m.matrix;
+  })();
+  </script>
 </head>
 
 <body class="theme-matrix">
@@ -46,7 +53,7 @@
   <div class="container">
     <div class="header-inner">
       <div class="header-left">
-        <div class="site-title">Grin Drop <span>ツ</span></div>
+        <div class="site-title"><img src="/img/grin-logo.svg" alt="" class="site-logo">Grin Drop <span>ツ</span></div>
         <nav class="header-nav" aria-label="Page navigation">
           <a class="header-nav-pill" href="/">← Home</a>
           <a class="header-nav-pill" href="#section-giveaway">Claim</a>
@@ -514,6 +521,9 @@
           via the <a href="#section-donation">Donate</a> section above. Every contribution counts. ツ
         </li>
       </ul>
+      <p style="margin-top:.9rem;font-size:.78rem;color:var(--text-dim);font-style:italic;">
+        * Donation counts and amounts reflect slatepack and invoice transactions only — TOR direct donations are not automatically tracked.
+      </p>
     </div>
   </section>
 
@@ -530,7 +540,6 @@
     </p>
     <p style="margin-top:.4rem;">
       Keywords: grin drop · grin faucet · testnet grin · free grin coins · slatepack tutorial
-    * Donation counts and amounts reflect slatepack and invoice transactions (without TOR finalization) only — TOR direct donations are not automatically tracked.<br>
     </p>
   </div>
 </footer>

@@ -18,6 +18,8 @@
   --warn-color:   #f2c94c;
   --font-mono:    'Courier New', Courier, monospace;
   --font-sans:    'Courier New', Courier, monospace;
+  --grin-yellow:  #00ff41;
+  --radius:       4px;
   --shadow:       0 2px 20px rgba(0,255,65,.08);
 }
 

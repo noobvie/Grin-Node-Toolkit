@@ -16,6 +16,8 @@
   --error-color:  #ff6666;
   --ok-color:     #c8a951;
   --warn-color:   #ffaa33;
+  --grin-yellow:  #c8a951;
+  --radius:       4px;
   --glow:         rgba(200,169,81,.35);
   --font-mono:    'Courier New', Courier, monospace;
   --font-sans:    Georgia, 'Times New Roman', serif;

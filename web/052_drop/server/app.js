@@ -611,11 +611,12 @@ app.post('/api/donate/invoice', async (req, res) => {
     });
 
     // 2. Encode invoice → slatepack
-    // sender_index: null — omit server's address from envelope so donor's wallet
-    // won't attempt TOR auto-send (same reasoning as the claim flow).
+    // sender_index: 0 — include server's address so the payer's wallet can encrypt
+    // the pay-response back to us, allowing slate_from_slatepack_message to decrypt
+    // it with secret_indices: [0] in the finalize step.
     const invoiceSlatepack = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'create_slatepack_message', {
       token,
-      sender_index: null,
+      sender_index: 0,
       recipients:   [],
       slate,
     });

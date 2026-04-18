@@ -611,9 +611,12 @@ app.post('/api/donate/invoice', async (req, res) => {
     });
 
     // 2. Encode invoice → slatepack
-    // sender_index: 0 — include server's address so the payer's wallet can encrypt
-    // the pay-response back to us, allowing slate_from_slatepack_message to decrypt
-    // it with secret_indices: [0] in the finalize step.
+    // sender_index: 0 — embeds the server's slatepack address in the envelope.
+    // NOTE: wallets with TOR enabled (grin-wallet default) will detect this address
+    // and automatically attempt to send the payment response via TOR directly to
+    // the server's grin-wallet listener — the donor WON'T need to paste a response
+    // slatepack back to the website.  If TOR fails or is disabled, the wallet will
+    // fall back to outputting a slatepack for the donor to paste manually.
     const invoiceSlatepack = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'create_slatepack_message', {
       token,
       sender_index: 0,

@@ -1,0 +1,196 @@
+/**
+ * GrinPay — thank-you / payment instruction page styles.
+ *
+ * Scoped to .grinpay-* so there is no conflict with the active theme.
+ *
+ * @package GrinPay_WooCommerce
+ */
+
+/* ── Outer container ─────────────────────────────────────────────────────── */
+
+.grinpay-payment-box {
+	margin: 24px 0;
+	padding: 24px;
+	border: 1px solid #e2e4e7;
+	border-radius: 4px;
+	background: #fff;
+	font-size: 15px;
+	line-height: 1.6;
+}
+
+/* ── Testnet notice ──────────────────────────────────────────────────────── */
+
+.grinpay-notice--testnet {
+	padding: 10px 14px;
+	border-radius: 3px;
+	margin-bottom: 20px;
+	background: #fff8e5;
+	border-left: 4px solid #f0b429;
+	color: #7a5700;
+	font-size: 13px;
+}
+
+/* ── Steps ───────────────────────────────────────────────────────────────── */
+
+.grinpay-step {
+	margin-bottom: 28px;
+}
+
+.grinpay-step__title {
+	font-size: 16px;
+	font-weight: 700;
+	margin: 0 0 8px;
+	color: #1d2327;
+}
+
+.grinpay-step__desc {
+	margin: 0 0 12px;
+	color: #3c434a;
+}
+
+/* ── Slate textarea + copy button wrapper ────────────────────────────────── */
+
+.grinpay-slate-wrap {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.grinpay-slate-textarea {
+	width: 100%;
+	min-height: 120px;
+	padding: 10px 12px;
+	font-family: monospace;
+	font-size: 13px;
+	line-height: 1.5;
+	border: 1px solid #8c8f94;
+	border-radius: 3px;
+	resize: vertical;
+	background: #f9f9f9;
+	box-sizing: border-box;
+}
+
+.grinpay-slate-textarea[readonly] {
+	background: #f0f0f0;
+	color: #3c434a;
+	cursor: text;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+
+.grinpay-btn {
+	display: inline-block;
+	padding: 8px 18px;
+	border-radius: 3px;
+	font-size: 14px;
+	font-weight: 600;
+	cursor: pointer;
+	border: none;
+	transition: background 0.15s, opacity 0.15s;
+}
+
+.grinpay-btn--copy {
+	align-self: flex-end;
+	background: #f6f7f7;
+	border: 1px solid #8c8f94;
+	color: #3c434a;
+}
+
+.grinpay-btn--copy:hover,
+.grinpay-btn--copy:focus {
+	background: #e8e9e9;
+}
+
+.grinpay-btn--copy.grinpay-btn--copied {
+	background: #edfaef;
+	border-color: #00a32a;
+	color: #1a6130;
+}
+
+.grinpay-btn--submit {
+	margin-top: 8px;
+	/* Uses WooCommerce .button.alt for primary colour automatically */
+}
+
+.grinpay-btn:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+}
+
+/* ── Messages ────────────────────────────────────────────────────────────── */
+
+.grinpay-message {
+	margin-top: 10px;
+	padding: 10px 14px;
+	border-radius: 3px;
+	font-size: 14px;
+}
+
+.grinpay-message:empty {
+	display: none;
+}
+
+.grinpay-message--success {
+	background: #edfaef;
+	border-left: 4px solid #00a32a;
+	color: #1a6130;
+}
+
+.grinpay-message--error {
+	background: #fcf0f1;
+	border-left: 4px solid #d63638;
+	color: #8a1f1f;
+}
+
+/* ── Expiry countdown ────────────────────────────────────────────────────── */
+
+.grinpay-expiry {
+	margin-top: 10px;
+	font-size: 13px;
+	color: #3c434a;
+}
+
+.grinpay-expiry strong {
+	font-family: monospace;
+	font-size: 15px;
+}
+
+/* ── Status banner (full-width, appears after submit or poll) ────────────── */
+
+.grinpay-status-banner {
+	padding: 12px 18px;
+	border-radius: 3px;
+	margin-top: 16px;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.grinpay-status-banner.grinpay-hidden {
+	display: none;
+}
+
+.grinpay-status-banner--success {
+	background: #edfaef;
+	border-left: 4px solid #00a32a;
+	color: #1a6130;
+}
+
+.grinpay-status-banner--error {
+	background: #fcf0f1;
+	border-left: 4px solid #d63638;
+	color: #8a1f1f;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media screen and ( max-width: 600px ) {
+	.grinpay-payment-box {
+		padding: 16px;
+	}
+
+	.grinpay-btn--submit {
+		width: 100%;
+		text-align: center;
+	}
+}

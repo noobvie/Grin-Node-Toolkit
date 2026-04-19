@@ -47,15 +47,29 @@ a:hover { text-decoration: underline; }
 
 /* ── Header ───────────────────────────────────────────────────────────────── */
 header {
-  padding: 1.2rem 0;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 1000;
+  padding: .65rem 0;
   border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
 }
+body { padding-top: 3.6rem; }
+/* offset anchor jumps so sections don't hide behind the fixed header */
+section[id] { scroll-margin-top: 3.8rem; }
+
 .header-inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: .6rem;
+  gap: .5rem;
+}
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  flex-wrap: wrap;
 }
 .site-title {
   font-size: 1.4rem;
@@ -63,22 +77,98 @@ header {
   color: var(--accent);
   font-family: var(--font-mono);
   letter-spacing: .02em;
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
 }
 .site-title span { color: var(--grin-yellow); }
+.site-logo { width: 26px; height: 26px; flex-shrink: 0; }
 
-/* ── Theme switcher ───────────────────────────────────────────────────────── */
-.theme-switcher { display: flex; gap: .4rem; align-items: center; }
-.theme-btn {
+/* Network badge — higher specificity beats inherited .site-title color */
+.site-title .net-badge {
+  margin-left: .5rem;
+  font-size: .6rem;
+  font-weight: 700;
+  padding: .15rem .4rem;
+  border-radius: var(--radius);
+  vertical-align: middle;
+  letter-spacing: .05em;
+  background: var(--accent);
+  color: #000;
+}
+
+/* ── Header nav pills ─────────────────────────────────────────────────────── */
+.header-nav { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+.header-nav-pill {
+  font-size: .75rem;
+  padding: .22rem .6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background .15s, color .15s, border-color .15s;
+  line-height: 1.5;
+}
+.header-nav-pill:hover {
+  background: var(--accent);
+  color: var(--btn-text);
+  border-color: var(--accent);
+}
+
+/* ── Theme picker (paint icon + dropdown) ─────────────────────────────────── */
+.theme-picker { position: relative; }
+.theme-picker-btn {
   background: var(--bg-card);
   border: 1px solid var(--border);
   color: var(--text-dim);
-  padding: .3rem .65rem;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color .15s, color .15s;
+}
+.theme-picker-btn:hover,
+.theme-picker-btn.open {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.theme-dropdown {
+  position: absolute;
+  top: calc(100% + .35rem);
+  right: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+  padding: .35rem;
+  min-width: 110px;
+  z-index: 100;
+}
+.theme-dropdown[hidden] { display: none; }
+.theme-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  padding: .35rem .7rem;
   border-radius: var(--radius);
   cursor: pointer;
   font-size: .8rem;
+  text-align: left;
+  white-space: nowrap;
   transition: border-color .15s, color .15s;
 }
-.theme-btn:hover, .theme-btn.active {
+.theme-btn:hover,
+.theme-btn.active {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -101,6 +191,7 @@ header {
 }
 .stat-label { font-size: .72rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
 .stat-value { font-size: 1.1rem; font-weight: 700; color: var(--accent); margin-top: .1rem; }
+.stat-value--warn { color: var(--warn-color) !important; }
 
 /* ── Section headings ─────────────────────────────────────────────────────── */
 section { padding: 2rem 0 1rem; }
@@ -111,7 +202,33 @@ h2 {
   margin-bottom: 1rem;
   font-family: var(--font-mono);
 }
+h2.section-hero {
+  font-size: 1.5rem;
+  letter-spacing: .03em;
+  border-left: 3px solid var(--accent);
+  padding-left: .65rem;
+  text-shadow: 0 0 18px var(--accent);
+}
 h3 { font-size: 1rem; font-weight: 600; margin-bottom: .6rem; }
+
+/* ── Node status list (How It Works) ─────────────────────────────────────── */
+.node-status-list {
+  margin: .55rem 0 .35rem;
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+}
+.node-item {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-family: var(--font-mono);
+  font-size: .82rem;
+}
+.node-item code { font-size: .82rem; }
+.node-ok  { color: var(--ok-color); }
+.node-err { color: var(--error-color); }
+.node-ms  { color: var(--text-dim); font-size: .75rem; }
 
 /* ── Card ─────────────────────────────────────────────────────────────────── */
 .card {
@@ -125,7 +242,7 @@ h3 { font-size: 1rem; font-weight: 600; margin-bottom: .6rem; }
 /* ── Form elements ────────────────────────────────────────────────────────── */
 label { font-size: .85rem; color: var(--text-dim); display: block; margin-bottom: .35rem; }
 
-input[type="text"], textarea {
+input[type="text"], input[type="number"], textarea {
   width: 100%;
   background: var(--input-bg);
   border: 1px solid var(--input-border);
@@ -136,10 +253,11 @@ input[type="text"], textarea {
   font-size: .9rem;
   transition: border-color .15s;
 }
-input[type="text"]:focus, textarea:focus {
+input[type="text"]:focus, input[type="number"]:focus, textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
+input[type="number"] { max-width: 200px; }
 textarea { resize: vertical; min-height: 100px; }
 
 /* ── Buttons ──────────────────────────────────────────────────────────────── */
@@ -230,19 +348,102 @@ textarea { resize: vertical; min-height: 100px; }
 .countdown-label { font-size: .8rem; color: var(--text-dim); }
 
 /* ── Donate section ───────────────────────────────────────────────────────── */
-.donate-card { display: grid; gap: 1rem; }
-.donate-addr-row {
-  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+
+/* Underline-style tab bar (claim + donate sections) */
+.donate-tabs,
+.claim-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1.25rem;
+  border-bottom: 2px solid var(--border);
+  flex-wrap: wrap;
 }
-.donate-addr {
+.claim-tabs { margin-bottom: 4px; }
+
+.donate-tab-btn,
+.claim-tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  padding: .6rem 1rem;
+  font-size: .88rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: color .15s, border-color .15s;
+  white-space: nowrap;
+}
+.donate-tab-btn:hover,
+.claim-tab-btn:hover  { color: var(--accent); }
+.donate-tab-btn.active,
+.claim-tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Donate + claim panes — CSS class toggled by JS */
+.donate-pane,
+.claim-pane { display: none; }
+.donate-pane.active,
+.claim-pane.active { display: block; }
+
+/* cmd-box — address / command display */
+.cmd-box {
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .6rem 1rem;
   font-family: var(--font-mono);
-  font-size: .85rem;
+  font-size: .82rem;
   word-break: break-all;
-  flex: 1;
   color: var(--accent);
 }
-.donate-qr { margin-top: .6rem; }
-.donate-qr img { max-width: 140px; border: 3px solid var(--bg-card2); border-radius: 4px; }
+
+/* Amount preset buttons */
+.amount-grid { display: flex; flex-wrap: wrap; gap: .5rem; margin: .75rem 0; }
+.amount-btn {
+  padding: .45rem 1.1rem;
+  border: 2px solid var(--border);
+  border-radius: 50px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: .85rem;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: border-color .15s, color .15s, background .15s;
+}
+.amount-btn:hover  { border-color: var(--accent); color: var(--accent); }
+.amount-btn.active { border-color: var(--accent); color: var(--accent);
+                     background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+/* Step label inside donate cards */
+.donate-step-label {
+  font-size: .72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+  margin-bottom: .35rem;
+  margin-top: .6rem;
+}
+
+/* Wallet status badge */
+#donate-wallet-status {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  font-size: .78rem;
+  font-weight: 700;
+  padding: .25rem .75rem;
+  border-radius: 50px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-dim);
+  transition: color .2s, border-color .2s, background .2s;
+}
+#donate-wallet-status.ok    { border-color: var(--ok-color);    color: var(--ok-color);    background: rgba(0,255,65,.06); }
+#donate-wallet-status.error { border-color: var(--error-color); color: var(--error-color); background: rgba(255,68,68,.06); }
+.ws-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
 
 /* ── How it works ─────────────────────────────────────────────────────────── */
 .tabs { display: flex; gap: .4rem; margin-bottom: 1rem; flex-wrap: wrap; }
@@ -311,7 +512,52 @@ footer a:hover { color: var(--accent); }
 
 /* ── Mobile ───────────────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
-  .header-inner { flex-direction: column; align-items: flex-start; }
-  .stats-bar { gap: .6rem; }
-  .stat-item { min-width: 110px; }
+  .stats-bar { gap: .5rem; }
+  .stat-item { min-width: 90px; padding: .35rem .7rem; }
+  .stat-label { font-size: .72rem; }
+  .stat-value { font-size: 1rem; }
+}
+
+/* ── Phone (≤480px) — single-row header, compact stats, scrollable tabs ──── */
+@media (max-width: 480px) {
+  /* Hide nav pills — page is short enough to scroll; title + theme-picker stay */
+  .header-nav { display: none; }
+
+  /* Header is now single-row → reduce padding-top */
+  body { padding-top: 3rem; }
+  section[id] { scroll-margin-top: 3.2rem; }
+
+  /* Stats: 2-column flex grid */
+  .stat-item { flex: 1 1 calc(50% - .5rem); min-width: 0; }
+
+  /* Tabs: horizontal scroll instead of wrapping — preserves chrome in all themes */
+  .donate-tabs,
+  .claim-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .donate-tabs::-webkit-scrollbar,
+  .claim-tabs::-webkit-scrollbar { display: none; }
+
+  .donate-tab-btn,
+  .claim-tab-btn { white-space: nowrap; flex-shrink: 0; font-size: .78rem; padding: .28rem .7rem; }
+
+  /* Amount grid: 2 per row */
+  .amount-grid { gap: .4rem; }
+  .amount-btn { flex: 1 1 calc(50% - .4rem); text-align: center; }
+
+  /* Slatepack + cmd boxes: prevent horizontal overflow */
+  .slatepack-box,
+  .cmd-box { font-size: .72rem; }
+
+  /* How-steps code snippets: allow break */
+  .how-steps code { word-break: break-all; }
+
+  /* iOS: prevent auto-zoom on input focus (requires font-size ≥ 16px) */
+  input[type="text"], input[type="number"], textarea { font-size: 1rem; }
+
+  /* Touch target: theme-picker button must be ≥ 44×44px */
+  .theme-picker-btn { width: 2.75rem; height: 2.75rem; }
 }

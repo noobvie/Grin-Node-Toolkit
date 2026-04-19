@@ -1,104 +1,397 @@
 /* win98.css — Windows 98 classic UI theme */
 :root {
   --bg-body:      #008080;
-  --bg-card:      #c0c0c0;
-  --bg-card2:     #d4d0c8;
+  --bg-card:      #d4d0c8;
+  --bg-card2:     #c0c0c0;
   --text:         #000000;
-  --text-dim:     #444444;
+  --text-dim:     #333333;
   --accent:       #000080;
   --accent2:      #0000aa;
   --border:       #808080;
-  --btn-bg:       #c0c0c0;
+  --btn-bg:       #d4d0c8;
   --btn-text:     #000000;
-  --btn-hover:    #d4d0c8;
+  --btn-hover:    #e0dcd8;
   --input-bg:     #ffffff;
   --input-border: #808080;
-  --error-color:  #cc0000;
+  --error-color:  #b00000;
   --ok-color:     #006400;
-  --warn-color:   #cc6600;
+  --warn-color:   #996600;
+  --grin-yellow:  #f2c94c;
   --font-mono:    'Courier New', Courier, monospace;
   --font-sans:    'Tahoma', 'MS Sans Serif', Arial, sans-serif;
   --radius:       0px;
   --shadow:       none;
 }
 
-/* Window chrome */
-body { font-size: 13px; }
-
-.card {
-  border: 2px solid;
-  border-color: #ffffff #808080 #808080 #ffffff;
-  box-shadow: 2px 2px 0 #000;
+/* ── Base ──────────────────────────────────────────────────────────────────── */
+body {
+  font-size: 13px;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: none;
+  font-smooth: never;
 }
 
-.stat-item {
-  border: 2px solid;
-  border-color: #808080 #ffffff #ffffff #808080;
+/* ── Header — silver taskbar style ────────────────────────────────────────── */
+header {
+  background: #d4d0c8;
+  border-bottom: 2px solid #808080;
+  box-shadow: 0 2px 0 #ffffff;
 }
 
-/* Title bar style for site title */
+/* ── Site title — title bar gradient ──────────────────────────────────────── */
 .site-title {
-  font-size: 1rem;
+  font-size: .9rem;
+  font-weight: bold;
   color: #ffffff;
   background: linear-gradient(to right, #000080, #1084d0);
-  padding: 3px 6px;
+  padding: 3px 8px 3px 5px;
   font-family: var(--font-sans);
+  letter-spacing: 0;
+  gap: 5px;
 }
 .site-title span { color: #f2c94c; }
 
-/* Buttons — raised bevel */
-.btn {
-  background: #c0c0c0;
-  color: #000;
+/* Network badge — yellow label on Win98 silver, square corners */
+.site-title .net-badge {
+  background: var(--grin-yellow);
+  color: #000000;
+  border-radius: 0;
+  border: 1px solid #808080;
+}
+
+/* ── Nav pills — Win98 push-buttons ───────────────────────────────────────── */
+.header-nav-pill {
+  background: #d4d0c8;
   border: 2px solid;
   border-color: #ffffff #808080 #808080 #ffffff;
-  box-shadow: 1px 1px 0 #000;
+  color: #000000;
+  border-radius: 0;
   font-family: var(--font-sans);
-  font-size: .85rem;
-  font-weight: normal;
+  font-size: .78rem;
+  padding: .18rem .65rem;
+  box-shadow: 1px 1px 0 #000000;
+  transition: none;
+}
+.header-nav-pill:hover {
+  background: #000080;
+  color: #ffffff;
+  border-color: #000080;
+  text-decoration: none;
+  box-shadow: none;
+}
+
+/* ── Theme picker ──────────────────────────────────────────────────────────── */
+.theme-picker-btn {
+  background: #d4d0c8;
+  border: 2px solid;
+  border-color: #ffffff #808080 #808080 #ffffff;
+  border-radius: 0;
+  box-shadow: 1px 1px 0 #000;
+  color: #000;
+  width: 2rem;
+  height: 2rem;
+}
+.theme-picker-btn:hover,
+.theme-picker-btn.open {
+  border-color: #808080 #ffffff #ffffff #808080;
+  box-shadow: none;
+  color: #000080;
+}
+.theme-dropdown {
+  background: #d4d0c8;
+  border: 2px solid;
+  border-color: #ffffff #808080 #808080 #ffffff;
+  border-radius: 0;
+  box-shadow: 4px 4px 0 #000000;
+  padding: .25rem;
+}
+.theme-btn {
+  font-family: var(--font-sans);
+  font-size: .8rem;
+  color: #000000;
+  border-radius: 0;
+  border: 1px solid transparent;
+  padding: .3rem .7rem;
+}
+.theme-btn.active,
+.theme-btn:hover {
+  background: #000080;
+  color: #ffffff;
+  border-color: #000080;
+}
+
+/* ── Stats bar — sunken tray ───────────────────────────────────────────────── */
+.stats-bar {
+  background: #c0c0c0;
+  border-top: 2px solid #ffffff;
+  border-bottom: 2px solid #808080;
+  padding: .4rem .5rem;
+  gap: .5rem;
+}
+.stat-item {
+  background: #c0c0c0;
+  border: 2px solid;
+  border-color: #808080 #ffffff #ffffff #808080;
+  border-radius: 0;
+  padding: .4rem .9rem;
+}
+.stat-label { color: #333333; font-family: var(--font-sans); }
+.stat-value { color: #000080; font-family: var(--font-sans); }
+.stat-value--warn { color: #996600 !important; }
+
+/* ── Section headings — title bar style ───────────────────────────────────── */
+h2 {
+  color: #000080;
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  text-shadow: none;
+}
+h2.section-hero {
+  color: #ffffff;
+  background: linear-gradient(to right, #000080, #1084d0);
+  padding: 3px 10px;
+  border-left: none;
+  text-shadow: none;
+  font-size: .95rem;
+  font-weight: bold;
+  letter-spacing: 0;
+}
+h3 { font-family: var(--font-sans); color: #000000; font-size: .9rem; }
+
+/* ── Cards — raised window chrome ─────────────────────────────────────────── */
+.card {
+  background: #d4d0c8;
+  border: 2px solid;
+  border-color: #ffffff #808080 #808080 #ffffff;
+  box-shadow: 2px 2px 0 #000000;
   border-radius: 0;
 }
-.btn:hover { background: #d4d0c8; }
+
+/* ── Tabs (donate + claim) — raised Win98 tabs ────────────────────────────── */
+.donate-tabs,
+.claim-tabs {
+  border-bottom: 2px solid #808080;
+  gap: 2px;
+  padding: 4px 0 0 4px;
+  background: #c0c0c0;
+  margin-bottom: 0;
+}
+.donate-tab-btn,
+.claim-tab-btn {
+  position: relative;
+  background: #c0c0c0;
+  border: 2px solid;
+  border-color: #ffffff #808080 transparent #ffffff;
+  border-bottom: none;
+  margin-bottom: -2px;
+  padding: .28rem .85rem;
+  font-family: var(--font-sans);
+  font-size: .8rem;
+  font-weight: normal;
+  color: #000000;
+  border-radius: 2px 2px 0 0;
+  transition: none;
+}
+.donate-tab-btn.active,
+.claim-tab-btn.active {
+  background: #d4d0c8;
+  z-index: 2;
+  color: #000000;
+  font-weight: bold;
+  padding-bottom: calc(.28rem + 2px);
+  border-bottom: 2px solid #d4d0c8;
+}
+.donate-tab-btn:hover,
+.claim-tab-btn:hover { background: #d4d0c8; color: #000080; }
+
+/* ── "How it works" tabs ──────────────────────────────────────────────────── */
+.tabs { gap: 4px; margin-bottom: .75rem; }
+.tab-btn {
+  background: #d4d0c8;
+  border: 2px solid;
+  border-color: #ffffff #808080 #808080 #ffffff;
+  color: #000000;
+  border-radius: 0;
+  font-family: var(--font-sans);
+  font-size: .8rem;
+  box-shadow: 1px 1px 0 #000;
+  transition: none;
+}
+.tab-btn.active,
+.tab-btn:hover {
+  background: #000080;
+  color: #ffffff;
+  border-color: #000080;
+  box-shadow: none;
+}
+
+/* ── Buttons — raised bevel ────────────────────────────────────────────────── */
+.btn {
+  background: #d4d0c8;
+  color: #000000;
+  border: 2px solid;
+  border-color: #ffffff #808080 #808080 #ffffff;
+  box-shadow: 1px 1px 0 #000000;
+  font-family: var(--font-sans);
+  font-size: .82rem;
+  font-weight: normal;
+  border-radius: 0;
+  min-width: 75px;
+  transition: none;
+}
+.btn:hover { background: #e0dcd8; }
 .btn:active {
   border-color: #808080 #ffffff #ffffff #808080;
   box-shadow: none;
   transform: translate(1px, 1px);
 }
 .btn-outline {
-  background: #c0c0c0;
+  background: #d4d0c8;
   border-color: #ffffff #808080 #808080 #ffffff;
   color: #000080;
 }
+.btn-outline:hover {
+  background: #000080;
+  color: #ffffff;
+  border-color: #000080;
+}
 
-/* Inputs */
-input[type="text"], textarea {
+/* ── Amount preset buttons ────────────────────────────────────────────────── */
+.amount-btn {
+  background: #d4d0c8;
+  border: 2px solid;
+  border-color: #ffffff #808080 #808080 #ffffff;
+  color: #000000;
+  border-radius: 0;
+  font-family: var(--font-sans);
+  font-size: .8rem;
+  font-weight: normal;
+  box-shadow: 1px 1px 0 #000;
+  transition: none;
+}
+.amount-btn:hover,
+.amount-btn.active {
+  background: #000080;
+  color: #ffffff;
+  border-color: #000080;
+  box-shadow: none;
+}
+
+/* ── Inputs ────────────────────────────────────────────────────────────────── */
+input[type="text"], input[type="number"], textarea {
   border: 2px inset #808080;
-  background: #fff;
-  color: #000;
+  background: #ffffff;
+  color: #000000;
   font-family: var(--font-mono);
   border-radius: 0;
 }
-input[type="text"]:focus, textarea:focus {
-  outline: 1px dotted #000;
+input[type="text"]:focus,
+input[type="number"]:focus,
+textarea:focus {
+  outline: 1px dotted #000000;
   border-color: #808080;
 }
 
-/* Slatepack box */
+/* ── Slatepack / cmd boxes ─────────────────────────────────────────────────── */
 .slatepack-box {
-  background: #fff;
+  background: #ffffff;
   border: 2px inset #808080;
   color: #000080;
+  border-radius: 0;
+}
+.cmd-box {
+  background: #ffffff;
+  border: 2px inset #808080;
+  color: #000080;
+  border-radius: 0;
 }
 
-/* Headers */
-h2 { color: #000080; font-family: var(--font-sans); }
-.step-num { background: #000080; color: #fff; border-radius: 0; }
-.step-title { color: #000; }
+/* ── Step numbers ──────────────────────────────────────────────────────────── */
+.step-num {
+  background: #000080;
+  color: #ffffff;
+  border-radius: 0;
+  border: 1px solid #ffffff;
+}
+.step-title { color: #000000; }
+
+/* ── Info box ──────────────────────────────────────────────────────────────── */
+.info-box {
+  background: #c0c0c0;
+  border-left: 3px solid #000080;
+  border-radius: 0;
+  color: #333333;
+}
+.info-box code {
+  background: #ffffff;
+  border: 1px inset #808080;
+  color: #000000;
+  border-radius: 0;
+}
+
+/* ── How steps ─────────────────────────────────────────────────────────────── */
+.how-steps li { border-bottom-color: #b0acaa; }
+.how-steps li::before { color: #000080; font-family: var(--font-sans); }
+.how-steps code {
+  background: #ffffff;
+  color: #000000;
+  border: 1px inset #808080;
+  border-radius: 0;
+}
+
+/* ── Node status list ──────────────────────────────────────────────────────── */
+.node-ok  { color: #006400; }
+.node-err { color: #cc0000; }
+
+/* ── Success / wallet status ───────────────────────────────────────────────── */
+.success-box {
+  background: #d4d0c8;
+  border: 2px solid;
+  border-color: #ffffff #808080 #808080 #ffffff;
+  border-radius: 0;
+}
+#donate-wallet-status {
+  background: #c0c0c0;
+  border: 2px solid;
+  border-color: #808080 #ffffff #ffffff #808080;
+  border-radius: 0;
+  font-family: var(--font-sans);
+  font-size: .78rem;
+}
+#donate-wallet-status.ok    { color: #006400; }
+#donate-wallet-status.error { color: #cc0000; }
+
+/* ── Links ─────────────────────────────────────────────────────────────────── */
 a { color: #000080; }
-.stat-value { color: #000080; }
-.theme-btn.active, .theme-btn:hover { border-color: #000080; color: #000080; }
-.tab-btn.active, .tab-btn:hover { border-color: #000080; color: #000080; }
-.donate-addr { color: #000080; }
-.how-steps li::before { color: #000080; }
-.how-steps code { background: #d4d0c8; color: #000; border: 1px inset #808080; }
-.info-box { border-left-color: #000080; background: #d4d0c8; color: #444; }
+a:hover { color: #0000cc; text-decoration: underline; }
+
+/* ── Footer ────────────────────────────────────────────────────────────────── */
+footer {
+  border-top: 2px solid #808080;
+  background: #d4d0c8;
+  color: #333333;
+}
+footer a { color: #000080; }
+
+/* ── Cap warning ───────────────────────────────────────────────────────────── */
+#claim-cap-warning {
+  background: #fffff0 !important;
+  border: 1px solid #808080 !important;
+  color: #996600 !important;
+  border-radius: 0 !important;
+}
+
+/* ── Countdown ─────────────────────────────────────────────────────────────── */
+.countdown { color: #cc6600; font-family: var(--font-mono); }
+
+/* ── Mobile: keep win98 tab chrome intact when tabs scroll horizontally ────── */
+@media (max-width: 480px) {
+  .donate-tabs,
+  .claim-tabs {
+    background: #c0c0c0;
+    border-bottom: 2px solid #808080;
+    padding-bottom: 0;
+  }
+  .donate-tab-btn,
+  .claim-tab-btn { font-size: .75rem; padding: .25rem .65rem; }
+}

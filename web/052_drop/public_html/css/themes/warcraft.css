@@ -4,7 +4,7 @@
   --bg-card:      #1a0a2e;
   --bg-card2:     #130820;
   --text:         #e8d5a3;
-  --text-dim:     #907040;
+  --text-dim:     #b08050;
   --accent:       #c8a951;
   --accent2:      #a88530;
   --border:       #3a1e5a;
@@ -16,6 +16,8 @@
   --error-color:  #ff6666;
   --ok-color:     #c8a951;
   --warn-color:   #ffaa33;
+  --grin-yellow:  #c8a951;
+  --radius:       4px;
   --glow:         rgba(200,169,81,.35);
   --font-mono:    'Courier New', Courier, monospace;
   --font-sans:    Georgia, 'Times New Roman', serif;

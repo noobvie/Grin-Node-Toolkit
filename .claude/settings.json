@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit -m *)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git status*)",
+      "Bash(bash -n scripts/*.sh)",
+      "Bash(bash -n scripts/lib/*.sh)",
+      "Bash(grep -n * scripts/*.sh)",
+      "Bash(grep -n * scripts/lib/*.sh)",
+      "Bash(grep -rn * scripts/)",
+      "Bash(python3 -m json.tool)"
+    ]
+  }
+}

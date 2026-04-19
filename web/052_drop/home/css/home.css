@@ -1,0 +1,165 @@
+/* home.css — Unified Grin Drop homepage */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Dark theme (default) ─────────────────────────────────────────────────── */
+:root {
+  --bg:          #0d1117;
+  --card-bg:     #161b22;
+  --border:      #30363d;
+  --text:        #c9d1d9;
+  --text-dim:    #8b949e;
+  --accent:      #f2c94c;
+  --accent-dim:  #d4a900;
+  --testnet-clr: #56ccf2;
+  --mainnet-clr: #f2994a;
+  --danger:      #eb5757;
+  --ok:          #6fcf97;
+  --font:        "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono:        "Cascadia Code", "Fira Code", "Consolas", monospace;
+}
+
+/* ── Light theme ─────────────────────────────────────────────────────────── */
+:root[data-theme="light"] {
+  --bg:          #ffffff;
+  --card-bg:     #f6f8fa;
+  --border:      #d0d7de;
+  --text:        #1f2328;
+  --text-dim:    #656d76;
+  --accent:      #0969da;
+  --accent-dim:  #0550ae;
+  --testnet-clr: #0969da;
+  --mainnet-clr: #cf4b00;
+  --danger:      #d1242f;
+  --ok:          #1a7f37;
+  --font:        "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono:        "Cascadia Code", "Fira Code", "Consolas", monospace;
+}
+
+body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.65; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code { font-family: var(--mono); font-size: .85em; background: rgba(128,128,128,.1);
+       padding: .1em .35em; border-radius: 3px; }
+
+/* ── Testing phase banner ─────────────────────────────────────────────────── */
+.test-banner {
+  display: block; width: 100%;
+  background: #1a3a5c; color: #e0e0e0;
+  text-align: center;
+  padding: .55rem 1rem; font-size: .85rem; letter-spacing: .02em;
+}
+.test-banner a { color: #74b9ff; text-decoration: underline; }
+[data-theme="light"] .test-banner { background: #dbeafe; color: #1e3a5f; border-bottom: 1px solid #bfdbfe; }
+[data-theme="light"] .test-banner a { color: #1d4ed8; }
+
+.container { max-width: 900px; margin: 0 auto; padding: 0 1.2rem; }
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+header { border-bottom: 1px solid var(--border); padding: 1.1rem 0; margin-bottom: 2rem; }
+.header-inner { display: flex; align-items: center; justify-content: space-between; }
+.site-logo { width: 26px; height: 26px; flex-shrink: 0; }
+.site-title { font-size: 1.25rem; font-weight: 700; color: var(--accent); letter-spacing: .02em;
+              font-family: var(--mono); display: inline-flex; align-items: center; gap: .35rem; }
+.site-title span { color: var(--text-dim); }
+
+/* ── Theme picker ────────────────────────────────────────────────────────── */
+.theme-picker { position: relative; }
+.theme-picker-btn {
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-dim); cursor: pointer; font-size: 1.1rem;
+  padding: .3rem .55rem; line-height: 1;
+  transition: border-color .15s, color .15s;
+}
+.theme-picker-btn:hover { border-color: var(--accent); color: var(--accent); }
+.theme-dropdown {
+  position: absolute; right: 0; top: calc(100% + .4rem);
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px;
+  min-width: 110px; z-index: 100; overflow: hidden;
+}
+.theme-dropdown[hidden] { display: none; }
+.theme-opt {
+  display: block; width: 100%; padding: .5rem .9rem; text-align: left;
+  background: none; border: none; color: var(--text); cursor: pointer; font-size: .85rem;
+  font-family: var(--font);
+}
+.theme-opt:hover { background: var(--accent); color: var(--bg); }
+.theme-opt.active { color: var(--accent); font-weight: 600; }
+
+/* ── Hero ────────────────────────────────────────────────────────────────── */
+.hero { text-align: center; padding: 1.5rem 0 2rem; }
+.hero h1 { font-size: 2rem; font-weight: 700; color: var(--accent); }
+.hero p { color: var(--text-dim); margin-top: .5rem; font-size: 1rem; }
+
+/* ── Network cards ───────────────────────────────────────────────────────── */
+.network-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2.5rem; }
+@media (max-width: 580px) { .network-grid { grid-template-columns: 1fr; } }
+
+.network-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+                padding: 1.4rem; }
+.network-card.testnet { border-top: 3px solid var(--testnet-clr); }
+.network-card.mainnet { border-top: 3px solid var(--mainnet-clr); }
+
+.net-label { font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+             margin-bottom: .5rem; }
+.net-label.testnet { color: var(--testnet-clr); }
+.net-label.mainnet { color: var(--mainnet-clr); }
+
+.net-status { font-size: .8rem; margin-bottom: .8rem; display: flex; align-items: center; gap: .35rem; }
+.dot-on      { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.dot-off     { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+.dot-unknown { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
+
+/* ── Stat list (per-network card) ───────────────────────────────────────── */
+.stat-list { display: flex; flex-direction: column; margin: .9rem 0 1.1rem; }
+.stat-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: .38rem 0; border-bottom: 1px solid var(--border);
+}
+.stat-row:last-child { border-bottom: none; }
+.stat-lbl { font-size: .82rem; color: var(--text-dim); }
+.stat-row .val { font-size: .95rem; font-weight: 700; color: var(--text); font-family: var(--mono); }
+
+.btn-visit { display: inline-block; padding: .55rem 1.2rem; border-radius: 4px; font-size: .9rem;
+             font-weight: 600; text-decoration: none; transition: opacity .15s; }
+.btn-visit:hover { opacity: .85; text-decoration: none; }
+.btn-visit.testnet { background: var(--testnet-clr); color: #000; }
+.btn-visit.mainnet { background: var(--mainnet-clr); color: #000; }
+
+/* ── Combined totals ─────────────────────────────────────────────────────── */
+.totals-section { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+                  padding: 1.4rem; margin-bottom: 2.5rem; }
+.totals-section h2 { font-size: 1rem; color: var(--text-dim); margin-bottom: .9rem; font-weight: 600; }
+.totals-list { display: flex; flex-direction: column; }
+.totals-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: .38rem 0; border-bottom: 1px solid var(--border);
+}
+.totals-row:last-child { border-bottom: none; }
+.totals-lbl { font-size: .85rem; color: var(--text-dim); }
+.totals-row .val { font-size: 1.05rem; font-weight: 700; color: var(--accent); font-family: var(--mono); }
+
+/* ── About / Why section ─────────────────────────────────────────────────── */
+.about-section { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+                 padding: 1.4rem; margin-bottom: 2rem; font-size: .9rem; }
+.about-section h2 { font-size: 1rem; color: var(--text-dim); margin-bottom: .8rem; font-weight: 600; }
+.about-section p { margin-bottom: .75rem; color: var(--text-dim); line-height: 1.75; }
+.about-section p:last-child { margin-bottom: 0; }
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+footer { border-top: 1px solid var(--border); padding: 1.2rem 0; margin-top: 2rem;
+         text-align: center; font-size: .82rem; color: var(--text-dim); }
+footer a { color: var(--text-dim); }
+footer a:hover { color: var(--accent); }
+.footer-keywords { font-size: .72rem; color: var(--text-dim); opacity: .5; margin-top: .4rem; }
+
+/* ── Last updated ────────────────────────────────────────────────────────── */
+.last-updated { text-align: right; font-size: .75rem; color: var(--text-dim); margin-top: .6rem; }
+
+/* ── Mobile ──────────────────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .theme-picker-btn { width: 2.75rem; height: 2.75rem; font-size: 1.2rem; }
+  .hero h1 { font-size: 1.5rem; }
+}

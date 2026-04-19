@@ -7,12 +7,12 @@
   <title>Grin Drop — Free GRIN Coins</title>
   <meta name="description" content="Claim free GRIN or donate to keep the drop running. No sign-up required.">
   <meta name="keywords" content="grin faucet, testnet grin, grin testnet faucet, free grin coins, grin cryptocurrency testnet, grin-wallet test, slatepack tutorial">
-  <link rel="canonical" href=""><!-- set at deploy time -->
-
   <!-- Open Graph -->
   <meta property="og:title"       content="Grin Drop — Free GRIN Coins">
   <meta property="og:description" content="Claim free GRIN or donate to keep the drop running. No sign-up required.">
   <meta property="og:type"        content="website">
+  <meta property="og:image"       content="__SITE_URL__/img/grin-logo.svg">
+  <link rel="icon" href="img/grin-logo-lime.svg">
 
   <!-- JSON-LD -->
   <script type="application/ld+json">
@@ -26,8 +26,15 @@
   }
   </script>
 
-  <link rel="stylesheet" href="/css/faucet.css">
-  <link rel="stylesheet" id="theme-css" href="/css/themes/matrix.css">
+  <link rel="stylesheet" href="css/faucet.css">
+  <link rel="stylesheet" id="theme-css" href="">
+  <script>
+  (function(){
+    var t=localStorage.getItem('grin-faucet-theme')||'matrix';
+    var m={matrix:'css/themes/matrix.css',warcraft:'css/themes/warcraft.css',win98:'css/themes/win98.css',light:'css/themes/light.css',dark:'css/themes/dark.css',cute:'css/themes/cute.css'};
+    document.getElementById('theme-css').href=m[t]||m.matrix;
+  })();
+  </script>
 </head>
 
 <body class="theme-matrix">
@@ -46,14 +53,25 @@
 <header>
   <div class="container">
     <div class="header-inner">
-      <div class="site-title">Grin Drop <span>ツ</span></div>
-      <div class="theme-switcher" role="navigation" aria-label="Theme selector">
-        <button class="theme-btn" data-theme="matrix"  title="Matrix theme">Matrix</button>
-        <button class="theme-btn" data-theme="warcraft" title="Warcraft Dark theme">Warcraft</button>
-        <button class="theme-btn" data-theme="win98"   title="Windows 98 theme">Win98</button>
-        <button class="theme-btn" data-theme="light"   title="Light theme">Light</button>
-        <button class="theme-btn" data-theme="dark"    title="Dark theme">Dark</button>
-        <button class="theme-btn" data-theme="cute"    title="Cute theme">Cute</button>
+      <div class="header-left">
+        <div class="site-title"><img src="img/grin-logo-lime.svg" alt="" class="site-logo" width="26" height="26">Grin Drop <span>ツ</span></div>
+        <nav class="header-nav" aria-label="Page navigation">
+          <a class="header-nav-pill" href="/">← Home</a>
+          <a class="header-nav-pill" href="#section-giveaway">Claim</a>
+          <a class="header-nav-pill" href="#section-donation">Donate</a>
+          <a class="header-nav-pill" href="#section-how-it-works">How it works</a>
+        </nav>
+      </div>
+      <div class="theme-picker" role="navigation" aria-label="Theme selector">
+        <button class="theme-picker-btn" id="theme-toggle-btn" title="Switch theme" aria-haspopup="true" aria-expanded="false">&#x1F3A8;</button>
+        <div class="theme-dropdown" id="theme-dropdown" hidden>
+          <button class="theme-btn" data-theme="matrix"  title="Matrix theme">Matrix</button>
+          <button class="theme-btn" data-theme="warcraft" title="Warcraft Dark theme">Warcraft</button>
+          <button class="theme-btn" data-theme="win98"   title="Windows 98 theme">Win98</button>
+          <button class="theme-btn" data-theme="light"   title="Light theme">Light</button>
+          <button class="theme-btn" data-theme="dark"    title="Dark theme">Dark</button>
+          <button class="theme-btn" data-theme="cute"    title="Cute theme">Cute</button>
+        </div>
       </div>
     </div>
   </div>
@@ -71,21 +89,33 @@
       <div class="stat-value" id="stat-today">…</div>
     </div>
     <div class="stat-item">
+      <div class="stat-label">Donations Today</div>
+      <div class="stat-value" id="stat-donations-today">…</div>
+    </div>
+    <div class="stat-item">
       <div class="stat-label">Total Claims</div>
       <div class="stat-value" id="stat-total">…</div>
     </div>
-    <div class="stat-item" id="stat-item-given" style="display:none;">
-      <div class="stat-label">Total Given</div>
-      <div class="stat-value" id="stat-total-given">…</div>
-    </div>
-    <div class="stat-item" id="stat-item-received" style="display:none;">
-      <div class="stat-label">Total Received</div>
-      <div class="stat-value" id="stat-total-received">…</div>
+    <div class="stat-item">
+      <div class="stat-label">Total Donations</div>
+      <div class="stat-value" id="stat-donations-total">…</div>
     </div>
     <div class="stat-item">
       <div class="stat-label">Your Next Claim</div>
       <div class="stat-value" id="stat-next">…</div>
     </div>
+    <div class="stat-item" id="stat-item-given" style="display:none;">
+      <div class="stat-label">Total Giveaway Amount</div>
+      <div class="stat-value" id="stat-total-given">…</div>
+    </div>
+    <div class="stat-item" id="stat-item-received" style="display:none;">
+      <div class="stat-label">Total Donation Amount</div>
+      <div class="stat-value" id="stat-total-received">…</div>
+    </div>
+  </div>
+  <!-- Wallet status — covers both giveaway and donation roles -->
+  <div style="margin-top:.6rem;padding:0 .25rem;">
+    <span id="donate-wallet-status"><span class="ws-dot"></span> Checking wallet…</span>
   </div>
 </div>
 
@@ -93,18 +123,68 @@
 
   <!-- ── Claim section ──────────────────────────────────────────────────────── -->
   <section id="section-giveaway" aria-label="Claim GRIN">
-    <h2>Claim 2 GRIN</h2>
+    <h2 id="claim-title" class="section-hero">Claim free GRIN</h2>
+
+    <!-- Claim method tabs -->
+    <div class="claim-tabs" role="tablist" aria-label="Claim method">
+      <button class="claim-tab-btn active" data-pane="claim-pane-addr" role="tab">With Address</button>
+      <button class="claim-tab-btn"        data-pane="claim-pane-anon" role="tab">Without Address ✦</button>
+    </div>
+
     <div class="card">
-      <!-- Step 1 — Enter address -->
+      <!-- Cap warning — shown by JS when daily/hourly limit is reached -->
+      <div id="claim-cap-warning" style="display:none;padding:.6rem .9rem;margin-bottom:.75rem;
+           background:rgba(242,201,76,.1);border:1px solid var(--warn-color);border-radius:6px;
+           color:var(--warn-color);font-size:.85rem;"></div>
+
+      <!-- Step 1 — tabbed -->
       <div id="step-1" class="step">
-        <label for="claim-address">Your Grin Address (grin1... or tgrin1...)</label>
-        <input type="text" id="claim-address" placeholder="grin1..." autocomplete="off" spellcheck="false">
-        <p class="error-msg" id="claim-error"></p>
-        <button class="btn btn-full" id="claim-btn">Claim 2 GRIN</button>
-        <p style="margin-top:.7rem;font-size:.8rem;color:var(--text-dim);">
-          2 GRIN per address per 24 hours &nbsp;·&nbsp; No sign-up required &nbsp;·&nbsp;
-          This simulates exactly how <strong>pool mainnet withdrawals</strong> work.
-        </p>
+
+        <!-- Pane A: With Address (standard flow) -->
+        <div id="claim-pane-addr" class="claim-pane active">
+          <div class="amount-grid" id="claim-amount-grid" style="margin-bottom:.9rem;">
+            <button class="amount-btn" data-amount="0.1">0.1</button>
+            <button class="amount-btn" data-amount="0.2">0.2</button>
+            <button class="amount-btn" data-amount="0.5">0.5</button>
+            <button class="amount-btn" data-amount="1.0">1.0</button>
+            <button class="amount-btn" data-amount="custom">Custom…</button>
+          </div>
+          <div id="claim-custom-wrap" style="display:none;margin-bottom:.75rem;">
+            <input type="number" id="claim-custom-amt" min="0.001" max="0.999" step="0.001"
+                   placeholder="0.001 – 0.999" style="max-width:200px;">
+          </div>
+          <label for="claim-address" id="claim-address-label">Your Grin Address</label>
+          <input type="text" id="claim-address" placeholder="" autocomplete="off" spellcheck="false">
+          <p class="error-msg" id="claim-error"></p>
+          <button class="btn btn-full" id="claim-btn">Claim</button>
+        </div>
+
+        <!-- Pane B: Without Address (newcomer showcase) -->
+        <div id="claim-pane-anon" class="claim-pane">
+          <div class="info-box" style="margin-bottom:1rem;">
+            <strong style="color:var(--accent);">Grin's magic — receive without sharing an address</strong>
+            <p style="margin-top:.5rem;font-size:.87rem;line-height:1.75;">
+              In BTC/ETH/USDT... or other privacy cryptos, you publish a fixed address — anyone can look it up and see
+              your full transaction history. <strong>Grin works differently:</strong> the sender
+              creates the transaction first and hands you a slatepack message. You respond from
+              your wallet. <em>No address posted publicly. No balance exposed. No history linked
+              to you.</em> This is Grin's interactive model — unique in all of crypto.
+            </p>
+          </div>
+          <div class="amount-grid" id="anon-amount-grid" style="margin-bottom:.9rem;">
+            <button class="amount-btn" data-amount="0.01">0.01</button>
+            <button class="amount-btn" data-amount="0.05">0.05</button>
+            <button class="amount-btn" data-amount="0.09">0.09</button>
+            <button class="amount-btn" data-amount="custom">Custom…</button>
+          </div>
+          <div id="anon-custom-wrap" style="display:none;margin-bottom:.75rem;">
+            <input type="number" id="anon-custom-amt" min="0.001" max="0.09" step="0.001"
+                   placeholder="0.001 – 0.09" style="max-width:200px;">
+          </div>
+          <p class="error-msg" id="anon-claim-error"></p>
+          <button class="btn btn-full" id="anon-claim-btn">Claim — No Address Needed</button>
+        </div>
+
       </div>
 
       <!-- Step 2 — Copy slatepack -->
@@ -121,7 +201,7 @@
         <button class="btn btn-outline btn-sm" id="copy-slatepack-btn">Copy Slatepack</button>
 
         <div class="info-box" style="margin-top:1rem;">
-          <strong>CLI:</strong> <code>grin-wallet --floonet receive</code> → paste slatepack → press Enter → copy the response<br>
+          <strong>CLI:</strong> <code>./grin-wallet --testnet receive</code> → paste slatepack → press Enter → copy the response<br>
           <strong>Grim:</strong> Receive tab → paste slatepack → confirm → copy response
         </div>
 
@@ -155,27 +235,163 @@
 
   <!-- ── Donate section ─────────────────────────────────────────────────────── -->
   <section id="section-donation" aria-label="Donate to keep the drop running">
-    <h2>Help Keep This Drop Running</h2>
-    <div class="card">
-      <p style="margin-bottom:1rem;font-size:.9rem;color:var(--text-dim);">
-        Send GRIN to this address to contribute to the drop balance.
-        Donations appear automatically — no sign-up needed.
-      </p>
-      <div class="donate-addr-row">
-        <span class="donate-addr" id="donate-address">Loading…</span>
-        <button class="btn btn-outline btn-sm" id="copy-donate-addr-btn">Copy</button>
-      </div>
-      <div class="donate-qr" id="donate-qr">
-        <img src="/api/qr" alt="Drop wallet QR code" width="140" height="140" loading="lazy">
-      </div>
-      <p style="margin-top:.8rem;font-size:.85rem;color:var(--text-dim);">
-        Current balance: <strong id="donate-balance">…</strong>
-      </p>
+    <h2 class="section-hero">Donate to Keep This Drop Running</h2>
+
+    <!-- Tab switcher — underline style -->
+    <div class="donate-tabs" role="tablist" aria-label="Donation method">
+      <button class="donate-tab-btn active" data-pane="donate-pane-1" role="tab">1. TOR Direct</button>
+      <button class="donate-tab-btn"        data-pane="donate-pane-2" role="tab">2. Slatepack — You Send</button>
+      <button class="donate-tab-btn"        data-pane="donate-pane-3" role="tab">3. Invoice — We Request</button>
     </div>
+
+    <!-- Pane 1 — TOR Direct -->
+    <div id="donate-pane-1" class="donate-pane active">
+      <div class="card">
+        <strong>Send directly from your Grin wallet via TOR</strong>
+        <p style="font-size:.88rem;color:var(--text-dim);margin:.75rem 0;">
+          The simplest method — paste the address below into your wallet and send any amount.
+          TOR must be running. If the connection is unstable, use one of the other tabs.
+        </p>
+        <div class="donate-step-label">Our Grin Address</div>
+        <div class="cmd-box" id="donate-address">Loading…</div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem;">
+          <button class="btn btn-outline btn-sm" id="copy-donate-addr-btn">Copy Address</button>
+        </div>
+        <p style="margin-top:.8rem;font-size:.85rem;color:var(--text-dim);">
+          Current balance: <strong id="donate-balance" style="color:var(--accent);">…</strong>
+        </p>
+      </div>
+      <div class="card" style="margin-top:.8rem;background:var(--bg-card2);">
+        <strong>Quick steps</strong>
+        <ol style="font-size:.86rem;color:var(--text-dim);margin:.6rem 0;padding-left:1.2rem;line-height:2;">
+          <li>Make sure TOR is running (or built into your wallet)</li>
+          <li>In your wallet: <strong>Send → paste address above → enter amount</strong></li>
+          <li>Confirm. Done!</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- Pane 2 — Slatepack: You Send / We Receive -->
+    <div id="donate-pane-2" class="donate-pane">
+
+      <div class="card" id="donate-rcv-s1">
+        <strong>Step 1 — Choose amount &amp; generate a send slate</strong>
+        <p style="font-size:.88rem;color:var(--text-dim);margin:.75rem 0;">
+          Pick a donation amount, then run the command shown in your terminal.
+        </p>
+        <div class="amount-grid" id="donate-rcv-amount-grid">
+          <button class="amount-btn" data-amount="10">10 GRIN</button>
+          <button class="amount-btn" data-amount="50">50 GRIN</button>
+          <button class="amount-btn" data-amount="100">100 GRIN</button>
+          <button class="amount-btn" data-amount="custom">Custom…</button>
+        </div>
+        <div id="donate-rcv-custom-wrap" style="display:none;margin-bottom:.75rem;">
+          <input type="number" id="donate-rcv-custom-amt" min="1" step="0.001"
+                 placeholder="Min 1 GRIN" style="max-width:200px;">
+        </div>
+        <div class="donate-step-label">Run in your terminal</div>
+        <div class="cmd-box" id="donate-send-cmd">./grin-wallet send -m -d &lt;address&gt; &lt;amount&gt;</div>
+        <button class="btn btn-outline btn-sm" style="margin-top:.5rem;" id="donate-copy-send-cmd">Copy Command</button>
+        <div style="margin-top:1rem;">
+          <label for="donate-send-slate">Paste the output slatepack from your wallet:</label>
+          <textarea id="donate-send-slate" rows="5"
+                    placeholder="BEGINSLATEPACK...ENDSLATEPACK."
+                    style="font-family:var(--font-mono);font-size:.78rem;margin-top:.35rem;"></textarea>
+        </div>
+        <button class="btn btn-full" id="donate-receive-btn" style="margin-top:.8rem;">Process Donation →</button>
+        <p class="error-msg" id="donate-receive-error" style="margin-top:.6rem;"></p>
+      </div>
+
+      <div class="card" id="donate-rcv-s2" style="display:none;">
+        <strong>Step 2 — Finalize from your wallet</strong>
+        <p style="font-size:.88rem;color:var(--text-dim);margin:.75rem 0;">
+          Copy the response slatepack below, save it to a file, then finalize.
+        </p>
+        <div class="donate-step-label">Our Response Slatepack</div>
+        <div class="slatepack-box" id="donate-response-slatepack"></div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem;">
+          <button class="btn btn-outline btn-sm" id="copy-donate-response-btn">Copy Response</button>
+          <button class="btn btn-outline btn-sm" id="download-donate-response-btn">Download .slatepack</button>
+        </div>
+        <div class="info-box" style="margin-top:1rem;">
+          <strong>CLI:</strong> <code>./grin-wallet finalize -i response.slatepack</code><br>
+          <strong>Grim:</strong> Receive tab → paste response → confirm
+        </div>
+        <div class="success-box" style="margin-top:1rem;text-align:center;">
+          <p>🙏 Almost there! Run the finalize command to complete your donation. Thank you!</p>
+        </div>
+        <button class="btn btn-outline btn-full btn-sm" id="donate-receive-reset-btn" style="margin-top:.8rem;">Donate Again</button>
+      </div>
+    </div>
+
+    <!-- Pane 3 — Invoice: We Request / You Pay -->
+    <div id="donate-pane-3" class="donate-pane">
+
+      <div class="card" id="donate-inv-s1">
+        <strong>Step 1 — Choose donation amount</strong>
+        <div class="amount-grid" id="donate-inv-amount-grid">
+          <button class="amount-btn" data-amount="10">10 GRIN</button>
+          <button class="amount-btn" data-amount="50">50 GRIN</button>
+          <button class="amount-btn" data-amount="100">100 GRIN</button>
+          <button class="amount-btn" data-amount="custom">Custom…</button>
+        </div>
+        <div id="donate-inv-custom-wrap" style="display:none;margin-bottom:.75rem;">
+          <input type="number" id="donate-inv-custom-amt" min="1" step="0.001"
+                 placeholder="Min 1 GRIN" style="max-width:200px;">
+        </div>
+        <div style="margin-top:.75rem;">
+          <label for="donate-invoice-address">Your Grin address <span style="font-size:.85rem;color:var(--text-dim);">(so we direct the invoice to you)</span></label>
+          <input type="text" id="donate-invoice-address" placeholder=""
+                 autocomplete="off" spellcheck="false" style="margin-top:.35rem;">
+        </div>
+        <button class="btn btn-full" id="donate-invoice-btn" style="margin-top:.8rem;" disabled>Create Invoice →</button>
+        <p class="error-msg" id="donate-invoice-error" style="margin-top:.6rem;"></p>
+      </div>
+
+      <div class="card" id="donate-inv-s2" style="display:none;">
+        <strong>Step 2 — Pay the invoice from your wallet</strong>
+        <p style="font-size:.88rem;color:var(--text-dim);margin:.75rem 0;">
+          Copy the invoice slatepack, save it to a file, then pay it.
+        </p>
+        <div class="donate-step-label">Invoice Slatepack — copy into your wallet</div>
+        <div class="slatepack-box" id="donate-invoice-slatepack"></div>
+        <button class="btn btn-outline btn-sm" style="margin-top:.5rem;" id="copy-donate-invoice-btn">Copy Invoice</button>
+        <div class="info-box" style="margin-top:.8rem;">
+          <strong>CLI:</strong> <code id="donate-pay-cmd">./grin-wallet pay -i invoice.slatepack</code>
+        </div>
+        <div style="margin-top:.75rem;">
+          <label for="donate-pay-slate">Paste your wallet's payment response:</label>
+          <p style="font-size:.82rem;color:var(--text-dim);margin:.3rem 0 .5rem;">
+            <strong>TOR wallets:</strong> if your wallet shows <em>"Transaction paid and sent back to initiator for finalization"</em>,
+            the response was delivered automatically via TOR — you don't need to paste anything here.
+            Click <strong>← Back</strong> to return.
+          </p>
+          <textarea id="donate-pay-slate" rows="5"
+                    placeholder="BEGINSLATEPACK...ENDSLATEPACK."
+                    style="font-family:var(--font-mono);font-size:.78rem;margin-top:.35rem;"></textarea>
+        </div>
+        <p class="error-msg" id="donate-invoice-finalize-error"></p>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.8rem;">
+          <button class="btn btn-full" id="donate-invoice-finalize-btn">Finalize Donation →</button>
+          <button class="btn btn-outline btn-sm" id="donate-invoice-back-btn">← Back</button>
+        </div>
+      </div>
+
+      <div class="card" id="donate-inv-s3" style="display:none;">
+        <div class="success-box" style="text-align:center;padding:2rem 1rem;">
+          <div style="font-size:3rem;margin-bottom:.5rem;">✅</div>
+          <h3 style="color:var(--ok-color);margin-bottom:.5rem;">Thank You!</h3>
+          <p>Your donation has been received and broadcast to the Grin network.</p>
+          <p style="font-size:.85rem;color:var(--text-dim);margin-top:.5rem;">You're awesome. Grin on! ツ</p>
+        </div>
+        <button class="btn btn-outline btn-full btn-sm" id="donate-invoice-reset-btn" style="margin-top:1rem;">Donate Again</button>
+      </div>
+    </div>
+
   </section>
 
   <!-- ── How it works ───────────────────────────────────────────────────────── -->
-  <section aria-label="How to use the Grin drop">
+  <section id="section-how-it-works" aria-label="How to use the Grin drop">
     <h2>How It Works</h2>
 
     <!-- Section A — Setup wallet -->
@@ -197,23 +413,23 @@
         </li>
         <li data-n="2">
           <strong>Initialize a testnet wallet</strong><br>
-          <code>grin-wallet --floonet init</code><br>
+          <code>./grin-wallet --testnet init</code><br>
           Set a password when prompted. Save your seed phrase somewhere safe.
         </li>
         <li data-n="3">
-          <strong>Connect to a public testnet node (no sync needed)</strong><br>
-          Edit <code>grin-wallet.toml</code> — find <code>check_node_api_http_addr</code> and set:<br>
-          <code>check_node_api_http_addr = "http://prunetest.grin.money:13413"</code><br>
-          This connects to a public pruned testnet node — ready in seconds, no chain download.
+          <strong>Connect to a public node (no sync needed)</strong><br>
+          Edit <code>grin-wallet.toml</code> — find <code>check_node_api_http_addr</code> and set it to any online node below:<br>
+          <div id="node-list-cli" class="node-status-list"><span style="color:var(--text-dim);font-size:.82rem;">Checking nodes…</span></div>
+          Ready in seconds — no chain download needed.
         </li>
         <li data-n="4">
           <strong>Verify connection</strong><br>
-          <code>grin-wallet --floonet info</code><br>
+          <code>./grin-wallet --testnet info</code><br>
           You should see your balance and "Node version" — you are connected.
         </li>
         <li data-n="5">
           <strong>Get your address</strong><br>
-          <code>grin-wallet --floonet address</code><br>
+          <code>./grin-wallet --testnet address</code><br>
           Copy the <code>tgrin1...</code> address and paste it into the claim form above.
         </li>
       </ol>
@@ -233,7 +449,8 @@
           <strong>First launch setup wizard</strong><br>
           · Select network: <strong>Testnet</strong><br>
           · Node connection: <strong>External node</strong><br>
-          · Node URL: <code>http://prunetest.grin.money:13413</code><br>
+          · Node URL: pick any online node below:<br>
+          <div id="node-list-grim" class="node-status-list"><span style="color:var(--text-dim);font-size:.82rem;">Checking nodes…</span></div>
           · Create new wallet → set password → save your seed phrase
         </li>
         <li data-n="3">
@@ -247,11 +464,11 @@
     <h3 style="margin-top:1.5rem;">B) Claim from this drop</h3>
     <div class="card">
       <ol class="how-steps">
-        <li data-n="1">Enter your Grin address above and click <strong>Claim 2 GRIN</strong>.</li>
+        <li data-n="1">Enter your Grin address above, choose an amount, and click <strong>Claim</strong>.</li>
         <li data-n="2">Copy the <strong>SLATEPACK</strong> text shown on screen.</li>
         <li data-n="3">
           Paste slatepack into your wallet:<br>
-          <strong>CLI:</strong> <code>grin-wallet --floonet receive</code> → paste → press Enter → wallet outputs a response slatepack<br>
+          <strong>CLI:</strong> <code>./grin-wallet --testnet receive</code> → paste → press Enter → wallet outputs a response slatepack<br>
           <strong>Grim:</strong> Receive tab → paste slatepack → confirm → copy the response
         </li>
         <li data-n="4">Copy the <strong>response slatepack</strong> from your wallet.</li>
@@ -275,16 +492,42 @@
           Once you complete a drop claim, you understand Grin transactions end-to-end.
         </li>
         <li style="padding:.4rem 0;border-bottom:1px solid var(--border);">
-          The public pruned testnet node (<code>prunetest.grin.money:13413</code>)
+          The public pruned testnet node (<code>testapi.grin.money</code>)
           means you do not need to download the full blockchain.
         </li>
-        <li style="padding:.4rem 0;">
-          Links:
-          <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a> &nbsp;·&nbsp;
-          <a href="https://github.com/mimblewimble/grin-wallet/releases" target="_blank" rel="noopener">grin-wallet releases</a> &nbsp;·&nbsp;
-          <a href="https://github.com/GetGrin/grim/releases" target="_blank" rel="noopener">Grim releases</a>
+      </ul>
+    </div>
+
+    <!-- Section D — Why this site was created -->
+    <h3 style="margin-top:1.5rem;">D) Why this site was created</h3>
+    <div class="card">
+      <ul style="list-style:none;padding:0;font-size:.9rem;">
+        <li style="padding:.5rem 0;border-bottom:1px solid var(--border);">
+          <strong style="color:var(--accent);">Education</strong> — Grin's interactive slatepack model
+          is unlike any other cryptocurrency. Many newcomers don't know where to start. This drop lets
+          anyone experience a complete, mainnet-equivalent Grin payment for free — no sign-up,
+          no KYC, no barriers.
+        </li>
+        <li style="padding:.5rem 0;border-bottom:1px solid var(--border);">
+          <strong style="color:var(--accent);">Developer bootstrap</strong> — Building on Grin requires
+          testnet coins to create and test payment flows, wallets, and integrations. This drop gives
+          new developers a small fund to start experimenting from day one.
+        </li>
+        <li style="padding:.5rem 0;border-bottom:1px solid var(--border);">
+          <strong style="color:var(--accent);">Accessibility</strong> — In some countries, buying or
+          selling privacy-preserving cryptocurrencies is restricted or heavily regulated. Testnet GRIN
+          has no monetary value — it exists purely for learning and development, freely available to
+          everyone regardless of jurisdiction.
+        </li>
+        <li style="padding:.5rem 0;">
+          <strong style="color:var(--accent);">Donations are genuinely appreciated</strong> — they keep
+          the wallet funded and the server running. If this drop helped you, please consider giving back
+          via the <a href="#section-donation">Donate</a> section above. Every contribution counts. ツ
         </li>
       </ul>
+      <p style="margin-top:.9rem;font-size:.78rem;color:var(--text-dim);font-style:italic;">
+        * Donation counts and amounts reflect slatepack and invoice transactions only — TOR direct donations are not automatically tracked.
+      </p>
     </div>
   </section>
 
@@ -296,7 +539,7 @@
     <p>
       Grin Drop &nbsp;·&nbsp;
       <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a> &nbsp;·&nbsp;
-      <a href="https://github.com/mimblewimble/grin" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">GitHub</a>
       &nbsp;·&nbsp; Testnet GRIN has no real value.
     </p>
     <p style="margin-top:.4rem;">
@@ -305,37 +548,10 @@
   </div>
 </footer>
 
-<script src="/js/matrix.js"></script>
-<script src="/js/theme.js"></script>
-<script src="/js/faucet.js"></script>
+<script src="js/matrix.js"></script>
+<script src="js/theme.js"></script>
+<script src="js/faucet.js"></script>
 
-<!-- Dynamic theme CSS injection (theme.js will update the link href) -->
-<script>
-(function(){
-  const link = document.getElementById("theme-css");
-  const THEME_CSSS = {
-    matrix:  "/css/themes/matrix.css",
-    warcraft:"/css/themes/warcraft.css",
-    win98:   "/css/themes/win98.css",
-    light:   "/css/themes/light.css",
-    dark:    "/css/themes/dark.css",
-    cute:    "/css/themes/cute.css",
-  };
-  // Apply saved theme on load
-  const saved = localStorage.getItem("grin-faucet-theme") || "matrix";
-  if (link && THEME_CSSS[saved]) link.href = THEME_CSSS[saved];
-
-  // Swap CSS file when theme button is clicked
-  document.addEventListener("DOMContentLoaded", function() {
-    document.querySelectorAll("[data-theme]").forEach(btn => {
-      btn.addEventListener("click", function() {
-        const t = this.dataset.theme;
-        if (link && THEME_CSSS[t]) link.href = THEME_CSSS[t];
-      });
-    });
-  });
-})();
-</script>
 
 </body>
 </html>

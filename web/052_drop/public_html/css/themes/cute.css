@@ -4,7 +4,7 @@
   --bg-card:      #ffffff;
   --bg-card2:     #fce4ec;
   --text:         #4a1a4a;
-  --text-dim:     #9b5b9b;
+  --text-dim:     #854585;
   --accent:       #e91e8c;
   --accent2:      #c2185b;
   --border:       #f8bbd0;
@@ -14,7 +14,7 @@
   --input-bg:     #fff8fb;
   --input-border: #f48fb1;
   --error-color:  #d32f2f;
-  --ok-color:     #e91e8c;
+  --ok-color:     #c2185b;
   --warn-color:   #9c27b0;
   --grin-yellow:  #ff80ab;
   --font-mono:    'Courier New', Courier, monospace;
@@ -30,9 +30,11 @@ body {
 
 header {
   background: rgba(255,255,255,.85);
+  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
   border-bottom-color: var(--border);
 }
+
 
 .site-title {
   color: var(--accent);

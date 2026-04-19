@@ -639,6 +639,26 @@ ww_install_deps() {
     [[ "$confirm" == "0" ]] && return
     [[ "${confirm,,}" == "n" ]] && return
 
+    # Evict apache2 before installing/starting nginx — apache2 occupies port 80
+    if ! command -v nginx &>/dev/null; then
+        if systemctl is-active --quiet apache2 2>/dev/null; then
+            warn "apache2 is running and occupies port 80 — nginx cannot start."
+            echo -ne "  Stop and disable apache2 now? [Y/n]: "
+            local _yn; read -r _yn || true
+            if [[ "${_yn,,}" != "n" ]]; then
+                systemctl stop    apache2 2>/dev/null || true
+                systemctl disable apache2 2>/dev/null || true
+                success "apache2 stopped and disabled."
+            else
+                warn "Skipping — nginx may fail to bind port 80/443."
+            fi
+        elif systemctl is-enabled --quiet apache2 2>/dev/null; then
+            warn "apache2 enabled at boot (not running) — disabling to avoid port conflict on reboot."
+            systemctl disable apache2 2>/dev/null || true
+            success "apache2 boot-start disabled."
+        fi
+    fi
+
     info "Updating package lists..."
     apt-get update -qq 2>/dev/null || warn "apt-get update failed — continuing anyway."
 

@@ -1,0 +1,1059 @@
+# 052_lib_wallet.sh — Grin Drop wallet setup + listener management
+# Sourced by 052_grin_drop.sh — inherits all color/log/network variables.
+# =============================================================================
+#
+#  Functions exported:
+#    drop_setup_wallet    — step 1: download binary, init/recover, write toml
+#    drop_wallet_listener — step 2: manage two tmux sessions (TOR + Owner API)
+#
+
+# ─── Public nodes ─────────────────────────────────────────────────────────────
+
+MAINNET_NODES=(
+    "api.grin.money"
+    "api.grinily.com"
+    "api.grinnode.org"
+    "main.gri.mw"
+    "grincoin.org"
+)
+
+TESTNET_NODES=(
+    "testapi.grin.money"
+    "testapi.grinily.com"
+    "testnet.grincoin.org"
+    "test.gri.mw"
+)
+
+# =============================================================================
+# OPTION 1 — Setup wallet (submenu)
+# =============================================================================
+
+drop_setup_wallet() {
+    while true; do
+        clear
+        echo -e "\n${BOLD}${CYAN}── Grin Drop [$DROP_NET_LABEL] — 1) Setup Wallet ──${RESET}\n"
+
+        # ── Status ────────────────────────────────────────────────────────────
+        local bin_st toml_st data_st
+        [[ -x "$DROP_WALLET_BIN" ]]                    && bin_st="${GREEN}installed${RESET}"  || bin_st="${DIM}not installed${RESET}"
+        [[ -f "$DROP_WALLET_DIR/grin-wallet.toml" ]]   && toml_st="${GREEN}present${RESET}"   || toml_st="${DIM}absent${RESET}"
+        [[ -d "$DROP_WALLET_DIR/wallet_data" ]]        && data_st="${GREEN}present${RESET}"   || data_st="${DIM}absent${RESET}"
+        local cur_node="${DIM}—${RESET}"
+        if [[ -f "$DROP_WALLET_DIR/grin-wallet.toml" ]]; then
+            cur_node=$(grep '^check_node_api_http_addr' "$DROP_WALLET_DIR/grin-wallet.toml" \
+                2>/dev/null | sed 's/.*= *"\(.*\)"/\1/' || echo "—")
+        fi
+        echo -e "  Binary      : $bin_st"
+        echo -e "  Wallet data : $data_st     Config : $toml_st"
+        echo -e "  Current node: $cur_node"
+        echo ""
+
+        echo -e "  ${GREEN}1${RESET}) Install new wallet      ${DIM}(first-time setup)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Re-install wallet       ${DIM}(clean + full reinstall)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Scan wallet             ${DIM}(recover wallet from seed · balance wrong · after node switch)${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Update binary           ${DIM}(download latest grin-wallet, keep wallet data)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Switch Grin node        ${DIM}(change node without reinstalling)${RESET}"
+        echo -e "  ${GREEN}6${RESET}) View / recover seed     ${DIM}(display seed phrase, optionally save)${RESET}"
+        echo -e "  ${DIM}0) Back${RESET}"
+        echo ""
+        echo -ne "${BOLD}Select [1-6/0]: ${RESET}"
+        local choice
+        read -r choice || true
+
+        case "$choice" in
+            1) _drop_wallet_install_new  ;;
+            2) _drop_wallet_reinstall    ;;
+            3) _drop_wallet_scan         ;;
+            4) _drop_wallet_update_bin   ;;
+            5) _drop_wallet_switch_node  ;;
+            6) _drop_wallet_view_seed    ;;
+            0) break ;;
+            *) warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
+# ── Shared helpers ─────────────────────────────────────────────────────────────
+
+_drop_ensure_system_user() {
+    if ! id grin &>/dev/null; then
+        info "Creating system user: grin"
+        useradd --system --no-create-home --shell /bin/false grin \
+            || { die "Failed to create 'grin' user — run as root."; return 1; }
+        success "System user 'grin' created."
+    else
+        info "System user 'grin' already exists."
+    fi
+    mkdir -p "$DROP_WALLET_DIR"
+}
+
+_drop_kill_wallet_processes() {
+    # Kill OS processes on wallet ports. No args = both network-scoped ports.
+    # Pass specific port(s) to target only those (e.g. during start/stop of one session).
+    local ports=("$@")
+    [[ ${#ports[@]} -eq 0 ]] && ports=("$DROP_TOR_PORT" "$DROP_OWNER_PORT")
+    for port in "${ports[@]}"; do
+        local pids
+        pids=$(ss -tlnp 2>/dev/null | awk "/:${port} /{print}" \
+            | grep -oP 'pid=\K[0-9]+' || true)
+        for pid in $pids; do
+            [[ -n "$pid" ]] || continue
+            kill -9 "$pid" 2>/dev/null && info "Killed PID $pid (port $port)" || true
+        done
+    done
+    # Full stop (no specific port): also kill scan and orphaned wallet processes.
+    # Port-based kill misses scan (no listening socket) and PPID=1 orphans.
+    if [[ $# -eq 0 ]]; then
+        pkill -9 -f "${DROP_WALLET_BIN}" 2>/dev/null \
+            && info "Killed remaining wallet processes (scan/orphaned)" || true
+    fi
+}
+
+_drop_fix_ownership() {
+    chown -R grin:grin "$DROP_WALLET_DIR" 2>/dev/null || true
+    chmod 750 "$DROP_WALLET_DIR"
+    chmod 600 "$DROP_WALLET_DIR/grin-wallet.toml" 2>/dev/null || true
+
+    # Fix ownership on grin-wallet's auto-generated secret files.
+    # grin-wallet init/recover creates both files in $DROP_WALLET_DIR:
+    #   .foreign_api_secret → wallet Foreign API  (grin-wallet default api_secret_path)
+    #   .owner_api_secret   → wallet Owner API    (grin-wallet default owner_api_secret_path)
+    local secret_file
+    for secret_file in "$DROP_WALLET_DIR/.foreign_api_secret" \
+                       "$DROP_WALLET_DIR/.owner_api_secret"; do
+        if [[ ! -s "$secret_file" ]]; then
+            warn "Secret file missing — wallet may not be initialized yet: $secret_file"
+        fi
+        chown grin:grin "$secret_file" 2>/dev/null || true
+        chmod 600 "$secret_file" 2>/dev/null || true
+    done
+    # wallet_data/ dir is needed for the wallet database
+    mkdir -p "$DROP_WALLET_DIR/wallet_data"
+
+    success "Ownership fixed."
+}
+
+_drop_init_menu() {
+    # Prompts new/recover choice and runs _drop_init_wallet. Returns 1 on cancel.
+    echo -e "  ${GREEN}1${RESET}) Create new wallet"
+    echo -e "  ${YELLOW}2${RESET}) Recover from seed"
+    echo -e "  ${DIM}0) Cancel${RESET}"
+    echo -ne "  Select [1/2/0]: "
+    local init_choice
+    read -r init_choice || true
+    case "$init_choice" in
+        1) _drop_init_wallet "new"     || return 1 ;;
+        2) _drop_init_wallet "recover" || return 1 ;;
+        0) info "Cancelled."; return 1 ;;
+        *) warn "Invalid choice."; return 1 ;;
+    esac
+}
+
+_drop_select_and_patch() {
+    # Runs node selector and patches toml. Returns 1 on cancel/error.
+    local chosen_node=""
+    chosen_node=$(_drop_select_node) || return 1
+    [[ -z "$chosen_node" ]] && { info "Node selection cancelled."; return 1; }
+    info "Selected node: $chosen_node"
+    _drop_write_toml "$chosen_node" || return 1
+    echo "$chosen_node"
+}
+
+_drop_print_summary() {
+    local chosen_node="$1"
+    echo ""
+    echo -e "  ${BOLD}Wallet dir  :${RESET} $DROP_WALLET_DIR"
+    echo -e "  ${BOLD}Binary      :${RESET} $DROP_WALLET_BIN"
+    echo -e "  ${BOLD}Config      :${RESET} $DROP_WALLET_DIR/grin-wallet.toml"
+    echo -e "  ${BOLD}Node        :${RESET} $chosen_node"
+    [[ -f "$DROP_PASS" ]] && echo -e "  ${BOLD}Passphrase  :${RESET} $DROP_PASS  ${DIM}(plaintext, mode 600)${RESET}"
+    [[ -f "$DROP_WORD" ]] && echo -e "  ${BOLD}Seed words  :${RESET} $DROP_WORD  ${DIM}(plaintext, mode 600)${RESET}"
+    echo ""
+    success "Done."
+    echo -e "  ${DIM}Next: run option 2) Wallet Listening to start the listener sessions.${RESET}"
+}
+
+# ── Submenu actions ────────────────────────────────────────────────────────────
+
+_drop_wallet_install_new() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── Install New Wallet [$DROP_NET_LABEL] ──${RESET}\n"
+
+    # Guard: abort if wallet data already exists
+    if [[ -d "$DROP_WALLET_DIR/wallet_data" ]] || [[ -f "$DROP_WALLET_DIR/grin-wallet.toml" ]]; then
+        warn "Wallet already installed in $DROP_WALLET_DIR"
+        echo -e "  ${YELLOW}Use option 2 (Re-install) to wipe and start over.${RESET}"
+        pause; return
+    fi
+
+    echo -e "  ${BOLD}— System user${RESET}"
+    _drop_ensure_system_user || { pause; return; }
+    echo ""
+
+    echo -e "  ${BOLD}— Binary${RESET}"
+    _drop_download_wallet || { pause; return; }
+    echo ""
+
+    echo -e "  ${BOLD}— Wallet init${RESET}"
+    _drop_init_menu || { pause; return; }
+    echo ""
+
+    echo -e "  ${BOLD}— Grin node${RESET}"
+    local chosen_node
+    chosen_node=$(_drop_select_and_patch) || { pause; return; }
+    echo ""
+
+    echo -e "  ${BOLD}— Ownership${RESET}"
+    _drop_fix_ownership
+    echo ""
+
+    _drop_print_summary "$chosen_node"
+    log "[drop_wallet_install_new] network=$DROP_NETWORK node=$chosen_node"
+    drop_ensure_defaults
+    pause
+}
+
+_drop_wallet_scan() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── Scan Wallet [$DROP_NET_LABEL] ──${RESET}\n"
+    echo -e "  Walks the full chain to re-discover all outputs — required after restoring"
+    echo -e "  from seed phrase, or if the balance is wrong / outputs are missing."
+    echo -e "  ${DIM}After seed recovery, wallet commands like 'grin-wallet info' also trigger a${RESET}"
+    echo -e "  ${DIM}full scan automatically — this is normal. Run this option once to complete it${RESET}"
+    echo -e "  ${DIM}in a controlled tmux session before starting the Owner API.${RESET}"
+    echo -e "  ${DIM}Not needed for a brand-new wallet — the Owner API startup refresh is sufficient.${RESET}\n"
+    echo -e "  ${YELLOW}⚠  Stop the Owner API session ($DROP_TMUX_OWNER) before scanning.${RESET}"
+    echo -e "  ${YELLOW}   Both scan and owner_api run as separate wallet processes on the same${RESET}"
+    echo -e "  ${YELLOW}   wallet data directory — concurrent LMDB writes cause conflicts and${RESET}"
+    echo -e "  ${YELLOW}   can leave in-flight transactions in an inconsistent state.${RESET}"
+    echo -e "  ${DIM}   Stop it from option 2 (Wallet listening) → Stop Owner API, then return here.${RESET}\n"
+
+    # Check if Owner API is already running and warn loudly
+    if tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null; then
+        echo -e "  ${RED}[!] Owner API session '$DROP_TMUX_OWNER' is currently running.${RESET}"
+        echo -ne "  Stop it now before continuing? [y/N]: "
+        local stop_ans; read -r stop_ans || true
+        if [[ "$stop_ans" =~ ^[Yy]$ ]]; then
+            tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null \
+                && success "Stopped tmux: $DROP_TMUX_OWNER" || true
+            _drop_kill_wallet_processes "$DROP_OWNER_PORT"
+            echo ""
+        else
+            warn "Scan cancelled — stop the Owner API session first to avoid conflicts."
+            pause; return
+        fi
+    fi
+
+    if [[ ! -d "$DROP_WALLET_DIR/wallet_data" ]]; then
+        warn "No wallet data found at $DROP_WALLET_DIR/wallet_data — install wallet first."
+        pause; return
+    fi
+
+    echo -ne "  Continue? [y/N]: "
+    local ans; read -r ans || true
+    [[ "$ans" =~ ^[Yy]$ ]] || { info "Cancelled."; pause; return; }
+
+    local wallet_pass
+    wallet_pass=$(_drop_read_saved_pass)
+
+    # Build scan command (same -p quoting as _drop_start_session)
+    local pass_arg=""
+    [[ -n "$wallet_pass" ]] && pass_arg="-p '$wallet_pass'"
+    local scan_tmux="drop-${DROP_NETWORK}-scan"
+    local scan_cmd="'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg scan; echo; echo '--- scan complete, press any key ---'; read -rn1"
+
+    tmux kill-session -t "$scan_tmux" 2>/dev/null || true
+    _drop_launch_session "$scan_tmux" "$scan_cmd"
+    sleep 1
+
+    if tmux has-session -t "$scan_tmux" 2>/dev/null; then
+        success "Scan running in tmux session: $scan_tmux"
+        echo -e "\n  Monitor progress:  ${BOLD}tmux attach -t $scan_tmux${RESET}"
+        echo -e "  The session closes automatically when scan finishes.\n"
+    else
+        warn "Scan session failed to start — check wallet config and passphrase."
+    fi
+
+    unset wallet_pass pass_arg
+    log "[drop_wallet_scan] network=$DROP_NETWORK"
+    pause
+}
+
+_drop_wallet_reinstall() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── Re-install Wallet [$DROP_NET_LABEL] ──${RESET}\n"
+
+    echo -e "  ${BOLD}— System user${RESET}"
+    _drop_ensure_system_user || { pause; return; }
+    echo ""
+
+    echo -e "  ${BOLD}— Clean existing installation${RESET}"
+    if [[ -d "$DROP_WALLET_DIR" ]] && [[ -n "$(ls -A "$DROP_WALLET_DIR" 2>/dev/null)" ]]; then
+        warn "Existing wallet installation detected in $DROP_WALLET_DIR"
+        _drop_kill_wallet_processes
+        echo -e "  ${YELLOW}Make sure you have your seed phrase before continuing.${RESET}"
+        echo -ne "  Clean and reinstall? [y/N]: "
+        local clean_ok
+        read -r clean_ok || true
+        if [[ "${clean_ok,,}" != "y" ]]; then
+            info "Cancelled."; pause; return
+        fi
+        rm -rf "${DROP_WALLET_DIR:?}/"
+        mkdir -p "$DROP_WALLET_DIR"
+        success "Wallet directory cleaned."
+    else
+        info "No existing installation found — continuing as fresh install."
+    fi
+    echo ""
+
+    echo -e "  ${BOLD}— Binary${RESET}"
+    _drop_download_wallet || { pause; return; }
+    echo ""
+
+    echo -e "  ${BOLD}— Wallet init${RESET}"
+    _drop_init_menu || { pause; return; }
+    echo ""
+
+    echo -e "  ${BOLD}— Grin node${RESET}"
+    local chosen_node
+    chosen_node=$(_drop_select_and_patch) || { pause; return; }
+    echo ""
+
+    echo -e "  ${BOLD}— Ownership${RESET}"
+    _drop_fix_ownership
+    echo ""
+
+    _drop_print_summary "$chosen_node"
+    log "[drop_wallet_reinstall] network=$DROP_NETWORK node=$chosen_node"
+    drop_ensure_defaults
+    pause
+}
+
+_drop_wallet_update_bin() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── Update Binary [$DROP_NET_LABEL] ──${RESET}\n"
+
+    # Guard: wallet should be initialized
+    if [[ ! -f "$DROP_WALLET_DIR/grin-wallet.toml" ]]; then
+        warn "Wallet not initialized — run Install first."; pause; return
+    fi
+
+    # Warn if sessions are running — kill them so binary can be replaced
+    local wallet_ports=("$DROP_TOR_PORT" "$DROP_OWNER_PORT")
+    local sessions_running=false
+    for port in "${wallet_ports[@]}"; do
+        ss -tlnp 2>/dev/null | grep -q ":${port} " && sessions_running=true && break
+    done
+    if $sessions_running; then
+        warn "Wallet sessions are currently running."
+        echo -e "  ${YELLOW}They will be stopped before the binary is replaced.${RESET}"
+        echo -ne "  Continue? [y/N]: "
+        local ok
+        read -r ok || true
+        [[ "${ok,,}" != "y" ]] && { info "Cancelled."; pause; return; }
+        tmux kill-session -t "$DROP_TMUX_TOR"   2>/dev/null || true
+        tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null || true
+        _drop_kill_wallet_processes
+    fi
+
+    echo -e "  ${BOLD}— Download latest binary${RESET}"
+    _drop_download_wallet || { pause; return; }
+    echo ""
+
+    # Fix binary ownership only
+    chown grin:grin "$DROP_WALLET_BIN" 2>/dev/null || true
+    chmod 755 "$DROP_WALLET_BIN"
+    success "Binary updated. Wallet data and config untouched."
+    echo -e "  ${DIM}Restart listener sessions from option 2) Wallet Listening.${RESET}"
+    log "[drop_wallet_update_bin] network=$DROP_NETWORK"
+    pause
+}
+
+_drop_wallet_switch_node() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── Switch Grin Node [$DROP_NET_LABEL] ──${RESET}\n"
+
+    if [[ ! -f "$DROP_WALLET_DIR/grin-wallet.toml" ]]; then
+        warn "Wallet not initialized — run Install first."; pause; return
+    fi
+
+    local cur_node
+    cur_node=$(grep '^check_node_api_http_addr' "$DROP_WALLET_DIR/grin-wallet.toml" \
+        2>/dev/null | sed 's/.*= *"\(.*\)"/\1/' || echo "—")
+    info "Current node: $cur_node"
+    echo ""
+
+    local chosen_node
+    chosen_node=$(_drop_select_and_patch) || { pause; return; }
+
+    echo ""
+    success "Node switched to: $chosen_node"
+    echo -e "  ${DIM}Restart listener sessions for the change to take effect.${RESET}"
+    log "[drop_wallet_switch_node] network=$DROP_NETWORK node=$chosen_node"
+    pause
+}
+
+_drop_wallet_view_seed() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── View / Recover Seed [$DROP_NET_LABEL] ──${RESET}\n"
+
+    if [[ ! -d "$DROP_WALLET_DIR/wallet_data" ]]; then
+        warn "Wallet not initialized — run Install first."; pause; return
+    fi
+
+    # Get passphrase
+    local wallet_pass=""
+    if [[ -f "$DROP_PASS" ]]; then
+        wallet_pass=$(cat "$DROP_PASS")
+        info "Using saved passphrase from $DROP_PASS"
+    else
+        read -rs -p "  Wallet passphrase (blank if none): " wallet_pass; echo ""
+    fi
+    echo ""
+
+    info "Retrieving seed phrase from wallet..."
+    # Security trade-off: same as init — -p exposes the passphrase in `ps aux`
+    # for the duration of this call. One-time, brief.
+    local seed_output
+    # shellcheck disable=SC2086
+    seed_output=$(cd "$DROP_WALLET_DIR" && "$DROP_WALLET_BIN" \
+        $DROP_NET_FLAG --top_level_dir "$DROP_WALLET_DIR" \
+        -p "$wallet_pass" recover 2>&1) || true
+
+    if [[ -z "$seed_output" ]]; then
+        warn "No output from grin-wallet recover — check passphrase."; pause; return
+    fi
+
+    echo ""
+    warn "Make sure you are alone. The seed phrase will be displayed below."
+    read -rs -p "  Press Enter to view..."; echo ""
+    echo ""
+    echo "  ─── SEED PHRASE ───────────────────────────────────────────"
+    echo "$seed_output"
+    echo "  ───────────────────────────────────────────────────────────"
+    echo ""
+    warn "Write it down on paper. Do not rely solely on a digital copy."
+    echo ""
+
+    # Offer to save
+    echo -ne "  Save seed words to $DROP_WORD? [y/N]: "
+    local save_seed
+    read -r save_seed || true
+    if [[ "${save_seed,,}" == "y" ]]; then
+        echo ""
+        echo -e "  ${BOLD}${RED}⚠  Security warning — PLAINTEXT SEED STORAGE:${RESET}"
+        echo -e "  ${YELLOW}  The seed phrase will be saved in PLAIN TEXT on this server.${RESET}"
+        echo -e "  ${YELLOW}  Anyone with root access or your hosting provider can read it.${RESET}"
+        echo -e "  ${YELLOW}  A compromised server means your funds are at risk.${RESET}"
+        echo ""
+        mkdir -p "$(dirname "$DROP_WORD")"
+        echo "$seed_output" > "$DROP_WORD"
+        chmod 600 "$DROP_WORD"
+        chown root:root "$DROP_WORD" 2>/dev/null || true
+        success "Seed saved → $DROP_WORD  ${DIM}(plaintext, mode 600, owned root)${RESET}"
+    fi
+
+    log "[drop_wallet_view_seed] network=$DROP_NETWORK"
+    pause
+}
+
+_drop_download_wallet() {
+    info "Querying GitHub for latest grin-wallet release..."
+    local release_json
+    release_json=$(curl -fsSL --max-time 30 "$GRIN_WALLET_GITHUB_API") \
+        || { die "Failed to reach GitHub API."; return 1; }
+
+    local version download_url
+    version=$(echo "$release_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'])" 2>/dev/null \
+        || echo "$release_json" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+    download_url=$(echo "$release_json" | python3 -c "
+import json,sys,re
+d=json.load(sys.stdin)
+for a in d.get('assets',[]):
+    if re.search(r'linux-x86_64\.tar\.gz$', a['name'], re.I):
+        print(a['browser_download_url']); break
+" 2>/dev/null)
+
+    if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+        die "No linux-x86_64 tar.gz asset found in release '$version'."; return 1
+    fi
+
+    info "Version : $version"
+    info "Target  : $DROP_WALLET_BIN"
+
+    local tmp_tar="/tmp/grin_drop_wallet_$$.tar.gz"
+    local tmp_dir="/tmp/grin_drop_wallet_extract_$$"
+    mkdir -p "$tmp_dir" "$DROP_WALLET_DIR"
+
+    info "Downloading..."
+    wget -c --progress=bar:force -O "$tmp_tar" "$download_url" \
+        || { die "Download failed."; rm -rf "$tmp_tar" "$tmp_dir"; return 1; }
+
+    info "Extracting..."
+    tar -xzf "$tmp_tar" -C "$tmp_dir" \
+        || { die "Failed to extract."; rm -rf "$tmp_tar" "$tmp_dir"; return 1; }
+    rm -f "$tmp_tar"
+
+    local wallet_bin_src
+    wallet_bin_src=$(find "$tmp_dir" -type f -name "grin-wallet" | head -1)
+    if [[ -z "$wallet_bin_src" ]]; then
+        die "Could not locate 'grin-wallet' binary in archive."; rm -rf "$tmp_dir"; return 1
+    fi
+    install -m 755 "$wallet_bin_src" "$DROP_WALLET_BIN"
+    rm -rf "$tmp_dir"
+    success "grin-wallet $version installed to $DROP_WALLET_BIN"
+}
+
+_drop_select_node() {
+    local -a nodes
+    if [[ "$DROP_NETWORK" == "mainnet" ]]; then
+        nodes=("${MAINNET_NODES[@]}")
+    else
+        nodes=("${TESTNET_NODES[@]}")
+    fi
+    local local_port="$DROP_NODE_PORT"
+
+    echo -e "\n  ${BOLD}Available Grin nodes:${RESET}" >&2
+    local i=1 first_online=0
+    for node in "${nodes[@]}"; do
+        local status http_code
+        http_code=$(curl -o /dev/null -s -w "%{http_code}" --max-time 5 "https://$node/v2/foreign" 2>/dev/null || echo "000")
+        if [[ "$http_code" =~ ^(2|3)[0-9]{2}$ ]] || [[ "$http_code" == "405" ]] || [[ "$http_code" == "404" ]]; then
+            status="${GREEN}● online${RESET}"
+            [[ $first_online -eq 0 ]] && first_online=$i
+        else
+            status="${RED}○ offline${RESET}"
+        fi
+        echo -e "  ${GREEN}$i${RESET}) $node  $status" >&2
+        ((i++))
+    done
+
+    # Local node
+    local local_status local_running=false
+    if ss -tlnp 2>/dev/null | grep -q ":${local_port} "; then
+        local_status="${GREEN}● running${RESET}"
+        local_running=true
+    else
+        local_status="${DIM}○ not running${RESET}"
+    fi
+    echo -e "  ${GREEN}$i${RESET}) Local node 127.0.0.1:${local_port}  $local_status" >&2
+    echo -e "  ${DIM}0) Back${RESET}" >&2
+    echo "" >&2
+
+    # Default: local if running, else first online public node
+    local default_sel=""
+    if $local_running; then
+        default_sel="$i"
+    elif [[ $first_online -gt 0 ]]; then
+        default_sel="$first_online"
+    fi
+
+    if [[ -n "$default_sel" ]]; then
+        echo -ne "  Select node [1-$i/0] (default $default_sel): " >&2
+    else
+        echo -ne "  Select node [1-$i/0]: " >&2
+    fi
+    local sel
+    read -r sel || true
+    [[ -z "$sel" && -n "$default_sel" ]] && sel="$default_sel"
+    [[ "$sel" == "0" ]] && return 1
+
+    local chosen=""
+    if [[ "$sel" =~ ^[0-9]+$ && "$sel" -le "${#nodes[@]}" && "$sel" -ge 1 ]]; then
+        chosen="https://${nodes[$((sel-1))]}"
+    elif [[ "$sel" == "$i" ]]; then
+        chosen="http://127.0.0.1:${local_port}"
+    else
+        echo "Invalid selection." >&2; return 1
+    fi
+    echo "$chosen"
+}
+
+
+_drop_read_pass_new() {
+    # Returns passphrase via stdout. Min 3 chars. Enter "0" to cancel (exit 1).
+    # All UI goes to >&2 so stdout stays clean for $() capture.
+    local pass pass2
+    while true; do
+        read -rs -p "  Passphrase (min 3 chars, 0 to cancel): " pass; echo "" >&2
+        [[ "$pass" == "0" ]] && return 1
+        if [[ ${#pass} -lt 3 ]]; then
+            echo "  Passphrase must be at least 3 characters." >&2
+            continue
+        fi
+        read -rs -p "  Confirm passphrase: " pass2; echo "" >&2
+        if [[ "$pass" != "$pass2" ]]; then
+            echo "  Passphrases do not match. Try again." >&2
+            unset pass pass2
+            continue
+        fi
+        unset pass2
+        break
+    done
+    printf '%s' "$pass"
+}
+
+_drop_init_wallet() {
+    local mode="$1"  # "new" or "recover"
+    # Called directly (not via $()) so grin-wallet has a live TTY.
+    # Overwrite guard and file cleanup are handled by drop_setup_wallet step 1.
+
+    mkdir -p "$DROP_WALLET_DIR"
+
+    # ── Passphrase ───────────────────────────────────────────────────────────
+    local wallet_pass
+    wallet_pass=$(_drop_read_pass_new) || { info "Cancelled."; return 1; }
+
+    # ── Run grin-wallet init ─────────────────────────────────────────────────
+    local init_flag="-h"
+    [[ "$mode" == "recover" ]] && init_flag="-hr"
+
+    info "Running: grin-wallet $DROP_NET_FLAG init $init_flag"
+    [[ "$mode" == "new" ]] && echo -e "\n  ${YELLOW}Write down the seed phrase shown below!${RESET}\n"
+
+    # Run directly — no pipe, full TTY for grin-wallet's seed/passphrase prompts.
+    # Security trade-off: -p exposes the passphrase in the process argument list
+    # (visible via `ps aux` / /proc/<pid>/cmdline) for the duration of this call.
+    # grin-wallet has no stdin or env-var passphrase input — -p is the only option.
+    # Exposure is brief (one-time during init) and limited to users with root/ps access.
+    # shellcheck disable=SC2086
+    cd "$DROP_WALLET_DIR" && "$DROP_WALLET_BIN" \
+        $DROP_NET_FLAG --top_level_dir "$DROP_WALLET_DIR" \
+        -p "$wallet_pass" init $init_flag
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+        warn "Init exited with code $rc — check output above."
+        return 1
+    fi
+
+    [[ "$mode" == "new" ]] && warn "IMPORTANT: Write down the seed phrase shown above on paper."
+    echo ""
+
+    # ── Save passphrase ──────────────────────────────────────────────────────
+    echo -e "  ${BOLD}${RED}⚠  Security warning:${RESET}"
+    echo -e "  ${YELLOW}  Saving the passphrase allows the wallet listener to auto-start on reboot${RESET}"
+    echo -e "  ${YELLOW}  and restart automatically if the wallet process crashes.${RESET}"
+    echo -e "  ${YELLOW}  It is stored in PLAIN TEXT — your hosting provider and anyone${RESET}"
+    echo -e "  ${YELLOW}  with root access can read it. Keep balance low.${RESET}"
+    echo ""
+    echo -ne "  Save passphrase for auto-start? [y/N]: "
+    local save_pass
+    read -r save_pass || true
+    [[ "${save_pass,,}" == "y" ]] && _drop_save_pass "$wallet_pass"
+    echo ""
+
+    # ── Save seed words ──────────────────────────────────────────────────────
+    echo -ne "  Save seed words to $DROP_WORD? [y/N]: "
+    local save_seed
+    read -r save_seed || true
+    [[ "${save_seed,,}" == "y" ]] && _drop_save_seed "$wallet_pass"
+
+    return 0
+}
+
+_drop_save_pass() {
+    local wallet_pass="$1"
+    mkdir -p "$(dirname "$DROP_PASS")"
+    echo "$wallet_pass" > "$DROP_PASS"
+    chmod 600 "$DROP_PASS"
+    id grin &>/dev/null && chown grin:grin "$DROP_PASS" 2>/dev/null || true
+    success "Passphrase saved to $DROP_PASS (mode 600)"
+}
+
+_drop_save_seed() {
+    local wallet_pass="$1"
+
+    echo ""
+    # Security trade-off: same as init — -p exposes the passphrase in `ps aux`
+    # for the duration of this call. One-time, brief.
+    info "Retrieving seed phrase from wallet..."
+    local seed_output
+    # shellcheck disable=SC2086
+    seed_output=$(cd "$DROP_WALLET_DIR" && "$DROP_WALLET_BIN" \
+        $DROP_NET_FLAG --top_level_dir "$DROP_WALLET_DIR" \
+        -p "$wallet_pass" recover 2>&1) || true
+
+    echo ""
+    echo -e "  ${BOLD}${RED}⚠  Security warning — PLAINTEXT SEED STORAGE:${RESET}"
+    echo -e "  ${YELLOW}  The seed phrase will be saved in PLAIN TEXT on this server.${RESET}"
+    echo -e "  ${YELLOW}  Anyone with root access or your hosting provider can read it.${RESET}"
+    echo -e "  ${YELLOW}  A compromised server means your funds are at risk.${RESET}"
+    echo -e "  ${YELLOW}  Only use this on a server you fully trust and control.${RESET}"
+    echo ""
+    warn "Make sure you are alone. The seed phrase will be displayed below."
+    read -rs -p "  Press Enter to view and save..."; echo ""
+    echo ""
+    echo "  ─── SEED PHRASE ───────────────────────────────────────────"
+    echo "$seed_output"
+    echo "  ───────────────────────────────────────────────────────────"
+    echo ""
+    warn "Write it down on paper as well. Do not rely solely on this file."
+    echo ""
+
+    mkdir -p "$(dirname "$DROP_WORD")"
+    echo "$seed_output" > "$DROP_WORD"
+    chmod 600 "$DROP_WORD"
+    chown root:root "$DROP_WORD" 2>/dev/null || true
+    success "Seed words saved → $DROP_WORD  ${DIM}(plaintext, mode 600, owned root)${RESET}"
+    echo ""
+}
+
+_drop_write_toml() {
+    # grin-wallet init writes chain_type correctly based on --testnet, but the
+    # listen ports (api_listen_port, owner_api_listen_port) default to 3415/3420
+    # even on testnet — they must be explicitly patched here.
+    local node_url="$1"
+    local toml="$DROP_WALLET_DIR/grin-wallet.toml"
+
+    if [[ ! -f "$toml" ]]; then
+        warn "grin-wallet.toml not found — was init skipped?"; return 1
+    fi
+
+    # 1. Remote node address — skip if local (grin-wallet default is already 127.0.0.1)
+    if [[ "$node_url" != *"127.0.0.1"* ]]; then
+        _patch_toml "$toml" "check_node_api_http_addr" "\"${node_url}\""
+    fi
+
+    # 2. Local grin node API secret — only needed when connecting to a local node.
+    #    grin-wallet calls the node's Foreign API (port 3413/13413) for get_version,
+    #    broadcast, etc. Without the correct secret the node returns 403 →
+    #    "Cannot parse response" / get_version error.
+    #    Node is always installed via script 01 → secret at <node_dir>/.foreign_api_secret
+    if [[ "$node_url" == *"127.0.0.1"* ]]; then
+        local node_secret_path=""
+        local instances_conf="/opt/grin/conf/grin_instances_location.conf"
+        if [[ -f "$instances_conf" ]]; then
+            # shellcheck source=/dev/null
+            source "$instances_conf" 2>/dev/null || true
+            local node_dir=""
+            if [[ "$DROP_NETWORK" == "testnet" ]]; then
+                node_dir="${PRUNETEST_GRIN_DIR:-}"
+            else
+                node_dir="${PRUNEMAIN_GRIN_DIR:-${FULLMAIN_GRIN_DIR:-}}"
+            fi
+            [[ -f "$node_dir/.foreign_api_secret" ]] && node_secret_path="$node_dir/.foreign_api_secret"
+        fi
+
+        if [[ -n "$node_secret_path" ]]; then
+            _patch_toml "$toml" "node_api_secret_path" "\"$node_secret_path\""
+            info "Node API secret: $node_secret_path"
+        else
+            warn "Node secret not found — run script 01 to build the node first."
+        fi
+    fi
+
+    # 3. Listen ports — enforce network-correct values (init defaults to 3415/3420 even for testnet)
+    _patch_toml "$toml" "api_listen_port"       "$DROP_TOR_PORT"
+    _patch_toml "$toml" "owner_api_listen_port" "$DROP_OWNER_PORT"
+
+    # 4. Wallet Owner API secret — absolute path (grin-wallet default is relative)
+    # Foreign API secret (.foreign_api_secret) is left at grin-wallet's own default — no override needed.
+    _patch_toml_in_section "$toml" "wallet" "owner_api_secret_path" "\"$DROP_WALLET_DIR/.owner_api_secret\""
+
+    # 5. Limit log rotation
+    _patch_toml "$toml" "log_max_files" "3"
+
+    local node_label="$node_url"
+    [[ "$node_url" == *"127.0.0.1"* ]] && node_label="local (127.0.0.1)"
+    success "grin-wallet.toml patched (node=$node_label)"
+}
+
+# =============================================================================
+# OPTION 2 — Wallet listener (two tmux sessions + cron + watchdog)
+# =============================================================================
+
+drop_wallet_listener() {
+    while true; do
+        clear
+        echo -e "\n${BOLD}${CYAN}── Grin Drop [$DROP_NET_LABEL] — 2) Wallet Listening ──${RESET}\n"
+
+        if [[ ! -x "$DROP_WALLET_BIN" ]]; then
+            warn "Wallet binary not found — run option 1 first."; pause; return
+        fi
+        if [[ ! -f "$DROP_WALLET_DIR/grin-wallet.toml" ]]; then
+            warn "Wallet not initialized — run option 1 first."; pause; return
+        fi
+        if ! command -v tmux &>/dev/null; then
+            info "Installing tmux..."; apt-get install -y tmux || { warn "apt-get failed."; pause; return; }
+        fi
+
+        # Status
+        local tor_st owner_st
+        tmux has-session -t "$DROP_TMUX_TOR" 2>/dev/null \
+            && tor_st="${GREEN}● running${RESET}" || tor_st="${DIM}○ stopped${RESET}"
+        tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null \
+            && owner_st="${GREEN}● running${RESET}" || owner_st="${DIM}○ stopped${RESET}"
+
+        local port_tor_st port_owner_st
+        ss -tlnp 2>/dev/null | grep -q ":${DROP_TOR_PORT} "   && port_tor_st="${GREEN}listening${RESET}"   || port_tor_st="${DIM}not listening${RESET}"
+        ss -tlnp 2>/dev/null | grep -q ":${DROP_OWNER_PORT} " && port_owner_st="${GREEN}listening${RESET}" || port_owner_st="${DIM}not listening${RESET}"
+
+        echo -e "  ${BOLD}TOR session${RESET}  ($DROP_TMUX_TOR)   : $tor_st   port :${DROP_TOR_PORT} $port_tor_st"
+        echo -e "  ${BOLD}Owner session${RESET}($DROP_TMUX_OWNER): $owner_st   port :${DROP_OWNER_PORT} $port_owner_st"
+        echo ""
+
+        local cron_reboot_note="${DIM}not set${RESET}"
+        crontab -l 2>/dev/null | grep -q "drop-${DROP_NETWORK}" \
+            && cron_reboot_note="${GREEN}enabled${RESET}"
+        local watchdog_note="${DIM}not set${RESET}"
+        crontab -l 2>/dev/null | grep -q "052_watchdog_${DROP_NETWORK}" \
+            && watchdog_note="${GREEN}enabled${RESET}"
+        echo -e "  Auto-start @reboot : $cron_reboot_note   Watchdog : $watchdog_note"
+        echo ""
+
+        # Passphrase file — required by the Node.js server to call Owner API open_wallet
+        local pass_note
+        if [[ -s "$DROP_PASS" ]]; then
+            pass_note="${GREEN}✓ exists${RESET}"
+        else
+            pass_note="${RED}✗ MISSING${RESET} — ${YELLOW}Node.js server cannot open the wallet (balance/claim/donate will fail)${RESET}"
+            echo -e "  ${RED}⚠  Passphrase file: $pass_note${RESET}"
+            echo -e "  ${DIM}   Fix: re-run 'Setup wallet' (option 1) and choose 'Save passphrase for auto-start'.${RESET}"
+        fi
+        [[ -s "$DROP_PASS" ]] && echo -e "  Passphrase file    : $pass_note  ${DIM}($DROP_PASS)${RESET}"
+        echo ""
+
+        echo -e "  ${GREEN}1${RESET}) Start / restart TOR session   ${DIM}($DROP_TMUX_TOR)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Start / restart Owner API session  ${DIM}($DROP_TMUX_OWNER)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Start / restart Both"
+        echo -e "  ${DIM}──────────────────────────────────────────${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Stop TOR session"
+        echo -e "  ${GREEN}5${RESET}) Stop Owner API session"
+        echo -e "  ${GREEN}6${RESET}) Stop both"
+        echo -e "  ${DIM}──────────────────────────────────────────${RESET}"
+        echo -e "  ${GREEN}7${RESET}) Auto-start TOR/API wallets @reboot    ${DIM}[$cron_reboot_note${DIM}]${RESET}"
+        echo -e "  ${GREEN}8${RESET}) Watchdog: auto-restart wallet on crash ${DIM}[$watchdog_note${DIM}]${RESET}"
+        echo -e "  ${DIM}──────────────────────────────────────────${RESET}"
+        echo -e "  ${DIM}To view wallet output: Ctrl+B then S to switch tmux sessions${RESET}"
+        echo -e "  ${DIM}↩  Refresh status${RESET}"
+        echo -e "  ${DIM}0) Back${RESET}"
+        echo ""
+        echo -ne "${BOLD}Select [1-8/0]: ${RESET}"
+        local choice
+        read -r choice || true
+
+        case "$choice" in
+            1)  _drop_start_session tor   ;;
+            2)  _drop_start_session owner ;;
+            3)  _drop_start_session both  ;;
+            4)  _drop_stop_session  tor   ;;
+            5)  _drop_stop_session  owner ;;
+            6)  _drop_stop_session  both  ;;
+            7)  _drop_toggle_reboot_cron   ;;
+            8)  _drop_toggle_watchdog_cron ;;
+            0)  break ;;
+            "")  continue ;;
+            *)  warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
+_drop_read_saved_pass() {
+    local wallet_pass=""
+    if [[ -f "$DROP_PASS" ]]; then
+        wallet_pass=$(cat "$DROP_PASS")
+        info "Using saved passphrase from $DROP_PASS" >&2
+    else
+        read -rs -p "  Wallet passphrase (blank if none): " wallet_pass; echo "" >&2
+    fi
+    echo "$wallet_pass"
+}
+
+_drop_launch_session() {
+    local name="$1" cmd="$2"
+    local run_user="grin"
+    id grin &>/dev/null || run_user="$USER"
+
+    if [[ "$run_user" == "grin" ]]; then
+        tmux new-session -d -s "$name" -c "$DROP_WALLET_DIR" \
+            "su -s /bin/bash -c \"$cmd; echo ''; echo 'Session exited. Press Enter to close.'; read\" grin"
+    else
+        tmux new-session -d -s "$name" -c "$DROP_WALLET_DIR" \
+            "bash -c \"$cmd; echo ''; echo 'Session exited. Press Enter to close.'; read\""
+    fi
+}
+
+_drop_start_session() {
+    # $1 = "tor" | "owner" | "both"
+    local target="$1"
+    local wallet_pass
+    wallet_pass=$(_drop_read_saved_pass)
+
+    # Security trade-off: -p embeds the passphrase as a literal string in the tmux
+    # command and exposes it in `ps aux` / /proc/<pid>/cmdline for the full lifetime
+    # of the grin-wallet listen/owner_api process (persistent, not just during startup).
+    # grin-wallet has no stdin or env-var passphrase input — -p is the only option.
+    local pass_arg=""
+    [[ -n "$wallet_pass" ]] && pass_arg="-p '$wallet_pass'"
+    local base_cmd="'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg"
+
+    if [[ "$target" == "tor" || "$target" == "both" ]]; then
+        tmux kill-session -t "$DROP_TMUX_TOR" 2>/dev/null || true
+        _drop_kill_wallet_processes "$DROP_TOR_PORT"
+        _drop_launch_session "$DROP_TMUX_TOR" "$base_cmd listen"
+        sleep 1
+        if tmux has-session -t "$DROP_TMUX_TOR" 2>/dev/null; then
+            success "TOR/Foreign session started: $DROP_TMUX_TOR"
+        else
+            warn "TOR session may have exited — check wallet config."
+        fi
+    fi
+
+    if [[ "$target" == "owner" || "$target" == "both" ]]; then
+        tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null || true
+        _drop_kill_wallet_processes "$DROP_OWNER_PORT"
+        _drop_launch_session "$DROP_TMUX_OWNER" "$base_cmd owner_api"
+        sleep 1
+        if tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null; then
+            success "Owner API session started: $DROP_TMUX_OWNER"
+        else
+            warn "Owner API session may have exited — check wallet config."
+        fi
+
+        # Auto-fetch wallet address and save to config so the donate tab shows
+        # the correct address even if the owner API is temporarily unreachable.
+        info "Fetching wallet address (waiting 5s for owner_api to initialise)…"
+        sleep 5
+        local fetched_addr=""
+        fetched_addr=$("$DROP_WALLET_BIN" $DROP_NET_FLAG \
+            --top_level_dir "$DROP_WALLET_DIR" \
+            ${wallet_pass:+-p "$wallet_pass"} address 2>/dev/null \
+            | grep -oE '(tgrin1|grin1)[a-z0-9]{40,}' | head -1 || true)
+        if [[ -n "$fetched_addr" ]]; then
+            drop_write_conf_key "wallet_address" "$fetched_addr"
+            success "Wallet address saved to config: $fetched_addr"
+        else
+            info "Could not auto-fetch wallet address — set it manually via option 4 Configure."
+        fi
+    fi
+
+    # Warn if passphrase file is missing — the Node.js server reads it to call
+    # open_wallet on the Owner API. Without it, balance/claim/donate all fail.
+    if [[ "$target" == "owner" || "$target" == "both" ]]; then
+        if [[ ! -s "$DROP_PASS" ]]; then
+            echo ""
+            warn "Passphrase file not found: $DROP_PASS"
+            warn "The Node.js server (grin-drop service) calls the Owner API on every request."
+            warn "It reads the wallet passphrase from this file to call open_wallet."
+            warn "Without it, balance / claim / donate features will all fail."
+            echo ""
+            echo -ne "  Save the passphrase to $DROP_PASS now? [y/N]: "
+            local save_now; read -r save_now || true
+            if [[ "${save_now,,}" == "y" ]]; then
+                echo -ne "  Enter wallet passphrase: "
+                local manual_pass; read -rs manual_pass; echo ""
+                if [[ -n "$manual_pass" ]]; then
+                    _drop_save_pass "$manual_pass"
+                    unset manual_pass
+                else
+                    warn "Empty passphrase — not saved."
+                fi
+            fi
+        fi
+    fi
+
+    unset wallet_pass pass_arg base_cmd
+    log "[drop_start_session:$target] network=$DROP_NETWORK"
+    pause
+}
+
+_drop_stop_session() {
+    # $1 = "tor" | "owner" | "both"
+    local target="$1"
+    if [[ "$target" == "tor" || "$target" == "both" ]]; then
+        tmux kill-session -t "$DROP_TMUX_TOR" 2>/dev/null \
+            && success "Stopped tmux: $DROP_TMUX_TOR" \
+            || info "Tmux not running: $DROP_TMUX_TOR"
+        _drop_kill_wallet_processes "$DROP_TOR_PORT"
+    fi
+    if [[ "$target" == "owner" || "$target" == "both" ]]; then
+        tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null \
+            && success "Stopped tmux: $DROP_TMUX_OWNER" \
+            || info "Tmux not running: $DROP_TMUX_OWNER"
+        _drop_kill_wallet_processes "$DROP_OWNER_PORT"
+    fi
+    if [[ "$target" == "both" ]]; then
+        # Kill the scan session and any surviving wallet processes (orphaned or scan)
+        local scan_tmux="drop-${DROP_NETWORK}-scan"
+        tmux kill-session -t "$scan_tmux" 2>/dev/null \
+            && info "Stopped tmux: $scan_tmux" || true
+        _drop_kill_wallet_processes  # full stop — catches scan + PPID=1 orphans
+    fi
+    log "[drop_stop_session:$target] network=$DROP_NETWORK"
+    pause
+}
+
+_drop_toggle_reboot_cron() {
+    local tag="# grin-drop-${DROP_NETWORK}-reboot"
+    local cur_cron; cur_cron=$(crontab -l 2>/dev/null || true)
+
+    if echo "$cur_cron" | grep -q "$tag"; then
+        # Remove
+        echo "$cur_cron" | grep -v "$tag" | crontab - 2>/dev/null || true
+        success "Auto-start @reboot disabled for $DROP_NET_LABEL."
+    else
+        # Prompt for boot delay so wallet starts after node is ready
+        local delay=300
+        echo ""
+        echo -e "  ${DIM}Boot delay — wallet will wait this many seconds after reboot${RESET}"
+        echo -e "  ${DIM}before starting (gives node time to come up first).${RESET}"
+        echo -ne "  Boot delay in seconds [${delay}]: "
+        local delay_input; read -r delay_input || true
+        [[ "$delay_input" =~ ^[0-9]+$ ]] && delay="$delay_input"
+
+        # Add — wrapper script reads pass from file, never appears in ps.
+        # export SHELL=/bin/bash ensures tmux uses bash when launched from
+        # cron @reboot (where SHELL is unset or /bin/sh by default).
+        local wrapper="$DROP_APP_DIR/drop-${DROP_NETWORK}-start.sh"
+        local pass_arg=""
+        [[ -f "$DROP_PASS" ]] && pass_arg="-p \"\$(cat '$DROP_PASS')\""
+        cat > "$wrapper" << WRAPPER_EOF
+#!/bin/bash
+# Auto-generated by 052_grin_drop.sh — do not edit manually
+export SHELL=/bin/bash
+sleep $delay
+tmux new-session -d -s "$DROP_TMUX_TOR" -c "$DROP_WALLET_DIR" \\
+    "'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg listen"
+sleep 3
+tmux new-session -d -s "$DROP_TMUX_OWNER" -c "$DROP_WALLET_DIR" \\
+    "'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg owner_api"
+WRAPPER_EOF
+        chmod 700 "$wrapper"
+        id grin &>/dev/null && chown root:grin "$wrapper" 2>/dev/null || true
+
+        (echo "$cur_cron"; echo "@reboot $wrapper  $tag") | crontab - 2>/dev/null || true
+        success "Auto-start @reboot enabled for $DROP_NET_LABEL (boot delay: ${delay}s). Wrapper: $wrapper"
+    fi
+    pause
+}
+
+_drop_toggle_watchdog_cron() {
+    local tag="052_watchdog_${DROP_NETWORK}"
+    local cur_cron; cur_cron=$(crontab -l 2>/dev/null || true)
+
+    if echo "$cur_cron" | grep -q "$tag"; then
+        echo "$cur_cron" | grep -v "$tag" | crontab - 2>/dev/null || true
+        success "Watchdog disabled for $DROP_NET_LABEL."
+    else
+        local wrapper="$DROP_APP_DIR/drop-${DROP_NETWORK}-watchdog.sh"
+        local pass_arg=""
+        [[ -f "$DROP_PASS" ]] && pass_arg="-p \"\$(cat '$DROP_PASS')\""
+        cat > "$wrapper" << WATCHDOG_EOF
+#!/bin/bash
+# Watchdog — auto-generated by 052_grin_drop.sh
+ss -tlnp | grep -q ":${DROP_TOR_PORT} " || \\
+    tmux new-session -d -s "$DROP_TMUX_TOR" -c "$DROP_WALLET_DIR" \\
+        "'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg listen"
+ss -tlnp | grep -q ":${DROP_OWNER_PORT} " || \\
+    tmux new-session -d -s "$DROP_TMUX_OWNER" -c "$DROP_WALLET_DIR" \\
+        "'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg owner_api"
+WATCHDOG_EOF
+        chmod 700 "$wrapper"
+        id grin &>/dev/null && chown root:grin "$wrapper" 2>/dev/null || true
+
+        (echo "$cur_cron"; echo "*/5 * * * * $wrapper  # $tag") | crontab - 2>/dev/null || true
+        success "Watchdog enabled (checks every 5 min). Wrapper: $wrapper"
+    fi
+    pause
+}
+

@@ -588,10 +588,15 @@ app.post('/api/donate/receive', async (req, res) => {
     // 2. Foreign API receive_tx — no LMDB conflict with Owner API calls
     const responseSlate = await foreignApiCall('receive_tx', [slate, null, null]);
 
-    // 3. Encode response slate → slatepack
+    // 3. Encode response slate → slatepack.
+    // sender_index: null — do NOT embed the server's Tor address in the envelope.
+    // Previously sender_index: 0 caused donor wallets (Tor enabled by default) to
+    // auto-deliver the payment response directly to the server's Foreign API, bypassing
+    // this endpoint entirely. That produced "ghost" TxReceived entries in grin-wallet
+    // (tx_slate_id=None, kernel_excess=None) with no matching DB record.
     const responseSlatepack = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'create_slatepack_message', {
       token,
-      sender_index: 0,
+      sender_index: null,
       recipients:   [],
       slate:        responseSlate,
     });
@@ -599,8 +604,9 @@ app.post('/api/donate/receive', async (req, res) => {
     // Record donation as confirmed — receive_tx succeeded so the wallet has accepted it.
     // Amount is in nanogrin in the slate; convert to GRIN for storage.
     const amountGrin = slate && slate.amount ? parseInt(slate.amount) / 1_000_000_000 : 0;
+    const txId = responseSlate && responseSlate.id ? String(responseSlate.id) : '';
     db.createSlatepackDonation('', amountGrin);
-    actLog('INFO', `DONATE_RECEIVE_OK amount=${amountGrin} GRIN`);
+    actLog('INFO', `DONATE_RECEIVE_OK amount=${amountGrin} GRIN tx=${txId}`);
 
     res.json({ response_slatepack: responseSlatepack });
   } catch (e) {
@@ -650,23 +656,23 @@ app.post('/api/donate/invoice', async (req, res) => {
       },
     });
 
-    // 2. Encode invoice → slatepack
-    // sender_index: 0 — embeds the server's slatepack address in the envelope.
-    // NOTE: wallets with TOR enabled (grin-wallet default) will detect this address
-    // and automatically attempt to send the payment response via TOR directly to
-    // the server's grin-wallet listener — the donor WON'T need to paste a response
-    // slatepack back to the website.  If TOR fails or is disabled, the wallet will
-    // fall back to outputting a slatepack for the donor to paste manually.
+    // 2. Encode invoice → slatepack.
+    // sender_index: null — do NOT embed the server's Tor address in the envelope.
+    // Previously sender_index: 0 caused donor wallets (Tor enabled by default) to
+    // auto-complete the payment via Tor directly to the server's Foreign API, bypassing
+    // /api/donate/finalize entirely. That left DB invoices stuck as "pending" and
+    // produced "ghost" TxReceived entries in grin-wallet (tx_slate_id=None).
+    // With null, the donor must always paste the response slatepack back to the website.
     const invoiceSlatepack = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'create_slatepack_message', {
       token,
-      sender_index: 0,
+      sender_index: null,
       recipients:   [],
       slate,
     });
 
     // 3. Store pending invoice in DB
     db.createInvoiceDonation(amount, address, invoiceId, timeoutMin);
-    actLog('INFO', `DONATE_INVOICE_OK invoice_id=${invoiceId} amount=${amount}`);
+    actLog('INFO', `DONATE_INVOICE_OK invoice_id=${invoiceId} amount=${amount} slate=${slate && slate.id ? slate.id : ''}`);
 
     res.json({ invoice_id: invoiceId, invoice_slatepack: invoiceSlatepack });
   } catch (e) {

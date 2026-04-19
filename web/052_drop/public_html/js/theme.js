@@ -17,13 +17,17 @@ const THEME_LOGO = {
   dark:    "img/grin-logo-lime.svg",
   cute:    "img/grin-logo-pink.svg",
 };
-const STORAGE_KEY = "grin-faucet-theme";
+const STORAGE_KEY = "grin-faucet-theme-" + (window.DROP_NETWORK || "testnet");
 let _current = null;
+
+function _defaultTheme() {
+  return window.DROP_NETWORK === 'mainnet' ? 'win98' : 'matrix';
+}
 
 // Apply CSS + logo early (before DOMContentLoaded) to avoid flash of wrong theme/logo.
 (function() {
   const link = document.getElementById("theme-css");
-  const saved = localStorage.getItem(STORAGE_KEY) || "matrix";
+  const saved = localStorage.getItem(STORAGE_KEY) || _defaultTheme();
   if (link && THEME_CSS[saved]) link.href = THEME_CSS[saved];
   // Logo swap runs after DOM is parsed — img element not available yet.
   // initTheme() handles it on DOMContentLoaded.
@@ -61,7 +65,7 @@ function applyTheme(name) {
 }
 
 function initTheme() {
-  const saved = localStorage.getItem(STORAGE_KEY) || "matrix";
+  const saved = localStorage.getItem(STORAGE_KEY) || _defaultTheme();
   applyTheme(saved);
 
   // Theme button clicks

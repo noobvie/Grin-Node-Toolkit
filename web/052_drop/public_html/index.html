@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <title>Grin Drop — Free GRIN Coins</title>
+  <title>Grin Drop</title>
   <meta name="description" content="Claim free GRIN or donate to keep the drop running. No sign-up required.">
   <meta name="keywords" content="grin faucet, testnet grin, grin testnet faucet, free grin coins, grin cryptocurrency testnet, grin-wallet test, slatepack tutorial">
   <!-- Open Graph -->
@@ -30,9 +30,11 @@
   <link rel="stylesheet" id="theme-css" href="">
   <script>
   (function(){
-    var t=localStorage.getItem('grin-faucet-theme')||'matrix';
+    var net=(window.DROP_NETWORK||'testnet');
+    var dflt=(net==='mainnet')?'win98':'matrix';
+    var t=localStorage.getItem('grin-faucet-theme-'+net)||dflt;
     var m={matrix:'css/themes/matrix.css',warcraft:'css/themes/warcraft.css',win98:'css/themes/win98.css',light:'css/themes/light.css',dark:'css/themes/dark.css',cute:'css/themes/cute.css'};
-    document.getElementById('theme-css').href=m[t]||m.matrix;
+    document.getElementById('theme-css').href=m[t]||m[dflt];
   })();
   </script>
 </head>
@@ -124,6 +126,7 @@
   <!-- ── Claim section ──────────────────────────────────────────────────────── -->
   <section id="section-giveaway" aria-label="Claim GRIN">
     <h2 id="claim-title" class="section-hero">Claim free GRIN</h2>
+    <div id="net-banner-claim-section"></div>
 
     <!-- Claim method tabs -->
     <div class="claim-tabs" role="tablist" aria-label="Claim method">
@@ -156,6 +159,7 @@
           <label for="claim-address" id="claim-address-label">Your Grin Address</label>
           <input type="text" id="claim-address" placeholder="" autocomplete="off" spellcheck="false">
           <p class="error-msg" id="claim-error"></p>
+          <div id="net-banner-claim"></div>
           <button class="btn btn-full" id="claim-btn">Claim</button>
         </div>
 
@@ -182,6 +186,7 @@
                    placeholder="0.001 – 0.09" style="max-width:200px;">
           </div>
           <p class="error-msg" id="anon-claim-error"></p>
+          <div id="net-banner-anon"></div>
           <button class="btn btn-full" id="anon-claim-btn">Claim — No Address Needed</button>
         </div>
 
@@ -201,7 +206,7 @@
         <button class="btn btn-outline btn-sm" id="copy-slatepack-btn">Copy Slatepack</button>
 
         <div class="info-box" style="margin-top:1rem;">
-          <strong>CLI:</strong> <code>./grin-wallet --testnet receive</code> → paste slatepack → press Enter → copy the response<br>
+          <strong>CLI:</strong> <code id="claim-receive-cmd">./grin-wallet receive</code> → paste slatepack → press Enter → copy the response<br>
           <strong>Grim:</strong> Receive tab → paste slatepack → confirm → copy response
         </div>
 
@@ -235,7 +240,7 @@
 
   <!-- ── Donate section ─────────────────────────────────────────────────────── -->
   <section id="section-donation" aria-label="Donate to keep the drop running">
-    <h2 class="section-hero">Donate to Keep This Drop Running</h2>
+    <h2 id="donate-section-title" class="section-hero">Donate to Keep This Drop Running</h2>
 
     <!-- Tab switcher — underline style -->
     <div class="donate-tabs" role="tablist" aria-label="Donation method">
@@ -252,7 +257,8 @@
           The simplest method — paste the address below into your wallet and send any amount.
           TOR must be running. If the connection is unstable, use one of the other tabs.
         </p>
-        <div class="donate-step-label">Our Grin Address</div>
+        <div id="net-banner-tor"></div>
+        <div class="donate-step-label" id="donate-tor-addr-label">Our Grin Address</div>
         <div class="cmd-box" id="donate-address">Loading…</div>
         <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem;">
           <button class="btn btn-outline btn-sm" id="copy-donate-addr-btn">Copy Address</button>
@@ -298,7 +304,8 @@
                     placeholder="BEGINSLATEPACK...ENDSLATEPACK."
                     style="font-family:var(--font-mono);font-size:.78rem;margin-top:.35rem;"></textarea>
         </div>
-        <button class="btn btn-full" id="donate-receive-btn" style="margin-top:.8rem;">Process Donation →</button>
+        <div id="net-banner-pane2" style="margin-top:.8rem;"></div>
+        <button class="btn btn-full" id="donate-receive-btn">Process Donation →</button>
         <p class="error-msg" id="donate-receive-error" style="margin-top:.6rem;"></p>
       </div>
 
@@ -344,7 +351,8 @@
           <input type="text" id="donate-invoice-address" placeholder=""
                  autocomplete="off" spellcheck="false" style="margin-top:.35rem;">
         </div>
-        <button class="btn btn-full" id="donate-invoice-btn" style="margin-top:.8rem;" disabled>Create Invoice →</button>
+        <div id="net-banner-pane3" style="margin-top:.8rem;"></div>
+        <button class="btn btn-full" id="donate-invoice-btn" disabled>Create Invoice →</button>
         <p class="error-msg" id="donate-invoice-error" style="margin-top:.6rem;"></p>
       </div>
 
@@ -395,7 +403,7 @@
     <h2>How It Works</h2>
 
     <!-- Section A — Setup wallet -->
-    <h3>A) Set up your testnet wallet</h3>
+    <h3 id="howitworks-setup-label">A) Set up your testnet wallet</h3>
     <div class="tabs" role="tablist">
       <button class="tab-btn" data-tab="cli"  role="tab">grin-wallet CLI</button>
       <button class="tab-btn" data-tab="grim" role="tab">Grim (GUI)</button>
@@ -412,8 +420,8 @@
           No blockchain download required.
         </li>
         <li data-n="2">
-          <strong>Initialize a testnet wallet</strong><br>
-          <code>./grin-wallet --testnet init</code><br>
+          <strong id="howitworks-init-label">Initialize a testnet wallet</strong><br>
+          <code id="howitworks-init-cmd">./grin-wallet --testnet init</code><br>
           Set a password when prompted. Save your seed phrase somewhere safe.
         </li>
         <li data-n="3">
@@ -424,13 +432,13 @@
         </li>
         <li data-n="4">
           <strong>Verify connection</strong><br>
-          <code>./grin-wallet --testnet info</code><br>
+          <code id="howitworks-info-cmd">./grin-wallet --testnet info</code><br>
           You should see your balance and "Node version" — you are connected.
         </li>
         <li data-n="5">
           <strong>Get your address</strong><br>
-          <code>./grin-wallet --testnet address</code><br>
-          Copy the <code>tgrin1...</code> address and paste it into the claim form above.
+          <code id="howitworks-addr-cmd">./grin-wallet --testnet address</code><br>
+          Copy the <code id="howitworks-addr-pfx">tgrin1...</code> address and paste it into the claim form above.
         </li>
       </ol>
     </div>
@@ -447,7 +455,7 @@
         </li>
         <li data-n="2">
           <strong>First launch setup wizard</strong><br>
-          · Select network: <strong>Testnet</strong><br>
+          · Select network: <strong id="howitworks-grim-net">Testnet</strong><br>
           · Node connection: <strong>External node</strong><br>
           · Node URL: pick any online node below:<br>
           <div id="node-list-grim" class="node-status-list"><span style="color:var(--text-dim);font-size:.82rem;">Checking nodes…</span></div>
@@ -468,7 +476,7 @@
         <li data-n="2">Copy the <strong>SLATEPACK</strong> text shown on screen.</li>
         <li data-n="3">
           Paste slatepack into your wallet:<br>
-          <strong>CLI:</strong> <code>./grin-wallet --testnet receive</code> → paste → press Enter → wallet outputs a response slatepack<br>
+          <strong>CLI:</strong> <code id="howitworks-receive-cmd">./grin-wallet --testnet receive</code> → paste → press Enter → wallet outputs a response slatepack<br>
           <strong>Grim:</strong> Receive tab → paste slatepack → confirm → copy the response
         </li>
         <li data-n="4">Copy the <strong>response slatepack</strong> from your wallet.</li>

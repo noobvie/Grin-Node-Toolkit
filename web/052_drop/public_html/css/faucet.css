@@ -561,3 +561,37 @@ footer a:hover { color: var(--accent); }
   /* Touch target: theme-picker button must be ≥ 44×44px */
   .theme-picker-btn { width: 2.75rem; height: 2.75rem; }
 }
+
+/* ── Network banner (above action buttons + Tor address) ─────────────────── */
+.net-banner {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  padding: .45rem .75rem;
+  border-radius: var(--radius);
+  font-size: .82rem;
+  font-weight: 700;
+  margin-bottom: .75rem;
+  letter-spacing: .04em;
+  border: 1.5px solid;
+}
+.net-banner.net-mainnet {
+  background: rgba(245,158,11,.13);
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+.net-banner.net-testnet {
+  background: rgba(56,189,248,.1);
+  border-color: #38bdf8;
+  color: #38bdf8;
+}
+
+/* Tor address box — border glow by network */
+.donate-addr-mainnet {
+  border-color: #f59e0b !important;
+  box-shadow: 0 0 0 3px rgba(245,158,11,.18);
+}
+.donate-addr-testnet {
+  border-color: #38bdf8 !important;
+  box-shadow: 0 0 0 3px rgba(56,189,248,.13);
+}

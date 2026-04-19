@@ -765,8 +765,75 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // Network-specific title + address placeholder + label
+  const isMainnet = window.DROP_NETWORK === 'mainnet';
+  const bannerCls  = 'net-banner ' + (isMainnet ? 'net-mainnet' : 'net-testnet');
+  const bannerIcon = isMainnet ? '⚡' : '🧪';
+  const bannerText = isMainnet ? 'MAINNET — Real GRIN coins' : 'TESTNET — No real value';
+
+  // Browser tab title
+  document.title = isMainnet
+    ? 'Grin Drop — Mainnet Real GRIN'
+    : 'Grin Drop — Free tGRIN Testnet';
+
+  // Claim section title
   const titleEl = $("claim-title");
-  if (titleEl) titleEl.textContent = `Claim free ${COIN}`;
+  if (titleEl) titleEl.textContent = isMainnet
+    ? 'Claim free real GRIN — Mainnet'
+    : 'Claim free tGRIN — Testnet';
+
+  // Network banner below claim title (above tabs)
+  const claimSectionBanner = $("net-banner-claim-section");
+  if (claimSectionBanner) {
+    claimSectionBanner.className = bannerCls;
+    claimSectionBanner.textContent = bannerIcon + ' ' + bannerText;
+  }
+
+  // Network banners above claim buttons
+  ['net-banner-claim', 'net-banner-anon'].forEach(id => {
+    const el = $(id);
+    if (el) { el.className = bannerCls; el.textContent = bannerIcon + ' ' + bannerText; }
+  });
+
+  // Donate section title
+  const donateTitleEl = $("donate-section-title");
+  if (donateTitleEl) donateTitleEl.textContent = isMainnet
+    ? 'Mainnet Wallet Needs More Donations'
+    : 'Donate to Testnet Wallet';
+
+  // Tor Direct tab — "Our Grin Address" label + address box highlight
+  const torAddrLabel = $("donate-tor-addr-label");
+  if (torAddrLabel) torAddrLabel.textContent = isMainnet
+    ? 'Our Mainnet Grin Address'
+    : 'Our Testnet Grin Address';
+  const torBanner = $("net-banner-tor");
+  if (torBanner) { torBanner.className = bannerCls; torBanner.textContent = bannerIcon + ' ' + bannerText; }
+  const torAddr = $("donate-address");
+  if (torAddr) torAddr.classList.add(isMainnet ? 'donate-addr-mainnet' : 'donate-addr-testnet');
+
+  // Network banners above Process Donation and Create Invoice buttons
+  ['net-banner-pane2', 'net-banner-pane3'].forEach(id => {
+    const el = $(id);
+    if (el) { el.className = bannerCls; el.textContent = bannerIcon + ' ' + bannerText; }
+  });
+
+  // Fix CLI commands in claim step-2 and How It Works section
+  const receiveCmd = $("claim-receive-cmd");
+  if (receiveCmd) receiveCmd.textContent = `./grin-wallet ${NET_FLAG}receive`;
+  [
+    ["howitworks-init-cmd",     `./grin-wallet ${NET_FLAG}init`],
+    ["howitworks-info-cmd",     `./grin-wallet ${NET_FLAG}info`],
+    ["howitworks-addr-cmd",     `./grin-wallet ${NET_FLAG}address`],
+    ["howitworks-receive-cmd",  `./grin-wallet ${NET_FLAG}receive`],
+  ].forEach(([id, cmd]) => { const el = $(id); if (el) el.textContent = cmd; });
+  const addrPfxEl = $("howitworks-addr-pfx");
+  if (addrPfxEl) addrPfxEl.textContent = ADDR_PFX + '...';
+  const initLabel = $("howitworks-init-label");
+  if (initLabel) initLabel.textContent = isMainnet ? 'Initialize a mainnet wallet' : 'Initialize a testnet wallet';
+  const setupLabel = $("howitworks-setup-label");
+  if (setupLabel) setupLabel.textContent = isMainnet ? 'A) Set up your mainnet wallet' : 'A) Set up your testnet wallet';
+  const grimNetEl = $("howitworks-grim-net");
+  if (grimNetEl) grimNetEl.textContent = isMainnet ? 'Mainnet' : 'Testnet';
+
   const addrInput = $("claim-address");
   if (addrInput) addrInput.placeholder = ADDR_PFX + "1...";
   const addrLabel = $("claim-address-label");

@@ -31,6 +31,8 @@ Publish API mainnet: https://api.grin.money
 Publish API testnet: https://testapi.grin.money
 
 Grin Global Health mainnet: https://world.grin.money
+
+Free Grin Coin Portal: https://drop.grin.money/
 ...
 
 ---

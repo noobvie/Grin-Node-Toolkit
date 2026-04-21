@@ -3,6 +3,67 @@
 
 const REFRESH_SEC = 300; // 5 minutes — single shared poll
 
+// ── Cloudflare Turnstile (optional — injected by nginx if CF_TURNSTILE_KEY is configured) ──
+let _tsWidgetAddr = null;  // widget id for address-based claim pane
+let _tsWidgetAnon = null;  // widget id for anonymous claim pane
+let _tsCbAddr     = null;  // pending resolve callback for address widget
+let _tsCbAnon     = null;  // pending resolve callback for anon widget
+
+(function () {
+  const key = window.CF_TURNSTILE_KEY;
+  if (!key || !key.startsWith('0x')) return;  // Turnstile site keys start with 0x
+  const s = document.createElement('script');
+  s.src   = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+  s.async = true;
+  s.defer = true;
+  s.onload = function () {
+    _tsWidgetAddr = turnstile.render('#cf-turnstile-addr', {
+      sitekey: key, execution: 'execute', appearance: 'interaction-only',
+      callback:         function (t) { if (_tsCbAddr) { _tsCbAddr(t);  _tsCbAddr = null; } },
+      'error-callback': function ()  { if (_tsCbAddr) { _tsCbAddr(''); _tsCbAddr = null; } },
+    });
+    _tsWidgetAnon = turnstile.render('#cf-turnstile-anon', {
+      sitekey: key, execution: 'execute', appearance: 'interaction-only',
+      callback:         function (t) { if (_tsCbAnon) { _tsCbAnon(t);  _tsCbAnon = null; } },
+      'error-callback': function ()  { if (_tsCbAnon) { _tsCbAnon(''); _tsCbAnon = null; } },
+    });
+  };
+  document.head.appendChild(s);
+})();
+
+// Returns a Promise resolving to a token string (or '' if Turnstile not active).
+// cbSetter receives the resolve fn so the render-time callback can trigger it.
+function getTurnstileToken(widgetId, cbSetter) {
+  if (!widgetId || typeof turnstile === 'undefined') return Promise.resolve('');
+  return new Promise(function (resolve) {
+    cbSetter(resolve);
+    turnstile.execute(widgetId);
+  });
+}
+
+function resetTurnstile(widgetId) {
+  if (widgetId && typeof turnstile !== 'undefined') turnstile.reset(widgetId);
+}
+
+// ── GA4 analytics (optional — injected by nginx if GA4_ID is configured) ──────
+(function () {
+  const id = window.GA4_ID;
+  if (!id || !id.startsWith('G-')) return;
+  const s = document.createElement('script');
+  s.async = true;
+  s.src = 'https://www.googletagmanager.com/gtag/js?id=' + id;
+  document.head.appendChild(s);
+  window.dataLayer = window.dataLayer || [];
+  window.gtag = function () { window.dataLayer.push(arguments); };
+  window.gtag('js', new Date());
+  window.gtag('config', id);
+})();
+
+function trackEvent(name, params) {
+  if (typeof window.gtag !== 'function') return;
+  window.gtag('event', name, Object.assign({ network: window.DROP_NETWORK || 'unknown' }, params));
+}
+
 // ── Network context (injected by nginx sub_filter) ────────────────────────────
 const API      = window.APP_BASE  || '';
 const COIN     = window.DROP_NETWORK === 'testnet' ? 'tGRIN' : 'GRIN';
@@ -362,10 +423,13 @@ async function submitClaim() {
   if (btn) { btn.disabled = true; btn.textContent = "Requesting…"; }
 
   try {
+    const tsToken = await getTurnstileToken(_tsWidgetAddr, function (fn) { _tsCbAddr = fn; });
     const claimBody = { grin_address: address };
     if (_claimAmount !== null) claimBody.amount = _claimAmount;
+    if (tsToken) claimBody.cf_token = tsToken;
     const data = await apiPost(API + "/api/claim", claimBody);
     _claimId = data.claim_id;
+    trackEvent('claim_started', { method: 'address', amount: _claimAmount });
 
     const sp = $("slatepack-text");
     if (sp) sp.textContent = data.slatepack;
@@ -376,9 +440,12 @@ async function submitClaim() {
     setStep(2);
     refreshStatus();
   } catch (err) {
+    resetTurnstile(_tsWidgetAddr);
     if (err.status === 429) {
+      trackEvent('claim_rate_limited', { method: 'address' });
       showError("claim-error", "You already claimed recently. " + err.message);
     } else {
+      trackEvent('claim_error', { method: 'address' });
       showError("claim-error", "Error: " + err.message);
     }
   } finally {
@@ -403,15 +470,18 @@ async function submitFinalize() {
     });
     stopCountdown();
     clearClaimSession();
+    trackEvent('claim_success', { amount: data.amount });
     setText("confirm-tx-id",  data.tx_slate_id || "(not available)");
     setText("confirm-amount", formatGrin(data.amount));
     setStep(3);
     refreshStatus();
   } catch (err) {
     if (err.status === 410) {
+      trackEvent('claim_expired');
       showError("finalize-error", "Claim expired. Please start a new claim.");
       setStep(1);
     } else {
+      trackEvent('finalize_error');
       showError("finalize-error", "Error: " + err.message);
     }
   } finally {
@@ -464,9 +534,13 @@ async function submitClaimAnon() {
   const origText = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = "Requesting…"; }
   try {
-    const amount = _claimAnonAmount !== null ? _claimAnonAmount : ANON_CLAIM_AMOUNT;
-    const data = await apiPost(API + "/api/claim/anonymous", { amount });
+    const amount   = _claimAnonAmount !== null ? _claimAnonAmount : ANON_CLAIM_AMOUNT;
+    const tsToken  = await getTurnstileToken(_tsWidgetAnon, function (fn) { _tsCbAnon = fn; });
+    const anonBody = { amount };
+    if (tsToken) anonBody.cf_token = tsToken;
+    const data = await apiPost(API + "/api/claim/anonymous", anonBody);
     _claimId = data.claim_id;
+    trackEvent('claim_started', { method: 'anonymous', amount });
     const sp = $("slatepack-text");
     if (sp) sp.textContent = data.slatepack;
     sessionStorage.setItem('grin_drop_claim_id',   String(data.claim_id));
@@ -476,9 +550,12 @@ async function submitClaimAnon() {
     setStep(2);
     refreshStatus();
   } catch (err) {
+    resetTurnstile(_tsWidgetAnon);
     if (err.status === 429) {
+      trackEvent('claim_rate_limited', { method: 'anonymous' });
       showError("anon-claim-error", "You already claimed recently. " + err.message);
     } else {
+      trackEvent('claim_error', { method: 'anonymous' });
       showError("anon-claim-error", "Error: " + err.message);
     }
   } finally {
@@ -553,6 +630,7 @@ async function submitDonateReceive() {
   const SCAN_MSG = "Wallet is busy (full scan / LMDB write lock) — Slatepack is unavailable right now. Try again in a minute, or switch to Tab 1 · TOR Direct which always works during a scan.";
   try {
     const data = await apiPost(API + "/api/donate/receive", { send_slate: slate }, 25000);
+    trackEvent('donate_slatepack_received');
     const sp = data.response_slatepack || data.slatepack || "";
     const spEl = $("donate-response-slatepack");
     if (spEl) spEl.textContent = sp;
@@ -663,6 +741,7 @@ async function submitDonateFinalize() {
       invoice_id:     _invoiceId,
       response_slate: response,
     });
+    trackEvent('donate_success', { method: 'invoice', amount: _invAmount });
     clearDonateInvSession();
     hide("donate-inv-s2");
     show("donate-inv-s3");

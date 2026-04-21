@@ -263,13 +263,16 @@ setup_conf() {
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     show_local_grin_instances
-    echo -e "  Enter the Grin nodes you want to monitor."
-    echo -e "  Format: ${BOLD}ip_or_domain  port  [optional label]${RESET}"
+    echo -e "  Enter the nodes and websites you want to monitor."
+    echo -e "  ${BOLD}TCP port check:${RESET}  ip_or_domain  port  [optional label]"
+    echo -e "  ${BOLD}HTTP/S check:${RESET}    https://url  -  [optional label]"
     echo ""
     echo -e "  ${DIM}Examples:${RESET}"
     echo -e "  ${DIM}  1.2.3.4 3414 FriendNode${RESET}"
     echo -e "  ${DIM}  grinmain.example.com 3414 MainnetPublic${RESET}"
     echo -e "  ${DIM}  grintest.example.com 13414 TestnetPublic${RESET}"
+    echo -e "  ${DIM}  https://drop.grin.money - Drop Website${RESET}"
+    echo -e "  ${DIM}  https://grin.money - Main Site${RESET}"
     echo ""
     echo -e "  ${BOLD}Input mode:${RESET}"
     echo -e "  ${GREEN}1${RESET}) One by one (interactive)"
@@ -284,8 +287,9 @@ setup_conf() {
     local tmp_file
     tmp_file="$(mktemp)"
     {
-        echo "# Grin node hosts to monitor"
-        echo "# Format: ip_or_domain  port  [optional label]"
+        echo "# Grin node monitor — hosts and websites"
+        echo "# TCP:  ip_or_domain  port  [optional label]"
+        echo "# HTTP: https://url   -     [optional label]"
         echo "# Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
         echo ""
     } > "$tmp_file"
@@ -300,6 +304,12 @@ setup_conf() {
             local h p
             h=$(awk '{print $1}' <<< "$entry")
             p=$(awk '{print $2}' <<< "$entry")
+            if [[ "$h" == http://* || "$h" == https://* ]]; then
+                echo "$entry" >> "$tmp_file"
+                count=$((count + 1))
+                success "  Added (HTTP): $h"
+                continue
+            fi
             if [[ -z "$p" ]]; then
                 warn "  Skipped (missing port): $entry"
                 continue
@@ -314,14 +324,20 @@ setup_conf() {
         done
     else
         while true; do
-            echo -ne "  Host $((count + 1)) (or Enter to finish): "
+            echo -ne "  Entry $((count + 1)) (or Enter to finish): "
             read -r entry
             [[ -z "$entry" ]] && break
             local h p
             h=$(awk '{print $1}' <<< "$entry")
             p=$(awk '{print $2}' <<< "$entry")
+            if [[ "$h" == http://* || "$h" == https://* ]]; then
+                echo "$entry" >> "$tmp_file"
+                count=$((count + 1))
+                success "  Added (HTTP): $h"
+                continue
+            fi
             if [[ -z "$p" ]]; then
-                warn "  Format must be: ip_or_domain port [label]"
+                warn "  Format must be: ip_or_domain port [label]  OR  https://url - [label]"
                 continue
             fi
             if ! [[ "$p" =~ ^[0-9]+$ ]]; then
@@ -366,6 +382,19 @@ check_port() {
 }
 
 # =============================================================================
+# URL health check — curl with HTTP response code
+# =============================================================================
+check_url() {
+    local url="$1"
+    local http_code
+    http_code=$(curl -o /dev/null -s -w "%{http_code}" --max-time 5 "$url") || true
+    case "$http_code" in
+        2*|3*) echo "UP" ;;
+        *)     echo "DOWN" ;;
+    esac
+}
+
+# =============================================================================
 # Load last known state from state file
 # =============================================================================
 load_last_state() {
@@ -397,6 +426,15 @@ run_checks() {
         return 1
     fi
 
+    echo ""
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  Grin Node Monitor — $(date -u '+%Y-%m-%d %H:%M UTC')${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    printf "  ${BOLD}%-28s %-32s %-5s  %-8s  %s${RESET}\n" "Label" "Host / URL" "Type" "Status" "Change"
+    printf "  %-28s %-32s %-5s  %-8s  %s\n" \
+        "────────────────────────────" "────────────────────────────────" "─────" "────────" "──────────────"
+
     local line_count=0
     while IFS= read -r line; do
         [[ "$line" =~ ^# || -z "${line// }" ]] && continue
@@ -406,55 +444,34 @@ run_checks() {
         host=$(awk '{print $1}' <<< "$line")
         port=$(awk '{print $2}' <<< "$line")
         label=$(awk '{print $3}' <<< "$line")
-        [[ -z "$label" ]] && label="$host:$port"
 
-        local key="$host:$port"
+        local key type_label
+        if [[ "$host" == http://* || "$host" == https://* ]]; then
+            key="$host"
+            type_label="HTTP"
+            [[ -z "$label" ]] && label="$host"
+        else
+            key="$host:$port"
+            type_label="TCP"
+            [[ -z "$label" ]] && label="$host:$port"
+        fi
+
         local status
-        status=$(check_port "$host" "$port")
+        if [[ "$type_label" == "HTTP" ]]; then
+            status=$(check_url "$host")
+        else
+            status=$(check_port "$host" "$port")
+        fi
 
         RESULTS["$key"]="$status"
         LABELS["$key"]="$label"
 
         local prev="${LAST_STATE[$key]:-UNKNOWN}"
         if [[ "$prev" != "UNKNOWN" && "$prev" != "$status" ]]; then
-            CHANGES+=("$label ($host:$port): $prev → $status")
+            CHANGES+=("$label ($key): $prev → $status")
         fi
 
         log "CHECK $label ($key): $status  [prev: $prev]"
-    done < "$CONF_FILE"
-
-    if [[ $line_count -eq 0 ]]; then
-        warn "No hosts configured. Run with --reconfigure."
-        return 1
-    fi
-    return 0
-}
-
-# =============================================================================
-# Display results in terminal
-# =============================================================================
-display_results() {
-    echo ""
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  Grin Node Monitor — $(date -u '+%Y-%m-%d %H:%M UTC')${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-    printf "  ${BOLD}%-28s %-22s %-8s  %s${RESET}\n" "Label" "Host:Port" "Status" "Change"
-    printf "  %-28s %-22s %-8s  %s\n" \
-        "────────────────────────────" "──────────────────────" "────────" "──────────────"
-
-    while IFS= read -r line; do
-        [[ "$line" =~ ^# || -z "${line// }" ]] && continue
-
-        local host port label
-        host=$(awk '{print $1}' <<< "$line")
-        port=$(awk '{print $2}' <<< "$line")
-        label=$(awk '{print $3}' <<< "$line")
-        [[ -z "$label" ]] && label="$host:$port"
-
-        local key="$host:$port"
-        local status="${RESULTS[$key]:-?}"
-        local prev="${LAST_STATE[$key]:-UNKNOWN}"
 
         local status_col change_col=""
         if [[ "$status" == "UP" ]]; then
@@ -469,13 +486,23 @@ display_results() {
             change_col="${YELLOW}← was $prev${RESET}"
         fi
 
-        printf "  %-28s %-22s " "$label" "$host:$port"
+        printf "  %-28s %-32s %-5s  " "$label" "$key" "$type_label"
         echo -ne "$status_col  $change_col"
         echo ""
     done < "$CONF_FILE"
 
-    echo ""
+    if [[ $line_count -eq 0 ]]; then
+        warn "No hosts configured. Run with --reconfigure."
+        return 1
+    fi
+    return 0
+}
 
+# =============================================================================
+# Display summary after run_checks() has already printed the table
+# =============================================================================
+display_summary() {
+    echo ""
     if [[ ${#CHANGES[@]} -gt 0 ]]; then
         warn "State changes since last run:"
         for ch in "${CHANGES[@]}"; do
@@ -502,8 +529,14 @@ log_results() {
         host=$(awk '{print $1}' <<< "$line")
         port=$(awk '{print $2}' <<< "$line")
         label=$(awk '{print $3}' <<< "$line")
-        [[ -z "$label" ]] && label="$host:$port"
-        local key="$host:$port"
+        local key
+        if [[ "$host" == http://* || "$host" == https://* ]]; then
+            key="$host"
+            [[ -z "$label" ]] && label="$host"
+        else
+            key="$host:$port"
+            [[ -z "$label" ]] && label="$host:$port"
+        fi
         log "  STATUS  $label ($key) → ${RESULTS[$key]:-?}"
     done < "$CONF_FILE"
 
@@ -550,8 +583,14 @@ send_email() {
         host=$(awk '{print $1}' <<< "$line")
         port=$(awk '{print $2}' <<< "$line")
         label=$(awk '{print $3}' <<< "$line")
-        [[ -z "$label" ]] && label="$host:$port"
-        local key="$host:$port"
+        local key
+        if [[ "$host" == http://* || "$host" == https://* ]]; then
+            key="$host"
+            [[ -z "$label" ]] && label="$host"
+        else
+            key="$host:$port"
+            [[ -z "$label" ]] && label="$host:$port"
+        fi
         body+="  ${RESULTS[$key]:-?}  $label ($key)\n"
     done < "$CONF_FILE"
 
@@ -1471,7 +1510,7 @@ main() {
                 load_last_state
                 run_checks || { echo "Press Enter to continue..."; read -r; continue; }
                 log_results
-                display_results
+                display_summary
                 save_state
                 echo "Press Enter to return to menu..."
                 read -r

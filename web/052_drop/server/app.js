@@ -95,6 +95,22 @@ function validateSlatepack(input) {
   return input.includes('BEGINSLATEPACK') && input.includes('ENDSLATEPACK');
 }
 
+// ── Cloudflare Turnstile verification ─────────────────────────────────────────
+async function verifyTurnstile(token, ip) {
+  const secret = loadConfig().turnstile_secret;
+  if (!secret) return true;   // disabled when no secret configured
+  if (!token)  return false;  // secret set but no token provided = block
+  const body = new URLSearchParams({ secret, response: token, remoteip: ip || '' });
+  try {
+    const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify',
+      { method: 'POST', body });
+    const d = await r.json();
+    return d.success === true;
+  } catch {
+    return true;  // fail open on Cloudflare network error — don't block real users
+  }
+}
+
 function nextClaimIso(address) {
   const last = db.lastActiveClaim(address);
   if (!last) return null;
@@ -287,6 +303,9 @@ app.post('/api/claim', async (req, res) => {
   const cfg = loadConfig();
   if (!cfg.giveaway_enabled) return err(res, 'Giveaway is currently disabled', 503);
 
+  if (!await verifyTurnstile(req.body?.cf_token || '', getClientIp(req)))
+    return err(res, 'Bot challenge failed. Please try again.', 403);
+
   const body = req.body || {};
   const address = (body.grin_address || '').trim();
 
@@ -393,6 +412,9 @@ app.post('/api/claim/anonymous', async (req, res) => {
 
   const ip = getClientIp(req);
   if (!ip) return err(res, 'Could not determine client IP', 400);
+
+  if (!await verifyTurnstile(body.cf_token || '', ip))
+    return err(res, 'Bot challenge failed. Please try again.', 403);
   const anonAddr = hashIp(ip, cfg.ip_salt);
 
   const nextAt = nextClaimIso(anonAddr);

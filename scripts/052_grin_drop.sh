@@ -123,6 +123,12 @@ select_network() {
     else
         echo -e "  ${DIM}Domain: ${YELLOW}not configured${RESET}  ${DIM}(run option 1)${RESET}"
     fi
+    local _ga4; _ga4=$(_shared_read "ga4_id" "")
+    if [[ -n "$_ga4" ]]; then
+        echo -e "  ${DIM}GA4   : ${GREEN}$_ga4${RESET}"
+    else
+        echo -e "  ${DIM}GA4   : ${DIM}not configured${RESET}"
+    fi
     echo ""
 
     local test_st main_st
@@ -139,6 +145,8 @@ select_network() {
     echo -e "  ${GREEN}2${RESET}) Testnet  ${DIM}(tGRIN — no monetary value)  drop: $test_st${RESET}"
     echo -e "  ${YELLOW}3${RESET}) Mainnet  ${RED}⚠ sends/receives real GRIN${RESET}  drop: $main_st${RESET}"
     echo -e "  ${CYAN}4${RESET}) Unified Homepage  ${DIM}(aggregated stats for both networks)${RESET}"
+    echo -e "  ${CYAN}7${RESET}) Turnstile          ${DIM}(Cloudflare bot protection — optional)${RESET}"
+    echo -e "  ${CYAN}6${RESET}) Google Analytics  ${DIM}(GA4 tracking — optional)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Admin (both networks) ────────────────────────${RESET}"
     echo -e "  ${YELLOW}B${RESET}) Backup   ${DIM}(encrypted archive: testnet + mainnet)${RESET}"
@@ -147,7 +155,7 @@ select_network() {
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [1-5 / B / R / D / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [1-7 / B / R / D / 0]: ${RESET}"
     local sel
     read -r sel || true
     case "${sel,,}" in
@@ -156,6 +164,8 @@ select_network() {
         3) _set_network mainnet ;;
         4) _unified_homepage_menu; return 1 ;;
         5) drop_remove_domain; return 1 ;;
+        6) drop_ga4_menu; return 1 ;;
+        7) drop_turnstile_menu; return 1 ;;
         b) drop_backup; return 1 ;;
         r) drop_restore; return 1 ;;
         d) drop_nuke; return 1 ;;
@@ -224,6 +234,142 @@ _unified_homepage_menu() {
     echo ""
     echo -ne "${BOLD}Press Enter to return...${RESET}"
     read -r || true
+}
+
+drop_ga4_menu() {
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN} 052) GRIN DROP — Google Analytics (GA4)${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+
+    local cur_id; cur_id=$(_shared_read "ga4_id" "")
+    if [[ -n "$cur_id" ]]; then
+        echo -e "  Current GA4 ID : ${GREEN}$cur_id${RESET}"
+    else
+        echo -e "  Current GA4 ID : ${DIM}not configured${RESET}"
+    fi
+    echo ""
+    echo -e "  ${DIM}Get your ID from: analytics.google.com → Admin → Data Streams → Measurement ID${RESET}"
+    echo -e "  ${DIM}Format: G-XXXXXXXXXX${RESET}"
+    echo -e "  ${DIM}Leave blank to disable. Type 0 to cancel.${RESET}"
+    echo ""
+    echo -ne "${BOLD}Enter GA4 Measurement ID: ${RESET}"
+    local new_id; read -r new_id || true
+    new_id="${new_id:-}"
+
+    [[ "$new_id" == "0" ]] && { info "Cancelled."; pause; return; }
+
+    if [[ -z "$new_id" ]]; then
+        _shared_write "ga4_id" ""
+        success "GA4 tracking disabled."
+    elif [[ "$new_id" =~ ^G-[A-Z0-9]+$ ]]; then
+        _shared_write "ga4_id" "$new_id"
+        success "GA4 ID saved: $new_id"
+    else
+        warn "Invalid format — must be G-XXXXXXXXXX (uppercase letters and digits after G-)"
+        pause; return
+    fi
+
+    local dom; dom=$(_shared_read "subdomain" "")
+    if [[ -n "$dom" ]]; then
+        echo ""
+        info "Re-applying nginx config to activate change..."
+        _drop_nginx_refresh
+    else
+        echo ""
+        info "No domain configured yet — nginx will pick up this setting when you run option 1."
+    fi
+    pause
+}
+
+drop_turnstile_menu() {
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN} 052) GRIN DROP — Cloudflare Turnstile${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+
+    # ── Gate: domain + at least one network must be deployed ──────────────────
+    local dom; dom=$(_shared_read "subdomain" "")
+    local ssl; ssl=$(_shared_read "ssl_type"  "")
+    local test_conf="/opt/grin/drop-test/grin_drop_test.conf"
+    local main_conf="/opt/grin/drop-main/grin_drop_main.conf"
+    local has_network=false
+    [[ -f "$test_conf" || -f "$main_conf" ]] && has_network=true
+
+    if [[ -z "$dom" || -z "$ssl" ]]; then
+        warn "No domain configured — run option 1 (Create / Update domain) first."
+        pause; return
+    fi
+    if ! $has_network; then
+        warn "No network deployed yet — run option 2 (Testnet) or 3 (Mainnet) first."
+        pause; return
+    fi
+
+    # ── Current status ────────────────────────────────────────────────────────
+    local cur_site; cur_site=$(_shared_read "turnstile_site_key" "")
+    local cur_sec;  cur_sec=$(_shared_read  "turnstile_secret"   "")
+    if [[ -n "$cur_site" ]]; then
+        echo -e "  Site Key : ${GREEN}$cur_site${RESET}"
+        echo -e "  Secret   : ${GREEN}configured${RESET}"
+    else
+        echo -e "  Site Key : ${DIM}not configured${RESET}"
+        echo -e "  Secret   : ${DIM}not configured${RESET}"
+    fi
+    echo ""
+    echo -e "  ${DIM}Get your keys: Cloudflare Dashboard → Turnstile → Add Site${RESET}"
+    echo -e "  ${DIM}Leave blank to disable. Type 0 to cancel.${RESET}"
+    echo ""
+
+    echo -ne "${BOLD}Site Key (public — starts with 0x): ${RESET}"
+    local new_site; read -r new_site || true
+    [[ "$new_site" == "0" ]] && { info "Cancelled."; pause; return; }
+
+    if [[ -z "$new_site" ]]; then
+        # Disable Turnstile
+        _shared_write "turnstile_site_key" ""
+        _shared_write "turnstile_secret"   ""
+        [[ -f "$test_conf" ]] && DROP_CONF="$test_conf" drop_write_conf_key "turnstile_secret" ""
+        [[ -f "$main_conf" ]] && DROP_CONF="$main_conf" drop_write_conf_key "turnstile_secret" ""
+        success "Turnstile disabled."
+    else
+        if [[ "$new_site" != 0x* ]]; then
+            warn "Invalid Site Key — Cloudflare Turnstile site keys start with 0x"
+            pause; return
+        fi
+        echo -ne "${BOLD}Secret Key (private — keep this safe): ${RESET}"
+        local new_sec; read -r new_sec || true
+        [[ "$new_sec" == "0" ]] && { info "Cancelled."; pause; return; }
+        if [[ -z "$new_sec" ]]; then
+            warn "Secret Key cannot be empty when enabling Turnstile."
+            pause; return
+        fi
+        _shared_write "turnstile_site_key" "$new_site"
+        _shared_write "turnstile_secret"   "$new_sec"
+        [[ -f "$test_conf" ]] && DROP_CONF="$test_conf" drop_write_conf_key "turnstile_secret" "$new_sec"
+        [[ -f "$main_conf" ]] && DROP_CONF="$main_conf" drop_write_conf_key "turnstile_secret" "$new_sec"
+        success "Turnstile configured."
+    fi
+
+    # Reload nginx so sub_filter picks up the new site key
+    echo ""
+    info "Re-applying nginx config..."
+    _drop_nginx_refresh
+
+    # Restart running services so Node.js reloads config with new secret
+    local restarted=false
+    if systemctl is-active --quiet "grin-drop-test" 2>/dev/null; then
+        systemctl restart "grin-drop-test" && info "grin-drop-test restarted." || true
+        restarted=true
+    fi
+    if systemctl is-active --quiet "grin-drop-main" 2>/dev/null; then
+        systemctl restart "grin-drop-main" && info "grin-drop-main restarted." || true
+        restarted=true
+    fi
+    $restarted || info "No running services to restart."
+
+    pause
 }
 
 # =============================================================================

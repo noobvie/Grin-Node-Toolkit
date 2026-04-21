@@ -263,12 +263,58 @@ drop_remove_domain() {
 # INTERNAL: write unified nginx vhost
 # =============================================================================
 
+_drop_nginx_refresh() {
+    local domain; domain=$(_shared_read "subdomain" "")
+    [[ -z "$domain" ]] && return 0
+
+    local ssl_type; ssl_type=$(_shared_read "ssl_type" "")
+    local nginx_conf="/etc/nginx/sites-available/$domain"
+    local nginx_link="/etc/nginx/sites-enabled/$domain"
+    local ssl_cert ssl_key ssl_params
+
+    case "$ssl_type" in
+        letsencrypt)
+            ssl_cert="/etc/letsencrypt/live/$domain/fullchain.pem"
+            ssl_key="/etc/letsencrypt/live/$domain/privkey.pem"
+            ssl_params="include /etc/letsencrypt/options-ssl-nginx.conf;\n    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;"
+            ;;
+        cloudflare)
+            local cf_dir="/etc/ssl/cloudflare-origin"
+            ssl_cert="$cf_dir/$domain.pem"
+            ssl_key="$cf_dir/$domain.key"
+            ssl_params="ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;\n    ssl_prefer_server_ciphers off;\n    ssl_session_cache shared:SSL:10m;\n    ssl_session_timeout 1d;"
+            ;;
+        *)
+            warn "SSL not configured — run option 1 → 3 to set up nginx first."
+            return 1
+            ;;
+    esac
+
+    _drop_write_unified_conf "$domain" "$ssl_cert" "$ssl_key" "$ssl_params" "$nginx_conf"
+    ln -sf "$nginx_conf" "$nginx_link" 2>/dev/null || true
+    nginx -t && systemctl reload nginx && success "nginx reloaded." \
+        || { warn "nginx test failed — check $nginx_conf"; return 1; }
+}
+
 _drop_write_unified_conf() {
     local domain="$1" ssl_cert="$2" ssl_key="$3" ssl_params="$4" nginx_conf="$5"
 
     local test_port=3004 main_port=3005
     local home_web_dir="/var/www/grin-drop-home"
     local home_src="$TOOLKIT_ROOT/web/052_drop/home"
+
+    local ga4_id; ga4_id=$(_shared_read "ga4_id" "")
+    local ts_key; ts_key=$(_shared_read "turnstile_site_key" "")
+
+    # CSP: extend to allow GA4 and/or Turnstile domains when configured
+    local csp_script="'self' 'unsafe-inline'"
+    local csp_connect="'self'"
+    local csp_frame=""
+    [[ -n "$ga4_id" ]] && csp_script="$csp_script https://www.googletagmanager.com" \
+                       && csp_connect="$csp_connect https://www.google-analytics.com https://analytics.google.com"
+    [[ -n "$ts_key"  ]] && csp_script="$csp_script https://challenges.cloudflare.com" \
+                        && csp_frame="frame-src 'self' https://challenges.cloudflare.com;"
+    local csp="default-src 'self'; script-src $csp_script; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src $csp_connect; $csp_frame"
 
     # Deploy unified homepage static files if source exists
     if [[ -d "$home_src" ]]; then
@@ -310,7 +356,7 @@ server {
     add_header X-Content-Type-Options    "nosniff"   always;
     add_header X-Frame-Options           "SAMEORIGIN" always;
     add_header Referrer-Policy           "strict-origin" always;
-    add_header Content-Security-Policy   "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" always;
+    add_header Content-Security-Policy   "$csp" always;
 
     client_max_body_size 8k;
 
@@ -321,6 +367,9 @@ server {
     location / {
         limit_req zone=drop_home burst=10 nodelay;
         try_files \$uri \$uri/ =404;
+        sub_filter '__GA4_ID__'            '$ga4_id';
+        sub_filter '__CF_TURNSTILE_KEY__'  '$ts_key';
+        sub_filter_once on;
     }
 
     location ~* \.(css|js|ico|png|svg|woff2?)\$ {
@@ -351,7 +400,9 @@ server {
         proxy_set_header   Accept-Encoding "";
         proxy_read_timeout 90s;
         sub_filter '<head>' '<head><script>window.APP_BASE="/testnet";window.DROP_NETWORK="testnet";</script>';
-        sub_filter '__SITE_URL__' 'https://$domain';
+        sub_filter '__SITE_URL__'          'https://$domain';
+        sub_filter '__GA4_ID__'            '$ga4_id';
+        sub_filter '__CF_TURNSTILE_KEY__'  '$ts_key';
         sub_filter_once on;
     }
 
@@ -378,7 +429,9 @@ server {
         proxy_set_header   Accept-Encoding "";
         proxy_read_timeout 90s;
         sub_filter '<head>' '<head><script>window.APP_BASE="/mainnet";window.DROP_NETWORK="mainnet";</script>';
-        sub_filter '__SITE_URL__' 'https://$domain';
+        sub_filter '__SITE_URL__'          'https://$domain';
+        sub_filter '__GA4_ID__'            '$ga4_id';
+        sub_filter '__CF_TURNSTILE_KEY__'  '$ts_key';
         sub_filter_once on;
     }
 

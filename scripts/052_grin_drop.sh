@@ -299,12 +299,14 @@ drop_turnstile_menu() {
     [[ -f "$test_conf" || -f "$main_conf" ]] && has_network=true
 
     if [[ -z "$dom" || -z "$ssl" ]]; then
-        warn "No domain configured — run option 1 (Create / Update domain) first."
-        pause; return
+        echo -e "  ${YELLOW}⚠  No domain configured yet — run option 1 (Create / Update domain) first${RESET}"
+        echo -e "  ${DIM}   Keys will be saved now and applied when you set up the domain.${RESET}"
+        echo ""
     fi
     if ! $has_network; then
-        warn "No network deployed yet — run option 2 (Testnet) or 3 (Mainnet) first."
-        pause; return
+        echo -e "  ${YELLOW}⚠  No network deployed yet — run option 2 (Testnet) or 3 (Mainnet) first${RESET}"
+        echo -e "  ${DIM}   Keys will be saved now and applied when you deploy a network.${RESET}"
+        echo ""
     fi
 
     # ── Current status ────────────────────────────────────────────────────────
@@ -352,10 +354,14 @@ drop_turnstile_menu() {
         success "Turnstile configured."
     fi
 
-    # Reload nginx so sub_filter picks up the new site key
-    echo ""
-    info "Re-applying nginx config..."
-    _drop_nginx_refresh
+    # Reload nginx so sub_filter picks up the new site key (only if domain is set up)
+    if [[ -n "$dom" && -n "$ssl" ]]; then
+        echo ""
+        info "Re-applying nginx config..."
+        _drop_nginx_refresh
+    else
+        info "Keys saved — nginx will pick them up when you run option 1 (Create / Update domain)."
+    fi
 
     # Restart running services so Node.js reloads config with new secret
     local restarted=false

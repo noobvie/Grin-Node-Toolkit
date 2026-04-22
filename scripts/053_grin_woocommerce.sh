@@ -6,8 +6,8 @@
 #  Installs and manages a Grin payment gateway for WordPress + WooCommerce.
 #
 #  Components:
-#    • grin-wallet-bridge.py  — stateless Flask bridge that proxies calls from
-#      the PHP WooCommerce plugin to the local grin-wallet CLI.
+#    • server.js              — Node.js/Express bridge that proxies calls from
+#      the PHP WooCommerce plugin to the local grin-wallet owner_api.
 #      Listens on 127.0.0.1 only — nginx is NOT used (internal only).
 #    • WooCommerce plugin     — PHP plugin in web/053_woocommerce/plugin/
 #      Handles the slatepack invoice flow inside the WP checkout.
@@ -20,7 +20,7 @@
 #   2) Testnet  (tGRIN — for testing)
 #
 #  ─── Menu ────────────────────────────────────────────────────────────────────
-#   1) Install bridge      (Python venv + Flask + systemd)
+#   1) Install bridge      (Node.js + npm + systemd)
 #   2) Install WP plugin   (copy plugin to WordPress plugins directory)
 #   3) Configure           (wallet path, bridge port, expiry, WP dir)
 #   4) Start / Stop bridge (systemd grin-woo-bridge-{main,test})
@@ -63,7 +63,7 @@ WOO_APP_DIR=""
 WOO_CONF=""
 WOO_BRIDGE_PORT=""
 WOO_OWNER_API_PORT=""
-WOO_SERVICE=""           # Flask bridge systemd service
+WOO_SERVICE=""           # Node.js bridge systemd service
 WOO_WALLET_SERVICE=""    # grin-wallet owner_api systemd service
 WOO_LOG=""
 
@@ -157,6 +157,7 @@ _set_network() {
 
 woo_load_conf() {
     WOO_OWNER_API_URL=""
+    WOO_WALLET_DIR=""
     WOO_API_KEY=""
     WOO_EXPIRY_MIN="30"
     WOO_WP_DIR="/var/www/html"
@@ -170,9 +171,10 @@ woo_save_conf() {
     mkdir -p "$(dirname "$WOO_CONF")"
     cat > "$WOO_CONF" << CONF
 WOO_OWNER_API_URL="${WOO_OWNER_API_URL:-}"
+WOO_WALLET_DIR="${WOO_WALLET_DIR:-}"
+WOO_API_KEY="${WOO_API_KEY:-}"
 WOO_EXPIRY_MIN="${WOO_EXPIRY_MIN:-30}"
 WOO_WP_DIR="${WOO_WP_DIR:-/var/www/html}"
-WOO_API_KEY="${WOO_API_KEY:-}"
 CONF
     chmod 600 "$WOO_CONF"
 }
@@ -185,9 +187,9 @@ woo_menu_status() {
     woo_load_conf
     echo ""
 
-    [[ -d "$WOO_APP_DIR/venv" ]] \
-        && echo -e "  ${BOLD}1 Bridge venv${RESET}: ${GREEN}installed${RESET}  ${DIM}($WOO_APP_DIR)${RESET}" \
-        || echo -e "  ${BOLD}1 Bridge venv${RESET}: ${DIM}not installed${RESET}  ${DIM}→ step 1${RESET}"
+    [[ -d "$WOO_APP_DIR/node_modules" ]] \
+        && echo -e "  ${BOLD}1 Bridge${RESET}     : ${GREEN}installed${RESET}  ${DIM}($WOO_APP_DIR)${RESET}" \
+        || echo -e "  ${BOLD}1 Bridge${RESET}     : ${DIM}not installed${RESET}  ${DIM}→ step 1${RESET}"
 
     if [[ -n "$WOO_WP_DIR" && -d "$WOO_WP_DIR/wp-content/plugins/grinpay-woocommerce" ]]; then
         echo -e "  ${BOLD}2 WP plugin${RESET}  : ${GREEN}installed${RESET}  ${DIM}($WOO_WP_DIR/wp-content/plugins/grinpay-woocommerce)${RESET}"
@@ -208,7 +210,7 @@ woo_menu_status() {
         echo -e "  ${BOLD}4 Wallet daemon${RESET}: ${DIM}not running${RESET}"
     fi
 
-    # Flask bridge
+    # Node.js bridge
     if systemctl is-active --quiet "$WOO_SERVICE" 2>/dev/null; then
         echo -e "  ${BOLD}  Bridge${RESET}      : ${GREEN}● running${RESET}  ${DIM}(port $WOO_BRIDGE_PORT, localhost only)${RESET}"
     elif systemctl is-enabled --quiet "$WOO_SERVICE" 2>/dev/null; then
@@ -226,18 +228,19 @@ woo_menu_status() {
 woo_install_bridge() {
     clear
     echo -e "\n${BOLD}${CYAN}── WooCommerce [$WOO_NET_LABEL] — 1) Install Bridge ──${RESET}\n"
-    echo -e "  ${DIM}Installs Python venv (Flask + cryptography) and creates two systemd services:${RESET}"
+    echo -e "  ${DIM}Installs Node.js dependencies (npm) and creates two systemd services:${RESET}"
     echo -e "  ${DIM}  $WOO_WALLET_SERVICE  — grin-wallet owner_api daemon${RESET}"
-    echo -e "  ${DIM}  $WOO_SERVICE         — GrinPay Flask bridge${RESET}\n"
+    echo -e "  ${DIM}  $WOO_SERVICE         — GrinPay Node.js bridge${RESET}\n"
 
     local bridge_src="$TOOLKIT_ROOT/web/053_woocommerce/bridge"
 
-    if ! command -v python3 &>/dev/null; then
-        info "python3 not found. Installing..."
-        apt-get install -y python3 python3-pip python3-venv \
-            || { die "apt-get failed. Run as root."; pause; return; }
+    if ! command -v node &>/dev/null; then
+        info "node not found. Installing Node.js 18 via nodesource..."
+        curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+            && apt-get install -y nodejs \
+            || { die "Node.js install failed. Install manually from https://nodejs.org"; pause; return; }
     fi
-    success "python3 $(python3 --version 2>&1 | awk '{print $2}') found."
+    success "node $(node --version 2>&1) found."
 
     if ! command -v grin-wallet &>/dev/null; then
         warn "grin-wallet binary not found on PATH."
@@ -253,33 +256,25 @@ woo_install_bridge() {
         die "Bridge source not found at $bridge_src — run git pull first."; pause; return
     fi
 
-    info "Creating Python virtualenv at $WOO_APP_DIR/venv ..."
-    if ! python3 -m venv "$WOO_APP_DIR/venv" 2>/dev/null; then
-        local _pyver; _pyver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        apt-get install -y "python${_pyver}-venv" python3-pip \
-            || { die "Failed to install python venv."; pause; return; }
-        python3 -m venv "$WOO_APP_DIR/venv" \
-            || { die "venv creation failed."; pause; return; }
-    fi
-
-    info "Installing Python requirements (flask, gunicorn, cryptography) ..."
-    "$WOO_APP_DIR/venv/bin/pip" install --quiet \
-        -r "$WOO_APP_DIR/requirements.txt" \
-        || { die "pip install failed."; pause; return; }
+    info "Installing npm dependencies ..."
+    npm install --prefix "$WOO_APP_DIR" --omit=dev --quiet \
+        || { die "npm install failed."; pause; return; }
 
     woo_load_conf
     local _ak="${WOO_API_KEY:-}"
-    local _owner_url="${WOO_OWNER_API_URL:-http://127.0.0.1:${WOO_OWNER_API_PORT}/v2/owner}"
+    local _owner_url="${WOO_OWNER_API_URL:-http://127.0.0.1:${WOO_OWNER_API_PORT}/v3/owner}"
+    local _wallet_dir="${WOO_WALLET_DIR:-}"
     local run_user="www-data"
     id www-data &>/dev/null || run_user="root"
 
-    # ── Service 1: grin-wallet owner_api daemon ────────────────────────────────
-    # NOTE: No password in the service file. The merchant starts this daemon
-    # interactively (or adds GRINPAY_WALLET_PASS via 'systemctl edit' override)
-    # For testnet wallets with empty password no env var is needed at all.
+    local node_bin
+    node_bin=$(command -v node 2>/dev/null || echo "/usr/bin/node")
+    # NOTE: No password in the service file. For testnet (empty password) no env var
+    # is needed. For mainnet add GRINPAY_WALLET_PASS via: systemctl edit $WOO_SERVICE
     local grin_wallet_bin
     grin_wallet_bin=$(command -v grin-wallet 2>/dev/null || echo "grin-wallet")
 
+    # ── Service 1: grin-wallet owner_api daemon ────────────────────────────────
     cat > "/etc/systemd/system/${WOO_WALLET_SERVICE}.service" << SYSTEMD
 [Unit]
 Description=GrinPay grin-wallet owner_api daemon [$WOO_NET_LABEL]
@@ -296,10 +291,10 @@ RestartSec=10
 WantedBy=multi-user.target
 SYSTEMD
 
-    # ── Service 2: Flask bridge ────────────────────────────────────────────────
+    # ── Service 2: Node.js bridge ──────────────────────────────────────────────
     cat > "/etc/systemd/system/${WOO_SERVICE}.service" << SYSTEMD
 [Unit]
-Description=GrinPay Flask Bridge for WooCommerce [$WOO_NET_LABEL]
+Description=GrinPay Node.js Bridge for WooCommerce [$WOO_NET_LABEL]
 After=network.target ${WOO_WALLET_SERVICE}.service
 Wants=${WOO_WALLET_SERVICE}.service
 
@@ -310,8 +305,9 @@ WorkingDirectory=$WOO_APP_DIR
 Environment="GRINPAY_NETWORK=$WOO_NETWORK"
 Environment="GRINPAY_PORT=$WOO_BRIDGE_PORT"
 Environment="GRINPAY_OWNER_API_URL=$_owner_url"
+Environment="GRINPAY_WALLET_DIR=$_wallet_dir"
 Environment="GRINPAY_API_KEY=$_ak"
-ExecStart=$WOO_APP_DIR/venv/bin/gunicorn -w 1 -b 127.0.0.1:$WOO_BRIDGE_PORT grin_wallet_bridge:app
+ExecStart=$node_bin $WOO_APP_DIR/server.js
 Restart=always
 RestartSec=5
 
@@ -323,7 +319,7 @@ SYSTEMD
     touch "$WOO_LOG"
     success "Services installed:"
     echo -e "    ${GREEN}✓${RESET} $WOO_WALLET_SERVICE  (grin-wallet owner_api, port $WOO_OWNER_API_PORT)"
-    echo -e "    ${GREEN}✓${RESET} $WOO_SERVICE         (Flask bridge, port $WOO_BRIDGE_PORT)"
+    echo -e "    ${GREEN}✓${RESET} $WOO_SERVICE         (Node.js bridge, port $WOO_BRIDGE_PORT)"
     echo ""
     info "Start wallet daemon first: systemctl start $WOO_WALLET_SERVICE"
     info "Then start bridge:         systemctl start $WOO_SERVICE"
@@ -402,13 +398,22 @@ woo_configure() {
     echo -e "\n${BOLD}${CYAN}── WooCommerce [$WOO_NET_LABEL] — 3) Configure ──${RESET}\n"
     echo -e "  ${DIM}Press Enter to keep current value.  Auto-detected values shown in brackets.${RESET}\n"
 
-    local default_owner_url="http://127.0.0.1:${WOO_OWNER_API_PORT}/v2/owner"
+    local default_owner_url="http://127.0.0.1:${WOO_OWNER_API_PORT}/v3/owner"
     echo -ne "owner_api URL      [${WOO_OWNER_API_URL:-$default_owner_url}]: "
     read -r v || true
     if [[ -n "$v" ]]; then
         WOO_OWNER_API_URL="$v"
     else
         WOO_OWNER_API_URL="${WOO_OWNER_API_URL:-$default_owner_url}"
+    fi
+
+    local default_wallet_dir="$WOO_APP_DIR"
+    echo -ne "Wallet data dir    [${WOO_WALLET_DIR:-$default_wallet_dir}]: "
+    read -r v || true
+    if [[ -n "$v" ]]; then
+        WOO_WALLET_DIR="$v"
+    else
+        WOO_WALLET_DIR="${WOO_WALLET_DIR:-$default_wallet_dir}"
     fi
 
     echo -ne "Bridge API key     [${WOO_API_KEY:+(set)}${WOO_API_KEY:-leave blank to disable auth}]: "
@@ -428,11 +433,14 @@ woo_configure() {
     if [[ -f "/etc/systemd/system/${WOO_SERVICE}.service" ]]; then
         local _ak="${WOO_API_KEY:-}"
         local _owner_url="${WOO_OWNER_API_URL}"
+        local _wallet_dir="${WOO_WALLET_DIR:-}"
         local run_user="www-data"
         id www-data &>/dev/null || run_user="root"
+        local node_bin
+        node_bin=$(command -v node 2>/dev/null || echo "/usr/bin/node")
         cat > "/etc/systemd/system/${WOO_SERVICE}.service" << SYSTEMD
 [Unit]
-Description=GrinPay Flask Bridge for WooCommerce [$WOO_NET_LABEL]
+Description=GrinPay Node.js Bridge for WooCommerce [$WOO_NET_LABEL]
 After=network.target ${WOO_WALLET_SERVICE}.service
 Wants=${WOO_WALLET_SERVICE}.service
 
@@ -443,8 +451,9 @@ WorkingDirectory=$WOO_APP_DIR
 Environment="GRINPAY_NETWORK=$WOO_NETWORK"
 Environment="GRINPAY_PORT=$WOO_BRIDGE_PORT"
 Environment="GRINPAY_OWNER_API_URL=$_owner_url"
+Environment="GRINPAY_WALLET_DIR=$_wallet_dir"
 Environment="GRINPAY_API_KEY=$_ak"
-ExecStart=$WOO_APP_DIR/venv/bin/gunicorn -w 1 -b 127.0.0.1:$WOO_BRIDGE_PORT grin_wallet_bridge:app
+ExecStart=$node_bin $WOO_APP_DIR/server.js
 Restart=always
 RestartSec=5
 
@@ -483,7 +492,7 @@ woo_service_control() {
         && bridge_st="${GREEN}running${RESET}" || bridge_st="${YELLOW}stopped${RESET}"
 
     echo -e "  Wallet daemon  ($WOO_WALLET_SERVICE): $wallet_st  ${DIM}(owner_api port $WOO_OWNER_API_PORT)${RESET}"
-    echo -e "  Flask bridge   ($WOO_SERVICE):  $bridge_st  ${DIM}(port $WOO_BRIDGE_PORT)${RESET}"
+    echo -e "  Node.js bridge ($WOO_SERVICE):  $bridge_st  ${DIM}(port $WOO_BRIDGE_PORT)${RESET}"
     echo ""
     echo -e "  ${GREEN}1${RESET}) Start both      ${DIM}(wallet daemon first, then bridge)${RESET}"
     echo -e "  ${RED}2${RESET}) Stop both       ${DIM}(bridge first, then wallet daemon)${RESET}"
@@ -539,17 +548,18 @@ woo_status() {
     if systemctl is-active --quiet "$WOO_SERVICE" 2>/dev/null; then
         local pid
         pid=$(systemctl show "$WOO_SERVICE" --property=MainPID --value 2>/dev/null || echo "?")
-        echo -e "  ${BOLD}Flask bridge${RESET} : ${GREEN}● running${RESET}  pid $pid  port $WOO_BRIDGE_PORT (localhost only)"
+        echo -e "  ${BOLD}Node.js bridge${RESET}: ${GREEN}● running${RESET}  pid $pid  port $WOO_BRIDGE_PORT (localhost only)"
     elif systemctl is-enabled --quiet "$WOO_SERVICE" 2>/dev/null; then
-        echo -e "  ${BOLD}Flask bridge${RESET} : ${YELLOW}stopped (enabled)${RESET}"
+        echo -e "  ${BOLD}Node.js bridge${RESET}: ${YELLOW}stopped (enabled)${RESET}"
     else
-        echo -e "  ${BOLD}Flask bridge${RESET} : ${RED}not installed${RESET}  ${DIM}(step 1)${RESET}"
+        echo -e "  ${BOLD}Node.js bridge${RESET}: ${RED}not installed${RESET}  ${DIM}(step 1)${RESET}"
     fi
 
     echo -e "  ${BOLD}Network${RESET}      : $WOO_NET_LABEL"
     echo -e "  ${BOLD}App dir${RESET}      : $WOO_APP_DIR"
     echo -e "  ${BOLD}Config${RESET}       : $WOO_CONF"
-    echo -e "  ${BOLD}owner_api URL${RESET}: ${WOO_OWNER_API_URL:-http://127.0.0.1:${WOO_OWNER_API_PORT}/v2/owner}"
+    echo -e "  ${BOLD}owner_api URL${RESET}: ${WOO_OWNER_API_URL:-http://127.0.0.1:${WOO_OWNER_API_PORT}/v3/owner}"
+    echo -e "  ${BOLD}Wallet dir${RESET}   : ${WOO_WALLET_DIR:-(not set)}"
     echo -e "  ${BOLD}WP root${RESET}      : ${WOO_WP_DIR:-/var/www/html}"
 
     if [[ -n "$WOO_WP_DIR" && -d "$WOO_WP_DIR/wp-content/plugins/grinpay-woocommerce" ]]; then
@@ -704,7 +714,7 @@ woo_menu() {
         woo_menu_status
 
         echo -e "${DIM}  ─── Setup ────────────────────────────────────────${RESET}"
-        echo -e "  ${GREEN}1${RESET}) Install bridge        ${DIM}(Python venv + Flask + systemd)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Install bridge        ${DIM}(Node.js + npm + systemd)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Install WP plugin     ${DIM}(copy plugin to WordPress)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Configure             ${DIM}(wallet path, expiry, WP dir)${RESET}"
         echo -e "  ${GREEN}4${RESET}) Start / Stop bridge   ${DIM}(systemd $WOO_SERVICE)${RESET}"

@@ -340,7 +340,7 @@ app.post('/api/claim', async (req, res) => {
   const maxAmount       = parseFloat(cfg.claim_grin_per_tx) || 2.0;
   const requestedAmount = body.amount != null ? parseFloat(body.amount) : null;
   const amount = (requestedAmount != null && requestedAmount > 0)
-    ? Math.min(Math.max(requestedAmount, 0.001), maxAmount)
+    ? Math.min(Math.max(requestedAmount, 0.0001), maxAmount)
     : maxAmount;
 
   const timeoutMin = parseInt(cfg.slatepack_expire_min, 10) || 5;
@@ -406,7 +406,7 @@ app.post('/api/claim', async (req, res) => {
 
 // POST /api/claim/anonymous ────────────────────────────────────────────────────
 // No address required — rate-limited by hashed client IP.
-// Amount is capped to ANON_CLAIM_GRIN max (0.009 mainnet / 0.09 testnet); min 0.001.
+// Amount is capped to ANON_CLAIM_GRIN max (0.009 mainnet / 0.09 testnet); min 0.0001.
 app.post('/api/claim/anonymous', async (req, res) => {
   const cfg  = loadConfig();
   const body = req.body || {};
@@ -438,7 +438,7 @@ app.post('/api/claim/anonymous', async (req, res) => {
 
   const requestedAnonAmount = body.amount != null ? parseFloat(body.amount) : null;
   const anonAmount = (requestedAnonAmount != null && requestedAnonAmount > 0)
-    ? Math.min(Math.max(requestedAnonAmount, 0.001), ANON_CLAIM_GRIN)
+    ? Math.min(Math.max(requestedAnonAmount, 0.0001), ANON_CLAIM_GRIN)
     : ANON_CLAIM_GRIN;
 
   const timeoutMin = parseInt(cfg.slatepack_expire_min, 10) || 5;

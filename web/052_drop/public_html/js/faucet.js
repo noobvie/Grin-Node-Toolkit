@@ -118,8 +118,7 @@ function setText(id, text) {
 
 function show(id)   { const el = $(id); if (el) el.style.display = ""; }
 function hide(id)   { const el = $(id); if (el) el.style.display = "none"; }
-function addClass(id, cls) { const el = $(id); if (el) el.classList.add(cls); }
-function rmClass(id, cls)  { const el = $(id); if (el) el.classList.remove(cls); }
+
 
 async function apiPost(path, body, timeoutMs) {
   const ctrl = timeoutMs ? new AbortController() : null;
@@ -287,7 +286,8 @@ async function refreshStatus() {
 
 function formatGrin(n) {
   if (n === null || n === undefined) return "— " + COIN;
-  return (typeof n === "number" ? n : parseFloat(n) || 0).toFixed(3) + " " + COIN;
+  const v = typeof n === "number" ? n : parseFloat(n) || 0;
+  return v.toFixed(v > 0 && v < 0.001 ? 4 : 3) + " " + COIN;
 }
 
 function formatGrinShort(n) {
@@ -663,6 +663,7 @@ function resetDonateReceive() {
   if (ta) ta.value = "";
   clearError("donate-receive-error");
   document.querySelectorAll("#donate-rcv-amount-grid .amount-btn").forEach(b => b.classList.remove("active"));
+  hide("donate-rcv-custom-wrap");
   _rcvAmount = null;
   _updateSendCmd();
   hide("donate-rcv-s2");
@@ -806,10 +807,9 @@ function initTabs() {
 }
 
 // ── Auto-refresh (single shared poll) ────────────────────────────────────────
-let _statsTimer = null;
 function startStatsRefresh() {
   refreshStatus();
-  _statsTimer = setInterval(refreshStatus, REFRESH_SEC * 1000);
+  setInterval(refreshStatus, REFRESH_SEC * 1000);
 }
 
 // ── Node status — How It Works ────────────────────────────────────────────────

@@ -79,9 +79,11 @@ const GRIN_ADDR_RE    = /^(grin1|tgrin1)[a-z0-9]{40,}$/;
 const ANON_CLAIM_GRIN = loadConfig().network === 'mainnet' ? 0.009 : 0.09;
 
 // IP helpers — nginx must set: proxy_set_header X-Real-IP $remote_addr;
-// Only X-Real-IP is trusted — X-Forwarded-For is client-controlled and spoofable.
+// Behind Cloudflare, CF-Connecting-IP carries the real visitor IP and cannot be
+// spoofed by the client (Cloudflare strips any client-supplied header).
+// Fall back to X-Real-IP for direct / non-CF traffic.
 function getClientIp(req) {
-  return (req.headers['x-real-ip'] || '').trim();
+  return (req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || '').trim();
 }
 
 function hashIp(ip, salt) {

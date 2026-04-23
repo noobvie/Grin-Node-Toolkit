@@ -79,14 +79,17 @@ let _countdown        = null;
 let _invoiceId        = null;
 let _donateWalletAddr = '';
 
-// Claim amount presets — 10× smaller on mainnet to conserve real GRIN
+// Claim amount presets — smaller on mainnet to conserve real GRIN
 const CLAIM_AMOUNTS   = window.DROP_NETWORK === 'mainnet'
-  ? [0.01, 0.02, 0.05, 0.1]
-  : [0.1,  0.2,  0.5,  1.0];
-const ANON_CLAIM_AMOUNT  = window.DROP_NETWORK === 'mainnet' ? 0.009 : 0.09;
+  ? [0.002, 0.006, 0.008]
+  : [0.1,   0.2,   0.5];
+const ANON_CLAIM_AMOUNT  = window.DROP_NETWORK === 'mainnet' ? 0.005 : 0.09;
 const ANON_CLAIM_AMOUNTS = window.DROP_NETWORK === 'mainnet'
-  ? [0.001, 0.005, 0.009]
+  ? [0.001, 0.003, 0.005]
   : [0.01,  0.05,  0.09];
+const CLAIM_CUSTOM_MIN = window.DROP_NETWORK === 'mainnet' ? 0.0001 : 0.001;
+const CLAIM_CUSTOM_MAX = window.DROP_NETWORK === 'mainnet' ? 0.008  : 0.999;
+const ANON_CUSTOM_MAX  = window.DROP_NETWORK === 'mainnet' ? 0.008  : ANON_CLAIM_AMOUNT;
 
 // ── Session storage helpers (survive page refresh within same tab) ────────────
 function clearClaimSession() {
@@ -344,6 +347,15 @@ function _clamp3dec(el) {
   }
 }
 
+// Force-clamp an <input> field to at most 4 decimal places in-place.
+function _clamp4dec(el) {
+  if (!el) return;
+  const dot = el.value.indexOf('.');
+  if (dot !== -1 && el.value.length - dot > 5) {
+    el.value = el.value.slice(0, dot + 5);
+  }
+}
+
 // ── Address prefix validation ─────────────────────────────────────────────────
 // Minimum full address length = prefix (5-6) + 40 alphanumeric chars = 45-46
 const ADDR_MIN_LEN = ADDR_PFX.length + 40;
@@ -372,7 +384,7 @@ function _initClaimAmountButtons() {
       if (btn.dataset.amount === "custom") {
         show("claim-custom-wrap");
         const v = parseFloat($("claim-custom-amt")?.value);
-        _claimAmount = (v >= 0.001 && v < 1) ? parseFloat(v.toFixed(3)) : null;
+        _claimAmount = (v >= CLAIM_CUSTOM_MIN && v <= CLAIM_CUSTOM_MAX) ? parseFloat(v.toFixed(4)) : null;
       } else {
         hide("claim-custom-wrap");
         _claimAmount = parseFloat(btn.dataset.amount);
@@ -381,9 +393,9 @@ function _initClaimAmountButtons() {
   });
   $("claim-custom-amt")?.addEventListener("input", () => {
     const el = $("claim-custom-amt");
-    _clamp3dec(el);
+    _clamp4dec(el);
     const v = parseFloat(el?.value);
-    _claimAmount = (v >= 0.001 && v < 1) ? parseFloat(v.toFixed(3)) : null;
+    _claimAmount = (v >= CLAIM_CUSTOM_MIN && v <= CLAIM_CUSTOM_MAX) ? parseFloat(v.toFixed(4)) : null;
   });
 }
 
@@ -396,7 +408,7 @@ function _initAnonAmountButtons() {
       if (btn.dataset.amount === "custom") {
         show("anon-custom-wrap");
         const v = parseFloat($("anon-custom-amt")?.value);
-        _claimAnonAmount = (v >= 0.001 && v <= ANON_CLAIM_AMOUNT) ? parseFloat(v.toFixed(3)) : null;
+        _claimAnonAmount = (v >= CLAIM_CUSTOM_MIN && v <= ANON_CUSTOM_MAX) ? parseFloat(v.toFixed(4)) : null;
       } else {
         hide("anon-custom-wrap");
         _claimAnonAmount = parseFloat(btn.dataset.amount);
@@ -405,9 +417,9 @@ function _initAnonAmountButtons() {
   });
   $("anon-custom-amt")?.addEventListener("input", () => {
     const el = $("anon-custom-amt");
-    _clamp3dec(el);
+    _clamp4dec(el);
     const v = parseFloat(el?.value);
-    _claimAnonAmount = (v >= 0.001 && v <= ANON_CLAIM_AMOUNT) ? parseFloat(v.toFixed(3)) : null;
+    _claimAnonAmount = (v >= CLAIM_CUSTOM_MIN && v <= ANON_CUSTOM_MAX) ? parseFloat(v.toFixed(4)) : null;
   });
 }
 
@@ -931,8 +943,18 @@ document.addEventListener("DOMContentLoaded", () => {
   // Update anon custom input max for network
   const anonCustomEl = $("anon-custom-amt");
   if (anonCustomEl) {
-    anonCustomEl.max         = String(ANON_CLAIM_AMOUNT);
-    anonCustomEl.placeholder = `0.001 – ${ANON_CLAIM_AMOUNT}`;
+    anonCustomEl.min         = String(CLAIM_CUSTOM_MIN);
+    anonCustomEl.max         = String(ANON_CUSTOM_MAX);
+    anonCustomEl.step        = String(CLAIM_CUSTOM_MIN);
+    anonCustomEl.placeholder = `${CLAIM_CUSTOM_MIN} – ${ANON_CUSTOM_MAX}`;
+  }
+
+  const claimCustomEl = $("claim-custom-amt");
+  if (claimCustomEl) {
+    claimCustomEl.min         = String(CLAIM_CUSTOM_MIN);
+    claimCustomEl.max         = String(CLAIM_CUSTOM_MAX);
+    claimCustomEl.step        = String(CLAIM_CUSTOM_MIN);
+    claimCustomEl.placeholder = `${CLAIM_CUSTOM_MIN} – ${CLAIM_CUSTOM_MAX}`;
   }
 
   // Update all amount button labels (donate + claim) using the (now-patched) data-amount values

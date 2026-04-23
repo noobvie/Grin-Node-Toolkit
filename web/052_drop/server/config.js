@@ -24,7 +24,7 @@ const DEFAULTS = {
 
   // ── Giveaway ──────────────────────────────────────────────────────────────
   giveaway_enabled:          true,
-  claim_grin_per_tx:         1.0,        // max GRIN sent in one claim transaction (server-side cap)
+  claim_grin_per_tx:         0.008,      // max GRIN sent in one claim transaction (server-side cap)
   claim_cooldown_minutes:       240,      // per-address/IP: minutes before the same address can claim again (240 = 4h)
   slatepack_expire_min:         30,       // minutes user has to paste response slatepack
   global_daily_claims_cap:      2000,     // 0 = unlimited; max total claims site-wide per day (all users combined, resets midnight UTC)

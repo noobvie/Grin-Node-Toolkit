@@ -441,7 +441,7 @@ drop_ensure_defaults() {
         drop_name_default="Grin Drop"
         global_daily_cap_default="2000"   # site-wide ceiling; mainnet wallet balance is the real constraint
         global_hourly_cap_default="100"
-        claim_grin_default="0.1"          # max claim amount on mainnet
+        claim_grin_default="0.008"         # max claim amount on mainnet
     else
         net_label="testnet"
         drop_name_default="Grin Drop [TESTNET]"

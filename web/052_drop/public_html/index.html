@@ -26,6 +26,7 @@
   }
   </script>
 
+  <script>window.GA4_ID="__GA4_ID__";window.CF_TURNSTILE_KEY="__CF_TURNSTILE_KEY__";</script>
   <link rel="stylesheet" href="css/faucet.css">
   <link rel="stylesheet" id="theme-css" href="">
   <script>
@@ -149,7 +150,6 @@
             <button class="amount-btn" data-amount="0.1">0.1</button>
             <button class="amount-btn" data-amount="0.2">0.2</button>
             <button class="amount-btn" data-amount="0.5">0.5</button>
-            <button class="amount-btn" data-amount="1.0">1.0</button>
             <button class="amount-btn" data-amount="custom">Custom…</button>
           </div>
           <div id="claim-custom-wrap" style="display:none;margin-bottom:.75rem;">
@@ -160,6 +160,7 @@
           <input type="text" id="claim-address" placeholder="" autocomplete="off" spellcheck="false">
           <p class="error-msg" id="claim-error"></p>
           <div id="net-banner-claim"></div>
+          <div id="cf-turnstile-addr"></div>
           <button class="btn btn-full" id="claim-btn">Claim</button>
         </div>
 
@@ -187,6 +188,7 @@
           </div>
           <p class="error-msg" id="anon-claim-error"></p>
           <div id="net-banner-anon"></div>
+          <div id="cf-turnstile-anon"></div>
           <button class="btn btn-full" id="anon-claim-btn">Claim — No Address Needed</button>
         </div>
 

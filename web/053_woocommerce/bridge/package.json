@@ -1,0 +1,15 @@
+{
+  "name": "grinpay-woocommerce-bridge",
+  "version": "1.0.0",
+  "description": "GrinPay — Node.js bridge between WooCommerce plugin and grin-wallet owner_api",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

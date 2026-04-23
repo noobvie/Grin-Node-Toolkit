@@ -3,26 +3,30 @@
 # 089_backup_restore.sh - Grin Node Toolkit Backup & Restore
 # =============================================================================
 # Backs up and restores all Grin-related configuration, nginx, SSL certs,
-# web files, and cron schedules — but NOT chain data (re-syncable).
+# wallets, databases, and cron schedules — but NOT chain data (re-syncable).
 #
-# Backup archive: /opt/grin/backups/grin_backup_YYYYMMDD_HHMMSS.tar.gz
+# Archive: /opt/grin/temp/temp_dir_YYYYMMDD_HHMMSS.tar.gz.enc
+# Encryption: AES-256-CBC · default password = DDMMYYYY from the filename
+#             e.g.  temp_dir_20260421_143015.tar.gz.enc  →  password: 21042026
 #
 # What is backed up:
 #   · /opt/grin/conf/          — node configs, instances registry, API secrets
 #   · /opt/grin/wallet/        — wallet dirs (toml, seed, wallet_data) — optional, default Y
+#   · /opt/grin/drop-test/     — Grin Drop testnet (DB, config, secrets) — optional, default Y
+#   · /opt/grin/drop-main/     — Grin Drop mainnet (DB, config, secrets) — optional, default Y
 #   · /opt/grin/grin-stats/stats.db    — blockchain stats DB (~100 MB, expensive to rebuild)
 #   · /opt/grin/grin-stats/config.env  — stats collector config
 #   · /opt/grin/grin-price/grin-price.db — price history DB (optional, default Y)
 #   · /etc/nginx/sites-available/*  (Grin-related configs only)
 #   · /etc/letsencrypt/live/ + renewal/  — SSL certs
-#   · /var/www/*grin*/, fullmain/, prunemain/, prunetest/  (web UIs, not archive files)
 #   · root + www-data crontabs  — collector schedules
 #   · /opt/grin/logs/          — optional, default N
 #
-# What is NOT backed up (large / reproducible):
-#   · /opt/grin/node/*/chain_data/
-#   · /opt/grin/bin/grin  (binary — re-download via script 01)
-#   · /var/www/fullmain|prunemain|prunetest  static chain archives
+# What is NOT backed up (reproducible via toolkit scripts):
+#   · /opt/grin/node/*/chain_data/     (re-sync via script 01)
+#   · /opt/grin/bin/grin               (re-download via script 01)
+#   · /var/www/                        (re-deployed by nginx setup scripts)
+#   · server/, public_html/, grin-wallet binary  (re-deployed by 052)
 # =============================================================================
 
 set -euo pipefail
@@ -33,7 +37,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/grin_backup_restore_$(date +%Y%m%d_%H%M%S).log"
 CONF_DIR="/opt/grin/conf"
-BACKUP_DIR="/opt/grin/backups"
+BACKUP_DIR="/opt/grin/temp"
 mkdir -p "$LOG_DIR"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
@@ -90,38 +94,6 @@ _collect_nginx_grin_configs() {
     done < <(find /etc/nginx/sites-available -maxdepth 1 -type f 2>/dev/null || true)
 }
 
-# Populates global array WEB_DIRS with Grin web/data directories.
-# Same three-source logic as 08del step 2.
-_collect_web_dirs() {
-    WEB_DIRS=()
-    local seen=""
-
-    # Source A — root dirs referenced in Grin nginx configs
-    for conf in "${NGINX_GRIN_CONFIGS[@]+"${NGINX_GRIN_CONFIGS[@]}"}"; do
-        local root_dir
-        root_dir=$(grep -oP '(?<=root\s)[^;]+' "$conf" 2>/dev/null | head -1 | xargs 2>/dev/null || true)
-        [[ -z "$root_dir" || ! -d "$root_dir" ]] && continue
-        [[ "$seen" == *"|$root_dir|"* ]] && continue
-        seen+="|$root_dir|"
-        WEB_DIRS+=("$root_dir")
-    done
-
-    # Source B — /var/www/*grin* (depth 1, case-insensitive)
-    while IFS= read -r _d; do
-        [[ "$seen" == *"|$_d|"* ]] && continue
-        seen+="|$_d|"
-        WEB_DIRS+=("$_d")
-    done < <(find /var/www -mindepth 1 -maxdepth 1 -type d -iname '*grin*' 2>/dev/null || true)
-
-    # Fixed node-type dirs (fullmain/prunemain/prunetest)
-    for _d in /var/www/fullmain /var/www/prunemain /var/www/prunetest; do
-        [[ -d "$_d" ]] || continue
-        [[ "$seen" == *"|$_d|"* ]] && continue
-        seen+="|$_d|"
-        WEB_DIRS+=("$_d")
-    done
-}
-
 # Cron tag used to identify the backup schedule entry
 CRON_TAG="# grin-toolkit-auto-backup"
 
@@ -129,7 +101,7 @@ CRON_TAG="# grin-toolkit-auto-backup"
 # BACKUP
 # =============================================================================
 # Pass --auto as first arg for non-interactive mode (used by cron scheduler).
-# In auto mode: uses default dest, includes wallet, skips logs, no prompts.
+# In auto mode: uses default dest, includes wallet + drop, skips logs, no prompts.
 run_backup() {
     local auto=false
     [[ "${1:-}" == "--auto" ]] && auto=true
@@ -154,9 +126,8 @@ run_backup() {
     [[ "$auto" == false ]] && success "Destination: $dest_dir"
 
     # ── Step 2: Collect sources ──────────────────────────────────────────────
-    section "Step 2: Collecting Grin sources"
+    [[ "$auto" == false ]] && section "Step 2: Collecting Grin sources"
     _collect_nginx_grin_configs
-    _collect_web_dirs
 
     local -a sources=()
     local -a manifest_lines=()
@@ -165,9 +136,9 @@ run_backup() {
     if [[ -d "$CONF_DIR" ]]; then
         sources+=("$CONF_DIR")
         manifest_lines+=("conf: $CONF_DIR")
-        info "  ✓ $CONF_DIR"
+        [[ "$auto" == false ]] && info "  ✓ $CONF_DIR"
     else
-        warn "  — $CONF_DIR not found (skipping)"
+        [[ "$auto" == false ]] && warn "  — $CONF_DIR not found (skipping)"
     fi
 
     # nginx configs
@@ -175,10 +146,10 @@ run_backup() {
         for _c in "${NGINX_GRIN_CONFIGS[@]}"; do
             sources+=("$_c")
             manifest_lines+=("nginx-config: $_c")
-            info "  ✓ $_c"
+            [[ "$auto" == false ]] && info "  ✓ $_c"
         done
     else
-        warn "  — No Grin nginx configs found (skipping)"
+        [[ "$auto" == false ]] && warn "  — No Grin nginx configs found (skipping)"
     fi
 
     # Let's Encrypt
@@ -186,32 +157,121 @@ run_backup() {
         if [[ -d "$_le" ]]; then
             sources+=("$_le")
             manifest_lines+=("letsencrypt: $_le")
-            info "  ✓ $_le"
+            [[ "$auto" == false ]] && info "  ✓ $_le"
         fi
-    done
-
-    # Web dirs (excluding static chain archive dirs)
-    for _w in "${WEB_DIRS[@]+"${WEB_DIRS[@]}"}"; do
-        sources+=("$_w")
-        manifest_lines+=("web: $_w")
-        info "  ✓ $_w"
     done
 
     # Crontabs
     if crontab -l &>/dev/null; then
         manifest_lines+=("crontab: root")
-        info "  ✓ root crontab"
+        [[ "$auto" == false ]] && info "  ✓ root crontab"
     fi
     if [[ -f /var/spool/cron/crontabs/www-data ]]; then
         manifest_lines+=("crontab: www-data")
-        info "  ✓ www-data crontab"
+        [[ "$auto" == false ]] && info "  ✓ www-data crontab"
     fi
 
-    # ── Step 4: Databases ────────────────────────────────────────────────────
+    # ── Step 3: Wallets ──────────────────────────────────────────────────────
+    local wallets_conf="$CONF_DIR/grin_wallets_location.conf"
+    local -a wallet_dirs=()
+    if [[ -f "$wallets_conf" ]]; then
+        local _wdir
+        while IFS= read -r _wdir; do
+            [[ -d "$_wdir" ]] && wallet_dirs+=("$_wdir")
+        done < <(grep -oP '(?<=_WALLET_DIR=")[^"]+' "$wallets_conf" 2>/dev/null | sort -u || true)
+    fi
+
+    if [[ "$auto" == false ]]; then
+        section "Step 3: Wallet data"
+    fi
+    if [[ ${#wallet_dirs[@]} -gt 0 ]]; then
+        local include_wallet=true
+        if [[ "$auto" == false ]]; then
+            echo -e "  ${YELLOW}Wallet dirs contain seed files — loss = unrecoverable.${RESET}"
+            echo ""
+            for _w in "${wallet_dirs[@]}"; do echo -e "  ${DIM}$_w${RESET}"; done
+            echo ""
+            echo -ne "${BOLD}Include wallet data? [Y/n]: ${RESET}"
+            read -r _wallet_choice
+            [[ "${_wallet_choice,,}" == "n" ]] && include_wallet=false
+        fi
+        if [[ "$include_wallet" == true ]]; then
+            for _w in "${wallet_dirs[@]}"; do
+                sources+=("$_w")
+                manifest_lines+=("wallet: $_w")
+                [[ "$auto" == false ]] && info "  ✓ $_w"
+            done
+        else
+            [[ "$auto" == false ]] && warn "  — Wallet data excluded. Ensure you have your seed phrase backed up separately."
+        fi
+    else
+        [[ "$auto" == false ]] && warn "  — No wallet dirs found in $wallets_conf (skipping)"
+    fi
+
+    # ── Step 4: Grin Drop data ───────────────────────────────────────────────
+    local -a _drop_nets=()
+    for _net in test main; do
+        [[ -f "/opt/grin/drop-$_net/drop-$_net.db" ]] && _drop_nets+=("$_net")
+    done
+
+    if [[ ${#_drop_nets[@]} -gt 0 ]]; then
+        local include_drop=true
+        local include_drop_wallet_data=true
+
+        if [[ "$auto" == false ]]; then
+            section "Step 4: Grin Drop data"
+            local _net_labels=""
+            for _n in "${_drop_nets[@]}"; do
+                _net_labels+="drop-$_n  "
+            done
+            echo -e "  ${YELLOW}Detected: ${BOLD}${_net_labels}${RESET}"
+            echo ""
+            echo -ne "${BOLD}Include Grin Drop data (DBs, configs, wallet secrets)? [Y/n]: ${RESET}"
+            read -r _drop_choice
+            [[ "${_drop_choice,,}" == "n" ]] && include_drop=false
+
+            if [[ "$include_drop" == true ]]; then
+                echo -ne "${BOLD}Include wallet_data/ (LMDB — faster migration, larger archive)? [Y/n]: ${RESET}"
+                read -r _dropw_choice
+                [[ "${_dropw_choice,,}" == "n" ]] && include_drop_wallet_data=false
+            fi
+        fi
+
+        if [[ "$include_drop" == true ]]; then
+            for _net in "${_drop_nets[@]}"; do
+                local _dir="/opt/grin/drop-$_net"
+                local _net_label; [[ "$_net" == "test" ]] && _net_label="testnet" || _net_label="mainnet"
+                manifest_lines+=("drop-$_net_label:")
+                for _f in \
+                    "$_dir/drop-$_net.db" \
+                    "$_dir/grin_drop_$_net.conf" \
+                    "$_dir/.temp_$_net" \
+                    "$_dir/.word_$_net" \
+                    "$_dir/.foreign_api_secret" \
+                    "$_dir/.owner_api_secret" \
+                    "$_dir/grin-wallet.toml"
+                do
+                    [[ -f "$_f" ]] || continue
+                    sources+=("$_f")
+                    manifest_lines+=("  $(basename "$_f")")
+                    [[ "$auto" == false ]] && info "  ✓ $_f"
+                done
+                if [[ "$include_drop_wallet_data" == true && -d "$_dir/wallet_data" ]]; then
+                    sources+=("$_dir/wallet_data")
+                    manifest_lines+=("  wallet_data/ (LMDB)")
+                    [[ "$auto" == false ]] && info "  ✓ $_dir/wallet_data/"
+                fi
+            done
+        else
+            [[ "$auto" == false ]] && warn "  — Grin Drop excluded."
+        fi
+    fi
+
+    # ── Step 5: Databases ────────────────────────────────────────────────────
     # stats.db took hours of crawling to build — always include it by default.
     # WAL checkpoint flushes any in-flight writes before we copy the file.
     if [[ "$auto" == false ]]; then
-        section "Step 4: Database files"
+        section "Step 5: Database files"
         echo -e "  ${YELLOW}stats.db contains ~100 MB of crawled blockchain data — expensive to rebuild.${RESET}"
         echo ""
     fi
@@ -247,51 +307,13 @@ run_backup() {
             fi
             sources+=("$_db")
             manifest_lines+=("database: $_db  ($_db_size)")
-            info "  ✓ $_db  ($_db_size)"
+            [[ "$auto" == false ]] && info "  ✓ $_db  ($_db_size)"
         fi
     done
 
-    # Wallet dirs (from grin_wallets_location.conf)
-    local wallets_conf="$CONF_DIR/grin_wallets_location.conf"
-    local -a wallet_dirs=()
-    if [[ -f "$wallets_conf" ]]; then
-        local _wdir
-        while IFS= read -r _wdir; do
-            [[ -d "$_wdir" ]] && wallet_dirs+=("$_wdir")
-        done < <(grep -oP '(?<=_WALLET_DIR=")[^"]+' "$wallets_conf" 2>/dev/null | sort -u || true)
-    fi
-
-    # ── Step 3: Wallets ──────────────────────────────────────────────────────
+    # ── Step 6: Optional logs ────────────────────────────────────────────────
     if [[ "$auto" == false ]]; then
-        section "Step 3: Wallet data"
-    fi
-    if [[ ${#wallet_dirs[@]} -gt 0 ]]; then
-        local include_wallet=true
-        if [[ "$auto" == false ]]; then
-            echo -e "  ${YELLOW}Wallet dirs contain seed files — loss = unrecoverable.${RESET}"
-            echo ""
-            for _w in "${wallet_dirs[@]}"; do echo -e "  ${DIM}$_w${RESET}"; done
-            echo ""
-            echo -ne "${BOLD}Include wallet data? [Y/n]: ${RESET}"
-            read -r _wallet_choice
-            [[ "${_wallet_choice,,}" == "n" ]] && include_wallet=false
-        fi
-        if [[ "$include_wallet" == true ]]; then
-            for _w in "${wallet_dirs[@]}"; do
-                sources+=("$_w")
-                manifest_lines+=("wallet: $_w")
-                info "  ✓ $_w"
-            done
-        else
-            warn "  — Wallet data excluded. Ensure you have your seed phrase backed up separately."
-        fi
-    else
-        [[ "$auto" == false ]] && warn "  — No wallet dirs found in $wallets_conf (skipping)"
-    fi
-
-    # ── Step 5: Optional logs ────────────────────────────────────────────────
-    if [[ "$auto" == false ]]; then
-        section "Step 5: Optional — include logs"
+        section "Step 6: Optional — include logs"
         if [[ -d /opt/grin/logs ]]; then
             echo -ne "${BOLD}Include /opt/grin/logs/? [y/N]: ${RESET}"
             read -r _log_choice
@@ -310,11 +332,15 @@ run_backup() {
         pause; return 0
     fi
 
-    # ── Step 6: Create archive ───────────────────────────────────────────────
-    [[ "$auto" == false ]] && section "Step 6: Creating archive"
+    # ── Step 7: Create archive ───────────────────────────────────────────────
+    [[ "$auto" == false ]] && section "Step 7: Creating archive"
     [[ "$auto" == true  ]] && log "[AUTO-BACKUP] Starting automated backup to $dest_dir"
     local ts; ts=$(date +%Y%m%d_%H%M%S)
-    local archive_name="grin_backup_${ts}.tar.gz"
+    # Derive encryption password: DDMMYYYY from the timestamp YYYYMMDD_HHMMSS
+    local enc_pass="${ts:6:2}${ts:4:2}${ts:0:4}"
+    local archive_basename="temp_dir_${ts}"
+    local archive_gz="$archive_basename.tar.gz"
+    local archive_enc="$archive_basename.tar.gz.enc"
     local tmp_dir; tmp_dir=$(mktemp -d)
     trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -333,7 +359,8 @@ run_backup() {
         echo "Excluded (not backed up):"
         echo "  /opt/grin/node/*/chain_data/  (re-sync via script 01)"
         echo "  /opt/grin/bin/grin            (re-download via script 01)"
-        echo "  /var/www/fullmain|prunemain|prunetest  static archives (re-gen via script 03)"
+        echo "  /var/www/                     (re-deployed by toolkit scripts)"
+        echo "  server/, public_html/         (re-deployed by script 052)"
     } > "$manifest_file"
 
     # Write crontabs to staging area
@@ -355,18 +382,17 @@ run_backup() {
         done
     fi
 
-    info "Building archive..."
-    local archive_tmp="$tmp_dir/$archive_name"
+    [[ "$auto" == false ]] && info "Building archive..."
+    local archive_tmp="$tmp_dir/$archive_gz"
 
-    # Build tar: stage extra files at / then add real filesystem paths
-    # Extra files go into a staging subdir that mirrors root so tar can include them
+    # Stage extra files (manifest, crontabs, nginx symlinks list)
     local stage="$tmp_dir/stage"
     mkdir -p "$stage"
     cp "$manifest_file" "$stage/MANIFEST.txt"
     mkdir -p "$stage/crontabs"
-    [[ -f "$cron_dir/root.crontab"    ]] && cp "$cron_dir/root.crontab"    "$stage/crontabs/"
+    [[ -f "$cron_dir/root.crontab"     ]] && cp "$cron_dir/root.crontab"     "$stage/crontabs/"
     [[ -f "$cron_dir/www-data.crontab" ]] && cp "$cron_dir/www-data.crontab" "$stage/crontabs/"
-    [[ -f "$nginx_enabled_manifest" ]] && cp "$nginx_enabled_manifest" "$stage/nginx_enabled_symlinks.txt"
+    [[ -f "$nginx_enabled_manifest"    ]] && cp "$nginx_enabled_manifest"     "$stage/nginx_enabled_symlinks.txt"
 
     tar -czf "$archive_tmp" \
         -C "$stage" MANIFEST.txt crontabs \
@@ -374,28 +400,40 @@ run_backup() {
         "${sources[@]}" \
         2>/dev/null || true
 
+    # Encrypt archive (AES-256-CBC, password via fd to avoid ps aux exposure)
+    [[ "$auto" == false ]] && info "Encrypting archive..."
+    local archive_enc_tmp="$tmp_dir/$archive_enc"
+    {
+        openssl enc -aes-256-cbc -pbkdf2 -iter 600000 \
+            -in "$archive_tmp" \
+            -out "$archive_enc_tmp" \
+            -pass fd:3
+    } 3< <(printf '%s' "$enc_pass")
+    rm "$archive_tmp"
+
     # Move to final destination atomically
-    mv "$archive_tmp" "$dest_dir/$archive_name"
+    mv "$archive_enc_tmp" "$dest_dir/$archive_enc"
     trap - EXIT
     rm -rf "$tmp_dir"
 
-    local size; size=$(du -sh "$dest_dir/$archive_name" 2>/dev/null | cut -f1)
+    local size; size=$(du -sh "$dest_dir/$archive_enc" 2>/dev/null | cut -f1)
 
-    # Set permissions: archive is sensitive (contains secrets + wallet seed)
-    chmod 600 "$dest_dir/$archive_name" 2>/dev/null || true
+    chmod 600 "$dest_dir/$archive_enc" 2>/dev/null || true
     if id grin &>/dev/null; then
         chown -R grin:grin "$dest_dir" 2>/dev/null || true
     fi
 
-    # ── Step 7: Done ─────────────────────────────────────────────────────────
+    # ── Step 8: Done ─────────────────────────────────────────────────────────
     if [[ "$auto" == false ]]; then
         section "Backup complete"
-        success "Archive : $dest_dir/$archive_name"
-        success "Size    : $size"
-        log "[BACKUP] Created: $dest_dir/$archive_name ($size)"
+        success "Archive  : $dest_dir/$archive_enc"
+        success "Size     : $size"
+        echo ""
+        echo -e "  ${YELLOW}Encrypted — password: ${BOLD}${enc_pass}${RESET}${YELLOW}  (DDMMYYYY of backup date)${RESET}"
+        log "[BACKUP] Created: $dest_dir/$archive_enc ($size)"
         pause
     else
-        log "[AUTO-BACKUP] Completed: $dest_dir/$archive_name ($size)"
+        log "[AUTO-BACKUP] Completed: $dest_dir/$archive_enc ($size)"
     fi
 }
 
@@ -416,10 +454,12 @@ run_restore() {
 
     local -a archives=()
     if [[ -d "$BACKUP_DIR" ]]; then
+        # New encrypted format + legacy unencrypted format
         while IFS= read -r _f; do
             archives+=("$_f")
-        done < <(find "$BACKUP_DIR" -maxdepth 1 -name 'grin_backup_*.tar.gz' -type f \
-                 | sort -r 2>/dev/null || true)
+        done < <(find "$BACKUP_DIR" -maxdepth 1 \
+                 \( -name 'temp_dir_*.tar.gz.enc' -o -name 'grin_backup_*.tar.gz' \) \
+                 -type f | sort -r 2>/dev/null || true)
     fi
 
     local chosen_archive=""
@@ -430,7 +470,9 @@ run_restore() {
         local i=1
         for _a in "${archives[@]}"; do
             local sz; sz=$(du -sh "$_a" 2>/dev/null | cut -f1)
-            echo -e "  ${BOLD}$i)${RESET} $(basename "$_a")  ${DIM}($sz)${RESET}"
+            local _enc_tag=""
+            [[ "$_a" == *.enc ]] && _enc_tag="  ${CYAN}[encrypted]${RESET}"
+            echo -e "  ${BOLD}$i)${RESET} $(basename "$_a")  ${DIM}($sz)${RESET}${_enc_tag}"
             (( i++ ))
         done
         echo -e "  ${DIM}C) Enter custom path${RESET}"
@@ -465,48 +507,95 @@ run_restore() {
         pause; return 1
     fi
 
-    # ── Step 2: Show manifest ────────────────────────────────────────────────
-    section "Step 2: Archive contents"
-    echo ""
-    tar -xOzf "$chosen_archive" MANIFEST.txt 2>/dev/null \
-        || warn "No MANIFEST.txt found in archive."
-    echo ""
-
-    # ── Step 3: Confirm ──────────────────────────────────────────────────────
-    if ! confirm_step "Restore $(basename "$chosen_archive") — this will overwrite existing files. Proceed?"; then
-        info "Cancelled."
-        return 0
-    fi
-
-    # ── Step 4: Extract ──────────────────────────────────────────────────────
-    section "Step 4: Restoring files"
-
+    # ── Step 2: Decrypt (if encrypted) ──────────────────────────────────────
+    local working_archive="$chosen_archive"
     local tmp_dir; tmp_dir=$(mktemp -d)
     trap 'rm -rf "$tmp_dir"' EXIT
 
+    if [[ "$chosen_archive" == *.enc ]]; then
+        section "Step 2: Decrypting archive"
+        # Derive password from YYYYMMDD embedded in filename
+        local _bname; _bname=$(basename "$chosen_archive")
+        local _date_part; _date_part=$(echo "$_bname" | grep -oP '\d{8}' | head -1 || true)
+        local _derived_pass=""
+        if [[ "${#_date_part}" -eq 8 ]]; then
+            _derived_pass="${_date_part:6:2}${_date_part:4:2}${_date_part:0:4}"
+            echo -e "  ${CYAN}Derived password:${RESET} ${BOLD}$_derived_pass${RESET}  ${DIM}(DDMMYYYY from filename)${RESET}"
+        fi
+
+        local _decrypted="$tmp_dir/archive.tar.gz"
+        local _dec_ok=false
+
+        if [[ -n "$_derived_pass" ]]; then
+            info "Trying derived password..."
+            if {
+                openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+                    -in "$chosen_archive" -out "$_decrypted" -pass fd:3
+            } 3< <(printf '%s' "$_derived_pass") 2>/dev/null; then
+                _dec_ok=true
+                success "Decrypted successfully."
+            fi
+        fi
+
+        if [[ "$_dec_ok" == false ]]; then
+            warn "Derived password did not work. Enter the password manually."
+            echo -ne "${BOLD}Password: ${RESET}"
+            read -rs _manual_pass
+            echo ""
+            if ! {
+                openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+                    -in "$chosen_archive" -out "$_decrypted" -pass fd:3
+            } 3< <(printf '%s' "$_manual_pass") 2>/dev/null; then
+                error "Decryption failed — wrong password?"
+                rm -rf "$tmp_dir"; trap - EXIT; pause; return 1
+            fi
+            success "Decrypted successfully."
+        fi
+
+        working_archive="$_decrypted"
+    fi
+
+    # ── Step 3: Show manifest ────────────────────────────────────────────────
+    section "Step 3: Archive contents"
+    echo ""
+    tar -xOzf "$working_archive" MANIFEST.txt 2>/dev/null \
+        || warn "No MANIFEST.txt found in archive."
+    echo ""
+
+    # ── Step 4: Confirm ──────────────────────────────────────────────────────
+    if ! confirm_step "Restore $(basename "$chosen_archive") — this will overwrite existing files. Proceed?"; then
+        info "Cancelled."
+        trap - EXIT; rm -rf "$tmp_dir"; return 0
+    fi
+
+    # ── Step 5: Extract ──────────────────────────────────────────────────────
+    section "Step 5: Restoring files"
+
+    local extract_dir="$tmp_dir/extracted"
+    mkdir -p "$extract_dir"
     info "Extracting archive..."
-    tar -xzf "$chosen_archive" -C "$tmp_dir" 2>/dev/null || true
+    tar -xzf "$working_archive" -C "$extract_dir" 2>/dev/null || true
 
     local nginx_restored=false
 
     # conf/
-    if [[ -d "$tmp_dir/opt/grin/conf" ]]; then
+    if [[ -d "$extract_dir/opt/grin/conf" ]]; then
         mkdir -p "$CONF_DIR"
-        cp -a "$tmp_dir/opt/grin/conf/." "$CONF_DIR/"
+        cp -a "$extract_dir/opt/grin/conf/." "$CONF_DIR/"
         success "Restored: $CONF_DIR"
         log "[RESTORE] conf → $CONF_DIR"
     fi
 
     # nginx configs
-    if [[ -d "$tmp_dir/etc/nginx/sites-available" ]]; then
-        cp -a "$tmp_dir/etc/nginx/sites-available/." /etc/nginx/sites-available/ 2>/dev/null || true
+    if [[ -d "$extract_dir/etc/nginx/sites-available" ]]; then
+        cp -a "$extract_dir/etc/nginx/sites-available/." /etc/nginx/sites-available/ 2>/dev/null || true
         success "Restored: nginx sites-available"
         nginx_restored=true
         log "[RESTORE] nginx sites-available"
     fi
 
     # Re-enable nginx symlinks from manifest
-    if [[ -f "$tmp_dir/nginx_enabled_symlinks.txt" ]]; then
+    if [[ -f "$extract_dir/nginx_enabled_symlinks.txt" ]]; then
         while IFS= read -r _bname; do
             local _src="/etc/nginx/sites-available/$_bname"
             local _dst="/etc/nginx/sites-enabled/$_bname"
@@ -514,31 +603,23 @@ run_restore() {
                 ln -s "$_src" "$_dst"
                 success "Re-enabled nginx: $_bname"
             fi
-        done < "$tmp_dir/nginx_enabled_symlinks.txt"
+        done < "$extract_dir/nginx_enabled_symlinks.txt"
     fi
 
     # Let's Encrypt
     for _le in live renewal; do
-        if [[ -d "$tmp_dir/etc/letsencrypt/$_le" ]]; then
+        if [[ -d "$extract_dir/etc/letsencrypt/$_le" ]]; then
             mkdir -p "/etc/letsencrypt/$_le"
-            cp -a "$tmp_dir/etc/letsencrypt/$_le/." "/etc/letsencrypt/$_le/" 2>/dev/null || true
+            cp -a "$extract_dir/etc/letsencrypt/$_le/." "/etc/letsencrypt/$_le/" 2>/dev/null || true
             success "Restored: /etc/letsencrypt/$_le"
             log "[RESTORE] letsencrypt/$_le"
         fi
     done
 
-    # Web dirs
-    if [[ -d "$tmp_dir/var/www" ]]; then
-        cp -a "$tmp_dir/var/www/." /var/www/ 2>/dev/null || true
-        success "Restored: /var/www (Grin web dirs)"
-        log "[RESTORE] /var/www"
-    fi
-
     # Wallet dirs
-    if [[ -d "$tmp_dir/opt/grin/wallet" ]]; then
+    if [[ -d "$extract_dir/opt/grin/wallet" ]]; then
         mkdir -p /opt/grin/wallet
-        cp -a "$tmp_dir/opt/grin/wallet/." /opt/grin/wallet/ 2>/dev/null || true
-        # Restore strict permissions: wallet dirs must not be world-readable
+        cp -a "$extract_dir/opt/grin/wallet/." /opt/grin/wallet/ 2>/dev/null || true
         find /opt/grin/wallet -maxdepth 1 -mindepth 1 -type d | while IFS= read -r _wd; do
             chmod 700 "$_wd" 2>/dev/null || true
             [[ -d "$_wd/wallet_data" ]] && chmod 700 "$_wd/wallet_data" 2>/dev/null || true
@@ -553,38 +634,72 @@ run_restore() {
         log "[RESTORE] wallet"
     fi
 
+    # Grin Drop dirs (individual files extracted from absolute paths)
+    for _net in test main; do
+        local _drop_src="$extract_dir/opt/grin/drop-$_net"
+        [[ -d "$_drop_src" ]] || continue
+        local _drop_dest="/opt/grin/drop-$_net"
+        mkdir -p "$_drop_dest"
+        local _net_label; [[ "$_net" == "test" ]] && _net_label="testnet" || _net_label="mainnet"
+
+        for _f in \
+            "drop-$_net.db" \
+            "grin_drop_$_net.conf" \
+            ".temp_$_net" \
+            ".word_$_net" \
+            ".foreign_api_secret" \
+            ".owner_api_secret" \
+            "grin-wallet.toml"
+        do
+            [[ -f "$_drop_src/$_f" ]] || continue
+            cp "$_drop_src/$_f" "$_drop_dest/$_f"
+            chmod 600 "$_drop_dest/$_f" 2>/dev/null || true
+        done
+
+        if [[ -d "$_drop_src/wallet_data" ]]; then
+            cp -a "$_drop_src/wallet_data" "$_drop_dest/"
+            chmod 700 "$_drop_dest/wallet_data" 2>/dev/null || true
+        fi
+
+        if id grin &>/dev/null; then
+            chown -R grin:grin "$_drop_dest" 2>/dev/null || true
+        fi
+        success "Restored: Grin Drop $_net_label"
+        log "[RESTORE] drop-$_net"
+    done
+
     # Database files (stats.db, config.env, grin-price.db)
     for _db_rel in \
         "opt/grin/grin-stats/stats.db" \
         "opt/grin/grin-stats/config.env" \
         "opt/grin/grin-price/grin-price.db"
     do
-        if [[ -f "$tmp_dir/$_db_rel" ]]; then
+        if [[ -f "$extract_dir/$_db_rel" ]]; then
             local _db_dest="/$_db_rel"
             mkdir -p "$(dirname "$_db_dest")"
-            cp -a "$tmp_dir/$_db_rel" "$_db_dest"
+            cp -a "$extract_dir/$_db_rel" "$_db_dest"
             success "Restored: $_db_dest"
             log "[RESTORE] $_db_dest"
         fi
     done
 
     # Logs
-    if [[ -d "$tmp_dir/opt/grin/logs" ]]; then
+    if [[ -d "$extract_dir/opt/grin/logs" ]]; then
         mkdir -p /opt/grin/logs
-        cp -a "$tmp_dir/opt/grin/logs/." /opt/grin/logs/ 2>/dev/null || true
+        cp -a "$extract_dir/opt/grin/logs/." /opt/grin/logs/ 2>/dev/null || true
         success "Restored: /opt/grin/logs"
         log "[RESTORE] logs"
     fi
 
     # Crontabs
-    if [[ -f "$tmp_dir/crontabs/root.crontab" ]]; then
-        crontab "$tmp_dir/crontabs/root.crontab"
+    if [[ -f "$extract_dir/crontabs/root.crontab" ]]; then
+        crontab "$extract_dir/crontabs/root.crontab"
         success "Restored: root crontab"
         log "[RESTORE] root crontab"
     fi
-    if [[ -f "$tmp_dir/crontabs/www-data.crontab" ]]; then
+    if [[ -f "$extract_dir/crontabs/www-data.crontab" ]]; then
         mkdir -p /var/spool/cron/crontabs
-        cp "$tmp_dir/crontabs/www-data.crontab" /var/spool/cron/crontabs/www-data
+        cp "$extract_dir/crontabs/www-data.crontab" /var/spool/cron/crontabs/www-data
         chown www-data:crontab /var/spool/cron/crontabs/www-data 2>/dev/null || true
         chmod 600 /var/spool/cron/crontabs/www-data 2>/dev/null || true
         success "Restored: www-data crontab"
@@ -594,9 +709,9 @@ run_restore() {
     trap - EXIT
     rm -rf "$tmp_dir"
 
-    # ── Step 5: Reload nginx if needed ───────────────────────────────────────
+    # ── Step 6: Reload nginx if needed ───────────────────────────────────────
     if [[ "$nginx_restored" == true ]]; then
-        section "Step 5: Reloading nginx"
+        section "Step 6: Reloading nginx"
         if nginx -t 2>/dev/null; then
             systemctl reload nginx && success "nginx reloaded." || warn "nginx reload failed — check manually."
         else
@@ -605,7 +720,7 @@ run_restore() {
         fi
     fi
 
-    # ── Step 6: Summary ──────────────────────────────────────────────────────
+    # ── Step 7: Summary ──────────────────────────────────────────────────────
     section "Restore complete"
     success "Files restored from: $(basename "$chosen_archive")"
     echo ""
@@ -614,7 +729,8 @@ run_restore() {
     echo -e "  · Start the Grin node via ${BOLD}Script 01 → S) Start${RESET}"
     echo -e "  · Chain data will re-sync automatically, or use ${BOLD}Script 03${RESET} to stream it"
     echo -e "  · If stats.db was restored, resume the stats cron — no re-crawl needed"
-    echo -e "  · If grin-price.db was restored, resume the price cron — history is intact"
+    echo -e "  · If Grin Drop was restored, restart services via ${BOLD}Script 052 → menu${RESET}"
+    echo -e "  · Web content (${DIM}/var/www/${RESET}) is redeployed automatically by each setup script"
     echo ""
     log "[RESTORE] Completed from: $chosen_archive"
     pause
@@ -754,7 +870,7 @@ main() {
         echo ""
 
         echo -e "  ${BOLD}B${RESET})  Backup now"
-        echo -e "     ${DIM}Saves conf, wallet, nginx, SSL certs, web UIs, crontabs${RESET}"
+        echo -e "     ${DIM}Saves conf, wallet, drop DBs, nginx, SSL certs, crontabs · encrypted${RESET}"
         echo ""
         echo -e "  ${BOLD}S${RESET})  Schedule automatic backup"
         echo -e "     ${DIM}Daily or 2 days per week · random off-peak time${RESET}"

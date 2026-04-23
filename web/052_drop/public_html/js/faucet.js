@@ -3,6 +3,67 @@
 
 const REFRESH_SEC = 300; // 5 minutes — single shared poll
 
+// ── Cloudflare Turnstile (optional — injected by nginx if CF_TURNSTILE_KEY is configured) ──
+let _tsWidgetAddr = null;  // widget id for address-based claim pane
+let _tsWidgetAnon = null;  // widget id for anonymous claim pane
+let _tsCbAddr     = null;  // pending resolve callback for address widget
+let _tsCbAnon     = null;  // pending resolve callback for anon widget
+
+(function () {
+  const key = window.CF_TURNSTILE_KEY;
+  if (!key || !key.startsWith('0x')) return;  // Turnstile site keys start with 0x
+  const s = document.createElement('script');
+  s.src   = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+  s.async = true;
+  s.defer = true;
+  s.onload = function () {
+    _tsWidgetAddr = turnstile.render('#cf-turnstile-addr', {
+      sitekey: key, execution: 'execute', appearance: 'interaction-only',
+      callback:         function (t) { if (_tsCbAddr) { _tsCbAddr(t);  _tsCbAddr = null; } },
+      'error-callback': function ()  { if (_tsCbAddr) { _tsCbAddr(''); _tsCbAddr = null; } },
+    });
+    _tsWidgetAnon = turnstile.render('#cf-turnstile-anon', {
+      sitekey: key, execution: 'execute', appearance: 'interaction-only',
+      callback:         function (t) { if (_tsCbAnon) { _tsCbAnon(t);  _tsCbAnon = null; } },
+      'error-callback': function ()  { if (_tsCbAnon) { _tsCbAnon(''); _tsCbAnon = null; } },
+    });
+  };
+  document.head.appendChild(s);
+})();
+
+// Returns a Promise resolving to a token string (or '' if Turnstile not active).
+// cbSetter receives the resolve fn so the render-time callback can trigger it.
+function getTurnstileToken(widgetId, cbSetter) {
+  if (!widgetId || typeof turnstile === 'undefined') return Promise.resolve('');
+  return new Promise(function (resolve) {
+    cbSetter(resolve);
+    turnstile.execute(widgetId);
+  });
+}
+
+function resetTurnstile(widgetId) {
+  if (widgetId && typeof turnstile !== 'undefined') turnstile.reset(widgetId);
+}
+
+// ── GA4 analytics (optional — injected by nginx if GA4_ID is configured) ──────
+(function () {
+  const id = window.GA4_ID;
+  if (!id || !id.startsWith('G-')) return;
+  const s = document.createElement('script');
+  s.async = true;
+  s.src = 'https://www.googletagmanager.com/gtag/js?id=' + id;
+  document.head.appendChild(s);
+  window.dataLayer = window.dataLayer || [];
+  window.gtag = function () { window.dataLayer.push(arguments); };
+  window.gtag('js', new Date());
+  window.gtag('config', id);
+})();
+
+function trackEvent(name, params) {
+  if (typeof window.gtag !== 'function') return;
+  window.gtag('event', name, Object.assign({ network: window.DROP_NETWORK || 'unknown' }, params));
+}
+
 // ── Network context (injected by nginx sub_filter) ────────────────────────────
 const API      = window.APP_BASE  || '';
 const COIN     = window.DROP_NETWORK === 'testnet' ? 'tGRIN' : 'GRIN';
@@ -18,14 +79,17 @@ let _countdown        = null;
 let _invoiceId        = null;
 let _donateWalletAddr = '';
 
-// Claim amount presets — 10× smaller on mainnet to conserve real GRIN
+// Claim amount presets — smaller on mainnet to conserve real GRIN
 const CLAIM_AMOUNTS   = window.DROP_NETWORK === 'mainnet'
-  ? [0.01, 0.02, 0.05, 0.1]
-  : [0.1,  0.2,  0.5,  1.0];
-const ANON_CLAIM_AMOUNT  = window.DROP_NETWORK === 'mainnet' ? 0.009 : 0.09;
+  ? [0.002, 0.006, 0.008]
+  : [0.1,   0.2,   0.5];
+const ANON_CLAIM_AMOUNT  = window.DROP_NETWORK === 'mainnet' ? 0.005 : 0.09;
 const ANON_CLAIM_AMOUNTS = window.DROP_NETWORK === 'mainnet'
-  ? [0.001, 0.005, 0.009]
+  ? [0.001, 0.003, 0.005]
   : [0.01,  0.05,  0.09];
+const CLAIM_CUSTOM_MIN = window.DROP_NETWORK === 'mainnet' ? 0.0001 : 0.001;
+const CLAIM_CUSTOM_MAX = window.DROP_NETWORK === 'mainnet' ? 0.008  : 0.999;
+const ANON_CUSTOM_MAX  = window.DROP_NETWORK === 'mainnet' ? 0.008  : ANON_CLAIM_AMOUNT;
 
 // ── Session storage helpers (survive page refresh within same tab) ────────────
 function clearClaimSession() {
@@ -54,8 +118,7 @@ function setText(id, text) {
 
 function show(id)   { const el = $(id); if (el) el.style.display = ""; }
 function hide(id)   { const el = $(id); if (el) el.style.display = "none"; }
-function addClass(id, cls) { const el = $(id); if (el) el.classList.add(cls); }
-function rmClass(id, cls)  { const el = $(id); if (el) el.classList.remove(cls); }
+
 
 async function apiPost(path, body, timeoutMs) {
   const ctrl = timeoutMs ? new AbortController() : null;
@@ -223,7 +286,8 @@ async function refreshStatus() {
 
 function formatGrin(n) {
   if (n === null || n === undefined) return "— " + COIN;
-  return (typeof n === "number" ? n : parseFloat(n) || 0).toFixed(3) + " " + COIN;
+  const v = typeof n === "number" ? n : parseFloat(n) || 0;
+  return v.toFixed(v > 0 && v < 0.001 ? 4 : 3) + " " + COIN;
 }
 
 function formatGrinShort(n) {
@@ -283,6 +347,15 @@ function _clamp3dec(el) {
   }
 }
 
+// Force-clamp an <input> field to at most 4 decimal places in-place.
+function _clamp4dec(el) {
+  if (!el) return;
+  const dot = el.value.indexOf('.');
+  if (dot !== -1 && el.value.length - dot > 5) {
+    el.value = el.value.slice(0, dot + 5);
+  }
+}
+
 // ── Address prefix validation ─────────────────────────────────────────────────
 // Minimum full address length = prefix (5-6) + 40 alphanumeric chars = 45-46
 const ADDR_MIN_LEN = ADDR_PFX.length + 40;
@@ -311,7 +384,7 @@ function _initClaimAmountButtons() {
       if (btn.dataset.amount === "custom") {
         show("claim-custom-wrap");
         const v = parseFloat($("claim-custom-amt")?.value);
-        _claimAmount = (v >= 0.001 && v < 1) ? parseFloat(v.toFixed(3)) : null;
+        _claimAmount = (v >= CLAIM_CUSTOM_MIN && v <= CLAIM_CUSTOM_MAX) ? parseFloat(v.toFixed(4)) : null;
       } else {
         hide("claim-custom-wrap");
         _claimAmount = parseFloat(btn.dataset.amount);
@@ -320,9 +393,9 @@ function _initClaimAmountButtons() {
   });
   $("claim-custom-amt")?.addEventListener("input", () => {
     const el = $("claim-custom-amt");
-    _clamp3dec(el);
+    _clamp4dec(el);
     const v = parseFloat(el?.value);
-    _claimAmount = (v >= 0.001 && v < 1) ? parseFloat(v.toFixed(3)) : null;
+    _claimAmount = (v >= CLAIM_CUSTOM_MIN && v <= CLAIM_CUSTOM_MAX) ? parseFloat(v.toFixed(4)) : null;
   });
 }
 
@@ -335,7 +408,7 @@ function _initAnonAmountButtons() {
       if (btn.dataset.amount === "custom") {
         show("anon-custom-wrap");
         const v = parseFloat($("anon-custom-amt")?.value);
-        _claimAnonAmount = (v >= 0.001 && v <= ANON_CLAIM_AMOUNT) ? parseFloat(v.toFixed(3)) : null;
+        _claimAnonAmount = (v >= CLAIM_CUSTOM_MIN && v <= ANON_CUSTOM_MAX) ? parseFloat(v.toFixed(4)) : null;
       } else {
         hide("anon-custom-wrap");
         _claimAnonAmount = parseFloat(btn.dataset.amount);
@@ -344,9 +417,9 @@ function _initAnonAmountButtons() {
   });
   $("anon-custom-amt")?.addEventListener("input", () => {
     const el = $("anon-custom-amt");
-    _clamp3dec(el);
+    _clamp4dec(el);
     const v = parseFloat(el?.value);
-    _claimAnonAmount = (v >= 0.001 && v <= ANON_CLAIM_AMOUNT) ? parseFloat(v.toFixed(3)) : null;
+    _claimAnonAmount = (v >= CLAIM_CUSTOM_MIN && v <= ANON_CUSTOM_MAX) ? parseFloat(v.toFixed(4)) : null;
   });
 }
 
@@ -362,10 +435,13 @@ async function submitClaim() {
   if (btn) { btn.disabled = true; btn.textContent = "Requesting…"; }
 
   try {
+    const tsToken = await getTurnstileToken(_tsWidgetAddr, function (fn) { _tsCbAddr = fn; });
     const claimBody = { grin_address: address };
     if (_claimAmount !== null) claimBody.amount = _claimAmount;
+    if (tsToken) claimBody.cf_token = tsToken;
     const data = await apiPost(API + "/api/claim", claimBody);
     _claimId = data.claim_id;
+    trackEvent('claim_started', { method: 'address', amount: _claimAmount });
 
     const sp = $("slatepack-text");
     if (sp) sp.textContent = data.slatepack;
@@ -376,9 +452,12 @@ async function submitClaim() {
     setStep(2);
     refreshStatus();
   } catch (err) {
+    resetTurnstile(_tsWidgetAddr);
     if (err.status === 429) {
+      trackEvent('claim_rate_limited', { method: 'address' });
       showError("claim-error", "You already claimed recently. " + err.message);
     } else {
+      trackEvent('claim_error', { method: 'address' });
       showError("claim-error", "Error: " + err.message);
     }
   } finally {
@@ -403,15 +482,18 @@ async function submitFinalize() {
     });
     stopCountdown();
     clearClaimSession();
+    trackEvent('claim_success', { amount: data.amount });
     setText("confirm-tx-id",  data.tx_slate_id || "(not available)");
     setText("confirm-amount", formatGrin(data.amount));
     setStep(3);
     refreshStatus();
   } catch (err) {
     if (err.status === 410) {
+      trackEvent('claim_expired');
       showError("finalize-error", "Claim expired. Please start a new claim.");
       setStep(1);
     } else {
+      trackEvent('finalize_error');
       showError("finalize-error", "Error: " + err.message);
     }
   } finally {
@@ -464,9 +546,13 @@ async function submitClaimAnon() {
   const origText = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = "Requesting…"; }
   try {
-    const amount = _claimAnonAmount !== null ? _claimAnonAmount : ANON_CLAIM_AMOUNT;
-    const data = await apiPost(API + "/api/claim/anonymous", { amount });
+    const amount   = _claimAnonAmount !== null ? _claimAnonAmount : ANON_CLAIM_AMOUNT;
+    const tsToken  = await getTurnstileToken(_tsWidgetAnon, function (fn) { _tsCbAnon = fn; });
+    const anonBody = { amount };
+    if (tsToken) anonBody.cf_token = tsToken;
+    const data = await apiPost(API + "/api/claim/anonymous", anonBody);
     _claimId = data.claim_id;
+    trackEvent('claim_started', { method: 'anonymous', amount });
     const sp = $("slatepack-text");
     if (sp) sp.textContent = data.slatepack;
     sessionStorage.setItem('grin_drop_claim_id',   String(data.claim_id));
@@ -476,9 +562,12 @@ async function submitClaimAnon() {
     setStep(2);
     refreshStatus();
   } catch (err) {
+    resetTurnstile(_tsWidgetAnon);
     if (err.status === 429) {
+      trackEvent('claim_rate_limited', { method: 'anonymous' });
       showError("anon-claim-error", "You already claimed recently. " + err.message);
     } else {
+      trackEvent('claim_error', { method: 'anonymous' });
       showError("anon-claim-error", "Error: " + err.message);
     }
   } finally {
@@ -553,6 +642,7 @@ async function submitDonateReceive() {
   const SCAN_MSG = "Wallet is busy (full scan / LMDB write lock) — Slatepack is unavailable right now. Try again in a minute, or switch to Tab 1 · TOR Direct which always works during a scan.";
   try {
     const data = await apiPost(API + "/api/donate/receive", { send_slate: slate }, 25000);
+    trackEvent('donate_slatepack_received');
     const sp = data.response_slatepack || data.slatepack || "";
     const spEl = $("donate-response-slatepack");
     if (spEl) spEl.textContent = sp;
@@ -573,6 +663,7 @@ function resetDonateReceive() {
   if (ta) ta.value = "";
   clearError("donate-receive-error");
   document.querySelectorAll("#donate-rcv-amount-grid .amount-btn").forEach(b => b.classList.remove("active"));
+  hide("donate-rcv-custom-wrap");
   _rcvAmount = null;
   _updateSendCmd();
   hide("donate-rcv-s2");
@@ -663,6 +754,7 @@ async function submitDonateFinalize() {
       invoice_id:     _invoiceId,
       response_slate: response,
     });
+    trackEvent('donate_success', { method: 'invoice', amount: _invAmount });
     clearDonateInvSession();
     hide("donate-inv-s2");
     show("donate-inv-s3");
@@ -715,10 +807,9 @@ function initTabs() {
 }
 
 // ── Auto-refresh (single shared poll) ────────────────────────────────────────
-let _statsTimer = null;
 function startStatsRefresh() {
   refreshStatus();
-  _statsTimer = setInterval(refreshStatus, REFRESH_SEC * 1000);
+  setInterval(refreshStatus, REFRESH_SEC * 1000);
 }
 
 // ── Node status — How It Works ────────────────────────────────────────────────
@@ -852,8 +943,18 @@ document.addEventListener("DOMContentLoaded", () => {
   // Update anon custom input max for network
   const anonCustomEl = $("anon-custom-amt");
   if (anonCustomEl) {
-    anonCustomEl.max         = String(ANON_CLAIM_AMOUNT);
-    anonCustomEl.placeholder = `0.001 – ${ANON_CLAIM_AMOUNT}`;
+    anonCustomEl.min         = String(CLAIM_CUSTOM_MIN);
+    anonCustomEl.max         = String(ANON_CUSTOM_MAX);
+    anonCustomEl.step        = String(CLAIM_CUSTOM_MIN);
+    anonCustomEl.placeholder = `${CLAIM_CUSTOM_MIN} – ${ANON_CUSTOM_MAX}`;
+  }
+
+  const claimCustomEl = $("claim-custom-amt");
+  if (claimCustomEl) {
+    claimCustomEl.min         = String(CLAIM_CUSTOM_MIN);
+    claimCustomEl.max         = String(CLAIM_CUSTOM_MAX);
+    claimCustomEl.step        = String(CLAIM_CUSTOM_MIN);
+    claimCustomEl.placeholder = `${CLAIM_CUSTOM_MIN} – ${CLAIM_CUSTOM_MAX}`;
   }
 
   // Update all amount button labels (donate + claim) using the (now-patched) data-amount values

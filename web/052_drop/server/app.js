@@ -79,9 +79,11 @@ const GRIN_ADDR_RE    = /^(grin1|tgrin1)[a-z0-9]{40,}$/;
 const ANON_CLAIM_GRIN = loadConfig().network === 'mainnet' ? 0.009 : 0.09;
 
 // IP helpers — nginx must set: proxy_set_header X-Real-IP $remote_addr;
-// Only X-Real-IP is trusted — X-Forwarded-For is client-controlled and spoofable.
+// Behind Cloudflare, CF-Connecting-IP carries the real visitor IP and cannot be
+// spoofed by the client (Cloudflare strips any client-supplied header).
+// Fall back to X-Real-IP for direct / non-CF traffic.
 function getClientIp(req) {
-  return (req.headers['x-real-ip'] || '').trim();
+  return (req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || '').trim();
 }
 
 function hashIp(ip, salt) {
@@ -93,6 +95,22 @@ function validateSlatepack(input) {
   if (!input || typeof input !== 'string') return false;
   if (input.length > 8192) return false;
   return input.includes('BEGINSLATEPACK') && input.includes('ENDSLATEPACK');
+}
+
+// ── Cloudflare Turnstile verification ─────────────────────────────────────────
+async function verifyTurnstile(token, ip) {
+  const secret = loadConfig().turnstile_secret;
+  if (!secret) return true;   // disabled when no secret configured
+  if (!token)  return false;  // secret set but no token provided = block
+  const body = new URLSearchParams({ secret, response: token, remoteip: ip || '' });
+  try {
+    const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify',
+      { method: 'POST', body });
+    const d = await r.json();
+    return d.success === true;
+  } catch {
+    return true;  // fail open on Cloudflare network error — don't block real users
+  }
 }
 
 function nextClaimIso(address) {
@@ -287,6 +305,9 @@ app.post('/api/claim', async (req, res) => {
   const cfg = loadConfig();
   if (!cfg.giveaway_enabled) return err(res, 'Giveaway is currently disabled', 503);
 
+  if (!await verifyTurnstile(req.body?.cf_token || '', getClientIp(req)))
+    return err(res, 'Bot challenge failed. Please try again.', 403);
+
   const body = req.body || {};
   const address = (body.grin_address || '').trim();
 
@@ -319,7 +340,7 @@ app.post('/api/claim', async (req, res) => {
   const maxAmount       = parseFloat(cfg.claim_grin_per_tx) || 2.0;
   const requestedAmount = body.amount != null ? parseFloat(body.amount) : null;
   const amount = (requestedAmount != null && requestedAmount > 0)
-    ? Math.min(Math.max(requestedAmount, 0.001), maxAmount)
+    ? Math.min(Math.max(requestedAmount, 0.0001), maxAmount)
     : maxAmount;
 
   const timeoutMin = parseInt(cfg.slatepack_expire_min, 10) || 5;
@@ -385,7 +406,7 @@ app.post('/api/claim', async (req, res) => {
 
 // POST /api/claim/anonymous ────────────────────────────────────────────────────
 // No address required — rate-limited by hashed client IP.
-// Amount is capped to ANON_CLAIM_GRIN max (0.009 mainnet / 0.09 testnet); min 0.001.
+// Amount is capped to ANON_CLAIM_GRIN max (0.009 mainnet / 0.09 testnet); min 0.0001.
 app.post('/api/claim/anonymous', async (req, res) => {
   const cfg  = loadConfig();
   const body = req.body || {};
@@ -393,6 +414,9 @@ app.post('/api/claim/anonymous', async (req, res) => {
 
   const ip = getClientIp(req);
   if (!ip) return err(res, 'Could not determine client IP', 400);
+
+  if (!await verifyTurnstile(body.cf_token || '', ip))
+    return err(res, 'Bot challenge failed. Please try again.', 403);
   const anonAddr = hashIp(ip, cfg.ip_salt);
 
   const nextAt = nextClaimIso(anonAddr);
@@ -414,7 +438,7 @@ app.post('/api/claim/anonymous', async (req, res) => {
 
   const requestedAnonAmount = body.amount != null ? parseFloat(body.amount) : null;
   const anonAmount = (requestedAnonAmount != null && requestedAnonAmount > 0)
-    ? Math.min(Math.max(requestedAnonAmount, 0.001), ANON_CLAIM_GRIN)
+    ? Math.min(Math.max(requestedAnonAmount, 0.0001), ANON_CLAIM_GRIN)
     : ANON_CLAIM_GRIN;
 
   const timeoutMin = parseInt(cfg.slatepack_expire_min, 10) || 5;

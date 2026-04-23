@@ -24,7 +24,7 @@ const DEFAULTS = {
 
   // ── Giveaway ──────────────────────────────────────────────────────────────
   giveaway_enabled:          true,
-  claim_grin_per_tx:         1.0,        // max GRIN sent in one claim transaction (server-side cap)
+  claim_grin_per_tx:         0.008,      // max GRIN sent in one claim transaction (server-side cap)
   claim_cooldown_minutes:       240,      // per-address/IP: minutes before the same address can claim again (240 = 4h)
   slatepack_expire_min:         30,       // minutes user has to paste response slatepack
   global_daily_claims_cap:      2000,     // 0 = unlimited; max total claims site-wide per day (all users combined, resets midnight UTC)
@@ -63,6 +63,9 @@ const DEFAULTS = {
 
   // ── Wallet cleanup ────────────────────────────────────────────────────────
   wallet_cleanup_hours:   1,     // auto-cancel unfinalized wallet txs older than this; 0 = disabled
+
+  // ── Cloudflare Turnstile (optional bot protection) ────────────────────────
+  turnstile_secret:       '',    // server-side secret key; empty = Turnstile disabled
 
   // ── Anonymous claim IP salt (set once by bash drop_ensure_defaults) ──────
   ip_salt:                '',    // empty = falls back to env IP_SALT or built-in default

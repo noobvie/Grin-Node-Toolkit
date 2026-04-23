@@ -1,7 +1,7 @@
 ================================================================================
   SCRIPT 053 — GRINPAY FOR WOOCOMMERCE
   Planning Document — Local Node (HTTP API), Block-First Approach
-  Updated: 2026-03-31
+  Updated: 2026-04-21
 ================================================================================
 
 ────────────────────────────────────────────────────────────────────────────────
@@ -10,8 +10,10 @@
 
 Goal:
   Accept Grin (GRIN / tGRIN) payments on a WooCommerce store using a locally
-  running grin-wallet. The system uses a local Flask bridge as the middleware
-  layer between the PHP WooCommerce plugin and the grin-wallet owner_api.
+  running grin-wallet. The system uses a local Node.js/Express bridge as the
+  middleware layer between the PHP WooCommerce plugin and the grin-wallet
+  owner_api. The bridge shares the same Node.js tech stack as script 052
+  (Grin Drop) — one backend language across all wallet services.
 
 Approach:
   Block-first. The plugin targets the WooCommerce Checkout Block (default for
@@ -90,7 +92,7 @@ Out of scope for Phase 1:
                      │  GET  http://127.0.0.1:3007/api/status
                      ▼
   ┌───────────────────────────────────────────────────────────────────────────┐
-  │  FLASK BRIDGE  (Python — grin_wallet_bridge.py)                          │
+  │  NODE.JS BRIDGE  (Express — server.js)                                   │
   │                                                                           │
   │   Port 3007  (testnet)  / Port 3006 (mainnet)                            │
   │   Listens on 127.0.0.1 ONLY                                              │
@@ -100,6 +102,8 @@ Out of scope for Phase 1:
   │   - Translates to grin-wallet owner_api JSON-RPC calls                   │
   │   - ECDH handshake + session token (in-memory, never on disk)            │
   │   - No subprocess spawning, no password file                             │
+  │   - Uses Node.js built-in crypto (secp256k1 ECDH + AES-256-GCM)        │
+  │   - Shares wallet API patterns from script 052 (Grin Drop)              │
   └───────────────────────────────────────────────────────────────────────────┘
                      │  HTTP JSON-RPC  (127.0.0.1 only)
                      ▼
@@ -170,7 +174,7 @@ Out of scope for Phase 1:
 
   SEQUENCE DIAGRAM:
 
-  Buyer          WordPress/PHP       Flask Bridge       grin-wallet CLI
+  Buyer          WordPress/PHP       Node.js Bridge     grin-wallet CLI
     │                  │                   │                   │
     │──checkout────→  │                   │                   │
     │                  │──POST /invoice──→ │                   │
@@ -188,7 +192,7 @@ Out of scope for Phase 1:
 
 
 ────────────────────────────────────────────────────────────────────────────────
-4. FLASK BRIDGE — API ENDPOINTS
+4. NODE.JS BRIDGE — API ENDPOINTS
 ────────────────────────────────────────────────────────────────────────────────
 
   Base URL: http://127.0.0.1:3007  (testnet)
@@ -260,8 +264,11 @@ Out of scope for Phase 1:
   │             (theme-agnostic: uses WC template hooks, no HTML assumptions)
   │
   └── bridge/
-      ├── grin_wallet_bridge.py       ← Flask app (API endpoints)
-      └── requirements.txt            ← flask>=3.0, gunicorn>=21.0
+      ├── server.js                   ← Express app (API endpoints)
+      ├── lib/
+      │   └── wallet-api.js           ← ECDH session + owner_api calls
+      │                                 (shared pattern from script 052)
+      └── package.json                ← express (only runtime dependency)
 
   Custom WooCommerce Order Status:
     - pending-grin  : invoice generated, waiting for buyer response
@@ -348,7 +355,8 @@ Out of scope for Phase 1:
   │ grin-wallet         │ 5.4.0        │ Stable invoice + finalize CLI      │
   │                     │              │ output format that bridge parses    │
   ├─────────────────────┼──────────────┼────────────────────────────────────┤
-  │ Python (bridge)     │ 3.10         │ Modern subprocess, match/case      │
+  │ Node.js (bridge)    │ 18.0         │ Built-in fetch, crypto (secp256k1  │
+  │                     │              │ ECDH + AES-GCM), stable ESM        │
   └─────────────────────┴──────────────┴────────────────────────────────────┘
 
   Version checks enforced at two points:
@@ -363,11 +371,11 @@ Out of scope for Phase 1:
   - PHP 8.4.1+  with curl + json extensions
   - WordPress 6.9+
   - WooCommerce 10.6.1+
-  - Python 3.10+  with pip and venv
+  - Node.js 18.0+  — bridge runtime (npm for install, no build step)
   - grin node 5.4.0+  — synced to selected network
   - grin-wallet 5.4.0+  — CLI binary, initialized wallet
   - systemd      — for bridge service management
-  - Node.js      — NOT required (JS is vanilla, no build step)
+  - Python       — NOT required (bridge is now Node.js)
 
   NETWORK REQUIREMENTS:
   - Mainnet: grin node ports 3414/3413 open outbound
@@ -426,7 +434,7 @@ Out of scope for Phase 1:
        → Enter wallet directory path
        → Enter WordPress root path
   [4] Select: 1) Install bridge
-       → Creates Python venv, installs Flask, creates systemd service
+       → Runs npm install in bridge dir, creates systemd service
   [5] Select: 2) Install WP plugin
        → Copies plugin files to WP plugins dir
        → Writes bridge-config.php with correct URL
@@ -505,15 +513,27 @@ Out of scope for Phase 1:
     - Inline JS for AJAX submission + live status polling
     - All styles scoped to .grinpay-box class (minimal, non-conflicting)
 
-  web/053_woocommerce/bridge/grin_wallet_bridge.py
-    - Flask app with endpoints: /api/status, /api/address,
-      /api/invoice, /api/finalize, /api/tx_status/<tx_id>
-    - Reads config from BRIDGE_CONF env var
+  web/053_woocommerce/bridge/server.js
+    - Express app with endpoints: /api/status, /api/address,
+      /api/invoice, /api/finalize, /api/tx_status/:tx_id
+    - Reads config from environment variables (same names as Flask version)
     - All wallet calls via grin-wallet owner_api JSON-RPC (no subprocess)
+    - Uses Node.js built-in crypto: secp256k1 ECDH + AES-256-GCM
+    - In-memory session token with automatic re-open on expiry
+    - Optional X-Api-Key auth header (GRINPAY_API_KEY env var)
 
-  web/053_woocommerce/bridge/requirements.txt
-    - flask>=3.0
-    - gunicorn>=21.0
+  web/053_woocommerce/bridge/lib/wallet-api.js
+    - ownerRpc(method, params)         — raw JSON-RPC to owner_api
+    - openWallet()                     — ECDH handshake + open_wallet
+    - walletCall(method, params)       — token-gated call with auto-reopen
+    - Decimal-safe amount conversion: GRIN string → nanogrins (BigInt)
+    - Slatepack + UUID validation regexes
+
+  web/053_woocommerce/bridge/package.json
+    - name: grinpay-woocommerce-bridge
+    - dependencies: { "express": "^4.x" }
+    - scripts: { "start": "node server.js" }
+    - No Python, no pip, no venv — just: npm install && node server.js
 
 ────────────────────────────────────────────────────────────────────────────────
 10.5 THEME COMPATIBILITY
@@ -1012,7 +1032,7 @@ Out of scope for Phase 1:
   │  Bridge URL               http://127.0.0.1:3007   [Test Connection]      │
   │  Bridge reachable     ✓  Responded in 38ms                               │
   │  Bridge version       ✓  1.0.0                                            │
-  │  Python version       ✓  3.11.4       required: >= 3.10                  │
+  │  Node.js version      ✓  18.20.4      required: >= 18.0                  │
   │                                                                           │
   │  ── GRIN NODE & WALLET ─────────────────────────────────────────────── │
   │                                                                           │
@@ -1095,7 +1115,7 @@ Out of scope for Phase 1:
     Critical conditions — Self-hosted mode:
       - Bridge unreachable
       - PHP / WP / WC below minimum version
-      - grin node / grin-wallet below minimum version
+      - Node.js / grin node / grin-wallet below minimum version
       - bridge-config.php missing
 
     Critical conditions — GrinPay Server mode:
@@ -1208,31 +1228,32 @@ Out of scope for Phase 1:
   │  └──────────────┘  └──────────────┘  └───────────────────┘             │
   └──────────────────────────────────────────────────────────────────────────┘
 
-  WHY THE FLASK BRIDGE IS NOT WASTED WORK
-  ────────────────────────────────────────
-  The Flask bridge (Phase 1) defines and validates the exact API contract
-  (endpoints, request/response format, error codes) that script 054 will
-  implement properly in Node.js. Think of it as:
+  ONE BACKEND — NODE.JS ACROSS ALL WALLET SERVICES
+  ──────────────────────────────────────────────────
+  The bridge is Node.js/Express — the same runtime used by script 052 (Grin
+  Drop) and planned for script 054 (GrinPay Server). This means:
 
-    Flask bridge  =  prototype that proves the spec
-    Script 054    =  production implementation of the same spec
+    052 Grin Drop        →  Node.js + Express + SQLite
+    053 WooCommerce bridge → Node.js + Express (same wallet-api.js pattern)
+    054 GrinPay Server   →  Node.js + Express + SQLite (inherits both above)
 
-  The PHP plugin calls the same endpoints either way. Switching from
-  self-hosted mode to GrinPay Server mode is a single URL change in settings.
+  The PHP plugin calls the same REST endpoints regardless of whether the
+  bridge is self-hosted (local Node.js) or a remote GrinPay Server (script
+  054). Switching modes is a single URL change in settings.
 
-  SHARED WALLET API LAYER (052 ↔ 054)
-  ─────────────────────────────────────
-  Script 052 (Grin Drop) is already moving to Node.js and has proven the
-  grin-wallet Owner API integration (ECDH handshake, AES-256-GCM encrypted
-  sessions, all wallet methods). Script 054 inherits this exact layer:
+  SHARED WALLET API LAYER (052 → 053 → 054)
+  ───────────────────────────────────────────
+  Script 052 (Grin Drop) has proven the grin-wallet Owner API integration
+  in Node.js: ECDH handshake, AES-256-GCM encrypted sessions, all wallet
+  methods via JSON-RPC. Script 053's bridge/lib/wallet-api.js is a direct
+  adaptation of that same layer:
 
-    052 lib/grin-wallet-api.js  →  reused by  →  054 lib/grin-wallet-api.js
-      ownerApiSession()                              same
-      encryptedOwnerCall()                           same
-      foreignApiCall()                               same
+    052 web/052_grin_drop/lib/wallet-api.js   ← proven implementation
+    053 web/053_woocommerce/bridge/lib/wallet-api.js  ← adapted from 052
+    054 (future) inherits from both
 
-  This means script 054 does NOT need to re-solve the hard wallet API
-  problems — it inherits the proven patterns from 052.
+  Neither 053 nor 054 re-solve the hard wallet API problems — they build
+  on the patterns already validated in production by script 052.
 
   SCRIPT 053 — TWO CONNECTION MODES (Phase 1 + Phase 2)
   ───────────────────────────────────────────────────────
@@ -1240,7 +1261,7 @@ Out of scope for Phase 1:
   Phase 1 (now):
     Connection Mode: Self-hosted
     Bridge URL:      http://127.0.0.1:3007  (auto from network toggle)
-    Requires:        Local grin node + Python Flask bridge
+    Requires:        Local grin node + Node.js Express bridge
 
   Phase 2 (after script 054 exists):
     Connection Mode: GrinPay Server
@@ -1290,7 +1311,7 @@ Out of scope for Phase 1:
 ────────────────────────────────────────────────────────────────────────────────
 
   PLUGIN (script 053):
-  - Add HMAC shared secret between PHP and Flask bridge (self-hosted security)
+  - Add HMAC shared secret between PHP and Node.js bridge (self-hosted security)
   - Add GrinPay Server connection mode (see §16) once script 054 exists
   - Add USD → GRIN exchange rate conversion:
       Sources: CoinGecko (default, no API key) + world.grin.money (community)

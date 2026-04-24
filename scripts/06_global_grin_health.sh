@@ -228,6 +228,42 @@ check_python() {
 # OPTION A — Network Stats + Peer Map
 ################################################################################
 
+# ── A-helper: Inject Google Analytics into deployed HTML ──────────────────────
+# Reads GA_MEASUREMENT_ID from config.env; no-ops if unset or empty.
+_inject_analytics() {
+    local ga_id
+    ga_id=$(grep -E "^GA_MEASUREMENT_ID=" "$DATA_DIR/config.env" 2>/dev/null | cut -d= -f2-)
+    [[ -z "$ga_id" ]] && return 0
+    GA_ID="$ga_id" GA_WWW_DIR="$WWW_DIR" python3 <<'PYEOF'
+import os
+ga_id = os.environ['GA_ID']
+www   = os.environ['GA_WWW_DIR']
+snippet = (
+    '<!-- Google tag (gtag.js) -->'
+    '<script async src="https://www.googletagmanager.com/gtag/js?id=' + ga_id + '"></script>'
+    '<script>window.dataLayer=window.dataLayer||[];'
+    'function gtag(){dataLayer.push(arguments);}'
+    "gtag('js',new Date());"
+    "gtag('config','" + ga_id + "');</script>"
+)
+for fname in ['index.html', 'stats.html']:
+    path = www + '/' + fname
+    try:
+        with open(path) as f:
+            html = f.read()
+        if snippet in html:
+            continue  # already up to date
+        # Strip any previously injected Google tag (handles ID changes without double-injection)
+        lines = [l for l in html.split('\n') if not l.startswith('<!-- Google tag (gtag.js) -->')]
+        html = '\n'.join(lines)
+        with open(path, 'w') as f:
+            f.write(html.replace('</head>', snippet + '\n</head>', 1))
+    except FileNotFoundError:
+        pass
+PYEOF
+    info "Google Analytics (${ga_id}) applied to index.html and stats.html."
+}
+
 # ── A-1: Install ──────────────────────────────────────────────────────────────
 install_stats() {
     require_root
@@ -253,6 +289,20 @@ install_stats() {
     info "Deploying web pages..."
     cp "$WEB_SRC/index.html"  "$WWW_DIR/index.html"
     cp "$WEB_SRC/stats.html"  "$WWW_DIR/stats.html"
+
+    # Optional Google Analytics
+    echo ""
+    echo -ne "${BOLD}Google Analytics Measurement ID${RESET} ${DIM}(e.g. G-VD8489MMYW — press Enter to skip): ${RESET}"
+    local _ga_input ga_id=""
+    read -r _ga_input
+    _ga_input="${_ga_input// /}"
+    if [[ -n "$_ga_input" ]]; then
+        if [[ "$_ga_input" =~ ^G-[A-Z0-9]+$ ]]; then
+            ga_id="$_ga_input"
+        else
+            warn "Invalid Measurement ID format — expected G-XXXXXXXXX. Skipping Google Analytics."
+        fi
+    fi
 
     # Download Chart.js
     if [[ ! -f "$WWW_DIR/chart.min.js" ]]; then
@@ -337,10 +387,12 @@ GRIN_TESTNET_OWNER_URL=http://127.0.0.1:13413/v2/owner
 GRIN_TESTNET_SECRET_PATH=${testnet_secret}
 GRIN_WWW_DATA=${WWW_DIR}/data
 GRIN_DB_PATH=${DB_PATH}
+GA_MEASUREMENT_ID=${ga_id}
 EOF
     chmod 600 "$DATA_DIR/config.env"
     info "Config written to $DATA_DIR/config.env"
     info "If your secret files are in a different location, edit that file manually."
+    _inject_analytics
 
     # Initialise empty DB (schema only)
     info "Initialising stats database..."
@@ -773,7 +825,71 @@ status_stats() {
     else
         echo -e "  Grin node    ${RED}✗ not detected${RESET}"
     fi
+
+    # Google Analytics
     echo ""
+    local ga_cur
+    ga_cur=$(grep -E "^GA_MEASUREMENT_ID=" "$DATA_DIR/config.env" 2>/dev/null | cut -d= -f2-)
+    if [[ -n "$ga_cur" ]]; then
+        echo -e "  Analytics    ${GREEN}✓ ${ga_cur}${RESET}"
+    else
+        echo -e "  Analytics    ${DIM}not configured${RESET}"
+    fi
+    echo ""
+    pause
+}
+
+# ── A-7: Configure Google Analytics ──────────────────────────────────────────
+configure_analytics() {
+    require_root
+    clear
+    echo -e "\n${BOLD}${CYAN}── Configure Google Analytics ──${RESET}\n"
+
+    if [[ ! -f "$DATA_DIR/config.env" ]]; then
+        die "Stats not installed yet. Run option 1 first."
+        return
+    fi
+
+    local current_id
+    current_id=$(grep -E "^GA_MEASUREMENT_ID=" "$DATA_DIR/config.env" 2>/dev/null | cut -d= -f2-)
+    if [[ -n "$current_id" ]]; then
+        echo -e "  Current ID:  ${GREEN}${current_id}${RESET}"
+    else
+        echo -e "  Current ID:  ${DIM}(none)${RESET}"
+    fi
+    echo ""
+    echo -ne "${BOLD}Measurement ID${RESET} ${DIM}(e.g. G-VD8489MMYW — Enter to remove, 0 to cancel): ${RESET}"
+    local ga_input
+    read -r ga_input
+    ga_input="${ga_input// /}"
+    [[ "$ga_input" == "0" ]] && return
+
+    if [[ -n "$ga_input" ]] && ! [[ "$ga_input" =~ ^G-[A-Z0-9]+$ ]]; then
+        warn "Invalid format — expected G-XXXXXXXXX. No changes made."
+        pause
+        return
+    fi
+
+    # Update config.env
+    if grep -q "^GA_MEASUREMENT_ID=" "$DATA_DIR/config.env"; then
+        sed -i "s|^GA_MEASUREMENT_ID=.*|GA_MEASUREMENT_ID=${ga_input}|" "$DATA_DIR/config.env"
+    else
+        echo "GA_MEASUREMENT_ID=${ga_input}" >> "$DATA_DIR/config.env"
+    fi
+
+    # Re-deploy HTML from source so injection starts from a clean base
+    if [[ -d "$WEB_SRC" ]]; then
+        cp "$WEB_SRC/index.html" "$WWW_DIR/index.html"
+        cp "$WEB_SRC/stats.html" "$WWW_DIR/stats.html"
+        chown www-data:www-data "$WWW_DIR/index.html" "$WWW_DIR/stats.html"
+    fi
+
+    if [[ -n "$ga_input" ]]; then
+        _inject_analytics
+        success "Google Analytics updated: ${ga_input}"
+    else
+        success "Google Analytics removed."
+    fi
     pause
 }
 
@@ -1337,9 +1453,12 @@ show_menu_a() {
     local inst="${RED}✗ not installed${RESET}"
     local cron="${YELLOW}inactive${RESET}"
     local ngnx="${YELLOW}not configured${RESET}"
+    local ga_lbl="${DIM}not set${RESET}"
     [[ -f "$COLLECTOR_BIN" ]]                                      && inst="${GREEN}✓ installed${RESET}"
     crontab -l 2>/dev/null | grep -q "grin_stats_update"           && cron="${GREEN}active${RESET}"
     [[ -f "$NGINX_STATS_CONF" ]]                                   && ngnx="${GREEN}✓ configured${RESET}"
+    local _ga_id; _ga_id=$(grep -E "^GA_MEASUREMENT_ID=" "$DATA_DIR/config.env" 2>/dev/null | cut -d= -f2-)
+    [[ -n "$_ga_id" ]] && ga_lbl="${GREEN}${_ga_id}${RESET}"
 
     echo -e "  ${GREEN}1${RESET})   Install          ${DIM}collector + Chart.js + Leaflet${RESET}   [$inst]"
     echo -e "  ${GREEN}2${RESET})   Import Data      ${DIM}stats: init / backfill / update  |  price: init / update${RESET}"
@@ -1347,13 +1466,14 @@ show_menu_a() {
     echo -e "  ${GREEN}4${RESET})   Check DNS        ${DIM}confirm A-record before nginx setup${RESET}"
     echo -e "  ${GREEN}5${RESET})   Setup Nginx      ${DIM}HTTPS subdomain${RESET}  [$ngnx]"
     echo -e "  ${GREEN}6${RESET})   Status"
+    echo -e "  ${GREEN}7${RESET})   Google Analytics  ${DIM}inject GA tag into both pages${RESET}  [$ga_lbl]"
     echo -e "  ${YELLOW}Z${RESET})   Stop Updates     ${DIM}disable cron${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back${RESET}"
     echo -e "  ${DIM}[Enter] Refresh menu${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-6, Z]: ${RESET}"
+    echo -ne "${BOLD}Select [0-7, Z]: ${RESET}"
 }
 
 show_menu_b() {
@@ -1437,6 +1557,7 @@ run_menu_a() {
             4) check_dns_record "stats"   || true ;;
             5) setup_nginx_stats          || true ;;
             6) status_stats               || true ;;
+            7) configure_analytics        || true ;;
             Z) stop_updates               || true ;;
             0) break                               ;;
             "") ;;  # Enter = refresh menu

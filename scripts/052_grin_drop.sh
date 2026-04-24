@@ -435,25 +435,27 @@ PYEOF
 
 drop_ensure_defaults() {
     # Network-specific defaults
-    local net_label drop_name_default global_daily_cap_default global_hourly_cap_default claim_grin_default
+    local net_label drop_name_default global_daily_cap_default global_hourly_cap_default claim_grin_default theme_default
     if [[ "$DROP_NETWORK" == "mainnet" ]]; then
         net_label="mainnet"
         drop_name_default="Grin Drop"
         global_daily_cap_default="2000"   # site-wide ceiling; mainnet wallet balance is the real constraint
         global_hourly_cap_default="100"
         claim_grin_default="0.008"         # max claim amount on mainnet
+        theme_default="win98"
     else
         net_label="testnet"
         drop_name_default="Grin Drop [TESTNET]"
         global_daily_cap_default="2000"
         global_hourly_cap_default="100"
         claim_grin_default="1.0"          # max claim amount on testnet
+        theme_default="matrix"
     fi
 
     local defaults=(
         "network:$net_label"
         "drop_name:$drop_name_default"
-        "theme_default:matrix"
+        "theme_default:$theme_default"
         # Giveaway
         "giveaway_enabled:true"
         "claim_grin_per_tx:$claim_grin_default"

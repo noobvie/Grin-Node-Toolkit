@@ -16,6 +16,8 @@
 #   3) Mainnet                 (⚠ sends/receives real GRIN — explicit confirmation)
 #   4) Unified Homepage        (aggregated stats view for both networks)
 #   5) Remove current domain   (delete nginx config + SSL)
+#   6) Google Analytics        (GA4 tracking — optional)
+#   7) Turnstile               (Cloudflare bot protection — optional)
 #   B) Backup                  (encrypted archive: testnet + mainnet)
 #   R) Restore                 (decrypt + restore backup)
 #   D) Delete                  (wipe everything: services, wallets, config, nginx — testing)
@@ -341,7 +343,7 @@ drop_turnstile_menu() {
             pause; return
         fi
         echo -ne "${BOLD}Secret Key (private — keep this safe): ${RESET}"
-        local new_sec; read -r new_sec || true
+        local new_sec; read -r -s new_sec || true; echo ""
         [[ "$new_sec" == "0" ]] && { info "Cancelled."; pause; return; }
         if [[ -z "$new_sec" ]]; then
             warn "Secret Key cannot be empty when enabling Turnstile."

@@ -400,6 +400,7 @@ server {
         proxy_set_header   Accept-Encoding "";
         proxy_read_timeout 90s;
         sub_filter '<head>' '<head><script>window.APP_BASE="/testnet";window.DROP_NETWORK="testnet";</script>';
+        sub_filter 'id="theme-css" href=""' 'id="theme-css" href="css/themes/matrix.css"';
         sub_filter '__SITE_URL__'          'https://$domain';
         sub_filter '__GA4_ID__'            '$ga4_id';
         sub_filter '__CF_TURNSTILE_KEY__'  '$ts_key';
@@ -429,6 +430,7 @@ server {
         proxy_set_header   Accept-Encoding "";
         proxy_read_timeout 90s;
         sub_filter '<head>' '<head><script>window.APP_BASE="/mainnet";window.DROP_NETWORK="mainnet";</script>';
+        sub_filter 'id="theme-css" href=""' 'id="theme-css" href="css/themes/win98.css"';
         sub_filter '__SITE_URL__'          'https://$domain';
         sub_filter '__GA4_ID__'            '$ga4_id';
         sub_filter '__CF_TURNSTILE_KEY__'  '$ts_key';

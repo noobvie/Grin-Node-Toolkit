@@ -16,19 +16,25 @@ const path = require('path');
 const CONF_PATH = process.env.DROP_CONF
   || '/opt/grin/drop-test/grin_drop_test.conf';
 
+// Derive network from the config file path so fallback defaults are self-consistent.
+const _IS_MAINNET = CONF_PATH.includes('drop-main');
+const _NET        = _IS_MAINNET ? 'mainnet' : 'testnet';
+const _DIR        = _IS_MAINNET ? '/opt/grin/drop-main' : '/opt/grin/drop-test';
+const _SUFFIX     = _IS_MAINNET ? 'main' : 'test';
+
 const DEFAULTS = {
   // ── Identity ──────────────────────────────────────────────────────────────
-  drop_name:              'Grin Drop',
-  theme_default:          'matrix',
-  network:                'testnet',     // 'testnet' | 'mainnet'
+  drop_name:              _IS_MAINNET ? 'Grin Drop' : 'Grin Drop [TESTNET]',
+  theme_default:          _IS_MAINNET ? 'win98' : 'matrix',
+  network:                _NET,
 
   // ── Giveaway ──────────────────────────────────────────────────────────────
   giveaway_enabled:          true,
-  claim_grin_per_tx:         0.008,      // max GRIN sent in one claim transaction (server-side cap)
-  claim_cooldown_minutes:       240,      // per-address/IP: minutes before the same address can claim again (240 = 4h)
+  claim_grin_per_tx:         _IS_MAINNET ? 0.008 : 1.0,  // server-side cap per claim
+  claim_cooldown_minutes:       240,      // per-address/IP cooldown (240 = 4h)
   slatepack_expire_min:         30,       // minutes user has to paste response slatepack
-  global_daily_claims_cap:      2000,     // 0 = unlimited; max total claims site-wide per day (all users combined, resets midnight UTC)
-  global_hourly_claims_cap:     100,      // 0 = unlimited; max total claims site-wide per hour (all users combined)
+  global_daily_claims_cap:      2000,     // 0 = unlimited; resets midnight UTC
+  global_hourly_claims_cap:     100,      // 0 = unlimited
 
   // ── Donation ──────────────────────────────────────────────────────────────
   donation_enabled:          true,
@@ -37,19 +43,19 @@ const DEFAULTS = {
   // ── Wallet identity ───────────────────────────────────────────────────────
   wallet_address:            '',
 
-  // ── Wallet HTTP API ports (set by bash option 4 Configure) ────────────────
-  wallet_foreign_api_port:   13415,
-  wallet_owner_api_port:     13420,
+  // ── Wallet HTTP API ports ──────────────────────────────────────────────────
+  wallet_foreign_api_port:   _IS_MAINNET ? 3415  : 13415,
+  wallet_owner_api_port:     _IS_MAINNET ? 3420  : 13420,
 
   // ── Wallet API secret files (absolute paths, chmod 600) ───────────────────
-  wallet_foreign_secret:  '/opt/grin/drop-test/.foreign_api_secret',
-  wallet_owner_secret:    '/opt/grin/drop-test/.owner_api_secret',
+  wallet_foreign_secret:  `${_DIR}/.foreign_api_secret`,
+  wallet_owner_secret:    `${_DIR}/.owner_api_secret`,
 
   // ── Wallet pass file (read by wallet.js, never logged) ────────────────────
-  wallet_pass_file:       '/opt/grin/drop-test/.temp_test',
+  wallet_pass_file:       `${_DIR}/.temp_${_SUFFIX}`,
 
   // ── Service ───────────────────────────────────────────────────────────────
-  service_port:           3004,
+  service_port:           _IS_MAINNET ? 3005 : 3004,
 
   // ── Public stats ──────────────────────────────────────────────────────────
   show_public_stats:      true,
@@ -71,7 +77,7 @@ const DEFAULTS = {
   ip_salt:                '',    // empty = falls back to env IP_SALT or built-in default
 
   // ── Logging ───────────────────────────────────────────────────────────────
-  log_path:               '/opt/grin/drop-test/grin_drop_test.log',
+  log_path:               `${_DIR}/grin_drop_${_SUFFIX}.log`,
 };
 
 /** Load config, merging with defaults for any missing keys. */

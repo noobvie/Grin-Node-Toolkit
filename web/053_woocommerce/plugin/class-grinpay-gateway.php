@@ -320,6 +320,15 @@ class Grinpay_Gateway extends WC_Payment_Gateway {
 
 		$tx_id = (string) $order->get_meta( '_grinpay_tx_id' );
 
+		// Idempotency guard — return early if already confirmed (concurrent double-click / cron race)
+		if ( 'confirmed' === (string) $order->get_meta( '_grinpay_status' ) ) {
+			wp_send_json_success( [
+				'message'  => __( 'Payment already confirmed.', 'grinpay-woocommerce' ),
+				'redirect' => $this->get_return_url( $order ),
+			] );
+			return;
+		}
+
 		// Call bridge /api/finalize
 		$result = $this->bridge_request( 'POST', 'api/finalize', [
 			'response_slate' => $response_slate,
@@ -406,6 +415,14 @@ class Grinpay_Gateway extends WC_Payment_Gateway {
 		$confirmed    = 'confirmed' === $tx_status && $num_confirms >= $threshold;
 
 		if ( $confirmed ) {
+			// Idempotency guard — concurrent poll ticks could both see confirmed and both call payment_complete
+			if ( 'confirmed' === (string) $order->get_meta( '_grinpay_status' ) ) {
+				wp_send_json_success( [
+					'status'   => 'confirmed',
+					'redirect' => $this->get_return_url( $order ),
+				] );
+				return;
+			}
 			$amount = (string) $order->get_meta( '_grinpay_amount' );
 			$order->update_meta_data( '_grinpay_status', 'confirmed' );
 			$order->payment_complete( $tx_id );
@@ -488,6 +505,11 @@ class Grinpay_Gateway extends WC_Payment_Gateway {
 			$num_confirms = (int) ( $result['confirmations'] ?? 0 );
 			$tx_status    = (string) ( $result['status'] ?? 'pending' );
 			if ( 'confirmed' !== $tx_status || $num_confirms < $threshold ) {
+				continue;
+			}
+
+			// Idempotency guard — cron may overlap with a concurrent poll or submit
+			if ( 'confirmed' === (string) $order->get_meta( '_grinpay_status' ) ) {
 				continue;
 			}
 

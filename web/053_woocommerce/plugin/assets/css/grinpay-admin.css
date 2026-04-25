@@ -117,11 +117,11 @@
 
 /* ── Test Connection button + result ─────────────────────────────────────── */
 
-#grinpay-test-btn {
+#grinpay_test_connection {
 	margin-top: 4px;
 }
 
-#grinpay-test-result {
+#grinpay_connection_result {
 	margin-top: 10px;
 	padding: 10px 14px;
 	border-radius: 3px;
@@ -182,7 +182,7 @@
 	flex: 1;
 }
 
-#grinpay-apikey-toggle {
+#grinpay_toggle_key {
 	white-space: nowrap;
 }
 

@@ -25,6 +25,8 @@
 #   3) Configure           (wallet path, bridge port, expiry, WP dir)
 #   4) Start / Stop bridge (systemd grin-woo-bridge-{main,test})
 #   5) Status
+#   6) Package plugin      (create distributable .zip without bridge-config.php)
+#   7) Pull latest & exit  (git pull origin, then exit)
 #   0) Back to network select
 #
 # =============================================================================
@@ -384,6 +386,8 @@ define( 'GRINPAY_EXPIRY_MIN',     ${WOO_EXPIRY_MIN:-30} );
 PHP
 
     chown -R www-data:www-data "$plugin_dir" 2>/dev/null || true
+    find "$plugin_dir" -type d -exec chmod 755 {} \;
+    find "$plugin_dir" -type f -exec chmod 644 {} \;
     woo_save_conf
 
     success "Plugin installed at $plugin_dir"

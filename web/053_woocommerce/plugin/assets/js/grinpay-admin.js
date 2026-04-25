@@ -31,10 +31,10 @@
 	var selfHostedRows      = null;  // NodeList .grinpay-self-hosted
 	var serverModeRows      = null;  // NodeList .grinpay-server-mode
 	var autoConfigTable     = null;  // <table id="grinpay-auto-config">
-	var testBtn             = null;  // <button id="grinpay-test-btn">
-	var testResult          = null;  // <div id="grinpay-test-result">
+	var testBtn             = null;  // <button id="grinpay_test_connection">
+	var testResult          = null;  // <span id="grinpay_connection_result">
 	var apiKeyInput         = null;  // <input id="grinpay_api_key">
-	var apiKeyToggle        = null;  // <button id="grinpay-apikey-toggle">
+	var apiKeyToggle        = null;  // <button id="grinpay_toggle_key">
 
 	// ── Auto-config field mapping ─────────────────────────────────────────────
 	// Maps data keys from selfHostedConf to the exact element IDs used in the PHP template.

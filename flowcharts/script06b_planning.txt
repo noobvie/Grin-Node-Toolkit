@@ -1,0 +1,751 @@
+================================================================================
+  SCRIPT 06B — GRINSCAN LIGHTWEIGHT BLOCK EXPLORER
+  Planning Document
+  Created: 2026-04-25
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+1. OVERVIEW
+────────────────────────────────────────────────────────────────────────────────
+
+Name:         GrinScan
+Tagline:      "Even a noob can scan the chain."
+Purpose:      Lightweight, visually impressive Grin block explorer.
+              Built with Node.js/Express — consistent with scripts 052–055.
+              Works with a pruned node (recent blocks only).
+              Supports both Testnet and Mainnet.
+
+Goal:
+  Provide a fast, beautiful, mobile-responsive Grin block explorer that users
+  can deploy without a 30-minute Rust build or a full archive node.
+  The "WOW" first impression is the top design priority — clean animations,
+  live updates, and a theme system that delights both developers and newcomers.
+
+Why not just use aglkm/grin-explorer?
+  - Requires Rust + Cargo (10–30 min build on a modest VPS)
+  - Requires a full archive node (mainnet-full, ~50+ GB)
+  - No mobile layout, no theme switching, no live updates
+  - GrinScan complements it — different audience, different goal
+
+Relation to Script 06:
+  Script 06 currently has:
+    A)  Network Stats + Peer Map
+    B)  Grin Explorer (aglkm/grin-explorer — Rust + Rocket)
+
+  After this change:
+    A)  Network Stats + Peer Map           (unchanged)
+    B)  GrinScan                           (NEW — this script)
+    C)  Grin Explorer by Grincoin.org      (old B — label rename only, no code change)
+
+Scope (Phase 1):
+  - Mainnet + Testnet (both, separate service instances)
+  - Latest N blocks list with live refresh
+  - Block detail page (header + kernels + output count)
+  - Search by block height or hash
+  - Stats bar (tip height, hashrate, difficulty, peer count)
+  - Dark / Light / Neon / Matrix themes with system preference detection
+  - Mobile responsive (375px → desktop)
+  - Nginx + certbot SSL setup via toolkit menu
+  - Systemd service (survive reboots)
+
+Out of scope for Phase 1:
+  - Full chain history (pruned node = recent blocks only, ~2 weeks)
+  - Input/output spend-link tracing (requires chain_data file access)
+  - Transaction graph or wallet address tracking
+  - WebSocket (uses polling instead — simpler, no extra deps)
+  - Mempool (Grin has no mempool — transactions are sent directly)
+
+
+────────────────────────────────────────────────────────────────────────────────
+2. ARCHITECTURE OVERVIEW
+────────────────────────────────────────────────────────────────────────────────
+
+  ┌───────────────────────────────────────────────────────────────────────────┐
+  │  BROWSER (Visitor)                                                        │
+  │                                                                           │
+  │   index.html — Home page                                                  │
+  │   ┌─────────────────────────────────────────────────────────┐            │
+  │   │  Stats bar: Tip · Hashrate · Difficulty · Peers         │            │
+  │   │  Search bar: [enter height or hash]                     │            │
+  │   │  Block list: latest 20 blocks (auto-refresh every 30s)  │            │
+  │   └─────────────────────────────────────────────────────────┘            │
+  │                                                                           │
+  │   block.html — Block detail page                                          │
+  │   ┌─────────────────────────────────────────────────────────┐            │
+  │   │  Header: height · hash · prev_hash · time · difficulty  │            │
+  │   │  Kernels list: type badge · fee · excess                │            │
+  │   │  Counts: outputs · inputs                               │            │
+  │   │  Nav: [← Prev Block]  [Next Block →]                    │            │
+  │   └─────────────────────────────────────────────────────────┘            │
+  └───────────────────────────────────────────────────────────────────────────┘
+                          │  REST  GET /api/*
+                          ▼
+  ┌───────────────────────────────────────────────────────────────────────────┐
+  │  GRINSCAN  (Node.js / Express)    127.0.0.1:3010 (test) / :3011 (main)   │
+  │                                                                           │
+  │   server.js                                                               │
+  │   ├── Express REST API  (/api/tip, /api/blocks, /api/block/:ref, …)      │
+  │   ├── SQLite block cache  (node:sqlite, DatabaseSync)                     │
+  │   │     /opt/grin/grinscan/test/grinscan.db                              │
+  │   │     /opt/grin/grinscan/main/grinscan.db                              │
+  │   └── Background poller  (every 30s → get_tip + fetch new blocks)        │
+  └───────────────────────────────────────────────────────────────────────────┘
+                          │  Foreign API v2  (HTTP Basic Auth)
+                          │  http://127.0.0.1:13413/v2/foreign  (testnet)
+                          │  http://127.0.0.1:3413/v2/foreign   (mainnet)
+                          ▼
+  ┌───────────────────────────────────────────────────────────────────────────┐
+  │  GRIN NODE  (pruned or full)                                              │
+  │   get_tip()               → chain tip height + last block hash            │
+  │   get_block(height,…)     → full block data (header, kernels, outputs)    │
+  │   get_connected_peers()   → live peer count (owner API)                   │
+  └───────────────────────────────────────────────────────────────────────────┘
+                          │  Nginx reverse proxy (HTTPS)
+                          ▼
+  ┌───────────────────────────────────────────────────────────────────────────┐
+  │  NGINX  (public HTTPS)                                                    │
+  │   scan.yourdomain.com  →  proxy 127.0.0.1:3010 or :3011                  │
+  │   SSL: Let's Encrypt via certbot                                          │
+  └───────────────────────────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────────
+3. FILE STRUCTURE
+────────────────────────────────────────────────────────────────────────────────
+
+  Grin-Node-Toolkit/
+  ├── scripts/
+  │   ├── 06_global_grin_health.sh          ← MODIFIED (add B=GrinScan, rename old B→C)
+  │   └── lib/
+  │       └── 06b_grinscan.sh               ← NEW bash lib (sourced by 06_*.sh)
+  │
+  └── web/
+      └── 06b_grinscan/                     ← NEW
+          ├── package.json
+          ├── server.js
+          └── public/
+              ├── index.html                 ← home: stats + block list + search
+              ├── block.html                 ← block detail page
+              ├── css/
+              │   ├── grinscan.css           ← base CSS variables + layout
+              │   └── themes/
+              │       ├── dark.css           ← default (mainnet)
+              │       ├── light.css
+              │       ├── neon.css           ← cyberpunk (WOW bonus)
+              │       └── matrix.css         ← default (testnet)
+              └── js/
+                  ├── app.js                 ← fetch API, rendering, live updates
+                  └── theme.js               ← theme switcher + localStorage
+
+
+────────────────────────────────────────────────────────────────────────────────
+4. RUNTIME DIRECTORIES  (on target VPS, not local)
+────────────────────────────────────────────────────────────────────────────────
+
+  /opt/grin/grinscan/
+    test/
+      config.json          ← GrinScan config for testnet instance
+      grinscan.db          ← SQLite block cache (testnet)
+      grinscan-test.log    ← service log
+    main/
+      config.json          ← GrinScan config for mainnet instance
+      grinscan.db          ← SQLite block cache (mainnet)
+      grinscan-main.log    ← service log
+
+  Systemd units:
+    /etc/systemd/system/grinscan-test.service
+    /etc/systemd/system/grinscan-main.service
+
+  Nginx:
+    /etc/nginx/sites-available/grinscan-test
+    /etc/nginx/sites-available/grinscan-main
+
+
+────────────────────────────────────────────────────────────────────────────────
+5. PORTS
+────────────────────────────────────────────────────────────────────────────────
+
+  Service       Testnet   Mainnet   Notes
+  ────────────  ───────   ───────   ──────────────────────────────────────────
+  Grin Drop     3004      3005      Script 052
+  WooCommerce   3007      3006      Script 053
+  GrinScan      3010      3011      Script 06B (this)
+
+  All services bind to 127.0.0.1 only — nginx acts as public reverse proxy.
+
+
+────────────────────────────────────────────────────────────────────────────────
+6. CONFIG FILE  (/opt/grin/grinscan/{test|main}/config.json)
+────────────────────────────────────────────────────────────────────────────────
+
+  {
+    "network":              "testnet",
+    "node_url":             "http://127.0.0.1:13413/v2/foreign",
+    "node_owner_url":       "http://127.0.0.1:13413/v2/owner",
+    "foreign_secret_path":  "/opt/grin/node/testnet-prune/.foreign_api_secret",
+    "owner_secret_path":    "/opt/grin/node/testnet-prune/.api_secret",
+    "port":                 3010,
+    "db_path":              "/opt/grin/grinscan/test/grinscan.db",
+    "log_path":             "/opt/grin/grinscan/test/grinscan-test.log",
+    "poll_interval_ms":     30000,
+    "blocks_cache":         500,
+    "web_dir":              "/opt/grin/toolkit/web/06b_grinscan/public"
+  }
+
+  Notes:
+  - blocks_cache: how many recent blocks to keep in SQLite (rolling window)
+  - poll_interval_ms: how often the background job fetches new blocks
+  - web_dir: path to the static frontend files
+
+
+────────────────────────────────────────────────────────────────────────────────
+7. SQLITE SCHEMA
+────────────────────────────────────────────────────────────────────────────────
+
+  CREATE TABLE IF NOT EXISTS blocks (
+    height        INTEGER PRIMARY KEY,
+    hash          TEXT    NOT NULL,
+    prev_hash     TEXT    NOT NULL DEFAULT '',
+    timestamp     INTEGER NOT NULL,           -- unix seconds
+    difficulty    INTEGER NOT NULL DEFAULT 0,
+    kernel_count  INTEGER NOT NULL DEFAULT 0, -- total kernels
+    tx_count      INTEGER NOT NULL DEFAULT 0, -- non-coinbase kernels only
+    fee_total     INTEGER NOT NULL DEFAULT 0, -- nanogrin sum
+    raw_json      TEXT    NOT NULL DEFAULT '' -- full block JSON for detail view
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_blocks_timestamp ON blocks(timestamp DESC);
+
+  Notes:
+  - raw_json stores the full get_block() response so /api/block/:ref
+    can serve detail without a fresh node API call
+  - tx_count = kernels where features != 'Coinbase'
+  - fee_total = sum of kernel.fee for non-coinbase kernels
+  - Rows older than blocks_cache are pruned after each poll
+
+
+────────────────────────────────────────────────────────────────────────────────
+8. BACKEND API ENDPOINTS
+────────────────────────────────────────────────────────────────────────────────
+
+  Method  Path                      Returns
+  ──────  ────────────────────────  ──────────────────────────────────────────
+  GET     /healthz                  200 OK  {"status":"ok","network":"testnet"}
+  GET     /api/network              {"network":"testnet"|"mainnet"}
+  GET     /api/tip                  {"height":N,"hash":"0x…","network":"…"}
+  GET     /api/stats                {"tip_height":N, "hashrate_gps":N,
+                                     "difficulty":N, "peer_count":N,
+                                     "network":"testnet", "cached_blocks":N}
+  GET     /api/blocks?              [{"height":N,"hash":"…","timestamp":N,
+            limit=20&offset=0        "tx_count":N,"fee_total":N,
+                                     "kernel_count":N,"difficulty":N}]
+  GET     /api/block/:ref           full block detail from raw_json
+                                    :ref = height (integer) or hash (hex string)
+  GET     /api/search?q=<val>       same as /api/block/:val (height or hash)
+  GET     /                         serve public/index.html
+  GET     /block.html               serve public/block.html
+  GET     /css/*  /js/*             static files
+
+  Hashrate formula (same as 06_collector.py):
+    hashrate_gps = difficulty / 60
+    (Grin targets 60-second block time — 1 block per minute)
+
+  Error responses:
+    404  {"error":"Block not found"}
+    400  {"error":"Invalid search query"}
+    503  {"error":"Node unreachable"}
+
+
+────────────────────────────────────────────────────────────────────────────────
+9. BACKGROUND POLLER  (server.js)
+────────────────────────────────────────────────────────────────────────────────
+
+  Runs every poll_interval_ms (default 30s):
+
+  1.  Call get_tip() on Grin Foreign API
+        → get current tip_height
+  2.  SELECT MAX(height) FROM blocks
+        → get highest cached block
+  3.  If tip_height > max_cached:
+        Loop from (max_cached + 1) to tip_height:
+          Call get_block(height, null, null)
+          Parse: timestamp, difficulty, kernels[], outputs[]
+          Calculate: kernel_count, tx_count (non-coinbase), fee_total
+          INSERT OR REPLACE INTO blocks (…)
+  4.  Prune old rows:
+        DELETE FROM blocks WHERE height < (tip_height - blocks_cache)
+  5.  Update in-memory tip state (for /api/tip fast response)
+
+  Peer count:
+    Call get_connected_peers() on Owner API every poll cycle
+    Store result in memory only (not in DB)
+    Used for /api/stats peer_count field
+
+  Error handling:
+    - Node unreachable → log warning, skip cycle, retry next interval
+    - Single block fetch failure → log error, skip that block, continue
+    - Never crash the server on node downtime
+
+
+────────────────────────────────────────────────────────────────────────────────
+10. FRONTEND — HOME PAGE (index.html)
+────────────────────────────────────────────────────────────────────────────────
+
+  Layout (desktop → mobile collapses gracefully):
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  🔍 GrinScan           [testnet ●]    [🌙 Dark ▼]   theme picker        │
+  └──────────────────────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │                  ┌─────────────────────────────┐                        │
+  │                  │  [ search by height or hash ]│                        │
+  │                  └─────────────────────────────┘                        │
+  └──────────────────────────────────────────────────────────────────────────┘
+  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+  │  TIP HEIGHT  │ │   HASHRATE   │ │  DIFFICULTY  │ │    PEERS     │
+  │  ● 2,345,678 │ │  42.3 GPS   │ │   1.23 M    │ │      24      │
+  │  [▁▂▃▄▅ ]   │ │             │ │             │ │             │
+  └──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  Latest Blocks                                    🟢 Live (30s refresh) │
+  ├─────────┬────────────────┬──────────────┬───────┬───────────────────────┤
+  │  Height │  Hash          │  Time        │  TXs  │  Fees                 │
+  ├─────────┼────────────────┼──────────────┼───────┼───────────────────────┤
+  │ 2345678 │  0xabcd…ef12  │  2m 14s ago  │   3   │  0.006 ツ             │
+  │ 2345677 │  0x9871…cc44  │  3m 18s ago  │   1   │  0.001 ツ             │
+  │ 2345676 │  0x1234…ab78  │  4m 22s ago  │   0   │  —                    │
+  │  …                                                                       │
+  └─────────┴────────────────┴──────────────┴───────┴───────────────────────┘
+                                                       [ Load 20 more ]
+
+  Mobile (≤ 480px):
+  - Stats cards: 2-column grid → 1-column if very narrow
+  - Block table: Height + Time + TXs only (hash hidden, visible on tap)
+  - Search bar: full width
+  - Theme picker: icon only (no label text)
+
+
+────────────────────────────────────────────────────────────────────────────────
+11. FRONTEND — BLOCK DETAIL PAGE (block.html)
+────────────────────────────────────────────────────────────────────────────────
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  🔍 GrinScan  /  Block #2,345,678                          [copy hash]  │
+  └──────────────────────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  Block #2,345,678                                                        │
+  │  ─────────────────────────────────────────────────────────────────────  │
+  │  Hash          0xabcdef1234567890…abcdef  [📋 copy]                     │
+  │  Prev Hash     0x987654321098765…fedcba  [📋 copy]                     │
+  │  Timestamp     2024-01-15  14:23:01 UTC  (2m 14s ago)                   │
+  │  Difficulty    1,234,567                                                 │
+  │  Kernel Count  4  (3 transactions + 1 coinbase)                          │
+  │  Output Count  7                                                         │
+  └──────────────────────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  Kernels                                                                 │
+  │  ─────────────────────────────────────────────────────────────────────  │
+  │  [COINBASE]  fee: —        (miner reward)                                │
+  │  [PLAIN   ]  fee: 0.006 ツ                                               │
+  │  [PLAIN   ]  fee: 0.001 ツ                                               │
+  │  [PLAIN   ]  fee: 0.002 ツ                                               │
+  └──────────────────────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  [← Block #2345677]                       [Block #2345679 →]            │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  Kernel type badges (CSS pill labels):
+    COINBASE       → yellow  (miner block reward)
+    PLAIN          → blue    (standard transaction)
+    HEIGHT_LOCKED  → purple  (time-locked transaction)
+
+  Fee display:
+    nanogrin → grin conversion: fee_nanogrin / 1_000_000_000
+    Display as "0.006 ツ"  (ツ = Grin's unicode symbol)
+    If fee is 0 or null: display "—"
+
+
+────────────────────────────────────────────────────────────────────────────────
+12. WOW FEATURES (UX — first-impression moments)
+────────────────────────────────────────────────────────────────────────────────
+
+  a) Animated Tip Counter
+     - When a new block is detected (polled every 30s), the tip height number
+       smoothly increments (CSS counter animation or JS digit roll)
+     - The "●" pulse dot next to TIP turns bright green on update
+
+  b) New Block Toast Notification
+     - A slide-in card appears top-right: "🎉 New block #2345679"
+     - Auto-dismisses after 5 seconds
+     - No page reload — pure DOM update via fetch + setInterval
+
+  c) Live Block Age Countdown
+     - Every row in the block list shows "2m 14s ago"
+     - A setInterval ticks every second and updates all age displays
+     - Age colour shifts: green (<5m) → yellow (<30m) → grey (older)
+
+  d) Hashrate Sparkline
+     - Small inline SVG bar chart (10 bars) in the TIP HEIGHT stats card
+     - Renders the last 10 blocks' implied hashrate (difficulty / 60)
+     - Updates on each poll cycle without redrawing the whole page
+
+  e) Skeleton Loaders
+     - On first page load, grey shimmer placeholder bars are shown
+     - Replace instantly with real data — no blank white flash
+
+  f) Keyboard Shortcuts
+     - "/" → focus search bar
+     - "←" / "→" → navigate prev/next block (on block.html)
+     - "Escape" → dismiss toast / blur search
+
+  g) Copy Hash Button
+     - On block.html: clipboard icon next to each hash
+     - On click: icon turns green + "Copied!" tooltip for 2s
+
+  h) System Theme Detection
+     - On first visit: reads prefers-color-scheme media query
+     - Sets dark or light automatically before any paint
+     - User can override; choice saved in localStorage
+
+  i) Network Indicator Badge
+     - Header shows [TESTNET ●] in orange or [MAINNET ●] in green
+     - Cannot be confused — always visible
+
+
+────────────────────────────────────────────────────────────────────────────────
+13. THEME SYSTEM
+────────────────────────────────────────────────────────────────────────────────
+
+  Pattern: mirrors 052_drop theme system exactly.
+  - Base CSS variables in grinscan.css :root {}
+  - Theme CSS files override only the variables they change
+  - Theme stored in localStorage key: "grinscan-theme-{testnet|mainnet}"
+  - Inline <script> before </head> applies theme before first paint (no flash)
+
+  Theme         Vibe                        Default for
+  ────────────  ──────────────────────────  ───────────
+  dark          GitHub-dark, Grin orange    Mainnet
+  light         Clean white, green accents  —
+  neon          Cyberpunk: deep purple,     —
+                electric cyan + magenta
+  matrix        Black bg, green mono rain   Testnet
+
+  Core CSS variables (grinscan.css — dark theme values):
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  :root {                                                                │
+  │    --bg:           #0d1117;    /* page background */                   │
+  │    --surface:      #161b22;    /* cards, panels */                     │
+  │    --surface2:     #21262d;    /* table rows, nested surfaces */       │
+  │    --border:       #30363d;                                            │
+  │    --text:         #e6edf3;                                            │
+  │    --muted:        #8b949e;    /* secondary text, timestamps */        │
+  │    --accent:       #ff9900;    /* Grin orange — primary highlight */   │
+  │    --accent2:      #f2c94c;    /* Grin yellow — secondary */           │
+  │    --green:        #3fb950;    /* success, live indicator */           │
+  │    --red:          #f85149;    /* error, offline */                    │
+  │    --badge-coin:   #b8860b;    /* COINBASE kernel badge */             │
+  │    --badge-plain:  #1f6feb;    /* PLAIN kernel badge */                │
+  │    --badge-lock:   #8957e5;    /* HEIGHT_LOCKED kernel badge */        │
+  │    --radius:       8px;                                                │
+  │    --font-mono:    'JetBrains Mono', 'Courier New', monospace;        │
+  │    --font-sans:    system-ui, -apple-system, sans-serif;               │
+  │    --shadow:       0 4px 24px rgba(0,0,0,0.4);                        │
+  │    --transition:   0.25s ease;                                         │
+  │  }                                                                     │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  Neon theme teaser (--accent: #00f0ff; --bg: #0a0014; --surface: #13002a):
+    Deep purple background, electric cyan accents, magenta secondary.
+    All stats cards get a subtle glow box-shadow matching --accent.
+    Font switches to monospace for extra terminal feel.
+
+
+────────────────────────────────────────────────────────────────────────────────
+14. BASH LIB — scripts/lib/06b_grinscan.sh
+────────────────────────────────────────────────────────────────────────────────
+
+  # 06b_grinscan.sh — GrinScan lightweight block explorer (Node.js)
+  # Sourced by 06_global_grin_health.sh — inherits all color/log/network vars.
+  #
+  #  Functions exported:
+  #    grinscan_install        — Node.js deps + systemd units + deploy web files
+  #    grinscan_configure      — write config.json (node URL, network, port)
+  #    grinscan_start          — systemctl start (testnet / mainnet / both)
+  #    grinscan_stop           — systemctl stop
+  #    grinscan_status         — status: service, port, nginx, db row count
+  #    grinscan_setup_nginx    — nginx vhost + certbot SSL
+  #    grinscan_autostart      — systemctl enable (survive reboots)
+
+  Key variables (set at top of lib):
+    GRINSCAN_DIR="/opt/grin/grinscan"
+    GRINSCAN_WEB="$TOOLKIT_ROOT/web/06b_grinscan"
+    NGINX_GRINSCAN_TEST_CONF="/etc/nginx/sites-available/grinscan-test"
+    NGINX_GRINSCAN_MAIN_CONF="/etc/nginx/sites-available/grinscan-main"
+
+  grinscan_install():
+    1. Check Node.js >= 18 (install via NodeSource if missing)
+    2. npm install --prefix "$GRINSCAN_WEB"  (express only)
+    3. mkdir -p /opt/grin/grinscan/{test,main}
+    4. Write systemd unit files for both networks
+    5. systemctl daemon-reload
+    6. chown -R www-data:www-data "$GRINSCAN_WEB/public"
+
+  grinscan_configure():
+    1. Prompt: which network? (1=testnet / 2=mainnet / 3=both)
+    2. For each chosen network:
+       - Auto-detect node URL using detect_node() from parent script
+       - Read foreign_secret_path from grin-server.toml
+       - Prompt to confirm or override node URL
+       - Write /opt/grin/grinscan/{test|main}/config.json
+    3. Confirm written paths
+
+  grinscan_start():
+    1. Prompt: testnet / mainnet / both
+    2. Check config.json exists for chosen network
+    3. systemctl start grinscan-{test|main}
+    4. Wait 2s, check port with ss -tlnp
+    5. Show URL: http://127.0.0.1:3010 or :3011
+
+  grinscan_status():
+    Show for each network (test + main):
+    - systemctl is-active grinscan-{test|main}
+    - Port :3010 / :3011 listening?
+    - config.json present?
+    - DB row count (SELECT COUNT(*) FROM blocks)
+    - Nginx configured?
+    - Last block cached height (SELECT MAX(height) FROM blocks)
+
+  grinscan_setup_nginx():
+    - Prompt: which network + domain + email
+    - Write /etc/nginx/sites-available/grinscan-{test|main}:
+        server { listen 80; server_name <domain>;
+          location / { proxy_pass http://127.0.0.1:3010; … } }
+    - Reuse existing grin-rate-limit.conf and snippets/grin-api.conf
+    - certbot --nginx -d <domain> --non-interactive --agree-tos …
+    - Add logrotate entry
+
+  Systemd unit template:
+    [Unit]
+    Description=GrinScan Block Explorer (testnet)
+    After=network.target
+
+    [Service]
+    Type=simple
+    User=www-data
+    WorkingDirectory=<GRINSCAN_WEB>
+    ExecStart=/usr/bin/node server.js
+    Environment=GRINSCAN_CONFIG=/opt/grin/grinscan/test/config.json
+    Restart=on-failure
+    RestartSec=10
+    StandardOutput=append:/opt/grin/grinscan/test/grinscan-test.log
+    StandardError=append:/opt/grin/grinscan/test/grinscan-test.log
+
+    [Install]
+    WantedBy=multi-user.target
+
+
+────────────────────────────────────────────────────────────────────────────────
+15. CHANGES TO 06_global_grin_health.sh
+────────────────────────────────────────────────────────────────────────────────
+
+  a) Add source line near top (after variable declarations):
+       source "$SCRIPT_DIR/lib/06b_grinscan.sh"
+
+  b) Rename existing B functions:
+       show_menu_b()   →  show_menu_c()   (relabel header to "C) Grin Explorer by Grincoin.org")
+       run_menu_b()    →  run_menu_c()    (no body changes)
+
+  c) Add new show_menu_b() for GrinScan:
+       Mirrors show_menu_c() structure but calls grinscan_* functions.
+       Options:
+         1) Install
+         2) Configure
+         3) Start
+         4) Check DNS
+         5) Setup Nginx
+         6) Auto-Start on Boot
+         7) Status
+         Z) Stop
+         0) Back
+
+  d) Add new run_menu_b() for GrinScan:
+       case 1 → grinscan_install
+       case 2 → grinscan_configure
+       case 3 → grinscan_start
+       case 4 → check_dns_record "grinscan"   (reuse existing function)
+       case 5 → grinscan_setup_nginx
+       case 6 → grinscan_autostart
+       case 7 → grinscan_status
+       case Z → grinscan_stop
+
+  e) Update show_main_menu():
+       A)  Network Stats + Peer Map       (unchanged)
+       B)  GrinScan                       (new)
+           "Lightweight block explorer — testnet + mainnet, mobile friendly"
+       C)  Grin Explorer by Grincoin.org  (was B)
+           "Rust+Rocket — archive node required"
+       Change prompt from [N/A/B/0] → [N/A/B/C/0]
+
+  f) Update run_interactive():
+       Add:  C) run_menu_c ;;
+
+
+────────────────────────────────────────────────────────────────────────────────
+16. NPM DEPENDENCIES
+────────────────────────────────────────────────────────────────────────────────
+
+  package.json:
+    {
+      "name": "grinscan",
+      "version": "1.0.0",
+      "engines": { "node": ">=18.0.0" },
+      "dependencies": {
+        "express": "^4.18.2"
+      }
+    }
+
+  Built-in Node.js modules used (no install needed):
+    node:sqlite   (DatabaseSync — requires Node >= 22.5 for stable API)
+    crypto        (Basic Auth header construction)
+    fs            (read config.json, read secret files)
+    path          (file path helpers)
+    http          (Foreign API calls — native fetch or http.request)
+
+  Note: If Node < 22.5 is installed, use better-sqlite3 package instead.
+  grinscan_install() should detect Node version and adjust accordingly.
+
+
+────────────────────────────────────────────────────────────────────────────────
+17. GRIN API CALLS USED
+────────────────────────────────────────────────────────────────────────────────
+
+  Foreign API v2  (Basic Auth: user="", password=<foreign_api_secret>)
+  Base URL: http://127.0.0.1:{3413|13413}/v2/foreign
+
+    get_tip()
+      Request:  {"id":1,"jsonrpc":"2.0","method":"get_tip","params":[]}
+      Returns:  {"height":N,"last_block_h":"hex","prev_block_h":"hex",
+                  "total_difficulty":N}
+
+    get_block(height, include_proof, include_merkle)
+      Request:  {"method":"get_block","params":[height, null, null]}
+      Returns:  {
+                  "header": { "height":N, "hash":"hex", "previous":"hex",
+                              "timestamp":"ISO8601", "total_difficulty":N },
+                  "kernels": [{ "features":"Coinbase"|"Plain"|"HeightLocked",
+                                "fee":N, "lock_height":N, "excess":"hex" }],
+                  "outputs": [{ "features":"Coinbase"|"Plain", … }],
+                  "inputs":  []
+                }
+
+  Owner API v2  (Basic Auth: user="", password=<api_secret>)
+  Base URL: http://127.0.0.1:{3413|13413}/v2/owner
+
+    get_connected_peers()
+      Request:  {"method":"get_connected_peers","params":[]}
+      Returns:  [{ "addr":"…", "user_agent":"…", "direction":"Inbound|Outbound" }]
+      Usage:    peer_count = response.length
+
+
+────────────────────────────────────────────────────────────────────────────────
+18. SUGGESTED FUTURE EXTENSIONS (Phase 2+)
+────────────────────────────────────────────────────────────────────────────────
+
+  a) Full chain history
+     - Connect to a mainnet-full (archive) node
+     - Increase blocks_cache to unlimited (store all blocks)
+     - Add "Jump to block" by date picker
+
+  b) Kernel excess search
+     - Index kernel excess hex in SQLite
+     - Allow search by excess → find which block contained a kernel
+
+  c) Unconfirmed transaction feed
+     - Grin has no public mempool, but connected peers can be queried
+     - Could show "pending kernel broadcasts" from connected peers
+
+  d) Hashrate chart page
+     - Dedicated chart page pulling from 06_collector.py's stats DB
+     - Reuse existing hashrate.json from option A (Network Stats)
+     - Avoids duplicating data collection
+
+  e) Multi-language / i18n
+     - Simple JSON string map loaded by theme.js
+     - Start with EN + one other
+
+  f) WebSocket live feed
+     - Replace 30s polling with WebSocket push for instant new-block display
+     - Requires ws npm package
+
+  g) Public API mode
+     - Expose /api/* publicly with nginx rate limiting
+     - Other community tools can consume GrinScan as a data source
+     - Reuse existing grin-api.conf snippet from option A nginx setup
+
+  h) Explorer widget embed
+     - Small iframe-embeddable "latest block" widget
+     - Other Grin sites (forums, wallets) can embed it
+
+
+────────────────────────────────────────────────────────────────────────────────
+19. VERIFICATION CHECKLIST
+────────────────────────────────────────────────────────────────────────────────
+
+  Shell scripts:
+    [ ] bash -n scripts/06_global_grin_health.sh
+    [ ] bash -n scripts/lib/06b_grinscan.sh
+
+  Menu flow:
+    [ ] Main menu shows N / A / B / C / 0 correctly
+    [ ] B → GrinScan submenu with 7 options + Z + 0
+    [ ] C → old Grin Explorer submenu (unchanged behaviour)
+    [ ] 0 navigates back at every level
+
+  Server:
+    [ ] GRINSCAN_CONFIG=<config> node server.js starts without error
+    [ ] GET /healthz returns 200 {"status":"ok"}
+    [ ] GET /api/tip returns {height, hash, network}
+    [ ] GET /api/blocks?limit=5 returns array of 5 objects
+    [ ] GET /api/block/1 returns block detail (from node or cache)
+    [ ] GET /api/search?q=1 returns same as /api/block/1
+    [ ] GET /api/stats returns hashrate_gps, difficulty, peer_count
+
+  Frontend:
+    [ ] index.html loads without console errors
+    [ ] Stats cards populate within 2s of page load
+    [ ] Block list shows at least 5 rows
+    [ ] Clicking a row navigates to block.html?h=<height>
+    [ ] block.html shows header details + kernels list
+    [ ] Prev/Next block buttons navigate correctly
+    [ ] Copy hash button writes to clipboard + shows "Copied!" feedback
+
+  Themes:
+    [ ] Dark theme is default on mainnet; matrix on testnet
+    [ ] Light theme applies correctly (white bg, dark text)
+    [ ] Neon theme applies correctly (purple bg, cyan accent)
+    [ ] Theme persists across page reload (localStorage)
+    [ ] No white flash before theme applies (inline script check)
+    [ ] System prefers-color-scheme auto-selects dark/light on first visit
+
+  WOW features:
+    [ ] Block age updates every second without page reload
+    [ ] New block toast appears when tip height increases
+    [ ] Animated tip counter increments smoothly on new block
+    [ ] Skeleton loaders visible during first fetch
+
+  Mobile (375px viewport):
+    [ ] Stats cards stack to 2-column or 1-column layout
+    [ ] Block table is horizontally scrollable
+    [ ] Search bar is full width
+    [ ] No horizontal page overflow
+
+  Nginx + SSL:
+    [ ] grinscan_setup_nginx creates valid nginx config
+    [ ] nginx -t passes
+    [ ] certbot issues certificate successfully
+    [ ] HTTPS redirects from HTTP
+
+================================================================================
+  END OF PLANNING DOCUMENT
+================================================================================

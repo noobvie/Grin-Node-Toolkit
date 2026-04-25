@@ -31,6 +31,9 @@ class Grinpay_Admin {
 
 		// AJAX: live bridge/server connection test
 		add_action( 'wp_ajax_grinpay_test_connection', [ $this, 'ajax_test_connection' ] );
+
+		// Admin: cancel a pending-grin order from the Orders tab
+		add_action( 'wp_ajax_grinpay_cancel_order', [ $this, 'handle_cancel_order' ] );
 	}
 
 	// ── Asset enqueueing ───────────────────────────────────────────────────────
@@ -56,9 +59,23 @@ class Grinpay_Admin {
 		);
 
 		wp_localize_script( 'grinpay-admin', 'grinpayAdmin', [
-			'ajaxUrl' => admin_url( 'admin-ajax.php' ),
-			'nonce'   => wp_create_nonce( 'grinpay_admin' ),
-			'i18n'    => [
+			'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
+			'nonce'      => wp_create_nonce( 'grinpay_admin' ),
+			'selfHosted' => [
+				'mainnet' => [
+					'bridge_url'  => 'http://127.0.0.1:3006',
+					'bridge_port' => '3006',
+					'net_flag'    => '(none)',
+					'wallet_path' => '~/.grin/main/',
+				],
+				'testnet' => [
+					'bridge_url'  => 'http://127.0.0.1:3007',
+					'bridge_port' => '3007',
+					'net_flag'    => '--testnet',
+					'wallet_path' => '~/.grin/test/',
+				],
+			],
+			'i18n'       => [
 				'testing'        => __( 'Testing…', 'grinpay-woocommerce' ),
 				'testConnection' => __( 'Test Connection', 'grinpay-woocommerce' ),
 				'connected'      => __( 'Connected ✔', 'grinpay-woocommerce' ),
@@ -118,12 +135,14 @@ class Grinpay_Admin {
 			return;
 		}
 
-		$mode       = $gateway->get_option( 'connection_mode', 'self_hosted' );
-		$network    = $gateway->get_option( 'network', 'testnet' );
-		$server_url = $gateway->get_option( 'server_url', '' );
-		$expiry     = $gateway->get_option( 'expiry_minutes', '30' );
-		$confirms   = $gateway->get_option( 'confirmations', '1' );
-		$debug      = $gateway->get_option( 'debug', 'no' );
+		$mode          = $gateway->get_option( 'connection_mode', 'self_hosted' );
+		$network       = $gateway->get_option( 'network', 'testnet' );
+		$server_url    = $gateway->get_option( 'server_url', '' );
+		$expiry        = $gateway->get_option( 'expiry_minutes', '30' );
+		$confirms      = $gateway->get_option( 'confirmations', '1' );
+		$currency_mode = $gateway->get_option( 'currency_mode', 'direct' );
+		$debug         = $gateway->get_option( 'debug', 'no' );
+		$hmac_set      = '' !== $gateway->get_option( 'hmac_secret', '' );
 
 		// Bridge auto-config values (read-only, shown for info)
 		$bridge_url  = 'mainnet' === $network ? 'http://127.0.0.1:3006' : 'http://127.0.0.1:3007';
@@ -297,6 +316,28 @@ class Grinpay_Admin {
 					</td>
 				</tr>
 
+				<?php // ── Currency Mode ── ?>
+				<tr>
+					<th><?php esc_html_e( 'Currency Mode', 'grinpay-woocommerce' ); ?></th>
+					<td>
+						<fieldset>
+							<label>
+								<input type="radio" name="woocommerce_grinpay_currency_mode"
+									   value="direct" <?php checked( $currency_mode, 'direct' ); ?>>
+								<strong><?php esc_html_e( 'Direct GRIN', 'grinpay-woocommerce' ); ?></strong>
+								&mdash; <?php esc_html_e( 'Product prices are set in GRIN directly.', 'grinpay-woocommerce' ); ?>
+							</label>
+							<br><br>
+							<label>
+								<input type="radio" name="woocommerce_grinpay_currency_mode"
+									   value="auto" <?php checked( $currency_mode, 'auto' ); ?>>
+								<strong><?php esc_html_e( 'Auto-convert', 'grinpay-woocommerce' ); ?></strong>
+								&mdash; <?php esc_html_e( 'Convert WooCommerce store currency (e.g. USD) to GRIN at checkout using live bridge rate (/api/rate).', 'grinpay-woocommerce' ); ?>
+							</label>
+						</fieldset>
+					</td>
+				</tr>
+
 				<?php // ── Debug ── ?>
 				<tr><td colspan="2"><hr><h3><?php esc_html_e( 'Debug', 'grinpay-woocommerce' ); ?></h3></td></tr>
 				<tr>
@@ -315,6 +356,21 @@ class Grinpay_Admin {
 								'<a href="' . esc_url( admin_url( 'admin.php?page=wc-status&tab=logs' ) ) . '">WooCommerce → Status → Logs → grinpay</a>'
 							);
 							?>
+						</p>
+					</td>
+				</tr>
+
+				<?php // ── Security ── ?>
+				<tr><td colspan="2"><hr><h3><?php esc_html_e( 'Security', 'grinpay-woocommerce' ); ?></h3></td></tr>
+				<tr>
+					<th><label for="grinpay_hmac_secret"><?php esc_html_e( 'HMAC Secret', 'grinpay-woocommerce' ); ?></label></th>
+					<td>
+						<input type="password" id="grinpay_hmac_secret" name="woocommerce_grinpay_hmac_secret"
+							   value="<?php echo esc_attr( $gateway->get_option( 'hmac_secret', '' ) ); ?>"
+							   class="regular-text" autocomplete="new-password"
+							   placeholder="<?php echo $hmac_set ? esc_attr__( '(set — enter new value to change)', 'grinpay-woocommerce' ) : ''; ?>">
+						<p class="description">
+							<?php esc_html_e( 'Self-hosted mode only. Must match GRINPAY_HMAC_SECRET in the bridge systemd service. Leave blank to disable POST signing.', 'grinpay-woocommerce' ); ?>
 						</p>
 					</td>
 				</tr>
@@ -542,21 +598,55 @@ class Grinpay_Admin {
 			] );
 		}
 
-		$body    = json_decode( wp_remote_retrieve_body( $response ), true );
-		$network = isset( $body['network'] ) ? strtoupper( (string) $body['network'] ) : '?';
-		$balance = isset( $body['balance'] ) ? number_format( (float) $body['balance'], 9 ) : '?';
-		$version = $body['version'] ?? $body['bridge_version'] ?? '?';
+		$body           = json_decode( wp_remote_retrieve_body( $response ), true );
+		$network        = isset( $body['network'] ) ? strtoupper( (string) $body['network'] ) : '?';
+		$balance        = isset( $body['balance'] ) ? number_format( (float) $body['balance'], 9 ) : null;
+		$wallet_version = $body['wallet_version'] ?? '?';
+		$node_version   = $body['node_version']   ?? '?';
+		$nodejs_version = $body['node_js_version'] ?? '?';
 
 		wp_send_json_success( [
-			'message' => sprintf(
-				/* translators: 1: ms 2: version 3: network 4: balance */
-				__( 'Connected in %1$dms — v%2$s — %3$s — balance: %4$s GRIN', 'grinpay-woocommerce' ),
+			'message'        => sprintf(
+				/* translators: 1: ms 2: network 3: wallet version */
+				__( 'Connected in %1$dms — %2$s — wallet v%3$s', 'grinpay-woocommerce' ),
 				$elapsed,
-				$version,
 				$network,
-				$balance
+				$wallet_version
 			),
+			'wallet_version' => $wallet_version,
+			'node_version'   => $node_version,
+			'nodejs_version' => $nodejs_version,
+			'network'        => $network,
+			'balance'        => $balance,
 		] );
+	}
+
+	// ── Admin: Cancel order ────────────────────────────────────────────────────
+
+	public function handle_cancel_order(): void {
+		$order_id = isset( $_GET['order_id'] ) ? absint( $_GET['order_id'] ) : 0;
+		if ( ! $order_id ) {
+			wp_die( esc_html__( 'Invalid order ID.', 'grinpay-woocommerce' ), '', [ 'response' => 400 ] );
+		}
+
+		check_admin_referer( 'grinpay_cancel_' . $order_id );
+
+		if ( ! current_user_can( 'manage_woocommerce' ) ) {
+			wp_die( esc_html__( 'Permission denied.', 'grinpay-woocommerce' ), '', [ 'response' => 403 ] );
+		}
+
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) {
+			wp_die( esc_html__( 'Order not found.', 'grinpay-woocommerce' ), '', [ 'response' => 404 ] );
+		}
+
+		$order->update_status( 'cancelled', __( 'Manually cancelled by admin via GrinPay.', 'grinpay-woocommerce' ) );
+		$order->save();
+
+		wp_safe_redirect(
+			admin_url( 'admin.php?page=wc-settings&tab=checkout&section=grinpay&grinpay_tab=orders' )
+		);
+		exit;
 	}
 
 	// ── Helpers ────────────────────────────────────────────────────────────────

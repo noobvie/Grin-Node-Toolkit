@@ -152,8 +152,8 @@
 		var mode           = checkedMode ? checkedMode.value : 'self_hosted';
 		var checkedNetwork = document.querySelector( 'input[name="woocommerce_grinpay_network"]:checked' );
 		var network        = checkedNetwork ? checkedNetwork.value : 'mainnet';
-		var serverUrl   = getFieldValue( 'woocommerce_grinpay_server_url' );
-		var apiKey      = getFieldValue( 'woocommerce_grinpay_api_key' );
+		var serverUrl   = getFieldValue( 'grinpay_server_url' );
+		var apiKey      = getFieldValue( 'grinpay_api_key' );
 
 		testBtn.disabled    = true;
 		testBtn.textContent = i18n.testing || 'Testing\u2026';
@@ -202,14 +202,15 @@
 
 		var rows = [];
 
-		if ( d.node_version )   rows.push( [ 'Node',    d.node_version ] );
-		if ( d.wallet_version ) rows.push( [ 'Wallet',  d.wallet_version ] );
-		if ( d.python_version ) rows.push( [ 'Python',  d.python_version ] );
-		if ( d.network )        rows.push( [ 'Network', d.network ] );
-		if ( d.address )        rows.push( [ 'Address', d.address ] );
+		if ( d.node_version )   rows.push( [ 'Grin node',   d.node_version ] );
+		if ( d.wallet_version ) rows.push( [ 'grin-wallet', d.wallet_version ] );
+		if ( d.nodejs_version ) rows.push( [ 'Node.js',     d.nodejs_version ] );
+		if ( d.network )        rows.push( [ 'Network',     d.network ] );
+		if ( d.balance )        rows.push( [ 'Balance',     d.balance + ' GRIN' ] );
 
 		if ( ! rows.length ) {
-			return '<span class="grinpay-test-ok">' + escHtml( i18n.connected || 'Connected \u2714' ) + '</span>';
+			var msg = d.message ? escHtml( d.message ) : escHtml( i18n.connected || 'Connected \u2714' );
+			return '<span class="grinpay-test-ok">' + msg + '</span>';
 		}
 
 		var html = '<span class="grinpay-test-ok">' + escHtml( i18n.connected || 'Connected \u2714' ) + '</span><table class="grinpay-test-details">';

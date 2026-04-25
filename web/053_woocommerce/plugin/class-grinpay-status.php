@@ -299,10 +299,10 @@ class Grinpay_Status {
 			);
 			$this->last_results[] = $this->check_version_from_response(
 				$body,
-				'python_version',
-				__( 'Python version', 'grinpay-woocommerce' ),
-				'python_version',
-				GRINPAY_MIN_PYTHON
+				'nodejs_version',
+				__( 'Node.js version', 'grinpay-woocommerce' ),
+				'node_js_version',
+				GRINPAY_MIN_NODEJS
 			);
 		}
 

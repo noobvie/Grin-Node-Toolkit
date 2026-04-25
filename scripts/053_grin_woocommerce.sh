@@ -159,6 +159,7 @@ woo_load_conf() {
     WOO_OWNER_API_URL=""
     WOO_WALLET_DIR=""
     WOO_API_KEY=""
+    WOO_HMAC_SECRET=""
     WOO_EXPIRY_MIN="30"
     WOO_WP_DIR="/var/www/html"
     if [[ -f "$WOO_CONF" ]]; then
@@ -173,6 +174,7 @@ woo_save_conf() {
 WOO_OWNER_API_URL="${WOO_OWNER_API_URL:-}"
 WOO_WALLET_DIR="${WOO_WALLET_DIR:-}"
 WOO_API_KEY="${WOO_API_KEY:-}"
+WOO_HMAC_SECRET="${WOO_HMAC_SECRET:-}"
 WOO_EXPIRY_MIN="${WOO_EXPIRY_MIN:-30}"
 WOO_WP_DIR="${WOO_WP_DIR:-/var/www/html}"
 CONF
@@ -262,6 +264,7 @@ woo_install_bridge() {
 
     woo_load_conf
     local _ak="${WOO_API_KEY:-}"
+    local _hmac="${WOO_HMAC_SECRET:-}"
     local _owner_url="${WOO_OWNER_API_URL:-http://127.0.0.1:${WOO_OWNER_API_PORT}/v3/owner}"
     local _wallet_dir="${WOO_WALLET_DIR:-}"
     local run_user="www-data"
@@ -307,6 +310,7 @@ Environment="GRINPAY_PORT=$WOO_BRIDGE_PORT"
 Environment="GRINPAY_OWNER_API_URL=$_owner_url"
 Environment="GRINPAY_WALLET_DIR=$_wallet_dir"
 Environment="GRINPAY_API_KEY=$_ak"
+Environment="GRINPAY_HMAC_SECRET=$_hmac"
 ExecStart=$node_bin $WOO_APP_DIR/server.js
 Restart=always
 RestartSec=5
@@ -420,6 +424,14 @@ woo_configure() {
     read -rs v || true; echo ""
     [[ -n "$v" ]] && WOO_API_KEY="$v"
 
+    echo -ne "HMAC Secret        [${WOO_HMAC_SECRET:+(set)}${WOO_HMAC_SECRET:-leave blank to disable signing}]: "
+    read -rs v || true; echo ""
+    if [[ "$v" == "none" ]]; then
+        WOO_HMAC_SECRET=""
+    elif [[ -n "$v" ]]; then
+        WOO_HMAC_SECRET="$v"
+    fi
+
     echo -ne "Invoice expiry     [${WOO_EXPIRY_MIN:-30} min]: "
     read -r v || true; [[ -n "$v" ]] && WOO_EXPIRY_MIN="$v"
 
@@ -432,6 +444,7 @@ woo_configure() {
     # Regenerate bridge systemd unit with updated env vars (full rewrite — no sed injection risk)
     if [[ -f "/etc/systemd/system/${WOO_SERVICE}.service" ]]; then
         local _ak="${WOO_API_KEY:-}"
+        local _hmac="${WOO_HMAC_SECRET:-}"
         local _owner_url="${WOO_OWNER_API_URL}"
         local _wallet_dir="${WOO_WALLET_DIR:-}"
         local run_user="www-data"
@@ -453,6 +466,7 @@ Environment="GRINPAY_PORT=$WOO_BRIDGE_PORT"
 Environment="GRINPAY_OWNER_API_URL=$_owner_url"
 Environment="GRINPAY_WALLET_DIR=$_wallet_dir"
 Environment="GRINPAY_API_KEY=$_ak"
+Environment="GRINPAY_HMAC_SECRET=$_hmac"
 ExecStart=$node_bin $WOO_APP_DIR/server.js
 Restart=always
 RestartSec=5

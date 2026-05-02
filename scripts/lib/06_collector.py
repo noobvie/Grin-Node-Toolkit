@@ -673,12 +673,20 @@ def _mask_ip(ip):
 
 
 def _is_public_ip(ip):
-    """Return True if ip is a routable public address (not loopback/RFC-1918)."""
-    return (ip
-            and not ip.startswith("127.")
-            and not ip.startswith("::1")
-            and not ip.startswith("10.")
-            and not ip.startswith("192.168."))
+    """Return True if ip is a routable public address (not loopback/RFC-1918/IPv6 private)."""
+    if not ip:
+        return False
+    ip_lower = ip.lower()
+    return (
+        not ip.startswith("127.")
+        and not ip_lower == "::1"
+        and not ip.startswith("10.")
+        and not ip.startswith("192.168.")
+        and not ip_lower.startswith("fc")     # IPv6 unique local fc00::/7 (first half)
+        and not ip_lower.startswith("fd")     # IPv6 unique local fc00::/7 (second half)
+        and not ip_lower.startswith("fe80")   # IPv6 link-local fe80::/10
+        and not ip_lower.startswith("2001:db8")  # IPv6 documentation
+    )
 
 def _is_valid_grin_agent(ua):
     """Return True only for known Grin node implementations.
@@ -686,7 +694,7 @@ def _is_valid_grin_agent(ua):
     if not ua:
         return False
     ua_lower = ua.lower()
-    return "mw/grin" in ua_lower or "grin++" in ua_lower
+    return "mw/grin" in ua_lower or "grin++" in ua_lower or "mw/grim" in ua_lower
 
 
 def _extract_addr(peer, default_port):
@@ -748,10 +756,16 @@ def _fetch_connected_peers(owner_url, secret, network_label):
                 ip, port = _extract_addr(p, expected_port)
                 if port != expected_port or not _is_public_ip(ip):
                     continue
+                ua = p.get("user_agent", "") or ""
+                # Active TCP connections with an unrecognised agent are still real nodes —
+                # store as "Unknown" so they appear in stats rather than being silently dropped.
+                # Routing-table peers (get_peers) keep the strict _is_valid_grin_agent filter.
+                if not _is_valid_grin_agent(ua):
+                    ua = "Unknown"
                 peer_list.append({
                     "ip":         ip,
                     "port":       port,
-                    "user_agent": p.get("user_agent", "unknown"),
+                    "user_agent": ua,
                     "direction":  p.get("direction", "Outbound"),
                     "network":    network_label,
                 })
@@ -995,7 +1009,8 @@ def _update_peers():
     # Remove any existing entries without a valid Grin agent (legacy contamination)
     purged = conn.execute(
         "DELETE FROM known_peers "
-        "WHERE user_agent NOT LIKE '%MW/Grin%' AND user_agent NOT LIKE '%Grin++%'"
+        "WHERE user_agent NOT LIKE '%MW/Grin%' AND user_agent NOT LIKE '%Grin++%' "
+        "AND user_agent NOT LIKE '%MW/Grim%' AND user_agent != 'Unknown'"
     ).rowcount
     if purged:
         print(f"[INFO] Purged {purged} peers with unknown agent names.")
@@ -1019,7 +1034,8 @@ def _update_peers():
                lat, lng, country, country_code, city, first_seen, last_seen
         FROM known_peers
         WHERE last_seen >= ?
-          AND (user_agent LIKE '%MW/Grin%' OR user_agent LIKE '%Grin++%')
+          AND (user_agent LIKE '%MW/Grin%' OR user_agent LIKE '%Grin++%'
+               OR user_agent LIKE '%MW/Grim%' OR user_agent = 'Unknown')
         ORDER BY last_seen DESC
     """, (history_cutoff,)).fetchall()
     # ── 9. Record peer count snapshot for history chart ──────────────────────

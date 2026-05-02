@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Grin Ecosystem Status — DNS Seeds, Services &amp; Community</title>
+<meta name="description" content="Live Grin ecosystem status: DNS seed connectivity and domain expiry, blockchain explorers, exchanges, community sites and developer resources. Real-time health checks for the Grin MimbleWimble network.">
+<meta name="robots" content="index, follow">
+<meta property="og:title" content="Grin Ecosystem Status">
+<meta property="og:description" content="Live health checks for Grin DNS seeds, explorers, exchanges, and community resources.">
+<meta property="og:type" content="website">
+<link rel="icon" href="grin-logo.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --border:    #30363d;
+    --text:      #e6edf3;
+    --muted:     #8b949e;
+    --grin:      #ff9900;
+    --blue:      #58a6ff;
+    --green:     #3fb950;
+    --purple:    #bc8cff;
+    --red:       #f85149;
+    --orange:    #d29922;
+  }
+  html[data-theme="light"] {
+    --bg:      #f6f8fa;
+    --surface: #ffffff;
+    --border:  #d0d7de;
+    --text:    #24292f;
+    --muted:   #656d76;
+    --grin:    #bf6800;
+    --blue:    #0969da;
+    --green:   #1a7f37;
+    --purple:  #8250df;
+    --red:     #cf222e;
+    --orange:  #9a6700;
+  }
+  html[data-theme="matrix"] {
+    --bg:      #000000;
+    --surface: #001500;
+    --border:  #004400;
+    --text:    #00ff41;
+    --muted:   #009922;
+    --grin:    #00ff41;
+    --blue:    #00e5ff;
+    --green:   #00ff41;
+    --purple:  #00e5ff;
+    --red:     #ff4444;
+    --orange:  #ffaa00;
+  }
+  html[data-theme="matrix"] body { font-family: 'Courier New', Courier, monospace; }
+  html[data-theme="matrix"] body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px);
+    pointer-events: none;
+    z-index: 9998;
+  }
+  html[data-theme="hp"] {
+    --bg:      #0d0221;
+    --surface: #1a0545;
+    --border:  #4a1a8a;
+    --text:    #f0e68c;
+    --muted:   #b8a0d4;
+    --grin:    #ffd700;
+    --blue:    #7b68ee;
+    --green:   #50c878;
+    --purple:  #da70d6;
+    --red:     #ff6347;
+    --orange:  #ff8c00;
+  }
+  html[data-theme="hp"] body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 0%, rgba(100,40,200,0.18) 0%, transparent 65%);
+    pointer-events: none;
+    z-index: 9998;
+  }
+
+  /* ── Theme controls ──────────────────────────────────────────────────────── */
+  .mode-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 28px; height: 26px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+    flex-shrink: 0;
+    padding: 0;
+  }
+  .mode-toggle:hover { border-color: var(--grin); color: var(--text); }
+  .theme-picker { position: relative; }
+  .theme-pill-btn {
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .theme-pill-btn:hover { border-color: var(--grin); color: var(--text); }
+  .theme-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    display: none;
+    z-index: 500;
+    min-width: 145px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  .theme-menu.open { display: block; }
+  .tm-item {
+    display: block; width: 100%;
+    padding: 8px 14px;
+    background: transparent; border: none;
+    color: var(--text); font-size: 12px;
+    text-align: left; cursor: pointer;
+    transition: background 0.1s;
+  }
+  .tm-item:hover { background: rgba(255,153,0,0.1); color: var(--grin); }
+  .tm-item.active { color: var(--grin); font-weight: 600; }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* ── Header ─────────────────────────────────────────────────────────────── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 12px;
+  }
+  .logo { display: flex; align-items: center; gap: 8px; }
+  .logo-img { height: 26px; width: 26px; flex-shrink: 0; }
+  .logo-dot {
+    width: 8px; height: 8px;
+    background: var(--grin);
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .logo h1 { font-size: 16px; font-weight: 600; color: var(--text); }
+  .logo h1 span { color: var(--grin); }
+  .header-right { display: flex; align-items: center; justify-self: end; gap: 6px; flex-wrap: wrap; }
+  nav { display: flex; gap: 6px; }
+  .nav-btn {
+    color: var(--muted);
+    text-decoration: none;
+    padding: 5px 13px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .nav-btn:hover { color: var(--text); border-color: var(--muted); }
+  .nav-btn.active { color: var(--grin); border-color: var(--grin); background: rgba(255,153,0,0.1); }
+
+  /* ── Summary bar ─────────────────────────────────────────────────────────── */
+  .eco-summary {
+    display: flex;
+    gap: 0;
+    background: var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .eco-sum-item {
+    flex: 1;
+    background: var(--surface);
+    padding: 14px 20px;
+    border-right: 1px solid var(--border);
+  }
+  .eco-sum-item:last-child { border-right: none; }
+  .eco-sum-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .eco-sum-value { font-size: 22px; font-weight: 700; color: var(--text); margin-top: 2px; }
+  .eco-sum-value.green { color: var(--green); }
+  .eco-sum-value.orange { color: var(--orange); }
+
+  /* ── Main layout ─────────────────────────────────────────────────────────── */
+  main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+
+  /* ── Cards ───────────────────────────────────────────────────────────────── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .dot-grin   { background: var(--grin); }
+  .dot-blue   { background: var(--blue); }
+  .dot-green  { background: var(--green); }
+  .card-ts { color: var(--muted); font-size: 12px; }
+
+  /* ── Warning banner ──────────────────────────────────────────────────────── */
+  .exp-warning-banner {
+    display: none;
+    margin: 0 20px 0;
+    padding: 10px 14px;
+    background: rgba(248,81,73,0.1);
+    border: 1px solid rgba(248,81,73,0.35);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--red);
+    line-height: 1.6;
+    margin-top: 14px;
+  }
+  .exp-warning-banner.visible { display: block; }
+  .exp-warning-banner strong { font-weight: 700; }
+
+  /* ── DNS Seed grid ───────────────────────────────────────────────────────── */
+  .dns-seeds-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 1px;
+    background: var(--border);
+    padding: 0;
+  }
+  @media (max-width: 600px) {
+    .dns-seeds-grid { grid-template-columns: 1fr; background: none; gap: 0; }
+  }
+  .dns-seeds-col {
+    background: var(--surface);
+    padding: 16px 20px 20px;
+  }
+  .dns-seeds-col-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 14px;
+  }
+  .dns-seed-host { margin-bottom: 16px; }
+  .dns-seed-host:last-child { margin-bottom: 0; }
+  .dns-seed-hostname {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 3px;
+    word-break: break-all;
+  }
+  .dns-seed-expiry {
+    font-size: 11px;
+    margin-bottom: 5px;
+    font-family: monospace;
+  }
+  .exp-ok      { color: var(--green); }
+  .exp-warn    { color: var(--orange); }
+  .exp-danger  { color: var(--red); font-weight: 700; }
+  .exp-unknown { color: var(--muted); }
+  .dns-seed-ip-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-family: monospace;
+    color: var(--muted);
+    padding: 1px 0;
+  }
+  .status-ok   { color: var(--green); font-weight: 700; }
+  .status-fail { color: var(--red);   font-weight: 700; }
+  .uptime-pill {
+    font-size: 10px;
+    color: var(--muted);
+    background: rgba(139,148,158,0.12);
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-left: 2px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  .dns-no-resolve { font-size: 11px; color: var(--red); font-style: italic; padding: 2px 0; }
+
+  /* ── Ecosystem services table ────────────────────────────────────────────── */
+  .svc-category-header {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 12px 20px 6px;
+    border-top: 1px solid var(--border);
+  }
+  .svc-category-header:first-child { border-top: none; }
+  .svc-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 20px;
+    border-top: 1px solid rgba(48,54,61,0.5);
+    font-size: 13px;
+  }
+  .svc-row:hover { background: rgba(255,255,255,0.02); }
+  .svc-status { font-size: 13px; font-weight: 700; flex-shrink: 0; width: 14px; }
+  .svc-name {
+    font-weight: 600;
+    color: var(--text);
+    min-width: 120px;
+    flex-shrink: 0;
+  }
+  .svc-url {
+    color: var(--muted);
+    font-size: 12px;
+    font-family: monospace;
+    text-decoration: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+  .svc-url:hover { color: var(--grin); text-decoration: underline; }
+  .svc-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    font-size: 11px;
+  }
+  .svc-ms        { color: var(--muted); font-family: monospace; min-width: 48px; text-align: right; }
+  .svc-uptime    { color: var(--muted); background: rgba(139,148,158,0.12); padding: 1px 5px; border-radius: 3px; }
+  .svc-since     { color: var(--muted); white-space: nowrap; }
+  .svc-down      { color: var(--red); font-size: 11px; }
+  .svc-git       { color: var(--blue); font-size: 11px; font-family: monospace; white-space: nowrap; }
+  .svc-stock-ok  { color: var(--green);  font-weight: 700; font-size: 11px; }
+  .svc-stock-out { color: var(--orange); font-weight: 700; font-size: 11px; }
+
+  /* ── Loading / empty states ─────────────────────────────────────────────── */
+  .placeholder { padding: 32px 20px; text-align: center; color: var(--muted); font-size: 13px; }
+  #loading {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    z-index: 999; gap: 12px;
+  }
+  .spinner {
+    width: 36px; height: 36px;
+    border: 3px solid var(--border);
+    border-top-color: var(--grin);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading p { color: var(--muted); font-size: 13px; }
+
+  /* ── Footer ──────────────────────────────────────────────────────────────── */
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 20px 24px;
+    border-top: 1px solid var(--border);
+    margin-top: 24px;
+  }
+  footer a { color: var(--grin); text-decoration: none; margin: 0 8px; }
+  footer a:hover { color: var(--text); }
+
+  /* ── Mobile ──────────────────────────────────────────────────────────────── */
+  @media (max-width: 640px) {
+    header { grid-template-columns: 1fr; padding: 10px 14px; gap: 8px; }
+    .logo h1 { font-size: 14px; }
+    nav { justify-self: center; }
+    .header-right { justify-self: auto; }
+    .nav-btn { padding: 4px 9px; font-size: 11px; }
+    main { padding: 12px; }
+    .card { margin-bottom: 12px; }
+    .eco-sum-item { padding: 10px 14px; }
+    .eco-sum-value { font-size: 18px; }
+    .svc-row { flex-wrap: wrap; gap: 4px; }
+    .svc-name { min-width: 0; }
+    .svc-meta { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <p>Checking Grin ecosystem…</p>
+</div>
+
+<header>
+  <div class="logo">
+    <img src="grin-logo.svg" class="logo-img" alt="Grin" onerror="this.style.display='none'">
+    <div class="logo-dot"></div>
+    <h1>Global <span>Grin</span> Health</h1>
+  </div>
+  <nav>
+    <a href="stats.html" class="nav-btn"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><polyline points="1,11 5,6 8,8 13,2"/><line x1="1" y1="13" x2="13" y2="13"/></svg>Network Stats</a>
+    <a href="index.html" class="nav-btn"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="7" cy="7" r="5.5"/><path d="M7 1.5c-2 2-2.5 3.5-2.5 5.5s.5 3.5 2.5 5.5M7 1.5c2 2 2.5 3.5 2.5 5.5S9 11 7 12.5"/><line x1="1.5" y1="7" x2="12.5" y2="7"/></svg>Peer Map</a>
+    <a href="ecosystem.html" class="nav-btn active"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="7" cy="7" r="5.5"/><circle cx="7" cy="7" r="2"/><line x1="7" y1="1.5" x2="7" y2="5"/><line x1="7" y1="9" x2="7" y2="12.5"/><line x1="1.5" y1="7" x2="5" y2="7"/><line x1="9" y1="7" x2="12.5" y2="7"/></svg>Ecosystem</a>
+  </nav>
+  <div class="header-right">
+    <button class="mode-toggle" id="mode-toggle" title="Toggle dark/light mode">🌙</button>
+    <div class="theme-picker">
+      <button class="theme-pill-btn" id="theme-pill-btn">🎨</button>
+      <div class="theme-menu" id="theme-menu">
+        <button class="tm-item" data-theme="dark">◼ Default</button>
+        <button class="tm-item" data-theme="light">◻ Light</button>
+        <button class="tm-item" data-theme="matrix">▓ Matrix</button>
+        <button class="tm-item" data-theme="hp">✦ Harry Potter</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ── Summary bar ─────────────────────────────────────────────────────────── -->
+<div class="eco-summary">
+  <div class="eco-sum-item">
+    <div class="eco-sum-label">Seeds Online</div>
+    <div class="eco-sum-value green" id="sum-seeds">—</div>
+  </div>
+  <div class="eco-sum-item">
+    <div class="eco-sum-label">Domains OK</div>
+    <div class="eco-sum-value green" id="sum-domains">—</div>
+  </div>
+  <div class="eco-sum-item">
+    <div class="eco-sum-label">Services Online</div>
+    <div class="eco-sum-value green" id="sum-services">—</div>
+  </div>
+  <div class="eco-sum-item">
+    <div class="eco-sum-label">Last Checked</div>
+    <div class="eco-sum-value" id="sum-updated" style="font-size:15px;">—</div>
+  </div>
+</div>
+
+<main>
+
+  <!-- ── DNS Seed Status ──────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-green"></span>DNS Seed Status</div>
+      <span class="card-ts" id="dns-ts"></span>
+    </div>
+
+    <div id="dns-warning" class="exp-warning-banner"></div>
+
+    <div class="dns-seeds-grid">
+      <div class="dns-seeds-col">
+        <div class="dns-seeds-col-header"><span class="dot dot-grin"></span>Mainnet &middot; port 3414</div>
+        <div id="dns-mainnet"><div class="placeholder">Loading…</div></div>
+      </div>
+      <div class="dns-seeds-col">
+        <div class="dns-seeds-col-header"><span class="dot dot-blue"></span>Testnet &middot; port 13414</div>
+        <div id="dns-testnet"><div class="placeholder">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Ecosystem Services ────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-grin"></span>Ecosystem Services</div>
+      <span class="card-ts" id="svc-ts"></span>
+    </div>
+    <div id="svc-body"><div class="placeholder">Loading…</div></div>
+  </div>
+
+</main>
+
+<footer>
+  Data refreshed hourly &nbsp;·&nbsp;
+  <a href="https://grin.mw/" target="_blank" rel="noopener">grin.mw</a>
+  <a href="https://forum.grin.mw/" target="_blank" rel="noopener">Forum</a>
+  <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>
+</footer>
+
+<script>
+const REFRESH_MS = 60 * 60 * 1000; // match hourly cron
+
+// ── Theme ──────────────────────────────────────────────────────────────────
+(function () {
+  const saved = localStorage.getItem('grin-theme') || 'matrix';
+  if (saved !== 'dark') document.documentElement.setAttribute('data-theme', saved);
+  document.querySelectorAll('.tm-item').forEach(btn => {
+    if (btn.dataset.theme === saved || (saved === 'dark' && btn.dataset.theme === 'dark'))
+      btn.classList.add('active');
+  });
+})();
+
+document.getElementById('mode-toggle').addEventListener('click', () => {
+  const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+  const next = cur === 'light' ? 'dark' : 'light';
+  applyTheme(next);
+});
+
+document.getElementById('theme-pill-btn').addEventListener('click', e => {
+  e.stopPropagation();
+  document.getElementById('theme-menu').classList.toggle('open');
+});
+document.addEventListener('click', () => document.getElementById('theme-menu').classList.remove('open'));
+document.querySelectorAll('.tm-item').forEach(btn => {
+  btn.addEventListener('click', () => applyTheme(btn.dataset.theme));
+});
+
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t === 'dark' ? '' : t);
+  if (t === 'dark') document.documentElement.removeAttribute('data-theme');
+  localStorage.setItem('grin-theme', t);
+  document.querySelectorAll('.tm-item').forEach(b => b.classList.toggle('active', b.dataset.theme === t));
+  document.getElementById('mode-toggle').textContent = t === 'light' ? '🌙' : '☀️';
+  document.getElementById('theme-menu').classList.remove('open');
+}
+
+// ── Data fetch ─────────────────────────────────────────────────────────────
+async function fetchJSON(url) {
+  const r = await fetch(url + '?t=' + Date.now());
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+// ── Expiry helpers ─────────────────────────────────────────────────────────
+function expiryClass(days) {
+  if (days === null || days === undefined) return 'exp-unknown';
+  if (days <= 30)  return 'exp-danger';
+  if (days <= 90)  return 'exp-warn';
+  return 'exp-ok';
+}
+
+function expiryLabel(str, days) {
+  if (!str) return '<span class="exp-unknown">exp: —</span>';
+  const cls = expiryClass(days);
+  const countdown = days !== null ? ` (${days}d)` : '';
+  return `<span class="${cls}">exp: ${str}${countdown}</span>`;
+}
+
+// ── DNS seed rendering ─────────────────────────────────────────────────────
+function renderDnsSeeds(data) {
+  const warnings = [];
+
+  for (const net of ['mainnet', 'testnet']) {
+    const el = document.getElementById('dns-' + net);
+    if (!el || !data[net]) continue;
+
+    el.innerHTML = data[net].map(host => {
+      // Collect expiry warnings
+      if (host.expiry_days !== null && host.expiry_days !== undefined && host.expiry_days <= 30) {
+        warnings.push(`<strong>${host.host}</strong> expires in ${host.expiry_days} day${host.expiry_days === 1 ? '' : 's'} (${host.expiry_str || '?'})`);
+      }
+
+      const expiryHtml = expiryLabel(host.expiry_str, host.expiry_days);
+
+      const ipRows = host.ips && host.ips.length
+        ? host.ips.map(ip => {
+            const icon    = ip.ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
+            const uptime  = (ip.ok && ip.uptime_days !== null)
+              ? `<span class="uptime-pill">${ip.uptime_days}d</span>`
+              : '';
+            return `<div class="dns-seed-ip-row">${icon} ${ip.ip}${uptime}</div>`;
+          }).join('')
+        : '<div class="dns-no-resolve">DNS resolution failed</div>';
+
+      return `<div class="dns-seed-host">
+  <div class="dns-seed-hostname">${host.host}</div>
+  <div class="dns-seed-expiry">${expiryHtml}</div>
+  ${ipRows}
+</div>`;
+    }).join('');
+  }
+
+  // Warning banner
+  const banner = document.getElementById('dns-warning');
+  if (warnings.length) {
+    banner.innerHTML = '⚠ Domain expiry warning — ' + warnings.join(' &nbsp;·&nbsp; ');
+    banner.classList.add('visible');
+  } else {
+    banner.classList.remove('visible');
+  }
+}
+
+// ── Service rendering ──────────────────────────────────────────────────────
+function renderServices(services) {
+  const el = document.getElementById('svc-body');
+  if (!services || !services.length) {
+    el.innerHTML = '<div class="placeholder">No service data yet</div>';
+    return;
+  }
+
+  // Group by category preserving order
+  const cats = [];
+  const catMap = {};
+  for (const s of services) {
+    if (!catMap[s.category]) {
+      catMap[s.category] = [];
+      cats.push(s.category);
+    }
+    catMap[s.category].push(s);
+  }
+
+  let html = '';
+  for (const cat of cats) {
+    html += `<div class="svc-category-header">${cat}</div>`;
+    for (const s of catMap[cat]) {
+      const icon   = s.ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
+      const ms     = s.ok && s.response_ms != null ? `<span class="svc-ms">${s.response_ms}ms</span>` : '<span class="svc-ms svc-down">—</span>';
+      const uptime = s.ok && s.uptime_days != null ? `<span class="svc-uptime">${s.uptime_days}d</span>` : '';
+      const since  = s.since ? `<span class="svc-since">Since ${s.since}</span>` : '';
+      const host   = (() => { try { return new URL(s.url).hostname; } catch(_) { return s.url; } })();
+
+      let extra = '';
+      if (s.type === 'github' || s.type === 'gitea') {
+        if (s.ok && s.git_tag) {
+          const prefix = s.git_kind === 'release' ? 'v' : '#';
+          const tag    = esc(s.git_tag.replace(/^v/, ''));
+          const date   = s.git_date ? ' · ' + esc(s.git_date) : '';
+          extra = `<span class="svc-git">${prefix}${tag}${date}</span>`;
+        }
+      } else if (s.type === 'stock') {
+        if (s.ok) {
+          extra = s.in_stock
+            ? '<span class="svc-stock-ok">In Stock</span>'
+            : '<span class="svc-stock-out">Sold Out</span>';
+        }
+      }
+
+      html += `<div class="svc-row">
+  <span class="svc-status">${icon}</span>
+  <span class="svc-name">${s.name}</span>
+  <a class="svc-url" href="${s.url}" target="_blank" rel="noopener" title="${s.url}">${host}</a>
+  <span class="svc-meta">${ms}${uptime}${extra || since}</span>
+</div>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+// ── Summary bar ────────────────────────────────────────────────────────────
+function updateSummary(data) {
+  // Seeds online: count IPs that are ok
+  let seedsOk = 0, seedsTotal = 0;
+  let domainsOk = 0, domainsTotal = 0;
+  for (const net of ['mainnet', 'testnet']) {
+    for (const host of (data.dns_seeds[net] || [])) {
+      domainsTotal++;
+      const allOk = host.ips.length > 0 && host.ips.every(ip => ip.ok);
+      if (allOk) domainsOk++;
+      for (const ip of host.ips) {
+        seedsTotal++;
+        if (ip.ok) seedsOk++;
+      }
+    }
+  }
+  const svcsOk    = (data.services || []).filter(s => s.ok).length;
+  const svcsTotal = (data.services || []).length;
+
+  document.getElementById('sum-seeds').textContent    = `${seedsOk}/${seedsTotal}`;
+  document.getElementById('sum-domains').textContent  = `${domainsOk}/${domainsTotal}`;
+  document.getElementById('sum-services').textContent = `${svcsOk}/${svcsTotal}`;
+
+  const setColor = (id, ok, total) => {
+    const el = document.getElementById(id);
+    el.className = 'eco-sum-value ' + (ok === total ? 'green' : ok < total / 2 ? 'orange' : '');
+  };
+  setColor('sum-seeds',    seedsOk,  seedsTotal);
+  setColor('sum-domains',  domainsOk, domainsTotal);
+  setColor('sum-services', svcsOk,   svcsTotal);
+
+  if (data.updated) {
+    document.getElementById('sum-updated').textContent =
+      new Date(data.updated * 1000).toLocaleTimeString();
+  }
+}
+
+// ── Load and render ────────────────────────────────────────────────────────
+async function load() {
+  try {
+    const data = await fetchJSON('data/ecosystem.json');
+
+    renderDnsSeeds(data.dns_seeds || {mainnet: [], testnet: []});
+    renderServices(data.services || []);
+    updateSummary(data);
+
+    const ts = data.updated ? new Date(data.updated * 1000).toLocaleTimeString() : '';
+    document.getElementById('dns-ts').textContent = ts ? 'Updated ' + ts : '';
+    document.getElementById('svc-ts').textContent = ts ? 'Updated ' + ts : '';
+  } catch (e) {
+    for (const id of ['dns-mainnet', 'dns-testnet', 'svc-body']) {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = '<div class="placeholder">No data yet — run the ecosystem checker to generate ecosystem.json</div>';
+    }
+  } finally {
+    document.getElementById('loading').style.display = 'none';
+  }
+}
+
+load();
+setInterval(load, REFRESH_MS);
+</script>
+</body>
+</html>

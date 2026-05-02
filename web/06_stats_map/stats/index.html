@@ -642,6 +642,7 @@
   <nav>
     <a href="stats.html" class="nav-btn"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><polyline points="1,11 5,6 8,8 13,2"/><line x1="1" y1="13" x2="13" y2="13"/></svg>Network Stats</a>
     <a href="index.html" class="nav-btn active"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="7" cy="7" r="5.5"/><path d="M7 1.5c-2 2-2.5 3.5-2.5 5.5s.5 3.5 2.5 5.5M7 1.5c2 2 2.5 3.5 2.5 5.5S9 11 7 12.5"/><line x1="1.5" y1="7" x2="12.5" y2="7"/></svg>Peer Map</a>
+    <a href="ecosystem.html" class="nav-btn"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="7" cy="7" r="5.5"/><circle cx="7" cy="7" r="2"/><line x1="7" y1="1.5" x2="7" y2="5"/><line x1="7" y1="9" x2="7" y2="12.5"/><line x1="1.5" y1="7" x2="5" y2="7"/><line x1="9" y1="7" x2="12.5" y2="7"/></svg>Ecosystem</a>
   </nav>
   <div class="header-right">
     <div class="stat-pills">
@@ -703,6 +704,11 @@
         <option value="mainnet">Mainnet</option>
         <option value="testnet">Testnet</option>
       </select>
+      <select id="f-ipver">
+        <option value="">All IP Versions</option>
+        <option value="4">IPv4</option>
+        <option value="6">IPv6</option>
+      </select>
     </div>
     <div id="lp-count">Loading…</div>
     <div id="peer-list"></div>
@@ -723,6 +729,8 @@
     <div class="stat-row"><span class="lbl">Countries</span><span class="val" id="p-countries">—</span></div>
     <div class="stat-row"><span class="lbl">Outbound</span><span class="val" id="p-out">—</span></div>
     <div class="stat-row"><span class="lbl">Inbound</span><span class="val" id="p-in">—</span></div>
+    <div class="stat-row"><span class="lbl">IPv4</span><span class="val" id="p-ipv4">—</span></div>
+    <div class="stat-row"><span class="lbl">IPv6</span><span class="val" id="p-ipv6">—</span></div>
     <div class="stat-row"><span class="lbl">Updated</span><span class="val" id="p-updated">—</span></div>
 
     <div class="legend-title">Colour Key</div>
@@ -891,6 +899,8 @@ const timeAgo = ts => {
   return Math.floor(s / 86400) + "d ago";
 };
 
+const isIPv6 = ip => Boolean(ip && ip.includes(":"));
+
 function maskIp(ip) {
   const v4 = ip.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/);
   if (v4) return v4[1] + ".x";
@@ -1019,6 +1029,8 @@ function updatePanel(peers, updatedTs) {
   $("p-countries").textContent = fmt(countries.size);
   $("p-out").textContent       = fmt(outbound);
   $("p-in").textContent        = fmt(peers.length - outbound);
+  $("p-ipv4").textContent      = fmt(peers.filter(p => !isIPv6(p.ip)).length);
+  $("p-ipv6").textContent      = fmt(peers.filter(p =>  isIPv6(p.ip)).length);
   $("p-updated").textContent   = updatedTs ? timeAgo(updatedTs) : "—";
   $("h-peers").textContent     = `${fmt(peers.length)} active peers`;
   $("h-countries").textContent = `${fmt(countries.size)} countries`;
@@ -1093,13 +1105,16 @@ function renderPeerList() {
   const version   = $("f-version").value;
   const direction = $("f-direction").value;
   const network   = $("f-network").value;
+  const ipver     = $("f-ipver").value;
 
   let list = ALL_PEERS;
-  if (ipQuery)   list = list.filter(p => p.ip && p.ip.toLowerCase().includes(ipQuery));
-  if (country)   list = list.filter(p => p.country === country);
-  if (version)   list = list.filter(p => p.user_agent === version);
-  if (direction) list = list.filter(p => p.direction === direction);
-  if (network)   list = list.filter(p => (p.network || "mainnet") === network);
+  if (ipQuery)      list = list.filter(p => p.ip && p.ip.toLowerCase().includes(ipQuery));
+  if (country)      list = list.filter(p => p.country === country);
+  if (version)      list = list.filter(p => p.user_agent === version);
+  if (direction)    list = list.filter(p => p.direction === direction);
+  if (network)      list = list.filter(p => (p.network || "mainnet") === network);
+  if (ipver === "4") list = list.filter(p => !isIPv6(p.ip));
+  if (ipver === "6") list = list.filter(p =>  isIPv6(p.ip));
   list = [...list].sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
   window._filteredPeers = list;
 
@@ -1137,6 +1152,7 @@ $("f-country").addEventListener("change",    renderPeerList);
 $("f-version").addEventListener("change",    renderPeerList);
 $("f-direction").addEventListener("change",  renderPeerList);
 $("f-network").addEventListener("change",    renderPeerList);
+$("f-ipver").addEventListener("change",      renderPeerList);
 
 // ── Left panel toggle ─────────────────────────────────────────────────────────
 function toggleLeftPanel(show) {

@@ -51,6 +51,7 @@ DB_PATH="$DATA_DIR/stats.db"
 PRICE_COLLECTOR_BIN="/usr/local/bin/grin-price-collector"
 PRICE_DIR="/opt/grin/grin-price"
 PRICE_DB_PATH="$PRICE_DIR/grin-price.db"
+ECOSYSTEM_CHECKER_BIN="/usr/local/bin/grin-ecosystem-checker"
 EXPLORER_DIR="/opt/grin/grin-explorer"
 EXPLORER_BIN="$EXPLORER_DIR/target/release/grin-explorer"
 EXPLORER_TOML="$EXPLORER_DIR/Explorer.toml"
@@ -62,6 +63,8 @@ NGINX_EXPLORER_CONF="/etc/nginx/sites-available/grin-explorer"
 # ─── Cron markers ─────────────────────────────────────────────────────────────
 CRON_MARKER_STATS="# grin-node-toolkit: grin_stats_update"
 CRON_MARKER_PRICE="# grin-node-toolkit: grin_price_update"
+CRON_MARKER_ECOSYSTEM="# grin-node-toolkit: grin_ecosystem_update"
+CRON_MARKER_WHOIS="# grin-node-toolkit: grin_whois_update"
 CRON_MARKER_EXPLORER="# grin-node-toolkit: grin_explorer"
 
 # ─── Grin node ports ─────────────────────────────────────────────────────────
@@ -246,7 +249,7 @@ snippet = (
     "gtag('js',new Date());"
     "gtag('config','" + ga_id + "');</script>"
 )
-for fname in ['index.html', 'stats.html']:
+for fname in ['index.html', 'stats.html', 'ecosystem.html']:
     path = www + '/' + fname
     try:
         with open(path) as f:
@@ -261,7 +264,7 @@ for fname in ['index.html', 'stats.html']:
     except FileNotFoundError:
         pass
 PYEOF
-    info "Google Analytics (${ga_id}) applied to index.html and stats.html."
+    info "Google Analytics (${ga_id}) applied to index.html, stats.html and ecosystem.html."
 }
 
 # ── A-1: Install ──────────────────────────────────────────────────────────────
@@ -279,16 +282,25 @@ install_stats() {
 
     # Deploy collector script
     info "Installing collector script..."
-    cp "$SCRIPT_DIR/06_collector.py" "$COLLECTOR_BIN"
+    cp "$SCRIPT_DIR/lib/06_collector.py" "$COLLECTOR_BIN"
     chmod +x "$COLLECTOR_BIN"
+
+    # Deploy ecosystem checker
+    info "Installing ecosystem checker..."
+    cp "$SCRIPT_DIR/lib/06_ecosystem_checker.py" "$ECOSYSTEM_CHECKER_BIN"
+    chmod +x "$ECOSYSTEM_CHECKER_BIN"
+    pip3 install python-whois --quiet 2>/dev/null \
+        || warn "python-whois install failed — domain expiry will show '—' (run: pip3 install python-whois)"
+    python3 "$ECOSYSTEM_CHECKER_BIN" --init-db
 
     # Deploy HTML pages
     if [[ ! -d "$WEB_SRC" ]]; then
         die "Web source not found: $WEB_SRC. Ensure the toolkit is complete."
     fi
     info "Deploying web pages..."
-    cp "$WEB_SRC/index.html"  "$WWW_DIR/index.html"
-    cp "$WEB_SRC/stats.html"  "$WWW_DIR/stats.html"
+    cp "$WEB_SRC/index.html"     "$WWW_DIR/index.html"
+    cp "$WEB_SRC/stats.html"     "$WWW_DIR/stats.html"
+    cp "$WEB_SRC/ecosystem.html" "$WWW_DIR/ecosystem.html"
 
     # Optional Google Analytics
     echo ""
@@ -400,10 +412,10 @@ EOF
 
     # ── Install price collector ───────────────────────────────────────────────
     info "Installing price collector..."
-    if [[ ! -f "$SCRIPT_DIR/06_price_collector.py" ]]; then
-        warn "06_price_collector.py not found in $SCRIPT_DIR — price charts will be unavailable."
+    if [[ ! -f "$SCRIPT_DIR/lib/06_price_collector.py" ]]; then
+        warn "06_price_collector.py not found in $SCRIPT_DIR/lib — price charts will be unavailable."
     else
-        cp "$SCRIPT_DIR/06_price_collector.py" "$PRICE_COLLECTOR_BIN"
+        cp "$SCRIPT_DIR/lib/06_price_collector.py" "$PRICE_COLLECTOR_BIN"
         chmod +x "$PRICE_COLLECTOR_BIN"
 
         mkdir -p "$PRICE_DIR"
@@ -568,18 +580,32 @@ start_updates() {
 
     local cron_line="*/5 * * * * env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $COLLECTOR_BIN --update >> $LOG_DIR/grin_stats_cron.log 2>&1 && chown -R www-data:www-data $WWW_DIR/data >> /dev/null 2>&1 $CRON_MARKER_STATS"
 
-    # Remove any stale price cron before re-adding
-    existing=$(echo "$existing" | grep -v "grin_price_update" || true)
+    # Remove any stale price / ecosystem crons before re-adding
+    existing=$(echo "$existing" | grep -v "grin_price_update"     || true)
+    existing=$(echo "$existing" | grep -v "grin_ecosystem_update" || true)
+    existing=$(echo "$existing" | grep -v "grin_whois_update"     || true)
+
     local price_cron=""
     if [[ -f "$PRICE_COLLECTOR_BIN" ]]; then
         price_cron="*/5 * * * * python3 $PRICE_COLLECTOR_BIN --update >> $LOG_DIR/price_cron.log 2>&1 $CRON_MARKER_PRICE"
     fi
 
-    (echo "$existing"; echo "$cron_line"; [[ -n "$price_cron" ]] && echo "$price_cron") \
+    local eco_cron="" whois_cron=""
+    if [[ -f "$ECOSYSTEM_CHECKER_BIN" ]]; then
+        eco_cron="0 * * * * env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $ECOSYSTEM_CHECKER_BIN --update >> $LOG_DIR/grin_ecosystem.log 2>&1 $CRON_MARKER_ECOSYSTEM"
+        whois_cron="0 3 * * * env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $ECOSYSTEM_CHECKER_BIN --whois >> $LOG_DIR/grin_ecosystem.log 2>&1 $CRON_MARKER_WHOIS"
+    fi
+
+    (echo "$existing"
+     echo "$cron_line"
+     [[ -n "$price_cron"  ]] && echo "$price_cron"
+     [[ -n "$eco_cron"    ]] && echo "$eco_cron"
+     [[ -n "$whois_cron"  ]] && echo "$whois_cron") \
         | grep -v '^$' | crontab -
-    success "Live updates enabled — stats + price collectors run every 5 minutes."
+    success "Live updates enabled — stats + price every 5 min · ecosystem checks every hour."
     [[ -z "$price_cron" ]] && warn "Price collector not installed — price cron skipped."
-    log "Stats cron added. Price cron: ${price_cron:-(skipped)}"
+    [[ -z "$eco_cron"   ]] && warn "Ecosystem checker not installed — ecosystem cron skipped."
+    log "Stats cron added. Price cron: ${price_cron:-(skipped)}. Ecosystem cron: ${eco_cron:-(skipped)}"
     pause
 }
 
@@ -670,7 +696,8 @@ server {
     #   /api/active_peers → mainnet+testnet peer count history        (06_collector.py)
     #   /api/versions     → node version distribution                 (06_collector.py)
     #   /api/price        → GRIN/USDT price, OHLCV history            (06_price_collector.py)
-    #   /api/issuance    → annual supply inflation: grin/usd_m2/gold  (06_collector.py)
+    #   /api/issuance     → annual supply inflation: grin/usd_m2/gold  (06_collector.py)
+    #   /api/ecosystem    → DNS seeds + ecosystem services status     (06_ecosystem_checker.py)
     #   /api/peers        → disabled (privacy mode — peer data is internal only)
     #
     location = /api/summary      { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/summary.json;      }
@@ -681,7 +708,8 @@ server {
     location = /api/active_peers { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/active_peers.json; }
     location = /api/versions     { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/versions.json;     }
     location = /api/price        { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/price.json;        }
-    location = /api/issuance    { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/issuance.json;    }
+    location = /api/issuance     { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/issuance.json;     }
+    location = /api/ecosystem    { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/ecosystem.json;    }
     location = /api/peers        { return 404; }
 
     # Block everything else under /api/ — no directory listing, no other files
@@ -879,9 +907,10 @@ configure_analytics() {
 
     # Re-deploy HTML from source so injection starts from a clean base
     if [[ -d "$WEB_SRC" ]]; then
-        cp "$WEB_SRC/index.html" "$WWW_DIR/index.html"
-        cp "$WEB_SRC/stats.html" "$WWW_DIR/stats.html"
-        chown www-data:www-data "$WWW_DIR/index.html" "$WWW_DIR/stats.html"
+        cp "$WEB_SRC/index.html"     "$WWW_DIR/index.html"
+        cp "$WEB_SRC/stats.html"     "$WWW_DIR/stats.html"
+        cp "$WEB_SRC/ecosystem.html" "$WWW_DIR/ecosystem.html"
+        chown www-data:www-data "$WWW_DIR/index.html" "$WWW_DIR/stats.html" "$WWW_DIR/ecosystem.html"
     fi
 
     if [[ -n "$ga_input" ]]; then

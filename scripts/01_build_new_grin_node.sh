@@ -1406,6 +1406,15 @@ patch_config() {
         warn "enable_stratum_server not found in config — appended."
     fi
 
+    # p2p host — use "::" (IPv6 any-address) instead of "0.0.0.0" so the node
+    # accepts both IPv4 and IPv6 inbound connections on dual-stack systems.
+    # Only replaces the default 0.0.0.0; custom addresses are left untouched.
+    if grep -qE '^#?[[:space:]]*host[[:space:]]*=[[:space:]]*"0\.0\.0\.0"' "$config"; then
+        sed -i -E 's/^#?[[:space:]]*host[[:space:]]*=[[:space:]]*"0\.0\.0\.0"/host = "::"/' "$config"
+    else
+        warn "host = \"0.0.0.0\" not found in p2p_config — skipping IPv6 patch."
+    fi
+
     success "Config patched:"
     info "  archive_mode                      = $archive_val"
     info "  db_root                           = \"$db_root\""
@@ -1417,7 +1426,8 @@ patch_config() {
     info "  peer_min_preferred_outbound_count = 199"
     info "  log_max_files                     = 3"
     info "  enable_stratum_server             = true"
-    log "[STEP 8] archive_mode=$archive_val db_root=$db_root api_secret=$GRIN_DIR/.api_secret peer_limits=999in/199out/199min log_max_files=3 stratum=true"
+    info "  host (p2p)                        = \"::\"  (IPv4 + IPv6 dual-stack)"
+    log "[STEP 8] archive_mode=$archive_val db_root=$db_root api_secret=$GRIN_DIR/.api_secret peer_limits=999in/199out/199min log_max_files=3 stratum=true p2p_host=::"
 }
 
 # =============================================================================

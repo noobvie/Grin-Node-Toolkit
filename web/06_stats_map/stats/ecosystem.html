@@ -578,7 +578,7 @@ function expiryLabel(regStr, expStr, days) {
   const cls = expiryClass(days);
   const parts = [];
   if (regStr) parts.push(`Domain registered ${regStr}`);
-  if (expStr)  parts.push(`domain expiration ${expStr}`);
+  if (expStr)  parts.push(`Domain expiration ${expStr}`);
   if (days !== null && days !== undefined) parts.push(`Renew domain in ${days}d`);
   if (!parts.length) return '<span class="exp-unknown">Domain expiration: —</span>';
   return `<span class="${cls}">${parts.join(' · ')}</span>`;
@@ -653,7 +653,8 @@ function renderServices(services) {
     for (const s of catMap[cat]) {
       const icon   = s.ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
       const ms     = s.ok && s.response_ms != null ? `<span class="svc-ms">${s.response_ms}ms</span>` : '<span class="svc-ms svc-down">—</span>';
-      const since  = s.since ? `<span class="svc-since"> — Online since ${s.since}</span>` : '';
+      const sinceText = s.since || s.registered_str;
+      const since  = sinceText ? `<span class="svc-since"> — Online since ${sinceText}</span>` : '';
       const host   = (() => { try { return new URL(s.url).hostname; } catch(_) { return s.url; } })();
 
       let extra = '';

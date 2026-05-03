@@ -240,6 +240,11 @@ def _check_seed_host(host, port, now, conn):
     ).fetchone()
     expiry_ts     = whois_row[0] if whois_row else None
     registered_ts = whois_row[1] if whois_row else None
+    # Apply hardcoded fallback for domains whose WHOIS servers block automated queries
+    if expiry_ts is None:
+        fb = WHOIS_FALLBACK.get(_registrable_domain(host), {})
+        expiry_ts     = expiry_ts     or fb.get("expiry_ts")
+        registered_ts = registered_ts or fb.get("registered_ts")
     expiry_str, expiry_days, registered_str = _format_expiry(expiry_ts, registered_ts, now)
 
     return {
@@ -610,6 +615,17 @@ def _check_services(services, now, conn):
                 "uptime_days": uptime_days,
             }
             result.update(extra)  # git_tag, git_date, git_kind, in_stock
+            # Use domain registration date as fallback "since" for services without one
+            if not result.get("since"):
+                try:
+                    hostname = urllib.parse.urlparse(svc["url"]).hostname or ""
+                    fb = WHOIS_FALLBACK.get(_registrable_domain(hostname), {})
+                    if fb.get("registered_ts"):
+                        result["registered_str"] = datetime.fromtimestamp(
+                            fb["registered_ts"], tz=timezone.utc
+                        ).strftime("%b %Y")
+                except Exception:
+                    pass
             results.append(result)
 
     # Preserve SERVICES ordering

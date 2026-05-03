@@ -520,6 +520,12 @@
 <script>
 const REFRESH_MS = 60 * 60 * 1000; // match hourly cron
 
+function esc(s) {
+  return String(s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 // ── Theme ──────────────────────────────────────────────────────────────────
 (function () {
   const saved = localStorage.getItem('grin-theme') || 'matrix';
@@ -667,7 +673,7 @@ function renderServices(services) {
 
       html += `<div class="svc-row">
   <span class="svc-status">${icon}</span>
-  <span class="svc-name">${s.name}</span>
+  <span class="svc-name">${esc(s.name)}</span>
   <a class="svc-url" href="${s.url}" target="_blank" rel="noopener" title="${s.url}">${host}</a>
   <span class="svc-meta">${ms}${uptime}${extra || since}</span>
 </div>`;

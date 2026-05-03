@@ -694,7 +694,7 @@ def _is_valid_grin_agent(ua):
     if not ua:
         return False
     ua_lower = ua.lower()
-    return "mw/grin" in ua_lower or "grin++" in ua_lower or "mw/grim" in ua_lower
+    return "mw/grin" in ua_lower or "grin++" in ua_lower or "mw/grim" in ua_lower or "g++ wiesche" in ua_lower
 
 
 def _extract_addr(peer, default_port):
@@ -802,7 +802,7 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
                     continue
                 if not _is_public_ip(ip):
                     continue
-                # Only accept known Grin node implementations (MW/Grin or Grin++)
+                # Only accept known Grin node implementations (MW/Grin, Grin++, MW/Grim, G++ Wiesche)
                 ua = p.get("user_agent", "")
                 if not _is_valid_grin_agent(ua):
                     skipped_agent += 1
@@ -1010,7 +1010,8 @@ def _update_peers():
     purged = conn.execute(
         "DELETE FROM known_peers "
         "WHERE user_agent NOT LIKE '%MW/Grin%' AND user_agent NOT LIKE '%Grin++%' "
-        "AND user_agent NOT LIKE '%MW/Grim%' AND user_agent != 'Unknown'"
+        "AND user_agent NOT LIKE '%MW/Grim%' AND user_agent NOT LIKE '%G++ Wiesche%' "
+        "AND user_agent != 'Unknown'"
     ).rowcount
     if purged:
         print(f"[INFO] Purged {purged} peers with unknown agent names.")
@@ -1035,7 +1036,8 @@ def _update_peers():
         FROM known_peers
         WHERE last_seen >= ?
           AND (user_agent LIKE '%MW/Grin%' OR user_agent LIKE '%Grin++%'
-               OR user_agent LIKE '%MW/Grim%' OR user_agent = 'Unknown')
+               OR user_agent LIKE '%MW/Grim%' OR user_agent LIKE '%G++ Wiesche%'
+               OR user_agent = 'Unknown')
         ORDER BY last_seen DESC
     """, (history_cutoff,)).fetchall()
     # ── 9. Record peer count snapshot for history chart ──────────────────────

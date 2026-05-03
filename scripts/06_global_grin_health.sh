@@ -545,10 +545,18 @@ import_data() {
         # ── Ecosystem checker ────────────────────────────────────────────────
         l)
             [[ ! -f "$ECOSYSTEM_CHECKER_BIN" ]] && { warn "Ecosystem checker not installed."; sleep 1; return; }
+            if ! python3 -c "import whois" 2>/dev/null; then
+                info "Installing python-whois..."
+                pip3 install python-whois --quiet || warn "python-whois install failed — domain expiry will show '—'"
+            fi
             bin="$ECOSYSTEM_CHECKER_BIN"; cmd="--update"; desc="Ecosystem: Run full check now (HTTP + TCP + WHOIS)"
             ;;
         m)
             [[ ! -f "$ECOSYSTEM_CHECKER_BIN" ]] && { warn "Ecosystem checker not installed."; sleep 1; return; }
+            if ! python3 -c "import whois" 2>/dev/null; then
+                info "Installing python-whois..."
+                pip3 install python-whois --quiet || { warn "pip3 install python-whois failed — check your pip/network."; sleep 2; return; }
+            fi
             bin="$ECOSYSTEM_CHECKER_BIN"; cmd="--whois";  desc="Ecosystem: Force WHOIS refresh for all DNS seeds"
             ;;
         *) warn "Invalid choice."; sleep 1; return ;;

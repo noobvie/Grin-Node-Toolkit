@@ -360,6 +360,7 @@ install_stats() {
     # Deploy ecosystem checker
     info "Installing ecosystem checker..."
     cp "$SCRIPT_DIR/lib/06_ecosystem_checker.py" "$ECOSYSTEM_CHECKER_BIN"
+    cp "$SCRIPT_DIR/lib/06_domains_exceptions.json" "$(dirname "$ECOSYSTEM_CHECKER_BIN")/06_domains_exceptions.json"
     chmod +x "$ECOSYSTEM_CHECKER_BIN"
     ensure_python_whois || true
     python3 "$ECOSYSTEM_CHECKER_BIN" --init-db

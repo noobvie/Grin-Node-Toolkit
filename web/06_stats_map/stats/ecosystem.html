@@ -284,6 +284,11 @@
   }
   .dns-seed-host { margin-bottom: 16px; }
   .dns-seed-host:last-child { margin-bottom: 0; }
+  .dns-seed-host-expiring {
+    border-left: 3px solid var(--red);
+    padding-left: 8px;
+    margin-left: -11px;
+  }
   .dns-seed-hostname {
     font-size: 12px;
     font-weight: 600;
@@ -605,9 +610,10 @@ function renderDnsSeeds(data) {
             const icon    = ip.ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
             return `<div class="dns-seed-ip-row">${icon} ${ip.ip}</div>`;
           }).join('')
-        : '<div class="dns-no-resolve">DNS resolution failed</div>';
+        : `<div class="dns-no-resolve">${esc(host.note) || 'DNS resolution failed'}</div>`;
 
-      return `<div class="dns-seed-host">
+      const expiring = host.expiry_days !== null && host.expiry_days !== undefined && host.expiry_days <= 30;
+      return `<div class="dns-seed-host${expiring ? ' dns-seed-host-expiring' : ''}">
   <div class="dns-seed-hostname">${host.host}</div>
   <div class="dns-seed-expiry">${expiryHtml}</div>
   ${ipRows}

@@ -44,6 +44,7 @@ DNS_SEEDS = {
         "mainnet-seed.grinnode.live",
         "grincoin.org",
         "main.gri.mw",
+        "mainnet.grin.mw",
         "mainnet.grinffindor.org",
         "main-seed.grin.money",
         "mainnet.fountainoffairfortune.it",
@@ -51,6 +52,7 @@ DNS_SEEDS = {
     "testnet": [
         "testnet.grincoin.org",
         "test.gri.mw",
+        "testnet.grin.mw",
         "testnet.grinffindor.org",
         "test-seed.grin.money",
         "testnet.fountainoffairfortune.it",
@@ -58,6 +60,12 @@ DNS_SEEDS = {
 }
 
 SEED_PORTS = {"mainnet": 3414, "testnet": 13414}
+
+# Notes shown in place of IP rows when a seed host has no DNS records yet
+DNS_SEED_NOTES = {
+    "mainnet.grin.mw": "Not available yet — DNS record pending",
+    "testnet.grin.mw": "Not available yet — DNS record pending",
+}
 
 # ── WHOIS fallback for domains whose WHOIS servers block automated queries ─────
 # Dates verified manually via https://www.whois.com / https://www.eurodns.com
@@ -194,6 +202,18 @@ def _tcp_ok(ip, port, timeout=5):
         return False
 
 def _check_seed_host(host, port, now, conn):
+    # WHOIS lookup first — needed even when DNS resolution fails (e.g. pending seeds)
+    whois_row = conn.execute(
+        "SELECT expiry_ts, registered_ts FROM dns_seed_whois WHERE host=?", (host,)
+    ).fetchone()
+    expiry_ts     = whois_row[0] if whois_row else None
+    registered_ts = whois_row[1] if whois_row else None
+    if expiry_ts is None:
+        fb = WHOIS_FALLBACK.get(_registrable_domain(host), {})
+        expiry_ts     = expiry_ts     or fb.get("expiry_ts")
+        registered_ts = registered_ts or fb.get("registered_ts")
+    expiry_str, expiry_days, registered_str = _format_expiry(expiry_ts, registered_ts, now)
+
     try:
         addrs = socket.getaddrinfo(host, port, socket.AF_INET)
         ips = sorted({a[4][0] for a in addrs})
@@ -201,8 +221,16 @@ def _check_seed_host(host, port, now, conn):
         ips = []
 
     if not ips:
-        return {"host": host, "port": port, "expiry_ts": None,
-                "expiry_str": None, "expiry_days": None, "registered_str": None, "ips": []}
+        return {
+            "host":           host,
+            "port":           port,
+            "expiry_ts":      expiry_ts,
+            "expiry_str":     expiry_str,
+            "expiry_days":    expiry_days,
+            "registered_str": registered_str,
+            "note":           DNS_SEED_NOTES.get(host),
+            "ips":            [],
+        }
 
     with ThreadPoolExecutor(max_workers=8) as ex:
         futures = {ex.submit(_tcp_ok, ip, port): ip for ip in ips}
@@ -235,18 +263,6 @@ def _check_seed_host(host, port, now, conn):
 
         ip_entries.append({"ip": ip, "ok": ok, "uptime_days": uptime_days})
 
-    whois_row = conn.execute(
-        "SELECT expiry_ts, registered_ts FROM dns_seed_whois WHERE host=?", (host,)
-    ).fetchone()
-    expiry_ts     = whois_row[0] if whois_row else None
-    registered_ts = whois_row[1] if whois_row else None
-    # Apply hardcoded fallback for domains whose WHOIS servers block automated queries
-    if expiry_ts is None:
-        fb = WHOIS_FALLBACK.get(_registrable_domain(host), {})
-        expiry_ts     = expiry_ts     or fb.get("expiry_ts")
-        registered_ts = registered_ts or fb.get("registered_ts")
-    expiry_str, expiry_days, registered_str = _format_expiry(expiry_ts, registered_ts, now)
-
     return {
         "host":           host,
         "port":           port,
@@ -254,6 +270,7 @@ def _check_seed_host(host, port, now, conn):
         "expiry_str":     expiry_str,
         "expiry_days":    expiry_days,
         "registered_str": registered_str,
+        "note":           None,
         "ips":            ip_entries,
     }
 

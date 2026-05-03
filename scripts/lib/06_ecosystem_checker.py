@@ -59,6 +59,22 @@ DNS_SEEDS = {
 
 SEED_PORTS = {"mainnet": 3414, "testnet": 13414}
 
+# ── WHOIS fallback for domains whose WHOIS servers block automated queries ─────
+# Dates verified manually via https://www.whois.com / https://www.eurodns.com
+# Update when renewed.
+
+def _date_to_ts(s):
+    """Convert YYYY-MM-DD string to UTC midnight timestamp."""
+    from datetime import datetime as _dt
+    return int(_dt.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
+
+WHOIS_FALLBACK = {
+    "grinnode.live": {"registered_ts": _date_to_ts("2019-11-12"), "expiry_ts": _date_to_ts("2026-11-12")},
+    "grin.mw":       {"registered_ts": _date_to_ts("2017-11-16"), "expiry_ts": _date_to_ts("2027-11-16")},
+    "grin.money":    {"registered_ts": _date_to_ts("2021-07-09"), "expiry_ts": _date_to_ts("2030-07-09")},
+    "gri.mw":        {"registered_ts": _date_to_ts("2024-11-13"), "expiry_ts": _date_to_ts("2026-11-13")},
+}
+
 # ── Ecosystem services ─────────────────────────────────────────────────────────
 # type: "http" (default) | "github" | "gitea" | "stock"
 # since: "Mon YYYY" string shown in UI, or None to omit
@@ -93,7 +109,7 @@ SERVICES = [
     {"category": "Ecommerce",   "name": "Grinily",           "url": "https://grinily.com",                                 "since": None},
 
     # ── Hardware miners — Shopify .json stock check ────────────────────────────
-    {"category": "Miner",       "name": "iPollo G1 Mini",    "url": "https://ipollo.com/products/ipollo-g1-mini",          "since": None, "type": "stock"},
+    {"category": "Miner",       "name": "iPollo G1 Mini",    "url": "https://ipollo.com/products/ipollo-g1-mini",          "since": None, "type": "stock", "in_stock": True},
     {"category": "Miner",       "name": "iPollo G1",         "url": "https://ipollo.com/products/ipollo-g1",               "since": None, "type": "stock"},
 
     # ── Mining pools ───────────────────────────────────────────────────────────
@@ -149,9 +165,10 @@ def init_schema(conn):
         );
 
         CREATE TABLE IF NOT EXISTS dns_seed_whois (
-            host       TEXT    PRIMARY KEY,
-            expiry_ts  INTEGER,
-            fetched_ts INTEGER NOT NULL
+            host          TEXT    PRIMARY KEY,
+            expiry_ts     INTEGER,
+            registered_ts INTEGER,
+            fetched_ts    INTEGER NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS ecosystem_service_history (
@@ -160,6 +177,11 @@ def init_schema(conn):
             last_seen_ok  INTEGER NOT NULL
         );
     """)
+    # Migrate existing DB: add registered_ts if the column is missing
+    try:
+        conn.execute("ALTER TABLE dns_seed_whois ADD COLUMN registered_ts INTEGER")
+    except Exception:
+        pass  # column already exists
     conn.commit()
 
 # ── DNS seed TCP checks ────────────────────────────────────────────────────────
@@ -180,7 +202,7 @@ def _check_seed_host(host, port, now, conn):
 
     if not ips:
         return {"host": host, "port": port, "expiry_ts": None,
-                "expiry_str": None, "expiry_days": None, "ips": []}
+                "expiry_str": None, "expiry_days": None, "registered_str": None, "ips": []}
 
     with ThreadPoolExecutor(max_workers=8) as ex:
         futures = {ex.submit(_tcp_ok, ip, port): ip for ip in ips}
@@ -214,26 +236,31 @@ def _check_seed_host(host, port, now, conn):
         ip_entries.append({"ip": ip, "ok": ok, "uptime_days": uptime_days})
 
     whois_row = conn.execute(
-        "SELECT expiry_ts FROM dns_seed_whois WHERE host=?", (host,)
+        "SELECT expiry_ts, registered_ts FROM dns_seed_whois WHERE host=?", (host,)
     ).fetchone()
-    expiry_ts   = whois_row[0] if whois_row else None
-    expiry_str, expiry_days = _format_expiry(expiry_ts, now)
+    expiry_ts     = whois_row[0] if whois_row else None
+    registered_ts = whois_row[1] if whois_row else None
+    expiry_str, expiry_days, registered_str = _format_expiry(expiry_ts, registered_ts, now)
 
     return {
-        "host":        host,
-        "port":        port,
-        "expiry_ts":   expiry_ts,
-        "expiry_str":  expiry_str,
-        "expiry_days": expiry_days,
-        "ips":         ip_entries,
+        "host":           host,
+        "port":           port,
+        "expiry_ts":      expiry_ts,
+        "expiry_str":     expiry_str,
+        "expiry_days":    expiry_days,
+        "registered_str": registered_str,
+        "ips":            ip_entries,
     }
 
-def _format_expiry(expiry_ts, now):
-    if expiry_ts is None:
-        return None, None
-    days = (expiry_ts - now) // 86400
-    dt   = datetime.fromtimestamp(expiry_ts, tz=timezone.utc)
-    return dt.strftime("%b %Y"), int(days)
+def _format_expiry(expiry_ts, registered_ts, now):
+    expiry_str = expiry_days = registered_str = None
+    if expiry_ts is not None:
+        days = (expiry_ts - now) // 86400
+        expiry_str  = datetime.fromtimestamp(expiry_ts,     tz=timezone.utc).strftime("%b %Y")
+        expiry_days = int(days)
+    if registered_ts is not None:
+        registered_str = datetime.fromtimestamp(registered_ts, tz=timezone.utc).strftime("%b %Y")
+    return expiry_str, expiry_days, registered_str
 
 # ── WHOIS domain expiry ────────────────────────────────────────────────────────
 
@@ -244,9 +271,49 @@ def _registrable_domain(host):
     return ".".join(parts[-2:]) if len(parts) >= 2 else host
 
 
+def _parse_whois_date(s):
+    """Parse a date string from raw WHOIS output. Returns UTC timestamp or None."""
+    from datetime import datetime as _dt
+    s = s.strip().split("T")[0].split(" ")[0]  # drop time portion
+    for fmt in ("%Y-%m-%d", "%d-%b-%Y", "%Y/%m/%d", "%d.%m.%Y", "%d-%m-%Y"):
+        try:
+            return int(_dt.strptime(s, fmt).replace(tzinfo=timezone.utc).timestamp())
+        except ValueError:
+            pass
+    return None
+
+
+def _fetch_whois_expiry_raw(registrable):
+    """Fallback: run system `whois` binary and parse expiry with a broad regex.
+    Catches TLDs that python-whois has no built-in parser for (.live, .mw, .money…)."""
+    import subprocess
+    import re as _re
+    _EXPIRY_RE = _re.compile(
+        r"(?:registry expiry date|expir(?:y|ation|es?|ed) date"
+        r"|paid-till|renewal(?:\s+date)?|valid(?:\s+until)?)\s*[:\s]\s*(\S+)",
+        _re.IGNORECASE,
+    )
+    try:
+        result = subprocess.run(
+            ["whois", registrable], capture_output=True, text=True, timeout=20
+        )
+        for m in _EXPIRY_RE.finditer(result.stdout):
+            ts = _parse_whois_date(m.group(1))
+            if ts:
+                return ts, None
+        return None, "no expiry pattern matched in raw whois output"
+    except FileNotFoundError:
+        return None, "whois command not found (run: apt install whois)"
+    except subprocess.TimeoutExpired:
+        return None, "raw whois timed out"
+    except Exception as exc:
+        return None, f"raw whois error: {exc}"
+
+
 def _fetch_whois_expiry(registrable):
-    """Return unix timestamp of domain expiry, or None on failure.
-    Always pass the registrable domain (no subdomains) to avoid parse failures."""
+    """Return (unix_ts, reason) for domain expiry.
+    Tries python-whois first; falls back to system whois binary for TLDs
+    that python-whois cannot parse (.live, .mw, .money, etc.)."""
     try:
         import whois  # python-whois
     except ImportError:
@@ -254,12 +321,10 @@ def _fetch_whois_expiry(registrable):
     try:
         w = whois.whois(registrable)
         exp = w.expiration_date
-        if exp is None:
-            return None, "expiration_date is None"
         if isinstance(exp, list):
             exp = exp[0]
         # datetime object
-        if hasattr(exp, "timestamp"):
+        if exp is not None and hasattr(exp, "timestamp"):
             return int(exp.timestamp()), None
         # string date — some TLDs return "2026-01-15 00:00:00" or "2026-01-15"
         if isinstance(exp, str):
@@ -271,9 +336,10 @@ def _fetch_whois_expiry(registrable):
                 except ValueError:
                     pass
             return None, f"unrecognised date format: {exp!r}"
-        return None, f"unexpected expiry type: {type(exp).__name__}"
-    except Exception as exc:
-        return None, str(exc)
+    except Exception:
+        pass  # fall through to raw whois
+    # python-whois failed or returned None — try system whois binary
+    return _fetch_whois_expiry_raw(registrable)
 
 
 def cmd_whois(conn, force=False):
@@ -286,8 +352,8 @@ def cmd_whois(conn, force=False):
     unique_hosts = list(dict.fromkeys(all_hosts))
 
     # Deduplicate by registrable domain — cache result keyed on registrable,
-    # then write the same expiry_ts for every subdomain that maps to it.
-    registrable_cache = {}  # registrable → (expiry_ts, reason)
+    # then write the same expiry_ts/registered_ts for every subdomain that maps to it.
+    registrable_cache = {}  # registrable → (expiry_ts, registered_ts, reason)
 
     for host in unique_hosts:
         row = conn.execute(
@@ -300,16 +366,24 @@ def cmd_whois(conn, force=False):
         print(f"[WHOIS] {host} ({reg}) ...", end=" ", flush=True)
 
         if reg in registrable_cache:
-            expiry_ts, reason = registrable_cache[reg]
+            expiry_ts, registered_ts, reason = registrable_cache[reg]
             print("(cached from registrable domain)", end=" ")
         else:
             expiry_ts, reason = _fetch_whois_expiry(reg)
-            registrable_cache[reg] = (expiry_ts, reason)
+            registered_ts = None
+            # If live WHOIS still returned nothing, use hardcoded fallback
+            if expiry_ts is None and reg in WHOIS_FALLBACK:
+                fb            = WHOIS_FALLBACK[reg]
+                expiry_ts     = fb.get("expiry_ts")
+                registered_ts = fb.get("registered_ts")
+                reason        = None
+                print("(hardcoded fallback)", end=" ")
+            registrable_cache[reg] = (expiry_ts, registered_ts, reason)
             time.sleep(1.5)  # be polite to WHOIS servers between unique queries
 
         conn.execute(
-            "INSERT OR REPLACE INTO dns_seed_whois(host, expiry_ts, fetched_ts) VALUES(?,?,?)",
-            (host, expiry_ts, now),
+            "INSERT OR REPLACE INTO dns_seed_whois(host, expiry_ts, registered_ts, fetched_ts) VALUES(?,?,?,?)",
+            (host, expiry_ts, registered_ts, now),
         )
         conn.commit()
         if expiry_ts:
@@ -491,6 +565,8 @@ def _check_services(services, now, conn):
             ok, code, ms, extra = _check_gitea(svc["url"])
         elif svc_type == "stock":
             ok, code, ms, extra = _check_stock(svc["url"])
+            if ok and "in_stock" in svc:  # hardcoded override takes precedence
+                extra["in_stock"] = svc["in_stock"]
         else:
             ok, code, ms = _http_check(svc["url"])
             extra = {}
@@ -617,6 +693,12 @@ def main():
         cmd_whois(conn, force=True)
         conn.commit()
         conn.close()
+        # Regenerate ecosystem.json so the HTML page reflects the new expiry dates.
+        # cmd_update() calls cmd_whois(force=False) internally — it will skip all
+        # entries we just refreshed (they're fresh in the cache) and just re-run
+        # the TCP/HTTP checks before writing the JSON.
+        print("[INFO] Regenerating ecosystem.json with updated WHOIS data...")
+        cmd_update()
     else:
         cmd_update()
 

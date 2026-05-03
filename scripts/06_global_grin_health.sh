@@ -227,6 +227,78 @@ check_python() {
         || die "Python 3 stdlib modules missing. Please install python3."
 }
 
+# ─── Ensure python-whois is available ────────────────────────────────────────
+ensure_python_whois() {
+    python3 -c "import whois" 2>/dev/null && return 0
+    if ! command -v pip3 &>/dev/null; then
+        info "pip3 not found — installing python3-pip..."
+        apt-get update -qq && apt-get install -y python3-pip -qq \
+            || { warn "apt install python3-pip failed."; return 1; }
+    fi
+    info "Installing python-whois..."
+    pip3 install python-whois --break-system-packages --quiet \
+        || pip3 install python-whois --quiet \
+        || { warn "python-whois install failed — domain expiry will show '—'"; return 1; }
+    return 0
+}
+
+# ─── Shared nginx helpers ─────────────────────────────────────────────────────
+
+# Prompt for a domain/subdomain, reject reserved script-02 labels.
+# Usage:  _prompt_nginx_domain <varname> <prompt_text> || return
+_prompt_nginx_domain() {
+    local -n _nginx_domain_out=$1
+    local prompt_text="$2"
+    while true; do
+        echo -ne "${BOLD}${prompt_text}: ${RESET}"
+        read -r _nginx_domain_out
+        [[ -z "$_nginx_domain_out" || "$_nginx_domain_out" == "0" ]] && return 1
+        local _lbl="${_nginx_domain_out%%.*}"
+        if [[ "$_lbl" == "fullmain" || "$_lbl" == "prunemain" || "$_lbl" == "prunetest" ]]; then
+            warn "'$_lbl' is reserved by script 02 (Grin chain data server). Choose a different subdomain."
+            continue
+        fi
+        break
+    done
+    return 0
+}
+
+# Write a standard logrotate config for a grin nginx service.
+# Usage:  _write_nginx_logrotate "stats"   or   _write_nginx_logrotate "explorer"
+_write_nginx_logrotate() {
+    local svc="$1"
+    cat > "/etc/logrotate.d/grin-${svc}" <<LOGROTATE
+/var/log/nginx/grin-${svc}-access.log /var/log/nginx/grin-${svc}-error.log {
+    daily
+    rotate 10
+    maxsize 10M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    sharedscripts
+    postrotate
+        nginx -s reopen 2>/dev/null || true
+    endscript
+}
+LOGROTATE
+}
+
+# Enable nginx site, test config, run certbot, reload.
+# Usage:  _nginx_certbot_finish <conf_file> <sites-enabled-name> <domain> <email> || return
+_nginx_certbot_finish() {
+    local conf_file="$1" sites_name="$2" domain="$3" email="$4"
+    ln -sf "$conf_file" "/etc/nginx/sites-enabled/${sites_name}"
+    nginx -t || { die "nginx config test failed. Check ${conf_file}."; return 1; }
+    nginx -s reload
+    info "Obtaining SSL certificate for ${domain}..."
+    info "Certbot will add HTTPS and redirect to the nginx config automatically."
+    certbot --nginx -d "$domain" --non-interactive --agree-tos \
+        --email "$email" --redirect \
+        || { warn "Certbot failed — verify DNS A-record resolves to this server (step 4)."; pause; return 1; }
+    nginx -s reload
+}
+
 ################################################################################
 # OPTION A — Network Stats + Peer Map
 ################################################################################
@@ -289,8 +361,7 @@ install_stats() {
     info "Installing ecosystem checker..."
     cp "$SCRIPT_DIR/lib/06_ecosystem_checker.py" "$ECOSYSTEM_CHECKER_BIN"
     chmod +x "$ECOSYSTEM_CHECKER_BIN"
-    pip3 install python-whois --quiet 2>/dev/null \
-        || warn "python-whois install failed — domain expiry will show '—' (run: pip3 install python-whois)"
+    ensure_python_whois || true
     python3 "$ECOSYSTEM_CHECKER_BIN" --init-db
 
     # Deploy HTML pages
@@ -545,18 +616,12 @@ import_data() {
         # ── Ecosystem checker ────────────────────────────────────────────────
         l)
             [[ ! -f "$ECOSYSTEM_CHECKER_BIN" ]] && { warn "Ecosystem checker not installed."; sleep 1; return; }
-            if ! python3 -c "import whois" 2>/dev/null; then
-                info "Installing python-whois..."
-                pip3 install python-whois --quiet || warn "python-whois install failed — domain expiry will show '—'"
-            fi
+            ensure_python_whois || true
             bin="$ECOSYSTEM_CHECKER_BIN"; cmd="--update"; desc="Ecosystem: Run full check now (HTTP + TCP + WHOIS)"
             ;;
         m)
             [[ ! -f "$ECOSYSTEM_CHECKER_BIN" ]] && { warn "Ecosystem checker not installed."; sleep 1; return; }
-            if ! python3 -c "import whois" 2>/dev/null; then
-                info "Installing python-whois..."
-                pip3 install python-whois --quiet || { warn "pip3 install python-whois failed — check your pip/network."; sleep 2; return; }
-            fi
+            ensure_python_whois || { sleep 2; return; }
             bin="$ECOSYSTEM_CHECKER_BIN"; cmd="--whois";  desc="Ecosystem: Force WHOIS refresh for all DNS seeds"
             ;;
         *) warn "Invalid choice."; sleep 1; return ;;
@@ -672,17 +737,7 @@ setup_nginx_stats() {
     command -v nginx &>/dev/null || { die "nginx not installed. Run option N first."; return; }
     command -v certbot &>/dev/null || apt-get install -y certbot python3-certbot-nginx -qq
 
-    while true; do
-        echo -ne "${BOLD}Stats subdomain (e.g. stats.yourdomain.com): ${RESET}"
-        read -r stats_domain
-        [[ -z "$stats_domain" || "$stats_domain" == "0" ]] && return
-        local _lbl="${stats_domain%%.*}"
-        if [[ "$_lbl" == "fullmain" || "$_lbl" == "prunemain" || "$_lbl" == "prunetest" ]]; then
-            warn "'$_lbl' is reserved by script 02 (Grin chain data server). Choose a different subdomain."
-            continue
-        fi
-        break
-    done
+    _prompt_nginx_domain stats_domain "Stats subdomain (e.g. stats.yourdomain.com)" || return
 
     echo -ne "${BOLD}Email address for SSL certificate (Let's Encrypt): ${RESET}"
     read -r ssl_email
@@ -782,33 +837,9 @@ if ($request_method = 'OPTIONS') {
 SNIPPET
 
     # Logrotate: rotate at 10 MB or after 10 days
-    cat > /etc/logrotate.d/grin-stats <<'LOGROTATE'
-/var/log/nginx/grin-stats-access.log /var/log/nginx/grin-stats-error.log {
-    daily
-    rotate 10
-    maxsize 10M
-    compress
-    delaycompress
-    missingok
-    notifempty
-    sharedscripts
-    postrotate
-        nginx -s reopen 2>/dev/null || true
-    endscript
-}
-LOGROTATE
+    _write_nginx_logrotate "stats"
 
-    ln -sf "$NGINX_STATS_CONF" "/etc/nginx/sites-enabled/grin-stats"
-    nginx -t || { die "nginx config test failed. Check $NGINX_STATS_CONF."; return; }
-    nginx -s reload
-
-    info "Obtaining SSL certificate for ${stats_domain}..."
-    info "Certbot will add HTTPS and redirect to the nginx config automatically."
-    certbot --nginx -d "$stats_domain" --non-interactive --agree-tos \
-        --email "$ssl_email" --redirect \
-        || { warn "Certbot failed — verify DNS A-record resolves to this server (step 4)."; pause; return; }
-
-    nginx -s reload
+    _nginx_certbot_finish "$NGINX_STATS_CONF" "grin-stats" "$stats_domain" "$ssl_email" || return
     success "Site live:       https://${stats_domain}              (peer map — index.html)"
     success "Stats page:      https://${stats_domain}/stats.html"
     log "Nginx stats config created for ${stats_domain}"
@@ -1330,17 +1361,7 @@ setup_nginx_explorer() {
     command -v nginx &>/dev/null || { die "nginx not installed. Run option N first."; return; }
     command -v certbot &>/dev/null || apt-get install -y certbot python3-certbot-nginx -qq
 
-    while true; do
-        echo -ne "${BOLD}Enter domain or sub-domain for the explorer (e.g. explorer.yourdomain.com) [0 = cancel]: ${RESET}"
-        read -r expl_domain
-        [[ -z "$expl_domain" || "$expl_domain" == "0" ]] && return
-        local _lbl="${expl_domain%%.*}"
-        if [[ "$_lbl" == "fullmain" || "$_lbl" == "prunemain" || "$_lbl" == "prunetest" ]]; then
-            warn "'$_lbl' is reserved by script 02 (Grin chain data server). Choose a different subdomain."
-            continue
-        fi
-        break
-    done
+    _prompt_nginx_domain expl_domain "Enter domain or sub-domain for the explorer (e.g. explorer.yourdomain.com) [0 = cancel]" || return
 
     echo -ne "${BOLD}Email address for Let's Encrypt SSL certificate [0 = cancel]: ${RESET}"
     read -r ssl_email
@@ -1372,33 +1393,9 @@ server {
 NGINX
 
     # Logrotate: rotate at 10 MB or after 10 days
-    cat > /etc/logrotate.d/grin-explorer <<'LOGROTATE'
-/var/log/nginx/grin-explorer-access.log /var/log/nginx/grin-explorer-error.log {
-    daily
-    rotate 10
-    maxsize 10M
-    compress
-    delaycompress
-    missingok
-    notifempty
-    sharedscripts
-    postrotate
-        nginx -s reopen 2>/dev/null || true
-    endscript
-}
-LOGROTATE
+    _write_nginx_logrotate "explorer"
 
-    ln -sf "$NGINX_EXPLORER_CONF" "/etc/nginx/sites-enabled/grin-explorer"
-    nginx -t || { die "nginx config test failed. Check $NGINX_EXPLORER_CONF."; return; }
-    nginx -s reload
-
-    info "Obtaining SSL certificate for ${expl_domain}..."
-    info "Certbot will add HTTPS and redirect to the nginx config automatically."
-    certbot --nginx -d "$expl_domain" --non-interactive --agree-tos \
-        --email "$ssl_email" --redirect \
-        || { warn "Certbot failed — verify DNS A-record resolves to this server (step 4)."; pause; return; }
-
-    nginx -s reload
+    _nginx_certbot_finish "$NGINX_EXPLORER_CONF" "grin-explorer" "$expl_domain" "$ssl_email" || return
     success "Explorer live: https://${expl_domain}"
     warn "Ensure the explorer is started (option 3) before visiting the URL."
     log "Nginx explorer config created for ${expl_domain}"

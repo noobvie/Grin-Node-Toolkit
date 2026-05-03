@@ -324,15 +324,23 @@
 
   /* ── Ecosystem services table ────────────────────────────────────────────── */
   .svc-category-header {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--muted);
-    padding: 12px 20px 6px;
+    color: var(--text);
+    padding: 14px 20px 6px 17px;
     border-top: 1px solid var(--border);
+    border-left: 3px solid var(--grin);
   }
   .svc-category-header:first-child { border-top: none; }
+  .svc-cat-note {
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--muted);
+  }
   .svc-row {
     display: flex;
     align-items: center;
@@ -373,8 +381,9 @@
   .svc-since     { color: var(--muted); white-space: nowrap; }
   .svc-down      { color: var(--red); font-size: 11px; }
   .svc-git       { color: var(--blue); font-size: 11px; font-family: monospace; white-space: nowrap; }
-  .svc-stock-ok  { color: var(--green);  font-weight: 700; font-size: 11px; }
-  .svc-stock-out { color: var(--orange); font-weight: 700; font-size: 11px; }
+  .svc-stock-ok      { color: var(--green);  font-weight: 700; font-size: 11px; }
+  .svc-stock-out     { color: var(--orange); font-weight: 700; font-size: 11px; }
+  .svc-stock-unknown { color: var(--muted);  font-size: 11px; }
 
   /* ── Loading / empty states ─────────────────────────────────────────────── */
   .placeholder { padding: 32px 20px; text-align: center; color: var(--muted); font-size: 13px; }
@@ -576,10 +585,10 @@ function expiryClass(days) {
 }
 
 function expiryLabel(str, days) {
-  if (!str) return '<span class="exp-unknown">exp: —</span>';
+  if (!str) return '<span class="exp-unknown">Domain expiration date: —</span>';
   const cls = expiryClass(days);
   const countdown = days !== null ? ` (${days}d)` : '';
-  return `<span class="${cls}">exp: ${str}${countdown}</span>`;
+  return `<span class="${cls}">Domain expiration date: ${str}${countdown}</span>`;
 }
 
 // ── DNS seed rendering ─────────────────────────────────────────────────────
@@ -647,7 +656,10 @@ function renderServices(services) {
 
   let html = '';
   for (const cat of cats) {
-    html += `<div class="svc-category-header">${cat}</div>`;
+    const catNote = cat === 'Development progress'
+      ? ' <span class="svc-cat-note">— last release / commit date</span>'
+      : '';
+    html += `<div class="svc-category-header">${cat}${catNote}</div>`;
     for (const s of catMap[cat]) {
       const icon   = s.ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
       const ms     = s.ok && s.response_ms != null ? `<span class="svc-ms">${s.response_ms}ms</span>` : '<span class="svc-ms svc-down">—</span>';
@@ -665,9 +677,13 @@ function renderServices(services) {
         }
       } else if (s.type === 'stock') {
         if (s.ok) {
-          extra = s.in_stock
-            ? '<span class="svc-stock-ok">In Stock</span>'
-            : '<span class="svc-stock-out">Sold Out</span>';
+          if (s.in_stock === null || s.in_stock === undefined) {
+            extra = '<span class="svc-stock-unknown">Stock unknown</span>';
+          } else {
+            extra = s.in_stock
+              ? '<span class="svc-stock-ok">In Stock</span>'
+              : '<span class="svc-stock-out">Sold Out</span>';
+          }
         }
       }
 

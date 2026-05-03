@@ -105,13 +105,14 @@ SERVICES = [
     {"category": "Mining Pool", "name": "Pool Stats",        "url": "https://miningpoolstats.stream/grin",                "since": None},
 
     # ── Dev repos — fetch last release / commit via API ────────────────────────
-    {"category": "Dev",         "name": "grin",              "url": "https://github.com/mimblewimble/grin",                "since": "Mar 2018", "type": "github"},
-    {"category": "Dev",         "name": "grin-wallet",       "url": "https://github.com/mimblewimble/grin-wallet",         "since": "Jan 2019", "type": "github"},
-    {"category": "Dev",         "name": "GRIM",              "url": "https://github.com/GetGrin/grim",                    "since": None,       "type": "github"},
-    {"category": "Dev",         "name": "GRIM (mirror)",     "url": "https://code.gri.mw/GUI/grim",                       "since": None,       "type": "gitea"},
-    {"category": "Dev",         "name": "Grin++",            "url": "https://github.com/GrinPlusPlus/GrinPlusPlus",        "since": None,       "type": "github"},
-    {"category": "Dev",         "name": "Grin Node Toolkit", "url": "https://github.com/noobvie/Grin-Node-Toolkit",        "since": None,       "type": "github"},
-    {"category": "Dev",         "name": "GrinSuite",         "url": "https://github.com/noobvie/GrinSuite",                "since": None,       "type": "github"},
+    {"category": "Development progress", "name": "grin",              "url": "https://github.com/mimblewimble/grin",                "since": "Mar 2018", "type": "github"},
+    {"category": "Development progress", "name": "grin-wallet",       "url": "https://github.com/mimblewimble/grin-wallet",         "since": "Jan 2019", "type": "github"},
+    {"category": "Development progress", "name": "GRIM",              "url": "https://github.com/GetGrin/grim",                    "since": None,       "type": "github"},
+    {"category": "Development progress", "name": "GRIM (mirror)",     "url": "https://code.gri.mw/GUI/grim",                       "since": None,       "type": "gitea"},
+    {"category": "Development progress", "name": "Grin++",            "url": "https://github.com/GrinPlusPlus/GrinPlusPlus",        "since": None,       "type": "github"},
+    {"category": "Development progress", "name": "Grin Node Toolkit", "url": "https://github.com/noobvie/Grin-Node-Toolkit",        "since": None,       "type": "github"},
+    {"category": "Development progress", "name": "GrinSuite",         "url": "https://github.com/noobvie/GrinSuite",                "since": None,       "type": "github"},
+    {"category": "Development progress", "name": "Grin Node for Umbrel", "url": "https://github.com/wiesche89/umbrel-community-app-store", "since": None,   "type": "github"},
 ]
 
 def _build_services():
@@ -236,31 +237,57 @@ def _format_expiry(expiry_ts, now):
 
 # ── WHOIS domain expiry ────────────────────────────────────────────────────────
 
-def _fetch_whois_expiry(host):
-    """Return unix timestamp of domain expiry, or None on failure."""
+def _registrable_domain(host):
+    """Strip subdomains — WHOIS servers only hold records for the registrable domain.
+    e.g. mainnet-seed.grinnode.live → grinnode.live  |  grincoin.org → grincoin.org"""
+    parts = host.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+def _fetch_whois_expiry(registrable):
+    """Return unix timestamp of domain expiry, or None on failure.
+    Always pass the registrable domain (no subdomains) to avoid parse failures."""
     try:
         import whois  # python-whois
     except ImportError:
-        return None
+        return None, "python-whois not installed (run: pip3 install python-whois)"
     try:
-        w = whois.whois(host)
+        w = whois.whois(registrable)
         exp = w.expiration_date
         if exp is None:
-            return None
+            return None, "expiration_date is None"
         if isinstance(exp, list):
             exp = exp[0]
+        # datetime object
         if hasattr(exp, "timestamp"):
-            return int(exp.timestamp())
-        return None
-    except Exception:
-        return None
+            return int(exp.timestamp()), None
+        # string date — some TLDs return "2026-01-15 00:00:00" or "2026-01-15"
+        if isinstance(exp, str):
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d-%b-%Y"):
+                try:
+                    from datetime import datetime as _dt
+                    parsed = _dt.strptime(exp.strip(), fmt).replace(tzinfo=timezone.utc)
+                    return int(parsed.timestamp()), None
+                except ValueError:
+                    pass
+            return None, f"unrecognised date format: {exp!r}"
+        return None, f"unexpected expiry type: {type(exp).__name__}"
+    except Exception as exc:
+        return None, str(exc)
+
 
 def cmd_whois(conn, force=False):
-    """Refresh WHOIS expiry for all seed domains. Skips if cached < WHOIS_TTL_HOURS old."""
+    """Refresh WHOIS expiry for all seed domains. Skips if cached < WHOIS_TTL_HOURS old.
+    Queries the registrable domain (strips subdomains) and deduplicates so shared
+    domains (e.g. main.gri.mw + test.gri.mw → gri.mw) are only fetched once."""
     now  = int(time.time())
     ttl  = WHOIS_TTL_HOURS * 3600
     all_hosts = [h for hosts in DNS_SEEDS.values() for h in hosts]
     unique_hosts = list(dict.fromkeys(all_hosts))
+
+    # Deduplicate by registrable domain — cache result keyed on registrable,
+    # then write the same expiry_ts for every subdomain that maps to it.
+    registrable_cache = {}  # registrable → (expiry_ts, reason)
 
     for host in unique_hosts:
         row = conn.execute(
@@ -269,8 +296,17 @@ def cmd_whois(conn, force=False):
         if not force and row and (now - row[0]) < ttl:
             continue  # still fresh
 
-        print(f"[WHOIS] {host} ...", end=" ", flush=True)
-        expiry_ts = _fetch_whois_expiry(host)
+        reg = _registrable_domain(host)
+        print(f"[WHOIS] {host} ({reg}) ...", end=" ", flush=True)
+
+        if reg in registrable_cache:
+            expiry_ts, reason = registrable_cache[reg]
+            print("(cached from registrable domain)", end=" ")
+        else:
+            expiry_ts, reason = _fetch_whois_expiry(reg)
+            registrable_cache[reg] = (expiry_ts, reason)
+            time.sleep(1.5)  # be polite to WHOIS servers between unique queries
+
         conn.execute(
             "INSERT OR REPLACE INTO dns_seed_whois(host, expiry_ts, fetched_ts) VALUES(?,?,?)",
             (host, expiry_ts, now),
@@ -280,7 +316,7 @@ def cmd_whois(conn, force=False):
             dt = datetime.fromtimestamp(expiry_ts, tz=timezone.utc)
             print(f"expires {dt.strftime('%b %Y')}")
         else:
-            print("— (unknown or parse failed)")
+            print(f"— ({reason})")
 
 # ── HTTP service checks ────────────────────────────────────────────────────────
 
@@ -421,7 +457,7 @@ def _check_stock(url):
     """
     Check Shopify product availability via the /products/{handle}.json endpoint.
     Returns (ok, status_code, response_ms, extra_dict).
-    extra_dict keys: in_stock (bool)
+    extra_dict keys: in_stock (bool | None)  None = no variant data returned
     """
     json_url = url.rstrip("/") + ".json"
     t0 = time.monotonic()
@@ -433,7 +469,14 @@ def _check_stock(url):
             ms       = int((time.monotonic() - t0) * 1000)
             data     = json.loads(resp.read())
             variants = data.get("product", {}).get("variants", [])
-            in_stock = any(v.get("available", False) for v in variants)
+            if not variants:
+                # Product JSON returned no variant data — can't determine stock
+                return True, 200, ms, {"in_stock": None}
+            # available=True OR inventory_policy="continue" (pre-order / backorder)
+            in_stock = any(
+                v.get("available", False) or v.get("inventory_policy") == "continue"
+                for v in variants
+            )
             return True, 200, ms, {"in_stock": in_stock}
     except Exception:
         return False, None, int((time.monotonic() - t0) * 1000), {}

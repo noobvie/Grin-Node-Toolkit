@@ -698,10 +698,14 @@ def _is_valid_grin_agent(ua):
 
 
 def _extract_addr(peer, default_port):
-    """Split a Grin peer dict's addr field into (ip, port)."""
+    """Split a Grin peer dict's addr field into (ip, port).
+    Strips ::ffff: prefix from IPv4-mapped IPv6 addresses so they are stored
+    and counted as IPv4 — preventing duplicate entries for dual-stack nodes."""
     addr = peer.get("addr", "")
     ip   = addr.rsplit(":", 1)[0].strip("[]")
     port = addr.rsplit(":", 1)[-1] if ":" in addr else default_port
+    if ip.lower().startswith("::ffff:"):
+        ip = ip[7:]
     return ip, port
 
 

@@ -374,6 +374,7 @@
   }
   .svc-ms        { color: var(--muted); font-family: monospace; min-width: 48px; text-align: right; }
   .svc-since     { color: var(--muted); white-space: nowrap; }
+  .svc-renew     { white-space: nowrap; font-family: monospace; }
   .svc-down      { color: var(--red); font-size: 11px; }
   .svc-git       { color: var(--blue); font-size: 11px; font-family: monospace; white-space: nowrap; }
   .svc-stock-ok      { color: var(--green);  font-weight: 700; font-size: 11px; }
@@ -582,11 +583,11 @@ function expiryClass(days) {
 function expiryLabel(regStr, expStr, days) {
   const cls = expiryClass(days);
   const parts = [];
-  if (regStr) parts.push(`Domain registered ${regStr}`);
-  if (expStr)  parts.push(`Domain expiration ${expStr}`);
-  if (days !== null && days !== undefined) parts.push(`Renew domain in ${days}d`);
+  if (regStr) parts.push(`registered ${regStr}`);
+  if (expStr)  parts.push(`expires ${expStr}`);
+  if (days !== null && days !== undefined) parts.push(`renew in ${days}d`);
   if (!parts.length) return '<span class="exp-unknown">Domain expiration: —</span>';
-  return `<span class="${cls}">${parts.join(' · ')}</span>`;
+  return `<span class="${cls}">Domain ${parts.join(', ')}</span>`;
 }
 
 // ── DNS seed rendering ─────────────────────────────────────────────────────
@@ -660,7 +661,7 @@ function renderServices(services) {
       const icon   = s.ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
       const ms     = s.ok && s.response_ms != null ? `<span class="svc-ms">${s.response_ms}ms</span>` : '<span class="svc-ms svc-down">—</span>';
       const sinceText = s.since || s.registered_str;
-      const since  = sinceText ? `<span class="svc-since"> — Online since ${sinceText}</span>` : '';
+      const since  = sinceText ? `<span class="svc-since">Online since ${sinceText}</span>` : '';
       const host   = (() => { try { return new URL(s.url).hostname; } catch(_) { return s.url; } })();
 
       let extra = '';
@@ -683,11 +684,20 @@ function renderServices(services) {
         }
       }
 
+      let renew = '';
+      if (cat !== 'Development progress' && s.expiry_str != null) {
+        renew = `<span class="svc-renew ${expiryClass(s.expiry_days)}">Renew in ${s.expiry_str}</span>`;
+      }
+
+      const metaContent = cat === 'Development progress'
+        ? `${ms}${extra || since}`
+        : `${ms}${extra || since}${renew}`;
+
       html += `<div class="svc-row">
   <span class="svc-status">${icon}</span>
   <span class="svc-name">${esc(s.name)}</span>
   <a class="svc-url" href="${s.url}" target="_blank" rel="noopener" title="${s.url}">${host}</a>
-  <span class="svc-meta">${ms}${extra || since}</span>
+  <span class="svc-meta">${metaContent}</span>
 </div>`;
     }
   }

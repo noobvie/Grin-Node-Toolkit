@@ -68,20 +68,30 @@ DNS_SEED_NOTES = {
 }
 
 # ── WHOIS fallback for domains whose WHOIS servers block automated queries ─────
-# Dates verified manually via https://www.whois.com / https://www.eurodns.com
-# Update when renewed.
+# Edit 06_domains_exceptions.json (same directory) to update dates on renewal.
 
 def _date_to_ts(s):
     """Convert YYYY-MM-DD string to UTC midnight timestamp."""
     from datetime import datetime as _dt
     return int(_dt.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
-WHOIS_FALLBACK = {
-    "grinnode.live": {"registered_ts": _date_to_ts("2019-11-12"), "expiry_ts": _date_to_ts("2026-11-12")},
-    "grin.mw":       {"registered_ts": _date_to_ts("2017-11-16"), "expiry_ts": _date_to_ts("2027-11-16")},
-    "grin.money":    {"registered_ts": _date_to_ts("2021-07-09"), "expiry_ts": _date_to_ts("2030-07-09")},
-    "gri.mw":        {"registered_ts": _date_to_ts("2024-11-13"), "expiry_ts": _date_to_ts("2026-11-13")},
-}
+def _load_whois_fallback():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "06_domains_exceptions.json")
+    try:
+        with open(path) as f:
+            raw = json.load(f)
+        return {
+            domain: {
+                "registered_ts": _date_to_ts(v["registered"]) if v.get("registered") else None,
+                "expiry_ts":     _date_to_ts(v["expires"])    if v.get("expires")    else None,
+            }
+            for domain, v in raw.items()
+        }
+    except (FileNotFoundError, json.JSONDecodeError, ValueError, KeyError) as e:
+        print(f"[WARN] 06_domains_exceptions.json load failed: {e} — WHOIS fallback disabled", file=sys.stderr)
+        return {}
+
+WHOIS_FALLBACK = _load_whois_fallback()
 
 # ── Ecosystem services ─────────────────────────────────────────────────────────
 # type: "http" (default) | "github" | "gitea" | "stock"
@@ -632,15 +642,19 @@ def _check_services(services, now, conn):
                 "uptime_days": uptime_days,
             }
             result.update(extra)  # git_tag, git_date, git_kind, in_stock
-            # Use domain registration date as fallback "since" for services without one
-            if not result.get("since"):
+            # Use domain registration/expiry dates for services on known managed domains
+            if result.get("category") != "Development progress":
                 try:
                     hostname = urllib.parse.urlparse(svc["url"]).hostname or ""
                     fb = WHOIS_FALLBACK.get(_registrable_domain(hostname), {})
-                    if fb.get("registered_ts"):
+                    if not result.get("since") and fb.get("registered_ts"):
                         result["registered_str"] = datetime.fromtimestamp(
                             fb["registered_ts"], tz=timezone.utc
                         ).strftime("%b %Y")
+                    if fb.get("expiry_ts"):
+                        exp_str, exp_days, _ = _format_expiry(fb["expiry_ts"], None, now)
+                        result["expiry_str"]  = exp_str
+                        result["expiry_days"] = exp_days
                 except Exception:
                     pass
             results.append(result)

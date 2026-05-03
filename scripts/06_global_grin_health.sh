@@ -493,9 +493,19 @@ import_data() {
         echo -e "  ${GREEN}j${RESET}) Re-export price JSON only     ${DIM}(no fetch — regenerate price.json from existing DB)${RESET}"
         echo ""
     fi
+    echo -e "  ${BOLD}── Ecosystem Checker  (DNS seeds + service health → ecosystem.json) ──${RESET}"
+    echo ""
+    if [[ ! -f "$ECOSYSTEM_CHECKER_BIN" ]]; then
+        echo -e "  ${YELLOW}  Ecosystem checker not installed — run Install (1) first.${RESET}"
+        echo ""
+    else
+        echo -e "  ${GREEN}l${RESET}) Run ecosystem check now       ${DIM}(HTTP + TCP checks, WHOIS if stale — writes ecosystem.json)${RESET}"
+        echo -e "  ${GREEN}m${RESET}) Force WHOIS refresh           ${DIM}(re-fetch domain expiry for all DNS seeds)${RESET}"
+        echo ""
+    fi
     echo -e "  ${DIM}0) Cancel${RESET}"
     echo ""
-    echo -ne "${BOLD}Select [a-k / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [a-m / 0]: ${RESET}"
     read -r imp_choice
     [[ "$imp_choice" == "0" || -z "$imp_choice" ]] && return
 
@@ -532,6 +542,15 @@ import_data() {
             [[ ! -f "$PRICE_COLLECTOR_BIN" ]] && { warn "Price collector not installed."; sleep 1; return; }
             bin="$PRICE_COLLECTOR_BIN"; cmd="--export"; desc="Price: Re-export price.json only"
             ;;
+        # ── Ecosystem checker ────────────────────────────────────────────────
+        l)
+            [[ ! -f "$ECOSYSTEM_CHECKER_BIN" ]] && { warn "Ecosystem checker not installed."; sleep 1; return; }
+            bin="$ECOSYSTEM_CHECKER_BIN"; cmd="--update"; desc="Ecosystem: Run full check now (HTTP + TCP + WHOIS)"
+            ;;
+        m)
+            [[ ! -f "$ECOSYSTEM_CHECKER_BIN" ]] && { warn "Ecosystem checker not installed."; sleep 1; return; }
+            bin="$ECOSYSTEM_CHECKER_BIN"; cmd="--whois";  desc="Ecosystem: Force WHOIS refresh for all DNS seeds"
+            ;;
         *) warn "Invalid choice."; sleep 1; return ;;
     esac
 
@@ -540,7 +559,7 @@ import_data() {
     echo -e "  ${DIM}Progress will appear below — do not close this window.${RESET}"
     echo ""
     local rc=0
-    if [[ "$bin" == "$COLLECTOR_BIN" ]]; then
+    if [[ "$bin" == "$COLLECTOR_BIN" || "$bin" == "$ECOSYSTEM_CHECKER_BIN" ]]; then
         # shellcheck disable=SC2046
         env $(cat "$DATA_DIR/config.env" | tr '\n' ' ') \
             python3 "$bin" $cmd || rc=$?
@@ -616,16 +635,22 @@ stop_updates() {
     echo -e "\n${BOLD}${CYAN}── Stop Live Updates ──${RESET}\n"
     local existing; existing=$(crontab -l 2>/dev/null || true)
     local found=false
-    echo "$existing" | grep -qF "grin_stats_update" && found=true
-    echo "$existing" | grep -qF "grin_price_update"  && found=true
+    echo "$existing" | grep -qF "grin_stats_update"      && found=true
+    echo "$existing" | grep -qF "grin_price_update"      && found=true
+    echo "$existing" | grep -qF "grin_ecosystem_update"  && found=true
+    echo "$existing" | grep -qF "grin_whois_update"      && found=true
     if [[ "$found" == false ]]; then
-        info "No stats or price cron jobs found."
+        info "No stats, price or ecosystem cron jobs found."
         pause; return
     fi
-    echo "$existing" | grep -v "grin_stats_update" | grep -v "grin_price_update" \
+    echo "$existing" \
+        | grep -v "grin_stats_update" \
+        | grep -v "grin_price_update" \
+        | grep -v "grin_ecosystem_update" \
+        | grep -v "grin_whois_update" \
         | grep -v '^$' | crontab -
-    success "Live updates disabled (stats + price)."
-    log "Stats and price crons removed."
+    success "Live updates disabled (stats + price + ecosystem)."
+    log "Stats, price and ecosystem crons removed."
     pause
 }
 
@@ -795,6 +820,9 @@ status_stats() {
     [[ -f "$PRICE_COLLECTOR_BIN" ]] \
         && echo -e "  Price coll.  ${GREEN}✓ installed${RESET}  ${DIM}($PRICE_COLLECTOR_BIN)${RESET}" \
         || echo -e "  Price coll.  ${YELLOW}✗ not installed${RESET}  ${DIM}(run Install → step 1)${RESET}"
+    [[ -f "$ECOSYSTEM_CHECKER_BIN" ]] \
+        && echo -e "  Eco checker  ${GREEN}✓ installed${RESET}  ${DIM}($ECOSYSTEM_CHECKER_BIN)${RESET}" \
+        || echo -e "  Eco checker  ${YELLOW}✗ not installed${RESET}  ${DIM}(run Install → step 1)${RESET}"
 
     # Databases
     if [[ -f "$DB_PATH" ]]; then
@@ -813,7 +841,7 @@ status_stats() {
 
     # JSON data files
     echo -e "  JSON exports"
-    for f in summary hashrate difficulty transactions fees active_peers versions peers price inflation; do
+    for f in summary hashrate difficulty transactions fees active_peers versions peers price inflation ecosystem; do
         local jf="$WWW_DIR/data/${f}.json"
         if [[ -f "$jf" ]]; then
             local age; age=$(( ($(date +%s) - $(stat -c %Y "$jf" 2>/dev/null || echo 0)) / 60 ))
@@ -834,6 +862,11 @@ status_stats() {
         echo -e "  Price cron   ${GREEN}✓ active${RESET}  ${DIM}(every 5 min)${RESET}"
     else
         echo -e "  Price cron   ${YELLOW}✗ inactive${RESET}"
+    fi
+    if crontab -l 2>/dev/null | grep -q "grin_ecosystem_update"; then
+        echo -e "  Eco cron     ${GREEN}✓ active${RESET}  ${DIM}(hourly)${RESET}"
+    else
+        echo -e "  Eco cron     ${YELLOW}✗ inactive${RESET}"
     fi
 
     # Nginx
@@ -1476,26 +1509,29 @@ show_menu_a() {
     echo -e "${BOLD}${CYAN}  6A) Network Stats + Peer Map${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  ${DIM}Pages served:  /            (index.html) → Grin peer world map${RESET}"
-    echo -e "  ${DIM}               /stats.html              → hashrate, difficulty, tx, fees, versions${RESET}"
+    echo -e "  ${DIM}Pages served:  /                (index.html)    → Grin peer world map${RESET}"
+    echo -e "  ${DIM}               /stats.html                     → hashrate, difficulty, tx, fees, versions${RESET}"
+    echo -e "  ${DIM}               /ecosystem.html                 → DNS seeds + ecosystem services status${RESET}"
     echo ""
     local inst="${RED}✗ not installed${RESET}"
     local cron="${YELLOW}inactive${RESET}"
+    local eco_cron="${YELLOW}inactive${RESET}"
     local ngnx="${YELLOW}not configured${RESET}"
     local ga_lbl="${DIM}not set${RESET}"
     [[ -f "$COLLECTOR_BIN" ]]                                      && inst="${GREEN}✓ installed${RESET}"
     crontab -l 2>/dev/null | grep -q "grin_stats_update"           && cron="${GREEN}active${RESET}"
+    crontab -l 2>/dev/null | grep -q "grin_ecosystem_update"       && eco_cron="${GREEN}active${RESET}"
     [[ -f "$NGINX_STATS_CONF" ]]                                   && ngnx="${GREEN}✓ configured${RESET}"
     local _ga_id; _ga_id=$(grep -E "^GA_MEASUREMENT_ID=" "$DATA_DIR/config.env" 2>/dev/null | cut -d= -f2-)
     [[ -n "$_ga_id" ]] && ga_lbl="${GREEN}${_ga_id}${RESET}"
 
-    echo -e "  ${GREEN}1${RESET})   Install          ${DIM}collector + Chart.js + Leaflet${RESET}   [$inst]"
-    echo -e "  ${GREEN}2${RESET})   Import Data      ${DIM}stats: init / backfill / update  |  price: init / update${RESET}"
-    echo -e "  ${GREEN}3${RESET})   Start Updates    ${DIM}cron every 5 min${RESET}  [$cron]"
+    echo -e "  ${GREEN}1${RESET})   Install          ${DIM}collector + ecosystem checker + Chart.js + Leaflet${RESET}   [$inst]"
+    echo -e "  ${GREEN}2${RESET})   Import Data      ${DIM}stats: init / backfill / update  |  price: init / update  |  ecosystem: run / whois${RESET}"
+    echo -e "  ${GREEN}3${RESET})   Start Updates    ${DIM}stats+price every 5 min · ecosystem hourly${RESET}  [stats: $cron · eco: $eco_cron]"
     echo -e "  ${GREEN}4${RESET})   Check DNS        ${DIM}confirm A-record before nginx setup${RESET}"
     echo -e "  ${GREEN}5${RESET})   Setup Nginx      ${DIM}HTTPS subdomain${RESET}  [$ngnx]"
     echo -e "  ${GREEN}6${RESET})   Status"
-    echo -e "  ${GREEN}7${RESET})   Google Analytics  ${DIM}inject GA tag into both pages${RESET}  [$ga_lbl]"
+    echo -e "  ${GREEN}7${RESET})   Google Analytics  ${DIM}inject GA tag into all three pages${RESET}  [$ga_lbl]"
     echo -e "  ${YELLOW}Z${RESET})   Stop Updates     ${DIM}disable cron${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back${RESET}"

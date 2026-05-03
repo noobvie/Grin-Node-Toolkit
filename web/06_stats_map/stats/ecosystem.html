@@ -727,7 +727,7 @@ function updateSummary(data) {
 
   if (data.updated) {
     document.getElementById('sum-updated').textContent =
-      new Date(data.updated * 1000).toLocaleTimeString();
+      new Date(data.updated * 1000).toLocaleTimeString('en-GB', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' UTC';
   }
 }
 
@@ -740,7 +740,9 @@ async function load() {
     renderServices(data.services || []);
     updateSummary(data);
 
-    const ts = data.updated ? new Date(data.updated * 1000).toLocaleTimeString() : '';
+    const ts = data.updated
+      ? new Date(data.updated * 1000).toLocaleTimeString('en-GB', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' UTC'
+      : '';
     document.getElementById('dns-ts').textContent = ts ? 'Updated ' + ts : '';
     document.getElementById('svc-ts').textContent = ts ? 'Updated ' + ts : '';
   } catch (e) {

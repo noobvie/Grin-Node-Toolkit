@@ -61,6 +61,15 @@ DNS_SEEDS = {
 
 SEED_PORTS = {"mainnet": 3414, "testnet": 13414}
 
+# TLDs where WHOIS servers are reliable enough for automated refresh.
+# Everything else (.mw, .io, .live, .money, ccTLDs) must be maintained manually
+# in 06_domains_exceptions.json — their WHOIS servers block or return bad data.
+WHOIS_AUTO_TLDS = {".com", ".org", ".net"}
+
+def _is_auto_tld(domain):
+    tld = "." + domain.rsplit(".", 1)[-1] if "." in domain else ""
+    return tld in WHOIS_AUTO_TLDS
+
 # Notes shown in place of IP rows when a seed host has no DNS records yet
 DNS_SEED_NOTES = {
     "mainnet.grin.mw": "Not available yet — DNS record pending",
@@ -381,6 +390,15 @@ def cmd_whois(conn, force=False):
     now  = int(time.time())
     ttl  = WHOIS_TTL_HOURS * 3600
     all_hosts = [h for hosts in DNS_SEEDS.values() for h in hosts]
+    # Also include service domains with standard TLDs (.com/.org/.net)
+    for svc in SERVICES:
+        try:
+            hostname = urllib.parse.urlparse(svc["url"]).hostname or ""
+            reg = _registrable_domain(hostname)
+            if _is_auto_tld(reg) and reg not in all_hosts:
+                all_hosts.append(reg)
+        except Exception:
+            pass
     unique_hosts = list(dict.fromkeys(all_hosts))
 
     # Deduplicate by registrable domain — cache result keyed on registrable,
@@ -646,13 +664,27 @@ def _check_services(services, now, conn):
             if result.get("category") != "Development progress":
                 try:
                     hostname = urllib.parse.urlparse(svc["url"]).hostname or ""
-                    fb = WHOIS_FALLBACK.get(_registrable_domain(hostname), {})
-                    if not result.get("since") and fb.get("registered_ts"):
+                    reg = _registrable_domain(hostname)
+                    expiry_ts = registered_ts = None
+                    # Auto TLDs: read from DB (populated by cmd_whois)
+                    if _is_auto_tld(reg):
+                        row = conn.execute(
+                            "SELECT expiry_ts, registered_ts FROM dns_seed_whois WHERE host=?",
+                            (reg,),
+                        ).fetchone()
+                        if row:
+                            expiry_ts, registered_ts = row
+                    # Manual TLDs: read from JSON fallback
+                    if expiry_ts is None:
+                        fb = WHOIS_FALLBACK.get(reg, {})
+                        expiry_ts     = fb.get("expiry_ts")
+                        registered_ts = registered_ts or fb.get("registered_ts")
+                    if not result.get("since") and registered_ts:
                         result["registered_str"] = datetime.fromtimestamp(
-                            fb["registered_ts"], tz=timezone.utc
+                            registered_ts, tz=timezone.utc
                         ).strftime("%b %Y")
-                    if fb.get("expiry_ts"):
-                        exp_str, exp_days, _ = _format_expiry(fb["expiry_ts"], None, now)
+                    if expiry_ts:
+                        exp_str, exp_days, _ = _format_expiry(expiry_ts, None, now)
                         result["expiry_str"]  = exp_str
                         result["expiry_days"] = exp_days
                 except Exception:

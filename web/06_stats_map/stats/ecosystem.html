@@ -792,7 +792,9 @@ function renderServices(services) {
       const icon   = s.ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
       const ms     = s.ok && s.response_ms != null ? `<span class="svc-ms">${s.response_ms}ms</span>` : '<span class="svc-ms svc-down">—</span>';
       const sinceText = s.since || s.registered_str;
-      const since  = sinceText ? `<span class="svc-since">Online since ${sinceText}</span>` : '';
+      const since  = cat === 'Development progress'
+        ? (sinceText ? `<span class="svc-since">Online since ${sinceText}</span>` : '')
+        : `<span class="svc-since">Online since ${sinceText || '—'}</span>`;
       const host   = (() => { try { return new URL(s.url).hostname; } catch(_) { return s.url; } })();
 
       let extra = '';

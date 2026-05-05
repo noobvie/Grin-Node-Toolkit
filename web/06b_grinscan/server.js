@@ -216,7 +216,7 @@ async function startupBackfill(tipHeight) {
 
 async function pollBlocks() {
   try {
-    const tip       = await foreignApi('get_tip', []);
+    const tip       = await ownerApi('get_tip', []);
     const tipHeight = tip.height;
 
     // Stall detection
@@ -601,7 +601,7 @@ app.listen(config.port, '127.0.0.1', async () => {
 
   // Initial tip + backfill
   try {
-    const tip = await foreignApi('get_tip', []);
+    const tip = await ownerApi('get_tip', []);
     tipState.height = tip.height;
     tipState.hash   = tip.last_block_h;
     lastTipHeight   = tip.height;

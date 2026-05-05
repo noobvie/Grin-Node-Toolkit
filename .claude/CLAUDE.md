@@ -91,8 +91,12 @@ Secret files — two per service, each with a Foreign and Owner secret:
 **Grin node** (`/opt/grin/node/<net>-prune/`) — created by script 01
 | File | API | Who reads it | Key in grin.toml |
 |------|-----|-------------|------------------|
-| `.api_secret` | Node Owner API | Script 04, Python collectors | `api_secret_path` |
-| `.foreign_api_secret` | Node Foreign API | grin-wallet via `node_api_secret_path` | `foreign_api_secret_path` |
+| `.api_secret` | Node Owner API | Script 04, Python collectors, GrinScan (06b) | `api_secret_path` |
+| `.foreign_api_secret` | Node Foreign API | grin-wallet via `node_api_secret_path`, GrinScan (06b) | `foreign_api_secret_path` |
+
+Node API method split — use this to decide which endpoint a new call should target:
+- **Owner API** (`/v2/owner`, `.api_secret`): `get_tip`, `get_status`, `get_connected_peers`, `validate_chain`, `compact_chain` — node management/status, trusted internal callers only
+- **Foreign API** (`/v2/foreign`, `.foreign_api_secret`): `get_block`, `get_header`, `get_outputs`, `get_unspent_outputs`, `get_pool_size`, `push_transaction` — public chain data, used by wallets and block explorers
 
 **grin-wallet** (`$WALLET_DIR/`) — both created by `grin-wallet init/recover`
 `grin-wallet init -hr` to recover wallet from seed and store config/secret files in same dir.

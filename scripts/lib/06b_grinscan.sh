@@ -18,7 +18,7 @@ grinscan_install() {
     clear
     echo -e "\n${BOLD}${CYAN}── GrinScan: Install ──${RESET}\n"
 
-    # Node.js version check (need >= 22.5 for node:sqlite DatabaseSync)
+    # Node.js version check (need >= 24 for node:sqlite DatabaseSync)
     local node_ver=""
     if command -v node &>/dev/null; then
         node_ver=$(node --version 2>/dev/null | sed 's/v//')
@@ -26,19 +26,22 @@ grinscan_install() {
 
     local node_ok=0
     if [[ -n "$node_ver" ]]; then
-        local major minor patch
-        IFS='.' read -r major minor patch <<< "$node_ver"
-        if [[ $major -gt 22 ]] || [[ $major -eq 22 && ${minor:-0} -ge 5 ]]; then
+        local major
+        major=$(echo "$node_ver" | cut -d. -f1)
+        if [[ $major -ge 24 ]]; then
             node_ok=1
             success "Node.js v${node_ver} ✓"
         else
-            warn "Node.js v${node_ver} detected — GrinScan requires v22.5+."
+            warn "Node.js v${node_ver} detected — GrinScan requires v24+."
+            info "Removing old Node.js before upgrading…"
+            apt-get remove -y nodejs npm 2>/dev/null || true
+            apt-get autoremove -y 2>/dev/null || true
         fi
     fi
 
     if [[ $node_ok -eq 0 ]]; then
-        info "Installing Node.js 22.x via NodeSource…"
-        curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+        info "Installing Node.js 24.x via NodeSource…"
+        curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
             || { die "NodeSource setup failed."; return; }
         apt-get install -y nodejs -qq \
             || { die "Node.js install failed."; return; }
@@ -160,24 +163,24 @@ grinscan_configure() {
         local node_url="${user_node_url:-$default_node_url}"
         local owner_url="${default_owner_url}"
 
-        # Connectivity pre-check
-        if [[ -f "$foreign_secret_path" ]]; then
-            local secret; secret=$(cat "$foreign_secret_path" 2>/dev/null | tr -d '\n')
+        # Connectivity pre-check via Owner API (get_tip is owner-only on the node)
+        if [[ -f "$owner_secret_path" ]]; then
+            local secret; secret=$(cat "$owner_secret_path" 2>/dev/null | tr -d '\n')
             info "Testing node connection…"
             local resp; resp=$(curl -s --max-time 5 -u ":${secret}" \
                 -H 'Content-Type: application/json' \
                 -d '{"jsonrpc":"2.0","method":"get_tip","params":[],"id":1}' \
-                "$node_url" 2>/dev/null || true)
+                "$default_owner_url" 2>/dev/null || true)
             if echo "$resp" | grep -q '"height"'; then
                 success "Node reachable ✓"
             else
-                warn "Node not reachable at ${node_url}"
+                warn "Node not reachable at ${default_owner_url}"
                 echo -ne "  Continue anyway? [Y/n]: "
                 read -r cont
                 [[ "${cont,,}" == "n" ]] && { info "Skipping ${net}."; continue; }
             fi
         else
-            warn "Foreign secret not found at ${foreign_secret_path} — skipping connectivity check."
+            warn "Owner secret not found at ${owner_secret_path} — skipping connectivity check."
         fi
 
         # GA4 (mainnet only)
@@ -244,12 +247,17 @@ grinscan_start() {
             && success "${svc} started." \
             || { error "Failed to start ${svc}. Check logs."; continue; }
 
-        sleep 2
-        if ss -tlnp 2>/dev/null | grep -q ":${svc_port} "; then
-            success "Port :${svc_port} is listening."
-            echo -e "  URL: ${CYAN}http://127.0.0.1:${svc_port}${RESET}"
-        else
-            warn "Port :${svc_port} not yet listening — service may still be starting."
+        local waited=0
+        while [[ $waited -lt 10 ]]; do
+            sleep 2; waited=$((waited+2))
+            if ss -tlnp 2>/dev/null | grep -q ":${svc_port} "; then
+                success "Port :${svc_port} is listening."
+                echo -e "  URL: ${CYAN}http://127.0.0.1:${svc_port}${RESET}"
+                break
+            fi
+        done
+        if ! ss -tlnp 2>/dev/null | grep -q ":${svc_port} "; then
+            warn "Port :${svc_port} not yet listening after ${waited}s — check: journalctl -u ${svc} -n 20"
         fi
         log "grinscan_start: ${svc}"
     done

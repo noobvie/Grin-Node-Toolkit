@@ -1,0 +1,23 @@
+/* matrix.css — Black background, green monochrome (testnet default) */
+:root {
+  --bg:           #000000;
+  --surface:      #001a00;
+  --surface2:     #002800;
+  --border:       #004400;
+  --text:         #00cc44;
+  --muted:        #006622;
+  --accent:       #00ff44;
+  --accent2:      #88ff00;
+  --green:        #00ff44;
+  --red:          #ff3300;
+  --badge-coin:   #ccaa00;
+  --badge-plain:  #00cc88;
+  --badge-lock:   #00aa55;
+  --font-mono:    'JetBrains Mono', 'Courier New', monospace;
+  --glow:         none;
+}
+
+body { font-family: var(--font-mono); }
+a { color: var(--accent); }
+
+.gs-table tbody tr:hover { background: rgba(0,255,68,0.05); }

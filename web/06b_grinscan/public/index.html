@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Lightweight Grin block explorer">
+  <meta property="og:site_name" content="GrinScan">
+  <meta property="og:title" content="GrinScan — Grin Block Explorer">
+  <meta property="og:description" content="Lightweight Grin block explorer">
+  <title>GrinScan — Block Explorer</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/grinscan.css">
+  <link rel="stylesheet" id="theme-css" href="/css/themes/dark.css">
+  <script>
+    // Apply theme before first paint (no FOUC)
+    (function () {
+      var net = (window.GRINSCAN_NETWORK || 'testnet');
+      var key = 'grinscan-theme-' + net;
+      var def = net === 'mainnet' ? 'neon' : 'matrix';
+      var saved = localStorage.getItem(key) || def;
+      var map = { dark: 'css/themes/dark.css', light: 'css/themes/light.css', neon: 'css/themes/neon.css', matrix: 'css/themes/matrix.css' };
+      var link = document.getElementById('theme-css');
+      if (link && map[saved]) link.href = map[saved];
+    })();
+    // Mark active nav link
+    (function () {
+      document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('.nav-link').forEach(function (a) {
+          if (a.dataset.page === 'explorer') a.classList.add('active');
+        });
+        // Dynamic title
+        var net = window.GRINSCAN_NETWORK || 'testnet';
+        document.title = 'GrinScan — ' + (net === 'mainnet' ? 'Mainnet' : 'Testnet') + ' Block Explorer';
+      });
+    })();
+  </script>
+</head>
+<body data-page="index">
+
+  <!-- Header -->
+  <header class="gs-header">
+    <a href="/" class="gs-logo">🔍 GrinScan</a>
+    <nav class="gs-nav">
+      <a href="/" class="nav-link" data-page="explorer" aria-label="Explorer">Explorer</a>
+      <a href="/info.html" class="nav-link" data-page="info" aria-label="Info">Info</a>
+    </nav>
+    <span id="network-badge" class="gs-network-badge testnet">TESTNET ●</span>
+    <div class="gs-theme-wrap">
+      <button id="theme-toggle-btn" aria-expanded="false" aria-haspopup="true">
+        <span id="theme-current-label">Theme</span> ▾
+      </button>
+      <div id="theme-dropdown" hidden role="menu">
+        <button data-theme="dark"   role="menuitem">🌑 Dark</button>
+        <button data-theme="light"  role="menuitem">☀️ Light</button>
+        <button data-theme="neon"   role="menuitem">⚡ Neon</button>
+        <button data-theme="matrix" role="menuitem">🟢 Matrix</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Toast -->
+  <div id="gs-toast" class="gs-toast" role="status" aria-live="polite"></div>
+
+  <main class="gs-main">
+
+    <!-- Search bar -->
+    <form id="search-form" class="gs-search" role="search">
+      <input id="search-input" type="text" placeholder="Search by block height or hash…" autocomplete="off" spellcheck="false" aria-label="Search blocks">
+      <button type="submit">Search</button>
+    </form>
+
+    <!-- Stats grid -->
+    <div class="gs-stats-grid" role="region" aria-label="Network statistics">
+      <div class="gs-stat-card">
+        <div class="gs-stat-label">Tip Height</div>
+        <div class="gs-stat-value">
+          <span class="live-dot" title="Live"></span><span id="stat-tip" class="skeleton skeleton-cell" style="display:inline-block;min-width:100px;height:1.2em;">‌</span>
+        </div>
+        <canvas id="sparkline" class="gs-sparkline" width="160" height="28" aria-hidden="true"></canvas>
+      </div>
+      <div class="gs-stat-card">
+        <div class="gs-stat-label">Hashrate</div>
+        <div class="gs-stat-value" id="stat-hashrate" style="min-width:80px;">—</div>
+      </div>
+      <div class="gs-stat-card">
+        <div class="gs-stat-label">Difficulty</div>
+        <div class="gs-stat-value" id="stat-difficulty">—</div>
+      </div>
+      <div class="gs-stat-card">
+        <div class="gs-stat-label">Peers</div>
+        <div class="gs-stat-value" id="stat-peers">—</div>
+      </div>
+    </div>
+
+    <!-- Block list -->
+    <section class="gs-block-section" aria-label="Latest blocks">
+      <div class="gs-block-header">
+        <span class="gs-block-title">Latest Blocks</span>
+        <span class="gs-live-indicator" aria-live="polite">Live · 30s refresh</span>
+      </div>
+      <div class="gs-table-wrap">
+        <table class="gs-table" aria-label="Block list">
+          <thead>
+            <tr>
+              <th>Height</th>
+              <th class="col-hash">Hash</th>
+              <th>Time</th>
+              <th>TXs</th>
+              <th>Fees</th>
+            </tr>
+          </thead>
+          <tbody id="blocks-tbody">
+            <!-- skeleton rows -->
+            <tr><td colspan="5"><div class="skeleton" style="height:16px;margin:4px 0;border-radius:4px;"></div></td></tr>
+            <tr><td colspan="5"><div class="skeleton" style="height:16px;margin:4px 0;border-radius:4px;"></div></td></tr>
+            <tr><td colspan="5"><div class="skeleton" style="height:16px;margin:4px 0;border-radius:4px;"></div></td></tr>
+          </tbody>
+        </table>
+        <button id="load-more-btn" class="gs-load-more" style="display:none;">Load 20 more</button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="gs-footer">
+    <div id="gs-footer-text"></div>
+  </footer>
+
+  <script src="/js/theme.js"></script>
+  <script src="/js/app.js"></script>
+  <script src="/js/analytics.js"></script>
+</body>
+</html>

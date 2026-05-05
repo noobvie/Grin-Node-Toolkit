@@ -39,6 +39,10 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLKIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# ─── GrinScan lib (sourced after TOOLKIT_ROOT is set) ────────────────────────
+# shellcheck source=lib/06b_grinscan.sh
+source "$SCRIPT_DIR/lib/06b_grinscan.sh"
 WEB_SRC="$TOOLKIT_ROOT/web/06_stats_map/stats"
 LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/global_grin_health_$(date +%Y%m%d_%H%M%S).log"
@@ -1550,7 +1554,47 @@ show_menu_a() {
 show_menu_b() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  B) Grin Explorer${RESET}"
+    echo -e "${BOLD}${CYAN}  B) GrinScan — Lightweight Block Explorer${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  ${DIM}Node.js / Express + SQLite — works with a pruned node${RESET}"
+    echo -e "  ${DIM}Testnet port: ${GRINSCAN_TEST_PORT}  ·  Mainnet port: ${GRINSCAN_MAIN_PORT}${RESET}"
+    echo ""
+
+    local inst_t="${RED}✗${RESET}" inst_m="${RED}✗${RESET}"
+    local run_t="${YELLOW}stopped${RESET}" run_m="${YELLOW}stopped${RESET}"
+    local ng_t="${YELLOW}not configured${RESET}" ng_m="${YELLOW}not configured${RESET}"
+
+    [[ -f "${GRINSCAN_DIR}/test/config.json" ]] && inst_t="${GREEN}✓${RESET}"
+    [[ -f "${GRINSCAN_DIR}/main/config.json" ]] && inst_m="${GREEN}✓${RESET}"
+    systemctl is-active grinscan-test &>/dev/null && run_t="${GREEN}running${RESET}"
+    systemctl is-active grinscan-main &>/dev/null && run_m="${GREEN}running${RESET}"
+    [[ -f "$NGINX_GRINSCAN_TEST_CONF" ]] && ng_t="${GREEN}✓ configured${RESET}"
+    [[ -f "$NGINX_GRINSCAN_MAIN_CONF" ]] && ng_m="${GREEN}✓ configured${RESET}"
+
+    echo -e "                        ${DIM}testnet${RESET}              ${DIM}mainnet${RESET}"
+    echo -e "  ${GREEN}1${RESET})   Install         ${DIM}Node.js + npm deps + systemd units${RESET}"
+    echo -e "  ${GREEN}2${RESET})   Configure       ${DIM}write config.json${RESET}  [test: $inst_t · main: $inst_m]"
+    echo -e "  ${GREEN}3${RESET})   Start           ${DIM}systemctl start${RESET}  [test: $run_t · main: $run_m]"
+    echo -e "  ${GREEN}4${RESET})   Check DNS       ${DIM}confirm A-record before nginx setup${RESET}"
+    echo -e "  ${GREEN}5${RESET})   Setup Nginx     ${DIM}HTTPS reverse proxy + certbot${RESET}  [test: $ng_t · main: $ng_m]"
+    echo -e "  ${GREEN}6${RESET})   Auto-Start      ${DIM}systemctl enable (survive reboots)${RESET}"
+    echo -e "  ${GREEN}7${RESET})   Status"
+    echo -e "  ${GREEN}8${RESET})   View Logs"
+    echo -e "  ${GREEN}U${RESET})   Update          ${DIM}npm install + restart${RESET}"
+    echo -e "  ${YELLOW}Z${RESET})   Stop            ${DIM}systemctl stop${RESET}"
+    echo ""
+    echo -e "  ${DIM}0) Back${RESET}"
+    echo -e "  ${DIM}[Enter] Refresh menu${RESET}"
+    echo ""
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -ne "${BOLD}Select [0-8, U, Z]: ${RESET}"
+}
+
+show_menu_c() {
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  C) Grin Explorer by Grincoin.org${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     echo -e "  ${DIM}Repo: github.com/aglkm/grin-explorer  (Rust + Rocket + SQLite)${RESET}"
@@ -1595,9 +1639,9 @@ show_main_menu() {
         && _nginx_st="${GREEN}[OK]${RESET} " \
         || _nginx_st="${RED}[NOK]${RESET}"
     echo -e "  ${BOLD}Requirements:${RESET}"
-    echo -e "  ${_node_st}  Grin mainnet archive node running ${DIM}(both options A and B require archive_mode=true)${RESET}"
-    echo -e "  ${_nginx_st}  Nginx installed                  ${DIM}(use option N to install)${RESET}"
-    echo -e "  ${YELLOW}[--]${RESET}  DNS A-records — confirm via A→4 or B→4 before nginx setup"
+    echo -e "  ${_node_st}  Grin node running  ${DIM}(A requires mainnet · B needs pruned or full · C requires archive)${RESET}"
+    echo -e "  ${_nginx_st}  Nginx installed    ${DIM}(use option N to install)${RESET}"
+    echo -e "  ${YELLOW}[--]${RESET}  DNS A-records — confirm via A→4, B→4, or C→4 before nginx setup"
     echo ""
     echo -e "${DIM}  ─────────────────────────────────────────────${RESET}"
     echo ""
@@ -1608,13 +1652,16 @@ show_main_menu() {
     echo -e "  ${GREEN}A${RESET})   Network Stats + Peer Map"
     echo -e "      ${DIM}Hashrate · Difficulty · Transactions · Fees · Versions · 2D Peer Map${RESET}"
     echo ""
-    echo -e "  ${GREEN}B${RESET})   Grin Explorer"
-    echo -e "      ${DIM}Browse blocks · Kernels · Search by height or hash${RESET}"
+    echo -e "  ${GREEN}B${RESET})   GrinScan"
+    echo -e "      ${DIM}Lightweight block explorer — testnet + mainnet, mobile friendly, pruned node OK${RESET}"
+    echo ""
+    echo -e "  ${GREEN}C${RESET})   Grin Explorer by Grincoin.org"
+    echo -e "      ${DIM}Rust + Rocket — archive node required${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back to main menu${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [N/A/B/0]: ${RESET}"
+    echo -ne "${BOLD}Select [N/A/B/C/0]: ${RESET}"
 }
 
 run_menu_a() {
@@ -1642,6 +1689,28 @@ run_menu_b() {
         show_menu_b
         read -r choice
         case "${choice^^}" in
+            1) grinscan_install                    || true ;;
+            2) grinscan_configure                  || true ;;
+            3) grinscan_start                      || true ;;
+            4) check_dns_record "grinscan"         || true ;;
+            5) grinscan_setup_nginx                || true ;;
+            6) grinscan_autostart                  || true ;;
+            7) grinscan_status                     || true ;;
+            8) grinscan_logs                       || true ;;
+            U) grinscan_update                     || true ;;
+            Z) grinscan_stop                       || true ;;
+            0) break                                        ;;
+            "") ;;  # Enter = refresh menu
+            *) warn "Invalid option."; sleep 1             ;;
+        esac
+    done
+}
+
+run_menu_c() {
+    while true; do
+        show_menu_c
+        read -r choice
+        case "${choice^^}" in
             1) install_explorer                || true ;;
             2) configure_explorer              || true ;;
             3) start_explorer                  || true ;;
@@ -1665,6 +1734,7 @@ run_interactive() {
             N) install_nginx_certbot ;;
             A) run_menu_a            ;;
             B) run_menu_b            ;;
+            C) run_menu_c            ;;
             0) break                 ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac

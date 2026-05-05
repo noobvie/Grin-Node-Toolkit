@@ -1,0 +1,21 @@
+/* light.css — Clean white, green accents */
+:root {
+  --bg:           #f6f8fa;
+  --surface:      #ffffff;
+  --surface2:     #f0f2f4;
+  --border:       #d0d7de;
+  --text:         #1f2328;
+  --muted:        #656d76;
+  --accent:       #1a7f37;
+  --accent2:      #2d9a4e;
+  --green:        #1a7f37;
+  --red:          #cf222e;
+  --badge-coin:   #9a6700;
+  --badge-plain:  #0969da;
+  --badge-lock:   #8250df;
+  --glow:         0 2px 8px rgba(0,0,0,0.08);
+}
+
+.gs-search input:focus {
+  box-shadow: 0 0 0 3px rgba(26,127,55,0.15);
+}

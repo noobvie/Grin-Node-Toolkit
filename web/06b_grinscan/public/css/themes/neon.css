@@ -1,0 +1,27 @@
+/* neon.css — Cyberpunk: deep purple, electric cyan + magenta (mainnet default) */
+:root {
+  --bg:           #0a0014;
+  --surface:      #13002a;
+  --surface2:     #1e0040;
+  --border:       #3d0080;
+  --text:         #e8e0ff;
+  --muted:        #8b7aaa;
+  --accent:       #00f0ff;
+  --accent2:      #ff00cc;
+  --green:        #00ff88;
+  --red:          #ff3366;
+  --badge-coin:   #ffcc00;
+  --badge-plain:  #00f0ff;
+  --badge-lock:   #ff00cc;
+  --font-mono:    'JetBrains Mono', 'Courier New', monospace;
+  --glow:         0 0 12px rgba(0,240,255,0.2), 0 4px 24px rgba(0,0,0,0.6);
+}
+
+.gs-stat-card { box-shadow: var(--glow); }
+
+.gs-search input:focus {
+  box-shadow: 0 0 0 3px rgba(0,240,255,0.2), 0 0 16px rgba(0,240,255,0.1);
+  border-color: var(--accent);
+}
+
+body { font-family: var(--font-mono); }

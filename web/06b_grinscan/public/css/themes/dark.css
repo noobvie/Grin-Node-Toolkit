@@ -1,0 +1,17 @@
+/* dark.css — GitHub-dark, Grin orange accent */
+:root {
+  --bg:           #0d1117;
+  --surface:      #161b22;
+  --surface2:     #21262d;
+  --border:       #30363d;
+  --text:         #e6edf3;
+  --muted:        #8b949e;
+  --accent:       #ff9900;
+  --accent2:      #f2c94c;
+  --green:        #3fb950;
+  --red:          #f85149;
+  --badge-coin:   #b8860b;
+  --badge-plain:  #1f6feb;
+  --badge-lock:   #8957e5;
+  --glow:         none;
+}

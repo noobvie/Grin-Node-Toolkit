@@ -1,0 +1,15 @@
+{
+  "name": "grinscan",
+  "version": "1.0.0",
+  "description": "GrinScan — Lightweight Grin block explorer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

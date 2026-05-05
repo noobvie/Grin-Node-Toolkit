@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Lightweight Grin block explorer">
+  <meta property="og:site_name" content="GrinScan">
+  <meta property="og:title" content="GrinScan — Grin Block Explorer">
+  <meta property="og:description" content="Lightweight Grin block explorer">
+  <title>GrinScan</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/grinscan.css">
+  <link rel="stylesheet" id="theme-css" href="/css/themes/dark.css">
+  <script>
+    (function () {
+      var net = (window.GRINSCAN_NETWORK || 'testnet');
+      var key = 'grinscan-theme-' + net;
+      var def = net === 'mainnet' ? 'neon' : 'matrix';
+      var saved = localStorage.getItem(key) || def;
+      var map = { dark: 'css/themes/dark.css', light: 'css/themes/light.css', neon: 'css/themes/neon.css', matrix: 'css/themes/matrix.css' };
+      var link = document.getElementById('theme-css');
+      if (link && map[saved]) link.href = map[saved];
+    })();
+  </script>
+</head>
+<body data-page="block">
+
+  <!-- Header -->
+  <header class="gs-header">
+    <a href="/" class="gs-logo">🔍 GrinScan</a>
+    <nav class="gs-nav">
+      <a href="/" class="nav-link" data-page="explorer" aria-label="Explorer">Explorer</a>
+      <a href="/info.html" class="nav-link" data-page="info" aria-label="Info">Info</a>
+    </nav>
+    <span id="network-badge" class="gs-network-badge testnet">TESTNET ●</span>
+    <div class="gs-theme-wrap">
+      <button id="theme-toggle-btn" aria-expanded="false" aria-haspopup="true">
+        <span id="theme-current-label">Theme</span> ▾
+      </button>
+      <div id="theme-dropdown" hidden role="menu">
+        <button data-theme="dark"   role="menuitem">🌑 Dark</button>
+        <button data-theme="light"  role="menuitem">☀️ Light</button>
+        <button data-theme="neon"   role="menuitem">⚡ Neon</button>
+        <button data-theme="matrix" role="menuitem">🟢 Matrix</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Search bar (reused here for quick lookup) -->
+  <main class="gs-main">
+
+    <form id="search-form" class="gs-search" role="search" style="margin-bottom:16px;">
+      <input id="search-input" type="text" placeholder="Jump to height or hash…" autocomplete="off" spellcheck="false" aria-label="Search blocks">
+      <button type="submit">Go</button>
+    </form>
+
+    <!-- Block detail section (hidden until data loads) -->
+    <div id="block-detail-wrap" style="display:none;">
+
+      <!-- Block header card -->
+      <div class="gs-block-detail" role="region" aria-labelledby="block-breadcrumb">
+        <h2 id="block-breadcrumb">Block #…</h2>
+
+        <div id="row-hash" class="gs-detail-row">
+          <span class="gs-detail-label">Hash</span>
+          <span class="gs-detail-value">
+            <span class="gs-detail-value-text" style="word-break:break-all;"></span>
+            <button class="gs-copy-btn" title="Copy hash">📋 Copy</button>
+          </span>
+        </div>
+
+        <div id="row-prev" class="gs-detail-row">
+          <span class="gs-detail-label">Prev Hash</span>
+          <span class="gs-detail-value">
+            <span class="gs-detail-value-text" style="word-break:break-all;"></span>
+            <button class="gs-copy-btn" title="Copy prev hash">📋 Copy</button>
+          </span>
+        </div>
+
+        <div id="row-time" class="gs-detail-row">
+          <span class="gs-detail-label">Timestamp</span>
+          <span class="gs-detail-value"><span class="gs-detail-value-text"></span></span>
+        </div>
+
+        <div id="row-difficulty" class="gs-detail-row">
+          <span class="gs-detail-label">Difficulty</span>
+          <span class="gs-detail-value"><span class="gs-detail-value-text"></span></span>
+        </div>
+
+        <div id="row-height" class="gs-detail-row">
+          <span class="gs-detail-label">Height</span>
+          <span class="gs-detail-value"><span class="gs-detail-value-text"></span></span>
+        </div>
+
+        <div id="row-kernels" class="gs-detail-row">
+          <span class="gs-detail-label">Kernel Count</span>
+          <span class="gs-detail-value"><span class="gs-detail-value-text"></span></span>
+        </div>
+
+        <div id="row-outputs" class="gs-detail-row">
+          <span class="gs-detail-label">Output Count</span>
+          <span class="gs-detail-value"><span class="gs-detail-value-text"></span></span>
+        </div>
+      </div>
+
+      <!-- Kernels -->
+      <div class="gs-kernels" role="region" aria-label="Kernels">
+        <h3>Kernels</h3>
+        <div id="kernels-list"></div>
+      </div>
+
+      <!-- Prev / Next navigation -->
+      <nav class="gs-block-nav" aria-label="Block navigation">
+        <a id="nav-prev" href="#" class="gs-nav-btn">← Previous Block</a>
+        <a id="nav-next" href="#" class="gs-nav-btn">Next Block →</a>
+      </nav>
+
+    </div><!-- /#block-detail-wrap -->
+
+    <!-- Error state -->
+    <div id="block-error" class="gs-error-box" style="display:none;" role="alert">
+      <h3>Block not found</h3>
+      <p class="error-msg"></p>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="gs-footer">
+    <div id="gs-footer-text"></div>
+  </footer>
+
+  <script src="/js/theme.js"></script>
+  <script src="/js/app.js"></script>
+  <script src="/js/analytics.js"></script>
+</body>
+</html>

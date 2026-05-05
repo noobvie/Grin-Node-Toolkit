@@ -68,6 +68,7 @@ EXTERNAL_NODES = {
     "mainnet": [
         "api.grin.money",
         "api.grinily.com",
+        "api.onlygrins.com",
         "api.grinnode.org",
         "main.gri.mw",
         "grincoin.org",
@@ -75,6 +76,7 @@ EXTERNAL_NODES = {
     "testnet": [
         "testapi.grin.money",
         "testapi.grinily.com",
+        "testapi.onlygrins.com",
         "testnet.grincoin.org",
         "test.gri.mw",
     ],
@@ -146,7 +148,7 @@ SERVICES = [
     {"category": "Community",   "name": "Grin Forum",        "url": "https://forum.grin.mw",                               "since": "Jan 2019"},
     {"category": "Community",   "name": "docs.grin.mw",      "url": "https://docs.grin.mw",                                "since": None},
     {"category": "Community",   "name": "grin.money",        "url": "http://grin.money",                                   "since": None},
-    {"category": "Community",   "name": "World Stats",       "url": "https://world.grin.money",                            "since": None},
+    {"category": "Community",   "name": "Grin Global Health with API", "url": "https://world.grin.money",                   "since": None},
     {"category": "Community",   "name": "Free Grin Airdrop", "url": "https://drop.grin.money/",                            "since": None},
 
     # ── Infrastructure ─────────────────────────────────────────────────────────
@@ -166,6 +168,15 @@ SERVICES = [
     {"category": "Mining Pool", "name": "NTMiner Pool",      "url": "https://ntminerpool.com/",                           "since": None},
     {"category": "Mining Pool", "name": "Gaea Pool",         "url": "https://gaeapool.com/",                              "since": None},
     {"category": "Mining Pool", "name": "Pool Stats",        "url": "https://miningpoolstats.stream/grin",                "since": None},
+
+    # ── Grin API providers ─────────────────────────────────────────────────────
+    {"category": "Grin API — Mainnet", "name": "api.grin.money",      "url": "https://api.grin.money",      "since": None},
+    {"category": "Grin API — Mainnet", "name": "api.grinily.com",     "url": "https://api.grinily.com",     "since": None},
+    {"category": "Grin API — Mainnet", "name": "api.onlygrins.com",   "url": "https://api.onlygrins.com",   "since": None},
+
+    {"category": "Grin API — Testnet", "name": "testapi.grin.money",  "url": "https://testapi.grin.money",  "since": None},
+    {"category": "Grin API — Testnet", "name": "testapi.grinily.com", "url": "https://testapi.grinily.com", "since": None},
+    {"category": "Grin API — Testnet", "name": "testapi.onlygrins.com", "url": "https://testapi.onlygrins.com", "since": None},
 
     # ── Dev repos — fetch last release / commit via API ────────────────────────
     {"category": "Development progress", "name": "grin",              "url": "https://github.com/mimblewimble/grin",                "since": "Mar 2018", "type": "github"},

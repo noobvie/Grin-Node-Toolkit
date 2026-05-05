@@ -381,6 +381,49 @@
   .svc-stock-out     { color: var(--orange); font-weight: 700; font-size: 11px; }
   .svc-stock-unknown { color: var(--muted);  font-size: 11px; }
 
+  /* ── Collapsible hint panels ────────────────────────────────────────────── */
+  .hint-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 17px; height: 17px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 10px;
+    display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    padding: 0;
+    transition: all 0.15s;
+  }
+  .hint-btn:hover, .hint-btn.open { border-color: var(--blue); color: var(--blue); }
+  .card-hint {
+    display: none;
+    padding: 12px 20px;
+    background: rgba(88,166,255,0.04);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+  .card-hint.open { display: block; }
+  .card-hint strong { color: var(--text); font-weight: 600; }
+  .card-hint pre {
+    margin: 5px 0 0;
+    padding: 7px 12px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: monospace;
+    color: var(--text);
+    line-height: 1.7;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .hint-section { margin-bottom: 10px; }
+  .hint-section:last-child { margin-bottom: 0; }
+  .hint-label { font-weight: 600; color: var(--text); margin-bottom: 1px; }
+
   /* ── External node rows ─────────────────────────────────────────────────── */
   .ext-node-row {
     display: flex;
@@ -499,8 +542,25 @@
   <!-- ── DNS Seed Status ──────────────────────────────────────────────────── -->
   <div class="card">
     <div class="card-header">
-      <div class="card-title"><span class="dot dot-green"></span>DNS Seed Status</div>
+      <div class="card-title">
+        <span class="dot dot-green"></span>DNS Seed Status
+        <button class="hint-btn" data-hint="dns-hint" title="How to configure DNS seeding">ⓘ</button>
+      </div>
       <span class="card-ts" id="dns-ts"></span>
+    </div>
+
+    <div class="card-hint" id="dns-hint">
+      <div class="hint-section">
+        <div class="hint-label">Default — automatic</div>
+        Grin resolves peers from DNS automatically. In <strong>grin-server.toml</strong>, the default is already set:
+        <pre>seeding_type = "DNSSeed"</pre>
+      </div>
+      <div class="hint-section">
+        <div class="hint-label">Fallback — if no DNS seed is reachable</div>
+        Switch to a static list and add known peer addresses:
+        <pre>seeding_type = "List"
+seeds = ["grincoin.org:3414", "main.gri.mw:3414", "main-seed.grin.money:3414"]</pre>
+      </div>
     </div>
 
     <div id="dns-warning" class="exp-warning-banner"></div>
@@ -520,9 +580,28 @@
   <!-- ── External Nodes ───────────────────────────────────────────────────── -->
   <div class="card">
     <div class="card-header">
-      <div class="card-title"><span class="dot dot-blue"></span>External Nodes — Grin Wallet API</div>
+      <div class="card-title">
+        <span class="dot dot-blue"></span>External Nodes — Grin Wallet API
+        <button class="hint-btn" data-hint="ext-hint" title="How to use an external node">ⓘ</button>
+      </div>
       <span class="card-ts" id="ext-ts"></span>
     </div>
+
+    <div class="card-hint" id="ext-hint">
+      <div class="hint-section">
+        Can't run a local Grin node? Point your wallet at one of the public nodes listed below.
+      </div>
+      <div class="hint-section">
+        <div class="hint-label">grin-wallet</div>
+        In <strong>grin-wallet.toml</strong>, set:
+        <pre>check_node_api_http_addr = "https://api.grinily.com"</pre>
+      </div>
+      <div class="hint-section">
+        <div class="hint-label">Grim wallet</div>
+        Go to <strong>Settings → External Connections</strong> and add the node URL.
+      </div>
+    </div>
+
     <div class="dns-seeds-grid">
       <div class="dns-seeds-col">
         <div class="dns-seeds-col-header"><span class="dot dot-grin"></span>Mainnet</div>
@@ -792,6 +871,17 @@ function updateSummary(data) {
       new Date(data.updated * 1000).toLocaleTimeString('en-GB', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' UTC';
   }
 }
+
+// ── Hint toggles ──────────────────────────────────────────────────────────
+document.querySelectorAll('.hint-btn').forEach(btn => {
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const hint = document.getElementById(btn.dataset.hint);
+    if (!hint) return;
+    const open = hint.classList.toggle('open');
+    btn.classList.toggle('open', open);
+  });
+});
 
 // ── Load and render ────────────────────────────────────────────────────────
 async function load() {

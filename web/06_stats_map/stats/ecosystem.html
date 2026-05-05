@@ -381,6 +381,19 @@
   .svc-stock-out     { color: var(--orange); font-weight: 700; font-size: 11px; }
   .svc-stock-unknown { color: var(--muted);  font-size: 11px; }
 
+  /* ── External node rows ─────────────────────────────────────────────────── */
+  .ext-node-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(48,54,61,0.5);
+    font-size: 12px;
+    font-family: monospace;
+  }
+  .ext-node-row:last-child { border-bottom: none; }
+  .ext-node-host { color: var(--text); display: flex; align-items: center; gap: 6px; }
+
   /* ── Loading / empty states ─────────────────────────────────────────────── */
   .placeholder { padding: 32px 20px; text-align: center; color: var(--muted); font-size: 13px; }
   #loading {
@@ -500,6 +513,24 @@
       <div class="dns-seeds-col">
         <div class="dns-seeds-col-header"><span class="dot dot-blue"></span>Testnet &middot; port 13414</div>
         <div id="dns-testnet"><div class="placeholder">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── External Nodes ───────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-blue"></span>External Nodes — Grin Wallet API</div>
+      <span class="card-ts" id="ext-ts"></span>
+    </div>
+    <div class="dns-seeds-grid">
+      <div class="dns-seeds-col">
+        <div class="dns-seeds-col-header"><span class="dot dot-grin"></span>Mainnet</div>
+        <div id="ext-mainnet"><div class="placeholder">Loading…</div></div>
+      </div>
+      <div class="dns-seeds-col">
+        <div class="dns-seeds-col-header"><span class="dot dot-blue"></span>Testnet</div>
+        <div id="ext-testnet"><div class="placeholder">Loading…</div></div>
       </div>
     </div>
   </div>
@@ -632,6 +663,27 @@ function renderDnsSeeds(data) {
   }
 }
 
+// ── External node rendering ────────────────────────────────────────────────
+function renderExternalNodes(data) {
+  for (const net of ['mainnet', 'testnet']) {
+    const el = document.getElementById('ext-' + net);
+    if (!el || !data[net]) continue;
+    if (!data[net].length) {
+      el.innerHTML = '<div class="placeholder">No data</div>';
+      continue;
+    }
+    el.innerHTML = data[net].map(node => {
+      const icon = node.ok
+        ? '<span class="status-ok">✓</span>'
+        : '<span class="status-fail">✗</span>';
+      const ms = node.ok && node.response_ms != null
+        ? `<span class="svc-ms">${node.response_ms}ms</span>`
+        : '<span class="svc-ms svc-down">—</span>';
+      return `<div class="ext-node-row"><div class="ext-node-host">${icon} ${esc(node.host)}</div>${ms}</div>`;
+    }).join('');
+  }
+}
+
 // ── Service rendering ──────────────────────────────────────────────────────
 function renderServices(services) {
   const el = document.getElementById('svc-body');
@@ -747,6 +799,7 @@ async function load() {
     const data = await fetchJSON('data/ecosystem.json');
 
     renderDnsSeeds(data.dns_seeds || {mainnet: [], testnet: []});
+    renderExternalNodes(data.external_nodes || {mainnet: [], testnet: []});
     renderServices(data.services || []);
     updateSummary(data);
 
@@ -754,9 +807,10 @@ async function load() {
       ? new Date(data.updated * 1000).toLocaleTimeString('en-GB', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' UTC'
       : '';
     document.getElementById('dns-ts').textContent = ts ? 'Updated ' + ts : '';
+    document.getElementById('ext-ts').textContent = ts ? 'Updated ' + ts : '';
     document.getElementById('svc-ts').textContent = ts ? 'Updated ' + ts : '';
   } catch (e) {
-    for (const id of ['dns-mainnet', 'dns-testnet', 'svc-body']) {
+    for (const id of ['dns-mainnet', 'dns-testnet', 'ext-mainnet', 'ext-testnet', 'svc-body']) {
       const el = document.getElementById(id);
       if (el) el.innerHTML = '<div class="placeholder">No data yet — run the ecosystem checker to generate ecosystem.json</div>';
     }

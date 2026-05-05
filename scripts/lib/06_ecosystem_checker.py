@@ -61,6 +61,25 @@ DNS_SEEDS = {
 
 SEED_PORTS = {"mainnet": 3414, "testnet": 13414}
 
+# ── External wallet-API nodes ──────────────────────────────────────────────────
+# Domains shared with DNS_SEEDS — no WHOIS check needed, just HTTP response time.
+
+EXTERNAL_NODES = {
+    "mainnet": [
+        "api.grin.money",
+        "api.grinily.com",
+        "api.grinnode.org",
+        "main.gri.mw",
+        "grincoin.org",
+    ],
+    "testnet": [
+        "testapi.grin.money",
+        "testapi.grinily.com",
+        "testnet.grincoin.org",
+        "test.gri.mw",
+    ],
+}
+
 # TLDs where WHOIS servers are reliable enough for automated refresh.
 # Everything else (.mw, .io, .live, .money, ccTLDs) must be maintained manually
 # in 06_domains_exceptions.json — their WHOIS servers block or return bad data.
@@ -128,6 +147,7 @@ SERVICES = [
     {"category": "Community",   "name": "docs.grin.mw",      "url": "https://docs.grin.mw",                                "since": None},
     {"category": "Community",   "name": "grin.money",        "url": "http://grin.money",                                   "since": None},
     {"category": "Community",   "name": "World Stats",       "url": "https://world.grin.money",                            "since": None},
+    {"category": "Community",   "name": "Free Grin Airdrop", "url": "https://drop.grin.money/",                            "since": None},
 
     # ── Infrastructure ─────────────────────────────────────────────────────────
     {"category": "Node",        "name": "GrinNode.live",     "url": "https://grinnode.live/",                              "since": None},
@@ -442,6 +462,28 @@ def cmd_whois(conn, force=False):
         else:
             print(f"— ({reason})")
 
+# ── External node HTTP checks ──────────────────────────────────────────────────
+
+def _check_external_nodes():
+    """HTTP-check all external wallet-API nodes. Returns {mainnet:[…], testnet:[…]}."""
+    result = {"mainnet": [], "testnet": []}
+
+    def check_one(net, host):
+        ok, _, ms = _http_check(f"https://{host}/", timeout=8)
+        return net, {"host": host, "ok": ok, "response_ms": ms if ok else None}
+
+    items = [(net, host) for net, hosts in EXTERNAL_NODES.items() for host in hosts]
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futures = [ex.submit(check_one, net, host) for net, host in items]
+        for f in as_completed(futures):
+            net, entry = f.result()
+            result[net].append(entry)
+
+    for net in result:
+        order = {h: i for i, h in enumerate(EXTERNAL_NODES[net])}
+        result[net].sort(key=lambda e: order.get(e["host"], 999))
+    return result
+
 # ── HTTP service checks ────────────────────────────────────────────────────────
 
 def _http_check(url, timeout=8):
@@ -733,6 +775,15 @@ def cmd_update():
             status = f"{sum(1 for ip in entry['ips'] if ip['ok'])}/{len(entry['ips'])} IPs ok"
             print(f"  {host}: {status}")
 
+    # External node HTTP checks
+    print("[INFO] Checking external nodes...")
+    ext_result = _check_external_nodes()
+    for net, nodes in ext_result.items():
+        for n in nodes:
+            icon = "✓" if n["ok"] else "✗"
+            ms   = f"{n['response_ms']}ms" if n["response_ms"] is not None else "—"
+            print(f"  {icon} [{net}] {n['host']} {ms}")
+
     # HTTP service checks
     print("[INFO] Checking ecosystem services...")
     services = _build_services()
@@ -745,9 +796,10 @@ def cmd_update():
     conn.close()
 
     _write_json("ecosystem.json", {
-        "updated":   now,
-        "dns_seeds": dns_result,
-        "services":  svc_results,
+        "updated":        now,
+        "dns_seeds":      dns_result,
+        "external_nodes": ext_result,
+        "services":       svc_results,
     })
     print(f"[OK] ecosystem.json written to {WWW_DATA}")
 

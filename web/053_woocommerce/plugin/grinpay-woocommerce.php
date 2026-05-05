@@ -24,7 +24,7 @@ define( 'GRINPAY_MIN_WP',      '6.9' );
 define( 'GRINPAY_MIN_WC',      '10.6.1' );
 define( 'GRINPAY_MIN_NODE',    '5.4.0' );
 define( 'GRINPAY_MIN_WALLET',  '5.4.0' );
-define( 'GRINPAY_MIN_PYTHON',  '3.10.0' );
+define( 'GRINPAY_MIN_NODEJS',  '18.0.0' );
 define( 'GRINPAY_PLUGIN_FILE', __FILE__ );
 define( 'GRINPAY_PLUGIN_DIR',  plugin_dir_path( __FILE__ ) );
 define( 'GRINPAY_PLUGIN_URL',  plugin_dir_url( __FILE__ ) );

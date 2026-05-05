@@ -120,6 +120,22 @@ The toolkit no longer patches `api_secret_path` in grin-wallet.toml; grin-wallet
 Owner API v3 session flow: `init_secure_api` → ECDH key exchange → `open_wallet` → AES-256-GCM encrypted calls.
 Foreign API v2: Basic Auth + secret file, no ECDH.
 
+## tmux Sessions — Always Use Bash
+When generating `tmux new-session` commands (in cron wrappers, watchdog scripts, or any
+code that may run from cron), always prefix the call with `SHELL=/bin/bash`:
+
+```bash
+SHELL=/bin/bash tmux new-session -d -s "name" -c "$DIR" "command"
+```
+
+**Why:** cron sets `SHELL=/bin/sh` in its environment. A `#!/bin/bash` shebang only sets
+the interpreter for the script itself — it does not change the `SHELL` env var inherited
+by child processes. If a tmux server starts (or a new session is created) while `SHELL`
+is `/bin/sh`, all sessions in that server use `sh`, not `bash`. The inline assignment
+`SHELL=/bin/bash tmux ...` passes bash to the tmux server regardless of how it was
+started. Using `export SHELL=/bin/bash` at the top of a wrapper is not sufficient when
+the tmux server was already started by a different process.
+
 ## Do Not
 - Never run the toolkit scripts locally — they assume a Linux VPS with root access
 - Never hardcode wallet API secrets or passwords in scripts

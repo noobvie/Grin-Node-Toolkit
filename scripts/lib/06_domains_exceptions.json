@@ -1,0 +1,10 @@
+{
+  "grinnode.live": { "registered": "2019-11-12", "expires": "2026-11-12" },
+  "grin.mw":       { "registered": "2017-11-16", "expires": "2027-11-16" },
+  "grin.money":    { "registered": "2021-07-09", "expires": "2030-07-09" },
+  "gri.mw":        { "registered": "2024-11-13", "expires": "2026-11-13" },
+  "always.vip":    { "registered": "2016-05-17", "expires": "2031-05-17" },
+  "miningpoolstats.stream":    { "registered": "2018-04-21", "expires": "2034-04-21" },
+  "grinily.com":    { "registered": "2023-05-18", "expires": "2027-05-18" },
+  "nonlogs.io":    { "registered": "2025-10-13", "expires": "2026-10-13" }
+}

@@ -10,11 +10,13 @@
  *   POST /api/invoice             — create Slatepack invoice
  *   POST /api/finalize            — finalise buyer's signed response slate
  *   GET  /api/tx_status/:tx_id   — poll transaction confirmation status
+ *   GET  /api/rate                — GRIN/USD rate (world.grin.money + Gate.io fallback)
  *
  * Config (environment variables):
  *   GRINPAY_NETWORK       mainnet | testnet  (default: mainnet)
  *   GRINPAY_PORT          bridge listen port (default: 3006/3007)
  *   GRINPAY_API_KEY       X-Api-Key auth header (optional)
+ *   GRINPAY_HMAC_SECRET   HMAC-SHA256 secret for POST signing (optional)
  *   GRINPAY_OWNER_API_URL override owner_api URL
  *   GRINPAY_WALLET_DIR    wallet data dir (locates .owner_api_secret)
  *   GRINPAY_WALLET_PASS   wallet password (default: empty)
@@ -23,6 +25,7 @@
  * Security:
  *   - Binds to 127.0.0.1 only — never exposed publicly.
  *   - Optional X-Api-Key auth (constant-time comparison).
+ *   - Optional HMAC-SHA256 POST body signing via X-Grinpay-Sig header.
  *   - Slatepack input validated before touching wallet state.
  *   - Session token kept in process memory only — never written to disk.
  */
@@ -41,13 +44,18 @@ const {
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const PORT    = parseInt(process.env.GRINPAY_PORT || (NETWORK === 'testnet' ? '3007' : '3006'), 10);
-const API_KEY = (process.env.GRINPAY_API_KEY || '').trim();
+const PORT        = parseInt(process.env.GRINPAY_PORT || (NETWORK === 'testnet' ? '3007' : '3006'), 10);
+const API_KEY     = (process.env.GRINPAY_API_KEY     || '').trim();
+const HMAC_SECRET = (process.env.GRINPAY_HMAC_SECRET || '').trim();
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
 const app = express();
-app.use(express.json({ limit: '128kb' }));
+// Capture raw body for HMAC verification before JSON parsing consumes the stream.
+app.use(express.json({
+  limit: '128kb',
+  verify: (req, _res, buf) => { req._rawBody = buf.toString('utf8'); },
+}));
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -56,18 +64,35 @@ function log(level, msg) {
   process.stdout.write(`[${ts}] [${level}] ${msg}\n`);
 }
 
-// ── Auth middleware ───────────────────────────────────────────────────────────
+// ── Auth middleware — API key ─────────────────────────────────────────────────
 
 function requireApiKey(req, res, next) {
   if (!API_KEY) return next();
   const provided = req.headers['x-api-key'] || '';
-  // Use constant-time comparison to prevent timing attacks on key length/content.
-  // crypto.timingSafeEqual requires equal-length Buffers — the length check here
-  // leaks key length only, which is acceptable for a localhost-only service.
+  // Constant-time comparison prevents timing attacks. Length leak is acceptable
+  // for a localhost-only service.
   const a = Buffer.from(provided);
   const b = Buffer.from(API_KEY);
   const valid = a.length === b.length && crypto.timingSafeEqual(a, b);
   if (!valid) return res.status(401).json({ success: false, error: 'Unauthorized' });
+  next();
+}
+
+// ── Auth middleware — HMAC-SHA256 POST signing ────────────────────────────────
+
+function requireHmac(req, res, next) {
+  // Only POST requests carry a body worth signing; GETs are read-only + localhost-bound.
+  if (!HMAC_SECRET || req.method !== 'POST') return next();
+  const sig      = req.headers['x-grinpay-sig'] || '';
+  const body     = req._rawBody || '';
+  const expected = 'sha256=' + crypto.createHmac('sha256', HMAC_SECRET).update(body).digest('hex');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  const valid = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!valid) {
+    log('WARN', `HMAC mismatch for ${req.method} ${req.path}`);
+    return res.status(401).json({ success: false, error: 'Invalid request signature' });
+  }
   next();
 }
 
@@ -140,7 +165,7 @@ app.get('/api/address', requireApiKey, async (_req, res) => {
 
 // ── POST /api/invoice ─────────────────────────────────────────────────────────
 
-app.post('/api/invoice', requireApiKey, async (req, res) => {
+app.post('/api/invoice', requireApiKey, requireHmac, async (req, res) => {
   const body        = req.body || {};
   const amountStr   = String(body.amount   || '').trim();
   const description = String(body.description || '').slice(0, 200);
@@ -186,7 +211,7 @@ app.post('/api/invoice', requireApiKey, async (req, res) => {
 
 // ── POST /api/finalize ────────────────────────────────────────────────────────
 
-app.post('/api/finalize', requireApiKey, async (req, res) => {
+app.post('/api/finalize', requireApiKey, requireHmac, async (req, res) => {
   const body          = req.body || {};
   const slateResponse = String(body.response_slate || '').trim();
   const expectedTxId  = String(body.tx_id          || '').trim();
@@ -252,9 +277,10 @@ app.get('/api/tx_status/:tx_id', requireApiKey, async (req, res) => {
     const txType      = String(tx.tx_type || '').toLowerCase();
     const isCancelled = txType.includes('cancel');
 
-    const status = isCancelled                       ? 'cancelled'
-                 : (confirmed || numConfirms >= 1)   ? 'confirmed'
-                 :                                     'pending';
+    // Report what the wallet says — PHP decides if confirmations >= threshold.
+    const status = isCancelled ? 'cancelled'
+                 : confirmed   ? 'confirmed'
+                 :               'pending';
 
     return res.json({ success: true, tx_id: txId, status, confirmations: numConfirms });
 
@@ -262,6 +288,78 @@ app.get('/api/tx_status/:tx_id', requireApiKey, async (req, res) => {
     log('ERROR', `TX_STATUS tx_id=${txId}: ${err.message}`);
     return apiErr(res, connMsg(err), connCode(err));
   }
+});
+
+// ── GET /api/rate ─────────────────────────────────────────────────────────────
+
+/** In-memory rate cache — { rate_usd: number, source: string, ts: number } */
+let _rateCache = null;
+const RATE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+app.get('/api/rate', requireApiKey, async (_req, res) => {
+  // Serve cached rate if still fresh
+  if (_rateCache && (Date.now() - _rateCache.ts) < RATE_TTL_MS) {
+    return res.json({
+      success:  true,
+      rate_usd: _rateCache.rate_usd,
+      source:   _rateCache.source,
+      cached:   true,
+      age_s:    Math.floor((Date.now() - _rateCache.ts) / 1000),
+    });
+  }
+
+  // Primary: world.grin.money
+  try {
+    const r    = await fetch('https://world.grin.money/api/price', { signal: AbortSignal.timeout(10_000) });
+    const data = await r.json();
+    // Defensive: try common field names the API might use
+    const rate = parseFloat(
+      data?.price ?? data?.usd ?? data?.USD ?? data?.rate ??
+      data?.last  ?? data?.close ?? (typeof data === 'number' ? data : NaN)
+    );
+    if (rate > 0 && isFinite(rate)) {
+      _rateCache = { rate_usd: rate, source: 'world.grin.money', ts: Date.now() };
+      log('INFO', `RATE ${rate} USD/GRIN from world.grin.money`);
+      return res.json({ success: true, rate_usd: rate, source: 'world.grin.money', cached: false });
+    }
+    log('WARN', `RATE world.grin.money: unexpected shape — ${JSON.stringify(data).slice(0, 120)}`);
+  } catch (err) {
+    log('WARN', `RATE world.grin.money failed: ${err.message}`);
+  }
+
+  // Fallback: Gate.io GRIN_USDT ticker
+  try {
+    const r      = await fetch('https://api.gateio.ws/api/v4/spot/tickers?currency_pair=GRIN_USDT', {
+      signal: AbortSignal.timeout(10_000),
+    });
+    const data   = await r.json();
+    const ticker = Array.isArray(data) ? data[0] : data;
+    const rate   = parseFloat(ticker?.last ?? ticker?.close ?? NaN);
+    if (rate > 0 && isFinite(rate)) {
+      _rateCache = { rate_usd: rate, source: 'gate.io', ts: Date.now() };
+      log('INFO', `RATE ${rate} USD/GRIN from gate.io`);
+      return res.json({ success: true, rate_usd: rate, source: 'gate.io', cached: false });
+    }
+    log('WARN', `RATE gate.io: unexpected shape — ${JSON.stringify(data).slice(0, 120)}`);
+  } catch (err) {
+    log('WARN', `RATE gate.io failed: ${err.message}`);
+  }
+
+  // Serve stale cache if both sources failed — better than an error during checkout
+  if (_rateCache) {
+    const age_min = Math.floor((Date.now() - _rateCache.ts) / 60_000);
+    log('WARN', `RATE serving stale cache (${age_min} min old)`);
+    return res.json({
+      success:  true,
+      rate_usd: _rateCache.rate_usd,
+      source:   _rateCache.source + ' (stale)',
+      cached:   true,
+      stale:    true,
+      age_s:    Math.floor((Date.now() - _rateCache.ts) / 1000),
+    });
+  }
+
+  return apiErr(res, 'Exchange rate unavailable — all sources failed', 503);
 });
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
@@ -273,5 +371,6 @@ app.use((_req, res) => res.status(404).json({ success: false, error: 'Not found'
 app.listen(PORT, '127.0.0.1', () => {
   log('INFO', `GrinPay bridge [${NETWORK.toUpperCase()}] listening on 127.0.0.1:${PORT}`);
   log('INFO', `owner_api → ${OWNER_API_URL}`);
-  if (!API_KEY) log('WARN', 'GRINPAY_API_KEY not set — bridge accessible without auth (localhost only)');
+  if (!API_KEY)     log('WARN', 'GRINPAY_API_KEY not set — no API key auth (localhost only)');
+  if (!HMAC_SECRET) log('WARN', 'GRINPAY_HMAC_SECRET not set — POST requests not HMAC-signed (localhost only)');
 });

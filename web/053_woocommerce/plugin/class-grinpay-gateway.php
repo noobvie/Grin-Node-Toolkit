@@ -106,11 +106,25 @@ class Grinpay_Gateway extends WC_Payment_Gateway {
 				'type'    => 'number',
 				'default' => '1',
 			],
+			'currency_mode' => [
+				'title'   => __( 'Currency Mode', 'grinpay-woocommerce' ),
+				'type'    => 'select',
+				'options' => [
+					'direct' => __( 'Direct GRIN — product prices set in GRIN', 'grinpay-woocommerce' ),
+					'auto'   => __( 'Auto-convert — convert store currency to GRIN at checkout', 'grinpay-woocommerce' ),
+				],
+				'default' => 'direct',
+			],
 			'debug' => [
 				'title'   => __( 'Debug Logging', 'grinpay-woocommerce' ),
 				'type'    => 'checkbox',
 				'label'   => __( 'Enable debug log', 'grinpay-woocommerce' ),
 				'default' => 'no',
+			],
+			'hmac_secret' => [
+				'title'   => __( 'HMAC Secret', 'grinpay-woocommerce' ),
+				'type'    => 'password',
+				'default' => '',
 			],
 		];
 	}
@@ -170,8 +184,25 @@ class Grinpay_Gateway extends WC_Payment_Gateway {
 			return [ 'result' => 'failure', 'redirect' => '' ];
 		}
 
-		// Amount in GRIN (product price must already be in GRIN)
-		$amount = number_format( (float) $order->get_total(), 9, '.', '' );
+		// Amount in GRIN — direct mode: price already in GRIN; auto mode: convert via bridge rate
+		$currency_mode = $this->get_option( 'currency_mode', 'direct' );
+		if ( 'auto' === $currency_mode ) {
+			$rate_result = $this->bridge_request( 'GET', 'api/rate' );
+			if ( is_wp_error( $rate_result ) ) {
+				$this->log( 'process_payment: rate fetch failed — ' . $rate_result->get_error_message() );
+				wc_add_notice( __( 'GrinPay: Could not fetch Grin exchange rate. Please try again.', 'grinpay-woocommerce' ), 'error' );
+				return [ 'result' => 'failure', 'redirect' => '' ];
+			}
+			$rate_usd = (float) ( $rate_result['rate_usd'] ?? 0 );
+			if ( $rate_usd <= 0 ) {
+				wc_add_notice( __( 'GrinPay: Invalid exchange rate received. Please try again.', 'grinpay-woocommerce' ), 'error' );
+				return [ 'result' => 'failure', 'redirect' => '' ];
+			}
+			$amount = number_format( (float) $order->get_total() / $rate_usd, 9, '.', '' );
+			$this->log( "Rate: {$rate_usd} USD/GRIN (source: " . ( $rate_result['source'] ?? '?' ) . ") → {$amount} GRIN" );
+		} else {
+			$amount = number_format( (float) $order->get_total(), 9, '.', '' );
+		}
 
 		// Call bridge /api/invoice
 		$response = $this->bridge_request( 'POST', 'api/invoice', [
@@ -239,15 +270,16 @@ class Grinpay_Gateway extends WC_Payment_Gateway {
 			return;
 		}
 
-		$slatepack  = (string) $order->get_meta( '_grinpay_slate' );
+		$slate      = (string) $order->get_meta( '_grinpay_slate' );
 		$tx_id      = (string) $order->get_meta( '_grinpay_tx_id' );
 		$amount     = (string) $order->get_meta( '_grinpay_amount' );
 		$network    = (string) $order->get_meta( '_grinpay_network' );
 		$created_at = (int) $order->get_meta( '_grinpay_created_at' );
 		$expiry_min = (int) $this->get_option( 'expiry_minutes', 30 );
 		$expires_at = $created_at + ( $expiry_min * 60 );
+		$order_key  = $order->get_order_key();
 
-		if ( empty( $slatepack ) || empty( $tx_id ) ) {
+		if ( empty( $slate ) || empty( $tx_id ) ) {
 			echo '<div class="grinpay-box"><p>'
 				. esc_html__( 'GrinPay: Invoice data not found. Please contact support with your order number.', 'grinpay-woocommerce' )
 				. '</p></div>';
@@ -287,6 +319,15 @@ class Grinpay_Gateway extends WC_Payment_Gateway {
 		}
 
 		$tx_id = (string) $order->get_meta( '_grinpay_tx_id' );
+
+		// Idempotency guard — return early if already confirmed (concurrent double-click / cron race)
+		if ( 'confirmed' === (string) $order->get_meta( '_grinpay_status' ) ) {
+			wp_send_json_success( [
+				'message'  => __( 'Payment already confirmed.', 'grinpay-woocommerce' ),
+				'redirect' => $this->get_return_url( $order ),
+			] );
+			return;
+		}
 
 		// Call bridge /api/finalize
 		$result = $this->bridge_request( 'POST', 'api/finalize', [
@@ -368,9 +409,20 @@ class Grinpay_Gateway extends WC_Payment_Gateway {
 			wp_send_json_success( [ 'status' => 'pending' ] );
 		}
 
-		$confirmed = ! empty( $result['confirmed'] ) && true === $result['confirmed'];
+		$threshold    = (int) $this->get_option( 'confirmations', 1 );
+		$num_confirms = (int) ( $result['confirmations'] ?? 0 );
+		$tx_status    = (string) ( $result['status'] ?? 'pending' );
+		$confirmed    = 'confirmed' === $tx_status && $num_confirms >= $threshold;
 
 		if ( $confirmed ) {
+			// Idempotency guard — concurrent poll ticks could both see confirmed and both call payment_complete
+			if ( 'confirmed' === (string) $order->get_meta( '_grinpay_status' ) ) {
+				wp_send_json_success( [
+					'status'   => 'confirmed',
+					'redirect' => $this->get_return_url( $order ),
+				] );
+				return;
+			}
 			$amount = (string) $order->get_meta( '_grinpay_amount' );
 			$order->update_meta_data( '_grinpay_status', 'confirmed' );
 			$order->payment_complete( $tx_id );
@@ -446,7 +498,18 @@ class Grinpay_Gateway extends WC_Payment_Gateway {
 
 			// Poll bridge for confirmation
 			$result = $gateway->bridge_request( 'GET', 'api/tx_status/' . rawurlencode( $tx_id ) );
-			if ( is_wp_error( $result ) || empty( $result['confirmed'] ) ) {
+			if ( is_wp_error( $result ) ) {
+				continue;
+			}
+			$threshold    = (int) $gateway->get_option( 'confirmations', 1 );
+			$num_confirms = (int) ( $result['confirmations'] ?? 0 );
+			$tx_status    = (string) ( $result['status'] ?? 'pending' );
+			if ( 'confirmed' !== $tx_status || $num_confirms < $threshold ) {
+				continue;
+			}
+
+			// Idempotency guard — cron may overlap with a concurrent poll or submit
+			if ( 'confirmed' === (string) $order->get_meta( '_grinpay_status' ) ) {
 				continue;
 			}
 
@@ -489,8 +552,18 @@ class Grinpay_Gateway extends WC_Payment_Gateway {
 			'headers'   => $headers,
 		];
 
+		$json_body = '';
 		if ( 'POST' === $args['method'] && ! empty( $body ) ) {
-			$args['body'] = wp_json_encode( $body );
+			$json_body    = (string) wp_json_encode( $body );
+			$args['body'] = $json_body;
+		}
+
+		// HMAC-SHA256 signing for self-hosted mode (verifies request integrity at bridge)
+		if ( 'self_hosted' === $this->get_option( 'connection_mode', 'self_hosted' ) ) {
+			$hmac_secret = (string) $this->get_option( 'hmac_secret', '' );
+			if ( $hmac_secret ) {
+				$args['headers']['X-Grinpay-Sig'] = 'sha256=' . hash_hmac( 'sha256', $json_body, $hmac_secret );
+			}
 		}
 
 		$response = wp_remote_request( $url, $args );

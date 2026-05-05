@@ -68,15 +68,28 @@ $poll_interval_ms = 15000;
 				readonly
 				aria-label="<?php esc_attr_e( 'Grin Slatepack invoice', 'grinpay-woocommerce' ); ?>"
 			><?php echo esc_textarea( $slate ); ?></textarea>
-			<button
-				type="button"
-				class="grinpay-btn grinpay-btn--copy"
-				data-clipboard-target="#grinpay-invoice-slate"
-				aria-label="<?php esc_attr_e( 'Copy Slatepack invoice', 'grinpay-woocommerce' ); ?>"
-			>
-				<?php esc_html_e( 'Copy', 'grinpay-woocommerce' ); ?>
-			</button>
+			<div class="grinpay-slate-actions">
+				<button
+					type="button"
+					class="grinpay-btn grinpay-btn--copy"
+					data-clipboard-target="#grinpay-invoice-slate"
+					aria-label="<?php esc_attr_e( 'Copy Slatepack invoice', 'grinpay-woocommerce' ); ?>"
+				>
+					<?php esc_html_e( 'Copy', 'grinpay-woocommerce' ); ?>
+				</button>
+				<button
+					type="button"
+					class="grinpay-btn grinpay-btn--qr"
+					id="grinpay-qr-toggle"
+					aria-expanded="false"
+					aria-controls="grinpay-qr-wrap"
+				>
+					<?php esc_html_e( 'Show QR', 'grinpay-woocommerce' ); ?>
+				</button>
+			</div>
 		</div>
+
+		<div id="grinpay-qr-wrap" class="grinpay-qr-wrap" aria-hidden="true"></div>
 
 		<?php if ( $expires_at > 0 ) : ?>
 		<p class="grinpay-expiry" id="grinpay-expiry" data-expires="<?php echo esc_attr( (string) $expires_at ); ?>">
@@ -136,6 +149,15 @@ wp_enqueue_style(
 	GRINPAY_VERSION
 );
 
+// QR code library (qrcodejs — MIT licence, runs entirely in-browser, no data sent externally).
+wp_enqueue_script(
+	'qrcodejs',
+	'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js',
+	[],
+	'1.0.0',
+	true
+);
+
 // Pass PHP data to the inline JS block below.
 $js_data = [
 	'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
@@ -146,6 +168,7 @@ $js_data = [
 	'txId'           => $tx_id,
 	'expiresAt'      => $expires_at,
 	'pollInterval'   => $poll_interval_ms,
+	'slatepack'      => $slate,
 	'i18n'           => [
 		'submitting'     => __( 'Submitting\u2026', 'grinpay-woocommerce' ),
 		'success'        => __( 'Payment received! Your order is being processed.', 'grinpay-woocommerce' ),
@@ -156,6 +179,8 @@ $js_data = [
 		'copied'         => __( 'Copied!', 'grinpay-woocommerce' ),
 		'pollPending'    => __( 'Waiting for payment confirmation\u2026', 'grinpay-woocommerce' ),
 		'pollConfirmed'  => __( 'Payment confirmed!', 'grinpay-woocommerce' ),
+		'showQr'         => __( 'Show QR', 'grinpay-woocommerce' ),
+		'hideQr'         => __( 'Hide QR', 'grinpay-woocommerce' ),
 	],
 ];
 ?>
@@ -211,6 +236,45 @@ $js_data = [
 		}, 1800 );
 	}
 
+	// ── QR code toggle ───────────────────────────────────────────────────────
+	var qrBtn  = document.getElementById( 'grinpay-qr-toggle' );
+	var qrWrap = document.getElementById( 'grinpay-qr-wrap' );
+	var qrCode = null;
+	if ( qrBtn && qrWrap && GP.slatepack ) {
+		qrBtn.addEventListener( 'click', function () {
+			var visible = qrWrap.getAttribute( 'aria-hidden' ) === 'false';
+			if ( visible ) {
+				qrWrap.setAttribute( 'aria-hidden', 'true' );
+				qrWrap.classList.remove( 'grinpay-qr-wrap--open' );
+				qrBtn.textContent = GP.i18n.showQr;
+				qrBtn.setAttribute( 'aria-expanded', 'false' );
+			} else {
+				if ( ! qrCode ) {
+					// Instantiate once — qrcodejs library creates a canvas/table inside qrWrap.
+					// CorrectLevel.L = lowest redundancy = maximum data capacity.
+					/* global QRCode */
+					if ( typeof QRCode !== 'undefined' ) {
+						qrCode = new QRCode( qrWrap, {
+							text:         GP.slatepack,
+							width:        240,
+							height:       240,
+							correctLevel: QRCode.CorrectLevel.L,
+						} );
+					} else {
+						qrWrap.textContent = 'QR library not loaded. Try refreshing the page.';
+					}
+				}
+				qrWrap.setAttribute( 'aria-hidden', 'false' );
+				qrWrap.classList.add( 'grinpay-qr-wrap--open' );
+				qrBtn.textContent = GP.i18n.hideQr;
+				qrBtn.setAttribute( 'aria-expanded', 'true' );
+			}
+		} );
+	} else if ( qrBtn ) {
+		// No slatepack data available — hide the button
+		qrBtn.style.display = 'none';
+	}
+
 	// ── Submit response ──────────────────────────────────────────────────────
 	var submitBtn = document.getElementById( 'grinpay-submit-btn' );
 	var submitMsg = document.getElementById( 'grinpay-submit-msg' );
@@ -230,7 +294,7 @@ $js_data = [
 			body.append( 'nonce',         GP.nonce );
 			body.append( 'order_id',      GP.orderId );
 			body.append( 'order_key',     GP.orderKey );
-			body.append( 'slate_response', responseSlate );
+			body.append( 'response_slate', responseSlate );
 
 			fetch( GP.ajaxUrl, {
 				method:      'POST',

@@ -90,11 +90,52 @@
 	transition: background 0.15s, opacity 0.15s;
 }
 
+/* ── Slate action buttons row ────────────────────────────────────────────── */
+
+.grinpay-slate-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+}
+
 .grinpay-btn--copy {
-	align-self: flex-end;
 	background: #f6f7f7;
 	border: 1px solid #8c8f94;
 	color: #3c434a;
+}
+
+/* ── QR code ─────────────────────────────────────────────────────────────── */
+
+.grinpay-btn--qr {
+	background: #f0f0f0;
+	border: 1px solid #8c8f94;
+	color: #3c434a;
+}
+
+.grinpay-btn--qr:hover,
+.grinpay-btn--qr:focus {
+	background: #e0e0e0;
+}
+
+.grinpay-qr-wrap {
+	display: none;
+	margin-top: 12px;
+	text-align: center;
+}
+
+.grinpay-qr-wrap--open {
+	display: block;
+}
+
+.grinpay-qr-wrap img,
+.grinpay-qr-wrap canvas {
+	max-width: 240px;
+	height: auto;
+	border: 1px solid #ddd;
+	border-radius: 4px;
+	padding: 8px;
+	background: #fff;
 }
 
 .grinpay-btn--copy:hover,

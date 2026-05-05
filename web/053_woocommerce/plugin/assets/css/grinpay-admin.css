@@ -16,7 +16,7 @@
 	margin-bottom: 20px;
 }
 
-.grinpay-tab-link {
+.grinpay-tab {
 	display: inline-block;
 	padding: 8px 16px;
 	text-decoration: none;
@@ -30,12 +30,12 @@
 	transition: background 0.1s;
 }
 
-.grinpay-tab-link:hover {
+.grinpay-tab:hover {
 	background: #fff;
 	color: #1d2327;
 }
 
-.grinpay-tab-link.grinpay-tab-link--active {
+.grinpay-tab.grinpay-tab--active {
 	background: #fff;
 	border-color: #c3c4c7;
 	border-bottom-color: #fff;
@@ -117,11 +117,11 @@
 
 /* ── Test Connection button + result ─────────────────────────────────────── */
 
-#grinpay-test-btn {
+#grinpay_test_connection {
 	margin-top: 4px;
 }
 
-#grinpay-test-result {
+#grinpay_connection_result {
 	margin-top: 10px;
 	padding: 10px 14px;
 	border-radius: 3px;
@@ -182,7 +182,7 @@
 	flex: 1;
 }
 
-#grinpay-apikey-toggle {
+#grinpay_toggle_key {
 	white-space: nowrap;
 }
 

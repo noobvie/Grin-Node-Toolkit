@@ -973,20 +973,30 @@ stop_grin_node() {
     log "Grin stopped (port $GRIN_PORT free)"
 }
 
-# Step 2: remove large txhashset zip files before compressing
+# Step 2: remove large txhashset zip files and txhashset_zip dir before compressing
 remove_old_txhashset() {
-    log "Step 2: Removing txhashset_snapshot*.zip files..."
+    log "Step 2: Removing txhashset_snapshot*.zip files and txhashset_zip directory..."
     cd "$GRIN_DATA_DIR" || error_exit "Cannot access $GRIN_DATA_DIR"
     local count; count=$(find . -name "txhashset_snapshot*.zip" 2>/dev/null | wc -l)
-    [ "$count" -gt 0 ] && find . -name "txhashset_snapshot*.zip" -delete && log "Removed $count file(s)" \
-        || log "None found"
+    [ "$count" -gt 0 ] && find . -name "txhashset_snapshot*.zip" -delete && log "Removed $count zip file(s)" \
+        || log "No txhashset_snapshot*.zip found"
+    local zip_dirs; zip_dirs=$(find . -maxdepth 1 -type d -name "txhashset_zip*" 2>/dev/null)
+    if [[ -n "$zip_dirs" ]]; then
+        find . -maxdepth 1 -type d -name "txhashset_zip*" -exec rm -rf {} +
+        log "Removed txhashset_zip* director(ies)"
+    else
+        log "No txhashset_zip* directory found"
+    fi
 }
 
-# Step 3: remove peer list so downloaders start fresh
+# Step 3: peer directory — kept in archive intentionally.
+# Removing it was the original behaviour, but when DNS seeds are unavailable
+# (as happened when all Grin DNS seed nodes went offline in 2026-04) a node
+# that bootstraps from this archive has no peers at all and cannot connect.
+# Including the peer DB gives downloaders a head-start with known-good peers.
+# LMDB reinitialises lock.mdb on open, so cross-platform copies are safe.
 remove_peer_directory() {
-    log "Step 3: Removing peer directory..."
-    local d="$GRIN_DATA_DIR/peer"
-    [ -d "$d" ] && { rm -rf "$d" && log "Peer directory removed"; } || log "Not found — skipping"
+    log "Step 3: Keeping peer directory (skipped — see comment above)"
 }
 
 # Step 4: write status file to signal download is not yet ready
@@ -1005,7 +1015,10 @@ compress_chain_data() {
     local base="grin_${NODE_TYPE}_${NETWORK_TYPE}_$(date +%Y%m%d)"
     local out="$OUTPUT_DIR/${base}.tar.gz"
 
-    tar -czf "$out" "$dir_name"
+    tar -czf "$out" \
+        --exclude="${dir_name}/lmdb/lock.mdb" \
+        --exclude="${dir_name}/peer/lock.mdb" \
+        "$dir_name"
     [ $? -ne 0 ] && error_exit "Compression failed"
     cd "$OUTPUT_DIR" && sha256sum "${base}.tar.gz" > "${base}.sha256"
     log "Archive size: $(du -h "$out" | cut -f1)"
@@ -1480,7 +1493,7 @@ CLEAN_TXHASHSET_DIRS=(
 # Entry point for --cron-clean
 run_txhashset_cleanup() {
     local ts; ts="[$(date -u '+%Y-%m-%d %H:%M:%S UTC')]"
-    echo "$ts Starting txhashset_snapshot_*.zip cleanup..."
+    echo "$ts Starting txhashset snapshot cleanup..."
     local total=0
     for d in "${CLEAN_TXHASHSET_DIRS[@]}"; do
         if [[ ! -d "$d" ]]; then
@@ -1490,13 +1503,18 @@ run_txhashset_cleanup() {
         local count; count=$(find "$d" -maxdepth 1 -name "txhashset_snapshot_*.zip" 2>/dev/null | wc -l)
         if [[ "$count" -gt 0 ]]; then
             find "$d" -maxdepth 1 -name "txhashset_snapshot_*.zip" -delete
-            echo "$ts   Removed $count file(s) from $d"
+            echo "$ts   Removed $count zip file(s) from $d"
             total=$((total + count))
         else
-            echo "$ts   None found in $d"
+            echo "$ts   No txhashset_snapshot_*.zip in $d"
+        fi
+        local zip_dirs; zip_dirs=$(find "$d" -maxdepth 1 -type d -name "txhashset_zip*" 2>/dev/null)
+        if [[ -n "$zip_dirs" ]]; then
+            find "$d" -maxdepth 1 -type d -name "txhashset_zip*" -exec rm -rf {} +
+            echo "$ts   Removed txhashset_zip* director(ies) from $d"
         fi
     done
-    echo "$ts Done. Total removed: $total file(s)"
+    echo "$ts Done. Total zip files removed: $total"
 }
 
 ################################################################################

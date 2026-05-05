@@ -51,6 +51,7 @@ DB_PATH="$DATA_DIR/stats.db"
 PRICE_COLLECTOR_BIN="/usr/local/bin/grin-price-collector"
 PRICE_DIR="/opt/grin/grin-price"
 PRICE_DB_PATH="$PRICE_DIR/grin-price.db"
+ECOSYSTEM_CHECKER_BIN="/usr/local/bin/grin-ecosystem-checker"
 EXPLORER_DIR="/opt/grin/grin-explorer"
 EXPLORER_BIN="$EXPLORER_DIR/target/release/grin-explorer"
 EXPLORER_TOML="$EXPLORER_DIR/Explorer.toml"
@@ -62,6 +63,8 @@ NGINX_EXPLORER_CONF="/etc/nginx/sites-available/grin-explorer"
 # ─── Cron markers ─────────────────────────────────────────────────────────────
 CRON_MARKER_STATS="# grin-node-toolkit: grin_stats_update"
 CRON_MARKER_PRICE="# grin-node-toolkit: grin_price_update"
+CRON_MARKER_ECOSYSTEM="# grin-node-toolkit: grin_ecosystem_update"
+CRON_MARKER_WHOIS="# grin-node-toolkit: grin_whois_update"
 CRON_MARKER_EXPLORER="# grin-node-toolkit: grin_explorer"
 
 # ─── Grin node ports ─────────────────────────────────────────────────────────
@@ -224,9 +227,117 @@ check_python() {
         || die "Python 3 stdlib modules missing. Please install python3."
 }
 
+# ─── Ensure python-whois is available ────────────────────────────────────────
+ensure_python_whois() {
+    python3 -c "import whois" 2>/dev/null && return 0
+    if ! command -v pip3 &>/dev/null; then
+        info "pip3 not found — installing python3-pip..."
+        apt-get update -qq && apt-get install -y python3-pip -qq \
+            || { warn "apt install python3-pip failed."; return 1; }
+    fi
+    info "Installing python-whois..."
+    pip3 install python-whois --break-system-packages --quiet \
+        || pip3 install python-whois --quiet \
+        || { warn "python-whois install failed — domain expiry will show '—'"; return 1; }
+    return 0
+}
+
+# ─── Shared nginx helpers ─────────────────────────────────────────────────────
+
+# Prompt for a domain/subdomain, reject reserved script-02 labels.
+# Usage:  _prompt_nginx_domain <varname> <prompt_text> || return
+_prompt_nginx_domain() {
+    local -n _nginx_domain_out=$1
+    local prompt_text="$2"
+    while true; do
+        echo -ne "${BOLD}${prompt_text}: ${RESET}"
+        read -r _nginx_domain_out
+        [[ -z "$_nginx_domain_out" || "$_nginx_domain_out" == "0" ]] && return 1
+        local _lbl="${_nginx_domain_out%%.*}"
+        if [[ "$_lbl" == "fullmain" || "$_lbl" == "prunemain" || "$_lbl" == "prunetest" ]]; then
+            warn "'$_lbl' is reserved by script 02 (Grin chain data server). Choose a different subdomain."
+            continue
+        fi
+        break
+    done
+    return 0
+}
+
+# Write a standard logrotate config for a grin nginx service.
+# Usage:  _write_nginx_logrotate "stats"   or   _write_nginx_logrotate "explorer"
+_write_nginx_logrotate() {
+    local svc="$1"
+    cat > "/etc/logrotate.d/grin-${svc}" <<LOGROTATE
+/var/log/nginx/grin-${svc}-access.log /var/log/nginx/grin-${svc}-error.log {
+    daily
+    rotate 10
+    maxsize 10M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    sharedscripts
+    postrotate
+        nginx -s reopen 2>/dev/null || true
+    endscript
+}
+LOGROTATE
+}
+
+# Enable nginx site, test config, run certbot, reload.
+# Usage:  _nginx_certbot_finish <conf_file> <sites-enabled-name> <domain> <email> || return
+_nginx_certbot_finish() {
+    local conf_file="$1" sites_name="$2" domain="$3" email="$4"
+    ln -sf "$conf_file" "/etc/nginx/sites-enabled/${sites_name}"
+    nginx -t || { die "nginx config test failed. Check ${conf_file}."; return 1; }
+    nginx -s reload
+    info "Obtaining SSL certificate for ${domain}..."
+    info "Certbot will add HTTPS and redirect to the nginx config automatically."
+    certbot --nginx -d "$domain" --non-interactive --agree-tos \
+        --email "$email" --redirect \
+        || { warn "Certbot failed — verify DNS A-record resolves to this server (step 4)."; pause; return 1; }
+    nginx -s reload
+}
+
 ################################################################################
 # OPTION A — Network Stats + Peer Map
 ################################################################################
+
+# ── A-helper: Inject Google Analytics into deployed HTML ──────────────────────
+# Reads GA_MEASUREMENT_ID from config.env; no-ops if unset or empty.
+_inject_analytics() {
+    local ga_id
+    ga_id=$(grep -E "^GA_MEASUREMENT_ID=" "$DATA_DIR/config.env" 2>/dev/null | cut -d= -f2-)
+    [[ -z "$ga_id" ]] && return 0
+    GA_ID="$ga_id" GA_WWW_DIR="$WWW_DIR" python3 <<'PYEOF'
+import os
+ga_id = os.environ['GA_ID']
+www   = os.environ['GA_WWW_DIR']
+snippet = (
+    '<!-- Google tag (gtag.js) -->'
+    '<script async src="https://www.googletagmanager.com/gtag/js?id=' + ga_id + '"></script>'
+    '<script>window.dataLayer=window.dataLayer||[];'
+    'function gtag(){dataLayer.push(arguments);}'
+    "gtag('js',new Date());"
+    "gtag('config','" + ga_id + "');</script>"
+)
+for fname in ['index.html', 'stats.html', 'ecosystem.html']:
+    path = www + '/' + fname
+    try:
+        with open(path) as f:
+            html = f.read()
+        if snippet in html:
+            continue  # already up to date
+        # Strip any previously injected Google tag (handles ID changes without double-injection)
+        lines = [l for l in html.split('\n') if not l.startswith('<!-- Google tag (gtag.js) -->')]
+        html = '\n'.join(lines)
+        with open(path, 'w') as f:
+            f.write(html.replace('</head>', snippet + '\n</head>', 1))
+    except FileNotFoundError:
+        pass
+PYEOF
+    info "Google Analytics (${ga_id}) applied to index.html, stats.html and ecosystem.html."
+}
 
 # ── A-1: Install ──────────────────────────────────────────────────────────────
 install_stats() {
@@ -243,16 +354,39 @@ install_stats() {
 
     # Deploy collector script
     info "Installing collector script..."
-    cp "$SCRIPT_DIR/06_collector.py" "$COLLECTOR_BIN"
+    cp "$SCRIPT_DIR/lib/06_collector.py" "$COLLECTOR_BIN"
     chmod +x "$COLLECTOR_BIN"
+
+    # Deploy ecosystem checker
+    info "Installing ecosystem checker..."
+    cp "$SCRIPT_DIR/lib/06_ecosystem_checker.py" "$ECOSYSTEM_CHECKER_BIN"
+    cp "$SCRIPT_DIR/lib/06_domains_exceptions.json" "$(dirname "$ECOSYSTEM_CHECKER_BIN")/06_domains_exceptions.json"
+    chmod +x "$ECOSYSTEM_CHECKER_BIN"
+    ensure_python_whois || true
+    python3 "$ECOSYSTEM_CHECKER_BIN" --init-db
 
     # Deploy HTML pages
     if [[ ! -d "$WEB_SRC" ]]; then
         die "Web source not found: $WEB_SRC. Ensure the toolkit is complete."
     fi
     info "Deploying web pages..."
-    cp "$WEB_SRC/index.html"  "$WWW_DIR/index.html"
-    cp "$WEB_SRC/stats.html"  "$WWW_DIR/stats.html"
+    cp "$WEB_SRC/index.html"     "$WWW_DIR/index.html"
+    cp "$WEB_SRC/stats.html"     "$WWW_DIR/stats.html"
+    cp "$WEB_SRC/ecosystem.html" "$WWW_DIR/ecosystem.html"
+
+    # Optional Google Analytics
+    echo ""
+    echo -ne "${BOLD}Google Analytics Measurement ID${RESET} ${DIM}(e.g. G-VD8489MMYW — press Enter to skip): ${RESET}"
+    local _ga_input ga_id=""
+    read -r _ga_input
+    _ga_input="${_ga_input// /}"
+    if [[ -n "$_ga_input" ]]; then
+        if [[ "$_ga_input" =~ ^G-[A-Z0-9]+$ ]]; then
+            ga_id="$_ga_input"
+        else
+            warn "Invalid Measurement ID format — expected G-XXXXXXXXX. Skipping Google Analytics."
+        fi
+    fi
 
     # Download Chart.js
     if [[ ! -f "$WWW_DIR/chart.min.js" ]]; then
@@ -337,10 +471,12 @@ GRIN_TESTNET_OWNER_URL=http://127.0.0.1:13413/v2/owner
 GRIN_TESTNET_SECRET_PATH=${testnet_secret}
 GRIN_WWW_DATA=${WWW_DIR}/data
 GRIN_DB_PATH=${DB_PATH}
+GA_MEASUREMENT_ID=${ga_id}
 EOF
     chmod 600 "$DATA_DIR/config.env"
     info "Config written to $DATA_DIR/config.env"
     info "If your secret files are in a different location, edit that file manually."
+    _inject_analytics
 
     # Initialise empty DB (schema only)
     info "Initialising stats database..."
@@ -348,10 +484,10 @@ EOF
 
     # ── Install price collector ───────────────────────────────────────────────
     info "Installing price collector..."
-    if [[ ! -f "$SCRIPT_DIR/06_price_collector.py" ]]; then
-        warn "06_price_collector.py not found in $SCRIPT_DIR — price charts will be unavailable."
+    if [[ ! -f "$SCRIPT_DIR/lib/06_price_collector.py" ]]; then
+        warn "06_price_collector.py not found in $SCRIPT_DIR/lib — price charts will be unavailable."
     else
-        cp "$SCRIPT_DIR/06_price_collector.py" "$PRICE_COLLECTOR_BIN"
+        cp "$SCRIPT_DIR/lib/06_price_collector.py" "$PRICE_COLLECTOR_BIN"
         chmod +x "$PRICE_COLLECTOR_BIN"
 
         mkdir -p "$PRICE_DIR"
@@ -429,9 +565,19 @@ import_data() {
         echo -e "  ${GREEN}j${RESET}) Re-export price JSON only     ${DIM}(no fetch — regenerate price.json from existing DB)${RESET}"
         echo ""
     fi
+    echo -e "  ${BOLD}── Ecosystem Checker  (DNS seeds + service health → ecosystem.json) ──${RESET}"
+    echo ""
+    if [[ ! -f "$ECOSYSTEM_CHECKER_BIN" ]]; then
+        echo -e "  ${YELLOW}  Ecosystem checker not installed — run Install (1) first.${RESET}"
+        echo ""
+    else
+        echo -e "  ${GREEN}l${RESET}) Run ecosystem check now       ${DIM}(HTTP + TCP checks, WHOIS if stale — writes ecosystem.json)${RESET}"
+        echo -e "  ${GREEN}m${RESET}) Force WHOIS refresh           ${DIM}(re-fetch domain expiry for all DNS seeds)${RESET}"
+        echo ""
+    fi
     echo -e "  ${DIM}0) Cancel${RESET}"
     echo ""
-    echo -ne "${BOLD}Select [a-k / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [a-m / 0]: ${RESET}"
     read -r imp_choice
     [[ "$imp_choice" == "0" || -z "$imp_choice" ]] && return
 
@@ -468,6 +614,17 @@ import_data() {
             [[ ! -f "$PRICE_COLLECTOR_BIN" ]] && { warn "Price collector not installed."; sleep 1; return; }
             bin="$PRICE_COLLECTOR_BIN"; cmd="--export"; desc="Price: Re-export price.json only"
             ;;
+        # ── Ecosystem checker ────────────────────────────────────────────────
+        l)
+            [[ ! -f "$ECOSYSTEM_CHECKER_BIN" ]] && { warn "Ecosystem checker not installed."; sleep 1; return; }
+            ensure_python_whois || true
+            bin="$ECOSYSTEM_CHECKER_BIN"; cmd="--update"; desc="Ecosystem: Run full check now (HTTP + TCP + WHOIS)"
+            ;;
+        m)
+            [[ ! -f "$ECOSYSTEM_CHECKER_BIN" ]] && { warn "Ecosystem checker not installed."; sleep 1; return; }
+            ensure_python_whois || { sleep 2; return; }
+            bin="$ECOSYSTEM_CHECKER_BIN"; cmd="--whois";  desc="Ecosystem: Force WHOIS refresh for all DNS seeds"
+            ;;
         *) warn "Invalid choice."; sleep 1; return ;;
     esac
 
@@ -476,7 +633,7 @@ import_data() {
     echo -e "  ${DIM}Progress will appear below — do not close this window.${RESET}"
     echo ""
     local rc=0
-    if [[ "$bin" == "$COLLECTOR_BIN" ]]; then
+    if [[ "$bin" == "$COLLECTOR_BIN" || "$bin" == "$ECOSYSTEM_CHECKER_BIN" ]]; then
         # shellcheck disable=SC2046
         env $(cat "$DATA_DIR/config.env" | tr '\n' ' ') \
             python3 "$bin" $cmd || rc=$?
@@ -516,18 +673,32 @@ start_updates() {
 
     local cron_line="*/5 * * * * env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $COLLECTOR_BIN --update >> $LOG_DIR/grin_stats_cron.log 2>&1 && chown -R www-data:www-data $WWW_DIR/data >> /dev/null 2>&1 $CRON_MARKER_STATS"
 
-    # Remove any stale price cron before re-adding
-    existing=$(echo "$existing" | grep -v "grin_price_update" || true)
+    # Remove any stale price / ecosystem crons before re-adding
+    existing=$(echo "$existing" | grep -v "grin_price_update"     || true)
+    existing=$(echo "$existing" | grep -v "grin_ecosystem_update" || true)
+    existing=$(echo "$existing" | grep -v "grin_whois_update"     || true)
+
     local price_cron=""
     if [[ -f "$PRICE_COLLECTOR_BIN" ]]; then
         price_cron="*/5 * * * * python3 $PRICE_COLLECTOR_BIN --update >> $LOG_DIR/price_cron.log 2>&1 $CRON_MARKER_PRICE"
     fi
 
-    (echo "$existing"; echo "$cron_line"; [[ -n "$price_cron" ]] && echo "$price_cron") \
+    local eco_cron="" whois_cron=""
+    if [[ -f "$ECOSYSTEM_CHECKER_BIN" ]]; then
+        eco_cron="0 * * * * env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $ECOSYSTEM_CHECKER_BIN --update >> $LOG_DIR/grin_ecosystem.log 2>&1 $CRON_MARKER_ECOSYSTEM"
+        whois_cron="0 3 * * * env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $ECOSYSTEM_CHECKER_BIN --whois >> $LOG_DIR/grin_ecosystem.log 2>&1 $CRON_MARKER_WHOIS"
+    fi
+
+    (echo "$existing"
+     echo "$cron_line"
+     [[ -n "$price_cron"  ]] && echo "$price_cron"
+     [[ -n "$eco_cron"    ]] && echo "$eco_cron"
+     [[ -n "$whois_cron"  ]] && echo "$whois_cron") \
         | grep -v '^$' | crontab -
-    success "Live updates enabled — stats + price collectors run every 5 minutes."
+    success "Live updates enabled — stats + price every 5 min · ecosystem checks every hour."
     [[ -z "$price_cron" ]] && warn "Price collector not installed — price cron skipped."
-    log "Stats cron added. Price cron: ${price_cron:-(skipped)}"
+    [[ -z "$eco_cron"   ]] && warn "Ecosystem checker not installed — ecosystem cron skipped."
+    log "Stats cron added. Price cron: ${price_cron:-(skipped)}. Ecosystem cron: ${eco_cron:-(skipped)}"
     pause
 }
 
@@ -538,16 +709,22 @@ stop_updates() {
     echo -e "\n${BOLD}${CYAN}── Stop Live Updates ──${RESET}\n"
     local existing; existing=$(crontab -l 2>/dev/null || true)
     local found=false
-    echo "$existing" | grep -qF "grin_stats_update" && found=true
-    echo "$existing" | grep -qF "grin_price_update"  && found=true
+    echo "$existing" | grep -qF "grin_stats_update"      && found=true
+    echo "$existing" | grep -qF "grin_price_update"      && found=true
+    echo "$existing" | grep -qF "grin_ecosystem_update"  && found=true
+    echo "$existing" | grep -qF "grin_whois_update"      && found=true
     if [[ "$found" == false ]]; then
-        info "No stats or price cron jobs found."
+        info "No stats, price or ecosystem cron jobs found."
         pause; return
     fi
-    echo "$existing" | grep -v "grin_stats_update" | grep -v "grin_price_update" \
+    echo "$existing" \
+        | grep -v "grin_stats_update" \
+        | grep -v "grin_price_update" \
+        | grep -v "grin_ecosystem_update" \
+        | grep -v "grin_whois_update" \
         | grep -v '^$' | crontab -
-    success "Live updates disabled (stats + price)."
-    log "Stats and price crons removed."
+    success "Live updates disabled (stats + price + ecosystem)."
+    log "Stats, price and ecosystem crons removed."
     pause
 }
 
@@ -561,17 +738,7 @@ setup_nginx_stats() {
     command -v nginx &>/dev/null || { die "nginx not installed. Run option N first."; return; }
     command -v certbot &>/dev/null || apt-get install -y certbot python3-certbot-nginx -qq
 
-    while true; do
-        echo -ne "${BOLD}Stats subdomain (e.g. stats.yourdomain.com): ${RESET}"
-        read -r stats_domain
-        [[ -z "$stats_domain" || "$stats_domain" == "0" ]] && return
-        local _lbl="${stats_domain%%.*}"
-        if [[ "$_lbl" == "fullmain" || "$_lbl" == "prunemain" || "$_lbl" == "prunetest" ]]; then
-            warn "'$_lbl' is reserved by script 02 (Grin chain data server). Choose a different subdomain."
-            continue
-        fi
-        break
-    done
+    _prompt_nginx_domain stats_domain "Stats subdomain (e.g. stats.yourdomain.com)" || return
 
     echo -ne "${BOLD}Email address for SSL certificate (Let's Encrypt): ${RESET}"
     read -r ssl_email
@@ -618,7 +785,8 @@ server {
     #   /api/active_peers → mainnet+testnet peer count history        (06_collector.py)
     #   /api/versions     → node version distribution                 (06_collector.py)
     #   /api/price        → GRIN/USDT price, OHLCV history            (06_price_collector.py)
-    #   /api/issuance    → annual supply inflation: grin/usd_m2/gold  (06_collector.py)
+    #   /api/issuance     → annual supply inflation: grin/usd_m2/gold  (06_collector.py)
+    #   /api/ecosystem    → DNS seeds + ecosystem services status     (06_ecosystem_checker.py)
     #   /api/peers        → disabled (privacy mode — peer data is internal only)
     #
     location = /api/summary      { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/summary.json;      }
@@ -629,7 +797,8 @@ server {
     location = /api/active_peers { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/active_peers.json; }
     location = /api/versions     { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/versions.json;     }
     location = /api/price        { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/price.json;        }
-    location = /api/issuance    { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/issuance.json;    }
+    location = /api/issuance     { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/issuance.json;     }
+    location = /api/ecosystem    { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/ecosystem.json;    }
     location = /api/peers        { return 404; }
 
     # Block everything else under /api/ — no directory listing, no other files
@@ -669,33 +838,9 @@ if ($request_method = 'OPTIONS') {
 SNIPPET
 
     # Logrotate: rotate at 10 MB or after 10 days
-    cat > /etc/logrotate.d/grin-stats <<'LOGROTATE'
-/var/log/nginx/grin-stats-access.log /var/log/nginx/grin-stats-error.log {
-    daily
-    rotate 10
-    maxsize 10M
-    compress
-    delaycompress
-    missingok
-    notifempty
-    sharedscripts
-    postrotate
-        nginx -s reopen 2>/dev/null || true
-    endscript
-}
-LOGROTATE
+    _write_nginx_logrotate "stats"
 
-    ln -sf "$NGINX_STATS_CONF" "/etc/nginx/sites-enabled/grin-stats"
-    nginx -t || { die "nginx config test failed. Check $NGINX_STATS_CONF."; return; }
-    nginx -s reload
-
-    info "Obtaining SSL certificate for ${stats_domain}..."
-    info "Certbot will add HTTPS and redirect to the nginx config automatically."
-    certbot --nginx -d "$stats_domain" --non-interactive --agree-tos \
-        --email "$ssl_email" --redirect \
-        || { warn "Certbot failed — verify DNS A-record resolves to this server (step 4)."; pause; return; }
-
-    nginx -s reload
+    _nginx_certbot_finish "$NGINX_STATS_CONF" "grin-stats" "$stats_domain" "$ssl_email" || return
     success "Site live:       https://${stats_domain}              (peer map — index.html)"
     success "Stats page:      https://${stats_domain}/stats.html"
     log "Nginx stats config created for ${stats_domain}"
@@ -715,6 +860,9 @@ status_stats() {
     [[ -f "$PRICE_COLLECTOR_BIN" ]] \
         && echo -e "  Price coll.  ${GREEN}✓ installed${RESET}  ${DIM}($PRICE_COLLECTOR_BIN)${RESET}" \
         || echo -e "  Price coll.  ${YELLOW}✗ not installed${RESET}  ${DIM}(run Install → step 1)${RESET}"
+    [[ -f "$ECOSYSTEM_CHECKER_BIN" ]] \
+        && echo -e "  Eco checker  ${GREEN}✓ installed${RESET}  ${DIM}($ECOSYSTEM_CHECKER_BIN)${RESET}" \
+        || echo -e "  Eco checker  ${YELLOW}✗ not installed${RESET}  ${DIM}(run Install → step 1)${RESET}"
 
     # Databases
     if [[ -f "$DB_PATH" ]]; then
@@ -733,7 +881,7 @@ status_stats() {
 
     # JSON data files
     echo -e "  JSON exports"
-    for f in summary hashrate difficulty transactions fees active_peers versions peers price inflation; do
+    for f in summary hashrate difficulty transactions fees active_peers versions peers price inflation ecosystem; do
         local jf="$WWW_DIR/data/${f}.json"
         if [[ -f "$jf" ]]; then
             local age; age=$(( ($(date +%s) - $(stat -c %Y "$jf" 2>/dev/null || echo 0)) / 60 ))
@@ -755,6 +903,11 @@ status_stats() {
     else
         echo -e "  Price cron   ${YELLOW}✗ inactive${RESET}"
     fi
+    if crontab -l 2>/dev/null | grep -q "grin_ecosystem_update"; then
+        echo -e "  Eco cron     ${GREEN}✓ active${RESET}  ${DIM}(hourly)${RESET}"
+    else
+        echo -e "  Eco cron     ${YELLOW}✗ inactive${RESET}"
+    fi
 
     # Nginx
     echo ""
@@ -773,7 +926,72 @@ status_stats() {
     else
         echo -e "  Grin node    ${RED}✗ not detected${RESET}"
     fi
+
+    # Google Analytics
     echo ""
+    local ga_cur
+    ga_cur=$(grep -E "^GA_MEASUREMENT_ID=" "$DATA_DIR/config.env" 2>/dev/null | cut -d= -f2-)
+    if [[ -n "$ga_cur" ]]; then
+        echo -e "  Analytics    ${GREEN}✓ ${ga_cur}${RESET}"
+    else
+        echo -e "  Analytics    ${DIM}not configured${RESET}"
+    fi
+    echo ""
+    pause
+}
+
+# ── A-7: Configure Google Analytics ──────────────────────────────────────────
+configure_analytics() {
+    require_root
+    clear
+    echo -e "\n${BOLD}${CYAN}── Configure Google Analytics ──${RESET}\n"
+
+    if [[ ! -f "$DATA_DIR/config.env" ]]; then
+        die "Stats not installed yet. Run option 1 first."
+        return
+    fi
+
+    local current_id
+    current_id=$(grep -E "^GA_MEASUREMENT_ID=" "$DATA_DIR/config.env" 2>/dev/null | cut -d= -f2-)
+    if [[ -n "$current_id" ]]; then
+        echo -e "  Current ID:  ${GREEN}${current_id}${RESET}"
+    else
+        echo -e "  Current ID:  ${DIM}(none)${RESET}"
+    fi
+    echo ""
+    echo -ne "${BOLD}Measurement ID${RESET} ${DIM}(e.g. G-VD8489MMYW — Enter to remove, 0 to cancel): ${RESET}"
+    local ga_input
+    read -r ga_input
+    ga_input="${ga_input// /}"
+    [[ "$ga_input" == "0" ]] && return
+
+    if [[ -n "$ga_input" ]] && ! [[ "$ga_input" =~ ^G-[A-Z0-9]+$ ]]; then
+        warn "Invalid format — expected G-XXXXXXXXX. No changes made."
+        pause
+        return
+    fi
+
+    # Update config.env
+    if grep -q "^GA_MEASUREMENT_ID=" "$DATA_DIR/config.env"; then
+        sed -i "s|^GA_MEASUREMENT_ID=.*|GA_MEASUREMENT_ID=${ga_input}|" "$DATA_DIR/config.env"
+    else
+        echo "GA_MEASUREMENT_ID=${ga_input}" >> "$DATA_DIR/config.env"
+    fi
+
+    # Re-deploy HTML from source so injection starts from a clean base
+    if [[ -d "$WEB_SRC" ]]; then
+        cp "$WEB_SRC/index.html"     "$WWW_DIR/index.html"
+        cp "$WEB_SRC/stats.html"     "$WWW_DIR/stats.html"
+        cp "$WEB_SRC/ecosystem.html" "$WWW_DIR/ecosystem.html"
+        chown www-data:www-data "$WWW_DIR/index.html" "$WWW_DIR/stats.html" "$WWW_DIR/ecosystem.html"
+    fi
+
+    if [[ -n "$ga_input" ]]; then
+        _inject_analytics
+        success "Google Analytics updated: ${ga_input}"
+    else
+        success "Google Analytics removed."
+    fi
     pause
 }
 
@@ -1144,17 +1362,7 @@ setup_nginx_explorer() {
     command -v nginx &>/dev/null || { die "nginx not installed. Run option N first."; return; }
     command -v certbot &>/dev/null || apt-get install -y certbot python3-certbot-nginx -qq
 
-    while true; do
-        echo -ne "${BOLD}Enter domain or sub-domain for the explorer (e.g. explorer.yourdomain.com) [0 = cancel]: ${RESET}"
-        read -r expl_domain
-        [[ -z "$expl_domain" || "$expl_domain" == "0" ]] && return
-        local _lbl="${expl_domain%%.*}"
-        if [[ "$_lbl" == "fullmain" || "$_lbl" == "prunemain" || "$_lbl" == "prunetest" ]]; then
-            warn "'$_lbl' is reserved by script 02 (Grin chain data server). Choose a different subdomain."
-            continue
-        fi
-        break
-    done
+    _prompt_nginx_domain expl_domain "Enter domain or sub-domain for the explorer (e.g. explorer.yourdomain.com) [0 = cancel]" || return
 
     echo -ne "${BOLD}Email address for Let's Encrypt SSL certificate [0 = cancel]: ${RESET}"
     read -r ssl_email
@@ -1186,33 +1394,9 @@ server {
 NGINX
 
     # Logrotate: rotate at 10 MB or after 10 days
-    cat > /etc/logrotate.d/grin-explorer <<'LOGROTATE'
-/var/log/nginx/grin-explorer-access.log /var/log/nginx/grin-explorer-error.log {
-    daily
-    rotate 10
-    maxsize 10M
-    compress
-    delaycompress
-    missingok
-    notifempty
-    sharedscripts
-    postrotate
-        nginx -s reopen 2>/dev/null || true
-    endscript
-}
-LOGROTATE
+    _write_nginx_logrotate "explorer"
 
-    ln -sf "$NGINX_EXPLORER_CONF" "/etc/nginx/sites-enabled/grin-explorer"
-    nginx -t || { die "nginx config test failed. Check $NGINX_EXPLORER_CONF."; return; }
-    nginx -s reload
-
-    info "Obtaining SSL certificate for ${expl_domain}..."
-    info "Certbot will add HTTPS and redirect to the nginx config automatically."
-    certbot --nginx -d "$expl_domain" --non-interactive --agree-tos \
-        --email "$ssl_email" --redirect \
-        || { warn "Certbot failed — verify DNS A-record resolves to this server (step 4)."; pause; return; }
-
-    nginx -s reload
+    _nginx_certbot_finish "$NGINX_EXPLORER_CONF" "grin-explorer" "$expl_domain" "$ssl_email" || return
     success "Explorer live: https://${expl_domain}"
     warn "Ensure the explorer is started (option 3) before visiting the URL."
     log "Nginx explorer config created for ${expl_domain}"
@@ -1331,29 +1515,36 @@ show_menu_a() {
     echo -e "${BOLD}${CYAN}  6A) Network Stats + Peer Map${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  ${DIM}Pages served:  /            (index.html) → Grin peer world map${RESET}"
-    echo -e "  ${DIM}               /stats.html              → hashrate, difficulty, tx, fees, versions${RESET}"
+    echo -e "  ${DIM}Pages served:  /                (index.html)    → Grin peer world map${RESET}"
+    echo -e "  ${DIM}               /stats.html                     → hashrate, difficulty, tx, fees, versions${RESET}"
+    echo -e "  ${DIM}               /ecosystem.html                 → DNS seeds + ecosystem services status${RESET}"
     echo ""
     local inst="${RED}✗ not installed${RESET}"
     local cron="${YELLOW}inactive${RESET}"
+    local eco_cron="${YELLOW}inactive${RESET}"
     local ngnx="${YELLOW}not configured${RESET}"
+    local ga_lbl="${DIM}not set${RESET}"
     [[ -f "$COLLECTOR_BIN" ]]                                      && inst="${GREEN}✓ installed${RESET}"
     crontab -l 2>/dev/null | grep -q "grin_stats_update"           && cron="${GREEN}active${RESET}"
+    crontab -l 2>/dev/null | grep -q "grin_ecosystem_update"       && eco_cron="${GREEN}active${RESET}"
     [[ -f "$NGINX_STATS_CONF" ]]                                   && ngnx="${GREEN}✓ configured${RESET}"
+    local _ga_id; _ga_id=$(grep -E "^GA_MEASUREMENT_ID=" "$DATA_DIR/config.env" 2>/dev/null | cut -d= -f2-)
+    [[ -n "$_ga_id" ]] && ga_lbl="${GREEN}${_ga_id}${RESET}"
 
-    echo -e "  ${GREEN}1${RESET})   Install          ${DIM}collector + Chart.js + Leaflet${RESET}   [$inst]"
-    echo -e "  ${GREEN}2${RESET})   Import Data      ${DIM}stats: init / backfill / update  |  price: init / update${RESET}"
-    echo -e "  ${GREEN}3${RESET})   Start Updates    ${DIM}cron every 5 min${RESET}  [$cron]"
+    echo -e "  ${GREEN}1${RESET})   Install          ${DIM}collector + ecosystem checker + Chart.js + Leaflet${RESET}   [$inst]"
+    echo -e "  ${GREEN}2${RESET})   Import Data      ${DIM}stats: init / backfill / update  |  price: init / update  |  ecosystem: run / whois${RESET}"
+    echo -e "  ${GREEN}3${RESET})   Start Updates    ${DIM}stats+price every 5 min · ecosystem hourly${RESET}  [stats: $cron · eco: $eco_cron]"
     echo -e "  ${GREEN}4${RESET})   Check DNS        ${DIM}confirm A-record before nginx setup${RESET}"
     echo -e "  ${GREEN}5${RESET})   Setup Nginx      ${DIM}HTTPS subdomain${RESET}  [$ngnx]"
     echo -e "  ${GREEN}6${RESET})   Status"
+    echo -e "  ${GREEN}7${RESET})   Google Analytics  ${DIM}inject GA tag into all three pages${RESET}  [$ga_lbl]"
     echo -e "  ${YELLOW}Z${RESET})   Stop Updates     ${DIM}disable cron${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back${RESET}"
     echo -e "  ${DIM}[Enter] Refresh menu${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-6, Z]: ${RESET}"
+    echo -ne "${BOLD}Select [0-7, Z]: ${RESET}"
 }
 
 show_menu_b() {
@@ -1437,6 +1628,7 @@ run_menu_a() {
             4) check_dns_record "stats"   || true ;;
             5) setup_nginx_stats          || true ;;
             6) status_stats               || true ;;
+            7) configure_analytics        || true ;;
             Z) stop_updates               || true ;;
             0) break                               ;;
             "") ;;  # Enter = refresh menu

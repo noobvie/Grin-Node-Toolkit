@@ -106,7 +106,6 @@ final class Grinpay_Block_Support extends AbstractPaymentMethodType {
 			'title'       => $title,
 			'description' => $description,
 			'supports'    => $supports,
-			'logo_url'    => GRINPAY_PLUGIN_URL . 'assets/images/grin-logo.svg',
 		];
 	}
 }

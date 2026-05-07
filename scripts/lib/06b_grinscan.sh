@@ -455,7 +455,8 @@ grinscan_setup_nginx() {
         *) warn "Invalid choice."; sleep 1; return ;;
     esac
 
-    echo -ne "  Domain (e.g. scan.yourdomain.com): "
+    local domain_eg; [[ "$net" == "testnet" ]] && domain_eg="test.yourdomain.com" || domain_eg="scan.yourdomain.com"
+    echo -ne "  Domain (e.g. ${domain_eg}): "
     read -r domain
     [[ -z "$domain" ]] && { warn "Domain required."; pause; return; }
 
@@ -463,10 +464,10 @@ grinscan_setup_nginx() {
     read -r ssl_email
     [[ -z "$ssl_email" ]] && { warn "Email required."; pause; return; }
 
-    # Ensure rate-limit snippet exists (reuse from existing nginx setup)
+    # Ensure rate-limit snippet exists — skip if zone already defined (e.g. by script 04)
     local rate_conf="/etc/nginx/conf.d/grin-rate-limit.conf"
     local api_snippet="/etc/nginx/snippets/grin-api.conf"
-    if [[ ! -f "$rate_conf" ]]; then
+    if ! grep -qr 'zone=grin_api' /etc/nginx/ 2>/dev/null; then
         mkdir -p /etc/nginx/conf.d
         cat > "$rate_conf" <<'RATELIMIT'
 limit_req_zone $binary_remote_addr zone=grin_api:10m rate=30r/m;

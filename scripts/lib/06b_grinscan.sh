@@ -67,8 +67,8 @@ After=network.target
 [Service]
 Type=simple
 User=www-data
-WorkingDirectory=${GRINSCAN_WEB}
-ExecStart=/usr/bin/node server.js
+WorkingDirectory=${GRINSCAN_DIR}/test
+ExecStart=/usr/bin/node ${GRINSCAN_WEB}/server.js
 Environment=GRINSCAN_CONFIG=${GRINSCAN_DIR}/test/config.json
 Restart=on-failure
 RestartSec=10
@@ -88,8 +88,8 @@ After=network.target
 [Service]
 Type=simple
 User=www-data
-WorkingDirectory=${GRINSCAN_WEB}
-ExecStart=/usr/bin/node server.js
+WorkingDirectory=${GRINSCAN_DIR}/main
+ExecStart=/usr/bin/node ${GRINSCAN_WEB}/server.js
 Environment=GRINSCAN_CONFIG=${GRINSCAN_DIR}/main/config.json
 Restart=on-failure
 RestartSec=10

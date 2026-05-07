@@ -6,6 +6,7 @@
 
 GRINSCAN_DIR="/opt/grin/grinscan"
 GRINSCAN_WEB="${TOOLKIT_ROOT}/web/06b_grinscan"
+GRINSCAN_APP="${GRINSCAN_DIR}/app"
 NGINX_GRINSCAN_TEST_CONF="/etc/nginx/sites-available/grinscan-test"
 NGINX_GRINSCAN_MAIN_CONF="/etc/nginx/sites-available/grinscan-main"
 GRINSCAN_TEST_PORT=3010
@@ -48,13 +49,18 @@ grinscan_install() {
         success "Node.js installed: $(node --version)"
     fi
 
-    # npm install (express)
+    # Deploy app to www-data-accessible location
+    info "Deploying app to ${GRINSCAN_APP}…"
+    mkdir -p "${GRINSCAN_APP}"
+    cp -r "${GRINSCAN_WEB}/." "${GRINSCAN_APP}/"
+
+    # npm install in deployed location (so www-data can read node_modules)
     info "Installing npm dependencies…"
-    npm install --prefix "$GRINSCAN_WEB" --omit=dev --silent \
+    npm install --prefix "${GRINSCAN_APP}" --omit=dev --silent \
         || { die "npm install failed."; return; }
     success "npm packages installed."
 
-    # Runtime directories
+    # Runtime directories + ownership (recursive — covers app/ test/ main/)
     mkdir -p "${GRINSCAN_DIR}/test" "${GRINSCAN_DIR}/main"
     chown -R www-data:www-data "${GRINSCAN_DIR}"
 
@@ -67,8 +73,8 @@ After=network.target
 [Service]
 Type=simple
 User=www-data
-WorkingDirectory=${GRINSCAN_DIR}/test
-ExecStart=/usr/bin/node ${GRINSCAN_WEB}/server.js
+WorkingDirectory=${GRINSCAN_APP}
+ExecStart=/usr/bin/node ${GRINSCAN_APP}/server.js
 Environment=GRINSCAN_CONFIG=${GRINSCAN_DIR}/test/config.json
 Restart=on-failure
 RestartSec=10
@@ -88,8 +94,8 @@ After=network.target
 [Service]
 Type=simple
 User=www-data
-WorkingDirectory=${GRINSCAN_DIR}/main
-ExecStart=/usr/bin/node ${GRINSCAN_WEB}/server.js
+WorkingDirectory=${GRINSCAN_APP}
+ExecStart=/usr/bin/node ${GRINSCAN_APP}/server.js
 Environment=GRINSCAN_CONFIG=${GRINSCAN_DIR}/main/config.json
 Restart=on-failure
 RestartSec=10
@@ -101,7 +107,6 @@ WantedBy=multi-user.target
 UNIT
 
     systemctl daemon-reload
-    chown -R www-data:www-data "${GRINSCAN_WEB}/public" 2>/dev/null || true
 
     success "GrinScan installed."
     echo ""
@@ -211,7 +216,7 @@ grinscan_configure() {
   "log_path":            "${log_path}",
   "poll_interval_ms":    30000,
   "blocks_cache":        500,
-  "web_dir":             "${GRINSCAN_WEB}/public",
+  "web_dir":             "${GRINSCAN_APP}/public",
   "ga4_measurement_id":  "${ga4_id}"
 }
 JSON

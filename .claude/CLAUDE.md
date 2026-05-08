@@ -95,8 +95,33 @@ Secret files — two per service, each with a Foreign and Owner secret:
 | `.foreign_api_secret` | Node Foreign API | grin-wallet via `node_api_secret_path`, GrinScan (06b) | `foreign_api_secret_path` |
 
 Node API method split — use this to decide which endpoint a new call should target:
-- **Owner API** (`/v2/owner`, `.api_secret`): `get_tip`, `get_status`, `get_connected_peers`, `validate_chain`, `compact_chain` — node management/status, trusted internal callers only
-- **Foreign API** (`/v2/foreign`, `.foreign_api_secret`): `get_block`, `get_header`, `get_outputs`, `get_unspent_outputs`, `get_pool_size`, `push_transaction` — public chain data, used by wallets and block explorers
+- **Owner API** (`/v2/owner`, `.api_secret`): `get_tip`, `get_status`, `get_connected_peers`, `validate_chain`, `compact_chain` — node management/status, trusted internal callers only. Used by: block explorers (GrinScan), monitoring scripts.
+- **Foreign API** (`/v2/foreign`, `.foreign_api_secret`): `get_block`, `get_header`, `get_outputs`, `get_unspent_outputs`, `get_pool_size`, `push_transaction` — public chain data. Used by: wallets connecting to a public node, external block data queries.
+
+Auth format for node API calls (both endpoints): `grin:<secret>` as HTTP Basic Auth username:password.
+The secret is NEVER sent over the internet — only used for server-to-server calls on localhost.
+
+```bash
+# Test Owner API (testnet) — use this to verify node is reachable
+cd /opt/grin/node/testnet-prune
+SECRET=$(cat .api_secret)
+curl -s -u "grin:$SECRET" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"get_status","params":[],"id":1}' \
+  http://127.0.0.1:13413/v2/owner
+
+# Test Foreign API (testnet)
+SECRET=$(cat .foreign_api_secret)
+curl -s -u "grin:$SECRET" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"get_tip","params":[],"id":1}' \
+  http://127.0.0.1:13413/v2/foreign
+
+# Same for mainnet — replace 13413 with 3413 and testnet-prune with mainnet-prune
+```
+
+GrinScan copies node secrets into `/opt/grin/grinscan/{test,main}/` during Configure (2).
+If node secrets are regenerated (Script 01 rebuild), re-run GrinScan Configure (2) to refresh copies.
 
 **grin-wallet** (`$WALLET_DIR/`) — both created by `grin-wallet init/recover`
 `grin-wallet init -hr` to recover wallet from seed and store config/secret files in same dir.

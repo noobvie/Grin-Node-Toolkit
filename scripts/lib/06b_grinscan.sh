@@ -177,11 +177,11 @@ grinscan_configure() {
             [[ "${cont,,}" == "n" ]] && { info "Skipping ${net}."; continue; }
         elif [[ -f "$owner_secret_path" ]]; then
             local secret; secret=$(tr -d '[:space:]' < "$owner_secret_path" 2>/dev/null || true)
-            local resp; resp=$(curl -s --max-time 5 -u ":${secret}" \
+            local resp; resp=$(curl -s --max-time 5 -u "grin:${secret}" \
                 -H 'Content-Type: application/json' \
-                -d '{"jsonrpc":"2.0","method":"get_tip","params":[],"id":1}' \
+                -d '{"jsonrpc":"2.0","method":"get_status","params":[],"id":1}' \
                 "$default_owner_url" 2>/dev/null || true)
-            if echo "$resp" | grep -q '"height"'; then
+            if echo "$resp" | grep -q '"sync_status"'; then
                 success "Node reachable ✓"
             else
                 warn "Node not reachable at ${default_owner_url}"
@@ -210,13 +210,32 @@ grinscan_configure() {
 
         mkdir -p "${GRINSCAN_DIR}/${net_short}"
 
+        # Copy node secrets into the grinscan data dir so www-data can read them
+        # without needing membership in the grin group.
+        local gs_foreign_secret="${GRINSCAN_DIR}/${net_short}/.foreign_api_secret"
+        local gs_owner_secret="${GRINSCAN_DIR}/${net_short}/.api_secret"
+        if [[ -f "$foreign_secret_path" ]]; then
+            cp "$foreign_secret_path" "$gs_foreign_secret"
+            chown www-data:www-data "$gs_foreign_secret"
+            chmod 600 "$gs_foreign_secret"
+        else
+            warn "Foreign secret not found at ${foreign_secret_path} — node API calls may fail."
+        fi
+        if [[ -f "$owner_secret_path" ]]; then
+            cp "$owner_secret_path" "$gs_owner_secret"
+            chown www-data:www-data "$gs_owner_secret"
+            chmod 600 "$gs_owner_secret"
+        else
+            warn "Owner secret not found at ${owner_secret_path} — node API calls may fail."
+        fi
+
         cat > "$config_path" <<JSON
 {
   "network":             "${net}",
   "node_url":            "${node_url}",
   "node_owner_url":      "${owner_url}",
-  "foreign_secret_path": "${foreign_secret_path}",
-  "owner_secret_path":   "${owner_secret_path}",
+  "foreign_secret_path": "${gs_foreign_secret}",
+  "owner_secret_path":   "${gs_owner_secret}",
   "port":                ${svc_port},
   "db_path":             "${db_path}",
   "log_path":            "${log_path}",
@@ -233,6 +252,9 @@ JSON
 
     echo ""
     echo -e "  Next: run ${BOLD}Start (3)${RESET} to launch the service."
+    echo ""
+    echo -e "  ${YELLOW}⚠  If you rebuild the node or reset its API secrets (Script 01),${RESET}"
+    echo -e "  ${YELLOW}   re-run Configure (2) to refresh the secret copies in this dir.${RESET}"
     pause
 }
 
@@ -471,12 +493,12 @@ grinscan_setup_nginx() {
     [[ -z "$ssl_email" ]] && { warn "Email required."; pause; return; }
 
     # Ensure rate-limit snippet exists — skip if zone already defined (e.g. by script 04)
-    local rate_conf="/etc/nginx/conf.d/grin-rate-limit.conf"
+    local rate_conf="/etc/nginx/conf.d/grinscan-rate-limit.conf"
     local api_snippet="/etc/nginx/snippets/grin-api.conf"
-    if ! grep -qr 'zone=grin_api' /etc/nginx/ 2>/dev/null; then
+    if [[ ! -f "$rate_conf" ]]; then
         mkdir -p /etc/nginx/conf.d
         cat > "$rate_conf" <<'RATELIMIT'
-limit_req_zone $binary_remote_addr zone=grin_api:10m rate=30r/m;
+limit_req_zone $binary_remote_addr zone=grinscan_api:10m rate=30r/m;
 RATELIMIT
     fi
     if [[ ! -f "$api_snippet" ]]; then
@@ -498,7 +520,7 @@ server {
 
     location /rest/ {
         include snippets/grin-api.conf;
-        limit_req zone=grin_api burst=20 nodelay;
+        limit_req zone=grinscan_api burst=20 nodelay;
         proxy_pass http://127.0.0.1:${svc_port};
     }
 

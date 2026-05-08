@@ -107,7 +107,7 @@ let lastTipHeight = 0;
 function jsonRpc(url, secret, method, params) {
   return new Promise((resolve, reject) => {
     const body   = JSON.stringify({ id: 1, jsonrpc: '2.0', method, params });
-    const auth   = Buffer.from(':' + secret).toString('base64');
+    const auth   = Buffer.from('grin:' + secret).toString('base64');
     const parsed = new URL(url);
     const lib    = parsed.protocol === 'https:' ? https : http;
     const opts   = {

@@ -246,6 +246,7 @@ grinscan_configure() {
 }
 JSON
 
+        chown www-data:www-data "$config_path"
         success "Config written: ${config_path}"
         log "grinscan_configure: ${net} → ${config_path}"
     done

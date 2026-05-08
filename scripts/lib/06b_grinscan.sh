@@ -168,10 +168,15 @@ grinscan_configure() {
         local node_url="${user_node_url:-$default_node_url}"
         local owner_url="${default_owner_url}"
 
-        # Connectivity pre-check via Owner API (get_tip is owner-only on the node)
-        if [[ -f "$owner_secret_path" ]]; then
-            local secret; secret=$(cat "$owner_secret_path" 2>/dev/null | tr -d '\n')
-            info "Testing node connection…"
+        # Connectivity pre-check via Owner API
+        info "Testing node connection…"
+        if ! ss -tlnp 2>/dev/null | grep -q ":${node_port} "; then
+            warn "Node API port :${node_port} not listening — is the node running?"
+            echo -ne "  Continue anyway? [Y/n]: "
+            read -r cont
+            [[ "${cont,,}" == "n" ]] && { info "Skipping ${net}."; continue; }
+        elif [[ -f "$owner_secret_path" ]]; then
+            local secret; secret=$(tr -d '[:space:]' < "$owner_secret_path" 2>/dev/null || true)
             local resp; resp=$(curl -s --max-time 5 -u ":${secret}" \
                 -H 'Content-Type: application/json' \
                 -d '{"jsonrpc":"2.0","method":"get_tip","params":[],"id":1}' \
@@ -180,6 +185,7 @@ grinscan_configure() {
                 success "Node reachable ✓"
             else
                 warn "Node not reachable at ${default_owner_url}"
+                [[ -n "$resp" ]] && warn "Response: ${resp:0:120}"
                 echo -ne "  Continue anyway? [Y/n]: "
                 read -r cont
                 [[ "${cont,,}" == "n" ]] && { info "Skipping ${net}."; continue; }

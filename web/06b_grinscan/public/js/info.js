@@ -44,6 +44,12 @@ function fmtDate(ts) {
   return new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+function fmtDateScaled(ts, spanDays) {
+  const d = new Date(ts * 1000);
+  if (spanDays > 365) return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 // ── Tab system ───────────────────────────────────────────────────────────────
 
 const _tabLoaded = {};
@@ -434,7 +440,7 @@ function makeLineChart(canvasId, labels, data, label, color, yTickFmt) {
 }
 
 async function loadCharts(days) {
-  // Update active day button
+  // Update active day button (days=0 means "All time")
   document.querySelectorAll('.gs-chart-day-btn').forEach(btn => {
     btn.classList.toggle('active', parseInt(btn.dataset.days) === days);
   });
@@ -446,7 +452,13 @@ async function loadCharts(days) {
     const rows = Array.isArray(data) ? data : (data.rows || []);
     if (rows.length < 2) return;
 
-    const labels = rows.map(p => fmtDate(p.timestamp));
+    const GENESIS_TS = 1547520000;
+    const now = Math.floor(Date.now() / 1000);
+    const spanDays = days === 0
+      ? (now - GENESIS_TS) / 86400
+      : days;
+
+    const labels = rows.map(p => fmtDateScaled(p.timestamp, spanDays));
     const style = getComputedStyle(document.documentElement);
     const accent  = style.getPropertyValue('--accent').trim()  || '#c8960c';
     const accent2 = style.getPropertyValue('--accent2').trim() || '#00bcd4';
@@ -477,7 +489,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('click', e => {
     if (e.target.classList.contains('gs-chart-day-btn')) {
       const days = parseInt(e.target.dataset.days);
-      if (days) loadCharts(days);
+      if (!isNaN(days)) loadCharts(days);
     }
   });
 

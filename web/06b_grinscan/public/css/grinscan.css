@@ -1013,7 +1013,7 @@ a:hover { text-decoration: underline; }
 .node-info-card .stat-row span:first-child { color: var(--muted); }
 
 /* ── Charts tab ── */
-.gs-chart-day-selector { display: flex; gap: 6px; margin-bottom: 12px; }
+.gs-chart-day-selector { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .gs-chart-day-btn {
   padding: 4px 10px;
   font-size: 12px;

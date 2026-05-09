@@ -680,11 +680,27 @@ app.get('/api/search', (req, res) => {
 });
 
 app.get('/api/history', (req, res) => {
-  const days  = Math.min(90, Math.max(1, parseInt(req.query.days) || 7));
-  const now   = Math.floor(Date.now() / 1000);
-  const since = now - days * 86400;
-  // Adaptive sampling: 1h for <=7d, 4h for >7d (avoids sending 100k rows for 90d)
-  const step = days > 7 ? 14400 : 3600;
+  const GENESIS_TS = 1547520000; // 2019-01-15 UTC
+  const now        = Math.floor(Date.now() / 1000);
+  let since;
+  const daysParam = req.query.days;
+  if (daysParam === '0' || daysParam === 'all') {
+    since = GENESIS_TS;
+  } else {
+    const days = Math.min(5000, Math.max(1, parseInt(daysParam) || 7));
+    since = now - days * 86400;
+  }
+  const spanDays = (now - since) / 86400;
+  // Adaptive sampling to keep response size reasonable
+  let step;
+  if      (spanDays <= 7)   step =    3600; // 1h
+  else if (spanDays <= 30)  step =   14400; // 4h
+  else if (spanDays <= 365) step =   86400; // 1d
+  else                      step =  604800; // 1 week
+  // Longer ranges change slowly — cache aggressively
+  const maxAge = spanDays <= 1 ? 60 : spanDays <= 7 ? 300 : 3600;
+  res.setHeader('Cache-Control', `public, max-age=${maxAge}`);
+
   const points = [];
   for (let t = since; t <= now; t += step) {
     const row = stmtHistory.get(t - step / 2, t + step / 2, t);

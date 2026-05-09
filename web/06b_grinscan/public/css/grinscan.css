@@ -434,6 +434,7 @@ a:hover { text-decoration: underline; }
 }
 .gs-table tbody tr:hover { background: var(--surface2); }
 .gs-table .col-hash { color: var(--muted); font-size: 12px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.gs-table .col-height strong { color: var(--accent); }
 .gs-table .col-age { color: var(--green); }
 .gs-table .col-age.age-warn { color: #f0ad4e; }
 .gs-table .col-age.age-old  { color: var(--muted); }

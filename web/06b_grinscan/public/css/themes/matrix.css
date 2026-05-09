@@ -14,12 +14,73 @@
   --badge-plain:  #00cc88;
   --badge-lock:   #00aa55;
   --font-mono:    'JetBrains Mono', 'Courier New', monospace;
-  --glow:         none;
+  --glow:         0 0 16px rgba(0,255,68,0.12), 0 4px 24px rgba(0,0,0,0.6);
 }
 
 body { font-family: var(--font-mono); }
 a { color: var(--accent); }
 
+/* ── Logo icon ── */
+.gs-logo-icon { filter: invert(1) drop-shadow(0 0 5px rgba(0,255,68,0.80)); }
+
+/* ── Logo text glow ── */
+.gs-logo {
+  text-shadow: 0 0 5px var(--accent), 0 0 14px var(--accent), 0 0 28px rgba(0,255,68,0.50);
+}
+
+/* ── Network badge ── */
+.gs-network-badge.testnet {
+  box-shadow: 0 0 12px rgba(0,255,68,0.25);
+  text-shadow: 0 0 8px var(--green);
+}
+
+/* ── Stat cards ── */
+.gs-stat-card {
+  box-shadow: var(--glow);
+  transition: box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.gs-stat-card:hover {
+  border-color: var(--green);
+  box-shadow: 0 0 18px rgba(0,255,68,0.30), 0 0 38px rgba(0,255,68,0.12);
+}
+
+/* ── Stat values ── */
+.gs-stat-value { text-shadow: 0 0 6px rgba(0,255,68,0.45); }
+
+/* ── Block list section title ── */
+.gs-block-title {
+  color: var(--accent);
+  text-shadow: 0 0 10px rgba(0,255,68,0.55);
+}
+
+/* ── Live indicator ── */
+.gs-live-indicator { text-shadow: 0 0 8px rgba(0,255,68,0.50); }
+
+/* ── Table container ── */
+.gs-table-wrap {
+  box-shadow: 0 0 22px rgba(0,255,68,0.07), 0 4px 24px rgba(0,0,0,0.4);
+}
+
+/* ── Height column in block list ── */
+.col-height strong {
+  color: var(--accent);
+  text-shadow: 0 0 4px var(--accent), 0 0 10px var(--accent), 0 0 20px rgba(0,255,68,0.40);
+}
+
+/* ── Table row hover ── */
 .gs-table tbody tr:hover { background: rgba(0,255,68,0.05); }
 
-.gs-logo-icon { filter: invert(1) drop-shadow(0 0 5px rgba(0,255,68,0.8)); }
+/* ── Header search focus ── */
+.gs-header-search input:focus {
+  box-shadow: 0 0 0 2px rgba(0,255,68,0.22), 0 0 18px rgba(0,255,68,0.12);
+  border-color: var(--accent);
+}
+
+/* ── Block detail page — height title ── */
+.gs-block-detail h2 {
+  color: var(--accent);
+  text-shadow: 0 0 5px var(--accent), 0 0 16px var(--accent), 0 0 30px rgba(0,255,68,0.50);
+}
+
+/* ── Toast ── */
+.gs-toast { box-shadow: 0 0 22px rgba(0,255,68,0.28); }

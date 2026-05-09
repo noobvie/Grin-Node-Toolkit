@@ -14,43 +14,96 @@
   --badge-plain:  #00f0ff;
   --badge-lock:   #ff00cc;
   --font-mono:    'JetBrains Mono', 'Courier New', monospace;
-  --glow:         0 0 12px rgba(0,240,255,0.18), 0 4px 24px rgba(0,0,0,0.7);
+  --glow:         0 0 18px rgba(0,240,255,0.22), 0 4px 24px rgba(0,0,0,0.7);
 }
 
 body { font-family: var(--font-mono); }
 
-/* ── Header neon border glow ── */
+/* ── Header border glow ── */
 .gs-header {
   border-bottom-color: #3d0080;
-  box-shadow: 0 1px 0 #3d0080, 0 4px 24px rgba(0,240,255,0.06);
+  box-shadow: 0 1px 0 #3d0080, 0 4px 24px rgba(0,240,255,0.08);
 }
 
-/* ── Logo: inverted (white circle) + cyan glow + breathing ── */
+/* ── Logo icon ── */
 .gs-logo-icon {
   filter: invert(1) drop-shadow(0 0 5px rgba(0,240,255,0.85));
 }
 
 /* ── Logo text glow ── */
 .gs-logo {
-  text-shadow: 0 0 10px rgba(0,240,255,0.55), 0 0 30px rgba(0,240,255,0.2);
+  text-shadow: 0 0 6px #fff, 0 0 16px var(--accent), 0 0 32px var(--accent), 0 0 52px rgba(0,240,255,0.35);
 }
 
-/* ── Active nav link glow ── */
-.nav-link.active {
-  text-shadow: 0 0 8px rgba(0,240,255,0.5);
-}
+/* ── Active nav link ── */
+.nav-link.active { text-shadow: 0 0 8px rgba(0,240,255,0.5); }
+
+/* ── Network badge ── */
+.gs-network-badge.mainnet { box-shadow: 0 0 14px rgba(0,255,136,0.30); text-shadow: 0 0 8px var(--green); }
+.gs-network-badge.testnet { box-shadow: 0 0 14px rgba(0,240,255,0.30); text-shadow: 0 0 8px var(--accent); }
 
 /* ── Stat cards ── */
-.gs-stat-card { box-shadow: var(--glow); }
+.gs-stat-card {
+  box-shadow: var(--glow);
+  transition: box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.gs-stat-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 20px rgba(0,240,255,0.35), 0 0 45px rgba(0,240,255,0.15), 0 4px 24px rgba(0,0,0,0.7);
+}
 
-/* ── Header search input focus glow ── */
+/* ── Stat values ── */
+.gs-stat-value { text-shadow: 0 0 8px rgba(0,240,255,0.35); }
+
+/* ── Block list section title ── */
+.gs-block-title {
+  color: var(--text);
+  text-shadow: 0 0 12px rgba(255,0,204,0.70);
+}
+
+/* ── Live indicator ── */
+.gs-live-indicator { text-shadow: 0 0 8px rgba(0,255,136,0.60); }
+
+/* ── Table container ── */
+.gs-table-wrap {
+  box-shadow: 0 0 30px rgba(0,240,255,0.09), 0 4px 24px rgba(0,0,0,0.4);
+}
+
+/* ── Height column in block list ── */
+.col-height strong {
+  color: var(--accent);
+  text-shadow: 0 0 5px #fff, 0 0 12px var(--accent), 0 0 24px rgba(0,240,255,0.50);
+}
+
+/* ── Header search focus ── */
 .gs-header-search input:focus {
-  box-shadow: 0 0 0 2px rgba(0,240,255,0.25), 0 0 16px rgba(0,240,255,0.12);
+  box-shadow: 0 0 0 2px rgba(0,240,255,0.28), 0 0 18px rgba(0,240,255,0.15);
   border-color: var(--accent);
 }
 
 /* ── Table row hover ── */
-.gs-table tbody tr:hover { background: rgba(0,240,255,0.04); }
+.gs-table tbody tr:hover { background: rgba(0,240,255,0.05); }
+
+/* ── Kernel badges ── */
+.badge-coinbase      { box-shadow: 0 0 8px rgba(255,204,0,0.35); }
+.badge-plain         { box-shadow: 0 0 8px rgba(0,240,255,0.35); }
+.badge-height-locked { box-shadow: 0 0 8px rgba(255,0,204,0.35); }
+
+/* ── Block detail page — height title ── */
+.gs-block-detail h2 {
+  color: var(--accent);
+  text-shadow: 0 0 6px #fff, 0 0 18px var(--accent), 0 0 36px rgba(0,240,255,0.45);
+}
+
+/* ── Block nav buttons hover ── */
+.gs-block-nav a:hover, .gs-nav-btn:hover {
+  box-shadow: 0 0 14px rgba(0,240,255,0.28);
+}
+
+/* ── Toast ── */
+.gs-toast {
+  box-shadow: 0 0 30px rgba(0,240,255,0.42), 0 0 60px rgba(0,240,255,0.15);
+}
 
 /* ── Load more button hover ── */
 .gs-load-more:hover { background: rgba(0,240,255,0.04); }

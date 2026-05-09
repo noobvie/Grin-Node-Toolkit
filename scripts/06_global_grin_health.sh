@@ -35,7 +35,7 @@
 #                B: 1 Install & Build → 2 Configure → 3 Start → 5 Nginx
 # =============================================================================
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLKIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -363,8 +363,10 @@ install_stats() {
 
     # Deploy ecosystem checker
     info "Installing ecosystem checker..."
-    cp "$SCRIPT_DIR/lib/06_ecosystem_checker.py" "$ECOSYSTEM_CHECKER_BIN"
+    cp "$SCRIPT_DIR/lib/06_ecosystem_checker.py"   "$ECOSYSTEM_CHECKER_BIN"
     cp "$SCRIPT_DIR/lib/06_domains_exceptions.json" "$(dirname "$ECOSYSTEM_CHECKER_BIN")/06_domains_exceptions.json"
+    cp "$SCRIPT_DIR/lib/06_ecosystem_sites.json"    "$(dirname "$ECOSYSTEM_CHECKER_BIN")/06_ecosystem_sites.json"
+    cp "$SCRIPT_DIR/lib/06_ecosystem_dev.json"      "$(dirname "$ECOSYSTEM_CHECKER_BIN")/06_ecosystem_dev.json"
     chmod +x "$ECOSYSTEM_CHECKER_BIN"
     ensure_python_whois || true
     python3 "$ECOSYSTEM_CHECKER_BIN" --init-db
@@ -1575,20 +1577,19 @@ show_menu_b() {
     echo -e "                        ${DIM}testnet${RESET}              ${DIM}mainnet${RESET}"
     echo -e "  ${GREEN}1${RESET})   Install         ${DIM}Node.js + npm deps + systemd units${RESET}"
     echo -e "  ${GREEN}2${RESET})   Configure       ${DIM}write config.json${RESET}  [test: $inst_t · main: $inst_m]"
-    echo -e "  ${GREEN}3${RESET})   Start           ${DIM}systemctl start${RESET}  [test: $run_t · main: $run_m]"
-    echo -e "  ${GREEN}4${RESET})   Check DNS       ${DIM}confirm A-record before nginx setup${RESET}"
-    echo -e "  ${GREEN}5${RESET})   Setup Nginx     ${DIM}HTTPS reverse proxy + certbot${RESET}  [test: $ng_t · main: $ng_m]"
-    echo -e "  ${GREEN}6${RESET})   Auto-Start      ${DIM}systemctl enable (survive reboots)${RESET}"
-    echo -e "  ${GREEN}7${RESET})   Status"
-    echo -e "  ${GREEN}8${RESET})   View Logs"
-    echo -e "  ${GREEN}U${RESET})   Update          ${DIM}npm install + restart${RESET}"
-    echo -e "  ${YELLOW}Z${RESET})   Stop            ${DIM}systemctl stop${RESET}"
+    echo -e "  ${GREEN}3${RESET})   Service Control ${DIM}Start / Stop / Remove${RESET}  [test: $run_t · main: $run_m]"
+    echo -e "  ${GREEN}4${RESET})   Setup Nginx     ${DIM}HTTPS reverse proxy + certbot${RESET}  [test: $ng_t · main: $ng_m]"
+    echo -e "  ${GREEN}5${RESET})   Auto-Start      ${DIM}systemctl enable (survive reboots)${RESET}"
+    echo -e "  ${GREEN}6${RESET})   Status"
+    echo -e "  ${GREEN}7${RESET})   View Logs"
+    echo -e "  ${GREEN}U${RESET})   Update App      ${DIM}redeploy server.js + web files from toolkit, refresh npm deps${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back${RESET}"
     echo -e "  ${DIM}[Enter] Refresh menu${RESET}"
+    echo -e "  ${DIM}DNS: ensure A-record points to this server before running Setup Nginx (4)${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-8, U, Z]: ${RESET}"
+    echo -ne "${BOLD}Select [0-7, U]: ${RESET}"
 }
 
 show_menu_c() {
@@ -1641,7 +1642,7 @@ show_main_menu() {
     echo -e "  ${BOLD}Requirements:${RESET}"
     echo -e "  ${_node_st}  Grin node running  ${DIM}(A requires mainnet · B needs pruned or full · C requires archive)${RESET}"
     echo -e "  ${_nginx_st}  Nginx installed    ${DIM}(use option N to install)${RESET}"
-    echo -e "  ${YELLOW}[--]${RESET}  DNS A-records — confirm via A→4, B→4, or C→4 before nginx setup"
+    echo -e "  ${YELLOW}[--]${RESET}  DNS A-records — confirm via A→4 or C→4 before nginx setup (B: see DNS hint in menu)"
     echo ""
     echo -e "${DIM}  ─────────────────────────────────────────────${RESET}"
     echo ""
@@ -1691,14 +1692,12 @@ run_menu_b() {
         case "${choice^^}" in
             1) grinscan_install                    || true ;;
             2) grinscan_configure                  || true ;;
-            3) grinscan_start                      || true ;;
-            4) check_dns_record "grinscan"         || true ;;
-            5) grinscan_setup_nginx                || true ;;
-            6) grinscan_autostart                  || true ;;
-            7) grinscan_status                     || true ;;
-            8) grinscan_logs                       || true ;;
+            3) grinscan_service_control            || true ;;
+            4) grinscan_setup_nginx                || true ;;
+            5) grinscan_autostart                  || true ;;
+            6) grinscan_status                     || true ;;
+            7) grinscan_logs                       || true ;;
             U) grinscan_update                     || true ;;
-            Z) grinscan_stop                       || true ;;
             0) break                                        ;;
             "") ;;  # Enter = refresh menu
             *) warn "Invalid option."; sleep 1             ;;

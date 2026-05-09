@@ -30,6 +30,7 @@
     <nav class="gs-nav">
       <a href="/" class="nav-link" data-page="explorer" aria-label="Explorer">Explorer</a>
       <a href="/info.html" class="nav-link active" data-page="info" aria-label="Info">Info</a>
+      <a href="/api.html" class="nav-link" data-page="api" aria-label="API">API</a>
     </nav>
     <span id="network-badge" class="gs-network-badge testnet">TESTNET ●</span>
     <div class="gs-theme-wrap">
@@ -52,6 +53,7 @@
       <button class="gs-tab-btn" data-tab="about"    role="tab">About</button>
       <button class="gs-tab-btn" data-tab="emission" role="tab">Emission</button>
       <button class="gs-tab-btn" data-tab="stats"    role="tab">Stats</button>
+      <button class="gs-tab-btn" data-tab="charts"   role="tab">Charts</button>
       <button class="gs-tab-btn" data-tab="network"  role="tab">Network</button>
       <button class="gs-tab-btn" data-tab="api"      role="tab">API</button>
     </div>
@@ -189,8 +191,60 @@
 
     </div><!-- /#tab-stats -->
 
+    <!-- ── CHARTS TAB ── -->
+    <div id="tab-charts" class="gs-tab-panel" role="tabpanel">
+
+      <div class="gs-info-section">
+        <h3>Hashrate (GPS)</h3>
+        <div class="gs-chart-day-selector">
+          <button class="gs-chart-day-btn active" data-days="1">1d</button>
+          <button class="gs-chart-day-btn" data-days="7">7d</button>
+          <button class="gs-chart-day-btn" data-days="30">30d</button>
+        </div>
+        <div class="gs-chart-canvas-wrap">
+          <canvas id="chart-canvas-hashrate" height="220"></canvas>
+        </div>
+      </div>
+
+      <div class="gs-info-section">
+        <h3>Difficulty</h3>
+        <div class="gs-chart-canvas-wrap">
+          <canvas id="chart-canvas-difficulty" height="220"></canvas>
+        </div>
+      </div>
+
+      <div class="gs-info-section">
+        <h3>Block Time (seconds)</h3>
+        <div class="gs-chart-canvas-wrap">
+          <canvas id="chart-canvas-blocktime" height="220"></canvas>
+        </div>
+      </div>
+
+    </div><!-- /#tab-charts -->
+
     <!-- ── NETWORK TAB ── -->
     <div id="tab-network" class="gs-tab-panel" role="tabpanel">
+
+      <!-- Node Info card -->
+      <div class="node-info-card">
+        <div class="stat-row">
+          <span>Node Mode</span>
+          <span id="node-mode-badge">—</span>
+        </div>
+        <div class="stat-row">
+          <span>Block History</span>
+          <span id="block-history">—</span>
+        </div>
+        <div class="stat-row">
+          <span>GrinScan DB Size</span>
+          <span id="db-size">—</span>
+        </div>
+        <div class="stat-row">
+          <span>Chain Data Size</span>
+          <span id="chain-size">—</span>
+        </div>
+      </div>
+
       <div id="network-content">
         <p style="color:var(--muted);font-family:var(--font-mono);font-size:13px;">Loading…</p>
       </div>
@@ -220,6 +274,7 @@
 
   <script src="/js/theme.js"></script>
   <script src="/js/app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script src="/js/info.js"></script>
   <script src="/js/analytics.js"></script>
 </body>

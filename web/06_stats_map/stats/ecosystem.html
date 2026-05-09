@@ -693,8 +693,8 @@ function expiryClass(days) {
 function expiryLabel(regStr, expStr, days) {
   const cls = expiryClass(days);
   const parts = [];
-  if (regStr) parts.push(`registered ${regStr}`);
-  if (expStr)  parts.push(`expires ${expStr}`);
+  if (regStr) parts.push(`registered ${esc(regStr)}`);
+  if (expStr)  parts.push(`expires ${esc(expStr)}`);
   if (days !== null && days !== undefined) parts.push(`renew in ${days}d`);
   if (!parts.length) return '<span class="exp-unknown">Domain expiration: —</span>';
   return `<span class="${cls}">Domain ${parts.join(', ')}</span>`;
@@ -711,7 +711,7 @@ function renderDnsSeeds(data) {
     el.innerHTML = data[net].map(host => {
       // Collect expiry warnings
       if (host.expiry_days !== null && host.expiry_days !== undefined && host.expiry_days <= 30) {
-        warnings.push(`<strong>${host.host}</strong> expires in ${host.expiry_days} day${host.expiry_days === 1 ? '' : 's'} (${host.expiry_str || '?'})`);
+        warnings.push(`<strong>${esc(host.host)}</strong> expires in ${host.expiry_days} day${host.expiry_days === 1 ? '' : 's'} (${esc(host.expiry_str || '?')})`);
       }
 
       const expiryHtml = expiryLabel(host.registered_str, host.expiry_str, host.expiry_days);
@@ -719,13 +719,13 @@ function renderDnsSeeds(data) {
       const ipRows = host.ips && host.ips.length
         ? host.ips.map(ip => {
             const icon    = ip.ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
-            return `<div class="dns-seed-ip-row">${icon} ${ip.ip}</div>`;
+            return `<div class="dns-seed-ip-row">${icon} ${esc(ip.ip)}</div>`;
           }).join('')
         : `<div class="dns-no-resolve">${esc(host.note) || 'DNS resolution failed'}</div>`;
 
       const expiring = host.expiry_days !== null && host.expiry_days !== undefined && host.expiry_days <= 30;
       return `<div class="dns-seed-host${expiring ? ' dns-seed-host-expiring' : ''}">
-  <div class="dns-seed-hostname">${host.host}</div>
+  <div class="dns-seed-hostname">${esc(host.host)}</div>
   <div class="dns-seed-expiry">${expiryHtml}</div>
   ${ipRows}
 </div>`;
@@ -795,7 +795,8 @@ function renderServices(services) {
       const since  = cat === 'Development progress'
         ? (sinceText ? `<span class="svc-since">Online since ${sinceText}</span>` : '')
         : `<span class="svc-since">Online since ${sinceText || '—'}</span>`;
-      const host   = (() => { try { return new URL(s.url).hostname; } catch(_) { return s.url; } })();
+      const safeUrl = /^https?:\/\//i.test(s.url) ? s.url : '#';
+      const host    = (() => { try { return new URL(s.url).hostname; } catch(_) { return s.url; } })();
 
       let extra = '';
       if (s.type === 'github' || s.type === 'gitea') {
@@ -829,7 +830,7 @@ function renderServices(services) {
       html += `<div class="svc-row">
   <span class="svc-status">${icon}</span>
   <span class="svc-name">${esc(s.name)}</span>
-  <a class="svc-url" href="${s.url}" target="_blank" rel="noopener" title="${s.url}">${host}</a>
+  <a class="svc-url" href="${safeUrl}" target="_blank" rel="noopener" title="${esc(s.url)}">${esc(host)}</a>
   <span class="svc-meta">${metaContent}</span>
 </div>`;
     }

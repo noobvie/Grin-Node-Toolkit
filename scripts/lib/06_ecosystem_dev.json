@@ -1,0 +1,10 @@
+[
+  {"category": "Development progress", "name": "grin",                  "url": "https://github.com/mimblewimble/grin",                        "since": "Mar 2018", "type": "github"},
+  {"category": "Development progress", "name": "grin-wallet",           "url": "https://github.com/mimblewimble/grin-wallet",                 "since": "Jan 2019", "type": "github"},
+  {"category": "Development progress", "name": "GRIM",                  "url": "https://github.com/GetGrin/grim",                             "since": null,       "type": "github"},
+  {"category": "Development progress", "name": "GRIM (mirror)",         "url": "https://code.gri.mw/GUI/grim",                               "since": null,       "type": "gitea"},
+  {"category": "Development progress", "name": "Grin++",                "url": "https://github.com/GrinPlusPlus/GrinPlusPlus",                "since": null,       "type": "github"},
+  {"category": "Development progress", "name": "Grin Node Toolkit",     "url": "https://github.com/noobvie/Grin-Node-Toolkit",                "since": null,       "type": "github"},
+  {"category": "Development progress", "name": "GrinSuite",             "url": "https://github.com/noobvie/GrinSuite",                        "since": null,       "type": "github"},
+  {"category": "Development progress", "name": "Grin Node for Umbrel",  "url": "https://github.com/wiesche89/umbrel-community-app-store",     "since": null,       "type": "github"}
+]

@@ -208,6 +208,23 @@ async function pollStats() {
     if (diffEl) diffEl.textContent = fmtDifficulty(s.difficulty);
     if (peersEl) peersEl.textContent = fmtNum(s.peer_count);
 
+    const mempoolEl = document.getElementById('stat-mempool');
+    if (mempoolEl) mempoolEl.textContent = s.pool_size != null ? fmtNum(s.pool_size) + ' txs' : '—';
+
+    const priceEl = document.getElementById('stat-price');
+    if (priceEl) {
+      if (s.price_usd != null && s.price_btc != null) {
+        priceEl.textContent = '$' + s.price_usd.toFixed(4) + ' / ' + Math.round(s.price_btc * 1e8) + ' sat';
+      } else {
+        priceEl.textContent = '—';
+      }
+    }
+
+    const supplyEl = document.getElementById('stat-supply');
+    if (supplyEl && s.tip_height) {
+      supplyEl.textContent = fmtNum(s.tip_height * 60) + ' GRIN';
+    }
+
     updateSparkline(s.difficulty);
     setStallBanner(s.stalled);
     _prevTipHeight = s.tip_height;
@@ -285,6 +302,16 @@ function setBlockDetail(block) {
   setRow('row-difficulty', fmtNum(h.total_difficulty), null);
   setRow('row-kernels',    kernels.length + '  (' + txCount + ' transactions + ' + (kernels.length - txCount) + ' coinbase)', null);
   setRow('row-outputs',    outputs.length, null);
+
+  // Block reward (Grin: 60 GRIN per block, constant linear emission)
+  const COIN = window.GRINSCAN_NETWORK === 'testnet' ? 'tGRIN' : 'GRIN';
+  setRow('row-reward', '60 ' + COIN, null);
+
+  // Block time (seconds since previous block)
+  if (block._prev_timestamp) {
+    const blockTimeSec = ts - block._prev_timestamp;
+    setRow('row-blocktime', blockTimeSec + 's', null);
+  }
 
   // Kernels list
   const kList = document.getElementById('kernels-list');
@@ -370,14 +397,13 @@ function showBlockError(msg) {
 function showCacheMiss() {
   const errBox = document.getElementById('block-error');
   const detailBox = document.getElementById('block-detail-wrap');
-  const cacheSize = window.GRINSCAN_BLOCKS_CACHE || 500;
   if (detailBox) detailBox.style.display = 'none';
   if (errBox) {
     errBox.style.display = '';
     errBox.innerHTML = `
       <h3>Block not found</h3>
-      <p>This node caches the last ~${cacheSize} blocks (~2 weeks of data).<br>
-         Older blocks are not available on this instance.</p>
+      <p>This block is not in the local database.<br>
+         On a pruned node, blocks before the pruning horizon are unavailable.</p>
       <p>Try an archive explorer: <a href="https://grincoin.org/blocks" target="_blank" rel="noopener">grincoin.org/blocks</a></p>`;
   }
 }
@@ -391,6 +417,7 @@ function setNavActive() {
     let active = false;
     if (page === 'explorer') active = (path === '/' || path === '/index.html' || path === '/block.html');
     if (page === 'info')     active = path === '/info.html';
+    if (page === 'api')      active = path === '/api.html';
     a.classList.toggle('active', active);
   });
 }
@@ -400,11 +427,13 @@ function setNavActive() {
 function renderFooter() {
   const el = document.getElementById('gs-footer-text');
   if (!el) return;
-  const ver  = window.GRINSCAN_VERSION || '';
-  const net  = (window.GRINSCAN_NETWORK || 'mainnet').toUpperCase();
-  el.innerHTML = `GrinScan${ver ? ' v' + ver : ''} · ${net}
-    · <a href="https://github.com/mimblewimble/grin" target="_blank" rel="noopener">Grin Node</a>
-    · Powered by <a href="https://github.com/mimblewimble/grin" target="_blank" rel="noopener">Grin Node Toolkit</a>`;
+  const ver = window.GRINSCAN_VERSION || '';
+  const net = (window.GRINSCAN_NETWORK || 'mainnet').toUpperCase();
+  el.innerHTML = `GrinScan${ver ? ' v' + ver : ''} &nbsp;·&nbsp; ${net}
+    &nbsp;·&nbsp; <a href="https://grin.mw" target="_blank" rel="noopener">Grin</a>
+    &nbsp;·&nbsp; <a href="https://grin.money" target="_blank" rel="noopener">grin.money</a>
+    &nbsp;·&nbsp; <a href="https://world.grin.money" target="_blank" rel="noopener">Global Grin Health Live!</a>
+    &nbsp;·&nbsp; <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Node Toolkit</a>`;
 }
 
 // ── Network badge ─────────────────────────────────────────────────────────────
@@ -436,6 +465,18 @@ document.addEventListener('DOMContentLoaded', () => {
     initLoadMore();
     startAgeCountdown();
     setInterval(() => pollStats(), 30000);
+
+    // SSE live push — instant block notifications
+    try {
+      const es = new EventSource('/events');
+      es.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'block') { pollStats(); fetchAndRenderBlocks(false); }
+        } catch {}
+      };
+      es.onerror = () => es.close();
+    } catch {}
   }
 
   if (page === 'block') {

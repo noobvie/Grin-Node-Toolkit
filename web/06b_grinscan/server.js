@@ -67,6 +67,7 @@ const stmtInsertBlock = db.prepare(`
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const stmtMaxHeight   = db.prepare('SELECT MAX(height) AS m FROM blocks');
+const stmtMinHeight   = db.prepare('SELECT MIN(height) AS m FROM blocks');
 const stmtGetByHeight = db.prepare('SELECT raw_json FROM blocks WHERE height = ?');
 const stmtGetByHash   = db.prepare('SELECT raw_json FROM blocks WHERE hash = ?');
 const stmtListBlocks  = db.prepare(
@@ -76,6 +77,9 @@ const stmtCountBlocks = db.prepare('SELECT COUNT(*) AS c FROM blocks');
 const stmtPruneBlocks = db.prepare('DELETE FROM blocks WHERE height < ?');
 const stmtHistory     = db.prepare(
   'SELECT height, difficulty, timestamp FROM blocks WHERE timestamp BETWEEN ? AND ? ORDER BY ABS(timestamp - ?) LIMIT 1'
+);
+const stmtHistoryRange = db.prepare(
+  'SELECT height, timestamp, difficulty FROM blocks WHERE timestamp >= ? ORDER BY height ASC'
 );
 const stmtInsertPrice = db.prepare(
   'INSERT OR REPLACE INTO prices (timestamp, price_btc, price_usd, source) VALUES (?, ?, ?, ?)'
@@ -93,6 +97,10 @@ const stmtPriceHist   = db.prepare(
 const tipState = {
   height: 0, hash: '', difficulty: 0, hashrate_gps: 0,
   peer_count: 0, stalled: false, syncing: false, node_version: 'unknown',
+  pool_size: 0,
+  backfill_active: false,
+  backfill_min: null,
+  backfill_pruned: false,
 };
 let peerVersionMap = {};
 let latestPrice    = null; // { price_btc, price_usd, change_24h_pct, fetched_at, sources, stale }
@@ -101,6 +109,40 @@ let latestPrice    = null; // { price_btc, price_usd, change_24h_pct, fetched_at
 
 let stallCount    = 0;
 let lastTipHeight = 0;
+
+// ── Chain data size (5-min TTL cache) ────────────────────────────────────────
+
+function getDirSizeBytes(dirPath) {
+  try {
+    let total = 0;
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const e of entries) {
+      const fp = path.join(dirPath, e.name);
+      if (e.isFile()) total += fs.statSync(fp).size;
+      else if (e.isDirectory()) total += getDirSizeBytes(fp);
+    }
+    return total;
+  } catch { return null; }
+}
+
+let chainSizeCache = { bytes: null, at: 0 };
+function getChainSize() {
+  if (Date.now() - chainSizeCache.at < 5 * 60 * 1000) return chainSizeCache.bytes;
+  const bytes = config.node_data_dir ? getDirSizeBytes(config.node_data_dir) : null;
+  chainSizeCache = { bytes, at: Date.now() };
+  return bytes;
+}
+
+// ── SSE clients ──────────────────────────────────────────────────────────────
+
+const sseClients = new Set();
+
+function broadcastNewBlock(block) {
+  const data = JSON.stringify({ type: 'block', height: block.height });
+  for (const client of sseClients) {
+    client.write(`data: ${data}\n\n`);
+  }
+}
 
 // ── Grin API helpers ──────────────────────────────────────────────────────────
 
@@ -212,6 +254,51 @@ async function startupBackfill(tipHeight) {
   log(`Backfill complete.`);
 }
 
+// ── Historical backfill ───────────────────────────────────────────────────────
+
+async function historicalBackfill() {
+  log('Historical backfill started — walking backwards to genesis.');
+  tipState.backfill_active = true;
+  tipState.backfill_pruned = false;
+  const MAX_CONSECUTIVE_ERRORS = 10;
+  let consecutiveErrors = 0;
+
+  while (true) {
+    const row = stmtMinHeight.get();
+    const minCached = row.m;
+
+    if (minCached == null || minCached <= 1) {
+      log('Historical backfill complete — genesis reached.');
+      tipState.backfill_active = false;
+      tipState.backfill_min = minCached ?? 1;
+      return;
+    }
+
+    const target = minCached - 1;
+    try {
+      const block = await foreignApi('get_block', [target, null, null]);
+      insertBlock(block);
+      tipState.backfill_min = target;
+      consecutiveErrors = 0;
+    } catch (e) {
+      consecutiveErrors++;
+      log(`[WARN] Historical backfill block ${target}: ${e.message} (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS})`);
+      if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        log(`Historical backfill stopped at block ${target} — pruned node horizon. Recent blocks still served normally.`);
+        tipState.backfill_active = false;
+        tipState.backfill_pruned = true;
+        tipState.backfill_min = minCached;
+        return;
+      }
+      await new Promise(r => setTimeout(r, 2000));
+      continue;
+    }
+
+    if (target % 1000 === 0) log(`Historical backfill progress: block ${target}`);
+    await new Promise(r => setTimeout(r, 200));
+  }
+}
+
 // ── Block poller ─────────────────────────────────────────────────────────────
 
 async function pollBlocks() {
@@ -236,7 +323,7 @@ async function pollBlocks() {
           log(`[WARN] Block ${h}: ${e.message}`);
         }
       }
-      stmtPruneBlocks.run(tipHeight - config.blocks_cache);
+      broadcastNewBlock({ height: tipHeight });
     }
 
     // Update difficulty from most recent cached block
@@ -260,6 +347,12 @@ async function pollBlocks() {
         const b = parseVersionBucket(p.user_agent);
         peerVersionMap[b] = (peerVersionMap[b] || 0) + 1;
       });
+    } catch {}
+
+    // Pool size
+    try {
+      const pool = await foreignApi('get_pool_size', []);
+      tipState.pool_size = typeof pool === 'number' ? pool : 0;
     } catch {}
 
   } catch (e) {
@@ -373,6 +466,10 @@ app.get('/rest/stats.json', (_req, res) => {
     difficulty:   tipState.difficulty,
     hashrate_gps: tipState.hashrate_gps,
     peer_count:   tipState.peer_count,
+    pool_size:    tipState.pool_size,
+    price_usd:    latestPrice?.price_usd ?? null,
+    price_btc:    latestPrice?.price_btc ?? null,
+    node_mode:    tipState.backfill_pruned ? 'pruned' : (tipState.backfill_min != null && tipState.backfill_min <= 1 ? 'archive' : 'syncing'),
     network:      config.network,
   };
   if (Object.keys(peerVersionMap).length) out.versions = { ...peerVersionMap };
@@ -447,15 +544,25 @@ app.get('/api/tip', (_req, res) => {
 });
 
 app.get('/api/stats', (_req, res) => {
+  const nodeMode = tipState.backfill_pruned ? 'pruned'
+    : (tipState.backfill_min != null && tipState.backfill_min <= 1 ? 'archive' : 'syncing');
   res.json({
-    tip_height:    tipState.height,
-    hashrate_gps:  tipState.hashrate_gps,
-    difficulty:    tipState.difficulty,
-    peer_count:    tipState.peer_count,
-    node_version:  tipState.node_version,
-    stalled:       tipState.stalled,
-    cached_blocks: stmtCountBlocks.get().c,
-    network:       config.network,
+    tip_height:       tipState.height,
+    hashrate_gps:     tipState.hashrate_gps,
+    difficulty:       tipState.difficulty,
+    peer_count:       tipState.peer_count,
+    node_version:     tipState.node_version,
+    stalled:          tipState.stalled,
+    cached_blocks:    stmtCountBlocks.get().c,
+    pool_size:        tipState.pool_size,
+    price_usd:        latestPrice?.price_usd ?? null,
+    price_btc:        latestPrice?.price_btc ?? null,
+    node_mode:        nodeMode,
+    backfill_active:  tipState.backfill_active,
+    backfill_min:     tipState.backfill_min,
+    db_size_bytes:    (() => { try { return fs.statSync(config.db_path).size; } catch { return null; } })(),
+    chain_size_bytes: getChainSize(),
+    network:          config.network,
   });
 });
 
@@ -485,8 +592,15 @@ app.get('/api/block/:ref', (req, res) => {
   if (!row || !row.raw_json) {
     return res.status(404).json({ error: 'Block not found', hint: 'cache_miss' });
   }
-  try { res.json(JSON.parse(row.raw_json)); }
-  catch { res.status(500).json({ error: 'Corrupt block data' }); }
+  try {
+    const block = JSON.parse(row.raw_json);
+    const height = block.header?.height;
+    if (height > 1) {
+      const prevRow = db.prepare('SELECT timestamp FROM blocks WHERE height = ?').get(height - 1);
+      if (prevRow) block._prev_timestamp = prevRow.timestamp;
+    }
+    res.json(block);
+  } catch { res.status(500).json({ error: 'Corrupt block data' }); }
 });
 
 app.get('/api/search', (req, res) => {
@@ -504,22 +618,24 @@ app.get('/api/search', (req, res) => {
 });
 
 app.get('/api/history', (req, res) => {
-  const days  = Math.min(30, Math.max(1, parseInt(req.query.days) || 14));
+  const days  = Math.min(90, Math.max(1, parseInt(req.query.days) || 7));
   const now   = Math.floor(Date.now() / 1000);
   const since = now - days * 86400;
+  // Adaptive sampling: 1h for <=7d, 4h for >7d (avoids sending 100k rows for 90d)
+  const step = days > 7 ? 14400 : 3600;
   const points = [];
-  for (let hour = since; hour <= now; hour += 3600) {
-    const row = stmtHistory.get(hour - 1800, hour + 1800, hour);
+  for (let t = since; t <= now; t += step) {
+    const row = stmtHistory.get(t - step / 2, t + step / 2, t);
     if (row) {
       points.push({
-        timestamp:    row.timestamp,
         height:       row.height,
+        timestamp:    row.timestamp,
         difficulty:   row.difficulty,
         hashrate_gps: Math.round((row.difficulty / 60) * 100) / 100,
       });
     }
   }
-  res.json(points);
+  res.json({ ok: true, rows: points });
 });
 
 app.get('/api/price', (_req, res) => {
@@ -537,6 +653,15 @@ app.get('/api/peers', async (_req, res) => {
   } catch {
     res.json([]);
   }
+});
+
+// ── SSE live push ────────────────────────────────────────────────────────────
+
+app.get('/events', (req, res) => {
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+  res.flushHeaders();
+  sseClients.add(res);
+  req.on('close', () => sseClients.delete(res));
 });
 
 // ── GA4 analytics route (must be before express.static) ─────────────────────
@@ -573,10 +698,10 @@ window.GRINSCAN_VERSION='${VERSION}';
 window.GRINSCAN_BASE_URL='${baseUrl}';
 window.GRINSCAN_BLOCKS_CACHE=${blocksCache};
 </script>`;
-  return html.replace('</head>', globals + '\n</head>');
+  return html.replace('<head>', '<head>\n' + globals);
 }
 
-['index.html', 'block.html', 'info.html'].forEach(page => {
+['index.html', 'block.html', 'info.html', 'api.html'].forEach(page => {
   const route = page === 'index.html' ? '/' : '/' + page;
   app.get(route, (_req, res) => {
     try {
@@ -609,6 +734,13 @@ app.listen(config.port, '127.0.0.1', async () => {
   } catch (e) {
     log(`[WARN] Initial tip fetch failed: ${e.message}`);
   }
+
+  // Start historical backfill in background
+  historicalBackfill().catch(e => log(`[WARN] Historical backfill: ${e.message}`));
+
+  // Set initial backfill_min from DB (so status is accurate before backfill starts)
+  const minRow = stmtMinHeight.get();
+  if (minRow.m != null) tipState.backfill_min = minRow.m;
 
   // First price collection (no wait)
   pollPrice().catch(e => log(`[WARN] Initial price fetch: ${e.message}`));

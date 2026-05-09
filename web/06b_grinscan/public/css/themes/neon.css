@@ -1,26 +1,26 @@
-/* neon.css — Cyberpunk: deep purple, electric cyan + magenta (mainnet default) */
+/* neon.css — Dark gold / amber (mainnet default) */
 :root {
-  --bg:           #0a0014;
-  --surface:      #13002a;
-  --surface2:     #1e0040;
-  --border:       #3d0080;
-  --text:         #e8e0ff;
-  --muted:        #8b7aaa;
-  --accent:       #00f0ff;
-  --accent2:      #ff00cc;
-  --green:        #00ff88;
-  --red:          #ff3366;
-  --badge-coin:   #ffcc00;
-  --badge-plain:  #00f0ff;
-  --badge-lock:   #ff00cc;
+  --bg:           #080700;
+  --surface:      #111000;
+  --surface2:     #1a1800;
+  --border:       #2e2800;
+  --text:         #ede8d5;
+  --muted:        #7a7050;
+  --accent:       #c8960c;
+  --accent2:      #00bcd4;
+  --green:        #4caf7d;
+  --red:          #e05555;
+  --badge-coin:   #c8960c;
+  --badge-plain:  #00bcd4;
+  --badge-lock:   #e08c00;
   --font-mono:    'JetBrains Mono', 'Courier New', monospace;
-  --glow:         0 0 12px rgba(0,240,255,0.2), 0 4px 24px rgba(0,0,0,0.6);
+  --glow:         0 0 12px rgba(200,150,12,0.25), 0 4px 24px rgba(0,0,0,0.7);
 }
 
 .gs-stat-card { box-shadow: var(--glow); }
 
 .gs-search input:focus {
-  box-shadow: 0 0 0 3px rgba(0,240,255,0.2), 0 0 16px rgba(0,240,255,0.1);
+  box-shadow: 0 0 0 3px rgba(200,150,12,0.2), 0 0 16px rgba(200,150,12,0.1);
   border-color: var(--accent);
 }
 

@@ -851,3 +851,56 @@ a:hover { text-decoration: underline; }
   .gs-stats-grid { grid-template-columns: 1fr 1fr; }
   .gs-info-stats-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* ── Ad banner placeholder ── */
+.gs-ad-banner {
+  max-width: 728px;
+  min-height: 90px;
+  margin: 1rem auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  overflow: hidden;
+}
+.gs-ad-banner:empty { display: none; }
+@media (max-width: 480px) { .gs-ad-banner { min-height: 50px; } }
+
+/* ── Node info card (Network tab) ── */
+.node-info-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  margin-bottom: 20px;
+}
+.node-info-card .stat-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+.node-info-card .stat-row:last-child { border-bottom: none; }
+.node-info-card .stat-row span:first-child { color: var(--muted); }
+
+/* ── Charts tab ── */
+.gs-chart-day-selector { display: flex; gap: 6px; margin-bottom: 12px; }
+.gs-chart-day-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+.gs-chart-day-btn:hover, .gs-chart-day-btn.active { color: var(--accent); border-color: var(--accent); }
+.gs-chart-canvas-wrap { position: relative; width: 100%; }
+.gs-chart-canvas-wrap canvas { width: 100% !important; }

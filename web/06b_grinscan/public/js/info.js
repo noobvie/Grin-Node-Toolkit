@@ -41,6 +41,7 @@ function switchTab(name) {
 function loadTabData(name) {
   if (name === 'emission')  loadEmission();
   if (name === 'stats')     loadStats();
+  if (name === 'charts')    loadCharts(7);
   if (name === 'network')   loadNetwork();
   // 'about' and 'api' are static
 }
@@ -175,7 +176,8 @@ async function loadStats() {
     }
 
     if (histR.ok) {
-      const hist = await histR.json();
+      const histData = await histR.json();
+      const hist = Array.isArray(histData) ? histData : (histData.rows || []);
       if (hist.length > 1) {
         renderLineChart('chart-hashrate', hist.map(p => [p.timestamp, p.hashrate_gps]),
           'GPS', 'var(--accent)');
@@ -227,13 +229,40 @@ function renderLineChart(elId, dataPoints, yUnit, color) {
 
 // ── Network tab ──────────────────────────────────────────────────────────────
 
+function formatBytes(b) {
+  if (b == null) return '—';
+  if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' GB';
+  if (b >= 1048576)    return (b / 1048576).toFixed(1) + ' MB';
+  if (b >= 1024)       return (b / 1024).toFixed(0) + ' KB';
+  return b + ' B';
+}
+
 async function loadNetwork() {
   const el = document.getElementById('network-content');
   if (!el) return;
   el.innerHTML = '<p style="color:var(--muted);font-family:var(--font-mono);font-size:13px;">Loading…</p>';
   try {
-    const peers = await fetch('/api/peers').then(r => r.json());
-    if (!peers.length) {
+    // Fetch stats for node info card alongside peers
+    const [peers, stats] = await Promise.all([
+      fetch('/api/peers').then(r => r.json()).catch(() => []),
+      fetch('/api/stats').then(r => r.json()).catch(() => ({})),
+    ]);
+
+    // Populate node info card
+    const modeLabel = stats.node_mode === 'archive' ? '✅ Full Archive'
+                    : stats.node_mode === 'pruned'  ? '⚠ Pruned'
+                    :                                 '⏳ Syncing History';
+    setText('node-mode-badge', modeLabel);
+
+    const minH = stats.backfill_min != null ? Number(stats.backfill_min).toLocaleString() : '?';
+    const maxH = stats.tip_height   != null ? Number(stats.tip_height).toLocaleString()   : '?';
+    setText('block-history', stats.backfill_active
+      ? `Blocks ${minH} – ${maxH} (backfilling…)`
+      : `Blocks ${minH} – ${maxH}`);
+
+    setText('db-size',    formatBytes(stats.db_size_bytes));
+    setText('chain-size', formatBytes(stats.chain_size_bytes));
+    if (!Array.isArray(peers) || !peers.length) {
       el.innerHTML = '<p style="color:var(--muted);font-family:var(--font-mono);font-size:13px;">Owner API unreachable — peer data unavailable.</p>';
       return;
     }
@@ -353,6 +382,72 @@ window.tryApi = async function(i) {
   }
 };
 
+// ── Charts tab (Chart.js) ─────────────────────────────────────────────────────
+
+const _chartInstances = {};
+
+function destroyChart(id) {
+  if (_chartInstances[id]) { _chartInstances[id].destroy(); delete _chartInstances[id]; }
+}
+
+function makeLineChart(canvasId, labels, data, label, color) {
+  destroyChart(canvasId);
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || typeof Chart === 'undefined') return;
+  const style = getComputedStyle(document.documentElement);
+  const gridColor = style.getPropertyValue('--border').trim() || '#333';
+  const textColor = style.getPropertyValue('--muted').trim() || '#888';
+  _chartInstances[canvasId] = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{ label, data, borderColor: color, backgroundColor: color + '22',
+        borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3 }],
+    },
+    options: {
+      responsive: true,
+      animation: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: textColor, maxTicksLimit: 8, font: { size: 10 } }, grid: { color: gridColor } },
+        y: { ticks: { color: textColor, maxTicksLimit: 6, font: { size: 10 } }, grid: { color: gridColor } },
+      },
+    },
+  });
+}
+
+async function loadCharts(days) {
+  // Update active day button
+  document.querySelectorAll('.gs-chart-day-btn').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.days) === days);
+  });
+
+  try {
+    const r = await fetch('/api/history?days=' + days);
+    if (!r.ok) return;
+    const data = await r.json();
+    const rows = Array.isArray(data) ? data : (data.rows || []);
+    if (rows.length < 2) return;
+
+    const labels = rows.map(p => fmtDate(p.timestamp));
+    const style = getComputedStyle(document.documentElement);
+    const accent  = style.getPropertyValue('--accent').trim()  || '#c8960c';
+    const accent2 = style.getPropertyValue('--accent2').trim() || '#00bcd4';
+
+    makeLineChart('chart-canvas-hashrate',   labels, rows.map(p => p.hashrate_gps.toFixed(2)), 'GPS', accent);
+    makeLineChart('chart-canvas-difficulty', labels, rows.map(p => p.difficulty),               'Difficulty', accent2);
+
+    // Block time: seconds between consecutive blocks, capped at 300s
+    const btLabels = rows.slice(1).map((p, i) => fmtDate(p.timestamp));
+    const btData   = rows.slice(1).map((p, i) => Math.min(p.timestamp - rows[i].timestamp, 300));
+    const green    = style.getPropertyValue('--green').trim() || '#4caf7d';
+    makeLineChart('chart-canvas-blocktime', btLabels, btData, 'Block Time (s)', green);
+
+  } catch (e) {
+    console.error('loadCharts:', e);
+  }
+}
+
 // ── Helper ───────────────────────────────────────────────────────────────────
 
 function setText(id, val) {
@@ -366,6 +461,15 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.gs-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
+
+  // Charts day selector (delegated — chart canvases may not exist yet)
+  document.addEventListener('click', e => {
+    if (e.target.classList.contains('gs-chart-day-btn')) {
+      const days = parseInt(e.target.dataset.days);
+      if (days) loadCharts(days);
+    }
+  });
+
   initApiTab();
   switchTab('about');
 });

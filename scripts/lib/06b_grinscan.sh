@@ -242,24 +242,111 @@ grinscan_configure() {
   "poll_interval_ms":    30000,
   "blocks_cache":        500,
   "web_dir":             "${GRINSCAN_APP}/public",
+  "node_data_dir":       "${node_dir}/chain_data",
   "ga4_measurement_id":  "${ga4_id}"
 }
 JSON
 
         chown www-data:www-data "$config_path"
         success "Config written: ${config_path}"
+        echo -e "  ${DIM}Note: SQLite DB is created automatically on first Start — no import step needed.${RESET}"
+        echo ""
+        echo -e "  ${CYAN}ℹ  Historical backfill runs automatically in the background.${RESET}"
+        echo -e "     Full node  → walks back to genesis block 0."
+        echo -e "     Pruned node → stops at pruning horizon, recent blocks still served."
+        echo -e "     To get full history on mainnet, run Script 01 with full node option."
         log "grinscan_configure: ${net} → ${config_path}"
     done
 
     echo ""
-    echo -e "  Next: run ${BOLD}Start (3)${RESET} to launch the service."
+    echo -e "  Next: run ${BOLD}Service Control (3)${RESET} to launch the service."
     echo ""
     echo -e "  ${YELLOW}⚠  If you rebuild the node or reset its API secrets (Script 01),${RESET}"
     echo -e "  ${YELLOW}   re-run Configure (2) to refresh the secret copies in this dir.${RESET}"
     pause
 }
 
-# ── Start ─────────────────────────────────────────────────────────────────────
+# ── Service Control (Start / Stop / Remove) ───────────────────────────────────
+
+grinscan_service_control() {
+    require_root
+    clear
+    echo -e "\n${BOLD}${CYAN}── GrinScan: Service Control ──${RESET}\n"
+
+    local net_choice; net_choice=$(_grinscan_pick_net) || return
+    local nets; IFS=',' read -ra nets <<< "$net_choice"
+
+    echo ""
+    echo -e "  ${GREEN}S${RESET}) Start"
+    echo -e "  ${GREEN}T${RESET}) Stop"
+    echo -e "  ${RED}R${RESET}) Remove service"
+    echo -e "  ${DIM}0) Cancel${RESET}"
+    echo ""
+    echo -ne "${BOLD}Action [S/T/R/0]: ${RESET}"
+    read -r action
+
+    case "${action^^}" in
+        S)
+            for net in "${nets[@]}"; do
+                local net_short; net_short=$( [[ "$net" == "testnet" ]] && echo "test" || echo "main" )
+                local svc="grinscan-${net_short}"
+                local config_path="${GRINSCAN_DIR}/${net_short}/config.json"
+                local svc_port; svc_port=$( [[ "$net" == "testnet" ]] && echo $GRINSCAN_TEST_PORT || echo $GRINSCAN_MAIN_PORT )
+                [[ ! -f "$config_path" ]] && { warn "Config not found for ${net}. Run Configure (2) first."; continue; }
+                systemctl start "$svc" 2>/dev/null \
+                    && success "${svc} started." \
+                    || { error "Failed to start ${svc}. Check logs."; continue; }
+                local waited=0
+                while [[ $waited -lt 10 ]]; do
+                    sleep 2; waited=$((waited+2))
+                    if ss -tlnp 2>/dev/null | grep -q ":${svc_port} "; then
+                        success "Port :${svc_port} is listening."
+                        echo -e "  URL: ${CYAN}http://127.0.0.1:${svc_port}${RESET}"
+                        break
+                    fi
+                done
+                if ! ss -tlnp 2>/dev/null | grep -q ":${svc_port} "; then
+                    warn "Port :${svc_port} not yet listening after ${waited}s — check: journalctl -u ${svc} -n 20"
+                fi
+                log "grinscan_service_control: start ${svc}"
+            done
+            ;;
+        T)
+            for net in "${nets[@]}"; do
+                local net_short; net_short=$( [[ "$net" == "testnet" ]] && echo "test" || echo "main" )
+                local svc="grinscan-${net_short}"
+                systemctl stop "$svc" 2>/dev/null \
+                    && success "${svc} stopped." \
+                    || warn "${svc} was not running."
+                log "grinscan_service_control: stop ${svc}"
+            done
+            ;;
+        R)
+            for net in "${nets[@]}"; do
+                local net_short; net_short=$( [[ "$net" == "testnet" ]] && echo "test" || echo "main" )
+                local svc="grinscan-${net_short}"
+                local unit_file="/etc/systemd/system/${svc}.service"
+                systemctl stop "$svc" 2>/dev/null || true
+                systemctl disable "$svc" 2>/dev/null || true
+                [[ -f "$unit_file" ]] && rm -f "$unit_file"
+                systemctl daemon-reload
+                success "${svc} removed."
+                echo -ne "  Also delete DB and config for ${net}? [y/N]: "
+                read -r del_data
+                if [[ "${del_data,,}" == "y" ]]; then
+                    rm -rf "${GRINSCAN_DIR}/${net_short}"
+                    success "Data deleted for ${net}."
+                fi
+                log "grinscan_service_control: remove ${svc}"
+            done
+            ;;
+        0|"") return ;;
+        *) warn "Invalid action."; sleep 1 ;;
+    esac
+    pause
+}
+
+# ── Start (kept for internal use) ─────────────────────────────────────────────
 
 grinscan_start() {
     require_root
@@ -392,6 +479,22 @@ grinscan_status() {
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
 
+_grinscan_show_log() {
+    local log_file="$1"
+    if [[ ! -f "$log_file" ]]; then warn "No log found: ${log_file}"; pause; return; fi
+    echo -e "  ${DIM}Log: ${log_file}${RESET}"
+    echo -e "  ${DIM}To tail manually: tail -f ${log_file}${RESET}\n"
+    tail -n 50 "$log_file"
+    echo ""
+    echo -e "  ${GREEN}F${RESET}) Follow live   ${DIM}0) Back${RESET}"
+    echo -ne "  ${BOLD}Select [F/0]: ${RESET}"
+    read -r fol
+    if [[ "${fol^^}" == "F" ]]; then
+        echo -e "  ${DIM}Ctrl+C or close terminal to stop following.${RESET}"
+        tail -f "$log_file" || true
+    fi
+}
+
 grinscan_logs() {
     clear
     echo -e "\n${BOLD}${CYAN}── GrinScan: View Logs ──${RESET}\n"
@@ -406,16 +509,28 @@ grinscan_logs() {
     local log_test="${GRINSCAN_DIR}/test/grinscan-test.log"
     local log_main="${GRINSCAN_DIR}/main/grinscan-main.log"
 
-    echo -e "\n  ${DIM}Press Ctrl+C to exit log view${RESET}\n"
     case "$choice" in
-        1) [[ -f "$log_test" ]] && tail -f "$log_test" || { warn "No testnet log found."; pause; } ;;
-        2) [[ -f "$log_main" ]] && tail -f "$log_main" || { warn "No mainnet log found."; pause; } ;;
+        1) _grinscan_show_log "$log_test" ;;
+        2) _grinscan_show_log "$log_main" ;;
         3)
-            local files=()
-            [[ -f "$log_test" ]] && files+=("$log_test")
-            [[ -f "$log_main" ]] && files+=("$log_main")
-            if [[ ${#files[@]} -eq 0 ]]; then warn "No log files found."; pause; return; fi
-            tail -f "${files[@]}"
+            echo -e "  ${DIM}Showing last 50 lines from each log.${RESET}\n"
+            if [[ -f "$log_test" ]]; then
+                echo -e "  ${BOLD}${CYAN}── Testnet ──${RESET}"
+                echo -e "  ${DIM}${log_test}${RESET}\n"
+                tail -n 50 "$log_test"
+                echo ""
+            fi
+            if [[ -f "$log_main" ]]; then
+                echo -e "  ${BOLD}${CYAN}── Mainnet ──${RESET}"
+                echo -e "  ${DIM}${log_main}${RESET}\n"
+                tail -n 50 "$log_main"
+                echo ""
+            fi
+            if [[ ! -f "$log_test" ]] && [[ ! -f "$log_main" ]]; then
+                warn "No log files found."; pause; return
+            fi
+            echo -e "  ${DIM}To follow live, select 1 or 2 individually.${RESET}"
+            pause
             ;;
         0|"") return ;;
         *) warn "Invalid choice."; sleep 1 ;;
@@ -432,8 +547,13 @@ grinscan_update() {
     local net_choice; net_choice=$(_grinscan_pick_net) || return
     local nets; IFS=',' read -ra nets <<< "$net_choice"
 
-    info "Updating npm packages…"
-    npm install --prefix "$GRINSCAN_WEB" --omit=dev --silent \
+    info "Redeploying app files from toolkit…"
+    cp -r "${GRINSCAN_WEB}/." "${GRINSCAN_APP}/"
+    chown -R www-data:www-data "${GRINSCAN_DIR}"
+    success "App files redeployed."
+
+    info "Updating npm dependencies…"
+    npm install --prefix "${GRINSCAN_APP}" --omit=dev --silent \
         && success "npm packages updated." \
         || warn "npm install reported errors."
 
@@ -454,7 +574,7 @@ grinscan_update() {
         fi
     done
 
-    local ver; ver=$(node -e "console.log(require('${GRINSCAN_WEB}/package.json').version)" 2>/dev/null || echo "unknown")
+    local ver; ver=$(node -e "console.log(require('${GRINSCAN_APP}/package.json').version)" 2>/dev/null || echo "unknown")
     success "GrinScan v${ver}"
     grinscan_status
 }
@@ -471,27 +591,40 @@ grinscan_setup_nginx() {
 
     echo -e "  ${GREEN}1${RESET}) Testnet  (port ${GRINSCAN_TEST_PORT})"
     echo -e "  ${GREEN}2${RESET}) Mainnet  (port ${GRINSCAN_MAIN_PORT})"
+    echo -e "  ${GREEN}3${RESET}) Both"
     echo -e "  ${DIM}0) Cancel${RESET}"
     echo ""
-    echo -ne "${BOLD}Select [1/2/0]: ${RESET}"
+    echo -ne "${BOLD}Select [1/2/3/0]: ${RESET}"
     read -r net_sel
 
-    local net net_short svc_port nginx_conf
+    local selected_nets=()
     case "$net_sel" in
-        1) net="testnet"; net_short="test"; svc_port=$GRINSCAN_TEST_PORT; nginx_conf="$NGINX_GRINSCAN_TEST_CONF" ;;
-        2) net="mainnet"; net_short="main"; svc_port=$GRINSCAN_MAIN_PORT; nginx_conf="$NGINX_GRINSCAN_MAIN_CONF" ;;
+        1) selected_nets=("testnet") ;;
+        2) selected_nets=("mainnet") ;;
+        3) selected_nets=("testnet" "mainnet") ;;
         0|"") return ;;
         *) warn "Invalid choice."; sleep 1; return ;;
     esac
 
-    local domain_eg; [[ "$net" == "testnet" ]] && domain_eg="test.yourdomain.com" || domain_eg="scan.yourdomain.com"
-    echo -ne "  Domain (e.g. ${domain_eg}): "
-    read -r domain
-    [[ -z "$domain" ]] && { warn "Domain required."; pause; return; }
+    # Determine SSL email once (skip if certbot account already exists)
+    local ssl_email=""
+    if ! certbot accounts list 2>/dev/null | grep -q "Account ID"; then
+        echo -ne "  Email for SSL certificate (Let's Encrypt): "
+        read -r ssl_email
+        [[ -z "$ssl_email" ]] && { warn "Email required for first certbot run."; pause; return; }
+    fi
 
-    echo -ne "  Email for SSL certificate (Let's Encrypt): "
-    read -r ssl_email
-    [[ -z "$ssl_email" ]] && { warn "Email required."; pause; return; }
+    for net in "${selected_nets[@]}"; do
+        local net_short svc_port nginx_conf
+        case "$net" in
+            testnet) net_short="test"; svc_port=$GRINSCAN_TEST_PORT; nginx_conf="$NGINX_GRINSCAN_TEST_CONF" ;;
+            mainnet) net_short="main"; svc_port=$GRINSCAN_MAIN_PORT; nginx_conf="$NGINX_GRINSCAN_MAIN_CONF" ;;
+        esac
+
+    local domain_eg; [[ "$net" == "testnet" ]] && domain_eg="test.yourdomain.com" || domain_eg="scan.yourdomain.com"
+    echo -ne "  Domain for ${net} (e.g. ${domain_eg}): "
+    read -r domain
+    [[ -z "$domain" ]] && { warn "Domain required for ${net}, skipping."; continue; }
 
     # Ensure rate-limit snippet exists — skip if zone already defined (e.g. by script 04)
     local rate_conf="/etc/nginx/conf.d/grinscan-rate-limit.conf"
@@ -540,8 +673,10 @@ NGINX
     success "Nginx config applied."
 
     info "Requesting SSL certificate from Let's Encrypt…"
+    local certbot_email_args=()
+    [[ -n "$ssl_email" ]] && certbot_email_args=(--email "$ssl_email")
     certbot --nginx -d "$domain" \
-        --non-interactive --agree-tos --email "$ssl_email" \
+        --non-interactive --agree-tos "${certbot_email_args[@]}" \
         --redirect \
         && success "SSL certificate issued for ${domain}." \
         || warn "Certbot failed — check connectivity and DNS."
@@ -558,9 +693,10 @@ ${GRINSCAN_DIR}/${net_short}/grinscan-${net_short}.log {
 }
 LOGROTATE
 
-    success "Nginx + SSL setup complete."
-    echo -e "  URL: ${CYAN}https://${domain}${RESET}"
-    log "grinscan_setup_nginx: ${net} → ${domain}"
+        success "Nginx + SSL setup complete."
+        echo -e "  URL: ${CYAN}https://${domain}${RESET}"
+        log "grinscan_setup_nginx: ${net} → ${domain}"
+    done
     pause
 }
 

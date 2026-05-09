@@ -14,6 +14,26 @@ const INFLATION_MILESTONES = [
 
 // ── Utility ──────────────────────────────────────────────────────────────────
 
+function fmtGPS(gps) {
+  if (gps == null || isNaN(gps)) return '—';
+  if (gps >= 1e15) return (gps / 1e15).toFixed(2) + ' PGPS';
+  if (gps >= 1e12) return (gps / 1e12).toFixed(2) + ' TGPS';
+  if (gps >= 1e9)  return (gps / 1e9).toFixed(2)  + ' GGPS';
+  if (gps >= 1e6)  return (gps / 1e6).toFixed(2)  + ' MGPS';
+  if (gps >= 1e3)  return (gps / 1e3).toFixed(1)  + ' kGPS';
+  return gps.toFixed(2) + ' GPS';
+}
+
+function fmtDiff(d) {
+  if (d == null || isNaN(d)) return '—';
+  if (d >= 1e15) return (d / 1e15).toFixed(2) + ' P';
+  if (d >= 1e12) return (d / 1e12).toFixed(2) + ' T';
+  if (d >= 1e9)  return (d / 1e9).toFixed(2)  + ' G';
+  if (d >= 1e6)  return (d / 1e6).toFixed(1)  + ' M';
+  if (d >= 1e3)  return (d / 1e3).toFixed(1)  + ' K';
+  return String(Math.round(d));
+}
+
 function fmtNum(n, dec) {
   if (n == null) return '—';
   if (dec != null) return Number(n).toLocaleString(undefined, { minimumFractionDigits: dec, maximumFractionDigits: dec });
@@ -43,13 +63,13 @@ function loadTabData(name) {
   if (name === 'stats')     loadStats();
   if (name === 'charts')    loadCharts(7);
   if (name === 'network')   loadNetwork();
-  // 'about' and 'api' are static
+  // 'about' is static
 }
 
 // ── SVG chart helper ─────────────────────────────────────────────────────────
 
 function makeSVG(points, width, height, opts) {
-  const { xMin, xMax, yMin, yMax, color, dotX, dotY } = opts;
+  const { xMin, xMax, yMin, yMax, color, dotX, dotY, yFmt } = opts;
   const xRange = xMax - xMin || 1;
   const yRange = yMax - yMin || 1;
   const pad = { top: 20, right: 10, bottom: 30, left: 45 };
@@ -63,8 +83,16 @@ function makeSVG(points, width, height, opts) {
 
   // Y axis labels (5 ticks)
   const yTicks = Array.from({ length: 5 }, (_, i) => yMin + (yRange * i) / 4);
+  const _defaultYFmt = v => {
+    if (v >= 1e15) return (v / 1e15).toFixed(1) + 'P';
+    if (v >= 1e12) return (v / 1e12).toFixed(1) + 'T';
+    if (v >= 1e9)  return (v / 1e9).toFixed(1)  + 'G';
+    if (v >= 1e6)  return (v / 1e6).toFixed(0)  + 'M';
+    if (v >= 1e3)  return (v / 1e3).toFixed(0)  + 'K';
+    return v.toFixed(1);
+  };
   const yAxisSvg = yTicks.map(v => {
-    const label = v >= 1e6 ? (v / 1e6).toFixed(0) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(0) + 'K' : v.toFixed(1);
+    const label = (yFmt || _defaultYFmt)(v);
     return `<text x="${pad.left - 6}" y="${toY(v).toFixed(1)}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="var(--muted)">${label}</text>
             <line x1="${pad.left}" y1="${toY(v).toFixed(1)}" x2="${pad.left + cw}" y2="${toY(v).toFixed(1)}" stroke="var(--border)" stroke-width="0.5"/>`;
   }).join('');
@@ -180,9 +208,9 @@ async function loadStats() {
       const hist = Array.isArray(histData) ? histData : (histData.rows || []);
       if (hist.length > 1) {
         renderLineChart('chart-hashrate', hist.map(p => [p.timestamp, p.hashrate_gps]),
-          'GPS', 'var(--accent)');
+          'GPS', 'var(--accent)', fmtGPS);
         renderLineChart('chart-difficulty', hist.map(p => [p.timestamp, p.difficulty]),
-          '', 'var(--accent2)');
+          '', 'var(--accent2)', fmtDiff);
       }
     }
   } catch (e) {
@@ -190,7 +218,7 @@ async function loadStats() {
   }
 }
 
-function renderLineChart(elId, dataPoints, yUnit, color) {
+function renderLineChart(elId, dataPoints, yUnit, color, yFmt) {
   const el = document.getElementById(elId);
   if (!el || dataPoints.length < 2) return;
   const xVals = dataPoints.map(p => p[0]);
@@ -202,6 +230,7 @@ function renderLineChart(elId, dataPoints, yUnit, color) {
     xMin, xMax, yMin, yMax,
     color,
     xFmt: ts => fmtDate(ts),
+    yFmt,
   });
   el.innerHTML = svg;
 
@@ -220,7 +249,7 @@ function renderLineChart(elId, dataPoints, yUnit, color) {
       tip.style.display = 'block';
       tip.style.left = (e.clientX - rect.left + 10) + 'px';
       tip.style.top  = (e.clientY - rect.top  - 30) + 'px';
-      const val = yUnit === 'GPS' ? pt[1].toFixed(1) + ' GPS' : fmtNum(Math.round(pt[1]));
+      const val = yFmt ? yFmt(pt[1]) : fmtNum(Math.round(pt[1]));
       tip.textContent = fmtDate(pt[0]) + '  ' + val;
     });
     svgEl.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
@@ -291,11 +320,20 @@ async function loadNetwork() {
       </div>`;
     }).join('');
 
+    function maskAddr(addr) {
+      if (!addr) return '—';
+      // IPv6 with embedded IPv4 like [::ffff:1.2.3.4]:port
+      let s = addr.replace(/(\[(?:[^\]]*:)?(?:\d+\.\d+\.)\d+\.)\d+(\])/g, '$1*$2');
+      // Plain IPv4 like 1.2.3.4:port — mask last octet
+      s = s.replace(/((?:\d+\.){2}\d+\.)\d+(:\d+)/g, '$1*$2');
+      return s;
+    }
+
     const rows = peers.map(p => {
       const dir = p.direction === 'Outbound'
         ? '<span class="badge badge-outbound">Outbound</span>'
         : '<span class="badge badge-inbound">Inbound</span>';
-      return `<tr><td>${p.addr || '—'}</td><td>${dir}</td><td style="color:var(--muted)">${p.user_agent || '—'}</td></tr>`;
+      return `<tr><td>${maskAddr(p.addr)}</td><td>${dir}</td><td style="color:var(--muted)">${p.user_agent || '—'}</td></tr>`;
     }).join('');
 
     el.innerHTML = `
@@ -328,59 +366,6 @@ async function loadNetwork() {
   }
 }
 
-// ── API tab ───────────────────────────────────────────────────────────────────
-
-function initApiTab() {
-  const baseUrl = window.GRINSCAN_BASE_URL || window.location.origin;
-  const endpoints = [
-    { path: '/rest/stats.json',      desc: 'Core chain stats: height, supply, difficulty, hashrate, peers', cache: '30s' },
-    { path: '/rest/supply.json',     desc: 'Circulating supply (height × 60 GRIN)',                        cache: '30s' },
-    { path: '/rest/height.json',     desc: 'Block height only',                                            cache: '30s' },
-    { path: '/rest/difficulty.json', desc: 'Network difficulty + hashrate (GPS)',                           cache: '30s' },
-    { path: '/rest/emission.json',   desc: 'Static emission schedule — yearly milestones, no halving',      cache: '24h' },
-    { path: '/rest/node.json',       desc: 'Connected peers, version distribution',                         cache: '30s' },
-    { path: '/rest/price.json',      desc: 'Current price (gate.io + nonlogs.io) + 24h change + history',  cache: '2 min' },
-  ];
-
-  const container = document.getElementById('api-cards');
-  if (!container) return;
-
-  container.innerHTML = endpoints.map((ep, i) => `
-    <div class="gs-api-card" id="api-card-${i}">
-      <div class="gs-api-card-header">
-        <span class="gs-api-method">GET</span>
-        <span class="gs-api-path">${ep.path}</span>
-        <div class="gs-api-actions">
-          <button class="gs-api-btn" onclick="copyApiUrl(${i})">📋 Copy URL</button>
-          <button class="gs-api-btn" onclick="tryApi(${i})">Try it</button>
-        </div>
-      </div>
-      <div class="gs-api-desc">${ep.desc} · Cache: ${ep.cache}</div>
-      <div class="gs-api-response" id="api-resp-${i}"></div>
-    </div>`).join('');
-
-  window._apiEndpoints = endpoints.map(ep => baseUrl + ep.path);
-}
-
-window.copyApiUrl = function(i) {
-  const url = window._apiEndpoints[i];
-  navigator.clipboard.writeText(url).catch(() => {});
-};
-
-window.tryApi = async function(i) {
-  const respEl = document.getElementById('api-resp-' + i);
-  if (!respEl) return;
-  if (respEl.style.display === 'block') { respEl.style.display = 'none'; return; }
-  respEl.style.display = 'block';
-  respEl.innerHTML = '<span class="gs-api-spinner"></span>';
-  try {
-    const r = await fetch(window._apiEndpoints[i]);
-    const data = await r.json();
-    respEl.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
-  } catch (e) {
-    respEl.innerHTML = `<pre class="api-error">Error: ${e.message}</pre>`;
-  }
-};
 
 // ── Charts tab (Chart.js) ─────────────────────────────────────────────────────
 
@@ -390,7 +375,7 @@ function destroyChart(id) {
   if (_chartInstances[id]) { _chartInstances[id].destroy(); delete _chartInstances[id]; }
 }
 
-function makeLineChart(canvasId, labels, data, label, color) {
+function makeLineChart(canvasId, labels, data, label, color, yTickFmt) {
   destroyChart(canvasId);
   const canvas = document.getElementById(canvasId);
   if (!canvas || typeof Chart === 'undefined') return;
@@ -410,7 +395,8 @@ function makeLineChart(canvasId, labels, data, label, color) {
       plugins: { legend: { display: false } },
       scales: {
         x: { ticks: { color: textColor, maxTicksLimit: 8, font: { size: 10 } }, grid: { color: gridColor } },
-        y: { ticks: { color: textColor, maxTicksLimit: 6, font: { size: 10 } }, grid: { color: gridColor } },
+        y: { ticks: { color: textColor, maxTicksLimit: 6, font: { size: 10 },
+               callback: yTickFmt || undefined }, grid: { color: gridColor } },
       },
     },
   });
@@ -434,8 +420,8 @@ async function loadCharts(days) {
     const accent  = style.getPropertyValue('--accent').trim()  || '#c8960c';
     const accent2 = style.getPropertyValue('--accent2').trim() || '#00bcd4';
 
-    makeLineChart('chart-canvas-hashrate',   labels, rows.map(p => p.hashrate_gps.toFixed(2)), 'GPS', accent);
-    makeLineChart('chart-canvas-difficulty', labels, rows.map(p => p.difficulty),               'Difficulty', accent2);
+    makeLineChart('chart-canvas-hashrate',   labels, rows.map(p => p.hashrate_gps), 'GPS',        accent,  v => fmtGPS(v));
+    makeLineChart('chart-canvas-difficulty', labels, rows.map(p => p.difficulty),  'Difficulty', accent2, v => fmtDiff(v));
 
     // Block time: seconds between consecutive blocks, capped at 300s
     const btLabels = rows.slice(1).map((p, i) => fmtDate(p.timestamp));

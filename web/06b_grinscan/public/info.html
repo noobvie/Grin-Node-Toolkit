@@ -7,10 +7,15 @@
   <meta property="og:site_name" content="GrinScan">
   <meta property="og:title" content="Info — GrinScan">
   <title>Info — GrinScan</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" id="favicon-link" href="/favicon-testnet.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/css/grinscan.css">
   <link rel="stylesheet" id="theme-css" href="/css/themes/dark.css">
   <script>
+    (function () {
+      var net = (window.GRINSCAN_NETWORK || 'testnet');
+      var fav = document.getElementById('favicon-link');
+      if (fav) fav.href = net === 'mainnet' ? '/favicon-mainnet.svg' : '/favicon-testnet.svg';
+    })();
     (function () {
       var net = (window.GRINSCAN_NETWORK || 'testnet');
       var key = 'grinscan-theme-' + net;
@@ -55,7 +60,6 @@
       <button class="gs-tab-btn" data-tab="stats"    role="tab">Stats</button>
       <button class="gs-tab-btn" data-tab="charts"   role="tab">Charts</button>
       <button class="gs-tab-btn" data-tab="network"  role="tab">Network</button>
-      <button class="gs-tab-btn" data-tab="api"      role="tab">API</button>
     </div>
 
     <!-- ── ABOUT TAB ── -->
@@ -250,20 +254,6 @@
       </div>
     </div>
 
-    <!-- ── API TAB ── -->
-    <div id="tab-api" class="gs-tab-panel" role="tabpanel">
-
-      <div class="gs-info-section">
-        <h3>Public REST API</h3>
-        <p style="font-size:13px;">
-          These endpoints are publicly accessible with no authentication.<br>
-          All responses include <code>Access-Control-Allow-Origin: *</code> for browser use.
-        </p>
-      </div>
-
-      <div id="api-cards"></div>
-
-    </div><!-- /#tab-api -->
 
   </main>
 

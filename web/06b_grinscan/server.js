@@ -75,11 +75,18 @@ const stmtListBlocks  = db.prepare(
 );
 const stmtCountBlocks = db.prepare('SELECT COUNT(*) AS c FROM blocks');
 const stmtPruneBlocks = db.prepare('DELETE FROM blocks WHERE height < ?');
-const stmtHistory     = db.prepare(
-  'SELECT height, difficulty, timestamp FROM blocks WHERE timestamp BETWEEN ? AND ? ORDER BY ABS(timestamp - ?) LIMIT 1'
-);
-const stmtHistoryRange = db.prepare(
-  'SELECT height, timestamp, difficulty FROM blocks WHERE timestamp >= ? ORDER BY height ASC'
+// Per-block difficulty = total_difficulty[n] - total_difficulty[n-1] via self-join
+const stmtHistory = db.prepare(`
+  SELECT b1.height, b1.timestamp,
+         MAX(0, b1.difficulty - COALESCE(b2.difficulty, 0)) AS difficulty
+  FROM   blocks b1
+  LEFT JOIN blocks b2 ON b2.height = b1.height - 1
+  WHERE  b1.timestamp BETWEEN ? AND ?
+  ORDER BY ABS(b1.timestamp - ?)
+  LIMIT 1
+`);
+const stmtTopTwoDiff = db.prepare(
+  'SELECT height, difficulty FROM blocks ORDER BY height DESC LIMIT 2'
 );
 const stmtInsertPrice = db.prepare(
   'INSERT OR REPLACE INTO prices (timestamp, price_btc, price_usd, source) VALUES (?, ?, ?, ?)'
@@ -344,19 +351,20 @@ async function pollBlocks() {
       broadcastNewBlock({ height: tipHeight });
     }
 
-    // Difficulty from DB (scalar from block header); fall back to status tip value
-    // Note: status.tip.total_difficulty may be an object on some node versions
-    const latest = db.prepare(
-      'SELECT difficulty FROM blocks WHERE height = ?'
-    ).get(tipHeight);
-    const rawDiff      = tip.total_difficulty;
-    const fallbackDiff = typeof rawDiff === 'number' ? rawDiff : (rawDiff?.difficulty ?? 0);
-    const difficulty   = latest ? latest.difficulty : fallbackDiff;
+    // Per-block difficulty = total_difficulty[tip] - total_difficulty[tip-1]
+    // (DB stores cumulative total_difficulty; the delta gives the actual block target)
+    const topTwo = stmtTopTwoDiff.all();
+    let perBlockDiff = 0;
+    if (topTwo.length >= 2) {
+      perBlockDiff = Math.max(0, topTwo[0].difficulty - topTwo[1].difficulty);
+    } else if (topTwo.length === 1) {
+      perBlockDiff = topTwo[0].difficulty;
+    }
 
     tipState.height       = tipHeight;
     tipState.hash         = tip.last_block_h;
-    tipState.difficulty   = difficulty;
-    tipState.hashrate_gps = Math.round((difficulty / 60) * 100) / 100;
+    tipState.difficulty   = perBlockDiff;
+    tipState.hashrate_gps = Math.round((perBlockDiff / 60) * 100) / 100;
 
     // ── Owner API: peer count (quick from status) + version map (full list) ──
     tipState.peer_count = status.connections || 0;
@@ -430,17 +438,20 @@ async function pollPrice() {
   // nonlogs.io: GRIN-BTC — preferred for BTC price + BTC-pair volume
   // base_volume = GRIN traded; quote_volume = BTC actually spent (the real BTC volume)
   try {
-    const nl = await httpsGet('api.nonlogs.io', '/api/markets/GRIN-BTC');
+    const nlRaw = await httpsGet('api.nonlogs.io', '/api/markets/GRIN-BTC');
+    // API may return object or single-element array
+    const nl = Array.isArray(nlRaw) ? nlRaw[0] : nlRaw;
     if (nl) {
-      const nlBtc = parseFloat(nl.last || nl.last_price) || 0;
+      const nlBtc = parseFloat(nl.last || nl.last_price || nl.price) || 0;
       if (nlBtc) {
         price_btc = nlBtc;
         if (!sources.includes('nonlogs.io')) sources.push('nonlogs.io');
         if (!price_usd && btcUsd) price_usd = nlBtc * btcUsd;
       }
       // quote_volume is BTC spent on the GRIN/BTC market
-      const nlVolBtc = parseFloat(nl.quote_volume) || 0;
+      const nlVolBtc = parseFloat(nl.quote_volume || nl.quoteVolume || nl.volume_quote) || 0;
       if (nlVolBtc) volume_btc = nlVolBtc;
+      if (!nlVolBtc) log(`[DEBUG] nonlogs.io GRIN-BTC keys: ${Object.keys(nl).join(', ')} | quote_volume=${nl.quote_volume}`);
     }
   } catch {}
 
@@ -736,29 +747,73 @@ app.get('/js/analytics.js', (_req, res) => {
 })();`);
 });
 
-// ── HTML pages with injected window globals ───────────────────────────────────
+// ── HTML pages with injected window globals + SEO ─────────────────────────────
 
 const webDir    = config.web_dir;
 const baseUrl   = process.env.GRINSCAN_BASE_URL || '';
 const blocksCache = config.blocks_cache || 500;
 
-function injectGlobals(html) {
+const _net      = config.network;
+const _isMain   = _net === 'mainnet';
+const _netLabel = _isMain ? 'Mainnet' : 'Testnet';
+
+const _pageMeta = {
+  index: {
+    title: `GrinScan — Grin ${_netLabel} Block Explorer`,
+    desc:  _isMain
+      ? 'GrinScan: real-time Grin mainnet block explorer. Track blocks, hashrate, difficulty, supply, and price.'
+      : 'GrinScan: lightweight Grin testnet block explorer. Explore testnet blocks and live network stats.',
+  },
+  block: {
+    title: `Block — GrinScan ${_netLabel}`,
+    desc:  `Grin ${_netLabel} block details: hash, timestamp, difficulty, kernels, and outputs.`,
+  },
+  info: {
+    title: `Info — GrinScan ${_netLabel}`,
+    desc:  `Grin ${_netLabel} network info: emission schedule, live stats, hashrate charts, peer list, and API reference.`,
+  },
+  api: {
+    title: `API — GrinScan ${_netLabel}`,
+    desc:  `GrinScan public REST API for the Grin ${_netLabel} block explorer. CORS-enabled, no auth required.`,
+  },
+};
+
+function injectGlobals(html, pageKey) {
+  const meta    = _pageMeta[pageKey] || _pageMeta.index;
+  const canon   = baseUrl ? `\n<link rel="canonical" href="${baseUrl}${pageKey === 'index' ? '/' : '/' + pageKey + '.html'}">` : '';
+  const ogImage = baseUrl ? `\n<meta property="og:image" content="${baseUrl}/grin-logo.svg">` : '';
+  const jsonLd  = pageKey === 'index'
+    ? `\n<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"GrinScan ${_netLabel} Block Explorer","url":"${baseUrl || ''}"}</script>`
+    : '';
+
+  const seoBlock = `<title>${meta.title}</title>
+<meta name="description" content="${meta.desc}">
+<meta property="og:title" content="${meta.title}">
+<meta property="og:description" content="${meta.desc}">${canon}${ogImage}${jsonLd}`;
+
   const globals = `<script>
 window.GRINSCAN_NETWORK='${config.network}';
 window.GRINSCAN_VERSION='${VERSION}';
 window.GRINSCAN_BASE_URL='${baseUrl}';
 window.GRINSCAN_BLOCKS_CACHE=${blocksCache};
 </script>`;
-  return html.replace('<head>', '<head>\n' + globals);
+
+  // Strip static title + description from the HTML file, then inject server-side versions
+  let out = html
+    .replace(/<title>[^<]*<\/title>/, '')
+    .replace(/<meta\s+name="description"[^>]*>/i, '');
+  out = out.replace('<head>', '<head>\n' + seoBlock + '\n' + globals);
+  return out;
 }
 
 ['index.html', 'block.html', 'info.html', 'api.html'].forEach(page => {
-  const route = page === 'index.html' ? '/' : '/' + page;
+  const route   = page === 'index.html' ? '/' : '/' + page;
+  const pageKey = page.replace('.html', '');
   app.get(route, (_req, res) => {
     try {
       const html = fs.readFileSync(path.join(webDir, page), 'utf8');
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send(injectGlobals(html));
+      res.send(injectGlobals(html, pageKey));
     } catch {
       res.status(404).send('Not found');
     }

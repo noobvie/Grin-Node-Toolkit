@@ -36,13 +36,21 @@ function fmtFee(nano) {
 
 function fmtHashrate(gps) {
   if (gps == null) return '—';
-  return gps.toFixed(1) + ' GPS';
+  if (gps >= 1e15) return (gps / 1e15).toFixed(2) + ' PGPS';
+  if (gps >= 1e12) return (gps / 1e12).toFixed(2) + ' TGPS';
+  if (gps >= 1e9)  return (gps / 1e9).toFixed(2)  + ' GGPS';
+  if (gps >= 1e6)  return (gps / 1e6).toFixed(2)  + ' MGPS';
+  if (gps >= 1e3)  return (gps / 1e3).toFixed(1)  + ' kGPS';
+  return gps.toFixed(2) + ' GPS';
 }
 
 function fmtDifficulty(d) {
   if (d == null) return '—';
-  if (d >= 1_000_000) return (d / 1_000_000).toFixed(2) + ' M';
-  if (d >= 1_000) return (d / 1_000).toFixed(1) + ' K';
+  if (d >= 1e15) return (d / 1e15).toFixed(2) + ' P';
+  if (d >= 1e12) return (d / 1e12).toFixed(2) + ' T';
+  if (d >= 1e9)  return (d / 1e9).toFixed(2)  + ' G';
+  if (d >= 1e6)  return (d / 1e6).toFixed(1)  + ' M';
+  if (d >= 1e3)  return (d / 1e3).toFixed(1)  + ' K';
   return String(d);
 }
 
@@ -84,34 +92,6 @@ function copyText(text, btn) {
     btn.classList.add('copied');
     setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
   }).catch(() => {});
-}
-
-// ── Sparkline ────────────────────────────────────────────────────────────────
-
-const _sparkValues = [];
-function updateSparkline(difficulty) {
-  _sparkValues.push(difficulty);
-  if (_sparkValues.length > 10) _sparkValues.shift();
-  const canvas = document.getElementById('sparkline');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
-  ctx.clearRect(0, 0, w, h);
-  if (_sparkValues.length < 2) return;
-  const max = Math.max(..._sparkValues);
-  const min = Math.min(..._sparkValues);
-  const range = max - min || 1;
-  const step = w / (_sparkValues.length - 1);
-  const style = getComputedStyle(document.documentElement);
-  ctx.strokeStyle = style.getPropertyValue('--accent').trim() || '#ff9900';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  _sparkValues.forEach((v, i) => {
-    const x = i * step;
-    const y = h - ((v - min) / range) * (h - 4) - 2;
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-  });
-  ctx.stroke();
 }
 
 // ── Stall banner ─────────────────────────────────────────────────────────────
@@ -234,15 +214,17 @@ async function pollStats() {
 
     const volEl    = document.getElementById('stat-volume');
     const volBtcEl = document.getElementById('stat-volume-btc');
-    if (volEl)    volEl.textContent    = fmtVol(s.volume_usdt);
-    if (volBtcEl) volBtcEl.textContent = s.volume_btc != null ? fmtBtcVol(s.volume_btc) + ' BTC pair' : '';
+    if (volEl) volEl.textContent = fmtVol(s.volume_usdt);
+    if (volBtcEl) {
+      const btcStr = fmtBtcVol(s.volume_btc);
+      volBtcEl.textContent = btcStr ? 'GRIN/BTC ' + btcStr : '';
+    }
 
     const supplyEl = document.getElementById('stat-supply');
     if (supplyEl && s.tip_height) {
       supplyEl.textContent = fmtNum(s.tip_height * 60) + ' GRIN';
     }
 
-    updateSparkline(s.difficulty);
     setStallBanner(s.stalled);
     _prevTipHeight = s.tip_height;
   } catch {}
@@ -259,8 +241,7 @@ function fmtVol(n) {
 
 function fmtBtcVol(n) {
   if (n == null || isNaN(n) || n === 0) return '';
-  if (n >= 1)     return n.toFixed(4) + ' BTC';
-  if (n >= 0.001) return n.toFixed(4) + ' BTC';   // e.g. 0.0049 BTC
+  if (n >= 0.001) return n.toFixed(4) + ' BTC';
   return (n * 1e8).toFixed(0) + ' sat';
 }
 
@@ -441,6 +422,96 @@ function showCacheMiss() {
   }
 }
 
+// ── API reference page ───────────────────────────────────────────────────────
+
+function initApiPage() {
+  const base = window.GRINSCAN_BASE_URL || window.location.origin;
+  const isMain = window.GRINSCAN_NETWORK === 'mainnet';
+
+  const endpoints = [
+    // ── Internal API (no CORS) ──
+    { path: '/api/stats',     desc: 'Latest tip, hashrate, difficulty, peers, price, pool size, node mode, DB size', cache: 'live',      link: true  },
+    { path: '/api/blocks',    desc: 'Paginated block list — <code>?limit=N&amp;offset=M</code> (max 100)',           cache: 'live',      link: true  },
+    { path: '/api/block/:id', desc: 'Single block by height or hash — includes <code>_prev_timestamp</code>',        cache: 'live',      link: false },
+    { path: '/api/history',   desc: 'Historical block samples — <code>?days=N</code> (max 90). Returns <code>{ ok, rows }</code>', cache: 'live', link: true },
+    { path: '/api/peers',     desc: 'Connected peer list (addr, direction, user_agent)',                              cache: 'live',      link: true  },
+    { path: '/api/price',     desc: 'GRIN price (USD + BTC), 24h change, price history',                             cache: '2 min',     link: true  },
+    { path: '/api/tip',       desc: 'Current tip height + hash',                                                     cache: 'live',      link: true  },
+    { path: '/events',        desc: 'Server-Sent Events stream — fires <code>{ type:"block", height }</code> on each new block', cache: 'streaming', link: false },
+    // ── Public REST (CORS-enabled) ──
+    { path: '/rest/stats.json',      desc: 'Core chain stats (CORS-enabled public snapshot)',                           cache: '30s',   link: true, cors: true },
+    { path: '/rest/supply.json',     desc: 'Circulating supply = height × 60 GRIN',                                    cache: '30s',   link: true, cors: true },
+    { path: '/rest/height.json',     desc: 'Block height only',                                                         cache: '30s',   link: true, cors: true },
+    { path: '/rest/difficulty.json', desc: 'Network difficulty + hashrate (GPS)',                                        cache: '30s',   link: true, cors: true },
+    { path: '/rest/emission.json',   desc: 'Static emission schedule — yearly milestones, no halving',                  cache: '24h',   link: true, cors: true },
+    { path: '/rest/node.json',       desc: 'Connected peers, version distribution (CORS-enabled)',                       cache: '30s',   link: true, cors: true },
+    { path: '/rest/price.json',      desc: 'Price data (gate.io + nonlogs.io) + 24h change + history (CORS-enabled)', cache: '2 min', link: true, cors: true },
+  ];
+
+  // Only include price endpoints on mainnet
+  const filtered = isMain ? endpoints : endpoints.filter(ep => !ep.path.includes('price'));
+
+  const container = document.getElementById('api-cards');
+  if (!container) return;
+
+  container.innerHTML = filtered.map((ep, i) => {
+    const url = base + ep.path;
+    const linkBtn = ep.link
+      ? `<a class="gs-api-btn" href="${url}" target="_blank" rel="noopener">↗ Open</a>`
+      : '';
+    const copyBtn = ep.link
+      ? `<button class="gs-api-btn" data-copy="${url}">📋 Copy</button>`
+      : '';
+    const tryBtn = ep.link && ep.path !== '/events'
+      ? `<button class="gs-api-btn gs-api-try-btn" data-idx="${i}">▶ Try</button>`
+      : '';
+    const corsBadge = ep.cors ? '<span style="font-size:10px;background:var(--green);color:#000;border-radius:3px;padding:1px 5px;margin-left:6px;">CORS</span>' : '';
+    return `
+      <div class="gs-api-card">
+        <div class="gs-api-card-header">
+          <span class="gs-api-method">GET</span>
+          <span class="gs-api-path">${ep.path}</span>${corsBadge}
+          <div class="gs-api-actions">${linkBtn}${copyBtn}${tryBtn}</div>
+        </div>
+        <div class="gs-api-desc">${ep.desc} &nbsp;·&nbsp; Cache: <strong>${ep.cache}</strong></div>
+        <div class="gs-api-response" id="api-resp-${i}" style="display:none;"></div>
+      </div>`;
+  }).join('');
+
+  // Store URLs for Try buttons
+  window._apiUrls = filtered.map(ep => base + ep.path);
+
+  // Copy buttons
+  container.querySelectorAll('[data-copy]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(btn.dataset.copy).catch(() => {});
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 1500);
+    });
+  });
+
+  // Try buttons
+  container.querySelectorAll('.gs-api-try-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const i = parseInt(btn.dataset.idx);
+      const respEl = document.getElementById('api-resp-' + i);
+      if (!respEl) return;
+      if (respEl.style.display === 'block') { respEl.style.display = 'none'; btn.textContent = '▶ Try'; return; }
+      respEl.style.display = 'block';
+      btn.textContent = '▼ Hide';
+      respEl.innerHTML = '<span class="gs-api-spinner"></span>';
+      try {
+        const r = await fetch(window._apiUrls[i]);
+        const data = await r.json();
+        respEl.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+      } catch (e) {
+        respEl.innerHTML = `<pre class="api-error">Error: ${e.message}</pre>`;
+      }
+    });
+  });
+}
+
 // ── Nav active state (shared across all pages) ───────────────────────────────
 
 function setNavActive() {
@@ -489,6 +560,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const page = document.body.dataset.page;
 
   if (page === 'index') {
+    // Hide price/volume/supply cards on testnet — not relevant for test coins
+    if (window.GRINSCAN_NETWORK !== 'mainnet') {
+      ['stat-price', 'stat-volume', 'stat-supply'].forEach(id => {
+        const card = document.getElementById(id)?.closest('.gs-stat-card');
+        if (card) card.style.display = 'none';
+      });
+    }
+
     // Remove skeleton loaders once first data arrives
     pollStats().then(() => {
       document.querySelectorAll('.skeleton-cell').forEach(el => el.classList.remove('skeleton'));
@@ -497,7 +576,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initSearch();
     initLoadMore();
     startAgeCountdown();
-    setInterval(() => pollStats(), 30000);
+    setInterval(() => pollStats(), 60000);
 
     // SSE live push — instant block notifications
     try {
@@ -515,5 +594,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (page === 'block') {
     loadBlockDetail();
     initSearch();
+  }
+
+  if (page === 'api') {
+    initApiPage();
   }
 });

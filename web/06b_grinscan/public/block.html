@@ -8,10 +8,15 @@
   <meta property="og:title" content="GrinScan — Grin Block Explorer">
   <meta property="og:description" content="Lightweight Grin block explorer">
   <title>GrinScan</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" id="favicon-link" href="/favicon-testnet.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/css/grinscan.css">
   <link rel="stylesheet" id="theme-css" href="/css/themes/dark.css">
   <script>
+    (function () {
+      var net = (window.GRINSCAN_NETWORK || 'testnet');
+      var fav = document.getElementById('favicon-link');
+      if (fav) fav.href = net === 'mainnet' ? '/favicon-mainnet.svg' : '/favicon-testnet.svg';
+    })();
     (function () {
       var net = (window.GRINSCAN_NETWORK || 'testnet');
       var key = 'grinscan-theme-' + net;

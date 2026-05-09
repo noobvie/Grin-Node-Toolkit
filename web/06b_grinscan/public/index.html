@@ -8,11 +8,16 @@
   <meta property="og:title" content="GrinScan — Grin Block Explorer">
   <meta property="og:description" content="Lightweight Grin block explorer">
   <title>GrinScan — Block Explorer</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" id="favicon-link" href="/favicon-testnet.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/css/grinscan.css">
   <link rel="stylesheet" id="theme-css" href="/css/themes/dark.css">
   <script>
     // Apply theme before first paint (no FOUC)
+    (function () {
+      var net = (window.GRINSCAN_NETWORK || 'testnet');
+      var fav = document.getElementById('favicon-link');
+      if (fav) fav.href = net === 'mainnet' ? '/favicon-mainnet.svg' : '/favicon-testnet.svg';
+    })();
     (function () {
       var net = (window.GRINSCAN_NETWORK || 'testnet');
       var key = 'grinscan-theme-' + net;
@@ -75,7 +80,6 @@
         <div class="gs-stat-value">
           <span class="live-dot" title="Live"></span><span id="stat-tip" class="skeleton skeleton-cell" style="display:inline-block;min-width:100px;height:1.2em;">‌</span>
         </div>
-        <canvas id="sparkline" class="gs-sparkline" width="160" height="28" aria-hidden="true"></canvas>
       </div>
       <div class="gs-stat-card">
         <div class="gs-stat-label">Hashrate</div>
@@ -86,8 +90,9 @@
         <div class="gs-stat-value" id="stat-difficulty">—</div>
       </div>
       <div class="gs-stat-card">
-        <div class="gs-stat-label">Peers</div>
+        <div class="gs-stat-label">Node Peers</div>
         <div class="gs-stat-value" id="stat-peers">—</div>
+        <div class="gs-stat-sub">connected to this node</div>
       </div>
       <div class="gs-stat-card">
         <div class="gs-stat-label">Mempool</div>
@@ -125,7 +130,7 @@
     <section class="gs-block-section" aria-label="Latest blocks">
       <div class="gs-block-header">
         <span class="gs-block-title">Latest Blocks</span>
-        <span class="gs-live-indicator" aria-live="polite">Live · 30s refresh</span>
+        <span class="gs-live-indicator" aria-live="polite">Live · 1min refresh</span>
       </div>
       <div class="gs-table-wrap">
         <table class="gs-table" aria-label="Block list">

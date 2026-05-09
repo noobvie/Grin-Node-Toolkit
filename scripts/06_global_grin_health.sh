@@ -1583,13 +1583,14 @@ show_menu_b() {
     echo -e "  ${GREEN}6${RESET})   Status"
     echo -e "  ${GREEN}7${RESET})   View Logs"
     echo -e "  ${GREEN}U${RESET})   Update App      ${DIM}redeploy server.js + web files from toolkit, refresh npm deps${RESET}"
+    echo -e "  ${RED}Z${RESET})   Nuke            ${DIM}stop + remove service, data dir, nginx config (clean rebuild)${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back${RESET}"
     echo -e "  ${DIM}[Enter] Refresh menu${RESET}"
     echo -e "  ${DIM}DNS: ensure A-record points to this server before running Setup Nginx (4)${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-7, U]: ${RESET}"
+    echo -ne "${BOLD}Select [0-7, U, Z]: ${RESET}"
 }
 
 show_menu_c() {
@@ -1698,6 +1699,7 @@ run_menu_b() {
             6) grinscan_status                     || true ;;
             7) grinscan_logs                       || true ;;
             U) grinscan_update                     || true ;;
+            Z) grinscan_nuke                       || true ;;
             0) break                                        ;;
             "") ;;  # Enter = refresh menu
             *) warn "Invalid option."; sleep 1             ;;

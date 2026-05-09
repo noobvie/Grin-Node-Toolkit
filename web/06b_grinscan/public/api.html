@@ -7,10 +7,15 @@
   <meta property="og:site_name" content="GrinScan">
   <meta property="og:title" content="API — GrinScan">
   <title>API — GrinScan</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" id="favicon-link" href="/favicon-testnet.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/css/grinscan.css">
   <link rel="stylesheet" id="theme-css" href="/css/themes/dark.css">
   <script>
+    (function () {
+      var net = (window.GRINSCAN_NETWORK || 'testnet');
+      var fav = document.getElementById('favicon-link');
+      if (fav) fav.href = net === 'mainnet' ? '/favicon-mainnet.svg' : '/favicon-testnet.svg';
+    })();
     (function () {
       var net = (window.GRINSCAN_NETWORK || 'testnet');
       var key = 'grinscan-theme-' + net;
@@ -49,104 +54,17 @@
   <main class="gs-main">
 
     <div class="gs-info-section">
-      <h3>Public REST API</h3>
+      <h3>API Reference</h3>
       <p style="font-size:13px;color:var(--muted);">
-        All endpoints return JSON. <code>/rest/</code> routes include
-        <code>Access-Control-Allow-Origin: *</code> for browser use.
+        All endpoints return JSON. <span style="background:var(--green);color:#000;border-radius:3px;padding:1px 5px;font-size:11px;">CORS</span>-tagged
+        routes include <code>Access-Control-Allow-Origin: *</code> for cross-origin browser use.
         No authentication required.
       </p>
     </div>
 
-    <div class="gs-table-wrap" style="margin-bottom:24px;">
-      <table class="gs-kv-table">
-        <thead>
-          <tr>
-            <th style="width:260px;">Endpoint</th>
-            <th>Description</th>
-            <th style="width:80px;">Cache</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>GET /api/stats</code></td>
-            <td>Latest tip, hashrate, difficulty, peers, price, pool size, node mode, DB size</td>
-            <td>live</td>
-          </tr>
-          <tr>
-            <td><code>GET /api/blocks</code></td>
-            <td>Paginated block list — <code>?limit=N&amp;offset=M</code> (max 100)</td>
-            <td>live</td>
-          </tr>
-          <tr>
-            <td><code>GET /api/block/:id</code></td>
-            <td>Single block by height or hash — includes <code>_prev_timestamp</code></td>
-            <td>live</td>
-          </tr>
-          <tr>
-            <td><code>GET /api/history</code></td>
-            <td>Historical block samples for charts — <code>?days=N</code> (max 90). Returns <code>{ ok, rows }</code></td>
-            <td>live</td>
-          </tr>
-          <tr>
-            <td><code>GET /api/peers</code></td>
-            <td>Connected peer list (addr, direction, user_agent)</td>
-            <td>live</td>
-          </tr>
-          <tr>
-            <td><code>GET /api/price</code></td>
-            <td>GRIN price (USD + BTC), 24h change, price history</td>
-            <td>2 min</td>
-          </tr>
-          <tr>
-            <td><code>GET /api/tip</code></td>
-            <td>Current tip height + hash</td>
-            <td>live</td>
-          </tr>
-          <tr>
-            <td><code>GET /events</code></td>
-            <td>Server-Sent Events stream — fires <code>{ type:"block", height }</code> on each new block</td>
-            <td>streaming</td>
-          </tr>
-          <tr>
-            <td><code>GET /rest/stats.json</code></td>
-            <td>Core chain stats (CORS-enabled public snapshot)</td>
-            <td>30s</td>
-          </tr>
-          <tr>
-            <td><code>GET /rest/supply.json</code></td>
-            <td>Circulating supply = height × 60 GRIN</td>
-            <td>30s</td>
-          </tr>
-          <tr>
-            <td><code>GET /rest/height.json</code></td>
-            <td>Block height only</td>
-            <td>30s</td>
-          </tr>
-          <tr>
-            <td><code>GET /rest/difficulty.json</code></td>
-            <td>Network difficulty + hashrate (GPS)</td>
-            <td>30s</td>
-          </tr>
-          <tr>
-            <td><code>GET /rest/emission.json</code></td>
-            <td>Static emission schedule — yearly milestones, no halving</td>
-            <td>24h</td>
-          </tr>
-          <tr>
-            <td><code>GET /rest/node.json</code></td>
-            <td>Connected peers, version distribution (CORS-enabled)</td>
-            <td>30s</td>
-          </tr>
-          <tr>
-            <td><code>GET /rest/price.json</code></td>
-            <td>Price data (gate.io + nonlogs.io) + 24h change + history (CORS-enabled)</td>
-            <td>2 min</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <div id="api-cards"></div>
 
-    <div class="gs-info-section">
+    <div class="gs-info-section" style="margin-top:24px;">
       <h3>SSE Example</h3>
       <pre style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;font-size:12px;overflow:auto;">const es = new EventSource('/events');
 es.onmessage = (e) => {

@@ -625,6 +625,9 @@ grinscan_setup_nginx() {
     echo -ne "  Domain for ${net} (e.g. ${domain_eg}): "
     read -r domain
     [[ -z "$domain" ]] && { warn "Domain required for ${net}, skipping."; continue; }
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$ ]]; then
+        warn "Invalid domain '${domain}' — only letters, digits, dots, and hyphens allowed."; continue
+    fi
 
     # Ensure rate-limit snippet exists — skip if zone already defined (e.g. by script 04)
     local rate_conf="/etc/nginx/conf.d/grinscan-rate-limit.conf"
@@ -656,6 +659,22 @@ server {
         include snippets/grin-api.conf;
         limit_req zone=grinscan_api burst=20 nodelay;
         proxy_pass http://127.0.0.1:${svc_port};
+    }
+
+    # SSE — must use HTTP/1.1, no buffering, long timeout; QUIC/HTTP3 incompatible
+    location /events {
+        proxy_pass http://127.0.0.1:${svc_port};
+        proxy_http_version 1.1;
+        proxy_set_header Connection '';
+        proxy_set_header Host              \$host;
+        proxy_set_header X-Real-IP         \$remote_addr;
+        proxy_set_header X-Forwarded-For   \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+        add_header X-Accel-Buffering no;
+        add_header Cache-Control "no-store";
     }
 
     location / {
@@ -722,6 +741,103 @@ grinscan_autostart() {
 }
 
 # ── Internal helper: pick network ─────────────────────────────────────────────
+
+# ── Nuke ──────────────────────────────────────────────────────────────────────
+
+grinscan_nuke() {
+    require_root
+    clear
+    echo -e "\n${BOLD}${RED}── GrinScan: Nuke ──${RESET}\n"
+    echo -e "  ${YELLOW}Destroys all GrinScan state for the selected network(s):${RESET}"
+    echo -e "  ${DIM}  • Stops + disables systemd service(s)${RESET}"
+    echo -e "  ${DIM}  • Deletes data dir (config, DB, logs, secrets)${RESET}"
+    echo -e "  ${DIM}  • Removes systemd unit file(s)${RESET}"
+    echo -e "  ${DIM}  • Removes Nginx vhost config(s) + enabled symlink(s)${RESET}"
+    echo -e "  ${DIM}  • Does NOT touch Node.js or the Grin node itself${RESET}"
+    echo ""
+    echo -e "  ${BOLD}Which network?${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Testnet"
+    echo -e "  ${GREEN}2${RESET}) Mainnet"
+    echo -e "  ${GREEN}3${RESET}) Both (also removes shared nginx snippets + offers app dir removal)"
+    echo -e "  ${DIM}0) Cancel${RESET}"
+    echo ""
+    echo -ne "${BOLD}Select [1/2/3/0]: ${RESET}"
+    read -r net_choice
+
+    local net_shorts=()
+    local nuke_shared=0
+    case "$net_choice" in
+        1) net_shorts=("test") ;;
+        2) net_shorts=("main") ;;
+        3) net_shorts=("test" "main"); nuke_shared=1 ;;
+        0|"") info "Cancelled."; return ;;
+        *) warn "Invalid choice."; sleep 1; return ;;
+    esac
+
+    echo ""
+    echo -ne "  ${BOLD}${RED}Type 'nuke' to confirm: ${RESET}"
+    read -r confirm
+    [[ "$confirm" != "nuke" ]] && { info "Cancelled — nothing removed."; sleep 1; return; }
+    echo ""
+
+    for net_short in "${net_shorts[@]}"; do
+        local svc="grinscan-${net_short}"
+        local net_dir="${GRINSCAN_DIR}/${net_short}"
+        local unit="/etc/systemd/system/${svc}.service"
+        local nginx_conf; nginx_conf=$( [[ "$net_short" == "test" ]] && echo "$NGINX_GRINSCAN_TEST_CONF" || echo "$NGINX_GRINSCAN_MAIN_CONF" )
+        local nginx_link="/etc/nginx/sites-enabled/$(basename "$nginx_conf")"
+
+        info "Nuking ${net_short}…"
+
+        # Stop + disable service
+        systemctl is-active  "$svc" &>/dev/null && systemctl stop    "$svc" 2>/dev/null && success "  Stopped ${svc}"
+        systemctl is-enabled "$svc" &>/dev/null && systemctl disable  "$svc" 2>/dev/null || true
+
+        # Systemd unit
+        if [[ -f "$unit" ]]; then rm -f "$unit"; success "  Removed ${unit}"; fi
+
+        # Data directory (config, DB, logs, secrets)
+        if [[ -d "$net_dir" ]]; then rm -rf "${net_dir:?}"; success "  Removed ${net_dir}"; fi
+
+        # Nginx vhost + symlink
+        if [[ -f "$nginx_conf" ]]; then rm -f "$nginx_conf"; success "  Removed ${nginx_conf}"; fi
+        if [[ -L "$nginx_link" ]]; then rm -f "$nginx_link"; success "  Removed ${nginx_link}"; fi
+    done
+
+    systemctl daemon-reload
+
+    # Shared files — only when nuking both networks
+    if [[ $nuke_shared -eq 1 ]]; then
+        local rate_conf="/etc/nginx/conf.d/grinscan-rate-limit.conf"
+        local api_snippet="/etc/nginx/snippets/grin-api.conf"
+        [[ -f "$rate_conf"   ]] && rm -f "$rate_conf"   && success "Removed ${rate_conf}"
+        [[ -f "$api_snippet" ]] && rm -f "$api_snippet" && success "Removed ${api_snippet}"
+
+        # Offer to remove the deployed app dir (node_modules etc.)
+        if [[ -d "${GRINSCAN_APP}" ]]; then
+            echo ""
+            echo -ne "  Also remove deployed app dir (${GRINSCAN_APP})? [y/N]: "
+            read -r rm_app
+            if [[ "${rm_app,,}" == "y" ]]; then
+                rm -rf "${GRINSCAN_APP:?}"
+                success "Removed ${GRINSCAN_APP}"
+                # Clean up parent dir if now empty
+                rmdir "${GRINSCAN_DIR}" 2>/dev/null || true
+            fi
+        fi
+    fi
+
+    # Reload nginx if running and config is still valid
+    if command -v nginx &>/dev/null && systemctl is-active nginx &>/dev/null; then
+        nginx -t &>/dev/null && systemctl reload nginx && success "Nginx reloaded." || \
+            warn "Nginx config test failed after nuke — reload manually."
+    fi
+
+    echo ""
+    success "Nuke complete. Run Install (1) → Configure (2) to rebuild."
+    log "grinscan_nuke: nets=${net_shorts[*]}"
+    pause
+}
 
 _grinscan_pick_net() {
     echo -e "  ${GREEN}1${RESET}) Testnet"  >/dev/tty

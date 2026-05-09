@@ -16,6 +16,6 @@
   --glow:         0 2px 8px rgba(0,0,0,0.08);
 }
 
-.gs-search input:focus {
+.gs-header-search input:focus {
   box-shadow: 0 0 0 3px rgba(26,127,55,0.15);
 }

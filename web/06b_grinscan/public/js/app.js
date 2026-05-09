@@ -201,24 +201,41 @@ async function pollStats() {
       }
     }
 
-    const hrEl = document.getElementById('stat-hashrate');
+    const hrEl   = document.getElementById('stat-hashrate');
     const diffEl = document.getElementById('stat-difficulty');
-    const peersEl = document.getElementById('stat-peers');
     if (hrEl)   hrEl.textContent   = fmtHashrate(s.hashrate_gps);
     if (diffEl) diffEl.textContent = fmtDifficulty(s.difficulty);
-    if (peersEl) peersEl.textContent = fmtNum(s.peer_count);
 
-    const mempoolEl = document.getElementById('stat-mempool');
-    if (mempoolEl) mempoolEl.textContent = s.pool_size != null ? fmtNum(s.pool_size) + ' txs' : '—';
+    const peersEl = document.getElementById('stat-peers');
+    if (peersEl) peersEl.textContent = s.peer_count != null ? fmtNum(s.peer_count) : '—';
+
+    const mempoolEl  = document.getElementById('stat-mempool');
+    const stempoolEl = document.getElementById('stat-stempool');
+    if (mempoolEl)  mempoolEl.textContent  = s.pool_size != null ? fmtNum(s.pool_size) + ' txs' : '—';
+    if (stempoolEl) stempoolEl.textContent = s.stem_pool_size ? fmtNum(s.stem_pool_size) + ' stem' : '';
 
     const priceEl = document.getElementById('stat-price');
     if (priceEl) {
-      if (s.price_usd != null && s.price_btc != null) {
-        priceEl.textContent = '$' + s.price_usd.toFixed(4) + ' / ' + Math.round(s.price_btc * 1e8) + ' sat';
+      priceEl.textContent = (s.price_usd != null && s.price_btc != null)
+        ? '$' + s.price_usd.toFixed(4) + ' / ' + Math.round(s.price_btc * 1e8) + ' sat'
+        : '—';
+    }
+    const changeEl = document.getElementById('stat-change24h');
+    if (changeEl) {
+      if (s.change_24h_pct != null) {
+        const pct = s.change_24h_pct;
+        changeEl.textContent  = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+        changeEl.style.color  = pct > 0 ? 'var(--green)' : pct < 0 ? 'var(--red)' : '';
       } else {
-        priceEl.textContent = '—';
+        changeEl.textContent = '';
+        changeEl.style.color = '';
       }
     }
+
+    const volEl    = document.getElementById('stat-volume');
+    const volBtcEl = document.getElementById('stat-volume-btc');
+    if (volEl)    volEl.textContent    = fmtVol(s.volume_usdt);
+    if (volBtcEl) volBtcEl.textContent = s.volume_btc != null ? fmtBtcVol(s.volume_btc) + ' BTC pair' : '';
 
     const supplyEl = document.getElementById('stat-supply');
     if (supplyEl && s.tip_height) {
@@ -229,6 +246,22 @@ async function pollStats() {
     setStallBanner(s.stalled);
     _prevTipHeight = s.tip_height;
   } catch {}
+}
+
+// ── Volume formatting helpers ─────────────────────────────────────────────────
+
+function fmtVol(n) {
+  if (n == null || isNaN(n) || n === 0) return '—';
+  if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2) + 'M';
+  if (n >= 1_000)     return '$' + (n / 1_000).toFixed(1) + 'K';
+  return '$' + n.toFixed(2);
+}
+
+function fmtBtcVol(n) {
+  if (n == null || isNaN(n) || n === 0) return '';
+  if (n >= 1)     return n.toFixed(4) + ' BTC';
+  if (n >= 0.001) return n.toFixed(4) + ' BTC';   // e.g. 0.0049 BTC
+  return (n * 1e8).toFixed(0) + ' sat';
 }
 
 function startAgeCountdown() {

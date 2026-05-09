@@ -21,3 +21,5 @@ body { font-family: var(--font-mono); }
 a { color: var(--accent); }
 
 .gs-table tbody tr:hover { background: rgba(0,255,68,0.05); }
+
+.gs-logo-icon { filter: invert(1) drop-shadow(0 0 5px rgba(0,255,68,0.8)); }

@@ -59,8 +59,24 @@ a:hover { text-decoration: underline; }
   color: var(--accent);
   white-space: nowrap;
   text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
 .gs-logo:hover { text-decoration: none; opacity: 0.85; }
+
+.gs-logo-icon {
+  width: 26px;
+  height: 26px;
+  display: inline-block;
+  flex-shrink: 0;
+  transform-origin: center;
+  animation: breathe 3.5s ease-in-out infinite;
+}
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50%       { transform: scale(1.14); }
+}
 
 /* ── Nav ── */
 .gs-nav {
@@ -164,17 +180,15 @@ a:hover { text-decoration: underline; }
   flex: 1;
 }
 
-/* ── Search bar ── */
+/* ── Content search (used on block.html detail page) ── */
 .gs-search {
   display: flex;
   gap: 8px;
-  margin-bottom: 20px;
-  justify-content: center;
+  margin-bottom: 16px;
 }
 .gs-search input {
   flex: 1;
-  max-width: 560px;
-  padding: 10px 14px;
+  padding: 8px 12px;
   font-family: var(--font-mono);
   font-size: 13px;
   background: var(--surface);
@@ -183,14 +197,10 @@ a:hover { text-decoration: underline; }
   color: var(--text);
   transition: border-color var(--transition), box-shadow var(--transition);
 }
-.gs-search input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(255,153,0,0.15);
-}
+.gs-search input:focus { outline: none; border-color: var(--accent); }
 .gs-search input::placeholder { color: var(--muted); }
 .gs-search button {
-  padding: 10px 18px;
+  padding: 8px 16px;
   background: var(--accent);
   color: #000;
   border: none;
@@ -203,18 +213,59 @@ a:hover { text-decoration: underline; }
 }
 .gs-search button:hover { opacity: 0.85; }
 
+/* ── Header search (compact, lives in header bar) ── */
+.gs-header-search {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  margin: 0 8px;
+}
+.gs-header-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.gs-header-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(255,153,0,0.15);
+}
+.gs-header-search input::placeholder { color: var(--muted); }
+.gs-header-search button {
+  padding: 5px 12px;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity var(--transition);
+  white-space: nowrap;
+}
+.gs-header-search button:hover { opacity: 0.85; }
+
 /* ── Stats grid ── */
 .gs-stats-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-bottom: 24px;
+  gap: 8px;
+  margin-bottom: 20px;
 }
 .gs-stat-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 10px 12px;
   box-shadow: var(--glow, var(--shadow));
 }
 .gs-stat-label {
@@ -224,16 +275,70 @@ a:hover { text-decoration: underline; }
   letter-spacing: 0.08em;
   color: var(--muted);
   text-transform: uppercase;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
+
+/* ── Info tooltip (ℹ icon on stat card labels) ── */
+.gs-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+  cursor: help;
+  position: relative;
+  flex-shrink: 0;
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.gs-info::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 7px);
+  right: -4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text);
+  width: 210px;
+  white-space: normal;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 200;
+}
+.gs-info:hover::after,
+.gs-info:focus::after  { opacity: 1; }
+.gs-info:focus         { outline: 1px solid var(--accent); outline-offset: 2px; }
 .gs-stat-value {
   font-family: var(--font-mono);
-  font-size: 22px;
+  font-size: 17px;
   font-weight: 700;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.gs-stat-sub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
 }
 .gs-stat-value .live-dot {
   display: inline-block;
@@ -846,6 +951,9 @@ a:hover { text-decoration: underline; }
   .gs-logo { font-size: 14px; }
   #theme-toggle-btn { font-size: 11px; padding: 4px 7px; }
   .nav-link { padding: 4px 7px; font-size: 12px; }
+  .gs-header { flex-wrap: wrap; height: auto; padding: 8px 12px; gap: 6px; }
+  .gs-header-search { order: 10; flex-basis: 100%; margin: 0; }
+  .gs-header-search button { display: none; }
 }
 @media (max-width: 400px) {
   .gs-stats-grid { grid-template-columns: 1fr 1fr; }

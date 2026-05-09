@@ -14,14 +14,43 @@
   --badge-plain:  #00f0ff;
   --badge-lock:   #ff00cc;
   --font-mono:    'JetBrains Mono', 'Courier New', monospace;
-  --glow:         0 0 12px rgba(0,240,255,0.2), 0 4px 24px rgba(0,0,0,0.6);
-}
-
-.gs-stat-card { box-shadow: var(--glow); }
-
-.gs-search input:focus {
-  box-shadow: 0 0 0 3px rgba(0,240,255,0.2), 0 0 16px rgba(0,240,255,0.1);
-  border-color: var(--accent);
+  --glow:         0 0 12px rgba(0,240,255,0.18), 0 4px 24px rgba(0,0,0,0.7);
 }
 
 body { font-family: var(--font-mono); }
+
+/* ── Header neon border glow ── */
+.gs-header {
+  border-bottom-color: #3d0080;
+  box-shadow: 0 1px 0 #3d0080, 0 4px 24px rgba(0,240,255,0.06);
+}
+
+/* ── Logo: inverted (white circle) + cyan glow + breathing ── */
+.gs-logo-icon {
+  filter: invert(1) drop-shadow(0 0 5px rgba(0,240,255,0.85));
+}
+
+/* ── Logo text glow ── */
+.gs-logo {
+  text-shadow: 0 0 10px rgba(0,240,255,0.55), 0 0 30px rgba(0,240,255,0.2);
+}
+
+/* ── Active nav link glow ── */
+.nav-link.active {
+  text-shadow: 0 0 8px rgba(0,240,255,0.5);
+}
+
+/* ── Stat cards ── */
+.gs-stat-card { box-shadow: var(--glow); }
+
+/* ── Header search input focus glow ── */
+.gs-header-search input:focus {
+  box-shadow: 0 0 0 2px rgba(0,240,255,0.25), 0 0 16px rgba(0,240,255,0.12);
+  border-color: var(--accent);
+}
+
+/* ── Table row hover ── */
+.gs-table tbody tr:hover { background: rgba(0,240,255,0.04); }
+
+/* ── Load more button hover ── */
+.gs-load-more:hover { background: rgba(0,240,255,0.04); }

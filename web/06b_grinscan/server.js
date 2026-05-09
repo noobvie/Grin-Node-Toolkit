@@ -97,7 +97,7 @@ const stmtPriceHist   = db.prepare(
 const tipState = {
   height: 0, hash: '', difficulty: 0, hashrate_gps: 0,
   peer_count: 0, stalled: false, syncing: false, node_version: 'unknown',
-  pool_size: 0,
+  pool_size: 0, stem_pool_size: 0,
   backfill_active: false,
   backfill_min: null,
   backfill_pruned: false,
@@ -303,14 +303,22 @@ async function historicalBackfill() {
 
 async function pollBlocks() {
   try {
-    const tip       = await foreignApi('get_tip', []);
+    // ── Owner API: node status (tip height, connections, version, sync state) ──
+    const status    = await ownerApi('get_status', []);
+    const tip       = status.tip;
     const tipHeight = tip.height;
 
-    // Stall detection
-    if (tipHeight === lastTipHeight) { stallCount++; }
+    // Node version from user_agent (more reliable than HTTP Server header)
+    const uaMatch = (status.user_agent || '').match(/(\d+\.\d+\.\d+)/);
+    if (uaMatch) tipState.node_version = uaMatch[1];
+
+    // Stall detection (suppress when node is actively syncing)
+    const nodeSyncing = status.sync_status && status.sync_status !== 'no_sync';
+    if (tipHeight === lastTipHeight && !nodeSyncing) { stallCount++; }
     else { stallCount = 0; lastTipHeight = tipHeight; }
     tipState.stalled = stallCount >= 5;
 
+    // ── Foreign API: fetch any new blocks ────────────────────────────────────
     const row       = stmtMaxHeight.get();
     const maxCached = row.m ?? 0;
 
@@ -326,21 +334,25 @@ async function pollBlocks() {
       broadcastNewBlock({ height: tipHeight });
     }
 
-    // Update difficulty from most recent cached block
+    // Difficulty from DB (scalar from block header); fall back to status tip value
+    // Note: status.tip.total_difficulty may be an object on some node versions
     const latest = db.prepare(
       'SELECT difficulty FROM blocks WHERE height = ?'
     ).get(tipHeight);
-    const difficulty = latest ? latest.difficulty : (tip.total_difficulty || 0);
+    const rawDiff      = tip.total_difficulty;
+    const fallbackDiff = typeof rawDiff === 'number' ? rawDiff : (rawDiff?.difficulty ?? 0);
+    const difficulty   = latest ? latest.difficulty : fallbackDiff;
 
     tipState.height       = tipHeight;
     tipState.hash         = tip.last_block_h;
     tipState.difficulty   = difficulty;
     tipState.hashrate_gps = Math.round((difficulty / 60) * 100) / 100;
 
-    // Peers
+    // ── Owner API: peer count (quick from status) + version map (full list) ──
+    tipState.peer_count = status.connections || 0;
     try {
-      const peers       = await ownerApi('get_connected_peers', []);
-      const peerList    = Array.isArray(peers) ? peers : [];
+      const peers    = await ownerApi('get_connected_peers', []);
+      const peerList = Array.isArray(peers) ? peers : [];
       tipState.peer_count = peerList.length;
       peerVersionMap = {};
       peerList.forEach(p => {
@@ -349,10 +361,15 @@ async function pollBlocks() {
       });
     } catch {}
 
-    // Pool size
+    // ── Foreign API: mempool (tx pool + stem pool) ────────────────────────────
     try {
       const pool = await foreignApi('get_pool_size', []);
       tipState.pool_size = typeof pool === 'number' ? pool : 0;
+    } catch {}
+
+    try {
+      const stem = await foreignApi('get_stempool_size', []);
+      tipState.stem_pool_size = typeof stem === 'number' ? stem : 0;
     } catch {}
 
   } catch (e) {
@@ -381,30 +398,39 @@ function httpsGet(hostname, path) {
 async function pollPrice() {
   const now = Math.floor(Date.now() / 1000);
   let price_usd = 0, price_btc = 0, btcUsd = 0;
+  let volume_usdt = 0, volume_btc = 0, change_gate = null;
   const sources = [];
 
-  // Gate.io: GRIN/USDT + BTC/USDT
+  // Gate.io: GRIN/USDT + BTC/USDT (parallel)
+  // quote_volume is USDT spent; base_volume is GRIN traded — we want the USDT figure
   try {
     const [grin, btc] = await Promise.all([
       httpsGet('api.gateio.ws', '/api/v4/spot/tickers?currency_pair=GRIN_USDT'),
       httpsGet('api.gateio.ws', '/api/v4/spot/tickers?currency_pair=BTC_USDT'),
     ]);
-    if (Array.isArray(grin) && grin[0]) price_usd = parseFloat(grin[0].last) || 0;
-    if (Array.isArray(btc)  && btc[0])  btcUsd    = parseFloat(btc[0].last)  || 0;
+    if (Array.isArray(grin) && grin[0]) {
+      price_usd   = parseFloat(grin[0].last)              || 0;
+      volume_usdt = parseFloat(grin[0].quote_volume)      || 0;
+      change_gate = parseFloat(grin[0].change_percentage) ?? null;
+    }
+    if (Array.isArray(btc) && btc[0]) btcUsd = parseFloat(btc[0].last) || 0;
     if (price_usd && btcUsd) { price_btc = price_usd / btcUsd; sources.push('gate.io'); }
   } catch {}
 
-  // nonlogs.io: GRIN-BTC (preferred for BTC price)
+  // nonlogs.io: GRIN-BTC — preferred for BTC price + BTC-pair volume
+  // base_volume = GRIN traded; quote_volume = BTC actually spent (the real BTC volume)
   try {
     const nl = await httpsGet('api.nonlogs.io', '/api/markets/GRIN-BTC');
-    if (nl && nl.last) {
-      const nlBtc = parseFloat(nl.last) || 0;
+    if (nl) {
+      const nlBtc = parseFloat(nl.last || nl.last_price) || 0;
       if (nlBtc) {
         price_btc = nlBtc;
         if (!sources.includes('nonlogs.io')) sources.push('nonlogs.io');
-        // Derive USD if gate.io failed
         if (!price_usd && btcUsd) price_usd = nlBtc * btcUsd;
       }
+      // quote_volume is BTC spent on the GRIN/BTC market
+      const nlVolBtc = parseFloat(nl.quote_volume) || 0;
+      if (nlVolBtc) volume_btc = nlVolBtc;
     }
   } catch {}
 
@@ -413,17 +439,23 @@ async function pollPrice() {
     return;
   }
 
-  // 24h change
-  const ts10 = Math.floor(now / 600) * 600;
+  // 24h change: use Gate.io live value when available, fall back to DB-computed
+  const ts10  = Math.floor(now / 600) * 600;
   const old24 = stmtPrice24h.get(now - 86400);
-  const change_24h_pct = old24 && old24.price_usd
-    ? Math.round(((price_usd - old24.price_usd) / old24.price_usd) * 10000) / 100
-    : 0;
+  const change_24h_pct = change_gate !== null
+    ? Math.round(change_gate * 100) / 100
+    : (old24 && old24.price_usd
+        ? Math.round(((price_usd - old24.price_usd) / old24.price_usd) * 10000) / 100
+        : 0);
 
   stmtInsertPrice.run(ts10, price_btc, price_usd, sources.join(','));
   stmtPrunePrice.run(now - 90 * 86400);
 
-  latestPrice = { price_btc, price_usd, change_24h_pct, fetched_at: now, sources, stale: false };
+  latestPrice = {
+    price_btc, price_usd, change_24h_pct,
+    volume_usdt, volume_btc,
+    fetched_at: now, sources, stale: false,
+  };
 }
 
 // ── Emission constants ───────────────────────────────────────────────────────
@@ -460,17 +492,22 @@ app.use('/rest', (_req, res, next) => {
 app.get('/rest/stats.json', (_req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=30');
   const out = {
-    height:       tipState.height,
-    hash:         tipState.hash,
-    supply:       tipState.height * 60,
-    difficulty:   tipState.difficulty,
-    hashrate_gps: tipState.hashrate_gps,
-    peer_count:   tipState.peer_count,
-    pool_size:    tipState.pool_size,
-    price_usd:    latestPrice?.price_usd ?? null,
-    price_btc:    latestPrice?.price_btc ?? null,
-    node_mode:    tipState.backfill_pruned ? 'pruned' : (tipState.backfill_min != null && tipState.backfill_min <= 1 ? 'archive' : 'syncing'),
-    network:      config.network,
+    height:          tipState.height,
+    hash:            tipState.hash,
+    supply:          tipState.height * 60,
+    difficulty:      tipState.difficulty,
+    hashrate_gps:    tipState.hashrate_gps,
+    peer_count:      tipState.peer_count,
+    pool_size:       tipState.pool_size,
+    stem_pool_size:  tipState.stem_pool_size,
+    node_version:    tipState.node_version,
+    price_usd:       latestPrice?.price_usd       ?? null,
+    price_btc:       latestPrice?.price_btc       ?? null,
+    change_24h_pct:  latestPrice?.change_24h_pct  ?? null,
+    volume_usdt:     latestPrice?.volume_usdt     ?? null,
+    volume_btc:      latestPrice?.volume_btc      ?? null,
+    node_mode:       tipState.backfill_pruned ? 'pruned' : (tipState.backfill_min != null && tipState.backfill_min <= 1 ? 'archive' : 'syncing'),
+    network:         config.network,
   };
   if (Object.keys(peerVersionMap).length) out.versions = { ...peerVersionMap };
   res.json(out);
@@ -555,8 +592,12 @@ app.get('/api/stats', (_req, res) => {
     stalled:          tipState.stalled,
     cached_blocks:    stmtCountBlocks.get().c,
     pool_size:        tipState.pool_size,
-    price_usd:        latestPrice?.price_usd ?? null,
-    price_btc:        latestPrice?.price_btc ?? null,
+    stem_pool_size:   tipState.stem_pool_size,
+    price_usd:        latestPrice?.price_usd      ?? null,
+    price_btc:        latestPrice?.price_btc      ?? null,
+    change_24h_pct:   latestPrice?.change_24h_pct ?? null,
+    volume_usdt:      latestPrice?.volume_usdt    ?? null,
+    volume_btc:       latestPrice?.volume_btc     ?? null,
     node_mode:        nodeMode,
     backfill_active:  tipState.backfill_active,
     backfill_min:     tipState.backfill_min,
@@ -726,7 +767,8 @@ app.listen(config.port, '127.0.0.1', async () => {
 
   // Initial tip + backfill
   try {
-    const tip = await foreignApi('get_tip', []);
+    const status = await ownerApi('get_status', []);
+    const tip    = status.tip;
     tipState.height = tip.height;
     tipState.hash   = tip.last_block_h;
     lastTipHeight   = tip.height;

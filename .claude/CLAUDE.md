@@ -95,8 +95,9 @@ Secret files — two per service, each with a Foreign and Owner secret:
 | `.foreign_api_secret` | Node Foreign API | grin-wallet via `node_api_secret_path`, GrinScan (06b) | `foreign_api_secret_path` |
 
 Node API method split — use this to decide which endpoint a new call should target:
-- **Owner API** (`/v2/owner`, `.api_secret`): `get_status`, `get_connected_peers`, `validate_chain`, `compact_chain` — node management/status, trusted internal callers only. Used by: block explorers (GrinScan), monitoring scripts.
-- **Foreign API** (`/v2/foreign`, `.foreign_api_secret`): `get_tip`, `get_block`, `get_header`, `get_outputs`, `get_unspent_outputs`, `get_pool_size`, `push_transaction` — public chain data. Used by: wallets connecting to a public node, external block data queries.
+- **Owner API** (`/v2/owner`, `.api_secret`): `get_status` (includes tip height + connections), `get_connected_peers`, `validate_chain`, `compact_chain` — node management/status, trusted internal callers only. Used by: GrinScan (06b) for polling, monitoring scripts.
+- **Foreign API** (`/v2/foreign`, `.foreign_api_secret`): `get_block`, `get_header`, `get_outputs`, `get_unspent_outputs`, `get_pool_size`, `push_transaction` — public chain data. Used by: wallets connecting to a public node, external block data queries.
+- **Note:** prefer `get_status` over `get_tip` for the node Owner API — `get_tip` returns "Method not found" in practice.
 
 Auth format for node API calls (both endpoints): `grin:<secret>` as HTTP Basic Auth username:password.
 The secret is NEVER sent over the internet — only used for server-to-server calls on localhost.

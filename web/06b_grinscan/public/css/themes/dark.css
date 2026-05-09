@@ -15,3 +15,5 @@
   --badge-lock:   #8957e5;
   --glow:         none;
 }
+
+.gs-logo-icon { filter: invert(1); }

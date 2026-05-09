@@ -102,6 +102,10 @@ Node API method split — use this to decide which endpoint a new call should ta
 Auth format for node API calls (both endpoints): `grin:<secret>` as HTTP Basic Auth username:password.
 The secret is NEVER sent over the internet — only used for server-to-server calls on localhost.
 
+**Result unwrapping:** The Grin node serialises Rust `Result<T,E>` as `{"Ok": T}` or `{"Err": E}` inside the JSON-RPC `result` field.
+GrinScan's `ownerApi()` and `foreignApi()` helpers call `unwrapResult()` to strip this wrapper.
+Do NOT access `data.result` directly for node API calls — always go through these helpers.
+
 ```bash
 # Test Owner API (testnet) — use this to verify node is reachable
 cd /opt/grin/node/testnet-prune

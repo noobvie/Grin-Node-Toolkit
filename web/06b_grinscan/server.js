@@ -183,16 +183,25 @@ function jsonRpc(url, secret, method, params) {
   });
 }
 
+function unwrapResult(result) {
+  // Grin node serialises Rust Result<T,E> as {"Ok": T} or {"Err": E}
+  if (result && typeof result === 'object') {
+    if ('Ok'  in result) return result.Ok;
+    if ('Err' in result) throw new Error(JSON.stringify(result.Err));
+  }
+  return result;
+}
+
 async function foreignApi(method, params) {
   const data = await jsonRpc(config.node_url, foreignSecret, method, params);
   if (data.error) throw new Error(JSON.stringify(data.error));
-  return data.result;
+  return unwrapResult(data.result);
 }
 
 async function ownerApi(method, params) {
   const data = await jsonRpc(config.node_owner_url, ownerSecret, method, params);
   if (data.error) throw new Error(JSON.stringify(data.error));
-  return data.result;
+  return unwrapResult(data.result);
 }
 
 // ── Block parsing ────────────────────────────────────────────────────────────
@@ -306,7 +315,8 @@ async function pollBlocks() {
     // ── Owner API: node status (tip height, connections, version, sync state) ──
     const status    = await ownerApi('get_status', []);
     const tip       = status.tip;
-    const tipHeight = tip.height;
+    const tipHeight = tip?.height;
+    if (tipHeight == null) throw new Error(`get_status returned no tip height — response: ${JSON.stringify(status).slice(0, 200)}`);
 
     // Node version from user_agent (more reliable than HTTP Server header)
     const uaMatch = (status.user_agent || '').match(/(\d+\.\d+\.\d+)/);
@@ -767,12 +777,14 @@ app.listen(config.port, '127.0.0.1', async () => {
 
   // Initial tip + backfill
   try {
-    const status = await ownerApi('get_status', []);
-    const tip    = status.tip;
-    tipState.height = tip.height;
+    const status    = await ownerApi('get_status', []);
+    const tip       = status.tip;
+    const tipHeight = tip?.height;
+    if (tipHeight == null) throw new Error(`get_status returned no tip height — response: ${JSON.stringify(status).slice(0, 200)}`);
+    tipState.height = tipHeight;
     tipState.hash   = tip.last_block_h;
-    lastTipHeight   = tip.height;
-    await startupBackfill(tip.height);
+    lastTipHeight   = tipHeight;
+    await startupBackfill(tipHeight);
   } catch (e) {
     log(`[WARN] Initial tip fetch failed: ${e.message}`);
   }

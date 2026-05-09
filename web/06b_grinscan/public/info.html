@@ -57,7 +57,6 @@
     <div class="gs-tabs" role="tablist" aria-label="Info sections">
       <button class="gs-tab-btn" data-tab="about"    role="tab">About</button>
       <button class="gs-tab-btn" data-tab="emission" role="tab">Emission</button>
-      <button class="gs-tab-btn" data-tab="stats"    role="tab">Stats</button>
       <button class="gs-tab-btn" data-tab="charts"   role="tab">Charts</button>
       <button class="gs-tab-btn" data-tab="network"  role="tab">Network</button>
     </div>
@@ -128,7 +127,7 @@
       </div>
 
       <div class="gs-info-section">
-        <h3>Supply Curve  (0 → 20 years)</h3>
+        <h3>Supply Curve (2019 → 2069)</h3>
         <div class="gs-chart-wrap">
           <div id="chart-supply"></div>
         </div>
@@ -152,51 +151,34 @@
 
     </div><!-- /#tab-emission -->
 
-    <!-- ── STATS TAB ── -->
-    <div id="tab-stats" class="gs-tab-panel" role="tabpanel">
-
-      <div class="gs-info-stats-grid">
-        <div class="gs-info-stat">
-          <div class="gs-info-stat-label">Price (BTC)</div>
-          <div class="gs-info-stat-value" id="price-btc">—</div>
-        </div>
-        <div class="gs-info-stat">
-          <div class="gs-info-stat-label">Price (USD)</div>
-          <div class="gs-info-stat-value" id="price-usd">—</div>
-          <div class="gs-info-stat-sub" id="price-24h" style="margin-top:4px;"></div>
-        </div>
-        <div class="gs-info-stat">
-          <div class="gs-info-stat-label">Market Cap</div>
-          <div class="gs-info-stat-value" id="market-cap">—</div>
-        </div>
-        <div class="gs-info-stat">
-          <div class="gs-info-stat-label">Circulating Supply</div>
-          <div class="gs-info-stat-value" id="circulating">—</div>
-        </div>
-      </div>
-
-      <div id="price-stale-warn" style="display:none;background:rgba(242,201,76,0.1);border:1px solid var(--accent2);border-radius:var(--radius);padding:8px 14px;font-family:var(--font-mono);font-size:12px;color:var(--accent2);margin-bottom:16px;">
-        ⚠ Price data may be outdated
-      </div>
-
-      <div class="gs-info-section">
-        <h3>Hashrate — last 14 days (GPS = Graph solutions / sec)</h3>
-        <div class="gs-chart-wrap">
-          <div id="chart-hashrate"></div>
-        </div>
-      </div>
-
-      <div class="gs-info-section">
-        <h3>Difficulty — last 14 days</h3>
-        <div class="gs-chart-wrap">
-          <div id="chart-difficulty"></div>
-        </div>
-      </div>
-
-    </div><!-- /#tab-stats -->
-
     <!-- ── CHARTS TAB ── -->
     <div id="tab-charts" class="gs-tab-panel" role="tabpanel">
+
+      <!-- Price / market stats (mainnet only — hidden on testnet via JS) -->
+      <div id="charts-price-stats">
+        <div class="gs-info-stats-grid">
+          <div class="gs-info-stat">
+            <div class="gs-info-stat-label">Price (BTC)</div>
+            <div class="gs-info-stat-value" id="price-btc">—</div>
+          </div>
+          <div class="gs-info-stat">
+            <div class="gs-info-stat-label">Price (USD)</div>
+            <div class="gs-info-stat-value" id="price-usd">—</div>
+            <div class="gs-info-stat-sub" id="price-24h" style="margin-top:4px;"></div>
+          </div>
+          <div class="gs-info-stat">
+            <div class="gs-info-stat-label">Market Cap</div>
+            <div class="gs-info-stat-value" id="market-cap">—</div>
+          </div>
+          <div class="gs-info-stat">
+            <div class="gs-info-stat-label">Circulating Supply</div>
+            <div class="gs-info-stat-value" id="circulating">—</div>
+          </div>
+        </div>
+        <div id="price-stale-warn" style="display:none;background:rgba(242,201,76,0.1);border:1px solid var(--accent2);border-radius:var(--radius);padding:8px 14px;font-family:var(--font-mono);font-size:12px;color:var(--accent2);margin-bottom:16px;">
+          ⚠ Price data may be outdated
+        </div>
+      </div>
 
       <div class="gs-info-section">
         <h3>Hashrate (GPS)</h3>
@@ -214,13 +196,6 @@
         <h3>Difficulty</h3>
         <div class="gs-chart-canvas-wrap">
           <canvas id="chart-canvas-difficulty" height="220"></canvas>
-        </div>
-      </div>
-
-      <div class="gs-info-section">
-        <h3>Block Time (seconds)</h3>
-        <div class="gs-chart-canvas-wrap">
-          <canvas id="chart-canvas-blocktime" height="220"></canvas>
         </div>
       </div>
 

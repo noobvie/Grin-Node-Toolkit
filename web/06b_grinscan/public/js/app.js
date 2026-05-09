@@ -189,10 +189,13 @@ async function pollStats() {
     const peersEl = document.getElementById('stat-peers');
     if (peersEl) peersEl.textContent = s.peer_count != null ? fmtNum(s.peer_count) : '—';
 
-    const mempoolEl  = document.getElementById('stat-mempool');
-    const stempoolEl = document.getElementById('stat-stempool');
-    if (mempoolEl)  mempoolEl.textContent  = s.pool_size != null ? fmtNum(s.pool_size) + ' txs' : '—';
-    if (stempoolEl) stempoolEl.textContent = s.stem_pool_size ? fmtNum(s.stem_pool_size) + ' stem' : '';
+    const mcapEl    = document.getElementById('stat-marketcap');
+    const mcapSubEl = document.getElementById('stat-marketcap-sub');
+    if (mcapEl && s.price_usd != null && s.tip_height) {
+      const supply = s.tip_height * 60;
+      mcapEl.textContent    = fmtMarketCap(supply * s.price_usd);
+      if (mcapSubEl) mcapSubEl.textContent = fmtNum(supply) + ' GRIN supply';
+    }
 
     const priceEl = document.getElementById('stat-price');
     if (priceEl) {
@@ -217,7 +220,7 @@ async function pollStats() {
     if (volEl) volEl.textContent = fmtVol(s.volume_usdt);
     if (volBtcEl) {
       const btcStr = fmtBtcVol(s.volume_btc);
-      volBtcEl.textContent = btcStr ? 'GRIN/BTC ' + btcStr : '';
+      volBtcEl.textContent = btcStr ? '+ ' + btcStr + ' (BTC pair)' : '';
     }
 
     const supplyEl = document.getElementById('stat-supply');
@@ -231,6 +234,14 @@ async function pollStats() {
 }
 
 // ── Volume formatting helpers ─────────────────────────────────────────────────
+
+function fmtMarketCap(n) {
+  if (n == null || isNaN(n) || n === 0) return '—';
+  if (n >= 1_000_000_000) return '$' + (n / 1_000_000_000).toFixed(2) + 'B';
+  if (n >= 1_000_000)     return '$' + (n / 1_000_000).toFixed(2) + 'M';
+  if (n >= 1_000)         return '$' + (n / 1_000).toFixed(1) + 'K';
+  return '$' + n.toFixed(2);
+}
 
 function fmtVol(n) {
   if (n == null || isNaN(n) || n === 0) return '—';
@@ -437,7 +448,9 @@ function initApiPage() {
     { path: '/api/peers',     desc: 'Connected peer list (addr, direction, user_agent)',                              cache: 'live',      link: true  },
     { path: '/api/price',     desc: 'GRIN price (USD + BTC), 24h change, price history',                             cache: '2 min',     link: true  },
     { path: '/api/tip',       desc: 'Current tip height + hash',                                                     cache: 'live',      link: true  },
-    { path: '/events',        desc: 'Server-Sent Events stream — fires <code>{ type:"block", height }</code> on each new block', cache: 'streaming', link: false },
+    { path: '/api/network',   desc: 'Returns the network this instance serves — <code>mainnet</code> or <code>testnet</code>', cache: 'live', link: true },
+    { path: '/api/search',    desc: 'Query-param alternative to <code>/api/block/:id</code> — use when you cannot put the ref in the path. Note: does not include <code>_prev_timestamp</code>.', cache: 'live', link: false },
+    { path: '/events',        desc: 'Server-Sent Events stream — subscribe to get instant block notifications without polling. Fires <code>{ type:"block", height }</code> on each new block. Use <code>new EventSource(\'/events\')</code> in browser or any SSE client.', cache: 'streaming', link: false },
     // ── Public REST (CORS-enabled) ──
     { path: '/rest/stats.json',      desc: 'Core chain stats (CORS-enabled public snapshot)',                           cache: '30s',   link: true, cors: true },
     { path: '/rest/supply.json',     desc: 'Circulating supply = height × 60 GRIN',                                    cache: '30s',   link: true, cors: true },
@@ -562,7 +575,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (page === 'index') {
     // Hide price/volume/supply cards on testnet — not relevant for test coins
     if (window.GRINSCAN_NETWORK !== 'mainnet') {
-      ['stat-price', 'stat-volume', 'stat-supply'].forEach(id => {
+      ['stat-price', 'stat-volume', 'stat-supply', 'stat-marketcap'].forEach(id => {
         const card = document.getElementById(id)?.closest('.gs-stat-card');
         if (card) card.style.display = 'none';
       });

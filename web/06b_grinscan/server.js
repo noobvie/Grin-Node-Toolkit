@@ -440,7 +440,7 @@ async function pollPrice() {
   try {
     const nlRaw = await httpsGet('api.nonlogs.io', '/api/markets/GRIN-BTC');
     // API may return object or single-element array
-    const nl = Array.isArray(nlRaw) ? nlRaw[0] : nlRaw;
+    const nl = Array.isArray(nlRaw) ? nlRaw[0] : (nlRaw?.market || nlRaw);
     if (nl) {
       const nlBtc = parseFloat(nl.last || nl.last_price || nl.price) || 0;
       if (nlBtc) {

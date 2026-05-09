@@ -59,10 +59,9 @@ function switchTab(name) {
 }
 
 function loadTabData(name) {
-  if (name === 'emission')  loadEmission();
-  if (name === 'stats')     loadStats();
-  if (name === 'charts')    loadCharts(7);
-  if (name === 'network')   loadNetwork();
+  if (name === 'emission') loadEmission();
+  if (name === 'charts')   { loadStats(); loadCharts(7); }
+  if (name === 'network')  loadNetwork();
   // 'about' is static
 }
 
@@ -126,7 +125,7 @@ async function loadEmission() {
     const supply = height * 60;
     const supplyM = supply / 1e6;
     const elapsed = (Date.now() / 1000 - GENESIS_UNIX) / (365.25 * 86400);
-    const inflation = (60 / supply) * 100 * (365.25 * 24 * 3600); // annual rate
+    const inflation = (365.25 * 24 * 3600 / supply) * 100; // 1 GRIN/sec × sec/year ÷ supply
     const COIN = window.GRINSCAN_NETWORK === 'testnet' ? 'tGRIN' : 'GRIN';
 
     setText('em-supply',    fmtNum(supply) + ' ' + COIN);
@@ -136,27 +135,29 @@ async function loadEmission() {
     setText('em-inflation', inflation.toFixed(1) + '% / year');
     setText('em-years',     elapsed.toFixed(1) + ' years since genesis');
 
-    // Supply curve (0–20 years, linear through origin)
+    // Supply curve — 2019 to 2069 (50 years), x-axis in calendar years
+    const GENESIS_YEAR = 2019;
+    const nowYear = GENESIS_YEAR + elapsed;
     const supplyPoints = [];
-    for (let yr = 0; yr <= 20; yr += 0.5) {
-      supplyPoints.push([yr, yr * 31.56]);
+    for (let yr = 0; yr <= 50; yr += 0.5) {
+      supplyPoints.push([GENESIS_YEAR + yr, yr * 31.56]);
     }
-    const supplyDotY = supplyM;
     const supplySVG = makeSVG(supplyPoints, 700, 200, {
-      xMin: 0, xMax: 20, yMin: 0, yMax: 650,
-      color: 'var(--accent)', dotX: elapsed, dotY: supplyDotY,
-      xFmt: v => v.toFixed(0) + 'y',
+      xMin: GENESIS_YEAR, xMax: GENESIS_YEAR + 50, yMin: 0, yMax: 50 * 31.56,
+      color: 'var(--accent)', dotX: nowYear, dotY: supplyM,
+      xFmt: v => v >= GENESIS_YEAR + 50 ? v.toFixed(0) + ' ∞' : v.toFixed(0),
+      yFmt: v => v.toFixed(0) + 'M',
     });
     const supplyEl = document.getElementById('chart-supply');
     if (supplyEl) supplyEl.innerHTML = supplySVG;
 
-    // Inflation curve (1/H shape)
-    const inflPoints = INFLATION_MILESTONES.map(([y, p]) => [y, p]);
-    const inflDotY = inflation;
+    // Inflation curve — 2019 to 2069, x-axis in calendar years
+    const inflPoints = INFLATION_MILESTONES.map(([y, p]) => [GENESIS_YEAR + y, p]);
     const inflSVG = makeSVG(inflPoints, 700, 180, {
-      xMin: 1, xMax: 50, yMin: 0, yMax: 100,
-      color: 'var(--accent2)', dotX: elapsed, dotY: Math.min(inflDotY, 100),
-      xFmt: v => v.toFixed(0) + 'y',
+      xMin: GENESIS_YEAR, xMax: GENESIS_YEAR + 50, yMin: 0, yMax: 100,
+      color: 'var(--accent2)', dotX: nowYear, dotY: Math.min(inflation, 100),
+      xFmt: v => v >= GENESIS_YEAR + 50 ? v.toFixed(0) + ' ∞' : v.toFixed(0),
+      yFmt: v => v.toFixed(0) + '%',
     });
     const inflEl = document.getElementById('chart-inflation');
     if (inflEl) inflEl.innerHTML = inflSVG;
@@ -169,24 +170,30 @@ async function loadEmission() {
 // ── Stats tab ────────────────────────────────────────────────────────────────
 
 async function loadStats() {
+  // Hide price section on testnet
+  if (window.GRINSCAN_NETWORK !== 'mainnet') {
+    const el = document.getElementById('charts-price-stats');
+    if (el) el.style.display = 'none';
+    return;
+  }
   try {
-    const [priceR, histR, tipR] = await Promise.all([
+    const [priceR, tipR] = await Promise.all([
       fetch('/api/price'),
-      fetch('/api/history?days=14'),
       fetch('/api/tip'),
     ]);
 
+    let priceData = null;
     if (priceR.ok) {
-      const p = await priceR.json();
-      setText('price-btc',  p.price_btc != null ? p.price_btc.toFixed(8) + ' ₿' : '—');
-      setText('price-usd',  p.price_usd != null ? '$' + p.price_usd.toFixed(4)   : '—');
-      const chg = p.change_24h_pct;
+      priceData = await priceR.json();
+      setText('price-btc', priceData.price_btc != null ? priceData.price_btc.toFixed(8) + ' ₿' : '—');
+      setText('price-usd', priceData.price_usd != null ? '$' + priceData.price_usd.toFixed(4)   : '—');
+      const chg = priceData.change_24h_pct;
       const chgEl = document.getElementById('price-24h');
       if (chgEl && chg != null) {
         chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
         chgEl.style.color = chg >= 0 ? 'var(--green)' : 'var(--red)';
       }
-      if (p.stale) {
+      if (priceData.stale) {
         const w = document.getElementById('price-stale-warn');
         if (w) w.style.display = '';
       }
@@ -195,22 +202,13 @@ async function loadStats() {
     if (tipR.ok) {
       const { height } = await tipR.json();
       const supply = height * 60;
-      if (priceR.ok) {
-        const p = await fetch('/api/price').then(r => r.json()).catch(() => ({}));
-        const mcap = supply * (p.price_usd || 0);
-        setText('market-cap', mcap ? '$' + fmtNum(Math.round(mcap / 1000)) + 'K' : '—');
-      }
       setText('circulating', fmtNum(supply) + ' ツ');
-    }
-
-    if (histR.ok) {
-      const histData = await histR.json();
-      const hist = Array.isArray(histData) ? histData : (histData.rows || []);
-      if (hist.length > 1) {
-        renderLineChart('chart-hashrate', hist.map(p => [p.timestamp, p.hashrate_gps]),
-          'GPS', 'var(--accent)', fmtGPS);
-        renderLineChart('chart-difficulty', hist.map(p => [p.timestamp, p.difficulty]),
-          '', 'var(--accent2)', fmtDiff);
+      if (priceData?.price_usd) {
+        const mcap = supply * priceData.price_usd;
+        const mcapStr = mcap >= 1e9 ? '$' + (mcap / 1e9).toFixed(2) + 'B'
+                      : mcap >= 1e6 ? '$' + (mcap / 1e6).toFixed(2) + 'M'
+                      : '$' + (mcap / 1e3).toFixed(1) + 'K';
+        setText('market-cap', mcapStr);
       }
     }
   } catch (e) {
@@ -423,12 +421,6 @@ async function loadCharts(days) {
     makeLineChart('chart-canvas-hashrate',   labels, rows.map(p => p.hashrate_gps), 'GPS',        accent,  v => fmtGPS(v));
     makeLineChart('chart-canvas-difficulty', labels, rows.map(p => p.difficulty),  'Difficulty', accent2, v => fmtDiff(v));
 
-    // Block time: seconds between consecutive blocks, capped at 300s
-    const btLabels = rows.slice(1).map((p, i) => fmtDate(p.timestamp));
-    const btData   = rows.slice(1).map((p, i) => Math.min(p.timestamp - rows[i].timestamp, 300));
-    const green    = style.getPropertyValue('--green').trim() || '#4caf7d';
-    makeLineChart('chart-canvas-blocktime', btLabels, btData, 'Block Time (s)', green);
-
   } catch (e) {
     console.error('loadCharts:', e);
   }
@@ -456,6 +448,5 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  initApiTab();
   switchTab('about');
 });

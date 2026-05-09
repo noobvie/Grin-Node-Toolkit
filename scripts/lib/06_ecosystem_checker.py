@@ -381,7 +381,7 @@ def cmd_whois(conn, force=False):
     ttl  = WHOIS_TTL_HOURS * 3600
     all_hosts = [h for hosts in DNS_SEEDS.values() for h in hosts]
     # Also include service domains with standard TLDs (.com/.org/.net)
-    for svc in SERVICES:
+    for svc in _build_services():
         try:
             hostname = urllib.parse.urlparse(svc["url"]).hostname or ""
             reg = _registrable_domain(hostname)

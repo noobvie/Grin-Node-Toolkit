@@ -41,6 +41,8 @@ body { font-family: var(--font-mono); }
 /* ── Network badge ── */
 .gs-network-badge.mainnet { box-shadow: 0 0 14px rgba(0,255,136,0.30); text-shadow: 0 0 8px var(--green); }
 .gs-network-badge.testnet { box-shadow: 0 0 14px rgba(0,240,255,0.30); text-shadow: 0 0 8px var(--accent); }
+.gs-net-pill.mainnet.active { box-shadow: 0 0 10px rgba(0,255,136,0.25); text-shadow: 0 0 6px var(--green); }
+.gs-net-pill.testnet.active { box-shadow: 0 0 10px rgba(0,240,255,0.25); text-shadow: 0 0 6px var(--accent); }
 
 /* ── Stat cards ── */
 .gs-stat-card {

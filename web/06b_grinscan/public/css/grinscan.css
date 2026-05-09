@@ -110,6 +110,29 @@ a:hover { text-decoration: underline; }
 .gs-network-badge.mainnet { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid var(--green); }
 .gs-network-badge.testnet { background: rgba(255,153,0,0.15); color: var(--accent); border: 1px solid var(--accent); }
 
+/* ── Network switcher (dual-deploy: mainnet + testnet links) ── */
+.gs-net-switcher {
+  display: inline-flex;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.gs-net-pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 9px;
+  letter-spacing: 0.05em;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.gs-net-pill.active         { cursor: default; }
+.gs-net-pill.mainnet.active { background: rgba(63,185,80,0.15);  color: var(--green);  }
+.gs-net-pill.testnet.active { background: rgba(255,153,0,0.15);  color: var(--accent); }
+.gs-net-pill:not(.active)   { background: transparent; color: var(--muted); }
+.gs-net-pill:not(.active):hover { background: var(--surface2); color: var(--text); text-decoration: none; }
+
 /* ── Theme picker ── */
 .gs-theme-wrap {
   position: relative;

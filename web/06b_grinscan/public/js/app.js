@@ -558,9 +558,18 @@ function renderFooter() {
 function renderNetworkBadge() {
   const badge = document.getElementById('network-badge');
   if (!badge) return;
-  const net = window.GRINSCAN_NETWORK || 'testnet';
-  badge.textContent = net.toUpperCase() + ' ●';
-  badge.className = 'gs-network-badge ' + net;
+  const net     = window.GRINSCAN_NETWORK || 'testnet';
+  const sibling = window.GRINSCAN_SIBLING_URL;
+  if (sibling) {
+    const sibNet = net === 'mainnet' ? 'testnet' : 'mainnet';
+    badge.className = 'gs-net-switcher';
+    badge.innerHTML =
+      `<span class="gs-net-pill ${net} active">${net.toUpperCase()}</span>` +
+      `<a class="gs-net-pill ${sibNet}" href="${sibling}">${sibNet.toUpperCase()}</a>`;
+  } else {
+    badge.textContent = net.toUpperCase();
+    badge.className = 'gs-network-badge ' + net;
+  }
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────

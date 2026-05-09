@@ -791,10 +791,12 @@ function injectGlobals(html, pageKey) {
 <meta property="og:title" content="${meta.title}">
 <meta property="og:description" content="${meta.desc}">${canon}${ogImage}${jsonLd}`;
 
+  const siblingUrl = config.sibling_url || '';
   const globals = `<script>
 window.GRINSCAN_NETWORK='${config.network}';
 window.GRINSCAN_VERSION='${VERSION}';
 window.GRINSCAN_BASE_URL='${baseUrl}';
+window.GRINSCAN_SIBLING_URL=${JSON.stringify(siblingUrl)};
 window.GRINSCAN_BLOCKS_CACHE=${blocksCache};
 </script>`;
 

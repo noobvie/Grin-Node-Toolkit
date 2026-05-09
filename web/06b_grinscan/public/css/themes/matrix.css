@@ -33,6 +33,7 @@ a { color: var(--accent); }
   box-shadow: 0 0 12px rgba(0,255,68,0.25);
   text-shadow: 0 0 8px var(--green);
 }
+.gs-net-pill.testnet.active { box-shadow: 0 0 10px rgba(0,255,68,0.20); text-shadow: 0 0 6px var(--green); }
 
 /* ── Stat cards ── */
 .gs-stat-card {

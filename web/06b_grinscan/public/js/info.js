@@ -104,9 +104,39 @@ function makeSVG(points, width, height, opts) {
     return `<text x="${toX(xv).toFixed(1)}" y="${height - 8}" text-anchor="middle" font-size="9" fill="var(--muted)">${label}</text>`;
   }).join('');
 
-  const dotSvg = (dotX != null && dotY != null)
-    ? `<circle cx="${toX(dotX).toFixed(1)}" cy="${toY(dotY).toFixed(1)}" r="5" fill="var(--accent)" stroke="var(--bg)" stroke-width="2"/>`
-    : '';
+  let dotSvg = '';
+  if (dotX != null && dotY != null) {
+    const iconSize = 18;
+    const cx = parseFloat(toX(dotX).toFixed(1));
+    const cy = parseFloat(toY(dotY).toFixed(1));
+    dotSvg = `<image href="/grin-logo.svg" x="${(cx - iconSize/2).toFixed(1)}" y="${(cy - iconSize/2).toFixed(1)}" width="${iconSize}" height="${iconSize}"/>`;
+
+    if (opts.dotLabel) {
+      const bw = 148, bh = 38, tailH = 7;
+      const bx = Math.min(Math.max(cx - bw/2, pad.left), pad.left + cw - bw);
+      const iconTopY = cy - iconSize/2;
+      const iconBotY = cy + iconSize/2;
+      let by, tailPts;
+      if (iconTopY - tailH - bh >= pad.top) {
+        // bubble above
+        by = iconTopY - tailH - bh;
+        tailPts = `${cx},${(iconTopY - 1).toFixed(1)} ${(cx-5).toFixed(1)},${(by+bh).toFixed(1)} ${(cx+5).toFixed(1)},${(by+bh).toFixed(1)}`;
+      } else {
+        // bubble below (dot near top of chart)
+        by = iconBotY + tailH;
+        tailPts = `${cx},${(iconBotY + 1).toFixed(1)} ${(cx-5).toFixed(1)},${by.toFixed(1)} ${(cx+5).toFixed(1)},${by.toFixed(1)}`;
+      }
+      dotSvg += `
+    <polygon points="${tailPts}" fill="var(--surface)" stroke="none"/>
+    <rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${bw}" height="${bh}" rx="5"
+          fill="var(--surface)" stroke="var(--accent)" stroke-width="1"/>
+    <image href="/grin-logo.svg" x="${(bx+7).toFixed(1)}" y="${(by+11).toFixed(1)}" width="16" height="16"/>
+    <text font-family="monospace" font-size="9" font-weight="700" fill="var(--accent)"
+          x="${(bx+27).toFixed(1)}" y="${(by+17).toFixed(1)}">Hey Grinner!</text>
+    <text font-family="monospace" font-size="9" fill="var(--text)"
+          x="${(bx+27).toFixed(1)}" y="${(by+30).toFixed(1)}">${opts.dotLabel}</text>`;
+    }
+  }
 
   return `<svg viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
     ${yAxisSvg}
@@ -135,29 +165,32 @@ async function loadEmission() {
     setText('em-inflation', inflation.toFixed(1) + '% / year');
     setText('em-years',     elapsed.toFixed(1) + ' years since genesis');
 
-    // Supply curve — 2019 to 2069 (50 years), x-axis in calendar years
+    // Supply curve — 2019 to ∞, x-axis in calendar years
     const GENESIS_YEAR = 2019;
     const nowYear = GENESIS_YEAR + elapsed;
+    const supplyYMax = 50 * 31.56;
     const supplyPoints = [];
     for (let yr = 0; yr <= 50; yr += 0.5) {
       supplyPoints.push([GENESIS_YEAR + yr, yr * 31.56]);
     }
     const supplySVG = makeSVG(supplyPoints, 700, 200, {
-      xMin: GENESIS_YEAR, xMax: GENESIS_YEAR + 50, yMin: 0, yMax: 50 * 31.56,
+      xMin: GENESIS_YEAR, xMax: GENESIS_YEAR + 50, yMin: 0, yMax: supplyYMax,
       color: 'var(--accent)', dotX: nowYear, dotY: supplyM,
-      xFmt: v => v >= GENESIS_YEAR + 50 ? v.toFixed(0) + ' ∞' : v.toFixed(0),
-      yFmt: v => v.toFixed(0) + 'M',
+      xFmt: v => v >= GENESIS_YEAR + 50 ? '∞' : v.toFixed(0),
+      yFmt: v => v >= supplyYMax - 0.01 ? '∞' : v.toFixed(0) + 'M',
+      dotLabel: `${supplyM.toFixed(1)}M ${COIN} · ${Math.floor(nowYear)}`,
     });
     const supplyEl = document.getElementById('chart-supply');
     if (supplyEl) supplyEl.innerHTML = supplySVG;
 
-    // Inflation curve — 2019 to 2069, x-axis in calendar years
+    // Inflation curve — 2019 to ∞, x-axis in calendar years
     const inflPoints = INFLATION_MILESTONES.map(([y, p]) => [GENESIS_YEAR + y, p]);
     const inflSVG = makeSVG(inflPoints, 700, 180, {
       xMin: GENESIS_YEAR, xMax: GENESIS_YEAR + 50, yMin: 0, yMax: 100,
       color: 'var(--accent2)', dotX: nowYear, dotY: Math.min(inflation, 100),
-      xFmt: v => v >= GENESIS_YEAR + 50 ? v.toFixed(0) + ' ∞' : v.toFixed(0),
+      xFmt: v => v >= GENESIS_YEAR + 50 ? '∞' : v.toFixed(0),
       yFmt: v => v.toFixed(0) + '%',
+      dotLabel: `${inflation.toFixed(1)}%/yr · ${Math.floor(nowYear)}`,
     });
     const inflEl = document.getElementById('chart-inflation');
     if (inflEl) inflEl.innerHTML = inflSVG;

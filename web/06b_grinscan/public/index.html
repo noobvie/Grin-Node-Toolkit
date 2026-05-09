@@ -45,7 +45,7 @@
   <!-- Header -->
   <header class="gs-header">
     <a href="/" class="gs-logo"><img src="/grin-logo.svg" class="gs-logo-icon" alt="" aria-hidden="true"> GrinScan</a>
-    <span id="network-badge" class="gs-network-badge testnet">TESTNET ●</span>
+    <span id="network-badge" class="gs-network-badge testnet">TESTNET</span>
     <form id="search-form" class="gs-header-search" role="search">
       <input id="search-input" type="text" placeholder="Search by block height or hash…" autocomplete="off" spellcheck="false" aria-label="Search blocks">
       <button type="submit">Search</button>
@@ -95,7 +95,10 @@
         <div class="gs-stat-sub">connected to this node</div>
       </div>
       <div class="gs-stat-card">
-        <div class="gs-stat-label">Market Cap</div>
+        <div class="gs-stat-label">Market Cap
+          <span class="gs-info" tabindex="0" role="tooltip"
+            data-tip="Supply × USD price · Supply = height × 60 GRIN (1 GRIN/sec emission) · Price: Gate.io GRIN/USDT · refreshed every 10 min">ℹ</span>
+        </div>
         <div class="gs-stat-value" id="stat-marketcap">—</div>
         <div class="gs-stat-sub" id="stat-marketcap-sub"></div>
       </div>

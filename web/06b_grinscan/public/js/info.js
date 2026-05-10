@@ -151,19 +151,30 @@ function fmtDiffLabel(d) {
   return d.toFixed(0);
 }
 
-function fmtTsLabel(ts) {
-  const d   = new Date(ts * 1000);
-  const age = Date.now() / 1000 - ts;
-  if (age < 86400 * 2)  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  if (age < 86400 * 60) return d.toLocaleDateString(undefined,  { month: 'short', day: 'numeric' });
-  return d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+function makeTsFmt(days) {
+  if (days === 1)
+    return ts => new Date(ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (days <= 31)
+    return ts => new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  if (days <= 365)
+    return ts => new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+  return ts => new Date(ts * 1000).getFullYear().toString();
 }
 
 // ── History charts ────────────────────────────────────────────────────────────
 
-let _histDays      = 7;
+let _histDays       = 7;
 let _activityMetric = 'both';
-let _cachedRows    = null;
+let _cachedRows     = null;
+let _cachedHeight   = null;
+
+function getChartW() {
+  const el = document.querySelector('.gs-chart-wrap');
+  if (!el) return 600;
+  const style   = window.getComputedStyle(el);
+  const padding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+  return Math.max(el.clientWidth - padding, 280);
+}
 
 function _chartLoading(ids) {
   ids.forEach(id => {
@@ -172,7 +183,7 @@ function _chartLoading(ids) {
   });
 }
 
-function makeActivitySVG(txPts, feePts, metric, width, height) {
+function makeActivitySVG(txPts, feePts, metric, width, height, xFmt) {
   const COIN    = window.GRINSCAN_NETWORK === 'testnet' ? 'tGRIN' : 'GRIN';
   const showTx  = metric !== 'fee';
   const showFee = metric !== 'tx';
@@ -197,7 +208,7 @@ function makeActivitySVG(txPts, feePts, metric, width, height) {
   const xStep  = (xMax - xMin) / 4;
   const xAxisSvg = [0, 1, 2, 3, 4].map(i => {
     const xv = xMin + xStep * i;
-    return `<text x="${toX(xv).toFixed(1)}" y="${height - 8}" text-anchor="middle" font-size="9" fill="var(--muted)">${fmtTsLabel(xv)}</text>`;
+    return `<text x="${toX(xv).toFixed(1)}" y="${height - 8}" text-anchor="middle" font-size="9" fill="var(--muted)">${(xFmt || makeTsFmt(7))(xv)}</text>`;
   }).join('');
 
   // Left Y axis — tx when showTx, else fee
@@ -263,7 +274,7 @@ function renderActivity(rows) {
   const txPts  = rows.map(r => [r.timestamp, r.tx_count || 0]);
   const feePts = rows.map(r => [r.timestamp, (r.fee_total || 0) / 1e9]);
   const el     = document.getElementById('chart-activity');
-  if (el) el.innerHTML = makeActivitySVG(txPts, feePts, _activityMetric, W, 170);
+  if (el) el.innerHTML = makeActivitySVG(txPts, feePts, _activityMetric, W, 170, makeTsFmt(_histDays));
 }
 
 function wireActivityMetricToggle() {
@@ -277,6 +288,33 @@ function wireActivityMetricToggle() {
     _activityMetric = btn.dataset.metric;
     if (_cachedRows) renderActivity(_cachedRows);
   });
+}
+
+function _drawHistory(rows, days) {
+  const xMin = rows[0].timestamp;
+  const xMax = rows[rows.length - 1].timestamp;
+  const W    = getChartW();
+  const xFmt = makeTsFmt(days);
+
+  const hrPts = rows.map(r => [r.timestamp, r.hashrate_gps]);
+  const hrMax = Math.max(...hrPts.map(p => p[1])) * 1.15 || 1;
+  const hrEl  = document.getElementById('chart-hashrate-history');
+  if (hrEl) hrEl.innerHTML = makeSVG(hrPts, W, 160, {
+    xMin, xMax, yMin: 0, yMax: hrMax, color: 'var(--accent)',
+    xFmt,
+    yFmt: v => { if (v >= 1e6) return (v/1e6).toFixed(1)+'M'; if (v >= 1e3) return (v/1e3).toFixed(0)+'k'; return v.toFixed(0); },
+  });
+
+  const diffPts = rows.map(r => [r.timestamp, r.difficulty]);
+  const diffMax = Math.max(...diffPts.map(p => p[1])) * 1.15 || 1;
+  const diffEl  = document.getElementById('chart-difficulty-history');
+  if (diffEl) diffEl.innerHTML = makeSVG(diffPts, W, 140, {
+    xMin, xMax, yMin: 0, yMax: diffMax, color: 'var(--accent2)',
+    xFmt,
+    yFmt: v => { if (v >= 1e9) return (v/1e9).toFixed(1)+'B'; if (v >= 1e6) return (v/1e6).toFixed(1)+'M'; if (v >= 1e3) return (v/1e3).toFixed(0)+'k'; return v.toFixed(0); },
+  });
+
+  renderActivity(rows);
 }
 
 async function renderHistoryCharts(days) {
@@ -293,41 +331,47 @@ async function renderHistoryCharts(days) {
       _cachedRows = null;
       return;
     }
-
     _cachedRows = rows;
-    const xMin = rows[0].timestamp;
-    const xMax = rows[rows.length - 1].timestamp;
-    const W = 700;
-
-    // Hashrate
-    const hrPts = rows.map(r => [r.timestamp, r.hashrate_gps]);
-    const hrMax = Math.max(...hrPts.map(p => p[1])) * 1.15 || 1;
-    const hrEl  = document.getElementById('chart-hashrate-history');
-    if (hrEl) hrEl.innerHTML = makeSVG(hrPts, W, 160, {
-      xMin, xMax, yMin: 0, yMax: hrMax, color: 'var(--accent)',
-      xFmt: fmtTsLabel,
-      yFmt: v => { if (v >= 1e6) return (v/1e6).toFixed(1)+'M'; if (v >= 1e3) return (v/1e3).toFixed(0)+'k'; return v.toFixed(0); },
-    });
-
-    // Difficulty
-    const diffPts = rows.map(r => [r.timestamp, r.difficulty]);
-    const diffMax = Math.max(...diffPts.map(p => p[1])) * 1.15 || 1;
-    const diffEl  = document.getElementById('chart-difficulty-history');
-    if (diffEl) diffEl.innerHTML = makeSVG(diffPts, W, 140, {
-      xMin, xMax, yMin: 0, yMax: diffMax, color: 'var(--accent2)',
-      xFmt: fmtTsLabel,
-      yFmt: v => { if (v >= 1e9) return (v/1e9).toFixed(1)+'B'; if (v >= 1e6) return (v/1e6).toFixed(1)+'M'; if (v >= 1e3) return (v/1e3).toFixed(0)+'k'; return v.toFixed(0); },
-    });
-
-    // Block Activity (combined tx + fee)
-    renderActivity(rows);
-
+    _drawHistory(rows, days);
   } catch (e) {
     console.error('renderHistoryCharts:', e);
   }
 }
 
 // ── Charts tab ────────────────────────────────────────────────────────────────
+
+function _drawEmissionCharts(height) {
+  const COIN       = window.GRINSCAN_NETWORK === 'testnet' ? 'tGRIN' : 'GRIN';
+  const GENESIS_YEAR = 2019;
+  const supply     = height * 60;
+  const supplyM    = supply / 1e6;
+  const elapsed    = (Date.now() / 1000 - GENESIS_UNIX) / (365.25 * 86400);
+  const inflation  = (365.25 * 24 * 3600 / supply) * 100;
+  const nowYear    = GENESIS_YEAR + elapsed;
+  const supplyYMax = 50 * 31.56;
+  const W          = getChartW();
+
+  const supplyPoints = [];
+  for (let yr = 0; yr <= 50; yr += 0.5) supplyPoints.push([GENESIS_YEAR + yr, yr * 31.56]);
+  const supplyEl = document.getElementById('chart-supply');
+  if (supplyEl) supplyEl.innerHTML = makeSVG(supplyPoints, W, 200, {
+    xMin: GENESIS_YEAR, xMax: GENESIS_YEAR + 50, yMin: 0, yMax: supplyYMax,
+    color: 'var(--accent)', dotX: nowYear, dotY: supplyM,
+    xFmt: v => v >= GENESIS_YEAR + 50 ? '∞' : v.toFixed(0),
+    yFmt: v => v >= supplyYMax - 0.01 ? '∞' : v.toFixed(0) + 'M',
+    dotLabel: `${supplyM.toFixed(1)}M ${COIN} · ${Math.floor(nowYear)}`,
+  });
+
+  const inflPoints = INFLATION_MILESTONES.map(([y, p]) => [GENESIS_YEAR + y, p]);
+  const inflEl = document.getElementById('chart-inflation');
+  if (inflEl) inflEl.innerHTML = makeSVG(inflPoints, W, 180, {
+    xMin: GENESIS_YEAR, xMax: GENESIS_YEAR + 50, yMin: 0, yMax: 100,
+    color: 'var(--accent2)', dotX: nowYear, dotY: Math.min(inflation, 100),
+    xFmt: v => v >= GENESIS_YEAR + 50 ? '∞' : v.toFixed(0),
+    yFmt: v => v.toFixed(0) + '%',
+    dotLabel: `${inflation.toFixed(1)}%/yr · ${Math.floor(nowYear)}`,
+  });
+}
 
 async function loadCharts() {
   const COIN = window.GRINSCAN_NETWORK === 'testnet' ? 'tGRIN' : 'GRIN';
@@ -350,9 +394,8 @@ async function loadCharts() {
     }
 
     const { height } = await results[0].json();
-    const supply  = height * 60;
-    const supplyM = supply / 1e6;
-    const elapsed = (Date.now() / 1000 - GENESIS_UNIX) / (365.25 * 86400);
+    const supply    = height * 60;
+    const elapsed   = (Date.now() / 1000 - GENESIS_UNIX) / (365.25 * 86400);
     const inflation = (365.25 * 24 * 3600 / supply) * 100;
 
     setText('em-supply',     fmtNum(supply) + ' ' + COIN);
@@ -362,30 +405,8 @@ async function loadCharts() {
     setText('em-inflation',  inflation.toFixed(1) + '% / year');
     setText('em-years',      elapsed.toFixed(1) + ' years since genesis');
 
-    const GENESIS_YEAR = 2019;
-    const nowYear      = GENESIS_YEAR + elapsed;
-    const supplyYMax   = 50 * 31.56;
-
-    const supplyPoints = [];
-    for (let yr = 0; yr <= 50; yr += 0.5) supplyPoints.push([GENESIS_YEAR + yr, yr * 31.56]);
-    const supplyEl = document.getElementById('chart-supply');
-    if (supplyEl) supplyEl.innerHTML = makeSVG(supplyPoints, 700, 200, {
-      xMin: GENESIS_YEAR, xMax: GENESIS_YEAR + 50, yMin: 0, yMax: supplyYMax,
-      color: 'var(--accent)', dotX: nowYear, dotY: supplyM,
-      xFmt: v => v >= GENESIS_YEAR + 50 ? '∞' : v.toFixed(0),
-      yFmt: v => v >= supplyYMax - 0.01 ? '∞' : v.toFixed(0) + 'M',
-      dotLabel: `${supplyM.toFixed(1)}M ${COIN} · ${Math.floor(nowYear)}`,
-    });
-
-    const inflPoints = INFLATION_MILESTONES.map(([y, p]) => [GENESIS_YEAR + y, p]);
-    const inflEl = document.getElementById('chart-inflation');
-    if (inflEl) inflEl.innerHTML = makeSVG(inflPoints, 700, 180, {
-      xMin: GENESIS_YEAR, xMax: GENESIS_YEAR + 50, yMin: 0, yMax: 100,
-      color: 'var(--accent2)', dotX: nowYear, dotY: Math.min(inflation, 100),
-      xFmt: v => v >= GENESIS_YEAR + 50 ? '∞' : v.toFixed(0),
-      yFmt: v => v.toFixed(0) + '%',
-      dotLabel: `${inflation.toFixed(1)}%/yr · ${Math.floor(nowYear)}`,
-    });
+    _cachedHeight = height;
+    _drawEmissionCharts(height);
 
     if (results[2]?.ok) {
       const priceData = await results[2].json();
@@ -543,4 +564,13 @@ document.addEventListener('DOMContentLoaded', () => {
   wireHistoryRange();
   wireActivityMetricToggle();
   switchTab('about');
+
+  let _resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(_resizeTimer);
+    _resizeTimer = setTimeout(() => {
+      if (_cachedRows)   _drawHistory(_cachedRows, _histDays);
+      if (_cachedHeight) _drawEmissionCharts(_cachedHeight);
+    }, 150);
+  });
 });

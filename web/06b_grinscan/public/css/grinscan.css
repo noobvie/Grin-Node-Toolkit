@@ -1095,8 +1095,7 @@ a:hover { text-decoration: underline; }
   .gs-header-search input, .gs-search input { font-size: 16px; }
   /* Stall banner top must clear the wrapped header (~80px on mobile) */
   .gs-stall-banner { top: 80px; }
-  /* Charts: prevent SVG from scaling text to unreadable size — scroll instead */
-  .gs-chart-wrap > div { min-width: 560px; }
+  /* Charts render at container width — no min-width needed */
   /* Improve tab touch targets */
   .gs-tab-btn { padding: 12px 16px; min-height: 44px; }
   /* Chart day buttons */

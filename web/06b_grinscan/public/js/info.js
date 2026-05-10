@@ -60,13 +60,15 @@ function makeSVG(points, width, height, opts) {
   const polyPts = points.map(([x, y]) => `${toX(x).toFixed(1)},${toY(y).toFixed(1)}`).join(' ');
 
   const yTicks = Array.from({ length: 5 }, (_, i) => yMin + (yRange * i) / 4);
-  const _defaultYFmt = v => {
-    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
-    if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
-    return v.toFixed(0);
-  };
+  // Unit picked once from yMax so every tick label uses the same denomination.
+  const _autoFmt = yFmt || (() => {
+    if (yMax >= 1e9) return v => (v / 1e9).toFixed(1) + 'B';
+    if (yMax >= 1e6) return v => (v / 1e6).toFixed(1) + 'M';
+    if (yMax >= 1e3) return v => (v / 1e3).toFixed(1) + 'k';
+    return v => v.toFixed(0);
+  })();
   const yAxisSvg = yTicks.map(v => {
-    const label = (yFmt || _defaultYFmt)(v);
+    const label = _autoFmt(v);
     return `<text x="${pad.left - 6}" y="${toY(v).toFixed(1)}" text-anchor="end" dominant-baseline="middle" font-size="11" fill="var(--muted)">${label}</text>
             <line x1="${pad.left}" y1="${toY(v).toFixed(1)}" x2="${pad.left + cw}" y2="${toY(v).toFixed(1)}" stroke="var(--border)" stroke-width="0.5"/>`;
   }).join('');
@@ -154,7 +156,7 @@ function fmtDiffLabel(d) {
 function makeTsFmt(days) {
   if (days === 1)
     return ts => new Date(ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  if (days <= 31)
+  if (days >= 2 && days <= 31)
     return ts => new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   if (days <= 365)
     return ts => new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
@@ -167,6 +169,7 @@ let _histDays       = 7;
 let _activityMetric = 'both';
 let _cachedRows     = null;
 let _cachedHeight   = null;
+let _cachedXFmt     = null;
 
 function getChartW() {
   const el = document.querySelector('.gs-chart-wrap');
@@ -274,7 +277,8 @@ function renderActivity(rows) {
   const txPts  = rows.map(r => [r.timestamp, r.tx_count || 0]);
   const feePts = rows.map(r => [r.timestamp, (r.fee_total || 0) / 1e9]);
   const el     = document.getElementById('chart-activity');
-  if (el) el.innerHTML = makeActivitySVG(txPts, feePts, _activityMetric, W, 170, makeTsFmt(_histDays));
+  const xFmt   = _cachedXFmt || makeTsFmt(_histDays);
+  if (el) el.innerHTML = makeActivitySVG(txPts, feePts, _activityMetric, W, 170, xFmt);
 }
 
 function wireActivityMetricToggle() {
@@ -294,24 +298,24 @@ function _drawHistory(rows, days) {
   const xMin = rows[0].timestamp;
   const xMax = rows[rows.length - 1].timestamp;
   const W    = getChartW();
-  const xFmt = makeTsFmt(days);
+  // Use actual data span so "Year" / "All" adapt when the DB only has partial history.
+  // days=0 (All Time sentinel) would hit the wrong branch in makeTsFmt without this.
+  const spanDays = rows.length > 1 ? (xMax - xMin) / 86400 : (days || 7);
+  const xFmt = makeTsFmt(spanDays);
+  _cachedXFmt = xFmt;
 
   const hrPts = rows.map(r => [r.timestamp, r.hashrate_gps]);
   const hrMax = Math.max(...hrPts.map(p => p[1])) * 1.15 || 1;
   const hrEl  = document.getElementById('chart-hashrate-history');
   if (hrEl) hrEl.innerHTML = makeSVG(hrPts, W, 160, {
-    xMin, xMax, yMin: 0, yMax: hrMax, color: 'var(--accent)',
-    xFmt,
-    yFmt: v => hrMax >= 1e6 ? (v/1e6).toFixed(2)+'M' : hrMax >= 1e3 ? (v/1e3).toFixed(2)+'k' : v.toFixed(1),
+    xMin, xMax, yMin: 0, yMax: hrMax, color: 'var(--accent)', xFmt,
   });
 
   const diffPts = rows.map(r => [r.timestamp, r.difficulty]);
   const diffMax = Math.max(...diffPts.map(p => p[1])) * 1.15 || 1;
   const diffEl  = document.getElementById('chart-difficulty-history');
   if (diffEl) diffEl.innerHTML = makeSVG(diffPts, W, 140, {
-    xMin, xMax, yMin: 0, yMax: diffMax, color: 'var(--accent2)',
-    xFmt,
-    yFmt: v => diffMax >= 1e9 ? (v/1e9).toFixed(2)+'B' : diffMax >= 1e6 ? (v/1e6).toFixed(2)+'M' : diffMax >= 1e3 ? (v/1e3).toFixed(2)+'k' : v.toFixed(0),
+    xMin, xMax, yMin: 0, yMax: diffMax, color: 'var(--accent2)', xFmt,
   });
 
   renderActivity(rows);

@@ -208,6 +208,20 @@ grinscan_configure() {
             fi
         fi
 
+        # Sibling URL — the OTHER network's public URL for the network switcher
+        local sib_label; sib_label=$( [[ "$net" == "testnet" ]] && echo "mainnet" || echo "testnet" )
+        local sib_example; sib_example=$( [[ "$net" == "testnet" ]] && echo "https://grinscan.example.com" || echo "https://testgrinscan.example.com" )
+        echo -ne "  ${sib_label^} sibling URL for network switcher (blank to skip, e.g. ${sib_example}): "
+        read -r sib_input
+        local sibling_url=""
+        if [[ -n "$sib_input" ]]; then
+            if [[ "$sib_input" =~ ^https?:// ]]; then
+                sibling_url="${sib_input%/}"   # strip trailing slash
+            else
+                warn "Sibling URL must start with http:// or https:// — skipped."
+            fi
+        fi
+
         mkdir -p "${GRINSCAN_DIR}/${net_short}"
 
         # Copy node secrets into the grinscan data dir so www-data can read them
@@ -243,18 +257,45 @@ grinscan_configure() {
   "blocks_cache":        500,
   "web_dir":             "${GRINSCAN_APP}/public",
   "node_data_dir":       "${node_dir}/chain_data",
-  "ga4_measurement_id":  "${ga4_id}"
+  "ga4_measurement_id":  "${ga4_id}",
+  "sibling_url":         "${sibling_url}"
 }
 JSON
 
         chown www-data:www-data "$config_path"
         success "Config written: ${config_path}"
+
+        # Create sample banners.json if it doesn't exist yet (active:false = no banner shown until edited)
+        local banners_path="${GRINSCAN_DIR}/${net_short}/banners.json"
+        if [[ ! -f "$banners_path" ]]; then
+            cat > "$banners_path" <<'BANNERS'
+[
+  {
+    "_comment": "Partner/sponsor banner config. Served at /api/partners — loaded by media.js. Fields: active (bool, omit = true), type ('image' or 'code'), src (image URL), href (link), alt (img alt text), weight (relative pick chance, default 1), html (raw embed for type:code). Place images in /opt/grin/grinscan/public/img/partners/. Restart not needed — file is re-read on each request (300s cache).",
+    "active": false,
+    "type":   "image",
+    "src":    "/img/partners/example-728x90.png",
+    "href":   "https://example.com",
+    "alt":    "Example sponsor",
+    "weight": 1
+  }
+]
+BANNERS
+            chown www-data:www-data "$banners_path"
+            echo ""
+            echo -e "  ${CYAN}Partner banner config created:${RESET}"
+            echo -e "    ${BOLD}${banners_path}${RESET}"
+            echo -e "  ${DIM}Banners are injected directly into page HTML — no public API endpoint.${RESET}"
+            echo -e "  ${DIM}Set ${BOLD}\"active\": true${RESET}${DIM} and fill in the fields to show a banner:${RESET}"
+            echo -e "  ${DIM}  type    → \"image\"  requires: src, href, alt${RESET}"
+            echo -e "  ${DIM}           \"code\"   requires: html (raw embed / ad-network script)${RESET}"
+            echo -e "  ${DIM}  weight  → relative pick chance (2 = twice as likely as 1)${RESET}"
+            echo -e "  ${DIM}  Images  → upload to ${GRINSCAN_APP}/public/img/partners/${RESET}"
+            echo -e "  ${DIM}  No restart needed — server re-reads every 300 s automatically.${RESET}"
+            echo -e "  To edit:  ${BOLD}nano ${banners_path}${RESET}"
+            echo ""
+        fi
         echo -e "  ${DIM}Note: SQLite DB is created automatically on first Start — no import step needed.${RESET}"
-        echo ""
-        echo -e "  ${CYAN}ℹ  Historical backfill runs automatically in the background.${RESET}"
-        echo -e "     Full node  → walks back to genesis block 0."
-        echo -e "     Pruned node → stops at pruning horizon, recent blocks still served."
-        echo -e "     To get full history on mainnet, run Script 01 with full node option."
         log "grinscan_configure: ${net} → ${config_path}"
     done
 

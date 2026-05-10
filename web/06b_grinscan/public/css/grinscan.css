@@ -976,8 +976,8 @@ a:hover { text-decoration: underline; }
   .gs-info-stats-grid { grid-template-columns: 1fr 1fr; }
 }
 
-/* ── Ad banner placeholder ── */
-.gs-ad-banner {
+/* ── Promo / partner banner ── */
+.gs-promo {
   max-width: 728px;
   min-height: 90px;
   margin: 1rem auto;
@@ -990,8 +990,8 @@ a:hover { text-decoration: underline; }
   font-size: 0.7rem;
   overflow: hidden;
 }
-.gs-ad-banner:empty { display: none; }
-@media (max-width: 480px) { .gs-ad-banner { min-height: 50px; } }
+.gs-promo:empty { display: none; }
+@media (max-width: 480px) { .gs-promo { min-height: 50px; } }
 
 /* ── Node info card (Network tab) ── */
 .node-info-card {

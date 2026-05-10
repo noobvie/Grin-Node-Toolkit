@@ -55,10 +55,9 @@
 
     <!-- Tab bar -->
     <div class="gs-tabs" role="tablist" aria-label="Info sections">
-      <button class="gs-tab-btn" data-tab="about"    role="tab">About</button>
-      <button class="gs-tab-btn" data-tab="emission" role="tab">Emission</button>
-      <button class="gs-tab-btn" data-tab="charts"   role="tab">Charts</button>
-      <button class="gs-tab-btn" data-tab="network"  role="tab">Network</button>
+      <button class="gs-tab-btn" data-tab="about"   role="tab">About</button>
+      <button class="gs-tab-btn" data-tab="charts"  role="tab">Charts</button>
+      <button class="gs-tab-btn" data-tab="network" role="tab">Network</button>
     </div>
 
     <!-- ── ABOUT TAB ── -->
@@ -102,9 +101,10 @@
 
     </div><!-- /#tab-about -->
 
-    <!-- ── EMISSION TAB ── -->
-    <div id="tab-emission" class="gs-tab-panel" role="tabpanel">
+    <!-- ── CHARTS TAB ── -->
+    <div id="tab-charts" class="gs-tab-panel" role="tabpanel">
 
+      <!-- Emission stats -->
       <div class="gs-info-stats-grid">
         <div class="gs-info-stat">
           <div class="gs-info-stat-label">Circulating Supply</div>
@@ -125,34 +125,6 @@
           <div class="gs-info-stat-value" id="em-inflation">—</div>
         </div>
       </div>
-
-      <div class="gs-info-section">
-        <h3>Supply Curve (2019 → ∞)</h3>
-        <div class="gs-chart-wrap">
-          <div id="chart-supply"></div>
-        </div>
-      </div>
-
-      <div class="gs-info-section">
-        <h3>Annual Inflation Rate</h3>
-        <div class="gs-chart-wrap">
-          <div id="chart-inflation"></div>
-        </div>
-      </div>
-
-      <div class="gs-info-section">
-        <p style="font-size:13px;color:var(--muted);">
-          ℹ  Grin has no halving. Supply grows at a constant 31.56 M GRIN/year.
-          Monetary inflation (%) decreases perpetually as supply grows.
-          Compare: Bitcoin cuts its block reward in half every ~4 years,
-          creating supply shocks. Grin's emission is smooth and predictable.
-        </p>
-      </div>
-
-    </div><!-- /#tab-emission -->
-
-    <!-- ── CHARTS TAB ── -->
-    <div id="tab-charts" class="gs-tab-panel" role="tabpanel">
 
       <!-- Price / market stats (mainnet only — hidden on testnet via JS) -->
       <div id="charts-price-stats">
@@ -181,25 +153,26 @@
       </div>
 
       <div class="gs-info-section">
-        <h3>Hashrate (GPS)</h3>
-        <div class="gs-chart-day-selector">
-          <button class="gs-chart-day-btn" data-days="1">1d</button>
-          <button class="gs-chart-day-btn active" data-days="7">7d</button>
-          <button class="gs-chart-day-btn" data-days="30">30d</button>
-          <button class="gs-chart-day-btn" data-days="365">1y</button>
-          <button class="gs-chart-day-btn" data-days="3650">10y</button>
-          <button class="gs-chart-day-btn" data-days="0">All</button>
-        </div>
-        <div class="gs-chart-canvas-wrap">
-          <canvas id="chart-canvas-hashrate" height="220"></canvas>
+        <h3>Supply Curve (2019 → ∞)</h3>
+        <div class="gs-chart-wrap">
+          <div id="chart-supply"></div>
         </div>
       </div>
 
       <div class="gs-info-section">
-        <h3>Difficulty</h3>
-        <div class="gs-chart-canvas-wrap">
-          <canvas id="chart-canvas-difficulty" height="220"></canvas>
+        <h3>Annual Inflation Rate</h3>
+        <div class="gs-chart-wrap">
+          <div id="chart-inflation"></div>
         </div>
+      </div>
+
+      <div class="gs-info-section">
+        <p style="font-size:13px;color:var(--muted);">
+          ℹ  Grin has no halving. Supply grows at a constant 31.56 M GRIN/year.
+          Monetary inflation (%) decreases perpetually as supply grows.
+          Compare: Bitcoin cuts its block reward in half every ~4 years,
+          creating supply shocks. Grin's emission is smooth and predictable.
+        </p>
       </div>
 
     </div><!-- /#tab-charts -->
@@ -210,12 +183,8 @@
       <!-- Node Info card -->
       <div class="node-info-card">
         <div class="stat-row">
-          <span>Node Mode</span>
-          <span id="node-mode-badge">—</span>
-        </div>
-        <div class="stat-row">
-          <span>Block History</span>
-          <span id="block-history">—</span>
+          <span>Cached Blocks</span>
+          <span id="cached-blocks">—</span>
         </div>
         <div class="stat-row">
           <span>GrinScan DB Size</span>
@@ -232,7 +201,6 @@
       </div>
     </div>
 
-
   </main>
 
   <!-- Footer -->
@@ -242,7 +210,6 @@
 
   <script src="/js/theme.js"></script>
   <script src="/js/app.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script src="/js/info.js"></script>
   <script src="/js/analytics.js"></script>
 </body>

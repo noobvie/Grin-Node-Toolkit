@@ -1,12 +1,7 @@
-// info.js — Info page: tabs, SVG charts, emission, stats, network, API
+// info.js — Info page: tabs, SVG charts, emission, network
 
 const GENESIS_UNIX = 1547520000; // 2019-01-15 00:00:00 UTC
 
-// Supply milestones
-const SUPPLY_MILESTONES = [
-  [0, 0], [1, 31.56], [2, 63.11], [5, 157.79],
-  [10, 315.58], [15, 473.36], [20, 631.15],
-];
 const INFLATION_MILESTONES = [
   [1, 100], [2, 50], [3, 33.3], [5, 20],
   [7, 14.3], [10, 10], [15, 6.7], [20, 5], [50, 2],
@@ -14,40 +9,15 @@ const INFLATION_MILESTONES = [
 
 // ── Utility ──────────────────────────────────────────────────────────────────
 
-function fmtGPS(gps) {
-  if (gps == null || isNaN(gps)) return '—';
-  if (gps >= 1e15) return (gps / 1e15).toFixed(2) + ' PGPS';
-  if (gps >= 1e12) return (gps / 1e12).toFixed(2) + ' TGPS';
-  if (gps >= 1e9)  return (gps / 1e9).toFixed(2)  + ' GGPS';
-  if (gps >= 1e6)  return (gps / 1e6).toFixed(2)  + ' MGPS';
-  if (gps >= 1e3)  return (gps / 1e3).toFixed(1)  + ' kGPS';
-  return gps.toFixed(2) + ' GPS';
-}
-
-function fmtDiff(d) {
-  if (d == null || isNaN(d)) return '—';
-  if (d >= 1e15) return (d / 1e15).toFixed(2) + ' P';
-  if (d >= 1e12) return (d / 1e12).toFixed(2) + ' T';
-  if (d >= 1e9)  return (d / 1e9).toFixed(2)  + ' G';
-  if (d >= 1e6)  return (d / 1e6).toFixed(1)  + ' M';
-  if (d >= 1e3)  return (d / 1e3).toFixed(1)  + ' K';
-  return String(Math.round(d));
-}
-
 function fmtNum(n, dec) {
   if (n == null) return '—';
   if (dec != null) return Number(n).toLocaleString(undefined, { minimumFractionDigits: dec, maximumFractionDigits: dec });
   return Number(n).toLocaleString();
 }
 
-function fmtDate(ts) {
-  return new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-function fmtDateScaled(ts, spanDays) {
-  const d = new Date(ts * 1000);
-  if (spanDays > 365) return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
 }
 
 // ── Tab system ───────────────────────────────────────────────────────────────
@@ -65,9 +35,8 @@ function switchTab(name) {
 }
 
 function loadTabData(name) {
-  if (name === 'emission') loadEmission();
-  if (name === 'charts')   { loadStats(); loadCharts(7); }
-  if (name === 'network')  loadNetwork();
+  if (name === 'charts')  loadCharts();
+  if (name === 'network') loadNetwork();
   // 'about' is static
 }
 
@@ -86,14 +55,10 @@ function makeSVG(points, width, height, opts) {
 
   const polyPts = points.map(([x, y]) => `${toX(x).toFixed(1)},${toY(y).toFixed(1)}`).join(' ');
 
-  // Y axis labels (5 ticks)
   const yTicks = Array.from({ length: 5 }, (_, i) => yMin + (yRange * i) / 4);
   const _defaultYFmt = v => {
-    if (v >= 1e15) return (v / 1e15).toFixed(1) + 'P';
-    if (v >= 1e12) return (v / 1e12).toFixed(1) + 'T';
-    if (v >= 1e9)  return (v / 1e9).toFixed(1)  + 'G';
-    if (v >= 1e6)  return (v / 1e6).toFixed(0)  + 'M';
-    if (v >= 1e3)  return (v / 1e3).toFixed(0)  + 'K';
+    if (v >= 1e6) return (v / 1e6).toFixed(0) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(0) + 'K';
     return v.toFixed(1);
   };
   const yAxisSvg = yTicks.map(v => {
@@ -102,7 +67,6 @@ function makeSVG(points, width, height, opts) {
             <line x1="${pad.left}" y1="${toY(v).toFixed(1)}" x2="${pad.left + cw}" y2="${toY(v).toFixed(1)}" stroke="var(--border)" stroke-width="0.5"/>`;
   }).join('');
 
-  // X axis labels (every other)
   const xStep = (xMax - xMin) / 4;
   const xAxisSvg = [0, 1, 2, 3, 4].map(i => {
     const xv = xMin + xStep * i;
@@ -124,11 +88,9 @@ function makeSVG(points, width, height, opts) {
       const iconBotY = cy + iconSize/2;
       let by, tailPts;
       if (iconTopY - tailH - bh >= pad.top) {
-        // bubble above
         by = iconTopY - tailH - bh;
         tailPts = `${cx},${(iconTopY - 1).toFixed(1)} ${(cx-5).toFixed(1)},${(by+bh).toFixed(1)} ${(cx+5).toFixed(1)},${(by+bh).toFixed(1)}`;
       } else {
-        // bubble below (dot near top of chart)
         by = iconBotY + tailH;
         tailPts = `${cx},${(iconBotY + 1).toFixed(1)} ${(cx-5).toFixed(1)},${by.toFixed(1)} ${(cx+5).toFixed(1)},${by.toFixed(1)}`;
       }
@@ -152,78 +114,61 @@ function makeSVG(points, width, height, opts) {
   </svg>`;
 }
 
-// ── Emission tab ─────────────────────────────────────────────────────────────
+// ── Charts tab ────────────────────────────────────────────────────────────────
 
-async function loadEmission() {
+async function loadCharts() {
+  const COIN = window.GRINSCAN_NETWORK === 'testnet' ? 'tGRIN' : 'GRIN';
+
+  if (window.GRINSCAN_NETWORK !== 'mainnet') {
+    const el = document.getElementById('charts-price-stats');
+    if (el) el.style.display = 'none';
+  }
+
   try {
-    const r = await fetch('/api/tip');
-    const { height } = await r.json();
-    const supply = height * 60;
+    const fetches = [fetch('/api/tip')];
+    if (window.GRINSCAN_NETWORK === 'mainnet') fetches.push(fetch('/api/price'));
+    const results = await Promise.all(fetches);
+
+    const { height } = await results[0].json();
+    const supply  = height * 60;
     const supplyM = supply / 1e6;
     const elapsed = (Date.now() / 1000 - GENESIS_UNIX) / (365.25 * 86400);
-    const inflation = (365.25 * 24 * 3600 / supply) * 100; // 1 GRIN/sec × sec/year ÷ supply
-    const COIN = window.GRINSCAN_NETWORK === 'testnet' ? 'tGRIN' : 'GRIN';
+    const inflation = (365.25 * 24 * 3600 / supply) * 100;
 
-    setText('em-supply',    fmtNum(supply) + ' ' + COIN);
-    setText('em-block',     '#' + fmtNum(height));
-    setText('em-reward',    '60 ' + COIN + ' / block');
+    setText('em-supply',     fmtNum(supply) + ' ' + COIN);
+    setText('em-block',      '#' + fmtNum(height));
+    setText('em-reward',     '60 ' + COIN + ' / block');
     setText('em-reward-sub', '1 ' + COIN + ' / sec');
-    setText('em-inflation', inflation.toFixed(1) + '% / year');
-    setText('em-years',     elapsed.toFixed(1) + ' years since genesis');
+    setText('em-inflation',  inflation.toFixed(1) + '% / year');
+    setText('em-years',      elapsed.toFixed(1) + ' years since genesis');
 
-    // Supply curve — 2019 to ∞, x-axis in calendar years
     const GENESIS_YEAR = 2019;
-    const nowYear = GENESIS_YEAR + elapsed;
-    const supplyYMax = 50 * 31.56;
+    const nowYear      = GENESIS_YEAR + elapsed;
+    const supplyYMax   = 50 * 31.56;
+
     const supplyPoints = [];
-    for (let yr = 0; yr <= 50; yr += 0.5) {
-      supplyPoints.push([GENESIS_YEAR + yr, yr * 31.56]);
-    }
-    const supplySVG = makeSVG(supplyPoints, 700, 200, {
+    for (let yr = 0; yr <= 50; yr += 0.5) supplyPoints.push([GENESIS_YEAR + yr, yr * 31.56]);
+    const supplyEl = document.getElementById('chart-supply');
+    if (supplyEl) supplyEl.innerHTML = makeSVG(supplyPoints, 700, 200, {
       xMin: GENESIS_YEAR, xMax: GENESIS_YEAR + 50, yMin: 0, yMax: supplyYMax,
       color: 'var(--accent)', dotX: nowYear, dotY: supplyM,
       xFmt: v => v >= GENESIS_YEAR + 50 ? '∞' : v.toFixed(0),
       yFmt: v => v >= supplyYMax - 0.01 ? '∞' : v.toFixed(0) + 'M',
       dotLabel: `${supplyM.toFixed(1)}M ${COIN} · ${Math.floor(nowYear)}`,
     });
-    const supplyEl = document.getElementById('chart-supply');
-    if (supplyEl) supplyEl.innerHTML = supplySVG;
 
-    // Inflation curve — 2019 to ∞, x-axis in calendar years
     const inflPoints = INFLATION_MILESTONES.map(([y, p]) => [GENESIS_YEAR + y, p]);
-    const inflSVG = makeSVG(inflPoints, 700, 180, {
+    const inflEl = document.getElementById('chart-inflation');
+    if (inflEl) inflEl.innerHTML = makeSVG(inflPoints, 700, 180, {
       xMin: GENESIS_YEAR, xMax: GENESIS_YEAR + 50, yMin: 0, yMax: 100,
       color: 'var(--accent2)', dotX: nowYear, dotY: Math.min(inflation, 100),
       xFmt: v => v >= GENESIS_YEAR + 50 ? '∞' : v.toFixed(0),
       yFmt: v => v.toFixed(0) + '%',
       dotLabel: `${inflation.toFixed(1)}%/yr · ${Math.floor(nowYear)}`,
     });
-    const inflEl = document.getElementById('chart-inflation');
-    if (inflEl) inflEl.innerHTML = inflSVG;
 
-  } catch (e) {
-    console.error('loadEmission:', e);
-  }
-}
-
-// ── Stats tab ────────────────────────────────────────────────────────────────
-
-async function loadStats() {
-  // Hide price section on testnet
-  if (window.GRINSCAN_NETWORK !== 'mainnet') {
-    const el = document.getElementById('charts-price-stats');
-    if (el) el.style.display = 'none';
-    return;
-  }
-  try {
-    const [priceR, tipR] = await Promise.all([
-      fetch('/api/price'),
-      fetch('/api/tip'),
-    ]);
-
-    let priceData = null;
-    if (priceR.ok) {
-      priceData = await priceR.json();
+    if (results[1]?.ok) {
+      const priceData = await results[1].json();
       setText('price-btc', priceData.price_btc != null ? priceData.price_btc.toFixed(8) + ' ₿' : '—');
       setText('price-usd', priceData.price_usd != null ? '$' + priceData.price_usd.toFixed(4)   : '—');
       const chg = priceData.change_24h_pct;
@@ -236,60 +181,18 @@ async function loadStats() {
         const w = document.getElementById('price-stale-warn');
         if (w) w.style.display = '';
       }
-    }
-
-    if (tipR.ok) {
-      const { height } = await tipR.json();
-      const supply = height * 60;
-      setText('circulating', fmtNum(supply) + ' ツ');
-      if (priceData?.price_usd) {
-        const mcap = supply * priceData.price_usd;
+      const mcap = supply * (priceData.price_usd || 0);
+      if (mcap) {
         const mcapStr = mcap >= 1e9 ? '$' + (mcap / 1e9).toFixed(2) + 'B'
                       : mcap >= 1e6 ? '$' + (mcap / 1e6).toFixed(2) + 'M'
                       : '$' + (mcap / 1e3).toFixed(1) + 'K';
         setText('market-cap', mcapStr);
       }
+      setText('circulating', fmtNum(supply) + ' ツ');
     }
+
   } catch (e) {
-    console.error('loadStats:', e);
-  }
-}
-
-function renderLineChart(elId, dataPoints, yUnit, color, yFmt) {
-  const el = document.getElementById(elId);
-  if (!el || dataPoints.length < 2) return;
-  const xVals = dataPoints.map(p => p[0]);
-  const yVals = dataPoints.map(p => p[1]);
-  const xMin = Math.min(...xVals), xMax = Math.max(...xVals);
-  const yMin = Math.min(...yVals) * 0.95, yMax = Math.max(...yVals) * 1.05;
-
-  const svg = makeSVG(dataPoints, 700, 180, {
-    xMin, xMax, yMin, yMax,
-    color,
-    xFmt: ts => fmtDate(ts),
-    yFmt,
-  });
-  el.innerHTML = svg;
-
-  // Hover tooltip
-  const svgEl = el.querySelector('svg');
-  if (svgEl) {
-    const tip = document.createElement('div');
-    tip.style.cssText = 'position:absolute;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font:11px var(--font-mono);color:var(--text);pointer-events:none;display:none;z-index:10;';
-    el.style.position = 'relative';
-    el.appendChild(tip);
-    svgEl.addEventListener('mousemove', e => {
-      const rect = svgEl.getBoundingClientRect();
-      const xFrac = (e.clientX - rect.left) / rect.width;
-      const idx = Math.round(xFrac * (dataPoints.length - 1));
-      const pt = dataPoints[Math.max(0, Math.min(idx, dataPoints.length - 1))];
-      tip.style.display = 'block';
-      tip.style.left = (e.clientX - rect.left + 10) + 'px';
-      tip.style.top  = (e.clientY - rect.top  - 30) + 'px';
-      const val = yFmt ? yFmt(pt[1]) : fmtNum(Math.round(pt[1]));
-      tip.textContent = fmtDate(pt[0]) + '  ' + val;
-    });
-    svgEl.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    console.error('loadCharts:', e);
   }
 }
 
@@ -308,26 +211,17 @@ async function loadNetwork() {
   if (!el) return;
   el.innerHTML = '<p style="color:var(--muted);font-family:var(--font-mono);font-size:13px;">Loading…</p>';
   try {
-    // Fetch stats for node info card alongside peers
     const [peers, stats] = await Promise.all([
       fetch('/api/peers').then(r => r.json()).catch(() => []),
       fetch('/api/stats').then(r => r.json()).catch(() => ({})),
     ]);
 
-    // Populate node info card
-    const modeLabel = stats.node_mode === 'archive' ? '✅ Full Archive'
-                    : stats.node_mode === 'pruned'  ? '⚠ Pruned'
-                    :                                 '⏳ Syncing History';
-    setText('node-mode-badge', modeLabel);
-
-    const minH = stats.backfill_min != null ? Number(stats.backfill_min).toLocaleString() : '?';
-    const maxH = stats.tip_height   != null ? Number(stats.tip_height).toLocaleString()   : '?';
-    setText('block-history', stats.backfill_active
-      ? `Blocks ${minH} – ${maxH} (backfilling…)`
-      : `Blocks ${minH} – ${maxH}`);
-
+    const tipH   = stats.tip_height    != null ? Number(stats.tip_height).toLocaleString()    : '?';
+    const cached = stats.cached_blocks != null ? Number(stats.cached_blocks).toLocaleString() : '?';
+    setText('cached-blocks', `${cached} (tip #${tipH})`);
     setText('db-size',    formatBytes(stats.db_size_bytes));
     setText('chain-size', formatBytes(stats.chain_size_bytes));
+
     if (!Array.isArray(peers) || !peers.length) {
       el.innerHTML = '<p style="color:var(--muted);font-family:var(--font-mono);font-size:13px;">Owner API unreachable — peer data unavailable.</p>';
       return;
@@ -335,7 +229,6 @@ async function loadNetwork() {
     const outbound = peers.filter(p => p.direction === 'Outbound').length;
     const inbound  = peers.filter(p => p.direction === 'Inbound').length;
 
-    // Version buckets
     const versions = {};
     peers.forEach(p => {
       const m = (p.user_agent || '').match(/(\d+\.\d+)\.\d+/);
@@ -359,9 +252,7 @@ async function loadNetwork() {
 
     function maskAddr(addr) {
       if (!addr) return '—';
-      // IPv6 with embedded IPv4 like [::ffff:1.2.3.4]:port
       let s = addr.replace(/(\[(?:[^\]]*:)?(?:\d+\.\d+\.)\d+\.)\d+(\])/g, '$1*$2');
-      // Plain IPv4 like 1.2.3.4:port — mask last octet
       s = s.replace(/((?:\d+\.){2}\d+\.)\d+(:\d+)/g, '$1*$2');
       return s;
     }
@@ -403,95 +294,11 @@ async function loadNetwork() {
   }
 }
 
-
-// ── Charts tab (Chart.js) ─────────────────────────────────────────────────────
-
-const _chartInstances = {};
-
-function destroyChart(id) {
-  if (_chartInstances[id]) { _chartInstances[id].destroy(); delete _chartInstances[id]; }
-}
-
-function makeLineChart(canvasId, labels, data, label, color, yTickFmt) {
-  destroyChart(canvasId);
-  const canvas = document.getElementById(canvasId);
-  if (!canvas || typeof Chart === 'undefined') return;
-  const style = getComputedStyle(document.documentElement);
-  const gridColor = style.getPropertyValue('--border').trim() || '#333';
-  const textColor = style.getPropertyValue('--muted').trim() || '#888';
-  _chartInstances[canvasId] = new Chart(canvas, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [{ label, data, borderColor: color, backgroundColor: color + '22',
-        borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3 }],
-    },
-    options: {
-      responsive: true,
-      animation: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { color: textColor, maxTicksLimit: 8, font: { size: 10 } }, grid: { color: gridColor } },
-        y: { ticks: { color: textColor, maxTicksLimit: 6, font: { size: 10 },
-               callback: yTickFmt || undefined }, grid: { color: gridColor } },
-      },
-    },
-  });
-}
-
-async function loadCharts(days) {
-  // Update active day button (days=0 means "All time")
-  document.querySelectorAll('.gs-chart-day-btn').forEach(btn => {
-    btn.classList.toggle('active', parseInt(btn.dataset.days) === days);
-  });
-
-  try {
-    const r = await fetch('/api/history?days=' + days);
-    if (!r.ok) return;
-    const data = await r.json();
-    const rows = Array.isArray(data) ? data : (data.rows || []);
-    if (rows.length < 2) return;
-
-    const GENESIS_TS = 1547520000;
-    const now = Math.floor(Date.now() / 1000);
-    const spanDays = days === 0
-      ? (now - GENESIS_TS) / 86400
-      : days;
-
-    const labels = rows.map(p => fmtDateScaled(p.timestamp, spanDays));
-    const style = getComputedStyle(document.documentElement);
-    const accent  = style.getPropertyValue('--accent').trim()  || '#c8960c';
-    const accent2 = style.getPropertyValue('--accent2').trim() || '#00bcd4';
-
-    makeLineChart('chart-canvas-hashrate',   labels, rows.map(p => p.hashrate_gps), 'GPS',        accent,  v => fmtGPS(v));
-    makeLineChart('chart-canvas-difficulty', labels, rows.map(p => p.difficulty),  'Difficulty', accent2, v => fmtDiff(v));
-
-  } catch (e) {
-    console.error('loadCharts:', e);
-  }
-}
-
-// ── Helper ───────────────────────────────────────────────────────────────────
-
-function setText(id, val) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = val;
-}
-
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.gs-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
-
-  // Charts day selector (delegated — chart canvases may not exist yet)
-  document.addEventListener('click', e => {
-    if (e.target.classList.contains('gs-chart-day-btn')) {
-      const days = parseInt(e.target.dataset.days);
-      if (!isNaN(days)) loadCharts(days);
-    }
-  });
-
   switchTab('about');
 });

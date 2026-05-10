@@ -82,27 +82,43 @@ function makeSVG(points, width, height, opts) {
     dotSvg = `<image href="/grin-logo.svg" x="${(cx - iconSize/2).toFixed(1)}" y="${(cy - iconSize/2).toFixed(1)}" width="${iconSize}" height="${iconSize}"/>`;
 
     if (opts.dotLabel) {
-      const bw = 148, bh = 38, tailH = 7;
-      const bx = Math.min(Math.max(cx - bw/2, pad.left), pad.left + cw - bw);
-      const iconTopY = cy - iconSize/2;
-      const iconBotY = cy + iconSize/2;
-      let by, tailPts;
-      if (iconTopY - tailH - bh >= pad.top) {
-        by = iconTopY - tailH - bh;
-        tailPts = `${cx},${(iconTopY - 1).toFixed(1)} ${(cx-5).toFixed(1)},${(by+bh).toFixed(1)} ${(cx+5).toFixed(1)},${(by+bh).toFixed(1)}`;
+      const bw = 160, bh = 36;
+      const iconR = iconSize / 2 + 2;  // clearance from icon edge to bubble
+      const bx = Math.min(Math.max(cx - bw / 2, pad.left), pad.left + cw - bw);
+      const arrowX = Math.min(Math.max(cx, bx + 8), bx + bw - 8);
+      const aw = 5; // arrow half-width at base
+      let by, pathD;
+      if (cy - iconR - bh >= pad.top) {
+        // bubble above — arrow points down to dot
+        by = cy - iconR - bh;
+        pathD = [
+          `M ${bx.toFixed(1)},${by.toFixed(1)}`,
+          `L ${(bx+bw).toFixed(1)},${by.toFixed(1)}`,
+          `L ${(bx+bw).toFixed(1)},${(by+bh).toFixed(1)}`,
+          `L ${(arrowX+aw).toFixed(1)},${(by+bh).toFixed(1)}`,
+          `L ${cx.toFixed(1)},${cy.toFixed(1)}`,
+          `L ${(arrowX-aw).toFixed(1)},${(by+bh).toFixed(1)}`,
+          `L ${bx.toFixed(1)},${(by+bh).toFixed(1)} Z`,
+        ].join(' ');
       } else {
-        by = iconBotY + tailH;
-        tailPts = `${cx},${(iconBotY + 1).toFixed(1)} ${(cx-5).toFixed(1)},${by.toFixed(1)} ${(cx+5).toFixed(1)},${by.toFixed(1)}`;
+        // bubble below — arrow points up to dot
+        by = cy + iconR;
+        pathD = [
+          `M ${bx.toFixed(1)},${by.toFixed(1)}`,
+          `L ${(arrowX-aw).toFixed(1)},${by.toFixed(1)}`,
+          `L ${cx.toFixed(1)},${cy.toFixed(1)}`,
+          `L ${(arrowX+aw).toFixed(1)},${by.toFixed(1)}`,
+          `L ${(bx+bw).toFixed(1)},${by.toFixed(1)}`,
+          `L ${(bx+bw).toFixed(1)},${(by+bh).toFixed(1)}`,
+          `L ${bx.toFixed(1)},${(by+bh).toFixed(1)} Z`,
+        ].join(' ');
       }
       dotSvg += `
-    <polygon points="${tailPts}" fill="var(--surface)" stroke="none"/>
-    <rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${bw}" height="${bh}" rx="5"
-          fill="var(--surface)" stroke="var(--accent)" stroke-width="1"/>
-    <image href="/grin-logo.svg" x="${(bx+7).toFixed(1)}" y="${(by+11).toFixed(1)}" width="16" height="16"/>
+    <path d="${pathD}" fill="var(--surface)" stroke="var(--accent)" stroke-width="1" stroke-linejoin="round"/>
     <text font-family="monospace" font-size="9" font-weight="700" fill="var(--accent)"
-          x="${(bx+27).toFixed(1)}" y="${(by+17).toFixed(1)}">Hey Grinner!</text>
+          x="${(bx+8).toFixed(1)}" y="${(by+14).toFixed(1)}">Hey Grinner! I'm here</text>
     <text font-family="monospace" font-size="9" fill="var(--text)"
-          x="${(bx+27).toFixed(1)}" y="${(by+30).toFixed(1)}">${opts.dotLabel}</text>`;
+          x="${(bx+8).toFixed(1)}" y="${(by+27).toFixed(1)}">${opts.dotLabel}</text>`;
     }
   }
 

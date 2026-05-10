@@ -95,6 +95,7 @@ const stmtListBlocks  = db.prepare(
   'SELECT height, hash, timestamp, tx_count, fee_total, kernel_count, difficulty FROM blocks ORDER BY height DESC LIMIT ? OFFSET ?'
 );
 const stmtCountBlocks = db.prepare('SELECT COUNT(*) AS c FROM blocks');
+const stmtMinHeight   = db.prepare('SELECT MIN(height) AS m FROM blocks');
 // Per-block difficulty = total_difficulty[n] - total_difficulty[n-1] via self-join
 const stmtHistory = db.prepare(`
   SELECT b1.height, b1.timestamp,
@@ -586,24 +587,29 @@ app.get('/api/tip', (_req, res) => {
 });
 
 app.get('/api/stats', (_req, res) => {
+  const cachedCount = stmtCountBlocks.get().c;
+  const minCachedH  = cachedCount > 0 ? (stmtMinHeight.get().m ?? null) : null;
+  const nodeMode    = minCachedH != null ? (minCachedH <= 10 ? 'archive' : 'pruned') : null;
   res.json({
-    tip_height:       tipState.height,
-    hashrate_gps:     tipState.hashrate_gps,
-    difficulty:       tipState.difficulty,
-    peer_count:       tipState.peer_count,
-    node_version:     tipState.node_version,
-    stalled:          tipState.stalled,
-    cached_blocks:    stmtCountBlocks.get().c,
-    pool_size:        tipState.pool_size,
-    stem_pool_size:   tipState.stem_pool_size,
-    price_usd:        latestPrice?.price_usd      ?? null,
-    price_btc:        latestPrice?.price_btc      ?? null,
-    change_24h_pct:   latestPrice?.change_24h_pct ?? null,
-    volume_usdt:      latestPrice?.volume_usdt    ?? null,
-    volume_btc:       latestPrice?.volume_btc     ?? null,
-    db_size_bytes:    (() => { try { return fs.statSync(config.db_path).size; } catch { return null; } })(),
-    chain_size_bytes: getChainSize(),
-    network:          config.network,
+    tip_height:        tipState.height,
+    hashrate_gps:      tipState.hashrate_gps,
+    difficulty:        tipState.difficulty,
+    peer_count:        tipState.peer_count,
+    node_version:      tipState.node_version,
+    stalled:           tipState.stalled,
+    cached_blocks:     cachedCount,
+    min_cached_height: minCachedH,
+    node_mode:         nodeMode,
+    pool_size:         tipState.pool_size,
+    stem_pool_size:    tipState.stem_pool_size,
+    price_usd:         latestPrice?.price_usd      ?? null,
+    price_btc:         latestPrice?.price_btc      ?? null,
+    change_24h_pct:    latestPrice?.change_24h_pct ?? null,
+    volume_usdt:       latestPrice?.volume_usdt    ?? null,
+    volume_btc:        latestPrice?.volume_btc     ?? null,
+    db_size_bytes:     (() => { try { return fs.statSync(config.db_path).size; } catch { return null; } })(),
+    chain_size_bytes:  getChainSize(),
+    network:           config.network,
   });
 });
 

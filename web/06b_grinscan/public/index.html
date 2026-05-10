@@ -148,7 +148,11 @@
             <tr><td colspan="5"><div class="skeleton" style="height:16px;margin:4px 0;border-radius:4px;"></div></td></tr>
           </tbody>
         </table>
-        <button id="load-more-btn" class="gs-load-more" style="display:none;">Load 20 more</button>
+        <div class="gs-pagination" id="pagination-bar">
+          <button id="page-prev-btn" class="gs-page-btn" disabled>← Prev</button>
+          <span id="page-info" class="gs-page-info">Page 1</span>
+          <button id="page-next-btn" class="gs-page-btn" disabled>Next →</button>
+        </div>
       </div>
     </section>
 

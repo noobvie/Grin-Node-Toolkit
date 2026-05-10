@@ -453,11 +453,12 @@ async function loadNetwork() {
 
     const tipH   = stats.tip_height    != null ? Number(stats.tip_height).toLocaleString()    : '?';
     const cached = stats.cached_blocks != null ? Number(stats.cached_blocks).toLocaleString() : '?';
+    const minH   = stats.min_cached_height != null ? Number(stats.min_cached_height).toLocaleString() : null;
     setText('node-type-badge',
       stats.node_mode === 'archive' ? '✅ Full Archive (since genesis)' :
       stats.node_mode === 'pruned'  ? '⚠ Pruned (recent blocks only)' :
                                       '⏳ Determining…');
-    setText('cached-blocks', `${cached} (tip #${tipH})`);
+    setText('cached-blocks', minH != null ? `${cached} (#${minH} – #${tipH})` : `${cached} (tip #${tipH})`);
     setText('db-size',    formatBytes(stats.db_size_bytes));
     setText('chain-size', formatBytes(stats.chain_size_bytes));
 

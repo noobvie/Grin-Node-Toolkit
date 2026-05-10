@@ -464,21 +464,34 @@ a:hover { text-decoration: underline; }
 .gs-table .col-fees { color: var(--muted); }
 .gs-table .col-txs { font-weight: 700; }
 
-.gs-load-more {
-  display: block;
-  width: 100%;
-  padding: 12px;
-  text-align: center;
+.gs-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+.gs-page-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+.gs-page-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.gs-page-btn:disabled { opacity: 0.35; cursor: default; }
+.gs-page-info {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--muted);
-  background: transparent;
-  border: none;
-  border-top: 1px solid var(--border);
-  cursor: pointer;
-  transition: color var(--transition), background var(--transition);
+  min-width: 110px;
+  text-align: center;
 }
-.gs-load-more:hover { color: var(--accent); background: var(--surface2); }
 
 /* ── Block detail page ── */
 .gs-block-detail {

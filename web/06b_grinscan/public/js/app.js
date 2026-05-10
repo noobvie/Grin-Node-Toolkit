@@ -111,8 +111,46 @@ function setStallBanner(stalled) {
 // ── INDEX PAGE ───────────────────────────────────────────────────────────────
 
 let _prevTipHeight = 0;
-let _blockOffset = 0;
+let _currentPage   = 1;
+let _totalCached   = 0;
 const _LIMIT = 20;
+
+function _totalPages() { return Math.max(1, Math.ceil(_totalCached / _LIMIT)); }
+
+function updatePagination() {
+  const total = _totalPages();
+  const el   = document.getElementById('page-info');
+  const prev = document.getElementById('page-prev-btn');
+  const next = document.getElementById('page-next-btn');
+  if (el)   el.textContent   = `Page ${_currentPage} of ${total}`;
+  if (prev) prev.disabled    = _currentPage <= 1;
+  if (next) next.disabled    = _currentPage >= total;
+}
+
+async function fetchPage(page) {
+  const offset = (page - 1) * _LIMIT;
+  try {
+    const r      = await fetch(`/api/blocks?limit=${_LIMIT}&offset=${offset}`);
+    const blocks = await r.json();
+    const tbody  = document.getElementById('blocks-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    blocks.forEach(b => tbody.appendChild(renderBlockRow(b)));
+    _currentPage = page;
+    updatePagination();
+  } catch (e) {
+    console.error('fetchPage:', e);
+  }
+}
+
+function initPagination() {
+  document.getElementById('page-prev-btn')?.addEventListener('click', () => {
+    if (_currentPage > 1) fetchPage(_currentPage - 1);
+  });
+  document.getElementById('page-next-btn')?.addEventListener('click', () => {
+    if (_currentPage < _totalPages()) fetchPage(_currentPage + 1);
+  });
+}
 
 function renderBlockRow(b) {
   const tr = document.createElement('tr');
@@ -129,24 +167,6 @@ function renderBlockRow(b) {
   return tr;
 }
 
-async function fetchAndRenderBlocks(append) {
-  try {
-    const r = await fetch(`/api/blocks?limit=${_LIMIT}&offset=${_blockOffset}`);
-    const blocks = await r.json();
-    const tbody = document.getElementById('blocks-tbody');
-    if (!tbody) return;
-    if (!append) {
-      tbody.innerHTML = '';
-      _blockOffset = 0;
-    }
-    blocks.forEach(b => tbody.appendChild(renderBlockRow(b)));
-    _blockOffset += blocks.length;
-    const btn = document.getElementById('load-more-btn');
-    if (btn) btn.style.display = blocks.length < _LIMIT ? 'none' : 'block';
-  } catch (e) {
-    console.error('fetchAndRenderBlocks:', e);
-  }
-}
 
 async function pollStats() {
   try {
@@ -170,12 +190,17 @@ async function pollStats() {
           }
         };
         requestAnimationFrame(step);
-        // Refresh block list
-        _blockOffset = 0;
-        fetchAndRenderBlocks(false);
+        // Refresh block list only if user is viewing the latest page
+        if (_currentPage === 1) fetchPage(1);
       } else {
         tipEl.textContent = fmtNum(s.tip_height);
       }
+    }
+
+    // Keep pagination total in sync
+    if (s.cached_blocks != null) {
+      _totalCached = s.cached_blocks;
+      updatePagination();
     }
 
     const hrEl   = document.getElementById('stat-hashrate');
@@ -280,13 +305,6 @@ function initSearch() {
     }
     if (e.key === 'Escape') inp.blur();
   });
-}
-
-// Load more
-function initLoadMore() {
-  const btn = document.getElementById('load-more-btn');
-  if (!btn) return;
-  btn.addEventListener('click', () => fetchAndRenderBlocks(true));
 }
 
 // ── BLOCK DETAIL PAGE ────────────────────────────────────────────────────────
@@ -680,9 +698,9 @@ document.addEventListener('DOMContentLoaded', () => {
     pollStats().then(() => {
       document.querySelectorAll('.skeleton-cell').forEach(el => el.classList.remove('skeleton'));
     });
-    fetchAndRenderBlocks(false);
+    fetchPage(1);
     initSearch();
-    initLoadMore();
+    initPagination();
     startAgeCountdown();
     setInterval(() => pollStats(), 60000);
 
@@ -692,7 +710,10 @@ document.addEventListener('DOMContentLoaded', () => {
       es.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data);
-          if (msg.type === 'block') { pollStats(); fetchAndRenderBlocks(false); }
+          if (msg.type === 'block') {
+            pollStats();
+            if (_currentPage === 1) fetchPage(1);
+          }
         } catch {}
       };
       es.onerror = () => es.close();

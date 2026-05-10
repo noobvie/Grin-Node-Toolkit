@@ -89,6 +89,23 @@
       </div>
 
       <div class="gs-info-section">
+        <h3>Why Grin?</h3>
+        <p>New to crypto? Here are the things that make Grin genuinely different — explained simply.</p>
+        <ul>
+          <li><strong>Time-backed money — a genuinely new idea</strong> — Every currency in history has been backed by something: gold is backed by a scarce metal, dollars are backed by a government's promise, Bitcoin is backed by a programmed scarcity with built-in halving steps. Grin is backed by something that has never been tried before: <em>time itself</em>. One minute of real-world clock time creates exactly 60 GRIN — always, without exception, without anyone's permission. You cannot fake time. You cannot speed it up. You cannot print more of it. This makes Grin's monetary policy the first in history that is truly neutral — not controlled by any person, company, or committee. It is enforced by physics, verified by mathematics, and distributed to whoever mines each block. That's the invention: a currency where the supply is as objective and unstoppable as the passage of time.</li>
+          <li><strong>Fair for everyone, forever</strong> — Grin creates exactly 60 coins per minute, and that never changes. No "halving" events that reward early buyers over late ones. Whether you discover Grin today or in 20 years, you get the same terms as everyone else.</li>
+          <li><strong>Private by design, not by option</strong> — Both the amounts and the parties involved are hidden directly in the math of every transaction. Nobody can scan the blockchain to see your balance or trace who paid whom — privacy is enforced by cryptography, not by policy.</li>
+          <li><strong>More trustworthy than digital gold</strong> — Tokenised gold requires a custodian who can be frozen, audited, or shut down. Grin's supply is verified by open-source math that anyone can check on their own computer. No company in the middle, ever.</li>
+          <li><strong>Unaffected by money printing</strong> — Stablecoins tied to USD quietly lose purchasing power whenever governments expand the money supply. Grin's emission rate is hard-coded in the protocol — no committee or government can ever change it.</li>
+          <li><strong>Solves Bitcoin's long-term security question</strong> — Bitcoin will stop minting new coins after the 21 million cap, leaving miners to survive on fees alone. Whether that's enough to keep the network secure long-term is an open question. Grin always pays miners a steady reward — security doesn't expire.</li>
+          <li><strong>A blockchain that stays small</strong> — Most chains grow forever, storing a record of every transaction ever made. Grin automatically removes old spent data from the chain. After 7+ years live, the whole thing is only ~5 GB (pruned). Fast to sync, cheap to run a node.</li>
+          <li><strong>Built for the long game</strong> — Grin's inflation rate gets lower every year, naturally and smoothly, with no dramatic cutoffs or supply shocks. It's designed to still be fair and functional for people decades from now.</li>
+          <li><strong>Simple enough to verify yourself</strong> — No hidden allocations, no complex tokenomics, no founder rewards. The codebase is deliberately small — a single engineer can read and audit the whole thing end-to-end.</li>
+          <li><strong>Can't be copied by a fork</strong> — Anyone can clone Grin's code, but they cannot clone its history. Years of accumulated proof-of-work, protocol maturity, and community trust are baked into the chain itself. You can't fork time.</li>
+        </ul>
+      </div>
+
+      <div class="gs-info-section">
         <h3>Resources</h3>
         <div class="gs-resources">
           <a href="https://forum.grin.mw"                             class="gs-resource-link" target="_blank" rel="noopener">Grin Forum</a>
@@ -202,10 +219,12 @@
 
       <div class="gs-info-section">
         <h3>Block Activity</h3>
-        <p style="font-size:11px;color:var(--muted);margin-bottom:4px;">Transactions per block</p>
-        <div class="gs-chart-wrap"><div id="chart-tx-history"></div></div>
-        <p style="font-size:11px;color:var(--muted);margin-top:12px;margin-bottom:4px;">Fees per block (GRIN)</p>
-        <div class="gs-chart-wrap"><div id="chart-fee-history"></div></div>
+        <div class="gs-chart-day-selector" id="activity-metric-toggle" style="margin-bottom:10px;">
+          <button class="gs-chart-day-btn active" data-metric="both">● Both</button>
+          <button class="gs-chart-day-btn" data-metric="tx">● Tx</button>
+          <button class="gs-chart-day-btn" data-metric="fee">● Fee</button>
+        </div>
+        <div class="gs-chart-wrap"><div id="chart-activity"></div></div>
       </div>
 
     </div><!-- /#tab-charts -->

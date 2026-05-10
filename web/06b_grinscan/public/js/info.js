@@ -161,7 +161,9 @@ function fmtTsLabel(ts) {
 
 // ── History charts ────────────────────────────────────────────────────────────
 
-let _histDays = 7;
+let _histDays      = 7;
+let _activityMetric = 'both';
+let _cachedRows    = null;
 
 function _chartLoading(ids) {
   ids.forEach(id => {
@@ -170,8 +172,115 @@ function _chartLoading(ids) {
   });
 }
 
+function makeActivitySVG(txPts, feePts, metric, width, height) {
+  const COIN    = window.GRINSCAN_NETWORK === 'testnet' ? 'tGRIN' : 'GRIN';
+  const showTx  = metric !== 'fee';
+  const showFee = metric !== 'tx';
+  const pad = { top: 20, right: (showTx && showFee) ? 55 : 10, bottom: 30, left: 45 };
+  const cw = width - pad.left - pad.right;
+  const ch = height - pad.top - pad.bottom;
+
+  const allPts = [...(showTx ? txPts : []), ...(showFee ? feePts : [])];
+  if (!allPts.length) return '<p style="color:var(--muted);font-size:12px;padding:16px;text-align:center;">No data</p>';
+
+  const xMin   = allPts.reduce((m, p) => Math.min(m, p[0]), Infinity);
+  const xMax   = allPts.reduce((m, p) => Math.max(m, p[0]), -Infinity);
+  const xRange = xMax - xMin || 1;
+  function toX(v) { return pad.left + ((v - xMin) / xRange) * cw; }
+
+  const txMax  = Math.max(...txPts.map(p => p[1]),  1)     * 1.2;
+  const feeMax = Math.max(...feePts.map(p => p[1]), 0.001) * 1.2;
+  function toY_tx(v)  { return pad.top + (1 - Math.min(v / txMax,  1)) * ch; }
+  function toY_fee(v) { return pad.top + (1 - Math.min(v / feeMax, 1)) * ch; }
+
+  // X axis labels
+  const xStep  = (xMax - xMin) / 4;
+  const xAxisSvg = [0, 1, 2, 3, 4].map(i => {
+    const xv = xMin + xStep * i;
+    return `<text x="${toX(xv).toFixed(1)}" y="${height - 8}" text-anchor="middle" font-size="9" fill="var(--muted)">${fmtTsLabel(xv)}</text>`;
+  }).join('');
+
+  // Left Y axis — tx when showTx, else fee
+  const leftMax   = showTx ? txMax  : feeMax;
+  const leftColor = showTx ? 'var(--green)' : 'var(--accent2)';
+  const leftFmt   = showTx
+    ? v => v.toFixed(0)
+    : v => v < 0.001 ? '0' : v.toFixed(3);
+  const toY_left  = showTx ? toY_tx : toY_fee;
+
+  const N = 5;
+  const gridAndLeftAxis = Array.from({ length: N }, (_, i) => (leftMax * i) / (N - 1)).map(v => {
+    const y = toY_left(v).toFixed(1);
+    return `<line x1="${pad.left}" y1="${y}" x2="${pad.left + cw}" y2="${y}" stroke="var(--border)" stroke-width="0.5"/>` +
+           `<text x="${pad.left - 6}" y="${y}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="${leftColor}">${leftFmt(v)}</text>`;
+  }).join('');
+
+  // Right Y axis — fee (only when showing both)
+  let rightAxisSvg = '';
+  if (showTx && showFee) {
+    rightAxisSvg = Array.from({ length: N }, (_, i) => (feeMax * i) / (N - 1)).map(v => {
+      const y    = toY_fee(v).toFixed(1);
+      const label = v < 0.001 ? '0' : v.toFixed(3);
+      return `<text x="${(pad.left + cw + 6).toFixed(1)}" y="${y}" dominant-baseline="middle" font-size="9" fill="var(--accent2)">${label}</text>`;
+    }).join('');
+  }
+
+  // Polylines
+  let txLine = '';
+  if (showTx && txPts.length) {
+    const pts = txPts.map(([x, y]) => `${toX(x).toFixed(1)},${toY_tx(y).toFixed(1)}`).join(' ');
+    txLine = `<polyline points="${pts}" fill="none" stroke="var(--green)" stroke-width="1.8" stroke-linejoin="round"/>`;
+  }
+  let feeLine = '';
+  if (showFee && feePts.length) {
+    const pts = feePts.map(([x, y]) => `${toX(x).toFixed(1)},${toY_fee(y).toFixed(1)}`).join(' ');
+    feeLine = `<polyline points="${pts}" fill="none" stroke="var(--accent2)" stroke-width="1.8" stroke-linejoin="round"/>`;
+  }
+
+  // Inline legend (both mode only)
+  let legendSvg = '';
+  if (showTx && showFee) {
+    const lx = pad.left + 8, ly = pad.top + 4;
+    legendSvg = `<rect x="${lx - 2}" y="${ly - 2}" width="180" height="18" rx="2" fill="var(--surface)" fill-opacity="0.8"/>` +
+      `<line x1="${lx}" y1="${ly + 7}" x2="${lx + 14}" y2="${ly + 7}" stroke="var(--green)" stroke-width="2"/>` +
+      `<text x="${lx + 18}" y="${ly + 11}" font-size="9" fill="var(--green)">Transactions</text>` +
+      `<line x1="${lx + 92}" y1="${ly + 7}" x2="${lx + 106}" y2="${ly + 7}" stroke="var(--accent2)" stroke-width="2"/>` +
+      `<text x="${lx + 110}" y="${ly + 11}" font-size="9" fill="var(--accent2)">Fees (${COIN})</text>`;
+  }
+
+  return `<svg viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
+    ${gridAndLeftAxis}
+    ${rightAxisSvg}
+    ${xAxisSvg}
+    ${txLine}
+    ${feeLine}
+    ${legendSvg}
+  </svg>`;
+}
+
+function renderActivity(rows) {
+  const W      = 700;
+  const txPts  = rows.map(r => [r.timestamp, r.tx_count || 0]);
+  const feePts = rows.map(r => [r.timestamp, (r.fee_total || 0) / 1e9]);
+  const el     = document.getElementById('chart-activity');
+  if (el) el.innerHTML = makeActivitySVG(txPts, feePts, _activityMetric, W, 170);
+}
+
+function wireActivityMetricToggle() {
+  const wrap = document.getElementById('activity-metric-toggle');
+  if (!wrap) return;
+  wrap.addEventListener('click', e => {
+    const btn = e.target.closest('.gs-chart-day-btn');
+    if (!btn) return;
+    wrap.querySelectorAll('.gs-chart-day-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    _activityMetric = btn.dataset.metric;
+    if (_cachedRows) renderActivity(_cachedRows);
+  });
+}
+
 async function renderHistoryCharts(days) {
-  const ids = ['chart-hashrate-history', 'chart-difficulty-history', 'chart-tx-history', 'chart-fee-history'];
+  const ids = ['chart-hashrate-history', 'chart-difficulty-history', 'chart-activity'];
   _chartLoading(ids);
   try {
     const r = await fetch('/api/history?days=' + days);
@@ -181,17 +290,19 @@ async function renderHistoryCharts(days) {
         const el = document.getElementById(id);
         if (el) el.innerHTML = '<p style="color:var(--muted);font-size:12px;padding:16px;text-align:center;">No data in this range</p>';
       });
+      _cachedRows = null;
       return;
     }
 
+    _cachedRows = rows;
     const xMin = rows[0].timestamp;
     const xMax = rows[rows.length - 1].timestamp;
     const W = 700;
 
     // Hashrate
-    const hrPts  = rows.map(r => [r.timestamp, r.hashrate_gps]);
-    const hrMax  = Math.max(...hrPts.map(p => p[1])) * 1.15 || 1;
-    const hrEl   = document.getElementById('chart-hashrate-history');
+    const hrPts = rows.map(r => [r.timestamp, r.hashrate_gps]);
+    const hrMax = Math.max(...hrPts.map(p => p[1])) * 1.15 || 1;
+    const hrEl  = document.getElementById('chart-hashrate-history');
     if (hrEl) hrEl.innerHTML = makeSVG(hrPts, W, 160, {
       xMin, xMax, yMin: 0, yMax: hrMax, color: 'var(--accent)',
       xFmt: fmtTsLabel,
@@ -208,26 +319,8 @@ async function renderHistoryCharts(days) {
       yFmt: v => { if (v >= 1e9) return (v/1e9).toFixed(1)+'B'; if (v >= 1e6) return (v/1e6).toFixed(1)+'M'; if (v >= 1e3) return (v/1e3).toFixed(0)+'k'; return v.toFixed(0); },
     });
 
-    // Transactions per block
-    const txPts = rows.map(r => [r.timestamp, r.tx_count || 0]);
-    const txMax = Math.max(...txPts.map(p => p[1]), 1) * 1.2;
-    const txEl  = document.getElementById('chart-tx-history');
-    if (txEl) txEl.innerHTML = makeSVG(txPts, W, 130, {
-      xMin, xMax, yMin: 0, yMax: txMax, color: 'var(--green)',
-      xFmt: fmtTsLabel,
-      yFmt: v => v.toFixed(0),
-    });
-
-    // Fees per block (nanogrin → GRIN)
-    const COIN    = window.GRINSCAN_NETWORK === 'testnet' ? 'tGRIN' : 'GRIN';
-    const feePts  = rows.map(r => [r.timestamp, (r.fee_total || 0) / 1e9]);
-    const feeMax  = Math.max(...feePts.map(p => p[1]), 0.001) * 1.2;
-    const feeEl   = document.getElementById('chart-fee-history');
-    if (feeEl) feeEl.innerHTML = makeSVG(feePts, W, 120, {
-      xMin, xMax, yMin: 0, yMax: feeMax, color: 'var(--accent2)',
-      xFmt: fmtTsLabel,
-      yFmt: v => v < 0.001 ? '0' : v.toFixed(3),
-    });
+    // Block Activity (combined tx + fee)
+    renderActivity(rows);
 
   } catch (e) {
     console.error('renderHistoryCharts:', e);
@@ -447,5 +540,6 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
   wireHistoryRange();
+  wireActivityMetricToggle();
   switchTab('about');
 });

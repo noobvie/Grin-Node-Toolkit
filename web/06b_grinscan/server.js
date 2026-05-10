@@ -107,7 +107,7 @@ const stmtHistory = db.prepare(`
   LIMIT 1
 `);
 const stmtTopTwoDiff = db.prepare(
-  'SELECT height, timestamp, difficulty FROM blocks ORDER BY height DESC LIMIT 2'
+  'SELECT height, timestamp, difficulty FROM blocks ORDER BY height DESC LIMIT 11'
 );
 const stmtInsertPrice = db.prepare(
   'INSERT OR REPLACE INTO prices (timestamp, price_btc, price_usd, source) VALUES (?, ?, ?, ?)'
@@ -330,15 +330,20 @@ async function pollBlocks() {
     //   GPS = diff_delta × 42 / block_time_seconds / 16384
     //   42    = Cuckatoo32 cycle length
     //   16384 = C32 solution rate (32 × 2^9)
-    const topTwo = stmtTopTwoDiff.all();
+    const topBlocks = stmtTopTwoDiff.all();
     let perBlockDiff = 0;
     let hashrateGps  = 0;
-    if (topTwo.length >= 2) {
-      perBlockDiff = Math.max(0, topTwo[0].difficulty - topTwo[1].difficulty);
-      const dt = topTwo[0].timestamp - topTwo[1].timestamp; // actual block time (seconds)
-      if (dt > 0 && perBlockDiff > 0) hashrateGps = perBlockDiff * 42 / dt / 16384;
-    } else if (topTwo.length === 1) {
-      perBlockDiff = topTwo[0].difficulty;
+    if (topBlocks.length >= 2) {
+      // per-block diff for difficulty display = last two blocks delta
+      perBlockDiff = Math.max(0, topBlocks[0].difficulty - topBlocks[1].difficulty);
+      // hashrate averaged over the full window (up to 10 blocks) to reduce per-block noise
+      const newest = topBlocks[0];
+      const oldest = topBlocks[topBlocks.length - 1];
+      const windowDelta = Math.max(0, newest.difficulty - oldest.difficulty);
+      const windowDt    = newest.timestamp - oldest.timestamp;
+      if (windowDt > 0 && windowDelta > 0) hashrateGps = windowDelta * 42 / windowDt / 16384;
+    } else if (topBlocks.length === 1) {
+      perBlockDiff = topBlocks[0].difficulty;
     }
 
     tipState.height       = tipHeight;

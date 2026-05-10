@@ -50,7 +50,7 @@ function makeSVG(points, width, height, opts) {
   const { xMin, xMax, yMin, yMax, color, dotX, dotY, yFmt } = opts;
   const xRange = xMax - xMin || 1;
   const yRange = yMax - yMin || 1;
-  const pad = { top: 20, right: 10, bottom: 30, left: 45 };
+  const pad = { top: 20, right: 10, bottom: 34, left: 52 };
   const cw = width  - pad.left - pad.right;
   const ch = height - pad.top  - pad.bottom;
 
@@ -61,13 +61,13 @@ function makeSVG(points, width, height, opts) {
 
   const yTicks = Array.from({ length: 5 }, (_, i) => yMin + (yRange * i) / 4);
   const _defaultYFmt = v => {
-    if (v >= 1e6) return (v / 1e6).toFixed(0) + 'M';
-    if (v >= 1e3) return (v / 1e3).toFixed(0) + 'K';
-    return v.toFixed(1);
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+    return v.toFixed(0);
   };
   const yAxisSvg = yTicks.map(v => {
     const label = (yFmt || _defaultYFmt)(v);
-    return `<text x="${pad.left - 6}" y="${toY(v).toFixed(1)}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="var(--muted)">${label}</text>
+    return `<text x="${pad.left - 6}" y="${toY(v).toFixed(1)}" text-anchor="end" dominant-baseline="middle" font-size="11" fill="var(--muted)">${label}</text>
             <line x1="${pad.left}" y1="${toY(v).toFixed(1)}" x2="${pad.left + cw}" y2="${toY(v).toFixed(1)}" stroke="var(--border)" stroke-width="0.5"/>`;
   }).join('');
 
@@ -75,7 +75,7 @@ function makeSVG(points, width, height, opts) {
   const xAxisSvg = [0, 1, 2, 3, 4].map(i => {
     const xv = xMin + xStep * i;
     const label = opts.xFmt ? opts.xFmt(xv) : xv.toFixed(0);
-    return `<text x="${toX(xv).toFixed(1)}" y="${height - 8}" text-anchor="middle" font-size="9" fill="var(--muted)">${label}</text>`;
+    return `<text x="${toX(xv).toFixed(1)}" y="${height - 8}" text-anchor="middle" font-size="11" fill="var(--muted)">${label}</text>`;
   }).join('');
 
   let dotSvg = '';
@@ -119,9 +119,9 @@ function makeSVG(points, width, height, opts) {
       }
       dotSvg += `
     <path d="${pathD}" fill="var(--surface)" stroke="var(--accent)" stroke-width="1" stroke-linejoin="round"/>
-    <text font-family="monospace" font-size="9" font-weight="700" fill="var(--accent)"
+    <text font-family="monospace" font-size="10" font-weight="700" fill="var(--accent)"
           x="${(bx+8).toFixed(1)}" y="${(by+14).toFixed(1)}">Hey Grinner! I'm here</text>
-    <text font-family="monospace" font-size="9" fill="var(--text)"
+    <text font-family="monospace" font-size="10" fill="var(--text)"
           x="${(bx+8).toFixed(1)}" y="${(by+27).toFixed(1)}">${opts.dotLabel}</text>`;
     }
   }
@@ -302,7 +302,7 @@ function _drawHistory(rows, days) {
   if (hrEl) hrEl.innerHTML = makeSVG(hrPts, W, 160, {
     xMin, xMax, yMin: 0, yMax: hrMax, color: 'var(--accent)',
     xFmt,
-    yFmt: v => { if (v >= 1e6) return (v/1e6).toFixed(1)+'M'; if (v >= 1e3) return (v/1e3).toFixed(0)+'k'; return v.toFixed(0); },
+    yFmt: v => hrMax >= 1e6 ? (v/1e6).toFixed(2)+'M' : hrMax >= 1e3 ? (v/1e3).toFixed(2)+'k' : v.toFixed(1),
   });
 
   const diffPts = rows.map(r => [r.timestamp, r.difficulty]);
@@ -311,7 +311,7 @@ function _drawHistory(rows, days) {
   if (diffEl) diffEl.innerHTML = makeSVG(diffPts, W, 140, {
     xMin, xMax, yMin: 0, yMax: diffMax, color: 'var(--accent2)',
     xFmt,
-    yFmt: v => { if (v >= 1e9) return (v/1e9).toFixed(1)+'B'; if (v >= 1e6) return (v/1e6).toFixed(1)+'M'; if (v >= 1e3) return (v/1e3).toFixed(0)+'k'; return v.toFixed(0); },
+    yFmt: v => diffMax >= 1e9 ? (v/1e9).toFixed(2)+'B' : diffMax >= 1e6 ? (v/1e6).toFixed(2)+'M' : diffMax >= 1e3 ? (v/1e3).toFixed(2)+'k' : v.toFixed(0),
   });
 
   renderActivity(rows);

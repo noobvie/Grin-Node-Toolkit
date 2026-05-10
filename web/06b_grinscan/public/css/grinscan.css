@@ -25,7 +25,7 @@
 
 /* ── Reset ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { font-size: 15px; }
+html { font-size: 16px; }
 body {
   font-family: var(--font-sans);
   background: var(--bg);
@@ -54,7 +54,7 @@ a:hover { text-decoration: underline; }
 
 .gs-logo {
   font-family: var(--font-mono);
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--accent);
   white-space: nowrap;
@@ -87,7 +87,7 @@ a:hover { text-decoration: underline; }
 .nav-link {
   padding: 4px 12px;
   border-radius: var(--radius);
-  font-size: 13px;
+  font-size: 14px;
   font-family: var(--font-mono);
   color: var(--muted);
   transition: color var(--transition);
@@ -100,7 +100,7 @@ a:hover { text-decoration: underline; }
 /* ── Network badge ── */
 .gs-network-badge {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   padding: 3px 8px;
   border-radius: 12px;
@@ -120,7 +120,7 @@ a:hover { text-decoration: underline; }
 }
 .gs-net-pill {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   padding: 3px 9px;
   letter-spacing: 0.05em;
@@ -144,7 +144,7 @@ a:hover { text-decoration: underline; }
   color: var(--text);
   border-radius: var(--radius);
   padding: 5px 10px;
-  font-size: 12px;
+  font-size: 13px;
   font-family: var(--font-mono);
   cursor: pointer;
   white-space: nowrap;
@@ -167,7 +167,7 @@ a:hover { text-decoration: underline; }
   display: block;
   width: 100%;
   padding: 7px 12px;
-  font-size: 12px;
+  font-size: 13px;
   font-family: var(--font-mono);
   color: var(--muted);
   background: transparent;
@@ -186,7 +186,7 @@ a:hover { text-decoration: underline; }
   border-bottom: 1px solid var(--accent2);
   color: var(--accent2);
   padding: 8px 16px;
-  font-size: 12px;
+  font-size: 13px;
   font-family: var(--font-mono);
   text-align: center;
   position: sticky;
@@ -213,7 +213,7 @@ a:hover { text-decoration: underline; }
   flex: 1;
   padding: 8px 12px;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -229,7 +229,7 @@ a:hover { text-decoration: underline; }
   border: none;
   border-radius: var(--radius);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   cursor: pointer;
   transition: opacity var(--transition);
@@ -249,7 +249,7 @@ a:hover { text-decoration: underline; }
   min-width: 0;
   padding: 5px 10px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   background: var(--surface2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -269,7 +269,7 @@ a:hover { text-decoration: underline; }
   border: none;
   border-radius: var(--radius);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   cursor: pointer;
   transition: opacity var(--transition);
@@ -293,7 +293,7 @@ a:hover { text-decoration: underline; }
 }
 .gs-stat-label {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--muted);
@@ -332,7 +332,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 7px 10px;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
   color: var(--text);
   width: 210px;
@@ -350,7 +350,7 @@ a:hover { text-decoration: underline; }
 .gs-info:focus         { outline: 1px solid var(--accent); outline-offset: 2px; }
 .gs-stat-value {
   font-family: var(--font-mono);
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--text);
   white-space: nowrap;
@@ -359,7 +359,7 @@ a:hover { text-decoration: underline; }
 }
 .gs-stat-sub {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   margin-top: 4px;
 }
@@ -396,7 +396,7 @@ a:hover { text-decoration: underline; }
 }
 .gs-block-title {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--muted);
   text-transform: uppercase;
@@ -404,7 +404,7 @@ a:hover { text-decoration: underline; }
 }
 .gs-live-indicator {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--green);
   display: flex;
   align-items: center;
@@ -430,12 +430,12 @@ a:hover { text-decoration: underline; }
   width: 100%;
   border-collapse: collapse;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
 }
 .gs-table th {
   padding: 10px 14px;
   text-align: left;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -456,7 +456,7 @@ a:hover { text-decoration: underline; }
   transition: background var(--transition);
 }
 .gs-table tbody tr:hover { background: var(--surface2); }
-.gs-table .col-hash { color: var(--muted); font-size: 12px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.gs-table .col-hash { color: var(--muted); font-size: 13px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .gs-table .col-height strong { color: var(--accent); }
 .gs-table .col-age { color: var(--green); }
 .gs-table .col-age.age-warn { color: #f0ad4e; }
@@ -474,7 +474,7 @@ a:hover { text-decoration: underline; }
 }
 .gs-page-btn {
   padding: 5px 14px;
-  font-size: 12px;
+  font-size: 13px;
   font-family: var(--font-mono);
   background: transparent;
   border: 1px solid var(--border);
@@ -487,7 +487,7 @@ a:hover { text-decoration: underline; }
 .gs-page-btn:disabled { opacity: 0.35; cursor: default; }
 .gs-page-info {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   min-width: 110px;
   text-align: center;
@@ -520,7 +520,7 @@ a:hover { text-decoration: underline; }
 .gs-detail-row:last-child { border-bottom: none; }
 .gs-detail-label {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -529,7 +529,7 @@ a:hover { text-decoration: underline; }
 }
 .gs-detail-value {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text);
   word-break: break-all;
   display: flex;
@@ -545,7 +545,7 @@ a:hover { text-decoration: underline; }
   color: var(--muted);
   cursor: pointer;
   padding: 2px 7px;
-  font-size: 11px;
+  font-size: 12px;
   font-family: var(--font-mono);
   transition: all var(--transition);
   white-space: nowrap;
@@ -564,7 +564,7 @@ a:hover { text-decoration: underline; }
 }
 .gs-kernels h3 {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -578,7 +578,7 @@ a:hover { text-decoration: underline; }
   padding: 8px 0;
   border-bottom: 1px solid var(--border);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
 }
 .gs-kernel-row:last-child { border-bottom: none; }
 .gs-kernel-excess {
@@ -590,7 +590,7 @@ a:hover { text-decoration: underline; }
   white-space: nowrap;
 }
 .gs-spent-tag {
-  font-size: 11px;
+  font-size: 12px;
   font-family: var(--font-mono);
   flex-shrink: 0;
 }
@@ -602,7 +602,7 @@ a:hover { text-decoration: underline; }
   display: inline-block;
   padding: 2px 8px;
   border-radius: 4px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   font-family: var(--font-mono);
   letter-spacing: 0.04em;
@@ -622,7 +622,7 @@ a:hover { text-decoration: underline; }
   padding: 0;
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -636,7 +636,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
   overflow: auto;
   max-height: 500px;
@@ -658,7 +658,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text);
   text-align: center;
   transition: border-color var(--transition), color var(--transition);
@@ -692,7 +692,7 @@ a:hover { text-decoration: underline; }
   border-radius: var(--radius);
   padding: 12px 20px;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--green);
   box-shadow: var(--shadow);
   z-index: 500;
@@ -715,7 +715,7 @@ a:hover { text-decoration: underline; }
 .gs-tab-btn {
   padding: 10px 18px;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
   background: transparent;
   border: none;
@@ -736,7 +736,7 @@ a:hover { text-decoration: underline; }
 }
 .gs-info-section h3 {
   font-family: var(--font-mono);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -747,7 +747,7 @@ a:hover { text-decoration: underline; }
   margin-bottom: 16px;
 }
 .gs-info-section p {
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.6;
   color: var(--text);
   margin-bottom: 10px;
@@ -757,7 +757,7 @@ a:hover { text-decoration: underline; }
 .gs-kv-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 14px;
 }
 .gs-kv-table td {
   padding: 8px 12px;
@@ -781,7 +781,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   transition: border-color var(--transition), color var(--transition);
 }
@@ -823,17 +823,17 @@ a:hover { text-decoration: underline; }
 }
 .gs-why-title {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 .gs-why-card--featured .gs-why-title {
-  font-size: 13px;
+  font-size: 14px;
 }
 .gs-why-desc {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.65;
   color: var(--muted);
 }
@@ -861,7 +861,7 @@ a:hover { text-decoration: underline; }
 }
 .gs-info-stat-label {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.07em;
   color: var(--muted);
@@ -870,13 +870,13 @@ a:hover { text-decoration: underline; }
 }
 .gs-info-stat-value {
   font-family: var(--font-mono);
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--text);
 }
 .gs-info-stat-sub {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   margin-top: 3px;
 }
@@ -893,7 +893,7 @@ a:hover { text-decoration: underline; }
 }
 .gs-chart-title {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -911,12 +911,12 @@ a:hover { text-decoration: underline; }
   width: 100%;
   border-collapse: collapse;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
 }
 .gs-peer-table th {
   padding: 8px 12px;
   text-align: left;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -937,7 +937,7 @@ a:hover { text-decoration: underline; }
   display: flex;
   justify-content: space-between;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   margin-bottom: 3px;
 }
@@ -972,14 +972,14 @@ a:hover { text-decoration: underline; }
 }
 .gs-api-method {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--green);
   flex-shrink: 0;
 }
 .gs-api-path {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--accent);
   flex: 1;
   white-space: nowrap;
@@ -987,7 +987,7 @@ a:hover { text-decoration: underline; }
   text-overflow: ellipsis;
 }
 .gs-api-desc {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   padding: 0 16px 10px;
 }
@@ -999,7 +999,7 @@ a:hover { text-decoration: underline; }
 .gs-api-btn {
   padding: 4px 10px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--surface2);
@@ -1017,7 +1017,7 @@ a:hover { text-decoration: underline; }
 }
 .gs-api-response pre {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text);
   white-space: pre-wrap;
   word-break: break-all;
@@ -1050,7 +1050,7 @@ a:hover { text-decoration: underline; }
   border-top: 1px solid var(--border);
   padding: 20px 16px;
   text-align: center;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   font-family: var(--font-mono);
   margin-top: 40px;
@@ -1084,10 +1084,10 @@ a:hover { text-decoration: underline; }
   .gs-table .col-hash { display: none; }
   .gs-block-detail { padding: 14px; }
   .gs-detail-row { grid-template-columns: 100px 1fr; }
-  .gs-logo { font-size: 14px; }
-  #theme-toggle-btn { font-size: 11px; padding: 4px 7px; }
+  .gs-logo { font-size: 15px; }
+  #theme-toggle-btn { font-size: 12px; padding: 4px 7px; }
   /* Increase nav touch targets */
-  .nav-link { padding: 10px 8px; font-size: 12px; min-height: 44px; display: inline-flex; align-items: center; }
+  .nav-link { padding: 10px 8px; font-size: 13px; min-height: 44px; display: inline-flex; align-items: center; }
   .gs-header { flex-wrap: wrap; height: auto; padding: 8px 12px; gap: 6px; }
   .gs-header-search { order: 10; flex-basis: 100%; margin: 0; }
   .gs-header-search button { display: none; }
@@ -1136,7 +1136,7 @@ a:hover { text-decoration: underline; }
   justify-content: space-between;
   padding: 6px 0;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: 14px;
   font-family: var(--font-mono);
 }
 .node-info-card .stat-row:last-child { border-bottom: none; }
@@ -1153,14 +1153,14 @@ a:hover { text-decoration: underline; }
 }
 .gs-chart-header-title {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
 .gs-chart-header-sub {
   font-weight: 400;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   text-transform: none;
   letter-spacing: 0;
@@ -1169,7 +1169,7 @@ a:hover { text-decoration: underline; }
 .gs-chart-day-selector { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .gs-chart-day-btn {
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: 13px;
   font-family: var(--font-mono);
   background: var(--surface2);
   border: 1px solid var(--border);

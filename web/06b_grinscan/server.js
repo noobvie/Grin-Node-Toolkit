@@ -682,23 +682,6 @@ app.get('/api/block/:ref', async (req, res) => {
   res.status(404).json({ error: 'Block not found', hint: 'cache_miss' });
 });
 
-app.get('/api/search', async (req, res) => {
-  const q = (req.query.q || '').trim();
-  if (!q) return res.status(400).json({ error: 'Missing query parameter q' });
-  if (!/^\d+$/.test(q) && !/^[0-9a-fA-F]{8,}$/.test(q)) {
-    return res.status(400).json({ error: 'Invalid search query' });
-  }
-  const row = findBlock(q);
-  if (row?.raw_json) {
-    try { return res.json(JSON.parse(row.raw_json)); }
-    catch { return res.status(500).json({ error: 'Corrupt block data' }); }
-  }
-  if (tipState.node_mode === 'archive') {
-    const block = await fetchBlockLive(q);
-    if (block) return res.json(block);
-  }
-  res.status(404).json({ error: 'Block not found', hint: 'cache_miss' });
-});
 
 app.get('/api/history', (req, res) => {
   const GENESIS_TS = 1547520000; // 2019-01-15 UTC

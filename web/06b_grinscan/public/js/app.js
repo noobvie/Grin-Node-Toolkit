@@ -556,7 +556,6 @@ function initApiPage() {
     { path: '/api/price',     desc: 'GRIN price (USD + BTC), 24h change, price history',                             cache: '2 min',     link: true  },
     { path: '/api/tip',       desc: 'Current tip height + hash',                                                     cache: 'live',      link: true  },
     { path: '/api/network',   desc: 'Returns the network this instance serves — <code>mainnet</code> or <code>testnet</code>', cache: 'live', link: true },
-    { path: '/api/search',    desc: 'Query-param alternative to <code>/api/block/:id</code> — use when you cannot put the ref in the path. Note: does not include <code>_prev_timestamp</code>.', cache: 'live', link: false },
     { path: '/events',        desc: 'Server-Sent Events stream — subscribe to get instant block notifications without polling. Fires <code>{ type:"block", height }</code> on each new block. Use <code>new EventSource(\'/events\')</code> in browser or any SSE client.', cache: 'streaming', link: false },
     // ── Public REST (CORS-enabled) ──
     { path: '/rest/stats.json',      desc: 'Core chain stats (CORS-enabled public snapshot)',                           cache: '30s',   link: true, cors: true },

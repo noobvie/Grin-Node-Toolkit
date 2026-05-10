@@ -530,10 +530,13 @@ function showCacheMiss() {
   if (detailBox) detailBox.style.display = 'none';
   if (errBox) {
     errBox.style.display = '';
+    const isMain = window.GRINSCAN_NETWORK === 'mainnet';
+    const archiveUrl   = isMain ? 'https://grincoin.org'         : 'https://testnet.grincoin.org/';
+    const archiveLabel = isMain ? 'grincoin.org'                 : 'testnet.grincoin.org';
     errBox.innerHTML = `
       <h3>Block not found</h3>
       <p>This block is outside the local cache window.</p>
-      <p>Try an archive explorer: <a href="https://grincoin.org" target="_blank" rel="noopener">grincoin.org</a></p>`;
+      <p>Try an archive explorer: <a href="${archiveUrl}" target="_blank" rel="noopener">${archiveLabel}</a></p>`;
   }
 }
 

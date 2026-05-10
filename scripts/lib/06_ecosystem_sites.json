@@ -1,6 +1,9 @@
 [
   {"category": "Explorer",    "name": "Grin Explorer",              "url": "https://grinexplorer.net",                             "since": "Jan 2019"},
-  {"category": "Explorer",    "name": "GrinCoin.org",               "url": "https://grincoin.org/",                                "since": null},
+  {"category": "Explorer",    "name": "GrinCoin.org mainnet",       "url": "https://grincoin.org/",                                "since": null},
+  {"category": "Explorer",    "name": "GrinCoin.org testnet",       "url": "https://testnet.grincoin.org/",                                "since": null},
+  {"category": "Explorer",    "name": "GrinScan.org mainnet",       "url": "https://grinscan.org/",                                "since": null},
+  {"category": "Explorer",    "name": "GrinScan.org testnet",       "url": "https://test.grinscan.org/",                                "since": null},
 
   {"category": "Exchange",    "name": "Gate.io",                    "url": "https://www.gate.com/trade/GRIN_USDT",                 "since": "Feb 2019"},
   {"category": "Exchange",    "name": "NoirTrade",                  "url": "https://noirtrade.com/trade?pair=GRIN_BTC",            "since": null},
@@ -32,11 +35,11 @@
   {"category": "Mining Pool", "name": "Gaea Pool",                  "url": "https://gaeapool.com/",                              "since": null},
   {"category": "Mining Pool", "name": "Pool Stats",                 "url": "https://miningpoolstats.stream/grin",                "since": null},
 
-  {"category": "Grin API — Mainnet", "name": "api.grin.money",        "url": "https://api.grin.money",        "since": null},
-  {"category": "Grin API — Mainnet", "name": "api.grinily.com",       "url": "https://api.grinily.com",       "since": null},
-  {"category": "Grin API — Mainnet", "name": "api.onlygrins.com",     "url": "https://api.onlygrins.com",     "since": null},
+  {"category": "Grin API — Mainnet", "name": "api.grin.money",        "url": "https://api.grin.money",        "since": 2026},
+  {"category": "Grin API — Mainnet", "name": "api.grinily.com",       "url": "https://api.grinily.com",       "since": 2026},
+  {"category": "Grin API — Mainnet", "name": "api.onlygrins.com",     "url": "https://api.onlygrins.com",     "since": 2026},
 
-  {"category": "Grin API — Testnet", "name": "testapi.grin.money",    "url": "https://testapi.grin.money",    "since": null},
-  {"category": "Grin API — Testnet", "name": "testapi.grinily.com",   "url": "https://testapi.grinily.com",   "since": null},
-  {"category": "Grin API — Testnet", "name": "testapi.onlygrins.com", "url": "https://testapi.onlygrins.com", "since": null}
+  {"category": "Grin API — Testnet", "name": "testapi.grin.money",    "url": "https://testapi.grin.money",    "since": 2026},
+  {"category": "Grin API — Testnet", "name": "testapi.grinily.com",   "url": "https://testapi.grinily.com",   "since": 2026},
+  {"category": "Grin API — Testnet", "name": "testapi.onlygrins.com", "url": "https://testapi.onlygrins.com", "since": 2026}
 ]

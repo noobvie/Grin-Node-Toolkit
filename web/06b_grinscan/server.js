@@ -127,7 +127,19 @@ const tipState = {
   height: 0, hash: '', difficulty: 0, hashrate_gps: 0,
   peer_count: 0, stalled: false, syncing: false, node_version: 'unknown',
   pool_size: 0, stem_pool_size: 0,
+  node_mode: null, // 'archive' | 'pruned' | null (undetermined)
 };
+
+async function detectNodeMode() {
+  try {
+    await foreignApi('get_block', [1, null, null]);
+    tipState.node_mode = 'archive';
+    log('Node mode: archive (block #1 reachable via Foreign API)');
+  } catch {
+    tipState.node_mode = 'pruned';
+    log('Node mode: pruned (block #1 not reachable via Foreign API)');
+  }
+}
 let peerVersionMap = {};
 let latestPrice    = null; // { price_btc, price_usd, change_24h_pct, fetched_at, sources, stale }
 
@@ -589,7 +601,6 @@ app.get('/api/tip', (_req, res) => {
 app.get('/api/stats', (_req, res) => {
   const cachedCount = stmtCountBlocks.get().c;
   const minCachedH  = cachedCount > 0 ? (stmtMinHeight.get().m ?? null) : null;
-  const nodeMode    = minCachedH != null ? (minCachedH <= 10 ? 'archive' : 'pruned') : null;
   res.json({
     tip_height:        tipState.height,
     hashrate_gps:      tipState.hashrate_gps,
@@ -599,7 +610,7 @@ app.get('/api/stats', (_req, res) => {
     stalled:           tipState.stalled,
     cached_blocks:     cachedCount,
     min_cached_height: minCachedH,
-    node_mode:         nodeMode,
+    node_mode:         tipState.node_mode,
     pool_size:         tipState.pool_size,
     stem_pool_size:    tipState.stem_pool_size,
     price_usd:         latestPrice?.price_usd      ?? null,
@@ -630,12 +641,34 @@ function findBlock(ref) {
   return null;
 }
 
-app.get('/api/block/:ref', (req, res) => {
+async function fetchBlockLive(ref) {
+  if (!ref) return null;
+  try {
+    if (/^\d+$/.test(ref)) {
+      return await foreignApi('get_block', [parseInt(ref, 10), null, null]);
+    }
+    return await foreignApi('get_block', [null, ref, null]);
+  } catch {
+    return null;
+  }
+}
+
+app.get('/api/block/:ref', async (req, res) => {
   const ref = req.params.ref;
   if (!/^\d+$/.test(ref) && !/^[0-9a-fA-F]{8,}$/.test(ref)) {
     return res.status(400).json({ error: 'Invalid search query' });
   }
-  const row = findBlock(ref);
+  let row = findBlock(ref);
+
+  // Archive node: fetch live from node if not cached, then persist
+  if (!row && tipState.node_mode === 'archive') {
+    const block = await fetchBlockLive(ref);
+    if (block) {
+      try { insertBlock(block); } catch {}
+      row = findBlock(ref);
+    }
+  }
+
   if (!row || !row.raw_json) {
     return res.status(404).json({ error: 'Block not found', hint: 'cache_miss' });
   }
@@ -650,13 +683,20 @@ app.get('/api/block/:ref', (req, res) => {
   } catch { res.status(500).json({ error: 'Corrupt block data' }); }
 });
 
-app.get('/api/search', (req, res) => {
+app.get('/api/search', async (req, res) => {
   const q = (req.query.q || '').trim();
   if (!q) return res.status(400).json({ error: 'Missing query parameter q' });
   if (!/^\d+$/.test(q) && !/^[0-9a-fA-F]{8,}$/.test(q)) {
     return res.status(400).json({ error: 'Invalid search query' });
   }
-  const row = findBlock(q);
+  let row = findBlock(q);
+  if (!row && tipState.node_mode === 'archive') {
+    const block = await fetchBlockLive(q);
+    if (block) {
+      try { insertBlock(block); } catch {}
+      row = findBlock(q);
+    }
+  }
   if (!row || !row.raw_json) {
     return res.status(404).json({ error: 'Block not found', hint: 'cache_miss' });
   }
@@ -864,6 +904,9 @@ app.listen(config.port, '127.0.0.1', async () => {
   } catch (e) {
     log(`[WARN] Initial tip fetch failed: ${e.message}`);
   }
+
+  // Detect archive vs pruned by probing block #1 on the Foreign API
+  detectNodeMode().catch(() => {});
 
   // First price collection (no wait)
   pollPrice().catch(e => log(`[WARN] Initial price fetch: ${e.message}`));

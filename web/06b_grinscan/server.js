@@ -98,7 +98,8 @@ const stmtCountBlocks = db.prepare('SELECT COUNT(*) AS c FROM blocks');
 // Per-block difficulty = total_difficulty[n] - total_difficulty[n-1] via self-join
 const stmtHistory = db.prepare(`
   SELECT b1.height, b1.timestamp,
-         MAX(0, b1.difficulty - COALESCE(b2.difficulty, 0)) AS difficulty
+         MAX(0, b1.difficulty - COALESCE(b2.difficulty, 0)) AS difficulty,
+         b1.tx_count, b1.fee_total
   FROM   blocks b1
   LEFT JOIN blocks b2 ON b2.height = b1.height - 1
   WHERE  b1.timestamp BETWEEN ? AND ?
@@ -106,7 +107,7 @@ const stmtHistory = db.prepare(`
   LIMIT 1
 `);
 const stmtTopTwoDiff = db.prepare(
-  'SELECT height, difficulty FROM blocks ORDER BY height DESC LIMIT 2'
+  'SELECT height, timestamp, difficulty FROM blocks ORDER BY height DESC LIMIT 2'
 );
 const stmtInsertPrice = db.prepare(
   'INSERT OR REPLACE INTO prices (timestamp, price_btc, price_usd, source) VALUES (?, ?, ?, ?)'
@@ -260,7 +261,7 @@ async function startupBackfill(tipHeight) {
   let backfillFrom;
 
   if (maxCached == null) {
-    backfillFrom = Math.max(1, tipHeight - config.blocks_cache);
+    backfillFrom = Math.max(0, tipHeight - config.blocks_cache);
   } else if (tipHeight > maxCached + 1) {
     backfillFrom = maxCached + 1;
   } else {
@@ -309,7 +310,7 @@ async function pollBlocks() {
 
     // ── Foreign API: fetch any new blocks ────────────────────────────────────
     const row       = stmtMaxHeight.get();
-    const maxCached = row.m ?? 0;
+    const maxCached = row.m ?? -1;
 
     if (tipHeight > maxCached) {
       for (let h = maxCached + 1; h <= tipHeight; h++) {
@@ -325,10 +326,17 @@ async function pollBlocks() {
 
     // Per-block difficulty = total_difficulty[tip] - total_difficulty[tip-1]
     // (DB stores cumulative total_difficulty; the delta gives the actual block target)
+    // Hashrate formula (matches 06_collector.py / aglkm/grin-explorer):
+    //   GPS = diff_delta × 42 / block_time_seconds / 16384
+    //   42    = Cuckatoo32 cycle length
+    //   16384 = C32 solution rate (32 × 2^9)
     const topTwo = stmtTopTwoDiff.all();
     let perBlockDiff = 0;
+    let hashrateGps  = 0;
     if (topTwo.length >= 2) {
       perBlockDiff = Math.max(0, topTwo[0].difficulty - topTwo[1].difficulty);
+      const dt = topTwo[0].timestamp - topTwo[1].timestamp; // actual block time (seconds)
+      if (dt > 0 && perBlockDiff > 0) hashrateGps = perBlockDiff * 42 / dt / 16384;
     } else if (topTwo.length === 1) {
       perBlockDiff = topTwo[0].difficulty;
     }
@@ -336,7 +344,7 @@ async function pollBlocks() {
     tipState.height       = tipHeight;
     tipState.hash         = tip.last_block_h;
     tipState.difficulty   = perBlockDiff;
-    tipState.hashrate_gps = Math.round((perBlockDiff / 60) * 100) / 100;
+    tipState.hashrate_gps = Math.round(hashrateGps * 100) / 100;
 
     // ── Owner API: peer count (quick from status) + version map (full list) ──
     tipState.peer_count = status.connections || 0;
@@ -675,7 +683,9 @@ app.get('/api/history', (req, res) => {
         height:       row.height,
         timestamp:    row.timestamp,
         difficulty:   row.difficulty,
-        hashrate_gps: Math.round((row.difficulty / 60) * 100) / 100,
+        hashrate_gps: Math.round(row.difficulty * 42 / 60 / 16384 * 100) / 100,
+        tx_count:     row.tx_count  || 0,
+        fee_total:    row.fee_total || 0,
       });
     }
   }

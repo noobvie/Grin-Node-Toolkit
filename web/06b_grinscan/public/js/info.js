@@ -20,6 +20,10 @@ function setText(id, val) {
   if (el) el.textContent = val;
 }
 
+function esc(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 // ── Tab system ───────────────────────────────────────────────────────────────
 
 const _tabLoaded = {};
@@ -130,6 +134,106 @@ function makeSVG(points, width, height, opts) {
   </svg>`;
 }
 
+// ── Formatters used by history charts ────────────────────────────────────────
+
+function fmtHR(gps) {
+  if (!gps) return '—';
+  if (gps >= 1e6) return (gps / 1e6).toFixed(2) + ' MG/s';
+  if (gps >= 1e3) return (gps / 1e3).toFixed(2) + ' kG/s';
+  return gps.toFixed(2) + ' G/s';
+}
+
+function fmtDiffLabel(d) {
+  if (!d) return '—';
+  if (d >= 1e9) return (d / 1e9).toFixed(2) + 'B';
+  if (d >= 1e6) return (d / 1e6).toFixed(2) + 'M';
+  if (d >= 1e3) return (d / 1e3).toFixed(1) + 'K';
+  return d.toFixed(0);
+}
+
+function fmtTsLabel(ts) {
+  const d   = new Date(ts * 1000);
+  const age = Date.now() / 1000 - ts;
+  if (age < 86400 * 2)  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (age < 86400 * 60) return d.toLocaleDateString(undefined,  { month: 'short', day: 'numeric' });
+  return d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+}
+
+// ── History charts ────────────────────────────────────────────────────────────
+
+let _histDays = 7;
+
+function _chartLoading(ids) {
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '<p style="color:var(--muted);font-size:12px;padding:16px;text-align:center;">Loading…</p>';
+  });
+}
+
+async function renderHistoryCharts(days) {
+  const ids = ['chart-hashrate-history', 'chart-difficulty-history', 'chart-tx-history', 'chart-fee-history'];
+  _chartLoading(ids);
+  try {
+    const r = await fetch('/api/history?days=' + days);
+    const { rows } = await r.json();
+    if (!rows || !rows.length) {
+      ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = '<p style="color:var(--muted);font-size:12px;padding:16px;text-align:center;">No data in this range</p>';
+      });
+      return;
+    }
+
+    const xMin = rows[0].timestamp;
+    const xMax = rows[rows.length - 1].timestamp;
+    const W = 700;
+
+    // Hashrate
+    const hrPts  = rows.map(r => [r.timestamp, r.hashrate_gps]);
+    const hrMax  = Math.max(...hrPts.map(p => p[1])) * 1.15 || 1;
+    const hrEl   = document.getElementById('chart-hashrate-history');
+    if (hrEl) hrEl.innerHTML = makeSVG(hrPts, W, 160, {
+      xMin, xMax, yMin: 0, yMax: hrMax, color: 'var(--accent)',
+      xFmt: fmtTsLabel,
+      yFmt: v => { if (v >= 1e6) return (v/1e6).toFixed(1)+'M'; if (v >= 1e3) return (v/1e3).toFixed(0)+'k'; return v.toFixed(0); },
+    });
+
+    // Difficulty
+    const diffPts = rows.map(r => [r.timestamp, r.difficulty]);
+    const diffMax = Math.max(...diffPts.map(p => p[1])) * 1.15 || 1;
+    const diffEl  = document.getElementById('chart-difficulty-history');
+    if (diffEl) diffEl.innerHTML = makeSVG(diffPts, W, 140, {
+      xMin, xMax, yMin: 0, yMax: diffMax, color: 'var(--accent2)',
+      xFmt: fmtTsLabel,
+      yFmt: v => { if (v >= 1e9) return (v/1e9).toFixed(1)+'B'; if (v >= 1e6) return (v/1e6).toFixed(1)+'M'; if (v >= 1e3) return (v/1e3).toFixed(0)+'k'; return v.toFixed(0); },
+    });
+
+    // Transactions per block
+    const txPts = rows.map(r => [r.timestamp, r.tx_count || 0]);
+    const txMax = Math.max(...txPts.map(p => p[1]), 1) * 1.2;
+    const txEl  = document.getElementById('chart-tx-history');
+    if (txEl) txEl.innerHTML = makeSVG(txPts, W, 130, {
+      xMin, xMax, yMin: 0, yMax: txMax, color: 'var(--green)',
+      xFmt: fmtTsLabel,
+      yFmt: v => v.toFixed(0),
+    });
+
+    // Fees per block (nanogrin → GRIN)
+    const COIN    = window.GRINSCAN_NETWORK === 'testnet' ? 'tGRIN' : 'GRIN';
+    const feePts  = rows.map(r => [r.timestamp, (r.fee_total || 0) / 1e9]);
+    const feeMax  = Math.max(...feePts.map(p => p[1]), 0.001) * 1.2;
+    const feeEl   = document.getElementById('chart-fee-history');
+    if (feeEl) feeEl.innerHTML = makeSVG(feePts, W, 120, {
+      xMin, xMax, yMin: 0, yMax: feeMax, color: 'var(--accent2)',
+      xFmt: fmtTsLabel,
+      yFmt: v => v < 0.001 ? '0' : v.toFixed(3),
+    });
+
+  } catch (e) {
+    console.error('renderHistoryCharts:', e);
+  }
+}
+
 // ── Charts tab ────────────────────────────────────────────────────────────────
 
 async function loadCharts() {
@@ -141,9 +245,16 @@ async function loadCharts() {
   }
 
   try {
-    const fetches = [fetch('/api/tip')];
+    const fetches = [fetch('/api/tip'), fetch('/api/stats')];
     if (window.GRINSCAN_NETWORK === 'mainnet') fetches.push(fetch('/api/price'));
     const results = await Promise.all(fetches);
+
+    // Populate hashrate / difficulty card from stats
+    if (results[1]?.ok) {
+      const stats = await results[1].json();
+      setText('info-hashrate',  fmtHR(stats.hashrate_gps));
+      setText('info-difficulty', 'diff ' + fmtDiffLabel(stats.difficulty));
+    }
 
     const { height } = await results[0].json();
     const supply  = height * 60;
@@ -183,8 +294,8 @@ async function loadCharts() {
       dotLabel: `${inflation.toFixed(1)}%/yr · ${Math.floor(nowYear)}`,
     });
 
-    if (results[1]?.ok) {
-      const priceData = await results[1].json();
+    if (results[2]?.ok) {
+      const priceData = await results[2].json();
       setText('price-btc', priceData.price_btc != null ? priceData.price_btc.toFixed(8) + ' ₿' : '—');
       setText('price-usd', priceData.price_usd != null ? '$' + priceData.price_usd.toFixed(4)   : '—');
       const chg = priceData.change_24h_pct;
@@ -204,12 +315,27 @@ async function loadCharts() {
                       : '$' + (mcap / 1e3).toFixed(1) + 'K';
         setText('market-cap', mcapStr);
       }
-      setText('circulating', fmtNum(supply) + ' ツ');
     }
+
+    // Kick off history charts (uses cached blocks — no backfill needed)
+    renderHistoryCharts(_histDays);
 
   } catch (e) {
     console.error('loadCharts:', e);
   }
+}
+
+function wireHistoryRange() {
+  const wrap = document.getElementById('history-range');
+  if (!wrap) return;
+  wrap.addEventListener('click', e => {
+    const btn = e.target.closest('.gs-chart-day-btn');
+    if (!btn) return;
+    wrap.querySelectorAll('.gs-chart-day-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    _histDays = btn.dataset.days === '0' ? 0 : parseInt(btn.dataset.days);
+    renderHistoryCharts(_histDays);
+  });
 }
 
 // ── Network tab ──────────────────────────────────────────────────────────────
@@ -234,6 +360,10 @@ async function loadNetwork() {
 
     const tipH   = stats.tip_height    != null ? Number(stats.tip_height).toLocaleString()    : '?';
     const cached = stats.cached_blocks != null ? Number(stats.cached_blocks).toLocaleString() : '?';
+    setText('node-type-badge',
+      stats.node_mode === 'archive' ? '✅ Full Archive (since genesis)' :
+      stats.node_mode === 'pruned'  ? '⚠ Pruned (recent blocks only)' :
+                                      '⏳ Determining…');
     setText('cached-blocks', `${cached} (tip #${tipH})`);
     setText('db-size',    formatBytes(stats.db_size_bytes));
     setText('chain-size', formatBytes(stats.chain_size_bytes));
@@ -277,7 +407,7 @@ async function loadNetwork() {
       const dir = p.direction === 'Outbound'
         ? '<span class="badge badge-outbound">Outbound</span>'
         : '<span class="badge badge-inbound">Inbound</span>';
-      return `<tr><td>${maskAddr(p.addr)}</td><td>${dir}</td><td style="color:var(--muted)">${p.user_agent || '—'}</td></tr>`;
+      return `<tr><td>${esc(maskAddr(p.addr))}</td><td>${dir}</td><td style="color:var(--muted)">${esc(p.user_agent)}</td></tr>`;
     }).join('');
 
     el.innerHTML = `
@@ -316,5 +446,6 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.gs-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
+  wireHistoryRange();
   switchTab('about');
 });

@@ -170,6 +170,32 @@ is `/bin/sh`, all sessions in that server use `sh`, not `bash`. The inline assig
 started. Using `export SHELL=/bin/bash` at the top of a wrapper is not sufficient when
 the tmux server was already started by a different process.
 
+## Grin Hashrate Formula (Cuckatoo32)
+
+**Do NOT use `difficulty / 60` — it gives values ~366× too high.**
+
+The correct formula (matches `06_collector.py` and `aglkm/grin-explorer`):
+
+```
+GPS = diff_delta × 42 / block_time_seconds / 16384
+```
+
+- `diff_delta`         — `total_difficulty[n] - total_difficulty[n-1]` (cumulative, already graph-weight-scaled)
+- `42`                 — Cuckatoo32 cycle length (proof size)
+- `block_time_seconds` — actual elapsed seconds between the two blocks (use real timestamps, not fixed 60)
+- `16384`              — C32 solution rate = `32 × 2^(32−23)` = `32 × 512`
+
+Display units: **G/s** (< 1 000), **kG/s** (≥ 1 000), **MG/s** (≥ 1 000 000) — matches world.grin.money.
+
+In GrinScan (`server.js`):
+```js
+// live (stmtTopTwoDiff gives actual timestamp per block)
+hashrateGps = perBlockDiff * 42 / dt / 16384;          // dt = actual seconds
+
+// history endpoint (actual block time unavailable — use 60s target)
+hashrate_gps = row.difficulty * 42 / 60 / 16384;
+```
+
 ## Do Not
 - Never run the toolkit scripts locally — they assume a Linux VPS with root access
 - Never hardcode wallet API secrets or passwords in scripts

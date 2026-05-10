@@ -19,6 +19,52 @@ grinscan_install() {
     clear
     echo -e "\n${BOLD}${CYAN}── GrinScan: Install ──${RESET}\n"
 
+    # ── Archive node pre-flight check ────────────────────────────────────────
+    # GrinScan works on both pruned and archive nodes, but a pruned node can
+    # only serve blocks within the pruning horizon (~last few weeks).
+    # An archive node serves every block since genesis — including block 0.
+    local instances_conf="/opt/grin/conf/grin_instances_location.conf"
+    local mainnet_full_dir=""
+    local mainnet_toml=""
+    local has_full_dir=0
+    local has_archive_flag=0
+
+    # Primary check: FULLMAIN_GRIN_DIR written by script 01 into instances conf
+    if [[ -f "$instances_conf" ]]; then
+        mainnet_full_dir=$(bash -c "source '$instances_conf' 2>/dev/null; echo \"\${FULLMAIN_GRIN_DIR:-}\"")
+    fi
+    if [[ -n "$mainnet_full_dir" && -d "$mainnet_full_dir" ]]; then
+        has_full_dir=1
+        mainnet_toml="${mainnet_full_dir}/grin-server.toml"
+        grep -qs "^archive_mode *= *true" "$mainnet_toml" 2>/dev/null && has_archive_flag=1
+    fi
+
+    if [[ $has_full_dir -eq 1 && $has_archive_flag -eq 1 ]]; then
+        success "Archive node detected at ${mainnet_full_dir} ✓"
+        echo -e "  ${DIM}GrinScan will be able to serve full block history since genesis.${RESET}"
+    else
+        echo -e "  ${YELLOW}${BOLD}⚠  Archive node not detected${RESET}"
+        if [[ $has_full_dir -eq 0 ]]; then
+            echo -e "  ${DIM}FULLMAIN_GRIN_DIR not set in ${instances_conf}${RESET}"
+        fi
+        if [[ $has_archive_flag -eq 0 && -n "$mainnet_toml" ]]; then
+            echo -e "  ${DIM}archive_mode = true not set in ${mainnet_toml}${RESET}"
+        fi
+        echo ""
+        echo -e "  ${DIM}GrinScan will still work, but on a ${BOLD}pruned node${RESET}${DIM} only blocks within the${RESET}"
+        echo -e "  ${DIM}pruning horizon (~last few weeks) will be available. Old blocks —${RESET}"
+        echo -e "  ${DIM}including the genesis block — will return \"not found\".${RESET}"
+        echo ""
+        echo -e "  ${DIM}To serve full history since genesis, exit and run:${RESET}"
+        echo -e "    ${BOLD}Script 01 → Setup Grin New Node → choose Archive mode${RESET}"
+        echo -e "  ${DIM}Then re-run GrinScan Install after the node has fully synced.${RESET}"
+        echo ""
+        echo -ne "  Continue installing on pruned node? [y/N]: "
+        read -r cont
+        [[ "${cont,,}" != "y" ]] && { info "Install cancelled."; pause; return; }
+    fi
+    echo ""
+
     # Node.js version check (need >= 24 for node:sqlite DatabaseSync)
     local node_ver=""
     if command -v node &>/dev/null; then
@@ -222,6 +268,20 @@ grinscan_configure() {
             fi
         fi
 
+        # Detect archive mode — primary: FULLMAIN_GRIN_DIR in instances conf,
+        # secondary: archive_mode = true in grin-server.toml inside that dir.
+        local archive_mode="false"
+        local _inst_conf="/opt/grin/conf/grin_instances_location.conf"
+        if [[ "$net" == "mainnet" && -f "$_inst_conf" ]]; then
+            local _fulldir
+            _fulldir=$(bash -c "source '$_inst_conf' 2>/dev/null; echo \"\${FULLMAIN_GRIN_DIR:-}\"")
+            if [[ -n "$_fulldir" && -d "$_fulldir" ]] && \
+               grep -qs "^archive_mode *= *true" "${_fulldir}/grin-server.toml" 2>/dev/null; then
+                archive_mode="true"
+                info "Archive node confirmed (${_fulldir}/grin-server.toml)"
+            fi
+        fi
+
         mkdir -p "${GRINSCAN_DIR}/${net_short}"
 
         # Copy node secrets into the grinscan data dir so www-data can read them
@@ -258,7 +318,8 @@ grinscan_configure() {
   "web_dir":             "${GRINSCAN_APP}/public",
   "node_data_dir":       "${node_dir}/chain_data",
   "ga4_measurement_id":  "${ga4_id}",
-  "sibling_url":         "${sibling_url}"
+  "sibling_url":         "${sibling_url}",
+  "archive_mode":        ${archive_mode}
 }
 JSON
 

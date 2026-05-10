@@ -8,7 +8,10 @@ const THEME_CSS = {
   matrix: 'css/themes/matrix.css',
 };
 const THEME_LABELS = { dark: '🌑 Dark', light: '☀️ Light', neon: '⚡ Neon', matrix: '🟢 Matrix' };
-const STORAGE_KEY = 'grinscan-theme-' + (window.GRINSCAN_NETWORK || 'testnet');
+// Single key — no network suffix. Mainnet/testnet are on different origins so
+// localStorage is already partitioned; the suffix was redundant and caused
+// wrong-key lookups when GRINSCAN_NETWORK was momentarily undefined.
+const STORAGE_KEY = 'grinscan-theme';
 
 function _defaultTheme() {
   return window.GRINSCAN_NETWORK === 'mainnet' ? 'neon' : 'matrix';

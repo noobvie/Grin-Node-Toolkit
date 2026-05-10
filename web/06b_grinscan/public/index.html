@@ -20,9 +20,8 @@
     })();
     (function () {
       var net = (window.GRINSCAN_NETWORK || 'testnet');
-      var key = 'grinscan-theme-' + net;
       var def = net === 'mainnet' ? 'neon' : 'matrix';
-      var saved = localStorage.getItem(key) || def;
+      var saved = localStorage.getItem('grinscan-theme') || def;
       var map = { dark: 'css/themes/dark.css', light: 'css/themes/light.css', neon: 'css/themes/neon.css', matrix: 'css/themes/matrix.css' };
       var link = document.getElementById('theme-css');
       if (link && map[saved]) link.href = map[saved];
@@ -100,7 +99,6 @@
             data-tip="Supply × USD price · Supply = height × 60 GRIN (1 GRIN/sec emission) · Price: Gate.io GRIN/USDT · refreshed every 10 min">ℹ</span>
         </div>
         <div class="gs-stat-value" id="stat-marketcap">—</div>
-        <div class="gs-stat-sub" id="stat-marketcap-sub"></div>
       </div>
       <div class="gs-stat-card">
         <div class="gs-stat-label">Price

@@ -36,12 +36,9 @@ function fmtFee(nano) {
 
 function fmtHashrate(gps) {
   if (gps == null) return '—';
-  if (gps >= 1e15) return (gps / 1e15).toFixed(2) + ' PGPS';
-  if (gps >= 1e12) return (gps / 1e12).toFixed(2) + ' TGPS';
-  if (gps >= 1e9)  return (gps / 1e9).toFixed(2)  + ' GGPS';
-  if (gps >= 1e6)  return (gps / 1e6).toFixed(2)  + ' MGPS';
-  if (gps >= 1e3)  return (gps / 1e3).toFixed(1)  + ' kGPS';
-  return gps.toFixed(2) + ' GPS';
+  if (gps >= 1e6)  return (gps / 1e6).toFixed(2) + ' MG/s';
+  if (gps >= 1e3)  return (gps / 1e3).toFixed(2) + ' kG/s';
+  return gps.toFixed(2) + ' G/s';
 }
 
 function fmtDifficulty(d) {
@@ -189,12 +186,10 @@ async function pollStats() {
     const peersEl = document.getElementById('stat-peers');
     if (peersEl) peersEl.textContent = s.peer_count != null ? fmtNum(s.peer_count) : '—';
 
-    const mcapEl    = document.getElementById('stat-marketcap');
-    const mcapSubEl = document.getElementById('stat-marketcap-sub');
+    const mcapEl = document.getElementById('stat-marketcap');
     if (mcapEl && s.price_usd != null && s.tip_height) {
       const supply = s.tip_height * 60;
-      mcapEl.textContent    = fmtMarketCap(supply * s.price_usd);
-      if (mcapSubEl) mcapSubEl.textContent = fmtNum(supply) + ' GRIN supply';
+      mcapEl.textContent = fmtMarketCap(supply * s.price_usd);
     }
 
     const priceEl = document.getElementById('stat-price');
@@ -225,7 +220,7 @@ async function pollStats() {
 
     const supplyEl = document.getElementById('stat-supply');
     if (supplyEl && s.tip_height) {
-      supplyEl.textContent = fmtNum(s.tip_height * 60) + ' GRIN';
+      supplyEl.textContent = fmtNum(s.tip_height * 60) + ' ツ';
     }
 
     setStallBanner(s.stalled);
@@ -338,6 +333,14 @@ function setBlockDetail(block) {
     setRow('row-blocktime', blockTimeSec + 's', null);
   }
 
+  // Extra header fields
+  if (h.version     != null) setRow('row-version',       h.version, null);
+  if (h.nonce       != null) setRow('row-nonce',         String(h.nonce), null);
+  if (h.edge_bits   != null) setRow('row-edge-bits',     'Cuckatoo' + h.edge_bits + ' (C' + h.edge_bits + ')', null);
+  if (h.output_root)         setRow('row-output-root',   h.output_root, h.output_root);
+  if (h.kernel_root)         setRow('row-kernel-root',   h.kernel_root, h.kernel_root);
+  if (h.total_kernel_offset) setRow('row-kernel-offset', h.total_kernel_offset, h.total_kernel_offset);
+
   // Kernels list
   const kList = document.getElementById('kernels-list');
   if (kList) {
@@ -346,11 +349,95 @@ function setBlockDetail(block) {
       const div = document.createElement('div');
       div.className = 'gs-kernel-row';
       const fee = k.features !== 'Coinbase' && k.fee ? fmtFee(k.fee) : '—';
+      const lockTag = k.lock_height
+        ? `<span style="color:var(--muted);font-size:12px;">lock: ${fmtNum(k.lock_height)}</span>`
+        : '';
       div.innerHTML = `
         <span class="badge ${kernelBadgeClass(k.features)}">${kernelBadgeLabel(k.features)}</span>
         <span style="color:var(--muted);font-size:12px;">fee: ${fee}</span>
+        ${lockTag}
         <span class="gs-kernel-excess">${k.excess || ''}</span>`;
       kList.appendChild(div);
+    });
+  }
+
+  // Inputs list
+  const inputs = block.inputs || [];
+  const iHeading = document.getElementById('inputs-heading');
+  const iList    = document.getElementById('inputs-list');
+  if (iHeading) iHeading.textContent = `Inputs (${inputs.length})`;
+  if (iList) {
+    if (inputs.length === 0) {
+      iList.innerHTML = '<span style="color:var(--muted);font-size:13px;padding:8px 0;display:block;">No inputs — coinbase-only block</span>';
+    } else {
+      iList.innerHTML = '';
+      inputs.forEach(inp => {
+        const commit = typeof inp === 'string' ? inp : (inp.commit || JSON.stringify(inp));
+        const div  = document.createElement('div');
+        div.className = 'gs-kernel-row';
+        const span = document.createElement('span');
+        span.className   = 'gs-kernel-excess';
+        span.textContent = commit;
+        const btn  = document.createElement('button');
+        btn.className   = 'gs-copy-btn';
+        btn.textContent = '📋 Copy';
+        btn.addEventListener('click', () => copyText(commit, btn));
+        div.appendChild(span);
+        div.appendChild(btn);
+        iList.appendChild(div);
+      });
+    }
+  }
+
+  // Outputs list
+  const oHeading = document.getElementById('outputs-heading');
+  const oList    = document.getElementById('outputs-list');
+  if (oHeading) oHeading.textContent = `Outputs (${outputs.length})`;
+  if (oList) {
+    oList.innerHTML = '';
+    outputs.forEach(o => {
+      const isCoinbase = (o.output_type || '').toLowerCase() === 'coinbase';
+      const commit = o.commit || '';
+      const div    = document.createElement('div');
+      div.className = 'gs-kernel-row';
+
+      const badge = document.createElement('span');
+      badge.className   = 'badge ' + (isCoinbase ? 'badge-coinbase' : 'badge-plain');
+      badge.textContent = isCoinbase ? 'COINBASE' : 'PLAIN';
+
+      const spentSpan = document.createElement('span');
+      spentSpan.className   = 'gs-spent-tag ' + (o.spent ? 'spent' : 'unspent');
+      spentSpan.textContent = o.spent ? 'SPENT' : 'UNSPENT';
+
+      const commitSpan = document.createElement('span');
+      commitSpan.className   = 'gs-kernel-excess';
+      commitSpan.textContent = commit;
+
+      div.appendChild(badge);
+      div.appendChild(spentSpan);
+      div.appendChild(commitSpan);
+
+      if (commit) {
+        const btn = document.createElement('button');
+        btn.className   = 'gs-copy-btn';
+        btn.textContent = '📋 Copy';
+        btn.addEventListener('click', () => copyText(commit, btn));
+        div.appendChild(btn);
+      }
+
+      oList.appendChild(div);
+    });
+  }
+
+  // Raw JSON toggle
+  const rawToggle = document.getElementById('raw-toggle');
+  const rawJsonEl = document.getElementById('raw-json');
+  if (rawToggle && rawJsonEl) {
+    rawToggle.addEventListener('click', () => {
+      const open = rawJsonEl.style.display !== 'none';
+      rawJsonEl.style.display = open ? 'none' : 'block';
+      rawToggle.textContent = (open ? '▶' : '▼') + ' Raw Block Data';
+      if (!open && !rawJsonEl.textContent) rawJsonEl.textContent = JSON.stringify(block, null, 2);
     });
   }
 
@@ -358,7 +445,7 @@ function setBlockDetail(block) {
   const prevBtn = document.getElementById('nav-prev');
   const nextBtn = document.getElementById('nav-next');
   if (prevBtn) {
-    if (h.height > 1) {
+    if (h.height > 0) {
       prevBtn.href = '/block.html?h=' + (h.height - 1);
       prevBtn.textContent = '← Block #' + fmtNum(h.height - 1);
     } else {
@@ -428,7 +515,7 @@ function showCacheMiss() {
     errBox.innerHTML = `
       <h3>Block not found</h3>
       <p>This block is outside the local cache window.</p>
-      <p>Try an archive explorer: <a href="https://grincoin.org/blocks" target="_blank" rel="noopener">grincoin.org/blocks</a></p>`;
+      <p>Try an archive explorer: <a href="https://grincoin.org" target="_blank" rel="noopener">grincoin.org</a></p>`;
   }
 }
 

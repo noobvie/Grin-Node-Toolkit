@@ -26,6 +26,10 @@ Prune node testnet: https://prunetest.grin.money
 
 Grin explorer (clone of grincoin.org) https://scan.grin.money
 
+GrinScan block explorer mainnet: https://grinscan.org
+
+GrinScan block explorer testnet: https://test.grinscan.org
+
 Publish API mainnet: https://api.grin.money
 
 Publish API testnet: https://testapi.grin.money

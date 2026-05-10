@@ -658,29 +658,28 @@ app.get('/api/block/:ref', async (req, res) => {
   if (!/^\d+$/.test(ref) && !/^[0-9a-fA-F]{8,}$/.test(ref)) {
     return res.status(400).json({ error: 'Invalid search query' });
   }
-  let row = findBlock(ref);
+  const row = findBlock(ref);
 
-  // Archive node: fetch live from node if not cached, then persist
-  if (!row && tipState.node_mode === 'archive') {
+  if (row?.raw_json) {
+    // Cached path — fast DB lookup
+    try {
+      const block  = JSON.parse(row.raw_json);
+      const height = block.header?.height;
+      if (height > 1) {
+        const prevRow = db.prepare('SELECT timestamp FROM blocks WHERE height = ?').get(height - 1);
+        if (prevRow) block._prev_timestamp = prevRow.timestamp;
+      }
+      return res.json(block);
+    } catch { return res.status(500).json({ error: 'Corrupt block data' }); }
+  }
+
+  // Not cached — fetch live from archive node (no DB insert, keeps SQLite small)
+  if (tipState.node_mode === 'archive') {
     const block = await fetchBlockLive(ref);
-    if (block) {
-      try { insertBlock(block); } catch {}
-      row = findBlock(ref);
-    }
+    if (block) return res.json(block);
   }
 
-  if (!row || !row.raw_json) {
-    return res.status(404).json({ error: 'Block not found', hint: 'cache_miss' });
-  }
-  try {
-    const block = JSON.parse(row.raw_json);
-    const height = block.header?.height;
-    if (height > 1) {
-      const prevRow = db.prepare('SELECT timestamp FROM blocks WHERE height = ?').get(height - 1);
-      if (prevRow) block._prev_timestamp = prevRow.timestamp;
-    }
-    res.json(block);
-  } catch { res.status(500).json({ error: 'Corrupt block data' }); }
+  res.status(404).json({ error: 'Block not found', hint: 'cache_miss' });
 });
 
 app.get('/api/search', async (req, res) => {
@@ -689,19 +688,16 @@ app.get('/api/search', async (req, res) => {
   if (!/^\d+$/.test(q) && !/^[0-9a-fA-F]{8,}$/.test(q)) {
     return res.status(400).json({ error: 'Invalid search query' });
   }
-  let row = findBlock(q);
-  if (!row && tipState.node_mode === 'archive') {
+  const row = findBlock(q);
+  if (row?.raw_json) {
+    try { return res.json(JSON.parse(row.raw_json)); }
+    catch { return res.status(500).json({ error: 'Corrupt block data' }); }
+  }
+  if (tipState.node_mode === 'archive') {
     const block = await fetchBlockLive(q);
-    if (block) {
-      try { insertBlock(block); } catch {}
-      row = findBlock(q);
-    }
+    if (block) return res.json(block);
   }
-  if (!row || !row.raw_json) {
-    return res.status(404).json({ error: 'Block not found', hint: 'cache_miss' });
-  }
-  try { res.json(JSON.parse(row.raw_json)); }
-  catch { res.status(500).json({ error: 'Corrupt block data' }); }
+  res.status(404).json({ error: 'Block not found', hint: 'cache_miss' });
 });
 
 app.get('/api/history', (req, res) => {

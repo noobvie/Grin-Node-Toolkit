@@ -85,3 +85,18 @@ a { color: var(--accent); }
 
 /* ── Toast ── */
 .gs-toast { box-shadow: 0 0 22px rgba(0,255,68,0.28); }
+
+/* ── Info section headings ── */
+.gs-info-section h3 {
+  border-left-color: var(--accent);
+  color: var(--accent);
+  text-shadow: 0 0 8px rgba(0,255,68,0.50);
+}
+
+/* ── Why Grin cards hover glow ── */
+.gs-why-card:hover {
+  box-shadow: 0 0 18px rgba(0,255,68,0.32), 0 0 36px rgba(0,255,68,0.12);
+}
+.gs-why-card--featured:hover {
+  box-shadow: 0 0 24px rgba(0,255,68,0.40), 0 0 48px rgba(0,255,68,0.16);
+}

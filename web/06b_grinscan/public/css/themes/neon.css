@@ -109,3 +109,18 @@ body { font-family: var(--font-mono); }
 
 /* ── Load more button hover ── */
 .gs-load-more:hover { background: rgba(0,240,255,0.04); }
+
+/* ── Info section headings ── */
+.gs-info-section h3 {
+  border-left-color: var(--accent);
+  color: var(--accent);
+  text-shadow: 0 0 8px rgba(0,240,255,0.45);
+}
+
+/* ── Why Grin cards hover glow ── */
+.gs-why-card:hover {
+  box-shadow: 0 0 20px rgba(0,240,255,0.38), 0 0 42px rgba(0,240,255,0.15), 0 4px 24px rgba(0,0,0,0.7);
+}
+.gs-why-card--featured:hover {
+  box-shadow: 0 0 28px rgba(0,240,255,0.45), 0 0 56px rgba(0,240,255,0.18), 0 4px 24px rgba(0,0,0,0.7);
+}

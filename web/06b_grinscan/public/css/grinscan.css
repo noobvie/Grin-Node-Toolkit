@@ -723,14 +723,15 @@ a:hover { text-decoration: underline; }
 }
 .gs-info-section h3 {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  padding-bottom: 8px;
+  letter-spacing: 0.08em;
+  color: var(--text);
+  padding: 2px 0 10px 10px;
+  border-left: 2px solid var(--accent);
   border-bottom: 1px solid var(--border);
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 .gs-info-section p {
   font-size: 14px;
@@ -772,6 +773,65 @@ a:hover { text-decoration: underline; }
   transition: border-color var(--transition), color var(--transition);
 }
 .gs-resource-link:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+
+/* Why Grin cards (About tab) */
+.gs-why-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+}
+.gs-why-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.gs-why-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 14px rgba(255,153,0,0.22), 0 4px 16px rgba(0,0,0,0.3);
+}
+.gs-why-card--featured {
+  grid-column: 1 / -1;
+  border-color: rgba(255,153,0,0.3);
+  background: rgba(255,153,0,0.04);
+}
+.gs-why-card--featured:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 20px rgba(255,153,0,0.28), 0 4px 20px rgba(0,0,0,0.3);
+}
+.gs-why-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+.gs-why-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.gs-why-card--featured .gs-why-title {
+  font-size: 13px;
+}
+.gs-why-desc {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+.gs-why-desc em { color: var(--accent2); font-style: normal; font-weight: 700; }
+@media (max-width: 900px) {
+  .gs-why-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
+  .gs-why-grid { grid-template-columns: 1fr; }
+  .gs-why-card--featured { grid-column: 1; }
+}
 
 /* Emission / Stats cards */
 .gs-info-stats-grid {

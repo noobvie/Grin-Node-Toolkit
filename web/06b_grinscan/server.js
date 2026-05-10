@@ -58,7 +58,6 @@ db.exec(`
     price_usd   REAL    NOT NULL DEFAULT 0,
     source      TEXT    NOT NULL DEFAULT ''
   );
-  CREATE INDEX IF NOT EXISTS idx_prices_timestamp ON prices(timestamp DESC);
 `);
 
 const stmtInsertBlock = db.prepare(`
@@ -821,6 +820,19 @@ window.GRINSCAN_BLOCKS_CACHE=${blocksCache};
     .replace(/<title>[^<]*<\/title>/, '')
     .replace(/<meta\s+name="description"[^>]*>/i, '');
   out = out.replace('<head>', '<head>\n' + seoBlock + '\n' + globals);
+
+  // Patch network-dependent static values so the page is correct before any JS runs.
+  // Without this, every page starts with hardcoded testnet favicon/badge/theme and relies
+  // on JS to fix it — causing a flash of testnet design (or full testnet if JS fails).
+  const favIcon      = _isMain ? '/favicon-mainnet.svg' : '/favicon-testnet.svg';
+  const badgeClass   = _isMain ? 'mainnet' : 'testnet';
+  const badgeText    = _isMain ? 'MAINNET' : 'TESTNET';
+  const defaultTheme = _isMain ? '/css/themes/neon.css' : '/css/themes/matrix.css';
+  out = out
+    .replace(/href="\/favicon-testnet\.svg"/g,          `href="${favIcon}"`)
+    .replace(/class="gs-network-badge testnet">TESTNET/, `class="gs-network-badge ${badgeClass}">${badgeText}`)
+    .replace(/href="\/css\/themes\/dark\.css"/,          `href="${defaultTheme}"`);
+
   return out;
 }
 
@@ -831,6 +843,7 @@ window.GRINSCAN_BLOCKS_CACHE=${blocksCache};
     try {
       const html = fs.readFileSync(path.join(webDir, page), 'utf8');
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
       res.send(injectGlobals(html, pageKey));
     } catch {
       res.status(404).send('Not found');

@@ -1,0 +1,22 @@
+/* light.css — Clean white, Grin orange accent */
+:root {
+  --bg:           #f6f8fa;
+  --surface:      #ffffff;
+  --surface2:     #f0f2f5;
+  --border:       #d0d7de;
+  --text:         #1f2328;
+  --muted:        #656d76;
+  --accent:       #e07000;
+  --accent2:      #a06000;
+  --green:        #1a7f37;
+  --red:          #cf222e;
+  --badge-coin:   #9a6700;
+  --badge-plain:  #0969da;
+  --badge-lock:   #8250df;
+  --shadow:       0 4px 24px rgba(0,0,0,0.10);
+  --glow:         0 2px 8px rgba(0,0,0,0.08);
+}
+
+.gs-header-search input:focus {
+  box-shadow: 0 0 0 3px rgba(224,112,0,0.15);
+}

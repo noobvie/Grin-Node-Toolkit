@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grin Network Info — Emission, Stats &amp; Why Grin | GrinScan</title>
+  <meta name="description" content="Learn about Grin (GRIN): MimbleWimble protocol, 60 GRIN/min linear emission, Cuckatoo32 proof-of-work, privacy by design, live supply curve, hashrate charts, and why Grin's time-backed monetary policy is a new idea in digital finance.">
+  <meta name="keywords" content="Grin network info, GRIN emission, MimbleWimble protocol, Grin supply curve, Grin inflation rate, Cuckatoo32, Grin privacy coin, time-backed cryptocurrency, Grin monetary policy, Grin hashrate chart, why Grin, Grin vs Bitcoin">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#0d1117">
+  <meta property="og:site_name" content="GrinScan">
+  <meta property="og:title" content="Grin Network Info — Emission &amp; Stats | GrinScan">
+  <meta property="og:description" content="MimbleWimble protocol, 60 GRIN/min linear emission, Cuckatoo32 PoW, live supply curve, hashrate charts, and why Grin's time-backed money is unique.">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Grin Network Info — Emission &amp; Stats | GrinScan">
+  <meta name="twitter:description" content="MimbleWimble protocol, 60 GRIN/min linear emission, Cuckatoo32 proof-of-work, supply curve, hashrate charts, and Grin network statistics.">
+  <link rel="icon" id="favicon-link" href="/favicon-testnet.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/grinscan.css">
+  <link rel="stylesheet" id="theme-css" href="/css/themes/dark.css">
+  <script>
+    (function () {
+      var net = (window.GRINSCAN_NETWORK || 'testnet');
+      var fav = document.getElementById('favicon-link');
+      if (fav) fav.href = net === 'mainnet' ? '/favicon-mainnet.svg' : '/favicon-testnet.svg';
+    })();
+    (function () {
+      var net = (window.GRINSCAN_NETWORK || 'testnet');
+      var def = net === 'mainnet' ? 'neon' : 'matrix';
+      var saved = localStorage.getItem('grinscan-theme') || def;
+      var map = { dark: 'css/themes/dark.css', light: 'css/themes/light.css', neon: 'css/themes/neon.css', matrix: 'css/themes/matrix.css' };
+      var link = document.getElementById('theme-css');
+      if (link && map[saved]) link.href = map[saved];
+    })();
+  </script>
+</head>
+<body data-page="info">
+
+  <!-- Header -->
+  <header class="gs-header">
+    <a href="/" class="gs-logo"><img src="/grin-logo.svg" class="gs-logo-icon" alt="" aria-hidden="true"> GrinScan</a>
+    <span id="network-badge" class="gs-network-badge testnet">TESTNET</span>
+    <nav class="gs-nav">
+      <a href="/" class="nav-link" data-page="explorer" aria-label="Explorer">Explorer</a>
+      <a href="/info.html" class="nav-link active" data-page="info" aria-label="Info">Info</a>
+      <a href="/api.html" class="nav-link" data-page="api" aria-label="API">API</a>
+    </nav>
+    <div class="gs-theme-wrap">
+      <button id="theme-toggle-btn" aria-expanded="false" aria-haspopup="true">
+        <span id="theme-current-label">Theme</span> ▾
+      </button>
+      <div id="theme-dropdown" hidden role="menu">
+        <button data-theme="dark"   role="menuitem">🌑 Dark</button>
+        <button data-theme="light"  role="menuitem">☀️ Light</button>
+        <button data-theme="neon"   role="menuitem">⚡ Neon</button>
+        <button data-theme="matrix" role="menuitem">🟢 Matrix</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="gs-main">
+
+    <div class="gs-promo" id="gs-promo"></div>
+
+    <!-- Tab bar -->
+    <div class="gs-tabs" role="tablist" aria-label="Info sections">
+      <button class="gs-tab-btn" data-tab="about"   role="tab">About</button>
+      <button class="gs-tab-btn" data-tab="charts"  role="tab">Charts</button>
+      <button class="gs-tab-btn" data-tab="network" role="tab">Network</button>
+    </div>
+
+    <!-- ── ABOUT TAB ── -->
+    <div id="tab-about" class="gs-tab-panel" role="tabpanel">
+
+      <div class="gs-info-section">
+        <h3>What is Grin?</h3>
+        <p>Grin is a privacy-preserving cryptocurrency implementing the MimbleWimble protocol. It has no addresses, no visible amounts, and uses Confidential Transactions so only sender and receiver can see what was transferred.</p>
+      </div>
+
+      <div class="gs-info-section">
+        <h3>Key Properties</h3>
+        <div class="gs-table-wrap">
+          <table class="gs-kv-table">
+            <tbody>
+              <tr><td>Privacy</td><td>CT + CoinJoin; no amounts on-chain</td></tr>
+              <tr><td>No Addresses</td><td>Transactions via interactive Slatepack</td></tr>
+              <tr><td>Emission</td><td>1 GRIN/sec forever — no halving</td></tr>
+              <tr><td>PoW Algorithm</td><td>Cuckatoo32+ (ASIC-friendly, GPU-capable)</td></tr>
+              <tr><td>Block Time</td><td>60 seconds</td></tr>
+              <tr><td>Block Reward</td><td>60 GRIN (1 GRIN/sec × 60s)</td></tr>
+              <tr><td>Launch</td><td>January 15, 2019 (no premine, no ICO) — <a href="https://grinscan.org/block.html?h=0" target="_blank" rel="noopener">genesis block #0</a></td></tr>
+              <tr><td>Founders</td><td>ignopeverell, antiochp, quentinlesceller, garyyu, hashmap, sesam, tromp, jaspervdm &amp; other anonymous members continuing</td></tr>
+              <tr><td>Founder Reward</td><td>None</td></tr>
+              <tr><td>Max Supply</td><td>None (infinite linear emission)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="gs-info-section">
+        <h3>Why Grin?</h3>
+        <p>New to crypto? Here are the things that make Grin genuinely different — explained simply.</p>
+        <div class="gs-why-grid">
+
+          <div class="gs-why-card gs-why-card--featured">
+            <div class="gs-why-icon">⏱</div>
+            <div class="gs-why-title">Time-backed money — a genuinely new idea</div>
+            <div class="gs-why-desc">Every currency in history has been backed by something: gold by a scarce metal, dollars by a government promise, Bitcoin by a programmed scarcity with halving steps. Grin is backed by something never tried before: <em>time itself</em>. One minute of real-world clock time creates exactly 60 GRIN — always, without exception, without anyone's permission. You cannot fake time, speed it up, or print more of it. This makes Grin the first monetary policy that is truly neutral — not controlled by any person, company, or committee. Enforced by physics, verified by mathematics, distributed to whoever mines each block. A currency where the supply is as objective and unstoppable as the passage of time.</div>
+          </div>
+
+          <div class="gs-why-card">
+            <div class="gs-why-icon">⚖</div>
+            <div class="gs-why-title">Fair for everyone, forever</div>
+            <div class="gs-why-desc">No halvings, no early-investor advantage. 60 GRIN per minute — the same rule whether you discover it today or in 20 years. Everyone plays by identical terms.</div>
+          </div>
+
+          <div class="gs-why-card">
+            <div class="gs-why-icon">👁</div>
+            <div class="gs-why-title">Private by design, not by option</div>
+            <div class="gs-why-desc">Amounts and parties are hidden in the cryptographic math of every transaction. Nobody can scan the blockchain to see your balance or trace who paid whom.</div>
+          </div>
+
+          <div class="gs-why-card">
+            <div class="gs-why-icon">🏦</div>
+            <div class="gs-why-title">No custodian risk</div>
+            <div class="gs-why-desc">Tokenised gold needs a custodian who can be frozen or shut down. Grin's supply is verified by open-source math on your own computer. No company in the middle, ever.</div>
+          </div>
+
+          <div class="gs-why-card">
+            <div class="gs-why-icon">🖨</div>
+            <div class="gs-why-title">Immune to money printing</div>
+            <div class="gs-why-desc">Stablecoins tied to USD silently lose value when governments expand the money supply. Grin's emission is hard-coded in protocol — no committee can ever change it.</div>
+          </div>
+
+          <div class="gs-why-card">
+            <div class="gs-why-icon">₿</div>
+            <div class="gs-why-title">Solves Bitcoin's security cliff</div>
+            <div class="gs-why-desc">Bitcoin stops minting after 21M coins, leaving miners to survive on fees alone. Grin always pays miners a fixed reward — network security doesn't have an expiry date.</div>
+          </div>
+
+          <div class="gs-why-card">
+            <div class="gs-why-icon">🪶</div>
+            <div class="gs-why-title">A blockchain that stays small</div>
+            <div class="gs-why-desc">Grin automatically removes spent data from the chain. After 7+ years live, the full history is ~5 GB pruned. Fast to sync, cheap to run a node at home.</div>
+          </div>
+
+          <div class="gs-why-card">
+            <div class="gs-why-icon">🌍</div>
+            <div class="gs-why-title">Designed for generations</div>
+            <div class="gs-why-desc">Inflation falls smoothly every year with no cliffs or shocks. Built to still be fair and functional for people who discover it decades from now.</div>
+          </div>
+
+          <div class="gs-why-card">
+            <div class="gs-why-icon">🔍</div>
+            <div class="gs-why-title">Simple enough to verify yourself</div>
+            <div class="gs-why-desc">No hidden allocations, no founder rewards, no complex tokenomics. The codebase is small enough for any engineer to read and audit end-to-end.</div>
+          </div>
+
+          <div class="gs-why-card">
+            <div class="gs-why-icon">⟳</div>
+            <div class="gs-why-title">Time can't be forked</div>
+            <div class="gs-why-desc">Anyone can clone Grin's code, but not its history. Years of accumulated proof-of-work, protocol maturity, and community trust are baked into the chain. You can't fork time.</div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="gs-info-section">
+        <h3>Resources</h3>
+        <div class="gs-resources">
+          <a href="https://forum.grin.mw"                             class="gs-resource-link" target="_blank" rel="noopener">Grin Forum</a>
+          <a href="https://github.com/mimblewimble/grin"              class="gs-resource-link" target="_blank" rel="noopener">GitHub (node)</a>
+          <a href="https://github.com/mimblewimble/grin-wallet"       class="gs-resource-link" target="_blank" rel="noopener">GitHub (wallet)</a>
+          <a href="https://docs.grin.mw"                              class="gs-resource-link" target="_blank" rel="noopener">Docs</a>
+          <a href="https://grincoin.org"                               class="gs-resource-link" target="_blank" rel="noopener">Grincoin.org</a>
+          <a href="https://github.com/grincc/grin-wallet-api-tutorial" class="gs-resource-link" target="_blank" rel="noopener">Wallet Tutorial</a>
+          <a href="https://github.com/GetGrin/grim"                    class="gs-resource-link" target="_blank" rel="noopener">Grim Wallet</a>
+        </div>
+      </div>
+
+    </div><!-- /#tab-about -->
+
+    <!-- ── CHARTS TAB ── -->
+    <div id="tab-charts" class="gs-tab-panel" role="tabpanel">
+
+      <!-- Emission stats -->
+      <div class="gs-info-stats-grid">
+        <div class="gs-info-stat">
+          <div class="gs-info-stat-label">Circulating Supply</div>
+          <div class="gs-info-stat-value" id="em-supply">—</div>
+          <div class="gs-info-stat-sub" id="em-block"></div>
+        </div>
+        <div class="gs-info-stat">
+          <div class="gs-info-stat-label">Time Since Genesis</div>
+          <div class="gs-info-stat-value" id="em-years">—</div>
+        </div>
+        <div class="gs-info-stat">
+          <div class="gs-info-stat-label">Block Reward</div>
+          <div class="gs-info-stat-value" id="em-reward">60 GRIN</div>
+          <div class="gs-info-stat-sub" id="em-reward-sub">1 GRIN / sec</div>
+        </div>
+        <div class="gs-info-stat">
+          <div class="gs-info-stat-label">Annual Inflation</div>
+          <div class="gs-info-stat-value" id="em-inflation">—</div>
+        </div>
+      </div>
+
+      <!-- Price / market stats (mainnet only — hidden on testnet via JS) -->
+      <div id="charts-price-stats">
+        <div class="gs-info-stats-grid">
+          <div class="gs-info-stat">
+            <div class="gs-info-stat-label">Price (BTC)</div>
+            <div class="gs-info-stat-value" id="price-btc">—</div>
+          </div>
+          <div class="gs-info-stat">
+            <div class="gs-info-stat-label">Price (USD)</div>
+            <div class="gs-info-stat-value" id="price-usd">—</div>
+            <div class="gs-info-stat-sub" id="price-24h" style="margin-top:4px;"></div>
+          </div>
+          <div class="gs-info-stat">
+            <div class="gs-info-stat-label">Market Cap</div>
+            <div class="gs-info-stat-value" id="market-cap">—</div>
+          </div>
+          <div class="gs-info-stat">
+            <div class="gs-info-stat-label">Hashrate / Difficulty</div>
+            <div class="gs-info-stat-value" id="info-hashrate">—</div>
+            <div class="gs-info-stat-sub" id="info-difficulty" style="margin-top:4px;"></div>
+          </div>
+        </div>
+        <div id="price-stale-warn" style="display:none;background:rgba(242,201,76,0.1);border:1px solid var(--accent2);border-radius:var(--radius);padding:8px 14px;font-family:var(--font-mono);font-size:12px;color:var(--accent2);margin-bottom:16px;">
+          ⚠ Price data may be outdated
+        </div>
+      </div>
+
+      <div class="gs-info-section">
+        <h3>Supply Curve (2019 → ∞)</h3>
+        <div class="gs-chart-wrap">
+          <div id="chart-supply"></div>
+        </div>
+      </div>
+
+      <div class="gs-info-section">
+        <h3>Annual Inflation Rate</h3>
+        <div class="gs-chart-wrap">
+          <div id="chart-inflation"></div>
+        </div>
+      </div>
+
+      <div class="gs-info-section">
+        <p style="font-size:13px;color:var(--muted);">
+          ℹ  Grin has no halving. Supply grows at a constant 31.56 M GRIN/year.
+          Monetary inflation (%) decreases perpetually as supply grows.
+          Compare: Bitcoin cuts its block reward in half every ~4 years,
+          creating supply shocks. Grin's emission is smooth and predictable.
+        </p>
+      </div>
+
+      <!-- ── Live charts from cached blocks ── -->
+      <div class="gs-chart-header">
+        <span class="gs-chart-header-title">Live Network Charts <span class="gs-chart-header-sub">— from cached blocks window</span></span>
+        <div class="gs-chart-day-selector" id="history-range">
+          <button class="gs-chart-day-btn" data-days="1">Day</button>
+          <button class="gs-chart-day-btn active" data-days="7">Week</button>
+          <button class="gs-chart-day-btn" data-days="30">Month</button>
+          <button class="gs-chart-day-btn" data-days="365">Year</button>
+          <button class="gs-chart-day-btn" data-days="0">All</button>
+        </div>
+      </div>
+
+      <div class="gs-info-section">
+        <h3>Network Hashrate</h3>
+        <div class="gs-chart-wrap"><div id="chart-hashrate-history"></div></div>
+      </div>
+
+      <div class="gs-info-section">
+        <h3>Mining Difficulty</h3>
+        <div class="gs-chart-wrap"><div id="chart-difficulty-history"></div></div>
+      </div>
+
+      <div class="gs-info-section">
+        <h3>Block Activity</h3>
+        <div class="gs-chart-day-selector" id="activity-metric-toggle" style="margin-bottom:10px;">
+          <button class="gs-chart-day-btn active" data-metric="both">● Both</button>
+          <button class="gs-chart-day-btn" data-metric="tx">● Tx</button>
+          <button class="gs-chart-day-btn" data-metric="fee">● Fee</button>
+        </div>
+        <div class="gs-chart-wrap"><div id="chart-activity"></div></div>
+      </div>
+
+    </div><!-- /#tab-charts -->
+
+    <!-- ── NETWORK TAB ── -->
+    <div id="tab-network" class="gs-tab-panel" role="tabpanel">
+
+      <!-- Node Info card -->
+      <div class="node-info-card">
+        <div class="stat-row">
+          <span>Node Type</span>
+          <span id="node-type-badge">—</span>
+        </div>
+        <div class="stat-row">
+          <span>Cached Blocks</span>
+          <span id="cached-blocks">—</span>
+        </div>
+        <div class="stat-row">
+          <span>GrinScan DB Size</span>
+          <span id="db-size">—</span>
+        </div>
+        <div class="stat-row">
+          <span>Chain Data Size</span>
+          <span id="chain-size">—</span>
+        </div>
+        <div class="stat-row">
+          <span>Backend</span>
+          <span style="color:var(--muted);font-size:12px;">Node.js · Express · SQLite · Nginx · SSE</span>
+        </div>
+      </div>
+
+      <div id="network-content">
+        <p style="color:var(--muted);font-family:var(--font-mono);font-size:13px;">Loading…</p>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="gs-footer">
+    <div id="gs-footer-text"></div>
+    <p class="gs-seo-text">Grin (GRIN) is a privacy-first cryptocurrency using the MimbleWimble protocol. No addresses, no visible amounts, 60 GRIN per minute linear emission since January 15, 2019. Cuckatoo32 proof-of-work, community-governed, no premine, no ICO, no founder reward.</p>
+  </footer>
+
+  <script src="/js/theme.js"></script>
+  <script src="/js/app.js"></script>
+  <script src="/js/info.js"></script>
+  <script src="/js/media.js"></script>
+  <script src="/js/analytics.js"></script>
+</body>
+</html>

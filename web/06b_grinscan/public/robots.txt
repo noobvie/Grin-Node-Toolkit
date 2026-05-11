@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Allow: /block.html
+Allow: /info.html
+Disallow: /api/
+Disallow: /rest/
+Disallow: /js/
+Disallow: /css/

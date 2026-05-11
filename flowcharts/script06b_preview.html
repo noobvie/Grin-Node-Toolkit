@@ -1,0 +1,1041 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GrinScan — UI Preview</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <style>
+    /* ================================================================
+       CSS VARIABLES — DARK (default / mainnet)
+       ================================================================ */
+    :root {
+      --bg:          #0d1117;
+      --surface:     #161b22;
+      --surface2:    #21262d;
+      --border:      #30363d;
+      --text:        #e6edf3;
+      --muted:       #8b949e;
+      --accent:      #ff9900;
+      --accent2:     #f2c94c;
+      --green:       #3fb950;
+      --red:         #f85149;
+      --badge-coin:  #b8860b;
+      --badge-plain: #1f6feb;
+      --badge-lock:  #8957e5;
+      --radius:      8px;
+      --font-mono:   'JetBrains Mono', 'Courier New', monospace;
+      --font-sans:   system-ui, -apple-system, sans-serif;
+      --shadow:      0 4px 24px rgba(0,0,0,0.4);
+      --transition:  0.25s ease;
+    }
+
+    /* ================================================================
+       LIGHT THEME
+       ================================================================ */
+    [data-theme="light"] {
+      --bg:          #f6f8fa;
+      --surface:     #ffffff;
+      --surface2:    #f0f2f5;
+      --border:      #d0d7de;
+      --text:        #1f2328;
+      --muted:       #656d76;
+      --accent:      #e07000;
+      --accent2:     #a06000;
+      --green:       #1a7f37;
+      --red:         #cf222e;
+      --badge-coin:  #9a6700;
+      --badge-plain: #0969da;
+      --badge-lock:  #8250df;
+      --shadow:      0 4px 24px rgba(0,0,0,0.10);
+    }
+
+    /* ================================================================
+       NEON THEME — cyberpunk / deep purple
+       ================================================================ */
+    [data-theme="neon"] {
+      --bg:          #0a0014;
+      --surface:     #13002a;
+      --surface2:    #1a0038;
+      --border:      #2d0060;
+      --text:        #e0d8ff;
+      --muted:       #7060aa;
+      --accent:      #00f0ff;
+      --accent2:     #ff00cc;
+      --green:       #00ff88;
+      --red:         #ff3366;
+      --badge-coin:  #cc8800;
+      --badge-plain: #00aaff;
+      --badge-lock:  #cc00ff;
+      --shadow:      0 4px 32px rgba(0,240,255,0.12);
+    }
+
+    /* ================================================================
+       MATRIX THEME — black / green mono / testnet default
+       ================================================================ */
+    [data-theme="matrix"] {
+      --bg:          #000000;
+      --surface:     #001400;
+      --surface2:    #002200;
+      --border:      #004000;
+      --text:        #00cc00;
+      --muted:       #006600;
+      --accent:      #00ff00;
+      --accent2:     #88ff88;
+      --green:       #00ff00;
+      --red:         #ff2200;
+      --badge-coin:  #887700;
+      --badge-plain: #006688;
+      --badge-lock:  #660088;
+      --shadow:      0 4px 24px rgba(0,255,0,0.08);
+    }
+
+    /* ================================================================
+       BASE RESET
+       ================================================================ */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      line-height: 1.6;
+      min-height: 100vh;
+      transition: background var(--transition), color var(--transition);
+    }
+
+    [data-theme="neon"] body,
+    [data-theme="matrix"] body { font-family: var(--font-mono); }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ================================================================
+       PREVIEW TOOLBAR  (not part of the real app)
+       ================================================================ */
+    .preview-bar {
+      background: #111;
+      border-bottom: 2px solid #ff9900;
+      padding: 7px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: #777;
+      flex-wrap: wrap;
+      position: sticky;
+      top: 0;
+      z-index: 2000;
+    }
+    .preview-bar .label { color: #ff9900; font-weight: 700; letter-spacing: 0.5px; }
+    .preview-bar .sep { color: #333; }
+    .preview-bar select,
+    .preview-bar button {
+      background: #222; border: 1px solid #444; color: #ccc;
+      padding: 3px 8px; border-radius: 4px; cursor: pointer;
+      font-size: 11px; font-family: var(--font-mono);
+    }
+    .preview-bar button:hover { border-color: #ff9900; color: #ff9900; }
+    .preview-bar .hint { color: #444; font-size: 10px; margin-left: auto; }
+
+    /* ================================================================
+       APP CONTAINER
+       ================================================================ */
+    #app { max-width: 1180px; margin: 0 auto; padding: 0 16px 40px; }
+
+    /* ================================================================
+       HEADER
+       ================================================================ */
+    .gs-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .gs-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .gs-logo .icon { font-size: 22px; }
+    .gs-logo .tagline {
+      display: block;
+      font-size: 10px;
+      color: var(--muted);
+      font-weight: 400;
+      letter-spacing: 0;
+    }
+
+    [data-theme="neon"] .gs-logo { text-shadow: 0 0 16px var(--accent); }
+
+    .gs-header-right { display: flex; align-items: center; gap: 10px; }
+
+    /* Network badge */
+    .net-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 12px; border-radius: 20px;
+      font-size: 11px; font-weight: 700;
+      font-family: var(--font-mono); letter-spacing: 0.5px;
+    }
+    .net-badge.mainnet { background: rgba(63,185,80,0.12); border: 1px solid var(--green); color: var(--green); }
+    .net-badge.testnet { background: rgba(255,153,0,0.12); border: 1px solid var(--accent); color: var(--accent); }
+
+    .pulse-dot {
+      width: 7px; height: 7px; border-radius: 50%; display: inline-block;
+      animation: pulse-anim 1.8s ease-in-out infinite;
+    }
+    .mainnet .pulse-dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .testnet .pulse-dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+    @keyframes pulse-anim {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(0.8); }
+    }
+
+    /* Theme picker */
+    .theme-picker { display: flex; align-items: center; gap: 6px; }
+    .theme-picker label { font-size: 12px; color: var(--muted); }
+    .theme-picker select {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); padding: 5px 8px;
+      border-radius: var(--radius); font-size: 12px; cursor: pointer;
+    }
+
+    /* ================================================================
+       SEARCH BAR
+       ================================================================ */
+    .search-wrap { padding: 20px 0 0; display: flex; justify-content: center; }
+
+    .search-box {
+      display: flex; width: 100%; max-width: 600px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow);
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+    .search-box:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(255,153,0,0.14), var(--shadow);
+    }
+    .search-box input {
+      flex: 1; background: transparent; border: none; outline: none;
+      padding: 12px 16px; color: var(--text);
+      font-size: 14px; font-family: var(--font-mono);
+    }
+    .search-box input::placeholder { color: var(--muted); }
+    .search-box .kbd-hint {
+      display: flex; align-items: center; padding: 0 10px;
+      color: var(--muted); font-size: 11px; font-family: var(--font-mono);
+      border-right: 1px solid var(--border);
+    }
+    .search-box button {
+      background: var(--accent); border: none; color: #000;
+      padding: 12px 20px; cursor: pointer;
+      font-weight: 700; font-size: 14px;
+      transition: background var(--transition);
+    }
+    .search-box button:hover { background: var(--accent2); }
+
+    /* ================================================================
+       STATS CARDS
+       ================================================================ */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px; margin-top: 20px;
+    }
+
+    .stat-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px 18px;
+      box-shadow: var(--shadow); position: relative; overflow: hidden;
+      transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition);
+    }
+    .stat-card:hover {
+      transform: translateY(-2px); border-color: var(--accent);
+    }
+    [data-theme="neon"] .stat-card:hover { box-shadow: 0 0 28px rgba(0,240,255,0.18); }
+    [data-theme="matrix"] .stat-card:hover { box-shadow: 0 0 20px rgba(0,255,0,0.12); border-color: var(--green); }
+
+    .stat-live-dot {
+      position: absolute; top: 12px; right: 12px;
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--green); box-shadow: 0 0 7px var(--green);
+      animation: pulse-anim 2s ease-in-out infinite;
+    }
+
+    .stat-label {
+      font-size: 10px; font-weight: 700; letter-spacing: 1.3px;
+      text-transform: uppercase; color: var(--muted);
+      font-family: var(--font-mono);
+    }
+    .stat-value {
+      font-size: 26px; font-weight: 700; color: var(--text);
+      font-family: var(--font-mono); margin-top: 6px; line-height: 1.2;
+    }
+    .stat-value .unit { font-size: 14px; color: var(--muted); font-weight: 400; }
+    .stat-value.accent { color: var(--accent); }
+    [data-theme="neon"] .stat-value.accent { text-shadow: 0 0 12px var(--accent); }
+
+    .stat-sub { font-size: 11px; color: var(--muted); margin-top: 4px; font-family: var(--font-mono); }
+
+    /* Sparkline */
+    .sparkline { margin-top: 10px; }
+    .sparkline svg { display: block; overflow: visible; }
+
+    /* tip counter animation */
+    @keyframes count-pop {
+      0%   { opacity: 0; transform: translateY(6px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+    .tip-pop { animation: count-pop 0.35s ease-out; }
+
+    /* ================================================================
+       BLOCK LIST
+       ================================================================ */
+    .blocks-section { margin-top: 24px; }
+
+    .section-header {
+      display: flex; align-items: center;
+      justify-content: space-between; margin-bottom: 12px;
+    }
+    .section-title {
+      font-size: 15px; font-weight: 700;
+      color: var(--text); font-family: var(--font-mono);
+    }
+
+    .live-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; color: var(--green); font-family: var(--font-mono);
+      background: rgba(63,185,80,0.08);
+      padding: 3px 10px; border-radius: 20px; border: 1px solid rgba(63,185,80,0.25);
+    }
+    .live-badge .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--green); animation: pulse-anim 1.5s ease-in-out infinite;
+    }
+
+    .blocks-table-wrap {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow);
+    }
+
+    .blocks-table { width: 100%; border-collapse: collapse; font-size: 13px; font-family: var(--font-mono); }
+
+    .blocks-table thead { background: var(--surface2); }
+    .blocks-table th {
+      text-align: left; padding: 10px 14px;
+      font-size: 10px; letter-spacing: 1px;
+      text-transform: uppercase; color: var(--muted);
+      font-weight: 600; border-bottom: 1px solid var(--border);
+    }
+    .blocks-table td {
+      padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: middle;
+    }
+    .blocks-table tr:last-child td { border-bottom: none; }
+    .blocks-table tbody tr { cursor: pointer; transition: background var(--transition); }
+    .blocks-table tbody tr:hover { background: var(--surface2); }
+
+    @keyframes flash-row {
+      0%   { background: rgba(255,153,0,0.22); }
+      100% { background: transparent; }
+    }
+    .blocks-table tbody tr.new-row { animation: flash-row 1.6s ease-out; }
+
+    .height-link { color: var(--accent); font-weight: 700; }
+    [data-theme="neon"] .height-link { text-shadow: 0 0 7px var(--accent); }
+
+    .hash-mono { color: var(--muted); font-size: 12px; }
+    .block-age { font-size: 12px; }
+    .age-fresh { color: var(--green); }
+    .age-mid   { color: var(--accent2); }
+    .age-old   { color: var(--muted); }
+    .tx-count  { text-align: center; }
+    .tx-pos    { font-weight: 600; }
+    .tx-zero   { color: var(--muted); }
+    .fee-grin  { color: var(--accent2); }
+    .fee-none  { color: var(--muted); }
+
+    .load-more-wrap {
+      padding: 14px; text-align: center;
+      border-top: 1px solid var(--border); background: var(--surface);
+    }
+    .btn-load-more {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--muted); padding: 8px 22px;
+      border-radius: var(--radius); cursor: pointer;
+      font-size: 12px; font-family: var(--font-mono);
+      transition: all var(--transition);
+    }
+    .btn-load-more:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ================================================================
+       SKELETON LOADERS
+       ================================================================ */
+    .skeleton {
+      background: linear-gradient(90deg, var(--surface2) 25%, var(--border) 50%, var(--surface2) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: 4px; display: inline-block;
+    }
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* ================================================================
+       TOAST NOTIFICATION
+       ================================================================ */
+    #toast {
+      position: fixed; top: 54px; right: 20px;
+      background: var(--surface); border: 1px solid var(--accent);
+      border-radius: var(--radius); padding: 12px 16px;
+      box-shadow: var(--shadow), 0 0 20px rgba(255,153,0,0.18);
+      font-family: var(--font-mono); font-size: 13px; color: var(--text);
+      z-index: 1500; max-width: 290px;
+      transform: translateX(calc(100% + 30px));
+      transition: transform 0.4s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    [data-theme="neon"] #toast {
+      border-color: var(--accent);
+      box-shadow: var(--shadow), 0 0 30px rgba(0,240,255,0.25);
+    }
+    #toast.show { transform: translateX(0); }
+
+    .toast-inner { display: flex; align-items: center; gap: 10px; }
+    .toast-icon { font-size: 18px; flex-shrink: 0; }
+    .toast-text strong { display: block; color: var(--accent); }
+    .toast-text span { font-size: 11px; color: var(--muted); }
+    .toast-close {
+      margin-left: auto; background: none; border: none;
+      color: var(--muted); cursor: pointer; font-size: 15px; padding: 0 0 0 6px;
+    }
+    .toast-close:hover { color: var(--text); }
+
+    /* ================================================================
+       VIEW TOGGLE
+       ================================================================ */
+    #home-view.hidden   { display: none; }
+    #block-view         { display: none; }
+    #block-view.active  { display: block; }
+
+    /* ================================================================
+       BLOCK DETAIL PAGE
+       ================================================================ */
+    .breadcrumb {
+      display: flex; align-items: center; gap: 8px;
+      padding: 16px 0 10px; font-size: 13px;
+      font-family: var(--font-mono); color: var(--muted);
+    }
+    .breadcrumb a { color: var(--accent); }
+    .breadcrumb .sep { color: var(--border); }
+
+    .block-header-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow);
+    }
+
+    .block-height-title {
+      font-size: 22px; font-weight: 700;
+      font-family: var(--font-mono); color: var(--accent); margin-bottom: 20px;
+    }
+
+    .block-fields { display: flex; flex-direction: column; gap: 13px; }
+
+    .block-field {
+      display: grid; grid-template-columns: 140px 1fr;
+      gap: 10px; align-items: start; font-size: 13px;
+    }
+    .field-label {
+      color: var(--muted); font-family: var(--font-mono);
+      font-size: 10px; letter-spacing: 0.5px;
+      text-transform: uppercase; padding-top: 2px;
+    }
+    .field-value {
+      font-family: var(--font-mono); color: var(--text);
+      word-break: break-all; display: flex; align-items: flex-start; gap: 8px;
+    }
+    .field-note { color: var(--muted); }
+
+    /* Copy button */
+    .copy-btn {
+      background: none; border: none; cursor: pointer;
+      color: var(--muted); font-size: 13px; padding: 0;
+      flex-shrink: 0; position: relative;
+      transition: color var(--transition);
+    }
+    .copy-btn:hover { color: var(--accent); }
+    .copy-tooltip {
+      position: absolute; bottom: 130%; left: 50%;
+      transform: translateX(-50%);
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--green); font-size: 10px;
+      padding: 3px 7px; border-radius: 4px;
+      white-space: nowrap; opacity: 0; pointer-events: none;
+      transition: opacity 0.2s;
+    }
+    .copy-btn.copied { color: var(--green); }
+    .copy-btn.copied .copy-tooltip { opacity: 1; }
+
+    /* Kernels */
+    .kernels-section {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); margin-top: 14px;
+      overflow: hidden; box-shadow: var(--shadow);
+    }
+    .kernels-title {
+      padding: 12px 22px; background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      font-size: 13px; font-weight: 700;
+      font-family: var(--font-mono); color: var(--text);
+    }
+    .kernel-row {
+      display: flex; align-items: center; gap: 14px;
+      padding: 12px 22px; border-bottom: 1px solid var(--border);
+      font-size: 13px; font-family: var(--font-mono);
+    }
+    .kernel-row:last-child { border-bottom: none; }
+
+    .k-badge {
+      display: inline-block; padding: 2px 9px;
+      border-radius: 4px; font-size: 10px; font-weight: 700;
+      letter-spacing: 0.5px; flex-shrink: 0;
+      min-width: 100px; text-align: center;
+    }
+    .k-coin   { background: rgba(184,134,11,0.18); color: var(--badge-coin); border: 1px solid var(--badge-coin); }
+    .k-plain  { background: rgba(31,111,235,0.18); color: var(--badge-plain); border: 1px solid var(--badge-plain); }
+    .k-locked { background: rgba(137,87,229,0.18); color: var(--badge-lock); border: 1px solid var(--badge-lock); }
+
+    .k-fee     { color: var(--accent2); }
+    .k-no-fee  { color: var(--muted); }
+    .k-note    { color: var(--muted); font-size: 11px; margin-left: auto; }
+
+    /* Block nav */
+    .block-nav { display: flex; justify-content: space-between; margin-top: 14px; gap: 12px; }
+    .btn-nav {
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--text); padding: 10px 20px;
+      border-radius: var(--radius); cursor: pointer;
+      font-family: var(--font-mono); font-size: 13px;
+      transition: all var(--transition);
+    }
+    .btn-nav:hover { border-color: var(--accent); color: var(--accent); background: var(--surface2); }
+
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 900px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 600px) {
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+      .stat-value { font-size: 20px; }
+      .blocks-table .col-hash,
+      .blocks-table .col-fees { display: none; }
+      .gs-logo .tagline { display: none; }
+      .theme-picker label { display: none; }
+    }
+    @media (max-width: 420px) {
+      .stats-grid { grid-template-columns: 1fr; }
+      .block-field { grid-template-columns: 1fr; }
+    }
+
+    /* ================================================================
+       MATRIX — extra flavour
+       ================================================================ */
+    [data-theme="matrix"] .gs-logo { text-shadow: 0 0 10px #00ff00; }
+    [data-theme="matrix"] .height-link { text-shadow: 0 0 6px #00ff00; }
+    [data-theme="matrix"] .stat-value.accent { text-shadow: 0 0 10px #00ff00; }
+
+  </style>
+</head>
+<body>
+
+<!-- ================================================================
+     PREVIEW TOOLBAR  (not part of the real GrinScan app)
+     ================================================================ -->
+<div class="preview-bar">
+  <span class="label">GrinScan UI Preview</span>
+  <span class="sep">|</span>
+  <label>Page:</label>
+  <select id="prev-view" onchange="switchView(this.value)">
+    <option value="home">index.html — Home</option>
+    <option value="block">block.html — Block Detail</option>
+  </select>
+  <span class="sep">|</span>
+  <button onclick="simulateNewBlock()">⚡ Simulate New Block</button>
+  <button onclick="showSkeletons()">💀 Skeleton Loaders</button>
+  <span class="hint">Press / to focus search &nbsp;·&nbsp; Esc to dismiss toast</span>
+</div>
+
+<!-- Toast notification -->
+<div id="toast">
+  <div class="toast-inner">
+    <span class="toast-icon">🎉</span>
+    <div class="toast-text">
+      <strong>New block <span id="toast-height">#2,345,679</span></strong>
+      <span id="toast-sub">just now · 0 txs</span>
+    </div>
+    <button class="toast-close" onclick="hideToast()">✕</button>
+  </div>
+</div>
+
+<!-- ================================================================
+     APP
+     ================================================================ -->
+<div id="app">
+
+  <!-- SHARED HEADER -->
+  <header class="gs-header">
+    <div class="gs-logo">
+      <span class="icon">🔍</span>
+      <div>
+        GrinScan
+        <span class="tagline">Even a noob can scan the chain.</span>
+      </div>
+    </div>
+    <div class="gs-header-right">
+      <div class="net-badge mainnet" id="net-badge">
+        <span class="pulse-dot"></span>
+        <span id="net-label">MAINNET</span>
+      </div>
+      <div class="theme-picker">
+        <label>🎨</label>
+        <select id="theme-select" onchange="setTheme(this.value)">
+          <option value="dark">🌙 Dark</option>
+          <option value="light">☀️ Light</option>
+          <option value="neon">⚡ Neon</option>
+          <option value="matrix">🟩 Matrix</option>
+        </select>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============================================================
+       HOME VIEW
+       ============================================================ -->
+  <div id="home-view">
+
+    <!-- Search -->
+    <div class="search-wrap">
+      <div class="search-box">
+        <input id="search-input" type="text" placeholder="Search by block height or hash…" />
+        <span class="kbd-hint">/ to focus</span>
+        <button onclick="doSearch()">Search</button>
+      </div>
+    </div>
+
+    <!-- Stats grid -->
+    <div class="stats-grid">
+
+      <div class="stat-card">
+        <div class="stat-live-dot"></div>
+        <div class="stat-label">Tip Height</div>
+        <div class="stat-value accent" id="tip-height">2,345,678</div>
+        <div class="stat-sub" id="tip-hash-short">0abcdef…ef12</div>
+        <div class="sparkline">
+          <svg id="sparkline-svg" width="100%" height="36" viewBox="0 0 130 36" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">Hashrate</div>
+        <div class="stat-value" id="stat-hashrate">42.3 <span class="unit">GPS</span></div>
+        <div class="stat-sub">Graph solutions / sec</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">Difficulty</div>
+        <div class="stat-value">2.54 <span class="unit">M</span></div>
+        <div class="stat-sub">2,535,180</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">Peers</div>
+        <div class="stat-value">24</div>
+        <div class="stat-sub">16 out · 8 in</div>
+      </div>
+
+    </div>
+
+    <!-- Block list -->
+    <div class="blocks-section">
+      <div class="section-header">
+        <div class="section-title">Latest Blocks</div>
+        <div class="live-badge">
+          <span class="dot"></span>
+          Live · 30s refresh
+        </div>
+      </div>
+
+      <div class="blocks-table-wrap">
+        <table class="blocks-table">
+          <thead>
+            <tr>
+              <th>Height</th>
+              <th class="col-hash">Hash</th>
+              <th>Age</th>
+              <th class="tx-count">TXs</th>
+              <th class="col-fees">Fees</th>
+            </tr>
+          </thead>
+          <tbody id="blocks-tbody"></tbody>
+        </table>
+        <div class="load-more-wrap">
+          <button class="btn-load-more">Load 20 more</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /#home-view -->
+
+  <!-- ============================================================
+       BLOCK DETAIL VIEW
+       ============================================================ -->
+  <div id="block-view">
+
+    <nav class="breadcrumb">
+      <a href="#" onclick="switchView('home');return false;">GrinScan</a>
+      <span class="sep">/</span>
+      <span>Block #2,345,678</span>
+    </nav>
+
+    <div class="block-header-card">
+      <div class="block-height-title">Block #2,345,678</div>
+      <div class="block-fields">
+
+        <div class="block-field">
+          <div class="field-label">Hash</div>
+          <div class="field-value">
+            0abcdef1234567890abcdef1234567890abcdef1234567890abcdef12345678
+            <button class="copy-btn" onclick="copyHash(this,'0abcdef1234567890abcdef1234567890abcdef1234567890abcdef12345678')">
+              📋<span class="copy-tooltip">Copied!</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="block-field">
+          <div class="field-label">Prev Hash</div>
+          <div class="field-value">
+            098765432109876543fedcba098765432109876543fedcba09876543210987654
+            <button class="copy-btn" onclick="copyHash(this,'098765432109876543fedcba098765432109876543fedcba09876543210987654')">
+              📋<span class="copy-tooltip">Copied!</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="block-field">
+          <div class="field-label">Timestamp</div>
+          <div class="field-value">
+            2025-11-08 &nbsp;14:23:01 UTC
+            &nbsp;<span class="field-note age-fresh">(2m 14s ago)</span>
+          </div>
+        </div>
+
+        <div class="block-field">
+          <div class="field-label">Difficulty</div>
+          <div class="field-value">1,234,567</div>
+        </div>
+
+        <div class="block-field">
+          <div class="field-label">Kernels</div>
+          <div class="field-value">
+            4
+            <span class="field-note">(3 transactions + 1 coinbase)</span>
+          </div>
+        </div>
+
+        <div class="block-field">
+          <div class="field-label">Outputs</div>
+          <div class="field-value">7</div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Kernels -->
+    <div class="kernels-section">
+      <div class="kernels-title">Kernels (4)</div>
+      <div class="kernel-row">
+        <span class="k-badge k-coin">COINBASE</span>
+        <span class="k-no-fee">fee: —</span>
+        <span class="k-note">miner reward</span>
+      </div>
+      <div class="kernel-row">
+        <span class="k-badge k-plain">PLAIN</span>
+        <span class="k-fee">fee: 0.006 ツ</span>
+        <span class="k-note">excess: 08f3a2…cc44</span>
+      </div>
+      <div class="kernel-row">
+        <span class="k-badge k-plain">PLAIN</span>
+        <span class="k-fee">fee: 0.001 ツ</span>
+        <span class="k-note">excess: 09d7c1…ab78</span>
+      </div>
+      <div class="kernel-row">
+        <span class="k-badge k-locked">HEIGHT_LOCKED</span>
+        <span class="k-fee">fee: 0.002 ツ</span>
+        <span class="k-note">lock height: #2,350,000</span>
+      </div>
+    </div>
+
+    <!-- Prev / Next nav -->
+    <div class="block-nav">
+      <button class="btn-nav" onclick="switchView('home')">← Block #2,345,677</button>
+      <button class="btn-nav" onclick="switchView('home')">Block #2,345,679 →</button>
+    </div>
+
+  </div><!-- /#block-view -->
+
+</div><!-- /#app -->
+
+<!-- ================================================================
+     JAVASCRIPT
+     ================================================================ -->
+<script>
+  /* ===== MOCK BLOCK DATA ===== */
+  const NOW = Date.now();
+  const MINUTE = 60000;
+
+  let tipHeight = 2345678;
+  let blocks = [
+    { h: 2345678, hash: '0abcdef…ef12', ts: NOW - 134*1000,   txs: 3, fee: 0.009 },
+    { h: 2345677, hash: '098716c…cc44', ts: NOW - 198*1000,   txs: 1, fee: 0.001 },
+    { h: 2345676, hash: '012345a…ab78', ts: NOW - 262*1000,   txs: 0, fee: 0     },
+    { h: 2345675, hash: '0bcdef9…9012', ts: NOW - 326*1000,   txs: 5, fee: 0.015 },
+    { h: 2345674, hash: '0f3a2cc…3344', ts: NOW - 390*1000,   txs: 2, fee: 0.003 },
+    { h: 2345673, hash: '0881abc…9988', ts: NOW - 454*1000,   txs: 0, fee: 0     },
+    { h: 2345672, hash: '0d71ef9…7766', ts: NOW - 518*1000,   txs: 1, fee: 0.001 },
+    { h: 2345671, hash: '0aabbcc…5544', ts: NOW - 582*1000,   txs: 4, fee: 0.012 },
+    { h: 2345670, hash: '099aabb…3322', ts: NOW - 646*1000,   txs: 0, fee: 0     },
+    { h: 2345669, hash: '0776655…aabb', ts: NOW - 710*1000,   txs: 2, fee: 0.006 },
+    { h: 2345668, hash: '0554433…ccdd', ts: NOW - 774*1000,   txs: 1, fee: 0.001 },
+    { h: 2345667, hash: '0332211…eeff', ts: NOW - 838*1000,   txs: 0, fee: 0     },
+  ];
+
+  /* ===== THEME ===== */
+  function setTheme(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    document.getElementById('theme-select').value = t;
+    const badge = document.getElementById('net-badge');
+    const label = document.getElementById('net-label');
+    if (t === 'matrix') {
+      badge.className = 'net-badge testnet';
+      label.textContent = 'TESTNET';
+    } else {
+      badge.className = 'net-badge mainnet';
+      label.textContent = 'MAINNET';
+    }
+  }
+
+  // apply system preference on first load
+  if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+    setTheme('light');
+  } else {
+    setTheme('dark');
+  }
+
+  /* ===== VIEW SWITCHING ===== */
+  function switchView(v) {
+    const home  = document.getElementById('home-view');
+    const block = document.getElementById('block-view');
+    const sel   = document.getElementById('prev-view');
+    if (v === 'block') {
+      home.classList.add('hidden');
+      block.classList.add('active');
+      sel.value = 'block';
+    } else {
+      home.classList.remove('hidden');
+      block.classList.remove('active');
+      sel.value = 'home';
+    }
+  }
+
+  /* ===== AGE ===== */
+  function fmtAge(ts) {
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60), ss = s % 60;
+    if (m < 60) return `${m}m ${ss}s ago`;
+    const hr = Math.floor(m / 60), mm = m % 60;
+    return `${hr}h ${mm}m ago`;
+  }
+  function ageCls(ts) {
+    const m = (Date.now() - ts) / MINUTE;
+    if (m < 5)  return 'age-fresh';
+    if (m < 30) return 'age-mid';
+    return 'age-old';
+  }
+
+  /* ===== RENDER BLOCKS ===== */
+  function renderBlocks(skeletons) {
+    const tbody = document.getElementById('blocks-tbody');
+    if (skeletons) {
+      let h = '';
+      for (let i = 0; i < 8; i++) {
+        h += `<tr>
+          <td><span class="skeleton" style="width:72px;height:15px">&nbsp;</span></td>
+          <td class="col-hash"><span class="skeleton" style="width:110px;height:15px">&nbsp;</span></td>
+          <td><span class="skeleton" style="width:78px;height:15px">&nbsp;</span></td>
+          <td class="tx-count"><span class="skeleton" style="width:22px;height:15px">&nbsp;</span></td>
+          <td class="col-fees"><span class="skeleton" style="width:58px;height:15px">&nbsp;</span></td>
+        </tr>`;
+      }
+      tbody.innerHTML = h;
+      return;
+    }
+    let h = '';
+    blocks.forEach((b, i) => {
+      const age    = fmtAge(b.ts);
+      const cls    = ageCls(b.ts);
+      const feeStr = b.fee > 0
+        ? `<span class="fee-grin">${b.fee.toFixed(3)} ツ</span>`
+        : '<span class="fee-none">—</span>';
+      const txStr  = b.txs > 0
+        ? `<span class="tx-pos">${b.txs}</span>`
+        : `<span class="tx-zero">—</span>`;
+      const rowCls = i === 0 ? 'new-row' : '';
+      h += `<tr class="${rowCls}" onclick="switchView('block')">
+        <td><span class="height-link">${b.h.toLocaleString()}</span></td>
+        <td class="col-hash"><span class="hash-mono">${b.hash}</span></td>
+        <td><span class="block-age ${cls}" data-ts="${b.ts}">${age}</span></td>
+        <td class="tx-count">${txStr}</td>
+        <td class="col-fees">${feeStr}</td>
+      </tr>`;
+    });
+    tbody.innerHTML = h;
+  }
+
+  /* ===== SPARKLINE ===== */
+  const sparkData = [38.1, 41.2, 39.8, 44.1, 42.0, 45.3, 40.7, 43.1, 41.9, 42.3];
+
+  function renderSparkline() {
+    const svg  = document.getElementById('sparkline-svg');
+    const W = 130, H = 36, bw = 11, gap = 3;
+    const max  = Math.max(...sparkData);
+    const min  = Math.min(...sparkData) * 0.88;
+    let bars   = '';
+    sparkData.forEach((v, i) => {
+      const bh  = Math.max(3, ((v - min) / (max - min)) * (H - 4));
+      const x   = i * (bw + gap);
+      const y   = H - bh;
+      const op  = (0.35 + (i / sparkData.length) * 0.65).toFixed(2);
+      bars += `<rect x="${x}" y="${y}" width="${bw}" height="${bh}" rx="2"
+                     fill="var(--accent)" opacity="${op}"/>`;
+    });
+    svg.innerHTML = bars;
+  }
+
+  /* ===== LIVE AGE TICK ===== */
+  setInterval(() => {
+    document.querySelectorAll('.block-age[data-ts]').forEach(el => {
+      const ts = parseInt(el.dataset.ts);
+      el.textContent  = fmtAge(ts);
+      el.className    = `block-age ${ageCls(ts)}`;
+    });
+  }, 1000);
+
+  /* ===== TOAST ===== */
+  let toastTimer = null;
+
+  function showToast(height, txs) {
+    document.getElementById('toast-height').textContent = '#' + height.toLocaleString();
+    document.getElementById('toast-sub').textContent    = `just now · ${txs} tx${txs !== 1 ? 's' : ''}`;
+    document.getElementById('toast').classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(hideToast, 5500);
+  }
+
+  function hideToast() {
+    document.getElementById('toast').classList.remove('show');
+  }
+
+  /* ===== SIMULATE NEW BLOCK ===== */
+  function simulateNewBlock() {
+    tipHeight++;
+    const txs = Math.floor(Math.random() * 6);
+    const fee = parseFloat((txs * 0.003 * Math.random()).toFixed(3));
+    const nb  = {
+      h:    tipHeight,
+      hash: '0' + Math.random().toString(16).substr(2,7) + '…' + Math.random().toString(16).substr(2,4),
+      ts:   Date.now(),
+      txs,
+      fee,
+    };
+    blocks.unshift(nb);
+    if (blocks.length > 20) blocks.pop();
+
+    // animate tip counter
+    const el = document.getElementById('tip-height');
+    el.textContent = tipHeight.toLocaleString();
+    el.classList.remove('tip-pop');
+    void el.offsetWidth;
+    el.classList.add('tip-pop');
+
+    // sparkline nudge
+    sparkData.shift();
+    sparkData.push(parseFloat((42 + (Math.random() - 0.5) * 6).toFixed(1)));
+    renderSparkline();
+
+    renderBlocks(false);
+    showToast(tipHeight, txs);
+  }
+
+  /* ===== SHOW SKELETONS ===== */
+  function showSkeletons() {
+    renderBlocks(true);
+    setTimeout(() => renderBlocks(false), 2000);
+  }
+
+  /* ===== SEARCH ===== */
+  function doSearch() {
+    const v = document.getElementById('search-input').value.trim();
+    if (v) switchView('block');
+  }
+
+  document.getElementById('search-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter')  doSearch();
+    if (e.key === 'Escape') e.target.blur();
+  });
+
+  /* ===== KEYBOARD SHORTCUTS ===== */
+  document.addEventListener('keydown', e => {
+    const tag = document.activeElement.tagName;
+    if (e.key === '/' && tag !== 'INPUT' && tag !== 'SELECT') {
+      e.preventDefault();
+      document.getElementById('search-input').focus();
+    }
+    if (e.key === 'Escape') hideToast();
+  });
+
+  /* ===== COPY HASH ===== */
+  function copyHash(btn, text) {
+    navigator.clipboard.writeText(text).catch(() => {});
+    btn.classList.add('copied');
+    btn.innerHTML = '✅<span class="copy-tooltip">Copied!</span>';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      btn.innerHTML = '📋<span class="copy-tooltip">Copied!</span>';
+    }, 2200);
+  }
+
+  /* ===== INIT ===== */
+  renderBlocks(true);
+  setTimeout(() => {
+    renderBlocks(false);
+    renderSparkline();
+  }, 1300);
+</script>
+
+</body>
+</html>

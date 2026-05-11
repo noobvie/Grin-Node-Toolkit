@@ -1,0 +1,45 @@
+[
+  {"category": "Explorer",    "name": "Grin Explorer",              "url": "https://grinexplorer.net",                             "since": "Jan 2019"},
+  {"category": "Explorer",    "name": "GrinCoin.org mainnet",       "url": "https://grincoin.org/",                                "since": null},
+  {"category": "Explorer",    "name": "GrinCoin.org testnet",       "url": "https://testnet.grincoin.org/",                                "since": null},
+  {"category": "Explorer",    "name": "GrinScan.org mainnet",       "url": "https://grinscan.org/",                                "since": null},
+  {"category": "Explorer",    "name": "GrinScan.org testnet",       "url": "https://test.grinscan.org/",                                "since": null},
+
+  {"category": "Exchange",    "name": "Gate.io",                    "url": "https://www.gate.com/trade/GRIN_USDT",                 "since": "Feb 2019"},
+  {"category": "Exchange",    "name": "NoirTrade",                  "url": "https://noirtrade.com/trade?pair=GRIN_BTC",            "since": null},
+  {"category": "Exchange",    "name": "nonlogs.io",                 "url": "https://nonlogs.io/trade/GRIN-BTC",                   "since": null},
+
+  {"category": "Wallet",      "name": "GRIM",                       "url": "https://gri.mw/",                                     "since": null},
+  {"category": "Wallet",      "name": "Grin++",                     "url": "https://grinplusplus.github.io/",                     "since": null},
+  {"category": "Wallet",      "name": "Easy Grin",                  "url": "https://wallet.easygrin.org/",                        "since": null},
+  {"category": "Wallet",      "name": "MWC Wallet",                 "url": "https://mwcwallet.com/",                              "since": null},
+
+  {"category": "Community",   "name": "grin.mw",                   "url": "https://grin.mw",                                     "since": "Jan 2019"},
+  {"category": "Community",   "name": "Grin Forum",                 "url": "https://forum.grin.mw",                               "since": "Jan 2019"},
+  {"category": "Community",   "name": "docs.grin.mw",               "url": "https://docs.grin.mw",                                "since": null},
+  {"category": "Community",   "name": "grin.money",                 "url": "http://grin.money",                                   "since": null},
+  {"category": "Community",   "name": "Grin Global Health with API","url": "https://world.grin.money",                            "since": null},
+  {"category": "Community",   "name": "Free Grin Airdrop",          "url": "https://drop.grin.money/",                            "since": null},
+
+  {"category": "Node",        "name": "GrinNode.live",              "url": "https://grinnode.live/",                              "since": null},
+
+  {"category": "Ecommerce",   "name": "Grinily",                    "url": "https://grinily.com",                                 "since": null},
+
+  {"category": "Miner",       "name": "iPollo G1 Mini",             "url": "https://ipollo.com/products/ipollo-g1-mini",          "since": null, "type": "stock", "in_stock": true},
+  {"category": "Miner",       "name": "iPollo G1",                  "url": "https://ipollo.com/products/ipollo-g1",               "since": null, "type": "stock"},
+
+  {"category": "Mining Pool", "name": "2Miners",                    "url": "https://2miners.com/grin-mining-pool",                "since": null},
+  {"category": "Mining Pool", "name": "EasyGrin Pool",              "url": "https://pool.easygrin.org/",                         "since": null},
+  {"category": "Mining Pool", "name": "Always Pool",                "url": "https://pool.always.vip/",                           "since": null},
+  {"category": "Mining Pool", "name": "NTMiner Pool",               "url": "https://ntminerpool.com/",                           "since": null},
+  {"category": "Mining Pool", "name": "Gaea Pool",                  "url": "https://gaeapool.com/",                              "since": null},
+  {"category": "Mining Pool", "name": "Pool Stats",                 "url": "https://miningpoolstats.stream/grin",                "since": null},
+
+  {"category": "Grin API — Mainnet", "name": "api.grin.money",        "url": "https://api.grin.money",        "since": 2026},
+  {"category": "Grin API — Mainnet", "name": "api.grinily.com",       "url": "https://api.grinily.com",       "since": 2026},
+  {"category": "Grin API — Mainnet", "name": "api.onlygrins.com",     "url": "https://api.onlygrins.com",     "since": 2026},
+
+  {"category": "Grin API — Testnet", "name": "testapi.grin.money",    "url": "https://testapi.grin.money",    "since": 2026},
+  {"category": "Grin API — Testnet", "name": "testapi.grinily.com",   "url": "https://testapi.grinily.com",   "since": 2026},
+  {"category": "Grin API — Testnet", "name": "testapi.onlygrins.com", "url": "https://testapi.onlygrins.com", "since": 2026}
+]

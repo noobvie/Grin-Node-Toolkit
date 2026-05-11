@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GrinScan — Grin Block Explorer | Live Blocks, Hashrate &amp; Network Stats</title>
+  <meta name="description" content="GrinScan: real-time Grin (GRIN) block explorer. Browse live blocks, track network hashrate, mining difficulty, peer count, and GRIN price on the MimbleWimble blockchain.">
+  <meta name="keywords" content="Grin block explorer, GRIN blockchain, MimbleWimble explorer, Grin hashrate, Grin mining difficulty, GRIN price, Grin network stats, GrinScan, Cuckatoo32, Grin cryptocurrency, privacy coin explorer">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#0d1117">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="GrinScan">
+  <meta property="og:title" content="GrinScan — Grin Block Explorer">
+  <meta property="og:description" content="Real-time Grin block explorer. Live blocks, hashrate, difficulty, peers, and GRIN/BTC price on the MimbleWimble blockchain.">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="GrinScan — Grin Block Explorer">
+  <meta name="twitter:description" content="Real-time Grin block explorer. Live blocks, hashrate, mining difficulty, peer count, and GRIN price.">
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"WebApplication","name":"GrinScan","description":"Real-time block explorer for the Grin (GRIN) MimbleWimble privacy cryptocurrency","url":"https://grinscan.org","applicationCategory":"FinanceApplication"}
+  </script>
+  <link rel="icon" id="favicon-link" href="/favicon-testnet.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/grinscan.css">
+  <link rel="stylesheet" id="theme-css" href="/css/themes/dark.css">
+  <script>
+    // Apply theme before first paint (no FOUC)
+    (function () {
+      var net = (window.GRINSCAN_NETWORK || 'testnet');
+      var fav = document.getElementById('favicon-link');
+      if (fav) fav.href = net === 'mainnet' ? '/favicon-mainnet.svg' : '/favicon-testnet.svg';
+    })();
+    (function () {
+      var net = (window.GRINSCAN_NETWORK || 'testnet');
+      var def = net === 'mainnet' ? 'neon' : 'matrix';
+      var saved = localStorage.getItem('grinscan-theme') || def;
+      var map = { dark: 'css/themes/dark.css', light: 'css/themes/light.css', neon: 'css/themes/neon.css', matrix: 'css/themes/matrix.css' };
+      var link = document.getElementById('theme-css');
+      if (link && map[saved]) link.href = map[saved];
+    })();
+    // Mark active nav link
+    (function () {
+      document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('.nav-link').forEach(function (a) {
+          if (a.dataset.page === 'explorer') a.classList.add('active');
+        });
+        // Dynamic title
+        var net = window.GRINSCAN_NETWORK || 'testnet';
+        document.title = 'GrinScan — ' + (net === 'mainnet' ? 'Mainnet' : 'Testnet') + ' Block Explorer';
+      });
+    })();
+  </script>
+</head>
+<body data-page="index">
+
+  <!-- Header -->
+  <header class="gs-header">
+    <a href="/" class="gs-logo"><img src="/grin-logo.svg" class="gs-logo-icon" alt="" aria-hidden="true"> GrinScan</a>
+    <span id="network-badge" class="gs-network-badge testnet">TESTNET</span>
+    <form id="search-form" class="gs-header-search" role="search">
+      <input id="search-input" type="text" placeholder="Search by block height or hash…" autocomplete="off" spellcheck="false" aria-label="Search blocks">
+      <button type="submit">Search</button>
+    </form>
+    <nav class="gs-nav">
+      <a href="/" class="nav-link" data-page="explorer" aria-label="Explorer">Explorer</a>
+      <a href="/info.html" class="nav-link" data-page="info" aria-label="Info">Info</a>
+      <a href="/api.html" class="nav-link" data-page="api" aria-label="API">API</a>
+    </nav>
+    <div class="gs-theme-wrap">
+      <button id="theme-toggle-btn" aria-expanded="false" aria-haspopup="true">
+        <span id="theme-current-label">Theme</span> ▾
+      </button>
+      <div id="theme-dropdown" hidden role="menu">
+        <button data-theme="dark"   role="menuitem">🌑 Dark</button>
+        <button data-theme="light"  role="menuitem">☀️ Light</button>
+        <button data-theme="neon"   role="menuitem">⚡ Neon</button>
+        <button data-theme="matrix" role="menuitem">🟢 Matrix</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Toast -->
+  <div id="gs-toast" class="gs-toast" role="status" aria-live="polite"></div>
+
+  <main class="gs-main">
+
+    <!-- Stats grid -->
+    <div class="gs-stats-grid" role="region" aria-label="Network statistics">
+      <div class="gs-stat-card">
+        <div class="gs-stat-label">Tip Height</div>
+        <div class="gs-stat-value">
+          <span class="live-dot" title="Live"></span><span id="stat-tip" class="skeleton skeleton-cell" style="display:inline-block;min-width:100px;height:1.2em;">‌</span>
+        </div>
+      </div>
+      <div class="gs-stat-card">
+        <div class="gs-stat-label">Hashrate</div>
+        <div class="gs-stat-value" id="stat-hashrate" style="min-width:80px;">—</div>
+      </div>
+      <div class="gs-stat-card">
+        <div class="gs-stat-label">Difficulty</div>
+        <div class="gs-stat-value" id="stat-difficulty">—</div>
+      </div>
+      <div class="gs-stat-card">
+        <div class="gs-stat-label">Node Peers</div>
+        <div class="gs-stat-value" id="stat-peers">—</div>
+        <div class="gs-stat-sub">connected to this node</div>
+      </div>
+      <div class="gs-stat-card">
+        <div class="gs-stat-label">Market Cap
+          <span class="gs-info" tabindex="0" role="tooltip"
+            data-tip="Supply × USD price · Supply = height × 60 GRIN (1 GRIN/sec emission) · Price: Gate.io GRIN/USDT · refreshed every 10 min">ℹ</span>
+        </div>
+        <div class="gs-stat-value" id="stat-marketcap">—</div>
+      </div>
+      <div class="gs-stat-card">
+        <div class="gs-stat-label">Price
+          <span class="gs-info" tabindex="0" role="tooltip"
+            data-tip="USD: Gate.io GRIN/USDT last price · BTC: nonlogs.io GRIN/BTC last price · 24h change: Gate.io live · refreshed every 10 min">ℹ</span>
+        </div>
+        <div class="gs-stat-value" id="stat-price">—</div>
+        <div class="gs-stat-sub" id="stat-change24h"></div>
+      </div>
+      <div class="gs-stat-card">
+        <div class="gs-stat-label">Grin Volume
+          <span class="gs-info" tabindex="0" role="tooltip"
+            data-tip="24h quote volume · USDT pair: Gate.io GRIN/USDT · BTC pair: nonlogs.io GRIN/BTC · refreshed every 10 min">ℹ</span>
+        </div>
+        <div class="gs-stat-value" id="stat-volume">—</div>
+        <div class="gs-stat-sub" id="stat-volume-btc"></div>
+      </div>
+      <div class="gs-stat-card">
+        <div class="gs-stat-label">Supply</div>
+        <div class="gs-stat-value" id="stat-supply">—</div>
+      </div>
+    </div>
+
+    <div class="gs-promo" id="gs-promo"></div>
+
+    <!-- Block list -->
+    <section class="gs-block-section" aria-label="Latest blocks">
+      <div class="gs-block-header">
+        <span class="gs-block-title">Latest Blocks</span>
+        <span id="live-indicator" class="gs-live-indicator" aria-live="polite">Live</span>
+      </div>
+      <div class="gs-table-wrap">
+        <table class="gs-table" aria-label="Block list">
+          <thead>
+            <tr>
+              <th>Height</th>
+              <th class="col-hash">Hash</th>
+              <th>Time</th>
+              <th>TXs</th>
+              <th>Fees</th>
+            </tr>
+          </thead>
+          <tbody id="blocks-tbody">
+            <!-- skeleton rows -->
+            <tr><td colspan="5"><div class="skeleton" style="height:16px;margin:4px 0;border-radius:4px;"></div></td></tr>
+            <tr><td colspan="5"><div class="skeleton" style="height:16px;margin:4px 0;border-radius:4px;"></div></td></tr>
+            <tr><td colspan="5"><div class="skeleton" style="height:16px;margin:4px 0;border-radius:4px;"></div></td></tr>
+          </tbody>
+        </table>
+        <div class="gs-pagination" id="pagination-bar">
+          <button id="page-prev-btn" class="gs-page-btn" disabled>← Prev</button>
+          <span id="page-info" class="gs-page-info">Page 1</span>
+          <button id="page-next-btn" class="gs-page-btn" disabled>Next →</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="gs-footer">
+    <div id="gs-footer-text"></div>
+    <p class="gs-seo-text">GrinScan indexes the Grin (GRIN) MimbleWimble blockchain in real time — live blocks, kernels, network hashrate, Cuckatoo32 mining difficulty, connected peer nodes, and GRIN/BTC price. Open-source block explorer for Grin mainnet and testnet.</p>
+  </footer>
+
+  <script src="/js/theme.js"></script>
+  <script src="/js/app.js"></script>
+  <script src="/js/media.js"></script>
+  <script src="/js/analytics.js"></script>
+</body>
+</html>

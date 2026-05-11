@@ -259,7 +259,7 @@ show_header() {
     echo " ╚██████╔╝██║  ██║██║██║ ╚████║"
     echo "  ╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝"
     echo -e "${RESET}"
-    echo -e "${BOLD} Grin Node Toolkit v2026.04.18${RESET}"
+    echo -e "${BOLD} Grin Node Toolkit v2026.05.10${RESET}"
     echo -e "${YELLOW}   Keep your Grin alive${RESET}"
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"

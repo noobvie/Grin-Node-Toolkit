@@ -91,8 +91,42 @@ Secret files — two per service, each with a Foreign and Owner secret:
 **Grin node** (`/opt/grin/node/<net>-prune/`) — created by script 01
 | File | API | Who reads it | Key in grin.toml |
 |------|-----|-------------|------------------|
-| `.api_secret` | Node Owner API | Script 04, Python collectors | `api_secret_path` |
-| `.foreign_api_secret` | Node Foreign API | grin-wallet via `node_api_secret_path` | `foreign_api_secret_path` |
+| `.api_secret` | Node Owner API | Script 04, Python collectors, GrinScan (06b) | `api_secret_path` |
+| `.foreign_api_secret` | Node Foreign API | grin-wallet via `node_api_secret_path`, GrinScan (06b) | `foreign_api_secret_path` |
+
+Node API method split — use this to decide which endpoint a new call should target:
+- **Owner API** (`/v2/owner`, `.api_secret`): `get_status` (includes tip height + connections), `get_connected_peers`, `validate_chain`, `compact_chain` — node management/status, trusted internal callers only. Used by: GrinScan (06b) for polling, monitoring scripts.
+- **Foreign API** (`/v2/foreign`, `.foreign_api_secret`): `get_block`, `get_header`, `get_outputs`, `get_unspent_outputs`, `get_pool_size`, `push_transaction` — public chain data. Used by: wallets connecting to a public node, external block data queries.
+- **Note:** prefer `get_status` over `get_tip` for the node Owner API — `get_tip` returns "Method not found" in practice.
+
+Auth format for node API calls (both endpoints): `grin:<secret>` as HTTP Basic Auth username:password.
+The secret is NEVER sent over the internet — only used for server-to-server calls on localhost.
+
+**Result unwrapping:** The Grin node serialises Rust `Result<T,E>` as `{"Ok": T}` or `{"Err": E}` inside the JSON-RPC `result` field.
+GrinScan's `ownerApi()` and `foreignApi()` helpers call `unwrapResult()` to strip this wrapper.
+Do NOT access `data.result` directly for node API calls — always go through these helpers.
+
+```bash
+# Test Owner API (testnet) — use this to verify node is reachable
+cd /opt/grin/node/testnet-prune
+SECRET=$(cat .api_secret)
+curl -s -u "grin:$SECRET" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"get_status","params":[],"id":1}' \
+  http://127.0.0.1:13413/v2/owner
+
+# Test Foreign API (testnet)
+SECRET=$(cat .foreign_api_secret)
+curl -s -u "grin:$SECRET" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"get_tip","params":[],"id":1}' \
+  http://127.0.0.1:13413/v2/foreign
+
+# Same for mainnet — replace 13413 with 3413 and testnet-prune with mainnet-prune
+```
+
+GrinScan copies node secrets into `/opt/grin/grinscan/{test,main}/` during Configure (2).
+If node secrets are regenerated (Script 01 rebuild), re-run GrinScan Configure (2) to refresh copies.
 
 **grin-wallet** (`$WALLET_DIR/`) — both created by `grin-wallet init/recover`
 `grin-wallet init -hr` to recover wallet from seed and store config/secret files in same dir.
@@ -135,6 +169,32 @@ is `/bin/sh`, all sessions in that server use `sh`, not `bash`. The inline assig
 `SHELL=/bin/bash tmux ...` passes bash to the tmux server regardless of how it was
 started. Using `export SHELL=/bin/bash` at the top of a wrapper is not sufficient when
 the tmux server was already started by a different process.
+
+## Grin Hashrate Formula (Cuckatoo32)
+
+**Do NOT use `difficulty / 60` — it gives values ~366× too high.**
+
+The correct formula (matches `06_collector.py` and `aglkm/grin-explorer`):
+
+```
+GPS = diff_delta × 42 / block_time_seconds / 16384
+```
+
+- `diff_delta`         — `total_difficulty[n] - total_difficulty[n-1]` (cumulative, already graph-weight-scaled)
+- `42`                 — Cuckatoo32 cycle length (proof size)
+- `block_time_seconds` — actual elapsed seconds between the two blocks (use real timestamps, not fixed 60)
+- `16384`              — C32 solution rate = `32 × 2^(32−23)` = `32 × 512`
+
+Display units: **G/s** (< 1 000), **kG/s** (≥ 1 000), **MG/s** (≥ 1 000 000) — matches world.grin.money.
+
+In GrinScan (`server.js`):
+```js
+// live (stmtTopTwoDiff gives actual timestamp per block)
+hashrateGps = perBlockDiff * 42 / dt / 16384;          // dt = actual seconds
+
+// history endpoint (actual block time unavailable — use 60s target)
+hashrate_gps = row.difficulty * 42 / 60 / 16384;
+```
 
 ## Do Not
 - Never run the toolkit scripts locally — they assume a Linux VPS with root access

@@ -123,75 +123,34 @@ def _load_whois_fallback():
 
 WHOIS_FALLBACK = _load_whois_fallback()
 
-# ── Ecosystem services ─────────────────────────────────────────────────────────
+# ── Ecosystem services — loaded from JSON sidecar files ────────────────────────
+# Edit 06_ecosystem_sites.json to add/remove service entries (Explorers, Exchanges,
+# Wallets, Community, Miners, Pools, APIs).
+# Edit 06_ecosystem_dev.json to add/remove development progress repos.
 # type: "http" (default) | "github" | "gitea" | "stock"
-# since: "Mon YYYY" string shown in UI, or None to omit
+# since: "Mon YYYY" string shown in UI, or null to omit
 
-SERVICES = [
-    # ── Explorers ──────────────────────────────────────────────────────────────
-    {"category": "Explorer",    "name": "Grin Explorer",     "url": "https://grinexplorer.net",                             "since": "Jan 2019"},
-    {"category": "Explorer",    "name": "GrinCoin.org",      "url": "https://grincoin.org/",                                "since": None},
+def _load_json_sidecar(filename, required=False):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            raise ValueError(f"expected a JSON array, got {type(data).__name__}")
+        return data
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
+        level = "ERROR" if required else "WARN"
+        print(f"[{level}] {filename} load failed: {e}", file=sys.stderr)
+        if required:
+            sys.exit(1)
+        return []
 
-    # ── Exchanges ──────────────────────────────────────────────────────────────
-    {"category": "Exchange",    "name": "Gate.io",           "url": "https://www.gate.com/trade/GRIN_USDT",                 "since": "Feb 2019"},
-    {"category": "Exchange",    "name": "NoirTrade",         "url": "https://noirtrade.com/trade?pair=GRIN_BTC",            "since": None},
-    {"category": "Exchange",    "name": "nonlogs.io",        "url": "https://nonlogs.io/trade/GRIN-BTC",                   "since": None},
-
-    # ── Wallets ────────────────────────────────────────────────────────────────
-    {"category": "Wallet",      "name": "GRIM",              "url": "https://gri.mw/",                                     "since": None},
-    {"category": "Wallet",      "name": "Grin++",            "url": "https://grinplusplus.github.io/",                     "since": None},
-    {"category": "Wallet",      "name": "Easy Grin",         "url": "https://wallet.easygrin.org/",                        "since": None},
-    {"category": "Wallet",      "name": "MWC Wallet",        "url": "https://mwcwallet.com/",                              "since": None},
-
-    # ── Community ──────────────────────────────────────────────────────────────
-    {"category": "Community",   "name": "grin.mw",           "url": "https://grin.mw",                                     "since": "Jan 2019"},
-    {"category": "Community",   "name": "Grin Forum",        "url": "https://forum.grin.mw",                               "since": "Jan 2019"},
-    {"category": "Community",   "name": "docs.grin.mw",      "url": "https://docs.grin.mw",                                "since": None},
-    {"category": "Community",   "name": "grin.money",        "url": "http://grin.money",                                   "since": None},
-    {"category": "Community",   "name": "Grin Global Health with API", "url": "https://world.grin.money",                   "since": None},
-    {"category": "Community",   "name": "Free Grin Airdrop", "url": "https://drop.grin.money/",                            "since": None},
-
-    # ── Infrastructure ─────────────────────────────────────────────────────────
-    {"category": "Node",        "name": "GrinNode.live",     "url": "https://grinnode.live/",                              "since": None},
-
-    # ── E-Commerce ─────────────────────────────────────────────────────────────
-    {"category": "Ecommerce",   "name": "Grinily",           "url": "https://grinily.com",                                 "since": None},
-
-    # ── Hardware miners — Shopify .json stock check ────────────────────────────
-    {"category": "Miner",       "name": "iPollo G1 Mini",    "url": "https://ipollo.com/products/ipollo-g1-mini",          "since": None, "type": "stock", "in_stock": True},
-    {"category": "Miner",       "name": "iPollo G1",         "url": "https://ipollo.com/products/ipollo-g1",               "since": None, "type": "stock"},
-
-    # ── Mining pools ───────────────────────────────────────────────────────────
-    {"category": "Mining Pool", "name": "2Miners",           "url": "https://2miners.com/grin-mining-pool",                "since": None},
-    {"category": "Mining Pool", "name": "EasyGrin Pool",     "url": "https://pool.easygrin.org/",                         "since": None},
-    {"category": "Mining Pool", "name": "Always Pool",       "url": "https://pool.always.vip/",                           "since": None},
-    {"category": "Mining Pool", "name": "NTMiner Pool",      "url": "https://ntminerpool.com/",                           "since": None},
-    {"category": "Mining Pool", "name": "Gaea Pool",         "url": "https://gaeapool.com/",                              "since": None},
-    {"category": "Mining Pool", "name": "Pool Stats",        "url": "https://miningpoolstats.stream/grin",                "since": None},
-
-    # ── Grin API providers ─────────────────────────────────────────────────────
-    {"category": "Grin API — Mainnet", "name": "api.grin.money",      "url": "https://api.grin.money",      "since": None},
-    {"category": "Grin API — Mainnet", "name": "api.grinily.com",     "url": "https://api.grinily.com",     "since": None},
-    {"category": "Grin API — Mainnet", "name": "api.onlygrins.com",   "url": "https://api.onlygrins.com",   "since": None},
-
-    {"category": "Grin API — Testnet", "name": "testapi.grin.money",  "url": "https://testapi.grin.money",  "since": None},
-    {"category": "Grin API — Testnet", "name": "testapi.grinily.com", "url": "https://testapi.grinily.com", "since": None},
-    {"category": "Grin API — Testnet", "name": "testapi.onlygrins.com", "url": "https://testapi.onlygrins.com", "since": None},
-
-    # ── Dev repos — fetch last release / commit via API ────────────────────────
-    {"category": "Development progress", "name": "grin",              "url": "https://github.com/mimblewimble/grin",                "since": "Mar 2018", "type": "github"},
-    {"category": "Development progress", "name": "grin-wallet",       "url": "https://github.com/mimblewimble/grin-wallet",         "since": "Jan 2019", "type": "github"},
-    {"category": "Development progress", "name": "GRIM",              "url": "https://github.com/GetGrin/grim",                    "since": None,       "type": "github"},
-    {"category": "Development progress", "name": "GRIM (mirror)",     "url": "https://code.gri.mw/GUI/grim",                       "since": None,       "type": "gitea"},
-    {"category": "Development progress", "name": "Grin++",            "url": "https://github.com/GrinPlusPlus/GrinPlusPlus",        "since": None,       "type": "github"},
-    {"category": "Development progress", "name": "Grin Node Toolkit", "url": "https://github.com/noobvie/Grin-Node-Toolkit",        "since": None,       "type": "github"},
-    {"category": "Development progress", "name": "GrinSuite",         "url": "https://github.com/noobvie/GrinSuite",                "since": None,       "type": "github"},
-    {"category": "Development progress", "name": "Grin Node for Umbrel", "url": "https://github.com/wiesche89/umbrel-community-app-store", "since": None,   "type": "github"},
-]
+ECOSYSTEM_SITES = _load_json_sidecar("06_ecosystem_sites.json", required=True)
+ECOSYSTEM_DEV   = _load_json_sidecar("06_ecosystem_dev.json",   required=False)
 
 def _build_services():
-    """Return SERVICES list, appending operator-deployed toolkit services from env."""
-    svcs = list(SERVICES)
+    """Return full services list, appending operator-deployed toolkit services from env."""
+    svcs = list(ECOSYSTEM_SITES) + list(ECOSYSTEM_DEV)
     toolkit = [
         ("GRIN_DROP_URL",         "Grin Drop"),
         ("GRIN_WASM_URL",         "WASM Wallet"),
@@ -422,7 +381,7 @@ def cmd_whois(conn, force=False):
     ttl  = WHOIS_TTL_HOURS * 3600
     all_hosts = [h for hosts in DNS_SEEDS.values() for h in hosts]
     # Also include service domains with standard TLDs (.com/.org/.net)
-    for svc in SERVICES:
+    for svc in _build_services():
         try:
             hostname = urllib.parse.urlparse(svc["url"]).hostname or ""
             reg = _registrable_domain(hostname)

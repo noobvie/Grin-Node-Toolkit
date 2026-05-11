@@ -301,6 +301,65 @@ async function startupBackfill(tipHeight) {
   log(`Backfill complete.`);
 }
 
+// ── Historical backfill ───────────────────────────────────────────────────────
+// Runs in background on startup when DB doesn't cover config.history_days.
+// Uses parallel fetching (10 concurrent) — 50 days ≈ 72k blocks ≈ 2 min on localhost.
+// Self-skipping: if minCachedHeight already covers the target, logs and returns.
+// Pruned-node safe: stops after 3 consecutive all-failed batches (horizon reached).
+
+const HISTORY_BACKFILL_CONCURRENCY = 10;
+
+async function historicalBackfill(tipHeight) {
+  const days = Math.min(50, Math.max(0, config.history_days || 0));
+  if (days === 0) return;
+
+  const targetHeight = Math.max(0, tipHeight - days * 1440);
+  const minCached    = stmtMinHeight.get().m ?? (tipHeight + 1);
+
+  if (minCached <= targetHeight + 1) {
+    log(`History backfill: DB covers back to #${minCached} (target #${targetHeight}) — skipping.`);
+    return;
+  }
+
+  const fromHeight = minCached - 1;
+  const total      = fromHeight - targetHeight;
+  log(`History backfill: ${total} blocks (#${fromHeight} → #${targetHeight}), concurrency=${HISTORY_BACKFILL_CONCURRENCY}…`);
+
+  let stored = 0, skipped = 0, consecFailBatches = 0;
+
+  for (let h = fromHeight; h >= targetHeight; h -= HISTORY_BACKFILL_CONCURRENCY) {
+    const batch = [];
+    for (let j = h; j > h - HISTORY_BACKFILL_CONCURRENCY && j >= targetHeight; j--) batch.push(j);
+
+    const results = await Promise.allSettled(
+      batch.map(height => foreignApi('get_block', [height, null, null]))
+    );
+
+    let batchAllFailed = true;
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        insertBlock(r.value);
+        stored++;
+        batchAllFailed = false;
+      } else {
+        skipped++;
+      }
+    }
+
+    consecFailBatches = batchAllFailed ? consecFailBatches + 1 : 0;
+    if (consecFailBatches >= 3) {
+      log(`History backfill: pruning horizon reached around #${h} — stopping.`);
+      break;
+    }
+
+    if (stored > 0 && stored % 5000 === 0) {
+      log(`History backfill: ${stored}/${total} stored…`);
+    }
+  }
+
+  log(`History backfill complete: ${stored} stored, ${skipped} skipped.`);
+}
+
 // ── Block poller ─────────────────────────────────────────────────────────────
 
 async function pollBlocks() {
@@ -880,6 +939,7 @@ app.listen(config.port, '127.0.0.1', async () => {
     tipState.hash   = tip.last_block_h;
     lastTipHeight   = tipHeight;
     await startupBackfill(tipHeight);
+    historicalBackfill(tipHeight).catch(e => log(`[WARN] History backfill: ${e.message}`));
   } catch (e) {
     log(`[WARN] Initial tip fetch failed: ${e.message}`);
   }

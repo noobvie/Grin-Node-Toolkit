@@ -315,6 +315,7 @@ grinscan_configure() {
   "log_path":            "${log_path}",
   "poll_interval_ms":    30000,
   "blocks_cache":        500,
+  "history_days":        50,
   "web_dir":             "${GRINSCAN_APP}/public",
   "node_data_dir":       "${node_dir}/chain_data",
   "ga4_measurement_id":  "${ga4_id}",

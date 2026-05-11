@@ -159,7 +159,7 @@ function makeTsFmt(days) {
   if (days >= 2 && days <= 31)
     return ts => new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   if (days <= 365)
-    return ts => new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+    return ts => new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
   return ts => new Date(ts * 1000).getFullYear().toString();
 }
 

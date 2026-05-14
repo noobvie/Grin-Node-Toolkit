@@ -367,6 +367,8 @@ install_stats() {
     cp "$SCRIPT_DIR/lib/06_domains_exceptions.json" "$(dirname "$ECOSYSTEM_CHECKER_BIN")/06_domains_exceptions.json"
     cp "$SCRIPT_DIR/lib/06_ecosystem_sites.json"    "$(dirname "$ECOSYSTEM_CHECKER_BIN")/06_ecosystem_sites.json"
     cp "$SCRIPT_DIR/lib/06_ecosystem_dev.json"      "$(dirname "$ECOSYSTEM_CHECKER_BIN")/06_ecosystem_dev.json"
+    cp "$SCRIPT_DIR/lib/06_dns_seeds.json"          "$(dirname "$ECOSYSTEM_CHECKER_BIN")/06_dns_seeds.json"
+    cp "$SCRIPT_DIR/lib/06_external_nodes.json"     "$(dirname "$ECOSYSTEM_CHECKER_BIN")/06_external_nodes.json"
     chmod +x "$ECOSYSTEM_CHECKER_BIN"
     ensure_python_whois || true
     python3 "$ECOSYSTEM_CHECKER_BIN" --init-db

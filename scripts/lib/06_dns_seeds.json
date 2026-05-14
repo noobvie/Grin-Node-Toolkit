@@ -1,0 +1,23 @@
+{
+  "mainnet": [
+    "mainnet-seed.grinnode.live",
+    "grincoin.org",
+    "main.gri.mw",
+    "mainnet.grin.mw",
+    "mainnet.grinffindor.org",
+    "main-seed.grin.money"
+
+  ],
+  "testnet": [
+    "testnet.grincoin.org",
+    "test.gri.mw",
+    "testnet.grin.mw",
+    "testnet.grinffindor.org",
+    "test-seed.grin.money"
+
+  ],
+  "notes": {
+    "mainnet.grin.mw": "Not available yet — DNS record pending",
+    "testnet.grin.mw": "Not available yet — DNS record pending"
+  }
+}

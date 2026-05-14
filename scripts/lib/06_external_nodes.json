@@ -1,0 +1,29 @@
+{
+  "mainnet": {
+    "https": [
+      "api.grin.money",
+      "api.grinily.com",
+      "api.onlygrins.com",
+      "api.grinnode.org",
+      "main.gri.mw",
+      "https://main.grin.raubritter.org",
+      "grincoin.org"
+    ],
+    "tor": [
+      "http://main.grin.raubnojdvgifadsht4axhsifo2fbcyvtfjspvegoesw4dfr2aajbtyad.onion"
+    ]
+  },
+  "testnet": {
+    "https": [
+      "testapi.grin.money",
+      "testapi.grinily.com",
+      "testapi.onlygrins.com",
+      "testnet.grincoin.org",
+      "https://test.grin.raubritter.org",
+      "test.gri.mw"
+    ],
+    "tor": [
+      "http://test.grin.raubnojdvgifadsht4axhsifo2fbcyvtfjspvegoesw4dfr2aajbtyad.onion"
+    ]
+  }
+}

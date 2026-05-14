@@ -38,49 +38,24 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN",   "")  # optional — raises rate 
 WHOIS_TTL_HOURS = 24   # re-fetch WHOIS only when cached value is older than this
 
 # ── DNS seed lists ─────────────────────────────────────────────────────────────
+# Edit 06_dns_seeds.json to add/remove seeds or update pending-DNS notes.
+# Edit 06_external_nodes.json to add/remove wallet-API nodes.
 
-DNS_SEEDS = {
-    "mainnet": [
-        "mainnet-seed.grinnode.live",
-        "grincoin.org",
-        "main.gri.mw",
-        "mainnet.grin.mw",
-        "mainnet.grinffindor.org",
-        "main-seed.grin.money",
-        "mainnet.fountainoffairfortune.it",
-    ],
-    "testnet": [
-        "testnet.grincoin.org",
-        "test.gri.mw",
-        "testnet.grin.mw",
-        "testnet.grinffindor.org",
-        "test-seed.grin.money",
-        "testnet.fountainoffairfortune.it",
-    ],
-}
+def _load_json_config(filename):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
+        print(f"[ERROR] {filename} load failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+_dns_seeds_cfg = _load_json_config("06_dns_seeds.json")
+DNS_SEEDS      = {k: v for k, v in _dns_seeds_cfg.items() if k in ("mainnet", "testnet")}
+DNS_SEED_NOTES = _dns_seeds_cfg.get("notes", {})
+EXTERNAL_NODES = _load_json_config("06_external_nodes.json")
 
 SEED_PORTS = {"mainnet": 3414, "testnet": 13414}
-
-# ── External wallet-API nodes ──────────────────────────────────────────────────
-# Domains shared with DNS_SEEDS — no WHOIS check needed, just HTTP response time.
-
-EXTERNAL_NODES = {
-    "mainnet": [
-        "api.grin.money",
-        "api.grinily.com",
-        "api.onlygrins.com",
-        "api.grinnode.org",
-        "main.gri.mw",
-        "grincoin.org",
-    ],
-    "testnet": [
-        "testapi.grin.money",
-        "testapi.grinily.com",
-        "testapi.onlygrins.com",
-        "testnet.grincoin.org",
-        "test.gri.mw",
-    ],
-}
 
 # TLDs where WHOIS servers are reliable enough for automated refresh.
 # Everything else (.mw, .io, .live, .money, ccTLDs) must be maintained manually
@@ -90,12 +65,6 @@ WHOIS_AUTO_TLDS = {".com", ".org", ".net"}
 def _is_auto_tld(domain):
     tld = "." + domain.rsplit(".", 1)[-1] if "." in domain else ""
     return tld in WHOIS_AUTO_TLDS
-
-# Notes shown in place of IP rows when a seed host has no DNS records yet
-DNS_SEED_NOTES = {
-    "mainnet.grin.mw": "Not available yet — DNS record pending",
-    "testnet.grin.mw": "Not available yet — DNS record pending",
-}
 
 # ── WHOIS fallback for domains whose WHOIS servers block automated queries ─────
 # Edit 06_domains_exceptions.json (same directory) to update dates on renewal.
@@ -219,7 +188,7 @@ def _check_seed_host(host, port, now, conn):
     registered_ts = whois_row[1] if whois_row else None
     if expiry_ts is None:
         fb = WHOIS_FALLBACK.get(_registrable_domain(host), {})
-        expiry_ts     = expiry_ts     or fb.get("expiry_ts")
+        expiry_ts     = fb.get("expiry_ts")
         registered_ts = registered_ts or fb.get("registered_ts")
     expiry_str, expiry_days, registered_str = _format_expiry(expiry_ts, registered_ts, now)
 
@@ -436,22 +405,58 @@ def cmd_whois(conn, force=False):
 
 def _check_external_nodes():
     """HTTP-check all external wallet-API nodes. Returns {mainnet:[…], testnet:[…]}."""
-    result = {"mainnet": [], "testnet": []}
+    result = {net: [] for net in EXTERNAL_NODES}
 
-    def check_one(net, host):
-        ok, _, ms = _http_check(f"https://{host}/", timeout=8)
-        return net, {"host": host, "ok": ok, "response_ms": ms if ok else None}
+    def _fetch_tip_height(base_url):
+        """JSON-RPC call to /v2/foreign get_header (no params = tip). Returns int or None."""
+        try:
+            rpc = json.dumps({"jsonrpc": "2.0", "method": "get_header", "params": [None, None, None], "id": 1}).encode()
+            req = urllib.request.Request(
+                base_url.rstrip("/") + "/v2/foreign",
+                data=rpc,
+                headers={"Content-Type": "application/json", "User-Agent": "grin-ecosystem-checker/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                data = json.loads(resp.read())
+            return data["result"]["Ok"]["height"]
+        except Exception:
+            return None
 
-    items = [(net, host) for net, hosts in EXTERNAL_NODES.items() for host in hosts]
+    def check_one(net, protocol, entry):
+        if entry.startswith("http://") or entry.startswith("https://"):
+            url  = entry
+            host = urllib.parse.urlparse(entry).hostname or entry
+        else:
+            url  = f"https://{entry}/"
+            host = entry
+        ok, _, ms = _http_check(url, timeout=8)
+        height = _fetch_tip_height(url) if ok else None
+        return net, {"host": host, "protocol": protocol, "ok": ok, "response_ms": ms if ok else None, "tip_height": height}
+
+    items = [
+        (net, proto, entry)
+        for net, protos in EXTERNAL_NODES.items()
+        for proto, entries in protos.items()
+        for entry in entries
+    ]
     with ThreadPoolExecutor(max_workers=10) as ex:
-        futures = [ex.submit(check_one, net, host) for net, host in items]
+        futures = [ex.submit(check_one, net, proto, e) for net, proto, e in items]
         for f in as_completed(futures):
             net, entry = f.result()
             result[net].append(entry)
 
     for net in result:
-        order = {h: i for i, h in enumerate(EXTERNAL_NODES[net])}
-        result[net].sort(key=lambda e: order.get(e["host"], 999))
+        protos = EXTERNAL_NODES[net]
+        proto_order = {p: i for i, p in enumerate(protos)}
+        entry_order = {
+            (proto, urllib.parse.urlparse(e).hostname if e.startswith("http") else e): i
+            for proto, entries in protos.items()
+            for i, e in enumerate(entries)
+        }
+        result[net].sort(key=lambda e: (
+            proto_order.get(e["protocol"], 999),
+            entry_order.get((e["protocol"], e["host"]), 999),
+        ))
     return result
 
 # ── HTTP service checks ────────────────────────────────────────────────────────

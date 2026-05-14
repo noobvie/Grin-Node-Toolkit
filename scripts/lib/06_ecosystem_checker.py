@@ -71,8 +71,7 @@ def _is_auto_tld(domain):
 
 def _date_to_ts(s):
     """Convert YYYY-MM-DD string to UTC midnight timestamp."""
-    from datetime import datetime as _dt
-    return int(_dt.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
+    return int(datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
 def _load_whois_fallback():
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "06_domains_exceptions.json")
@@ -273,11 +272,10 @@ def _registrable_domain(host):
 
 def _parse_whois_date(s):
     """Parse a date string from raw WHOIS output. Returns UTC timestamp or None."""
-    from datetime import datetime as _dt
     s = s.strip().split("T")[0].split(" ")[0]  # drop time portion
     for fmt in ("%Y-%m-%d", "%d-%b-%Y", "%Y/%m/%d", "%d.%m.%Y", "%d-%m-%Y"):
         try:
-            return int(_dt.strptime(s, fmt).replace(tzinfo=timezone.utc).timestamp())
+            return int(datetime.strptime(s, fmt).replace(tzinfo=timezone.utc).timestamp())
         except ValueError:
             pass
     return None
@@ -330,8 +328,7 @@ def _fetch_whois_expiry(registrable):
         if isinstance(exp, str):
             for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d-%b-%Y"):
                 try:
-                    from datetime import datetime as _dt
-                    parsed = _dt.strptime(exp.strip(), fmt).replace(tzinfo=timezone.utc)
+                    parsed = datetime.strptime(exp.strip(), fmt).replace(tzinfo=timezone.utc)
                     return int(parsed.timestamp()), None
                 except ValueError:
                     pass
@@ -409,17 +406,26 @@ def _check_external_nodes():
 
     def _fetch_tip_height(base_url):
         """JSON-RPC call to /v2/foreign get_header (no params = tip). Returns int or None."""
+        rpc_url = base_url.rstrip("/") + "/v2/foreign"
         try:
             rpc = json.dumps({"jsonrpc": "2.0", "method": "get_header", "params": [None, None, None], "id": 1}).encode()
             req = urllib.request.Request(
-                base_url.rstrip("/") + "/v2/foreign",
+                rpc_url,
                 data=rpc,
                 headers={"Content-Type": "application/json", "User-Agent": "grin-ecosystem-checker/1.0"},
             )
             with urllib.request.urlopen(req, timeout=6) as resp:
                 data = json.loads(resp.read())
-            return data["result"]["Ok"]["height"]
-        except Exception:
+            result = data.get("result", {})
+            if isinstance(result, dict) and "Ok" in result:
+                return result["Ok"].get("height")
+            print(f"[WARN] tip height unexpected response from {rpc_url}: {str(data)[:120]}", file=sys.stderr)
+            return None
+        except urllib.error.HTTPError as e:
+            print(f"[WARN] tip height HTTP {e.code} from {rpc_url} (node may require auth)", file=sys.stderr)
+            return None
+        except Exception as e:
+            print(f"[WARN] tip height fetch failed for {rpc_url}: {e}", file=sys.stderr)
             return None
 
     def check_one(net, protocol, entry):
@@ -429,8 +435,12 @@ def _check_external_nodes():
         else:
             url  = f"https://{entry}/"
             host = entry
-        ok, _, ms = _http_check(url, timeout=8)
-        height = _fetch_tip_height(url) if ok else None
+        if protocol == "tor":
+            ok, _, ms = _http_check_tor(url, timeout=30)
+            height = _fetch_tip_height_tor(url, timeout=30) if ok else None
+        else:
+            ok, _, ms = _http_check(url, timeout=8)
+            height = _fetch_tip_height(url) if ok else None
         return net, {"host": host, "protocol": protocol, "ok": ok, "response_ms": ms if ok else None, "tip_height": height}
 
     items = [
@@ -477,6 +487,48 @@ def _http_check(url, timeout=8):
     except Exception:
         ms = int((time.monotonic() - t0) * 1000)
         return False, None, ms
+
+def _http_check_tor(url, timeout=30):
+    """HTTP check routed through local Tor SOCKS5 proxy. Returns (ok, status_code, response_ms)."""
+    try:
+        import requests as _req
+    except ImportError:
+        print("[WARN] tor check skipped — python3-requests not installed", file=sys.stderr)
+        return False, None, 0
+    proxies = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
+    t0 = time.monotonic()
+    try:
+        r = _req.get(url, proxies=proxies, timeout=timeout,
+                     headers={"User-Agent": "grin-ecosystem-checker/1.0"})
+        ms = int((time.monotonic() - t0) * 1000)
+        ok = r.status_code < 500
+        return ok, r.status_code, ms
+    except Exception as e:
+        ms = int((time.monotonic() - t0) * 1000)
+        print(f"[WARN] tor check failed for {url}: {e}", file=sys.stderr)
+        return False, None, ms
+
+def _fetch_tip_height_tor(base_url, timeout=30):
+    """JSON-RPC get_header via Tor SOCKS5. Returns int or None."""
+    try:
+        import requests as _req
+    except ImportError:
+        return None
+    proxies = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
+    rpc_url = base_url.rstrip("/") + "/v2/foreign"
+    try:
+        payload = {"jsonrpc": "2.0", "method": "get_header", "params": [None, None, None], "id": 1}
+        r = _req.post(rpc_url, json=payload, proxies=proxies, timeout=timeout,
+                      headers={"User-Agent": "grin-ecosystem-checker/1.0"})
+        data = r.json()
+        result = data.get("result", {})
+        if isinstance(result, dict) and "Ok" in result:
+            return result["Ok"].get("height")
+        print(f"[WARN] tor tip height unexpected response from {rpc_url}: {str(data)[:120]}", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"[WARN] tor tip height failed for {rpc_url}: {e}", file=sys.stderr)
+        return None
 
 def _gh_headers():
     h = {"User-Agent": "grin-ecosystem-checker/1.0",

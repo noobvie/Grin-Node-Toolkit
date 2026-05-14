@@ -231,6 +231,25 @@ check_python() {
         || die "Python 3 stdlib modules missing. Please install python3."
 }
 
+# ─── Ensure Tor + Python SOCKS packages are available ────────────────────────
+ensure_tor_socks() {
+    local missing=()
+    command -v tor &>/dev/null          || missing+=(tor)
+    python3 -c "import requests" 2>/dev/null || missing+=(python3-requests)
+    python3 -c "import socks"    2>/dev/null || missing+=(python3-socks)
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        success "Tor + SOCKS packages already installed."
+        return 0
+    fi
+    info "Installing: ${missing[*]}..."
+    apt-get update -qq && apt-get install -y "${missing[@]}" -qq \
+        || { warn "apt install failed for: ${missing[*]} — onion node checks will be skipped."; return 1; }
+    systemctl enable tor --quiet 2>/dev/null || true
+    systemctl start  tor         2>/dev/null || true
+    success "Tor + SOCKS packages installed. Tor service started."
+    return 0
+}
+
 # ─── Ensure python-whois is available ────────────────────────────────────────
 ensure_python_whois() {
     python3 -c "import whois" 2>/dev/null && return 0
@@ -371,11 +390,12 @@ install_stats() {
     cp "$SCRIPT_DIR/lib/06_external_nodes.json"     "$(dirname "$ECOSYSTEM_CHECKER_BIN")/06_external_nodes.json"
     chmod +x "$ECOSYSTEM_CHECKER_BIN"
     ensure_python_whois || true
+    ensure_tor_socks    || true
     python3 "$ECOSYSTEM_CHECKER_BIN" --init-db
 
     # Deploy HTML pages
     if [[ ! -d "$WEB_SRC" ]]; then
-        die "Web source not found: $WEB_SRC. Ensure the toolkit is complete."
+        die "Web source not found: $WEB_SRC. Ensure the toolkit is complete." || return
     fi
     info "Deploying web pages..."
     cp "$WEB_SRC/index.html"     "$WWW_DIR/index.html"
@@ -889,7 +909,7 @@ status_stats() {
 
     # JSON data files
     echo -e "  JSON exports"
-    for f in summary hashrate difficulty transactions fees active_peers versions peers price inflation ecosystem; do
+    for f in summary hashrate difficulty transactions fees active_peers versions peers price issuance ecosystem; do
         local jf="$WWW_DIR/data/${f}.json"
         if [[ -f "$jf" ]]; then
             local age; age=$(( ($(date +%s) - $(stat -c %Y "$jf" 2>/dev/null || echo 0)) / 60 ))

@@ -435,8 +435,8 @@
     font-family: monospace;
   }
   .ext-node-row:last-child { border-bottom: none; }
-  .ext-node-host { color: var(--text); display: flex; align-items: center; gap: 6px; }
-  .ext-node-meta { display: flex; align-items: center; gap: 0; white-space: nowrap; }
+  .ext-node-host { color: var(--text); display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; word-break: break-all; }
+  .ext-node-meta { display: flex; align-items: center; gap: 0; white-space: nowrap; flex-shrink: 0; margin-left: 8px; }
   .ext-node-sep  { color: var(--border); margin: 0 5px; }
   .ext-node-height { color: var(--blue); }
   .ext-node-onion-sep {

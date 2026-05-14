@@ -99,10 +99,10 @@ const stmtMinHeight   = db.prepare('SELECT MIN(height) AS m FROM blocks');
 // Per-block difficulty = total_difficulty[n] - total_difficulty[n-1] via self-join
 const stmtHistory = db.prepare(`
   SELECT b1.height, b1.timestamp,
-         MAX(0, b1.difficulty - COALESCE(b2.difficulty, 0)) AS difficulty,
+         MAX(0, b1.difficulty - b2.difficulty) AS difficulty,
          b1.tx_count, b1.fee_total
   FROM   blocks b1
-  LEFT JOIN blocks b2 ON b2.height = b1.height - 1
+  JOIN blocks b2 ON b2.height = b1.height - 1
   WHERE  b1.timestamp BETWEEN ? AND ?
   ORDER BY ABS(b1.timestamp - ?)
   LIMIT 1

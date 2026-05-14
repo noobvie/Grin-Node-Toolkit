@@ -20,8 +20,8 @@
   {"category": "Community",   "name": "grin.money",                 "url": "http://grin.money",                                   "since": null},
   {"category": "Community",   "name": "Grin Global Health with API","url": "https://world.grin.money",                            "since": null},
   {"category": "Community",   "name": "Free Grin Airdrop",          "url": "https://drop.grin.money/",                            "since": null},
-
-  {"category": "Node",        "name": "GrinNode.live",              "url": "https://grinnode.live/",                              "since": null},
+  {"category": "Community",   "name": "GrinNode.live",              "url": "https://grinnode.live/",                              "since": null},
+  {"category": "Community",   "name": "Grin.Fail",                  "url": "https://grin.fail/",                                "since": "May 2026"},
 
   {"category": "Ecommerce",   "name": "Grinily",                    "url": "https://grinily.com",                                 "since": null},
 

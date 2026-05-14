@@ -408,7 +408,7 @@ def _check_external_nodes():
         """JSON-RPC call to /v2/foreign get_header (no params = tip). Returns int or None."""
         rpc_url = base_url.rstrip("/") + "/v2/foreign"
         try:
-            rpc = json.dumps({"jsonrpc": "2.0", "method": "get_header", "params": [None, None, None], "id": 1}).encode()
+            rpc = json.dumps({"jsonrpc": "2.0", "method": "get_tip", "params": [], "id": 1}).encode()
             req = urllib.request.Request(
                 rpc_url,
                 data=rpc,
@@ -517,7 +517,7 @@ def _fetch_tip_height_tor(base_url, timeout=30):
     proxies = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
     rpc_url = base_url.rstrip("/") + "/v2/foreign"
     try:
-        payload = {"jsonrpc": "2.0", "method": "get_header", "params": [None, None, None], "id": 1}
+        payload = {"jsonrpc": "2.0", "method": "get_tip", "params": [], "id": 1}
         r = _req.post(rpc_url, json=payload, proxies=proxies, timeout=timeout,
                       headers={"User-Agent": "grin-ecosystem-checker/1.0"})
         data = r.json()

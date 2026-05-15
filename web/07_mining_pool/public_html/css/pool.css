@@ -1,51 +1,175 @@
-/* =============================================================================
-   pool.css — Grin Pool base styles + CSS variable skeleton
-   Theme files (matrix / dark / light / naruto / japan) override :root vars.
-   ============================================================================= */
-
-/* ── Variables (dark defaults — overridden per theme) ─────────────────────── */
+/* Grin Mining Pool — Modern Clean Design */
 :root {
-  --bg-body:       #0a0a0a;
-  --bg-card:       #111;
-  --bg-card2:      #161616;
-  --text:          #e0e0e0;
-  --text-dim:      #888;
-  --accent:        #00ff41;
-  --accent2:       #00cc33;
-  --border:        #2a2a2a;
-  --btn-bg:        #00ff41;
-  --btn-text:      #000;
-  --btn-hover:     #00cc33;
-  --input-bg:      #1a1a1a;
-  --input-border:  #333;
-  --error-color:   #ff4444;
-  --ok-color:      #00ff41;
-  --warn-color:    #f2c94c;
-  --grin-yellow:   #f2c94c;
-  --font-mono:     'Courier New', Courier, monospace;
-  --font-sans:     system-ui, -apple-system, sans-serif;
-  --radius:        6px;
-  --shadow:        0 2px 12px rgba(0,0,0,0.5);
+  --primary: #667eea;
+  --primary-dark: #5a67d8;
+  --secondary: #764ba2;
+  --accent: #f093fb;
+  --success: #48bb78;
+  --warning: #ed8936;
+  --danger: #f56565;
+  --info: #4299e1;
+
+  --bg-dark: #0f1419;
+  --bg-darker: #0a0e13;
+  --bg-card: #1a1f29;
+  --border-color: #2d3748;
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0aec0;
+  --text-muted: #718096;
 }
 
-/* ── Reset / base ─────────────────────────────────────────────────────────── */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
 
 body {
-  background: var(--bg-body);
-  color: var(--text);
-  font-family: var(--font-sans);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: linear-gradient(135deg, var(--bg-darker) 0%, var(--bg-dark) 100%);
+  color: var(--text-primary);
   line-height: 1.6;
   min-height: 100vh;
 }
 
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+/* ============== LAYOUT ============== */
 
-/* ── Layout ───────────────────────────────────────────────────────────────── */
-.container { max-width: 1060px; margin: 0 auto; padding: 0 1rem; }
+header {
+  background: rgba(15, 20, 25, 0.95);
+  border-bottom: 1px solid var(--border-color);
+  padding: 1rem 0;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(10px);
+}
 
-/* ── Testnet Banner ───────────────────────────────────────────────────────── */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+.header-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 2rem;
+}
+
+.site-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.site-title a {
+  text-decoration: none;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.site-title span {
+  font-size: 1.2em;
+}
+
+nav {
+  display: flex;
+  gap: 2rem;
+  align-items: center;
+  flex: 1;
+}
+
+nav a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 0.5rem 0;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s ease;
+  font-size: 0.95rem;
+}
+
+nav a:hover,
+nav a.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+/* ============== MAIN CONTENT ============== */
+
+main {
+  padding: 3rem 0;
+  flex: 1;
+}
+
+section {
+  margin-bottom: 3rem;
+}
+
+section h2 {
+  font-size: 1.8rem;
+  margin-bottom: 1.5rem;
+  color: var(--text-primary);
+}
+
+/* ============== CARDS ============== */
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1.5rem;
+  transition: all 0.3s ease;
+}
+
+.card:hover {
+  border-color: var(--primary);
+  box-shadow: 0 0 20px rgba(102, 126, 234, 0.1);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.card-header h3 {
+  font-size: 1.1rem;
+  color: var(--text-primary);
+}
+
+.card-value {
+  font-size: 2rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin: 0.5rem 0;
+}
+
+.card-label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ============== TESTNET BANNER ============== */
+
 .testnet-banner {
   background: #7a5c00;
   color: var(--grin-yellow);

@@ -790,8 +790,10 @@ function renderExternalNodes(data) {
       const ms = node.ok && node.response_ms != null
         ? `<span class="svc-ms">${node.response_ms}ms</span>`
         : '<span class="svc-ms svc-down">—</span>';
-      const height = node.ok && node.tip_height != null
-        ? `<span class="ext-node-sep">|</span><span class="ext-node-height">height ${node.tip_height.toLocaleString()}</span>`
+      const height = node.ok
+        ? (node.tip_height != null
+            ? `<span class="ext-node-sep">|</span><span class="ext-node-height">height ${node.tip_height.toLocaleString()}</span>`
+            : `<span class="ext-node-sep">|</span><span class="ext-node-height" style="color:var(--muted)">height unavailable</span>`)
         : '';
       const pm    = PROTO_META[proto];
       const badge = pm ? ` <span class="ext-node-onion-badge">${pm.badge}</span>` : '';

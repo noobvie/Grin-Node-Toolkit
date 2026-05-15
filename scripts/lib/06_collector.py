@@ -700,15 +700,36 @@ def _is_valid_grin_agent(ua):
     return "mw/grin" in ua_lower or "grin++" in ua_lower or "mw/grim" in ua_lower or "g++ wiesche" in ua_lower
 
 
+def _nat64_to_ipv4(ip):
+    """Decode a NAT64 well-known prefix address (64:ff9b::/96, RFC 6052) to plain IPv4.
+    e.g. 64:ff9b::b9b1:dbb9 → 185.177.219.185. Returns None if not a NAT64 address."""
+    if not ip.lower().startswith("64:ff9b::"):
+        return None
+    suffix = ip.split("::")[-1]   # e.g. "b9b1:dbb9"
+    parts  = suffix.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        hi = int(parts[0], 16)
+        lo = int(parts[1], 16)
+        return f"{hi >> 8}.{hi & 0xff}.{lo >> 8}.{lo & 0xff}"
+    except ValueError:
+        return None
+
+
 def _extract_addr(peer, default_port):
     """Split a Grin peer dict's addr field into (ip, port).
-    Strips ::ffff: prefix from IPv4-mapped IPv6 addresses so they are stored
-    and counted as IPv4 — preventing duplicate entries for dual-stack nodes."""
+    Strips ::ffff: (IPv4-mapped) and decodes 64:ff9b:: (NAT64) prefixes so
+    those addresses are stored and geolocated as plain IPv4."""
     addr = peer.get("addr", "")
     ip   = addr.rsplit(":", 1)[0].strip("[]")
     port = addr.rsplit(":", 1)[-1] if ":" in addr else default_port
     if ip.lower().startswith("::ffff:"):
         ip = ip[7:]
+    else:
+        decoded = _nat64_to_ipv4(ip)
+        if decoded:
+            ip = decoded
     return ip, port
 
 

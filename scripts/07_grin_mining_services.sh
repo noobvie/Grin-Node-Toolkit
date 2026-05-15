@@ -50,8 +50,8 @@ LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/grin_mining_$(date +%Y%m%d_%H%M%S).log"
 
 # ─── Pool Web Interface constants ─────────────────────────────────────────────
-POOL_APP_SRC="$TOOLKIT_ROOT/web/07_pool/pool-manager"
-POOL_WEB_SRC="$TOOLKIT_ROOT/web/07_pool/public_html"
+POOL_APP_SRC="$TOOLKIT_ROOT/web/07_mining_pool/back-end-pool"
+POOL_WEB_SRC="$TOOLKIT_ROOT/web/07_mining_pool/public_html"
 POOL_CONF_MAINNET="/opt/grin/conf/grin_pool.json"
 POOL_CONF_TESTNET="/opt/grin/conf/grin_pool_testnet.json"
 POOL_APP_DIR_MAINNET="/opt/grin/pool/mainnet"

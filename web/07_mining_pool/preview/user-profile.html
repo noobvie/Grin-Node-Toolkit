@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>[PREVIEW] Profile | Grin Pool ツ</title>
+<style>
+:root{--bg-body:#000;--bg-card:#050505;--bg-card2:#0a0a0a;--text:#c0ffc0;--text-dim:#4a8a4a;--accent:#00ff41;--accent2:#00cc33;--border:#0d2e0d;--btn-bg:#00ff41;--btn-text:#000;--btn-hover:#00cc33;--input-bg:#040d04;--input-border:#0d2e0d;--error-color:#ff4444;--ok-color:#00ff41;--warn-color:#f2c94c;--grin-yellow:#f2c94c;--font-mono:'Courier New',Courier,monospace;--font-sans:'Courier New',Courier,monospace;--radius:6px;--shadow:0 2px 20px rgba(0,255,65,.08)}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg-body);color:var(--text);font-family:var(--font-sans);line-height:1.6;min-height:100vh}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.container{max-width:1060px;margin:0 auto;padding:0 1rem}
+header{padding:1rem 0;border-bottom:1px solid var(--border);background:var(--bg-body);position:sticky;top:0;z-index:90}
+.header-inner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.6rem}
+.site-title{font-size:1.35rem;font-weight:700;color:var(--accent);font-family:var(--font-mono);text-shadow:0 0 8px rgba(0,255,65,.6)}
+.site-title span{color:var(--grin-yellow)}
+.nav-links{display:flex;align-items:center;gap:.2rem;flex-wrap:wrap}
+.nav-links a{color:var(--text-dim);font-size:.88rem;padding:.3rem .65rem;border-radius:var(--radius)}
+.nav-links a:hover,.nav-links a.active{color:var(--accent);background:var(--bg-card);text-decoration:none}
+.nav-username{font-weight:600;color:var(--grin-yellow);font-size:.88rem;margin-right:.2rem}
+section{padding:1.8rem 0 .8rem}
+h2{font-size:1.15rem;font-weight:700;color:var(--accent);margin-bottom:.9rem;font-family:var(--font-mono)}
+h3{font-size:.95rem;font-weight:600;margin-bottom:.6rem;color:var(--text-dim)}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:1.4rem;box-shadow:var(--shadow)}
+.card+.card{margin-top:1rem}
+.form-group{margin-bottom:1rem}
+label{font-size:.85rem;color:var(--text-dim);display:block;margin-bottom:.35rem}
+input[type="text"],input[type="email"],input[type="password"]{width:100%;background:var(--input-bg);border:1px solid var(--input-border);border-radius:var(--radius);color:var(--text);padding:.6rem .8rem;font-family:var(--font-sans);font-size:.9rem}
+input:focus{outline:none;border-color:var(--accent)}
+input[readonly]{opacity:.6;cursor:default}
+.btn{display:inline-block;background:var(--btn-bg);color:var(--btn-text);border:none;border-radius:var(--radius);padding:.65rem 1.4rem;font-weight:700;font-size:.95rem;cursor:pointer;transition:background .15s;text-decoration:none}
+.btn:hover{background:var(--btn-hover);text-decoration:none}
+.btn-outline{background:transparent;border:1px solid var(--accent);color:var(--accent)}
+.btn-outline:hover{background:var(--accent);color:var(--btn-text)}
+.btn-danger{background:var(--error-color);color:#fff}
+.btn-danger:hover{background:#cc3333}
+.success-msg{color:var(--ok-color);font-size:.85rem;margin-top:.45rem}
+.info-row{display:flex;justify-content:space-between;align-items:center;padding:.55rem 0;border-bottom:1px solid var(--border);font-size:.88rem}
+.info-row:last-child{border-bottom:none}
+.info-row .lbl{color:var(--text-dim)}
+.info-row .val{font-family:var(--font-mono)}
+footer{padding:2rem 0 1.5rem;border-top:1px solid var(--border);text-align:center;font-size:.8rem;color:var(--text-dim);margin-top:2rem}
+footer a{color:var(--text-dim)}footer a:hover{color:var(--accent)}
+.preview-badge{position:fixed;bottom:1rem;right:1rem;background:#7a5c00;color:var(--grin-yellow);font-size:.75rem;padding:.35rem .7rem;border-radius:var(--radius);border:1px solid var(--grin-yellow);font-family:var(--font-mono);z-index:999}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title"><a href="public-home.html">Grin Pool <span>ツ</span></a></div>
+      <nav class="nav-links">
+        <a href="public-home.html">Home</a>
+        <a href="user-dashboard.html">Dashboard</a>
+        <a href="user-miners.html">Miners</a>
+        <a href="user-withdraw.html">Withdraw</a>
+        <a href="user-profile.html" class="active">Profile</a>
+        <span class="nav-username">satoshi</span>
+        <a href="#">Logout</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+
+    <section>
+      <h2>// profile</h2>
+
+      <!-- Account info (read-only) -->
+      <div class="card">
+        <h3>Account</h3>
+        <div class="info-row"><span class="lbl">Username</span><span class="val">satoshi</span></div>
+        <div class="info-row"><span class="lbl">Member since</span><span class="val">2026-01-07</span></div>
+        <div class="info-row"><span class="lbl">Role</span><span class="val">miner</span></div>
+        <div class="info-row"><span class="lbl">Total earned</span><span class="val">720.0000 GRIN</span></div>
+      </div>
+
+      <!-- Email -->
+      <div class="card">
+        <h3>Email notifications</h3>
+        <div class="form-group">
+          <label for="email">Email address</label>
+          <input type="email" id="email" value="satoshi@example.com">
+        </div>
+        <p style="font-size:.8rem;color:var(--text-dim);margin-bottom:.8rem">Receives withdrawal confirmations and block win notifications.</p>
+        <button class="btn">Save Email</button>
+        <div class="success-msg" style="display:none">✓ Email updated.</div>
+      </div>
+
+      <!-- Change password -->
+      <div class="card">
+        <h3>Change password</h3>
+        <div class="form-group">
+          <label for="pw-current">Current password</label>
+          <input type="password" id="pw-current" placeholder="••••••••">
+        </div>
+        <div class="form-group">
+          <label for="pw-new">New password</label>
+          <input type="password" id="pw-new" placeholder="••••••••">
+        </div>
+        <div class="form-group">
+          <label for="pw-confirm">Confirm new password</label>
+          <input type="password" id="pw-confirm" placeholder="••••••••">
+        </div>
+        <button class="btn">Update Password</button>
+      </div>
+
+      <!-- Auto-payout threshold -->
+      <div class="card">
+        <h3>Auto-payout</h3>
+        <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:.8rem">
+          When your balance reaches this threshold the pool will automatically initiate a withdrawal. Set to 0 to disable.
+        </p>
+        <div class="form-group">
+          <label for="threshold">Threshold (GRIN)</label>
+          <input type="text" id="threshold" value="120">
+        </div>
+        <button class="btn">Save</button>
+      </div>
+
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <p>Grin Pool ツ &nbsp;·&nbsp; <a href="https://grin.mw" target="_blank">grin.mw</a></p>
+  </div>
+</footer>
+
+<div class="preview-badge">PREVIEW — user-profile</div>
+</body>
+</html>

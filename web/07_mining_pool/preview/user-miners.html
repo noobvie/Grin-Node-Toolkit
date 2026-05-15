@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>[PREVIEW] My Miners | Grin Pool ツ</title>
+<style>
+:root{--bg-body:#000;--bg-card:#050505;--bg-card2:#0a0a0a;--text:#c0ffc0;--text-dim:#4a8a4a;--accent:#00ff41;--accent2:#00cc33;--border:#0d2e0d;--btn-bg:#00ff41;--btn-text:#000;--btn-hover:#00cc33;--input-bg:#040d04;--input-border:#0d2e0d;--error-color:#ff4444;--ok-color:#00ff41;--warn-color:#f2c94c;--grin-yellow:#f2c94c;--font-mono:'Courier New',Courier,monospace;--font-sans:'Courier New',Courier,monospace;--radius:6px;--shadow:0 2px 20px rgba(0,255,65,.08)}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg-body);color:var(--text);font-family:var(--font-sans);line-height:1.6;min-height:100vh}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.container{max-width:1060px;margin:0 auto;padding:0 1rem}
+header{padding:1rem 0;border-bottom:1px solid var(--border);background:var(--bg-body);position:sticky;top:0;z-index:90}
+.header-inner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.6rem}
+.site-title{font-size:1.35rem;font-weight:700;color:var(--accent);font-family:var(--font-mono);text-shadow:0 0 8px rgba(0,255,65,.6)}
+.site-title span{color:var(--grin-yellow)}
+.nav-links{display:flex;align-items:center;gap:.2rem;flex-wrap:wrap}
+.nav-links a{color:var(--text-dim);font-size:.88rem;padding:.3rem .65rem;border-radius:var(--radius)}
+.nav-links a:hover,.nav-links a.active{color:var(--accent);background:var(--bg-card);text-decoration:none}
+.nav-username{font-weight:600;color:var(--grin-yellow);font-size:.88rem;margin-right:.2rem}
+section{padding:1.8rem 0 .8rem}
+h2{font-size:1.15rem;font-weight:700;color:var(--accent);margin-bottom:.9rem;font-family:var(--font-mono)}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:1.4rem;box-shadow:var(--shadow)}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+th{text-align:left;padding:.55rem .8rem;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:.55rem .8rem;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--bg-card2)}
+.mono{font-family:var(--font-mono);font-size:.82rem}
+.badge{display:inline-block;padding:.15rem .55rem;border-radius:20px;font-size:.74rem;font-weight:600;white-space:nowrap}
+.badge-ok{background:rgba(0,255,65,.15);color:var(--ok-color);border:1px solid var(--ok-color)}
+.badge-dim{background:var(--bg-card2);color:var(--text-dim);border:1px solid var(--border)}
+.dot{display:inline-block;width:.55rem;height:.55rem;border-radius:50%;margin-right:.35rem;vertical-align:middle}
+.dot-green{background:var(--ok-color);box-shadow:0 0 4px var(--ok-color)}
+.dot-red{background:var(--error-color)}
+.info-box{background:var(--bg-card2);border-left:3px solid var(--accent);padding:.75rem 1rem;border-radius:0 var(--radius) var(--radius) 0;font-size:.82rem;margin:.8rem 0;color:var(--text-dim)}
+.code-block{background:var(--input-bg);border:1px solid var(--input-border);border-radius:var(--radius);padding:.7rem 1rem;font-family:var(--font-mono);font-size:.85rem;color:var(--accent);margin:.5rem 0;overflow-x:auto;white-space:pre}
+.stat-row{display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1rem}
+.stat-mini{text-align:center;padding:.5rem .8rem;background:var(--bg-card2);border:1px solid var(--border);border-radius:var(--radius);min-width:100px}
+.stat-mini .val{font-family:var(--font-mono);font-size:1.1rem;font-weight:700;color:var(--accent)}
+.stat-mini .lbl{font-size:.7rem;color:var(--text-dim);text-transform:uppercase}
+footer{padding:2rem 0 1.5rem;border-top:1px solid var(--border);text-align:center;font-size:.8rem;color:var(--text-dim);margin-top:2rem}
+footer a{color:var(--text-dim)}footer a:hover{color:var(--accent)}
+.preview-badge{position:fixed;bottom:1rem;right:1rem;background:#7a5c00;color:var(--grin-yellow);font-size:.75rem;padding:.35rem .7rem;border-radius:var(--radius);border:1px solid var(--grin-yellow);font-family:var(--font-mono);z-index:999}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title"><a href="public-home.html">Grin Pool <span>ツ</span></a></div>
+      <nav class="nav-links">
+        <a href="public-home.html">Home</a>
+        <a href="user-dashboard.html">Dashboard</a>
+        <a href="user-miners.html" class="active">Miners</a>
+        <a href="user-withdraw.html">Withdraw</a>
+        <a href="user-profile.html">Profile</a>
+        <span class="nav-username">satoshi</span>
+        <a href="#">Logout</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+
+    <section>
+      <h2>// my workers</h2>
+
+      <div class="stat-row">
+        <div class="stat-mini"><div class="val">3</div><div class="lbl">Online</div></div>
+        <div class="stat-mini"><div class="val">1</div><div class="lbl">Offline</div></div>
+        <div class="stat-mini"><div class="val">1.21 kG/s</div><div class="lbl">Total (1h)</div></div>
+        <div class="stat-mini"><div class="val">605</div><div class="lbl">Shares (1h)</div></div>
+      </div>
+
+      <div class="card" style="padding:0">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Worker</th>
+                <th>Status</th>
+                <th>Hashrate (1h)</th>
+                <th>Shares (1h)</th>
+                <th>Shares (24h)</th>
+                <th>Accept Rate</th>
+                <th>Last Seen</th>
+                <th>Location</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="mono">satoshi.1</td>
+                <td><span class="dot dot-green"></span><span class="badge badge-ok">Online</span></td>
+                <td class="mono">0.62 kG/s</td>
+                <td>312</td>
+                <td>7 488</td>
+                <td>99.1%</td>
+                <td>2m ago</td>
+                <td>US-East</td>
+              </tr>
+              <tr>
+                <td class="mono">satoshi.2</td>
+                <td><span class="dot dot-green"></span><span class="badge badge-ok">Online</span></td>
+                <td class="mono">0.41 kG/s</td>
+                <td>204</td>
+                <td>4 896</td>
+                <td>98.6%</td>
+                <td>1m ago</td>
+                <td>US-East</td>
+              </tr>
+              <tr>
+                <td class="mono">satoshi.eu1</td>
+                <td><span class="dot dot-green"></span><span class="badge badge-ok">Online</span></td>
+                <td class="mono">0.18 kG/s</td>
+                <td>89</td>
+                <td>2 136</td>
+                <td>97.9%</td>
+                <td>4m ago</td>
+                <td>EU-West</td>
+              </tr>
+              <tr>
+                <td class="mono">satoshi.test</td>
+                <td><span class="dot dot-red"></span><span class="badge badge-dim">Offline</span></td>
+                <td class="mono">—</td>
+                <td>0</td>
+                <td>0</td>
+                <td>—</td>
+                <td>3h 12m ago</td>
+                <td>—</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>// stratum connect</h2>
+      <div class="card">
+        <div class="info-box">
+          Workers connect using <strong>username.workername</strong> as the stratum login.<br>
+          Any new worker name auto-registers on first share.
+        </div>
+        <p style="margin:.6rem 0 .3rem;font-size:.85rem;color:var(--text-dim)">US-East stratum</p>
+        <div class="code-block">stratum+tcp://us-east.grin.example:3416</div>
+        <p style="margin:.6rem 0 .3rem;font-size:.85rem;color:var(--text-dim)">EU-West stratum</p>
+        <div class="code-block">stratum+tcp://eu-west.grin.example:3416</div>
+        <p style="margin-top:.8rem;font-size:.82rem;color:var(--text-dim)">
+          Worker login examples: &nbsp;
+          <span style="color:var(--accent);font-family:var(--font-mono)">satoshi.rig1</span>&nbsp;·&nbsp;
+          <span style="color:var(--accent);font-family:var(--font-mono)">satoshi.basement2</span>
+        </p>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <p>Grin Pool ツ &nbsp;·&nbsp; <a href="https://grin.mw" target="_blank">grin.mw</a></p>
+  </div>
+</footer>
+
+<div class="preview-badge">PREVIEW — user-miners</div>
+</body>
+</html>

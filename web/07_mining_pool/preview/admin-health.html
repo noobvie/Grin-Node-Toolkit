@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>[PREVIEW] Admin Health | Grin Pool ツ</title>
+<style>
+:root{--bg-body:#000;--bg-card:#050505;--bg-card2:#0a0a0a;--text:#c0ffc0;--text-dim:#4a8a4a;--accent:#00ff41;--accent2:#00cc33;--border:#0d2e0d;--btn-bg:#00ff41;--btn-text:#000;--btn-hover:#00cc33;--input-bg:#040d04;--input-border:#0d2e0d;--error-color:#ff4444;--ok-color:#00ff41;--warn-color:#f2c94c;--grin-yellow:#f2c94c;--font-mono:'Courier New',Courier,monospace;--font-sans:'Courier New',Courier,monospace;--radius:6px;--shadow:0 2px 20px rgba(0,255,65,.08)}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg-body);color:var(--text);font-family:var(--font-sans);line-height:1.6;min-height:100vh}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.container{max-width:1060px;margin:0 auto;padding:0 1rem}
+header{padding:1rem 0;border-bottom:2px solid var(--warn-color);background:var(--bg-body);position:sticky;top:0;z-index:90}
+.header-inner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.6rem}
+.site-title{font-size:1.35rem;font-weight:700;color:var(--warn-color);font-family:var(--font-mono)}
+.admin-nav{display:flex;align-items:center;gap:.2rem;flex-wrap:wrap}
+.admin-nav a{color:var(--text-dim);font-size:.88rem;padding:.3rem .65rem;border-radius:var(--radius)}
+.admin-nav a:hover,.admin-nav a.active{color:var(--warn-color);background:var(--bg-card);text-decoration:none}
+.admin-badge{background:var(--warn-color);color:#000;font-size:.72rem;font-weight:700;padding:.15rem .5rem;border-radius:var(--radius);margin-right:.4rem;font-family:var(--font-mono)}
+section{padding:1.8rem 0 .8rem}
+h2{font-size:1.15rem;font-weight:700;color:var(--warn-color);margin-bottom:.9rem;font-family:var(--font-mono)}
+h3{font-size:.95rem;font-weight:600;margin-bottom:.6rem;color:var(--text-dim)}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:1.4rem;box-shadow:var(--shadow)}
+.card+.card{margin-top:1rem}
+.health-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.8rem;margin:1rem 0}
+.health-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:1.1rem 1.3rem;box-shadow:var(--shadow);border-left:4px solid var(--border)}
+.health-card.ok{border-left-color:var(--ok-color)}
+.health-card.warn{border-left-color:var(--warn-color)}
+.health-card.error{border-left-color:var(--error-color)}
+.health-name{font-weight:700;font-size:.95rem;margin-bottom:.4rem;display:flex;align-items:center;gap:.4rem}
+.health-detail{font-size:.82rem;color:var(--text-dim);line-height:1.8}
+.health-val{color:var(--text);font-family:var(--font-mono)}
+.dot{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;flex-shrink:0}
+.dot-green{background:var(--ok-color);box-shadow:0 0 6px var(--ok-color)}
+.dot-yellow{background:var(--warn-color)}
+.dot-red{background:var(--error-color)}
+.btn{display:inline-block;background:var(--btn-bg);color:var(--btn-text);border:none;border-radius:var(--radius);padding:.65rem 1.4rem;font-weight:700;font-size:.95rem;cursor:pointer;transition:background .15s;text-decoration:none}
+.btn:hover{background:var(--btn-hover);text-decoration:none}
+.btn-danger{background:var(--error-color);color:#fff}
+.btn-warn{background:var(--warn-color);color:#000}
+.btn-outline{background:transparent;border:1px solid var(--accent);color:var(--accent)}
+.btn-sm{padding:.3rem .7rem;font-size:.8rem}
+.action-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.7rem;margin:.8rem 0}
+.action-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.4rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;color:var(--text);font-size:.88rem;cursor:pointer;transition:border-color .15s,color .15s;text-decoration:none}
+.action-btn:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+.action-icon{font-size:1.5rem}
+.log-box{background:var(--input-bg);border:1px solid var(--input-border);border-radius:var(--radius);padding:.8rem;font-family:var(--font-mono);font-size:.78rem;height:200px;overflow-y:auto;color:var(--text-dim);line-height:1.7}
+.log-box .ok{color:var(--ok-color)}
+.log-box .warn{color:var(--warn-color)}
+.log-box .err{color:var(--error-color)}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+th{text-align:left;padding:.55rem .8rem;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:.55rem .8rem;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+.mono{font-family:var(--font-mono);font-size:.82rem}
+footer{padding:2rem 0 1.5rem;border-top:1px solid var(--border);text-align:center;font-size:.8rem;color:var(--text-dim);margin-top:2rem}
+.preview-badge{position:fixed;bottom:1rem;right:1rem;background:#7a5c00;color:var(--grin-yellow);font-size:.75rem;padding:.35rem .7rem;border-radius:var(--radius);border:1px solid var(--grin-yellow);font-family:var(--font-mono);z-index:999}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title">⚙ ADMIN — Grin Pool ツ</div>
+      <nav class="admin-nav">
+        <span class="admin-badge">ADMIN</span>
+        <a href="admin-dashboard.html">Dashboard</a>
+        <a href="admin-users.html">Users</a>
+        <a href="admin-miners.html">Miners</a>
+        <a href="admin-payments.html">Payments</a>
+        <a href="admin-health.html" class="active">Health</a>
+        <a href="public-home.html" style="color:var(--text-dim)">← Public</a>
+        <a href="#" style="color:var(--text-dim)">Logout</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+
+    <section>
+      <h2>// service health</h2>
+      <div class="health-grid">
+        <div class="health-card ok">
+          <div class="health-name"><span class="dot dot-green"></span> Express server</div>
+          <div class="health-detail">
+            Port: <span class="health-val">3002</span><br>
+            Uptime: <span class="health-val">4d 12h 07m</span><br>
+            Node.js: <span class="health-val">v22.4.0</span><br>
+            Memory: <span class="health-val">87 MB / 512 MB</span>
+          </div>
+        </div>
+        <div class="health-card ok">
+          <div class="health-name"><span class="dot dot-green"></span> Grin node</div>
+          <div class="health-detail">
+            Height: <span class="health-val">#2 847 193</span><br>
+            Sync: <span class="health-val">fully synced</span><br>
+            Peers: <span class="health-val">8 connected</span><br>
+            API: <span class="health-val">:3413 OK</span>
+          </div>
+        </div>
+        <div class="health-card ok">
+          <div class="health-name"><span class="dot dot-green"></span> grin-wallet</div>
+          <div class="health-detail">
+            Foreign API: <span class="health-val">:3415 OK</span><br>
+            Balance: <span class="health-val">87.6 GRIN</span><br>
+            Last check: <span class="health-val">30s ago</span>
+          </div>
+        </div>
+        <div class="health-card ok">
+          <div class="health-name"><span class="dot dot-green"></span> Stratum — US-East</div>
+          <div class="health-detail">
+            Port: <span class="health-val">3416</span><br>
+            Workers: <span class="health-val">3 online</span><br>
+            Log: <span class="health-val">/var/log/grin-server-us.log</span><br>
+            Last share: <span class="health-val">2m ago</span>
+          </div>
+        </div>
+        <div class="health-card warn">
+          <div class="health-name"><span class="dot dot-yellow"></span> Stratum — EU-West</div>
+          <div class="health-detail">
+            Port: <span class="health-val">3416</span><br>
+            Workers: <span class="health-val">1 online</span><br>
+            Log: <span class="health-val">/var/log/grin-server-eu.log</span><br>
+            Last share: <span class="health-val" style="color:var(--warn-color)">11m ago</span>
+          </div>
+        </div>
+        <div class="health-card ok">
+          <div class="health-name"><span class="dot dot-green"></span> Nginx</div>
+          <div class="health-detail">
+            Host: <span class="health-val">pool.grin.example</span><br>
+            SSL: <span class="health-val">valid (74 days)</span><br>
+            HTTP→HTTPS: <span class="health-val">OK</span>
+          </div>
+        </div>
+        <div class="health-card ok">
+          <div class="health-name"><span class="dot dot-green"></span> SQLite DB</div>
+          <div class="health-detail">
+            File: <span class="health-val">pool.db (4.2 MB)</span><br>
+            WAL mode: <span class="health-val">on</span><br>
+            Tables: <span class="health-val">8</span>
+          </div>
+        </div>
+        <div class="health-card ok">
+          <div class="health-name"><span class="dot dot-green"></span> Disk</div>
+          <div class="health-detail">
+            Chain: <span class="health-val">47 GB used</span><br>
+            Free: <span class="health-val">128 GB</span><br>
+            Log dir: <span class="health-val">12 MB</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>// pool locations (regions)</h2>
+      <div class="card" style="padding:0">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Name</th><th>Stratum Port</th><th>Log Path</th><th>Workers</th><th>Hashrate</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>US-East</td>
+                <td class="mono">3416</td>
+                <td class="mono">/var/log/grin-server-us.log</td>
+                <td>3</td>
+                <td class="mono">1.21 kG/s</td>
+                <td style="color:var(--ok-color)">● Active</td>
+              </tr>
+              <tr>
+                <td>EU-West</td>
+                <td class="mono">3416</td>
+                <td class="mono">/var/log/grin-server-eu.log</td>
+                <td>1</td>
+                <td class="mono">0.63 kG/s</td>
+                <td style="color:var(--warn-color)">● Slow</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>// quick actions</h2>
+      <div class="action-grid">
+        <a href="#" class="action-btn"><span class="action-icon">📋</span>View server log</a>
+        <a href="#" class="action-btn"><span class="action-icon">🔄</span>Reload config</a>
+        <a href="#" class="action-btn"><span class="action-icon">💾</span>Backup DB</a>
+        <a href="#" class="action-btn btn-warn" style="background:rgba(242,201,76,.08);border-color:var(--warn-color);color:var(--warn-color)"><span class="action-icon">🗑️</span>Rotate logs</a>
+      </div>
+    </section>
+
+    <section>
+      <h2>// recent log tail</h2>
+      <div class="log-box">
+<span class="ok">[2026-05-15 14:09:12]</span> [INFO] Block #2847193 found by satoshi.1 at US-East
+<span class="ok">[2026-05-15 14:09:12]</span> [INFO] Distributing reward: 59.400 GRIN to 3 miners
+<span class="ok">[2026-05-15 14:09:12]</span> [INFO] Pool fee credited: 0.600 GRIN to pool_fee
+[2026-05-15 14:07:44] [INFO] Share accepted: satoshi.2 (US-East)
+[2026-05-15 14:07:39] [INFO] Share accepted: satoshi.1 (US-East)
+<span class="warn">[2026-05-15 14:06:05]</span> [WARN] EU-West stratum: no share in 10 min, satoshi.eu1 may be offline
+[2026-05-15 14:05:31] [INFO] Share accepted: satoshi.eu1 (EU-West)
+[2026-05-15 14:05:28] [INFO] Share accepted: nakamoto.rig1 (EU-West)
+[2026-05-15 14:04:19] [INFO] Withdrawal #88: hal requested 54.000 GRIN, slate sent
+[2026-05-15 14:03:50] [INFO] Auth: login ok — hal (127.0.0.1)
+<span class="ok">[2026-05-15 13:55:00]</span> [INFO] Hashrate snapshot saved — pool: 1840 G/s
+[2026-05-15 13:45:00]  [INFO] Withdrawal #87 expired, refunding nakamoto 80.007 GRIN
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <p>Grin Pool ツ — Admin Panel &nbsp;·&nbsp; <a href="public-home.html">Public site</a></p>
+  </div>
+</footer>
+
+<div class="preview-badge">PREVIEW — admin-health</div>
+</body>
+</html>

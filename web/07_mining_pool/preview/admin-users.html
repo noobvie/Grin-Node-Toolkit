@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>[PREVIEW] Admin Users | Grin Pool ツ</title>
+<style>
+:root{--bg-body:#000;--bg-card:#050505;--bg-card2:#0a0a0a;--text:#c0ffc0;--text-dim:#4a8a4a;--accent:#00ff41;--accent2:#00cc33;--border:#0d2e0d;--btn-bg:#00ff41;--btn-text:#000;--btn-hover:#00cc33;--input-bg:#040d04;--input-border:#0d2e0d;--error-color:#ff4444;--ok-color:#00ff41;--warn-color:#f2c94c;--grin-yellow:#f2c94c;--font-mono:'Courier New',Courier,monospace;--font-sans:'Courier New',Courier,monospace;--radius:6px;--shadow:0 2px 20px rgba(0,255,65,.08)}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg-body);color:var(--text);font-family:var(--font-sans);line-height:1.6;min-height:100vh}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.container{max-width:1060px;margin:0 auto;padding:0 1rem}
+header{padding:1rem 0;border-bottom:2px solid var(--warn-color);background:var(--bg-body);position:sticky;top:0;z-index:90}
+.header-inner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.6rem}
+.site-title{font-size:1.35rem;font-weight:700;color:var(--warn-color);font-family:var(--font-mono)}
+.admin-nav{display:flex;align-items:center;gap:.2rem;flex-wrap:wrap}
+.admin-nav a{color:var(--text-dim);font-size:.88rem;padding:.3rem .65rem;border-radius:var(--radius)}
+.admin-nav a:hover,.admin-nav a.active{color:var(--warn-color);background:var(--bg-card);text-decoration:none}
+.admin-badge{background:var(--warn-color);color:#000;font-size:.72rem;font-weight:700;padding:.15rem .5rem;border-radius:var(--radius);margin-right:.4rem;font-family:var(--font-mono)}
+section{padding:1.8rem 0 .8rem}
+h2{font-size:1.15rem;font-weight:700;color:var(--warn-color);margin-bottom:.9rem;font-family:var(--font-mono)}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:1.4rem;box-shadow:var(--shadow)}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+th{text-align:left;padding:.55rem .8rem;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:.55rem .8rem;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--bg-card2)}
+.mono{font-family:var(--font-mono);font-size:.82rem}
+.badge{display:inline-block;padding:.15rem .55rem;border-radius:20px;font-size:.74rem;font-weight:600;white-space:nowrap}
+.badge-ok{background:rgba(0,255,65,.15);color:var(--ok-color);border:1px solid var(--ok-color)}
+.badge-warn{background:rgba(242,201,76,.15);color:var(--warn-color);border:1px solid var(--warn-color)}
+.badge-dim{background:var(--bg-card2);color:var(--text-dim);border:1px solid var(--border)}
+.badge-error{background:rgba(255,68,68,.15);color:var(--error-color);border:1px solid var(--error-color)}
+.btn{display:inline-block;background:var(--btn-bg);color:var(--btn-text);border:none;border-radius:var(--radius);padding:.65rem 1.4rem;font-weight:700;font-size:.95rem;cursor:pointer;transition:background .15s;text-decoration:none}
+.btn:hover{background:var(--btn-hover);text-decoration:none}
+.btn-danger{background:var(--error-color);color:#fff}
+.btn-danger:hover{background:#cc3333}
+.btn-warn{background:var(--warn-color);color:#000}
+.btn-outline{background:transparent;border:1px solid var(--accent);color:var(--accent)}
+.btn-sm{padding:.3rem .7rem;font-size:.8rem}
+.toolbar{display:flex;align-items:center;gap:.8rem;margin-bottom:1rem;flex-wrap:wrap}
+input[type="text"]{background:var(--input-bg);border:1px solid var(--input-border);border-radius:var(--radius);color:var(--text);padding:.5rem .8rem;font-family:var(--font-sans);font-size:.9rem;width:220px}
+input:focus{outline:none;border-color:var(--accent)}
+.pagination{display:flex;gap:.4rem;align-items:center;margin-top:1rem;flex-wrap:wrap}
+.page-btn{background:var(--bg-card);border:1px solid var(--border);color:var(--text-dim);padding:.3rem .7rem;border-radius:var(--radius);cursor:pointer;font-size:.85rem}
+.page-btn.active,.page-btn:hover{border-color:var(--accent);color:var(--accent)}
+footer{padding:2rem 0 1.5rem;border-top:1px solid var(--border);text-align:center;font-size:.8rem;color:var(--text-dim);margin-top:2rem}
+.preview-badge{position:fixed;bottom:1rem;right:1rem;background:#7a5c00;color:var(--grin-yellow);font-size:.75rem;padding:.35rem .7rem;border-radius:var(--radius);border:1px solid var(--grin-yellow);font-family:var(--font-mono);z-index:999}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title">⚙ ADMIN — Grin Pool ツ</div>
+      <nav class="admin-nav">
+        <span class="admin-badge">ADMIN</span>
+        <a href="admin-dashboard.html">Dashboard</a>
+        <a href="admin-users.html" class="active">Users</a>
+        <a href="admin-miners.html">Miners</a>
+        <a href="admin-payments.html">Payments</a>
+        <a href="admin-health.html">Health</a>
+        <a href="public-home.html" style="color:var(--text-dim)">← Public</a>
+        <a href="#" style="color:var(--text-dim)">Logout</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+    <section>
+      <h2>// user management</h2>
+
+      <div class="toolbar">
+        <input type="text" placeholder="Search username…" value="">
+        <span style="font-size:.85rem;color:var(--text-dim)">12 users total</span>
+      </div>
+
+      <div class="card" style="padding:0">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Role</th>
+                <th>Balance ツ</th>
+                <th>Locked ツ</th>
+                <th>Workers</th>
+                <th>Joined</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="mono">satoshi</td>
+                <td><span class="badge badge-warn">admin</span></td>
+                <td class="mono">142.3820</td>
+                <td class="mono">0.0000</td>
+                <td>4</td>
+                <td>2026-01-07</td>
+                <td><span class="badge badge-ok">Active</span></td>
+                <td><button class="btn btn-sm btn-outline">Edit</button></td>
+              </tr>
+              <tr>
+                <td class="mono">nakamoto</td>
+                <td><span class="badge badge-dim">miner</span></td>
+                <td class="mono">87.6220</td>
+                <td class="mono">0.0000</td>
+                <td>2</td>
+                <td>2026-01-14</td>
+                <td><span class="badge badge-ok">Active</span></td>
+                <td><button class="btn btn-sm btn-outline">Edit</button></td>
+              </tr>
+              <tr>
+                <td class="mono">hal</td>
+                <td><span class="badge badge-dim">miner</span></td>
+                <td class="mono">54.0100</td>
+                <td class="mono">54.0000</td>
+                <td>1</td>
+                <td>2026-02-03</td>
+                <td><span class="badge badge-warn">Withdrawing</span></td>
+                <td><button class="btn btn-sm btn-outline">Edit</button></td>
+              </tr>
+              <tr>
+                <td class="mono">szabo</td>
+                <td><span class="badge badge-dim">miner</span></td>
+                <td class="mono">0.0000</td>
+                <td class="mono">0.0000</td>
+                <td>0</td>
+                <td>2026-03-11</td>
+                <td><span class="badge badge-dim">Inactive</span></td>
+                <td><button class="btn btn-sm btn-danger">Disable</button></td>
+              </tr>
+              <tr>
+                <td class="mono">pool_fee</td>
+                <td><span class="badge badge-error">system</span></td>
+                <td class="mono">87.6000</td>
+                <td class="mono">0.0000</td>
+                <td>—</td>
+                <td>2026-01-07</td>
+                <td><span class="badge badge-dim">System</span></td>
+                <td><span style="color:var(--text-dim);font-size:.8rem">protected</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="pagination">
+        <button class="page-btn" disabled>‹ Prev</button>
+        <button class="page-btn active">1</button>
+        <button class="page-btn">2</button>
+        <button class="page-btn">Next ›</button>
+        <span style="font-size:.82rem;color:var(--text-dim);margin-left:.4rem">Page 1 of 2</span>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <p>Grin Pool ツ — Admin Panel &nbsp;·&nbsp; <a href="public-home.html">Public site</a></p>
+  </div>
+</footer>
+
+<div class="preview-badge">PREVIEW — admin-users</div>
+</body>
+</html>

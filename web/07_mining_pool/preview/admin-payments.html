@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>[PREVIEW] Admin Payments | Grin Pool ツ</title>
+<style>
+:root{--bg-body:#000;--bg-card:#050505;--bg-card2:#0a0a0a;--text:#c0ffc0;--text-dim:#4a8a4a;--accent:#00ff41;--accent2:#00cc33;--border:#0d2e0d;--btn-bg:#00ff41;--btn-text:#000;--btn-hover:#00cc33;--input-bg:#040d04;--input-border:#0d2e0d;--error-color:#ff4444;--ok-color:#00ff41;--warn-color:#f2c94c;--grin-yellow:#f2c94c;--font-mono:'Courier New',Courier,monospace;--font-sans:'Courier New',Courier,monospace;--radius:6px;--shadow:0 2px 20px rgba(0,255,65,.08)}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg-body);color:var(--text);font-family:var(--font-sans);line-height:1.6;min-height:100vh}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.container{max-width:1060px;margin:0 auto;padding:0 1rem}
+header{padding:1rem 0;border-bottom:2px solid var(--warn-color);background:var(--bg-body);position:sticky;top:0;z-index:90}
+.header-inner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.6rem}
+.site-title{font-size:1.35rem;font-weight:700;color:var(--warn-color);font-family:var(--font-mono)}
+.admin-nav{display:flex;align-items:center;gap:.2rem;flex-wrap:wrap}
+.admin-nav a{color:var(--text-dim);font-size:.88rem;padding:.3rem .65rem;border-radius:var(--radius)}
+.admin-nav a:hover,.admin-nav a.active{color:var(--warn-color);background:var(--bg-card);text-decoration:none}
+.admin-badge{background:var(--warn-color);color:#000;font-size:.72rem;font-weight:700;padding:.15rem .5rem;border-radius:var(--radius);margin-right:.4rem;font-family:var(--font-mono)}
+section{padding:1.8rem 0 .8rem}
+h2{font-size:1.15rem;font-weight:700;color:var(--warn-color);margin-bottom:.9rem;font-family:var(--font-mono)}
+h3{font-size:.95rem;font-weight:600;margin-bottom:.6rem;color:var(--text-dim)}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:1.4rem;box-shadow:var(--shadow)}
+.card+.card{margin-top:1rem}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+th{text-align:left;padding:.55rem .8rem;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:.55rem .8rem;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--bg-card2)}
+.mono{font-family:var(--font-mono);font-size:.82rem}
+.badge{display:inline-block;padding:.15rem .55rem;border-radius:20px;font-size:.74rem;font-weight:600;white-space:nowrap}
+.badge-ok{background:rgba(0,255,65,.15);color:var(--ok-color);border:1px solid var(--ok-color)}
+.badge-warn{background:rgba(242,201,76,.15);color:var(--warn-color);border:1px solid var(--warn-color)}
+.badge-error{background:rgba(255,68,68,.15);color:var(--error-color);border:1px solid var(--error-color)}
+.badge-dim{background:var(--bg-card2);color:var(--text-dim);border:1px solid var(--border)}
+.btn{display:inline-block;background:var(--btn-bg);color:var(--btn-text);border:none;border-radius:var(--radius);padding:.65rem 1.4rem;font-weight:700;font-size:.95rem;cursor:pointer;transition:background .15s;text-decoration:none}
+.btn:hover{background:var(--btn-hover);text-decoration:none}
+.btn-danger{background:var(--error-color);color:#fff}
+.btn-danger:hover{background:#cc3333}
+.btn-warn{background:var(--warn-color);color:#000}
+.btn-outline{background:transparent;border:1px solid var(--accent);color:var(--accent)}
+.btn-sm{padding:.3rem .7rem;font-size:.8rem}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.8rem;margin:1.2rem 0}
+.kpi-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:1.1rem;box-shadow:var(--shadow);text-align:center}
+.kpi-label{font-size:.72rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem}
+.kpi-value{font-size:1.4rem;font-weight:700;color:var(--accent);font-family:var(--font-mono)}
+.kpi-sub{font-size:.75rem;color:var(--text-dim);margin-top:.2rem}
+.kpi-warn .kpi-value{color:var(--warn-color)}
+.countdown{font-family:var(--font-mono);font-size:1rem;color:var(--warn-color);font-weight:700}
+footer{padding:2rem 0 1.5rem;border-top:1px solid var(--border);text-align:center;font-size:.8rem;color:var(--text-dim);margin-top:2rem}
+.preview-badge{position:fixed;bottom:1rem;right:1rem;background:#7a5c00;color:var(--grin-yellow);font-size:.75rem;padding:.35rem .7rem;border-radius:var(--radius);border:1px solid var(--grin-yellow);font-family:var(--font-mono);z-index:999}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title">⚙ ADMIN — Grin Pool ツ</div>
+      <nav class="admin-nav">
+        <span class="admin-badge">ADMIN</span>
+        <a href="admin-dashboard.html">Dashboard</a>
+        <a href="admin-users.html">Users</a>
+        <a href="admin-miners.html">Miners</a>
+        <a href="admin-payments.html" class="active">Payments</a>
+        <a href="admin-health.html">Health</a>
+        <a href="public-home.html" style="color:var(--text-dim)">← Public</a>
+        <a href="#" style="color:var(--text-dim)">Logout</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+
+    <section>
+      <h2>// payment overview</h2>
+      <div class="kpi-grid">
+        <div class="kpi-card kpi-warn">
+          <div class="kpi-label">Pending</div>
+          <div class="kpi-value">2</div>
+          <div class="kpi-sub">awaiting miner response</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Total Unclaimed</div>
+          <div class="kpi-value">284.7</div>
+          <div class="kpi-sub">GRIN owed to miners</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Pool Fee Reserve</div>
+          <div class="kpi-value">87.6</div>
+          <div class="kpi-sub">GRIN (pool_fee account)</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Paid out (30d)</div>
+          <div class="kpi-value">1 740</div>
+          <div class="kpi-sub">GRIN total</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>// pending withdrawals</h2>
+      <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:1rem">Miners have <strong style="color:var(--warn-color)">30 minutes</strong> to respond with their wallet slate. Expired withdrawals are auto-refunded.</p>
+
+      <div class="card" style="padding:0">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>User</th>
+                <th>Amount ツ</th>
+                <th>Fee</th>
+                <th>Initiated</th>
+                <th>Expires</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="mono">#88</td>
+                <td><a href="admin-users.html">hal</a></td>
+                <td class="mono">54.000</td>
+                <td class="mono">0.007</td>
+                <td>14:03 today</td>
+                <td><span class="countdown">12:47</span></td>
+                <td><span class="badge badge-warn">Awaiting slate</span></td>
+                <td>
+                  <button class="btn btn-danger btn-sm">Force Expire</button>
+                </td>
+              </tr>
+              <tr>
+                <td class="mono">#87</td>
+                <td><a href="admin-users.html">nakamoto</a></td>
+                <td class="mono">80.000</td>
+                <td class="mono">0.007</td>
+                <td>13:44 today</td>
+                <td><span class="countdown">00:12</span></td>
+                <td><span class="badge badge-warn">Awaiting slate</span></td>
+                <td>
+                  <button class="btn btn-danger btn-sm">Force Expire</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>// withdrawal history</h2>
+      <div class="card" style="padding:0">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>User</th>
+                <th>Amount ツ</th>
+                <th>Date</th>
+                <th>Status</th>
+                <th>Kernel</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="mono">#86</td>
+                <td><a href="#">satoshi</a></td>
+                <td class="mono">59.993</td>
+                <td>2026-05-10 14:22</td>
+                <td><span class="badge badge-ok">Complete</span></td>
+                <td class="mono" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">09a3c4f2…8e1b</td>
+              </tr>
+              <tr>
+                <td class="mono">#85</td>
+                <td><a href="#">nakamoto</a></td>
+                <td class="mono">119.993</td>
+                <td>2026-05-08 09:12</td>
+                <td><span class="badge badge-ok">Complete</span></td>
+                <td class="mono">77d2ef1a…c302</td>
+              </tr>
+              <tr>
+                <td class="mono">#84</td>
+                <td><a href="#">hal</a></td>
+                <td class="mono">30.000</td>
+                <td>2026-05-06 20:55</td>
+                <td><span class="badge badge-error">Expired</span></td>
+                <td class="mono" style="color:var(--text-dim)">—</td>
+              </tr>
+              <tr>
+                <td class="mono">#83</td>
+                <td><a href="#">satoshi</a></td>
+                <td class="mono">59.993</td>
+                <td>2026-04-28 09:05</td>
+                <td><span class="badge badge-ok">Complete</span></td>
+                <td class="mono">3f8c12aa…7d41</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <p>Grin Pool ツ — Admin Panel &nbsp;·&nbsp; <a href="public-home.html">Public site</a></p>
+  </div>
+</footer>
+
+<div class="preview-badge">PREVIEW — admin-payments</div>
+</body>
+</html>

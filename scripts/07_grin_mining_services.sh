@@ -951,7 +951,7 @@ pool_install() {
     # Check source
     if [[ ! -d "$POOL_APP_SRC" ]]; then
         error "Pool app source not found: $POOL_APP_SRC"
-        error "Ensure web/07_pool/pool-manager/ exists in the toolkit directory."
+        error "Ensure web/07_mining_pool/back-end-pool/ exists in the toolkit directory."
         return 1
     fi
 
@@ -1492,7 +1492,7 @@ pool_menu() {
         echo -e "  Service: $(_pool_menu_status_line "$net")"
         echo ""
         echo -e "${DIM}  ─── First-Time Setup ────────────────────────────${RESET}"
-        echo -e "  ${GREEN}0${RESET}) Guided Full Setup    ${DIM}(runs 1→2→3→4→5→6)${RESET}"
+        echo -e "  ${GREEN}G${RESET}) Guided Full Setup    ${DIM}(runs 1→2→3→4→5→6)${RESET}"
         echo ""
         echo -e "${DIM}  ─── Install & Configure ──────────────────────────${RESET}"
         echo -e "  ${GREEN}1${RESET}) Install dependencies ${DIM}(python3, pip, fastapi, uvicorn)${RESET}"
@@ -1519,7 +1519,7 @@ pool_menu() {
 
         case "${choice,,}" in
             "")    continue ;;
-            0)     pool_guided_setup "$net" ;;
+            g)     pool_guided_setup "$net" ;;
             1)     pool_install "$net" ;;
             2)     pool_configure "$net" ;;
             3)     pool_deploy_web "$net" ;;
@@ -1532,7 +1532,7 @@ pool_menu() {
             l)     pool_view_logs "$net" ;;
             del)   pool_reset_db "$net" ;;
             s)     ${EDITOR:-nano} "$POOL_CONF" ;;
-            back|q) break ;;
+            0|back|q) break ;;
             *)     warn "Invalid option." ; sleep 1 ; continue ;;
         esac
 

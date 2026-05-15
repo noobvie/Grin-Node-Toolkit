@@ -3796,5 +3796,65 @@ SUCCESS             FAILED/TIMEOUT
     ☐ pool.json has all required fields (no hardcoded secrets in code)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PHASE 3 — DOCUMENTATION (PUBLIC-FACING)         STATUS: DONE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Public instructional pages served via Nginx alongside pool API.
+  Target audience: Miners connecting IPOLLO, solo miners, pool operators.
+
+  Deliverables:
+    web/07_mining_pool/public_html/grin_mining_testnet_instruction.html
+      ✓ 8-step testnet solo mining guide (IPOLLO G1 Mini)
+      ✓ TOML configuration reference
+      ✓ Port mapping (testnet vs mainnet)
+      ✓ Troubleshooting section (firewall, sync, crashes)
+      ✓ FAQ (how long for blocks, multiple units, mainnet migration)
+      ✓ Responsive design (mobile-friendly)
+      ✓ Links to Grin docs + forum
+
+  Served at:
+    http://pool.example.com/grin_mining_testnet_instruction.html
+
+  Nginx configuration:
+    location ~ ^/.*\.html$ {
+      root /var/www/grin-pool-testnet/public_html;
+      try_files $uri $uri/ =404;
+      expires 1h;
+      add_header Cache-Control "public, must-revalidate";
+    }
+
+  Why serve HTML, not markdown:
+    • Users don't have git repo access
+    • Professional UX (styled, responsive, searchable)
+    • Can be printed or bookmarked
+    • No build step required (plain HTML)
+
+  Future: Add grin_mining_mainnet_instruction.html (same content, ports 3413→3415→3420)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  IMPLEMENTATION GUIDES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Step-by-step testing, setup, and API reference for each phase:
+  See → flowcharts/script07_implementation_guides.md
+
+  This file contains:
+    • Phase 0c: Environment setup & validation
+    • Phase 1: Mining core (stratum protocol, shares, block crediting)
+    • Phases 7/8/2/6: Payment pipeline (node integration, PPLNS, wallet, withdrawals)
+    • Phases 4/5/10/11/12: Admin auth, monitoring, public API, logging, UI
+
+  Each phase includes:
+    ✓ What's created (files, endpoints, features)
+    ✓ Setup instructions
+    ✓ Testing sequence (curl examples, expected outputs)
+    ✓ Validation checklists
+    ✓ Configuration samples
+
+  Companion documents:
+    • script07_testnet_quickstart.md — Lean testnet solo mining (8 steps, IPOLLO focus)
+    • grin_mining_testnet_instruction.html — Same as above, styled for web
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   END OF PLAN
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -117,6 +117,12 @@ FAIL2BAN_JAIL_CONF="/etc/fail2ban/jail.d/nginx-grin.conf"
 BLOCKED_LIST_FILE="/etc/grin-toolkit/blocked_ips.list"
 FIREWALL=""   # Populated by detect_firewall()
 
+# ── Source shared nginx helpers ───────────────────────────────────────────────
+# Required — provides _ensure_sites_enabled_include and other nginx helpers.
+# If this file is missing, the toolkit is broken; fail loudly rather than silently.
+# shellcheck source=lib/nginx_shared_helpers.sh
+source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+
 # Detect a running Grin instance on the given port and return the recommended
 # web dir path matching script 03's naming convention (fullmain/prunemain/prunetest).
 # Returns 1 (no output) if no Grin is found on that port.
@@ -478,80 +484,7 @@ _evict_apache2() {
     fi
 }
 
-# Ensure /etc/nginx/sites-enabled/* is included inside the http {} block of nginx.conf.
-# Idempotent — safe to call multiple times. Required on RHEL/Rocky/Alma (and after any
-# nginx package upgrade that resets nginx.conf) because the default config on those
-# distros only includes conf.d/, not sites-enabled/.
-_ensure_sites_enabled_include() {
-    local nginx_conf="/etc/nginx/nginx.conf"
-    local sites_avail="$NGINX_AVAILABLE"
-    local sites_en="$NGINX_ENABLED"
-
-    # Create the directories if missing (RHEL-based nginx doesn't ship them)
-    mkdir -p "$sites_avail" "$sites_en"
-
-    # Already present? Nothing to do.
-    if grep -q "sites-enabled" "$nginx_conf" 2>/dev/null; then
-        # Verify the include is inside the http block, not outside it.
-        python3 - "$nginx_conf" << 'PYEOF'
-import sys, re
-with open(sys.argv[1]) as fh:
-    txt = fh.read()
-# Find the http block boundaries
-m = re.search(r'\bhttp\s*\{', txt)
-if not m:
-    sys.exit(0)  # malformed — let nginx -t catch it
-http_start = m.end()
-# Walk forward counting braces to find the closing }
-depth = 1
-i = http_start
-while i < len(txt) and depth > 0:
-    if txt[i] == '{':
-        depth += 1
-    elif txt[i] == '}':
-        depth -= 1
-    i += 1
-http_body = txt[http_start:i-1]
-if 'sites-enabled' in http_body:
-    sys.exit(0)  # include is already inside http {}
-# include exists but is OUTSIDE http {} — remove the stray line
-txt2 = re.sub(r'[ \t]*include[^;]*sites-enabled[^;]*;\n?', '', txt)
-# Re-insert inside http {}
-insert = '\n    include /etc/nginx/sites-enabled/*;\n'
-nl = txt2.find('\n', txt2.find('http {'))
-if nl == -1:
-    nl = txt2.find('\n', txt2.find('http{'))
-if nl != -1:
-    txt2 = txt2[:nl] + insert + txt2[nl:]
-with open(sys.argv[1], 'w') as fh:
-    fh.write(txt2)
-print('[INFO]  Moved sites-enabled include inside http {} block in nginx.conf')
-PYEOF
-        return 0
-    fi
-
-    # Insert include inside the http {} block (after the opening brace line)
-    python3 - "$nginx_conf" << 'PYEOF'
-import sys
-conf_file = sys.argv[1]
-with open(conf_file) as fh:
-    txt = fh.read()
-if 'sites-enabled' in txt:
-    sys.exit(0)
-insert = '\n    include /etc/nginx/sites-enabled/*;\n'
-idx = txt.find('http {')
-if idx == -1:
-    idx = txt.find('http{')
-if idx == -1:
-    print('ERROR: http { block not found in ' + conf_file, file=sys.stderr)
-    sys.exit(1)
-nl = txt.find('\n', idx)
-txt = txt[:nl] + insert + txt[nl:]
-with open(conf_file, 'w') as fh:
-    fh.write(txt)
-print('[INFO]  Added include /etc/nginx/sites-enabled/*; inside http {} in nginx.conf')
-PYEOF
-}
+# _ensure_sites_enabled_include is provided by lib/nginx_shared_helpers.sh (sourced above).
 
 # Ensure nginx + certbot are installed. Single prompt if either (or both) are missing.
 # Returns 1 if the user cancels or declines.
@@ -559,6 +492,9 @@ ensure_nginx_certbot() {
     local need_nginx=false need_certbot=false label
     command -v nginx   &>/dev/null || need_nginx=true
     command -v certbot &>/dev/null || need_certbot=true
+
+    # Always verify sites-enabled include is in place — self-heals after nginx upgrades.
+    _ensure_sites_enabled_include
 
     $need_nginx || $need_certbot || return 0   # both present — nothing to do
 
@@ -1604,7 +1540,7 @@ get_domain_to_remove() {
         print_info "Available domains:"
         list_domains
         DOMAIN_TO_REMOVE=""
-        return
+        return 1
     fi
     
     print_info "Domain to remove: $DOMAIN_TO_REMOVE"
@@ -2170,36 +2106,77 @@ run_setup_custom() {
 # 24.0 - Remove domain workflow
 run_remove() {
     print_section "Domain Removal"
-    
-    # List available domains
+
+    # Show available domains; bail early if none exist
     if ! list_domains; then
-        print_error "No domains to remove"
+        print_error "No domains configured — nothing to remove."
         echo ""
         read -rp "Press Enter to return to the main menu..."
         return 0
     fi
 
-    # Get domain to remove
-    get_domain_to_remove || { print_info "Removal cancelled."; return 0; }
-    
-    # Gather information about the domain
+    # Pick the domain (loops until valid or cancelled)
+    while true; do
+        get_domain_to_remove || { print_info "Removal cancelled."; return 0; }
+        [[ -n "$DOMAIN_TO_REMOVE" ]] && break
+    done
+
+    # Gather facts (files dir, SSL, bandwidth) — silently
     gather_domain_info
-    
-    # Confirm removal with user
-    confirm_removal || { return 0; }
+
+    # Show a concise summary of what will be removed
+    echo ""
+    print_warn "About to remove: $DOMAIN_TO_REMOVE"
+    echo "  • Nginx config  : $NGINX_AVAILABLE/$DOMAIN_TO_REMOVE"
+    echo "  • Sites-enabled : $NGINX_ENABLED/$DOMAIN_TO_REMOVE"
+    [[ "$HAS_SSL"            == "yes" ]] && echo "  • SSL cert      : /etc/letsencrypt/live/$DOMAIN_TO_REMOVE"
+    [[ "$HAS_BANDWIDTH_LIMIT" == "yes" ]] && echo "  • Bandwidth cfg : /etc/nginx/conf.d/${DOMAIN_TO_REMOVE}-bandwidth-map.conf"
+    echo "  • Nginx logs    : /var/log/nginx/${DOMAIN_TO_REMOVE}-*.log"
+    echo ""
+
+    # Ask once about www files (default: keep — they can be rebuilt)
+    local _del_files="no"
+    if [[ -n "$FILES_DIR" && -d "$FILES_DIR" ]]; then
+        local _dir_size; _dir_size=$(du -sh "$FILES_DIR" 2>/dev/null | cut -f1)
+        echo "  • Files dir     : $FILES_DIR  (${_dir_size:-?})"
+        echo ""
+        local _fc
+        read -rp "  Also delete the files directory? [y/N]: " _fc
+        [[ "${_fc,,}" == "y" ]] && _del_files="yes" \
+                                 && echo "    → Files will be DELETED" \
+                                 || echo "    → Files will be KEPT (can be rebuilt)"
+        echo ""
+    fi
+
+    # Single Y/n confirmation — no typing the domain name
+    local _confirm
+    read -rp "Confirm removal of $DOMAIN_TO_REMOVE? [Y/n]: " _confirm
+    _confirm="${_confirm:-y}"
+    if [[ "${_confirm,,}" != "y" ]]; then
+        print_info "Removal cancelled."
+        DOMAIN_TO_REMOVE=""
+        return 0
+    fi
 
     # Execute removal steps
     remove_nginx_config
     remove_ssl_certificate
     remove_bandwidth_limiting
     remove_log_files
-    remove_files_directory
-    
-    # Display summary
-    display_removal_summary
+
+    # Handle files directory
+    if [[ "$_del_files" == "yes" && -n "$FILES_DIR" && -d "$FILES_DIR" ]]; then
+        rm -rf "$FILES_DIR" && print_info "Files directory removed: $FILES_DIR" \
+                            || print_warn "Could not remove $FILES_DIR — check permissions."
+    elif [[ -n "$FILES_DIR" && -d "$FILES_DIR" ]]; then
+        print_info "Files directory preserved: $FILES_DIR"
+    fi
+
     echo ""
-    print_info "Full log saved to: $LOG_FILE"
+    print_info "Domain '$DOMAIN_TO_REMOVE' removed successfully."
+    print_info "Log: $LOG_FILE"
     echo ""
+    DOMAIN_TO_REMOVE=""
     read -rp "Press Enter to return to the main menu..."
 }
 

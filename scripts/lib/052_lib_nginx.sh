@@ -191,6 +191,8 @@ _drop_reapply_nginx() {
     fi
 
     _drop_write_unified_conf "$domain" "$ssl_cert" "$ssl_key" "$ssl_params" "$nginx_conf"
+    # Self-heal sites-enabled include if missing (e.g. after nginx package upgrade).
+    declare -F nginx_ensure_sites_enabled_include &>/dev/null && nginx_ensure_sites_enabled_include
     ln -sf "$nginx_conf" "$nginx_link" 2>/dev/null || true
     nginx -t && systemctl reload nginx && success "nginx config loaded." \
         || { warn "nginx test failed — check $nginx_conf"; pause; return; }
@@ -291,6 +293,7 @@ _drop_nginx_refresh() {
     esac
 
     _drop_write_unified_conf "$domain" "$ssl_cert" "$ssl_key" "$ssl_params" "$nginx_conf"
+    declare -F nginx_ensure_sites_enabled_include &>/dev/null && nginx_ensure_sites_enabled_include
     ln -sf "$nginx_conf" "$nginx_link" 2>/dev/null || true
     nginx -t && systemctl reload nginx && success "nginx reloaded." \
         || { warn "nginx test failed — check $nginx_conf"; return 1; }
@@ -496,6 +499,7 @@ _drop_nginx_letsencrypt() {
     cat > "$nginx_conf" << HTTP_CONF
 server { listen 80; server_name $domain; location / { return 301 https://\$host\$request_uri; } }
 HTTP_CONF
+    declare -F nginx_ensure_sites_enabled_include &>/dev/null && nginx_ensure_sites_enabled_include
     ln -sf "$nginx_conf" "$nginx_link" 2>/dev/null || true
     nginx -t && systemctl reload nginx || true
 

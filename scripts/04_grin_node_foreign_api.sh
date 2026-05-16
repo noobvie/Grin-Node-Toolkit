@@ -128,6 +128,12 @@ success() { echo -e "${GREEN}[OK]${RESET}    $*"; log "[OK] $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; log "[WARN] $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 
+# ─── Source shared nginx helpers ──────────────────────────────────────────────
+# Required — provides _ensure_sites_enabled_include and other nginx helpers.
+# If this file is missing, the toolkit is broken; fail loudly rather than silently.
+# shellcheck source=lib/nginx_shared_helpers.sh
+source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+
 # ─── Port guide popup ─────────────────────────────────────────────────────────
 show_port_guide() {
     local port="$1"
@@ -222,6 +228,8 @@ PYEOF
 _nginx_domain() {
     grep -m1 'server_name' "$1" 2>/dev/null | awk '{print $2}' | tr -d ';'
 }
+
+# _ensure_sites_enabled_include is provided by lib/nginx_shared_helpers.sh (sourced above).
 
 # Add rate-limit/connection-limit zones into the http {} block of nginx.conf.
 # Idempotent — skips if grin_conn zone already present.
@@ -563,6 +571,9 @@ _enable_node_api_nginx() {
     # Remove any legacy stream block left by old versions of this script.
     # If present, nginx -t would fail with "unknown directive stream".
     _remove_legacy_stream_config
+
+    # Ensure sites-enabled include is in nginx.conf (self-heals after nginx upgrades).
+    _ensure_sites_enabled_include
 
     # Ensure rate/connection-limit zones are in nginx.conf before writing the site config.
     _nginx_add_limit_req_zone

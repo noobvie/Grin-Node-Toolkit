@@ -17,7 +17,7 @@
 #   · W) Pool Web Interface (guided setup + admin dashboard for configuration)
 #        Submenu options:
 #          G) Guided Full Setup   (runs 1→2→3→4→5→6 in sequence)
-#          1) Install deps        (python3, fastapi, systemd, nginx)
+#          1) Install deps        (nodejs ≥18, npm, sqlite3, systemd, nginx)
 #          2) Configure           (pool name, fees, min withdrawal, wallet dir)
 #          3) Deploy web          (frontend files to /var/www/grin-pool)
 #          4) Setup nginx         (SSL cert, rate limits, security headers)
@@ -107,6 +107,13 @@ info()    { echo -e "${CYAN}[INFO]${RESET}  $*"; log "[INFO] $*"; }
 success() { echo -e "${GREEN}[OK]${RESET}    $*"; log "[OK] $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; log "[WARN] $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
+
+# ─── Source shared nginx helpers (guarded — script still works if lib missing) ─
+_NGINX_LIB="$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+if [[ -f "$_NGINX_LIB" ]]; then
+    # shellcheck source=lib/nginx_shared_helpers.sh
+    source "$_NGINX_LIB"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOML DETECTION — locate grin-server.toml for the given network
@@ -313,7 +320,7 @@ graceful_restart_grin() {
     sleep 1
 
     info "Starting grin in tmux session: $session_name"
-    tmux new-session -d -s "$session_name" -c "$grin_dir" \
+    SHELL=/bin/bash tmux new-session -d -s "$session_name" -c "$grin_dir" \
         "echo 'Starting Grin node...'; cd '$grin_dir' && '$grin_binary' server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
         || { warn "Failed to create tmux session. Start manually: cd $grin_dir && $grin_binary server run"; return 1; }
 
@@ -425,6 +432,9 @@ show_node_status() {
     _show_node_info testnet "$NODE_API_PORT_TESTNET" "$STRATUM_PORT_TESTNET"
 }
 
+# Escape \, &, and | so a value is safe in the RHS of sed 's|LHS|RHS|' expressions
+_sed_escape_rhs() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # B / F) SETUP STRATUM  (per-network wrappers around shared _do_setup_stratum)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -485,9 +495,10 @@ _do_setup_stratum() {
 
     if [[ -n "$wallet_url" || -z "$cur_wallet" ]]; then
         local new_url="${wallet_url:-$default_wallet_url}"
+        local esc_url; esc_url=$(_sed_escape_rhs "$new_url")
         if grep -qE '^#?[[:space:]]*wallet_listener_url[[:space:]]*=' "$grin_toml" 2>/dev/null; then
             sed -i -E \
-                "s|^#?[[:space:]]*wallet_listener_url[[:space:]]*=.*|wallet_listener_url = \"$new_url\"|" \
+                "s|^#?[[:space:]]*wallet_listener_url[[:space:]]*=.*|wallet_listener_url = \"$esc_url\"|" \
                 "$grin_toml"
         else
             echo "wallet_listener_url = \"$new_url\"" >> "$grin_toml"
@@ -565,8 +576,9 @@ _do_configure_stratum() {
             echo -ne "Set enable_stratum_server [true/false] (current: ${cur_enable:-not set}): "
             read -r new_val
             [[ -z "$new_val" ]] && return
+            local esc_val; esc_val=$(_sed_escape_rhs "$new_val")
             if grep -qE '^#?[[:space:]]*enable_stratum_server[[:space:]]*=' "$grin_toml" 2>/dev/null; then
-                sed -i -E "s|^#?[[:space:]]*enable_stratum_server[[:space:]]*=.*|enable_stratum_server = $new_val|" "$grin_toml"
+                sed -i -E "s|^#?[[:space:]]*enable_stratum_server[[:space:]]*=.*|enable_stratum_server = $esc_val|" "$grin_toml"
             else
                 echo "enable_stratum_server = $new_val" >> "$grin_toml"
             fi
@@ -579,8 +591,9 @@ _do_configure_stratum() {
             echo -ne "New stratum_server_addr (current: ${cur_addr:-not set}): "
             read -r new_addr
             [[ -z "$new_addr" ]] && return
+            local esc_addr; esc_addr=$(_sed_escape_rhs "$new_addr")
             if grep -qE '^#?[[:space:]]*stratum_server_addr[[:space:]]*=' "$grin_toml" 2>/dev/null; then
-                sed -i -E "s|^#?[[:space:]]*stratum_server_addr[[:space:]]*=.*|stratum_server_addr = \"$new_addr\"|" "$grin_toml"
+                sed -i -E "s|^#?[[:space:]]*stratum_server_addr[[:space:]]*=.*|stratum_server_addr = \"$esc_addr\"|" "$grin_toml"
             else
                 echo "stratum_server_addr = \"$new_addr\"" >> "$grin_toml"
             fi
@@ -592,8 +605,9 @@ _do_configure_stratum() {
             echo -ne "New wallet_listener_url (current: ${cur_wallet:-not set}): "
             read -r new_wallet
             [[ -z "$new_wallet" ]] && return
+            local esc_wallet; esc_wallet=$(_sed_escape_rhs "$new_wallet")
             if grep -qE '^#?[[:space:]]*wallet_listener_url[[:space:]]*=' "$grin_toml" 2>/dev/null; then
-                sed -i -E "s|^#?[[:space:]]*wallet_listener_url[[:space:]]*=.*|wallet_listener_url = \"$new_wallet\"|" "$grin_toml"
+                sed -i -E "s|^#?[[:space:]]*wallet_listener_url[[:space:]]*=.*|wallet_listener_url = \"$esc_wallet\"|" "$grin_toml"
             else
                 echo "wallet_listener_url = \"$new_wallet\"" >> "$grin_toml"
             fi
@@ -605,8 +619,9 @@ _do_configure_stratum() {
             echo -ne "Set burn_reward [true/false] (current: ${cur_burn:-not set}): "
             read -r new_burn
             [[ -z "$new_burn" ]] && return
+            local esc_burn; esc_burn=$(_sed_escape_rhs "$new_burn")
             if grep -qE '^#?[[:space:]]*burn_reward[[:space:]]*=' "$grin_toml" 2>/dev/null; then
-                sed -i -E "s|^#?[[:space:]]*burn_reward[[:space:]]*=.*|burn_reward = $new_burn|" "$grin_toml"
+                sed -i -E "s|^#?[[:space:]]*burn_reward[[:space:]]*=.*|burn_reward = $esc_burn|" "$grin_toml"
             else
                 echo "burn_reward = $new_burn" >> "$grin_toml"
             fi
@@ -682,9 +697,13 @@ _enable_stratum() {
     local grin_toml="$FOUND_GRIN_TOML"
 
     info "Patching $grin_toml ..."
-    sed -i -E \
-        "s|^#?[[:space:]]*stratum_server_addr[[:space:]]*=.*|stratum_server_addr = \"0.0.0.0:${stratum_port}\"|" \
-        "$grin_toml"
+    if grep -qE '^#?[[:space:]]*stratum_server_addr[[:space:]]*=' "$grin_toml" 2>/dev/null; then
+        sed -i -E \
+            "s|^#?[[:space:]]*stratum_server_addr[[:space:]]*=.*|stratum_server_addr = \"0.0.0.0:${stratum_port}\"|" \
+            "$grin_toml"
+    else
+        echo "stratum_server_addr = \"0.0.0.0:${stratum_port}\"" >> "$grin_toml"
+    fi
     success "stratum_server_addr = \"0.0.0.0:$stratum_port\" written to grin-server.toml"
     log "Stratum ($network) published: patched $grin_toml -> 0.0.0.0:$stratum_port"
 
@@ -705,6 +724,12 @@ _enable_stratum() {
                 success "UFW: port $stratum_port opened to all."
             elif command -v iptables &>/dev/null; then
                 iptables -I INPUT -p tcp --dport "$stratum_port" -j ACCEPT
+                # Persist across reboots
+                if command -v netfilter-persistent &>/dev/null; then
+                    netfilter-persistent save 2>/dev/null || true
+                elif [[ -d /etc/iptables ]]; then
+                    iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+                fi
                 success "iptables: port $stratum_port opened to all."
             else
                 warn "No firewall tool found. Configure manually."
@@ -720,6 +745,11 @@ _enable_stratum() {
                     success "UFW: port $stratum_port opened for $allowed_ip."
                 elif command -v iptables &>/dev/null; then
                     iptables -I INPUT -s "$allowed_ip" -p tcp --dport "$stratum_port" -j ACCEPT
+                    if command -v netfilter-persistent &>/dev/null; then
+                        netfilter-persistent save 2>/dev/null || true
+                    elif [[ -d /etc/iptables ]]; then
+                        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+                    fi
                     success "iptables: port $stratum_port opened for $allowed_ip."
                 fi
             fi
@@ -743,9 +773,13 @@ _disable_stratum() {
     local grin_toml="$FOUND_GRIN_TOML"
 
     info "Patching $grin_toml ..."
-    sed -i -E \
-        "s|^#?[[:space:]]*stratum_server_addr[[:space:]]*=.*|stratum_server_addr = \"127.0.0.1:${stratum_port}\"|" \
-        "$grin_toml"
+    if grep -qE '^#?[[:space:]]*stratum_server_addr[[:space:]]*=' "$grin_toml" 2>/dev/null; then
+        sed -i -E \
+            "s|^#?[[:space:]]*stratum_server_addr[[:space:]]*=.*|stratum_server_addr = \"127.0.0.1:${stratum_port}\"|" \
+            "$grin_toml"
+    else
+        echo "stratum_server_addr = \"127.0.0.1:${stratum_port}\"" >> "$grin_toml"
+    fi
     success "stratum_server_addr reverted to 127.0.0.1:$stratum_port"
     log "Stratum ($network) restricted: patched $grin_toml -> 127.0.0.1:$stratum_port"
 
@@ -868,15 +902,13 @@ pool_read_conf() {
     local net="$1" key="$2" default="${3:-}"
     _pool_vars "$net"
     [[ -f "$POOL_CONF" ]] || { echo "$default"; return; }
-    python3 - "$POOL_CONF" "$key" "$default" << 'PYEOF' 2>/dev/null || echo "$default"
-import json, sys
-path, key, default = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    d = json.load(open(path))
-    print(d.get(key, default))
-except Exception:
-    print(default)
-PYEOF
+    node -e "
+try {
+  const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+  const v = d[process.argv[2]];
+  process.stdout.write(v !== undefined ? String(v) : process.argv[3]);
+} catch(e) { process.stdout.write(process.argv[3]); }
+" "$POOL_CONF" "$key" "$default" 2>/dev/null || echo "$default"
 }
 
 pool_write_conf_key() {
@@ -884,19 +916,18 @@ pool_write_conf_key() {
     local net="$1" key="$2" val="$3"
     _pool_vars "$net"
     mkdir -p "$(dirname "$POOL_CONF")"
-    python3 - "$key" "$val" "$POOL_CONF" << 'PYEOF'
-import json, sys, os
-key, val, path = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    d = json.load(open(path)) if os.path.isfile(path) else {}
-except Exception:
-    d = {}
-NUMS = {"stratum_port","node_api_port","pool_fee_percent","min_withdrawal","withdrawal_fee","service_port"}
-d[key] = float(val) if key in NUMS else val
-with open(path, "w") as f:
-    json.dump(d, f, indent=2)
-os.chmod(path, 0o600)
-PYEOF
+    node -e "
+const fs = require('fs');
+const path = process.argv[1];
+const key  = process.argv[2];
+const val  = process.argv[3];
+const NUMS = new Set(['stratum_port','node_api_port','pool_fee_percent','min_withdrawal','withdrawal_fee','service_port']);
+let d = {};
+try { d = JSON.parse(fs.readFileSync(path, 'utf8')); } catch(e) {}
+d[key] = NUMS.has(key) ? parseFloat(val) : val;
+fs.writeFileSync(path, JSON.stringify(d, null, 2));
+fs.chmodSync(path, 0o600);
+" "$POOL_CONF" "$key" "$val"
 }
 
 pool_ensure_defaults() {
@@ -914,7 +945,7 @@ pool_ensure_defaults() {
         ["grin_wallet_dir"]="$( [[ $net == testnet ]] && echo /opt/grin/wallet/testnet || echo /opt/grin/wallet/mainnet )"
         ["log_path"]="$POOL_LOG"
         ["service_port"]="$POOL_PORT"
-        ["db_url"]="sqlite+aiosqlite:////$POOL_APP_DIR/pool.db"
+        ["db_path"]="$POOL_APP_DIR/pool.db"
         ["wallet_pass_file"]="$POOL_APP_DIR/wallet_pass"
     )
     for k in "${!defaults[@]}"; do
@@ -974,36 +1005,56 @@ pool_install() {
         error "Ensure web/07_mining_pool/back-end-pool/ exists in the toolkit directory."
         return 1
     fi
-
-    # System packages
-    info "Checking system packages..."
-    if command -v apt-get &>/dev/null; then
-        apt-get install -y python3 python3-pip python3-venv python3-dev build-essential \
-            logrotate 2>&1 | tail -5
-    elif command -v dnf &>/dev/null; then
-        dnf install -y python3 python3-pip python3-devel gcc logrotate 2>&1 | tail -5
+    if [[ ! -f "$POOL_APP_SRC/package.json" ]]; then
+        error "package.json not found in $POOL_APP_SRC — Node.js backend not yet written."
+        return 1
     fi
 
-    # App directory
+    # System packages (Node.js 18+, build tools, sqlite3 CLI)
+    info "Checking system packages..."
+    if command -v apt-get &>/dev/null; then
+        apt-get install -y nodejs npm build-essential logrotate sqlite3 2>&1 | tail -5
+    elif command -v dnf &>/dev/null; then
+        dnf install -y nodejs npm gcc-c++ logrotate sqlite3 2>&1 | tail -5
+    fi
+
+    # Verify Node.js version
+    local node_ver
+    node_ver=$(node -e 'process.stdout.write(process.version.slice(1).split(".")[0])' 2>/dev/null || echo 0)
+    if [[ "$node_ver" -lt 18 ]]; then
+        error "Node.js 18+ required (found: v${node_ver}). Install from https://nodejs.org/ or via NodeSource."
+        return 1
+    fi
+    success "Node.js v${node_ver} found."
+
+    # App directory — lock down permissions before writing
     mkdir -p "$POOL_APP_DIR"
+    chmod 700 "$POOL_APP_DIR"
     info "Copying pool manager to $POOL_APP_DIR..."
-    cp -r "$POOL_APP_SRC/"* "$POOL_APP_DIR/"
+    rsync -a --delete "$POOL_APP_SRC/" "$POOL_APP_DIR/" \
+        2>/dev/null || cp -r "$POOL_APP_SRC/"* "$POOL_APP_DIR/"
 
-    # Virtual environment
-    info "Creating Python virtual environment..."
-    python3 -m venv "$POOL_APP_DIR/venv" \
-        || { error "Failed to create venv."; return 1; }
+    # Install Node.js dependencies
+    info "Installing Node.js dependencies (npm ci)..."
+    (cd "$POOL_APP_DIR" && npm ci --omit=dev 2>&1 | tail -5) \
+        || { error "npm ci failed. Check $POOL_APP_DIR/package.json and package-lock.json."; return 1; }
+    success "Node.js dependencies installed."
 
-    info "Installing Python dependencies..."
-    "$POOL_APP_DIR/venv/bin/pip" install --upgrade pip -q
-    "$POOL_APP_DIR/venv/bin/pip" install -r "$POOL_APP_DIR/requirements.txt" -q \
-        || { error "pip install failed. Check $POOL_APP_DIR/requirements.txt."; return 1; }
-    success "Python dependencies installed."
+    # Initialise database via init-db.js
+    if [[ -f "$POOL_APP_DIR/init-db.js" ]]; then
+        info "Initialising database schema..."
+        GRIN_POOL_CONF="$POOL_CONF" node "$POOL_APP_DIR/init-db.js" \
+            || { error "Database initialisation failed."; return 1; }
+        local db_file="$POOL_APP_DIR/pool.db"
+        [[ -f "$db_file" ]] && chmod 600 "$db_file"
+        success "Database initialised."
+    fi
 
     # Generate JWT secret if not present
     local jwt_secret; jwt_secret=$(pool_read_conf "$net" "jwt_secret" "")
     if [[ -z "$jwt_secret" ]]; then
-        jwt_secret=$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || openssl rand -hex 32)
+        jwt_secret=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" \
+            2>/dev/null || openssl rand -hex 32)
         pool_write_conf_key "$net" "jwt_secret" "$jwt_secret"
         success "JWT secret generated."
     fi
@@ -1011,7 +1062,7 @@ pool_install() {
     pool_ensure_defaults "$net"
 
     # Systemd service
-    local exec_start="$POOL_APP_DIR/venv/bin/uvicorn main:app --host 127.0.0.1 --port $POOL_PORT"
+    local node_bin; node_bin=$(command -v node 2>/dev/null || echo /usr/bin/node)
     cat > "/etc/systemd/system/$POOL_SERVICE.service" << EOF
 [Unit]
 Description=Grin Pool Manager ($label)
@@ -1023,9 +1074,13 @@ Type=simple
 User=root
 WorkingDirectory=$POOL_APP_DIR
 Environment="GRIN_POOL_CONF=$POOL_CONF"
-ExecStart=$exec_start
+Environment="NODE_ENV=production"
+Environment="HOST=127.0.0.1"
+Environment="PORT=$POOL_PORT"
+ExecStart=$node_bin $POOL_APP_DIR/index.js
 Restart=on-failure
-RestartSec=10
+RestartSec=5
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
@@ -1046,7 +1101,7 @@ $POOL_LOG {
     missingok
     notifempty
     postrotate
-        systemctl reload $POOL_SERVICE 2>/dev/null || true
+        systemctl kill -s USR2 $POOL_SERVICE 2>/dev/null || true
     endscript
 }
 EOF
@@ -1075,7 +1130,8 @@ pool_configure() {
     echo -ne "Pool fee %%       [$(pool_read_conf "$net" "pool_fee_percent" "0")]: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "$net" "pool_fee_percent" "$val"
 
-    echo -ne "Min withdrawal   [$(pool_read_conf "$net" "min_withdrawal" "2.0")] GRIN: "
+    local currency="GRIN"; [[ "$net" == "testnet" ]] && currency="tGRIN"
+    echo -ne "Min withdrawal   [$(pool_read_conf "$net" "min_withdrawal" "2.0")] $currency: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "$net" "min_withdrawal" "$val"
 
     echo -ne "Wallet dir       [$(pool_read_conf "$net" "grin_wallet_dir" "/opt/grin/wallet/$net")]: "
@@ -1116,10 +1172,13 @@ pool_deploy_web() {
 
     # Stamp network into a small config JS file for frontend detection
     local pool_name; pool_name=$(pool_read_conf "$net" "pool_name" "My Grin Pool")
+    local escaped_name
+    escaped_name=$(node -e "process.stdout.write(JSON.stringify(process.argv[1]))" "$pool_name" 2>/dev/null \
+        || printf '"%s"' "${pool_name//\"/\\\"}")
     cat > "$POOL_WEB_DIR/js/pool-config.js" << EOF
 // Auto-generated by 07_grin_mining_services.sh
 window.POOL_NETWORK = "${net}";
-window.POOL_NAME = $(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$pool_name" 2>/dev/null || echo '"'"$pool_name"'"');
+window.POOL_NAME = ${escaped_name};
 EOF
 
     success "Web files deployed to $POOL_WEB_DIR"
@@ -1136,6 +1195,12 @@ pool_setup_nginx() {
         read -r subdomain
         [[ -z "$subdomain" ]] && { warn "No subdomain — nginx not configured."; return 1; }
         pool_write_conf_key "$net" "subdomain" "$subdomain"
+    fi
+
+    # Validate domain before writing into nginx config
+    if [[ ! "$subdomain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?$ ]]; then
+        error "Invalid domain name: $subdomain"
+        return 1
     fi
 
     info "Writing nginx vhost: $POOL_NGINX_CONF"
@@ -1197,6 +1262,11 @@ server {
 }
 EOF
 
+    # Ensure sites-enabled is included in nginx.conf (self-heals after nginx upgrades).
+    if declare -F nginx_ensure_sites_enabled_include &>/dev/null; then
+        nginx_ensure_sites_enabled_include
+    fi
+
     local sites_enabled="/etc/nginx/sites-enabled/$(basename "$POOL_NGINX_CONF")"
     ln -sf "$POOL_NGINX_CONF" "$sites_enabled" 2>/dev/null || true
 
@@ -1238,27 +1308,37 @@ pool_setup_admin() {
     echo -ne "Admin email (optional): "
     read -r admin_email
 
-    local payload; payload=$(python3 -c "
-import json, sys
-d = {'username': sys.argv[1], 'password': sys.argv[2], 'email': sys.argv[3]}
-print(json.dumps(d))
-" "$admin_user" "$admin_pass" "${admin_email:-}")
+    local payload
+    payload=$(node -e "
+process.stdout.write(JSON.stringify({
+  username: process.argv[1],
+  password: process.argv[2],
+  email:    process.argv[3]
+}))
+" "$admin_user" "$admin_pass" "${admin_email:-}" 2>/dev/null)
+    if [[ -z "$payload" ]]; then
+        error "Failed to build JSON payload (node not available?)."
+        return 1
+    fi
 
-    local resp; resp=$(curl -s -X POST "http://127.0.0.1:$port/api/auth/register" \
+    local resp; resp=$(curl -fsSL -X POST "http://127.0.0.1:$port/api/auth/register" \
         -H "Content-Type: application/json" -d "$payload" 2>&1)
 
-    if echo "$resp" | grep -q "access_token"; then
+    if echo "$resp" | grep -q '"success"[[:space:]]*:[[:space:]]*true'; then
         success "User '$admin_user' registered."
-        # Promote to admin directly via DB (simplest approach)
-        python3 - "$POOL_APP_DIR/pool.db" "$admin_user" << 'PYEOF'
-import sqlite3, sys
-db_path, username = sys.argv[1], sys.argv[2]
-con = sqlite3.connect(db_path)
-con.execute("UPDATE users SET is_admin=1 WHERE username=?", (username,))
-con.commit()
-con.close()
-print(f"User '{username}' promoted to admin.")
-PYEOF
+        # Promote to admin directly via sqlite3 binary
+        local safe_user="${admin_user//"'"/"''"}"
+        if command -v sqlite3 &>/dev/null; then
+            sqlite3 "$POOL_APP_DIR/pool.db" \
+                "UPDATE users SET is_admin=1 WHERE username='${safe_user}';" \
+                && info "User '$admin_user' promoted to admin."
+        else
+            node -e "
+const db = require('better-sqlite3')(process.argv[1]);
+db.prepare('UPDATE users SET is_admin=1 WHERE username=?').run(process.argv[2]);
+" "$POOL_APP_DIR/pool.db" "$admin_user" \
+                && info "User '$admin_user' promoted to admin."
+        fi
     else
         error "Registration failed: $resp"
     fi
@@ -1359,16 +1439,37 @@ pool_cron_schedules() {
     echo -ne "Choice: "
     read -r cc
 
+    local backup_wrapper="/usr/local/bin/grin-pool-backup-${net}"
+
     case "$cc" in
         1)
             if [[ -f "$cron_backup" ]]; then
-                rm -f "$cron_backup"
+                rm -f "$cron_backup" "$backup_wrapper"
                 success "Daily backup cron disabled."
             else
+                # Write a standalone backup wrapper — never source the interactive script in cron
+                cat > "$backup_wrapper" << SCRIPT
+#!/bin/bash
+set -euo pipefail
+BACKUP_DIR="/opt/grin/backups/${POOL_SERVICE}"
+mkdir -p "\$BACKUP_DIR"
+TS=\$(date +%Y%m%d_%H%M%S)
+FILES=()
+[[ -f "$POOL_APP_DIR/pool.db" ]] && FILES+=("$POOL_APP_DIR/pool.db")
+[[ -f "$POOL_CONF" ]]            && FILES+=("$POOL_CONF")
+if [[ \${#FILES[@]} -eq 0 ]]; then
+    echo "[grin-pool-backup-${net}] Nothing to back up."
+    exit 0
+fi
+tar -czf "\$BACKUP_DIR/pool_backup_\${TS}.tar.gz" "\${FILES[@]}"
+# Keep last 30
+ls -t "\$BACKUP_DIR"/pool_backup_*.tar.gz 2>/dev/null | tail -n +31 | xargs -r rm -f
+SCRIPT
+                chmod 750 "$backup_wrapper"
                 cat > "$cron_backup" << EOF
-0 2 * * * root /usr/bin/bash -c "source $SCRIPT_DIR/07_grin_mining_services.sh 2>/dev/null; _pool_vars $net; pool_backup $net" >> $POOL_LOG 2>&1
+0 2 * * * root $backup_wrapper >> $POOL_LOG 2>&1
 EOF
-                success "Daily backup cron enabled ($cron_backup)."
+                success "Daily backup cron enabled ($cron_backup → $backup_wrapper)."
             fi
             ;;
         2)
@@ -1411,14 +1512,12 @@ pool_reset_db() {
     fi
 
     local db_size; db_size=$(du -sh "$db_path" 2>/dev/null | cut -f1 || echo "?")
-    local user_count; user_count=$(python3 -c "
-import sqlite3, sys
-try:
-    con = sqlite3.connect(sys.argv[1])
-    print(con.execute('SELECT COUNT(*) FROM users').fetchone()[0])
-    con.close()
-except: print('?')
-" "$db_path" 2>/dev/null || echo "?")
+    local user_count
+    if command -v sqlite3 &>/dev/null; then
+        user_count=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM users;" 2>/dev/null || echo "?")
+    else
+        user_count="?"
+    fi
 
     echo -e "  Database : $db_path  ($db_size)"
     echo -e "  Users    : $user_count accounts"
@@ -1437,15 +1536,15 @@ except: print('?')
     pool_service_control "$net" stop 2>/dev/null || true
     sleep 1
 
-    rm -f "$db_path"
+    rm -f "${db_path:?refusing to rm — db_path is empty}"
     success "Database deleted."
 
-    # Recreate schema via Python
-    if [[ -f "$POOL_APP_DIR/database.py" && -f "$POOL_APP_DIR/venv/bin/python3" ]]; then
+    # Recreate schema via Node.js init-db.js
+    if [[ -f "$POOL_APP_DIR/init-db.js" ]]; then
         info "Recreating database schema..."
-        GRIN_POOL_CONF="$POOL_CONF" "$POOL_APP_DIR/venv/bin/python3" \
-            -c "import asyncio; from database import init_db; asyncio.run(init_db())" \
-            2>&1 && success "Schema recreated." || warn "Schema recreation failed — restart service."
+        GRIN_POOL_CONF="$POOL_CONF" node "$POOL_APP_DIR/init-db.js" \
+            && success "Schema recreated." || warn "Schema recreation failed — restart service."
+        [[ -f "$db_path" ]] && chmod 600 "$db_path"
     fi
 
     pool_service_control "$net" start 2>/dev/null || true
@@ -1515,7 +1614,7 @@ pool_menu() {
         echo -e "  ${GREEN}G${RESET}) Guided Full Setup    ${DIM}(runs all setup steps 1→6)${RESET}"
         echo ""
         echo -e "${DIM}  ─── Manual Setup Steps ───────────────────────────${RESET}"
-        echo -e "  ${GREEN}1${RESET}) Install dependencies ${DIM}(python3, pip, fastapi, uvicorn)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Install dependencies ${DIM}(nodejs ≥18, npm, build-essential, sqlite3)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Configure pool       ${DIM}(name, domain, fee %, wallet dir)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Deploy web files     ${DIM}(frontend → $POOL_WEB_DIR)${RESET}"
         echo -e "  ${GREEN}4${RESET}) Setup nginx          ${DIM}(vhost + SSL + rate limits)${RESET}"
@@ -1582,7 +1681,7 @@ pool_web_interface() {
     read -r proceed
 
     case "$proceed" in
-        0|"") return ;;
+        0) return ;;
         *) pool_menu mainnet ;;
     esac
 }

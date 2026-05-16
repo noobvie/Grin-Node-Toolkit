@@ -238,6 +238,28 @@ scripts define the same `limit_req_zone` with different names or rates, nginx er
 - Script 04 only uses `limit_req zone=grin_api burst=10 nodelay;` in its location blocks
 - No redefinition, no conflict
 
+## Generated & Temporary Files — Centralized Location
+
+**ALL generated documentation, audit reports, security analyses, flowcharts, and temporary
+files must be stored in `docs/generated/` with a clear purpose-based prefix and date.**
+
+### Location & Naming
+```
+docs/generated/
+  ├── audit_*.md           Audit reports (prefix: audit_<service>_<date>.md)
+  ├── security_*.md        Security analysis/fixes (prefix: security_<service>_<date>.md)
+  ├── flowchart_*.md       Architecture diagrams (prefix: flowchart_<service>_<date>.md)
+  └── analysis_*.md        Any other generated analysis (prefix: analysis_<topic>_<date>.md)
+```
+
+### Rule
+- Never create generated files in script directories (e.g., NOT in `web/07_mining_pool/`)
+- Never create them without clear prefixes and dates
+- Keep a `docs/generated/README.md` index explaining what each file contains
+- If a generated file becomes permanent documentation, move it to `docs/` and rename to remove date/prefix
+
+**DO NOT** create files like `SECURITY_FIXES.md` scattered across `web/`, `flowcharts/`, etc.
+
 ## Do Not
 - Never run the toolkit scripts locally — they assume a Linux VPS with root access
 - Never hardcode wallet API secrets or passwords in scripts
@@ -246,3 +268,4 @@ scripts define the same `limit_req_zone` with different names or rates, nginx er
 - Never mix mainnet and testnet ports or directories
 - Don't add `#!/bin/bash` to lib files — they are sourced, not executed
 - **Never redefine nginx zones/upstreams across multiple scripts** — define once, use everywhere
+- **Never create generated/temporary files without a central location** — use `docs/generated/` with prefixed names and dates

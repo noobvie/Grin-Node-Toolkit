@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="ogGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f1419;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#1a202c;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2d3748;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Dark background -->
+  <rect width="1200" height="630" fill="url(#ogGradient)"/>
+
+  <!-- Accent stripe -->
+  <rect width="1200" height="8" fill="#667eea"/>
+
+  <!-- Logo area -->
+  <circle cx="150" cy="315" r="80" fill="#667eea" opacity="0.1" stroke="#667eea" stroke-width="2"/>
+
+  <!-- Pickaxe icon -->
+  <g transform="translate(150, 315)" stroke="#667eea" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="-15" y1="-30" x2="25" y2="40"/>
+    <path d="M -15 -30 L -35 -50 L -15 -30 Z" fill="#667eea"/>
+    <rect x="22" y="38" width="8" height="18" fill="#667eea"/>
+  </g>
+
+  <!-- Main text -->
+  <text x="350" y="200" font-family="Arial, sans-serif" font-size="72" font-weight="bold" fill="white">GRINIUM</text>
+  <text x="350" y="280" font-family="Arial, sans-serif" font-size="56" font-weight="bold" fill="#667eea">Mining Pool</text>
+
+  <!-- Tagline -->
+  <text x="350" y="350" font-family="Arial, sans-serif" font-size="28" fill="#a0aec0">Professional Grin Mining Infrastructure</text>
+
+  <!-- Stats area -->
+  <g transform="translate(350, 400)">
+    <text font-family="Arial, sans-serif" font-size="20" fill="#cbd5e0">
+      <tspan x="0" y="0">✓ Real-time Pool Statistics</tspan>
+      <tspan x="0" y="40">✓ Secure Admin Dashboard</tspan>
+      <tspan x="0" y="80">✓ Advanced Miner Tracking</tspan>
+    </text>
+  </g>
+
+  <!-- Bottom accent -->
+  <rect y="622" width="1200" height="8" fill="#764ba2"/>
+</svg>

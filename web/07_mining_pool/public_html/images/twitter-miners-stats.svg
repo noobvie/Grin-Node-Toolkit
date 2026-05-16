@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 512">
+  <defs>
+    <linearGradient id="twitterMinerGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="512" fill="#0f1419"/>
+  <rect width="1024" height="6" fill="url(#twitterMinerGradient)"/>
+
+  <!-- Title -->
+  <text x="80" y="100" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="white">Live Miner Stats</text>
+  <text x="80" y="160" font-family="Arial, sans-serif" font-size="32" fill="#667eea">Real-time Performance</text>
+
+  <!-- Stats boxes -->
+  <g font-family="Arial, sans-serif">
+    <rect x="80" y="210" width="380" height="120" rx="8" fill="#1a202c" stroke="#667eea" stroke-width="2"/>
+    <text x="120" y="250" font-size="20" fill="#a0aec0">Active Miners</text>
+    <text x="120" y="310" font-size="44" font-weight="bold" fill="#48bb78">142</text>
+
+    <rect x="560" y="210" width="380" height="120" rx="8" fill="#1a202c" stroke="#764ba2" stroke-width="2"/>
+    <text x="600" y="250" font-size="20" fill="#a0aec0">Avg Hashrate</text>
+    <text x="600" y="310" font-size="44" font-weight="bold" fill="#48bb78">16.8 MH/s</text>
+  </g>
+
+  <rect y="506" width="1024" height="6" fill="url(#twitterMinerGradient)"/>
+</svg>

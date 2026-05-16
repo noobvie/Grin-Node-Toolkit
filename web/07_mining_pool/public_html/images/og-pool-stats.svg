@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="statsGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f1419;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1a202c;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#statsGradient)"/>
+  <rect width="1200" height="8" fill="#667eea"/>
+
+  <!-- Title -->
+  <text x="60" y="120" font-family="Arial, sans-serif" font-size="64" font-weight="bold" fill="white">Pool Statistics</text>
+  <text x="60" y="180" font-family="Arial, sans-serif" font-size="32" fill="#667eea">Real-time Metrics Dashboard</text>
+
+  <!-- Stats cards representation -->
+  <g>
+    <!-- Card 1 -->
+    <rect x="60" y="220" width="280" height="160" rx="12" fill="#1a202c" stroke="#667eea" stroke-width="2"/>
+    <text x="80" y="250" font-family="Arial, sans-serif" font-size="18" fill="#a0aec0">Hashrate</text>
+    <text x="80" y="310" font-family="Arial, sans-serif" font-size="36" font-weight="bold" fill="#48bb78">2.4 GH/s</text>
+
+    <!-- Card 2 -->
+    <rect x="380" y="220" width="280" height="160" rx="12" fill="#1a202c" stroke="#764ba2" stroke-width="2"/>
+    <text x="400" y="250" font-family="Arial, sans-serif" font-size="18" fill="#a0aec0">Active Miners</text>
+    <text x="400" y="310" font-family="Arial, sans-serif" font-size="36" font-weight="bold" fill="#48bb78">145</text>
+
+    <!-- Card 3 -->
+    <rect x="700" y="220" width="440" height="160" rx="12" fill="#1a202c" stroke="#667eea" stroke-width="2"/>
+    <text x="720" y="250" font-family="Arial, sans-serif" font-size="18" fill="#a0aec0">Network Difficulty</text>
+    <text x="720" y="310" font-family="Arial, sans-serif" font-size="36" font-weight="bold" fill="#f97316">8.2M</text>
+  </g>
+
+  <!-- Bottom section -->
+  <text x="60" y="450" font-family="Arial, sans-serif" font-size="24" fill="#cbd5e0">Track your mining performance with advanced analytics and detailed miner statistics</text>
+
+  <rect y="622" width="1200" height="8" fill="#764ba2"/>
+</svg>

@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
+  <defs>
+    <linearGradient id="appleBgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+    <filter id="appleGlow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Apple-safe background with rounded corners -->
+  <rect width="180" height="180" rx="40" fill="url(#appleBgGradient)"/>
+
+  <!-- Center the icon -->
+  <g transform="translate(90, 90)">
+    <!-- Pickaxe icon -->
+    <g stroke="white" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round" filter="url(#appleGlow)">
+      <!-- Handle -->
+      <line x1="-8" y1="-25" x2="12" y2="20"/>
+
+      <!-- Pick head (angled) -->
+      <path d="M -8 -25 L -18 -35 L -8 -25 Z" stroke="white" stroke-width="3.5" fill="white"/>
+
+      <!-- Flat end -->
+      <rect x="10" y="18" width="6" height="12" fill="white"/>
+
+      <!-- Decorative spark 1 -->
+      <circle cx="-22" cy="-40" r="2" fill="white"/>
+      <!-- Decorative spark 2 -->
+      <circle cx="18" cy="32" r="2" fill="white"/>
+    </g>
+
+    <!-- Grin coin symbol in corner -->
+    <circle cx="25" cy="-25" r="10" fill="rgba(255,255,255,0.2)" stroke="white" stroke-width="1.5"/>
+    <text x="25" y="-20" text-anchor="middle" font-size="14" fill="white" font-weight="bold">G</text>
+  </g>
+</svg>

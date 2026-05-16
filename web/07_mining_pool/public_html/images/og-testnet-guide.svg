@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="guideGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f1419;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1a202c;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#guideGradient)"/>
+  <rect width="1200" height="8" fill="#f97316"/>
+
+  <!-- Header -->
+  <text x="60" y="120" font-family="Arial, sans-serif" font-size="64" font-weight="bold" fill="white">Testnet Setup Guide</text>
+  <text x="60" y="180" font-family="Arial, sans-serif" font-size="32" fill="#f97316">Mining on IPOLLO G1 Mini</text>
+
+  <!-- Steps visualization -->
+  <g font-family="Arial, sans-serif" font-size="20" fill="#cbd5e0">
+    <circle cx="100" cy="280" r="20" fill="#f97316"/>
+    <text x="100" y="290" text-anchor="middle" fill="white" font-weight="bold">1</text>
+    <text x="160" y="295">Initialize Wallet</text>
+
+    <circle cx="100" cy="370" r="20" fill="#f97316"/>
+    <text x="100" y="380" text-anchor="middle" fill="white" font-weight="bold">2</text>
+    <text x="160" y="385">Configure TOML</text>
+
+    <circle cx="100" cy="460" r="20" fill="#f97316"/>
+    <text x="100" y="470" text-anchor="middle" fill="white" font-weight="bold">3</text>
+    <text x="160" y="475">Start Stratum Server</text>
+
+    <circle cx="100" cy="550" r="20" fill="#f97316"/>
+    <text x="100" y="560" text-anchor="middle" fill="white" font-weight="bold">4</text>
+    <text x="160" y="565">Connect IPOLLO</text>
+  </g>
+
+  <!-- Connection info -->
+  <rect x="700" y="260" width="480" height="280" rx="12" fill="#1a202c" stroke="#f97316" stroke-width="2"/>
+  <text x="730" y="295" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#f97316">Quick Reference</text>
+  <text x="730" y="345" font-family="monospace" font-size="16" fill="#a0aec0">
+    <tspan x="730" y="345">Stratum Port: 3333</tspan>
+    <tspan x="730" y="380">Network: Testnet</tspan>
+    <tspan x="730" y="415">Flag: --testnet</tspan>
+    <tspan x="730" y="450">Wallet API: 13415</tspan>
+    <tspan x="730" y="485">Node API: 13413</tspan>
+  </text>
+
+  <rect y="622" width="1200" height="8" fill="#667eea"/>
+</svg>

@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="minerGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f1419;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1a202c;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#minerGradient)"/>
+  <rect width="1200" height="8" fill="#667eea"/>
+
+  <!-- Title -->
+  <text x="60" y="120" font-family="Arial, sans-serif" font-size="64" font-weight="bold" fill="white">Miners Statistics</text>
+  <text x="60" y="180" font-family="Arial, sans-serif" font-size="32" fill="#667eea">Live Performance Tracking</text>
+
+  <!-- Chart representation -->
+  <g stroke="#667eea" stroke-width="2" fill="none">
+    <polyline points="80,450 150,380 220,410 290,320 360,350 430,280 500,310" stroke-width="3"/>
+    <!-- Bars under chart -->
+    <line x1="80" y1="450" x2="80" y2="480"/>
+    <line x1="150" y1="380" x2="150" y2="480"/>
+    <line x1="220" y1="410" x2="220" y2="480"/>
+    <line x1="290" y1="320" x2="290" y2="480"/>
+    <line x1="360" y1="350" x2="360" y2="480"/>
+    <line x1="430" y1="280" x2="430" y2="480"/>
+    <line x1="500" y1="310" x2="500" y2="480"/>
+  </g>
+
+  <!-- Metrics on right -->
+  <g font-family="Arial, sans-serif" fill="#cbd5e0">
+    <text x="650" y="260" font-size="24" fill="#a0aec0">Active Miners:</text>
+    <text x="1000" y="260" font-size="28" font-weight="bold" fill="#48bb78">142</text>
+
+    <text x="650" y="330" font-size="24" fill="#a0aec0">Avg Hashrate:</text>
+    <text x="1000" y="330" font-size="28" font-weight="bold" fill="#48bb78">16.8 MH/s</text>
+
+    <text x="650" y="400" font-size="24" fill="#a0aec0">Total Shares:</text>
+    <text x="1000" y="400" font-size="28" font-weight="bold" fill="#f97316">284,591</text>
+
+    <text x="650" y="470" font-size="24" fill="#a0aec0">Pool Reward:</text>
+    <text x="1000" y="470" font-size="28" font-weight="bold" fill="#667eea">12.5 tGRIN</text>
+  </g>
+
+  <rect y="622" width="1200" height="8" fill="#764ba2"/>
+</svg>

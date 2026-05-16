@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 512">
+  <defs>
+    <linearGradient id="twitterGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Dark background -->
+  <rect width="1024" height="512" fill="#0f1419"/>
+
+  <!-- Accent bar -->
+  <rect width="1024" height="6" fill="url(#twitterGradient)"/>
+
+  <!-- Logo -->
+  <circle cx="120" cy="256" r="60" fill="url(#twitterGradient)"/>
+  <g transform="translate(120, 256)" stroke="white" stroke-width="2" fill="none" stroke-linecap="round">
+    <line x1="-12" y1="-24" x2="20" y2="32"/>
+    <path d="M -12 -24 L -28 -40 L -12 -24 Z" fill="white"/>
+    <rect x="18" y="30" width="6" height="14" fill="white"/>
+  </g>
+
+  <!-- Text -->
+  <text x="250" y="160" font-family="Arial, sans-serif" font-size="56" font-weight="bold" fill="white">GRINIUM</text>
+  <text x="250" y="240" font-family="Arial, sans-serif" font-size="36" fill="#667eea">Mining Pool</text>
+  <text x="250" y="310" font-family="Arial, sans-serif" font-size="20" fill="#a0aec0">Professional Grin Mining Infrastructure</text>
+
+  <!-- Bottom accent -->
+  <rect y="506" width="1024" height="6" fill="url(#twitterGradient)"/>
+</svg>

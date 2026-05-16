@@ -478,6 +478,81 @@ _evict_apache2() {
     fi
 }
 
+# Ensure /etc/nginx/sites-enabled/* is included inside the http {} block of nginx.conf.
+# Idempotent — safe to call multiple times. Required on RHEL/Rocky/Alma (and after any
+# nginx package upgrade that resets nginx.conf) because the default config on those
+# distros only includes conf.d/, not sites-enabled/.
+_ensure_sites_enabled_include() {
+    local nginx_conf="/etc/nginx/nginx.conf"
+    local sites_avail="$NGINX_AVAILABLE"
+    local sites_en="$NGINX_ENABLED"
+
+    # Create the directories if missing (RHEL-based nginx doesn't ship them)
+    mkdir -p "$sites_avail" "$sites_en"
+
+    # Already present? Nothing to do.
+    if grep -q "sites-enabled" "$nginx_conf" 2>/dev/null; then
+        # Verify the include is inside the http block, not outside it.
+        python3 - "$nginx_conf" << 'PYEOF'
+import sys, re
+with open(sys.argv[1]) as fh:
+    txt = fh.read()
+# Find the http block boundaries
+m = re.search(r'\bhttp\s*\{', txt)
+if not m:
+    sys.exit(0)  # malformed — let nginx -t catch it
+http_start = m.end()
+# Walk forward counting braces to find the closing }
+depth = 1
+i = http_start
+while i < len(txt) and depth > 0:
+    if txt[i] == '{':
+        depth += 1
+    elif txt[i] == '}':
+        depth -= 1
+    i += 1
+http_body = txt[http_start:i-1]
+if 'sites-enabled' in http_body:
+    sys.exit(0)  # include is already inside http {}
+# include exists but is OUTSIDE http {} — remove the stray line
+txt2 = re.sub(r'[ \t]*include[^;]*sites-enabled[^;]*;\n?', '', txt)
+# Re-insert inside http {}
+insert = '\n    include /etc/nginx/sites-enabled/*;\n'
+nl = txt2.find('\n', txt2.find('http {'))
+if nl == -1:
+    nl = txt2.find('\n', txt2.find('http{'))
+if nl != -1:
+    txt2 = txt2[:nl] + insert + txt2[nl:]
+with open(sys.argv[1], 'w') as fh:
+    fh.write(txt2)
+print('[INFO]  Moved sites-enabled include inside http {} block in nginx.conf')
+PYEOF
+        return 0
+    fi
+
+    # Insert include inside the http {} block (after the opening brace line)
+    python3 - "$nginx_conf" << 'PYEOF'
+import sys
+conf_file = sys.argv[1]
+with open(conf_file) as fh:
+    txt = fh.read()
+if 'sites-enabled' in txt:
+    sys.exit(0)
+insert = '\n    include /etc/nginx/sites-enabled/*;\n'
+idx = txt.find('http {')
+if idx == -1:
+    idx = txt.find('http{')
+if idx == -1:
+    print('ERROR: http { block not found in ' + conf_file, file=sys.stderr)
+    sys.exit(1)
+nl = txt.find('\n', idx)
+txt = txt[:nl] + insert + txt[nl:]
+with open(conf_file, 'w') as fh:
+    fh.write(txt)
+print('[INFO]  Added include /etc/nginx/sites-enabled/*; inside http {} in nginx.conf')
+PYEOF
+}
+
 # Ensure nginx + certbot are installed. Single prompt if either (or both) are missing.
 # Returns 1 if the user cancels or declines.
 ensure_nginx_certbot() {
@@ -1106,12 +1181,16 @@ server {
 }
 EOF
     
+    # Ensure sites-enabled is included in nginx.conf (required on RHEL/Rocky/Alma
+    # and after any nginx package upgrade that resets nginx.conf to its default).
+    _ensure_sites_enabled_include
+
     # Enable the site
     if [[ ! -L "$NGINX_ENABLED/$DOMAIN" ]]; then
         ln -s "$NGINX_CONF" "$NGINX_ENABLED/$DOMAIN"
         print_info "Enabled Nginx site: $DOMAIN"
     fi
-    
+
     # Test nginx config
     if nginx -t &> /dev/null; then
         print_info "Nginx configuration is valid"

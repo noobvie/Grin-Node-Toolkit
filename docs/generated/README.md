@@ -2,64 +2,70 @@
 
 **Purpose:** All generated documentation, audit reports, analysis, and temporary documentation files are stored here with clear naming conventions and script prefixes.
 
-## Script 07 — Mining Pool Files
+## Current Files
 
-| File | Type | Purpose | Date | Status |
-|------|------|---------|------|--------|
-| [script07_design_specification.md](script07_design_specification.md) | Design | System architecture & design | - | Current |
-| [script07_implementation_guide.md](script07_implementation_guide.md) | Guide | Code examples & patterns | - | Current |
-| [script07_implementation_guides.md](script07_implementation_guides.md) | Guide | Detailed implementation walkthroughs | - | Reference |
-| [script07_deployment_guide.md](script07_deployment_guide.md) | Guide | Testing & deployment procedures | - | Current |
-| [script07_testnet_quickstart.md](script07_testnet_quickstart.md) | Guide | Testnet solo mining setup | - | Reference |
-| [script07_security_audit_2026-05-15.md](script07_security_audit_2026-05-15.md) | Audit | Security vulnerabilities & fixes | 2026-05-15 | Complete |
-| [script07_security_pool_audit_2026-05-15.md](script07_security_pool_audit_2026-05-15.md) | Audit | Pool security audit report | 2026-05-15 | Complete |
-| [script07_audit_2026-05-15.md](script07_audit_2026-05-15.md) | Audit | Compliance audit findings | 2026-05-15 | Archive |
-| [script07_consolidation_summary.md](script07_consolidation_summary.md) | Summary | Documentation consolidation process | - | Reference |
-| [script07_reference_documentation_standard_2026-05-15.md](script07_reference_documentation_standard_2026-05-15.md) | Reference | Mining pool docs organization guide | 2026-05-15 | Reference |
-| [script07_admin_backend_design_backup.md](script07_admin_backend_design_backup.md) | Backup | Admin backend design (archived) | - | Archive |
-| [script07_config_schema_backup.md](script07_config_schema_backup.md) | Backup | Pool config schema (archived) | - | Archive |
-| [script07_health_api_security_backup.md](script07_health_api_security_backup.md) | Backup | Health API security (archived) | - | Archive |
+| File | Script | Type | Purpose |
+|------|--------|------|---------|
+| [script07_design.md](script07_design.md) | 07 | Design | System architecture, API spec, database schema |
+| [script07_implementation.md](script07_implementation.md) | 07 | Guide | Code examples, deployment procedures, testing |
+| [script07_security_audit.md](script07_security_audit.md) | 07 | Audit | Security vulnerabilities & fixes |
 
 ## Naming Convention
 
 All files follow this pattern:
 
 ```
-script<XX>_<type>_<service>_<optional_date>.md
+script<XX>_<type>_<optional_service>_<optional_date>.md
 ```
 
 - **script<XX>**: Script number (e.g., `script07`, `script04`, `script06`) — **REQUIRED**
-- **<type>**: `security`, `audit`, `analysis`, `reference`, `guide`, `summary`, `backup`, etc.
-- **<service>**: Optional service/component name (e.g., `pool`, `node`, `wallet`, `api`)
-- **<optional_date>**: `YYYY-MM-DD` format, only if multiple versions exist
+- **<type>**: `design`, `implementation`, `security`, `audit`, `analysis`, `reference`, etc.
+- **<service>**: Optional service name for clarity
+- **<optional_date>**: `YYYY-MM-DD` only if multiple versions exist
 
 ### Examples
-- ✅ `script07_security_pool_audit_2026-05-15.md` — Security audit for Script 07
-- ✅ `script04_audit_foreign_api_2026-05-10.md` — API audit for Script 04
-- ✅ `script06_reference_health_endpoints.md` — Reference doc for Script 06
-- ✅ `script07_design_specification.md` — Design spec without date
-- ❌ `security_pool_audit_2026-05-15.md` — Missing script prefix ❌
-- ❌ `SECURITY_FIXES.md` — No script prefix ❌
+- ✅ `script07_design.md` — Design spec for Script 07
+- ✅ `script07_implementation.md` — Implementation guide for Script 07
+- ✅ `script07_security_audit.md` — Security audit for Script 07
+- ✅ `script04_audit_foreign_api_2026-05-15.md` — Audit for Script 04 with version date
+- ❌ `design_specification.md` — Missing script prefix ❌
+- ❌ `implementation_guide.md` — No script prefix ❌
 
 ## Rules
 
 1. **All .md files go here** — `docs/generated/` is the central location
-2. **Always include script prefix** — `script##_` is REQUIRED
-3. **Use lowercase with underscores** — `script07_security_pool_audit_2026-05-15.md`
-4. **Use YYYY-MM-DD dates** — for version tracking when multiple versions exist
-5. **Keep this README updated** — when adding or moving files
-6. **Archive old versions** — rename with `_backup` or `_archive` suffix, don't delete
-7. **Only .txt files in flowcharts/** — flowcharts/ contains only .txt analysis files
+2. **Always include script prefix** — `script##_` is **REQUIRED**
+3. **Consolidate related topics** — Avoid fragmentation (e.g., combine implementation + deployment into one file)
+4. **Use lowercase with underscores** — `script07_design.md` not `Script07_Design.md`
+5. **Use YYYY-MM-DD dates** — only if multiple versions of same doc exist
+6. **Keep this README updated** — when adding or consolidating files
+7. **Only .txt files in flowcharts/** — flowcharts/ contains only .txt analysis files, never .md
+
+## Consolidation Strategy
+
+**Avoid fragmentation** — instead of 13 separate files for one script, consolidate into:
+- `script##_design.md` — Architecture, design decisions, schemas
+- `script##_implementation.md` — Code examples, deployment, testing
+- `script##_security_audit.md` — Vulnerabilities and security findings
+
+This reduces token usage and improves navigation.
+
+## When to Add Files
+
+Add new files when:
+- ✅ Creating a new script (e.g., `script08_...`)
+- ✅ New type of analysis for existing script (e.g., `script07_performance_audit_2026-05-20.md`)
+- ❌ Never for incremental updates to existing docs — update the file instead
 
 ## When to Promote
 
-Files can be promoted to permanent documentation in main codebase:
+Files can be promoted to permanent documentation:
 
-- Move to `docs/<service>/` and keep script prefix if relevant
-- Move to script file directory and keep script prefix
+- Move to `docs/<service>/` and keep script prefix
 - Update this README to mark as promoted
 - Keep dates only if version history matters
 
 ---
 
-**Last Updated:** 2026-05-15
+**Last Updated:** 2026-05-15  
+**Rule:** All .md files generated by Claude use `docs/generated/` with script## prefix

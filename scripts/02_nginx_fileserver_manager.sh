@@ -2559,10 +2559,16 @@ run_enhance_security() {
 # Grin File Server - Request rate limiting zone
 # Managed by 02_nginx-fileserver-manager.sh
 limit_req_zone $binary_remote_addr zone=grin_req:10m rate=20r/s;
-limit_req_status 429;
 EOF
         print_info "Created request rate limit zone: $req_zone_conf"
     else
+        # Migration: remove limit_req_status from the zone file if present —
+        # it belongs at the location level, not the http level, to avoid
+        # conflicts when other configs also define it in the http context.
+        if grep -q "limit_req_status" "$req_zone_conf" 2>/dev/null; then
+            sed -i '/limit_req_status/d' "$req_zone_conf"
+            print_info "Removed limit_req_status from zone file (moved to location blocks)"
+        fi
         print_info "Request rate limit zone already exists: $req_zone_conf"
     fi
 
@@ -2576,7 +2582,7 @@ EOF
 
         if ! grep -q "limit_req zone=grin_req" "$conf_file" 2>/dev/null; then
             if grep -q "autoindex_format html;" "$conf_file" 2>/dev/null; then
-                sed -i 's/autoindex_format html;/autoindex_format html;\n        limit_req zone=grin_req burst=30 nodelay;/' "$conf_file"
+                sed -i 's/autoindex_format html;/autoindex_format html;\n        limit_req zone=grin_req burst=30 nodelay;\n        limit_req_status 429;/' "$conf_file"
                 injected_req=$(( injected_req + 1 ))
                 print_info "Injected request limit into: $domain"
             fi

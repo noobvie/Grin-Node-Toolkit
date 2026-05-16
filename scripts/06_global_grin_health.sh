@@ -846,13 +846,9 @@ server {
 }
 NGINX
 
-    # Rate-limit zone (must live in http context, not server context)
-    mkdir -p /etc/nginx/conf.d
-    cat > /etc/nginx/conf.d/grin-rate-limit.conf <<'RATELIMIT'
-# Grin Node Toolkit — API rate limiting
-# 30 requests/min per IP, 10m shared memory zone (~160k IPs)
-limit_req_zone $binary_remote_addr zone=grin_api:10m rate=30r/m;
-RATELIMIT
+    # Rate-limit zone — delegated to nginx_shared_helpers.sh so Script 04 can
+    # use the same zone without conflict (same file path + same content = safe overwrite).
+    nginx_ensure_grin_api_zone
 
     # Shared snippet included by every /api/ location block
     mkdir -p /etc/nginx/snippets

@@ -280,10 +280,14 @@ function setupRoutes() {
 
           // Log registration event
           const auditStmt = db.prepare(`
-            INSERT INTO admin_audit_log (user_id, action, resource, details)
-            VALUES (?, 'register', 'auth', ?)
+            INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+            VALUES (?, 'register', 'auth', 'register', ?, ?)
           `);
-          auditStmt.run(result.user_id, JSON.stringify({ username, timestamp: new Date().toISOString() }));
+          auditStmt.run(
+            result.user_id,
+            JSON.stringify({ username }),
+            req.ip
+          );
 
           // Don't return tokens (in cookies now)
           res.json({ success: true, username: result.username, is_admin: result.is_admin });
@@ -323,20 +327,24 @@ function setupRoutes() {
 
           // Log successful login
           const auditStmt = db.prepare(`
-            INSERT INTO admin_audit_log (user_id, action, resource, details)
-            VALUES (?, 'login_success', 'auth', ?)
+            INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+            VALUES (?, 'login_success', 'auth', 'login', ?, ?)
           `);
-          auditStmt.run(result.user_id || null, JSON.stringify({ ip, username, timestamp: new Date().toISOString() }));
+          auditStmt.run(
+            result.user_id || null,
+            JSON.stringify({ username }),
+            ip
+          );
 
           // Don't return tokens in response body (they're in httpOnly cookies)
           res.json({ success: true, username: result.username, is_admin: result.is_admin });
         } else {
-          // Log failed login attempt
+          // Log failed login attempt (admin_id NULL — bad username may not exist in users)
           const auditStmt = db.prepare(`
-            INSERT INTO admin_audit_log (user_id, action, resource, details)
-            VALUES (?, 'login_failed', 'auth', ?)
+            INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+            VALUES (NULL, 'login_failed', 'auth', 'login', ?, ?)
           `);
-          auditStmt.run(null, JSON.stringify({ ip, username, timestamp: new Date().toISOString() }));
+          auditStmt.run(JSON.stringify({ username }), ip);
           res.status(401).json({ success: false, error: 'Invalid credentials' });
         }
       } catch (err) {
@@ -951,10 +959,15 @@ function setupRoutes() {
 
       // Log to audit
       const auditStmt = db.prepare(`
-        INSERT INTO admin_audit_log (user_id, action, resource, details)
-        VALUES (?, 'update_settings', 'user_settings', ?)
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'update_settings', 'user_settings', ?, ?, ?)
       `);
-      auditStmt.run(userId, JSON.stringify({ email: email || null, min_payout: min_payout || null, theme: theme || null, timestamp: new Date().toISOString() }));
+      auditStmt.run(
+        userId,
+        String(userId),
+        JSON.stringify({ email: email || null, min_payout: min_payout || null, theme: theme || null }),
+        req.ip
+      );
 
       res.json({
         success: true,

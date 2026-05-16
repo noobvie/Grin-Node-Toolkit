@@ -86,6 +86,13 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 die()     { error "$*"; return 1; }
 pause()   { echo ""; echo -e "${DIM}Press Enter to continue...${RESET}"; read -r || true; }
 
+# ─── Source shared nginx helpers (guarded — script falls back to inline if missing) ─
+_NGINX_LIB="$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+if [[ -f "$_NGINX_LIB" ]]; then
+    # shellcheck source=lib/nginx_shared_helpers.sh
+    source "$_NGINX_LIB"
+fi
+
 # ─── Constants (mainnet only) ─────────────────────────────────────────────────
 XP_WALLET_API_PORT=3415
 XP_DEPLOY_DIR="/var/www/web-wallet-xp"
@@ -367,13 +374,21 @@ xp_configure_nginx() {
     [[ "$confirm" == "0" ]] && return
     [[ "${confirm,,}" == "n" ]] && info "Cancelled." && return
 
-    mkdir -p /etc/nginx/conf.d
-    cat > "/etc/nginx/conf.d/grin-xp-wallet-ratelimit.conf" << RATELIMIT
+    # Rate-limit zones — via shared helper if available, inline fallback otherwise
+    if declare -F nginx_ensure_rate_limit_zones &>/dev/null; then
+        nginx_ensure_rate_limit_zones "grin-xp-wallet-ratelimit" \
+            "${XP_RATELIMIT_ZONE}_tx:3r/m"    \
+            "${XP_RATELIMIT_ZONE}_api:10r/m"  \
+            "${XP_RATELIMIT_ZONE}_http:20r/m"
+    else
+        mkdir -p /etc/nginx/conf.d
+        cat > "/etc/nginx/conf.d/grin-xp-wallet-ratelimit.conf" << RATELIMIT
 # Grin XP Wallet rate limits
 limit_req_zone \$binary_remote_addr zone=${XP_RATELIMIT_ZONE}_tx:10m   rate=3r/m;
 limit_req_zone \$binary_remote_addr zone=${XP_RATELIMIT_ZONE}_api:10m  rate=10r/m;
 limit_req_zone \$binary_remote_addr zone=${XP_RATELIMIT_ZONE}_http:10m rate=20r/m;
 RATELIMIT
+    fi
 
     info "Writing HTTP vhost → $XP_NGINX_CONF ..."
     cat > "$XP_NGINX_CONF" << NGINX_HTTP

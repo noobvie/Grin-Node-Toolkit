@@ -196,47 +196,88 @@ hashrateGps = perBlockDiff * 42 / dt / 16384;          // dt = actual seconds
 hashrate_gps = row.difficulty * 42 / 60 / 16384;
 ```
 
-## Nginx Configuration — Naming & Conflict Prevention
+## Nginx Configuration — Shared Helpers & Conflict Prevention
 
 **Critical:** Nginx config files from multiple scripts can conflict if they define
 the same zones, upstreams, or directives in the same context (http/server/location).
 Nginx loads ALL files in `/etc/nginx/conf.d/*.conf` into the http context — if two
 scripts define the same `limit_req_zone` with different names or rates, nginx errors.
 
-### Naming Convention
-- **Shared zones** (used by multiple scripts): Defined ONCE by the authoritative script.
-  - Example: Script 06 defines `limit_req_zone "grin_api"` in `/etc/nginx/conf.d/grin-rate-limit.conf`
-  - Other scripts (04, 07, etc.) must NOT redefine it — they only use it via `limit_req zone=grin_api`
-- **Script-specific configs**: Name with script prefix to avoid collisions.
-  - Script 04: `/etc/nginx/conf.d/script04-node-api.conf`
-  - Script 07: `/etc/nginx/conf.d/script07-pool.conf`
-  - Script 052: `/etc/nginx/snippets/script052-drop.conf` (for location blocks)
+### Rate-limit zones — primitive + named wrappers
+All rate-limit zone creation goes through one primitive in `scripts/lib/nginx_shared_helpers.sh`:
+
+```bash
+nginx_ensure_rate_limit_zone <zone_name> <rate> [size=10m] [conf_basename]
+```
+
+Behaviour: grep-guards against existing definitions, writes
+`/etc/nginx/conf.d/<conf_basename>.conf` if missing. Ops can edit the conf file
+manually to override the rate — the helper detects the existing zone and skips.
+
+**For SHARED zones** (multiple scripts need the same zone), add a named wrapper
+in the lib so every caller passes identical args → byte-identical output →
+last-write-wins is safe regardless of which script runs first:
+
+```bash
+nginx_ensure_grin_api_zone() {
+    nginx_ensure_rate_limit_zone "grin_api" "30r/m" "10m" "grin-rate-limit"
+}
+```
+
+Every script that needs `grin_api` calls `nginx_ensure_grin_api_zone` — never
+the primitive directly, never an inline `cat > /etc/nginx/conf.d/...` heredoc.
+
+**For SCRIPT-SPECIFIC zones** (zone used by only one script), call the primitive
+directly with the script's own parameters:
+
+```bash
+# In Script 07 (pool):
+nginx_ensure_rate_limit_zone "pool_api_${net}" "60r/m" "10m" "script07-pool-${net}"
+```
+
+Current named wrappers:
+
+| Zone | Wrapper | Rate | Used by |
+|---|---|---|---|
+| `grin_api` (limit_req) | `nginx_ensure_grin_api_zone` | `30r/m` | Scripts 04, 06 |
+
+### Script-specific zones — stay in the script that owns them
+- `grin_conn` (Script 04 only) — defined inline in Script 04 inside `nginx.conf` http block
+- `${POOL_SERVICE}_auth/_api/_static` (Script 07 only) — defined inline in pool vhost
+- Per-domain bandwidth maps (Script 02) — defined inline in per-domain conf
+
+Name script-specific conf files with a `script##-` prefix to avoid future collisions:
+`script04-…`, `script07-…`, `script052-…`.
 
 ### Rules
-1. **One script owns each shared resource.** If Script 06 defines `grin_api` zone, no other
-   script should redefine it. If Script 04 needs it, use it — don't declare it again.
-2. **Zones must have unique names across the entire nginx config.** Before adding a new zone,
-   grep the entire codebase to ensure no other script uses that name.
-3. **Check before writing:** Before creating a conf file, verify:
+1. **Never write `limit_req_zone …` inline.** Always go through
+   `nginx_ensure_rate_limit_zone` (primitive) or a named wrapper in the lib.
+   If the zone is shared across scripts, add a named wrapper so every caller
+   produces byte-identical output.
+2. **Same path + same content = safe.** Multiple scripts MAY overwrite the same
+   conf file as long as every caller writes byte-identical content. The named
+   wrappers in the lib enforce this.
+3. **Zone names must be unique across the entire nginx config.** Before adding a new zone:
    ```bash
-   grep -r "zone=name_here" scripts/ lib/  # Check if zone exists elsewhere
-   grep -r "/etc/nginx/conf.d/your-name.conf" scripts/  # Check if file path is unique
+   grep -r "zone=name_here" scripts/ lib/
    ```
-4. **Test syntax after changes:**
-   ```bash
-   nginx -t  # Always run before systemctl reload
-   ```
+4. **Test syntax after changes:** `nginx -t` before any `systemctl reload nginx`.
 
-### Example: Avoiding Duplicates (Script 04 ↔ Script 06)
-**BAD (causes nginx error):**
-- Script 04 writes: `limit_req_zone $binary_remote_addr zone=grin_api:10m rate=10r/s;` to `/etc/nginx/nginx.conf`
-- Script 06 writes: `limit_req_zone $binary_remote_addr zone=grin_api:10m rate=30r/m;` to `/etc/nginx/conf.d/grin-rate-limit.conf`
-- Result: nginx loads both → duplicate zone definition → ERROR
+### Anti-patterns — don't do this
+**BAD — different files, different rates, same zone name:**
+- Script A writes `zone=grin_api:10m rate=10r/s` to `/etc/nginx/nginx.conf`
+- Script B writes `zone=grin_api:10m rate=30r/m` to `/etc/nginx/conf.d/grin-rate-limit.conf`
+- Result: nginx loads both → "zone already bound" error
 
-**GOOD (single authoritative source):**
-- Script 06 defines `grin_api` zone in `/etc/nginx/conf.d/grin-rate-limit.conf`
-- Script 04 only uses `limit_req zone=grin_api burst=10 nodelay;` in its location blocks
-- No redefinition, no conflict
+**BAD — single owner that may not have run:**
+- Script A uses `limit_req zone=grin_api` but defines nothing
+- Script B (the "owner") hasn't been run yet
+- Result: "zero size shared memory zone" error
+
+**GOOD — shared helper, identical content across callers:**
+- Both scripts call `nginx_ensure_grin_api_zone` from `nginx_shared_helpers.sh`
+- Helper writes the same file with the same content; later calls grep-guard out
+- Either script can run first, standalone or together — no conflict, no missing zone
 
 ## Generated & Temporary Files — Centralized Location & Consolidation
 

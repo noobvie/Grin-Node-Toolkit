@@ -27,7 +27,31 @@ function getDb() {
   return db;
 }
 
+// Drop admin_audit_log if its columns don't match the canonical shape.
+// The pool isn't in production; auditing a fresh table is preferable to
+// silently swallowing INSERT errors against a stale schema (BUG-18).
+function migrateAdminAuditLog() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(admin_audit_log)").all();
+    if (cols.length === 0) return;
+    const expected = new Set(['id', 'admin_id', 'action', 'target_type', 'target_id', 'details', 'ip', 'created_at']);
+    const colNames = new Set(cols.map(c => c.name));
+    const missing = [...expected].filter(c => !colNames.has(c));
+    const obsolete = [...colNames].filter(c => !expected.has(c));
+    if (missing.length > 0 || obsolete.length > 0) {
+      console.warn(
+        `[db] admin_audit_log schema mismatch (missing: [${missing.join(',')}], obsolete: [${obsolete.join(',')}]); dropping and recreating. Existing audit rows will be lost.`
+      );
+      db.exec('DROP TABLE admin_audit_log');
+    }
+  } catch (e) {
+    console.error(`[db] admin_audit_log migration check failed: ${e.message}`);
+  }
+}
+
 function createSchema() {
+  migrateAdminAuditLog();
+
   const statements = [
     `CREATE TABLE IF NOT EXISTS miner_accounts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,13 +170,12 @@ function createSchema() {
 
     `CREATE TABLE IF NOT EXISTS admin_audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      admin_id INTEGER NOT NULL REFERENCES users(id),
+      admin_id INTEGER REFERENCES users(id),
       action TEXT NOT NULL,
-      target_type TEXT NOT NULL,
-      target_id TEXT NOT NULL,
-      before_state TEXT DEFAULT NULL,
-      after_state TEXT DEFAULT NULL,
-      ip TEXT NOT NULL,
+      target_type TEXT,
+      target_id TEXT,
+      details TEXT,
+      ip TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 

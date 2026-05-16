@@ -19,6 +19,449 @@
   Dir renames (DONE):  web/07_pool/ → web/07_mining_pool/
                        pool-manager/ → back-end-pool/
 
+╔══════════════════════════════════════════════════════════════════════════════╗
+║   STATUS REPORT  2026-05-16  —  AUDIT FINDINGS + CORRECTED BUILD ORDER     ║
+║   This section supersedes the per-phase STATUS labels below where they      ║
+║   conflict. The original v3 plan content is retained as design reference.   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  REALITY CHECK — what was built vs what the plan said
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  The plan said: build sequentially, test each phase end-to-end before moving on.
+  What happened:  All phases were stubbed in parallel by the Haiku model and
+                  never tested end-to-end. The result is ~6,100 LOC of Node.js
+                  + ~18,000 LOC of HTML that LOOKS complete but has critical
+                  bugs at every load-bearing connection point.
+
+  Bash script (07_grin_mining_services.sh):
+    ✓ Python eliminated   (fixed 2026-05-16 — see script 07 review)
+    ✓ Node.js install path (apt nodejs/npm, npm ci, node init-db.js, JWT via crypto)
+    ✓ Systemd unit       (node index.js, NODE_ENV=production, LimitNOFILE)
+    ✓ sed-injection guard, tmux SHELL=/bin/bash, nginx domain validation
+    ✓ Cron backup wrapper script (was: sourced interactive script — broken)
+
+  Backend (web/07_mining_pool/back-end-pool/):
+    ✓ Stub files for all phases exist (db, auth, stratum, shares, miners,
+      blocks, block-monitor, rewards, wallet, wallet-tor, withdrawal-scheduler,
+      grin-node, orphan-detector, hashrate-tracker, alert-monitor, alert-delivery,
+      pool-settings, asset-manager, poolstats-reporter, rate-limiter, ip-filter,
+      auth-middleware, index.js)
+    ✗ NONE of it works end-to-end. See "Critical bugs" below.
+
+  Frontend (web/07_mining_pool/public_html/ + back-end-pool/admin-panel/):
+    ✓ 9 HTML pages designed, themed, responsive
+    ✗ Auth gate broken (Promise never awaited)
+    ✗ Two separate HTML trees, only one reachable (the other never wired to Express)
+    ✗ Field names don't match what the backend returns
+    ✗ Hardcoded production URLs (pool.grin.money) in canonical/og tags
+    ✗ Three different localStorage keys for "theme"
+
+  Generated docs that were DELETED on 2026-05-16:
+    ✗ docs/generated/script07_implementation.md
+        Claimed "COMPLETE & TESTED" — frontend snippets still used localStorage
+        for tokens, contradicting the security audit's httpOnly cookie fix.
+    ✗ docs/generated/script07_security_pool_audit_2026-05-15.md
+        Claimed "production-ready, all 10 vulnerabilities fixed" — described
+        fixes to Node.js code that doesn't actually behave as claimed.
+    ✗ docs/generated/README.md
+        Indexed two of the above (deleted) and a third file with the wrong
+        name. Convention now lives in CLAUDE.md only.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  CRITICAL BUGS — must fix before any new feature work
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  All paths are relative to web/07_mining_pool/back-end-pool/ unless noted.
+
+  ── MINING CORE ─────────────────────────────────────────────────────────────
+
+  BUG-01  Stratum protocol is BITCOIN, not GRIN.
+          lib/stratum-server.js, lib/stratum-protocol.js
+          Implements mining.subscribe / mining.submit / mining.set_difficulty.
+          Grin uses login / getjobtemplate / submit / keepalive with
+          {nonce, pow[42], edge_bits}. No real miner will connect.
+          FIX: Port grin-mining-pool's stratum or reimplement against
+          https://github.com/mimblewimble/grin-miner stratum spec.
+
+  BUG-02  No block-finding pipeline exists.
+          lib/block-monitor.js only polls network tip height. There is no
+          code that watches the pool wallet for coinbase outputs and calls
+          blockManager.creditBlock(). The `blocks` table is therefore
+          NEVER populated → reward/payout/orphan chain has zero input.
+          FIX: Add a watcher that listens for coinbase TX in the pool
+          wallet, correlates to the block height, and calls creditBlock().
+
+  BUG-03  PPLNS double-pay: shares have no "paid" marker.
+          lib/rewards.js  getSharesForDistribution() (line 99)
+          If two blocks land within 60 heights, overlapping shares are
+          credited TWICE. There is no shares.paid_in_block_id column.
+          FIX: Add column `shares.paid_in_block_id INTEGER NULL`. Set it
+          inside the distribution transaction. Filter `WHERE paid_in_block_id
+          IS NULL` in getSharesForDistribution.
+
+  BUG-04  distributeRewards() is never called.
+          Grep confirms zero callers. block-monitor confirms blocks via
+          orphan-detector but never triggers distribution.
+          FIX: In block-monitor.checkImmatureBlocks(), after
+          orphanDetector.confirmBlock(), call rewardDistributor.distributeRewards(blockId).
+
+  BUG-05  RewardDistributor.grinNode is undefined.
+          lib/rewards.js line 24 references this.grinNode; the constructor
+          never assigns it. Blockchain verification ALWAYS skipped.
+          FIX: Constructor takes (config, grinNode). index.js must pass it.
+
+  BUG-06  Stale-share check rejects every share.
+          lib/shares.js line 23: Date.parse(shareHash) on a SHA-256 hex
+          string returns NaN → shareAge is huge → every share is "stale".
+          FIX: Pass a real timestamp into submitShare() — the share hash
+          is not a date.
+
+  BUG-07  currentJobId never increments + server.connections deprecated.
+          lib/stratum-server.js line 20, 207, 227
+          Only jobId 0 is ever "current"; everything else is rejected.
+          server.connections was removed from Node ≥ 12.
+          FIX: Track sockets in a Set; bump currentJobId on each new job.
+
+  BUG-08  TCP packet fragmentation breaks stratum parsing.
+          lib/stratum-server.js  data.toString().split('\n') with no
+          per-socket buffer.
+          FIX: Maintain `socket.recvBuf` and only parse complete lines.
+
+  ── WALLET / MONEY FLOW ─────────────────────────────────────────────────────
+
+  BUG-09  Withdrawal accounting never locks funds.
+          lib/withdrawal-scheduler.js
+          initiateWithdrawal() doesn't move balance → balance_locked.
+          markFailed() then does balance += amount, balance_locked -= amount.
+          Since locked was never incremented, the user's balance DOUBLES on
+          every failure. Also miners can request more than their balance
+          before any complete.
+          FIX:
+            - On withdrawal create: atomic UPDATE setting balance = balance-X,
+              balance_locked = balance_locked+X (only if balance >= X).
+            - On confirm: balance_locked -= X.
+            - On failure: balance_locked -= X, balance += X.
+            - Wrap all three in a sqlite transaction.
+            - Add CHECK constraints: balance >= 0, balance_locked >= 0.
+
+  BUG-10  canInitiateWithdrawal() defined but never called.
+          MAX_PENDING_WITHDRAWALS / MAX_USER_PENDING limits don't fire.
+          FIX: Call it at the top of initiateWithdrawal().
+
+  BUG-11  Command injection in WalletTor.
+          lib/wallet-tor.js line 20
+          `grin-wallet -p ${dir} send -d '${addr}' -a ${amt}` then
+          spawn('bash', ['-c', cmd]).
+          FIX: spawn('grin-wallet', ['-p', dir, 'send', '-d', addr, '-a', String(amt)])
+          with no shell.
+
+  BUG-12  WalletTor regex matches .onion, not Grin Slatepack addresses.
+          Withdrawals use grin1.../tgrin1... addresses routed via Tor —
+          NOT raw .onion. isTorAddress("grin1abc...") returns false →
+          every withdrawal gets scheduled for retry forever.
+          FIX: Rename to isGrinAddress(); use /^t?grin1[a-z0-9]{55,62}$/.
+          Drop the raw-TCP "tor probe" entirely — grin-wallet handles
+          Tor routing internally via its own SOCKS config.
+
+  BUG-13  WalletAPI uses Owner API v3 without ECDH.
+          lib/wallet.js line 96 hits /v3/owner with plain Basic Auth.
+          Per CLAUDE.md, v3 requires init_secure_api → ECDH → AES-GCM.
+          FIX: Either implement v3 handshake (preferred long-term), or
+          switch to Owner API v2 endpoints + methods for MVP.
+
+  BUG-14  WalletAPI.sendTransaction calls non-existent method 'send'.
+          Owner API has init_send_tx, not send.
+          FIX: Use init_send_tx + finalize_tx flow.
+
+  BUG-15  GrinNodeAPI Foreign endpoints unauthenticated.
+          lib/grin-node.js line 107: secret only sent for Owner API.
+          Per CLAUDE.md, Foreign API also needs Basic Auth with
+          .foreign_api_secret. getTip / getHeader / getBlock all 401.
+          FIX: Take both secrets in constructor; send the right one per
+          endpoint. Or load each from its own file path at call time.
+
+  BUG-16  Money in JS floats (REAL columns + Number).
+          Cumulative rounding errors on credits/debits.
+          FIX: Store nanoGRIN as INTEGER (1 GRIN = 1e9 nanoGRIN). Use
+          BigInt in JS. Convert to GRIN nominal only at the display layer.
+
+  BUG-17  Orphan reversal is wrong (and unsafe).
+          lib/orphan-detector.js line 138: reverses block.reward / shares.length
+          — equal split — but distribution was PPLNS weighted by difficulty.
+          Reverses miner credits only, not pool fee. No guard against
+          negative balance if miner already withdrew.
+          FIX: Read the actual credited amounts from balance_log
+          (or shares.paid_in_block_id × that share's payout column) and
+          reverse those exact amounts. Reverse pool_fee_address credit too.
+          Refuse to reverse if it would push balance < 0; flag for admin.
+
+  ── AUTH / DATA INTEGRITY ───────────────────────────────────────────────────
+
+  BUG-18  admin_audit_log schema mismatch — every INSERT throws.
+          lib/db.js   columns: admin_id, action, target_type, target_id,
+                       before_state, after_state, ip
+          index.js    INSERTs:  user_id, action, resource, details
+          pool-settings.js writes:  admin_id, action, target_type, target_id, details
+          target_type is NOT NULL → every login/register/update audit row
+          silently fails (caught and logged). Audit log is permanently empty.
+          FIX: Pick one column shape. Recommended: rename to
+          (admin_id, action, target_type, target_id, details JSON, ip TEXT,
+          created_at INTEGER). Update all 6+ writers.
+
+  BUG-19  Frontend auth guard always passes.
+          public_html/js/auth.js line 119-123:
+            function requireAuth() {
+              if (!Auth.isLoggedIn()) { … }   // Promise → always truthy
+            }
+          Same bug in:
+            public_html/login.html line 390 — hits /api/health (public, 200
+              for everyone) → redirects every visitor to admin-dashboard.html
+              before they even log in.
+            back-end-pool/admin-panel/index.html line 124 — API.isLoggedIn()
+              is a Promise; truthy; admin page never blocks unauth.
+          FIX: All three: await the check. Use an authenticated endpoint
+          like /api/admin/dashboard (returns 401 for unauth) — not /api/health.
+
+  BUG-20  Spoofable X-Forwarded-For in admin allowlist.
+          lib/ip-filter.js line 229; lib/rate-limiter.js line 214
+          Anyone with `X-Forwarded-For: <allowed-ip>` bypasses both.
+          FIX: In index.js do app.set('trust proxy', 1) and use req.ip
+          everywhere. Strip the header-trust code in these two libs.
+
+  BUG-21  JWT refresh tokens replayable.
+          lib/auth.js refreshAccessToken doesn't invalidate the old refresh
+          token. Stolen tokens valid for the full 7 days.
+          FIX: Track refresh token jti in a refresh_tokens table; mark used
+          jtis as revoked on refresh.
+
+  BUG-22  No account lockout on failed login.
+          Rate-limit is per-IP only. Attacker rotates IPs to brute-force.
+          FIX: Add failed_login_attempts counter per username; lock after N.
+
+  BUG-23  bcrypt rounds = 10 (too low for 2025).
+          lib/auth.js line 237   bcrypt.genSalt(10)
+          FIX: Use 12 minimum.
+
+  ── ALERT MONITOR ───────────────────────────────────────────────────────────
+
+  BUG-24  AlertMonitor reads fields/methods that don't exist.
+          lib/alert-monitor.js
+            line 118: status.sync_status === 'Synced'  (grin-node returns
+                      {ok, height, total_difficulty, network, timestamp})
+            line 155: this.walletTor.checkHealth()      (method doesn't exist)
+            line 208: stratumServer.getStats() reads shares_accepted_1h,
+                      connection_errors_1h (neither field exists)
+            line 256: WHERE status='failed'              (column is 'tor_failed')
+            line 256: datetime('now',...)                (column is unixepoch int)
+          Net effect: critical wallet + node alerts fire EVERY check cycle.
+          FIX: Align field/method names; standardize on unixepoch timestamps;
+          add `withdrawals.updated_at` column or query by `created_at`.
+
+  BUG-25  alert_thresholds stored as JSON string, read as object.
+          lib/pool-settings.js line 67 stores '{...}' as text.
+          lib/alert-monitor.js reads config.alert_thresholds?.X — undefined.
+          FIX: Mark value_type='json' in pool-settings storage, or JSON.parse
+          when reading.
+
+  BUG-26  Alert delivery is stubbed in alert-monitor itself.
+          alert-monitor.deliverAlert() just console.logs "Would send …".
+          alert-delivery.js has real implementations but is never invoked.
+          FIX: Pass alertDelivery into AlertMonitor constructor; call
+          alertDelivery.send(alert) instead of the stubs.
+
+  ── XSS / FRONTEND HARDENING ────────────────────────────────────────────────
+
+  BUG-27  11 innerHTML = data.map() sites; only one file defines escHtml.
+          See review for full list. Worker names, status reasons, settings
+          values are stored-XSS sinks.
+          FIX: Move escHtml() to /js/escape.js and use it in every map.
+          Or switch to DOM construction (createElement + textContent).
+
+  BUG-28  CSP allows 'unsafe-inline' for scripts.
+          index.js line 47. Required because every HTML page uses inline
+          onclick= and inline <script>. CSP is decorative.
+          FIX: Move all inline handlers to addEventListener in separate
+          .js files. Then drop 'unsafe-inline'. Add nonce-based CSP.
+
+  BUG-29  SVG uploads accepted by AssetManager.
+          lib/asset-manager.js line 14. SVG can contain <script> →
+          stored XSS via admin-uploaded logo.
+          FIX: Drop 'image/svg+xml' from allowedMimeTypes. OR strip with
+          a server-side SVG sanitizer (sanitize-svg / DOMPurify-node).
+
+  BUG-30  Asset uploads have no static route.
+          AssetManager.getAssetUrl() returns /custom/${filename} but
+          index.js never registers app.use('/custom', express.static(uploadDir)).
+          Every uploaded asset is unreachable.
+          FIX: Add the static route in setupRoutes(). Limit to image MIMEs
+          via res.type check.
+
+  BUG-31  multer 1.x has known CVEs.
+          package.json     "multer": "^1.4.5-lts.1"
+          FIX: Upgrade to multer v2 (npm install multer@^2). Test upload
+          flow for breaking changes.
+
+  ── PUBLIC DATA LEAKS ───────────────────────────────────────────────────────
+
+  BUG-32  GET /api/pool/payments and /api/pool/miners have no auth.
+          index.js lines 542 + 556. Exposes full withdrawal history with
+          addresses + amounts, and every miner's balance, publicly.
+          FIX: Either move to requireAuth or aggregate before responding
+          (return totals/anonymous leaderboards, not raw rows).
+
+  BUG-33  Dashboard hardcodes fake metrics.
+          index.js line 852-870: uptime_hours: 730.5, found_7d: 18, etc.
+          FIX: Either compute or omit.
+
+  ── DEPLOYMENT / OPS ────────────────────────────────────────────────────────
+
+  BUG-34  Two HTML trees; only public_html/ is reachable.
+          back-end-pool/admin-panel/*.html and back-end-pool/public/*.html
+          exist but index.js never registers a static route for them.
+          FIX: Either:
+            (a) DELETE the back-end-pool/admin-panel/ and back-end-pool/public/
+                trees and serve everything from public_html/ via nginx; OR
+            (b) add app.use('/admin', requireAdminPage, express.static('admin-panel'))
+                per the original v3 plan's security design.
+          The v3 plan favored (b) for "admin HTML behind requireAdmin
+          middleware" — but it was never wired. Pick one.
+
+  BUG-35  Three localStorage keys for "the theme".
+          theme.js → 'admin-theme'
+          public_html/*.html → 'grinium-theme'
+          preview/dual-theme-complete.html → 'grin-pool-theme'
+          FIX: One key. 'pool-theme'. Update all three.
+
+  BUG-36  Hardcoded production URLs in HTML head.
+          login.html and 8 other pages bake in https://pool.grin.money/...
+          for og:url, canonical, twitter:domain.
+          FIX: Templated from config.subdomain. Either generated at deploy
+          time (pool_deploy_web in the bash script) or fetched client-side.
+
+  BUG-37  jwt_secret regenerated on every restart if missing from config.
+          lib/config.js line 24: generateSecret() called inline.
+          FIX: Read once at install (bash script does this); error out if
+          missing at boot. Don't silently regenerate — it invalidates all
+          existing JWTs and breaks the config hash check.
+
+  BUG-38  node-fetch v2 timeout option doesn't work.
+          grin-node.js, wallet.js, poolstats-reporter.js all rely on it.
+          FIX: Drop node-fetch (Node 18+ has global fetch). Use
+          AbortController for timeouts.
+
+  BUG-39  Hashrate formula uses session.difficulty (assigned target).
+          lib/hashrate-tracker.js line 71. Should aggregate accepted-share
+          difficulty over the window. Pool hashrate displayed is always ~0.
+          FIX: Sum accepted-share difficulties in window; apply the
+          GPS = sumDiff × 42 / window / 16384 formula from CLAUDE.md.
+
+  BUG-40  Two MinerManager + ShareValidator instances.
+          index.js + stratum-server.js each construct their own. Separate
+          activeSessions Maps. /api/stratum/stats and /api/pool/stats
+          disagree on counts.
+          FIX: Construct once in index.js; pass into StratumServer.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  CORRECTED BUILD SEQUENCE — what to do, in order
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  The original v3 plan's sequential approach was correct. The Haiku model
+  ignored it and stubbed everything in parallel. To recover, work in
+  dependency order, ONE GROUP at a time, with a working end-to-end test
+  before moving to the next.
+
+  GROUP A — Data integrity foundation (no money, no mining yet)
+    A1.  Fix admin_audit_log schema mismatch        (BUG-18)
+    A2.  Add shares.paid_in_block_id column         (BUG-03)
+    A3.  Switch to nanoGRIN INTEGER columns         (BUG-16)
+    A4.  Wire alert_thresholds JSON properly        (BUG-25)
+    A5.  Migrate jwt_secret handling (no auto-gen)  (BUG-37)
+    GATE: All tests pass; existing data migrated; npm start clean.
+
+  GROUP B — Auth + admin access actually work
+    B1.  Fix frontend Promise-not-awaited guards    (BUG-19)
+    B2.  Trust-proxy + req.ip for IP filters        (BUG-20)
+    B3.  Refresh token revocation table             (BUG-21)
+    B4.  Account lockout + bcrypt 12                (BUG-22, BUG-23)
+    B5.  Decide HTML tree (a or b) and wire it      (BUG-34)
+    GATE: Curl /api/admin/dashboard without cookie returns 401; with
+          valid cookie returns 200; X-Forwarded-For spoof blocked.
+
+  GROUP C — Wallet integration (without it, no payouts ever work)
+    C1.  Owner API v2 OR implement v3 ECDH          (BUG-13, BUG-14)
+    C2.  Foreign API Basic Auth for grin-node       (BUG-15)
+    C3.  Replace wallet-tor (drop .onion regex)     (BUG-12)
+    C4.  Remove command injection                   (BUG-11)
+    C5.  Drop node-fetch + add AbortController      (BUG-38)
+    GATE: From a fresh wallet, getBalance returns correct value;
+          a test send to a real Slatepack address completes.
+
+  GROUP D — Mining core (the actual product)
+    D1.  Rewrite stratum to Grin Cuckatoo32         (BUG-01, BUG-07, BUG-08)
+    D2.  Fix share submission + timestamp           (BUG-06)
+    D3.  Fix hashrate formula                       (BUG-39)
+    D4.  Single MinerManager instance               (BUG-40)
+    GATE: A real Grin miner (grin-miner CLI) connects, submits accepted
+          shares, sees them in /api/account/:addr/shares.
+
+  GROUP E — Money flow (depends on C + D)
+    E1.  Block-finding pipeline                     (BUG-02)
+    E2.  Pass grinNode into RewardDistributor       (BUG-05)
+    E3.  Call distributeRewards on block confirm    (BUG-04)
+    E4.  Atomic withdrawal balance locking          (BUG-09)
+    E5.  Wire canInitiateWithdrawal limits          (BUG-10)
+    E6.  Fix orphan reversal                        (BUG-17)
+    GATE: Mine a testnet block end-to-end, see PPLNS distribution,
+          request and complete a withdrawal, orphan a manually-poisoned
+          row and confirm correct reversal.
+
+  GROUP F — Monitoring + hardening (after pool actually works)
+    F1.  Fix alert-monitor field/method mismatches  (BUG-24)
+    F2.  Wire alert-delivery into alert-monitor     (BUG-26)
+    F3.  Auth public endpoints leaking data         (BUG-32)
+    F4.  Drop dashboard fake metrics                (BUG-33)
+    F5.  Escape utility for innerHTML sites         (BUG-27)
+    F6.  Move inline handlers; drop unsafe-inline   (BUG-28)
+    F7.  Strip SVG from uploads; add static route   (BUG-29, BUG-30)
+    F8.  Upgrade multer to v2                       (BUG-31)
+    F9.  Theme key consolidation                    (BUG-35)
+    F10. Templated production URLs                  (BUG-36)
+    GATE: Audit run produces zero critical findings.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PHASE STATUS — superseded labels
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Phases below are labelled STATUS: TODO in the original v3 plan because
+  they hadn't been started at the time of writing. In reality, all of
+  them were started by Haiku — but the resulting code has the bugs
+  catalogued above. Read those phases as DESIGN REFERENCE, not as
+  open work. Real status:
+
+    PHASE 0   ✓ DONE         (directory rename)
+    PHASE 0b  ✓ DONE         (directory restructure)
+    PHASE 0a  ⚠ DESIGN ONLY  (stratum protocol — actual code is WRONG, BUG-01)
+    PHASE 0c  ⚠ PARTIAL      (bash menu redesign — see script 07 review)
+    PHASE 1   ✓ DONE 2026-05-16 (bash python3 calls eliminated)
+    PHASE 2   ⚠ PARTIAL      (config.js exists; jwt regen bug, BUG-37)
+    PHASE 3   ⚠ PARTIAL      (db.js exists; schema/code mismatch, BUG-18)
+    PHASE 4   ⚠ PARTIAL      (auth.js exists; refresh + lockout bugs)
+    PHASE 5   ✗ BROKEN       (wallet.js — BUG-13, BUG-14)
+    PHASE 6   ✗ BROKEN       (block-monitor — BUG-02; stratum — BUG-01)
+    PHASE 7   ✗ BROKEN       (rewards — BUG-03, BUG-04, BUG-05)
+    PHASE 8   ⚠ PARTIAL      (withdrawal-scheduler — BUG-09, BUG-10)
+    PHASE 9   ⚠ SUPERSEDED   (Next.js never adopted; plain HTML+Express used)
+    PHASE 10  ✓ DONE 2026-05-16 (bash install flow rewritten)
+    PHASE 11  ⚠ PARTIAL      (admin panel exists but unreachable, BUG-34)
+    PHASE 12  ⚠ PARTIAL      (preview HTMLs exist; README is misleading)
+    PHASE 13  ⚠ PARTIAL      (themes exist; key fragmented, BUG-35)
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║   END STATUS REPORT  —  original v3 planning content follows               ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   IMPLEMENTATION STRATEGY — Sequential Building (Not Skeleton-First)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

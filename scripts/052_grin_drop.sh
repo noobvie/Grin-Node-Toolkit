@@ -99,13 +99,12 @@ DROP_APP_SRC="$TOOLKIT_ROOT/web/052_drop/server"
 DROP_WEB_SRC="$TOOLKIT_ROOT/web/052_drop/public_html"
 
 # ─── Source lib files ─────────────────────────────────────────────────────────
-# Shared nginx helpers — sourced first so 052_lib_nginx.sh can use them.
-# Guarded so the script still works if the file is missing.
-_NGINX_LIB="$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
-if [[ -f "$_NGINX_LIB" ]]; then
-    # shellcheck source=lib/nginx_shared_helpers.sh
-    source "$_NGINX_LIB"
-fi
+# Shared nginx helpers — sourced FIRST so 052_lib_nginx.sh can use them.
+# Required: 052_lib_nginx.sh calls nginx_ensure_rate_limit_zones to write the
+# drop_home/drop_api/drop_test/drop_main zones. Without it, the vhost references
+# undefined zones and nginx fails with "zero size shared memory zone".
+# shellcheck source=lib/nginx_shared_helpers.sh
+source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
 # shellcheck source=lib/052_lib_wallet.sh
 source "$SCRIPT_DIR/lib/052_lib_wallet.sh"
 # shellcheck source=lib/052_lib_app.sh

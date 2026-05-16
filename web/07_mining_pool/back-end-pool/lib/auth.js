@@ -248,7 +248,7 @@ class AuthManager {
         INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, ip)
         VALUES (?, ?, 'auth', 'login', ?)
       `);
-      stmt.run(userId, success ? 'login_success' : 'login_failure', ip || 'unknown');
+      stmt.run(userId, success ? 'login_success' : 'login_failure', ip);
     } catch (err) {
       console.error(`Error logging login attempt: ${err.message}`);
     }

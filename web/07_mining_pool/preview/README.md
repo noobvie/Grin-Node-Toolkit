@@ -1,10 +1,15 @@
-# GRIN Mining Pool — Dual Theme Design System
+# GRIN Mining Pool — Design Mockups (preview/)
+
+> **NOT DEPLOYED.** Per `flowcharts/script07_flow_refactor.txt`, this
+> directory holds design mockups only. The bash deploy script does NOT
+> copy `preview/` to the VPS — only `public_html/` is served.
+> Use these files as visual references when implementing the real pages.
 
 ## 📁 Theme Files
 
-### Primary Design
+### Primary Mockup
 
-**[dual-theme-complete.html](dual-theme-complete.html)** ⭐ **PRODUCTION READY**
+**[dual-theme-complete.html](dual-theme-complete.html)** — Reference mockup (not production)
 - Full mining pool interface with dual theme support
 - Dark (NEXUS cyberpunk) and light (vibrant colorful) modes
 - Working theme toggle (🌙/☀️) in top-right corner
@@ -73,4 +78,7 @@ Additional pages ready to be built:
 
 ---
 
-**Status:** Design system complete and production-ready. Use `dual-theme-complete.html` as your primary mining pool interface.
+**Status:** Design mockup. The actual `public_html/` pages do NOT use this
+theme system yet (they use a different `localStorage` key, `grinium-theme`,
+which `theme.js` doesn't know about — see `BUG-35` in the flowchart status
+report). Consolidating themes onto a single key is a Group F task.

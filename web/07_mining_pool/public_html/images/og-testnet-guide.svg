@@ -1,47 +1,61 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
-  <defs>
-    <linearGradient id="guideGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#0f1419;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#1a202c;stop-opacity:1" />
-    </linearGradient>
-  </defs>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:serif="http://www.serif.com/" viewBox="0 0 1200 630" version="1.1" xml:space="preserve" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:1.41421;">
+    <defs>
+        <linearGradient id="guideGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#0f1419;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#1a202c;stop-opacity:1" />
+        </linearGradient>
+        <linearGradient id="accentGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#f97316;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#667eea;stop-opacity:1" />
+        </linearGradient>
+    </defs>
 
-  <rect width="1200" height="630" fill="url(#guideGradient)"/>
-  <rect width="1200" height="8" fill="#f97316"/>
+    <rect width="1200" height="630" style="fill:url(#guideGradient);"/>
+    <rect width="1200" height="8" style="fill:url(#accentGradient);"/>
 
-  <!-- Header -->
-  <text x="60" y="120" font-family="Arial, sans-serif" font-size="64" font-weight="bold" fill="white">Testnet Setup Guide</text>
-  <text x="60" y="180" font-family="Arial, sans-serif" font-size="32" fill="#f97316">Mining on IPOLLO G1 Mini</text>
+    <!-- Grin Logo -->
+    <g transform="translate(120, 315) scale(1)">
+        <g transform="matrix(1.03804,0,0,1.03804,-19.1739,-16.0598)">
+            <circle cx="136" cy="133" r="92" style="fill:#f97316;opacity:0.8;"/>
+        </g>
+        <g transform="matrix(1.06897,0,0,1.06897,-29.7347,-25.25)">
+            <circle cx="141.75" cy="137.75" r="79.75" style="fill:#f97316;opacity:0.6;"/>
+        </g>
+        <g transform="matrix(1,0,0,1,0.208873,-2)">
+            <path d="M162,92C159.966,87.434 158.071,78.413 152.855,76.407C146.14,73.825 141.989,90.729 141,95L140,95C138.307,87.682 136.035,77.31 128,75C124.28,90.624 131.886,107.479 139,121C146.596,117.37 150.297,106.002 151,98L152,98L160,122C166.436,120.15 168.675,113.781 170.999,108C175.988,95.592 180.174,80.332 177,67C167.395,69.72 164.473,83.455 162,92M66,124C74.595,119.896 78.685,106.906 80,98L81,98C82.017,102.293 84.736,113.368 90.1,114.079C96.934,114.983 100.517,99.819 101,95L102,95C104.179,102.529 106.475,112.32 114,116C116.776,104.34 113.452,91.905 109.188,81C108.092,78.196 105.841,70.636 101.975,70.636C95.641,70.636 92.08,87.332 91,92L90,92L82,68C67.928,74.72 60.284,110.453 66,124M51,136C61.443,181.551 109.612,207.374 153,188.138C168.791,181.137 181.317,168.663 188.539,153C190.405,148.953 194.07,141.628 191.933,136.318C189.805,131.029 169.166,139.671 164.009,141.928C163.285,142.25 162.774,142.918 162.655,143.702C162.655,143.702 162.655,143.702 162.655,143.702C162.486,144.811 162.786,145.941 163.485,146.82C164.183,147.699 165.216,148.247 166.335,148.333C170.116,148.624 175,149 175,149C159.313,179.365 116.899,192.791 87,168.532C80.308,163.103 74.338,156.652 70.32,149C68.377,145.3 66.575,140.568 63.272,138.029C60.099,135.589 55.285,134.753 51,136Z" style="fill:white;fill-rule:nonzero;"/>
+        </g>
+    </g>
 
-  <!-- Steps visualization -->
-  <g font-family="Arial, sans-serif" font-size="20" fill="#cbd5e0">
-    <circle cx="100" cy="280" r="20" fill="#f97316"/>
-    <text x="100" y="290" text-anchor="middle" fill="white" font-weight="bold">1</text>
-    <text x="160" y="295">Initialize Wallet</text>
+    <!-- Title -->
+    <text x="320" y="120" font-family="Arial, sans-serif" font-size="64" font-weight="bold" style="fill:white;">Testnet Setup Guide</text>
+    <text x="320" y="180" font-family="Arial, sans-serif" font-size="32" style="fill:#f97316;">Mining on IPOLLO G1 Mini</text>
 
-    <circle cx="100" cy="370" r="20" fill="#f97316"/>
-    <text x="100" y="380" text-anchor="middle" fill="white" font-weight="bold">2</text>
-    <text x="160" y="385">Configure TOML</text>
+    <!-- Steps -->
+    <g font-family="Arial, sans-serif" font-size="20" style="fill:#cbd5e0;">
+        <circle cx="350" cy="280" r="20" style="fill:#f97316;"/>
+        <text x="350" y="290" text-anchor="middle" font-weight="bold" style="fill:white;">1</text>
+        <text x="410" y="295">Initialize Wallet</text>
 
-    <circle cx="100" cy="460" r="20" fill="#f97316"/>
-    <text x="100" y="470" text-anchor="middle" fill="white" font-weight="bold">3</text>
-    <text x="160" y="475">Start Stratum Server</text>
+        <circle cx="350" cy="370" r="20" style="fill:#f97316;"/>
+        <text x="350" y="380" text-anchor="middle" font-weight="bold" style="fill:white;">2</text>
+        <text x="410" y="385">Configure TOML</text>
 
-    <circle cx="100" cy="550" r="20" fill="#f97316"/>
-    <text x="100" y="560" text-anchor="middle" fill="white" font-weight="bold">4</text>
-    <text x="160" y="565">Connect IPOLLO</text>
-  </g>
+        <circle cx="350" cy="460" r="20" style="fill:#f97316;"/>
+        <text x="350" y="470" text-anchor="middle" font-weight="bold" style="fill:white;">3</text>
+        <text x="410" y="475">Start Stratum Server</text>
+    </g>
 
-  <!-- Connection info -->
-  <rect x="700" y="260" width="480" height="280" rx="12" fill="#1a202c" stroke="#f97316" stroke-width="2"/>
-  <text x="730" y="295" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#f97316">Quick Reference</text>
-  <text x="730" y="345" font-family="monospace" font-size="16" fill="#a0aec0">
-    <tspan x="730" y="345">Stratum Port: 3333</tspan>
-    <tspan x="730" y="380">Network: Testnet</tspan>
-    <tspan x="730" y="415">Flag: --testnet</tspan>
-    <tspan x="730" y="450">Wallet API: 13415</tspan>
-    <tspan x="730" y="485">Node API: 13413</tspan>
-  </text>
+    <!-- Reference box -->
+    <rect x="850" y="260" width="320" height="220" rx="12" style="fill:#1a202c;stroke:#f97316;stroke-width:2;"/>
+    <text x="880" y="295" font-family="Arial, sans-serif" font-size="20" font-weight="bold" style="fill:#f97316;">Quick Reference</text>
+    <text x="880" y="340" font-family="monospace" font-size="16" style="fill:#a0aec0;">
+        <tspan x="880" y="340">Stratum Port: 3333</tspan>
+        <tspan x="880" y="375">Network: Testnet</tspan>
+        <tspan x="880" y="410">Wallet API: 13415</tspan>
+        <tspan x="880" y="445">Node API: 13413</tspan>
+    </text>
 
-  <rect y="622" width="1200" height="8" fill="#667eea"/>
+    <rect y="622" width="1200" height="8" style="fill:url(#accentGradient);"/>
 </svg>

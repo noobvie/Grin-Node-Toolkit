@@ -196,6 +196,48 @@ hashrateGps = perBlockDiff * 42 / dt / 16384;          // dt = actual seconds
 hashrate_gps = row.difficulty * 42 / 60 / 16384;
 ```
 
+## Nginx Configuration — Naming & Conflict Prevention
+
+**Critical:** Nginx config files from multiple scripts can conflict if they define
+the same zones, upstreams, or directives in the same context (http/server/location).
+Nginx loads ALL files in `/etc/nginx/conf.d/*.conf` into the http context — if two
+scripts define the same `limit_req_zone` with different names or rates, nginx errors.
+
+### Naming Convention
+- **Shared zones** (used by multiple scripts): Defined ONCE by the authoritative script.
+  - Example: Script 06 defines `limit_req_zone "grin_api"` in `/etc/nginx/conf.d/grin-rate-limit.conf`
+  - Other scripts (04, 07, etc.) must NOT redefine it — they only use it via `limit_req zone=grin_api`
+- **Script-specific configs**: Name with script prefix to avoid collisions.
+  - Script 04: `/etc/nginx/conf.d/script04-node-api.conf`
+  - Script 07: `/etc/nginx/conf.d/script07-pool.conf`
+  - Script 052: `/etc/nginx/snippets/script052-drop.conf` (for location blocks)
+
+### Rules
+1. **One script owns each shared resource.** If Script 06 defines `grin_api` zone, no other
+   script should redefine it. If Script 04 needs it, use it — don't declare it again.
+2. **Zones must have unique names across the entire nginx config.** Before adding a new zone,
+   grep the entire codebase to ensure no other script uses that name.
+3. **Check before writing:** Before creating a conf file, verify:
+   ```bash
+   grep -r "zone=name_here" scripts/ lib/  # Check if zone exists elsewhere
+   grep -r "/etc/nginx/conf.d/your-name.conf" scripts/  # Check if file path is unique
+   ```
+4. **Test syntax after changes:**
+   ```bash
+   nginx -t  # Always run before systemctl reload
+   ```
+
+### Example: Avoiding Duplicates (Script 04 ↔ Script 06)
+**BAD (causes nginx error):**
+- Script 04 writes: `limit_req_zone $binary_remote_addr zone=grin_api:10m rate=10r/s;` to `/etc/nginx/nginx.conf`
+- Script 06 writes: `limit_req_zone $binary_remote_addr zone=grin_api:10m rate=30r/m;` to `/etc/nginx/conf.d/grin-rate-limit.conf`
+- Result: nginx loads both → duplicate zone definition → ERROR
+
+**GOOD (single authoritative source):**
+- Script 06 defines `grin_api` zone in `/etc/nginx/conf.d/grin-rate-limit.conf`
+- Script 04 only uses `limit_req zone=grin_api burst=10 nodelay;` in its location blocks
+- No redefinition, no conflict
+
 ## Do Not
 - Never run the toolkit scripts locally — they assume a Linux VPS with root access
 - Never hardcode wallet API secrets or passwords in scripts
@@ -203,3 +245,4 @@ hashrate_gps = row.difficulty * 42 / 60 / 16384;
 - Never use `--floonet` flag — the correct testnet flag is `--testnet`
 - Never mix mainnet and testnet ports or directories
 - Don't add `#!/bin/bash` to lib files — they are sourced, not executed
+- **Never redefine nginx zones/upstreams across multiple scripts** — define once, use everywhere

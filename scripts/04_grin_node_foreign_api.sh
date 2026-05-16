@@ -241,11 +241,8 @@ txt = re.sub(
     r'\n    # Grin Node Toolkit[^\n]*\n(?:    [^\n]+\n){1,6}',
     '\n', txt)
 insert = (
-    '\n    # Grin Node Toolkit — rate/connection-limit zones for public API\n'
-    '    limit_req_zone  $binary_remote_addr zone=grin_api:10m  rate=10r/s;\n'
+    '\n    # Grin Node Toolkit — connection-limit zone for public API\n'
     '    limit_conn_zone $binary_remote_addr zone=grin_conn:10m;\n'
-    '    limit_req_status  429;\n'
-    '    limit_req_log_level warn;\n'
 )
 idx = txt.find('http {')
 if idx == -1:

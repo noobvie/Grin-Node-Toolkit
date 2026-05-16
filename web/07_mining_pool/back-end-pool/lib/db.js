@@ -157,7 +157,28 @@ function createSchema() {
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_audit_admin ON admin_audit_log(admin_id, created_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_audit_target ON admin_audit_log(target_type, target_id, created_at DESC)`
+    `CREATE INDEX IF NOT EXISTS idx_audit_target ON admin_audit_log(target_type, target_id, created_at DESC)`,
+
+    `CREATE TABLE IF NOT EXISTS alerts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      level TEXT NOT NULL DEFAULT 'warning',
+      message TEXT NOT NULL,
+      data TEXT DEFAULT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      occurrence_count INTEGER NOT NULL DEFAULT 1,
+      triggered_at TEXT NOT NULL,
+      last_seen TEXT NOT NULL,
+      resolved_at TEXT DEFAULT NULL,
+      acknowledged_at TEXT DEFAULT NULL,
+      acknowledged_by TEXT DEFAULT NULL,
+      snoozed_until TEXT DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_alert_type ON alerts(type, status)`,
+    `CREATE INDEX IF NOT EXISTS idx_alert_status ON alerts(status, triggered_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_alert_time ON alerts(triggered_at DESC)`
   ];
 
   const transaction = db.transaction(() => {

@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Miners Statistics — Mining Pool</title>
-    <link rel="stylesheet" href="admin-dashboard.html">
+    <title>System Health — Mining Pool</title>
     <style>
         * {
             margin: 0;
@@ -661,6 +660,18 @@
             border: 1px solid var(--neon-lime);
         }
 
+        .badge.healthy {
+            background: rgba(0, 255, 0, 0.2);
+            color: var(--neon-lime);
+            border-color: var(--neon-lime);
+        }
+
+        .badge.warning {
+            background: rgba(255, 200, 0, 0.2);
+            color: #ffc800;
+            border-color: #ffc800;
+        }
+
         footer {
             text-align: center;
             padding: 40px 20px;
@@ -676,6 +687,29 @@
 
         body.atomic-theme footer {
             border-top-color: rgba(184, 230, 0, 0.2);
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(0, 247, 255, 0.1);
+            border-radius: 3px;
+            margin-top: 5px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--neon-cyan), var(--neon-magenta));
+            transition: width 0.3s ease;
+        }
+
+        body.light-theme .progress-fill {
+            background: linear-gradient(90deg, var(--color-blue), var(--color-purple));
+        }
+
+        body.atomic-theme .progress-fill {
+            background: var(--uranium);
         }
 
         @media (max-width: 1024px) {
@@ -717,7 +751,7 @@
             <nav class="header-nav">
                 <a href="index.html" class="nav-link">Home</a>
                 <a href="admin-dashboard.html" class="nav-link">Admin</a>
-                <a href="miners-stats.html" class="nav-link active">Miners</a>
+                <a href="miners-stats.html" class="nav-link">Miners</a>
                 <a href="payment-history.html" class="nav-link">Payouts</a>
                 <a href="pool-info.html" class="nav-link">Info</a>
             </nav>
@@ -729,150 +763,114 @@
     </header>
 
     <div class="container">
-        <h2 class="page-title">Miners Statistics</h2>
+        <h2 class="page-title">System Health</h2>
 
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-label">Total Miners</div>
-                <div class="stat-value">42<span style="font-size: 0.5em;">K</span></div>
+                <div class="stat-label">System Uptime</div>
+                <div class="stat-value">99<span style="font-size: 0.5em;">%</span></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Avg Hashrate</div>
-                <div class="stat-value">57<span style="font-size: 0.5em;">KH/s</span></div>
+                <div class="stat-label">CPU Usage</div>
+                <div class="stat-value">42<span style="font-size: 0.5em;">%</span></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Top Miner</div>
-                <div class="stat-value">428<span style="font-size: 0.5em;">MH/s</span></div>
+                <div class="stat-label">Memory Usage</div>
+                <div class="stat-value">68<span style="font-size: 0.5em;">%</span></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Avg Uptime</div>
-                <div class="stat-value">94<span style="font-size: 0.5em;">%</span></div>
+                <div class="stat-label">Network I/O</div>
+                <div class="stat-value">850<span style="font-size: 0.5em;">MB/s</span></div>
             </div>
         </div>
 
-        <h3 class="section-title">Top 10 Miners by Hashrate</h3>
+        <h3 class="section-title">Node Status</h3>
 
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>Rank</th>
-                    <th>Miner ID</th>
-                    <th>Hashrate</th>
-                    <th>Shares (24h)</th>
+                    <th>Service</th>
                     <th>Status</th>
+                    <th>Uptime</th>
+                    <th>Last Check</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
-                    <td>#1</td>
-                    <td>Miner#0001</td>
-                    <td>428.5 MH/s</td>
-                    <td>45,234</td>
-                    <td><span class="badge">Online</span></td>
+                    <td>Pool Server</td>
+                    <td><span class="badge healthy">Healthy</span></td>
+                    <td>99.8%</td>
+                    <td>2024-05-15 14:32:10</td>
                 </tr>
                 <tr>
-                    <td>#2</td>
-                    <td>Miner#0045</td>
-                    <td>385.2 MH/s</td>
-                    <td>38,901</td>
-                    <td><span class="badge">Online</span></td>
+                    <td>Grin Node (Mainnet)</td>
+                    <td><span class="badge healthy">Healthy</span></td>
+                    <td>99.6%</td>
+                    <td>2024-05-15 14:32:08</td>
                 </tr>
                 <tr>
-                    <td>#3</td>
-                    <td>Miner#0089</td>
-                    <td>342.8 MH/s</td>
-                    <td>34,567</td>
-                    <td><span class="badge">Online</span></td>
+                    <td>Grin Node (Testnet)</td>
+                    <td><span class="badge healthy">Healthy</span></td>
+                    <td>99.7%</td>
+                    <td>2024-05-15 14:32:07</td>
                 </tr>
                 <tr>
-                    <td>#4</td>
-                    <td>Miner#0134</td>
-                    <td>298.3 MH/s</td>
-                    <td>29,834</td>
-                    <td><span class="badge">Online</span></td>
+                    <td>Database Server</td>
+                    <td><span class="badge healthy">Healthy</span></td>
+                    <td>99.9%</td>
+                    <td>2024-05-15 14:32:12</td>
                 </tr>
                 <tr>
-                    <td>#5</td>
-                    <td>Miner#0178</td>
-                    <td>267.9 MH/s</td>
-                    <td>26,745</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#6</td>
-                    <td>Miner#0223</td>
-                    <td>245.6 MH/s</td>
-                    <td>24,501</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#7</td>
-                    <td>Miner#0267</td>
-                    <td>218.4 MH/s</td>
-                    <td>21,834</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#8</td>
-                    <td>Miner#0312</td>
-                    <td>195.7 MH/s</td>
-                    <td>19,567</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#9</td>
-                    <td>Miner#0356</td>
-                    <td>178.2 MH/s</td>
-                    <td>17,834</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#10</td>
-                    <td>Miner#0401</td>
-                    <td>156.9 MH/s</td>
-                    <td>15,678</td>
-                    <td><span class="badge">Online</span></td>
+                    <td>Cache Server</td>
+                    <td><span class="badge warning">Warning</span></td>
+                    <td>98.2%</td>
+                    <td>2024-05-15 14:32:11</td>
                 </tr>
             </tbody>
         </table>
 
-        <h3 class="section-title">Miners Distribution</h3>
+        <h3 class="section-title">Resource Usage</h3>
 
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>Hashrate Range</th>
-                    <th>Miner Count</th>
-                    <th>Percentage</th>
+                    <th>Resource</th>
+                    <th>Current</th>
+                    <th>Average</th>
+                    <th>Peak</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
-                    <td>&gt; 100 MH/s</td>
-                    <td>1,234</td>
-                    <td>2.9%</td>
+                    <td>CPU</td>
+                    <td>42% <div class="progress-bar"><div class="progress-fill" style="width: 42%"></div></div></td>
+                    <td>38%</td>
+                    <td>78%</td>
                 </tr>
                 <tr>
-                    <td>10 - 100 MH/s</td>
-                    <td>12,456</td>
-                    <td>29.6%</td>
+                    <td>Memory</td>
+                    <td>68% <div class="progress-bar"><div class="progress-fill" style="width: 68%"></div></div></td>
+                    <td>65%</td>
+                    <td>85%</td>
                 </tr>
                 <tr>
-                    <td>1 - 10 MH/s</td>
-                    <td>18,901</td>
-                    <td>44.9%</td>
+                    <td>Disk I/O</td>
+                    <td>12% <div class="progress-bar"><div class="progress-fill" style="width: 12%"></div></div></td>
+                    <td>18%</td>
+                    <td>64%</td>
                 </tr>
                 <tr>
-                    <td>&lt; 1 MH/s</td>
-                    <td>9,409</td>
-                    <td>22.4%</td>
+                    <td>Network</td>
+                    <td>34% <div class="progress-bar"><div class="progress-fill" style="width: 34%"></div></div></td>
+                    <td>42%</td>
+                    <td>89%</td>
                 </tr>
             </tbody>
         </table>
     </div>
 
     <footer>
-        <p>Miners Statistics — Mining Pool Analysis | Professional • Reliable • Secure</p>
+        <p>System Health — Mining Pool Monitoring | Professional • Reliable • Secure</p>
     </footer>
 
     <script>

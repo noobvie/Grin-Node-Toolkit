@@ -875,6 +875,7 @@
         <p>Miners Statistics — Mining Pool Analysis | Professional • Reliable • Secure</p>
     </footer>
 
+    <script src="/js/auth.js"></script>
     <script>
         const themeButtons = document.querySelectorAll('.theme-btn');
         const savedTheme = localStorage.getItem('grinium-theme') || 'dark';
@@ -901,6 +902,69 @@
                 btn.classList.toggle('active', btn.dataset.theme === theme);
             });
         }
+
+        // ═════════════════════════════════════════════════════════════════
+        // API Integration: Load miners statistics
+        // ═════════════════════════════════════════════════════════════════
+
+        async function loadMinersStats() {
+            try {
+                const poolData = await Auth.fetch('/api/pool/stats');
+                const minersData = await Auth.fetch('/api/test/miners?limit=10');
+
+                if (!poolData) {
+                    console.error('Failed to fetch pool data');
+                    return;
+                }
+
+                // Update stat cards
+                const statCards = document.querySelectorAll('.stat-card');
+                if (statCards.length >= 4) {
+                    // Total Miners
+                    const totalMiners = poolData.active_miners || 0;
+                    const minersLabel = totalMiners >= 1000 ? (totalMiners / 1000).toFixed(1) + 'K' : totalMiners;
+                    const minersValue = statCards[0].querySelector('.stat-value');
+                    if (minersValue) minersValue.textContent = minersLabel;
+
+                    // Average Hashrate
+                    const avgHashrate = poolData.blocks?.average_hashrate || 0;
+                    const hashrateLabel = avgHashrate >= 1000 ? (avgHashrate / 1000).toFixed(2) + 'M' : avgHashrate.toFixed(2);
+                    const hashrateValue = statCards[1].querySelector('.stat-value');
+                    if (hashrateValue) hashrateValue.innerHTML = hashrateLabel + '<span style="font-size: 0.5em;">GPS</span>';
+
+                    // Top Miner
+                    const topMiner = minersData && minersData.length > 0 ? minersData[0].grin_address.substring(0, 8) + '...' : 'N/A';
+                    const topMinerValue = statCards[2].querySelector('.stat-value');
+                    if (topMinerValue) topMinerValue.textContent = topMiner;
+
+                    // Average Uptime
+                    const uptimeValue = statCards[3].querySelector('.stat-value');
+                    if (uptimeValue) uptimeValue.innerHTML = '98<span style="font-size: 0.5em;">%</span>';
+                }
+
+                // Update top miners table
+                const minersTbody = document.querySelectorAll('table tbody')[0];
+                if (minersTbody && minersData && minersData.length > 0) {
+                    minersTbody.innerHTML = minersData.map((miner, idx) => `
+                        <tr>
+                            <td>${idx + 1}</td>
+                            <td>${miner.grin_address}</td>
+                            <td>${(miner.balance || 0).toFixed(2)}</td>
+                            <td>N/A</td>
+                            <td><span class="badge badge-online">Online</span></td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (error) {
+                console.error('Error loading miners stats:', error);
+            }
+        }
+
+        // Load on page ready
+        document.addEventListener('DOMContentLoaded', loadMinersStats);
+
+        // Refresh every 60 seconds
+        setInterval(loadMinersStats, 60000);
     </script>
 </body>
 </html>

@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Miners Statistics — Mining Pool</title>
-    <link rel="stylesheet" href="admin-dashboard.html">
+    <title>Payment History — Mining Pool</title>
     <style>
         * {
             margin: 0;
@@ -661,6 +660,18 @@
             border: 1px solid var(--neon-lime);
         }
 
+        .badge.completed {
+            background: rgba(0, 255, 0, 0.2);
+            color: var(--neon-lime);
+            border-color: var(--neon-lime);
+        }
+
+        .badge.pending {
+            background: rgba(255, 200, 0, 0.2);
+            color: #ffc800;
+            border-color: #ffc800;
+        }
+
         footer {
             text-align: center;
             padding: 40px 20px;
@@ -717,8 +728,8 @@
             <nav class="header-nav">
                 <a href="index.html" class="nav-link">Home</a>
                 <a href="admin-dashboard.html" class="nav-link">Admin</a>
-                <a href="miners-stats.html" class="nav-link active">Miners</a>
-                <a href="payment-history.html" class="nav-link">Payouts</a>
+                <a href="miners-stats.html" class="nav-link">Miners</a>
+                <a href="payment-history.html" class="nav-link active">Payouts</a>
                 <a href="pool-info.html" class="nav-link">Info</a>
             </nav>
             <div class="header-buttons">
@@ -729,152 +740,123 @@
     </header>
 
     <div class="container">
-        <h2 class="page-title">Miners Statistics</h2>
+        <h2 class="page-title">Payment History</h2>
 
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-label">Total Miners</div>
-                <div class="stat-value">42<span style="font-size: 0.5em;">K</span></div>
+                <div class="stat-label">Total Paid</div>
+                <div class="stat-value">1,234<span style="font-size: 0.5em;">K GRIN</span></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Avg Hashrate</div>
-                <div class="stat-value">57<span style="font-size: 0.5em;">KH/s</span></div>
+                <div class="stat-label">Last Payout</div>
+                <div class="stat-value">42<span style="font-size: 0.5em;">GRIN</span></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Top Miner</div>
-                <div class="stat-value">428<span style="font-size: 0.5em;">MH/s</span></div>
+                <div class="stat-label">Next Payout</div>
+                <div class="stat-value">2<span style="font-size: 0.5em;">h</span></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Avg Uptime</div>
-                <div class="stat-value">94<span style="font-size: 0.5em;">%</span></div>
+                <div class="stat-label">Avg Payout</div>
+                <div class="stat-value">35<span style="font-size: 0.5em;">GRIN</span></div>
             </div>
         </div>
 
-        <h3 class="section-title">Top 10 Miners by Hashrate</h3>
+        <h3 class="section-title">Recent Payouts (Last 30 Days)</h3>
 
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>Rank</th>
-                    <th>Miner ID</th>
-                    <th>Hashrate</th>
-                    <th>Shares (24h)</th>
+                    <th>Date & Time</th>
+                    <th>Amount</th>
+                    <th>Transaction Hash</th>
                     <th>Status</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
-                    <td>#1</td>
-                    <td>Miner#0001</td>
-                    <td>428.5 MH/s</td>
-                    <td>45,234</td>
-                    <td><span class="badge">Online</span></td>
+                    <td>2024-05-15 12:45:32</td>
+                    <td>42.15 GRIN</td>
+                    <td>0x8f2a1b4c...9e7d5f3a</td>
+                    <td><span class="badge completed">Completed</span></td>
                 </tr>
                 <tr>
-                    <td>#2</td>
-                    <td>Miner#0045</td>
-                    <td>385.2 MH/s</td>
-                    <td>38,901</td>
-                    <td><span class="badge">Online</span></td>
+                    <td>2024-05-14 18:23:15</td>
+                    <td>38.92 GRIN</td>
+                    <td>0x4a3b8c2e...1f9d7e5b</td>
+                    <td><span class="badge completed">Completed</span></td>
                 </tr>
                 <tr>
-                    <td>#3</td>
-                    <td>Miner#0089</td>
-                    <td>342.8 MH/s</td>
-                    <td>34,567</td>
-                    <td><span class="badge">Online</span></td>
+                    <td>2024-05-14 06:12:48</td>
+                    <td>35.67 GRIN</td>
+                    <td>0x2e9f7d3a...6c4b1a8f</td>
+                    <td><span class="badge completed">Completed</span></td>
                 </tr>
                 <tr>
-                    <td>#4</td>
-                    <td>Miner#0134</td>
-                    <td>298.3 MH/s</td>
-                    <td>29,834</td>
-                    <td><span class="badge">Online</span></td>
+                    <td>2024-05-13 15:34:01</td>
+                    <td>41.23 GRIN</td>
+                    <td>0x9c1d5f2b...3e8a7c4d</td>
+                    <td><span class="badge completed">Completed</span></td>
                 </tr>
                 <tr>
-                    <td>#5</td>
-                    <td>Miner#0178</td>
-                    <td>267.9 MH/s</td>
-                    <td>26,745</td>
-                    <td><span class="badge">Online</span></td>
+                    <td>2024-05-13 03:21:17</td>
+                    <td>39.45 GRIN</td>
+                    <td>0x5a7b9e2f...8d1c3f6a</td>
+                    <td><span class="badge completed">Completed</span></td>
                 </tr>
                 <tr>
-                    <td>#6</td>
-                    <td>Miner#0223</td>
-                    <td>245.6 MH/s</td>
-                    <td>24,501</td>
-                    <td><span class="badge">Online</span></td>
+                    <td>2024-05-12 14:55:42</td>
+                    <td>36.78 GRIN</td>
+                    <td>0x3d6f8a1c...7e2b9f5d</td>
+                    <td><span class="badge completed">Completed</span></td>
                 </tr>
                 <tr>
-                    <td>#7</td>
-                    <td>Miner#0267</td>
-                    <td>218.4 MH/s</td>
-                    <td>21,834</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#8</td>
-                    <td>Miner#0312</td>
-                    <td>195.7 MH/s</td>
-                    <td>19,567</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#9</td>
-                    <td>Miner#0356</td>
-                    <td>178.2 MH/s</td>
-                    <td>17,834</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#10</td>
-                    <td>Miner#0401</td>
-                    <td>156.9 MH/s</td>
-                    <td>15,678</td>
-                    <td><span class="badge">Online</span></td>
+                    <td>2024-05-12 02:11:29</td>
+                    <td>40.12 GRIN</td>
+                    <td>0x7f4a2d9b...1e5c8a3f</td>
+                    <td><span class="badge completed">Completed</span></td>
                 </tr>
             </tbody>
         </table>
 
-        <h3 class="section-title">Miners Distribution</h3>
+        <h3 class="section-title">Payout Summary</h3>
 
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>Hashrate Range</th>
-                    <th>Miner Count</th>
-                    <th>Percentage</th>
+                    <th>Period</th>
+                    <th>Payouts</th>
+                    <th>Total Amount</th>
+                    <th>Status</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
-                    <td>&gt; 100 MH/s</td>
-                    <td>1,234</td>
-                    <td>2.9%</td>
+                    <td>This Week</td>
+                    <td>28</td>
+                    <td>978.45 GRIN</td>
+                    <td><span class="badge completed">Complete</span></td>
                 </tr>
                 <tr>
-                    <td>10 - 100 MH/s</td>
-                    <td>12,456</td>
-                    <td>29.6%</td>
+                    <td>Last Week</td>
+                    <td>32</td>
+                    <td>1,124.67 GRIN</td>
+                    <td><span class="badge completed">Complete</span></td>
                 </tr>
                 <tr>
-                    <td>1 - 10 MH/s</td>
-                    <td>18,901</td>
-                    <td>44.9%</td>
-                </tr>
-                <tr>
-                    <td>&lt; 1 MH/s</td>
-                    <td>9,409</td>
-                    <td>22.4%</td>
+                    <td>This Month</td>
+                    <td>120</td>
+                    <td>4,256.89 GRIN</td>
+                    <td><span class="badge completed">Complete</span></td>
                 </tr>
             </tbody>
         </table>
     </div>
 
     <footer>
-        <p>Miners Statistics — Mining Pool Analysis | Professional • Reliable • Secure</p>
+        <p>Payment History — Mining Pool Transactions | Professional • Reliable • Secure</p>
     </footer>
 
+    <script src="/js/auth.js"></script>
     <script>
         const themeButtons = document.querySelectorAll('.theme-btn');
         const savedTheme = localStorage.getItem('grinium-theme') || 'dark';
@@ -901,6 +883,64 @@
                 btn.classList.toggle('active', btn.dataset.theme === theme);
             });
         }
+
+        // ═════════════════════════════════════════════════════════════════
+        // API Integration: Load payment history
+        // ═════════════════════════════════════════════════════════════════
+
+        async function loadPaymentHistory() {
+            try {
+                const data = await Auth.fetch('/api/admin/withdrawals');
+                if (!data) {
+                    console.error('Failed to fetch withdrawal data');
+                    return;
+                }
+
+                // Update stat cards (placeholder values)
+                const statCards = document.querySelectorAll('.stat-card');
+                if (statCards.length >= 4) {
+                    // Total Paid
+                    const totalPaid = (data.reduce((sum, w) => sum + (w.amount || 0), 0)).toFixed(2);
+                    const totalValue = statCards[0].querySelector('.stat-value');
+                    if (totalValue) totalValue.innerHTML = totalPaid + '<span style="font-size: 0.5em;"> GRIN</span>';
+
+                    // Last Payout
+                    const lastPayout = data.length > 0 ? new Date(data[0].created_at).toLocaleDateString() : 'Never';
+                    const lastValue = statCards[1].querySelector('.stat-value');
+                    if (lastValue) lastValue.textContent = lastPayout;
+
+                    // Next Payout
+                    const nextValue = statCards[2].querySelector('.stat-value');
+                    if (nextValue) nextValue.textContent = 'In 24h';
+
+                    // Avg Payout
+                    const avgPayout = data.length > 0 ? (totalPaid / data.length).toFixed(2) : '0.00';
+                    const avgValue = statCards[3].querySelector('.stat-value');
+                    if (avgValue) avgValue.innerHTML = avgPayout + '<span style="font-size: 0.5em;"> GRIN</span>';
+                }
+
+                // Update payment history table
+                const payoutTbody = document.querySelectorAll('table tbody')[0];
+                if (payoutTbody && data.length > 0) {
+                    payoutTbody.innerHTML = data.slice(0, 20).map(w => `
+                        <tr>
+                            <td>${new Date(w.created_at).toLocaleString()}</td>
+                            <td>${w.amount.toFixed(2)} GRIN</td>
+                            <td>${w.tx_hash || 'pending'}</td>
+                            <td><span class="status-badge ${w.status === 'confirmed' ? 'status-active' : 'status-inactive'}">${w.status}</span></td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (error) {
+                console.error('Error loading payment history:', error);
+            }
+        }
+
+        // Load on page ready
+        document.addEventListener('DOMContentLoaded', loadPaymentHistory);
+
+        // Refresh every 60 seconds
+        setInterval(loadPaymentHistory, 60000);
     </script>
 </body>
 </html>

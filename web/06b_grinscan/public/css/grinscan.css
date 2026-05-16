@@ -1077,6 +1077,12 @@ a:hover { text-decoration: underline; }
 @media (max-width: 900px) {
   .gs-stats-grid { grid-template-columns: repeat(2, 1fr); }
   .gs-info-stats-grid { grid-template-columns: repeat(2, 1fr); }
+  /* Left-column cards: tooltip would overflow left edge — open rightward instead */
+  .gs-stats-grid .gs-stat-card:nth-child(odd) .gs-info::after {
+    right: auto;
+    left: 0;
+    width: min(210px, calc(50vw - 4px));
+  }
 }
 @media (max-width: 600px) {
   .gs-stats-grid { grid-template-columns: repeat(2, 1fr); }

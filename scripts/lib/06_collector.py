@@ -94,8 +94,11 @@ PEER_RETENTION_DAYS = 30
 # How many days back to include in peers.json (must match ACTIVE_WINDOW_SEC in map.html)
 PEER_HISTORY_DAYS   = 7
 
-# Standard Grin P2P ports — only accept peers advertising these ports.
-# get_peers returns ALL gossip-discovered IPs; non-standard ports are not Grin nodes.
+# Standard Grin P2P ports.
+# Testnet: used as a strict filter (all testnet nodes run on 13414).
+# Mainnet: used only as the default when addr has no port; no port filter applied
+#          (MW/Grim and some MW/Grin nodes listen on non-standard ports — user-agent
+#          is the gate for mainnet instead).
 MAINNET_P2P_PORT = "3414"
 TESTNET_P2P_PORT = "13414"
 
@@ -697,15 +700,36 @@ def _is_valid_grin_agent(ua):
     return "mw/grin" in ua_lower or "grin++" in ua_lower or "mw/grim" in ua_lower or "g++ wiesche" in ua_lower
 
 
+def _nat64_to_ipv4(ip):
+    """Decode a NAT64 well-known prefix address (64:ff9b::/96, RFC 6052) to plain IPv4.
+    e.g. 64:ff9b::b9b1:dbb9 → 185.177.219.185. Returns None if not a NAT64 address."""
+    if not ip.lower().startswith("64:ff9b::"):
+        return None
+    suffix = ip.split("::")[-1]   # e.g. "b9b1:dbb9"
+    parts  = suffix.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        hi = int(parts[0], 16)
+        lo = int(parts[1], 16)
+        return f"{hi >> 8}.{hi & 0xff}.{lo >> 8}.{lo & 0xff}"
+    except ValueError:
+        return None
+
+
 def _extract_addr(peer, default_port):
     """Split a Grin peer dict's addr field into (ip, port).
-    Strips ::ffff: prefix from IPv4-mapped IPv6 addresses so they are stored
-    and counted as IPv4 — preventing duplicate entries for dual-stack nodes."""
+    Strips ::ffff: (IPv4-mapped) and decodes 64:ff9b:: (NAT64) prefixes so
+    those addresses are stored and geolocated as plain IPv4."""
     addr = peer.get("addr", "")
     ip   = addr.rsplit(":", 1)[0].strip("[]")
     port = addr.rsplit(":", 1)[-1] if ":" in addr else default_port
     if ip.lower().startswith("::ffff:"):
         ip = ip[7:]
+    else:
+        decoded = _nat64_to_ipv4(ip)
+        if decoded:
+            ip = decoded
     return ip, port
 
 
@@ -750,6 +774,10 @@ def _fetch_connected_peers(owner_url, secret, network_label):
     Fetch CURRENTLY CONNECTED peers via get_connected_peers (owner API, auth required).
     These peers have an active TCP session — guaranteed to be alive right now.
     Typically returns 8–30 peers; used as the authoritative source for peers.json.
+
+    Mainnet: no port filter (MW/Grim and some MW/Grin nodes use non-standard ports);
+             user-agent filter is the gate — only known Grin implementations accepted.
+    Testnet: standard port 13414 filter kept (all testnet nodes use it consistently).
     """
     expected_port = MAINNET_P2P_PORT if network_label == "mainnet" else TESTNET_P2P_PORT
     peer_list = []
@@ -758,14 +786,13 @@ def _fetch_connected_peers(owner_url, secret, network_label):
         if raw:
             for p in raw:
                 ip, port = _extract_addr(p, expected_port)
-                if port != expected_port or not _is_public_ip(ip):
+                if not _is_public_ip(ip):
+                    continue
+                if network_label == "testnet" and port != expected_port:
                     continue
                 ua = p.get("user_agent", "") or ""
-                # Active TCP connections with an unrecognised agent are still real nodes —
-                # store as "Unknown" so they appear in stats rather than being silently dropped.
-                # Routing-table peers (get_peers) keep the strict _is_valid_grin_agent filter.
                 if not _is_valid_grin_agent(ua):
-                    ua = "Unknown"
+                    continue
                 peer_list.append({
                     "ip":         ip,
                     "port":       port,
@@ -773,7 +800,8 @@ def _fetch_connected_peers(owner_url, secret, network_label):
                     "direction":  p.get("direction", "Outbound"),
                     "network":    network_label,
                 })
-        print(f"[INFO] {network_label}: {len(peer_list)} currently connected peers (port {expected_port}).")
+        port_info = f"port {expected_port}" if network_label == "testnet" else "any port"
+        print(f"[INFO] {network_label}: {len(peer_list)} currently connected peers ({port_info}).")
     except Exception as exc:
         print(f"[WARN] {network_label} get_connected_peers failed: {exc}", file=sys.stderr)
     return peer_list
@@ -782,9 +810,9 @@ def _fetch_connected_peers(owner_url, secret, network_label):
 def _fetch_all_peers_from_node(owner_url, secret, network_label):
     """
     Query the owner API get_peers filtered to Healthy flag only.
-    Returns a larger set than get_connected_peers — used for version stats AND
-    as a secondary map source (routing-table peers seen within PEER_HISTORY_DAYS).
-    Standard P2P port filter applied to exclude gossip-only routing-table noise.
+    Returns a larger set than get_connected_peers — used for version stats.
+    Mainnet: no port filter (nodes run on various ports); user-agent is the gate.
+    Testnet: standard port 13414 filter kept.
     """
     expected_port = MAINNET_P2P_PORT if network_label == "mainnet" else TESTNET_P2P_PORT
     peer_list = []
@@ -801,7 +829,7 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
                     skipped_flag += 1
                     continue
                 ip, port = _extract_addr(p, expected_port)
-                if port != expected_port:
+                if network_label == "testnet" and port != expected_port:
                     skipped_port += 1
                     continue
                 if not _is_public_ip(ip):
@@ -822,8 +850,9 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
                     "network":    network_label,
                     "last_seen":  last_seen_ts,
                 })
+            port_skipped = f", {skipped_port} wrong-port" if network_label == "testnet" else ""
             print(f"[INFO] {network_label}: {len(peer_list)} healthy peers for stats "
-                  f"(skipped {skipped_flag} non-Healthy, {skipped_port} wrong-port, "
+                  f"(skipped {skipped_flag} non-Healthy{port_skipped}, "
                   f"{skipped_agent} unknown-agent).")
     except Exception as exc:
         print(f"[WARN] {network_label} owner API get_peers failed: {exc}", file=sys.stderr)

@@ -1,30 +1,50 @@
 #!/bin/bash
 # =============================================================================
-# 07_grin_mining_services.sh - Grin Mining Services & Pool Web Interface
+# 07_grin_mining_services.sh - Grin Mining Services & Pool Deployment
 # =============================================================================
-# v2: Menu reorganized — stratum split by network, pool web interface added.
+# Toolkit for deploying user-owned Grin mining pools.
+# Configuration-driven: users customize via admin web interface, not bash.
 #
-# ─── Overview ─────────────────────────────────────────────────────────────────
-#   · A) Node Status        (running nodes, tmux sessions, binary path)
-#   · H) Mining Status      (ports, connected miners, toml values)
+# ─── System Overview ──────────────────────────────────────────────────────────
+#   · A) Node Status        (running nodes, tmux sessions, binary paths)
+#   · H) Mining Status      (stratum ports, connected miners, config values)
 #
-# ─── Mainnet Stratum (port 3416) ──────────────────────────────────────────────
-#   · B) Setup Stratum      (enable_stratum_server, wallet_listener_url)
-#   · C) Configure Stratum  (wallet URL, burn_reward, toggle enable)
-#   · D) Publish Stratum    (0.0.0.0:3416 + firewall — open to miners)
-#   · E) Restrict Stratum   (revert to 127.0.0.1:3416)
+# ─── MAINNET: Production Mining Pool ──────────────────────────────────────────
+#   · B) Setup Stratum      (enable stratum in grin-server.toml)
+#   · C) Configure Stratum  (wallet URL, burn_reward, etc)
+#   · D) Publish Stratum    (0.0.0.0:3416 — open to miners globally)
+#   · E) Restrict Stratum   (127.0.0.1:3416 — localhost only)
+#   · W) Pool Web Interface (guided setup + admin dashboard for configuration)
+#        Submenu options:
+#          G) Guided Full Setup   (runs 1→2→3→4→5→6 in sequence)
+#          1) Install deps        (python3, fastapi, systemd, nginx)
+#          2) Configure           (pool name, fees, min withdrawal, wallet dir)
+#          3) Deploy web          (frontend files to /var/www/grin-pool)
+#          4) Setup nginx         (SSL cert, rate limits, security headers)
+#          5) Create admin user   (first admin account)
+#          6) Service control     (start/stop/restart)
+#          7) Status              (service state, DB size, logs)
+#          B) Backup              (DB + config → /opt/grin/backups/)
+#          C) Cron schedules      (daily backup, weekly VACUUM)
+#          L) View logs           (tail service logs)
+#          S) Edit config         (manual JSON config edit)
+#          DEL) Reset DB          (⚠ wipe all data)
 #
-# ─── Testnet Stratum (port 13416) ─────────────────────────────────────────────
-#   · F) Setup Stratum      (enable_stratum_server, wallet_listener_url)
-#   · G) Configure Stratum  (wallet URL, burn_reward, toggle enable)
-#   · I) Publish Stratum    (0.0.0.0:13416 + firewall — open to miners)
-#   · J) Restrict Stratum   (revert to 127.0.0.1:13416)
+# ─── TESTNET: Development Stratum Only ────────────────────────────────────────
+#   · F) Setup Stratum      (enable stratum in grin-server.toml)
+#   · G) Configure Stratum  (wallet URL, burn_reward, etc)
+#   · I) Publish Stratum    (0.0.0.0:13416 — for local lab networks)
+#   · J) Restrict Stratum   (127.0.0.1:13416 — single machine)
+#   · ✓ NO web interface for testnet (CLI config only, for testing)
 #
-# ─── Pool Web Interface ───────────────────────────────────────────────────────
-#   · W) Pool Web Interface (FastAPI app — mainnet port 3002 / testnet 3003)
-#        Submenu: 0) Guided setup  1) Install  2) Configure  3) Deploy web
-#                 4) nginx  5) Admin account  6) Start/Stop  7) Status
-#                 B) Backup  C) Cron schedules  U) Update  L) Logs  DEL) Reset
+# ─── How It Works ─────────────────────────────────────────────────────────────
+#   1. User clones your pool source code
+#   2. SSH into VPS, run: ./grin-node-toolkit.sh → 7 → W → G (guided setup)
+#   3. Script deploys pool, sets up systemd + nginx + SSL
+#   4. Pool starts listening on port 3002 (or custom)
+#   5. User logs in to admin UI, configures: pool name, fees, wallet, thresholds
+#   6. Miners point hashrate at :3416, stratum routes to pool
+#   7. Pool auto-pays winners via Tor to their Grin addresses
 # =============================================================================
 
 set -euo pipefail
@@ -50,8 +70,8 @@ LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/grin_mining_$(date +%Y%m%d_%H%M%S).log"
 
 # ─── Pool Web Interface constants ─────────────────────────────────────────────
-POOL_APP_SRC="$TOOLKIT_ROOT/web/07_pool/pool-manager"
-POOL_WEB_SRC="$TOOLKIT_ROOT/web/07_pool/public_html"
+POOL_APP_SRC="$TOOLKIT_ROOT/web/07_mining_pool/back-end-pool"
+POOL_WEB_SRC="$TOOLKIT_ROOT/web/07_mining_pool/public_html"
 POOL_CONF_MAINNET="/opt/grin/conf/grin_pool.json"
 POOL_CONF_TESTNET="/opt/grin/conf/grin_pool_testnet.json"
 POOL_APP_DIR_MAINNET="/opt/grin/pool/mainnet"
@@ -951,7 +971,7 @@ pool_install() {
     # Check source
     if [[ ! -d "$POOL_APP_SRC" ]]; then
         error "Pool app source not found: $POOL_APP_SRC"
-        error "Ensure web/07_pool/pool-manager/ exists in the toolkit directory."
+        error "Ensure web/07_mining_pool/back-end-pool/ exists in the toolkit directory."
         return 1
     fi
 
@@ -1479,39 +1499,39 @@ _pool_menu_status_line() {
 }
 
 pool_menu() {
+    # Note: This is mainnet-only now. Testnet uses stratum only (no web interface).
     local net="$1"
     _pool_vars "$net"
-    local label="Mainnet"; [[ "$net" == "testnet" ]] && label="Testnet"
 
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  W) Pool Web Interface — $label${RESET}"
+        echo -e "${BOLD}${CYAN}  W) Pool Web Interface — Mainnet${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
         echo -e "  Service: $(_pool_menu_status_line "$net")"
         echo ""
         echo -e "${DIM}  ─── First-Time Setup ────────────────────────────${RESET}"
-        echo -e "  ${GREEN}0${RESET}) Guided Full Setup    ${DIM}(runs 1→2→3→4→5→6)${RESET}"
+        echo -e "  ${GREEN}G${RESET}) Guided Full Setup    ${DIM}(runs all setup steps 1→6)${RESET}"
         echo ""
-        echo -e "${DIM}  ─── Install & Configure ──────────────────────────${RESET}"
+        echo -e "${DIM}  ─── Manual Setup Steps ───────────────────────────${RESET}"
         echo -e "  ${GREEN}1${RESET}) Install dependencies ${DIM}(python3, pip, fastapi, uvicorn)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Configure pool       ${DIM}(name, domain, fee, wallet)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Deploy web files     ${DIM}(→ $POOL_WEB_DIR)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Configure pool       ${DIM}(name, domain, fee %, wallet dir)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Deploy web files     ${DIM}(frontend → $POOL_WEB_DIR)${RESET}"
         echo -e "  ${GREEN}4${RESET}) Setup nginx          ${DIM}(vhost + SSL + rate limits)${RESET}"
-        echo -e "  ${GREEN}5${RESET}) Setup admin account  ${DIM}(create first admin user)${RESET}"
-        echo -e "  ${GREEN}6${RESET}) Start / Stop service ${DIM}($POOL_SERVICE)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Create admin user    ${DIM}(first admin account)${RESET}"
+        echo -e "  ${GREEN}6${RESET}) Service control      ${DIM}(start / stop service)${RESET}"
         echo ""
-        echo -e "${DIM}  ─── Maintenance ──────────────────────────────────${RESET}"
+        echo -e "${DIM}  ─── Administration ───────────────────────────────${RESET}"
         echo -e "  ${GREEN}7${RESET}) Pool status          ${DIM}(service, port, DB, recent logs)${RESET}"
-        echo -e "  ${GREEN}B${RESET}) Backup now           ${DIM}(DB + config → /opt/grin/backups/)${RESET}"
-        echo -e "  ${GREEN}C${RESET}) Cron schedules       ${DIM}(toggle daily backup + weekly VACUUM)${RESET}"
-        echo -e "  ${GREEN}L${RESET}) View logs            ${DIM}(tail -n 50 | less)${RESET}"
+        echo -e "  ${GREEN}B${RESET}) Backup pool          ${DIM}(DB + config → /opt/grin/backups/)${RESET}"
+        echo -e "  ${GREEN}C${RESET}) Cron tasks           ${DIM}(backup schedule, VACUUM)${RESET}"
+        echo -e "  ${GREEN}L${RESET}) View logs            ${DIM}(tail -50 | less)${RESET}"
+        echo -e "  ${GREEN}S${RESET}) Edit config          ${DIM}(${POOL_CONF})${RESET}"
         echo ""
         echo -e "${DIM}  ─── Danger Zone ──────────────────────────────────${RESET}"
-        echo -e "  ${RED}DEL${RESET}) Reset database   ${DIM}(triple-confirm wipe)${RESET}"
+        echo -e "  ${RED}DEL${RESET}) Reset database    ${DIM}(⚠ permanently wipes all data)${RESET}"
         echo ""
-        echo -e "  ${DIM}s) Edit saved settings  ($POOL_CONF)${RESET}"
         echo -e "  ${RED}0) Back${RESET} to mining services menu"
         echo ""
         echo -ne "${BOLD}Select: ${RESET}"
@@ -1519,7 +1539,7 @@ pool_menu() {
 
         case "${choice,,}" in
             "")    continue ;;
-            0)     pool_guided_setup "$net" ;;
+            g)     pool_guided_setup "$net" ;;
             1)     pool_install "$net" ;;
             2)     pool_configure "$net" ;;
             3)     pool_deploy_web "$net" ;;
@@ -1530,9 +1550,9 @@ pool_menu() {
             b)     pool_backup "$net" ;;
             c)     pool_cron_schedules "$net" ;;
             l)     pool_view_logs "$net" ;;
-            del)   pool_reset_db "$net" ;;
             s)     ${EDITOR:-nano} "$POOL_CONF" ;;
-            back|q) break ;;
+            del)   pool_reset_db "$net" ;;
+            0|back|q) break ;;
             *)     warn "Invalid option." ; sleep 1 ; continue ;;
         esac
 
@@ -1547,26 +1567,23 @@ pool_menu() {
 pool_web_interface() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  W) Pool Web Interface${RESET}"
+    echo -e "${BOLD}${CYAN}  W) Pool Web Interface — Mainnet Only${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-
-    local mn_status tn_status
-    mn_status=$(_pool_menu_status_line mainnet)
-    tn_status=$(_pool_menu_status_line testnet)
-
-    echo -e "  ${GREEN}1${RESET}) Mainnet pool  ${DIM}(port $POOL_PORT_MAINNET / $POOL_SERVICE_MAINNET)${RESET}  $mn_status"
-    echo -e "  ${GREEN}2${RESET}) Testnet pool  ${DIM}(port $POOL_PORT_TESTNET / $POOL_SERVICE_TESTNET)${RESET}  $tn_status"
-    echo -e "  ${DIM}0) Cancel${RESET}"
+    echo -e "  ${DIM}ℹ Testnet: use Stratum only (F/G/I/J). No public web interface for testnet.${RESET}"
     echo ""
-    echo -ne "Select network [1/2/0]: "
-    read -r net_choice
 
-    case "$net_choice" in
-        1) pool_menu mainnet ;;
-        2) pool_menu testnet ;;
+    local mn_status
+    mn_status=$(_pool_menu_status_line mainnet)
+
+    echo -e "  Mainnet pool  ${DIM}(port $POOL_PORT_MAINNET / $POOL_SERVICE_MAINNET)${RESET}  $mn_status"
+    echo ""
+    echo -ne "Enter to proceed, 0 to cancel: "
+    read -r proceed
+
+    case "$proceed" in
         0|"") return ;;
-        *) warn "Invalid choice." ;;
+        *) pool_menu mainnet ;;
     esac
 }
 
@@ -1582,29 +1599,28 @@ show_menu() {
     echo ""
     show_compact_status
 
-    echo -e "${DIM}  ─── Overview ────────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}A${RESET}) Node Status          ${DIM}(running nodes, tmux, binary)${RESET}"
-    echo -e "  ${GREEN}H${RESET}) Mining Status        ${DIM}(ports, miners connected, toml)${RESET}"
+    echo -e "${DIM}  ─── System Status ───────────────────────────────${RESET}"
+    echo -e "  ${GREEN}A${RESET}) Node Status          ${DIM}(which nodes running, tmux, binary)${RESET}"
+    echo -e "  ${GREEN}H${RESET}) Mining Status        ${DIM}(ports, miners connected, config)${RESET}"
     echo ""
-    echo -e "${DIM}  ─── Mainnet Stratum (port $STRATUM_PORT_MAINNET) ────────────────${RESET}"
-    echo -e "  ${GREEN}B${RESET}) Setup Stratum        ${DIM}(enable server, set wallet URL)${RESET}"
-    echo -e "  ${GREEN}C${RESET}) Configure Stratum    ${DIM}(wallet URL, burn_reward, toggle)${RESET}"
-    echo -e "  ${GREEN}D${RESET}) Publish Stratum      ${DIM}(0.0.0.0:$STRATUM_PORT_MAINNET — open to miners)${RESET}"
-    echo -e "  ${RED}E${RESET}) Restrict Stratum     ${DIM}(revert to 127.0.0.1:$STRATUM_PORT_MAINNET)${RESET}"
+    echo -e "${DIM}  ─── MAINNET: Full Pool Setup (production) ────────${RESET}"
+    echo -e "  ${GREEN}B${RESET}) Setup Stratum        ${DIM}(enable stratum in node config)${RESET}"
+    echo -e "  ${GREEN}C${RESET}) Configure Stratum    ${DIM}(wallet URL, burn_reward, etc)${RESET}"
+    echo -e "  ${GREEN}D${RESET}) Publish Stratum      ${DIM}(open :$STRATUM_PORT_MAINNET to miners)${RESET}"
+    echo -e "  ${RED}E${RESET}) Restrict Stratum     ${DIM}(revert to localhost)${RESET}"
+    echo -e "  ${GREEN}W${RESET}) Pool Web Interface   ${DIM}(admin dashboard, stratum mgmt, payouts)${RESET}"
     echo ""
-    echo -e "${DIM}  ─── Testnet Stratum (port $STRATUM_PORT_TESTNET) ───────────────${RESET}"
-    echo -e "  ${GREEN}F${RESET}) Setup Stratum        ${DIM}(enable server, set wallet URL)${RESET}"
-    echo -e "  ${GREEN}G${RESET}) Configure Stratum    ${DIM}(wallet URL, burn_reward, toggle)${RESET}"
-    echo -e "  ${GREEN}I${RESET}) Publish Stratum      ${DIM}(0.0.0.0:$STRATUM_PORT_TESTNET — open to miners)${RESET}"
-    echo -e "  ${RED}J${RESET}) Restrict Stratum     ${DIM}(revert to 127.0.0.1:$STRATUM_PORT_TESTNET)${RESET}"
-    echo ""
-    echo -e "${DIM}  ─── Pool Web Interface ──────────────────────────${RESET}"
-    echo -e "  ${GREEN}W${RESET}) Pool Web Interface   ${DIM}(FastAPI — mainnet :3002 / testnet :3003)${RESET}"
+    echo -e "${DIM}  ─── TESTNET: Stratum Only (local development) ───${RESET}"
+    echo -e "  ${GREEN}F${RESET}) Setup Stratum        ${DIM}(enable stratum in node config)${RESET}"
+    echo -e "  ${GREEN}G${RESET}) Configure Stratum    ${DIM}(wallet URL, burn_reward, etc)${RESET}"
+    echo -e "  ${GREEN}I${RESET}) Publish Stratum      ${DIM}(open :$STRATUM_PORT_TESTNET for local lab)${RESET}"
+    echo -e "  ${RED}J${RESET}) Restrict Stratum     ${DIM}(revert to localhost)${RESET}"
+    echo -e "  ${DIM}✓ No web interface for testnet (use for testing only)${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [A-J/W/0]: ${RESET}"
+    echo -ne "${BOLD}Select [A/H/B-E/W/F-J/0]: ${RESET}"
 }
 
 main() {

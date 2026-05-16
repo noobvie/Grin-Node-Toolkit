@@ -196,6 +196,106 @@ hashrateGps = perBlockDiff * 42 / dt / 16384;          // dt = actual seconds
 hashrate_gps = row.difficulty * 42 / 60 / 16384;
 ```
 
+## Nginx Configuration — Naming & Conflict Prevention
+
+**Critical:** Nginx config files from multiple scripts can conflict if they define
+the same zones, upstreams, or directives in the same context (http/server/location).
+Nginx loads ALL files in `/etc/nginx/conf.d/*.conf` into the http context — if two
+scripts define the same `limit_req_zone` with different names or rates, nginx errors.
+
+### Naming Convention
+- **Shared zones** (used by multiple scripts): Defined ONCE by the authoritative script.
+  - Example: Script 06 defines `limit_req_zone "grin_api"` in `/etc/nginx/conf.d/grin-rate-limit.conf`
+  - Other scripts (04, 07, etc.) must NOT redefine it — they only use it via `limit_req zone=grin_api`
+- **Script-specific configs**: Name with script prefix to avoid collisions.
+  - Script 04: `/etc/nginx/conf.d/script04-node-api.conf`
+  - Script 07: `/etc/nginx/conf.d/script07-pool.conf`
+  - Script 052: `/etc/nginx/snippets/script052-drop.conf` (for location blocks)
+
+### Rules
+1. **One script owns each shared resource.** If Script 06 defines `grin_api` zone, no other
+   script should redefine it. If Script 04 needs it, use it — don't declare it again.
+2. **Zones must have unique names across the entire nginx config.** Before adding a new zone,
+   grep the entire codebase to ensure no other script uses that name.
+3. **Check before writing:** Before creating a conf file, verify:
+   ```bash
+   grep -r "zone=name_here" scripts/ lib/  # Check if zone exists elsewhere
+   grep -r "/etc/nginx/conf.d/your-name.conf" scripts/  # Check if file path is unique
+   ```
+4. **Test syntax after changes:**
+   ```bash
+   nginx -t  # Always run before systemctl reload
+   ```
+
+### Example: Avoiding Duplicates (Script 04 ↔ Script 06)
+**BAD (causes nginx error):**
+- Script 04 writes: `limit_req_zone $binary_remote_addr zone=grin_api:10m rate=10r/s;` to `/etc/nginx/nginx.conf`
+- Script 06 writes: `limit_req_zone $binary_remote_addr zone=grin_api:10m rate=30r/m;` to `/etc/nginx/conf.d/grin-rate-limit.conf`
+- Result: nginx loads both → duplicate zone definition → ERROR
+
+**GOOD (single authoritative source):**
+- Script 06 defines `grin_api` zone in `/etc/nginx/conf.d/grin-rate-limit.conf`
+- Script 04 only uses `limit_req zone=grin_api burst=10 nodelay;` in its location blocks
+- No redefinition, no conflict
+
+## Generated & Temporary Files — Centralized Location & Consolidation
+
+**ALL generated documentation, audit reports, security analyses, flowcharts, and temporary
+files must be stored in `docs/generated/` with script prefix, type, and date.**
+
+### Consolidation Strategy
+
+**Avoid over-fragmentation.** Instead of creating 13 separate files for one script,
+consolidate related content into fewer, comprehensive files:
+
+```
+ONE SCRIPT = 3 core files maximum:
+  script##_design.md           Architecture, design decisions, schemas, API spec
+  script##_implementation.md   Code examples, deployment, testing, troubleshooting
+  script##_security_audit.md   Vulnerabilities, fixes, compliance findings
+```
+
+**Why:** Token efficiency (fewer files to load/manage), better navigation, clearer
+purpose, reduces cognitive load.
+
+**Bad:** 13 files (design spec, implementation guide, deployment guide, testnet guide,
+consolidation summary, 3 backups, 2 audits, 2 reference docs, implementation examples)
+
+### Location & Naming
+```
+docs/generated/
+  ├── script07_security_pool_audit_2026-05-15.md          Script 07 security audit
+  ├── script04_analysis_node_api_2026-05-15.md            Script 04 analysis
+  ├── script06_reference_health_collector.md              Script 06 reference (no date)
+  └── script##_<type>_<service>_<date>.md                 Pattern for all generated files
+```
+
+Format: `script<XX>_<type>_<optional_service>_<optional_date>.md`
+
+- **script<XX>** — REQUIRED: Script number (e.g., script07, script04, script06) so you know immediately
+- **type** — What kind of file: `security`, `audit`, `analysis`, `reference`, `flowchart`, `report`
+- **service** — Optional service name for clarity (pool, node, wallet, api, etc.)
+- **date** — `YYYY-MM-DD` only if multiple versions exist, otherwise omit
+
+### Examples
+- ✅ `script07_security_pool_audit_2026-05-15.md` — Security audit for Script 07
+- ✅ `script04_audit_foreign_api_2026-05-10.md` — API audit for Script 04
+- ✅ `script06_reference_health_endpoints.md` — Reference doc for Script 06
+- ❌ `security_pool_audit_2026-05-15.md` — Missing script prefix ❌
+- ❌ `SECURITY_FIXES.md` — No script prefix ❌
+
+### Rules
+1. **Never scatter files** — ALL generated docs go to `docs/generated/`
+2. **Always include script prefix** — `script##_` so purpose is immediately clear
+3. **Use lowercase with underscores** — `script07_security_pool_audit_2026-05-15.md`
+4. **Use YYYY-MM-DD dates** — for version tracking when multiple versions exist
+5. **Keep a README.md** — explaining what each file contains
+6. **If a generated file becomes permanent**, move it to `docs/` and remove date/prefix (keep script## if relevant)
+
+**DO NOT** create files like `SECURITY_FIXES.md` scattered across `web/07_mining_pool/`, `flowcharts/`, etc.
+**DO NOT** create .md files without the `script##_` prefix — it must be immediately clear which script/service a file belongs to.
+**DO NOT** create more than 3 core .md files per script — consolidate related content instead.
+
 ## Do Not
 - Never run the toolkit scripts locally — they assume a Linux VPS with root access
 - Never hardcode wallet API secrets or passwords in scripts
@@ -203,3 +303,5 @@ hashrate_gps = row.difficulty * 42 / 60 / 16384;
 - Never use `--floonet` flag — the correct testnet flag is `--testnet`
 - Never mix mainnet and testnet ports or directories
 - Don't add `#!/bin/bash` to lib files — they are sourced, not executed
+- **Never redefine nginx zones/upstreams across multiple scripts** — define once, use everywhere
+- **Never create generated/temporary files without a central location** — use `docs/generated/` with prefixed names and dates

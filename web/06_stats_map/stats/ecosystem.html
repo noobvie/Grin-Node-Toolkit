@@ -435,7 +435,33 @@
     font-family: monospace;
   }
   .ext-node-row:last-child { border-bottom: none; }
-  .ext-node-host { color: var(--text); display: flex; align-items: center; gap: 6px; }
+  .ext-node-host { color: var(--text); display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; word-break: break-all; }
+  .ext-node-meta { display: flex; align-items: center; gap: 0; white-space: nowrap; flex-shrink: 0; margin-left: 8px; }
+  .ext-node-sep  { color: var(--border); margin: 0 5px; }
+  .ext-node-height { color: var(--blue); }
+  .ext-node-onion-sep {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 8px 0 4px;
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .ext-node-onion-badge {
+    font-size: 10px;
+    color: var(--purple);
+    background: rgba(188,140,255,0.1);
+    border: 1px solid rgba(188,140,255,0.25);
+    border-radius: 4px;
+    padding: 0 4px;
+    font-family: monospace;
+    font-style: normal;
+  }
 
   /* ── Loading / empty states ─────────────────────────────────────────────── */
   .placeholder { padding: 32px 20px; text-align: center; color: var(--muted); font-size: 13px; }
@@ -721,7 +747,7 @@ function renderDnsSeeds(data) {
             const icon    = ip.ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
             return `<div class="dns-seed-ip-row">${icon} ${esc(ip.ip)}</div>`;
           }).join('')
-        : `<div class="dns-no-resolve">${esc(host.note) || 'DNS resolution failed'}</div>`;
+        : `<div class="dns-no-resolve">${host.note ? esc(host.note) : 'DNS resolution failed'}</div>`;
 
       const expiring = host.expiry_days !== null && host.expiry_days !== undefined && host.expiry_days <= 30;
       return `<div class="dns-seed-host${expiring ? ' dns-seed-host-expiring' : ''}">
@@ -751,14 +777,32 @@ function renderExternalNodes(data) {
       el.innerHTML = '<div class="placeholder">No data</div>';
       continue;
     }
+    const PROTO_META = {
+      tor: { sep: '🧅 Tor',  badge: '.onion' },
+      i2p: { sep: '🔒 I2P',  badge: '.i2p'   },
+    };
+    let lastProto = null;
     el.innerHTML = data[net].map(node => {
+      const proto = node.protocol || 'https';
       const icon = node.ok
         ? '<span class="status-ok">✓</span>'
         : '<span class="status-fail">✗</span>';
       const ms = node.ok && node.response_ms != null
         ? `<span class="svc-ms">${node.response_ms}ms</span>`
         : '<span class="svc-ms svc-down">—</span>';
-      return `<div class="ext-node-row"><div class="ext-node-host">${icon} ${esc(node.host)}</div>${ms}</div>`;
+      const height = node.ok
+        ? (node.tip_height != null
+            ? `<span class="ext-node-sep">|</span><span class="ext-node-height">height ${node.tip_height.toLocaleString()}</span>`
+            : `<span class="ext-node-sep">|</span><span class="ext-node-height" style="color:var(--muted)">height unavailable</span>`)
+        : '';
+      const pm    = PROTO_META[proto];
+      const badge = pm ? ` <span class="ext-node-onion-badge">${pm.badge}</span>` : '';
+      let sep = '';
+      if (pm && proto !== lastProto) {
+        sep = `<div class="ext-node-onion-sep">${pm.sep}</div>`;
+      }
+      lastProto = proto;
+      return `${sep}<div class="ext-node-row"><div class="ext-node-host">${icon} ${esc(node.host)}${badge}</div><div class="ext-node-meta">${ms}${height}</div></div>`;
     }).join('');
   }
 }
@@ -787,14 +831,14 @@ function renderServices(services) {
     const catNote = cat === 'Development progress'
       ? ' <span class="svc-cat-note">— last release / commit date</span>'
       : '';
-    html += `<div class="svc-category-header">${cat}${catNote}</div>`;
+    html += `<div class="svc-category-header">${esc(cat)}${catNote}</div>`;
     for (const s of catMap[cat]) {
       const icon   = s.ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
       const ms     = s.ok && s.response_ms != null ? `<span class="svc-ms">${s.response_ms}ms</span>` : '<span class="svc-ms svc-down">—</span>';
       const sinceText = s.since || s.registered_str;
       const since  = cat === 'Development progress'
-        ? (sinceText ? `<span class="svc-since">Online since ${sinceText}</span>` : '')
-        : `<span class="svc-since">Online since ${sinceText || '—'}</span>`;
+        ? (sinceText ? `<span class="svc-since">Online since ${esc(sinceText)}</span>` : '')
+        : `<span class="svc-since">Online since ${sinceText ? esc(sinceText) : '—'}</span>`;
       const safeUrl = /^https?:\/\//i.test(s.url) ? s.url : '#';
       const host    = (() => { try { return new URL(s.url).hostname; } catch(_) { return s.url; } })();
 

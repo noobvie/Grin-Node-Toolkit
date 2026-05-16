@@ -38,49 +38,24 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN",   "")  # optional — raises rate 
 WHOIS_TTL_HOURS = 24   # re-fetch WHOIS only when cached value is older than this
 
 # ── DNS seed lists ─────────────────────────────────────────────────────────────
+# Edit 06_dns_seeds.json to add/remove seeds or update pending-DNS notes.
+# Edit 06_external_nodes.json to add/remove wallet-API nodes.
 
-DNS_SEEDS = {
-    "mainnet": [
-        "mainnet-seed.grinnode.live",
-        "grincoin.org",
-        "main.gri.mw",
-        "mainnet.grin.mw",
-        "mainnet.grinffindor.org",
-        "main-seed.grin.money",
-        "mainnet.fountainoffairfortune.it",
-    ],
-    "testnet": [
-        "testnet.grincoin.org",
-        "test.gri.mw",
-        "testnet.grin.mw",
-        "testnet.grinffindor.org",
-        "test-seed.grin.money",
-        "testnet.fountainoffairfortune.it",
-    ],
-}
+def _load_json_config(filename):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
+        print(f"[ERROR] {filename} load failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+_dns_seeds_cfg = _load_json_config("06_dns_seeds.json")
+DNS_SEEDS      = {k: v for k, v in _dns_seeds_cfg.items() if k in ("mainnet", "testnet")}
+DNS_SEED_NOTES = _dns_seeds_cfg.get("notes", {})
+EXTERNAL_NODES = _load_json_config("06_external_nodes.json")
 
 SEED_PORTS = {"mainnet": 3414, "testnet": 13414}
-
-# ── External wallet-API nodes ──────────────────────────────────────────────────
-# Domains shared with DNS_SEEDS — no WHOIS check needed, just HTTP response time.
-
-EXTERNAL_NODES = {
-    "mainnet": [
-        "api.grin.money",
-        "api.grinily.com",
-        "api.onlygrins.com",
-        "api.grinnode.org",
-        "main.gri.mw",
-        "grincoin.org",
-    ],
-    "testnet": [
-        "testapi.grin.money",
-        "testapi.grinily.com",
-        "testapi.onlygrins.com",
-        "testnet.grincoin.org",
-        "test.gri.mw",
-    ],
-}
 
 # TLDs where WHOIS servers are reliable enough for automated refresh.
 # Everything else (.mw, .io, .live, .money, ccTLDs) must be maintained manually
@@ -91,19 +66,12 @@ def _is_auto_tld(domain):
     tld = "." + domain.rsplit(".", 1)[-1] if "." in domain else ""
     return tld in WHOIS_AUTO_TLDS
 
-# Notes shown in place of IP rows when a seed host has no DNS records yet
-DNS_SEED_NOTES = {
-    "mainnet.grin.mw": "Not available yet — DNS record pending",
-    "testnet.grin.mw": "Not available yet — DNS record pending",
-}
-
 # ── WHOIS fallback for domains whose WHOIS servers block automated queries ─────
 # Edit 06_domains_exceptions.json (same directory) to update dates on renewal.
 
 def _date_to_ts(s):
     """Convert YYYY-MM-DD string to UTC midnight timestamp."""
-    from datetime import datetime as _dt
-    return int(_dt.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
+    return int(datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
 def _load_whois_fallback():
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "06_domains_exceptions.json")
@@ -219,7 +187,7 @@ def _check_seed_host(host, port, now, conn):
     registered_ts = whois_row[1] if whois_row else None
     if expiry_ts is None:
         fb = WHOIS_FALLBACK.get(_registrable_domain(host), {})
-        expiry_ts     = expiry_ts     or fb.get("expiry_ts")
+        expiry_ts     = fb.get("expiry_ts")
         registered_ts = registered_ts or fb.get("registered_ts")
     expiry_str, expiry_days, registered_str = _format_expiry(expiry_ts, registered_ts, now)
 
@@ -304,11 +272,10 @@ def _registrable_domain(host):
 
 def _parse_whois_date(s):
     """Parse a date string from raw WHOIS output. Returns UTC timestamp or None."""
-    from datetime import datetime as _dt
     s = s.strip().split("T")[0].split(" ")[0]  # drop time portion
     for fmt in ("%Y-%m-%d", "%d-%b-%Y", "%Y/%m/%d", "%d.%m.%Y", "%d-%m-%Y"):
         try:
-            return int(_dt.strptime(s, fmt).replace(tzinfo=timezone.utc).timestamp())
+            return int(datetime.strptime(s, fmt).replace(tzinfo=timezone.utc).timestamp())
         except ValueError:
             pass
     return None
@@ -361,8 +328,7 @@ def _fetch_whois_expiry(registrable):
         if isinstance(exp, str):
             for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d-%b-%Y"):
                 try:
-                    from datetime import datetime as _dt
-                    parsed = _dt.strptime(exp.strip(), fmt).replace(tzinfo=timezone.utc)
+                    parsed = datetime.strptime(exp.strip(), fmt).replace(tzinfo=timezone.utc)
                     return int(parsed.timestamp()), None
                 except ValueError:
                     pass
@@ -436,22 +402,71 @@ def cmd_whois(conn, force=False):
 
 def _check_external_nodes():
     """HTTP-check all external wallet-API nodes. Returns {mainnet:[…], testnet:[…]}."""
-    result = {"mainnet": [], "testnet": []}
+    result = {net: [] for net in EXTERNAL_NODES}
 
-    def check_one(net, host):
-        ok, _, ms = _http_check(f"https://{host}/", timeout=8)
-        return net, {"host": host, "ok": ok, "response_ms": ms if ok else None}
+    def _fetch_tip_height(base_url):
+        """JSON-RPC call to /v2/foreign get_header (no params = tip). Returns int or None."""
+        rpc_url = base_url.rstrip("/") + "/v2/foreign"
+        try:
+            rpc = json.dumps({"jsonrpc": "2.0", "method": "get_tip", "params": [], "id": 1}).encode()
+            req = urllib.request.Request(
+                rpc_url,
+                data=rpc,
+                headers={"Content-Type": "application/json", "User-Agent": "grin-ecosystem-checker/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                data = json.loads(resp.read())
+            result = data.get("result", {})
+            if isinstance(result, dict) and "Ok" in result:
+                return result["Ok"].get("height")
+            print(f"[WARN] tip height unexpected response from {rpc_url}: {str(data)[:120]}", file=sys.stderr)
+            return None
+        except urllib.error.HTTPError as e:
+            print(f"[WARN] tip height HTTP {e.code} from {rpc_url} (node may require auth)", file=sys.stderr)
+            return None
+        except Exception as e:
+            print(f"[WARN] tip height fetch failed for {rpc_url}: {e}", file=sys.stderr)
+            return None
 
-    items = [(net, host) for net, hosts in EXTERNAL_NODES.items() for host in hosts]
+    def check_one(net, protocol, entry):
+        if entry.startswith("http://") or entry.startswith("https://"):
+            url  = entry
+            host = urllib.parse.urlparse(entry).hostname or entry
+        else:
+            url  = f"https://{entry}/"
+            host = entry
+        if protocol == "tor":
+            ok, _, ms = _http_check_tor(url, timeout=30)
+            height = _fetch_tip_height_tor(url, timeout=30) if ok else None
+        else:
+            ok, _, ms = _http_check(url, timeout=8)
+            height = _fetch_tip_height(url) if ok else None
+        return net, {"host": host, "protocol": protocol, "ok": ok, "response_ms": ms if ok else None, "tip_height": height}
+
+    items = [
+        (net, proto, entry)
+        for net, protos in EXTERNAL_NODES.items()
+        for proto, entries in protos.items()
+        for entry in entries
+    ]
     with ThreadPoolExecutor(max_workers=10) as ex:
-        futures = [ex.submit(check_one, net, host) for net, host in items]
+        futures = [ex.submit(check_one, net, proto, e) for net, proto, e in items]
         for f in as_completed(futures):
             net, entry = f.result()
             result[net].append(entry)
 
     for net in result:
-        order = {h: i for i, h in enumerate(EXTERNAL_NODES[net])}
-        result[net].sort(key=lambda e: order.get(e["host"], 999))
+        protos = EXTERNAL_NODES[net]
+        proto_order = {p: i for i, p in enumerate(protos)}
+        entry_order = {
+            (proto, urllib.parse.urlparse(e).hostname if e.startswith("http") else e): i
+            for proto, entries in protos.items()
+            for i, e in enumerate(entries)
+        }
+        result[net].sort(key=lambda e: (
+            proto_order.get(e["protocol"], 999),
+            entry_order.get((e["protocol"], e["host"]), 999),
+        ))
     return result
 
 # ── HTTP service checks ────────────────────────────────────────────────────────
@@ -472,6 +487,48 @@ def _http_check(url, timeout=8):
     except Exception:
         ms = int((time.monotonic() - t0) * 1000)
         return False, None, ms
+
+def _http_check_tor(url, timeout=30):
+    """HTTP check routed through local Tor SOCKS5 proxy. Returns (ok, status_code, response_ms)."""
+    try:
+        import requests as _req
+    except ImportError:
+        print("[WARN] tor check skipped — python3-requests not installed", file=sys.stderr)
+        return False, None, 0
+    proxies = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
+    t0 = time.monotonic()
+    try:
+        r = _req.get(url, proxies=proxies, timeout=timeout,
+                     headers={"User-Agent": "grin-ecosystem-checker/1.0"})
+        ms = int((time.monotonic() - t0) * 1000)
+        ok = r.status_code < 500
+        return ok, r.status_code, ms
+    except Exception as e:
+        ms = int((time.monotonic() - t0) * 1000)
+        print(f"[WARN] tor check failed for {url}: {e}", file=sys.stderr)
+        return False, None, ms
+
+def _fetch_tip_height_tor(base_url, timeout=30):
+    """JSON-RPC get_header via Tor SOCKS5. Returns int or None."""
+    try:
+        import requests as _req
+    except ImportError:
+        return None
+    proxies = {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
+    rpc_url = base_url.rstrip("/") + "/v2/foreign"
+    try:
+        payload = {"jsonrpc": "2.0", "method": "get_tip", "params": [], "id": 1}
+        r = _req.post(rpc_url, json=payload, proxies=proxies, timeout=timeout,
+                      headers={"User-Agent": "grin-ecosystem-checker/1.0"})
+        data = r.json()
+        result = data.get("result", {})
+        if isinstance(result, dict) and "Ok" in result:
+            return result["Ok"].get("height")
+        print(f"[WARN] tor tip height unexpected response from {rpc_url}: {str(data)[:120]}", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"[WARN] tor tip height failed for {rpc_url}: {e}", file=sys.stderr)
+        return None
 
 def _gh_headers():
     h = {"User-Agent": "grin-ecosystem-checker/1.0",

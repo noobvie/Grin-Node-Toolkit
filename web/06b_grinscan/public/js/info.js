@@ -154,12 +154,12 @@ function fmtDiffLabel(d) {
 }
 
 function makeTsFmt(days) {
-  if (days === 1)
+  if (days < 2)
     return ts => new Date(ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   if (days >= 2 && days <= 31)
     return ts => new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   if (days <= 365)
-    return ts => new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+    return ts => new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
   return ts => new Date(ts * 1000).getFullYear().toString();
 }
 
@@ -273,7 +273,7 @@ function makeActivitySVG(txPts, feePts, metric, width, height, xFmt) {
 }
 
 function renderActivity(rows) {
-  const W      = 700;
+  const W      = getChartW();
   const txPts  = rows.map(r => [r.timestamp, r.tx_count || 0]);
   const feePts = rows.map(r => [r.timestamp, (r.fee_total || 0) / 1e9]);
   const el     = document.getElementById('chart-activity');
@@ -323,6 +323,8 @@ function _drawHistory(rows, days) {
 
 async function renderHistoryCharts(days) {
   const ids = ['chart-hashrate-history', 'chart-difficulty-history', 'chart-activity'];
+  _cachedRows = null;
+  _cachedXFmt = null;
   _chartLoading(ids);
   try {
     const r = await fetch('/api/history?days=' + days);

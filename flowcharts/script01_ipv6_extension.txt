@@ -1,0 +1,372 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║           script01_ipv6_extension.txt  —  PLANNING NOTES                ║
+║           IPv6 support for build + chain-data download/share             ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+STATUS: Planning only — not yet implemented in 01_build_new_grin_node.sh
+DEPENDS ON: script03 (chain data share) for the IPv6 server side
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BACKGROUND
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The current Grin P2P network is IPv4-only in practice:
+  • DNS seeds return only A records (IPv4)
+  • All known peers advertise IPv4 addresses
+  • grin.toml defaults to host = "0.0.0.0"
+
+Grin's P2P layer does understand IPv6 syntax — native IPv6 addresses appear
+in routing-table gossip (seen in trace logs as [2001:...]:3414) and
+NAT64-mapped addresses (64:ff9b::) also appear. The code can handle the
+format; what's missing is operator tooling to actually configure and
+bootstrap IPv6 nodes.
+
+Two distinct address types seen in Grin P2P — do NOT confuse them:
+  ::ffff:1.2.3.4    IPv4-mapped IPv6 — socket-layer representation when an
+                    IPv6 dual-stack socket accepts an IPv4 connection.
+                    NOT a real IPv6 address. Never dialled directly.
+                    Grin's P2P layer and 06_collector.py already strip this.
+
+  64:ff9b::x.x.x.x NAT64 well-known prefix (RFC 6052). Appears in gossip
+                    when a NAT64 gateway is in use. Still represents an IPv4
+                    host — the provider translates it. NOT a native IPv6 node.
+
+  2001:db8::1       Real native IPv6 address — this is what we want to add.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+THE BOOTSTRAP PROBLEM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+A pure IPv6-only node with no NAT64 cannot reach any current Grin peer
+because all DNS seeds return IPv4. The only way out:
+
+  Option A — Dual-stack anchor node (recommended first step)
+    Run host = "::" on a server that has BOTH IPv4 and IPv6.
+    It syncs via IPv4 seeds normally, and also listens on its IPv6 address.
+    Pure IPv6 nodes then use this anchor as a static seed.
+    This is the practical bootstrapping path.
+
+  Option B — DNS seed adds AAAA record
+    A DNS seed operator (e.g. grinnode.live) adds an AAAA record pointing
+    at a dual-stack or IPv6 node. Then pure IPv6 nodes can bootstrap
+    automatically without any manual config. Requires coordination with
+    seed operators — out of scope for the toolkit alone.
+
+  Option C — NAT64 provider
+    If the VPS provider has NAT64 (test: curl -6 https://ipv4.lookup.test-ipv6.com/),
+    pure IPv6 nodes can reach IPv4 peers transparently. No code change needed —
+    the OS handles translation. Toolkit just needs to detect this case and
+    skip the "IPv6-only, isolated" warning.
+
+Current recommendation: implement Option A first. Option B is a network-level
+decision beyond the toolkit. Option C depends on the provider.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PROPOSED NEW STEP — IPv6 Detection (insert between Step 7 and Step 8)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+         ┌───────────────▼────────────────────────┐
+         │   STEP 7b — IPv6 Detection             │
+         │                                        │
+         │   ip -6 addr show scope global         │
+         │   → parse first public IPv6 address    │
+         │                                        │
+         │   [no IPv6 found]                      │
+         │     → skip IPv6 config, continue       │
+         │       as IPv4-only (current behaviour) │
+         │                                        │
+         │   [IPv6 found: 2001:db8::1]            │
+         │     → test NAT64 (curl -6 ipv4 test)   │
+         │       NAT64 ok  → GRIN_NAT64=1         │
+         │       NAT64 no  → GRIN_NAT64=0         │
+         │                                        │
+         │     → prompt user:                     │
+         │       Detected IPv6: 2001:db8::1       │
+         │       D = dual-stack (recommended)     │
+         │           host = "::" in grin.toml     │
+         │           listens on IPv4 + IPv6       │
+         │       6 = IPv6-only                    │
+         │           host = "::" + IPV6_V6ONLY    │
+         │           [WARN if GRIN_NAT64=0:       │
+         │            cannot reach IPv4 peers,    │
+         │            needs static anchor seed]   │
+         │       4 = IPv4-only (skip IPv6)        │
+         │                                        │
+         │   stores: GRIN_IPV6_MODE               │
+         │           (dual/ipv6only/ipv4only)     │
+         │           GRIN_IPV6_ADDR               │
+         └────────────────────────────────────────┘
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CHANGES TO STEP 8 — Patch Config
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Current Step 8 patches: archive_mode, db_root, p2p port.
+
+Add for GRIN_IPV6_MODE = dual or ipv6only:
+  • sed: host = "0.0.0.0"  →  host = "::"
+  • If ipv6only and GRIN_NAT64=0:
+      seeding_type = "List"
+      seeds = []          ← filled in Step 8b (static seed prompt)
+
+New sub-step 8b — Static peer seed (only if ipv6only + no NAT64):
+
+         ┌───────────────▼────────────────────────┐
+         │   STEP 8b — Static IPv6 Anchor Seed    │
+         │   (only shown if IPv6-only + no NAT64) │
+         │                                        │
+         │   [WARN] No NAT64 — this node cannot   │
+         │   reach IPv4 DNS seeds automatically.  │
+         │                                        │
+         │   Enter IPv6 address of a dual-stack   │
+         │   Grin anchor node to use as seed:     │
+         │   e.g. 2001:db8::1                     │
+         │   (leave blank to configure later)     │
+         │                                        │
+         │   → validates address with:            │
+         │     python3 -c "import ipaddress;      │
+         │     ipaddress.IPv6Address('...')"      │
+         │     or ipcalc -6 if python3 absent     │
+         │                                        │
+         │   → writes to grin.toml:               │
+         │     seeds = ["[2001:db8::1]:3414"]     │
+         │     (bracket notation required)        │
+         └────────────────────────────────────────┘
+
+NOTE: grin.toml bracket notation for IPv6 peers:
+  IPv4:  seeds = ["1.2.3.4:3414"]
+  IPv6:  seeds = ["[2001:db8::1]:3414"]   ← brackets mandatory
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DOMAIN AAAA RECORDS — Chain Data Download Domains
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Chain data servers run by operators may have domain names (e.g.
+chain.grin.money, chaindata.example.org). For IPv6-only downloaders to
+reach them by domain, those domains need AAAA records in addition to A.
+
+Requirement: any operator running a script03 chain data share node on a
+dual-stack VPS should add an AAAA record for their chain data domain
+pointing at their public IPv6 address.
+
+  Example DNS zone:
+    chain.grin.money.   A     1.2.3.4
+    chain.grin.money.   AAAA  2001:db8::1    ← add this
+
+Benefit: the server list in script01 can use the domain name directly
+instead of a raw IPv6 address. curl resolves to IPv6 automatically on
+IPv6-only nodes, and to IPv4 on IPv4-only nodes — no bracket notation
+needed, no separate entry for each protocol:
+
+  SERVERS_EUROPE=(
+    "chain.grin.money|Frankfurt|DE"     # curl picks A or AAAA per client
+  )
+
+vs. the raw-IP fallback when no domain is available:
+
+  SERVERS_EUROPE=(
+    "1.2.3.4|Frankfurt|DE"              # IPv4 raw
+    "2001:db8::1|Frankfurt|DE|ipv6"     # IPv6 raw (bracket URL needed)
+  )
+
+Operator checklist for a script03 IPv6-capable chain data server:
+  [ ] VPS has a public IPv6 address
+  [ ] nginx vhost includes listen [::]:80; (see script03 section below)
+  [ ] Domain AAAA record added and propagated (check: dig AAAA chain.example.org)
+  [ ] ufw / firewalld: port 80 open for IPv6
+  [ ] Add domain (not raw IP) to the script01 server zone list
+
+If no domain exists for the chain data server:
+  → use raw IPv6 bracket URL as fallback (see Step 9 below)
+  → consider setting up a subdomain specifically for chain data sharing
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CHANGES TO STEP 9 — Chain Data Source
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Currently Step 9 scans known IPv4 servers (script03 share nodes) by zone.
+Extend the server list to include IPv6 endpoints when GRIN_IPV6_MODE != ipv4only.
+
+Server list entry format — prefer domain over raw IP when AAAA exists:
+
+  SERVERS_EUROPE=(
+    "chain.grin.money|Frankfurt|DE"          # domain with A+AAAA — preferred
+    "1.2.3.4|Frankfurt|DE"                   # raw IPv4 fallback (no domain)
+    "2001:db8::1|Frankfurt|DE|ipv6"          # raw IPv6 fallback (no domain)
+  )
+
+Display in picker — show [v6] tag only for raw IPv6 entries (domain entries
+need no tag — curl resolves transparently):
+  1)  chain.grin.money   Frankfurt, DE      [synced 1439/1440]
+  2)  1.2.3.4            Frankfurt, DE      [synced 1439/1440]
+  3)  [v6] 2001:db8::1  Frankfurt, DE      [synced 1439/1440]
+
+Download URL construction:
+  Domain: http://chain.grin.money/grin-chain-mainnet-prune.tar.gz
+  IPv4:   http://1.2.3.4/grin-chain-mainnet-prune.tar.gz
+  IPv6:   http://[2001:db8::1]/grin-chain-mainnet-prune.tar.gz
+         ↑ curl handles bracket notation natively — no extra flags needed
+
+Connectivity pre-check before showing server in list:
+  IPv4: curl -4 --max-time 5 -s -o /dev/null http://1.2.3.4/
+  IPv6: curl -6 --max-time 5 -s -o /dev/null http://[2001:db8::1]/
+
+  If GRIN_IPV6_MODE = ipv4only → skip IPv6 servers entirely
+  If GRIN_IPV6_MODE = dual     → show both, prefer IPv6 if reachable
+                                  (or let user pick)
+  If GRIN_IPV6_MODE = ipv6only + NAT64 → show all (NAT64 handles IPv4)
+  If GRIN_IPV6_MODE = ipv6only + no NAT64 → show IPv6 only (IPv4 unreachable)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CHANGES TO STEP 2 — Dependencies
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Add to apt/dnf install list (only if IPv6 detected):
+  iproute2   — for `ip -6 addr show` (usually already installed)
+
+No additional deps needed — curl already supports IPv6 natively.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CHANGES TO FIREWALL (script08 / ufw section in script01 summary)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+`ufw allow 3414/tcp` already covers IPv6 when ufw is configured with
+IPV6=yes in /etc/default/ufw (Debian/Ubuntu default).
+
+But verify — add to Step 14 summary output when dual/ipv6only:
+  grep "^IPV6=" /etc/default/ufw → must be "yes"
+  ip6tables -L INPUT | grep 3414  → confirm rule is active
+
+If IPV6=no in /etc/default/ufw → warn user: ufw IPv6 rules are disabled.
+  Suggest: sed -i 's/^IPV6=no/IPV6=yes/' /etc/default/ufw && ufw reload
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CHANGES TO STEP 14 — Summary
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Add to summary output when IPv6 is active:
+
+  IPv6 mode:   dual-stack
+  IPv6 addr:   2001:db8::1
+  P2P listen:  [::]:3414  (IPv4 + IPv6)
+  NAT64:       yes / no
+
+  If dual-stack: "Share your IPv6 address with other operators so they
+    can add you as a static seed or chain data source."
+
+  If IPv6-only + no NAT64: "This node cannot reach IPv4 peers.
+    It depends on the anchor seed configured in grin.toml.
+    Verify with: grep seeds /opt/grin/node/<net>-prune/grin.toml"
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SCRIPT03 — CHAIN DATA SHARE SIDE (IPv6 server)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When script03 sets up nginx to serve chain data, it binds to the server's
+IP. For IPv6 serving to work:
+
+  nginx listen directive — current:
+    listen 80;
+    listen [::]:80;     ← this line may be missing on some installs
+
+  script03 should ensure [::]:80 is present in the vhost when IPv6 is
+  detected, so the server is reachable at http://[2001:db8::1]/.
+
+  No change needed to the tar.gz packaging or sha256 — format is identical.
+  Only the URL and the nginx listen directive differ.
+
+  The sync-status endpoint (used by script01 Step 9 to show "synced N/1440")
+  is served by the same nginx vhost — automatically available on IPv6 too
+  once [::]:80 is added.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+06_collector.py — PEER MAP (already partially handled)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Already done:
+  • ::ffff:x.x.x.x stripped to plain IPv4 in _extract_addr ✓
+  • _is_public_ip accepts native IPv6 (no blanket IPv6 block) ✓
+  • _is_valid_grin_agent filters by user agent (works for IPv6 peers too) ✓
+
+Still missing:
+  • NAT64 prefix 64:ff9b:: — these pass _is_public_ip and get stored as
+    IPv6 but are actually IPv4 hosts. Consider stripping:
+      if ip.lower().startswith("64:ff9b::"):
+          # decode last 32 bits as IPv4
+          suffix = ip.split("::")[-1]   # e.g. "b9b1:dbb9"
+          parts  = suffix.split(":")
+          a = int(parts[0], 16) >> 8;  b = int(parts[0], 16) & 0xff
+          c = int(parts[1], 16) >> 8;  d = int(parts[1], 16) & 0xff
+          ip = f"{a}.{b}.{c}.{d}"
+    This would land them as IPv4 and geolocate correctly.
+
+  • Native IPv6 peers: ip-api.com batch endpoint supports IPv6 lookups.
+    No code change needed — geo_map already uses the address as the key
+    and passes it to ip-api.com. Will work once real IPv6 peers appear.
+
+  • Map pin rendering in ecosystem.html / stats.html — currently assumes
+    lat/lng are valid for all peers. No change needed; IPv6 geolocates
+    the same way as IPv4 via ip-api.com.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IMPLEMENTATION ORDER (suggested)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Phase 1 — Dual-stack node support (low risk, backward compatible)
+  1. Add Step 7b: IPv6 detection + mode prompt (D/6/4)
+  2. Add Step 8 patch: host = "::" when dual or ipv6only
+  3. Add Step 14 summary: show IPv6 addr + ufw check
+  4. script03: add [::]:80 to nginx vhost when IPv6 present
+  → At this point a dual-stack node runs, listens on IPv6,
+    and serves chain data to IPv6 downloaders.
+
+Phase 2 — Chain data download from IPv6 servers
+  5. Extend server zone arrays with IPv6 entries
+  6. Step 9: filter/tag IPv6 servers, construct bracket URLs
+  7. Test: curl -6 download from a Phase 1 dual-stack server
+
+Phase 3 — IPv6-only node bootstrap
+  8. Add Step 8b: static anchor seed prompt (ipv6only + no NAT64)
+  9. Add NAT64 detection to Step 7b
+  10. Add NAT64 prefix stripping to 06_collector.py _extract_addr
+
+Phase 4 — DNS seed AAAA records
+  → Requires coordination with seed operators, outside toolkit scope.
+    When AAAA records exist, IPv6-only nodes bootstrap automatically
+    and Step 8b becomes optional.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OPEN QUESTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Does Grin binary actually successfully dial a native IPv6 peer?
+   Seen in gossip logs but not confirmed as an outbound connection.
+   Test: manually add seeds = ["[known-ipv6]:3414"] to grin.toml and
+   watch the debug log for "Connected!" from that address.
+
+2. Does Grin advertise its own IPv6 address to peers when host = "::"?
+   If not, it won't spread via gossip even if reachable.
+   Check: get_connected_peers on a peer of the dual-stack node — does the
+   dual-stack node's IPv6 address appear in their routing table?
+
+3. sysctl net.ipv6.bindv6only — some distros default to 1 (IPv6-only
+   sockets don't accept IPv4). With host = "::" this would mean IPv4
+   connections are rejected. Step 7b should check:
+     sysctl net.ipv6.bindv6only
+   If = 1 in dual-stack mode: warn user or offer to set it to 0.
+
+4. Rocky Linux / AlmaLinux 10 — firewalld instead of ufw. IPv6 rule
+   verification needs a separate path (firewall-cmd --list-ports).

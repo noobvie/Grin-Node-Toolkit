@@ -238,10 +238,28 @@ scripts define the same `limit_req_zone` with different names or rates, nginx er
 - Script 04 only uses `limit_req zone=grin_api burst=10 nodelay;` in its location blocks
 - No redefinition, no conflict
 
-## Generated & Temporary Files — Centralized Location
+## Generated & Temporary Files — Centralized Location & Consolidation
 
 **ALL generated documentation, audit reports, security analyses, flowcharts, and temporary
 files must be stored in `docs/generated/` with script prefix, type, and date.**
+
+### Consolidation Strategy
+
+**Avoid over-fragmentation.** Instead of creating 13 separate files for one script,
+consolidate related content into fewer, comprehensive files:
+
+```
+ONE SCRIPT = 3 core files maximum:
+  script##_design.md           Architecture, design decisions, schemas, API spec
+  script##_implementation.md   Code examples, deployment, testing, troubleshooting
+  script##_security_audit.md   Vulnerabilities, fixes, compliance findings
+```
+
+**Why:** Token efficiency (fewer files to load/manage), better navigation, clearer
+purpose, reduces cognitive load.
+
+**Bad:** 13 files (design spec, implementation guide, deployment guide, testnet guide,
+consolidation summary, 3 backups, 2 audits, 2 reference docs, implementation examples)
 
 ### Location & Naming
 ```
@@ -275,6 +293,8 @@ Format: `script<XX>_<type>_<optional_service>_<optional_date>.md`
 6. **If a generated file becomes permanent**, move it to `docs/` and remove date/prefix (keep script## if relevant)
 
 **DO NOT** create files like `SECURITY_FIXES.md` scattered across `web/07_mining_pool/`, `flowcharts/`, etc.
+**DO NOT** create .md files without the `script##_` prefix — it must be immediately clear which script/service a file belongs to.
+**DO NOT** create more than 3 core .md files per script — consolidate related content instead.
 
 ## Do Not
 - Never run the toolkit scripts locally — they assume a Linux VPS with root access

@@ -129,12 +129,15 @@ source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
 suggest_grin_web_dir() {
     local port=$1 pid binary dir cfg chain_line net ntype
 
+    pid=""
     if command -v lsof &>/dev/null; then
         pid=$(lsof -ti :"$port" 2>/dev/null)
-    elif command -v ss &>/dev/null; then
-        pid=$(ss -tlnp 2>/dev/null | grep ":$port " | grep -oP 'pid=\K[0-9]+' | head -1)
-    elif command -v netstat &>/dev/null; then
-        pid=$(netstat -tlnp 2>/dev/null | grep ":$port " | grep -oP '[0-9]+/.*' | cut -d'/' -f1 | head -1)
+    fi
+    if [[ -z "$pid" ]] && command -v ss &>/dev/null; then
+        pid=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)
+    fi
+    if [[ -z "$pid" ]] && command -v netstat &>/dev/null; then
+        pid=$(netstat -tlnp 2>/dev/null | grep ":${port}[[:space:]]" | grep -oP '[0-9]+/.*' | cut -d'/' -f1 | head -1)
     fi
     [ -z "$pid" ] && return 1
 
@@ -858,12 +861,15 @@ _chain_data_for_prefix() {
         web_dir=$(suggest_grin_web_dir "$port" 2>/dev/null) || continue
         [[ "$web_dir" != "$required_web" ]] && continue
         # Found the matching node — resolve its binary dir and chain_data path
+        pid=""
         if command -v lsof &>/dev/null; then
             pid=$(lsof -ti :"$port" 2>/dev/null)
-        elif command -v ss &>/dev/null; then
-            pid=$(ss -tlnp 2>/dev/null | grep ":$port " | grep -oP 'pid=\K[0-9]+' | head -1)
-        elif command -v netstat &>/dev/null; then
-            pid=$(netstat -tlnp 2>/dev/null | grep ":$port " | grep -oP '[0-9]+/.*' | cut -d'/' -f1 | head -1)
+        fi
+        if [[ -z "$pid" ]] && command -v ss &>/dev/null; then
+            pid=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)
+        fi
+        if [[ -z "$pid" ]] && command -v netstat &>/dev/null; then
+            pid=$(netstat -tlnp 2>/dev/null | grep ":${port}[[:space:]]" | grep -oP '[0-9]+/.*' | cut -d'/' -f1 | head -1)
         fi
         [ -z "$pid" ] && continue
         binary=$(readlink -f "/proc/$pid/exe" 2>/dev/null)

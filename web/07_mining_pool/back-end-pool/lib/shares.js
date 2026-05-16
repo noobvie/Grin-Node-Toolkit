@@ -17,6 +17,16 @@ class ShareValidator {
         throw new Error('Invalid difficulty');
       }
 
+      // FIX #10: Validate share timestamp is recent (not from hours ago)
+      // Prevents stale share replay attacks
+      const now = Math.floor(Date.now() / 1000);
+      const shareAge = now - Math.floor(Date.parse(shareHash) / 1000 || 0);
+
+      // Allow shares up to 30 minutes old (clock skew tolerance)
+      if (shareAge > 1800) {
+        throw new Error('Share is too old (stale share)');
+      }
+
       const stmt = this.db.prepare(`
         INSERT INTO shares (grin_address, worker_name, difficulty, block_height, share_hash)
         VALUES (?, ?, ?, ?, ?)

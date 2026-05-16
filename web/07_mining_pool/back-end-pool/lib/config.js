@@ -85,7 +85,24 @@ function getConfirmDepth(network) {
     : config.confirm_depth_testnet;
 }
 
+function mergeDbSettings(config, db) {
+  try {
+    const PoolSettings = require('./pool-settings');
+    const settings = new PoolSettings(db);
+    const allSettings = settings.getAll();
+
+    // Apply DB settings to config (only non-infrastructure keys)
+    config = PoolSettings.applyToConfig(config, allSettings);
+  } catch (err) {
+    console.error(`[Config] Warning: Failed to merge DB settings: ${err.message}`);
+    // Continue with file-based config if DB merge fails
+  }
+
+  return config;
+}
+
 module.exports = {
   loadConfig,
-  getConfirmDepth
+  getConfirmDepth,
+  mergeDbSettings
 };

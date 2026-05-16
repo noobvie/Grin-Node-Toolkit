@@ -1,43 +1,57 @@
 // Authentication helper module
-// Provides token management, API fetch wrapper, and login/logout
+// FIX #4: Updated to use httpOnly cookies instead of localStorage
+// Tokens are now automatically sent with each request via cookies
 
 const Auth = {
 
-  getToken() {
-    return localStorage.getItem('access_token') || null;
+  // FIX #4: Tokens are in httpOnly cookies (not accessible to JS)
+  // Just check if we can access protected endpoints
+  async getToken() {
+    // Make a test request to check if authenticated
+    try {
+      const response = await fetch('/api/admin/dashboard', { credentials: 'include' });
+      return response.status === 200;
+    } catch {
+      return false;
+    }
   },
 
+  // FIX #4: No longer needed - tokens are in httpOnly cookies set by server
   setToken(access_token, refresh_token) {
-    localStorage.setItem('access_token', access_token);
-    localStorage.setItem('refresh_token', refresh_token);
+    // Deprecated: Server sets httpOnly cookies on login
+    console.log('[Auth] Tokens set as httpOnly cookies by server');
   },
 
-  clearToken() {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
+  // Logout: call server to clear cookies
+  async clearToken() {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include'
+      });
+    } catch (e) {
+      console.warn('Logout request failed');
+    }
     window.location.href = '/login.html';
   },
 
-  // Fetch wrapper with auth header - FIX #8: Validate response type and handle errors safely
+  // FIX #4: Fetch wrapper - credentials:'include' sends httpOnly cookies automatically
   async fetch(url, options = {}) {
-    const token = this.getToken();
     const headers = {
       'Content-Type': 'application/json',
       ...options.headers
     };
 
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
     try {
       const response = await fetch(url, {
         ...options,
-        headers
+        headers,
+        credentials: 'include'  // FIX #4: Send cookies with every request
       });
 
       if (response.status === 401) {
-        this.clearToken();
+        // Token expired or missing
+        window.location.href = '/login.html';
         return null;
       }
 
@@ -63,7 +77,7 @@ const Auth = {
     }
   },
 
-  // Login
+  // Login - tokens now returned as httpOnly cookies
   async login(username, password) {
     try {
       const data = await this.fetch('/api/auth/login', {
@@ -72,10 +86,11 @@ const Auth = {
       });
 
       if (data && data.success) {
-        this.setToken(data.access_token, data.refresh_token);
+        // FIX #4: Token is in httpOnly cookie, not in response
+        console.log('Login successful - token in httpOnly cookie');
         return true;
       } else {
-        console.error('Login failed:', data?.message || 'Unknown error');
+        console.error('Login failed:', data?.error || 'Unknown error');
         return false;
       }
     } catch (error) {
@@ -90,8 +105,13 @@ const Auth = {
   },
 
   // Check if logged in
-  isLoggedIn() {
-    return !!this.getToken();
+  async isLoggedIn() {
+    try {
+      const response = await fetch('/api/health', { credentials: 'include' });
+      return response.status === 200;
+    } catch {
+      return false;
+    }
   }
 };
 

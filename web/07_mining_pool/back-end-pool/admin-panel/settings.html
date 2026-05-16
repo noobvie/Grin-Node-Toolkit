@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pool Settings</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <style>
+    .settings-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+
+    .settings-header {
+      margin-bottom: 2rem;
+    }
+
+    .settings-header h1 {
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .settings-tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 2px solid var(--border-color);
+      margin-bottom: 2rem;
+      overflow-x: auto;
+      flex-wrap: wrap;
+    }
+
+    .settings-tabs button {
+      padding: 1rem 1.5rem;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      color: var(--text-dim);
+      font-size: 1rem;
+      font-weight: 500;
+      border-bottom: 3px solid transparent;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+
+    .settings-tabs button:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .settings-tabs button.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    .settings-content {
+      display: none;
+    }
+
+    .settings-content.active {
+      display: block;
+    }
+
+    .settings-form {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .form-group label {
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    .form-group input[type="text"],
+    .form-group input[type="email"],
+    .form-group input[type="number"],
+    .form-group input[type="url"],
+    .form-group select,
+    .form-group textarea {
+      padding: 0.75rem;
+      border: 1px solid var(--border-color);
+      background: var(--input-bg);
+      color: var(--text);
+      border-radius: 4px;
+      font-size: 1rem;
+      font-family: inherit;
+    }
+
+    .form-group textarea {
+      resize: vertical;
+      min-height: 120px;
+    }
+
+    .form-group input[type="checkbox"],
+    .form-group input[type="radio"] {
+      width: 20px;
+      height: 20px;
+      cursor: pointer;
+    }
+
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .checkbox-group label {
+      margin: 0;
+      font-weight: normal;
+      cursor: pointer;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+
+    @media (max-width: 768px) {
+      .form-row {
+        grid-template-columns: 1fr;
+      }
+
+      .settings-container {
+        padding: 1rem;
+      }
+
+      .settings-tabs {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .settings-tabs button {
+        padding: 0.75rem 1rem;
+        font-size: 0.9rem;
+      }
+    }
+
+    .form-section {
+      border-top: 1px solid var(--border-color);
+      padding-top: 1.5rem;
+      margin-top: 1.5rem;
+    }
+
+    .form-section:first-child {
+      border-top: none;
+      margin-top: 0;
+      padding-top: 0;
+    }
+
+    .section-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: var(--accent);
+    }
+
+    .helper-text {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      margin-top: 0.25rem;
+    }
+
+    .form-actions {
+      display: flex;
+      gap: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border-color);
+      margin-top: 2rem;
+    }
+
+    .btn {
+      padding: 0.75rem 1.5rem;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 1rem;
+      font-weight: 600;
+      transition: all 0.2s ease;
+      min-width: 140px;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: var(--btn-text);
+    }
+
+    .btn-primary:hover {
+      background: var(--btn-hover);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border-color);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .btn-danger {
+      background: var(--error-color);
+      color: white;
+    }
+
+    .btn-danger:hover {
+      opacity: 0.8;
+    }
+
+    .file-upload {
+      border: 2px dashed var(--border-color);
+      border-radius: 8px;
+      padding: 2rem;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .file-upload:hover {
+      border-color: var(--accent);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .file-upload input[type="file"] {
+      display: none;
+    }
+
+    .file-preview {
+      max-width: 200px;
+      max-height: 200px;
+      border-radius: 4px;
+      margin-top: 1rem;
+    }
+
+    .current-asset {
+      font-size: 0.9rem;
+      color: var(--text-dim);
+      margin-top: 0.5rem;
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      padding: 1rem 1.5rem;
+      border-radius: 4px;
+      color: white;
+      font-weight: 600;
+      z-index: 1000;
+      animation: slideIn 0.3s ease;
+    }
+
+    .toast.success {
+      background: var(--ok-color);
+    }
+
+    .toast.error {
+      background: var(--error-color);
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(400px);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+
+    .loading {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+
+    .color-input-group {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+
+    .color-input-group input[type="color"] {
+      width: 60px;
+      height: 40px;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .color-preview {
+      font-size: 0.9rem;
+      color: var(--text-dim);
+    }
+
+    .slider-group {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .slider-group input[type="range"] {
+      flex: 1;
+    }
+
+    .slider-value {
+      min-width: 60px;
+      text-align: right;
+      font-weight: 600;
+    }
+
+    .list-manager {
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .list-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .list-item:last-child {
+      border-bottom: none;
+    }
+
+    .list-item-input {
+      display: flex;
+      gap: 0.5rem;
+      width: 100%;
+      margin-bottom: 1rem;
+    }
+
+    .list-item-input input {
+      flex: 1;
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav-links">
+    <a href="/">Home</a>
+    <a href="/admin/">Dashboard</a>
+    <a href="/admin/settings.html" class="active">Settings</a>
+  </nav>
+
+  <div class="settings-container">
+    <div class="settings-header">
+      <h1>⚙️ Pool Configuration</h1>
+      <p>Customize your pool settings, branding, and operational parameters</p>
+    </div>
+
+    <div class="settings-tabs">
+      <button class="tab-btn active" data-tab="pool-info">Pool Info</button>
+      <button class="tab-btn" data-tab="branding">Branding</button>
+      <button class="tab-btn" data-tab="seo">SEO</button>
+      <button class="tab-btn" data-tab="payout">Payout</button>
+      <button class="tab-btn" data-tab="access">Access Control</button>
+      <button class="tab-btn" data-tab="alerts">Alerts</button>
+    </div>
+
+    <!-- POOL INFO TAB -->
+    <div id="pool-info" class="settings-content active">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Pool Identity</h3>
+          <div class="form-group">
+            <label for="pool_name">Pool Name</label>
+            <input type="text" id="pool_name" name="pool_name" placeholder="GRINIUM">
+            <div class="helper-text">The name displayed to miners (e.g., on the homepage)</div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="pool_tagline">Tagline</label>
+              <input type="text" id="pool_tagline" name="pool_tagline" placeholder="Grin Mining Pool">
+              <div class="helper-text">Short subtitle or slogan</div>
+            </div>
+            <div class="form-group">
+              <label for="contact_email">Contact Email</label>
+              <input type="email" id="contact_email" name="contact_email">
+              <div class="helper-text">Public contact for miners</div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="pool_description">Description</label>
+            <textarea id="pool_description" name="pool_description" placeholder="Tell miners about your pool..."></textarea>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Visibility & Mining</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="pool_visibility">Pool Visibility</label>
+              <select id="pool_visibility" name="pool_visibility">
+                <option value="public">Public (open to all)</option>
+                <option value="private">Private (whitelisted only)</option>
+                <option value="maintenance">Maintenance (closed)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="mining_mode">Mining Mode</label>
+              <select id="mining_mode" name="mining_mode">
+                <option value="stratum">Stratum (traditional pool)</option>
+                <option value="solo">Solo (solo mining proxy)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group" id="address-whitelist-group" style="display: none;">
+            <label>Address Whitelist (Private Mode)</label>
+            <div class="list-item-input">
+              <input type="text" id="whitelist-input" placeholder="grin1xxxxx..." required>
+              <button class="btn btn-secondary" onclick="addToWhitelist()">Add</button>
+            </div>
+            <div class="list-manager" id="whitelist-list"></div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Pool Economics</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="pool_fee_percent">Pool Fee (%)</label>
+              <div class="slider-group">
+                <input type="range" id="pool_fee_percent" name="pool_fee_percent" min="0" max="50" step="0.1" value="2">
+                <span class="slider-value"><span id="fee-value">2</span>%</span>
+              </div>
+              <div class="helper-text">Retained by pool operator (0-50%)</div>
+            </div>
+            <div class="form-group">
+              <label for="max_miners">Max Miners</label>
+              <input type="number" id="max_miners" name="max_miners" min="0" placeholder="0 (unlimited)">
+              <div class="helper-text">0 = no limit</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Homepage</h3>
+          <div class="form-group">
+            <label for="homepage_banner">Banner Message</label>
+            <textarea id="homepage_banner" name="homepage_banner" placeholder="Optional announcement for miners..."></textarea>
+            <div class="helper-text">HTML/Markdown supported</div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('pool_info')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('pool_info')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- BRANDING TAB -->
+    <div id="branding" class="settings-content">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Logo & Icons</h3>
+          <div class="form-group">
+            <label>Pool Logo</label>
+            <div class="file-upload" onclick="document.getElementById('logo-input').click()">
+              <input type="file" id="logo-input" accept="image/*" onchange="uploadAsset('logo')">
+              <p>Click to upload logo (SVG, PNG, or GIF)</p>
+              <div class="current-asset" id="logo-current"></div>
+            </div>
+            <img id="logo-preview" class="file-preview" style="display: none;">
+          </div>
+
+          <div class="form-group">
+            <label>Favicon</label>
+            <div class="file-upload" onclick="document.getElementById('favicon-input').click()">
+              <input type="file" id="favicon-input" accept="image/*" onchange="uploadAsset('favicon')">
+              <p>Click to upload favicon (32x32)</p>
+              <div class="current-asset" id="favicon-current"></div>
+            </div>
+            <img id="favicon-preview" class="file-preview" style="display: none;">
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Theme & Colors</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="pool_theme">Theme</label>
+              <select id="pool_theme" name="pool_theme">
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="accent_color">Accent Color</label>
+              <div class="color-input-group">
+                <input type="color" id="accent_color" name="accent_color" value="#667eea">
+                <span class="color-preview" id="accent-preview">#667eea</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="custom_css">Custom CSS (Advanced)</label>
+            <textarea id="custom_css" name="custom_css" placeholder=".header { color: red; }"></textarea>
+            <div class="helper-text">Additional CSS overrides</div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Social Links & Footer</h3>
+          <div class="form-group">
+            <label for="discord_link">Discord Invite URL</label>
+            <input type="url" id="discord_link" name="discord_link" placeholder="https://discord.gg/...">
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="telegram_link">Telegram Group</label>
+              <input type="url" id="telegram_link" name="telegram_link" placeholder="https://t.me/...">
+            </div>
+            <div class="form-group">
+              <label for="twitter_link">Twitter</label>
+              <input type="url" id="twitter_link" name="twitter_link" placeholder="https://twitter.com/...">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="website_link">Website URL</label>
+            <input type="url" id="website_link" name="website_link" placeholder="https://...">
+          </div>
+
+          <div class="form-group">
+            <label for="footer_text">Footer Text</label>
+            <textarea id="footer_text" name="footer_text" placeholder="© 2024 Your Pool. All rights reserved." rows="3"></textarea>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('branding')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('branding')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SEO TAB -->
+    <div id="seo" class="settings-content">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Meta Tags & SEO</h3>
+          <div class="form-group">
+            <label for="meta_description">Meta Description</label>
+            <textarea id="meta_description" name="meta_description" placeholder="Brief description for search engines..." rows="2"></textarea>
+            <div class="helper-text">Recommended: 155-160 characters</div>
+          </div>
+
+          <div class="form-group">
+            <label for="meta_keywords">Meta Keywords</label>
+            <input type="text" id="meta_keywords" name="meta_keywords" placeholder="grin mining, pool, cryptocurrency">
+          </div>
+
+          <div class="form-group">
+            <label for="site_url">Canonical Site URL</label>
+            <input type="url" id="site_url" name="site_url" placeholder="https://your-pool.com">
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Open Graph (Social Sharing)</h3>
+          <div class="form-group">
+            <label for="og_title">OG Title</label>
+            <input type="text" id="og_title" name="og_title" placeholder="GRINIUM Mining Pool">
+          </div>
+
+          <div class="form-group">
+            <label for="og_description">OG Description</label>
+            <textarea id="og_description" name="og_description" placeholder="Join our Grin mining pool..." rows="3"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>OG Image</label>
+            <div class="file-upload" onclick="document.getElementById('og-input').click()">
+              <input type="file" id="og-input" accept="image/*" onchange="uploadAsset('og_image')">
+              <p>Click to upload OG image (1200x630 recommended)</p>
+              <div class="current-asset" id="og_image-current"></div>
+            </div>
+            <img id="og_image-preview" class="file-preview" style="display: none;">
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Analytics & Indexing</h3>
+          <div class="form-group">
+            <label for="ga_tracking_id">Google Analytics ID</label>
+            <input type="text" id="ga_tracking_id" name="ga_tracking_id" placeholder="G-XXXXXXXXXX">
+            <div class="helper-text">Format: G-XXXXXXXXXX</div>
+          </div>
+
+          <div class="form-row">
+            <div class="checkbox-group">
+              <input type="checkbox" id="sitemap_enabled" name="sitemap_enabled">
+              <label for="sitemap_enabled">Enable sitemap.xml</label>
+            </div>
+            <div class="checkbox-group">
+              <input type="checkbox" id="robots_noindex" name="robots_noindex">
+              <label for="robots_noindex">Prevent indexing (noindex)</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('seo')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('seo')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAYOUT TAB -->
+    <div id="payout" class="settings-content">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Withdrawal Settings</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="min_withdrawal">Minimum Withdrawal (GRIN)</label>
+              <input type="number" id="min_withdrawal" name="min_withdrawal" min="0.01" step="0.01" value="0.1">
+              <div class="helper-text">Miners must accumulate at least this much to withdraw</div>
+            </div>
+            <div class="form-group">
+              <label for="payout_frequency">Auto Payout Frequency</label>
+              <select id="payout_frequency" name="payout_frequency">
+                <option value="manual">Manual (default)</option>
+                <option value="hourly">Hourly</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="auto_payout" name="auto_payout">
+            <label for="auto_payout">Enable automatic payouts</label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Block Confirmation Depth</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="confirm_depth_mainnet">Mainnet Confirm Depth</label>
+              <input type="number" id="confirm_depth_mainnet" name="confirm_depth_mainnet" value="1441">
+              <div class="helper-text">Blocks until mainnet reward is spendable</div>
+            </div>
+            <div class="form-group">
+              <label for="confirm_depth_testnet">Testnet Confirm Depth</label>
+              <input type="number" id="confirm_depth_testnet" name="confirm_depth_testnet" value="100">
+              <div class="helper-text">Blocks until testnet reward is spendable</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Rate Limiting</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="max_pending_withdrawals">Max Pending Withdrawals (Pool)</label>
+              <input type="number" id="max_pending_withdrawals" name="max_pending_withdrawals" value="100">
+              <div class="helper-text">Total concurrent withdrawal limit</div>
+            </div>
+            <div class="form-group">
+              <label for="max_user_pending">Max Pending Per Miner</label>
+              <input type="number" id="max_user_pending" name="max_user_pending" value="10">
+              <div class="helper-text">Per-address concurrent limit</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('payout')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('payout')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ACCESS CONTROL TAB -->
+    <div id="access" class="settings-content">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Session & Security</h3>
+          <div class="form-group">
+            <label for="session_timeout_hours">Session Timeout (hours)</label>
+            <input type="number" id="session_timeout_hours" name="session_timeout_hours" min="1" max="168" value="1">
+            <div class="helper-text">How long before admin login expires</div>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="invite_codes_enabled" name="invite_codes_enabled">
+            <label for="invite_codes_enabled">Enable invite codes for private pool</label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Admin IP Allowlist</h3>
+          <div class="helper-text">Only these IPs can access the admin panel</div>
+          <div class="list-item-input">
+            <input type="text" id="admin-allowlist-input" placeholder="192.168.1.0/24 or 203.0.113.5">
+            <button class="btn btn-secondary" onclick="addToAdminAllowlist()">Add</button>
+          </div>
+          <div class="list-manager" id="admin-allowlist"></div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Admin IP Blacklist</h3>
+          <div class="helper-text">Block these IPs from accessing the admin panel</div>
+          <div class="list-item-input">
+            <input type="text" id="admin-blacklist-input" placeholder="192.168.0.0/16">
+            <button class="btn btn-secondary" onclick="addToAdminBlacklist()">Add</button>
+          </div>
+          <div class="list-manager" id="admin-blacklist"></div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('access')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('access')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ALERTS TAB -->
+    <div id="alerts" class="settings-content">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Alert Delivery</h3>
+          <div class="form-group">
+            <label for="alert_check_interval_secs">Check Interval (seconds)</label>
+            <input type="number" id="alert_check_interval_secs" name="alert_check_interval_secs" min="5" max="3600" value="60">
+            <div class="helper-text">How often to check for alert conditions (5-3600 sec)</div>
+          </div>
+
+          <div class="form-group">
+            <label for="alert_email_address">Email Address</label>
+            <input type="email" id="alert_email_address" name="alert_email_address" placeholder="admin@pool.com">
+            <div class="helper-text">Receive alerts via email</div>
+          </div>
+
+          <div class="form-group">
+            <label for="discord_webhook_url">Discord Webhook URL</label>
+            <input type="url" id="discord_webhook_url" name="discord_webhook_url" placeholder="https://discord.com/api/webhooks/...">
+            <div class="helper-text">Send alerts to Discord channel</div>
+          </div>
+
+          <div class="form-group">
+            <label for="slack_webhook_url">Slack Webhook URL</label>
+            <input type="url" id="slack_webhook_url" name="slack_webhook_url" placeholder="https://hooks.slack.com/...">
+            <div class="helper-text">Send alerts to Slack channel</div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Alert Thresholds</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="alert_large_withdrawal">Large Withdrawal (GRIN)</label>
+              <input type="number" id="alert_large_withdrawal" name="alert_large_withdrawal" value="100">
+              <div class="helper-text">Alert if withdrawal exceeds this amount</div>
+            </div>
+            <div class="form-group">
+              <label for="alert_tor_fails_per_week">Tor Failures / Week</label>
+              <input type="number" id="alert_tor_fails_per_week" name="alert_tor_fails_per_week" value="3">
+              <div class="helper-text">Alert if Tor connectivity fails this many times</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('alerts')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('alerts')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/auth.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/theme.js"></script>
+  <script>
+    // Tab switching
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tab = btn.getAttribute('data-tab');
+        switchTab(tab);
+      });
+    });
+
+    function switchTab(tabName) {
+      document.querySelectorAll('.settings-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+      document.getElementById(tabName).classList.add('active');
+      document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+    }
+
+    // Load settings on page load
+    window.addEventListener('DOMContentLoaded', () => {
+      loadAllSettings();
+    });
+
+    async function loadAllSettings() {
+      try {
+        const response = await fetch('/api/admin/settings', { credentials: 'include' });
+        if (!response.ok) throw new Error('Failed to load settings');
+        const data = await response.json();
+        populateForm(data.data);
+      } catch (err) {
+        showToast('Error loading settings: ' + err.message, 'error');
+      }
+    }
+
+    function populateForm(settings) {
+      for (const [section, values] of Object.entries(settings)) {
+        for (const [key, value] of Object.entries(values)) {
+          const el = document.getElementById(key);
+          if (!el) continue;
+
+          if (el.type === 'checkbox') {
+            el.checked = value === true || value === 'true';
+          } else if (el.type === 'color') {
+            el.value = value || '#667eea';
+            updateColorPreview(el);
+          } else if (el.type === 'range') {
+            el.value = value;
+            updateRangeDisplay(el);
+          } else if (el.tagName === 'TEXTAREA' || el.type === 'text' || el.type === 'email' || el.type === 'url' || el.type === 'number') {
+            el.value = value || '';
+          } else if (el.tagName === 'SELECT') {
+            el.value = value || '';
+          }
+        }
+      }
+
+      // Update conditional visibility
+      updatePoolVisibilityUI();
+
+      // Load asset previews
+      loadAssetPreviews();
+    }
+
+    async function saveSection(section) {
+      const form = document.querySelector(`#${section} .settings-form`);
+      const data = {};
+
+      form.querySelectorAll('input, select, textarea').forEach(el => {
+        if (!el.id) return;
+        if (el.type === 'checkbox') {
+          data[el.id] = el.checked;
+        } else if (el.value) {
+          data[el.id] = el.value;
+        }
+      });
+
+      try {
+        const response = await fetch(`/api/admin/settings/${section}`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+
+        if (!response.ok) throw new Error('Save failed');
+        showToast(`${section} settings saved!`, 'success');
+      } catch (err) {
+        showToast('Error saving settings: ' + err.message, 'error');
+      }
+    }
+
+    async function restoreSection(section) {
+      if (!confirm(`Restore ${section} to defaults?`)) return;
+
+      try {
+        const response = await fetch(`/api/admin/settings/${section}/restore`, {
+          method: 'POST',
+          credentials: 'include'
+        });
+
+        if (!response.ok) throw new Error('Restore failed');
+        const data = await response.json();
+        location.reload();
+      } catch (err) {
+        showToast('Error restoring defaults: ' + err.message, 'error');
+      }
+    }
+
+    async function uploadAsset(type) {
+      const input = document.getElementById(`${type}-input`);
+      if (!input.files.length) return;
+
+      const formData = new FormData();
+      formData.append('file', input.files[0]);
+
+      try {
+        const response = await fetch(`/api/admin/assets/upload?type=${type}`, {
+          method: 'POST',
+          credentials: 'include',
+          body: formData
+        });
+
+        if (!response.ok) throw new Error('Upload failed');
+        showToast('Asset uploaded!', 'success');
+        loadAssetPreviews();
+      } catch (err) {
+        showToast('Upload error: ' + err.message, 'error');
+      }
+    }
+
+    async function loadAssetPreviews() {
+      try {
+        const response = await fetch('/api/admin/assets', { credentials: 'include' });
+        if (!response.ok) return;
+        const data = await response.json();
+
+        data.assets.forEach(asset => {
+          const previewEl = document.getElementById(`${asset.asset_type}-preview`);
+          const currentEl = document.getElementById(`${asset.asset_type}-current`);
+
+          if (previewEl) {
+            previewEl.src = `/custom/${asset.filename}`;
+            previewEl.style.display = 'block';
+          }
+          if (currentEl) {
+            currentEl.textContent = `Current: ${asset.original_name}`;
+          }
+        });
+      } catch (err) {
+        console.error('Failed to load asset previews:', err);
+      }
+    }
+
+    function updatePoolVisibilityUI() {
+      const visibility = document.getElementById('pool_visibility');
+      const whitelistGroup = document.getElementById('address-whitelist-group');
+      if (visibility && whitelistGroup) {
+        whitelistGroup.style.display = visibility.value === 'private' ? 'block' : 'none';
+      }
+    }
+
+    document.getElementById('pool_visibility')?.addEventListener('change', updatePoolVisibilityUI);
+
+    function updateColorPreview(el) {
+      const preview = document.getElementById('accent-preview');
+      if (preview) preview.textContent = el.value.toUpperCase();
+    }
+
+    function updateRangeDisplay(el) {
+      const display = document.getElementById(`${el.id}-value`) || document.getElementById('fee-value');
+      if (display) display.textContent = el.value;
+    }
+
+    document.getElementById('accent_color')?.addEventListener('change', (e) => updateColorPreview(e.target));
+    document.getElementById('pool_fee_percent')?.addEventListener('input', (e) => updateRangeDisplay(e.target));
+
+    function showToast(message, type = 'success') {
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      toast.textContent = message;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 4000);
+    }
+
+    function addToWhitelist() {
+      const input = document.getElementById('whitelist-input');
+      if (!input.value) return;
+      addToList('whitelist-list', input.value);
+      input.value = '';
+    }
+
+    function addToAdminAllowlist() {
+      const input = document.getElementById('admin-allowlist-input');
+      if (!input.value) return;
+      addToList('admin-allowlist', input.value);
+      input.value = '';
+    }
+
+    function addToAdminBlacklist() {
+      const input = document.getElementById('admin-blacklist-input');
+      if (!input.value) return;
+      addToList('admin-blacklist', input.value);
+      input.value = '';
+    }
+
+    function addToList(listId, value) {
+      const list = document.getElementById(listId);
+      const item = document.createElement('div');
+      item.className = 'list-item';
+      item.innerHTML = `
+        <span>${value}</span>
+        <button class="btn btn-danger" style="min-width: auto; padding: 0.5rem 1rem;" onclick="this.parentElement.remove()">Remove</button>
+      `;
+      list.appendChild(item);
+    }
+  </script>
+</body>
+</html>

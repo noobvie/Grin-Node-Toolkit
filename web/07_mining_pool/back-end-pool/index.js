@@ -3,7 +3,9 @@
 const express = require('express');
 const path = require('path');
 const { initDb, getDb } = require('./lib/db');
-const { loadConfig } = require('./lib/config');
+const { loadConfig, mergeDbSettings } = require('./lib/config');
+const PoolSettings = require('./lib/pool-settings');
+const AssetManager = require('./lib/asset-manager');
 const WalletAPI = require('./lib/wallet');
 const StratumServer = require('./lib/stratum-server');
 const BlockManager = require('./lib/blocks');
@@ -21,9 +23,21 @@ const RateLimiter = require('./lib/rate-limiter');
 const IpFilter = require('./lib/ip-filter');
 const AlertMonitor = require('./lib/alert-monitor');
 const AlertDelivery = require('./lib/alert-delivery');
+const cookieParser = require('cookie-parser');
+const crypto = require('crypto');
+const fs = require('fs');
 
 const app = express();
 app.use(express.json());
+app.use(cookieParser());  // FIX #4: Parse httpOnly cookies
+
+// FIX #8: Compute config integrity hash
+function hashConfig(cfg) {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(cfg))
+    .digest('hex');
+}
 
 // Security headers middleware
 app.use((req, res, next) => {
@@ -55,6 +69,10 @@ function validateConfig(cfg) {
   if (!cfg.stratum_port || cfg.stratum_port < 1024 || cfg.stratum_port > 65535) {
     throw new Error(`Invalid stratum_port: ${cfg.stratum_port}`);
   }
+  // FIX #7: Validate pool fee is between 0 and 50% (prevent fee theft)
+  if (cfg.pool_fee_percent !== undefined && (cfg.pool_fee_percent < 0 || cfg.pool_fee_percent > 50)) {
+    throw new Error(`Invalid pool_fee_percent: ${cfg.pool_fee_percent} (must be 0-50)`);
+  }
   return cfg;
 }
 
@@ -76,6 +94,8 @@ let rateLimiter = null;
 let ipFilter = null;
 let alertMonitor = null;
 let alertDelivery = null;
+let poolSettings = null;
+let assetManager = null;
 
 async function initializePool() {
   try {
@@ -85,12 +105,32 @@ async function initializePool() {
     // Validate config (CRITICAL: issue #12)
     config = validateConfig(config);
 
+    // FIX #8: Check config integrity - warn if modified since last startup
+    const configHash = hashConfig(config);
+    const hashFile = '.config.sha256';
+    if (fs.existsSync(hashFile)) {
+      const savedHash = fs.readFileSync(hashFile, 'utf-8').trim();
+      if (savedHash !== configHash) {
+        console.warn('[SECURITY] Config file modified since last startup! Verify changes are intentional.');
+      }
+    }
+    fs.writeFileSync(hashFile, configHash, 'utf-8');
+
     console.log(`  Network: ${config.network}`);
     console.log(`  API port: ${config.port}`);
     console.log(`  Stratum port: ${config.stratum_port}`);
 
     db = initDb(config.db_path);
     console.log(`[${new Date().toISOString()}] Database initialized at ${config.db_path}`);
+
+    // Merge DB settings into config (applies UI-customized settings at startup)
+    config = mergeDbSettings(config, db);
+    console.log(`[${new Date().toISOString()}] Pool configuration merged from database`);
+
+    // Initialize pool settings manager and asset manager
+    poolSettings = new PoolSettings(db);
+    assetManager = new AssetManager(config, db);
+    console.log(`[${new Date().toISOString()}] Pool settings and asset managers initialized`);
 
     // Create user_settings table at startup (CRITICAL: issue #6)
     db.exec(`
@@ -207,31 +247,56 @@ function setupRoutes() {
     }
   );
 
-  // FIX #7: Add rate limiting to auth endpoints
+  // FIX #7, #6, #4: Add rate limiting + first-admin gating + httpOnly cookies
   app.post('/api/auth/register',
     rateLimiter.middleware('auth'),
     async (req, res) => {
       try {
+        // Check if any admin already exists (prevent first-admin takeover)
+        const adminCount = db.prepare('SELECT COUNT(*) as cnt FROM users WHERE is_admin=1').get();
+        if (adminCount.cnt > 0) {
+          return res.status(403).json({ error: 'Admin registration closed.' });
+        }
+
         const { username, password } = req.body;
         const result = await authManager.registerAdmin(username, password);
         if (result.success) {
+          // FIX #4: Generate tokens and set as httpOnly cookies
+          const tokens = authManager.generateTokens(result.user_id, username, true);
+
+          res.cookie('access_token', tokens.accessToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict',
+            maxAge: 3600000
+          });
+
+          res.cookie('refresh_token', tokens.refreshToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict',
+            maxAge: 604800000
+          });
+
           // Log registration event
           const auditStmt = db.prepare(`
             INSERT INTO admin_audit_log (user_id, action, resource, details)
             VALUES (?, 'register', 'auth', ?)
           `);
-          auditStmt.run(null, JSON.stringify({ username, timestamp: new Date() }));
-          res.json(result);
+          auditStmt.run(result.user_id, JSON.stringify({ username, timestamp: new Date().toISOString() }));
+
+          // Don't return tokens (in cookies now)
+          res.json({ success: true, username: result.username, is_admin: result.is_admin });
         } else {
-          res.status(400).json(result);
+          res.status(400).json({ success: false, error: result.error });
         }
       } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: 'Server error' });
       }
     }
   );
 
-  // FIX #7, #15: Add rate limiting and audit logging to login
+  // FIX #7, #15, #4: Add rate limiting + audit logging + httpOnly cookies
   app.post('/api/auth/login',
     rateLimiter.middleware('auth'),
     async (req, res) => {
@@ -241,13 +306,30 @@ function setupRoutes() {
         const result = await authManager.login(username, password, ip);
 
         if (result.success) {
+          // FIX #4: Set httpOnly, Secure cookie instead of returning token
+          res.cookie('access_token', result.access_token, {
+            httpOnly: true,        // JS cannot access (prevents XSS theft)
+            secure: process.env.NODE_ENV === 'production',  // HTTPS only in production
+            sameSite: 'strict',    // CSRF protection
+            maxAge: 3600000        // 1 hour
+          });
+
+          res.cookie('refresh_token', result.refresh_token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict',
+            maxAge: 604800000      // 7 days
+          });
+
           // Log successful login
           const auditStmt = db.prepare(`
             INSERT INTO admin_audit_log (user_id, action, resource, details)
             VALUES (?, 'login_success', 'auth', ?)
           `);
           auditStmt.run(result.user_id || null, JSON.stringify({ ip, username, timestamp: new Date().toISOString() }));
-          res.json(result);
+
+          // Don't return tokens in response body (they're in httpOnly cookies)
+          res.json({ success: true, username: result.username, is_admin: result.is_admin });
         } else {
           // Log failed login attempt
           const auditStmt = db.prepare(`
@@ -255,22 +337,52 @@ function setupRoutes() {
             VALUES (?, 'login_failed', 'auth', ?)
           `);
           auditStmt.run(null, JSON.stringify({ ip, username, timestamp: new Date().toISOString() }));
-          res.status(401).json(result);
+          res.status(401).json({ success: false, error: 'Invalid credentials' });
         }
       } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: 'Server error' });  // Don't expose error details
       }
     }
   );
 
   app.post('/api/auth/refresh', (req, res) => {
-    const { refresh_token } = req.body;
-    const result = authManager.refreshAccessToken(refresh_token);
-    if (result.success) {
-      res.json(result);
-    } else {
-      res.status(401).json(result);
+    // FIX #4: Get refresh token from cookie instead of body
+    const refreshToken = req.cookies.refresh_token || req.body.refresh_token;
+    if (!refreshToken) {
+      return res.status(401).json({ error: 'No refresh token' });
     }
+
+    const result = authManager.refreshAccessToken(refreshToken);
+    if (result.success) {
+      // Set new access token in httpOnly cookie
+      res.cookie('access_token', result.access_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 3600000
+      });
+
+      // Set new refresh token if provided
+      if (result.refresh_token) {
+        res.cookie('refresh_token', result.refresh_token, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'strict',
+          maxAge: 604800000
+        });
+      }
+
+      res.json({ success: true });
+    } else {
+      res.status(401).json({ success: false, error: result.error });
+    }
+  });
+
+  // FIX: Add logout endpoint
+  app.post('/api/auth/logout', (req, res) => {
+    res.clearCookie('access_token', { httpOnly: true });
+    res.clearCookie('refresh_token', { httpOnly: true });
+    res.json({ success: true });
   });
 
   app.post('/api/auth/change-password', requireAuth(authManager), (req, res) => {
@@ -280,8 +392,12 @@ function setupRoutes() {
         if (result.success) {
           res.json(result);
         } else {
-          res.status(400).json(result);
+          // FIX #6: Don't expose detailed error messages
+          res.status(400).json({ success: false, error: 'Password change failed' });
         }
+      })
+      .catch(err => {
+        res.status(500).json({ error: 'Server error' });
       });
   });
 
@@ -369,53 +485,10 @@ function setupRoutes() {
       .catch(err => res.status(500).json({ error: err.message }));
   });
 
-  // FIX #10: Secure test endpoint with admin auth
-  app.post('/api/test/initiate-withdrawal', secureAdmin, async (req, res) => {
-    try {
-      const { grin_address, amount } = req.body;
-
-      if (!grin_address || !amount) {
-        return res.status(400).json({ error: 'Missing required fields' });
-      }
-
-      if (amount <= 0 || amount < config.min_withdrawal) {
-        return res.status(400).json({
-          error: `Minimum withdrawal is ${config.min_withdrawal} GRIN`
-        });
-      }
-
-      const stmt = db.prepare(`
-        INSERT INTO withdrawals (grin_address, amount, fee)
-        VALUES (?, ?, 0)
-      `);
-
-      const result = stmt.run(grin_address, amount);
-
-      const eventStmt = db.prepare(`
-        INSERT INTO withdrawal_events
-        (withdrawal_id, to_status, triggered_by)
-        VALUES (?, 'tor_checking', 'admin_test')
-      `);
-      eventStmt.run(result.lastInsertRowid);
-
-      // Audit log
-      const auditStmt = db.prepare(`
-        INSERT INTO admin_audit_log (user_id, action, resource, details)
-        VALUES (?, 'test_withdrawal', 'withdrawals', ?)
-      `);
-      auditStmt.run(req.user?.user_id || null, JSON.stringify({ grin_address, amount, withdrawal_id: result.lastInsertRowid }));
-
-      res.json({
-        withdrawal_id: result.lastInsertRowid,
-        grin_address,
-        amount,
-        status: 'tor_checking',
-        created_at: new Date().toISOString()
-      });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  // REMOVED: /api/test/initiate-withdrawal endpoint
+  // Reason: Test endpoint disabled in production. Allowed admin to initiate arbitrary withdrawals.
+  // Use /api/admin/withdrawals to view and manage withdrawal scheduler instead.
+  // For testing: use withdrawal_scheduler.initiateWithdrawal() directly in backend tests.
 
   app.get('/api/admin/withdrawals', secureAdmin, (req, res) => {
     try {
@@ -1036,6 +1109,95 @@ function setupRoutes() {
         error: err.message,
         timestamp: new Date().toISOString()
       });
+    }
+  });
+
+  // ─── POOL SETTINGS ENDPOINTS (Admin only) ─────────────────────────
+
+  // Get all settings sections
+  app.get('/api/admin/settings', secureAdmin, (req, res) => {
+    try {
+      const allSettings = poolSettings.getAll();
+      res.json({ success: true, data: allSettings });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to fetch settings' });
+    }
+  });
+
+  // Get one settings section
+  app.get('/api/admin/settings/:section', secureAdmin, (req, res) => {
+    try {
+      const section = poolSettings.getSection(req.params.section);
+      res.json({ success: true, section: req.params.section, data: section });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Update one settings section
+  app.post('/api/admin/settings/:section', secureAdmin, (req, res) => {
+    try {
+      const updated = poolSettings.updateSection(req.params.section, req.body, req.user.user_id);
+      res.json({ success: true, section: req.params.section, data: updated });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Restore section to defaults
+  app.post('/api/admin/settings/:section/restore', secureAdmin, (req, res) => {
+    try {
+      const restored = poolSettings.resetSection(req.params.section, req.user.user_id);
+      res.json({ success: true, section: req.params.section, data: restored });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ─── ASSET UPLOAD ENDPOINTS (Admin only) ──────────────────────────
+
+  // Upload an asset (logo, favicon, og_image)
+  app.post('/api/admin/assets/upload', secureAdmin, (req, res) => {
+    try {
+      const upload = assetManager.getMulterInstance().single('file');
+      upload(req, res, async (err) => {
+        if (err) {
+          return res.status(400).json({ error: err.message });
+        }
+        if (!req.file) {
+          return res.status(400).json({ error: 'No file provided' });
+        }
+
+        try {
+          const assetType = req.query.type || 'custom';
+          const saved = await assetManager.saveAsset(req.file, assetType, req.user.user_id);
+          res.json({ success: true, asset: saved });
+        } catch (err) {
+          res.status(400).json({ error: err.message });
+        }
+      });
+    } catch (err) {
+      res.status(500).json({ error: 'Upload failed' });
+    }
+  });
+
+  // List uploaded assets
+  app.get('/api/admin/assets', secureAdmin, (req, res) => {
+    try {
+      const assets = assetManager.listAssets(true);
+      res.json({ success: true, assets });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to list assets' });
+    }
+  });
+
+  // Delete an asset
+  app.delete('/api/admin/assets/:filename', secureAdmin, (req, res) => {
+    try {
+      const result = assetManager.deleteAsset(req.params.filename);
+      res.json({ success: true, ...result });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
     }
   });
 

@@ -17,7 +17,9 @@ class WalletAPI {
       const result = await this._rpcCall(this.ownerUrl, 'get_balance', {}, this.ownerSecretPath);
       return result;
     } catch (err) {
-      throw new Error(`Failed to get wallet balance: ${err.message}`);
+      // FIX #6: Don't expose wallet paths or internal details
+      console.error(`[Wallet] Balance error: ${err.message}`);
+      throw new Error('Wallet balance check failed');
     }
   }
 
@@ -48,13 +50,22 @@ class WalletAPI {
   validateGrinAddress(address, network = 'testnet') {
     if (!address) return false;
 
-    const prefix = network === 'mainnet' ? 'grin1' : 'grin1';
-    if (!address.startsWith(prefix)) return false;
+    // FIX #8: Proper testnet/mainnet prefix validation (was hardcoded to 'grin1' for both)
+    const prefixes = {
+      'mainnet': 'grin1',
+      'testnet': 'tgrin1'
+    };
+    const expectedPrefix = prefixes[network] || 'grin1';
 
-    if (address.length < 15 || address.length > 80) return false;
+    if (!address.startsWith(expectedPrefix)) return false;
 
+    // Validate length (Grin addresses are typically 48-62 chars including prefix)
+    if (address.length < 48 || address.length > 62) return false;
+
+    // Validate only lowercase alphanumeric (after prefix)
+    const addressBody = address.substring(expectedPrefix.length);
     const validChars = /^[a-z0-9]+$/;
-    return validChars.test(address.substring(5));
+    return validChars.test(addressBody) && addressBody.length > 0;
   }
 
   async _rpcCall(baseUrl, method, params = {}, secretPath) {

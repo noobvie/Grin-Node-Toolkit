@@ -178,7 +178,36 @@ function createSchema() {
 
     `CREATE INDEX IF NOT EXISTS idx_alert_type ON alerts(type, status)`,
     `CREATE INDEX IF NOT EXISTS idx_alert_status ON alerts(status, triggered_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_alert_time ON alerts(triggered_at DESC)`
+    `CREATE INDEX IF NOT EXISTS idx_alert_time ON alerts(triggered_at DESC)`,
+
+    `CREATE TABLE IF NOT EXISTS pool_config (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      section TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      value_type TEXT NOT NULL DEFAULT 'string',
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_by INTEGER REFERENCES users(id),
+      UNIQUE(section, key)
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_pool_config_section ON pool_config(section)`,
+    `CREATE INDEX IF NOT EXISTS idx_pool_config_updated ON pool_config(updated_at DESC)`,
+
+    `CREATE TABLE IF NOT EXISTS pool_assets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asset_type TEXT NOT NULL,
+      filename TEXT NOT NULL UNIQUE,
+      original_name TEXT,
+      mime_type TEXT,
+      size_bytes INTEGER,
+      uploaded_by INTEGER REFERENCES users(id),
+      uploaded_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      is_active INTEGER NOT NULL DEFAULT 1
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_pool_assets_type ON pool_assets(asset_type, is_active)`,
+    `CREATE INDEX IF NOT EXISTS idx_pool_assets_uploaded ON pool_assets(uploaded_at DESC)`
   ];
 
   const transaction = db.transaction(() => {

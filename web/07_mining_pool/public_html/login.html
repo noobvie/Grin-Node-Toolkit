@@ -316,14 +316,15 @@
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
+          body: JSON.stringify({ username, password }),
+          credentials: 'include'  // FIX #4: Include httpOnly cookies
         });
 
         const data = await res.json();
 
         if (data.success) {
-          localStorage.setItem('access_token', data.access_token);
-          localStorage.setItem('refresh_token', data.refresh_token);
+          // FIX #4: Token is now in httpOnly cookie, not in response body
+          // No need to store anything in localStorage
           window.location.href = '/admin-dashboard.html';
         } else {
           showError(data.error || 'Login failed');
@@ -359,7 +360,8 @@
         const res = await fetch('/api/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
+          body: JSON.stringify({ username, password }),
+          credentials: 'include'  // FIX #4: Include httpOnly cookies
         });
 
         const data = await res.json();
@@ -384,10 +386,19 @@
       }
     }
 
-    // If already logged in, redirect to dashboard
-    if (localStorage.getItem('access_token')) {
-      window.location.href = '/admin-dashboard.html';
+    // FIX #4: Check if already logged in by testing API access (token in httpOnly cookie)
+    async function checkIfLoggedIn() {
+      try {
+        const res = await fetch('/api/health', { credentials: 'include' });
+        if (res.status === 200) {
+          window.location.href = '/admin-dashboard.html';
+        }
+      } catch (e) {
+        // Not logged in, stay on login page
+      }
     }
+
+    checkIfLoggedIn();
   </script>
 </body>
 </html>

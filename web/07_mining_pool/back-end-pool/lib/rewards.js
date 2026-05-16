@@ -19,6 +19,30 @@ class RewardDistributor {
         throw new Error(`Block ${blockId} is not confirmed (status: ${block.status})`);
       }
 
+      // FIX #1, #5: CRITICAL - Verify block actually exists on blockchain
+      // Prevents fake blocks from being credited if block_monitor is compromised
+      if (this.grinNode) {
+        try {
+          const nodeBlock = await this.grinNode.getBlock(block.height);
+
+          // Double-check: block must exist AND hash must match
+          if (!nodeBlock) {
+            throw new Error(`[SECURITY ALERT] Block ${block.height} marked confirmed in DB but NOT FOUND on blockchain!`);
+          }
+
+          if (nodeBlock.hash !== block.hash) {
+            throw new Error(`[SECURITY ALERT] Block ${block.height} hash mismatch! DB: ${block.hash}, Node: ${nodeBlock.hash}`);
+          }
+
+          console.log(`[VERIFIED] Block ${block.height} confirmed on blockchain before distribution`);
+        } catch (err) {
+          console.error(`[CRITICAL] Blockchain verification failed: ${err.message}`);
+          throw new Error(`Blockchain verification failed: ${err.message}`);
+        }
+      } else {
+        console.warn(`[WARNING] Grin node not available - skipping blockchain verification`);
+      }
+
       const shares = this.getSharesForDistribution(block.height);
 
       if (shares.length === 0) {

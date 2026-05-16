@@ -131,7 +131,7 @@ class StratumServer {
   }
 
   handleSubmit(socket, sessionId, msg) {
-    const [username, jobId, extraNonce2, blockBits, blockTime] = msg.params || [];
+    const [username, jobId, extraNonce2, blockBits, difficulty, blockTime] = msg.params || [];
 
     const session = this.minerManager.getSession(sessionId);
     if (!session) {
@@ -145,6 +145,37 @@ class StratumServer {
         JSON.stringify(
           createShareResponse(msg.id, false, -3)
         ) + '\n'
+      );
+      return;
+    }
+
+    // FIX #2: Validate share difficulty matches server-assigned difficulty
+    // Prevents attacker from claiming 1B difficulty for single share
+    if (difficulty !== undefined && difficulty !== session.difficulty) {
+      console.warn(
+        `[SECURITY] Difficulty mismatch: ${session.grinAddress} submitted ${difficulty}, expected ${session.difficulty}`
+      );
+      socket.write(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          error: { code: -4, message: 'Difficulty mismatch' },
+          id: msg.id
+        }) + '\n'
+      );
+      return;
+    }
+
+    // FIX #3: Validate job is current (not stale)
+    // Prevents replaying old/past job submissions
+    const isValidJob = this.isCurrentOrRecentJob(jobId);
+    if (!isValidJob) {
+      console.warn(`[SECURITY] Stale job submission: ${session.grinAddress} submitted job ${jobId}`);
+      socket.write(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          error: { code: -5, message: 'Job not found or stale' },
+          id: msg.id
+        }) + '\n'
       );
       return;
     }
@@ -185,6 +216,21 @@ class StratumServer {
     if (pruned > 0) {
       console.log(`[${new Date().toISOString()}] Pruned ${pruned} inactive sessions`);
     }
+  }
+
+  // FIX #3: Helper to validate job is current/recent (not stale)
+  isCurrentOrRecentJob(jobId) {
+    if (!jobId) return false;
+
+    // Keep last 10 jobs in memory; anything older is rejected
+    const recentJobWindow = 10;
+    const currentJobNum = parseInt(this.currentJobId);
+    const submittedJobNum = parseInt(jobId);
+
+    if (isNaN(submittedJobNum)) return false;
+
+    // Job must not be more than 'recentJobWindow' jobs old
+    return submittedJobNum >= Math.max(0, currentJobNum - recentJobWindow);
   }
 
   stop() {

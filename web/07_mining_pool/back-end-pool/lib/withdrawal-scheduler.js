@@ -14,6 +14,9 @@ class WithdrawalScheduler {
       24 * 3600,
       48 * 3600
     ];
+    // FIX #7: Limit concurrent withdrawals to prevent DoS
+    this.MAX_PENDING_WITHDRAWALS = 100;
+    this.MAX_USER_PENDING = 10;
   }
 
   start() {
@@ -295,6 +298,33 @@ class WithdrawalScheduler {
       );
     } catch (err) {
       console.error(`Error marking withdrawal as failed: ${err.message}`);
+    }
+  }
+
+  // FIX #7: Check withdrawal rate limits to prevent DoS
+  async canInitiateWithdrawal(grinAddress) {
+    try {
+      // Check total pending withdrawals
+      const totalPending = this.db.prepare(
+        "SELECT COUNT(*) as count FROM withdrawals WHERE status IN ('tor_checking', 'tor_sending', 'retry_scheduled')"
+      ).get();
+
+      if (totalPending.count >= this.MAX_PENDING_WITHDRAWALS) {
+        throw new Error(`Pool has reached maximum pending withdrawals (${this.MAX_PENDING_WITHDRAWALS}). Try again later.`);
+      }
+
+      // Check user's pending withdrawals
+      const userPending = this.db.prepare(
+        "SELECT COUNT(*) as count FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking', 'tor_sending', 'retry_scheduled')"
+      ).get(grinAddress);
+
+      if (userPending.count >= this.MAX_USER_PENDING) {
+        throw new Error(`You have too many pending withdrawals (${this.MAX_USER_PENDING}). Wait for them to complete.`);
+      }
+
+      return true;
+    } catch (err) {
+      throw err;
     }
   }
 

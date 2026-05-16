@@ -241,24 +241,40 @@ scripts define the same `limit_req_zone` with different names or rates, nginx er
 ## Generated & Temporary Files — Centralized Location
 
 **ALL generated documentation, audit reports, security analyses, flowcharts, and temporary
-files must be stored in `docs/generated/` with a clear purpose-based prefix and date.**
+files must be stored in `docs/generated/` with script prefix, type, and date.**
 
 ### Location & Naming
 ```
 docs/generated/
-  ├── audit_*.md           Audit reports (prefix: audit_<service>_<date>.md)
-  ├── security_*.md        Security analysis/fixes (prefix: security_<service>_<date>.md)
-  ├── flowchart_*.md       Architecture diagrams (prefix: flowchart_<service>_<date>.md)
-  └── analysis_*.md        Any other generated analysis (prefix: analysis_<topic>_<date>.md)
+  ├── script07_security_pool_audit_2026-05-15.md          Script 07 security audit
+  ├── script04_analysis_node_api_2026-05-15.md            Script 04 analysis
+  ├── script06_reference_health_collector.md              Script 06 reference (no date)
+  └── script##_<type>_<service>_<date>.md                 Pattern for all generated files
 ```
 
-### Rule
-- Never create generated files in script directories (e.g., NOT in `web/07_mining_pool/`)
-- Never create them without clear prefixes and dates
-- Keep a `docs/generated/README.md` index explaining what each file contains
-- If a generated file becomes permanent documentation, move it to `docs/` and rename to remove date/prefix
+Format: `script<XX>_<type>_<optional_service>_<optional_date>.md`
 
-**DO NOT** create files like `SECURITY_FIXES.md` scattered across `web/`, `flowcharts/`, etc.
+- **script<XX>** — REQUIRED: Script number (e.g., script07, script04, script06) so you know immediately
+- **type** — What kind of file: `security`, `audit`, `analysis`, `reference`, `flowchart`, `report`
+- **service** — Optional service name for clarity (pool, node, wallet, api, etc.)
+- **date** — `YYYY-MM-DD` only if multiple versions exist, otherwise omit
+
+### Examples
+- ✅ `script07_security_pool_audit_2026-05-15.md` — Security audit for Script 07
+- ✅ `script04_audit_foreign_api_2026-05-10.md` — API audit for Script 04
+- ✅ `script06_reference_health_endpoints.md` — Reference doc for Script 06
+- ❌ `security_pool_audit_2026-05-15.md` — Missing script prefix ❌
+- ❌ `SECURITY_FIXES.md` — No script prefix ❌
+
+### Rules
+1. **Never scatter files** — ALL generated docs go to `docs/generated/`
+2. **Always include script prefix** — `script##_` so purpose is immediately clear
+3. **Use lowercase with underscores** — `script07_security_pool_audit_2026-05-15.md`
+4. **Use YYYY-MM-DD dates** — for version tracking when multiple versions exist
+5. **Keep a README.md** — explaining what each file contains
+6. **If a generated file becomes permanent**, move it to `docs/` and remove date/prefix (keep script## if relevant)
+
+**DO NOT** create files like `SECURITY_FIXES.md` scattered across `web/07_mining_pool/`, `flowcharts/`, etc.
 
 ## Do Not
 - Never run the toolkit scripts locally — they assume a Linux VPS with root access

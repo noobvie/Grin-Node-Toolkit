@@ -192,8 +192,8 @@ def _check_seed_host(host, port, now, conn):
     expiry_str, expiry_days, registered_str = _format_expiry(expiry_ts, registered_ts, now)
 
     try:
-        addrs = socket.getaddrinfo(host, port, socket.AF_INET)
-        ips = sorted({a[4][0] for a in addrs})
+        addrs = socket.getaddrinfo(host, port, socket.AF_UNSPEC)
+        ips = sorted({a[4][0] for a in addrs if a[0] in (socket.AF_INET, socket.AF_INET6)})
     except OSError:
         ips = []
 

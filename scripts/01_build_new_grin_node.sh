@@ -1489,13 +1489,11 @@ ensure_grin_user() {
     fi
 
     if [[ -n "${GRIN_DIR:-}" && -d "$GRIN_DIR" ]]; then
-        # Chown the entire base tree (/opt/grin) so grin user can create ~/.grin/main/
-        # on startup and all node/wallet dirs are consistently owned.
-        local _parent; _parent="$(dirname "$GRIN_DIR")"
-        local _grandparent; _grandparent="$(dirname "$_parent")"
-        local _base; _base="${_grandparent}"
-        [[ -d "$_base" ]] && chown -R grin:grin "$_base" 2>/dev/null || true
-        info "Ownership set: grin:grin → $_base"
+        # Chown only the specific node directory — other services (grinscan, drop,
+        # wallet, etc.) share /opt/grin/ and manage their own ownership (www-data).
+        # Never walk up to the grandparent or it silently breaks every other service.
+        chown -R grin:grin "$GRIN_DIR" 2>/dev/null || true
+        info "Ownership set: grin:grin → $GRIN_DIR"
     fi
 }
 
@@ -2096,11 +2094,9 @@ start_grin_tmux() {
         tmux kill-session -t "$session" 2>/dev/null || true
     fi
 
-    # Own the directory and run process as grin service user if available
+    # Own only the node directory — not the parent tree (grinscan, drop, etc. live there).
     if id grin &>/dev/null; then
-        local _par; _par="$(dirname "$GRIN_DIR")"
-        local _base; _base="$(dirname "$_par")"
-        [[ -d "$_base" ]] && chown -R grin:grin "$_base" 2>/dev/null || true
+        chown -R grin:grin "$GRIN_DIR" 2>/dev/null || true
         tmux new-session -d -s "$session" -c "$GRIN_DIR" \
             "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$GRIN_DIR\" && ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
             || die "Failed to create tmux session '$session'. Is tmux installed and working?"

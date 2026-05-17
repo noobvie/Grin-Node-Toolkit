@@ -55,7 +55,6 @@ function readBanners() {
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}\n`;
   process.stdout.write(line);
-  try { fs.appendFileSync(config.log_path, line); } catch {}
 }
 
 // ── SQLite ───────────────────────────────────────────────────────────────────

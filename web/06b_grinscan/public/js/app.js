@@ -110,9 +110,10 @@ function setStallBanner(stalled) {
 
 // ── INDEX PAGE ───────────────────────────────────────────────────────────────
 
-let _prevTipHeight = 0;
-let _currentPage   = 1;
-let _totalCached   = 0;
+let _prevTipHeight      = 0;
+let _currentPage        = 1;
+let _totalCached        = 0;
+let _latestBlockTs      = 0; // Unix timestamp of the most recent block (page-1 first row)
 const _LIMIT = 20;
 
 function _totalPages() { return Math.max(1, Math.ceil(_totalCached / _LIMIT)); }
@@ -136,6 +137,7 @@ async function fetchPage(page) {
     if (!tbody) return;
     tbody.innerHTML = '';
     blocks.forEach(b => tbody.appendChild(renderBlockRow(b)));
+    if (page === 1 && blocks.length > 0) _latestBlockTs = blocks[0].timestamp || 0;
     _currentPage = page;
     updatePagination();
   } catch (e) {
@@ -253,12 +255,13 @@ async function pollStats() {
 
     const liveEl = document.getElementById('live-indicator');
     if (liveEl) {
-      const now = new Date();
-      const ts = now.toLocaleString(undefined, {
-        month: 'short', day: 'numeric',
-        hour: '2-digit', minute: '2-digit', second: '2-digit'
-      });
-      liveEl.textContent = 'Updated ' + ts;
+      if (_latestBlockTs > 0) {
+        const ts = new Date(_latestBlockTs * 1000).toLocaleString(undefined, {
+          month: 'short', day: 'numeric',
+          hour: '2-digit', minute: '2-digit', second: '2-digit'
+        });
+        liveEl.textContent = 'Updated ' + ts;
+      }
     }
   } catch {}
 }

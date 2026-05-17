@@ -325,6 +325,9 @@ grinscan_configure() {
 JSON
 
         chown www-data:www-data "$config_path"
+        # Ensure the entire data dir is www-data-owned — a node rebuild (Script 01)
+        # may have done chown -R grin:grin /opt/grin/ and overwritten our ownership.
+        chown -R www-data:www-data "${GRINSCAN_DIR}/${net_short}"
         success "Config written: ${config_path}"
 
         # Create sample banners.json if it doesn't exist yet (active:false = no banner shown until edited)

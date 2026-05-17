@@ -159,6 +159,70 @@
       Testnet (:13416): ...
 
 ================================================================================
+ PLANNED: Solo Mining Stats Dashboard  [not yet implemented — see plan file]
+================================================================================
+
+ Goal: Read-only web dashboard for non-technical miners (no SSH needed).
+       Modelled on 2miners — enter Grin address, see workers + block history.
+
+ Architecture:
+   Miners ──→ Node.js stratum proxy (:3416/:13416)
+                 │  tracks per-address workers/shares in-memory
+                 └──→ Grin node built-in stratum (:3417/:13417)
+   Browser ──→ nginx (HTTPS) ──→ Node.js API (:3500)
+                                   ├── GET /api/info              notice text
+                                   ├── GET /api/:net/stats        node + wallet health
+                                   └── GET /api/:net/miner/:addr  [rate limited 10r/m]
+   Node.js ──→ node Owner API (:3413/:13413)   get_status
+           ──→ wallet Foreign API (:3415)       reachability check ONLY (no password)
+           ──→ SQLite                           block history
+
+ Homepage shows (per enabled network):
+   · Height, estimated hashrate (Cuckatoo32: diff_delta×42/dt/16384), peers
+   · Stratum: listening? miners connected?
+   · Wallet: ● Ready / ● Offline  (Foreign API reachability only)
+   · Custom notice banner (operator sets: "private pool", maintenance, etc.)
+
+ Miner lookup (address input):
+   · Client-side bech32 check (grin1[ac-hj-np-z02-9]{54}) before submitting
+   · Server-side validation → HTTP 400 if invalid (no DB query)
+   · Unknown valid address → empty result (no 404, no confirmation)
+   · Shows: workers connected, estimated hashrate, blocks found + maturity
+
+ SQLite schema (block history only, no user accounts, no PPLNS):
+   blocks(id, network, height, found_by, found_at, maturity_height)
+   maturity_height = height + 1440
+
+ New bash functions in 07_grin_mining_solo.sh:
+   solo_stats_install()         Node.js deps + systemd + logrotate
+   solo_stats_configure()       enable networks, notice text, api_secret paths
+   solo_nginx_add_domain()      validate → vhost → nginx_run_certbot()
+   solo_nginx_update_domain()   nginx_extract_server_name() → rewrite → certbot
+   solo_nginx_remove_domain()   nginx_disable_site() + nginx_delete_certbot_cert()
+   solo_nginx_domain_menu()     Add / Update / Remove submenu
+   solo_stats_service_menu()    start / stop / restart
+   solo_dashboard_menu()        P) submenu (1-5/0)
+
+ nginx rate-limit zones:
+   grin_api   (30r/m) → /api/:net/stats       reuses scripts 04/06 shared zone
+   solo_miner (10r/m) → /api/:net/miner/:addr  new, script07-solo-miner.conf
+
+ New menu option in script 07:
+   P) Stats Dashboard  (replaces S) Stats web page)
+      1) Install  2) Configure  3) Nginx domain  4) Service  5) Logs  0) Back
+
+ New files:
+   web/07_mining_pool_solo/back-end/index.js
+   web/07_mining_pool_solo/back-end/lib/stratum-proxy.js
+   web/07_mining_pool_solo/back-end/lib/node-api.js
+   web/07_mining_pool_solo/back-end/lib/wallet-check.js
+   web/07_mining_pool_solo/back-end/lib/db.js
+   web/07_mining_pool_solo/back-end/lib/config.js
+   web/07_mining_pool_solo/back-end/solo-stats.json.template
+   web/07_mining_pool_solo/back-end/package.json
+   web/07_mining_pool_solo/public/index.html   ← replaces stats.html
+
+================================================================================
  Port Reference
 ================================================================================
 

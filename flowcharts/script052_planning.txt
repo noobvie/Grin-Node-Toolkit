@@ -1174,3 +1174,339 @@
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   END OF PLAN
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║    052_grin_drop — REFACTOR PLAN: Single Source of Truth for Claim Caps     ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+  Version:  planning v13
+  Date:     2026-05-17
+  Scope:    Eliminate 4 independent hardcoded sources of truth for claim-cap
+            amounts. After this refactor, changing a cap in config.js
+            automatically cascades to the backend enforcement AND the frontend
+            UI — no other file needs editing.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PROBLEM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Mainnet and testnet share one codebase, differentiated by DROP_CONF env var.
+  Every claim-cap value currently lives in 4 independent places. Changing one
+  network's cap requires hunting all 4 and updating each manually — any missed
+  location produces a silent bug (wrong UI, wrong backend fallback, or stale
+  HTML attribute).
+
+  Current four sources of truth:
+
+  ┌─────┬──────────────────────────────┬─────────────────────────────────────┐
+  │  #  │  Location                    │  What it controls                   │
+  ├─────┼──────────────────────────────┼─────────────────────────────────────┤
+  │  1  │  config.js DEFAULTS line 33  │  claim_grin_per_tx  (backend cap,   │
+  │     │                              │  also served to frontend via        │
+  │     │                              │  /api/status — but frontend ignores)│
+  ├─────┼──────────────────────────────┼─────────────────────────────────────┤
+  │  2  │  app.js line 79 (module-lvl) │  ANON_CLAIM_GRIN  (anon cap, baked  │
+  │     │                              │  at process start, not in config,   │
+  │     │                              │  not served to frontend)            │
+  ├─────┼──────────────────────────────┼─────────────────────────────────────┤
+  │  3  │  faucet.js lines 83–92       │  CLAIM_CUSTOM_MAX, ANON_CLAIM_AMOUNT│
+  │     │                              │  ANON_CUSTOM_MAX, preset arrays     │
+  │     │                              │  (all hardcoded ternaries — fully   │
+  │     │                              │  disconnected from backend)         │
+  ├─────┼──────────────────────────────┼─────────────────────────────────────┤
+  │  4  │  index.html lines 156, 186   │  max= attributes on custom inputs   │
+  │     │                              │  (overridden by faucet.js at        │
+  │     │                              │  runtime anyway — mostly noise)     │
+  └─────┴──────────────────────────────┴─────────────────────────────────────┘
+
+  Additional inconsistency discovered:
+    mainnet ANON_CLAIM_GRIN (app.js) = 0.009  GRIN
+    mainnet ANON_CLAIM_AMOUNT (faucet.js) = 0.005 GRIN
+    → backend allows up to 0.009, frontend only ever requests up to 0.005
+    → silent discrepancy; no bug today but will confuse future changes
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TARGET ARCHITECTURE (after refactor)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ONE change point → automatic cascade:
+
+  config.js DEFAULTS
+    claim_grin_per_tx        ← edit here to change address-based cap
+    anon_claim_grin_per_tx   ← edit here to change anonymous cap
+        │
+        │  app.js reads cfg fresh per-request
+        ├─► backend enforcement (both endpoints)
+        │
+        │  /api/status already serves claim_grin_per_tx
+        │  + now also serves anon_claim_grin_per_tx
+        │
+        └─► faucet.js refreshStatus() reads both from response
+              ├─ updates CLAIM_CUSTOM_MAX  → input max + placeholder
+              ├─ updates ANON_CUSTOM_MAX   → input max + placeholder
+              ├─ updates ANON_CLAIM_AMOUNT → anon default amount
+              └─ re-runs DOM update (already exists: lines 943–958)
+
+  index.html max= attributes become safe fallbacks only
+  (JS always overrides them on first status fetch)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  WHAT STAYS HARDCODED (intentionally)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  These are network labels and UX presets — not security-critical amounts.
+  The server always clamps regardless of what the frontend sends.
+
+  Stays hardcoded               Reason
+  ──────────────────────────    ─────────────────────────────────────────────
+  COIN ('GRIN' / 'tGRIN')       Network identity label, not an amount
+  NET_FLAG ('--testnet ')       CLI command generation, not an amount
+  ADDR_PFX ('grin1'/'tgrin1')   Address prefix, not an amount
+  CLAIM_CUSTOM_MIN              Minimum is stable (0.0001/0.001); tiny change
+                                risk; server clamps upward anyway
+  CLAIM_AMOUNTS [0.1, 0.2, 0.5] Preset buttons — UX convenience, server clamps
+  ANON_CLAIM_AMOUNTS [0.5,1,2]  Same — already updated, server clamps
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  IMPLEMENTATION — FILE BY FILE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ── FILE 1: web/052_drop/server/config.js ────────────────────────────────────
+
+  Change: Add anon_claim_grin_per_tx to the DEFAULTS object (after
+  claim_grin_per_tx, line 33).
+
+  Before (line 33):
+    claim_grin_per_tx:         _IS_MAINNET ? 0.008 : 3.0,  // server-side cap per claim
+
+  After (lines 33–34):
+    claim_grin_per_tx:         _IS_MAINNET ? 0.008 : 3.0,  // server-side cap, address-based
+    anon_claim_grin_per_tx:    _IS_MAINNET ? 0.009 : 2.0,  // server-side cap, anonymous claim
+
+  Also add 'anon_claim_grin_per_tx' to the numKeys Set in writeConfigKey()
+  (line 110) so it coerces correctly if written via admin panel:
+
+  Before:
+    'claim_grin_per_tx', 'claim_cooldown_minutes', ...
+
+  After:
+    'claim_grin_per_tx', 'anon_claim_grin_per_tx', 'claim_cooldown_minutes', ...
+
+  ── FILE 2: web/052_drop/server/app.js ────────────────────────────────────────
+
+  Change A — Remove module-level ANON_CLAIM_GRIN constant (line 79):
+
+  Remove:
+    const ANON_CLAIM_GRIN = loadConfig().network === 'mainnet' ? 0.009 : 2.0;
+
+  Why: module-level constants baked at process start cannot reflect live
+  config changes. The anonymous endpoint already calls loadConfig() fresh
+  per-request — use that cfg object instead.
+
+  Change B — Anonymous endpoint: read cap from cfg (around line 439):
+
+  Before:
+    const requestedAnonAmount = body.amount != null ? parseFloat(body.amount) : null;
+    const anonAmount = (requestedAnonAmount != null && requestedAnonAmount > 0)
+      ? Math.min(Math.max(requestedAnonAmount, 0.0001), ANON_CLAIM_GRIN)
+      : ANON_CLAIM_GRIN;
+
+  After:
+    const anonMax = parseFloat(cfg.anon_claim_grin_per_tx)
+                    || (cfg.network === 'mainnet' ? 0.009 : 2.0);
+    const requestedAnonAmount = body.amount != null ? parseFloat(body.amount) : null;
+    const anonAmount = (requestedAnonAmount != null && requestedAnonAmount > 0)
+      ? Math.min(Math.max(requestedAnonAmount, 0.0001), anonMax)
+      : anonMax;
+
+  Change C — /api/status payload: expose anon cap (after line 211):
+
+  Before:
+    claim_grin_per_tx:    cfg.claim_grin_per_tx,
+
+  After:
+    claim_grin_per_tx:         cfg.claim_grin_per_tx,
+    anon_claim_grin_per_tx:    cfg.anon_claim_grin_per_tx,
+
+  Change D — Update comment on anonymous endpoint (line 409):
+
+  Before:
+    // Amount is capped to ANON_CLAIM_GRIN max (0.009 mainnet / 2.0 testnet); min 0.0001.
+
+  After:
+    // Amount is capped to cfg.anon_claim_grin_per_tx (0.009 mainnet / 2.0 testnet); min 0.0001.
+
+  ── FILE 3: web/052_drop/public_html/js/faucet.js ─────────────────────────────
+
+  Change A — Convert server-driven caps from const to let (lines 91–92):
+
+  Before:
+    const CLAIM_CUSTOM_MAX = window.DROP_NETWORK === 'mainnet' ? 0.008  : 3.0;
+    const ANON_CUSTOM_MAX  = window.DROP_NETWORK === 'mainnet' ? 0.008  : ANON_CLAIM_AMOUNT;
+
+  After:
+    let CLAIM_CUSTOM_MAX = window.DROP_NETWORK === 'mainnet' ? 0.008  : 3.0;   // updated from /api/status
+    let ANON_CUSTOM_MAX  = window.DROP_NETWORK === 'mainnet' ? 0.008  : ANON_CLAIM_AMOUNT; // same
+
+  Also convert ANON_CLAIM_AMOUNT (line 86):
+
+  Before:
+    const ANON_CLAIM_AMOUNT  = window.DROP_NETWORK === 'mainnet' ? 0.005 : 2.0;
+
+  After:
+    let ANON_CLAIM_AMOUNT  = window.DROP_NETWORK === 'mainnet' ? 0.005 : 2.0;  // updated from /api/status
+
+  Note: CLAIM_AMOUNTS and ANON_CLAIM_AMOUNTS stay as const — preset buttons
+  are intentionally static (see "stays hardcoded" section above).
+
+  Change B — refreshStatus() reads caps from server and updates DOM.
+  Insert AFTER the cap-warnings block (around line 232), BEFORE the
+  donate-badge block (line 262). This is inside the try{} block:
+
+    // ── Sync claim caps from server ──
+    if (data.claim_grin_per_tx) {
+      CLAIM_CUSTOM_MAX = parseFloat(data.claim_grin_per_tx);
+    }
+    if (data.anon_claim_grin_per_tx) {
+      ANON_CLAIM_AMOUNT = parseFloat(data.anon_claim_grin_per_tx);
+      ANON_CUSTOM_MAX   = ANON_CLAIM_AMOUNT;
+    }
+    // Re-apply input constraints so they match the live server caps
+    const anonCustomEl  = $("anon-custom-amt");
+    if (anonCustomEl) {
+      anonCustomEl.max         = String(ANON_CUSTOM_MAX);
+      anonCustomEl.placeholder = `${CLAIM_CUSTOM_MIN} – ${ANON_CUSTOM_MAX}`;
+    }
+    const claimCustomEl = $("claim-custom-amt");
+    if (claimCustomEl) {
+      claimCustomEl.max         = String(CLAIM_CUSTOM_MAX);
+      claimCustomEl.placeholder = `${CLAIM_CUSTOM_MIN} – ${CLAIM_CUSTOM_MAX}`;
+    }
+
+  Why here: refreshStatus() is called on page load and every 5 minutes
+  (line 812). Putting the DOM update here means caps are always in sync
+  with whatever is live in the config — including any admin panel changes
+  made without restarting the server.
+
+  ── FILE 4: web/052_drop/public_html/index.html ───────────────────────────────
+
+  The max= attributes (lines 156, 186) serve as initial fallback values
+  before the first refreshStatus() response arrives. JS already overrides
+  them at lines 944–958. No functional change is needed here, but update
+  the values to match current maximums for correctness of the initial state:
+
+    Line 156: max="3.0"  placeholder="0.001 – 3.0"   (already done)
+    Line 186: max="2.0"  placeholder="0.001 – 2.0"   (already done)
+
+  No further changes needed in index.html.
+
+  ── FILE 5: scripts/052_grin_drop.sh ──────────────────────────────────────────
+
+  Change: Add anon_claim_grin_default to the Configure step defaults
+  (around line 459, alongside claim_grin_default).
+
+  Before:
+    claim_grin_default="3.0"          # max claim amount on testnet
+    ...
+    (no anon default)
+
+  After:
+    claim_grin_default="3.0"          # max claim amount on testnet
+    anon_claim_grin_default="2.0"     # max anon claim amount on testnet
+
+  And in the mainnet branch (around line 452):
+    claim_grin_default="0.008"        # max claim amount on mainnet
+    anon_claim_grin_default="0.009"   # max anon claim amount on mainnet
+
+  Add the new key to the defaults array written to the conf file
+  (in drop_ensure_defaults or equivalent function in 052_lib_app.sh):
+    "anon_claim_grin_per_tx:$anon_claim_grin_default"
+
+  Also add a prompt in the Configure step (step 4) so the operator can
+  set it interactively — follows the same pattern as claim_grin_per_tx:
+
+    "Anon GRIN per tx [$(drop_read_conf anon_claim_grin_per_tx '0.009')] (max GRIN for anonymous claims)"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  CHANGE SUMMARY TABLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  File                              Change           Lines affected
+  ──────────────────────────────    ─────────────    ────────────────────────
+  server/config.js                  +1 DEFAULTS key  ~33–34, ~110
+                                    +1 numKeys entry
+  server/app.js                     -1 module const  ~79 (remove)
+                                    ~3 anon endpoint ~439–442 (rewrite)
+                                    +1 status field  ~211
+                                    +1 comment fix   ~409
+  public_html/js/faucet.js          3× const→let     ~86, ~91, ~92
+                                    +1 status block  ~232–245 (insert)
+  public_html/index.html            No change needed (already updated)
+  scripts/052_grin_drop.sh          +1 default var   ~452, ~459
+  scripts/lib/052_lib_app.sh        +1 defaults[]    configure step
+                                    +1 prompt        configure step
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  EXECUTION ORDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Order matters — do backend before frontend so the API serves the new
+  field before faucet.js tries to read it.
+
+  Step  File                     Change
+  ────  ──────────────────────   ─────────────────────────────────────────────
+  1     server/config.js         Add anon_claim_grin_per_tx to DEFAULTS
+                                 Add to numKeys in writeConfigKey()
+  2     server/app.js            Remove ANON_CLAIM_GRIN constant
+                                 Rewrite anon endpoint to use cfg
+                                 Add field to /api/status payload
+                                 Update comment
+  3     public_html/js/faucet.js const → let for 3 cap variables
+                                 Insert cap-sync block in refreshStatus()
+  4     scripts/052_grin_drop.sh Add anon_claim_grin_default to both
+        scripts/lib/052_lib_app.sh  network branches + defaults array
+                                 Add prompt in Configure step
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  EDGE CASES & GUARDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  A. Existing deployed conf files (no anon_claim_grin_per_tx key yet)
+     config.js DEFAULTS acts as fallback — missing key falls back to
+     the _IS_MAINNET ? 0.009 : 2.0 default. Zero migration needed.
+
+  B. faucet.js before first status response arrives
+     The let variables are initialized to the same hardcoded ternary
+     values as before. If the status fetch fails (network error), caps
+     stay at the safe hardcoded defaults — behavior identical to today.
+
+  C. Admin changes claim cap via settings panel at runtime
+     cfg is read fresh per-request in app.js — backend enforces new value
+     immediately. Frontend picks it up on next refreshStatus() (≤5 min).
+
+  D. Mainnet anon cap discrepancy (0.009 backend vs 0.005 frontend today)
+     After refactor: both read from config.js anon_claim_grin_per_tx = 0.009.
+     Frontend will now correctly show 0.009 as the max for mainnet anon claims.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  VERIFICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. bash -n scripts/052_grin_drop.sh              syntax check passes
+  2. bash -n scripts/lib/052_lib_app.sh            syntax check passes
+  3. curl http://127.0.0.1:3004/api/status | jq .  testnet: both fields present
+       → claim_grin_per_tx:       3.0
+       → anon_claim_grin_per_tx:  2.0
+  4. curl http://127.0.0.1:3005/api/status | jq .  mainnet: both fields present
+       → claim_grin_per_tx:       0.008
+       → anon_claim_grin_per_tx:  0.009
+  5. Load testnet frontend → custom claim input max=3.0, anon input max=2.0
+     (verify in devtools: inspect input#claim-custom-amt max attribute)
+  6. POST /api/claim/anonymous {amount:9999} → clamped to 2.0 testnet / 0.009 mainnet
+  7. Edit config.js testnet anon cap to 1.5 → restart server → frontend
+     shows max=1.5 after next refreshStatus() without touching faucet.js
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  END OF PLAN (v13)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

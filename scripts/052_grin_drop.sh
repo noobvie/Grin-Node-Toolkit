@@ -456,7 +456,7 @@ drop_ensure_defaults() {
         drop_name_default="Grin Drop [TESTNET]"
         global_daily_cap_default="2000"
         global_hourly_cap_default="100"
-        claim_grin_default="1.0"          # max claim amount on testnet
+        claim_grin_default="3.0"          # max claim amount on testnet
         theme_default="matrix"
     fi
 

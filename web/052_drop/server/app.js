@@ -76,7 +76,7 @@ function truncAddr(addr) {
 }
 
 const GRIN_ADDR_RE    = /^(grin1|tgrin1)[a-z0-9]{40,}$/;
-const ANON_CLAIM_GRIN = loadConfig().network === 'mainnet' ? 0.009 : 0.09;
+const ANON_CLAIM_GRIN = loadConfig().network === 'mainnet' ? 0.009 : 2.0;
 
 // IP helpers — nginx must set: proxy_set_header X-Real-IP $remote_addr;
 // Behind Cloudflare, CF-Connecting-IP carries the real visitor IP and cannot be
@@ -337,7 +337,7 @@ app.post('/api/claim', async (req, res) => {
     return err(res, 'Hourly claim limit reached. Try again in a few minutes.', 503);
   }
 
-  const maxAmount       = parseFloat(cfg.claim_grin_per_tx) || 2.0;
+  const maxAmount       = parseFloat(cfg.claim_grin_per_tx) || (cfg.network === 'mainnet' ? 0.008 : 3.0);
   const requestedAmount = body.amount != null ? parseFloat(body.amount) : null;
   const amount = (requestedAmount != null && requestedAmount > 0)
     ? Math.min(Math.max(requestedAmount, 0.0001), maxAmount)
@@ -406,7 +406,7 @@ app.post('/api/claim', async (req, res) => {
 
 // POST /api/claim/anonymous ────────────────────────────────────────────────────
 // No address required — rate-limited by hashed client IP.
-// Amount is capped to ANON_CLAIM_GRIN max (0.009 mainnet / 0.09 testnet); min 0.0001.
+// Amount is capped to ANON_CLAIM_GRIN max (0.009 mainnet / 2.0 testnet); min 0.0001.
 app.post('/api/claim/anonymous', async (req, res) => {
   const cfg  = loadConfig();
   const body = req.body || {};

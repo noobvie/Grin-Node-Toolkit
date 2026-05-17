@@ -30,7 +30,7 @@ const DEFAULTS = {
 
   // ── Giveaway ──────────────────────────────────────────────────────────────
   giveaway_enabled:          true,
-  claim_grin_per_tx:         _IS_MAINNET ? 0.008 : 1.0,  // server-side cap per claim
+  claim_grin_per_tx:         _IS_MAINNET ? 0.008 : 3.0,  // server-side cap per claim
   claim_cooldown_minutes:       240,      // per-address/IP cooldown (240 = 4h)
   slatepack_expire_min:         30,       // minutes user has to paste response slatepack
   global_daily_claims_cap:      2000,     // 0 = unlimited; resets midnight UTC

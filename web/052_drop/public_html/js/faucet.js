@@ -83,12 +83,12 @@ let _donateWalletAddr = '';
 const CLAIM_AMOUNTS   = window.DROP_NETWORK === 'mainnet'
   ? [0.002, 0.006, 0.008]
   : [0.1,   0.2,   0.5];
-const ANON_CLAIM_AMOUNT  = window.DROP_NETWORK === 'mainnet' ? 0.005 : 0.09;
+const ANON_CLAIM_AMOUNT  = window.DROP_NETWORK === 'mainnet' ? 0.005 : 2.0;
 const ANON_CLAIM_AMOUNTS = window.DROP_NETWORK === 'mainnet'
   ? [0.001, 0.003, 0.005]
-  : [0.01,  0.05,  0.09];
+  : [0.5,   1.0,   2.0];
 const CLAIM_CUSTOM_MIN = window.DROP_NETWORK === 'mainnet' ? 0.0001 : 0.001;
-const CLAIM_CUSTOM_MAX = window.DROP_NETWORK === 'mainnet' ? 0.008  : 0.999;
+const CLAIM_CUSTOM_MAX = window.DROP_NETWORK === 'mainnet' ? 0.008  : 3.0;
 const ANON_CUSTOM_MAX  = window.DROP_NETWORK === 'mainnet' ? 0.008  : ANON_CLAIM_AMOUNT;
 
 // ── Session storage helpers (survive page refresh within same tab) ────────────

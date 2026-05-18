@@ -100,7 +100,7 @@ function setStallBanner(stalled) {
       banner = document.createElement('div');
       banner.id = 'stall-banner';
       banner.className = 'gs-stall-banner';
-      banner.textContent = '⚠  No new blocks for 2+ minutes — node may be syncing or offline';
+      banner.textContent = '⚠  No new blocks for 10+ minutes — node may be stalled or offline';
       document.body.insertBefore(banner, document.body.firstChild);
     }
   } else {

@@ -1,0 +1,252 @@
+================================================================================
+ 07_grin_mining_solo.sh — Solo Mining Flowchart
+================================================================================
+
+ Entry
+   └─> main()
+         └─> show_menu()  ← loops until user selects 0
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  MENU OPTIONS                                                           │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  A) Node & Mining Status
+       └─> show_node_status()
+             ├─> _show_node_info(mainnet, 3413, 3416)
+             │     ├─> ss -tlnp → check node running (port 3413)
+             │     ├─> readlink /proc/$pid/exe → binary path
+             │     ├─> _find_grin_session_for_pid() → tmux session name
+             │     ├─> ss -tnp → count ESTAB connections on :3416
+             │     └─> _resolve_stratum_toml() → read enable/bind/wallet/burn
+             └─> _show_node_info(testnet, 13413, 13416)  [same flow]
+
+  ─── MAINNET ──────────────────────────────────────────────────────────────
+
+  B) Setup Stratum (mainnet)
+       └─> setup_stratum_mainnet()
+             └─> _do_setup_stratum(mainnet, 3416, 3413)
+                   ├─> find_grin_server_toml()
+                   │     ├─> ss → find running grin PID on :3413
+                   │     ├─> readlink /proc/$pid/exe → grin-server.toml
+                   │     └─> fallback: scan known dirs, prompt user
+                   ├─> Show current: enable_stratum_server / wallet_listener_url / burn_reward
+                   ├─> Patch: enable_stratum_server = true
+                   ├─> Patch: wallet_listener_url = <user input or default>
+                   └─> Patch: burn_reward = false
+
+  C) Configure Stratum (mainnet)
+       └─> configure_stratum_mainnet()
+             └─> _do_configure_stratum(mainnet, 3416, 3413)
+                   ├─> find_grin_server_toml()
+                   ├─> Show current settings (1–4)
+                   ├─> User picks field to change
+                   ├─> sed -i patch grin-server.toml
+                   └─> graceful_restart_grin(3413, mainnet)
+                         ├─> ss → find PID
+                         ├─> readlink /proc/$pid/exe → binary + dir
+                         ├─> _find_grin_session_for_pid() → tmux session
+                         ├─> kill -TERM $pid → wait up to 30s
+                         ├─> tmux kill-session
+                         └─> SHELL=/bin/bash tmux new-session → restart grin
+
+  D) Publish Stratum (mainnet) — open :3416 to external miners
+       └─> publish_mainnet_stratum()
+             └─> _enable_stratum(mainnet, 3416, 3413)
+                   ├─> _show_stratum_port_guide(3416) → read "yes" to confirm
+                   ├─> find_grin_server_toml()
+                   ├─> sed -i: stratum_server_addr = "0.0.0.0:3416"
+                   ├─> Firewall: ufw allow 3416/tcp  OR  iptables -I INPUT
+                   └─> graceful_restart_grin(3413, mainnet)
+
+  E) Restrict Stratum (mainnet) — revert to localhost
+       └─> restrict_mainnet_stratum()
+             └─> _disable_stratum(mainnet, 3416, 3413)
+                   ├─> find_grin_server_toml()
+                   ├─> sed -i: stratum_server_addr = "127.0.0.1:3416"
+                   ├─> Firewall: ufw delete allow 3416/tcp
+                   └─> graceful_restart_grin(3413, mainnet)
+
+  ─── TESTNET ──────────────────────────────────────────────────────────────
+
+  F / G / I / J — identical to B / C / D / E above but with ports 13416 / 13413
+
+  ─── TOOLS ────────────────────────────────────────────────────────────────
+
+  L) Live Stats Terminal Dashboard
+       └─> solo_live_stats()
+             ├─> Prompt: mainnet (3413) or testnet (13413)?
+             ├─> Read .api_secret from /opt/grin/node/<net>-prune/
+             └─> loop every 10s:
+                   ├─> curl 127.0.0.1:$api_port/v2/owner  ← get_status
+                   ├─> extract: height, total_difficulty, connections
+                   ├─> ss -tnp → count ESTAB connections on stratum port
+                   ├─> Cuckatoo32 hashrate:
+                   │     diff_delta = total_difficulty - prev_diff
+                   │     dt         = now - prev_ts
+                   │     GPS        = diff_delta × 42 / dt / 16384
+                   │     display as G/s, kG/s, or MG/s
+                   └─> clear + render dashboard → sleep 10
+
+  S) Stats Web Page (nginx + static HTML)
+       └─> solo_deploy_stats_page()
+             ├─> Prompt: subdomain (e.g. mining.example.com)
+             ├─> Read /opt/grin/node/mainnet-prune/.api_secret
+             ├─> base64(grin:<secret>) → b64_auth
+             ├─> mkdir /var/www/grin-stats
+             ├─> cp web/07_mining_pool_solo/stats.html → /var/www/grin-stats/index.html
+             ├─> nginx_ensure_grin_api_zone()  ← shared rate-limit zone
+             ├─> Write /etc/nginx/sites-available/grin-stats:
+             │     · HTTP → HTTPS redirect
+             │     · location /api/status → proxy_pass 127.0.0.1:3413/v2/owner
+             │     │   proxy_method POST
+             │     │   proxy_set_header Authorization "Basic $b64_auth"
+             │     │   proxy_set_body '{"jsonrpc":"2.0","method":"get_status",...}'
+             │     └─ location / → static /var/www/grin-stats
+             ├─> chmod 600 nginx conf (contains b64 auth token)
+             ├─> nginx_ensure_sites_enabled_include()
+             ├─> ln -sf → sites-enabled/
+             ├─> nginx -t && systemctl reload nginx
+             └─> certbot --nginx -d <subdomain>
+
+       Page JS flow (browser):
+             ├─> fetch('/api/status') every 10s  ← GET hits nginx, POST forwarded
+             ├─> parse result.Ok.tip.{height, total_difficulty}
+             ├─> parse result.Ok.connections (peers)
+             ├─> parse result.Ok.stratum_stats.num_workers (if available)
+             └─> Cuckatoo32 hashrate:
+                   diff_delta = total_difficulty - prev
+                   dt         = (now - prevTs) / 1000
+                   gps        = delta × 42 / dt / 16384
+                   display as G/s, kG/s, MG/s
+
+  W) Watchdog Cron
+       └─> solo_watchdog_setup()
+             ├─> If /etc/cron.d/grin-stratum-watchdog exists: offer to disable
+             └─> Else:
+                   ├─> Write /usr/local/bin/grin-stratum-watchdog (chmod 750):
+                   │     for each detected grin-server.toml:
+                   │       grep enable_stratum_server
+                   │       if != "true": append WARNING to $WATCHDOG_LOG
+                   │       else: append OK line
+                   └─> Write /etc/cron.d/grin-stratum-watchdog:
+                         */5 * * * * root /usr/local/bin/grin-stratum-watchdog
+
+  ─── INTERNAL HELPERS ─────────────────────────────────────────────────────
+
+  find_grin_server_toml(network, api_port)
+    1. ss -tlnp → find PID on api_port
+    2. readlink /proc/$pid/exe → binary dir → check for grin-server.toml
+    3. Scan _KNOWN_TOML_SEARCH_PATHS[] for matching chain_type
+    4. If multiple: prompt user to select
+    5. If none: prompt for manual path
+    6. Sets global FOUND_GRIN_TOML
+
+  _resolve_stratum_toml(network, api_port)  [non-interactive version]
+    → returns path via stdout, used by show_compact_status and _show_node_info
+
+  graceful_restart_grin(api_port, network)
+    1. ss → get grin PID
+    2. readlink /proc/$pid/exe → binary path
+    3. _find_grin_session_for_pid() → tmux session
+    4. Prompt: restart now?
+    5. kill -TERM, wait 30s, kill -KILL if needed
+    6. tmux kill-session
+    7. SHELL=/bin/bash tmux new-session -d → restart binary
+
+  show_compact_status()
+    → Shown at top of every menu:
+      Mainnet (:3416): LISTENING or OFF   bind: PUBLIC/LOCAL/not set
+      Testnet (:13416): ...
+
+================================================================================
+ PLANNED: Solo Mining Stats Dashboard  [not yet implemented — see plan file]
+================================================================================
+
+ Goal: Read-only web dashboard for non-technical miners (no SSH needed).
+       Modelled on 2miners — enter Grin address, see workers + block history.
+
+ Architecture:
+   Miners ──→ Node.js stratum proxy (:3416/:13416)
+                 │  tracks per-address workers/shares in-memory
+                 └──→ Grin node built-in stratum (:3417/:13417)
+   Browser ──→ nginx (HTTPS) ──→ Node.js API (:3500)
+                                   ├── GET /api/info              notice text
+                                   ├── GET /api/:net/stats        node + wallet health
+                                   └── GET /api/:net/miner/:addr  [rate limited 10r/m]
+   Node.js ──→ node Owner API (:3413/:13413)   get_status
+           ──→ wallet Foreign API (:3415)       reachability check ONLY (no password)
+           ──→ SQLite                           block history
+
+ Homepage shows (per enabled network):
+   · Height, estimated hashrate (Cuckatoo32: diff_delta×42/dt/16384), peers
+   · Stratum: listening? miners connected?
+   · Wallet: ● Ready / ● Offline  (Foreign API reachability only)
+   · Custom notice banner (operator sets: "private pool", maintenance, etc.)
+
+ Miner lookup (address input):
+   · Client-side bech32 check (grin1[ac-hj-np-z02-9]{54}) before submitting
+   · Server-side validation → HTTP 400 if invalid (no DB query)
+   · Unknown valid address → empty result (no 404, no confirmation)
+   · Shows: workers connected, estimated hashrate, blocks found + maturity
+
+ SQLite schema (block history only, no user accounts, no PPLNS):
+   blocks(id, network, height, found_by, found_at, maturity_height)
+   maturity_height = height + 1440
+
+ New bash functions in 07_grin_mining_solo.sh:
+   solo_stats_install()         Node.js deps + systemd + logrotate
+   solo_stats_configure()       enable networks, notice text, api_secret paths
+   solo_nginx_add_domain()      validate → vhost → nginx_run_certbot()
+   solo_nginx_update_domain()   nginx_extract_server_name() → rewrite → certbot
+   solo_nginx_remove_domain()   nginx_disable_site() + nginx_delete_certbot_cert()
+   solo_nginx_domain_menu()     Add / Update / Remove submenu
+   solo_stats_service_menu()    start / stop / restart
+   solo_dashboard_menu()        P) submenu (1-5/0)
+
+ nginx rate-limit zones:
+   grin_api   (30r/m) → /api/:net/stats       reuses scripts 04/06 shared zone
+   solo_miner (10r/m) → /api/:net/miner/:addr  new, script07-solo-miner.conf
+
+ New menu option in script 07:
+   P) Stats Dashboard  (replaces S) Stats web page)
+      1) Install  2) Configure  3) Nginx domain  4) Service  5) Logs  0) Back
+
+ New files:
+   web/07_mining_pool_solo/back-end/index.js
+   web/07_mining_pool_solo/back-end/lib/stratum-proxy.js
+   web/07_mining_pool_solo/back-end/lib/node-api.js
+   web/07_mining_pool_solo/back-end/lib/wallet-check.js
+   web/07_mining_pool_solo/back-end/lib/db.js
+   web/07_mining_pool_solo/back-end/lib/config.js
+   web/07_mining_pool_solo/back-end/solo-stats.json.template
+   web/07_mining_pool_solo/back-end/package.json
+   web/07_mining_pool_solo/public/index.html   ← replaces stats.html
+
+================================================================================
+ Port Reference
+================================================================================
+
+  Stratum (miners → node):
+    Mainnet  :3416   (grin-server.toml → stratum_server_addr)
+    Testnet  :13416
+
+  Node Owner API (local only — stats/watchdog):
+    Mainnet  :3413
+    Testnet  :13413
+
+  Wallet Foreign API (coinbase reward delivery):
+    Mainnet  :3415   (grin-server.toml → wallet_listener_url)
+    Testnet  :13415
+
+================================================================================
+ Security Model
+================================================================================
+
+  · Node API secret (/opt/grin/node/<net>-prune/.api_secret) never leaves VPS
+  · nginx injects Basic Auth header for /api/status proxy — browser never sees it
+  · nginx conf containing b64 auth token: chmod 600
+  · stratum port opened to 0.0.0.0 only when user explicitly runs D/I (Publish)
+  · Wallet Foreign API stays on localhost — not exposed to internet
+  · Watchdog runs as root, logs to /opt/grin/logs/stratum-watchdog.log
+
+================================================================================

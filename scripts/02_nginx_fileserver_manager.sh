@@ -117,18 +117,27 @@ FAIL2BAN_JAIL_CONF="/etc/fail2ban/jail.d/nginx-grin.conf"
 BLOCKED_LIST_FILE="/etc/grin-toolkit/blocked_ips.list"
 FIREWALL=""   # Populated by detect_firewall()
 
+# ── Source shared nginx helpers ───────────────────────────────────────────────
+# Required — provides _ensure_sites_enabled_include and other nginx helpers.
+# If this file is missing, the toolkit is broken; fail loudly rather than silently.
+# shellcheck source=lib/nginx_shared_helpers.sh
+source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+
 # Detect a running Grin instance on the given port and return the recommended
 # web dir path matching script 03's naming convention (fullmain/prunemain/prunetest).
 # Returns 1 (no output) if no Grin is found on that port.
 suggest_grin_web_dir() {
     local port=$1 pid binary dir cfg chain_line net ntype
 
+    pid=""
     if command -v lsof &>/dev/null; then
         pid=$(lsof -ti :"$port" 2>/dev/null)
-    elif command -v ss &>/dev/null; then
-        pid=$(ss -tlnp 2>/dev/null | grep ":$port " | grep -oP 'pid=\K[0-9]+' | head -1)
-    elif command -v netstat &>/dev/null; then
-        pid=$(netstat -tlnp 2>/dev/null | grep ":$port " | grep -oP '[0-9]+/.*' | cut -d'/' -f1 | head -1)
+    fi
+    if [[ -z "$pid" ]] && command -v ss &>/dev/null; then
+        pid=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)
+    fi
+    if [[ -z "$pid" ]] && command -v netstat &>/dev/null; then
+        pid=$(netstat -tlnp 2>/dev/null | grep ":${port}[[:space:]]" | grep -oP '[0-9]+/.*' | cut -d'/' -f1 | head -1)
     fi
     [ -z "$pid" ] && return 1
 
@@ -478,12 +487,17 @@ _evict_apache2() {
     fi
 }
 
+# _ensure_sites_enabled_include is provided by lib/nginx_shared_helpers.sh (sourced above).
+
 # Ensure nginx + certbot are installed. Single prompt if either (or both) are missing.
 # Returns 1 if the user cancels or declines.
 ensure_nginx_certbot() {
     local need_nginx=false need_certbot=false label
     command -v nginx   &>/dev/null || need_nginx=true
     command -v certbot &>/dev/null || need_certbot=true
+
+    # Always verify sites-enabled include is in place — self-heals after nginx upgrades.
+    _ensure_sites_enabled_include
 
     $need_nginx || $need_certbot || return 0   # both present — nothing to do
 
@@ -847,12 +861,15 @@ _chain_data_for_prefix() {
         web_dir=$(suggest_grin_web_dir "$port" 2>/dev/null) || continue
         [[ "$web_dir" != "$required_web" ]] && continue
         # Found the matching node — resolve its binary dir and chain_data path
+        pid=""
         if command -v lsof &>/dev/null; then
             pid=$(lsof -ti :"$port" 2>/dev/null)
-        elif command -v ss &>/dev/null; then
-            pid=$(ss -tlnp 2>/dev/null | grep ":$port " | grep -oP 'pid=\K[0-9]+' | head -1)
-        elif command -v netstat &>/dev/null; then
-            pid=$(netstat -tlnp 2>/dev/null | grep ":$port " | grep -oP '[0-9]+/.*' | cut -d'/' -f1 | head -1)
+        fi
+        if [[ -z "$pid" ]] && command -v ss &>/dev/null; then
+            pid=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)
+        fi
+        if [[ -z "$pid" ]] && command -v netstat &>/dev/null; then
+            pid=$(netstat -tlnp 2>/dev/null | grep ":${port}[[:space:]]" | grep -oP '[0-9]+/.*' | cut -d'/' -f1 | head -1)
         fi
         [ -z "$pid" ] && continue
         binary=$(readlink -f "/proc/$pid/exe" 2>/dev/null)
@@ -1106,12 +1123,16 @@ server {
 }
 EOF
     
+    # Ensure sites-enabled is included in nginx.conf (required on RHEL/Rocky/Alma
+    # and after any nginx package upgrade that resets nginx.conf to its default).
+    _ensure_sites_enabled_include
+
     # Enable the site
     if [[ ! -L "$NGINX_ENABLED/$DOMAIN" ]]; then
         ln -s "$NGINX_CONF" "$NGINX_ENABLED/$DOMAIN"
         print_info "Enabled Nginx site: $DOMAIN"
     fi
-    
+
     # Test nginx config
     if nginx -t &> /dev/null; then
         print_info "Nginx configuration is valid"
@@ -1187,8 +1208,9 @@ server {
 
 # HTTPS - Main file server
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
     server_name $DOMAIN;
 
     # SSL certificate (managed by Certbot)
@@ -1525,7 +1547,7 @@ get_domain_to_remove() {
         print_info "Available domains:"
         list_domains
         DOMAIN_TO_REMOVE=""
-        return
+        return 1
     fi
     
     print_info "Domain to remove: $DOMAIN_TO_REMOVE"
@@ -2091,36 +2113,77 @@ run_setup_custom() {
 # 24.0 - Remove domain workflow
 run_remove() {
     print_section "Domain Removal"
-    
-    # List available domains
+
+    # Show available domains; bail early if none exist
     if ! list_domains; then
-        print_error "No domains to remove"
+        print_error "No domains configured — nothing to remove."
         echo ""
         read -rp "Press Enter to return to the main menu..."
         return 0
     fi
 
-    # Get domain to remove
-    get_domain_to_remove || { print_info "Removal cancelled."; return 0; }
-    
-    # Gather information about the domain
+    # Pick the domain (loops until valid or cancelled)
+    while true; do
+        get_domain_to_remove || { print_info "Removal cancelled."; return 0; }
+        [[ -n "$DOMAIN_TO_REMOVE" ]] && break
+    done
+
+    # Gather facts (files dir, SSL, bandwidth) — silently
     gather_domain_info
-    
-    # Confirm removal with user
-    confirm_removal || { return 0; }
+
+    # Show a concise summary of what will be removed
+    echo ""
+    print_warn "About to remove: $DOMAIN_TO_REMOVE"
+    echo "  • Nginx config  : $NGINX_AVAILABLE/$DOMAIN_TO_REMOVE"
+    echo "  • Sites-enabled : $NGINX_ENABLED/$DOMAIN_TO_REMOVE"
+    [[ "$HAS_SSL"            == "yes" ]] && echo "  • SSL cert      : /etc/letsencrypt/live/$DOMAIN_TO_REMOVE"
+    [[ "$HAS_BANDWIDTH_LIMIT" == "yes" ]] && echo "  • Bandwidth cfg : /etc/nginx/conf.d/${DOMAIN_TO_REMOVE}-bandwidth-map.conf"
+    echo "  • Nginx logs    : /var/log/nginx/${DOMAIN_TO_REMOVE}-*.log"
+    echo ""
+
+    # Ask once about www files (default: keep — they can be rebuilt)
+    local _del_files="no"
+    if [[ -n "$FILES_DIR" && -d "$FILES_DIR" ]]; then
+        local _dir_size; _dir_size=$(du -sh "$FILES_DIR" 2>/dev/null | cut -f1)
+        echo "  • Files dir     : $FILES_DIR  (${_dir_size:-?})"
+        echo ""
+        local _fc
+        read -rp "  Also delete the files directory? [y/N]: " _fc
+        [[ "${_fc,,}" == "y" ]] && _del_files="yes" \
+                                 && echo "    → Files will be DELETED" \
+                                 || echo "    → Files will be KEPT (can be rebuilt)"
+        echo ""
+    fi
+
+    # Single Y/n confirmation — no typing the domain name
+    local _confirm
+    read -rp "Confirm removal of $DOMAIN_TO_REMOVE? [Y/n]: " _confirm
+    _confirm="${_confirm:-y}"
+    if [[ "${_confirm,,}" != "y" ]]; then
+        print_info "Removal cancelled."
+        DOMAIN_TO_REMOVE=""
+        return 0
+    fi
 
     # Execute removal steps
     remove_nginx_config
     remove_ssl_certificate
     remove_bandwidth_limiting
     remove_log_files
-    remove_files_directory
-    
-    # Display summary
-    display_removal_summary
+
+    # Handle files directory
+    if [[ "$_del_files" == "yes" && -n "$FILES_DIR" && -d "$FILES_DIR" ]]; then
+        rm -rf "$FILES_DIR" && print_info "Files directory removed: $FILES_DIR" \
+                            || print_warn "Could not remove $FILES_DIR — check permissions."
+    elif [[ -n "$FILES_DIR" && -d "$FILES_DIR" ]]; then
+        print_info "Files directory preserved: $FILES_DIR"
+    fi
+
     echo ""
-    print_info "Full log saved to: $LOG_FILE"
+    print_info "Domain '$DOMAIN_TO_REMOVE' removed successfully."
+    print_info "Log: $LOG_FILE"
     echo ""
+    DOMAIN_TO_REMOVE=""
     read -rp "Press Enter to return to the main menu..."
 }
 
@@ -2502,10 +2565,16 @@ run_enhance_security() {
 # Grin File Server - Request rate limiting zone
 # Managed by 02_nginx-fileserver-manager.sh
 limit_req_zone $binary_remote_addr zone=grin_req:10m rate=20r/s;
-limit_req_status 429;
 EOF
         print_info "Created request rate limit zone: $req_zone_conf"
     else
+        # Migration: remove limit_req_status from the zone file if present —
+        # it belongs at the location level, not the http level, to avoid
+        # conflicts when other configs also define it in the http context.
+        if grep -q "limit_req_status" "$req_zone_conf" 2>/dev/null; then
+            sed -i '/limit_req_status/d' "$req_zone_conf"
+            print_info "Removed limit_req_status from zone file (moved to location blocks)"
+        fi
         print_info "Request rate limit zone already exists: $req_zone_conf"
     fi
 
@@ -2519,7 +2588,7 @@ EOF
 
         if ! grep -q "limit_req zone=grin_req" "$conf_file" 2>/dev/null; then
             if grep -q "autoindex_format html;" "$conf_file" 2>/dev/null; then
-                sed -i 's/autoindex_format html;/autoindex_format html;\n        limit_req zone=grin_req burst=30 nodelay;/' "$conf_file"
+                sed -i 's/autoindex_format html;/autoindex_format html;\n        limit_req zone=grin_req burst=30 nodelay;\n        limit_req_status 429;/' "$conf_file"
                 injected_req=$(( injected_req + 1 ))
                 print_info "Injected request limit into: $domain"
             fi

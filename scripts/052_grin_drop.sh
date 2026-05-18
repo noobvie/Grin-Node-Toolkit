@@ -99,6 +99,12 @@ DROP_APP_SRC="$TOOLKIT_ROOT/web/052_drop/server"
 DROP_WEB_SRC="$TOOLKIT_ROOT/web/052_drop/public_html"
 
 # ─── Source lib files ─────────────────────────────────────────────────────────
+# Shared nginx helpers — sourced FIRST so 052_lib_nginx.sh can use them.
+# Required: 052_lib_nginx.sh calls nginx_ensure_rate_limit_zones to write the
+# drop_home/drop_api/drop_test/drop_main zones. Without it, the vhost references
+# undefined zones and nginx fails with "zero size shared memory zone".
+# shellcheck source=lib/nginx_shared_helpers.sh
+source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
 # shellcheck source=lib/052_lib_wallet.sh
 source "$SCRIPT_DIR/lib/052_lib_wallet.sh"
 # shellcheck source=lib/052_lib_app.sh
@@ -450,7 +456,7 @@ drop_ensure_defaults() {
         drop_name_default="Grin Drop [TESTNET]"
         global_daily_cap_default="2000"
         global_hourly_cap_default="100"
-        claim_grin_default="1.0"          # max claim amount on testnet
+        claim_grin_default="3.0"          # max claim amount on testnet
         theme_default="matrix"
     fi
 

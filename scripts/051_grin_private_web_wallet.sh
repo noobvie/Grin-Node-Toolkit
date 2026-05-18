@@ -98,6 +98,13 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 die()     { error "$*"; return 1; }
 pause()   { echo ""; echo -e "${DIM}Press Enter to continue...${RESET}"; read -r || true; }
 
+# ─── Source shared nginx helpers (guarded — script falls back to inline if missing) ─
+_NGINX_LIB="$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+if [[ -f "$_NGINX_LIB" ]]; then
+    # shellcheck source=lib/nginx_shared_helpers.sh
+    source "$_NGINX_LIB"
+fi
+
 # ─── Network-specific constants (set by select_network) ───────────────────────
 WW_NETWORK=""
 WW_WALLET_API_PORT=""
@@ -815,14 +822,23 @@ ww_configure_nginx() {
     [[ "$confirm" == "0" ]] && return
     [[ "${confirm,,}" == "n" ]] && info "Cancelled." && return
 
-    # Rate-limit snippet (network-scoped zone names avoid conflicts)
-    mkdir -p /etc/nginx/conf.d
-    cat > "/etc/nginx/conf.d/grin-web-wallet-${WW_NETWORK}-ratelimit.conf" << RATELIMIT
+    # Rate-limit zones — written via the shared helper if available; falls back
+    # to inline heredoc if the lib isn't sourced (script 051 doesn't currently
+    # source nginx_shared_helpers.sh — see lib path comment in setup).
+    if declare -F nginx_ensure_rate_limit_zones &>/dev/null; then
+        nginx_ensure_rate_limit_zones "grin-web-wallet-${WW_NETWORK}-ratelimit" \
+            "${WW_RATELIMIT_ZONE}_tx:3r/m"    \
+            "${WW_RATELIMIT_ZONE}_api:10r/m"  \
+            "${WW_RATELIMIT_ZONE}_http:20r/m"
+    else
+        mkdir -p /etc/nginx/conf.d
+        cat > "/etc/nginx/conf.d/grin-web-wallet-${WW_NETWORK}-ratelimit.conf" << RATELIMIT
 # Grin Web Wallet [$WW_NET_LABEL] rate limits
 limit_req_zone \$binary_remote_addr zone=${WW_RATELIMIT_ZONE}_tx:10m   rate=3r/m;
 limit_req_zone \$binary_remote_addr zone=${WW_RATELIMIT_ZONE}_api:10m  rate=10r/m;
 limit_req_zone \$binary_remote_addr zone=${WW_RATELIMIT_ZONE}_http:10m rate=20r/m;
 RATELIMIT
+    fi
 
     # HTTP-only vhost — certbot --nginx (step 4) adds HTTPS automatically
     info "Writing HTTP vhost → $WW_NGINX_CONF ..."

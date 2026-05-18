@@ -325,6 +325,9 @@ grinscan_configure() {
 JSON
 
         chown www-data:www-data "$config_path"
+        # Ensure the entire data dir is www-data-owned — a node rebuild (Script 01)
+        # may have done chown -R grin:grin /opt/grin/ and overwritten our ownership.
+        chown -R www-data:www-data "${GRINSCAN_DIR}/${net_short}"
         success "Config written: ${config_path}"
 
         # Create sample banners.json if it doesn't exist yet (active:false = no banner shown until edited)
@@ -732,14 +735,18 @@ grinscan_setup_nginx() {
         warn "Invalid domain '${domain}' — only letters, digits, dots, and hyphens allowed."; continue
     fi
 
-    # Ensure rate-limit snippet exists — skip if zone already defined (e.g. by script 04)
-    local rate_conf="/etc/nginx/conf.d/grinscan-rate-limit.conf"
+    # Ensure rate-limit zone exists — via shared helper, with inline fallback
     local api_snippet="/etc/nginx/snippets/grin-api.conf"
-    if [[ ! -f "$rate_conf" ]]; then
-        mkdir -p /etc/nginx/conf.d
-        cat > "$rate_conf" <<'RATELIMIT'
+    if declare -F nginx_ensure_rate_limit_zone &>/dev/null; then
+        nginx_ensure_rate_limit_zone "grinscan_api" "30r/m" "10m" "grinscan-rate-limit"
+    else
+        local rate_conf="/etc/nginx/conf.d/grinscan-rate-limit.conf"
+        if [[ ! -f "$rate_conf" ]]; then
+            mkdir -p /etc/nginx/conf.d
+            cat > "$rate_conf" <<'RATELIMIT'
 limit_req_zone $binary_remote_addr zone=grinscan_api:10m rate=30r/m;
 RATELIMIT
+        fi
     fi
     if [[ ! -f "$api_snippet" ]]; then
         mkdir -p /etc/nginx/snippets

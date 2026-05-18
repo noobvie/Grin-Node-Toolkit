@@ -128,6 +128,12 @@ success() { echo -e "${GREEN}[OK]${RESET}    $*"; log "[OK] $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; log "[WARN] $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 
+# ─── Source shared nginx helpers ──────────────────────────────────────────────
+# Required — provides _ensure_sites_enabled_include and other nginx helpers.
+# If this file is missing, the toolkit is broken; fail loudly rather than silently.
+# shellcheck source=lib/nginx_shared_helpers.sh
+source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+
 # ─── Port guide popup ─────────────────────────────────────────────────────────
 show_port_guide() {
     local port="$1"
@@ -223,11 +229,19 @@ _nginx_domain() {
     grep -m1 'server_name' "$1" 2>/dev/null | awk '{print $2}' | tr -d ';'
 }
 
-# Add rate-limit/connection-limit zones into the http {} block of nginx.conf.
-# Idempotent — skips if grin_conn zone already present.
-# Upgrades gracefully — removes any old single-zone block before inserting the new one.
+# _ensure_sites_enabled_include is provided by lib/nginx_shared_helpers.sh (sourced above).
+
+# Ensure both rate-limit zones referenced by this script's nginx config exist:
+#   · grin_api  (limit_req_zone)   — SHARED with Script 06; created via shared helper
+#   · grin_conn (limit_conn_zone)  — Script 04-only; created in nginx.conf http block
+# Idempotent: safe to call every setup.
 _nginx_add_limit_req_zone() {
     local nginx_conf="/etc/nginx/nginx.conf"
+
+    # 1. Shared grin_api zone — delegated to nginx_shared_helpers.sh
+    nginx_ensure_grin_api_zone
+
+    # 2. Script 04-specific grin_conn zone — lives in nginx.conf http {} block
     grep -q "zone=grin_conn" "$nginx_conf" 2>/dev/null && return 0
     python3 - "$nginx_conf" << 'PYEOF'
 import sys, re
@@ -257,10 +271,12 @@ with open(conf_file, 'w') as fh:
 PYEOF
 }
 
-# Remove the limit_req_zone added by this script (marker-guarded).
+# Remove the limit_conn_zone added by this script (marker-guarded).
+# Does NOT touch /etc/nginx/conf.d/grin-rate-limit.conf — that file is shared
+# with Script 06, so removing it here would break Script 06's setup.
 _nginx_remove_limit_req_zone() {
     local nginx_conf="/etc/nginx/nginx.conf"
-    grep -q "Grin Node Toolkit.*rate-limit zone" "$nginx_conf" 2>/dev/null || return 0
+    grep -q "Grin Node Toolkit.*connection-limit zone\|Grin Node Toolkit.*rate-limit zone" "$nginx_conf" 2>/dev/null || return 0
     python3 - "$nginx_conf" << 'PYEOF'
 import sys, re
 conf_file = sys.argv[1]
@@ -563,6 +579,9 @@ _enable_node_api_nginx() {
     # Remove any legacy stream block left by old versions of this script.
     # If present, nginx -t would fail with "unknown directive stream".
     _remove_legacy_stream_config
+
+    # Ensure sites-enabled include is in nginx.conf (self-heals after nginx upgrades).
+    _ensure_sites_enabled_include
 
     # Ensure rate/connection-limit zones are in nginx.conf before writing the site config.
     _nginx_add_limit_req_zone

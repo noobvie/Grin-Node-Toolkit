@@ -94,6 +94,12 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 die()     { error "$*"; echo ""; echo "Press Enter to continue..."; read -r || true; return 1; }
 pause()   { echo ""; echo -e "${DIM}Press Enter to continue...${RESET}"; read -r || true; }
 
+# ─── Source shared nginx helpers ──────────────────────────────────────────────
+# Required — provides _ensure_sites_enabled_include and other nginx helpers.
+# If this file is missing, the toolkit is broken; fail loudly rather than silently.
+# shellcheck source=lib/nginx_shared_helpers.sh
+source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+
 # ─── Privilege check ──────────────────────────────────────────────────────────
 require_root() {
     [[ $EUID -eq 0 ]] || die "This action requires root / sudo."
@@ -307,10 +313,13 @@ _write_nginx_logrotate() {
 LOGROTATE
 }
 
+# _ensure_sites_enabled_include is provided by lib/nginx_shared_helpers.sh (sourced above).
+
 # Enable nginx site, test config, run certbot, reload.
 # Usage:  _nginx_certbot_finish <conf_file> <sites-enabled-name> <domain> <email> || return
 _nginx_certbot_finish() {
     local conf_file="$1" sites_name="$2" domain="$3" email="$4"
+    _ensure_sites_enabled_include
     ln -sf "$conf_file" "/etc/nginx/sites-enabled/${sites_name}"
     nginx -t || { die "nginx config test failed. Check ${conf_file}."; return 1; }
     nginx -s reload
@@ -837,13 +846,9 @@ server {
 }
 NGINX
 
-    # Rate-limit zone (must live in http context, not server context)
-    mkdir -p /etc/nginx/conf.d
-    cat > /etc/nginx/conf.d/grin-rate-limit.conf <<'RATELIMIT'
-# Grin Node Toolkit — API rate limiting
-# 30 requests/min per IP, 10m shared memory zone (~160k IPs)
-limit_req_zone $binary_remote_addr zone=grin_api:10m rate=30r/m;
-RATELIMIT
+    # Rate-limit zone — delegated to nginx_shared_helpers.sh so Script 04 can
+    # use the same zone without conflict (same file path + same content = safe overwrite).
+    nginx_ensure_grin_api_zone
 
     # Shared snippet included by every /api/ location block
     mkdir -p /etc/nginx/snippets

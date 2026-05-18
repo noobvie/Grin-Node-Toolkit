@@ -153,8 +153,8 @@
             <button class="amount-btn" data-amount="custom">Custom…</button>
           </div>
           <div id="claim-custom-wrap" style="display:none;margin-bottom:.75rem;">
-            <input type="number" id="claim-custom-amt" min="0.001" max="0.999" step="0.001"
-                   placeholder="0.001 – 0.999" style="max-width:200px;">
+            <input type="number" id="claim-custom-amt" min="0.001" max="3.0" step="0.001"
+                   placeholder="0.001 – 3.0" style="max-width:200px;">
           </div>
           <label for="claim-address" id="claim-address-label">Your Grin Address</label>
           <input type="text" id="claim-address" placeholder="" autocomplete="off" spellcheck="false">
@@ -177,14 +177,14 @@
             </p>
           </div>
           <div class="amount-grid" id="anon-amount-grid" style="margin-bottom:.9rem;">
-            <button class="amount-btn" data-amount="0.01">0.01</button>
-            <button class="amount-btn" data-amount="0.05">0.05</button>
-            <button class="amount-btn" data-amount="0.09">0.09</button>
+            <button class="amount-btn" data-amount="0.5">0.5</button>
+            <button class="amount-btn" data-amount="1.0">1.0</button>
+            <button class="amount-btn" data-amount="2.0">2.0</button>
             <button class="amount-btn" data-amount="custom">Custom…</button>
           </div>
           <div id="anon-custom-wrap" style="display:none;margin-bottom:.75rem;">
-            <input type="number" id="anon-custom-amt" min="0.001" max="0.09" step="0.001"
-                   placeholder="0.001 – 0.09" style="max-width:200px;">
+            <input type="number" id="anon-custom-amt" min="0.001" max="2.0" step="0.001"
+                   placeholder="0.001 – 2.0" style="max-width:200px;">
           </div>
           <p class="error-msg" id="anon-claim-error"></p>
           <div id="net-banner-anon"></div>

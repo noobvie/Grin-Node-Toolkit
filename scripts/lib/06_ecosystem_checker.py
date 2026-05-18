@@ -3,13 +3,13 @@
 grin-ecosystem-checker
 ======================
 Checks Grin DNS seeds (TCP) and ecosystem service URLs (HTTP).
-Tracks per-IP uptime and per-domain WHOIS expiry in SQLite.
+Tracks per-IP uptime and per-domain RDAP expiry in SQLite.
 Writes ecosystem.json for the ecosystem.html status page.
 
 Usage:
-    python3 06_ecosystem_checker.py --update    TCP + HTTP checks + stale WHOIS refresh  [default]
+    python3 06_ecosystem_checker.py --update    TCP + HTTP checks + stale RDAP refresh  [default]
     python3 06_ecosystem_checker.py --init-db   Create DB tables only
-    python3 06_ecosystem_checker.py --whois     Force WHOIS refresh for all seed domains
+    python3 06_ecosystem_checker.py --whois     Force RDAP refresh for all seed domains
 
 Config (env vars — loaded from config.env by cron):
     GRIN_WWW_DATA   default: /var/www/grin-stats/data
@@ -35,7 +35,7 @@ WWW_DATA     = os.environ.get("GRIN_WWW_DATA",   "/var/www/grin-stats/data")
 DB_PATH      = os.environ.get("GRIN_DB_PATH",   "/opt/grin/grin-stats/stats.db")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN",   "")  # optional — raises rate limit 60→5000/hr
 
-WHOIS_TTL_HOURS = 24   # re-fetch WHOIS only when cached value is older than this
+RDAP_TTL_HOURS = 24   # re-fetch RDAP only when cached value is older than this
 
 # ── DNS seed lists ─────────────────────────────────────────────────────────────
 # Edit 06_dns_seeds.json to add/remove seeds or update pending-DNS notes.
@@ -57,16 +57,7 @@ EXTERNAL_NODES = _load_json_config("06_external_nodes.json")
 
 SEED_PORTS = {"mainnet": 3414, "testnet": 13414}
 
-# TLDs where WHOIS servers are reliable enough for automated refresh.
-# Everything else (.mw, .io, .live, .money, ccTLDs) must be maintained manually
-# in 06_domains_exceptions.json — their WHOIS servers block or return bad data.
-WHOIS_AUTO_TLDS = {".com", ".org", ".net"}
-
-def _is_auto_tld(domain):
-    tld = "." + domain.rsplit(".", 1)[-1] if "." in domain else ""
-    return tld in WHOIS_AUTO_TLDS
-
-# ── WHOIS fallback for domains whose WHOIS servers block automated queries ─────
+# ── RDAP fallback for domains with no RDAP support (e.g. .mw ccTLD) ──────────
 # Edit 06_domains_exceptions.json (same directory) to update dates on renewal.
 
 def _date_to_ts(s):
@@ -86,7 +77,7 @@ def _load_whois_fallback():
             for domain, v in raw.items()
         }
     except (FileNotFoundError, json.JSONDecodeError, ValueError, KeyError) as e:
-        print(f"[WARN] 06_domains_exceptions.json load failed: {e} — WHOIS fallback disabled", file=sys.stderr)
+        print(f"[WARN] 06_domains_exceptions.json load failed: {e} — RDAP fallback disabled", file=sys.stderr)
         return {}
 
 WHOIS_FALLBACK = _load_whois_fallback()
@@ -192,8 +183,8 @@ def _check_seed_host(host, port, now, conn):
     expiry_str, expiry_days, registered_str = _format_expiry(expiry_ts, registered_ts, now)
 
     try:
-        addrs = socket.getaddrinfo(host, port, socket.AF_INET)
-        ips = sorted({a[4][0] for a in addrs})
+        addrs = socket.getaddrinfo(host, port, socket.AF_UNSPEC)
+        ips = sorted({a[4][0] for a in addrs if a[0] in (socket.AF_INET, socket.AF_INET6)})
     except OSError:
         ips = []
 
@@ -261,18 +252,31 @@ def _format_expiry(expiry_ts, registered_ts, now):
         registered_str = datetime.fromtimestamp(registered_ts, tz=timezone.utc).strftime("%b %Y")
     return expiry_str, expiry_days, registered_str
 
-# ── WHOIS domain expiry ────────────────────────────────────────────────────────
+# ── RDAP domain expiry ─────────────────────────────────────────────────────────
 
 def _registrable_domain(host):
-    """Strip subdomains — WHOIS servers only hold records for the registrable domain.
+    """Strip subdomains — RDAP only holds records for the registrable domain.
     e.g. mainnet-seed.grinnode.live → grinnode.live  |  grincoin.org → grincoin.org"""
     parts = host.split(".")
     return ".".join(parts[-2:]) if len(parts) >= 2 else host
 
 
+def _parse_rdap_date(s):
+    """Parse ISO 8601 date from RDAP eventDate. Returns UTC timestamp or None."""
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except ValueError:
+        return None
+
+
 def _parse_whois_date(s):
     """Parse a date string from raw WHOIS output. Returns UTC timestamp or None."""
-    s = s.strip().split("T")[0].split(" ")[0]  # drop time portion
+    s = s.strip().split("T")[0].split(" ")[0]
     for fmt in ("%Y-%m-%d", "%d-%b-%Y", "%Y/%m/%d", "%d.%m.%Y", "%d-%m-%Y"):
         try:
             return int(datetime.strptime(s, fmt).replace(tzinfo=timezone.utc).timestamp())
@@ -283,7 +287,7 @@ def _parse_whois_date(s):
 
 def _fetch_whois_expiry_raw(registrable):
     """Fallback: run system `whois` binary and parse expiry with a broad regex.
-    Catches TLDs that python-whois has no built-in parser for (.live, .mw, .money…)."""
+    Used when RDAP is unavailable. Returns (expiry_ts, reason)."""
     import subprocess
     import re as _re
     _EXPIRY_RE = _re.compile(
@@ -299,59 +303,59 @@ def _fetch_whois_expiry_raw(registrable):
             ts = _parse_whois_date(m.group(1))
             if ts:
                 return ts, None
-        return None, "no expiry pattern matched in raw whois output"
+        return None, "no expiry pattern matched in whois output"
     except FileNotFoundError:
-        return None, "whois command not found (run: apt install whois)"
+        return None, "whois binary not found (apt install whois)"
     except subprocess.TimeoutExpired:
-        return None, "raw whois timed out"
+        return None, "whois timed out"
     except Exception as exc:
-        return None, f"raw whois error: {exc}"
+        return None, f"whois error: {exc}"
 
 
-def _fetch_whois_expiry(registrable):
-    """Return (unix_ts, reason) for domain expiry.
-    Tries python-whois first; falls back to system whois binary for TLDs
-    that python-whois cannot parse (.live, .mw, .money, etc.)."""
+def _fetch_rdap_expiry(registrable):
+    """Return (expiry_ts, registered_ts, reason) via RDAP (rdap.org).
+    Covers all gTLDs including .io/.live/.money/.fail/.stream/.vip — stdlib only,
+    no pip dependency. Returns (None, None, reason) on any failure so caller
+    can fall back to whois binary or 06_domains_exceptions.json."""
+    url = f"https://rdap.org/domain/{registrable}"
     try:
-        import whois  # python-whois
-    except ImportError:
-        return None, "python-whois not installed (run: pip3 install python-whois)"
-    try:
-        w = whois.whois(registrable)
-        exp = w.expiration_date
-        if isinstance(exp, list):
-            exp = exp[0]
-        # datetime object
-        if exp is not None and hasattr(exp, "timestamp"):
-            return int(exp.timestamp()), None
-        # string date — some TLDs return "2026-01-15 00:00:00" or "2026-01-15"
-        if isinstance(exp, str):
-            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d-%b-%Y"):
-                try:
-                    parsed = datetime.strptime(exp.strip(), fmt).replace(tzinfo=timezone.utc)
-                    return int(parsed.timestamp()), None
-                except ValueError:
-                    pass
-            return None, f"unrecognised date format: {exp!r}"
-    except Exception:
-        pass  # fall through to raw whois
-    # python-whois failed or returned None — try system whois binary
-    return _fetch_whois_expiry_raw(registrable)
+        req = urllib.request.Request(url, headers={"Accept": "application/rdap+json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        return None, None, f"RDAP HTTP {exc.code}"
+    except Exception as exc:
+        return None, None, f"RDAP error: {exc}"
+
+    expiry_ts = registered_ts = None
+    for event in data.get("events", []):
+        action = event.get("eventAction", "").lower()
+        ts = _parse_rdap_date(event.get("eventDate", ""))
+        if action == "expiration":
+            if ts is not None and (expiry_ts is None or ts > expiry_ts):
+                expiry_ts = ts
+        elif action == "registration":
+            if ts is not None and (registered_ts is None or ts < registered_ts):
+                registered_ts = ts
+
+    if expiry_ts is None:
+        return None, registered_ts, "RDAP returned no expiration event"
+    return expiry_ts, registered_ts, None
 
 
 def cmd_whois(conn, force=False):
-    """Refresh WHOIS expiry for all seed domains. Skips if cached < WHOIS_TTL_HOURS old.
+    """Refresh RDAP expiry for all seed and service domains. Skips if cached < RDAP_TTL_HOURS old.
     Queries the registrable domain (strips subdomains) and deduplicates so shared
     domains (e.g. main.gri.mw + test.gri.mw → gri.mw) are only fetched once."""
     now  = int(time.time())
-    ttl  = WHOIS_TTL_HOURS * 3600
+    ttl  = RDAP_TTL_HOURS * 3600
     all_hosts = [h for hosts in DNS_SEEDS.values() for h in hosts]
-    # Also include service domains with standard TLDs (.com/.org/.net)
+    # Include all service domains — RDAP covers all gTLDs, fallback handles the rest
     for svc in _build_services():
         try:
             hostname = urllib.parse.urlparse(svc["url"]).hostname or ""
             reg = _registrable_domain(hostname)
-            if _is_auto_tld(reg) and reg not in all_hosts:
+            if reg and reg not in all_hosts:
                 all_hosts.append(reg)
         except Exception:
             pass
@@ -369,23 +373,33 @@ def cmd_whois(conn, force=False):
             continue  # still fresh
 
         reg = _registrable_domain(host)
-        print(f"[WHOIS] {host} ({reg}) ...", end=" ", flush=True)
+        print(f"[RDAP] {host} ({reg}) ...", end=" ", flush=True)
 
         if reg in registrable_cache:
             expiry_ts, registered_ts, reason = registrable_cache[reg]
             print("(cached from registrable domain)", end=" ")
         else:
-            expiry_ts, reason = _fetch_whois_expiry(reg)
-            registered_ts = None
-            # If live WHOIS still returned nothing, use hardcoded fallback
+            expiry_ts, registered_ts, reason = _fetch_rdap_expiry(reg)
+            # Tier 2: RDAP failed — try system whois binary
+            if expiry_ts is None:
+                whois_ts, whois_reason = _fetch_whois_expiry_raw(reg)
+                if whois_ts is not None:
+                    expiry_ts = whois_ts
+                    reason    = None
+                    print("(whois fallback)", end=" ")
+                else:
+                    reason = whois_reason
+            # Tier 3: both failed — use manual JSON fallback (e.g. .mw ccTLD)
             if expiry_ts is None and reg in WHOIS_FALLBACK:
                 fb            = WHOIS_FALLBACK[reg]
                 expiry_ts     = fb.get("expiry_ts")
                 registered_ts = fb.get("registered_ts")
                 reason        = None
-                print("(hardcoded fallback)", end=" ")
+                print("(manual fallback)", end=" ")
+            elif registered_ts is None and reg in WHOIS_FALLBACK:
+                registered_ts = WHOIS_FALLBACK[reg].get("registered_ts")
             registrable_cache[reg] = (expiry_ts, registered_ts, reason)
-            time.sleep(1.5)  # be polite to WHOIS servers between unique queries
+            time.sleep(1)  # be polite to rdap.org between unique queries
 
         conn.execute(
             "INSERT OR REPLACE INTO dns_seed_whois(host, expiry_ts, registered_ts, fetched_ts) VALUES(?,?,?,?)",
@@ -735,15 +749,14 @@ def _check_services(services, now, conn):
                     hostname = urllib.parse.urlparse(svc["url"]).hostname or ""
                     reg = _registrable_domain(hostname)
                     expiry_ts = registered_ts = None
-                    # Auto TLDs: read from DB (populated by cmd_whois)
-                    if _is_auto_tld(reg):
-                        row = conn.execute(
-                            "SELECT expiry_ts, registered_ts FROM dns_seed_whois WHERE host=?",
-                            (reg,),
-                        ).fetchone()
-                        if row:
-                            expiry_ts, registered_ts = row
-                    # Manual TLDs: read from JSON fallback
+                    # All TLDs: read from DB (populated by cmd_whois via RDAP)
+                    row = conn.execute(
+                        "SELECT expiry_ts, registered_ts FROM dns_seed_whois WHERE host=?",
+                        (reg,),
+                    ).fetchone()
+                    if row:
+                        expiry_ts, registered_ts = row
+                    # If not yet in DB, read from manual fallback (e.g. .mw ccTLD)
                     if expiry_ts is None:
                         fb = WHOIS_FALLBACK.get(reg, {})
                         expiry_ts     = fb.get("expiry_ts")

@@ -55,7 +55,6 @@ function readBanners() {
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}\n`;
   process.stdout.write(line);
-  try { fs.appendFileSync(config.log_path, line); } catch {}
 }
 
 // ── SQLite ───────────────────────────────────────────────────────────────────
@@ -144,9 +143,10 @@ let peerVersionMap = {};
 let latestPrice    = null; // { price_btc, price_usd, change_24h_pct, fetched_at, sources, stale }
 
 // ── Stall tracking ───────────────────────────────────────────────────────────
-
-let stallCount    = 0;
-let lastTipHeight = 0;
+// Threshold: 10 minutes. Avoids false positives from natural Poisson variance
+// in block times and slow VPS polling. Uses actual block timestamps from the DB
+// rather than poll counts, so it is independent of poll interval.
+const STALL_THRESHOLD_MS = 10 * 60 * 1000;
 
 // ── Chain data size (5-min TTL cache) ────────────────────────────────────────
 
@@ -374,11 +374,7 @@ async function pollBlocks() {
     const uaMatch = (status.user_agent || '').match(/(\d+\.\d+\.\d+)/);
     if (uaMatch) tipState.node_version = uaMatch[1];
 
-    // Stall detection (suppress when node is actively syncing)
     const nodeSyncing = status.sync_status && status.sync_status !== 'no_sync';
-    if (tipHeight === lastTipHeight && !nodeSyncing) { stallCount++; }
-    else { stallCount = 0; lastTipHeight = tipHeight; }
-    tipState.stalled = stallCount >= 5;
 
     // ── Foreign API: fetch any new blocks ────────────────────────────────────
     const row       = stmtMaxHeight.get();
@@ -403,6 +399,12 @@ async function pollBlocks() {
     //   42    = Cuckatoo32 cycle length
     //   16384 = C32 solution rate (32 × 2^9)
     const topBlocks = stmtTopTwoDiff.all();
+
+    // Stall detection — compare actual latest block timestamp against now.
+    // Suppressed during active sync. Falls back to false when DB is empty.
+    tipState.stalled = !nodeSyncing && topBlocks.length > 0
+      && (Date.now() - topBlocks[0].timestamp * 1000) > STALL_THRESHOLD_MS;
+
     let perBlockDiff = 0;
     let hashrateGps  = 0;
     if (topBlocks.length >= 2) {

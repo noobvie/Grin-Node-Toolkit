@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Grin Solo Mining Stats</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0d1117;
+    color: #c9d1d9;
+    font-family: 'Courier New', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2rem 1rem;
+  }
+
+  header {
+    width: 100%;
+    max-width: 640px;
+    border-bottom: 1px solid #21262d;
+    padding-bottom: 1rem;
+    margin-bottom: 2rem;
+  }
+
+  header h1 {
+    font-size: 1.4rem;
+    color: #58a6ff;
+    letter-spacing: 0.04em;
+  }
+
+  header p {
+    font-size: 0.75rem;
+    color: #6e7681;
+    margin-top: 0.25rem;
+  }
+
+  #status-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #6e7681;
+    margin-right: 0.4em;
+    vertical-align: middle;
+  }
+  #status-dot.ok  { background: #3fb950; }
+  #status-dot.err { background: #f85149; }
+
+  .grid {
+    width: 100%;
+    max-width: 640px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+
+  .card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 6px;
+    padding: 1.2rem;
+  }
+
+  .card .label {
+    font-size: 0.7rem;
+    color: #6e7681;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.5rem;
+  }
+
+  .card .value {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #e6edf3;
+    word-break: break-all;
+  }
+
+  .card.wide {
+    grid-column: span 2;
+  }
+
+  .card .value.green { color: #3fb950; }
+  .card .value.yellow { color: #d29922; }
+  .card .value.dim { color: #6e7681; font-size: 1rem; }
+
+  #error-box {
+    display: none;
+    width: 100%;
+    max-width: 640px;
+    background: #1c1214;
+    border: 1px solid #6e2c2c;
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    color: #f85149;
+    font-size: 0.85rem;
+    margin-bottom: 1.5rem;
+  }
+
+  footer {
+    color: #6e7681;
+    font-size: 0.7rem;
+    text-align: center;
+  }
+
+  #last-updated {
+    color: #6e7681;
+    font-size: 0.75rem;
+    margin-top: 0.3rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span id="status-dot"></span>Grin Solo Mining</h1>
+  <p id="last-updated">connecting...</p>
+</header>
+
+<div id="error-box"></div>
+
+<div class="grid">
+  <div class="card">
+    <div class="label">Block Height</div>
+    <div class="value" id="height">—</div>
+  </div>
+  <div class="card">
+    <div class="label">Network Difficulty</div>
+    <div class="value" id="difficulty">—</div>
+  </div>
+  <div class="card">
+    <div class="label">Estimated Hashrate</div>
+    <div class="value green" id="hashrate">—</div>
+  </div>
+  <div class="card">
+    <div class="label">Connected Peers</div>
+    <div class="value" id="peers">—</div>
+  </div>
+  <div class="card wide">
+    <div class="label">Stratum Miners Connected</div>
+    <div class="value" id="miners">—</div>
+  </div>
+</div>
+
+<footer>
+  Grin Node Toolkit · solo mining stats page<br>
+  Polls <code>/api/status</code> every 10 seconds · Cuckatoo32
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  var prevDiff = null;
+  var prevTs   = null;
+
+  function fmtNum(n) {
+    if (n >= 1e12) return (n / 1e12).toFixed(2) + 'T';
+    if (n >= 1e9)  return (n / 1e9).toFixed(2) + 'G';
+    if (n >= 1e6)  return (n / 1e6).toFixed(2) + 'M';
+    if (n >= 1e3)  return (n / 1e3).toFixed(2) + 'k';
+    return String(n);
+  }
+
+  // Cuckatoo32 hashrate: diff_delta × 42 / dt_seconds / 16384
+  function calcHashrate(diff, nowTs) {
+    if (prevDiff === null || prevTs === null) {
+      prevDiff = diff;
+      prevTs   = nowTs;
+      return null;
+    }
+    var delta = diff - prevDiff;
+    var dt    = (nowTs - prevTs) / 1000;
+    prevDiff  = diff;
+    prevTs    = nowTs;
+    if (delta <= 0 || dt <= 0) return null;
+    var gps = delta * 42 / dt / 16384;
+    if (gps >= 1e6) return (gps / 1e6).toFixed(2) + ' MG/s';
+    if (gps >= 1e3) return (gps / 1e3).toFixed(2) + ' kG/s';
+    return gps.toFixed(2) + ' G/s';
+  }
+
+  function set(id, text, cls) {
+    var el = document.getElementById(id);
+    el.textContent = text;
+    if (cls) {
+      el.className = 'value ' + cls;
+    } else {
+      el.className = 'value';
+    }
+  }
+
+  function showError(msg) {
+    var box = document.getElementById('error-box');
+    box.textContent = msg;
+    box.style.display = 'block';
+    document.getElementById('status-dot').className = 'err';
+  }
+
+  function hideError() {
+    document.getElementById('error-box').style.display = 'none';
+    document.getElementById('status-dot').className = 'ok';
+  }
+
+  function poll() {
+    var nowTs = Date.now();
+
+    fetch('/api/status', { method: 'GET' })
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (data) {
+        var ok = data && data.result && data.result.Ok;
+        if (!ok) throw new Error('Unexpected response shape');
+
+        var tip   = ok.tip || {};
+        var height = tip.height;
+        var diff   = tip.total_difficulty;
+        var peers  = ok.connections;
+
+        hideError();
+
+        set('height', height !== undefined ? height.toLocaleString() : '—');
+        set('difficulty', diff   !== undefined ? fmtNum(diff) : '—');
+        set('peers',      peers  !== undefined ? String(peers) : '—',
+            peers > 0 ? 'green' : 'yellow');
+
+        var hr = diff !== undefined ? calcHashrate(diff, nowTs) : null;
+        set('hashrate', hr || '—', hr ? 'green' : '');
+
+        // stratum_stats is available in some node builds
+        var strat = ok.stratum_stats;
+        if (strat && strat.num_workers !== undefined) {
+          set('miners', String(strat.num_workers),
+              strat.num_workers > 0 ? 'green' : 'dim');
+        } else {
+          set('miners', 'n/a', 'dim');
+        }
+
+        document.getElementById('last-updated').textContent =
+          'Last updated: ' + new Date().toLocaleTimeString();
+      })
+      .catch(function (err) {
+        showError('Cannot reach node: ' + err.message);
+        set('height', '—');
+        set('difficulty', '—');
+        set('hashrate', '—');
+        set('peers', '—');
+        set('miners', '—');
+        document.getElementById('last-updated').textContent = 'Error — retrying in 10s';
+      });
+  }
+
+  poll();
+  setInterval(poll, 10000);
+})();
+</script>
+</body>
+</html>

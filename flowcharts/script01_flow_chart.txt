@@ -187,6 +187,33 @@
          │   elapsed time / log path     │
          └───────────────────────────────┘
                          │
+         ┌───────────────▼────────────────────────────────────┐
+         │   STEP 14b — Tor / Onion Network (TODO)            │
+         │                                                    │
+         │   Optional step after node is running.             │
+         │   "Configure this node as a Tor hidden service?"   │
+         │   1 = Yes   2 = No (default)                       │
+         │                                                    │
+         │   If Yes:                                          │
+         │   • Add HiddenServiceDir + HiddenServicePort       │
+         │     to /etc/tor/torrc (per network):               │
+         │     mainnet: HiddenServicePort 3414 127.0.0.1:3414 │
+         │     testnet: HiddenServicePort 13414 127.0.0.1:13414│
+         │   • systemctl restart tor                          │
+         │   • Read .onion addr from                          │
+         │     /var/lib/tor/grin-{net}/hostname               │
+         │   • Patch grin-server.toml [p2p]:                  │
+         │     tor_external_addr = "<addr>.onion:3414"        │
+         │     socks_proxy_addr  = "127.0.0.1:9050"           │
+         │     use_tor_listener  = true                       │
+         │   • Restart node tmux session                      │
+         │   • Show .onion address to user                    │
+         │                                                    │
+         │   Note: tor already installed in Step 2.           │
+         │   Implementation: node_tor_configure() in          │
+         │   a new lib file  01_lib_tor.sh                    │
+         └────────────────────────────────────────────────────┘
+                         │
          ┌───────────────▼───────────────┐
          │   save_instance_location      │
          │   writes to conf/             │
@@ -233,3 +260,40 @@ K (kill all & rebuild both) — stop_grin_gracefully + _remove_instance_dirs all
 
 "both" network — runs setup_one_node twice sequentially. Binary download cached after first run
   (reused for testnet). Each run independently saves to conf.
+
+
+──────────────────────────────────────────────────────────────────────────────────────────────
+I2P vs Tor — Research Note (I2P not planned)
+──────────────────────────────────────────────────────────────────────────────────────────────
+
+I2P (Invisible Internet Project) uses garlic routing (vs Tor's onion routing).
+Compared for Grin P2P use:
+
+  Feature              Tor                          I2P
+  ───────────────────  ───────────────────────────  ───────────────────────────────────────
+  Routing              Onion (3-hop, layered)        Garlic (bundled msgs, tunnel-based)
+  Designed for         Clearnet anonymity +          Internal P2P network services
+                       hidden services
+  Exit nodes           Yes (clearnet leak risk)      No — all traffic stays in I2P
+  P2P fit              Good                          Excellent (built for P2P apps)
+  Grin support         Partial — grin-server.toml    None — needs Grin core changes
+                       has socks_proxy_addr,
+                       use_tor_listener, tor_external_addr
+  Address format       .onion                        .i2p / b32.i2p
+  SOCKS proxy port     9050                          4444 (I2P-only, no clearnet exit)
+  Implementation       C (fast)                      Java (i2pd is C++ alternative)
+
+Can Grin run on I2P?
+  Theoretically yes, but NOT practical today:
+  • Grin's P2P layer only understands IP addresses and .onion hostnames
+  • .i2p / b32.i2p addresses are not recognised by Grin's peer handling code
+  • Would require Grin core changes (like Bitcoin Core did in v22.0 for I2P via SAM bridge)
+  • socks_proxy_addr cannot be reused — I2P SOCKS (port 4444) only routes to .i2p
+    destinations, not clearnet; it is not a drop-in replacement for Tor SOCKS
+
+Verdict: Tor is the practical choice now.
+  I2P support is a Grin core feature request — not something the toolkit can configure
+  without upstream changes. If Grin core ever adds I2P (following Bitcoin's lead),
+  Step 14b can gain an I2P branch alongside the Tor branch above.
+
+Reference: Bitcoin Core I2P docs — https://github.com/bitcoin/bitcoin/blob/master/doc/i2p.md

@@ -82,20 +82,6 @@
   }
 
   /* ── Theme controls ──────────────────────────────────────────────────────── */
-  .mode-toggle {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    width: 28px; height: 26px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 13px;
-    display: flex; align-items: center; justify-content: center;
-    transition: all 0.15s;
-    flex-shrink: 0;
-    padding: 0;
-  }
-  .mode-toggle:hover { border-color: var(--grin); color: var(--text); }
   .theme-picker { position: relative; }
   .theme-pill-btn {
     padding: 3px 9px;
@@ -319,6 +305,46 @@
   .status-fail { color: var(--red);   font-weight: 700; }
   .dns-no-resolve { font-size: 11px; color: var(--red); font-style: italic; padding: 2px 0; }
 
+  /* ── Submit card ─────────────────────────────────────────────────────────── */
+  .submit-card .submit-body { padding: 18px 20px 20px; }
+  .submit-card p {
+    margin: 0 0 14px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .submit-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--grin);
+    background: rgba(255,153,0,0.08);
+    color: var(--grin);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.15s;
+  }
+  .submit-btn:hover {
+    background: var(--grin);
+    color: var(--bg);
+  }
+  .submit-note {
+    margin: 14px 0 0 !important;
+    font-size: 12px;
+  }
+  .submit-note a { color: var(--blue); text-decoration: none; }
+  .submit-note a:hover { text-decoration: underline; }
+  .submit-note code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+  }
+
   /* ── Ecosystem services table ────────────────────────────────────────────── */
   .svc-category-header {
     font-size: 12px;
@@ -531,9 +557,8 @@
     <a href="ecosystem.html" class="nav-btn active"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="7" cy="7" r="5.5"/><circle cx="7" cy="7" r="2"/><line x1="7" y1="1.5" x2="7" y2="5"/><line x1="7" y1="9" x2="7" y2="12.5"/><line x1="1.5" y1="7" x2="5" y2="7"/><line x1="9" y1="7" x2="12.5" y2="7"/></svg>Ecosystem</a>
   </nav>
   <div class="header-right">
-    <button class="mode-toggle" id="mode-toggle" title="Toggle dark/light mode">🌙</button>
     <div class="theme-picker">
-      <button class="theme-pill-btn" id="theme-pill-btn">🎨</button>
+      <button class="theme-pill-btn" id="theme-pill-btn" title="Change theme"></button>
       <div class="theme-menu" id="theme-menu">
         <button class="tm-item" data-theme="dark">◼ Default</button>
         <button class="tm-item" data-theme="light">◻ Light</button>
@@ -650,6 +675,40 @@ seeds = ["grincoin.org:3414", "main.gri.mw:3414", "main-seed.grin.money:3414"]</
     <div id="svc-body"><div class="placeholder">Loading…</div></div>
   </div>
 
+  <!-- ── Submit your site / repo ─────────────────────────────────────────── -->
+  <div class="card submit-card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-blue"></span>Submit your site or repo</div>
+    </div>
+    <div class="submit-body">
+      <p>
+        Building something Grin-related? Add it to this page by opening a short
+        submission issue on GitHub — name, URL, category, and a one-line
+        description. Approved entries get added on the next data refresh.
+      </p>
+      <a class="submit-btn"
+         href="https://github.com/noobvie/Grin-Node-Toolkit/issues/new?template=ecosystem-submission.yml"
+         target="_blank" rel="noopener">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" style="vertical-align:-2px;margin-right:6px">
+          <path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+        </svg>
+        Submit on GitHub
+      </a>
+      <p class="submit-note">
+        Already cloned the repo? Open a PR adding your entry to
+        <a href="https://github.com/noobvie/Grin-Node-Toolkit/blob/main/scripts/lib/06_ecosystem_sites.json" target="_blank" rel="noopener"><code>06_ecosystem_sites.json</code></a>
+        (live services) or
+        <a href="https://github.com/noobvie/Grin-Node-Toolkit/blob/main/scripts/lib/06_ecosystem_dev.json" target="_blank" rel="noopener"><code>06_ecosystem_dev.json</code></a>
+        (code repos &mdash; needs a <code>type: github|gitea</code> field).
+      </p>
+      <p class="submit-note">
+        Requires a free GitHub account. Need a different route? Open any
+        <a href="https://github.com/noobvie/Grin-Node-Toolkit/issues" target="_blank" rel="noopener">issue</a>
+        on the repo and we'll take it from there.
+      </p>
+    </div>
+  </div>
+
 </main>
 
 <footer>
@@ -669,20 +728,29 @@ function esc(s) {
 }
 
 // ── Theme ──────────────────────────────────────────────────────────────────
+const THEME_LABELS = {
+  dark:   "◼ Default",
+  light:  "◻ Light",
+  matrix: "▓ Matrix",
+  hp:     "✦ Harry Potter",
+};
+
+function applyTheme(t) {
+  if (t === 'dark') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', t);
+  localStorage.setItem('grin-theme', t);
+  document.querySelectorAll('.tm-item').forEach(b => b.classList.toggle('active', b.dataset.theme === t));
+  document.getElementById('theme-pill-btn').textContent = (THEME_LABELS[t] || THEME_LABELS.dark) + ' ▾';
+  document.getElementById('theme-menu').classList.remove('open');
+}
+
+// Set data-theme early to avoid flash; full sync runs after DOM ready below.
 (function () {
   const saved = localStorage.getItem('grin-theme') || 'matrix';
   if (saved !== 'dark') document.documentElement.setAttribute('data-theme', saved);
-  document.querySelectorAll('.tm-item').forEach(btn => {
-    if (btn.dataset.theme === saved || (saved === 'dark' && btn.dataset.theme === 'dark'))
-      btn.classList.add('active');
-  });
 })();
 
-document.getElementById('mode-toggle').addEventListener('click', () => {
-  const cur = document.documentElement.getAttribute('data-theme') || 'dark';
-  const next = cur === 'light' ? 'dark' : 'light';
-  applyTheme(next);
-});
+applyTheme(localStorage.getItem('grin-theme') || 'matrix');
 
 document.getElementById('theme-pill-btn').addEventListener('click', e => {
   e.stopPropagation();
@@ -692,15 +760,6 @@ document.addEventListener('click', () => document.getElementById('theme-menu').c
 document.querySelectorAll('.tm-item').forEach(btn => {
   btn.addEventListener('click', () => applyTheme(btn.dataset.theme));
 });
-
-function applyTheme(t) {
-  document.documentElement.setAttribute('data-theme', t === 'dark' ? '' : t);
-  if (t === 'dark') document.documentElement.removeAttribute('data-theme');
-  localStorage.setItem('grin-theme', t);
-  document.querySelectorAll('.tm-item').forEach(b => b.classList.toggle('active', b.dataset.theme === t));
-  document.getElementById('mode-toggle').textContent = t === 'light' ? '🌙' : '☀️';
-  document.getElementById('theme-menu').classList.remove('open');
-}
 
 // ── Data fetch ─────────────────────────────────────────────────────────────
 async function fetchJSON(url) {
@@ -875,7 +934,7 @@ function renderServices(services) {
       html += `<div class="svc-row">
   <span class="svc-status">${icon}</span>
   <span class="svc-name">${esc(s.name)}</span>
-  <a class="svc-url" href="${safeUrl}" target="_blank" rel="noopener" title="${esc(s.url)}">${esc(host)}</a>
+  <a class="svc-url" href="${esc(safeUrl)}" target="_blank" rel="noopener" title="${esc(s.url)}">${esc(host)}</a>
   <span class="svc-meta">${metaContent}</span>
 </div>`;
     }

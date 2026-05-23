@@ -89,20 +89,6 @@
   }
 
   /* ── Theme controls ──────────────────────────────────────────────────────── */
-  .mode-toggle {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    width: 28px; height: 26px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 13px;
-    display: flex; align-items: center; justify-content: center;
-    transition: all 0.15s;
-    flex-shrink: 0;
-    padding: 0;
-  }
-  .mode-toggle:hover { border-color: var(--grin); color: var(--text); }
   .api-pill-btn {
     background: transparent;
     border: 1px solid var(--border);
@@ -646,9 +632,8 @@
       <span class="pill-sep">·</span>
       <button class="api-pill-btn" id="api-docs-btn" title="Public API documentation">API</button>
       <span class="pill-sep">|</span>
-      <button class="mode-toggle" id="mode-toggle" title="Toggle dark/light mode">🌙</button>
       <div class="theme-picker">
-        <button class="theme-pill-btn" id="theme-pill-btn">🎨</button>
+        <button class="theme-pill-btn" id="theme-pill-btn" title="Change theme"></button>
         <div class="theme-menu" id="theme-menu">
           <button class="tm-item" data-theme="dark">◼ Default</button>
           <button class="tm-item" data-theme="light">◻ Light</button>
@@ -2096,6 +2081,13 @@ const THEME_CHART = {
   hp:     { grid: "#4a1a8a", tick: "#b8a0d4" },
 };
 
+const THEME_LABELS = {
+  dark:   "◼ Default",
+  light:  "◻ Light",
+  matrix: "▓ Matrix",
+  hp:     "✦ Harry Potter",
+};
+
 function applyTheme(theme) {
   currentTheme = theme;
   localStorage.setItem("grin-theme", theme);
@@ -2105,8 +2097,8 @@ function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme);
   }
 
-  const modeBtn = $("mode-toggle");
-  if (modeBtn) modeBtn.textContent = theme === "light" ? "☀️" : "🌙";
+  const pillBtn = $("theme-pill-btn");
+  if (pillBtn) pillBtn.textContent = (THEME_LABELS[theme] || THEME_LABELS.dark) + " ▾";
 
   document.querySelectorAll(".tm-item").forEach(b =>
     b.classList.toggle("active", b.dataset.theme === theme)
@@ -2133,10 +2125,6 @@ function applyTheme(theme) {
 
 function initTheme() {
   applyTheme(currentTheme);
-
-  $("mode-toggle").addEventListener("click", () => {
-    applyTheme(currentTheme === "light" ? "dark" : "light");
-  });
 
   $("theme-pill-btn").addEventListener("click", e => {
     e.stopPropagation();

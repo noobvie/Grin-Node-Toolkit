@@ -17,6 +17,8 @@
 #   · /opt/grin/grin-stats/stats.db    — blockchain stats DB (~100 MB, expensive to rebuild)
 #   · /opt/grin/grin-stats/config.env  — stats collector config
 #   · /opt/grin/grin-price/grin-price.db — price history DB (optional, default Y)
+#   · /var/lib/tor/grin-mainnet/, /var/lib/tor/grin-testnet/
+#                              — Tor HiddenService Ed25519 keys (.onion identity) — optional, default Y
 #   · /etc/nginx/sites-available/*  (Grin-related configs only)
 #   · /etc/letsencrypt/live/ + renewal/  — SSL certs
 #   · root + www-data crontabs  — collector schedules
@@ -310,6 +312,44 @@ run_backup() {
             [[ "$auto" == false ]] && info "  ✓ $_db  ($_db_size)"
         fi
     done
+
+    # ── Step 5b: Tor HiddenService keys (.onion identity) ────────────────────
+    # /var/lib/tor/grin-<network>/ contains the Ed25519 keypair that defines the
+    # .onion address. Backing this up lets the operator restore the same .onion
+    # on a new VPS without breaking any wallet that bookmarked the URL.
+    # The secret key is sensitive — the archive is AES-256-CBC encrypted by Step 7.
+    local -a _tor_onion_dirs=()
+    for _net in mainnet testnet; do
+        [[ -d "/var/lib/tor/grin-${_net}" ]] && _tor_onion_dirs+=("/var/lib/tor/grin-${_net}")
+    done
+    if [[ ${#_tor_onion_dirs[@]} -gt 0 ]]; then
+        local include_tor=true
+        if [[ "$auto" == false ]]; then
+            section "Step 5b: Tor HiddenService identity keys"
+            echo -e "  ${YELLOW}Detected .onion identity directories:${RESET}"
+            for _t in "${_tor_onion_dirs[@]}"; do
+                local _hn=""
+                [[ -f "$_t/hostname" ]] && _hn=" → $(cat "$_t/hostname" 2>/dev/null || echo '?')"
+                echo -e "  ${DIM}$_t${RESET}${_hn}"
+            done
+            echo ""
+            echo -e "  ${YELLOW}These keys ARE your .onion identity. Backing them up lets you${RESET}"
+            echo -e "  ${YELLOW}restore the same .onion address on another VPS.${RESET}"
+            echo ""
+            echo -ne "${BOLD}Include Tor HiddenService keys? [Y/n]: ${RESET}"
+            read -r _tor_choice
+            [[ "${_tor_choice,,}" == "n" ]] && include_tor=false
+        fi
+        if [[ "$include_tor" == true ]]; then
+            for _t in "${_tor_onion_dirs[@]}"; do
+                sources+=("$_t")
+                manifest_lines+=("tor-onion: $_t")
+                [[ "$auto" == false ]] && info "  ✓ $_t"
+            done
+        else
+            [[ "$auto" == false ]] && warn "  — Tor HiddenService keys excluded. .onion identity will be lost on VPS migration."
+        fi
+    fi
 
     # ── Step 6: Optional logs ────────────────────────────────────────────────
     if [[ "$auto" == false ]]; then
@@ -615,6 +655,61 @@ run_restore() {
             log "[RESTORE] letsencrypt/$_le"
         fi
     done
+
+    # Tor HiddenService keys — restore the .onion identity for each network
+    # found in the archive. Two ownership conventions in the wild:
+    #   debian-tor:debian-tor   (Debian/Ubuntu)
+    #   toranon:toranon         (Rocky/Alma — newer Fedora-based)
+    # Try each in order; whichever user actually exists wins.
+    # Also strip torrc entries with the same marker for the network — Script 01
+    # on the new VPS may write a *different* HS dir; we want torrc to point at
+    # the restored one. The next Script 01 run will rewrite the marker block
+    # idempotently to the canonical content, so this just keeps things tidy.
+    local _tor_restored_nets=()
+    for _net in mainnet testnet; do
+        local _tor_src="$extract_dir/var/lib/tor/grin-${_net}"
+        [[ -d "$_tor_src" ]] || continue
+        local _tor_dst="/var/lib/tor/grin-${_net}"
+
+        # Stop tor before swapping dirs so it doesn't republish stale descriptors
+        local _tor_was_running=0
+        if systemctl is-active --quiet tor 2>/dev/null; then
+            _tor_was_running=1
+            systemctl stop tor 2>/dev/null || true
+        fi
+
+        mkdir -p "$_tor_dst"
+        cp -a "$_tor_src/." "$_tor_dst/"
+
+        # Permissions: 700 on dir, 600 on secret key
+        chmod 700 "$_tor_dst"
+        [[ -f "$_tor_dst/hs_ed25519_secret_key" ]] && chmod 600 "$_tor_dst/hs_ed25519_secret_key"
+
+        # Ownership — try the conventional tor user on this distro
+        local _tor_user=""
+        for _u in debian-tor toranon tor _tor; do
+            if id "$_u" &>/dev/null; then _tor_user="$_u"; break; fi
+        done
+        if [[ -n "$_tor_user" ]]; then
+            chown -R "$_tor_user:$_tor_user" "$_tor_dst" 2>/dev/null || true
+        else
+            warn "  No tor user found — leaving $_tor_dst owned by root. tor may refuse to read it."
+        fi
+
+        _tor_restored_nets+=("$_net")
+        local _hn=""
+        [[ -f "$_tor_dst/hostname" ]] && _hn=" → $(cat "$_tor_dst/hostname" 2>/dev/null || echo '?')"
+        success "Restored Tor identity: $_tor_dst${_hn}"
+        log "[RESTORE] tor-onion ${_net}${_hn}"
+
+        if [[ $_tor_was_running -eq 1 ]]; then
+            systemctl start tor 2>/dev/null || true
+        fi
+    done
+    if [[ ${#_tor_restored_nets[@]} -gt 0 ]]; then
+        echo -e "  ${YELLOW}Note:${RESET} re-run Script 01 (or M/T/K rebuild) on this VPS so the matching"
+        echo -e "        torrc HiddenService stanza is (re)written and tor picks up the identity."
+    fi
 
     # Wallet dirs
     if [[ -d "$extract_dir/opt/grin/wallet" ]]; then

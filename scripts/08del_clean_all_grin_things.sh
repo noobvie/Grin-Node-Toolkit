@@ -536,6 +536,108 @@ step_remove_crontab() {
 }
 
 # =============================================================================
+# STEP 8 — Remove Tor HiddenService entries written by Script 01
+# =============================================================================
+# Strips marker-bounded stanzas from /etc/tor/torrc and removes the matching
+# /var/lib/tor/grin-<network>/ key directories. Only touches blocks Script 01
+# itself wrote (delimited by # >>> grin-toolkit:<net> >>>  ...  # <<< grin-toolkit:<net> <<<);
+# any other HiddenService entries the operator added are untouched.
+#
+# WARNING: removing /var/lib/tor/grin-<network>/ destroys the .onion identity.
+# Anyone bookmarking your URL won't be able to reach you again, even if you
+# rebuild later — a fresh build generates a fresh keypair.
+# =============================================================================
+step_remove_tor_hidden_services() {
+    section "STEP 8: Remove Tor HiddenService Entries"
+
+    local torrc="/etc/tor/torrc"
+    local found=0
+    local -a found_networks=()
+
+    if [[ -f "$torrc" ]]; then
+        for net in mainnet testnet; do
+            if grep -qF "# >>> grin-toolkit:${net} >>>" "$torrc"; then
+                found=1
+                found_networks+=("$net")
+            fi
+        done
+    fi
+    for net in mainnet testnet; do
+        if [[ -d "/var/lib/tor/grin-${net}" ]]; then
+            # Only flag if not already collected above
+            local already=0
+            for n in "${found_networks[@]+"${found_networks[@]}"}"; do
+                [[ "$n" == "$net" ]] && already=1
+            done
+            if [[ $already -eq 0 ]]; then
+                found=1
+                found_networks+=("$net")
+            fi
+        fi
+    done
+
+    if [[ $found -eq 0 ]]; then
+        info "No Tor HiddenService entries found. Skipping."
+        log "[STEP 8] No Tor HiddenService entries — skipped."
+        return
+    fi
+
+    info "Found toolkit-marked Tor HiddenServices for: ${found_networks[*]}"
+    warn "Removing these will destroy the .onion identity (the Ed25519 keypair)."
+    warn "If you want to preserve the .onion for migration, back up first via Script 089."
+
+    if ! confirm_step "Remove Tor HiddenService entries and key directories?"; then
+        info "Skipped — Tor HiddenService entries kept."
+        log "[STEP 8] SKIPPED by user."
+        return
+    fi
+
+    # Strip marker-bounded blocks from torrc (literal-string awk, no regex escaping)
+    if [[ -f "$torrc" ]]; then
+        for net in "${found_networks[@]}"; do
+            local begin="# >>> grin-toolkit:${net} >>>"
+            local end="# <<< grin-toolkit:${net} <<<"
+            if grep -qF "$begin" "$torrc"; then
+                local tmp="${torrc}.toolkit.tmp"
+                awk -v b="$begin" -v e="$end" '
+                    $0 == b { in_block=1; next }
+                    $0 == e { in_block=0; next }
+                    !in_block
+                ' "$torrc" > "$tmp" && mv "$tmp" "$torrc"
+                success "Stripped torrc block for ${net}."
+                log "[STEP 8] torrc block removed: ${net}"
+            fi
+        done
+    fi
+
+    # Remove key directories (the .onion identity).
+    # Defensive: only touch /var/lib/tor/grin-* — never anything else.
+    # ${hs_dir:?} guards against an empty variable resolving to "rm -rf /".
+    for net in "${found_networks[@]}"; do
+        local hs_dir="/var/lib/tor/grin-${net}"
+        if [[ "$hs_dir" != /var/lib/tor/grin-* ]]; then
+            warn "Refusing to remove '$hs_dir' — not under /var/lib/tor/grin-*. Skipping."
+            continue
+        fi
+        if [[ -d "$hs_dir" ]]; then
+            rm -rf "${hs_dir:?}"
+            success "Removed: $hs_dir"
+            log "[STEP 8] Removed HiddenServiceDir: $hs_dir"
+        fi
+    done
+
+    # Reload tor so it drops the now-orphaned hidden services
+    if systemctl reload tor 2>/dev/null; then
+        success "tor reloaded."
+    elif systemctl restart tor 2>/dev/null; then
+        success "tor restarted."
+    else
+        warn "tor reload/restart failed — restart manually if it remains running."
+    fi
+    log "[STEP 8] Tor HiddenService cleanup complete."
+}
+
+# =============================================================================
 # Main
 # =============================================================================
 main() {
@@ -556,8 +658,10 @@ main() {
     echo -e "${BOLD}${RED}║    5.  Chain data and wallet files  (\$HOME/.grin/)                  ║${RESET}"
     echo -e "${BOLD}${RED}║    6.  Grin toolkit log files                                       ║${RESET}"
     echo -e "${BOLD}${RED}║    7.  Grin crontab entries                                         ║${RESET}"
+    echo -e "${BOLD}${RED}║    8.  Tor HiddenService entries + .onion identity keys             ║${RESET}"
     echo -e "${BOLD}${RED}║                                                                      ║${RESET}"
-    echo -e "${BOLD}${RED}║  Wallet seed phrases will be LOST if not backed up beforehand.      ║${RESET}"
+    echo -e "${BOLD}${RED}║  Wallet seed phrases AND .onion identity keys will be LOST          ║${RESET}"
+    echo -e "${BOLD}${RED}║  if not backed up beforehand (use Script 089 to back up first).     ║${RESET}"
     echo -e "${BOLD}${RED}║                                                                      ║${RESET}"
     echo -e "${BOLD}${RED}╚══════════════════════════════════════════════════════════════════════╝${RESET}"
     echo ""
@@ -580,6 +684,7 @@ main() {
     step_remove_home_grin
     step_remove_logs
     step_remove_crontab
+    step_remove_tor_hidden_services
 
     echo ""
     echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"

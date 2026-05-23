@@ -117,7 +117,7 @@
 #              User then chooses transfer mode:
 #                1) On-the-fly — pipes remote tar.gz straight into tar; no
 #                   .tar.gz stored locally; auto-switches source on failure;
-#                   skips Steps 10 & 11.  cmd: wget -O - <url> | tar -xzvf -
+#                   skips Steps 10 & 11.  cmd: wget -O - <url> | tar -xzf -
 #                2) Full download — saves .tar.gz to disk (wget -c, resumable),
 #                   auto-switches source on failure; continues to Steps 10–12.
 #
@@ -2070,7 +2070,7 @@ download_chain_data() {
     echo ""
     echo -e "  ${GREEN}1${RESET}) ${BOLD}On-the-fly extraction${RESET} ${DIM}(default — stream directly, no full download)${RESET}"
     echo -e "     ${DIM}Pipes the remote archive straight into tar without saving locally.${RESET}"
-    echo -e "     ${DIM}cmd: wget -O - <url> | tar -xzvf -${RESET}"
+    echo -e "     ${DIM}cmd: wget -O - <url> | tar -xzf -${RESET}"
     echo -e "     ${DIM}Saves temporary disk space and reduces total setup time.${RESET}"
     echo -e "     ${DIM}Auto-switches to the next source if the stream fails mid-transfer.${RESET}"
     echo -e "     ${DIM}Note: SHA256 checksum verification is skipped in this mode.${RESET}"
@@ -2231,7 +2231,7 @@ extract_chain_data() {
 # [STREAM] EXTRACT CHAIN DATA ON-THE-FLY  (no local archive)
 # -----------------------------------------------------------------------------
 # Pipes the remote .tar.gz directly into tar without saving it locally:
-#   wget -O - <url> | tar -xzvf - -C "$GRIN_DIR"
+#   wget -O - <url> | tar -xzf - -C "$GRIN_DIR"
 # All ready sources from READY_SOURCES are tried in order. On failure, any
 # partially extracted chain_data directory is removed before retrying.
 # Steps 10 (SHA256) and 11 (disk space) are skipped in this mode.
@@ -2249,12 +2249,12 @@ stream_extract_chain_data() {
         src_num=$(( src_num + 1 ))
         local tar_url="$src_base/$tar_name"
         info "Source $src_num/$total_src: $tar_url"
-        info "Running: wget -O - \"$tar_url\" | tar -xzvf - -C \"$GRIN_DIR\""
+        info "Running: wget -O - \"$tar_url\" | tar -xzf - -C \"$GRIN_DIR\""
         [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
         echo ""
         log "[STEP 10] Streaming from $tar_url"
         if wget --progress=bar:force -O - "$tar_url" \
-                | tar -xzvf - -C "$GRIN_DIR"; then
+                | tar -xzf - -C "$GRIN_DIR"; then
             stream_ok=true
             break
         else

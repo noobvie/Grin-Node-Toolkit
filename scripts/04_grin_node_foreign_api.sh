@@ -22,7 +22,7 @@
 # │                                                                       │
 # │  MODE B — nginx HTTPS Proxy  (menu options 3/4)                      │
 # │    Exposes /v2/foreign behind HTTPS (Let's Encrypt). Rate limited.   │
-# │    Includes optional live status page and REST API endpoints.        │
+# │    Includes optional live status page, REST API, and Tor onion.      │
 # │    Best for public-facing community nodes:                           │
 # │      https://api.grin.money/   https://api.grinily.com/              │
 # └──────────────────────────────────────────────────────────────────────┘
@@ -56,6 +56,12 @@
 #                        /rest/difficulty.json  /rest/emission.json
 #           · CORS enabled; Cache-Control: public, max-age=60
 #           · Requires status page deployed (option 6/7) first
+#
+#   T/U)  Tor onion  (MODE B add-on)
+#           · Publishes /v2/foreign as a .onion hidden service via nginx
+#           · Auth injected by nginx — callers need no credentials
+#           · Key dir: /var/lib/tor/grin-04-<net>/ (separate from Script 01)
+#           · Requires nginx proxy active (option 4) first
 #
 # NETWORKS
 #   mainnet (port 3413)  ·  testnet (port 13413)
@@ -114,6 +120,13 @@ NODE_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04_node_api/node-collector
 NODE_COLLECTOR_DEST="/opt/grin/grin-api-collector/node-collector.py"
 NODE_CRON_MAINNET="/etc/cron.d/grin-node-api-node"
 NODE_CRON_TESTNET="/etc/cron.d/grin-node-api-node-testnet"
+
+# Tor local-only HTTP listener ports (127.0.0.1 — Tor reaches hidden services via loopback)
+TOR_LOCAL_PORT_MAINNET=8413
+TOR_LOCAL_PORT_TESTNET=18413
+# Dedicated nginx configs for the Tor listener (separate from the main HTTPS vhost)
+TOR_NGINX_CONF_MAINNET="/etc/nginx/sites-available/grin-node-api-tor"
+TOR_NGINX_CONF_TESTNET="/etc/nginx/sites-available/grin-node-api-tor-testnet"
 
 # Grin instance conf — written by script 01, read here to find actual data dirs.
 CONF_DIR="/opt/grin/conf"
@@ -484,6 +497,20 @@ show_network_status() {
     else
         echo -e "  ${BOLD}REST API${RESET}    : ${DIM}not deployed${RESET}  ${DIM}(option 8)${RESET}"
     fi
+
+    local tor_sym; [[ "$NETWORK" == "mainnet" ]] && tor_sym="grin-node-api-tor" || tor_sym="grin-node-api-tor-testnet"
+    if [[ -f "/etc/nginx/sites-enabled/$tor_sym" ]]; then
+        local tor_hf="/var/lib/tor/grin-04-${NETWORK}/hostname"
+        if [[ -f "$tor_hf" ]]; then
+            local _th; _th=$(tr -d '[:space:]' < "$tor_hf" 2>/dev/null || true)
+            local _tp; [[ "$NETWORK" == "mainnet" ]] && _tp="main.grin." || _tp="test.grin."
+            echo -e "  ${BOLD}Tor onion   ${RESET} : ${GREEN}ACTIVE${RESET}   ${DIM}http://${_tp}${_th}/v2/foreign${RESET}"
+        else
+            echo -e "  ${BOLD}Tor onion   ${RESET} : ${GREEN}ENABLED${RESET}  ${DIM}(awaiting tor publish)${RESET}"
+        fi
+    else
+        echo -e "  ${BOLD}Tor onion   ${RESET} : ${DIM}disabled${RESET}  ${DIM}(option T)${RESET}"
+    fi
     echo ""
 }
 
@@ -751,6 +778,20 @@ _disable_node_api_nginx() {
         return
     fi
 
+    # Cascade: also remove Tor listener if active (Tor endpoint unreachable without proxy)
+    local tor_nginx_conf tor_symlink
+    if [[ "$network" == "mainnet" ]]; then
+        tor_nginx_conf="$TOR_NGINX_CONF_MAINNET"; tor_symlink="grin-node-api-tor"
+    else
+        tor_nginx_conf="$TOR_NGINX_CONF_TESTNET"; tor_symlink="grin-node-api-tor-testnet"
+    fi
+    if [[ -f "/etc/nginx/sites-enabled/$tor_symlink" || -f "$tor_nginx_conf" ]]; then
+        info "Also removing Tor onion listener (cascade from proxy removal)..."
+        rm -f "/etc/nginx/sites-enabled/$tor_symlink" "$tor_nginx_conf"
+        _torrc_04_remove "$network" || true
+        log "Tor onion listener removed (cascade from proxy removal): $network"
+    fi
+
     # Cascade: also remove status page deploy if present (proxy gone = page unreachable anyway)
     local deploy_dir
     deploy_dir="$( [[ "$network" == "mainnet" ]] && echo "$STATUS_PAGE_DEPLOY_MAINNET" || echo "$STATUS_PAGE_DEPLOY_TESTNET" )"
@@ -782,6 +823,268 @@ disable_mainnet_node_api() {
 
 disable_testnet_node_api() {
     _disable_node_api_nginx testnet "$NODE_API_NGINX_CONF_TESTNET" "grin-node-api-testnet"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TOR ONION — nginx local HTTP listener hidden service  (MODE B add-on)
+# ─────────────────────────────────────────────────────────────────────────────
+# Creates a dedicated nginx server block on 127.0.0.1:<TOR_LOCAL_PORT> that
+# proxies /v2/foreign to the Grin node with auth injected internally.  Tor maps
+# its hidden service port 80 to that local port, so .onion callers get a clean
+# unauthenticated endpoint — the foreign_api_secret never leaves the server.
+#
+# Key dir:  /var/lib/tor/grin-04-<network>/  (separate from Script 01's dir)
+# Marker:   # >>> grin-toolkit:04-<network> >>>  (no torrc collision with 01)
+# Requires: option 4 (nginx HTTPS proxy) already active.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Install or update the marker-bounded Tor torrc stanza for Script 04.
+_torrc_04_install() {
+    local network="$1" tor_port="$2"
+    local torrc="/etc/tor/torrc"
+    local begin="# >>> grin-toolkit:04-${network} >>>"
+    local end="# <<< grin-toolkit:04-${network} <<<"
+    local hs_dir="/var/lib/tor/grin-04-${network}/"
+    local expected
+    expected=$(printf '%s\nHiddenServiceDir %s\nHiddenServicePort 80 127.0.0.1:%s\n%s' \
+        "$begin" "$hs_dir" "$tor_port" "$end")
+
+    if [[ ! -f "$torrc" ]]; then
+        warn "$torrc not found — tor may not be installed. Skipping HiddenService setup."
+        return 1
+    fi
+
+    local existing
+    existing=$(awk -v b="$begin" -v e="$end" '
+        $0 == b { in_block=1 }
+        in_block { print }
+        $0 == e { in_block=0 }
+    ' "$torrc")
+
+    if [[ "$existing" == "$expected" ]]; then
+        info "Tor HiddenService (04-${network}): already configured (no change)."
+        return 0
+    fi
+
+    if [[ -n "$existing" ]]; then
+        local tmp="${torrc}.toolkit.tmp"
+        awk -v b="$begin" -v e="$end" '
+            $0 == b { in_block=1; next }
+            $0 == e { in_block=0; next }
+            !in_block
+        ' "$torrc" > "$tmp" && mv "$tmp" "$torrc"
+    fi
+
+    { echo ""; echo "$expected"; } >> "$torrc"
+
+    if systemctl reload tor 2>/dev/null; then
+        success "Tor HiddenService (04-${network}): written, tor reloaded."
+    elif systemctl restart tor 2>/dev/null; then
+        success "Tor HiddenService (04-${network}): written, tor restarted."
+    else
+        warn "Tor HiddenService written, but tor reload/restart failed — restart manually."
+        return 1
+    fi
+    log "[TOR-04] HiddenService ${network}: port 80 → 127.0.0.1:${tor_port}"
+}
+
+# Remove the Script 04 marker block from torrc and reload tor.
+_torrc_04_remove() {
+    local network="$1"
+    local torrc="/etc/tor/torrc"
+    local begin="# >>> grin-toolkit:04-${network} >>>"
+    local end="# <<< grin-toolkit:04-${network} <<<"
+
+    if [[ ! -f "$torrc" ]]; then return 0; fi
+
+    local existing
+    existing=$(awk -v b="$begin" -v e="$end" '
+        $0 == b { in_block=1 }
+        in_block { print }
+        $0 == e { in_block=0 }
+    ' "$torrc")
+
+    if [[ -z "$existing" ]]; then
+        info "No Tor HiddenService stanza found for 04-${network} in torrc."
+        return 0
+    fi
+
+    local tmp="${torrc}.toolkit.tmp"
+    awk -v b="$begin" -v e="$end" '
+        $0 == b { in_block=1; next }
+        $0 == e { in_block=0; next }
+        !in_block
+    ' "$torrc" > "$tmp" && mv "$tmp" "$torrc"
+
+    if systemctl reload tor 2>/dev/null || systemctl restart tor 2>/dev/null; then
+        success "Tor HiddenService (04-${network}) removed, tor reloaded."
+    else
+        warn "torrc updated but tor reload failed — restart tor manually."
+    fi
+    log "[TOR-04] HiddenService ${network}: stanza removed from torrc"
+}
+
+# Poll /var/lib/tor/grin-04-<network>/hostname until tor publishes it (up to 30s).
+# Returns the decorated .onion URL on stdout, or empty string on timeout.
+_read_onion_04() {
+    local network="$1"
+    local hostname_file="/var/lib/tor/grin-04-${network}/hostname"
+    local waited=0
+    while [[ ! -f "$hostname_file" && $waited -lt 30 ]]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    [[ -f "$hostname_file" ]] || return 0
+    local prefix
+    case "$network" in
+        mainnet) prefix="main.grin." ;;
+        testnet) prefix="test.grin." ;;
+        *)       prefix="" ;;
+    esac
+    printf '%s%s\n' "$prefix" "$(tr -d '[:space:]' < "$hostname_file")"
+}
+
+_enable_tor_nginx() {
+    local network="$1" api_port="$2" nginx_conf="$3" main_symlink="$4" \
+          tor_nginx_conf="$5" tor_symlink="$6" tor_port="$7"
+
+    echo -e "\n${BOLD}${CYAN}── Enable Tor Onion ($network) ──${RESET}\n"
+    echo -e "  Adds a local nginx HTTP listener on 127.0.0.1:${tor_port}"
+    echo -e "  and a Tor hidden service pointing to it."
+    echo -e "  .onion callers reach ${BOLD}/v2/foreign${RESET} without needing credentials."
+    echo ""
+
+    if [[ ! -f "/etc/nginx/sites-enabled/$main_symlink" ]]; then
+        error "nginx proxy (option 4) must be enabled for $network first."
+        return
+    fi
+
+    if ! systemctl is-active --quiet tor 2>/dev/null; then
+        warn "tor service is not running. Install/start it first: apt-get install tor && systemctl start tor"
+        echo -ne "Continue anyway? [Y/n]: "
+        read -r cont
+        [[ "${cont,,}" == "n" ]] && return
+    fi
+
+    local _proxy_auth_header=""
+    local _grin_dir; _grin_dir=$(_lookup_grin_dir "$network")
+    if [[ -z "$_grin_dir" ]]; then
+        error "Cannot locate $network node directory. Install the node via Script 01 first."
+        return
+    fi
+    local _foreign_secret_file="$_grin_dir/.foreign_api_secret"
+    if [[ -f "$_foreign_secret_file" ]]; then
+        local _secret; _secret=$(tr -d '[:space:]' < "$_foreign_secret_file" 2>/dev/null || true)
+        if [[ -n "$_secret" ]]; then
+            local _b64; _b64=$(printf '%s' "grin:$_secret" | base64 -w 0 2>/dev/null || printf '%s' "grin:$_secret" | base64)
+            _proxy_auth_header="        proxy_set_header   Authorization \"Basic $_b64\";"
+        fi
+    fi
+
+    cat > "$tor_nginx_conf" << EOF
+# Tor local HTTP listener — proxied to Grin Foreign API by nginx.
+# Bound to 127.0.0.1 only; Tor hidden service maps port 80 here.
+# Written by grin-node-toolkit Script 04 option T — do not edit manually.
+server {
+    listen 127.0.0.1:$tor_port;
+    server_name localhost;
+
+    location /v2/foreign {
+        proxy_pass         http://127.0.0.1:$api_port/v2/foreign;
+${_proxy_auth_header}
+        proxy_http_version 1.1;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 60;
+        client_max_body_size 8k;
+    }
+
+    location / {
+        return 403 "Access denied. Only /v2/foreign is exposed.";
+    }
+}
+EOF
+
+    ln -sf "$tor_nginx_conf" "/etc/nginx/sites-enabled/$tor_symlink"
+
+    if ! nginx -t; then
+        error "nginx config test failed. Check $tor_nginx_conf"
+        rm -f "/etc/nginx/sites-enabled/$tor_symlink"
+        return
+    fi
+    systemctl reload nginx
+
+    if ! _torrc_04_install "$network" "$tor_port"; then
+        warn "Tor torrc setup failed — rolling back nginx listener..."
+        rm -f "/etc/nginx/sites-enabled/$tor_symlink" "$tor_nginx_conf"
+        nginx -t 2>/dev/null && systemctl reload nginx || true
+        return
+    fi
+
+    info "Waiting for Tor to generate .onion address (up to 30 s)..."
+    local _onion; _onion=$(_read_onion_04 "$network")
+
+    success "Tor onion ($network) enabled!"
+    echo ""
+    if [[ -n "$_onion" ]]; then
+        info "Onion endpoint : http://${_onion}/v2/foreign"
+        info "Key dir        : /var/lib/tor/grin-04-${network}/"
+    else
+        warn ".onion address not yet published — check 'systemctl status tor' and retry."
+        info "Key dir: /var/lib/tor/grin-04-${network}/"
+    fi
+    echo ""
+    [[ -n "$_proxy_auth_header" ]] && \
+        info "Auth injected internally — callers need no credentials."
+    warn "Back up /var/lib/tor/grin-04-${network}/ to preserve your .onion identity."
+    log "[TOR-04] Tor onion enabled: network=$network tor_port=$tor_port onion=${_onion:-unknown}"
+}
+
+_disable_tor_nginx() {
+    local network="$1" tor_nginx_conf="$2" tor_symlink="$3"
+
+    echo -e "\n${BOLD}${CYAN}── Disable Tor Onion ($network) ──${RESET}\n"
+
+    if [[ ! -f "/etc/nginx/sites-enabled/$tor_symlink" && ! -f "$tor_nginx_conf" ]]; then
+        warn "Tor onion ($network) is not enabled. Nothing to remove."
+        return
+    fi
+
+    rm -f "/etc/nginx/sites-enabled/$tor_symlink" "$tor_nginx_conf"
+
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+    else
+        warn "nginx config test failed after removal — reload skipped. Check nginx manually."
+    fi
+
+    _torrc_04_remove "$network"
+
+    success "Tor onion ($network) disabled."
+    info "The Ed25519 key dir /var/lib/tor/grin-04-${network}/ is preserved."
+    info "Re-enable with option T to reuse the same .onion address."
+    log "[TOR-04] Tor onion disabled: network=$network"
+}
+
+enable_mainnet_tor_nginx() {
+    _enable_tor_nginx mainnet "$NODE_API_PORT_MAINNET" \
+        "$NODE_API_NGINX_CONF_MAINNET" "grin-node-api" \
+        "$TOR_NGINX_CONF_MAINNET" "grin-node-api-tor" "$TOR_LOCAL_PORT_MAINNET"
+}
+
+enable_testnet_tor_nginx() {
+    _enable_tor_nginx testnet "$NODE_API_PORT_TESTNET" \
+        "$NODE_API_NGINX_CONF_TESTNET" "grin-node-api-testnet" \
+        "$TOR_NGINX_CONF_TESTNET" "grin-node-api-tor-testnet" "$TOR_LOCAL_PORT_TESTNET"
+}
+
+disable_mainnet_tor_nginx() {
+    _disable_tor_nginx mainnet "$TOR_NGINX_CONF_MAINNET" "grin-node-api-tor"
+}
+
+disable_testnet_tor_nginx() {
+    _disable_tor_nginx testnet "$TOR_NGINX_CONF_TESTNET" "grin-node-api-tor-testnet"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1549,6 +1852,23 @@ show_api_menu() {
         label_7="${DIM}(requires option 6 first)${RESET}"
     fi
 
+    local label_T
+    local _tor_sym; [[ "$NETWORK" == "mainnet" ]] && _tor_sym="grin-node-api-tor" || _tor_sym="grin-node-api-tor-testnet"
+    local _tor_hf="/var/lib/tor/grin-04-${NETWORK}/hostname"
+    if [[ -f "/etc/nginx/sites-enabled/$_tor_sym" ]]; then
+        if [[ -f "$_tor_hf" ]]; then
+            local _th; _th=$(tr -d '[:space:]' < "$_tor_hf" 2>/dev/null || true)
+            local _tp; [[ "$NETWORK" == "mainnet" ]] && _tp="main.grin." || _tp="test.grin."
+            label_T="${GREEN}[ACTIVE]${RESET}  ${DIM}http://${_tp}${_th}/${RESET}  ${DIM}(re-run to refresh)${RESET}"
+        else
+            label_T="${GREEN}[ENABLED]${RESET}  ${DIM}(awaiting tor publish)${RESET}"
+        fi
+    elif [[ -f "/etc/nginx/sites-enabled/$nginx_symlink" ]]; then
+        label_T="${DIM}(option 4 active ✓ — ready to enable)${RESET}"
+    else
+        label_T="${DIM}(requires option 4 first)${RESET}"
+    fi
+
     echo -e "${BOLD}${YELLOW}  ╔══════════════════════════════════════════════════╗${RESET}"
     echo -e "${BOLD}${YELLOW}  ║  IMPORTANT — Choose ONE mode only.               ║${RESET}"
     echo -e "${BOLD}${YELLOW}  ║  Activating both modes will cause port conflicts. ║${RESET}"
@@ -1571,10 +1891,14 @@ show_api_menu() {
     echo -e "  ${GREEN}8${RESET}) Enable REST API      $label_7"
     echo -e "  ${RED}9${RESET}) Disable REST API      ${DIM}(removes cron + JSON files)${RESET}"
     echo ""
+    echo -e "${DIM}  ─── Tor onion /v2/foreign (requires option 4) ────────${RESET}"
+    echo -e "  ${GREEN}T${RESET}) Enable Tor onion     $label_T"
+    echo -e "  ${RED}U${RESET}) Disable Tor onion    ${DIM}(removes nginx listener + torrc stanza)${RESET}"
+    echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh status${RESET}"
     echo -e "  ${RED}0${RESET}) Back to network select"
     echo ""
-    echo -ne "${BOLD}Select [1-9 / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [1-9 / T / U / 0]: ${RESET}"
 }
 
 # ─── Network-aware dispatch ────────────────────────────────────────────────────
@@ -1582,6 +1906,8 @@ _call_enable_node_api()  { [[ "$NETWORK" == "mainnet" ]] && enable_mainnet_node_
 _call_disable_node_api() { [[ "$NETWORK" == "mainnet" ]] && disable_mainnet_node_api   || disable_testnet_node_api; }
 _call_enable_status()    { [[ "$NETWORK" == "mainnet" ]] && enable_mainnet_status_page  || enable_testnet_status_page; }
 _call_disable_status()   { [[ "$NETWORK" == "mainnet" ]] && disable_mainnet_status_page || disable_testnet_status_page; }
+_call_enable_tor()       { [[ "$NETWORK" == "mainnet" ]] && enable_mainnet_tor_nginx    || enable_testnet_tor_nginx; }
+_call_disable_tor()      { [[ "$NETWORK" == "mainnet" ]] && disable_mainnet_tor_nginx   || disable_testnet_tor_nginx; }
 _call_enable_rest()      { [[ "$NETWORK" == "mainnet" ]] && enable_mainnet_rest_api    || enable_testnet_rest_api; }
 _call_disable_rest()     { [[ "$NETWORK" == "mainnet" ]] && disable_mainnet_rest_api   || disable_testnet_rest_api; }
 
@@ -1614,6 +1940,8 @@ main() {
                         7) _call_disable_status   || true ;;
                         8) _call_enable_rest      || true ;;
                         9) _call_disable_rest     || true ;;
+                        T|t) _call_enable_tor     || true ;;
+                        U|u) _call_disable_tor    || true ;;
                         0) break ;;
                         "") continue ;;
                         *) warn "Invalid option." ; sleep 1 ;;

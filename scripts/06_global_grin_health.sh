@@ -797,9 +797,8 @@ server {
     index index.html;
 
     # SSI: splice _header.html into the three pages at request time.
-    # Only enabled for .html so non-HTML assets aren't scanned.
+    # nginx already restricts SSI parsing to text/html by default.
     ssi on;
-    ssi_types text/html;
 
     location / {
         try_files \$uri \$uri/ =404;

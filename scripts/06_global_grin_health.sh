@@ -410,6 +410,9 @@ install_stats() {
     cp "$WEB_SRC/index.html"     "$WWW_DIR/index.html"
     cp "$WEB_SRC/stats.html"     "$WWW_DIR/stats.html"
     cp "$WEB_SRC/ecosystem.html" "$WWW_DIR/ecosystem.html"
+    # Shared header (markup spliced via nginx SSI) + its CSS
+    cp "$WEB_SRC/_header.html"   "$WWW_DIR/_header.html"
+    cp "$WEB_SRC/_header.css"    "$WWW_DIR/_header.css"
 
     # Optional Google Analytics
     echo ""
@@ -793,6 +796,11 @@ server {
     root  ${WWW_DIR};
     index index.html;
 
+    # SSI: splice _header.html into the three pages at request time.
+    # Only enabled for .html so non-HTML assets aren't scanned.
+    ssi on;
+    ssi_types text/html;
+
     location / {
         try_files \$uri \$uri/ =404;
     }
@@ -1016,7 +1024,11 @@ configure_analytics() {
         cp "$WEB_SRC/index.html"     "$WWW_DIR/index.html"
         cp "$WEB_SRC/stats.html"     "$WWW_DIR/stats.html"
         cp "$WEB_SRC/ecosystem.html" "$WWW_DIR/ecosystem.html"
-        chown www-data:www-data "$WWW_DIR/index.html" "$WWW_DIR/stats.html" "$WWW_DIR/ecosystem.html"
+        cp "$WEB_SRC/_header.html"   "$WWW_DIR/_header.html"
+        cp "$WEB_SRC/_header.css"    "$WWW_DIR/_header.css"
+        chown www-data:www-data \
+            "$WWW_DIR/index.html" "$WWW_DIR/stats.html" "$WWW_DIR/ecosystem.html" \
+            "$WWW_DIR/_header.html" "$WWW_DIR/_header.css"
     fi
 
     if [[ -n "$ga_input" ]]; then

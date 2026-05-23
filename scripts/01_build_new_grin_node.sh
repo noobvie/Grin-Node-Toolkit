@@ -2412,6 +2412,7 @@ show_summary() {
     echo -e "${BOLD}  Quick commands:${RESET}"
     echo -e "  ${YELLOW}tmux attach -t $session${RESET}   — view node output"
     echo -e "  ${YELLOW}tmux ls${RESET}                   — list sessions"
+    echo -e "  ${YELLOW}grep ONION $INSTANCES_CONF${RESET}   — recall onion URLs"
     echo ""
     echo -e "  ${YELLOW}⚠  Back up your .onion identity${RESET} — ${DIM}/var/lib/tor/grin-${network}/${RESET}"
     echo -e "     contains the Ed25519 keypair that defines your .onion address."

@@ -44,6 +44,9 @@
 #           · Auto-refreshes every 60 s; dark/light theme; mobile-friendly
 #           · Static files — zero extra server load per visitor
 #           · Developer section: CORS test, fetch snippets, remote checker
+#           · Wallet connection cards: clearnet HTTPS + Tor onion (if Script 01
+#             set up a hidden service, the .onion URL is injected into config.js
+#             at deploy time from /var/lib/tor/grin-<network>/hostname)
 #
 #   7/9)  REST API  (https://domain/rest/)
 #           · Simple GET endpoints returning clean JSON
@@ -820,8 +823,26 @@ _enable_status_page() {
     mkdir -p "$deploy_dir"
     cp -r "$STATUS_PAGE_SRC"/. "$deploy_dir/"
 
-    # Write network identifier — read by node-status.js at runtime
-    printf 'const GRIN_NETWORK = "%s";\n' "$network" > "$deploy_dir/config.js"
+    # Write network identifier and onion URL — read by node-status.js at runtime.
+    # Onion URL is read from the Tor hidden service hostname file (written by script 01).
+    local _onion_url=""
+    local _hostname_file="/var/lib/tor/grin-${network}/hostname"
+    if [[ -f "$_hostname_file" ]]; then
+        local _hash; _hash=$(tr -d '[:space:]' < "$_hostname_file" 2>/dev/null || true)
+        if [[ -n "$_hash" ]]; then
+            local _prefix
+            case "$network" in
+                mainnet) _prefix="main.grin." ;;
+                testnet) _prefix="test.grin." ;;
+                *)       _prefix=""           ;;
+            esac
+            _onion_url="http://${_prefix}${_hash}"
+        fi
+    fi
+    {
+        printf 'const GRIN_NETWORK = "%s";\n' "$network"
+        printf 'const GRIN_ONION_URL = "%s";\n' "$_onion_url"
+    } > "$deploy_dir/config.js"
 
     # Set ownership and permissions for nginx (www-data)
     chown -R www-data:www-data "$deploy_dir"   2>/dev/null || true

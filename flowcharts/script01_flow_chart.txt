@@ -180,39 +180,42 @@
          │   if already exists           │
          └───────────────────────────────┘
                          │
+         ┌───────────────▼────────────────────────────────────┐
+         │   STEP 13b — Tor HiddenService  (IMPLEMENTED)      │
+         │                                                    │
+         │   _grin_torrc_install <network> <api_port>         │
+         │                                                    │
+         │   Writes marker-bounded block to /etc/tor/torrc:   │
+         │     # >>> grin-toolkit:<network> >>>               │
+         │     HiddenServiceDir /var/lib/tor/grin-<net>/      │
+         │     HiddenServicePort 80 127.0.0.1:<api_port>      │
+         │     # <<< grin-toolkit:<network> <<<               │
+         │                                                    │
+         │   api_port:  3413 (mainnet)  13413 (testnet)       │
+         │   Exposes Foreign API only — P2P port not exposed  │
+         │                                                    │
+         │   Idempotent: compares existing block to expected; │
+         │   no file write + no tor reload if identical.      │
+         │   Tor keys in /var/lib/tor/grin-<net>/ are never   │
+         │   deleted by any toolkit operation — .onion addr   │
+         │   survives all rebuilds.                           │
+         │                                                    │
+         │   _grin_read_onion <network> [timeout]             │
+         │   Polls hostname file up to timeout seconds, then  │
+         │   prepends network prefix:                         │
+         │     mainnet → main.grin.<56chars>.onion            │
+         │     testnet → test.grin.<56chars>.onion            │
+         └────────────────────────────────────────────────────┘
+                         │
          ┌───────────────▼───────────────┐
          │   STEP 14 — Summary           │
          │   network / mode / dir        │
          │   tmux session name           │
          │   elapsed time / log path     │
+         │   onion URL (polls up to 20s) │
+         │   backup reminder → script089 │
+         │   recovery chown hint         │
          └───────────────────────────────┘
-                         │
-         ┌───────────────▼────────────────────────────────────┐
-         │   STEP 14b — Tor / Onion Network (TODO)            │
-         │                                                    │
-         │   Optional step after node is running.             │
-         │   "Configure this node as a Tor hidden service?"   │
-         │   1 = Yes   2 = No (default)                       │
-         │                                                    │
-         │   If Yes:                                          │
-         │   • Add HiddenServiceDir + HiddenServicePort       │
-         │     to /etc/tor/torrc (per network):               │
-         │     mainnet: HiddenServicePort 3414 127.0.0.1:3414 │
-         │     testnet: HiddenServicePort 13414 127.0.0.1:13414│
-         │   • systemctl restart tor                          │
-         │   • Read .onion addr from                          │
-         │     /var/lib/tor/grin-{net}/hostname               │
-         │   • Patch grin-server.toml [p2p]:                  │
-         │     tor_external_addr = "<addr>.onion:3414"        │
-         │     socks_proxy_addr  = "127.0.0.1:9050"           │
-         │     use_tor_listener  = true                       │
-         │   • Restart node tmux session                      │
-         │   • Show .onion address to user                    │
-         │                                                    │
-         │   Note: tor already installed in Step 2.           │
-         │   Implementation: node_tor_configure() in          │
-         │   a new lib file  01_lib_tor.sh                    │
-         └────────────────────────────────────────────────────┘
                          │
          ┌───────────────▼───────────────┐
          │   save_instance_location      │

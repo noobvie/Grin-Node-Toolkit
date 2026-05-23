@@ -117,6 +117,11 @@
 
   ── STATUS PAGE (requires option 4 first) ───────────────────────────────
   6) Deploy/Update     _enable_status_page()   copies static HTML to web root,
+                                               writes config.js with:
+                                                 GRIN_NETWORK = "mainnet|testnet"
+                                                 GRIN_ONION_URL = "http://[prefix]<hash>.onion"
+                                                   (read from /var/lib/tor/grin-<net>/hostname
+                                                    if Script 01 Tor setup was run; else "")
                                                patches nginx catch-all from
                                                OLD_LOC → NEW_LOC (see below),
                                                reloads nginx
@@ -286,11 +291,16 @@
   For MODE B with status page and REST API, always follow this order:
 
   [Script 01]  Install & run Grin node
-       ↓
+       ↓           (also sets up Tor HiddenService in Step 13b)
   [Script 04]  Option 4 — Enable nginx HTTPS proxy
        ↓           (writes site config + SSL + injects rate-limit zones)
   [Script 04]  Option 6 — Deploy status page
-       ↓           (patches OLD_LOC → NEW_LOC, CATCH_ALL anchor now present)
+       ↓           (patches OLD_LOC → NEW_LOC, CATCH_ALL anchor now present;
+       ↓            reads /var/lib/tor/grin-<net>/hostname → GRIN_ONION_URL
+       ↓            in config.js — run AFTER Script 01 to get onion URL)
   [Script 04]  Option 8 — Enable REST API
                   (installs collectors + cron, inserts REST_BLOCK before
                    CATCH_ALL, reloads nginx)
+
+  NOTE: If Script 01 is run AFTER Option 6, re-run Option 6 to refresh
+  config.js with the new GRIN_ONION_URL value.

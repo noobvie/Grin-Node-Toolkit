@@ -2416,8 +2416,14 @@ show_summary() {
     echo ""
     echo -e "  ${YELLOW}⚠  Back up your .onion identity${RESET} — ${DIM}/var/lib/tor/grin-${network}/${RESET}"
     echo -e "     contains the Ed25519 keypair that defines your .onion address."
-    echo -e "     Use ${BOLD}Script 089 → Backup${RESET} to include it in your encrypted backup,"
+    echo -e "     Use ${BOLD}Script 089 → Backup${RESET} to include it in your encrypted backup"
     echo -e "     so you can migrate this identity to another VPS later."
+    echo -e "     ${DIM}To restore manually (e.g. after a VPS migration):${RESET}"
+    echo -e "     ${DIM}  cp -r ~/backup/grin-${network}/ /var/lib/tor/grin-${network}/${RESET}"
+    echo -e "     ${DIM}  # Debian/Ubuntu: debian-tor:debian-tor  |  Rocky/Alma: toranon:toranon${RESET}"
+    echo -e "     ${DIM}  chown -R \$(stat -c '%U:%G' /var/lib/tor 2>/dev/null || echo 'debian-tor:debian-tor') /var/lib/tor/grin-${network}/${RESET}"
+    echo -e "     ${DIM}  chmod 700 /var/lib/tor/grin-${network}/${RESET}"
+    echo -e "     ${DIM}  systemctl restart tor   # full restart required to re-read keys${RESET}"
     echo ""
     echo -e "  ${YELLOW}⚠  Remember:${RESET} schedule auto-start on reboot via"
     echo -e "     ${BOLD}3) Share Grin Chain Data / Schedule${RESET} → option ${GREEN}G) Auto startup Grin node${RESET}"
@@ -2554,7 +2560,14 @@ _grin_torrc_install() {
 }
 
 # Poll /var/lib/tor/grin-<network>/hostname until tor publishes it (or timeout).
-# Returns the .onion address on stdout, empty string on timeout.
+# Returns the .onion URL on stdout (decorated with a human-readable subdomain
+# prefix per network), or empty string on timeout.
+#
+# Tor ignores all labels left of the trailing <56-char>.onion hash, so we
+# prepend a self-documenting prefix that makes the URL meaningful to users:
+#     mainnet → main.grin.<hash>.onion
+#     testnet → test.grin.<hash>.onion
+# The cryptographic identity (the hash) is unchanged; this is pure labelling.
 _grin_read_onion() {
     local network="$1"
     local hostname_file="/var/lib/tor/grin-${network}/hostname"
@@ -2564,7 +2577,15 @@ _grin_read_onion() {
         sleep 1
         waited=$((waited + 1))
     done
-    [[ -f "$hostname_file" ]] && cat "$hostname_file"
+    [[ -f "$hostname_file" ]] || return 0
+
+    local prefix
+    case "$network" in
+        mainnet) prefix="main.grin." ;;
+        testnet) prefix="test.grin." ;;
+        *)       prefix=""           ;;
+    esac
+    printf '%s%s\n' "$prefix" "$(cat "$hostname_file")"
 }
 
 # =============================================================================

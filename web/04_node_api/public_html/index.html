@@ -133,10 +133,10 @@
 
   </div>
 
-  <!-- ── Connect Your Wallet section ─────────────────────────────────── -->
+  <!-- ── Connect Your Wallet — Clearnet ───────────────────────────────── -->
   <div class="section-label">
     <span class="section-dot" style="background:var(--blue)"></span>
-    Connect Your Wallet to This Node
+    Connect Your Wallet — Clearnet
   </div>
 
   <div class="grid">
@@ -165,6 +165,31 @@
       </ol>
       <div class="card-sub">
         External connections let Grim use a remote node — no local Grin node process needed.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Connect Your Wallet — Tor Onion Network ───────────────────────── -->
+  <div class="section-label">
+    <span class="section-dot" style="background:#7d4698"></span>
+    Connect Your Wallet — Tor Onion Network &#x1F9C5;
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label"><a href="https://github.com/mimblewimble/grin-wallet" target="_blank" rel="noopener">grin-wallet</a> &nbsp;·&nbsp; Edit <code>grin-wallet.toml</code> &nbsp;·&nbsp; run via <code>torsocks</code><span id="net-label-tor"></span></div>
+      <div class="curl-wrap">
+        <pre class="curl-block" id="wallet-tor-snippet">check_node_api_http_addr = "http://….onion"</pre>
+        <button class="curl-copy-btn" data-target="wallet-tor-snippet" title="Copy">Copy</button>
+      </div>
+      <ol class="dev-steps">
+        <li>Set <code>check_node_api_http_addr</code> to the onion URL above in <code>grin-wallet.toml</code></li>
+        <li>Install Tor on the wallet machine: <code>apt install tor torsocks</code></li>
+        <li>Run all wallet commands through torsocks: <code>torsocks ./grin-wallet info</code></li>
+      </ol>
+      <div class="card-sub">
+        CLI only — Grim GUI does not support Tor/SOCKS5 routing &nbsp;·&nbsp;
+        The <code>.onion</code> identity survives node rebuilds (Ed25519 keys preserved)
       </div>
     </div>
   </div>

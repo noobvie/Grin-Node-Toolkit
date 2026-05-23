@@ -617,6 +617,35 @@ rebuild_chain_data_only() {
 }
 
 # -----------------------------------------------------------------------------
+# _describe_installed_node — emit a one-line summary of an installed node
+# directory: binary version, chain_data size, chain_data last-modified date.
+# Information only — no health check. Used by the S-option prompts so the user
+# can see what they're about to start (vs. rebuild).
+#   Usage: _describe_installed_node /opt/grin/node/mainnet-prune
+# Prints "(not installed)" if the binary is missing.
+# -----------------------------------------------------------------------------
+_describe_installed_node() {
+    local d="$1"
+    if [[ -z "$d" || ! -x "$d/grin" ]]; then
+        echo "(not installed)"
+        return
+    fi
+    local ver size mtime
+    ver=$("$d/grin" --version 2>/dev/null | awk '{print $NF}')
+    [[ -z "$ver" ]] && ver="?"
+    if [[ -d "$d/chain_data" ]]; then
+        size=$(du -sh "$d/chain_data" 2>/dev/null | cut -f1)
+        mtime=$(stat -c '%y' "$d/chain_data" 2>/dev/null | cut -d' ' -f1)
+        [[ -z "$size"  ]] && size="?"
+        [[ -z "$mtime" ]] && mtime="?"
+    else
+        size="-"
+        mtime="never"
+    fi
+    echo "version=${ver}  chain_data=${size}  modified=${mtime}"
+}
+
+# -----------------------------------------------------------------------------
 # _start_installed_node — start already-installed Grin nodes from standard paths.
 # Starts mainnet first, then waits 30 s before starting testnet (if both present).
 # Returns 0 on success (caller should exit 0 after).
@@ -755,6 +784,7 @@ check_grin_running() {
             echo -e "  ${RED}M${RESET} — kill mainnet  & rebuild mainnet"
             if $_testnet_installed; then
                 echo -e "  ${CYAN}S${RESET} — start installed testnet node  (no rebuild)  ${DIM}(default)${RESET}"
+                echo -e "       ${DIM}$(_describe_installed_node /opt/grin/node/testnet-prune)${RESET}"
             else
                 echo -e "  ${GREEN}1${RESET} — install testnet alongside mainnet  ${DIM}(default)${RESET}"
             fi
@@ -825,7 +855,11 @@ check_grin_running() {
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
             echo -e "  ${RED}T${RESET} — kill testnet  & rebuild testnet"
             if $_mainnet_installed; then
+                local _maindir=""
+                [[ -x /opt/grin/node/mainnet-prune/grin ]] && _maindir=/opt/grin/node/mainnet-prune
+                [[ -x /opt/grin/node/mainnet-full/grin  ]] && _maindir=/opt/grin/node/mainnet-full
                 echo -e "  ${CYAN}S${RESET} — start installed mainnet node  (no rebuild)  ${DIM}(default)${RESET}"
+                echo -e "       ${DIM}$(_describe_installed_node "$_maindir")${RESET}"
             else
                 echo -e "  ${GREEN}1${RESET} — install mainnet alongside testnet  ${DIM}(default)${RESET}"
             fi
@@ -914,6 +948,7 @@ check_grin_running() {
             local _i
             for _i in "${!INSTALLED_NETS[@]}"; do
                 echo -e "  ${CYAN}→${RESET} ${INSTALLED_NETS[$_i]} (${INSTALLED_MODES[$_i]}) — ${DIM}${INSTALLED_DIRS[$_i]}${RESET}"
+                echo -e "      ${DIM}$(_describe_installed_node "${INSTALLED_DIRS[$_i]}")${RESET}"
             done
         fi
 
@@ -995,42 +1030,52 @@ check_grin_running() {
         fi
     done
 
-    # ── Legacy directory check ─────────────────────────────────────────────────
-    if [[ -d "$HOME/.grin" ]]; then
-        echo ""
-        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        warn "  Legacy Grin directory detected: $HOME/.grin"
-        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        echo -e "  This is a non-standard path that can conflict with the new"
-        echo -e "  standardized installation under ${BOLD}/opt/grin/${RESET}."
-        local _legacy_size
-        _legacy_size=$(du -sh "$HOME/.grin" 2>/dev/null | cut -f1) || _legacy_size="?"
-        echo -e "  Size: ${YELLOW}${_legacy_size}${RESET}"
-        echo ""
-        echo -e "  ${RED}D${RESET}) Delete ${BOLD}$HOME/.grin${RESET}  ${DIM}(recommended)${RESET}"
-        echo -e "  ${DIM}Enter${RESET}) Keep it and continue  ${DIM}(may cause config conflicts)${RESET}"
-        echo -e "  ${DIM}0${RESET}) Return to master script"
-        echo ""
-        echo -ne "${BOLD}Choice [D/Enter/0]: ${RESET}"
-        local _legacy_choice
-        read -r _legacy_choice || true
-        case "${_legacy_choice,,}" in
-            d)
-                rm -rf "$HOME/.grin"
-                success "Deleted: $HOME/.grin"
-                ;;
-            0)
-                exit 0
-                ;;
-            *)
-                warn "Keeping $HOME/.grin — this may cause config conflicts."
-                ;;
-        esac
-        echo ""
-    fi
-
     log "[STEP 1] Complete. No restrictions."
+}
+
+# =============================================================================
+# [1b] LEGACY $HOME/.grin DIRECTORY CHECK
+# -----------------------------------------------------------------------------
+# Detects the non-standard $HOME/.grin path that older grin/grin-wallet versions
+# created by default. Runs unconditionally from main() so the warning is shown
+# regardless of which Step-1 branch was taken (including "install alongside"
+# paths that previously returned before the legacy check could run).
+# Offers D) delete, Enter to keep, 0 to abort.
+# =============================================================================
+check_legacy_grin_dir() {
+    [[ ! -d "$HOME/.grin" ]] && return 0
+
+    echo ""
+    warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    warn "  Legacy Grin directory detected: $HOME/.grin"
+    warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo -e "  This is a non-standard path that can conflict with the new"
+    echo -e "  standardized installation under ${BOLD}/opt/grin/${RESET}."
+    local _legacy_size
+    _legacy_size=$(du -sh "$HOME/.grin" 2>/dev/null | cut -f1) || _legacy_size="?"
+    echo -e "  Size: ${YELLOW}${_legacy_size}${RESET}"
+    echo ""
+    echo -e "  ${RED}D${RESET}) Delete ${BOLD}$HOME/.grin${RESET}  ${DIM}(recommended)${RESET}"
+    echo -e "  ${DIM}Enter${RESET}) Keep it and continue  ${DIM}(may cause config conflicts)${RESET}"
+    echo -e "  ${DIM}0${RESET}) Return to master script"
+    echo ""
+    echo -ne "${BOLD}Choice [D/Enter/0]: ${RESET}"
+    local _legacy_choice
+    read -r _legacy_choice || true
+    case "${_legacy_choice,,}" in
+        d)
+            rm -rf "$HOME/.grin"
+            success "Deleted: $HOME/.grin"
+            ;;
+        0)
+            exit 0
+            ;;
+        *)
+            warn "Keeping $HOME/.grin — this may cause config conflicts."
+            ;;
+    esac
+    echo ""
 }
 
 # =============================================================================
@@ -2584,7 +2629,21 @@ main() {
     echo ""
     log "=== Grin Node Build Started ==="
 
+    # Early root check — Step 1 (ss -tlnp) needs root to read PIDs.
+    # Without root, port scans silently return empty and the gate misbehaves.
+    [[ $EUID -ne 0 ]] && die "This script must be run as root (sudo)."
+
+    # Concurrent-run guard — two parallel script-01 instances can corrupt
+    # $INSTANCES_CONF or partially overwrite a node directory.
+    # fd 9 stays open for the life of the process; flock releases on exit.
+    exec 9>/var/run/grin-toolkit-01.lock 2>/dev/null \
+        || exec 9>/tmp/grin-toolkit-01.lock
+    if ! flock -n 9; then
+        die "Another instance of script 01 is already running. Wait for it to finish, or remove the lock file if you are sure no other instance exists."
+    fi
+
     check_grin_running
+    check_legacy_grin_dir
     check_os_and_deps
     select_network
 

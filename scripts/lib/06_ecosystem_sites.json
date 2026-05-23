@@ -20,8 +20,11 @@
   {"category": "Community",   "name": "grin.money",                 "url": "http://grin.money",                                   "since": null},
   {"category": "Community",   "name": "Grin Global Health",         "url": "https://world.grin.money",                            "since": null},
   {"category": "Community",   "name": "Free Grin Airdrop",          "url": "https://drop.grin.money/",                            "since": null},
+  {"category": "Community",   "name": "Grin Faucet Testnet1",          "url": "https://t.me/grin_mw_test_bot",                       "since": null},
+  {"category": "Community",   "name": "Grin Faucet Testnet2",          "url": "https://t.me/Grin_Tipping_Bot_Testnet",             "since": null},
   {"category": "Community",   "name": "GrinNode.live",              "url": "https://grinnode.live/",                              "since": null},
-  {"category": "Community",   "name": "Popular Grin Nodes",                  "url": "https://grin.fail/",                                "since": "May 2026"},
+  {"category": "Community",   "name": "Popular Grin Nodes",         "url": "https://grin.fail/",                                "since": "May 2026"},
+  {"category": "Community",   "name": "Grinffindor ecosystem",      "url": "https://grinffindor.org/",                                "since": null},
 
   {"category": "Ecommerce",   "name": "Grinily",                    "url": "https://grinily.com",                                 "since": null},
 

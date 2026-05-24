@@ -1595,9 +1595,11 @@ enable_testnet_raw_tcp()  { _enable_raw_tcp  testnet "$NODE_API_PORT_TESTNET" "g
 disable_testnet_raw_tcp() { _disable_raw_tcp testnet "$NODE_API_PORT_TESTNET"; }
 status_testnet_raw_tcp()  { _status_raw_tcp  testnet "$NODE_API_PORT_TESTNET"; }
 
-_call_enable_raw_tcp()  { [[ "$NETWORK" == "mainnet" ]] && enable_mainnet_raw_tcp  || enable_testnet_raw_tcp; }
-_call_disable_raw_tcp() { [[ "$NETWORK" == "mainnet" ]] && disable_mainnet_raw_tcp || disable_testnet_raw_tcp; }
-_call_status_raw_tcp()  { [[ "$NETWORK" == "mainnet" ]] && status_mainnet_raw_tcp  || status_testnet_raw_tcp; }
+# Use explicit if/else — `A && B || C` falls through to C if B exits non-zero
+# (e.g. mainnet branch cancelled or errored), silently running the testnet branch.
+_call_enable_raw_tcp()  { if [[ "$NETWORK" == "mainnet" ]]; then enable_mainnet_raw_tcp;  else enable_testnet_raw_tcp;  fi; }
+_call_disable_raw_tcp() { if [[ "$NETWORK" == "mainnet" ]]; then disable_mainnet_raw_tcp; else disable_testnet_raw_tcp; fi; }
+_call_status_raw_tcp()  { if [[ "$NETWORK" == "mainnet" ]]; then status_mainnet_raw_tcp;  else status_testnet_raw_tcp;  fi; }
 
 _enable_rest_api() {
     local network="$1" port="$2" nginx_conf="$3" rest_dir="$4" cron_file="$5" grin_data_dir="$6"
@@ -1948,14 +1950,19 @@ show_api_menu() {
 }
 
 # ─── Network-aware dispatch ────────────────────────────────────────────────────
-_call_enable_node_api()  { [[ "$NETWORK" == "mainnet" ]] && enable_mainnet_node_api    || enable_testnet_node_api; }
-_call_disable_node_api() { [[ "$NETWORK" == "mainnet" ]] && disable_mainnet_node_api   || disable_testnet_node_api; }
-_call_enable_status()    { [[ "$NETWORK" == "mainnet" ]] && enable_mainnet_status_page  || enable_testnet_status_page; }
-_call_disable_status()   { [[ "$NETWORK" == "mainnet" ]] && disable_mainnet_status_page || disable_testnet_status_page; }
-_call_enable_tor()       { [[ "$NETWORK" == "mainnet" ]] && enable_mainnet_tor_nginx    || enable_testnet_tor_nginx; }
-_call_disable_tor()      { [[ "$NETWORK" == "mainnet" ]] && disable_mainnet_tor_nginx   || disable_testnet_tor_nginx; }
-_call_enable_rest()      { [[ "$NETWORK" == "mainnet" ]] && enable_mainnet_rest_api    || enable_testnet_rest_api; }
-_call_disable_rest()     { [[ "$NETWORK" == "mainnet" ]] && disable_mainnet_rest_api   || disable_testnet_rest_api; }
+# IMPORTANT: do NOT use the `A && B || C` one-liner pattern here. If the mainnet
+# branch (B) returns non-zero — e.g. the user cancels at show_port_guide, or any
+# `return` inherits a non-zero exit code — bash treats the chain as failed and
+# falls through to `|| C`, silently running the testnet branch after a mainnet
+# action. Use explicit if/else so the unwanted branch is unreachable.
+_call_enable_node_api()  { if [[ "$NETWORK" == "mainnet" ]]; then enable_mainnet_node_api;    else enable_testnet_node_api;    fi; }
+_call_disable_node_api() { if [[ "$NETWORK" == "mainnet" ]]; then disable_mainnet_node_api;   else disable_testnet_node_api;   fi; }
+_call_enable_status()    { if [[ "$NETWORK" == "mainnet" ]]; then enable_mainnet_status_page; else enable_testnet_status_page; fi; }
+_call_disable_status()   { if [[ "$NETWORK" == "mainnet" ]]; then disable_mainnet_status_page;else disable_testnet_status_page;fi; }
+_call_enable_tor()       { if [[ "$NETWORK" == "mainnet" ]]; then enable_mainnet_tor_nginx;   else enable_testnet_tor_nginx;   fi; }
+_call_disable_tor()      { if [[ "$NETWORK" == "mainnet" ]]; then disable_mainnet_tor_nginx;  else disable_testnet_tor_nginx;  fi; }
+_call_enable_rest()      { if [[ "$NETWORK" == "mainnet" ]]; then enable_mainnet_rest_api;    else enable_testnet_rest_api;    fi; }
+_call_disable_rest()     { if [[ "$NETWORK" == "mainnet" ]]; then disable_mainnet_rest_api;   else disable_testnet_rest_api;   fi; }
 
 main() {
     while true; do

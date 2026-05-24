@@ -44,9 +44,9 @@
 #           · Auto-refreshes every 60 s; dark/light theme; mobile-friendly
 #           · Static files — zero extra server load per visitor
 #           · Developer section: CORS test, fetch snippets, remote checker
-#           · Wallet connection cards: clearnet HTTPS + Tor onion (if Script 01
-#             set up a hidden service, the .onion URL is injected into config.js
-#             at deploy time from /var/lib/tor/grin-<network>/hostname)
+#           · Wallet connection cards: clearnet HTTPS + Tor onion (if option T
+#             is enabled, the .onion URL is injected into config.js from
+#             /var/lib/tor/grin-<network>-nginx/hostname — Script 04's own service)
 #
 #   7/9)  REST API  (https://domain/rest/)
 #           · Simple GET endpoints returning clean JSON
@@ -60,7 +60,7 @@
 #   T/U)  Tor onion  (MODE B add-on)
 #           · Publishes /v2/foreign as a .onion hidden service via nginx
 #           · Auth injected by nginx — callers need no credentials
-#           · Key dir: /var/lib/tor/grin-04-<net>/ (separate from Script 01)
+#           · Key dir: /var/lib/tor/grin-<net>-nginx/ (separate from Script 01)
 #           · Requires nginx proxy active (option 4) first
 #
 # NETWORKS
@@ -500,7 +500,7 @@ show_network_status() {
 
     local tor_sym; [[ "$NETWORK" == "mainnet" ]] && tor_sym="grin-node-api-tor" || tor_sym="grin-node-api-tor-testnet"
     if [[ -f "/etc/nginx/sites-enabled/$tor_sym" ]]; then
-        local tor_hf="/var/lib/tor/grin-04-${NETWORK}/hostname"
+        local tor_hf="/var/lib/tor/grin-${NETWORK}-nginx/hostname"
         if [[ -f "$tor_hf" ]]; then
             local _th; _th=$(tr -d '[:space:]' < "$tor_hf" 2>/dev/null || true)
             local _tp; [[ "$NETWORK" == "mainnet" ]] && _tp="main.grin." || _tp="test.grin."
@@ -833,8 +833,8 @@ disable_testnet_node_api() {
 # its hidden service port 80 to that local port, so .onion callers get a clean
 # unauthenticated endpoint — the foreign_api_secret never leaves the server.
 #
-# Key dir:  /var/lib/tor/grin-04-<network>/  (separate from Script 01's dir)
-# Marker:   # >>> grin-toolkit:04-<network> >>>  (no torrc collision with 01)
+# Key dir:  /var/lib/tor/grin-<network>-nginx/  (separate from Script 01's dir)
+# Marker:   # >>> grin-toolkit:<network>-nginx >>>  (no torrc collision with 01)
 # Requires: option 4 (nginx HTTPS proxy) already active.
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -842,9 +842,9 @@ disable_testnet_node_api() {
 _torrc_04_install() {
     local network="$1" tor_port="$2"
     local torrc="/etc/tor/torrc"
-    local begin="# >>> grin-toolkit:04-${network} >>>"
-    local end="# <<< grin-toolkit:04-${network} <<<"
-    local hs_dir="/var/lib/tor/grin-04-${network}/"
+    local begin="# >>> grin-toolkit:${network}-nginx >>>"
+    local end="# <<< grin-toolkit:${network}-nginx <<<"
+    local hs_dir="/var/lib/tor/grin-${network}-nginx/"
     local expected
     expected=$(printf '%s\nHiddenServiceDir %s\nHiddenServicePort 80 127.0.0.1:%s\n%s' \
         "$begin" "$hs_dir" "$tor_port" "$end")
@@ -852,6 +852,26 @@ _torrc_04_install() {
     if [[ ! -f "$torrc" ]]; then
         warn "$torrc not found — tor may not be installed. Skipping HiddenService setup."
         return 1
+    fi
+
+    # Migrate old naming convention: grin-toolkit:04-<network> → grin-toolkit:<network>-nginx
+    # Strips the old stanza so the normal append path writes the correctly-named one.
+    local _old_begin="# >>> grin-toolkit:04-${network} >>>"
+    local _old_end="# <<< grin-toolkit:04-${network} <<<"
+    if grep -qF "$_old_begin" "$torrc" 2>/dev/null; then
+        info "Migrating torrc stanza: grin-toolkit:04-${network} → grin-toolkit:${network}-nginx"
+        local _tmp="${torrc}.toolkit.tmp"
+        awk -v b="$_old_begin" -v e="$_old_end" '
+            $0 == b { skip=1; next }
+            $0 == e { skip=0; next }
+            !skip
+        ' "$torrc" > "$_tmp" && mv "$_tmp" "$torrc"
+    fi
+    # Migrate old directory name if it exists and the new name doesn't yet
+    local _old_dir="/var/lib/tor/grin-04-${network}"
+    if [[ -d "$_old_dir" && ! -d "${hs_dir%/}" ]]; then
+        info "Renaming $_old_dir → ${hs_dir%/} (preserving .onion identity)"
+        mv "$_old_dir" "${hs_dir%/}"
     fi
 
     local existing
@@ -862,7 +882,7 @@ _torrc_04_install() {
     ' "$torrc")
 
     if [[ "$existing" == "$expected" ]]; then
-        info "Tor HiddenService (04-${network}): already configured (no change)."
+        info "Tor HiddenService (${network}-nginx): already configured (no change)."
         return 0
     fi
 
@@ -892,8 +912,8 @@ _torrc_04_install() {
 _torrc_04_remove() {
     local network="$1"
     local torrc="/etc/tor/torrc"
-    local begin="# >>> grin-toolkit:04-${network} >>>"
-    local end="# <<< grin-toolkit:04-${network} <<<"
+    local begin="# >>> grin-toolkit:${network}-nginx >>>"
+    local end="# <<< grin-toolkit:${network}-nginx <<<"
 
     if [[ ! -f "$torrc" ]]; then return 0; fi
 
@@ -924,11 +944,11 @@ _torrc_04_remove() {
     log "[TOR-04] HiddenService ${network}: stanza removed from torrc"
 }
 
-# Poll /var/lib/tor/grin-04-<network>/hostname until tor publishes it (up to 30s).
+# Poll /var/lib/tor/grin-<network>-nginx/hostname until tor publishes it (up to 30s).
 # Returns the decorated .onion URL on stdout, or empty string on timeout.
 _read_onion_04() {
     local network="$1"
-    local hostname_file="/var/lib/tor/grin-04-${network}/hostname"
+    local hostname_file="/var/lib/tor/grin-${network}-nginx/hostname"
     local waited=0
     while [[ ! -f "$hostname_file" && $waited -lt 30 ]]; do
         sleep 1
@@ -1029,15 +1049,30 @@ EOF
     echo ""
     if [[ -n "$_onion" ]]; then
         info "Onion endpoint : http://${_onion}/v2/foreign"
-        info "Key dir        : /var/lib/tor/grin-04-${network}/"
+        info "Key dir        : /var/lib/tor/grin-${network}-nginx/"
     else
         warn ".onion address not yet published — check 'systemctl status tor' and retry."
-        info "Key dir: /var/lib/tor/grin-04-${network}/"
+        info "Key dir: /var/lib/tor/grin-${network}-nginx/"
+        info "Once tor publishes, re-run option T (or option 6) to update the status page Tor card."
     fi
     echo ""
     [[ -n "$_proxy_auth_header" ]] && \
         info "Auth injected internally — callers need no credentials."
-    warn "Back up /var/lib/tor/grin-04-${network}/ to preserve your .onion identity."
+    warn "Back up /var/lib/tor/grin-${network}-nginx/ to preserve your .onion identity."
+
+    # Refresh config.js in the deployed status page so the Tor card shows the real address.
+    if [[ -n "$_onion" ]]; then
+        local _deploy_dir
+        _deploy_dir="$( [[ "$network" == "mainnet" ]] && echo "$STATUS_PAGE_DEPLOY_MAINNET" \
+                                                      || echo "$STATUS_PAGE_DEPLOY_TESTNET" )"
+        if [[ -f "$_deploy_dir/config.js" ]]; then
+            sed -i "s|const GRIN_ONION_URL = \"[^\"]*\";|const GRIN_ONION_URL = \"http://${_onion}\";|" \
+                "$_deploy_dir/config.js" || true
+            chown www-data:www-data "$_deploy_dir/config.js" 2>/dev/null || true
+            success "Status page updated — Tor card now shows http://${_onion}"
+        fi
+    fi
+
     log "[TOR-04] Tor onion enabled: network=$network tor_port=$tor_port onion=${_onion:-unknown}"
 }
 
@@ -1062,8 +1097,19 @@ _disable_tor_nginx() {
     _torrc_04_remove "$network"
 
     success "Tor onion ($network) disabled."
-    info "The Ed25519 key dir /var/lib/tor/grin-04-${network}/ is preserved."
+    info "The Ed25519 key dir /var/lib/tor/grin-${network}-nginx/ is preserved."
     info "Re-enable with option T to reuse the same .onion address."
+
+    # Clear the onion URL from config.js so the status page Tor card shows "not configured".
+    local _deploy_dir
+    _deploy_dir="$( [[ "$network" == "mainnet" ]] && echo "$STATUS_PAGE_DEPLOY_MAINNET" \
+                                                  || echo "$STATUS_PAGE_DEPLOY_TESTNET" )"
+    if [[ -f "$_deploy_dir/config.js" ]]; then
+        sed -i "s|const GRIN_ONION_URL = \"[^\"]*\";|const GRIN_ONION_URL = \"\";|" \
+            "$_deploy_dir/config.js" || true
+        chown www-data:www-data "$_deploy_dir/config.js" 2>/dev/null || true
+    fi
+
     log "[TOR-04] Tor onion disabled: network=$network"
 }
 
@@ -1127,9 +1173,9 @@ _enable_status_page() {
     cp -r "$STATUS_PAGE_SRC"/. "$deploy_dir/"
 
     # Write network identifier and onion URL — read by node-status.js at runtime.
-    # Onion URL is read from the Tor hidden service hostname file (written by script 01).
+    # Reads Script 04's nginx hidden service only (grin-<net>-nginx); empty string if option T not enabled.
     local _onion_url=""
-    local _hostname_file="/var/lib/tor/grin-${network}/hostname"
+    local _hostname_file="/var/lib/tor/grin-${network}-nginx/hostname"
     if [[ -f "$_hostname_file" ]]; then
         local _hash; _hash=$(tr -d '[:space:]' < "$_hostname_file" 2>/dev/null || true)
         if [[ -n "$_hash" ]]; then
@@ -1854,7 +1900,7 @@ show_api_menu() {
 
     local label_T
     local _tor_sym; [[ "$NETWORK" == "mainnet" ]] && _tor_sym="grin-node-api-tor" || _tor_sym="grin-node-api-tor-testnet"
-    local _tor_hf="/var/lib/tor/grin-04-${NETWORK}/hostname"
+    local _tor_hf="/var/lib/tor/grin-${NETWORK}-nginx/hostname"
     if [[ -f "/etc/nginx/sites-enabled/$_tor_sym" ]]; then
         if [[ -f "$_tor_hf" ]]; then
             local _th; _th=$(tr -d '[:space:]' < "$_tor_hf" 2>/dev/null || true)

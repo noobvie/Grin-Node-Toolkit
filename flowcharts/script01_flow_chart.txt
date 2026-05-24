@@ -186,25 +186,48 @@
          │   _grin_torrc_install <network> <api_port>         │
          │                                                    │
          │   Writes marker-bounded block to /etc/tor/torrc:   │
-         │     # >>> grin-toolkit:<network> >>>               │
-         │     HiddenServiceDir /var/lib/tor/grin-<net>/      │
+         │     # >>> grin-toolkit:<network>-raw-tcp >>>            │
+         │     HiddenServiceDir /var/lib/tor/grin-<net>-raw-tcp/   │
          │     HiddenServicePort 80 127.0.0.1:<api_port>      │
-         │     # <<< grin-toolkit:<network> <<<               │
+         │     # <<< grin-toolkit:<network>-raw-tcp <<<            │
          │                                                    │
          │   api_port:  3413 (mainnet)  13413 (testnet)       │
-         │   Exposes Foreign API only — P2P port not exposed  │
+         │   Direct raw Foreign API — no nginx, no rate limit │
+         │   Callers must supply foreign_api_secret           │
+         │   P2P port not exposed                             │
+         │                                                    │
+         │   SEPARATE from Script 04's nginx-proxied onion:   │
+         │     Script 01 → /var/lib/tor/grin-<net>-raw-tcp/        │
+         │     Script 04 → /var/lib/tor/grin-<net>-nginx/     │
+         │   Different .onion addresses, different purposes.  │
+         │   Script 04 status page uses grin-<net>-nginx only.│
          │                                                    │
          │   Idempotent: compares existing block to expected; │
          │   no file write + no tor reload if identical.      │
-         │   Tor keys in /var/lib/tor/grin-<net>/ are never   │
-         │   deleted by any toolkit operation — .onion addr   │
-         │   survives all rebuilds.                           │
+         │   Tor keys in grin-<net>-raw-tcp/ are never deleted by  │
+         │   any toolkit operation — .onion addr survives all │
+         │   rebuilds.                                        │
          │                                                    │
          │   _grin_read_onion <network> [timeout]             │
          │   Polls hostname file up to timeout seconds, then  │
          │   prepends network prefix:                         │
          │     mainnet → main.grin.<56chars>.onion            │
          │     testnet → test.grin.<56chars>.onion            │
+         │   (Tor v3 subdomain prefix — cosmetic label only,  │
+         │    crypto identity is the 56-char hash)            │
+         │                                                    │
+         │   BACKUP & RECOVERY:                               │
+         │     Backup:   cp -rp /var/lib/tor/grin-mainnet-raw-tcp/ │
+         │                       /opt/grin/backup/tor-main-raw-│
+         │                       $(date +%Y%m%d)/             │
+         │     Restore:  systemctl stop tor                   │
+         │               cp -rp backup/ /var/lib/tor/grin-…  │
+         │               chown -R debian-tor:debian-tor …     │
+         │               chmod 700 dir; chmod 600 keys        │
+         │               systemctl start tor                  │
+         │     New addr: rm -rf /var/lib/tor/grin-<net>-raw-tcp/   │
+         │               systemctl reload tor                 │
+         │               (torrc stanza must still exist)      │
          └────────────────────────────────────────────────────┘
                          │
          ┌───────────────▼───────────────┐

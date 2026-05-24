@@ -16,6 +16,12 @@
     → https://your-domain/rest/*.json    REST API static JSON files
     → everything else                    return 403
 
+  Tor nginx local listener (option T — MODE B add-on, separate from Script 01):
+    Mainnet  →  127.0.0.1:8413    (HTTP, proxies to 3413 with auth header injected)
+    Testnet  →  127.0.0.1:18413   (HTTP, proxies to 13413 with auth header injected)
+    Tor maps port 80 of the .onion address to this local port.
+    Wallets connect credential-free — nginx injects the Foreign API secret.
+
   REST collector cron:
     www-data  every 60 s  →  rest-collector.py  →  /var/www/grin-node-api/rest/
     root      every 60 s  →  node-collector.py  →  /var/www/grin-node-api/rest/node.json
@@ -58,6 +64,21 @@
     /etc/cron.d/grin-node-api-rest-testnet   testnet REST cron (www-data)
     /etc/cron.d/grin-node-api-node           mainnet node cron (root)
     /etc/cron.d/grin-node-api-node-testnet   testnet node cron (root)
+
+  Tor hidden service — Script 04's own (option T):
+    /var/lib/tor/grin-mainnet-nginx/hostname          mainnet .onion address file
+    /var/lib/tor/grin-testnet-nginx/hostname        testnet .onion address file
+    /var/lib/tor/grin-mainnet-nginx/hs_ed25519_*      Ed25519 key pair (identity)
+    /etc/nginx/sites-available/grin-node-api-tor          mainnet Tor listener config
+    /etc/nginx/sites-available/grin-node-api-tor-testnet  testnet Tor listener config
+    torrc marker: # >>> grin-toolkit:04-<network> >>>
+
+  Tor hidden service — Script 01's raw service (step 13b, separate identity):
+    /var/lib/tor/grin-mainnet/hostname             mainnet .onion → raw port 3413 direct
+    /var/lib/tor/grin-testnet/hostname             testnet .onion → raw port 13413 direct
+    torrc marker: # >>> grin-toolkit:<network> >>>
+    NOTE: Script 04's status page reads ONLY grin-<net>-nginx/hostname, not this one.
+          Callers here need the Foreign API secret — no auth injection.
 
   Logs:
     /opt/grin/logs/grin_node_services_YYYYMMDD_HHMMSS.log
@@ -120,13 +141,25 @@
                                                writes config.js with:
                                                  GRIN_NETWORK = "mainnet|testnet"
                                                  GRIN_ONION_URL = "http://[prefix]<hash>.onion"
-                                                   (read from /var/lib/tor/grin-<net>/hostname
-                                                    if Script 01 Tor setup was run; else "")
+                                                   (read from /var/lib/tor/grin-<net>-nginx/hostname
+                                                    if option T was run; else "" → JS shows
+                                                    "not configured" in Tor card)
                                                patches nginx catch-all from
                                                OLD_LOC → NEW_LOC (see below),
                                                reloads nginx
   7) Remove page       _disable_status_page()  reverts NEW_LOC → OLD_LOC,
                                                removes web root files
+
+  ── TOR ONION (requires option 4 first) ─────────────────────────────────
+  T) Enable Tor    _enable_tor_nginx()    writes 127.0.0.1:8413 nginx listener,
+                                          installs torrc HiddenService stanza,
+                                          waits up to 30 s for hostname file,
+                                          updates config.js GRIN_ONION_URL if
+                                          status page is already deployed
+  U) Disable Tor   _disable_tor_nginx()   removes nginx listener + symlink,
+                                          removes torrc stanza, reloads tor,
+                                          clears GRIN_ONION_URL in config.js
+                                          (Ed25519 keys in grin-<net>-nginx/ kept)
 
   ── REST API (requires option 6 first) ──────────────────────────────────
   8) Enable REST       _enable_rest_api()    installs collectors, writes cron,
@@ -288,19 +321,91 @@
   CORRECT SETUP ORDER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  For MODE B with status page and REST API, always follow this order:
+  For MODE B with status page, Tor, and REST API, follow this order:
 
   [Script 01]  Install & run Grin node
-       ↓           (also sets up Tor HiddenService in Step 13b)
+       ↓           (creates /var/lib/tor/grin-<net>/ — raw Foreign API onion,
+       ↓            separate from Script 04's onion)
   [Script 04]  Option 4 — Enable nginx HTTPS proxy
        ↓           (writes site config + SSL + injects rate-limit zones)
+  [Script 04]  Option T — Enable Tor onion  (optional)
+       ↓           (creates /var/lib/tor/grin-<net>-nginx/ — nginx-proxied onion,
+       ↓            updates config.js GRIN_ONION_URL if page already deployed)
   [Script 04]  Option 6 — Deploy status page
        ↓           (patches OLD_LOC → NEW_LOC, CATCH_ALL anchor now present;
-       ↓            reads /var/lib/tor/grin-<net>/hostname → GRIN_ONION_URL
-       ↓            in config.js — run AFTER Script 01 to get onion URL)
+       ↓            reads /var/lib/tor/grin-<net>-nginx/hostname → GRIN_ONION_URL)
   [Script 04]  Option 8 — Enable REST API
                   (installs collectors + cron, inserts REST_BLOCK before
                    CATCH_ALL, reloads nginx)
 
-  NOTE: If Script 01 is run AFTER Option 6, re-run Option 6 to refresh
-  config.js with the new GRIN_ONION_URL value.
+  NOTE: Option T can be run before or after option 6 — both update config.js.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TOR IDENTITY — BACKUP & RECOVERY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Two Tor hidden services may exist on the VPS — they have separate identities:
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  Script 01   /var/lib/tor/grin-<net>-raw-tcp/   raw Foreign API (direct) │
+  │  Script 04   /var/lib/tor/grin-<net>-nginx/   nginx-proxied (no creds) │
+  └─────────────────────────────────────────────────────────────────────┘
+
+  Each dir contains:
+    hostname             56-char .onion address (text file, written by tor)
+    hs_ed25519_public_key    Ed25519 public key  (64 bytes)
+    hs_ed25519_secret_key    Ed25519 secret key  (96 bytes)  ← THE IDENTITY
+    authorized_clients/      empty dir (client auth not used)
+
+  Owner: debian-tor:debian-tor   Dir: chmod 700   Key files: chmod 600
+
+  ── BACKUP (run periodically, especially before server changes) ─────────
+
+    # Script 04's nginx-proxied onion
+    cp -rp /var/lib/tor/grin-mainnet-nginx/ /opt/grin/backup/tor-grin-mainnet-nginx-$(date +%Y%m%d)/
+
+    # Script 01's raw onion
+    cp -rp /var/lib/tor/grin-mainnet-raw-tcp/ /opt/grin/backup/tor-grin-mainnet-raw-tcp-$(date +%Y%m%d)/
+
+  ── RECOVERY FROM BACKUP (same .onion address preserved) ────────────────
+
+    systemctl stop tor
+    rm -rf /var/lib/tor/grin-mainnet-nginx/
+    cp -rp /opt/grin/backup/tor-grin-mainnet-nginx-YYYYMMDD/ /var/lib/tor/grin-mainnet-nginx/
+    chown -R debian-tor:debian-tor /var/lib/tor/grin-mainnet-nginx/
+    chmod 700 /var/lib/tor/grin-mainnet-nginx/
+    chmod 600 /var/lib/tor/grin-mainnet-nginx/hs_ed25519_public_key \
+              /var/lib/tor/grin-mainnet-nginx/hs_ed25519_secret_key
+    systemctl start tor
+    cat /var/lib/tor/grin-mainnet-nginx/hostname   # verify same address appears
+
+    # Then re-run Script 04 option T (re-enable) or option 6 (Update page)
+    # to refresh config.js with the restored address.
+
+  ── RECOVERY WITHOUT BACKUP (new .onion address, old address lost) ──────
+
+    # 1. Verify the torrc stanza still exists:
+    grep -A3 "grin-mainnet-nginx" /etc/tor/torrc
+    #    Should show:  HiddenServiceDir /var/lib/tor/grin-mainnet-nginx/
+    #                  HiddenServicePort 80 127.0.0.1:8413
+
+    # 2. Delete (or it is already gone) and reload:
+    rm -rf /var/lib/tor/grin-mainnet-nginx/
+    systemctl reload tor
+
+    # 3. Wait ~30-60 seconds, then check the new address:
+    cat /var/lib/tor/grin-mainnet-nginx/hostname
+
+    # 4. Update config.js / status page:
+    #    Re-run Script 04 option T (re-enable Tor) — it detects the
+    #    existing nginx listener and updates config.js automatically.
+    #    Or run option 6 (Update status page) to regenerate config.js.
+
+    # If torrc stanza was also deleted, run Script 04 option T from scratch.
+
+  ── TORRC MARKER REFERENCE ──────────────────────────────────────────────
+
+    Script 01 (grin-<net>-raw-tcp):  # >>> grin-toolkit:01-<network> >>>
+    Script 04 (grin-<net>-nginx):  # >>> grin-toolkit:04-<network> >>>
+
+    Markers prevent torrc collision — each script only touches its own block.

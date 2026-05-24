@@ -509,7 +509,7 @@ detect_installed_nodes() {
 # corrupted but everything else (config, secrets, .onion identity) is intact.
 # Removes ONLY $GRIN_DIR/chain_data, then re-downloads + extracts + starts.
 # Preserves: grin-server.toml, .api_secret, .foreign_api_secret, Tor HiddenService
-#            keys in /var/lib/tor/grin-<network>/, INSTANCES_CONF entries.
+#            keys in /var/lib/tor/grin-<network>-raw-tcp/, INSTANCES_CONF entries.
 # Usage: rebuild_chain_data_only <network> <node_dir>
 # -----------------------------------------------------------------------------
 rebuild_chain_data_only() {
@@ -2405,7 +2405,7 @@ show_summary() {
         echo -e "  Onion mirror : ${CYAN}http://${_onion_addr}${RESET}  ${DIM}(Foreign API via Tor)${RESET}"
     else
         echo -e "  Onion mirror : ${YELLOW}(not yet published — tor may still be generating keys)${RESET}"
-        echo -e "                 ${DIM}Check later: cat /var/lib/tor/grin-${network}/hostname${RESET}"
+        echo -e "                 ${DIM}Check later: cat /var/lib/tor/grin-${network}-raw-tcp/hostname${RESET}"
     fi
 
     echo ""
@@ -2414,15 +2414,15 @@ show_summary() {
     echo -e "  ${YELLOW}tmux ls${RESET}                   — list sessions"
     echo -e "  ${YELLOW}grep ONION $INSTANCES_CONF${RESET}   — recall onion URLs"
     echo ""
-    echo -e "  ${YELLOW}⚠  Back up your .onion identity${RESET} — ${DIM}/var/lib/tor/grin-${network}/${RESET}"
+    echo -e "  ${YELLOW}⚠  Back up your .onion identity${RESET} — ${DIM}/var/lib/tor/grin-${network}-raw-tcp/${RESET}"
     echo -e "     contains the Ed25519 keypair that defines your .onion address."
     echo -e "     Use ${BOLD}Script 089 → Backup${RESET} to include it in your encrypted backup"
     echo -e "     so you can migrate this identity to another VPS later."
     echo -e "     ${DIM}To restore manually (e.g. after a VPS migration):${RESET}"
-    echo -e "     ${DIM}  cp -r ~/backup/grin-${network}/ /var/lib/tor/grin-${network}/${RESET}"
+    echo -e "     ${DIM}  cp -r ~/backup/grin-${network}-raw-tcp/ /var/lib/tor/grin-${network}-raw-tcp/${RESET}"
     echo -e "     ${DIM}  # Debian/Ubuntu: debian-tor:debian-tor  |  Rocky/Alma: toranon:toranon${RESET}"
-    echo -e "     ${DIM}  chown -R \$(stat -c '%U:%G' /var/lib/tor 2>/dev/null || echo 'debian-tor:debian-tor') /var/lib/tor/grin-${network}/${RESET}"
-    echo -e "     ${DIM}  chmod 700 /var/lib/tor/grin-${network}/${RESET}"
+    echo -e "     ${DIM}  chown -R \$(stat -c '%U:%G' /var/lib/tor 2>/dev/null || echo 'debian-tor:debian-tor') /var/lib/tor/grin-${network}-raw-tcp/${RESET}"
+    echo -e "     ${DIM}  chmod 700 /var/lib/tor/grin-${network}-raw-tcp/${RESET}"
     echo -e "     ${DIM}  systemctl restart tor   # full restart required to re-read keys${RESET}"
     echo ""
     echo -e "  ${YELLOW}⚠  Remember:${RESET} schedule auto-start on reboot via"
@@ -2480,15 +2480,15 @@ __EOF__
 # -----------------------------------------------------------------------------
 # Idempotently install a marker-bounded HiddenService stanza in /etc/tor/torrc
 # pointing at the local grin Foreign API. Each network gets its own .onion
-# address whose identity (Ed25519 keypair) lives in /var/lib/tor/grin-<net>/.
+# address whose identity (Ed25519 keypair) lives in /var/lib/tor/grin-<net>-raw-tcp/.
 # Those key dirs are preserved across rebuilds so the same .onion address
 # survives a re-run of this script.
 #
 # torrc stanza written (per network):
-#     # >>> grin-toolkit:<network> >>>
-#     HiddenServiceDir /var/lib/tor/grin-<network>/
+#     # >>> grin-toolkit:<network>-raw-tcp >>>
+#     HiddenServiceDir /var/lib/tor/grin-<network>-raw-tcp/
 #     HiddenServicePort 80 127.0.0.1:<api_port>
-#     # <<< grin-toolkit:<network> <<<
+#     # <<< grin-toolkit:<network>-raw-tcp <<<
 #
 # Anything the operator has placed outside these markers in torrc is untouched.
 # =============================================================================
@@ -2508,9 +2508,9 @@ _grin_api_port() {
 _grin_torrc_install() {
     local network="$1" api_port="$2"
     local torrc="/etc/tor/torrc"
-    local begin="# >>> grin-toolkit:${network} >>>"
-    local end="# <<< grin-toolkit:${network} <<<"
-    local hs_dir="/var/lib/tor/grin-${network}/"
+    local begin="# >>> grin-toolkit:${network}-raw-tcp >>>"
+    local end="# <<< grin-toolkit:${network}-raw-tcp <<<"
+    local hs_dir="/var/lib/tor/grin-${network}-raw-tcp/"
     local expected
     expected=$(printf '%s\nHiddenServiceDir %s\nHiddenServicePort 80 127.0.0.1:%s\n%s' \
         "$begin" "$hs_dir" "$api_port" "$end")
@@ -2518,6 +2518,26 @@ _grin_torrc_install() {
     if [[ ! -f "$torrc" ]]; then
         warn "$torrc not found — tor may not be installed. Skipping HiddenService setup."
         return 1
+    fi
+
+    # Migrate old naming convention: grin-toolkit:<network> → grin-toolkit:<network>-raw-tcp
+    # Strips the old stanza so the normal append path writes the correctly-named one.
+    local _old_begin="# >>> grin-toolkit:${network} >>>"
+    local _old_end="# <<< grin-toolkit:${network} <<<"
+    if grep -qF "$_old_begin" "$torrc" 2>/dev/null; then
+        info "Migrating torrc stanza: grin-toolkit:${network} → grin-toolkit:${network}-raw-tcp"
+        local _tmp="${torrc}.toolkit.tmp"
+        awk -v b="$_old_begin" -v e="$_old_end" '
+            $0 == b { skip=1; next }
+            $0 == e { skip=0; next }
+            !skip
+        ' "$torrc" > "$_tmp" && mv "$_tmp" "$torrc"
+    fi
+    # Migrate old directory name if it exists and the new name doesn't yet
+    local _old_dir="/var/lib/tor/grin-${network}"
+    if [[ -d "$_old_dir" && ! -d "${hs_dir%/}" ]]; then
+        info "Renaming $_old_dir → ${hs_dir%/} (preserving .onion identity)"
+        mv "$_old_dir" "${hs_dir%/}"
     fi
 
     # Extract existing marker-bounded block (literal string match, no regex escaping)
@@ -2559,7 +2579,7 @@ _grin_torrc_install() {
     return 0
 }
 
-# Poll /var/lib/tor/grin-<network>/hostname until tor publishes it (or timeout).
+# Poll /var/lib/tor/grin-<network>-raw-tcp/hostname until tor publishes it (or timeout).
 # Returns the .onion URL on stdout (decorated with a human-readable subdomain
 # prefix per network), or empty string on timeout.
 #
@@ -2570,7 +2590,7 @@ _grin_torrc_install() {
 # The cryptographic identity (the hash) is unchanged; this is pure labelling.
 _grin_read_onion() {
     local network="$1"
-    local hostname_file="/var/lib/tor/grin-${network}/hostname"
+    local hostname_file="/var/lib/tor/grin-${network}-raw-tcp/hostname"
     local max_wait="${2:-30}"
     local waited=0
     while [[ ! -f "$hostname_file" && $waited -lt $max_wait ]]; do
@@ -2616,7 +2636,7 @@ setup_one_node() {
     start_grin_tmux
 
     # Tor HiddenService — every toolkit-built node is reachable as an .onion HTTP
-    # mirror by default. Identity (Ed25519 keys) lives in /var/lib/tor/grin-<net>/
+    # mirror by default. Identity (Ed25519 keys) lives in /var/lib/tor/grin-<net>-raw-tcp/
     # and is preserved across rebuilds.
     step_header "Step 13b: Tor HiddenService (Foreign API onion mirror)"
     local _api_port

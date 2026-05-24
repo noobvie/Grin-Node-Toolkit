@@ -2249,12 +2249,14 @@ stream_extract_chain_data() {
         src_num=$(( src_num + 1 ))
         local tar_url="$src_base/$tar_name"
         info "Source $src_num/$total_src: $tar_url"
-        info "Running: wget -O - \"$tar_url\" | tar -xzf - -C \"$GRIN_DIR\""
+        info "Running: wget -q -O - \"$tar_url\" | tar -xzvf - -C \"$GRIN_DIR\""
+        info "Each extracted file will be listed below — scrolling output means the stream is healthy."
         [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
         echo ""
         log "[STEP 10] Streaming from $tar_url"
-        if wget --progress=bar:force -O - "$tar_url" \
-                | tar -xzf - -C "$GRIN_DIR"; then
+        # wget -q + tar -xzvf: silence wget so its progress bar doesn't fight tar's per-file output on stderr.
+        if wget -q -O - "$tar_url" \
+                | tar -xzvf - -C "$GRIN_DIR"; then
             stream_ok=true
             break
         else

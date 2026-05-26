@@ -124,24 +124,33 @@ def _rate_limited(ip):
 def _validate_url(url):
     if not url:
         return "URL is required."
-    if not url.startswith("https://"):
-        return "URL must start with https://"
     try:
         parsed = urllib.parse.urlparse(url)
     except Exception:
         return "Invalid URL."
-    host = parsed.hostname or ""
+    host = (parsed.hostname or "").lower()
+    is_onion = host.endswith(".onion")
+    if is_onion:
+        if not url.startswith("http://"):
+            return "Tor (.onion) nodes must use http://"
+    else:
+        if not url.startswith("https://"):
+            return "URL must start with https://"
+        if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+            return "IP addresses are not allowed — use a domain name."
+        if not re.match(r"^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$", host):
+            return "Invalid domain name."
     if not host or host in ("localhost", "127.0.0.1", "::1"):
         return "Local addresses are not allowed."
-    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
-        return "IP addresses are not allowed — use a domain name."
-    if not re.match(r"^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$", host):
-        return "Invalid domain name."
     return None
 
 
 def _probe_node(url):
-    """Return (ok, tip_height_or_None, error_str_or_None)."""
+    """Return (ok, tip_height_or_None, error_str_or_None).
+    Tor (.onion) nodes are skipped — the stats server cannot reach them without a Tor proxy."""
+    parsed = urllib.parse.urlparse(url)
+    if (parsed.hostname or "").lower().endswith(".onion"):
+        return True, None, None
     rpc_url = url.rstrip("/") + "/v2/foreign"
     payload = json.dumps(
         {"jsonrpc": "2.0", "method": "get_tip", "params": [], "id": 1}
@@ -241,9 +250,9 @@ class Handler(BaseHTTPRequestHandler):
 
         with _lock:
             data = _load_community()
-            all_urls = {n["url"].rstrip("/") for lst in data.values() for n in lst}
-            if url in all_urls:
-                _json(self, 409, {"ok": False, "message": "This node is already listed."})
+            existing = {n["url"].rstrip("/").lower() for n in data[net]}
+            if url.lower() in existing:
+                _json(self, 409, {"ok": False, "message": "This node is already listed on the community list."})
                 return
             if len(data[net]) >= MAX_NODES_PER_NET:
                 _json(self, 429, {"ok": False,

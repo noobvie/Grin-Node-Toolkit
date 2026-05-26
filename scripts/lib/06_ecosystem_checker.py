@@ -36,6 +36,11 @@ DB_PATH      = os.environ.get("GRIN_DB_PATH",   "/opt/grin/grin-stats/stats.db")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN",   "")  # optional — raises rate limit 60→5000/hr
 
 RDAP_TTL_HOURS = 24   # re-fetch RDAP only when cached value is older than this
+COMMUNITY_NODES_PATH = os.environ.get(
+    "GRIN_COMMUNITY_NODES",
+    os.path.join(os.path.dirname(DB_PATH), "community_nodes.json"),
+)
+FAIL_THRESHOLD = 3    # consecutive failed checks before auto-removing a community node
 
 # ── DNS seed lists ─────────────────────────────────────────────────────────────
 # Edit 06_dns_seeds.json to add/remove seeds or update pending-DNS notes.
@@ -81,6 +86,28 @@ def _load_whois_fallback():
         return {}
 
 WHOIS_FALLBACK = _load_whois_fallback()
+
+# ── Community node I/O ─────────────────────────────────────────────────────────
+
+def _load_community_nodes():
+    try:
+        with open(COMMUNITY_NODES_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return {"mainnet": [], "testnet": []}
+        return {
+            "mainnet": [n for n in data.get("mainnet", []) if isinstance(n, dict)],
+            "testnet": [n for n in data.get("testnet", []) if isinstance(n, dict)],
+        }
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"mainnet": [], "testnet": []}
+
+
+def _save_community_nodes(data):
+    tmp = COMMUNITY_NODES_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, separators=(",", ":"))
+    os.replace(tmp, COMMUNITY_NODES_PATH)
 
 # ── Ecosystem services — loaded from JSON sidecar files ────────────────────────
 # Edit 06_ecosystem_sites.json to add/remove service entries (Explorers, Exchanges,
@@ -415,11 +442,12 @@ def cmd_whois(conn, force=False):
 # ── External node HTTP checks ──────────────────────────────────────────────────
 
 def _check_external_nodes():
-    """HTTP-check all external wallet-API nodes. Returns {mainnet:[…], testnet:[…]}."""
-    result = {net: [] for net in EXTERNAL_NODES}
+    """HTTP-check curated + community wallet-API nodes. Returns {mainnet:[…], testnet:[…]}."""
+    result    = {net: [] for net in EXTERNAL_NODES}
+    community = _load_community_nodes()
 
     def _fetch_tip_height(base_url):
-        """JSON-RPC call to /v2/foreign get_header (no params = tip). Returns int or None."""
+        """JSON-RPC call to /v2/foreign get_tip. Returns int or None."""
         rpc_url = base_url.rstrip("/") + "/v2/foreign"
         try:
             rpc = json.dumps({"jsonrpc": "2.0", "method": "get_tip", "params": [], "id": 1}).encode()
@@ -442,7 +470,7 @@ def _check_external_nodes():
             print(f"[WARN] tip height fetch failed for {rpc_url}: {e}", file=sys.stderr)
             return None
 
-    def check_one(net, protocol, entry):
+    def check_one(net, protocol, entry, community_url=None):
         if entry.startswith("http://") or entry.startswith("https://"):
             url  = entry
             host = urllib.parse.urlparse(entry).hostname or entry
@@ -455,22 +483,62 @@ def _check_external_nodes():
         else:
             ok, _, ms = _http_check(url, timeout=8)
             height = _fetch_tip_height(url) if ok else None
-        return net, {"host": host, "protocol": protocol, "ok": ok, "response_ms": ms if ok else None, "tip_height": height}
+        entry_dict = {
+            "host": host, "protocol": protocol, "ok": ok,
+            "response_ms": ms if ok else None, "tip_height": height,
+        }
+        if community_url:
+            entry_dict["community"]      = True
+            entry_dict["_community_url"] = community_url  # internal — stripped before return
+        return net, entry_dict
 
+    # Curated items (from 06_external_nodes.json)
     items = [
-        (net, proto, entry)
+        (net, proto, entry, None)
         for net, protos in EXTERNAL_NODES.items()
         for proto, entries in protos.items()
         for entry in entries
     ]
+    # Community items (https only — Tor is not supported for community nodes)
+    for net, nodes in community.items():
+        for n in nodes:
+            items.append((net, "https", n["url"], n["url"]))
+
     with ThreadPoolExecutor(max_workers=10) as ex:
-        futures = [ex.submit(check_one, net, proto, e) for net, proto, e in items]
+        futures = [ex.submit(check_one, net, proto, e, comm) for net, proto, e, comm in items]
         for f in as_completed(futures):
             net, entry = f.result()
             result[net].append(entry)
 
+    # Update community fail_counts and auto-remove dead nodes
+    for net, nodes in community.items():
+        for node in nodes:
+            node_url = node["url"].rstrip("/")
+            match    = next(
+                (r for r in result[net] if r.get("_community_url", "").rstrip("/") == node_url),
+                None,
+            )
+            if match is not None:
+                if match["ok"]:
+                    node["fail_count"] = 0
+                else:
+                    node["fail_count"] = node.get("fail_count", 0) + 1
+    for net in community:
+        before         = len(community[net])
+        community[net] = [n for n in community[net] if n.get("fail_count", 0) < FAIL_THRESHOLD]
+        removed        = before - len(community[net])
+        if removed:
+            print(f"[INFO] Auto-removed {removed} dead community node(s) from {net}.")
+    _save_community_nodes(community)
+
+    # Strip internal field before returning
     for net in result:
-        protos = EXTERNAL_NODES[net]
+        for entry in result[net]:
+            entry.pop("_community_url", None)
+
+    # Sort: curated nodes first (by original order), community nodes at end of each group
+    for net in result:
+        protos      = EXTERNAL_NODES[net]
         proto_order = {p: i for i, p in enumerate(protos)}
         entry_order = {
             (proto, urllib.parse.urlparse(e).hostname if e.startswith("http") else e): i

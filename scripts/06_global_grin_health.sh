@@ -75,6 +75,11 @@ CRON_MARKER_EXPLORER="# grin-node-toolkit: grin_explorer"
 MAINNET_PORT=3413
 TESTNET_PORT=13413
 
+# ─── Community node submit server ─────────────────────────────────────────────
+SUBMIT_SERVER_BIN="/usr/local/bin/grin-node-submit"
+SUBMIT_SERVER_PORT=5060
+SUBMIT_SERVER_SERVICE="grin-submit"
+
 # ─── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -269,6 +274,59 @@ ensure_python_whois() {
         || pip3 install python-whois --quiet \
         || { warn "python-whois install failed — domain expiry will show '—'"; return 1; }
     return 0
+}
+
+# ─── Install / refresh community node submit server ──────────────────────────
+install_submit_server() {
+    require_root
+    [[ ! -f "$SCRIPT_DIR/lib/06_node_submit_server.py" ]] && {
+        warn "06_node_submit_server.py not found — community submission skipped."
+        return 0
+    }
+
+    info "Installing community node submit server..."
+    cp "$SCRIPT_DIR/lib/06_node_submit_server.py" "$SUBMIT_SERVER_BIN"
+    chmod +x "$SUBMIT_SERVER_BIN"
+
+    # Generate admin token if not already in config.env
+    local token=""
+    token=$(grep -E "^GRIN_SUBMIT_TOKEN=" "$DATA_DIR/config.env" 2>/dev/null | cut -d= -f2-)
+    if [[ -z "$token" ]]; then
+        token=$(python3 -c "import secrets; print(secrets.token_hex(24))")
+        cat >> "$DATA_DIR/config.env" <<EOF
+GRIN_COMMUNITY_NODES=${DATA_DIR}/community_nodes.json
+GRIN_SUBMIT_PORT=${SUBMIT_SERVER_PORT}
+GRIN_SUBMIT_TOKEN=${token}
+EOF
+        success "Admin token written to $DATA_DIR/config.env (GRIN_SUBMIT_TOKEN)."
+    else
+        info "Submit server config already in config.env — keeping existing token."
+    fi
+
+    # Systemd unit
+    cat > "/etc/systemd/system/${SUBMIT_SERVER_SERVICE}.service" <<UNIT
+[Unit]
+Description=Grin Community Node Submit Server
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=${DATA_DIR}/config.env
+ExecStart=/usr/bin/python3 ${SUBMIT_SERVER_BIN}
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+    systemctl daemon-reload
+    systemctl enable "${SUBMIT_SERVER_SERVICE}" --quiet
+    systemctl restart "${SUBMIT_SERVER_SERVICE}"
+    success "Submit server installed and started (port ${SUBMIT_SERVER_PORT})."
+    info "To remove a node: curl -X DELETE \"http://127.0.0.1:${SUBMIT_SERVER_PORT}/remove-node?url=URL&token=\$(grep GRIN_SUBMIT_TOKEN ${DATA_DIR}/config.env | cut -d= -f2-)\""
 }
 
 # ─── Shared nginx helpers ─────────────────────────────────────────────────────
@@ -559,6 +617,9 @@ EOF
     info "Setting file ownership to www-data..."
     chown -R www-data:www-data "$WWW_DIR"
 
+    # ── Install community node submit server ─────────────────────────────────
+    install_submit_server || true
+
     log "Stats installed: DATA_DIR=$DATA_DIR WWW_DIR=$WWW_DIR PRICE_DIR=$PRICE_DIR"
     success "Network Stats installed."
     echo ""
@@ -848,14 +909,37 @@ server {
     # Block everything else under /api/ — no directory listing, no other files
     location /api/ { return 404; }
 
+    # ── Community node submission ──────────────────────────────────────────────
+    # GET  /submit-token → challenge token (proves server is up; required by POST)
+    # POST /add-node     → validate token + probe node + store
+    # Both rate-limited (10 req/min/IP); server enforces its own 2/hour limit on POST.
+    location = /submit-token {
+        limit_req        zone=grin_submit burst=5 nodelay;
+        limit_req_status 429;
+        proxy_pass         http://127.0.0.1:${SUBMIT_SERVER_PORT};
+        proxy_set_header   X-Real-IP       \$remote_addr;
+        proxy_read_timeout 5s;
+    }
+
+    location = /add-node {
+        limit_req        zone=grin_submit burst=3 nodelay;
+        limit_req_status 429;
+        proxy_pass         http://127.0.0.1:${SUBMIT_SERVER_PORT};
+        proxy_set_header   X-Real-IP       \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 15s;
+        client_max_body_size 2k;
+    }
+
     access_log /var/log/nginx/grin-stats-access.log;
     error_log  /var/log/nginx/grin-stats-error.log;
 }
 NGINX
 
-    # Rate-limit zone — delegated to nginx_shared_helpers.sh so Script 04 can
-    # use the same zone without conflict (same file path + same content = safe overwrite).
+    # Rate-limit zones
     nginx_ensure_grin_api_zone
+    # script06-specific zone for community node submission endpoint
+    nginx_ensure_rate_limit_zone "grin_submit" "10r/m" "10m" "script06-submit"
 
     # Shared snippet included by every /api/ location block
     mkdir -p /etc/nginx/snippets
@@ -965,6 +1049,27 @@ status_stats() {
         echo -e "  Grin node    ${GREEN}✓ running${RESET}  ${DIM}(port ${NODE_PORT})${RESET}"
     else
         echo -e "  Grin node    ${RED}✗ not detected${RESET}"
+    fi
+
+    # Community node submit server
+    echo ""
+    if [[ -f "$SUBMIT_SERVER_BIN" ]]; then
+        if systemctl is-active "${SUBMIT_SERVER_SERVICE}" &>/dev/null; then
+            echo -e "  Submit srv   ${GREEN}✓ running${RESET}  ${DIM}(port ${SUBMIT_SERVER_PORT})${RESET}"
+        else
+            echo -e "  Submit srv   ${YELLOW}✗ stopped${RESET}  ${DIM}(systemctl start ${SUBMIT_SERVER_SERVICE})${RESET}"
+        fi
+        local community_path="$DATA_DIR/community_nodes.json"
+        if [[ -f "$community_path" ]]; then
+            local n_main n_test
+            n_main=$(python3 -c "import json,sys; d=json.load(open('$community_path')); print(len(d.get('mainnet',[])))" 2>/dev/null || echo "?")
+            n_test=$(python3 -c  "import json,sys; d=json.load(open('$community_path')); print(len(d.get('testnet',[])))" 2>/dev/null || echo "?")
+            echo -e "  Community    ${DIM}${n_main} mainnet · ${n_test} testnet nodes${RESET}"
+        else
+            echo -e "  Community    ${DIM}no submissions yet${RESET}"
+        fi
+    else
+        echo -e "  Submit srv   ${DIM}not installed${RESET}"
     fi
 
     # Google Analytics

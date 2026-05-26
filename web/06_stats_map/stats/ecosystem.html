@@ -279,13 +279,79 @@
   .status-fail { color: var(--red);   font-weight: 700; }
   .dns-no-resolve { font-size: 11px; color: var(--red); font-style: italic; padding: 2px 0; }
 
-  /* ── Submit strip — content styles (strip layout above) ──────────────────── */
+  /* ── Submit strip — two-column body ─────────────────────────────────────── */
+  .submit-cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 24px;
+  }
+  @media (max-width: 640px) {
+    .submit-cols { grid-template-columns: 1fr; gap: 20px 0; }
+  }
+  .submit-col-label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--grin);
+    margin-bottom: 10px;
+  }
+  .submit-divider {
+    width: 1px;
+    background: var(--border);
+    align-self: stretch;
+    margin: 0 -12px;
+  }
+  @media (max-width: 640px) { .submit-divider { display: none; } }
+
   .submit-strip-body p {
-    margin: 0 0 14px;
+    margin: 0 0 12px;
     color: var(--muted);
     font-size: 13px;
     line-height: 1.55;
   }
+
+  /* Instant submit form */
+  .node-form { display: flex; flex-direction: column; gap: 8px; }
+  .node-form-url {
+    width: 100%;
+    padding: 7px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    box-sizing: border-box;
+  }
+  .node-form-url:focus { outline: none; border-color: var(--grin); }
+  .node-form-nets {
+    display: flex;
+    gap: 16px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .node-form-nets label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .node-form-nets input[type=radio] { accent-color: var(--grin); }
+  .node-form-submit {
+    align-self: flex-start;
+    padding: 7px 18px;
+    border-radius: 6px;
+    border: 1px solid var(--grin);
+    background: rgba(255,153,0,0.08);
+    color: var(--grin);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .node-form-submit:hover:not(:disabled) { background: var(--grin); color: var(--bg); }
+  .node-form-submit:disabled { opacity: 0.5; cursor: default; }
+  .submit-result { margin-top: 8px; font-size: 12px; line-height: 1.5; }
+  .submit-result.ok  { color: var(--green); }
+  .submit-result.err { color: var(--red); }
+
+  /* GitHub path */
   .submit-btn {
     display: inline-flex;
     align-items: center;
@@ -299,12 +365,9 @@
     text-decoration: none;
     transition: all 0.15s;
   }
-  .submit-btn:hover {
-    background: var(--grin);
-    color: var(--bg);
-  }
+  .submit-btn:hover { background: var(--grin); color: var(--bg); }
   .submit-note {
-    margin: 14px 0 0 !important;
+    margin: 12px 0 0 !important;
     font-size: 12px;
   }
   .submit-note a { color: var(--blue); text-decoration: none; }
@@ -316,6 +379,18 @@
     border-radius: 4px;
     background: rgba(255,255,255,0.04);
     border: 1px solid var(--border);
+  }
+
+  /* Community node badge */
+  .ext-node-community-badge {
+    font-size: 10px;
+    color: var(--blue);
+    background: rgba(88,166,255,0.1);
+    border: 1px solid rgba(88,166,255,0.25);
+    border-radius: 4px;
+    padding: 0 4px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-style: normal;
   }
 
   /* ── Ecosystem services table ────────────────────────────────────────────── */
@@ -542,37 +617,71 @@
   <!-- ── Submit your site / repo — collapsed strip ────────────────────────── -->
   <div class="submit-strip" id="submit-strip">
     <button type="button" class="submit-strip-toggle" id="submit-strip-toggle"
-            title="Building something Grin-related? Open a short submission issue on GitHub and we'll add it on the next refresh.">
+            title="Running a public Grin node? Submit it instantly, or commit long-term via GitHub.">
       <span class="ss-arrow" aria-hidden="true">+</span>
-      <span>Submit your site or repo</span>
+      <span>Submit a node or site</span>
       <span class="ss-hint">Get listed on this page</span>
     </button>
     <div class="submit-strip-body">
-      <p>
-        Building something Grin-related? Add it to this page by opening a short
-        submission issue on GitHub — name, URL, category, and a one-line
-        description. Approved entries get added on the next data refresh.
-      </p>
-      <a class="submit-btn"
-         href="https://github.com/noobvie/Grin-Node-Toolkit/issues/new?template=ecosystem-submission.yml"
-         target="_blank" rel="noopener">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" style="vertical-align:-2px;margin-right:6px">
-          <path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
-        </svg>
-        Submit on GitHub
-      </a>
-      <p class="submit-note">
-        Already cloned the repo? Open a PR adding your entry to
-        <a href="https://github.com/noobvie/Grin-Node-Toolkit/blob/main/scripts/lib/06_ecosystem_sites.json" target="_blank" rel="noopener"><code>06_ecosystem_sites.json</code></a>
-        (live services) or
-        <a href="https://github.com/noobvie/Grin-Node-Toolkit/blob/main/scripts/lib/06_ecosystem_dev.json" target="_blank" rel="noopener"><code>06_ecosystem_dev.json</code></a>
-        (code repos &mdash; needs a <code>type: github|gitea</code> field).
-      </p>
-      <p class="submit-note">
-        Requires a free GitHub account. Need a different route? Open any
-        <a href="https://github.com/noobvie/Grin-Node-Toolkit/issues" target="_blank" rel="noopener">issue</a>
-        on the repo and we'll take it from there.
-      </p>
+      <div class="submit-cols">
+
+        <!-- ── Instant node submission ──────────────────────────────────── -->
+        <div class="submit-col">
+          <div class="submit-col-label">⚡ Submit a node instantly</div>
+          <p>
+            Running a public Grin node? Submit it here — it's validated live and
+            appears after the next hourly check. Auto-removed if it goes offline
+            for 3 consecutive hours.
+          </p>
+          <form class="node-form" id="node-submit-form" autocomplete="off">
+            <!-- honeypot: hidden from real users, bots fill it in -->
+            <input type="text" name="website" tabindex="-1" autocomplete="off"
+                   aria-hidden="true"
+                   style="position:absolute;left:-9999px;opacity:0;height:0;width:0;">
+            <input
+              type="url"
+              id="node-url-input"
+              class="node-form-url"
+              placeholder="https://main.example.org"
+              required
+            />
+            <div class="node-form-nets">
+              <label><input type="radio" name="net" value="mainnet" checked> Mainnet</label>
+              <label><input type="radio" name="net" value="testnet"> Testnet</label>
+            </div>
+            <button type="submit" class="node-form-submit" id="node-submit-btn">Submit Node</button>
+          </form>
+          <div class="submit-result" id="node-submit-result"></div>
+        </div>
+
+        <div class="submit-divider"></div>
+
+        <!-- ── Long-term via GitHub ─────────────────────────────────────── -->
+        <div class="submit-col">
+          <div class="submit-col-label">⭐ Commit long-term via GitHub</div>
+          <p>
+            Building something Grin-related or running a node you plan to
+            maintain indefinitely? Open an issue or PR — approved entries are
+            added to the curated list and marked as long-term.
+          </p>
+          <a class="submit-btn"
+             href="https://github.com/noobvie/Grin-Node-Toolkit/issues/new?template=ecosystem-submission.yml"
+             target="_blank" rel="noopener">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" style="vertical-align:-2px;margin-right:6px">
+              <path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            Submit on GitHub
+          </a>
+          <p class="submit-note">
+            Already cloned the repo? Open a PR adding your entry to
+            <a href="https://github.com/noobvie/Grin-Node-Toolkit/blob/main/scripts/lib/06_ecosystem_sites.json" target="_blank" rel="noopener"><code>06_ecosystem_sites.json</code></a>
+            (services) or
+            <a href="https://github.com/noobvie/Grin-Node-Toolkit/blob/main/scripts/lib/06_external_nodes.json" target="_blank" rel="noopener"><code>06_external_nodes.json</code></a>
+            (nodes).
+          </p>
+        </div>
+
+      </div>
     </div>
   </div>
 
@@ -819,7 +928,9 @@ function renderExternalNodes(data) {
             : `<span class="ext-node-sep">|</span><span class="ext-node-height" style="color:var(--muted)">height unavailable</span>`)
         : '';
       const pm    = PROTO_META[proto];
-      const badge = pm ? ` <span class="ext-node-onion-badge">${pm.badge}</span>` : '';
+      const protoBadge = pm ? ` <span class="ext-node-onion-badge">${pm.badge}</span>` : '';
+      const commBadge  = node.community ? ` <span class="ext-node-community-badge">community</span>` : '';
+      const badge = protoBadge + commBadge;
       let sep = '';
       if (pm && proto !== lastProto) {
         sep = `<div class="ext-node-onion-sep">${pm.sep}</div>`;
@@ -981,6 +1092,53 @@ async function load() {
 
 load();
 setInterval(load, REFRESH_MS);
+
+// ── Community node submission form ─────────────────────────────────────────
+(function () {
+  const form   = document.getElementById('node-submit-form');
+  const btn    = document.getElementById('node-submit-btn');
+  const result = document.getElementById('node-submit-result');
+  if (!form) return;
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    btn.disabled     = true;
+    btn.textContent  = 'Checking…';
+    result.textContent = '';
+    result.className   = 'submit-result';
+
+    const url = document.getElementById('node-url-input').value.trim();
+    const net = document.querySelector('input[name="net"]:checked').value;
+
+    try {
+      // Preflight: get a fresh challenge token — also confirms server is reachable.
+      const tokenResp = await fetch('/submit-token');
+      if (!tokenResp.ok) throw new Error('offline');
+      const { token } = await tokenResp.json();
+
+      btn.textContent = 'Submitting…';
+      const body = new URLSearchParams({ node_url: url, net, submit_token: token });
+      const resp = await fetch('/add-node', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      });
+      const data = await resp.json();
+      result.textContent = data.message || (data.ok ? 'Submitted!' : 'Error.');
+      result.className   = 'submit-result ' + (data.ok ? 'ok' : 'err');
+      if (data.ok) document.getElementById('node-url-input').value = '';
+    } catch (err) {
+      const isOffline = err.message === 'offline' || err instanceof TypeError;
+      result.textContent = isOffline
+        ? 'Submit server offline — try again later.'
+        : 'Network error.';
+      result.className = 'submit-result err';
+    } finally {
+      btn.disabled    = false;
+      btn.textContent = 'Submit Node';
+    }
+  });
+})();
 </script>
 </body>
 </html>

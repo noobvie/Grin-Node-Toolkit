@@ -964,6 +964,10 @@ SNIPPET
     # Logrotate: rotate at 10 MB or after 10 days
     _write_nginx_logrotate "stats"
 
+    # Ensure submit server is running — nginx proxies /submit-token and /add-node to it.
+    # Must happen before nginx reload so the backend exists when certbot tests the config.
+    install_submit_server || true
+
     _nginx_certbot_finish "$NGINX_STATS_CONF" "grin-stats" "$stats_domain" "$ssl_email" || return
     success "Site live:       https://${stats_domain}              (peer map — index.html)"
     success "Stats page:      https://${stats_domain}/stats.html"

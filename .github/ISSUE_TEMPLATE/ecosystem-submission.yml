@@ -1,0 +1,90 @@
+name: Ecosystem submission
+description: Submit a Grin-related site, service, or repository to the ecosystem page.
+title: "[Ecosystem] <Name of your site/repo>"
+labels: ["ecosystem-submission"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for submitting to the Grin ecosystem page!
+        Listings appear at https://world.grin.money/ecosystem.html once reviewed and merged.
+        Only Grin-related projects are accepted. Please make sure your project is publicly reachable.
+
+  - type: input
+    id: name
+    attributes:
+      label: Name
+      description: Display name shown in the ecosystem list.
+      placeholder: e.g. My Grin Wallet
+    validations:
+      required: true
+
+  - type: input
+    id: url
+    attributes:
+      label: URL
+      description: Public, HTTPS URL the entry should link to.
+      placeholder: https://example.com
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      description: Pick the closest match. New categories can be proposed in the description.
+      options:
+        - Explorer
+        - Exchange
+        - Wallet
+        - Mining Pool
+        - Miner
+        - Ecommerce
+        - Community
+        - Development progress
+        - Grin API — Mainnet
+        - Grin API — Testnet
+        - Other (explain below)
+    validations:
+      required: true
+
+  - type: input
+    id: repo
+    attributes:
+      label: Source code / repository (optional)
+      description: GitHub/GitLab URL if the project is open source.
+      placeholder: https://github.com/your-org/your-repo
+
+  - type: input
+    id: since
+    attributes:
+      label: Live since (optional)
+      description: Month and year the project first launched.
+      placeholder: e.g. May 2026
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: One or two sentences on what the project does and why it belongs on the ecosystem page.
+      placeholder: Brief, factual description — no marketing copy.
+    validations:
+      required: true
+
+  - type: input
+    id: contact
+    attributes:
+      label: Contact (optional)
+      description: Forum handle, Discord, email, or anything else for follow-up questions.
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: The site/service is publicly reachable and Grin-related.
+          required: true
+        - label: I am the maintainer, or I have the maintainer's permission to submit this.
+          required: true
+        - label: This is not a phishing site, scam, or impersonation of an existing project.
+          required: true

@@ -229,6 +229,30 @@ function applyWalletLinks() {
     grimEl.textContent = '';
     grimEl.appendChild(a);
   }
+
+  // Tor onion card
+  const torLabelEl = document.getElementById('net-label-tor');
+  if (torLabelEl) torLabelEl.textContent = netLabel;
+  const torEl    = document.getElementById('wallet-tor-snippet');
+  const onionUrl = (typeof GRIN_ONION_URL !== 'undefined' ? GRIN_ONION_URL : '').trim();
+  if (torEl) {
+    const torCopyBtn = document.querySelector('[data-target="wallet-tor-snippet"]');
+    if (onionUrl) {
+      const a = document.createElement('a');
+      a.href        = onionUrl;
+      a.target      = '_blank';
+      a.rel         = 'noopener';
+      a.title       = 'Opens in Tor Browser only';
+      a.textContent = onionUrl;
+      a.className   = 'wallet-url';
+      torEl.textContent = 'check_node_api_http_addr = "';
+      torEl.appendChild(a);
+      torEl.appendChild(document.createTextNode('"'));
+    } else {
+      torEl.textContent = '# Tor hidden service not configured\n# Run script 01 to enable the onion mirror';
+      if (torCopyBtn) torCopyBtn.style.display = 'none';
+    }
+  }
 }
 
 // ── REST endpoints ─────────────────────────────────────────────────────────────

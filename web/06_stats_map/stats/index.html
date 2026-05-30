@@ -12,6 +12,7 @@
 <meta property="og:type" content="website">
 <link rel="icon" href="grin-logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="leaflet.min.css">
+<link rel="stylesheet" href="_header.css">
 <script src="leaflet.min.js"></script>
 <style>
   :root {
@@ -41,7 +42,6 @@
     --ctrl-bg:   rgba(246,248,250,0.92);
     --tip-bg:    rgba(255,255,255,0.98);
   }
-  html[data-theme="light"] .pill-btc { color: #cf222e; border-color: #cf222e; background: rgba(207,34,46,0.08); }
   html[data-theme="light"] .leaflet-container { background: #aad3df !important; }
   html[data-theme="light"] .leaflet-control-attribution {
     background: rgba(255,255,255,0.75) !important;
@@ -93,76 +93,7 @@
     z-index: 999;
   }
 
-  /* ── Theme controls ──────────────────────────────────────────────────────── */
-  .mode-toggle {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    width: 28px; height: 26px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 13px;
-    display: flex; align-items: center; justify-content: center;
-    transition: all 0.15s;
-    flex-shrink: 0;
-    padding: 0;
-  }
-  .mode-toggle:hover { border-color: var(--grin); color: var(--text); }
-  .api-pill-btn {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    height: 26px;
-    padding: 0 9px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    display: flex; align-items: center;
-    transition: all 0.15s;
-    flex-shrink: 0;
-  }
-  .api-pill-btn:hover { border-color: var(--blue); color: var(--blue); }
-  html[data-theme="matrix"] .api-pill-btn { border-color: #008800; color: #00cc44; }
-  html[data-theme="matrix"] .api-pill-btn:hover { border-color: #00e5ff; color: #00e5ff; }
-  .theme-picker { position: relative; }
-  .theme-pill-btn {
-    padding: 3px 9px;
-    border-radius: 20px;
-    font-size: 12px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--muted);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: all 0.15s;
-  }
-  .theme-pill-btn:hover { border-color: var(--grin); color: var(--text); }
-  .theme-menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-    display: none;
-    z-index: 1100;
-    min-width: 145px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
-  }
-  .theme-menu.open { display: block; }
-  .tm-item {
-    display: block; width: 100%;
-    padding: 8px 14px;
-    background: transparent; border: none;
-    color: var(--text); font-size: 12px;
-    text-align: left; cursor: pointer;
-    transition: background 0.1s;
-  }
-  .tm-item:hover { background: rgba(255,153,0,0.1); color: var(--grin); }
-  .tm-item.active { color: var(--grin); font-weight: 600; }
+  /* Header / nav / pills / theme picker → _header.css */
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -177,62 +108,6 @@
     flex-direction: column;
   }
 
-  /* ── Header ──────────────────────────────────────────────────────────────── */
-  header {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 12px 24px;
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: center;
-    flex-shrink: 0;
-    gap: 12px;
-    z-index: 1050;   /* must be > panel z-index (1000) so theme dropdown renders on top */
-  }
-  .logo { display: flex; align-items: center; gap: 8px; }
-  .logo-img { height: 26px; width: 26px; flex-shrink: 0; }
-  .logo-dot {
-    width: 8px; height: 8px;
-    background: var(--grin);
-    border-radius: 50%;
-    animation: pulse 2s infinite;
-  }
-  @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.3} }
-  .logo h1 { font-size: 16px; font-weight: 600; }
-  .logo h1 span { color: var(--grin); }
-  .header-right { display: flex; align-items: center; justify-self: end; flex-wrap: wrap; }
-  .stat-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .pill {
-    padding: 3px 10px;
-    border-radius: 20px;
-    font-size: 12px;
-    font-weight: 600;
-    border: 1px solid;
-    white-space: nowrap;
-  }
-  .pill-peers    { color: var(--grin);  border-color: var(--grin);  background: rgba(255,153,0,0.08); }
-  .pill-country  { color: var(--blue);  border-color: var(--blue);  background: rgba(88,166,255,0.08); }
-  .pill-price    { color: var(--green); border-color: var(--green); background: rgba(63,185,80,0.08); }
-  .pill-btc      { color: #ffd700;      border-color: #ffd700;      background: rgba(255,215,0,0.08); }
-  .pill-sep { color: var(--border); font-size: 14px; }
-  nav { display: flex; gap: 6px; }
-  .nav-btn {
-    color: var(--muted);
-    text-decoration: none;
-    padding: 5px 13px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    font-size: 12px;
-    font-weight: 500;
-    transition: all 0.15s;
-    white-space: nowrap;
-  }
-  .nav-btn:hover { color: var(--text); border-color: var(--muted); }
-  .nav-btn.active {
-    color: var(--grin);
-    border-color: var(--grin);
-    background: rgba(255,153,0,0.1);
-  }
   /* ── Version distribution tabs ───────────────────────────────────────────── */
   .ver-tabs { display: flex; gap: 4px; margin: 6px 0 4px; }
   .ver-tab {
@@ -614,11 +489,7 @@
     .api-desc { font-size: 11px; }
     .api-note { font-size: 11px; }
 
-    header { grid-template-columns: 1fr; padding: 10px 14px; }
-    .logo h1 { font-size: 14px; }
-    nav { justify-self: center; }
-    .header-right { justify-self: auto; }
-    .nav-btn { padding: 4px 9px; font-size: 11px; }
+    /* header mobile rules → _header.css */
     #peer-count { display: none; }
     #left-panel { width: calc(100vw - 32px); max-height: 55vh; }
     #panel { width: calc(100vw - 32px); right: 16px; max-height: 55vh; }
@@ -633,42 +504,7 @@
 </head>
 <body>
 
-<header>
-  <div class="logo">
-    <img src="grin-logo.svg" class="logo-img" alt="Grin" onerror="this.style.display='none'">
-    <div class="logo-dot"></div>
-    <h1>Global <span>Grin</span> Health</h1>
-  </div>
-  <nav>
-    <a href="stats.html" class="nav-btn"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><polyline points="1,11 5,6 8,8 13,2"/><line x1="1" y1="13" x2="13" y2="13"/></svg>Network Stats</a>
-    <a href="index.html" class="nav-btn active"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="7" cy="7" r="5.5"/><path d="M7 1.5c-2 2-2.5 3.5-2.5 5.5s.5 3.5 2.5 5.5M7 1.5c2 2 2.5 3.5 2.5 5.5S9 11 7 12.5"/><line x1="1.5" y1="7" x2="12.5" y2="7"/></svg>Peer Map</a>
-    <a href="ecosystem.html" class="nav-btn"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="7" cy="7" r="5.5"/><circle cx="7" cy="7" r="2"/><line x1="7" y1="1.5" x2="7" y2="5"/><line x1="7" y1="9" x2="7" y2="12.5"/><line x1="1.5" y1="7" x2="5" y2="7"/><line x1="9" y1="7" x2="12.5" y2="7"/></svg>Ecosystem</a>
-  </nav>
-  <div class="header-right">
-    <div class="stat-pills">
-      <span class="pill pill-peers"   id="h-peers">— peers</span>
-      <span class="pill-sep">·</span>
-      <span class="pill pill-country" id="h-countries">— countries</span>
-      <span class="pill-sep">·</span>
-      <span class="pill pill-price"   id="h-price">$—</span>
-      <span class="pill-sep">·</span>
-      <span class="pill pill-btc"     id="h-btc-price">₿—</span>
-      <span class="pill-sep">·</span>
-      <button class="api-pill-btn" id="api-docs-btn" title="Public API documentation">API</button>
-      <span class="pill-sep">|</span>
-      <button class="mode-toggle" id="mode-toggle" title="Toggle dark/light mode">🌙</button>
-      <div class="theme-picker">
-        <button class="theme-pill-btn" id="theme-pill-btn">🎨</button>
-        <div class="theme-menu" id="theme-menu">
-          <button class="tm-item" data-theme="dark">◼ Default</button>
-          <button class="tm-item" data-theme="light">◻ Light</button>
-          <button class="tm-item" data-theme="matrix">▓ Matrix</button>
-          <button class="tm-item" data-theme="hp">✦ Harry Potter</button>
-        </div>
-      </div>
-    </div>
-  </div>
-</header>
+<!--#include virtual="/_header.html"-->
 
 <div id="map-container">
   <div id="loading">
@@ -1032,7 +868,7 @@ function updatePanel(peers, updatedTs) {
   $("p-ipv4").textContent      = fmt(peers.filter(p => !isIPv6(p.ip)).length);
   $("p-ipv6").textContent      = fmt(peers.filter(p =>  isIPv6(p.ip)).length);
   $("p-updated").textContent   = updatedTs ? timeAgo(updatedTs) : "—";
-  $("h-peers").textContent     = `${fmt(peers.length)} active peers`;
+  $("h-peers").textContent     = `${fmt(peers.length)} peers`;
   $("h-countries").textContent = `${fmt(countries.size)} countries`;
 
   // Version distribution — render both tabs
@@ -1071,10 +907,10 @@ async function loadGrinPrice() {
     const usdt = data["GRIN_USDT"];
     const btc  = data["GRIN_BTC"];
     $("h-price").textContent     = usdt?.last != null ? "$" + fmtNum(usdt.last, 4) : "$—";
-    $("h-btc-price").textContent = btc?.last  != null ? Math.round(btc.last * 1e8) + " sat" : "₿—";
+    $("h-btc-price").textContent = btc?.last  != null ? Math.round(btc.last * 1e8) + " sat" : "— sat";
   } catch {
     $("h-price").textContent     = "$—";
-    $("h-btc-price").textContent = "₿—";
+    $("h-btc-price").textContent = "— sat";
   }
 }
 
@@ -1190,6 +1026,13 @@ if (window.matchMedia("(max-width: 720px)").matches) {
 // ── Theme management ──────────────────────────────────────────────────────────
 let currentTheme = localStorage.getItem("grin-theme") || "matrix";
 
+const THEME_LABELS = {
+  dark:   "◼ Default",
+  light:  "◻ Light",
+  matrix: "▓ Matrix",
+  hp:     "✦ Harry Potter",
+};
+
 function applyTheme(theme) {
   currentTheme = theme;
   localStorage.setItem("grin-theme", theme);
@@ -1199,8 +1042,8 @@ function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme);
   }
 
-  const modeBtn = $("mode-toggle");
-  if (modeBtn) modeBtn.textContent = theme === "light" ? "☀️" : "🌙";
+  const pillBtn = $("theme-pill-btn");
+  if (pillBtn) pillBtn.textContent = (THEME_LABELS[theme] || THEME_LABELS.dark) + " ▾";
 
   document.querySelectorAll(".tm-item").forEach(b =>
     b.classList.toggle("active", b.dataset.theme === theme)
@@ -1224,10 +1067,6 @@ function applyTheme(theme) {
 
 function initTheme() {
   applyTheme(currentTheme);
-
-  $("mode-toggle").addEventListener("click", () => {
-    applyTheme(currentTheme === "light" ? "dark" : "light");
-  });
 
   $("theme-pill-btn").addEventListener("click", e => {
     e.stopPropagation();

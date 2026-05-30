@@ -10,6 +10,7 @@
 <meta property="og:description" content="Live health checks for Grin DNS seeds, explorers, exchanges, and community resources.">
 <meta property="og:type" content="website">
 <link rel="icon" href="grin-logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="_header.css">
 <style>
   :root {
     --bg:        #0d1117;
@@ -81,58 +82,7 @@
     z-index: 9998;
   }
 
-  /* ── Theme controls ──────────────────────────────────────────────────────── */
-  .mode-toggle {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    width: 28px; height: 26px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 13px;
-    display: flex; align-items: center; justify-content: center;
-    transition: all 0.15s;
-    flex-shrink: 0;
-    padding: 0;
-  }
-  .mode-toggle:hover { border-color: var(--grin); color: var(--text); }
-  .theme-picker { position: relative; }
-  .theme-pill-btn {
-    padding: 3px 9px;
-    border-radius: 20px;
-    font-size: 12px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--muted);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: all 0.15s;
-  }
-  .theme-pill-btn:hover { border-color: var(--grin); color: var(--text); }
-  .theme-menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-    display: none;
-    z-index: 500;
-    min-width: 145px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
-  }
-  .theme-menu.open { display: block; }
-  .tm-item {
-    display: block; width: 100%;
-    padding: 8px 14px;
-    background: transparent; border: none;
-    color: var(--text); font-size: 12px;
-    text-align: left; cursor: pointer;
-    transition: background 0.1s;
-  }
-  .tm-item:hover { background: rgba(255,153,0,0.1); color: var(--grin); }
-  .tm-item.active { color: var(--grin); font-weight: 600; }
+  /* Header / nav / theme picker → _header.css */
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -143,42 +93,52 @@
     line-height: 1.6;
   }
 
-  /* ── Header ─────────────────────────────────────────────────────────────── */
-  header {
+  /* ── Submit your site / repo — collapsed strip ──────────────────────────── */
+  .submit-strip {
     background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 14px 24px;
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: center;
-    gap: 12px;
-  }
-  .logo { display: flex; align-items: center; gap: 8px; }
-  .logo-img { height: 26px; width: 26px; flex-shrink: 0; }
-  .logo-dot {
-    width: 8px; height: 8px;
-    background: var(--grin);
-    border-radius: 50%;
-    animation: pulse 2s infinite;
-  }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-  .logo h1 { font-size: 16px; font-weight: 600; color: var(--text); }
-  .logo h1 span { color: var(--grin); }
-  .header-right { display: flex; align-items: center; justify-self: end; gap: 6px; flex-wrap: wrap; }
-  nav { display: flex; gap: 6px; }
-  .nav-btn {
-    color: var(--muted);
-    text-decoration: none;
-    padding: 5px 13px;
-    border-radius: 6px;
     border: 1px solid var(--border);
-    font-size: 12px;
-    font-weight: 500;
-    transition: all 0.15s;
-    white-space: nowrap;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    overflow: hidden;
   }
-  .nav-btn:hover { color: var(--text); border-color: var(--muted); }
-  .nav-btn.active { color: var(--grin); border-color: var(--grin); background: rgba(255,153,0,0.1); }
+  .submit-strip-toggle {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 10px 16px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+    gap: 10px;
+  }
+  .submit-strip-toggle:hover { background: rgba(255,153,0,0.05); }
+  .ss-arrow {
+    display: inline-block;
+    width: 16px;
+    text-align: center;
+    color: var(--grin);
+    font-weight: 700;
+    font-size: 16px;
+    line-height: 1;
+    transition: transform 0.2s;
+  }
+  .submit-strip.open .ss-arrow { transform: rotate(45deg); }
+  .ss-hint {
+    margin-left: auto;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 400;
+  }
+  .submit-strip-body {
+    display: none;
+    padding: 14px 16px 16px;
+    border-top: 1px solid var(--border);
+  }
+  .submit-strip.open .submit-strip-body { display: block; }
 
   /* ── Summary bar ─────────────────────────────────────────────────────────── */
   .eco-summary {
@@ -318,6 +278,120 @@
   .status-ok   { color: var(--green); font-weight: 700; }
   .status-fail { color: var(--red);   font-weight: 700; }
   .dns-no-resolve { font-size: 11px; color: var(--red); font-style: italic; padding: 2px 0; }
+
+  /* ── Submit strip — two-column body ─────────────────────────────────────── */
+  .submit-cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 24px;
+  }
+  @media (max-width: 640px) {
+    .submit-cols { grid-template-columns: 1fr; gap: 20px 0; }
+  }
+  .submit-col-label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--grin);
+    margin-bottom: 10px;
+  }
+  .submit-divider {
+    width: 1px;
+    background: var(--border);
+    align-self: stretch;
+    margin: 0 -12px;
+  }
+  @media (max-width: 640px) { .submit-divider { display: none; } }
+
+  .submit-strip-body p {
+    margin: 0 0 12px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  /* Instant submit form */
+  .node-form { display: flex; flex-direction: column; gap: 8px; }
+  .node-form-url {
+    width: 100%;
+    padding: 7px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    box-sizing: border-box;
+  }
+  .node-form-url:focus { outline: none; border-color: var(--grin); }
+  .node-form-nets {
+    display: flex;
+    gap: 16px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .node-form-nets label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .node-form-nets input[type=radio] { accent-color: var(--grin); }
+  .node-form-submit {
+    align-self: flex-start;
+    padding: 7px 18px;
+    border-radius: 6px;
+    border: 1px solid var(--grin);
+    background: rgba(255,153,0,0.08);
+    color: var(--grin);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .node-form-submit:hover:not(:disabled) { background: var(--grin); color: var(--bg); }
+  .node-form-submit:disabled { opacity: 0.5; cursor: default; }
+  .submit-result { margin-top: 8px; font-size: 12px; line-height: 1.5; }
+  .submit-result.ok  { color: var(--green); }
+  .submit-result.err { color: var(--red); }
+
+  /* GitHub path */
+  .submit-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--grin);
+    background: rgba(255,153,0,0.08);
+    color: var(--grin);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.15s;
+  }
+  .submit-btn:hover { background: var(--grin); color: var(--bg); }
+  .submit-note {
+    margin: 12px 0 0 !important;
+    font-size: 12px;
+  }
+  .submit-note a { color: var(--blue); text-decoration: none; }
+  .submit-note a:hover { text-decoration: underline; }
+  .submit-note code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+  }
+
+  /* Community node badge */
+  .ext-node-community-badge {
+    font-size: 10px;
+    color: var(--blue);
+    background: rgba(88,166,255,0.1);
+    border: 1px solid rgba(88,166,255,0.25);
+    border-radius: 4px;
+    padding: 0 4px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-style: normal;
+  }
 
   /* ── Ecosystem services table ────────────────────────────────────────────── */
   .svc-category-header {
@@ -497,11 +571,7 @@
 
   /* ── Mobile ──────────────────────────────────────────────────────────────── */
   @media (max-width: 640px) {
-    header { grid-template-columns: 1fr; padding: 10px 14px; gap: 8px; }
-    .logo h1 { font-size: 14px; }
-    nav { justify-self: center; }
-    .header-right { justify-self: auto; }
-    .nav-btn { padding: 4px 9px; font-size: 11px; }
+    /* header mobile rules → _header.css */
     main { padding: 12px; }
     .card { margin-bottom: 12px; }
     .eco-sum-item { padding: 10px 14px; }
@@ -509,40 +579,18 @@
     .svc-row { flex-wrap: wrap; gap: 4px; }
     .svc-name { min-width: 0; }
     .svc-meta { flex-wrap: wrap; }
+    .ss-hint { display: none; }
   }
 </style>
 </head>
-<body>
+<body data-no-pills>
 
 <div id="loading">
   <div class="spinner"></div>
   <p>Checking Grin ecosystem…</p>
 </div>
 
-<header>
-  <div class="logo">
-    <img src="grin-logo.svg" class="logo-img" alt="Grin" onerror="this.style.display='none'">
-    <div class="logo-dot"></div>
-    <h1>Global <span>Grin</span> Health</h1>
-  </div>
-  <nav>
-    <a href="stats.html" class="nav-btn"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><polyline points="1,11 5,6 8,8 13,2"/><line x1="1" y1="13" x2="13" y2="13"/></svg>Network Stats</a>
-    <a href="index.html" class="nav-btn"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="7" cy="7" r="5.5"/><path d="M7 1.5c-2 2-2.5 3.5-2.5 5.5s.5 3.5 2.5 5.5M7 1.5c2 2 2.5 3.5 2.5 5.5S9 11 7 12.5"/><line x1="1.5" y1="7" x2="12.5" y2="7"/></svg>Peer Map</a>
-    <a href="ecosystem.html" class="nav-btn active"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="7" cy="7" r="5.5"/><circle cx="7" cy="7" r="2"/><line x1="7" y1="1.5" x2="7" y2="5"/><line x1="7" y1="9" x2="7" y2="12.5"/><line x1="1.5" y1="7" x2="5" y2="7"/><line x1="9" y1="7" x2="12.5" y2="7"/></svg>Ecosystem</a>
-  </nav>
-  <div class="header-right">
-    <button class="mode-toggle" id="mode-toggle" title="Toggle dark/light mode">🌙</button>
-    <div class="theme-picker">
-      <button class="theme-pill-btn" id="theme-pill-btn">🎨</button>
-      <div class="theme-menu" id="theme-menu">
-        <button class="tm-item" data-theme="dark">◼ Default</button>
-        <button class="tm-item" data-theme="light">◻ Light</button>
-        <button class="tm-item" data-theme="matrix">▓ Matrix</button>
-        <button class="tm-item" data-theme="hp">✦ Harry Potter</button>
-      </div>
-    </div>
-  </div>
-</header>
+<!--#include virtual="/_header.html"-->
 
 <!-- ── Summary bar ─────────────────────────────────────────────────────────── -->
 <div class="eco-summary">
@@ -565,6 +613,77 @@
 </div>
 
 <main>
+
+  <!-- ── Submit your site / repo — collapsed strip ────────────────────────── -->
+  <div class="submit-strip" id="submit-strip">
+    <button type="button" class="submit-strip-toggle" id="submit-strip-toggle"
+            title="Running a public Grin node? Submit it instantly, or commit long-term via GitHub.">
+      <span class="ss-arrow" aria-hidden="true">+</span>
+      <span>Submit a node or site</span>
+      <span class="ss-hint">Get listed on this page</span>
+    </button>
+    <div class="submit-strip-body">
+      <div class="submit-cols">
+
+        <!-- ── Instant node submission ──────────────────────────────────── -->
+        <div class="submit-col">
+          <div class="submit-col-label">⚡ Submit a node instantly</div>
+          <p>
+            Running a public Grin node? Submit it here — it's validated live and
+            appears after the next hourly check. Auto-removed if it goes offline
+            for 3 consecutive hours.
+          </p>
+          <form class="node-form" id="node-submit-form" autocomplete="off">
+            <!-- honeypot: hidden from real users, bots fill it in -->
+            <input type="text" name="website" tabindex="-1" autocomplete="off"
+                   aria-hidden="true"
+                   style="position:absolute;left:-9999px;opacity:0;height:0;width:0;">
+            <input
+              type="text"
+              id="node-url-input"
+              class="node-form-url"
+              placeholder="https://example.org or http://….onion"
+              required
+            />
+            <div class="node-form-nets">
+              <label><input type="radio" name="net" value="mainnet" checked> Mainnet</label>
+              <label><input type="radio" name="net" value="testnet"> Testnet</label>
+            </div>
+            <button type="submit" class="node-form-submit" id="node-submit-btn">Submit Node</button>
+          </form>
+          <div class="submit-result" id="node-submit-result"></div>
+        </div>
+
+        <div class="submit-divider"></div>
+
+        <!-- ── Long-term via GitHub ─────────────────────────────────────── -->
+        <div class="submit-col">
+          <div class="submit-col-label">⭐ Commit long-term via GitHub</div>
+          <p>
+            Building something Grin-related or running a node you plan to
+            maintain indefinitely? Open an issue or PR — approved entries are
+            added to the curated list and marked as long-term.
+          </p>
+          <a class="submit-btn"
+             href="https://github.com/noobvie/Grin-Node-Toolkit/issues/new?template=ecosystem-submission.yml"
+             target="_blank" rel="noopener">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" style="vertical-align:-2px;margin-right:6px">
+              <path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            Submit on GitHub
+          </a>
+          <p class="submit-note">
+            Already cloned the repo? Open a PR adding your entry to
+            <a href="https://github.com/noobvie/Grin-Node-Toolkit/blob/main/scripts/lib/06_ecosystem_sites.json" target="_blank" rel="noopener"><code>06_ecosystem_sites.json</code></a>
+            (services) or
+            <a href="https://github.com/noobvie/Grin-Node-Toolkit/blob/main/scripts/lib/06_external_nodes.json" target="_blank" rel="noopener"><code>06_external_nodes.json</code></a>
+            (nodes).
+          </p>
+        </div>
+
+      </div>
+    </div>
+  </div>
 
   <!-- ── DNS Seed Status ──────────────────────────────────────────────────── -->
   <div class="card">
@@ -669,20 +788,29 @@ function esc(s) {
 }
 
 // ── Theme ──────────────────────────────────────────────────────────────────
+const THEME_LABELS = {
+  dark:   "◼ Default",
+  light:  "◻ Light",
+  matrix: "▓ Matrix",
+  hp:     "✦ Harry Potter",
+};
+
+function applyTheme(t) {
+  if (t === 'dark') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', t);
+  localStorage.setItem('grin-theme', t);
+  document.querySelectorAll('.tm-item').forEach(b => b.classList.toggle('active', b.dataset.theme === t));
+  document.getElementById('theme-pill-btn').textContent = (THEME_LABELS[t] || THEME_LABELS.dark) + ' ▾';
+  document.getElementById('theme-menu').classList.remove('open');
+}
+
+// Set data-theme early to avoid flash; full sync runs after DOM ready below.
 (function () {
   const saved = localStorage.getItem('grin-theme') || 'matrix';
   if (saved !== 'dark') document.documentElement.setAttribute('data-theme', saved);
-  document.querySelectorAll('.tm-item').forEach(btn => {
-    if (btn.dataset.theme === saved || (saved === 'dark' && btn.dataset.theme === 'dark'))
-      btn.classList.add('active');
-  });
 })();
 
-document.getElementById('mode-toggle').addEventListener('click', () => {
-  const cur = document.documentElement.getAttribute('data-theme') || 'dark';
-  const next = cur === 'light' ? 'dark' : 'light';
-  applyTheme(next);
-});
+applyTheme(localStorage.getItem('grin-theme') || 'matrix');
 
 document.getElementById('theme-pill-btn').addEventListener('click', e => {
   e.stopPropagation();
@@ -693,14 +821,17 @@ document.querySelectorAll('.tm-item').forEach(btn => {
   btn.addEventListener('click', () => applyTheme(btn.dataset.theme));
 });
 
-function applyTheme(t) {
-  document.documentElement.setAttribute('data-theme', t === 'dark' ? '' : t);
-  if (t === 'dark') document.documentElement.removeAttribute('data-theme');
-  localStorage.setItem('grin-theme', t);
-  document.querySelectorAll('.tm-item').forEach(b => b.classList.toggle('active', b.dataset.theme === t));
-  document.getElementById('mode-toggle').textContent = t === 'light' ? '🌙' : '☀️';
-  document.getElementById('theme-menu').classList.remove('open');
-}
+// ── Submit strip — collapsed by default, state persisted in localStorage ──
+(function () {
+  const strip  = document.getElementById('submit-strip');
+  const toggle = document.getElementById('submit-strip-toggle');
+  if (!strip || !toggle) return;
+  if (localStorage.getItem('eco-submit-open') === '1') strip.classList.add('open');
+  toggle.addEventListener('click', () => {
+    const open = strip.classList.toggle('open');
+    localStorage.setItem('eco-submit-open', open ? '1' : '0');
+  });
+})();
 
 // ── Data fetch ─────────────────────────────────────────────────────────────
 async function fetchJSON(url) {
@@ -797,7 +928,9 @@ function renderExternalNodes(data) {
             : `<span class="ext-node-sep">|</span><span class="ext-node-height" style="color:var(--muted)">height unavailable</span>`)
         : '';
       const pm    = PROTO_META[proto];
-      const badge = pm ? ` <span class="ext-node-onion-badge">${pm.badge}</span>` : '';
+      const protoBadge = pm ? ` <span class="ext-node-onion-badge">${pm.badge}</span>` : '';
+      const commBadge  = node.community ? ` <span class="ext-node-community-badge">community</span>` : '';
+      const badge = protoBadge + commBadge;
       let sep = '';
       if (pm && proto !== lastProto) {
         sep = `<div class="ext-node-onion-sep">${pm.sep}</div>`;
@@ -875,7 +1008,7 @@ function renderServices(services) {
       html += `<div class="svc-row">
   <span class="svc-status">${icon}</span>
   <span class="svc-name">${esc(s.name)}</span>
-  <a class="svc-url" href="${safeUrl}" target="_blank" rel="noopener" title="${esc(s.url)}">${esc(host)}</a>
+  <a class="svc-url" href="${esc(safeUrl)}" target="_blank" rel="noopener" title="${esc(s.url)}">${esc(host)}</a>
   <span class="svc-meta">${metaContent}</span>
 </div>`;
     }
@@ -959,6 +1092,53 @@ async function load() {
 
 load();
 setInterval(load, REFRESH_MS);
+
+// ── Community node submission form ─────────────────────────────────────────
+(function () {
+  const form   = document.getElementById('node-submit-form');
+  const btn    = document.getElementById('node-submit-btn');
+  const result = document.getElementById('node-submit-result');
+  if (!form) return;
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    btn.disabled     = true;
+    btn.textContent  = 'Checking…';
+    result.textContent = '';
+    result.className   = 'submit-result';
+
+    const url = document.getElementById('node-url-input').value.trim();
+    const net = document.querySelector('input[name="net"]:checked').value;
+
+    try {
+      // Preflight: get a fresh challenge token — also confirms server is reachable.
+      const tokenResp = await fetch('/submit-token');
+      if (!tokenResp.ok) throw new Error('offline');
+      const { token } = await tokenResp.json();
+
+      btn.textContent = 'Submitting…';
+      const body = new URLSearchParams({ node_url: url, net, submit_token: token });
+      const resp = await fetch('/add-node', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      });
+      const data = await resp.json();
+      result.textContent = data.message || (data.ok ? 'Submitted!' : 'Error.');
+      result.className   = 'submit-result ' + (data.ok ? 'ok' : 'err');
+      if (data.ok) document.getElementById('node-url-input').value = '';
+    } catch (err) {
+      const isOffline = err.message === 'offline' || err instanceof TypeError;
+      result.textContent = isOffline
+        ? 'Submit server offline — try again later.'
+        : 'Network error.';
+      result.className = 'submit-result err';
+    } finally {
+      btn.disabled    = false;
+      btn.textContent = 'Submit Node';
+    }
+  });
+})();
 </script>
 </body>
 </html>

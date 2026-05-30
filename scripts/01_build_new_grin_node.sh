@@ -117,7 +117,7 @@
 #              User then chooses transfer mode:
 #                1) On-the-fly — pipes remote tar.gz straight into tar; no
 #                   .tar.gz stored locally; auto-switches source on failure;
-#                   skips Steps 10 & 11.  cmd: wget -O - <url> | tar -xzvf -
+#                   skips Steps 10 & 11.  cmd: wget -O - <url> | tar -xzf -
 #                2) Full download — saves .tar.gz to disk (wget -c, resumable),
 #                   auto-switches source on failure; continues to Steps 10–12.
 #
@@ -463,8 +463,187 @@ update_binary_only() {
 #                                  T = kill testnet  & rebuild testnet
 #                                  1 = install mainnet alongside (default)
 #   Neither occupied           → check for stale/orphaned grin processes and ports,
-#                                offer to kill them before continuing
+#                                AND scan disk for an installed-but-not-running node.
+#                                When found, offer (in addition to the cleanup options):
+#                                  S = Start installed node (try a clean start)
+#                                  R = Rebuild chain_data ONLY — recovery path for
+#                                      corrupted chain data. Preserves grin-server.toml,
+#                                      .api_secret, .foreign_api_secret, Tor HiddenService
+#                                      keys (.onion identity) and INSTANCES_CONF.
+#                                  K = Full reinstall via fresh wizard (existing path)
 # =============================================================================
+
+# -----------------------------------------------------------------------------
+# detect_installed_nodes — scan standard /opt/grin/node/* paths for already-built
+# nodes (regardless of running state). Sets three parallel global arrays:
+#   INSTALLED_NETS  = ("mainnet" "testnet" ...)
+#   INSTALLED_DIRS  = ("/opt/grin/node/mainnet-prune" ...)
+#   INSTALLED_MODES = ("prune" "prune" ...)
+# A node is considered "installed" only when BOTH grin-server.toml and the grin
+# binary exist in the directory — guards against half-removed leftovers.
+# -----------------------------------------------------------------------------
+detect_installed_nodes() {
+    INSTALLED_NETS=()
+    INSTALLED_DIRS=()
+    INSTALLED_MODES=()
+    local -a _check_dirs=(
+        /opt/grin/node/mainnet-full
+        /opt/grin/node/mainnet-prune
+        /opt/grin/node/testnet-prune
+    )
+    local -a _check_nets=( mainnet mainnet testnet )
+    local -a _check_modes=( full   prune   prune   )
+    local i
+    for i in "${!_check_dirs[@]}"; do
+        local _d="${_check_dirs[$i]}"
+        if [[ -f "$_d/grin-server.toml" && -x "$_d/grin" ]]; then
+            INSTALLED_NETS+=("${_check_nets[$i]}")
+            INSTALLED_DIRS+=("$_d")
+            INSTALLED_MODES+=("${_check_modes[$i]}")
+        fi
+    done
+}
+
+# -----------------------------------------------------------------------------
+# rebuild_chain_data_only — surgical recovery for a node whose chain_data is
+# corrupted but everything else (config, secrets, .onion identity) is intact.
+# Removes ONLY $GRIN_DIR/chain_data, then re-downloads + extracts + starts.
+# Preserves: grin-server.toml, .api_secret, .foreign_api_secret, Tor HiddenService
+#            keys in /var/lib/tor/grin-<network>-raw-tcp/, INSTANCES_CONF entries.
+# Usage: rebuild_chain_data_only <network> <node_dir>
+# -----------------------------------------------------------------------------
+rebuild_chain_data_only() {
+    local network="$1" node_dir="$2"
+
+    # Defensive prefix guard: only ever operate inside /opt/grin/node/<network>-<mode>.
+    # Prevents any future caller from passing an unexpected path that would cause
+    # rm -rf to act outside the node tree (where sibling services live).
+    if [[ "$node_dir" != /opt/grin/node/* ]]; then
+        error "Refusing to rebuild — node_dir '$node_dir' is not under /opt/grin/node/."
+        return 1
+    fi
+
+    local archive_mode
+    case "$node_dir" in
+        *-full)  archive_mode="full"  ;;
+        *-prune) archive_mode="prune" ;;
+        *) error "Cannot derive archive_mode from $node_dir"; return 1 ;;
+    esac
+
+    step_header "Rebuild chain_data only: $network ($archive_mode mode)"
+
+    if [[ ! -f "$node_dir/grin-server.toml" ]]; then
+        error "Missing $node_dir/grin-server.toml — not a valid install."
+        return 1
+    fi
+    if [[ ! -x "$node_dir/grin" ]]; then
+        error "Missing $node_dir/grin binary — use the F (Full rebuild) option instead."
+        return 1
+    fi
+
+    echo ""
+    warn  "This action will:"
+    warn  "  • DELETE   $node_dir/chain_data  (forces full re-sync — hours to days)"
+    info  "  • PRESERVE grin-server.toml + .api_secret + .foreign_api_secret"
+    info  "  • PRESERVE Tor HiddenService keys (.onion identity stays the same)"
+    info  "  • PRESERVE instance registry, wallet dirs, nginx config"
+    echo ""
+    echo -ne "${BOLD}Type ${RED}REBUILD${RESET}${BOLD} to confirm, or Enter to cancel: ${RESET}"
+    local _confirm
+    read -r _confirm || true
+    if [[ "$_confirm" != "REBUILD" ]]; then
+        info "Cancelled — no changes made."
+        return 1
+    fi
+
+    # Stop the node if somehow running (e.g. partially started)
+    local _port
+    [[ "$network" == "mainnet" ]] && _port=3414 || _port=13414
+    if ss -tlnp "sport = :$_port" 2>/dev/null | grep -q ":$_port "; then
+        info "Stopping node on port $_port..."
+        stop_grin_one "$_port" || true
+    fi
+
+    # Set globals so the reused step functions resolve to the right paths
+    GRIN_DIR="$node_dir"
+    NETWORK_TYPE="$network"
+    ARCHIVE_MODE="$archive_mode"
+
+    # Delete corrupted chain_data (the only destructive step).
+    # ${node_dir:?} guards against an empty variable accidentally resolving
+    # the path to "/chain_data" — never delete anything if node_dir is unset.
+    if [[ -d "${node_dir:?}/chain_data" ]]; then
+        info "Removing ${node_dir}/chain_data ..."
+        rm -rf "${node_dir:?}/chain_data"
+        success "Old chain_data removed."
+    fi
+
+    # Re-run the chain-data acquisition steps from setup_one_node, no other changes.
+    # GRIN_SKIP_DISK_CHECK=1 mirrors the M/T/K rebuild paths (existing dir, no
+    # need to re-check disk space against a fresh-install footprint).
+    GRIN_SKIP_DISK_CHECK=1
+    download_chain_data "$network" "$archive_mode"
+    if [[ "$STREAM_MODE" == "true" ]]; then
+        stream_extract_chain_data
+    else
+        verify_checksum
+        check_disk_space
+        extract_chain_data
+    fi
+
+    start_grin_tmux
+
+    # Idempotently re-assert the Tor HiddenService marker block (no-op if unchanged).
+    # The key dir was never touched, so the .onion address survives.
+    local _rb_api_port
+    if _rb_api_port=$(_grin_api_port "$network"); then
+        _grin_torrc_install "$network" "$_rb_api_port" || true
+    fi
+
+    show_summary "$network" "$archive_mode"
+    # Refresh INSTANCES_CONF so ONION_HOSTNAME stays current (handles operators
+    # who built the node before this field existed).
+    save_instance_location "$network" "$archive_mode"
+
+    # Reset per-node state for any subsequent action in the same script invocation
+    GRIN_DIR=""
+    TAR_FILE=""
+    SHA_FILE=""
+    ARCHIVE_MODE=""
+    STREAM_MODE=false
+    READY_SOURCES=()
+    log "[REBUILD-CHAIN-ONLY] $network ($archive_mode) — completed"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _describe_installed_node — emit a one-line summary of an installed node
+# directory: binary version, chain_data size, chain_data last-modified date.
+# Information only — no health check. Used by the S-option prompts so the user
+# can see what they're about to start (vs. rebuild).
+#   Usage: _describe_installed_node /opt/grin/node/mainnet-prune
+# Prints "(not installed)" if the binary is missing.
+# -----------------------------------------------------------------------------
+_describe_installed_node() {
+    local d="$1"
+    if [[ -z "$d" || ! -x "$d/grin" ]]; then
+        echo "(not installed)"
+        return
+    fi
+    local ver size mtime
+    ver=$("$d/grin" --version 2>/dev/null | awk '{print $NF}')
+    [[ -z "$ver" ]] && ver="?"
+    if [[ -d "$d/chain_data" ]]; then
+        size=$(du -sh "$d/chain_data" 2>/dev/null | cut -f1)
+        mtime=$(stat -c '%y' "$d/chain_data" 2>/dev/null | cut -d' ' -f1)
+        [[ -z "$size"  ]] && size="?"
+        [[ -z "$mtime" ]] && mtime="?"
+    else
+        size="-"
+        mtime="never"
+    fi
+    echo "version=${ver}  chain_data=${size}  modified=${mtime}"
+}
 
 # -----------------------------------------------------------------------------
 # _start_installed_node — start already-installed Grin nodes from standard paths.
@@ -605,6 +784,7 @@ check_grin_running() {
             echo -e "  ${RED}M${RESET} — kill mainnet  & rebuild mainnet"
             if $_testnet_installed; then
                 echo -e "  ${CYAN}S${RESET} — start installed testnet node  (no rebuild)  ${DIM}(default)${RESET}"
+                echo -e "       ${DIM}$(_describe_installed_node /opt/grin/node/testnet-prune)${RESET}"
             else
                 echo -e "  ${GREEN}1${RESET} — install testnet alongside mainnet  ${DIM}(default)${RESET}"
             fi
@@ -675,7 +855,11 @@ check_grin_running() {
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
             echo -e "  ${RED}T${RESET} — kill testnet  & rebuild testnet"
             if $_mainnet_installed; then
+                local _maindir=""
+                [[ -x /opt/grin/node/mainnet-prune/grin ]] && _maindir=/opt/grin/node/mainnet-prune
+                [[ -x /opt/grin/node/mainnet-full/grin  ]] && _maindir=/opt/grin/node/mainnet-full
                 echo -e "  ${CYAN}S${RESET} — start installed mainnet node  (no rebuild)  ${DIM}(default)${RESET}"
+                echo -e "       ${DIM}$(_describe_installed_node "$_maindir")${RESET}"
             else
                 echo -e "  ${GREEN}1${RESET} — install mainnet alongside testnet  ${DIM}(default)${RESET}"
             fi
@@ -727,10 +911,15 @@ check_grin_running() {
         done
     fi
 
-    # ── No legitimate node running → check for stale/orphaned processes ───────
+    # ── No legitimate node running → check for stale processes + existing installs ──
+    # An installed-but-not-running node is the common signal of corrupted chain_data:
+    # the node was built fine, but the data store is broken so the P2P port never
+    # binds. Detection here is config-file driven (not port driven), so we can
+    # offer the operator a chain-data-only rebuild instead of forcing a full reinstall.
     local -A PORT_NAMES=([3413]="API" [3414]="P2P mainnet" [13414]="P2P testnet" [3415]="Wallet Listener")
     while true; do
         local found=0
+        local _inst_detected=false
 
         local grin_procs
         grin_procs=$(pgrep -a -f '[g]rin server run' 2>/dev/null || true)
@@ -750,32 +939,36 @@ check_grin_running() {
             fi
         done
 
-        # Check for an installed-but-not-running node (conf file or binary on disk)
-        if [[ $found -eq 0 ]]; then
-            local _inst_detected=false
-            if [[ -s "$INSTANCES_CONF" ]]; then
-                _inst_detected=true
-            else
-                for _chk in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/node/testnet-prune; do
-                    [[ -x "$_chk/grin" ]] && { _inst_detected=true; break; }
-                done
-            fi
-            if $_inst_detected; then
-                info "Grin node installation found (not currently running)."
-                found=1
-            fi
+        # Authoritative detection: scan for grin-server.toml + grin binary on disk.
+        detect_installed_nodes
+        if [[ ${#INSTALLED_NETS[@]} -gt 0 ]]; then
+            _inst_detected=true
+            found=1
+            info "Installed Grin node(s) detected (not currently running):"
+            local _i
+            for _i in "${!INSTALLED_NETS[@]}"; do
+                echo -e "  ${CYAN}→${RESET} ${INSTALLED_NETS[$_i]} (${INSTALLED_MODES[$_i]}) — ${DIM}${INSTALLED_DIRS[$_i]}${RESET}"
+                echo -e "      ${DIM}$(_describe_installed_node "${INSTALLED_DIRS[$_i]}")${RESET}"
+            done
         fi
 
         if [[ $found -eq 1 ]]; then
             echo ""
             echo -e "  ${GREEN}K${RESET}) Kill all conflicting processes and continue"
             echo -e "  ${YELLOW}C${RESET}) Continue anyway with warning only (if processes are unrelated to Grin)"
-            echo -e "  ${CYAN}S${RESET}) Start installed node (no rebuild)"
+            if $_inst_detected; then
+                echo -e "  ${CYAN}S${RESET}) Start installed node (no rebuild — try this first)"
+                echo -e "  ${CYAN}R${RESET}) Rebuild ${BOLD}chain_data only${RESET}  ${DIM}— for corrupted chain (preserves config + .onion + secrets)${RESET}"
+            else
+                echo -e "  ${CYAN}S${RESET}) Start installed node (no rebuild)"
+            fi
             echo -e "  ${RED}N${RESET}) Abort  (resolve manually)"
             echo -e "  ${DIM}0${RESET}) Return to main menu"
             echo -e "  ${DIM}Enter${RESET}) Recheck"
             echo ""
-            echo -ne "${BOLD}${RED}Choose [K/C/S/N/0]: ${RESET}"
+            local _prompt_keys="K/C/S/N/0"
+            $_inst_detected && _prompt_keys="K/C/S/R/N/0"
+            echo -ne "${BOLD}${RED}Choose [${_prompt_keys}]: ${RESET}"
             read -r confirm || true
             case "${confirm,,}" in
                 k) stop_grin_gracefully
@@ -788,6 +981,45 @@ check_grin_running() {
                        warn "No installed nodes found — proceeding with new node setup."
                        break
                    fi ;;
+                r)
+                   if ! $_inst_detected; then
+                       warn "No installed nodes — R is not available right now."
+                       echo ""
+                       continue
+                   fi
+                   # Pick which network to rebuild
+                   local _pick_net="" _pick_dir=""
+                   if [[ ${#INSTALLED_NETS[@]} -eq 1 ]]; then
+                       _pick_net="${INSTALLED_NETS[0]}"
+                       _pick_dir="${INSTALLED_DIRS[0]}"
+                   else
+                       echo ""
+                       echo -e "  Which installation should be rebuilt?"
+                       local _j
+                       for _j in "${!INSTALLED_NETS[@]}"; do
+                           echo -e "    ${GREEN}$((_j + 1))${RESET}) ${INSTALLED_NETS[$_j]} (${INSTALLED_MODES[$_j]}) — ${DIM}${INSTALLED_DIRS[$_j]}${RESET}"
+                       done
+                       echo -e "    ${DIM}0${RESET}) Cancel"
+                       echo ""
+                       echo -ne "${BOLD}Choose: ${RESET}"
+                       local _pick; read -r _pick || true
+                       if [[ "$_pick" =~ ^[1-9][0-9]*$ ]] && (( _pick >= 1 && _pick <= ${#INSTALLED_NETS[@]} )); then
+                           _pick_net="${INSTALLED_NETS[$((_pick - 1))]}"
+                           _pick_dir="${INSTALLED_DIRS[$((_pick - 1))]}"
+                       else
+                           info "Cancelled."
+                           echo ""
+                           continue
+                       fi
+                   fi
+                   if rebuild_chain_data_only "$_pick_net" "$_pick_dir"; then
+                       exit 0
+                   else
+                       warn "Rebuild cancelled or failed — returning to menu."
+                       echo ""
+                       continue
+                   fi
+                   ;;
                 0) exit 0 ;;
                 "") continue ;;
                 *) die "Aborted. Resolve the conflicts manually and re-run." ;;
@@ -798,42 +1030,52 @@ check_grin_running() {
         fi
     done
 
-    # ── Legacy directory check ─────────────────────────────────────────────────
-    if [[ -d "$HOME/.grin" ]]; then
-        echo ""
-        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        warn "  Legacy Grin directory detected: $HOME/.grin"
-        warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        echo -e "  This is a non-standard path that can conflict with the new"
-        echo -e "  standardized installation under ${BOLD}/opt/grin/${RESET}."
-        local _legacy_size
-        _legacy_size=$(du -sh "$HOME/.grin" 2>/dev/null | cut -f1) || _legacy_size="?"
-        echo -e "  Size: ${YELLOW}${_legacy_size}${RESET}"
-        echo ""
-        echo -e "  ${RED}D${RESET}) Delete ${BOLD}$HOME/.grin${RESET}  ${DIM}(recommended)${RESET}"
-        echo -e "  ${DIM}Enter${RESET}) Keep it and continue  ${DIM}(may cause config conflicts)${RESET}"
-        echo -e "  ${DIM}0${RESET}) Return to master script"
-        echo ""
-        echo -ne "${BOLD}Choice [D/Enter/0]: ${RESET}"
-        local _legacy_choice
-        read -r _legacy_choice || true
-        case "${_legacy_choice,,}" in
-            d)
-                rm -rf "$HOME/.grin"
-                success "Deleted: $HOME/.grin"
-                ;;
-            0)
-                exit 0
-                ;;
-            *)
-                warn "Keeping $HOME/.grin — this may cause config conflicts."
-                ;;
-        esac
-        echo ""
-    fi
-
     log "[STEP 1] Complete. No restrictions."
+}
+
+# =============================================================================
+# [1b] LEGACY $HOME/.grin DIRECTORY CHECK
+# -----------------------------------------------------------------------------
+# Detects the non-standard $HOME/.grin path that older grin/grin-wallet versions
+# created by default. Runs unconditionally from main() so the warning is shown
+# regardless of which Step-1 branch was taken (including "install alongside"
+# paths that previously returned before the legacy check could run).
+# Offers D) delete, Enter to keep, 0 to abort.
+# =============================================================================
+check_legacy_grin_dir() {
+    [[ ! -d "$HOME/.grin" ]] && return 0
+
+    echo ""
+    warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    warn "  Legacy Grin directory detected: $HOME/.grin"
+    warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo -e "  This is a non-standard path that can conflict with the new"
+    echo -e "  standardized installation under ${BOLD}/opt/grin/${RESET}."
+    local _legacy_size
+    _legacy_size=$(du -sh "$HOME/.grin" 2>/dev/null | cut -f1) || _legacy_size="?"
+    echo -e "  Size: ${YELLOW}${_legacy_size}${RESET}"
+    echo ""
+    echo -e "  ${RED}D${RESET}) Delete ${BOLD}$HOME/.grin${RESET}  ${DIM}(recommended)${RESET}"
+    echo -e "  ${DIM}Enter${RESET}) Keep it and continue  ${DIM}(may cause config conflicts)${RESET}"
+    echo -e "  ${DIM}0${RESET}) Return to master script"
+    echo ""
+    echo -ne "${BOLD}Choice [D/Enter/0]: ${RESET}"
+    local _legacy_choice
+    read -r _legacy_choice || true
+    case "${_legacy_choice,,}" in
+        d)
+            rm -rf "$HOME/.grin"
+            success "Deleted: $HOME/.grin"
+            ;;
+        0)
+            exit 0
+            ;;
+        *)
+            warn "Keeping $HOME/.grin — this may cause config conflicts."
+            ;;
+    esac
+    echo ""
 }
 
 # =============================================================================
@@ -917,6 +1159,20 @@ check_os_and_deps() {
         else
             success "All required packages already present."
         fi
+    fi
+
+    # Ensure tor SOCKS daemon is running. apt auto-starts tor on Debian/Ubuntu,
+    # but dnf on Rocky/Alma does not. Both `enable` and `start` are no-ops when
+    # already in the desired state, so this is safe to re-run on every build.
+    if systemctl list-unit-files tor.service &>/dev/null; then
+        systemctl enable tor --quiet 2>/dev/null || true
+        systemctl start  tor          2>/dev/null || true
+        if ss -tlnp 2>/dev/null | grep -q '127.0.0.1:9050'; then
+            success "Tor service running (SOCKS on 127.0.0.1:9050)."
+        else
+            warn "Tor service started but SOCKS port 9050 not yet listening — may need a moment."
+        fi
+        log "[STEP 2] tor enabled+started."
     fi
 
     log "[STEP 2] Deps OK."
@@ -1814,7 +2070,7 @@ download_chain_data() {
     echo ""
     echo -e "  ${GREEN}1${RESET}) ${BOLD}On-the-fly extraction${RESET} ${DIM}(default — stream directly, no full download)${RESET}"
     echo -e "     ${DIM}Pipes the remote archive straight into tar without saving locally.${RESET}"
-    echo -e "     ${DIM}cmd: wget -O - <url> | tar -xzvf -${RESET}"
+    echo -e "     ${DIM}cmd: wget -O - <url> | tar -xzf -${RESET}"
     echo -e "     ${DIM}Saves temporary disk space and reduces total setup time.${RESET}"
     echo -e "     ${DIM}Auto-switches to the next source if the stream fails mid-transfer.${RESET}"
     echo -e "     ${DIM}Note: SHA256 checksum verification is skipped in this mode.${RESET}"
@@ -1975,7 +2231,7 @@ extract_chain_data() {
 # [STREAM] EXTRACT CHAIN DATA ON-THE-FLY  (no local archive)
 # -----------------------------------------------------------------------------
 # Pipes the remote .tar.gz directly into tar without saving it locally:
-#   wget -O - <url> | tar -xzvf - -C "$GRIN_DIR"
+#   wget -O - <url> | tar -xzf - -C "$GRIN_DIR"
 # All ready sources from READY_SOURCES are tried in order. On failure, any
 # partially extracted chain_data directory is removed before retrying.
 # Steps 10 (SHA256) and 11 (disk space) are skipped in this mode.
@@ -1993,11 +2249,14 @@ stream_extract_chain_data() {
         src_num=$(( src_num + 1 ))
         local tar_url="$src_base/$tar_name"
         info "Source $src_num/$total_src: $tar_url"
-        info "Running: wget -O - \"$tar_url\" | tar -xzvf - -C \"$GRIN_DIR\""
+        info "Running: wget -q --show-progress -O - \"$tar_url\" | tar -xzvf - -C \"$GRIN_DIR\""
+        info "You'll see: wget bar (%, speed, ETA) + extracted filenames as the stream lands."
         [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
         echo ""
         log "[STEP 10] Streaming from $tar_url"
-        if wget --progress=bar:force -O - "$tar_url" \
+        # wget -q --show-progress: suppress chatter but keep the transfer bar (%, MB/s, ETA).
+        # tar -xzvf -: list each extracted entry so the user can see the archive being unpacked live.
+        if wget -q --show-progress -O - "$tar_url" \
                 | tar -xzvf - -C "$GRIN_DIR"; then
             stream_ok=true
             break
@@ -2140,16 +2399,40 @@ show_summary() {
     echo -e "  Tmux session : ${CYAN}$session${RESET}"
     echo -e "  Time taken   : ${CYAN}${mins}m ${secs}s${RESET}"
     echo -e "  Log file     : ${CYAN}$LOG_FILE${RESET}"
+
+    # Tor .onion address (if Step 13b set up a HiddenService and tor has published it).
+    # Poll briefly — tor usually generates the keys within a few seconds of reload.
+    local _onion_addr
+    _onion_addr=$(_grin_read_onion "$network" 20 2>/dev/null || true)
+    if [[ -n "$_onion_addr" ]]; then
+        echo -e "  Onion mirror : ${CYAN}http://${_onion_addr}${RESET}  ${DIM}(Foreign API via Tor)${RESET}"
+    else
+        echo -e "  Onion mirror : ${YELLOW}(not yet published — tor may still be generating keys)${RESET}"
+        echo -e "                 ${DIM}Check later: cat /var/lib/tor/grin-${network}-raw-tcp/hostname${RESET}"
+    fi
+
     echo ""
     echo -e "${BOLD}  Quick commands:${RESET}"
     echo -e "  ${YELLOW}tmux attach -t $session${RESET}   — view node output"
     echo -e "  ${YELLOW}tmux ls${RESET}                   — list sessions"
+    echo -e "  ${YELLOW}grep ONION $INSTANCES_CONF${RESET}   — recall onion URLs"
+    echo ""
+    echo -e "  ${YELLOW}⚠  Back up your .onion identity${RESET} — ${DIM}/var/lib/tor/grin-${network}-raw-tcp/${RESET}"
+    echo -e "     contains the Ed25519 keypair that defines your .onion address."
+    echo -e "     Use ${BOLD}Script 089 → Backup${RESET} to include it in your encrypted backup"
+    echo -e "     so you can migrate this identity to another VPS later."
+    echo -e "     ${DIM}To restore manually (e.g. after a VPS migration):${RESET}"
+    echo -e "     ${DIM}  cp -r ~/backup/grin-${network}-raw-tcp/ /var/lib/tor/grin-${network}-raw-tcp/${RESET}"
+    echo -e "     ${DIM}  # Debian/Ubuntu: debian-tor:debian-tor  |  Rocky/Alma: toranon:toranon${RESET}"
+    echo -e "     ${DIM}  chown -R \$(stat -c '%U:%G' /var/lib/tor 2>/dev/null || echo 'debian-tor:debian-tor') /var/lib/tor/grin-${network}-raw-tcp/${RESET}"
+    echo -e "     ${DIM}  chmod 700 /var/lib/tor/grin-${network}-raw-tcp/${RESET}"
+    echo -e "     ${DIM}  systemctl restart tor   # full restart required to re-read keys${RESET}"
     echo ""
     echo -e "  ${YELLOW}⚠  Remember:${RESET} schedule auto-start on reboot via"
     echo -e "     ${BOLD}3) Share Grin Chain Data / Schedule${RESET} → option ${GREEN}G) Auto startup Grin node${RESET}"
     echo -e "${BOLD}${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 
-    log "[STEP 14] DONE. network=$network mode=$mode dir=$GRIN_DIR time=${mins}m${secs}s"
+    log "[STEP 14] DONE. network=$network mode=$mode dir=$GRIN_DIR time=${mins}m${secs}s onion=${_onion_addr:-pending}"
 }
 
 # =============================================================================
@@ -2175,15 +2458,157 @@ save_instance_location() {
         [[ "$key" == "FULLMAIN"  ]] && sed -i '/^PRUNEMAIN_/d' "$INSTANCES_CONF"
         [[ "$key" == "PRUNEMAIN" ]] && sed -i '/^FULLMAIN_/d'  "$INSTANCES_CONF"
     fi
+
+    # Cache the .onion hostname so other toolkit scripts (and the operator) can
+    # look it up without grepping /var/lib/tor. Short poll: tor usually has the
+    # file ready by now since show_summary already polled before this call.
+    # Empty string if tor hasn't published yet — refreshed on the next rebuild.
+    local _onion=""
+    _onion=$(_grin_read_onion "$network" 5 2>/dev/null || true)
+
     cat >> "$INSTANCES_CONF" << __EOF__
 
 ${key}_GRIN_DIR="$GRIN_DIR"
 ${key}_BINARY="$GRIN_DIR/grin"
 ${key}_TOML="$GRIN_DIR/grin-server.toml"
 ${key}_CHAIN_DATA="$GRIN_DIR/chain_data"
+${key}_ONION_HOSTNAME="${_onion}"
 __EOF__
     chmod 600 "$INSTANCES_CONF"
-    log "Instance location saved: $key → $GRIN_DIR"
+    log "Instance location saved: $key → $GRIN_DIR (onion=${_onion:-pending})"
+}
+
+# =============================================================================
+# [TOR ONION] Hidden-service helpers
+# -----------------------------------------------------------------------------
+# Idempotently install a marker-bounded HiddenService stanza in /etc/tor/torrc
+# pointing at the local grin Foreign API. Each network gets its own .onion
+# address whose identity (Ed25519 keypair) lives in /var/lib/tor/grin-<net>-raw-tcp/.
+# Those key dirs are preserved across rebuilds so the same .onion address
+# survives a re-run of this script.
+#
+# torrc stanza written (per network):
+#     # >>> grin-toolkit:<network>-raw-tcp >>>
+#     HiddenServiceDir /var/lib/tor/grin-<network>-raw-tcp/
+#     HiddenServicePort 80 127.0.0.1:<api_port>
+#     # <<< grin-toolkit:<network>-raw-tcp <<<
+#
+# Anything the operator has placed outside these markers in torrc is untouched.
+# =============================================================================
+
+_grin_api_port() {
+    case "$1" in
+        mainnet) echo 3413  ;;
+        testnet) echo 13413 ;;
+        *) error "_grin_api_port: unknown network '$1' (expected mainnet|testnet)"; return 1 ;;
+    esac
+}
+
+# Install or update the toolkit-marked Tor HiddenService stanza for one network.
+# Compares the existing block against the expected block; if identical, no file
+# write and no tor reload happens (so M/T/K rebuilds don't republish the
+# hidden service descriptor needlessly).
+_grin_torrc_install() {
+    local network="$1" api_port="$2"
+    local torrc="/etc/tor/torrc"
+    local begin="# >>> grin-toolkit:${network}-raw-tcp >>>"
+    local end="# <<< grin-toolkit:${network}-raw-tcp <<<"
+    local hs_dir="/var/lib/tor/grin-${network}-raw-tcp/"
+    local expected
+    expected=$(printf '%s\nHiddenServiceDir %s\nHiddenServicePort 80 127.0.0.1:%s\n%s' \
+        "$begin" "$hs_dir" "$api_port" "$end")
+
+    if [[ ! -f "$torrc" ]]; then
+        warn "$torrc not found — tor may not be installed. Skipping HiddenService setup."
+        return 1
+    fi
+
+    # Migrate old naming convention: grin-toolkit:<network> → grin-toolkit:<network>-raw-tcp
+    # Strips the old stanza so the normal append path writes the correctly-named one.
+    local _old_begin="# >>> grin-toolkit:${network} >>>"
+    local _old_end="# <<< grin-toolkit:${network} <<<"
+    if grep -qF "$_old_begin" "$torrc" 2>/dev/null; then
+        info "Migrating torrc stanza: grin-toolkit:${network} → grin-toolkit:${network}-raw-tcp"
+        local _tmp="${torrc}.toolkit.tmp"
+        awk -v b="$_old_begin" -v e="$_old_end" '
+            $0 == b { skip=1; next }
+            $0 == e { skip=0; next }
+            !skip
+        ' "$torrc" > "$_tmp" && mv "$_tmp" "$torrc"
+    fi
+    # Migrate old directory name if it exists and the new name doesn't yet
+    local _old_dir="/var/lib/tor/grin-${network}"
+    if [[ -d "$_old_dir" && ! -d "${hs_dir%/}" ]]; then
+        info "Renaming $_old_dir → ${hs_dir%/} (preserving .onion identity)"
+        mv "$_old_dir" "${hs_dir%/}"
+    fi
+
+    # Extract existing marker-bounded block (literal string match, no regex escaping)
+    local existing
+    existing=$(awk -v b="$begin" -v e="$end" '
+        $0 == b { in_block=1 }
+        in_block { print }
+        $0 == e { in_block=0 }
+    ' "$torrc")
+
+    if [[ "$existing" == "$expected" ]]; then
+        info "Tor HiddenService for ${network}: already configured (no change)."
+        log "[TOR] HiddenService ${network}: unchanged"
+        return 0
+    fi
+
+    # Remove any previous toolkit block for this network (literal-match awk)
+    if [[ -n "$existing" ]]; then
+        local tmp="${torrc}.toolkit.tmp"
+        awk -v b="$begin" -v e="$end" '
+            $0 == b { in_block=1; next }
+            $0 == e { in_block=0; next }
+            !in_block
+        ' "$torrc" > "$tmp" && mv "$tmp" "$torrc"
+    fi
+
+    # Append fresh block (leading blank line for readability)
+    { echo ""; echo "$expected"; } >> "$torrc"
+
+    if systemctl reload tor 2>/dev/null; then
+        success "Tor HiddenService for ${network}: written, tor reloaded."
+    elif systemctl restart tor 2>/dev/null; then
+        success "Tor HiddenService for ${network}: written, tor restarted."
+    else
+        warn "Tor HiddenService for ${network}: written, but tor reload/restart failed — restart manually."
+        return 1
+    fi
+    log "[TOR] HiddenService ${network}: port 80 → 127.0.0.1:${api_port}"
+    return 0
+}
+
+# Poll /var/lib/tor/grin-<network>-raw-tcp/hostname until tor publishes it (or timeout).
+# Returns the .onion URL on stdout (decorated with a human-readable subdomain
+# prefix per network), or empty string on timeout.
+#
+# Tor ignores all labels left of the trailing <56-char>.onion hash, so we
+# prepend a self-documenting prefix that makes the URL meaningful to users:
+#     mainnet → main.grin.<hash>.onion
+#     testnet → test.grin.<hash>.onion
+# The cryptographic identity (the hash) is unchanged; this is pure labelling.
+_grin_read_onion() {
+    local network="$1"
+    local hostname_file="/var/lib/tor/grin-${network}-raw-tcp/hostname"
+    local max_wait="${2:-30}"
+    local waited=0
+    while [[ ! -f "$hostname_file" && $waited -lt $max_wait ]]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    [[ -f "$hostname_file" ]] || return 0
+
+    local prefix
+    case "$network" in
+        mainnet) prefix="main.grin." ;;
+        testnet) prefix="test.grin." ;;
+        *)       prefix=""           ;;
+    esac
+    printf '%s%s\n' "$prefix" "$(cat "$hostname_file")"
 }
 
 # =============================================================================
@@ -2212,6 +2637,19 @@ setup_one_node() {
     fi
     ensure_grin_user
     start_grin_tmux
+
+    # Tor HiddenService — every toolkit-built node is reachable as an .onion HTTP
+    # mirror by default. Identity (Ed25519 keys) lives in /var/lib/tor/grin-<net>-raw-tcp/
+    # and is preserved across rebuilds.
+    step_header "Step 13b: Tor HiddenService (Foreign API onion mirror)"
+    local _api_port
+    if _api_port=$(_grin_api_port "$network"); then
+        _grin_torrc_install "$network" "$_api_port" || \
+            warn "Tor HiddenService setup did not complete — node still runs on clearnet."
+    else
+        warn "Skipping Tor HiddenService setup — unknown network '$network'."
+    fi
+
     show_summary        "$network" "$ARCHIVE_MODE"
     save_instance_location "$network" "$ARCHIVE_MODE"
 
@@ -2236,7 +2674,21 @@ main() {
     echo ""
     log "=== Grin Node Build Started ==="
 
+    # Early root check — Step 1 (ss -tlnp) needs root to read PIDs.
+    # Without root, port scans silently return empty and the gate misbehaves.
+    [[ $EUID -ne 0 ]] && die "This script must be run as root (sudo)."
+
+    # Concurrent-run guard — two parallel script-01 instances can corrupt
+    # $INSTANCES_CONF or partially overwrite a node directory.
+    # fd 9 stays open for the life of the process; flock releases on exit.
+    exec 9>/var/run/grin-toolkit-01.lock 2>/dev/null \
+        || exec 9>/tmp/grin-toolkit-01.lock
+    if ! flock -n 9; then
+        die "Another instance of script 01 is already running. Wait for it to finish, or remove the lock file if you are sure no other instance exists."
+    fi
+
     check_grin_running
+    check_legacy_grin_dir
     check_os_and_deps
     select_network
 

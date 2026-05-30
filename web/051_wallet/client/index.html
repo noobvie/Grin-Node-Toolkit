@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>(function(){var t=localStorage.getItem('grin-theme');if(t==='light')document.documentElement.setAttribute('data-theme','light');}());</script>
+  <meta name="description" content="Grin Web Wallet — local wallet manager for the Grin cryptocurrency. Manage wallets, send and receive via Slatepack, monitor node status.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <title>Grin Web Wallet</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Aurora background -->
+  <div class="bg-aurora" aria-hidden="true">
+    <div class="aurora-1"></div>
+    <div class="aurora-2"></div>
+    <div class="aurora-3"></div>
+  </div>
+
+  <!-- Mobile sidebar overlay -->
+  <div id="sidebarOverlay" class="sidebar-overlay"></div>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <button id="hamburgerBtn" class="hamburger" aria-label="Menu">&#9776;</button>
+      <img src="favicon.svg"              class="header-logo logo-dark logo-breathe"  alt="Grin">
+      <img src="grin_darkblue_white.svg"  class="header-logo logo-light logo-breathe" alt="Grin">
+      <span class="header-title">Grin<span class="header-accent"> Web Wallet</span></span>
+    </div>
+    <div class="header-right">
+      <span id="portfolioChip" class="portfolio-chip" title="Total mainnet portfolio" style="display:none">&Sigma; <span id="portfolioUsd">—</span></span>
+      <span id="networkBadge" class="network-badge"></span>
+      <button id="privacyToggleBtn" class="theme-toggle" title="Hide balances">&#128065;</button>
+      <button id="themeToggleBtn" class="theme-toggle" title="Switch theme">&#9728;</button>
+    </div>
+  </header>
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-inner">
+      <div id="walletList" class="wallet-list"></div>
+      <button id="addWalletBtn" class="btn-add-wallet">+ Add Wallet</button>
+    </div>
+  </aside>
+
+  <!-- Content area -->
+  <div class="content-area">
+
+    <!-- Top tab nav -->
+    <nav class="tab-nav-top">
+      <button class="tab-btn active" data-tab="wallet"><span class="ti">&#x2B21;</span>Wallet</button>
+      <button class="tab-btn" data-tab="send"><span class="ti">&#x2191;</span>Send</button>
+      <button class="tab-btn" data-tab="receive"><span class="ti">&#x2193;</span>Receive</button>
+      <button class="tab-btn" data-tab="history"><span class="ti">&#x2261;</span>History</button>
+      <button class="tab-btn" data-tab="node"><span class="ti">&#x25C9;</span>Node</button>
+      <button class="tab-btn" data-tab="setup"><span class="ti">&#x2B22;</span>Setup</button>
+    </nav>
+
+    <main class="main">
+
+      <!-- Loading -->
+      <div id="loadingPanel" class="loading-panel">Loading wallets&hellip;</div>
+
+      <!-- App shell (shown once wallets loaded) -->
+      <div id="appShell" style="display:none">
+
+        <!-- WALLET TAB -->
+        <section class="tab-panel active" id="tab-wallet">
+
+          <!-- Unlock screen -->
+          <div id="unlockPanel" style="display:none">
+            <div class="unlock-box">
+              <div class="unlock-title">Unlock Wallet</div>
+              <div id="unlockWalletLabel" class="unlock-label"></div>
+              <form id="unlockForm" autocomplete="off">
+                <div class="field">
+                  <label for="unlockPassphrase">Passphrase</label>
+                  <input type="password" id="unlockPassphrase" class="input" placeholder="Enter passphrase" autocomplete="current-password">
+                </div>
+                <div id="unlockError" class="error-inline" style="display:none"></div>
+                <button type="submit" class="btn btn-primary btn-full mt-16">Unlock &amp; Connect</button>
+              </form>
+            </div>
+          </div>
+
+          <!-- Dashboard (after unlock) -->
+          <div id="dashboardPanel" style="display:none">
+
+            <!-- Sync banner (only visible when node is syncing) -->
+            <div id="syncBanner" class="sync-banner" style="display:none">
+              <div class="sync-banner-head">
+                <span class="sync-banner-icon">&#9888;</span>
+                <span class="sync-banner-title">Node syncing</span>
+                <span id="syncBannerLabel" class="sync-banner-label"></span>
+              </div>
+              <div class="sync-banner-bar"><div id="syncBannerFill" class="sync-banner-fill" style="width:0%"></div></div>
+              <div id="syncBannerDetail" class="sync-banner-detail"></div>
+            </div>
+
+            <div id="nodeStatus" class="node-bar">
+              <span class="node-dot"></span>
+              <span id="nodeBarText" class="node-bar-text">Checking node&hellip;</span>
+            </div>
+
+            <div class="balance-grid">
+              <div class="balance-card">
+                <div class="balance-label">Spendable</div>
+                <div id="balSpendable" class="balance-amount">─── ∩</div>
+                <div id="balSpendableUsd" class="balance-usd"></div>
+              </div>
+              <div class="balance-card balance-card--dim">
+                <div class="balance-label">Pending</div>
+                <div id="balPending" class="balance-amount">─── ∩</div>
+                <div id="balPendingUsd" class="balance-usd"></div>
+              </div>
+              <div class="balance-card balance-card--dim">
+                <div class="balance-label">Immature</div>
+                <div id="balImmature" class="balance-amount">─── ∩</div>
+                <div id="balImmatureUsd" class="balance-usd"></div>
+              </div>
+            </div>
+
+            <div id="balStatus" class="status-box mt-8"></div>
+            <div id="reorgBanner" class="locked-chip mt-8" style="display:none;border-left-color:var(--error);background:rgba(244,63,94,0.07)"></div>
+            <div id="lockedOutputsChip" class="locked-chip mt-8" style="display:none">
+              <span class="locked-chip-text"><strong>Locked outputs detected.</strong> A previous send may be stuck.</span>
+              <button id="recoverLockedBtn" class="btn btn-sm">Recover</button>
+            </div>
+
+            <div class="services-panel">
+              <div class="services-title">Services</div>
+              <details class="service-row-expandable" id="nodeServiceRow">
+                <summary class="service-row">
+                  <span id="nodeSvcDot" class="svc-dot">●</span>
+                  <span class="svc-name">Node</span>
+                  <span id="nodeSvcInfo" class="svc-info">─</span>
+                  <span class="svc-chevron">&#9662;</span>
+                </summary>
+                <div id="peerList" class="peer-list">
+                  <div class="peer-list-empty">Loading peers&hellip;</div>
+                </div>
+              </details>
+              <div class="service-row">
+                <span id="listenerDot" class="svc-dot">●</span>
+                <span class="svc-name">Listener (Tor)</span>
+                <span id="listenerPortLabel" class="svc-port"></span>
+                <button id="listenerBtn" class="btn btn-sm btn-svc">Start</button>
+              </div>
+              <div class="service-row">
+                <span id="ownerDot" class="svc-dot">●</span>
+                <span class="svc-name">Owner API</span>
+                <span id="ownerPortLabel" class="svc-port"></span>
+                <button id="ownerBtn" class="btn btn-sm btn-svc">Start</button>
+              </div>
+            </div>
+
+            <div class="address-panel">
+              <div class="block-label">Slatepack Address</div>
+              <code id="walletAddress" class="url-display">─────────────────</code>
+              <div class="action-row mt-8">
+                <button id="copyAddrBtn" class="btn btn-sm btn-outline">Copy</button>
+                <span id="addrClipMsg" class="clip-msg"></span>
+              </div>
+            </div>
+
+            <div style="display:flex;gap:10px;margin-top:14px">
+              <button id="refreshBtn" class="btn btn-outline" style="flex:1">Refresh</button>
+              <button id="lockBtn"    class="btn btn-outline" style="flex:1">Lock Wallet</button>
+            </div>
+            <div style="margin-top:10px;display:flex;gap:10px">
+              <button id="exportWalletBtn" class="btn btn-outline" style="flex:1">Export Backup</button>
+              <button id="deleteWalletBtn" class="btn btn-outline" style="flex:1;color:var(--error);border-color:rgba(244,63,94,0.35)">Delete</button>
+            </div>
+
+            <div class="panel-footer">
+              Keys stay on your machine &mdash;
+              <a href="https://github.com/noobvie/GrinSuite" target="_blank" rel="noopener">GrinSuite</a>
+              &bull; <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a>
+            </div>
+          </div>
+
+          <!-- No wallet selected -->
+          <div id="noSelectionPanel" class="info-panel">
+            <p>Select a wallet from the sidebar or click <strong>+ Add Wallet</strong> to get started.</p>
+          </div>
+
+        </section>
+
+        <!-- SEND TAB -->
+        <section class="tab-panel" id="tab-send">
+
+          <!-- Tor send (interactive) -->
+          <div id="sendTorPanel" class="send-method-panel send-method-disabled" title="Tor not running — on host: sudo systemctl start tor">
+            <div class="send-method-header">
+              <span class="send-method-title">Send via Tor <span id="sendTorNet" class="send-method-net"></span></span>
+              <span id="sendTorStatus" class="send-method-status">Checking…</span>
+            </div>
+            <p class="field-hint mb-8">Interactive send. Recipient must be online with their Tor listener running.</p>
+            <form id="sendTorForm" autocomplete="off">
+              <div class="field">
+                <label for="sendTorAmount">Amount (∩)</label>
+                <input type="number" id="sendTorAmount" class="input" placeholder="0.000000000" min="0" step="0.0001" required>
+              </div>
+              <div class="field">
+                <label for="sendTorDest">Recipient Address</label>
+                <div class="input-with-action">
+                  <input type="text" id="sendTorDest" class="input" placeholder="grin1…" autocomplete="off" required>
+                  <button id="scanQrBtn" type="button" class="btn btn-sm btn-outline" title="Scan QR code">QR</button>
+                  <input type="file" id="scanQrFile" accept="image/*" style="display:none">
+                </div>
+                <div id="sendTorRecent" class="recent-list" style="display:none"></div>
+                <span class="field-hint">Recipient's Slatepack/Tor address (starts with grin1). Click QR to scan or upload an image.</span>
+              </div>
+              <details class="advanced-section">
+                <summary>Advanced — request payment proof</summary>
+                <div class="field mt-8">
+                  <label for="sendTorProofAddr">Payment proof recipient address (optional)</label>
+                  <input type="text" id="sendTorProofAddr" class="input" placeholder="grin1…" autocomplete="off">
+                  <span class="field-hint">If set, grin-wallet embeds a payment proof commitment so the recipient can later prove receipt to a third party.</span>
+                </div>
+              </details>
+              <button id="sendTorBtn" type="submit" class="btn btn-primary btn-full mt-8">Send Now</button>
+            </form>
+            <div id="sendTorResult" class="result-box" style="display:none"></div>
+          </div>
+
+          <!-- Batch send (CSV) -->
+          <details class="send-method-panel advanced-section" id="batchSendPanel">
+            <summary>
+              <span class="send-method-title">Batch Send via Tor (CSV)</span>
+            </summary>
+            <p class="field-hint mb-8">Paste lines of <code>address,amount[,label]</code>. Each row is sent sequentially over Tor. Stops on first failure.</p>
+            <textarea id="batchSendInput" class="slate-input" placeholder="grin1abc...,0.5,Alice&#10;grin1xyz...,1.25" style="min-height:90px"></textarea>
+            <button id="batchSendBtn" class="btn btn-outline btn-full mt-8">Validate &amp; Send All</button>
+            <div id="batchSendResult" class="result-box" style="display:none"></div>
+          </details>
+
+          <!-- Slatepack send (offline / async) -->
+          <div class="send-method-panel">
+            <div class="send-method-header">
+              <span class="send-method-title">Send via Slatepack <span id="sendSlateNet" class="send-method-net"></span></span>
+              <span class="send-method-status ok">Always available</span>
+            </div>
+            <p class="field-hint mb-8">Offline exchange — copy the slatepack to the recipient by any channel.</p>
+            <form id="sendForm" autocomplete="off">
+              <div class="field">
+                <label for="sendAmount">Amount (∩)</label>
+                <input type="number" id="sendAmount" class="input" placeholder="0.000000000" min="0" step="0.0001" required>
+                <span id="feeEstimate" class="field-hint"></span>
+              </div>
+              <button type="submit" class="btn btn-primary btn-full mt-8">Generate Slatepack</button>
+            </form>
+            <div id="sendResult" class="result-box" style="display:none"></div>
+          </div>
+
+        </section>
+
+        <!-- RECEIVE TAB -->
+        <section class="tab-panel" id="tab-receive">
+          <div class="receive-block">
+            <div class="block-label">Your Slatepack Address</div>
+            <code id="receiveAddress" class="url-display">─────────────────</code>
+            <div class="action-row mt-8">
+              <button id="copyReceiveAddrBtn" class="btn btn-outline btn-sm">Copy Address</button>
+              <button id="toggleQrBtn"        class="btn btn-outline btn-sm">Show QR</button>
+              <span id="receiveAddrClip" class="clip-msg"></span>
+            </div>
+            <div id="receiveQrWrap" class="qr-wrap" style="display:none">
+              <div id="receiveQr" class="qr-canvas"></div>
+              <p class="field-hint mt-8">Anyone scanning this gets your Slatepack address — share at your own discretion.</p>
+            </div>
+          </div>
+          <div class="receive-block">
+            <div class="block-label">Process Incoming Slatepack</div>
+            <textarea id="receiveSlateInput" class="slate-input" placeholder="BEGINSLATEPACK. ... ENDSLATEPACK."></textarea>
+            <button id="processSlateBtn" class="btn btn-outline btn-full mt-10">Process Slatepack</button>
+            <div id="receiveResult" class="result-box" style="display:none"></div>
+          </div>
+          <div class="receive-block">
+            <div class="block-label">Finalize &amp; Broadcast</div>
+            <textarea id="finalizeSlateInput" class="slate-input" placeholder="BEGINSLATEPACK. ... ENDSLATEPACK."></textarea>
+            <button id="finalizeBtn" class="btn btn-primary btn-full mt-10">Finalize &amp; Broadcast</button>
+            <div id="finalizeResult" class="result-box" style="display:none"></div>
+          </div>
+
+          <details class="receive-block advanced-section">
+            <summary>Verify a payment proof</summary>
+            <p class="field-hint mb-8">Paste a payment proof JSON (from <code>retrieve_payment_proof</code> output) to verify it cryptographically.</p>
+            <textarea id="verifyProofInput" class="slate-input" placeholder='{"amount":"...","excess":"...","recipient_address":"grin1...","recipient_sig":"...","sender_address":"grin1...","sender_sig":"..."}'></textarea>
+            <button id="verifyProofBtn" class="btn btn-outline btn-full mt-10">Verify Proof</button>
+            <div id="verifyProofResult" class="result-box" style="display:none"></div>
+          </details>
+        </section>
+
+        <!-- HISTORY TAB -->
+        <section class="tab-panel" id="tab-history">
+          <div class="history-toolbar">
+            <span id="historyCount" class="history-count"></span>
+            <button id="historyExportBtn" class="btn btn-outline btn-sm">Export CSV</button>
+          </div>
+          <div id="transactionsList"><p class="loading">Loading transactions&hellip;</p></div>
+          <button id="historyMoreBtn" class="btn btn-outline btn-full mt-12" style="display:none">Load older transactions</button>
+        </section>
+
+        <!-- NODE TAB -->
+        <section class="tab-panel" id="tab-node">
+          <div class="node-columns">
+
+            <!-- MAINNET column -->
+            <div class="node-column">
+              <div class="node-col-header">
+                <span class="node-col-net mainnet">Mainnet</span>
+              </div>
+              <div class="node-local-card">
+                <div class="node-local-label">Local Node</div>
+                <div class="node-local-status">
+                  <span class="node-dot" id="nodeLocalMainnetDot"></span>
+                  <span id="nodeLocalMainnetText">─</span>
+                </div>
+              </div>
+              <div class="node-col-section-label">Public Nodes</div>
+              <div id="nodeListMainnet" class="node-row-list"></div>
+            </div>
+
+            <!-- TESTNET column -->
+            <div class="node-column">
+              <div class="node-col-header">
+                <span class="node-col-net testnet">Testnet</span>
+              </div>
+              <div class="node-local-card">
+                <div class="node-local-label">Local Node</div>
+                <div class="node-local-status">
+                  <span class="node-dot" id="nodeLocalTestnetDot"></span>
+                  <span id="nodeLocalTestnetText">─</span>
+                </div>
+              </div>
+              <div class="node-col-section-label">Public Nodes</div>
+              <div id="nodeListTestnet" class="node-row-list"></div>
+            </div>
+
+          </div>
+          <p class="node-hint">Click <strong>Use</strong> to set a node for the currently open wallet.</p>
+        </section>
+
+        <!-- SETUP TAB -->
+        <section class="tab-panel" id="tab-setup">
+
+          <!-- Section A: Binary -->
+          <div class="setup-section" id="binarySection">
+            <div class="block-label">Grin-Wallet Binary</div>
+            <div id="binaryPanelInfo" class="info-box mt-8">Checking&hellip;</div>
+            <div id="binaryPanelProgress" class="progress-log" style="display:none"></div>
+            <button id="binaryInstallBtn" class="btn btn-outline btn-full mt-8" style="display:none">Install Binary</button>
+          </div>
+
+          <!-- Section A: Notifications -->
+          <div class="setup-section" id="notificationsSection">
+            <div class="block-label">Desktop Notifications</div>
+            <p class="field-hint mt-8">Show OS notifications for incoming payments, confirmations, and chain reorgs.</p>
+            <div id="notifStatus" class="info-box mt-8"></div>
+            <button id="notifEnableBtn" class="btn btn-outline btn-full mt-8" style="display:none">Enable Desktop Notifications</button>
+          </div>
+
+          <!-- Section A0: Auto-lock setting -->
+          <div class="setup-section" id="autolockSection">
+            <div class="block-label">Auto-Lock</div>
+            <p class="field-hint mt-8">Automatically lock all unlocked wallets after a period of inactivity (no mouse/keyboard).</p>
+            <div class="field mt-8">
+              <label for="autolockMinutes">Lock after (minutes)</label>
+              <select id="autolockMinutes" class="input">
+                <option value="0">Never</option>
+                <option value="5">5 minutes</option>
+                <option value="10">10 minutes</option>
+                <option value="15" selected>15 minutes</option>
+                <option value="30">30 minutes</option>
+                <option value="60">1 hour</option>
+              </select>
+            </div>
+            <div id="autolockStatus" class="field-hint mt-8"></div>
+          </div>
+
+          <!-- Section A1b removed in Linux port — node services are managed by Script 01 (systemd). -->
+
+          <!-- Section A2: Tor Service (read-only status — managed via host systemd) -->
+          <div class="setup-section" id="torServiceSection">
+            <div class="block-label">Tor Service</div>
+            <div id="torPanelInfo" class="info-box mt-8">Checking&hellip;</div>
+            <p class="field-hint mt-8">Tor runs as a host systemd service. To install/start: <code>sudo apt install tor &amp;&amp; sudo systemctl enable --now tor</code></p>
+          </div>
+
+          <!-- Section A3: Address Book (per wallet) -->
+          <div class="setup-section" id="addressBookSection" style="display:none">
+            <div class="block-label">Address Book <span id="addrBookWalletLabel" class="field-hint" style="margin-left:8px"></span></div>
+            <div id="addrBookList" class="addr-book-list mt-8"></div>
+            <p class="field-hint mt-8">Tor sends to unknown addresses prompt a 0.1 ∩ test-send warning. Sends made succesfully are saved here automatically.</p>
+          </div>
+
+          <!-- Section B: Wallets -->
+          <div class="setup-section" id="setupWalletsSection">
+            <div class="block-label">Your Wallets</div>
+            <div id="setupWalletList" class="setup-wallet-list mt-8"></div>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button id="setupAddWalletBtn"    class="btn btn-outline" style="flex:1">+ Add Wallet</button>
+              <button id="setupImportWalletBtn" class="btn btn-outline" style="flex:1">Import .gws</button>
+              <input type="file" id="setupImportFile" accept=".gws,application/octet-stream" style="display:none">
+            </div>
+
+            <!-- Wizard -->
+            <div id="setupWizard" style="display:none;margin-top:20px">
+              <div class="wizard-header">
+                <div class="wizard-steps-bar">
+                  <span class="wstep active" id="wstep1">1</span>
+                  <span class="wstep-sep"></span>
+                  <span class="wstep" id="wstep2">2</span>
+                  <span class="wstep-sep"></span>
+                  <span class="wstep" id="wstep3">3</span>
+                  <span class="wstep-sep"></span>
+                  <span class="wstep" id="wstep4">4</span>
+                </div>
+                <div id="wizardStepTitle" class="wizard-title">Wallet Details</div>
+              </div>
+
+              <!-- Step 1: Wallet details -->
+              <div id="wizardStep2" class="wizard-panel" style="display:none">
+                <div class="field">
+                  <label>Wallet Name</label>
+                  <input type="text" id="wName" class="input" placeholder="main" maxlength="32">
+                  <span class="field-hint">Letters, digits, hyphens, underscores</span>
+                </div>
+                <div class="field">
+                  <label>Network</label>
+                  <div class="radio-row">
+                    <label class="radio-label"><input type="radio" name="wNetwork" value="mainnet" checked> Mainnet</label>
+                    <label class="radio-label"><input type="radio" name="wNetwork" value="testnet"> Testnet</label>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Directory</label>
+                  <input type="text" id="wDir" class="input" placeholder="Loading&hellip;">
+                </div>
+                <div id="dirStatus" class="info-box" style="display:none"></div>
+                <button id="wNext2" class="btn btn-primary btn-full mt-12">Next &rarr;</button>
+              </div>
+
+              <!-- Step 2: Node selection -->
+              <div id="wizardStep3" class="wizard-panel" style="display:none">
+                <p class="field-hint mb-8">Checking nodes — select one to connect your wallet.</p>
+                <div id="nodePickList" class="node-pick-list"></div>
+                <button id="wNext3" class="btn btn-primary btn-full mt-12" disabled>Next &rarr;</button>
+              </div>
+
+              <!-- Step 3: Init / Recover -->
+              <div id="wizardStep4" class="wizard-panel" style="display:none">
+                <div class="radio-row" style="flex-direction:column;gap:10px;margin-bottom:16px">
+                  <label class="radio-label"><input type="radio" name="initMode" value="new" checked> New Wallet &mdash; generate fresh seed</label>
+                  <label class="radio-label"><input type="radio" name="initMode" value="recover"> Recover &mdash; restore from seed phrase</label>
+                  <label class="radio-label"><input type="radio" name="initMode" value="skip"> Skip &mdash; initialize manually later</label>
+                </div>
+                <div id="initPassField" class="field">
+                  <label>Passphrase</label>
+                  <input type="password" id="initPass" class="input" placeholder="Leave empty for no encryption" autocomplete="new-password">
+                </div>
+                <div id="recoverSeedField" class="field" style="display:none">
+                  <label>Seed Phrase (24 words, space-separated)</label>
+                  <textarea id="seedInput" class="slate-input" rows="4" placeholder="word1 word2 word3 ..."></textarea>
+                </div>
+                <div id="seedDisplay" class="seed-display" style="display:none"></div>
+                <div id="initError" class="error-inline" style="display:none"></div>
+                <button id="runInitBtn" class="btn btn-outline btn-full mt-12">Initialize Wallet</button>
+                <button id="wNext4" class="btn btn-primary btn-full mt-8" disabled>Next &rarr;</button>
+              </div>
+
+              <!-- Step 4: Tor (read-only — installed/managed on the host) -->
+              <div id="wizardStep5" class="wizard-panel" style="display:none">
+                <p class="field-hint mb-8">Tor gives your wallet a private Slatepack address. Without it, your IP is exposed to senders.</p>
+                <div id="torStatusInfo" class="info-box"></div>
+                <p class="field-hint mt-8">To install/start Tor on the host: <code>sudo apt install tor &amp;&amp; sudo systemctl enable --now tor</code></p>
+                <button id="wNext5" class="btn btn-primary btn-full mt-12">Finish &rarr;</button>
+              </div>
+
+              <!-- Done -->
+              <div id="wizardStep6" class="wizard-panel" style="display:none">
+                <div class="done-box">
+                  <div class="done-title">Wallet Added ✓</div>
+                  <div id="doneWalletName" class="done-name"></div>
+                  <p class="field-hint mt-8">Your wallet appears in the sidebar. Click it to unlock and connect.</p>
+                </div>
+                <button id="openNewWalletBtn" class="btn btn-primary btn-full mt-16">Open Wallet</button>
+                <button id="addAnotherBtn" class="btn btn-outline btn-full mt-8">Add Another Wallet</button>
+              </div>
+
+            </div><!-- #setupWizard -->
+          </div><!-- #setupWalletsSection -->
+
+        </section>
+
+      </div><!-- #appShell -->
+    </main>
+
+    <!-- Bottom nav (mobile) -->
+    <nav class="tab-nav-bottom">
+      <button class="tab-btn-bottom active" data-tab="wallet"><span class="tab-icon">&#x2B21;</span><span class="tab-label">Wallet</span></button>
+      <button class="tab-btn-bottom" data-tab="send"><span class="tab-icon">&#x2191;</span><span class="tab-label">Send</span></button>
+      <button class="tab-btn-bottom" data-tab="receive"><span class="tab-icon">&#x2193;</span><span class="tab-label">Receive</span></button>
+      <button class="tab-btn-bottom" data-tab="history"><span class="tab-icon">&#x2261;</span><span class="tab-label">History</span></button>
+      <button class="tab-btn-bottom" data-tab="node"><span class="tab-icon">&#x25C9;</span><span class="tab-label">Node</span></button>
+      <button class="tab-btn-bottom" data-tab="setup"><span class="tab-icon">&#x2B22;</span><span class="tab-label">Setup</span></button>
+    </nav>
+
+  </div><!-- .content-area -->
+
+  <!-- Modal overlay (reused for confirmations) -->
+  <div id="modalOverlay" class="modal-overlay" style="display:none">
+    <div class="modal-card">
+      <div id="modalTitle" class="modal-title">Confirm</div>
+      <div id="modalBody"  class="modal-body"></div>
+      <div id="modalActions" class="modal-actions"></div>
+    </div>
+  </div>
+
+  <script src="qrcode.min.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>

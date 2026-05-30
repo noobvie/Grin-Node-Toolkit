@@ -1,0 +1,9 @@
+{
+  "name": "grin-web-wallet",
+  "version": "2.0.0-linux.1",
+  "private": true,
+  "description": "Grin Node Toolkit — Script 051 private web wallet (Linux port of GrinSuite Node wallet)",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "express": "^4.21.2" },
+  "engines": { "node": ">=18.0.0" }
+}

@@ -1,0 +1,49 @@
+<!--
+  Shared header for Global Grin Health pages — included via nginx SSI.
+  Pages opt out of the data pills with `<body data-no-pills>` (see _header.css).
+-->
+<header>
+  <div class="logo">
+    <img src="grin-logo.svg" class="logo-img" alt="Grin" onerror="this.style.display='none'">
+    <div class="logo-dot"></div>
+    <h1>Global <span>Grin</span> Health</h1>
+  </div>
+  <nav>
+    <a href="stats.html"     class="nav-btn" data-nav="stats.html"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><polyline points="1,11 5,6 8,8 13,2"/><line x1="1" y1="13" x2="13" y2="13"/></svg>Network Stats</a>
+    <a href="index.html"     class="nav-btn" data-nav="index.html"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="7" cy="7" r="5.5"/><path d="M7 1.5c-2 2-2.5 3.5-2.5 5.5s.5 3.5 2.5 5.5M7 1.5c2 2 2.5 3.5 2.5 5.5S9 11 7 12.5"/><line x1="1.5" y1="7" x2="12.5" y2="7"/></svg>Peer Map</a>
+    <a href="ecosystem.html" class="nav-btn" data-nav="ecosystem.html"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><circle cx="7" cy="7" r="5.5"/><circle cx="7" cy="7" r="2"/><line x1="7" y1="1.5" x2="7" y2="5"/><line x1="7" y1="9" x2="7" y2="12.5"/><line x1="1.5" y1="7" x2="5" y2="7"/><line x1="9" y1="7" x2="12.5" y2="7"/></svg>Ecosystem</a>
+  </nav>
+  <div class="header-right">
+    <div class="stat-pills">
+      <span class="pill pill-network" title="Active peers · countries represented">
+        <span class="v-peers"     id="h-peers">— peers</span>
+        <span class="pill-sep">·</span>
+        <span class="v-countries" id="h-countries">— countries</span>
+      </span>
+      <span class="pill pill-market" title="GRIN price — USDT · BTC">
+        <span class="v-usd" id="h-price">$—</span>
+        <span class="pill-sep">·</span>
+        <span class="v-btc" id="h-btc-price">₿—</span>
+      </span>
+      <button class="api-pill-btn" id="api-docs-btn" title="Public API documentation">API</button>
+      <span class="pill-sep">|</span>
+      <div class="theme-picker">
+        <button class="theme-pill-btn" id="theme-pill-btn" title="Change theme"></button>
+        <div class="theme-menu" id="theme-menu">
+          <button class="tm-item" data-theme="dark">◼ Default</button>
+          <button class="tm-item" data-theme="light">◻ Light</button>
+          <button class="tm-item" data-theme="matrix">▓ Matrix</button>
+          <button class="tm-item" data-theme="hp">✦ Harry Potter</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+<script>
+(function () {
+  var page = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
+  document.querySelectorAll('header nav .nav-btn').forEach(function (a) {
+    if (a.getAttribute('data-nav') === page) a.classList.add('active');
+  });
+})();
+</script>

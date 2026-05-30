@@ -40,7 +40,8 @@ COMMUNITY_NODES_PATH = os.environ.get(
     "GRIN_COMMUNITY_NODES",
     os.path.join(os.path.dirname(DB_PATH), "community_nodes.json"),
 )
-FAIL_THRESHOLD = 3    # consecutive failed checks before auto-removing a community node
+FAIL_THRESHOLD = 168  # consecutive failed hourly checks before auto-removing a
+                      # community node (168 = 7 days). Tolerates reboots/flaky uplinks.
 
 # ── DNS seed lists ─────────────────────────────────────────────────────────────
 # Edit 06_dns_seeds.json to add/remove seeds or update pending-DNS notes.
@@ -293,7 +294,13 @@ def _parse_rdap_date(s):
     if not s:
         return None
     try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        # Normalize timezone suffix and truncate fractional seconds to 6 digits
+        # (microseconds) so Python < 3.11 fromisoformat doesn't reject 7+ digit
+        # precision returned by some RDAP servers (e.g. ".0000000").
+        import re as _re
+        s = s.strip().replace("Z", "+00:00")
+        s = _re.sub(r"(\.\d{6})\d+", r"\1", s)
+        dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return int(dt.timestamp())
@@ -339,35 +346,71 @@ def _fetch_whois_expiry_raw(registrable):
         return None, f"whois error: {exc}"
 
 
-def _fetch_rdap_expiry(registrable):
-    """Return (expiry_ts, registered_ts, reason) via RDAP (rdap.org).
-    Covers all gTLDs including .io/.live/.money/.fail/.stream/.vip — stdlib only,
-    no pip dependency. Returns (None, None, reason) on any failure so caller
-    can fall back to whois binary or 06_domains_exceptions.json."""
-    url = f"https://rdap.org/domain/{registrable}"
-    try:
-        req = urllib.request.Request(url, headers={"Accept": "application/rdap+json"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as exc:
-        return None, None, f"RDAP HTTP {exc.code}"
-    except Exception as exc:
-        return None, None, f"RDAP error: {exc}"
+# TLDs whose registries have their own RDAP servers that rdap.org fails to
+# bootstrap correctly. Queried directly when rdap.org returns an error.
+# Donuts manages .live/.money/.fail/.stream/.vip and many others.
+_RDAP_DIRECT = {
+    "live":   "https://rdap.donuts.co/rdap",
+    "money":  "https://rdap.donuts.co/rdap",
+    "fail":   "https://rdap.donuts.co/rdap",
+    "stream": "https://rdap.donuts.co/rdap",
+    "vip":    "https://rdap.donuts.co/rdap",
+}
 
+
+def _parse_rdap_response(data, registrable):
+    """Extract (expiry_ts, registered_ts, reason) from a parsed RDAP JSON dict."""
     expiry_ts = registered_ts = None
     for event in data.get("events", []):
         action = event.get("eventAction", "").lower()
         ts = _parse_rdap_date(event.get("eventDate", ""))
-        if action == "expiration":
+        # RFC 7483 uses "expiration"; some registrars (e.g. Donuts) use "expiry"
+        if action in ("expiration", "expiry"):
             if ts is not None and (expiry_ts is None or ts > expiry_ts):
                 expiry_ts = ts
         elif action == "registration":
             if ts is not None and (registered_ts is None or ts < registered_ts):
                 registered_ts = ts
-
     if expiry_ts is None:
         return None, registered_ts, "RDAP returned no expiration event"
     return expiry_ts, registered_ts, None
+
+
+def _rdap_fetch(url):
+    """Fetch and parse an RDAP URL. Returns (data_dict, error_str)."""
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/rdap+json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode()), None
+    except urllib.error.HTTPError as exc:
+        return None, f"RDAP HTTP {exc.code}"
+    except Exception as exc:
+        return None, f"RDAP error: {exc}"
+
+
+def _fetch_rdap_expiry(registrable):
+    """Return (expiry_ts, registered_ts, reason) via RDAP.
+    Tries rdap.org first; if that fails, falls back to the registry's own RDAP
+    server for TLDs known not to be bootstrapped correctly by rdap.org (e.g.
+    Donuts TLDs: .live .money .fail .stream .vip).
+    Returns (None, None, reason) on failure so the caller can fall back to the
+    whois binary or 06_domains_exceptions.json."""
+    tld = registrable.rsplit(".", 1)[-1].lower()
+
+    # Tier 1: rdap.org (covers most gTLDs)
+    data, err = _rdap_fetch(f"https://rdap.org/domain/{registrable}")
+    if data is not None:
+        return _parse_rdap_response(data, registrable)
+
+    # Tier 2: direct registry RDAP for TLDs rdap.org can't bootstrap
+    direct_base = _RDAP_DIRECT.get(tld)
+    if direct_base:
+        data, err2 = _rdap_fetch(f"{direct_base}/domain/{registrable}")
+        if data is not None:
+            return _parse_rdap_response(data, registrable)
+        err = err2  # report the direct-registry error if both fail
+
+    return None, None, err or "RDAP unavailable"
 
 
 def cmd_whois(conn, force=False):
@@ -515,10 +558,12 @@ def _check_external_nodes():
         for proto, entries in protos.items()
         for entry in entries
     ]
-    # Community items (https only — Tor is not supported for community nodes)
+    # Community items — .onion nodes are checked over Tor, the rest over https.
     for net, nodes in community.items():
         for n in nodes:
-            items.append((net, "https", n["url"], n["url"]))
+            host  = (urllib.parse.urlparse(n["url"]).hostname or "").lower()
+            proto = "tor" if host.endswith(".onion") else "https"
+            items.append((net, proto, n["url"], n["url"]))
 
     with ThreadPoolExecutor(max_workers=10) as ex:
         futures = [ex.submit(check_one, net, proto, e, comm) for net, proto, e, comm in items]

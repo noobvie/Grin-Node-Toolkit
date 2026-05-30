@@ -19,7 +19,7 @@
 #      ● Node must be running and listening on port 3413 (mainnet)
 #
 #   2. Nginx + Certbot
-#      ● Use option N) in this script's main menu to install nginx + certbot
+#      ● Use option N) in this script's main menu to install nginx + certbot + whois
 #      ● This script creates its own nginx site configs (option A→5 and B→5)
 #
 #   3. DNS records  (external — must be done BEFORE running nginx setup)
@@ -29,7 +29,7 @@
 #
 # RECOMMENDED SETUP ORDER (first time):
 #   [Script 01]  Install + sync a Grin mainnet node (pruned is fine for stats)
-#   [Script 06]  N) Install Nginx + Certbot
+#   [Script 06]  N) Install Nginx + Certbot + Whois
 #   [DNS panel]  Point your subdomains to this server's IP address
 #   [Script 06]  A: 1 Install → 2 Import History → 3 Start Updates → 5 Nginx
 #                B: 1 Install & Build → 2 Configure → 3 Start → 5 Nginx
@@ -110,15 +110,16 @@ require_root() {
     [[ $EUID -eq 0 ]] || die "This action requires root / sudo."
 }
 
-# ─── Install nginx + certbot ──────────────────────────────────────────────────
+# ─── Install nginx + certbot + whois ─────────────────────────────────────────
 install_nginx_certbot() {
     require_root
     clear
-    echo -e "\n${BOLD}${CYAN}── Install Nginx + Certbot ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── Install Nginx + Certbot + Whois ──${RESET}\n"
 
-    local nginx_ok=0 certbot_ok=0
+    local nginx_ok=0 certbot_ok=0 whois_ok=0
     command -v nginx   &>/dev/null && nginx_ok=1
     command -v certbot &>/dev/null && certbot_ok=1
+    command -v whois   &>/dev/null && whois_ok=1
 
     if [[ $nginx_ok -eq 1 ]]; then
         success "Nginx already installed:   $(nginx -v 2>&1)"
@@ -126,11 +127,14 @@ install_nginx_certbot() {
     if [[ $certbot_ok -eq 1 ]]; then
         success "Certbot already installed: $(certbot --version 2>&1)"
     fi
-    if [[ $nginx_ok -eq 1 && $certbot_ok -eq 1 ]]; then
+    if [[ $whois_ok -eq 1 ]]; then
+        success "Whois already installed:   $(whois --version 2>&1 | head -1)"
+    fi
+    if [[ $nginx_ok -eq 1 && $certbot_ok -eq 1 && $whois_ok -eq 1 ]]; then
         pause; return
     fi
 
-    echo -ne "${BOLD}Install nginx + certbot now? [Y/n/0]: ${RESET}"
+    echo -ne "${BOLD}Install nginx + certbot + whois now? [Y/n/0]: ${RESET}"
     read -r confirm
     [[ "$confirm" == "0" ]] && return
     [[ "${confirm,,}" == "n" ]] && return
@@ -152,8 +156,14 @@ install_nginx_certbot() {
         success "Certbot installed."
     fi
 
-    success "Nginx + Certbot are ready."
-    log "nginx + certbot installed"
+    if [[ $whois_ok -eq 0 ]]; then
+        info "Installing whois..."
+        apt-get install -y whois -qq
+        success "Whois installed."
+    fi
+
+    success "Nginx + Certbot + Whois are ready."
+    log "nginx + certbot + whois installed"
     pause
 }
 
@@ -285,6 +295,10 @@ install_submit_server() {
     }
 
     info "Installing community node submit server..."
+    # The submit server reaches .onion nodes through the local Tor SOCKS proxy to
+    # auto-detect their network — ensure tor + python SOCKS are present regardless
+    # of entry point (idempotent; returns early if already installed).
+    ensure_tor_socks || true
     cp "$SCRIPT_DIR/lib/06_node_submit_server.py" "$SUBMIT_SERVER_BIN"
     chmod +x "$SUBMIT_SERVER_BIN"
 
@@ -307,7 +321,8 @@ EOF
     cat > "/etc/systemd/system/${SUBMIT_SERVER_SERVICE}.service" <<UNIT
 [Unit]
 Description=Grin Community Node Submit Server
-After=network.target
+After=network.target tor.service
+Wants=tor.service
 
 [Service]
 Type=simple
@@ -1794,7 +1809,7 @@ show_main_menu() {
     echo ""
     echo -e "${DIM}  ─────────────────────────────────────────────${RESET}"
     echo ""
-    echo -e "  ${GREEN}N${RESET})   Install Nginx + Certbot  ${DIM}install nginx + certbot on this machine${RESET}"
+    echo -e "  ${GREEN}N${RESET})   Install Nginx + Certbot + Whois  ${DIM}install nginx, certbot, and whois (domain expiry lookup)${RESET}"
     echo ""
     echo -e "${DIM}  ─────────────────────────────────────────────${RESET}"
     echo ""

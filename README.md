@@ -45,17 +45,16 @@ Free Grin Coin Portal: https://drop.grin.money/
 
 - **Linux — supported distributions:**
   - Ubuntu 22.04 LTS or later — **fully tested and recommended**
-  - Rocky Linux 10 or later — **fully tested**
-  - AlmaLinux 10 or later — **fully tested**
-  - Other Debian-based distros (Debian, Mint, Pop!\_OS, Kali, etc.) — best effort, not guaranteed
+  - Other Debian-based distros (Debian, Mint, Pop!\_OS, Kali, etc.) — best effort, **not fully tested**
+  - Rocky Linux / AlmaLinux 10+ (RHEL clones) — **experimental, may not work** (not fully tested; use at your own risk)
   - Rocky Linux / AlmaLinux 9 or older — **not supported** (glibc too old); upgrade instructions shown at startup
-  - Other non-Debian systems (RHEL, Fedora, Arch, etc.) — **not supported, script will exit**
+  - Other systems (Fedora, Arch, etc.) — **not supported, script will exit**
 - `bash` 4.0+
 - `curl`, `wget`, `jq`, `tar`, `tmux` (installed automatically where possible)
 - Root / `sudo` access for system-level operations
 - **Free disk space: 10 GB minimum** (pruned mode) — more recommended for full archive or hosting snapshots
 
-> The main script checks your OS at startup. Unsupported distros exit immediately with a clear error. Rocky/AlmaLinux older than version 10 receive upgrade instructions instead of a hard stop.
+> **Ubuntu is the only fully tested platform.** The main script checks your OS at startup. Unsupported distros exit immediately with a clear error. Rocky/AlmaLinux 10+ may run but are experimental and not fully tested; older Rocky/Alma versions receive upgrade instructions instead of a hard stop.
 
 ---
 
@@ -136,48 +135,39 @@ Grin Node Toolkit
 │   │   ├── 5) Public Web Wallet         → 055_grin_public_web_wallet.sh  (coming soon)
 │   │   └── 0) Back to main menu
 │   ├── 6) Global Grin Health            → 06_global_grin_health.sh
-│   │   ├── A) Network Stats + Peer Map
-│   │   │   ├── A1) Install (Python collector, Chart.js, Leaflet)
-│   │   │   ├── A2) Import full history (backfill from genesis)
-│   │   │   ├── A3) Start periodic updates (cron every 5 min)
-│   │   │   ├── A4) Stop updates
-│   │   │   ├── A5) Setup nginx (stats.yourdomain.com)
-│   │   │   └── A6) Status
-│   │   ├── B) Grin Explorer              (aglkm/grin-explorer — Rust + Rocket)
-│   │   │   ├── B1) Install (cargo build --release)
-│   │   │   ├── B2) Configure (Explorer.toml)
-│   │   │   ├── B3) Start
-│   │   │   ├── B4) Stop
-│   │   │   ├── B5) Setup nginx (explorer.yourdomain.com)
-│   │   │   └── B6) Status
+│   │   ├── N) Install Nginx + Certbot + Whois
+│   │   ├── A) Network Stats + Peer Map   (stats.yourdomain.com — Python collector → Chart.js + Leaflet)
+│   │   │   ├── 1) Install (collector, Chart.js, Leaflet)
+│   │   │   ├── 2) Import data (backfill 180d / 90d / full history)
+│   │   │   ├── 3) Start periodic updates (cron every 5 min)
+│   │   │   ├── 4) Stop updates / 5) Setup nginx / 6) Status
+│   │   │   └── Collector tasks a–k (init DB, backfill, incremental,
+│   │   │       peers geolocation, inflation data: USD M2 + Gold)
+│   │   ├── B) GrinScan — Lightweight Block Explorer  (Node.js, ports 3010/3011)
+│   │   │   ├── 1) Install        (Node.js + systemd grinscan-{test,main})
+│   │   │   ├── 2) Configure      (config.json per net, copies node secrets)
+│   │   │   ├── 3) Service control (start / stop / restart)
+│   │   │   ├── 5) Setup nginx    (grinscan.yourdomain.com + SSL)
+│   │   │   └── Logs / Status
 │   │   └── 0) Back
-│   ├── 7) Grin Mining Services          → 07_grin_mining_services.sh
-│   │   ├── A) Node Status               (running nodes, tmux sessions, binary path)
-│   │   ├── H) Mining Status             (ports, miners connected, toml values)
+│   ├── 7) Grin Solo Mining              → 07_grin_mining_solo.sh
+│   │   ├── A) Node & Mining Status      (node sync, tmux, stratum config + miner count)
 │   │   ├── Mainnet Stratum (port 3416)
-│   │   │   ├── B) Setup Stratum         (enable_stratum_server, wallet_listener_url)
-│   │   │   ├── C) Configure Stratum     (wallet URL, burn_reward, toggle enable)
-│   │   │   ├── D) Publish Stratum       (0.0.0.0:3416 + firewall)
+│   │   │   ├── B) Setup Stratum         (enable stratum_server in grin-server.toml)
+│   │   │   ├── C) Configure Stratum     (wallet address, burn_reward, timeout)
+│   │   │   ├── D) Publish Stratum       (open 0.0.0.0:3416 to miners + firewall)
 │   │   │   └── E) Restrict Stratum      (revert to 127.0.0.1:3416)
 │   │   ├── Testnet Stratum (port 13416)
-│   │   │   ├── F) Setup Stratum         (enable_stratum_server, wallet_listener_url)
-│   │   │   ├── G) Configure Stratum     (wallet URL, burn_reward, toggle enable)
-│   │   │   ├── I) Publish Stratum       (0.0.0.0:13416 + firewall)
+│   │   │   ├── F) Setup Stratum
+│   │   │   ├── G) Configure Stratum
+│   │   │   ├── I) Publish Stratum       (open 0.0.0.0:13416 + firewall)
 │   │   │   └── J) Restrict Stratum      (revert to 127.0.0.1:13416)
-│   │   ├── W) Pool Web Interface        → FastAPI pool manager (mainnet :3002 / testnet :3003)
-│   │   │   ├── 0) Guided Full Setup     (runs 1→2→3→4→5→6)
-│   │   │   ├── 1) Install               (python3, pip, fastapi, uvicorn, systemd)
-│   │   │   ├── 2) Configure             (pool name, domain, fee, wallet)
-│   │   │   ├── 3) Deploy web files      (→ /var/www/grin-pool/)
-│   │   │   ├── 4) Setup nginx           (vhost + SSL + rate limits)
-│   │   │   ├── 5) Setup admin account   (create first admin user)
-│   │   │   ├── 6) Start / Stop          (systemd grin-pool-manager)
-│   │   │   ├── 7) Pool status           (service, DB, recent logs)
-│   │   │   ├── B) Backup                (DB + config → /opt/grin/backups/)
-│   │   │   ├── C) Cron schedules        (daily backup + weekly VACUUM)
-│   │   │   ├── L) View logs
-│   │   │   └── DEL) Reset database      (triple-confirm wipe)
+│   │   ├── Tools
+│   │   │   ├── L) Live stats            (terminal dashboard, refresh every 10s)
+│   │   │   ├── S) Stats web page        (deploy static nginx mining stats page)
+│   │   │   └── W) Watchdog cron         (alert if stratum drops after node restart)
 │   │   └── 0) Back
+│   │   (Mining pool — PPLNS, Node.js web UI, Tor auto-pay — coming soon)
 │   └── 8) Admin & Maintenance           → 08_grin_node_admin.sh
 │       ├── 1) Remote Node Monitor       (081_host_monitor_port.sh — also cron-ready)
 │       │   ├── 1) Run check now         (registry hosts first, then custom conf hosts)
@@ -262,29 +252,26 @@ Once your node is publicly sharing chain data via nginx (options A → B → E),
 - Exposes `/v2/foreign` only via nginx HTTPS reverse proxy; blocks `/v2/owner` (returns 403)
 - Enables light wallets, block explorers, and tools to query your node
 
-### 7. Grin Mining Services — `07_grin_mining_services.sh`
+### 7. Grin Solo Mining — `07_grin_mining_solo.sh`
 
-Manages Stratum Mining and the self-hosted Pool Web Interface — all from an alphabet menu (A–J, W).
+Configures and manages **solo mining** on a Grin node — enables the node's built-in stratum server, sets your wallet reward address, and publishes the port so miners can connect directly. All from an alphabet menu (A–J, plus tools L/S/W).
+
+> **Solo mining pays block rewards directly to your listening wallet** (via `wallet_listener_url`) — no Tor, no pool, no third party. You keep the full coinbase of every block you find.
 
 **Stratum management (per-network — no shared prompts):**
-- **A) Node Status** — running node info per network: PID, binary path, tmux session, stratum port state
+- **A) Node & Mining Status** — per network: node sync state, PID, binary path, tmux session, stratum port + bind, connected miner count, current toml settings
 - **B/F) Setup Stratum** — enables `enable_stratum_server = true`, sets `wallet_listener_url`; B = mainnet, F = testnet
-- **C/G) Configure Stratum** — change any toml setting interactively; prompts graceful node restart
+- **C/G) Configure Stratum** — change wallet address, `burn_reward`, timeout and other toml settings interactively; prompts graceful node restart
 - **D/I) Publish Stratum** — patches `grin-server.toml` to `0.0.0.0:PORT`, opens firewall; D = mainnet (3416), I = testnet (13416)
 - **E/J) Restrict Stratum** — reverts bind to `127.0.0.1:PORT`, closes firewall port
-- **H) Mining Status** — per-network: port listening, connected miners (ESTAB TCP), full toml settings, miner connect URL
 - Auto-detects `grin-server.toml` via running process (`/proc/$pid/exe`) or known toolkit directories
 
-**W) Pool Web Interface — FastAPI mining pool manager:**
-- Full self-hosted Grin mining pool with share accounting, user dashboards, slatepack withdrawals, and admin panel
-- Mainnet (port 3002) and testnet (port 3003) deployed independently with separate DBs, services, and nginx vhosts
-- **Share accounting** — monitors stratum log every 10s; maps `username.N` workers to registered users; distributes 60 GRIN per block proportionally
-- **Auth** — JWT (1h access + 7d refresh), bcrypt passwords, 5-failed-login → 15min IP lockout
-- **Withdrawals** — 3-step slatepack flow identical to the testnet faucet: init_send → user finalizes in wallet → confirmed; 5-min timeout with automatic balance restore
-- **Admin panel** — KPI dashboard, live system health (30s refresh), user management, miner overview, manual payment triggers; testnet only: "Inject Balance" for UI testing
-- **5 CSS themes** — Matrix (default, canvas rain), Dark (navy), Light (white), Naruto (orange), Japan (pink + CSS sakura petals)
-- **Guided setup** — option 0 runs install → configure → deploy → nginx → admin in sequence
-- Testnet UI: permanent yellow `⚠ TESTNET` banner, `[TESTNET]` in page title, "Inject Balance" button visible
+**Tools:**
+- **L) Live stats** — terminal dashboard refreshing every 10s
+- **S) Stats web page** — deploys a static nginx mining stats page
+- **W) Watchdog cron** — alerts if the stratum server drops after a node restart
+
+> **Mining pool — coming soon.** A full self-hosted pool (PPLNS reward model, address-as-identity, Tor-only auto-pay, Node.js web dashboard + admin panel) is in development as a separate component. The current script 07 covers solo mining only.
 
 ### 5. Grin Wallet Services — `05_grin_wallet_service.sh` (hub) + `051`–`055`
 
@@ -293,20 +280,21 @@ Manages Stratum Mining and the self-hosted Pool Web Interface — all from an al
 > **Tip:** Install each service on its own dedicated server to avoid port conflicts and config collisions. Each server can run both mainnet and testnet simultaneously.
 
 **051 — Private Web Wallet** (`051_grin_private_web_wallet.sh`)
-- Personal browser UI for your own wallet — nginx + PHP + Basic Auth (owner-only, not public)
-- Mainnet wallet at `/opt/grin/webwallet/mainnet/`, testnet at `/opt/grin/webwallet/testnet/`
-- Setup: install deps → deploy web files → configure nginx → SSL → Basic Auth → firewall
+- Personal browser UI for your own wallet — **Node.js** (ported from GrinSuite) + nginx + Basic Auth (owner-only, not public)
+- **One Node.js process serves many wallets across both networks** — app at `/opt/grin/webwallet/app/`, single shared `grin-wallet` binary, per-wallet dirs `/opt/grin/webwallet/wallet_<net>_<name>/`, registry `wallets_info.json`
+- nginx reverse-proxies `127.0.0.1:7420`; Tor + qrencode supported
+- Setup: install deps (nodejs, nginx, certbot, htpasswd, tor, qrencode) → deploy files + systemd → nginx → SSL → Basic Auth → firewall
 
 **052 — Grin Drop** (`052_grin_drop.sh`)
-- Configurable GRIN giveaway + donation portal — Flask + systemd
+- Configurable GRIN giveaway + donation portal — **Node.js/Express + SQLite (`node:sqlite`)** + systemd
 - **Giveaway mode**: interactive 3-step slatepack claim, rate-limited per address per 24h
 - **Donation mode**: shows wallet address + QR code for receiving GRIN
 - Both modes are independently toggleable; works on testnet (default) or mainnet
-- Testnet service: `grin-drop-test` (port 3004); mainnet: `grin-drop-main` (port 3005)
+- Testnet service: `grin-drop-test` (port 3004, `/opt/grin/drop-test/`); mainnet: `grin-drop-main` (port 3005, `/opt/grin/drop-main/`)
 
 **053 — WooCommerce Payment Gateway** (`053_grin_woocommerce.sh`)
-- Grin payment plugin for WordPress / WooCommerce
-- Stateless Flask bridge (`grin-wallet-bridge.py`) on `127.0.0.1:3006` (mainnet) / `3007` (testnet)
+- Grin payment plugin for WordPress / WooCommerce — **PHP plugin** + **Node.js/Express bridge** (`server.js`)
+- Bridge proxies the PHP plugin to the local grin-wallet **Owner API** (3420 mainnet / 13420 testnet); listens on `127.0.0.1:3006` (mainnet) / `3007` (testnet), config in `/opt/grin/woocommerce/{mainnet,testnet}/`
 - Slatepack invoice flow: buyer copies invoice slate → pastes response → auto-confirmed
 
 **054 — Payment Pro** (`054_grin_payment_pro.sh`) — *coming soon*
@@ -343,17 +331,15 @@ A self-hosted network monitoring dashboard with two components that share a sing
 - Smart sampling: every block for last 24 h, hourly for last 30 d, daily for full chain history → SQLite DB under 3 MB
 - Fully responsive — works on mobile browsers
 
-*Collector (`06_collector.py`)*
-- Modes: `--init-db`, `--init-history` (backfill all 2.1 M blocks), `--update`, `--peers-only`
-- Geo-location via ip-api.com batch API (no key required, 100 IPs/request)
-- Dual-network: queries mainnet (port 3413) and testnet (port 13413) owner APIs independently
-- Atomic JSON writes (`os.replace`) — safe for concurrent browser reads
+*Collector (`scripts/lib/06_collector.py`)*
+- Backfills and incrementally updates blocks, peers, and inflation-comparison data into SQLite; geo-locates peers via ip-api.com
+- Queries mainnet (3413) and testnet (13413) owner APIs independently
+- Companion collectors in `scripts/lib/`: `06_price_collector.py`, `06_ecosystem_checker.py`, `06_node_submit_server.py`
 
-**B) Grin Explorer** — served at `explorer.yourdomain.com`
-- Automates clone + `cargo build --release` of [aglkm/grin-explorer](https://github.com/aglkm/grin-explorer) (Rust + Rocket)
-- Configures `Explorer.toml`, manages systemd-style start/stop via `nohup`
-- nginx reverse proxy to `127.0.0.1:8000`
-- Note: initial build takes 10–30 min and requires ~2 GB disk for Rust toolchain
+**B) GrinScan — Lightweight Block Explorer** (Node.js) — served at `grinscan.yourdomain.com`
+- Self-hosted Express block explorer (`web/06b_grinscan/`) — powers [grinscan.org](https://grinscan.org) / [test.grinscan.org](https://test.grinscan.org)
+- Testnet on port `3010`, mainnet on `3011`; systemd `grinscan-{test,main}`
+- Configure writes `config.json` per network and copies node API secrets into `/opt/grin/grinscan/{test,main}/`
 
 ### 8. Admin & Maintenance — `08_grin_node_admin.sh`
 
@@ -421,67 +407,35 @@ grin-node-toolkit/
 │   ├── 054_grin_payment_pro.sh           # Feature 5d: payment pro (coming soon)
 │   ├── 055_grin_public_web_wallet.sh     # Feature 5e: public WASM wallet (coming soon)
 │   ├── 06_global_grin_health.sh          # Feature 6 : Global Grin Health menu
-│   ├── 06_collector.py                   # Feature 6 : Python stats + peer collector
-│   ├── 07_grin_mining_services.sh        # Feature 7 : stratum mining services
+│   ├── 07_grin_mining_solo.sh            # Feature 7 : solo (stratum) mining
 │   ├── 08_grin_node_admin.sh             # Addon  8 : admin & maintenance menu
 │   ├── 081_host_monitor_port.sh          # Remote node port monitor (standalone / cron)
-│   └── 08del_clean_all_grin_things.sh    # Full Grin removal (nuclear cleanup)
+│   ├── 08del_clean_all_grin_things.sh    # Full Grin removal (nuclear cleanup)
+│   └── lib/                              # Sourced libs + collectors + data files
+│       ├── 06_collector.py               # Stats + peer collector (Python)
+│       ├── 06_price_collector.py         # GRIN price collector
+│       ├── 06_ecosystem_checker.py       # Ecosystem site checker
+│       ├── 06_node_submit_server.py      # Community node submission server
+│       ├── 06b_grinscan.sh               # GrinScan install/configure helpers
+│       ├── 052_lib_*.sh                  # Grin Drop libs (app, wallet, nginx, admin)
+│       └── nginx_shared_helpers.sh       # Shared nginx rate-limit zone helpers
 └── web/
-    ├── 04_node_api/
-    │   ├── public_html/                  # Feature 4 : Node API status page assets
-    │   ├── rest-collector.py             # REST API JSON collector
-    │   └── node-collector.py             # Node data collector
-    ├── 051_wallet/                       # Feature 5a: Private Web Wallet
-    │   ├── public_html/                  # PHP proxy + JS + CSS (deployed to /var/www/web-wallet-{main,test}/)
-    │   └── nginx.conf.template           # nginx vhost template
-    ├── 052_drop/                         # Feature 5b: Grin Drop (giveaway + donation)
-    │   ├── app/                          # Flask backend (deployed to /opt/grin/drop-{main,test}/)
-    │   │   ├── app_drop.py               # Flask routes + activity logger
-    │   │   ├── db_drop.py                # SQLite schema + helpers
-    │   │   ├── wallet_drop.py            # grin-wallet CLI integration
-    │   │   ├── config_drop.py            # Reads /opt/grin/drop-{net}/grin_drop.conf
-    │   │   └── requirements.txt
-    │   └── public_html/                  # Static frontend (deployed to /var/www/grin-drop-{main,test}/)
-    │       ├── index.html                # 3-step claim form + donation section
-    │       ├── css/                      # Base styles + CSS variables + themes
-    │       └── js/                       # drop.js · theme.js · matrix.js
-    ├── 053_woocommerce/                  # Feature 5c: WooCommerce payment gateway
-    │   ├── bridge/                       # Flask bridge (deployed to /opt/grin/woo-{main,test}/)
-    │   │   ├── grin-wallet-bridge.py     # Stateless Flask bridge (127.0.0.1:3006/3007)
-    │   │   └── requirements.txt
-    │   └── wp-plugin/                    # WordPress plugin (copy to wp-content/plugins/)
-    ├── 054_payment_pro/                  # Feature 5d: Payment Pro (coming soon)
-    └── 055_public_wallet/               # Feature 5e: Public WASM Wallet (coming soon)
-        └── public_html/                  # Static HTML/JS/CSS/WASM (deployed to /var/www/grin-public-wallet/)
-            ├── index.html
-            ├── css/
-            └── js/                       # grin-wallet-wasm.js · grin-wallet-wasm.wasm · wallet-ui.js
-    ├── 06_stats_map/
-    │   └── stats/                        # Feature 6 : Network stats + peer map assets
-    │       ├── index.html                # Peer Map (Leaflet 2D map)
-    │       ├── stats.html                # Network Stats dashboard (Chart.js)
-    │       └── chart.min.js              # Chart.js bundle (copy before deploy)
-    └── 07_pool/                          # Feature 7 : Pool Web Interface
-        ├── pool-manager/                 # FastAPI backend (deployed to /opt/grin/pool/<net>/)
-        │   ├── main.py                   # All API routes (public + auth + user + admin)
-        │   ├── database.py               # SQLAlchemy models (aiosqlite)
-        │   ├── auth.py                   # JWT + bcrypt + brute-force lockout
-        │   ├── monitor.py                # Stratum log parser + share tracker
-        │   ├── rewards.py                # Block reward distribution (60 GRIN proportional)
-        │   ├── wallet.py                 # grin-wallet CLI slatepack send/finalize
-        │   ├── scheduler.py              # APScheduler background jobs
-        │   ├── config.py                 # Reads /opt/grin/conf/grin_pool[_testnet].json
-        │   └── requirements.txt
-        └── public_html/                  # Static frontend (deployed to /var/www/grin-pool/)
-            ├── index.html                # Public homepage (stats + mining setup)
-            ├── login.html                # Login + Register tabs
-            ├── dashboard.html            # User stats + hashrate charts
-            ├── withdraw.html             # 3-step slatepack withdrawal
-            ├── admin/                    # Admin pages (index, health, users, miners, payments)
-            ├── css/pool.css              # Base styles + CSS variables
-            ├── css/themes/               # matrix · dark · light · naruto · japan
-            └── js/                       # api.js · theme.js · charts.js · withdraw.js · matrix.js
+    ├── 04_node_api/                      # Feature 4 : Node API status page + collectors
+    ├── 051_wallet/                       # Feature 5a: Private Web Wallet (Node.js)
+    │   ├── server.js · package.json      #   → deployed to /opt/grin/webwallet/app/
+    │   └── client/                       #   browser UI (index.html, app.js, css, svg)
+    ├── 052_drop/                         # Feature 5b: Grin Drop (Node.js/Express)
+    │   ├── server/                       #   app.js · db.js · wallet.js · config.js (→ /opt/grin/drop-{main,test}/)
+    │   └── public_html/                  #   static frontend (claim + donation)
+    ├── 053_woocommerce/                  # Feature 5c: WooCommerce gateway
+    │   ├── bridge/                       #   server.js Node/Express bridge (→ /opt/grin/woocommerce/{mainnet,testnet}/)
+    │   └── plugin/                       #   PHP WordPress/WooCommerce plugin
+    ├── 06_stats_map/stats/               # Feature 6 : Network stats + peer map (index.html, stats.html)
+    ├── 06b_grinscan/                     # Feature 6 : GrinScan explorer (server.js + public/)
+    └── 07_mining_pool_solo/stats.html    # Feature 7 : static mining stats page
 ```
+
+> Scripts 054 (Payment Pro) and 055 (Public WASM Wallet) are placeholders — no web files yet. The full PPLNS mining pool (Node.js dashboard) is also still in development.
 
 **Runtime config created on first run** (stored outside the toolkit, under `/opt/grin/conf/`):
 
@@ -490,13 +444,11 @@ grin-node-toolkit/
 | `/opt/grin/conf/grin_instances_location.conf` | Node install paths (written by `01`, read by `03`/`04`/`08`) |
 | `/opt/grin/conf/grin_share_nginx.conf` | Nginx share settings (written/read by `03`) |
 | `/opt/grin/conf/grin_share_ssh.conf` | SSH share settings (written/read by `03`) |
-| `/opt/grin/conf/grin_pool.json` | Pool manager mainnet config (written/read by `07` W menu) |
-| `/opt/grin/conf/grin_pool_testnet.json` | Pool manager testnet config (written/read by `07` W menu) |
 | `/opt/grin/conf/host_monitor_port.conf` | Custom hosts for node monitor (`081`) |
 | `/opt/grin/conf/host_monitor_last_state.conf` | Last-known port state for change detection (`081`) |
 | `/opt/grin/conf/mass_deploy.conf` | Fleet server list for mass deployment (`081`) |
 | `/opt/grin/conf/github_repo.conf` | GitHub repo slug override for self-update (optional) |
-| `/opt/grin/webwallet/{mainnet,testnet}/config.conf` | Private web wallet settings (written/read by `051`) |
+| `/opt/grin/webwallet/config.conf` + `wallets_info.json` | Private web wallet settings + wallet registry (`051`) |
 | `/opt/grin/drop-{main,test}/grin_drop.conf` | Grin Drop config — domain, modes, claim amount (written/read by `052`) |
 
 **Runtime paths created by option 6 install:**
@@ -507,7 +459,7 @@ grin-node-toolkit/
 | `/var/lib/grin-stats/config.env` | Collector config (node URLs, API secret paths) |
 | `/var/www/grin-stats/` | Nginx web root (HTML + JSON data files) |
 | `/usr/local/bin/grin-stats-collector` | Installed collector script |
-| `/opt/grin-explorer/` | Grin Explorer build directory (option B) |
+| `/opt/grin/grinscan/{test,main}/` | GrinScan config + copied node API secrets (option B) |
 
 ---
 
@@ -523,12 +475,13 @@ grin-node-toolkit/
 | 13414 | P2P      | Grin testnet peer connections                               |
 | 13415 | HTTP     | Grin testnet wallet Foreign API                             |
 | 13416 | TCP      | Grin testnet stratum mining server                          |
-| 3002  | HTTP     | Pool manager — mainnet (FastAPI, proxied by nginx)          |
-| 3003  | HTTP     | Pool manager — testnet (FastAPI, proxied by nginx)          |
-| 3004  | HTTP     | Grin Drop — testnet (Flask, proxied by nginx)               |
-| 3005  | HTTP     | Grin Drop — mainnet (Flask, proxied by nginx)               |
-| 3006  | HTTP     | WooCommerce wallet bridge — mainnet (Flask, localhost only) |
-| 3007  | HTTP     | WooCommerce wallet bridge — testnet (Flask, localhost only) |
+| 3004  | HTTP     | Grin Drop — testnet (Node.js, proxied by nginx)             |
+| 3005  | HTTP     | Grin Drop — mainnet (Node.js, proxied by nginx)             |
+| 3006  | HTTP     | WooCommerce bridge — mainnet (Node.js, localhost only)      |
+| 3007  | HTTP     | WooCommerce bridge — testnet (Node.js, localhost only)      |
+| 3010  | HTTP     | GrinScan explorer — testnet (Node.js, proxied by nginx)     |
+| 3011  | HTTP     | GrinScan explorer — mainnet (Node.js, proxied by nginx)     |
+| 7420  | HTTP     | Private Web Wallet — Node.js (localhost, proxied by nginx)  |
 | 80    | HTTP     | nginx (redirects to HTTPS)                                  |
 | 443   | HTTPS    | nginx file server / proxy                                   |
 
@@ -550,12 +503,11 @@ Each wallet service sub-script manages its own wallet in an isolated directory:
 
 | Script | Network | Wallet directory                        |
 |--------|---------|-----------------------------------------|
-| 051 — Private Web Wallet | Mainnet | `/opt/grin/webwallet/mainnet/` |
-| 051 — Private Web Wallet | Testnet | `/opt/grin/webwallet/testnet/` |
+| 051 — Private Web Wallet | Both    | `/opt/grin/webwallet/wallet_<net>_<name>/` (per-wallet) |
 | 052 — Grin Drop          | Mainnet | `/opt/grin/drop-main/wallet/`  |
 | 052 — Grin Drop          | Testnet | `/opt/grin/drop-test/wallet/`  |
-| 053 — WooCommerce bridge | Mainnet | uses existing node wallet (port 3415)   |
-| 053 — WooCommerce bridge | Testnet | uses existing node wallet (port 13415)  |
+| 053 — WooCommerce bridge | Mainnet | uses existing node wallet Owner API (port 3420)  |
+| 053 — WooCommerce bridge | Testnet | uses existing node wallet Owner API (port 13420) |
 
 ---
 

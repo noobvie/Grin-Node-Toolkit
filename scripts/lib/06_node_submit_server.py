@@ -45,6 +45,19 @@ MAX_NODES_PER_NET  = 50   # hard cap per network
 RATE_LIMIT_MAX     = 2    # submissions per IP per window
 RATE_LIMIT_WINDOW  = 3600 # seconds (1 hour)
 
+# Genesis (height-0) header hash → network. This is the only reliable, permanent
+# way to tell mainnet from testnet: both networks serve a fixed genesis block whose
+# header hash never changes. Values from mimblewimble/grin core/src/genesis.rs.
+# Headers are never pruned, so get_header(0) works even on pruned community nodes.
+GENESIS_HASHES = {
+    "40adad0aec27797b48840aa9e00472015c21baea118ce7a2ff1a82c0f8f5bf82": "mainnet",
+    "edc758c1370d43e1d733f70f58cf187c3be8242830429b1676b89fd91ccf2dab": "testnet",
+}
+
+# Local Tor SOCKS5 proxy — used to reach .onion nodes (their Foreign API is not
+# directly routable). Matches the ecosystem checker's proxy convention.
+TOR_SOCKS_PROXY = "socks5h://127.0.0.1:9050"
+
 # Challenge tokens — HMAC-SHA256 over a 15-min time window; no state needed.
 # Key = ADMIN_TOKEN (set at install time). Falls back to a per-process random
 # key so the endpoint still works even if the env var is missing at startup.
@@ -145,34 +158,66 @@ def _validate_url(url):
     return None
 
 
-def _probe_node(url):
-    """Return (ok, tip_height_or_None, error_str_or_None).
-    Tor (.onion) nodes are skipped — the stats server cannot reach them without a Tor proxy."""
-    parsed = urllib.parse.urlparse(url)
-    if (parsed.hostname or "").lower().endswith(".onion"):
-        return True, None, None
-    rpc_url = url.rstrip("/") + "/v2/foreign"
-    payload = json.dumps(
-        {"jsonrpc": "2.0", "method": "get_tip", "params": [], "id": 1}
-    ).encode()
+def _rpc_via_tor(rpc_url, payload):
+    """POST a Foreign API call to an .onion node through the local Tor SOCKS5 proxy.
+    Returns (data_dict_or_None, error_str_or_None)."""
     try:
-        req = urllib.request.Request(
-            rpc_url, data=payload,
+        import requests as _req
+    except ImportError:
+        return None, "Tor support unavailable on the server."
+    proxies = {"http": TOR_SOCKS_PROXY, "https": TOR_SOCKS_PROXY}
+    try:
+        resp = _req.post(
+            rpc_url, data=payload, proxies=proxies, timeout=20,
             headers={
                 "Content-Type": "application/json",
                 "User-Agent": "grin-node-submit/1.0",
             },
         )
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read())
-        r = data.get("result", {})
-        if isinstance(r, dict) and "Ok" in r:
-            return True, r["Ok"].get("height"), None
-        return False, None, "Node responded but returned unexpected JSON."
+        return resp.json(), None
+    except Exception as exc:
+        return None, f"Could not reach Tor node: {exc}"
+
+
+def _probe_node(url):
+    """Return (ok, detected_net_or_None, error_str_or_None).
+
+    Detects the network by reading the genesis (height-0) header hash and matching
+    it against GENESIS_HASHES — so the submitter never has to pick a network and can
+    never pick the wrong one. .onion nodes are reached through the local Tor proxy."""
+    host    = (urllib.parse.urlparse(url).hostname or "").lower()
+    rpc_url = url.rstrip("/") + "/v2/foreign"
+    payload = json.dumps(
+        {"jsonrpc": "2.0", "method": "get_header", "params": [0, None, None], "id": 1}
+    ).encode()
+    try:
+        if host.endswith(".onion"):
+            data, err = _rpc_via_tor(rpc_url, payload)
+            if err:
+                return False, None, err
+        else:
+            req = urllib.request.Request(
+                rpc_url, data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "grin-node-submit/1.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read())
     except urllib.error.HTTPError as exc:
         return False, None, f"Node returned HTTP {exc.code}."
     except Exception as exc:
         return False, None, f"Could not reach node: {exc}"
+
+    r = data.get("result", {})
+    if isinstance(r, dict) and "Ok" in r:
+        genesis_hash = (r["Ok"].get("hash") or "").lower()
+        net = GENESIS_HASHES.get(genesis_hash)
+        if net:
+            return True, net, None
+        return False, None, "Reachable, but not a recognised Grin mainnet or testnet node."
+    return False, None, "Node responded but returned unexpected data."
 
 # ── Request handler ───────────────────────────────────────────────────────────
 
@@ -231,26 +276,24 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         url = params.get("node_url", "").strip().rstrip("/")
-        net = params.get("net", "").strip().lower()
-
-        if net not in ("mainnet", "testnet"):
-            _json(self, 400, {"ok": False, "message": "net must be 'mainnet' or 'testnet'."})
-            return
 
         err = _validate_url(url)
         if err:
             _json(self, 400, {"ok": False, "message": err})
             return
 
-        # Probe before taking the lock (network I/O can be slow)
-        ok, height, probe_err = _probe_node(url)
+        # Probe before taking the lock (network I/O can be slow). The probe also
+        # determines the network from the genesis hash — the submitter does not choose.
+        ok, net, probe_err = _probe_node(url)
         if not ok:
-            _json(self, 400, {"ok": False, "message": f"Node unreachable — {probe_err}"})
+            _json(self, 400, {"ok": False, "message": f"Node rejected — {probe_err}"})
             return
 
         with _lock:
             data = _load_community()
-            existing = {n["url"].rstrip("/").lower() for n in data[net]}
+            # A node belongs to exactly one network; guard against duplicates on either.
+            existing = {n["url"].rstrip("/").lower()
+                        for lst in data.values() for n in lst}
             if url.lower() in existing:
                 _json(self, 409, {"ok": False, "message": "This node is already listed on the community list."})
                 return
@@ -265,9 +308,10 @@ class Handler(BaseHTTPRequestHandler):
             })
             _save_community(data)
 
-        print(f"[SUBMIT] {net} {url} height={height} from {ip}", flush=True)
+        print(f"[SUBMIT] {net} (auto-detected) {url} from {ip}", flush=True)
         _json(self, 200, {"ok": True,
-            "message": "Node submitted! It will appear after the next hourly ecosystem check."})
+            "message": f"Node submitted as {net} (detected automatically). "
+                       "It will appear after the next hourly ecosystem check."})
 
     # ── DELETE /remove-node ───────────────────────────────────────────────────
     def do_DELETE(self):

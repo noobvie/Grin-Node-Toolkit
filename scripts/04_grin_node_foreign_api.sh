@@ -341,10 +341,17 @@ NEW_LOC = (
     '        deny all;\n'
     '    }\n'
     '\n'
-    '    # Serve only known static asset types\n'
-    '    location ~* \\.(html|css|js|svg|ico|png)$ {\n'
+    '    # HTML/JS revalidate every load — they carry the page logic and the generated\n'
+    '    # config.js (GRIN_ONION_URL); a stale copy pins the Tor card to its placeholder.\n'
+    '    location ~* \\.(html|js)$ {\n'
     '        try_files $uri =404;\n'
-    '        add_header Cache-Control "public, max-age=3600";\n'
+    '        add_header Cache-Control "no-cache" always;\n'
+    '    }\n'
+    '\n'
+    '    # Truly-static assets — safe to cache for an hour\n'
+    '    location ~* \\.(css|svg|ico|png)$ {\n'
+    '        try_files $uri =404;\n'
+    '        add_header Cache-Control "public, max-age=3600" always;\n'
     '    }\n'
     '\n'
     '    # Root path — serve index.html only\n'
@@ -360,11 +367,33 @@ NEW_LOC = (
 if action == 'enable':
     if OLD_LOC in txt:
         txt = txt.replace(OLD_LOC, NEW_LOC)
+    # Migration: older deployments cached every asset for an hour, so a stale
+    # node-status.js/config.js pinned the Tor card to its placeholder. Split the old
+    # single-regex block into no-cache html/js + cached static assets.
+    OLD_ASSET_BLOCK = (
+        '    # Serve only known static asset types\n'
+        '    location ~* \\.(html|css|js|svg|ico|png)$ {\n'
+        '        try_files $uri =404;\n'
+        '        add_header Cache-Control "public, max-age=3600";\n'
+        '    }\n')
+    NEW_ASSET_BLOCK = (
+        '    # HTML/JS revalidate every load — they carry the page logic and the generated\n'
+        '    # config.js (GRIN_ONION_URL); a stale copy pins the Tor card to its placeholder.\n'
+        '    location ~* \\.(html|js)$ {\n'
+        '        try_files $uri =404;\n'
+        '        add_header Cache-Control "no-cache" always;\n'
+        '    }\n'
+        '\n'
+        '    # Truly-static assets — safe to cache for an hour\n'
+        '    location ~* \\.(css|svg|ico|png)$ {\n'
+        '        try_files $uri =404;\n'
+        '        add_header Cache-Control "public, max-age=3600" always;\n'
+        '    }\n')
+    if OLD_ASSET_BLOCK in txt:
+        txt = txt.replace(OLD_ASSET_BLOCK, NEW_ASSET_BLOCK)
 elif action == 'disable':
     if NEW_LOC in txt:
         txt = txt.replace(NEW_LOC, OLD_LOC)
-    if NEW_PROXY_TAIL in txt:
-        txt = txt.replace(NEW_PROXY_TAIL, OLD_PROXY_TAIL)
 
 with open(conf_file, 'w') as fh:
     fh.write(txt)
@@ -1199,7 +1228,13 @@ _enable_status_page() {
     find "$deploy_dir" -type f -exec chmod 644 {} \; 2>/dev/null || true
 
     if [[ "$mode" == "Update" ]]; then
-        # Files already live — nginx config unchanged, just reload to pick up new files
+        # Files already live. Re-run the (idempotent) nginx patch so older deployments
+        # pick up the html/js no-cache rule, then reload to serve the new files.
+        _nginx_patch_status "$nginx_conf" "$deploy_dir" enable
+        if ! nginx -t 2>/dev/null; then
+            error "nginx config test failed after update — not reloading. Check $nginx_conf"
+            return
+        fi
         systemctl reload nginx 2>/dev/null || true
         success "Status page updated!"
         info "URL : https://$domain/"
@@ -1238,6 +1273,14 @@ _disable_status_page() {
     if [[ ! -f "$nginx_conf" ]]; then
         warn "No nginx config found for $network. Nothing to revert."
         return
+    fi
+
+    # REST blocks sit inside the status server block, before the catch-all. A lingering
+    # one would split NEW_LOC so the status revert below can't match — and REST can't work
+    # without the status page anyway. Tear REST down first (cron + data dir + nginx block).
+    if grep -q 'location /rest/' "$nginx_conf" 2>/dev/null; then
+        info "REST API is enabled and depends on the status page — removing it first."
+        if [[ "$network" == "mainnet" ]]; then disable_mainnet_rest_api; else disable_testnet_rest_api; fi
     fi
 
     _nginx_patch_status "$nginx_conf" "$deploy_dir" disable
@@ -1919,7 +1962,7 @@ show_api_menu() {
 
     echo -e "${BOLD}${YELLOW}  ╔══════════════════════════════════════════════════╗${RESET}"
     echo -e "${BOLD}${YELLOW}  ║  IMPORTANT — Choose ONE mode only.               ║${RESET}"
-    echo -e "${BOLD}${YELLOW}  ║  Activating both modes will cause port conflicts. ║${RESET}"
+    echo -e "${BOLD}${YELLOW}  ║  Activating both modes will cause port conflicts.║${RESET}"
     echo -e "${BOLD}${YELLOW}  ╚══════════════════════════════════════════════════╝${RESET}"
     echo ""
     echo -e "${DIM}  ─── MODE A: Raw TCP Direct Access ──────────────────${RESET}"

@@ -440,24 +440,40 @@ REST_BLOCK = (
     '    location /rest/ { return 403; }  # block directory listing\n'
     '\n')
 
-if action == 'enable':
-    # Use a stable sentinel instead of the full block for idempotency — the exact
-    # block text may differ from a previous script version, causing a false "not found"
-    # and a duplicate insertion.  Presence of any /rest/ location means it's done.
-    if 'location /rest/' not in txt and CATCH_ALL in txt:
-        txt = txt.replace(CATCH_ALL, REST_BLOCK + CATCH_ALL)
-elif action == 'disable':
-    # Remove current REST_BLOCK if present (exact match)
-    if REST_BLOCK in txt:
-        txt = txt.replace(REST_BLOCK, '')
-    # Also remove any legacy REST block variant left by an older script version.
-    # Matches everything from the REST API comment header to the /rest/ location line.
-    import re
-    txt = re.sub(
+import re
+
+def strip_rest(s):
+    # Remove every form of REST block so re-insertion can't create a duplicate
+    # `location /rest/` (which makes nginx -t fail). Handles: the current block,
+    # an older header-prefixed variant, and a bare header-less leftover.
+    # 1. Current REST_BLOCK, exact match.
+    s = s.replace(REST_BLOCK, '')
+    # 2. Legacy block: REST API comment header through the /rest/ directory line.
+    s = re.sub(
         r'[ \t]*# ── REST API[^\n]*\n(?:[ \t]*#[^\n]*\n)*'
         r'(?:[ \t]+[^\n]+\n)*?'
-        r'[ \t]+location /rest/[^\n]*\n\n',
-        '', txt)
+        r'[ \t]+location /rest/[^\n]*\n\n?',
+        '', s)
+    # 3. Any leftover JSON-serving regex location block (header-less).
+    s = re.sub(
+        r'[ \t]*location ~\* \^/rest/[^\n]*\{\n(?:[^\n]*\n)*?[ \t]*\}\n',
+        '', s)
+    # 4. Any leftover bare single-line /rest/ directory block.
+    s = re.sub(r'[ \t]*location /rest/ \{[^}\n]*\}[^\n]*\n', '', s)
+    # 5. Collapse blank-line runs we may have introduced.
+    s = re.sub(r'\n{3,}', '\n\n', s)
+    return s
+
+if action == 'enable':
+    # Always strip any existing/stale REST block first, then insert the current
+    # one before the catch-all. Self-healing: a partial block (e.g. only the bare
+    # `location /rest/` left by an older version) no longer blocks re-insertion of
+    # the real JSON-serving `location ~* ^/rest/…json$` block.
+    txt = strip_rest(txt)
+    if CATCH_ALL in txt:
+        txt = txt.replace(CATCH_ALL, REST_BLOCK + CATCH_ALL)
+elif action == 'disable':
+    txt = strip_rest(txt)
 
 with open(conf_file, 'w') as fh:
     fh.write(txt)
@@ -1776,7 +1792,8 @@ EOF
     _nginx_patch_rest "$nginx_conf" enable
 
     local _nginx_err; _nginx_err=$(nginx -t 2>&1)
-    if echo "$_nginx_err" | grep -q "successful"; then
+    if echo "$_nginx_err" | grep -q "successful" \
+       && grep -q 'location ~\* \^/rest/' "$nginx_conf"; then
         systemctl reload nginx
         local domain; domain=$(_nginx_domain "$nginx_conf")
         success "REST API enabled for $network!"
@@ -1803,12 +1820,19 @@ EOF
         info "Log file : $LOG_FILE"
         log "REST API enabled: network=$network domain=$domain port=$port rest_dir=$rest_dir cron=$cron_file node_cron=$node_cron_file"
     else
-        error "nginx config test failed — reverting REST changes."
-        echo "$_nginx_err"
+        if echo "$_nginx_err" | grep -q "successful"; then
+            # nginx -t passed but the /rest/ block isn't in the conf — almost always
+            # because the status-page catch-all anchor is missing (status not deployed).
+            error "REST /rest/ block was not inserted — status-page catch-all not found."
+            error "Run option 6 (Deploy / Update status page) first, then enable REST again."
+        else
+            error "nginx config test failed — reverting REST changes."
+            echo "$_nginx_err"
+        fi
         _nginx_patch_rest "$nginx_conf" disable
         rm -f "$cron_file"
         nginx -t 2>/dev/null && systemctl reload nginx || true
-        log "REST API enable FAILED (nginx -t): network=$network"
+        log "REST API enable FAILED: network=$network"
     fi
 }
 

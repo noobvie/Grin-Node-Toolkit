@@ -10,7 +10,7 @@ Run as root/sudo on a remote VPS — not executed locally on this machine.
 - **Web backend:** Node.js/Express + SQLite (script 052, 053, 054, 055)
 - **Web server:** Nginx (vhost management, SSL via certbot)
 - **Process management:** systemd services + tmux sessions
-- **Grin tooling:** grin-wallet binary (Foreign API v2, Owner API v3 ECDH)
+- **Grin tooling:** grin-wallet binary (Foreign API v2, Owner API v3 ECDH). **Note:** "Grim wallet" (GetGrin/grim) is a completely separate GUI wallet project — never conflate with grin-wallet (mimblewimble org).
 - **Other:** Python 3 (stats/price collectors), tor, ufw/iptables
 
 ## Script Numbering Convention
@@ -85,6 +85,10 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
 | Node API (nginx) | `https://api.grin.money` | `https://testapi.grin.money` |
 | Wallet Foreign API | 3415 | 13415 |
 | Wallet Owner API | 3420 | 13420 |
+
+Script 07 (mining pool) adds two operator-configurable ports not in the table above:
+- **Stratum server** — miners connect here; default `3333` (same for both networks)
+- **Pool HTTP API** — monitoring/stats REST API; default `8080` (same for both networks)
 
 Secret files — two per service, each with a Foreign and Owner secret:
 
@@ -162,13 +166,7 @@ code that may run from cron), always prefix the call with `SHELL=/bin/bash`:
 SHELL=/bin/bash tmux new-session -d -s "name" -c "$DIR" "command"
 ```
 
-**Why:** cron sets `SHELL=/bin/sh` in its environment. A `#!/bin/bash` shebang only sets
-the interpreter for the script itself — it does not change the `SHELL` env var inherited
-by child processes. If a tmux server starts (or a new session is created) while `SHELL`
-is `/bin/sh`, all sessions in that server use `sh`, not `bash`. The inline assignment
-`SHELL=/bin/bash tmux ...` passes bash to the tmux server regardless of how it was
-started. Using `export SHELL=/bin/bash` at the top of a wrapper is not sufficient when
-the tmux server was already started by a different process.
+**Why:** cron sets `SHELL=/bin/sh`; a shebang only sets the interpreter, not the env var inherited by tmux child sessions. `export SHELL=` is insufficient if the tmux server was already started by another process — the inline prefix is the only reliable fix.
 
 ## Grin Hashrate Formula (Cuckatoo32)
 
@@ -264,85 +262,52 @@ Name script-specific conf files with a `script##-` prefix to avoid future collis
 4. **Test syntax after changes:** `nginx -t` before any `systemctl reload nginx`.
 
 ### Anti-patterns — don't do this
-**BAD — different files, different rates, same zone name:**
-- Script A writes `zone=grin_api:10m rate=10r/s` to `/etc/nginx/nginx.conf`
-- Script B writes `zone=grin_api:10m rate=30r/m` to `/etc/nginx/conf.d/grin-rate-limit.conf`
-- Result: nginx loads both → "zone already bound" error
+**BAD — name collision:** two scripts define the same zone name with different rates/files → nginx "zone already bound" error.
 
-**BAD — single owner that may not have run:**
-- Script A uses `limit_req zone=grin_api` but defines nothing
-- Script B (the "owner") hasn't been run yet
-- Result: "zero size shared memory zone" error
+**BAD — missing owner:** Script A uses `limit_req zone=grin_api` but Script B (the zone owner) hasn't run yet → "zero size shared memory zone" error.
 
-**GOOD — shared helper, identical content across callers:**
-- Both scripts call `nginx_ensure_grin_api_zone` from `nginx_shared_helpers.sh`
-- Helper writes the same file with the same content; later calls grep-guard out
-- Either script can run first, standalone or together — no conflict, no missing zone
+## Generated & Temporary Files
 
-## Generated & Temporary Files — Centralized Location & Consolidation
+ALL generated docs go to `docs/generated/` — never scatter into `web/`, `flowcharts/`, etc.
 
-**ALL generated documentation, audit reports, security analyses, flowcharts, and temporary
-files must be stored in `docs/generated/` with script prefix, type, and date.**
+**Naming:** `script<XX>_<type>_<optional_service>_<optional_date>.md`
+- `script<XX>` — REQUIRED prefix (e.g. `script07_`, `script04_`)
+- `type` — `design`, `implementation`, `security_audit`, `analysis`, `reference`, `report`
+- `date` — `YYYY-MM-DD` only when multiple versions exist
 
-### Consolidation Strategy
-
-**Avoid over-fragmentation.** Instead of creating 13 separate files for one script,
-consolidate related content into fewer, comprehensive files:
-
+**Max 3 files per script:**
 ```
-ONE SCRIPT = 3 core files maximum:
-  script##_design.md           Architecture, design decisions, schemas, API spec
-  script##_implementation.md   Code examples, deployment, testing, troubleshooting
-  script##_security_audit.md   Vulnerabilities, fixes, compliance findings
+script##_design.md           Architecture, design decisions, schemas, API spec
+script##_implementation.md   Code examples, deployment, testing, troubleshooting
+script##_security_audit.md   Vulnerabilities, fixes, compliance findings
 ```
 
-**Why:** Token efficiency (fewer files to load/manage), better navigation, clearer
-purpose, reduces cognitive load.
+✅ `script07_security_pool_audit_2026-05-15.md` ✅ `script06_reference_health_endpoints.md`  
+❌ `SECURITY_FIXES.md` ❌ `security_pool_audit_2026-05-15.md` (missing script prefix)
 
-**Bad:** 13 files (design spec, implementation guide, deployment guide, testnet guide,
-consolidation summary, 3 backups, 2 audits, 2 reference docs, implementation examples)
+Before creating any `.md` file, check if it should be merged into an existing `script##_[type].md`. If a file becomes permanent, move it to `docs/` and drop the date.
 
-### Location & Naming
-```
-docs/generated/
-  ├── script07_security_pool_audit_2026-05-15.md          Script 07 security audit
-  ├── script04_analysis_node_api_2026-05-15.md            Script 04 analysis
-  ├── script06_reference_health_collector.md              Script 06 reference (no date)
-  └── script##_<type>_<service>_<date>.md                 Pattern for all generated files
-```
+## Script 07 — Mining Pool Architecture
 
-Format: `script<XX>_<type>_<optional_service>_<optional_date>.md`
+Key design decisions (locked in — do not change without user confirmation):
 
-- **script<XX>** — REQUIRED: Script number (e.g., script07, script04, script06) so you know immediately
-- **type** — What kind of file: `security`, `audit`, `analysis`, `reference`, `flowchart`, `report`
-- **service** — Optional service name for clarity (pool, node, wallet, api, etc.)
-- **date** — `YYYY-MM-DD` only if multiple versions exist, otherwise omit
-
-### Examples
-- ✅ `script07_security_pool_audit_2026-05-15.md` — Security audit for Script 07
-- ✅ `script04_audit_foreign_api_2026-05-10.md` — API audit for Script 04
-- ✅ `script06_reference_health_endpoints.md` — Reference doc for Script 06
-- ❌ `security_pool_audit_2026-05-15.md` — Missing script prefix ❌
-- ❌ `SECURITY_FIXES.md` — No script prefix ❌
-
-### Rules
-1. **Never scatter files** — ALL generated docs go to `docs/generated/`
-2. **Always include script prefix** — `script##_` so purpose is immediately clear
-3. **Use lowercase with underscores** — `script07_security_pool_audit_2026-05-15.md`
-4. **Use YYYY-MM-DD dates** — for version tracking when multiple versions exist
-5. **Keep a README.md** — explaining what each file contains
-6. **If a generated file becomes permanent**, move it to `docs/` and remove date/prefix (keep script## if relevant)
-
-**DO NOT** create files like `SECURITY_FIXES.md` scattered across `web/07_mining_pool/`, `flowcharts/`, etc.
-**DO NOT** create .md files without the `script##_` prefix — it must be immediately clear which script/service a file belongs to.
-**DO NOT** create more than 3 core .md files per script — consolidate related content instead.
+- **Identity:** Address-as-identity (2miners style) — miner submits `grin_address.worker_name` as stratum username; no mandatory registration
+- **Payments:** Tor-only auto-pay; slatepack interactive flow dropped entirely; on Tor failure, queue and retry every 6h up to 7 days
+- **Reward model:** PPLNS (default); configurable to Proportional or Solo via admin panel
+- **Block maturity:** 1441 blocks (mainnet) / 100 blocks (testnet) before payout; critical for reorg safety
+- **Orphan detection:** Nonce-based verification job every 6h; reverses payouts if a found block is orphaned
+- **Race conditions:** INSERT OR IGNORE for miner auto-creation; SELECT FOR UPDATE for balance updates
+- **Stack:** Next.js + Tailwind CSS + SQLite (better-sqlite3); systemd process manager (not pm2)
+- **Auth:** Admin-only JWT sessions (bcrypt, IP allowlist, 60 min timeout); miners never need accounts
+- **Config:** Stored in `/opt/grin/conf/grin_pool.json`; all settings via web admin panel — no bash config files
+- **Script 07 role:** Infrastructure only (deploy files, systemd services, backups); business logic lives in pool web code
+- **Testnet mode:** Stratum-only, no web UI; mainnet mode: full pool + web dashboard
+- **No fees by default** (`pool_fee_percent: 0.0`); min withdrawal: 2.0 GRIN
 
 ## Do Not
-- Never run the toolkit scripts locally — they assume a Linux VPS with root access
+- Never run toolkit scripts locally — they assume a Linux VPS with root access
 - Never hardcode wallet API secrets or passwords in scripts
-- Never skip the `bash -n` check before committing a shell script change
-- Never use `--floonet` flag — the correct testnet flag is `--testnet`
+- Never skip `bash -n` syntax check before committing a shell script change
+- Never use `--floonet` — the correct testnet flag is `--testnet`
 - Never mix mainnet and testnet ports or directories
 - Don't add `#!/bin/bash` to lib files — they are sourced, not executed
-- **Never redefine nginx zones/upstreams across multiple scripts** — define once, use everywhere
-- **Never create generated/temporary files without a central location** — use `docs/generated/` with prefixed names and dates

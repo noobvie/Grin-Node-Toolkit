@@ -293,7 +293,13 @@ def _parse_rdap_date(s):
     if not s:
         return None
     try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        # Normalize timezone suffix and truncate fractional seconds to 6 digits
+        # (microseconds) so Python < 3.11 fromisoformat doesn't reject 7+ digit
+        # precision returned by some RDAP servers (e.g. ".0000000").
+        import re as _re
+        s = s.strip().replace("Z", "+00:00")
+        s = _re.sub(r"(\.\d{6})\d+", r"\1", s)
+        dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return int(dt.timestamp())
@@ -358,7 +364,8 @@ def _fetch_rdap_expiry(registrable):
     for event in data.get("events", []):
         action = event.get("eventAction", "").lower()
         ts = _parse_rdap_date(event.get("eventDate", ""))
-        if action == "expiration":
+        # RFC 7483 uses "expiration"; some registrars (e.g. Donuts) use "expiry"
+        if action in ("expiration", "expiry"):
             if ts is not None and (expiry_ts is None or ts > expiry_ts):
                 expiry_ts = ts
         elif action == "registration":

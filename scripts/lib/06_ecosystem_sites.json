@@ -41,8 +41,11 @@
   {"category": "Grin API — Mainnet", "name": "api.grin.money",        "url": "https://api.grin.money",        "since": 2026},
   {"category": "Grin API — Mainnet", "name": "api.grinily.com",       "url": "https://api.grinily.com",       "since": 2026},
   {"category": "Grin API — Mainnet", "name": "api.onlygrins.com",     "url": "https://api.onlygrins.com",     "since": 2026},
+  {"category": "Grin API — Mainnet", "name": "api.grinnode.org",      "url": "https://api.grinnode.org",      "since": 2026},
 
   {"category": "Grin API — Testnet", "name": "testapi.grin.money",    "url": "https://testapi.grin.money",    "since": 2026},
   {"category": "Grin API — Testnet", "name": "testapi.grinily.com",   "url": "https://testapi.grinily.com",   "since": 2026},
-  {"category": "Grin API — Testnet", "name": "testapi.onlygrins.com", "url": "https://testapi.onlygrins.com", "since": 2026}
+  {"category": "Grin API — Testnet", "name": "testapi.onlygrins.com", "url": "https://testapi.onlygrins.com", "since": 2026},
+  {"category": "Grin API — Testnet", "name": "testapi.grinnode.org",  "url": "https://testapi.grinnode.org",  "since": 2026}
+
 ]

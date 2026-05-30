@@ -345,21 +345,20 @@ def _fetch_whois_expiry_raw(registrable):
         return None, f"whois error: {exc}"
 
 
-def _fetch_rdap_expiry(registrable):
-    """Return (expiry_ts, registered_ts, reason) via RDAP (rdap.org).
-    Covers all gTLDs including .io/.live/.money/.fail/.stream/.vip — stdlib only,
-    no pip dependency. Returns (None, None, reason) on any failure so caller
-    can fall back to whois binary or 06_domains_exceptions.json."""
-    url = f"https://rdap.org/domain/{registrable}"
-    try:
-        req = urllib.request.Request(url, headers={"Accept": "application/rdap+json"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as exc:
-        return None, None, f"RDAP HTTP {exc.code}"
-    except Exception as exc:
-        return None, None, f"RDAP error: {exc}"
+# TLDs whose registries have their own RDAP servers that rdap.org fails to
+# bootstrap correctly. Queried directly when rdap.org returns an error.
+# Donuts manages .live/.money/.fail/.stream/.vip and many others.
+_RDAP_DIRECT = {
+    "live":   "https://rdap.donuts.co/rdap",
+    "money":  "https://rdap.donuts.co/rdap",
+    "fail":   "https://rdap.donuts.co/rdap",
+    "stream": "https://rdap.donuts.co/rdap",
+    "vip":    "https://rdap.donuts.co/rdap",
+}
 
+
+def _parse_rdap_response(data, registrable):
+    """Extract (expiry_ts, registered_ts, reason) from a parsed RDAP JSON dict."""
     expiry_ts = registered_ts = None
     for event in data.get("events", []):
         action = event.get("eventAction", "").lower()
@@ -371,10 +370,46 @@ def _fetch_rdap_expiry(registrable):
         elif action == "registration":
             if ts is not None and (registered_ts is None or ts < registered_ts):
                 registered_ts = ts
-
     if expiry_ts is None:
         return None, registered_ts, "RDAP returned no expiration event"
     return expiry_ts, registered_ts, None
+
+
+def _rdap_fetch(url):
+    """Fetch and parse an RDAP URL. Returns (data_dict, error_str)."""
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/rdap+json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode()), None
+    except urllib.error.HTTPError as exc:
+        return None, f"RDAP HTTP {exc.code}"
+    except Exception as exc:
+        return None, f"RDAP error: {exc}"
+
+
+def _fetch_rdap_expiry(registrable):
+    """Return (expiry_ts, registered_ts, reason) via RDAP.
+    Tries rdap.org first; if that fails, falls back to the registry's own RDAP
+    server for TLDs known not to be bootstrapped correctly by rdap.org (e.g.
+    Donuts TLDs: .live .money .fail .stream .vip).
+    Returns (None, None, reason) on failure so the caller can fall back to the
+    whois binary or 06_domains_exceptions.json."""
+    tld = registrable.rsplit(".", 1)[-1].lower()
+
+    # Tier 1: rdap.org (covers most gTLDs)
+    data, err = _rdap_fetch(f"https://rdap.org/domain/{registrable}")
+    if data is not None:
+        return _parse_rdap_response(data, registrable)
+
+    # Tier 2: direct registry RDAP for TLDs rdap.org can't bootstrap
+    direct_base = _RDAP_DIRECT.get(tld)
+    if direct_base:
+        data, err2 = _rdap_fetch(f"{direct_base}/domain/{registrable}")
+        if data is not None:
+            return _parse_rdap_response(data, registrable)
+        err = err2  # report the direct-registry error if both fail
+
+    return None, None, err or "RDAP unavailable"
 
 
 def cmd_whois(conn, force=False):

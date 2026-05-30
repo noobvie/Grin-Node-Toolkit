@@ -341,9 +341,8 @@ NEW_LOC = (
     '        deny all;\n'
     '    }\n'
     '\n'
-    '    # HTML and JS must always revalidate. They carry the page logic and the\n'
-    '    # generated config.js (GRIN_ONION_URL, regenerated when Tor is enabled/\n'
-    '    # disabled). A stale cached copy leaves the Tor card on its .onion placeholder.\n'
+    '    # HTML/JS revalidate every load — they carry the page logic and the generated\n'
+    '    # config.js (GRIN_ONION_URL); a stale copy pins the Tor card to its placeholder.\n'
     '    location ~* \\.(html|js)$ {\n'
     '        try_files $uri =404;\n'
     '        add_header Cache-Control "no-cache" always;\n'
@@ -368,9 +367,9 @@ NEW_LOC = (
 if action == 'enable':
     if OLD_LOC in txt:
         txt = txt.replace(OLD_LOC, NEW_LOC)
-    # Migration: servers patched before html/js were split out cached every asset for
-    # an hour, so a stale node-status.js / config.js left the Tor card on its .onion
-    # placeholder. Replace the old single-regex block with the split no-cache rules.
+    # Migration: older deployments cached every asset for an hour, so a stale
+    # node-status.js/config.js pinned the Tor card to its placeholder. Split the old
+    # single-regex block into no-cache html/js + cached static assets.
     OLD_ASSET_BLOCK = (
         '    # Serve only known static asset types\n'
         '    location ~* \\.(html|css|js|svg|ico|png)$ {\n'
@@ -378,9 +377,8 @@ if action == 'enable':
         '        add_header Cache-Control "public, max-age=3600";\n'
         '    }\n')
     NEW_ASSET_BLOCK = (
-        '    # HTML and JS must always revalidate. They carry the page logic and the\n'
-        '    # generated config.js (GRIN_ONION_URL, regenerated when Tor is enabled/\n'
-        '    # disabled). A stale cached copy leaves the Tor card on its .onion placeholder.\n'
+        '    # HTML/JS revalidate every load — they carry the page logic and the generated\n'
+        '    # config.js (GRIN_ONION_URL); a stale copy pins the Tor card to its placeholder.\n'
         '    location ~* \\.(html|js)$ {\n'
         '        try_files $uri =404;\n'
         '        add_header Cache-Control "no-cache" always;\n'
@@ -1277,10 +1275,9 @@ _disable_status_page() {
         return
     fi
 
-    # REST blocks live INSIDE the status server block (inserted before the catch-all).
-    # The status page is REST's foundation — removing it necessarily breaks REST, and a
-    # lingering REST block would split the contiguous NEW_LOC string so the status revert
-    # below could not match. Tear REST down first (its cron + data dir + nginx block).
+    # REST blocks sit inside the status server block, before the catch-all. A lingering
+    # one would split NEW_LOC so the status revert below can't match — and REST can't work
+    # without the status page anyway. Tear REST down first (cron + data dir + nginx block).
     if grep -q 'location /rest/' "$nginx_conf" 2>/dev/null; then
         info "REST API is enabled and depends on the status page — removing it first."
         if [[ "$network" == "mainnet" ]]; then disable_mainnet_rest_api; else disable_testnet_rest_api; fi
@@ -1965,7 +1962,7 @@ show_api_menu() {
 
     echo -e "${BOLD}${YELLOW}  ╔══════════════════════════════════════════════════╗${RESET}"
     echo -e "${BOLD}${YELLOW}  ║  IMPORTANT — Choose ONE mode only.               ║${RESET}"
-    echo -e "${BOLD}${YELLOW}  ║  Activating both modes will cause port conflicts. ║${RESET}"
+    echo -e "${BOLD}${YELLOW}  ║  Activating both modes will cause port conflicts.║${RESET}"
     echo -e "${BOLD}${YELLOW}  ╚══════════════════════════════════════════════════╝${RESET}"
     echo ""
     echo -e "${DIM}  ─── MODE A: Raw TCP Direct Access ──────────────────${RESET}"

@@ -40,7 +40,8 @@ COMMUNITY_NODES_PATH = os.environ.get(
     "GRIN_COMMUNITY_NODES",
     os.path.join(os.path.dirname(DB_PATH), "community_nodes.json"),
 )
-FAIL_THRESHOLD = 3    # consecutive failed checks before auto-removing a community node
+FAIL_THRESHOLD = 168  # consecutive failed hourly checks before auto-removing a
+                      # community node (168 = 7 days). Tolerates reboots/flaky uplinks.
 
 # ── DNS seed lists ─────────────────────────────────────────────────────────────
 # Edit 06_dns_seeds.json to add/remove seeds or update pending-DNS notes.
@@ -557,10 +558,12 @@ def _check_external_nodes():
         for proto, entries in protos.items()
         for entry in entries
     ]
-    # Community items (https only — Tor is not supported for community nodes)
+    # Community items — .onion nodes are checked over Tor, the rest over https.
     for net, nodes in community.items():
         for n in nodes:
-            items.append((net, "https", n["url"], n["url"]))
+            host  = (urllib.parse.urlparse(n["url"]).hostname or "").lower()
+            proto = "tor" if host.endswith(".onion") else "https"
+            items.append((net, proto, n["url"], n["url"]))
 
     with ThreadPoolExecutor(max_workers=10) as ex:
         futures = [ex.submit(check_one, net, proto, e, comm) for net, proto, e, comm in items]

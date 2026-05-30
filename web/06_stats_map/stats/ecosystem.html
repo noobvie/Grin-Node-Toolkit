@@ -325,7 +325,7 @@
     box-sizing: border-box;
   }
   .node-form-url:focus { outline: none; border-color: var(--grin); }
-  .node-form-nets {
+  .node-form-nets { /* deprecated — network is now auto-detected; kept harmless */
     display: flex;
     gap: 16px;
     font-size: 13px;
@@ -630,8 +630,9 @@
           <div class="submit-col-label">⚡ Submit a node instantly</div>
           <p>
             Running a public Grin node? Submit it here — it's validated live and
-            appears after the next hourly check. Auto-removed if it goes offline
-            for 3 consecutive hours.
+            the network (mainnet/testnet) is detected automatically. It appears
+            after the next hourly check, and is auto-removed only after 7 days
+            offline.
           </p>
           <form class="node-form" id="node-submit-form" autocomplete="off">
             <!-- honeypot: hidden from real users, bots fill it in -->
@@ -645,10 +646,6 @@
               placeholder="https://example.org or http://….onion"
               required
             />
-            <div class="node-form-nets">
-              <label><input type="radio" name="net" value="mainnet" checked> Mainnet</label>
-              <label><input type="radio" name="net" value="testnet"> Testnet</label>
-            </div>
             <button type="submit" class="node-form-submit" id="node-submit-btn">Submit Node</button>
           </form>
           <div class="submit-result" id="node-submit-result"></div>
@@ -1108,7 +1105,6 @@ setInterval(load, REFRESH_MS);
     result.className   = 'submit-result';
 
     const url = document.getElementById('node-url-input').value.trim();
-    const net = document.querySelector('input[name="net"]:checked').value;
 
     try {
       // Preflight: get a fresh challenge token — also confirms server is reachable.
@@ -1117,7 +1113,7 @@ setInterval(load, REFRESH_MS);
       const { token } = await tokenResp.json();
 
       btn.textContent = 'Submitting…';
-      const body = new URLSearchParams({ node_url: url, net, submit_token: token });
+      const body = new URLSearchParams({ node_url: url, submit_token: token });
       const resp = await fetch('/add-node', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

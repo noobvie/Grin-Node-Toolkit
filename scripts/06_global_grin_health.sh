@@ -295,6 +295,10 @@ install_submit_server() {
     }
 
     info "Installing community node submit server..."
+    # The submit server reaches .onion nodes through the local Tor SOCKS proxy to
+    # auto-detect their network — ensure tor + python SOCKS are present regardless
+    # of entry point (idempotent; returns early if already installed).
+    ensure_tor_socks || true
     cp "$SCRIPT_DIR/lib/06_node_submit_server.py" "$SUBMIT_SERVER_BIN"
     chmod +x "$SUBMIT_SERVER_BIN"
 
@@ -317,7 +321,8 @@ EOF
     cat > "/etc/systemd/system/${SUBMIT_SERVER_SERVICE}.service" <<UNIT
 [Unit]
 Description=Grin Community Node Submit Server
-After=network.target
+After=network.target tor.service
+Wants=tor.service
 
 [Service]
 Type=simple

@@ -428,10 +428,26 @@ def cmd_whois(conn, force=False):
             registrable_cache[reg] = (expiry_ts, registered_ts, reason)
             time.sleep(1)  # be polite to rdap.org between unique queries
 
-        conn.execute(
-            "INSERT OR REPLACE INTO dns_seed_whois(host, expiry_ts, registered_ts, fetched_ts) VALUES(?,?,?,?)",
-            (host, expiry_ts, registered_ts, now),
-        )
+        if expiry_ts is not None:
+            conn.execute(
+                "INSERT OR REPLACE INTO dns_seed_whois(host, expiry_ts, registered_ts, fetched_ts) VALUES(?,?,?,?)",
+                (host, expiry_ts, registered_ts, now),
+            )
+        else:
+            # RDAP/whois failed — preserve any previously good expiry rather than
+            # overwriting with NULL, which would show "-" for the next 24h.
+            existing = conn.execute(
+                "SELECT expiry_ts, registered_ts FROM dns_seed_whois WHERE host=?", (host,)
+            ).fetchone()
+            if existing and existing[0] is not None:
+                conn.execute(
+                    "UPDATE dns_seed_whois SET fetched_ts=? WHERE host=?", (now, host)
+                )
+            else:
+                conn.execute(
+                    "INSERT OR REPLACE INTO dns_seed_whois(host, expiry_ts, registered_ts, fetched_ts) VALUES(?,?,?,?)",
+                    (host, None, None, now),
+                )
         conn.commit()
         if expiry_ts:
             dt = datetime.fromtimestamp(expiry_ts, tz=timezone.utc)

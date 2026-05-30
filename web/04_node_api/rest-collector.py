@@ -88,6 +88,9 @@ def write_atomic(path, obj):
         with os.fdopen(fd, "w") as fh:
             json.dump(obj, fh, indent=2)
             fh.write("\n")
+        # mkstemp creates the temp file 0600; nginx's worker (a different user)
+        # must be able to read it, so widen to 0644 before the atomic replace.
+        os.chmod(tmp_path, 0o644)
         os.replace(tmp_path, path)
     except Exception:
         try:

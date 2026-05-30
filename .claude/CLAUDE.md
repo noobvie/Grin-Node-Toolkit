@@ -304,6 +304,21 @@ Key design decisions (locked in — do not change without user confirmation):
 - **Testnet mode:** Stratum-only, no web UI; mainnet mode: full pool + web dashboard
 - **No fees by default** (`pool_fee_percent: 0.0`); min withdrawal: 2.0 GRIN
 
+## Debugging — Confirm Root Cause Before Editing
+When a bug or error is reported, **confirm the root cause with evidence before changing
+code.** A plausible-looking suspect is not a confirmed cause.
+
+- Ask the operator to run diagnostics and read the *actual* output first. Propose specific
+  commands, wait for results, and let the evidence point to the cause.
+- Don't jump from a guess (a suspicious commit, a recent change) straight to an edit. State
+  your hypothesis, then verify it before touching code.
+- Make sure each diagnostic actually proves what you think — a test that can't observe the
+  thing you're checking is not evidence.
+- "It worked before" often means a different environment or input, not a code regression —
+  rule that out before blaming a change.
+- Only once the cause is confirmed, make the **smallest** fix at the true source rather than
+  adding compensating logic elsewhere.
+
 ## Do Not
 - Never run toolkit scripts locally — they assume a Linux VPS with root access
 - Never hardcode wallet API secrets or passwords in scripts

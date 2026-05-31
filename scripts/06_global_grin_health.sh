@@ -301,6 +301,10 @@ install_submit_server() {
     ensure_tor_socks || true
     cp "$SCRIPT_DIR/lib/06_node_submit_server.py" "$SUBMIT_SERVER_BIN"
     chmod +x "$SUBMIT_SERVER_BIN"
+    # Curated node list — the submit server reads it (from its own bin dir) to reject
+    # submissions that duplicate an already-curated node. Copy it here too so dedup
+    # works regardless of whether the stats collector install ran first.
+    cp "$SCRIPT_DIR/lib/06_external_nodes.json" "$(dirname "$SUBMIT_SERVER_BIN")/06_external_nodes.json"
 
     # Generate admin token if not already in config.env
     local token=""

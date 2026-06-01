@@ -20,6 +20,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_DIR="/opt/grin/conf"
 WALLETS_CONF="$CONF_DIR/grin_wallets_location.conf"
+# Shared node primitives (canonical _grin_session_name, etc.). Source-guarded,
+# no side effects; defines info/warn/error fallbacks only if absent.
+source "$SCRIPT_DIR/lib/grin_node_control.sh"
 
 # ─── GitHub self-update ───────────────────────────────────────────────────────
 # Official public repository. A fork slug saved in /opt/grin/conf/github_repo.conf
@@ -50,15 +53,7 @@ GRIN_LOG_DIR="${GRIN_LOG_PATH:-$HOME/.grin/main/log}"
 # ─── Press-enter helper ───────────────────────────────────────────────────────
 pause() { echo ""; echo "Press Enter to return to menu..."; read -r; }
 
-# tmux session name convention: grin_<nodetype>_<networktype>
-_grin_session_name() {
-    case "$(basename "${1:-}")" in
-        mainnet-full)  echo "grin_full_mainnet"   ;;
-        mainnet-prune) echo "grin_pruned_mainnet" ;;
-        testnet-prune) echo "grin_pruned_testnet" ;;
-        *)             echo "grin_$(basename "${1:-}")" ;;
-    esac
-}
+# _grin_session_name() now lives in lib/grin_node_control.sh (sourced near top).
 
 # =============================================================================
 # 8.1  Remote Node Manager

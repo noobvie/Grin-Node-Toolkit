@@ -165,6 +165,9 @@ LOG_FILE="$LOG_DIR/01_build_new_grin_node_$(date +%Y%m%d_%H%M%S).log"
 CONF_DIR="/opt/grin/conf"
 INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"
 GRIN_GITHUB_API="https://api.github.com/repos/mimblewimble/grin/releases/latest"
+# Shared node primitives (canonical _grin_session_name, etc.). Source-guarded,
+# no side effects; defines info/warn/error fallbacks only if absent.
+source "$SCRIPT_DIR/lib/grin_node_control.sh"
 
 # --- Session state (reset per node) ---
 NETWORK_TYPE=""
@@ -2280,15 +2283,7 @@ stream_extract_chain_data() {
     log "[STEP 10] On-the-fly extraction complete."
 }
 
-# tmux session name convention: grin_<nodetype>_<networktype>
-_grin_session_name() {
-    case "$(basename "${1:-}")" in
-        mainnet-full)  echo "grin_full_mainnet"   ;;
-        mainnet-prune) echo "grin_pruned_mainnet" ;;
-        testnet-prune) echo "grin_pruned_testnet" ;;
-        *)             echo "grin_$(basename "${1:-}")" ;;
-    esac
-}
+# _grin_session_name() now lives in lib/grin_node_control.sh (sourced near top).
 
 # =============================================================================
 # HELPER: CHECK IF A GRIN PROCESS IS RUNNING FOR A SPECIFIC NODE DIRECTORY

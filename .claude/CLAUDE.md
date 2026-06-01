@@ -294,7 +294,7 @@ Key design decisions (locked in — do not change without user confirmation):
 - **Identity:** Address-as-identity (2miners style) — miner submits `grin_address.worker_name` as stratum username; no mandatory registration
 - **Payments:** Tor-only auto-pay; slatepack interactive flow dropped entirely; on Tor failure, queue and retry every 6h up to 7 days
 - **Reward model:** PPLNS (default); configurable to Proportional or Solo via admin panel
-- **Block maturity:** 1441 blocks (mainnet) / 100 blocks (testnet) before payout; critical for reorg safety
+- **Block maturity:** 1440 blocks (mainnet) / 100 blocks (testnet) before payout; critical for reorg safety (Grin consensus `COINBASE_MATURITY = 1440`)
 - **Orphan detection:** Nonce-based verification job every 6h; reverses payouts if a found block is orphaned
 - **Race conditions:** INSERT OR IGNORE for miner auto-creation; SELECT FOR UPDATE for balance updates
 - **Stack:** Next.js + Tailwind CSS + SQLite (better-sqlite3); systemd process manager (not pm2)

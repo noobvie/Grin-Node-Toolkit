@@ -7,26 +7,27 @@
 # and publishes the port so miners can connect directly.
 #
 # ─── Menu ─────────────────────────────────────────────────────────────────────
+# Grouped sub-menus; each action prompts mainnet / testnet inside (reusing the
+# "1) Mainnet 2) Testnet" pattern), so the old per-network letter duplication
+# (B/C/D/E mainnet + F/G/I/J testnet) is gone. A) stays a letter as the always-
+# visible overview alongside the compact stratum-status header.
+#
 #   A) Node & Mining Status   (node sync, tmux, stratum config + miner count)
 #
-#   ─── MAINNET ──────────────────────────────────────────────────────────────
-#   B) Setup Stratum          (enable stratum_server in grin-server.toml)
-#   C) Configure Stratum      (wallet address, burn_reward, timeout)
-#   D) Publish Stratum        (open :3416 to miners via ufw/iptables)
-#   E) Restrict Stratum       (revert to localhost only)
-#
-#   ─── TESTNET ──────────────────────────────────────────────────────────────
-#   F) Setup Stratum
-#   G) Configure Stratum
-#   I) Publish Stratum
-#   J) Restrict Stratum
-#
-#   ─── TOOLS ────────────────────────────────────────────────────────────────
-#   L) Live stats             (terminal dashboard, updates every 10s)
-#   S) Stats web page         (deploy static nginx mining stats page)
-#   W) Watchdog cron          (alert if stratum drops after node restart)
+#   1) Wallet               ▸ setup/recover · listener · auto-restart · address
+#   2) Stratum              ▸ setup · configure · publish · restrict
+#   3) Stats & Web          ▸ live dashboard · web page (payment prefixes + lock)
+#   4) Health / Watchdogs   ▸ node-sync · boot autostart · wallet listener · stratum
 #
 #   0) Back to main menu
+#
+# Migration map (old letter → new home):
+#   A  Status .............. A           (kept)
+#   B/F Setup Stratum ...... 2 ▸ 1       D/I Publish Stratum .... 2 ▸ 3
+#   C/G Configure Stratum .. 2 ▸ 2       E/J Restrict Stratum ... 2 ▸ 4
+#   L  Live stats .......... 3 ▸ 1       S  Web page ............ 3 ▸ 2
+#   W  Stratum watchdog .... 4 ▸ 4       K  Wallet .............. 1
+#   H  Health/Watchdogs .... 4
 # =============================================================================
 
 set -euo pipefail
@@ -49,9 +50,26 @@ STRATUM_PORT_TESTNET=13416
 NODE_API_PORT_MAINNET=3413
 NODE_API_PORT_TESTNET=13413
 
-STATS_WEB_SRC="$TOOLKIT_ROOT/web/07_mining_pool_solo/stats.html"
-STATS_WEB_DIR="/var/www/grin-stats"
-STATS_NGINX_CONF="/etc/nginx/sites-available/grin-stats"
+# Stats page resources are namespaced "grin-solo-mining-stat" (NOT "grin-stats" —
+# Script 06 / Global health owns grin-stats for its ecosystem site). ONE unified
+# vhost serves both networks side by side, so there is no per-network suffix.
+STATS_WEB_SRC="$TOOLKIT_ROOT/web/07_mining_pool_solo/index.html"
+STATS_SETUP_SRC="$TOOLKIT_ROOT/web/07_mining_pool_solo/setup-solo-mining.html"
+STATS_LOGO_SRC="$TOOLKIT_ROOT/web/0z0_media/logo_favi/grin_gold.svg"
+STATS_BASENAME="grin-solo-mining-stat"
+
+# Mining stats collector (parses node log → rolling JSON: found blocks +
+# per-miner hashrate + miningpoolstats-pollable poolstats).
+BLOCK_COLLECTOR_SRC="$TOOLKIT_ROOT/scripts/lib/07_mining_block_collector.py"
+BLOCK_COLLECTOR_BIN="/usr/local/bin/grin-solo-mining-collector.py"
+BLOCK_COLLECTOR_WRAPPER="/usr/local/bin/grin-solo-mining-collector"
+BLOCK_COLLECTOR_CRON="/etc/cron.d/grin-solo-mining-collector"
+BLOCK_COLLECTOR_STATE_DIR="/opt/grin/solo-stats"
+# Reward-split payment calc (mainnet): nickname PREFIXES only, never addresses.
+# The collector reads this to emit split_main.json.
+PAYMENT_CONFIG="/opt/grin/conf/grin_solo_payment.json"
+# Optional stats-page access lock (HTTP Basic Auth over the certbot-managed HTTPS).
+STATS_HTPASSWD="/etc/nginx/grin-solo-stats.htpasswd"
 WATCHDOG_LOG="/opt/grin/logs/stratum-watchdog.log"
 LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/grin_mining_$(date +%Y%m%d_%H%M%S).log"
@@ -67,9 +85,17 @@ success() { echo -e "${GREEN}[OK]${RESET}    $*"; log "[OK] $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; log "[WARN] $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 
-# ─── Source shared nginx helpers ──────────────────────────────────────────────
+# ─── Source shared libs ─────────────────────────────────────────────────────
 # shellcheck source=lib/nginx_shared_helpers.sh
 source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+# Node supervision: control primitives + keepalive (boot autostart + node-sync
+# watchdog). Central wallet pulls in grin_wallet_install.sh + control (guarded).
+# shellcheck source=lib/grin_node_control.sh
+source "$SCRIPT_DIR/lib/grin_node_control.sh"
+# shellcheck source=lib/grin_node_keepalive.sh
+source "$SCRIPT_DIR/lib/grin_node_keepalive.sh"
+# shellcheck source=lib/07_solo_wallet.sh
+source "$SCRIPT_DIR/lib/07_solo_wallet.sh"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOML DETECTION
@@ -177,14 +203,8 @@ find_grin_server_toml() {
 # PROCESS HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_grin_session_name() {
-    case "$(basename "${1:-}")" in
-        mainnet-full)  echo "grin_full_mainnet"   ;;
-        mainnet-prune) echo "grin_pruned_mainnet" ;;
-        testnet-prune) echo "grin_pruned_testnet" ;;
-        *)             echo "grin_$(basename "${1:-}")" ;;
-    esac
-}
+# _grin_session_name() is provided by lib/grin_node_control.sh (sourced above) —
+# the canonical copy. The previous local duplicate was removed (DRY).
 
 _is_descendant_of() {
     local child_pid="$1" parent_pid="$2"
@@ -690,7 +710,10 @@ _enable_stratum() {
                 ufw allow "$stratum_port/tcp"
                 success "UFW: port $stratum_port opened to all."
             elif command -v iptables &>/dev/null; then
-                iptables -I INPUT -p tcp --dport "$stratum_port" -j ACCEPT
+                # -C guard so re-running Publish does not stack duplicate ACCEPT rules.
+                if ! iptables -C INPUT -p tcp --dport "$stratum_port" -j ACCEPT 2>/dev/null; then
+                    iptables -I INPUT -p tcp --dport "$stratum_port" -j ACCEPT
+                fi
                 if command -v netfilter-persistent &>/dev/null; then
                     netfilter-persistent save 2>/dev/null || true
                 elif [[ -d /etc/iptables ]]; then
@@ -710,7 +733,9 @@ _enable_stratum() {
                     ufw allow from "$allowed_ip" to any port "$stratum_port" proto tcp
                     success "UFW: port $stratum_port opened for $allowed_ip."
                 elif command -v iptables &>/dev/null; then
-                    iptables -I INPUT -s "$allowed_ip" -p tcp --dport "$stratum_port" -j ACCEPT
+                    if ! iptables -C INPUT -s "$allowed_ip" -p tcp --dport "$stratum_port" -j ACCEPT 2>/dev/null; then
+                        iptables -I INPUT -s "$allowed_ip" -p tcp --dport "$stratum_port" -j ACCEPT
+                    fi
                     if command -v netfilter-persistent &>/dev/null; then
                         netfilter-persistent save 2>/dev/null || true
                     elif [[ -d /etc/iptables ]]; then
@@ -751,13 +776,23 @@ _disable_stratum() {
     echo -ne "Close firewall port $stratum_port? [Y/n/0]: "
     read -r close_fw
     if [[ "${close_fw,,}" != "n" && "$close_fw" != "0" ]]; then
+        # NOTE: the node now binds 127.0.0.1, so any leftover firewall ALLOW for
+        # this port is moot (nothing external is listening). We remove the all-IPs
+        # rule(s) best-effort; a per-IP allow added via "specific IP" can't be
+        # matched without the original IP and is harmless — remove it manually if
+        # you want a clean ruleset (ufw status numbered / iptables -S).
         if command -v ufw &>/dev/null; then
             ufw delete allow "$stratum_port/tcp" 2>/dev/null || true
-            ufw delete allow from any to any port "$stratum_port" proto tcp 2>/dev/null || true
-            success "UFW: port $stratum_port closed."
+            success "UFW: removed all-IPs allow for port $stratum_port."
         elif command -v iptables &>/dev/null; then
-            iptables -D INPUT -p tcp --dport "$stratum_port" -j ACCEPT 2>/dev/null || true
-            success "iptables: port $stratum_port closed."
+            # Drain duplicates that older (pre-guard) Publish runs may have stacked.
+            while iptables -D INPUT -p tcp --dport "$stratum_port" -j ACCEPT 2>/dev/null; do :; done
+            if command -v netfilter-persistent &>/dev/null; then
+                netfilter-persistent save 2>/dev/null || true
+            elif [[ -d /etc/iptables ]]; then
+                iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+            fi
+            success "iptables: removed all-IPs allow for port $stratum_port."
         fi
     fi
 
@@ -810,6 +845,9 @@ solo_live_stats() {
     fi
 
     local prev_diff=0 prev_ts=0
+    # Persist across iterations: blocks land ~every 60s, so most 10s polls see no
+    # difficulty change. Hold the last computed value instead of flickering.
+    local hashrate_str="calculating..."
 
     echo -e "\n${DIM}Connecting to node on port $api_port ...${RESET}\n"
 
@@ -836,8 +874,9 @@ solo_live_stats() {
 
         local now; now=$(date +%s)
 
-        # Cuckatoo32 hashrate: diff_delta × 42 / dt / 16384
-        local hashrate_str="calculating..."
+        # Cuckatoo32 hashrate: diff_delta × 42 / dt / 16384.
+        # hashrate_str carries over from the previous block; only recomputed when
+        # a new block arrives (diff_delta > 0).
         if [[ "$prev_diff" -gt 0 && "$total_diff" -gt 0 && "$now" -gt "$prev_ts" ]]; then
             local diff_delta dt gps
             diff_delta=$(( total_diff - prev_diff ))
@@ -882,8 +921,239 @@ else:
 # ═══════════════════════════════════════════════════════════════════════════════
 # S) STATS WEB PAGE
 # ═══════════════════════════════════════════════════════════════════════════════
-# Deploys a static HTML page via nginx that polls the node Owner API every 10s.
-# nginx injects the Basic Auth header so the secret never reaches the browser.
+# Deploys ONE static HTML page via nginx that polls BOTH nodes' Owner API every
+# 10s and shows mainnet + testnet side by side. nginx injects the Basic Auth
+# header per network so the secret never reaches the browser.
+
+# Emit one nginx proxy location for a network's /api/status/<net> endpoint.
+#   $1 = net key (main|test)   $2 = node API port   $3 = base64 of "grin:<secret>"
+# Exact-match location: a request to a network we did NOT deploy falls through to
+# `location /` and 404s, which the page reads as "not deployed" and greys out.
+_solo_stats_proxy_location() {
+    cat << EOF
+    # Proxy → $1 node Owner API (auth injected here, never exposed to the browser)
+    location = /api/status/$1 {
+        limit_req zone=grin_api burst=5 nodelay;
+        proxy_pass         http://127.0.0.1:$2/v2/owner;
+        proxy_method       POST;
+        proxy_set_header   Content-Type "application/json";
+        proxy_set_header   Authorization "Basic $3";
+        proxy_set_body     '{"jsonrpc":"2.0","method":"get_status","params":[],"id":1}';
+        proxy_read_timeout 10s;
+    }
+EOF
+}
+
+# Resolve the node's log file path so the block collector knows what to parse.
+# Reads log_file_path from grin-server.toml (resolving a relative path against the
+# node dir); falls back to <node_dir>/grin-server.log.
+#   $1 = network (mainnet|testnet)  →  echoes an absolute log file path
+_solo_node_log_path() {
+    local net="$1" node_dir toml log=""
+    node_dir="/opt/grin/node/${net}-prune"
+    toml="$node_dir/grin-server.toml"
+    if [[ -f "$toml" ]]; then
+        log=$(grep -E '^[[:space:]]*log_file_path[[:space:]]*=' "$toml" 2>/dev/null \
+              | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
+    fi
+    log="${log:-grin-server.log}"
+    [[ "$log" != /* ]] && log="$node_dir/$log"   # resolve relative paths
+    echo "$log"
+}
+
+# Echo the stratum port a network's node binds (from stratum_server_addr in
+# grin-server.toml), falling back to the toolkit default. Used by the setup page.
+#   $1 = network (mainnet|testnet)  →  echoes a port number
+_solo_stratum_port() {
+    local net="$1" toml="/opt/grin/node/${1}-prune/grin-server.toml" def addr port=""
+    def=$STRATUM_PORT_MAINNET; [[ "$net" == "testnet" ]] && def=$STRATUM_PORT_TESTNET
+    if [[ -f "$toml" ]]; then
+        addr=$(grep -E '^[[:space:]]*stratum_server_addr[[:space:]]*=' "$toml" 2>/dev/null \
+               | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
+        port="${addr##*:}"
+    fi
+    [[ "$port" =~ ^[0-9]+$ ]] && echo "$port" || echo "$def"
+}
+
+# Echo the node's file_log_level (uppercased) so the deploy can warn when shares
+# (logged at INFO) won't be captured. Empty if not found.
+#   $1 = network (mainnet|testnet)
+_solo_node_file_log_level() {
+    local net="$1" toml="/opt/grin/node/${1}-prune/grin-server.toml" lvl=""
+    if [[ -f "$toml" ]]; then
+        lvl=$(grep -E '^[[:space:]]*file_log_level[[:space:]]*=' "$toml" 2>/dev/null \
+              | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
+    fi
+    echo "${lvl^^}"
+}
+
+# Resolve the wallet Foreign API URL the node is configured to mine to, so the
+# stats page can show whether that listener is up. Reads wallet_listener_url from
+# the network's grin-server.toml; falls back to the toolkit default foreign port.
+#   $1 = network (mainnet|testnet)  →  echoes a full http URL ending in /v2/foreign
+_solo_wallet_listener_url() {
+    local net="$1" default_port=3415 toml url=""
+    [[ "$net" == "testnet" ]] && default_port=13415
+    toml="/opt/grin/node/${net}-prune/grin-server.toml"
+    if [[ -f "$toml" ]]; then
+        url=$(grep -E '^[[:space:]]*wallet_listener_url[[:space:]]*=' "$toml" 2>/dev/null \
+              | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
+    fi
+    echo "${url:-http://127.0.0.1:${default_port}/v2/foreign}"
+}
+
+# Emit one nginx proxy location for a network's /api/wallet/<net> liveness probe.
+#   $1 = net key (main|test)   $2 = wallet Foreign API URL
+# No secret is injected: a 200 or 401 both prove the listener is up; only a
+# connection error / 5xx (which nginx maps to 502) means it is down.
+_solo_stats_wallet_location() {
+    cat << EOF
+    # Liveness probe → $1 wallet Foreign API (the listener the node builds coinbase from)
+    location = /api/wallet/$1 {
+        limit_req zone=grin_api burst=5 nodelay;
+        proxy_pass            $2;
+        proxy_method          POST;
+        proxy_set_header      Content-Type "application/json";
+        proxy_set_body        '{"jsonrpc":"2.0","method":"check_version","params":[],"id":1}';
+        proxy_connect_timeout 3s;
+        proxy_read_timeout    5s;
+        proxy_intercept_errors off;
+    }
+EOF
+}
+
+# Prompt for (or edit) the mainnet reward-split nickname prefixes and write
+# $PAYMENT_CONFIG. Prefixes ONLY — never Grin addresses. Validates that no prefix
+# is a prefix of another so the collector's longest-match grouping is unambiguous.
+# Called from the S) deploy (mainnet detected); no separate menu option.
+_solo_prompt_payment_prefixes() {
+    local cur=""
+    if [[ -f "$PAYMENT_CONFIG" ]]; then
+        cur=$(python3 -c 'import json,sys
+try: print(" ".join(json.load(open(sys.argv[1])).get("prefixes",[])))
+except Exception: pass' "$PAYMENT_CONFIG" 2>/dev/null || true)
+    fi
+
+    echo ""
+    echo -e "${BOLD}Reward-split payment calculation (mainnet)${RESET}"
+    echo -e "  ${DIM}Splits matured coinbase across nicknames by work done, shown on the page.${RESET}"
+    echo -e "  ${DIM}Stores nickname PREFIXES only — never Grin addresses. Miners log in to${RESET}"
+    echo -e "  ${DIM}stratum as user <prefix><n> (e.g. alpha1, alpha2, bravo1).${RESET}"
+
+    if [[ -n "$cur" ]]; then
+        echo -e "  Current prefixes: ${BOLD}${cur}${RESET}"
+        echo -ne "  [K]eep / [C]hange / [R]emove? [K]: "
+        read -r pchoice
+        case "${pchoice,,}" in
+            r) rm -f "$PAYMENT_CONFIG"; success "Reward split disabled (config removed)."; return ;;
+            c) ;;
+            *) info "Keeping existing prefixes."; return ;;
+        esac
+    else
+        echo -ne "  Enable reward-split calculation? [y/N]: "
+        read -r pen
+        [[ "${pen,,}" != "y" ]] && { info "Reward split not enabled."; return; }
+    fi
+
+    local raw json
+    while true; do
+        echo -ne "  Nickname prefixes (space-separated, e.g. alpha bravo): "
+        read -r raw
+        [[ -z "$raw" ]] && { warn "No prefixes entered — not enabling."; return; }
+        # Validate + normalise in python: token charset, dedupe, no prefix-of-another.
+        json=$(python3 -c '
+import json, re, sys
+toks = [t for t in re.split(r"[\s,]+", sys.argv[1].strip()) if t]
+if not toks: sys.exit(1)
+seen = []
+for t in toks:
+    if not re.match(r"^[A-Za-z0-9_-]+$", t): sys.exit(1)
+    if t not in seen: seen.append(t)
+for a in seen:
+    for b in seen:
+        if a != b and b.startswith(a): sys.exit(1)
+print(json.dumps({"prefixes": seen}))
+' "$raw" 2>/dev/null) && break
+        warn "Invalid: use letters/digits/_/- only, and no prefix may start another (e.g. al/alpha)."
+    done
+
+    mkdir -p "$(dirname "$PAYMENT_CONFIG")"
+    printf '%s\n' "$json" > "$PAYMENT_CONFIG"
+    chmod 644 "$PAYMENT_CONFIG"
+    success "Reward split enabled → $PAYMENT_CONFIG"
+    echo -e "  ${DIM}The page shows nickname → % → GRIN owed (weekly/monthly are the settlement cadence).${RESET}"
+}
+
+# Prompt for the optional stats-page access lock (HTTP Basic Auth). Writes an
+# apr1 htpasswd (no apache2-utils needed — nginx reads apr1 natively) and echoes,
+# via the named globals below, the nginx snippets the vhost writer injects:
+#   _ACCESS_AUTH_BLOCK       server-level auth_basic + auth_basic_user_file (or "")
+#   _ACCESS_PUBLIC_CARVEOUTS poolstats_*.json `auth_basic off` carve-outs (or "")
+# Basic Auth is safe here because S) always runs certbot + HTTP→HTTPS redirect, so
+# credentials never travel over plain HTTP (the :80 block 301s before the prompt).
+_ACCESS_AUTH_BLOCK=""
+_ACCESS_PUBLIC_CARVEOUTS=""
+_solo_prompt_access_lock() {
+    _ACCESS_AUTH_BLOCK=""
+    _ACCESS_PUBLIC_CARVEOUTS=""
+
+    echo ""
+    echo -e "${BOLD}Stats page access lock (optional)${RESET}"
+    echo -e "  ${DIM}Username/password gate (HTTP Basic Auth) — also keeps crawlers out (401).${RESET}"
+
+    local action="new"
+    if [[ -f "$STATS_HTPASSWD" ]]; then
+        echo -e "  Status: ${GREEN}currently protected${RESET}"
+        echo -ne "  [K]eep / [C]hange / [R]emove? [K]: "
+        read -r achoice
+        case "${achoice,,}" in
+            r) rm -f "$STATS_HTPASSWD"; success "Access lock removed (page is public again)."; return ;;
+            c) action="change" ;;
+            *) info "Keeping existing credentials."; action="keep" ;;
+        esac
+    else
+        echo -ne "  Protect the stats page with a username/password? [y/N]: "
+        read -r alk
+        [[ "${alk,,}" != "y" ]] && { info "Access lock not enabled (page stays public)."; return; }
+    fi
+
+    if [[ "$action" != "keep" ]]; then
+        local auser apass apass2
+        echo -ne "  Username: "
+        read -r auser
+        [[ -z "$auser" ]] && { warn "No username — access lock not enabled."; return; }
+        echo -ne "  Password: ";        read -rs apass;  echo
+        echo -ne "  Confirm password: "; read -rs apass2; echo
+        if [[ -z "$apass" || "$apass" != "$apass2" ]]; then
+            warn "Passwords empty or did not match — access lock not enabled."
+            return
+        fi
+        local ahash
+        ahash=$(openssl passwd -apr1 "$apass") || { error "openssl passwd failed."; return; }
+        ( umask 077; printf '%s:%s\n' "$auser" "$ahash" > "$STATS_HTPASSWD" )
+        # nginx worker must read it; keep it non-world-readable.
+        local nuser
+        nuser=$(ps -eo user=,comm= 2>/dev/null | awk '$2 ~ /nginx/ && $1 != "root" {print $1; exit}')
+        [[ -z "$nuser" ]] && { id www-data >/dev/null 2>&1 && nuser=www-data || nuser=nginx; }
+        chmod 640 "$STATS_HTPASSWD"
+        chown "root:$nuser" "$STATS_HTPASSWD" 2>/dev/null || true
+        success "Credentials written → $STATS_HTPASSWD"
+    fi
+
+    # Server-level auth (every location inherits unless it opts out below).
+    _ACCESS_AUTH_BLOCK=$'\n    auth_basic           "Grin Solo Mining";\n    auth_basic_user_file '"$STATS_HTPASSWD"$';'
+
+    # miningpoolstats.com polls poolstats_<net>.json — keep it public so the
+    # listing keeps working, unless the operator opts to hide it too.
+    echo -ne "  Also hide the public miningpoolstats feed (poolstats_*.json)? [y/N]: "
+    read -r hidemps
+    if [[ "${hidemps,,}" != "y" ]]; then
+        _ACCESS_PUBLIC_CARVEOUTS=$'    location = /data/poolstats_main.json { auth_basic off; }\n    location = /data/poolstats_test.json { auth_basic off; }\n\n'
+        info "miningpoolstats feed left public; everything else (incl. split_main.json) is locked."
+    else
+        warn "Entire page locked — public miningpoolstats listing will stop updating."
+    fi
+}
 
 solo_deploy_stats_page() {
     clear
@@ -891,8 +1161,9 @@ solo_deploy_stats_page() {
     echo -e "${BOLD}${CYAN}  S) Deploy Mining Stats Page${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  Deploys a static mining stats page via nginx."
-    echo -e "  nginx proxies /api/status → node Owner API with Basic Auth."
+    echo -e "  Deploys ${BOLD}one unified stats page${RESET} showing mainnet + testnet side by side."
+    echo -e "  nginx proxies /api/status/<net> → each node's Owner API with Basic Auth."
+    echo -e "  Auto-detects which nodes exist; missing networks grey out on the page."
     echo -e "  No Node.js, no database, no systemd service needed."
     echo ""
 
@@ -901,8 +1172,35 @@ solo_deploy_stats_page() {
         return 1
     fi
 
+    # ── Auto-detect available networks ──────────────────────────────────────────
+    # ONE unified page/vhost serves both networks. We add a proxy location only for
+    # each node whose .api_secret exists; the page greys out any missing network.
+    local conf_name="$STATS_BASENAME"
+    local web_dir="/var/www/$conf_name"
+    local nginx_conf="/etc/nginx/sites-available/$conf_name"
+    local mn_secret_path="/opt/grin/node/mainnet-prune/.api_secret"
+    local tn_secret_path="/opt/grin/node/testnet-prune/.api_secret"
+
+    local have_main=0 have_test=0
+    [[ -f "$mn_secret_path" ]] && have_main=1
+    [[ -f "$tn_secret_path" ]] && have_test=1
+
+    if [[ $have_main -eq 0 && $have_test -eq 0 ]]; then
+        error "No node .api_secret found for either network."
+        echo -e "  Looked for: $mn_secret_path"
+        echo -e "              $tn_secret_path"
+        echo -e "  ${DIM}Build a node first (Script 01), then re-run S.${RESET}"
+        return 1
+    fi
+
+    local detected=""
+    [[ $have_main -eq 1 ]] && detected+=" Mainnet"
+    [[ $have_test -eq 1 ]] && detected+=" Testnet"
+    info "Detected node secret(s) for:${detected}  ·  vhost: $conf_name"
+    echo ""
+
     local subdomain
-    echo -ne "Subdomain for stats page (e.g. mining.example.com): "
+    echo -ne "Subdomain for the stats page (e.g. mining.example.com): "
     read -r subdomain
     [[ -z "$subdomain" ]] && { warn "No subdomain — cancelled."; return 1; }
 
@@ -911,97 +1209,234 @@ solo_deploy_stats_page() {
         return 1
     fi
 
-    local secret_path="/opt/grin/node/mainnet-prune/.api_secret"
-    if [[ ! -f "$secret_path" ]]; then
-        echo -ne "Path to node .api_secret [/opt/grin/node/mainnet-prune/.api_secret]: "
-        read -r alt_path
-        [[ -n "$alt_path" ]] && secret_path="$alt_path"
-    fi
-    if [[ ! -f "$secret_path" ]]; then
-        error "Secret file not found: $secret_path"
-        return 1
+    # DNS pre-check — certbot's HTTP-01 challenge needs this name pointing here.
+    if ! getent hosts "$subdomain" >/dev/null 2>&1; then
+        warn "$subdomain does not currently resolve in DNS."
+        echo -e "  ${DIM}certbot will fail unless an A/AAAA record points $subdomain at this server.${RESET}"
+        echo -ne "Continue anyway (deploy HTTP now, retry SSL later)? [y/N/0]: "
+        read -r dns_go
+        [[ "${dns_go,,}" != "y" ]] && { info "Cancelled — set DNS first, then re-run S."; return 1; }
     fi
 
-    local secret; secret=$(cat "$secret_path")
-    local b64_auth; b64_auth=$(printf 'grin:%s' "$secret" | base64 -w 0)
+    # ── Build per-network proxy blocks for whichever nodes exist ────────────────
+    # Each network contributes a node-status proxy (/api/status/<net>) and a wallet
+    # liveness proxy (/api/wallet/<net>) so the page can flag a down wallet listener.
+    local proxy_blocks=""
+    if [[ $have_main -eq 1 ]]; then
+        local mn_secret; mn_secret=$(cat "$mn_secret_path")
+        local mn_b64;    mn_b64=$(printf 'grin:%s' "$mn_secret" | base64 -w 0)
+        local mn_wallet; mn_wallet=$(_solo_wallet_listener_url "mainnet")
+        proxy_blocks+=$(_solo_stats_proxy_location "main" "$NODE_API_PORT_MAINNET" "$mn_b64")
+        proxy_blocks+=$'\n\n'
+        proxy_blocks+=$(_solo_stats_wallet_location "main" "$mn_wallet")
+        proxy_blocks+=$'\n\n'
+    fi
+    if [[ $have_test -eq 1 ]]; then
+        local tn_secret; tn_secret=$(cat "$tn_secret_path")
+        local tn_b64;    tn_b64=$(printf 'grin:%s' "$tn_secret" | base64 -w 0)
+        local tn_wallet; tn_wallet=$(_solo_wallet_listener_url "testnet")
+        proxy_blocks+=$(_solo_stats_proxy_location "test" "$NODE_API_PORT_TESTNET" "$tn_b64")
+        proxy_blocks+=$'\n\n'
+        proxy_blocks+=$(_solo_stats_wallet_location "test" "$tn_wallet")
+        proxy_blocks+=$'\n\n'
+    fi
 
-    info "Deploying stats page to $STATS_WEB_DIR..."
-    mkdir -p "$STATS_WEB_DIR"
-    cp "$STATS_WEB_SRC" "$STATS_WEB_DIR/index.html"
-    chmod 644 "$STATS_WEB_DIR/index.html"
-    success "stats.html deployed."
+    info "Deploying stats page to $web_dir..."
+    mkdir -p "$web_dir"
+    cp "$STATS_WEB_SRC" "$web_dir/index.html"
+    chmod 644 "$web_dir/index.html"
+    if [[ -f "$STATS_SETUP_SRC" ]]; then
+        cp "$STATS_SETUP_SRC" "$web_dir/setup-solo-mining.html"
+        chmod 644 "$web_dir/setup-solo-mining.html"
+    else
+        warn "Setup page not found ($STATS_SETUP_SRC) — Miner Setup link will 404."
+    fi
+    if [[ -f "$STATS_LOGO_SRC" ]]; then
+        cp "$STATS_LOGO_SRC" "$web_dir/logo.svg"
+        chmod 644 "$web_dir/logo.svg"
+    else
+        warn "Logo not found ($STATS_LOGO_SRC) — page will show a broken icon."
+    fi
+    success "index.html + setup page deployed."
+
+    # ── Page config: stratum host/ports (setup page) + optional slogan ──────────
+    # Always written to data/config.json so the setup page shows real connection
+    # details. Editable any time without re-deploying.
+    mkdir -p "$web_dir/data"
+    echo -ne "Custom header slogan (Enter to keep default): "
+    read -r solo_slogan
+    local slogan_json=""
+    if [[ -n "$solo_slogan" ]]; then
+        local esc_slogan="${solo_slogan//\\/\\\\}"; esc_slogan="${esc_slogan//\"/\\\"}"
+        slogan_json="\"slogan\":\"$esc_slogan\","
+    fi
+    local nets_json=""
+    if [[ $have_main -eq 1 ]]; then
+        nets_json+="\"main\":{\"stratum_port\":$(_solo_stratum_port mainnet)}"
+    fi
+    if [[ $have_test -eq 1 ]]; then
+        [[ -n "$nets_json" ]] && nets_json+=","
+        nets_json+="\"test\":{\"stratum_port\":$(_solo_stratum_port testnet)}"
+    fi
+    printf '{%s"host":"%s","networks":{%s}}\n' "$slogan_json" "$subdomain" "$nets_json" \
+        > "$web_dir/data/config.json"
+    chmod 644 "$web_dir/data/config.json"
+    [[ -n "$solo_slogan" ]] && success "Slogan + connection config written (edit $web_dir/data/config.json to change)." \
+        || success "Connection config written (edit $web_dir/data/config.json for slogan/ports)."
+
+    # ── Reward-split prefixes (mainnet only) ────────────────────────────────────
+    # Optional. Writes $PAYMENT_CONFIG (nickname prefixes). Done before the initial
+    # collector run below so split_main.json appears immediately when enabled.
+    if [[ $have_main -eq 1 ]]; then
+        _solo_prompt_payment_prefixes
+    fi
+
+    # ── Mining stats collector ──────────────────────────────────────────────────
+    # Parses each detected node's log for "Solution Found for block <h>" (found
+    # blocks) and "Got share … submitted by <worker>" (per-miner hashrate), and
+    # writes rolling JSON: blocks_<net>.json, miners_<net>.json, poolstats_<net>.json.
+    # Runs every 5 min via cron.d (matches the watchdog pattern).
+    local data_dir="$web_dir/data"
+    mkdir -p "$data_dir" "$BLOCK_COLLECTOR_STATE_DIR"
+    if [[ -f "$BLOCK_COLLECTOR_SRC" ]]; then
+        info "Installing mining stats collector..."
+        cp "$BLOCK_COLLECTOR_SRC" "$BLOCK_COLLECTOR_BIN"
+        chmod 755 "$BLOCK_COLLECTOR_BIN"
+
+        # Wrapper runs the collector once per detected network.
+        {
+            echo '#!/bin/bash'
+            echo '# Generated by 07_grin_mining_solo.sh — solo mining stats collector.'
+            echo 'set -uo pipefail'
+            if [[ $have_main -eq 1 ]]; then
+                printf '%q --net mainnet --log %q --state-dir %q --out-dir %q --payment-config %q || true\n' \
+                    "$BLOCK_COLLECTOR_BIN" "$(_solo_node_log_path mainnet)" \
+                    "$BLOCK_COLLECTOR_STATE_DIR" "$data_dir" "$PAYMENT_CONFIG"
+            fi
+            if [[ $have_test -eq 1 ]]; then
+                printf '%q --net testnet --log %q --state-dir %q --out-dir %q || true\n' \
+                    "$BLOCK_COLLECTOR_BIN" "$(_solo_node_log_path testnet)" \
+                    "$BLOCK_COLLECTOR_STATE_DIR" "$data_dir"
+            fi
+        } > "$BLOCK_COLLECTOR_WRAPPER"
+        chmod 755 "$BLOCK_COLLECTOR_WRAPPER"
+
+        cat > "$BLOCK_COLLECTOR_CRON" << CRON
+# Grin solo mining stats collector — every 5 min. Managed by 07_grin_mining_solo.sh
+*/5 * * * * root $BLOCK_COLLECTOR_WRAPPER >/dev/null 2>&1
+CRON
+        chmod 644 "$BLOCK_COLLECTOR_CRON"
+
+        # Initial run so the page has data immediately.
+        "$BLOCK_COLLECTOR_WRAPPER" || warn "Initial collection errored (cron will retry)."
+
+        # Feedback + log-level check per network. Per-miner hashrate needs INFO-level
+        # logging (shares log at INFO); found blocks log at WARN so they always work.
+        local net lvl
+        for net in mainnet testnet; do
+            [[ "$net" == "mainnet" && $have_main -ne 1 ]] && continue
+            [[ "$net" == "testnet" && $have_test -ne 1 ]] && continue
+            "$BLOCK_COLLECTOR_BIN" --net "$net" --log "$(_solo_node_log_path "$net")" \
+                --dry-run 2>/dev/null | tail -1 | sed "s/^/  $net: /" || true
+            lvl="$(_solo_node_file_log_level "$net")"
+            if [[ -n "$lvl" && "$lvl" != "INFO" && "$lvl" != "DEBUG" && "$lvl" != "TRACE" ]]; then
+                warn "  $net file_log_level=$lvl — per-miner hashrate needs INFO. Found blocks still work."
+                echo -e "  ${DIM}Set file_log_level = \"INFO\" in $(_solo_node_log_path "$net" | xargs dirname)/grin-server.toml and restart the node.${RESET}"
+            fi
+        done
+
+        success "Mining stats collector installed (cron every 5 min) → $data_dir"
+        echo -e "  ${DIM}miningpoolstats endpoint(s): https://$subdomain/data/poolstats_<net>.json${RESET}"
+        echo -e "  ${DIM}If a scan shows 0 block matches after finding a block, the log wording may${RESET}"
+        echo -e "  ${DIM}differ on your node version — adjust FOUND_RE/SHARE_RE in $BLOCK_COLLECTOR_BIN.${RESET}"
+    else
+        warn "Collector not found ($BLOCK_COLLECTOR_SRC) — blocks + miner stats disabled."
+    fi
+
+    # ── Optional access lock (HTTP Basic Auth) ──────────────────────────────────
+    # Sets $_ACCESS_AUTH_BLOCK + $_ACCESS_PUBLIC_CARVEOUTS, injected into the vhost
+    # below. Safe over the certbot HTTPS redirect (creds never cross plain HTTP).
+    _solo_prompt_access_lock
 
     nginx_ensure_grin_api_zone
 
-    info "Writing nginx vhost: $STATS_NGINX_CONF"
-    mkdir -p "$(dirname "$STATS_NGINX_CONF")"
-    cat > "$STATS_NGINX_CONF" << EOF
-# Grin Solo Mining Stats — generated by 07_grin_mining_solo.sh
+    # Write an HTTP-only vhost FIRST. Referencing letsencrypt certs that do not
+    # exist yet would make `nginx -t` fail. certbot --nginx injects the 443
+    # server block + SSL directives afterward (and manages options-ssl-nginx.conf).
+    # umask 077 so the conf (which holds the base64 auth token(s)) is never
+    # group/world readable, even momentarily, before the explicit chmod below.
+    info "Writing nginx vhost (HTTP): $nginx_conf"
+    mkdir -p "$(dirname "$nginx_conf")"
+    ( umask 077; cat > "$nginx_conf" << EOF
+# Grin Solo Mining Stats (unified mainnet + testnet) — generated by 07_grin_mining_solo.sh
 # Rate-limit zone lives in /etc/nginx/conf.d/grin-rate-limit.conf
+# SSL is added in-place by certbot --nginx (do not hand-add a 443 block here).
 
 server {
     listen 80;
     server_name $subdomain;
-    return 301 https://\$host\$request_uri;
-}
 
-server {
-    listen 443 ssl http2;
-    server_name $subdomain;
-
-    root $STATS_WEB_DIR;
+    root $web_dir;
     index index.html;
-
-    # SSL — managed by certbot
-    ssl_certificate     /etc/letsencrypt/live/$subdomain/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$subdomain/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf 2>/dev/null;
 
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "no-referrer" always;
+$_ACCESS_AUTH_BLOCK
 
-    # Proxy to node Owner API — Auth injected here, never exposed to browser
-    location /api/status {
-        limit_req zone=grin_api burst=5 nodelay;
-        proxy_pass         http://127.0.0.1:$NODE_API_PORT_MAINNET/v2/owner;
-        proxy_method       POST;
-        proxy_set_header   Content-Type "application/json";
-        proxy_set_header   Authorization "Basic $b64_auth";
-        proxy_set_body     '{"jsonrpc":"2.0","method":"get_status","params":[],"id":1}';
-        proxy_read_timeout 10s;
-    }
-
-    location / {
+$proxy_blocks$_ACCESS_PUBLIC_CARVEOUTS    location / {
         try_files \$uri \$uri/ =404;
     }
 
-    access_log /var/log/nginx/grin-stats-access.log;
-    error_log  /var/log/nginx/grin-stats-error.log;
+    access_log /var/log/nginx/${conf_name}-access.log;
+    error_log  /var/log/nginx/${conf_name}-error.log;
 }
 EOF
+    )
+    chmod 600 "$nginx_conf"
 
-    chmod 600 "$STATS_NGINX_CONF"
-
-    nginx_ensure_sites_enabled_include
-    local sites_enabled="/etc/nginx/sites-enabled/$(basename "$STATS_NGINX_CONF")"
-    ln -sf "$STATS_NGINX_CONF" "$sites_enabled" 2>/dev/null || true
-
-    nginx -t 2>&1 && systemctl reload nginx \
-        && success "nginx configured for $subdomain" \
-        || { error "nginx config test failed. Check $STATS_NGINX_CONF"; return 1; }
+    # nginx_enable_site (shared lib): ensures the sites-enabled include, symlinks,
+    # then runs nginx -t + reload. Returns non-zero on failure.
+    if ! nginx_enable_site "$nginx_conf" "$conf_name"; then
+        error "nginx rejected the config — check $nginx_conf"
+        return 1
+    fi
+    success "nginx serving http://$subdomain"
 
     echo ""
-    echo -ne "Run certbot for SSL on $subdomain? [Y/n/0]: "
+    echo -ne "Run certbot for SSL on $subdomain (recommended)? [Y/n/0]: "
     read -r do_ssl
+    local page_https=0
     if [[ "${do_ssl,,}" != "n" && "$do_ssl" != "0" ]]; then
-        certbot --nginx -d "$subdomain" --non-interactive --agree-tos \
-            --email "admin@$subdomain" 2>&1 | tail -5 || warn "certbot failed — configure SSL manually."
+        # nginx_run_certbot (shared lib) handles the certbot --nginx --redirect call.
+        if nginx_run_certbot "$subdomain" "admin@$subdomain" --redirect; then
+            # certbot rewrote the conf in place — re-tighten perms (token still inside).
+            chmod 600 "$nginx_conf"
+            nginx_test_reload "reload after certbot" || true
+            page_https=1
+            success "Stats page deployed: https://$subdomain"
+        else
+            warn "certbot failed — page is live over HTTP only."
+            echo -e "  Fix DNS so $subdomain points here, then re-run S (or run certbot manually)."
+            success "Stats page deployed: http://$subdomain"
+        fi
+    else
+        info "Skipped SSL — page is live over HTTP only at http://$subdomain"
     fi
 
-    echo ""
-    success "Stats page deployed: https://$subdomain"
-    echo -e "  Page polls ${BOLD}/api/status${RESET} every 10s via nginx proxy."
+    # Guardrail: never serve Basic Auth over plain HTTP. If a lock was configured
+    # but the page ended up HTTP-only (SSL skipped or certbot failed), strip the
+    # auth_basic lines now. The htpasswd file is kept; re-run S once SSL is up.
+    if [[ -n "$_ACCESS_AUTH_BLOCK" && $page_https -eq 0 ]]; then
+        sed -i '/^[[:space:]]*auth_basic/d' "$nginx_conf"
+        nginx_test_reload "reload after disabling HTTP-only auth lock" || true
+        warn "Access lock NOT active: refusing to serve Basic Auth over plain HTTP."
+        echo -e "  ${DIM}Credentials saved at $STATS_HTPASSWD — re-run S after SSL succeeds to enable the lock.${RESET}"
+    fi
+
+    echo -e "  Page polls ${BOLD}/api/status/<net>${RESET} + ${BOLD}/api/wallet/<net>${RESET} every 10s — both networks side by side."
+    echo -e "  ${DIM}Wallet Listener row flags whether the coinbase listener is up.${RESET}"
+    echo -e "  ${DIM}Only the network(s) detected at deploy time are wired; others grey out.${RESET}"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1050,7 +1485,9 @@ solo_watchdog_setup() {
 
     cat > "$wrapper" << WATCHDOG
 #!/bin/bash
-# Grin stratum watchdog — checks stratum is still enabled in grin-server.toml
+# Grin stratum watchdog — verifies stratum is enabled in grin-server.toml AND
+# the configured stratum port is actually listening (catches a node restart that
+# reset the toml, or a stratum that failed to bind).
 set -euo pipefail
 
 LOG="$WATCHDOG_LOG"
@@ -1061,14 +1498,26 @@ for TOML_PATH in $toml_paths; do
     [[ -f "\$TOML_PATH" ]] || continue
     ENABLED=\$(grep -E '^[[:space:]]*enable_stratum_server[[:space:]]*=' "\$TOML_PATH" 2>/dev/null \
         | head -1 | sed 's/.*=[[:space:]]*//' | tr -d ' ' || echo "")
+    ADDR=\$(grep -E '^[[:space:]]*stratum_server_addr[[:space:]]*=' "\$TOML_PATH" 2>/dev/null \
+        | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '" ' || echo "")
+    PORT="\${ADDR##*:}"
+
     if [[ "\$ENABLED" != "true" ]]; then
         echo "[\$TS] WARN: enable_stratum_server not true in \$TOML_PATH (found: '\${ENABLED:-not set}')" >> "\$LOG"
+        WARNED=true
+        continue
+    fi
+
+    # Config says enabled — confirm the port is live. Enabled but no listener
+    # means the node is down or stratum failed to bind.
+    if [[ -n "\$PORT" ]] && ! ss -tln 2>/dev/null | grep -q ":\$PORT "; then
+        echo "[\$TS] WARN: stratum enabled in \$TOML_PATH but port \$PORT is NOT listening" >> "\$LOG"
         WARNED=true
     fi
 done
 
 if [[ "\$WARNED" == "false" ]]; then
-    echo "[\$TS] OK: stratum enabled in all detected grin-server.toml files" >> "\$LOG"
+    echo "[\$TS] OK: stratum enabled and listening for all detected grin-server.toml files" >> "\$LOG"
 fi
 WATCHDOG
     chmod 750 "$wrapper"
@@ -1084,6 +1533,199 @@ EOF
 # MENU
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# SUPERVISION SUBMENUS (Track B — central wallet + watchdogs)
+# Each action prompts for the network, mirroring L) Live stats. Underlying logic
+# lives in the shared libs (07_solo_wallet.sh, grin_node_keepalive.sh).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# _solo_pick_net <label> → echoes "mainnet"|"testnet" on stdout; rc 1 on cancel.
+_solo_pick_net() {
+    local label="${1:-this action}" n
+    echo -e "  Network for ${BOLD}$label${RESET}:  ${GREEN}1${RESET}) Mainnet   ${GREEN}2${RESET}) Testnet   ${DIM}0) Cancel${RESET}" >&2
+    echo -ne "  Select [1/2/0]: " >&2
+    read -r n || true   # EOF → empty → cancel (never abort the menu under set -e)
+    case "$n" in
+        1) echo mainnet ;;
+        2) echo testnet ;;
+        *) return 1 ;;
+    esac
+}
+
+_solo_pause() { echo ""; echo "Press Enter to continue..."; read -r || true; }
+
+# K) Central Wallet — init/recover, listener, auto-restart, address.
+wallet_menu() {
+    local choice net
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  Central Wallet — coinbase listener${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        echo -e "${BOLD}  Listener:${RESET}"
+        sw_listener_status mainnet | sed 's/^/    /'
+        sw_listener_status testnet | sed 's/^/    /'
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Setup / Recover    ${DIM}(download + init|recover + save pass + start)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Start listener"
+        echo -e "  ${RED}3${RESET}) Stop listener"
+        echo -e "  ${GREEN}4${RESET}) Auto-restart       ${DIM}(@reboot + */5 listener watchdog)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Show address"
+        echo -e "  ${RED}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select [1-5/0]: ${RESET}"
+        read -r choice || choice=0          # EOF (Ctrl+D) → 0 → Back
+        case "$choice" in
+            "") continue ;;                 # Enter → refresh
+            1) net=$(_solo_pick_net "wallet setup")   && { sw_setup "$net" || true; };         _solo_pause ;;
+            2) net=$(_solo_pick_net "start listener") && { sw_listener_start "$net" || true; }; _solo_pause ;;
+            3) net=$(_solo_pick_net "stop listener")  && { sw_listener_stop "$net" || true; };  _solo_pause ;;
+            4) _wallet_autorestart_menu || true ;;
+            5) net=$(_solo_pick_net "show address")    && { sw_show_address "$net" || true; };   _solo_pause ;;
+            0) return ;;
+            *) warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
+_wallet_autorestart_menu() {
+    local choice net
+    clear
+    echo -e "${BOLD}${CYAN}  Wallet listener — auto-restart${RESET}\n"
+    echo -e "${BOLD}  Boot autostart:${RESET}"; sw_autostart_status | sed 's/^/    /'
+    echo -e "${BOLD}  Listener watchdog:${RESET}"; sw_watchdog_status 2>&1 | sed 's/^/    /' | head -1
+    echo ""
+    echo -e "  ${GREEN}1${RESET}) Enable boot autostart (per net)"
+    echo -e "  ${RED}2${RESET}) Disable boot autostart (per net)"
+    echo -e "  ${GREEN}3${RESET}) Install listener watchdog (*/5)"
+    echo -e "  ${RED}4${RESET}) Remove listener watchdog"
+    echo -e "  ${RED}0${RESET}) Back"
+    echo ""
+    echo -ne "${BOLD}Select [1-4/0]: ${RESET}"
+    read -r choice || choice=0
+    case "$choice" in
+        1) net=$(_solo_pick_net "boot autostart") && { sw_autostart_enable "$net" || true; } ;;
+        2) net=$(_solo_pick_net "boot autostart") && { sw_autostart_disable "$net" || true; } ;;
+        3) sw_watchdog_install || true ;;
+        4) sw_watchdog_remove || true ;;
+        0) return ;;
+        *) warn "Invalid option." ;;
+    esac
+    _solo_pause
+}
+
+# H) Health / Watchdogs — node-sync, node boot-autostart, wallet listener, stratum.
+watchdog_menu() {
+    local choice net
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  Health / Watchdogs${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        echo -e "${BOLD}  Node-sync watchdog:${RESET}";    gnk_watchdog_status 2>&1 | sed 's/^/    /' | head -2
+        echo -e "${BOLD}  Node boot-autostart:${RESET}";   gnk_autostart_status | sed 's/^/    /'
+        echo -e "${BOLD}  Wallet-listener watchdog:${RESET}"; sw_watchdog_status 2>&1 | sed 's/^/    /' | head -1
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Node-sync watchdog     ${DIM}install / remove (restarts a wedged node)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Node boot-autostart    ${DIM}enable / disable @reboot (per net)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Wallet-listener wd     ${DIM}install / remove${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Stratum watchdog       ${DIM}(existing W — alert if stratum drops)${RESET}"
+        echo -e "  ${RED}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select [1-4/0]: ${RESET}"
+        read -r choice || choice=0
+        case "$choice" in
+            "") continue ;;
+            1)  echo -ne "  ${GREEN}i${RESET}nstall / ${RED}r${RESET}emove / ${DIM}0 cancel${RESET}: "; read -r a || true
+                case "$a" in i) gnk_watchdog_install || true ;; r) gnk_watchdog_remove || true ;; esac; _solo_pause ;;
+            2)  net=$(_solo_pick_net "boot autostart") || { _solo_pause; continue; }
+                echo -ne "  ${GREEN}e${RESET}nable / ${RED}d${RESET}isable: "; read -r a || true
+                case "$a" in e) gnk_autostart_enable "$net" || true ;; d) gnk_autostart_disable "$net" || true ;; esac; _solo_pause ;;
+            3)  echo -ne "  ${GREEN}i${RESET}nstall / ${RED}r${RESET}emove / ${DIM}0 cancel${RESET}: "; read -r a || true
+                case "$a" in i) sw_watchdog_install || true ;; r) sw_watchdog_remove || true ;; esac; _solo_pause ;;
+            4)  solo_watchdog_setup || true; _solo_pause ;;
+            0)  return ;;
+            *)  warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
+# 2) Stratum — Setup / Configure / Publish / Restrict, network chosen inside.
+# Was B/C/D/E (mainnet) + F/G/I/J (testnet); the per-network letters collapsed
+# into one set. Pure dispatch — each branch calls the SAME mainnet/testnet
+# wrapper the old letters did, so behaviour is unchanged.
+_stratum_dispatch() {
+    local action="$1" net="$2"
+    case "$action:$net" in
+        setup:mainnet)     setup_stratum_mainnet ;;
+        setup:testnet)     setup_stratum_testnet ;;
+        configure:mainnet) configure_stratum_mainnet ;;
+        configure:testnet) configure_stratum_testnet ;;
+        publish:mainnet)   publish_mainnet_stratum ;;
+        publish:testnet)   publish_testnet_stratum ;;
+        restrict:mainnet)  restrict_mainnet_stratum ;;
+        restrict:testnet)  restrict_testnet_stratum ;;
+    esac
+}
+
+stratum_menu() {
+    local choice net
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  Stratum Server${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        show_compact_status
+        echo -e "  ${GREEN}1${RESET}) Setup       ${DIM}(enable stratum in grin-server.toml · wallet URL · burn)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Configure   ${DIM}(enable / bind / wallet / burn — single field)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Publish     ${DIM}(open 0.0.0.0:<port> to miners + firewall)${RESET}"
+        echo -e "  ${RED}4${RESET}) Restrict    ${DIM}(revert to 127.0.0.1)${RESET}"
+        echo -e "  ${RED}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select [1-4/0]: ${RESET}"
+        read -r choice || choice=0          # EOF (Ctrl+D) → 0 → Back
+        case "$choice" in
+            "") continue ;;                 # Enter → refresh
+            1) net=$(_solo_pick_net "setup stratum")     && { _stratum_dispatch setup "$net"     || true; }; _solo_pause ;;
+            2) net=$(_solo_pick_net "configure stratum") && { _stratum_dispatch configure "$net" || true; }; _solo_pause ;;
+            3) net=$(_solo_pick_net "publish stratum")   && { _stratum_dispatch publish "$net"   || true; }; _solo_pause ;;
+            4) net=$(_solo_pick_net "restrict stratum")  && { _stratum_dispatch restrict "$net"  || true; }; _solo_pause ;;
+            0) return ;;
+            *) warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
+# 3) Stats & Web — live terminal dashboard (was L) + nginx page deploy (was S).
+# The deploy itself prompts for payment-split prefixes + the optional access
+# lock, so those stay reachable through option 2 (no standalone quick-edit yet).
+stats_menu() {
+    local choice
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  Stats & Web${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Live dashboard    ${DIM}(terminal stats, updates every 10s; Ctrl+C to exit)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Deploy / update   ${DIM}(nginx page; prompts payment prefixes + access lock)${RESET}"
+        echo -e "  ${RED}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select [1-2/0]: ${RESET}"
+        read -r choice || choice=0          # EOF (Ctrl+D) → 0 → Back
+        case "$choice" in
+            "") continue ;;                 # Enter → refresh
+            1) solo_live_stats || true ;;
+            2) solo_deploy_stats_page || true; _solo_pause ;;
+            0) return ;;
+            *) warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -1092,60 +1734,40 @@ show_menu() {
     echo ""
     show_compact_status
 
-    echo -e "${DIM}  ─── Status ──────────────────────────────────────${RESET}"
     echo -e "  ${GREEN}A${RESET}) Node & Mining Status  ${DIM}(node sync, tmux, stratum config + miners)${RESET}"
     echo ""
-    echo -e "${DIM}  ─── MAINNET ─────────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}B${RESET}) Setup Stratum         ${DIM}(enable stratum in grin-server.toml)${RESET}"
-    echo -e "  ${GREEN}C${RESET}) Configure Stratum     ${DIM}(wallet URL, burn_reward)${RESET}"
-    echo -e "  ${GREEN}D${RESET}) Publish Stratum       ${DIM}(open :$STRATUM_PORT_MAINNET to miners)${RESET}"
-    echo -e "  ${RED}E${RESET}) Restrict Stratum      ${DIM}(revert to localhost)${RESET}"
-    echo ""
-    echo -e "${DIM}  ─── TESTNET ─────────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}F${RESET}) Setup Stratum"
-    echo -e "  ${GREEN}G${RESET}) Configure Stratum"
-    echo -e "  ${GREEN}I${RESET}) Publish Stratum       ${DIM}(open :$STRATUM_PORT_TESTNET for local lab)${RESET}"
-    echo -e "  ${RED}J${RESET}) Restrict Stratum"
-    echo ""
-    echo -e "${DIM}  ─── TOOLS ───────────────────────────────────────${RESET}"
-    echo -e "  ${GREEN}L${RESET}) Live stats            ${DIM}(terminal dashboard, updates every 10s)${RESET}"
-    echo -e "  ${GREEN}S${RESET}) Stats web page        ${DIM}(deploy static mining stats page via nginx)${RESET}"
-    echo -e "  ${GREEN}W${RESET}) Watchdog cron         ${DIM}(auto-alert if stratum drops)${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Wallet               ${DIM}▸ setup/recover · listener · auto-restart · address${RESET}"
+    echo -e "  ${GREEN}2${RESET}) Stratum              ${DIM}▸ setup · configure · publish · restrict${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Stats & Web          ${DIM}▸ live dashboard · web page${RESET}"
+    echo -e "  ${GREEN}4${RESET}) Health / Watchdogs   ${DIM}▸ node-sync · boot autostart · wallet listener · stratum${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [A/B-E/F-J/L/S/W/0]: ${RESET}"
+    echo -ne "${BOLD}Select [A/1-4/0]: ${RESET}"
 }
 
 main() {
     while true; do
         show_menu
-        read -r choice
+        read -r choice || choice=0          # EOF (Ctrl+D) → 0 → Back to main menu
 
+        # Every action is guarded with `|| true`: this is an interactive dispatch
+        # loop, so a cancelled/failed action (e.g. "TOML not found" → `... || return`)
+        # must drop back to the menu, never hard-exit the script under `set -e`.
         case "${choice,,}" in
-            "")  continue ;;
-            a)   show_node_status ;;
-            b)   setup_stratum_mainnet ;;
-            c)   configure_stratum_mainnet ;;
-            d)   publish_mainnet_stratum ;;
-            e)   restrict_mainnet_stratum ;;
-            f)   setup_stratum_testnet ;;
-            g)   configure_stratum_testnet ;;
-            i)   publish_testnet_stratum ;;
-            j)   restrict_testnet_stratum ;;
-            l)   solo_live_stats ;;
-            s)   solo_deploy_stats_page ;;
-            w)   solo_watchdog_setup ;;
+            "")  continue ;;                # Enter → refresh status
+            a)   show_node_status || true
+                 echo ""; echo "Press Enter to continue..."; read -r || true ;;
+            1)   wallet_menu   || true ;;
+            2)   stratum_menu  || true ;;
+            3)   stats_menu    || true ;;
+            4)   watchdog_menu || true ;;
             0)   break ;;
-            *)   warn "Invalid option." ; sleep 1 ; continue ;;
+            *)   warn "Invalid option."; sleep 1 ;;
         esac
-
-        [[ "${choice,,}" != "l" ]] && {
-            echo ""
-            echo "Press Enter to continue..."
-            read -r
-        }
+        # Submenus (1-4) run their own loops + pauses; only the one-shot A) status
+        # view needs a pause, handled inline above.
     done
 }
 

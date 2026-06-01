@@ -248,7 +248,7 @@ step_remove_web_dirs() {
     if confirm_step "Permanently delete all Grin directories listed above?"; then
         for d in "${web_dirs[@]}"; do
             info "Removing $d ..."
-            rm -rf "$d"
+            rm -rf "${d:?}"
             success "Removed: $d"
             log "[STEP 2] DELETED web dir: $d"
         done
@@ -403,7 +403,7 @@ step_remove_install_dirs() {
 
     if confirm_step "Remove all Grin install directories and binaries?"; then
         for f in "${found[@]}"; do
-            rm -rf "$f"
+            rm -rf "${f:?}"
             success "Removed: $f"
             log "[STEP 4] DELETED: $f"
         done
@@ -438,7 +438,7 @@ step_remove_home_grin() {
     echo -e "  ${YELLOW}→${RESET} $grin_home  ${DIM}($sz)${RESET}"
 
     if confirm_step "Permanently delete \$HOME/.grin? (wallets WILL be lost)"; then
-        rm -rf "$grin_home"
+        rm -rf "${grin_home:?}"
         success "Removed: $grin_home"
         log "[STEP 5] DELETED: $grin_home"
     else
@@ -499,39 +499,65 @@ step_remove_logs() {
 # STEP 7 — Remove Grin crontab entries
 # =============================================================================
 step_remove_crontab() {
-    section "STEP 7: Remove Grin Crontab Entries"
+    section "STEP 7: Remove Grin Crontab and /etc/cron.d Entries"
 
-    local existing
+    # ── 7a) User crontab ────────────────────────────────────────────────────────
+    local existing grin_lines
     existing=$(crontab -l 2>/dev/null || true)
-
-    local grin_lines
     grin_lines=$(echo "$existing" | grep -i 'grin' || true)
 
-    if [[ -z "$grin_lines" ]]; then
-        info "No Grin entries found in crontab. Skipping."
-        log "[STEP 7] No Grin crontab entries found. Skipped."
+    if [[ -n "$grin_lines" ]]; then
+        info "Found Grin entries in the user crontab:"
+        while IFS= read -r line; do
+            echo -e "  ${YELLOW}→${RESET} $line"
+        done <<< "$grin_lines"
+        if confirm_step "Remove all Grin entries from the user crontab?"; then
+            local cleaned
+            cleaned=$(echo "$existing" | grep -iv 'grin' || true)
+            # Write back — if nothing remains, install an empty crontab
+            if [[ -n "$cleaned" ]]; then
+                echo "$cleaned" | crontab -
+            else
+                crontab -r 2>/dev/null || true
+            fi
+            success "User crontab Grin entries removed."
+            log "[STEP 7] Removed user crontab entries: $grin_lines"
+        else
+            info "Skipped — user crontab entries kept."
+            log "[STEP 7] User crontab SKIPPED by user."
+        fi
+    else
+        info "No Grin entries in the user crontab."
+        log "[STEP 7] No user crontab Grin entries."
+    fi
+
+    # ── 7b) /etc/cron.d drop-ins (stats collector, stratum watchdog, …) ─────────
+    # Scripts 06/07 install cron.d files (e.g. grin-solo-mining-collector,
+    # grin-stratum-watchdog) — these are NOT in the user crontab above.
+    local -a crond=()
+    while IFS= read -r f; do
+        [[ -n "$f" ]] && crond+=("$f")
+    done < <(find /etc/cron.d -maxdepth 1 -type f -iname 'grin*' 2>/dev/null || true)
+
+    if [[ ${#crond[@]} -eq 0 ]]; then
+        info "No Grin /etc/cron.d drop-ins found."
+        log "[STEP 7] No /etc/cron.d grin files."
         return
     fi
 
-    info "Found Grin entries in crontab:"
-    while IFS= read -r line; do
-        echo -e "  ${YELLOW}→${RESET} $line"
-    done <<< "$grin_lines"
-
-    if confirm_step "Remove all Grin entries from crontab?"; then
-        local cleaned
-        cleaned=$(echo "$existing" | grep -iv 'grin' || true)
-        # Write back — if nothing remains, install an empty crontab
-        if [[ -n "$cleaned" ]]; then
-            echo "$cleaned" | crontab -
-        else
-            crontab -r 2>/dev/null || true
-        fi
-        success "Grin crontab entries removed."
-        log "[STEP 7] Removed crontab entries: $grin_lines"
+    info "Found Grin /etc/cron.d drop-ins:"
+    for f in "${crond[@]}"; do
+        echo -e "  ${YELLOW}→${RESET} $f"
+    done
+    if confirm_step "Remove these /etc/cron.d Grin files?"; then
+        for f in "${crond[@]}"; do
+            rm -f "$f"
+            success "Removed: $f"
+            log "[STEP 7] DELETED cron.d: $f"
+        done
     else
-        info "Skipped — crontab entries kept."
-        log "[STEP 7] SKIPPED by user."
+        info "Skipped — /etc/cron.d files kept."
+        log "[STEP 7] /etc/cron.d SKIPPED by user."
     fi
 }
 
@@ -657,7 +683,7 @@ main() {
     echo -e "${BOLD}${RED}║    4.  Grin binary and install directories (/grin*, /opt/grin*)     ║${RESET}"
     echo -e "${BOLD}${RED}║    5.  Chain data and wallet files  (\$HOME/.grin/)                  ║${RESET}"
     echo -e "${BOLD}${RED}║    6.  Grin toolkit log files                                       ║${RESET}"
-    echo -e "${BOLD}${RED}║    7.  Grin crontab entries                                         ║${RESET}"
+    echo -e "${BOLD}${RED}║    7.  Grin crontab + cron.d entries                                ║${RESET}"
     echo -e "${BOLD}${RED}║    8.  Tor HiddenService entries + .onion identity keys             ║${RESET}"
     echo -e "${BOLD}${RED}║                                                                      ║${RESET}"
     echo -e "${BOLD}${RED}║  Wallet seed phrases AND .onion identity keys will be LOST          ║${RESET}"

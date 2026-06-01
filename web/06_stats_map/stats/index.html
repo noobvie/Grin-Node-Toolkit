@@ -3,13 +3,44 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Grin Node World Map — Global Grin Network Peer Map</title>
-<meta name="description" content="Live Grin node world map. See active Grin network peers by country, version, and direction. Monitor global Grin node health in real time.">
-<meta name="keywords" content="grin node map, grin node world, grin network map, grin peers, grin cryptocurrency nodes, grin blockchain, grin network health, grin peer map, mimblewimble nodes">
-<meta name="robots" content="index, follow">
-<meta property="og:title" content="Grin Node World Map — Global Grin Network">
-<meta property="og:description" content="Interactive world map of active Grin network nodes. Filter by country, version, or direction.">
+<title>Grin Network Peer Map — Live Global Grin Node Tracker</title>
+<meta name="description" content="Live, interactive world map of active Grin cryptocurrency network peers. Track global Grin nodes in real time by country, client version, and connection direction — across mainnet and testnet.">
+<meta name="keywords" content="grin node map, grin network peer map, live grin node tracker, grin peers, grin cryptocurrency nodes, global grin network, grin network health, mimblewimble nodes">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="author" content="Grin Node Toolkit">
+<meta name="theme-color" content="#0d1117">
+<link rel="canonical" href="__SITE_URL__/">
+
+<!-- Open Graph -->
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="Global Grin Health">
+<meta property="og:title" content="Grin Network Peer Map — Live Global Grin Node Tracker">
+<meta property="og:description" content="Interactive live world map of active Grin network nodes. Filter by country, client version, or connection direction.">
+<meta property="og:url" content="__SITE_URL__/">
+<meta property="og:image" content="__SITE_URL__/grin-logo.svg">
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Grin Network Peer Map — Live Global Grin Node Tracker">
+<meta name="twitter:description" content="Live world map of active Grin cryptocurrency network peers — by country, client version, and connection direction.">
+<meta name="twitter:image" content="__SITE_URL__/grin-logo.svg">
+
+<!-- Structured data -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebApplication",
+  "name": "Grin Network Peer Map",
+  "url": "__SITE_URL__/",
+  "applicationCategory": "BrowserApplication",
+  "operatingSystem": "All",
+  "browserRequirements": "Requires JavaScript",
+  "description": "Live interactive world map of active Grin cryptocurrency network peers, tracking global Grin nodes in real time by country, client version, and connection direction across mainnet and testnet.",
+  "isPartOf": { "@type": "WebSite", "name": "Global Grin Health", "url": "__SITE_URL__/" },
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+
 <link rel="icon" href="grin-logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="leaflet.min.css">
 <link rel="stylesheet" href="_header.css">
@@ -106,6 +137,31 @@
     height: 100svh;
     display: flex;
     flex-direction: column;
+  }
+
+  /* ── SEO intro strip (crawlable text above the map) ──────────────────────── */
+  .seo-intro {
+    flex-shrink: 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 6px 16px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--muted);
+    text-align: center;
+  }
+  .seo-intro h1 {
+    display: inline;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .seo-intro h1::after { content: " — "; color: var(--muted); font-weight: 400; }
+  .seo-intro p { display: inline; }
+  .seo-intro strong { color: var(--grin); font-weight: 600; }
+  @media (max-width: 720px) {
+    .seo-intro { font-size: 11px; padding: 5px 10px; }
+    .seo-intro h1 { font-size: 12px; }
   }
 
   /* ── Version distribution tabs ───────────────────────────────────────────── */
@@ -505,6 +561,14 @@
 <body>
 
 <!--#include virtual="/_header.html"-->
+
+<section class="seo-intro">
+  <h1>Live Grin Network Peer Map</h1>
+  <p>Real-time interactive world map of active <strong>Grin</strong> cryptocurrency network peers — explore live mainnet &amp; testnet nodes by country, client version, and connection direction.</p>
+  <noscript>
+    <p>This live Grin node map needs JavaScript enabled. The Grin Node Toolkit continuously tracks active peers across the global Grin network and plots them on an interactive world map, with filtering by country, Grin client version, inbound/outbound direction, and IPv4/IPv6. Peer data refreshes every few minutes from a live Grin node. Learn more about Grin at <a href="https://grin.mw/">grin.mw</a> or the <a href="https://forum.grin.mw/">Grin community forum</a>.</p>
+  </noscript>
+</section>
 
 <div id="map-container">
   <div id="loading">
@@ -1111,6 +1175,17 @@ async function boot() {
   // Load price independently — don't block the map if CoinGecko is slow
   loadGrinPrice();
 }
+
+// Fallback: if the deploy step hasn't substituted __SITE_URL__ yet, derive it from
+// the live origin so canonical/og URLs are still valid (meta only — JSON-LD is fixed at deploy).
+(function fixSiteUrl() {
+  const origin = location.origin;
+  const canon = document.querySelector('link[rel="canonical"]');
+  if (canon && canon.href.includes("__SITE_URL__")) canon.href = origin + "/";
+  document.querySelectorAll('meta[content*="__SITE_URL__"]').forEach(m =>
+    m.setAttribute("content", m.getAttribute("content").replace(/__SITE_URL__/g, origin))
+  );
+})();
 
 initTheme();
 boot();

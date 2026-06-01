@@ -448,6 +448,46 @@ PYEOF
     info "Google Analytics (${ga_id}) applied to index.html, stats.html and ecosystem.html."
 }
 
+# ── A-helper: Finalize SEO once the public domain is known ────────────────────
+# Substitutes the __SITE_URL__ token (canonical / og: / JSON-LD) with the real
+# https://<domain> and writes robots.txt + sitemap.xml at the site root. Idempotent:
+# re-copies pristine HTML from the toolkit source first, so a domain change re-applies
+# cleanly. Re-runs GA injection afterward (substitution wipes the prior GA tag).
+_finalize_seo() {
+    local domain="$1"
+    [[ -z "$domain" ]] && return 0
+    local url="https://${domain}"
+
+    # Re-copy pristine HTML (token intact), then substitute the live URL
+    for f in index.html stats.html ecosystem.html; do
+        [[ -f "$WEB_SRC/$f" ]] && cp "$WEB_SRC/$f" "$WWW_DIR/$f"
+        [[ -f "$WWW_DIR/$f" ]] && sed -i "s|__SITE_URL__|${url}|g" "$WWW_DIR/$f"
+    done
+
+    # robots.txt — allow the pages, keep crawlers out of the JSON API/data dirs
+    cat > "$WWW_DIR/robots.txt" <<ROBOTS
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /data/
+
+Sitemap: ${url}/sitemap.xml
+ROBOTS
+
+    # sitemap.xml — the three indexable pages
+    local today; today=$(date -u +%Y-%m-%d)
+    cat > "$WWW_DIR/sitemap.xml" <<SITEMAP
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>${url}/</loc><lastmod>${today}</lastmod><changefreq>hourly</changefreq><priority>1.0</priority></url>
+  <url><loc>${url}/stats.html</loc><lastmod>${today}</lastmod><changefreq>hourly</changefreq><priority>0.8</priority></url>
+  <url><loc>${url}/ecosystem.html</loc><lastmod>${today}</lastmod><changefreq>daily</changefreq><priority>0.6</priority></url>
+</urlset>
+SITEMAP
+
+    info "SEO finalized for ${domain} — canonical/og URLs, robots.txt and sitemap.xml written."
+}
+
 # ── A-1: Install ──────────────────────────────────────────────────────────────
 install_stats() {
     require_root
@@ -579,6 +619,9 @@ install_stats() {
         || warn "Mainnet secret not found: $mainnet_secret — owner API calls may fail."
     [[ -f "$testnet_secret" ]] \
         || warn "Testnet secret not found: $testnet_secret — testnet peers will be skipped."
+    # Preserve a previously configured public domain across re-install (used for SEO)
+    local prev_domain=""
+    prev_domain=$(grep -E "^STATS_DOMAIN=" "$DATA_DIR/config.env" 2>/dev/null | cut -d= -f2- || true)
     cat > "$DATA_DIR/config.env" <<EOF
 GRIN_NODE_URL=${NODE_URL}
 GRIN_FOREIGN_SECRET_PATH=${foreign_secret}
@@ -589,10 +632,15 @@ GRIN_TESTNET_SECRET_PATH=${testnet_secret}
 GRIN_WWW_DATA=${WWW_DIR}/data
 GRIN_DB_PATH=${DB_PATH}
 GA_MEASUREMENT_ID=${ga_id}
+STATS_DOMAIN=${prev_domain}
 EOF
     chmod 600 "$DATA_DIR/config.env"
     info "Config written to $DATA_DIR/config.env"
     info "If your secret files are in a different location, edit that file manually."
+    # Re-apply SEO (canonical/og/sitemap) if a domain was already set; else the
+    # __SITE_URL__ token stays and is resolved at runtime by the page's JS fallback
+    # until Setup Nginx (5) runs and finalizes it.
+    [[ -n "$prev_domain" ]] && _finalize_seo "$prev_domain"
     _inject_analytics
 
     # Initialise empty DB (schema only)
@@ -865,6 +913,15 @@ setup_nginx_stats() {
     if [[ -z "$ssl_email" ]]; then
         warn "Email is required for Let's Encrypt SSL certificate."; pause; return
     fi
+
+    # Persist the public domain and finalize SEO (canonical/og/JSON-LD + robots/sitemap).
+    if grep -q '^STATS_DOMAIN=' "$DATA_DIR/config.env" 2>/dev/null; then
+        sed -i "s|^STATS_DOMAIN=.*|STATS_DOMAIN=${stats_domain}|" "$DATA_DIR/config.env"
+    else
+        echo "STATS_DOMAIN=${stats_domain}" >> "$DATA_DIR/config.env"
+    fi
+    _finalize_seo "$stats_domain"
+    _inject_analytics   # re-apply GA tag (SEO step re-copied pristine HTML)
 
     # Write HTTP-only config first — certbot needs nginx to serve the ACME challenge
     info "Creating nginx config for ${stats_domain}..."

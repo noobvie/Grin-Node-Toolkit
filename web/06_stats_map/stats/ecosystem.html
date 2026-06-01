@@ -5,10 +5,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Grin Ecosystem Status — DNS Seeds, Services &amp; Community</title>
 <meta name="description" content="Live Grin ecosystem status: DNS seed connectivity and domain expiry, blockchain explorers, exchanges, community sites and developer resources. Real-time health checks for the Grin MimbleWimble network.">
-<meta name="robots" content="index, follow">
-<meta property="og:title" content="Grin Ecosystem Status">
-<meta property="og:description" content="Live health checks for Grin DNS seeds, explorers, exchanges, and community resources.">
+<meta name="keywords" content="grin ecosystem, grin dns seeds, grin explorers, grin exchanges, grin community, grin services status, mimblewimble ecosystem, grin node directory">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="author" content="Grin Node Toolkit">
+<meta name="theme-color" content="#0d1117">
+<link rel="canonical" href="__SITE_URL__/ecosystem.html">
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="Global Grin Health">
+<meta property="og:title" content="Grin Ecosystem Status — DNS Seeds, Services &amp; Community">
+<meta property="og:description" content="Live health checks for Grin DNS seeds, blockchain explorers, exchanges, and community resources across the MimbleWimble network.">
+<meta property="og:url" content="__SITE_URL__/ecosystem.html">
+<meta property="og:image" content="__SITE_URL__/grin-logo.svg">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Grin Ecosystem Status">
+<meta name="twitter:description" content="Live health checks for Grin DNS seeds, explorers, exchanges, and community resources.">
+<meta name="twitter:image" content="__SITE_URL__/grin-logo.svg">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  "name": "Grin Ecosystem Status",
+  "url": "__SITE_URL__/ecosystem.html",
+  "description": "Live status of the Grin ecosystem: DNS seed connectivity and domain expiry, blockchain explorers, exchanges, community sites and developer resources for the MimbleWimble network.",
+  "isPartOf": { "@type": "WebSite", "name": "Global Grin Health", "url": "__SITE_URL__/" }
+}
+</script>
 <link rel="icon" href="grin-logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="_header.css">
 <style>
@@ -614,6 +635,17 @@
 
 <main>
 
+  <section style="max-width:860px;margin:0 auto 4px;padding:18px 24px 0;font-size:12px;color:var(--muted);line-height:1.7;">
+    <h1 style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:8px;">Grin Ecosystem Status</h1>
+    <p>
+      Live health checks for the <a href="https://grin.mw/" target="_blank" rel="noopener" style="color:var(--grin);">Grin MimbleWimble</a> ecosystem —
+      <strong>DNS seed</strong> connectivity and domain expiry, public <strong>blockchain explorers</strong>,
+      <strong>exchanges</strong>, community sites and developer resources. Public Grin nodes and sites can be
+      submitted below and are re-checked hourly. Built with the open-source
+      <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener" style="color:var(--grin);">Grin Node Toolkit</a>.
+    </p>
+  </section>
+
   <!-- ── Submit your site / repo — collapsed strip ────────────────────────── -->
   <div class="submit-strip" id="submit-strip">
     <button type="button" class="submit-strip-toggle" id="submit-strip-toggle"
@@ -776,6 +808,17 @@ seeds = ["grincoin.org:3414", "main.gri.mw:3414", "main-seed.grin.money:3414"]</
 </footer>
 
 <script>
+// Fallback: resolve __SITE_URL__ in canonical/og meta from the live origin if the
+// deploy step hasn't substituted it yet (JSON-LD is fixed at deploy time).
+(function fixSiteUrl() {
+  const origin = location.origin;
+  const canon = document.querySelector('link[rel="canonical"]');
+  if (canon && canon.href.includes("__SITE_URL__")) canon.href = canon.getAttribute("href").replace(/__SITE_URL__/g, origin);
+  document.querySelectorAll('meta[content*="__SITE_URL__"]').forEach(m =>
+    m.setAttribute("content", m.getAttribute("content").replace(/__SITE_URL__/g, origin))
+  );
+})();
+
 const REFRESH_MS = 60 * 60 * 1000; // match hourly cron
 
 function esc(s) {

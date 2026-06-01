@@ -108,32 +108,51 @@ _KNOWN_TOML_SEARCH_PATHS=(
     /root/.grin/main       /root/.grin/test
 )
 
+# Echo the grin-server.toml beside the RUNNING node's binary (via /proc/<pid>/exe),
+# or rc 1 if the node isn't listening / has no toml next to its binary.
+#   $1 = node API port
+_toml_from_running_node() {
+    local api_port="$1" pid exe dir
+    pid=$(ss -tlnp 2>/dev/null | grep ":$api_port " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+    [[ -n "$pid" ]] || return 1
+    exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
+    [[ -n "$exe" ]] || return 1
+    dir=$(dirname "$exe")
+    [[ -f "$dir/grin-server.toml" ]] && { echo "$dir/grin-server.toml"; return 0; }
+    return 1
+}
+
+# Echo every grin-server.toml under the known search dirs whose chain_type matches.
+#   $1 = expected chain type (Mainnet|Testnet)   →   zero or more paths, one per line
+_toml_search_candidates() {
+    local expected_chain_type="$1" dir f
+    for dir in "${_KNOWN_TOML_SEARCH_PATHS[@]}"; do
+        f="$dir/grin-server.toml"
+        [[ -f "$f" ]] || continue
+        grep -qiE "chain_type\s*=\s*[\"']?$expected_chain_type" "$f" 2>/dev/null \
+            && echo "$f"
+    done
+}
+
+# Silent resolver (no prompts): running node wins, else the first matching search
+# path. Echoes the toml path; rc 1 if none. Used by the status views.
 _resolve_stratum_toml() {
     local network="$1" api_port="$2"
     local expected_chain_type="Mainnet"
     [[ "$network" == "testnet" ]] && expected_chain_type="Testnet"
 
-    local pid exe dir
-    pid=$(ss -tlnp 2>/dev/null | grep ":$api_port " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
-    if [[ -n "$pid" ]]; then
-        exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
-        if [[ -n "$exe" ]]; then
-            dir=$(dirname "$exe")
-            [[ -f "$dir/grin-server.toml" ]] && echo "$dir/grin-server.toml" && return 0
-        fi
-    fi
-
     local f
-    for dir in "${_KNOWN_TOML_SEARCH_PATHS[@]}"; do
-        f="$dir/grin-server.toml"
-        [[ -f "$f" ]] || continue
-        grep -qiE "chain_type\s*=\s*[\"']?$expected_chain_type" "$f" 2>/dev/null \
-            && echo "$f" && return 0
-    done
-
+    f=$(_toml_from_running_node "$api_port") && { echo "$f"; return 0; }
+    # First matching candidate. Deterministic read loop instead of `| head -1`,
+    # which under pipefail+set -e can abort on a SIGPIPE'd producer.
+    while IFS= read -r f; do
+        [[ -n "$f" ]] && { echo "$f"; return 0; }
+    done < <(_toml_search_candidates "$expected_chain_type")
     return 1
 }
 
+# Interactive resolver: sets global FOUND_GRIN_TOML. Running node wins outright;
+# otherwise 1 match auto-selects, >1 prompts, 0 asks for a manual path.
 find_grin_server_toml() {
     local network="$1" api_port="$2"
     local expected_chain_type="Mainnet"
@@ -141,27 +160,17 @@ find_grin_server_toml() {
 
     FOUND_GRIN_TOML=""
 
-    local pid exe grin_dir
-    pid=$(ss -tlnp 2>/dev/null | grep ":$api_port " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
-    if [[ -n "$pid" ]]; then
-        exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
-        if [[ -n "$exe" ]]; then
-            grin_dir=$(dirname "$exe")
-            if [[ -f "$grin_dir/grin-server.toml" ]]; then
-                FOUND_GRIN_TOML="$grin_dir/grin-server.toml"
-                info "Config detected (via running process): $FOUND_GRIN_TOML"
-                return 0
-            fi
-        fi
+    local f
+    if f=$(_toml_from_running_node "$api_port"); then
+        FOUND_GRIN_TOML="$f"
+        info "Config detected (via running process): $FOUND_GRIN_TOML"
+        return 0
     fi
 
-    local candidates=() dir f
-    for dir in "${_KNOWN_TOML_SEARCH_PATHS[@]}"; do
-        f="$dir/grin-server.toml"
-        [[ -f "$f" ]] || continue
-        grep -qiE "chain_type\s*=\s*[\"']?$expected_chain_type" "$f" 2>/dev/null \
-            && candidates+=("$f")
-    done
+    local candidates=() sel="" manual_path="" idx
+    while IFS= read -r f; do
+        [[ -n "$f" ]] && candidates+=("$f")
+    done < <(_toml_search_candidates "$expected_chain_type")
 
     if [[ ${#candidates[@]} -eq 1 ]]; then
         FOUND_GRIN_TOML="${candidates[0]}"
@@ -178,7 +187,8 @@ find_grin_server_toml() {
         echo -ne "Select [0-${#candidates[@]}]: "
         read -r sel
         [[ "$sel" == "0" ]] && return 1
-        local idx=$(( sel - 1 ))
+        [[ "$sel" =~ ^[0-9]+$ ]] || { warn "Invalid selection."; return 1; }
+        idx=$(( sel - 1 ))
         if [[ "$idx" -ge 0 && "$idx" -lt "${#candidates[@]}" ]]; then
             FOUND_GRIN_TOML="${candidates[$idx]}"
             return 0
@@ -432,7 +442,6 @@ _do_setup_stratum() {
     local network="$1" stratum_port="$2" api_port="$3"
     local label="Mainnet"
     [[ "$network" == "testnet" ]] && label="Testnet"
-    local publish_key="D"; [[ "$network" == "testnet" ]] && publish_key="I"
 
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -441,7 +450,7 @@ _do_setup_stratum() {
     echo ""
     echo -e "  Enables the stratum server in grin-server.toml and sets the"
     echo -e "  wallet listener URL for coinbase block rewards."
-    echo -e "  Use ${BOLD}$publish_key${RESET} to publish (open to miners) after setup."
+    echo -e "  Use ${BOLD}Stratum ▸ 3) Publish${RESET} to open it to miners after setup."
     echo ""
 
     find_grin_server_toml "$network" "$api_port" || return
@@ -517,7 +526,7 @@ _do_setup_stratum() {
     success "Stratum setup complete for $network."
     echo ""
     info "Stratum is configured but bound to localhost by default."
-    echo -e "  Use ${BOLD}$publish_key${RESET} to publish and open to miners."
+    echo -e "  Use ${BOLD}Stratum ▸ 3) Publish${RESET} to open it to miners."
     echo -e "  Restart the grin node to apply changes."
 }
 
@@ -565,6 +574,9 @@ _do_configure_stratum() {
             echo -ne "Set enable_stratum_server [true/false] (current: ${cur_enable:-not set}): "
             read -r new_val
             [[ -z "$new_val" ]] && return
+            if [[ "$new_val" != "true" && "$new_val" != "false" ]]; then
+                warn "Must be exactly 'true' or 'false' — not changed."; return
+            fi
             local esc_val; esc_val=$(_sed_escape_rhs "$new_val")
             if grep -qE '^#?[[:space:]]*enable_stratum_server[[:space:]]*=' "$grin_toml" 2>/dev/null; then
                 sed -i -E "s|^#?[[:space:]]*enable_stratum_server[[:space:]]*=.*|enable_stratum_server = $esc_val|" "$grin_toml"
@@ -580,6 +592,9 @@ _do_configure_stratum() {
             echo -ne "New stratum_server_addr (current: ${cur_addr:-not set}): "
             read -r new_addr
             [[ -z "$new_addr" ]] && return
+            if [[ ! "$new_addr" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{1,5}$ ]]; then
+                warn "Expected host:port like 0.0.0.0:$stratum_port — not changed."; return
+            fi
             local esc_addr; esc_addr=$(_sed_escape_rhs "$new_addr")
             if grep -qE '^#?[[:space:]]*stratum_server_addr[[:space:]]*=' "$grin_toml" 2>/dev/null; then
                 sed -i -E "s|^#?[[:space:]]*stratum_server_addr[[:space:]]*=.*|stratum_server_addr = \"$esc_addr\"|" "$grin_toml"
@@ -608,6 +623,9 @@ _do_configure_stratum() {
             echo -ne "Set burn_reward [true/false] (current: ${cur_burn:-not set}): "
             read -r new_burn
             [[ -z "$new_burn" ]] && return
+            if [[ "$new_burn" != "true" && "$new_burn" != "false" ]]; then
+                warn "Must be exactly 'true' or 'false' — not changed."; return
+            fi
             local esc_burn; esc_burn=$(_sed_escape_rhs "$new_burn")
             if grep -qE '^#?[[:space:]]*burn_reward[[:space:]]*=' "$grin_toml" 2>/dev/null; then
                 sed -i -E "s|^#?[[:space:]]*burn_reward[[:space:]]*=.*|burn_reward = $esc_burn|" "$grin_toml"
@@ -728,6 +746,12 @@ _enable_stratum() {
             echo -ne "Enter allowed IP (or 0 to skip): "
             read -r allowed_ip
             [[ "$allowed_ip" == "0" ]] && allowed_ip=""
+            # Reject anything that is not a bare IPv4 or IPv4/CIDR before it
+            # reaches ufw/iptables (a typo would otherwise write a broken rule).
+            if [[ -n "$allowed_ip" && ! "$allowed_ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$ ]]; then
+                warn "Not a valid IPv4 address or CIDR — skipping firewall rule."
+                allowed_ip=""
+            fi
             if [[ -n "$allowed_ip" ]]; then
                 if command -v ufw &>/dev/null; then
                     ufw allow from "$allowed_ip" to any port "$stratum_port" proto tcp
@@ -933,7 +957,7 @@ _solo_stats_proxy_location() {
     cat << EOF
     # Proxy → $1 node Owner API (auth injected here, never exposed to the browser)
     location = /api/status/$1 {
-        limit_req zone=grin_api burst=5 nodelay;
+        limit_req zone=solo_stats_api burst=10 nodelay;
         proxy_pass         http://127.0.0.1:$2/v2/owner;
         proxy_method       POST;
         proxy_set_header   Content-Type "application/json";
@@ -1010,7 +1034,7 @@ _solo_stats_wallet_location() {
     cat << EOF
     # Liveness probe → $1 wallet Foreign API (the listener the node builds coinbase from)
     location = /api/wallet/$1 {
-        limit_req zone=grin_api burst=5 nodelay;
+        limit_req zone=solo_stats_api burst=10 nodelay;
         proxy_pass            $2;
         proxy_method          POST;
         proxy_set_header      Content-Type "application/json";
@@ -1358,7 +1382,10 @@ CRON
     # below. Safe over the certbot HTTPS redirect (creds never cross plain HTTP).
     _solo_prompt_access_lock
 
-    nginx_ensure_grin_api_zone
+    # Dedicated zone (NOT the shared grin_api 30r/m used by scripts 04/06): the
+    # page polls up to 4 proxied endpoints every 10s, so one viewer alone draws
+    # ~24 req/min. 90r/m gives a NAT'd / multi-tab audience real headroom.
+    nginx_ensure_rate_limit_zone "solo_stats_api" "90r/m" "10m" "script07-solo-stats"
 
     # Write an HTTP-only vhost FIRST. Referencing letsencrypt certs that do not
     # exist yet would make `nginx -t` fail. certbot --nginx injects the 443
@@ -1369,7 +1396,7 @@ CRON
     mkdir -p "$(dirname "$nginx_conf")"
     ( umask 077; cat > "$nginx_conf" << EOF
 # Grin Solo Mining Stats (unified mainnet + testnet) — generated by 07_grin_mining_solo.sh
-# Rate-limit zone lives in /etc/nginx/conf.d/grin-rate-limit.conf
+# Rate-limit zone lives in /etc/nginx/conf.d/script07-solo-stats.conf
 # SSL is added in-place by certbot --nginx (do not hand-add a 443 block here).
 
 server {
@@ -1454,10 +1481,13 @@ solo_watchdog_setup() {
 
     local cron_file="/etc/cron.d/grin-stratum-watchdog"
     local wrapper="/usr/local/bin/grin-stratum-watchdog"
-    local toml_paths=""
 
+    # Bake the search DIRS (not a one-time snapshot of the tomls that happen to
+    # exist now) so a node built AFTER the watchdog is installed is picked up on
+    # the next run — the wrapper re-scans these dirs every time it fires.
+    local search_dirs_literal="" dir
     for dir in "${_KNOWN_TOML_SEARCH_PATHS[@]}"; do
-        [[ -f "$dir/grin-server.toml" ]] && toml_paths+="$dir/grin-server.toml "
+        search_dirs_literal+="    \"$dir\""$'\n'
     done
 
     if [[ -f "$cron_file" ]]; then
@@ -1494,7 +1524,10 @@ LOG="$WATCHDOG_LOG"
 TS=\$(date -u '+%Y-%m-%d %H:%M:%S UTC')
 WARNED=false
 
-for TOML_PATH in $toml_paths; do
+SEARCH_DIRS=(
+$search_dirs_literal)
+for DIR in "\${SEARCH_DIRS[@]}"; do
+    TOML_PATH="\$DIR/grin-server.toml"
     [[ -f "\$TOML_PATH" ]] || continue
     ENABLED=\$(grep -E '^[[:space:]]*enable_stratum_server[[:space:]]*=' "\$TOML_PATH" 2>/dev/null \
         | head -1 | sed 's/.*=[[:space:]]*//' | tr -d ' ' || echo "")

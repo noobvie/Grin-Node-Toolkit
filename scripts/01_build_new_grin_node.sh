@@ -1122,7 +1122,7 @@ check_os_and_deps() {
                 || die "Failed to install epel-release. Check internet connection."
         fi
 
-        local packages=(tar tmux curl wget jq tor openssl ncurses-compat-libs)
+        local packages=(tar tmux curl wget jq tor openssl ncurses-compat-libs pv)
         local to_install=()
         for pkg in "${packages[@]}"; do
             rpm -q "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")
@@ -1146,7 +1146,7 @@ check_os_and_deps() {
             ncurses_pkg="libncurses6"
         fi
 
-        local packages=(tar openssl "$ncurses_pkg" tmux jq tor curl wget)
+        local packages=(tar openssl "$ncurses_pkg" tmux jq tor curl wget pv)
         local to_install=()
         for pkg in "${packages[@]}"; do
             dpkg -s "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")
@@ -2252,20 +2252,40 @@ stream_extract_chain_data() {
         src_num=$(( src_num + 1 ))
         local tar_url="$src_base/$tar_name"
         info "Source $src_num/$total_src: $tar_url"
-        info "Running: wget -q --show-progress --progress=bar:force -O - \"$tar_url\" | tar -xzf - -C \"$GRIN_DIR\""
-        info "You'll see the wget transfer bar (%, size, speed, ETA) update live as the stream lands."
+        info "Running: wget -qO - <url> | pv -s <size> | tar -xzf - -C \"$GRIN_DIR\""
+        info "You'll see a live bar (%, size, speed, ETA) drawn by pv as the stream lands."
         [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
         echo ""
         log "[STEP 10] Streaming from $tar_url"
-        # wget flags (must match the other wget calls in this script, lines ~416/1488/2112):
-        #   -q --show-progress : quiet except the transfer bar
-        #   --progress=bar:force : REQUIRED here — with -O - wget's stdout is the pipe (not a
-        #     tty), so plain --show-progress auto-suppresses the bar and shows nothing. The
-        #     `force` keyword draws it regardless of tty detection.
-        # tar -xzf - (no -v): stay silent so the bar owns the terminal line (with -v, tar's
-        #   filenames collide with wget's \r-redrawn bar on stderr and shred it).
-        if wget -q --show-progress --progress=bar:force -O - "$tar_url" \
-                | tar -xzf - -C "$GRIN_DIR"; then
+
+        # Progress is metered by pv (pipe viewer), NOT by wget's own bar — the same strategy
+        # the GrinSuite/Windows build uses (it counts bytes in its own stream loop rather than
+        # trusting the downloader). A minimal/BusyBox wget silently draws no bar when piped to
+        # stdout (-O -), even with --progress=bar:force, so we put the meter in the pipe.
+        # Size is pre-fetched (curl -I → Content-Length) so pv can show a true % and ETA.
+        # tar -xzf - (no -v): keep tar silent so pv's bar owns the terminal line.
+        local total_bytes=0
+        total_bytes=$(curl -sIL "$tar_url" 2>/dev/null \
+            | awk 'BEGIN{IGNORECASE=1} /^content-length:/{n=$2} END{gsub(/[^0-9]/,"",n); print n+0}') \
+            || total_bytes=0
+
+        local ok=0
+        if command -v pv >/dev/null 2>&1; then
+            if [[ "$total_bytes" -gt 0 ]]; then
+                info "Archive size: $(awk -v b="$total_bytes" 'BEGIN{printf "%.1f GiB", b/1073741824}')"
+                if wget -qO - "$tar_url" | pv -s "$total_bytes" | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
+            else
+                warn "Content-Length unavailable — bar will show bytes + speed (no %/ETA)."
+                if wget -qO - "$tar_url" | pv | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
+            fi
+        else
+            # Fallback only — pv should be installed by the dependency step. Minimal wget
+            # builds may still render nothing here; that is the exact case pv solves.
+            warn "pv not installed — falling back to wget's own progress bar."
+            if wget -q --show-progress --progress=bar:force -O - "$tar_url" | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
+        fi
+
+        if [[ "$ok" -eq 1 ]]; then
             stream_ok=true
             break
         else

@@ -2252,22 +2252,21 @@ stream_extract_chain_data() {
         src_num=$(( src_num + 1 ))
         local tar_url="$src_base/$tar_name"
         info "Source $src_num/$total_src: $tar_url"
-        info "Running: wget --progress=bar:force -O - \"$tar_url\" | tar -xzf - -C \"$GRIN_DIR\""
-        info "wget draws its transfer bar (size, %, speed, ETA) above the connection lines."
+        info "Running: wget --progress=bar:force -O - \"$tar_url\" | tar -xzvf - -C \"$GRIN_DIR\""
+        info "Extracted filenames scroll as the stream lands; if your wget renders it, its bar (size/%/ETA) shows above."
         [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
         echo ""
         log "[STEP 10] Streaming from $tar_url"
-        # RESTORED from commit 05570df^ — the pre-2026-05-24 version that actually drew the bar.
-        # Two rules, learned across the "wget progress bar v1..v6" commits — do not re-break:
-        #   1. NO -q. --progress=bar:force draws the bar even with stdout piped, but -q
-        #      suppresses it on this environment's wget. Commit 05570df (2026-05-24, "fix
-        #      percentage") added -q and that is exactly when the bar disappeared.
-        #   2. tar -xzf - (no -v): a silent tar lets the bar own the terminal line; -v floods
-        #      stderr with filenames that shred the \r-redrawn bar.
-        # pv was tried (v-series + curl|pv) and reverted: it self-suppresses mid-pipeline due
-        # to process-group tty ownership even with -f, and adds an unwanted dependency.
+        # ORIGINAL on-the-fly command, restored verbatim from commit 91ad606 (2026-03-06) — the
+        # first version of this feature, which the user confirms worked in their setup (root,
+        # inside a tmux session). Restored at their request after later flag tweaks (the
+        # v1..v6 series, -q, --show-progress, and pv) all displayed nothing on the target VPS.
+        #   wget --progress=bar:force (NO -q) : forced transfer bar.
+        #   tar -xzvf -                       : -v lists each entry, so even if wget's bar is
+        #                                       suppressed, the scrolling filenames confirm the
+        #                                       stream is live.
         if wget --progress=bar:force -O - "$tar_url" \
-                | tar -xzf - -C "$GRIN_DIR"; then
+                | tar -xzvf - -C "$GRIN_DIR"; then
             stream_ok=true
             break
         else

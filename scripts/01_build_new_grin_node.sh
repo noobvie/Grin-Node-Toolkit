@@ -2252,15 +2252,18 @@ stream_extract_chain_data() {
         src_num=$(( src_num + 1 ))
         local tar_url="$src_base/$tar_name"
         info "Source $src_num/$total_src: $tar_url"
-        info "Running: wget -q --show-progress -O - \"$tar_url\" | tar -xzvf - -C \"$GRIN_DIR\""
-        info "You'll see: wget bar (%, speed, ETA) + extracted filenames as the stream lands."
+        info "Running: wget -q --show-progress -O - \"$tar_url\" | tar -xzf - -C \"$GRIN_DIR\""
+        info "You'll see the wget transfer bar (%, size, speed, ETA) update live as the stream lands."
         [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
         echo ""
         log "[STEP 10] Streaming from $tar_url"
         # wget -q --show-progress: suppress chatter but keep the transfer bar (%, MB/s, ETA).
-        # tar -xzvf -: list each extracted entry so the user can see the archive being unpacked live.
+        # tar -xzf - (no -v): stay silent so wget's progress bar owns the terminal line.
+        #   With -v, tar's filename stream collides with wget's \r-redrawn bar (both on
+        #   stderr) and the bar is shredded; worse here since the archive is essentially one
+        #   multi-GB data.mdb, so -v prints one line then goes silent for the whole transfer.
         if wget -q --show-progress -O - "$tar_url" \
-                | tar -xzvf - -C "$GRIN_DIR"; then
+                | tar -xzf - -C "$GRIN_DIR"; then
             stream_ok=true
             break
         else

@@ -2252,20 +2252,19 @@ stream_extract_chain_data() {
         src_num=$(( src_num + 1 ))
         local tar_url="$src_base/$tar_name"
         info "Source $src_num/$total_src: $tar_url"
-        info "Running: wget --progress=bar:force -O - \"$tar_url\" | tar -xzvf - -C \"$GRIN_DIR\""
-        info "Extracted filenames scroll as the stream lands; if your wget renders it, its bar (size/%/ETA) shows above."
+        info "Running: wget --progress=dot:giga -O - \"$tar_url\" | tar -xzvf - -C \"$GRIN_DIR\""
+        info "Progress prints as periodic lines with size, %, speed and ETA; extracted filenames scroll too."
         [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
         echo ""
         log "[STEP 10] Streaming from $tar_url"
-        # ORIGINAL on-the-fly command, restored verbatim from commit 91ad606 (2026-03-06) — the
-        # first version of this feature, which the user confirms worked in their setup (root,
-        # inside a tmux session). Restored at their request after later flag tweaks (the
-        # v1..v6 series, -q, --show-progress, and pv) all displayed nothing on the target VPS.
-        #   wget --progress=bar:force (NO -q) : forced transfer bar.
-        #   tar -xzvf -                       : -v lists each entry, so even if wget's bar is
-        #                                       suppressed, the scrolling filenames confirm the
-        #                                       stream is live.
-        if wget --progress=bar:force -O - "$tar_url" \
+        # --progress=dot:giga (NOT bar): on this target VPS (root inside tmux) wget's bar never
+        # renders — it redraws one line with carriage-returns (\r), which this terminal does not
+        # show, while NEWLINE output does (tar -v filenames always appeared). Dot progress is
+        # newline-based: it prints a line every ~32 MiB ending with cumulative size, %, speed and
+        # ETA — the exact output style we've confirmed reaches the screen. NO -q (that suppresses
+        # it). tar -xzvf - kept so filenames still confirm extraction; both are newline output so
+        # they coexist without the \r-vs-newline collision the bar had.
+        if wget --progress=dot:giga -O - "$tar_url" \
                 | tar -xzvf - -C "$GRIN_DIR"; then
             stream_ok=true
             break

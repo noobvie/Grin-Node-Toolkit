@@ -2252,7 +2252,7 @@ stream_extract_chain_data() {
         src_num=$(( src_num + 1 ))
         local tar_url="$src_base/$tar_name"
         info "Source $src_num/$total_src: $tar_url"
-        info "Running: wget -qO - <url> | pv -f -s <size> | tar -xzf - -C \"$GRIN_DIR\""
+        info "Running: wget -qO - <url> | pv -pter -f -s <size> | tar -xzf - -C \"$GRIN_DIR\""
         info "You'll see a live bar (%, size, speed, ETA) drawn by pv as the stream lands."
         [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
         echo ""
@@ -2277,10 +2277,10 @@ stream_extract_chain_data() {
         if command -v pv >/dev/null 2>&1; then
             if [[ "$total_bytes" -gt 0 ]]; then
                 info "Archive size: $(awk -v b="$total_bytes" 'BEGIN{printf "%.1f GiB", b/1073741824}')"
-                if wget -qO - "$tar_url" | pv -f -s "$total_bytes" | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
+                if wget -qO - "$tar_url" | pv -pter -f -i 1 -s "$total_bytes" | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
             else
                 warn "Content-Length unavailable — bar will show bytes + speed (no %/ETA)."
-                if wget -qO - "$tar_url" | pv -f | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
+                if wget -qO - "$tar_url" | pv -pter -f -i 1 | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
             fi
         else
             # Fallback only — pv should be installed by the dependency step. Minimal wget

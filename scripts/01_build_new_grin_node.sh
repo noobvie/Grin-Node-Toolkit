@@ -2252,17 +2252,19 @@ stream_extract_chain_data() {
         src_num=$(( src_num + 1 ))
         local tar_url="$src_base/$tar_name"
         info "Source $src_num/$total_src: $tar_url"
-        info "Running: wget -q --show-progress -O - \"$tar_url\" | tar -xzf - -C \"$GRIN_DIR\""
+        info "Running: wget -q --show-progress --progress=bar:force -O - \"$tar_url\" | tar -xzf - -C \"$GRIN_DIR\""
         info "You'll see the wget transfer bar (%, size, speed, ETA) update live as the stream lands."
         [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
         echo ""
         log "[STEP 10] Streaming from $tar_url"
-        # wget -q --show-progress: suppress chatter but keep the transfer bar (%, MB/s, ETA).
-        # tar -xzf - (no -v): stay silent so wget's progress bar owns the terminal line.
-        #   With -v, tar's filename stream collides with wget's \r-redrawn bar (both on
-        #   stderr) and the bar is shredded; worse here since the archive is essentially one
-        #   multi-GB data.mdb, so -v prints one line then goes silent for the whole transfer.
-        if wget -q --show-progress -O - "$tar_url" \
+        # wget flags (must match the other wget calls in this script, lines ~416/1488/2112):
+        #   -q --show-progress : quiet except the transfer bar
+        #   --progress=bar:force : REQUIRED here — with -O - wget's stdout is the pipe (not a
+        #     tty), so plain --show-progress auto-suppresses the bar and shows nothing. The
+        #     `force` keyword draws it regardless of tty detection.
+        # tar -xzf - (no -v): stay silent so the bar owns the terminal line (with -v, tar's
+        #   filenames collide with wget's \r-redrawn bar on stderr and shred it).
+        if wget -q --show-progress --progress=bar:force -O - "$tar_url" \
                 | tar -xzf - -C "$GRIN_DIR"; then
             stream_ok=true
             break

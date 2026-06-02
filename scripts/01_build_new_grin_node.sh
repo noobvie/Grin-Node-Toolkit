@@ -2252,7 +2252,7 @@ stream_extract_chain_data() {
         src_num=$(( src_num + 1 ))
         local tar_url="$src_base/$tar_name"
         info "Source $src_num/$total_src: $tar_url"
-        info "Running: wget -qO - <url> | pv -s <size> | tar -xzf - -C \"$GRIN_DIR\""
+        info "Running: wget -qO - <url> | pv -f -s <size> | tar -xzf - -C \"$GRIN_DIR\""
         info "You'll see a live bar (%, size, speed, ETA) drawn by pv as the stream lands."
         [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
         echo ""
@@ -2263,6 +2263,10 @@ stream_extract_chain_data() {
         # trusting the downloader). A minimal/BusyBox wget silently draws no bar when piped to
         # stdout (-O -), even with --progress=bar:force, so we put the meter in the pipe.
         # Size is pre-fetched (curl -I → Content-Length) so pv can show a true % and ETA.
+        # pv -f (force): pv hides its bar when it thinks stderr is not a terminal; in this
+        #   build context it does, so -f is REQUIRED to draw the bar (same tty-gating that
+        #   silenced wget's bar — tar's newline output is unaffected, which is why only
+        #   tar -v ever showed). -f is a harmless no-op when stderr really is a terminal.
         # tar -xzf - (no -v): keep tar silent so pv's bar owns the terminal line.
         local total_bytes=0
         total_bytes=$(curl -sIL "$tar_url" 2>/dev/null \
@@ -2273,10 +2277,10 @@ stream_extract_chain_data() {
         if command -v pv >/dev/null 2>&1; then
             if [[ "$total_bytes" -gt 0 ]]; then
                 info "Archive size: $(awk -v b="$total_bytes" 'BEGIN{printf "%.1f GiB", b/1073741824}')"
-                if wget -qO - "$tar_url" | pv -s "$total_bytes" | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
+                if wget -qO - "$tar_url" | pv -f -s "$total_bytes" | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
             else
                 warn "Content-Length unavailable — bar will show bytes + speed (no %/ETA)."
-                if wget -qO - "$tar_url" | pv | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
+                if wget -qO - "$tar_url" | pv -f | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
             fi
         else
             # Fallback only — pv should be installed by the dependency step. Minimal wget

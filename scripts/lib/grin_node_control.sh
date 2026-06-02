@@ -161,9 +161,24 @@ gnc_start_node_tmux() {
     tmux kill-session -t "$sess" 2>/dev/null || true
 
     info "Starting grin ($network) in tmux session '$sess' — dir $dir"
-    SHELL=/bin/bash tmux new-session -d -s "$sess" -c "$dir" \
-        "echo 'Starting Grin node...'; cd '$dir' && '$binary' server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
-        || { error "Failed to create tmux session '$sess'. Start manually: cd $dir && ./grin server run"; return 1; }
+    # Run as the grin user with HOME=$dir (same contract as Script 01's start_grin):
+    #  - grin 5.4.0 needs a WRITABLE $HOME to create its .grin/<chain> work area, even
+    #    though it loads the cwd grin-server.toml; pointing HOME at the node dir keeps
+    #    everything under /opt/grin/node/<net> and avoids the root-owned /opt/grin/.grin.
+    #  - Never start grin as root: a root-run node writes root:root files (grin-server.log,
+    #    chain_data) that then EACCES-block the grin user on the next grin-owned start.
+    # chown first to reclaim any root-owned leftovers from an earlier root-run start.
+    if id grin &>/dev/null; then
+        chown -R grin:grin "$dir" 2>/dev/null || true
+        SHELL=/bin/bash tmux new-session -d -s "$sess" -c "$dir" \
+            "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$dir\" && HOME=\"$dir\" \"$binary\" server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            || { error "Failed to create tmux session '$sess'. Start manually: cd $dir && ./grin server run"; return 1; }
+    else
+        warn "User 'grin' not found — running node as current user. Re-run Script 01 to create it."
+        SHELL=/bin/bash tmux new-session -d -s "$sess" -c "$dir" \
+            "echo 'Starting Grin node...'; cd '$dir' && HOME='$dir' '$binary' server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            || { error "Failed to create tmux session '$sess'. Start manually: cd $dir && ./grin server run"; return 1; }
+    fi
 
     if gnc_wait_for_port "$port" "$wait_timeout"; then
         success "Grin ($network) is up on port $port (session '$sess')."

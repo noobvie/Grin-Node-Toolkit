@@ -83,7 +83,12 @@ gnk_autostart_enable() {
 
     # Same shape as Script 03's line (so both scripts recognise it), but with the
     # conf-resolved dir + canonical (underscore) session name.
-    line="@reboot sleep $delay && cd '$dir' && env SHELL=/bin/bash tmux new-session -d -s $sess '$binary' server run $tag"
+    # Runs as the grin user via su (same contract as Script 01 / gnc_start_node_tmux):
+    #  - chown first reclaims any root-owned leftovers from an earlier root-run start.
+    #  - HOME=$dir gives grin a writable home (it creates .grin/<chain> even with a cwd
+    #    config); without it grin EACCES-panics on the root-owned /opt/grin/.grin.
+    #  - SHELL=/bin/bash is mandatory for cron-launched tmux (cron sets SHELL=/bin/sh).
+    line="@reboot sleep $delay && chown -R grin:grin '$dir' 2>/dev/null; su -s /bin/bash grin -c \"cd '$dir' && env HOME='$dir' SHELL=/bin/bash tmux new-session -d -s $sess '$binary server run'\" $tag"
 
     cron=$(crontab -l 2>/dev/null || true)
     if echo "$cron" | grep -qF "$tag"; then

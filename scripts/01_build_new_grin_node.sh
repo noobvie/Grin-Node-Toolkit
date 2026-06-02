@@ -1122,7 +1122,7 @@ check_os_and_deps() {
                 || die "Failed to install epel-release. Check internet connection."
         fi
 
-        local packages=(tar tmux curl wget jq tor openssl ncurses-compat-libs pv)
+        local packages=(tar tmux curl wget jq tor openssl ncurses-compat-libs)
         local to_install=()
         for pkg in "${packages[@]}"; do
             rpm -q "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")
@@ -1146,7 +1146,7 @@ check_os_and_deps() {
             ncurses_pkg="libncurses6"
         fi
 
-        local packages=(tar openssl "$ncurses_pkg" tmux jq tor curl wget pv)
+        local packages=(tar openssl "$ncurses_pkg" tmux jq tor curl wget)
         local to_install=()
         for pkg in "${packages[@]}"; do
             dpkg -s "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")
@@ -2252,44 +2252,22 @@ stream_extract_chain_data() {
         src_num=$(( src_num + 1 ))
         local tar_url="$src_base/$tar_name"
         info "Source $src_num/$total_src: $tar_url"
-        info "Running: curl -sL <url> | pv -p -t -e -r -f -s <size> | tar -xzf - -C \"$GRIN_DIR\""
-        info "You'll see a live bar (%, size, speed, ETA) drawn by pv as the stream lands."
+        info "Running: wget --progress=bar:force -O - \"$tar_url\" | tar -xzf - -C \"$GRIN_DIR\""
+        info "wget draws its transfer bar (size, %, speed, ETA) above the connection lines."
         [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
         echo ""
         log "[STEP 10] Streaming from $tar_url"
-
-        # Progress is metered by pv (pipe viewer), NOT by wget's own bar — the same strategy
-        # the GrinSuite/Windows build uses (it counts bytes in its own stream loop rather than
-        # trusting the downloader). A minimal/BusyBox wget silently draws no bar when piped to
-        # stdout (-O -), even with --progress=bar:force, so we put the meter in the pipe.
-        # Size is pre-fetched (curl -I → Content-Length) so pv can show a true % and ETA.
-        # pv -f (force): pv hides its bar when it thinks stderr is not a terminal; in this
-        #   build context it does, so -f is REQUIRED to draw the bar (same tty-gating that
-        #   silenced wget's bar — tar's newline output is unaffected, which is why only
-        #   tar -v ever showed). -f is a harmless no-op when stderr really is a terminal.
-        # tar -xzf - (no -v): keep tar silent so pv's bar owns the terminal line.
-        local total_bytes=0
-        total_bytes=$(curl -sIL "$tar_url" 2>/dev/null \
-            | awk 'BEGIN{IGNORECASE=1} /^content-length:/{n=$2} END{gsub(/[^0-9]/,"",n); print n+0}') \
-            || total_bytes=0
-
-        local ok=0
-        if command -v pv >/dev/null 2>&1; then
-            if [[ "$total_bytes" -gt 0 ]]; then
-                info "Archive size: $(awk -v b="$total_bytes" 'BEGIN{printf "%.1f GiB", b/1073741824}')"
-                if curl -sL "$tar_url" | pv -p -t -e -r -f -s "$total_bytes" | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
-            else
-                warn "Content-Length unavailable — bar will show bytes + speed (no %/ETA)."
-                if curl -sL "$tar_url" | pv -p -t -e -r -f | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
-            fi
-        else
-            # Fallback only — pv should be installed by the dependency step. Minimal wget
-            # builds may still render nothing here; that is the exact case pv solves.
-            warn "pv not installed — falling back to wget's own progress bar."
-            if wget -q --show-progress --progress=bar:force -O - "$tar_url" | tar -xzf - -C "$GRIN_DIR"; then ok=1; fi
-        fi
-
-        if [[ "$ok" -eq 1 ]]; then
+        # RESTORED from commit 05570df^ — the pre-2026-05-24 version that actually drew the bar.
+        # Two rules, learned across the "wget progress bar v1..v6" commits — do not re-break:
+        #   1. NO -q. --progress=bar:force draws the bar even with stdout piped, but -q
+        #      suppresses it on this environment's wget. Commit 05570df (2026-05-24, "fix
+        #      percentage") added -q and that is exactly when the bar disappeared.
+        #   2. tar -xzf - (no -v): a silent tar lets the bar own the terminal line; -v floods
+        #      stderr with filenames that shred the \r-redrawn bar.
+        # pv was tried (v-series + curl|pv) and reverted: it self-suppresses mid-pipeline due
+        # to process-group tty ownership even with -f, and adds an unwanted dependency.
+        if wget --progress=bar:force -O - "$tar_url" \
+                | tar -xzf - -C "$GRIN_DIR"; then
             stream_ok=true
             break
         else
@@ -2378,15 +2356,20 @@ start_grin_tmux() {
     fi
 
     # Own only the node directory — not the parent tree (grinscan, drop, etc. live there).
+    # HOME=$GRIN_DIR is mandatory: grin 5.4.0 still creates its $HOME/.grin/<chain>
+    # working area even when it loads the cwd grin-server.toml. The grin user's home
+    # is /opt/grin (root-owned, unwritable) → without this override grin panics with
+    # "Error loading config file: Permission denied" trying to mkdir /opt/grin/.grin.
+    # Pointing HOME at the node dir keeps everything under /opt/grin/node/<net>.
     if id grin &>/dev/null; then
         chown -R grin:grin "$GRIN_DIR" 2>/dev/null || true
         tmux new-session -d -s "$session" -c "$GRIN_DIR" \
-            "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$GRIN_DIR\" && ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$GRIN_DIR\" && HOME=\"$GRIN_DIR\" ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
             || die "Failed to create tmux session '$session'. Is tmux installed and working?"
     else
         warn "User 'grin' not found — running as current user. Re-run Script 01 to create it."
         tmux new-session -d -s "$session" -c "$GRIN_DIR" \
-            "echo 'Starting Grin node...'; cd $GRIN_DIR && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            "echo 'Starting Grin node...'; cd $GRIN_DIR && HOME=\"$GRIN_DIR\" ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
             || die "Failed to create tmux session '$session'. Is tmux installed and working?"
     fi
 

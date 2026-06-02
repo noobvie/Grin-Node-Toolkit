@@ -210,7 +210,7 @@ check_scripts() {
         "04_grin_node_foreign_api.sh"
         "05_grin_wallet_service.sh"
         "06_global_grin_health.sh"
-        "07_grin_mining_services.sh"
+        "07_grin_mining_solo.sh"
         "08_grin_node_admin.sh"
     )
     for script in "${required_scripts[@]}"; do
@@ -324,7 +324,7 @@ main() {
                 ;;
             7)
                 echo -e "\n${CYAN}Starting: Grin Mining Services...${RESET}\n"
-                run_script "07_grin_mining_services.sh"
+                run_script "07_grin_mining_solo.sh"
                 ;;
             8)
                 echo -e "\n${CYAN}Starting: Admin & Maintenance...${RESET}\n"

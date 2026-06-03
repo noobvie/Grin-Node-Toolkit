@@ -7,27 +7,26 @@
 # and publishes the port so miners can connect directly.
 #
 # ─── Menu ─────────────────────────────────────────────────────────────────────
-# Grouped sub-menus; each action prompts mainnet / testnet inside (reusing the
-# "1) Mainnet 2) Testnet" pattern), so the old per-network letter duplication
-# (B/C/D/E mainnet + F/G/I/J testnet) is gone. A) stays a letter as the always-
-# visible overview alongside the compact stratum-status header.
+# Network-as-parent (mirrors 052 Grin Drop): the top screen picks a network ONCE,
+# then every per-action prompt inside that branch is gone — SOLO_NETWORK is set
+# and inherited. Cross-network tools (both-net status, the unified stats page,
+# global watchdogs) live on the network-select screen, not inside a branch.
+# All-numeric keys; letters are reserved for destructive/admin actions.
 #
-#   A) Node & Mining Status   (node sync, tmux, stratum config + miner count)
+#   Network-select screen
+#     1) Mainnet ┐ enter the per-net branch below
+#     2) Testnet ┘
+#     3) Node, Wallet & Mining Status   (both networks)
+#     4) Stats web page                 (unified vhost; payment prefixes + lock)
+#     5) Watchdogs (global)             (node-sync · boot autostart · wallet · stratum)
+#     6) Maintenance                    (encrypted backup · restore · schedule · seed)
+#     0) Back to main menu
 #
-#   1) Wallet               ▸ setup/recover · listener · auto-restart · address
-#   2) Stratum              ▸ setup · configure · publish · restrict
-#   3) Stats & Web          ▸ live dashboard · web page (payment prefixes + lock)
-#   4) Health / Watchdogs   ▸ node-sync · boot autostart · wallet listener · stratum
-#
-#   0) Back to main menu
-#
-# Migration map (old letter → new home):
-#   A  Status .............. A           (kept)
-#   B/F Setup Stratum ...... 2 ▸ 1       D/I Publish Stratum .... 2 ▸ 3
-#   C/G Configure Stratum .. 2 ▸ 2       E/J Restrict Stratum ... 2 ▸ 4
-#   L  Live stats .......... 3 ▸ 1       S  Web page ............ 3 ▸ 2
-#   W  Stratum watchdog .... 4 ▸ 4       K  Wallet .............. 1
-#   H  Health/Watchdogs .... 4
+#   Per-net branch (after 1/2 — SOLO_NETWORK set)
+#     1) Wallet      ▸ setup/recover · listener · auto-restart · address
+#     2) Stratum     ▸ setup · configure · publish · restrict
+#     3) Live stats    (terminal dashboard for the chosen net)
+#     0) Back to network select
 # =============================================================================
 
 set -euo pipefail
@@ -65,7 +64,7 @@ BLOCK_COLLECTOR_BIN="/usr/local/bin/grin-solo-mining-collector.py"
 BLOCK_COLLECTOR_WRAPPER="/usr/local/bin/grin-solo-mining-collector"
 BLOCK_COLLECTOR_CRON="/etc/cron.d/grin-solo-mining-collector"
 BLOCK_COLLECTOR_STATE_DIR="/opt/grin/solo-stats"
-# Reward-split payment calc (mainnet): nickname PREFIXES only, never addresses.
+# Payout-split payment calc (mainnet): nickname PREFIXES only, never addresses.
 # The collector reads this to emit split_main.json.
 PAYMENT_CONFIG="/opt/grin/conf/grin_solo_payment.json"
 # Optional stats-page access lock (HTTP Basic Auth over the certbot-managed HTTPS).
@@ -96,6 +95,10 @@ source "$SCRIPT_DIR/lib/grin_node_control.sh"
 source "$SCRIPT_DIR/lib/grin_node_keepalive.sh"
 # shellcheck source=lib/07_solo_wallet.sh
 source "$SCRIPT_DIR/lib/07_solo_wallet.sh"
+# Encrypted backup/restore/schedule (depends on SW_BASE/SW_STATE_DIR from the
+# wallet lib + PAYMENT_CONFIG above — sourced after them so those are set).
+# shellcheck source=lib/07_solo_backup.sh
+source "$SCRIPT_DIR/lib/07_solo_backup.sh"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOML DETECTION
@@ -443,7 +446,7 @@ show_compact_status() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# A) NODE & MINING STATUS
+# NODE, WALLET & MINING STATUS  (network-select ▸ 3)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _show_node_info() {
@@ -476,16 +479,9 @@ _show_node_info() {
         echo -e "    Node   : ${RED}NOT RUNNING${RESET}  ${DIM}(port $api_port not listening)${RESET}"
     fi
 
-    if ss -tlnp 2>/dev/null | grep -q ":$stratum_port "; then
-        echo -e "    Stratum: ${GREEN}LISTENING${RESET}  ${DIM}(port $stratum_port)${RESET}"
-        local miner_count
-        miner_count=$(ss -tnp 2>/dev/null | grep ":$stratum_port" | grep -c ESTAB || true)
-        echo -e "    Miners : ${miner_count:-0} connected"
-    else
-        echo -e "    Stratum: ${DIM}not listening${RESET}  ${DIM}(port $stratum_port)${RESET}"
-    fi
-
     # Coinbase wallet Foreign listener — where the node sends block rewards.
+    # Shown before Stratum: a solo miner's first question is "is my reward
+    # listener up?", so the screen reads node → wallet → mining top to bottom.
     local wal_port wal_pid wal_toml wal_tmux
     wal_port=$(sw_foreign_port "$network")
     wal_pid=$(ss -tlnp 2>/dev/null | grep ":$wal_port " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
@@ -500,6 +496,15 @@ _show_node_info() {
         echo -e "    Wallet : ${RED}NOT RUNNING${RESET}  ${DIM}(configured, Foreign port $wal_port not listening)${RESET}"
     else
         echo -e "    Wallet : ${DIM}not configured${RESET}  ${DIM}(Foreign port $wal_port)${RESET}"
+    fi
+
+    if ss -tlnp 2>/dev/null | grep -q ":$stratum_port "; then
+        echo -e "    Stratum: ${GREEN}LISTENING${RESET}  ${DIM}(port $stratum_port)${RESET}"
+        local miner_count
+        miner_count=$(ss -tnp 2>/dev/null | grep ":$stratum_port" | grep -c ESTAB || true)
+        echo -e "    Miners : ${miner_count:-0} connected"
+    else
+        echo -e "    Stratum: ${DIM}not listening${RESET}  ${DIM}(port $stratum_port)${RESET}"
     fi
 
     local toml
@@ -526,7 +531,7 @@ _show_node_info() {
 show_node_status() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  A) Node & Mining Status${RESET}"
+    echo -e "${BOLD}${CYAN}  Node, Wallet & Mining Status${RESET}  ${DIM}(both networks)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     _show_node_info mainnet "$NODE_API_PORT_MAINNET" "$STRATUM_PORT_MAINNET"
@@ -534,7 +539,7 @@ show_node_status() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# B / F) SETUP STRATUM
+# SETUP STRATUM  (per-net branch ▸ Stratum ▸ 1)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _do_setup_stratum() {
@@ -627,7 +632,7 @@ setup_stratum_mainnet() { _do_setup_stratum mainnet "$STRATUM_PORT_MAINNET" "$NO
 setup_stratum_testnet() { _do_setup_stratum testnet "$STRATUM_PORT_TESTNET" "$NODE_API_PORT_TESTNET"; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# C / G) CONFIGURE STRATUM
+# CONFIGURE STRATUM  (per-net branch ▸ Stratum ▸ 2)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _do_configure_stratum() {
@@ -749,7 +754,7 @@ _show_stratum_port_guide() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# D / E / I / J) PUBLISH / RESTRICT STRATUM
+# PUBLISH / RESTRICT STRATUM  (per-net branch ▸ Stratum ▸ 3 / 4)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _enable_stratum() {
@@ -912,22 +917,28 @@ publish_testnet_stratum()  { _enable_stratum  testnet "$STRATUM_PORT_TESTNET" "$
 restrict_testnet_stratum() { _disable_stratum testnet "$STRATUM_PORT_TESTNET" "$NODE_API_PORT_TESTNET"; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# L) LIVE STATS DASHBOARD
+# LIVE STATS DASHBOARD  (per-net branch ▸ 3)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Polls node Owner API every 10s. Shows: height, difficulty, hashrate, peers,
 # connected miners. Hashrate formula: diff_delta × 42 / dt / 16384 (Cuckatoo32)
 
 solo_live_stats() {
+    local preset_net="${1:-}"
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  L) Live Mining Stats${RESET}  ${DIM}(Enter = refresh · 0 = return)${RESET}"
+    echo -e "${BOLD}${CYAN}  Live Mining Stats${RESET}  ${DIM}(Enter = refresh · 0 = return)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
 
     local net_choice
-    echo -e "  ${GREEN}1${RESET}) Mainnet  ${GREEN}2${RESET}) Testnet"
-    echo -ne "Select [1]: "
-    read -r net_choice
+    if [[ -n "$preset_net" ]]; then
+        # Network chosen by the parent branch — no prompt.
+        net_choice=1; [[ "$preset_net" == "testnet" ]] && net_choice=2
+    else
+        echo -e "  ${GREEN}1${RESET}) Mainnet  ${GREEN}2${RESET}) Testnet"
+        echo -ne "Select [1]: "
+        read -r net_choice
+    fi
 
     local api_port="$NODE_API_PORT_MAINNET"
     local stratum_port="$STRATUM_PORT_MAINNET"
@@ -1024,7 +1035,7 @@ else:
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# S) STATS WEB PAGE
+# STATS WEB PAGE  (network-select ▸ 4)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Deploys ONE static HTML page via nginx that polls BOTH nodes' Owner API every
 # 10s and shows mainnet + testnet side by side. nginx injects the Basic Auth
@@ -1135,15 +1146,16 @@ _solo_stats_wallet_location() {
 EOF
 }
 
-# Toggle the mainnet reward-split calculation (on/off — no names to pre-define).
+# Toggle the mainnet payout-split calculation (on/off — no names to pre-define).
 # When ON, the collector splits matured coinbase across miners automatically BY
 # THE WORKER NAME each miner connects with. Writes $PAYMENT_CONFIG as
 # {"enabled":true}. Advanced (optional): group several workers under one label by
 # hand-editing the file to {"prefixes":["alpha","bravo"]} — the collector then
 # groups by longest matching prefix instead. Display-only: solo mining always
 # pays ONE coinbase wallet; this just shows who earned what for manual settling,
-# and never stores a Grin address. Called from S) deploy (mainnet detected).
-_solo_prompt_reward_split() {
+# and never stores a Grin address. Called from the Stats web page deploy
+# (network-select ▸ 4, mainnet detected).
+_solo_prompt_payout_split() {
     # Enabled = file present AND not explicitly disabled (mirrors load_prefixes).
     local enabled=0
     if [[ -f "$PAYMENT_CONFIG" ]] && python3 -c 'import json,sys
@@ -1155,7 +1167,7 @@ sys.exit(0 if ok else 1)' "$PAYMENT_CONFIG" 2>/dev/null; then
     fi
 
     echo ""
-    echo -e "${BOLD}Reward-split payment calculation (mainnet)${RESET}"
+    echo -e "${BOLD}Payout-split payment calculation (mainnet)${RESET}"
     echo -e "  ${DIM}Display-only split of matured coinbase across miners by work done,${RESET}"
     echo -e "  ${DIM}grouped automatically by the worker name each miner connects with —${RESET}"
     echo -e "  ${DIM}nothing to pre-define. Solo mining always pays ONE coinbase wallet;${RESET}"
@@ -1166,13 +1178,13 @@ sys.exit(0 if ok else 1)' "$PAYMENT_CONFIG" 2>/dev/null; then
     local ans
     if [[ $enabled -eq 1 ]]; then
         echo -e "  Status: ${GREEN}currently ON${RESET}"
-        echo -ne "  Keep reward split enabled? [Y/n]: "
+        echo -ne "  Keep payout split enabled? [Y/n]: "
         read -r ans
         if [[ "${ans,,}" == "n" ]]; then
             rm -f "$PAYMENT_CONFIG"
-            success "Reward split disabled (config removed)."
+            success "Payout split disabled (config removed)."
         else
-            info "Reward split stays enabled."
+            info "Payout split stays enabled."
         fi
         return
     fi
@@ -1185,14 +1197,14 @@ sys.exit(0 if ok else 1)' "$PAYMENT_CONFIG" 2>/dev/null; then
     echo -e "  ${BOLD}${CYAN}┃${RESET}  cadence you like) by hand. If you mine alone, leave it OFF."
     echo -e "  ${BOLD}${CYAN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${RESET}"
     echo ""
-    echo -ne "  Enable reward-split calculation? [Y/n]: "
+    echo -ne "  Enable payout-split calculation? [Y/n]: "
     read -r ans
-    [[ "${ans,,}" == "n" ]] && { info "Reward split not enabled."; return; }
+    [[ "${ans,,}" == "n" ]] && { info "Payout split not enabled."; return; }
 
     mkdir -p "$(dirname "$PAYMENT_CONFIG")"
     printf '{"enabled":true}\n' > "$PAYMENT_CONFIG"
     chmod 644 "$PAYMENT_CONFIG"
-    success "Reward split enabled → $PAYMENT_CONFIG"
+    success "Payout split enabled → $PAYMENT_CONFIG"
     echo -e "  ${DIM}The page splits by worker name → % → GRIN owed (weekly/monthly cadence).${RESET}"
 }
 
@@ -1201,7 +1213,7 @@ sys.exit(0 if ok else 1)' "$PAYMENT_CONFIG" 2>/dev/null; then
 # via the named globals below, the nginx snippets the vhost writer injects:
 #   _ACCESS_AUTH_BLOCK       server-level auth_basic + auth_basic_user_file (or "")
 #   _ACCESS_PUBLIC_CARVEOUTS poolstats_*.json `auth_basic off` carve-outs (or "")
-# Basic Auth is safe here because S) always runs certbot + HTTP→HTTPS redirect, so
+# Basic Auth is safe here because the Stats web page deploy always runs certbot + HTTP→HTTPS redirect, so
 # credentials never travel over plain HTTP (the :80 block 301s before the prompt).
 _ACCESS_AUTH_BLOCK=""
 _ACCESS_PUBLIC_CARVEOUTS=""
@@ -1270,7 +1282,7 @@ _solo_prompt_access_lock() {
 solo_deploy_stats_page() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  S) Deploy Mining Stats Page${RESET}"
+    echo -e "${BOLD}${CYAN}  Deploy Mining Stats Page${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     echo -e "  Deploys ${BOLD}one unified stats page${RESET} showing mainnet + testnet side by side."
@@ -1435,12 +1447,12 @@ solo_deploy_stats_page() {
     [[ -n "$solo_slogan" ]] && success "Slogan + connection config written (edit $web_dir/data/config.json to change)." \
         || success "Connection config written (edit $web_dir/data/config.json for slogan/ports)."
 
-    # ── Reward split (mainnet only) ─────────────────────────────────────────────
+    # ── Payout split (mainnet only) ─────────────────────────────────────────────
     # Optional on/off toggle. Writes $PAYMENT_CONFIG ({"enabled":true}); the
     # collector then splits by worker name automatically. Done before the initial
     # collector run below so split_main.json appears immediately when enabled.
     if [[ $have_main -eq 1 ]]; then
-        _solo_prompt_reward_split
+        _solo_prompt_payout_split
     fi
 
     # ── Mining stats collector ──────────────────────────────────────────────────
@@ -1595,7 +1607,7 @@ EOF
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# W) WATCHDOG CRON
+# STRATUM WATCHDOG CRON  (Watchdogs ▸ 4)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Cron entry: every 5 minutes, verify stratum is enabled in grin-server.toml.
 # Logs a warning if stratum config was lost (e.g. node restart reset the toml).
@@ -1603,7 +1615,7 @@ EOF
 solo_watchdog_setup() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  W) Stratum Watchdog Cron${RESET}"
+    echo -e "${BOLD}${CYAN}  Stratum Watchdog Cron${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
 
@@ -1696,12 +1708,40 @@ EOF
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SUPERVISION SUBMENUS (Track B — central wallet + watchdogs)
-# Each action prompts for the network, mirroring L) Live stats. Underlying logic
-# lives in the shared libs (07_solo_wallet.sh, grin_node_keepalive.sh).
+# Inside a network branch each action inherits SOLO_NETWORK (no per-action
+# prompt); the global Watchdogs menu still prompts which net to act on. Underlying
+# logic lives in the shared libs (07_solo_wallet.sh, grin_node_keepalive.sh).
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ─── Active network (network-as-parent) ─────────────────────────────────────
+# The top menu picks a network ONCE; inside that branch SOLO_NETWORK is set and
+# every per-action call to _solo_pick_net returns it silently (no repeat prompt).
+# Cleared on the way back to the network-select screen so the global Watchdogs
+# menu still prompts for which net to act on. Mirrors 052 Grin Drop's _set_network.
+SOLO_NETWORK=""
+SOLO_API_PORT=""
+SOLO_STRATUM_PORT=""
+
+_set_solo_net() {
+    SOLO_NETWORK="$1"
+    if [[ "$1" == "mainnet" ]]; then
+        SOLO_API_PORT="$NODE_API_PORT_MAINNET"
+        SOLO_STRATUM_PORT="$STRATUM_PORT_MAINNET"
+    else
+        SOLO_API_PORT="$NODE_API_PORT_TESTNET"
+        SOLO_STRATUM_PORT="$STRATUM_PORT_TESTNET"
+    fi
+}
+_clear_solo_net() { SOLO_NETWORK=""; SOLO_API_PORT=""; SOLO_STRATUM_PORT=""; }
+
 # _solo_pick_net <label> → echoes "mainnet"|"testnet" on stdout; rc 1 on cancel.
+# Inside a network branch (SOLO_NETWORK set) it returns that net with NO prompt;
+# at the top level (global menus) it falls back to the interactive 1/2/0 prompt.
 _solo_pick_net() {
+    if [[ -n "${SOLO_NETWORK:-}" ]]; then
+        echo "$SOLO_NETWORK"
+        return 0
+    fi
     local label="${1:-this action}" n
     echo -e "  Network for ${BOLD}$label${RESET}:  ${GREEN}1${RESET}) Mainnet   ${GREEN}2${RESET}) Testnet   ${DIM}0) Cancel${RESET}" >&2
     echo -ne "  Select [1/2/0]: " >&2
@@ -1715,7 +1755,7 @@ _solo_pick_net() {
 
 _solo_pause() { echo ""; echo "Press Enter to continue..."; read -r || true; }
 
-# K) Central Wallet — init/recover, listener, auto-restart, address.
+# Wallet (per-net branch ▸ 1) — init/recover, listener, auto-restart, address.
 wallet_menu() {
     local choice net
     while true; do
@@ -1776,7 +1816,7 @@ _wallet_autorestart_menu() {
     _solo_pause
 }
 
-# H) Health / Watchdogs — node-sync, node boot-autostart, wallet listener, stratum.
+# Watchdogs (global) (network-select ▸ 5) — node-sync, node boot-autostart, wallet listener, stratum.
 watchdog_menu() {
     local choice net
     while true; do
@@ -1813,10 +1853,9 @@ watchdog_menu() {
     done
 }
 
-# 2) Stratum — Setup / Configure / Publish / Restrict, network chosen inside.
-# Was B/C/D/E (mainnet) + F/G/I/J (testnet); the per-network letters collapsed
-# into one set. Pure dispatch — each branch calls the SAME mainnet/testnet
-# wrapper the old letters did, so behaviour is unchanged.
+# Stratum (per-net branch ▸ 2) — Setup / Configure / Publish / Restrict for the
+# branch's network. Pure dispatch — maps action+net to the mainnet/testnet
+# wrapper; the network comes from the parent branch (SOLO_NETWORK), not a prompt.
 _stratum_dispatch() {
     local action="$1" net="$2"
     case "$action:$net" in
@@ -1860,33 +1899,50 @@ stratum_menu() {
     done
 }
 
-# 3) Stats & Web — live terminal dashboard (was L) + nginx page deploy (was S).
-# The deploy itself prompts for payment-split prefixes + the optional access
-# lock, so those stay reachable through option 2 (no standalone quick-edit yet).
-stats_menu() {
-    local choice
+# Per-network branch — entered from the network-select screen after a net is
+# chosen (SOLO_NETWORK set). Holds only the genuinely per-net actions; cross-
+# network tools (both-net status, the unified stats page, global watchdogs) stay
+# on the network-select screen. Wallet/Stratum keep their own submenus — they
+# just inherit SOLO_NETWORK now instead of prompting per action.
+solo_net_menu() {
+    local choice label
+    label="Mainnet"; [[ "$SOLO_NETWORK" == "testnet" ]] && label="Testnet"
     while true; do
         clear
-        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  Stats & Web${RESET}"
-        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        if [[ "$SOLO_NETWORK" == "mainnet" ]]; then
+            echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+            echo -e "${BOLD}${RED}  07) Grin Solo — [MAINNET — REAL GRIN]${RESET}"
+            echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        else
+            echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+            echo -e "${BOLD}${CYAN}  07) Grin Solo — [TESTNET]${RESET}"
+            echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        fi
         echo ""
-        echo -e "  ${GREEN}1${RESET}) Live dashboard    ${DIM}(terminal stats; Enter to refresh, 0 to return)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Deploy / update   ${DIM}(nginx page; prompts payment prefixes + access lock)${RESET}"
-        echo -e "  ${RED}0${RESET}) Back"
+        _show_node_info "$SOLO_NETWORK" "$SOLO_API_PORT" "$SOLO_STRATUM_PORT"
+        echo -e "  ${GREEN}1${RESET}) Wallet       ${DIM}▸ setup/recover · listener · auto-restart · address${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Stratum      ${DIM}▸ setup · configure · publish · restrict${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Live stats   ${DIM}(terminal dashboard for $label)${RESET}"
         echo ""
-        echo -ne "${BOLD}Select [1-2/0]: ${RESET}"
+        echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
+        echo -e "  ${RED}0${RESET}) Back to network select"
+        echo ""
+        echo -ne "${BOLD}Select [1-3/0]: ${RESET}"
         read -r choice || choice=0          # EOF (Ctrl+D) → 0 → Back
         case "$choice" in
             "") continue ;;                 # Enter → refresh
-            1) solo_live_stats || true ;;
-            2) solo_deploy_stats_page || true; _solo_pause ;;
+            1) wallet_menu  || true ;;
+            2) stratum_menu || true ;;
+            3) solo_live_stats "$SOLO_NETWORK" || true ;;
             0) return ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done
 }
 
+# Network-select screen (network-as-parent). Pick a net to manage (1/2), or use
+# a cross-network tool (3-5). All-numeric — letters are reserved for
+# destructive/admin actions per the toolkit menu convention.
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -1895,17 +1951,20 @@ show_menu() {
     echo ""
     show_compact_status
 
-    echo -e "  ${GREEN}A${RESET}) Node & Mining Status  ${DIM}(node sync, tmux, stratum config + miners)${RESET}"
+    echo -e "  ${DIM}─── Manage a network ─────────────────────────────${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Mainnet  ${DIM}(real GRIN)${RESET}"
+    echo -e "  ${GREEN}2${RESET}) Testnet  ${DIM}(tGRIN — no monetary value)${RESET}"
     echo ""
-    echo -e "  ${GREEN}1${RESET}) Wallet               ${DIM}▸ setup/recover · listener · auto-restart · address${RESET}"
-    echo -e "  ${GREEN}2${RESET}) Stratum              ${DIM}▸ setup · configure · publish · restrict${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Stats & Web          ${DIM}▸ live dashboard · web page${RESET}"
-    echo -e "  ${GREEN}4${RESET}) Health / Watchdogs   ${DIM}▸ node-sync · boot autostart · wallet listener · stratum${RESET}"
+    echo -e "  ${DIM}─── Overview & shared tools ──────────────────────${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Node, Wallet & Mining Status  ${DIM}(both networks)${RESET}"
+    echo -e "  ${GREEN}4${RESET}) Stats web page                ${DIM}(unified vhost; payment prefixes + lock)${RESET}"
+    echo -e "  ${GREEN}5${RESET}) Watchdogs (global)            ${DIM}(node-sync · boot autostart · wallet · stratum)${RESET}"
+    echo -e "  ${GREEN}6${RESET}) Maintenance                   ${DIM}(encrypted backup · restore · schedule · seed)${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [A/1-4/0]: ${RESET}"
+    echo -ne "${BOLD}Select [1-6/0]: ${RESET}"
 }
 
 main() {
@@ -1916,19 +1975,23 @@ main() {
         # Every action is guarded with `|| true`: this is an interactive dispatch
         # loop, so a cancelled/failed action (e.g. "TOML not found" → `... || return`)
         # must drop back to the menu, never hard-exit the script under `set -e`.
+        # 1/2 enter a per-net branch: SOLO_NETWORK is set for its duration and
+        # cleared on return, so the global Watchdogs menu (5) still prompts for
+        # which net to act on. 3/4/5 are cross-network and run at the top level.
         case "${choice,,}" in
             "")  continue ;;                # Enter → refresh status
-            a)   show_node_status || true
+            1)   _set_solo_net mainnet; solo_net_menu || true; _clear_solo_net ;;
+            2)   _set_solo_net testnet; solo_net_menu || true; _clear_solo_net ;;
+            3)   show_node_status || true
                  echo ""; echo "Press Enter to continue..."; read -r || true ;;
-            1)   wallet_menu   || true ;;
-            2)   stratum_menu  || true ;;
-            3)   stats_menu    || true ;;
-            4)   watchdog_menu || true ;;
+            4)   solo_deploy_stats_page || true; _solo_pause ;;
+            5)   watchdog_menu || true ;;
+            6)   maintenance_menu || true ;;
             0)   break ;;
             *)   warn "Invalid option."; sleep 1 ;;
         esac
-        # Submenus (1-4) run their own loops + pauses; only the one-shot A) status
-        # view needs a pause, handled inline above.
+        # Branches/submenus run their own loops + pauses; only the one-shot status
+        # view (3) needs a pause, handled inline above.
     done
 }
 

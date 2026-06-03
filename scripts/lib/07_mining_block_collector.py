@@ -14,12 +14,23 @@ From these it maintains, per network:
   - a rolling record of blocks this node SOLVED  → blocks_<key>.json
   - per-worker hashrate over 15m / 12h / 24h / 48h, online/offline, with workers
     silent > 7 days pruned                        → miners_<key>.json
+  - a rolling daily-average POOL hashrate history (per UTC day, ~400 days, for the
+    daily/weekly/monthly trend chart)             → hashrate_<key>.json
   - a miningpoolstats-friendly pool+network summary → poolstats_<key>.json
 
 It also queries the node Owner API (get_status, localhost, reading .api_secret)
 to fill network height / difficulty / hashrate for poolstats.
 
-MAINNET-only reward split (trusted-group payment calculation):
+DURABLE STATE: all long-lived state (found blocks, per-worker buckets, daily
+hashrate history, payout ledger, log position) lives in ONE SQLite database per
+network — <state-dir>/solo_mining_stats_<key>.db (Python stdlib sqlite3, no external
+dependency, rollback-journal + synchronous=FULL so a crash mid-write recovers to
+the last committed run). The JSON files above are derived VIEWS, regenerated each
+run for the static web page to fetch. On the first run after upgrading from the
+old JSON-state build, <state-dir>/stats_<key>.state.json and
+payment_ledger_main.json are auto-imported once, then left in place (inert).
+
+MAINNET-only payout split (trusted-group payment calculation):
   - an append-only DAILY ledger (UTC day-keyed: per-worker share-difficulty +
     chain-verified matured-block count) → <state-dir>/payment_ledger_main.json
   - a public per-period split (daily/weekly/monthly/yearly: nickname → % + GRIN
@@ -52,6 +63,7 @@ import gzip
 import json
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 import time
@@ -79,8 +91,9 @@ BUCKET = 60                      # share-difficulty bucket size (seconds)
 WINDOWS = {"15m": 900, "12h": 43200, "24h": 86400, "48h": 172800}
 ONLINE_THRESHOLD = 900           # no share within 15 min ⇒ worker offline
 WORKER_TTL = 7 * 86400           # prune workers silent for 7 days
-BLOCK_RETENTION = 400 * 86400    # bound found-block history (covers 12-mo graph)
-RECENT_CAP = 500
+BLOCK_RETENTION = 1830 * 86400   # bound found-block history (~5 yr, covers yearly graph)
+HR_HISTORY_RETENTION_DAYS = 1830 # daily pool-hashrate history depth (~5 yr, covers yearly graph)
+RECENT_CAP = 2000                # max blocks in the output list (covers a 5-yr yearly chart)
 C32_SCALE = 16384                # Cuckatoo32 solution-rate constant (32 * 2^9)
 
 # Per-share work credit. minimum_share_difficulty defaults to 1 — below the C32
@@ -93,7 +106,7 @@ C32_SCALE = 16384                # Cuckatoo32 solution-rate constant (32 * 2^9)
 # can score, and thus the effective target every share clears. Fed through
 # hashrate_gps() this gives GPS = share_count × 42 / window, which is
 # self-consistent with the network hashrate formula and low-variance (Poisson in
-# the share count). It also makes the reward split credit work by share count
+# the share count). It also makes the payout split credit work by share count
 # rather than by luck.
 # NOTE: assumes minimum_share_difficulty ≤ 16384 (grin/toolkit default = 1, so
 # every cycle is submitted). If an operator raises it above the floor, set this
@@ -102,7 +115,7 @@ SHARE_CREDIT_DIFF = C32_SCALE
 
 NODE_PORTS = {"mainnet": 3413, "testnet": 13413}
 
-# ── Reward split (mainnet only) ────────────────────────────────────────────────
+# ── Payout split (mainnet only) ────────────────────────────────────────────────
 BLOCK_REWARD_GRIN = 60.0         # flat coinbase reward (Grin has no halving)
 MAINNET_MATURITY = 1440          # COINBASE_MATURITY — blocks before reward spendable
 DEFAULT_PAYMENT_CONFIG = "/opt/grin/conf/grin_solo_payment.json"
@@ -141,7 +154,8 @@ def hashrate_gps(sum_diff, window_s):
     return sum_diff * 42.0 / C32_SCALE / window_s
 
 
-def load_state(path):
+def _read_json(path):
+    """Read a JSON file → dict, or {} if missing/unreadable (legacy import only)."""
     try:
         with open(path) as fh:
             return json.load(fh)
@@ -180,6 +194,148 @@ def save_json_atomic(path, obj, mode=0o600):
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+
+
+# ── SQLite persistence ─────────────────────────────────────────────────────────
+# All durable state lives in <state-dir>/solo_mining_stats_<key>.db (one DB per network; the
+# mainnet/testnet collector runs never share a file, so no locking contention).
+# The in-memory processing below is UNCHANGED — these helpers just load every
+# table into the same dict shapes the build_* functions already expect, and write
+# them back in a single transaction. Rollback-journal mode (the default) leaves a
+# single .db file at rest between the 5-min runs, so the tar backup of
+# /opt/grin/solo-stats/ captures a consistent snapshot; synchronous=FULL makes a
+# crash mid-write recover to the last committed run (never a torn file).
+DB_SCHEMA = """
+PRAGMA synchronous=FULL;
+CREATE TABLE IF NOT EXISTS meta          (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS found_blocks  (height INTEGER PRIMARY KEY, ts REAL NOT NULL, hash TEXT);
+CREATE TABLE IF NOT EXISTS workers       (worker TEXT PRIMARY KEY, last_seen REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS worker_buckets(worker TEXT NOT NULL, bucket INTEGER NOT NULL, diff REAL NOT NULL, PRIMARY KEY (worker, bucket));
+CREATE TABLE IF NOT EXISTS hr_days       (day TEXT PRIMARY KEY, diff_sum INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS ledger_days   (day TEXT PRIMARY KEY, blocks_matured INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS ledger_worker (day TEXT NOT NULL, worker TEXT NOT NULL, diff INTEGER NOT NULL, PRIMARY KEY (day, worker));
+CREATE TABLE IF NOT EXISTS ledger_blocks (height INTEGER PRIMARY KEY, status TEXT NOT NULL);
+"""
+
+
+def db_connect(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fresh = not os.path.exists(path)
+    conn = sqlite3.connect(path, timeout=30)
+    conn.executescript(DB_SCHEMA)
+    if fresh:
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    return conn
+
+
+def _meta_get(conn, key, default=None):
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def _meta_set(conn, key, value):
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, value))
+
+
+def load_state_db(conn):
+    """Read every state table back into the dict shapes the build_* code expects."""
+    found, hashes = {}, {}
+    for h, ts, hsh in conn.execute("SELECT height, ts, hash FROM found_blocks"):
+        found[str(h)] = ts
+        if hsh:
+            hashes[str(h)] = hsh
+    workers = {}
+    for w, ls in conn.execute("SELECT worker, last_seen FROM workers"):
+        workers[w] = {"last_seen": ls, "buckets": {}}
+    for w, b, d in conn.execute("SELECT worker, bucket, diff FROM worker_buckets"):
+        wk = workers.get(w)
+        if wk is not None:
+            wk["buckets"][str(b)] = d
+    hr_days = {day: ds for day, ds in conn.execute("SELECT day, diff_sum FROM hr_days")}
+    net_prev = json.loads(_meta_get(conn, "net_prev", "{}"))
+    log_pos = json.loads(_meta_get(conn, "log_pos", "{}"))
+    return {"found": found, "hashes": hashes, "workers": workers,
+            "net_prev": net_prev, "hr_days": hr_days, "log_pos": log_pos}
+
+
+def save_state_db(conn, state):
+    """Replace every state table from the in-memory dicts in one transaction.
+    Full table replace (not incremental) mirrors the old whole-file JSON rewrite —
+    correct and simple; the row counts here (≤ a few ×10k buckets) are trivial for
+    SQLite, and the build_* code has already pruned the dicts before this runs."""
+    with conn:
+        conn.execute("DELETE FROM found_blocks")
+        conn.executemany(
+            "INSERT INTO found_blocks(height, ts, hash) VALUES (?, ?, ?)",
+            [(int(h), ts, state["hashes"].get(h)) for h, ts in state["found"].items()])
+        conn.execute("DELETE FROM workers")
+        conn.execute("DELETE FROM worker_buckets")
+        wrows, brows = [], []
+        for w, wk in state["workers"].items():
+            wrows.append((w, wk.get("last_seen", 0)))
+            for b, d in wk.get("buckets", {}).items():
+                brows.append((w, int(b), d))
+        conn.executemany("INSERT INTO workers(worker, last_seen) VALUES (?, ?)", wrows)
+        conn.executemany("INSERT INTO worker_buckets(worker, bucket, diff) VALUES (?, ?, ?)", brows)
+        conn.execute("DELETE FROM hr_days")
+        conn.executemany("INSERT INTO hr_days(day, diff_sum) VALUES (?, ?)",
+                         [(day, int(v)) for day, v in state["hr_days"].items()])
+        _meta_set(conn, "net_prev", json.dumps(state["net_prev"]))
+        _meta_set(conn, "log_pos", json.dumps(state["log_pos"]))
+
+
+def load_ledger_db(conn):
+    """Payout ledger (mainnet) → {days: {day: {workers, blocks_matured}}, blocks}."""
+    days = {}
+    for day, bm in conn.execute("SELECT day, blocks_matured FROM ledger_days"):
+        days[day] = {"workers": {}, "blocks_matured": bm}
+    for day, w, d in conn.execute("SELECT day, worker, diff FROM ledger_worker"):
+        if day in days:
+            days[day]["workers"][w] = d
+    blocks = {str(h): s for h, s in conn.execute("SELECT height, status FROM ledger_blocks")}
+    return {"days": days, "blocks": blocks}
+
+
+def save_ledger_db(conn, ledger):
+    with conn:
+        conn.execute("DELETE FROM ledger_days")
+        conn.execute("DELETE FROM ledger_worker")
+        conn.execute("DELETE FROM ledger_blocks")
+        drows, wrows = [], []
+        for day, e in ledger["days"].items():
+            drows.append((day, int(e.get("blocks_matured", 0))))
+            for w, d in (e.get("workers") or {}).items():
+                wrows.append((day, w, int(d)))
+        conn.executemany("INSERT INTO ledger_days(day, blocks_matured) VALUES (?, ?)", drows)
+        conn.executemany("INSERT INTO ledger_worker(day, worker, diff) VALUES (?, ?, ?)", wrows)
+        conn.executemany("INSERT INTO ledger_blocks(height, status) VALUES (?, ?)",
+                         [(int(h), s) for h, s in ledger["blocks"].items()])
+
+
+def migrate_legacy_json(conn, state_json, ledger_json, is_mainnet):
+    """One-time auto-import of the pre-SQLite JSON files into the DB, on the first
+    run after upgrade. Guarded by a meta flag so it runs exactly once (also set on
+    a fresh install where no legacy file exists). Legacy files are left in place
+    (inert) rather than deleted."""
+    if _meta_get(conn, "legacy_imported"):
+        return
+    obj = _read_json(state_json)
+    if isinstance(obj, dict) and obj:
+        save_state_db(conn, {
+            "found": obj.get("found", {}), "hashes": obj.get("hashes", {}),
+            "workers": obj.get("workers", {}), "net_prev": obj.get("net_prev", {}),
+            "hr_days": obj.get("hr_days", {}), "log_pos": obj.get("log_pos", {}),
+        })
+    if is_mainnet:
+        led = _read_json(ledger_json)
+        if isinstance(led, dict) and (led.get("days") or led.get("blocks")):
+            save_ledger_db(conn, {"days": led.get("days", {}),
+                                  "blocks": led.get("blocks", {})})
+    with conn:
+        _meta_set(conn, "legacy_imported", "1")
 
 
 def query_node_status(net):
@@ -233,14 +389,14 @@ def query_node_block(net, height):
         return None
 
 
-# ── reward split: UTC ledger + per-period calculation (mainnet only) ───────────
+# ── payout split: UTC ledger + per-period calculation (mainnet only) ───────────
 def utc_day(epoch):
     """UTC calendar-day key 'YYYY-MM-DD' for an epoch (split buckets by UTC day)."""
     return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%d")
 
 
 def load_prefixes(path):
-    """Reward-split config loader. Returns:
+    """Payout-split config loader. Returns:
         None  ⇒ feature OFF (config absent/unreadable, or {"enabled": false})
         []    ⇒ feature ON, split by worker name automatically ({"enabled": true})
         [..]  ⇒ feature ON, group workers by these nickname prefixes
@@ -264,17 +420,6 @@ def load_prefixes(path):
     if out:
         return out                       # explicit prefix grouping
     return [] if cfg.get("enabled") is True else None
-
-
-def load_ledger(path):
-    """Append-only payment ledger. `days` = UTC-day → {workers, blocks_matured};
-    `blocks` = found-height → 'matured'|'orphan' (idempotency: count each once)."""
-    obj = load_state(path)
-    if not isinstance(obj, dict):
-        obj = {}
-    obj.setdefault("days", {})
-    obj.setdefault("blocks", {})
-    return obj
 
 
 def _daily_worker_diff(workers, day):
@@ -361,7 +506,7 @@ def _window_days(period, now):
 
 
 def compute_split(ledger, prefixes, now):
-    """Per-period reward split. reward_P = Σ matured blocks × 60 GRIN, divided by
+    """Per-period payout split. reward_P = Σ matured blocks × 60 GRIN, divided by
     work share (Σ share-diff, longest-prefix match). Nicknames + % + GRIN ONLY."""
     periods = {}
     for period in SPLIT_PERIODS:
@@ -442,7 +587,7 @@ def scan_increment(main_log, pos_state, found, hashes, workers, backfill):
             b = str(int(ts // BUCKET) * BUCKET)
             # Credit a FIXED per-share difficulty (SHARE_CREDIT_DIFF), not the
             # heavy-tailed actual difficulty the log reports, so one lucky share
-            # cannot spike the hashrate estimate or the reward split.
+            # cannot spike the hashrate estimate or the payout split.
             wk["buckets"][b] = wk["buckets"].get(b, 0.0) + SHARE_CREDIT_DIFF
 
     # First run (no state) — backfill found blocks from rotated logs too.
@@ -537,6 +682,48 @@ def build_miners(workers, now):
     }
 
 
+def _daily_total_diff(workers, day):
+    """Σ accepted share-difficulty across ALL workers whose 60s bucket falls on UTC `day`."""
+    total = 0.0
+    for wk in workers.values():
+        for b, v in wk.get("buckets", {}).items():
+            if utc_day(int(b)) == day:
+                total += v
+    return total
+
+
+def update_hr_history(hr_days, workers, now):
+    """Rolling per-UTC-day pool share-difficulty → daily-average hashrate history.
+
+    Like the reward ledger, only TODAY and YESTERDAY are (re)written each run — the
+    48h bucket window always covers both, so the rewrite is idempotent and older
+    days stay frozen at the value finalised while still inside the window. Entries
+    older than HR_HISTORY_RETENTION_DAYS are pruned (bounds the 12-month graph).
+    Maintained for BOTH networks (unlike the mainnet-only reward ledger)."""
+    for day in (utc_day(now - 86400), utc_day(now)):
+        hr_days[day] = int(round(_daily_total_diff(workers, day)))
+    cutoff = utc_day(now - HR_HISTORY_RETENTION_DAYS * 86400)
+    for day in list(hr_days):
+        if day < cutoff:
+            del hr_days[day]
+    return hr_days
+
+
+def build_hr_history(hr_days, now):
+    """Daily-average pool hashrate (G/s) per UTC day, ascending. The current day is
+    divided by elapsed seconds since UTC midnight (not a full 86400) so it reads as
+    a live average rather than an artificially low partial-day figure."""
+    today = utc_day(now)
+    midnight = datetime.fromtimestamp(now, timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0).timestamp()
+    elapsed_today = max(1.0, now - midnight)
+    points = []
+    for day in sorted(hr_days):
+        secs = elapsed_today if day == today else 86400.0
+        points.append({"day": day, "gps": round(hashrate_gps(hr_days[day], secs), 3)})
+    return points
+
+
 def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now,
                     status=None, pool_name=DEFAULT_POOL_NAME):
     if status is None:
@@ -587,7 +774,7 @@ def main():
     ap.add_argument("--state-dir", default="/opt/grin/solo-stats")
     ap.add_argument("--out-dir")
     ap.add_argument("--payment-config", default=DEFAULT_PAYMENT_CONFIG,
-                    help="nickname-prefix file enabling the mainnet reward split")
+                    help="nickname-prefix file enabling the mainnet payout split")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     key = "main" if args.net == "mainnet" else "test"
@@ -613,13 +800,18 @@ def main():
         return 0
 
     now = time.time()
-    state_file = os.path.join(args.state_dir, f"stats_{key}.state.json")
-    state = load_state(state_file)
-    found = state.get("found", {})
-    hashes = state.get("hashes", {})
-    workers = state.get("workers", {})
-    net_prev = state.get("net_prev", {})
-    pos_state = state.get("log_pos", {})
+    db_path = os.path.join(args.state_dir, f"solo_mining_stats_{key}.db")
+    legacy_state = os.path.join(args.state_dir, f"stats_{key}.state.json")
+    legacy_ledger = os.path.join(args.state_dir, "payment_ledger_main.json")
+    conn = db_connect(db_path)
+    migrate_legacy_json(conn, legacy_state, legacy_ledger, args.net == "mainnet")
+    state = load_state_db(conn)
+    found = state["found"]
+    hashes = state["hashes"]
+    workers = state["workers"]
+    net_prev = state["net_prev"]
+    hr_days = state["hr_days"]
+    pos_state = state["log_pos"]
     backfill = not found and not workers and not pos_state
 
     pos_state = scan_increment(args.log, pos_state, found, hashes, workers, backfill)
@@ -627,23 +819,23 @@ def main():
     status = query_node_status(args.net)
     found, hashes, blocks_payload = build_blocks(found, hashes, now)
     workers, miners_payload = build_miners(workers, now)
+    hr_days = update_hr_history(hr_days, workers, now)
     net_prev, pool_payload = build_poolstats(
         args.net, miners_payload, blocks_payload, found, net_prev, now, status,
         pool_name=load_pool_name(args.out_dir))
 
-    save_json_atomic(state_file, {
+    save_state_db(conn, {
         "found": found, "hashes": hashes, "workers": workers,
-        "net_prev": net_prev, "log_pos": pos_state,
+        "net_prev": net_prev, "hr_days": hr_days, "log_pos": pos_state,
     })
 
-    # ── Reward split (mainnet only) ──────────────────────────────────────────
+    # ── Payout split (mainnet only) ──────────────────────────────────────────
     # The ledger is maintained unconditionally so history accrues from day one;
     # the public split is emitted only once the operator registers prefixes.
     if args.net == "mainnet":
-        ledger_path = os.path.join(args.state_dir, "payment_ledger_main.json")
-        ledger = update_ledger(load_ledger(ledger_path), workers, found, hashes,
+        ledger = update_ledger(load_ledger_db(conn), workers, found, hashes,
                                status, args.net, now)
-        save_json_atomic(ledger_path, ledger, 0o600)
+        save_ledger_db(conn, ledger)
 
         prefixes = load_prefixes(args.payment_config)
         if args.out_dir:
@@ -663,14 +855,18 @@ def main():
 
     blocks_out = dict(blocks_payload); blocks_out.update({"updated": iso(now), "net": args.net})
     miners_out = dict(miners_payload); miners_out.update({"updated": iso(now), "net": args.net})
+    hashrate_out = {"updated": iso(now), "net": args.net, "unit": "gps",
+                    "points": build_hr_history(hr_days, now)}
 
     if args.out_dir:
         save_json_atomic(os.path.join(args.out_dir, f"blocks_{key}.json"), blocks_out, 0o644)
         save_json_atomic(os.path.join(args.out_dir, f"miners_{key}.json"), miners_out, 0o644)
+        save_json_atomic(os.path.join(args.out_dir, f"hashrate_{key}.json"), hashrate_out, 0o644)
         save_json_atomic(os.path.join(args.out_dir, f"poolstats_{key}.json"), pool_payload, 0o644)
     else:
         print(json.dumps({"blocks": blocks_out, "miners": miners_out,
-                          "poolstats": pool_payload}, indent=2))
+                          "hashrate": hashrate_out, "poolstats": pool_payload}, indent=2))
+    conn.close()
     return 0
 
 

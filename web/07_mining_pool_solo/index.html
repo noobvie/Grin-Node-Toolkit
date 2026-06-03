@@ -68,6 +68,8 @@
   .dot.ok   { background: var(--green);  box-shadow: 0 0 0 3px rgba(63,185,80,.20); }
   .dot.warn { background: var(--yellow); box-shadow: 0 0 0 3px rgba(227,179,65,.20); }
   .dot.err  { background: var(--red);    box-shadow: 0 0 0 3px rgba(255,107,99,.20); }
+  @keyframes dotpulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+  .dot.blink { animation: dotpulse 1.4s ease-in-out infinite; }
 
   /* single-column network sections */
   .panel {
@@ -152,13 +154,13 @@
   .legend span { display: inline-flex; align-items: center; gap: .4rem; }
   .legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
   .legend i.m { background: var(--main); } .legend i.t { background: var(--test); }
-  #chart svg { width: 100%; height: auto; display: block; }
-  #chart text { fill: var(--muted); font-size: 11px; font-family: 'Courier New', monospace; }
+  #chart svg, #hr-chart svg { width: 100%; height: auto; display: block; }
+  #chart text, #hr-chart text { fill: var(--muted); font-size: 11px; font-family: 'Courier New', monospace; }
   .chart-empty { color: var(--muted); font-size: .95rem; padding: 1.5rem 0; text-align: center; }
   .mtag { font-size: .78rem; padding: .1rem .55rem; border-radius: 999px; border: 1px solid var(--border); }
   .mtag.maturing { color: var(--yellow); } .mtag.mature { color: var(--green); } .mtag.unknown { color: var(--muted); }
 
-  /* reward split (payment calc) */
+  /* payout split (payment calc) */
   .split-meta { color: var(--muted); font-size: .92rem; margin-bottom: .9rem; }
   .split-meta b { color: var(--text-hi); }
   #split-table { min-width: 420px; }
@@ -206,7 +208,7 @@
     <div class="tile"><div class="label">Block Height</div><div class="value" id="main-height">—</div></div>
     <div class="tile"><div class="label">Network Difficulty</div><div class="value" id="main-difficulty">—</div></div>
     <div class="tile"><div class="label">Network Hashrate</div><div class="value green" id="main-hashrate">—</div></div>
-    <div class="tile"><div class="label">Connected Peers</div><div class="value" id="main-peers">—</div></div>
+    <div class="tile"><div class="label">Pool Hashrate</div><div class="value green" id="main-poolhr">—</div></div>
     <div class="tile"><div class="label">Blocks Found (24h)</div><div class="value" id="main-blocks24">—</div></div>
     <div class="tile"><div class="label">Coinbase Maturing</div><div class="value dim" id="main-maturing">—</div></div>
     <div class="tile"><div class="label">Active Miners</div><div class="value dim" id="main-miners">—</div></div>
@@ -214,7 +216,7 @@
   </div>
   <div class="miners">
     <div class="miners-head">
-      <h3>Miners</h3>
+      <h3>Miners List</h3>
       <span class="miners-sum" id="main-miners-sum">—</span>
     </div>
     <div class="table-scroll"><table id="main-miners-table"><tbody></tbody></table></div>
@@ -242,7 +244,7 @@
     <div class="tile"><div class="label">Block Height</div><div class="value" id="test-height">—</div></div>
     <div class="tile"><div class="label">Network Difficulty</div><div class="value" id="test-difficulty">—</div></div>
     <div class="tile"><div class="label">Network Hashrate</div><div class="value green" id="test-hashrate">—</div></div>
-    <div class="tile"><div class="label">Connected Peers</div><div class="value" id="test-peers">—</div></div>
+    <div class="tile"><div class="label">Pool Hashrate</div><div class="value green" id="test-poolhr">—</div></div>
     <div class="tile"><div class="label">Blocks Found (24h)</div><div class="value" id="test-blocks24">—</div></div>
     <div class="tile"><div class="label">Coinbase Maturing</div><div class="value dim" id="test-maturing">—</div></div>
     <div class="tile"><div class="label">Active Miners</div><div class="value dim" id="test-miners">—</div></div>
@@ -250,7 +252,7 @@
   </div>
   <div class="miners">
     <div class="miners-head">
-      <h3>Miners</h3>
+      <h3>Miners List</h3>
       <span class="miners-sum" id="test-miners-sum">—</span>
     </div>
     <div class="table-scroll"><table id="test-miners-table"><tbody></tbody></table></div>
@@ -273,19 +275,35 @@
   <div class="chart-head">
     <h2>Blocks Found History Chart</h2>
     <div class="seg" id="range-seg">
-      <button type="button" data-range="daily" class="active">Daily · 30d</button>
-      <button type="button" data-range="weekly">Weekly · 12w</button>
-      <button type="button" data-range="monthly">Monthly · 12mo</button>
+      <button type="button" data-range="daily" class="active">Daily</button>
+      <button type="button" data-range="weekly">Weekly</button>
+      <button type="button" data-range="monthly">Monthly</button>
+      <button type="button" data-range="yearly">Yearly</button>
     </div>
   </div>
   <div class="legend"><span><i class="m"></i>Mainnet</span><span><i class="t"></i>Testnet</span></div>
   <div id="chart"><div class="chart-empty">Loading block history…</div></div>
 </section>
 
-<!-- ── Reward split (payment calc, mainnet) — hidden unless data/split_main.json exists ── -->
+<!-- ── Pool hashrate history ── -->
+<section class="chart-card">
+  <div class="chart-head">
+    <h2>Pool Hashrate History Chart</h2>
+    <div class="seg" id="hr-range-seg">
+      <button type="button" data-range="daily" class="active">Daily</button>
+      <button type="button" data-range="weekly">Weekly</button>
+      <button type="button" data-range="monthly">Monthly</button>
+      <button type="button" data-range="yearly">Yearly</button>
+    </div>
+  </div>
+  <div class="legend"><span><i class="m"></i>Mainnet</span><span><i class="t"></i>Testnet</span></div>
+  <div id="hr-chart"><div class="chart-empty">Loading hashrate history…</div></div>
+</section>
+
+<!-- ── Payout split (payment calc, mainnet) — hidden unless data/split_main.json exists ── -->
 <section class="chart-card" id="split-card" style="display:none">
   <div class="chart-head">
-    <h2>Reward Split · <span style="color:var(--main)">Mainnet</span></h2>
+    <h2>Payout Split · <span style="color:var(--main)">Mainnet</span></h2>
     <div class="seg" id="split-seg">
       <button type="button" data-period="daily">Daily</button>
       <button type="button" data-period="weekly" class="active">Weekly</button>
@@ -341,11 +359,19 @@
   var MATURITY = { main: 1440, test: 1440 };
   var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   var NETS = {
-    main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null },
-    test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null }
+    main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', hashrate: 'data/hashrate_main.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null },
+    test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', hashrate: 'data/hashrate_test.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null }
   };
-  var STATE = { tip: { main: null, test: null }, blocks: { main: [], test: [] }, miners: { main: [], test: [] }, loaded: { main: false, test: false }, range: 'daily', blocksExpanded: { main: false, test: false } };
+  var STATE = { tip: { main: null, test: null }, blocks: { main: [], test: [] }, miners: { main: [], test: [] }, hashrate: { main: [], test: [] }, loaded: { main: false, test: false }, hrLoaded: { main: false, test: false }, range: 'daily', hrRange: 'daily', blocksExpanded: { main: false, test: false } };
   var BLOCKS_PREVIEW = 10;   // rows shown before "show all"
+
+  // Seed difficulty/hashrate from the last session so the tiles render a number
+  // before the first delta is computed (function decls below are hoisted).
+  ['main', 'test'].forEach(function (net) {
+    loadNetCache(net);
+    if (NETS[net].netDiff != null) set(net + '-difficulty', fmtNum(NETS[net].netDiff));
+    if (NETS[net].hrGps != null) set(net + '-hashrate', fmtHr(NETS[net].hrGps), 'green');
+  });
 
   function fmtNum(n) {
     if (n >= 1e12) return (n/1e12).toFixed(2)+'T'; if (n >= 1e9) return (n/1e9).toFixed(2)+'G';
@@ -377,8 +403,28 @@
     if (dBlocks > 0 && dDiff > 0 && dt > 0) {
       s.netDiff = dDiff / dBlocks;                           // avg per-block network difficulty
       s.hrGps   = dDiff * 42 / dt / 16384;                   // avg hashrate over the window (G/s)
+      saveNetCache(net);                                     // persist so a reload shows a number instantly
     }
     if (dBlocks >= HR_WINDOW_BLOCKS) { s.baseHeight = height; s.baseDiff = diff; s.baseTs = nowTs; }
+  }
+  // Difficulty/hashrate are deltas across blocks, so the first ~10–30 s after a
+  // load have nothing to compute yet. We persist the last good pair to
+  // localStorage and re-seed it on load: the tiles show the (slightly stale) last
+  // value immediately instead of a "—" placeholder, and the next computed delta
+  // overwrites it. Cleared only when the node is genuinely unreachable.
+  function netCacheKey(net) { return 'grinSoloNet_' + net; }
+  function saveNetCache(net) {
+    try { localStorage.setItem(netCacheKey(net),
+      JSON.stringify({ netDiff: NETS[net].netDiff, hrGps: NETS[net].hrGps })); } catch (e) {}
+  }
+  function loadNetCache(net) {
+    try {
+      var v = JSON.parse(localStorage.getItem(netCacheKey(net)));
+      if (v && typeof v === 'object') {
+        if (typeof v.netDiff === 'number') NETS[net].netDiff = v.netDiff;
+        if (typeof v.hrGps === 'number') NETS[net].hrGps = v.hrGps;
+      }
+    } catch (e) {}
   }
   function syncLabel(s) { return (!s || s === 'no_sync') ? { text: 'synced', cls: 'ok' } : { text: String(s).replace(/_/g, ' '), cls: 'warn' }; }
 
@@ -400,7 +446,7 @@
     document.getElementById(net + '-state').textContent = stateText;
     var n = document.getElementById(net + '-note');
     n.textContent = note; n.style.display = note ? 'block' : 'none';
-    set(net + '-height', '—'); set(net + '-difficulty', '—'); set(net + '-hashrate', '—'); set(net + '-peers', '—');
+    set(net + '-height', '—'); set(net + '-difficulty', '—'); set(net + '-hashrate', '—');
     STATE.tip[net] = null;
     NETS[net].baseHeight = null; NETS[net].baseDiff = null; NETS[net].baseTs = null;
     NETS[net].netDiff = null; NETS[net].hrGps = null;
@@ -420,10 +466,13 @@
         var note = document.getElementById(net + '-note'); note.textContent = ''; note.style.display = 'none';
         var tip = ok.tip || {}, height = tip.height, diff = tip.total_difficulty, peers = ok.connections, sync = syncLabel(ok.sync_status);
         STATE.tip[net] = (height !== undefined) ? Number(height) : null;
+        // Peer count now rides on the sync-status line (its own tile was replaced
+        // by Pool Hashrate): e.g. "synced · 8 nodes". The dot keeps the sync colour.
+        var peerN = (peers !== undefined && peers !== null) ? Number(peers) : null;
         document.getElementById(net + '-dot').className = 'dot ' + sync.cls;
-        document.getElementById(net + '-state').textContent = sync.text;
+        document.getElementById(net + '-state').textContent =
+          sync.text + (peerN !== null ? ' · ' + peerN + ' node' + (peerN === 1 ? '' : 's') : '');
         set(net + '-height', height !== undefined ? Number(height).toLocaleString() : '—');
-        set(net + '-peers', peers !== undefined ? String(peers) : '—', Number(peers) > 0 ? 'green' : 'yellow');
         updateDiffHashrate(net, height !== undefined ? Number(height) : null, diff !== undefined ? Number(diff) : null, nowTs);
         var s = NETS[net];
         set(net + '-difficulty', s.netDiff != null ? fmtNum(s.netDiff) : '—');
@@ -441,10 +490,10 @@
     return fetch(NETS[net].wallet, { method: 'GET' })
       .then(function (res) {
         if (res.status === 404) { set(net + '-wallet', 'n/a', 'dim'); return; }
-        if (res.status === 200 || res.status === 401) set(net + '-wallet', 'listening', 'green');
-        else set(net + '-wallet', 'down', 'red');
+        if (res.status === 200 || res.status === 401) set(net + '-wallet', 'Up', 'green');
+        else set(net + '-wallet', 'Down', 'red');
       })
-      .catch(function () { set(net + '-wallet', 'down', 'red'); });
+      .catch(function () { set(net + '-wallet', 'Down', 'red'); });
   }
 
   function pollBlocks(net) {
@@ -455,6 +504,15 @@
         set(net + '-blocks24', String(data.found_24h != null ? data.found_24h : 0), (data.found_24h > 0) ? 'green' : 'dim');
       })
       .catch(function () { STATE.loaded[net] = false; set(net + '-blocks24', 'n/a', 'dim'); });
+  }
+
+  function pollHashrate(net) {
+    return fetch(NETS[net].hashrate, { method: 'GET', cache: 'no-store' })
+      .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+      .then(function (data) {
+        STATE.hashrate[net] = Array.isArray(data.points) ? data.points : []; STATE.hrLoaded[net] = true;
+      })
+      .catch(function () { STATE.hrLoaded[net] = false; STATE.hashrate[net] = []; });
   }
 
   function pollMiners(net) {
@@ -468,6 +526,7 @@
         STATE.miners[net] = miners;   // retained for the per-nickname split view
         var mc = data.miner_count || 0, oc = data.online_count || 0;
         set(net + '-miners', oc + ' / ' + mc, mc === 0 ? 'dim' : (oc === mc ? 'green' : 'yellow'));
+        set(net + '-poolhr', fmtHr(data.total_hr_gps), (data.total_hr_gps > 0) ? 'green' : 'dim');
         sum.innerHTML = '<b>' + oc + '</b>/' + mc + ' online · total <b>' + fmtHr(data.total_hr_gps) + '</b>';
         if (miners.length === 0) {
           tbody.innerHTML = '';
@@ -476,20 +535,32 @@
           empty.style.display = 'block'; return;
         }
         empty.style.display = 'none';
-        tbody.innerHTML = '<tr><th>Worker</th><th>15m</th><th>12h</th><th>24h</th><th>48h</th><th>Last</th><th>Status</th></tr>'
+        tbody.innerHTML = '<tr><th></th><th>Worker</th><th>15m</th><th>12h</th><th>24h</th><th>48h</th><th>Last seen</th></tr>'
           + miners.map(function (m) {
-            var st = m.online ? '<span class="st on"><span class="dot ok"></span>online</span>'
-                              : '<span class="st off"><span class="dot err"></span>offline ' + relAge(m.age_s) + '</span>';
+            // Status reduced to a dot (no header text): blinking green = online,
+            // static red = offline. For a down miner the dot's tooltip and the
+            // "Last seen" column both show when it was last online.
+            var st;
+            if (m.online) {
+              st = '<span class="dot ok blink" title="online"></span>';
+            } else {
+              var ld = new Date(m.last_seen);
+              var when = isNaN(ld) ? (relAge(m.age_s) + ' ago')
+                                   : (fmtDate(ld) + ' ' + fmtTime(ld) + ' (' + relAge(m.age_s) + ' ago)');
+              st = '<span class="dot err" title="last online ' + when + '"></span>';
+            }
             return '<tr class="' + (m.online ? '' : 'off') + '">'
+              + '<td>' + st + '</td>'
               + '<td><span class="w">' + esc(m.worker) + '</span></td>'
               + '<td>' + fmtHr(m.hr_15m) + '</td><td>' + fmtHr(m.hr_12h) + '</td>'
               + '<td>' + fmtHr(m.hr_24h) + '</td><td>' + fmtHr(m.hr_48h) + '</td>'
-              + '<td>' + relAge(m.age_s) + '</td><td>' + st + '</td></tr>';
+              + '<td>' + relAge(m.age_s) + '</td></tr>';
           }).join('');
       })
       .catch(function () {
         STATE.miners[net] = [];
         set(net + '-miners', 'n/a', 'dim');
+        set(net + '-poolhr', 'n/a', 'dim');
         sum.textContent = 'collector not installed';
         tbody.innerHTML = '';
         empty.textContent = 'Block/miner collector not installed yet — run the stats deploy (S).';
@@ -521,10 +592,11 @@
     var keys = [], labels = [], now = new Date(), i, d;
     if (range === 'daily') { for (i = 29; i >= 0; i--) { d = new Date(now); d.setDate(d.getDate() - i); keys.push(dayKey(d)); labels.push((d.getMonth()+1)+'/'+d.getDate()); } }
     else if (range === 'weekly') { var mon = startOfWeek(now); for (i = 11; i >= 0; i--) { d = new Date(mon); d.setDate(d.getDate() - i*7); keys.push(dayKey(d)); labels.push((d.getMonth()+1)+'/'+d.getDate()); } }
+    else if (range === 'yearly') { for (i = 4; i >= 0; i--) { var yr = now.getFullYear() - i; keys.push(String(yr)); labels.push(String(yr)); } }
     else { for (i = 11; i >= 0; i--) { d = new Date(now.getFullYear(), now.getMonth() - i, 1); keys.push(d.getFullYear()+'-'+(d.getMonth()+1)); labels.push(MONTHS[d.getMonth()]); } }
     return { keys: keys, labels: labels };
   }
-  function keyForDate(d, range) { if (range === 'daily') return dayKey(d); if (range === 'weekly') return dayKey(startOfWeek(d)); return d.getFullYear()+'-'+(d.getMonth()+1); }
+  function keyForDate(d, range) { if (range === 'daily') return dayKey(d); if (range === 'weekly') return dayKey(startOfWeek(d)); if (range === 'yearly') return String(d.getFullYear()); return d.getFullYear()+'-'+(d.getMonth()+1); }
   function countSeries(blocks, keys, range) {
     var idx = {}, c = keys.map(function () { return 0; }); keys.forEach(function (k, i) { idx[k] = i; });
     blocks.forEach(function (b) { var d = new Date(b.ts); if (isNaN(d)) return; var k = keyForDate(d, range); if (k in idx) c[idx[k]]++; });
@@ -554,6 +626,58 @@
     svg += '<line x1="' + L + '" y1="' + baseY + '" x2="' + (W-R) + '" y2="' + baseY + '" stroke="var(--border)"/>';
     svg += '<text x="' + (L-6) + '" y="' + (baseY+4) + '" text-anchor="end">0</text>';
     svg += '<text x="' + (L-6) + '" y="' + (T+10) + '" text-anchor="end">' + maxV + '</text>';
+    svg += '<path d="' + linePath(sm) + '" fill="none" stroke="var(--main)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+    svg += '<path d="' + linePath(st) + '" fill="none" stroke="var(--test)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+    svg += dots(sm, 'var(--main)') + dots(st, 'var(--test)');
+    var every = Math.ceil(n / 8);
+    for (var i = 0; i < n; i++) {
+      if (i % every === 0) svg += '<text x="' + xAt(i).toFixed(1) + '" y="' + (baseY + 16) + '" text-anchor="middle">' + b.labels[i] + '</text>';
+    }
+    holder.innerHTML = svg + '</svg>';
+  }
+
+  // ── Pool hashrate history chart ──
+  // Reuses the block chart's bucket keys (daily 30d / weekly 12w / monthly 12mo)
+  // but AVERAGES the daily-average G/s points within each bucket instead of
+  // counting events. Points come from data/hashrate_<net>.json ({day, gps}).
+  function avgSeries(points, keys, range) {
+    var idx = {}, sum = keys.map(function () { return 0; }), cnt = keys.map(function () { return 0; });
+    keys.forEach(function (k, i) { idx[k] = i; });
+    points.forEach(function (p) {
+      var d = new Date(p.day + 'T12:00:00'); if (isNaN(d)) return;
+      var k = keyForDate(d, range); if (!(k in idx)) return;
+      var i = idx[k]; sum[i] += (p.gps || 0); cnt[i]++;
+    });
+    return sum.map(function (s, i) { return cnt[i] ? s / cnt[i] : 0; });
+  }
+  function renderHrChart() {
+    var holder = document.getElementById('hr-chart');
+    if (!STATE.hrLoaded.main && !STATE.hrLoaded.test) {
+      holder.innerHTML = '<div class="chart-empty">Hashrate-history collector not installed yet — run the stats deploy (S) to enable.</div>'; return;
+    }
+    if (STATE.hashrate.main.length === 0 && STATE.hashrate.test.length === 0) {
+      holder.innerHTML = '<div class="chart-empty">No hashrate history yet — it builds up as miners submit shares.</div>'; return;
+    }
+    var b = rangeBuckets(STATE.hrRange);
+    var sm = avgSeries(STATE.hashrate.main, b.keys, STATE.hrRange);
+    var st = avgSeries(STATE.hashrate.test, b.keys, STATE.hrRange);
+    var maxV = Math.max.apply(null, sm.concat(st));
+    if (!(maxV > 0)) maxV = 1;
+    var W = 720, H = 240, L = 56, R = 8, T = 14, B = 30;
+    var plotW = W - L - R, plotH = H - T - B, n = b.keys.length, baseY = T + plotH;
+    var stepX = n > 1 ? plotW / (n - 1) : 0;
+    function xAt(i) { return L + i * stepX; }
+    function yAt(v) { return baseY - (v / maxV) * plotH; }
+    function linePath(data) {
+      return data.map(function (v, i) { return (i === 0 ? 'M' : 'L') + xAt(i).toFixed(1) + ' ' + yAt(v).toFixed(1); }).join(' ');
+    }
+    function dots(data, color) {
+      return data.map(function (v, i) { return '<circle cx="' + xAt(i).toFixed(1) + '" cy="' + yAt(v).toFixed(1) + '" r="2.4" fill="' + color + '"/>'; }).join('');
+    }
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img">';
+    svg += '<line x1="' + L + '" y1="' + baseY + '" x2="' + (W-R) + '" y2="' + baseY + '" stroke="var(--border)"/>';
+    svg += '<text x="' + (L-6) + '" y="' + (baseY+4) + '" text-anchor="end">0</text>';
+    svg += '<text x="' + (L-6) + '" y="' + (T+10) + '" text-anchor="end">' + fmtHr(maxV) + '</text>';
     svg += '<path d="' + linePath(sm) + '" fill="none" stroke="var(--main)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
     svg += '<path d="' + linePath(st) + '" fill="none" stroke="var(--test)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
     svg += dots(sm, 'var(--main)') + dots(st, 'var(--test)');
@@ -636,7 +760,7 @@
     }
   }
 
-  // ── Reward split (payment calc, mainnet) ──
+  // ── Payout split (payment calc, mainnet) ──
   var SPLIT = { period: 'weekly', data: null, person: null };
   function fmtGrin(g) { return (g == null ? 0 : g).toFixed(3); }
   // Longest registered prefix a worker name starts with, or null (mirrors the
@@ -753,13 +877,20 @@
     btn.classList.add('active'); renderSplit();
   });
 
-  function renderDerived() { renderMaturity('main'); renderMaturity('test'); renderChart(); renderBlocks('main'); renderBlocks('test'); }
+  function renderDerived() { renderMaturity('main'); renderMaturity('test'); renderChart(); renderHrChart(); renderBlocks('main'); renderBlocks('test'); }
 
   document.getElementById('range-seg').addEventListener('click', function (e) {
     var btn = e.target.closest('button'); if (!btn) return;
     STATE.range = btn.getAttribute('data-range');
     Array.prototype.forEach.call(this.querySelectorAll('button'), function (x) { x.classList.remove('active'); });
     btn.classList.add('active'); renderChart();
+  });
+
+  document.getElementById('hr-range-seg').addEventListener('click', function (e) {
+    var btn = e.target.closest('button'); if (!btn) return;
+    STATE.hrRange = btn.getAttribute('data-range');
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function (x) { x.classList.remove('active'); });
+    btn.classList.add('active'); renderHrChart();
   });
 
   ['main', 'test'].forEach(function (net) {
@@ -773,7 +904,7 @@
     Promise.all([
       pollNet('main'), pollNet('test'), pollWallet('main'), pollWallet('test'),
       pollBlocks('main'), pollBlocks('test'), pollMiners('main'), pollMiners('test'),
-      pollSplit()
+      pollHashrate('main'), pollHashrate('test'), pollSplit()
     ]).then(function () {
       renderDerived();
       if (SPLIT.person) renderPerson();   // refresh live worker hashrates each tick

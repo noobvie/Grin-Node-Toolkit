@@ -413,7 +413,7 @@ update_binary_only() {
     local tmp_tar="/tmp/grin_bin_$$.tar.gz"
     local tmp_dir="/tmp/grin_extract_$$"
     mkdir -p "$tmp_dir"
-    wget --progress=bar:force -O "$tmp_tar" "$download_url" \
+    wget -e background=off --progress=bar:force -O "$tmp_tar" "$download_url" \
         || die "Binary download failed."
     tar -xzf "$tmp_tar" -C "$tmp_dir" \
         || die "Failed to extract binary archive."
@@ -1485,7 +1485,7 @@ download_grin_binary() {
     mkdir -p "$tmp_dir"
 
     info "Downloading binary (showing progress)..."
-    wget --progress=bar:force -O "$tmp_tar" "$download_url" \
+    wget -e background=off --progress=bar:force -O "$tmp_tar" "$download_url" \
         || die "Binary download failed."
 
     info "Extracting archive..."
@@ -2109,7 +2109,9 @@ download_chain_data() {
     for src_base in "${READY_SOURCES[@]}"; do
         src_num=$(( src_num + 1 ))
         info "Trying source $src_num/$total_src: $src_base"
-        if wget -c --progress=bar:force -O "$TAR_FILE" "$src_base/$tar_name"; then
+        # -e background=off: same fix as Step 10 — without it wget forks to the background on
+        # this target box and writes its progress bar to a wget-log file instead of the screen.
+        if wget -c -e background=off --progress=bar:force -O "$TAR_FILE" "$src_base/$tar_name"; then
             dl_ok=true
             success "Chain data downloaded from $src_base"
             break
@@ -2252,20 +2254,25 @@ stream_extract_chain_data() {
         src_num=$(( src_num + 1 ))
         local tar_url="$src_base/$tar_name"
         info "Source $src_num/$total_src: $tar_url"
-        info "Running: wget --progress=dot:giga -O - \"$tar_url\" | tar -xzvf - -C \"$GRIN_DIR\""
-        info "Progress prints as periodic lines with size, %, speed and ETA; extracted filenames scroll too."
+        info "Running: wget -e background=off --progress=bar:force -O - \"$tar_url\" | tar -xzf - -C \"$GRIN_DIR\""
+        info "wget draws a live transfer bar (size, %, speed, ETA) as the stream downloads and extracts."
         [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
         echo ""
         log "[STEP 10] Streaming from $tar_url"
-        # --progress=dot:giga (NOT bar): on this target VPS (root inside tmux) wget's bar never
-        # renders — it redraws one line with carriage-returns (\r), which this terminal does not
-        # show, while NEWLINE output does (tar -v filenames always appeared). Dot progress is
-        # newline-based: it prints a line every ~32 MiB ending with cumulative size, %, speed and
-        # ETA — the exact output style we've confirmed reaches the screen. NO -q (that suppresses
-        # it). tar -xzvf - kept so filenames still confirm extraction; both are newline output so
-        # they coexist without the \r-vs-newline collision the bar had.
-        if wget --progress=dot:giga -O - "$tar_url" \
-                | tar -xzvf - -C "$GRIN_DIR"; then
+        # -e background=off is THE fix (confirmed 2026-06-02 by isolating the command on the
+        # target box): otherwise wget forks to the background and writes its progress (bar, %,
+        # speed, ETA) to a "wget-log" FILE instead of the terminal — which is why NO flag
+        # (bar:force, --show-progress, dot, or pv) ever showed anything on screen, in or out of
+        # tmux. Symptom without it: wget prints "Redirecting output to 'wget-log'" and the
+        # terminal stays blank while tar's output still shows. With -e background=off the bar
+        # renders live. (No wgetrc 'background=on' exists; wget backgrounds when it lands in a
+        # process group without the controlling tty — this flag defeats that unconditionally and
+        # is a harmless no-op otherwise.)
+        #   --progress=bar:force : draw the bar even though stdout is piped (-O -).
+        #   NO -q                : -q suppresses the bar.
+        #   tar -xzf - (no -v)   : silent tar so the \r-redrawn bar isn't shredded by filenames.
+        if wget -e background=off --progress=bar:force -O - "$tar_url" \
+                | tar -xzf - -C "$GRIN_DIR"; then
             stream_ok=true
             break
         else

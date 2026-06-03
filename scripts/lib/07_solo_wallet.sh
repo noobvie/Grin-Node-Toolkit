@@ -54,12 +54,23 @@ if ! declare -F success >/dev/null 2>&1; then success() { echo "[OK]    $*"; }; 
 sw_foreign_port() { [[ "${1:-}" == "testnet" ]] && echo 13415 || echo 3415; }
 sw_net_flag()     { [[ "${1:-}" == "testnet" ]] && echo "--testnet" || echo ""; }
 sw_dir()          { echo "$SW_BASE/${1:-mainnet}"; }
-sw_pass_file()    { echo "$(sw_dir "$1")/${1}_pass.txt"; }
+sw_pass_file()    { echo "$(sw_dir "$1")/.passphrase"; }
 sw_toml()         { echo "$(sw_dir "$1")/grin-wallet.toml"; }
 sw_launcher()     { echo "$(sw_dir "$1")/listen.sh"; }
 sw_wallet_bin()   { echo "$(sw_dir "$1")/grin-wallet"; }
 sw_tmux_name()    { echo "grin_solowallet_${1:-mainnet}"; }
 sw_autostart_tag(){ echo "# grin-node-toolkit: grin_solowallet_autostart_${1:-mainnet}"; }
+
+# ─── Pass-file migration (old `<net>_pass.txt` → hidden `.passphrase`) ───────
+# Earlier builds saved the passphrase as `<net>_pass.txt`. Rename any leftover
+# to the current hidden dotfile name so already-deployed wallets keep working
+# after an upgrade. Idempotent; only moves when the new file is absent.
+_sw_migrate_pass_file() {
+    local net="${1:-mainnet}" old new; new=$(sw_pass_file "$net")
+    old="$(sw_dir "$net")/${net}_pass.txt"
+    [[ -f "$old" && ! -f "$new" ]] || return 0
+    mv "$old" "$new" 2>/dev/null && chmod 600 "$new" 2>/dev/null || true
+}
 
 # ─── Passphrase reader (min 3 chars, confirm; "0" cancels → rc 1) ───────────
 _sw_read_new_pass() {
@@ -118,6 +129,7 @@ sw_listener_start() {
     local net="${1:-mainnet}" port tmux_name launcher
     port=$(sw_foreign_port "$net"); tmux_name=$(sw_tmux_name "$net"); launcher=$(sw_launcher "$net")
 
+    _sw_migrate_pass_file "$net"
     [[ -f "$(sw_pass_file "$net")" ]] || { error "No saved passphrase for $net (run Setup first)."; return 1; }
     [[ -x "$(sw_wallet_bin "$net")" ]] || { error "No grin-wallet binary for $net (run Setup first)."; return 1; }
     sw_port_collision_check "$net" || return 1
@@ -172,6 +184,7 @@ sw_setup() {
 
     [[ "$net" == "mainnet" ]] && warn "MAINNET — this wallet receives REAL GRIN coinbase."
     mkdir -p "$dir"
+    _sw_migrate_pass_file "$net"
 
     # 1) Binary (shared download/verify lib)
     gwi_install_grin_wallet "$dir" 0 || { error "grin-wallet install failed."; return 1; }
@@ -190,6 +203,12 @@ sw_setup() {
         local mode; read -r mode || true
         [[ "$mode" == "0" ]] && { info "Cancelled."; return 1; }
 
+        echo ""
+        echo -e "  ${YELLOW:-}Note: this passphrase will be SAVED to disk (mode 600) after init.${RESET:-}"
+        echo -e "  ${YELLOW:-}The coinbase listener must open the wallet unattended, so the saved${RESET:-}"
+        echo -e "  ${YELLOW:-}copy is what lets it auto-start again after a reboot or crash${RESET:-}"
+        echo -e "  ${YELLOW:-}(boot autostart + */5 watchdog). It is never sent over the network.${RESET:-}"
+        echo ""
         local pass; pass=$(_sw_read_new_pass) || { info "Cancelled."; return 1; }
         local init_flag="-h"; [[ "$mode" == "2" ]] && init_flag="-hr"
 
@@ -201,7 +220,7 @@ sw_setup() {
 
         # 3) Save passphrase (required for unattended listen + reboot/watchdog).
         echo "$pass" > "$pass_file"; chmod 600 "$pass_file"; unset pass
-        success "Passphrase saved: $pass_file (mode 600)."
+        success "Passphrase saved: $pass_file (mode 600) — enables listener auto-start on reboot/crash."
     fi
 
     # 4) Patch grin-wallet.toml: node_api_secret_path → node's .foreign_api_secret
@@ -304,7 +323,9 @@ for net in mainnet testnet; do
     [[ "$net" == "testnet" ]] && port=13415 || port=3415
     dir="$SW_BASE/$net"
     launcher="$dir/listen.sh"
-    pass_file="$dir/${net}_pass.txt"
+    pass_file="$dir/.passphrase"
+    # Legacy fallback: pre-rename builds saved the pass as `<net>_pass.txt`.
+    [[ -f "$pass_file" ]] || pass_file="$dir/${net}_pass.txt"
     tmux_name="grin_solowallet_$net"
     # Only manage a net that has been set up (launcher + saved pass present).
     [[ -x "$launcher" && -f "$pass_file" ]] || continue

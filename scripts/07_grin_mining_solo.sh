@@ -485,6 +485,23 @@ _show_node_info() {
         echo -e "    Stratum: ${DIM}not listening${RESET}  ${DIM}(port $stratum_port)${RESET}"
     fi
 
+    # Coinbase wallet Foreign listener — where the node sends block rewards.
+    local wal_port wal_pid wal_toml wal_tmux
+    wal_port=$(sw_foreign_port "$network")
+    wal_pid=$(ss -tlnp 2>/dev/null | grep ":$wal_port " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+    wal_toml=$(sw_toml "$network" 2>/dev/null || true)
+    if [[ -n "$wal_pid" ]]; then
+        echo -e "    Wallet : ${GREEN}LISTENING${RESET}  ${DIM}(PID $wal_pid, Foreign port $wal_port)${RESET}"
+        wal_tmux=$(sw_tmux_name "$network" 2>/dev/null || true)
+        if [[ -n "$wal_tmux" ]] && tmux has-session -t "$wal_tmux" 2>/dev/null; then
+            echo -e "    Wtmux  : ${GREEN}$wal_tmux${RESET}  ${DIM}(attach: tmux attach -t $wal_tmux)${RESET}"
+        fi
+    elif [[ -n "$wal_toml" && -f "$wal_toml" ]]; then
+        echo -e "    Wallet : ${RED}NOT RUNNING${RESET}  ${DIM}(configured, Foreign port $wal_port not listening)${RESET}"
+    else
+        echo -e "    Wallet : ${DIM}not configured${RESET}  ${DIM}(Foreign port $wal_port)${RESET}"
+    fi
+
     local toml
     toml=$(_resolve_stratum_toml "$network" "$api_port" 2>/dev/null || true)
     if [[ -n "$toml" && -f "$toml" ]]; then
@@ -1087,7 +1104,15 @@ _solo_wallet_listener_url() {
         url=$(grep -E '^[[:space:]]*wallet_listener_url[[:space:]]*=' "$toml" 2>/dev/null \
               | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
     fi
-    echo "${url:-http://127.0.0.1:${default_port}/v2/foreign}"
+    # Normalise to the Foreign API endpoint. grin's native grin-server.toml stores
+    # this as a BASE url (e.g. http://127.0.0.1:3415) with no path; an nginx
+    # proxy_pass to a pathless url forwards the original request URI
+    # (/api/wallet/<net>), which the wallet 404s → page shows "n/a". The Foreign
+    # API the probe needs always lives at /v2/foreign, so append it when absent.
+    url="${url:-http://127.0.0.1:${default_port}}"
+    url="${url%/}"                                          # drop any trailing slash
+    [[ "$url" != */v2/foreign ]] && url="$url/v2/foreign"
+    echo "$url"
 }
 
 # Emit one nginx proxy location for a network's /api/wallet/<net> liveness probe.
@@ -1377,6 +1402,25 @@ solo_deploy_stats_page() {
         local esc_slogan="${solo_slogan//\\/\\\\}"; esc_slogan="${esc_slogan//\"/\\\"}"
         slogan_json="\"slogan\":\"$esc_slogan\","
     fi
+
+    # Pool display name shown in the public poolstats feed (poolstats_<net>.json →
+    # "pool":{"name"}). The stats collector reads it from this config.json, so it
+    # can be changed any time by editing config.json — no redeploy needed (the next
+    # 5-min collector run picks it up). Pre-fill from the existing config so a
+    # redeploy keeps the operator's chosen name unless they type a new one.
+    local existing_name=""
+    if [[ -f "$web_dir/data/config.json" ]]; then
+        existing_name=$(grep -oP '"pool_name"\s*:\s*"\K(\\.|[^"\\])*' \
+            "$web_dir/data/config.json" 2>/dev/null || true)
+    fi
+    echo -ne "Pool display name for stats feed [${existing_name:-Grin Solo (Node Toolkit)}]: "
+    read -r solo_pool_name
+    [[ -z "$solo_pool_name" ]] && solo_pool_name="$existing_name"
+    local pool_name_json=""
+    if [[ -n "$solo_pool_name" ]]; then
+        local esc_name="${solo_pool_name//\\/\\\\}"; esc_name="${esc_name//\"/\\\"}"
+        pool_name_json="\"pool_name\":\"$esc_name\","
+    fi
     local nets_json=""
     if [[ $have_main -eq 1 ]]; then
         nets_json+="\"main\":{\"stratum_port\":$(_solo_stratum_port mainnet)}"
@@ -1385,7 +1429,7 @@ solo_deploy_stats_page() {
         [[ -n "$nets_json" ]] && nets_json+=","
         nets_json+="\"test\":{\"stratum_port\":$(_solo_stratum_port testnet)}"
     fi
-    printf '{%s"host":"%s","networks":{%s}}\n' "$slogan_json" "$subdomain" "$nets_json" \
+    printf '{%s%s"host":"%s","networks":{%s}}\n' "$slogan_json" "$pool_name_json" "$subdomain" "$nets_json" \
         > "$web_dir/data/config.json"
     chmod 644 "$web_dir/data/config.json"
     [[ -n "$solo_slogan" ]] && success "Slogan + connection config written (edit $web_dir/data/config.json to change)." \

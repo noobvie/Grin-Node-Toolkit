@@ -64,7 +64,9 @@ FOUND_RE = re.compile(
     re.I,
 )
 
-# Accepted-share line. 'd' = actual share difficulty, 'w' = worker/login.
+# Accepted-share line. 'w' = worker/login. The 'd' (actual difficulty) field is
+# matched to anchor the line shape but intentionally NOT summed — see
+# SHARE_CREDIT_DIFF for why each share is credited a fixed difficulty instead.
 SHARE_RE = re.compile(
     r"Got share at height\s+\d+.*?difficulty\s+(?P<d>\d+)\s*/\s*\d+.*?submitted by\s+(?P<w>\S+)",
     re.I,
@@ -81,6 +83,23 @@ BLOCK_RETENTION = 400 * 86400    # bound found-block history (covers 12-mo graph
 RECENT_CAP = 500
 C32_SCALE = 16384                # Cuckatoo32 solution-rate constant (32 * 2^9)
 
+# Per-share work credit. minimum_share_difficulty defaults to 1 — below the C32
+# floor — so the node submits EVERY cycle a miner finds and logs its raw ACTUAL
+# difficulty. That actual difficulty is Pareto/heavy-tailed (A ≈ 16384 / U) with
+# an effectively infinite mean, so SUMMING it makes the hashrate estimate explode
+# on the occasional lucky high-difficulty share (e.g. one near-block share alone
+# can add >100 G/s to a 15-min window). Instead we credit each accepted share a
+# FIXED difficulty: the C32 floor (16384) — the lowest difficulty any valid cycle
+# can score, and thus the effective target every share clears. Fed through
+# hashrate_gps() this gives GPS = share_count × 42 / window, which is
+# self-consistent with the network hashrate formula and low-variance (Poisson in
+# the share count). It also makes the reward split credit work by share count
+# rather than by luck.
+# NOTE: assumes minimum_share_difficulty ≤ 16384 (grin/toolkit default = 1, so
+# every cycle is submitted). If an operator raises it above the floor, set this
+# to the configured target instead.
+SHARE_CREDIT_DIFF = C32_SCALE
+
 NODE_PORTS = {"mainnet": 3413, "testnet": 13413}
 
 # ── Reward split (mainnet only) ────────────────────────────────────────────────
@@ -88,6 +107,10 @@ BLOCK_REWARD_GRIN = 60.0         # flat coinbase reward (Grin has no halving)
 MAINNET_MATURITY = 1440          # COINBASE_MATURITY — blocks before reward spendable
 DEFAULT_PAYMENT_CONFIG = "/opt/grin/conf/grin_solo_payment.json"
 SPLIT_PERIODS = ("daily", "weekly", "monthly", "yearly")
+
+# Default pool display name for the poolstats feed. Operators override it by
+# setting "pool_name" in <out-dir>/config.json (see load_pool_name).
+DEFAULT_POOL_NAME = "Grin Solo (Node Toolkit)"
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -124,6 +147,25 @@ def load_state(path):
             return json.load(fh)
     except (OSError, ValueError):
         return {}
+
+
+def load_pool_name(out_dir):
+    """Read the operator-set pool display name from <out-dir>/config.json.
+    Falls back to DEFAULT_POOL_NAME when out-dir is unset, the file is missing
+    /unreadable, or "pool_name" is absent or blank. config.json is the same
+    operator-editable file that already carries host + slogan, so renaming the
+    feed needs no redeploy — the next 5-min collector run picks it up.
+    """
+    if not out_dir:
+        return DEFAULT_POOL_NAME
+    try:
+        with open(os.path.join(out_dir, "config.json")) as fh:
+            name = json.load(fh).get("pool_name")
+    except (OSError, ValueError, AttributeError):
+        return DEFAULT_POOL_NAME
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return DEFAULT_POOL_NAME
 
 
 def save_json_atomic(path, obj, mode=0o600):
@@ -394,12 +436,14 @@ def scan_increment(main_log, pos_state, found, hashes, workers, backfill):
         if ms:
             ts = parse_epoch(line) or time.time()
             w = ms.group("w").strip().strip(".,")
-            d = float(ms.group("d"))
             wk = workers.setdefault(w, {"last_seen": 0, "buckets": {}})
             if ts > wk["last_seen"]:
                 wk["last_seen"] = ts
             b = str(int(ts // BUCKET) * BUCKET)
-            wk["buckets"][b] = wk["buckets"].get(b, 0.0) + d
+            # Credit a FIXED per-share difficulty (SHARE_CREDIT_DIFF), not the
+            # heavy-tailed actual difficulty the log reports, so one lucky share
+            # cannot spike the hashrate estimate or the reward split.
+            wk["buckets"][b] = wk["buckets"].get(b, 0.0) + SHARE_CREDIT_DIFF
 
     # First run (no state) — backfill found blocks from rotated logs too.
     if backfill:
@@ -493,7 +537,8 @@ def build_miners(workers, now):
     }
 
 
-def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now, status=None):
+def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now,
+                    status=None, pool_name=DEFAULT_POOL_NAME):
     if status is None:
         status = query_node_status(net)
     height = diff = peers = net_hr = None
@@ -519,7 +564,7 @@ def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now, s
     return net_prev, {
         "ts": iso(now), "net": net,
         "pool": {
-            "name": "Grin Solo (Node Toolkit)",
+            "name": pool_name,
             "hashrate": miners_payload["total_hr_gps"], "hashrate_unit": "gps",
             "workers": miners_payload["online_count"],
             "miners": miners_payload["miner_count"],
@@ -583,7 +628,8 @@ def main():
     found, hashes, blocks_payload = build_blocks(found, hashes, now)
     workers, miners_payload = build_miners(workers, now)
     net_prev, pool_payload = build_poolstats(
-        args.net, miners_payload, blocks_payload, found, net_prev, now, status)
+        args.net, miners_payload, blocks_payload, found, net_prev, now, status,
+        pool_name=load_pool_name(args.out_dir))
 
     save_json_atomic(state_file, {
         "found": found, "hashes": hashes, "workers": workers,

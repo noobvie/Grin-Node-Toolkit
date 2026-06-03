@@ -130,6 +130,8 @@
   .blocks-sum b { color: var(--text-hi); }
   .blocks table { min-width: 460px; }
   .blocks td .h { color: var(--text-hi); font-weight: bold; }
+  .blocks td a.h { color: var(--main); text-decoration: underline dotted; text-underline-offset: 3px; }
+  .blocks td a.h:hover { text-decoration: underline; }
   .blocks td .hash { color: var(--muted); font-size: .88rem; }
   .blocks-empty { color: var(--muted); font-size: .92rem; padding: .6rem 0; }
   .blocks-more { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
@@ -269,7 +271,7 @@
 <!-- ── Found-blocks history ── -->
 <section class="chart-card">
   <div class="chart-head">
-    <h2>Blocks Found</h2>
+    <h2>Blocks Found History Chart</h2>
     <div class="seg" id="range-seg">
       <button type="button" data-range="daily" class="active">Daily · 30d</button>
       <button type="button" data-range="weekly">Weekly · 12w</button>
@@ -301,7 +303,7 @@
 <footer>
   <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer" style="color:var(--main)">Grin Node Toolkit</a> · solo mining stats · Cuckatoo32 · <a href="setup-solo-mining.html" style="color:var(--main)">Miner setup guide</a><br>
   Live node + wallet every 10 s · blocks &amp; per-miner hashrate from node log (collector) · coinbase matures after 1440 blocks (~24 h)<br>
-  Per-miner stats need <code>file_log_level = "INFO"</code> on the node · external pollers: <code>data/poolstats_&lt;net&gt;.json</code>
+  Per-miner stats need <code>file_log_level = "INFO"</code> on the node · external pollers: <code id="poller-endpoint">data/poolstats_main.json</code>
 </footer>
 
 <script>
@@ -319,19 +321,28 @@
     applyTheme(next); try { localStorage.setItem('grinSoloTheme', next); } catch (e) {}
   });
 
-  // ── Operator slogan (data/config.json: {"slogan":"…"}) — editable any time,
-  // set at deploy time, falls back to the default in the markup. ──
+  // ── Operator slogan + poller endpoint (data/config.json: {"slogan":"…",
+  // "host":"…"}) — set at deploy time from the nginx domain, editable any time.
+  // The footer endpoint is built from config.host so the domain is never
+  // hardcoded; it falls back to the relative path in the markup if host is absent. ──
   fetch('data/config.json', { cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (c) { if (c && c.slogan) document.getElementById('slogan').textContent = c.slogan; })
+    .then(function (c) {
+      if (!c) return;
+      if (c.slogan) document.getElementById('slogan').textContent = c.slogan;
+      if (c.host) {
+        var ep = document.getElementById('poller-endpoint');
+        if (ep) ep.textContent = 'https://' + c.host + '/data/poolstats_main.json';
+      }
+    })
     .catch(function () {});
 
   // ── State ──
   var MATURITY = { main: 1440, test: 1440 };
   var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   var NETS = {
-    main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', prevDiff: null, prevTs: null },
-    test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', prevDiff: null, prevTs: null }
+    main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null },
+    test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null }
   };
   var STATE = { tip: { main: null, test: null }, blocks: { main: [], test: [] }, miners: { main: [], test: [] }, loaded: { main: false, test: false }, range: 'daily', blocksExpanded: { main: false, test: false } };
   var BLOCKS_PREVIEW = 10;   // rows shown before "show all"
@@ -347,12 +358,27 @@
     if (gps >= 1e3) return (gps/1e3).toFixed(2)+' kG/s';
     return gps.toFixed(2)+' G/s';
   }
-  function calcHashrate(net, diff, nowTs) {
+  // Network difficulty + hashrate derived from the change in cumulative
+  // total_difficulty across BLOCKS (not poll ticks). get_status only exposes the
+  // chain-wide cumulative total_difficulty; the per-block network difficulty is
+  // its delta between heights, and hashrate = Δtotal_difficulty × 42 / Δseconds
+  // / 16384 (Cuckatoo32). Averaged over up to HR_WINDOW_BLOCKS for a steady
+  // reading. The cached netDiff/hrGps persist between blocks, so the tiles show a
+  // real number once one is known and never flap back to a placeholder.
+  var HR_WINDOW_BLOCKS = 10;
+  function updateDiffHashrate(net, height, diff, nowTs) {
     var s = NETS[net];
-    if (s.prevDiff === null || s.prevTs === null) { s.prevDiff = diff; s.prevTs = nowTs; return 'measuring…'; }
-    var delta = diff - s.prevDiff, dt = (nowTs - s.prevTs) / 1000; s.prevDiff = diff; s.prevTs = nowTs;
-    if (delta <= 0 || dt <= 0) return 'measuring…';
-    return fmtHr(delta * 42 / dt / 16384);
+    if (height == null || diff == null) return;
+    if (s.baseHeight === null || height < s.baseHeight) {   // first sample or reorg → (re)baseline
+      s.baseHeight = height; s.baseDiff = diff; s.baseTs = nowTs; return;
+    }
+    if (height === s.baseHeight) return;                     // same block — keep last reading
+    var dBlocks = height - s.baseHeight, dDiff = diff - s.baseDiff, dt = (nowTs - s.baseTs) / 1000;
+    if (dBlocks > 0 && dDiff > 0 && dt > 0) {
+      s.netDiff = dDiff / dBlocks;                           // avg per-block network difficulty
+      s.hrGps   = dDiff * 42 / dt / 16384;                   // avg hashrate over the window (G/s)
+    }
+    if (dBlocks >= HR_WINDOW_BLOCKS) { s.baseHeight = height; s.baseDiff = diff; s.baseTs = nowTs; }
   }
   function syncLabel(s) { return (!s || s === 'no_sync') ? { text: 'synced', cls: 'ok' } : { text: String(s).replace(/_/g, ' '), cls: 'warn' }; }
 
@@ -375,7 +401,9 @@
     var n = document.getElementById(net + '-note');
     n.textContent = note; n.style.display = note ? 'block' : 'none';
     set(net + '-height', '—'); set(net + '-difficulty', '—'); set(net + '-hashrate', '—'); set(net + '-peers', '—');
-    STATE.tip[net] = null; NETS[net].prevDiff = null; NETS[net].prevTs = null;
+    STATE.tip[net] = null;
+    NETS[net].baseHeight = null; NETS[net].baseDiff = null; NETS[net].baseTs = null;
+    NETS[net].netDiff = null; NETS[net].hrGps = null;
   }
 
   function pollNet(net) {
@@ -395,10 +423,11 @@
         document.getElementById(net + '-dot').className = 'dot ' + sync.cls;
         document.getElementById(net + '-state').textContent = sync.text;
         set(net + '-height', height !== undefined ? Number(height).toLocaleString() : '—');
-        set(net + '-difficulty', diff !== undefined ? fmtNum(diff) : '—');
         set(net + '-peers', peers !== undefined ? String(peers) : '—', Number(peers) > 0 ? 'green' : 'yellow');
-        var hr = diff !== undefined ? calcHashrate(net, diff, nowTs) : '—';
-        set(net + '-hashrate', hr, hr && hr.indexOf('G/s') !== -1 ? 'green' : 'dim');
+        updateDiffHashrate(net, height !== undefined ? Number(height) : null, diff !== undefined ? Number(diff) : null, nowTs);
+        var s = NETS[net];
+        set(net + '-difficulty', s.netDiff != null ? fmtNum(s.netDiff) : '—');
+        set(net + '-hashrate', s.hrGps != null ? fmtHr(s.hrGps) : '—', s.hrGps != null ? 'green' : 'dim');
         return true;
       })
       .catch(function (err) {
@@ -511,17 +540,26 @@
     var st = countSeries(STATE.blocks.test, b.keys, STATE.range);
     var maxV = Math.max(1, Math.max.apply(null, sm.concat(st)));
     var W = 720, H = 240, L = 34, R = 8, T = 14, B = 30;
-    var plotW = W - L - R, plotH = H - T - B, n = b.keys.length, gw = plotW / n, bw = gw * 0.32, baseY = T + plotH;
+    var plotW = W - L - R, plotH = H - T - B, n = b.keys.length, baseY = T + plotH;
+    var stepX = n > 1 ? plotW / (n - 1) : 0;
+    function xAt(i) { return L + i * stepX; }
+    function yAt(v) { return baseY - (v / maxV) * plotH; }
+    function linePath(data) {
+      return data.map(function (v, i) { return (i === 0 ? 'M' : 'L') + xAt(i).toFixed(1) + ' ' + yAt(v).toFixed(1); }).join(' ');
+    }
+    function dots(data, color) {
+      return data.map(function (v, i) { return '<circle cx="' + xAt(i).toFixed(1) + '" cy="' + yAt(v).toFixed(1) + '" r="2.4" fill="' + color + '"/>'; }).join('');
+    }
     var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img">';
     svg += '<line x1="' + L + '" y1="' + baseY + '" x2="' + (W-R) + '" y2="' + baseY + '" stroke="var(--border)"/>';
     svg += '<text x="' + (L-6) + '" y="' + (baseY+4) + '" text-anchor="end">0</text>';
     svg += '<text x="' + (L-6) + '" y="' + (T+10) + '" text-anchor="end">' + maxV + '</text>';
+    svg += '<path d="' + linePath(sm) + '" fill="none" stroke="var(--main)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+    svg += '<path d="' + linePath(st) + '" fill="none" stroke="var(--test)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+    svg += dots(sm, 'var(--main)') + dots(st, 'var(--test)');
     var every = Math.ceil(n / 8);
     for (var i = 0; i < n; i++) {
-      var gx = L + i * gw, hm = (sm[i]/maxV)*plotH, ht = (st[i]/maxV)*plotH;
-      svg += '<rect x="' + (gx + gw*0.14).toFixed(1) + '" y="' + (baseY - hm).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + hm.toFixed(1) + '" fill="var(--main)" rx="1"/>';
-      svg += '<rect x="' + (gx + gw*0.52).toFixed(1) + '" y="' + (baseY - ht).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + ht.toFixed(1) + '" fill="var(--test)" rx="1"/>';
-      if (i % every === 0) svg += '<text x="' + (gx + gw/2).toFixed(1) + '" y="' + (baseY + 16) + '" text-anchor="middle">' + b.labels[i] + '</text>';
+      if (i % every === 0) svg += '<text x="' + xAt(i).toFixed(1) + '" y="' + (baseY + 16) + '" text-anchor="middle">' + b.labels[i] + '</text>';
     }
     holder.innerHTML = svg + '</svg>';
   }
@@ -534,6 +572,22 @@
     if (!h) return '—';
     h = String(h);
     return h.length > 14 ? h.slice(0, 6) + '…' + h.slice(-6) : h;
+  }
+  // A height links out to one of the public explorers, picked at random per row.
+  // Each network has its own explorer set (mainnet vs testnet hosts).
+  var BLOCK_EXPLORERS = {
+    main: [
+      function (h) { return 'https://grinscan.org/block.html?h=' + h; },
+      function (h) { return 'https://grincoin.org/block/' + h; }
+    ],
+    test: [
+      function (h) { return 'https://test.grinscan.org/block.html?h=' + h; },
+      function (h) { return 'https://testnet.grincoin.org/block/' + h; }
+    ]
+  };
+  function blockExplorerUrl(net, height) {
+    var set = BLOCK_EXPLORERS[net] || [];
+    return set[Math.floor(Math.random() * set.length)](height);
   }
 
   function renderBlocks(net) {
@@ -562,10 +616,12 @@
     tbody.innerHTML = '<tr><th>Date</th><th>Time</th><th>Height</th><th>Hash</th><th>Maturity</th></tr>'
       + shown.map(function (b) {
         var d = new Date(b.ts), m = maturityOf(net, b.height);
+        var heightTxt = Number(b.height).toLocaleString();
+        var heightCell = '<td><a class="h" href="' + blockExplorerUrl(net, b.height) + '" target="_blank" rel="noopener noreferrer">' + heightTxt + '</a></td>';
         return '<tr>'
           + '<td>' + fmtDate(d) + '</td>'
           + '<td>' + fmtTime(d) + '</td>'
-          + '<td><span class="h">' + Number(b.height).toLocaleString() + '</span></td>'
+          + heightCell
           + '<td><span class="hash">' + esc(shortHash(b.hash)) + '</span></td>'
           + '<td><span class="mtag ' + m.state + '">' + m.text + '</span></td></tr>';
       }).join('');

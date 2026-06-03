@@ -227,6 +227,15 @@ sw_setup() {
     sw_listener_start "$net"
 
     echo ""
+    echo -e "  ${RED:-}${BOLD:-}⚠  SECURITY — passphrase is visible in the process list${RESET:-}"
+    echo -e "  ${YELLOW:-}The coinbase listener runs 'grin-wallet -p <pass> listen', so the${RESET:-}"
+    echo -e "  ${YELLOW:-}passphrase appears in 'ps aux' / /proc/<pid>/cmdline for the listener's${RESET:-}"
+    echo -e "  ${YELLOW:-}whole lifetime. Anyone with root on this server — including your hosting${RESET:-}"
+    echo -e "  ${YELLOW:-}provider, or an attacker who breaks in — can read it. grin-wallet has no${RESET:-}"
+    echo -e "  ${YELLOW:-}stdin/env-var passphrase input, so this exposure is unavoidable here.${RESET:-}"
+    echo -e "  ${YELLOW:-}→ If you don't fully trust this provider, keep the balance low and sweep${RESET:-}"
+    echo -e "  ${YELLOW:-}  coinbase rewards to a wallet on a private machine you control.${RESET:-}"
+    echo ""
     info "wallet_listener_url default ($net): http://127.0.0.1:$(sw_foreign_port "$net")/v2/foreign"
     info "Enable auto-restart (Setup → Auto-restart) so the listener survives reboot/crash."
 }

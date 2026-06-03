@@ -85,8 +85,12 @@ gwi_install_grin_wallet() {
     local tmp_tar="/tmp/grin_wallet_dl_$$.tar.gz"
     local tmp_dir="/tmp/grin_wallet_extract_$$"
     mkdir -p "$tmp_dir"
-    # Clean temp files on any return path.
-    trap 'rm -rf "$tmp_tar" "$tmp_dir" 2>/dev/null || true' RETURN
+    # Clean temp files on any return path. A RETURN trap is GLOBAL (not
+    # function-scoped without `set -T`), so it would otherwise fire again when
+    # the CALLER returns — by then $tmp_tar/$tmp_dir are out of scope and
+    # `set -u` aborts with "unbound variable". Guard with :- and self-clear
+    # the trap (`trap - RETURN`) so it only runs once, here.
+    trap 'rm -rf "${tmp_tar:-}" "${tmp_dir:-}" 2>/dev/null || true; trap - RETURN' RETURN
 
     info "Version : ${version:-unknown}"
     info "Target  : $wallet_bin"

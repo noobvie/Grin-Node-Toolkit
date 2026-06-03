@@ -319,6 +319,88 @@ graceful_restart_grin() {
 
 _sed_escape_rhs() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
 
+# True if $1 is a private / non-internet-routable IPv4 (RFC1918, loopback,
+# link-local, or CGNAT 100.64/10) — i.e. an address a remote miner can't dial.
+_is_private_ipv4() {
+    local ip="$1"
+    [[ "$ip" =~ ^10\. ]]                                  && return 0
+    [[ "$ip" =~ ^192\.168\. ]]                            && return 0
+    [[ "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. ]]          && return 0
+    [[ "$ip" =~ ^127\. ]]                                 && return 0
+    [[ "$ip" =~ ^169\.254\. ]]                            && return 0
+    [[ "$ip" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\. ]] && return 0
+    return 1
+}
+
+# First PUBLIC IPv4 bound locally (default-route source addr, then any other
+# global-scope addr). rc 1 if the host has only private/NAT addresses.
+_local_public_ipv4() {
+    local ip; local candidates=()
+    ip=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1 || true)
+    [[ -n "$ip" ]] && candidates+=("$ip")
+    while IFS= read -r ip; do
+        [[ -n "$ip" ]] && candidates+=("$ip")
+    done < <(ip -4 -o addr show scope global 2>/dev/null | grep -oP 'inet \K[0-9.]+' || true)
+    # Guard empty-array expansion under `set -u` (bash < 4.4 errors otherwise).
+    [[ ${#candidates[@]} -eq 0 ]] && return 1
+    for ip in "${candidates[@]}"; do
+        [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && ! _is_private_ipv4 "$ip" \
+            && { echo "$ip"; return 0; }
+    done
+    return 1
+}
+
+# External view: query up to 3 echo services and return the IP a MAJORITY agree
+# on (first one if there's a tie), or rc 1 if none answered. The majority vote
+# guards against a single service handing back a proxy/CDN address.
+_external_public_ipv4() {
+    local svc ip; local got=()
+    for svc in "https://api.ipify.org" "https://ipv4.icanhazip.com" "https://ifconfig.me/ip"; do
+        ip=$(curl -4 -sf --max-time 4 "$svc" 2>/dev/null | tr -d '[:space:]' || true)
+        [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && got+=("$ip")
+    done
+    [[ ${#got[@]} -eq 0 ]] && return 1
+    printf '%s\n' "${got[@]}" | sort | uniq -c | sort -rn | awk 'NR==1{print $2}'
+}
+
+# Cross-checked PUBLIC IPv4 for the "point your miner here" message. Reconciles
+# the locally-bound public IP against an external majority vote and reports BOTH
+# results via globals (NOT stdout — the caller can't read a global set inside a
+# `$(...)` subshell, so we set them directly here and the caller reads them):
+#   $_DETECTED_PUBLIC_IP  the chosen IP ("" if none)
+#   $_IP_DETECT_NOTE      a human confidence string:
+#     · agree                 → verified (high confidence)
+#     · only a private NIC    → behind NAT, trust the external value
+#     · disagree (multi-homed / unusual SNAT) → prefer the NIC IP (it's what's
+#       actually bound for inbound stratum) but surface BOTH so ops can confirm
+#     · external only          → no public NIC addr but a service answered
+# Returns 0 if an IP was determined, rc 1 otherwise. IPv6 added later.
+_DETECTED_PUBLIC_IP=""
+_IP_DETECT_NOTE=""
+_detect_public_ipv4() {
+    _DETECTED_PUBLIC_IP=""
+    _IP_DETECT_NOTE=""
+    local local_ip ext_ip
+    local_ip=$(_local_public_ipv4 || true)
+    ext_ip=$(_external_public_ipv4 || true)
+
+    if [[ -n "$local_ip" && -n "$ext_ip" ]]; then
+        if [[ "$local_ip" == "$ext_ip" ]]; then
+            _IP_DETECT_NOTE="verified — local NIC and external check agree"
+        else
+            _IP_DETECT_NOTE="NIC=$local_ip differs from external=$ext_ip (multi-homed/NAT?) — using the NIC IP; confirm which one miners can actually reach"
+        fi
+        _DETECTED_PUBLIC_IP="$local_ip"; return 0
+    elif [[ -n "$ext_ip" ]]; then
+        _IP_DETECT_NOTE="behind NAT — external check reports this; the NIC only has a private address"
+        _DETECTED_PUBLIC_IP="$ext_ip"; return 0
+    elif [[ -n "$local_ip" ]]; then
+        _IP_DETECT_NOTE="local NIC only — could not reach an external service to confirm"
+        _DETECTED_PUBLIC_IP="$local_ip"; return 0
+    fi
+    return 1
+}
+
 _stratum_bind_line() {
     local toml="$1" port="$2"
     if [[ ! -f "$toml" ]]; then
@@ -458,13 +540,11 @@ _do_setup_stratum() {
     echo ""
 
     echo -e "${BOLD}Current stratum settings in:${RESET} $grin_toml"
-    local cur_enable cur_wallet cur_burn
+    local cur_enable cur_wallet
     cur_enable=$(grep -E '^[[:space:]]*enable_stratum_server[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 || true)
     cur_wallet=$(grep -E '^[[:space:]]*wallet_listener_url[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 || true)
-    cur_burn=$(grep -E '^[[:space:]]*burn_reward[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 || true)
     echo -e "  enable_stratum_server : ${cur_enable:-${DIM}(not set)${RESET}}"
     echo -e "  wallet_listener_url   : ${cur_wallet:-${DIM}(not set)${RESET}}"
-    echo -e "  burn_reward           : ${cur_burn:-${DIM}(not set)${RESET}}"
     echo ""
 
     echo -ne "Enable stratum server (enable_stratum_server = true)? [Y/n/0]: "
@@ -505,22 +585,18 @@ _do_setup_stratum() {
         log "Setup ($network): wallet_listener_url = $new_url in $grin_toml"
     fi
 
-    echo ""
-    echo -e "${BOLD}burn_reward${RESET} — set true to discard coinbase (testing only)."
-    echo -ne "Set burn_reward = false (keep rewards)? [Y/n/0]: "
-    read -r burn_choice
-    [[ "$burn_choice" == "0" ]] && burn_choice="n"
-    if [[ "${burn_choice,,}" != "n" ]]; then
-        if grep -qE '^#?[[:space:]]*burn_reward[[:space:]]*=' "$grin_toml" 2>/dev/null; then
-            sed -i -E \
-                "s|^#?[[:space:]]*burn_reward[[:space:]]*=.*|burn_reward = false|" \
-                "$grin_toml"
-        else
-            echo "burn_reward = false" >> "$grin_toml"
-        fi
-        success "burn_reward = false"
-        log "Setup ($network): burn_reward = false in $grin_toml"
+    # burn_reward — always force the safe default (keep rewards). This is a
+    # testing-only flag that discards coinbase; we never prompt for it so a
+    # solo miner can't accidentally burn real block rewards. A tester who
+    # genuinely wants to burn can set it by hand in grin-server.toml.
+    if grep -qE '^#?[[:space:]]*burn_reward[[:space:]]*=' "$grin_toml" 2>/dev/null; then
+        sed -i -E \
+            "s|^#?[[:space:]]*burn_reward[[:space:]]*=.*|burn_reward = false|" \
+            "$grin_toml"
+    else
+        echo "burn_reward = false" >> "$grin_toml"
     fi
+    log "Setup ($network): burn_reward = false (forced) in $grin_toml"
 
     echo ""
     success "Stratum setup complete for $network."
@@ -553,18 +629,16 @@ _do_configure_stratum() {
 
     echo -e "${BOLD}Current settings in:${RESET} $grin_toml"
     echo ""
-    local cur_enable cur_addr cur_wallet cur_burn
+    local cur_enable cur_addr cur_wallet
     cur_enable=$(grep -E '^[[:space:]]*enable_stratum_server[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//' | xargs || true)
     cur_addr=$(grep -E '^[[:space:]]*stratum_server_addr[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
     cur_wallet=$(grep -E '^[[:space:]]*wallet_listener_url[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
-    cur_burn=$(grep -E '^[[:space:]]*burn_reward[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//' | xargs || true)
     echo -e "  ${GREEN}1${RESET}) enable_stratum_server : ${cur_enable:-${DIM}not set${RESET}}"
     echo -e "  ${GREEN}2${RESET}) stratum_server_addr   : ${cur_addr:-${DIM}not set${RESET}}"
     echo -e "  ${GREEN}3${RESET}) wallet_listener_url   : ${cur_wallet:-${DIM}not set${RESET}}"
-    echo -e "  ${GREEN}4${RESET}) burn_reward           : ${cur_burn:-${DIM}not set${RESET}}"
     echo -e "  ${DIM}0) Cancel${RESET}"
     echo ""
-    echo -ne "Which setting to change [1-4/0]: "
+    echo -ne "Which setting to change [1-3/0]: "
     read -r cfg_choice
     [[ "$cfg_choice" == "0" || -z "$cfg_choice" ]] && return
 
@@ -619,23 +693,6 @@ _do_configure_stratum() {
             log "Configure ($network): wallet_listener_url = $new_wallet"
             changed=true
             ;;
-        4)
-            echo -ne "Set burn_reward [true/false] (current: ${cur_burn:-not set}): "
-            read -r new_burn
-            [[ -z "$new_burn" ]] && return
-            if [[ "$new_burn" != "true" && "$new_burn" != "false" ]]; then
-                warn "Must be exactly 'true' or 'false' — not changed."; return
-            fi
-            local esc_burn; esc_burn=$(_sed_escape_rhs "$new_burn")
-            if grep -qE '^#?[[:space:]]*burn_reward[[:space:]]*=' "$grin_toml" 2>/dev/null; then
-                sed -i -E "s|^#?[[:space:]]*burn_reward[[:space:]]*=.*|burn_reward = $esc_burn|" "$grin_toml"
-            else
-                echo "burn_reward = $new_burn" >> "$grin_toml"
-            fi
-            success "burn_reward = $new_burn"
-            log "Configure ($network): burn_reward = $new_burn"
-            changed=true
-            ;;
         *)
             warn "Invalid choice."
             return
@@ -657,33 +714,20 @@ configure_stratum_testnet() { _do_configure_stratum testnet "$STRATUM_PORT_TESTN
 
 _show_stratum_port_guide() {
     local port="$1"
-    clear
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  PORT GUIDE — Read before continuing${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
     local label="Mainnet"
     [[ "$port" == "$STRATUM_PORT_TESTNET" ]] && label="Testnet"
-    echo -e "  ${BOLD}PORT $port — Grin $label Stratum Mining Server (TCP)${RESET}"
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  Publish Stratum — $label (port $port)${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  ${CYAN}What it does${RESET} : Allows miners to connect and submit proof-of-work to your node."
-    echo -e "  ${CYAN}Who needs it${RESET} : Solo miners who want to mine directly on their own node."
-    echo -e "  ${CYAN}Expose via${RESET}   : Direct bind — patches grin-server.toml so grin listens on"
-    echo -e "               0.0.0.0:$port instead of 127.0.0.1:$port."
-    echo -e "  ${YELLOW}Requires${RESET}     : Graceful node restart for the change to take effect."
-    echo -e "  ${GREEN}Expose if${RESET}    : You want miners to point their hashrate at your node."
-    echo -e "  ${YELLOW}Skip if${RESET}      : You are mining locally (same machine as the node)."
-    echo -e "  ${DIM}Note${RESET}         : Coinbase rewards go to your local wallet — a localhost-only"
-    echo -e "               connection that does NOT need to be public."
+    echo -e "  Publishing binds grin to ${BOLD}0.0.0.0:$port${RESET} so your miners (or friends')"
+    echo -e "  can reach this node. Point a miner (e.g. G1 mini) at your stratum"
+    echo -e "  ${BOLD}domain${RESET} or ${BOLD}YOUR_SERVER_IP:$port${RESET}. Required for any remote mining."
     echo ""
-    echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-    echo -ne "${BOLD}Type ${GREEN}yes${RESET}${BOLD} to confirm you have read the above and want to proceed [yes/N/0]: ${RESET}"
+    echo -ne "${BOLD}Proceed? [Y/n]: ${RESET}"
     read -r _guide_confirm || true
-    if [[ "${_guide_confirm,,}" != "yes" ]]; then
-        info "Cancelled."
-        return 1
-    fi
+    [[ "${_guide_confirm,,}" == "n" ]] && { info "Cancelled."; return 1; }
     return 0
 }
 
@@ -695,9 +739,6 @@ _enable_stratum() {
     local network="$1" stratum_port="$2" api_port="$3"
 
     _show_stratum_port_guide "$stratum_port" || return
-    echo -e "\n${BOLD}${CYAN}── Publish Stratum ($network, port $stratum_port) ──${RESET}\n"
-    echo -e "  Patches grin-server.toml: ${BOLD}0.0.0.0:$stratum_port${RESET}  (miners can connect directly)"
-    echo -e "  Requires graceful node restart."
     echo ""
 
     find_grin_server_toml "$network" "$api_port" || return
@@ -774,8 +815,32 @@ _enable_stratum() {
 
     echo ""
     graceful_restart_grin "$api_port" "$network"
+
+    local label="Mainnet"; [[ "$network" == "testnet" ]] && label="Testnet"
+    # Sets globals $_DETECTED_PUBLIC_IP + $_IP_DETECT_NOTE (can't return them via
+    # $(...) — that subshell would discard the note global).
+    _detect_public_ipv4 || true
+    local pub_ip="$_DETECTED_PUBLIC_IP"
+    local conn_host="${pub_ip:-YOUR_SERVER_IP}"
+    local url="stratum+tcp://${conn_host}:${stratum_port}"
+
     echo ""
-    info "Miners connect to: YOUR_SERVER_IP:$stratum_port"
+    echo -e "${BOLD}${GREEN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}  ${BOLD}Put this in your miner's Pool / Server field ($label):${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}      ${BOLD}${CYAN}$url${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}"
+    if [[ -n "$pub_ip" ]]; then
+        echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}Detected public IPv4: $pub_ip · port $stratum_port ($label)${RESET}"
+        [[ -n "$_IP_DETECT_NOTE" ]] && \
+            echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}↳ $_IP_DETECT_NOTE${RESET}"
+    else
+        echo -e "${BOLD}${GREEN}┃${RESET}  ${YELLOW}Could not auto-detect public IP — replace YOUR_SERVER_IP above.${RESET}"
+    fi
+    echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}Using a domain instead? On Cloudflare the A record MUST be${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}\"DNS only\" (grey cloud), NOT proxied — miners can't reach a${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}proxied record; fall back to the raw IP above (e.g. iPollo G1).${RESET}"
+    echo -e "${BOLD}${GREEN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${RESET}"
 }
 
 _disable_stratum() {
@@ -838,7 +903,7 @@ restrict_testnet_stratum() { _disable_stratum testnet "$STRATUM_PORT_TESTNET" "$
 solo_live_stats() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  L) Live Mining Stats${RESET}  ${DIM}(Ctrl+C to exit)${RESET}"
+    echo -e "${BOLD}${CYAN}  L) Live Mining Stats${RESET}  ${DIM}(Enter = refresh · 0 = return)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
 
@@ -869,11 +934,11 @@ solo_live_stats() {
     fi
 
     local prev_diff=0 prev_ts=0
-    # Persist across iterations: blocks land ~every 60s, so most 10s polls see no
-    # difficulty change. Hold the last computed value instead of flickering.
+    # Held across refreshes: blocks land ~every 60s, so a manual refresh often sees
+    # no difficulty change. Keep the last computed value instead of flickering.
+    # (Hashrate needs two samples, so it shows "calculating..." until you refresh
+    # once with a new block in between.)
     local hashrate_str="calculating..."
-
-    echo -e "\n${DIM}Connecting to node on port $api_port ...${RESET}\n"
 
     while true; do
         local resp
@@ -883,30 +948,32 @@ solo_live_stats() {
             -d '{"jsonrpc":"2.0","method":"get_status","params":[],"id":1}' \
             "http://127.0.0.1:${api_port}/v2/owner" 2>/dev/null || true)
 
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  Grin Solo Mining — $net_label${RESET}  ${DIM}($(date -u '+%H:%M:%S UTC'))${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+
         if [[ -z "$resp" ]]; then
-            clear
-            echo -e "${RED}[ERROR]${RESET} Cannot reach node on port $api_port"
-            echo -e "  Start the node and try again, or check the API secret."
-            sleep 10
-            continue
-        fi
+            echo -e "  ${RED}[ERROR]${RESET} Cannot reach node on port $api_port"
+            echo -e "  ${DIM}Start the node and try again, or check the API secret.${RESET}"
+        else
+            local height total_diff peers
+            height=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['tip']['height'])" 2>/dev/null || echo "?")
+            total_diff=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['tip']['total_difficulty'])" 2>/dev/null || echo "0")
+            peers=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['connections'])" 2>/dev/null || echo "?")
 
-        local height total_diff peers
-        height=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['tip']['height'])" 2>/dev/null || echo "?")
-        total_diff=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['tip']['total_difficulty'])" 2>/dev/null || echo "0")
-        peers=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['connections'])" 2>/dev/null || echo "?")
+            local now; now=$(date +%s)
 
-        local now; now=$(date +%s)
-
-        # Cuckatoo32 hashrate: diff_delta × 42 / dt / 16384.
-        # hashrate_str carries over from the previous block; only recomputed when
-        # a new block arrives (diff_delta > 0).
-        if [[ "$prev_diff" -gt 0 && "$total_diff" -gt 0 && "$now" -gt "$prev_ts" ]]; then
-            local diff_delta dt gps
-            diff_delta=$(( total_diff - prev_diff ))
-            dt=$(( now - prev_ts ))
-            if [[ "$diff_delta" -gt 0 && "$dt" -gt 0 ]]; then
-                gps=$(python3 -c "
+            # Cuckatoo32 hashrate: diff_delta × 42 / dt / 16384.
+            # hashrate_str carries over from the previous sample; only recomputed
+            # when a new block arrives between refreshes (diff_delta > 0).
+            if [[ "$prev_diff" -gt 0 && "$total_diff" -gt 0 && "$now" -gt "$prev_ts" ]]; then
+                local diff_delta dt gps
+                diff_delta=$(( total_diff - prev_diff ))
+                dt=$(( now - prev_ts ))
+                if [[ "$diff_delta" -gt 0 && "$dt" -gt 0 ]]; then
+                    gps=$(python3 -c "
 d=$diff_delta; t=$dt
 gps = d * 42 / t / 16384
 if gps >= 1000000:
@@ -916,29 +983,26 @@ elif gps >= 1000:
 else:
     print(f'{gps:.2f} G/s')
 " 2>/dev/null || echo "?")
-                hashrate_str="$gps"
+                    hashrate_str="$gps"
+                fi
             fi
+            prev_diff="$total_diff"
+            prev_ts="$now"
+
+            local miner_count
+            miner_count=$(ss -tnp 2>/dev/null | grep ":$stratum_port" | grep -c ESTAB || true)
+
+            echo -e "  ${BOLD}Height${RESET}     : $height"
+            echo -e "  ${BOLD}Difficulty${RESET} : $total_diff"
+            echo -e "  ${BOLD}Hashrate${RESET}   : ${GREEN}$hashrate_str${RESET}"
+            echo -e "  ${BOLD}Peers${RESET}      : $peers"
+            echo -e "  ${BOLD}Miners${RESET}     : ${miner_count:-0} connected  ${DIM}(port $stratum_port)${RESET}"
         fi
-        prev_diff="$total_diff"
-        prev_ts="$now"
 
-        local miner_count
-        miner_count=$(ss -tnp 2>/dev/null | grep ":$stratum_port" | grep -c ESTAB || true)
-
-        clear
-        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  Grin Solo Mining — $net_label${RESET}  ${DIM}($(date -u '+%H:%M:%S UTC'))${RESET}"
-        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
-        echo -e "  ${BOLD}Height${RESET}     : $height"
-        echo -e "  ${BOLD}Difficulty${RESET} : $total_diff"
-        echo -e "  ${BOLD}Hashrate${RESET}   : ${GREEN}$hashrate_str${RESET}"
-        echo -e "  ${BOLD}Peers${RESET}      : $peers"
-        echo -e "  ${BOLD}Miners${RESET}     : ${miner_count:-0} connected  ${DIM}(port $stratum_port)${RESET}"
-        echo ""
-        echo -e "  ${DIM}Ctrl+C to exit  ·  refreshes every 10s${RESET}"
-
-        sleep 10
+        echo -ne "  ${DIM}Press Enter to refresh · 0 to return: ${RESET}"
+        local _k; read -r _k || _k=0
+        [[ "$_k" == "0" ]] && break
     done
 }
 
@@ -1046,66 +1110,65 @@ _solo_stats_wallet_location() {
 EOF
 }
 
-# Prompt for (or edit) the mainnet reward-split nickname prefixes and write
-# $PAYMENT_CONFIG. Prefixes ONLY — never Grin addresses. Validates that no prefix
-# is a prefix of another so the collector's longest-match grouping is unambiguous.
-# Called from the S) deploy (mainnet detected); no separate menu option.
-_solo_prompt_payment_prefixes() {
-    local cur=""
-    if [[ -f "$PAYMENT_CONFIG" ]]; then
-        cur=$(python3 -c 'import json,sys
-try: print(" ".join(json.load(open(sys.argv[1])).get("prefixes",[])))
-except Exception: pass' "$PAYMENT_CONFIG" 2>/dev/null || true)
+# Toggle the mainnet reward-split calculation (on/off — no names to pre-define).
+# When ON, the collector splits matured coinbase across miners automatically BY
+# THE WORKER NAME each miner connects with. Writes $PAYMENT_CONFIG as
+# {"enabled":true}. Advanced (optional): group several workers under one label by
+# hand-editing the file to {"prefixes":["alpha","bravo"]} — the collector then
+# groups by longest matching prefix instead. Display-only: solo mining always
+# pays ONE coinbase wallet; this just shows who earned what for manual settling,
+# and never stores a Grin address. Called from S) deploy (mainnet detected).
+_solo_prompt_reward_split() {
+    # Enabled = file present AND not explicitly disabled (mirrors load_prefixes).
+    local enabled=0
+    if [[ -f "$PAYMENT_CONFIG" ]] && python3 -c 'import json,sys
+try: c=json.load(open(sys.argv[1]))
+except Exception: sys.exit(1)
+ok = isinstance(c,dict) and c.get("enabled") is not False and (c.get("enabled") is True or bool(c.get("prefixes")))
+sys.exit(0 if ok else 1)' "$PAYMENT_CONFIG" 2>/dev/null; then
+        enabled=1
     fi
 
     echo ""
     echo -e "${BOLD}Reward-split payment calculation (mainnet)${RESET}"
-    echo -e "  ${DIM}Splits matured coinbase across nicknames by work done, shown on the page.${RESET}"
-    echo -e "  ${DIM}Stores nickname PREFIXES only — never Grin addresses. Miners log in to${RESET}"
-    echo -e "  ${DIM}stratum as user <prefix><n> (e.g. alpha1, alpha2, bravo1).${RESET}"
+    echo -e "  ${DIM}Display-only split of matured coinbase across miners by work done,${RESET}"
+    echo -e "  ${DIM}grouped automatically by the worker name each miner connects with —${RESET}"
+    echo -e "  ${DIM}nothing to pre-define. Solo mining always pays ONE coinbase wallet;${RESET}"
+    echo -e "  ${DIM}this just shows who earned what so you can settle up manually, and${RESET}"
+    echo -e "  ${DIM}stores no Grin addresses. (Advanced: group several workers under one${RESET}"
+    echo -e "  ${DIM}label by hand-editing $PAYMENT_CONFIG → {\"prefixes\":[\"alpha\",\"bravo\"]}.)${RESET}"
 
-    if [[ -n "$cur" ]]; then
-        echo -e "  Current prefixes: ${BOLD}${cur}${RESET}"
-        echo -ne "  [K]eep / [C]hange / [R]emove? [K]: "
-        read -r pchoice
-        case "${pchoice,,}" in
-            r) rm -f "$PAYMENT_CONFIG"; success "Reward split disabled (config removed)."; return ;;
-            c) ;;
-            *) info "Keeping existing prefixes."; return ;;
-        esac
-    else
-        echo -ne "  Enable reward-split calculation? [y/N]: "
-        read -r pen
-        [[ "${pen,,}" != "y" ]] && { info "Reward split not enabled."; return; }
+    local ans
+    if [[ $enabled -eq 1 ]]; then
+        echo -e "  Status: ${GREEN}currently ON${RESET}"
+        echo -ne "  Keep reward split enabled? [Y/n]: "
+        read -r ans
+        if [[ "${ans,,}" == "n" ]]; then
+            rm -f "$PAYMENT_CONFIG"
+            success "Reward split disabled (config removed)."
+        else
+            info "Reward split stays enabled."
+        fi
+        return
     fi
 
-    local raw json
-    while true; do
-        echo -ne "  Nickname prefixes (space-separated, e.g. alpha bravo): "
-        read -r raw
-        [[ -z "$raw" ]] && { warn "No prefixes entered — not enabling."; return; }
-        # Validate + normalise in python: token charset, dedupe, no prefix-of-another.
-        json=$(python3 -c '
-import json, re, sys
-toks = [t for t in re.split(r"[\s,]+", sys.argv[1].strip()) if t]
-if not toks: sys.exit(1)
-seen = []
-for t in toks:
-    if not re.match(r"^[A-Za-z0-9_-]+$", t): sys.exit(1)
-    if t not in seen: seen.append(t)
-for a in seen:
-    for b in seen:
-        if a != b and b.startswith(a): sys.exit(1)
-print(json.dumps({"prefixes": seen}))
-' "$raw" 2>/dev/null) && break
-        warn "Invalid: use letters/digits/_/- only, and no prefix may start another (e.g. al/alpha)."
-    done
+    echo ""
+    echo -e "  ${BOLD}${CYAN}┏━ WHEN IS THIS USEFUL? ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${RESET}"
+    echo -e "  ${BOLD}${CYAN}┃${RESET}  Turn this ON if you ${BOLD}share this solo pool with trusted${RESET}"
+    echo -e "  ${BOLD}${CYAN}┃${RESET}  ${BOLD}friends${RESET}. The page tracks how much work each worker did,"
+    echo -e "  ${BOLD}${CYAN}┃${RESET}  so you can reconcile and ${BOLD}pay them out weekly${RESET} (or on any"
+    echo -e "  ${BOLD}${CYAN}┃${RESET}  cadence you like) by hand. If you mine alone, leave it OFF."
+    echo -e "  ${BOLD}${CYAN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${RESET}"
+    echo ""
+    echo -ne "  Enable reward-split calculation? [Y/n]: "
+    read -r ans
+    [[ "${ans,,}" == "n" ]] && { info "Reward split not enabled."; return; }
 
     mkdir -p "$(dirname "$PAYMENT_CONFIG")"
-    printf '%s\n' "$json" > "$PAYMENT_CONFIG"
+    printf '{"enabled":true}\n' > "$PAYMENT_CONFIG"
     chmod 644 "$PAYMENT_CONFIG"
     success "Reward split enabled → $PAYMENT_CONFIG"
-    echo -e "  ${DIM}The page shows nickname → % → GRIN owed (weekly/monthly are the settlement cadence).${RESET}"
+    echo -e "  ${DIM}The page splits by worker name → % → GRIN owed (weekly/monthly cadence).${RESET}"
 }
 
 # Prompt for the optional stats-page access lock (HTTP Basic Auth). Writes an
@@ -1223,8 +1286,28 @@ solo_deploy_stats_page() {
     info "Detected node secret(s) for:${detected}  ·  vhost: $conf_name"
     echo ""
 
+    # nginx + certbot must exist before we write the htpasswd, the vhost, or run
+    # `nginx -t`. On a bare node /etc/nginx does not exist yet, which is why the
+    # htpasswd write failed ("No such file or directory") and nginx_enable_site
+    # reported "nginx: command not found". Install up front so both succeed.
+    if ! command -v nginx >/dev/null 2>&1; then
+        info "nginx not installed — installing nginx + certbot first..."
+    fi
+    nginx_install_with_certbot || { error "Could not install nginx/certbot — aborting deploy."; return 1; }
+
+    echo ""
+    echo -e "${BOLD}${YELLOW}┏━━ CLOUDFLARE / DNS NOTE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${RESET}"
+    echo -e "${BOLD}${YELLOW}┃${RESET}  If this domain is on Cloudflare, set the A record to"
+    echo -e "${BOLD}${YELLOW}┃${RESET}  ${BOLD}\"DNS only\" (grey cloud)${RESET} — ${BOLD}NOT proxied (orange cloud)${RESET}."
+    echo -e "${BOLD}${YELLOW}┃${RESET}  ${DIM}A proxied record blocks miners from reaching the stratum${RESET}"
+    echo -e "${BOLD}${YELLOW}┃${RESET}  ${DIM}port via the domain — they'd have to use the raw server IP${RESET}"
+    echo -e "${BOLD}${YELLOW}┃${RESET}  ${DIM}(e.g. iPollo G1 mini: Pool name with real IP instead).${RESET}"
+    echo -e "${BOLD}${YELLOW}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${RESET}"
+    echo ""
+
     local subdomain
-    echo -ne "Subdomain for the stats page (e.g. mining.example.com): "
+    echo -e "Subdomain for the stats page  ${DIM}(suggestion: solo.yourdomain.com)${RESET}"
+    echo -ne "Enter subdomain: "
     read -r subdomain
     [[ -z "$subdomain" ]] && { warn "No subdomain — cancelled."; return 1; }
 
@@ -1308,11 +1391,12 @@ solo_deploy_stats_page() {
     [[ -n "$solo_slogan" ]] && success "Slogan + connection config written (edit $web_dir/data/config.json to change)." \
         || success "Connection config written (edit $web_dir/data/config.json for slogan/ports)."
 
-    # ── Reward-split prefixes (mainnet only) ────────────────────────────────────
-    # Optional. Writes $PAYMENT_CONFIG (nickname prefixes). Done before the initial
+    # ── Reward split (mainnet only) ─────────────────────────────────────────────
+    # Optional on/off toggle. Writes $PAYMENT_CONFIG ({"enabled":true}); the
+    # collector then splits by worker name automatically. Done before the initial
     # collector run below so split_main.json appears immediately when enabled.
     if [[ $have_main -eq 1 ]]; then
-        _solo_prompt_payment_prefixes
+        _solo_prompt_reward_split
     fi
 
     # ── Mining stats collector ──────────────────────────────────────────────────
@@ -1712,8 +1796,8 @@ stratum_menu() {
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
         show_compact_status
-        echo -e "  ${GREEN}1${RESET}) Setup       ${DIM}(enable stratum in grin-server.toml · wallet URL · burn)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Configure   ${DIM}(enable / bind / wallet / burn — single field)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Setup       ${DIM}(enable stratum in grin-server.toml · wallet URL)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Configure   ${DIM}(enable / bind / wallet — single field)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Publish     ${DIM}(open 0.0.0.0:<port> to miners + firewall)${RESET}"
         echo -e "  ${RED}4${RESET}) Restrict    ${DIM}(revert to 127.0.0.1)${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
@@ -1743,7 +1827,7 @@ stats_menu() {
         echo -e "${BOLD}${CYAN}  Stats & Web${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
-        echo -e "  ${GREEN}1${RESET}) Live dashboard    ${DIM}(terminal stats, updates every 10s; Ctrl+C to exit)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Live dashboard    ${DIM}(terminal stats; Enter to refresh, 0 to return)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Deploy / update   ${DIM}(nginx page; prompts payment prefixes + access lock)${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""

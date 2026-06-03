@@ -645,7 +645,10 @@
     if (!person) { box.style.display = 'none'; box.innerHTML = ''; SPLIT.person = null; return; }
 
     var prefixes = d.prefixes || [];
+    // No prefixes ⇒ split is by worker name, so a person IS a single worker.
+    // With prefixes ⇒ group by longest-prefix match ('unassigned' = matched none).
     var mine = (STATE.miners.main || []).filter(function (m) {
+      if (prefixes.length === 0) return m.worker === name;
       var hit = matchPrefix(m.worker, prefixes);
       return (name === 'unassigned') ? (hit === null) : (hit === name);
     });

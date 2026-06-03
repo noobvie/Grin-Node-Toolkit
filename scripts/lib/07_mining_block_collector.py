@@ -23,8 +23,9 @@ MAINNET-only reward split (trusted-group payment calculation):
   - an append-only DAILY ledger (UTC day-keyed: per-worker share-difficulty +
     chain-verified matured-block count) → <state-dir>/payment_ledger_main.json
   - a public per-period split (daily/weekly/monthly/yearly: nickname → % + GRIN
-    owed, NO addresses) → <out-dir>/split_main.json, enabled by a prefixes file
-    (--payment-config, default /opt/grin/conf/grin_solo_payment.json).
+    owed, NO addresses) → <out-dir>/split_main.json, toggled by --payment-config
+    (default /opt/grin/conf/grin_solo_payment.json). {"enabled": true} splits by
+    worker name automatically; {"prefixes":[..]} groups workers by prefix.
   This module computes only — it never holds keys, moves money, or stores a Grin
   address. Matured blocks are CHAIN-VERIFIED at 1440 maturity (Foreign API
   get_block) so an orphaned solution never inflates a payout.
@@ -197,21 +198,30 @@ def utc_day(epoch):
 
 
 def load_prefixes(path):
-    """Read nickname prefixes from the payment config. None ⇒ feature disabled
-    (config absent/unreadable); a list (possibly empty) ⇒ enabled."""
+    """Reward-split config loader. Returns:
+        None  ⇒ feature OFF (config absent/unreadable, or {"enabled": false})
+        []    ⇒ feature ON, split by worker name automatically ({"enabled": true})
+        [..]  ⇒ feature ON, group workers by these nickname prefixes
+                 (advanced: {"prefixes": ["alpha", "bravo"]})
+    The no-prefix case is the default the toolkit writes — operators don't
+    pre-define names; each worker name the miner connects with is its own group.
+    """
     try:
         with open(path) as fh:
             cfg = json.load(fh)
     except (OSError, ValueError):
         return None
-    pfx = cfg.get("prefixes", []) if isinstance(cfg, dict) else []
-    if not isinstance(pfx, list):
-        return []
+    if not isinstance(cfg, dict) or cfg.get("enabled") is False:
+        return None
+    pfx = cfg.get("prefixes", [])
     out = []
-    for p in pfx:
-        if isinstance(p, str) and p.strip() and p.strip() not in out:
-            out.append(p.strip())
-    return out
+    if isinstance(pfx, list):
+        for p in pfx:
+            if isinstance(p, str) and p.strip() and p.strip() not in out:
+                out.append(p.strip())
+    if out:
+        return out                       # explicit prefix grouping
+    return [] if cfg.get("enabled") is True else None
 
 
 def load_ledger(path):
@@ -326,12 +336,23 @@ def compute_split(ledger, prefixes, now):
         total_diff = sum(diffs.values())
         reward = blocks_matured * BLOCK_REWARD_GRIN
 
-        groups = {p: {"diff": 0, "workers": set()} for p in prefixes}
-        groups["unassigned"] = {"diff": 0, "workers": set()}
-        for w, v in diffs.items():
-            g = groups[_match_prefix(w, prefixes) or "unassigned"]
-            g["diff"] += v
-            g["workers"].add(w)
+        if prefixes:
+            # Advanced: group workers under the longest registered prefix; any
+            # worker matching none falls to "unassigned".
+            groups = {p: {"diff": 0, "workers": set()} for p in prefixes}
+            groups["unassigned"] = {"diff": 0, "workers": set()}
+            for w, v in diffs.items():
+                g = groups[_match_prefix(w, prefixes) or "unassigned"]
+                g["diff"] += v
+                g["workers"].add(w)
+        else:
+            # Default: split by worker name — each connected worker is its own
+            # group, no pre-registration and no "unassigned" bucket.
+            groups = {}
+            for w, v in diffs.items():
+                g = groups.setdefault(w, {"diff": 0, "workers": set()})
+                g["diff"] += v
+                g["workers"].add(w)
 
         persons = []
         for name, g in groups.items():

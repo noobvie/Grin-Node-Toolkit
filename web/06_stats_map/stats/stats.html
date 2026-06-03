@@ -6,13 +6,33 @@
 <title>Grin Network Stats — Hashrate, Difficulty &amp; Blockchain Data</title>
 <meta name="description" content="Live Grin network statistics: real-time hashrate (GPS), mining difficulty, block height, coin supply, supply issuance rate, active peer count, node version distribution, transactions per block, and fee history. Compare Grin supply issuance against Bitcoin, USD M2 and Gold. Monitor the Grin (ツ) MimbleWimble blockchain.">
 <meta name="keywords" content="grin network stats, grin hashrate, grin mining difficulty, grin block height, grin blockchain statistics, grin node monitor, grin coin supply, grin issuance rate, grin supply inflation, grin GPS, grin graphs per second, grin transactions, grin fees, grin active peers, grin peer count, grin node count, mimblewimble stats, grin cryptocurrency data, grin blockchain explorer, grin network health, grin mining monitor, grin node version, cuckatoo32, bitcoin supply issuance, crypto supply growth, monetary inflation comparison">
-<meta name="robots" content="index, follow">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="author" content="Grin Node Toolkit">
+<meta name="theme-color" content="#0d1117">
+<link rel="canonical" href="__SITE_URL__/stats.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Global Grin Health">
 <meta property="og:title" content="Grin Network Stats — Hashrate, Difficulty &amp; Blockchain Data">
 <meta property="og:description" content="Real-time Grin network stats: hashrate (GPS), mining difficulty, block height, coin supply, supply issuance rate vs Bitcoin, USD M2 and Gold, active peer count, and transaction history. Live MimbleWimble blockchain data.">
-<meta property="og:type" content="website">
+<meta property="og:url" content="__SITE_URL__/stats.html">
+<meta property="og:image" content="__SITE_URL__/grin-logo.svg">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Grin Network Stats — Hashrate &amp; Difficulty">
 <meta name="twitter:description" content="Live Grin blockchain stats: hashrate, difficulty, block height, coin supply issuance rate, and peer count. Compare supply growth against Bitcoin, USD M2 and Gold. Real-time MimbleWimble network data.">
+<meta name="twitter:image" content="__SITE_URL__/grin-logo.svg">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Dataset",
+  "name": "Grin Network Statistics",
+  "url": "__SITE_URL__/stats.html",
+  "description": "Live Grin (MimbleWimble) network statistics: hashrate (GPS), mining difficulty, block height, coin supply, supply issuance rate, transactions per block, fees, active peer count and node version distribution across mainnet and testnet.",
+  "keywords": ["Grin", "hashrate", "mining difficulty", "blockchain", "MimbleWimble", "Cuckatoo32"],
+  "creator": { "@type": "Organization", "name": "Grin Node Toolkit", "url": "https://github.com/noobvie/Grin-Node-Toolkit" },
+  "isAccessibleForFree": true,
+  "isPartOf": { "@type": "WebSite", "name": "Global Grin Health", "url": "__SITE_URL__/" }
+}
+</script>
 <link rel="icon" href="grin-logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="_header.css">
 <script src="chart.min.js"></script>
@@ -546,7 +566,7 @@
         <b>Graphs Per Second</b> — the estimated rate at which miners find valid Cuckoo Cycle graph solutions (C32 proofs of work). Higher GPS = more mining power securing the network.
         <hr class="chart-info-sep">
         <h4>How it's calculated</h4>
-        Derived from block difficulty and the 60-second block target: <code>hashrate ≈ difficulty / 60</code>. The stats collector polls the node every ~5 min and stores daily/hourly/recent aggregates.
+        Derived from the per-block difficulty delta and the Cuckatoo32 solution rate: <code>GPS = diff_delta × 42 / block_time / 16384</code>, where <code>42</code> is the Cuckoo cycle length and <code>16384</code> (= 32 × 2⁹) is the C32 solution rate. The stats collector polls the node every ~5 min and stores daily/hourly/recent aggregates.
         <hr class="chart-info-sep">
         <h4>Data source</h4>
         Local Grin node API — block header difficulty, sampled every ~5 min by the stats collector.
@@ -811,8 +831,9 @@
 </main>
 
 <section style="max-width:860px;margin:0 auto;padding:24px 24px 8px;font-size:12px;color:var(--muted);line-height:1.8;">
+  <h1 style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:8px;">Grin (ツ) Network Statistics</h1>
   <p>
-    <strong style="color:var(--text);">Grin (ツ) Network Statistics</strong> — live monitoring of the
+    Live monitoring of the
     <a href="https://grin.mw/" target="_blank" rel="noopener" style="color:var(--grin);">Grin MimbleWimble blockchain</a>.
     Track real-time <strong>network hashrate</strong> (graphs per second, GPS), <strong>mining difficulty</strong> (Cuckatoo32, LWMA adjustment),
     <strong>block height</strong>, <strong>coin supply</strong>, <strong>transactions per block</strong>, <strong>fees</strong>,
@@ -947,6 +968,17 @@
 </div>
 
 <script>
+// Fallback: resolve __SITE_URL__ in canonical/og meta from the live origin if the
+// deploy step hasn't substituted it yet (JSON-LD is fixed at deploy time).
+(function fixSiteUrl() {
+  const origin = location.origin;
+  const canon = document.querySelector('link[rel="canonical"]');
+  if (canon && canon.href.includes("__SITE_URL__")) canon.href = canon.getAttribute("href").replace(/__SITE_URL__/g, origin);
+  document.querySelectorAll('meta[content*="__SITE_URL__"]').forEach(m =>
+    m.setAttribute("content", m.getAttribute("content").replace(/__SITE_URL__/g, origin))
+  );
+})();
+
 // ── Config ───────────────────────────────────────────────────────────────────
 const DATA = "data/";
 const REFRESH_MS = 5 * 60 * 1000;  // re-fetch every 5 minutes

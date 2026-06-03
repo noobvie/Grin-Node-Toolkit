@@ -165,6 +165,9 @@ LOG_FILE="$LOG_DIR/01_build_new_grin_node_$(date +%Y%m%d_%H%M%S).log"
 CONF_DIR="/opt/grin/conf"
 INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"
 GRIN_GITHUB_API="https://api.github.com/repos/mimblewimble/grin/releases/latest"
+# Shared node primitives (canonical _grin_session_name, etc.). Source-guarded,
+# no side effects; defines info/warn/error fallbacks only if absent.
+source "$SCRIPT_DIR/lib/grin_node_control.sh"
 
 # --- Session state (reset per node) ---
 NETWORK_TYPE=""
@@ -410,7 +413,7 @@ update_binary_only() {
     local tmp_tar="/tmp/grin_bin_$$.tar.gz"
     local tmp_dir="/tmp/grin_extract_$$"
     mkdir -p "$tmp_dir"
-    wget --progress=bar:force -O "$tmp_tar" "$download_url" \
+    wget -e background=off --progress=bar:force -O "$tmp_tar" "$download_url" \
         || die "Binary download failed."
     tar -xzf "$tmp_tar" -C "$tmp_dir" \
         || die "Failed to extract binary archive."
@@ -1482,7 +1485,7 @@ download_grin_binary() {
     mkdir -p "$tmp_dir"
 
     info "Downloading binary (showing progress)..."
-    wget --progress=bar:force -O "$tmp_tar" "$download_url" \
+    wget -e background=off --progress=bar:force -O "$tmp_tar" "$download_url" \
         || die "Binary download failed."
 
     info "Extracting archive..."
@@ -2106,7 +2109,9 @@ download_chain_data() {
     for src_base in "${READY_SOURCES[@]}"; do
         src_num=$(( src_num + 1 ))
         info "Trying source $src_num/$total_src: $src_base"
-        if wget -c --progress=bar:force -O "$TAR_FILE" "$src_base/$tar_name"; then
+        # -e background=off: same fix as Step 10 — without it wget forks to the background on
+        # this target box and writes its progress bar to a wget-log file instead of the screen.
+        if wget -c -e background=off --progress=bar:force -O "$TAR_FILE" "$src_base/$tar_name"; then
             dl_ok=true
             success "Chain data downloaded from $src_base"
             break
@@ -2249,15 +2254,25 @@ stream_extract_chain_data() {
         src_num=$(( src_num + 1 ))
         local tar_url="$src_base/$tar_name"
         info "Source $src_num/$total_src: $tar_url"
-        info "Running: wget -q --show-progress -O - \"$tar_url\" | tar -xzvf - -C \"$GRIN_DIR\""
-        info "You'll see: wget bar (%, speed, ETA) + extracted filenames as the stream lands."
+        info "Running: wget -e background=off --progress=bar:force -O - \"$tar_url\" | tar -xzf - -C \"$GRIN_DIR\""
+        info "wget draws a live transfer bar (size, %, speed, ETA) as the stream downloads and extracts."
         [[ $total_src -gt 1 ]] && warn "If this stream fails mid-transfer, the next source will be tried automatically."
         echo ""
         log "[STEP 10] Streaming from $tar_url"
-        # wget -q --show-progress: suppress chatter but keep the transfer bar (%, MB/s, ETA).
-        # tar -xzvf -: list each extracted entry so the user can see the archive being unpacked live.
-        if wget -q --show-progress -O - "$tar_url" \
-                | tar -xzvf - -C "$GRIN_DIR"; then
+        # -e background=off is THE fix (confirmed 2026-06-02 by isolating the command on the
+        # target box): otherwise wget forks to the background and writes its progress (bar, %,
+        # speed, ETA) to a "wget-log" FILE instead of the terminal — which is why NO flag
+        # (bar:force, --show-progress, dot, or pv) ever showed anything on screen, in or out of
+        # tmux. Symptom without it: wget prints "Redirecting output to 'wget-log'" and the
+        # terminal stays blank while tar's output still shows. With -e background=off the bar
+        # renders live. (No wgetrc 'background=on' exists; wget backgrounds when it lands in a
+        # process group without the controlling tty — this flag defeats that unconditionally and
+        # is a harmless no-op otherwise.)
+        #   --progress=bar:force : draw the bar even though stdout is piped (-O -).
+        #   NO -q                : -q suppresses the bar.
+        #   tar -xzf - (no -v)   : silent tar so the \r-redrawn bar isn't shredded by filenames.
+        if wget -e background=off --progress=bar:force -O - "$tar_url" \
+                | tar -xzf - -C "$GRIN_DIR"; then
             stream_ok=true
             break
         else
@@ -2280,15 +2295,7 @@ stream_extract_chain_data() {
     log "[STEP 10] On-the-fly extraction complete."
 }
 
-# tmux session name convention: grin_<nodetype>_<networktype>
-_grin_session_name() {
-    case "$(basename "${1:-}")" in
-        mainnet-full)  echo "grin_full_mainnet"   ;;
-        mainnet-prune) echo "grin_pruned_mainnet" ;;
-        testnet-prune) echo "grin_pruned_testnet" ;;
-        *)             echo "grin_$(basename "${1:-}")" ;;
-    esac
-}
+# _grin_session_name() now lives in lib/grin_node_control.sh (sourced near top).
 
 # =============================================================================
 # HELPER: CHECK IF A GRIN PROCESS IS RUNNING FOR A SPECIFIC NODE DIRECTORY
@@ -2354,15 +2361,20 @@ start_grin_tmux() {
     fi
 
     # Own only the node directory — not the parent tree (grinscan, drop, etc. live there).
+    # HOME=$GRIN_DIR is mandatory: grin 5.4.0 still creates its $HOME/.grin/<chain>
+    # working area even when it loads the cwd grin-server.toml. The grin user's home
+    # is /opt/grin (root-owned, unwritable) → without this override grin panics with
+    # "Error loading config file: Permission denied" trying to mkdir /opt/grin/.grin.
+    # Pointing HOME at the node dir keeps everything under /opt/grin/node/<net>.
     if id grin &>/dev/null; then
         chown -R grin:grin "$GRIN_DIR" 2>/dev/null || true
         tmux new-session -d -s "$session" -c "$GRIN_DIR" \
-            "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$GRIN_DIR\" && ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$GRIN_DIR\" && HOME=\"$GRIN_DIR\" ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
             || die "Failed to create tmux session '$session'. Is tmux installed and working?"
     else
         warn "User 'grin' not found — running as current user. Re-run Script 01 to create it."
         tmux new-session -d -s "$session" -c "$GRIN_DIR" \
-            "echo 'Starting Grin node...'; cd $GRIN_DIR && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            "echo 'Starting Grin node...'; cd $GRIN_DIR && HOME=\"$GRIN_DIR\" ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
             || die "Failed to create tmux session '$session'. Is tmux installed and working?"
     fi
 
@@ -2681,8 +2693,16 @@ main() {
     # Concurrent-run guard — two parallel script-01 instances can corrupt
     # $INSTANCES_CONF or partially overwrite a node directory.
     # fd 9 stays open for the life of the process; flock releases on exit.
-    exec 9>/var/run/grin-toolkit-01.lock 2>/dev/null \
-        || exec 9>/tmp/grin-toolkit-01.lock
+    #
+    # IMPORTANT: never write `exec 9>FILE 2>/dev/null` here. A bare `exec` with no
+    # command applies its redirections to the shell PERMANENTLY — the `2>/dev/null`
+    # would silence the whole script's stderr for the rest of the run, swallowing the
+    # wget download progress bar (and every other stderr message) in later steps.
+    # Instead, pick a writable lock path first (stderr suppression scoped to a subshell
+    # so it cannot leak), then open fd 9 with stderr left intact.
+    LOCK_FILE=/var/run/grin-toolkit-01.lock
+    ( : >>"$LOCK_FILE" ) 2>/dev/null || LOCK_FILE=/tmp/grin-toolkit-01.lock
+    exec 9>"$LOCK_FILE"
     if ! flock -n 9; then
         die "Another instance of script 01 is already running. Wait for it to finish, or remove the lock file if you are sure no other instance exists."
     fi

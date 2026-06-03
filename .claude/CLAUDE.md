@@ -168,6 +168,33 @@ SHELL=/bin/bash tmux new-session -d -s "name" -c "$DIR" "command"
 
 **Why:** cron sets `SHELL=/bin/sh`; a shebang only sets the interpreter, not the env var inherited by tmux child sessions. `export SHELL=` is insufficient if the tmux server was already started by another process — the inline prefix is the only reliable fix.
 
+## Grin Node Launch Contract — Run as `grin`, with `HOME=$GRIN_DIR`
+
+**Every** code path that starts `grin server run` (Script 01 `start_grin`, `grin_node_control.sh`
+`gnc_start_node_tmux`, the `grin_node_keepalive.sh` `@reboot` autostart line) MUST:
+
+1. **Run as the `grin` user** — never as root. A root-run node writes `root:root` files
+   (`grin-server.log`, `chain_data/…`) into the node dir; the next `grin`-owned start then
+   gets `EACCES` (e.g. `logger.rs:218 Failed to create logfile`) and the node won't start.
+2. **Set `HOME="$GRIN_DIR"`** (the node dir). grin 5.4.0 still creates its `$HOME/.grin/<chain>/`
+   work area **even when it loads the cwd `grin-server.toml`** (confirmed via strace: it reads
+   the cwd config *and* touches `$HOME/.grin/main`). The `grin` user's default home is `/opt/grin`,
+   which is `root:root` and unwritable → grin panics `Error loading config file: Permission denied`
+   while trying to `mkdir /opt/grin/.grin`. Pointing `HOME` at the node dir keeps grin's home area
+   inside the standard `/opt/grin/node/<net>` path and never touches `/opt/grin/.grin` or `~/.grin`.
+3. **`chown -R grin:grin "$GRIN_DIR"` immediately before launch** — reclaims any root-owned
+   leftovers (idempotent, cheap, prevents the EACCES in #1).
+
+Canonical form (matches all three launch points):
+```bash
+chown -R grin:grin "$GRIN_DIR" 2>/dev/null || true
+su -s /bin/bash -c 'cd "$GRIN_DIR" && HOME="$GRIN_DIR" ./grin server run' grin
+```
+
+**Do NOT** debug a "node won't start" by running `./grin server run` as root in the node dir —
+it *works* for root (root can write anywhere) but leaves `root:root` files that re-break the
+`grin` user. Reproduce as the service user: `su -s /bin/bash -c 'cd $DIR && HOME=$DIR ./grin server run' grin`.
+
 ## Grin Hashrate Formula (Cuckatoo32)
 
 **Do NOT use `difficulty / 60` — it gives values ~366× too high.**
@@ -294,7 +321,7 @@ Key design decisions (locked in — do not change without user confirmation):
 - **Identity:** Address-as-identity (2miners style) — miner submits `grin_address.worker_name` as stratum username; no mandatory registration
 - **Payments:** Tor-only auto-pay; slatepack interactive flow dropped entirely; on Tor failure, queue and retry every 6h up to 7 days
 - **Reward model:** PPLNS (default); configurable to Proportional or Solo via admin panel
-- **Block maturity:** 1441 blocks (mainnet) / 100 blocks (testnet) before payout; critical for reorg safety
+- **Block maturity:** 1440 blocks (mainnet) / 100 blocks (testnet) before payout; critical for reorg safety (Grin consensus `COINBASE_MATURITY = 1440`)
 - **Orphan detection:** Nonce-based verification job every 6h; reverses payouts if a found block is orphaned
 - **Race conditions:** INSERT OR IGNORE for miner auto-creation; SELECT FOR UPDATE for balance updates
 - **Stack:** Next.js + Tailwind CSS + SQLite (better-sqlite3); systemd process manager (not pm2)

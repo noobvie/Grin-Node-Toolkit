@@ -38,6 +38,13 @@ COMMUNITY_NODES_PATH = os.environ.get(
     "GRIN_COMMUNITY_NODES",
     os.path.join(_db_dir, "community_nodes.json"),
 )
+# Curated node list (06_external_nodes.json). Installed next to this binary in
+# /usr/local/bin by Script 06, same as the ecosystem checker's sidecar. Used to
+# reject submissions that duplicate an already-curated node.
+EXTERNAL_NODES_PATH = os.environ.get(
+    "GRIN_EXTERNAL_NODES",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "06_external_nodes.json"),
+)
 PORT        = int(os.environ.get("GRIN_SUBMIT_PORT", "5060"))
 ADMIN_TOKEN = os.environ.get("GRIN_SUBMIT_TOKEN", "")
 
@@ -91,6 +98,37 @@ def _save_community(data):
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(data, fh, separators=(",", ":"))
     os.replace(tmp, COMMUNITY_NODES_PATH)
+
+
+def _host_of(entry):
+    """Lowercased hostname for a node entry, which may be a bare domain
+    (curated, e.g. 'api.grinily.com') or a full URL (community submission)."""
+    entry = (entry or "").strip().rstrip("/")
+    if "://" in entry:
+        return (urllib.parse.urlparse(entry).hostname or "").lower()
+    return entry.lower()
+
+
+def _curated_hosts():
+    """Set of lowercased hostnames already in the curated 06_external_nodes.json,
+    across both networks and all protocols. Empty set if the file is missing."""
+    try:
+        with open(EXTERNAL_NODES_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return set()
+    hosts = set()
+    if isinstance(data, dict):
+        for protos in data.values():
+            if not isinstance(protos, dict):
+                continue
+            for entries in protos.values():
+                if isinstance(entries, list):
+                    for e in entries:
+                        h = _host_of(e)
+                        if h:
+                            hosts.add(h)
+    return hosts
 
 # ── Challenge tokens ─────────────────────────────────────────────────────────
 
@@ -289,13 +327,20 @@ class Handler(BaseHTTPRequestHandler):
             _json(self, 400, {"ok": False, "message": f"Node rejected — {probe_err}"})
             return
 
+        submitted_host = _host_of(url)
+
         with _lock:
             data = _load_community()
-            # A node belongs to exactly one network; guard against duplicates on either.
-            existing = {n["url"].rstrip("/").lower()
-                        for lst in data.values() for n in lst}
-            if url.lower() in existing:
+            # Dedup by hostname (not full URL) so 'api.grinnode.org' and
+            # 'https://api.grinnode.org' are treated as the same node. Check both the
+            # community list AND the curated 06_external_nodes.json — a node belongs to
+            # exactly one network and must not double up across either source.
+            community_hosts = {_host_of(n["url"]) for lst in data.values() for n in lst}
+            if submitted_host in community_hosts:
                 _json(self, 409, {"ok": False, "message": "This node is already listed on the community list."})
+                return
+            if submitted_host in _curated_hosts():
+                _json(self, 409, {"ok": False, "message": "This node is already on the curated node list."})
                 return
             if len(data[net]) >= MAX_NODES_PER_NET:
                 _json(self, 429, {"ok": False,

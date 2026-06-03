@@ -571,6 +571,31 @@ def _check_external_nodes():
             net, entry = f.result()
             result[net].append(entry)
 
+    # Self-heal: drop any community node that duplicates a curated node (same host).
+    # Curated entries may be bare domains ("api.grinily.com") or full URLs; community
+    # submissions are always full URLs — so compare by hostname, not raw string.
+    curated_hosts = set()
+    for protos in EXTERNAL_NODES.values():
+        for entries in protos.values():
+            for e in entries:
+                h = (urllib.parse.urlparse(e).hostname if e.startswith("http") else e).lower()
+                if h:
+                    curated_hosts.add(h)
+
+    def _is_curated_dup(node):
+        return (urllib.parse.urlparse(node["url"]).hostname or "").lower() in curated_hosts
+
+    for net in community:
+        dups = [n for n in community[net] if _is_curated_dup(n)]
+        if dups:
+            dup_urls       = {n["url"].rstrip("/") for n in dups}
+            community[net] = [n for n in community[net] if not _is_curated_dup(n)]
+            # Also drop them from this run's output so they vanish immediately, not next hour.
+            result[net]    = [r for r in result[net]
+                              if r.get("_community_url", "").rstrip("/") not in dup_urls]
+            print(f"[INFO] Auto-removed {len(dups)} community node(s) from {net} "
+                  f"that duplicate a curated node.")
+
     # Update community fail_counts and auto-remove dead nodes
     for net, nodes in community.items():
         for node in nodes:

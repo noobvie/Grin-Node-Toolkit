@@ -87,32 +87,49 @@
                    │     display as G/s, kG/s, or MG/s
                    └─> clear + render dashboard → sleep 10
 
-  S) Stats Web Page (nginx + static HTML)
+  S) Stats Web Page (nginx + static HTML)   — domain + Let's Encrypt only
+                                              — ONE UNIFIED vhost serves BOTH
+                                                networks side by side (auto-detect;
+                                                a missing network greys out)
        └─> solo_deploy_stats_page()
-             ├─> Prompt: subdomain (e.g. mining.example.com)
-             ├─> Read /opt/grin/node/mainnet-prune/.api_secret
-             ├─> base64(grin:<secret>) → b64_auth
-             ├─> mkdir /var/www/grin-stats
-             ├─> cp web/07_mining_pool_solo/stats.html → /var/www/grin-stats/index.html
-             ├─> nginx_ensure_grin_api_zone()  ← shared rate-limit zone
-             ├─> Write /etc/nginx/sites-available/grin-stats:
-             │     · HTTP → HTTPS redirect
-             │     · location /api/status → proxy_pass 127.0.0.1:3413/v2/owner
-             │     │   proxy_method POST
-             │     │   proxy_set_header Authorization "Basic $b64_auth"
-             │     │   proxy_set_body '{"jsonrpc":"2.0","method":"get_status",...}'
-             │     └─ location / → static /var/www/grin-stats
+             ├─> Fixed names (NO per-network suffix):
+             │     · conf_name  grin-solo-mining-stat   (STATS_BASENAME; NOT
+             │     │            "grin-stats" — that belongs to Script 06)
+             │     · web_dir    /var/www/grin-solo-mining-stat
+             │     · detect     have_main/have_test from
+             │     │            /opt/grin/node/<net>-prune/.api_secret
+             ├─> Prompt: subdomain (e.g. mining.example.com) → nginx_validate_domain
+             ├─> DNS pre-check: getent hosts <subdomain> (warn + confirm if unresolved)
+             ├─> cp index.html + setup-solo-mining.html + logo.svg → web_dir
+             ├─> mkdir web_dir/data; write data/config.json (stratum ports + slogan)
+             ├─> nginx_ensure_grin_api_zone()  ← shared rate-limit zone (lib)
+             ├─> Write /etc/nginx/sites-available/grin-solo-mining-stat (HTTP-only):
+             │     · listen 80  (NO 443 block — certbot injects SSL in-place below)
+             │     · PER DETECTED NET (exact-match; unknown net → 404 → page greys):
+             │     │   location = /api/status/<net> → 127.0.0.1:<3413|13413>/v2/owner
+             │     │       POST get_status · Authorization "Basic b64(grin:secret)"
+             │     │   location = /api/wallet/<net> → wallet Foreign liveness probe
+             │     └─ location / → static web_dir
+             │   (collector cron writes data/{blocks,miners,poolstats}_<key>.json
+             │    + planned split_main.json — consumed by the page JS)
              ├─> chmod 600 nginx conf (contains b64 auth token)
-             ├─> nginx_ensure_sites_enabled_include()
-             ├─> ln -sf → sites-enabled/
-             ├─> nginx -t && systemctl reload nginx
-             └─> certbot --nginx -d <subdomain>
+             ├─> nginx_enable_site(<conf>, <conf_name>)   ← lib: include + symlink
+             │                                              + nginx -t + reload
+             └─> nginx_run_certbot(<subdomain>, admin@<subdomain>, --redirect)  ← lib
+                   ├─> injects 443 server block + SSL directives + HTTP→HTTPS redirect
+                   ├─> re-chmod 600 (certbot rewrote the file) + nginx_test_reload (lib)
+                   └─> on failure: page stays live over HTTP, prompt to fix DNS & retry S
+
+       Reused shared-lib helpers (scripts/lib/nginx_shared_helpers.sh) — no local
+       reimplementation: nginx_validate_domain · nginx_ensure_grin_api_zone ·
+       nginx_enable_site · nginx_run_certbot · nginx_test_reload
 
        Page JS flow (browser):
              ├─> fetch('/api/status') every 10s  ← GET hits nginx, POST forwarded
              ├─> parse result.Ok.tip.{height, total_difficulty}
              ├─> parse result.Ok.connections (peers)
-             ├─> parse result.Ok.stratum_stats.num_workers (if available)
+             ├─> miners: get_status does NOT return stratum_stats → shows
+             │     "n/a — use terminal dashboard (L)"; live count only via menu L
              └─> Cuckatoo32 hashrate:
                    diff_delta = total_difficulty - prev
                    dt         = (now - prevTs) / 1000
@@ -125,9 +142,10 @@
              └─> Else:
                    ├─> Write /usr/local/bin/grin-stratum-watchdog (chmod 750):
                    │     for each detected grin-server.toml:
-                   │       grep enable_stratum_server
-                   │       if != "true": append WARNING to $WATCHDOG_LOG
-                   │       else: append OK line
+                   │       grep enable_stratum_server + stratum_server_addr (→ port)
+                   │       if enable != "true":            append WARN (config drift)
+                   │       elif port not listening (ss):   append WARN (stratum down)
+                   │       else:                           (OK line if none warned)
                    └─> Write /etc/cron.d/grin-stratum-watchdog:
                          */5 * * * * root /usr/local/bin/grin-stratum-watchdog
 
@@ -159,13 +177,23 @@
       Testnet (:13416): ...
 
 ================================================================================
- PLANNED: Solo Mining Stats Dashboard  [not yet implemented — see plan file]
+ SUPERSEDED: Solo Mining Stats Dashboard (old Node.js + SQLite + proxy design)
 ================================================================================
+
+ ⚠ DO NOT IMPLEMENT THIS SECTION. It is replaced by the new plan at the END of
+ this file: "PLANNED: Payment Calculation" (static JSON written by the collector
+ — NO Node.js, NO SQLite, NO stratum proxy; the node stratum stays on :3416) plus
+ "PLANNED: Menu Restructure" (the "P) Stats Dashboard" menu was DROPPED). The text
+ below is kept ONLY as a record of the rejected approach.
 
  Goal: Read-only web dashboard for non-technical miners (no SSH needed).
        Modelled on 2miners — enter Grin address, see workers + block history.
 
  Architecture:
+   NOTE: ports below are PLACEHOLDERS for the unbuilt proxy design and are
+   INCONSISTENT with the current build, where the node's own stratum binds
+   :3416/:13416. If this proxy is ever built, the node stratum must be moved
+   to a private port (e.g. :3417/:13417) and the proxy takes over :3416/:13416.
    Miners ──→ Node.js stratum proxy (:3416/:13416)
                  │  tracks per-address workers/shares in-memory
                  └──→ Grin node built-in stratum (:3417/:13417)
@@ -208,7 +236,8 @@
    solo_miner (10r/m) → /api/:net/miner/:addr  new, script07-solo-miner.conf
 
  New menu option in script 07:
-   P) Stats Dashboard  (replaces S) Stats web page)
+   P) Stats Dashboard  (WOULD replace S) Stats web page — NOT YET BUILT; S is
+                        still the live option today)
       1) Install  2) Configure  3) Nginx domain  4) Service  5) Logs  0) Back
 
  New files:
@@ -248,5 +277,619 @@
   · stratum port opened to 0.0.0.0 only when user explicitly runs D/I (Publish)
   · Wallet Foreign API stays on localhost — not exposed to internet
   · Watchdog runs as root, logs to /opt/grin/logs/stratum-watchdog.log
+
+================================================================================
+
+
+================================================================================
+ PLANNED: Payment Calculation (Reward Split for a Trusted Group)  [design only]
+================================================================================
+
+ PROBLEM
+   Grin's built-in stratum sends 100% of every block reward to ONE wallet
+   (wallet_listener_url). When >1 person points rigs at the same node, the node
+   does NOT split — it can't. All coinbase lands in the OPERATOR's wallet; the
+   operator must settle each contributor's share by hand afterward.
+
+   This module moves NO money and holds NO wallet keys, AND stores NO Grin
+   addresses on the server. It only computes, from data the stats page already
+   publishes, "what % of the work each nickname did and therefore how many GRIN
+   they are owed this period," and displays it ON THE PUBLIC STATS PAGE. The
+   operator reads the GRIN figure and sends one normal Grin tx to the address
+   they already know for that nickname (out-of-band).
+
+   Keeps Script 07's core property intact: infrastructure only, no hot wallet.
+
+ SCOPE
+   · Mainnet only (testnet has no value to split — no ledger for testnet)
+   · Display/compute only — never sends, never unlocks a wallet, never stores
+     a Grin address
+   · Trusted group (friends). NOT trustless: all reward is in operator's wallet;
+     contributors trust the operator to pay. Worker label is self-declared.
+
+ ─── WHY THERE IS NO MENU OPTION AND NO ADDRESS CONFIG ──────────────────────────
+
+   An earlier draft had a "P) Payment Calculation" bash menu + a config mapping
+   prefix → Grin address. Both were REMOVED to simplify:
+
+     · Reports → the PUBLIC STATS PAGE shows every period (daily/weekly/monthly/
+       yearly), so a separate bash report is redundant.
+     · Block reward → flat 60 GRIN (Grin has no halving) → hardcoded, not config.
+     · Maturity → 1440 blocks (mainnet) → hardcoded.
+     · Grin addresses → NOT stored at all. The page shows "nickname → GRIN owed";
+       the operator maps nickname → address from their own wallet address book.
+       Privacy win (no address on server, none on page) and less code.
+
+   What survives: the list of NICKNAME PREFIXES. It is captured by ONE prompt in
+   the existing "S) Stats web page" deploy — no new top-level menu.
+
+ ─── IDENTITY: WORKER NAME → PERSON (NICKNAME) ──────────────────────────────────
+
+   Each person mines under a nickname PREFIX; rigs append any suffix. Use neutral
+   nicknames, NOT real names (the page is public):
+       you    : alpha1 alpha2 ... alpha10
+       friend : bravo1 bravo2 bravo3
+
+   Grouping rule: a worker belongs to the registered prefix it STARTS WITH (use
+   LONGEST-prefix match). Do NOT auto-strip trailing digits — a typo (brav2,
+   alphaa5) would silently become a phantom person and skew the split. Prefixes
+   are REGISTERED explicitly (S-deploy prompt); any worker matching no prefix →
+   "unassigned" bucket, shown plainly so typos are visible, not swallowed.
+
+   Requirement on miners: set the stratum username (login) to <prefix><n>.
+   That is the ONLY discipline the whole scheme depends on.
+
+ ─── CONFIG  /opt/grin/conf/grin_solo_payment.json ──────────────────────────────
+
+   {
+     "prefixes": ["alpha", "bravo"]      // nickname prefixes only — NO addresses
+   }
+   (block_reward = 60 and maturity = 1440 are hardcoded, not config.)
+
+ ─── DATA: APPEND-ONLY DAILY LEDGER  (the only new moving part) ──────────────────
+
+   The collector (07_mining_block_collector.py) already tallies per-worker
+   share-difficulty, BUT prunes buckets older than 48h → no long-term history.
+   The payment module captures a DAILY ROLLUP before pruning (collector already
+   runs on cron — emit this as a side effect):
+
+     /opt/grin/solo-stats/payment_ledger_main.json
+       "2026-05-30": { "workers": { "alpha1": 84210, ..., "bravo3": 19400 },
+                       "blocks_matured": 1 }
+       "2026-05-31": { ... }
+
+   · key = calendar date (mainnet server tz)
+   · workers[w] = Σ accepted share-difficulty that day (work = difficulty-weighted,
+                  NOT a raw share count — handles unequal rigs correctly)
+   · blocks_matured = blocks whose maturity height was reached that day
+     (only matured blocks become money; an orphan never inflates a split)
+
+ ─── CALCULATION (per period) ───────────────────────────────────────────────────
+
+   reward_P      = Σ blocks_matured over P  × 60 GRIN
+   person_diff   = Σ share-diff of all workers whose prefix = person, over P
+   total_diff    = Σ share-diff of ALL workers (incl. unassigned), over P
+   person_payout = reward_P × person_diff / total_diff
+
+   Period windows:
+     daily   = one date            (VISIBILITY ONLY — can look lumpy: a block may
+                                     mature on a day the heavy mining was elsewhere)
+     weekly  = last 7 days         ← REAL SETTLEMENT CADENCE
+     monthly = calendar month      ← REAL SETTLEMENT CADENCE
+     yearly  = calendar year       (overview)
+
+   Fairness note: blocks-in-P are split by work-in-P. Lumpy over a single day,
+   accurate over a week+. Hence weekly/monthly are the settlement cadence; daily
+   is shown for visibility only.
+
+ ─── PUBLIC STATS PAGE — what the browser shows (no addresses, ever) ────────────
+
+   PHASE 1 — Homepage aggregate panel (per period tab: daily/weekly/monthly/year)
+
+     Reward Split — Mainnet           Period: 2026-05-25 → 2026-05-31 (weekly)
+     ─────────────────────────────────────────────────────────────────────────
+     Matured blocks: 5     Total reward: 300.000 GRIN
+       alpha   10 workers   77.0%   231.000 GRIN
+       bravo    3 workers   23.0%    69.000 GRIN
+       unassigned  0                   —        (ok — none)
+
+   PHASE 2 — Per-person "account" view (2miners-style; key = nickname prefix)
+     Clicking a nickname opens its detail. Lookup key is the PUBLIC prefix
+     (guessable) — fine for a consenting friend group; this is NOT the semi-
+     private "look up by full address" model 2miners uses.
+
+       Person: alpha                                    ● 8/10 workers online
+       Hashrate (15m): 4.21 kG/s    Last 24h reward: 132.000 GRIN
+       Est. daily earning: ~128 GRIN  (estimate — depends on luck)
+       ── Workers ──────────────────────────────────────────────────────────
+       alpha1   ● online   612 G/s   last share 7s ago
+       alpha2   ○ offline    0 G/s   last share 3h ago
+       ...
+
+     Per-person fields & feasibility (all from existing collector data):
+       workers + per-worker hashrate ...... free (miners_*.json)
+       online / last share ................ free (last_seen)
+       work share % ....................... free (share-diff)
+       last-24h reward (GRIN) ............. cheap (= calc over a 24h window)
+       estimated daily earning ............ cheap (their_hr/net_hr × ~daily
+                                            blocks × 60; LABEL as estimate)
+       valid share rate (accepted/reject) . DEFERRED — needs reject/stale log
+                                            parsing that does not exist yet and
+                                            may not be reliably logged. Skip v1.
+
+   Implementation guardrail: the calculator writes the PUBLIC JSON with nicknames,
+   %, GRIN, hashrate ONLY. No Grin address is read, stored, or emitted anywhere.
+
+ ─── SETTLEMENT (operator, out-of-band) ─────────────────────────────────────────
+
+   Operator reads "bravo: 69 GRIN" off the page, then sends 69 GRIN from their
+   wallet to bravo's address (known from their own address book) in ONE normal
+   Grin tx. Cadence: weekly or monthly. The toolkit never prints an address.
+
+ ─── FLOW ───────────────────────────────────────────────────────────────────────
+
+   Daily (cron, alongside collector):
+       collector parses log → per-worker share-diff (existing)
+              │
+              ├─> append today's {workers, blocks_matured} to
+              │   payment_ledger_main.json   (before 48h prune loses it)
+              │     · blocks_matured = found blocks now past 1440 maturity
+              │     · (optional) chain-verify each block before counting
+              └─> recompute public split JSON for each period (daily/weekly/
+                  monthly/yearly) → /var/www/<stats>/data/split_main.json
+                    · read prefixes from grin_solo_payment.json
+                    · per person: Σ share-diff (longest-prefix match), unassigned
+                    · reward_P = Σ blocks_matured × 60 ; payout = proportion
+                    · nicknames + % + GRIN + hashrate ONLY (no addresses)
+
+   Browser:
+       fetch split_main.json → render Phase-1 panel + Phase-2 per-person views
+
+ ─── NEW / TOUCHED FILES ────────────────────────────────────────────────────────
+
+   scripts/lib/07_mining_block_collector.py   extend: daily ledger + split JSON
+   scripts/07_grin_mining_solo.sh             S-deploy: prompt+write prefixes
+                                              (NO new menu option)
+   web/07_mining_pool_solo/index.html         add: Phase-1 panel + Phase-2 views
+   /opt/grin/conf/grin_solo_payment.json      runtime config: prefixes only
+   /opt/grin/solo-stats/payment_ledger_main.json   runtime append-only ledger
+   /var/www/<stats>/data/split_main.json      public output (no addresses)
+
+ ─── EDGE CASES / GUARDRAILS ────────────────────────────────────────────────────
+
+   · Unassigned worker (typo / unregistered prefix) → own bucket, shown plainly;
+     it still counts in total_diff so nobody is over-paid, and the operator sees
+     the leak and can fix the label.
+   · Prefix collision (one prefix is a substring of another, e.g. "al"/"alpha")
+     → require LONGEST-prefix match; validate prefixes are non-overlapping when
+     written at S-deploy.
+   · Orphaned block → excluded by counting only matured blocks; optionally
+     chain-verify each block (collector's found-list is NOT chain-verified).
+   · Mid-period relabel / rig changes owner → operator edits prefixes / accepts
+     it from next period; ledger is per-day so history stays intact.
+   · Privacy: nicknames are public and guessable; use neutral labels. No address
+     is ever stored or shown. Income-per-nickname IS public by design (operator
+     chose % + GRIN public) — acceptable for a consenting friend group only.
+   · Trust boundary: all reward is in operator's wallet; the page only states
+     what is owed. Not suitable for untrusted/public mining.
+
+================================================================================
+
+
+================================================================================
+ PLANNED: Central Wallet for Solo Mining (in-script, Option C)   [design only]
+================================================================================
+
+ GOAL
+   Let the operator do the WHOLE flow — wallet init/recover → start coinbase
+   listener → mine — inside Script 07, without jumping to Script 05/052. The
+   wallet that receives coinbase (the "central wallet") is set up and kept alive
+   by Script 07 itself.
+
+ DIR / NAMING
+   /opt/grin/solowallet/<net>/        (mainnet | testnet)
+     grin-wallet.toml, wallet_data/, .foreign_api_secret, .owner_api_secret
+     <net>_pass.txt                   saved passphrase, chmod 600 (see WHY below)
+
+ WHICH API MINING NEEDS  (decides the passphrase question)
+   The node funds coinbase via the wallet FOREIGN API: wallet_listener_url ends
+   in /v2/foreign, method build_coinbase. So Script 07 must run:
+       grin-wallet <net_flag> -p <pass> listen      → Foreign API on 3415/13415
+   · Foreign `listen` needs the wallet OPEN at startup (keychain builds the
+     coinbase). Without -p, grin-wallet PROMPTS on stdin; in a detached tmux the
+     session lingers at the prompt and the port never binds → NOT usable. So for
+     unattended mining the passphrase MUST be available (saved file → -p).
+   · The passwordless-start trick (start bare, open later via open_wallet ECDH)
+     is OWNER API only (owner_api, 3420/13420) — which mining does NOT use. So it
+     does not help here. owner_api is optional (operator balance/sends), not
+     required to mine.
+   · -p trade-off (same as 05/052): the passphrase shows in `ps aux` /
+     /proc/<pid>/cmdline for the listener's lifetime. grin-wallet has no stdin/
+     env-var passphrase input — -p is the only option. Saved pass file is 600.
+
+ FLOW  (new wallet section in Script 07, mainnet + testnet)
+   1. Download/verify grin-wallet binary via lib/grin_wallet_install.sh
+      (factored from Script 05's download/verify)
+   2. init  (grin-wallet init -h)   OR   recover (grin-wallet init -hr, from seed)
+   3. Save passphrase → /opt/grin/solowallet/<net>/<net>_pass.txt (chmod 600)
+        · required for unattended Foreign listen + reboot/watchdog auto-start
+   4. Patch grin-wallet.toml: node_api_secret_path → node's .foreign_api_secret
+   5. Start Foreign listen on 3415/13415 in tmux (launcher reads pass from file,
+      so the pass is not in the tmux command string; -p ps-aux caveat remains)
+   6. Auto-restart layer (borrowed pattern, see 052):
+        · @reboot cron wrapper  → start listener after a boot delay (node first)
+        · */5 watchdog cron      → relaunch if 3415/13415 not listening
+   7. wallet_listener_url already defaults to http://127.0.0.1:3415/v2/foreign
+      (13415 testnet) → node→wallet link is automatic, no extra config
+
+ PORT COLLISION  (must guard)
+   The solo wallet binds Foreign 3415 / 13415 — the grin-wallet DEFAULTS, and
+   exactly what Script 07's wallet_listener_url already points to. But other
+   toolkit wallets may already hold those ports:
+     · 05C cmdwallet              → also defaults to 3415 / 13415
+     · 052 Grin Drop              → patches its own api_listen_port (own ports)
+     · 051 / 055 web wallets      → may run a listener
+   Before starting, Script 07 MUST check `ss -tlnp` for a listener on 3415/13415
+   and, if found, identify it (cmdwallet? drop? unknown) and ABORT with guidance
+   rather than fight for the port. Do NOT auto-kill another service's wallet.
+   Optionally allow a non-default solo wallet port + patch wallet_listener_url to
+   match — but default path is "one wallet owns 3415/13415".
+
+ DRY CONCESSION  (one-script UX, no copy-paste)
+   User requirement: everything inside Script 07 (no jumping scripts). Code
+   requirement (toolkit rule): no duplicated wallet logic. Resolution —
+     · Put wallet launch / @reboot cron / watchdog / pass-file helpers in a NEW
+       sourced lib:  scripts/lib/07_solo_wallet.sh
+     · Script 07 sources it and drives the flow → the USER never leaves Script 07,
+       but the listener+cron+watchdog pattern is shared code, not a paste of 052.
+     · Lib files are sourced, not executed → NO shebang (toolkit convention).
+
+ NEW / TOUCHED FILES
+   scripts/lib/grin_wallet_install.sh   NEW shared lib: grin-wallet download+verify
+                                        (factored from 05; 07 uses it now)
+   scripts/lib/07_solo_wallet.sh        NEW lib: init/recover/listen + the WALLET-
+                                        listener @reboot+watchdog cron (DISTINCT
+                                        from the NODE cron in grin_node_keepalive)
+   scripts/07_grin_mining_solo.sh       source libs + new "Central Wallet" menu
+                                        action(s) for mainnet/testnet
+   /opt/grin/solowallet/<net>/          runtime wallet dir + saved pass (600)
+
+ GUARDRAILS
+   · Port collision check before start (above) — abort, never auto-kill.
+   · Foreign listener down ⇒ coinbase delivery fails when a block is found ⇒
+     reward at risk. The watchdog (step 6) is what makes solo mining safe; note
+     Script 07's existing W) watchdog only watches the STRATUM port, not the
+     wallet listener — this adds the missing half.
+   · Mainnet + testnet wallets independent (separate dir/ports/pass) — never mix.
+   · Saved passphrase is the unattended-operation trade-off; document the -p
+     ps-aux exposure so the operator makes an informed choice.
+
+
+================================================================================
+ PLANNED: Optional Stats Page Access Lock (HTTP Basic Auth)     [design only]
+================================================================================
+
+ GOAL
+   Soft, opt-in protection for the S) stats page for operators who do NOT want it
+   public / crawled / spied. Default = OFF (page stays public as today). A 401
+   gate also covers "don't index" for free (crawlers can't read it).
+
+ SETUP  (one prompt during S) deploy)
+   "Protect the stats page with a username/password? [y/N]"
+     y → prompt user + pass (twice), then:
+         · hash = openssl passwd -apr1 "<pass>"   (NO apache2-utils/htpasswd dep —
+           nginx reads apr1 natively)
+         · write /etc/nginx/.../grin-solo-stats.htpasswd  (user:hash), chmod 640
+           root:<nginx user> so the worker can read it
+         · add to protected locations:
+               auth_basic           "Grin Solo Mining";
+               auth_basic_user_file  <htpasswd path>;
+   HTTPS-ONLY: never serve Basic Auth over plain HTTP. Safe here — S) already
+   runs certbot + HTTP→HTTPS redirect.
+
+ WHAT IS PROTECTED vs LEFT PUBLIC  (the miningpoolstats carve-out)
+   The page exposes /data/poolstats_<net>.json SPECIFICALLY so miningpoolstats.com
+   (external) can poll it. Auth-ing the whole vhost breaks that integration (401).
+   So by default:
+     PROTECT :  location /                 (the HTML dashboard)
+                location /api/*            (status + wallet proxies)
+                location = /data/split_main.json   (nicknames + GRIN figures)
+     PUBLIC  :  location = /data/poolstats_main.json  (miningpoolstats poller)
+                location = /data/poolstats_test.json
+   Optional sub-choice: "Also hide from miningpoolstats? [y/N]" → if y, protect
+   the poolstats endpoints too (accept that public pool listing stops working).
+
+ SYNERGY WITH PAYMENT SPLIT
+   Enabling auth automatically protects split_main.json (the nickname → GRIN
+   figures), so this one knob also answers the income-privacy worry from the
+   payment-split design. Operators who chose "% + GRIN public" but want it behind
+   a login get exactly that here.
+
+ LIGHTER ALTERNATIVE (public-but-not-indexed)
+   For operators who want the page public yet not search-indexed: add
+   `add_header X-Robots-Tag "noindex, nofollow" always;` + a robots.txt Disallow,
+   without Basic Auth. Polite crawlers obey; humans still see the page. Offer as
+   a separate, weaker option — NOT a substitute for the 401 gate.
+
+ MANAGEMENT
+   Re-running S) Configure offers: set / change / remove the user+pass (rewrite
+   or delete the htpasswd file + toggle the auth_basic lines), then nginx -t +
+   reload via shared lib (nginx_test_reload).
+
+ NEW / TOUCHED FILES
+   scripts/07_grin_mining_solo.sh       S-deploy prompt + htpasswd write + conf
+   /etc/nginx/.../grin-solo-stats.htpasswd   runtime cred file (chmod 640)
+
+ GUARDRAILS
+   · openssl passwd -apr1 → no extra OS package; never store the plaintext pass.
+   · htpasswd file 640 root:<nginx user>; not world-readable.
+   · HTTPS-only; auth lines added only after/with the certbot 443 block.
+   · Keep poolstats_*.json public unless operator opts to hide (miningpoolstats).
+   · Default OFF — opt-in; never silently lock an existing public page on upgrade.
+
+================================================================================
+
+
+================================================================================
+ PLANNED: Node Sync Watchdog (auto-restart a stuck/unsynced node)  [design only]
+================================================================================
+
+ GOAL
+   Every 5 min, confirm the local node is actually SYNCED (not merely "process
+   running") and auto-restart it in tmux if it is down OR wedged. Critical for
+   solo mining: a hung node holds its port but serves the stratum a DEAD tip →
+   miners waste hashrate and produce orphans.
+
+ WHY "process running" IS NOT TRUSTED
+   A stuck grin process keeps the API port bound and the PID alive but its tip
+   stops advancing. pgrep / ss says "up"; the chain says "stale". Health must be
+   judged by HEIGHT PROGRESS + agreement with an EXTERNAL reference, not by PID.
+
+ HEALTH SIGNALS  (combine — no single signal decides)
+   a) Port listening?  (ss on 3413 / 13413)              — process present
+   b) get_status reachable?  (Owner API, localhost, .api_secret)
+                                                          — process responsive
+   c) sync_status field  (e.g. no_sync = caught up; *_sync = catching up)
+   d) local tip height  (from get_status)
+   e) external reference height  (2+ INDEPENDENT public sources, consensus/max)
+   f) height ADVANCING across the last N checks  (state file: last height + ts)
+
+ EXTERNAL REFERENCE  (the part most easy to get wrong)
+   · api.grin.money / testapi.grin.money are THIS operator's OWN node (toolkit
+     node-API nginx). Using them as "truth" is CIRCULAR — if the local node is
+     stuck, so is that endpoint. DO NOT use own endpoints as the reference.
+   · Use 2+ THIRD-PARTY sources (independent node Foreign API get_tip), take
+     max/consensus so one flaky source can't trigger a restart. Default list:
+         mainnet : grincoin.org · main.gri.mw          (Foreign API get_tip)
+         testnet : testnet.grincoin.org · test.gri.mw
+     Configurable — operator may replace/extend. (api.grin.money / testapi.grin.
+     money are the operator's OWN node — NEVER in this list.)
+   · FETCH FAILURE ≠ RESTART: if the external source is unreachable, do NOT
+     restart (that is the external's problem). Fall back to signal (f) only.
+     External comparison is a CONFIRMING signal, never the sole trigger.
+
+ DECISION LOGIC  (per network, each run)
+   if port not listening OR get_status unreachable:
+       → RESTART  (node down / hung)
+   elif sync_status == catching-up AND height advancing:
+       → OK, no action            (legitimate initial/post-restart sync)
+   elif external reachable AND (ref_height - local_height) > TOLERANCE
+        AND height NOT advancing for >= N checks:
+       → RESTART  (stuck or forked on a dead tip)
+   else:
+       → OK
+   TOLERANCE = 5 blocks max (propagation + 60s timing slack); N ~ 2-3 checks.
+
+ ANTI-FLAP  (must, or the watchdog makes things worse)
+   · State file /opt/grin/solo-stats/node_watchdog_<net>.json:
+       last_height, last_height_ts, stuck_count, last_restart_ts
+   · Rate-limit: no more than 1 restart per COOLDOWN (e.g. 20 min); back off on
+     repeated failures.
+   · POST-RESTART GRACE: skip stuck-detection for ~15-30 min after a restart
+     (the node is legitimately behind-but-advancing while it catches up).
+   · Log every decision + action → /opt/grin/logs/node-watchdog.log; optional
+     alert hook.
+
+ RESTART ACTION  (reuse, don't reinvent)
+   · Reuse Script 03's try_start_from_known_dir(network, port) PATTERN (kills stale
+     session, tmux start, waits for port) — BUT conf-ONLY resolution: drop 03's
+     default-dir fallback (see NODE RESOLVER). A node not in the conf is not
+     restarted.
+   · Reuse _grin_session_name() for the tmux session name.
+   · MUST prefix tmux with SHELL=/bin/bash for cron use. NOTE: 03's current
+     try_start_from_known_dir uses bare `tmux new-session` (03 line ~1287) —
+     a latent cron bug; the shared version must add the SHELL=/bin/bash prefix
+     (Script 07 / 052 already do this).
+   · Restarting the node also revives the STRATUM (it lives in grin-server.toml).
+     It does NOT revive the wallet listener — that is the Central-Wallet watchdog.
+
+ REUSE / DRY  (remove today's triple-duplication)
+   _grin_session_name() is currently copied in 01, 03, AND 07; try_start logic in
+   01 + 03. Extract into a shared lib:
+       scripts/lib/grin_node_control.sh
+         _grin_session_name() · find_grin_binary_dir() · start_node_tmux()
+         (SHELL=/bin/bash) · node_get_status() · wait_for_port()
+   01 / 03 / 07 source it → one implementation, watchdog reuses it.
+
+ RELATION TO OTHER WATCHDOGS  (three today; consider unifying)
+   · 03  @reboot autostart  — starts node at BOOT (cron grin_autostart_<net>)
+   · 07  W) stratum watchdog — checks stratum PORT only (not sync, not wallet)
+   · NEW node-sync watchdog  — checks SYNC + restarts a wedged node
+   · Central-Wallet watchdog — keeps the coinbase Foreign listener alive
+   Eventually fold the per-concern */5 crons into ONE "solo health" watchdog
+   (node sync + stratum + wallet listener) to avoid 3 overlapping cron jobs.
+
+ PER-NETWORK
+   Mainnet (3413) and testnet (13413) independent: separate state files,
+   tolerances, external references, cron entries. Never cross-compare.
+
+ NEW / TOUCHED FILES
+   scripts/lib/grin_node_control.sh     NEW shared lib (session/start/status)
+   scripts/lib/grin_node_keepalive.sh   NEW: reboot-autostart + node-sync watchdog
+                                        (NOT "07_node_watchdog.sh" — see RESOLVED)
+   scripts/07_grin_mining_solo.sh       menu: enable/disable node-sync watchdog
+   /opt/grin/solo-stats/node_watchdog_<net>.json   runtime state
+   /opt/grin/logs/node-watchdog.log     runtime log
+   (cron: */5 * * * * — SHELL=/bin/bash in the wrapper)
+
+ GUARDRAILS
+   · Never trust PID/port alone — require height progress + external agreement.
+   · Never use own (api.grin.money) endpoint as the external truth (circular).
+   · External fetch failure must NOT cause a restart.
+   · Anti-flap: cooldown + post-restart grace + state file, or risk a kill loop.
+   · SHELL=/bin/bash for any tmux launched from cron.
+   · Do not auto-restart during a known maintenance window (optional flag).
+
+================================================================================
+
+
+================================================================================
+ PLANNED: Menu Restructure — Grouped Sub-menus              [design only]
+================================================================================
+
+ WHY
+   The flat letter scheme (A · B/C/D/E · F/G/I/J · L/S/W) already duplicates every
+   Stratum action per network. Adding Wallet (×2 nets) + 2 more watchdogs would
+   push it past ~20 single-key items. Collapse into 4 functional groups; each
+   submenu handles BOTH networks (network chosen inside), so the per-network
+   letter duplication disappears.
+
+ NEW TOP MENU
+   The compact stratum-status header stays at the top of every screen.
+
+     A) Node & Mining Status
+
+     1) Wallet              ▸  setup · recover · listener · auto-restart
+     2) Stratum             ▸  setup · configure · publish · restrict
+     3) Stats & Web         ▸  live dashboard · web page · payment · access lock
+     4) Health / Watchdogs  ▸  node-sync · stratum · wallet listener
+
+     0) Back
+
+ SUBMENUS  (each action prompts mainnet / testnet / both where relevant)
+
+   1) WALLET   (Central Wallet, Option C — /opt/grin/solowallet/<net>/)
+        1) Setup / Recover     init -h   OR   recover (init -hr from seed)
+        2) Listener            start / stop  (Foreign listen 3415 / 13415)
+        3) Auto-restart        toggle @reboot cron + */5 watchdog
+        4) Status / address    show listener state + wallet address
+        0) Back
+
+   2) STRATUM   (was B/C/D/E mainnet + F/G/I/J testnet → one set)
+        1) Setup               enable_stratum_server · wallet_listener_url · burn
+        2) Configure           enable / bind / wallet / burn
+        3) Publish             open 0.0.0.0:<port> to miners (+ firewall)
+        4) Restrict            revert to 127.0.0.1
+        0) Back
+
+   3) STATS & WEB
+        1) Live dashboard      terminal stats            (was L)
+        2) Deploy / update     nginx stats page          (was S)
+                                 · prompts payment-split prefixes
+                                 · prompts access lock (Basic Auth)
+        3) Access lock         set / change / remove Basic Auth (quick edit)
+        4) Payment prefixes    edit nickname prefixes (quick edit)
+        0) Back
+
+   4) HEALTH / WATCHDOGS
+        1) Node-sync watchdog  enable/disable (ext refs, tolerance 5)   [NEW]
+        2) Stratum watchdog    enable/disable                          (was W)
+        3) Wallet listener wd  enable/disable                          [NEW]
+        4) Status              show all watchdog crons + last results
+        0) Back
+        NOTE: candidate to merge 1+2+3 into ONE "solo health" */5 watchdog so
+        there is a single cron instead of three overlapping ones.
+
+ LETTER → NEW HOME  (migration map for implementer)
+     A  Status .................. A           (kept)
+     B/F Setup Stratum .......... 2 ▸ 1
+     C/G Configure Stratum ...... 2 ▸ 2
+     D/I Publish Stratum ........ 2 ▸ 3
+     E/J Restrict Stratum ....... 2 ▸ 4
+     L  Live stats .............. 3 ▸ 1
+     S  Web page ................ 3 ▸ 2  (+ payment prefixes + access lock)
+     W  Stratum watchdog ........ 4 ▸ 2
+     (new) Wallet ............... 1 ▸ *
+     (new) Node-sync watchdog ... 4 ▸ 1
+     (new) Wallet listener wd ... 4 ▸ 3
+
+ IMPLEMENTATION NOTES
+   · Rewrite the script header menu comment + show_menu() + main() dispatch to a
+     two-level loop (top menu → submenu functions, each its own while-loop).
+   · Network prompt is asked INSIDE each action (reuse the existing "1) Mainnet
+     2) Testnet" pattern already used by L) Live stats), not as separate letters.
+   · Keep A) as a letter (always-visible overview) + the compact status header.
+   · No behaviour change to the underlying actions — purely how they are reached.
+
+================================================================================
+
+
+================================================================================
+ RESOLVED: Pre-Code Decisions                          [locks the sections above]
+================================================================================
+
+ LIB BOUNDARIES  (3 shared libs; sourced, so NO shebang)
+   lib/grin_node_control.sh    Primitives: _grin_session_name · resolve node from
+                               conf · start_node_tmux (SHELL=/bin/bash) ·
+                               node_get_status · wait_for_port.  Sourced 01/03/07.
+   lib/grin_node_keepalive.sh  Reboot-autostart cron + node-sync watchdog cron
+                               (policy on top of control.sh).     Sourced 03/07.
+   lib/grin_wallet_install.sh  grin-wallet download + verify, factored from 05.
+                               Used by 07 now; 05/051/052 adapt later.
+   (Rejected name "grin_node_watchdog.sh": 01/03 would source "watchdog" just to
+    start a node, and it hides the boot-start half. "keepalive" = start@boot +
+    restart-if-stuck; "control" = the primitives both layers stand on.)
+
+ REBOOT-AUTOSTART = ONE SHARED, TAG-GUARDED CRON ENTRY
+   · Single @reboot entry per network, fixed comment tag (reuse 03's
+     grin_autostart_<net>). Managed ONLY via keepalive lib.
+   · 07 reads `crontab -l`: scheduled → show state; not scheduled → offer to
+     activate. Activating writes the SAME tagged entry → 03 then shows it too.
+   · Add is idempotent (grep tag → replace, never append) → no double entry, no
+     double node-start at boot. 03 and 07 are two front-doors to ONE cron.
+
+ NODE RESOLVER = /opt/grin/conf/grin_instances_location.conf  (authoritative)
+   · Keepalive/watchdog manage ONLY nodes listed there.
+   · NO default-dir fallback AT ALL (decided). 03's try_start_from_known_dir falls
+     back to default dirs — the SHARED control.sh resolver must NOT. A node absent
+     from the conf is simply not managed (never guess a binary to restart).
+   · ⇒ the reused starter is ADAPTED to conf-only resolution, not copied as-is.
+
+ PROCESS SUPERVISION = cron + tmux, NOT systemd  (decided)
+   · Node stays in tmux (keeps `tmux attach` TUI; toolkit convention).
+   · systemd Restart= only catches process EXIT — it CANNOT see a hung-but-
+     running node stuck on a dead tip, which is the whole reason for the sync
+     watchdog. systemd would NOT remove the need for the height check.
+   · Autostart + watchdog stay in cron (consistent with 03/052, one mechanism).
+     [Future: one systemd timer could unify boot+periodic, but only after
+     migrating 03 off cron — else cron vs systemd double-start.]
+
+ EXTERNAL REFERENCE = server-side curl  (CORS does NOT apply)
+   · Watchdog fetches get_tip via curl on the VPS → CORS is a browser-only rule,
+     irrelevant here. Requirement: endpoint publicly reachable, no/known auth,
+     get_tip returns a parseable height.
+   · If the BROWSER ever needs network height, proxy via nginx (like /api/status)
+     → avoids CORS and hides any auth.
+   · [CONFIRM AT CODE TIME] exact URL/method/auth of grincoin.org · main.gri.mw ·
+     testnet.grincoin.org · test.gri.mw Foreign API get_tip.
+
+ MATURED-BLOCK COUNTING = CHAIN-VERIFY AT MATURITY  (decided)
+   · Cheap: solo found-blocks are RARE; each verified ONCE at 1440 maturity →
+     a few get_block calls/day, never a hot path. Correctness >> cost; trusting
+     the log would over-pay on orphans (real money).
+   · Mechanism: extend FOUND_RE to CAPTURE the hash (line already has "hash <H>"),
+     then at maturity compare to node get_block(height) (Foreign API). Match →
+     count; mismatch/absent → orphan, exclude.
+
+ LEDGER TIME = UTC  (decided)
+   · Store day-keys + timestamps in UTC (bucket by UTC calendar day). Confirm
+     grin log TZ when converting log lines → epoch (collector currently parses
+     log timestamps as LOCAL) so the UTC day boundary is correct.
+   · Homepage converts UTC → the viewer's OS local timezone for display.
+
+ TESTING
+   · Local: bash -n + /check + /review only (cannot run — needs Linux + root VPS).
+   · Operator runs live on the VPS as root. Build incrementally; syntax-clean
+     each piece before moving on.
 
 ================================================================================

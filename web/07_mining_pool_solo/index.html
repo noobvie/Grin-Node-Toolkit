@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Operator stats page — keep it out of search engines. -->
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" type="image/svg+xml" href="logo.svg">
+<title>Grin Solo Mining Stats</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg-1: #05080d; --bg-2: #0d1422; --panel: #141b25; --border: #3a4658;
+    --text: #f4f8fd; --text-hi: #ffffff; --muted: #c7d1dc;
+    --green: #5ee08a; --yellow: #ffd84d; --red: #ff8079;
+    --main: #ffcb45; --test: #c79bff; --chip-bg: rgba(255,255,255,0.07);
+    --main-rgb: 255,203,69; --test-rgb: 199,155,255;
+  }
+  html[data-theme="light"] {
+    --bg-1: #eef1f5; --bg-2: #ffffff; --panel: #ffffff; --border: #b9c2cd;
+    --text: #11151a; --text-hi: #000000; --muted: #3a424c;
+    --green: #157f33; --yellow: #8a5d00; --red: #c0202c;
+    --main: #9a6b00; --test: #6f29d6; --chip-bg: rgba(0,0,0,0.05);
+    --main-rgb: 154,107,0; --test-rgb: 111,41,214;
+  }
+
+  body {
+    background:
+      radial-gradient(820px 460px at 10% -8%, rgba(255,203,69,0.12), transparent 60%),
+      radial-gradient(820px 460px at 92% -6%, rgba(199,155,255,0.12), transparent 60%),
+      radial-gradient(1200px 760px at 50% -12%, var(--bg-2) 0%, var(--bg-1) 58%);
+    background-attachment: fixed;
+    color: var(--text); font-family: 'Courier New', monospace; min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 2.5rem 1rem; transition: color .25s;
+  }
+  html[data-theme="light"] body {
+    background:
+      radial-gradient(820px 460px at 10% -8%, rgba(154,107,0,0.06), transparent 60%),
+      radial-gradient(820px 460px at 92% -6%, rgba(111,41,214,0.05), transparent 60%),
+      radial-gradient(1200px 760px at 50% -12%, var(--bg-2) 0%, var(--bg-1) 58%);
+    background-attachment: fixed;
+  }
+  .wrap { width: 100%; max-width: 860px; }
+
+  header {
+    width: 100%; max-width: 860px; margin-bottom: 1.6rem;
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+  }
+  .brand { display: flex; align-items: center; gap: .85rem; }
+  .brand img { width: 46px; height: 46px; flex: none; }
+  header h1 {
+    font-size: 1.95rem; color: var(--text-hi); letter-spacing: .02em; line-height: 1.1;
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  }
+  header h1 .grin { color: var(--main); text-shadow: 0 0 22px rgba(var(--main-rgb), .55); }
+  .slogan { color: var(--text); font-size: 1rem; margin-top: .45rem; opacity: .92; }
+  .theme-toggle {
+    background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 999px; padding: .5rem .9rem; font-family: inherit; font-size: .95rem;
+    cursor: pointer; flex: none; transition: background .2s; text-decoration: none; white-space: nowrap;
+  }
+  .theme-toggle:hover { background: var(--border); }
+
+  .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%;
+    background: var(--muted); box-shadow: 0 0 0 3px rgba(128,128,128,.15); }
+  .dot.ok   { background: var(--green);  box-shadow: 0 0 0 3px rgba(63,185,80,.20); }
+  .dot.warn { background: var(--yellow); box-shadow: 0 0 0 3px rgba(227,179,65,.20); }
+  .dot.err  { background: var(--red);    box-shadow: 0 0 0 3px rgba(255,107,99,.20); }
+
+  /* single-column network sections */
+  .panel {
+    width: 100%; max-width: 860px; margin-bottom: 1.5rem;
+    background: var(--panel); border: 1px solid var(--border);
+    border-top: 4px solid var(--border); border-radius: 14px;
+    padding: 1.5rem 1.6rem 1.7rem; transition: opacity .3s, transform .15s;
+    box-shadow: 0 14px 36px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.04);
+  }
+  .panel[data-net="main"] { border-top-color: var(--main);
+    background: linear-gradient(180deg, rgba(var(--main-rgb),.10), rgba(var(--main-rgb),.02) 40%), var(--panel);
+    box-shadow: 0 0 28px rgba(var(--main-rgb),.10), 0 14px 36px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.04); }
+  .panel[data-net="test"] { border-top-color: var(--test);
+    background: linear-gradient(180deg, rgba(var(--test-rgb),.11), rgba(var(--test-rgb),.02) 40%), var(--panel);
+    box-shadow: 0 0 28px rgba(var(--test-rgb),.10), 0 14px 36px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.04); }
+  html[data-theme="light"] .panel { box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+  /* offline networks stay fully readable — the status dot + label carry the cue */
+  .panel.offline { opacity: 1; }
+
+  .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.3rem; }
+  .badge { display: inline-flex; align-items: center; gap: .6rem; font-size: 1.7rem; font-weight: 800; letter-spacing: .1em; }
+  .badge .net { text-shadow: none; }
+  .panel[data-net="main"] .badge .net { color: var(--main); }
+  .panel[data-net="test"] .badge .net { color: var(--test); }
+  .unit { font-size: .72rem; color: var(--muted); background: var(--chip-bg);
+    border: 1px solid var(--border); border-radius: 999px; padding: .16rem .6rem; letter-spacing: .04em; }
+  .panel-status { font-size: .9rem; color: var(--muted); display: flex; align-items: center; gap: .45rem; }
+
+  /* metric tiles */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .9rem; }
+  .tile { background: var(--chip-bg); border: 1px solid var(--border); border-radius: 9px; padding: .85rem .95rem; }
+  .tile .label { font-size: .76rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .4rem; }
+  .tile .value { font-size: 1.5rem; font-weight: bold; color: var(--text-hi); word-break: break-all; }
+  .tile .value.green { color: var(--green); } .tile .value.yellow { color: var(--yellow); }
+  .tile .value.red { color: var(--red); } .tile .value.dim { color: var(--muted); font-size: 1.05rem; }
+
+  /* miners */
+  .miners { margin-top: 1.4rem; border-top: 1px solid var(--border); padding-top: 1.1rem; }
+  .miners-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .5rem; margin-bottom: .8rem; }
+  .miners-head h3 { font-size: 1.05rem; color: var(--text-hi); letter-spacing: .05em; }
+  .miners-sum { font-size: .9rem; color: var(--muted); }
+  .miners-sum b { color: var(--text-hi); }
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .95rem; min-width: 540px; }
+  th, td { text-align: right; padding: .5rem .6rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-size: .76rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+  td { color: var(--text); }
+  td .w { color: var(--text-hi); font-weight: bold; }
+  tr.off td { color: var(--muted); }
+  .st { display: inline-flex; align-items: center; gap: .4rem; }
+  .st.on  { color: var(--green); } .st.off { color: var(--red); }
+  .miners-empty { color: var(--muted); font-size: .92rem; padding: .6rem 0; }
+
+  /* found-blocks table (per network) */
+  .blocks { margin-top: 1.4rem; border-top: 1px solid var(--border); padding-top: 1.1rem; }
+  .blocks-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .5rem; margin-bottom: .8rem; }
+  .blocks-head h3 { font-size: 1.05rem; color: var(--text-hi); letter-spacing: .05em; }
+  .blocks-sum { font-size: .9rem; color: var(--muted); }
+  .blocks-sum b { color: var(--text-hi); }
+  .blocks table { min-width: 460px; }
+  .blocks td .h { color: var(--text-hi); font-weight: bold; }
+  .blocks td .hash { color: var(--muted); font-size: .88rem; }
+  .blocks-empty { color: var(--muted); font-size: .92rem; padding: .6rem 0; }
+  .blocks-more { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 999px; padding: .4rem .9rem; font-family: inherit; font-size: .88rem;
+    cursor: pointer; margin-top: .8rem; transition: background .2s; }
+  .blocks-more:hover { background: var(--border); }
+  .blocks-more[hidden] { display: none; }
+
+  /* chart card */
+  .chart-card { width: 100%; max-width: 860px; margin-top: .5rem; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 12px; padding: 1.4rem 1.5rem 1.6rem; }
+  .chart-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .8rem; margin-bottom: 1rem; }
+  .chart-head h2 { font-size: 1.25rem; color: var(--text-hi); letter-spacing: .04em; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+  .seg button { background: transparent; color: var(--muted); border: none; font-family: inherit; font-size: .9rem; padding: .45rem .95rem; cursor: pointer; }
+  .seg button.active { background: var(--chip-bg); color: var(--text-hi); font-weight: bold; }
+  .legend { display: flex; gap: 1.2rem; font-size: .85rem; color: var(--muted); margin-bottom: .6rem; }
+  .legend span { display: inline-flex; align-items: center; gap: .4rem; }
+  .legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .legend i.m { background: var(--main); } .legend i.t { background: var(--test); }
+  #chart svg { width: 100%; height: auto; display: block; }
+  #chart text { fill: var(--muted); font-size: 11px; font-family: 'Courier New', monospace; }
+  .chart-empty { color: var(--muted); font-size: .95rem; padding: 1.5rem 0; text-align: center; }
+  .mtag { font-size: .78rem; padding: .1rem .55rem; border-radius: 999px; border: 1px solid var(--border); }
+  .mtag.maturing { color: var(--yellow); } .mtag.mature { color: var(--green); } .mtag.unknown { color: var(--muted); }
+
+  /* reward split (payment calc) */
+  .split-meta { color: var(--muted); font-size: .92rem; margin-bottom: .9rem; }
+  .split-meta b { color: var(--text-hi); }
+  #split-table { min-width: 420px; }
+  #split-table td .grin { color: var(--green); font-weight: bold; }
+  .split-foot { color: var(--muted); font-size: .82rem; margin-top: .9rem; line-height: 1.6; }
+  .split-empty { color: var(--muted); font-size: .92rem; padding: .6rem 0; }
+  #split-table tr.clk { cursor: pointer; }
+  #split-table tr.clk:hover td { background: var(--border); }
+  #split-table td .w.lnk { text-decoration: underline dotted; text-underline-offset: 3px; }
+  .split-person { margin-top: 1.1rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+  .sp-head { display: flex; align-items: baseline; gap: .9rem; flex-wrap: wrap; margin-bottom: .5rem; }
+  .sp-head h3 { font-size: 1.05rem; margin: 0; }
+  .sp-head .back { color: var(--main); cursor: pointer; font-size: .85rem; }
+  .sp-head .off { color: var(--muted); font-weight: normal; font-size: .85rem; }
+  .sp-stats { color: var(--muted); font-size: .9rem; margin-bottom: .8rem; line-height: 1.6; }
+  .sp-stats b { color: var(--text-hi); }
+
+  footer { color: var(--muted); font-size: .82rem; text-align: center; margin-top: 2rem; line-height: 1.7; max-width: 860px; }
+  footer code { color: var(--text); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <img src="logo.svg" alt="Grin">
+    <div>
+      <h1><span class="grin">GRIN</span>&nbsp;Solo Mining</h1>
+      <p class="slogan" id="slogan">Solo mining — your node, your keys, your blocks.</p>
+    </div>
+  </div>
+  <div style="display:flex; gap:.6rem; align-items:center; flex:none;">
+    <a class="theme-toggle" href="setup-solo-mining.html">⚙ Miner Setup</a>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme">☾ Dark</button>
+  </div>
+</header>
+
+<!-- ── MAINNET ── -->
+<section class="panel" data-net="main" id="panel-main">
+  <div class="panel-head">
+    <span class="badge"><span class="net">MAINNET</span><span class="unit">GRIN</span></span>
+    <span class="panel-status"><span id="main-dot" class="dot"></span><span id="main-state">—</span></span>
+  </div>
+  <div class="tiles">
+    <div class="tile"><div class="label">Block Height</div><div class="value" id="main-height">—</div></div>
+    <div class="tile"><div class="label">Network Difficulty</div><div class="value" id="main-difficulty">—</div></div>
+    <div class="tile"><div class="label">Network Hashrate</div><div class="value green" id="main-hashrate">—</div></div>
+    <div class="tile"><div class="label">Connected Peers</div><div class="value" id="main-peers">—</div></div>
+    <div class="tile"><div class="label">Blocks Found (24h)</div><div class="value" id="main-blocks24">—</div></div>
+    <div class="tile"><div class="label">Coinbase Maturing</div><div class="value dim" id="main-maturing">—</div></div>
+    <div class="tile"><div class="label">Active Miners</div><div class="value dim" id="main-miners">—</div></div>
+    <div class="tile"><div class="label">Wallet Listener</div><div class="value dim" id="main-wallet">—</div></div>
+  </div>
+  <div class="miners">
+    <div class="miners-head">
+      <h3>Miners</h3>
+      <span class="miners-sum" id="main-miners-sum">—</span>
+    </div>
+    <div class="table-scroll"><table id="main-miners-table"><tbody></tbody></table></div>
+    <div class="miners-empty" id="main-miners-empty"></div>
+  </div>
+  <div class="blocks">
+    <div class="blocks-head">
+      <h3>Blocks found by this solo pool</h3>
+      <span class="blocks-sum" id="main-blocks-sum">—</span>
+    </div>
+    <div class="table-scroll"><table id="main-blocks-table"><tbody></tbody></table></div>
+    <div class="blocks-empty" id="main-blocks-empty"></div>
+    <button type="button" class="blocks-more" id="main-blocks-more" hidden></button>
+  </div>
+  <p class="miners-empty" id="main-note" style="display:none"></p>
+</section>
+
+<!-- ── TESTNET ── -->
+<section class="panel" data-net="test" id="panel-test">
+  <div class="panel-head">
+    <span class="badge"><span class="net">TESTNET</span><span class="unit">tGRIN</span></span>
+    <span class="panel-status"><span id="test-dot" class="dot"></span><span id="test-state">—</span></span>
+  </div>
+  <div class="tiles">
+    <div class="tile"><div class="label">Block Height</div><div class="value" id="test-height">—</div></div>
+    <div class="tile"><div class="label">Network Difficulty</div><div class="value" id="test-difficulty">—</div></div>
+    <div class="tile"><div class="label">Network Hashrate</div><div class="value green" id="test-hashrate">—</div></div>
+    <div class="tile"><div class="label">Connected Peers</div><div class="value" id="test-peers">—</div></div>
+    <div class="tile"><div class="label">Blocks Found (24h)</div><div class="value" id="test-blocks24">—</div></div>
+    <div class="tile"><div class="label">Coinbase Maturing</div><div class="value dim" id="test-maturing">—</div></div>
+    <div class="tile"><div class="label">Active Miners</div><div class="value dim" id="test-miners">—</div></div>
+    <div class="tile"><div class="label">Wallet Listener</div><div class="value dim" id="test-wallet">—</div></div>
+  </div>
+  <div class="miners">
+    <div class="miners-head">
+      <h3>Miners</h3>
+      <span class="miners-sum" id="test-miners-sum">—</span>
+    </div>
+    <div class="table-scroll"><table id="test-miners-table"><tbody></tbody></table></div>
+    <div class="miners-empty" id="test-miners-empty"></div>
+  </div>
+  <div class="blocks">
+    <div class="blocks-head">
+      <h3>Blocks found by this solo pool</h3>
+      <span class="blocks-sum" id="test-blocks-sum">—</span>
+    </div>
+    <div class="table-scroll"><table id="test-blocks-table"><tbody></tbody></table></div>
+    <div class="blocks-empty" id="test-blocks-empty"></div>
+    <button type="button" class="blocks-more" id="test-blocks-more" hidden></button>
+  </div>
+  <p class="miners-empty" id="test-note" style="display:none"></p>
+</section>
+
+<!-- ── Found-blocks history ── -->
+<section class="chart-card">
+  <div class="chart-head">
+    <h2>Blocks Found</h2>
+    <div class="seg" id="range-seg">
+      <button type="button" data-range="daily" class="active">Daily · 30d</button>
+      <button type="button" data-range="weekly">Weekly · 12w</button>
+      <button type="button" data-range="monthly">Monthly · 12mo</button>
+    </div>
+  </div>
+  <div class="legend"><span><i class="m"></i>Mainnet</span><span><i class="t"></i>Testnet</span></div>
+  <div id="chart"><div class="chart-empty">Loading block history…</div></div>
+</section>
+
+<!-- ── Reward split (payment calc, mainnet) — hidden unless data/split_main.json exists ── -->
+<section class="chart-card" id="split-card" style="display:none">
+  <div class="chart-head">
+    <h2>Reward Split · <span style="color:var(--main)">Mainnet</span></h2>
+    <div class="seg" id="split-seg">
+      <button type="button" data-period="daily">Daily</button>
+      <button type="button" data-period="weekly" class="active">Weekly</button>
+      <button type="button" data-period="monthly">Monthly</button>
+      <button type="button" data-period="yearly">Yearly</button>
+    </div>
+  </div>
+  <p class="split-meta" id="split-meta">—</p>
+  <div class="table-scroll"><table id="split-table"><tbody></tbody></table></div>
+  <p class="split-empty" id="split-empty" style="display:none"></p>
+  <div id="split-person" class="split-person" style="display:none"></div>
+  <p class="split-foot">Click a nickname for its workers. Matured coinbase split by work done (share-difficulty), per nickname. A single day can look lumpy — <b>weekly/monthly are the settlement cadence</b>. The operator pays each nickname out-of-band; no Grin address is stored or shown.</p>
+</section>
+
+<footer>
+  <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer" style="color:var(--main)">Grin Node Toolkit</a> · solo mining stats · Cuckatoo32 · <a href="setup-solo-mining.html" style="color:var(--main)">Miner setup guide</a><br>
+  Live node + wallet every 10 s · blocks &amp; per-miner hashrate from node log (collector) · coinbase matures after 1440 blocks (~24 h)<br>
+  Per-miner stats need <code>file_log_level = "INFO"</code> on the node · external pollers: <code>data/poolstats_&lt;net&gt;.json</code>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  // ── Theme ──
+  var root = document.documentElement, toggle = document.getElementById('theme-toggle');
+  function applyTheme(t) { root.setAttribute('data-theme', t); toggle.textContent = (t === 'light') ? '☀ Light' : '☾ Dark'; }
+  var saved = null; try { saved = localStorage.getItem('grinSoloTheme'); } catch (e) {}
+  if (!saved) saved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+  applyTheme(saved);
+  toggle.addEventListener('click', function () {
+    var next = (root.getAttribute('data-theme') === 'light') ? 'dark' : 'light';
+    applyTheme(next); try { localStorage.setItem('grinSoloTheme', next); } catch (e) {}
+  });
+
+  // ── Operator slogan (data/config.json: {"slogan":"…"}) — editable any time,
+  // set at deploy time, falls back to the default in the markup. ──
+  fetch('data/config.json', { cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (c) { if (c && c.slogan) document.getElementById('slogan').textContent = c.slogan; })
+    .catch(function () {});
+
+  // ── State ──
+  var MATURITY = { main: 1440, test: 1440 };
+  var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var NETS = {
+    main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', prevDiff: null, prevTs: null },
+    test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', prevDiff: null, prevTs: null }
+  };
+  var STATE = { tip: { main: null, test: null }, blocks: { main: [], test: [] }, miners: { main: [], test: [] }, loaded: { main: false, test: false }, range: 'daily', blocksExpanded: { main: false, test: false } };
+  var BLOCKS_PREVIEW = 10;   // rows shown before "show all"
+
+  function fmtNum(n) {
+    if (n >= 1e12) return (n/1e12).toFixed(2)+'T'; if (n >= 1e9) return (n/1e9).toFixed(2)+'G';
+    if (n >= 1e6) return (n/1e6).toFixed(2)+'M'; if (n >= 1e3) return (n/1e3).toFixed(2)+'k'; return String(n);
+  }
+  // hashrate (input already in G/s) → readable unit
+  function fmtHr(gps) {
+    if (gps == null) return '—';
+    if (gps >= 1e6) return (gps/1e6).toFixed(2)+' MG/s';
+    if (gps >= 1e3) return (gps/1e3).toFixed(2)+' kG/s';
+    return gps.toFixed(2)+' G/s';
+  }
+  function calcHashrate(net, diff, nowTs) {
+    var s = NETS[net];
+    if (s.prevDiff === null || s.prevTs === null) { s.prevDiff = diff; s.prevTs = nowTs; return 'measuring…'; }
+    var delta = diff - s.prevDiff, dt = (nowTs - s.prevTs) / 1000; s.prevDiff = diff; s.prevTs = nowTs;
+    if (delta <= 0 || dt <= 0) return 'measuring…';
+    return fmtHr(delta * 42 / dt / 16384);
+  }
+  function syncLabel(s) { return (!s || s === 'no_sync') ? { text: 'synced', cls: 'ok' } : { text: String(s).replace(/_/g, ' '), cls: 'warn' }; }
+
+  function set(id, text, cls) {
+    var el = document.getElementById(id); if (!el) return;
+    el.textContent = text; el.className = 'value' + (cls ? ' ' + cls : '');
+  }
+  function relAge(s) {
+    if (s == null) return '';
+    if (s < 90) return Math.max(0, Math.round(s)) + 's';
+    if (s < 5400) return Math.round(s/60) + 'm';
+    if (s < 172800) return (s/3600).toFixed(1) + 'h';
+    return Math.round(s/86400) + 'd';
+  }
+
+  function setPanelOffline(net, dotCls, stateText, note) {
+    document.getElementById('panel-' + net).classList.add('offline');
+    document.getElementById(net + '-dot').className = 'dot ' + dotCls;
+    document.getElementById(net + '-state').textContent = stateText;
+    var n = document.getElementById(net + '-note');
+    n.textContent = note; n.style.display = note ? 'block' : 'none';
+    set(net + '-height', '—'); set(net + '-difficulty', '—'); set(net + '-hashrate', '—'); set(net + '-peers', '—');
+    STATE.tip[net] = null; NETS[net].prevDiff = null; NETS[net].prevTs = null;
+  }
+
+  function pollNet(net) {
+    var nowTs = Date.now();
+    return fetch(NETS[net].status, { method: 'GET' })
+      .then(function (res) {
+        if (res.status === 404) { setPanelOffline(net, 'warn', 'not deployed', 'This network is not configured on this server.'); throw { handled: true }; }
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (data) {
+        var ok = data && data.result && data.result.Ok; if (!ok) throw new Error('unexpected response');
+        document.getElementById('panel-' + net).classList.remove('offline');
+        var note = document.getElementById(net + '-note'); note.textContent = ''; note.style.display = 'none';
+        var tip = ok.tip || {}, height = tip.height, diff = tip.total_difficulty, peers = ok.connections, sync = syncLabel(ok.sync_status);
+        STATE.tip[net] = (height !== undefined) ? Number(height) : null;
+        document.getElementById(net + '-dot').className = 'dot ' + sync.cls;
+        document.getElementById(net + '-state').textContent = sync.text;
+        set(net + '-height', height !== undefined ? Number(height).toLocaleString() : '—');
+        set(net + '-difficulty', diff !== undefined ? fmtNum(diff) : '—');
+        set(net + '-peers', peers !== undefined ? String(peers) : '—', Number(peers) > 0 ? 'green' : 'yellow');
+        var hr = diff !== undefined ? calcHashrate(net, diff, nowTs) : '—';
+        set(net + '-hashrate', hr, hr && hr.indexOf('G/s') !== -1 ? 'green' : 'dim');
+        return true;
+      })
+      .catch(function (err) {
+        if (err && err.handled) return false;
+        setPanelOffline(net, 'err', 'unreachable', 'Node not responding — retrying every 10 s.');
+        return false;
+      });
+  }
+
+  function pollWallet(net) {
+    return fetch(NETS[net].wallet, { method: 'GET' })
+      .then(function (res) {
+        if (res.status === 404) { set(net + '-wallet', 'n/a', 'dim'); return; }
+        if (res.status === 200 || res.status === 401) set(net + '-wallet', 'listening', 'green');
+        else set(net + '-wallet', 'down', 'red');
+      })
+      .catch(function () { set(net + '-wallet', 'down', 'red'); });
+  }
+
+  function pollBlocks(net) {
+    return fetch(NETS[net].blocks, { method: 'GET', cache: 'no-store' })
+      .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+      .then(function (data) {
+        STATE.blocks[net] = Array.isArray(data.blocks) ? data.blocks : []; STATE.loaded[net] = true;
+        set(net + '-blocks24', String(data.found_24h != null ? data.found_24h : 0), (data.found_24h > 0) ? 'green' : 'dim');
+      })
+      .catch(function () { STATE.loaded[net] = false; set(net + '-blocks24', 'n/a', 'dim'); });
+  }
+
+  function pollMiners(net) {
+    var sum = document.getElementById(net + '-miners-sum');
+    var tbody = document.querySelector('#' + net + '-miners-table tbody');
+    var empty = document.getElementById(net + '-miners-empty');
+    return fetch(NETS[net].miners, { method: 'GET', cache: 'no-store' })
+      .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+      .then(function (data) {
+        var miners = Array.isArray(data.miners) ? data.miners : [];
+        STATE.miners[net] = miners;   // retained for the per-nickname split view
+        var mc = data.miner_count || 0, oc = data.online_count || 0;
+        set(net + '-miners', oc + ' / ' + mc, mc === 0 ? 'dim' : (oc === mc ? 'green' : 'yellow'));
+        sum.innerHTML = '<b>' + oc + '</b>/' + mc + ' online · total <b>' + fmtHr(data.total_hr_gps) + '</b>';
+        if (miners.length === 0) {
+          tbody.innerHTML = '';
+          empty.textContent = 'No miners connected. If you are mining, check your miner’s stratum settings — '
+            + 'and that the node’s file_log_level is "INFO" (shares are logged at INFO).';
+          empty.style.display = 'block'; return;
+        }
+        empty.style.display = 'none';
+        tbody.innerHTML = '<tr><th>Worker</th><th>15m</th><th>12h</th><th>24h</th><th>48h</th><th>Last</th><th>Status</th></tr>'
+          + miners.map(function (m) {
+            var st = m.online ? '<span class="st on"><span class="dot ok"></span>online</span>'
+                              : '<span class="st off"><span class="dot err"></span>offline ' + relAge(m.age_s) + '</span>';
+            return '<tr class="' + (m.online ? '' : 'off') + '">'
+              + '<td><span class="w">' + esc(m.worker) + '</span></td>'
+              + '<td>' + fmtHr(m.hr_15m) + '</td><td>' + fmtHr(m.hr_12h) + '</td>'
+              + '<td>' + fmtHr(m.hr_24h) + '</td><td>' + fmtHr(m.hr_48h) + '</td>'
+              + '<td>' + relAge(m.age_s) + '</td><td>' + st + '</td></tr>';
+          }).join('');
+      })
+      .catch(function () {
+        STATE.miners[net] = [];
+        set(net + '-miners', 'n/a', 'dim');
+        sum.textContent = 'collector not installed';
+        tbody.innerHTML = '';
+        empty.textContent = 'Block/miner collector not installed yet — run the stats deploy (S).';
+        empty.style.display = 'block';
+      });
+  }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]; }); }
+
+  // ── Maturity ──
+  function maturityOf(net, height) {
+    var tip = STATE.tip[net]; if (tip === null) return { state: 'unknown', text: 'depth n/a' };
+    var depth = tip - height, need = MATURITY[net];
+    if (depth >= need) return { state: 'mature', text: 'mature' };
+    var hrs = ((need - depth) * 60) / 3600;
+    return { state: 'maturing', text: 'maturing ~' + (hrs >= 1 ? hrs.toFixed(0) + 'h' : '<1h') };
+  }
+  function renderMaturity(net) {
+    var tip = STATE.tip[net];
+    if (!STATE.loaded[net]) { set(net + '-maturing', 'n/a', 'dim'); return; }
+    if (tip === null) { set(net + '-maturing', '?', 'dim'); return; }
+    var n = 0; STATE.blocks[net].forEach(function (b) { if (tip - b.height < MATURITY[net]) n++; });
+    set(net + '-maturing', String(n), n > 0 ? 'yellow' : 'dim');
+  }
+
+  // ── Chart ──
+  function dayKey(d) { return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
+  function startOfWeek(d) { var x = new Date(d); var day = (x.getDay() + 6) % 7; x.setDate(x.getDate() - day); x.setHours(0,0,0,0); return x; }
+  function rangeBuckets(range) {
+    var keys = [], labels = [], now = new Date(), i, d;
+    if (range === 'daily') { for (i = 29; i >= 0; i--) { d = new Date(now); d.setDate(d.getDate() - i); keys.push(dayKey(d)); labels.push((d.getMonth()+1)+'/'+d.getDate()); } }
+    else if (range === 'weekly') { var mon = startOfWeek(now); for (i = 11; i >= 0; i--) { d = new Date(mon); d.setDate(d.getDate() - i*7); keys.push(dayKey(d)); labels.push((d.getMonth()+1)+'/'+d.getDate()); } }
+    else { for (i = 11; i >= 0; i--) { d = new Date(now.getFullYear(), now.getMonth() - i, 1); keys.push(d.getFullYear()+'-'+(d.getMonth()+1)); labels.push(MONTHS[d.getMonth()]); } }
+    return { keys: keys, labels: labels };
+  }
+  function keyForDate(d, range) { if (range === 'daily') return dayKey(d); if (range === 'weekly') return dayKey(startOfWeek(d)); return d.getFullYear()+'-'+(d.getMonth()+1); }
+  function countSeries(blocks, keys, range) {
+    var idx = {}, c = keys.map(function () { return 0; }); keys.forEach(function (k, i) { idx[k] = i; });
+    blocks.forEach(function (b) { var d = new Date(b.ts); if (isNaN(d)) return; var k = keyForDate(d, range); if (k in idx) c[idx[k]]++; });
+    return c;
+  }
+  function renderChart() {
+    var holder = document.getElementById('chart');
+    if (!STATE.loaded.main && !STATE.loaded.test) {
+      holder.innerHTML = '<div class="chart-empty">Block-history collector not installed yet — run the stats deploy (S) to enable.</div>'; return;
+    }
+    var b = rangeBuckets(STATE.range);
+    var sm = countSeries(STATE.blocks.main, b.keys, STATE.range);
+    var st = countSeries(STATE.blocks.test, b.keys, STATE.range);
+    var maxV = Math.max(1, Math.max.apply(null, sm.concat(st)));
+    var W = 720, H = 240, L = 34, R = 8, T = 14, B = 30;
+    var plotW = W - L - R, plotH = H - T - B, n = b.keys.length, gw = plotW / n, bw = gw * 0.32, baseY = T + plotH;
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img">';
+    svg += '<line x1="' + L + '" y1="' + baseY + '" x2="' + (W-R) + '" y2="' + baseY + '" stroke="var(--border)"/>';
+    svg += '<text x="' + (L-6) + '" y="' + (baseY+4) + '" text-anchor="end">0</text>';
+    svg += '<text x="' + (L-6) + '" y="' + (T+10) + '" text-anchor="end">' + maxV + '</text>';
+    var every = Math.ceil(n / 8);
+    for (var i = 0; i < n; i++) {
+      var gx = L + i * gw, hm = (sm[i]/maxV)*plotH, ht = (st[i]/maxV)*plotH;
+      svg += '<rect x="' + (gx + gw*0.14).toFixed(1) + '" y="' + (baseY - hm).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + hm.toFixed(1) + '" fill="var(--main)" rx="1"/>';
+      svg += '<rect x="' + (gx + gw*0.52).toFixed(1) + '" y="' + (baseY - ht).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + ht.toFixed(1) + '" fill="var(--test)" rx="1"/>';
+      if (i % every === 0) svg += '<text x="' + (gx + gw/2).toFixed(1) + '" y="' + (baseY + 16) + '" text-anchor="middle">' + b.labels[i] + '</text>';
+    }
+    holder.innerHTML = svg + '</svg>';
+  }
+
+  // ── Found-blocks table (per network) ──
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function fmtDate(d) { return pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+  function fmtTime(d) { return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+  function shortHash(h) {
+    if (!h) return '—';
+    h = String(h);
+    return h.length > 14 ? h.slice(0, 6) + '…' + h.slice(-6) : h;
+  }
+
+  function renderBlocks(net) {
+    var sum = document.getElementById(net + '-blocks-sum');
+    var tbody = document.querySelector('#' + net + '-blocks-table tbody');
+    var empty = document.getElementById(net + '-blocks-empty');
+    var more = document.getElementById(net + '-blocks-more');
+
+    if (!STATE.loaded[net]) {
+      sum.textContent = '—'; tbody.innerHTML = '';
+      empty.textContent = 'Block collector not installed yet — run the stats deploy (S).';
+      empty.style.display = 'block'; more.hidden = true; return;
+    }
+
+    var blocks = STATE.blocks[net];   // already height-desc from the collector
+    sum.innerHTML = '<b>' + blocks.length + '</b> found';
+    if (blocks.length === 0) {
+      tbody.innerHTML = '';
+      empty.textContent = 'No blocks found yet. Solo finds are rare — they will appear here.';
+      empty.style.display = 'block'; more.hidden = true; return;
+    }
+    empty.style.display = 'none';
+
+    var expanded = STATE.blocksExpanded[net];
+    var shown = expanded ? blocks : blocks.slice(0, BLOCKS_PREVIEW);
+    tbody.innerHTML = '<tr><th>Date</th><th>Time</th><th>Height</th><th>Hash</th><th>Maturity</th></tr>'
+      + shown.map(function (b) {
+        var d = new Date(b.ts), m = maturityOf(net, b.height);
+        return '<tr>'
+          + '<td>' + fmtDate(d) + '</td>'
+          + '<td>' + fmtTime(d) + '</td>'
+          + '<td><span class="h">' + Number(b.height).toLocaleString() + '</span></td>'
+          + '<td><span class="hash">' + esc(shortHash(b.hash)) + '</span></td>'
+          + '<td><span class="mtag ' + m.state + '">' + m.text + '</span></td></tr>';
+      }).join('');
+
+    if (blocks.length > BLOCKS_PREVIEW) {
+      more.hidden = false;
+      more.textContent = expanded
+        ? '▴ Show fewer'
+        : '▾ Show all ' + blocks.length + ' blocks';
+    } else {
+      more.hidden = true;
+    }
+  }
+
+  // ── Reward split (payment calc, mainnet) ──
+  var SPLIT = { period: 'weekly', data: null, person: null };
+  function fmtGrin(g) { return (g == null ? 0 : g).toFixed(3); }
+  // Longest registered prefix a worker name starts with, or null (mirrors the
+  // collector's _match_prefix — no digit-stripping, so typos fall to unassigned).
+  function matchPrefix(worker, prefixes) {
+    var best = null;
+    (prefixes || []).forEach(function (p) {
+      if (worker.indexOf(p) === 0 && (best === null || p.length > best.length)) best = p;
+    });
+    return best;
+  }
+
+  function pollSplit() {
+    return fetch('data/split_main.json', { cache: 'no-store' })
+      .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+      .then(function (d) {
+        SPLIT.data = d;
+        document.getElementById('split-card').style.display = '';
+        renderSplit();
+      })
+      .catch(function () {
+        SPLIT.data = null;
+        document.getElementById('split-card').style.display = 'none';   // feature off / mainnet absent
+      });
+  }
+  function renderSplit() {
+    var d = SPLIT.data; if (!d) return;
+    var p = (d.periods || {})[SPLIT.period];
+    var meta = document.getElementById('split-meta');
+    var tbody = document.querySelector('#split-table tbody');
+    var empty = document.getElementById('split-empty');
+    if (!p) { meta.textContent = '—'; tbody.innerHTML = ''; empty.textContent = 'No data for this period yet.'; empty.style.display = 'block'; return; }
+    meta.innerHTML = 'Period <b>' + esc(p.label) + '</b> · matured blocks <b>' + p.blocks_matured
+      + '</b> · total reward <b>' + fmtGrin(p.reward) + ' GRIN</b>';
+    var persons = p.persons || [];
+    if (persons.length === 0 || !p.total_diff) {
+      tbody.innerHTML = '';
+      empty.textContent = 'No accepted shares recorded in this period yet.';
+      empty.style.display = 'block'; return;
+    }
+    empty.style.display = 'none';
+    tbody.innerHTML = '<tr><th>Nickname</th><th>Workers</th><th>Work share</th><th>GRIN owed</th></tr>'
+      + persons.map(function (x) {
+          var cls = 'clk' + (x.name === 'unassigned' ? ' off' : '');
+          return '<tr class="' + cls + '" data-name="' + esc(x.name) + '">'
+            + '<td><span class="w lnk">' + esc(x.name) + '</span></td>'
+            + '<td>' + x.workers + '</td>'
+            + '<td>' + Number(x.pct).toFixed(1) + '%</td>'
+            + '<td><span class="grin">' + fmtGrin(x.grin) + '</span></td></tr>';
+        }).join('');
+    renderPerson();
+  }
+
+  // Per-nickname detail: live workers (mainnet) grouped by longest-prefix match,
+  // plus the selected period's work-share % and GRIN owed. No address, ever.
+  function renderPerson() {
+    var box = document.getElementById('split-person');
+    var d = SPLIT.data, name = SPLIT.person;
+    if (!d || !name) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    var p = (d.periods || {})[SPLIT.period] || {};
+    var person = (p.persons || []).filter(function (x) { return x.name === name; })[0];
+    if (!person) { box.style.display = 'none'; box.innerHTML = ''; SPLIT.person = null; return; }
+
+    var prefixes = d.prefixes || [];
+    var mine = (STATE.miners.main || []).filter(function (m) {
+      var hit = matchPrefix(m.worker, prefixes);
+      return (name === 'unassigned') ? (hit === null) : (hit === name);
+    });
+    mine.sort(function (a, b) { return (a.online === b.online) ? (b.hr_15m - a.hr_15m) : (a.online ? -1 : 1); });
+    var online = mine.filter(function (m) { return m.online; }).length;
+    var liveHr = mine.reduce(function (s, m) { return s + (m.online ? (m.hr_15m || 0) : 0); }, 0);
+
+    var head = '<div class="sp-head"><span class="back" id="sp-back">← all nicknames</span>'
+      + '<h3>' + esc(name) + (name === 'unassigned' ? ' <span class="off">(unregistered / typo)</span>' : '') + '</h3></div>';
+    var stats = '<p class="sp-stats"><b>' + online + '</b>/' + mine.length + ' workers online'
+      + ' · live hashrate <b>' + fmtHr(liveHr) + '</b>'
+      + ' · work share <b>' + Number(person.pct).toFixed(1) + '%</b>'
+      + ' · ' + esc(p.label || SPLIT.period) + ' reward <b>' + fmtGrin(person.grin) + ' GRIN</b>'
+      + '<br><span style="font-size:.82rem">Live hashrate is a 15-min estimate; reward is settled out-of-band by the operator.</span></p>';
+
+    var table;
+    if (mine.length === 0) {
+      table = '<p class="split-empty">No workers seen for this nickname in the last 7 days.</p>';
+    } else {
+      table = '<div class="table-scroll"><table><tbody>'
+        + '<tr><th>Worker</th><th>15m</th><th>24h</th><th>Last share</th><th>Status</th></tr>'
+        + mine.map(function (m) {
+            var st = m.online ? '<span class="st on"><span class="dot ok"></span>online</span>'
+                              : '<span class="st off"><span class="dot err"></span>offline</span>';
+            return '<tr class="' + (m.online ? '' : 'off') + '">'
+              + '<td><span class="w">' + esc(m.worker) + '</span></td>'
+              + '<td>' + fmtHr(m.hr_15m) + '</td><td>' + fmtHr(m.hr_24h) + '</td>'
+              + '<td>' + relAge(m.age_s) + '</td><td>' + st + '</td></tr>';
+          }).join('')
+        + '</tbody></table></div>';
+    }
+    box.innerHTML = head + stats + table;
+    box.style.display = '';
+    var back = document.getElementById('sp-back');
+    if (back) back.addEventListener('click', function () { SPLIT.person = null; renderPerson(); });
+  }
+  document.querySelector('#split-table tbody').addEventListener('click', function (e) {
+    var tr = e.target.closest('tr[data-name]'); if (!tr) return;
+    SPLIT.person = tr.getAttribute('data-name');
+    renderPerson();
+  });
+  document.getElementById('split-seg').addEventListener('click', function (e) {
+    var btn = e.target.closest('button'); if (!btn) return;
+    SPLIT.period = btn.getAttribute('data-period');
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function (x) { x.classList.remove('active'); });
+    btn.classList.add('active'); renderSplit();
+  });
+
+  function renderDerived() { renderMaturity('main'); renderMaturity('test'); renderChart(); renderBlocks('main'); renderBlocks('test'); }
+
+  document.getElementById('range-seg').addEventListener('click', function (e) {
+    var btn = e.target.closest('button'); if (!btn) return;
+    STATE.range = btn.getAttribute('data-range');
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function (x) { x.classList.remove('active'); });
+    btn.classList.add('active'); renderChart();
+  });
+
+  ['main', 'test'].forEach(function (net) {
+    document.getElementById(net + '-blocks-more').addEventListener('click', function () {
+      STATE.blocksExpanded[net] = !STATE.blocksExpanded[net];
+      renderBlocks(net);
+    });
+  });
+
+  function poll() {
+    Promise.all([
+      pollNet('main'), pollNet('test'), pollWallet('main'), pollWallet('test'),
+      pollBlocks('main'), pollBlocks('test'), pollMiners('main'), pollMiners('test'),
+      pollSplit()
+    ]).then(function () {
+      renderDerived();
+      if (SPLIT.person) renderPerson();   // refresh live worker hashrates each tick
+    });
+  }
+  poll(); setInterval(poll, 10000);
+})();
+</script>
+</body>
+</html>

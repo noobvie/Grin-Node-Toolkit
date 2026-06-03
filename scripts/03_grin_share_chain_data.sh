@@ -50,6 +50,9 @@
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Shared node primitives (canonical _grin_session_name, etc.). Source-guarded,
+# no side effects; defines info/warn/error fallbacks only if absent.
+source "$SCRIPT_DIR/lib/grin_node_control.sh"
 CONF_DIR="/opt/grin/conf"
 CONF_NGINX="$CONF_DIR/grin_share_nginx.conf"
 CONF_SSH="$CONF_DIR/grin_share_ssh.conf"
@@ -128,15 +131,7 @@ TMUX_SESSION=""
 # Logging helpers
 ################################################################################
 
-# tmux session name convention: grin_<nodetype>_<networktype>
-_grin_session_name() {
-    case "$(basename "${1:-}")" in
-        mainnet-full)  echo "grin_full_mainnet"   ;;
-        mainnet-prune) echo "grin_pruned_mainnet" ;;
-        testnet-prune) echo "grin_pruned_testnet" ;;
-        *)             echo "grin_$(basename "${1:-}")" ;;
-    esac
-}
+# _grin_session_name() now lives in lib/grin_node_control.sh (sourced above).
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S UTC' -u)] $1" | tee -a "$LOG_FILE"; }
 error_exit() { log "ERROR: $1"; exit 1; }
@@ -1284,7 +1279,9 @@ try_start_from_known_dir() {
     # Kill any stale session with this name before starting fresh
     tmux kill-session -t "$sess" 2>/dev/null || true
 
-    tmux new-session -d -s "$sess" -c "$found_dir" \
+    # SHELL=/bin/bash: this path may run from cron (which sets SHELL=/bin/sh);
+    # tmux child sessions inherit it and a bare `sh` breaks the launch.
+    SHELL=/bin/bash tmux new-session -d -s "$sess" -c "$found_dir" \
         "echo 'Starting Grin node...'; cd $found_dir && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
         2>/dev/null || true
     echo "  → Started in tmux session '$sess' — waiting for port $port (up to 120s)..."
@@ -1763,7 +1760,10 @@ add_grin_autostart() {
                 detect_config_file  >/dev/null 2>&1
                 detect_network_type >/dev/null 2>&1
                 detect_node_type    >/dev/null 2>&1
-                TMUX_SESSION="grin-${NODE_TYPE}-${NETWORK_TYPE}"
+                # Underscore convention (grin_pruned_mainnet) — matches the shared
+                # lib (_grin_session_name) and grin_node_keepalive's autostart so
+                # 03 and 07 write the SAME tagged @reboot entry, not two rivals.
+                TMUX_SESSION="$(_grin_session_name "$GRIN_DIR")"
                 sched_info "Detected binary : $GRIN_BINARY"
                 sched_info "tmux session    : $TMUX_SESSION"
             else
@@ -1779,7 +1779,7 @@ add_grin_autostart() {
             [[ "$manual_bin" == "0" || -z "$manual_bin" ]] && sched_info "Skipping $label." && continue
             GRIN_BINARY="$manual_bin"
             GRIN_DIR=$(dirname "$GRIN_BINARY")
-            TMUX_SESSION="grin-$net"
+            TMUX_SESSION="$(_grin_session_name "$GRIN_DIR")"
         fi
 
         echo -ne "  Boot delay in seconds [$default_delay]: "
@@ -1791,7 +1791,7 @@ add_grin_autostart() {
             delay=$default_delay
         fi
 
-        local cron_line="@reboot sleep $delay && cd $GRIN_DIR && env SHELL=/bin/bash tmux new-session -d -s $TMUX_SESSION $GRIN_BINARY $cron_marker"
+        local cron_line="@reboot sleep $delay && cd $GRIN_DIR && env SHELL=/bin/bash tmux new-session -d -s $TMUX_SESSION $GRIN_BINARY server run $cron_marker"
 
         # Check for existing entry
         if echo "$existing_cron" | grep -qF "$cron_marker"; then

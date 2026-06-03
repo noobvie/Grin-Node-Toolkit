@@ -2693,8 +2693,16 @@ main() {
     # Concurrent-run guard — two parallel script-01 instances can corrupt
     # $INSTANCES_CONF or partially overwrite a node directory.
     # fd 9 stays open for the life of the process; flock releases on exit.
-    exec 9>/var/run/grin-toolkit-01.lock 2>/dev/null \
-        || exec 9>/tmp/grin-toolkit-01.lock
+    #
+    # IMPORTANT: never write `exec 9>FILE 2>/dev/null` here. A bare `exec` with no
+    # command applies its redirections to the shell PERMANENTLY — the `2>/dev/null`
+    # would silence the whole script's stderr for the rest of the run, swallowing the
+    # wget download progress bar (and every other stderr message) in later steps.
+    # Instead, pick a writable lock path first (stderr suppression scoped to a subshell
+    # so it cannot leak), then open fd 9 with stderr left intact.
+    LOCK_FILE=/var/run/grin-toolkit-01.lock
+    ( : >>"$LOCK_FILE" ) 2>/dev/null || LOCK_FILE=/tmp/grin-toolkit-01.lock
+    exec 9>"$LOCK_FILE"
     if ! flock -n 9; then
         die "Another instance of script 01 is already running. Wait for it to finish, or remove the lock file if you are sure no other instance exists."
     fi

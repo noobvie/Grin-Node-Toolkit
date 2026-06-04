@@ -14,10 +14,10 @@
 # All-numeric keys; letters are reserved for destructive/admin actions.
 #
 #   Network-select screen
-#     1) Mainnet ┐ enter the per-net branch below
-#     2) Testnet ┘
-#     3) Node, Wallet & Mining Status   (both networks)
-#     4) Stats web page                 (unified vhost; payment split + lock)
+#     1) Configure solo pool Mainnet ┐ enter the per-net branch below
+#     2) Configure solo pool Testnet ┘
+#     3) Deploy stats web page          (public dashboard, both networks)
+#     4) Node, Wallet & Mining Status   (both networks)
 #     5) Watchdogs (global)             (node-sync · boot autostart · wallet · stratum)
 #     6) Maintenance                    (encrypted backup · restore · schedule · seed)
 #     0) Back to main menu
@@ -25,7 +25,7 @@
 #   Per-net branch (after 1/2 — SOLO_NETWORK set)
 #     1) Wallet      ▸ setup/recover · listener · auto-restart · address
 #     2) Stratum     ▸ setup · configure · publish · restrict
-#     3) Live stats    (terminal dashboard for the chosen net)
+#     3) Terminal Stats  (live dashboard for the chosen net)
 #     0) Back to network select
 # =============================================================================
 
@@ -510,7 +510,7 @@ show_compact_status() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE, WALLET & MINING STATUS  (network-select ▸ 3)
+# NODE, WALLET & MINING STATUS  (network-select ▸ 4)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _show_node_info() {
@@ -1127,16 +1127,70 @@ publish_testnet_stratum()  { _enable_stratum  testnet "$STRATUM_PORT_TESTNET" "$
 restrict_testnet_stratum() { _disable_stratum testnet "$STRATUM_PORT_TESTNET" "$NODE_API_PORT_TESTNET"; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# LIVE STATS DASHBOARD  (per-net branch ▸ 3)
+# TERMINAL STATS DASHBOARD  (per-net branch ▸ 3)
 # ═══════════════════════════════════════════════════════════════════════════════
-# Polls node Owner API every 10s. Shows: height, difficulty, hashrate, peers,
-# connected miners. Hashrate formula: diff_delta × 42 / dt / 16384 (Cuckatoo32)
+# Polls the node Owner API (get_status) on each manual refresh and shows height,
+# difficulty, hashrate, peers, connected miners. Network hashrate is computed
+# instantly from two block headers (Foreign API get_header) over a 60-block
+# window: diff_delta × 42 / dt / 16384 (Cuckatoo32).
+
+# Fetch a block header via the node Foreign API get_header. Echoes the raw JSON
+# response (caller parses); empty on failure.
+#   $1 = node API port  $2 = foreign secret  $3 = height
+_solo_get_header() {
+    curl -sf --max-time 5 -u "grin:$2" \
+        -H 'Content-Type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"method\":\"get_header\",\"params\":[$3,null,null],\"id\":1}" \
+        "http://127.0.0.1:$1/v2/foreign" 2>/dev/null || true
+}
+
+# Network hashrate from two block headers, averaged over a window of blocks so a
+# single odd block-time doesn't skew it. Echoes a formatted G/s string, or "n/a"
+# if the headers can't be fetched (missing foreign secret, node down, genesis).
+#   $1 = node API port  $2 = foreign secret  $3 = tip height  $4 = window blocks
+_solo_network_hashrate() {
+    local port="$1" fsecret="$2" tip="$3" window="${4:-60}"
+    [[ -z "$fsecret" || ! "$tip" =~ ^[0-9]+$ ]] && { echo "n/a"; return; }
+    local old=$(( tip - window ))
+    (( old < 0 )) && old=0
+    (( old == tip )) && { echo "n/a"; return; }
+
+    local h_new h_old
+    h_new=$(_solo_get_header "$port" "$fsecret" "$tip")
+    h_old=$(_solo_get_header "$port" "$fsecret" "$old")
+    [[ -z "$h_new" || -z "$h_old" ]] && { echo "n/a"; return; }
+
+    python3 - "$h_new" "$h_old" << 'PY' 2>/dev/null || echo "n/a"
+import sys, json
+from datetime import datetime
+def ep(s): return datetime.fromisoformat(s.replace('Z', '+00:00')).timestamp()
+def hdr(j):
+    d = json.loads(j)['result']['Ok']
+    return int(d['total_difficulty']), ep(d['timestamp'])
+try:
+    td_n, ts_n = hdr(sys.argv[1])
+    td_o, ts_o = hdr(sys.argv[2])
+except Exception:
+    print("n/a"); sys.exit()
+dt = ts_n - ts_o
+dd = td_n - td_o
+if dt <= 0 or dd <= 0:
+    print("n/a"); sys.exit()
+gps = dd * 42 / dt / 16384
+if gps >= 1_000_000:
+    print(f"{gps/1_000_000:.2f} MG/s")
+elif gps >= 1_000:
+    print(f"{gps/1_000:.2f} kG/s")
+else:
+    print(f"{gps:.2f} G/s")
+PY
+}
 
 solo_live_stats() {
     local preset_net="${1:-}"
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  Live Mining Stats${RESET}  ${DIM}(Enter = refresh · 0 = return)${RESET}"
+    echo -e "${BOLD}${CYAN}  Terminal Mining Stats${RESET}  ${DIM}(Enter = refresh · 0 = return)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
 
@@ -1171,12 +1225,12 @@ solo_live_stats() {
         [[ "$alt_secret_path" != "0" && -f "$alt_secret_path" ]] && secret=$(cat "$alt_secret_path")
     fi
 
-    local prev_diff=0 prev_ts=0
-    # Held across refreshes: blocks land ~every 60s, so a manual refresh often sees
-    # no difficulty change. Keep the last computed value instead of flickering.
-    # (Hashrate needs two samples, so it shows "calculating..." until you refresh
-    # once with a new block in between.)
-    local hashrate_str="calculating..."
+    # Foreign API secret (same node dir) — used by get_header for the instant
+    # network-hashrate calc below. Derived from the owner secret's dir, so a custom
+    # owner path still finds its sibling foreign secret.
+    local fsecret=""
+    local foreign_secret_path="${secret_path%/.api_secret}/.foreign_api_secret"
+    [[ -f "$foreign_secret_path" ]] && fsecret=$(cat "$foreign_secret_path")
 
     while true; do
         local resp
@@ -1201,31 +1255,11 @@ solo_live_stats() {
             total_diff=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['tip']['total_difficulty'])" 2>/dev/null || echo "0")
             peers=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['connections'])" 2>/dev/null || echo "?")
 
-            local now; now=$(date +%s)
-
-            # Cuckatoo32 hashrate: diff_delta × 42 / dt / 16384.
-            # hashrate_str carries over from the previous sample; only recomputed
-            # when a new block arrives between refreshes (diff_delta > 0).
-            if [[ "$prev_diff" -gt 0 && "$total_diff" -gt 0 && "$now" -gt "$prev_ts" ]]; then
-                local diff_delta dt gps
-                diff_delta=$(( total_diff - prev_diff ))
-                dt=$(( now - prev_ts ))
-                if [[ "$diff_delta" -gt 0 && "$dt" -gt 0 ]]; then
-                    gps=$(python3 -c "
-d=$diff_delta; t=$dt
-gps = d * 42 / t / 16384
-if gps >= 1000000:
-    print(f'{gps/1000000:.2f} MG/s')
-elif gps >= 1000:
-    print(f'{gps/1000:.2f} kG/s')
-else:
-    print(f'{gps:.2f} G/s')
-" 2>/dev/null || echo "?")
-                    hashrate_str="$gps"
-                fi
-            fi
-            prev_diff="$total_diff"
-            prev_ts="$now"
+            # Network hashrate — computed instantly from two block headers over a
+            # 60-block window (Foreign API get_header), so it never sits on
+            # "calculating...". Averaging the window smooths single odd block times.
+            local hashrate_str
+            hashrate_str=$(_solo_network_hashrate "$api_port" "$fsecret" "$height" 60)
 
             local miner_count
             miner_count=$(ss -tnp 2>/dev/null | grep ":$stratum_port" | grep -c ESTAB || true)
@@ -1245,7 +1279,7 @@ else:
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STATS WEB PAGE  (network-select ▸ 4)
+# STATS WEB PAGE  (network-select ▸ 3)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Deploys ONE static HTML page via nginx that polls BOTH nodes' Owner API every
 # 10s and shows mainnet + testnet side by side. nginx injects the Basic Auth
@@ -1362,7 +1396,7 @@ EOF
 # (alpha.01, alpha.02, …) settle as one payee. Writes $PAYMENT_CONFIG as
 # {"enabled":true}. Display-only: solo mining always pays ONE coinbase wallet;
 # this just shows who earned what for manual settling, and never stores a Grin
-# address. Called from the Stats web page deploy (network-select ▸ 4, mainnet
+# address. Called from the Stats web page deploy (network-select ▸ 3, mainnet
 # detected).
 _solo_prompt_payout_split() {
     # Enabled = file present AND not explicitly disabled (mirrors payout_split_enabled).
@@ -1554,9 +1588,9 @@ solo_deploy_stats_page() {
 
     local subdomain
     echo -e "Subdomain for the stats page  ${DIM}(suggestion: solo.yourdomain.com)${RESET}"
-    echo -ne "Enter subdomain: "
+    echo -ne "Enter subdomain ${DIM}(0 = return)${RESET}: "
     read -r subdomain
-    [[ -z "$subdomain" ]] && { warn "No subdomain — cancelled."; return 1; }
+    [[ -z "$subdomain" || "$subdomain" == "0" ]] && { info "Cancelled — returning."; return 1; }
 
     if ! nginx_validate_domain "$subdomain"; then
         error "Invalid domain name: $subdomain"
@@ -2162,9 +2196,9 @@ solo_net_menu() {
         fi
         echo ""
         _show_node_info "$SOLO_NETWORK" "$SOLO_API_PORT" "$SOLO_STRATUM_PORT"
-        echo -e "  ${GREEN}1${RESET}) Wallet       ${DIM}▸ setup/recover · listener · auto-restart · address${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Stratum      ${DIM}▸ setup · configure · publish · restrict${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Live stats   ${DIM}(terminal dashboard for $label)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Wallet          ${DIM}▸ setup/recover · listener · auto-restart · address${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Stratum         ${DIM}▸ setup · configure · publish · restrict${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Terminal Stats  ${DIM}(live dashboard for $label)${RESET}"
         echo ""
         echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
         echo -e "  ${RED}0${RESET}) Back to network select"
@@ -2180,6 +2214,52 @@ solo_net_menu() {
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done
+}
+
+# ── Deploy new code (refresh runtime copies from the checkout) ──────────────
+# The .sh menus + sourced libs run IN-PLACE from the checkout, so a `git pull`
+# (Admin centre 08 → 8 Self-Update) already updates them. But two runtime files
+# are SNAPSHOTS copied out by the full stats deploy (07 → 3): the collector .py
+# (→ /usr/local/bin) and the stats web page (→ /var/www/<conf>). A pull does NOT
+# refresh those. This re-copies just those two — no prompts, no wrapper/cron
+# rewrite, no nginx reload — so a code-only update doesn't need the heavy deploy.
+solo_deploy_code() {
+    echo ""
+    echo -e "  ${BOLD}Deploy new code${RESET} — refresh runtime copies from the checkout."
+    echo -e "  ${DIM}Source: $TOOLKIT_ROOT${RESET}"
+    echo -e "  ${YELLOW}Pull the latest first:${RESET} Admin centre ${BOLD}(08) → 8) Self-Update${RESET}."
+    echo ""
+    local did=0
+
+    # 1) Mining stats collector (.py) — fixed dest path, only refresh if already deployed.
+    if [[ ! -f "$BLOCK_COLLECTOR_SRC" ]]; then
+        warn "Collector source missing: $BLOCK_COLLECTOR_SRC"
+    elif [[ ! -f "$BLOCK_COLLECTOR_BIN" ]]; then
+        info "Collector not deployed yet — run 'Deploy stats web page' (07 → 3) once first."
+    elif cp "$BLOCK_COLLECTOR_SRC" "$BLOCK_COLLECTOR_BIN" && chmod 755 "$BLOCK_COLLECTOR_BIN"; then
+        success "Collector refreshed → $BLOCK_COLLECTOR_BIN"; did=1
+    else
+        warn "Could not refresh collector."
+    fi
+
+    # 2) Stats web page (index.html) — dest is per-deployment. Discover the live
+    #    web dir(s) from the collector wrapper's --out-dir (= <web_dir>/data),
+    #    written at deploy time; refresh only dirs that already hold an index.html.
+    if [[ -f "$STATS_WEB_SRC" && -f "$BLOCK_COLLECTOR_WRAPPER" ]]; then
+        local out_dir web_dir
+        while IFS= read -r out_dir; do
+            [[ -z "$out_dir" ]] && continue
+            web_dir="$(dirname "$out_dir")"
+            if [[ -f "$web_dir/index.html" ]] \
+               && cp "$STATS_WEB_SRC" "$web_dir/index.html" && chmod 644 "$web_dir/index.html"; then
+                success "Stats page refreshed → $web_dir/index.html"; did=1
+            fi
+        done < <(grep -oE -- '--out-dir [^ ]+' "$BLOCK_COLLECTOR_WRAPPER" | awk '{print $2}' | sort -u)
+    fi
+
+    [[ $did -eq 0 ]] && info "Nothing to refresh yet — deploy the stats page (07 → 3) first."
+    echo ""
+    echo -e "  ${DIM}Menu scripts (.sh) run in-place — the pull already updated them.${RESET}"
 }
 
 # ── Payouts & settlement (mainnet running balance) ──────────────────────────
@@ -2202,26 +2282,67 @@ rows = d.get("balances", []); t = d.get("totals", {})
 if not rows:
     print("  No earnings recorded yet (no block has matured since the split was enabled).")
     sys.exit()
-print("  %-22s %12s %12s %12s" % ("Nickname", "Earned", "Paid", "Owed"))
-print("  " + "-" * 62)
-for r in rows:
-    print("  %-22s %12.3f %12.3f %12.3f" % (r["nick"][:22], r["earned"], r["paid"], r["owed"]))
-print("  " + "-" * 62)
-print("  %-22s %12.3f %12.3f %12.3f GRIN" % ("TOTAL", t.get("earned",0), t.get("paid",0), t.get("owed",0)))
+rows.sort(key=lambda r: (-r["owed"], r["nick"]))   # biggest To be Paid first; same sort the picker uses
+print("  %-3s %-22s %13s %10s %12s" % ("#", "Nickname", "All time earn", "Paid", "To be Paid"))
+print("  " + "-" * 64)
+for i, r in enumerate(rows, 1):
+    print("  %-3d %-22s %13.3f %10.3f %12.3f" % (i, r["nick"][:22], r["earned"], r["paid"], r["owed"]))
+print("  " + "-" * 64)
+print("  %-3s %-22s %13.3f %10.3f %12.3f GRIN" % ("", "TOTAL", t.get("earned",0), t.get("paid",0), t.get("owed",0)))
 '
 }
 
 _settlement_record_payment() {
-    local nick amt note confirm out
+    local nick amt note confirm out bj pick owed_default
+    # Fetch the balances JSON once: drives both the numbered picker below and the
+    # index→nickname resolution. Sort here must match _settlement_show_balances so
+    # the row numbers line up with what the operator just saw on the menu screen.
+    bj="$("$BLOCK_COLLECTOR_BIN" --net mainnet --state-dir "$BLOCK_COLLECTOR_STATE_DIR" \
+        --list-balances 2>/dev/null)"
     echo ""
-    echo -ne "  Nickname to credit (text before the first dot, e.g. alpha): "
+    echo "$bj" | python3 -c '
+import json, sys
+try: d = json.load(sys.stdin)
+except Exception: d = {}
+rows = d.get("balances", [])
+rows.sort(key=lambda r: (-r["owed"], r["nick"]))
+if not rows:
+    print("  No balances yet — nothing to pick from (type a nickname to record anyway).")
+    sys.exit()
+print("  %-3s %-22s %12s" % ("#", "Nickname", "To be Paid"))
+print("  " + "-" * 39)
+for i, r in enumerate(rows, 1):
+    print("  %-3d %-22s %12.3f" % (i, r["nick"][:22], r["owed"]))
+' 2>/dev/null || true
+    echo ""
+    echo -ne "  Pick # to credit, or type a nickname ${DIM}(0 = return)${RESET}: "
     read -r nick
     nick="$(echo "$nick" | tr -d '[:space:]')"
-    [[ -z "$nick" ]] && { warn "No nickname — cancelled."; return; }
-    echo -ne "  Amount paid in GRIN (e.g. 12.5): "
+    [[ -z "$nick" || "$nick" == "0" ]] && { info "Cancelled — returning."; return; }
+    # Pure number → resolve to a nickname (and its owed amount) from the same sorted list.
+    if [[ "$nick" =~ ^[0-9]+$ ]]; then
+        pick="$(echo "$bj" | python3 -c '
+import json, sys
+idx = int(sys.argv[1])
+try: d = json.load(sys.stdin)
+except Exception: d = {}
+rows = d.get("balances", [])
+rows.sort(key=lambda r: (-r["owed"], r["nick"]))
+if 1 <= idx <= len(rows):
+    r = rows[idx-1]; print("%s\t%.3f" % (r["nick"], r["owed"]))
+' "$nick" 2>/dev/null)"
+        [[ -z "$pick" ]] && { warn "No nickname at #$nick. Cancelled."; return; }
+        nick="${pick%%$'\t'*}"
+        owed_default="${pick##*$'\t'}"
+        [[ "$owed_default" == "0.000" ]] && owed_default=""   # nothing owed → no default
+        info "Selected: ${nick}${owed_default:+ (To be Paid ${owed_default} GRIN)}"
+    fi
+    echo -ne "  Amount paid in GRIN ${DIM}(e.g. 12.5${owed_default:+ · Enter = ${owed_default}} · 0 = return)${RESET}: "
     read -r amt
+    [[ -z "$amt" && -n "$owed_default" ]] && amt="$owed_default"   # Enter = pay full owed
+    [[ "$amt" == "0" ]] && { info "Cancelled — returning."; return; }
     # Positive decimal only.
-    if [[ ! "$amt" =~ ^[0-9]+(\.[0-9]+)?$ ]] || [[ "$amt" == "0" || "$amt" == "0.0" ]]; then
+    if [[ ! "$amt" =~ ^[0-9]+(\.[0-9]+)?$ ]] || [[ "$amt" == "0.0" ]]; then
         warn "Invalid amount '$amt' — must be a positive number. Cancelled."
         return
     fi
@@ -2229,16 +2350,16 @@ _settlement_record_payment() {
     read -r note
     echo ""
     echo -e "  Record payment of ${BOLD}${amt} GRIN${RESET} to ${BOLD}${nick}${RESET}?"
-    echo -ne "  This reduces their owed balance. [y/N]: "
+    echo -ne "  This lowers their 'To be Paid' balance. [Y/n]: "
     read -r confirm
-    [[ "${confirm,,}" != "y" ]] && { info "Cancelled — nothing recorded."; return; }
+    [[ "${confirm,,}" == "n" || "${confirm,,}" == "no" ]] && { info "Cancelled — nothing recorded."; return; }
 
     out="$("$BLOCK_COLLECTOR_BIN" --net mainnet --state-dir "$BLOCK_COLLECTOR_STATE_DIR" \
         --record-payment --pay-nick "$nick" --pay-grin "$amt" --pay-note "$note" 2>&1)" || {
         error "Failed to record payment:"; echo "$out"; return; }
     success "Payment recorded."
     echo "$out" | python3 -c 'import json,sys
-try: d=json.load(sys.stdin); print("  %s now owed: %.3f GRIN" % (d["recorded"]["nick"], d["owed_now"]))
+try: d=json.load(sys.stdin); print("  %s now To be Paid: %.3f GRIN" % (d["recorded"]["nick"], d["owed_now"]))
 except Exception: pass' 2>/dev/null || true
 
     # Refresh split_main.json now so the web page reflects the payment immediately
@@ -2277,11 +2398,11 @@ solo_settlement_menu() {
         echo ""
         if [[ ! -f "$SOLO_MAIN_DB" ]]; then
             warn "No mainnet stats database yet ($SOLO_MAIN_DB)."
-            echo -e "  ${DIM}Deploy the stats page (menu 4) with payout split enabled first.${RESET}"
+            echo -e "  ${DIM}Deploy the stats page (menu 3) with payout split enabled first.${RESET}"
             _solo_pause; return
         fi
-        echo -e "  ${DIM}Running balance — owed = matured-block earnings − payments you record.${RESET}"
-        echo -e "  ${DIM}Pay each nickname out-of-band, then record it here so 'Owed' drops.${RESET}"
+        echo -e "  ${DIM}All time earn = matured-block rewards · Paid = payments you record · To be Paid = earn − paid.${RESET}"
+        echo -e "  ${DIM}Pay each nickname out-of-band, then record it here so their 'To be Paid' drops.${RESET}"
         echo ""
         _settlement_show_balances || true   # display only — never abort the menu under set -e
         echo ""
@@ -2304,7 +2425,7 @@ solo_settlement_menu() {
 }
 
 # Network-select screen (network-as-parent). Pick a net to manage (1/2), or use
-# a cross-network tool (3-5). All-numeric — letters are reserved for
+# a cross-network tool (3-7). All-numeric — letters are reserved for
 # destructive/admin actions per the toolkit menu convention.
 show_menu() {
     clear
@@ -2314,15 +2435,14 @@ show_menu() {
     echo ""
     show_compact_status
 
-    echo -e "  ${GREEN}A${RESET}) Start here — node check       ${DIM}(is your node running & synced?)${RESET}"
-    echo ""
-    echo -e "  ${DIM}─── Manage a network ─────────────────────────────${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Mainnet  ${DIM}(real GRIN)${RESET}"
-    echo -e "  ${GREEN}2${RESET}) Testnet  ${DIM}(tGRIN — no monetary value)${RESET}"
+    echo -e "  ${DIM}─── Set up your solo pool — top to bottom ────────${RESET}"
+    echo -e "  ${GREEN}A${RESET}) Start here — node check      ${DIM}(is your node running & synced?)${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Configure solo pool Mainnet  ${DIM}(real GRIN)${RESET}"
+    echo -e "  ${GREEN}2${RESET}) Configure solo pool Testnet  ${DIM}(tGRIN — no monetary value)${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Deploy stats web page        ${DIM}(public dashboard, both nets)${RESET}"
     echo ""
     echo -e "  ${DIM}─── Overview & shared tools ──────────────────────${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Node, Wallet & Mining Status  ${DIM}(both networks)${RESET}"
-    echo -e "  ${GREEN}4${RESET}) Stats web page                ${DIM}(unified vhost; payment prefixes + lock)${RESET}"
+    echo -e "  ${GREEN}4${RESET}) Node, Wallet & Mining Status  ${DIM}(both networks)${RESET}"
     echo -e "  ${GREEN}5${RESET}) Watchdogs (global)            ${DIM}(node-sync · boot autostart · wallet · stratum)${RESET}"
     echo -e "  ${GREEN}6${RESET}) Maintenance                   ${DIM}(encrypted backup · restore · schedule · seed)${RESET}"
     echo -e "  ${GREEN}7${RESET}) Payouts & settlement          ${DIM}(mainnet running balance · record payments)${RESET}"
@@ -2343,15 +2463,15 @@ main() {
         # must drop back to the menu, never hard-exit the script under `set -e`.
         # 1/2 enter a per-net branch: SOLO_NETWORK is set for its duration and
         # cleared on return, so the global Watchdogs menu (5) still prompts for
-        # which net to act on. 3/4/5 are cross-network and run at the top level.
+        # which net to act on. 3-7 are cross-network and run at the top level.
         case "${choice,,}" in
             "")  continue ;;                # Enter → refresh status
             a)   solo_node_precheck || true ;;
             1)   _set_solo_net mainnet; solo_net_menu || true; _clear_solo_net ;;
             2)   _set_solo_net testnet; solo_net_menu || true; _clear_solo_net ;;
-            3)   show_node_status || true
+            3)   solo_deploy_stats_page || true; _solo_pause ;;
+            4)   show_node_status || true
                  echo ""; echo "Press Enter to continue..."; read -r || true ;;
-            4)   solo_deploy_stats_page || true; _solo_pause ;;
             5)   watchdog_menu || true ;;
             6)   maintenance_menu || true ;;
             7)   solo_settlement_menu || true ;;

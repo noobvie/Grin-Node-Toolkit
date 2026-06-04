@@ -558,31 +558,33 @@ maintenance_menu() {
         clear
         sb_load_conf
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  Maintenance — Backup & Restore${RESET}"
+        echo -e "${BOLD}${CYAN}  Maintenance — Deploy, Backup & Restore${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
         local sched="${RED}off${RESET}"; [[ -f "$SB_CRON" ]] && sched="${GREEN}daily $(printf '%02d:%02d' "$SB_HOUR" "$SB_MIN")${RESET}"
         local key_state="${RED}not set${RESET}"; [[ -n "$SB_PERSONAL_KEY" ]] && key_state="${GREEN}set${RESET}"
         echo -e "  ${DIM}Dir: $SB_BACKUP_DIR · key: ${RESET}$key_state${DIM} · schedule: ${RESET}$sched"
         echo ""
-        echo -e "  ${GREEN}1${RESET}) Backup now            ${DIM}(encrypted archive of wallets + stats + config)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Restore from backup   ${DIM}(one-shot extract to original paths)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Schedule daily backup ${DIM}(cron · ${SB_KEEP}-archive retention)${RESET}"
-        echo -e "  ${GREEN}4${RESET}) Settings              ${DIM}(personal key · retention · list)${RESET}"
-        echo -e "  ${GREEN}5${RESET}) Show recovery seed    ${DIM}(per net — the ultimate wallet backup)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Deploy new code       ${DIM}(refresh collector + web page from checkout · pull via 08→8 first)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Backup now            ${DIM}(encrypted archive of wallets + stats + config)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Restore from backup   ${DIM}(one-shot extract to original paths)${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Schedule daily backup ${DIM}(cron · ${SB_KEEP}-archive retention)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Settings              ${DIM}(personal key · retention · list)${RESET}"
+        echo -e "  ${GREEN}6${RESET}) Show recovery seed    ${DIM}(per net — the ultimate wallet backup)${RESET}"
         echo ""
         echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1-5/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-6/0]: ${RESET}"
         read -r choice || choice=0
         case "$choice" in
             "") continue ;;
-            1) sb_backup_now || true; _solo_pause ;;
-            2) sb_restore    || true; _solo_pause ;;
-            3) sb_schedule   || true; _solo_pause ;;
-            4) sb_settings   || true ;;
-            5) net=$(_solo_pick_net "show recovery seed") && { sb_show_seed "$net" || true; }; _solo_pause ;;
+            1) solo_deploy_code || true; _solo_pause ;;
+            2) sb_backup_now || true; _solo_pause ;;
+            3) sb_restore    || true; _solo_pause ;;
+            4) sb_schedule   || true; _solo_pause ;;
+            5) sb_settings   || true ;;
+            6) net=$(_solo_pick_net "show recovery seed") && { sb_show_seed "$net" || true; }; _solo_pause ;;
             0) return ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac

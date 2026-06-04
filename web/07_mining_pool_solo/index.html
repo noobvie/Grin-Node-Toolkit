@@ -79,9 +79,18 @@
     padding: 1.5rem 1.6rem 1.7rem; transition: opacity .3s, transform .15s;
     box-shadow: 0 14px 36px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.04);
   }
-  .panel[data-net="main"] { border-top-color: var(--main);
+  .panel[data-net="main"] { position: relative; border-top-color: transparent;
     background: linear-gradient(180deg, rgba(var(--main-rgb),.10), rgba(var(--main-rgb),.02) 40%), var(--panel);
     box-shadow: 0 0 28px rgba(var(--main-rgb),.10), 0 14px 36px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.04); }
+  /* subtle animated RGB accent bar — marks MAINNET as the headline panel */
+  .panel[data-net="main"]::before {
+    content: ""; position: absolute; top: -4px; left: -1px; right: -1px; height: 4px;
+    border-radius: 14px 14px 0 0;
+    background: linear-gradient(90deg, var(--main), #ff7a59, #ff5b8a, #c79bff, #5bc8ff, #5ee08a, var(--main));
+    background-size: 220% 100%; animation: mainRgb 9s linear infinite; opacity: .9;
+  }
+  @keyframes mainRgb { to { background-position: 220% 0; } }
+  @media (prefers-reduced-motion: reduce) { .panel[data-net="main"]::before { animation: none; } }
   .panel[data-net="test"] { border-top-color: var(--test);
     background: linear-gradient(180deg, rgba(var(--test-rgb),.11), rgba(var(--test-rgb),.02) 40%), var(--panel);
     box-shadow: 0 0 28px rgba(var(--test-rgb),.10), 0 14px 36px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.04); }
@@ -188,8 +197,8 @@
   <div class="brand">
     <img src="logo.svg" alt="Grin">
     <div>
-      <h1><span class="grin">GRIN</span>&nbsp;Solo Mining</h1>
-      <p class="slogan" id="slogan">Solo mining — your node, your keys, your blocks.</p>
+      <h1><span class="grin">GRIN</span>Solo Mining</h1>
+      <p class="slogan" id="slogan">Your node, your keys, your rewards.</p>
     </div>
   </div>
   <div style="display:flex; gap:.6rem; align-items:center; flex:none;">
@@ -319,9 +328,7 @@
 </section>
 
 <footer>
-  <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer" style="color:var(--main)">Grin Node Toolkit</a> · solo mining stats · Cuckatoo32 · <a href="setup-solo-mining.html" style="color:var(--main)">Miner setup guide</a><br>
-  Live node + wallet every 10 s · blocks &amp; per-miner hashrate from node log (collector) · coinbase matures after 1440 blocks (~24 h)<br>
-  Per-miner stats need <code>file_log_level = "INFO"</code> on the node · external pollers: <code id="poller-endpoint">data/poolstats_main.json</code>
+  Run by <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer" style="color:var(--main)">Grin Node Toolkit</a>
 </footer>
 
 <script>
@@ -339,19 +346,13 @@
     applyTheme(next); try { localStorage.setItem('grinSoloTheme', next); } catch (e) {}
   });
 
-  // ── Operator slogan + poller endpoint (data/config.json: {"slogan":"…",
-  // "host":"…"}) — set at deploy time from the nginx domain, editable any time.
-  // The footer endpoint is built from config.host so the domain is never
-  // hardcoded; it falls back to the relative path in the markup if host is absent. ──
+  // ── Operator slogan (data/config.json: {"slogan":"…"}) — set at deploy time,
+  // editable any time. The external-poller endpoint now lives on the setup page. ──
   fetch('data/config.json', { cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (c) {
       if (!c) return;
       if (c.slogan) document.getElementById('slogan').textContent = c.slogan;
-      if (c.host) {
-        var ep = document.getElementById('poller-endpoint');
-        if (ep) ep.textContent = 'https://' + c.host + '/data/poolstats_main.json';
-      }
     })
     .catch(function () {});
 
@@ -763,14 +764,39 @@
   // ── Payout split (payment calc, mainnet) ──
   var SPLIT = { period: 'weekly', data: null, person: null };
   function fmtGrin(g) { return (g == null ? 0 : g).toFixed(3); }
-  // Longest registered prefix a worker name starts with, or null (mirrors the
-  // collector's _match_prefix — no digit-stripping, so typos fall to unassigned).
-  function matchPrefix(worker, prefixes) {
-    var best = null;
-    (prefixes || []).forEach(function (p) {
-      if (worker.indexOf(p) === 0 && (best === null || p.length > best.length)) best = p;
+
+  // Nickname = the part of a worker name before the first dot — byte-identical to
+  // the collector's _nick_of (worker.split(".",1)[0]): no dot ⇒ the whole name;
+  // a leading dot ⇒ "". All of one miner's rigs (alpha.01, alpha.02, …) settle as
+  // one payee.
+  function nickOf(worker) {
+    var i = worker.indexOf('.');
+    return i >= 0 ? worker.slice(0, i) : worker;
+  }
+  // Collapse a persons list into per-nickname groups (sum diff + GRIN, recompute %
+  // from the period's total_diff), ordered by GRIN owed desc. The collector already
+  // groups by nickname; this is an idempotent safety net (and regroups any older
+  // per-worker split_main.json still on disk before the collector regenerates it).
+  function groupPersonsByNick(persons, totalDiff) {
+    var map = {}, order = [];
+    persons.forEach(function (x) {
+      var k = nickOf(x.name);
+      if (!map[k]) { map[k] = { name: k, workers: 0, diff: 0, grin: 0 }; order.push(k); }
+      map[k].workers += x.workers || 1;
+      map[k].diff += x.diff || 0;
+      map[k].grin += x.grin || 0;
     });
-    return best;
+    return order.map(function (k) {
+      var g = map[k];
+      g.pct = totalDiff > 0 ? (g.diff / totalDiff * 100) : 0;
+      g.grin = Math.round(g.grin * 1000) / 1000;
+      return g;
+    }).sort(function (a, b) { return b.grin - a.grin || (a.name < b.name ? -1 : 1); });
+  }
+  // Persons to display for a period, grouped by nickname (idempotent over the
+  // collector's already-grouped output).
+  function splitPersons(p) {
+    return groupPersonsByNick((p && p.persons) || [], (p && p.total_diff) || 0);
   }
 
   function pollSplit() {
@@ -795,7 +821,7 @@
     if (!p) { meta.textContent = '—'; tbody.innerHTML = ''; empty.textContent = 'No data for this period yet.'; empty.style.display = 'block'; return; }
     meta.innerHTML = 'Period <b>' + esc(p.label) + '</b> · matured blocks <b>' + p.blocks_matured
       + '</b> · total reward <b>' + fmtGrin(p.reward) + ' GRIN</b>';
-    var persons = p.persons || [];
+    var persons = splitPersons(p);
     if (persons.length === 0 || !p.total_diff) {
       tbody.innerHTML = '';
       empty.textContent = 'No accepted shares recorded in this period yet.';
@@ -804,8 +830,7 @@
     empty.style.display = 'none';
     tbody.innerHTML = '<tr><th>Nickname</th><th>Workers</th><th>Work share</th><th>GRIN owed</th></tr>'
       + persons.map(function (x) {
-          var cls = 'clk' + (x.name === 'unassigned' ? ' off' : '');
-          return '<tr class="' + cls + '" data-name="' + esc(x.name) + '">'
+          return '<tr class="clk" data-name="' + esc(x.name) + '">'
             + '<td><span class="w lnk">' + esc(x.name) + '</span></td>'
             + '<td>' + x.workers + '</td>'
             + '<td>' + Number(x.pct).toFixed(1) + '%</td>'
@@ -814,30 +839,26 @@
     renderPerson();
   }
 
-  // Per-nickname detail: live workers (mainnet) grouped by longest-prefix match,
-  // plus the selected period's work-share % and GRIN owed. No address, ever.
+  // Per-nickname detail: live workers (mainnet) sharing this nickname (text before
+  // the first dot), plus the period's work-share % and GRIN owed. No address, ever.
   function renderPerson() {
     var box = document.getElementById('split-person');
     var d = SPLIT.data, name = SPLIT.person;
     if (!d || !name) { box.style.display = 'none'; box.innerHTML = ''; return; }
     var p = (d.periods || {})[SPLIT.period] || {};
-    var person = (p.persons || []).filter(function (x) { return x.name === name; })[0];
+    var person = splitPersons(p).filter(function (x) { return x.name === name; })[0];
     if (!person) { box.style.display = 'none'; box.innerHTML = ''; SPLIT.person = null; return; }
 
-    var prefixes = d.prefixes || [];
-    // No prefixes ⇒ split is by worker name, so a person IS a single worker.
-    // With prefixes ⇒ group by longest-prefix match ('unassigned' = matched none).
+    // A "person" is every live worker sharing this nickname (text before first dot).
     var mine = (STATE.miners.main || []).filter(function (m) {
-      if (prefixes.length === 0) return m.worker === name;
-      var hit = matchPrefix(m.worker, prefixes);
-      return (name === 'unassigned') ? (hit === null) : (hit === name);
+      return nickOf(m.worker) === name;
     });
     mine.sort(function (a, b) { return (a.online === b.online) ? (b.hr_15m - a.hr_15m) : (a.online ? -1 : 1); });
     var online = mine.filter(function (m) { return m.online; }).length;
     var liveHr = mine.reduce(function (s, m) { return s + (m.online ? (m.hr_15m || 0) : 0); }, 0);
 
     var head = '<div class="sp-head"><span class="back" id="sp-back">← all nicknames</span>'
-      + '<h3>' + esc(name) + (name === 'unassigned' ? ' <span class="off">(unregistered / typo)</span>' : '') + '</h3></div>';
+      + '<h3>' + esc(name) + '</h3></div>';
     var stats = '<p class="sp-stats"><b>' + online + '</b>/' + mine.length + ' workers online'
       + ' · live hashrate <b>' + fmtHr(liveHr) + '</b>'
       + ' · work share <b>' + Number(person.pct).toFixed(1) + '%</b>'

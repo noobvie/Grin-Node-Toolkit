@@ -35,8 +35,8 @@ MAINNET-only payout split (trusted-group payment calculation):
     chain-verified matured-block count) → <state-dir>/payment_ledger_main.json
   - a public per-period split (daily/weekly/monthly/yearly: nickname → % + GRIN
     owed, NO addresses) → <out-dir>/split_main.json, toggled by --payment-config
-    (default /opt/grin/conf/grin_solo_payment.json). {"enabled": true} splits by
-    worker name automatically; {"prefixes":[..]} groups workers by prefix.
+    (default /opt/grin/conf/grin_solo_payment.json). {"enabled": true} groups
+    miners by nickname — the text before the first dot in nickname.NN.
   This module computes only — it never holds keys, moves money, or stores a Grin
   address. Matured blocks are CHAIN-VERIFIED at 1440 maturity (Foreign API
   get_block) so an orphaned solution never inflates a payout.
@@ -395,31 +395,16 @@ def utc_day(epoch):
     return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%d")
 
 
-def load_prefixes(path):
-    """Payout-split config loader. Returns:
-        None  ⇒ feature OFF (config absent/unreadable, or {"enabled": false})
-        []    ⇒ feature ON, split by worker name automatically ({"enabled": true})
-        [..]  ⇒ feature ON, group workers by these nickname prefixes
-                 (advanced: {"prefixes": ["alpha", "bravo"]})
-    The no-prefix case is the default the toolkit writes — operators don't
-    pre-define names; each worker name the miner connects with is its own group.
-    """
+def payout_split_enabled(path):
+    """Payout-split on/off. True when the config file is present and not explicitly
+    disabled ({"enabled": false}); False when absent/unreadable. Workers are grouped
+    by nickname automatically — there are no names to pre-register."""
     try:
         with open(path) as fh:
             cfg = json.load(fh)
     except (OSError, ValueError):
-        return None
-    if not isinstance(cfg, dict) or cfg.get("enabled") is False:
-        return None
-    pfx = cfg.get("prefixes", [])
-    out = []
-    if isinstance(pfx, list):
-        for p in pfx:
-            if isinstance(p, str) and p.strip() and p.strip() not in out:
-                out.append(p.strip())
-    if out:
-        return out                       # explicit prefix grouping
-    return [] if cfg.get("enabled") is True else None
+        return False
+    return isinstance(cfg, dict) and cfg.get("enabled") is not False
 
 
 def _daily_worker_diff(workers, day):
@@ -471,14 +456,11 @@ def update_ledger(ledger, workers, found, hashes, status, net, now):
     return ledger
 
 
-def _match_prefix(worker, prefixes):
-    """Longest registered prefix the worker name starts with, or None (no auto
-    digit-stripping — a typo must surface as 'unassigned', never a phantom)."""
-    best = None
-    for p in prefixes:
-        if worker.startswith(p) and (best is None or len(p) > len(best)):
-            best = p
-    return best
+def _nick_of(worker):
+    """Group key = the nickname before the first dot (the nickname.NN convention),
+    so a miner's rigs (alpha.01, alpha.02, …) settle as one payee. A worker name
+    with no dot is its own group."""
+    return worker.split(".", 1)[0]
 
 
 def _window_days(period, now):
@@ -505,9 +487,10 @@ def _window_days(period, now):
     return today.strftime("%Y"), days[0], days[-1], days
 
 
-def compute_split(ledger, prefixes, now):
+def compute_split(ledger, now):
     """Per-period payout split. reward_P = Σ matured blocks × 60 GRIN, divided by
-    work share (Σ share-diff, longest-prefix match). Nicknames + % + GRIN ONLY."""
+    work share (Σ share-diff). Workers are grouped by nickname (the text before the
+    first dot in nickname.NN). Nicknames + % + GRIN ONLY — never addresses."""
     periods = {}
     for period in SPLIT_PERIODS:
         label, dfrom, dto, days = _window_days(period, now)
@@ -523,23 +506,13 @@ def compute_split(ledger, prefixes, now):
         total_diff = sum(diffs.values())
         reward = blocks_matured * BLOCK_REWARD_GRIN
 
-        if prefixes:
-            # Advanced: group workers under the longest registered prefix; any
-            # worker matching none falls to "unassigned".
-            groups = {p: {"diff": 0, "workers": set()} for p in prefixes}
-            groups["unassigned"] = {"diff": 0, "workers": set()}
-            for w, v in diffs.items():
-                g = groups[_match_prefix(w, prefixes) or "unassigned"]
-                g["diff"] += v
-                g["workers"].add(w)
-        else:
-            # Default: split by worker name — each connected worker is its own
-            # group, no pre-registration and no "unassigned" bucket.
-            groups = {}
-            for w, v in diffs.items():
-                g = groups.setdefault(w, {"diff": 0, "workers": set()})
-                g["diff"] += v
-                g["workers"].add(w)
+        # Group every worker under its nickname (the text before the first dot),
+        # so all of one miner's rigs (alpha.01, alpha.02, …) settle as one payee.
+        groups = {}
+        for w, v in diffs.items():
+            g = groups.setdefault(_nick_of(w), {"diff": 0, "workers": set()})
+            g["diff"] += v
+            g["workers"].add(w)
 
         persons = []
         for name, g in groups.items():
@@ -549,8 +522,8 @@ def compute_split(ledger, prefixes, now):
             persons.append({"name": name, "workers": len(g["workers"]),
                             "diff": int(diff), "pct": round(pct, 1),
                             "grin": round(grin, 3)})
-        # registered prefixes first (payout desc), unassigned always last
-        persons.sort(key=lambda x: (x["name"] == "unassigned", -x["grin"], x["name"]))
+        # highest payout first, then by nickname
+        persons.sort(key=lambda x: (-x["grin"], x["name"]))
         periods[period] = {
             "label": label, "from": dfrom, "to": dto,
             "blocks_matured": blocks_matured, "reward": round(reward, 3),
@@ -831,21 +804,19 @@ def main():
 
     # ── Payout split (mainnet only) ──────────────────────────────────────────
     # The ledger is maintained unconditionally so history accrues from day one;
-    # the public split is emitted only once the operator registers prefixes.
+    # the public split is emitted only while the operator keeps it enabled.
     if args.net == "mainnet":
         ledger = update_ledger(load_ledger_db(conn), workers, found, hashes,
                                status, args.net, now)
         save_ledger_db(conn, ledger)
 
-        prefixes = load_prefixes(args.payment_config)
         if args.out_dir:
             split_path = os.path.join(args.out_dir, "split_main.json")
-            if prefixes is not None:
+            if payout_split_enabled(args.payment_config):
                 save_json_atomic(split_path, {
                     "updated": iso(now), "net": "mainnet",
                     "block_reward": BLOCK_REWARD_GRIN, "maturity": MAINNET_MATURITY,
-                    "prefixes": prefixes,
-                    "periods": compute_split(ledger, prefixes, now),
+                    "periods": compute_split(ledger, now),
                 }, 0o644)
             elif os.path.exists(split_path):
                 try:

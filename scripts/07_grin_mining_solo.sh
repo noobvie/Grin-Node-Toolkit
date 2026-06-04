@@ -17,7 +17,7 @@
 #     1) Mainnet ┐ enter the per-net branch below
 #     2) Testnet ┘
 #     3) Node, Wallet & Mining Status   (both networks)
-#     4) Stats web page                 (unified vhost; payment prefixes + lock)
+#     4) Stats web page                 (unified vhost; payment split + lock)
 #     5) Watchdogs (global)             (node-sync · boot autostart · wallet · stratum)
 #     6) Maintenance                    (encrypted backup · restore · schedule · seed)
 #     0) Back to main menu
@@ -64,8 +64,8 @@ BLOCK_COLLECTOR_BIN="/usr/local/bin/grin-solo-mining-collector.py"
 BLOCK_COLLECTOR_WRAPPER="/usr/local/bin/grin-solo-mining-collector"
 BLOCK_COLLECTOR_CRON="/etc/cron.d/grin-solo-mining-collector"
 BLOCK_COLLECTOR_STATE_DIR="/opt/grin/solo-stats"
-# Payout-split payment calc (mainnet): nickname PREFIXES only, never addresses.
-# The collector reads this to emit split_main.json.
+# Payout-split payment calc (mainnet): nickname grouping (text before first dot)
+# only, never addresses. The collector reads this to emit split_main.json.
 PAYMENT_CONFIG="/opt/grin/conf/grin_solo_payment.json"
 # Optional stats-page access lock (HTTP Basic Auth over the certbot-managed HTTPS).
 STATS_HTPASSWD="/etc/nginx/grin-solo-stats.htpasswd"
@@ -402,6 +402,54 @@ _detect_public_ipv4() {
         _DETECTED_PUBLIC_IP="$local_ip"; return 0
     fi
     return 1
+}
+
+# Interactive confirm/override of the public IPv4 advertised to miners on the setup
+# page. Detection (_detect_public_ipv4) already cross-checks the local NIC against an
+# external 3-service majority vote (ipify / icanhazip / ifconfig.me); this surfaces
+# that result + its confidence note and lets the operator accept it, type a correction,
+# or clear it (page then falls back to the domain). The chosen IP is echoed on STDOUT;
+# all prompts/notes go to STDERR so `$(...)` capture stays clean. Empty = no IP.
+_confirm_public_ipv4() {
+    local fallback="$1"   # IP already in config.json, offered if live detection fails
+    _detect_public_ipv4 || true
+    local detected="${_DETECTED_PUBLIC_IP:-$fallback}"
+
+    echo >&2
+    if [[ -n "$_DETECTED_PUBLIC_IP" ]]; then
+        echo -e "  ${BOLD}Public IP check${RESET} — detected ${BOLD}${_DETECTED_PUBLIC_IP}${RESET}" >&2
+        echo -e "  ${DIM}${_IP_DETECT_NOTE}${RESET}" >&2
+    elif [[ -n "$fallback" ]]; then
+        echo -e "  ${BOLD}Public IP check${RESET} — ${YELLOW}auto-detect failed${RESET}; keeping saved value ${BOLD}${fallback}${RESET}" >&2
+    else
+        echo -e "  ${BOLD}Public IP check${RESET} — ${YELLOW}could not detect a public IPv4 and none is saved.${RESET}" >&2
+    fi
+    echo -e "  ${DIM}Miners connect to this IP + stratum port over raw TCP, so it must be the" >&2
+    echo -e "  internet-reachable address — not a private/NAT one.${RESET}" >&2
+
+    while true; do
+        if [[ -n "$detected" ]]; then
+            echo -ne "  Public IP for miners [${detected}] (Enter=accept · type to override · '-' to clear): " >&2
+        else
+            echo -ne "  Public IP for miners (type the IP, Enter to skip): " >&2
+        fi
+        local ans; read -r ans
+        if [[ -z "$ans" ]]; then
+            printf '%s' "$detected"; return 0
+        elif [[ "$ans" == "-" ]]; then
+            printf ''; return 0
+        elif [[ "$ans" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+            if _is_private_ipv4 "$ans"; then
+                echo -ne "  ${YELLOW}$ans is private/NAT — miners on the internet can't reach it. Use anyway? [y/N]: ${RESET}" >&2
+                local c; read -r c
+                [[ "$c" =~ ^[Yy]$ ]] && { printf '%s' "$ans"; return 0; }
+            else
+                printf '%s' "$ans"; return 0
+            fi
+        else
+            echo -e "  ${RED}Not a valid IPv4 — try again.${RESET}" >&2
+        fi
+    done
 }
 
 _stratum_bind_line() {
@@ -1147,21 +1195,20 @@ EOF
 }
 
 # Toggle the mainnet payout-split calculation (on/off — no names to pre-define).
-# When ON, the collector splits matured coinbase across miners automatically BY
-# THE WORKER NAME each miner connects with. Writes $PAYMENT_CONFIG as
-# {"enabled":true}. Advanced (optional): group several workers under one label by
-# hand-editing the file to {"prefixes":["alpha","bravo"]} — the collector then
-# groups by longest matching prefix instead. Display-only: solo mining always
-# pays ONE coinbase wallet; this just shows who earned what for manual settling,
-# and never stores a Grin address. Called from the Stats web page deploy
-# (network-select ▸ 4, mainnet detected).
+# When ON, the collector splits matured coinbase across miners grouped BY NICKNAME
+# — the text before the first dot in nickname.NN, so all of one miner's rigs
+# (alpha.01, alpha.02, …) settle as one payee. Writes $PAYMENT_CONFIG as
+# {"enabled":true}. Display-only: solo mining always pays ONE coinbase wallet;
+# this just shows who earned what for manual settling, and never stores a Grin
+# address. Called from the Stats web page deploy (network-select ▸ 4, mainnet
+# detected).
 _solo_prompt_payout_split() {
-    # Enabled = file present AND not explicitly disabled (mirrors load_prefixes).
+    # Enabled = file present AND not explicitly disabled (mirrors payout_split_enabled).
     local enabled=0
     if [[ -f "$PAYMENT_CONFIG" ]] && python3 -c 'import json,sys
 try: c=json.load(open(sys.argv[1]))
 except Exception: sys.exit(1)
-ok = isinstance(c,dict) and c.get("enabled") is not False and (c.get("enabled") is True or bool(c.get("prefixes")))
+ok = isinstance(c,dict) and c.get("enabled") is not False
 sys.exit(0 if ok else 1)' "$PAYMENT_CONFIG" 2>/dev/null; then
         enabled=1
     fi
@@ -1169,11 +1216,11 @@ sys.exit(0 if ok else 1)' "$PAYMENT_CONFIG" 2>/dev/null; then
     echo ""
     echo -e "${BOLD}Payout-split payment calculation (mainnet)${RESET}"
     echo -e "  ${DIM}Display-only split of matured coinbase across miners by work done,${RESET}"
-    echo -e "  ${DIM}grouped automatically by the worker name each miner connects with —${RESET}"
-    echo -e "  ${DIM}nothing to pre-define. Solo mining always pays ONE coinbase wallet;${RESET}"
-    echo -e "  ${DIM}this just shows who earned what so you can settle up manually, and${RESET}"
-    echo -e "  ${DIM}stores no Grin addresses. (Advanced: group several workers under one${RESET}"
-    echo -e "  ${DIM}label by hand-editing $PAYMENT_CONFIG → {\"prefixes\":[\"alpha\",\"bravo\"]}.)${RESET}"
+    echo -e "  ${DIM}grouped automatically by nickname — the part of the worker name${RESET}"
+    echo -e "  ${DIM}before the first dot (alpha.01, alpha.02 → alpha), nothing to${RESET}"
+    echo -e "  ${DIM}pre-define. Solo mining always pays ONE coinbase wallet; this just${RESET}"
+    echo -e "  ${DIM}shows who earned what so you can settle up manually, and stores no${RESET}"
+    echo -e "  ${DIM}Grin addresses.${RESET}"
 
     local ans
     if [[ $enabled -eq 1 ]]; then
@@ -1205,7 +1252,7 @@ sys.exit(0 if ok else 1)' "$PAYMENT_CONFIG" 2>/dev/null; then
     printf '{"enabled":true}\n' > "$PAYMENT_CONFIG"
     chmod 644 "$PAYMENT_CONFIG"
     success "Payout split enabled → $PAYMENT_CONFIG"
-    echo -e "  ${DIM}The page splits by worker name → % → GRIN owed (weekly/monthly cadence).${RESET}"
+    echo -e "  ${DIM}The page splits by nickname → % → GRIN owed (weekly/monthly cadence).${RESET}"
 }
 
 # Prompt for the optional stats-page access lock (HTTP Basic Auth). Writes an
@@ -1441,7 +1488,24 @@ solo_deploy_stats_page() {
         [[ -n "$nets_json" ]] && nets_json+=","
         nets_json+="\"test\":{\"stratum_port\":$(_solo_stratum_port testnet)}"
     fi
-    printf '{%s%s"host":"%s","networks":{%s}}\n' "$slogan_json" "$pool_name_json" "$subdomain" "$nets_json" \
+
+    # Public IPv4 → the setup page shows it as the PRIMARY stratum target. Stratum is
+    # raw TCP straight to the node (never proxied through nginx), so the IP always
+    # reaches it, while the domain only works if its A record points straight at this
+    # box — DNS-only; a Cloudflare-proxied (orange-cloud) record breaks raw-TCP
+    # stratum. Prefer a freshly detected IP; fall back to one already in config.json
+    # so a redeploy on a host where detection fails keeps the operator's value.
+    local existing_ip=""
+    if [[ -f "$web_dir/data/config.json" ]]; then
+        existing_ip=$(grep -oP '"public_ip"\s*:\s*"\K[0-9.]+' \
+            "$web_dir/data/config.json" 2>/dev/null || true)
+    fi
+    local pub_ip
+    pub_ip=$(_confirm_public_ipv4 "$existing_ip")
+    local public_ip_json=""
+    [[ -n "$pub_ip" ]] && public_ip_json="\"public_ip\":\"$pub_ip\","
+
+    printf '{%s%s"host":"%s",%s"networks":{%s}}\n' "$slogan_json" "$pool_name_json" "$subdomain" "$public_ip_json" "$nets_json" \
         > "$web_dir/data/config.json"
     chmod 644 "$web_dir/data/config.json"
     [[ -n "$solo_slogan" ]] && success "Slogan + connection config written (edit $web_dir/data/config.json to change)." \

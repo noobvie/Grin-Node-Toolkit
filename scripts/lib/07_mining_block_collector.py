@@ -446,7 +446,15 @@ def update_ledger(ledger, workers, found, hashes, status, net, now):
                 continue   # node unreachable — leave unmarked, retry next run
             chain_hash = ((blk.get("header") or {}).get("hash") or "").lower()
             stored = (hashes.get(h) or "").lower()
-            if chain_hash and stored and chain_hash == stored:
+            # The "Solution Found ... hash X" log line emits an ABBREVIATED hash
+            # (grin logs the first 6 bytes, e.g. 0000564ceb7e), while get_block
+            # returns the full 64-hex header.hash. Compare on the common prefix:
+            # a canonical block's full hash starts with the logged abbreviation;
+            # an orphan at the same height has a different hash (a 48-bit / 12-hex
+            # prefix collision is ~2^-48, so prefix match is safe for orphan
+            # detection). Full-equality would mark EVERY block orphan.
+            n = min(len(chain_hash), len(stored))
+            if n > 0 and chain_hash[:n] == stored[:n]:
                 e = ledger["days"].setdefault(utc_day(now),
                                               {"workers": {}, "blocks_matured": 0})
                 e["blocks_matured"] = e.get("blocks_matured", 0) + 1

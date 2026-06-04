@@ -631,7 +631,7 @@ _precheck_one_net() {
         else
             echo -e "    ${CYAN}○ Spin one up here too!${RESET}  ${DIM}This server already has the resources —${RESET}"
             echo -e "    ${DIM}  a testnet node grows the test network and lets you practice mining${RESET}"
-            echo -e "    ${DIM}  risk-free (testnet GRIN has no value). Use ${BOLD}1) Build / sync a node${RESET}${DIM} below.${RESET}"
+            echo -e "    ${DIM}  risk-free (testnet GRIN has no value) — Script 01 can build it.${RESET}"
         fi
         echo ""
         return
@@ -662,7 +662,29 @@ _precheck_one_net() {
     echo ""
 }
 
+# _precheck_next_action → echoes the single most useful "Next" action as
+# "<net>:<start|build>", or nothing when both nodes are already running.
+# Mainnet has priority (real mining needs it); testnet is only offered once
+# mainnet is up. "start" only when the node is INSTALLED (conf + binary) so
+# gnc_start_node_tmux will actually work; otherwise "build" (route to Script 01).
+# Cheap: ss + a conf-file read, no API calls.
+_precheck_next_action() {
+    local net api_port dir
+    for net in mainnet testnet; do
+        [[ "$net" == "mainnet" ]] && api_port="$NODE_API_PORT_MAINNET" || api_port="$NODE_API_PORT_TESTNET"
+        ss -tlnp 2>/dev/null | grep -q ":$api_port " && continue   # running → skip
+        if dir=$(gnc_resolve_node_dir "$net" 2>/dev/null) && gnc_node_binary "$dir" >/dev/null 2>&1; then
+            echo "$net:start"
+        else
+            echo "$net:build"
+        fi
+        return 0
+    done
+    return 0   # both running → empty
+}
+
 solo_node_precheck() {
+    local choice nextact net act s
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -676,27 +698,52 @@ solo_node_precheck() {
         _precheck_one_net testnet "$NODE_API_PORT_TESTNET" optional
 
         echo -e "  ${BOLD}Once mainnet is SYNCED, set up mining in this order:${RESET}"
-        echo -e "    1) Pick the network    ${DIM}(1 Mainnet / 2 Testnet)${RESET}"
-        echo -e "    2) Wallet              ${DIM}set up the coinbase listener — back up your seed!${RESET}"
-        echo -e "    3) Stratum             ${DIM}Setup, then Publish to open it to miners${RESET}"
-        echo -e "    4) Point your miner    ${DIM}stratum+tcp://YOUR_SERVER_IP:<port>${RESET}"
+        echo -e "    · Pick the network    ${DIM}(1 Mainnet / 2 Testnet)${RESET}"
+        echo -e "    · Wallet              ${DIM}set up the coinbase listener — back up your seed!${RESET}"
+        echo -e "    · Stratum             ${DIM}Setup, then Publish to open it to miners${RESET}"
+        echo -e "    · Point your miner    ${DIM}stratum+tcp://YOUR_SERVER_IP:<port>${RESET}"
         echo ""
-        echo -e "  ${DIM}─── Next ─────────────────────────────────────────${RESET}"
-        echo -e "  ${GREEN}1${RESET}) Build / sync a node now   ${DIM}(opens Script 01 — mainnet or testnet)${RESET}"
-        echo -e "  ${DIM}↩  Enter to re-check · 0 to return${RESET}"
-        echo ""
-        echo -ne "${BOLD}Select [1/Enter/0]: ${RESET}"
-        local choice; read -r choice || choice=0
+
+        nextact=$(_precheck_next_action)
+        net="${nextact%%:*}"; act="${nextact##*:}"
+        if [[ -n "$nextact" ]]; then
+            echo -e "  ${DIM}─── Next ─────────────────────────────────────────${RESET}"
+            if [[ "$act" == "start" && "$net" == "mainnet" ]]; then
+                echo -e "  ${GREEN}1${RESET}) Start your mainnet node now   ${DIM}(installed but stopped)${RESET}"
+            elif [[ "$act" == "start" && "$net" == "testnet" ]]; then
+                echo -e "  ${GREEN}1${RESET}) Start your testnet node now   ${DIM}(installed but stopped)${RESET}"
+            elif [[ "$net" == "mainnet" ]]; then
+                echo -e "  ${GREEN}1${RESET}) Build a Grin node now         ${DIM}(opens Script 01)${RESET}"
+            else
+                echo -e "  ${GREEN}1${RESET}) Build a testnet node          ${DIM}(opens Script 01 — run in parallel, no mining, to support the test network)${RESET}"
+            fi
+            echo -e "  ${DIM}↩  Enter to re-check · 0 to return${RESET}"
+            echo ""
+            echo -ne "${BOLD}Select [1/Enter/0]: ${RESET}"
+        else
+            echo -e "  ${GREEN}✓ Both nodes are running.${RESET}"
+            echo -e "  ${DIM}↩  Enter to re-check · 0 to return${RESET}"
+            echo ""
+            echo -ne "${BOLD}Select [Enter/0]: ${RESET}"
+        fi
+
+        read -r choice || choice=0
         case "$choice" in
-            1)  local s="$SCRIPT_DIR/$_SOLO_SCRIPT01"
-                if [[ -f "$s" ]]; then
-                    bash "$s" || true        # returns here when the user exits Script 01
+            1)  [[ -z "$nextact" ]] && continue          # both up → no action bound to 1
+                if [[ "$act" == "start" ]]; then
+                    gnc_start_node_tmux "$net" 60 || true
+                    _solo_pause
                 else
-                    error "Script 01 not found: $s"; _solo_pause
+                    s="$SCRIPT_DIR/$_SOLO_SCRIPT01"
+                    if [[ -f "$s" ]]; then
+                        bash "$s" || true                # returns here when the user exits Script 01
+                    else
+                        error "Script 01 not found: $s"; _solo_pause
+                    fi
                 fi ;;
             0)  return ;;
-            "") continue ;;                  # Enter → re-check (loop redraws fresh status)
-            *)  : ;;                         # ignore stray input → redraw
+            "") continue ;;                              # Enter → re-check (loop redraws fresh status)
+            *)  : ;;                                     # ignore stray input → redraw
         esac
     done
 }

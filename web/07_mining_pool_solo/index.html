@@ -174,6 +174,12 @@
   .split-meta b { color: var(--text-hi); }
   #split-table { min-width: 420px; }
   #split-table td .grin { color: var(--green); font-weight: bold; }
+  .split-sub { font-size: 1.02rem; margin: 1.3rem 0 .55rem; }
+  .split-sub:first-of-type { margin-top: .2rem; }
+  #balance-table { min-width: 460px; }
+  #balance-table td .owed { color: var(--green); font-weight: bold; }
+  #balance-table td .owed.zero { color: var(--muted); font-weight: normal; }
+  #balance-table td .paid { color: var(--muted); }
   .split-foot { color: var(--muted); font-size: .82rem; margin-top: .9rem; line-height: 1.6; }
   .split-empty { color: var(--muted); font-size: .92rem; padding: .6rem 0; }
   #split-table tr.clk { cursor: pointer; }
@@ -320,11 +326,20 @@
       <button type="button" data-period="yearly">Yearly</button>
     </div>
   </div>
+  <!-- Settlement: lifetime running balance (owed = earnings − payments). Stops
+       accumulating once the operator records a payment. Independent of the period. -->
+  <h3 class="split-sub">Settlement · what's owed now</h3>
+  <p class="split-meta" id="balance-meta">—</p>
+  <div class="table-scroll"><table id="balance-table"><tbody></tbody></table></div>
+  <p class="split-empty" id="balance-empty" style="display:none"></p>
+
+  <!-- Activity: work share + earnings within the selected rolling window. -->
+  <h3 class="split-sub">Work share by period</h3>
   <p class="split-meta" id="split-meta">—</p>
   <div class="table-scroll"><table id="split-table"><tbody></tbody></table></div>
   <p class="split-empty" id="split-empty" style="display:none"></p>
   <div id="split-person" class="split-person" style="display:none"></div>
-  <p class="split-foot">Click a nickname for its workers. Matured coinbase split by work done (share-difficulty), per nickname. A single day can look lumpy — <b>weekly/monthly are the settlement cadence</b>. The operator pays each nickname out-of-band; no Grin address is stored or shown.</p>
+  <p class="split-foot">Click a nickname for its workers. <b>Owed</b> = its share of every matured coinbase (split by work done, per nickname) minus what the operator has already paid out-of-band — it drops to zero once settled. The period table shows work share within a rolling window. No Grin address is stored or shown.</p>
 </section>
 
 <footer>
@@ -779,7 +794,7 @@
     return i >= 0 ? worker.slice(0, i) : worker;
   }
   // Collapse a persons list into per-nickname groups (sum diff + GRIN, recompute %
-  // from the period's total_diff), ordered by GRIN owed desc. The collector already
+  // from the period's total_diff), ordered by period earnings desc. The collector already
   // groups by nickname; this is an idempotent safety net (and regroups any older
   // per-worker split_main.json still on disk before the collector regenerates it).
   function groupPersonsByNick(persons, totalDiff) {
@@ -810,6 +825,7 @@
       .then(function (d) {
         SPLIT.data = d;
         document.getElementById('split-card').style.display = '';
+        renderBalances();
         renderSplit();
       })
       .catch(function () {
@@ -817,6 +833,35 @@
         document.getElementById('split-card').style.display = 'none';   // feature off / mainnet absent
       });
   }
+  // Lifetime running balance per nickname: owed = Σ earnings − Σ payments. Unlike
+  // the period table this is cumulative and independent of the selected window —
+  // it's the number the operator settles against, and it drops as payments land.
+  function renderBalances() {
+    var d = SPLIT.data;
+    var meta = document.getElementById('balance-meta');
+    var tbody = document.querySelector('#balance-table tbody');
+    var empty = document.getElementById('balance-empty');
+    var rows = (d && d.balances) || [];
+    var t = (d && d.totals) || {};
+    if (!rows.length) {
+      meta.textContent = '—'; tbody.innerHTML = '';
+      empty.textContent = 'Nothing owed yet — a balance appears once a found block matures (1440 confirmations).';
+      empty.style.display = 'block'; return;
+    }
+    empty.style.display = 'none';
+    meta.innerHTML = 'Outstanding <b>' + fmtGrin(t.owed) + ' GRIN</b> across <b>' + rows.length
+      + '</b> nickname' + (rows.length === 1 ? '' : 's')
+      + ' · earned <b>' + fmtGrin(t.earned) + '</b> · paid <b>' + fmtGrin(t.paid) + '</b>';
+    tbody.innerHTML = '<tr><th>Nickname</th><th>Earned</th><th>Paid</th><th>Owed</th></tr>'
+      + rows.map(function (r) {
+          var zero = (r.owed || 0) <= 0 ? ' zero' : '';
+          return '<tr><td><span class="w">' + esc(r.nick) + '</span></td>'
+            + '<td>' + fmtGrin(r.earned) + '</td>'
+            + '<td><span class="paid">' + fmtGrin(r.paid) + '</span></td>'
+            + '<td><span class="owed' + zero + '">' + fmtGrin(r.owed) + '</span></td></tr>';
+        }).join('');
+  }
+
   function renderSplit() {
     var d = SPLIT.data; if (!d) return;
     var p = (d.periods || {})[SPLIT.period];
@@ -833,7 +878,7 @@
       empty.style.display = 'block'; return;
     }
     empty.style.display = 'none';
-    tbody.innerHTML = '<tr><th>Nickname</th><th>Workers</th><th>Work share</th><th>GRIN owed</th></tr>'
+    tbody.innerHTML = '<tr><th>Nickname</th><th>Workers</th><th>Work share</th><th>Earned</th></tr>'
       + persons.map(function (x) {
           return '<tr class="clk" data-name="' + esc(x.name) + '">'
             + '<td><span class="w lnk">' + esc(x.name) + '</span></td>'
@@ -845,7 +890,7 @@
   }
 
   // Per-nickname detail: live workers (mainnet) sharing this nickname (text before
-  // the first dot), plus the period's work-share % and GRIN owed. No address, ever.
+  // the first dot), plus the period's work-share % and earnings. No address, ever.
   function renderPerson() {
     var box = document.getElementById('split-person');
     var d = SPLIT.data, name = SPLIT.person;

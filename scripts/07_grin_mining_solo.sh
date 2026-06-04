@@ -477,6 +477,22 @@ show_compact_status() {
     mn_bind=$(_stratum_bind_line "${mn_toml:-}" "$STRATUM_PORT_MAINNET" 2>/dev/null || echo -e "${DIM}unknown${RESET}")
     tn_bind=$(_stratum_bind_line "${tn_toml:-}" "$STRATUM_PORT_TESTNET" 2>/dev/null || echo -e "${DIM}unknown${RESET}")
 
+    # Node line first — cheap ss-only RUNNING/OFF (no API calls, so the menu
+    # never stalls on an unreachable node). Sync state is intentionally NOT here;
+    # it needs an Owner-API call and lives behind menu A) Start here.
+    echo -e "${BOLD}  Node Status:${RESET}"
+    if ss -tlnp 2>/dev/null | grep -q ":$NODE_API_PORT_MAINNET "; then
+        echo -e "    Mainnet ($NODE_API_PORT_MAINNET): ${GREEN}RUNNING${RESET}"
+    else
+        echo -e "    Mainnet ($NODE_API_PORT_MAINNET): ${RED}OFF${RESET}     ${DIM}(build/sync in Script 01)${RESET}"
+    fi
+    if ss -tlnp 2>/dev/null | grep -q ":$NODE_API_PORT_TESTNET "; then
+        echo -e "    Testnet ($NODE_API_PORT_TESTNET): ${GREEN}RUNNING${RESET}"
+    else
+        echo -e "    Testnet ($NODE_API_PORT_TESTNET): ${RED}OFF${RESET}     ${DIM}(build/sync in Script 01)${RESET}"
+    fi
+    echo ""
+
     echo -e "${BOLD}  Stratum Status:${RESET}"
     if ss -tlnp 2>/dev/null | grep -q ":$STRATUM_PORT_MAINNET "; then
         echo -ne "    Mainnet ($STRATUM_PORT_MAINNET): ${GREEN}LISTENING${RESET}  bind: "
@@ -584,6 +600,105 @@ show_node_status() {
     echo ""
     _show_node_info mainnet "$NODE_API_PORT_MAINNET" "$STRATUM_PORT_MAINNET"
     _show_node_info testnet "$NODE_API_PORT_TESTNET" "$STRATUM_PORT_TESTNET"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# START HERE — NODE PRE-CHECK  (menu ▸ A)
+# ═══════════════════════════════════════════════════════════════════════════════
+# A beginner's "step 0": solo mining needs a fully synced node on THIS server.
+# Read-only — reports node running + sync state per network and points at Script
+# 01 when no node exists yet. Sync uses one Owner-API call per net; this only
+# runs when the user opens A), so the 8s-timeout curl never blocks the top menu.
+
+# Script 01 launches in-process (mirrors Script 05's run_sub) so the user can
+# build/sync a node without backing out to the main menu. It lives in the scripts
+# dir = SCRIPT_DIR.
+_SOLO_SCRIPT01="01_build_new_grin_node.sh"
+
+# _precheck_one_net <network> <api_port> <role: primary|optional>
+# Mainnet is the primary node (real mining needs it); testnet is optional — a
+# user can run one here to practice mining safely or help the test network, even
+# without mining it (testnet GRIN has no monetary value).
+_precheck_one_net() {
+    local network="$1" api_port="$2" role="${3:-primary}"
+    local label="Mainnet"; [[ "$network" == "testnet" ]] && label="Testnet"
+    echo -e "  ${BOLD}$label:${RESET}"
+
+    if ! ss -tlnp 2>/dev/null | grep -q ":$api_port "; then
+        echo -e "    Node : ${RED}NOT RUNNING${RESET}  ${DIM}(API port $api_port not listening)${RESET}"
+        if [[ "$role" == "primary" ]]; then
+            echo -e "    ${YELLOW}→ Real mining needs this. Build & sync a mainnet node (Script 01) first.${RESET}"
+        else
+            echo -e "    ${CYAN}○ Spin one up here too!${RESET}  ${DIM}This server already has the resources —${RESET}"
+            echo -e "    ${DIM}  a testnet node grows the test network and lets you practice mining${RESET}"
+            echo -e "    ${DIM}  risk-free (testnet GRIN has no value). Use ${BOLD}1) Build / sync a node${RESET}${DIM} below.${RESET}"
+        fi
+        echo ""
+        return
+    fi
+    echo -e "    Node : ${GREEN}RUNNING${RESET}  ${DIM}(API port $api_port)${RESET}"
+
+    local json sync height peers
+    json=$(gnc_owner_get_status "$network" 6 2>/dev/null || true)
+    if [[ -z "$json" ]]; then
+        echo -e "    Sync : ${YELLOW}unknown${RESET}  ${DIM}(node up but Owner API didn't answer — check .api_secret)${RESET}"
+        echo ""
+        return
+    fi
+    sync=$(gnc_status_field "$json" sync_status 2>/dev/null || true)
+    height=$(gnc_status_field "$json" tip.height 2>/dev/null || true)
+    peers=$(gnc_status_field "$json" connections 2>/dev/null || true)
+    if [[ "$sync" == "no_sync" ]]; then
+        echo -e "    Sync : ${GREEN}SYNCED${RESET}  ${DIM}(height ${height:-?}, peers ${peers:-?})${RESET}"
+        if [[ "$role" == "primary" ]]; then
+            echo -e "    ${GREEN}✓ Ready to mine.${RESET}"
+        else
+            echo -e "    ${GREEN}✓ Synced — thanks for strengthening the test network!${RESET}  ${DIM}Great for practice too.${RESET}"
+        fi
+    else
+        echo -e "    Sync : ${YELLOW}${sync:-syncing}${RESET}  ${DIM}(height ${height:-?}, peers ${peers:-?})${RESET}"
+        echo -e "    ${YELLOW}⏳ Still syncing — wait until SYNCED (coinbase from an unsynced node is invalid).${RESET}"
+    fi
+    echo ""
+}
+
+solo_node_precheck() {
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  A) Start Here — Node Check${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        echo -e "  Solo mining needs a ${BOLD}fully synced mainnet node on this server${RESET}."
+        echo -e "  This screen only checks — it changes nothing."
+        echo ""
+        _precheck_one_net mainnet "$NODE_API_PORT_MAINNET" primary
+        _precheck_one_net testnet "$NODE_API_PORT_TESTNET" optional
+
+        echo -e "  ${BOLD}Once mainnet is SYNCED, set up mining in this order:${RESET}"
+        echo -e "    1) Pick the network    ${DIM}(1 Mainnet / 2 Testnet)${RESET}"
+        echo -e "    2) Wallet              ${DIM}set up the coinbase listener — back up your seed!${RESET}"
+        echo -e "    3) Stratum             ${DIM}Setup, then Publish to open it to miners${RESET}"
+        echo -e "    4) Point your miner    ${DIM}stratum+tcp://YOUR_SERVER_IP:<port>${RESET}"
+        echo ""
+        echo -e "  ${DIM}─── Next ─────────────────────────────────────────${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Build / sync a node now   ${DIM}(opens Script 01 — mainnet or testnet)${RESET}"
+        echo -e "  ${DIM}↩  Enter to re-check · 0 to return${RESET}"
+        echo ""
+        echo -ne "${BOLD}Select [1/Enter/0]: ${RESET}"
+        local choice; read -r choice || choice=0
+        case "$choice" in
+            1)  local s="$SCRIPT_DIR/$_SOLO_SCRIPT01"
+                if [[ -f "$s" ]]; then
+                    bash "$s" || true        # returns here when the user exits Script 01
+                else
+                    error "Script 01 not found: $s"; _solo_pause
+                fi ;;
+            0)  return ;;
+            "") continue ;;                  # Enter → re-check (loop redraws fresh status)
+            *)  : ;;                         # ignore stray input → redraw
+        esac
+    done
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1252,7 +1367,8 @@ sys.exit(0 if ok else 1)' "$PAYMENT_CONFIG" 2>/dev/null; then
     printf '{"enabled":true}\n' > "$PAYMENT_CONFIG"
     chmod 644 "$PAYMENT_CONFIG"
     success "Payout split enabled → $PAYMENT_CONFIG"
-    echo -e "  ${DIM}The page splits by nickname → % → GRIN owed (weekly/monthly cadence).${RESET}"
+    echo -e "  ${DIM}The page shows a per-nickname running balance (owed = matured-block${RESET}"
+    echo -e "  ${DIM}earnings − payments). Record payouts in menu 7 so 'Owed' drops.${RESET}"
 }
 
 # Prompt for the optional stats-page access lock (HTTP Basic Auth). Writes an
@@ -2004,6 +2120,127 @@ solo_net_menu() {
     done
 }
 
+# ── Payouts & settlement (mainnet running balance) ──────────────────────────
+# Records out-of-band payouts against the collector's per-nickname RUNNING BALANCE
+#   owed(nick) = Σ matured-block earnings  −  Σ recorded payments
+# so the GRIN-owed figure stops accumulating once you pay. Bookkeeping only — no
+# Grin address is ever stored or moved; the operator still sends GRIN by hand. All
+# state lives in the collector's SQLite DB and is reached ONLY through its
+# --list-balances / --record-payment / --list-payments modes (the collector owns
+# the schema; the menu never touches the DB directly).
+SOLO_MAIN_DB="$BLOCK_COLLECTOR_STATE_DIR/solo_mining_stats_main.db"
+
+_settlement_show_balances() {
+    "$BLOCK_COLLECTOR_BIN" --net mainnet --state-dir "$BLOCK_COLLECTOR_STATE_DIR" \
+        --list-balances 2>/dev/null | python3 -c '
+import json, sys
+try: d = json.load(sys.stdin)
+except Exception: d = {}
+rows = d.get("balances", []); t = d.get("totals", {})
+if not rows:
+    print("  No earnings recorded yet (no block has matured since the split was enabled).")
+    sys.exit()
+print("  %-22s %12s %12s %12s" % ("Nickname", "Earned", "Paid", "Owed"))
+print("  " + "-" * 62)
+for r in rows:
+    print("  %-22s %12.3f %12.3f %12.3f" % (r["nick"][:22], r["earned"], r["paid"], r["owed"]))
+print("  " + "-" * 62)
+print("  %-22s %12.3f %12.3f %12.3f GRIN" % ("TOTAL", t.get("earned",0), t.get("paid",0), t.get("owed",0)))
+'
+}
+
+_settlement_record_payment() {
+    local nick amt note confirm out
+    echo ""
+    echo -ne "  Nickname to credit (text before the first dot, e.g. alpha): "
+    read -r nick
+    nick="$(echo "$nick" | tr -d '[:space:]')"
+    [[ -z "$nick" ]] && { warn "No nickname — cancelled."; return; }
+    echo -ne "  Amount paid in GRIN (e.g. 12.5): "
+    read -r amt
+    # Positive decimal only.
+    if [[ ! "$amt" =~ ^[0-9]+(\.[0-9]+)?$ ]] || [[ "$amt" == "0" || "$amt" == "0.0" ]]; then
+        warn "Invalid amount '$amt' — must be a positive number. Cancelled."
+        return
+    fi
+    echo -ne "  Note (optional, e.g. 'weekly settle 06-04'): "
+    read -r note
+    echo ""
+    echo -e "  Record payment of ${BOLD}${amt} GRIN${RESET} to ${BOLD}${nick}${RESET}?"
+    echo -ne "  This reduces their owed balance. [y/N]: "
+    read -r confirm
+    [[ "${confirm,,}" != "y" ]] && { info "Cancelled — nothing recorded."; return; }
+
+    out="$("$BLOCK_COLLECTOR_BIN" --net mainnet --state-dir "$BLOCK_COLLECTOR_STATE_DIR" \
+        --record-payment --pay-nick "$nick" --pay-grin "$amt" --pay-note "$note" 2>&1)" || {
+        error "Failed to record payment:"; echo "$out"; return; }
+    success "Payment recorded."
+    echo "$out" | python3 -c 'import json,sys
+try: d=json.load(sys.stdin); print("  %s now owed: %.3f GRIN" % (d["recorded"]["nick"], d["owed_now"]))
+except Exception: pass' 2>/dev/null || true
+
+    # Refresh split_main.json now so the web page reflects the payment immediately
+    # (otherwise it waits for the next 5-min cron run).
+    if [[ -x "$BLOCK_COLLECTOR_WRAPPER" ]]; then
+        "$BLOCK_COLLECTOR_WRAPPER" >/dev/null 2>&1 || true
+        info "Web page balances refreshed."
+    fi
+}
+
+_settlement_show_history() {
+    echo ""
+    echo -e "  ${BOLD}Recorded payments (newest first)${RESET}"
+    "$BLOCK_COLLECTOR_BIN" --net mainnet --state-dir "$BLOCK_COLLECTOR_STATE_DIR" \
+        --list-payments 2>/dev/null | python3 -c '
+import json, sys
+try: d = json.load(sys.stdin)
+except Exception: d = {}
+pays = d.get("payments", [])
+if not pays:
+    print("  No payments recorded yet."); sys.exit()
+print("  %-20s %12s  %-20s  %s" % ("When (UTC)", "GRIN", "Nickname", "Note"))
+print("  " + "-" * 72)
+for p in pays:
+    print("  %-20s %12.3f  %-20s  %s" % (p["ts"][:19], p["grin"], p["nick"][:20], p.get("note","")))
+'
+}
+
+solo_settlement_menu() {
+    local choice
+    while true; do
+        clear
+        echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${RED}  07) Payouts & Settlement — [MAINNET]${RESET}"
+        echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        if [[ ! -f "$SOLO_MAIN_DB" ]]; then
+            warn "No mainnet stats database yet ($SOLO_MAIN_DB)."
+            echo -e "  ${DIM}Deploy the stats page (menu 4) with payout split enabled first.${RESET}"
+            _solo_pause; return
+        fi
+        echo -e "  ${DIM}Running balance — owed = matured-block earnings − payments you record.${RESET}"
+        echo -e "  ${DIM}Pay each nickname out-of-band, then record it here so 'Owed' drops.${RESET}"
+        echo ""
+        _settlement_show_balances || true   # display only — never abort the menu under set -e
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Record a payment"
+        echo -e "  ${GREEN}2${RESET}) Payment history"
+        echo ""
+        echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
+        echo -e "  ${RED}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select [1-2/0]: ${RESET}"
+        read -r choice || choice=0
+        case "$choice" in
+            "") continue ;;
+            1) _settlement_record_payment || true; _solo_pause ;;
+            2) _settlement_show_history   || true; _solo_pause ;;
+            0) return ;;
+            *) warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
 # Network-select screen (network-as-parent). Pick a net to manage (1/2), or use
 # a cross-network tool (3-5). All-numeric — letters are reserved for
 # destructive/admin actions per the toolkit menu convention.
@@ -2015,6 +2252,8 @@ show_menu() {
     echo ""
     show_compact_status
 
+    echo -e "  ${GREEN}A${RESET}) Start here — node check       ${DIM}(is your node running & synced?)${RESET}"
+    echo ""
     echo -e "  ${DIM}─── Manage a network ─────────────────────────────${RESET}"
     echo -e "  ${GREEN}1${RESET}) Mainnet  ${DIM}(real GRIN)${RESET}"
     echo -e "  ${GREEN}2${RESET}) Testnet  ${DIM}(tGRIN — no monetary value)${RESET}"
@@ -2024,11 +2263,12 @@ show_menu() {
     echo -e "  ${GREEN}4${RESET}) Stats web page                ${DIM}(unified vhost; payment prefixes + lock)${RESET}"
     echo -e "  ${GREEN}5${RESET}) Watchdogs (global)            ${DIM}(node-sync · boot autostart · wallet · stratum)${RESET}"
     echo -e "  ${GREEN}6${RESET}) Maintenance                   ${DIM}(encrypted backup · restore · schedule · seed)${RESET}"
+    echo -e "  ${GREEN}7${RESET}) Payouts & settlement          ${DIM}(mainnet running balance · record payments)${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [1-6/0]: ${RESET}"
+    echo -ne "${BOLD}Select [A/1-7/0]: ${RESET}"
 }
 
 main() {
@@ -2044,6 +2284,7 @@ main() {
         # which net to act on. 3/4/5 are cross-network and run at the top level.
         case "${choice,,}" in
             "")  continue ;;                # Enter → refresh status
+            a)   solo_node_precheck || true ;;
             1)   _set_solo_net mainnet; solo_net_menu || true; _clear_solo_net ;;
             2)   _set_solo_net testnet; solo_net_menu || true; _clear_solo_net ;;
             3)   show_node_status || true
@@ -2051,6 +2292,7 @@ main() {
             4)   solo_deploy_stats_page || true; _solo_pause ;;
             5)   watchdog_menu || true ;;
             6)   maintenance_menu || true ;;
+            7)   solo_settlement_menu || true ;;
             0)   break ;;
             *)   warn "Invalid option."; sleep 1 ;;
         esac

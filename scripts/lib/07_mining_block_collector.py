@@ -215,6 +215,8 @@ CREATE TABLE IF NOT EXISTS hr_days       (day TEXT PRIMARY KEY, diff_sum INTEGER
 CREATE TABLE IF NOT EXISTS ledger_days   (day TEXT PRIMARY KEY, blocks_matured INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS ledger_worker (day TEXT NOT NULL, worker TEXT NOT NULL, diff INTEGER NOT NULL, PRIMARY KEY (day, worker));
 CREATE TABLE IF NOT EXISTS ledger_blocks (height INTEGER PRIMARY KEY, status TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS earnings      (height INTEGER NOT NULL, nick TEXT NOT NULL, grin REAL NOT NULL, PRIMARY KEY (height, nick));
+CREATE TABLE IF NOT EXISTS payments      (id INTEGER PRIMARY KEY AUTOINCREMENT, nick TEXT NOT NULL, grin REAL NOT NULL, ts TEXT NOT NULL, note TEXT NOT NULL DEFAULT '');
 """
 
 
@@ -288,7 +290,11 @@ def save_state_db(conn, state):
 
 
 def load_ledger_db(conn):
-    """Payout ledger (mainnet) → {days: {day: {workers, blocks_matured}}, blocks}."""
+    """Payout ledger (mainnet) → {days, blocks, earnings, payments}.
+
+    earnings[height][nick] = GRIN frozen to that nickname when the block matured
+    (append-only, never recomputed). payments = the operator's recorded out-of-band
+    payouts. Lifetime owed per nickname = Σ earnings − Σ payments (compute_balances)."""
     days = {}
     for day, bm in conn.execute("SELECT day, blocks_matured FROM ledger_days"):
         days[day] = {"workers": {}, "blocks_matured": bm}
@@ -296,14 +302,26 @@ def load_ledger_db(conn):
         if day in days:
             days[day]["workers"][w] = d
     blocks = {str(h): s for h, s in conn.execute("SELECT height, status FROM ledger_blocks")}
-    return {"days": days, "blocks": blocks}
+    earnings = {}
+    for h, nick, g in conn.execute("SELECT height, nick, grin FROM earnings"):
+        earnings.setdefault(str(h), {})[nick] = g
+    payments = [{"nick": n, "grin": g, "ts": ts, "note": note}
+                for n, g, ts, note in
+                conn.execute("SELECT nick, grin, ts, note FROM payments ORDER BY id")]
+    return {"days": days, "blocks": blocks, "earnings": earnings, "payments": payments}
 
 
 def save_ledger_db(conn, ledger):
+    """Persist the derived/frozen ledger state in one transaction. NOTE: the
+    payments table is intentionally NOT touched here — payments are appended only by
+    the --record-payment mode (a separate invocation between cron runs), so a full
+    DELETE+INSERT here could drop a payment written in the gap. Earnings ARE rewritten
+    (they are frozen and only ever grow, so a whole-table replace is idempotent)."""
     with conn:
         conn.execute("DELETE FROM ledger_days")
         conn.execute("DELETE FROM ledger_worker")
         conn.execute("DELETE FROM ledger_blocks")
+        conn.execute("DELETE FROM earnings")
         drows, wrows = [], []
         for day, e in ledger["days"].items():
             drows.append((day, int(e.get("blocks_matured", 0))))
@@ -313,6 +331,10 @@ def save_ledger_db(conn, ledger):
         conn.executemany("INSERT INTO ledger_worker(day, worker, diff) VALUES (?, ?, ?)", wrows)
         conn.executemany("INSERT INTO ledger_blocks(height, status) VALUES (?, ?)",
                          [(int(h), s) for h, s in ledger["blocks"].items()])
+        erows = [(int(h), nick, g)
+                 for h, nicks in ledger.get("earnings", {}).items()
+                 for nick, g in nicks.items()]
+        conn.executemany("INSERT INTO earnings(height, nick, grin) VALUES (?, ?, ?)", erows)
 
 
 def migrate_legacy_json(conn, state_json, ledger_json, is_mainnet):
@@ -420,6 +442,34 @@ def _daily_worker_diff(workers, day):
     return out
 
 
+def _freeze_block_earnings(ledger, h, found, now):
+    """Freeze one matured block's BLOCK_REWARD_GRIN across nicknames, by work-share
+    on the UTC day the block was FOUND. Append-only — skips heights already credited,
+    so it is safe to call for both newly matured blocks and as a backfill over
+    previously matured ones. A block whose found-day has no recorded shares (e.g.
+    INFO logging was off that day, or the block predates this node's share history)
+    is left UNCREDITED — it still counts toward blocks_matured, but its reward is
+    not allocated to any nickname. We deliberately do NOT fall back to another day's
+    workers: the miners online when the block matured (~1440 blocks / ~1 day later)
+    may be a different population than those who actually mined it, so a fallback
+    would misattribute the reward."""
+    if str(h) in ledger.get("earnings", {}):
+        return
+    ts = found.get(str(h))
+    if ts is None:
+        return                                # no found timestamp ⇒ no defining day
+    day_workers = (ledger["days"].get(utc_day(ts)) or {}).get("workers") or {}
+    total = sum(day_workers.values())
+    if total <= 0:
+        return
+    nick_diff = {}
+    for w, v in day_workers.items():
+        nick_diff[_nick_of(w)] = nick_diff.get(_nick_of(w), 0) + v
+    credit = ledger.setdefault("earnings", {}).setdefault(str(h), {})
+    for nick, v in nick_diff.items():
+        credit[nick] = round(BLOCK_REWARD_GRIN * v / total, 6)
+
+
 def update_ledger(ledger, workers, found, hashes, status, net, now):
     """Refresh the ledger (mutates + returns it).
 
@@ -429,6 +479,8 @@ def update_ledger(ledger, workers, found, hashes, status, net, now):
     2. Count each found block ONCE, the run after it crosses 1440 maturity, but
        only if the node confirms our hash is the canonical block at that height
        (orphans are recorded and excluded; an unreachable node is retried).
+    3. Freeze the matured block's reward across nicknames (running-balance earnings),
+       and backfill any already-matured block that predates the earnings table.
     """
     for day in (utc_day(now - 86400), utc_day(now)):
         entry = ledger["days"].setdefault(day, {"workers": {}, "blocks_matured": 0})
@@ -459,9 +511,45 @@ def update_ledger(ledger, workers, found, hashes, status, net, now):
                                               {"workers": {}, "blocks_matured": 0})
                 e["blocks_matured"] = e.get("blocks_matured", 0) + 1
                 ledger["blocks"][h] = "matured"
+                _freeze_block_earnings(ledger, h, found, now)
             else:
                 ledger["blocks"][h] = "orphan"   # node answered, hash differs
+
+    # Backfill earnings for blocks marked matured before the earnings table existed
+    # (upgrade path) — idempotent: _freeze_block_earnings skips heights already credited.
+    for h, st in ledger["blocks"].items():
+        if st == "matured":
+            _freeze_block_earnings(ledger, h, found, now)
     return ledger
+
+
+def compute_balances(ledger):
+    """Lifetime running balance per nickname: owed = Σ earnings − Σ payments.
+    Returns rows sorted by owed desc, plus a totals summary. Nicknames + GRIN
+    only — never an address. A negative owed means the operator has overpaid
+    (a standing credit)."""
+    earned, paid, last_paid = {}, {}, {}
+    for nicks in ledger.get("earnings", {}).values():
+        for nick, g in nicks.items():
+            earned[nick] = earned.get(nick, 0.0) + g
+    for p in ledger.get("payments", []):
+        nick = p["nick"]
+        paid[nick] = paid.get(nick, 0.0) + p["grin"]
+        if nick not in last_paid or p["ts"] > last_paid[nick]:
+            last_paid[nick] = p["ts"]
+    rows = []
+    for nick in set(earned) | set(paid):
+        e = round(earned.get(nick, 0.0), 3)
+        pd = round(paid.get(nick, 0.0), 3)
+        rows.append({"nick": nick, "earned": e, "paid": pd,
+                     "owed": round(e - pd, 3), "last_paid": last_paid.get(nick)})
+    rows.sort(key=lambda x: (-x["owed"], x["nick"]))
+    totals = {
+        "earned": round(sum(r["earned"] for r in rows), 3),
+        "paid": round(sum(r["paid"] for r in rows), 3),
+        "owed": round(sum(r["owed"] for r in rows), 3),
+    }
+    return rows, totals
 
 
 def _nick_of(worker):
@@ -751,14 +839,66 @@ def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now,
 def main():
     ap = argparse.ArgumentParser(description="Grin solo mining stats collector")
     ap.add_argument("--net", required=True, choices=["mainnet", "testnet"])
-    ap.add_argument("--log", required=True)
+    ap.add_argument("--log")
     ap.add_argument("--state-dir", default="/opt/grin/solo-stats")
     ap.add_argument("--out-dir")
     ap.add_argument("--payment-config", default=DEFAULT_PAYMENT_CONFIG,
                     help="nickname-prefix file enabling the mainnet payout split")
     ap.add_argument("--dry-run", action="store_true")
+    # Settlement (mainnet running-balance) management — used by the Script 07 menu.
+    ap.add_argument("--list-balances", action="store_true",
+                    help="print per-nickname earned/paid/owed (JSON) and exit")
+    ap.add_argument("--list-payments", action="store_true",
+                    help="print recorded payments (JSON, newest first) and exit")
+    ap.add_argument("--record-payment", action="store_true",
+                    help="append an out-of-band payment to a nickname and exit")
+    ap.add_argument("--pay-nick", help="nickname to credit (with --record-payment)")
+    ap.add_argument("--pay-grin", type=float, help="GRIN amount (with --record-payment)")
+    ap.add_argument("--pay-note", default="", help="optional payment note")
     args = ap.parse_args()
     key = "main" if args.net == "mainnet" else "test"
+    db_path = os.path.join(args.state_dir, f"solo_mining_stats_{key}.db")
+
+    # ── Settlement modes (no log scan needed; mainnet only) ──────────────────
+    if args.list_balances or args.record_payment or args.list_payments:
+        if args.net != "mainnet":
+            print("error: settlement applies to mainnet only", file=sys.stderr)
+            return 2
+        conn = db_connect(db_path)
+        if args.record_payment:
+            nick = (args.pay_nick or "").strip()
+            if not nick or args.pay_grin is None or args.pay_grin <= 0:
+                print("error: --record-payment needs --pay-nick and a positive --pay-grin",
+                      file=sys.stderr)
+                conn.close()
+                return 2
+            ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with conn:
+                conn.execute("INSERT INTO payments(nick, grin, ts, note) VALUES (?, ?, ?, ?)",
+                             (nick, float(args.pay_grin), ts, args.pay_note or ""))
+            rows, totals = compute_balances(load_ledger_db(conn))
+            conn.close()
+            owed = next((r["owed"] for r in rows if r["nick"] == nick), 0.0)
+            print(json.dumps({"recorded": {"nick": nick, "grin": round(float(args.pay_grin), 3),
+                                           "ts": ts, "note": args.pay_note or ""},
+                              "owed_now": owed}, indent=2))
+            return 0
+        if args.list_payments:
+            pays = [{"nick": n, "grin": round(g, 3), "ts": ts, "note": note}
+                    for n, g, ts, note in conn.execute(
+                        "SELECT nick, grin, ts, note FROM payments ORDER BY id DESC")]
+            conn.close()
+            print(json.dumps({"payments": pays}, indent=2))
+            return 0
+        rows, totals = compute_balances(load_ledger_db(conn))
+        conn.close()
+        print(json.dumps({"updated": iso(time.time()), "balances": rows, "totals": totals},
+                         indent=2))
+        return 0
+
+    if not args.log:
+        print("error: --log is required for a collector run", file=sys.stderr)
+        return 2
 
     if args.dry_run:
         nb = nsh = 0
@@ -781,7 +921,6 @@ def main():
         return 0
 
     now = time.time()
-    db_path = os.path.join(args.state_dir, f"solo_mining_stats_{key}.db")
     legacy_state = os.path.join(args.state_dir, f"stats_{key}.state.json")
     legacy_ledger = os.path.join(args.state_dir, "payment_ledger_main.json")
     conn = db_connect(db_path)
@@ -821,10 +960,12 @@ def main():
         if args.out_dir:
             split_path = os.path.join(args.out_dir, "split_main.json")
             if payout_split_enabled(args.payment_config):
+                balances, totals = compute_balances(ledger)
                 save_json_atomic(split_path, {
                     "updated": iso(now), "net": "mainnet",
                     "block_reward": BLOCK_REWARD_GRIN, "maturity": MAINNET_MATURITY,
                     "periods": compute_split(ledger, now),
+                    "balances": balances, "totals": totals,
                 }, 0o644)
             elif os.path.exists(split_path):
                 try:

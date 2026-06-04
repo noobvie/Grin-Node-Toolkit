@@ -2010,7 +2010,7 @@ watchdog_menu() {
         echo -e "${BOLD}  Wallet-listener watchdog:${RESET}"; sw_watchdog_status 2>&1 | sed 's/^/    /' | head -1
         echo ""
         echo -e "  ${GREEN}1${RESET}) Node-sync watchdog     ${DIM}install / remove (restarts a wedged node)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Node boot-autostart    ${DIM}enable / disable @reboot (per net)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Node boot-autostart    ${DIM}enable / disable @reboot (per net / both)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Wallet-listener wd     ${DIM}install / remove${RESET}"
         echo -e "  ${GREEN}4${RESET}) Stratum watchdog       ${DIM}(existing W — alert if stratum drops)${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
@@ -2021,9 +2021,24 @@ watchdog_menu() {
             "") continue ;;
             1)  echo -ne "  ${GREEN}i${RESET}nstall / ${RED}r${RESET}emove / ${DIM}0 cancel${RESET}: "; read -r a || true
                 case "$a" in i) gnk_watchdog_install || true ;; r) gnk_watchdog_remove || true ;; esac; _solo_pause ;;
-            2)  net=$(_solo_pick_net "boot autostart") || { _solo_pause; continue; }
+            2)  echo -e "  Network for ${BOLD}boot autostart${RESET}:  ${GREEN}1${RESET}) Both  ${GREEN}2${RESET}) Mainnet  ${GREEN}3${RESET}) Testnet  ${DIM}0) Cancel${RESET}"
+                echo -ne "  Select [1/2/3/0]: "; read -r np || true
+                local nets=()
+                case "$np" in
+                    1) nets=(mainnet testnet) ;;
+                    2) nets=(mainnet) ;;
+                    3) nets=(testnet) ;;
+                    *) _solo_pause; continue ;;
+                esac
                 echo -ne "  ${GREEN}e${RESET}nable / ${RED}d${RESET}isable: "; read -r a || true
-                case "$a" in e) gnk_autostart_enable "$net" || true ;; d) gnk_autostart_disable "$net" || true ;; esac; _solo_pause ;;
+                for net in "${nets[@]}"; do
+                    case "$a" in
+                        e) gnk_autostart_enable "$net" || true ;;
+                        d) gnk_autostart_disable "$net" || true ;;
+                        *) break ;;
+                    esac
+                done
+                _solo_pause ;;
             3)  echo -ne "  ${GREEN}i${RESET}nstall / ${RED}r${RESET}emove / ${DIM}0 cancel${RESET}: "; read -r a || true
                 case "$a" in i) sw_watchdog_install || true ;; r) sw_watchdog_remove || true ;; esac; _solo_pause ;;
             4)  solo_watchdog_setup || true; _solo_pause ;;

@@ -664,7 +664,8 @@
     var st = avgSeries(STATE.hashrate.test, b.keys, STATE.hrRange);
     var maxV = Math.max.apply(null, sm.concat(st));
     if (!(maxV > 0)) maxV = 1;
-    var W = 720, H = 240, L = 56, R = 8, T = 14, B = 30;
+    // T leaves a top band for the peak label (a wide unit string, see below).
+    var W = 720, H = 240, L = 34, R = 8, T = 30, B = 30;
     var plotW = W - L - R, plotH = H - T - B, n = b.keys.length, baseY = T + plotH;
     var stepX = n > 1 ? plotW / (n - 1) : 0;
     function xAt(i) { return L + i * stepX; }
@@ -678,7 +679,11 @@
     var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img">';
     svg += '<line x1="' + L + '" y1="' + baseY + '" x2="' + (W-R) + '" y2="' + baseY + '" stroke="var(--border)"/>';
     svg += '<text x="' + (L-6) + '" y="' + (baseY+4) + '" text-anchor="end">0</text>';
-    svg += '<text x="' + (L-6) + '" y="' + (T+10) + '" text-anchor="end">' + fmtHr(maxV) + '</text>';
+    // The peak (y-axis max) carries a wide unit string — "3.81 G/s" up to
+    // "999.99 kG/s" (11 chars). A left-gutter tick (text-anchor="end") would run
+    // off the SVG's left edge and clip the leading digit. Park it in the top band,
+    // left-anchored at x=0, so it can never clip regardless of length.
+    svg += '<text x="0" y="16" text-anchor="start">peak ' + fmtHr(maxV) + '</text>';
     svg += '<path d="' + linePath(sm) + '" fill="none" stroke="var(--main)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
     svg += '<path d="' + linePath(st) + '" fill="none" stroke="var(--test)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
     svg += dots(sm, 'var(--main)') + dots(st, 'var(--test)');

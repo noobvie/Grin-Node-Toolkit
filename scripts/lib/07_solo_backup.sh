@@ -5,8 +5,11 @@
 #   /opt/grin/solowallet/        ALL wallets (binary INCLUDED → run immediately
 #                                after restore, no re-download) + seed + saved
 #                                passphrase + api secrets + grin-wallet.toml
-#   /opt/grin/solo-stats/        rolling stats history (found blocks, hashrate)
-#   /opt/grin/conf/grin_solo_payment.json   payout-split prefixes
+#   /opt/grin/solo-stats/        SQLite stats DBs (per-net: found blocks, hashrate,
+#                                the payout ledger). Each .db is consistency-snapshotted
+#                                via SQLite's online-backup API before archiving, so a
+#                                backup is never a torn copy of a mid-write DB.
+#   /opt/grin/conf/grin_solo_payment.json   payout-split enable flag
 #
 # NOT backed up: the node dir / grin-server.toml (you re-publish stratum after
 # restore) and the backup key file itself (must never travel inside an archive).
@@ -147,6 +150,49 @@ sb_prune() {
     info "Pruned old backups (kept newest $keep)."
 }
 
+# ─── Build the gzip tar with consistent SQLite snapshots ────────────────────
+# $1 = output .tar.gz, $2… = source paths relative to / (from _sb_sources).
+# Any SQLite DB in the stats dir is first copied with SQLite's online-backup API
+# into a staging mirror, so the archive captures a consistent (never torn) DB
+# even if the 5-min collector is mid-write; everything else is tarred live. If a
+# snapshot can't be made, falls back to a live copy of that DB. Returns tar's rc.
+_sb_make_tar() {
+    local out="$1"; shift
+    local -a rels=("$@")
+    local stats_rel="${SW_STATE_DIR:-/opt/grin/solo-stats}"; stats_rel="${stats_rel#/}"
+    local stage="" s db name
+    local -a other=()
+    for s in "${rels[@]}"; do
+        [[ "$s" == "$stats_rel" ]] && continue
+        other+=("$s")
+    done
+    if [[ -d "/$stats_rel" ]]; then
+        stage=$(mktemp -d /tmp/grin_solo_dbsnap_XXXXXX 2>/dev/null) || stage=""
+        if [[ -n "$stage" ]]; then
+            mkdir -p "$stage/$stats_rel"
+            cp -a "/$stats_rel/." "$stage/$stats_rel/" 2>/dev/null || true
+            for db in "/$stats_rel"/*.db; do
+                [[ -e "$db" ]] || continue
+                name=$(basename "$db")
+                rm -f "$stage/$stats_rel/$name" "$stage/$stats_rel/$name-journal" "$stage/$stats_rel/$name-wal"
+                python3 -c 'import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close()' \
+                    "$db" "$stage/$stats_rel/$name" 2>/dev/null || cp -p "$db" "$stage/$stats_rel/$name"
+            done
+        fi
+    fi
+    local -a targs=()
+    [[ "${#other[@]}" -gt 0 ]] && targs+=( -C / "${other[@]}" )
+    if [[ -n "$stage" ]]; then
+        targs+=( -C "$stage" "$stats_rel" )
+    elif printf '%s\n' "${rels[@]}" | grep -Fxq "$stats_rel"; then
+        targs+=( -C / "$stats_rel" )          # staging failed → live copy fallback
+    fi
+    tar -czf "$out" "${targs[@]}" 2>/dev/null
+    local rc=$?
+    [[ -n "$stage" ]] && rm -rf "$stage"
+    return $rc
+}
+
 # ─── Backup now (interactive) ───────────────────────────────────────────────
 sb_backup_now() {
     clear
@@ -179,11 +225,12 @@ sb_backup_now() {
     mkdir -p "$SB_BACKUP_DIR"; chmod 700 "$SB_BACKUP_DIR" 2>/dev/null || true
 
     info "Creating archive..."
-    # Relative-to-/ paths → restore with `-C /` lands them back exactly.
+    # Relative-to-/ paths → restore with `-C /` lands them back exactly. SQLite
+    # DBs in the stats dir are consistency-snapshotted first (see _sb_make_tar).
     # tar may exit non-zero for a benign "file changed as we read it" (the live
     # listener touching a file) — that's a warning, not fatal. But an EMPTY tmp
     # means a real failure (disk full / nothing readable): never encrypt that.
-    if ! tar -czf "$tmp_tar" -C / "${rels[@]}" 2>/dev/null; then
+    if ! _sb_make_tar "$tmp_tar" "${rels[@]}"; then
         warn "tar reported issues (a file changed mid-read, or a missing optional path — usually harmless)."
     fi
     if [[ ! -s "$tmp_tar" ]]; then
@@ -339,7 +386,35 @@ RELS=(); for s in "\${SOURCES[@]}"; do [[ -e "\$s" ]] && RELS+=( "\${s#/}" ); do
 [[ "\${#RELS[@]}" -gt 0 ]] || { echo "[\$TS] ERROR: nothing to back up" >> "\$LOG"; exit 1; }
 
 TMP=\$(mktemp /tmp/grin_solo_cronbak_XXXXXX.tar.gz) || exit 1
-tar -czf "\$TMP" -C / "\${RELS[@]}" 2>/dev/null || true
+
+# Consistency-snapshot SQLite DBs in the stats dir (online-backup API) so the
+# archive never captures a torn mid-write DB; other paths are tarred live.
+STATS_REL="${SW_STATE_DIR:-/opt/grin/solo-stats}"; STATS_REL="\${STATS_REL#/}"
+STAGE=""
+OTHER=(); for r in "\${RELS[@]}"; do [[ "\$r" == "\$STATS_REL" ]] && continue; OTHER+=( "\$r" ); done
+if [[ -d "/\$STATS_REL" ]]; then
+    STAGE=\$(mktemp -d /tmp/grin_solo_dbsnap_XXXXXX 2>/dev/null) || STAGE=""
+    if [[ -n "\$STAGE" ]]; then
+        mkdir -p "\$STAGE/\$STATS_REL"
+        cp -a "/\$STATS_REL/." "\$STAGE/\$STATS_REL/" 2>/dev/null || true
+        for db in "/\$STATS_REL"/*.db; do
+            [[ -e "\$db" ]] || continue
+            name=\$(basename "\$db")
+            rm -f "\$STAGE/\$STATS_REL/\$name" "\$STAGE/\$STATS_REL/\$name-journal" "\$STAGE/\$STATS_REL/\$name-wal"
+            python3 -c 'import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close()' \
+                "\$db" "\$STAGE/\$STATS_REL/\$name" 2>/dev/null || cp -p "\$db" "\$STAGE/\$STATS_REL/\$name"
+        done
+    fi
+fi
+TARARGS=()
+[[ "\${#OTHER[@]}" -gt 0 ]] && TARARGS+=( -C / "\${OTHER[@]}" )
+if [[ -n "\$STAGE" ]]; then
+    TARARGS+=( -C "\$STAGE" "\$STATS_REL" )
+elif printf '%s\n' "\${RELS[@]}" | grep -Fxq "\$STATS_REL"; then
+    TARARGS+=( -C / "\$STATS_REL" )
+fi
+tar -czf "\$TMP" "\${TARARGS[@]}" 2>/dev/null || true
+[[ -n "\$STAGE" ]] && rm -rf "\$STAGE"
 [[ -s "\$TMP" ]] || { rm -f "\$TMP"; echo "[\$TS] ERROR: empty archive (disk full?)" >> "\$LOG"; exit 1; }
 if openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -pass fd:3 \
         -in "\$TMP" -out "\$ARCHIVE" 3<<<"\$PASS" 2>/dev/null; then

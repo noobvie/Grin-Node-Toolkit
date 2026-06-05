@@ -2451,6 +2451,14 @@ show_menu() {
     echo -e "  ${GREEN}6${RESET}) Maintenance                   ${DIM}(encrypted backup · restore · schedule · seed)${RESET}"
     echo -e "  ${GREEN}7${RESET}) Payouts & settlement          ${DIM}(mainnet running balance · record payments)${RESET}"
     echo ""
+    # Informational callout (not selectable) — points operators who outgrow solo
+    # mining toward the sibling public-pool project.
+    echo -e "  ${DIM}╭─ Wanna run a PUBLIC pool? ──────────────────────╮${RESET}"
+    echo -e "  ${DIM}│${RESET} ${BOLD}Grinium${RESET} — open-source multi-miner Grin pool     ${DIM}│${RESET}"
+    echo -e "  ${DIM}│${RESET} ${DIM}Latest info & updates at${RESET}                        ${DIM}│${RESET}"
+    echo -e "  ${DIM}│${RESET} ${CYAN}github.com/noobvie/Grinium${RESET}                      ${DIM}│${RESET}"
+    echo -e "  ${DIM}╰─────────────────────────────────────────────────╯${RESET}"
+    echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""

@@ -167,8 +167,14 @@
   .blocks-pageinfo b { color: var(--text-hi); }
 
   /* chart card */
-  .chart-card { width: 100%; max-width: 860px; margin-top: .5rem; background: var(--panel);
+  .chart-card { position: relative; width: 100%; max-width: 860px; margin-top: .5rem; background: var(--panel);
     border: 1px solid var(--border); border-radius: 12px; padding: 1.4rem 1.5rem 1.6rem; }
+  /* per-section gradient accent — a left stripe so stacked charts read as distinct */
+  .chart-card::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 5px;
+    border-radius: 12px 0 0 12px; }
+  .chart-card.accent-blocks::before   { background: linear-gradient(180deg, var(--green), #1f9e57); }
+  .chart-card.accent-hashrate::before { background: linear-gradient(180deg, #5bc8ff, #2f6bf0); }
+  .chart-card.accent-payout::before   { background: linear-gradient(180deg, var(--main), #ff7a59); }
   .chart-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .8rem; margin-bottom: 1rem; }
   .chart-head h2 { font-size: 1.25rem; color: var(--text-hi); letter-spacing: .04em; }
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
@@ -309,7 +315,7 @@
 </section>
 
 <!-- ── Found-blocks history ── -->
-<section class="chart-card">
+<section class="chart-card accent-blocks">
   <div class="chart-head">
     <h2>Blocks Found History Chart</h2>
     <div class="seg" id="range-seg">
@@ -324,7 +330,7 @@
 </section>
 
 <!-- ── Pool hashrate history ── -->
-<section class="chart-card">
+<section class="chart-card accent-hashrate">
   <div class="chart-head">
     <h2>Pool Hashrate History Chart</h2>
     <div class="seg" id="hr-range-seg">
@@ -339,7 +345,7 @@
 </section>
 
 <!-- ── Payout split (payment calc, mainnet) — hidden unless data/split_main.json exists ── -->
-<section class="chart-card" id="split-card" style="display:none">
+<section class="chart-card accent-payout" id="split-card" style="display:none">
   <div class="chart-head">
     <h2>Payout Split · <span style="color:var(--main)">Mainnet</span></h2>
     <div class="seg" id="split-seg">

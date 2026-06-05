@@ -214,6 +214,25 @@
   .sp-stats { color: var(--muted); font-size: .9rem; margin-bottom: .8rem; line-height: 1.6; }
   .sp-stats b { color: var(--text-hi); }
 
+  /* keyboard focus ring for the chart range toggles (Daily/Weekly/…) */
+  .seg button:focus-visible { outline: 2px solid var(--main); outline-offset: -2px; }
+
+  /* live-data freshness indicator, tucked under the header */
+  .freshness { width: 100%; max-width: 860px; display: flex; justify-content: flex-end;
+    align-items: center; gap: .45rem; font-size: .82rem; color: var(--muted); margin: -0.8rem 0 1.4rem; }
+  .freshness .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .freshness.live  .live-dot { background: var(--green);  box-shadow: 0 0 0 3px rgba(94,224,138,.18); animation: dotpulse 1.4s ease-in-out infinite; }
+  .freshness.stale .live-dot { background: var(--yellow); box-shadow: 0 0 0 3px rgba(255,216,77,.18); }
+  @media (prefers-reduced-motion: reduce) { .freshness.live .live-dot { animation: none; } }
+
+  /* header actions — wrap onto their own row on narrow screens */
+  .header-actions { display: flex; gap: .6rem; align-items: center; flex: none; }
+  @media (max-width: 560px) {
+    header { flex-direction: column; align-items: stretch; gap: .9rem; }
+    .header-actions { flex-wrap: wrap; }
+    .freshness { justify-content: flex-start; margin-top: 0; }
+  }
+
   footer { color: var(--muted); font-size: .82rem; text-align: center; margin-top: 2rem; line-height: 1.7; max-width: 860px; }
   footer code { color: var(--text); }
 </style>
@@ -228,11 +247,15 @@
       <p class="slogan" id="slogan">Your node, your keys, your rewards.</p>
     </div>
   </div>
-  <div style="display:flex; gap:.6rem; align-items:center; flex:none;">
+  <div class="header-actions">
     <a class="theme-toggle" href="setup-solo-mining.html">⚙ Miner Setup</a>
     <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme">☾ Dark</button>
   </div>
 </header>
+
+<div class="freshness" id="freshness" aria-live="polite" title="Live data refreshes every 10 seconds">
+  <span class="live-dot"></span><span id="fresh-text">Connecting…</span>
+</div>
 
 <!-- ── MAINNET ── -->
 <section class="panel" data-net="main" id="panel-main">
@@ -373,7 +396,7 @@
 </section>
 
 <footer>
-  Run by <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer" style="color:var(--main)">Grin Node Toolkit</a>
+  Run by <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer" style="color:var(--main)">Grin Node Toolkit</a> — script 07 (Grin Solo Mining Pool Setup). Happy Grinning (ツ)
 </footer>
 
 <script>
@@ -429,6 +452,25 @@
     if (gps >= 1e6) return (gps/1e6).toFixed(2)+' MG/s';
     if (gps >= 1e3) return (gps/1e3).toFixed(2)+' kG/s';
     return gps.toFixed(2)+' G/s';
+  }
+  // Compact integer count for the y-axis (block-count gridline labels). Keeps
+  // every label ≤4 chars so it never clips the narrow left gutter: 0–999 raw,
+  // then 1.0k–999k, then 1.0M+. The band thresholds (999.5 / 999500) are set so
+  // rounding can never overflow a band into a 5-char label like "1000k".
+  function fmtCount(v) {
+    v = Math.round(v);
+    if (v < 999.5)  return '' + v;                                      // 0–999
+    if (v < 999500) { var k = v/1e3; return (k < 9.95 ? k.toFixed(1) : Math.round(k)) + 'k'; }
+    var m = v/1e6;  return (m < 9.95 ? m.toFixed(1) : Math.round(m)) + 'M';
+  }
+  // One-line text summary of a two-series chart for the SVG aria-label, so screen
+  // readers get the gist (peak + latest per network) instead of silence.
+  function chartAria(title, range, sm, st, fmt) {
+    function one(name, d) {
+      var pk = d.length ? Math.max.apply(null, d) : 0, last = d.length ? d[d.length - 1] : 0;
+      return name + ' peak ' + fmt(pk) + ', latest ' + fmt(last);
+    }
+    return title + ', ' + range + '. ' + one('mainnet', sm) + '; ' + one('testnet', st) + '.';
   }
   // Network difficulty + hashrate derived from the change in cumulative
   // total_difficulty across BLOCKS (not poll ticks). get_status only exposes the
@@ -656,7 +698,8 @@
     var b = rangeBuckets(STATE.range);
     var sm = countSeries(STATE.blocks.main, b.keys, STATE.range);
     var st = countSeries(STATE.blocks.test, b.keys, STATE.range);
-    var maxV = Math.max(1, Math.max.apply(null, sm.concat(st)));
+    var realMax = Math.max.apply(null, sm.concat(st));   // 0 when nothing in range
+    var maxV = Math.max(1, realMax);
     var W = 720, H = 240, L = 34, R = 8, T = 14, B = 30;
     var plotW = W - L - R, plotH = H - T - B, n = b.keys.length, baseY = T + plotH;
     var stepX = n > 1 ? plotW / (n - 1) : 0;
@@ -665,11 +708,19 @@
     function linePath(data) {
       return data.map(function (v, i) { return (i === 0 ? 'M' : 'L') + xAt(i).toFixed(1) + ' ' + yAt(v).toFixed(1); }).join(' ');
     }
-    function dots(data, color) {
-      return data.map(function (v, i) { return '<circle cx="' + xAt(i).toFixed(1) + '" cy="' + yAt(v).toFixed(1) + '" r="2.4" fill="' + color + '"/>'; }).join('');
+    // Visible dot + a larger transparent hit circle carrying a <title>, so hovering
+    // anywhere near a point shows "Network · date — N blocks" as a native tooltip.
+    function dots(data, color, netName) {
+      return data.map(function (v, i) {
+        var cx = xAt(i).toFixed(1), cy = yAt(v).toFixed(1);
+        var title = esc(netName + ' · ' + b.labels[i] + ' — ' + v + ' block' + (v === 1 ? '' : 's'));
+        return '<circle cx="' + cx + '" cy="' + cy + '" r="2.4" fill="' + color + '"/>'
+             + '<circle cx="' + cx + '" cy="' + cy + '" r="8" fill="transparent"><title>' + title + '</title></circle>';
+      }).join('');
     }
     var every = Math.ceil(n / 8);
-    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img">';
+    var aria = chartAria('Blocks found', STATE.range, sm, st, String);
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="' + esc(aria) + '">';
     // Horizontal gridlines + y-axis value labels (baseline solid, rest dashed).
     // Counts are integers — cap divisions at maxV so labels never duplicate (e.g.
     // maxV=2 → lines at 0,1,2 rather than 0,0,1,1,2).
@@ -677,7 +728,7 @@
     for (var g = 0; g <= GRID; g++) {
       var gv = maxV * g / GRID, gy = yAt(gv).toFixed(1);
       svg += '<line x1="' + L + '" y1="' + gy + '" x2="' + (W-R) + '" y2="' + gy + '" stroke="var(--border)"' + (g === 0 ? '' : ' stroke-opacity="0.35" stroke-dasharray="3 3"') + '/>';
-      svg += '<text x="' + (L-6) + '" y="' + (parseFloat(gy)+4) + '" text-anchor="end">' + Math.round(gv) + '</text>';
+      svg += '<text x="' + (L-6) + '" y="' + (parseFloat(gy)+4) + '" text-anchor="end">' + fmtCount(gv) + '</text>';
     }
     // Faint vertical gridlines aligned to the x-axis date ticks
     for (var gx = 0; gx < n; gx += every) {
@@ -686,10 +737,12 @@
     }
     svg += '<path d="' + linePath(sm) + '" fill="none" stroke="var(--main)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
     svg += '<path d="' + linePath(st) + '" fill="none" stroke="var(--test)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
-    svg += dots(sm, 'var(--main)') + dots(st, 'var(--test)');
+    svg += dots(sm, 'var(--main)', 'Mainnet') + dots(st, 'var(--test)', 'Testnet');
     for (var i = 0; i < n; i++) {
       if (i % every === 0) svg += '<text x="' + xAt(i).toFixed(1) + '" y="' + (baseY + 16) + '" text-anchor="middle">' + b.labels[i] + '</text>';
     }
+    // All-zero in range reads the same as no data — say so explicitly.
+    if (realMax === 0) svg += '<text x="' + (W/2) + '" y="' + (T + plotH/2) + '" text-anchor="middle">No blocks found in this range</text>';
     holder.innerHTML = svg + '</svg>';
   }
 
@@ -718,8 +771,8 @@
     var b = rangeBuckets(STATE.hrRange);
     var sm = avgSeries(STATE.hashrate.main, b.keys, STATE.hrRange);
     var st = avgSeries(STATE.hashrate.test, b.keys, STATE.hrRange);
-    var maxV = Math.max.apply(null, sm.concat(st));
-    if (!(maxV > 0)) maxV = 1;
+    var realMax = Math.max.apply(null, sm.concat(st));   // 0 when nothing in range
+    var maxV = realMax > 0 ? realMax : 1;
     // T leaves a top band for the peak label (a wide unit string, see below).
     // L is wider than the block chart's (34) because the y-axis tick labels here
     // carry a unit string — up to "999.99 kG/s" (11 chars ≈ 73px). A narrower
@@ -732,11 +785,19 @@
     function linePath(data) {
       return data.map(function (v, i) { return (i === 0 ? 'M' : 'L') + xAt(i).toFixed(1) + ' ' + yAt(v).toFixed(1); }).join(' ');
     }
-    function dots(data, color) {
-      return data.map(function (v, i) { return '<circle cx="' + xAt(i).toFixed(1) + '" cy="' + yAt(v).toFixed(1) + '" r="2.4" fill="' + color + '"/>'; }).join('');
+    // Visible dot + a larger transparent hit circle carrying a <title>, so hovering
+    // anywhere near a point shows "Network · date — 133.81 G/s" as a native tooltip.
+    function dots(data, color, netName) {
+      return data.map(function (v, i) {
+        var cx = xAt(i).toFixed(1), cy = yAt(v).toFixed(1);
+        var title = esc(netName + ' · ' + b.labels[i] + ' — ' + fmtHr(v));
+        return '<circle cx="' + cx + '" cy="' + cy + '" r="2.4" fill="' + color + '"/>'
+             + '<circle cx="' + cx + '" cy="' + cy + '" r="8" fill="transparent"><title>' + title + '</title></circle>';
+      }).join('');
     }
     var every = Math.ceil(n / 8);
-    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img">';
+    var aria = chartAria('Pool hashrate', STATE.hrRange, sm, st, fmtHr);
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="' + esc(aria) + '">';
     // The peak (y-axis max) carries a wide unit string — "3.81 G/s" up to
     // "999.99 kG/s" (11 chars). A left-gutter tick (text-anchor="end") would run
     // off the SVG's left edge and clip the leading digit. Park it in the top band,
@@ -758,10 +819,12 @@
     }
     svg += '<path d="' + linePath(sm) + '" fill="none" stroke="var(--main)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
     svg += '<path d="' + linePath(st) + '" fill="none" stroke="var(--test)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
-    svg += dots(sm, 'var(--main)') + dots(st, 'var(--test)');
+    svg += dots(sm, 'var(--main)', 'Mainnet') + dots(st, 'var(--test)', 'Testnet');
     for (var i = 0; i < n; i++) {
       if (i % every === 0) svg += '<text x="' + xAt(i).toFixed(1) + '" y="' + (baseY + 16) + '" text-anchor="middle">' + b.labels[i] + '</text>';
     }
+    // Points exist but none fall in the selected window — distinguish from no data.
+    if (realMax === 0) svg += '<text x="' + (W/2) + '" y="' + (T + plotH/2) + '" text-anchor="middle">No hashrate recorded in this range</text>';
     holder.innerHTML = svg + '</svg>';
   }
 
@@ -1063,18 +1126,35 @@
     });
   })();
 
+  // ── Live-data freshness indicator ──
+  // lastOkTs = last time a node poll actually returned data. A 1 s ticker keeps the
+  // "updated Ns ago" text current between the 10 s polls and flips to "stale" (no
+  // pulse) once a cycle fails, so a silently-dead server is visible at a glance.
+  var lastOkTs = null, lastPollOk = false;
+  var freshBox = document.getElementById('freshness'), freshText = document.getElementById('fresh-text');
+  function tickFresh() {
+    if (lastOkTs === null) { freshBox.className = 'freshness'; freshText.textContent = 'Connecting…'; return; }
+    var age = (Date.now() - lastOkTs) / 1000;
+    if (lastPollOk && age < 30) { freshBox.className = 'freshness live'; freshText.textContent = 'Live · updated ' + relAge(age) + ' ago'; }
+    else { freshBox.className = 'freshness stale'; freshText.textContent = 'Stale · updated ' + relAge(age) + ' ago'; }
+  }
+
   function poll() {
     Promise.all([
       pollNet('main'), pollNet('test'), pollWallet('main'), pollWallet('test'),
       pollBlocks('main'), pollBlocks('test'), pollMiners('main'), pollMiners('test'),
       pollHashrate('main'), pollHashrate('test'), pollSplit()
-    ]).then(function () {
+    ]).then(function (results) {
+      // results[0]/[1] = pollNet main/test (true only when a node returned a tip)
+      lastPollOk = !!(results[0] || results[1]);
+      if (lastPollOk) lastOkTs = Date.now();
+      tickFresh();
       renderDerived();
       autoTestnetCollapse();              // expand testnet only while its node is live
       if (SPLIT.person) renderPerson();   // refresh live worker hashrates each tick
     });
   }
-  poll(); setInterval(poll, 10000);
+  poll(); setInterval(poll, 10000); setInterval(tickFresh, 1000);
 })();
 </script>
 </body>

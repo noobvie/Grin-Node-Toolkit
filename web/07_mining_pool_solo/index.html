@@ -99,6 +99,17 @@
   .panel.offline { opacity: 1; }
 
   .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.3rem; }
+  /* collapsible testnet panel — header stays as the toggle + live status summary */
+  .panel-head.collapsible { cursor: pointer; }
+  .panel-head.collapsible:focus-visible { outline: 2px solid var(--test); outline-offset: 4px; border-radius: 8px; }
+  .chevron { margin-left: .5rem; color: var(--muted); display: inline-block; transition: transform .2s; }
+  #panel-test.collapsed { padding-bottom: 1.5rem; margin-bottom: 1rem; }
+  #panel-test.collapsed .panel-head { margin-bottom: 0; }
+  #panel-test.collapsed .chevron { transform: rotate(-90deg); }
+  #panel-test.collapsed .tiles,
+  #panel-test.collapsed .miners,
+  #panel-test.collapsed .blocks,
+  #panel-test.collapsed #test-note { display: none !important; }
   .badge { display: inline-flex; align-items: center; gap: .6rem; font-size: 1.7rem; font-weight: 800; letter-spacing: .1em; }
   .badge .net { text-shadow: none; }
   .panel[data-net="main"] .badge .net { color: var(--main); }
@@ -258,10 +269,10 @@
 </section>
 
 <!-- ── TESTNET ── -->
-<section class="panel" data-net="test" id="panel-test">
-  <div class="panel-head">
+<section class="panel collapsed" data-net="test" id="panel-test">
+  <div class="panel-head collapsible" id="test-head" role="button" tabindex="0" aria-expanded="false" title="Show / hide testnet">
     <span class="badge"><span class="net">TESTNET</span><span class="unit">tGRIN</span></span>
-    <span class="panel-status"><span id="test-dot" class="dot"></span><span id="test-state">—</span></span>
+    <span class="panel-status"><span id="test-dot" class="dot"></span><span id="test-state">—</span><span class="chevron" id="test-chevron" aria-hidden="true">▾</span></span>
   </div>
   <div class="tiles">
     <div class="tile"><div class="label">Block Height</div><div class="value" id="test-height">—</div></div>
@@ -992,6 +1003,34 @@
     });
   });
 
+  // ── Testnet panel collapse ──
+  // Auto-collapsed unless the testnet node is live (most operators run mainnet
+  // only). pollNet() toggles `.offline` on the panel; we mirror that into a
+  // collapse. A manual click sets an override so auto-state stops flipping under
+  // the user for the rest of the session.
+  var TEST_COLLAPSE_OVERRIDDEN = false;
+  function setTestnetCollapsed(collapsed) {
+    document.getElementById('panel-test').classList.toggle('collapsed', collapsed);
+    document.getElementById('test-head').setAttribute('aria-expanded', String(!collapsed));
+  }
+  function autoTestnetCollapse() {
+    if (TEST_COLLAPSE_OVERRIDDEN) return;
+    var active = !document.getElementById('panel-test').classList.contains('offline')
+                 && STATE.tip.test !== null;   // reachable node returning a tip
+    setTestnetCollapsed(!active);
+  }
+  (function () {
+    var head = document.getElementById('test-head');
+    function toggle() {
+      TEST_COLLAPSE_OVERRIDDEN = true;
+      setTestnetCollapsed(!document.getElementById('panel-test').classList.contains('collapsed'));
+    }
+    head.addEventListener('click', toggle);
+    head.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+    });
+  })();
+
   function poll() {
     Promise.all([
       pollNet('main'), pollNet('test'), pollWallet('main'), pollWallet('test'),
@@ -999,6 +1038,7 @@
       pollHashrate('main'), pollHashrate('test'), pollSplit()
     ]).then(function () {
       renderDerived();
+      autoTestnetCollapse();              // expand testnet only while its node is live
       if (SPLIT.person) renderPerson();   // refresh live worker hashrates each tick
     });
   }

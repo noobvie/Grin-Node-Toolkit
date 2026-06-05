@@ -721,7 +721,10 @@
     var maxV = Math.max.apply(null, sm.concat(st));
     if (!(maxV > 0)) maxV = 1;
     // T leaves a top band for the peak label (a wide unit string, see below).
-    var W = 720, H = 240, L = 34, R = 8, T = 30, B = 30;
+    // L is wider than the block chart's (34) because the y-axis tick labels here
+    // carry a unit string — up to "999.99 kG/s" (11 chars ≈ 73px). A narrower
+    // gutter would clip the leading digits (only "G/s" would show).
+    var W = 720, H = 240, L = 84, R = 8, T = 30, B = 30;
     var plotW = W - L - R, plotH = H - T - B, n = b.keys.length, baseY = T + plotH;
     var stepX = n > 1 ? plotW / (n - 1) : 0;
     function xAt(i) { return L + i * stepX; }

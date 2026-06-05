@@ -2376,15 +2376,19 @@ _settlement_show_history() {
     "$BLOCK_COLLECTOR_BIN" --net mainnet --state-dir "$BLOCK_COLLECTOR_STATE_DIR" \
         --list-payments 2>/dev/null | python3 -c '
 import json, sys
+LIMIT = 20   # show only the latest 20; collector still returns full history (backups/queries)
 try: d = json.load(sys.stdin)
 except Exception: d = {}
-pays = d.get("payments", [])
+pays = d.get("payments", [])   # already newest-first (ORDER BY id DESC)
 if not pays:
     print("  No payments recorded yet."); sys.exit()
 print("  %-20s %12s  %-20s  %s" % ("When (UTC)", "GRIN", "Nickname", "Note"))
 print("  " + "-" * 72)
-for p in pays:
+for p in pays[:LIMIT]:
     print("  %-20s %12.3f  %-20s  %s" % (p["ts"][:19], p["grin"], p["nick"][:20], p.get("note","")))
+if len(pays) > LIMIT:
+    print("  " + "-" * 72)
+    print("  …and %d older — showing the latest %d of %d." % (len(pays) - LIMIT, LIMIT, len(pays)))
 '
 }
 

@@ -65,7 +65,14 @@
   code, .code { background: var(--chip-bg); border: 1px solid var(--border); border-radius: 6px;
     padding: .15rem .5rem; color: var(--text-hi); font-family: 'Courier New', monospace; word-break: break-all; }
   .code.block { display: block; padding: .8rem 1rem; margin: .5rem 0; white-space: pre-wrap; }
-  .copy { cursor: pointer; }
+  .copytext { cursor: text; }
+  .copybtn { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: .12rem .55rem; font-family: inherit; font-size: .78rem;
+    cursor: pointer; white-space: nowrap; flex: none; }
+  .copybtn:hover { background: var(--border); }
+  .copybtn.ok { color: var(--green); border-color: var(--green); }
+  .copyrow { display: flex; align-items: center; gap: .55rem; margin: .5rem 0; flex-wrap: wrap; }
+  .copyrow .copytext { flex: 1 1 auto; }
   .callout { border-left: 3px solid var(--yellow); background: rgba(255,216,77,.08);
     padding: .8rem 1rem; border-radius: 0 8px 8px 0; margin: .8rem 0; color: var(--text); }
   .callout.warn { border-left-color: var(--red); background: rgba(255,128,121,.08); }
@@ -177,7 +184,7 @@
        most reliable target — and the <b>domain</b> as an optional alias. If the domain shows
        <b>unreachable</b>, just use the IP.
        <span class="hint" title="If the domain shows unreachable: point its A record at the node's public IP, and on Cloudflare set that record to DNS-only (grey cloud), not Proxied (orange). Proxied mode only handles HTTP/HTTPS and breaks raw-TCP stratum — then only the IP works.">ⓘ domain unreachable?</span>
-       Tap any URL to copy it.</p>
+       Use the <b>copy</b> button to grab a URL.</p>
 
     <h3 class="pool-head backup"><span class="pdot"></span>Pool 2 / Pool 3 — public backups
         <span class="chip">failover</span></h3>
@@ -279,8 +286,8 @@
 
     <h3>External pollers</h3>
     <p>Pool stats are also published as a machine-readable JSON feed for external tools and
-       dashboards. Tap to copy:</p>
-    <div class="code block copy" id="poller-endpoint">data/poolstats_main.json</div>
+       dashboards. Copy the endpoint:</p>
+    <div class="copyrow"><code class="code copytext" id="poller-endpoint">data/poolstats_main.json</code><button class="copybtn" type="button" aria-label="Copy endpoint">copy</button></div>
     <p class="muted">The feed is refreshed by the collector and carries both pool and network
        figures:</p>
     <ul>
@@ -351,7 +358,8 @@
   }
 
   function poolOption(url, host, port, type, opts) {
-    return '<div class="poolurl"><code class="copy">' + url + '</code> '
+    return '<div class="poolurl"><code class="copytext">' + url + '</code>'
+      + '<button class="copybtn" type="button" aria-label="Copy URL">copy</button> '
       + reachPill(host, port, type, opts) + '</div>';
   }
 
@@ -440,12 +448,16 @@
     })
     .catch(function () { document.getElementById('no-net').style.display = 'block'; });
 
-  // click-to-copy stratum strings
+  // Copy button → copies the sibling .copytext. The text is NEVER mutated (the
+  // feedback lives on the button, restored to a constant 'copy'), so rapid clicks
+  // always copy the real URL and can't permanently stick a label on either node.
   document.addEventListener('click', function (e) {
-    var el = e.target.closest('.copy'); if (!el || !navigator.clipboard) return;
-    navigator.clipboard.writeText(el.textContent).then(function () {
-      var old = el.textContent; el.textContent = 'copied ✓';
-      setTimeout(function () { el.textContent = old; }, 900);
+    var btn = e.target.closest('.copybtn'); if (!btn || !navigator.clipboard) return;
+    var row = btn.closest('.poolurl, .copyrow');
+    var src = row && row.querySelector('.copytext'); if (!src) return;
+    navigator.clipboard.writeText(src.textContent).then(function () {
+      btn.textContent = 'copied ✓'; btn.classList.add('ok');
+      setTimeout(function () { btn.textContent = 'copy'; btn.classList.remove('ok'); }, 900);
     }).catch(function () {});
   });
 })();

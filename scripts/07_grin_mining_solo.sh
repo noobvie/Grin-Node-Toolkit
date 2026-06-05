@@ -67,7 +67,7 @@ BLOCK_COLLECTOR_STATE_DIR="/opt/grin/solo-stats"
 # Payout-split payment calc (mainnet): nickname grouping (text before first dot)
 # only, never addresses. The collector reads this to emit split_main.json.
 PAYMENT_CONFIG="/opt/grin/conf/grin_solo_payment.json"
-# Optional stats-page access lock (HTTP Basic Auth over the certbot-managed HTTPS).
+# Optional index & setup pages access lock (HTTP Basic Auth over the certbot-managed HTTPS).
 STATS_HTPASSWD="/etc/nginx/grin-solo-stats.htpasswd"
 WATCHDOG_LOG="/opt/grin/logs/stratum-watchdog.log"
 LOG_DIR="/opt/grin/logs"
@@ -1501,8 +1501,8 @@ sys.exit(0 if ok else 1)' "$PAYMENT_CONFIG" 2>/dev/null; then
     echo -e "  ${DIM}earnings − payments). Record payouts in menu 7 so 'Owed' drops.${RESET}"
 }
 
-# Prompt for the optional stats-page access lock (HTTP Basic Auth). Writes an
-# apr1 htpasswd (no apache2-utils needed — nginx reads apr1 natively) and echoes,
+# Prompt for the optional index & setup pages access lock (HTTP Basic Auth over
+# HTTPS). Writes an apr1 htpasswd (no apache2-utils needed — nginx reads apr1 natively) and echoes,
 # via the named globals below, the nginx snippets the vhost writer injects:
 #   _ACCESS_AUTH_BLOCK       server-level auth_basic + auth_basic_user_file (or "")
 #   _ACCESS_PUBLIC_CARVEOUTS poolstats_*.json `auth_basic off` carve-outs (or "")
@@ -1515,8 +1515,14 @@ _solo_prompt_access_lock() {
     _ACCESS_PUBLIC_CARVEOUTS=""
 
     echo ""
-    echo -e "${BOLD}Stats page access lock (optional)${RESET}"
-    echo -e "  ${DIM}Username/password gate (HTTP Basic Auth) — also keeps crawlers out (401).${RESET}"
+    echo -e "${BOLD}Index & setup pages access lock (recommended for solo)${RESET}"
+    echo -e "  ${DIM}Username/password gate (HTTP Basic Auth, served over HTTPS). With it ON, the${RESET}"
+    echo -e "  ${DIM}index + setup pages go fully private: every visitor — search engines included${RESET}"
+    echo -e "  ${DIM}— gets a 401 before any content, so the domain can't be crawled or indexed at${RESET}"
+    echo -e "  ${DIM}all. A solo page shows your income (found blocks, hashrate, nicknames, owed),${RESET}"
+    echo -e "  ${DIM}so locking it is the sensible default; the public miningpoolstats feed${RESET}"
+    echo -e "  ${DIM}(poolstats_*.json) stays reachable. Without the lock, the pages are public${RESET}"
+    echo -e "  ${DIM}(only a 'noindex' hint, which rogue bots ignore).${RESET}"
 
     local action="new"
     if [[ -f "$STATS_HTPASSWD" ]]; then
@@ -1529,9 +1535,9 @@ _solo_prompt_access_lock() {
             *) info "Keeping existing credentials."; action="keep" ;;
         esac
     else
-        echo -ne "  Protect the stats page with a username/password? [y/N]: "
+        echo -ne "  Protect the index & setup pages with a username/password? [Y/n]: "
         read -r alk
-        [[ "${alk,,}" != "y" ]] && { info "Access lock not enabled (page stays public)."; return; }
+        [[ "${alk,,}" == "n" ]] && { info "Access lock not enabled (pages stay public)."; return; }
     fi
 
     if [[ "$action" != "keep" ]]; then
@@ -1560,15 +1566,17 @@ _solo_prompt_access_lock() {
     # Server-level auth (every location inherits unless it opts out below).
     _ACCESS_AUTH_BLOCK=$'\n    auth_basic           "Grin Solo Mining";\n    auth_basic_user_file '"$STATS_HTPASSWD"$';'
 
-    # miningpoolstats.com polls poolstats_<net>.json — keep it public so the
-    # listing keeps working, unless the operator opts to hide it too.
-    echo -ne "  Also hide the public miningpoolstats feed (poolstats_*.json)? [y/N]: "
-    read -r hidemps
-    if [[ "${hidemps,,}" != "y" ]]; then
+    # poolstats_<net>.json is the machine-readable feed miningpoolstats.stream polls.
+    # Default OFF: a freshly locked solo page stays FULLY private. Opt in to expose
+    # just this one feed (auth_basic off carve-out) if you want the pool listed.
+    echo -e "  ${DIM}poolstats_*.json is the feed https://miningpoolstats.stream/grin polls to list a pool.${RESET}"
+    echo -ne "  Publish it publicly so you can list this pool there (everything else stays locked)? [y/N]: "
+    read -r pubmps
+    if [[ "${pubmps,,}" == "y" ]]; then
         _ACCESS_PUBLIC_CARVEOUTS=$'    location = /data/poolstats_main.json { auth_basic off; }\n    location = /data/poolstats_test.json { auth_basic off; }\n\n'
-        info "miningpoolstats feed left public; everything else (incl. split_main.json) is locked."
+        info "poolstats feed published (public); everything else (incl. split_main.json) stays locked."
     else
-        warn "Entire page locked — public miningpoolstats listing will stop updating."
+        info "Fully private — poolstats feed locked too (no public miningpoolstats listing)."
     fi
 }
 
@@ -1877,6 +1885,25 @@ CRON
     # Write an HTTP-only vhost FIRST. Referencing letsencrypt certs that do not
     # exist yet would make `nginx -t` fail. certbot --nginx injects the 443
     # server block + SSL directives afterward (and manages options-ssl-nginx.conf).
+    # ── Content-Security-Policy ─────────────────────────────────────────────────
+    # Locks the pages to same-origin resources. BOTH pages use inline <style> and
+    # <script> blocks (plus inline style="" attributes), so style-src/script-src
+    # MUST allow 'unsafe-inline' — drop it and the layout + all live polling break.
+    # connect-src needs 'self' (the same-origin /api/* and /data/*.json fetches)
+    # PLUS the off-box port-check origin the setup page calls for its reachability
+    # pills; we derive that origin (scheme://host[:port], path stripped) from the
+    # operator-chosen portcheck_api so the pills keep working. Checker disabled →
+    # only 'self'. No external fonts/CDN, logo is same-origin → img/font-src 'self'.
+    # Applied at server level; it inherits into every location because none of them
+    # set their own add_header (the /data location uses `expires`, not add_header,
+    # precisely to keep this inheritance).
+    local csp_connect="'self'"
+    if [[ "${solo_pcapi:-}" =~ ^https?:// ]]; then
+        local pc_origin; pc_origin=$(printf '%s' "$solo_pcapi" | sed -E 's#^(https?://[^/]+).*#\1#')
+        [[ -n "$pc_origin" ]] && csp_connect="'self' $pc_origin"
+    fi
+    local csp_value="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src $csp_connect; font-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+
     # umask 077 so the conf (which holds the base64 auth token(s)) is never
     # group/world readable, even momentarily, before the explicit chmod below.
     info "Writing nginx vhost (HTTP): $nginx_conf"
@@ -1896,6 +1923,7 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "$csp_value" always;
 
     # Abuse guards (zones in script07-solo-static.conf / script07-solo-conn.conf).
     # Server-level so they are inherited by location / and the /data JSON location.

@@ -93,6 +93,14 @@
   .hint { cursor: help; color: var(--yellow); border-bottom: 1px dotted var(--yellow);
     font-size: .82rem; white-space: nowrap; }
 
+  /* live "reachable from the internet" pill — measured by an off-box prober */
+  .rpill { display: inline-block; border: 1px solid var(--border); border-radius: 999px;
+    padding: .12rem .6rem; font-size: .76rem; letter-spacing: .04em; white-space: nowrap; cursor: help; }
+  .rpill.checking { color: var(--muted); }
+  .rpill.ok  { color: var(--green); border-color: var(--green); }
+  .rpill.bad { color: var(--red);   border-color: var(--red); }
+  .rpill.unknown { color: var(--muted); border-color: var(--border); }
+
   /* per-network pool URL lines inside the iPollo table */
   .poolurl { display: flex; align-items: baseline; gap: .55rem; margin: .25rem 0; flex-wrap: wrap; }
   .poolurl .net { font-weight: 800; font-size: .72rem; letter-spacing: .05em; min-width: 4.6rem; }
@@ -331,44 +339,118 @@
     + "Proxied (orange) mode only proxies HTTP/HTTPS and breaks raw-TCP stratum — "
     + "then only the IP works.";
 
-  // One copyable URL line. kind: 'primary' | 'optional'. note → hover tooltip (domain only).
-  function poolOption(url, kind, note) {
-    var chip = (kind === 'primary')
-      ? '<span class="chip primary">recommended</span>'
-      : '<span class="chip">optional</span>';
-    var hint = note
-      ? ' <span class="hint" title="' + note.replace(/"/g, '&quot;') + '">⚠ Cloudflare?</span>'
-      : '';
-    return '<div class="poolurl"><code class="copy">' + url + '</code>' + chip + hint + '</div>';
+  // Base URL of an OFF-BOX port-check service (the Office Tools backend). It must run on
+  // a different host than this node, otherwise probing our own public IP can hairpin
+  // through the local stack and report a false "open". Set via data/config.json →
+  // "portcheck_api". When unset, we fall back to the old static recommended/optional chips.
+  var PORTCHECK_API = '';
+
+  // A reachability pill (live) or the legacy chip (fallback when no prober configured).
+  // type: 'ip' | 'domain'. opts.fallbackChip → render a chip when PORTCHECK_API is unset;
+  // opts.primary → that chip is "recommended" vs "optional".
+  function reachPill(host, port, type, opts) {
+    opts = opts || {};
+    if (!PORTCHECK_API) {
+      if (!opts.fallbackChip) return '';
+      var chip = opts.primary
+        ? '<span class="chip primary">recommended</span>'
+        : '<span class="chip">optional</span>';
+      var hint = (type === 'domain')
+        ? ' <span class="hint" title="' + CF_NOTE.replace(/"/g, '&quot;') + '">⚠ Cloudflare?</span>'
+        : '';
+      return chip + hint;
+    }
+    return '<span class="rpill checking" data-host="' + host + '" data-port="' + port
+      + '" data-type="' + type + '">⏳ checking…</span>';
   }
 
-  // Connection-details block: IP first (primary), domain second (optional alias).
+  function poolOption(url, host, port, type, opts) {
+    return '<div class="poolurl"><code class="copy">' + url + '</code> '
+      + reachPill(host, port, type, opts) + '</div>';
+  }
+
+  // Connection-details block: IP first (most reliable), domain second (alias).
   function show(net, ip, domain, port) {
     var b = document.getElementById('block-' + net); if (!b) return;
     b.classList.remove('hidden');
     var html = '';
-    if (ip) html += poolOption('stratum+tcp://' + ip + ':' + port, 'primary', '');
-    if (domain) html += poolOption('stratum+tcp://' + domain + ':' + port,
-      ip ? 'optional' : 'primary', CF_NOTE);
+    if (ip) html += poolOption('stratum+tcp://' + ip + ':' + port, ip, port, 'ip',
+      { fallbackChip: true, primary: true });
+    if (domain) html += poolOption('stratum+tcp://' + domain + ':' + port, domain, port, 'domain',
+      { fallbackChip: true, primary: !ip });
     document.getElementById(net + '-stratum').innerHTML =
       html || '<span class="muted">no host configured</span>';
   }
 
   // Build one labelled, copyable pool-URL line per available network for a given host.
-  function poolUrlLines(nets, host) {
+  function poolUrlLines(nets, host, type) {
     return nets.map(function (n) {
       return '<div class="poolurl">'
         + '<span class="net ' + n.net + '">' + NET_META[n.net].label + '</span>'
         + '<code class="copy">stratum+tcp://' + host + ':' + n.port + '</code>'
-        + '<span class="port-note">port ' + n.port + ' · ' + NET_META[n.net].coin + '</span>'
+        + '<span class="port-note">port ' + n.port + ' · ' + NET_META[n.net].coin + '</span> '
+        + reachPill(host, n.port, type, { fallbackChip: false })
         + '</div>';
     }).join('');
+  }
+
+  // Settle one pill from a probe result. type drives the failure hint.
+  function setPill(p, state, type) {
+    if (state === 'ok') {
+      p.className = 'rpill ok'; p.textContent = '🟢 reachable';
+      p.title = 'An external check connected to this address from the internet.';
+    } else if (state === 'bad') {
+      p.className = 'rpill bad'; p.textContent = '🔴 unreachable';
+      p.title = (type === 'domain')
+        ? "External check couldn't connect. The domain may not point here, or it's "
+          + "Cloudflare-proxied (orange cloud) — set the A record to DNS-only (grey cloud). "
+          + "Raw-TCP stratum is never proxied."
+        : "External check couldn't connect. Open the stratum port to your miners — "
+          + "it's raw TCP, not proxied through nginx/HTTPS.";
+    } else {
+      p.className = 'rpill unknown'; p.textContent = '⚪ check unavailable';
+      p.title = 'Could not reach the port-check service.';
+    }
+  }
+
+  // Probe every live pill against the off-box checker. Pills are grouped by host and
+  // sent as one /api/portcheckbatch call per host (one network round-trip for all that
+  // host's ports) — keeps us well under the checker's per-IP rate limit on reloads.
+  function runReachChecks() {
+    if (!PORTCHECK_API) return;
+    var base = PORTCHECK_API.replace(/\/+$/, '');
+    var byHost = {};
+    [].forEach.call(document.querySelectorAll('.rpill.checking'), function (p) {
+      (byHost[p.dataset.host] = byHost[p.dataset.host] || []).push(p);
+    });
+    Object.keys(byHost).forEach(function (host) {
+      var group = byHost[host];
+      var ports = group.map(function (p) { return p.dataset.port; })
+        .filter(function (v, i, a) { return a.indexOf(v) === i; });
+      var fail = function (state) {
+        group.forEach(function (p) { setPill(p, state, p.dataset.type); });
+      };
+      var url = base + '/api/portcheckbatch?host=' + encodeURIComponent(host)
+        + '&ports=' + encodeURIComponent(ports.join(','));
+      fetch(url, { signal: AbortSignal.timeout(9000) })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (!d || !d.results) { fail('unknown'); return; }
+          var open = {};
+          d.results.forEach(function (x) { open[x.port] = x.open; });
+          group.forEach(function (p) {
+            setPill(p, open[p.dataset.port] ? 'ok' : 'bad', p.dataset.type);
+          });
+        })
+        .catch(function () { fail('unknown'); });
+    });
   }
 
   fetch('data/config.json', { cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (c) {
       if (!c) { document.getElementById('no-net').style.display = 'block'; return; }
+      PORTCHECK_API = c.portcheck_api || '';
       var domain = c.host || location.hostname;
       var ip = c.public_ip || '';
       var ep = document.getElementById('poller-endpoint');
@@ -385,7 +467,10 @@
       if (!nets.length) { document.getElementById('no-net').style.display = 'block'; return; }
       // iPollo Pool 1 = this solo pool, IP first (most reliable). Pool 2 / Pool 3 are
       // static public-pool backups in the markup, so only Pool 1 is filled from config.
-      document.getElementById('ipollo-pool1').innerHTML = poolUrlLines(nets, ip || domain);
+      document.getElementById('ipollo-pool1').innerHTML =
+        poolUrlLines(nets, ip || domain, ip ? 'ip' : 'domain');
+      // Fire the off-box reachability probes once every pill is in the DOM.
+      runReachChecks();
     })
     .catch(function () { document.getElementById('no-net').style.display = 'block'; });
 

@@ -1702,7 +1702,35 @@ solo_deploy_stats_page() {
     local public_ip_json=""
     [[ -n "$pub_ip" ]] && public_ip_json="\"public_ip\":\"$pub_ip\","
 
-    printf '{%s%s"host":"%s",%s"networks":{%s}}\n' "$slogan_json" "$pool_name_json" "$subdomain" "$public_ip_json" "$nets_json" \
+    # Off-box port-check service → the setup page turns each stratum URL into a live
+    # "🟢 reachable / 🔴 unreachable" pill. MUST be a host OTHER than this node (e.g. the
+    # public Office Tools checker), otherwise probing our own public IP can hairpin
+    # through the local stack and report a false "open". The page calls
+    # <base>/api/portcheckbatch?host=&ports= — a public CORS-open endpoint, so no
+    # per-domain setup is needed on the checker. Defaults to the canonical public
+    # Office Tools instance so the pills work out of the box; the operator can paste
+    # a self-hosted Office Tools base URL instead, or type "-" to disable the live
+    # pills (the static recommended/optional chips are kept). Existing config wins
+    # as the prefill so a re-run does not silently revert a custom/disabled choice.
+    local default_pcapi="https://tools.grin.money"
+    local existing_pcapi=""
+    if [[ -f "$web_dir/data/config.json" ]]; then
+        existing_pcapi=$(grep -oP '"portcheck_api"\s*:\s*"\K(\\.|[^"\\])*' \
+            "$web_dir/data/config.json" 2>/dev/null || true)
+    fi
+    # Prefill: a value already in config (even when re-running) else the canonical default.
+    local prefill_pcapi="${existing_pcapi:-$default_pcapi}"
+    echo -ne "Off-box port-check API base URL for live reachability pills (Enter to accept, '-' to disable) [$prefill_pcapi]: "
+    read -r solo_pcapi
+    [[ -z "$solo_pcapi" ]] && solo_pcapi="$prefill_pcapi"
+    [[ "$solo_pcapi" == "-" ]] && solo_pcapi=""   # explicit opt-out → omit the key, page falls back to chips
+    local portcheck_api_json=""
+    if [[ -n "$solo_pcapi" ]]; then
+        local esc_pcapi="${solo_pcapi//\\/\\\\}"; esc_pcapi="${esc_pcapi//\"/\\\"}"
+        portcheck_api_json="\"portcheck_api\":\"$esc_pcapi\","
+    fi
+
+    printf '{%s%s"host":"%s",%s%s"networks":{%s}}\n' "$slogan_json" "$pool_name_json" "$subdomain" "$public_ip_json" "$portcheck_api_json" "$nets_json" \
         > "$web_dir/data/config.json"
     chmod 644 "$web_dir/data/config.json"
     [[ -n "$solo_slogan" ]] && success "Slogan + connection config written (edit $web_dir/data/config.json to change)." \

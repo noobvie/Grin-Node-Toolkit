@@ -668,14 +668,25 @@
     function dots(data, color) {
       return data.map(function (v, i) { return '<circle cx="' + xAt(i).toFixed(1) + '" cy="' + yAt(v).toFixed(1) + '" r="2.4" fill="' + color + '"/>'; }).join('');
     }
+    var every = Math.ceil(n / 8);
     var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img">';
-    svg += '<line x1="' + L + '" y1="' + baseY + '" x2="' + (W-R) + '" y2="' + baseY + '" stroke="var(--border)"/>';
-    svg += '<text x="' + (L-6) + '" y="' + (baseY+4) + '" text-anchor="end">0</text>';
-    svg += '<text x="' + (L-6) + '" y="' + (T+10) + '" text-anchor="end">' + maxV + '</text>';
+    // Horizontal gridlines + y-axis value labels (baseline solid, rest dashed).
+    // Counts are integers — cap divisions at maxV so labels never duplicate (e.g.
+    // maxV=2 → lines at 0,1,2 rather than 0,0,1,1,2).
+    var GRID = Math.min(4, maxV);
+    for (var g = 0; g <= GRID; g++) {
+      var gv = maxV * g / GRID, gy = yAt(gv).toFixed(1);
+      svg += '<line x1="' + L + '" y1="' + gy + '" x2="' + (W-R) + '" y2="' + gy + '" stroke="var(--border)"' + (g === 0 ? '' : ' stroke-opacity="0.35" stroke-dasharray="3 3"') + '/>';
+      svg += '<text x="' + (L-6) + '" y="' + (parseFloat(gy)+4) + '" text-anchor="end">' + Math.round(gv) + '</text>';
+    }
+    // Faint vertical gridlines aligned to the x-axis date ticks
+    for (var gx = 0; gx < n; gx += every) {
+      var vx = xAt(gx).toFixed(1);
+      svg += '<line x1="' + vx + '" y1="' + T + '" x2="' + vx + '" y2="' + baseY + '" stroke="var(--border)" stroke-opacity="0.2" stroke-dasharray="3 3"/>';
+    }
     svg += '<path d="' + linePath(sm) + '" fill="none" stroke="var(--main)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
     svg += '<path d="' + linePath(st) + '" fill="none" stroke="var(--test)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
     svg += dots(sm, 'var(--main)') + dots(st, 'var(--test)');
-    var every = Math.ceil(n / 8);
     for (var i = 0; i < n; i++) {
       if (i % every === 0) svg += '<text x="' + xAt(i).toFixed(1) + '" y="' + (baseY + 16) + '" text-anchor="middle">' + b.labels[i] + '</text>';
     }
@@ -721,18 +732,30 @@
     function dots(data, color) {
       return data.map(function (v, i) { return '<circle cx="' + xAt(i).toFixed(1) + '" cy="' + yAt(v).toFixed(1) + '" r="2.4" fill="' + color + '"/>'; }).join('');
     }
+    var every = Math.ceil(n / 8);
     var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img">';
-    svg += '<line x1="' + L + '" y1="' + baseY + '" x2="' + (W-R) + '" y2="' + baseY + '" stroke="var(--border)"/>';
-    svg += '<text x="' + (L-6) + '" y="' + (baseY+4) + '" text-anchor="end">0</text>';
     // The peak (y-axis max) carries a wide unit string — "3.81 G/s" up to
     // "999.99 kG/s" (11 chars). A left-gutter tick (text-anchor="end") would run
     // off the SVG's left edge and clip the leading digit. Park it in the top band,
     // left-anchored at x=0, so it can never clip regardless of length.
     svg += '<text x="0" y="16" text-anchor="start">peak ' + fmtHr(maxV) + '</text>';
+    // Horizontal gridlines + y-axis value labels (baseline solid, rest dashed).
+    // Top gutter holds the peak label, so the topmost gridline label is dropped
+    // to avoid overlapping it.
+    var GRID = 4;
+    for (var g = 0; g <= GRID; g++) {
+      var gv = maxV * g / GRID, gy = yAt(gv).toFixed(1);
+      svg += '<line x1="' + L + '" y1="' + gy + '" x2="' + (W-R) + '" y2="' + gy + '" stroke="var(--border)"' + (g === 0 ? '' : ' stroke-opacity="0.35" stroke-dasharray="3 3"') + '/>';
+      if (g < GRID) svg += '<text x="' + (L-6) + '" y="' + (parseFloat(gy)+4) + '" text-anchor="end">' + fmtHr(gv) + '</text>';
+    }
+    // Faint vertical gridlines aligned to the x-axis date ticks
+    for (var gx = 0; gx < n; gx += every) {
+      var vx = xAt(gx).toFixed(1);
+      svg += '<line x1="' + vx + '" y1="' + T + '" x2="' + vx + '" y2="' + baseY + '" stroke="var(--border)" stroke-opacity="0.2" stroke-dasharray="3 3"/>';
+    }
     svg += '<path d="' + linePath(sm) + '" fill="none" stroke="var(--main)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
     svg += '<path d="' + linePath(st) + '" fill="none" stroke="var(--test)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
     svg += dots(sm, 'var(--main)') + dots(st, 'var(--test)');
-    var every = Math.ceil(n / 8);
     for (var i = 0; i < n; i++) {
       if (i % every === 0) svg += '<text x="' + xAt(i).toFixed(1) + '" y="' + (baseY + 16) + '" text-anchor="middle">' + b.labels[i] + '</text>';
     }

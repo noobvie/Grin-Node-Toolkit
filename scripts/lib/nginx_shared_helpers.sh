@@ -291,6 +291,47 @@ limit_req_zone \$binary_remote_addr zone=${zone}:${size} rate=${rate};
 RATELIMIT
 }
 
+# Generic primitive for defining nginx `limit_conn_zone` directives in conf.d/.
+# Companion to nginx_ensure_rate_limit_zone — a connection zone caps the number
+# of *concurrent* connections per key (blunts slowloris / connection floods),
+# whereas a rate zone caps request *rate*. The per-connection cap itself is set
+# by a `limit_conn <zone> <n>;` directive in the server/location block, NOT here;
+# this only declares the shared-memory zone.
+#
+# Behaviour mirrors nginx_ensure_rate_limit_zone:
+#   · No-op if the conf file already exists (lets ops customise it)
+#   · Grep-guard: skips if the zone is already defined anywhere under /etc/nginx
+#   · Writes /etc/nginx/conf.d/<conf_basename>.conf with a comment header
+#
+# Usage:
+#   nginx_ensure_conn_limit_zone <zone_name> [size=10m] [conf_basename]
+nginx_ensure_conn_limit_zone() {
+    local zone="$1" size="${2:-10m}" basename="${3:-${1}-conn-limit}"
+    if [[ -z "$zone" ]]; then
+        error "nginx_ensure_conn_limit_zone: usage: <zone_name> [size] [conf_basename]"
+        return 1
+    fi
+    local conf_file="/etc/nginx/conf.d/${basename}.conf"
+
+    # Skip if the target file already exists — re-running should be a no-op.
+    [[ -f "$conf_file" ]] && return 0
+
+    # Skip if this zone is already defined anywhere under /etc/nginx (avoids a
+    # duplicate definition → nginx "zone already bound" fatal error).
+    grep -rqsE "limit_conn_zone[^;]*zone=${zone}[: ]" /etc/nginx 2>/dev/null && return 0
+
+    mkdir -p /etc/nginx/conf.d
+    cat > "$conf_file" << CONNLIMIT
+# Grin Node Toolkit — managed connection-limit zone: ${zone}
+# Caps concurrent connections per IP (the cap value is set by a limit_conn
+# directive in the vhost, not here). ${size} shared memory zone.
+# Helper: nginx_ensure_conn_limit_zone (scripts/lib/nginx_shared_helpers.sh)
+# To customise, edit this file directly — the helper detects the existing zone
+# and will not overwrite it on subsequent runs.
+limit_conn_zone \$binary_remote_addr zone=${zone}:${size};
+CONNLIMIT
+}
+
 # ── Multi-zone variant: write several related zones to ONE conf.d file ──────
 # Use when a single service (e.g. pool, wallet, drop) needs multiple rate limits.
 #

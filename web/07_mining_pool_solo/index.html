@@ -253,7 +253,7 @@
   </div>
 </header>
 
-<div class="freshness" id="freshness" aria-live="polite" title="Live data refreshes every 10 seconds">
+<div class="freshness" id="freshness" aria-live="polite" title="Live data refreshes every 120 seconds (two Grin blocks)">
   <span class="live-dot"></span><span id="fresh-text">Connecting…</span>
 </div>
 
@@ -342,8 +342,8 @@
   <div class="chart-head">
     <h2>Blocks Found History Chart</h2>
     <div class="seg" id="range-seg">
-      <button type="button" data-range="daily" class="active">Daily</button>
-      <button type="button" data-range="weekly">Weekly</button>
+      <button type="button" data-range="daily">Daily</button>
+      <button type="button" data-range="weekly" class="active">Weekly</button>
       <button type="button" data-range="monthly">Monthly</button>
       <button type="button" data-range="yearly">Yearly</button>
     </div>
@@ -357,8 +357,8 @@
   <div class="chart-head">
     <h2>Pool Hashrate History Chart</h2>
     <div class="seg" id="hr-range-seg">
-      <button type="button" data-range="daily" class="active">Daily</button>
-      <button type="button" data-range="weekly">Weekly</button>
+      <button type="button" data-range="daily">Daily</button>
+      <button type="button" data-range="weekly" class="active">Weekly</button>
       <button type="button" data-range="monthly">Monthly</button>
       <button type="button" data-range="yearly">Yearly</button>
     </div>
@@ -431,7 +431,7 @@
     main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', hashrate: 'data/hashrate_main.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null },
     test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', hashrate: 'data/hashrate_test.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null }
   };
-  var STATE = { tip: { main: null, test: null }, blocks: { main: [], test: [] }, miners: { main: [], test: [] }, hashrate: { main: [], test: [] }, loaded: { main: false, test: false }, hrLoaded: { main: false, test: false }, range: 'daily', hrRange: 'daily', blocksPage: { main: 0, test: 0 } };
+  var STATE = { tip: { main: null, test: null }, blocks: { main: [], test: [] }, miners: { main: [], test: [] }, hashrate: { main: [], test: [] }, loaded: { main: false, test: false }, hrLoaded: { main: false, test: false }, range: 'weekly', hrRange: 'weekly', blocksPage: { main: 0, test: 0 } };
   var BLOCKS_PER_PAGE = 20;  // found-blocks table rows per page
 
   // Seed difficulty/hashrate from the last session so the tiles render a number
@@ -569,7 +569,7 @@
       })
       .catch(function (err) {
         if (err && err.handled) return false;
-        setPanelOffline(net, 'err', 'unreachable', 'Node not responding — retrying every 10 s.');
+        setPanelOffline(net, 'err', 'unreachable', 'Node not responding — retrying every 120 s.');
         return false;
       });
   }
@@ -1127,15 +1127,19 @@
   })();
 
   // ── Live-data freshness indicator ──
-  // lastOkTs = last time a node poll actually returned data. A 1 s ticker keeps the
-  // "updated Ns ago" text current between the 10 s polls and flips to "stale" (no
-  // pulse) once a cycle fails, so a silently-dead server is visible at a glance.
+  // Poll every 120 s — twice Grin's 60 s block time. Chain data only advances once
+  // per block, so a relaxed cadence still catches every block while halving the
+  // node load. lastOkTs = last time a node poll returned data; a 1 s ticker keeps
+  // "updated Ns ago" current between polls. We stay "Live" for 180 s (3 blocks,
+  // tolerates a slow/missed poll) then flip to "stale" (no pulse) so a
+  // silently-dead server is obvious.
+  var POLL_MS = 120000, STALE_S = 180;
   var lastOkTs = null, lastPollOk = false;
   var freshBox = document.getElementById('freshness'), freshText = document.getElementById('fresh-text');
   function tickFresh() {
     if (lastOkTs === null) { freshBox.className = 'freshness'; freshText.textContent = 'Connecting…'; return; }
     var age = (Date.now() - lastOkTs) / 1000;
-    if (lastPollOk && age < 30) { freshBox.className = 'freshness live'; freshText.textContent = 'Live · updated ' + relAge(age) + ' ago'; }
+    if (lastPollOk && age < STALE_S) { freshBox.className = 'freshness live'; freshText.textContent = 'Live · updated ' + relAge(age) + ' ago'; }
     else { freshBox.className = 'freshness stale'; freshText.textContent = 'Stale · updated ' + relAge(age) + ' ago'; }
   }
 
@@ -1154,7 +1158,7 @@
       if (SPLIT.person) renderPerson();   // refresh live worker hashrates each tick
     });
   }
-  poll(); setInterval(poll, 10000); setInterval(tickFresh, 1000);
+  poll(); setInterval(poll, POLL_MS); setInterval(tickFresh, 1000);
 })();
 </script>
 </body>

@@ -967,6 +967,47 @@ _show_stratum_port_guide() {
 # PUBLISH / RESTRICT STRATUM  (per-net branch ▸ Stratum ▸ 3 / 4)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Post-publish connection watch. Manual-refresh (Enter = re-check · 0 = return) to
+# match every other 07 screen — NOT a Ctrl-C trap. Reuses the same ss idiom as
+# _show_node_info. A rig usually appears ~1 min after the pool config is saved and
+# it reconnects, so this closes the loop at the moment the operator most wants to
+# know "did it connect?".
+#   $1 = stratum port   $2 = network label (Mainnet|Testnet)   $3 = miner URL
+_solo_watch_for_miner() {
+    local stratum_port="$1" label="$2" url="$3" n k
+    while true; do
+        n=$(ss -tnp 2>/dev/null | grep ":$stratum_port" | grep -c ESTAB || true)
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  Waiting for a miner — $label (port $stratum_port)${RESET}  ${DIM}($(date -u '+%H:%M:%S UTC'))${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        echo -e "  ${BOLD}Miner Pool / Server:${RESET}  ${BOLD}${CYAN}$url${RESET}"
+        echo ""
+        if [[ "${n:-0}" -gt 0 ]]; then
+            echo -e "  ${GREEN}✓ Miner connected!${RESET}  ${BOLD}$n${RESET} connection(s) on port $stratum_port"
+            echo ""
+            ss -tnp 2>/dev/null | grep ":$stratum_port" | grep ESTAB \
+                | awk '{print $5}' | head -5 | sed 's/^/      from /' || true
+        else
+            echo -e "  ${YELLOW}No miner connected yet.${RESET}  ${DIM}(0 established on port $stratum_port)${RESET}"
+            echo ""
+            echo -e "  ${DIM}A rig usually appears ~1 min after you save the pool config above and${RESET}"
+            echo -e "  ${DIM}it reconnects (the node must also have restarted after Publish). If${RESET}"
+            echo -e "  ${DIM}nothing shows after a few minutes, double-check on the miner:${RESET}"
+            echo -e "    ${DIM}· Pool/Server matches the URL above${RESET}"
+            echo -e "    ${DIM}· that IP is internet-reachable (firewall open, not a private/NAT addr)${RESET}"
+        fi
+        echo ""
+        echo -e "  ${DIM}↩  Enter to refresh status${RESET}"
+        echo -e "  ${RED}0${RESET}) Return"
+        echo ""
+        echo -ne "${BOLD}Select [Enter/0]: ${RESET}"
+        read -r k || k=0
+        [[ "$k" == "0" ]] && return
+    done
+}
+
 _enable_stratum() {
     local network="$1" stratum_port="$2" api_port="$3"
 
@@ -1062,6 +1103,9 @@ _enable_stratum() {
     echo -e "${BOLD}${GREEN}┃${RESET}"
     echo -e "${BOLD}${GREEN}┃${RESET}      ${BOLD}${CYAN}$url${RESET}"
     echo -e "${BOLD}${GREEN}┃${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}  ${BOLD}Worker / Login:${RESET} any nickname you like — ${CYAN}e.g. myname.rig1${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}(text before the dot groups earnings if payout-split is on)${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}"
     if [[ -n "$pub_ip" ]]; then
         echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}Detected public IPv4: $pub_ip · port $stratum_port ($label)${RESET}"
         [[ -n "$_IP_DETECT_NOTE" ]] && \
@@ -1073,6 +1117,11 @@ _enable_stratum() {
     echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}\"DNS only\" (grey cloud), NOT proxied — miners can't reach a${RESET}"
     echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}proxied record; fall back to the raw IP above (e.g. iPollo G1).${RESET}"
     echo -e "${BOLD}${GREEN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${RESET}"
+
+    echo ""
+    echo -ne "  ${BOLD}Watch for your first miner to connect?${RESET} ${DIM}[Y/n]${RESET}: "
+    read -r _watch_choice || true
+    [[ "${_watch_choice,,}" == "n" ]] || _solo_watch_for_miner "$stratum_port" "$label" "$url"
 }
 
 _disable_stratum() {
@@ -2149,19 +2198,22 @@ watchdog_menu() {
         echo -e "${BOLD}  Node boot-autostart:${RESET}";   gnk_autostart_status | sed 's/^/    /'
         echo -e "${BOLD}  Wallet-listener watchdog:${RESET}"; sw_watchdog_status 2>&1 | sed 's/^/    /' | head -1
         echo ""
-        echo -e "  ${GREEN}1${RESET}) Node-sync watchdog     ${DIM}install / remove (restarts a wedged node)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Node boot-autostart    ${DIM}enable / disable @reboot (per net / both)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Wallet-listener wd     ${DIM}install / remove${RESET}"
-        echo -e "  ${GREEN}4${RESET}) Stratum watchdog       ${DIM}(existing W — alert if stratum drops)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Install node-sync watchdog    ${DIM}(restarts a wedged node)${RESET}"
+        echo -e "  ${RED}2${RESET}) Remove  node-sync watchdog"
+        echo -e "  ${GREEN}3${RESET}) Enable  node boot-autostart   ${DIM}(@reboot · per net / both)${RESET}"
+        echo -e "  ${RED}4${RESET}) Disable node boot-autostart   ${DIM}(per net / both)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Install wallet-listener watchdog"
+        echo -e "  ${RED}6${RESET}) Remove  wallet-listener watchdog"
+        echo -e "  ${GREEN}7${RESET}) Stratum watchdog              ${DIM}(alert if stratum drops)${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1-4/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-7/0]: ${RESET}"
         read -r choice || choice=0
         case "$choice" in
             "") continue ;;
-            1)  echo -ne "  ${GREEN}i${RESET}nstall / ${RED}r${RESET}emove / ${DIM}0 cancel${RESET}: "; read -r a || true
-                case "$a" in i) gnk_watchdog_install || true ;; r) gnk_watchdog_remove || true ;; esac; _solo_pause ;;
-            2)  echo -e "  Network for ${BOLD}boot autostart${RESET}:  ${GREEN}1${RESET}) Both  ${GREEN}2${RESET}) Mainnet  ${GREEN}3${RESET}) Testnet  ${DIM}0) Cancel${RESET}"
+            1)  gnk_watchdog_install || true; _solo_pause ;;
+            2)  gnk_watchdog_remove  || true; _solo_pause ;;
+            3|4) echo -e "  Network for ${BOLD}boot autostart${RESET}:  ${GREEN}1${RESET}) Both  ${GREEN}2${RESET}) Mainnet  ${GREEN}3${RESET}) Testnet  ${DIM}0) Cancel${RESET}"
                 echo -ne "  Select [1/2/3/0]: "; read -r np || true
                 local nets=()
                 case "$np" in
@@ -2170,18 +2222,17 @@ watchdog_menu() {
                     3) nets=(testnet) ;;
                     *) _solo_pause; continue ;;
                 esac
-                echo -ne "  ${GREEN}e${RESET}nable / ${RED}d${RESET}isable: "; read -r a || true
                 for net in "${nets[@]}"; do
-                    case "$a" in
-                        e) gnk_autostart_enable "$net" || true ;;
-                        d) gnk_autostart_disable "$net" || true ;;
-                        *) break ;;
-                    esac
+                    if [[ "$choice" == "3" ]]; then
+                        gnk_autostart_enable "$net" || true
+                    else
+                        gnk_autostart_disable "$net" || true
+                    fi
                 done
                 _solo_pause ;;
-            3)  echo -ne "  ${GREEN}i${RESET}nstall / ${RED}r${RESET}emove / ${DIM}0 cancel${RESET}: "; read -r a || true
-                case "$a" in i) sw_watchdog_install || true ;; r) sw_watchdog_remove || true ;; esac; _solo_pause ;;
-            4)  solo_watchdog_setup || true; _solo_pause ;;
+            5)  sw_watchdog_install || true; _solo_pause ;;
+            6)  sw_watchdog_remove  || true; _solo_pause ;;
+            7)  solo_watchdog_setup || true; _solo_pause ;;
             0)  return ;;
             *)  warn "Invalid option."; sleep 1 ;;
         esac

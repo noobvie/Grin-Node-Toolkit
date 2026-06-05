@@ -77,13 +77,15 @@
   .net-title { font-weight: 800; letter-spacing: .08em; margin-bottom: .5rem; }
   .net-title.main { color: var(--main); } .net-title.test { color: var(--test); }
 
-  /* iPollo-style field table */
-  .form-table { width: 100%; border-collapse: collapse; margin: .6rem 0 .2rem; font-size: .95rem; }
-  .form-table th, .form-table td { text-align: left; padding: .6rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
-  .form-table th { color: var(--muted); text-transform: uppercase; font-size: .72rem; letter-spacing: .05em; font-weight: 600; white-space: nowrap; }
-  .form-table td:first-child { color: var(--muted); white-space: nowrap; width: 1%; }
-  .form-table td .val { color: var(--text-hi); }
-  .form-table tr:last-child td { border-bottom: none; }
+  /* colour-coded sub-headers separating Pool 1 (your pool) from Pool 2/3 (backups) */
+  .pool-head { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap;
+    margin: 1.4rem 0 .7rem; padding: .5rem .8rem; border-radius: 0 8px 8px 0;
+    font-size: 1.04rem; font-weight: 700; color: var(--text-hi); letter-spacing: .02em; }
+  .pool-head .pdot { width: .72rem; height: .72rem; border-radius: 50%; flex: none; }
+  .pool-head.primary { background: rgba(94,224,138,.10); border-left: 4px solid var(--green); }
+  .pool-head.primary .pdot { background: var(--green); box-shadow: 0 0 9px var(--green); }
+  .pool-head.backup { background: rgba(255,216,77,.09); border-left: 4px solid var(--yellow); }
+  .pool-head.backup .pdot { background: var(--yellow); box-shadow: 0 0 9px var(--yellow); }
 
   .chip { display: inline-block; background: var(--chip-bg); border: 1px solid var(--border);
     border-radius: 999px; padding: .12rem .6rem; font-size: .78rem; color: var(--muted); letter-spacing: .04em; }
@@ -101,10 +103,8 @@
   .rpill.bad { color: var(--red);   border-color: var(--red); }
   .rpill.unknown { color: var(--muted); border-color: var(--border); }
 
-  /* per-network pool URL lines inside the iPollo table */
+  /* copyable pool-URL line (IP / domain) inside a net-block */
   .poolurl { display: flex; align-items: baseline; gap: .55rem; margin: .25rem 0; flex-wrap: wrap; }
-  .poolurl .net { font-weight: 800; font-size: .72rem; letter-spacing: .05em; min-width: 4.6rem; }
-  .poolurl .net.main { color: var(--main); } .poolurl .net.test { color: var(--test); }
 
   footer { color: var(--muted); font-size: .82rem; text-align: center; margin-top: 1.5rem; max-width: 820px; line-height: 1.7; }
   footer a { color: var(--main); }
@@ -140,12 +140,19 @@
   </section>
 
   <section class="card">
-    <h2>Connection details</h2>
+    <h2>Connection details — iPollo G1 Mini / G1</h2>
+    <p>Open the miner's web panel in a browser (its IP on your LAN), log in, then go to
+       <b>Miners → Pool Configuration</b>. The G1 takes up to <b>three</b> pools and uses
+       them in order — set <b>Pool 1</b> to this solo pool, and point <b>Pool 2 / Pool 3</b>
+       at public pools so the rig keeps earning if your node goes offline.</p>
 
+    <h3 class="pool-head primary"><span class="pdot"></span>Pool 1 — this solo pool
+        <span class="chip ok">primary</span></h3>
     <div class="net-block main hidden" id="block-main">
       <div class="net-title main">MAINNET · GRIN</div>
       <div class="kv">
         <span class="k">Pool URL</span><span id="main-stratum"><span class="muted">loading…</span></span>
+        <span class="k">Coin</span><span><code>GRIN</code></span>
         <span class="k">Algorithm</span><span><code>Cuckatoo32 (C32)</code></span>
         <span class="k">Worker</span><span><code>nickname.NN</code> <span class="muted">(e.g. <code>alpha.01</code>)</span></span>
         <span class="k">Password</span><span><code>123</code> <span class="muted">(unused — any value)</span></span>
@@ -156,6 +163,7 @@
       <div class="net-title test">TESTNET · tGRIN</div>
       <div class="kv">
         <span class="k">Pool URL</span><span id="test-stratum"><span class="muted">loading…</span></span>
+        <span class="k">Coin</span><span><code>GRIN</code></span>
         <span class="k">Algorithm</span><span><code>Cuckatoo32 (C32)</code></span>
         <span class="k">Worker</span><span><code>nickname.NN</code> <span class="muted">(e.g. <code>alpha.01</code>)</span></span>
         <span class="k">Password</span><span><code>123</code> <span class="muted">(unused — any value)</span></span>
@@ -165,29 +173,18 @@
     <p class="muted" id="no-net" style="display:none">Connection details load from the
        server config — if this stays blank, the stats deploy hasn't written
        <code>data/config.json</code> yet.</p>
-    <p class="muted">Each network shows the node's <b>IP</b> first — the most reliable target,
-       connect to this — and the <b>domain</b> as an optional alias. Tap any URL to copy it.</p>
-  </section>
+    <p class="muted">Each network shows the node's <b>IP</b> first — connect to this, it's the
+       most reliable target — and the <b>domain</b> as an optional alias. If the domain shows
+       <b>unreachable</b>, just use the IP.
+       <span class="hint" title="If the domain shows unreachable: point its A record at the node's public IP, and on Cloudflare set that record to DNS-only (grey cloud), not Proxied (orange). Proxied mode only handles HTTP/HTTPS and breaks raw-TCP stratum — then only the IP works.">ⓘ domain unreachable?</span>
+       Tap any URL to copy it.</p>
 
-  <section class="card">
-    <h2>ASIC setup — iPollo G1 Mini / G1</h2>
-    <p>Open your miner's web panel in a browser (its IP on your LAN), log in, then go to
-       <b>Miners → Pool Configuration</b>. The G1 takes up to <b>three</b> pools and uses
-       them in order. Set <b>Pool 1</b> to this solo pool, and point <b>Pool 2 / Pool 3</b>
-       at public pools so the rig keeps earning if your node is offline. Fill the
-       <b>Pool Setting</b> form as below:</p>
-
-    <table class="form-table">
-      <tr><th>Field</th><th>Value</th></tr>
-      <tr><td>Select Coin</td><td><span class="val"><code>GRIN</code></span></td></tr>
-      <tr><td>Pool 1 <span class="chip primary">this pool</span></td><td id="ipollo-pool1"><span class="muted">loading from server config…</span></td></tr>
-      <tr><td>Pool1 worker</td><td><span class="val"><code>alpha.01</code></span> <span class="muted">→ your nickname.rig number</span></td></tr>
-      <tr><td>Pool1 password</td><td><span class="val"><code>123</code></span> <span class="muted">→ anything; not checked</span></td></tr>
-      <tr><td>Pool 2 <span class="chip">backup</span></td><td><a href="https://gaeapool.com" target="_blank" rel="noopener noreferrer">gaeapool.com</a> <span class="muted">→ public pool — copy its GRIN stratum URL + port from the site</span></td></tr>
-      <tr><td>Pool2 worker</td><td><span class="muted">your <b>GRIN payout address</b> (public pools pay you directly — see gaeapool's guide)</span></td></tr>
-      <tr><td>Pool 3 <span class="chip">backup</span></td><td><a href="https://grin.2miners.com" target="_blank" rel="noopener noreferrer">grin.2miners.com</a> <span class="muted">→ public pool — copy its GRIN stratum URL + port from the site</span></td></tr>
-      <tr><td>Pool3 worker</td><td><span class="muted">your <b>GRIN payout address</b> (per 2miners' guide)</span></td></tr>
-    </table>
+    <h3 class="pool-head backup"><span class="pdot"></span>Pool 2 / Pool 3 — public backups
+        <span class="chip">failover</span></h3>
+    <div class="kv">
+      <span class="k">Pool 2</span><span>check details at <a href="https://gaeapool.com" target="_blank" rel="noopener noreferrer">gaeapool.com</a></span>
+      <span class="k">Pool 3</span><span>check details at <a href="https://grin.2miners.com" target="_blank" rel="noopener noreferrer">grin.2miners.com</a></span>
+    </div>
 
     <div class="callout">
       <b>Worker naming — <code>nickname.NN</code>.</b> Pick a nickname for yourself
@@ -197,12 +194,6 @@
       machine differently if you want to tell them apart.
     </div>
     <div class="callout info">
-      <b>Pick the network's port.</b> Mainnet (real GRIN) and testnet (tGRIN, for
-      practice) listen on <i>different</i> stratum ports — use the line that matches the
-      coin you want. Pool 1's host and ports come straight from this server's
-      <code>data/config.json</code>.
-    </div>
-    <div class="callout info">
       <b>Pool 2 / Pool 3 are failover.</b> The G1 falls back to them, in order, only when
       Pool 1 is unreachable — so if your node or this pool goes down, the rig keeps earning
       on a public pool instead of idling. They're independent pools, so their
@@ -210,17 +201,18 @@
       password is whatever that pool asks for — grab the exact stratum URL, port, and worker
       format from each pool's own getting-started page. Pool 1's password is ignored.
     </div>
-    <p>Save the form. The miner reconnects to the new pool within a few seconds — confirm
-       under <b>CGMiner Status</b> that it shows the pool as <b>Alive</b> and shares accepted.</p>
+    <p>Save the config and reboot the miner if possible. It reconnects to Pool 1 within a few
+       seconds — confirm under <b>CGMiner Status</b> that the pool shows as <b>Alive</b> and
+       shares are accepted.</p>
   </section>
 
   <section class="card">
     <h2>GPU miners</h2>
     <p><span class="chip tbd">to be defined</span></p>
-    <p class="muted">GPU mining of Grin (Cuckatoo32) has not been tested against this node
-       yet, so no verified flags are published here. In principle any C32-capable GPU
-       miner can point at the same <b>Pool URL</b> above, but treat that as untested
-       until this section is filled in.</p>
+    <p class="muted">Set a GPU rig up the <b>same way as the iPollo above</b> — point it at the
+       same <b>Pool URL</b>, with worker <code>nickname.NN</code> and any password. The
+       creator hasn't tested GPU mining (Cuckatoo32) against this node, though, so no verified
+       miner flags are published here — treat it as unverified until this section is filled in.</p>
   </section>
 
   <section class="card">
@@ -325,11 +317,6 @@
     applyTheme(next); try { localStorage.setItem('grinSoloTheme', next); } catch (e) {}
   });
 
-  var NET_META = {
-    main: { label: 'MAINNET', coin: 'GRIN' },
-    test: { label: 'TESTNET', coin: 'tGRIN' }
-  };
-
   // Why the IP is primary: stratum is raw TCP straight to the node, never proxied
   // through nginx. The IP always reaches it; the domain only does if its A record
   // points straight at the box. On Cloudflare that means DNS-only (grey cloud) —
@@ -379,17 +366,6 @@
       { fallbackChip: true, primary: !ip });
     document.getElementById(net + '-stratum').innerHTML =
       html || '<span class="muted">no host configured</span>';
-  }
-
-  // Build one labelled, copyable pool-URL line per available network for a given host.
-  function poolUrlLines(nets, host, type) {
-    return nets.map(function (n) {
-      return '<div class="poolurl">'
-        + '<span class="net ' + n.net + '">' + NET_META[n.net].label + '</span>'
-        + '<code class="copy">stratum+tcp://' + host + ':' + n.port + '</code> '
-        + reachPill(host, n.port, type, { fallbackChip: false })
-        + '</div>';
-    }).join('');
   }
 
   // Settle one pill from a probe result. type drives the failure hint.
@@ -453,20 +429,12 @@
       var ip = c.public_ip || '';
       var ep = document.getElementById('poller-endpoint');
       if (ep) ep.textContent = 'https://' + domain + '/data/poolstats_main.json';
-      var nets = [];
-      if (c.networks && c.networks.main) {
-        show('main', ip, domain, c.networks.main.stratum_port);
-        nets.push({ net: 'main', port: c.networks.main.stratum_port });
-      }
-      if (c.networks && c.networks.test) {
-        show('test', ip, domain, c.networks.test.stratum_port);
-        nets.push({ net: 'test', port: c.networks.test.stratum_port });
-      }
-      if (!nets.length) { document.getElementById('no-net').style.display = 'block'; return; }
-      // iPollo Pool 1 = this solo pool, IP first (most reliable). Pool 2 / Pool 3 are
-      // static public-pool backups in the markup, so only Pool 1 is filled from config.
-      document.getElementById('ipollo-pool1').innerHTML =
-        poolUrlLines(nets, ip || domain, ip ? 'ip' : 'domain');
+      var shown = 0;
+      if (c.networks && c.networks.main) { show('main', ip, domain, c.networks.main.stratum_port); shown++; }
+      if (c.networks && c.networks.test) { show('test', ip, domain, c.networks.test.stratum_port); shown++; }
+      if (!shown) { document.getElementById('no-net').style.display = 'block'; return; }
+      // Pool 1 = this solo pool, filled per-network by show() (IP first, domain second).
+      // Pool 2 / Pool 3 are static public-pool backups in the markup.
       // Fire the off-box reachability probes once every pill is in the DOM.
       runReachChecks();
     })

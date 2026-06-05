@@ -145,11 +145,15 @@
   .blocks td a.h:hover { text-decoration: underline; }
   .blocks td .hash { color: var(--muted); font-size: .88rem; }
   .blocks-empty { color: var(--muted); font-size: .92rem; padding: .6rem 0; }
-  .blocks-more { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
+  .blocks-pager { display: flex; align-items: center; gap: .6rem; margin-top: .8rem; }
+  .blocks-pager[hidden] { display: none; }
+  .blocks-pager button { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
     border-radius: 999px; padding: .4rem .9rem; font-family: inherit; font-size: .88rem;
-    cursor: pointer; margin-top: .8rem; transition: background .2s; }
-  .blocks-more:hover { background: var(--border); }
-  .blocks-more[hidden] { display: none; }
+    cursor: pointer; transition: background .2s; }
+  .blocks-pager button:hover:not(:disabled) { background: var(--border); }
+  .blocks-pager button:disabled { opacity: .4; cursor: default; }
+  .blocks-pageinfo { font-size: .88rem; color: var(--muted); }
+  .blocks-pageinfo b { color: var(--text-hi); }
 
   /* chart card */
   .chart-card { width: 100%; max-width: 860px; margin-top: .5rem; background: var(--panel);
@@ -244,7 +248,11 @@
     </div>
     <div class="table-scroll"><table id="main-blocks-table"><tbody></tbody></table></div>
     <div class="blocks-empty" id="main-blocks-empty"></div>
-    <button type="button" class="blocks-more" id="main-blocks-more" hidden></button>
+    <div class="blocks-pager" id="main-blocks-pager" hidden>
+      <button type="button" id="main-blocks-prev">‹ Prev</button>
+      <span class="blocks-pageinfo" id="main-blocks-pageinfo"></span>
+      <button type="button" id="main-blocks-next">Next ›</button>
+    </div>
   </div>
   <p class="miners-empty" id="main-note" style="display:none"></p>
 </section>
@@ -280,7 +288,11 @@
     </div>
     <div class="table-scroll"><table id="test-blocks-table"><tbody></tbody></table></div>
     <div class="blocks-empty" id="test-blocks-empty"></div>
-    <button type="button" class="blocks-more" id="test-blocks-more" hidden></button>
+    <div class="blocks-pager" id="test-blocks-pager" hidden>
+      <button type="button" id="test-blocks-prev">‹ Prev</button>
+      <span class="blocks-pageinfo" id="test-blocks-pageinfo"></span>
+      <button type="button" id="test-blocks-next">Next ›</button>
+    </div>
   </div>
   <p class="miners-empty" id="test-note" style="display:none"></p>
 </section>
@@ -379,8 +391,8 @@
     main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', hashrate: 'data/hashrate_main.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null },
     test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', hashrate: 'data/hashrate_test.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null }
   };
-  var STATE = { tip: { main: null, test: null }, blocks: { main: [], test: [] }, miners: { main: [], test: [] }, hashrate: { main: [], test: [] }, loaded: { main: false, test: false }, hrLoaded: { main: false, test: false }, range: 'daily', hrRange: 'daily', blocksExpanded: { main: false, test: false } };
-  var BLOCKS_PREVIEW = 10;   // rows shown before "show all"
+  var STATE = { tip: { main: null, test: null }, blocks: { main: [], test: [] }, miners: { main: [], test: [] }, hashrate: { main: [], test: [] }, loaded: { main: false, test: false }, hrLoaded: { main: false, test: false }, range: 'daily', hrRange: 'daily', blocksPage: { main: 0, test: 0 } };
+  var BLOCKS_PER_PAGE = 20;  // found-blocks table rows per page
 
   // Seed difficulty/hashrate from the last session so the tiles render a number
   // before the first delta is computed (function decls below are hoisted).
@@ -740,12 +752,12 @@
     var sum = document.getElementById(net + '-blocks-sum');
     var tbody = document.querySelector('#' + net + '-blocks-table tbody');
     var empty = document.getElementById(net + '-blocks-empty');
-    var more = document.getElementById(net + '-blocks-more');
+    var pager = document.getElementById(net + '-blocks-pager');
 
     if (!STATE.loaded[net]) {
       sum.textContent = '—'; tbody.innerHTML = '';
       empty.textContent = 'Block collector not installed yet — run the stats deploy (S).';
-      empty.style.display = 'block'; more.hidden = true; return;
+      empty.style.display = 'block'; pager.hidden = true; return;
     }
 
     var blocks = STATE.blocks[net];   // already height-desc from the collector
@@ -753,12 +765,17 @@
     if (blocks.length === 0) {
       tbody.innerHTML = '';
       empty.textContent = 'No blocks found yet. Solo finds are rare — they will appear here.';
-      empty.style.display = 'block'; more.hidden = true; return;
+      empty.style.display = 'block'; pager.hidden = true; return;
     }
     empty.style.display = 'none';
 
-    var expanded = STATE.blocksExpanded[net];
-    var shown = expanded ? blocks : blocks.slice(0, BLOCKS_PREVIEW);
+    var pageCount = Math.ceil(blocks.length / BLOCKS_PER_PAGE);
+    var page = STATE.blocksPage[net];
+    if (page > pageCount - 1) page = pageCount - 1;   // clamp (data may have shrunk)
+    if (page < 0) page = 0;
+    STATE.blocksPage[net] = page;
+    var start = page * BLOCKS_PER_PAGE;
+    var shown = blocks.slice(start, start + BLOCKS_PER_PAGE);
     tbody.innerHTML = '<tr><th>Date</th><th>Time</th><th>Height</th><th>Hash</th><th>Maturity</th></tr>'
       + shown.map(function (b) {
         var d = new Date(b.ts), m = maturityOf(net, b.height);
@@ -772,13 +789,14 @@
           + '<td><span class="mtag ' + m.state + '">' + m.text + '</span></td></tr>';
       }).join('');
 
-    if (blocks.length > BLOCKS_PREVIEW) {
-      more.hidden = false;
-      more.textContent = expanded
-        ? '▴ Show fewer'
-        : '▾ Show all ' + blocks.length + ' blocks';
+    if (pageCount > 1) {
+      pager.hidden = false;
+      document.getElementById(net + '-blocks-prev').disabled = (page === 0);
+      document.getElementById(net + '-blocks-next').disabled = (page >= pageCount - 1);
+      document.getElementById(net + '-blocks-pageinfo').innerHTML =
+        'Page <b>' + (page + 1) + '</b> of <b>' + pageCount + '</b>';
     } else {
-      more.hidden = true;
+      pager.hidden = true;
     }
   }
 
@@ -966,9 +984,11 @@
   });
 
   ['main', 'test'].forEach(function (net) {
-    document.getElementById(net + '-blocks-more').addEventListener('click', function () {
-      STATE.blocksExpanded[net] = !STATE.blocksExpanded[net];
-      renderBlocks(net);
+    document.getElementById(net + '-blocks-prev').addEventListener('click', function () {
+      if (STATE.blocksPage[net] > 0) { STATE.blocksPage[net]--; renderBlocks(net); }
+    });
+    document.getElementById(net + '-blocks-next').addEventListener('click', function () {
+      STATE.blocksPage[net]++; renderBlocks(net);   // renderBlocks clamps to the last page
     });
   });
 

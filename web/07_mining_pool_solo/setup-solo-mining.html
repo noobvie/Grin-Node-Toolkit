@@ -105,7 +105,6 @@
   .poolurl { display: flex; align-items: baseline; gap: .55rem; margin: .25rem 0; flex-wrap: wrap; }
   .poolurl .net { font-weight: 800; font-size: .72rem; letter-spacing: .05em; min-width: 4.6rem; }
   .poolurl .net.main { color: var(--main); } .poolurl .net.test { color: var(--test); }
-  .poolurl .port-note { color: var(--muted); font-size: .8rem; }
 
   footer { color: var(--muted); font-size: .82rem; text-align: center; margin-top: 1.5rem; max-width: 820px; line-height: 1.7; }
   footer a { color: var(--main); }
@@ -182,7 +181,7 @@
       <tr><th>Field</th><th>Value</th></tr>
       <tr><td>Select Coin</td><td><span class="val"><code>GRIN</code></span></td></tr>
       <tr><td>Pool 1 <span class="chip primary">this pool</span></td><td id="ipollo-pool1"><span class="muted">loading from server config…</span></td></tr>
-      <tr><td>Pool1 worker</td><td><span class="val"><code>alpha.01</code></span> <span class="muted">→ your nickname + rig number</span></td></tr>
+      <tr><td>Pool1 worker</td><td><span class="val"><code>alpha.01</code></span> <span class="muted">→ your nickname.rig number</span></td></tr>
       <tr><td>Pool1 password</td><td><span class="val"><code>123</code></span> <span class="muted">→ anything; not checked</span></td></tr>
       <tr><td>Pool 2 <span class="chip">backup</span></td><td><a href="https://gaeapool.com" target="_blank" rel="noopener noreferrer">gaeapool.com</a> <span class="muted">→ public pool — copy its GRIN stratum URL + port from the site</span></td></tr>
       <tr><td>Pool2 worker</td><td><span class="muted">your <b>GRIN payout address</b> (public pools pay you directly — see gaeapool's guide)</span></td></tr>
@@ -387,8 +386,7 @@
     return nets.map(function (n) {
       return '<div class="poolurl">'
         + '<span class="net ' + n.net + '">' + NET_META[n.net].label + '</span>'
-        + '<code class="copy">stratum+tcp://' + host + ':' + n.port + '</code>'
-        + '<span class="port-note">port ' + n.port + ' · ' + NET_META[n.net].coin + '</span> '
+        + '<code class="copy">stratum+tcp://' + host + ':' + n.port + '</code> '
         + reachPill(host, n.port, type, { fallbackChip: false })
         + '</div>';
     }).join('');

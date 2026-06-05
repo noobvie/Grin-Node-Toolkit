@@ -1712,7 +1712,7 @@ solo_deploy_stats_page() {
     # a self-hosted Office Tools base URL instead, or type "-" to disable the live
     # pills (the static recommended/optional chips are kept). Existing config wins
     # as the prefill so a re-run does not silently revert a custom/disabled choice.
-    local default_pcapi="https://tools.grin.money"
+    local default_pcapi="https://tools.grin.money/pay-api"
     local existing_pcapi=""
     if [[ -f "$web_dir/data/config.json" ]]; then
         existing_pcapi=$(grep -oP '"portcheck_api"\s*:\s*"\K(\\.|[^"\\])*' \
@@ -2294,7 +2294,7 @@ solo_net_menu() {
 _solo_backfill_portcheck_api() {
     local cfg="$1"
     [[ -f "$cfg" ]] || return 1
-    python3 - "$cfg" "https://tools.grin.money" <<'PY' || return 1
+    python3 - "$cfg" "https://tools.grin.money/pay-api" <<'PY' || return 1
 import json, sys
 path, default = sys.argv[1], sys.argv[2]
 try:
@@ -2359,7 +2359,7 @@ solo_deploy_code() {
             fi
             if _solo_backfill_portcheck_api "$web_dir/data/config.json"; then
                 chmod 644 "$web_dir/data/config.json" 2>/dev/null || true
-                success "Port-check default added → $web_dir/data/config.json (portcheck_api=https://tools.grin.money)"; did=1
+                success "Port-check default added → $web_dir/data/config.json (portcheck_api=https://tools.grin.money/pay-api)"; did=1
             fi
         done < <(grep -oE -- '--out-dir [^ ]+' "$BLOCK_COLLECTOR_WRAPPER" | awk '{print $2}' | sort -u)
     fi

@@ -2282,6 +2282,35 @@ solo_net_menu() {
 # (→ /usr/local/bin) and the stats web page (→ /var/www/<conf>). A pull does NOT
 # refresh those. This re-copies just those two — no prompts, no wrapper/cron
 # rewrite, no nginx reload — so a code-only update doesn't need the heavy deploy.
+# Backfill the port-check API default into an EXISTING config.json when the key is
+# missing, so a code-only "Deploy new code" makes the refreshed setup page's live
+# reachability pills work without re-running the full deploy's prompt. Deliberately
+# conservative:
+#   · no-op if the file is absent or not valid JSON (the full deploy owns creation)
+#   · no-op if "portcheck_api" is already present — a custom URL the operator set, OR
+#     a deliberate disable (full deploy omits the key), are both preserved
+#   · only adds the key + value, leaving every other field and the compact format intact
+# Returns 0 ONLY when it actually added the key (so the caller logs + chmods).
+_solo_backfill_portcheck_api() {
+    local cfg="$1"
+    [[ -f "$cfg" ]] || return 1
+    python3 - "$cfg" "https://tools.grin.money" <<'PY' || return 1
+import json, sys
+path, default = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f:
+        cfg = json.load(f)
+except Exception:
+    sys.exit(1)                      # missing / corrupt — leave it for the full deploy
+if not isinstance(cfg, dict) or "portcheck_api" in cfg:
+    sys.exit(1)                      # already set (custom or disabled) — never override
+cfg["portcheck_api"] = default
+with open(path, "w") as f:
+    json.dump(cfg, f, separators=(",", ":"))   # match the printf'd compact style
+sys.exit(0)
+PY
+}
+
 solo_deploy_code() {
     echo ""
     echo -e "  ${BOLD}Deploy new code${RESET} — refresh runtime copies from the checkout."
@@ -2301,17 +2330,36 @@ solo_deploy_code() {
         warn "Could not refresh collector."
     fi
 
-    # 2) Stats web page (index.html) — dest is per-deployment. Discover the live
-    #    web dir(s) from the collector wrapper's --out-dir (= <web_dir>/data),
-    #    written at deploy time; refresh only dirs that already hold an index.html.
+    # 2) Web assets (index.html + setup page + logo) — dest is per-deployment.
+    #    Discover the live web dir(s) from the collector wrapper's --out-dir
+    #    (= <web_dir>/data), written at deploy time; refresh only dirs that already
+    #    hold an index.html. ALL static assets the full deploy (07 → 3) lays down are
+    #    refreshed here, not just index.html, so a code-only update never leaves a
+    #    stale setup page. config.json is generated (not a static copy), so we only
+    #    backfill the port-check default into it when the key is absent — never
+    #    overwrite the operator's pool name / ports / a custom portcheck_api value.
     if [[ -f "$STATS_WEB_SRC" && -f "$BLOCK_COLLECTOR_WRAPPER" ]]; then
         local out_dir web_dir
         while IFS= read -r out_dir; do
             [[ -z "$out_dir" ]] && continue
             web_dir="$(dirname "$out_dir")"
-            if [[ -f "$web_dir/index.html" ]] \
-               && cp "$STATS_WEB_SRC" "$web_dir/index.html" && chmod 644 "$web_dir/index.html"; then
+            [[ -f "$web_dir/index.html" ]] || continue   # only a live stats deploy
+
+            if cp "$STATS_WEB_SRC" "$web_dir/index.html" && chmod 644 "$web_dir/index.html"; then
                 success "Stats page refreshed → $web_dir/index.html"; did=1
+            fi
+            if [[ -f "$STATS_SETUP_SRC" ]] \
+               && cp "$STATS_SETUP_SRC" "$web_dir/setup-solo-mining.html" \
+               && chmod 644 "$web_dir/setup-solo-mining.html"; then
+                success "Setup page refreshed → $web_dir/setup-solo-mining.html"; did=1
+            fi
+            if [[ -f "$STATS_LOGO_SRC" ]] \
+               && cp "$STATS_LOGO_SRC" "$web_dir/logo.svg" && chmod 644 "$web_dir/logo.svg"; then
+                did=1
+            fi
+            if _solo_backfill_portcheck_api "$web_dir/data/config.json"; then
+                chmod 644 "$web_dir/data/config.json" 2>/dev/null || true
+                success "Port-check default added → $web_dir/data/config.json (portcheck_api=https://tools.grin.money)"; did=1
             fi
         done < <(grep -oE -- '--out-dir [^ ]+' "$BLOCK_COLLECTOR_WRAPPER" | awk '{print $2}' | sort -u)
     fi

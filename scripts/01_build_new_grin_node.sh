@@ -16,8 +16,9 @@
 #   • OS version check is handled by the master script (grin-node-toolkit.sh)
 #   • Internet access  (GitHub API + chain data hosts)
 #   • Required packages (auto-installed if missing):
-#       Debian/Ubuntu : tar  openssl  libncurses5 (or libncurses6)  tmux  jq  tor  curl  wget
-#       Rocky / Alma  : tar  openssl  ncurses-compat-libs  tmux  jq  tor  curl  wget
+#       Debian/Ubuntu : tar  openssl  libncurses5 (or libncurses6)  tmux  jq  tor  curl  wget  sqlite3
+#       Rocky / Alma  : tar  openssl  ncurses-compat-libs  tmux  jq  tor  curl  wget  sqlite
+#       (sqlite3 CLI — used by backup/restore for consistent online DB snapshots)
 #
 # NETWORK & ARCHIVE MODES
 #   Networks  : Mainnet  |  Testnet  |  Both (mainnet first, then testnet)
@@ -1122,7 +1123,9 @@ check_os_and_deps() {
                 || die "Failed to install epel-release. Check internet connection."
         fi
 
-        local packages=(tar tmux curl wget jq tor openssl ncurses-compat-libs)
+        # sqlite (provides the sqlite3 CLI on RHEL-family) — used by 089 backup
+        # for consistent online DB snapshots (sqlite3 ".backup").
+        local packages=(tar tmux curl wget jq tor openssl ncurses-compat-libs sqlite)
         local to_install=()
         for pkg in "${packages[@]}"; do
             rpm -q "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")
@@ -1146,7 +1149,8 @@ check_os_and_deps() {
             ncurses_pkg="libncurses6"
         fi
 
-        local packages=(tar openssl "$ncurses_pkg" tmux jq tor curl wget)
+        # sqlite3 — CLI used by 089 backup for consistent online DB snapshots.
+        local packages=(tar openssl "$ncurses_pkg" tmux jq tor curl wget sqlite3)
         local to_install=()
         for pkg in "${packages[@]}"; do
             dpkg -s "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")

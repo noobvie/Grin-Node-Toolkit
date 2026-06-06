@@ -263,12 +263,18 @@ sw_setup() {
 # REBOOT AUTOSTART (root crontab, tag-guarded) — starts the LISTENER at boot
 # =============================================================================
 sw_autostart_status() {
-    local cron net tag state; cron=$(crontab -l 2>/dev/null || true)
+    # One line, [OK]/[--] per net — matches gnk_autostart_status for a consistent look.
+    local cron net tag label out=""; cron=$(crontab -l 2>/dev/null || true)
     for net in mainnet testnet; do
         tag=$(sw_autostart_tag "$net")
-        echo "$cron" | grep -qF "$tag" && state="present" || state="absent"
-        printf '%s %s\n' "$net" "$state"
+        label="Mainnet"; [[ "$net" == "testnet" ]] && label="Testnet"
+        if echo "$cron" | grep -qF "$tag"; then
+            out+="${GREEN:-}[OK]${RESET:-} ${label}    "
+        else
+            out+="${DIM:-}[--] ${label}${RESET:-}    "
+        fi
     done
+    echo -e "${out%    }"
 }
 
 sw_autostart_enable() {

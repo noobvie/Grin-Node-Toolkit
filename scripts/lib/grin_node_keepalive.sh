@@ -52,15 +52,20 @@ _gnk_autostart_tag() {
 # REBOOT AUTOSTART  (root user crontab, tag-guarded, idempotent)
 # =============================================================================
 
-# gnk_autostart_status  → prints mainnet/testnet present|absent
+# gnk_autostart_status  → one line, [OK]/[--] per net (matches the success() [OK] style).
 gnk_autostart_status() {
     local cron; cron=$(crontab -l 2>/dev/null || true)
-    local net tag state
+    local net tag label out=""
     for net in mainnet testnet; do
         tag=$(_gnk_autostart_tag "$net")
-        if echo "$cron" | grep -qF "$tag"; then state="present"; else state="absent"; fi
-        printf '%s %s\n' "$net" "$state"
+        label="Mainnet"; [[ "$net" == "testnet" ]] && label="Testnet"
+        if echo "$cron" | grep -qF "$tag"; then
+            out+="${GREEN:-}[OK]${RESET:-} ${label}    "
+        else
+            out+="${DIM:-}[--] ${label}${RESET:-}    "
+        fi
     done
+    echo -e "${out%    }"
 }
 
 # gnk_autostart_enable <network> [delay=20]

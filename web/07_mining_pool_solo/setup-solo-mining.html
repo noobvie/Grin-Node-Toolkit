@@ -113,6 +113,13 @@
   /* copyable pool-URL line (IP / domain) inside a net-block */
   .poolurl { display: flex; align-items: baseline; gap: .55rem; margin: .25rem 0; flex-wrap: wrap; }
 
+  /* collapsible "Example screenshot" of the miner's Pool Configuration panel */
+  .example-shot { margin-top: .85rem; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .example-shot summary { cursor: pointer; padding: .55rem .8rem; background: var(--chip-bg);
+    color: var(--text-hi); font-size: .9rem; letter-spacing: .03em; user-select: none; }
+  .example-shot summary:hover { background: var(--border); }
+  .example-shot img { display: block; max-width: 100%; height: auto; padding: .8rem; }
+
   footer { color: var(--muted); font-size: .82rem; text-align: center; margin-top: 1.5rem; max-width: 820px; line-height: 1.7; }
   footer a { color: var(--main); }
 </style>
@@ -158,22 +165,25 @@
     <div class="net-block main hidden" id="block-main">
       <div class="net-title main">MAINNET · GRIN</div>
       <div class="kv">
-        <span class="k">Pool URL</span><span id="main-stratum"><span class="muted">loading…</span></span>
-        <span class="k">Coin</span><span><code>GRIN</code></span>
-        <span class="k">Algorithm</span><span><code>Cuckatoo32 (C32)</code></span>
-        <span class="k">Worker</span><span><code>nickname.NN</code> <span class="muted">(e.g. <code>alpha.01</code>)</span></span>
-        <span class="k">Password</span><span><code>123</code> <span class="muted">(unused — any value)</span></span>
+        <span class="k">Select Coin</span><span><code>GRIN</code></span>
+        <span class="k">Pool 1</span><span id="main-stratum"><span class="muted">loading…</span></span>
+        <span class="k">Pool1 worker</span><span><code>nickname.NN</code> <span class="muted">(e.g. <code>alpha.01</code>)</span></span>
+        <span class="k">Pool1 password</span><span><code>123</code> <span class="muted">(unused — any value)</span></span>
       </div>
+      <details class="example-shot">
+        <summary>Example screenshot</summary>
+        <img src="pool-config-example.png" loading="lazy"
+             alt="iPollo G1 Pool Configuration — Select Coin GRIN, Pool 1 stratum URL, Pool1 worker, Pool1 password">
+      </details>
     </div>
 
     <div class="net-block test hidden" id="block-test">
       <div class="net-title test">TESTNET · tGRIN</div>
       <div class="kv">
-        <span class="k">Pool URL</span><span id="test-stratum"><span class="muted">loading…</span></span>
-        <span class="k">Coin</span><span><code>GRIN</code></span>
-        <span class="k">Algorithm</span><span><code>Cuckatoo32 (C32)</code></span>
-        <span class="k">Worker</span><span><code>nickname.NN</code> <span class="muted">(e.g. <code>alpha.01</code>)</span></span>
-        <span class="k">Password</span><span><code>123</code> <span class="muted">(unused — any value)</span></span>
+        <span class="k">Select Coin</span><span><code>GRIN</code></span>
+        <span class="k">Pool 1</span><span id="test-stratum"><span class="muted">loading…</span></span>
+        <span class="k">Pool1 worker</span><span><code>nickname.NN</code> <span class="muted">(e.g. <code>alpha.01</code>)</span></span>
+        <span class="k">Pool1 password</span><span><code>123</code> <span class="muted">(unused — any value)</span></span>
       </div>
     </div>
 

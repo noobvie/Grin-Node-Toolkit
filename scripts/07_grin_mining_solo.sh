@@ -54,6 +54,7 @@ NODE_API_PORT_TESTNET=13413
 # vhost serves both networks side by side, so there is no per-network suffix.
 STATS_WEB_SRC="$TOOLKIT_ROOT/web/07_mining_pool_solo/index.html"
 STATS_SETUP_SRC="$TOOLKIT_ROOT/web/07_mining_pool_solo/setup-solo-mining.html"
+STATS_SHOT_SRC="$TOOLKIT_ROOT/web/07_mining_pool_solo/pool-config-example.png"
 STATS_LOGO_SRC="$TOOLKIT_ROOT/web/0z0_media/logo_favi/grin_gold.svg"
 STATS_BASENAME="grin-solo-mining-stat"
 
@@ -1696,6 +1697,10 @@ solo_deploy_stats_page() {
     else
         warn "Setup page not found ($STATS_SETUP_SRC) — Miner Setup link will 404."
     fi
+    if [[ -f "$STATS_SHOT_SRC" ]]; then
+        cp "$STATS_SHOT_SRC" "$web_dir/pool-config-example.png"
+        chmod 644 "$web_dir/pool-config-example.png"
+    fi
     if [[ -f "$STATS_LOGO_SRC" ]]; then
         cp "$STATS_LOGO_SRC" "$web_dir/logo.svg"
         chmod 644 "$web_dir/logo.svg"
@@ -2431,6 +2436,11 @@ solo_deploy_code() {
                && cp "$STATS_SETUP_SRC" "$web_dir/setup-solo-mining.html" \
                && chmod 644 "$web_dir/setup-solo-mining.html"; then
                 success "Setup page refreshed → $web_dir/setup-solo-mining.html"; did=1
+            fi
+            if [[ -f "$STATS_SHOT_SRC" ]] \
+               && cp "$STATS_SHOT_SRC" "$web_dir/pool-config-example.png" \
+               && chmod 644 "$web_dir/pool-config-example.png"; then
+                did=1
             fi
             if [[ -f "$STATS_LOGO_SRC" ]] \
                && cp "$STATS_LOGO_SRC" "$web_dir/logo.svg" && chmod 644 "$web_dir/logo.svg"; then

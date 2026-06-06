@@ -1,0 +1,889 @@
+#!/bin/bash
+# =============================================================================
+# 07_grin_mining_public_pool.sh — Grin Public Mining Pool (GRINIUM)
+# =============================================================================
+# Part of: Grin Node Toolkit — launched from the mining hub
+# (07_grin_mining_hub_services.sh). Deploys GRINIUM, the public PPLNS Grin
+# mining pool, on a Debian/Ubuntu/Rocky/Alma VPS. Run as root.
+#
+# IMPORTANT: A server runs EITHER solo private mining (07_grin_mining_solo.sh)
+# OR this public pool — never both. They collide on the stratum port (3416),
+# nginx rate-limit zones, and the /opt/grin layout. pool_check_exclusivity
+# hard-blocks installation if a solo private setup is detected.
+#
+# Requirements:
+#   · A running Grin node (mainnet) with stratum enabled
+#   · Nginx + certbot for HTTPS
+#   · Tor for anonymous payouts
+#   · A grin-wallet with Foreign and Owner API running
+#
+# ─── Menu ────────────────────────────────────────────────────────────────────
+#   G) Guided Full Setup     (1→2→3→4→5→6 in sequence)
+#   1) Install               (nodejs ≥18, npm, sqlite3, systemd, logrotate)
+#   2) Configure             (pool name, domain, fee, wallet dir, stratum port)
+#   3) Deploy web files      (frontend → /var/www/grin-pool)
+#   4) Setup nginx           (vhost + rate limits + SSL via certbot)
+#   5) Create admin account  (first admin user)
+#   6) Service control       (start / stop / restart)
+#   7) Pool status           (service state, DB size, recent logs)
+#   B) Backup                (DB + config → /opt/grin/backups/)
+#   C) Cron schedules        (daily backup, weekly VACUUM)
+#   L) View logs             (tail -50 | less)
+#   S) Edit config           (manual JSON config edit)
+#   DEL) Reset database      (⚠ permanently wipes all data)
+#   0) Exit
+# =============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOOLKIT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# ─── Colors ───────────────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+
+# ─── Constants ────────────────────────────────────────────────────────────────
+LOG_DIR="/opt/grin/logs"
+LOG_FILE="$LOG_DIR/grinium_$(date +%Y%m%d_%H%M%S).log"
+
+POOL_APP_SRC="$TOOLKIT_ROOT/web/07_mining_pool_public/back-end-pool"
+POOL_WEB_SRC="$TOOLKIT_ROOT/web/07_mining_pool_public/public_html"
+POOL_CONF="/opt/grin/conf/grin_pool.json"
+POOL_APP_DIR="/opt/grin/pool/mainnet"
+POOL_WEB_DIR="/var/www/grin-pool"
+POOL_PORT=3002
+POOL_SERVICE="grin-pool-manager"
+POOL_NGINX_CONF="/etc/nginx/sites-available/grin-pool"
+POOL_LOG="/opt/grin/logs/grin-pool.log"
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+mkdir -p "$LOG_DIR"
+log()     { echo -e "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*" >> "$LOG_FILE" 2>/dev/null || true; }
+info()    { echo -e "${CYAN}[INFO]${RESET}  $*"; log "[INFO] $*"; }
+success() { echo -e "${GREEN}[OK]${RESET}    $*"; log "[OK] $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; log "[WARN] $*"; }
+error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
+
+# ─── Source nginx helpers ──────────────────────────────────────────────────────
+# Uses the toolkit's shared helper (scripts/lib) — same zones/wrappers as every
+# other toolkit script, so rate-limit/conn zones never collide.
+# shellcheck source=lib/nginx_shared_helpers.sh
+source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# EXCLUSIVITY GUARD — one mining type per server (public XOR solo private)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Solo private mining (07_grin_mining_solo.sh) and this public pool cannot
+# coexist: both want the stratum port 3416, both write nginx rate-limit zones,
+# and both own the /opt/grin layout. Detect solo artifacts and hard-block.
+pool_check_exclusivity() {
+    local solo_markers=(
+        "/opt/grin/conf/grin_solo_payment.json"
+        "/etc/cron.d/grin-solo-mining-collector"
+        "/opt/grin/solo-stats"
+        "/etc/nginx/grin-solo-stats.htpasswd"
+    )
+    local found=() m
+    for m in "${solo_markers[@]}"; do
+        [[ -e "$m" ]] && found+=("$m")
+    done
+    if systemctl list-units --type=service --all 2>/dev/null | grep -q 'grin-solo'; then
+        found+=("systemd: grin-solo-* service")
+    fi
+
+    if [[ ${#found[@]} -gt 0 ]]; then
+        echo ""
+        error "Solo PRIVATE mining is already set up on this server:"
+        local f
+        for f in "${found[@]}"; do echo -e "    ${DIM}· $f${RESET}"; done
+        echo ""
+        warn "Run only ONE mining type per server: solo private OR public — not both."
+        warn "They collide on the stratum port (3416), nginx rate-limit zones, and"
+        warn "the /opt/grin layout. Remove the solo private setup first (toolkit"
+        warn "Script 7 → Solo private → Maintenance/cleanup), or deploy this public"
+        warn "pool on a separate VPS."
+        echo ""
+        return 1
+    fi
+    return 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CONFIG HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+pool_read_conf() {
+    local key="$1" default="${2:-}"
+    [[ -f "$POOL_CONF" ]] || { echo "$default"; return; }
+    node -e "
+try {
+  const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+  const v = d[process.argv[2]];
+  process.stdout.write(v !== undefined ? String(v) : process.argv[3]);
+} catch(e) { process.stdout.write(process.argv[3]); }
+" "$POOL_CONF" "$key" "$default" 2>/dev/null || echo "$default"
+}
+
+pool_write_conf_key() {
+    local key="$1" val="$2"
+    mkdir -p "$(dirname "$POOL_CONF")"
+    node -e "
+const fs = require('fs');
+const path = process.argv[1];
+const key  = process.argv[2];
+const val  = process.argv[3];
+const NUMS = new Set(['stratum_port','node_api_port','pool_fee_percent','min_withdrawal','withdrawal_fee','service_port','node_stratum_port']);
+let d = {};
+try { d = JSON.parse(fs.readFileSync(path, 'utf8')); } catch(e) {}
+d[key] = NUMS.has(key) ? parseFloat(val) : val;
+fs.writeFileSync(path, JSON.stringify(d, null, 2));
+fs.chmodSync(path, 0o600);
+" "$POOL_CONF" "$key" "$val"
+}
+
+pool_ensure_defaults() {
+    local -A defaults=(
+        ["pool_name"]="My Grin Pool"
+        ["subdomain"]=""
+        ["network"]="mainnet"
+        ["stratum_port"]="3416"
+        ["node_api_port"]="3413"
+        ["node_stratum_port"]="3417"
+        ["node_stratum_host"]="127.0.0.1"
+        ["pool_address"]=""
+        ["pool_fee_percent"]="0"
+        ["min_withdrawal"]="2.0"
+        ["withdrawal_fee"]="0.0"
+        ["grin_wallet_dir"]="/opt/grin/wallet/mainnet"
+        ["log_path"]="$POOL_LOG"
+        ["service_port"]="$POOL_PORT"
+        ["db_path"]="$POOL_APP_DIR/pool.db"
+        ["wallet_pass_file"]="$POOL_APP_DIR/wallet_pass"
+    )
+    for k in "${!defaults[@]}"; do
+        local existing; existing=$(pool_read_conf "$k" "__MISSING__")
+        [[ "$existing" == "__MISSING__" ]] && pool_write_conf_key "$k" "${defaults[$k]}"
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7) STATUS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+pool_show_status() {
+    echo -e "\n${BOLD}Pool Manager — Mainnet${RESET}"
+    echo -e "${DIM}────────────────────────────────────────────────${RESET}"
+
+    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        local pid; pid=$(systemctl show "$POOL_SERVICE" --property=MainPID --value 2>/dev/null || echo "?")
+        echo -e "  ${BOLD}Service${RESET}  : ${GREEN}● active${RESET}  (pid $pid)"
+    elif systemctl is-enabled --quiet "$POOL_SERVICE" 2>/dev/null; then
+        echo -e "  ${BOLD}Service${RESET}  : ${YELLOW}installed, stopped${RESET}"
+    else
+        echo -e "  ${BOLD}Service${RESET}  : ${DIM}not installed${RESET}"
+    fi
+
+    local port; port=$(pool_read_conf "service_port" "$POOL_PORT")
+    if ss -tlnp 2>/dev/null | grep -q ":$port "; then
+        echo -e "  ${BOLD}Port${RESET}     : ${GREEN}$port listening${RESET}"
+    else
+        echo -e "  ${BOLD}Port${RESET}     : ${DIM}$port — not listening${RESET}"
+    fi
+
+    [[ -f "$POOL_APP_DIR/pool.db" ]] && {
+        local dbsz; dbsz=$(du -sh "$POOL_APP_DIR/pool.db" 2>/dev/null | cut -f1 || echo "?")
+        echo -e "  ${BOLD}Database${RESET} : $POOL_APP_DIR/pool.db  ($dbsz)"
+    }
+
+    local subdomain; subdomain=$(pool_read_conf "subdomain" "")
+    [[ -n "$subdomain" ]] && echo -e "  ${BOLD}URL${RESET}      : https://$subdomain"
+
+    if [[ -f "$POOL_LOG" ]]; then
+        echo -e "\n${DIM}── Recent activity (last 15 lines) ──${RESET}"
+        tail -n 15 "$POOL_LOG" 2>/dev/null | sed 's/^/  /'
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1) INSTALL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+pool_install() {
+    echo -e "\n${BOLD}Installing Pool Manager (Mainnet)...${RESET}\n"
+
+    pool_check_exclusivity || return 0
+
+    if [[ ! -d "$POOL_APP_SRC" ]]; then
+        error "Pool app source not found: $POOL_APP_SRC"
+        error "Run this script from within the GRINIUM repository."
+        return 1
+    fi
+    if [[ ! -f "$POOL_APP_SRC/package.json" ]]; then
+        error "package.json not found in $POOL_APP_SRC"
+        return 1
+    fi
+
+    info "Checking system packages..."
+    if command -v apt-get &>/dev/null; then
+        apt-get install -y nodejs npm build-essential logrotate sqlite3 2>&1 | tail -5
+    elif command -v dnf &>/dev/null; then
+        dnf install -y nodejs npm gcc-c++ logrotate sqlite3 2>&1 | tail -5
+    fi
+
+    local node_ver
+    node_ver=$(node -e 'process.stdout.write(process.version.slice(1).split(".")[0])' 2>/dev/null || echo 0)
+    if [[ "$node_ver" -lt 18 ]]; then
+        error "Node.js 18+ required (found: v${node_ver}). Install from https://nodejs.org/ or via NodeSource."
+        return 1
+    fi
+    success "Node.js v${node_ver} found."
+
+    mkdir -p "$POOL_APP_DIR"
+    chmod 700 "$POOL_APP_DIR"
+    info "Copying pool manager to $POOL_APP_DIR..."
+    rsync -a --delete "$POOL_APP_SRC/" "$POOL_APP_DIR/" \
+        2>/dev/null || cp -r "$POOL_APP_SRC/"* "$POOL_APP_DIR/"
+
+    info "Installing Node.js dependencies (npm ci)..."
+    (cd "$POOL_APP_DIR" && npm ci --omit=dev 2>&1 | tail -5) \
+        || { error "npm ci failed. Check $POOL_APP_DIR/package.json."; return 1; }
+    success "Node.js dependencies installed."
+
+    if [[ -f "$POOL_APP_DIR/init-db.js" ]]; then
+        info "Initialising database schema..."
+        GRIN_POOL_CONF="$POOL_CONF" node "$POOL_APP_DIR/init-db.js" \
+            || { error "Database initialisation failed."; return 1; }
+        local db_file="$POOL_APP_DIR/pool.db"
+        [[ -f "$db_file" ]] && chmod 600 "$db_file"
+        success "Database initialised."
+    fi
+
+    local jwt_secret; jwt_secret=$(pool_read_conf "jwt_secret" "")
+    if [[ -z "$jwt_secret" ]]; then
+        jwt_secret=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" \
+            2>/dev/null || openssl rand -hex 32)
+        pool_write_conf_key "jwt_secret" "$jwt_secret"
+        success "JWT secret generated."
+    fi
+
+    pool_ensure_defaults
+
+    local node_bin; node_bin=$(command -v node 2>/dev/null || echo /usr/bin/node)
+    cat > "/etc/systemd/system/$POOL_SERVICE.service" << EOF
+[Unit]
+Description=Grin Pool Manager (GRINIUM — Mainnet)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$POOL_APP_DIR
+Environment="GRIN_POOL_CONF=$POOL_CONF"
+Environment="NODE_ENV=production"
+Environment="HOST=127.0.0.1"
+Environment="PORT=$POOL_PORT"
+ExecStart=$node_bin $POOL_APP_DIR/index.js
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable "$POOL_SERVICE" 2>/dev/null || true
+    success "Systemd service $POOL_SERVICE installed."
+
+    mkdir -p "$(dirname "$POOL_LOG")"
+    cat > "/etc/logrotate.d/${POOL_SERVICE}" << EOF
+$POOL_LOG {
+    daily
+    rotate 10
+    size 20M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    postrotate
+        systemctl kill -s USR2 $POOL_SERVICE 2>/dev/null || true
+    endscript
+}
+EOF
+    success "Logrotate configured."
+    echo ""
+    success "Pool manager installed."
+    echo -e "  Next: ${BOLD}2) Configure${RESET} → ${BOLD}3) Deploy web files${RESET} → ${BOLD}4) Setup nginx${RESET} → ${BOLD}5) Admin account${RESET}"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 2) CONFIGURE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+pool_configure() {
+    echo -e "\n${BOLD}Configure Pool Manager — Mainnet${RESET}\n"
+    pool_ensure_defaults
+
+    local val
+
+    echo -ne "Pool name        [$(pool_read_conf "pool_name" "My Grin Pool")]: "
+    read -r val; [[ -n "$val" ]] && pool_write_conf_key "pool_name" "$val"
+
+    echo -ne "Subdomain        [$(pool_read_conf "subdomain" "")]: "
+    read -r val; [[ -n "$val" ]] && pool_write_conf_key "subdomain" "$val"
+
+    echo -ne "Pool fee %%       [$(pool_read_conf "pool_fee_percent" "0")]: "
+    read -r val; [[ -n "$val" ]] && pool_write_conf_key "pool_fee_percent" "$val"
+
+    echo -ne "Min withdrawal   [$(pool_read_conf "min_withdrawal" "2.0")] GRIN: "
+    read -r val; [[ -n "$val" ]] && pool_write_conf_key "min_withdrawal" "$val"
+
+    echo -ne "Wallet dir       [$(pool_read_conf "grin_wallet_dir" "/opt/grin/wallet/mainnet")]: "
+    read -r val; [[ -n "$val" ]] && pool_write_conf_key "grin_wallet_dir" "$val"
+
+    local default_nsp; default_nsp=$(pool_read_conf "node_stratum_port" "3417")
+    echo -e "  ${DIM}(Node stratum port — set stratum_server_addr in grin-server.toml to match)${RESET}"
+    echo -ne "Node stratum port [${default_nsp}]: "
+    read -r val; [[ -n "$val" ]] && pool_write_conf_key "node_stratum_port" "$val"
+
+    local current_addr; current_addr=$(pool_read_conf "pool_address" "")
+    echo -e "  ${DIM}(Pool's own Grin address — used to login to node stratum upstream)${RESET}"
+    echo -ne "Pool Grin address [${current_addr:-none}]: "
+    read -r val; [[ -n "$val" ]] && pool_write_conf_key "pool_address" "$val"
+
+    local pass_file="$POOL_APP_DIR/wallet_pass"
+    echo -ne "Wallet password  (leave blank to keep existing): "
+    read -rs val; echo ""
+    if [[ -n "$val" ]]; then
+        install -m 600 /dev/null "$pass_file"
+        echo -n "$val" > "$pass_file"
+        pool_write_conf_key "wallet_pass_file" "$pass_file"
+        success "Wallet password saved to $pass_file"
+    fi
+
+    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        info "Restarting $POOL_SERVICE to apply config..."
+        systemctl restart "$POOL_SERVICE"
+    fi
+    success "Pool manager configured."
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 3) DEPLOY WEB FILES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+pool_deploy_web() {
+    if [[ ! -d "$POOL_WEB_SRC" ]]; then
+        error "Web source not found: $POOL_WEB_SRC"
+        return 1
+    fi
+
+    info "Deploying web files to $POOL_WEB_DIR..."
+    mkdir -p "$POOL_WEB_DIR"
+    rsync -a --delete "$POOL_WEB_SRC/" "$POOL_WEB_DIR/" \
+        2>/dev/null || cp -r "$POOL_WEB_SRC/"* "$POOL_WEB_DIR/"
+
+    local pool_name; pool_name=$(pool_read_conf "pool_name" "My Grin Pool")
+    local escaped_name
+    escaped_name=$(node -e "process.stdout.write(JSON.stringify(process.argv[1]))" "$pool_name" 2>/dev/null \
+        || printf '"%s"' "${pool_name//\"/\\\"}")
+    cat > "$POOL_WEB_DIR/js/pool-config.js" << EOF
+// Auto-generated by GRINIUM pool_deploy.sh
+window.POOL_NETWORK = "mainnet";
+window.POOL_NAME = ${escaped_name};
+EOF
+
+    success "Web files deployed to $POOL_WEB_DIR"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4) SETUP NGINX
+# ═══════════════════════════════════════════════════════════════════════════════
+
+pool_setup_nginx() {
+    local subdomain; subdomain=$(pool_read_conf "subdomain" "")
+    if [[ -z "$subdomain" ]]; then
+        echo -ne "Pool subdomain (e.g. pool.example.com): "
+        read -r subdomain
+        [[ -z "$subdomain" ]] && { warn "No subdomain — nginx not configured."; return 1; }
+        pool_write_conf_key "subdomain" "$subdomain"
+    fi
+
+    if ! nginx_validate_domain "$subdomain"; then
+        error "Invalid domain name: $subdomain"
+        return 1
+    fi
+
+    info "Writing nginx vhost: $POOL_NGINX_CONF"
+    mkdir -p "$(dirname "$POOL_NGINX_CONF")"
+
+    if declare -F nginx_ensure_rate_limit_zones &>/dev/null; then
+        nginx_ensure_rate_limit_zones "script07-${POOL_SERVICE}" \
+            "${POOL_SERVICE}_auth:3r/m"    \
+            "${POOL_SERVICE}_api:30r/m"    \
+            "${POOL_SERVICE}_static:60r/m"
+    fi
+
+    cat > "$POOL_NGINX_CONF" << EOF
+# GRINIUM Grin Pool — Mainnet — generated by deploy/pool_deploy.sh
+# Rate-limit zones live in /etc/nginx/conf.d/script07-${POOL_SERVICE}.conf
+
+server {
+    listen 80;
+    server_name $subdomain;
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $subdomain;
+
+    root $POOL_WEB_DIR;
+    index index.html;
+
+    # SSL — managed by certbot
+    ssl_certificate     /etc/letsencrypt/live/$subdomain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$subdomain/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf 2>/dev/null;
+
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" always;
+
+    location /api/auth/ {
+        limit_req zone=${POOL_SERVICE}_auth burst=5 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+
+    location /api/ {
+        limit_req zone=${POOL_SERVICE}_api burst=10 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 30s;
+    }
+
+    location / {
+        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        try_files \$uri \$uri/ \$uri.html =404;
+    }
+
+    access_log /var/log/nginx/${POOL_SERVICE}-access.log;
+    error_log  /var/log/nginx/${POOL_SERVICE}-error.log;
+}
+EOF
+
+    nginx_ensure_sites_enabled_include
+
+    local sites_enabled="/etc/nginx/sites-enabled/$(basename "$POOL_NGINX_CONF")"
+    ln -sf "$POOL_NGINX_CONF" "$sites_enabled" 2>/dev/null || true
+
+    nginx -t 2>&1 && systemctl reload nginx \
+        && success "nginx configured for $subdomain" \
+        || { error "nginx config test failed. Check $POOL_NGINX_CONF"; return 1; }
+
+    echo ""
+    echo -ne "Run certbot for SSL on $subdomain? [Y/n/0]: "
+    read -r do_ssl
+    if [[ "${do_ssl,,}" != "n" && "$do_ssl" != "0" ]]; then
+        certbot --nginx -d "$subdomain" --non-interactive --agree-tos \
+            --email "admin@$subdomain" 2>&1 | tail -5 || warn "certbot failed — configure SSL manually."
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5) CREATE ADMIN ACCOUNT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+pool_setup_admin() {
+    local port; port=$(pool_read_conf "service_port" "$POOL_PORT")
+    echo -e "\n${BOLD}Create Admin Account — Mainnet${RESET}\n"
+
+    if ! ss -tlnp 2>/dev/null | grep -q ":$port "; then
+        warn "Pool manager is not running on port $port."
+        warn "Start the service (option 6) first, then run this again."
+        return 1
+    fi
+
+    echo -ne "Admin username: "
+    read -r admin_user
+    [[ -z "$admin_user" ]] && return
+
+    echo -ne "Admin password: "
+    read -rs admin_pass; echo ""
+    [[ -z "$admin_pass" ]] && return
+
+    echo -ne "Admin email (optional): "
+    read -r admin_email
+
+    local payload
+    payload=$(node -e "
+process.stdout.write(JSON.stringify({
+  username: process.argv[1],
+  password: process.argv[2],
+  email:    process.argv[3]
+}))
+" "$admin_user" "$admin_pass" "${admin_email:-}" 2>/dev/null)
+    if [[ -z "$payload" ]]; then
+        error "Failed to build JSON payload (node not available?)."
+        return 1
+    fi
+
+    local resp; resp=$(curl -fsSL -X POST "http://127.0.0.1:$port/api/auth/register" \
+        -H "Content-Type: application/json" -d "$payload" 2>&1)
+
+    if echo "$resp" | grep -q '"success"[[:space:]]*:[[:space:]]*true'; then
+        success "User '$admin_user' registered."
+        local safe_user="${admin_user//"'"/"''"}"
+        if command -v sqlite3 &>/dev/null; then
+            sqlite3 "$POOL_APP_DIR/pool.db" \
+                "UPDATE users SET is_admin=1 WHERE username='${safe_user}';" \
+                && info "User '$admin_user' promoted to admin."
+        else
+            node -e "
+const db = require('better-sqlite3')(process.argv[1]);
+db.prepare('UPDATE users SET is_admin=1 WHERE username=?').run(process.argv[2]);
+" "$POOL_APP_DIR/pool.db" "$admin_user" \
+                && info "User '$admin_user' promoted to admin."
+        fi
+    else
+        error "Registration failed: $resp"
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6) SERVICE CONTROL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+pool_service_control() {
+    local action="$1"
+    case "$action" in
+        start)
+            systemctl start "$POOL_SERVICE" \
+                && success "$POOL_SERVICE started." \
+                || error "Failed to start $POOL_SERVICE."
+            ;;
+        stop)
+            systemctl stop "$POOL_SERVICE" \
+                && success "$POOL_SERVICE stopped." \
+                || error "Failed to stop $POOL_SERVICE."
+            ;;
+        restart)
+            systemctl restart "$POOL_SERVICE" \
+                && success "$POOL_SERVICE restarted." \
+                || error "Failed to restart $POOL_SERVICE."
+            ;;
+    esac
+}
+
+pool_service_menu() {
+    echo -e "\n${BOLD}Service Control — $POOL_SERVICE${RESET}"
+    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        echo -e "  Status: ${GREEN}● running${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Stop    ${RED}2${RESET}) Restart    ${DIM}0) Back${RESET}"
+        echo -ne "Choice: "
+        read -r sc
+        case "$sc" in
+            1) pool_service_control stop ;;
+            2) pool_service_control restart ;;
+        esac
+    else
+        echo -e "  Status: ${RED}● stopped${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Start    ${DIM}0) Back${RESET}"
+        echo -ne "Choice: "
+        read -r sc
+        [[ "$sc" == "1" ]] && pool_service_control start
+    fi
+}
+
+pool_start_service() {
+    if ! systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        pool_service_control start
+    else
+        info "$POOL_SERVICE is already running."
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# B) BACKUP
+# ═══════════════════════════════════════════════════════════════════════════════
+
+pool_backup() {
+    local backup_dir="/opt/grin/backups/${POOL_SERVICE}"
+    mkdir -p "$backup_dir"
+    local ts; ts=$(date +%Y%m%d_%H%M%S)
+    local backup_file="$backup_dir/pool_backup_${ts}.tar.gz"
+
+    local files=()
+    [[ -f "$POOL_APP_DIR/pool.db" ]] && files+=("$POOL_APP_DIR/pool.db")
+    [[ -f "$POOL_CONF" ]]            && files+=("$POOL_CONF")
+
+    if [[ ${#files[@]} -eq 0 ]]; then
+        warn "Nothing to back up — DB and config not found."
+        return
+    fi
+
+    tar -czf "$backup_file" "${files[@]}" 2>/dev/null \
+        && success "Backup: $backup_file" \
+        || error "Backup failed."
+
+    ls -t "$backup_dir"/pool_backup_*.tar.gz 2>/dev/null | tail -n +31 | xargs rm -f 2>/dev/null || true
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# C) CRON SCHEDULES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+pool_cron_schedules() {
+    echo -e "\n${BOLD}Cron Schedules — $POOL_SERVICE${RESET}\n"
+    local cron_backup="/etc/cron.d/${POOL_SERVICE}-backup"
+    local cron_vacuum="/etc/cron.d/${POOL_SERVICE}-vacuum"
+
+    [[ -f "$cron_backup" ]] \
+        && echo -e "  Daily backup  : ${GREEN}enabled${RESET}  ($cron_backup)" \
+        || echo -e "  Daily backup  : ${DIM}disabled${RESET}"
+
+    [[ -f "$cron_vacuum" ]] \
+        && echo -e "  Weekly VACUUM : ${GREEN}enabled${RESET}  ($cron_vacuum)" \
+        || echo -e "  Weekly VACUUM : ${DIM}disabled${RESET}"
+
+    echo ""
+    echo -e "  ${GREEN}1${RESET}) Toggle daily backup (02:00 UTC)"
+    echo -e "  ${GREEN}2${RESET}) Toggle weekly SQLite VACUUM (Sunday 03:00 UTC)"
+    echo -e "  ${DIM}0) Back${RESET}"
+    echo -ne "Choice: "
+    read -r cc
+
+    local backup_wrapper="/usr/local/bin/grin-pool-backup-mainnet"
+
+    case "$cc" in
+        1)
+            if [[ -f "$cron_backup" ]]; then
+                rm -f "$cron_backup" "$backup_wrapper"
+                success "Daily backup cron disabled."
+            else
+                cat > "$backup_wrapper" << SCRIPT
+#!/bin/bash
+set -euo pipefail
+BACKUP_DIR="/opt/grin/backups/${POOL_SERVICE}"
+mkdir -p "\$BACKUP_DIR"
+TS=\$(date +%Y%m%d_%H%M%S)
+FILES=()
+[[ -f "$POOL_APP_DIR/pool.db" ]] && FILES+=("$POOL_APP_DIR/pool.db")
+[[ -f "$POOL_CONF" ]]            && FILES+=("$POOL_CONF")
+if [[ \${#FILES[@]} -eq 0 ]]; then
+    echo "[grin-pool-backup-mainnet] Nothing to back up."
+    exit 0
+fi
+tar -czf "\$BACKUP_DIR/pool_backup_\${TS}.tar.gz" "\${FILES[@]}"
+ls -t "\$BACKUP_DIR"/pool_backup_*.tar.gz 2>/dev/null | tail -n +31 | xargs -r rm -f
+SCRIPT
+                chmod 750 "$backup_wrapper"
+                cat > "$cron_backup" << EOF
+0 2 * * * root $backup_wrapper >> $POOL_LOG 2>&1
+EOF
+                success "Daily backup cron enabled ($cron_backup → $backup_wrapper)."
+            fi
+            ;;
+        2)
+            if [[ -f "$cron_vacuum" ]]; then
+                rm -f "$cron_vacuum"
+                success "Weekly VACUUM cron disabled."
+            else
+                cat > "$cron_vacuum" << EOF
+0 3 * * 0 root /usr/bin/sqlite3 $POOL_APP_DIR/pool.db "VACUUM;" >> $POOL_LOG 2>&1
+EOF
+                success "Weekly VACUUM cron enabled ($cron_vacuum)."
+            fi
+            ;;
+    esac
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# L) VIEW LOGS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+pool_view_logs() {
+    if [[ ! -f "$POOL_LOG" ]]; then
+        warn "Log file not found: $POOL_LOG"
+        return
+    fi
+    tail -n 50 "$POOL_LOG" | less -FRX
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEL) RESET DATABASE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+pool_reset_db() {
+    local db_path="$POOL_APP_DIR/pool.db"
+
+    echo -e "\n${RED}${BOLD}━━━ DANGER ZONE — Reset Pool Database ━━━${RESET}"
+    echo ""
+
+    if [[ ! -f "$db_path" ]]; then
+        warn "Database not found: $db_path"
+        return
+    fi
+
+    local db_size; db_size=$(du -sh "$db_path" 2>/dev/null | cut -f1 || echo "?")
+    local user_count
+    if command -v sqlite3 &>/dev/null; then
+        user_count=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM users;" 2>/dev/null || echo "?")
+    else
+        user_count="?"
+    fi
+
+    echo -e "  Database : $db_path  ($db_size)"
+    echo -e "  Users    : $user_count accounts"
+    echo -e "  Network  : Mainnet"
+    echo ""
+    warn "This will permanently DELETE all users, balances, shares, blocks, and withdrawals."
+    echo ""
+    echo -ne "Type ${RED}RESET POOL DATABASE${RESET} to confirm: "
+    read -r confirm1
+    [[ "$confirm1" != "RESET POOL DATABASE" ]] && { info "Aborted."; return; }
+
+    echo -ne "Type ${RED}YES${RESET} to proceed: "
+    read -r confirm2
+    [[ "$confirm2" != "YES" ]] && { info "Aborted."; return; }
+
+    pool_service_control stop 2>/dev/null || true
+    sleep 1
+
+    rm -f "${db_path:?refusing to rm — db_path is empty}"
+    success "Database deleted."
+
+    if [[ -f "$POOL_APP_DIR/init-db.js" ]]; then
+        info "Recreating database schema..."
+        GRIN_POOL_CONF="$POOL_CONF" node "$POOL_APP_DIR/init-db.js" \
+            && success "Schema recreated." || warn "Schema recreation failed — restart service."
+        [[ -f "$db_path" ]] && chmod 600 "$db_path"
+    fi
+
+    pool_service_control start 2>/dev/null || true
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# G) GUIDED FULL SETUP
+# ═══════════════════════════════════════════════════════════════════════════════
+
+pool_guided_setup() {
+    echo -e "\n${BOLD}${CYAN}═══ Guided Full Setup — GRINIUM Pool (Mainnet) ═══${RESET}\n"
+    pool_check_exclusivity || return 0
+    echo -e "  This will run steps 1 → 2 → 3 → 4 → 5 → 6 in sequence."
+    echo -ne "  Continue? [Y/n]: "
+    read -r go; [[ "${go,,}" == "n" ]] && return
+
+    pool_install   || return
+    echo ""; echo "Press Enter to continue to Configure..."; read -r
+    pool_configure
+    echo ""; echo "Press Enter to continue to Deploy web files..."; read -r
+    pool_deploy_web
+    echo ""; echo "Press Enter to continue to Setup nginx..."; read -r
+    pool_setup_nginx
+    echo ""; echo "Press Enter to start the service and create admin account..."; read -r
+    pool_start_service
+    sleep 2
+    pool_setup_admin
+
+    echo ""
+    success "Guided setup complete. Open https://$(pool_read_conf "subdomain" "your-domain") to access the pool."
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STATUS LINE helper
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_pool_menu_status_line() {
+    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        echo -e "${GREEN}● running${RESET}"
+    elif [[ -f "$POOL_CONF" ]]; then
+        echo -e "${YELLOW}installed, stopped${RESET}"
+    else
+        echo -e "${DIM}not installed${RESET}"
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN MENU
+# ═══════════════════════════════════════════════════════════════════════════════
+
+show_menu() {
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  GRINIUM — Grin Public Mining Pool (Mainnet)${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  Service: $(_pool_menu_status_line)"
+    echo ""
+    echo -e "${DIM}  ─── First-Time Setup ────────────────────────────${RESET}"
+    echo -e "  ${GREEN}G${RESET}) Guided Full Setup    ${DIM}(runs all setup steps 1→6)${RESET}"
+    echo ""
+    echo -e "${DIM}  ─── Manual Setup Steps ───────────────────────────${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Install               ${DIM}(nodejs ≥18, npm, sqlite3, systemd)${RESET}"
+    echo -e "  ${GREEN}2${RESET}) Configure             ${DIM}(pool name, domain, fee, wallet dir)${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Deploy web files      ${DIM}(frontend → $POOL_WEB_DIR)${RESET}"
+    echo -e "  ${GREEN}4${RESET}) Setup nginx           ${DIM}(vhost + SSL + rate limits)${RESET}"
+    echo -e "  ${GREEN}5${RESET}) Create admin account  ${DIM}(first admin user)${RESET}"
+    echo -e "  ${GREEN}6${RESET}) Service control       ${DIM}(start / stop)${RESET}"
+    echo ""
+    echo -e "${DIM}  ─── Administration ───────────────────────────────${RESET}"
+    echo -e "  ${GREEN}7${RESET}) Pool status           ${DIM}(service, port, DB, recent logs)${RESET}"
+    echo -e "  ${GREEN}B${RESET}) Backup pool           ${DIM}(DB + config → /opt/grin/backups/)${RESET}"
+    echo -e "  ${GREEN}C${RESET}) Cron tasks            ${DIM}(backup schedule, VACUUM)${RESET}"
+    echo -e "  ${GREEN}L${RESET}) View logs             ${DIM}(tail -50 | less)${RESET}"
+    echo -e "  ${GREEN}S${RESET}) Edit config           ${DIM}(${POOL_CONF})${RESET}"
+    echo ""
+    echo -e "${DIM}  ─── Danger Zone ──────────────────────────────────${RESET}"
+    echo -e "  ${RED}DEL${RESET}) Reset database    ${DIM}(⚠ permanently wipes all data)${RESET}"
+    echo ""
+    echo -e "  ${RED}0${RESET}) Back to mining hub"
+    echo ""
+    echo -ne "${BOLD}Select: ${RESET}"
+}
+
+main() {
+    while true; do
+        show_menu
+        read -r choice
+
+        case "${choice,,}" in
+            "")    continue ;;
+            g)     pool_guided_setup ;;
+            1)     pool_install ;;
+            2)     pool_configure ;;
+            3)     pool_deploy_web ;;
+            4)     pool_setup_nginx ;;
+            5)     pool_setup_admin ;;
+            6)     pool_service_menu ;;
+            7)     pool_show_status ;;
+            b)     pool_backup ;;
+            c)     pool_cron_schedules ;;
+            l)     pool_view_logs ;;
+            s)     ${EDITOR:-nano} "$POOL_CONF" ;;
+            del)   pool_reset_db ;;
+            0|q|exit) break ;;
+            *)     warn "Invalid option." ; sleep 1 ; continue ;;
+        esac
+
+        [[ "${choice,,}" != "l" && "${choice,,}" != "s" ]] && {
+            echo ""
+            echo "Press Enter to continue..."
+            read -r
+        }
+    done
+}
+
+main "$@"

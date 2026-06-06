@@ -1,0 +1,40 @@
+{
+  "port": 8080,
+  "stratum_port": 3333,
+  "network": "testnet",
+  "jwt_secret": "CHANGE_ME_TO_RANDOM_SECRET_32_CHARS",
+
+  "pool_fee_percent": 2.0,
+  "min_withdrawal": 0.1,
+
+  "confirm_depth_mainnet": 1441,
+  "confirm_depth_testnet": 100,
+
+  "wallet_dir": "/opt/grin/pool-test/",
+  "wallet_owner_port": 13420,
+  "wallet_foreign_port": 13415,
+
+  "node_api_url": "http://127.0.0.1:13413",
+  "node_api_secret": "CHANGE_ME_TO_NODE_SECRET",
+
+  "node_stratum_host": "127.0.0.1",
+  "node_stratum_port": 13417,
+  "pool_address": "CHANGE_ME_TO_POOL_GRIN_ADDRESS",
+
+  "db_path": "./pool.sqlite",
+
+  "tor_enabled": true,
+  "tor_socks_port": 9050,
+  "tor_check_timeout_ms": 3000,
+
+  "alert_large_withdrawal": 100,
+  "alert_tor_fails_per_week": 3,
+  "alert_rapid_creates": 2,
+
+  "withdrawal_retry_delays": [
+    21600,
+    43200,
+    86400,
+    172800
+  ]
+}

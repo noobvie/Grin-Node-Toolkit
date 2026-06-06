@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Grin Mining Pool Admin Dashboard">
+  <title>Admin Dashboard - Grin Mining Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    body.admin-layout {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    .admin-wrapper {
+      display: flex;
+      flex: 1;
+    }
+
+    .sidebar {
+      width: 250px;
+      background: var(--bg-card);
+      border-right: 1px solid var(--border-color);
+      padding: 1.5rem 0;
+      position: fixed;
+      left: 0;
+      top: 60px;
+      height: calc(100vh - 60px);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .sidebar-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      padding: 0 1rem;
+      flex: 1;
+    }
+
+    .sidebar-nav a {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.75rem 1rem;
+      color: var(--text-secondary);
+      text-decoration: none;
+      border-radius: 6px;
+      transition: all 0.2s ease;
+      font-size: 0.95rem;
+      border-left: 3px solid transparent;
+      cursor: pointer;
+    }
+
+    .sidebar-nav a:hover,
+    .sidebar-nav a.active {
+      color: var(--primary);
+      background: rgba(102, 126, 234, 0.1);
+      border-left-color: var(--primary);
+    }
+
+    .sidebar-footer {
+      padding: 1rem;
+      border-top: 1px solid var(--border-color);
+    }
+
+    main {
+      margin-left: 250px;
+      flex: 1;
+      padding: 2rem 0;
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 3rem;
+    }
+
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1.5rem;
+      transition: all 0.3s ease;
+    }
+
+    .stat-card:hover {
+      border-color: var(--primary);
+      box-shadow: 0 0 20px rgba(102, 126, 234, 0.15);
+    }
+
+    .stat-title {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 0.5rem;
+    }
+
+    .stat-value {
+      font-size: 2.2rem;
+      font-weight: 700;
+      color: var(--primary);
+      margin-bottom: 0.5rem;
+    }
+
+    .stat-sub {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    .section-tabs {
+      display: flex;
+      gap: 0.5rem;
+      border-bottom: 1px solid var(--border-color);
+      margin-bottom: 1.5rem;
+      overflow-x: auto;
+    }
+
+    .tab-btn {
+      padding: 1rem 1.5rem;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+
+    .tab-btn:hover,
+    .tab-btn.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .table-wrapper {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead {
+      background: rgba(102, 126, 234, 0.1);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    th {
+      padding: 1rem;
+      text-align: left;
+      font-weight: 600;
+      color: var(--primary);
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    td {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border-color);
+      color: var(--text-secondary);
+    }
+
+    tbody tr:hover {
+      background: rgba(102, 126, 234, 0.05);
+    }
+
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .status-online {
+      background: rgba(72, 187, 120, 0.2);
+      color: var(--success);
+    }
+
+    .status-offline {
+      background: rgba(245, 101, 101, 0.2);
+      color: var(--danger);
+    }
+
+    .status-idle {
+      background: rgba(237, 137, 54, 0.2);
+      color: var(--warning);
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 3rem 1.5rem;
+      color: var(--text-secondary);
+    }
+
+    @media (max-width: 768px) {
+      .sidebar {
+        width: 100%;
+        height: auto;
+        position: static;
+        border-right: none;
+        border-bottom: 1px solid var(--border-color);
+        padding: 1rem;
+        flex-direction: row;
+      }
+
+      .sidebar-nav {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        flex: 1;
+      }
+
+      .sidebar-nav a {
+        flex: 1;
+        min-width: 100px;
+        text-align: center;
+        flex-direction: column;
+        font-size: 0.8rem;
+      }
+
+      .sidebar-footer {
+        border-left: 1px solid var(--border-color);
+        border-top: none;
+        padding: 0 1rem;
+      }
+
+      main {
+        margin-left: 0;
+        padding: 1rem 0;
+      }
+
+      .dashboard-grid {
+        grid-template-columns: 1fr;
+      }
+
+      table {
+        font-size: 0.85rem;
+      }
+
+      th, td {
+        padding: 0.75rem 0.5rem;
+      }
+    }
+  </style>
+</head>
+<body class="admin-layout">
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <div class="site-title"><a href="/">⛏ Grin Pool</a></div>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/back-end-pool/admin.html" class="active">Dashboard</a>
+      </nav>
+      <button class="btn btn-outline btn-sm" onclick="logout()" style="margin: 0;">Logout</button>
+    </div>
+  </div>
+</header>
+
+<div class="admin-wrapper">
+  <aside class="sidebar">
+    <nav class="sidebar-nav">
+      <a href="#overview" class="tab-trigger active" data-tab="overview">📊 Overview</a>
+      <a href="#miners" class="tab-trigger" data-tab="miners">⛏️ Miners</a>
+      <a href="#blocks" class="tab-trigger" data-tab="blocks">🔗 Blocks</a>
+      <a href="#payments" class="tab-trigger" data-tab="payments">💸 Payments</a>
+      <a href="#health" class="tab-trigger" data-tab="health">❤️ Health</a>
+    </nav>
+    <div class="sidebar-footer">
+      <button class="btn btn-outline btn-block btn-sm" onclick="logout()">Logout</button>
+    </div>
+  </aside>
+
+  <main>
+    <div class="container">
+
+      <!-- OVERVIEW TAB -->
+      <section id="overview" class="tab-content active">
+        <h2>Dashboard Overview</h2>
+
+        <div class="dashboard-grid">
+          <div class="stat-card">
+            <div class="stat-title">Pool Hashrate</div>
+            <div class="stat-value" id="metric-hashrate">—</div>
+            <div class="stat-sub">1h average</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Active Miners</div>
+            <div class="stat-value" id="metric-miners">—</div>
+            <div class="stat-sub">Connected now</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Blocks Found</div>
+            <div class="stat-value" id="metric-blocks">—</div>
+            <div class="stat-sub">Total confirmed</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Total Payouts</div>
+            <div class="stat-value" id="metric-payouts">—</div>
+            <div class="stat-sub">GRIN distributed</div>
+          </div>
+        </div>
+
+        <section>
+          <h3 style="margin-bottom: 1rem;">Recent Blocks</h3>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Height</th>
+                  <th>Hash</th>
+                  <th>Reward (GRIN)</th>
+                  <th>Miner</th>
+                  <th>Status</th>
+                  <th>Found At</th>
+                </tr>
+              </thead>
+              <tbody id="blocks-table">
+                <tr>
+                  <td colspan="6" class="empty-state">Loading...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <!-- MINERS TAB -->
+      <section id="miners" class="tab-content">
+        <h2>Miners</h2>
+        <div class="section-tabs">
+          <button class="tab-btn active" onclick="filterMiners('active')">Active</button>
+          <button class="tab-btn" onclick="filterMiners('all')">All</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Address</th>
+                <th>Balance (GRIN)</th>
+                <th>Shares</th>
+                <th>Status</th>
+                <th>Last Seen</th>
+              </tr>
+            </thead>
+            <tbody id="miners-table">
+              <tr>
+                <td colspan="5" class="empty-state">Loading...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- BLOCKS TAB -->
+      <section id="blocks" class="tab-content">
+        <h2>Blocks</h2>
+        <div class="section-tabs">
+          <button class="tab-btn active" onclick="filterBlocks('all')">All</button>
+          <button class="tab-btn" onclick="filterBlocks('confirmed')">Confirmed</button>
+          <button class="tab-btn" onclick="filterBlocks('pending')">Pending</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Height</th>
+                <th>Hash</th>
+                <th>Reward</th>
+                <th>Found By</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="blocks-detailed-table">
+              <tr>
+                <td colspan="5" class="empty-state">Loading...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- PAYMENTS TAB -->
+      <section id="payments" class="tab-content">
+        <h2>Payments & Withdrawals</h2>
+        <div class="section-tabs">
+          <button class="tab-btn active" onclick="filterPayments('confirmed')">Confirmed</button>
+          <button class="tab-btn" onclick="filterPayments('pending')">Pending</button>
+          <button class="tab-btn" onclick="filterPayments('failed')">Failed</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Address</th>
+                <th>Amount (GRIN)</th>
+                <th>Status</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody id="payments-table">
+              <tr>
+                <td colspan="5" class="empty-state">Loading...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- HEALTH TAB -->
+      <section id="health" class="tab-content">
+        <h2>System Health</h2>
+        <div class="dashboard-grid">
+          <div class="stat-card">
+            <div class="stat-title">Node Status</div>
+            <div style="margin: 0.5rem 0;">
+              <span class="status-badge status-online">● Online</span>
+            </div>
+            <div class="stat-sub">Height: <span id="health-node-height">—</span></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Wallet Status</div>
+            <div style="margin: 0.5rem 0;">
+              <span class="status-badge status-online">● Online</span>
+            </div>
+            <div class="stat-sub">Balance: <span id="health-wallet-balance">—</span> GRIN</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Stratum Server</div>
+            <div style="margin: 0.5rem 0;">
+              <span class="status-badge status-online">● Running</span>
+            </div>
+            <div class="stat-sub">Connections: <span id="health-stratum">—</span></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Block Monitor</div>
+            <div style="margin: 0.5rem 0;">
+              <span class="status-badge status-online">● Active</span>
+            </div>
+            <div class="stat-sub">Last check: <span id="health-monitor">—</span></div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<script>
+  // Check auth
+  function checkAuth() {
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      window.location.href = '/back-end-pool/login.html';
+      return false;
+    }
+    return true;
+  }
+
+  // Logout
+  function logout() {
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    window.location.href = '/back-end-pool/login.html';
+  }
+
+  // Tab switching
+  document.querySelectorAll('.tab-trigger').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const tabName = btn.dataset.tab;
+      switchTab(tabName);
+    });
+  });
+
+  function switchTab(tabName) {
+    document.querySelectorAll('.tab-content').forEach(el => {
+      el.classList.remove('active');
+    });
+    document.getElementById(tabName).classList.add('active');
+    document.querySelectorAll('.tab-trigger').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
+  }
+
+  // Filter functions
+  function filterMiners(filter) { console.log('Filter miners:', filter); }
+  function filterBlocks(filter) { console.log('Filter blocks:', filter); }
+  function filterPayments(filter) { console.log('Filter payments:', filter); }
+
+  // Load dashboard
+  async function loadDashboard() {
+    if (!checkAuth()) return;
+    try {
+      const token = localStorage.getItem('access_token');
+      const res = await fetch('/api/admin/metrics', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.hashrate) document.getElementById('metric-hashrate').textContent = data.hashrate.toFixed(2) + ' G/s';
+        if (data.miners) document.getElementById('metric-miners').textContent = data.miners;
+        if (data.blocks) document.getElementById('metric-blocks').textContent = data.blocks;
+        if (data.payouts) document.getElementById('metric-payouts').textContent = data.payouts.toFixed(2);
+      }
+    } catch (err) {
+      console.error('Failed to load metrics:', err);
+    }
+  }
+
+  // Init
+  if (checkAuth()) {
+    loadDashboard();
+    setInterval(loadDashboard, 30000);
+  }
+</script>
+
+</body>
+</html>

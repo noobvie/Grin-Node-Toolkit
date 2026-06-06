@@ -150,6 +150,9 @@
   .blocks-head h3 { font-size: 1.05rem; color: var(--text-hi); letter-spacing: .05em; }
   .blocks-sum { font-size: .9rem; color: var(--muted); }
   .blocks-sum b { color: var(--text-hi); }
+  .blocks-sum .fiat { color: var(--muted); white-space: nowrap; }
+  .blocks-sum .src-info { cursor: help; margin-left: .3rem; opacity: .65; font-size: .85em; }
+  .blocks-sum .src-info:hover, .blocks-sum .src-info:focus { opacity: 1; outline: none; }
   .blocks table { min-width: 460px; }
   .blocks td .h { color: var(--text-hi); font-weight: bold; }
   .blocks td a.h { color: var(--main); text-decoration: underline dotted; text-underline-offset: 3px; }
@@ -283,7 +286,7 @@
   </div>
   <div class="blocks">
     <div class="blocks-head">
-      <h3>Blocks found by this solo pool</h3>
+      <h3>All time blocks found by this solo pool</h3>
       <span class="blocks-sum" id="main-blocks-sum">—</span>
     </div>
     <div class="table-scroll"><table id="main-blocks-table"><tbody></tbody></table></div>
@@ -323,7 +326,7 @@
   </div>
   <div class="blocks">
     <div class="blocks-head">
-      <h3>Blocks found by this solo pool</h3>
+      <h3>All time blocks found by this solo pool</h3>
       <span class="blocks-sum" id="test-blocks-sum">—</span>
     </div>
     <div class="table-scroll"><table id="test-blocks-table"><tbody></tbody></table></div>
@@ -431,7 +434,7 @@
     main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', hashrate: 'data/hashrate_main.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null },
     test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', hashrate: 'data/hashrate_test.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null }
   };
-  var STATE = { tip: { main: null, test: null }, blocks: { main: [], test: [] }, miners: { main: [], test: [] }, hashrate: { main: [], test: [] }, loaded: { main: false, test: false }, hrLoaded: { main: false, test: false }, range: 'weekly', hrRange: 'weekly', blocksPage: { main: 0, test: 0 } };
+  var STATE = { tip: { main: null, test: null }, blocks: { main: [], test: [] }, miners: { main: [], test: [] }, hashrate: { main: [], test: [] }, loaded: { main: false, test: false }, hrLoaded: { main: false, test: false }, range: 'weekly', hrRange: 'weekly', blocksPage: { main: 0, test: 0 }, price: null };
   var BLOCKS_PER_PAGE = 20;  // found-blocks table rows per page
 
   // Seed difficulty/hashrate from the last session so the tiles render a number
@@ -452,6 +455,18 @@
     if (gps >= 1e6) return (gps/1e6).toFixed(2)+' MG/s';
     if (gps >= 1e3) return (gps/1e3).toFixed(2)+' kG/s';
     return gps.toFixed(2)+' G/s';
+  }
+  // Fiat conversions for the total-mined line. Null in → null out (skip the part).
+  function fmtUsd(v) {
+    if (v == null || isNaN(v)) return null;
+    // Compact once it reaches 1k ($1.2k / $3.4M); keep cents below that.
+    return '$' + (v >= 1000 ? fmtCount(v)
+                            : v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+  }
+  function fmtBtc(v) {
+    if (v == null || isNaN(v)) return null;
+    var dp = v >= 1 ? 4 : (v >= 0.0001 ? 6 : 8);   // small totals keep more precision
+    return '₿' + v.toFixed(dp);
   }
   // Compact integer count for the y-axis (block-count gridline labels). Keeps
   // every label ≤4 chars so it never clips the narrow left gutter: 0–999 raw,
@@ -601,6 +616,16 @@
         STATE.hashrate[net] = Array.isArray(data.points) ? data.points : []; STATE.hrLoaded[net] = true;
       })
       .catch(function () { STATE.hrLoaded[net] = false; STATE.hashrate[net] = []; });
+  }
+
+  // GRIN fiat price (mainnet-only file, written server-side by the collector).
+  // Absent on testnet-only deploys → 404 → price stays null (total-mined line
+  // shows GRIN only). A transient network blip leaves the last price in place.
+  function pollPrice() {
+    return fetch('data/price.json', { cache: 'no-store' })
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (p) { STATE.price = (p && (p.usd != null || p.btc != null)) ? p : null; })
+      .catch(function () { /* network blip — keep last known price */ });
   }
 
   function pollMiners(net) {
@@ -867,7 +892,27 @@
     }
 
     var blocks = STATE.blocks[net];   // already height-desc from the collector
-    sum.innerHTML = '<b>' + blocks.length + '</b> found';
+    // Total mined = blocks × flat coinbase (60 GRIN, no halving). Mainnet adds a
+    // ≈ USD/BTC conversion from the server-fetched price (testnet tGRIN: count only).
+    var reward = (STATE.price && STATE.price.block_reward) || 60;
+    var totalGrin = blocks.length * reward;
+    var cur = (net === 'main') ? 'GRIN' : 'tGRIN';
+    var sumHtml = '<b>' + fmtCount(blocks.length) + '</b> found · <b>' + fmtCount(totalGrin) + '</b> ' + cur + ' mined';
+    if (net === 'main' && totalGrin > 0 && STATE.price) {
+      var p = STATE.price;   // null legs stay null (don't coerce to 0 → "$0.00")
+      var fiat = [
+        fmtUsd(p.usd != null ? totalGrin * p.usd : null),
+        fmtBtc(p.btc != null ? totalGrin * p.btc : null)
+      ].filter(Boolean);
+      if (fiat.length) {
+        var srcName = (p.source === 'nonlogs') ? 'nonlogs.io' : 'CoinGecko';
+        var tip = 'Total mined = blocks × 60 GRIN. Price via ' + srcName
+                + ' — source: CoinGecko (primary), nonlogs.io (fallback).';
+        sumHtml += ' <span class="fiat">≈ ' + fiat.join(' · ')
+                 + '<span class="src-info" title="' + esc(tip) + '" tabindex="0" role="img" aria-label="' + esc(tip) + '">ⓘ</span></span>';
+      }
+    }
+    sum.innerHTML = sumHtml;
     if (blocks.length === 0) {
       tbody.innerHTML = '';
       empty.textContent = 'No blocks found yet. Solo finds are rare — they will appear here.';
@@ -1147,7 +1192,7 @@
     Promise.all([
       pollNet('main'), pollNet('test'), pollWallet('main'), pollWallet('test'),
       pollBlocks('main'), pollBlocks('test'), pollMiners('main'), pollMiners('test'),
-      pollHashrate('main'), pollHashrate('test'), pollSplit()
+      pollHashrate('main'), pollHashrate('test'), pollSplit(), pollPrice()
     ]).then(function (results) {
       // results[0]/[1] = pollNet main/test (true only when a node returned a tip)
       lastPollOk = !!(results[0] || results[1]);

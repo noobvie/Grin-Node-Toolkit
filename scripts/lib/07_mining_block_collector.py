@@ -125,6 +125,20 @@ SPLIT_PERIODS = ("daily", "weekly", "monthly", "yearly")
 # setting "pool_name" in <out-dir>/config.json (see load_pool_name).
 DEFAULT_POOL_NAME = "Grin Solo (Node Toolkit)"
 
+# ── GRIN fiat price (mainnet dashboard only) ───────────────────────────────────
+# Fetched SERVER-SIDE (here) so the static page reads it same-origin from
+# data/price.json — the page's strict `connect-src 'self'` CSP needs no external
+# origin, and visitors never hit a rate limit or a CORS wall. CoinGecko returns
+# USD + BTC in one call; on failure we fall back to nonlogs (GRIN→BTC) × nonlogs
+# (BTC→USDT) for the USD. If every source fails the previous price.json is left
+# untouched (stale-but-shown) rather than overwritten with nulls. testnet is
+# tGRIN (no value) so no price is fetched for it.
+PRICE_COINGECKO = ("https://api.coingecko.com/api/v3/simple/price"
+                   "?ids=grin&vs_currencies=usd,btc")          # {"grin":{"usd":..,"btc":..}}
+PRICE_NONLOGS_GRINBTC = "https://api.nonlogs.io/api/markets/GRIN-BTC"   # {"market":{"last_price":".."}}
+PRICE_NONLOGS_BTCUSD = "https://api.nonlogs.io/api/markets/BTC-USDT"    # {"market":{"last_price":".."}}
+PRICE_HTTP_TIMEOUT = 8           # seconds per external price call
+
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 def parse_epoch(line):
@@ -409,6 +423,47 @@ def query_node_block(net, height):
         return data.get("result", {}).get("Ok")
     except Exception:
         return None
+
+
+def _http_get_json(url):
+    """GET `url` → parsed JSON (dict), raising on any network/parse error."""
+    req = urllib.request.Request(url, headers={"User-Agent": "grin-solo-collector"})
+    with urllib.request.urlopen(req, timeout=PRICE_HTTP_TIMEOUT) as resp:
+        return json.loads(resp.read().decode())
+
+
+def fetch_grin_price():
+    """GRIN price in USD + BTC for the mainnet dashboard, or None if all sources fail.
+
+    Primary: CoinGecko (one call → both). Fallback: nonlogs GRIN-BTC (BTC) ×
+    nonlogs BTC-USDT (USD). In the fallback the USD leg is best-effort — if the
+    BTC→USD call fails we still return the BTC figure with usd=None so the page
+    can show at least one conversion.
+    """
+    # 1) CoinGecko — {"grin":{"usd":..,"btc":..}}
+    try:
+        g = (_http_get_json(PRICE_COINGECKO) or {}).get("grin") or {}
+        usd = float(g.get("usd") or 0)
+        btc = float(g.get("btc") or 0)
+        if usd > 0 and btc > 0:
+            return {"usd": usd, "btc": btc, "source": "coingecko"}
+    except Exception:
+        pass
+    # 2) nonlogs — GRIN→BTC, then BTC→USD for the USD leg
+    try:
+        btc = float((_http_get_json(PRICE_NONLOGS_GRINBTC).get("market") or {}).get("last_price") or 0)
+        if btc > 0:
+            usd = None
+            try:
+                btc_usd = float((_http_get_json(PRICE_NONLOGS_BTCUSD).get("market") or {}).get("last_price") or 0)
+                if btc_usd > 0:
+                    usd = round(btc * btc_usd, 8)
+            except Exception:
+                usd = None
+            return {"usd": usd, "btc": btc, "source": "nonlogs"}
+    except Exception:
+        pass
+    return None
 
 
 # ── payout split: UTC ledger + per-period calculation (mainnet only) ───────────
@@ -972,6 +1027,19 @@ def main():
                     os.remove(split_path)   # feature turned off → drop stale data
                 except OSError:
                     pass
+
+        # ── GRIN fiat price (mainnet only) → data/price.json ─────────────────
+        # Drives the "All time blocks found" total-mined USD/BTC line. On a total
+        # fetch failure the previous price.json is left in place (stale-but-shown)
+        # rather than zeroed; testnet (tGRIN) never gets a price.
+        if args.out_dir:
+            price = fetch_grin_price()
+            if price:
+                save_json_atomic(os.path.join(args.out_dir, "price.json"), {
+                    "updated": iso(now), "ts": int(now),
+                    "usd": price["usd"], "btc": price["btc"],
+                    "source": price["source"], "block_reward": BLOCK_REWARD_GRIN,
+                }, 0o644)
 
     blocks_out = dict(blocks_payload); blocks_out.update({"updated": iso(now), "net": args.net})
     miners_out = dict(miners_payload); miners_out.update({"updated": iso(now), "net": args.net})

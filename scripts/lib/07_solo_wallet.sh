@@ -241,7 +241,18 @@ sw_setup() {
         warn "  set node_api_secret_path in $toml manually if the node uses a foreign secret."
     fi
 
-    # 5) Write launcher + start listener
+    # 5) Patch grin-wallet.toml: log_max_files → 5. The grin-wallet default keeps 32
+    #    rotated log files; a solo coinbase listener runs 24/7 and never needs that
+    #    depth, so trim to 5 to bound disk use. Force the value regardless of what is
+    #    there now (.* after =). Replace-in-place ONLY — grin-wallet init always writes
+    #    log_max_files under [logging], so appending (which would land the key in the
+    #    wrong TOML section) is never needed; if it's somehow absent we leave it alone.
+    if [[ -f "$toml" ]] && grep -qE '^[#[:space:]]*log_max_files[[:space:]]*=' "$toml"; then
+        sed -i -E "s|^[#[:space:]]*log_max_files[[:space:]]*=.*|log_max_files = 5|" "$toml"
+        success "Patched log_max_files → 5"
+    fi
+
+    # 6) Write launcher + start listener
     sw_write_launcher "$net"
     sw_listener_start "$net"
 

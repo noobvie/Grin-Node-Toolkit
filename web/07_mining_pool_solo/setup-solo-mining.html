@@ -11,14 +11,14 @@
   :root {
     --bg-1: #05080d; --bg-2: #0d1422; --panel: #141b25; --border: #3a4658;
     --text: #f4f8fd; --text-hi: #ffffff; --muted: #c7d1dc;
-    --green: #5ee08a; --yellow: #ffd84d; --red: #ff8079;
+    --green: #5ee08a; --yellow: #ffd84d; --red: #ff8079; --link: #8ab4f8;
     --main: #ffcb45; --test: #c79bff; --chip-bg: rgba(255,255,255,0.07);
     --main-rgb: 255,203,69; --test-rgb: 199,155,255;
   }
   html[data-theme="light"] {
     --bg-1: #eef1f5; --bg-2: #ffffff; --panel: #ffffff; --border: #b9c2cd;
     --text: #11151a; --text-hi: #000000; --muted: #3a424c;
-    --green: #157f33; --yellow: #8a5d00; --red: #c0202c;
+    --green: #157f33; --yellow: #8a5d00; --red: #c0202c; --link: #1a5fb4;
     --main: #9a6b00; --test: #6f29d6; --chip-bg: rgba(0,0,0,0.05);
     --main-rgb: 154,107,0; --test-rgb: 111,41,214;
   }
@@ -65,6 +65,8 @@
   code, .code { background: var(--chip-bg); border: 1px solid var(--border); border-radius: 6px;
     padding: .15rem .5rem; color: var(--text-hi); font-family: 'Courier New', monospace; word-break: break-all; }
   .code.block { display: block; padding: .8rem 1rem; margin: .5rem 0; white-space: pre-wrap; }
+  /* ASCII flow diagram: keep alignment, scroll instead of wrapping/breaking words */
+  .code.block.diagram { white-space: pre; overflow-x: auto; word-break: normal; line-height: 1.45; }
   .copytext { cursor: text; }
   .copybtn { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
     border-radius: 6px; padding: .12rem .55rem; font-family: inherit; font-size: .78rem;
@@ -99,6 +101,7 @@
   .chip.ok { color: var(--green); border-color: var(--green); }
   .chip.tbd { color: var(--muted); }
   .chip.primary { color: var(--main); border-color: var(--main); }
+  .chip.warn { color: var(--yellow); border-color: var(--yellow); }
   .hint { cursor: help; color: var(--yellow); border-bottom: 1px dotted var(--yellow);
     font-size: .82rem; white-space: nowrap; }
 
@@ -120,6 +123,10 @@
   .example-shot summary:hover { background: var(--border); }
   .example-shot img { display: block; max-width: 100%; height: auto; padding: .8rem; }
 
+  /* body-text links (pool refs, miningpoolstats, …) — standard link blue,
+     theme-aware. .btn/.code/footer anchors keep their own colour (higher specificity). */
+  a { color: var(--link); }
+  a:hover { color: var(--text-hi); }
   footer { color: var(--muted); font-size: .82rem; text-align: center; margin-top: 1.5rem; max-width: 820px; line-height: 1.7; }
   footer a { color: var(--main); }
 </style>
@@ -275,6 +282,86 @@
       Coinbase rewards are <b>immature for 1440 blocks (~24 h)</b> before they're spendable.
       The stats page <b>Coinbase Maturing</b> tile tracks how many of your found blocks are
       still maturing.
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>High availability — keep mining during node maintenance
+        <span class="chip warn">⚠ to be tested</span></h2>
+    <p>Solo mining stops the instant your node does — so rebooting the box or patching the OS
+       means lost hashing time unless something picks up the slack. Two ways to cover that gap,
+       easiest first.</p>
+
+    <h3>Easiest — fail over to a public pool (already set up above)</h3>
+    <p>This needs <b>no extra servers</b>: <b>Pool 2 / Pool 3</b> in the setup above already point at
+       <a href="https://gaeapool.com" target="_blank" rel="noopener noreferrer">gaeapool.com</a> and
+       <a href="https://grin.2miners.com" target="_blank" rel="noopener noreferrer">grin.2miners.com</a>.
+       When your node goes down the G1 falls through to them within seconds and keeps earning — paid to
+       your own GRIN address. The only downside is you're not <i>solo</i> while the node is offline.
+       For most people this is enough.</p>
+
+    <h3>Advanced — a second solo node (true HA)</h3>
+    <p>To stay <i>solo</i> through a reboot, run a <b>second grin node</b> and let the miner fail over
+       between the two. The G1 has three pool slots tried in order, so the natural mapping is two of
+       your own nodes first, then a public pool as last resort:</p>
+
+    <div class="code block diagram"> iPollo G1 — three pool slots, tried in order
+ ─────────────────────────────────────────────
+   Pool 1  →  node-A : 3416         your two solo nodes;
+   Pool 2  →  node-B : 3416         both set wallet_listener_url
+   Pool 3  →  gaeapool / 2miners    to the SAME wallet  (public = last resort)
+
+        rig fails over   Pool 1 → 2 → 3   within seconds
+                 │
+                 ▼
+   Wallet server  (the one box you do NOT reboot during maintenance)
+     • foreign listener  : 3415   ← node-A and node-B send the coinbase here
+     • local grin node   : 3413   ← this wallet's check_node_api_http_addr
+                                    points at a co-located, always-up synced
+                                    node — NOT the remote mining nodes</div>
+
+    <p>The whole trick is that <b>both nodes pay the same wallet</b>, so it doesn't matter which one
+       solves the block — the reward lands in the same place. Reboot node-A and the rig keeps mining
+       solo on node-B; only when <i>both</i> are down does it drop to the public Pool 3.</p>
+
+    <h3>The three links to wire up</h3>
+    <p><b>1. Each node — <code>grin-server.toml</code></b> (identical on node-A and node-B):</p>
+    <div class="code block">[server.stratum_mining_config]
+enable_stratum_server = true
+stratum_server_addr   = "0.0.0.0:3416"               # bind public so remote miners reach it
+wallet_listener_url   = "http://WALLET_HOST:3415"    # SAME wallet on both nodes</div>
+
+    <p><b>2. Wallet server — <code>grin-wallet.toml</code></b>:</p>
+    <div class="code block">check_node_api_http_addr = "http://127.0.0.1:3413"   # a local, always-up, synced node</div>
+    <div class="callout warn">
+      <b>grin-wallet has no built-in node failover.</b> <code>check_node_api_http_addr</code> is a
+      <i>single</i> value — it won't rotate to a second node on its own. That's why the wallet points
+      at a <b>co-located local node</b> instead of the remote mining nodes: that local node stays up
+      regardless of which mining node you're rebooting. (The alternative — a single hostname over a
+      health-checked TCP load balancer like nginx-stream/HAProxy in front of both nodes' <code>3413</code>
+      — also works but adds more moving parts.)
+    </div>
+
+    <p><b>3. iPollo — Pool Configuration</b>:</p>
+    <div class="code block">Pool 1   stratum+tcp://node-A:3416     worker nickname.NN   pass 123
+Pool 2   stratum+tcp://node-B:3416     worker nickname.NN   pass 123
+Pool 3   gaeapool / 2miners            worker = your GRIN payout address</div>
+
+    <div class="callout info">
+      <b>A node you fail over to must be fully synced first.</b> A freshly-restarted node opens the
+      stratum port <i>before</i> it has caught up to the tip and will hand out stale block templates —
+      wasted hashrate. Confirm <code>sync_status</code> is <code>no_sync</code> via the node Owner API
+      (<code>get_status</code>) before trusting node-B. Only <b>one</b> node needs to be up at a time
+      for mining to continue.
+    </div>
+
+    <div class="callout warn">
+      <b>Not tested in production yet.</b> The creator hasn't had time to run this two-node setup
+      end-to-end — the single-node + public-pool failover above is the proven path. If you try the
+      two-node HA and get it working (or hit snags), help would be hugely appreciated: please open an
+      issue or PR on the
+      <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer">Grin Node Toolkit</a>
+      repo so this section can be marked verified.
     </div>
   </section>
 

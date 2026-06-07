@@ -291,7 +291,7 @@
   </div>
   <div class="blocks">
     <div class="blocks-head">
-      <h3>All time blocks found by this solo pool</h3>
+      <h3>All blocks we found</h3>
       <span class="blocks-sum" id="main-blocks-sum">—</span>
     </div>
     <div class="table-scroll"><table id="main-blocks-table"><tbody></tbody></table></div>
@@ -331,7 +331,7 @@
   </div>
   <div class="blocks">
     <div class="blocks-head">
-      <h3>All time blocks found by this solo pool</h3>
+      <h3>All blocks we found</h3>
       <span class="blocks-sum" id="test-blocks-sum">—</span>
     </div>
     <div class="table-scroll"><table id="test-blocks-table"><tbody></tbody></table></div>
@@ -730,7 +730,12 @@
     var st = countSeries(STATE.blocks.test, b.keys, STATE.range);
     var realMax = Math.max.apply(null, sm.concat(st));   // 0 when nothing in range
     var maxV = Math.max(1, realMax);
-    var W = 720, H = 240, L = 34, R = 8, T = 14, B = 30;
+    // Y-axis ticks live in the RIGHT gutter (R) so the scale sits next to the
+    // newest point (which is always at the right edge of a time-series). L is NOT a
+    // thin pad: the first x-axis date label is middle-anchored at xAt(0)=L, so L
+    // must stay wide enough to hold that label's LEFT half or it clips off the SVG
+    // edge (e.g. "2026-06" ≈ 23u half-width at 11px Courier). 34 covers it.
+    var W = 720, H = 240, L = 34, R = 34, T = 14, B = 30;
     var plotW = W - L - R, plotH = H - T - B, n = b.keys.length, baseY = T + plotH;
     var stepX = n > 1 ? plotW / (n - 1) : 0;
     function xAt(i) { return L + i * stepX; }
@@ -758,7 +763,7 @@
     for (var g = 0; g <= GRID; g++) {
       var gv = maxV * g / GRID, gy = yAt(gv).toFixed(1);
       svg += '<line x1="' + L + '" y1="' + gy + '" x2="' + (W-R) + '" y2="' + gy + '" stroke="var(--border)"' + (g === 0 ? '' : ' stroke-opacity="0.35" stroke-dasharray="3 3"') + '/>';
-      svg += '<text x="' + (L-6) + '" y="' + (parseFloat(gy)+4) + '" text-anchor="end">' + fmtCount(gv) + '</text>';
+      svg += '<text x="' + (W-R+6) + '" y="' + (parseFloat(gy)+4) + '" text-anchor="start">' + fmtCount(gv) + '</text>';
     }
     // Faint vertical gridlines aligned to the x-axis date ticks
     for (var gx = 0; gx < n; gx += every) {
@@ -803,11 +808,13 @@
     var st = avgSeries(STATE.hashrate.test, b.keys, STATE.hrRange);
     var realMax = Math.max.apply(null, sm.concat(st));   // 0 when nothing in range
     var maxV = realMax > 0 ? realMax : 1;
-    // T leaves a top band for the peak label (a wide unit string, see below).
-    // L is wider than the block chart's (34) because the y-axis tick labels here
-    // carry a unit string — up to "999.99 kG/s" (11 chars ≈ 73px). A narrower
-    // gutter would clip the leading digits (only "G/s" would show).
-    var W = 720, H = 240, L = 84, R = 8, T = 30, B = 30;
+    // Y-axis ticks live in the RIGHT gutter so the scale sits next to the newest
+    // point (always at the right edge of a time-series). R is wide because these
+    // labels carry a unit string — up to "999.99 kG/s" (11 chars ≈ 73u); start-
+    // anchored at W-R+6=642 it ends at ~714 < 720, so it can't clip. L stays 34
+    // (NOT a thin pad) to hold the LEFT half of the first middle-anchored x-axis
+    // date label, which sits at xAt(0)=L and would otherwise clip off the SVG edge.
+    var W = 720, H = 240, L = 34, R = 84, T = 14, B = 30;
     var plotW = W - L - R, plotH = H - T - B, n = b.keys.length, baseY = T + plotH;
     var stepX = n > 1 ? plotW / (n - 1) : 0;
     function xAt(i) { return L + i * stepX; }
@@ -828,19 +835,14 @@
     var every = Math.ceil(n / 8);
     var aria = chartAria('Pool hashrate', STATE.hrRange, sm, st, fmtHr);
     var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="' + esc(aria) + '">';
-    // The peak (y-axis max) carries a wide unit string — "3.81 G/s" up to
-    // "999.99 kG/s" (11 chars). A left-gutter tick (text-anchor="end") would run
-    // off the SVG's left edge and clip the leading digit. Park it in the top band,
-    // left-anchored at x=0, so it can never clip regardless of length.
-    svg += '<text x="0" y="16" text-anchor="start">peak ' + fmtHr(maxV) + '</text>';
-    // Horizontal gridlines + y-axis value labels (baseline solid, rest dashed).
-    // Top gutter holds the peak label, so the topmost gridline label is dropped
-    // to avoid overlapping it.
+    // Horizontal gridlines + y-axis value labels (baseline solid, rest dashed),
+    // start-anchored in the wide RIGHT gutter so the unit string can't clip — the
+    // topmost label is the peak, so no separate peak annotation is needed.
     var GRID = 4;
     for (var g = 0; g <= GRID; g++) {
       var gv = maxV * g / GRID, gy = yAt(gv).toFixed(1);
       svg += '<line x1="' + L + '" y1="' + gy + '" x2="' + (W-R) + '" y2="' + gy + '" stroke="var(--border)"' + (g === 0 ? '' : ' stroke-opacity="0.35" stroke-dasharray="3 3"') + '/>';
-      if (g < GRID) svg += '<text x="' + (L-6) + '" y="' + (parseFloat(gy)+4) + '" text-anchor="end">' + fmtHr(gv) + '</text>';
+      svg += '<text x="' + (W-R+6) + '" y="' + (parseFloat(gy)+4) + '" text-anchor="start">' + fmtHr(gv) + '</text>';
     }
     // Faint vertical gridlines aligned to the x-axis date ticks
     for (var gx = 0; gx < n; gx += every) {

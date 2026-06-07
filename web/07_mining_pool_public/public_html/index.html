@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-page="home">
 <head>
     <!-- ===== ESSENTIAL META TAGS ===== -->
     <meta charset="UTF-8">
@@ -879,6 +879,7 @@
             }
         }
     </style>
+    <link rel="stylesheet" href="/css/themes.css">
 </head>
 <body>
     <div class="theme-switcher">
@@ -889,7 +890,7 @@
 
     <header>
         <div class="header-content">
-            <h1>⚛ GRINIUM</h1>
+            <h1 data-brand="pool_name">⚛ GRINIUM</h1>
             <nav class="header-nav">
                 <a href="#" class="nav-link active">Home</a>
                 <a href="#" class="nav-link">Dashboard</a>
@@ -905,8 +906,8 @@
     </header>
 
     <div class="container">
-        <h2 class="hero-title">Uranium Mining Pool</h2>
-        <p class="hero-subtitle">Professional mining with uranium-level performance</p>
+        <h2 class="hero-title" data-brand="hero_heading">Uranium Mining Pool</h2>
+        <p class="hero-subtitle" data-brand="hero_subheading">Professional mining with uranium-level performance</p>
 
         <div class="stats-grid">
             <div class="stat-card">
@@ -957,41 +958,22 @@
         </div>
 
         <div class="cta-section">
-            <button class="cta-button">Start Mining Today</button>
+            <a class="cta-button" href="/connect" data-brand="cta">Start Mining Today</a>
         </div>
     </div>
 
     <footer>
-        <p>GRINIUM — Uranium Element Mining Pool | Professional • Reliable • Secure</p>
+        <p data-brand="footer_text">GRINIUM — Uranium Element Mining Pool | Professional • Reliable • Secure</p>
+        <div data-brand="page-links"></div>
+        <p data-brand="attribution" style="opacity:0.7;font-size:0.85em;">Powered by the Grin Node Toolkit</p>
     </footer>
 
     <script src="/js/auth.js"></script>
+    <script src="/js/public-theme.js"></script>
+    <script src="/js/branding.js"></script>
     <script>
-        const themeButtons = document.querySelectorAll('.theme-btn');
-        const savedTheme = localStorage.getItem('grinium-theme') || 'dark';
-
-        setTheme(savedTheme);
-
-        themeButtons.forEach(btn => {
-            btn.addEventListener('click', () => {
-                const theme = btn.dataset.theme;
-                setTheme(theme);
-                localStorage.setItem('grinium-theme', theme);
-            });
-        });
-
-        function setTheme(theme) {
-            document.body.className = '';
-            if (theme === 'light') {
-                document.body.classList.add('light-theme');
-            } else if (theme === 'atomic') {
-                document.body.classList.add('atomic-theme');
-            }
-
-            themeButtons.forEach(btn => {
-                btn.classList.toggle('active', btn.dataset.theme === theme);
-            });
-        }
+        // Theme switching is handled site-wide by /js/public-theme.js, which renders
+        // the theme picker and applies the 3 built-in + 10 white-label themes.
 
         // ═════════════════════════════════════════════════════════════════
         // API Integration: Load public pool stats (no auth required)

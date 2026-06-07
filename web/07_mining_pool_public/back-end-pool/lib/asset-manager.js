@@ -13,7 +13,7 @@ class AssetManager {
 
     this.allowedMimeTypes = ['image/svg+xml', 'image/png', 'image/jpeg', 'image/gif'];
     this.maxFileSize = 2 * 1024 * 1024; // 2 MB
-    this.allowedTypes = ['logo', 'favicon', 'og_image'];
+    this.allowedTypes = ['logo', 'logo_dark', 'favicon', 'og_image', 'apple_touch_icon', 'icon_192', 'icon_512'];
 
     this.setupDirectory();
   }

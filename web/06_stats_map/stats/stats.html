@@ -810,10 +810,10 @@
         Distribution of Grin node client versions among peers connected to this monitoring node — a live snapshot of software adoption across the network.
         <hr class="chart-info-sep">
         <h4>How it works</h4>
-        Version strings are extracted from the <code>user_agent</code> field returned by <code>v2/owner → get_peers</code> (routing-table query, Healthy peers only). The chart reflects unique versions seen in the last 7 days.
+        Version strings are taken verbatim from the <code>user_agent</code> each peer reports during the Grin P2P handshake, via <code>v2/owner → get_peers</code> (routing-table query, Healthy peers only). Every reported name is kept — peers that report no agent are grouped as <code>Unknown</code>. The chart counts <strong>mainnet</strong> peers seen in the last 7 days.
         <hr class="chart-info-sep">
         <h4>Note</h4>
-        Only peers directly connected to this node are counted. Peers running behind NAT or not reachable may be under-represented.
+        Only mainnet peers directly connected to this node are counted here — testnet peers show on the node map but not in this chart, so this total is lower than the map's "Total peers". Peers running behind NAT or not reachable may be under-represented.
       </div>
     </div>
     <div class="versions-wrap">

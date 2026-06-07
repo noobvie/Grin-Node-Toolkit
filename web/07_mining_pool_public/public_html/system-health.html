@@ -737,6 +737,7 @@
             }
         }
     </style>
+    <link rel="stylesheet" href="/css/themes.css">
 </head>
 <body>
     <div class="theme-switcher">
@@ -875,31 +876,8 @@
 
     <script src="/js/auth.js"></script>
     <script>
-        const themeButtons = document.querySelectorAll('.theme-btn');
-        const savedTheme = localStorage.getItem('grinium-theme') || 'dark';
-
-        setTheme(savedTheme);
-
-        themeButtons.forEach(btn => {
-            btn.addEventListener('click', () => {
-                const theme = btn.dataset.theme;
-                setTheme(theme);
-                localStorage.setItem('grinium-theme', theme);
-            });
-        });
-
-        function setTheme(theme) {
-            document.body.className = '';
-            if (theme === 'light') {
-                document.body.classList.add('light-theme');
-            } else if (theme === 'atomic') {
-                document.body.classList.add('atomic-theme');
-            }
-
-            themeButtons.forEach(btn => {
-                btn.classList.toggle('active', btn.dataset.theme === theme);
-            });
-        }
+        // Theme switching is handled site-wide by /js/public-theme.js, which renders
+        // the theme picker and applies the 3 built-in + 10 white-label themes.
 
         // ═════════════════════════════════════════════════════════════════
         // API Integration: Load system health status
@@ -1008,5 +986,7 @@
         // Refresh every 30 seconds
         setInterval(loadSystemHealth, 30000);
     </script>
+    <script src="/js/public-theme.js"></script>
+    <script src="/js/branding.js"></script>
 </body>
 </html>

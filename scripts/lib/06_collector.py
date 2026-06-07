@@ -691,13 +691,16 @@ def _is_public_ip(ip):
         and not ip_lower.startswith("2001:db8")  # IPv6 documentation
     )
 
-def _is_valid_grin_agent(ua):
-    """Return True only for known Grin node implementations.
-    Rejects blank/unknown agents that flood the routing table from non-Grin software."""
-    if not ua:
-        return False
-    ua_lower = ua.lower()
-    return "mw/grin" in ua_lower or "grin++" in ua_lower or "mw/grim" in ua_lower or "g++ wiesche" in ua_lower
+def _normalize_agent(ua):
+    """Normalize a peer's reported user agent for the peer map.
+    Blank/null/whitespace-only agents become 'Unknown'; every other name is kept
+    as-is so new and yet-unknown Grin implementations are captured, not silently
+    dropped. Peers reach here only after completing the Grin P2P handshake, so a
+    non-blank name is a genuine self-reported node identity."""
+    if ua is None:
+        return "Unknown"
+    ua = str(ua).strip()
+    return ua if ua else "Unknown"
 
 
 def _nat64_to_ipv4(ip):
@@ -776,7 +779,8 @@ def _fetch_connected_peers(owner_url, secret, network_label):
     Typically returns 8–30 peers; used as the authoritative source for peers.json.
 
     Mainnet: no port filter (MW/Grim and some MW/Grin nodes use non-standard ports);
-             user-agent filter is the gate — only known Grin implementations accepted.
+             every connected peer is accepted — its self-reported agent name is kept
+             (blank names normalized to 'Unknown'), so all implementations are mapped.
     Testnet: standard port 13414 filter kept (all testnet nodes use it consistently).
     """
     expected_port = MAINNET_P2P_PORT if network_label == "mainnet" else TESTNET_P2P_PORT
@@ -790,9 +794,7 @@ def _fetch_connected_peers(owner_url, secret, network_label):
                     continue
                 if network_label == "testnet" and port != expected_port:
                     continue
-                ua = p.get("user_agent", "") or ""
-                if not _is_valid_grin_agent(ua):
-                    continue
+                ua = _normalize_agent(p.get("user_agent", ""))
                 peer_list.append({
                     "ip":         ip,
                     "port":       port,
@@ -821,7 +823,6 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
         if raw:
             skipped_port  = 0
             skipped_flag  = 0
-            skipped_agent = 0
             for p in raw:
                 flags = str(p.get("flags", ""))
                 # Only accept peers the node considers Healthy (successfully handshaked)
@@ -834,11 +835,8 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
                     continue
                 if not _is_public_ip(ip):
                     continue
-                # Only accept known Grin node implementations (MW/Grin, Grin++, MW/Grim, G++ Wiesche)
-                ua = p.get("user_agent", "")
-                if not _is_valid_grin_agent(ua):
-                    skipped_agent += 1
-                    continue
+                # Keep every handshaked peer; normalize a blank agent to 'Unknown'
+                ua = _normalize_agent(p.get("user_agent", ""))
                 # Capture last_seen from the routing table (Unix timestamp)
                 last_seen_raw = p.get("last_seen", 0)
                 last_seen_ts  = int(last_seen_raw) if last_seen_raw else 0
@@ -852,8 +850,7 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
                 })
             port_skipped = f", {skipped_port} wrong-port" if network_label == "testnet" else ""
             print(f"[INFO] {network_label}: {len(peer_list)} healthy peers for stats "
-                  f"(skipped {skipped_flag} non-Healthy{port_skipped}, "
-                  f"{skipped_agent} unknown-agent).")
+                  f"(skipped {skipped_flag} non-Healthy{port_skipped}).")
     except Exception as exc:
         print(f"[WARN] {network_label} owner API get_peers failed: {exc}", file=sys.stderr)
     return peer_list
@@ -1039,15 +1036,13 @@ def _update_peers():
     ).rowcount
     if deleted:
         print(f"[INFO] Pruned {deleted} stale peers (>{PEER_RETENTION_DAYS}d).")
-    # Remove any existing entries without a valid Grin agent (legacy contamination)
-    purged = conn.execute(
-        "DELETE FROM known_peers "
-        "WHERE user_agent NOT LIKE '%MW/Grin%' AND user_agent NOT LIKE '%Grin++%' "
-        "AND user_agent NOT LIKE '%MW/Grim%' AND user_agent NOT LIKE '%G++ Wiesche%' "
-        "AND user_agent != 'Unknown'"
+    # Relabel any legacy blank/empty agents to 'Unknown' (no peer is dropped by name)
+    relabeled = conn.execute(
+        "UPDATE known_peers SET user_agent='Unknown' "
+        "WHERE user_agent IS NULL OR TRIM(user_agent)=''"
     ).rowcount
-    if purged:
-        print(f"[INFO] Purged {purged} peers with unknown agent names.")
+    if relabeled:
+        print(f"[INFO] Relabeled {relabeled} peers with blank agent → 'Unknown'.")
 
     # ── 7. Version snapshot — use stat_peers if available, else map_peers ─────
     version_source = stat_peers if stat_peers else map_peers
@@ -1068,9 +1063,6 @@ def _update_peers():
                lat, lng, country, country_code, city, first_seen, last_seen
         FROM known_peers
         WHERE last_seen >= ?
-          AND (user_agent LIKE '%MW/Grin%' OR user_agent LIKE '%Grin++%'
-               OR user_agent LIKE '%MW/Grim%' OR user_agent LIKE '%G++ Wiesche%'
-               OR user_agent = 'Unknown')
         ORDER BY last_seen DESC
     """, (history_cutoff,)).fetchall()
     # ── 9. Record peer count snapshot for history chart ──────────────────────
@@ -1248,7 +1240,7 @@ def export_all_json():
     version_cutoff = ts_now - PEER_HISTORY_DAYS * 86400
     ver_rows = conn.execute(
         "SELECT user_agent, COUNT(*) as cnt FROM known_peers "
-        "WHERE last_seen >= ? AND network='mainnet' AND user_agent != '' AND user_agent != 'unknown' "
+        "WHERE last_seen >= ? AND network='mainnet' "
         "GROUP BY user_agent ORDER BY cnt DESC",
         (version_cutoff,),
     ).fetchall()

@@ -257,6 +257,141 @@ function setupRoutes() {
     }
   );
 
+  // ─── Public White-Label Config (rate-limited, no auth) ─────────────────────
+  // Serves the curated branding/SEO/analytics payload consumed by /js/branding.js
+  // on every public page. Only operator-set, non-sensitive fields are exposed.
+  app.get('/api/public/branding',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const assetUrlFor = (type) => {
+          const asset = assetManager.getActiveAsset(type);
+          return asset ? assetManager.getAssetUrl(asset.filename) : '';
+        };
+        const cfg = poolSettings.buildPublicConfig(assetUrlFor);
+        // Connection info for the miner-config generator (host falls back to request host).
+        cfg.connection = {
+          stratum_host: cfg.pool.public_stratum_host || req.hostname || '',
+          stratum_port: config.stratum_port || '',
+          network: config.network || 'mainnet',
+          algorithm: 'Cuckatoo32',
+        };
+        // Short cache: branding changes are infrequent and the page can tolerate it.
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        res.json({ success: true, data: cfg });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to load branding' });
+      }
+    }
+  );
+
+  // Single content page (About/Terms/Privacy/FAQ/Impressum) authored in the admin panel.
+  app.get('/api/public/page/:key',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const page = poolSettings.getPage(req.params.key);
+        if (!page) return res.status(404).json({ error: 'Page not found' });
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        res.json({ success: true, data: page });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to load page' });
+      }
+    }
+  );
+
+  // ─── SEO files: robots.txt, sitemap.xml, PWA manifest (served via nginx proxy) ──
+  // Resolve the canonical site origin: configured site_url > request host.
+  function siteOrigin(req) {
+    const seo = poolSettings.getSection('seo');
+    if (seo.site_url) return String(seo.site_url).replace(/\/+$/, '');
+    return (req.protocol || 'https') + '://' + req.get('host');
+  }
+
+  app.get('/robots.txt',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const seo = poolSettings.getSection('seo');
+        const noindex = seo.robots_noindex === true || seo.robots_noindex === 'true';
+        const sitemapOn = !(seo.sitemap_enabled === false || seo.sitemap_enabled === 'false');
+        let body = 'User-agent: *\n';
+        body += noindex ? 'Disallow: /\n' : 'Disallow:\n'; // index by default
+        if (sitemapOn && !noindex) body += 'Sitemap: ' + siteOrigin(req) + '/sitemap.xml\n';
+        res.type('text/plain').send(body);
+      } catch (err) {
+        res.type('text/plain').send('User-agent: *\nDisallow:\n');
+      }
+    }
+  );
+
+  // Public pages included in the sitemap (extension-less; nginx resolves $uri.html).
+  const SITEMAP_PATHS = ['/', '/pool-info', '/miners-stats', '/connect', '/system-health'];
+
+  app.get('/sitemap.xml',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const seo = poolSettings.getSection('seo');
+        const noindex = seo.robots_noindex === true || seo.robots_noindex === 'true';
+        const sitemapOn = !(seo.sitemap_enabled === false || seo.sitemap_enabled === 'false');
+        if (noindex || !sitemapOn) return res.status(404).type('text/plain').send('Not found');
+
+        const origin = siteOrigin(req);
+        const paths = SITEMAP_PATHS.slice();
+        // Append authored content pages.
+        poolSettings.listEnabledPages().forEach((p) => paths.push('/page.html?p=' + p.key));
+
+        const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+        xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
+        paths.forEach((p) => {
+          xml += '  <url><loc>' + esc(origin + p) + '</loc></url>\n';
+        });
+        xml += '</urlset>\n';
+        res.type('application/xml').send(xml);
+      } catch (err) {
+        res.status(500).type('text/plain').send('Error');
+      }
+    }
+  );
+
+  app.get('/manifest.json',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const pool = poolSettings.getSection('pool_info');
+        const seo = poolSettings.getSection('seo');
+        const brand = poolSettings.getSection('branding');
+        const name = pool.pool_name || 'Grin Mining Pool';
+        const themeColor = seo.theme_color || brand.accent_color || '#667eea';
+
+        const icons = [];
+        const pushIcon = (type, size) => {
+          const asset = assetManager.getActiveAsset(type);
+          if (asset) {
+            icons.push({ src: assetManager.getAssetUrl(asset.filename), sizes: size, type: asset.mime_type || 'image/png' });
+          }
+        };
+        pushIcon('icon_192', '192x192');
+        pushIcon('icon_512', '512x512');
+
+        const manifest = {
+          name: name,
+          short_name: brand.app_short_name || name,
+          start_url: '/',
+          display: 'standalone',
+          background_color: themeColor,
+          theme_color: themeColor,
+          icons: icons,
+        };
+        res.type('application/manifest+json').send(JSON.stringify(manifest, null, 2));
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to build manifest' });
+      }
+    }
+  );
+
   // FIX #7, #6, #4: Add rate limiting + first-admin gating + httpOnly cookies
   app.post('/api/auth/register',
     rateLimiter.middleware('auth'),

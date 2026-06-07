@@ -1,3 +1,14 @@
+// Small deterministic string hash → used to derive a stable banner id for client-side
+// dismissal when the operator didn't assign one.
+function hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h << 5) - h + s.charCodeAt(i);
+    h |= 0;
+  }
+  return h;
+}
+
 class PoolSettings {
   constructor(db) {
     this.db = db;
@@ -16,13 +27,37 @@ class PoolSettings {
       max_miners: 0,
       contact_email: '',
       homepage_banner: '',
+      // Public stratum host shown by the connect/config generator (defaults to the
+      // request host at runtime when left blank). Port comes from pool.json.
+      public_stratum_host: '',
     },
     branding: {
       logo_file: '',
+      logo_dark_file: '',
       favicon_file: '',
       accent_color: '#667eea',
+      // pool_theme kept for backward compatibility; default_theme is authoritative
       pool_theme: 'dark',
+      default_theme: 'dark',
+      allow_theme_switch: 'true',
+      // enabled_themes: JSON array of theme keys visitors may switch between on the
+      // public pages. With ≤1 entry (or allow_theme_switch off) no switcher is shown
+      // and default_theme is forced. default_theme need not be in this list.
+      enabled_themes: '["light","atomic"]',
+      // custom_theme: JSON map of CSS variable name -> value (theme builder output)
+      custom_theme: '{}',
       custom_css: '',
+      font_family: '',
+      font_url: '',
+      // PWA: short name for the home-screen icon (falls back to pool_name)
+      app_short_name: '',
+      // Show the "powered by" footer attribution
+      show_attribution: 'true',
+      // Hero / slogan block (rendered into [data-brand] hooks on public pages)
+      hero_heading: '',
+      hero_subheading: '',
+      cta_text: '',
+      cta_link: '',
       discord_link: '',
       telegram_link: '',
       twitter_link: '',
@@ -32,13 +67,37 @@ class PoolSettings {
     seo: {
       meta_description: '',
       meta_keywords: '',
+      title_template: '%page% — %pool_name%',
       og_title: '',
       og_description: '',
       og_image_file: '',
-      ga_tracking_id: '',
+      og_locale: 'en_US',
+      twitter_handle: '',
+      twitter_card_type: 'summary_large_image',
+      theme_color: '',
       site_url: '',
+      // page_seo: JSON map of page key -> {title, description}
+      page_seo: '{}',
+      structured_data_enabled: 'true',
       sitemap_enabled: 'true',
       robots_noindex: 'false',
+    },
+    analytics: {
+      // provider selects which analytics script loads: none|ga4|plausible|umami|matomo
+      provider: 'none',
+      ga_tracking_id: '',
+      plausible_domain: '',
+      plausible_src: 'https://plausible.io/js/script.js',
+      umami_website_id: '',
+      umami_src: 'https://cloud.umami.is/script.js',
+      matomo_url: '',
+      matomo_site_id: '',
+      // custom_head_html: raw HTML injected into <head> on every public page
+      custom_head_html: '',
+      // custom_body_html: raw HTML injected before </body> (chat widgets, etc.)
+      custom_body_html: '',
+      cookie_consent_enabled: 'false',
+      cookie_consent_text: 'We use analytics cookies to improve your experience.',
     },
     payout: {
       min_withdrawal: 0.1,
@@ -66,7 +125,39 @@ class PoolSettings {
       alert_tor_fails_per_week: 3,
       alert_thresholds: '{"wallet_balance_warning_grin":10,"rejection_rate_warning_percent":20,"error_rate_warning_percent":50,"difficulty_change_warning_percent":50}',
     },
+    // Operator-authored content pages (HTML). Empty content = page disabled / hidden.
+    pages: {
+      about: '',
+      terms: '',
+      privacy: '',
+      faq: '',
+      impressum: '',
+    },
+    // Site-wide maintenance mode + announcement banners.
+    notices: {
+      maintenance_mode: 'false',
+      maintenance_title: 'Under Maintenance',
+      maintenance_message: 'We are performing scheduled maintenance and will be back shortly.',
+      // banners: JSON array of {id,type,message,link,link_text,dismissible,enabled,start,end}
+      banners: '[]',
+    },
   };
+
+  // Fixed display titles for the content pages (keys match the `pages` section).
+  static pageTitles = {
+    about: 'About',
+    terms: 'Terms of Service',
+    privacy: 'Privacy Policy',
+    faq: 'FAQ',
+    impressum: 'Impressum',
+  };
+
+  // Every valid theme key (public_html/css/themes.css + js/theme.js + js/public-theme.js).
+  static THEME_KEYS = [
+    'dark', 'light', 'matrix', 'naruto', 'japan', 'atomic', 'custom',
+    'winter', 'spring', 'summer', 'autumn', 'halloween', 'christmas',
+    'galaxy', 'winxp', 'aqua', 'comic',
+  ];
 
   // Validation rules per section
   static validators = {
@@ -95,11 +186,73 @@ class PoolSettings {
         if (!/^#[0-9a-fA-F]{6}$/.test(val)) throw new Error('accent_color must be valid hex (#xxxxxx)');
         return val;
       },
+      default_theme: (val) => {
+        if (!PoolSettings.THEME_KEYS.includes(val)) {
+          throw new Error('invalid default_theme');
+        }
+        return val;
+      },
+      enabled_themes: (val) => {
+        // Accept a JS array or a JSON string; always store a deduped JSON-string array
+        // of valid theme keys. Empty array is allowed (= no public switcher).
+        let arr = val;
+        if (typeof val === 'string') {
+          if (val.trim() === '') return '[]';
+          try { arr = JSON.parse(val); } catch (err) { throw new Error('enabled_themes must be valid JSON'); }
+        }
+        if (!Array.isArray(arr)) throw new Error('enabled_themes must be an array');
+        const seen = new Set();
+        const cleaned = [];
+        for (const t of arr) {
+          if (!PoolSettings.THEME_KEYS.includes(t)) throw new Error(`invalid theme in enabled_themes: ${t}`);
+          if (!seen.has(t)) { seen.add(t); cleaned.push(t); }
+        }
+        return JSON.stringify(cleaned);
+      },
+      custom_theme: (val) => {
+        // Accept an object directly or a JSON string; always store as JSON string
+        if (typeof val === 'object' && val !== null) return JSON.stringify(val);
+        if (typeof val === 'string') {
+          if (val.trim() === '') return '{}';
+          try {
+            JSON.parse(val);
+          } catch (err) {
+            throw new Error('custom_theme must be valid JSON');
+          }
+          return val;
+        }
+        return '{}';
+      },
+      font_url: (val) => {
+        if (val) {
+          try { new URL(val); } catch (err) { throw new Error('font_url must be a valid URL'); }
+        }
+        return val;
+      },
     },
     seo: {
-      ga_tracking_id: (val) => {
-        if (val && !/^G-[A-Z0-9]+$/.test(val)) throw new Error('invalid GA tracking ID format');
+      title_template: (val) => {
+        if (val && val.length > 120) throw new Error('title_template too long (max 120)');
         return val;
+      },
+      twitter_card_type: (val) => {
+        if (val && !['summary', 'summary_large_image'].includes(val)) {
+          throw new Error('invalid twitter_card_type');
+        }
+        return val;
+      },
+      theme_color: (val) => {
+        if (val && !/^#[0-9a-fA-F]{6}$/.test(val)) throw new Error('theme_color must be valid hex (#xxxxxx)');
+        return val;
+      },
+      page_seo: (val) => {
+        if (typeof val === 'object' && val !== null) return JSON.stringify(val);
+        if (typeof val === 'string') {
+          if (val.trim() === '') return '{}';
+          try { JSON.parse(val); } catch (err) { throw new Error('page_seo must be valid JSON'); }
+          return val;
+        }
+        return '{}';
       },
       site_url: (val) => {
         if (val) {
@@ -110,6 +263,45 @@ class PoolSettings {
           }
         }
         return val;
+      },
+    },
+    analytics: {
+      provider: (val) => {
+        if (!['none', 'ga4', 'plausible', 'umami', 'matomo'].includes(val)) {
+          throw new Error('invalid analytics provider');
+        }
+        return val;
+      },
+      ga_tracking_id: (val) => {
+        if (val && !/^G-[A-Z0-9]+$/.test(val)) throw new Error('invalid GA tracking ID format');
+        return val;
+      },
+      matomo_site_id: (val) => {
+        if (val && !/^\d+$/.test(String(val))) throw new Error('matomo_site_id must be numeric');
+        return val;
+      },
+      plausible_src: (val) => {
+        if (val) { try { new URL(val); } catch (err) { throw new Error('plausible_src must be a valid URL'); } }
+        return val;
+      },
+      umami_src: (val) => {
+        if (val) { try { new URL(val); } catch (err) { throw new Error('umami_src must be a valid URL'); } }
+        return val;
+      },
+      matomo_url: (val) => {
+        if (val) { try { new URL(val); } catch (err) { throw new Error('matomo_url must be a valid URL'); } }
+        return val;
+      },
+    },
+    notices: {
+      banners: (val) => {
+        let arr = val;
+        if (typeof arr === 'string') {
+          if (arr.trim() === '') return '[]';
+          try { arr = JSON.parse(arr); } catch (err) { throw new Error('banners must be valid JSON'); }
+        }
+        if (!Array.isArray(arr)) throw new Error('banners must be a JSON array');
+        return JSON.stringify(arr);
       },
     },
     payout: {
@@ -169,6 +361,157 @@ class PoolSettings {
       result[section] = this.getSection(section);
     }
     return result;
+  }
+
+  // Build the curated, public-safe white-label payload served at /api/public/branding.
+  // assetUrlFor(type) -> URL string (or '') for an active uploaded asset; injected so this
+  // module stays free of the AssetManager dependency.
+  buildPublicConfig(assetUrlFor = () => '') {
+    const pool = this.getSection('pool_info');
+    const b = this.getSection('branding');
+    const seo = this.getSection('seo');
+    const a = this.getSection('analytics');
+    const n = this.getSection('notices');
+
+    const parseJson = (v, fallback) => {
+      if (v && typeof v === 'object') return v;
+      try { return JSON.parse(v); } catch (e) { return fallback; }
+    };
+
+    // GA id can live in analytics (new) or seo (legacy leftover) — prefer analytics.
+    const gaId = a.ga_tracking_id || seo.ga_tracking_id || '';
+
+    return {
+      pool: {
+        name: pool.pool_name || '',
+        tagline: pool.pool_tagline || '',
+        description: pool.pool_description || '',
+        contact_email: pool.contact_email || '',
+        homepage_banner: pool.homepage_banner || '',
+        visibility: pool.pool_visibility || 'public',
+        public_stratum_host: pool.public_stratum_host || '',
+      },
+      branding: {
+        accent_color: b.accent_color || '',
+        default_theme: b.default_theme || b.pool_theme || 'dark',
+        allow_theme_switch: b.allow_theme_switch === true || b.allow_theme_switch === 'true',
+        enabled_themes: parseJson(b.enabled_themes, ['light', 'atomic']),
+        custom_theme: parseJson(b.custom_theme, {}),
+        custom_css: b.custom_css || '',
+        font_family: b.font_family || '',
+        font_url: b.font_url || '',
+        app_short_name: b.app_short_name || '',
+        show_attribution: !(b.show_attribution === false || b.show_attribution === 'false'),
+        hero_heading: b.hero_heading || '',
+        hero_subheading: b.hero_subheading || '',
+        cta_text: b.cta_text || '',
+        cta_link: b.cta_link || '',
+        footer_text: b.footer_text || '',
+        social: {
+          discord: b.discord_link || '',
+          telegram: b.telegram_link || '',
+          twitter: b.twitter_link || '',
+          website: b.website_link || '',
+        },
+        logo_url: assetUrlFor('logo'),
+        logo_dark_url: assetUrlFor('logo_dark'),
+        favicon_url: assetUrlFor('favicon'),
+        apple_touch_url: assetUrlFor('apple_touch_icon'),
+        icon_192_url: assetUrlFor('icon_192'),
+        icon_512_url: assetUrlFor('icon_512'),
+      },
+      seo: {
+        meta_description: seo.meta_description || '',
+        meta_keywords: seo.meta_keywords || '',
+        title_template: seo.title_template || '%page% — %pool_name%',
+        og_title: seo.og_title || '',
+        og_description: seo.og_description || '',
+        og_image_url: assetUrlFor('og_image'),
+        og_locale: seo.og_locale || 'en_US',
+        twitter_handle: seo.twitter_handle || '',
+        twitter_card_type: seo.twitter_card_type || 'summary_large_image',
+        theme_color: seo.theme_color || b.accent_color || '',
+        site_url: seo.site_url || '',
+        page_seo: parseJson(seo.page_seo, {}),
+        structured_data_enabled: seo.structured_data_enabled === true || seo.structured_data_enabled === 'true',
+        robots_noindex: seo.robots_noindex === true || seo.robots_noindex === 'true',
+      },
+      analytics: {
+        provider: a.provider || 'none',
+        ga_tracking_id: gaId,
+        plausible_domain: a.plausible_domain || '',
+        plausible_src: a.plausible_src || '',
+        umami_website_id: a.umami_website_id || '',
+        umami_src: a.umami_src || '',
+        matomo_url: a.matomo_url || '',
+        matomo_site_id: a.matomo_site_id || '',
+        custom_head_html: a.custom_head_html || '',
+        custom_body_html: a.custom_body_html || '',
+        cookie_consent_enabled: a.cookie_consent_enabled === true || a.cookie_consent_enabled === 'true',
+        cookie_consent_text: a.cookie_consent_text || '',
+      },
+      // Footer link list: content pages that have been authored (content present).
+      pages: this.listEnabledPages(),
+      // Maintenance mode (rendered as a full-page overlay by branding.js).
+      maintenance: {
+        enabled: n.maintenance_mode === true || n.maintenance_mode === 'true',
+        title: n.maintenance_title || 'Under Maintenance',
+        message: n.maintenance_message || '',
+      },
+      // Currently-active announcement banners (enabled + within date window).
+      announcements: this.getActiveBanners(),
+    };
+  }
+
+  // Announcement banners that are enabled and within their start/end window (if set).
+  getActiveBanners() {
+    const notices = this.getSection('notices');
+    let banners = notices.banners;
+    if (typeof banners === 'string') {
+      try { banners = JSON.parse(banners); } catch (e) { banners = []; }
+    }
+    if (!Array.isArray(banners)) return [];
+    const now = Date.now();
+    const parse = (d) => {
+      if (!d) return null;
+      const t = Date.parse(d);
+      return isNaN(t) ? null : t;
+    };
+    return banners
+      .filter((b) => b && b.enabled !== false && b.enabled !== 'false')
+      .filter((b) => {
+        const start = parse(b.start);
+        const end = parse(b.end);
+        if (start !== null && now < start) return false;
+        if (end !== null && now > end) return false;
+        return true;
+      })
+      .map((b) => ({
+        id: b.id || ('b' + Math.abs(hashStr(String(b.type) + String(b.message)))),
+        type: ['news', 'update', 'maintenance', 'warning'].includes(b.type) ? b.type : 'news',
+        message: b.message || '',
+        link: b.link || '',
+        link_text: b.link_text || '',
+        dismissible: !(b.dismissible === false || b.dismissible === 'false'),
+      }))
+      .filter((b) => b.message.trim() !== '');
+  }
+
+  // Content pages that have non-empty HTML, as [{key, title}] for footer navigation.
+  listEnabledPages() {
+    const pages = this.getSection('pages');
+    return Object.keys(PoolSettings.defaults.pages)
+      .filter((key) => pages[key] && String(pages[key]).trim() !== '')
+      .map((key) => ({ key, title: PoolSettings.pageTitles[key] || key }));
+  }
+
+  // Full content for one page (used by GET /api/public/page/:key).
+  getPage(key) {
+    if (!(key in PoolSettings.defaults.pages)) return null;
+    const pages = this.getSection('pages');
+    const html = pages[key] || '';
+    if (String(html).trim() === '') return null; // disabled when empty
+    return { key, title: PoolSettings.pageTitles[key] || key, html };
   }
 
   updateSection(section, values, userId = null) {

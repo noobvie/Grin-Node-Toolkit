@@ -17,6 +17,13 @@ From these it maintains, per network:
   - a rolling daily-average POOL hashrate history (per UTC day, ~400 days, for the
     daily/weekly/monthly trend chart)             → hashrate_<key>.json
   - a miningpoolstats-friendly pool+network summary → poolstats_<key>.json
+  - a sanitized liveness summary for external uptime monitors, BOTH networks merged
+    into ONE file (per-net: node/wallet/stratum up? + miners connected + blocks
+    found in 24h — booleans + counts ONLY, never height/difficulty/balance/
+    hashrate) → health.json. Each per-net run merges only its own section, so the
+    mainnet + testnet runs (sequential in the wrapper) build the combined file
+    together. Script 07 serves it with an `auth_basic off` carve-out so it stays
+    reachable even when the page is locked.
 
 It also queries the node Owner API (get_status, localhost, reading .api_secret)
 to fill network height / difficulty / hashrate for poolstats.
@@ -67,6 +74,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -114,6 +122,10 @@ C32_SCALE = 16384                # Cuckatoo32 solution-rate constant (32 * 2^9)
 SHARE_CREDIT_DIFF = C32_SCALE
 
 NODE_PORTS = {"mainnet": 3413, "testnet": 13413}
+# Toolkit defaults for the health probe, used when grin-server.toml has no explicit
+# value. Stratum = the port miners dial; wallet = the coinbase Foreign listener.
+STRATUM_PORTS = {"mainnet": 3416, "testnet": 13416}
+WALLET_FOREIGN_PORTS = {"mainnet": 3415, "testnet": 13415}
 
 # ── Payout split (mainnet only) ────────────────────────────────────────────────
 BLOCK_REWARD_GRIN = 60.0         # flat coinbase reward (Grin has no halving)
@@ -423,6 +435,138 @@ def query_node_block(net, height):
         return data.get("result", {}).get("Ok")
     except Exception:
         return None
+
+
+# ── health probe (sanitized liveness for external monitors) ─────────────────────
+def _node_toml_path(net):
+    return f"/opt/grin/node/{net}-prune/grin-server.toml"
+
+
+def _read_toml_scalar(path, key):
+    """First top-level `key = value` from a grin-server.toml (quotes/comment
+    stripped), or None. Good enough for the flat scalars the health probe needs;
+    not a general TOML parser."""
+    try:
+        with open(path) as fh:
+            for line in fh:
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                m = re.match(r"%s\s*=\s*(.+)$" % re.escape(key), s)
+                if m:
+                    return m.group(1).strip().strip('"').strip("'")
+    except OSError:
+        return None
+    return None
+
+
+def stratum_port(net):
+    """Stratum port the node binds (from stratum_server_addr), else the default."""
+    addr = _read_toml_scalar(_node_toml_path(net), "stratum_server_addr")
+    if addr and ":" in addr:
+        tail = addr.rsplit(":", 1)[-1]
+        if tail.isdigit():
+            return int(tail)
+    return STRATUM_PORTS[net]
+
+
+def wallet_foreign_url(net):
+    """Coinbase wallet Foreign API URL the node mines to, normalised to /v2/foreign
+    (mirrors the Script 07 bash helper). Falls back to the toolkit default port."""
+    url = _read_toml_scalar(_node_toml_path(net), "wallet_listener_url")
+    if not url:
+        url = f"http://127.0.0.1:{WALLET_FOREIGN_PORTS[net]}"
+    url = url.rstrip("/")
+    if not url.endswith("/v2/foreign"):
+        url += "/v2/foreign"
+    return url
+
+
+def query_wallet_alive(net):
+    """True if the wallet Foreign listener answers AT ALL — a 200 or a 401 both
+    prove the socket is up; only a connection refusal / timeout (URLError) means
+    it is down. No secret is sent (we only need liveness, not a valid call)."""
+    body = json.dumps({"jsonrpc": "2.0", "method": "check_version",
+                       "params": [], "id": 1}).encode()
+    req = urllib.request.Request(wallet_foreign_url(net), data=body)
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=4):
+            return True
+    except urllib.error.HTTPError:
+        return True              # listener answered (e.g. 401 needs-auth) → up
+    except Exception:
+        return False
+
+
+def proc_tcp_port_stats(port):
+    """(listening, established) for a LOCAL tcp port, read from /proc/net/tcp{,6}
+    with no subprocess. The local port is the 4-hex-digit field after ':' in the
+    local_address column; state 0A = LISTEN, 01 = ESTABLISHED. ESTABLISHED rows
+    whose local port is the stratum port are inbound miner connections."""
+    listening = False
+    established = 0
+    target = "%04X" % port
+    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(path) as fh:
+                next(fh, None)                      # skip header row
+                for line in fh:
+                    parts = line.split()
+                    if len(parts) < 4:
+                        continue
+                    if parts[1].rsplit(":", 1)[-1].upper() != target:
+                        continue
+                    if parts[3] == "0A":
+                        listening = True
+                    elif parts[3] == "01":
+                        established += 1
+        except OSError:
+            continue
+    return listening, established
+
+
+def build_health_section(net, status, blocks_found_24h, now):
+    """One network's sanitized liveness section — booleans + counts ONLY (never
+    height, difficulty, balance, or hashrate), so Script 07 can serve it publicly
+    even when the page is behind the Basic-Auth lock. `ok` is the infra roll-up
+    (node up+synced, wallet up, stratum listening); miners_connected and
+    blocks_found_24h are reported but do NOT gate `ok` (a solo stratum can be up
+    with no miner attached, and a dry 24h is normal solo luck — neither is a
+    fault)."""
+    node_up = status is not None
+    node_synced = bool(status and status.get("sync_status") == "no_sync")
+    wallet_up = query_wallet_alive(net)
+    listening, miners = proc_tcp_port_stats(stratum_port(net))
+    return {
+        "updated": iso(now),
+        "ok": bool(node_up and node_synced and wallet_up and listening),
+        "node": {"up": node_up, "synced": node_synced},
+        "wallet": {"up": wallet_up},
+        "stratum": {"up": listening, "miners_connected": miners},
+        "blocks_found_24h": int(blocks_found_24h),
+    }
+
+
+def write_health_combined(out_dir, net, section):
+    """Merge this network's `section` into the shared data/health.json, preserving
+    the OTHER network's section.
+
+    Both networks live in one file under "networks": {mainnet, testnet}. The two
+    per-net collector runs execute sequentially in one wrapper invocation (mainnet
+    then testnet) and the 5-min cron firings never overlap, so this read-merge-write
+    is race-free; save_json_atomic's os.replace guarantees readers never see a torn
+    file. Top-level `ok` is the AND of every section present (so a single check can
+    gate on the whole rig), while a monitor can also watch networks.<net>.ok to
+    alert on one network only. `updated` mirrors the section just written."""
+    path = os.path.join(out_dir, "health.json")
+    doc = _read_json(path)
+    if not isinstance(doc, dict) or not isinstance(doc.get("networks"), dict):
+        doc = {"networks": {}}
+    doc["networks"][net] = section
+    doc["ok"] = all(s.get("ok") for s in doc["networks"].values())
+    doc["updated"] = section["updated"]
+    save_json_atomic(path, doc, 0o644)
 
 
 def _http_get_json(url):
@@ -1046,14 +1190,19 @@ def main():
     hashrate_out = {"updated": iso(now), "net": args.net, "unit": "gps",
                     "points": build_hr_history(hr_days, now)}
 
+    health_section = build_health_section(
+        args.net, status, blocks_payload["found_24h"], now)
+
     if args.out_dir:
         save_json_atomic(os.path.join(args.out_dir, f"blocks_{key}.json"), blocks_out, 0o644)
         save_json_atomic(os.path.join(args.out_dir, f"miners_{key}.json"), miners_out, 0o644)
         save_json_atomic(os.path.join(args.out_dir, f"hashrate_{key}.json"), hashrate_out, 0o644)
         save_json_atomic(os.path.join(args.out_dir, f"poolstats_{key}.json"), pool_payload, 0o644)
+        write_health_combined(args.out_dir, args.net, health_section)
     else:
         print(json.dumps({"blocks": blocks_out, "miners": miners_out,
-                          "hashrate": hashrate_out, "poolstats": pool_payload}, indent=2))
+                          "hashrate": hashrate_out, "poolstats": pool_payload,
+                          "health": {args.net: health_section}}, indent=2))
     conn.close()
     return 0
 

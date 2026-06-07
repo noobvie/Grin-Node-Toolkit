@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en" data-page="content">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Loading…</title>
+  <style>
+    :root {
+      --bg-body: #0f1419; --bg-card: #1a1f29; --text: #e0e0e0;
+      --text-dim: #a0aec0; --accent: #667eea; --border-color: #2d3748;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg-body); color: var(--text);
+      font-family: var(--brand-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+      line-height: 1.6;
+    }
+    .topbar {
+      padding: 1rem 1.5rem; border-bottom: 1px solid var(--border-color);
+      display: flex; align-items: center; gap: 1rem;
+    }
+    .topbar a { color: var(--accent); text-decoration: none; font-weight: 600; }
+    .content {
+      max-width: 820px; margin: 0 auto; padding: 2.5rem 1.5rem;
+    }
+    .content h1 { font-size: 2rem; margin-top: 0; }
+    .content h2 { color: var(--accent); margin-top: 2rem; }
+    .content a { color: var(--accent); }
+    .content img { max-width: 100%; height: auto; }
+    footer {
+      padding: 2rem 1.5rem; text-align: center; color: var(--text-dim);
+      border-top: 1px solid var(--border-color); font-size: 0.9rem;
+    }
+    footer [data-brand="page-links"] a { color: var(--accent); text-decoration: none; }
+    .muted { color: var(--text-dim); }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <a href="/">&larr; <span data-brand="pool_name">Home</span></a>
+  </div>
+
+  <main class="content">
+    <h1 id="page-title" class="muted">Loading…</h1>
+    <div id="page-body"></div>
+  </main>
+
+  <footer>
+    <p data-brand="footer_text"></p>
+    <div data-brand="page-links"></div>
+    <p data-brand="attribution" class="muted">Powered by the Grin Node Toolkit</p>
+  </footer>
+
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var key = (params.get('p') || '').replace(/[^a-z0-9_-]/gi, '');
+      if (!key) { renderMissing(); return; }
+
+      fetch('/api/public/page/' + encodeURIComponent(key))
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (json) {
+          if (!json || !json.data) { renderMissing(); return; }
+          document.title = json.data.title;
+          var t = document.getElementById('page-title');
+          t.textContent = json.data.title;
+          t.classList.remove('muted');
+          document.getElementById('page-body').innerHTML = json.data.html; // operator-authored
+          // Set the page key so per-page SEO overrides can target it.
+          document.documentElement.setAttribute('data-page', 'page-' + key);
+        })
+        .catch(renderMissing);
+
+      function renderMissing() {
+        document.title = 'Page not found';
+        document.getElementById('page-title').textContent = 'Page not found';
+        document.getElementById('page-body').innerHTML = '<p class="muted">This page is not available. <a href="/">Return home</a>.</p>';
+      }
+    })();
+  </script>
+  <script src="/js/branding.js"></script>
+</body>
+</html>

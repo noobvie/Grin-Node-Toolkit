@@ -1567,18 +1567,27 @@ _solo_prompt_access_lock() {
     # Server-level auth (every location inherits unless it opts out below).
     _ACCESS_AUTH_BLOCK=$'\n    auth_basic           "Grin Solo Mining";\n    auth_basic_user_file '"$STATS_HTPASSWD"$';'
 
+    # health.json is ALWAYS public (auth_basic off), independent of the poolstats
+    # choice below. ONE file carries both networks: per-net booleans + counts only
+    # (node/wallet/stratum up? + miners connected + blocks found 24h — no height/
+    # difficulty/balance/hashrate), so an external uptime monitor can verify the
+    # rig without the page password. An exact-match location beats the /data regex,
+    # so it wins by location-priority.
+    _ACCESS_PUBLIC_CARVEOUTS=$'    location = /data/health.json { auth_basic off; }\n'
+
     # poolstats_<net>.json is the machine-readable feed miningpoolstats.stream polls.
-    # Default OFF: a freshly locked solo page stays FULLY private. Opt in to expose
-    # just this one feed (auth_basic off carve-out) if you want the pool listed.
+    # Default OFF: a freshly locked solo page keeps everything but health locked. Opt
+    # in to expose just this one feed (auth_basic off carve-out) to list the pool.
     echo -e "  ${DIM}poolstats_*.json is the feed https://miningpoolstats.stream/grin polls to list a pool.${RESET}"
     echo -ne "  Publish it publicly so you can list this pool there (everything else stays locked)? [y/N]: "
     read -r pubmps
     if [[ "${pubmps,,}" == "y" ]]; then
-        _ACCESS_PUBLIC_CARVEOUTS=$'    location = /data/poolstats_main.json { auth_basic off; }\n    location = /data/poolstats_test.json { auth_basic off; }\n\n'
-        info "poolstats feed published (public); everything else (incl. split_main.json) stays locked."
+        _ACCESS_PUBLIC_CARVEOUTS+=$'    location = /data/poolstats_main.json { auth_basic off; }\n    location = /data/poolstats_test.json { auth_basic off; }\n'
+        info "poolstats feed published (public); everything but health + poolstats (incl. split_main.json) stays locked."
     else
-        info "Fully private — poolstats feed locked too (no public miningpoolstats listing)."
+        info "poolstats feed locked (no public miningpoolstats listing); only the sanitized health endpoint stays public."
     fi
+    _ACCESS_PUBLIC_CARVEOUTS+=$'\n'   # blank line before the /data regex location
 }
 
 solo_deploy_stats_page() {
@@ -2006,6 +2015,9 @@ EOF
     echo -e "  Page polls ${BOLD}/api/status/<net>${RESET} + ${BOLD}/api/wallet/<net>${RESET} every 10s — both networks side by side."
     echo -e "  ${DIM}Wallet Listener row flags whether the coinbase listener is up.${RESET}"
     echo -e "  ${DIM}Only the network(s) detected at deploy time are wired; others grey out.${RESET}"
+    echo -e "  Uptime monitor: ${BOLD}/data/health.json${RESET} ${DIM}— both networks, sanitized node/wallet/stratum liveness${RESET}"
+    echo -e "  ${DIM}(per-net booleans + miners-connected + blocks-found-24h; top-level ok = all nets; stays public${RESET}"
+    echo -e "  ${DIM}even with the access lock on; refreshed every 5 min).${RESET}"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

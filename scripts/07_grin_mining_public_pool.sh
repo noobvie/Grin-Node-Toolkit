@@ -455,7 +455,11 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" always;
+    # CSP must permit: inline scripts (page bootstraps + branding.js analytics init),
+    # the managed analytics providers' script + beacon hosts, and Google Fonts.
+    # Self-hosted Plausible/Umami/Matomo on a custom domain require adding that
+    # domain to script-src and connect-src below.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self' https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com;" always;
 
     location /api/auth/ {
         limit_req zone=${POOL_SERVICE}_auth burst=5 nodelay;
@@ -473,6 +477,12 @@ server {
         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_read_timeout 30s;
     }
+
+    # SEO / PWA files generated dynamically from admin settings (proxied to the app).
+    # Exact-match so they take priority over any static file of the same name.
+    location = /robots.txt    { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
+    location = /sitemap.xml   { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
+    location = /manifest.json { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
 
     location / {
         limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;

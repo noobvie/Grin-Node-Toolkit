@@ -227,6 +227,11 @@
   .freshness.live  .live-dot { background: var(--green);  box-shadow: 0 0 0 3px rgba(94,224,138,.18); animation: dotpulse 1.4s ease-in-out infinite; }
   .freshness.stale .live-dot { background: var(--yellow); box-shadow: 0 0 0 3px rgba(255,216,77,.18); }
   @media (prefers-reduced-motion: reduce) { .freshness.live .live-dot { animation: none; } }
+  /* Static link to the machine-readable status feed (data/health.json). Sits as a
+     sibling AFTER the dynamic Live/Stale text so it never shifts as state flips. */
+  .freshness .api-link { color: var(--muted); text-decoration: none; }
+  .freshness .api-link::before { content: "·"; margin-right: .45rem; opacity: .6; }
+  .freshness .api-link:hover, .freshness .api-link:focus-visible { color: var(--text-hi); text-decoration: underline; }
 
   /* header actions — wrap onto their own row on narrow screens */
   .header-actions { display: flex; gap: .6rem; align-items: center; flex: none; }
@@ -257,7 +262,7 @@
 </header>
 
 <div class="freshness" id="freshness" aria-live="polite" title="Live data refreshes every 120 seconds (two Grin blocks)">
-  <span class="live-dot"></span><span id="fresh-text">Connecting…</span>
+  <span class="live-dot"></span><span id="fresh-text">Connecting…</span><a class="api-link" href="data/health.json" target="_blank" rel="noopener" title="Machine-readable status for both networks (data/health.json) — node/wallet/stratum liveness + 24h blocks. Refreshed every 5 min; stays public even if this page is locked.">status JSON</a>
 </div>
 
 <!-- ── MAINNET ── -->

@@ -165,6 +165,7 @@ pool_ensure_defaults() {
         ["service_port"]="$POOL_PORT"
         ["db_path"]="$POOL_APP_DIR/pool.db"
         ["wallet_pass_file"]="$POOL_APP_DIR/wallet_pass"
+        ["assets_dir"]="$POOL_APP_DIR/custom_assets"
     )
     for k in "${!defaults[@]}"; do
         local existing; existing=$(pool_read_conf "$k" "__MISSING__")
@@ -423,6 +424,12 @@ pool_setup_nginx() {
     info "Writing nginx vhost: $POOL_NGINX_CONF"
     mkdir -p "$(dirname "$POOL_NGINX_CONF")"
 
+    # Uploaded white-label assets (logos/icons/OG image) are written here by the app
+    # (assets_dir in pool.json) and served by nginx at /custom/. Ensure the directory
+    # exists and that nginx can traverse into it (o+rX on the dir and its parents).
+    mkdir -p "$POOL_APP_DIR/custom_assets"
+    chmod o+rx /opt/grin "$POOL_APP_DIR" "$POOL_APP_DIR/custom_assets" 2>/dev/null || true
+
     if declare -F nginx_ensure_rate_limit_zones &>/dev/null; then
         nginx_ensure_rate_limit_zones "script07-${POOL_SERVICE}" \
             "${POOL_SERVICE}_auth:3r/m"    \
@@ -483,6 +490,14 @@ server {
     location = /robots.txt    { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
     location = /sitemap.xml   { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
     location = /manifest.json { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
+
+    # Operator-uploaded white-label assets (served from assets_dir in pool.json).
+    location /custom/ {
+        alias $POOL_APP_DIR/custom_assets/;
+        try_files \$uri =404;
+        expires 7d;
+        add_header Cache-Control "public";
+    }
 
     location / {
         limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;

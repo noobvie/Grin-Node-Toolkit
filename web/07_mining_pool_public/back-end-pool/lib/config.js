@@ -41,6 +41,10 @@ function mergeEnvVars(config) {
 
     db_path: config.db_path || process.env.POOL_DB || './pool.sqlite',
 
+    // Directory for operator-uploaded white-label assets (logos, icons, OG image).
+    // Served by nginx at /custom/<file>; defaults under the app's working directory.
+    assets_dir: config.assets_dir || process.env.POOL_ASSETS_DIR || './custom_assets',
+
     tor_enabled: config.tor_enabled !== undefined ? config.tor_enabled : true,
     tor_socks_port: config.tor_socks_port || 9050,
     tor_check_timeout_ms: config.tor_check_timeout_ms || 3000,

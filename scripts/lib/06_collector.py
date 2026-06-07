@@ -691,16 +691,17 @@ def _is_public_ip(ip):
         and not ip_lower.startswith("2001:db8")  # IPv6 documentation
     )
 
-def _normalize_agent(ua):
-    """Normalize a peer's reported user agent for the peer map.
-    Blank/null/whitespace-only agents become 'Unknown'; every other name is kept
-    as-is so new and yet-unknown Grin implementations are captured, not silently
-    dropped. Peers reach here only after completing the Grin P2P handshake, so a
-    non-blank name is a genuine self-reported node identity."""
+def _clean_agent(ua):
+    """Return the peer's trimmed user agent, or None if blank/empty.
+    Blank agents come from routing-table addresses the node only heard about via
+    gossip and never handshaked (get_peers returns tens of thousands of these);
+    they carry no node identity, so callers skip them instead of flooding the map
+    with 'Unknown'. Every non-blank name is kept as-is, capturing new and
+    yet-unknown Grin implementations."""
     if ua is None:
-        return "Unknown"
+        return None
     ua = str(ua).strip()
-    return ua if ua else "Unknown"
+    return ua or None
 
 
 def _nat64_to_ipv4(ip):
@@ -779,8 +780,8 @@ def _fetch_connected_peers(owner_url, secret, network_label):
     Typically returns 8–30 peers; used as the authoritative source for peers.json.
 
     Mainnet: no port filter (MW/Grim and some MW/Grin nodes use non-standard ports);
-             every connected peer is accepted — its self-reported agent name is kept
-             (blank names normalized to 'Unknown'), so all implementations are mapped.
+             peers reporting a blank agent are skipped (gossiped, never-handshaked
+             routing entries); every named peer is kept, so all implementations map.
     Testnet: standard port 13414 filter kept (all testnet nodes use it consistently).
     """
     expected_port = MAINNET_P2P_PORT if network_label == "mainnet" else TESTNET_P2P_PORT
@@ -794,7 +795,9 @@ def _fetch_connected_peers(owner_url, secret, network_label):
                     continue
                 if network_label == "testnet" and port != expected_port:
                     continue
-                ua = _normalize_agent(p.get("user_agent", ""))
+                ua = _clean_agent(p.get("user_agent", ""))
+                if not ua:
+                    continue
                 peer_list.append({
                     "ip":         ip,
                     "port":       port,
@@ -823,6 +826,7 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
         if raw:
             skipped_port  = 0
             skipped_flag  = 0
+            skipped_blank = 0
             for p in raw:
                 flags = str(p.get("flags", ""))
                 # Only accept peers the node considers Healthy (successfully handshaked)
@@ -835,8 +839,11 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
                     continue
                 if not _is_public_ip(ip):
                     continue
-                # Keep every handshaked peer; normalize a blank agent to 'Unknown'
-                ua = _normalize_agent(p.get("user_agent", ""))
+                # Skip blank-agent peers — gossiped routing entries never handshaked
+                ua = _clean_agent(p.get("user_agent", ""))
+                if not ua:
+                    skipped_blank += 1
+                    continue
                 # Capture last_seen from the routing table (Unix timestamp)
                 last_seen_raw = p.get("last_seen", 0)
                 last_seen_ts  = int(last_seen_raw) if last_seen_raw else 0
@@ -850,7 +857,8 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
                 })
             port_skipped = f", {skipped_port} wrong-port" if network_label == "testnet" else ""
             print(f"[INFO] {network_label}: {len(peer_list)} healthy peers for stats "
-                  f"(skipped {skipped_flag} non-Healthy{port_skipped}).")
+                  f"(skipped {skipped_flag} non-Healthy{port_skipped}, "
+                  f"{skipped_blank} blank-agent).")
     except Exception as exc:
         print(f"[WARN] {network_label} owner API get_peers failed: {exc}", file=sys.stderr)
     return peer_list
@@ -1036,13 +1044,14 @@ def _update_peers():
     ).rowcount
     if deleted:
         print(f"[INFO] Pruned {deleted} stale peers (>{PEER_RETENTION_DAYS}d).")
-    # Relabel any legacy blank/empty agents to 'Unknown' (no peer is dropped by name)
-    relabeled = conn.execute(
-        "UPDATE known_peers SET user_agent='Unknown' "
-        "WHERE user_agent IS NULL OR TRIM(user_agent)=''"
+    # Purge blank/empty agents and the legacy 'Unknown' label — these are gossiped
+    # routing-table addresses the node never handshaked, not real mapped nodes.
+    purged = conn.execute(
+        "DELETE FROM known_peers "
+        "WHERE user_agent IS NULL OR TRIM(user_agent)='' OR user_agent='Unknown'"
     ).rowcount
-    if relabeled:
-        print(f"[INFO] Relabeled {relabeled} peers with blank agent → 'Unknown'.")
+    if purged:
+        print(f"[INFO] Purged {purged} peers with blank/unknown agent names.")
 
     # ── 7. Version snapshot — use stat_peers if available, else map_peers ─────
     version_source = stat_peers if stat_peers else map_peers

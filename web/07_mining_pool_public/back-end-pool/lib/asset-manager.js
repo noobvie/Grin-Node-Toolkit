@@ -7,9 +7,12 @@ class AssetManager {
   constructor(config, db) {
     this.config = config;
     this.db = db;
-    this.uploadDir = `/opt/grin/mining-pool-${
-      config.network === 'mainnet' ? 'main' : 'test'
-    }/custom_assets`;
+    // Resolve relative to cwd so it sits under the app's WorkingDirectory by default.
+    // Served by nginx at /custom/<file> (see getAssetUrl + the vhost location /custom/).
+    this.uploadDir = path.resolve(
+      config.assets_dir ||
+      `/opt/grin/mining-pool-${config.network === 'mainnet' ? 'main' : 'test'}/custom_assets`
+    );
 
     this.allowedMimeTypes = ['image/svg+xml', 'image/png', 'image/jpeg', 'image/gif'];
     this.maxFileSize = 2 * 1024 * 1024; // 2 MB

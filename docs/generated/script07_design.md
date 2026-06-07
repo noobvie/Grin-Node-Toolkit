@@ -159,11 +159,27 @@ and exposed through `/api/public/branding`:
 - **Custom body HTML** — `analytics.custom_body_html` injected before `</body>` (chat
   widgets); sibling to `custom_head_html`.
 
+## Uploaded asset serving (`/custom/`)
+
+Asset URLs are `/custom/<file>` (`AssetManager.getAssetUrl`). The upload directory is now
+config-driven: `assets_dir` in `pool.json` (default `$POOL_APP_DIR/custom_assets`), resolved
+via `path.resolve` in `AssetManager`. The deploy script creates the directory, makes it
+nginx-traversable (`chmod o+rx` on it and its parents), and the vhost serves it:
+
+```nginx
+location /custom/ {
+    alias /opt/grin/pool/mainnet/custom_assets/;
+    try_files $uri =404;
+    expires 7d;
+}
+```
+
+This replaced a hardcoded `/opt/grin/mining-pool-<net>/custom_assets` path that did not
+match the app's actual working directory, so uploaded logos/icons/OG image (and the PWA
+manifest icons) now load. `img-src 'self'` in the CSP already permits them.
+
 ## Follow-ups (not implemented)
 
-- Serve uploaded assets: confirm an nginx `location /custom/` (or equivalent) maps to the
-  `custom_assets` upload dir — `getAssetUrl()` returns `/custom/<file>`. Required for
-  logos/icons/OG images (and therefore the manifest icons) to actually load.
 - i18n / multi-language content and fiat (USD/EUR/BTC) price display.
 - Optionally unify the public `body.<theme>-theme` system onto the `theme.js` CSS-variable
   system to remove the dual-theme split.

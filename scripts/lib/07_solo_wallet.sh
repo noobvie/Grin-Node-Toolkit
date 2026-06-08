@@ -163,10 +163,15 @@ sw_listener_stop() {
 
 sw_listener_status() {
     local net="${1:-mainnet}" port tmux_name; port=$(sw_foreign_port "$net"); tmux_name=$(sw_tmux_name "$net")
-    local up_sess="no" up_port="no"
+    local up_sess="no" up_port="no" tag
     tmux has-session -t "$tmux_name" 2>/dev/null && up_sess="yes"
     gnc_get_pid_on_port "$port" >/dev/null 2>&1 && up_port="yes"
-    printf '%s: session=%s port=%s(%s)\n' "$net" "$up_sess" "$port" "$up_port"
+    if [[ "$up_sess" == "yes" && "$up_port" == "yes" ]]; then
+        tag="${GREEN:-}[RUNNING]${RESET:-}"
+    else
+        tag="${RED:-}[DOWN]${RESET:-}"
+    fi
+    printf '%s %s: session=%s port=%s(%s)\n' "$tag" "$net" "$up_sess" "$port" "$up_port"
 }
 
 sw_show_address() {

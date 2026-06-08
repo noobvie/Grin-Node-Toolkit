@@ -86,9 +86,12 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
 | Wallet Foreign API | 3415 | 13415 |
 | Wallet Owner API | 3420 | 13420 |
 
-Script 07 (mining pool) adds two operator-configurable ports not in the table above:
-- **Stratum server** — miners connect here; default `3333` (same for both networks)
-- **Pool HTTP API** — monitoring/stats REST API; default `8080` (same for both networks)
+Script 07 (mining pool) adds operator-configurable ports not in the table above:
+- **Public stratum** — miners connect here; default `3333` (same for both networks)
+- **Node built-in stratum (upstream)** — localhost only; the pool's stratum proxy connects here as a client; default `3334`. Set the Grin node's `stratum_server_addr` to `127.0.0.1:3334`.
+- **Central API / Pool HTTP API** — stats + satellite share/block ingestion (`/api/shares`, `/api/blocks`); default `8080` (same for both networks). Ingestion is IP-allowlisted + shared-secret authenticated.
+
+> All three modes use the same ports: public stratum `3333`, node built-in stratum upstream `127.0.0.1:3334` (testnet `13334`), Central API `8080`. The single-box installer was migrated off the legacy `3416/3417/3002` in 2026-06. (Solo mining — `07_grin_mining_solo.sh` — is a separate product and keeps `3416`.)
 
 Secret files — two per service, each with a Foreign and Owner secret:
 
@@ -330,6 +333,20 @@ Key design decisions (locked in — do not change without user confirmation):
 - **Script 07 role:** Infrastructure only (deploy files, systemd services, backups); business logic lives in pool web code
 - **Testnet mode:** Stratum-only, no web UI; mainnet mode: full pool + web dashboard
 - **No fees by default** (`pool_fee_percent: 0.0`); min withdrawal: 2.0 GRIN
+
+### Multi-region — hub-and-spoke (design: `docs/generated/script07_multi_region_design.md`)
+
+Script 07 supports three deployment modes, selected at launch (mode may be passed as `$1` = `singlebox|hub|satellite` for non-interactive launches):
+- **singlebox** — Hub + co-located Satellite on one server (original behaviour; the existing `pool_singlebox_loop`).
+- **hub** — Central Hub only (the brain): Central API (sole DB writer), SQLite/WAL + schema + retention job, web dashboard + admin, Grin wallet (Tor payouts), nginx. Sourced from `lib/07_lib_hub.sh`; reuses the shared `pool_*` setup functions.
+- **satellite** — Regional node + stratum proxy + share relay; **no** web/admin/DB/wallet. Sourced from `lib/07_lib_satellite.sh`. Config: `/opt/grin/conf/grin_satellite.json`.
+
+Locked decisions (do not change without user confirmation):
+- **Database stays SQLite (WAL), not Postgres.** The hub is **single-writer** — only the Central API process writes; satellites POST over HTTPS, they never touch the DB. Migrate to Postgres only if the Central API itself goes multi-process/replicated, the DB moves to a separate box, or hot un-prunable data exceeds ~20–50 GB. Adding satellites does NOT change this (a region is a new HTTP client, not a new DB writer).
+- **Share capture = own stratum proxy** in front of the node's built-in stratum (grin-pool model) — NOT log-tailing. Gives structured `address.worker` identity + per-miner vardiff. Built-in stratum binds localhost `:3334`; proxy binds public `:3333`.
+- **Satellite→Hub transport** — `POST /api/shares` (batched) + `/api/blocks` (block-found) to Central API `:8080`; IP-allowlist + shared-secret header over HTTPS (mTLS later). Relay buffers to a local SQLite failover file on Hub outage and replays.
+- **Retention** — raw shares kept only for the PPLNS window then pruned; hashrate downsampled 5m→1h→1d; financial rows kept forever. Configurable in the admin panel (Database / Cleanup); job is `retention.js` on a systemd timer. ~300–600 MB after year 1 for ~1000 miners, ~30 MB/yr after.
+- **Runtime** for proxy + relay: Node.js (better-sqlite3 for the failover buffer).
 
 ## Debugging — Confirm Root Cause Before Editing
 When a bug or error is reported, **confirm the root cause with evidence before changing

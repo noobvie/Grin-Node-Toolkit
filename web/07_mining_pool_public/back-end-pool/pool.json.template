@@ -18,7 +18,7 @@
   "node_api_secret": "CHANGE_ME_TO_NODE_SECRET",
 
   "node_stratum_host": "127.0.0.1",
-  "node_stratum_port": 13417,
+  "node_stratum_port": 13334,
   "pool_address": "CHANGE_ME_TO_POOL_GRIN_ADDRESS",
 
   "db_path": "./pool.sqlite",

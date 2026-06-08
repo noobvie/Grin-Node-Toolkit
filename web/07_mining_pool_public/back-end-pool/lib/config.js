@@ -35,7 +35,7 @@ function mergeEnvVars(config) {
     node_api_secret: config.node_api_secret || process.env.NODE_API_SECRET || '',
 
     node_stratum_host: config.node_stratum_host || '127.0.0.1',
-    node_stratum_port: config.node_stratum_port || (config.network === 'mainnet' ? 3417 : 13417),
+    node_stratum_port: config.node_stratum_port || (config.network === 'mainnet' ? 3334 : 13334),
     pool_address:      config.pool_address || '',
     wallet_pass_file:  config.wallet_pass_file || '',
 
@@ -58,7 +58,17 @@ function mergeEnvVars(config) {
       12 * 3600,
       24 * 3600,
       48 * 3600
-    ]
+    ],
+
+    // ─── Multi-region (hub-and-spoke) ───────────────────────────────────────
+    // role: singlebox (default) | hub | satellite. Satellites relay shares/blocks
+    // to the hub's Central API; see lib/share-relay.js + satellite.js.
+    role: config.role || process.env.POOL_ROLE || 'singlebox',
+    region: config.region || process.env.POOL_REGION || 'default',
+    hub_url: config.hub_url || process.env.HUB_URL || '',
+    hub_shared_secret: config.hub_shared_secret || process.env.HUB_SHARED_SECRET || '',
+    satellite_ip_allowlist: config.satellite_ip_allowlist || [],
+    relay_batch_interval_ms: config.relay_batch_interval_ms || 2000
   };
 }
 

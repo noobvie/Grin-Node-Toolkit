@@ -372,6 +372,7 @@
       <button class="tab-btn" data-tab="incentives">Incentives</button>
       <button class="tab-btn" data-tab="access">Access Control</button>
       <button class="tab-btn" data-tab="alerts">Alerts</button>
+      <button class="tab-btn" data-tab="database">Database</button>
     </div>
 
     <!-- POOL INFO TAB -->
@@ -1353,6 +1354,69 @@
         </div>
       </div>
     </div>
+
+    <!-- DATABASE TAB -->
+    <div id="database" class="settings-content">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Retention &amp; Cleanup</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="retention_enabled" name="retention_enabled">
+            <label for="retention_enabled">Enable automatic database cleanup</label>
+          </div>
+          <div class="helper-text">
+            Prunes raw shares, old hashrate history, and resolved alerts on a schedule.
+            Shares are only ever deleted below a floor of
+            <strong>confirm&nbsp;depth + PPLNS&nbsp;window&nbsp;(60) + safety&nbsp;margin</strong>,
+            and never for a block still maturing — so PPLNS payouts and orphan reversal
+            are never affected.
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Retention Windows</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="shares_margin_blocks">Shares safety margin (blocks)</label>
+              <input type="number" id="shares_margin_blocks" name="shares_margin_blocks" min="0" step="1" value="360">
+              <div class="helper-text">Extra blocks of shares kept beyond the required confirm-depth + PPLNS floor. Higher = safer, larger DB.</div>
+            </div>
+            <div class="form-group">
+              <label for="prune_interval_minutes">Cleanup interval (minutes)</label>
+              <input type="number" id="prune_interval_minutes" name="prune_interval_minutes" min="5" step="1" value="60">
+              <div class="helper-text">How often the cleanup job runs (applied after a service restart).</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="hashrate_keep_days">Keep hashrate history (days)</label>
+              <input type="number" id="hashrate_keep_days" name="hashrate_keep_days" min="1" step="1" value="30">
+              <div class="helper-text">Hashrate chart data older than this is removed.</div>
+            </div>
+            <div class="form-group">
+              <label for="resolved_alerts_keep_days">Keep resolved alerts (days)</label>
+              <input type="number" id="resolved_alerts_keep_days" name="resolved_alerts_keep_days" min="1" step="1" value="30">
+              <div class="helper-text">Resolved/acknowledged alerts older than this are removed.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Database Status</h3>
+          <div id="db-status" class="helper-text">Loading…</div>
+          <div class="form-actions" style="margin-top:.75rem;">
+            <button type="button" class="btn btn-secondary" onclick="loadDbStatus()">Refresh</button>
+            <button type="button" class="btn btn-secondary" onclick="runDbCleanup()">Run cleanup now</button>
+          </div>
+          <div class="helper-text">File size shrinks after the weekly <code>VACUUM</code> cron, not immediately after a prune.</div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('database')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('database')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/js/auth.js"></script>
@@ -1372,6 +1436,7 @@
       document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
       document.getElementById(tabName).classList.add('active');
       document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+      if (tabName === 'database') loadDbStatus();
     }
 
     // Load settings on page load
@@ -1473,6 +1538,48 @@
         location.reload();
       } catch (err) {
         showToast('Error restoring defaults: ' + err.message, 'error');
+      }
+    }
+
+    // ─── Database / Cleanup status + manual run ───────────────────────
+    function fmtBytes(n) {
+      if (n === null || n === undefined) return '—';
+      const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let i = 0, v = n;
+      while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+      return v.toFixed(i ? 1 : 0) + ' ' + u[i];
+    }
+
+    async function loadDbStatus() {
+      const box = document.getElementById('db-status');
+      if (box) box.textContent = 'Loading…';
+      try {
+        const r = await fetch('/api/admin/database/status', { credentials: 'include' });
+        if (!r.ok) throw new Error('status ' + r.status);
+        const { data } = await r.json();
+        const c = data.counts || {};
+        const last = data.last_run ? new Date(data.last_run * 1000).toLocaleString() : 'never';
+        box.innerHTML =
+          `<strong>DB size:</strong> ${fmtBytes(data.db_size_bytes)} &nbsp;·&nbsp; ` +
+          `<strong>shares:</strong> ${c.shares ?? '—'} &nbsp;·&nbsp; ` +
+          `<strong>hashrate rows:</strong> ${c.hashrate_history ?? '—'} &nbsp;·&nbsp; ` +
+          `<strong>alerts:</strong> ${c.alerts ?? '—'} &nbsp;·&nbsp; ` +
+          `<strong>last cleanup:</strong> ${last}`;
+      } catch (err) {
+        if (box) box.textContent = 'Failed to load DB status: ' + err.message;
+      }
+    }
+
+    async function runDbCleanup() {
+      if (!confirm('Run database cleanup now?')) return;
+      try {
+        const r = await fetch('/api/admin/database/cleanup', { method: 'POST', credentials: 'include' });
+        if (!r.ok) throw new Error('status ' + r.status);
+        const { data } = await r.json();
+        showToast(`Cleanup done — shares ${data.shares_deleted}, hashrate ${data.hashrate_deleted}, alerts ${data.alerts_deleted}`, 'success');
+        loadDbStatus();
+      } catch (err) {
+        showToast('Cleanup failed: ' + err.message, 'error');
       }
     }
 

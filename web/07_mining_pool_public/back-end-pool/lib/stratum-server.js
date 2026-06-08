@@ -27,10 +27,14 @@ const IncentivesManager = require('./incentives');
 // How many old job IDs remain valid for submit (avoids instant stale on slow networks)
 const JOB_WINDOW = 10;
 
+// Grin block reward is a fixed 60 GRIN (no halving). Used when crediting a found
+// block to the local DB (single-box / hub-primary). Satellites relay instead.
+const GRIN_BLOCK_REWARD = 60;
+
 class StratumServer {
   constructor(config) {
     this.config = config;
-    this.port = config.stratum_port || 3416;
+    this.port = config.stratum_port || 3333;
     this.server = null;
     this.shareValidator = new ShareValidator(config);
     this.minerManager = new MinerManager(config);
@@ -42,11 +46,28 @@ class StratumServer {
     this.jobCounter = 0;
     // Set by index.js after both are constructed
     this.nodeStratumClient = null;
+    // Optional: set by the satellite entrypoint (setShareRelay) to forward accepted
+    // shares / found blocks to the Central Hub. null in single-box/hub mode.
+    this.shareRelay = null;
+    // Optional: set by index.js (setBlockManager) so found blocks are credited to the
+    // local DB in single-box/hub mode. null on satellites (the hub credits instead).
+    this.blockManager = null;
   }
 
   // Wire the upstream node stratum client so submits can be forwarded for PoW validation.
   setNodeStratumClient(client) {
     this.nodeStratumClient = client;
+  }
+
+  // Wire the share relay (satellite mode). Additive: when set, every accepted share
+  // and found block is also emitted to the hub. When null, behaviour is unchanged.
+  setShareRelay(relay) {
+    this.shareRelay = relay;
+  }
+
+  // Wire the block manager (single-box/hub mode) so found blocks are recorded locally.
+  setBlockManager(bm) {
+    this.blockManager = bm;
   }
 
   start() {
@@ -275,12 +296,45 @@ class StratumServer {
       this.minerManager.recordShare(session.grinAddress, session.difficulty);
       this._stat(sessionId, 'accepted');
 
+      // Satellite mode: forward the accepted share to the Central Hub (idempotent —
+      // the hub dedups by share_hash UNIQUE). No-op in single-box/hub mode.
+      if (this.shareRelay) {
+        this.shareRelay.recordShare({
+          grin_address: session.grinAddress,
+          worker_name:  session.workerName,
+          difficulty:   session.difficulty,
+          height,
+          share_hash:   shareHash,
+          created_at:   Math.floor(Date.now() / 1000)
+        });
+      }
+
       // Forward every accepted share upstream — the Grin node validates the actual
       // Cuckatoo32 PoW and tells us if this share is also a valid block solution.
       if (this.nodeStratumClient) {
         const nodeResult = await this.nodeStratumClient.forwardSubmit(params);
         if (nodeResult.blockHash) {
           console.log(`[${new Date().toISOString()}] BLOCK FOUND: height=${height} hash=${nodeResult.blockHash} miner=${session.grinAddress}`);
+          // Record the found block exactly once:
+          //  · satellite mode → relay to the hub (hub dedups by hash UNIQUE)
+          //  · single-box/hub → credit the local DB (creditBlock dedups by hash UNIQUE)
+          if (this.shareRelay) {
+            this.shareRelay.recordBlock({
+              height,
+              hash:       nodeResult.blockHash,
+              nonce,
+              found_by:   session.grinAddress,
+              created_at: Math.floor(Date.now() / 1000)
+            });
+          } else if (this.blockManager) {
+            try {
+              await this.blockManager.creditBlock(
+                height, nodeResult.blockHash, nonce, GRIN_BLOCK_REWARD, session.grinAddress
+              );
+            } catch (err) {
+              console.error(`[ERROR] creditBlock: ${err.message}`);
+            }
+          }
           socket.write(JSON.stringify(createSubmitResponse(id, true, nodeResult.blockHash)) + '\n');
           return;
         }

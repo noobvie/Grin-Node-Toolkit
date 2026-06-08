@@ -13,6 +13,13 @@ class BlockMonitor {
     this.checkInterval = 30000;
     this.orphanCheckInterval = 6 * 3600 * 1000;
     this.lastOrphanCheck = 0;
+    // Set by index.js after construction (setRewardDistributor). When present, the
+    // monitor distributes PPLNS rewards for newly-confirmed blocks each tick.
+    this.rewardDistributor = null;
+  }
+
+  setRewardDistributor(rd) {
+    this.rewardDistributor = rd;
   }
 
   start() {
@@ -28,6 +35,7 @@ class BlockMonitor {
     while (this.isRunning) {
       try {
         await this.checkNewBlocks();
+        await this.distributeConfirmedBlocks();
 
         const now = Date.now();
         if (now - this.lastOrphanCheck > this.orphanCheckInterval) {
@@ -120,6 +128,30 @@ class BlockMonitor {
       }
     } catch (err) {
       console.error(`Error running orphan detection: ${err.message}`);
+    }
+  }
+
+  // Credit PPLNS rewards for every block that has reached 'confirmed' (by either the
+  // maturity check or orphan detection). distributeRewards transitions confirmed→paid,
+  // so each block is distributed exactly once and this sweep is naturally idempotent.
+  async distributeConfirmedBlocks() {
+    if (!this.rewardDistributor) return;
+    try {
+      const rows = this.db.prepare(
+        "SELECT id, height FROM blocks WHERE status = 'confirmed' ORDER BY height ASC"
+      ).all();
+      for (const row of rows) {
+        const res = await this.rewardDistributor.distributeRewards(row.id);
+        if (res.success) {
+          console.log(`[${new Date().toISOString()}] Rewards distributed: height=${row.height}, miners=${res.unique_miners}, miner_reward=${res.miner_reward}`);
+        } else if (res.reason === 'no_shares_found') {
+          console.warn(`[${new Date().toISOString()}] Block height=${row.height} confirmed with no shares — marked paid, reward retained by pool`);
+        } else {
+          console.error(`[${new Date().toISOString()}] Reward distribution failed for height=${row.height}: ${res.error || res.reason}`);
+        }
+      }
+    } catch (err) {
+      console.error(`Error distributing confirmed blocks: ${err.message}`);
     }
   }
 

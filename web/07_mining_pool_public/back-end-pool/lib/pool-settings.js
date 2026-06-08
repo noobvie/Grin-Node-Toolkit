@@ -177,6 +177,17 @@ class PoolSettings {
       // banners: JSON array of {id,type,message,link,link_text,dismissible,enabled,start,end}
       banners: '[]',
     },
+    // Database retention / cleanup. Keeps the SQLite file bounded WITHOUT ever
+    // deleting shares still needed for PPLNS distribution or orphan reversal:
+    // the prune floor is (confirm_depth + PPLNS window + shares_margin_blocks) and
+    // is additionally clamped below the oldest immature block. See lib/retention.js.
+    database: {
+      retention_enabled: 'true',
+      shares_margin_blocks: 360,        // safety blocks kept BEYOND confirm_depth + PPLNS window
+      hashrate_keep_days: 30,           // prune hashrate_history rows older than this
+      resolved_alerts_keep_days: 30,    // prune resolved/acknowledged alerts older than this
+      prune_interval_minutes: 60,       // how often retention.js runs (applied at restart)
+    },
   };
 
   // Fixed display titles for the content pages (keys match the `pages` section).
@@ -423,6 +434,28 @@ class PoolSettings {
         },
       };
     })(),
+    database: {
+      shares_margin_blocks: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 0 || n > 100000) throw new Error('shares_margin_blocks must be 0-100000');
+        return n;
+      },
+      hashrate_keep_days: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 1 || n > 3650) throw new Error('hashrate_keep_days must be 1-3650');
+        return n;
+      },
+      resolved_alerts_keep_days: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 1 || n > 3650) throw new Error('resolved_alerts_keep_days must be 1-3650');
+        return n;
+      },
+      prune_interval_minutes: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 5 || n > 10080) throw new Error('prune_interval_minutes must be 5-10080');
+        return n;
+      },
+    },
   };
 
   getSection(section) {

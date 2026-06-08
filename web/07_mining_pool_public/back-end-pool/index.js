@@ -26,6 +26,7 @@ const RateLimiter = require('./lib/rate-limiter');
 const IpFilter = require('./lib/ip-filter');
 const AlertMonitor = require('./lib/alert-monitor');
 const AlertDelivery = require('./lib/alert-delivery');
+const RetentionManager = require('./lib/retention');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -102,6 +103,7 @@ let alertMonitor = null;
 let alertDelivery = null;
 let poolSettings = null;
 let assetManager = null;
+let retentionManager = null;
 
 async function initializePool() {
   try {
@@ -161,6 +163,7 @@ async function initializePool() {
     console.log(`[${new Date().toISOString()}] Mining managers initialized`);
 
     stratumServer = new StratumServer(config);
+    stratumServer.setBlockManager(blockManager);
     stratumServer.start();
 
     // Wire upstream node stratum → pool stratum server.
@@ -175,6 +178,7 @@ async function initializePool() {
     blockMonitor.start();
 
     rewardDistributor = new RewardDistributor(config);
+    blockMonitor.setRewardDistributor(rewardDistributor);
     console.log(`[${new Date().toISOString()}] Reward distributor initialized (PPLNS window: 60 blocks)`);
 
     // Incentive system: prize pool, join bonus, jackpot, streaks, lottery. All no-ops unless
@@ -245,6 +249,12 @@ async function initializePool() {
     alertMonitor.start();
     console.log(`[${new Date().toISOString()}] Alert monitor started`);
 
+    // Database retention/cleanup — prunes shares (only below the PPLNS+maturity-safe
+    // floor), old hashrate history, and resolved alerts. Configurable in the admin
+    // panel → Database / Cleanup. File space is reclaimed by the weekly VACUUM cron.
+    retentionManager = new RetentionManager(config);
+    retentionManager.start();
+
     setupRoutes();
 
     app.listen(config.port, () => {
@@ -276,6 +286,69 @@ function setupRoutes() {
       });
     }
   );
+
+  // ─── Satellite ingestion (Central Hub) ─────────────────────────────────────
+  // Satellites POST accepted shares / found blocks here (see lib/share-relay.js).
+  // Auth: shared-secret header (+ optional IP allowlist). Idempotent: shares dedup
+  // by share_hash UNIQUE, blocks by hash UNIQUE. Inert unless hub_shared_secret is set.
+  const GRIN_BLOCK_REWARD = 60; // Grin block reward is a fixed 60 GRIN (no halving)
+
+  function satelliteSecretOk(provided) {
+    const expected = config.hub_shared_secret || '';
+    if (!expected) return false;
+    const a = Buffer.from(String(provided));
+    const b = Buffer.from(String(expected));
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  }
+
+  function requireSatellite(req, res, next) {
+    if (!satelliteSecretOk(req.get('x-pool-secret') || '')) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+    const allow = config.satellite_ip_allowlist || [];
+    if (Array.isArray(allow) && allow.length > 0) {
+      const ip = String(req.ip || (req.connection && req.connection.remoteAddress) || '').replace('::ffff:', '');
+      if (!allow.includes(ip)) return res.status(403).json({ error: 'ip not allowed' });
+    }
+    next();
+  }
+
+  app.post('/api/shares', requireSatellite, async (req, res) => {
+    const { region, shares } = req.body || {};
+    if (!Array.isArray(shares)) return res.status(400).json({ error: 'shares[] required' });
+    let accepted = 0, skipped = 0;
+    for (const s of shares) {
+      if (!s || !s.grin_address || !s.share_hash || !s.height) { skipped++; continue; }
+      try {
+        minerManager.ensureMinerExists(s.grin_address);
+        const r = await shareValidator.submitShare(
+          s.grin_address, s.worker_name || null, s.difficulty, s.height, s.share_hash
+        );
+        if (r.success) accepted++; else skipped++; // duplicate (UNIQUE) or invalid → skip
+      } catch (e) {
+        skipped++;
+      }
+    }
+    res.json({ success: true, region: region || null, accepted, skipped });
+  });
+
+  app.post('/api/blocks', requireSatellite, async (req, res) => {
+    const { region, block } = req.body || {};
+    if (!block || block.height === undefined || !block.hash || !block.found_by) {
+      return res.status(400).json({ error: 'block {height,hash,found_by} required' });
+    }
+    try {
+      minerManager.ensureMinerExists(block.found_by);
+      const r = await blockManager.creditBlock(
+        block.height, block.hash, block.nonce, GRIN_BLOCK_REWARD, block.found_by
+      );
+      // Duplicate hash (UNIQUE) → already recorded; treat as success/idempotent.
+      res.json({ success: true, region: region || null, block_id: r.block_id || null, duplicate: !r.success });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
 
   // ─── Public White-Label Config (rate-limited, no auth) ─────────────────────
   // Serves the curated branding/SEO/analytics payload consumed by /js/branding.js
@@ -1374,6 +1447,26 @@ function setupRoutes() {
       res.json({ success: true, section: req.params.section, data: restored });
     } catch (err) {
       res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ─── DATABASE / CLEANUP (Admin only) ──────────────────────────────
+  // Scalar retention config is handled by /api/admin/settings/database; these expose
+  // the live DB size + row counts and a manual "run cleanup now" trigger.
+  app.get('/api/admin/database/status', secureAdmin, (req, res) => {
+    try {
+      res.json({ success: true, data: retentionManager.status() });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/database/cleanup', secureAdmin, (req, res) => {
+    try {
+      const result = retentionManager.runOnce();
+      res.json({ success: true, data: result });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
   });
 

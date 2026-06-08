@@ -2351,52 +2351,37 @@ wallet_menu() {
         sw_listener_status mainnet | sed 's/^/    /'
         sw_listener_status testnet | sed 's/^/    /'
         echo ""
+        echo -e "${BOLD}  Auto-restart:${RESET} ${DIM}(@reboot + */5 listener watchdog)${RESET}"
+        echo -e "    ${BOLD}Boot autostart:${RESET}";    sw_autostart_status | sed 's/^/      /'
+        echo -e "    ${BOLD}Listener watchdog:${RESET}"; sw_watchdog_status 2>&1 | sed 's/^/      /' | head -1
+        echo ""
         echo -e "  ${GREEN}1${RESET}) Setup / Recover    ${DIM}(download + init|recover + save pass + start)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Start listener"
         echo -e "  ${RED}3${RESET}) Stop listener"
-        echo -e "  ${GREEN}4${RESET}) Auto-restart       ${DIM}(@reboot + */5 listener watchdog)${RESET}"
-        echo -e "  ${GREEN}5${RESET}) Show address"
+        echo -e "  ${GREEN}4${RESET}) Show address"
+        echo -e "  ${DIM}  ── Auto-restart ──────────────────────────${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Enable boot autostart   ${DIM}(per net)${RESET}"
+        echo -e "  ${RED}6${RESET}) Disable boot autostart  ${DIM}(per net)${RESET}"
+        echo -e "  ${GREEN}7${RESET}) Install listener watchdog ${DIM}(*/5)${RESET}"
+        echo -e "  ${RED}8${RESET}) Remove listener watchdog"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1-5/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-8/0]: ${RESET}"
         read -r choice || choice=0          # EOF (Ctrl+D) → 0 → Back
         case "$choice" in
             "") continue ;;                 # Enter → refresh
             1) net=$(_solo_pick_net "wallet setup")   && { sw_setup "$net" || true; };         _solo_pause ;;
             2) net=$(_solo_pick_net "start listener") && { sw_listener_start "$net" || true; }; _solo_pause ;;
             3) net=$(_solo_pick_net "stop listener")  && { sw_listener_stop "$net" || true; };  _solo_pause ;;
-            4) _wallet_autorestart_menu || true ;;
-            5) net=$(_solo_pick_net "show address")    && { sw_show_address "$net" || true; };   _solo_pause ;;
+            4) net=$(_solo_pick_net "show address")    && { sw_show_address "$net" || true; };   _solo_pause ;;
+            5) net=$(_solo_pick_net "boot autostart") && { sw_autostart_enable "$net" || true; };  _solo_pause ;;
+            6) net=$(_solo_pick_net "boot autostart") && { sw_autostart_disable "$net" || true; }; _solo_pause ;;
+            7) sw_watchdog_install || true; _solo_pause ;;
+            8) sw_watchdog_remove  || true; _solo_pause ;;
             0) return ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done
-}
-
-_wallet_autorestart_menu() {
-    local choice net
-    clear
-    echo -e "${BOLD}${CYAN}  Wallet listener — auto-restart${RESET}\n"
-    echo -e "${BOLD}  Boot autostart:${RESET}"; sw_autostart_status | sed 's/^/    /'
-    echo -e "${BOLD}  Listener watchdog:${RESET}"; sw_watchdog_status 2>&1 | sed 's/^/    /' | head -1
-    echo ""
-    echo -e "  ${GREEN}1${RESET}) Enable boot autostart (per net)"
-    echo -e "  ${RED}2${RESET}) Disable boot autostart (per net)"
-    echo -e "  ${GREEN}3${RESET}) Install listener watchdog (*/5)"
-    echo -e "  ${RED}4${RESET}) Remove listener watchdog"
-    echo -e "  ${RED}0${RESET}) Back"
-    echo ""
-    echo -ne "${BOLD}Select [1-4/0]: ${RESET}"
-    read -r choice || choice=0
-    case "$choice" in
-        1) net=$(_solo_pick_net "boot autostart") && { sw_autostart_enable "$net" || true; } ;;
-        2) net=$(_solo_pick_net "boot autostart") && { sw_autostart_disable "$net" || true; } ;;
-        3) sw_watchdog_install || true ;;
-        4) sw_watchdog_remove || true ;;
-        0) return ;;
-        *) warn "Invalid option." ;;
-    esac
-    _solo_pause
 }
 
 # Watchdogs (global) (network-select ▸ 5) — node-sync, node boot-autostart, wallet listener, stratum.

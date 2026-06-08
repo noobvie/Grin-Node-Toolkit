@@ -7,8 +7,8 @@
 # mining pool, on a Debian/Ubuntu/Rocky/Alma VPS. Run as root.
 #
 # IMPORTANT: A server runs EITHER solo private mining (07_grin_mining_solo.sh)
-# OR this public pool — never both. They collide on the stratum port (3416),
-# nginx rate-limit zones, and the /opt/grin layout. pool_check_exclusivity
+# OR this public pool — never both. They collide on nginx rate-limit zones and
+# the /opt/grin layout. pool_check_exclusivity
 # hard-blocks installation if a solo private setup is detected.
 #
 # Requirements:
@@ -57,7 +57,7 @@ POOL_WEB_SRC="$TOOLKIT_ROOT/web/07_mining_pool_public/public_html"
 POOL_CONF="/opt/grin/conf/grin_pool.json"
 POOL_APP_DIR="/opt/grin/pool/mainnet"
 POOL_WEB_DIR="/var/www/grin-pool"
-POOL_PORT=3002
+POOL_PORT=8080
 POOL_SERVICE="grin-pool-manager"
 POOL_NGINX_CONF="/etc/nginx/sites-available/grin-pool"
 POOL_LOG="/opt/grin/logs/grin-pool.log"
@@ -80,8 +80,8 @@ source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
 # EXCLUSIVITY GUARD — one mining type per server (public XOR solo private)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Solo private mining (07_grin_mining_solo.sh) and this public pool cannot
-# coexist: both want the stratum port 3416, both write nginx rate-limit zones,
-# and both own the /opt/grin layout. Detect solo artifacts and hard-block.
+# coexist: both write nginx rate-limit zones and both own the /opt/grin layout.
+# Detect solo artifacts and hard-block.
 pool_check_exclusivity() {
     local solo_markers=(
         "/opt/grin/conf/grin_solo_payment.json"
@@ -104,8 +104,8 @@ pool_check_exclusivity() {
         for f in "${found[@]}"; do echo -e "    ${DIM}· $f${RESET}"; done
         echo ""
         warn "Run only ONE mining type per server: solo private OR public — not both."
-        warn "They collide on the stratum port (3416), nginx rate-limit zones, and"
-        warn "the /opt/grin layout. Remove the solo private setup first (toolkit"
+        warn "They collide on nginx rate-limit zones and the /opt/grin layout."
+        warn "Remove the solo private setup first (toolkit"
         warn "Script 7 → Solo private → Maintenance/cleanup), or deploy this public"
         warn "pool on a separate VPS."
         echo ""
@@ -152,9 +152,9 @@ pool_ensure_defaults() {
         ["pool_name"]="My Grin Pool"
         ["subdomain"]=""
         ["network"]="mainnet"
-        ["stratum_port"]="3416"
+        ["stratum_port"]="3333"
         ["node_api_port"]="3413"
-        ["node_stratum_port"]="3417"
+        ["node_stratum_port"]="3334"
         ["node_stratum_host"]="127.0.0.1"
         ["pool_address"]=""
         ["pool_fee_percent"]="0"
@@ -219,6 +219,9 @@ pool_install() {
     echo -e "\n${BOLD}Installing Pool Manager (Mainnet)...${RESET}\n"
 
     pool_check_exclusivity || return 0
+    # Defense-in-depth: refuse if a Satellite already occupies this box (in case
+    # the selector guard was bypassed via a direct/non-interactive entry).
+    pool_mode_conflict_check "${POOL_MODE:-singlebox}" || return 0
 
     if [[ ! -d "$POOL_APP_SRC" ]]; then
         error "Pool app source not found: $POOL_APP_SRC"
@@ -348,7 +351,7 @@ pool_configure() {
     echo -ne "Wallet dir       [$(pool_read_conf "grin_wallet_dir" "/opt/grin/wallet/mainnet")]: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "grin_wallet_dir" "$val"
 
-    local default_nsp; default_nsp=$(pool_read_conf "node_stratum_port" "3417")
+    local default_nsp; default_nsp=$(pool_read_conf "node_stratum_port" "3334")
     echo -e "  ${DIM}(Node stratum port — set stratum_server_addr in grin-server.toml to match)${RESET}"
     echo -ne "Node stratum port [${default_nsp}]: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "node_stratum_port" "$val"
@@ -884,7 +887,7 @@ show_menu() {
     echo -ne "${BOLD}Select: ${RESET}"
 }
 
-main() {
+pool_singlebox_loop() {
     while true; do
         show_menu
         read -r choice
@@ -914,6 +917,138 @@ main() {
             read -r
         }
     done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEPLOYMENT MODE SELECTOR (multi-region split)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Three deployment directions — see docs/generated/script07_multi_region_design.md §8:
+#   singlebox — Hub + co-located Satellite on one server (original behaviour)
+#   hub       — Central Hub only (brain: API/DB/web/admin/wallet); satellites relay in
+#   satellite — Regional node + stratum proxy + share relay → points at a Hub
+# Mode may be passed as $1 (singlebox|hub|satellite) for non-interactive launches
+# (e.g. from the mining hub); otherwise it is chosen interactively.
+POOL_MODE=""
+
+# ─── Install-footprint detectors (collision guard) ──────────────────────────────
+# Single-server pool and Central Hub share the same "brain" footprint
+# ($POOL_CONF + $POOL_SERVICE); a Satellite has its own (grin_satellite.json +
+# grin-satellite). Co-locating a brain and a satellite on one box collides on
+# stratum 3333 / node upstream 3334 (and Central API 8080), so we refuse at
+# selection time and point the operator at cleanup.
+pool_brain_installed() {
+    [[ -f "$POOL_CONF" ]] && return 0
+    systemctl list-unit-files 2>/dev/null | grep -q "^${POOL_SERVICE}\.service" && return 0
+    return 1
+}
+pool_satellite_installed() {
+    [[ -f "/opt/grin/conf/grin_satellite.json" ]] && return 0
+    systemctl list-unit-files 2>/dev/null | grep -q "^grin-satellite\.service" && return 0
+    return 1
+}
+
+# Returns 0 if the chosen mode is safe to install on this box; 1 (with guidance)
+# if it would collide with an existing install of the other kind.
+pool_mode_conflict_check() {
+    case "$1" in
+        singlebox|hub)
+            pool_satellite_installed || return 0
+            echo ""
+            warn "A Satellite install was detected on this server:"
+            echo -e "    config:  /opt/grin/conf/grin_satellite.json"
+            echo -e "    service: grin-satellite"
+            echo -e "  ${DIM}Single-server / Central Hub bind the same stratum (3333) and node${RESET}"
+            echo -e "  ${DIM}upstream (3334) ports the Satellite uses — both on one box collides.${RESET}"
+            echo -e "  ${BOLD}Clean up the Satellite first${RESET} (Satellite menu → uninstall), then re-run."
+            return 1
+            ;;
+        satellite)
+            pool_brain_installed || return 0
+            echo ""
+            warn "An existing pool / Central Hub install was detected on this server:"
+            echo -e "    config:  $POOL_CONF"
+            echo -e "    service: $POOL_SERVICE"
+            echo -e "  ${DIM}A Satellite binds stratum 3333 + node upstream 3334, which this install${RESET}"
+            echo -e "  ${DIM}already uses (plus Central API 8080) — both on one box collides.${RESET}"
+            echo -e "  ${BOLD}Clean up the public pool config first${RESET} (pool menu → reset/uninstall), then re-run."
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+pool_select_mode() {
+    local arg="${1:-}"
+    case "$arg" in
+        singlebox|hub|satellite)
+            POOL_MODE="$arg"
+            pool_mode_conflict_check "$arg" || POOL_MODE=""
+            return
+            ;;
+    esac
+
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  GRINIUM — Mining Pool Deployment Mode${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        echo -e "  ${BOLD}Single-server${RESET} ${DIM}(everything on one box)${RESET}"
+        echo -e "  ${DIM}─────────────────────────────────────────────${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Single-server pool   ${DIM}(Hub + local Satellite, all-in-one)${RESET}"
+        echo ""
+        echo -e "  ${BOLD}Distributed / multi-region${RESET} ${DIM}(each role on a SEPARATE server)${RESET}"
+        echo -e "  ${CYAN}═════════════════════════════════════════════${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Central Hub          ${DIM}(the brain — one per pool)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Satellite            ${DIM}(a region — node + proxy → points at your Hub)${RESET}"
+        echo ""
+        echo -e "  ${DIM}Tip: don't install a brain (1/2) and a Satellite (3) on the same box —${RESET}"
+        echo -e "  ${DIM}they collide on ports 3333/3334/8080. Use Single-server for one machine.${RESET}"
+        echo ""
+        echo -e "  ${RED}0${RESET}) Back to mining hub"
+        echo ""
+        echo -ne "${BOLD}Select mode: ${RESET}"
+        read -r m
+
+        local chosen=""
+        case "$m" in
+            1) chosen="singlebox" ;;
+            2) chosen="hub" ;;
+            3) chosen="satellite" ;;
+            0|q|exit) POOL_MODE=""; return ;;
+            *) warn "Invalid option."; sleep 1; continue ;;
+        esac
+
+        if pool_mode_conflict_check "$chosen"; then
+            POOL_MODE="$chosen"
+            return
+        fi
+        echo ""
+        echo "Press Enter to return to the menu..."
+        read -r
+    done
+}
+
+main() {
+    pool_select_mode "${1:-}"
+    case "$POOL_MODE" in
+        singlebox)
+            pool_singlebox_loop
+            ;;
+        hub)
+            # shellcheck source=lib/07_lib_hub.sh
+            source "$SCRIPT_DIR/lib/07_lib_hub.sh"
+            pool_hub_loop
+            ;;
+        satellite)
+            # shellcheck source=lib/07_lib_satellite.sh
+            source "$SCRIPT_DIR/lib/07_lib_satellite.sh"
+            pool_satellite_loop
+            ;;
+        *)
+            info "No mode selected — returning to mining hub."
+            ;;
+    esac
 }
 
 main "$@"

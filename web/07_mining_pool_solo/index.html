@@ -123,6 +123,7 @@
   .tile { background: var(--chip-bg); border: 1px solid var(--border); border-radius: 9px; padding: .85rem .95rem; }
   .tile .label { font-size: .76rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .4rem; }
   .tile .value { font-size: 1.5rem; font-weight: bold; color: var(--text-hi); word-break: break-all; }
+  .tile .value .pct { font-size: .72rem; font-weight: 600; color: var(--muted); margin-left: .35rem; white-space: nowrap; }
   .tile .value.green { color: var(--green); } .tile .value.yellow { color: var(--yellow); }
   .tile .value.red { color: var(--red); } .tile .value.dim { color: var(--muted); font-size: 1.05rem; }
 
@@ -540,6 +541,23 @@
     var el = document.getElementById(id); if (!el) return;
     el.textContent = text; el.className = 'value' + (cls ? ' ' + cls : '');
   }
+  // Pool hashrate tile: value in G/s plus a small (%) share of network hashrate.
+  // Network hashrate (NETS[net].hrGps) and pool hashrate are both in G/s, so the
+  // ratio is direct. The (%) is hidden until both numbers are known and > 0.
+  function setPoolHr(net, poolGps) {
+    var el = document.getElementById(net + '-poolhr'); if (!el) return;
+    var on = (poolGps > 0);
+    el.className = 'value' + (on ? ' green' : ' dim');
+    el.textContent = fmtHr(poolGps);
+    var netGps = NETS[net].hrGps;
+    if (on && netGps != null && netGps > 0) {
+      var pct = poolGps / netGps * 100;
+      var span = document.createElement('span');
+      span.className = 'pct';
+      span.textContent = '(' + (pct >= 10 ? pct.toFixed(0) : pct.toFixed(pct >= 1 ? 1 : 2)) + '%)';
+      el.appendChild(span);
+    }
+  }
   function relAge(s) {
     if (s == null) return '';
     if (s < 90) return Math.max(0, Math.round(s)) + 's';
@@ -644,7 +662,7 @@
         STATE.miners[net] = miners;   // retained for the per-nickname split view
         var mc = data.miner_count || 0, oc = data.online_count || 0;
         set(net + '-miners', oc + ' / ' + mc, mc === 0 ? 'dim' : (oc === mc ? 'green' : 'yellow'));
-        set(net + '-poolhr', fmtHr(data.total_hr_gps), (data.total_hr_gps > 0) ? 'green' : 'dim');
+        setPoolHr(net, data.total_hr_gps);
         sum.innerHTML = '<b>' + oc + '</b>/' + mc + ' online · total <b>' + fmtHr(data.total_hr_gps) + '</b>';
         if (miners.length === 0) {
           tbody.innerHTML = '';

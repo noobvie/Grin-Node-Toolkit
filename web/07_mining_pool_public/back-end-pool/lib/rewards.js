@@ -50,6 +50,9 @@ class RewardDistributor {
 
       if (shares.length === 0) {
         console.warn(`No shares found for block ${block.height}`);
+        // Mark terminal so the monitor doesn't reprocess it every tick. The block
+        // matured with no attributable shares — its reward stays in the pool wallet.
+        this.db.prepare("UPDATE blocks SET status = 'paid' WHERE id = ?").run(blockId);
         return {
           block_id: blockId,
           success: false,
@@ -76,6 +79,10 @@ class RewardDistributor {
       }
 
       const distributionResult = this.creditBalances(block.height, distribution, minerReward, poolFee);
+
+      // Mark the block paid so it's distributed exactly once (the monitor only
+      // distributes status='confirmed' blocks; distributeRewards refuses any other).
+      this.db.prepare("UPDATE blocks SET status = 'paid' WHERE id = ?").run(blockId);
 
       return {
         block_id: blockId,

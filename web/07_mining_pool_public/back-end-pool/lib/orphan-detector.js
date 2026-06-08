@@ -1,10 +1,12 @@
 const { getDb } = require('./db');
+const IncentivesManager = require('./incentives');
 
 class OrphanDetector {
   constructor(config, grinNode) {
     this.config = config;
     this.grinNode = grinNode;
     this.db = getDb();
+    this.incentives = new IncentivesManager(config);
   }
 
   async verifyBlockOnChain(blockHeight, blockNonce) {
@@ -64,6 +66,7 @@ class OrphanDetector {
 
         if (verification.onChain) {
           this.confirmBlock(block.id);
+          this.incentives.payBlockFinderJackpot(block);
           results.confirmed++;
           results.details.push({
             block_id: block.id,
@@ -145,6 +148,11 @@ class OrphanDetector {
           VALUES (?, 'reversal', ?, 0, 0, 0, 0, 'block', ?)
         `);
         logStmt.run(share.grin_address, rewardAmount, blockId);
+      }
+
+      // Claw back any block-finder jackpot paid for this block (idempotent).
+      if (this.incentives) {
+        this.incentives.reverseJackpot(block.height);
       }
 
       console.log(`Reversed payouts for block ${blockId} (${shares.length} shares)`);

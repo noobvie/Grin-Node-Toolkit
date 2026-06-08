@@ -14,6 +14,8 @@ const ShareValidator = require('./lib/shares');
 const MinerManager = require('./lib/miners');
 const BlockMonitor = require('./lib/block-monitor');
 const RewardDistributor = require('./lib/rewards');
+const IncentivesManager = require('./lib/incentives');
+const LotteryManager = require('./lib/lottery');
 const WalletTor = require('./lib/wallet-tor');
 const WithdrawalScheduler = require('./lib/withdrawal-scheduler');
 const AuthManager = require('./lib/auth');
@@ -87,6 +89,8 @@ let shareValidator = null;
 let minerManager = null;
 let blockMonitor = null;
 let rewardDistributor = null;
+let incentivesManager = null;
+let lotteryManager = null;
 let walletTor = null;
 let withdrawalScheduler = null;
 let authManager = null;
@@ -172,6 +176,22 @@ async function initializePool() {
 
     rewardDistributor = new RewardDistributor(config);
     console.log(`[${new Date().toISOString()}] Reward distributor initialized (PPLNS window: 60 blocks)`);
+
+    // Incentive system: prize pool, join bonus, jackpot, streaks, lottery. All no-ops unless
+    // enabled in the admin panel. LotteryManager reuses the block monitor's node client for
+    // its verifiable draw seed.
+    incentivesManager = new IncentivesManager(config);
+    lotteryManager = new LotteryManager(config, blockMonitor.grinNode);
+    console.log(`[${new Date().toISOString()}] Incentives + lottery managers initialized`);
+
+    // Daily loyalty-streak roll-up (every 24h) and hourly lottery scheduler tick.
+    setInterval(() => {
+      try { incentivesManager.updateStreaks(); }
+      catch (e) { console.error(`[Incentives] streak update failed: ${e.message}`); }
+    }, 24 * 3600 * 1000);
+    setInterval(() => {
+      lotteryManager.runDueDraws().catch((e) => console.error(`[Lottery] scheduler tick failed: ${e.message}`));
+    }, 3600 * 1000);
 
     walletTor = new WalletTor(config);
     console.log(`[${new Date().toISOString()}] Wallet Tor integration initialized`);
@@ -276,11 +296,56 @@ function setupRoutes() {
           network: config.network || 'mainnet',
           algorithm: 'Cuckatoo32',
         };
+        // Public incentive summary (prize-pool size, next draw, recent winners). Only shown
+        // when the operator has enabled incentives. Winner addresses are truncated.
+        try {
+          if (incentivesManager && incentivesManager.enabled()) {
+            const recent = lotteryManager.recentDraws(3);
+            const trunc = (a) => (a && a.length > 14 ? `${a.slice(0, 10)}…${a.slice(-4)}` : a);
+            const incCfg = poolSettings.getSection('incentives');
+            cfg.incentives = {
+              enabled: true,
+              ...incentivesManager.publicSummary(),
+              donation_address: incCfg.donation_address || '',
+              lottery: lotteryManager.nextScheduled(),
+              recent_winners: recent.flatMap((d) =>
+                (d.winners || []).map((w) => ({
+                  event: d.event_name || 'Weekly',
+                  address: trunc(w.address || w.grin_address),
+                  amount: w.amount,
+                }))
+              ),
+            };
+          } else {
+            cfg.incentives = { enabled: false };
+          }
+        } catch (e) {
+          cfg.incentives = { enabled: false };
+        }
         // Short cache: branding changes are infrequent and the page can tolerate it.
         res.setHeader('Cache-Control', 'public, max-age=60');
         res.json({ success: true, data: cfg });
       } catch (err) {
         res.status(500).json({ error: 'Failed to load branding' });
+      }
+    }
+  );
+
+  // ─── Public Fortune Board: lottery winner history (no auth, rate-limited) ──────
+  // Transparency/audit feed — winner (truncated address) + amount + date + verifiable seed.
+  app.get('/api/public/lottery/winners',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        if (!incentivesManager || !incentivesManager.enabled()) {
+          return res.json({ success: true, data: { total: 0, winners: [] } });
+        }
+        const limit = Math.min(parseInt(req.query.limit, 10) || 25, 100);
+        const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        res.json({ success: true, data: lotteryManager.winnerHistory(limit, offset) });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to load winners' });
       }
     }
   );
@@ -326,7 +391,7 @@ function setupRoutes() {
   );
 
   // Public pages included in the sitemap (extension-less; nginx resolves $uri.html).
-  const SITEMAP_PATHS = ['/', '/pool-info', '/miners-stats', '/connect', '/system-health'];
+  const SITEMAP_PATHS = ['/', '/pool-info', '/miners-stats', '/connect', '/system-health', '/fortune-board', '/donate'];
 
   app.get('/sitemap.xml',
     rateLimiter.middleware('public'),
@@ -1307,6 +1372,64 @@ function setupRoutes() {
     try {
       const restored = poolSettings.resetSection(req.params.section, req.user.user_id);
       res.json({ success: true, section: req.params.section, data: restored });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ─── INCENTIVES ENDPOINTS (Admin only) ────────────────────────────
+  // Scalar config is handled by the generic /api/admin/settings/incentives endpoints; these
+  // cover the live prize-pool bucket and lottery draws that the generic settings can't.
+
+  app.get('/api/admin/incentives/prize-pool', secureAdmin, (req, res) => {
+    try {
+      res.json({
+        success: true,
+        balance: incentivesManager.prizePoolBalance(),
+        ledger: incentivesManager.prizePoolLedger(25),
+      });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to load prize pool' });
+    }
+  });
+
+  // Manual operator top-up of the prize bucket. Accounting only — the operator must already
+  // hold the GRIN in the pool wallet; this just records it as available for prizes.
+  app.post('/api/admin/incentives/prize-pool/topup', secureAdmin, (req, res) => {
+    try {
+      const balance = incentivesManager.manualTopup(req.body.amount);
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+        VALUES (?, 'prize_pool_topup', 'prize_pool', 'prize_pool', ?)
+      `).run(req.user.user_id, JSON.stringify({ amount: req.body.amount, balance }));
+      res.json({ success: true, balance });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/incentives/lottery/draws', secureAdmin, (req, res) => {
+    try {
+      res.json({
+        success: true,
+        draws: lotteryManager.recentDraws(20),
+        next: lotteryManager.nextScheduled(),
+      });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to load lottery draws' });
+    }
+  });
+
+  // Manually trigger a draw (testing / off-schedule special event).
+  app.post('/api/admin/incentives/lottery/draw-now', secureAdmin, async (req, res) => {
+    try {
+      const type = req.body.type === 'special' ? 'special' : 'weekly';
+      const result = await lotteryManager.runDraw(type, req.body.event_name || null, parseFloat(req.body.pot_grin) || 0);
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+        VALUES (?, 'lottery_draw_now', 'lottery', ?, ?)
+      `).run(req.user.user_id, String(result.draw_id || ''), JSON.stringify(result));
+      res.json({ success: true, result });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

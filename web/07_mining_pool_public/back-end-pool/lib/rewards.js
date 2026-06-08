@@ -1,10 +1,13 @@
 const { getDb } = require('./db');
+const IncentivesManager = require('./incentives');
 
 class RewardDistributor {
   constructor(config) {
     this.config = config;
     this.db = getDb();
     this.pplnsWindow = 60;
+    // Incentive system (prize pool, donations, streak top-ups). No-op unless enabled in admin.
+    this.incentives = new IncentivesManager(config);
   }
 
   async distributeRewards(blockId) {
@@ -172,6 +175,15 @@ class RewardDistributor {
         logStmt.run(feeAddress, poolFee, blockHeight);
       }
 
+      // Incentive rebalancing: divert fee-cut + donations into the prize pool and pay streak
+      // top-ups, all atomically. minerMap is address → gross PPLNS payout for this block.
+      if (this.incentives && this.incentives.enabled()) {
+        const incentiveTx = this.db.transaction(() => {
+          this.incentives.applyToDistribution(blockHeight, minerMap, poolFee);
+        });
+        incentiveTx();
+      }
+
       return results;
     } catch (err) {
       console.error(`Error crediting balances: ${err.message}`);
@@ -185,16 +197,20 @@ class RewardDistributor {
         "SELECT COALESCE(SUM(amount), 0) as total FROM balance_log WHERE event_type = 'credit'"
       ).get();
 
+      // Exclude reserved pseudo-addresses (pool_fee, prize_pool) from miner-facing stats.
+      const reserved = IncentivesManager.RESERVED_ADDRESSES;
+      const ph = reserved.map(() => '?').join(',');
+
       const minerCount = this.db.prepare(
-        "SELECT COUNT(*) as count FROM miner_accounts WHERE balance > 0"
-      ).get();
+        `SELECT COUNT(*) as count FROM miner_accounts WHERE balance > 0 AND grin_address NOT IN (${ph})`
+      ).get(...reserved);
 
       const topMiners = this.db.prepare(`
         SELECT grin_address, balance FROM miner_accounts
-        WHERE balance > 0
+        WHERE balance > 0 AND grin_address NOT IN (${ph})
         ORDER BY balance DESC
         LIMIT 10
-      `).all();
+      `).all(...reserved);
 
       return {
         total_credited: totalPaid.total,

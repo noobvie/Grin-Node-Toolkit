@@ -133,6 +133,42 @@ class PoolSettings {
       faq: '',
       impressum: '',
     },
+    // Incentive features (prize pool, join bonus, jackpot, streaks, lottery).
+    // All funded from a single prize_pool pseudo-address bucket; see lib/incentives.js.
+    incentives: {
+      incentives_enabled: 'false',           // master switch
+      // Funding
+      prize_fee_cut_percent: 0,              // % OF the collected pool fee diverted to prize_pool (0-100)
+      allow_miner_donations: 'true',         // miners opt in via a `donateN` worker-name tag
+      // Published pool Slatepack address for community donations (shown on the fortune board).
+      // External donations land in the wallet; the operator reflects them via a manual top-up.
+      donation_address: '',
+      // Join bonus — paid once per address, only after its first successful withdrawal
+      join_bonus_enabled: 'false',
+      join_bonus_amount: 0.1,                // GRIN
+      // Block-finder jackpot — flat bonus to block.found_by; credited at maturity, reversed on orphan
+      jackpot_enabled: 'false',
+      jackpot_amount: 0.0,                   // GRIN per found block
+      // Loyalty streak multiplier — top-up funded from prize_pool, never dilutes other miners
+      streak_enabled: 'false',
+      streak_bonus_per_week_percent: 1.0,    // +% per consecutive 7-day streak
+      streak_max_percent: 5.0,               // cap
+      // Lottery
+      lottery_enabled: 'false',
+      lottery_weekly_enabled: 'true',
+      lottery_pot_share_weighted_percent: 50,  // Pot A: tickets ∝ valid shares
+      lottery_pot_equal_chance_percent: 50,    // Pot B: one entry per qualifying address
+      lottery_min_shares: 10,                  // min valid shares in the period to qualify
+      lottery_pot_fraction_percent: 100,       // % of prize_pool paid out per draw
+      // special events: JSON array of {name, date:"MM-DD", pot_grin, enabled}
+      lottery_special_events: JSON.stringify([
+        { name: 'Christmas', date: '12-25', pot_grin: 0, enabled: false },
+        { name: 'New Year', date: '01-01', pot_grin: 0, enabled: false },
+        { name: 'Grin Genesis Day', date: '01-15', pot_grin: 0, enabled: false },
+      ]),
+      // Grin Transporter (payout rail #3, Script 056) — reserved, forced off until it ships
+      transporter_enabled: 'false',
+    },
     // Site-wide maintenance mode + announcement banners.
     notices: {
       maintenance_mode: 'false',
@@ -329,6 +365,64 @@ class PoolSettings {
         return n;
       },
     },
+    incentives: (() => {
+      const percent = (name) => (val) => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0 || n > 100) throw new Error(`${name} must be 0-100`);
+        return n;
+      };
+      const nonNeg = (name) => (val) => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0) throw new Error(`${name} must be >= 0`);
+        return n;
+      };
+      const intRange = (name, lo, hi) => (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < lo || n > hi) throw new Error(`${name} must be ${lo}-${hi}`);
+        return n;
+      };
+      return {
+        prize_fee_cut_percent: percent('prize_fee_cut_percent'),
+        donation_address: (val) => {
+          if (!val) return '';
+          const v = String(val).trim();
+          if (!/^t?grin1[ac-hj-np-z02-9]{40,}$/.test(v)) {
+            throw new Error('donation_address must be a grin/tgrin Slatepack address');
+          }
+          return v;
+        },
+        join_bonus_amount: nonNeg('join_bonus_amount'),
+        jackpot_amount: nonNeg('jackpot_amount'),
+        streak_bonus_per_week_percent: percent('streak_bonus_per_week_percent'),
+        streak_max_percent: percent('streak_max_percent'),
+        lottery_pot_share_weighted_percent: percent('lottery_pot_share_weighted_percent'),
+        lottery_pot_equal_chance_percent: percent('lottery_pot_equal_chance_percent'),
+        lottery_pot_fraction_percent: percent('lottery_pot_fraction_percent'),
+        lottery_min_shares: intRange('lottery_min_shares', 0, 1000000),
+        lottery_special_events: (val) => {
+          let arr = val;
+          if (typeof arr === 'string') {
+            if (arr.trim() === '') return '[]';
+            try { arr = JSON.parse(arr); } catch (err) { throw new Error('lottery_special_events must be valid JSON'); }
+          }
+          if (!Array.isArray(arr)) throw new Error('lottery_special_events must be a JSON array');
+          const cleaned = arr.map((e) => {
+            e = e || {};
+            if (!/^\d{2}-\d{2}$/.test(String(e.date || ''))) {
+              throw new Error('each special event needs a date in MM-DD format');
+            }
+            const pot = parseFloat(e.pot_grin);
+            return {
+              name: String(e.name || 'Event').slice(0, 60),
+              date: e.date,
+              pot_grin: isNaN(pot) || pot < 0 ? 0 : pot,
+              enabled: !(e.enabled === false || e.enabled === 'false'),
+            };
+          });
+          return JSON.stringify(cleaned);
+        },
+      };
+    })(),
   };
 
   getSection(section) {

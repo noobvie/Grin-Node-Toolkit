@@ -462,8 +462,45 @@
 
     try { applySeo(cfg); } catch (e) {}
     try { applyContent(cfg); } catch (e) {}
+    try { applyIncentives(cfg.incentives || {}); } catch (e) {}
     try { renderBanners(cfg.announcements || []); } catch (e) {}
     try { applyAnalytics(cfg); } catch (e) {}
+  }
+
+  // ── Incentives: prize pool + recent fortune-board winners ───────────────────
+  // Lightweight hooks so any public page can surface incentive info without its own
+  // fetch. The full paginated fortune board (fortune-board.html) calls the dedicated
+  // /api/public/lottery/winners endpoint instead.
+  function applyIncentives(inc) {
+    // Prize-pool size hook.
+    document.querySelectorAll('[data-brand="prize-pool"]').forEach(function (el) {
+      if (inc.enabled && typeof inc.prize_pool_grin === 'number') {
+        el.textContent = inc.prize_pool_grin.toFixed(4) + ' GRIN';
+      }
+    });
+
+    // Public donation address hook (community donations via Slatepack).
+    document.querySelectorAll('[data-brand="donation-address"]').forEach(function (el) {
+      if (inc.enabled && inc.donation_address) {
+        el.textContent = inc.donation_address;
+        var wrap = el.closest('[data-brand-show="donation"]');
+        if (wrap) wrap.style.display = '';
+      }
+    });
+
+    // Compact recent-winners list (e.g. a homepage "🎉 Latest winners" widget).
+    var winners = inc.recent_winners || [];
+    document.querySelectorAll('[data-brand="fortune-board"]').forEach(function (container) {
+      if (!inc.enabled || !winners.length) return;
+      container.innerHTML = '';
+      winners.forEach(function (w) {
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;justify-content:space-between;gap:1rem;padding:.3rem 0;';
+        row.innerHTML = '<span>🎉 ' + escapeText(w.event) + ' — ' + escapeText(w.address) + '</span>' +
+          '<strong>' + escapeText((w.amount || 0).toFixed ? w.amount.toFixed(4) : w.amount) + ' GRIN</strong>';
+        container.appendChild(row);
+      });
+    });
   }
 
   // ── Maintenance overlay ────────────────────────────────────────────────────

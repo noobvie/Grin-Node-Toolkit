@@ -178,6 +178,78 @@ This replaced a hardcoded `/opt/grin/mining-pool-<net>/custom_assets` path that 
 match the app's actual working directory, so uploaded logos/icons/OG image (and the PWA
 manifest icons) now load. `img-src 'self'` in the CSP already permits them.
 
+## Incentive features (prize pool, bonuses, lottery)
+
+Fun, balanced incentives to attract and retain **small** miners without letting raw hashrate
+always win. All configured from the admin **Incentives** tab; all off until the master switch
+(`incentives_enabled`) is on. Register-free is preserved — the grin_address is the identity.
+
+### Prize pool = reserved pseudo-address
+A single bucket funds every prize: the reserved `prize_pool` row in `miner_accounts` (mirrors
+the existing `pool_fee` pseudo-row). Funding credits it; prizes debit it; all movements go
+through `balance_log` for audit. `IncentivesManager.RESERVED_ADDRESSES = ['pool_fee','prize_pool']`
+is filtered out of every miner-facing surface (leaderboards, `rewardStats`, lottery eligibility).
+Prize debits never overdraw the bucket (`debitPrizePool` returns false if insufficient).
+
+**Funding (3 sources):**
+1. **Fee cut** — `prize_fee_cut_percent` of the collected pool fee is diverted from `pool_fee`
+   → `prize_pool` during reward distribution (net-zero move, [rewards.js](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js) `creditBalances`).
+2. **Miner donations** — a miner names a worker `donate10` (or `rig01-donate10`) to donate N%
+   of their payout. Parsed in [stratum-protocol.js](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js) `validateUsername`; **only N in 0–100
+   donates** (`donate0` opts out). Out-of-range/mistyped tokens (`donate101`, `donate-1`,
+   `donatexx`, bare `donate`) are kept as a literal worker name and donate nothing — a typo can
+   never cause an accidental donation. Stored in `miner_incentives.donation_percent`.
+3. **Manual top-ups + public donation address** — operator credits the bucket via
+   `POST /api/admin/incentives/prize-pool/topup` (accounting only). A published Slatepack
+   `donation_address` lets anyone donate; received funds are reflected via a manual top-up.
+
+The public **`donate.html`** page explains both channels (the `donateN` worker tag with an
+examples table, and the Slatepack address with copy button) and shows the live prize-pool size;
+**`fortune-board.html`** shows the winner history. Both link to each other and are in the sitemap.
+
+### The four features
+- **Join bonus** — one-time `join_bonus_amount`, paid only after an address's **first confirmed
+  withdrawal** (anti-Sybil gate; spammers never reach a real payout). Idempotent via
+  `miner_incentives.join_bonus_paid`; triggered from `withdrawal-scheduler.js markConfirmed`.
+- **Block-finder jackpot** — flat `jackpot_amount` to `block.found_by`, credited at block
+  **maturity** ([block-monitor.js](../../web/07_mining_pool_public/back-end-pool/lib/block-monitor.js)/`orphan-detector.js` confirm path, idempotent per height),
+  and **clawed back on orphan** via `orphan-detector.js reverseBlockPayouts → reverseJackpot`.
+  Sybil-proof: a small miner who solves a block gets the full flat jackpot.
+- **Loyalty streak** — capped multiplier (`streak_bonus_per_week_percent`/week, max
+  `streak_max_percent`) for consecutive mining days; daily `updateStreaks()` job; top-up funded
+  from `prize_pool` so it never dilutes other miners' base PPLNS. Stale streak (no shares
+  today/yesterday) → 0.
+- **Lottery** — weekly + special-occasion (`lottery_special_events`: Christmas 12-25, New Year
+  01-01, Grin Genesis 01-15, …). Two pots: **A = share-weighted** (tickets ∝ valid shares,
+  favours contribution, Sybil-resistant) and **B = equal-chance** (one entry per qualifying
+  address ≥ `lottery_min_shares`, favours small miners). **Verifiable**: the winner is picked
+  deterministically from the node tip block hash (`seed_hash`) captured at draw time —
+  `LotteryManager.seededMod`/`pickWeighted` — so anyone can recompute the result. Scheduler:
+  hourly `runDueDraws()`; manual `POST /api/admin/incentives/lottery/draw-now`.
+
+### Schema (db.js)
+`miner_incentives` (per-address: join_bonus_paid, donation_percent, streak_days, last_active_day),
+`lottery_draws` (period, seed_height/seed_hash, pot amounts, status), `lottery_winners`
+(draw_id, address, pot a/b, ticket_count, amount). Balance-log `reference_type` markers:
+`fee_cut`, `donation`, `streak`, `join_bonus`, `jackpot`, `jackpot_reversal`, `lottery`, `topup`.
+
+### Fortune board (public transparency)
+`fortune-board.html` lists full winner history (winner + amount + date + draw seed) via
+`GET /api/public/lottery/winners` (paginated, truncated addresses, seed shown for audit).
+Themed via shared `--t-*` variables. Prize-pool size + donation address surface through
+`branding.js` `[data-brand]` hooks (`prize-pool`, `fortune-board`, `donation-address`).
+
+### Known trade-off (register-free)
+Pot B (equal-chance) and per-address bonuses are partly Sybil-farmable without accounts — a
+whale can split into many addresses. Accepted: share-weighting + a min-shares bar raise the
+cost, and the Sybil-*proof* features (jackpot, streak, fee-cut funding) carry the fairness load.
+Optional free accounts for true one-person-one-entry is a deferred phase-2 item.
+
+### Grin Transporter (payout rail #3 — placeholder)
+`transporter_enabled` is reserved and forced off (read-only admin card); `lib/wallet-transporter.js`
+is a throwing stub. See [script056_design.md](script056_design.md) — shipping is gated on whether
+miners' existing wallets can receive on a relay.
+
 ## Follow-ups (not implemented)
 
 - i18n / multi-language content and fiat (USD/EUR/BTC) price display.

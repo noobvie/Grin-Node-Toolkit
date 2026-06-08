@@ -22,6 +22,7 @@ const {
 } = require('./stratum-protocol');
 const ShareValidator = require('./shares');
 const MinerManager = require('./miners');
+const IncentivesManager = require('./incentives');
 
 // How many old job IDs remain valid for submit (avoids instant stale on slow networks)
 const JOB_WINDOW = 10;
@@ -33,6 +34,7 @@ class StratumServer {
     this.server = null;
     this.shareValidator = new ShareValidator(config);
     this.minerManager = new MinerManager(config);
+    this.incentives = new IncentivesManager(config);
     // Map<socket, sessionId|null> — authoritative socket registry for broadcasting
     this.sockets = new Map();
     // Current job pushed by NodeStratumClient via setNewJob()
@@ -189,6 +191,17 @@ class StratumServer {
     }
 
     this.minerManager.ensureMinerExists(parsed.grin_address);
+
+    // Optional `donateN` worker tag → record the miner's voluntary donation %.
+    // No-op unless donations are enabled in the admin panel.
+    if (parsed.donation_percent !== null && parsed.donation_percent !== undefined) {
+      try {
+        this.incentives.setDonation(parsed.grin_address, parsed.donation_percent);
+      } catch (e) {
+        console.error(`Error setting donation for ${parsed.grin_address}: ${e.message}`);
+      }
+    }
+
     const sessionId = this.minerManager.createSession(parsed.grin_address, parsed.worker_name, ip);
     setSession(sessionId);
 

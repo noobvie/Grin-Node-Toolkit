@@ -492,11 +492,16 @@ server {
     location = /manifest.json { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
 
     # Operator-uploaded white-label assets (served from assets_dir in pool.json).
+    # Uploads are magic-byte validated and given server-controlled names, but we still
+    # harden the serving side: nosniff stops a mislabelled file being reinterpreted, and
+    # the sandbox CSP neutralises any script inside an SVG opened directly. Correct image
+    # MIME types are kept (via the default mime.types) so logos/icons still render.
     location /custom/ {
         alias $POOL_APP_DIR/custom_assets/;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; sandbox" always;
+        add_header Cache-Control "public, max-age=604800" always;
         try_files \$uri =404;
-        expires 7d;
-        add_header Cache-Control "public";
     }
 
     location / {

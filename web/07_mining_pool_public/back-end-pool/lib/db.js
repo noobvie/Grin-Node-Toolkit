@@ -230,7 +230,52 @@ function createSchema() {
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_pool_assets_type ON pool_assets(asset_type, is_active)`,
-    `CREATE INDEX IF NOT EXISTS idx_pool_assets_uploaded ON pool_assets(uploaded_at DESC)`
+    `CREATE INDEX IF NOT EXISTS idx_pool_assets_uploaded ON pool_assets(uploaded_at DESC)`,
+
+    // ─── Incentives (Script 07 incentive features) ────────────────────────────
+    // Per-address incentive state. Identity-ready (address-keyed) but register-free —
+    // there is no account, the grin_address IS the identity.
+    `CREATE TABLE IF NOT EXISTS miner_incentives (
+      grin_address TEXT PRIMARY KEY REFERENCES miner_accounts(grin_address),
+      join_bonus_paid INTEGER NOT NULL DEFAULT 0,
+      donation_percent REAL NOT NULL DEFAULT 0,
+      streak_days INTEGER NOT NULL DEFAULT 0,
+      last_active_day INTEGER DEFAULT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    // One row per lottery draw. seed_height/seed_hash make the draw publicly verifiable:
+    // anyone can recompute the winners from the node block hash + public share data.
+    `CREATE TABLE IF NOT EXISTS lottery_draws (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      draw_type TEXT NOT NULL,
+      event_name TEXT DEFAULT NULL,
+      period_start INTEGER NOT NULL,
+      period_end INTEGER NOT NULL,
+      seed_height INTEGER DEFAULT NULL,
+      seed_hash TEXT DEFAULT NULL,
+      pot_a_amount REAL NOT NULL DEFAULT 0,
+      pot_b_amount REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      drawn_at INTEGER DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_lottery_draws_time ON lottery_draws(created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_lottery_draws_status ON lottery_draws(status)`,
+
+    `CREATE TABLE IF NOT EXISTS lottery_winners (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      draw_id INTEGER NOT NULL REFERENCES lottery_draws(id),
+      grin_address TEXT NOT NULL,
+      pot TEXT NOT NULL,
+      ticket_count INTEGER NOT NULL DEFAULT 0,
+      amount REAL NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_lottery_winners_draw ON lottery_winners(draw_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_lottery_winners_address ON lottery_winners(grin_address, created_at DESC)`
   ];
 
   const transaction = db.transaction(() => {

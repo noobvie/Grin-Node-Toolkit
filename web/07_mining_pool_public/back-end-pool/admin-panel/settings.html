@@ -369,6 +369,7 @@
       <button class="tab-btn" data-tab="pages">Pages</button>
       <button class="tab-btn" data-tab="announcements">Announcements</button>
       <button class="tab-btn" data-tab="payout">Payout</button>
+      <button class="tab-btn" data-tab="incentives">Incentives</button>
       <button class="tab-btn" data-tab="access">Access Control</button>
       <button class="tab-btn" data-tab="alerts">Alerts</button>
     </div>
@@ -1094,6 +1095,168 @@
       </div>
     </div>
 
+    <!-- INCENTIVES TAB -->
+    <div id="incentives" class="settings-content">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Incentives</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="incentives_enabled" name="incentives_enabled">
+            <label for="incentives_enabled">Enable incentive features (master switch)</label>
+          </div>
+          <div class="helper-text">All features below are off unless this is on. Prizes pay out of the prize pool — fund it before enabling payouts.</div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Prize Pool Funding</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="prize_fee_cut_percent">Fee cut into prize pool (%)</label>
+              <input type="number" id="prize_fee_cut_percent" name="prize_fee_cut_percent" min="0" max="100" step="1" value="0">
+              <div class="helper-text">% of the collected pool fee diverted to the prize pool.</div>
+            </div>
+            <div class="checkbox-group" style="align-self:end;padding-bottom:.75rem;">
+              <input type="checkbox" id="allow_miner_donations" name="allow_miner_donations">
+              <label for="allow_miner_donations">Allow miner donations (<code>donateN</code> worker tag)</label>
+            </div>
+          </div>
+          <div class="helper-text">
+            Miners donate N% of their payout by naming a worker <code>donate10</code> (10%) or
+            <code>rig01-donate10</code>. N is clamped 0–100; <code>donate0</code> opts out.
+          </div>
+          <div class="form-group">
+            <label for="donation_address">Public donation address (Slatepack)</label>
+            <input type="text" id="donation_address" name="donation_address" placeholder="grin1… (your pool donation receiving address)">
+            <div class="helper-text">Shown on the fortune board so anyone can donate. Reflect received donations into the prize pool with a manual top-up above.</div>
+          </div>
+          <div class="form-section" style="background:rgba(0,0,0,.03);">
+            <div class="helper-text">
+              <strong>Prize pool balance:</strong> <span id="prize-pool-balance">…</span> GRIN
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="prize-topup-amount">Manual top-up (GRIN)</label>
+                <input type="number" id="prize-topup-amount" class="settings-skip" min="0" step="0.01" placeholder="0.00">
+                <div class="helper-text">Accounting only — the GRIN must already be in the pool wallet.</div>
+              </div>
+              <div class="form-group" style="align-self:end;padding-bottom:.75rem;">
+                <button type="button" class="btn btn-secondary" onclick="topUpPrizePool()">Add to prize pool</button>
+              </div>
+            </div>
+            <div class="helper-text" id="prize-pool-ledger"></div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Join Bonus</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="join_bonus_enabled" name="join_bonus_enabled">
+            <label for="join_bonus_enabled">Pay a one-time join bonus</label>
+          </div>
+          <div class="form-group">
+            <label for="join_bonus_amount">Join bonus amount (GRIN)</label>
+            <input type="number" id="join_bonus_amount" name="join_bonus_amount" min="0" step="0.01" value="0.1">
+            <div class="helper-text">Paid once per address, only after its first successful withdrawal (anti-Sybil gate).</div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Block-Finder Jackpot</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="jackpot_enabled" name="jackpot_enabled">
+            <label for="jackpot_enabled">Pay a flat jackpot to the miner who solves a block</label>
+          </div>
+          <div class="form-group">
+            <label for="jackpot_amount">Jackpot amount (GRIN)</label>
+            <input type="number" id="jackpot_amount" name="jackpot_amount" min="0" step="0.01" value="0">
+            <div class="helper-text">Credited when the block matures; clawed back automatically if the block is orphaned.</div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Loyalty Streak Multiplier</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="streak_enabled" name="streak_enabled">
+            <label for="streak_enabled">Reward consecutive mining days</label>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="streak_bonus_per_week_percent">Bonus per 7-day streak (%)</label>
+              <input type="number" id="streak_bonus_per_week_percent" name="streak_bonus_per_week_percent" min="0" max="100" step="0.5" value="1">
+            </div>
+            <div class="form-group">
+              <label for="streak_max_percent">Maximum bonus (%)</label>
+              <input type="number" id="streak_max_percent" name="streak_max_percent" min="0" max="100" step="0.5" value="5">
+            </div>
+          </div>
+          <div class="helper-text">Top-up funded from the prize pool — never reduces other miners' base PPLNS payout.</div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Lottery</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="lottery_enabled" name="lottery_enabled">
+            <label for="lottery_enabled">Enable lottery draws</label>
+          </div>
+          <div class="checkbox-group">
+            <input type="checkbox" id="lottery_weekly_enabled" name="lottery_weekly_enabled">
+            <label for="lottery_weekly_enabled">Run a weekly draw</label>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="lottery_pot_share_weighted_percent">Pot A — share-weighted (%)</label>
+              <input type="number" id="lottery_pot_share_weighted_percent" name="lottery_pot_share_weighted_percent" min="0" max="100" step="1" value="50">
+              <div class="helper-text">Tickets ∝ valid shares (favours contribution).</div>
+            </div>
+            <div class="form-group">
+              <label for="lottery_pot_equal_chance_percent">Pot B — equal chance (%)</label>
+              <input type="number" id="lottery_pot_equal_chance_percent" name="lottery_pot_equal_chance_percent" min="0" max="100" step="1" value="50">
+              <div class="helper-text">One entry per qualifying address (favours small miners).</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="lottery_min_shares">Minimum shares to qualify</label>
+              <input type="number" id="lottery_min_shares" name="lottery_min_shares" min="0" step="1" value="10">
+            </div>
+            <div class="form-group">
+              <label for="lottery_pot_fraction_percent">Prize pool paid out per draw (%)</label>
+              <input type="number" id="lottery_pot_fraction_percent" name="lottery_pot_fraction_percent" min="0" max="100" step="1" value="100">
+            </div>
+          </div>
+
+          <h4 style="margin-top:1rem;">Special-occasion draws</h4>
+          <div class="helper-text">Extra draws on fixed dates (e.g. Christmas, New Year, Grin Genesis Day = 01-15). Date is MM-DD, UTC.</div>
+          <input type="hidden" id="lottery_special_events" name="lottery_special_events">
+          <div id="events-list"></div>
+          <button type="button" class="btn btn-secondary" style="margin-top:1rem;" onclick="addEvent()">+ Add Event</button>
+
+          <div style="margin-top:1rem;">
+            <button type="button" class="btn btn-secondary" onclick="drawLotteryNow('weekly')">Run weekly draw now (test)</button>
+            <div class="helper-text" id="lottery-draws"></div>
+          </div>
+        </div>
+
+        <div class="form-section" style="opacity:.6;">
+          <h3 class="section-title">Grin Transporter — payout rail #3 <span style="font-weight:normal;">(coming soon)</span></h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="transporter_enabled" name="transporter_enabled" disabled>
+            <label for="transporter_enabled">Enable Grin Transporter payouts</label>
+          </div>
+          <div class="helper-text">
+            Reserved for the self-hosted store-and-forward slate relay (Script 056) — async payouts for
+            miners who aren't online when we pay. Disabled until it ships. The pool stays register-free:
+            your Grin address remains your identity across every payout rail.
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('incentives')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('incentives')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ACCESS CONTROL TAB -->
     <div id="access" class="settings-content">
       <div class="settings-form">
@@ -1265,6 +1428,7 @@
       if (section === 'branding') { collectThemeBuilder(); collectEnabledThemes(); }
       if (section === 'seo') collectPageSeo();
       if (section === 'notices') collectBanners();
+      if (section === 'incentives') collectIncentiveEvents();
 
       form.querySelectorAll('input, select, textarea').forEach(el => {
         if (!el.id) return;
@@ -1692,6 +1856,123 @@
       if (hidden) hidden.value = JSON.stringify(arr);
     }
 
+    // ─── Lottery special-event editor ──────────────────────────────────────
+    function eventAttr(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;'); }
+
+    function renderEventRow(ev) {
+      ev = ev || {};
+      const list = document.getElementById('events-list');
+      const row = document.createElement('div');
+      row.className = 'form-section event-row';
+      row.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;gap:1rem;">
+          <div class="checkbox-group">
+            <input type="checkbox" class="event-enabled settings-skip"${(ev.enabled === false || ev.enabled === 'false') ? '' : ' checked'}>
+            <label>Enabled</label>
+          </div>
+          <button type="button" class="btn btn-danger" style="min-width:auto;padding:.4rem .9rem;" onclick="this.closest('.event-row').remove()">Remove</button>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Event name</label>
+            <input type="text" class="event-name settings-skip" value="${eventAttr(ev.name)}" placeholder="Christmas">
+          </div>
+          <div class="form-group">
+            <label>Date (MM-DD, UTC)</label>
+            <input type="text" class="event-date settings-skip" value="${eventAttr(ev.date)}" placeholder="12-25" maxlength="5">
+          </div>
+          <div class="form-group">
+            <label>Fixed pot (GRIN, 0 = use pool %)</label>
+            <input type="number" class="event-pot settings-skip" min="0" step="0.01" value="${eventAttr(ev.pot_grin || 0)}">
+          </div>
+        </div>`;
+      list.appendChild(row);
+    }
+
+    function addEvent() { renderEventRow({}); }
+
+    function populateEvents(events) {
+      const list = document.getElementById('events-list');
+      if (list) list.innerHTML = '';
+      let arr = events;
+      if (typeof arr === 'string') { try { arr = JSON.parse(arr); } catch (e) { arr = []; } }
+      if (!Array.isArray(arr)) arr = [];
+      arr.forEach(renderEventRow);
+    }
+
+    function collectIncentiveEvents() {
+      const arr = [];
+      document.querySelectorAll('#events-list .event-row').forEach(row => {
+        const date = row.querySelector('.event-date').value.trim();
+        if (!/^\d{2}-\d{2}$/.test(date)) return; // skip invalid dates
+        arr.push({
+          name: row.querySelector('.event-name').value.trim() || 'Event',
+          date,
+          pot_grin: parseFloat(row.querySelector('.event-pot').value) || 0,
+          enabled: row.querySelector('.event-enabled').checked,
+        });
+      });
+      const hidden = document.getElementById('lottery_special_events');
+      if (hidden) hidden.value = JSON.stringify(arr);
+    }
+
+    // ─── Prize pool + lottery dynamic data ──────────────────────────────────
+    async function loadIncentiveData() {
+      try {
+        const r = await fetch('/api/admin/incentives/prize-pool', { credentials: 'include' });
+        if (r.ok) {
+          const d = await r.json();
+          const bal = document.getElementById('prize-pool-balance');
+          if (bal) bal.textContent = (d.balance || 0).toFixed(4);
+          const led = document.getElementById('prize-pool-ledger');
+          if (led) led.innerHTML = (d.ledger || []).slice(0, 8).map(e =>
+            `${new Date(e.created_at * 1000).toLocaleString()} — ${e.event_type} ${(e.amount).toFixed(4)} (${e.reference_type})`
+          ).join('<br>');
+        }
+      } catch (e) { /* non-fatal */ }
+      try {
+        const r = await fetch('/api/admin/incentives/lottery/draws', { credentials: 'include' });
+        if (r.ok) {
+          const d = await r.json();
+          const el = document.getElementById('lottery-draws');
+          if (el) el.innerHTML = (d.draws || []).slice(0, 5).map(dr =>
+            `#${dr.id} ${dr.event_name || 'weekly'} — ${dr.status} — ${(dr.winners || []).map(w => `${w.grin_address.slice(0, 12)}… ${w.amount.toFixed(4)}`).join(', ') || 'no winners'}`
+          ).join('<br>');
+        }
+      } catch (e) { /* non-fatal */ }
+    }
+
+    async function topUpPrizePool() {
+      const amount = parseFloat(document.getElementById('prize-topup-amount').value);
+      if (!(amount > 0)) { showToast('Enter a top-up amount', 'error'); return; }
+      try {
+        const r = await fetch('/api/admin/incentives/prize-pool/topup', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount })
+        });
+        if (!r.ok) throw new Error((await r.json()).error || 'Top-up failed');
+        showToast('Prize pool topped up', 'success');
+        document.getElementById('prize-topup-amount').value = '';
+        loadIncentiveData();
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
+    async function drawLotteryNow(type) {
+      if (!confirm('Run a lottery draw now? This pays real prize-pool GRIN to winners.')) return;
+      try {
+        const r = await fetch('/api/admin/incentives/lottery/draw-now', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Draw failed');
+        showToast('Draw complete: ' + (d.result.winners || []).length + ' winner(s)', 'success');
+        loadIncentiveData();
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
     // ─── Analytics provider field toggling ─────────────────────────────────
     function updateProviderFields() {
       const provider = document.getElementById('provider');
@@ -1709,7 +1990,9 @@
       }
       if (settings.seo) populatePageSeo(settings.seo.page_seo);
       if (settings.notices) populateBanners(settings.notices.banners);
+      if (settings.incentives) populateEvents(settings.incentives.lottery_special_events);
       updateProviderFields();
+      loadIncentiveData();
     }
 
     // Wire up dynamic listeners once the DOM is ready.

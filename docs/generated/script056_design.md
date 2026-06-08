@@ -509,3 +509,24 @@ Smallest real-world validation first (Phase 1 testnet round trip with offline pa
 then integrate. Do **not** fork grinbox/MWC MQS Rust — re-implement only the one good idea
 (the addressed offline queue) on the toolkit's existing Node + SQLite + Tor + grin-wallet
 stack, taking the Slatepack crypto from grin-wallet rather than the legacy secp256k1 scheme.
+
+---
+
+## 13. Open item — pool integration as payout rail #3 (gating question)
+
+Script 07 (mining pool) reserves Grin Transporter as **payout rail #3** — the async,
+store-and-forward option for miners who aren't online when the pool pays. A disabled,
+read-only placeholder ships in the pool now:
+- config key `incentives.transporter_enabled` (forced `false`),
+- `web/07_mining_pool_public/back-end-pool/lib/wallet-transporter.js` — a throwing stub whose
+  interface mirrors `WalletTor` (`isAvailable` / `probeReachable` / `send`) so it can slot in
+  beside the Tor and manual-slatepack rails when ready.
+
+**The make-or-break question to resolve before building the pool integration:** does the
+wallet a miner *already runs* support receiving on a relay? Standard `grin-wallet` speaks
+**Tor + HTTP listener + manual slatepack file** — to our knowledge it has **no built-in
+relay/MQS client** (that was an MWC addition; Grin upstream never adopted it). If receiving
+via Transporter requires miners to run non-standard tooling, adoption will be ~zero no matter
+how good the relay is. **Confirm receive-support across grin-wallet / Grim / GrinPlusPlus /
+Ironbelly first.** Until then the pool relies on Tor (rail #1) + a manual slatepack claim
+(rail #2), and the Transporter toggle stays disabled.

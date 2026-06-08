@@ -87,6 +87,8 @@ class BlockMonitor {
 
           if (verification.onChain) {
             this.orphanDetector.confirmBlock(block.id);
+            // Block-finder jackpot is paid at maturity (idempotent per block height).
+            this.orphanDetector.incentives.payBlockFinderJackpot(block);
             console.log(
               `[${new Date().toISOString()}] Block confirmed: height=${block.height}, confirmations=${confirmationCount}`
             );

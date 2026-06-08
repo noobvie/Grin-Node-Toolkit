@@ -1,11 +1,13 @@
 const { getDb } = require('./db');
 const WalletTor = require('./wallet-tor');
+const IncentivesManager = require('./incentives');
 
 class WithdrawalScheduler {
   constructor(config) {
     this.config = config;
     this.db = getDb();
     this.walletTor = new WalletTor(config);
+    this.incentives = new IncentivesManager(config);
     this.isRunning = false;
     this.checkInterval = 60000;
     this.retryDelays = config.withdrawal_retry_delays || [
@@ -256,6 +258,14 @@ class WithdrawalScheduler {
       console.log(
         `[${new Date().toISOString()}] Withdrawal ${withdrawalId} confirmed (${withdrawal.amount} GRIN to ${withdrawal.grin_address})`
       );
+
+      // First successful withdrawal qualifies the address for the one-time join bonus
+      // (anti-Sybil gate: spammers never reach a real payout). No-op unless enabled / funded.
+      try {
+        this.incentives.maybePayJoinBonus(withdrawal.grin_address);
+      } catch (e) {
+        console.error(`Error paying join bonus for ${withdrawal.grin_address}: ${e.message}`);
+      }
     } catch (err) {
       console.error(`Error marking withdrawal as confirmed: ${err.message}`);
     }

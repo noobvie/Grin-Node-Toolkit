@@ -3,6 +3,37 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 
+// Canonical, server-controlled extension/MIME per detected content type. The uploader's
+// declared MIME and original filename are NEVER trusted for what we write to disk — the
+// extension drives nginx's served Content-Type, so it must be derived from the actual bytes.
+const SNIFFERS = [
+  { ext: 'png', mime: 'image/png', test: (b) => b.length > 7 &&
+      b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 &&
+      b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a },
+  { ext: 'jpg', mime: 'image/jpeg', test: (b) => b.length > 2 &&
+      b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  { ext: 'gif', mime: 'image/gif', test: (b) => b.length > 5 &&
+      b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38 &&
+      (b[4] === 0x37 || b[4] === 0x39) && b[5] === 0x61 },
+];
+
+// SVG is text/XML, not a binary signature. Accept only if the head clearly parses as SVG.
+function looksLikeSvg(buffer) {
+  const head = buffer.slice(0, 1024).toString('utf8').replace(/^﻿/, '').trimStart().toLowerCase();
+  return (head.startsWith('<?xml') || head.startsWith('<!doctype svg') || head.startsWith('<svg')) &&
+    head.includes('<svg');
+}
+
+// Returns { ext, mime } from the real bytes, or null if it's not an allowed image.
+function detectImage(buffer) {
+  if (!buffer || buffer.length < 4) return null;
+  for (const s of SNIFFERS) {
+    if (s.test(buffer)) return { ext: s.ext, mime: s.mime };
+  }
+  if (looksLikeSvg(buffer)) return { ext: 'svg', mime: 'image/svg+xml' };
+  return null;
+}
+
 class AssetManager {
   constructor(config, db) {
     this.config = config;
@@ -14,6 +45,7 @@ class AssetManager {
       `/opt/grin/mining-pool-${config.network === 'mainnet' ? 'main' : 'test'}/custom_assets`
     );
 
+    // Declared MIME gate (cheap, spoofable — real check is detectImage() on the bytes).
     this.allowedMimeTypes = ['image/svg+xml', 'image/png', 'image/jpeg', 'image/gif'];
     this.maxFileSize = 2 * 1024 * 1024; // 2 MB
     this.allowedTypes = ['logo', 'logo_dark', 'favicon', 'og_image', 'apple_touch_icon', 'icon_192', 'icon_512'];
@@ -27,6 +59,8 @@ class AssetManager {
     }
   }
 
+  // In-memory storage: nothing is written to disk until the bytes pass validation and we
+  // assign a safe, server-controlled filename ourselves (see saveAsset).
   getMulterInstance() {
     const fileFilter = (req, file, cb) => {
       if (!this.allowedMimeTypes.includes(file.mimetype)) {
@@ -36,34 +70,44 @@ class AssetManager {
       cb(null, true);
     };
 
-    const storage = multer.diskStorage({
-      destination: (req, file, cb) => {
-        cb(null, this.uploadDir);
-      },
-      filename: (req, file, cb) => {
-        const type = req.query.type || 'custom';
-        const timestamp = Date.now();
-        const sanitized = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
-        const filename = `${type}_${timestamp}_${sanitized}`;
-        cb(null, filename);
-      }
-    });
-
     return multer({
-      storage,
+      storage: multer.memoryStorage(),
       fileFilter,
-      limits: { fileSize: this.maxFileSize }
+      limits: { fileSize: this.maxFileSize, files: 1 },
     });
   }
 
+  // Validate the in-memory upload, then write it under a generated name. Throws on any
+  // problem (caller returns 400). No untrusted file ever lands on disk.
   async saveAsset(file, assetType, userId) {
     if (!this.allowedTypes.includes(assetType)) {
       throw new Error(`Invalid asset type: ${assetType}`);
     }
-
-    if (!file || !file.filename || !file.path) {
+    if (!file || !file.buffer || !file.buffer.length) {
       throw new Error('No file provided');
     }
+    if (file.buffer.length > this.maxFileSize) {
+      throw new Error('File too large');
+    }
+
+    // The decisive check: content must actually be an allowed image type.
+    const detected = detectImage(file.buffer);
+    if (!detected) {
+      throw new Error('File content is not a valid PNG, JPEG, GIF, or SVG image');
+    }
+
+    // Server-controlled filename — never derived from the uploader's name or query string.
+    const safeType = String(assetType).replace(/[^a-z0-9_]/gi, '').slice(0, 32) || 'asset';
+    const rand = crypto.randomBytes(4).toString('hex');
+    const filename = `${safeType}_${Date.now()}_${rand}.${detected.ext}`;
+    const destPath = path.join(this.uploadDir, filename);
+
+    // Defence in depth: the joined path must stay inside the upload dir.
+    if (path.dirname(destPath) !== this.uploadDir) {
+      throw new Error('Resolved path escapes the asset directory');
+    }
+
+    fs.writeFileSync(destPath, file.buffer, { mode: 0o644 });
 
     // Deactivate previous assets of same type
     const deactivateStmt = this.db.prepare(`
@@ -72,7 +116,7 @@ class AssetManager {
     `);
     deactivateStmt.run(assetType);
 
-    // Insert new asset record
+    // Insert new asset record (store the *detected* mime, not the declared one).
     const stmt = this.db.prepare(`
       INSERT INTO pool_assets (asset_type, filename, original_name, mime_type, size_bytes, uploaded_by)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -80,19 +124,19 @@ class AssetManager {
 
     const result = stmt.run(
       assetType,
-      file.filename,
-      file.originalname,
-      file.mimetype,
-      file.size,
+      filename,
+      (file.originalname || '').slice(0, 255),
+      detected.mime,
+      file.buffer.length,
       userId
     );
 
     return {
       id: result.lastInsertRowid,
-      filename: file.filename,
+      filename: filename,
       original_name: file.originalname,
-      mime_type: file.mimetype,
-      size_bytes: file.size,
+      mime_type: detected.mime,
+      size_bytes: file.buffer.length,
       asset_type: assetType
     };
   }
@@ -105,8 +149,10 @@ class AssetManager {
       throw new Error('Asset not found');
     }
 
-    const filePath = path.join(this.uploadDir, filename);
-    if (fs.existsSync(filePath)) {
+    // Only ever unlink within the upload dir using the stored (already safe) basename.
+    const safeName = path.basename(asset.filename);
+    const filePath = path.join(this.uploadDir, safeName);
+    if (path.dirname(filePath) === this.uploadDir && fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
 

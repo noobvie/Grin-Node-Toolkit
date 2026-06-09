@@ -49,6 +49,49 @@ function migrateAdminAuditLog() {
   }
 }
 
+// Additive, non-destructive: add account-lockout + token-version columns to an
+// existing users table (older testnet DBs predate them). Unlike migrateAdminAuditLog
+// we never drop users — that would delete admin accounts. ADD COLUMN with a default
+// backfills existing rows safely.
+function migrateUsers() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(users)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the columns
+    const have = new Set(cols.map(c => c.name));
+    const additions = {
+      failed_login_attempts: 'INTEGER NOT NULL DEFAULT 0',
+      locked_until: 'INTEGER NOT NULL DEFAULT 0',
+      token_version: 'INTEGER NOT NULL DEFAULT 0'
+    };
+    for (const [name, def] of Object.entries(additions)) {
+      if (!have.has(name)) {
+        db.exec(`ALTER TABLE users ADD COLUMN ${name} ${def}`);
+        console.warn(`[db] users: added missing column ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error(`[db] users migration check failed: ${e.message}`);
+  }
+}
+
+// Additive, non-destructive: add the multi-region `region` column to an existing
+// shares table (older testnet DBs predate it). NOT NULL DEFAULT 'default' backfills
+// every existing row, so legacy single-region shares group under 'default'.
+function migrateShares() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(shares)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the column
+    const have = new Set(cols.map(c => c.name));
+    if (!have.has('region')) {
+      db.exec(`ALTER TABLE shares ADD COLUMN region TEXT NOT NULL DEFAULT 'default'`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_share_region ON shares(region, created_at)`);
+      console.warn(`[db] shares: added missing column region`);
+    }
+  } catch (e) {
+    console.error(`[db] shares migration check failed: ${e.message}`);
+  }
+}
+
 function createSchema() {
   migrateAdminAuditLog();
 
@@ -91,12 +134,14 @@ function createSchema() {
       difficulty REAL NOT NULL,
       block_height INTEGER NOT NULL,
       share_hash TEXT NOT NULL UNIQUE,
+      region TEXT NOT NULL DEFAULT 'default',
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_share_address ON shares(grin_address)`,
     `CREATE INDEX IF NOT EXISTS idx_share_block_height ON shares(block_height)`,
     `CREATE INDEX IF NOT EXISTS idx_share_created ON shares(created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_share_region ON shares(region, created_at)`,
 
     `CREATE TABLE IF NOT EXISTS hashrate_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,6 +207,9 @@ function createSchema() {
       password_hash TEXT NOT NULL,
       is_admin INTEGER NOT NULL DEFAULT 0,
       is_active INTEGER NOT NULL DEFAULT 1,
+      failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+      locked_until INTEGER NOT NULL DEFAULT 0,
+      token_version INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
@@ -275,7 +323,26 @@ function createSchema() {
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_lottery_winners_draw ON lottery_winners(draw_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_lottery_winners_address ON lottery_winners(grin_address, created_at DESC)`
+    `CREATE INDEX IF NOT EXISTS idx_lottery_winners_address ON lottery_winners(grin_address, created_at DESC)`,
+
+    // ─── Multi-region — operator-declared regional endpoints (hub-and-spoke) ───
+    // One row per region/satellite the hub knows about. `region` matches the tag the
+    // satellite relay stamps on shares (config.region → POST /api/shares { region }),
+    // so /api/pool/stats/regions can left-join live share aggregates onto these labels.
+    // Purely descriptive: the IP allowlist + shared secret in pool.json (not this table)
+    // are what actually authorise ingestion.
+    `CREATE TABLE IF NOT EXISTS pool_locations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      region TEXT NOT NULL UNIQUE,
+      label TEXT DEFAULT NULL,
+      api_url TEXT DEFAULT NULL,
+      stratum_url TEXT DEFAULT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_pool_locations_active ON pool_locations(is_active)`
   ];
 
   const transaction = db.transaction(() => {
@@ -285,6 +352,10 @@ function createSchema() {
   });
 
   transaction();
+
+  // Additive column migrations run after the tables exist.
+  migrateUsers();
+  migrateShares();
 }
 
 function closeDb() {

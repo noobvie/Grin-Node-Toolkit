@@ -4,10 +4,10 @@
   "network": "testnet",
   "jwt_secret": "CHANGE_ME_TO_RANDOM_SECRET_32_CHARS",
 
-  "pool_fee_percent": 2.0,
-  "min_withdrawal": 0.1,
+  "pool_fee_percent": 1.0,
+  "min_withdrawal": 5.0,
 
-  "confirm_depth_mainnet": 1441,
+  "confirm_depth_mainnet": 1440,
   "confirm_depth_testnet": 100,
 
   "wallet_dir": "/opt/grin/pool-test/",

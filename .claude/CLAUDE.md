@@ -332,9 +332,9 @@ Key design decisions (locked in — do not change without user confirmation):
 - **Config:** Stored in `/opt/grin/conf/grin_pool.json`; all settings via web admin panel — no bash config files
 - **Script 07 role:** Infrastructure only (deploy files, systemd services, backups); business logic lives in pool web code
 - **Testnet mode:** Stratum-only, no web UI; mainnet mode: full pool + web dashboard
-- **No fees by default** (`pool_fee_percent: 0.0`); min withdrawal: 2.0 GRIN
+- **Default pool fee 1.0%** (`pool_fee_percent: 1.0`, validated 0–50); min withdrawal: 5.0 GRIN
 
-### Multi-region — hub-and-spoke (design: `docs/generated/script07_multi_region_design.md`)
+### Multi-region — hub-and-spoke (design: `docs/generated/script07_design.md` §3–4)
 
 Script 07 supports three deployment modes, selected at launch (mode may be passed as `$1` = `singlebox|hub|satellite` for non-interactive launches):
 - **singlebox** — Hub + co-located Satellite on one server (original behaviour; the existing `pool_singlebox_loop`).

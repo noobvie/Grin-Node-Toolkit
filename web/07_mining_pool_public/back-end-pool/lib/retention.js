@@ -20,7 +20,7 @@ class RetentionManager {
 
   _confirmDepth() {
     return this.config.network === 'mainnet'
-      ? (this.config.confirm_depth_mainnet || 1441)
+      ? (this.config.confirm_depth_mainnet || 1440)
       : (this.config.confirm_depth_testnet || 100);
   }
 

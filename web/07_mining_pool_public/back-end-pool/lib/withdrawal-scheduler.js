@@ -311,6 +311,85 @@ class WithdrawalScheduler {
     }
   }
 
+  // Create a miner-initiated withdrawal with a compare-and-swap balance lock.
+  // All-or-nothing in one transaction (design §8 balance model):
+  //   balance −= amount ; balance_locked += amount  (only if balance ≥ amount)
+  // Then the scheduler's tor_checking → tor_sending → confirmed/failed states take over.
+  // Throws an Error carrying a numeric `.code` (400/404/409/429) so the route maps it to
+  // the right HTTP status. fee is held at 0 to stay consistent with the existing
+  // markConfirmed/markFailed math (which un-lock/reverse `amount`); per-tx network fees
+  // are part of the deferred nanoGRIN rework (design §12 D2).
+  createWithdrawal(grinAddress, amount, method = 'tor') {
+    const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
+
+    if (!grinAddress) fail('address required', 400);
+    if (method !== 'tor') fail('only Tor withdrawals are supported', 400);
+
+    const acct0 = this.db.prepare(
+      'SELECT balance FROM miner_accounts WHERE grin_address = ?'
+    ).get(grinAddress);
+    if (!acct0) fail('account not found', 404);
+
+    // Default to the full available balance when no amount is supplied.
+    let amt = amount === undefined || amount === null || amount === ''
+      ? acct0.balance
+      : parseFloat(amount);
+    if (isNaN(amt) || amt <= 0) fail('invalid amount', 400);
+    amt = parseFloat(amt.toFixed(9));
+
+    const minW = this.config.min_withdrawal || 5.0;
+    if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
+
+    const txn = this.db.transaction(() => {
+      const totalPending = this.db.prepare(
+        "SELECT COUNT(*) AS c FROM withdrawals WHERE status IN ('tor_checking','tor_sending','retry_scheduled')"
+      ).get().c;
+      if (totalPending >= this.MAX_PENDING_WITHDRAWALS) {
+        fail(`pool has reached maximum pending withdrawals (${this.MAX_PENDING_WITHDRAWALS})`, 429);
+      }
+      // Design §8: at most ONE pending withdrawal per address.
+      const userPending = this.db.prepare(
+        "SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled')"
+      ).get(grinAddress).c;
+      if (userPending >= 1) fail('you already have a pending withdrawal', 429);
+
+      const before = this.db.prepare(
+        'SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?'
+      ).get(grinAddress);
+
+      // CAS: the WHERE balance >= ? makes the debit atomic — a racing request that would
+      // overdraw changes 0 rows and is rejected with 409.
+      const locked = this.db.prepare(
+        `UPDATE miner_accounts
+         SET balance = balance - ?, balance_locked = balance_locked + ?, updated_at = unixepoch()
+         WHERE grin_address = ? AND balance >= ?`
+      ).run(amt, amt, grinAddress, amt);
+      if (locked.changes !== 1) fail('insufficient balance', 409);
+
+      const wid = this.db.prepare(
+        "INSERT INTO withdrawals (grin_address, amount, fee, status) VALUES (?, ?, 0, 'tor_checking')"
+      ).run(grinAddress, amt).lastInsertRowid;
+
+      this.db.prepare(`
+        INSERT INTO balance_log
+        (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+        VALUES (?, 'lock', ?, ?, ?, ?, ?, 'withdrawal', ?)
+      `).run(grinAddress, amt, before.balance, before.balance - amt,
+             before.balance_locked, before.balance_locked + amt, wid);
+
+      this.db.prepare(`
+        INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+        VALUES (?, NULL, 'tor_checking', 'miner', ?)
+      `).run(wid, `withdrawal requested (${amt} GRIN)`);
+
+      return wid;
+    });
+
+    const withdrawal_id = txn();
+    console.log(`[${new Date().toISOString()}] Withdrawal ${withdrawal_id} created for ${grinAddress} (${amt} GRIN, locked)`);
+    return { success: true, withdrawal_id, amount: amt };
+  }
+
   // FIX #7: Check withdrawal rate limits to prevent DoS
   async canInitiateWithdrawal(grinAddress) {
     try {

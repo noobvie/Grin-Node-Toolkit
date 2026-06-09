@@ -7,7 +7,12 @@ class ShareValidator {
     this.db = getDb();
   }
 
-  async submitShare(grinAddress, workerName, difficulty, blockHeight, shareHash) {
+  // `region` tags which region a share came from (multi-region hub-and-spoke):
+  //  · local stratum shares omit it → default to this box's config.region
+  //  · hub ingestion (POST /api/shares) passes the satellite's region per batch
+  // It is purely an aggregation dimension (see GET /api/pool/stats/regions); it has
+  // no bearing on PPLNS weighting, which is region-agnostic.
+  async submitShare(grinAddress, workerName, difficulty, blockHeight, shareHash, region) {
     try {
       if (!grinAddress || !shareHash) {
         throw new Error('Missing required fields: grinAddress, shareHash');
@@ -17,16 +22,18 @@ class ShareValidator {
         throw new Error('Invalid difficulty');
       }
 
+      const reg = region || this.config.region || 'default';
+
       // Staleness is enforced upstream in StratumServer.isValidJob() by job_id window.
       // shareHash is a SHA-256 hex string — Date.parse() on it always returns NaN,
       // so any timestamp-based check here would reject every share.
 
       const stmt = this.db.prepare(`
-        INSERT INTO shares (grin_address, worker_name, difficulty, block_height, share_hash)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO shares (grin_address, worker_name, difficulty, block_height, share_hash, region)
+        VALUES (?, ?, ?, ?, ?, ?)
       `);
 
-      const result = stmt.run(grinAddress, workerName, difficulty, blockHeight, shareHash);
+      const result = stmt.run(grinAddress, workerName, difficulty, blockHeight, shareHash, reg);
 
       return {
         success: true,

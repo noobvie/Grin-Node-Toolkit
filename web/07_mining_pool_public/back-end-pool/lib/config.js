@@ -21,10 +21,15 @@ function mergeEnvVars(config) {
     port: config.port || parseInt(process.env.POOL_PORT || '8080', 10),
     stratum_port: config.stratum_port || parseInt(process.env.STRATUM_PORT || '3333', 10),
     network: config.network || process.env.POOL_NETWORK || 'testnet',
-    jwt_secret: config.jwt_secret || process.env.JWT_SECRET || generateSecret(),
-    pool_fee_percent: config.pool_fee_percent !== undefined ? config.pool_fee_percent : 2.0,
-    min_withdrawal: config.min_withdrawal !== undefined ? config.min_withdrawal : 0.1,
-    confirm_depth_mainnet: config.confirm_depth_mainnet || 1441,
+    // NOTE: no auto-generate fallback — a missing secret must fail loudly at boot
+    // (see validateConfig). Auto-minting one here would silently invalidate every admin
+    // session on each restart. The Script 07 installer writes it once into pool.json.
+    jwt_secret: config.jwt_secret || process.env.JWT_SECRET || '',
+    pool_fee_percent: config.pool_fee_percent !== undefined ? config.pool_fee_percent : 1.0,
+    min_withdrawal: config.min_withdrawal !== undefined ? config.min_withdrawal : 5.0,
+    // Grin COINBASE_MATURITY = 1440; a coinbase cannot be spent until 1440 confirmations,
+    // so payouts must wait at least that long to be reorg-safe.
+    confirm_depth_mainnet: config.confirm_depth_mainnet || 1440,
     confirm_depth_testnet: config.confirm_depth_testnet || 100,
 
     wallet_dir: config.wallet_dir || process.env.POOL_WALLET_DIR || '/opt/grin/pool-test/',
@@ -73,7 +78,24 @@ function mergeEnvVars(config) {
 }
 
 function validateConfig(config) {
-  const required = ['jwt_secret', 'wallet_dir', 'node_api_url', 'db_path'];
+  // Satellites run mining ingress + relay only — no web/admin/auth — so they carry no
+  // jwt_secret. The fail-loud JWT check applies only to roles that serve admin auth
+  // (singlebox/hub). Without this guard the satellite (grin_satellite.json has no
+  // jwt_secret) would refuse to boot.
+  if (config.role !== 'satellite') {
+    // Fail loudly on a missing/weak JWT secret rather than auto-generating one at boot —
+    // a fresh secret each restart silently logs out every admin and breaks refresh tokens.
+    // The installer must write a persistent jwt_secret into pool.json (Script 07 install/configure).
+    if (!config.jwt_secret || String(config.jwt_secret).length < 32) {
+      throw new Error(
+        'FATAL: jwt_secret is missing or too short (need ≥32 chars) in pool.json. ' +
+        'It must be generated ONCE at install and persisted, never minted at boot. ' +
+        'Re-run the Script 07 installer/configure step to set it.'
+      );
+    }
+  }
+
+  const required = ['wallet_dir', 'node_api_url', 'db_path'];
   const missing = required.filter(key => !config[key]);
 
   if (missing.length > 0) {
@@ -84,17 +106,13 @@ function validateConfig(config) {
     throw new Error(`Invalid network: ${config.network}. Must be 'mainnet' or 'testnet'`);
   }
 
-  if (config.pool_fee_percent < 0 || config.pool_fee_percent > 100) {
+  if (config.pool_fee_percent < 0 || config.pool_fee_percent > 50) {
     throw new Error(`Invalid pool_fee_percent: ${config.pool_fee_percent}`);
   }
 
   if (config.min_withdrawal <= 0) {
     throw new Error(`Invalid min_withdrawal: ${config.min_withdrawal}`);
   }
-}
-
-function generateSecret() {
-  return require('crypto').randomBytes(32).toString('hex');
 }
 
 function getConfirmDepth(network) {

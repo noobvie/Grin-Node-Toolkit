@@ -387,10 +387,13 @@
       }
     }
 
-    // FIX #4: Check if already logged in by testing API access (token in httpOnly cookie)
+    // FIX #4: Check if already logged in by testing API access (token in httpOnly cookie).
+    // Must hit an AUTH-GATED endpoint — /api/health is public and 200 for everyone, which
+    // would redirect every visitor to the dashboard (and loop). /api/admin/dashboard returns
+    // 200 only with a valid admin cookie, so a logged-out visitor stays on this page.
     async function checkIfLoggedIn() {
       try {
-        const res = await fetch('/api/health', { credentials: 'include' });
+        const res = await fetch('/api/admin/dashboard', { credentials: 'include' });
         if (res.status === 200) {
           window.location.href = '/admin-dashboard.html';
         }

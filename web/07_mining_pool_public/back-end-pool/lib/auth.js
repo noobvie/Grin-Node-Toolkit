@@ -10,6 +10,12 @@ class AuthManager {
     this.jwtExpiresIn = 3600;
     this.refreshTokenExpiresIn = 86400 * 7;
     this.sessionTimeout = 300;
+    // Account lockout (per-username): blunts online password guessing even when the
+    // attacker rotates source IPs (which defeats the per-IP rate limiter alone).
+    this.maxFailedAttempts = config.max_failed_login_attempts || 5;
+    this.lockoutDurationSeconds = config.lockout_duration_seconds || 900; // 15 min
+    // bcrypt work factor (cost). ≥12 per the security audit.
+    this.bcryptRounds = config.bcrypt_rounds || 12;
   }
 
   async registerAdmin(username, password) {
@@ -59,6 +65,7 @@ class AuthManager {
 
   async login(username, password, ip = null) {
     try {
+      const now = Math.floor(Date.now() / 1000);
       const user = this.db.prepare(
         'SELECT * FROM users WHERE username = ?'
       ).get(username);
@@ -77,16 +84,44 @@ class AuthManager {
         };
       }
 
+      // Account lockout: reject while locked, without revealing whether the password
+      // was right (returns a generic locked message).
+      if (user.locked_until && user.locked_until > now) {
+        return {
+          success: false,
+          error: 'Account temporarily locked due to failed login attempts. Try again later.',
+          locked: true
+        };
+      }
+
       const passwordValid = await this.comparePassword(password, user.password_hash);
 
       if (!passwordValid) {
+        // Increment the failure counter; lock the account once the threshold is hit.
+        const attempts = (user.failed_login_attempts || 0) + 1;
+        if (attempts >= this.maxFailedAttempts) {
+          this.db.prepare(
+            'UPDATE users SET failed_login_attempts = ?, locked_until = ?, updated_at = ? WHERE id = ?'
+          ).run(attempts, now + this.lockoutDurationSeconds, now, user.id);
+        } else {
+          this.db.prepare(
+            'UPDATE users SET failed_login_attempts = ?, updated_at = ? WHERE id = ?'
+          ).run(attempts, now, user.id);
+        }
         return {
           success: false,
           error: 'Invalid username or password'
         };
       }
 
-      const tokens = this.generateTokens(user.id, user.username, user.is_admin);
+      // Success: clear any failure state.
+      if (user.failed_login_attempts || user.locked_until) {
+        this.db.prepare(
+          'UPDATE users SET failed_login_attempts = 0, locked_until = 0, updated_at = ? WHERE id = ?'
+        ).run(now, user.id);
+      }
+
+      const tokens = this.generateTokens(user.id, user.username, user.is_admin, user.token_version || 0);
 
       this.logLoginAttempt(user.id, true, ip);
 
@@ -107,7 +142,7 @@ class AuthManager {
     }
   }
 
-  generateTokens(userId, username, isAdmin) {
+  generateTokens(userId, username, isAdmin, tokenVersion = 0) {
     const now = Math.floor(Date.now() / 1000);
 
     const accessToken = jwt.sign(
@@ -115,6 +150,7 @@ class AuthManager {
         user_id: userId,
         username,
         is_admin: isAdmin ? 1 : 0,
+        tv: tokenVersion,
         iat: now,
         type: 'access'
       },
@@ -122,9 +158,13 @@ class AuthManager {
       { expiresIn: this.jwtExpiresIn }
     );
 
+    // The refresh token carries the token_version it was minted against. On each
+    // refresh we bump the user's token_version, so a previously issued (or stolen)
+    // refresh token no longer matches and is rejected — see refreshAccessToken().
     const refreshToken = jwt.sign(
       {
         user_id: userId,
+        tv: tokenVersion,
         type: 'refresh'
       },
       this.jwtSecret,
@@ -179,7 +219,22 @@ class AuthManager {
         throw new Error('User not found or inactive');
       }
 
-      const tokens = this.generateTokens(user.id, user.username, user.is_admin);
+      // Revocation/rotation check: the presented refresh token must match the current
+      // token_version. A stale token (already rotated, or revoked via logout/password
+      // change) is rejected here — closing the "stolen refresh token valid for its full
+      // lifetime" gap.
+      const currentVersion = user.token_version || 0;
+      if ((decoded.tv || 0) !== currentVersion) {
+        throw new Error('Refresh token revoked');
+      }
+
+      // Rotate: bump the version so THIS refresh token can't be replayed.
+      const nextVersion = currentVersion + 1;
+      this.db.prepare(
+        'UPDATE users SET token_version = ?, updated_at = ? WHERE id = ?'
+      ).run(nextVersion, Math.floor(Date.now() / 1000), user.id);
+
+      const tokens = this.generateTokens(user.id, user.username, user.is_admin, nextVersion);
 
       return {
         success: true,
@@ -192,6 +247,31 @@ class AuthManager {
         success: false,
         error: err.message
       };
+    }
+  }
+
+  // Logout helper: verify a refresh token and revoke that user's sessions. Returns
+  // true if a user was revoked. Invalid/expired tokens are ignored (nothing to revoke).
+  revokeByRefreshToken(refreshToken) {
+    if (!refreshToken) return false;
+    try {
+      const decoded = jwt.verify(refreshToken, this.jwtSecret);
+      if (decoded && decoded.user_id) return this.revokeUserTokens(decoded.user_id);
+    } catch (_) { /* invalid/expired → nothing to revoke */ }
+    return false;
+  }
+
+  // Invalidate all of a user's refresh tokens (logout / password change / disable).
+  // Bumping token_version makes every previously issued refresh token stale.
+  revokeUserTokens(userId) {
+    try {
+      this.db.prepare(
+        'UPDATE users SET token_version = token_version + 1, updated_at = ? WHERE id = ?'
+      ).run(Math.floor(Date.now() / 1000), userId);
+      return true;
+    } catch (err) {
+      console.error(`Error revoking tokens for user ${userId}: ${err.message}`);
+      return false;
     }
   }
 
@@ -221,6 +301,9 @@ class AuthManager {
       );
       stmt.run(hashedPassword, userId);
 
+      // Revoke all existing refresh tokens after a password change.
+      this.revokeUserTokens(userId);
+
       return {
         success: true,
         message: 'Password changed successfully'
@@ -234,7 +317,7 @@ class AuthManager {
   }
 
   async hashPassword(password) {
-    const salt = await bcrypt.genSalt(10);
+    const salt = await bcrypt.genSalt(this.bcryptRounds);
     return bcrypt.hash(password, salt);
   }
 

@@ -2021,20 +2021,38 @@ EOF
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STRATUM WATCHDOG CRON  (Watchdogs ▸ 4)
+# STRATUM WATCHDOG CRON  (Health / Watchdogs ▸ 7 install · 8 remove)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Cron entry: every 5 minutes, verify stratum is enabled in grin-server.toml.
 # Logs a warning if stratum config was lost (e.g. node restart reset the toml).
 
-solo_watchdog_setup() {
-    clear
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  Stratum Watchdog Cron${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
+# Fixed paths shared by the stratum-watchdog install/remove/status trio.
+STRATUM_WATCHDOG_CRON="/etc/cron.d/grin-stratum-watchdog"
+STRATUM_WATCHDOG_BIN="/usr/local/bin/grin-stratum-watchdog"
 
-    local cron_file="/etc/cron.d/grin-stratum-watchdog"
-    local wrapper="/usr/local/bin/grin-stratum-watchdog"
+# solo_stratum_watchdog_status — cron presence + recent log tail (mirrors
+# sw_watchdog_status / gnk_watchdog_status so the Health menu reads uniformly).
+solo_stratum_watchdog_status() {
+    if [[ -f "$STRATUM_WATCHDOG_CRON" && -x "$STRATUM_WATCHDOG_BIN" ]]; then
+        success "Stratum watchdog: INSTALLED ($STRATUM_WATCHDOG_CRON)"
+    else
+        warn "Stratum watchdog: NOT installed."
+    fi
+    [[ -f "$WATCHDOG_LOG" ]] && { info "Recent log:"; tail -n 6 "$WATCHDOG_LOG" 2>/dev/null || true; }
+}
+
+# solo_stratum_watchdog_remove — drop cron.d entry + wrapper (idempotent).
+solo_stratum_watchdog_remove() {
+    rm -f "$STRATUM_WATCHDOG_CRON" "$STRATUM_WATCHDOG_BIN"
+    success "Stratum watchdog removed."
+}
+
+# solo_stratum_watchdog_install — write wrapper + cron.d entry (every 5 min).
+# Non-interactive and idempotent, matching the other watchdog installers; the
+# menu owns presentation.
+solo_stratum_watchdog_install() {
+    local cron_file="$STRATUM_WATCHDOG_CRON"
+    local wrapper="$STRATUM_WATCHDOG_BIN"
 
     # Bake the search DIRS (not a one-time snapshot of the tomls that happen to
     # exist now) so a node built AFTER the watchdog is installed is picked up on
@@ -2043,27 +2061,6 @@ solo_watchdog_setup() {
     for dir in "${_KNOWN_TOML_SEARCH_PATHS[@]}"; do
         search_dirs_literal+="    \"$dir\""$'\n'
     done
-
-    if [[ -f "$cron_file" ]]; then
-        echo -e "  Status: ${GREEN}enabled${RESET}  ($cron_file)"
-        echo ""
-        echo -e "  ${GREEN}1${RESET}) Disable watchdog"
-        echo -e "  ${DIM}0) Back${RESET}"
-        echo -ne "Choice: "
-        read -r wc
-        if [[ "$wc" == "1" ]]; then
-            rm -f "$cron_file" "$wrapper"
-            success "Watchdog disabled."
-        fi
-        return
-    fi
-
-    echo -e "  ${DIM}Checks every 5 minutes that stratum is enabled in grin-server.toml.${RESET}"
-    echo -e "  ${DIM}Logs warnings to: $WATCHDOG_LOG${RESET}"
-    echo ""
-    echo -ne "Enable stratum watchdog cron? [Y/n/0]: "
-    read -r wgo
-    [[ "${wgo,,}" == "n" || "$wgo" == "0" ]] && return
 
     mkdir -p "$LOG_DIR"
 
@@ -2112,8 +2109,8 @@ WATCHDOG
     cat > "$cron_file" << EOF
 */5 * * * * root $wrapper
 EOF
-    success "Watchdog cron enabled → $cron_file"
-    echo -e "  Log: $WATCHDOG_LOG"
+    success "Stratum watchdog installed (*/5) → $cron_file"
+    info "Log: $WATCHDOG_LOG"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2396,6 +2393,7 @@ watchdog_menu() {
         echo -e "${BOLD}  Node-sync watchdog:${RESET}";    gnk_watchdog_status 2>&1 | sed 's/^/    /' | head -2
         echo -e "${BOLD}  Node boot-autostart:${RESET}";   gnk_autostart_status | sed 's/^/    /'
         echo -e "${BOLD}  Wallet-listener watchdog:${RESET}"; sw_watchdog_status 2>&1 | sed 's/^/    /' | head -1
+        echo -e "${BOLD}  Stratum watchdog:${RESET}"; solo_stratum_watchdog_status 2>&1 | sed 's/^/    /' | head -1
         echo ""
         echo -e "  ${GREEN}1${RESET}) Install node-sync watchdog    ${DIM}(restarts a wedged node)${RESET}"
         echo -e "  ${RED}2${RESET}) Remove  node-sync watchdog"
@@ -2403,10 +2401,11 @@ watchdog_menu() {
         echo -e "  ${RED}4${RESET}) Disable node boot-autostart   ${DIM}(per net / both)${RESET}"
         echo -e "  ${GREEN}5${RESET}) Install wallet-listener watchdog"
         echo -e "  ${RED}6${RESET}) Remove  wallet-listener watchdog"
-        echo -e "  ${GREEN}7${RESET}) Stratum watchdog              ${DIM}(alert if stratum drops)${RESET}"
+        echo -e "  ${GREEN}7${RESET}) Install stratum watchdog      ${DIM}(alert if stratum drops)${RESET}"
+        echo -e "  ${RED}8${RESET}) Remove  stratum watchdog"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1-7/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-8/0]: ${RESET}"
         read -r choice || choice=0
         case "$choice" in
             "") continue ;;
@@ -2431,7 +2430,8 @@ watchdog_menu() {
                 _solo_pause ;;
             5)  sw_watchdog_install || true; _solo_pause ;;
             6)  sw_watchdog_remove  || true; _solo_pause ;;
-            7)  solo_watchdog_setup || true; _solo_pause ;;
+            7)  solo_stratum_watchdog_install || true; _solo_pause ;;
+            8)  solo_stratum_watchdog_remove  || true; _solo_pause ;;
             0)  return ;;
             *)  warn "Invalid option."; sleep 1 ;;
         esac

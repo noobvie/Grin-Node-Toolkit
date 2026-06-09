@@ -208,18 +208,15 @@ class RateLimiter {
   }
 
   /**
-   * Extract client IP from request
-   * Respects X-Forwarded-For, X-Real-IP headers (behind proxy)
+   * Extract client IP from request.
+   * Uses Express's req.ip, which — with `app.set('trust proxy', 1)` in index.js —
+   * resolves to the real client IP from X-Forwarded-For while IGNORING client-supplied
+   * XFF beyond the one trusted nginx hop. Reading the raw x-forwarded-for header here
+   * (as before) let a client rotate forged IPs and evade per-IP throttling/lockout.
    */
   getClientIp(req) {
-    return (
-      (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
-      req.headers['x-real-ip'] ||
-      req.connection.remoteAddress ||
-      req.socket.remoteAddress ||
-      req.ip ||
-      'unknown'
-    );
+    const ip = (req && (req.ip || (req.socket && req.socket.remoteAddress))) || 'unknown';
+    return String(ip).replace('::ffff:', '');
   }
 
   /**

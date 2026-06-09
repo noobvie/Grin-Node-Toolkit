@@ -5,7 +5,7 @@
 # Deploys mining ingress + relay ONLY: no web, no admin, no pool DB, no wallet.
 # Runs the lean satellite entrypoint (back-end-pool/satellite.js), which starts
 # the stratum proxy + node upstream client + share relay to the Central Hub.
-# See docs/generated/script07_multi_region_design.md §5, §8, §9.
+# See docs/generated/script07_design.md §3–4 (deployment modes, share capture).
 #
 # Sourced, not executed — inherits colors/log helpers from the parent script
 # (info/warn/success/error, $TOOLKIT_ROOT, $POOL_APP_SRC).
@@ -61,8 +61,8 @@ sat_ensure_defaults() {
         ["pool_address"]=""
         ["db_path"]="$SAT_DB"
         ["relay_batch_interval_ms"]="2000"
-        ["pool_fee_percent"]="0"
-        ["min_withdrawal"]="2.0"
+        ["pool_fee_percent"]="1.0"
+        ["min_withdrawal"]="5.0"
         ["wallet_dir"]="$SAT_APP_DIR/no-wallet"  # placeholder — satellites have no wallet
     )
     local k

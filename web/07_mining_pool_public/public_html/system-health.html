@@ -1,8 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-page="system-health" data-maintenance="exempt">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
     <title>System Health — Mining Pool</title>
     <style>
         * {
@@ -672,6 +673,34 @@
             border-color: #ffc800;
         }
 
+        .badge.error {
+            background: rgba(255, 0, 0, 0.2);
+            color: #ff6b6b;
+            border-color: #ff6b6b;
+        }
+
+        .admin-note {
+            background: rgba(0, 247, 255, 0.06);
+            border: 1px dashed rgba(0, 247, 255, 0.4);
+            border-radius: 4px;
+            padding: 16px 20px;
+            margin-bottom: 40px;
+            font-size: 0.95em;
+            color: var(--dark-dim);
+        }
+
+        body.light-theme .admin-note {
+            background: rgba(59, 130, 246, 0.06);
+            border-color: rgba(59, 130, 246, 0.3);
+            color: #555;
+        }
+
+        body.atomic-theme .admin-note {
+            background: rgba(184, 230, 0, 0.06);
+            border-color: rgba(184, 230, 0, 0.4);
+            color: #999;
+        }
+
         footer {
             text-align: center;
             padding: 40px 20px;
@@ -751,7 +780,7 @@
             <h1>⚛ GRINIUM</h1>
             <nav class="header-nav">
                 <a href="index.html" class="nav-link">Home</a>
-                <a href="admin-dashboard.html" class="nav-link">Admin</a>
+                <a href="admin-dashboard.html" class="nav-link active">Admin</a>
                 <a href="miners-stats.html" class="nav-link">Miners</a>
                 <a href="payment-history.html" class="nav-link">Payouts</a>
                 <a href="pool-info.html" class="nav-link">Info</a>
@@ -766,67 +795,63 @@
     <div class="container">
         <h2 class="page-title">System Health</h2>
 
+        <div class="admin-note">
+            🔒 Admin-only page — host resources refresh every 5 minutes; service &amp; relay
+            status refresh on each load. <span id="last-refresh"></span>
+        </div>
+
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-label">System Uptime</div>
-                <div class="stat-value">99<span style="font-size: 0.5em;">%</span></div>
+                <div class="stat-value" id="sys-uptime">—</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">CPU Usage</div>
-                <div class="stat-value">42<span style="font-size: 0.5em;">%</span></div>
+                <div class="stat-label">CPU Load (1m)</div>
+                <div class="stat-value" id="sys-cpu">—</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Memory Usage</div>
-                <div class="stat-value">68<span style="font-size: 0.5em;">%</span></div>
+                <div class="stat-value" id="sys-mem">—</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Network I/O</div>
-                <div class="stat-value">850<span style="font-size: 0.5em;">MB/s</span></div>
+                <div class="stat-label">Disk Usage</div>
+                <div class="stat-value" id="sys-disk">—</div>
             </div>
         </div>
 
-        <h3 class="section-title">Node Status</h3>
+        <h3 class="section-title">Service Status</h3>
 
         <table class="data-table">
             <thead>
                 <tr>
                     <th>Service</th>
                     <th>Status</th>
-                    <th>Uptime</th>
+                    <th>Detail</th>
                     <th>Last Check</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="service-tbody">
+                <tr><td colspan="4">Loading…</td></tr>
+            </tbody>
+        </table>
+
+        <h3 class="section-title">Share Relay &amp; Satellites</h3>
+
+        <div class="admin-note" id="relay-note" style="display:none"></div>
+
+        <table class="data-table" id="relay-table">
+            <thead>
                 <tr>
-                    <td>Pool Server</td>
-                    <td><span class="badge healthy">Healthy</span></td>
-                    <td>99.8%</td>
-                    <td>2024-05-15 14:32:10</td>
+                    <th>Region</th>
+                    <th>Status</th>
+                    <th>Last Share</th>
+                    <th>Height</th>
+                    <th>Shares (acc/skip)</th>
+                    <th>Blocks</th>
                 </tr>
-                <tr>
-                    <td>Grin Node (Mainnet)</td>
-                    <td><span class="badge healthy">Healthy</span></td>
-                    <td>99.6%</td>
-                    <td>2024-05-15 14:32:08</td>
-                </tr>
-                <tr>
-                    <td>Grin Node (Testnet)</td>
-                    <td><span class="badge healthy">Healthy</span></td>
-                    <td>99.7%</td>
-                    <td>2024-05-15 14:32:07</td>
-                </tr>
-                <tr>
-                    <td>Database Server</td>
-                    <td><span class="badge healthy">Healthy</span></td>
-                    <td>99.9%</td>
-                    <td>2024-05-15 14:32:12</td>
-                </tr>
-                <tr>
-                    <td>Cache Server</td>
-                    <td><span class="badge warning">Warning</span></td>
-                    <td>98.2%</td>
-                    <td>2024-05-15 14:32:11</td>
-                </tr>
+            </thead>
+            <tbody id="relay-tbody">
+                <tr><td colspan="6">Loading…</td></tr>
             </tbody>
         </table>
 
@@ -837,35 +862,11 @@
                 <tr>
                     <th>Resource</th>
                     <th>Current</th>
-                    <th>Average</th>
-                    <th>Peak</th>
+                    <th>Detail</th>
                 </tr>
             </thead>
-            <tbody>
-                <tr>
-                    <td>CPU</td>
-                    <td>42% <div class="progress-bar"><div class="progress-fill" style="width: 42%"></div></div></td>
-                    <td>38%</td>
-                    <td>78%</td>
-                </tr>
-                <tr>
-                    <td>Memory</td>
-                    <td>68% <div class="progress-bar"><div class="progress-fill" style="width: 68%"></div></div></td>
-                    <td>65%</td>
-                    <td>85%</td>
-                </tr>
-                <tr>
-                    <td>Disk I/O</td>
-                    <td>12% <div class="progress-bar"><div class="progress-fill" style="width: 12%"></div></div></td>
-                    <td>18%</td>
-                    <td>64%</td>
-                </tr>
-                <tr>
-                    <td>Network</td>
-                    <td>34% <div class="progress-bar"><div class="progress-fill" style="width: 34%"></div></div></td>
-                    <td>42%</td>
-                    <td>89%</td>
-                </tr>
+            <tbody id="resource-tbody">
+                <tr><td colspan="3">Loading…</td></tr>
             </tbody>
         </table>
     </div>
@@ -880,111 +881,192 @@
         // the theme picker and applies the 3 built-in + 10 white-label themes.
 
         // ═════════════════════════════════════════════════════════════════
-        // API Integration: Load system health status
+        // Admin-only system health. Every /api/admin/* call is gated server-side
+        // by secureAdmin (IP allowlist + admin JWT); a non-admin gets a 401 and
+        // Auth.fetch() redirects to /login.html, so this page never renders data
+        // to a non-admin. No hardcoded metrics — all values come from the API.
         // ═════════════════════════════════════════════════════════════════
 
-        async function loadSystemHealth() {
-            requireAuth(); // Redirect if not logged in
+        function esc(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+                ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
 
+        function statusBadge(status) {
+            const s = String(status || '').toLowerCase();
+            if (s === 'ok' || s === 'healthy' || s === 'online') return '<span class="badge healthy">' + esc(status) + '</span>';
+            if (s === 'warning' || s === 'stale' || s === 'degraded') return '<span class="badge warning">' + esc(status) + '</span>';
+            return '<span class="badge error">' + esc(status || 'unknown') + '</span>';
+        }
+
+        function fmtDuration(sec) {
+            sec = Math.max(0, Math.floor(sec || 0));
+            const d = Math.floor(sec / 86400);
+            const h = Math.floor((sec % 86400) / 3600);
+            const m = Math.floor((sec % 3600) / 60);
+            if (d > 0) return d + 'd ' + h + 'h';
+            if (h > 0) return h + 'h ' + m + 'm';
+            return m + 'm';
+        }
+
+        function fmtAge(sec) {
+            sec = Math.max(0, Math.floor(sec || 0));
+            if (sec < 90) return sec + 's ago';
+            if (sec < 5400) return Math.round(sec / 60) + 'm ago';
+            return Math.round(sec / 3600) + 'h ago';
+        }
+
+        function bigStat(value, unit) {
+            return esc(value) + (unit ? '<span style="font-size: 0.5em;">' + esc(unit) + '</span>' : '');
+        }
+
+        function progressCell(pct, label) {
+            const w = Math.max(0, Math.min(100, Math.round(pct || 0)));
+            return esc(label) + ' <div class="progress-bar"><div class="progress-fill" style="width: ' + w + '%"></div></div>';
+        }
+
+        // ── Host resources (CPU / memory / disk / uptime) ──────────────────────
+        async function loadSystemResources() {
+            const sys = await Auth.fetch('/api/admin/health/system');
+            if (!sys) return; // null ⇒ Auth.fetch already redirected (401) or request failed
+
+            document.getElementById('sys-uptime').innerHTML =
+                bigStat(fmtDuration(sys.uptime?.system_seconds), '');
+            document.getElementById('sys-cpu').innerHTML =
+                sys.cpu ? bigStat(sys.cpu.used_pct, '%') : '—';
+            document.getElementById('sys-mem').innerHTML =
+                sys.memory ? bigStat(sys.memory.used_pct, '%') : '—';
+            document.getElementById('sys-disk').innerHTML =
+                sys.disk ? bigStat(sys.disk.used_pct, '%') : 'n/a';
+
+            const rows = [];
+            if (sys.cpu) {
+                rows.push(['CPU', progressCell(sys.cpu.used_pct, sys.cpu.used_pct + '%'),
+                    'Load ' + sys.cpu.load_1m + ' / ' + sys.cpu.load_5m + ' / ' + sys.cpu.load_15m +
+                    ' · ' + sys.cpu.count + ' core(s)']);
+            }
+            if (sys.memory) {
+                rows.push(['Memory', progressCell(sys.memory.used_pct, sys.memory.used_pct + '%'),
+                    sys.memory.used_gb + ' / ' + sys.memory.total_gb + ' GB used']);
+            }
+            if (sys.disk) {
+                rows.push(['Disk', progressCell(sys.disk.used_pct, sys.disk.used_pct + '%'),
+                    sys.disk.free_gb + ' GB free of ' + sys.disk.total_gb + ' GB (' + esc(sys.disk.mount) + ')']);
+            } else {
+                rows.push(['Disk', 'n/a', 'statfs unavailable on this host']);
+            }
+            rows.push(['Pool process', '—', 'up ' + fmtDuration(sys.uptime?.process_seconds)]);
+
+            document.getElementById('resource-tbody').innerHTML = rows.map(r =>
+                '<tr><td>' + esc(r[0]) + '</td><td>' + r[1] + '</td><td>' + r[2] + '</td></tr>').join('');
+        }
+
+        // ── Service status (node + wallet) ─────────────────────────────────────
+        async function loadServices() {
+            const [nodeHealth, walletHealth] = await Promise.all([
+                Auth.fetch('/api/admin/health/node'),
+                Auth.fetch('/api/admin/health/wallet')
+            ]);
+
+            const rows = [];
+            // The fact that we got any admin response means the Pool API itself is up.
+            rows.push({ service: 'Pool API (Central)', status: 'ok', detail: 'Responding to admin requests' });
+
+            if (nodeHealth) {
+                const sync = nodeHealth.checks?.sync_status || {};
+                const peers = nodeHealth.checks?.peers || {};
+                rows.push({
+                    service: 'Grin Node',
+                    status: nodeHealth.status === 'healthy' ? 'ok' : (nodeHealth.status || 'unknown'),
+                    detail: 'Height ' + (sync.height ?? '—') +
+                        (sync.synced ? ' · synced' : ' · ' + (sync.blocks_behind ?? '?') + ' behind') +
+                        ' · ' + (peers.count ?? 0) + ' peers'
+                });
+            } else {
+                rows.push({ service: 'Grin Node', status: 'error', detail: 'Unreachable' });
+            }
+
+            if (walletHealth) {
+                const bal = walletHealth.checks?.balance || {};
+                const tor = walletHealth.checks?.tor_reachable || {};
+                rows.push({
+                    service: 'Grin Wallet',
+                    status: walletHealth.status === 'healthy' ? 'ok' : (walletHealth.status || 'unknown'),
+                    detail: 'Spendable ' + (bal.available != null ? Number(bal.available).toFixed(4) : '—') +
+                        ' GRIN · Tor ' + esc(tor.status || 'n/a')
+                });
+            } else {
+                rows.push({ service: 'Grin Wallet', status: 'error', detail: 'Unreachable' });
+            }
+
+            const now = new Date().toLocaleTimeString();
+            document.getElementById('service-tbody').innerHTML = rows.map(r =>
+                '<tr><td>' + esc(r.service) + '</td><td>' + statusBadge(r.status) +
+                '</td><td>' + r.detail + '</td><td>' + now + '</td></tr>').join('');
+        }
+
+        // ── Share relay / satellite verification ───────────────────────────────
+        async function loadSatellites() {
+            const data = await Auth.fetch('/api/admin/health/satellites');
+            const note = document.getElementById('relay-note');
+            const table = document.getElementById('relay-table');
+            const tbody = document.getElementById('relay-tbody');
+            if (!data) return;
+
+            if (data.role === 'singlebox') {
+                note.style.display = '';
+                note.innerHTML = '🖥 <strong>Single-box mode.</strong> The local stratum proxy feeds ' +
+                    'accepted shares straight into the Central API — there are no remote satellites to verify. ' +
+                    'See the Grin Node row above for the live share source.';
+                table.style.display = 'none';
+                return;
+            }
+
+            // Hub mode.
+            if (!data.ingestion_enabled) {
+                note.style.display = '';
+                note.innerHTML = '⚠ <strong>Hub ingestion is disabled.</strong> No <code>hub_shared_secret</code> ' +
+                    'is configured, so satellites cannot POST shares. Set it in pool.json / via the installer.';
+            } else if (!data.satellites.length) {
+                note.style.display = '';
+                note.innerHTML = '⏳ Ingestion is enabled but <strong>no satellite has reported yet.</strong> ' +
+                    'A region appears here within seconds of its first relayed share batch.';
+            } else {
+                note.style.display = 'none';
+            }
+
+            table.style.display = '';
+            if (!data.satellites.length) {
+                tbody.innerHTML = '<tr><td colspan="6">No satellite regions seen this session.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = data.satellites.map(s =>
+                '<tr>' +
+                '<td>' + esc(s.region) + (s.ip ? ' <span style="opacity:.6">(' + esc(s.ip) + ')</span>' : '') + '</td>' +
+                '<td>' + statusBadge(s.status) + '</td>' +
+                '<td>' + fmtAge(s.age_seconds) + '</td>' +
+                '<td>' + esc(s.last_share_height || '—') + '</td>' +
+                '<td>' + esc(s.shares_accepted) + ' / ' + esc(s.shares_skipped) + '</td>' +
+                '<td>' + esc(s.blocks) + '</td>' +
+                '</tr>').join('');
+        }
+
+        async function refreshAll() {
             try {
-                const nodeHealth = await Auth.fetch('/api/admin/health/node');
-                const walletHealth = await Auth.fetch('/api/admin/health/wallet');
-
-                if (!nodeHealth || !walletHealth) {
-                    console.error('Failed to fetch health data');
-                    return;
-                }
-
-                // Update stat cards
-                const statCards = document.querySelectorAll('.stat-card');
-                if (statCards.length >= 4) {
-                    // System Uptime
-                    const uptime = 730.5; // hours
-                    const uptimeValue = statCards[0].querySelector('.stat-value');
-                    if (uptimeValue) uptimeValue.innerHTML = uptime + '<span style="font-size: 0.5em;">h</span>';
-
-                    // CPU Usage
-                    const cpuValue = statCards[1].querySelector('.stat-value');
-                    if (cpuValue) cpuValue.innerHTML = '42<span style="font-size: 0.5em;">%</span>';
-
-                    // Memory Usage
-                    const memValue = statCards[2].querySelector('.stat-value');
-                    if (memValue) memValue.innerHTML = '68<span style="font-size: 0.5em;">%</span>';
-
-                    // Network I/O
-                    const netValue = statCards[3].querySelector('.stat-value');
-                    if (netValue) netValue.innerHTML = '1.2<span style="font-size: 0.5em;"> GB/h</span>';
-                }
-
-                // Update Node Status table
-                const nodeStatus = [
-                    {
-                        service: 'Grin Node',
-                        status: nodeHealth.checks?.api_reachable?.status || 'healthy',
-                        uptime: '730.5h',
-                        lastCheck: '5 min ago'
-                    },
-                    {
-                        service: 'Stratum Server',
-                        status: 'healthy',
-                        uptime: '730.5h',
-                        lastCheck: '1 min ago'
-                    },
-                    {
-                        service: 'Wallet API',
-                        status: walletHealth.checks?.api_reachable?.status || 'healthy',
-                        uptime: '720.5h',
-                        lastCheck: '5 min ago'
-                    },
-                    {
-                        service: 'Database',
-                        status: 'healthy',
-                        uptime: '730.5h',
-                        lastCheck: '1 min ago'
-                    }
-                ];
-
-                const nodeStatusTbody = document.querySelectorAll('table tbody')[0];
-                if (nodeStatusTbody) {
-                    nodeStatusTbody.innerHTML = nodeStatus.map(svc => `
-                        <tr>
-                            <td>${svc.service}</td>
-                            <td><span class="badge badge-${svc.status === 'healthy' || svc.status === 'ok' ? 'healthy' : 'warning'}">${svc.status}</span></td>
-                            <td>${svc.uptime}</td>
-                            <td>${svc.lastCheck}</td>
-                        </tr>
-                    `).join('');
-                }
-
-                // Update Resource Usage table
-                const resources = [
-                    { metric: 'CPU', current: 42, avg: 38, peak: 78 },
-                    { metric: 'Memory', current: 68, avg: 65, peak: 85 },
-                    { metric: 'Disk I/O', current: 12, avg: 18, peak: 64 },
-                    { metric: 'Network', current: 34, avg: 42, peak: 89 }
-                ];
-
-                const resourceTbody = document.querySelectorAll('table tbody')[1];
-                if (resourceTbody) {
-                    resourceTbody.innerHTML = resources.map(r => `
-                        <tr>
-                            <td>${r.metric}</td>
-                            <td>${r.current}% <div class="progress-bar"><div class="progress-fill" style="width: ${r.current}%"></div></div></td>
-                            <td>${r.avg}%</td>
-                            <td>${r.peak}%</td>
-                        </tr>
-                    `).join('');
-                }
-            } catch (error) {
-                console.error('Error loading system health:', error);
+                await Promise.all([loadSystemResources(), loadServices(), loadSatellites()]);
+                const ts = document.getElementById('last-refresh');
+                if (ts) ts.textContent = 'Last refreshed ' + new Date().toLocaleTimeString() + '.';
+            } catch (err) {
+                console.error('Error loading system health:', err);
             }
         }
 
-        // Load on page ready
-        document.addEventListener('DOMContentLoaded', loadSystemHealth);
+        document.addEventListener('DOMContentLoaded', refreshAll);
 
-        // Refresh every 30 seconds
-        setInterval(loadSystemHealth, 30000);
+        // Host metrics change slowly, so refresh every 5 minutes (also re-checks relay
+        // liveness). The 401-redirect in Auth.fetch keeps the page admin-only on each tick.
+        setInterval(refreshAll, 5 * 60 * 1000);
     </script>
     <script src="/js/public-theme.js"></script>
     <script src="/js/branding.js"></script>

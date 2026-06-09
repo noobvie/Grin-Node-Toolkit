@@ -157,8 +157,8 @@ pool_ensure_defaults() {
         ["node_stratum_port"]="3334"
         ["node_stratum_host"]="127.0.0.1"
         ["pool_address"]=""
-        ["pool_fee_percent"]="0"
-        ["min_withdrawal"]="2.0"
+        ["pool_fee_percent"]="1.0"
+        ["min_withdrawal"]="5.0"
         ["withdrawal_fee"]="0.0"
         ["grin_wallet_dir"]="/opt/grin/wallet/mainnet"
         ["log_path"]="$POOL_LOG"
@@ -342,10 +342,10 @@ pool_configure() {
     echo -ne "Subdomain        [$(pool_read_conf "subdomain" "")]: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "subdomain" "$val"
 
-    echo -ne "Pool fee %%       [$(pool_read_conf "pool_fee_percent" "0")]: "
+    echo -ne "Pool fee %%       [$(pool_read_conf "pool_fee_percent" "1.0")]: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "pool_fee_percent" "$val"
 
-    echo -ne "Min withdrawal   [$(pool_read_conf "min_withdrawal" "2.0")] GRIN: "
+    echo -ne "Min withdrawal   [$(pool_read_conf "min_withdrawal" "5.0")] GRIN: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "min_withdrawal" "$val"
 
     echo -ne "Wallet dir       [$(pool_read_conf "grin_wallet_dir" "/opt/grin/wallet/mainnet")]: "
@@ -922,7 +922,7 @@ pool_singlebox_loop() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEPLOYMENT MODE SELECTOR (multi-region split)
 # ═══════════════════════════════════════════════════════════════════════════════
-# Three deployment directions — see docs/generated/script07_multi_region_design.md §8:
+# Three deployment directions — see docs/generated/script07_design.md §3:
 #   singlebox — Hub + co-located Satellite on one server (original behaviour)
 #   hub       — Central Hub only (brain: API/DB/web/admin/wallet); satellites relay in
 #   satellite — Regional node + stratum proxy + share relay → points at a Hub

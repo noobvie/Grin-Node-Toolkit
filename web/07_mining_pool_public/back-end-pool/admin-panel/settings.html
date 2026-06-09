@@ -441,8 +441,8 @@
             <div class="form-group">
               <label for="pool_fee_percent">Pool Fee (%)</label>
               <div class="slider-group">
-                <input type="range" id="pool_fee_percent" name="pool_fee_percent" min="0" max="50" step="0.1" value="2">
-                <span class="slider-value"><span id="fee-value">2</span>%</span>
+                <input type="range" id="pool_fee_percent" name="pool_fee_percent" min="0" max="50" step="0.1" value="1">
+                <span class="slider-value"><span id="fee-value">1</span>%</span>
               </div>
               <div class="helper-text">Retained by pool operator (0-50%)</div>
             </div>
@@ -1037,7 +1037,7 @@
           <div class="form-row">
             <div class="form-group">
               <label for="min_withdrawal">Minimum Withdrawal (GRIN)</label>
-              <input type="number" id="min_withdrawal" name="min_withdrawal" min="0.01" step="0.01" value="0.1">
+              <input type="number" id="min_withdrawal" name="min_withdrawal" min="0.01" step="0.01" value="5">
               <div class="helper-text">Miners must accumulate at least this much to withdraw</div>
             </div>
             <div class="form-group">
@@ -1062,8 +1062,8 @@
           <div class="form-row">
             <div class="form-group">
               <label for="confirm_depth_mainnet">Mainnet Confirm Depth</label>
-              <input type="number" id="confirm_depth_mainnet" name="confirm_depth_mainnet" value="1441">
-              <div class="helper-text">Blocks until mainnet reward is spendable</div>
+              <input type="number" id="confirm_depth_mainnet" name="confirm_depth_mainnet" value="1440">
+              <div class="helper-text">Blocks until mainnet reward is spendable (Grin COINBASE_MATURITY = 1440)</div>
             </div>
             <div class="form-group">
               <label for="confirm_depth_testnet">Testnet Confirm Depth</label>

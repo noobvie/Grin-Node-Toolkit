@@ -30,8 +30,17 @@ const RetentionManager = require('./lib/retention');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 
 const app = express();
+// Trust X-Forwarded-For ONLY when the connection comes from our own nginx on loopback.
+// This makes req.ip the real client IP from XFF (instead of nginx's 127.0.0.1) while making
+// raw XFF UNspoofable: a direct hit on :8080 (not via the local proxy) gets its real socket
+// IP, not a forged header. Without this the rate-limiter, admin IP allowlist, and satellite
+// ingestion allowlist (requireSatellite) all compare against the wrong/forgeable address.
+// 'loopback' matches the toolkit convention (see web/051_wallet/server.js); app-scoped, so
+// no collision with other toolkit Express products.
+app.set('trust proxy', 'loopback');
 app.use(express.json());
 app.use(cookieParser());  // FIX #4: Parse httpOnly cookies
 
@@ -276,7 +285,9 @@ function setupRoutes() {
   ];
 
   // ─── Public Health Check (rate-limited, no auth) ───────────────────────────
-  app.get('/health',
+  // Registered on both /health and /api/health: nginx proxies /api/* to the backend,
+  // so the /api/health alias is what reaches the pool through the standard proxy path.
+  app.get(['/health', '/api/health'],
     rateLimiter.middleware('public'),
     (req, res) => {
       res.json({
@@ -292,6 +303,28 @@ function setupRoutes() {
   // Auth: shared-secret header (+ optional IP allowlist). Idempotent: shares dedup
   // by share_hash UNIQUE, blocks by hash UNIQUE. Inert unless hub_shared_secret is set.
   const GRIN_BLOCK_REWARD = 60; // Grin block reward is a fixed 60 GRIN (no halving)
+
+  // In-memory satellite liveness, keyed by region. The Central API is the sole DB writer
+  // and runs single-process, so a plain Map is sufficient — no locking needed. It resets
+  // on restart, which is fine: this is a liveness monitor, not a financial record (those
+  // live in the shares/blocks tables). Surfaced read-only via /api/admin/health/satellites.
+  const satelliteHeartbeats = new Map();
+
+  function recordSatelliteHeartbeat(region, ip, { accepted = 0, skipped = 0, blocks = 0, shareHeight = 0, blockHeight = 0 }) {
+    const key = region || 'default';
+    const hb = satelliteHeartbeats.get(key) || {
+      region: key, shares_accepted: 0, shares_skipped: 0, blocks: 0,
+      last_share_height: 0, last_block_height: 0
+    };
+    hb.ip = ip || hb.ip || null;
+    hb.last_seen = Date.now();
+    hb.shares_accepted += accepted;
+    hb.shares_skipped += skipped;
+    hb.blocks += blocks;
+    if (shareHeight > hb.last_share_height) hb.last_share_height = shareHeight;
+    if (blockHeight > hb.last_block_height) hb.last_block_height = blockHeight;
+    satelliteHeartbeats.set(key, hb);
+  }
 
   function satelliteSecretOk(provided) {
     const expected = config.hub_shared_secret || '';
@@ -317,19 +350,23 @@ function setupRoutes() {
   app.post('/api/shares', requireSatellite, async (req, res) => {
     const { region, shares } = req.body || {};
     if (!Array.isArray(shares)) return res.status(400).json({ error: 'shares[] required' });
-    let accepted = 0, skipped = 0;
+    let accepted = 0, skipped = 0, maxHeight = 0;
     for (const s of shares) {
       if (!s || !s.grin_address || !s.share_hash || !s.height) { skipped++; continue; }
       try {
         minerManager.ensureMinerExists(s.grin_address);
         const r = await shareValidator.submitShare(
-          s.grin_address, s.worker_name || null, s.difficulty, s.height, s.share_hash
+          s.grin_address, s.worker_name || null, s.difficulty, s.height, s.share_hash,
+          region || 'default'
         );
         if (r.success) accepted++; else skipped++; // duplicate (UNIQUE) or invalid → skip
+        if (s.height > maxHeight) maxHeight = s.height;
       } catch (e) {
         skipped++;
       }
     }
+    const ip = String(req.ip || '').replace('::ffff:', '');
+    recordSatelliteHeartbeat(region, ip, { accepted, skipped, shareHeight: maxHeight });
     res.json({ success: true, region: region || null, accepted, skipped });
   });
 
@@ -343,6 +380,8 @@ function setupRoutes() {
       const r = await blockManager.creditBlock(
         block.height, block.hash, block.nonce, GRIN_BLOCK_REWARD, block.found_by
       );
+      const ip = String(req.ip || '').replace('::ffff:', '');
+      recordSatelliteHeartbeat(region, ip, { blocks: 1, blockHeight: block.height });
       // Duplicate hash (UNIQUE) → already recorded; treat as success/idempotent.
       res.json({ success: true, region: region || null, block_id: r.block_id || null, duplicate: !r.success });
     } catch (e) {
@@ -671,6 +710,9 @@ function setupRoutes() {
 
   // FIX: Add logout endpoint
   app.post('/api/auth/logout', (req, res) => {
+    // Server-side revoke: bump the user's token_version so the issued refresh token
+    // can't be replayed after logout (clearing the cookie alone only affects this browser).
+    authManager.revokeByRefreshToken(req.cookies?.refresh_token || req.body?.refresh_token);
     res.clearCookie('access_token', { httpOnly: true });
     res.clearCookie('refresh_token', { httpOnly: true });
     res.json({ success: true });
@@ -853,6 +895,189 @@ function setupRoutes() {
       `);
       const payments = stmt.all(limit);
       res.json(payments);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── Account summary (address-as-identity; no auth) ─────────────────────────
+  // One-stop public view for a miner address: balances + lifetime paid + pending
+  // withdrawal + share/hashrate snapshot. 404 if the address has never mined here.
+  app.get('/api/account/:addr', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const { addr } = req.params;
+      const acct = db.prepare(
+        `SELECT grin_address, balance, balance_locked, is_online, last_seen_at, created_at
+         FROM miner_accounts WHERE grin_address = ?`
+      ).get(addr);
+      if (!acct) return res.status(404).json({ error: 'Account not found' });
+
+      const paid = db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM withdrawals
+         WHERE grin_address = ? AND status = 'confirmed'`
+      ).get(addr).total;
+
+      const pending = db.prepare(
+        `SELECT COUNT(*) AS c FROM withdrawals
+         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled')`
+      ).get(addr).c;
+
+      const shareAgg = db.prepare(
+        `SELECT COUNT(*) AS count, MAX(created_at) AS last_share_at FROM shares WHERE grin_address = ?`
+      ).get(addr);
+
+      const hr = hashrateTracker.getMinerHashrate(addr, 60) || {};
+
+      res.json({
+        grin_address: acct.grin_address,
+        balance: acct.balance,
+        balance_locked: acct.balance_locked,
+        total: acct.balance + acct.balance_locked,
+        total_paid: paid,
+        pending_withdrawals: pending,
+        is_online: !!acct.is_online,
+        last_seen_at: acct.last_seen_at || null,
+        created_at: acct.created_at,
+        shares: {
+          count: shareAgg.count || 0,
+          last_share_at: shareAgg.last_share_at || null
+        },
+        hashrate_gps: parseFloat(((hr.avg_hashrate || 0)).toFixed(6)),
+        min_withdrawal: config.min_withdrawal
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Append-only ledger for an address (every balance/locked change). No auth — the
+  // ledger only exposes the address's own money movements, and the address is identity.
+  app.get('/api/account/:addr/balance/log', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const { addr } = req.params;
+      const limit = Math.min(parseInt(req.query.limit || 50), 500);
+      const offset = parseInt(req.query.offset || 0);
+      const rows = db.prepare(
+        `SELECT event_type, amount, balance_before, balance_after, locked_before, locked_after,
+                reference_type, reference_id, created_at
+         FROM balance_log WHERE grin_address = ?
+         ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+      ).all(addr, limit, offset);
+      res.json({ grin_address: addr, count: rows.length, log: rows });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Is this miner reachable over Tor right now? Drives the UI hint for whether an
+  // auto (Tor) payout can succeed vs. needing a Slatepack claim. No state change.
+  app.get('/api/account/:addr/tor-check', rateLimiter.middleware('public'), async (req, res) => {
+    try {
+      const { addr } = req.params;
+      const result = await walletTor.probeToronlineStatus(addr, config.tor_check_timeout_ms);
+      res.json({
+        grin_address: addr,
+        online: !!result.online,
+        reason: result.reason || (result.online ? 'reachable' : 'unreachable')
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Miner-initiated withdrawal (address-as-identity). The payout always goes back to the
+  // requesting address via the Tor listener, so there is no theft vector even without auth —
+  // it only moves an address's own balance to itself. Rate-limited; the CAS balance lock,
+  // 1-pending-per-address cap, and ledger entry all live in WithdrawalScheduler.createWithdrawal.
+  app.post('/api/account/:addr/withdraw', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const { addr } = req.params;
+      const method = (req.body && req.body.method) || 'tor';
+      if (method !== 'tor') {
+        // Slatepack transport is a documented-but-unbuilt rail (design §8 / §12); only the
+        // zero-interaction Tor transport is wired today. Fail explicitly rather than silently.
+        return res.status(400).json({ error: 'Only Tor withdrawals are available; Slatepack is not yet supported.' });
+      }
+      const result = withdrawalScheduler.createWithdrawal(addr, req.body && req.body.amount, method);
+      res.json({ success: true, withdrawal_id: result.withdrawal_id, status: 'tor_checking' });
+    } catch (err) {
+      res.status(err.code && err.code >= 400 && err.code < 500 ? err.code : 500).json({ error: err.message });
+    }
+  });
+
+  // ─── Multi-region public read APIs ──────────────────────────────────────────
+  // Descriptive list of operator-declared regions (for a "connect to your nearest region"
+  // UI). Only active rows + non-sensitive fields; the IP allowlist/secret are never exposed.
+  app.get('/api/pool/locations', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const rows = db.prepare(
+        `SELECT region, label, stratum_url, is_active FROM pool_locations
+         WHERE is_active = 1 ORDER BY region ASC`
+      ).all();
+      res.json(rows.map(r => ({ region: r.region, label: r.label, stratum_url: r.stratum_url })));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Per-region live stats. Hashrate is derived from accepted-share difficulty over a short
+  // window using the canonical C32 formula (GPS = Σdiff × 42 / window_s / 16384 — matches
+  // hashrate-tracker.js and CLAUDE.md), grouped by the `region` tag the relay stamps on each
+  // share. Regions with a pool_locations row but no recent shares appear with online=false.
+  // Satellite IPs are deliberately NOT exposed here (that's admin-only /health/satellites).
+  app.get('/api/pool/stats/regions', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const WINDOW_S = 900; // 15-minute window for "current" regional hashrate
+      const CYCLE_LENGTH = 42, SOLUTION_RATE = 16384;
+      const cutoff = Math.floor(Date.now() / 1000) - WINDOW_S;
+
+      const agg = db.prepare(
+        `SELECT region,
+                COUNT(*) AS shares,
+                COUNT(DISTINCT grin_address) AS miners,
+                COALESCE(SUM(difficulty), 0) AS sumdiff
+         FROM shares WHERE created_at > ? GROUP BY region`
+      ).all(cutoff);
+      const byRegion = new Map(agg.map(r => [r.region, r]));
+
+      const locations = db.prepare(
+        `SELECT region, label, stratum_url, is_active FROM pool_locations`
+      ).all();
+      const locByRegion = new Map(locations.map(l => [l.region, l]));
+
+      // Union of regions seen in shares and regions declared in pool_locations.
+      const regions = new Set([...byRegion.keys(), ...locByRegion.keys()]);
+      const out = [];
+      let totalGps = 0, totalMiners = 0, totalShares = 0;
+      for (const region of regions) {
+        const a = byRegion.get(region) || { shares: 0, miners: 0, sumdiff: 0 };
+        const loc = locByRegion.get(region) || {};
+        const gps = (a.sumdiff * CYCLE_LENGTH) / (WINDOW_S * SOLUTION_RATE);
+        totalGps += gps; totalMiners += a.miners; totalShares += a.shares;
+        out.push({
+          region,
+          label: loc.label || null,
+          stratum_url: loc.stratum_url || null,
+          is_active: loc.is_active === undefined ? null : !!loc.is_active,
+          online: a.shares > 0,
+          hashrate_gps: parseFloat(gps.toFixed(6)),
+          miners: a.miners,
+          shares_window: a.shares
+        });
+      }
+      out.sort((x, y) => y.hashrate_gps - x.hashrate_gps);
+
+      res.json({
+        window_seconds: WINDOW_S,
+        region_count: out.length,
+        totals: {
+          hashrate_gps: parseFloat(totalGps.toFixed(6)),
+          miners: totalMiners,
+          shares_window: totalShares
+        },
+        regions: out,
+        timestamp: new Date().toISOString()
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -1389,7 +1614,7 @@ function setupRoutes() {
             total: walletBalance.total || 0,
             available: walletBalance.available || 0,
             locked: walletBalance.locked || 0,
-            min_required: config.min_withdrawal || 10.0
+            min_required: config.min_withdrawal || 5.0
           },
           synced: {
             status: 'ok',
@@ -1405,6 +1630,280 @@ function setupRoutes() {
         error: err.message,
         timestamp: new Date().toISOString()
       });
+    }
+  });
+
+  // System Resources — real host metrics (CPU load, memory, disk, uptime). No hardcoded
+  // values: everything comes from Node's `os` module + statfs on the data partition.
+  app.get('/api/admin/health/system', secureAdmin, (req, res) => {
+    try {
+      const cpus = os.cpus() || [];
+      const cpuCount = cpus.length || 1;
+      const load = os.loadavg(); // [1m, 5m, 15m]; reported as 0,0,0 on platforms without it
+      const totalMem = os.totalmem();
+      const freeMem = os.freemem();
+      const usedMem = totalMem - freeMem;
+      const memPct = totalMem ? Math.round((usedMem / totalMem) * 100) : 0;
+      // CPU utilisation proxy: 1-min load average relative to core count (standard Linux view).
+      const cpuPct = Math.min(100, Math.round((load[0] / cpuCount) * 100));
+
+      // Disk usage for the partition holding the pool DB (falls back to the cwd, then '/').
+      // fs.statfsSync landed in Node 18.15 — guard so older runtimes degrade to null.
+      let disk = null;
+      try {
+        if (typeof fs.statfsSync === 'function') {
+          let target = '/';
+          if (config.db_path && path.isAbsolute(config.db_path)) target = path.dirname(config.db_path);
+          else target = process.cwd();
+          const st = fs.statfsSync(target);
+          const totalBytes = st.blocks * st.bsize;
+          const freeBytes = st.bavail * st.bsize;
+          const usedBytes = totalBytes - freeBytes;
+          disk = {
+            mount: target,
+            total_gb: +(totalBytes / 1e9).toFixed(1),
+            free_gb: +(freeBytes / 1e9).toFixed(1),
+            used_pct: totalBytes ? Math.round((usedBytes / totalBytes) * 100) : 0
+          };
+        }
+      } catch (e) {
+        disk = null;
+      }
+
+      res.json({
+        status: 'ok',
+        hostname: os.hostname(),
+        platform: os.platform(),
+        cpu: {
+          count: cpuCount,
+          model: cpus[0] ? cpus[0].model : null,
+          used_pct: cpuPct,
+          load_1m: +load[0].toFixed(2),
+          load_5m: +load[1].toFixed(2),
+          load_15m: +load[2].toFixed(2)
+        },
+        memory: {
+          total_gb: +(totalMem / 1e9).toFixed(2),
+          used_gb: +(usedMem / 1e9).toFixed(2),
+          free_gb: +(freeMem / 1e9).toFixed(2),
+          used_pct: memPct
+        },
+        disk,
+        uptime: {
+          system_seconds: Math.floor(os.uptime()),
+          process_seconds: Math.floor(process.uptime())
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (err) {
+      res.status(500).json({ status: 'error', error: err.message, timestamp: new Date().toISOString() });
+    }
+  });
+
+  // Share-relay liveness — confirms each satellite region is still POSTing shares/blocks to
+  // the hub. Status thresholds are share-age based: a satellite is only "online" while shares
+  // keep arriving. In single-box mode the local stratum feeds the Central API directly, so no
+  // remote satellites are expected (the page renders an explanatory note instead).
+  app.get('/api/admin/health/satellites', secureAdmin, (req, res) => {
+    const STALE_S = 180;    // no shares for 3 min  → stale (relay lagging / region quiet)
+    const OFFLINE_S = 600;  // no shares for 10 min → offline (relay or region down)
+    const now = Date.now();
+    const satellites = Array.from(satelliteHeartbeats.values()).map((s) => {
+      const ageS = Math.floor((now - s.last_seen) / 1000);
+      let status = 'online';
+      if (ageS >= OFFLINE_S) status = 'offline';
+      else if (ageS >= STALE_S) status = 'stale';
+      return {
+        region: s.region,
+        ip: s.ip || null,
+        status,
+        age_seconds: ageS,
+        last_seen: new Date(s.last_seen).toISOString(),
+        last_share_height: s.last_share_height || 0,
+        last_block_height: s.last_block_height || 0,
+        shares_accepted: s.shares_accepted || 0,
+        shares_skipped: s.shares_skipped || 0,
+        blocks: s.blocks || 0
+      };
+    }).sort((a, b) => a.region.localeCompare(b.region));
+
+    res.json({
+      role: config.role || 'singlebox',
+      // Ingestion is inert until the operator sets hub_shared_secret; surface that so the
+      // admin knows whether a missing satellite means "down" vs "hub not configured to accept".
+      ingestion_enabled: !!config.hub_shared_secret,
+      stale_threshold_seconds: STALE_S,
+      offline_threshold_seconds: OFFLINE_S,
+      satellite_count: satellites.length,
+      satellites,
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // ─── MULTI-REGION LOCATIONS (Admin only) ──────────────────────────
+  // CRUD over pool_locations — the operator's descriptive registry of regions/satellites
+  // (labels + public stratum URLs surfaced to miners via /api/pool/locations). This is
+  // metadata only; ingestion is still gated by the IP allowlist + shared secret in pool.json.
+  app.get('/api/admin/locations', secureAdmin, (req, res) => {
+    try {
+      const rows = db.prepare('SELECT * FROM pool_locations ORDER BY region ASC').all();
+      res.json({ success: true, locations: rows });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Create or update a region by its unique `region` key (upsert).
+  app.post('/api/admin/locations', secureAdmin, (req, res) => {
+    try {
+      const { region, label, api_url, stratum_url } = req.body || {};
+      const is_active = req.body && req.body.is_active === false ? 0 : 1;
+      const reg = String(region || '').trim();
+      if (!reg) return res.status(400).json({ error: 'region is required' });
+
+      db.prepare(`
+        INSERT INTO pool_locations (region, label, api_url, stratum_url, is_active, updated_at)
+        VALUES (?, ?, ?, ?, ?, unixepoch())
+        ON CONFLICT(region) DO UPDATE SET
+          label = excluded.label,
+          api_url = excluded.api_url,
+          stratum_url = excluded.stratum_url,
+          is_active = excluded.is_active,
+          updated_at = unixepoch()
+      `).run(reg, label || null, api_url || null, stratum_url || null, is_active);
+
+      const row = db.prepare('SELECT * FROM pool_locations WHERE region = ?').get(reg);
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'location_upsert', 'pool_location', ?, ?, ?)
+      `).run(req.user.user_id, reg, JSON.stringify({ label, api_url, stratum_url, is_active }), req.ip);
+
+      res.json({ success: true, location: row });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/admin/locations/:id', secureAdmin, (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const row = db.prepare('SELECT * FROM pool_locations WHERE id = ?').get(id);
+      if (!row) return res.status(404).json({ error: 'location not found' });
+      db.prepare('DELETE FROM pool_locations WHERE id = ?').run(id);
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'location_delete', 'pool_location', ?, ?, ?)
+      `).run(req.user.user_id, row.region, JSON.stringify(row), req.ip);
+      res.json({ success: true, deleted: row.region });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── MINERS (Admin only) ───────────────────────────────────────────
+  // Admin view of miner accounts (address-keyed; miners never have logins). Read access
+  // to balances + share/hashrate activity, plus a testnet-only balance injector for
+  // exercising the payout pipeline without mining 100 blocks first.
+  app.get('/api/admin/miners', secureAdmin, (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit || 50), 500);
+      const offset = parseInt(req.query.offset || 0);
+      const search = req.query.search ? `%${req.query.search}%` : null;
+
+      const where = search ? 'WHERE ma.grin_address LIKE ?' : '';
+      const args = search ? [search, limit, offset] : [limit, offset];
+      const rows = db.prepare(`
+        SELECT ma.grin_address, ma.balance, ma.balance_locked, ma.is_online, ma.last_seen_at, ma.created_at,
+               (SELECT COUNT(*) FROM shares s WHERE s.grin_address = ma.grin_address) AS shares_count,
+               (SELECT MAX(created_at) FROM shares s WHERE s.grin_address = ma.grin_address) AS last_share_at,
+               (SELECT COALESCE(SUM(amount),0) FROM withdrawals w WHERE w.grin_address = ma.grin_address AND w.status='confirmed') AS total_paid
+        FROM miner_accounts ma
+        ${where}
+        ORDER BY ma.balance DESC
+        LIMIT ? OFFSET ?
+      `).all(...args);
+
+      res.json({ success: true, count: rows.length, miners: rows });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/miners/:addr', secureAdmin, (req, res) => {
+    try {
+      const { addr } = req.params;
+      const acct = db.prepare('SELECT * FROM miner_accounts WHERE grin_address = ?').get(addr);
+      if (!acct) return res.status(404).json({ error: 'miner not found' });
+
+      const total_paid = db.prepare(
+        `SELECT COALESCE(SUM(amount),0) AS t FROM withdrawals WHERE grin_address = ? AND status='confirmed'`
+      ).get(addr).t;
+      const pending = db.prepare(
+        `SELECT * FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled') ORDER BY created_at DESC`
+      ).all(addr);
+      const shareAgg = db.prepare(
+        `SELECT COUNT(*) AS count, MAX(created_at) AS last_share_at FROM shares WHERE grin_address = ?`
+      ).get(addr);
+      const blocks_found = db.prepare(
+        `SELECT COUNT(*) AS c FROM blocks WHERE found_by = ?`
+      ).get(addr).c;
+      const incentives = db.prepare('SELECT * FROM miner_incentives WHERE grin_address = ?').get(addr) || null;
+      const hr = hashrateTracker.getMinerHashrate(addr, 60) || {};
+
+      res.json({
+        success: true,
+        miner: {
+          ...acct,
+          is_online: !!acct.is_online,
+          total_paid,
+          shares_count: shareAgg.count || 0,
+          last_share_at: shareAgg.last_share_at || null,
+          blocks_found,
+          hashrate_gps: parseFloat(((hr.avg_hashrate || 0)).toFixed(6)),
+          pending_withdrawals: pending,
+          incentives
+        }
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Testnet-only: inject GRIN into a miner's balance to exercise the payout pipeline
+  // (skip the confirm_depth wait). Hard-guarded to testnet so it can never mint mainnet
+  // balances. Records a balance_log credit + admin_audit_log row.
+  app.post('/api/admin/miners/:addr/inject', secureAdmin, (req, res) => {
+    try {
+      if (config.network !== 'testnet') {
+        return res.status(403).json({ error: 'balance injection is testnet-only' });
+      }
+      const { addr } = req.params;
+      const amount = parseFloat(req.body && req.body.amount);
+      if (isNaN(amount) || amount <= 0) {
+        return res.status(400).json({ error: 'amount must be a positive number' });
+      }
+
+      const injected = db.transaction(() => {
+        minerManager.ensureMinerExists(addr);
+        const before = db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(addr);
+        db.prepare('UPDATE miner_accounts SET balance = balance + ?, updated_at = unixepoch() WHERE grin_address = ?').run(amount, addr);
+        const after = before.balance + amount;
+        db.prepare(`
+          INSERT INTO balance_log
+          (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+          VALUES (?, 'credit', ?, ?, ?, ?, ?, 'admin_inject', 0)
+        `).run(addr, amount, before.balance, after, before.balance_locked, before.balance_locked);
+        return after;
+      })();
+
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'miner_inject', 'miner_account', ?, ?, ?)
+      `).run(req.user.user_id, addr, JSON.stringify({ amount, balance: injected }), req.ip);
+
+      res.json({ success: true, grin_address: addr, amount, balance: injected });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
   });
 

@@ -859,6 +859,14 @@
 
     <script src="/js/auth.js"></script>
     <script>
+        // Escape any value before it goes into innerHTML (defense-in-depth on tx_hash,
+        // status, and any operator/miner-derived field rendered into the table).
+        function escHtml(v) {
+            return String(v == null ? '' : v)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
         // Theme switching is handled site-wide by /js/public-theme.js, which renders
         // the theme picker and applies the 3 built-in + 10 white-label themes.
 
@@ -904,8 +912,8 @@
                         <tr>
                             <td>${new Date(w.created_at).toLocaleString()}</td>
                             <td>${w.amount.toFixed(2)} GRIN</td>
-                            <td>${w.tx_hash || 'pending'}</td>
-                            <td><span class="status-badge ${w.status === 'confirmed' ? 'status-active' : 'status-inactive'}">${w.status}</span></td>
+                            <td>${escHtml(w.tx_hash || 'pending')}</td>
+                            <td><span class="status-badge ${w.status === 'confirmed' ? 'status-active' : 'status-inactive'}">${escHtml(w.status)}</span></td>
                         </tr>
                     `).join('');
                 }

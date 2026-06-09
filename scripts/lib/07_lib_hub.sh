@@ -5,7 +5,7 @@
 # Deploys: Central API (sole DB writer), SQLite/WAL + schema + retention job,
 # web dashboard + admin panel, Grin wallet (Tor payouts), nginx + SSL, backups.
 # Remote satellites relay shares/blocks in via HTTPS POST (IP allowlist + secret).
-# See docs/generated/script07_multi_region_design.md §3, §4, §8, §9.
+# See docs/generated/script07_design.md §3–6 + script07_implementation.md (retention, runbook).
 #
 # The hub brain REUSES the shared pool_* setup functions from the parent script
 # (install/configure/deploy web/nginx/admin/status/backup). Hub-specific

@@ -104,10 +104,13 @@ const Auth = {
     this.clearToken();
   },
 
-  // Check if logged in
+  // Check if logged in. Must hit an AUTH-GATED endpoint: /api/health is public and
+  // returns 200 for everyone, so it can't tell logged-in from logged-out. The admin
+  // dashboard endpoint returns 200 only with a valid admin cookie (401/403 otherwise),
+  // which is the right signal here since only admins have accounts on this pool.
   async isLoggedIn() {
     try {
-      const response = await fetch('/api/health', { credentials: 'include' });
+      const response = await fetch('/api/admin/dashboard', { credentials: 'include' });
       return response.status === 200;
     } catch {
       return false;

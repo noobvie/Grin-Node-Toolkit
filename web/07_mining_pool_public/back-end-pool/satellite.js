@@ -13,7 +13,7 @@
 //
 // Config: GRIN_POOL_CONF (defaults ./pool.json). Must set hub_url +
 // hub_shared_secret + region (+ pool_address for the node stratum login).
-// See docs/generated/script07_multi_region_design.md §8.
+// See docs/generated/script07_design.md §3–4.
 
 const { loadConfig } = require('./lib/config');
 const { initDb } = require('./lib/db');

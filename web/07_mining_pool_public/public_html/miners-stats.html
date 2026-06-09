@@ -938,6 +938,15 @@
 
     <script src="/js/auth.js"></script>
     <script>
+        // Escape any value before it goes into innerHTML. Defense-in-depth: the stratum
+        // layer already restricts grin_address to bech32 chars (lib/stratum-protocol.js),
+        // but escaping here protects every interpolated field regardless of source.
+        function escHtml(v) {
+            return String(v == null ? '' : v)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
         // Theme switching is handled site-wide by /js/public-theme.js, which renders
         // the theme picker and applies the 3 built-in + 10 white-label themes.
 
@@ -986,7 +995,7 @@
                     minersTbody.innerHTML = minersData.map((miner, idx) => `
                         <tr>
                             <td>${idx + 1}</td>
-                            <td>${miner.grin_address}</td>
+                            <td>${escHtml(miner.grin_address)}</td>
                             <td>${(miner.balance || 0).toFixed(2)}</td>
                             <td>N/A</td>
                             <td><span class="badge badge-online">Online</span></td>

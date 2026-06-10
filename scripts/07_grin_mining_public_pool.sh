@@ -19,7 +19,7 @@
 #
 # ─── Menu ────────────────────────────────────────────────────────────────────
 #   G) Guided Full Setup     (1→2→3→4→5→6 in sequence)
-#   1) Install               (nodejs ≥18, npm, sqlite3, systemd, logrotate)
+#   1) Install               (nodejs ≥18, npm, sqlite3, systemd, logrotate, fail2ban)
 #   2) Configure             (pool name, domain, fee, wallet dir, stratum port)
 #   3) Deploy web files      (frontend → /var/www/grin-pool)
 #   4) Setup nginx           (vhost + rate limits + SSL via certbot)
@@ -327,6 +327,11 @@ $POOL_LOG {
 }
 EOF
     success "Logrotate configured."
+
+    # Fail2ban login guard is part of the base install; non-fatal so a missing
+    # EPEL repo doesn't abort the whole install — fix the cause and re-run Install.
+    pool_setup_fail2ban || warn "fail2ban setup failed — fix the cause (e.g. enable EPEL) and re-run 1) Install."
+
     echo ""
     success "Pool manager installed."
     echo -e "  Next: ${BOLD}2) Configure${RESET} → ${BOLD}3) Deploy web files${RESET} → ${BOLD}4) Setup nginx${RESET} → ${BOLD}5) Admin account${RESET}"
@@ -555,7 +560,7 @@ EOF
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 4b) FAIL2BAN — brute-force protection for the admin login endpoint
+# 1b) FAIL2BAN — brute-force protection for the admin login endpoint (run by Install)
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # A wrong password makes the pool return HTTP 401 on POST /api/auth/login, which nginx
@@ -644,7 +649,7 @@ EOF
     if fail2ban-client status grin-pool-login &>/dev/null; then
         success "Jail 'grin-pool-login' is active."
         echo ""
-        echo -e "  ${DIM}Rule:   ${maxretry} failed logins / ${findtime}s  →  ${bantime}s ban  (edit fail2ban_* in grin_pool.json, then re-run F)${RESET}"
+        echo -e "  ${DIM}Rule:   ${maxretry} failed logins / ${findtime}s  →  ${bantime}s ban  (edit fail2ban_* in grin_pool.json, then re-run 1) Install)${RESET}"
         echo -e "  ${DIM}Status: fail2ban-client status grin-pool-login${RESET}"
         echo -e "  ${DIM}Unban:  fail2ban-client set grin-pool-login unbanip <IP>${RESET}"
         echo -e "  ${DIM}Test:   fail2ban-regex $access_log $filter${RESET}"
@@ -933,7 +938,7 @@ pool_reset_db() {
 pool_guided_setup() {
     echo -e "\n${BOLD}${CYAN}═══ Guided Full Setup — GRINIUM Pool (Mainnet) ═══${RESET}\n"
     pool_check_exclusivity || return 0
-    echo -e "  This will run steps 1 → 2 → 3 → 4 → fail2ban → 5 → 6 in sequence."
+    echo -e "  This will run steps 1 → 2 → 3 → 4 → 5 → 6 in sequence."
     echo -ne "  Continue? [Y/n]: "
     read -r go; [[ "${go,,}" == "n" ]] && return
 
@@ -944,8 +949,6 @@ pool_guided_setup() {
     pool_deploy_web
     echo ""; echo "Press Enter to continue to Setup nginx..."; read -r
     pool_setup_nginx
-    echo ""; echo "Press Enter to set up fail2ban (admin login protection)..."; read -r
-    pool_setup_fail2ban || warn "Skipping fail2ban — set it up later from the menu (F)."
     echo ""; echo "Press Enter to start the service and create admin account..."; read -r
     pool_start_service
     sleep 2
@@ -985,7 +988,7 @@ show_menu() {
     echo -e "  ${GREEN}G${RESET}) Guided Full Setup    ${DIM}(runs all setup steps 1→6)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Manual Setup Steps ───────────────────────────${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Install               ${DIM}(nodejs ≥18, npm, sqlite3, systemd)${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Install               ${DIM}(nodejs ≥18, npm, sqlite3, systemd, fail2ban)${RESET}"
     echo -e "  ${GREEN}2${RESET}) Configure             ${DIM}(pool name, domain, fee, wallet dir)${RESET}"
     echo -e "  ${GREEN}3${RESET}) Deploy web files      ${DIM}(frontend → $POOL_WEB_DIR)${RESET}"
     echo -e "  ${GREEN}4${RESET}) Setup nginx           ${DIM}(vhost + SSL + rate limits)${RESET}"
@@ -994,7 +997,6 @@ show_menu() {
     echo ""
     echo -e "${DIM}  ─── Administration ───────────────────────────────${RESET}"
     echo -e "  ${GREEN}7${RESET}) Pool status           ${DIM}(service, port, DB, recent logs)${RESET}"
-    echo -e "  ${GREEN}F${RESET}) Fail2ban login guard  ${DIM}(brute-force protection for admin login)${RESET}"
     echo -e "  ${GREEN}B${RESET}) Backup pool           ${DIM}(DB + config → /opt/grin/backups/)${RESET}"
     echo -e "  ${GREEN}C${RESET}) Cron tasks            ${DIM}(backup schedule, VACUUM)${RESET}"
     echo -e "  ${GREEN}L${RESET}) View logs             ${DIM}(tail -50 | less)${RESET}"
@@ -1003,7 +1005,7 @@ show_menu() {
     echo -e "${DIM}  ─── Danger Zone ──────────────────────────────────${RESET}"
     echo -e "  ${RED}DEL${RESET}) Reset database    ${DIM}(⚠ permanently wipes all data)${RESET}"
     echo ""
-    echo -e "  ${RED}0${RESET}) Back to mining hub"
+    echo -e "  ${RED}0${RESET}) Back to deployment mode menu"
     echo ""
     echo -ne "${BOLD}Select: ${RESET}"
 }
@@ -1023,7 +1025,6 @@ pool_singlebox_loop() {
             5)     pool_setup_admin ;;
             6)     pool_service_menu ;;
             7)     pool_show_status ;;
-            f)     pool_setup_fail2ban || true ;;  # tolerate non-zero (e.g. no EPEL) — set -e would else drop the menu
             b)     pool_backup ;;
             c)     pool_cron_schedules ;;
             l)     pool_view_logs ;;
@@ -1078,6 +1079,8 @@ pool_cleanup() {
     local logrotate_conf="/etc/logrotate.d/${POOL_SERVICE}"
     local zones_conf="/etc/nginx/conf.d/script07-${POOL_SERVICE}.conf"
     local backup_dir="/opt/grin/backups/${POOL_SERVICE}"
+    local f2b_filter="/etc/fail2ban/filter.d/grin-pool-login.conf"
+    local f2b_jail="/etc/fail2ban/jail.d/grin-pool.conf"
 
     echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -e "${BOLD}${RED}  Clean Up Public Mining Pool${RESET}  ${DIM}(rebuild from scratch quickly)${RESET}"
@@ -1097,6 +1100,7 @@ pool_cleanup() {
     echo -e "    Pool config (JSON)          $(_pool_cleanup_mark "$POOL_CONF")"
     echo -e "    Satellite config (JSON)     $(_pool_cleanup_mark "$SAT_CONF")"
     echo -e "    Service logs                $(_pool_cleanup_mark "$POOL_LOG")"
+    echo -e "    Fail2ban jail + filter      $(_pool_cleanup_mark "$f2b_jail")"
     echo ""
     echo -e "  ${BOLD}${GREEN}Kept — never touched:${RESET}"
     echo -e "    ${DIM}Grin node + chain data · grin-server.toml (stratum config as-is)${RESET}"
@@ -1201,6 +1205,26 @@ pool_cleanup() {
     fi
     echo ""
 
+    # 8) Fail2ban login-guard jail + filter (written by 1) Install). Must go when the
+    #    pool does: step 7 deletes the watched access log, and a jail with a missing
+    #    logpath stops fail2ban from starting — taking every other jail down with it.
+    #    fail2ban itself stays installed (other services may have their own jails).
+    if [[ -f "$f2b_jail" || -f "$f2b_filter" ]]; then
+        echo -ne "${BOLD}8)${RESET} Remove fail2ban login-guard jail + filter? [Y/n]: "
+        read -r a || true
+        if [[ "${a,,}" != "n" ]]; then
+            rm -f "$f2b_jail" "$f2b_filter"
+            if systemctl is-active --quiet fail2ban 2>/dev/null; then
+                systemctl restart fail2ban 2>/dev/null \
+                    && success "fail2ban restarted without the pool jail." \
+                    || warn "fail2ban restart failed — inspect: journalctl -u fail2ban -n 30"
+            fi
+            success "Fail2ban jail + filter removed."
+            log "Cleanup: removed $f2b_jail + $f2b_filter"
+        fi
+        echo ""
+    fi
+
     success "Public-pool cleanup complete."
     echo -e "  ${BOLD}${GREEN}Kept:${RESET} node + chain data · grin-server.toml (stratum config as-is)"
     echo -e "        wallet dir + seed · pool backups ($backup_dir)"
@@ -1278,8 +1302,11 @@ pool_select_mode() {
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  GRINIUM — Mining Pool Deployment Mode${RESET}"
+        echo -e "${BOLD}${CYAN}  Public Mining Pool Deployment Mode${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        echo -e "  ${DIM}Tip: don't install a brain (1/2) and a Satellite (3) on the same box —${RESET}"
+        echo -e "  ${DIM}they collide on ports 3333/3334/8080. Use Single-server for one machine.${RESET}"
         echo ""
         echo -e "  ${BOLD}Single-server${RESET} ${DIM}(everything on one box)${RESET}"
         echo -e "  ${DIM}─────────────────────────────────────────────${RESET}"
@@ -1290,10 +1317,10 @@ pool_select_mode() {
         echo -e "  ${GREEN}2${RESET}) Central Hub          ${DIM}(the brain — one per pool)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Satellite            ${DIM}(a region — node + proxy → points at your Hub)${RESET}"
         echo ""
-        echo -e "  ${DIM}Tip: don't install a brain (1/2) and a Satellite (3) on the same box —${RESET}"
-        echo -e "  ${DIM}they collide on ports 3333/3334/8080. Use Single-server for one machine.${RESET}"
-        echo ""
+        echo -e "  ${BOLD}${RED}Danger zone${RESET}"
+        echo -e "  ${RED}═════════════════════════════════════════════${RESET}"
         echo -e "  ${RED}Z${RESET}) Cleanup public pool  ${DIM}(remove pool/hub/satellite infra · keeps node + wallet + backups)${RESET}"
+        echo ""
         echo -e "  ${RED}0${RESET}) Back to mining hub"
         echo ""
         echo -ne "${BOLD}Select mode: ${RESET}"
@@ -1324,25 +1351,34 @@ pool_select_mode() {
 }
 
 main() {
-    pool_select_mode "${1:-}"
-    case "$POOL_MODE" in
-        singlebox)
-            pool_singlebox_loop
-            ;;
-        hub)
-            # shellcheck source=lib/07_lib_hub.sh
-            source "$SCRIPT_DIR/lib/07_lib_hub.sh"
-            pool_hub_loop
-            ;;
-        satellite)
-            # shellcheck source=lib/07_lib_satellite.sh
-            source "$SCRIPT_DIR/lib/07_lib_satellite.sh"
-            pool_satellite_loop
-            ;;
-        *)
-            info "No mode selected — returning to mining hub."
-            ;;
-    esac
+    local arg="${1:-}"
+    # Loop so leaving a mode menu (0) returns here, to the deployment-mode
+    # selector — only the selector's own 0 exits the script back to the mining
+    # hub. A direct mode arg (non-interactive entry) runs that mode once and exits.
+    while true; do
+        POOL_MODE=""
+        pool_select_mode "$arg"
+        case "$POOL_MODE" in
+            singlebox)
+                pool_singlebox_loop
+                ;;
+            hub)
+                # shellcheck source=lib/07_lib_hub.sh
+                source "$SCRIPT_DIR/lib/07_lib_hub.sh"
+                pool_hub_loop
+                ;;
+            satellite)
+                # shellcheck source=lib/07_lib_satellite.sh
+                source "$SCRIPT_DIR/lib/07_lib_satellite.sh"
+                pool_satellite_loop
+                ;;
+            *)
+                info "No mode selected — returning to mining hub."
+                return 0
+                ;;
+        esac
+        [[ -n "$arg" ]] && return 0
+    done
 }
 
 main "$@"

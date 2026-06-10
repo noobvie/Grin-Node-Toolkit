@@ -117,7 +117,7 @@ hub_menu() {
     echo -e "${DIM}  Central API ingestion :$HUB_CENTRAL_API_PORT (satellites relay in)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Brain setup (shared with single-box) ─────────${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Install               ${DIM}(nodejs, sqlite3, systemd)${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Install               ${DIM}(nodejs, sqlite3, systemd, fail2ban)${RESET}"
     echo -e "  ${GREEN}2${RESET}) Configure             ${DIM}(pool name, domain, fee, wallet)${RESET}"
     echo -e "  ${GREEN}3${RESET}) Deploy web files"
     echo -e "  ${GREEN}4${RESET}) Setup nginx           ${DIM}(vhost + SSL)${RESET}"

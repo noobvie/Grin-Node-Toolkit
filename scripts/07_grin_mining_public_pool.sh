@@ -393,6 +393,19 @@ pool_deploy_web() {
     rsync -a --delete "$POOL_WEB_SRC/" "$POOL_WEB_DIR/" \
         2>/dev/null || cp -r "$POOL_WEB_SRC/"* "$POOL_WEB_DIR/"
 
+    # Serve the full web admin (dashboard/settings/users/payments/incentives/health) at /admin/.
+    # It ships in the app source under admin-panel/; copy it into the web root so nginx's
+    # `try_files $uri $uri/ $uri.html` resolves /admin/ → /admin/index.html. The admin pages
+    # self-guard (redirect to /login.html without a session) and every /api/admin/* call they
+    # make is IP-allowlist + JWT protected, so the static HTML itself carries no secrets.
+    # NOTE: must run AFTER the --delete rsync above, which would otherwise prune /admin/.
+    if [[ -d "$POOL_APP_SRC/admin-panel" ]]; then
+        info "Deploying web admin panel to $POOL_WEB_DIR/admin..."
+        mkdir -p "$POOL_WEB_DIR/admin"
+        rsync -a --delete "$POOL_APP_SRC/admin-panel/" "$POOL_WEB_DIR/admin/" \
+            2>/dev/null || cp -r "$POOL_APP_SRC/admin-panel/"* "$POOL_WEB_DIR/admin/"
+    fi
+
     local pool_name; pool_name=$(pool_read_conf "pool_name" "My Grin Pool")
     local escaped_name
     escaped_name=$(node -e "process.stdout.write(JSON.stringify(process.argv[1]))" "$pool_name" 2>/dev/null \

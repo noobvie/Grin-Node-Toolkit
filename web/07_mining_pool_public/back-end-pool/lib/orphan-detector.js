@@ -127,27 +127,55 @@ class OrphanDetector {
       const block = this.db.prepare('SELECT * FROM blocks WHERE id = ?').get(blockId);
       if (!block) return;
 
-      const shares = this.db.prepare(`
-        SELECT * FROM shares WHERE block_height = ?
+      // Reverse EXACTLY what was credited for this block, by reading back the original
+      // balance_log credit rows (keyed by reference_type IN ('block','pool_fee') and
+      // reference_id = block.height, matching rewards.js#creditBalances). This mirrors the
+      // real difficulty-weighted PPLNS split (minus pool fee) instead of re-deriving it —
+      // so it's correct even if the shares were pruned by retention, and it never reverses
+      // more than was actually paid.
+      //
+      // Note: blocks are only distributed AFTER on-chain maturity verification, and orphan
+      // detection only targets still-immature (never-distributed) blocks, so in normal
+      // operation there are zero credit rows here and this is a safe no-op — we never deduct
+      // a balance that was never credited (the previous equal-split logic did, and used the
+      // wrong amount and miner set).
+      const credits = this.db.prepare(`
+        SELECT grin_address, COALESCE(SUM(amount), 0) AS amount
+        FROM balance_log
+        WHERE event_type = 'credit'
+          AND reference_type IN ('block', 'pool_fee')
+          AND reference_id = ?
+        GROUP BY grin_address
       `).all(block.height);
 
-      for (const share of shares) {
-        const stmt = this.db.prepare(`
-          UPDATE miner_accounts
-          SET balance = balance - ?, balance_locked = balance_locked - ?
-          WHERE grin_address = ?
-        `);
+      if (credits.length > 0) {
+        const reverse = this.db.transaction(() => {
+          for (const c of credits) {
+            const before = this.db.prepare(
+              'SELECT balance FROM miner_accounts WHERE grin_address = ?'
+            ).get(c.grin_address);
+            if (!before) continue;
 
-        const rewardAmount = block.reward / shares.length;
-        stmt.run(rewardAmount, 0, share.grin_address);
+            // Clamp: if the miner already withdrew, claw back only what remains rather than
+            // driving the balance negative. Any shortfall is implicit in the ledger trail.
+            const clawback = Math.min(c.amount, before.balance);
+            if (clawback <= 0) continue;
 
-        const logStmt = this.db.prepare(`
-          INSERT INTO balance_log
-          (grin_address, event_type, amount, balance_before, balance_after,
-           locked_before, locked_after, reference_type, reference_id)
-          VALUES (?, 'reversal', ?, 0, 0, 0, 0, 'block', ?)
-        `);
-        logStmt.run(share.grin_address, rewardAmount, blockId);
+            this.db.prepare(`
+              UPDATE miner_accounts
+              SET balance = balance - ?, updated_at = unixepoch()
+              WHERE grin_address = ?
+            `).run(clawback, c.grin_address);
+
+            this.db.prepare(`
+              INSERT INTO balance_log
+              (grin_address, event_type, amount, balance_before, balance_after,
+               locked_before, locked_after, reference_type, reference_id)
+              VALUES (?, 'reversal', ?, ?, ?, 0, 0, 'block', ?)
+            `).run(c.grin_address, clawback, before.balance, before.balance - clawback, block.height);
+          }
+        });
+        reverse();
       }
 
       // Claw back any block-finder jackpot paid for this block (idempotent).
@@ -155,7 +183,7 @@ class OrphanDetector {
         this.incentives.reverseJackpot(block.height);
       }
 
-      console.log(`Reversed payouts for block ${blockId} (${shares.length} shares)`);
+      console.log(`Reversed payouts for orphaned block height=${block.height} (${credits.length} credited address(es))`);
     } catch (err) {
       console.error(`Error reversing block payouts: ${err.message}`);
     }

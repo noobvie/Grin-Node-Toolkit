@@ -17,8 +17,10 @@ class AlertMonitor {
     this.config = config;
     this.blockMonitor = modules.blockMonitor;
     this.walletTor = modules.walletTor;
+    this.wallet = modules.wallet;               // WalletAPI (Owner-API) — online + balance signal
     this.stratumServer = modules.stratumServer;
     this.withdrawalScheduler = modules.withdrawalScheduler;
+    this.alertDelivery = modules.alertDelivery; // wired so alerts are actually delivered
     this.db = db;
 
     this.monitorInterval = null;
@@ -114,16 +116,28 @@ class AlertMonitor {
    */
   async checkNodeHealth() {
     try {
+      // getStatus() resolves (it doesn't throw) with { ok, synced, peer_count, ... }.
       const status = await this.blockMonitor.grinNode.getStatus();
-      const isSynced = status.sync_status === 'Synced';
-      const peerCount = status.connected_peers || 0;
+
+      if (!status.ok) {
+        // Node API unreachable / errored — critical.
+        await this.triggerAlert('node_down', {
+          level: 'critical',
+          message: `Node API unreachable: ${status.error || 'no response'}`,
+          data: { error: status.error || null }
+        });
+        return;
+      }
+
+      const isSynced = status.synced === true;
+      const peerCount = status.peer_count || 0;
 
       if (!isSynced) {
         // Node not synced — could be catching up (temporary) or stuck
         await this.triggerAlert('node_down', {
           level: 'warning',
-          message: `Node not synced. Height: ${status.height}, Network: ${status.network_height}`,
-          data: { height: status.height, network_height: status.network_height }
+          message: `Node not synced (${status.sync_status}). Height: ${status.height}, Network: ${status.network_height}`,
+          data: { height: status.height, network_height: status.network_height, sync_status: status.sync_status }
         });
       } else if (peerCount < 2) {
         // Few peers — connectivity issue
@@ -151,50 +165,37 @@ class AlertMonitor {
    * Check wallet balance and connectivity
    */
   async checkWalletHealth() {
+    if (!this.wallet || typeof this.wallet.getBalance !== 'function') return; // no wallet wired
+
+    // A successful Owner-API retrieve_summary_info both proves the wallet is reachable AND
+    // gives the balance. retrieve_summary_info returns [was_refreshed, WalletInfo] with the
+    // amounts as nanoGRIN strings, so convert to GRIN. A throw → wallet offline.
+    let info;
     try {
-      const walletStatus = await this.walletTor.checkHealth();
-
-      if (!walletStatus.online) {
-        // Wallet offline
-        await this.triggerAlert('wallet_offline', {
-          level: 'critical',
-          message: `Wallet offline: ${walletStatus.error || 'No response'}`,
-          data: { error: walletStatus.error }
-        });
-      } else {
-        // Wallet online — check balance
-        const balance = walletStatus.balance || 0;
-
-        if (balance < this.thresholds.wallet_balance_warning_grin) {
-          await this.triggerAlert('wallet_balance_low', {
-            level: 'warning',
-            message: `Wallet balance ${balance.toFixed(2)} GRIN below warning threshold (${this.thresholds.wallet_balance_warning_grin} GRIN)`,
-            data: { balance, threshold: this.thresholds.wallet_balance_warning_grin }
-          });
-        } else {
-          // Wallet healthy
-          await this.resolveAlert('wallet_offline');
-          await this.resolveAlert('wallet_balance_low');
-        }
-
-        // Check Tor connectivity
-        if (this.enabledAlerts.tor_unreachable && !walletStatus.tor_reachable) {
-          await this.triggerAlert('tor_unreachable', {
-            level: 'warning',
-            message: 'Tor proxy unreachable — payouts may fail',
-            data: { tor_status: walletStatus.tor_status }
-          });
-        } else {
-          await this.resolveAlert('tor_unreachable');
-        }
-      }
-
+      const summary = await this.wallet.getBalance();
+      info = Array.isArray(summary) ? summary[1] : summary;
     } catch (err) {
       await this.triggerAlert('wallet_offline', {
         level: 'critical',
-        message: `Wallet health check failed: ${err.message}`,
+        message: `Wallet unreachable: ${err.message}`,
         data: { error: err.message }
       });
+      return;
+    }
+
+    await this.resolveAlert('wallet_offline');
+
+    if (this.enabledAlerts.wallet_balance_low) {
+      const spendable = Number((info && info.amount_currently_spendable) || 0) / 1e9;
+      if (spendable < this.thresholds.wallet_balance_warning_grin) {
+        await this.triggerAlert('wallet_balance_low', {
+          level: 'warning',
+          message: `Wallet spendable balance ${spendable.toFixed(2)} GRIN below warning threshold (${this.thresholds.wallet_balance_warning_grin} GRIN)`,
+          data: { spendable, threshold: this.thresholds.wallet_balance_warning_grin }
+        });
+      } else {
+        await this.resolveAlert('wallet_balance_low');
+      }
     }
   }
 
@@ -203,40 +204,28 @@ class AlertMonitor {
    */
   async checkStratumHealth() {
     try {
+      // getStats() exposes per-session counters (accepted/rejected/stale) in sessions[].
+      // Aggregate them for a live rejection rate; stale shares count as "bad".
       const stats = this.stratumServer.getStats();
-      const sharesAccepted = stats.shares_accepted_1h || 0;
-      const sharesRejected = stats.shares_rejected_1h || 0;
-      const totalShares = sharesAccepted + sharesRejected;
+      const sessions = stats.sessions || [];
+      let accepted = 0, bad = 0;
+      for (const s of sessions) {
+        accepted += s.accepted || 0;
+        bad += (s.rejected || 0) + (s.stale || 0);
+      }
+      const totalShares = accepted + bad;
 
-      if (totalShares > 0) {
-        const rejectionRate = (sharesRejected / totalShares) * 100;
+      if (this.enabledAlerts.high_rejection_rate && totalShares > 0) {
+        const rejectionRate = (bad / totalShares) * 100;
 
         if (rejectionRate > this.thresholds.rejection_rate_warning_percent) {
           await this.triggerAlert('high_rejection_rate', {
             level: 'warning',
             message: `High share rejection rate: ${rejectionRate.toFixed(2)}% (threshold: ${this.thresholds.rejection_rate_warning_percent}%)`,
-            data: { rejection_rate: rejectionRate, accepted: sharesAccepted, rejected: sharesRejected }
+            data: { rejection_rate: rejectionRate, accepted, rejected: bad }
           });
         } else {
           await this.resolveAlert('high_rejection_rate');
-        }
-      }
-
-      // Check error rate
-      const connectionErrors = stats.connection_errors_1h || 0;
-      const totalConnections = (stats.successful_connections_1h || 0) + connectionErrors;
-
-      if (totalConnections > 0) {
-        const errorRate = (connectionErrors / totalConnections) * 100;
-
-        if (errorRate > this.thresholds.error_rate_warning_percent) {
-          await this.triggerAlert('high_error_rate', {
-            level: 'warning',
-            message: `High error rate: ${errorRate.toFixed(2)}% (threshold: ${this.thresholds.error_rate_warning_percent}%)`,
-            data: { error_rate: errorRate, errors: connectionErrors, total: totalConnections }
-          });
-        } else {
-          await this.resolveAlert('high_error_rate');
         }
       }
 
@@ -250,10 +239,12 @@ class AlertMonitor {
    */
   async checkPayoutHealth() {
     try {
+      // withdrawals.status uses 'tor_failed' for an exhausted/failed payout, and created_at
+      // is an INTEGER unixepoch (compare with unixepoch() arithmetic, not datetime('now')).
       const stmt = this.db.prepare(`
-        SELECT COUNT(*) as failed_count, MAX(updated_at) as last_failure
+        SELECT COUNT(*) as failed_count, MAX(created_at) as last_failure
         FROM withdrawals
-        WHERE status = 'failed' AND updated_at > datetime('now', '-24 hours')
+        WHERE status = 'tor_failed' AND created_at > unixepoch() - 86400
       `);
       const result = stmt.get();
 
@@ -277,10 +268,11 @@ class AlertMonitor {
    */
   async checkOrphanedBlocks() {
     try {
+      // blocks.found_at is an INTEGER unixepoch — compare with unixepoch() arithmetic.
       const stmt = this.db.prepare(`
         SELECT COUNT(*) as orphaned_count
         FROM blocks
-        WHERE status = 'orphaned' AND found_at > datetime('now', '-24 hours')
+        WHERE status = 'orphaned' AND found_at > unixepoch() - 86400
       `);
       const result = stmt.get();
 
@@ -374,27 +366,19 @@ class AlertMonitor {
    * Deliver alert via configured channels
    */
   async deliverAlert(alertId, alertType, details) {
+    if (!this.alertDelivery || typeof this.alertDelivery.send !== 'function') return;
     try {
-      const level = details.level || 'warning';
-
-      // Email delivery (if configured)
-      if (this.config.alert_email_address) {
-        // Stub — implement email delivery
-        this.log(`Would send email to ${this.config.alert_email_address} for ${alertType}`);
-      }
-
-      // Discord webhook (if configured)
-      if (this.config.discord_webhook_url) {
-        // Stub — implement Discord delivery
-        this.log(`Would send Discord message for ${alertType}`);
-      }
-
-      // Slack webhook (if configured)
-      if (this.config.slack_webhook_url) {
-        // Stub — implement Slack delivery
-        this.log(`Would send Slack message for ${alertType}`);
-      }
-
+      // Hand the alert to AlertDelivery, which fans out to the configured channels
+      // (Discord/Slack over HTTPS; email is a documented stub pending an SMTP transport).
+      // It expects data as a JSON string (formatEmailBody re-parses it).
+      await this.alertDelivery.send({
+        type: alertType,
+        level: details.level || 'warning',
+        message: details.message,
+        occurrence_count: 1,
+        triggered_at: new Date().toISOString(),
+        data: JSON.stringify(details.data || {})
+      });
     } catch (err) {
       this.error(`Alert delivery failed: ${err.message}`);
     }

@@ -118,9 +118,11 @@ const Auth = {
   }
 };
 
-// Redirect to login if not authenticated (for protected pages)
-function requireAuth() {
-  if (!Auth.isLoggedIn()) {
+// Redirect to login if not authenticated (for protected pages).
+// isLoggedIn() is async — must be awaited, or `!Promise` is always false and this never fires.
+async function requireAuth() {
+  const ok = await Auth.isLoggedIn();
+  if (!ok) {
     window.location.href = '/login.html';
   }
 }

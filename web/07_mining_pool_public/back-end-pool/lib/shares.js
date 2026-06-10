@@ -73,8 +73,11 @@ class ShareValidator {
     }
   }
 
-  generateShareHash(jobId, workerName, timestamp) {
-    const input = `${jobId}-${workerName}-${timestamp}`;
+  // Dedup key for a submitted share. Includes grin_address so two different miners that share
+  // a worker name (e.g. the default) can never collide on (job, worker, nonce) and have one's
+  // valid share rejected as the other's duplicate.
+  generateShareHash(grinAddress, jobId, workerName, nonce) {
+    const input = `${grinAddress}-${jobId}-${workerName}-${nonce}`;
     return crypto.createHash('sha256').update(input).digest('hex');
   }
 

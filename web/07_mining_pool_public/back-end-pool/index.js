@@ -248,12 +248,16 @@ async function initializePool() {
     // Initialize alert delivery (email, Discord, Slack)
     alertDelivery = new AlertDelivery(config);
 
-    // Initialize alert monitor (health checks, triggers)
+    // Initialize alert monitor (health checks, triggers). alertDelivery is passed in so
+    // triggered alerts are actually delivered (Discord/Slack); `wallet` (Owner-API client)
+    // gives it a real wallet online/balance signal.
     alertMonitor = new AlertMonitor(config, {
       blockMonitor,
       walletTor,
+      wallet,
       stratumServer,
-      withdrawalScheduler
+      withdrawalScheduler,
+      alertDelivery
     }, db);
     alertMonitor.start();
     console.log(`[${new Date().toISOString()}] Alert monitor started`);
@@ -503,7 +507,8 @@ function setupRoutes() {
   );
 
   // Public pages included in the sitemap (extension-less; nginx resolves $uri.html).
-  const SITEMAP_PATHS = ['/', '/pool-info', '/miners-stats', '/connect', '/system-health', '/fortune-board', '/donate'];
+  // Note: /system-health is intentionally excluded — that page is noindex,nofollow (ops view).
+  const SITEMAP_PATHS = ['/', '/pool-info', '/miners-stats', '/connect', '/fortune-board', '/donate'];
 
   app.get('/sitemap.xml',
     rateLimiter.middleware('public'),
@@ -974,10 +979,12 @@ function setupRoutes() {
   app.get('/api/account/:addr/tor-check', rateLimiter.middleware('public'), async (req, res) => {
     try {
       const { addr } = req.params;
-      const result = await walletTor.probeToronlineStatus(addr, config.tor_check_timeout_ms);
+      const result = await walletTor.probeToronlineStatus(addr);
       res.json({
         grin_address: addr,
-        online: !!result.online,
+        // Tri-state: true/false when known, null = "determined at payout time" (grin-wallet
+        // performs the actual Tor connection to the recipient during the send).
+        online: result.online === null ? null : !!result.online,
         reason: result.reason || (result.online ? 'reachable' : 'unreachable')
       });
     } catch (err) {
@@ -1092,10 +1099,10 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/admin/metrics', secureAdmin, (req, res) => {
+  app.get('/api/admin/metrics', secureAdmin, async (req, res) => {
     try {
       const blockStats = blockManager.getPoolStats();
-      const rewardStats = rewardDistributor.rewardStats();
+      const rewardStats = await rewardDistributor.rewardStats();
       const hashrateStats = hashrateTracker.getHashrateStats();
       const withdrawalStats = withdrawalScheduler.getStatus();
 
@@ -1350,14 +1357,21 @@ function setupRoutes() {
       const hashrateStats = hashrateTracker.getHashrateStats() || {};
       const withdrawalStatus = withdrawalScheduler.getStatus() || {};
 
-      // Use parameterized query (FIX #1 pattern) - already correct
-      const stmt = db.prepare(`
-        SELECT COUNT(*) as count FROM blocks WHERE status = 'confirmed' AND created_at > datetime('now', '-24 hours')
-      `);
-      const blocks24h = stmt.get() || { count: 0 };
+      // created_at is an INTEGER unixepoch, so compare against unixepoch() arithmetic — NOT
+      // datetime('now',…) (a TEXT value), which would make every row compare false. "Found"
+      // counts all non-orphaned blocks (immature/confirmed/paid).
+      const blocks24h = db.prepare(`
+        SELECT COUNT(*) as count FROM blocks WHERE status != 'orphaned' AND created_at > unixepoch() - 86400
+      `).get() || { count: 0 };
+      const blocks7d = db.prepare(`
+        SELECT COUNT(*) as count FROM blocks WHERE status != 'orphaned' AND created_at > unixepoch() - 7 * 86400
+      `).get() || { count: 0 };
+      const orphaned = db.prepare(`
+        SELECT COUNT(*) as count FROM blocks WHERE status = 'orphaned'
+      `).get() || { count: 0 };
 
       const stmt2 = db.prepare(`
-        SELECT height, hash, miner_address, reward, status, created_at FROM blocks ORDER BY height DESC LIMIT 1
+        SELECT height, hash, found_by, reward, status, created_at FROM blocks ORDER BY height DESC LIMIT 1
       `);
       const lastBlock = stmt2.get() || null;
 
@@ -1365,8 +1379,8 @@ function setupRoutes() {
         timestamp: new Date().toISOString(),
         pool_status: {
           name: config.pool_name || 'GRINIUM',
-          uptime_hours: 730.5,
-          last_restart: new Date(Date.now() - 730.5 * 3600000).toISOString()
+          uptime_hours: +(process.uptime() / 3600).toFixed(1),
+          last_restart: new Date(Date.now() - process.uptime() * 1000).toISOString()
         },
         stratum_metrics: {
           active_connections: stratumServer.getStats().active_connections || 0,
@@ -1383,15 +1397,15 @@ function setupRoutes() {
         },
         blocks: {
           found_24h: blocks24h?.count || 0,
-          found_7d: 18,
+          found_7d: blocks7d?.count || 0,
           pending_payout: withdrawalStatus?.pending_count || 0,
-          orphaned: 0,
+          orphaned: orphaned?.count || 0,
           last_block: lastBlock ? {
             height: lastBlock.height,
             timestamp: lastBlock.created_at,
             reward: lastBlock.reward,
             status: lastBlock.status,
-            miner_address: lastBlock.miner_address
+            miner_address: lastBlock.found_by
           } : null,
           current_difficulty: blockStats?.current_difficulty || 0,
           avg_difficulty_24h: blockStats?.avg_difficulty_24h || 0,
@@ -1501,8 +1515,8 @@ function setupRoutes() {
           ma.balance_locked,
           ma.is_online,
           ma.created_at,
-          (SELECT COUNT(*) FROM shares WHERE miner_address = ma.grin_address) as shares_count,
-          (SELECT MAX(timestamp) FROM shares WHERE miner_address = ma.grin_address) as last_share_timestamp
+          (SELECT COUNT(*) FROM shares WHERE grin_address = ma.grin_address) as shares_count,
+          (SELECT MAX(created_at) FROM shares WHERE grin_address = ma.grin_address) as last_share_timestamp
         FROM miner_accounts ma
         ORDER BY ma.balance DESC
         LIMIT ? OFFSET ?
@@ -1535,7 +1549,7 @@ function setupRoutes() {
 
       // Check if node API is reachable (by getting status successfully)
       const latencyMs = Date.now() - startTime;
-      const isSynced = (status?.header_height || 0) === (status?.network_height || 0);
+      const isSynced = status?.synced === true;
 
       res.json({
         status: isSynced ? 'healthy' : 'warning',

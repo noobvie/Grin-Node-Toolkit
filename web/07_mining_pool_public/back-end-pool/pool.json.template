@@ -15,7 +15,9 @@
   "wallet_foreign_port": 13415,
 
   "node_api_url": "http://127.0.0.1:13413",
-  "node_api_secret": "CHANGE_ME_TO_NODE_SECRET",
+  "_comment_node_secrets": "Leave the two secrets blank to auto-read /opt/grin/node/<net>-prune/.api_secret and .foreign_api_secret (the pool runs as root). Or set the value directly, or point *_path at the files.",
+  "node_api_secret": "",
+  "node_foreign_api_secret": "",
 
   "node_stratum_host": "127.0.0.1",
   "node_stratum_port": 13334,

@@ -37,7 +37,14 @@ function mergeEnvVars(config) {
     wallet_foreign_port: config.wallet_foreign_port || 13415,
 
     node_api_url: config.node_api_url || process.env.NODE_API_URL || 'http://127.0.0.1:13413',
+    // Owner + Foreign API secrets. Either pass the value directly, or a *_path to the
+    // node's secret file, or leave all blank and let grin-node.js read the standard
+    // /opt/grin/node/<net>-prune/.{api,foreign_api}_secret files (pool runs as root).
     node_api_secret: config.node_api_secret || process.env.NODE_API_SECRET || '',
+    node_api_secret_path: config.node_api_secret_path || process.env.NODE_API_SECRET_PATH || '',
+    node_foreign_api_secret: config.node_foreign_api_secret || process.env.NODE_FOREIGN_API_SECRET || '',
+    node_foreign_api_secret_path: config.node_foreign_api_secret_path || process.env.NODE_FOREIGN_API_SECRET_PATH || '',
+    node_dir: config.node_dir || process.env.NODE_DIR || '',
 
     node_stratum_host: config.node_stratum_host || '127.0.0.1',
     node_stratum_port: config.node_stratum_port || (config.network === 'mainnet' ? 3334 : 13334),

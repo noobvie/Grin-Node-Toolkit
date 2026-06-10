@@ -277,19 +277,44 @@ class StratumServer {
       return;
     }
 
-    const shareHash = this.shareValidator.generateShareHash(job_id, session.workerName, nonce);
+    const shareHash = this.shareValidator.generateShareHash(session.grinAddress, job_id, session.workerName, nonce);
 
-    this.shareValidator.submitShare(
-      session.grinAddress,
-      session.workerName,
-      session.difficulty,
-      height,
-      shareHash
-    ).then(async (result) => {
+    // CRITICAL ORDERING: validate the PoW with the Grin node BEFORE crediting anything.
+    // The node is the authority — it checks the actual Cuckatoo32 solution against the pool's
+    // share difficulty and reports whether this submit is a valid share (and whether it also
+    // solves a full block). Recording the share first (as a previous version did) let anyone
+    // farm PPLNS credit by sending structurally-valid submits with a bogus pow[] array: the
+    // node would reject them, but the share was already counted. Now nothing is persisted
+    // unless the node accepts the PoW. If the node is briefly unreachable, forwardSubmit
+    // returns accepted:false and we reject the share (the miner resubmits) rather than crediting
+    // unvalidated work.
+    (async () => {
+      let nodeResult = { accepted: true, blockHash: null, error: null };
+      if (this.nodeStratumClient) {
+        nodeResult = await this.nodeStratumClient.forwardSubmit(params);
+        if (!nodeResult.accepted) {
+          this._stat(sessionId, 'rejected');
+          console.warn(`[${new Date().toISOString()}] Node rejected share from ${session.grinAddress}: ${nodeResult.error}`);
+          socket.write(JSON.stringify(createSubmitResponse(id, false, null, nodeResult.error || 'Share rejected by node')) + '\n');
+          return;
+        }
+      }
+      // else: no upstream node wired (dev/test only) — fall through and record optimistically.
+
+      // PoW accepted by the node → now it's safe to record the share for PPLNS.
+      const result = await this.shareValidator.submitShare(
+        session.grinAddress,
+        session.workerName,
+        session.difficulty,
+        height,
+        shareHash
+      );
       if (!result.success) {
+        // Node accepted the PoW but we couldn't record it (duplicate share_hash UNIQUE, or DB
+        // error). Don't double-credit — report rejected without counting it.
         this._stat(sessionId, 'rejected');
         socket.write(JSON.stringify(createSubmitResponse(id, false, null, result.error)) + '\n');
-        console.log(`[${new Date().toISOString()}] Share rejected: ${result.error}`);
+        console.log(`[${new Date().toISOString()}] Share not recorded: ${result.error}`);
         return;
       }
 
@@ -309,43 +334,35 @@ class StratumServer {
         });
       }
 
-      // Forward every accepted share upstream — the Grin node validates the actual
-      // Cuckatoo32 PoW and tells us if this share is also a valid block solution.
-      if (this.nodeStratumClient) {
-        const nodeResult = await this.nodeStratumClient.forwardSubmit(params);
-        if (nodeResult.blockHash) {
-          console.log(`[${new Date().toISOString()}] BLOCK FOUND: height=${height} hash=${nodeResult.blockHash} miner=${session.grinAddress}`);
-          // Record the found block exactly once:
-          //  · satellite mode → relay to the hub (hub dedups by hash UNIQUE)
-          //  · single-box/hub → credit the local DB (creditBlock dedups by hash UNIQUE)
-          if (this.shareRelay) {
-            this.shareRelay.recordBlock({
-              height,
-              hash:       nodeResult.blockHash,
-              nonce,
-              found_by:   session.grinAddress,
-              created_at: Math.floor(Date.now() / 1000)
-            });
-          } else if (this.blockManager) {
-            try {
-              await this.blockManager.creditBlock(
-                height, nodeResult.blockHash, nonce, GRIN_BLOCK_REWARD, session.grinAddress
-              );
-            } catch (err) {
-              console.error(`[ERROR] creditBlock: ${err.message}`);
-            }
+      if (nodeResult.blockHash) {
+        console.log(`[${new Date().toISOString()}] BLOCK FOUND: height=${height} hash=${nodeResult.blockHash} miner=${session.grinAddress}`);
+        // Record the found block exactly once:
+        //  · satellite mode → relay to the hub (hub dedups by hash UNIQUE)
+        //  · single-box/hub → credit the local DB (creditBlock dedups by hash UNIQUE)
+        if (this.shareRelay) {
+          this.shareRelay.recordBlock({
+            height,
+            hash:       nodeResult.blockHash,
+            nonce,
+            found_by:   session.grinAddress,
+            created_at: Math.floor(Date.now() / 1000)
+          });
+        } else if (this.blockManager) {
+          try {
+            await this.blockManager.creditBlock(
+              height, nodeResult.blockHash, nonce, GRIN_BLOCK_REWARD, session.grinAddress
+            );
+          } catch (err) {
+            console.error(`[ERROR] creditBlock: ${err.message}`);
           }
-          socket.write(JSON.stringify(createSubmitResponse(id, true, nodeResult.blockHash)) + '\n');
-          return;
         }
-        if (!nodeResult.accepted) {
-          console.warn(`[${new Date().toISOString()}] Node rejected share from ${session.grinAddress}: ${nodeResult.error}`);
-        }
+        socket.write(JSON.stringify(createSubmitResponse(id, true, nodeResult.blockHash)) + '\n');
+        return;
       }
 
       socket.write(JSON.stringify(createSubmitResponse(id, true)) + '\n');
       console.log(`[${new Date().toISOString()}] Share accepted: ${session.grinAddress} height=${height} job=${job_id}`);
-    }).catch((err) => {
+    })().catch((err) => {
       console.error(`[ERROR] Share submission: ${err.message}`);
       socket.write(JSON.stringify(createSubmitResponse(id, false, null, 'Internal error')) + '\n');
     });

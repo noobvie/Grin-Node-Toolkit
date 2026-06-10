@@ -84,28 +84,14 @@ class WithdrawalScheduler {
   }
 
   async checkTorAndSend(withdrawal) {
+    // grin-wallet establishes the Tor connection to the recipient's Slatepack listener as part
+    // of the send, so it is the authoritative reachability check — we attempt the send directly
+    // rather than pre-probing. sendWithdrawal handles the outcome: success → confirmed; failure
+    // (recipient offline, etc.) → scheduleRetry, which markFailed()s once retries are exhausted.
     try {
-      const torStatus = await this.walletTor.probeToronlineStatus(
-        withdrawal.grin_address,
-        this.config.tor_check_timeout_ms
-      );
-
-      const stmt = this.db.prepare(`
-        UPDATE withdrawals SET tor_check_result = ? WHERE id = ?
-      `);
-      stmt.run(torStatus.online ? 'online' : 'offline', withdrawal.id);
-
-      if (torStatus.online) {
-        await this.sendWithdrawal(withdrawal.id);
-      } else {
-        if (withdrawal.retry_count < this.retryDelays.length) {
-          await this.scheduleRetry(withdrawal.id);
-        } else {
-          await this.markFailed(withdrawal.id);
-        }
-      }
+      await this.sendWithdrawal(withdrawal.id);
     } catch (err) {
-      console.error(`Error checking Tor for withdrawal ${withdrawal.id}: ${err.message}`);
+      console.error(`Error sending withdrawal ${withdrawal.id}: ${err.message}`);
     }
   }
 
@@ -431,11 +417,25 @@ class WithdrawalScheduler {
         "SELECT COUNT(*) as count FROM withdrawals WHERE status = 'tor_failed'"
       ).get();
 
+      const paid24 = this.db.prepare(
+        "SELECT COALESCE(SUM(amount), 0) AS total FROM withdrawals WHERE status = 'confirmed' AND confirmed_at >= unixepoch() - 86400"
+      ).get();
+      const lastPayout = this.db.prepare(
+        "SELECT MAX(confirmed_at) AS t FROM withdrawals WHERE status = 'confirmed'"
+      ).get();
+
       return {
         running: this.isRunning,
         pending: pending.count,
         confirmed: confirmed.count,
-        failed: failed.count
+        failed: failed.count,
+        // Aliases consumed by the admin dashboard / metrics endpoints.
+        pending_count: pending.count,
+        confirmed_count: confirmed.count,
+        failed_count: failed.count,
+        total_paid_24h: paid24.total || 0,
+        last_payout_time: lastPayout.t ? new Date(lastPayout.t * 1000).toISOString() : null,
+        next_payout_time: null // event-driven (per-withdrawal Tor checks), no fixed schedule
       };
     } catch (err) {
       return {

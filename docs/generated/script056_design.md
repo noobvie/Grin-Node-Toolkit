@@ -1,6 +1,6 @@
 # Script 056 — Grin Transporter (store-and-forward slate relay)
 
-**Status:** Design proposal (no code yet)
+**Status:** Design proposal (no code yet) — API method names + R8 auth gates **resolved 2026-06-09** (see §3, §5)
 **Provisional slot:** `056_grin_transporter.sh` under the Wallet Services hub (Script 05)
 **Origin idea:** vault713/grinbox — revived as a self-hosted, Tor-fronted slate transport,
 not a public central relay.
@@ -20,8 +20,14 @@ not a public central relay.
 
 > ⚠ **Verify-before-code markers.** Items tagged `⚠VERIFY` are based on grin-wallet
 > behaviour that should be confirmed against the running binary / API docs before
-> implementation. Run `/research` on "grin-wallet slatepack encrypt/decode + Foreign
-> receive_tx" to lock these down. Everything else follows existing toolkit patterns.
+> implementation. Everything else follows existing toolkit patterns.
+>
+> **Update 2026-06-09 — Owner/Foreign API method names confirmed** against
+> `docs.rs/grin_wallet_api` (latest, stable across 5.x). The five slatepack methods and
+> `receive_tx` are verified with exact signatures (see §3 and §5). The R8 auth design is
+> resolved to **signature challenge** (option a), made buildable by the confirmed
+> `get_slatepack_secret_key`. One residual tick remains: a 30-second curl against the
+> *deployed* binary (CLAUDE.md's `get_tip` rule) before coding the agent — not a blocker.
 
 ---
 
@@ -152,14 +158,33 @@ Modern grin-wallet **inherited that** as Slatepack — we implement **zero crypt
 
 | grinbox concept | grin-wallet equivalent | API to call |
 |---|---|---|
-| `grinbox://` address (secp256k1) | **Slatepack address** (ed25519, `grin1…`/`tgrin1…`) — *same key as the Tor onion v3 address* | `get_slatepack_address` (Owner) `⚠VERIFY` name |
-| Encrypt slate to recipient | **Encrypted Slatepack** addressed to recipient's slatepack address | `create_slatepack_message` (Owner) `⚠VERIFY` |
-| Decrypt on receiver | Wallet opens with its ed25519 key | `slate_from_slatepack_message` / `decode_slatepack_message` (Owner) `⚠VERIFY` |
-| Receiver adds their part | Foreign API receive | `receive_tx` (Foreign v2) |
-| Sender finalizes + broadcasts | Owner API | `finalize_tx` + `post_tx` (Owner) |
+| `grinbox://` address (secp256k1) | **Slatepack address** (ed25519, `grin1…`/`tgrin1…`) — *same key as the Tor onion v3 address* | `get_slatepack_address` (Owner) ✅ |
+| Encrypt slate to recipient | **Encrypted Slatepack** addressed to recipient's slatepack address | `create_slatepack_message` (Owner) ✅ |
+| Decrypt on receiver | Wallet opens with its ed25519 key | `slate_from_slatepack_message` (Owner) ✅ |
+| Receiver adds their part | Foreign API receive | `receive_tx` (Foreign v2) ✅ |
+| Sender finalizes + broadcasts | Owner/Foreign API | `finalize_tx` + `post_tx` ✅ |
 | Relay transport | ❌ nothing — **this is the only piece we build** | — the Transporter server |
 
 The Transporter is therefore a **thin transport layer**, not a protocol re-implementation.
+
+### Confirmed method signatures (`docs.rs/grin_wallet_api`, 2026-06-09)
+
+All calls pass the ECDH session `token`. Indices below are `u32`; the toolkit standardises on
+**`derivation_index 0`** — the wallet's primary slatepack address, the *same* key as its Tor
+onion v3 address. Payer encrypts to that address; payee decrypts and signs with index 0.
+
+| Method | API | Params | Returns |
+|---|---|---|---|
+| `get_slatepack_address` | Owner | `token`, `derivation_index: u32` | `SlatepackAddress` |
+| `get_slatepack_secret_key` | Owner | `token`, `derivation_index: u32` | `Ed25519SecretKey` — *enables R8 signing* |
+| `create_slatepack_message` | Owner | `token`, `slate: VersionedSlate`, `sender_index: Option<u32>`, `recipients: Vec<SlatepackAddress>` | `String` (armored) |
+| `slate_from_slatepack_message` | Owner | `token`, `message: String`, `secret_indices: Vec<u32>` | `VersionedSlate` |
+| `decode_slatepack_message` | Owner | `token`, `message: String`, `secret_indices: Vec<u32>` | `Slatepack` (metadata) |
+| `receive_tx` | Foreign | `slate: VersionedSlate`, `dest_acct_name: Option<String>`, `dest: Option<String>` | `VersionedSlate` |
+| `finalize_tx` | Owner/Foreign | `slate: VersionedSlate` | `VersionedSlate` |
+
+> Note: `decode_slatepack_message` is **Owner-only**, not on the Foreign API. The agent decodes
+> via the Owner ECDH session, then hands the plain slate to Foreign `receive_tx`.
 
 ---
 
@@ -250,21 +275,34 @@ Key property: steps 1–3 and 9–11 (payer) need not overlap in time with steps
 ### Authentication (R8) — challenge/response, no accounts
 
 ```
-   client                         server
+   client (agent)                 server
      │ GET /auth/challenge?addr=grin1…  │
      │ ◄──────── {nonce, expires} ──────│   server stores nonce briefly
-     │ sign(nonce) with ed25519 key     │   (the key behind the slatepack addr)
+     │ key = Owner.get_slatepack_secret_key(token, 0)   (ed25519 secret, index 0)
+     │ sig = ed25519_sign(key, nonce)   │   (signed locally; key never leaves the agent)
      │ ──── POST /auth {addr, nonce, sig} ─►  verify sig against pubkey decoded from addr
      │ ◄──────── {short-lived token} ───│
      │ use token on /queue/<addr> calls │
 ```
 
-`⚠VERIFY`: confirm grin-wallet can expose a sign/verify primitive for the slatepack
-ed25519 key, or whether we derive the verifying pubkey purely from the bech32 address and
-have the wallet sign via an existing method (e.g. payment-proof signing). If no clean
-signing hook exists, fallback options: (a) a per-recipient bearer token issued at
-registration, or (b) decrypt-to-prove — server sends an encrypted nonce only the true
-key-holder can decrypt. Decision deferred to research.
+**Resolved (2026-06-09):** option (a) **signature challenge**, confirmed buildable. The
+agent calls Owner API `get_slatepack_secret_key(token, 0)` → `Ed25519SecretKey`, signs the
+server nonce **locally** with a standard ed25519 library, and the server verifies against the
+pubkey it decodes from the bech32 slatepack address. No special wallet "sign" method is
+needed.
+
+**No trust escalation:** the agent already holds full Owner API access to run
+`receive_tx`/`finalize_tx`, so it is already entrusted with the wallet keys — pulling the
+ed25519 signing key over the (ECDH-encrypted) Owner session adds nothing new to the threat
+model. The key never leaves the agent's machine; only a signature crosses the wire.
+
+Why (a) over the alternatives: it stores **no server-side secret** (a server breach leaks
+only addr+timing metadata, preserving R7), and nonce+expiry kills replay. Rejected fallbacks,
+kept here for the record: **(b) decrypt-to-prove** — server encrypts a nonce to the
+recipient's address, only the key-holder can decrypt and echo it; security-equivalent to (a)
+and needs no new primitive, but (a) is more direct now that the secret key is exposed. **(c)
+per-recipient bearer token** — weakest (shared secret, server-side storage to leak); avoid
+unless (a) is ever unavailable on the deployed binary.
 
 ---
 
@@ -476,11 +514,13 @@ encryption layer comes from grin-wallet's Slatepack, not theirs.
 
 ## 11. Open questions (resolve before / during implementation)
 
-1. **`⚠VERIFY` signing primitive (R8).** Does grin-wallet expose a clean sign/verify for the
-   slatepack ed25519 key? If not, pick the bearer-token or decrypt-to-prove fallback.
-2. **`⚠VERIFY` exact Owner API method names** for slatepack create/decode and address fetch
-   in the deployed grin-wallet version — confirm against `docs.rs/grin_wallet_api` and the
-   running binary (CLAUDE.md flags `get_tip` vs `get_status` style surprises).
+1. ~~**`⚠VERIFY` signing primitive (R8).**~~ **RESOLVED (2026-06-09):** option (a) signature
+   challenge. `get_slatepack_secret_key(token, 0)` returns the `Ed25519SecretKey`; the agent
+   signs locally. See §5 auth section.
+2. ~~**`⚠VERIFY` exact Owner API method names**~~ **RESOLVED (2026-06-09):** all five slatepack
+   methods + `receive_tx` confirmed against `docs.rs/grin_wallet_api` with exact signatures
+   (see §3). Residual: one curl against the *deployed* binary before coding the agent
+   (CLAUDE.md `get_tip` rule).
 3. **Agent runtime for the payee.** Pool/Drop run a Node service already (easy to add an
    agent loop). An *individual* recipient may not want a daemon — do we ship a cron-poll
    one-shot, or lean on the 051 web wallet to "check Transporter" on demand? Likely: both.

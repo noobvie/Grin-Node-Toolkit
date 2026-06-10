@@ -686,6 +686,19 @@ class PoolSettings {
 
         stmt.run(section, key, valueStr, valueType, userId);
       }
+
+      // Cross-field rule: the two lottery pots can't claim more than 100% of a draw's pot.
+      // (Per-key validators can't see sibling fields. getSection() here reflects the rows just
+      // written — same connection, same transaction — so a partial update is validated against
+      // the resulting merged state, and an over-100 total rolls the whole update back.)
+      if (section === 'incentives') {
+        const merged = this.getSection('incentives');
+        const w = parseFloat(merged.lottery_pot_share_weighted_percent) || 0;
+        const e = parseFloat(merged.lottery_pot_equal_chance_percent) || 0;
+        if (w + e > 100) {
+          throw new Error('lottery_pot_share_weighted_percent + lottery_pot_equal_chance_percent must not exceed 100');
+        }
+      }
     });
 
     transaction();

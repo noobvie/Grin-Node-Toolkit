@@ -9,22 +9,29 @@ class WalletTor {
     this.ownerPort = config.wallet_owner_port || (this.network === 'mainnet' ? 3420 : 13420);
     this.torSocksPort = config.tor_socks_port || 9050;
     this.torCheckTimeoutMs = config.tor_check_timeout_ms || 3000;
+    this.walletPassFile = config.wallet_pass_file || '';
+    // Hard ceiling on a single `grin-wallet send` (Tor connect + slate round-trip). Stops a
+    // hung wallet or unreachable recipient from stalling the withdrawal scheduler loop.
+    this.sendTimeoutMs = config.wallet_send_timeout_ms || 120000;
   }
 
-  async sendToTorAddress(torAddress, amount) {
+  // Pool payouts go to the miner's Slatepack address (grin1…/tgrin1…) — which IS their mining
+  // identity. grin-wallet resolves the Slatepack address to its Tor/onion service and sends
+  // over Tor automatically, so we pass the address straight through (no .onion derivation here).
+  async sendToTorAddress(address, amount) {
     try {
-      if (!this.isTorAddress(torAddress)) {
-        throw new Error('Invalid Tor address format');
+      if (!this.isPayoutAddress(address)) {
+        throw new Error('Invalid Grin payout address (expected a grin1…/tgrin1… Slatepack address)');
       }
 
       const result = await this.execWalletCommand([
         '--top-level-dir', this.walletDir,
-        'send', '-d', torAddress, '-a', String(amount)
+        'send', '-d', address, '-a', String(amount)
       ]);
 
       return {
         success: true,
-        address: torAddress,
+        address,
         amount,
         timestamp: new Date().toISOString(),
         output: result
@@ -33,114 +40,71 @@ class WalletTor {
       return {
         success: false,
         error: err.message,
-        address: torAddress,
+        address,
         amount
       };
     }
   }
 
-  async probeToronlineStatus(torAddress, timeoutMs = null) {
-    const timeout = timeoutMs || this.torCheckTimeoutMs;
-
-    return new Promise((resolve) => {
-      try {
-        if (!this.isTorAddress(torAddress)) {
-          resolve({
-            online: false,
-            reason: 'invalid_format'
-          });
-          return;
-        }
-
-        const startTime = Date.now();
-        const timer = setTimeout(() => {
-          resolve({
-            online: false,
-            reason: 'timeout',
-            latency_ms: timeout
-          });
-        }, timeout);
-
-        this.checkTorConnection(torAddress)
-          .then((result) => {
-            clearTimeout(timer);
-            const latency = Date.now() - startTime;
-            resolve({
-              online: result,
-              latency_ms: latency,
-              checked_at: new Date().toISOString()
-            });
-          })
-          .catch(() => {
-            clearTimeout(timer);
-            resolve({
-              online: false,
-              reason: 'connection_failed',
-              checked_at: new Date().toISOString()
-            });
-          });
-      } catch (err) {
-        resolve({
-          online: false,
-          reason: 'error',
-          error: err.message
-        });
-      }
-    });
-  }
-
-  async checkTorConnection(torAddress) {
-    // .onion addresses require Tor's SOCKS5 proxy — raw TCP can't resolve them.
-    const { SocksClient } = require('socks');
-    const [host, portStr] = torAddress.split(':');
-    const port = parseInt(portStr || '3415', 10);
-
-    try {
-      const conn = await SocksClient.createConnection({
-        proxy:       { host: '127.0.0.1', port: this.torSocksPort, type: 5 },
-        command:     'connect',
-        destination: { host, port },
-        timeout:     this.torCheckTimeoutMs
-      });
-      conn.socket.destroy();
-      return true;
-    } catch {
-      return false;
+  // Reachability hint for the UI only. grin-wallet performs the real Tor connection during the
+  // send and is the authoritative check, so for a well-formed address we report an "unknown"
+  // tri-state (online: null) instead of guessing. We deliberately do NOT pre-probe by deriving
+  // the .onion from the Slatepack address — grin-wallet already does that, and a wrong
+  // derivation here would falsely block every payout.
+  async probeToronlineStatus(address) {
+    if (!this.isPayoutAddress(address)) {
+      return { online: false, reason: 'invalid_format' };
     }
+    return { online: null, reason: 'determined_at_send' };
   }
 
-  isTorAddress(address) {
-    const torRegex = /^[a-z2-7]{56}\.onion(:[0-9]+)?$/i;
-    return torRegex.test(address);
+  isPayoutAddress(address) {
+    return /^(grin1|tgrin1)[ac-hj-np-z02-9]{54}$/i.test(String(address || ''));
   }
 
-  // args: string[] — passed directly to spawn, never interpolated into a shell string
+  // args: string[] — passed directly to spawn, never interpolated into a shell string.
+  // Feeds the wallet password (from wallet_pass_file, if set) on stdin so the non-interactive
+  // `send` doesn't block on the password prompt, and enforces a timeout so a stuck send can't
+  // wedge the scheduler.
   async execWalletCommand(args) {
     return new Promise((resolve, reject) => {
       const proc = spawn('grin-wallet', args);
 
       let stdout = '';
       let stderr = '';
+      let finished = false;
 
-      proc.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
+      const finish = (fn, arg) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        fn(arg);
+      };
 
-      proc.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
+      const timer = setTimeout(() => {
+        proc.kill('SIGKILL');
+        finish(reject, new Error(`grin-wallet timed out after ${this.sendTimeoutMs}ms`));
+      }, this.sendTimeoutMs);
+
+      proc.stdout.on('data', (data) => { stdout += data.toString(); });
+      proc.stderr.on('data', (data) => { stderr += data.toString(); });
 
       proc.on('close', (code) => {
-        if (code === 0) {
-          resolve(stdout);
-        } else {
-          reject(new Error(`Command failed (code ${code}): ${stderr}`));
-        }
+        if (code === 0) finish(resolve, stdout);
+        else finish(reject, new Error(`Command failed (code ${code}): ${stderr}`));
       });
 
-      proc.on('error', (err) => {
-        reject(err);
-      });
+      proc.on('error', (err) => finish(reject, err));
+
+      // Supply the wallet password on stdin when a pass file is configured. If none is set the
+      // wallet will prompt and the timeout above will catch the resulting hang.
+      try {
+        if (this.walletPassFile && fs.existsSync(this.walletPassFile)) {
+          const pass = fs.readFileSync(this.walletPassFile, 'utf-8').replace(/\r?\n$/, '');
+          proc.stdin.write(pass + '\n');
+        }
+      } catch (_) { /* ignore — fall through to prompt/timeout */ }
+      proc.stdin.end();
     });
   }
 

@@ -19,6 +19,7 @@ const Database = require('better-sqlite3');
 const DEFAULT_BATCH_INTERVAL_MS = 2000;
 const MAX_BATCH = 300;          // ~75 KB/batch — stays under express.json() 100kb limit
 const FAILOVER_BLOCK_LIMIT = 50;
+const DEFAULT_POST_TIMEOUT_MS = 15000; // abort a hub POST that hangs (half-open connection)
 
 class ShareRelay {
   constructor(config) {
@@ -26,6 +27,7 @@ class ShareRelay {
     this.secret = config.hub_shared_secret || '';
     this.region = config.region || 'default';
     this.intervalMs = config.relay_batch_interval_ms || DEFAULT_BATCH_INTERVAL_MS;
+    this.postTimeoutMs = config.relay_post_timeout_ms || DEFAULT_POST_TIMEOUT_MS;
 
     this.buffer = [];           // live, in-memory accepted shares awaiting flush
     this.timer = null;
@@ -81,13 +83,22 @@ class ShareRelay {
   }
 
   async _post(pathname, body) {
-    const res = await fetch(`${this.hubUrl}${pathname}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-pool-secret': this.secret },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`hub ${pathname} -> HTTP ${res.status}`);
-    return res;
+    // Abort a hung POST so a half-open hub connection can't leave flush() stuck with
+    // flushing=true forever (which would silently grow the in-memory buffer unbounded).
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), this.postTimeoutMs);
+    try {
+      const res = await fetch(`${this.hubUrl}${pathname}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-pool-secret': this.secret },
+        body: JSON.stringify(body),
+        signal: ac.signal,
+      });
+      if (!res.ok) throw new Error(`hub ${pathname} -> HTTP ${res.status}`);
+      return res;
+    } finally {
+      clearTimeout(t);
+    }
   }
 
   // One flush pass. Always empties the in-memory buffer (to the hub or to failover),

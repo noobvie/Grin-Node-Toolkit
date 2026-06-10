@@ -7,7 +7,7 @@ Run as root/sudo on a remote VPS — not executed locally on this machine.
 
 ## Tech Stack
 - **Shell:** Bash (primary language — all scripts must pass `bash -n` syntax check)
-- **Web backend:** Node.js/Express + SQLite (script 052, 053, 054, 055)
+- **Web backend:** Node.js/Express + SQLite (scripts 052–055, and the Script 07 public-pool backend)
 - **Web server:** Nginx (vhost management, SSL via certbot)
 - **Process management:** systemd services + tmux sessions
 - **Grin tooling:** grin-wallet binary (Foreign API v2, Owner API v3 ECDH). **Note:** "Grim wallet" (GetGrin/grim) is a completely separate GUI wallet project — never conflate with grin-wallet (mimblewimble org).
@@ -28,7 +28,9 @@ scripts/
   054_ Payment Pro
   055_ Public WASM wallet
   06_  Global health + price collector
-  07_  Mining services
+  07_  Mining services hub → 07_grin_mining_solo.sh (solo private mining) and
+       07_grin_mining_public_pool.sh (GRINIUM public pool; libs 07_lib_hub.sh /
+       07_lib_satellite.sh; app code in web/07_mining_pool_public/)
   08_  Node admin centre (monitoring, nginx, firewall, backup)
   08del_ Full cleanup (destructive)
   lib/ Sourced libraries — always prefixed with parent script number
@@ -55,6 +57,10 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
 
 ## Conventions
 - Scripts use `set -euo pipefail` at the top
+- **Menu loops under `set -e`:** every `case` dispatch MUST be `||`-guarded
+  (`fn || true`) — an unguarded non-zero return kills the whole script instead of
+  returning to the menu. Same trap: never end a function with `[[ ... ]] && cmd`
+  (a false test makes the function return 1); use the `if`-form instead.
 - Colors/logging defined once in the main script and inherited via source
 - Config written to `/opt/grin/<service>/` on the target server
 - Wallet secrets stored in `/opt/grin/<net>/.api_secret` (never hardcode)
@@ -255,13 +261,20 @@ nginx_ensure_grin_api_zone() {
 Every script that needs `grin_api` calls `nginx_ensure_grin_api_zone` — never
 the primitive directly, never an inline `cat > /etc/nginx/conf.d/...` heredoc.
 
-**For SCRIPT-SPECIFIC zones** (zone used by only one script), call the primitive
-directly with the script's own parameters:
+**For SCRIPT-SPECIFIC zones** (zone used by only one script), call the primitive —
+or the multi-zone variant `nginx_ensure_rate_limit_zones <conf_basename> <zone:rate[:size]> ...`
+— with the script's own parameters:
 
 ```bash
-# In Script 07 (pool):
-nginx_ensure_rate_limit_zone "pool_api_${net}" "60r/m" "10m" "script07-pool-${net}"
+# In Script 07 (public pool) — actual call:
+nginx_ensure_rate_limit_zones "script07-${POOL_SERVICE}" \
+    "${POOL_SERVICE}_auth:3r/m"  "${POOL_SERVICE}_api:30r/m" \
+    "${POOL_SERVICE}_static:60r/m" "${POOL_SERVICE}_ingest:120r/m"
 ```
+
+Note: the helper is a no-op if the conf file already exists — deleting
+`/etc/nginx/conf.d/<basename>.conf` (or running pool cleanup) is the signal to regenerate,
+e.g. after adding a new zone to the list.
 
 Current named wrappers:
 
@@ -271,7 +284,7 @@ Current named wrappers:
 
 ### Script-specific zones — stay in the script that owns them
 - `grin_conn` (Script 04 only) — defined inline in Script 04 inside `nginx.conf` http block
-- `${POOL_SERVICE}_auth/_api/_static` (Script 07 only) — defined inline in pool vhost
+- `${POOL_SERVICE}_auth/_api/_static/_ingest` (Script 07 only) — written via the multi-zone helper; `_ingest` covers satellite `/api/shares` + `/api/blocks` so relay batches aren't throttled by the public `_api` zone
 - Per-domain bandwidth maps (Script 02) — defined inline in per-domain conf
 
 Name script-specific conf files with a `script##-` prefix to avoid future collisions:
@@ -290,6 +303,11 @@ Name script-specific conf files with a `script##-` prefix to avoid future collis
    grep -r "zone=name_here" scripts/ lib/
    ```
 4. **Test syntax after changes:** `nginx -t` before any `systemctl reload nginx`.
+5. **Let's Encrypt bootstrap:** never write a vhost referencing
+   `/etc/letsencrypt/live/<domain>/…` before the cert exists — `nginx -t` hard-fails
+   (chicken-and-egg). Pattern (052, 07): HTTP-only vhost → reload → `certbot --nginx`
+   → then write the full SSL vhost. Include `options-ssl-nginx.conf` only when the
+   file exists, and never put shell syntax like `2>/dev/null` inside an nginx config.
 
 ### Anti-patterns — don't do this
 **BAD — name collision:** two scripts define the same zone name with different rates/files → nginx "zone already bound" error.
@@ -319,6 +337,24 @@ Before creating any `.md` file, check if it should be merged into an existing `s
 
 ## Script 07 — Mining Pool Architecture
 
+**Source of truth — the pool lives in THIS repo** (2026-06): bash in
+`scripts/07_grin_mining_public_pool.sh` + `lib/07_lib_hub.sh` / `lib/07_lib_satellite.sh`,
+app code in `web/07_mining_pool_public/{back-end-pool,public_html}`. The standalone
+**GRINIUM repo (github.com/noobvie/Grinium) was merged into the toolkit and is
+deprecated — never apply fixes or mirror changes there.**
+
+Operational facts:
+- **Exclusivity:** one mining type per server — public pool XOR solo private
+  (`pool_check_exclusivity` hard-blocks; they collide on nginx zones + /opt/grin layout).
+  Likewise a brain (singlebox/hub) and a Satellite can't share a box (ports 3333/3334/8080).
+- **No `init-db.js`:** the schema is created/migrated by `lib/db.js initDb()` every time
+  the service starts — there is no separate DB-init step in the installer.
+- **No `package-lock.json` yet:** the installer falls back to `npm install --omit=dev`;
+  commit a lockfile in `back-end-pool/` to get reproducible `npm ci` installs.
+- **Central API binds `127.0.0.1:8080`** (systemd `HOST` env) — satellites reach it only
+  through the nginx HTTPS vhost (`/api/shares` + `/api/blocks`, `_ingest` rate zone), so
+  satellite `hub_url` = `https://<pool-domain>`, never `:8080` directly.
+
 Key design decisions (locked in — do not change without user confirmation):
 
 - **Identity:** Address-as-identity (2miners style) — miner submits `grin_address.worker_name` as stratum username; no mandatory registration
@@ -327,11 +363,11 @@ Key design decisions (locked in — do not change without user confirmation):
 - **Block maturity:** 1440 blocks (mainnet) / 100 blocks (testnet) before payout; critical for reorg safety (Grin consensus `COINBASE_MATURITY = 1440`)
 - **Orphan detection:** Nonce-based verification job every 6h; reverses payouts if a found block is orphaned
 - **Race conditions:** INSERT OR IGNORE for miner auto-creation; SELECT FOR UPDATE for balance updates
-- **Stack:** Next.js + Tailwind CSS + SQLite (better-sqlite3); systemd process manager (not pm2)
+- **Stack:** Node.js/Express backend (`back-end-pool/`) + static HTML/CSS/JS frontend (`public_html/`) + SQLite (better-sqlite3); systemd process manager (not pm2). *(The early Next.js + Tailwind plan was dropped — do not reintroduce a frontend framework.)*
 - **Auth:** Admin-only JWT sessions (bcrypt, IP allowlist, 60 min timeout); miners never need accounts
 - **Config:** Stored in `/opt/grin/conf/grin_pool.json`; all settings via web admin panel — no bash config files
 - **Script 07 role:** Infrastructure only (deploy files, systemd services, backups); business logic lives in pool web code
-- **Testnet mode:** Stratum-only, no web UI; mainnet mode: full pool + web dashboard
+- **Networks:** the public pool is a mainnet-only product (the earlier "testnet stratum-only mode" plan was not implemented); testnet mining is done via `07_grin_mining_solo.sh`
 - **Default pool fee 1.0%** (`pool_fee_percent: 1.0`, validated 0–50); min withdrawal: 5.0 GRIN
 
 ### Multi-region — hub-and-spoke (design: `docs/generated/script07_design.md` §3–4)

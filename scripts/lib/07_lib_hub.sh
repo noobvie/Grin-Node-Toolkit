@@ -92,9 +92,14 @@ hub_ingestion_auth() {
     [[ -z "$secret" ]] && { warn "No secret set."; return; }
     pool_write_conf_key "hub_shared_secret" "$secret"
     success "Shared secret saved to $POOL_CONF."
+    # The Central API binds 127.0.0.1:$HUB_CENTRAL_API_PORT (systemd HOST env) —
+    # satellites cannot reach it directly; they relay through the nginx HTTPS
+    # vhost, which routes /api/shares + /api/blocks with a dedicated rate zone.
+    local hub_domain; hub_domain=$(pool_read_conf "subdomain" "<your-pool-domain>")
     echo -e "\n  ${BOLD}Configure each satellite with:${RESET}"
-    echo -e "    hub_url           = https://<this-host>:${HUB_CENTRAL_API_PORT}"
+    echo -e "    hub_url           = https://${hub_domain}"
     echo -e "    hub_shared_secret = ${secret}"
+    echo -e "  ${DIM}(the nginx vhost proxies /api/shares + /api/blocks to the Central API)${RESET}"
     warn "Restart the hub ($POOL_SERVICE) to apply: option 6 → Restart."
 }
 
@@ -130,7 +135,7 @@ hub_menu() {
     echo -e "  ${GREEN}A${RESET}) Ingestion auth        ${DIM}(shared secret)${RESET}"
     echo -e "  ${GREEN}T${RESET}) Retention settings    ${DIM}(prune / cleanup)${RESET}"
     echo ""
-    echo -e "  ${GREEN}B${RESET}) Backup     ${GREEN}L${RESET}) View logs"
+    echo -e "  ${GREEN}B${RESET}) Backup     ${GREEN}C${RESET}) Cron tasks     ${GREEN}L${RESET}) View logs"
     echo -e "  ${RED}0${RESET}) Back"
     echo ""
     echo -ne "${BOLD}Select: ${RESET}"
@@ -140,20 +145,23 @@ pool_hub_loop() {
     while true; do
         hub_menu
         read -r choice
+        # ||-guarded dispatch: a failing step must return to this menu, not kill
+        # the whole script via set -e.
         case "${choice,,}" in
             "")       continue ;;
-            1)        pool_install ;;
-            2)        pool_configure ;;
-            3)        pool_deploy_web ;;
-            4)        pool_setup_nginx ;;
-            5)        pool_setup_admin ;;
-            6)        pool_service_menu ;;
-            7)        pool_show_status ;;
-            r)        hub_satellite_registry ;;
-            a)        hub_ingestion_auth ;;
-            t)        hub_retention_settings ;;
-            b)        pool_backup ;;
-            l)        pool_view_logs ;;
+            1)        pool_install || true ;;
+            2)        pool_configure || true ;;
+            3)        pool_deploy_web || true ;;
+            4)        pool_setup_nginx || true ;;
+            5)        pool_setup_admin || true ;;
+            6)        pool_service_menu || true ;;
+            7)        pool_show_status || true ;;
+            r)        hub_satellite_registry || true ;;
+            a)        hub_ingestion_auth || true ;;
+            t)        hub_retention_settings || true ;;
+            b)        pool_backup || true ;;
+            c)        pool_cron_schedules || true ;;
+            l)        pool_view_logs || true ;;
             0|q|exit) break ;;
             *)        warn "Invalid option."; sleep 1; continue ;;
         esac

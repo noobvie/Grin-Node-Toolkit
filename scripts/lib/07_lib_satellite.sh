@@ -93,10 +93,14 @@ sat_install() {
     fi
 
     info "Checking system packages..."
+    # Only ask the package manager for nodejs/npm when they are missing — on a
+    # NodeSource install the distro npm package conflicts (held broken packages).
+    local node_pkgs=""
+    { command -v node && command -v npm; } &>/dev/null || node_pkgs="nodejs npm"
     if command -v apt-get &>/dev/null; then
-        apt-get install -y nodejs npm build-essential sqlite3 2>&1 | tail -5
+        apt-get install -y $node_pkgs build-essential sqlite3 2>&1 | tail -5
     elif command -v dnf &>/dev/null; then
-        dnf install -y nodejs npm gcc-c++ sqlite3 2>&1 | tail -5
+        dnf install -y $node_pkgs gcc-c++ sqlite3 2>&1 | tail -5
     fi
 
     local node_ver
@@ -112,9 +116,11 @@ sat_install() {
     info "Copying satellite app to $SAT_APP_CODE..."
     rsync -a --delete "$POOL_APP_SRC/" "$SAT_APP_CODE/" 2>/dev/null || cp -r "$POOL_APP_SRC/"* "$SAT_APP_CODE/"
 
-    info "Installing Node.js dependencies (npm ci)..."
-    (cd "$SAT_APP_CODE" && npm ci --omit=dev 2>&1 | tail -5) \
-        || { error "npm ci failed. Check $SAT_APP_CODE/package.json."; return 1; }
+    local npm_cmd="install"
+    [[ -f "$SAT_APP_CODE/package-lock.json" ]] && npm_cmd="ci"
+    info "Installing Node.js dependencies (npm $npm_cmd)..."
+    (cd "$SAT_APP_CODE" && npm "$npm_cmd" --omit=dev 2>&1 | tail -20) \
+        || { error "npm $npm_cmd failed in $SAT_APP_CODE — see /root/.npm/_logs/ (latest *-debug-0.log)."; return 1; }
     success "Dependencies installed."
 
     sat_ensure_defaults
@@ -241,7 +247,10 @@ sat_service_control() {
         echo -e "  Status: ${RED}● stopped${RESET}"
         echo -e "  ${GREEN}1${RESET}) Start    ${DIM}0) Back${RESET}"
         echo -ne "Choice: "; read -r sc
-        [[ "$sc" == "1" ]] && { systemctl start "$SAT_SERVICE" && success "Started." || error "Start failed."; }
+        # if-form: a trailing `[[ ]] &&` would make "0/back" return 1 → set -e kills the caller
+        if [[ "$sc" == "1" ]]; then
+            systemctl start "$SAT_SERVICE" && success "Started." || error "Start failed."
+        fi
     fi
 }
 
@@ -307,13 +316,15 @@ pool_satellite_loop() {
     while true; do
         sat_menu
         read -r choice
+        # ||-guarded dispatch: a failing step must return to this menu, not kill
+        # the whole script via set -e.
         case "${choice,,}" in
             "")       continue ;;
-            1)        sat_install ;;
-            2)        sat_configure ;;
-            3)        sat_enable_node_stratum ;;
-            4)        sat_service_control ;;
-            5)        sat_status ;;
+            1)        sat_install || true ;;
+            2)        sat_configure || true ;;
+            3)        sat_enable_node_stratum || true ;;
+            4)        sat_service_control || true ;;
+            5)        sat_status || true ;;
             0|q|exit) break ;;
             *)        warn "Invalid option."; sleep 1; continue ;;
         esac

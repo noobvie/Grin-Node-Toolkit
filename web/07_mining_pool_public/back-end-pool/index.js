@@ -1599,10 +1599,17 @@ function setupRoutes() {
       let walletBalance = { total: 0, available: 0, locked: 0 };
       let torStatus = config.tor_enabled ? 'enabled' : 'disabled';
 
-      // Attempt to query wallet if API exists
+      // Attempt to query wallet if API exists. retrieve_summary_info returns
+      // [was_refreshed, WalletInfo] with amounts as nanoGRIN strings — parse to GRIN.
       if (wallet && wallet.getBalance) {
         try {
-          walletBalance = await wallet.getBalance();
+          const summary = await wallet.getBalance();
+          const info = Array.isArray(summary) ? summary[1] : (summary || {});
+          walletBalance = {
+            total: Number(info.total || 0) / 1e9,
+            available: Number(info.amount_currently_spendable || 0) / 1e9,
+            locked: Number(info.amount_locked || 0) / 1e9
+          };
           walletStatus = 'ok';
         } catch (err) {
           console.error('Wallet query failed:', err.message);

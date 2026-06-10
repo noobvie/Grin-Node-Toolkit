@@ -92,9 +92,9 @@ class PoolstatsReporter {
     const minerCount = this.minerManager.getActiveMinersCount();
     const stratumStats = this.stratumServer.getStats();
 
-    // Get last block info
+    // Get last block info (found_at is INTEGER unixepoch seconds → ms for Date)
     const lastBlock = this.blockManager.getLastBlock();
-    const lastBlockTime = lastBlock ? new Date(lastBlock.found_at).toISOString() : null;
+    const lastBlockTime = lastBlock ? new Date(lastBlock.found_at * 1000).toISOString() : null;
     const lastBlockReward = lastBlock ? lastBlock.reward : 0;
 
     return {
@@ -103,7 +103,7 @@ class PoolstatsReporter {
       network: 'mainnet',
       pool_fee: this.config.pool_fee_percent || 0,
       miners: minerCount,
-      hashrate_gps: hashrateStats.current_gps || 0,
+      hashrate_gps: hashrateStats.pool_hashrate_1h_gps || 0,
       blocks_24h: blockStats.blocks_24h || 0,
       blocks_7d: blockStats.blocks_7d || 0,
       blocks_total: blockStats.total_blocks_found || 0,

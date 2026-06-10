@@ -49,26 +49,35 @@ class AlertDelivery {
    * Send alert via email (SMTP)
    */
   async sendEmail(alert) {
-    if (!this.smtpConfig.enabled) {
+    if (!this.smtpConfig.enabled || !this.alertEmail) {
       return;
     }
 
-    // Format email body
+    // nodemailer is an optional dependency: lazy-require so a deployment that hasn't
+    // installed it (or has email disabled) degrades gracefully instead of crashing at boot.
+    let nodemailer;
+    try {
+      nodemailer = require('nodemailer');
+    } catch (e) {
+      this.log('Email delivery skipped: nodemailer not installed (run npm install)');
+      return;
+    }
+
     const subject = `[${alert.level.toUpperCase()}] ${this.formatAlertType(alert.type)}`;
     const body = this.formatEmailBody(alert);
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-    // Stub — nodemailer integration
-    this.log(`Would send email to ${this.alertEmail}: ${subject}`);
+    // smtpConfig is passed straight to nodemailer (host, port, secure, auth:{user,pass}, …).
+    const transporter = nodemailer.createTransport(this.smtpConfig);
+    await transporter.sendMail({
+      from: this.smtpConfig.from || this.alertEmail,
+      to: this.alertEmail,
+      subject,
+      text: body,
+      html: `<pre>${esc(body)}</pre>`
+    });
 
-    // In production, you'd use nodemailer:
-    // const transporter = nodemailer.createTransport(this.smtpConfig);
-    // await transporter.sendMail({
-    //   from: this.smtpConfig.from,
-    //   to: this.alertEmail,
-    //   subject,
-    //   text: body,
-    //   html: `<pre>${body}</pre>`
-    // });
+    this.log(`Alert email sent to ${this.alertEmail}: ${subject}`);
   }
 
   /**

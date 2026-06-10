@@ -130,7 +130,10 @@ class BlockManager {
     }
   }
 
-  async getPoolStats() {
+  // Synchronous: all queries are better-sqlite3 .get() (no awaits). It must NOT be async —
+  // every caller uses it without await, so an async version returned a Promise they spread
+  // into {} (empty stats on /api/pool/stats, /api/admin/metrics, dashboard, poolstats).
+  getPoolStats() {
     try {
       const totalBlocks = this.db.prepare(
         'SELECT COUNT(*) as count FROM blocks'
@@ -148,12 +151,22 @@ class BlockManager {
         "SELECT COALESCE(SUM(reward), 0) as total FROM blocks WHERE status = 'confirmed'"
       ).get();
 
+      // "Found" = any non-orphaned block. created_at is INTEGER unixepoch.
+      const blocks24h = this.db.prepare(
+        "SELECT COUNT(*) as count FROM blocks WHERE status != 'orphaned' AND created_at > unixepoch() - 86400"
+      ).get();
+      const blocks7d = this.db.prepare(
+        "SELECT COUNT(*) as count FROM blocks WHERE status != 'orphaned' AND created_at > unixepoch() - 7 * 86400"
+      ).get();
+
       return {
         total_blocks_found: totalBlocks.count,
         total_reward: totalReward.total,
         confirmed_blocks: confirmedBlocks.count,
         confirmed_reward: confirmedReward.total,
-        immature_blocks: totalBlocks.count - confirmedBlocks.count
+        immature_blocks: totalBlocks.count - confirmedBlocks.count,
+        blocks_24h: blocks24h.count,
+        blocks_7d: blocks7d.count
       };
     } catch (err) {
       console.error(`Error fetching pool stats: ${err.message}`);
@@ -162,8 +175,20 @@ class BlockManager {
         total_reward: 0,
         confirmed_blocks: 0,
         confirmed_reward: 0,
-        immature_blocks: 0
+        immature_blocks: 0,
+        blocks_24h: 0,
+        blocks_7d: 0
       };
+    }
+  }
+
+  // Most recently found block (by height), or null. Synchronous.
+  getLastBlock() {
+    try {
+      return this.db.prepare('SELECT * FROM blocks ORDER BY height DESC LIMIT 1').get() || null;
+    } catch (err) {
+      console.error(`Error fetching last block: ${err.message}`);
+      return null;
     }
   }
 }

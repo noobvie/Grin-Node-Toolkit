@@ -77,7 +77,15 @@ GRIN_PORT_TESTNET=13414
 LOCAL_WEB_DIR_MAINNET_FULL="/var/www/fullmain"
 LOCAL_WEB_DIR_MAINNET_PRUNED="/var/www/prunemain"
 LOCAL_WEB_DIR_TESTNET_PRUNED="/var/www/prunetest"
-FILE_OWNER="www-data:www-data"
+# Web user differs per distro — www-data (Debian/Ubuntu), nginx (RHEL/Rocky/Alma).
+# Saved config (CONF_NGINX) overrides this default.
+if id -u www-data &>/dev/null; then
+    FILE_OWNER="www-data:www-data"
+elif id -u nginx &>/dev/null; then
+    FILE_OWNER="nginx:nginx"
+else
+    FILE_OWNER="www-data:www-data"
+fi
 GRIN_STOP_TIMEOUT=120
 FORCE_KILL_IF_STUCK=true
 DETECTED_NODE_TYPES=""   # populated by run_nginx_setup, e.g. "mainnet:pruned testnet:pruned"
@@ -173,6 +181,40 @@ show_error_pause() {
     echo ""
     echo "Press Enter to return to menu..."
     read -r
+}
+
+################################################################################
+# Package helpers — distro-aware (apt on Debian/Ubuntu, dnf on Rocky/Alma)
+################################################################################
+
+# Install a package if the given command is missing.
+# Usage: ensure_package <command> <package>
+ensure_package() {
+    local cmd="$1" pkg="$2"
+    command -v "$cmd" &>/dev/null && return 0
+    echo "Installing missing package: $pkg..."
+    if command -v dnf &>/dev/null; then
+        dnf install -y -q "$pkg"
+    else
+        apt-get update -qq && apt-get install -y -qq "$pkg"
+    fi
+}
+
+# Ensure the crontab command exists and the cron daemon runs. RHEL-family
+# minimal images often ship without cronie — schedules would silently never run.
+ensure_crontab() {
+    if ! command -v crontab &>/dev/null; then
+        if command -v dnf &>/dev/null; then
+            ensure_package crontab cronie || return 1
+        else
+            ensure_package crontab cron || return 1
+        fi
+    fi
+    # enable+start are no-ops when already active; service name differs per distro
+    systemctl enable --now crond &>/dev/null \
+        || systemctl enable --now cron &>/dev/null \
+        || true
+    return 0
 }
 
 ################################################################################
@@ -1150,7 +1192,7 @@ restart_grin_node() {
     [ ! -f "$GRIN_BINARY" ] && { log "WARNING: binary not found at $GRIN_BINARY — start manually"; return 1; }
 
     cd "$GRIN_DIR" || error_exit "Cannot access $GRIN_DIR"
-    command -v tmux &>/dev/null || { apt-get update -qq && apt-get install -y tmux -qq; }
+    ensure_package tmux tmux || log "WARNING: could not install tmux — start may fail"
 
     # Kill any stale session with this name (e.g. left over after stop_grin_node
     # killed the process but not the tmux session)
@@ -1272,7 +1314,7 @@ try_start_from_known_dir() {
         return 1
     fi
 
-    command -v tmux &>/dev/null || apt-get install -y tmux -qq
+    ensure_package tmux tmux || echo "  WARNING: could not install tmux — start may fail"
     # Session name convention: grin_<nodetype>_<networktype>
     local sess; sess="$(_grin_session_name "$found_dir")"
 
@@ -1417,7 +1459,9 @@ run_ssh_share_for_combo() {
         && log "Remote status: upload in progress" \
         || log "WARNING: Could not write remote status file"
 
-    # Rsync source → remote
+    # Rsync source → remote (rsync is not preinstalled on RHEL/newer Debian minimal)
+    ensure_package rsync rsync \
+        || { log "ERROR: rsync not available and install failed — install it manually"; return 1; }
     log "Uploading via rsync..."
     rsync -az --progress --delete \
         --exclude='.*' \
@@ -1587,6 +1631,7 @@ get_cron_expression() {
 # Add or replace the nginx cron entry
 add_nginx_schedule() {
     echo -e "\n${BOLD}${CYAN}── Schedule Nginx Jobs ──${RESET}\n"
+    ensure_crontab || { sched_error "crontab unavailable — install cronie/cron and retry."; return; }
     local this_script; this_script="$(realpath "${BASH_SOURCE[0]}")"
 
     get_cron_expression || return
@@ -1653,6 +1698,7 @@ remove_nginx_schedule() {
 
 add_clean_schedule() {
     echo -e "\n${BOLD}${CYAN}── Auto-Delete txhashset Snapshots ──${RESET}\n"
+    ensure_crontab || { sched_error "crontab unavailable — install cronie/cron and retry."; return; }
     echo -e "  Deletes ${BOLD}txhashset_snapshot_*.zip${RESET} files from chain_data directories:"
     for d in "${CLEAN_TXHASHSET_DIRS[@]}"; do
         echo -e "    ${DIM}$d${RESET}"
@@ -1706,6 +1752,7 @@ add_clean_schedule() {
 
 add_grin_autostart() {
     echo -e "\n${BOLD}${CYAN}── Auto Startup Grin Node ──${RESET}\n"
+    ensure_crontab || { sched_error "crontab unavailable — install cronie/cron and retry."; return; }
 
     echo -e "  Which network to autostart?"
     echo -e "  ${GREEN}1${RESET}) Mainnet"

@@ -16,9 +16,10 @@
 #   • OS version check is handled by the master script (grin-node-toolkit.sh)
 #   • Internet access  (GitHub API + chain data hosts)
 #   • Required packages (auto-installed if missing):
-#       Debian/Ubuntu : tar  openssl  libncurses5 (or libncurses6)  tmux  jq  tor  curl  wget  sqlite3
-#       Rocky / Alma  : tar  openssl  ncurses-compat-libs  tmux  jq  tor  curl  wget  sqlite
-#       (sqlite3 CLI — used by backup/restore for consistent online DB snapshots)
+#       Debian/Ubuntu : tar  openssl  libncurses5 (or libncurses6)  tmux  jq  tor  curl  wget  sqlite3  rsync  cron
+#       Rocky / Alma  : tar  openssl  ncurses-compat-libs  tmux  jq  tor  curl  wget  sqlite  rsync  cronie
+#       (sqlite3 CLI — used by backup/restore for consistent online DB snapshots;
+#        rsync + cron/cronie — used by Script 03 SSH share and schedules)
 #
 # NETWORK & ARCHIVE MODES
 #   Networks  : Mainnet  |  Testnet  |  Both (mainnet first, then testnet)
@@ -1125,7 +1126,9 @@ check_os_and_deps() {
 
         # sqlite (provides the sqlite3 CLI on RHEL-family) — used by 089 backup
         # for consistent online DB snapshots (sqlite3 ".backup").
-        local packages=(tar tmux curl wget jq tor openssl ncurses-compat-libs sqlite)
+        # rsync + cronie — used by Script 03 (SSH share, cron schedules); neither
+        # is preinstalled on RHEL-family minimal images.
+        local packages=(tar tmux curl wget jq tor openssl ncurses-compat-libs sqlite rsync cronie)
         local to_install=()
         for pkg in "${packages[@]}"; do
             rpm -q "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")
@@ -1139,6 +1142,10 @@ check_os_and_deps() {
         else
             success "All required packages already present."
         fi
+
+        # cronie does not auto-start on install (unlike Debian's cron) — needed
+        # by Script 03 schedules and the certbot renewal cron fallback.
+        systemctl enable --now crond &>/dev/null || true
     else
         # Debian/Ubuntu — use apt-get
         # ncurses: libncurses5 was removed in Ubuntu 24.04 — use libncurses6 there.
@@ -1150,7 +1157,9 @@ check_os_and_deps() {
         fi
 
         # sqlite3 — CLI used by 089 backup for consistent online DB snapshots.
-        local packages=(tar openssl "$ncurses_pkg" tmux jq tor curl wget sqlite3)
+        # rsync + cron — used by Script 03 (SSH share, cron schedules); rsync is
+        # no longer guaranteed on minimal Debian images.
+        local packages=(tar openssl "$ncurses_pkg" tmux jq tor curl wget sqlite3 rsync cron)
         local to_install=()
         for pkg in "${packages[@]}"; do
             dpkg -s "$pkg" &>/dev/null 2>&1 || to_install+=("$pkg")

@@ -358,17 +358,33 @@ inject_rate_limit_to_sites() {
     fi
 }
 
-# 1.7 - Detect available firewall (ufw or iptables)
+# 1.7 - Detect available firewall (firewalld, ufw or iptables)
+# firewalld first: it is the default on RHEL/Rocky/Alma, where iptables may be
+# absent entirely (removed in RHEL 10) or conflict with firewalld if used directly.
 detect_firewall() {
-    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+    if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
+        FIREWALL="firewalld"
+    elif command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
         FIREWALL="ufw"
     elif command -v iptables &>/dev/null; then
         FIREWALL="iptables"
     else
         FIREWALL="none"
-        print_warn "No supported firewall found (ufw or iptables). IP blocking will not work."
+        print_warn "No supported firewall found (firewalld, ufw or iptables). IP blocking will not work."
     fi
     print_info "Firewall detected: $FIREWALL"
+}
+
+# 1.7b - Web content owner: www-data on Debian/Ubuntu, nginx on RHEL/Rocky/Alma.
+# Falls back to root if neither user exists (nginx not installed yet).
+_web_owner() {
+    if id -u www-data &>/dev/null; then
+        echo "www-data"
+    elif id -u nginx &>/dev/null; then
+        echo "nginx"
+    else
+        echo "root"
+    fi
 }
 
 # 1.8 - Initialise directories for security data
@@ -489,6 +505,26 @@ _evict_apache2() {
 
 # _ensure_sites_enabled_include is provided by lib/nginx_shared_helpers.sh (sourced above).
 
+# Open HTTP/HTTPS in the active firewall. Debian/Ubuntu images usually ship no
+# active firewall, but Rocky/Alma run firewalld by default with 80/443 closed —
+# without this, certbot's HTTP-01 challenge fails and the vhost is unreachable.
+# Idempotent and silent when nothing needs opening.
+open_web_firewall_ports() {
+    if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
+        if ! firewall-cmd --query-service=http &>/dev/null \
+            || ! firewall-cmd --query-service=https &>/dev/null; then
+            firewall-cmd --permanent --add-service=http --add-service=https &>/dev/null \
+                && firewall-cmd --reload &>/dev/null \
+                && print_info "firewalld: opened HTTP/HTTPS (80/443)" \
+                || print_warn "firewalld: could not open 80/443 — open them manually: firewall-cmd --permanent --add-service={http,https} && firewall-cmd --reload"
+        fi
+    elif command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+        ufw allow 80/tcp  &>/dev/null || true
+        ufw allow 443/tcp &>/dev/null || true
+        print_info "ufw: ports 80/443 allowed"
+    fi
+}
+
 # Ensure nginx + certbot are installed. Single prompt if either (or both) are missing.
 # Returns 1 if the user cancels or declines.
 ensure_nginx_certbot() {
@@ -498,6 +534,10 @@ ensure_nginx_certbot() {
 
     # Always verify sites-enabled include is in place — self-heals after nginx upgrades.
     _ensure_sites_enabled_include
+
+    # 80/443 must be reachable for certbot and the vhost (firewalld default-blocks
+    # them on Rocky/Alma).
+    open_web_firewall_ports
 
     $need_nginx || $need_certbot || return 0   # both present — nothing to do
 
@@ -528,6 +568,8 @@ ensure_nginx_certbot() {
         if [[ -f /etc/debian_version ]]; then
             apt-get update && apt-get install -y certbot python3-certbot-nginx
         elif [[ -f /etc/redhat-release ]]; then
+            # certbot lives in EPEL — ensure the repo is enabled first
+            rpm -q epel-release &>/dev/null || yum install -y epel-release
             yum install -y certbot python3-certbot-nginx
         fi
         print_info "Certbot installed successfully"
@@ -1087,8 +1129,10 @@ create_files_directory() {
         print_info "Directory already exists: $FILES_DIR"
     fi
     
-    # Set appropriate permissions
-    chown -R www-data:www-data "$FILES_DIR"
+    # Set appropriate permissions (web user differs per distro — see _web_owner)
+    local web_owner; web_owner="$(_web_owner)"
+    chown -R "${web_owner}:${web_owner}" "$FILES_DIR" \
+        || print_warn "Could not chown $FILES_DIR to ${web_owner} — set ownership manually."
     chmod 755 "$FILES_DIR"
 
 }
@@ -1869,7 +1913,7 @@ Next Steps:
 File Management:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Upload files:     cp yourfile.zip $FILES_DIR/
-  Set permissions:  chown www-data:www-data $FILES_DIR/*
+  Set permissions:  chown $(_web_owner):$(_web_owner) $FILES_DIR/*
   List files:       ls -lh $FILES_DIR/
 
 Logs:
@@ -2546,6 +2590,8 @@ run_enhance_security() {
             apt-get update -q
             apt-get install -y fail2ban
         elif [[ -f /etc/redhat-release ]]; then
+            # fail2ban lives in EPEL — ensure the repo is enabled first
+            rpm -q epel-release &>/dev/null || yum install -y epel-release
             yum install -y fail2ban
         else
             print_error "Unsupported OS. Please install fail2ban manually and re-run."
@@ -2676,6 +2722,12 @@ _ip_block() {
     [[ "$reason" == "0" ]] && return
 
     case "$FIREWALL" in
+        firewalld)
+            firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='${target_ip}' drop" &>/dev/null \
+                && firewall-cmd --reload &>/dev/null \
+                || { print_warn "firewalld: failed to add drop rule for $target_ip"; return; }
+            print_info "firewalld: blocked $target_ip"
+            ;;
         ufw)
             ufw deny from "$target_ip" to any
             print_info "UFW: blocked $target_ip"
@@ -2714,6 +2766,12 @@ _ip_unblock() {
     [[ -z "$target_ip" || "$target_ip" == "0" ]] && return
 
     case "$FIREWALL" in
+        firewalld)
+            firewall-cmd --permanent --remove-rich-rule="rule family='ipv4' source address='${target_ip}' drop" &>/dev/null \
+                && firewall-cmd --reload &>/dev/null \
+                || print_warn "firewalld rule not found for $target_ip"
+            print_info "firewalld: unblocked $target_ip"
+            ;;
         ufw)
             ufw delete deny from "$target_ip" to any 2>/dev/null \
                 || print_warn "UFW rule not found for $target_ip"
@@ -2747,12 +2805,18 @@ _ip_list() {
     fi
 
     echo ""
-    echo "Active iptables DROP rules (INPUT chain):"
-    if command -v iptables &>/dev/null; then
-        iptables -L INPUT -n --line-numbers 2>/dev/null | grep "DROP" | sed 's/^/  /' \
+    if [[ "$FIREWALL" == "firewalld" ]]; then
+        echo "Active firewalld drop rich-rules:"
+        firewall-cmd --list-rich-rules 2>/dev/null | grep "drop" | sed 's/^/  /' \
             || echo "  (none)"
     else
-        echo "  (iptables not available)"
+        echo "Active iptables DROP rules (INPUT chain):"
+        if command -v iptables &>/dev/null; then
+            iptables -L INPUT -n --line-numbers 2>/dev/null | grep "DROP" | sed 's/^/  /' \
+                || echo "  (none)"
+        else
+            echo "  (iptables not available)"
+        fi
     fi
     echo ""
 }

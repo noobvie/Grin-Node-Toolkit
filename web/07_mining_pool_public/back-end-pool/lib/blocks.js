@@ -130,7 +130,7 @@ class BlockManager {
     }
   }
 
-  // Synchronous: all queries are better-sqlite3 .get() (no awaits). It must NOT be async —
+  // Synchronous: all queries are synchronous sqlite .get() (no awaits). It must NOT be async —
   // every caller uses it without await, so an async version returned a Promise they spread
   // into {} (empty stats on /api/pool/stats, /api/admin/metrics, dashboard, poolstats).
   getPoolStats() {

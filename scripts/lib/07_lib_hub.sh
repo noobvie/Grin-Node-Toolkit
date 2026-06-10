@@ -10,7 +10,7 @@
 # The hub brain REUSES the shared pool_* setup functions from the parent script
 # (install/configure/deploy web/nginx/admin/status/backup). Hub-specific
 # multi-region functions (satellite registry, ingestion auth) are implemented here
-# and write to the same $POOL_CONF (grin_pool.json) the Central API reads at startup.
+# and write to the same $POOL_CONF (grin_pubpool.json) the Central API reads at startup.
 #
 # Sourced, not executed — inherits colors/log/config helpers + pool_* from parent.
 # Central API ingestion (/api/shares, /api/blocks) lives on $POOL_PORT (8080).

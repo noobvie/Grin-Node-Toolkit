@@ -22,9 +22,9 @@ web/07_mining_pool_public/
 
 **Production (VPS):**
 ```
-/opt/grin/pool/mainnet/   Node app (index.js, lib/, pool.json, pool.sqlite)
-/opt/grin/pool/testnet/   isolated instance (service …-testnet)
-/opt/grin/conf/grin_pool.json        singlebox/hub config (admin-editable)
+/opt/grin/pubpool/mainnet/   Node app (index.js, lib/, pool.json, pool.sqlite)
+/opt/grin/pubpool/testnet/   isolated instance (service …-testnet)
+/opt/grin/conf/grin_pubpool.json        singlebox/hub config (admin-editable)
 /opt/grin/conf/grin_satellite.json   satellite config (hub URL, secret, region, vardiff)
 /var/www/grin-pool/                  frontend served by nginx
 /etc/nginx/sites-available/grin-pool
@@ -35,7 +35,7 @@ web/07_mining_pool_public/
 ```
 [Service]
 Type=simple
-WorkingDirectory=/opt/grin/pool/<net>
+WorkingDirectory=/opt/grin/pubpool/<net>
 ExecStart=/usr/bin/node index.js
 Environment=NODE_ENV=production
 Restart=on-failure
@@ -55,7 +55,7 @@ pattern as `052_lib_wallet.sh`). The backend handles SIGTERM/SIGINT → stop sch
 - `nginx -t` before every reload.
 
 ### Installer responsibilities
-- Node ≥ 18 guard (global `fetch`); `npm ci` (or `--omit=dev`) in the app dir.
+- Node ≥ 24 guard (`node:sqlite`) with NodeSource auto-install (`pool_ensure_node24`); `npm ci` (or `--omit=dev`) in the app dir.
 - Generate `jwt_secret` **once at install** into `pool.json` (the backend should not silently
   regenerate it at boot — that invalidates all JWTs on restart).
 - Create/migrate schema via `db.js` (`createSchema()`, additive `ALTER TABLE ADD COLUMN` guards).
@@ -64,7 +64,7 @@ pattern as `052_lib_wallet.sh`). The backend handles SIGTERM/SIGINT → stop sch
   `min_withdrawal`, `confirm_depth`, `auto_payout`, region.
 - Satellite install (`07_lib_satellite.sh`): deploys `satellite.js` (app copy + `npm ci` + systemd +
   `grin_satellite.json` + node-stratum toml patch). Hub install (`07_lib_hub.sh`): manages the shared
-  secret + satellite IP allowlist in `grin_pool.json`.
+  secret + satellite IP allowlist in `grin_pubpool.json`.
 - Every `.sh` change passes `bash -n` before commit.
 
 ---
@@ -145,14 +145,14 @@ runtime-tested locally (`node_modules` live only on the VPS). On a testnet box, 
 
 ## 4. Database — engine & backup runbook
 
-**Stay on SQLite (`better-sqlite3`) now** (one local writer; see design §4 for the migration
+**Stay on SQLite (Node's built-in `node:sqlite`) now** (one local writer; see design §4 for the migration
 triggers). The safe topology is exactly ours: **one local writer process on local disk** — SQLite
 does not corrupt on its own; corruption comes from misuse, all avoidable.
 
 **Rules that prevent corruption:**
 - DB on the box's **local SSD** only. Cloud *block* volumes (EBS, DO Volumes) are fine; **never** a
   network filesystem (NFS/SMB).
-- One process owns the file (✓ by design); one `better-sqlite3` version.
+- One process owns the file (✓ by design); one Node/`node:sqlite` version.
 - **Never** `cp`/`rsync` the live `.sqlite` — you can capture a torn write.
 
 **Backups — use the online backup API, not file copy:**
@@ -196,7 +196,7 @@ corruption. That is the one legitimate future reason to consider Postgres.
 ## 6. Testnet mode
 
 Backend is config-driven; testnet = a different config file + isolated instance
-(`/opt/grin/pool/testnet/`, service `grin-pool-manager-testnet`, node API `13413`, node stratum
+(`/opt/grin/pubpool/testnet/`, service `grin-pool-manager-testnet`, node API `13413`, node stratum
 upstream `13334`, wallet `13415/13420`). Currency label `tGRIN`; `--testnet` (never `--floonet`);
 `confirm_depth` defaults to 100; admin balance-inject endpoint is testnet-only (guarded). Testnet
 deploy is stratum-capable; mainnet adds the full web dashboard.
@@ -261,8 +261,8 @@ satellite to prove federation. Don't debug federation and the core pipeline at t
 
 **Layer 1 — bash / deploy (both libs)**
 - Services exist & enabled: `grin-pool-manager[-testnet]` (hub), `grin-satellite` (sat).
-- Configs written 0600: `/opt/grin/conf/grin_pool.json`, `/opt/grin/conf/grin_satellite.json`.
-- `jwt_secret` present in `grin_pool.json` and **stable across a restart** (not regenerated at boot).
+- Configs written 0600: `/opt/grin/conf/grin_pubpool.json`, `/opt/grin/conf/grin_satellite.json`.
+- `jwt_secret` present in `grin_pubpool.json` and **stable across a restart** (not regenerated at boot).
 - Ports listening per §11; node built-in stratum is **localhost-only** (`127.0.0.1:3334`, not `0.0.0.0`).
 - `bash -n` clean on all `07_*`; `node --check` clean on backend JS; `nginx -t` OK.
 
@@ -317,7 +317,7 @@ Run on the box. Set the vars once. `$NET=mainnet` or `testnet`; ports per §11.
 ```bash
 # ── vars ──────────────────────────────────────────────────────────────────────
 HUB=127.0.0.1:8080                 # Central API (local to the hub box)
-SECRET=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/opt/grin/conf/grin_pool.json','utf8')).hub_shared_secret||'')")
+SECRET=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/opt/grin/conf/grin_pubpool.json','utf8')).hub_shared_secret||'')")
 ADDR=tgrin1exampleaddressxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ADMIN_USER=admin; ADMIN_PASS='your-admin-password'
 
@@ -387,7 +387,7 @@ curl -s -X POST "http://$HUB/api/account/$ADDR/withdraw" \
 curl -s $C http://$HUB/api/admin/withdrawals       # the new withdrawal should appear
 
 # ── 4) DB-layer checks (cross-check the federation aggregates) ───────────────────
-DB=/opt/grin/pool/$NET/pool.sqlite
+DB=/opt/grin/pubpool/$NET/pool.sqlite
 sqlite3 "$DB" 'PRAGMA integrity_check;'
 sqlite3 "$DB" "SELECT region,COUNT(*) FROM shares GROUP BY region;"   # matches /api/pool/stats/regions
 sqlite3 "$DB" 'SELECT grin_address,balance,balance_locked FROM miner_accounts LIMIT 5;'

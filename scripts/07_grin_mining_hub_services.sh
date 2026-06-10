@@ -68,6 +68,8 @@ hub_detect_solo() {
 hub_detect_public() {
     local m
     for m in \
+        "/opt/grin/conf/grin_pubpool.json" \
+        "/opt/grin/pubpool/mainnet" \
         "/opt/grin/conf/grin_pool.json" \
         "/opt/grin/pool/mainnet"
     do

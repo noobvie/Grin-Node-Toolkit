@@ -11,10 +11,10 @@
 // failover file and replayed on the next flush. Delivery is at-least-once; the hub
 // is idempotent (shares dedup by share_hash UNIQUE, blocks by hash UNIQUE).
 //
-// Requires Node 18+ (global fetch). Sourced by satellite.js, never by index.js.
+// Requires Node 24+ (node:sqlite via sqlite-compat). Sourced by satellite.js, never by index.js.
 
 const path = require('path');
-const Database = require('better-sqlite3');
+const Database = require('./sqlite-compat');
 
 const DEFAULT_BATCH_INTERVAL_MS = 2000;
 const MAX_BATCH = 300;          // ~75 KB/batch — stays under express.json() 100kb limit

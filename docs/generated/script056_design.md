@@ -320,7 +320,7 @@ unless (a) is ever unavailable on the deployed binary.
   config.json                           TTL, size cap, public host, tor on/off
 /opt/grin/transporter-test/             testnet instance (port 7466, --testnet semantics)
 
-/opt/grin/conf/grin_transporter.json    shared settings (mirrors grin_pool.json style)
+/opt/grin/conf/grin_transporter.json    shared settings (mirrors grin_pubpool.json style)
 
 /etc/systemd/system/grin-transporter-main.service
 /etc/systemd/system/grin-transporter-test.service

@@ -116,7 +116,11 @@ let retentionManager = null;
 
 async function initializePool() {
   try {
-    config = loadConfig('./pool.json');
+    // GRIN_POOL_CONF is set by the Script 07 systemd unit (/opt/grin/conf/
+    // grin_pubpool.json); ./pool.json is the manual/testnet fallback. Same
+    // resolution as satellite.js — without it the installed service ignored
+    // the operator's config entirely.
+    config = loadConfig(process.env.GRIN_POOL_CONF || './pool.json');
     console.log(`[${new Date().toISOString()}] Loading pool configuration...`);
 
     // Validate config (CRITICAL: issue #12)

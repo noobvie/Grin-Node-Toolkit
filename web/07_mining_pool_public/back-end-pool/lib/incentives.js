@@ -14,7 +14,7 @@ const POOL_FEE = 'pool_fee';
 const flag = (v) => v === true || v === 'true';
 const SECONDS_PER_DAY = 86400;
 
-// Central incentive logic. Shares the better-sqlite3 singleton with the rest of the pool, so
+// Central incentive logic. Shares the sqlite singleton with the rest of the pool, so
 // its mutations participate in any enclosing db.transaction() (e.g. rewards.js distribution).
 class IncentivesManager {
   constructor(config) {

@@ -61,8 +61,13 @@ LOG_FILE="$LOG_DIR/grinium_$(date +%Y%m%d_%H%M%S).log"
 
 POOL_APP_SRC="$TOOLKIT_ROOT/web/07_mining_pool_public/back-end-pool"
 POOL_WEB_SRC="$TOOLKIT_ROOT/web/07_mining_pool_public/public_html"
-POOL_CONF="/opt/grin/conf/grin_pool.json"
-POOL_APP_DIR="/opt/grin/pool/mainnet"
+# "pubpool" family — product-prefixed like solo's /opt/grin/solowallet, so an
+# operator can tell at a glance which product owns a dir (renamed 2026-06 from
+# the generic grin_pool.json + /opt/grin/pool + /opt/grin/wallet; legacy paths
+# are still recognised by Z) Cleanup).
+POOL_CONF="/opt/grin/conf/grin_pubpool.json"
+POOL_APP_DIR="/opt/grin/pubpool/mainnet"
+POOL_WALLET_DIR="/opt/grin/pubpoolwallet/mainnet"
 POOL_WEB_DIR="/var/www/grin-pool"
 POOL_PORT=8080
 POOL_SERVICE="grin-pool-manager"
@@ -167,11 +172,11 @@ pool_ensure_defaults() {
         ["pool_fee_percent"]="1.0"
         ["min_withdrawal"]="5.0"
         ["withdrawal_fee"]="0.0"
-        ["grin_wallet_dir"]="/opt/grin/wallet/mainnet"
+        ["grin_wallet_dir"]="$POOL_WALLET_DIR"
         ["log_path"]="$POOL_LOG"
         ["service_port"]="$POOL_PORT"
         ["db_path"]="$POOL_APP_DIR/pool.db"
-        ["wallet_pass_file"]="$POOL_APP_DIR/wallet_pass"
+        ["wallet_pass_file"]="$POOL_APP_DIR/.wallet_pass"
         ["assets_dir"]="$POOL_APP_DIR/custom_assets"
         ["fail2ban_maxretry"]="5"
         ["fail2ban_findtime"]="600"
@@ -225,6 +230,43 @@ pool_show_status() {
 # 1) INSTALL
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Ensure Node.js 24+ (node:sqlite needs >= 24). Installs or upgrades via
+# NodeSource when the box has no node or one that is too old. Shared by the
+# pool install and the satellite install (lib is sourced from this script).
+pool_ensure_node24() {
+    local node_ver=0
+    command -v node &>/dev/null && \
+        node_ver=$(node -e 'process.stdout.write(process.version.slice(1).split(".")[0])' 2>/dev/null || echo 0)
+    if [[ "$node_ver" -ge 24 ]]; then
+        success "Node.js $(node --version 2>/dev/null) found."
+        return 0
+    fi
+    if [[ "$node_ver" -gt 0 ]]; then
+        warn "Node.js v${node_ver} found — the pool requires v24+ (node:sqlite). Upgrading via NodeSource..."
+    else
+        info "Node.js not found — installing v24 LTS via NodeSource..."
+    fi
+    if command -v apt-get &>/dev/null; then
+        # Distro nodejs/npm packages conflict with NodeSource — remove them first.
+        apt-get remove -y nodejs npm 2>/dev/null || true
+        apt-get autoremove -y 2>/dev/null || true
+        curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
+            || { error "NodeSource setup failed."; return 1; }
+        apt-get install -y nodejs 2>&1 | tail -3 \
+            || { error "Node.js install failed."; return 1; }
+    elif command -v dnf &>/dev/null; then
+        dnf remove -y nodejs npm 2>/dev/null || true
+        curl -fsSL https://rpm.nodesource.com/setup_24.x | bash - \
+            || { error "NodeSource setup failed."; return 1; }
+        dnf install -y nodejs 2>&1 | tail -3 \
+            || { error "Node.js install failed."; return 1; }
+    else
+        error "No apt/dnf found — install Node.js 24+ manually from https://nodejs.org/."
+        return 1
+    fi
+    success "Node.js installed: $(node --version)"
+}
+
 pool_install() {
     echo -e "\n${BOLD}Installing Pool Manager (Mainnet)...${RESET}\n"
 
@@ -244,23 +286,15 @@ pool_install() {
     fi
 
     info "Checking system packages..."
-    # Only ask the package manager for nodejs/npm when they are missing — on a
-    # NodeSource install the distro npm package conflicts (held broken packages).
-    local node_pkgs=""
-    { command -v node && command -v npm; } &>/dev/null || node_pkgs="nodejs npm"
+    # No build-essential/gcc-c++: the pool has no native npm modules since the
+    # better-sqlite3 → node:sqlite migration (everything else is pure JS).
     if command -v apt-get &>/dev/null; then
-        apt-get install -y $node_pkgs build-essential logrotate sqlite3 2>&1 | tail -5
+        apt-get install -y logrotate sqlite3 2>&1 | tail -5
     elif command -v dnf &>/dev/null; then
-        dnf install -y $node_pkgs gcc-c++ logrotate sqlite3 2>&1 | tail -5
+        dnf install -y logrotate sqlite3 2>&1 | tail -5
     fi
 
-    local node_ver
-    node_ver=$(node -e 'process.stdout.write(process.version.slice(1).split(".")[0])' 2>/dev/null || echo 0)
-    if [[ "$node_ver" -lt 18 ]]; then
-        error "Node.js 18+ required (found: v${node_ver}). Install from https://nodejs.org/ or via NodeSource."
-        return 1
-    fi
-    success "Node.js v${node_ver} found."
+    pool_ensure_node24 || return 1
 
     mkdir -p "$POOL_APP_DIR"
     chmod 700 "$POOL_APP_DIR"
@@ -364,7 +398,7 @@ pool_configure() {
     echo -ne "Min withdrawal   [$(pool_read_conf "min_withdrawal" "5.0")] GRIN: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "min_withdrawal" "$val"
 
-    echo -ne "Wallet dir       [$(pool_read_conf "grin_wallet_dir" "/opt/grin/wallet/mainnet")]: "
+    echo -ne "Wallet dir       [$(pool_read_conf "grin_wallet_dir" "$POOL_WALLET_DIR")]: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "grin_wallet_dir" "$val"
 
     local default_nsp; default_nsp=$(pool_read_conf "node_stratum_port" "3334")
@@ -377,7 +411,7 @@ pool_configure() {
     echo -ne "Pool Grin address [${current_addr:-none}]: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "pool_address" "$val"
 
-    local pass_file="$POOL_APP_DIR/wallet_pass"
+    local pass_file="$POOL_APP_DIR/.wallet_pass"
     echo -ne "Wallet password  (leave blank to keep existing): "
     read -rs val; echo ""
     if [[ -n "$val" ]]; then
@@ -646,7 +680,7 @@ pool_setup_fail2ban() {
     local filter="/etc/fail2ban/filter.d/grin-pool-login.conf"
     local jail="/etc/fail2ban/jail.d/grin-pool.conf"
 
-    # Thresholds are operator-tunable in grin_pool.json (seeded by pool_ensure_defaults).
+    # Thresholds are operator-tunable in grin_pubpool.json (seeded by pool_ensure_defaults).
     # Read them here and guard against non-numeric / blank edits so a typo can't produce a
     # broken jail file — fall back to the safe 5 / 10 min / 1 h defaults.
     local maxretry findtime bantime
@@ -719,7 +753,7 @@ EOF
     if fail2ban-client status grin-pool-login &>/dev/null; then
         success "Jail 'grin-pool-login' is active."
         echo ""
-        echo -e "  ${DIM}Rule:   ${maxretry} failed logins / ${findtime}s  →  ${bantime}s ban  (edit fail2ban_* in grin_pool.json, then re-run 1) Install)${RESET}"
+        echo -e "  ${DIM}Rule:   ${maxretry} failed logins / ${findtime}s  →  ${bantime}s ban  (edit fail2ban_* in grin_pubpool.json, then re-run 1) Install)${RESET}"
         echo -e "  ${DIM}Status: fail2ban-client status grin-pool-login${RESET}"
         echo -e "  ${DIM}Unban:  fail2ban-client set grin-pool-login unbanip <IP>${RESET}"
         echo -e "  ${DIM}Test:   fail2ban-regex $access_log $filter${RESET}"
@@ -778,7 +812,8 @@ process.stdout.write(JSON.stringify({
                 && info "User '$admin_user' promoted to admin."
         else
             node -e "
-const db = require('better-sqlite3')(process.argv[1]);
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync(process.argv[1]);
 db.prepare('UPDATE users SET is_admin=1 WHERE username=?').run(process.argv[2]);
 " "$POOL_APP_DIR/pool.db" "$admin_user" \
                 && info "User '$admin_user' promoted to admin."
@@ -1123,7 +1158,7 @@ pool_singlebox_loop() {
 # needs, so an operator can rebuild binary/source/services from scratch quickly.
 #
 # REMOVED (per-group confirm):  systemd services + units, pool app dir (incl.
-#   pool.db + wallet_pass), satellite app dir (incl. staging/failover DBs),
+#   pool.db + .wallet_pass), satellite app dir (incl. staging/failover DBs),
 #   web root + nginx vhost + rate-limit zones conf, cron jobs + logrotate +
 #   backup wrapper, JSON configs, service logs.
 # PRESERVED (never touched):    the Grin node + chain data + grin-server.toml
@@ -1178,9 +1213,9 @@ pool_cleanup() {
     echo -e "    ${DIM}Wallet dir + seed · pool backups ($backup_dir)${RESET}"
     echo -e "    ${DIM}(use Script 08del for a full wipe including those)${RESET}"
     echo ""
-    echo -ne "${BOLD}Proceed with public-pool cleanup? [y/N]: ${RESET}"
+    echo -ne "${BOLD}Proceed with public-pool cleanup? [Y/n]: ${RESET}"
     local go; read -r go || true
-    [[ "${go,,}" == "y" ]] || { info "Cancelled — nothing changed."; return; }
+    [[ "${go,,}" != "n" ]] || { info "Cancelled — nothing changed."; return; }
     echo ""
 
     local a svc
@@ -1199,16 +1234,19 @@ pool_cleanup() {
     fi
     echo ""
 
-    # 2) Pool app dir — includes pool.db (miner balances!) and wallet_pass
-    if [[ -d "$POOL_APP_DIR" ]]; then
-        echo -e "   ${YELLOW}⚠ $POOL_APP_DIR includes pool.db (miner balances) + wallet_pass.${RESET}"
+    # 2) Pool app dir — includes pool.db (miner balances!) and .wallet_pass.
+    # legacy_app: pre-rename installs used /opt/grin/pool — sweep it too.
+    local legacy_app="/opt/grin/pool"
+    if [[ -d "$POOL_APP_DIR" || -d "$legacy_app" ]]; then
+        echo -e "   ${YELLOW}⚠ $POOL_APP_DIR includes pool.db (miner balances) + .wallet_pass.${RESET}"
         echo -e "   ${DIM}Backups in $backup_dir are kept — run B) Backup first if unsure.${RESET}"
         echo -ne "${BOLD}2)${RESET} Remove pool app + database ($POOL_APP_DIR)? [Y/n]: "
         read -r a || true
         if [[ "${a,,}" != "n" ]]; then
             rm -rf "${POOL_APP_DIR:?}"
+            [[ -d "$legacy_app" ]] && { rm -rf "${legacy_app:?}"; info "Legacy app dir removed ($legacy_app)."; }
             success "Pool app + database removed."
-            log "Cleanup: removed $POOL_APP_DIR"
+            log "Cleanup: removed $POOL_APP_DIR (+ legacy $legacy_app if present)"
         fi
         echo ""
     fi
@@ -1255,13 +1293,13 @@ pool_cleanup() {
     fi
     echo ""
 
-    # 6) JSON configs (pool + satellite)
+    # 6) JSON configs (pool + satellite + pre-rename legacy grin_pool.json)
     echo -ne "${BOLD}6)${RESET} Remove configs ($POOL_CONF, $SAT_CONF)? [Y/n]: "
     read -r a || true
     if [[ "${a,,}" != "n" ]]; then
-        rm -f "$POOL_CONF" "$SAT_CONF"
+        rm -f "$POOL_CONF" "$SAT_CONF" "/opt/grin/conf/grin_pool.json"
         success "Configs removed."
-        log "Cleanup: removed $POOL_CONF + $SAT_CONF"
+        log "Cleanup: removed $POOL_CONF + $SAT_CONF (+ legacy grin_pool.json)"
     fi
     echo ""
 

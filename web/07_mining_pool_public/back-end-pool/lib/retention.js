@@ -52,7 +52,7 @@ class RetentionManager {
     return cutoff;
   }
 
-  // Run one prune pass. Synchronous (better-sqlite3). Safe to call manually.
+  // Run one prune pass. Synchronous (node:sqlite). Safe to call manually.
   runOnce() {
     const s = this.settings.getSection('database');
     const enabled = s.retention_enabled === true || s.retention_enabled === 'true';

@@ -93,23 +93,16 @@ sat_install() {
     fi
 
     info "Checking system packages..."
-    # Only ask the package manager for nodejs/npm when they are missing — on a
-    # NodeSource install the distro npm package conflicts (held broken packages).
-    local node_pkgs=""
-    { command -v node && command -v npm; } &>/dev/null || node_pkgs="nodejs npm"
+    # No build-essential/gcc-c++: the relay has no native npm modules since the
+    # better-sqlite3 → node:sqlite migration (failover buffer uses node:sqlite).
     if command -v apt-get &>/dev/null; then
-        apt-get install -y $node_pkgs build-essential sqlite3 2>&1 | tail -5
+        apt-get install -y sqlite3 2>&1 | tail -5
     elif command -v dnf &>/dev/null; then
-        dnf install -y $node_pkgs gcc-c++ sqlite3 2>&1 | tail -5
+        dnf install -y sqlite3 2>&1 | tail -5
     fi
 
-    local node_ver
-    node_ver=$(node -e 'process.stdout.write(process.version.slice(1).split(".")[0])' 2>/dev/null || echo 0)
-    if [[ "$node_ver" -lt 18 ]]; then
-        error "Node.js 18+ required (found v${node_ver})."
-        return 1
-    fi
-    success "Node.js v${node_ver} found."
+    # pool_ensure_node24 is defined in the parent script (07_grin_mining_public_pool.sh).
+    pool_ensure_node24 || return 1
 
     mkdir -p "$SAT_APP_CODE"
     chmod 700 "$SAT_APP_DIR"

@@ -28,7 +28,7 @@ Script 07 deploys the full pool stack on top of a running node + grin-wallet.
 - **Auth:** admin-only JWT sessions. Miners never authenticate.
 - **Script 07 role:** **infrastructure only** — deploy files, systemd, nginx, backups. All
   business logic lives in the pool web code; all settings are set via the web admin panel
-  (config in `/opt/grin/conf/grin_pool.json`), never bash config files.
+  (config in `/opt/grin/conf/grin_pubpool.json`), never bash config files.
 
 ### Stack reality — Express, not Next.js
 An earlier "v4" plan to rewrite in Next.js + Tailwind **never happened**. Treat any
@@ -40,7 +40,7 @@ stack is:
 | Backend | **Express** (`back-end-pool/index.js`), one long-lived process per network |
 | Frontend | **Static HTML + vanilla JS** (`public_html/*.html`, `js/*.js`), served by nginx |
 | Styling | `public_html/css/pool.css` + `js/theme.js` (CSS variables) |
-| Database | **SQLite** via `better-sqlite3` (synchronous, in-process) |
+| Database | **SQLite** via Node's built-in `node:sqlite` (synchronous, in-process; `lib/sqlite-compat.js` shim keeps the better-sqlite3-style API; needs Node 24+) |
 | Process mgr | **systemd** (+ watchdog cron) |
 
 ---
@@ -67,7 +67,7 @@ stack is:
 └───────────────────────────────┬──────────────────────────────┘
                                  ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ SQLite (better-sqlite3)  /opt/grin/pool/<net>/pool.sqlite     │
+│ SQLite (node:sqlite)  /opt/grin/pubpool/<net>/pool.sqlite     │
 │  miner_accounts · shares · blocks · withdrawals · balance_log │
 │  withdrawal_events · users · admin_audit_log · pool_settings  │
 │  pool_locations · hashrate_history · miner_incentives ·       │
@@ -115,8 +115,8 @@ Script 07 ─ install mode:
 
 | Mode | Deploys | Library | Config file |
 |---|---|---|---|
-| **singlebox** | Everything on one box (Hub + co-located Satellite) | core `pool_*` fns | `grin_pool.json` |
-| **hub** | Central API (sole DB writer) + SQLite/WAL + schema + retention + web dashboard + admin + wallet (Tor payouts) + nginx | `scripts/lib/07_lib_hub.sh` | `grin_pool.json` |
+| **singlebox** | Everything on one box (Hub + co-located Satellite) | core `pool_*` fns | `grin_pubpool.json` |
+| **hub** | Central API (sole DB writer) + SQLite/WAL + schema + retention + web dashboard + admin + wallet (Tor payouts) + nginx | `scripts/lib/07_lib_hub.sh` | `grin_pubpool.json` |
 | **satellite** | Regional node + stratum proxy + share relay — **no** web/admin/DB/wallet | `scripts/lib/07_lib_satellite.sh` | `grin_satellite.json` |
 
 `config.js` selects mode via the `role` key (`singlebox` | `hub` | `satellite`).
@@ -185,7 +185,7 @@ global difficulty, no guaranteed per-share identity).
 > integers), and uses a single-resolution `hashrate_history`. The idealized integer-nanoGRIN /
 > downsampled model in older notes is a *conceptual target*, not the current code.
 
-Core tables (`/opt/grin/pool/<net>/pool.sqlite`):
+Core tables (`/opt/grin/pubpool/<net>/pool.sqlite`):
 
 | Table | Purpose | Retention |
 |---|---|---|

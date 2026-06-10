@@ -572,11 +572,10 @@ maintenance_menu() {
         echo -e "  ${GREEN}5${RESET}) Settings              ${DIM}(personal key · retention · list)${RESET}"
         echo -e "  ${GREEN}6${RESET}) Show recovery seed    ${DIM}(per net — the ultimate wallet backup)${RESET}"
         echo ""
-        echo -e "  ${RED}C${RESET}) Clean up solo mining  ${DIM}(remove solo infra · keeps node + seed + backups)${RESET}"
         echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1-6/C/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-6/0]: ${RESET}"
         read -r choice || choice=0
         case "$choice" in
             "") continue ;;
@@ -586,7 +585,6 @@ maintenance_menu() {
             4) sb_schedule   || true; _solo_pause ;;
             5) sb_settings   || true ;;
             6) net=$(_solo_pick_net "show recovery seed") && { sb_show_seed "$net" || true; }; _solo_pause ;;
-            C|c) solo_cleanup || true; _solo_pause ;;
             0) return ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac

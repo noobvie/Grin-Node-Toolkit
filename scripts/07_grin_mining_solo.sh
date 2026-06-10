@@ -19,7 +19,8 @@
 #     3) Deploy stats web page          (public dashboard, both networks)
 #     4) Node, Wallet & Mining Status   (both networks)
 #     5) Watchdogs (global)             (node-sync · boot autostart · wallet · stratum)
-#     6) Maintenance                    (encrypted backup · restore · schedule · seed · C=cleanup)
+#     6) Maintenance                    (encrypted backup · restore · schedule · seed)
+#     C) Clean up solo mining           (Danger Zone — remove solo infra · keeps node + seed + backups)
 #     0) Back to main menu
 #
 #   Per-net branch (after 1/2 — SOLO_NETWORK set)
@@ -2114,7 +2115,7 @@ EOF
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CLEANUP — REMOVE SOLO-MINING INFRA  (Maintenance ▸ C)
+# CLEANUP — REMOVE SOLO-MINING INFRA  (top menu ▸ Danger Zone ▸ C)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Tears down everything Script 07 (solo) deploys so the server is a clean base for
 # the public pool — WITHOUT touching anything the node or the public pool also
@@ -2791,8 +2792,9 @@ solo_settlement_menu() {
 }
 
 # Network-select screen (network-as-parent). Pick a net to manage (1/2), or use
-# a cross-network tool (3-7). All-numeric — letters are reserved for
-# destructive/admin actions per the toolkit menu convention.
+# a cross-network tool (3-7). Numeric keys for main actions; letters per the
+# toolkit menu convention: A = guided precheck, C = destructive cleanup
+# (Danger Zone).
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -2813,10 +2815,13 @@ show_menu() {
     echo -e "  ${GREEN}6${RESET}) Maintenance                   ${DIM}(encrypted backup · restore · schedule · seed)${RESET}"
     echo -e "  ${GREEN}7${RESET}) Payouts & settlement          ${DIM}(mainnet running balance · record payments)${RESET}"
     echo ""
+    echo -e "  ${DIM}─── Danger Zone ──────────────────────────────────${RESET}"
+    echo -e "  ${RED}C${RESET}) Clean up solo mining  ${DIM}(remove solo infra · keeps node + seed + backups)${RESET}"
+    echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [A/1-7/0]: ${RESET}"
+    echo -ne "${BOLD}Select [A/1-7/C/0]: ${RESET}"
 }
 
 main() {
@@ -2829,7 +2834,7 @@ main() {
         # must drop back to the menu, never hard-exit the script under `set -e`.
         # 1/2 enter a per-net branch: SOLO_NETWORK is set for its duration and
         # cleared on return, so the global Watchdogs menu (5) still prompts for
-        # which net to act on. 3-7 are cross-network and run at the top level.
+        # which net to act on. 3-7 and C are cross-network and run at the top level.
         case "${choice,,}" in
             "")  continue ;;                # Enter → refresh status
             a)   solo_node_precheck || true ;;
@@ -2841,11 +2846,12 @@ main() {
             5)   watchdog_menu || true ;;
             6)   maintenance_menu || true ;;
             7)   solo_settlement_menu || true ;;
+            c)   solo_cleanup || true; _solo_pause ;;
             0)   break ;;
             *)   warn "Invalid option."; sleep 1 ;;
         esac
-        # Branches/submenus run their own loops + pauses; only the one-shot status
-        # view (3) needs a pause, handled inline above.
+        # Branches/submenus run their own loops + pauses; one-shot actions pause
+        # via _solo_pause (3, C) or inline (status view 4).
     done
 }
 

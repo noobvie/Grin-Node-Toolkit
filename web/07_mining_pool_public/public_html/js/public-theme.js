@@ -1,10 +1,12 @@
 // public-theme.js — site-wide theme switcher for the public pool pages.
 //
 // Themes are applied by toggling a class on <body>:
-//   · dark    → (no class; the inline :root default)
-//   · light   → body.light-theme        (built-in inline styles)
-//   · atomic  → body.atomic-theme        (built-in inline styles)
-//   · the 10 extras → body.<name>-theme + body.themed   (styled in /css/themes.css)
+//   · atomic  → (no class; the inline :root default — mockup-v3 uranium-lime)
+//   · everything else → body.<name>-theme + body.themed  (styled in /css/themes.css)
+// The legacy key 'dark' (the retired cyan default) is normalised to 'atomic' so
+// old localStorage picks and stored operator configs keep working. The old
+// dark/atomic/light looks live on in the ADMIN panel registry (js/theme.js) as
+// Cyber Classic / Atomic Classic / Gradient Light.
 //
 // WHAT VISITORS SEE IS OPERATOR-CONTROLLED. The admin panel exposes:
 //   · default_theme        — the look applied first
@@ -23,11 +25,11 @@
 
   var STORAGE_KEY = 'grinium-theme';
 
-  // group: shown as an <optgroup>. builtin themes keep their existing inline CSS.
+  // group: shown as an <optgroup>. 'atomic' is the inline no-class default.
   var THEMES = [
-    { key: 'dark',      label: 'Dark',          group: 'Classic',  builtin: true },
-    { key: 'light',     label: 'Light',         group: 'Classic',  builtin: true },
-    { key: 'atomic',    label: 'Atomic',        group: 'Classic',  builtin: true },
+    { key: 'atomic',    label: 'Atomic ⚛',      group: 'Classic',  builtin: true },
+    { key: 'nexus',     label: 'Nexus',         group: 'Classic' },
+    { key: 'light',     label: 'Light',         group: 'Classic' },
     { key: 'winter',    label: 'Winter Frost ❄️',   group: 'Seasonal' },
     { key: 'spring',    label: 'Spring Blossom 🌸', group: 'Seasonal' },
     { key: 'summer',    label: 'Summer Wave 🌊',    group: 'Seasonal' },
@@ -44,24 +46,26 @@
   var BY_KEY = {};
   THEMES.forEach(function (t) { BY_KEY[t.key] = t; });
 
+  // Retired key from the pre-mockup era → its modern equivalent.
+  function normalizeKey(key) { return key === 'dark' ? 'atomic' : key; }
+
   // Every class this module might add — used to fully clear before applying.
+  // 'atomic-theme'/'dark-theme' are stale classes from older releases.
   function allThemeClasses() {
-    var classes = ['light-theme', 'atomic-theme', 'themed'];
+    var classes = ['atomic-theme', 'dark-theme', 'themed'];
     KEYS.forEach(function (k) {
-      if (k !== 'dark' && k !== 'light' && k !== 'atomic') classes.push(k + '-theme');
+      if (k !== 'atomic') classes.push(k + '-theme');
     });
     return classes;
   }
 
   // Which body classes a given theme key needs.
   function classesFor(key) {
-    if (key === 'dark') return [];
-    if (key === 'light') return ['light-theme'];
-    if (key === 'atomic') return ['atomic-theme'];
+    if (key === 'atomic') return []; // the inline no-class default
     return [key + '-theme', 'themed'];
   }
 
-  function isKnown(key) { return KEYS.indexOf(key) !== -1; }
+  function isKnown(key) { return KEYS.indexOf(normalizeKey(key)) !== -1; }
 
   function getSaved() {
     try { return localStorage.getItem(STORAGE_KEY); } catch (e) { return null; }
@@ -74,17 +78,18 @@
   // other code, e.g. branding.js, set a class before we initialised).
   function currentFromBody() {
     var body = document.body;
-    if (!body) return 'dark';
+    if (!body) return 'atomic';
     for (var i = 0; i < KEYS.length; i++) {
       var k = KEYS[i];
-      if (k === 'dark') continue;
+      if (k === 'atomic') continue;
       if (body.classList.contains(k + '-theme')) return k;
     }
-    return 'dark';
+    return 'atomic';
   }
 
   function applyTheme(key, persist) {
-    if (!isKnown(key)) key = 'dark';
+    key = normalizeKey(key);
+    if (!isKnown(key)) key = 'atomic';
     var body = document.body;
     if (!body) return;
 
@@ -161,13 +166,15 @@
   // Called by branding.js once the operator config is fetched.
   // enabledThemes: array of theme keys the operator allows visitors to switch between.
   function applyDefault(defaultTheme, allowSwitch, enabledThemes) {
-    var def = isKnown(defaultTheme) ? defaultTheme : 'dark';
+    var def = isKnown(defaultTheme) ? normalizeKey(defaultTheme) : 'atomic';
 
-    // Normalise the enabled list: known keys only, de-duped, in THEMES order.
+    // Normalise the enabled list: known keys only (legacy 'dark' → 'atomic'),
+    // de-duped, in THEMES order.
     var enabled = [];
     if (Array.isArray(enabledThemes)) {
+      var wanted = enabledThemes.map(normalizeKey);
       KEYS.forEach(function (k) {
-        if (enabledThemes.indexOf(k) !== -1 && enabled.indexOf(k) === -1) enabled.push(k);
+        if (wanted.indexOf(k) !== -1 && enabled.indexOf(k) === -1) enabled.push(k);
       });
     }
 
@@ -187,6 +194,7 @@
     // Honour a saved pick if it is still permitted, else fall back to the default
     // (when the default is itself enabled) or the first enabled theme.
     var saved = getSaved();
+    if (saved) saved = normalizeKey(saved);
     var initial;
     if (saved && enabled.indexOf(saved) !== -1) initial = saved;
     else if (enabled.indexOf(def) !== -1) initial = def;

@@ -20,13 +20,13 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            background: var(--t-bg, #0a0a0a);
+            background: var(--t-bg, #080b07);
             color: var(--t-text, #e0e0e0);
-            font-family: var(--t-font, 'Courier New', monospace);
+            font-family: var(--t-font, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif);
             line-height: 1.6;
             transition: all .6s cubic-bezier(.4, 0, .2, 1);
         }
-        header { background: var(--t-header, var(--t-card, #1a2342)); border-bottom: 1px solid var(--t-border, #2d3748); }
+        header { background: var(--t-header, var(--t-card, #11160d)); border-bottom: 1px solid var(--t-border, #2d3748); }
         .header-content { max-width: 900px; margin: 0 auto; padding: 1rem 1.5rem; display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
         .header-content h1 { color: var(--t-heading, var(--t-accent, #b8e600)); font-size: 1.4rem; }
         .header-nav { display: flex; gap: 1rem; flex-wrap: wrap; }
@@ -35,17 +35,17 @@
         .container { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem; }
         .page-title { color: var(--t-heading, var(--t-accent, #b8e600)); margin-bottom: .5rem; font-size: 1.8rem; }
         .lead { color: var(--t-dim, #a0aec0); margin-bottom: 1.5rem; }
-        .card { background: var(--t-card, #1a2342); border: 1px solid var(--t-border, #2d3748); border-radius: 10px; padding: 1.5rem; margin-bottom: 1.5rem; }
+        .card { background: var(--t-card, #11160d); border: 1px solid var(--t-border, #2d3748); border-radius: 10px; padding: 1.5rem; margin-bottom: 1.5rem; }
         .card h3 { color: var(--t-heading, var(--t-accent, #b8e600)); margin-bottom: .75rem; font-size: 1.2rem; }
         .card p { margin-bottom: .6rem; }
         .pill { display: inline-block; background: var(--t-chip-bg, rgba(255,255,255,.08)); border: 1px solid var(--t-chip-border, var(--t-border, #2d3748)); border-radius: 999px; padding: .15rem .7rem; font-size: .8rem; color: var(--t-dim, #a0aec0); margin-bottom: .75rem; }
         code, .mono {
             background: var(--t-chip-bg, rgba(255,255,255,.06)); border: 1px solid var(--t-chip-border, var(--t-border, #2d3748));
-            border-radius: 6px; padding: .15rem .5rem; font-family: 'Courier New', monospace; word-break: break-all; color: var(--t-text, #e0e0e0);
+            border-radius: 6px; padding: .15rem .5rem; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; word-break: break-all; color: var(--t-text, #e0e0e0);
         }
         .addr-box { display: none; }
         .addr-box .mono { display: block; padding: .8rem; margin-top: .5rem; font-size: .9rem; }
-        .copy-btn { margin-top: .6rem; padding: .45rem 1rem; cursor: pointer; background: var(--t-accent, #b8e600); color: var(--t-on-accent, #0a0a0a); border: none; border-radius: 6px; font-weight: 700; }
+        .copy-btn { margin-top: .6rem; padding: .45rem 1rem; cursor: pointer; background: var(--t-accent, #b8e600); color: var(--t-on-accent, #080b07); border: none; border-radius: 6px; font-weight: 700; }
         table { width: 100%; border-collapse: collapse; margin-top: .5rem; }
         th, td { padding: .45rem .6rem; text-align: left; border-bottom: 1px solid var(--t-border, #2d3748); font-size: .88rem; }
         th { color: var(--t-dim, #a0aec0); font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
@@ -58,11 +58,7 @@
     </style>
 </head>
 <body>
-    <div class="theme-switcher">
-        <button class="theme-btn active" data-theme="dark">Dark</button>
-        <button class="theme-btn" data-theme="light">Light</button>
-        <button class="theme-btn" data-theme="atomic">Atomic</button>
-    </div>
+    <div class="theme-switcher"></div>
 
     <header>
         <div class="header-content">

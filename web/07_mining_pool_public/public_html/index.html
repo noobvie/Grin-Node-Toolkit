@@ -73,7 +73,7 @@
     </script>
 
     <!-- ===== ADDITIONAL SEO ===== -->
-    <meta name="theme-color" content="#0a0a0a">
+    <meta name="theme-color" content="#080b07">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="GRINIUM Pool">
@@ -89,58 +89,26 @@
         }
 
         :root {
-            /* Dark theme variables */
-            --dark-bg: #0a0a0a;
-            --dark-card: #1a2342;
-            --dark-text: #00f7ff;
-            --dark-dim: #666666;
-            --neon-cyan: #00f7ff;
-            --neon-magenta: #ff00ff;
-            --neon-lime: #00ff00;
-            /* Light theme variables */
-            --light-bg: #f5f7fb;
-            --light-card: #ffffff;
-            --light-text: #1a1a1a;
-            --light-dim: #666666;
-            --light-border: #e0e0e0;
-            --color-cyan: #0891b2;
-            --color-purple: #7c3aed;
-            --color-pink: #ec4899;
-            --color-orange: #f97316;
-            --color-green: #22c55e;
-            --color-blue: #3b82f6;
-            /* Atomic theme */
-            --uranium: #b8e600;
-            --uranium-dark: #7a9700;
+            /* Atomic default (mockup-v3) — legacy var names kept; themes.css remaps them per theme */
+            --dark-bg: #080b07;
+            --dark-card: #11160d;
+            --dark-text: #e8f5cf;
+            --dark-dim: #9db077;
+            --neon-cyan: #b8e600;
+            --neon-magenta: #00f7ff;
+            --neon-lime: #d4ff3d;
         }
 
         body {
             background-color: var(--dark-bg);
             background-image:
-                linear-gradient(0deg, transparent 24%, rgba(0, 247, 255, 0.05) 25%, rgba(0, 247, 255, 0.05) 26%, transparent 27%, transparent 74%, rgba(0, 247, 255, 0.05) 75%, rgba(0, 247, 255, 0.05) 76%, transparent 77%, transparent),
-                linear-gradient(90deg, transparent 24%, rgba(0, 247, 255, 0.05) 25%, rgba(0, 247, 255, 0.05) 26%, transparent 27%, transparent 74%, rgba(0, 247, 255, 0.05) 75%, rgba(0, 247, 255, 0.05) 76%, transparent 77%, transparent);
+                linear-gradient(0deg, transparent 24%, rgba(184, 230, 0, 0.05) 25%, rgba(184, 230, 0, 0.05) 26%, transparent 27%, transparent 74%, rgba(184, 230, 0, 0.05) 75%, rgba(184, 230, 0, 0.05) 76%, transparent 77%, transparent),
+                linear-gradient(90deg, transparent 24%, rgba(184, 230, 0, 0.05) 25%, rgba(184, 230, 0, 0.05) 26%, transparent 27%, transparent 74%, rgba(184, 230, 0, 0.05) 75%, rgba(184, 230, 0, 0.05) 76%, transparent 77%, transparent);
             background-size: 50px 50px;
             color: var(--dark-text);
-            font-family: 'Courier New', monospace;
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             line-height: 1.6;
             transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-
-        body.light-theme {
-            background: linear-gradient(135deg, #f5f7fb 0%, #faf7ff 50%, #fff5f8 100%);
-            background-attachment: fixed;
-            color: var(--light-text);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-        }
-
-        body.atomic-theme {
-            background-color: var(--dark-bg);
-            background-image:
-                linear-gradient(0deg, transparent 24%, rgba(184, 230, 0, 0.04) 25%, rgba(184, 230, 0, 0.04) 26%, transparent 27%, transparent 74%, rgba(184, 230, 0, 0.04) 75%, rgba(184, 230, 0, 0.04) 76%, transparent 77%, transparent),
-                linear-gradient(90deg, transparent 24%, rgba(184, 230, 0, 0.04) 25%, rgba(184, 230, 0, 0.04) 26%, transparent 27%, transparent 74%, rgba(184, 230, 0, 0.04) 75%, rgba(184, 230, 0, 0.04) 76%, transparent 77%, transparent);
-            background-size: 50px 50px;
-            color: var(--uranium);
-            font-family: 'Courier New', monospace;
         }
 
         @keyframes neon-glow {
@@ -148,48 +116,21 @@
             50% { text-shadow: 0 0 10px var(--neon-cyan), 0 0 20px var(--neon-cyan), 0 0 30px var(--neon-cyan), 0 0 40px var(--neon-cyan); }
         }
 
-        @keyframes uranium-glow {
-            0%, 100% { text-shadow: 0 0 5px var(--uranium), 0 0 10px var(--uranium), 0 0 20px var(--uranium); }
-            50% { text-shadow: 0 0 10px var(--uranium), 0 0 20px var(--uranium), 0 0 30px var(--uranium), 0 0 40px var(--uranium); }
-        }
 
         @keyframes scanlines {
             0% { transform: translateY(0); }
             100% { transform: translateY(10px); }
         }
 
-        @keyframes shimmer {
-            0%, 100% { box-shadow: 0 4px 20px rgba(59, 130, 246, 0.15); }
-            50% { box-shadow: 0 8px 30px rgba(124, 58, 237, 0.25); }
-        }
 
-        @keyframes float-up {
-            0%, 100% { transform: translateY(0px); }
-            50% { transform: translateY(-8px); }
-        }
 
-        @keyframes gradient-flow {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
-        }
 
         @keyframes border-glow {
-            0%, 100% { border-color: var(--neon-cyan); box-shadow: 0 0 5px var(--neon-cyan), inset 0 0 5px rgba(0, 247, 255, 0.1); }
-            50% { border-color: var(--neon-magenta); box-shadow: 0 0 10px var(--neon-magenta), inset 0 0 5px rgba(255, 0, 255, 0.1); }
+            0%, 100% { border-color: var(--neon-cyan); box-shadow: 0 0 5px var(--neon-cyan), inset 0 0 5px rgba(184, 230, 0, 0.1); }
+            50% { border-color: var(--neon-magenta); box-shadow: 0 0 10px var(--neon-magenta), inset 0 0 5px rgba(0, 247, 255, 0.1); }
         }
 
-        @keyframes border-glow-uranium {
-            0%, 100% { border-color: var(--uranium); box-shadow: 0 0 5px var(--uranium), inset 0 0 5px rgba(184, 230, 0, 0.1); }
-            50% { border-color: #00f7ff; box-shadow: 0 0 10px #00f7ff, inset 0 0 5px rgba(0, 247, 255, 0.1); }
-        }
 
-        @keyframes light-border-glow {
-            0%, 100% { border-color: #0891b2; box-shadow: 0 4px 20px rgba(8, 145, 178, 0.2), inset 0 0 8px rgba(8, 145, 178, 0.08); }
-            25% { border-color: #7c3aed; box-shadow: 0 8px 30px rgba(124, 58, 237, 0.25), inset 0 0 8px rgba(124, 58, 237, 0.1); }
-            50% { border-color: #ec4899; box-shadow: 0 8px 30px rgba(236, 72, 153, 0.25), inset 0 0 8px rgba(236, 72, 153, 0.1); }
-            75% { border-color: #f97316; box-shadow: 0 8px 30px rgba(249, 115, 22, 0.25), inset 0 0 8px rgba(249, 115, 22, 0.1); }
-        }
 
         /* === THEME SWITCHER (FIXED) === */
         .theme-switcher {
@@ -209,60 +150,11 @@
             transition: all 0.3s ease;
         }
 
-        body.light-theme .theme-switcher {
-            background: rgba(255, 255, 255, 0.85);
-            border-color: var(--color-blue);
-            box-shadow: 0 0 15px rgba(59, 130, 246, 0.3);
-        }
 
-        body.atomic-theme .theme-switcher {
-            background: rgba(0, 0, 0, 0.6);
-            border-color: var(--uranium);
-            box-shadow: 0 0 15px rgba(184, 230, 0, 0.3);
-        }
-
-        .theme-btn {
-            padding: 4px 8px;
-            border: 1px solid var(--neon-cyan);
-            background: transparent;
-            color: var(--neon-cyan);
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 0.6em;
-            font-weight: bold;
-            text-transform: uppercase;
-            letter-spacing: 0.3px;
-            transition: all 0.3s ease;
-        }
-
-        .theme-btn.active {
-            background: var(--neon-cyan);
-            color: var(--dark-bg);
-        }
-
-        body.light-theme .theme-btn {
-            border-color: var(--color-blue);
-            color: var(--color-blue);
-        }
-
-        body.light-theme .theme-btn.active {
-            background: var(--color-blue);
-            color: white;
-        }
-
-        body.atomic-theme .theme-btn {
-            border-color: var(--uranium);
-            color: var(--uranium);
-        }
-
-        body.atomic-theme .theme-btn.active {
-            background: var(--uranium);
-            color: var(--dark-bg);
-        }
 
         /* === HEADER === */
         header {
-            background: linear-gradient(135deg, rgba(0, 247, 255, 0.1), rgba(255, 0, 255, 0.1));
+            background: linear-gradient(135deg, rgba(184, 230, 0, 0.1), rgba(0, 247, 255, 0.1));
             border-bottom: 2px solid var(--neon-cyan);
             padding: 16px 20px;
             position: relative;
@@ -281,46 +173,11 @@
                 0deg,
                 transparent,
                 transparent 2px,
-                rgba(0, 247, 255, 0.03) 2px,
-                rgba(0, 247, 255, 0.03) 4px
-            );
-            pointer-events: none;
-            animation: scanlines 8s linear infinite;
-        }
-
-        body.light-theme header {
-            background: linear-gradient(135deg, #3b82f6 0%, #7c3aed 50%, #ec4899 100%);
-            background-size: 300% 300%;
-            animation: gradient-flow 6s ease infinite;
-            border-bottom: 2px solid rgba(255, 255, 255, 0.3);
-            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.15);
-        }
-
-        body.light-theme header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -10%;
-            width: 250px;
-            height: 250px;
-            background: radial-gradient(circle, rgba(255, 255, 255, 0.15), transparent);
-            border-radius: 50%;
-            animation: float-up 4s ease-in-out infinite;
-        }
-
-        body.atomic-theme header {
-            background: linear-gradient(135deg, rgba(122, 151, 0, 0.15), rgba(184, 230, 0, 0.1));
-            border-bottom: 2px solid var(--uranium);
-        }
-
-        body.atomic-theme header::before {
-            background: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 2px,
                 rgba(184, 230, 0, 0.03) 2px,
                 rgba(184, 230, 0, 0.03) 4px
             );
+            pointer-events: none;
+            animation: scanlines 8s linear infinite;
         }
 
         .header-content {
@@ -344,19 +201,6 @@
             transition: all 0.6s ease;
         }
 
-        body.light-theme h1 {
-            background: linear-gradient(135deg, #ffffff, rgba(255, 255, 255, 0.9));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            animation: none;
-            text-shadow: none;
-        }
-
-        body.atomic-theme h1 {
-            animation: uranium-glow 2s ease-in-out infinite;
-        }
-
         .header-nav {
             display: flex;
             gap: 8px;
@@ -377,53 +221,19 @@
             letter-spacing: 0.5px;
             transition: all 0.3s ease;
             border-radius: 4px;
-            background: rgba(0, 247, 255, 0.1);
-            border: 1px solid rgba(0, 247, 255, 0.2);
-        }
-
-        body.light-theme .nav-link {
-            background: rgba(255, 255, 255, 0.15);
-            border-color: rgba(255, 255, 255, 0.3);
-            color: white;
-        }
-
-        body.atomic-theme .nav-link {
             background: rgba(184, 230, 0, 0.1);
-            border-color: rgba(184, 230, 0, 0.2);
-            color: var(--uranium);
+            border: 1px solid rgba(184, 230, 0, 0.2);
         }
 
         .nav-link:hover {
-            background: rgba(0, 247, 255, 0.2);
-            border-color: var(--neon-cyan);
-            box-shadow: 0 0 10px rgba(0, 247, 255, 0.3);
-        }
-
-        body.light-theme .nav-link:hover {
-            background: rgba(255, 255, 255, 0.25);
-            border-color: rgba(255, 255, 255, 0.5);
-            box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
-        }
-
-        body.atomic-theme .nav-link:hover {
             background: rgba(184, 230, 0, 0.2);
-            border-color: var(--uranium);
+            border-color: var(--neon-cyan);
             box-shadow: 0 0 10px rgba(184, 230, 0, 0.3);
         }
 
         .nav-link.active {
-            background: rgba(0, 247, 255, 0.2);
-            border-color: var(--neon-cyan);
-        }
-
-        body.light-theme .nav-link.active {
-            background: rgba(255, 255, 255, 0.25);
-            border-color: rgba(255, 255, 255, 0.5);
-        }
-
-        body.atomic-theme .nav-link.active {
             background: rgba(184, 230, 0, 0.2);
-            border-color: var(--uranium);
+            border-color: var(--neon-cyan);
         }
 
         .header-buttons {
@@ -432,7 +242,9 @@
         }
 
         .header-btn {
-            background: rgba(0, 247, 255, 0.1);
+            display: inline-block;
+            text-decoration: none;
+            background: rgba(184, 230, 0, 0.1);
             color: var(--neon-cyan);
             border: 1px solid var(--neon-cyan);
             padding: 8px 14px;
@@ -443,39 +255,13 @@
             letter-spacing: 0.5px;
             cursor: pointer;
             transition: all 0.3s ease;
-            font-family: 'Courier New', monospace;
-            box-shadow: 0 0 8px rgba(0, 247, 255, 0.2);
-        }
-
-        body.light-theme .header-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            border-color: rgba(255, 255, 255, 0.4);
-            box-shadow: 0 0 8px rgba(255, 255, 255, 0.1);
-        }
-
-        body.atomic-theme .header-btn {
-            background: rgba(184, 230, 0, 0.1);
-            color: var(--uranium);
-            border-color: var(--uranium);
+            font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
             box-shadow: 0 0 8px rgba(184, 230, 0, 0.2);
         }
 
         .header-btn:hover {
-            background: rgba(0, 247, 255, 0.2);
-            border-color: var(--neon-magenta);
-            box-shadow: 0 0 15px rgba(0, 247, 255, 0.4);
-        }
-
-        body.light-theme .header-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            border-color: rgba(255, 255, 255, 0.6);
-            box-shadow: 0 0 15px rgba(255, 255, 255, 0.2);
-        }
-
-        body.atomic-theme .header-btn:hover {
             background: rgba(184, 230, 0, 0.2);
-            border-color: var(--uranium);
+            border-color: var(--neon-magenta);
             box-shadow: 0 0 15px rgba(184, 230, 0, 0.4);
         }
 
@@ -494,33 +280,12 @@
             transition: all 0.6s ease;
         }
 
-        body.light-theme .hero-title {
-            background: linear-gradient(135deg, #3b82f6, #7c3aed, #ec4899, #f97316);
-            background-size: 300% 300%;
-            animation: gradient-flow 6s ease infinite;
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        body.atomic-theme .hero-title {
-            animation: uranium-glow 2s ease-in-out infinite;
-        }
-
         .hero-subtitle {
             color: var(--neon-magenta);
             font-size: 1em;
             margin-bottom: 30px;
             letter-spacing: 1px;
             transition: all 0.6s ease;
-        }
-
-        body.light-theme .hero-subtitle {
-            color: var(--color-purple);
-        }
-
-        body.atomic-theme .hero-subtitle {
-            color: var(--uranium);
         }
 
         .stats-grid {
@@ -531,7 +296,7 @@
         }
 
         .stat-card {
-            background: rgba(26, 35, 66, 0.5);
+            background: rgba(17, 22, 13, 0.5);
             border: 2px solid var(--neon-cyan);
             padding: 28px;
             border-radius: 0;
@@ -539,19 +304,6 @@
             overflow: hidden;
             transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             animation: border-glow 3s ease-in-out infinite;
-        }
-
-        body.light-theme .stat-card {
-            background: white;
-            border: 2px solid var(--light-border);
-            border-radius: 16px;
-            animation: light-border-glow 4s ease-in-out infinite;
-        }
-
-        body.atomic-theme .stat-card {
-            background: rgba(26, 35, 66, 0.5);
-            border: 2px solid var(--uranium);
-            animation: border-glow-uranium 3s ease-in-out infinite;
         }
 
         .stat-card::before {
@@ -566,21 +318,6 @@
             transition: opacity 0.3s ease;
         }
 
-        body.light-theme .stat-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 4px;
-            background: linear-gradient(90deg, #0891b2, #7c3aed, #ec4899, #f97316);
-            opacity: 0;
-        }
-
-        body.atomic-theme .stat-card::before {
-            background: linear-gradient(90deg, var(--uranium), #00f7ff);
-        }
-
         .stat-card:hover {
             transform: translateY(-8px);
             border-color: var(--neon-magenta);
@@ -589,19 +326,6 @@
 
         .stat-card:hover::before {
             opacity: 1;
-        }
-
-        body.light-theme .stat-card:hover {
-            transform: translateY(-12px);
-            border-color: var(--color-cyan);
-            box-shadow: 0 16px 40px rgba(8, 145, 178, 0.2);
-            background: linear-gradient(135deg, rgba(59, 130, 246, 0.02), rgba(124, 58, 237, 0.02));
-        }
-
-        body.atomic-theme .stat-card:hover {
-            transform: translateY(-8px);
-            border-color: var(--uranium);
-            box-shadow: 0 0 30px var(--uranium);
         }
 
         .stat-label {
@@ -616,15 +340,6 @@
             transition: all 0.6s ease;
         }
 
-        body.light-theme .stat-label {
-            color: var(--light-dim);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-
-        body.atomic-theme .stat-label {
-            color: var(--uranium);
-        }
-
         .stat-label::before {
             content: '';
             width: 6px;
@@ -632,16 +347,6 @@
             background: var(--neon-lime);
             border-radius: 50%;
             box-shadow: 0 0 8px var(--neon-lime);
-        }
-
-        body.light-theme .stat-label::before {
-            background: var(--color-cyan);
-            box-shadow: 0 0 8px var(--color-cyan);
-        }
-
-        body.atomic-theme .stat-label::before {
-            background: var(--uranium);
-            box-shadow: 0 0 8px var(--uranium);
         }
 
         .stat-value {
@@ -653,32 +358,11 @@
             transition: all 0.6s ease;
         }
 
-        body.light-theme .stat-value {
-            background: linear-gradient(135deg, var(--color-cyan), var(--color-purple));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            text-shadow: none;
-        }
-
-        body.atomic-theme .stat-value {
-            color: var(--uranium);
-            text-shadow: 0 0 10px var(--uranium);
-        }
-
         .stat-unit {
             color: var(--neon-magenta);
             font-size: 0.5em;
             margin-left: 5px;
             transition: all 0.6s ease;
-        }
-
-        body.light-theme .stat-unit {
-            color: var(--light-dim);
-        }
-
-        body.atomic-theme .stat-unit {
-            color: var(--uranium);
         }
 
         .section-title {
@@ -692,19 +376,6 @@
             transition: all 0.6s ease;
         }
 
-        body.light-theme .section-title {
-            background: linear-gradient(135deg, var(--color-cyan), var(--color-purple), var(--color-pink));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            border-bottom-color: rgba(59, 130, 246, 0.3);
-        }
-
-        body.atomic-theme .section-title {
-            color: var(--uranium);
-            border-bottom-color: var(--uranium);
-        }
-
         .features-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -713,43 +384,10 @@
         }
 
         .feature-item {
-            background: rgba(0, 247, 255, 0.05);
+            background: rgba(184, 230, 0, 0.05);
             border-left: 3px solid var(--neon-lime);
             padding: 20px;
             transition: all 0.4s ease;
-        }
-
-        body.light-theme .feature-item {
-            background: white;
-            border-top: 4px solid var(--color-cyan);
-            border-left: none;
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.06);
-        }
-
-        body.atomic-theme .feature-item {
-            background: rgba(26, 35, 66, 0.3);
-            border-left-color: var(--uranium);
-        }
-
-        body.light-theme .feature-item:nth-child(2) {
-            border-top-color: #7c3aed;
-        }
-
-        body.light-theme .feature-item:nth-child(3) {
-            border-top-color: #ec4899;
-        }
-
-        body.light-theme .feature-item:nth-child(4) {
-            border-top-color: #f97316;
-        }
-
-        body.light-theme .feature-item:nth-child(5) {
-            border-top-color: #22c55e;
-        }
-
-        body.light-theme .feature-item:nth-child(6) {
-            border-top-color: #3b82f6;
         }
 
         .feature-item:hover {
@@ -766,28 +404,11 @@
             transition: all 0.3s ease;
         }
 
-        body.light-theme .feature-title {
-            color: var(--light-text);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-
-        body.atomic-theme .feature-title {
-            color: var(--uranium);
-        }
-
         .feature-desc {
             color: var(--dark-dim);
             font-size: 0.9em;
             line-height: 1.5;
             transition: all 0.3s ease;
-        }
-
-        body.light-theme .feature-desc {
-            color: #666;
-        }
-
-        body.atomic-theme .feature-desc {
-            color: #888;
         }
 
         .cta-section {
@@ -807,52 +428,21 @@
             letter-spacing: 1px;
             cursor: pointer;
             transition: all 0.3s ease;
-            box-shadow: 0 0 20px rgba(0, 247, 255, 0.3);
-            font-family: 'Courier New', monospace;
+            box-shadow: 0 0 20px rgba(184, 230, 0, 0.3);
+            font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
         }
 
         .cta-button:hover {
-            box-shadow: 0 0 30px rgba(0, 247, 255, 0.5);
-            transform: translateY(-2px);
-        }
-
-        body.light-theme .cta-button {
-            background: linear-gradient(135deg, #3b82f6, #7c3aed);
-            color: white;
-            box-shadow: 0 0 20px rgba(59, 130, 246, 0.3);
-            border-radius: 6px;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-
-        body.light-theme .cta-button:hover {
-            box-shadow: 0 0 30px rgba(59, 130, 246, 0.5);
-        }
-
-        body.atomic-theme .cta-button {
-            background: linear-gradient(135deg, var(--uranium), var(--uranium-dark));
-            color: var(--dark-bg);
-            box-shadow: 0 0 20px rgba(184, 230, 0, 0.3);
-        }
-
-        body.atomic-theme .cta-button:hover {
             box-shadow: 0 0 30px rgba(184, 230, 0, 0.5);
+            transform: translateY(-2px);
         }
 
         footer {
             text-align: center;
             padding: 40px 20px;
-            border-top: 2px solid rgba(0, 247, 255, 0.2);
+            border-top: 2px solid rgba(184, 230, 0, 0.2);
             color: #666;
             font-size: 0.9em;
-        }
-
-        body.light-theme footer {
-            border-top-color: rgba(59, 130, 246, 0.2);
-            color: #888;
-        }
-
-        body.atomic-theme footer {
-            border-top-color: rgba(184, 230, 0, 0.2);
         }
 
         @media (max-width: 1024px) {
@@ -882,25 +472,21 @@
     <link rel="stylesheet" href="/css/themes.css">
 </head>
 <body>
-    <div class="theme-switcher">
-        <button class="theme-btn active" data-theme="dark">Dark</button>
-        <button class="theme-btn" data-theme="light">Light</button>
-        <button class="theme-btn" data-theme="atomic">Atomic</button>
-    </div>
+    <div class="theme-switcher"></div>
 
     <header>
         <div class="header-content">
             <h1 data-brand="pool_name">⚛ GRINIUM</h1>
             <nav class="header-nav">
-                <a href="#" class="nav-link active">Home</a>
-                <a href="#" class="nav-link">Dashboard</a>
-                <a href="#" class="nav-link">Miners</a>
-                <a href="#" class="nav-link">Payouts</a>
-                <a href="#" class="nav-link">Docs</a>
+                <a href="index.html" class="nav-link active">Home</a>
+                <a href="admin-dashboard.html" class="nav-link">Admin</a>
+                <a href="miners-stats.html" class="nav-link">Miners</a>
+                <a href="payment-history.html" class="nav-link">Payouts</a>
+                <a href="pool-info.html" class="nav-link">Info</a>
             </nav>
             <div class="header-buttons">
-                <button class="header-btn">Sign In</button>
-                <button class="header-btn">Start Mining</button>
+                <a href="login.html" class="header-btn">Sign In</a>
+                <a href="connect.html" class="header-btn">Start Mining</a>
             </div>
         </div>
     </header>

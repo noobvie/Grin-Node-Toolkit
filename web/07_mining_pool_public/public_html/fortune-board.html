@@ -20,13 +20,13 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            background: var(--t-bg, #0a0a0a);
+            background: var(--t-bg, #080b07);
             color: var(--t-text, #e0e0e0);
-            font-family: var(--t-font, 'Courier New', monospace);
+            font-family: var(--t-font, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif);
             line-height: 1.6;
             transition: all .6s cubic-bezier(.4, 0, .2, 1);
         }
-        header { background: var(--t-header, var(--t-card, #1a2342)); border-bottom: 1px solid var(--t-border, #2d3748); }
+        header { background: var(--t-header, var(--t-card, #11160d)); border-bottom: 1px solid var(--t-border, #2d3748); }
         .header-content {
             max-width: 1100px; margin: 0 auto; padding: 1rem 1.5rem;
             display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;
@@ -39,7 +39,7 @@
         .page-title { color: var(--t-heading, var(--t-accent, #b8e600)); margin-bottom: 1.5rem; font-size: 1.8rem; }
         .cards { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
         .stat-card {
-            flex: 1; min-width: 200px; background: var(--t-card, #1a2342);
+            flex: 1; min-width: 200px; background: var(--t-card, #11160d);
             border: 1px solid var(--t-border, #2d3748); border-radius: 10px; padding: 1.25rem;
         }
         .stat-card .label { color: var(--t-dim, #a0aec0); font-size: .85rem; text-transform: uppercase; letter-spacing: .05em; }
@@ -49,7 +49,7 @@
             display: block; background: var(--t-chip-bg, rgba(255,255,255,.06)); border: 1px solid var(--t-chip-border, var(--t-border, #2d3748));
             border-radius: 6px; padding: .6rem .8rem; margin-top: .4rem; font-size: .85rem; word-break: break-all; color: var(--t-text, #e0e0e0);
         }
-        .table-wrap { background: var(--t-card, #1a2342); border: 1px solid var(--t-border, #2d3748); border-radius: 10px; overflow-x: auto; }
+        .table-wrap { background: var(--t-card, #11160d); border: 1px solid var(--t-border, #2d3748); border-radius: 10px; overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; min-width: 640px; }
         th, td { padding: .8rem 1rem; text-align: left; border-bottom: 1px solid var(--t-border, #2d3748); font-size: .9rem; }
         th { color: var(--t-dim, #a0aec0); text-transform: uppercase; font-size: .75rem; letter-spacing: .05em; }
@@ -59,7 +59,7 @@
         .empty, .loading { padding: 2rem; text-align: center; color: var(--t-dim, #a0aec0); }
         .more-btn {
             display: block; margin: 1.25rem auto 0; padding: .6rem 1.5rem; cursor: pointer;
-            background: var(--t-accent, #b8e600); color: var(--t-on-accent, #0a0a0a); border: none; border-radius: 6px; font-weight: 700;
+            background: var(--t-accent, #b8e600); color: var(--t-on-accent, #080b07); border: none; border-radius: 6px; font-weight: 700;
         }
         .more-btn[disabled] { opacity: .5; cursor: default; }
         .audit-note { color: var(--t-dim, #a0aec0); font-size: .82rem; margin-top: 1rem; }
@@ -67,11 +67,7 @@
     </style>
 </head>
 <body>
-    <div class="theme-switcher">
-        <button class="theme-btn active" data-theme="dark">Dark</button>
-        <button class="theme-btn" data-theme="light">Light</button>
-        <button class="theme-btn" data-theme="atomic">Atomic</button>
-    </div>
+    <div class="theme-switcher"></div>
 
     <header>
         <div class="header-content">

@@ -562,12 +562,17 @@
               <label for="default_theme">Default Theme</label>
               <select id="default_theme" name="default_theme">
                 <optgroup label="Classic">
-                  <option value="dark">Dark</option>
+                  <option value="atomic">Atomic ⚛ (default)</option>
+                  <option value="nexus">Nexus</option>
                   <option value="light">Light</option>
+                </optgroup>
+                <optgroup label="Admin panel only">
                   <option value="matrix">Matrix</option>
                   <option value="naruto">Naruto</option>
                   <option value="japan">Japan ✿</option>
-                  <option value="atomic">Atomic / Uranium</option>
+                  <option value="cyber">Cyber Classic 🌃 (old default)</option>
+                  <option value="uranium">Atomic Classic ☢️ (old atomic)</option>
+                  <option value="gradient">Gradient Light 🌈 (old light)</option>
                 </optgroup>
                 <optgroup label="Seasonal">
                   <option value="winter">Winter Frost ❄️</option>
@@ -585,7 +590,8 @@
                 </optgroup>
                 <option value="custom">Custom (theme builder below)</option>
               </select>
-              <div class="helper-text">The theme visitors see by default</div>
+              <div class="helper-text">The theme visitors see by default. "Admin panel only" picks
+                style this panel; public pages fall back to Atomic for those.</div>
             </div>
             <div class="form-group">
               <label for="accent_color">Accent Color</label>
@@ -1473,7 +1479,12 @@
           } else if (el.tagName === 'TEXTAREA' || el.type === 'text' || el.type === 'email' || el.type === 'url' || el.type === 'number') {
             el.value = value || '';
           } else if (el.tagName === 'SELECT') {
-            el.value = value || '';
+            let v = value || '';
+            // Retired key from pre-mockup configs: the 'dark' option no longer
+            // exists; without this the select would silently go blank and the
+            // next save would submit '' (rejected by the back-end validator).
+            if (key === 'default_theme' && v === 'dark') v = 'atomic';
+            el.value = v;
           }
         }
       }
@@ -1744,7 +1755,7 @@
     // ── Enabled-themes picker (drives the public theme switcher) ────────────────
     // Must match the public switcher's known themes (public_html/js/public-theme.js).
     const PUBLIC_THEMES = [
-      { key: 'dark', label: 'Dark' }, { key: 'light', label: 'Light' }, { key: 'atomic', label: 'Atomic' },
+      { key: 'atomic', label: 'Atomic ⚛' }, { key: 'nexus', label: 'Nexus' }, { key: 'light', label: 'Light' },
       { key: 'winter', label: 'Winter Frost ❄️' }, { key: 'spring', label: 'Spring Blossom 🌸' },
       { key: 'summer', label: 'Summer Wave 🌊' }, { key: 'autumn', label: 'Autumn Harvest 🍂' },
       { key: 'halloween', label: 'Halloween 🎃' }, { key: 'christmas', label: 'Christmas 🎄' },

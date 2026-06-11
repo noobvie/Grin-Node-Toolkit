@@ -1,12 +1,15 @@
-/* themes.css — extra white-label themes for the public pool pages.
+/* themes.css — theme system for the public pool pages (GRINIUM mockup-v3 family).
  *
- * The public pages ship a hand-written inline <style> block with three built-in
- * looks: dark (the :root default), light, and atomic. Those are applied by adding
- * a `light-theme` / `atomic-theme` class to <body>.
+ * The DEFAULT look ("Atomic", no body class) is the mockup-v3 uranium-lime
+ * reactor skin and lives in each page's inline <style> block (:root legacy
+ * variables + lime palette). This file adds everything else:
  *
- * This file adds TEN more operator-selectable themes the same way — each is a
- * `body.<name>-theme` class. To stay DRY across pages whose selectors differ
- * slightly, every new theme does two things:
+ *   · the default-look extras the inline CSS can't share (mono accents,
+ *     full-page scanline overlay),
+ *   · the two other Classic themes from the mockup — "Nexus" (cyan/magenta
+ *     cyberpunk) and "Light" (clean, low-decoration) — plus TEN white-label
+ *     extras. Each is a `body.<name>-theme` class. To stay DRY across pages
+ *     whose selectors differ slightly, every theme does two things:
  *
  *   1. Remaps the legacy variables the inline page CSS already consumes
  *      (--dark-bg/-card/-text/-dim, --neon-cyan/-magenta/-lime, --uranium) to the
@@ -19,9 +22,47 @@
  * background. branding.js (operator default) and public-theme.js (visitor switch)
  * both toggle these classes, so the two entry points share one stylesheet.
  *
- * The three built-in themes (dark/light/atomic) never get the `themed` class, so
- * none of these rules touch them.
+ * The old built-in looks (cyan "dark" default, black-bg "atomic", gradient
+ * "light") were retired from the public pages in 2026-06 and live on as
+ * admin-panel palettes in js/theme.js (Cyber Classic / Atomic Classic /
+ * Gradient Light). The legacy public key 'dark' now maps to the default.
  */
+
+/* ── Built-in default look ("Atomic", no body class) ─────────────────────────
+ * Body text is sans (set inline per page); headings + data go mono, and the
+ * cyberpunk scanline overlay breathes over everything. Nexus keeps the
+ * scanlines too; Light and the white-label extras stay clean.
+ * Standalone-design pages (login, testnet guide) opt out with <body class="no-fx">. */
+body:not(.themed):not(.no-fx) h1,
+body:not(.themed):not(.no-fx) .stat-value,
+body:not(.themed):not(.no-fx) .section-title,
+body:not(.themed):not(.no-fx) .addr {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+body:not(.themed):not(.no-fx)::before,
+body.nexus-theme::before {
+  content: "";
+  position: fixed; inset: 0; z-index: 9999;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, .12) 3px,
+    rgba(0, 0, 0, 0) 4px
+  );
+  opacity: .35;
+  animation: grin-scanlines 8s linear infinite;
+}
+@keyframes grin-scanlines {
+  0% { background-position: 0 0; }
+  100% { background-position: 0 48px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body:not(.themed):not(.no-fx)::before,
+  body.nexus-theme::before { animation: none; }
+}
 
 /* ── Scalable switcher: a grouped <select> replaces the old button pill ──────── */
 .theme-switcher .theme-select {
@@ -113,7 +154,44 @@ body.themed .theme-switcher {
 body.themed .theme-switcher .theme-select { color: var(--t-accent); }
 
 /* ════════════════════════════════════════════════════════════════════════════
- *  THE 10 THEMES
+ *  CLASSIC THEMES (mockup-v3) — Nexus + Light. Atomic is the no-class default.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* Nexus — cyan/magenta neon cyberpunk (mockup-v3 "nexus") */
+body.nexus-theme {
+  --t-bg: #07080f; --t-text: #d8ecff; --t-dim: #8aa0c8;
+  --t-card: #0e1020; --t-card2: #161a30; --t-border: #243056;
+  --t-header: linear-gradient(135deg, rgba(0, 247, 255, 0.12), rgba(255, 0, 255, 0.12));
+  --t-accent: #00f7ff; --t-accent2: #ff00ff; --t-heading: #00f7ff;
+  --t-on-accent: #06121a; --t-chip-bg: rgba(0, 247, 255, 0.10);
+  --t-chip-border: rgba(0, 247, 255, 0.28);
+  --dark-bg: #07080f; --dark-card: #0e1020; --dark-text: #d8ecff; --dark-dim: #8aa0c8;
+  --neon-cyan: #00f7ff; --neon-magenta: #ff00ff; --neon-lime: #b8e600; --uranium: #00f7ff;
+  background:
+    linear-gradient(0deg, transparent 24%, rgba(0, 247, 255, 0.05) 25%, rgba(0, 247, 255, 0.05) 26%, transparent 27%, transparent 74%, rgba(0, 247, 255, 0.05) 75%, rgba(0, 247, 255, 0.05) 76%, transparent 77%, transparent),
+    linear-gradient(90deg, transparent 24%, rgba(0, 247, 255, 0.05) 25%, rgba(0, 247, 255, 0.05) 26%, transparent 27%, transparent 74%, rgba(0, 247, 255, 0.05) 75%, rgba(0, 247, 255, 0.05) 76%, transparent 77%, transparent),
+    #07080f;
+  background-size: 50px 50px;
+  background-attachment: fixed;
+}
+
+/* Light — vibrant clean, low decoration (mockup-v3 "light") */
+body.light-theme {
+  --t-bg: #f4f6f9; --t-text: #1a2129; --t-dim: #51606f;
+  --t-card: #ffffff; --t-card2: #f0f3f7; --t-border: #dde3ea;
+  --t-header: linear-gradient(135deg, #ffffff, #eef2f7);
+  --t-accent: #1ba673; --t-accent2: #7c3aed; --t-heading: #14855c;
+  --t-on-accent: #ffffff; --t-chip-bg: rgba(27, 166, 115, 0.10);
+  --t-chip-border: rgba(27, 166, 115, 0.28); --t-switcher-bg: rgba(255, 255, 255, 0.85);
+  --t-font: 'Segoe UI', system-ui, sans-serif;
+  --dark-bg: #f4f6f9; --dark-card: #ffffff; --dark-text: #1a2129; --dark-dim: #51606f;
+  --neon-cyan: #1ba673; --neon-magenta: #7c3aed; --neon-lime: #1ba673; --uranium: #1ba673;
+  background: linear-gradient(135deg, #f5f7fb 0%, #faf7ff 50%, #fff5f8 100%);
+  background-attachment: fixed;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  THE 10 WHITE-LABEL EXTRAS
  *  Each block: semantic --t-* palette + legacy var remap + signature background.
  * ════════════════════════════════════════════════════════════════════════════ */
 

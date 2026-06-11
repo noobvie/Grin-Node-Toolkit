@@ -38,12 +38,12 @@ class PoolSettings {
       accent_color: '#667eea',
       // pool_theme kept for backward compatibility; default_theme is authoritative
       pool_theme: 'dark',
-      default_theme: 'dark',
+      default_theme: 'atomic',
       allow_theme_switch: 'true',
       // enabled_themes: JSON array of theme keys visitors may switch between on the
       // public pages. With ≤1 entry (or allow_theme_switch off) no switcher is shown
       // and default_theme is forced. default_theme need not be in this list.
-      enabled_themes: '["light","atomic"]',
+      enabled_themes: '["atomic","nexus","light"]',
       // custom_theme: JSON map of CSS variable name -> value (theme builder output)
       custom_theme: '{}',
       custom_css: '',
@@ -200,8 +200,13 @@ class PoolSettings {
   };
 
   // Every valid theme key (public_html/css/themes.css + js/theme.js + js/public-theme.js).
+  // 'dark' is the retired pre-mockup public default — still accepted for stored
+  // configs; the public pages normalise it to 'atomic'. 'nexus' is public+admin;
+  // 'cyber'/'uranium'/'gradient' (the moved old looks) and matrix/naruto/japan
+  // are admin-panel-only palettes.
   static THEME_KEYS = [
-    'dark', 'light', 'matrix', 'naruto', 'japan', 'atomic', 'custom',
+    'atomic', 'nexus', 'light', 'dark', 'custom',
+    'matrix', 'naruto', 'japan', 'cyber', 'uranium', 'gradient',
     'winter', 'spring', 'summer', 'autumn', 'halloween', 'christmas',
     'galaxy', 'winxp', 'aqua', 'comic',
   ];
@@ -520,9 +525,9 @@ class PoolSettings {
       },
       branding: {
         accent_color: b.accent_color || '',
-        default_theme: b.default_theme || b.pool_theme || 'dark',
+        default_theme: b.default_theme || b.pool_theme || 'atomic',
         allow_theme_switch: b.allow_theme_switch === true || b.allow_theme_switch === 'true',
-        enabled_themes: parseJson(b.enabled_themes, ['light', 'atomic']),
+        enabled_themes: parseJson(b.enabled_themes, ['atomic', 'nexus', 'light']),
         custom_theme: parseJson(b.custom_theme, {}),
         custom_css: b.custom_css || '',
         font_family: b.font_family || '',

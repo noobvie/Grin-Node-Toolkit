@@ -373,7 +373,7 @@ EOF
 
     echo ""
     success "Pool manager installed."
-    echo -e "  Next: ${BOLD}2) Configure${RESET} → ${BOLD}3) Deploy web files${RESET} → ${BOLD}4) Setup nginx${RESET} → ${BOLD}5) Admin account${RESET}"
+    echo -e "  Next: ${BOLD}2) Configure${RESET} → ${BOLD}3) Deploy web files${RESET} → ${BOLD}4) Setup nginx${RESET} → ${BOLD}5) Start service${RESET} → ${BOLD}6) Admin account${RESET}"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -386,10 +386,11 @@ pool_configure() {
 
     local val
 
-    echo -ne "Pool name        [$(pool_read_conf "pool_name" "My Grin Pool")]: "
+    echo -ne "Pool title       [$(pool_read_conf "pool_name" "My Grin Pool")]: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "pool_name" "$val"
 
-    echo -ne "Subdomain        [$(pool_read_conf "subdomain" "")]: "
+    echo -e "  ${DIM}(Full domain or subdomain for the pool site, e.g. pool.example.com or example.com)${RESET}"
+    echo -ne "Domain/subdomain [$(pool_read_conf "subdomain" "")]: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "subdomain" "$val"
 
     echo -ne "Pool fee %        [$(pool_read_conf "pool_fee_percent" "1.0")]: "
@@ -772,17 +773,27 @@ pool_setup_admin() {
 
     if ! ss -tlnp 2>/dev/null | grep -q ":$port "; then
         warn "Pool manager is not running on port $port."
-        warn "Start the service (option 6) first, then run this again."
+        warn "Start the service (option 5) first, then run this again."
         return 1
     fi
 
+    echo -e "  ${DIM}(Username: at least 3 characters)${RESET}"
     echo -ne "Admin username: "
     read -r admin_user
     [[ -z "$admin_user" ]] && return
+    if [[ ${#admin_user} -lt 3 ]]; then
+        error "Username must be at least 3 characters."
+        return 1
+    fi
 
+    echo -e "  ${DIM}(Password: at least 8 characters)${RESET}"
     echo -ne "Admin password: "
     read -rs admin_pass; echo ""
     [[ -z "$admin_pass" ]] && return
+    if [[ ${#admin_pass} -lt 8 ]]; then
+        error "Password must be at least 8 characters."
+        return 1
+    fi
 
     echo -ne "Admin email (optional): "
     read -r admin_email
@@ -800,10 +811,18 @@ process.stdout.write(JSON.stringify({
         return 1
     fi
 
-    local resp; resp=$(curl -fsSL -X POST "http://127.0.0.1:$port/api/auth/register" \
-        -H "Content-Type: application/json" -d "$payload" 2>&1)
+    # Do NOT use curl -f here: on HTTP 4xx the -f flag discards the JSON body and
+    # curl only prints "curl: (22) ... error: 400", hiding the real reason. Capture
+    # the body + status code separately so the operator sees the actual error
+    # (e.g. "Password must be at least 8 characters" / "Admin registration closed").
+    local resp http_code body
+    resp=$(curl -sS -X POST "http://127.0.0.1:$port/api/auth/register" \
+        -H "Content-Type: application/json" -d "$payload" \
+        -w $'\n%{http_code}' 2>&1)
+    http_code="${resp##*$'\n'}"
+    body="${resp%$'\n'*}"
 
-    if echo "$resp" | grep -q '"success"[[:space:]]*:[[:space:]]*true'; then
+    if [[ "$http_code" == "200" ]] && echo "$body" | grep -q '"success"[[:space:]]*:[[:space:]]*true'; then
         success "User '$admin_user' registered."
         local safe_user="${admin_user//"'"/"''"}"
         if command -v sqlite3 &>/dev/null; then
@@ -819,7 +838,19 @@ db.prepare('UPDATE users SET is_admin=1 WHERE username=?').run(process.argv[2]);
                 && info "User '$admin_user' promoted to admin."
         fi
     else
-        error "Registration failed: $resp"
+        # Pull the human-readable message out of the JSON {"error":"..."} body.
+        local msg
+        msg=$(printf '%s' "$body" | node -e "
+let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+  try{const j=JSON.parse(s);process.stdout.write(j.error||j.message||s);}catch{process.stdout.write(s);}
+});" 2>/dev/null)
+        [[ -z "$msg" ]] && msg="$body"
+        error "Registration failed (HTTP ${http_code:-?}): $msg"
+        case "$http_code" in
+            400) warn "Requirements: username ≥ 3 characters, password ≥ 8 characters." ;;
+            403) warn "An admin already exists — registration is closed. Reset via Z) Cleanup or remove the admin row from pool.db to re-register." ;;
+            000|"") warn "No response — is the service running? Check 6) Service control and 7) Pool status." ;;
+        esac
     fi
 }
 
@@ -1096,8 +1127,8 @@ show_menu() {
     echo -e "  ${GREEN}2${RESET}) Configure             ${DIM}(pool name, domain, fee, wallet dir)${RESET}"
     echo -e "  ${GREEN}3${RESET}) Deploy web files      ${DIM}(frontend → $POOL_WEB_DIR)${RESET}"
     echo -e "  ${GREEN}4${RESET}) Setup nginx           ${DIM}(vhost + SSL + rate limits)${RESET}"
-    echo -e "  ${GREEN}5${RESET}) Create admin account  ${DIM}(first admin user)${RESET}"
-    echo -e "  ${GREEN}6${RESET}) Service control       ${DIM}(start / stop)${RESET}"
+    echo -e "  ${GREEN}5${RESET}) Service control       ${DIM}(start / stop — start before creating admin)${RESET}"
+    echo -e "  ${GREEN}6${RESET}) Create admin account  ${DIM}(first admin user — needs service running)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Administration ───────────────────────────────${RESET}"
     echo -e "  ${GREEN}7${RESET}) Pool status           ${DIM}(service, port, DB, recent logs)${RESET}"
@@ -1128,8 +1159,8 @@ pool_singlebox_loop() {
             2)     pool_configure || true ;;
             3)     pool_deploy_web || true ;;
             4)     pool_setup_nginx || true ;;
-            5)     pool_setup_admin || true ;;
-            6)     pool_service_menu || true ;;
+            5)     pool_service_menu || true ;;
+            6)     pool_setup_admin || true ;;
             7)     pool_show_status || true ;;
             b)     pool_backup || true ;;
             c)     pool_cron_schedules || true ;;

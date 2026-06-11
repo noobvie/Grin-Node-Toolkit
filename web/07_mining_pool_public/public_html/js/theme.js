@@ -1,8 +1,10 @@
 // Theme switcher module for the admin panel — CSS-variable theme registry.
-// Built-in: Matrix, Dark, Light, Naruto, Japan. Plus 10 white-label themes
-// (Winter/Spring/Summer/Autumn/Halloween/Christmas/Galaxy/Windows XP/Aqua/Comic)
-// that mirror the public-page themes in /css/themes.css so operator default_theme
-// looks consistent across the public site and the admin panel.
+// Built-in: Matrix, Dark, Light, Naruto, Japan. The mockup-v3 classics
+// (Atomic/Nexus) and 10 white-label themes mirror the public-page themes in
+// /css/themes.css so operator default_theme looks consistent across the public
+// site and the admin panel. Cyber/Atomic/Gradient "Classic" are the retired
+// pre-mockup public looks (old cyan default, old black-bg atomic, old gradient
+// light), moved here in 2026-06 — admin-panel only, not public keys.
 // All admin-panel/*.html pages reference <script src="/js/theme.js">.
 
 const ThemeSwitcher = {
@@ -115,6 +117,54 @@ const ThemeSwitcher = {
       'warn-color': '#f39c12',
       'input-bg': '#ffffff',
       'input-border': '#e8dcc8'
+    },
+    atomic: {
+      name: 'Atomic ⚛',
+      'primary': '#b8e600', 'secondary': '#00f7ff', 'accent': '#b8e600',
+      'bg-body': '#080b07', 'bg-card': '#11160d', 'bg-card2': '#1a2110',
+      'border-color': '#2c3a18', 'text': '#e8f5cf', 'text-dim': '#9db077', 'text-muted': '#6a7a4d',
+      'btn-bg': '#b8e600', 'btn-text': '#06120a', 'btn-hover': '#8fb300',
+      'error-color': '#ff5a52', 'ok-color': '#b8e600', 'warn-color': '#f5b942',
+      'input-bg': '#11160d', 'input-border': '#2c3a18'
+    },
+    nexus: {
+      name: 'Nexus',
+      'primary': '#00f7ff', 'secondary': '#ff00ff', 'accent': '#00f7ff',
+      'bg-body': '#07080f', 'bg-card': '#0e1020', 'bg-card2': '#161a30',
+      'border-color': '#243056', 'text': '#d8ecff', 'text-dim': '#8aa0c8', 'text-muted': '#5c6f96',
+      'btn-bg': '#00f7ff', 'btn-text': '#06121a', 'btn-hover': '#00c2cc',
+      'error-color': '#ff5d8a', 'ok-color': '#b8e600', 'warn-color': '#ffcc44',
+      'input-bg': '#0e1020', 'input-border': '#243056'
+    },
+    cyber: {
+      name: 'Cyber Classic 🌃',
+      // the retired pre-mockup public DEFAULT: neon cyan/magenta on black + navy cards
+      'primary': '#00f7ff', 'secondary': '#ff00ff', 'accent': '#00f7ff',
+      'bg-body': '#0a0a0a', 'bg-card': '#1a2342', 'bg-card2': '#222d52',
+      'border-color': '#00f7ff', 'text': '#b9f3ff', 'text-dim': '#7fb0bd', 'text-muted': '#54777f',
+      'btn-bg': '#00f7ff', 'btn-text': '#0a0a0a', 'btn-hover': '#00c2cc',
+      'error-color': '#ff5a52', 'ok-color': '#00ff00', 'warn-color': '#ffff00',
+      'input-bg': '#11182e', 'input-border': '#00f7ff'
+    },
+    uranium: {
+      name: 'Atomic Classic ☢️',
+      // the retired pre-mockup public "atomic": uranium lime on black + navy cards
+      'primary': '#b8e600', 'secondary': '#7a9700', 'accent': '#b8e600',
+      'bg-body': '#0a0a0a', 'bg-card': '#1a2342', 'bg-card2': '#222d52',
+      'border-color': '#b8e600', 'text': '#e4f7b0', 'text-dim': '#9db077', 'text-muted': '#6a7a4d',
+      'btn-bg': '#b8e600', 'btn-text': '#0a0a0a', 'btn-hover': '#7a9700',
+      'error-color': '#ff5a52', 'ok-color': '#b8e600', 'warn-color': '#f5b942',
+      'input-bg': '#11182e', 'input-border': '#b8e600'
+    },
+    gradient: {
+      name: 'Gradient Light 🌈',
+      // the retired pre-mockup public "light": blue/purple gradient accents on white
+      'primary': '#3b82f6', 'secondary': '#7c3aed', 'accent': '#ec4899',
+      'bg-body': '#f5f7fb', 'bg-card': '#ffffff', 'bg-card2': '#f0f3f7',
+      'border-color': '#e0e0e0', 'text': '#1a1a1a', 'text-dim': '#666666', 'text-muted': '#999999',
+      'btn-bg': '#3b82f6', 'btn-text': '#ffffff', 'btn-hover': '#7c3aed',
+      'error-color': '#d83a36', 'ok-color': '#22c55e', 'warn-color': '#c98a13',
+      'input-bg': '#ffffff', 'input-border': '#e0e0e0'
     },
     winter: {
       name: 'Winter Frost ❄️',

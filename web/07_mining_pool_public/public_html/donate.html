@@ -16,24 +16,9 @@
     <meta name="twitter:title" content="Donate — Support the Prize Pool">
     <meta name="twitter:image" content="https://pool.grin.money/images/twitter-card.svg">
     <link rel="canonical" href="https://pool.grin.money/donate.html">
-    <link rel="stylesheet" href="/css/themes.css">
+    <link rel="stylesheet" href="/css/dashboard.css">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            background: var(--t-bg, #080b07);
-            color: var(--t-text, #e0e0e0);
-            font-family: var(--t-font, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif);
-            line-height: 1.6;
-            transition: all .6s cubic-bezier(.4, 0, .2, 1);
-        }
-        header { background: var(--t-header, var(--t-card, #11160d)); border-bottom: 1px solid var(--t-border, #2d3748); }
-        .header-content { max-width: 900px; margin: 0 auto; padding: 1rem 1.5rem; display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
-        .header-content h1 { color: var(--t-heading, var(--t-accent, #b8e600)); font-size: 1.4rem; }
-        .header-nav { display: flex; gap: 1rem; flex-wrap: wrap; }
-        .nav-link { color: var(--t-dim, #a0aec0); text-decoration: none; font-weight: 600; }
-        .nav-link.active, .nav-link:hover { color: var(--t-accent, #b8e600); }
         .container { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem; }
-        .page-title { color: var(--t-heading, var(--t-accent, #b8e600)); margin-bottom: .5rem; font-size: 1.8rem; }
         .lead { color: var(--t-dim, #a0aec0); margin-bottom: 1.5rem; }
         .card { background: var(--t-card, #11160d); border: 1px solid var(--t-border, #2d3748); border-radius: 10px; padding: 1.5rem; margin-bottom: 1.5rem; }
         .card h3 { color: var(--t-heading, var(--t-accent, #b8e600)); margin-bottom: .75rem; font-size: 1.2rem; }
@@ -53,23 +38,25 @@
         .no { color: var(--t-dim, #a0aec0); }
         .prize { color: var(--t-accent, #b8e600); font-weight: 700; }
         ul { margin: .3rem 0 .3rem 1.2rem; }
-        footer { text-align: center; padding: 2rem; color: var(--t-dim, #a0aec0); font-size: .85rem; }
         .fund-list li { margin-bottom: .25rem; }
     </style>
+    <link rel="stylesheet" href="/css/themes.css">
 </head>
 <body>
-    <div class="theme-switcher"></div>
 
     <header>
-        <div class="header-content">
-            <h1 data-brand="pool_name">⚛ GRINIUM</h1>
-            <nav class="header-nav">
-                <a href="index.html" class="nav-link">Home</a>
-                <a href="miners-stats.html" class="nav-link">Miners</a>
-                <a href="fortune-board.html" class="nav-link">Fortune Board</a>
-                <a href="donate.html" class="nav-link active">Donate</a>
-                <a href="pool-info.html" class="nav-link">Info</a>
-            </nav>
+        <div class="brand"><span class="dot" aria-hidden="true"></span><span data-brand="pool_name">GRINIUM</span></div>
+        <nav class="header-nav" aria-label="Main">
+            <a href="index.html" class="nav-link">Dashboard</a>
+            <a href="miners-stats.html" class="nav-link">Miners</a>
+            <a href="fortune-board.html" class="nav-link">Fortune Board</a>
+            <a href="donate.html" class="nav-link active">Donate</a>
+            <a href="pool-info.html" class="nav-link">Info</a>
+        </nav>
+        <div class="nav-right">
+            <div class="theme-switcher"></div>
+            <a class="btn primary sm" href="connect.html">Start Mining</a>
+            <a class="btn sm" href="login.html">Sign In</a>
         </div>
     </header>
 

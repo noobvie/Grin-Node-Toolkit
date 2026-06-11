@@ -17,34 +17,8 @@
   <meta name="twitter:description" content="How to point your miner at the GRINIUM Grin pool.">
   <meta name="twitter:image" content="https://pool.grin.money/images/twitter-card.svg">
   <link rel="canonical" href="https://pool.grin.money/connect.html">
+  <link rel="stylesheet" href="/css/dashboard.css">
   <style>
-    :root {
-      /* Atomic default (mockup-v3) — legacy var names; themes.css remaps them per theme */
-      --dark-bg: #080b07; --dark-card: #11160d; --dark-text: #e8f5cf; --dark-dim: #9db077;
-      --neon-cyan: #b8e600; --neon-magenta: #00f7ff; --neon-lime: #d4ff3d;
-    }
-    body {
-      /* bridge: page tokens follow the active theme (themes.css remaps the legacy vars on body) */
-      --bg-body: var(--dark-bg);
-      --bg-card: var(--dark-card);
-      --bg-card2: color-mix(in srgb, var(--dark-card) 88%, var(--dark-text) 7%);
-      --text: var(--dark-text);
-      --text-dim: var(--dark-dim);
-      --accent: var(--neon-cyan);
-      --border-color: color-mix(in srgb, var(--neon-cyan) 24%, var(--dark-bg));
-      --btn-bg: var(--neon-cyan);
-      --btn-text: var(--dark-bg);
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; background: var(--bg-body); color: var(--text);
-      font-family: var(--brand-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-      line-height: 1.6;
-    }
-    .topbar {
-      padding: 1rem 1.5rem; border-bottom: 1px solid var(--border-color);
-    }
-    .topbar a { color: var(--accent); text-decoration: none; font-weight: 600; }
     .wrap { max-width: 900px; margin: 0 auto; padding: 2.5rem 1.5rem; }
     h1 { font-size: 2rem; margin-top: 0; }
     h2 { color: var(--accent); margin-top: 2.5rem; }
@@ -76,18 +50,25 @@
     .miner { margin-top: 1.5rem; }
     .miner h3 { margin-bottom: 0.25rem; }
     .hint { color: var(--text-dim); font-size: 0.9rem; }
-    footer {
-      padding: 2rem 1.5rem; text-align: center; color: var(--text-dim);
-      border-top: 1px solid var(--border-color); font-size: 0.9rem;
-    }
-    footer [data-brand="page-links"] a { color: var(--accent); text-decoration: none; }
   </style>
   <link rel="stylesheet" href="/css/themes.css">
 </head>
 <body>
-  <div class="topbar">
-    <a href="/">&larr; <span data-brand="pool_name">Home</span></a>
-  </div>
+  <header>
+        <div class="brand"><span class="dot" aria-hidden="true"></span><span data-brand="pool_name">GRINIUM</span></div>
+        <nav class="header-nav" aria-label="Main">
+            <a href="index.html" class="nav-link">Dashboard</a>
+            <a href="miners-stats.html" class="nav-link">Miners</a>
+            <a href="payment-history.html" class="nav-link">Payouts</a>
+            <a href="pool-info.html" class="nav-link">Info</a>
+            <a href="account-settings.html" class="nav-link">My Account</a>
+        </nav>
+        <div class="nav-right">
+            <div class="theme-switcher"></div>
+            <a class="btn primary sm" href="connect.html">Start Mining</a>
+            <a class="btn sm" href="login.html">Sign In</a>
+        </div>
+    </header>
 
   <div class="wrap">
     <h1>Connect &amp; Start Mining</h1>

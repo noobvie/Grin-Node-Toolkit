@@ -6,8 +6,18 @@
   <title>Loading…</title>
   <style>
     :root {
-      --bg-body: #0f1419; --bg-card: #1a1f29; --text: #e0e0e0;
-      --text-dim: #a0aec0; --accent: #667eea; --border-color: #2d3748;
+      /* Atomic default (mockup-v3) — legacy var names; themes.css remaps them per theme */
+      --dark-bg: #080b07; --dark-card: #11160d; --dark-text: #e8f5cf; --dark-dim: #9db077;
+      --neon-cyan: #b8e600; --neon-magenta: #00f7ff; --neon-lime: #d4ff3d;
+    }
+    body {
+      /* bridge: page tokens follow the active theme (themes.css remaps the legacy vars on body) */
+      --bg-body: var(--dark-bg);
+      --bg-card: var(--dark-card);
+      --text: var(--dark-text);
+      --text-dim: var(--dark-dim);
+      --accent: var(--neon-cyan);
+      --border-color: color-mix(in srgb, var(--neon-cyan) 24%, var(--dark-bg));
     }
     * { box-sizing: border-box; }
     body {
@@ -34,6 +44,7 @@
     footer [data-brand="page-links"] a { color: var(--accent); text-decoration: none; }
     .muted { color: var(--text-dim); }
   </style>
+  <link rel="stylesheet" href="/css/themes.css">
 </head>
 <body>
   <div class="topbar">
@@ -78,6 +89,7 @@
       }
     })();
   </script>
+  <script src="/js/public-theme.js"></script>
   <script src="/js/branding.js"></script>
 </body>
 </html>

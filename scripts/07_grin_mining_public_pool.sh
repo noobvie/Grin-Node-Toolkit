@@ -18,14 +18,15 @@
 #   · A grin-wallet with Foreign and Owner API running
 #
 # ─── Menu ────────────────────────────────────────────────────────────────────
-#   G) Guided Full Setup     (1→2→3→4→5→6 in sequence)
+#   G) Guided Full Setup     (1→2→3→4→5→6→7 in sequence)
 #   1) Install               (nodejs ≥18, npm, sqlite3, systemd, logrotate, fail2ban)
 #   2) Configure             (pool name, domain, fee, wallet dir, stratum port)
 #   3) Deploy web files      (frontend → /var/www/grin-pool)
 #   4) Setup nginx           (vhost + rate limits + SSL via certbot)
-#   5) Create admin account  (first admin user)
+#   5) Set up wallet         (coinbase Foreign 3415 + payout Owner 3420 listeners)
 #   6) Service control       (start / stop / restart)
-#   7) Pool status           (service state, DB size, recent logs)
+#   7) Create admin account  (first admin user — needs service running)
+#   8) Pool status           (service state, DB size, recent logs)
 #   B) Backup                (DB + config → /opt/grin/backups/)
 #   C) Cron schedules        (daily backup, weekly VACUUM)
 #   L) View logs             (tail -50 | less)
@@ -87,6 +88,14 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 # other toolkit script, so rate-limit/conn zones never collide.
 # shellcheck source=lib/nginx_shared_helpers.sh
 source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+
+# ─── Source pool wallet lib (coinbase Foreign 3415 + payout Owner 3420) ────────
+# pw_* functions: install/init the pool wallet, run BOTH listeners, autostart +
+# watchdog. Same technique as lib/07_solo_wallet.sh, pool naming/dirs. Resolvers
+# read live pool config (grin_wallet_dir / wallet_pass_file) at call time, so
+# sourcing here — before pool_read_conf is defined — is safe.
+# shellcheck source=lib/07_lib_pool_wallet.sh
+source "$SCRIPT_DIR/lib/07_lib_pool_wallet.sh"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # EXCLUSIVITY GUARD — one mining type per server (public XOR solo private)
@@ -373,7 +382,7 @@ EOF
 
     echo ""
     success "Pool manager installed."
-    echo -e "  Next: ${BOLD}2) Configure${RESET} → ${BOLD}3) Deploy web files${RESET} → ${BOLD}4) Setup nginx${RESET} → ${BOLD}5) Start service${RESET} → ${BOLD}6) Admin account${RESET}"
+    echo -e "  Next: ${BOLD}2) Configure${RESET} → ${BOLD}3) Deploy${RESET} → ${BOLD}4) Nginx${RESET} → ${BOLD}5) Set up wallet${RESET} → ${BOLD}6) Start service${RESET} → ${BOLD}7) Admin account${RESET}"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -773,7 +782,7 @@ pool_setup_admin() {
 
     if ! ss -tlnp 2>/dev/null | grep -q ":$port "; then
         warn "Pool manager is not running on port $port."
-        warn "Start the service (option 5) first, then run this again."
+        warn "Start the service (option 6) first, then run this again."
         return 1
     fi
 
@@ -849,9 +858,60 @@ let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
         case "$http_code" in
             400) warn "Requirements: username ≥ 3 characters, password ≥ 8 characters." ;;
             403) warn "An admin already exists — registration is closed. Reset via Z) Cleanup or remove the admin row from pool.db to re-register." ;;
-            000|"") warn "No response — is the service running? Check 6) Service control and 7) Pool status." ;;
+            000|"") warn "No response — is the service running? Check 6) Service control and 8) Pool status." ;;
         esac
     fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5) POOL WALLET (coinbase Foreign 3415 + payout Owner 3420)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Thin menu over the pw_* functions in lib/07_lib_pool_wallet.sh. The pool needs
+# BOTH wallet APIs running: Foreign (the node's stratum builds coinbase here →
+# block rewards) and Owner (the backend sends Tor payouts here). Setup installs
+# the binary, inits/recovers the wallet, patches the node's wallet_listener_url,
+# and starts both listeners; the rest is ongoing listener control.
+
+pool_wallet_menu() {
+    while true; do
+        echo -e "\n${BOLD}Pool Wallet — coinbase (Foreign 3415) + payouts (Owner 3420)${RESET}"
+        pw_listener_status
+        local wd_tag
+        if [[ -f "$PW_WATCHDOG_CRON" ]]; then wd_tag="${GREEN}[OK] watchdog${RESET}"; else wd_tag="${DIM}[--] watchdog${RESET}"; fi
+        echo -e "  $(pw_autostart_status)    $wd_tag"
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Set up wallet        ${DIM}(install + init/recover + patch node + start)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Start listeners      ${DIM}(Foreign 3415 + Owner 3420)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Stop listeners"
+        echo -e "  ${GREEN}4${RESET}) Show pool address"
+        echo -e "  ${GREEN}5${RESET}) Patch node wallet_listener_url"
+        echo -e "  ${GREEN}6${RESET}) Auto-restart on boot ${DIM}(enable / disable)${RESET}"
+        echo -e "  ${GREEN}7${RESET}) Watchdog */5        ${DIM}(install / remove)${RESET}"
+        echo -e "  ${DIM}0) Back${RESET}"
+        echo -ne "${BOLD}Select: ${RESET}"
+        local c; read -r c
+        case "$c" in
+            1) pw_setup || true ;;
+            2) pw_listener_start || true ;;
+            3) pw_listener_stop || true ;;
+            4) pw_show_address || true ;;
+            5) pw_patch_node_toml || true ;;
+            6) echo -ne "  Enable or disable? [e/d]: "; local a; read -r a
+               case "${a,,}" in
+                   e) pw_autostart_enable || true ;;
+                   d) pw_autostart_disable || true ;;
+                   *) warn "Cancelled." ;;
+               esac ;;
+            7) echo -ne "  Install or remove? [i/r]: "; local w; read -r w
+               case "${w,,}" in
+                   i) pw_watchdog_install || true ;;
+                   r) pw_watchdog_remove || true ;;
+                   *) warn "Cancelled." ;;
+               esac ;;
+            0|"") return 0 ;;
+            *) warn "Invalid option." ;;
+        esac
+    done
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1069,7 +1129,7 @@ pool_reset_db() {
 pool_guided_setup() {
     echo -e "\n${BOLD}${CYAN}═══ Guided Full Setup — GRINIUM Pool (Mainnet) ═══${RESET}\n"
     pool_check_exclusivity || return 0
-    echo -e "  This will run steps 1 → 2 → 3 → 4 → 5 → 6 in sequence."
+    echo -e "  This will run steps 1 → 2 → 3 → 4 → 5 → 6 → 7 in sequence."
     echo -ne "  Continue? [Y/n]: "
     read -r go; [[ "${go,,}" == "n" ]] && return
 
@@ -1083,10 +1143,14 @@ pool_guided_setup() {
     pool_deploy_web  || { error "Web deploy failed — aborting guided setup."; return 0; }
     echo ""; echo "Press Enter to continue to Setup nginx..."; read -r
     pool_setup_nginx || { error "Nginx setup failed — aborting guided setup."; return 0; }
+    echo ""; echo "Press Enter to set up the pool wallet (coinbase + payout listeners)..."; read -r
+    # Wallet setup is best-effort in guided mode: a missing/unsynced node shouldn't
+    # block the rest of setup. The operator can finish it later via 5) Set up wallet.
+    pw_setup || warn "Wallet not fully set up — finish via 5) Set up wallet (needed for coinbase + payouts)."
     echo ""; echo "Press Enter to start the service and create admin account..."; read -r
     pool_start_service || true
     sleep 2
-    pool_setup_admin || warn "Admin account not created — run 5) Create admin account once the service is up."
+    pool_setup_admin || warn "Admin account not created — run 7) Create admin account once the service is up."
 
     echo ""
     success "Guided setup complete. Open https://$(pool_read_conf "subdomain" "your-domain") to access the pool."
@@ -1120,18 +1184,19 @@ show_menu() {
     echo -e "  Service: $(_pool_menu_status_line)"
     echo ""
     echo -e "${DIM}  ─── First-Time Setup ────────────────────────────${RESET}"
-    echo -e "  ${GREEN}G${RESET}) Guided Full Setup    ${DIM}(runs all setup steps 1→6)${RESET}"
+    echo -e "  ${GREEN}G${RESET}) Guided Full Setup    ${DIM}(runs all setup steps 1→7)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Manual Setup Steps ───────────────────────────${RESET}"
     echo -e "  ${GREEN}1${RESET}) Install               ${DIM}(nodejs ≥18, npm, sqlite3, systemd, fail2ban)${RESET}"
     echo -e "  ${GREEN}2${RESET}) Configure             ${DIM}(pool name, domain, fee, wallet dir)${RESET}"
     echo -e "  ${GREEN}3${RESET}) Deploy web files      ${DIM}(frontend → $POOL_WEB_DIR)${RESET}"
     echo -e "  ${GREEN}4${RESET}) Setup nginx           ${DIM}(vhost + SSL + rate limits)${RESET}"
-    echo -e "  ${GREEN}5${RESET}) Service control       ${DIM}(start / stop — start before creating admin)${RESET}"
-    echo -e "  ${GREEN}6${RESET}) Create admin account  ${DIM}(first admin user — needs service running)${RESET}"
+    echo -e "  ${GREEN}5${RESET}) Set up wallet         ${DIM}(coinbase Foreign 3415 + payout Owner 3420)${RESET}"
+    echo -e "  ${GREEN}6${RESET}) Service control       ${DIM}(start / stop — start before creating admin)${RESET}"
+    echo -e "  ${GREEN}7${RESET}) Create admin account  ${DIM}(first admin user — needs service running)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Administration ───────────────────────────────${RESET}"
-    echo -e "  ${GREEN}7${RESET}) Pool status           ${DIM}(service, port, DB, recent logs)${RESET}"
+    echo -e "  ${GREEN}8${RESET}) Pool status           ${DIM}(service, port, DB, recent logs)${RESET}"
     echo -e "  ${GREEN}B${RESET}) Backup pool           ${DIM}(DB + config → /opt/grin/backups/)${RESET}"
     echo -e "  ${GREEN}C${RESET}) Cron tasks            ${DIM}(backup schedule, VACUUM)${RESET}"
     echo -e "  ${GREEN}L${RESET}) View logs             ${DIM}(tail -50 | less)${RESET}"
@@ -1159,9 +1224,10 @@ pool_singlebox_loop() {
             2)     pool_configure || true ;;
             3)     pool_deploy_web || true ;;
             4)     pool_setup_nginx || true ;;
-            5)     pool_service_menu || true ;;
-            6)     pool_setup_admin || true ;;
-            7)     pool_show_status || true ;;
+            5)     pool_wallet_menu || true ;;
+            6)     pool_service_menu || true ;;
+            7)     pool_setup_admin || true ;;
+            8)     pool_show_status || true ;;
             b)     pool_backup || true ;;
             c)     pool_cron_schedules || true ;;
             l)     pool_view_logs || true ;;
@@ -1314,13 +1380,19 @@ pool_cleanup() {
     fi
     echo ""
 
-    # 5) Cron jobs + logrotate + backup wrapper
-    echo -ne "${BOLD}5)${RESET} Remove cron jobs + logrotate + backup wrapper? [Y/n]: "
+    # 5) Cron jobs + logrotate + backup wrapper + wallet listeners/watchdog/autostart.
+    #    The wallet SEED dir is kept (it holds coinbase funds) — we only stop the
+    #    runtime listeners and remove their watchdog + @reboot autostart.
+    echo -ne "${BOLD}5)${RESET} Remove cron + logrotate + wrapper + stop wallet listeners? [Y/n]: "
     read -r a || true
     if [[ "${a,,}" != "n" ]]; then
         rm -f "$cron_backup" "$cron_vacuum" "$backup_wrapper" "$logrotate_conf"
-        success "Cron + logrotate + wrapper removed."
-        log "Cleanup: removed $cron_backup, $cron_vacuum, $backup_wrapper, $logrotate_conf"
+        pw_listener_stop   2>/dev/null || true
+        pw_watchdog_remove 2>/dev/null || true
+        pw_autostart_disable 2>/dev/null || true
+        success "Cron + logrotate + wrapper removed; wallet listeners stopped, watchdog + autostart removed."
+        info "Wallet seed dir ($(pw_wallet_dir)) kept — it holds the coinbase funds."
+        log "Cleanup: removed $cron_backup, $cron_vacuum, $backup_wrapper, $logrotate_conf + wallet listeners/watchdog/autostart"
     fi
     echo ""
 

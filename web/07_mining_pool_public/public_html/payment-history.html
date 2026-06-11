@@ -18,7 +18,7 @@
             --dark-dim: #9db077;
             --neon-cyan: #b8e600;
             --neon-magenta: #00f7ff;
-            --neon-lime: #d4ff3d;
+            --neon-lime: #d4ff3d;
         }
 
         body {
@@ -37,20 +37,20 @@
             0%, 100% { text-shadow: 0 0 5px var(--neon-cyan), 0 0 10px var(--neon-cyan), 0 0 20px var(--neon-cyan); }
             50% { text-shadow: 0 0 10px var(--neon-cyan), 0 0 20px var(--neon-cyan), 0 0 30px var(--neon-cyan), 0 0 40px var(--neon-cyan); }
         }
-
+
 
         @keyframes scanlines {
             0% { transform: translateY(0); }
             100% { transform: translateY(10px); }
         }
-
+
 
         @keyframes border-glow {
             0%, 100% { border-color: var(--neon-cyan); box-shadow: 0 0 5px var(--neon-cyan), inset 0 0 5px rgba(184, 230, 0, 0.1); }
             50% { border-color: var(--neon-magenta); box-shadow: 0 0 10px var(--neon-magenta), inset 0 0 5px rgba(0, 247, 255, 0.1); }
         }
-
-
+
+
 
         .theme-switcher {
             position: fixed;
@@ -68,8 +68,8 @@
             box-shadow: 0 0 15px var(--neon-cyan);
             transition: all 0.3s ease;
         }
-
-
+
+
 
         header {
             background: linear-gradient(135deg, rgba(184, 230, 0, 0.1), rgba(0, 247, 255, 0.1));
@@ -382,8 +382,8 @@
                 <a href="pool-info.html" class="nav-link">Info</a>
             </nav>
             <div class="header-buttons">
-                <button class="header-btn">Profile</button>
-                <button class="header-btn">Logout</button>
+                <a href="account-settings.html" class="header-btn">My Account</a>
+                <a href="connect.html" class="header-btn">Start Mining</a>
             </div>
         </div>
     </header>
@@ -393,110 +393,36 @@
 
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-label">Total Paid</div>
-                <div class="stat-value">1,234<span style="font-size: 0.5em;">K GRIN</span></div>
+                <div class="stat-label">Paid Out (7 days)</div>
+                <div class="stat-value" id="ph-paid-7d">—</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Last Payout</div>
-                <div class="stat-value">42<span style="font-size: 0.5em;">GRIN</span></div>
+                <div class="stat-value" id="ph-last">—</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Next Payout</div>
-                <div class="stat-value">2<span style="font-size: 0.5em;">h</span></div>
+                <div class="stat-label">Payouts (7 days)</div>
+                <div class="stat-value" id="ph-count-7d">—</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Avg Payout</div>
-                <div class="stat-value">35<span style="font-size: 0.5em;">GRIN</span></div>
+                <div class="stat-value" id="ph-avg">—</div>
             </div>
         </div>
 
-        <h3 class="section-title">Recent Payouts (Last 30 Days)</h3>
+        <h3 class="section-title">Recent Payouts</h3>
 
         <table class="data-table">
             <thead>
                 <tr>
                     <th>Date & Time</th>
+                    <th>Miner</th>
                     <th>Amount</th>
-                    <th>Transaction Hash</th>
                     <th>Status</th>
                 </tr>
             </thead>
-            <tbody>
-                <tr>
-                    <td>2024-05-15 12:45:32</td>
-                    <td>42.15 GRIN</td>
-                    <td>0x8f2a1b4c...9e7d5f3a</td>
-                    <td><span class="badge completed">Completed</span></td>
-                </tr>
-                <tr>
-                    <td>2024-05-14 18:23:15</td>
-                    <td>38.92 GRIN</td>
-                    <td>0x4a3b8c2e...1f9d7e5b</td>
-                    <td><span class="badge completed">Completed</span></td>
-                </tr>
-                <tr>
-                    <td>2024-05-14 06:12:48</td>
-                    <td>35.67 GRIN</td>
-                    <td>0x2e9f7d3a...6c4b1a8f</td>
-                    <td><span class="badge completed">Completed</span></td>
-                </tr>
-                <tr>
-                    <td>2024-05-13 15:34:01</td>
-                    <td>41.23 GRIN</td>
-                    <td>0x9c1d5f2b...3e8a7c4d</td>
-                    <td><span class="badge completed">Completed</span></td>
-                </tr>
-                <tr>
-                    <td>2024-05-13 03:21:17</td>
-                    <td>39.45 GRIN</td>
-                    <td>0x5a7b9e2f...8d1c3f6a</td>
-                    <td><span class="badge completed">Completed</span></td>
-                </tr>
-                <tr>
-                    <td>2024-05-12 14:55:42</td>
-                    <td>36.78 GRIN</td>
-                    <td>0x3d6f8a1c...7e2b9f5d</td>
-                    <td><span class="badge completed">Completed</span></td>
-                </tr>
-                <tr>
-                    <td>2024-05-12 02:11:29</td>
-                    <td>40.12 GRIN</td>
-                    <td>0x7f4a2d9b...1e5c8a3f</td>
-                    <td><span class="badge completed">Completed</span></td>
-                </tr>
-            </tbody>
-        </table>
-
-        <h3 class="section-title">Payout Summary</h3>
-
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Period</th>
-                    <th>Payouts</th>
-                    <th>Total Amount</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>This Week</td>
-                    <td>28</td>
-                    <td>978.45 GRIN</td>
-                    <td><span class="badge completed">Complete</span></td>
-                </tr>
-                <tr>
-                    <td>Last Week</td>
-                    <td>32</td>
-                    <td>1,124.67 GRIN</td>
-                    <td><span class="badge completed">Complete</span></td>
-                </tr>
-                <tr>
-                    <td>This Month</td>
-                    <td>120</td>
-                    <td>4,256.89 GRIN</td>
-                    <td><span class="badge completed">Complete</span></td>
-                </tr>
+            <tbody id="payouts">
+                <tr><td colspan="4">Loading…</td></tr>
             </tbody>
         </table>
     </div>
@@ -519,54 +445,53 @@
         // the theme picker and applies the 3 built-in + 10 white-label themes.
 
         // ═════════════════════════════════════════════════════════════════
-        // API Integration: Load payment history
+        // API Integration: confirmed payouts from the PUBLIC endpoint
+        // (/api/pool/payments — withdrawals table, status='confirmed').
+        // Timestamps are unixepoch SECONDS → multiply by 1000 for Date.
         // ═════════════════════════════════════════════════════════════════
 
+        function truncAddr(addr) {
+            addr = String(addr || '');
+            return addr.length > 16 ? addr.slice(0, 9) + '…' + addr.slice(-4) : addr;
+        }
+
+        function setStat(id, text) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = text;
+        }
+
         async function loadPaymentHistory() {
+            const tbody = document.getElementById('payouts');
             try {
-                const data = await Auth.fetch('/api/admin/withdrawals');
-                if (!data) {
-                    console.error('Failed to fetch withdrawal data');
-                    return;
-                }
+                const data = await Auth.fetch('/api/pool/payments?limit=100');
+                if (!Array.isArray(data)) throw new Error('bad response');
 
-                // Update stat cards (placeholder values)
-                const statCards = document.querySelectorAll('.stat-card');
-                if (statCards.length >= 4) {
-                    // Total Paid
-                    const totalPaid = (data.reduce((sum, w) => sum + (w.amount || 0), 0)).toFixed(2);
-                    const totalValue = statCards[0].querySelector('.stat-value');
-                    if (totalValue) totalValue.innerHTML = totalPaid + '<span style="font-size: 0.5em;"> GRIN</span>';
+                const now = Math.floor(Date.now() / 1000);
+                const when = w => w.confirmed_at || w.created_at || 0;
+                const last7d = data.filter(w => when(w) > now - 7 * 86400);
+                const sum = arr => arr.reduce((s, w) => s + (w.amount || 0), 0);
 
-                    // Last Payout
-                    const lastPayout = data.length > 0 ? new Date(data[0].created_at).toLocaleDateString() : 'Never';
-                    const lastValue = statCards[1].querySelector('.stat-value');
-                    if (lastValue) lastValue.textContent = lastPayout;
+                setStat('ph-paid-7d', sum(last7d).toFixed(2) + ' GRIN');
+                setStat('ph-count-7d', last7d.length);
+                setStat('ph-last', data.length ? new Date(when(data[0]) * 1000).toLocaleString() : 'No payouts yet');
+                setStat('ph-avg', data.length ? (sum(data) / data.length).toFixed(2) + ' GRIN' : '—');
 
-                    // Next Payout
-                    const nextValue = statCards[2].querySelector('.stat-value');
-                    if (nextValue) nextValue.textContent = 'In 24h';
-
-                    // Avg Payout
-                    const avgPayout = data.length > 0 ? (totalPaid / data.length).toFixed(2) : '0.00';
-                    const avgValue = statCards[3].querySelector('.stat-value');
-                    if (avgValue) avgValue.innerHTML = avgPayout + '<span style="font-size: 0.5em;"> GRIN</span>';
-                }
-
-                // Update payment history table
-                const payoutTbody = document.querySelectorAll('table tbody')[0];
-                if (payoutTbody && data.length > 0) {
-                    payoutTbody.innerHTML = data.slice(0, 20).map(w => `
-                        <tr>
-                            <td>${new Date(w.created_at).toLocaleString()}</td>
-                            <td>${w.amount.toFixed(2)} GRIN</td>
-                            <td>${escHtml(w.tx_hash || 'pending')}</td>
-                            <td><span class="status-badge ${w.status === 'confirmed' ? 'status-active' : 'status-inactive'}">${escHtml(w.status)}</span></td>
-                        </tr>
-                    `).join('');
+                if (tbody) {
+                    if (!data.length) {
+                        tbody.innerHTML = '<tr><td colspan="4">No payouts yet</td></tr>';
+                    } else {
+                        tbody.innerHTML = data.slice(0, 25).map(w => `
+                            <tr>
+                                <td>${escHtml(new Date(when(w) * 1000).toLocaleString())}</td>
+                                <td title="${escHtml(w.grin_address)}">${escHtml(truncAddr(w.grin_address))}</td>
+                                <td>${Number(w.amount || 0).toFixed(2)} GRIN</td>
+                                <td><span class="status-badge status-active">confirmed</span></td>
+                            </tr>
+                        `).join('');
+                    }
                 }
             } catch (error) {
-                console.error('Error loading payment history:', error);
+                if (tbody) tbody.innerHTML = '<tr><td colspan="4">Payment data unavailable</td></tr>';
             }
         }
 

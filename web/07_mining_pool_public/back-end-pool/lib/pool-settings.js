@@ -43,7 +43,9 @@ class PoolSettings {
       // enabled_themes: JSON array of theme keys visitors may switch between on the
       // public pages. With ≤1 entry (or allow_theme_switch off) no switcher is shown
       // and default_theme is forced. default_theme need not be in this list.
-      enabled_themes: '["atomic","nexus","light"]',
+      // Default = the two polished looks (Atomic dark + Light); nexus and the 10
+      // white-label extras stay opt-in via the admin panel checkbox grid.
+      enabled_themes: '["atomic","light"]',
       // custom_theme: JSON map of CSS variable name -> value (theme builder output)
       custom_theme: '{}',
       custom_css: '',
@@ -527,7 +529,7 @@ class PoolSettings {
         accent_color: b.accent_color || '',
         default_theme: b.default_theme || b.pool_theme || 'atomic',
         allow_theme_switch: b.allow_theme_switch === true || b.allow_theme_switch === 'true',
-        enabled_themes: parseJson(b.enabled_themes, ['atomic', 'nexus', 'light']),
+        enabled_themes: parseJson(b.enabled_themes, ['atomic', 'light']),
         custom_theme: parseJson(b.custom_theme, {}),
         custom_css: b.custom_css || '',
         font_family: b.font_family || '',

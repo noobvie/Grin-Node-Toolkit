@@ -79,7 +79,7 @@
             --dark-dim: #9db077;
             --neon-cyan: #b8e600;
             --neon-magenta: #00f7ff;
-            --neon-lime: #d4ff3d;
+            --neon-lime: #d4ff3d;
         }
 
         body {
@@ -98,20 +98,20 @@
             0%, 100% { text-shadow: 0 0 5px var(--neon-cyan), 0 0 10px var(--neon-cyan), 0 0 20px var(--neon-cyan); }
             50% { text-shadow: 0 0 10px var(--neon-cyan), 0 0 20px var(--neon-cyan), 0 0 30px var(--neon-cyan), 0 0 40px var(--neon-cyan); }
         }
-
+
 
         @keyframes scanlines {
             0% { transform: translateY(0); }
             100% { transform: translateY(10px); }
         }
-
+
 
         @keyframes border-glow {
             0%, 100% { border-color: var(--neon-cyan); box-shadow: 0 0 5px var(--neon-cyan), inset 0 0 5px rgba(184, 230, 0, 0.1); }
             50% { border-color: var(--neon-magenta); box-shadow: 0 0 10px var(--neon-magenta), inset 0 0 5px rgba(0, 247, 255, 0.1); }
         }
-
-
+
+
 
         .theme-switcher {
             position: fixed;
@@ -129,8 +129,8 @@
             box-shadow: 0 0 15px var(--neon-cyan);
             transition: all 0.3s ease;
         }
-
-
+
+
 
         header {
             background: linear-gradient(135deg, rgba(184, 230, 0, 0.1), rgba(0, 247, 255, 0.1));
@@ -431,8 +431,8 @@
                 <a href="pool-info.html" class="nav-link">Info</a>
             </nav>
             <div class="header-buttons">
-                <button class="header-btn">Profile</button>
-                <button class="header-btn">Logout</button>
+                <a href="account-settings.html" class="header-btn">My Account</a>
+                <a href="connect.html" class="header-btn">Start Mining</a>
             </div>
         </div>
     </header>
@@ -442,140 +442,52 @@
 
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-label">Total Miners</div>
-                <div class="stat-value">42<span style="font-size: 0.5em;">K</span></div>
+                <div class="stat-label">Miners Online</div>
+                <div class="stat-value" id="ms-miners">—</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Avg Hashrate</div>
-                <div class="stat-value">57<span style="font-size: 0.5em;">KH/s</span></div>
+                <div class="stat-label">Pool Hashrate (1h)</div>
+                <div class="stat-value" id="ms-hashrate">—</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Top Miner</div>
-                <div class="stat-value">428<span style="font-size: 0.5em;">MH/s</span></div>
+                <div class="stat-label">Top Miner Hashrate</div>
+                <div class="stat-value" id="ms-top">—</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Avg Uptime</div>
-                <div class="stat-value">94<span style="font-size: 0.5em;">%</span></div>
+                <div class="stat-label">Active Connections</div>
+                <div class="stat-value" id="ms-connections">—</div>
             </div>
         </div>
 
-        <h3 class="section-title">Top 10 Miners by Hashrate</h3>
+        <h3 class="section-title">Top 10 Miners by Hashrate (last hour)</h3>
 
         <table class="data-table">
             <thead>
                 <tr>
                     <th>Rank</th>
-                    <th>Miner ID</th>
+                    <th>Miner</th>
                     <th>Hashrate</th>
-                    <th>Shares (24h)</th>
-                    <th>Status</th>
+                    <th>Peak (1h)</th>
                 </tr>
             </thead>
-            <tbody>
-                <tr>
-                    <td>#1</td>
-                    <td>Miner#0001</td>
-                    <td>428.5 MH/s</td>
-                    <td>45,234</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#2</td>
-                    <td>Miner#0045</td>
-                    <td>385.2 MH/s</td>
-                    <td>38,901</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#3</td>
-                    <td>Miner#0089</td>
-                    <td>342.8 MH/s</td>
-                    <td>34,567</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#4</td>
-                    <td>Miner#0134</td>
-                    <td>298.3 MH/s</td>
-                    <td>29,834</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#5</td>
-                    <td>Miner#0178</td>
-                    <td>267.9 MH/s</td>
-                    <td>26,745</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#6</td>
-                    <td>Miner#0223</td>
-                    <td>245.6 MH/s</td>
-                    <td>24,501</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#7</td>
-                    <td>Miner#0267</td>
-                    <td>218.4 MH/s</td>
-                    <td>21,834</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#8</td>
-                    <td>Miner#0312</td>
-                    <td>195.7 MH/s</td>
-                    <td>19,567</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#9</td>
-                    <td>Miner#0356</td>
-                    <td>178.2 MH/s</td>
-                    <td>17,834</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
-                <tr>
-                    <td>#10</td>
-                    <td>Miner#0401</td>
-                    <td>156.9 MH/s</td>
-                    <td>15,678</td>
-                    <td><span class="badge">Online</span></td>
-                </tr>
+            <tbody id="top-hashrate">
+                <tr><td colspan="4">Loading…</td></tr>
             </tbody>
         </table>
 
-        <h3 class="section-title">Miners Distribution</h3>
+        <h3 class="section-title">Top Miners by Balance</h3>
 
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>Hashrate Range</th>
-                    <th>Miner Count</th>
-                    <th>Percentage</th>
+                    <th>Rank</th>
+                    <th>Miner</th>
+                    <th>Unpaid Balance (GRIN)</th>
+                    <th>Status</th>
                 </tr>
             </thead>
-            <tbody>
-                <tr>
-                    <td>&gt; 100 MH/s</td>
-                    <td>1,234</td>
-                    <td>2.9%</td>
-                </tr>
-                <tr>
-                    <td>10 - 100 MH/s</td>
-                    <td>12,456</td>
-                    <td>29.6%</td>
-                </tr>
-                <tr>
-                    <td>1 - 10 MH/s</td>
-                    <td>18,901</td>
-                    <td>44.9%</td>
-                </tr>
-                <tr>
-                    <td>&lt; 1 MH/s</td>
-                    <td>9,409</td>
-                    <td>22.4%</td>
-                </tr>
+            <tbody id="top-balance">
+                <tr><td colspan="4">Loading…</td></tr>
             </tbody>
         </table>
     </div>
@@ -599,59 +511,87 @@
         // the theme picker and applies the 3 built-in + 10 white-label themes.
 
         // ═════════════════════════════════════════════════════════════════
-        // API Integration: Load miners statistics
+        // API Integration: live miner statistics — public endpoints only.
+        //   /api/pool/stats        active miners / connections
+        //   /api/stratum/hashrate  pool GPS + top miners by 1h hashrate
+        //   /api/pool/miners       top miners by unpaid balance
         // ═════════════════════════════════════════════════════════════════
+
+        function fmtGpsLabel(gps) {
+            if (!isFinite(gps)) return '—';
+            if (gps >= 1e6) return (gps / 1e6).toFixed(2) + ' MG/s';
+            if (gps >= 1e3) return (gps / 1e3).toFixed(2) + ' kG/s';
+            return gps.toFixed(2) + ' G/s';
+        }
+
+        function truncAddr(addr) {
+            addr = String(addr || '');
+            return addr.length > 16 ? addr.slice(0, 9) + '…' + addr.slice(-4) : addr;
+        }
+
+        function setStat(id, text) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = text;
+        }
+
+        function tableMessage(tbody, msg) {
+            tbody.innerHTML = '<tr><td colspan="4">' + escHtml(msg) + '</td></tr>';
+        }
 
         async function loadMinersStats() {
             try {
-                const poolData = await Auth.fetch('/api/pool/stats');
-                const minersData = await Auth.fetch('/api/test/miners?limit=10');
-
-                if (!poolData) {
-                    console.error('Failed to fetch pool data');
-                    return;
+                const stats = await Auth.fetch('/api/pool/stats');
+                if (stats) {
+                    setStat('ms-miners', stats.active_miners || 0);
+                    setStat('ms-connections', stats.active_connections || 0);
                 }
+            } catch (e) { /* tiles keep placeholders */ }
 
-                // Update stat cards
-                const statCards = document.querySelectorAll('.stat-card');
-                if (statCards.length >= 4) {
-                    // Total Miners
-                    const totalMiners = poolData.active_miners || 0;
-                    const minersLabel = totalMiners >= 1000 ? (totalMiners / 1000).toFixed(1) + 'K' : totalMiners;
-                    const minersValue = statCards[0].querySelector('.stat-value');
-                    if (minersValue) minersValue.textContent = minersLabel;
-
-                    // Average Hashrate
-                    const avgHashrate = poolData.blocks?.average_hashrate || 0;
-                    const hashrateLabel = avgHashrate >= 1000 ? (avgHashrate / 1000).toFixed(2) + 'M' : avgHashrate.toFixed(2);
-                    const hashrateValue = statCards[1].querySelector('.stat-value');
-                    if (hashrateValue) hashrateValue.innerHTML = hashrateLabel + '<span style="font-size: 0.5em;">GPS</span>';
-
-                    // Top Miner
-                    const topMiner = minersData && minersData.length > 0 ? minersData[0].grin_address.substring(0, 8) + '...' : 'N/A';
-                    const topMinerValue = statCards[2].querySelector('.stat-value');
-                    if (topMinerValue) topMinerValue.textContent = topMiner;
-
-                    // Average Uptime
-                    const uptimeValue = statCards[3].querySelector('.stat-value');
-                    if (uptimeValue) uptimeValue.innerHTML = '98<span style="font-size: 0.5em;">%</span>';
+            const hrTbody = document.getElementById('top-hashrate');
+            try {
+                const hr = await Auth.fetch('/api/stratum/hashrate');
+                if (hr) {
+                    setStat('ms-hashrate', fmtGpsLabel(hr.pool_hashrate_1h_gps || 0));
+                    const top = Array.isArray(hr.top_miners) ? hr.top_miners : [];
+                    setStat('ms-top', top.length ? fmtGpsLabel(top[0].hashrate_gps || 0) : '—');
+                    if (hrTbody) {
+                        if (!top.length) {
+                            tableMessage(hrTbody, 'No active miners in the last hour');
+                        } else {
+                            hrTbody.innerHTML = top.map((m, idx) => `
+                                <tr>
+                                    <td>#${idx + 1}</td>
+                                    <td title="${escHtml(m.grin_address)}">${escHtml(truncAddr(m.grin_address))}</td>
+                                    <td>${escHtml(fmtGpsLabel(m.hashrate_gps || 0))}</td>
+                                    <td>${escHtml(fmtGpsLabel(m.max_hashrate_gps || 0))}</td>
+                                </tr>
+                            `).join('');
+                        }
+                    }
                 }
+            } catch (e) {
+                if (hrTbody) tableMessage(hrTbody, 'Hashrate data unavailable');
+            }
 
-                // Update top miners table
-                const minersTbody = document.querySelectorAll('table tbody')[0];
-                if (minersTbody && minersData && minersData.length > 0) {
-                    minersTbody.innerHTML = minersData.map((miner, idx) => `
-                        <tr>
-                            <td>${idx + 1}</td>
-                            <td>${escHtml(miner.grin_address)}</td>
-                            <td>${(miner.balance || 0).toFixed(2)}</td>
-                            <td>N/A</td>
-                            <td><span class="badge badge-online">Online</span></td>
-                        </tr>
-                    `).join('');
+            const balTbody = document.getElementById('top-balance');
+            try {
+                const miners = await Auth.fetch('/api/pool/miners?limit=10');
+                if (balTbody) {
+                    if (!Array.isArray(miners) || !miners.length) {
+                        tableMessage(balTbody, 'No miners yet — be the first!');
+                    } else {
+                        balTbody.innerHTML = miners.map((m, idx) => `
+                            <tr>
+                                <td>#${idx + 1}</td>
+                                <td title="${escHtml(m.grin_address)}">${escHtml(truncAddr(m.grin_address))}</td>
+                                <td>${Number(m.balance || 0).toFixed(4)}</td>
+                                <td><span class="badge${m.is_online ? ' badge-online' : ''}">${m.is_online ? 'Online' : 'Offline'}</span></td>
+                            </tr>
+                        `).join('');
+                    }
                 }
-            } catch (error) {
-                console.error('Error loading miners stats:', error);
+            } catch (e) {
+                if (balTbody) tableMessage(balTbody, 'Miner data unavailable');
             }
         }
 

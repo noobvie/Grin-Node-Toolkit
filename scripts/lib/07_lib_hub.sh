@@ -126,9 +126,10 @@ hub_menu() {
     echo -e "  ${GREEN}2${RESET}) Configure             ${DIM}(pool name, domain, fee, wallet)${RESET}"
     echo -e "  ${GREEN}3${RESET}) Deploy web files"
     echo -e "  ${GREEN}4${RESET}) Setup nginx           ${DIM}(vhost + SSL)${RESET}"
-    echo -e "  ${GREEN}5${RESET}) Create admin account"
-    echo -e "  ${GREEN}6${RESET}) Service control"
-    echo -e "  ${GREEN}7${RESET}) Status"
+    echo -e "  ${GREEN}5${RESET}) Set up wallet         ${DIM}(coinbase Foreign 3415 + payout Owner 3420)${RESET}"
+    echo -e "  ${GREEN}6${RESET}) Service control       ${DIM}(start before creating admin)${RESET}"
+    echo -e "  ${GREEN}7${RESET}) Create admin account  ${DIM}(needs service running)${RESET}"
+    echo -e "  ${GREEN}8${RESET}) Status"
     echo ""
     echo -e "${DIM}  ─── Multi-region (hub-specific) ──────────────────${RESET}"
     echo -e "  ${GREEN}R${RESET}) Satellite registry    ${DIM}(IP allowlist)${RESET}"
@@ -153,9 +154,10 @@ pool_hub_loop() {
             2)        pool_configure || true ;;
             3)        pool_deploy_web || true ;;
             4)        pool_setup_nginx || true ;;
-            5)        pool_setup_admin || true ;;
+            5)        pool_wallet_menu || true ;;
             6)        pool_service_menu || true ;;
-            7)        pool_show_status || true ;;
+            7)        pool_setup_admin || true ;;
+            8)        pool_show_status || true ;;
             r)        hub_satellite_registry || true ;;
             a)        hub_ingestion_auth || true ;;
             t)        hub_retention_settings || true ;;

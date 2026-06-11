@@ -69,7 +69,7 @@
             --dark-dim: #9db077;
             --neon-cyan: #b8e600;
             --neon-magenta: #00f7ff;
-            --neon-lime: #d4ff3d;
+            --neon-lime: #d4ff3d;
         }
 
         body {
@@ -88,20 +88,20 @@
             0%, 100% { text-shadow: 0 0 5px var(--neon-cyan), 0 0 10px var(--neon-cyan), 0 0 20px var(--neon-cyan); }
             50% { text-shadow: 0 0 10px var(--neon-cyan), 0 0 20px var(--neon-cyan), 0 0 30px var(--neon-cyan), 0 0 40px var(--neon-cyan); }
         }
-
+
 
         @keyframes scanlines {
             0% { transform: translateY(0); }
             100% { transform: translateY(10px); }
         }
-
+
 
         @keyframes border-glow {
             0%, 100% { border-color: var(--neon-cyan); box-shadow: 0 0 5px var(--neon-cyan), inset 0 0 5px rgba(184, 230, 0, 0.1); }
             50% { border-color: var(--neon-magenta); box-shadow: 0 0 10px var(--neon-magenta), inset 0 0 5px rgba(0, 247, 255, 0.1); }
         }
-
-
+
+
 
         .theme-switcher {
             position: fixed;
@@ -119,8 +119,8 @@
             box-shadow: 0 0 15px var(--neon-cyan);
             transition: all 0.3s ease;
         }
-
-
+
+
 
         header {
             background: linear-gradient(135deg, rgba(184, 230, 0, 0.1), rgba(0, 247, 255, 0.1));
@@ -348,8 +348,8 @@
                 <a href="pool-info.html" class="nav-link active">Info</a>
             </nav>
             <div class="header-buttons">
-                <button class="header-btn">Profile</button>
-                <button class="header-btn">Logout</button>
+                <a href="account-settings.html" class="header-btn">My Account</a>
+                <a href="connect.html" class="header-btn">Start Mining</a>
             </div>
         </div>
     </header>
@@ -360,86 +360,75 @@
         <div class="info-section">
             <h3>Getting Started</h3>
             <p class="info-content">
-                Welcome to GRINIUM Mining Pool! We provide professional uranium-element mining infrastructure with competitive fees, fast payouts, and 24/7 support. Follow these steps to start mining:
+                No registration needed — your Grin address <em>is</em> your account. Point your miner
+                at the pool with <code>grin_address.worker_name</code> as the username and rewards
+                accrue to that address automatically.
             </p>
             <ul class="info-list">
-                <li>Download and install a Grin mining client</li>
-                <li>Create an account on our pool</li>
-                <li>Configure your miner with pool connection details</li>
-                <li>Start mining and watch your rewards accumulate</li>
+                <li>Get a Grin wallet address (grin1…)</li>
+                <li>Configure your miner — see <a href="connect.html">Connect &amp; Start Mining</a> for ready-made commands</li>
+                <li>Use <code>grin_address.worker_name</code> as the stratum username (any password)</li>
+                <li>Track earnings on <a href="account-settings.html">My Account</a> — payouts arrive via Tor automatically</li>
             </ul>
         </div>
 
         <div class="info-section">
             <h3>Pool Connection Details</h3>
-            <p class="info-content"><strong>Main Server:</strong> pool.grinium.io:3333</p>
-            <p class="info-content"><strong>Backup Server:</strong> backup.grinium.io:3333</p>
-            <p class="info-content"><strong>Mining Algorithm:</strong> Cuckatoo32</p>
-            <p class="info-content"><strong>Network:</strong> Grin Mainnet</p>
+            <p class="info-content"><strong>Stratum Server:</strong> <span data-brand="stratum_url">configured by the pool operator</span></p>
+            <p class="info-content"><strong>Mining Algorithm:</strong> <span data-brand="algorithm">Cuckatoo32</span></p>
+            <p class="info-content"><strong>Network:</strong> <span data-brand="network">mainnet</span></p>
+            <p class="info-content"><strong>Username Format:</strong> <code>grin_address.worker_name</code></p>
         </div>
 
         <div class="info-section">
-            <h3>Fee Structure</h3>
+            <h3>Fees &amp; Payouts</h3>
             <ul class="info-list">
-                <li>Standard Mining Fee: 1.5%</li>
-                <li>Pool Operator Fee: 0.5%</li>
-                <li>Minimum Payout: 10 GRIN</li>
-                <li>Payout Frequency: Every 4 hours</li>
+                <li>Pool Fee: <strong id="pi-fee">—</strong> (PPLNS reward distribution)</li>
+                <li>Minimum Payout: <strong id="pi-min-payout">—</strong></li>
+                <li>Payouts are sent automatically over Tor to your Grin wallet address</li>
+                <li>If your wallet is unreachable, the payout retries every 6 hours for up to 7 days</li>
+                <li>Block rewards mature after 1,440 confirmations (~24h) before they are credited</li>
             </ul>
         </div>
 
         <div class="info-section">
-            <h3>Mining Rules & Policies</h3>
+            <h3>Mining Rules &amp; Policies</h3>
             <ul class="info-list">
-                <li>No minimum hardware requirements</li>
-                <li>ASIC and GPU mining supported</li>
-                <li>No account age restrictions</li>
-                <li>Shares have 1 minute expiration</li>
-                <li>Orphaned blocks handled fairly</li>
-                <li>Cheating and multi-pooling detection enabled</li>
+                <li>PPLNS (Pay Per Last N Shares) — rewards follow recent contributed work</li>
+                <li>No account, email, or registration required — address-as-identity</li>
+                <li>ASIC mining (Cuckatoo32) — e.g. iPollo G1/G1-Mini</li>
+                <li>Per-miner variable difficulty (vardiff) tunes itself to your hardware</li>
+                <li>Orphaned blocks are detected automatically and their rewards reversed fairly</li>
             </ul>
         </div>
 
         <div class="info-section">
             <h3>Supported Mining Software</h3>
             <ul class="info-list">
-                <li>Grin Miner (Official)</li>
-                <li>nbminer</li>
-                <li>lolminer</li>
+                <li>lolMiner</li>
                 <li>GMiner</li>
-                <li>MiniZ</li>
+                <li>SRBMiner-MULTI</li>
+                <li>ASIC built-in stratum clients (iPollo and compatible)</li>
             </ul>
+            <p class="info-content">Ready-made command lines for each are on the <a href="connect.html">Connect</a> page.</p>
         </div>
 
         <div class="info-section">
-            <h3>Security & Reliability</h3>
-            <p class="info-content">
-                GRINIUM Mining Pool is built on enterprise-grade infrastructure with:
-            </p>
+            <h3>Support &amp; Contact</h3>
             <ul class="info-list">
-                <li>99.9% uptime SLA</li>
-                <li>DDoS protection and filtering</li>
-                <li>Cold wallet storage for security</li>
-                <li>Regular security audits</li>
-                <li>24/7 monitoring and alerts</li>
+                <li style="display:none" id="pi-contact">Email: <span data-brand="contact_email"></span></li>
+                <!-- data-brand on the <li> too: branding.js shows/hides the elements carrying
+                     the social hook, and sets href on the inner <a>. -->
+                <li style="display:none" data-brand="social-discord"><a data-brand="social-discord" href="#" rel="noopener" target="_blank">Discord</a></li>
+                <li style="display:none" data-brand="social-telegram"><a data-brand="social-telegram" href="#" rel="noopener" target="_blank">Telegram</a></li>
+                <li style="display:none" data-brand="social-twitter"><a data-brand="social-twitter" href="#" rel="noopener" target="_blank">Twitter / X</a></li>
+                <li style="display:none" data-brand="social-website"><a data-brand="social-website" href="#" rel="noopener" target="_blank">Website</a></li>
             </ul>
-        </div>
-
-        <div class="info-section">
-            <h3>Support & Contact</h3>
-            <p class="info-content">
-                Need help? Our support team is available 24/7:
-            </p>
-            <ul class="info-list">
-                <li>Email: support@grinium.io</li>
-                <li>Discord: discord.gg/grinium</li>
-                <li>Forum: forum.grinium.io</li>
-                <li>Status: status.grinium.io</li>
-            </ul>
+            <p class="info-content" id="pi-no-contact">Contact channels are configured by the pool operator in the admin panel (Branding → Social links).</p>
         </div>
 
         <div style="text-align: center; margin-top: 40px;">
-            <button class="cta-button">Start Mining Now</button>
+            <a class="cta-button" href="connect.html" style="text-decoration:none;display:inline-block;">Start Mining Now</a>
         </div>
     </div>
 
@@ -449,7 +438,40 @@
 
     <script>
         // Theme switching is handled site-wide by /js/public-theme.js, which renders
-        // the theme picker and applies the 3 built-in + 10 white-label themes.
+        // the theme picker and applies the built-in + white-label themes.
+
+        // Live fee/payout figures + contact visibility. Connection details
+        // (stratum URL, network) are filled by branding.js [data-brand] hooks.
+        async function loadPoolInfo() {
+            try {
+                const r = await fetch('/api/config/pool-info');
+                const info = r.ok ? await r.json() : null;
+                if (info) {
+                    const fee = document.getElementById('pi-fee');
+                    if (fee && info.pool_fee_percent != null) fee.textContent = Number(info.pool_fee_percent).toFixed(1) + '%';
+                    const minp = document.getElementById('pi-min-payout');
+                    if (minp && info.min_withdrawal != null) minp.textContent = Number(info.min_withdrawal).toFixed(1) + ' GRIN';
+                }
+            } catch (e) { /* keep placeholders */ }
+
+            try {
+                const r = await fetch('/api/public/branding');
+                const json = r.ok ? await r.json() : null;
+                const data = json && json.data ? json.data : {};
+                const email = data.pool && data.pool.contact_email;
+                const social = (data.branding && data.branding.social) || {};
+                if (email) {
+                    const li = document.getElementById('pi-contact');
+                    if (li) li.style.display = '';
+                }
+                const anyChannel = email || ['discord', 'telegram', 'twitter', 'website'].some(k => social[k]);
+                if (anyChannel) {
+                    const note = document.getElementById('pi-no-contact');
+                    if (note) note.style.display = 'none';
+                }
+            } catch (e) { /* keep the operator note */ }
+        }
+        document.addEventListener('DOMContentLoaded', loadPoolInfo);
     </script>
     <script src="/js/public-theme.js"></script>
     <script src="/js/branding.js"></script>

@@ -209,7 +209,9 @@ _pool_step_done() {
               && -f "$POOL_APP_DIR/index.js" && -d "$POOL_APP_DIR/node_modules" ]] ;;
         2) [[ -n "$(pool_read_conf "subdomain" "")" ]] ;;
         3) [[ -f "$POOL_WEB_DIR/index.html" && -f "$POOL_WEB_DIR/js/pool-config.js" ]] ;;
-        4) [[ -f "$POOL_NGINX_CONF" ]] ;;
+        4) # listen 443 distinguishes the finished SSL vhost from the HTTP-only
+           # certbot bootstrap (operator declined/failed certbot mid-step).
+           [[ -f "$POOL_NGINX_CONF" ]] && grep -q "listen 443" "$POOL_NGINX_CONF" 2>/dev/null ;;
         5) [[ -x "$(pw_bin)" && -f "$(pw_toml)" && -f "$(pw_pass_file)" ]] ;;
         6) systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null ;;
         7) [[ -f "$POOL_APP_DIR/pool.db" ]] && command -v sqlite3 &>/dev/null \
@@ -305,10 +307,12 @@ pool_ensure_node24() {
 pool_install() {
     echo -e "\n${BOLD}Installing Pool Manager (Mainnet)...${RESET}\n"
 
-    pool_check_exclusivity || return 0
+    # rc 1 on a guard block (not 0): the guided flow must treat a refused install
+    # as a failure and abort, not continue to Configure on a blocked box.
+    pool_check_exclusivity || return 1
     # Defense-in-depth: refuse if a Satellite already occupies this box (in case
     # the selector guard was bypassed via a direct/non-interactive entry).
-    pool_mode_conflict_check "${POOL_MODE:-singlebox}" || return 0
+    pool_mode_conflict_check "${POOL_MODE:-singlebox}" || return 1
 
     if [[ ! -d "$POOL_APP_SRC" ]]; then
         error "Pool app source not found: $POOL_APP_SRC"
@@ -417,6 +421,13 @@ EOF
 
 pool_configure() {
     echo -e "\n${BOLD}Configure Pool Manager — Mainnet${RESET}\n"
+
+    # The config read/write helpers run on node (installed by step 1). Without
+    # it every write fails silently, so make the missing prerequisite explicit.
+    if ! command -v node &>/dev/null; then
+        error "Node.js not found — run 1) Install first."
+        return 1
+    fi
     pool_ensure_defaults
 
     local val
@@ -424,26 +435,61 @@ pool_configure() {
     echo -ne "Pool title       [$(pool_read_conf "pool_name" "My Grin Pool")]: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "pool_name" "$val"
 
+    # Validate inputs at entry time — a bad domain otherwise only surfaces at
+    # 4) Setup nginx, and a non-numeric fee/port would be written as null.
     echo -e "  ${DIM}(Full domain or subdomain for the pool site, e.g. pool.example.com or example.com)${RESET}"
     echo -ne "Domain/subdomain [$(pool_read_conf "subdomain" "")]: "
-    read -r val; [[ -n "$val" ]] && pool_write_conf_key "subdomain" "$val"
+    read -r val
+    if [[ -n "$val" ]]; then
+        if nginx_validate_domain "$val"; then
+            pool_write_conf_key "subdomain" "$val"
+        else
+            warn "Invalid domain name '$val' — keeping previous value."
+        fi
+    fi
 
     echo -ne "Pool fee %        [$(pool_read_conf "pool_fee_percent" "1.0")]: "
-    read -r val; [[ -n "$val" ]] && pool_write_conf_key "pool_fee_percent" "$val"
+    read -r val
+    if [[ -n "$val" ]]; then
+        if [[ "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]] \
+           && awk -v v="$val" 'BEGIN{exit !(v>=0 && v<=50)}'; then
+            pool_write_conf_key "pool_fee_percent" "$val"
+        else
+            warn "Fee must be a number from 0 to 50 — keeping previous value."
+        fi
+    fi
 
     echo -ne "Min withdrawal   [$(pool_read_conf "min_withdrawal" "5.0")] GRIN: "
-    read -r val; [[ -n "$val" ]] && pool_write_conf_key "min_withdrawal" "$val"
+    read -r val
+    if [[ -n "$val" ]]; then
+        if [[ "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+            pool_write_conf_key "min_withdrawal" "$val"
+        else
+            warn "Not a number — keeping previous value."
+        fi
+    fi
 
     local default_nsp; default_nsp=$(pool_read_conf "node_stratum_port" "3334")
     echo -e "  ${DIM}(Node stratum port — set stratum_server_addr in grin-server.toml to match)${RESET}"
     echo -ne "Node stratum port [${default_nsp}]: "
-    read -r val; [[ -n "$val" ]] && pool_write_conf_key "node_stratum_port" "$val"
+    read -r val
+    if [[ -n "$val" ]]; then
+        if [[ "$val" =~ ^[0-9]+$ ]] && (( val >= 1 && val <= 65535 )); then
+            pool_write_conf_key "node_stratum_port" "$val"
+        else
+            warn "Not a valid port (1–65535) — keeping previous value."
+        fi
+    fi
 
     # Wallet dir, pool Grin address + wallet password are NOT asked here — the
     # wallet doesn't exist yet at this point. All three are captured by
     # 5) Set up wallet (pw_setup), which asks for the dir, creates the wallet,
     # saves the passphrase and records the address.
     info "Wallet dir, pool Grin address + wallet password are set during 5) Set up wallet."
+
+    # Keep the already-deployed frontend in sync with a changed pool name
+    # (no-op before 3) Deploy has run).
+    pool_write_web_config_js
 
     if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
         info "Restarting $POOL_SERVICE to apply config..."
@@ -480,8 +526,18 @@ pool_deploy_web() {
             2>/dev/null || cp -r "$POOL_APP_SRC/admin-panel/"* "$POOL_WEB_DIR/admin/"
     fi
 
-    local pool_name; pool_name=$(pool_read_conf "pool_name" "My Grin Pool")
-    local escaped_name
+    pool_write_web_config_js
+
+    success "Web files deployed to $POOL_WEB_DIR"
+}
+
+# (Re)generate the static frontend config. Called by 3) Deploy and by
+# 2) Configure (after a pool-name change) so the deployed site never serves a
+# stale pool name. No-op until the web files have been deployed.
+pool_write_web_config_js() {
+    [[ -d "$POOL_WEB_DIR/js" ]] || return 0
+    local pool_name escaped_name
+    pool_name=$(pool_read_conf "pool_name" "My Grin Pool")
     escaped_name=$(node -e "process.stdout.write(JSON.stringify(process.argv[1]))" "$pool_name" 2>/dev/null \
         || printf '"%s"' "${pool_name//\"/\\\"}")
     cat > "$POOL_WEB_DIR/js/pool-config.js" << EOF
@@ -489,8 +545,6 @@ pool_deploy_web() {
 window.POOL_NETWORK = "mainnet";
 window.POOL_NAME = ${escaped_name};
 EOF
-
-    success "Web files deployed to $POOL_WEB_DIR"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -954,6 +1008,10 @@ pool_service_control() {
 }
 
 pool_service_menu() {
+    if [[ ! -f "/etc/systemd/system/$POOL_SERVICE.service" ]]; then
+        error "Service unit not found — run 1) Install first."
+        return 1
+    fi
     echo -e "\n${BOLD}Service Control — $POOL_SERVICE${RESET}"
     if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
         echo -e "  Status: ${GREEN}● running${RESET}"
@@ -975,6 +1033,10 @@ pool_service_menu() {
 }
 
 pool_start_service() {
+    if [[ ! -f "/etc/systemd/system/$POOL_SERVICE.service" ]]; then
+        error "Service unit not found — run 1) Install first."
+        return 1
+    fi
     if ! systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
         pool_service_control start
     else

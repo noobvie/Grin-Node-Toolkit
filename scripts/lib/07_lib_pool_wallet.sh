@@ -245,10 +245,25 @@ pw_patch_node_toml() {
 # ─── Setup: install binary + init|recover + patch tomls + start listeners ───
 pw_setup() {
     local dir bin toml pass_file
-    dir=$(pw_wallet_dir); bin=$(pw_bin); toml=$(pw_toml); pass_file=$(pw_pass_file)
 
     echo -e "\n${BOLD:-}Set up pool wallet (coinbase + payouts) — Mainnet${RESET:-}\n"
     warn "MAINNET — this wallet receives REAL GRIN coinbase and sends miner payouts."
+
+    # Wallet dir is asked here, not in 2) Configure — it's a wallet concern, and
+    # every other pw_* path (binary, toml, launchers) derives from it. Must be
+    # answered BEFORE the resolvers below run.
+    if declare -F pool_write_conf_key >/dev/null 2>&1; then
+        local cur_dir new_dir
+        cur_dir=$(pw_wallet_dir)
+        echo -ne "Wallet dir [$cur_dir]: "
+        read -r new_dir || true
+        if [[ -n "$new_dir" && "$new_dir" != "$cur_dir" ]]; then
+            pool_write_conf_key "grin_wallet_dir" "$new_dir"
+            info "Wallet dir set to $new_dir"
+        fi
+    fi
+
+    dir=$(pw_wallet_dir); bin=$(pw_bin); toml=$(pw_toml); pass_file=$(pw_pass_file)
     mkdir -p "$dir"
 
     # 1) Binary (shared download/verify lib)

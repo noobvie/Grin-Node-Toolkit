@@ -123,7 +123,7 @@ hub_menu() {
     echo ""
     echo -e "${DIM}  ─── Brain setup (shared with single-box) ─────────${RESET}"
     echo -e "  ${GREEN}1${RESET}) $(_pool_step_mark 1) Install             ${DIM}(nodejs, sqlite3, systemd, fail2ban)${RESET}"
-    echo -e "  ${GREEN}2${RESET}) $(_pool_step_mark 2) Configure           ${DIM}(pool name, domain, fee, wallet dir)${RESET}"
+    echo -e "  ${GREEN}2${RESET}) $(_pool_step_mark 2) Configure           ${DIM}(pool name, domain, fee, stratum port)${RESET}"
     echo -e "  ${GREEN}3${RESET}) $(_pool_step_mark 3) Deploy web files"
     echo -e "  ${GREEN}4${RESET}) $(_pool_step_mark 4) Setup nginx         ${DIM}(vhost + SSL)${RESET}"
     echo -e "  ${GREEN}5${RESET}) $(_pool_step_mark 5) Set up wallet       ${DIM}(coinbase Foreign 3415 + payout Owner 3420)${RESET}"

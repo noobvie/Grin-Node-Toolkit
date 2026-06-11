@@ -434,18 +434,16 @@ pool_configure() {
     echo -ne "Min withdrawal   [$(pool_read_conf "min_withdrawal" "5.0")] GRIN: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "min_withdrawal" "$val"
 
-    echo -ne "Wallet dir       [$(pool_read_conf "grin_wallet_dir" "$POOL_WALLET_DIR")]: "
-    read -r val; [[ -n "$val" ]] && pool_write_conf_key "grin_wallet_dir" "$val"
-
     local default_nsp; default_nsp=$(pool_read_conf "node_stratum_port" "3334")
     echo -e "  ${DIM}(Node stratum port — set stratum_server_addr in grin-server.toml to match)${RESET}"
     echo -ne "Node stratum port [${default_nsp}]: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "node_stratum_port" "$val"
 
-    # Pool Grin address + wallet password are NOT asked here — the wallet doesn't
-    # exist yet at this point. Both are captured by 5) Set up wallet (pw_setup),
-    # which creates the wallet, saves the passphrase and records the address.
-    info "Pool Grin address + wallet password are set during 5) Set up wallet."
+    # Wallet dir, pool Grin address + wallet password are NOT asked here — the
+    # wallet doesn't exist yet at this point. All three are captured by
+    # 5) Set up wallet (pw_setup), which asks for the dir, creates the wallet,
+    # saves the passphrase and records the address.
+    info "Wallet dir, pool Grin address + wallet password are set during 5) Set up wallet."
 
     if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
         info "Restarting $POOL_SERVICE to apply config..."
@@ -1250,7 +1248,7 @@ show_menu() {
     echo ""
     echo -e "${DIM}  ─── Manual Setup Steps ───────────────────────────${RESET}"
     echo -e "  ${GREEN}1${RESET}) $(_pool_step_mark 1) Install             ${DIM}(nodejs ≥24, npm, sqlite3, systemd, fail2ban)${RESET}"
-    echo -e "  ${GREEN}2${RESET}) $(_pool_step_mark 2) Configure           ${DIM}(pool name, domain, fee, wallet dir)${RESET}"
+    echo -e "  ${GREEN}2${RESET}) $(_pool_step_mark 2) Configure           ${DIM}(pool name, domain, fee, stratum port)${RESET}"
     echo -e "  ${GREEN}3${RESET}) $(_pool_step_mark 3) Deploy web files    ${DIM}(frontend → $POOL_WEB_DIR)${RESET}"
     echo -e "  ${GREEN}4${RESET}) $(_pool_step_mark 4) Setup nginx         ${DIM}(vhost + SSL + rate limits)${RESET}"
     echo -e "  ${GREEN}5${RESET}) $(_pool_step_mark 5) Set up wallet       ${DIM}(coinbase Foreign 3415 + payout Owner 3420)${RESET}"

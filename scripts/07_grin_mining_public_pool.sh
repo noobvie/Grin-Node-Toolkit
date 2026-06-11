@@ -197,6 +197,32 @@ pool_ensure_defaults() {
     done
 }
 
+# ─── Per-step completion probes ────────────────────────────────────────────────
+# Used by the menus (✓ markers next to setup steps 1–7) and by the guided flow,
+# which offers to skip already-completed steps — so re-running G) after a
+# mid-flow abort resumes instead of redoing everything. Probes check the
+# artifacts each step leaves behind, not a recorded state, so they stay correct
+# even after manual runs or a partial cleanup.
+_pool_step_done() {
+    case "$1" in
+        1) [[ -f "/etc/systemd/system/$POOL_SERVICE.service" \
+              && -f "$POOL_APP_DIR/index.js" && -d "$POOL_APP_DIR/node_modules" ]] ;;
+        2) [[ -n "$(pool_read_conf "subdomain" "")" ]] ;;
+        3) [[ -f "$POOL_WEB_DIR/index.html" && -f "$POOL_WEB_DIR/js/pool-config.js" ]] ;;
+        4) [[ -f "$POOL_NGINX_CONF" ]] ;;
+        5) [[ -x "$(pw_bin)" && -f "$(pw_toml)" && -f "$(pw_pass_file)" ]] ;;
+        6) systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null ;;
+        7) [[ -f "$POOL_APP_DIR/pool.db" ]] && command -v sqlite3 &>/dev/null \
+              && [[ "$(sqlite3 "$POOL_APP_DIR/pool.db" \
+                     "SELECT COUNT(*) FROM users WHERE is_admin=1;" 2>/dev/null || echo 0)" -gt 0 ]] ;;
+        *) return 1 ;;
+    esac
+}
+
+_pool_step_mark() {
+    if _pool_step_done "$1"; then echo -e "${GREEN}✓${RESET}"; else echo -e "${DIM}·${RESET}"; fi
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 7) STATUS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -416,20 +442,10 @@ pool_configure() {
     echo -ne "Node stratum port [${default_nsp}]: "
     read -r val; [[ -n "$val" ]] && pool_write_conf_key "node_stratum_port" "$val"
 
-    local current_addr; current_addr=$(pool_read_conf "pool_address" "")
-    echo -e "  ${DIM}(Pool's own Grin address — used to login to node stratum upstream)${RESET}"
-    echo -ne "Pool Grin address [${current_addr:-none}]: "
-    read -r val; [[ -n "$val" ]] && pool_write_conf_key "pool_address" "$val"
-
-    local pass_file="$POOL_APP_DIR/.wallet_pass"
-    echo -ne "Wallet password  (leave blank to keep existing): "
-    read -rs val; echo ""
-    if [[ -n "$val" ]]; then
-        install -m 600 /dev/null "$pass_file"
-        echo -n "$val" > "$pass_file"
-        pool_write_conf_key "wallet_pass_file" "$pass_file"
-        success "Wallet password saved to $pass_file"
-    fi
+    # Pool Grin address + wallet password are NOT asked here — the wallet doesn't
+    # exist yet at this point. Both are captured by 5) Set up wallet (pw_setup),
+    # which creates the wallet, saves the passphrase and records the address.
+    info "Pool Grin address + wallet password are set during 5) Set up wallet."
 
     if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
         info "Restarting $POOL_SERVICE to apply config..."
@@ -880,7 +896,7 @@ pool_wallet_menu() {
         if [[ -f "$PW_WATCHDOG_CRON" ]]; then wd_tag="${GREEN}[OK] watchdog${RESET}"; else wd_tag="${DIM}[--] watchdog${RESET}"; fi
         echo -e "  $(pw_autostart_status)    $wd_tag"
         echo ""
-        echo -e "  ${GREEN}1${RESET}) Set up wallet        ${DIM}(install + init/recover + patch node + start)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Set up wallet        ${DIM}(install + init/recover + save pass/address + start)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Start listeners      ${DIM}(Foreign 3415 + Owner 3420)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Stop listeners"
         echo -e "  ${GREEN}4${RESET}) Show pool address"
@@ -1126,31 +1142,77 @@ pool_reset_db() {
 # G) GUIDED FULL SETUP
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Pause between guided steps. Enter continues; 0 (or q) aborts the guided flow
+# (rc 1) so the caller can return to the menu. <label of the next step>
+_pool_guided_pause() {
+    local ans
+    echo ""
+    echo -ne "Press Enter to continue to ${1} (0 to abort guided setup): "
+    read -r ans
+    if [[ "${ans,,}" == "0" || "${ans,,}" == "q" ]]; then
+        info "Guided setup aborted — completed steps are kept; re-run G) or use the manual steps."
+        return 1
+    fi
+    return 0
+}
+
+# Run guided step <n> "<label>" <fn> — when the step already looks complete
+# (per _pool_step_done), offer to skip it. This makes re-running G) after a
+# mid-flow abort resume where it left off instead of redoing everything.
+_pool_guided_step() {
+    local n="$1" label="$2" fn="$3"
+    if _pool_step_done "$n"; then
+        echo -ne "  Step $n) $label looks ${GREEN}already done${RESET} — re-run it? [y/N]: "
+        local re; read -r re
+        [[ "${re,,}" == "y" ]] || { info "Skipped: $label (already done)."; return 0; }
+    fi
+    "$fn"
+}
+
 pool_guided_setup() {
     echo -e "\n${BOLD}${CYAN}═══ Guided Full Setup — GRINIUM Pool (Mainnet) ═══${RESET}\n"
     pool_check_exclusivity || return 0
     echo -e "  This will run steps 1 → 2 → 3 → 4 → 5 → 6 → 7 in sequence."
+    echo -e "  Steps already completed (✓) can be skipped when prompted:"
+    local _step_names=("Install" "Configure" "Deploy web files" "Setup nginx" \
+                       "Set up wallet" "Service running" "Admin account")
+    local _i
+    for _i in 1 2 3 4 5 6 7; do
+        echo -e "    $(_pool_step_mark "$_i") ${_step_names[$((_i-1))]}"
+    done
+    echo ""
     echo -ne "  Continue? [Y/n]: "
     read -r go; [[ "${go,,}" == "n" ]] && return
 
     # Every step is ||-guarded: under set -e an unguarded failure would kill the
     # whole script instead of returning to the menu. Abort the guided flow with a
     # message on the first hard failure; the operator fixes it and re-runs.
-    pool_install     || { error "Install failed — fix the cause and re-run G) Guided setup."; return 0; }
-    echo ""; echo "Press Enter to continue to Configure..."; read -r
-    pool_configure   || { error "Configure failed — aborting guided setup."; return 0; }
-    echo ""; echo "Press Enter to continue to Deploy web files..."; read -r
-    pool_deploy_web  || { error "Web deploy failed — aborting guided setup."; return 0; }
-    echo ""; echo "Press Enter to continue to Setup nginx..."; read -r
-    pool_setup_nginx || { error "Nginx setup failed — aborting guided setup."; return 0; }
-    echo ""; echo "Press Enter to set up the pool wallet (coinbase + payout listeners)..."; read -r
+    _pool_guided_step 1 "Install" pool_install \
+        || { error "Install failed — fix the cause and re-run G) Guided setup."; return 0; }
+    _pool_guided_pause "Configure" || return 0
+    _pool_guided_step 2 "Configure" pool_configure \
+        || { error "Configure failed — aborting guided setup."; return 0; }
+    _pool_guided_pause "Deploy web files" || return 0
+    _pool_guided_step 3 "Deploy web files" pool_deploy_web \
+        || { error "Web deploy failed — aborting guided setup."; return 0; }
+    _pool_guided_pause "Setup nginx" || return 0
+    _pool_guided_step 4 "Setup nginx" pool_setup_nginx \
+        || { error "Nginx setup failed — aborting guided setup."; return 0; }
+    _pool_guided_pause "Set up pool wallet (coinbase + payout listeners)" || return 0
     # Wallet setup is best-effort in guided mode: a missing/unsynced node shouldn't
-    # block the rest of setup. The operator can finish it later via 5) Set up wallet.
-    pw_setup || warn "Wallet not fully set up — finish via 5) Set up wallet (needed for coinbase + payouts)."
-    echo ""; echo "Press Enter to start the service and create admin account..."; read -r
+    # block the rest of setup — but ask before moving on, so a deliberate cancel
+    # (0 inside the wallet prompts) can also end the guided flow here.
+    if ! _pool_guided_step 5 "Set up wallet" pw_setup; then
+        warn "Wallet not fully set up — finish via 5) Set up wallet (needed for coinbase + payouts)."
+        echo -ne "  Continue with the remaining steps (service + admin)? [Y/n]: "
+        local go2; read -r go2
+        [[ "${go2,,}" == "n" ]] && { info "Guided setup stopped — completed steps are kept."; return 0; }
+    fi
+    _pool_guided_pause "start the service and create admin account" || return 0
     pool_start_service || true
     sleep 2
-    pool_setup_admin || warn "Admin account not created — run 7) Create admin account once the service is up."
+    _pool_guided_step 7 "Create admin account" pool_setup_admin \
+        || warn "Admin account not created — run 7) Create admin account once the service is up."
 
     echo ""
     success "Guided setup complete. Open https://$(pool_read_conf "subdomain" "your-domain") to access the pool."
@@ -1187,13 +1249,13 @@ show_menu() {
     echo -e "  ${GREEN}G${RESET}) Guided Full Setup    ${DIM}(runs all setup steps 1→7)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Manual Setup Steps ───────────────────────────${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Install               ${DIM}(nodejs ≥18, npm, sqlite3, systemd, fail2ban)${RESET}"
-    echo -e "  ${GREEN}2${RESET}) Configure             ${DIM}(pool name, domain, fee, wallet dir)${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Deploy web files      ${DIM}(frontend → $POOL_WEB_DIR)${RESET}"
-    echo -e "  ${GREEN}4${RESET}) Setup nginx           ${DIM}(vhost + SSL + rate limits)${RESET}"
-    echo -e "  ${GREEN}5${RESET}) Set up wallet         ${DIM}(coinbase Foreign 3415 + payout Owner 3420)${RESET}"
-    echo -e "  ${GREEN}6${RESET}) Service control       ${DIM}(start / stop — start before creating admin)${RESET}"
-    echo -e "  ${GREEN}7${RESET}) Create admin account  ${DIM}(first admin user — needs service running)${RESET}"
+    echo -e "  ${GREEN}1${RESET}) $(_pool_step_mark 1) Install             ${DIM}(nodejs ≥24, npm, sqlite3, systemd, fail2ban)${RESET}"
+    echo -e "  ${GREEN}2${RESET}) $(_pool_step_mark 2) Configure           ${DIM}(pool name, domain, fee, wallet dir)${RESET}"
+    echo -e "  ${GREEN}3${RESET}) $(_pool_step_mark 3) Deploy web files    ${DIM}(frontend → $POOL_WEB_DIR)${RESET}"
+    echo -e "  ${GREEN}4${RESET}) $(_pool_step_mark 4) Setup nginx         ${DIM}(vhost + SSL + rate limits)${RESET}"
+    echo -e "  ${GREEN}5${RESET}) $(_pool_step_mark 5) Set up wallet       ${DIM}(coinbase Foreign 3415 + payout Owner 3420)${RESET}"
+    echo -e "  ${GREEN}6${RESET}) $(_pool_step_mark 6) Service control     ${DIM}(start / stop — start before creating admin)${RESET}"
+    echo -e "  ${GREEN}7${RESET}) $(_pool_step_mark 7) Create admin account ${DIM}(first admin user — needs service running)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Administration ───────────────────────────────${RESET}"
     echo -e "  ${GREEN}8${RESET}) Pool status           ${DIM}(service, port, DB, recent logs)${RESET}"

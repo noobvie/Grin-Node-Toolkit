@@ -18,10 +18,12 @@
 # pattern from Script 052 (Grin Drop), which runs `listen` + `owner_api` side
 # by side the same way.
 #
-# Reuses the password file the Configure step already writes
-# (/opt/grin/pubpool/mainnet/.wallet_pass, mode 600) — we do NOT create a
-# second passphrase file. The listeners read it unattended so they can
-# auto-start after a reboot/crash (boot autostart + */5 watchdog).
+# Owns the password file the backend reads
+# (/opt/grin/pubpool/mainnet/.wallet_pass, mode 600) — pw_setup writes it during
+# init/recover (and prompts for it when an existing wallet has no saved copy).
+# The listeners read it unattended so they can auto-start after a reboot/crash
+# (boot autostart + */5 watchdog). pw_setup also records the wallet's address
+# as pool_address in the pool config (the node-stratum login identity).
 #
 #   pw_setup                install binary + init|recover + patch tomls + start
 #   pw_listener_start       (re)start BOTH listeners in tmux
@@ -290,6 +292,24 @@ pw_setup() {
         success "Passphrase saved: $pass_file (mode 600) — enables listener auto-start."
     fi
 
+    # Existing wallet kept but no saved passphrase (pass file removed, or the
+    # wallet predates this setup flow) — the listeners + backend need it on disk.
+    if [[ -f "$toml" && ! -f "$pass_file" ]]; then
+        warn "No saved wallet password ($pass_file) — listeners can't start without it."
+        echo -e "  Enter the EXISTING wallet's passphrase to save it (mode 600):"
+        local exist_pass
+        if exist_pass=$(_pw_read_new_pass); then
+            install -m 600 /dev/null "$pass_file" 2>/dev/null || true
+            printf '%s' "$exist_pass" > "$pass_file"; chmod 600 "$pass_file"; unset exist_pass
+            if declare -F pool_write_conf_key >/dev/null 2>&1; then
+                pool_write_conf_key "wallet_pass_file" "$pass_file"
+            fi
+            success "Passphrase saved: $pass_file (mode 600)."
+        else
+            warn "Skipped — listeners will fail until the passphrase is saved (re-run Setup wallet)."
+        fi
+    fi
+
     # 3) Patch grin-wallet.toml — pin the API ports + node foreign secret + log cap.
     if [[ -f "$toml" ]]; then
         _pw_set_toml_key "$toml" "api_listen_port"       "$PW_FOREIGN_PORT" && info "grin-wallet.toml api_listen_port → $PW_FOREIGN_PORT"
@@ -317,6 +337,36 @@ pw_setup() {
     echo ""
     pw_write_launchers
     pw_listener_start
+
+    # 6) Record the pool's Grin address in the pool config — the backend uses it
+    #    to login to the node's built-in stratum (node-stratum-client.js). It can
+    #    only be read once the wallet exists, which is why it lives here and not
+    #    in 2) Configure.
+    if declare -F pool_write_conf_key >/dev/null 2>&1; then
+        echo ""
+        local pool_addr
+        pool_addr=$( (pw_show_address 2>/dev/null || true) | grep -oE 'grin1[a-z0-9]{40,}' | head -1 || true)
+        if [[ -n "$pool_addr" ]]; then
+            pool_write_conf_key "pool_address" "$pool_addr"
+            success "Pool Grin address saved to config: $pool_addr"
+        else
+            warn "Could not auto-detect the wallet address."
+            echo -ne "  Pool Grin address (blank to skip): "
+            local manual_addr; read -r manual_addr || true
+            if [[ -n "$manual_addr" ]]; then
+                pool_write_conf_key "pool_address" "$manual_addr"
+                success "Pool Grin address saved to config."
+            else
+                warn "pool_address not set — the backend can't login to the node stratum"
+                warn "  until it is set (re-run Setup wallet, or edit the pool config)."
+            fi
+        fi
+        if declare -F pool_service_control >/dev/null 2>&1 \
+           && systemctl is-active --quiet "${POOL_SERVICE:-}" 2>/dev/null; then
+            info "Restarting ${POOL_SERVICE} to apply wallet config..."
+            systemctl restart "$POOL_SERVICE" || true
+        fi
+    fi
 
     echo ""
     echo -e "  ${RED:-}${BOLD:-}⚠  SECURITY — passphrase is visible in the process list${RESET:-}"

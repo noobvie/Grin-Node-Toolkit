@@ -5,6 +5,14 @@ A unified bash toolkit for deploying and managing Grin cryptocurrency nodes and
 infrastructure on Linux servers (Debian/Ubuntu, Rocky Linux, AlmaLinux 10+).
 Run as root/sudo on a remote VPS — not executed locally on this machine.
 
+## Persisting Knowledge — Put Durable Facts HERE, Not Local Memory
+The user works across **macOS and Windows**. The auto-memory dir
+(`~/.claude/projects/.../memory/`) is **local to one machine and does NOT sync** — a fact
+saved there on Windows is invisible on macOS. **Durable project/technical facts go in THIS
+git-tracked `.claude/CLAUDE.md`** (and committed docs under `docs/generated/`) so both machines
+see them. Reserve the local memory dir only for machine-specific or throwaway notes. When you
+learn a reusable fact worth remembering, **edit CLAUDE.md**, don't write a local memory file.
+
 ## Tech Stack
 - **Shell:** Bash (primary language — all scripts must pass `bash -n` syntax check)
 - **Web backend:** Node.js/Express + SQLite (scripts 052–055, and the Script 07 public-pool backend)
@@ -166,6 +174,40 @@ The toolkit no longer patches `api_secret_path` in grin-wallet.toml; grin-wallet
 
 Owner API v3 session flow: `init_secure_api` → ECDH key exchange → `open_wallet` → AES-256-GCM encrypted calls.
 Foreign API v2: Basic Auth + secret file, no ECDH.
+
+### Wallet ↔ Node — two opposite directions (don't conflate)
+
+There are **two separate node↔wallet links**, on different ports, doing different jobs:
+
+- **① Node → Wallet Foreign API (3415/13415)** — `wallet_listener_url` in the node's
+  `grin-server.toml` stratum config. The node's stratum calls **`build_coinbase`** to fund
+  block rewards. Confirmed from docs.rs `grin_wallet_api::Foreign`: build_coinbase "builds a
+  new unconfirmed coinbase output in the wallet" — a **local keychain operation**; the node
+  passes fees+height in the request (`BlockFees`), the wallet **never queries the node back**.
+  Also local-only: `receive_tx`, `check_version`. `finalize_tx` posts to the node only if
+  `post_automatically=true`.
+- **② Wallet → Node Foreign API (3413/13413)** — `node_api_secret_path` in `grin-wallet.toml`
+  (→ node's `.foreign_api_secret`). The wallet, as a *client*, calls the node for `get_version`
+  (startup), output scanning (balance confirm), maturity (1440 blocks), and `push_transaction`
+  (broadcast/spend/payout). Wrong/missing secret → node 403 → "Cannot parse response".
+
+**The `get_version: Cannot parse response` error at `grin-wallet init` is HARMLESS** (recurs in
+drop 052, pool 07, solo 07): init runs *before* the toml is patched, so the version probe fails
+but init still writes the seed; the `node_api_secret_path` patch (run right after init) fixes
+runtime. **Coinbase reception never depends on ② at all** (it's `build_coinbase`, local) — so
+"coinbase arrived" does NOT prove ② works. Only `grin-wallet info` (balance refresh) and
+`send`/sweep exercise ② — those working *is* the real proof the wallet→node link is healthy.
+
+**Naming gotcha:** Foreign API's `check_version` (wallet serving its own version) ≠ the
+`get_version` in the error. The error comes from `grin_wallet_impls::node_clients::http` =
+grin-wallet acting as a CLIENT calling the NODE's foreign `get_version` (direction ②).
+
+**Tor** is neither 3413 nor 3415 — it's the wallet **Owner API (3420)** sending payouts
+*outbound* to a miner's `.onion`. Node↔wallet on the same box is always plain localhost HTTP.
+
+Patch locations: solo `scripts/lib/07_solo_wallet.sh` step 4; pool
+`scripts/lib/07_lib_pool_wallet.sh` (~`node_api_secret_path`); drop
+`scripts/lib/052_lib_wallet.sh` `_drop_write_toml`.
 
 ## tmux Sessions — Always Use Bash
 When generating `tmux new-session` commands (in cron wrappers, watchdog scripts, or any

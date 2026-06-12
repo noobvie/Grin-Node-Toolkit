@@ -197,6 +197,24 @@ pool_ensure_defaults() {
     done
 }
 
+# Scalar SELECT against the pool DB via node:sqlite — the pool's own engine, so
+# it is always present (Node 24+ is an install prerequisite). Do NOT use the
+# sqlite3 CLI for probes: it is optional (RHEL names the package `sqlite`, and
+# a failed install is masked by the `| tail` pipe), and a missing CLI must not
+# make status checks lie. Prints the first column of the first row; empty on error.
+_pool_db_scalar() { # <sql> [db_path]
+    local db="${2:-$POOL_APP_DIR/pool.db}"
+    [[ -f "$db" ]] || return 1
+    node -e "
+try {
+  const { DatabaseSync } = require('node:sqlite');
+  const d = new DatabaseSync(process.argv[1]);
+  const row = d.prepare(process.argv[2]).get();
+  process.stdout.write(String(row ? Object.values(row)[0] : ''));
+} catch (e) { process.exit(1); }
+" "$db" "$1" 2>/dev/null
+}
+
 # ─── Per-step completion probes ────────────────────────────────────────────────
 # Used by the menus (✓ markers next to setup steps 1–7) and by the guided flow,
 # which offers to skip already-completed steps — so re-running G) after a
@@ -214,9 +232,7 @@ _pool_step_done() {
            [[ -f "$POOL_NGINX_CONF" ]] && grep -q "listen 443" "$POOL_NGINX_CONF" 2>/dev/null ;;
         5) [[ -x "$(pw_bin)" && -f "$(pw_toml)" && -f "$(pw_pass_file)" ]] ;;
         6) systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null ;;
-        7) [[ -f "$POOL_APP_DIR/pool.db" ]] && command -v sqlite3 &>/dev/null \
-              && [[ "$(sqlite3 "$POOL_APP_DIR/pool.db" \
-                     "SELECT COUNT(*) FROM users WHERE is_admin=1;" 2>/dev/null || echo 0)" -gt 0 ]] ;;
+        7) [[ "$(_pool_db_scalar "SELECT COUNT(*) FROM users WHERE is_admin=1" || echo 0)" == [1-9]* ]] ;;
         *) return 1 ;;
     esac
 }
@@ -330,7 +346,9 @@ pool_install() {
     if command -v apt-get &>/dev/null; then
         apt-get install -y logrotate sqlite3 2>&1 | tail -5
     elif command -v dnf &>/dev/null; then
-        dnf install -y logrotate sqlite3 2>&1 | tail -5
+        # RHEL-family names the CLI package `sqlite` (it ships /usr/bin/sqlite3);
+        # `dnf install sqlite3` fails — and the pipe to tail masks the failure.
+        dnf install -y logrotate sqlite 2>&1 | tail -5
     fi
 
     pool_ensure_node24 || return 1
@@ -900,19 +918,14 @@ process.stdout.write(JSON.stringify({
     body="${resp%$'\n'*}"
 
     if [[ "$http_code" == "200" ]] && echo "$body" | grep -q '"success"[[:space:]]*:[[:space:]]*true'; then
-        success "User '$admin_user' registered."
-        local safe_user="${admin_user//"'"/"''"}"
-        if command -v sqlite3 &>/dev/null; then
-            sqlite3 "$POOL_APP_DIR/pool.db" \
-                "UPDATE users SET is_admin=1 WHERE username='${safe_user}';" \
-                && info "User '$admin_user' promoted to admin."
+        # No separate "promote" step needed: registerAdmin() inserts the first
+        # user with is_admin=1 (registration closes once an admin exists).
+        # Verify it landed so the step-7 ✓ marker and the operator agree.
+        if _pool_step_done 7; then
+            success "Admin '$admin_user' registered (is_admin confirmed in pool.db)."
         else
-            node -e "
-const { DatabaseSync } = require('node:sqlite');
-const db = new DatabaseSync(process.argv[1]);
-db.prepare('UPDATE users SET is_admin=1 WHERE username=?').run(process.argv[2]);
-" "$POOL_APP_DIR/pool.db" "$admin_user" \
-                && info "User '$admin_user' promoted to admin."
+            success "Admin '$admin_user' registered."
+            warn "Could not confirm the admin row in pool.db — check 8) Pool status."
         fi
     else
         # Pull the human-readable message out of the JSON {"error":"..."} body.
@@ -1168,11 +1181,8 @@ pool_reset_db() {
 
     local db_size; db_size=$(du -sh "$db_path" 2>/dev/null | cut -f1 || echo "?")
     local user_count
-    if command -v sqlite3 &>/dev/null; then
-        user_count=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM users;" 2>/dev/null || echo "?")
-    else
-        user_count="?"
-    fi
+    user_count=$(_pool_db_scalar "SELECT COUNT(*) FROM users" "$db_path" || true)
+    [[ -n "$user_count" ]] || user_count="?"
 
     echo -e "  Database : $db_path  ($db_size)"
     echo -e "  Users    : $user_count accounts"

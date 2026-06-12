@@ -45,6 +45,10 @@ RESET='\033[0m'
 SOLO_SCRIPT="$SCRIPT_DIR/07_grin_mining_solo.sh"
 PUBLIC_SCRIPT="$SCRIPT_DIR/07_grin_mining_public_pool.sh"
 
+# Deployed solo stats-page vhost — the source of truth for Internet-vs-LAN mode
+# (must match STATS_BASENAME in 07_grin_mining_solo.sh).
+SOLO_STATS_VHOST="/etc/nginx/sites-available/grin-solo-mining-stat"
+
 # ─── Logging ──────────────────────────────────────────────────────────────────
 info()  { echo -e "${CYAN}[INFO]${RESET}  $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
@@ -69,6 +73,42 @@ hub_detect_solo() {
         echo "systemd: grin-solo-* service"; return 0
     fi
     return 1
+}
+
+# Distinguish Internet vs LAN solo by inspecting the DEPLOYED stats vhost — the
+# live source of truth (a re-deploy in the other mode rewrites it, so this can't
+# go stale the way a stored flag would). Reads nothing if no stats page exists.
+# Echoes a short human label (always rc 0). The two modes write structurally
+# different vhosts: LAN binds `listen <ip>:<port>;`, Internet uses `listen 80;`
+# with an FQDN server_name (+ a certbot-managed letsencrypt cert once SSL is up).
+hub_detect_solo_mode() {
+    local vhost="$SOLO_STATS_VHOST"
+    if [[ ! -f "$vhost" ]]; then
+        echo "stratum only — no stats page deployed"
+        return 0
+    fi
+    # A `listen` directive carrying an IPv4 → LAN bind (Internet never does: its
+    # server_name is a validated domain and it listens on bare :80 / :443).
+    local lan_bind
+    lan_bind=$(grep -m1 -oE 'listen[[:space:]]+[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]+' "$vhost" 2>/dev/null \
+               | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]+' || true)
+    if [[ -n "$lan_bind" ]]; then
+        # Hide the implied :80 so a bare-IP bind reads as a clean URL.
+        echo "LAN · http://${lan_bind%:80}/"
+        return 0
+    fi
+    # Internet: pull the domain from server_name; SSL state from the letsencrypt
+    # cert / 443 listener that certbot --nginx injects in-place.
+    local domain
+    domain=$(grep -m1 -E '^[[:space:]]*server_name' "$vhost" 2>/dev/null \
+             | sed -E 's/^[[:space:]]*server_name[[:space:]]+//; s/[[:space:];].*$//' || true)
+    if grep -qE 'ssl_certificate[[:space:]]+/etc/letsencrypt/' "$vhost" 2>/dev/null \
+       || grep -qE 'listen[^;]*443' "$vhost" 2>/dev/null; then
+        echo "Internet · https://${domain:-?} (SSL)"
+    else
+        echo "Internet · http://${domain:-?} (SSL pending)"
+    fi
+    return 0
 }
 
 hub_detect_public() {
@@ -148,11 +188,12 @@ hub_launch() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 hub_status_line() {
-    local solo public
+    local solo public mode
     solo=$(hub_detect_solo || true)
     public=$(hub_detect_public || true)
     if [[ -n "$solo" ]]; then
-        echo -e "  Active type: ${GREEN}Solo PRIVATE mining${RESET}  ${DIM}($solo)${RESET}"
+        mode=$(hub_detect_solo_mode || true)
+        echo -e "  Active type: ${GREEN}Solo PRIVATE mining${RESET}  ${DIM}— ${mode}${RESET}"
     elif [[ -n "$public" ]]; then
         echo -e "  Active type: ${GREEN}Public mining pool${RESET}  ${DIM}($public)${RESET}"
     else

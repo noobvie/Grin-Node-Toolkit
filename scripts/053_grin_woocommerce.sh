@@ -238,9 +238,16 @@ woo_install_bridge() {
 
     local bridge_src="$TOOLKIT_ROOT/web/053_woocommerce/bridge"
 
-    if ! command -v node &>/dev/null; then
-        info "node not found. Installing Node.js 18 via nodesource..."
-        curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    # Ensure Node.js 24+ (toolkit standard). Missing or older → install NodeSource
+    # 24.x; an existing node >= 24 (e.g. 26 from a co-installed product) is left as-is
+    # so we never downgrade.
+    local node_major=0
+    command -v node &>/dev/null && node_major=$(node --version 2>/dev/null | sed 's/^v//; s/\..*//')
+    [[ "$node_major" =~ ^[0-9]+$ ]] || node_major=0
+    if [[ "$node_major" -lt 24 ]]; then
+        info "Installing Node.js 24.x via NodeSource (toolkit standard, need >=24)..."
+        apt-get remove -y nodejs npm 2>/dev/null || true
+        curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
             && apt-get install -y nodejs \
             || { die "Node.js install failed. Install manually from https://nodejs.org"; pause; return; }
     fi

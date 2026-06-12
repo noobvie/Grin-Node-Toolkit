@@ -987,9 +987,15 @@ _show_stratum_port_guide() {
     echo -e "${BOLD}${CYAN}  Publish Stratum — $label (port $port)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  Publishing binds grin to ${BOLD}0.0.0.0:$port${RESET} so your miners (or friends')"
-    echo -e "  can reach this node. Point a miner (e.g. G1 mini) at your stratum"
-    echo -e "  ${BOLD}domain${RESET} or ${BOLD}YOUR_SERVER_IP:$port${RESET}. Required for any remote mining."
+    if [[ "${SOLO_NET_MODE:-public}" == "lan" ]]; then
+        echo -e "  Publishing binds grin to ${BOLD}0.0.0.0:$port${RESET} so miners on your LAN can"
+        echo -e "  reach this node. Point a miner (e.g. G1 mini) at this server's"
+        echo -e "  ${BOLD}LAN IP:$port${RESET} — no domain or public IP needed."
+    else
+        echo -e "  Publishing binds grin to ${BOLD}0.0.0.0:$port${RESET} so your miners (or friends')"
+        echo -e "  can reach this node. Point a miner (e.g. G1 mini) at your stratum"
+        echo -e "  ${BOLD}domain${RESET} or ${BOLD}YOUR_SERVER_IP:$port${RESET}. Required for any remote mining."
+    fi
     echo ""
     echo -ne "${BOLD}Proceed? [Y/n]: ${RESET}"
     read -r _guide_confirm || true
@@ -1124,11 +1130,21 @@ _enable_stratum() {
     graceful_restart_grin "$api_port" "$network"
 
     local label="Mainnet"; [[ "$network" == "testnet" ]] && label="Testnet"
-    # Sets globals $_DETECTED_PUBLIC_IP + $_IP_DETECT_NOTE (can't return them via
-    # $(...) — that subshell would discard the note global).
-    _detect_public_ipv4 || true
-    local pub_ip="$_DETECTED_PUBLIC_IP"
-    local conn_host="${pub_ip:-YOUR_SERVER_IP}"
+    # LAN mode advertises the server's LAN IP (miners are on the same network) so the
+    # stratum target matches the LAN stats page; Internet mode advertises the public IP.
+    local lan_mode=0
+    [[ "${SOLO_NET_MODE:-public}" == "lan" ]] && lan_mode=1
+    local pub_ip conn_host
+    if [[ $lan_mode -eq 1 ]]; then
+        pub_ip=$(_detect_lan_ipv4)
+        conn_host="${pub_ip:-YOUR_LAN_IP}"
+    else
+        # Sets globals $_DETECTED_PUBLIC_IP + $_IP_DETECT_NOTE (can't return them via
+        # $(...) — that subshell would discard the note global).
+        _detect_public_ipv4 || true
+        pub_ip="$_DETECTED_PUBLIC_IP"
+        conn_host="${pub_ip:-YOUR_SERVER_IP}"
+    fi
     local url="stratum+tcp://${conn_host}:${stratum_port}"
 
     echo ""
@@ -1140,16 +1156,25 @@ _enable_stratum() {
     echo -e "${BOLD}${GREEN}┃${RESET}  ${BOLD}Worker / Login:${RESET} any nickname you like — ${CYAN}e.g. myname.rig1${RESET}"
     echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}(text before the dot groups earnings if payout-split is on)${RESET}"
     echo -e "${BOLD}${GREEN}┃${RESET}"
-    if [[ -n "$pub_ip" ]]; then
-        echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}Detected public IPv4: $pub_ip · port $stratum_port ($label)${RESET}"
-        [[ -n "$_IP_DETECT_NOTE" ]] && \
-            echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}↳ $_IP_DETECT_NOTE${RESET}"
+    if [[ $lan_mode -eq 1 ]]; then
+        if [[ -n "$pub_ip" ]]; then
+            echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}Detected LAN IPv4: $pub_ip · port $stratum_port ($label)${RESET}"
+        else
+            echo -e "${BOLD}${GREEN}┃${RESET}  ${YELLOW}Could not auto-detect a LAN IP — replace YOUR_LAN_IP above.${RESET}"
+        fi
+        echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}LAN miners connect to this private IP directly — no domain/DNS needed.${RESET}"
     else
-        echo -e "${BOLD}${GREEN}┃${RESET}  ${YELLOW}Could not auto-detect public IP — replace YOUR_SERVER_IP above.${RESET}"
+        if [[ -n "$pub_ip" ]]; then
+            echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}Detected public IPv4: $pub_ip · port $stratum_port ($label)${RESET}"
+            [[ -n "$_IP_DETECT_NOTE" ]] && \
+                echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}↳ $_IP_DETECT_NOTE${RESET}"
+        else
+            echo -e "${BOLD}${GREEN}┃${RESET}  ${YELLOW}Could not auto-detect public IP — replace YOUR_SERVER_IP above.${RESET}"
+        fi
+        echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}Using a domain instead? On Cloudflare the A record MUST be${RESET}"
+        echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}\"DNS only\" (grey cloud), NOT proxied — miners can't reach a${RESET}"
+        echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}proxied record; fall back to the raw IP above (e.g. iPollo G1).${RESET}"
     fi
-    echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}Using a domain instead? On Cloudflare the A record MUST be${RESET}"
-    echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}\"DNS only\" (grey cloud), NOT proxied — miners can't reach a${RESET}"
-    echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}proxied record; fall back to the raw IP above (e.g. iPollo G1).${RESET}"
     echo -e "${BOLD}${GREEN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${RESET}"
 
     echo ""
@@ -1690,7 +1715,7 @@ solo_deploy_stats_page() {
     # $subdomain doubles as the page "host" + nginx server_name. In public mode it
     # is an FQDN; in LAN mode it is the chosen private IP. $lan_ip/$lan_port are only
     # set (and only referenced later) in LAN mode.
-    local subdomain lan_ip lan_port lan_port_in c
+    local subdomain lan_ip lan_port lan_port_in c lan_url=""
     if [[ $lan_mode -eq 1 ]]; then
         # ── LAN mode: bind to a private IP:port — no domain, DNS, or certbot ─────
         local lan_default; lan_default=$(_detect_lan_ipv4)
@@ -1716,14 +1741,23 @@ solo_deploy_stats_page() {
             fi
             break
         done
+        # Default to 80 so a bare http://<ip> URL just works — nothing for LAN users
+        # to remember. (A LAN-only solo box almost never has anything else on :80;
+        # the toolkit's other web features are Internet-mode and need a domain.) If
+        # :80 on this IP is taken, nginx -t below rejects the vhost and we bail
+        # cleanly — pick a free port like 8099 then. Avoid 8080 (public pool API).
         lan_port=80
-        echo -ne "HTTP port for the stats page [80]: "
+        echo -ne "HTTP port for the stats page [80] ${DIM}(80 = bare-IP URL, no port to type)${RESET}: "
         read -r lan_port_in
         [[ -n "$lan_port_in" ]] && lan_port="$lan_port_in"
-        if [[ ! "$lan_port" =~ ^[0-9]+$ ]] || (( lan_port < 1 || lan_port > 65535 )); then
+        if [[ ! "$lan_port" =~ ^[0-9]+$ ]] || (( 10#$lan_port < 1 || 10#$lan_port > 65535 )); then
             error "Invalid port: $lan_port"; return 1
         fi
+        lan_port=$(( 10#$lan_port ))   # normalise any leading zeros (e.g. 080 → 80)
         subdomain="$lan_ip"
+        # Display URL hides the :80 (browsers imply it) so the bare-IP URL reads clean.
+        lan_url="http://${lan_ip}"
+        [[ "$lan_port" -ne 80 ]] && lan_url="http://${lan_ip}:${lan_port}"
         info "LAN stats page will bind ${BOLD}${lan_ip}:${lan_port}${RESET} (plain HTTP, no SSL)."
     else
         echo ""
@@ -1968,7 +2002,7 @@ CRON
 
         success "Mining stats collector installed (cron every 5 min) → $data_dir"
         if [[ $lan_mode -eq 1 ]]; then
-            echo -e "  ${DIM}poolstats endpoint(s): http://${lan_ip}:${lan_port}/data/poolstats_<net>.json${RESET}"
+            echo -e "  ${DIM}poolstats endpoint(s): ${lan_url}/data/poolstats_<net>.json${RESET}"
         else
             echo -e "  ${DIM}miningpoolstats endpoint(s): https://$subdomain/data/poolstats_<net>.json${RESET}"
         fi
@@ -2105,10 +2139,16 @@ EOF
         # LAN mode: no domain → no certbot (HTTP-01 can't validate a private IP) and
         # no auth (decided: LAN page is unauthenticated). The page is intentionally
         # plain HTTP, reachable only on the LAN it is bound to.
-        success "nginx serving http://${lan_ip}:${lan_port}/ (LAN only)"
-        success "Stats page deployed: http://${lan_ip}:${lan_port}/"
+        success "nginx serving ${lan_url}/ (LAN only)"
+        success "Stats page deployed: ${lan_url}/"
         echo -e "  ${DIM}Bound to ${lan_ip} — only reachable from this network. Make sure your${RESET}"
         echo -e "  ${DIM}firewall allows TCP ${lan_port} from the LAN, and does NOT expose it to the internet.${RESET}"
+        echo ""
+        echo -e "  ${BOLD}Opening it:${RESET} browse to ${BOLD}${lan_url}/${RESET} from any device on this LAN."
+        echo -e "  ${DIM}It's plain HTTP, so browsers show a grey \"Not secure\" label (no padlock) — that is${RESET}"
+        echo -e "  ${DIM}normal and harmless on a private network; the page still loads. If it will NOT load,${RESET}"
+        echo -e "  ${DIM}the browser is forcing HTTPS — turn off Firefox \"HTTPS-Only Mode\" / Chrome \"Always${RESET}"
+        echo -e "  ${DIM}use secure connections\", or add an HTTP exception for ${lan_ip}, then reload.${RESET}"
     else
         success "nginx serving http://$subdomain"
 

@@ -173,7 +173,9 @@
       <div class="net-title main">MAINNET · GRIN</div>
       <div class="kv">
         <span class="k">Select Coin</span><span><code>GRIN</code></span>
-        <span class="k">Pool 1</span><span id="main-stratum"><span class="muted">loading…</span></span>
+        <span class="k">Pool 1 URL</span><span><span class="muted">choose <b>one</b> of the two below — IP <i>or</i> domain</span></span>
+        <span class="k">→ Option A · IP</span><span id="main-stratum-ip"><span class="muted">loading…</span></span>
+        <span class="k">→ Option B · domain</span><span id="main-stratum-domain"><span class="muted">loading…</span></span>
         <span class="k">Pool1 worker</span><span><code>nickname.NN</code> <span class="muted">(e.g. <code>alpha.01</code>)</span></span>
         <span class="k">Pool1 password</span><span><code>123</code> <span class="muted">(unused — any value)</span></span>
       </div>
@@ -188,7 +190,9 @@
       <div class="net-title test">TESTNET · tGRIN</div>
       <div class="kv">
         <span class="k">Select Coin</span><span><code>GRIN</code></span>
-        <span class="k">Pool 1</span><span id="test-stratum"><span class="muted">loading…</span></span>
+        <span class="k">Pool 1 URL</span><span><span class="muted">choose <b>one</b> of the two below — IP <i>or</i> domain</span></span>
+        <span class="k">→ Option A · IP</span><span id="test-stratum-ip"><span class="muted">loading…</span></span>
+        <span class="k">→ Option B · domain</span><span id="test-stratum-domain"><span class="muted">loading…</span></span>
         <span class="k">Pool1 worker</span><span><code>nickname.NN</code> <span class="muted">(e.g. <code>alpha.01</code>)</span></span>
         <span class="k">Pool1 password</span><span><code>123</code> <span class="muted">(unused — any value)</span></span>
       </div>
@@ -197,11 +201,23 @@
     <p class="muted" id="no-net" style="display:none">Connection details load from the
        server config — if this stays blank, the stats deploy hasn't written
        <code>data/config.json</code> yet.</p>
-    <p class="muted">Each network shows the node's <b>IP</b> first — connect to this, it's the
-       most reliable target — and the <b>domain</b> as an optional alias. If the domain shows
-       <b>unreachable</b>, just use the IP.
-       <span class="hint" title="If the domain shows unreachable: point its A record at the node's public IP, and on Cloudflare set that record to DNS-only (grey cloud), not Proxied (orange). Proxied mode only handles HTTP/HTTPS and breaks raw-TCP stratum — then only the IP works.">ⓘ domain unreachable?</span>
-       Use the <b>copy</b> button to grab a URL.</p>
+    <div class="callout info">
+      <b>Pick exactly one — IP or domain — for Pool 1.</b> Both addresses reach the
+      <i>same</i> node; you only put one of them in the Pool 1 slot.
+      <ul>
+        <li><b>Option A · IP</b> <span class="chip primary">recommended</span> — the node's raw
+            public IP. Stratum is plain TCP straight to the node (never proxied), so the IP is
+            always the most reliable target. Use this unless you have a specific reason not to.</li>
+        <li><b>Option B · domain</b> <span class="chip">optional</span> — a friendlier alias, handy
+            if the node's IP ever changes. It only works when the domain's <b>A record points
+            straight at the node's public IP</b>. If it shows
+            <span class="rpill bad" style="cursor:default">🔴 unreachable</span> (or
+            <span class="hint" title="If the domain shows unreachable: point its A record at the node's public IP, and on Cloudflare set that record to DNS-only (grey cloud), not Proxied (orange). Proxied mode only handles HTTP/HTTPS and breaks raw-TCP stratum — then only the IP works.">⚠ Cloudflare?</span>),
+            fall back to the IP.</li>
+      </ul>
+      <span class="muted">Use the <b>copy</b> button next to whichever one you choose to grab the
+      exact <code>stratum+tcp://…</code> URL.</span>
+    </div>
 
     <h3 class="pool-head backup"><span class="pdot"></span>Pool 2 / Pool 3 — public backups
         <span class="chip">failover</span></h3>
@@ -460,17 +476,22 @@ Pool 3   gaeapool / 2miners            worker = your GRIN payout address</div>
       + reachPill(host, port, type, opts) + '</div>';
   }
 
-  // Connection-details block: IP first (most reliable), domain second (alias).
+  // Connection-details block: two explicit either/or options — Option A (IP, most
+  // reliable) and Option B (domain, alias). Each renders into its own kv row so the
+  // miner picks exactly one for the single Pool 1 slot.
   function show(net, ip, domain, port) {
     var b = document.getElementById('block-' + net); if (!b) return;
     b.classList.remove('hidden');
-    var html = '';
-    if (ip) html += poolOption('stratum+tcp://' + ip + ':' + port, ip, port, 'ip',
-      { fallbackChip: true, primary: true });
-    if (domain) html += poolOption('stratum+tcp://' + domain + ':' + port, domain, port, 'domain',
-      { fallbackChip: true, primary: !ip });
-    document.getElementById(net + '-stratum').innerHTML =
-      html || '<span class="muted">no host configured</span>';
+    var ipEl = document.getElementById(net + '-stratum-ip');
+    var domEl = document.getElementById(net + '-stratum-domain');
+    if (ipEl) ipEl.innerHTML = ip
+      ? poolOption('stratum+tcp://' + ip + ':' + port, ip, port, 'ip',
+          { fallbackChip: true, primary: true })
+      : '<span class="muted">no IP configured</span>';
+    if (domEl) domEl.innerHTML = domain
+      ? poolOption('stratum+tcp://' + domain + ':' + port, domain, port, 'domain',
+          { fallbackChip: true, primary: !ip })
+      : '<span class="muted">no domain configured</span>';
   }
 
   // Settle one pill from a probe result. type drives the failure hint.

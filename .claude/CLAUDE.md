@@ -39,6 +39,12 @@ scripts/
   07_  Mining services hub → 07_grin_mining_solo.sh (solo private mining) and
        07_grin_mining_public_pool.sh (GRINIUM public pool; libs 07_lib_hub.sh /
        07_lib_satellite.sh; app code in web/07_mining_pool_public/)
+       Solo (07_grin_mining_solo.sh) has a `lan` launch arg (`bash 07_grin_mining_solo.sh lan`,
+       sets global SOLO_NET_MODE=lan) — same product, but the stats page deploys over
+       plain HTTP on a chosen LAN IP:port (no domain/certbot/Basic Auth) for internal
+       networks. Only solo_deploy_stats_page branches on the mode; all mining mechanics
+       are shared. The 07 hub menu exposes it as option 3 (hub_launch solo-lan); LAN and
+       public solo are the SAME exclusivity bucket (same ports/dirs).
   08_  Node admin centre (monitoring, nginx, firewall, backup)
   08del_ Full cleanup (destructive)
   lib/ Sourced libraries — always prefixed with parent script number

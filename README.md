@@ -150,24 +150,20 @@ Grin Node Toolkit
 │   │   │   ├── 5) Setup nginx    (grinscan.yourdomain.com + SSL)
 │   │   │   └── Logs / Status
 │   │   └── 0) Back
-│   ├── 7) Grin Solo Mining              → 07_grin_mining_solo.sh
-│   │   ├── A) Node & Mining Status      (node sync, tmux, stratum config + miner count)
-│   │   ├── Mainnet Stratum (port 3416)
-│   │   │   ├── B) Setup Stratum         (enable stratum_server in grin-server.toml)
-│   │   │   ├── C) Configure Stratum     (wallet address, burn_reward, timeout)
-│   │   │   ├── D) Publish Stratum       (open 0.0.0.0:3416 to miners + firewall)
-│   │   │   └── E) Restrict Stratum      (revert to 127.0.0.1:3416)
-│   │   ├── Testnet Stratum (port 13416)
-│   │   │   ├── F) Setup Stratum
-│   │   │   ├── G) Configure Stratum
-│   │   │   ├── I) Publish Stratum       (open 0.0.0.0:13416 + firewall)
-│   │   │   └── J) Restrict Stratum      (revert to 127.0.0.1:13416)
-│   │   ├── Tools
-│   │   │   ├── L) Live stats            (terminal dashboard, refresh every 10s)
-│   │   │   ├── S) Stats web page        (deploy static nginx mining stats page)
-│   │   │   └── W) Watchdog cron         (alert if stratum drops after node restart)
-│   │   └── 0) Back
-│   │   (Mining pool — PPLNS, Node.js web UI, Tor auto-pay — coming soon)
+│   ├── 7) Grin Mining Services          → 07_grin_mining_hub_services.sh  (pick ONE per server)
+│   │   ├── 1) Solo PRIVATE — Internet   → 07_grin_mining_solo.sh        (stats page on a domain + SSL)
+│   │   ├── 2) Solo PRIVATE — LAN        → 07_grin_mining_solo.sh lan    (plain HTTP on a LAN IP, no domain/SSL)
+│   │   │   └── Solo menu (both modes):  A) Node check · 1/2) Configure Mainnet/Testnet
+│   │   │       │   └── per-net branch:  1) Wallet · 2) Stratum (setup/configure/publish/restrict) · 3) Terminal stats
+│   │   │       3) Deploy stats web page · 4) Status · 5) Watchdogs · 6) Maintenance (backup)
+│   │   │       7) Payouts & settlement  · C) Clean up · 0) Back
+│   │   │       (stratum: 3416 mainnet / 13416 testnet; publish = 0.0.0.0:PORT + firewall)
+│   │   └── 3) Public mining pool        → 07_grin_mining_public_pool.sh  (GRINIUM — PPLNS, Tor pay)
+│   │       ├── G) Guided full setup     (1→2→3→4→5→6→7 in sequence)
+│   │       ├── 1) Install · 2) Configure · 3) Deploy web · 4) Nginx+SSL · 5) Wallet listeners
+│   │       ├── 6) Service control · 7) Create admin · 8) Pool status
+│   │       ├── B) Backup · C) Cron · L) Logs · S) Edit config · DEL) Reset DB
+│   │       └── Z) Cleanup (mode-selector) · 0) Exit   (modes: singlebox / hub / satellite)
 │   └── 8) Admin & Maintenance           → 08_grin_node_admin.sh
 │       ├── 1) Remote Node Monitor       (081_host_monitor_port.sh — also cron-ready)
 │       │   ├── 1) Run check now         (registry hosts first, then custom conf hosts)
@@ -252,26 +248,29 @@ Once your node is publicly sharing chain data via nginx (options A → B → E),
 - Exposes `/v2/foreign` only via nginx HTTPS reverse proxy; blocks `/v2/owner` (returns 403)
 - Enables light wallets, block explorers, and tools to query your node
 
-### 7. Grin Solo Mining — `07_grin_mining_solo.sh`
+### 7. Grin Mining Services — `07_grin_mining_hub_services.sh` (hub) + solo / public pool
 
-Configures and manages **solo mining** on a Grin node — enables the node's built-in stratum server, sets your wallet reward address, and publishes the port so miners can connect directly. All from an alphabet menu (A–J, plus tools L/S/W).
+A hub that deploys **one** mining setup per server — solo private *or* a public pool, never both (they collide on the stratum port, nginx zones, and the `/opt/grin` layout, so the hub hard-blocks a second type). Three options:
+
+#### 1) Solo PRIVATE — Internet · 2) Solo PRIVATE — LAN — `07_grin_mining_solo.sh`
+
+Both run the **same solo product** on the node's built-in stratum; they differ only in how the stats dashboard is served. The LAN variant launches as `07_grin_mining_solo.sh lan` (`SOLO_NET_MODE=lan`):
+
+| | Stats dashboard | Best for |
+|---|---|---|
+| **Internet** | Public domain + Let's Encrypt SSL (certbot); optional HTTP Basic-Auth lock; off-box reachability pills | A pool reachable over the internet |
+| **LAN** | Plain HTTP bound to a chosen private IP:port — no domain, no certbot, no auth | A trusted internal / home network |
 
 > **Solo mining pays block rewards directly to your listening wallet** (via `wallet_listener_url`) — no Tor, no pool, no third party. You keep the full coinbase of every block you find.
 
-**Stratum management (per-network — no shared prompts):**
-- **A) Node & Mining Status** — per network: node sync state, PID, binary path, tmux session, stratum port + bind, connected miner count, current toml settings
-- **B/F) Setup Stratum** — enables `enable_stratum_server = true`, sets `wallet_listener_url`; B = mainnet, F = testnet
-- **C/G) Configure Stratum** — change wallet address, `burn_reward`, timeout and other toml settings interactively; prompts graceful node restart
-- **D/I) Publish Stratum** — patches `grin-server.toml` to `0.0.0.0:PORT`, opens firewall; D = mainnet (3416), I = testnet (13416)
-- **E/J) Restrict Stratum** — reverts bind to `127.0.0.1:PORT`, closes firewall port
-- Auto-detects `grin-server.toml` via running process (`/proc/$pid/exe`) or known toolkit directories
+The solo menu is **network-as-parent** (pick a network once, no repeated prompts):
+- **A) Node check** · **1/2) Configure Mainnet/Testnet** → per-net branch: **Wallet** (setup/recover, listener, address), **Stratum** (setup, configure wallet address / `burn_reward` / timeout, publish, restrict), **Terminal stats** (live dashboard, 10s refresh)
+- **3) Deploy stats web page** (both networks side by side; Internet or LAN per launch mode) · **4) Node, Wallet & Mining Status** · **5) Watchdogs** (node-sync, boot autostart, wallet, stratum) · **6) Maintenance** (encrypted backup / restore / schedule / seed) · **7) Payouts & settlement** · **C) Clean up**
+- Stratum binds **3416** (mainnet) / **13416** (testnet); *publish* patches `grin-server.toml` to `0.0.0.0:PORT` + opens the firewall, *restrict* reverts to `127.0.0.1:PORT`. The toml is auto-detected via the running process (`/proc/$pid/exe`) or known toolkit directories.
 
-**Tools:**
-- **L) Live stats** — terminal dashboard refreshing every 10s
-- **S) Stats web page** — deploys a static nginx mining stats page
-- **W) Watchdog cron** — alerts if the stratum server drops after a node restart
+#### 3) Public mining pool (GRINIUM) — `07_grin_mining_public_pool.sh`
 
-> **Mining pool — coming soon.** A full self-hosted pool (PPLNS reward model, address-as-identity, Tor-only auto-pay, Node.js web dashboard + admin panel) is in development as a separate component. The current script 07 covers solo mining only.
+A full self-hosted **PPLNS** pool: **address-as-identity** (miners submit `grin_address.worker` as the stratum user — no accounts), **Tor-only auto-payouts**, Node.js/Express + SQLite backend, a static dashboard, and a JWT-protected admin panel. **G) Guided Full Setup** runs install → configure → deploy web → nginx+SSL → wallet listeners → service → create admin in sequence; individual steps and Backup/Cron/Logs/Reset are also available. Deploys as a **singlebox**, or split into a central **hub** + regional **satellites**. Ports: public stratum **3333**, node built-in stratum upstream **127.0.0.1:3334**, central API **8080** (nginx-proxied). App code in `web/07_mining_pool_public/`.
 
 ### 5. Grin Wallet Services — `05_grin_wallet_service.sh` (hub) + `051`–`055`
 
@@ -407,7 +406,9 @@ grin-node-toolkit/
 │   ├── 054_grin_payment_pro.sh           # Feature 5d: payment pro (coming soon)
 │   ├── 055_grin_public_web_wallet.sh     # Feature 5e: public WASM wallet (coming soon)
 │   ├── 06_global_grin_health.sh          # Feature 6 : Global Grin Health menu
-│   ├── 07_grin_mining_solo.sh            # Feature 7 : solo (stratum) mining
+│   ├── 07_grin_mining_hub_services.sh    # Feature 7 : mining hub (solo XOR public pool)
+│   ├── 07_grin_mining_solo.sh            #   solo private mining (Internet + LAN modes)
+│   ├── 07_grin_mining_public_pool.sh     #   GRINIUM public PPLNS pool (singlebox/hub/satellite)
 │   ├── 08_grin_node_admin.sh             # Addon  8 : admin & maintenance menu
 │   ├── 081_host_monitor_port.sh          # Remote node port monitor (standalone / cron)
 │   ├── 08del_clean_all_grin_things.sh    # Full Grin removal (nuclear cleanup)
@@ -418,6 +419,9 @@ grin-node-toolkit/
 │       ├── 06_node_submit_server.py      # Community node submission server
 │       ├── 06b_grinscan.sh               # GrinScan install/configure helpers
 │       ├── 052_lib_*.sh                  # Grin Drop libs (app, wallet, nginx, admin)
+│       ├── 07_lib_hub.sh / 07_lib_satellite.sh   # Public pool hub + satellite libs
+│       ├── 07_solo_*.sh                  # Solo mining libs (wallet, backup)
+│       ├── 07_mining_block_collector.py  # Solo mining stats collector (log → JSON)
 │       └── nginx_shared_helpers.sh       # Shared nginx rate-limit zone helpers
 └── web/
     ├── 04_node_api/                      # Feature 4 : Node API status page + collectors
@@ -432,10 +436,11 @@ grin-node-toolkit/
     │   └── plugin/                       #   PHP WordPress/WooCommerce plugin
     ├── 06_stats_map/stats/               # Feature 6 : Network stats + peer map (index.html, stats.html)
     ├── 06b_grinscan/                     # Feature 6 : GrinScan explorer (server.js + public/)
-    └── 07_mining_pool_solo/stats.html    # Feature 7 : static mining stats page
+    ├── 07_mining_pool_solo/              # Feature 7 : solo stats page (index.html, setup page)
+    └── 07_mining_pool_public/            # Feature 7 : GRINIUM pool (back-end-pool/ + public_html/)
 ```
 
-> Scripts 054 (Payment Pro) and 055 (Public WASM Wallet) are placeholders — no web files yet. The full PPLNS mining pool (Node.js dashboard) is also still in development.
+> Scripts 054 (Payment Pro) and 055 (Public WASM Wallet) are placeholders — no web files yet.
 
 **Runtime config created on first run** (stored outside the toolkit, under `/opt/grin/conf/`):
 
@@ -470,17 +475,20 @@ grin-node-toolkit/
 | 3413  | HTTP     | Grin mainnet node API V2 (`/v2/foreign` via nginx)          |
 | 3414  | P2P      | Grin mainnet peer connections                               |
 | 3415  | HTTP     | Grin mainnet wallet Foreign API                             |
-| 3416  | TCP      | Grin mainnet stratum mining server                          |
+| 3416  | TCP      | Grin mainnet stratum mining server (solo private)           |
 | 13413 | HTTP     | Grin testnet node API V2 (`/v2/foreign` via nginx)          |
 | 13414 | P2P      | Grin testnet peer connections                               |
 | 13415 | HTTP     | Grin testnet wallet Foreign API                             |
-| 13416 | TCP      | Grin testnet stratum mining server                          |
+| 13416 | TCP      | Grin testnet stratum mining server (solo private)           |
 | 3004  | HTTP     | Grin Drop — testnet (Node.js, proxied by nginx)             |
 | 3005  | HTTP     | Grin Drop — mainnet (Node.js, proxied by nginx)             |
 | 3006  | HTTP     | WooCommerce bridge — mainnet (Node.js, localhost only)      |
 | 3007  | HTTP     | WooCommerce bridge — testnet (Node.js, localhost only)      |
 | 3010  | HTTP     | GrinScan explorer — testnet (Node.js, proxied by nginx)     |
 | 3011  | HTTP     | GrinScan explorer — mainnet (Node.js, proxied by nginx)     |
+| 3333  | TCP      | Public pool (GRINIUM) stratum — miners connect here         |
+| 3334  | TCP      | Public pool node built-in stratum upstream (localhost only) |
+| 8080  | HTTP     | Public pool central API (localhost, nginx-proxied)          |
 | 7420  | HTTP     | Private Web Wallet — Node.js (localhost, proxied by nginx)  |
 | 80    | HTTP     | nginx (redirects to HTTPS)                                  |
 | 443   | HTTPS    | nginx file server / proxy                                   |

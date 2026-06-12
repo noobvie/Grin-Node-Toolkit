@@ -16,7 +16,8 @@
 #   Network-select screen
 #     1) Configure solo private pool Mainnet ┐ enter the per-net branch below
 #     2) Configure solo private pool Testnet ┘
-#     3) Deploy stats web page          (public dashboard, both networks)
+#     3) Deploy stats web page          (both networks; public domain+SSL, or plain
+#                                        HTTP on a LAN IP if launched as `… solo.sh lan`)
 #     4) Node, Wallet & Mining Status   (both networks)
 #     5) Watchdogs (global)             (node-sync · boot autostart · wallet · stratum)
 #     6) Maintenance                    (encrypted backup · restore · schedule · seed)
@@ -49,6 +50,15 @@ STRATUM_PORT_MAINNET=3416
 STRATUM_PORT_TESTNET=13416
 NODE_API_PORT_MAINNET=3413
 NODE_API_PORT_TESTNET=13413
+
+# Stats-page presentation mode, set once from $1 in main():
+#   "public" (default) — domain + Let's Encrypt SSL via certbot (the original flow).
+#   "lan"              — plain HTTP on a chosen LAN IP:port; no domain, no certbot,
+#                        no Basic Auth. For an internal/home network where the page
+#                        is never internet-reachable. ONLY the stats-page deploy
+#                        differs; all mining mechanics (node/wallet/stratum/watchdogs/
+#                        backups/collector) are identical to public mode.
+SOLO_NET_MODE="public"
 
 # Stats page resources are namespaced "grin-solo-mining-stat" (NOT "grin-stats" —
 # Script 06 / Global health owns grin-stats for its ecosystem site). ONE unified
@@ -452,6 +462,28 @@ _confirm_public_ipv4() {
             echo -e "  ${RED}Not a valid IPv4 — try again.${RESET}" >&2
         fi
     done
+}
+
+# Best-effort detection of this box's primary LAN (RFC-1918) IPv4. Used by the
+# LAN stats-page flow as the prefill for the bind address. Prefers the source IP
+# of the default route (the NIC the box actually reaches the LAN on), then falls
+# back to the first private address in `hostname -I`. Echoes the IP (empty if none);
+# the caller always lets the operator confirm/override, so a miss is non-fatal.
+_detect_lan_ipv4() {
+    local ip=""
+    ip=$(ip -4 route get 1.1.1.1 2>/dev/null \
+         | grep -oP 'src \K[0-9.]+' | head -n1 || true)
+    if [[ -n "$ip" ]] && _is_private_ipv4 "$ip"; then
+        printf '%s' "$ip"; return 0
+    fi
+    # Fall back to the first private address reported by hostname -I.
+    local cand
+    for cand in $(hostname -I 2>/dev/null); do
+        if [[ "$cand" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && _is_private_ipv4 "$cand"; then
+            printf '%s' "$cand"; return 0
+        fi
+    done
+    printf ''
 }
 
 _stratum_bind_line() {
@@ -1592,6 +1624,12 @@ _solo_prompt_access_lock() {
 }
 
 solo_deploy_stats_page() {
+    # LAN mode (SOLO_NET_MODE=lan) serves the SAME page over plain HTTP on a chosen
+    # LAN IP:port — no domain, no certbot, no Basic Auth. Only the bind + publish
+    # tail differs; the page build (HTML/config/collector/proxy blocks) is shared.
+    local lan_mode=0
+    [[ "${SOLO_NET_MODE:-public}" == "lan" ]] && lan_mode=1
+
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -e "${BOLD}${CYAN}  Deploy Mining Stats Page${RESET}"
@@ -1601,6 +1639,11 @@ solo_deploy_stats_page() {
     echo -e "  nginx proxies /api/status/<net> → each node's Owner API with Basic Auth."
     echo -e "  Auto-detects which nodes exist; missing networks grey out on the page."
     echo -e "  No Node.js, no database, no systemd service needed."
+    if [[ $lan_mode -eq 1 ]]; then
+        echo ""
+        echo -e "  ${BOLD}LAN mode:${RESET} served over ${BOLD}plain HTTP on this server's LAN address${RESET} —"
+        echo -e "  ${DIM}no domain, no SSL, no certbot, no Basic Auth. For a trusted internal network.${RESET}"
+    fi
     echo ""
 
     if [[ ! -f "$STATS_WEB_SRC" ]]; then
@@ -1644,34 +1687,73 @@ solo_deploy_stats_page() {
     fi
     nginx_install_with_certbot || { error "Could not install nginx/certbot — aborting deploy."; return 1; }
 
-    echo ""
-    echo -e "${BOLD}${YELLOW}┏━━ CLOUDFLARE / DNS NOTE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${RESET}"
-    echo -e "${BOLD}${YELLOW}┃${RESET}  If this domain is on Cloudflare, set the A record to"
-    echo -e "${BOLD}${YELLOW}┃${RESET}  ${BOLD}\"DNS only\" (grey cloud)${RESET} — ${BOLD}NOT proxied (orange cloud)${RESET}."
-    echo -e "${BOLD}${YELLOW}┃${RESET}  ${DIM}A proxied record blocks miners from reaching the stratum${RESET}"
-    echo -e "${BOLD}${YELLOW}┃${RESET}  ${DIM}port via the domain — they'd have to use the raw server IP${RESET}"
-    echo -e "${BOLD}${YELLOW}┃${RESET}  ${DIM}(e.g. iPollo G1 mini: Pool name with real IP instead).${RESET}"
-    echo -e "${BOLD}${YELLOW}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${RESET}"
-    echo ""
+    # $subdomain doubles as the page "host" + nginx server_name. In public mode it
+    # is an FQDN; in LAN mode it is the chosen private IP. $lan_ip/$lan_port are only
+    # set (and only referenced later) in LAN mode.
+    local subdomain lan_ip lan_port lan_port_in c
+    if [[ $lan_mode -eq 1 ]]; then
+        # ── LAN mode: bind to a private IP:port — no domain, DNS, or certbot ─────
+        local lan_default; lan_default=$(_detect_lan_ipv4)
+        echo -e "Serve the stats page on this server's ${BOLD}LAN address${RESET}."
+        echo -e "  ${DIM}Browsers/miners on the same network reach it at http://<ip>:<port>/.${RESET}"
+        echo ""
+        while true; do
+            if [[ -n "$lan_default" ]]; then
+                echo -ne "LAN IP to serve on [${lan_default}] (Enter=accept · type to override · 0=return): "
+            else
+                echo -ne "LAN IP to serve on (type the private IP · 0=return): "
+            fi
+            read -r lan_ip
+            [[ "$lan_ip" == "0" ]] && { info "Cancelled — returning."; return 1; }
+            [[ -z "$lan_ip" ]] && lan_ip="$lan_default"
+            if [[ ! "$lan_ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+                error "Not a valid IPv4 — try again."; continue
+            fi
+            if ! _is_private_ipv4 "$lan_ip"; then
+                echo -ne "  ${YELLOW}$lan_ip is not a private/LAN address. Bind it anyway? [y/N]: ${RESET}"
+                read -r c
+                [[ "$c" =~ ^[Yy]$ ]] || continue
+            fi
+            break
+        done
+        lan_port=80
+        echo -ne "HTTP port for the stats page [80]: "
+        read -r lan_port_in
+        [[ -n "$lan_port_in" ]] && lan_port="$lan_port_in"
+        if [[ ! "$lan_port" =~ ^[0-9]+$ ]] || (( lan_port < 1 || lan_port > 65535 )); then
+            error "Invalid port: $lan_port"; return 1
+        fi
+        subdomain="$lan_ip"
+        info "LAN stats page will bind ${BOLD}${lan_ip}:${lan_port}${RESET} (plain HTTP, no SSL)."
+    else
+        echo ""
+        echo -e "${BOLD}${YELLOW}┏━━ CLOUDFLARE / DNS NOTE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${RESET}"
+        echo -e "${BOLD}${YELLOW}┃${RESET}  If this domain is on Cloudflare, set the A record to"
+        echo -e "${BOLD}${YELLOW}┃${RESET}  ${BOLD}\"DNS only\" (grey cloud)${RESET} — ${BOLD}NOT proxied (orange cloud)${RESET}."
+        echo -e "${BOLD}${YELLOW}┃${RESET}  ${DIM}A proxied record blocks miners from reaching the stratum${RESET}"
+        echo -e "${BOLD}${YELLOW}┃${RESET}  ${DIM}port via the domain — they'd have to use the raw server IP${RESET}"
+        echo -e "${BOLD}${YELLOW}┃${RESET}  ${DIM}(e.g. iPollo G1 mini: Pool name with real IP instead).${RESET}"
+        echo -e "${BOLD}${YELLOW}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${RESET}"
+        echo ""
 
-    local subdomain
-    echo -e "Subdomain for the stats page  ${DIM}(suggestion: solo.yourdomain.com)${RESET}"
-    echo -ne "Enter subdomain ${DIM}(0 = return)${RESET}: "
-    read -r subdomain
-    [[ -z "$subdomain" || "$subdomain" == "0" ]] && { info "Cancelled — returning."; return 1; }
+        echo -e "Subdomain for the stats page  ${DIM}(suggestion: solo.yourdomain.com)${RESET}"
+        echo -ne "Enter subdomain ${DIM}(0 = return)${RESET}: "
+        read -r subdomain
+        [[ -z "$subdomain" || "$subdomain" == "0" ]] && { info "Cancelled — returning."; return 1; }
 
-    if ! nginx_validate_domain "$subdomain"; then
-        error "Invalid domain name: $subdomain"
-        return 1
-    fi
+        if ! nginx_validate_domain "$subdomain"; then
+            error "Invalid domain name: $subdomain"
+            return 1
+        fi
 
-    # DNS pre-check — certbot's HTTP-01 challenge needs this name pointing here.
-    if ! getent hosts "$subdomain" >/dev/null 2>&1; then
-        warn "$subdomain does not currently resolve in DNS."
-        echo -e "  ${DIM}certbot will fail unless an A/AAAA record points $subdomain at this server.${RESET}"
-        echo -ne "Continue anyway (deploy HTTP now, retry SSL later)? [y/N/0]: "
-        read -r dns_go
-        [[ "${dns_go,,}" != "y" ]] && { info "Cancelled — set DNS first, then re-run S."; return 1; }
+        # DNS pre-check — certbot's HTTP-01 challenge needs this name pointing here.
+        if ! getent hosts "$subdomain" >/dev/null 2>&1; then
+            warn "$subdomain does not currently resolve in DNS."
+            echo -e "  ${DIM}certbot will fail unless an A/AAAA record points $subdomain at this server.${RESET}"
+            echo -ne "Continue anyway (deploy HTTP now, retry SSL later)? [y/N/0]: "
+            read -r dns_go
+            [[ "${dns_go,,}" != "y" ]] && { info "Cancelled — set DNS first, then re-run S."; return 1; }
+        fi
     fi
 
     # ── Build per-network proxy blocks for whichever nodes exist ────────────────
@@ -1770,7 +1852,13 @@ solo_deploy_stats_page() {
             "$web_dir/data/config.json" 2>/dev/null || true)
     fi
     local pub_ip
-    pub_ip=$(_confirm_public_ipv4 "$existing_ip")
+    if [[ $lan_mode -eq 1 ]]; then
+        # On a LAN there is no public IP — the stratum target the setup page shows IS
+        # the LAN address miners point their rigs at (raw TCP to <lan_ip>:<stratum>).
+        pub_ip="$lan_ip"
+    else
+        pub_ip=$(_confirm_public_ipv4 "$existing_ip")
+    fi
     local public_ip_json=""
     [[ -n "$pub_ip" ]] && public_ip_json="\"public_ip\":\"$pub_ip\","
 
@@ -1784,22 +1872,30 @@ solo_deploy_stats_page() {
     # a self-hosted Office Tools base URL instead, or type "-" to disable the live
     # pills (the static recommended/optional chips are kept). Existing config wins
     # as the prefill so a re-run does not silently revert a custom/disabled choice.
-    local default_pcapi="https://tools.grin.money/pay-api"
-    local existing_pcapi=""
-    if [[ -f "$web_dir/data/config.json" ]]; then
-        existing_pcapi=$(grep -oP '"portcheck_api"\s*:\s*"\K(\\.|[^"\\])*' \
-            "$web_dir/data/config.json" 2>/dev/null || true)
-    fi
-    # Prefill: a value already in config (even when re-running) else the canonical default.
-    local prefill_pcapi="${existing_pcapi:-$default_pcapi}"
-    echo -ne "Off-box port-check API base URL for live reachability pills (Enter to accept, '-' to disable) [$prefill_pcapi]: "
-    read -r solo_pcapi
-    [[ -z "$solo_pcapi" ]] && solo_pcapi="$prefill_pcapi"
-    [[ "$solo_pcapi" == "-" ]] && solo_pcapi=""   # explicit opt-out → omit the key, page falls back to chips
-    local portcheck_api_json=""
-    if [[ -n "$solo_pcapi" ]]; then
-        local esc_pcapi="${solo_pcapi//\\/\\\\}"; esc_pcapi="${esc_pcapi//\"/\\\"}"
-        portcheck_api_json="\"portcheck_api\":\"$esc_pcapi\","
+    local solo_pcapi="" portcheck_api_json=""
+    if [[ $lan_mode -eq 1 ]]; then
+        # LAN: an off-box (internet) checker can't reach a private LAN IP, so the live
+        # reachability pills are meaningless here — leave them off (page keeps the
+        # static recommended/optional chips). solo_pcapi="" also drops the external
+        # origin from connect-src below, keeping the CSP pure 'self'.
+        info "LAN mode — live off-box port-check pills disabled (can't reach private IPs)."
+    else
+        local default_pcapi="https://tools.grin.money/pay-api"
+        local existing_pcapi=""
+        if [[ -f "$web_dir/data/config.json" ]]; then
+            existing_pcapi=$(grep -oP '"portcheck_api"\s*:\s*"\K(\\.|[^"\\])*' \
+                "$web_dir/data/config.json" 2>/dev/null || true)
+        fi
+        # Prefill: a value already in config (even when re-running) else the canonical default.
+        local prefill_pcapi="${existing_pcapi:-$default_pcapi}"
+        echo -ne "Off-box port-check API base URL for live reachability pills (Enter to accept, '-' to disable) [$prefill_pcapi]: "
+        read -r solo_pcapi
+        [[ -z "$solo_pcapi" ]] && solo_pcapi="$prefill_pcapi"
+        [[ "$solo_pcapi" == "-" ]] && solo_pcapi=""   # explicit opt-out → omit the key, page falls back to chips
+        if [[ -n "$solo_pcapi" ]]; then
+            local esc_pcapi="${solo_pcapi//\\/\\\\}"; esc_pcapi="${esc_pcapi//\"/\\\"}"
+            portcheck_api_json="\"portcheck_api\":\"$esc_pcapi\","
+        fi
     fi
 
     printf '{%s%s"host":"%s",%s%s"networks":{%s}}\n' "$slogan_json" "$pool_name_json" "$subdomain" "$public_ip_json" "$portcheck_api_json" "$nets_json" \
@@ -1871,7 +1967,11 @@ CRON
         done
 
         success "Mining stats collector installed (cron every 5 min) → $data_dir"
-        echo -e "  ${DIM}miningpoolstats endpoint(s): https://$subdomain/data/poolstats_<net>.json${RESET}"
+        if [[ $lan_mode -eq 1 ]]; then
+            echo -e "  ${DIM}poolstats endpoint(s): http://${lan_ip}:${lan_port}/data/poolstats_<net>.json${RESET}"
+        else
+            echo -e "  ${DIM}miningpoolstats endpoint(s): https://$subdomain/data/poolstats_<net>.json${RESET}"
+        fi
         echo -e "  ${DIM}If a scan shows 0 block matches after finding a block, the log wording may${RESET}"
         echo -e "  ${DIM}differ on your node version — adjust FOUND_RE/SHARE_RE in $BLOCK_COLLECTOR_BIN.${RESET}"
     else
@@ -1881,7 +1981,14 @@ CRON
     # ── Optional access lock (HTTP Basic Auth) ──────────────────────────────────
     # Sets $_ACCESS_AUTH_BLOCK + $_ACCESS_PUBLIC_CARVEOUTS, injected into the vhost
     # below. Safe over the certbot HTTPS redirect (creds never cross plain HTTP).
-    _solo_prompt_access_lock
+    # LAN mode has no auth path at all (plain HTTP only) — clear the blocks so the
+    # vhost carries no auth_basic lines, and skip the prompt.
+    if [[ $lan_mode -eq 1 ]]; then
+        _ACCESS_AUTH_BLOCK=""
+        _ACCESS_PUBLIC_CARVEOUTS=""
+    else
+        _solo_prompt_access_lock
+    fi
 
     # Dedicated zone (NOT the shared grin_api 30r/m used by scripts 04/06): the
     # page polls up to 4 proxied endpoints every 10s, so one viewer alone draws
@@ -1919,6 +2026,19 @@ CRON
     fi
     local csp_value="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src $csp_connect; font-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
 
+    # Bind/server_name differ by mode: public listens on :80 (certbot then adds 443);
+    # LAN binds only to the chosen private IP:port and never gets a 443 block.
+    local listen_line server_name_line vhost_ssl_note
+    if [[ $lan_mode -eq 1 ]]; then
+        listen_line="listen ${lan_ip}:${lan_port};"
+        server_name_line="server_name ${lan_ip} _;"
+        vhost_ssl_note="# LAN mode: plain HTTP only, bound to ${lan_ip}:${lan_port} — no SSL/certbot."
+    else
+        listen_line="listen 80;"
+        server_name_line="server_name $subdomain;"
+        vhost_ssl_note="# SSL is added in-place by certbot --nginx (do not hand-add a 443 block here)."
+    fi
+
     # umask 077 so the conf (which holds the base64 auth token(s)) is never
     # group/world readable, even momentarily, before the explicit chmod below.
     info "Writing nginx vhost (HTTP): $nginx_conf"
@@ -1926,11 +2046,11 @@ CRON
     ( umask 077; cat > "$nginx_conf" << EOF
 # Grin Solo Mining Stats (unified mainnet + testnet) — generated by 07_grin_mining_solo.sh
 # Rate/conn zones live in /etc/nginx/conf.d/script07-solo-{stats,static,conn}.conf
-# SSL is added in-place by certbot --nginx (do not hand-add a 443 block here).
+$vhost_ssl_note
 
 server {
-    listen 80;
-    server_name $subdomain;
+    $listen_line
+    $server_name_line
 
     root $web_dir;
     index index.html;
@@ -1980,37 +2100,47 @@ EOF
         error "nginx rejected the config — check $nginx_conf"
         return 1
     fi
-    success "nginx serving http://$subdomain"
-
-    echo ""
-    echo -ne "Run certbot for SSL on $subdomain (recommended)? [Y/n/0]: "
-    read -r do_ssl
     local page_https=0
-    if [[ "${do_ssl,,}" != "n" && "$do_ssl" != "0" ]]; then
-        # nginx_run_certbot (shared lib) handles the certbot --nginx --redirect call.
-        if nginx_run_certbot "$subdomain" "admin@$subdomain" --redirect; then
-            # certbot rewrote the conf in place — re-tighten perms (token still inside).
-            chmod 600 "$nginx_conf"
-            nginx_test_reload "reload after certbot" || true
-            page_https=1
-            success "Stats page deployed: https://$subdomain"
-        else
-            warn "certbot failed — page is live over HTTP only."
-            echo -e "  Fix DNS so $subdomain points here, then re-run S (or run certbot manually)."
-            success "Stats page deployed: http://$subdomain"
-        fi
+    if [[ $lan_mode -eq 1 ]]; then
+        # LAN mode: no domain → no certbot (HTTP-01 can't validate a private IP) and
+        # no auth (decided: LAN page is unauthenticated). The page is intentionally
+        # plain HTTP, reachable only on the LAN it is bound to.
+        success "nginx serving http://${lan_ip}:${lan_port}/ (LAN only)"
+        success "Stats page deployed: http://${lan_ip}:${lan_port}/"
+        echo -e "  ${DIM}Bound to ${lan_ip} — only reachable from this network. Make sure your${RESET}"
+        echo -e "  ${DIM}firewall allows TCP ${lan_port} from the LAN, and does NOT expose it to the internet.${RESET}"
     else
-        info "Skipped SSL — page is live over HTTP only at http://$subdomain"
-    fi
+        success "nginx serving http://$subdomain"
 
-    # Guardrail: never serve Basic Auth over plain HTTP. If a lock was configured
-    # but the page ended up HTTP-only (SSL skipped or certbot failed), strip the
-    # auth_basic lines now. The htpasswd file is kept; re-run S once SSL is up.
-    if [[ -n "$_ACCESS_AUTH_BLOCK" && $page_https -eq 0 ]]; then
-        sed -i '/^[[:space:]]*auth_basic/d' "$nginx_conf"
-        nginx_test_reload "reload after disabling HTTP-only auth lock" || true
-        warn "Access lock NOT active: refusing to serve Basic Auth over plain HTTP."
-        echo -e "  ${DIM}Credentials saved at $STATS_HTPASSWD — re-run S after SSL succeeds to enable the lock.${RESET}"
+        echo ""
+        echo -ne "Run certbot for SSL on $subdomain (recommended)? [Y/n/0]: "
+        read -r do_ssl
+        if [[ "${do_ssl,,}" != "n" && "$do_ssl" != "0" ]]; then
+            # nginx_run_certbot (shared lib) handles the certbot --nginx --redirect call.
+            if nginx_run_certbot "$subdomain" "admin@$subdomain" --redirect; then
+                # certbot rewrote the conf in place — re-tighten perms (token still inside).
+                chmod 600 "$nginx_conf"
+                nginx_test_reload "reload after certbot" || true
+                page_https=1
+                success "Stats page deployed: https://$subdomain"
+            else
+                warn "certbot failed — page is live over HTTP only."
+                echo -e "  Fix DNS so $subdomain points here, then re-run S (or run certbot manually)."
+                success "Stats page deployed: http://$subdomain"
+            fi
+        else
+            info "Skipped SSL — page is live over HTTP only at http://$subdomain"
+        fi
+
+        # Guardrail: never serve Basic Auth over plain HTTP. If a lock was configured
+        # but the page ended up HTTP-only (SSL skipped or certbot failed), strip the
+        # auth_basic lines now. The htpasswd file is kept; re-run S once SSL is up.
+        if [[ -n "$_ACCESS_AUTH_BLOCK" && $page_https -eq 0 ]]; then
+            sed -i '/^[[:space:]]*auth_basic/d' "$nginx_conf"
+            nginx_test_reload "reload after disabling HTTP-only auth lock" || true
+            warn "Access lock NOT active: refusing to serve Basic Auth over plain HTTP."
+            echo -e "  ${DIM}Credentials saved at $STATS_HTPASSWD — re-run S after SSL succeeds to enable the lock.${RESET}"
+        fi
     fi
 
     echo -e "  Page polls ${BOLD}/api/status/<net>${RESET} + ${BOLD}/api/wallet/<net>${RESET} every 10s — both networks side by side."
@@ -2798,7 +2928,11 @@ solo_settlement_menu() {
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  07) Grin Mining Service — Solo Private Pool${RESET}"
+    if [[ "$SOLO_NET_MODE" == "lan" ]]; then
+        echo -e "${BOLD}${CYAN}  07) Grin Mining Service — Solo Private Pool ${DIM}(LAN mode)${RESET}"
+    else
+        echo -e "${BOLD}${CYAN}  07) Grin Mining Service — Solo Private Pool${RESET}"
+    fi
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     show_compact_status
@@ -2807,7 +2941,11 @@ show_menu() {
     echo -e "  ${GREEN}A${RESET}) Start here — node check      ${DIM}(is your node running & synced?)${RESET}"
     echo -e "  ${GREEN}1${RESET}) Configure solo private pool Mainnet  ${DIM}(real GRIN)${RESET}"
     echo -e "  ${GREEN}2${RESET}) Configure solo private pool Testnet  ${DIM}(tGRIN — no monetary value)${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Deploy stats web page        ${DIM}(public dashboard, both nets)${RESET}"
+    if [[ "$SOLO_NET_MODE" == "lan" ]]; then
+        echo -e "  ${GREEN}3${RESET}) Deploy stats web page        ${DIM}(LAN dashboard · plain HTTP · no domain/SSL)${RESET}"
+    else
+        echo -e "  ${GREEN}3${RESET}) Deploy stats web page        ${DIM}(public dashboard, both nets)${RESET}"
+    fi
     echo ""
     echo -e "  ${DIM}─── Overview & shared tools ──────────────────────${RESET}"
     echo -e "  ${GREEN}4${RESET}) Node, Wallet & Mining Status  ${DIM}(both networks)${RESET}"
@@ -2825,6 +2963,13 @@ show_menu() {
 }
 
 main() {
+    # Optional launch mode (mirrors Script 07 pool's singlebox|hub|satellite arg):
+    #   lan → serve the stats page over plain HTTP on a LAN IP:port (no domain/SSL).
+    # Any other value (or none) keeps the default public domain + certbot flow.
+    case "${1:-}" in
+        lan) SOLO_NET_MODE="lan" ;;
+    esac
+
     while true; do
         show_menu
         read -r choice || choice=0          # EOF (Ctrl+D) → 0 → Back to main menu

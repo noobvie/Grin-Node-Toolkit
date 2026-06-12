@@ -5,16 +5,22 @@
 # Part of: Grin Node Toolkit. Entry point for Script 7 (mining). Lets the
 # operator pick ONE mining type for this server and dispatches to it:
 #
-#   1) Solo PRIVATE mining   → 07_grin_mining_solo.sh
+#   1) Solo PRIVATE mining — Internet → 07_grin_mining_solo.sh
 #        Your node's built-in stratum; rewards go to ONE wallet. No miner
-#        accounts, no payouts engine. Best for a single owner / trusted group.
+#        accounts, no payouts engine. Stats dashboard on a public domain + SSL.
+#        Best for a single owner / trusted group reachable over the internet.
 #
-#   2) PUBLIC mining pool     → 07_grin_mining_public_pool.sh  (GRINIUM)
+#   2) Solo PRIVATE mining — LAN      → 07_grin_mining_solo.sh lan
+#        Same solo product, but the stats dashboard is served over plain HTTP on
+#        a chosen LAN IP:port — no domain, no certbot, no auth. For an internal
+#        network. Same exclusivity bucket as (1): it IS solo, just a LAN front-end.
+#
+#   3) PUBLIC mining pool             → 07_grin_mining_public_pool.sh  (GRINIUM)
 #        Full PPLNS pool: many miners, address-as-identity, Tor auto-payouts,
 #        web dashboard + admin panel. Best for a public-facing pool operator.
 #
-# ─── ONE TYPE PER SERVER ──────────────────────────────────────────────────────
-# A single server runs solo private OR public — NEVER both. They collide on:
+# ─── ONE SETUP PER SERVER ─────────────────────────────────────────────────────
+# A single server runs ONE of the above — NEVER two. They collide on:
 #   · the stratum port (3416, shared default)
 #   · nginx rate-limit / connection zones
 #   · the /opt/grin layout and conf files
@@ -85,13 +91,21 @@ hub_detect_public() {
 # DISPATCH — launch a child after enforcing one-type-per-server
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# $1 = type to launch ("solo"|"public")
+# $1 = type to launch ("solo"|"solo-lan"|"public")
+# solo and solo-lan are the SAME product (same ports/dirs/exclusivity) — solo-lan
+# just launches the solo script in LAN stats-page mode (plain HTTP, no domain/SSL).
 hub_launch() {
-    local want="$1" other_name other_marker want_script
+    local want="$1" other_name other_marker want_script want_arg=""
 
     case "$want" in
         solo)
             want_script="$SOLO_SCRIPT"
+            other_name="Public mining pool"
+            other_marker=$(hub_detect_public || true)
+            ;;
+        solo-lan)
+            want_script="$SOLO_SCRIPT"
+            want_arg="lan"
             other_name="Public mining pool"
             other_marker=$(hub_detect_public || true)
             ;;
@@ -125,7 +139,7 @@ hub_launch() {
         return 0
     fi
 
-    bash "$want_script"
+    bash "$want_script" $want_arg
     return 0
 }
 
@@ -154,12 +168,16 @@ show_menu() {
     echo ""
     hub_status_line
     echo ""
-    echo -e "${YELLOW}  Run only ONE mining type per server (solo private OR public)${RESET}"
-    echo -e "${DIM}  — they clash on the stratum port, nginx zones, and /opt/grin.${RESET}"
+    echo -e "${YELLOW}  Pick ONE option only — a server runs a single mining setup.${RESET}"
+    echo -e "${DIM}  All three clash on the stratum port, nginx zones, and /opt/grin, so only${RESET}"
+    echo -e "${DIM}  one can be installed per server (the others are blocked once one is set up).${RESET}"
     echo ""
-    echo -e "${DIM}  ─── Choose a mining type ─────────────────────────${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Solo PRIVATE mining   ${DIM}(private pool for yourself + friends, book keeping, web dashboard)${RESET}"
-    echo -e "  ${GREEN}2${RESET}) Public mining pool    ${DIM}(PPLNS rewards, miners join by address, Tor payouts, web dashboard)${RESET}"
+    echo -e "${DIM}  ─── Solo Mining Pool ${DIM}(private — yourself + friends)─────────${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Solo PRIVATE mining — Internet  ${DIM}(public domain + Let's Encrypt SSL · reachable anywhere)${RESET}"
+    echo -e "  ${GREEN}2${RESET}) Solo PRIVATE mining — LAN       ${DIM}(internal network · plain HTTP stats page · no domain/SSL)${RESET}"
+    echo ""
+    echo -e "${DIM}  ─── Public Mining Pool ${DIM}(open to anyone)──────────────────${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Public mining pool           ${DIM}(PPLNS rewards, miners join by address, Tor payouts, web dashboard)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
@@ -169,11 +187,12 @@ show_menu() {
 main() {
     while true; do
         show_menu
-        echo -ne "${BOLD}Select [0-2]: ${RESET}"
+        echo -ne "${BOLD}Select [0-3]: ${RESET}"
         read -r choice
         case "$choice" in
             1) hub_launch solo ;;
-            2) hub_launch public ;;
+            2) hub_launch solo-lan ;;
+            3) hub_launch public ;;
             0|q|exit) break ;;
             "") continue ;;
             *) warn "Invalid option."; sleep 1 ;;

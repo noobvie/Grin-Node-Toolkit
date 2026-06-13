@@ -172,6 +172,36 @@ hub_launch() {
         return 0
     fi
 
+    # Within solo: Internet and LAN are the SAME product (shared wallet/stratum/
+    # ports/dirs) — only the stats-page vhost differs. If solo is already deployed
+    # in the OTHER stats-page mode, warn and confirm before switching, because a
+    # re-deploy in the new mode rewrites that vhost (and its URL/SSL). Re-entering
+    # the same mode, or solo with no stats page yet, passes through silently.
+    if [[ "$want" == "solo" || "$want" == "solo-lan" ]] && hub_detect_solo >/dev/null 2>&1; then
+        local want_mode cur_label cur_word ans
+        want_mode="Internet"; [[ "$want" == "solo-lan" ]] && want_mode="LAN"
+        cur_label=$(hub_detect_solo_mode || true)
+        cur_word=${cur_label%% *}                       # "Internet" | "LAN" | "stratum"
+        if { [[ "$cur_word" == "Internet" ]] || [[ "$cur_word" == "LAN" ]]; } \
+           && [[ "$cur_word" != "$want_mode" ]]; then
+            echo ""
+            warn "Solo is already deployed in ${cur_word} mode:"
+            echo -e "    ${DIM}· ${cur_label}${RESET}"
+            warn "Internet and LAN are the same solo setup — only the stats page differs."
+            warn "Continuing in ${want_mode} mode re-deploys the stats page and OVERWRITES"
+            warn "the ${cur_word} vhost (and its URL/SSL)."
+            echo ""
+            echo -ne "${BOLD}Continue and switch to ${want_mode} mode? [y/N]: ${RESET}"
+            read -r ans || ans=""
+            if [[ "${ans,,}" != "y" ]]; then
+                info "Cancelled — keeping ${cur_word} mode."
+                echo "Press Enter to return to the mining hub..."
+                read -r
+                return 0
+            fi
+        fi
+    fi
+
     if [[ ! -f "$want_script" ]]; then
         error "Script not found: $want_script"
         echo "Press Enter to return to the mining hub..."
@@ -179,7 +209,13 @@ hub_launch() {
         return 0
     fi
 
-    bash "$want_script" $want_arg
+    if [[ "$want" == "solo" || "$want" == "solo-lan" ]]; then
+        # Tell the solo script it arrived via the hub so it skips its own
+        # Internet/LAN mode-switch prompt — already handled above.
+        SOLO_LAUNCHED_VIA_HUB=1 bash "$want_script" $want_arg
+    else
+        bash "$want_script" $want_arg
+    fi
     return 0
 }
 

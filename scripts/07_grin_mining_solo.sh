@@ -2661,17 +2661,18 @@ stratum_menu() {
 # on the network-select screen. Wallet/Stratum keep their own submenus — they
 # just inherit SOLO_NETWORK now instead of prompting per action.
 solo_net_menu() {
-    local choice label
+    local choice label mode_label
     label="Mainnet"; [[ "$SOLO_NETWORK" == "testnet" ]] && label="Testnet"
+    mode_label="Internet"; [[ "$SOLO_NET_MODE" == "lan" ]] && mode_label="LAN"
     while true; do
         clear
         if [[ "$SOLO_NETWORK" == "mainnet" ]]; then
             echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-            echo -e "${BOLD}${RED}  07) Grin Solo — [MAINNET — REAL GRIN]${RESET}"
+            echo -e "${BOLD}${RED}  07) Solo Private Pool ${mode_label} — [MAINNET — REAL GRIN]${RESET}"
             echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         else
             echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-            echo -e "${BOLD}${CYAN}  07) Grin Solo — [TESTNET]${RESET}"
+            echo -e "${BOLD}${CYAN}  07) Solo Private Pool ${mode_label} — [TESTNET]${RESET}"
             echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         fi
         echo ""
@@ -2973,7 +2974,7 @@ show_menu() {
     if [[ "$SOLO_NET_MODE" == "lan" ]]; then
         echo -e "${BOLD}${CYAN}  07) Grin Mining Service — Solo Private Pool ${DIM}(LAN mode)${RESET}"
     else
-        echo -e "${BOLD}${CYAN}  07) Grin Mining Service — Solo Private Pool${RESET}"
+        echo -e "${BOLD}${CYAN}  07) Grin Mining Service — Solo Private Pool ${DIM}(Internet mode)${RESET}"
     fi
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
@@ -3004,6 +3005,21 @@ show_menu() {
     echo -ne "${BOLD}Select [A/1-7/C/0]: ${RESET}"
 }
 
+# Detect the mode of an already-deployed solo stats page by inspecting its vhost.
+# Echoes "Internet" or "LAN"; echoes nothing when no stats page is deployed (only
+# the stratum is set up → no stats vhost to clash with). Mirrors the hub's
+# hub_detect_solo_mode: a LAN deploy binds `listen <ipv4>:<port>`, Internet uses
+# bare `listen 80`/`443` with an FQDN server_name.
+_solo_detect_deployed_mode() {
+    local vhost="/etc/nginx/sites-available/$STATS_BASENAME"
+    [[ -f "$vhost" ]] || return 0
+    if grep -qE 'listen[[:space:]]+[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]+' "$vhost" 2>/dev/null; then
+        echo "LAN"
+    else
+        echo "Internet"
+    fi
+}
+
 main() {
     # Optional launch mode (mirrors Script 07 pool's singlebox|hub|satellite arg):
     #   lan → serve the stats page over plain HTTP on a LAN IP:port (no domain/SSL).
@@ -3011,6 +3027,30 @@ main() {
     case "${1:-}" in
         lan) SOLO_NET_MODE="lan" ;;
     esac
+
+    # Direct-launch mode guard. Skipped when launched via the mining hub (it sets
+    # SOLO_LAUNCHED_VIA_HUB and runs its own Internet/LAN switch confirmation, so we
+    # don't prompt twice). Internet and LAN are the same solo product — only the
+    # stats page differs — so warn before a switch that would overwrite the
+    # already-deployed stats vhost.
+    if [[ -z "${SOLO_LAUNCHED_VIA_HUB:-}" ]]; then
+        local _want_mode _cur_mode _ans
+        _want_mode="Internet"; [[ "$SOLO_NET_MODE" == "lan" ]] && _want_mode="LAN"
+        _cur_mode=$(_solo_detect_deployed_mode)
+        if [[ -n "$_cur_mode" && "$_cur_mode" != "$_want_mode" ]]; then
+            echo ""
+            warn "Solo stats page is already deployed in ${_cur_mode} mode, but you launched ${_want_mode} mode."
+            warn "Internet and LAN are the same solo setup — only the stats page differs."
+            warn "Deploying the stats page in ${_want_mode} mode rewrites the ${_cur_mode} vhost (and its URL/SSL)."
+            echo ""
+            echo -ne "${BOLD}Continue in ${_want_mode} mode? [y/N]: ${RESET}"
+            read -r _ans || _ans=""
+            if [[ "${_ans,,}" != "y" ]]; then
+                info "Cancelled — keeping ${_cur_mode} mode. Re-launch in ${_cur_mode} mode to manage it."
+                return 0
+            fi
+        fi
+    fi
 
     while true; do
         show_menu

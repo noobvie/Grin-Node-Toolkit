@@ -45,6 +45,17 @@ app.set('trust proxy', 'loopback');
 app.use(express.json());
 app.use(cookieParser());  // FIX #4: Parse httpOnly cookies
 
+// True when a request arrived DIRECTLY on loopback (the trusted operator on the box —
+// e.g. Script 07's guided installer hitting 127.0.0.1:8080), NOT proxied in from nginx.
+// The app binds 127.0.0.1 only, and trust proxy='loopback' rewrites req.ip to the real
+// client IP for anything coming through nginx (which always sets XFF). So a loopback req.ip
+// can ONLY be a direct on-box call. Used to skip the anti-robot CAPTCHA for setup-time admin
+// registration — the captcha exists to slow REMOTE brute force, not the local root operator.
+function isLocalRequest(req) {
+  const ip = String(req.ip || '').replace('::ffff:', '');
+  return ip === '127.0.0.1' || ip === '::1';
+}
+
 // FIX #8: Compute config integrity hash
 function hashConfig(cfg) {
   return crypto
@@ -634,8 +645,12 @@ function setupRoutes() {
         }
 
         // CAPTCHA gate (before any credential work — a wrong/expired captcha never counts
-        // as a password attempt and can't trip the account lockout).
-        if (!loginCaptcha.verify(req.body?.captcha_id, req.body?.captcha_answer)) {
+        // as a password attempt and can't trip the account lockout). Skipped for direct
+        // on-box (loopback) calls: this is first-admin-only registration, run once by the
+        // trusted root operator via Script 07's guided installer. The captcha only exists
+        // to slow REMOTE brute force, which can't reach this loopback-bound endpoint anyway.
+        if (!isLocalRequest(req) &&
+            !loginCaptcha.verify(req.body?.captcha_id, req.body?.captcha_answer)) {
           return res.status(400).json({ success: false, error: 'Captcha incorrect or expired. Try again.' });
         }
 

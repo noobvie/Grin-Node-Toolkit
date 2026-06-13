@@ -938,6 +938,10 @@ pool_setup_admin() {
     echo -ne "Admin email (optional): "
     read -r admin_email
 
+    # No captcha here: /api/auth/register skips the anti-robot gate for direct on-box
+    # (loopback) calls — see isLocalRequest() in back-end-pool/index.js. This guided
+    # flow always POSTs to 127.0.0.1, and the captcha only exists to slow REMOTE brute
+    # force on the public login form, not the trusted root operator doing first-admin setup.
     local payload
     payload=$(node -e "
 process.stdout.write(JSON.stringify({

@@ -1269,14 +1269,15 @@ pool_guided_setup() {
     _pool_guided_step 4 "Setup nginx" pool_setup_nginx \
         || { error "Nginx setup failed — aborting guided setup."; return 0; }
     _pool_guided_pause "Set up pool wallet (coinbase + payout listeners)" || return 0
-    # Wallet setup is best-effort in guided mode: a missing/unsynced node shouldn't
-    # block the rest of setup — but ask before moving on, so a deliberate cancel
-    # (0 inside the wallet prompts) can also end the guided flow here.
+    # Wallet setup must end with BOTH listeners up (pw_setup returns non-zero
+    # otherwise, or on a deliberate cancel). Don't roll on to the service + admin
+    # steps with a wallet that can't listen — coinbase + payouts would silently
+    # fail. Default to stopping; only continue if the operator explicitly opts in.
     if ! _pool_guided_step 5 "Set up wallet" pw_setup; then
-        warn "Wallet not fully set up — finish via 5) Set up wallet (needed for coinbase + payouts)."
-        echo -ne "  Continue with the remaining steps (service + admin)? [Y/n]: "
+        warn "Wallet not fully set up (listeners down or setup cancelled) — finish via 5) Set up wallet."
+        echo -ne "  Continue with the remaining steps anyway (service + admin)? [y/N]: "
         local go2; read -r go2
-        [[ "${go2,,}" == "n" ]] && { info "Guided setup stopped — completed steps are kept."; return 0; }
+        [[ "${go2,,}" == "y" ]] || { info "Guided setup stopped — completed steps are kept."; return 0; }
     fi
     _pool_guided_pause "start the service and create admin account" || return 0
     pool_start_service || true

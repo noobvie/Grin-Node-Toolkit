@@ -100,6 +100,34 @@ _pw_read_new_pass() {
     printf '%s' "$pass"
 }
 
+# ─── Verify a passphrase actually opens the wallet seed ──────────────────────
+# Runs the local `address` command (no node needed) — succeeds only if the seed
+# decrypts. Used before saving a passphrase, so we never hand the listeners a
+# password that can't open the wallet. <dir> <bin> <pass>
+_pw_verify_pass() {
+    local d="$1" b="$2" p="$3" out
+    out=$( cd "$d" && "$b" --top_level_dir "$d" -p "$p" address 2>&1 )
+    grep -qiE 'grin1[a-z0-9]{40,}|tor address' <<< "$out"
+}
+
+# ─── Archive an existing wallet dir aside as <dir>_ddmmyy ────────────────────
+# grin-wallet refuses to `init` over an existing config dir ("Wallet
+# configuration already exists"), so a fresh wallet must move the old one aside.
+# Renamed, never deleted — the seed/passphrase stay recoverable. <dir>
+_pw_archive_wallet_dir() {
+    local d="$1" stamp archive
+    stamp=$(date +%d%m%y)
+    archive="${d}_${stamp}"
+    [[ -e "$archive" ]] && archive="${d}_${stamp}-$(date +%H%M%S)"
+    if mv "$d" "$archive"; then
+        success "Old wallet archived → $archive (renamed, not deleted)."
+        warn "Its seed + passphrase still live there — keep it until the new wallet is confirmed."
+        return 0
+    fi
+    error "Could not move $d aside (→ $archive). Resolve manually and re-run."
+    return 1
+}
+
 # ─── Port-collision guard ───────────────────────────────────────────────────
 # 3415/3420 are grin-wallet defaults — another wallet service (05C, 051/055, a
 # 052 drop) may already hold them. NEVER auto-kill another service's wallet.
@@ -161,7 +189,9 @@ _pw_start_one() {
     if gnc_wait_for_port "$port" 20 2; then
         success "$label listener up on $port (session '$tmux_name')."
     else
-        warn "$label session started but port $port not listening yet. Check: tmux attach -t $tmux_name"
+        error "$label session started but port $port is NOT listening — wrong passphrase, port collision, or wallet busy."
+        error "  Check: tmux attach -t $tmux_name"
+        return 1
     fi
 }
 
@@ -264,33 +294,55 @@ pw_setup() {
     fi
 
     dir=$(pw_wallet_dir); bin=$(pw_bin); toml=$(pw_toml); pass_file=$(pw_pass_file)
-    mkdir -p "$dir"
 
-    # 1) Binary (shared download/verify lib)
-    gwi_install_grin_wallet "$dir" 0 || { error "grin-wallet install failed."; return 1; }
-
-    # 2) init -h  OR  recover (init -hr from seed)
-    local re=""
+    # 1) Decide what to do when a wallet already exists. grin-wallet refuses to
+    #    `init` over an existing config dir, so a NEW / RECOVERED wallet must move
+    #    the old dir aside first (archived → <dir>_ddmmyy, never deleted). We only
+    #    archive AFTER a valid new passphrase is in hand (step 3a), so a cancel at
+    #    the passphrase prompt never disturbs the existing wallet.
+    local action="new"          # new | existing | recover
     if [[ -f "$toml" ]]; then
         warn "Wallet already initialized at $dir."
-        echo -ne "  Re-initialize? ${RED:-}(overwrites!)${RESET:-} [y/N]: "
-        read -r re || true
-        [[ "${re,,}" == "y" ]] || info "Keeping existing wallet."
+        echo -e "  What do you want to do?"
+        echo -e "    1) Use the EXISTING wallet  (you remember its passphrase)"
+        echo -e "    2) Create a NEW wallet      (archive old dir → ${dir}_$(date +%d%m%y), then init)"
+        echo -e "    3) Recover from seed        (archive old dir, then init -hr)"
+        echo -ne "  Select [1/2/3/0]: "
+        local choice; read -r choice || true
+        case "$choice" in
+            1) action="existing" ;;
+            2) action="new" ;;
+            3) action="recover" ;;
+            *) info "Cancelled."; return 1 ;;
+        esac
     fi
 
-    if [[ ! -f "$toml" || "${re,,}" == "y" ]]; then
-        echo -e "  Setup mode:  1) New wallet (init)   2) Recover from seed (init -hr)"
-        echo -ne "  Select [1/2/0]: "
-        local mode; read -r mode || true
-        [[ "$mode" == "0" ]] && { info "Cancelled."; return 1; }
+    mkdir -p "$dir"
 
+    # 3a) NEW / RECOVERED wallet — read passphrase, (archive old), install, init.
+    if [[ "$action" == "new" || "$action" == "recover" ]]; then
         echo ""
         echo -e "  ${YELLOW:-}This passphrase is SAVED to disk (mode 600). Both listeners must open${RESET:-}"
         echo -e "  ${YELLOW:-}the wallet unattended, so the saved copy is what lets them auto-start${RESET:-}"
         echo -e "  ${YELLOW:-}after a reboot/crash (boot autostart + */5 watchdog).${RESET:-}"
         echo ""
         local pass; pass=$(_pw_read_new_pass) || { info "Cancelled."; return 1; }
-        local init_flag="-h"; [[ "$mode" == "2" ]] && init_flag="-hr"
+        local init_flag="-h"; [[ "$action" == "recover" ]] && init_flag="-hr"
+
+        # Archive the existing wallet only now — passphrase captured, so a cancel
+        # above left the old wallet untouched. Confirm, then move it aside.
+        if [[ -f "$toml" ]]; then
+            echo ""
+            warn "The existing wallet at $dir will be ARCHIVED (renamed), not deleted."
+            echo -ne "  Proceed? [y/N]: "
+            local cfm; read -r cfm || true
+            [[ "${cfm,,}" == "y" ]] || { info "Cancelled."; unset pass; return 1; }
+            _pw_archive_wallet_dir "$dir" || { unset pass; return 1; }
+            mkdir -p "$dir"
+        fi
+
+        # Binary into the (now fresh) dir.
+        gwi_install_grin_wallet "$dir" 0 || { error "grin-wallet install failed."; unset pass; return 1; }
 
         info "Running grin-wallet init ($init_flag) — follow any seed prompts..."
         # Security trade-off: -p exposes the passphrase in argv during init.
@@ -298,34 +350,46 @@ pw_setup() {
         local rc=$?
         if [[ $rc -ne 0 ]]; then error "grin-wallet init failed (rc=$rc)."; unset pass; return 1; fi
 
-        # Save passphrase to the SAME file the Configure step + backend already use.
+        # Confirm the seed decrypts with this passphrase before saving it — a
+        # password the listeners can't use is worse than no password.
+        if ! _pw_verify_pass "$dir" "$bin" "$pass"; then
+            error "The new wallet did not open with that passphrase — aborting setup."
+            unset pass; return 1
+        fi
+
         install -m 600 /dev/null "$pass_file" 2>/dev/null || true
         printf '%s' "$pass" > "$pass_file"; chmod 600 "$pass_file"; unset pass
         if declare -F pool_write_conf_key >/dev/null 2>&1; then
             pool_write_conf_key "wallet_pass_file" "$pass_file"
         fi
         success "Passphrase saved: $pass_file (mode 600) — enables listener auto-start."
-    fi
 
-    # Existing wallet kept but no saved passphrase (pass file removed, or the
-    # wallet predates this setup flow) — the listeners + backend need it on disk.
-    if [[ -f "$toml" && ! -f "$pass_file" ]]; then
-        warn "No saved wallet password ($pass_file) — listeners can't start without it."
-        echo -e "  Enter the EXISTING wallet's passphrase to save it (mode 600):"
+    # 3b) EXISTING wallet — prompt for the passphrase and verify it opens the
+    #     wallet before saving. We refuse to continue on a wrong passphrase, so
+    #     the listeners (and every later step) only ever see a working one.
+    else
+        # Binary (shared download/verify lib) — no-op if already present.
+        gwi_install_grin_wallet "$dir" 0 || { error "grin-wallet install failed."; return 1; }
+
+        echo ""
+        info "Using the existing wallet at $dir."
+        echo -e "  Enter its passphrase so both listeners can open it unattended:"
         local exist_pass
-        if exist_pass=$(_pw_read_new_pass); then
-            install -m 600 /dev/null "$pass_file" 2>/dev/null || true
-            printf '%s' "$exist_pass" > "$pass_file"; chmod 600 "$pass_file"; unset exist_pass
-            if declare -F pool_write_conf_key >/dev/null 2>&1; then
-                pool_write_conf_key "wallet_pass_file" "$pass_file"
-            fi
-            success "Passphrase saved: $pass_file (mode 600)."
-        else
-            warn "Skipped — listeners will fail until the passphrase is saved (re-run Setup wallet)."
+        while true; do
+            read -rs -p "  Passphrase (0 to cancel): " exist_pass; echo ""
+            [[ "$exist_pass" == "0" ]] && { info "Cancelled."; unset exist_pass; return 1; }
+            if _pw_verify_pass "$dir" "$bin" "$exist_pass"; then break; fi
+            error "That passphrase did not open the wallet — try again (0 to cancel)."
+        done
+        install -m 600 /dev/null "$pass_file" 2>/dev/null || true
+        printf '%s' "$exist_pass" > "$pass_file"; chmod 600 "$pass_file"; unset exist_pass
+        if declare -F pool_write_conf_key >/dev/null 2>&1; then
+            pool_write_conf_key "wallet_pass_file" "$pass_file"
         fi
+        success "Passphrase verified & saved: $pass_file (mode 600)."
     fi
 
-    # 3) Patch grin-wallet.toml — pin the API ports + node foreign secret + log cap.
+    # 4) Patch grin-wallet.toml — pin the API ports + node foreign secret + log cap.
     if [[ -f "$toml" ]]; then
         _pw_set_toml_key "$toml" "api_listen_port"       "$PW_FOREIGN_PORT" && info "grin-wallet.toml api_listen_port → $PW_FOREIGN_PORT"
         _pw_set_toml_key "$toml" "owner_api_listen_port" "$PW_OWNER_PORT"   && info "grin-wallet.toml owner_api_listen_port → $PW_OWNER_PORT"
@@ -344,16 +408,24 @@ pw_setup() {
         fi
     fi
 
-    # 4) Point the node's stratum coinbase at this wallet.
+    # 5) Point the node's stratum coinbase at this wallet.
     echo ""
     pw_patch_node_toml || true
 
-    # 5) Start both listeners.
+    # 6) Start both listeners. The wallet MUST be able to listen before setup is
+    #    considered done — a wrong passphrase or port collision surfaces here, and
+    #    the operator should NOT continue (start the service, accept miners) until
+    #    both listeners are up, or coinbase + payouts silently fail.
     echo ""
     pw_write_launchers
-    pw_listener_start
+    if ! pw_listener_start; then
+        error "Pool wallet listeners are NOT both up — setup is incomplete."
+        error "  Do NOT start the pool service yet. Fix the cause (passphrase, port"
+        error "  collision, node) and re-run 5) Set up wallet until both show [RUNNING]."
+        return 1
+    fi
 
-    # 6) Record the pool's Grin address in the pool config — the backend uses it
+    # 7) Record the pool's Grin address in the pool config — the backend uses it
     #    to login to the node's built-in stratum (node-stratum-client.js). It can
     #    only be read once the wallet exists, which is why it lives here and not
     #    in 2) Configure.

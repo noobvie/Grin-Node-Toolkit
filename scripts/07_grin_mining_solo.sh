@@ -1914,7 +1914,7 @@ solo_deploy_stats_page() {
         # origin from connect-src below, keeping the CSP pure 'self'.
         info "LAN mode — live off-box port-check pills disabled (can't reach private IPs)."
     else
-        local default_pcapi="https://tools.grin.money/pay-api"
+        local default_pcapi="https://tools.grin.money/tools-api"
         local existing_pcapi=""
         if [[ -f "$web_dir/data/config.json" ]]; then
             existing_pcapi=$(grep -oP '"portcheck_api"\s*:\s*"\K(\\.|[^"\\])*' \
@@ -1922,7 +1922,7 @@ solo_deploy_stats_page() {
         fi
         # Prefill: a value already in config (even when re-running) else the canonical default.
         local prefill_pcapi="${existing_pcapi:-$default_pcapi}"
-        echo -ne "Off-box port-check API base URL for live reachability pills (Enter to accept, '-' to disable) [$prefill_pcapi]: "
+        echo -ne "External API the miner setup page uses to live-check your stratum ports' reachability (Enter to accept, '-' to disable) [$prefill_pcapi]: "
         read -r solo_pcapi
         [[ -z "$solo_pcapi" ]] && solo_pcapi="$prefill_pcapi"
         [[ "$solo_pcapi" == "-" ]] && solo_pcapi=""   # explicit opt-out → omit the key, page falls back to chips
@@ -2710,21 +2710,22 @@ solo_net_menu() {
 #   · no-op if the file is absent or not valid JSON (the full deploy owns creation)
 #   · no-op if "portcheck_api" is already present — a custom URL the operator set, OR
 #     a deliberate disable (full deploy omits the key), are both preserved
-#   · only adds the key + value, leaving every other field and the compact format intact
-# Returns 0 ONLY when it actually added the key (so the caller logs + chmods).
+# Returns 0 ONLY when it actually changed the file (so the caller logs + chmods).
 _solo_backfill_portcheck_api() {
     local cfg="$1"
     [[ -f "$cfg" ]] || return 1
-    python3 - "$cfg" "https://tools.grin.money/pay-api" <<'PY' || return 1
+    python3 - "$cfg" "https://tools.grin.money/tools-api" "https://tools.grin.money/pay-api" <<'PY' || return 1
 import json, sys
-path, default = sys.argv[1], sys.argv[2]
+path, default, old_default = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     with open(path) as f:
         cfg = json.load(f)
 except Exception:
     sys.exit(1)                      # missing / corrupt — leave it for the full deploy
-if not isinstance(cfg, dict) or "portcheck_api" in cfg:
-    sys.exit(1)                      # already set (custom or disabled) — never override
+if not isinstance(cfg, dict):
+    sys.exit(1)
+if "portcheck_api" in cfg and cfg["portcheck_api"] != old_default:
+    sys.exit(1)                      # custom or disabled — never override
 cfg["portcheck_api"] = default
 with open(path, "w") as f:
     json.dump(cfg, f, separators=(",", ":"))   # match the printf'd compact style
@@ -2757,8 +2758,9 @@ solo_deploy_code() {
     #    hold an index.html. ALL static assets the full deploy (07 → 3) lays down are
     #    refreshed here, not just index.html, so a code-only update never leaves a
     #    stale setup page. config.json is generated (not a static copy), so we only
-    #    backfill the port-check default into it when the key is absent — never
-    #    overwrite the operator's pool name / ports / a custom portcheck_api value.
+    #    backfill the port-check default when the key is absent (or still the retired
+    #    pay-api default) — never overwrite the operator's pool name / ports / a
+    #    custom portcheck_api value.
     if [[ -f "$STATS_WEB_SRC" && -f "$BLOCK_COLLECTOR_WRAPPER" ]]; then
         local out_dir web_dir
         while IFS= read -r out_dir; do
@@ -2785,7 +2787,7 @@ solo_deploy_code() {
             fi
             if _solo_backfill_portcheck_api "$web_dir/data/config.json"; then
                 chmod 644 "$web_dir/data/config.json" 2>/dev/null || true
-                success "Port-check default added → $web_dir/data/config.json (portcheck_api=https://tools.grin.money/pay-api)"; did=1
+                success "Port-check default set → $web_dir/data/config.json (portcheck_api=https://tools.grin.money/tools-api)"; did=1
             fi
         done < <(grep -oE -- '--out-dir [^ ]+' "$BLOCK_COLLECTOR_WRAPPER" | awk '{print $2}' | sort -u)
     fi

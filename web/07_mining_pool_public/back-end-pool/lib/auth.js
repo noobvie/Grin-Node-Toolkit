@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const totp = require('./totp');
 const { getDb } = require('./db');
 
 class AuthManager {
@@ -121,7 +123,11 @@ class AuthManager {
         ).run(now, user.id);
       }
 
-      const tokens = this.generateTokens(user.id, user.username, user.is_admin, user.token_version || 0);
+      // pwa = "password-verified-at": login is a real password check, so stamp it now.
+      // Step-up (requireFreshAuth) checks this, NOT iat — a silent token refresh must not
+      // grant freshness (see refreshAccessToken, which passes pwa=0).
+      const now2 = Math.floor(Date.now() / 1000);
+      const tokens = this.generateTokens(user.id, user.username, user.is_admin, user.token_version || 0, now2);
 
       this.logLoginAttempt(user.id, true, ip);
 
@@ -142,7 +148,9 @@ class AuthManager {
     }
   }
 
-  generateTokens(userId, username, isAdmin, tokenVersion = 0) {
+  // pwa = password-verified-at (unix seconds). 0 = "not freshly password-verified"
+  // (e.g. minted by a silent refresh). Step-up auth reads this, never iat.
+  generateTokens(userId, username, isAdmin, tokenVersion = 0, pwa = 0) {
     const now = Math.floor(Date.now() / 1000);
 
     const accessToken = jwt.sign(
@@ -151,6 +159,7 @@ class AuthManager {
         username,
         is_admin: isAdmin ? 1 : 0,
         tv: tokenVersion,
+        pwa: pwa,
         iat: now,
         type: 'access'
       },
@@ -316,6 +325,122 @@ class AuthManager {
     }
   }
 
+  // ─── Optional admin TOTP 2FA ───────────────────────────────────────────────
+  isTotpEnabled(userId) {
+    const u = this.db.prepare('SELECT totp_enabled FROM users WHERE id = ?').get(userId);
+    return !!(u && u.totp_enabled);
+  }
+
+  // Start enrollment: generate a secret, stash it as pending (NOT yet active), return the
+  // secret + otpauth URI for the QR / manual entry. Activated only by begin→confirm.
+  begin2faEnrollment(userId, issuer = 'Grin Pool') {
+    const u = this.db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+    if (!u) return { success: false, error: 'User not found' };
+    const secret = totp.generateSecret();
+    this.db.prepare('UPDATE users SET totp_pending_secret = ?, updated_at = ? WHERE id = ?')
+      .run(secret, Math.floor(Date.now() / 1000), userId);
+    return { success: true, secret, otpauth_uri: totp.keyuri(secret, u.username, issuer) };
+  }
+
+  // Confirm enrollment: the admin proves the authenticator works by entering a current code.
+  // On success the pending secret becomes active and a fresh set of recovery codes is issued
+  // (returned in plaintext ONCE — only hashes are stored).
+  async confirm2faEnrollment(userId, code) {
+    const u = this.db.prepare('SELECT totp_pending_secret FROM users WHERE id = ?').get(userId);
+    if (!u || !u.totp_pending_secret) return { success: false, error: 'No enrollment in progress' };
+    if (!totp.verify(u.totp_pending_secret, code)) return { success: false, error: 'Incorrect code — check your authenticator and try again' };
+    this.db.prepare('UPDATE users SET totp_secret = ?, totp_enabled = 1, totp_pending_secret = NULL, updated_at = ? WHERE id = ?')
+      .run(u.totp_pending_secret, Math.floor(Date.now() / 1000), userId);
+    const recovery_codes = await this.generateRecoveryCodes(userId);
+    return { success: true, recovery_codes };
+  }
+
+  // Disable 2FA — requires a valid current TOTP or recovery code (verified by the caller's
+  // route via verifyTotpOrRecovery before calling, or pass the code here).
+  async disable2fa(userId, code) {
+    const ok = await this.verifyTotpOrRecovery(userId, code);
+    if (!ok) return { success: false, error: 'Incorrect 2FA / recovery code' };
+    this.db.prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_pending_secret = NULL, updated_at = ? WHERE id = ?')
+      .run(Math.floor(Date.now() / 1000), userId);
+    this.db.prepare('DELETE FROM admin_recovery_codes WHERE user_id = ?').run(userId);
+    return { success: true };
+  }
+
+  // Verify a 6-digit TOTP OR a one-time backup recovery code. Recovery codes are consumed.
+  async verifyTotpOrRecovery(userId, code) {
+    const u = this.db.prepare('SELECT totp_secret FROM users WHERE id = ?').get(userId);
+    if (!u || !u.totp_secret) return false;
+    const raw = String(code == null ? '' : code).trim();
+    if (/^\d{6}$/.test(raw.replace(/\s+/g, ''))) {
+      return totp.verify(u.totp_secret, raw);
+    }
+    // Recovery code path: normalise (strip separators, uppercase), compare against unused hashes.
+    const norm = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!norm) return false;
+    const rows = this.db.prepare('SELECT id, code_hash FROM admin_recovery_codes WHERE user_id = ? AND used_at IS NULL').all(userId);
+    for (const row of rows) {
+      if (await bcrypt.compare(norm, row.code_hash)) {
+        this.db.prepare('UPDATE admin_recovery_codes SET used_at = ? WHERE id = ?')
+          .run(Math.floor(Date.now() / 1000), row.id);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // (Re)generate 10 one-time backup codes; replaces any existing ones. Returns plaintext.
+  // async + await bcrypt.hash so 10 hashes don't block the shared event loop (stratum/API).
+  async generateRecoveryCodes(userId, count = 10) {
+    this.db.prepare('DELETE FROM admin_recovery_codes WHERE user_id = ?').run(userId);
+    const codes = [];
+    const ins = this.db.prepare('INSERT INTO admin_recovery_codes (user_id, code_hash) VALUES (?, ?)');
+    for (let i = 0; i < count; i++) {
+      // 10 base32 chars, shown grouped as XXXXX-XXXXX (stored uppercase, no dash).
+      const raw = totp.base32Encode(crypto.randomBytes(7)).slice(0, 10);
+      const pretty = raw.slice(0, 5) + '-' + raw.slice(5);
+      const hash = await bcrypt.hash(raw, this.bcryptRounds);
+      ins.run(userId, hash);
+      codes.push(pretty);
+    }
+    return codes;
+  }
+
+  unusedRecoveryCount(userId) {
+    const r = this.db.prepare('SELECT COUNT(*) AS c FROM admin_recovery_codes WHERE user_id = ? AND used_at IS NULL').get(userId);
+    return r ? r.c : 0;
+  }
+
+  // Short-lived token that proves the password step passed; the holder may complete the 2FA
+  // step (POST /api/auth/login/totp). Not a session — confers no admin access by itself.
+  generate2faToken(userId) {
+    return jwt.sign({ user_id: userId, type: '2fa' }, this.jwtSecret, { expiresIn: 300 });
+  }
+
+  verify2faToken(token) {
+    try {
+      const d = jwt.verify(token, this.jwtSecret);
+      if (d.type !== '2fa') return null;
+      return d.user_id;
+    } catch (e) { return null; }
+  }
+
+  // Build session tokens for an already-authenticated user (used after the 2FA step). pwa=now
+  // because the password WAS verified in the preceding step (step-up-fresh on login).
+  issueSessionFor(userId) {
+    const user = this.db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (!user || !user.is_active) return { success: false, error: 'User not found or inactive' };
+    const now = Math.floor(Date.now() / 1000);
+    const tokens = this.generateTokens(user.id, user.username, user.is_admin, user.token_version || 0, now);
+    return {
+      success: true,
+      user_id: user.id,
+      username: user.username,
+      is_admin: user.is_admin,
+      access_token: tokens.accessToken,
+      refresh_token: tokens.refreshToken,
+    };
+  }
+
   async hashPassword(password) {
     const salt = await bcrypt.genSalt(this.bcryptRounds);
     return bcrypt.hash(password, salt);
@@ -337,14 +462,36 @@ class AuthManager {
     }
   }
 
+  // Freshness for step-up auth = time since the last PASSWORD verification (pwa), not iat.
+  // A token minted by a silent refresh carries pwa=0 and is therefore never "fresh", so an
+  // attacker with a stolen cookie can't refresh their way into sensitive actions — they must
+  // present the password again via stepUp().
   isTokenFresh(token, maxAgeSeconds = 300) {
     const result = this.verifyAccessToken(token);
     if (!result.valid) return false;
 
-    const now = Math.floor(Date.now() / 1000);
-    const age = now - result.payload.iat;
+    const pwa = result.payload.pwa || 0;
+    if (!pwa) return false;
 
-    return age <= maxAgeSeconds;
+    const now = Math.floor(Date.now() / 1000);
+    return (now - pwa) <= maxAgeSeconds;
+  }
+
+  // Re-authenticate an already-logged-in admin: verify the password and mint a NEW access
+  // token stamped pwa=now (same token_version, so the existing refresh token stays valid).
+  // Powers the step-up challenge on money/destructive endpoints.
+  async stepUp(userId, password) {
+    try {
+      const user = this.db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+      if (!user || !user.is_active) return { success: false, error: 'User not found' };
+      const ok = await this.comparePassword(password, user.password_hash);
+      if (!ok) return { success: false, error: 'Incorrect password' };
+      const now = Math.floor(Date.now() / 1000);
+      const tokens = this.generateTokens(user.id, user.username, user.is_admin, user.token_version || 0, now);
+      return { success: true, access_token: tokens.accessToken };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
   }
 }
 

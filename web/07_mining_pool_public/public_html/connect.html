@@ -60,19 +60,28 @@
             <a href="index.html" class="nav-link">Dashboard</a>
             <a href="miners-stats.html" class="nav-link">Miners</a>
             <a href="payment-history.html" class="nav-link">Payouts</a>
+            <a href="fortune-board.html" class="nav-link">🎁 Rewards</a>
             <a href="pool-info.html" class="nav-link">Info</a>
             <a href="account-settings.html" class="nav-link">My Account</a>
         </nav>
         <div class="nav-right">
             <div class="theme-switcher"></div>
             <a class="btn primary sm" href="connect.html">Start Mining</a>
-            <a class="btn sm" href="login.html">Sign In</a>
         </div>
     </header>
 
   <div class="wrap">
     <h1>Connect &amp; Start Mining</h1>
-    <p class="hint">Enter your Grin address and a worker name, then copy a command for your miner.</p>
+    <p class="hint">Pick the region closest to you, enter your Grin address and a worker name, then copy a command for your miner.</p>
+
+    <div class="form-row" id="region-row" style="display:none">
+      <div>
+        <label for="region-select">Region</label>
+        <select id="region-select" onchange="onRegionChange()"
+          style="width:100%;padding:0.7rem;border:1px solid var(--border-color);background:var(--bg-card2);color:var(--text);border-radius:4px;font-size:1rem;"></select>
+      </div>
+      <div></div>
+    </div>
 
     <div class="summary">
       <div><div class="label">Stratum host</div><div class="value" data-brand="stratum_host">—</div></div>
@@ -160,14 +169,57 @@
       return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
+    // Regional stratum hosts (operator-declared). Selecting one overrides the host (and
+    // port, if the region's stratum_url is host:port) used by the generated commands.
+    var REGIONS = [];
+    var BASE_PORT = '';  // pool default port, captured before any region overrides it
+    function onRegionChange() {
+      var sel = document.getElementById('region-select');
+      var r = REGIONS[sel.value];
+      if (!r || !r.stratum_url) { renderCommands(); return; }
+      var parts = String(r.stratum_url).split(':');
+      CONN.stratum_host = parts[0];
+      // Region may pin a port (host:port); if it doesn't, fall back to the pool default
+      // so switching back from a ported region doesn't leave a stale port.
+      CONN.stratum_port = parts[1] || BASE_PORT;
+      // Reflect the chosen host + port in the summary card.
+      var hostEl = document.querySelector('[data-brand="stratum_host"]');
+      if (hostEl) hostEl.textContent = CONN.stratum_host;
+      var portEl = document.querySelector('[data-brand="stratum_port"]');
+      if (portEl && CONN.stratum_port) portEl.textContent = CONN.stratum_port;
+      renderCommands();
+    }
+
+    function loadRegions() {
+      fetch('/api/pool/locations')
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (rows) {
+          if (!Array.isArray(rows) || rows.length === 0) return;
+          REGIONS = rows;
+          BASE_PORT = CONN.stratum_port || '3333';
+          var sel = document.getElementById('region-select');
+          sel.innerHTML = '';
+          rows.forEach(function (r, i) {
+            var opt = document.createElement('option');
+            opt.value = String(i);
+            opt.textContent = (r.label || r.region) + ' — ' + (r.stratum_url || '');
+            sel.appendChild(opt);
+          });
+          document.getElementById('region-row').style.display = '';
+          onRegionChange();
+        })
+        .catch(function () { /* no regions → single-host flow */ });
+    }
+
     // Pull connection details from the public branding endpoint.
     fetch('/api/public/branding')
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (json) {
         if (json && json.data && json.data.connection) CONN = json.data.connection;
         renderCommands();
+        loadRegions();
       })
-      .catch(renderCommands);
+      .catch(function () { renderCommands(); loadRegions(); });
 
     renderCommands();
   </script>

@@ -190,6 +190,10 @@ pool_ensure_defaults() {
         ["fail2ban_maxretry"]="5"
         ["fail2ban_findtime"]="600"
         ["fail2ban_bantime"]="3600"
+        # Admin panel access control: comma/space-separated IPs/CIDRs allowed to reach
+        # /admin and /api/admin at the nginx layer. Empty = LAN/VPN/localhost only (the
+        # admin panel is taken off the public internet). Add your office/VPN IP here.
+        ["admin_allowlist"]=""
     )
     for k in "${!defaults[@]}"; do
         local existing; existing=$(pool_read_conf "$k" "__MISSING__")
@@ -584,6 +588,30 @@ pool_setup_nginx() {
             "${POOL_SERVICE}_ingest:120r/m"
     fi
 
+    # Build nginx allow/deny rules for the admin surfaces (/admin + /api/admin). This is
+    # network-layer defense in depth ON TOP OF the app's JWT + IP filter + step-up auth.
+    # admin_allowlist (comma/space-separated IPs/CIDRs) opens it to those networks; empty =
+    # localhost + RFC1918 only, i.e. the admin panel is OFF the public internet (reach it via
+    # LAN, WireGuard/VPN, or an SSH tunnel). Public login (/api/auth) stays reachable so the
+    # operator can authenticate — it's covered by captcha + lockout + auto-ban + fail2ban.
+    local admin_allow_raw; admin_allow_raw=$(pool_read_conf "admin_allowlist" "")
+    local admin_rules="" _entry
+    if [[ -n "$admin_allow_raw" ]]; then
+        for _entry in ${admin_allow_raw//,/ }; do
+            [[ -n "$_entry" ]] && admin_rules+="        allow ${_entry};"$'\n'
+        done
+        info "Admin panel (/admin, /api/admin) restricted to: $admin_allow_raw"
+    else
+        admin_rules+="        allow 127.0.0.1;"$'\n'
+        admin_rules+="        allow ::1;"$'\n'
+        admin_rules+="        allow 10.0.0.0/8;"$'\n'
+        admin_rules+="        allow 172.16.0.0/12;"$'\n'
+        admin_rules+="        allow 192.168.0.0/16;"$'\n'
+        warn "Admin panel limited to LAN/VPN/localhost (admin_allowlist is empty)."
+        warn "  To reach it from your public/VPN IP: set \"admin_allowlist\" in $POOL_CONF and re-run 4) Setup nginx."
+    fi
+    admin_rules+="        deny all;"
+
     local sites_enabled="/etc/nginx/sites-enabled/$(basename "$POOL_NGINX_CONF")"
     local cert_dir="/etc/letsencrypt/live/$subdomain"
 
@@ -673,6 +701,25 @@ server {
     # Self-hosted Plausible/Umami/Matomo on a custom domain require adding that
     # domain to script-src and connect-src below.
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self' https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com;" always;
+
+    # ── Admin panel + admin API — restricted at the nginx layer (off the public
+    # internet by default). Defense in depth on top of the app's JWT + IP filter +
+    # step-up auth. Widen via admin_allowlist in $POOL_CONF, then re-run 4) Setup nginx.
+    location = /admin { return 301 https://\$host/admin/; }
+    location /admin/ {
+$admin_rules
+        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        try_files \$uri \$uri/ \$uri.html =404;
+    }
+    location /api/admin/ {
+$admin_rules
+        limit_req zone=${POOL_SERVICE}_api burst=10 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 30s;
+    }
 
     location /api/auth/ {
         limit_req zone=${POOL_SERVICE}_auth burst=5 nodelay;
@@ -853,9 +900,20 @@ pool_setup_admin() {
     local port; port=$(pool_read_conf "service_port" "$POOL_PORT")
     echo -e "\n${BOLD}Create Admin Account — Mainnet${RESET}\n"
 
+    # The service may still be binding the port — the FIRST start runs DB
+    # init/migrations, so it isn't instant. Wait briefly instead of bailing
+    # immediately (this is the common case right after 6) Start service and in
+    # the guided flow, where a 2s gap isn't enough).
+    if ! ss -tlnp 2>/dev/null | grep -q ":$port "; then
+        info "Waiting for the pool manager to listen on port $port..."
+        if declare -F gnc_wait_for_port >/dev/null 2>&1; then
+            gnc_wait_for_port "$port" 20 2 >/dev/null 2>&1 || true
+        fi
+    fi
     if ! ss -tlnp 2>/dev/null | grep -q ":$port "; then
         warn "Pool manager is not running on port $port."
         warn "Start the service (option 6) first, then run this again."
+        warn "If it won't start, check: journalctl -u $POOL_SERVICE -n 50 --no-pager"
         return 1
     fi
 
@@ -1268,7 +1326,13 @@ pool_guided_setup() {
 
     echo -e "\n${BOLD}${CYAN}── Step 6/7: Start service ──${RESET}"
     pool_start_service || true
-    sleep 2
+    # Wait for the service to actually bind its port before creating the admin —
+    # the first start runs DB init/migrations, so it isn't instant. Without this
+    # the next step's port check can fail and skip admin creation.
+    local _svc_port; _svc_port=$(pool_read_conf "service_port" "$POOL_PORT")
+    info "Waiting for $POOL_SERVICE to listen on port $_svc_port..."
+    gnc_wait_for_port "$_svc_port" 30 2 >/dev/null 2>&1 \
+        || warn "Service not listening yet — 7) admin creation will wait/retry."
 
     echo -e "\n${BOLD}${CYAN}── Step 7/7: Create admin account ──${RESET}"
     _pool_guided_step 7 "Create admin account" pool_setup_admin \

@@ -18,7 +18,7 @@ class PoolSettings {
   static defaults = {
     pool_info: {
       pool_name: 'GRINIUM',
-      pool_tagline: 'Grin Mining Pool',
+      pool_tagline: 'Mine Grin, anywhere',
       pool_description: '',
       pool_visibility: 'public',
       address_whitelist: '[]',

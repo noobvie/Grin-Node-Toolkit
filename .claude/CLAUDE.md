@@ -412,12 +412,99 @@ Key design decisions (locked in — do not change without user confirmation):
 - **Orphan detection:** Nonce-based verification job every 6h; reverses payouts if a found block is orphaned
 - **Race conditions:** INSERT OR IGNORE for miner auto-creation; SELECT FOR UPDATE for balance updates
 - **Stack:** Node.js/Express backend (`back-end-pool/`) + static HTML/CSS/JS frontend (`public_html/`) + SQLite via Node's built-in `node:sqlite` (needs Node 24+; `lib/sqlite-compat.js` provides the better-sqlite3-style API — pragma/transaction — always require the shim, never `node:sqlite` directly in pool code); systemd process manager (not pm2). *(The early Next.js + Tailwind plan was dropped — do not reintroduce a frontend framework. better-sqlite3 was dropped 2026-06 — the pool has no native npm modules.)*
-- **Auth:** Admin-only JWT sessions (bcrypt, IP allowlist, 60 min timeout); miners never need accounts
+- **Auth:** Admin-only JWT sessions (bcrypt, IP allowlist, 60 min timeout); miners never need accounts.
+  Login/register are gated by a **self-hosted arithmetic CAPTCHA** (`lib/captcha.js`, in-memory,
+  single-use, 5-min TTL — no external reCAPTCHA/hCaptcha): `GET /api/auth/captcha` issues `{id,question}`;
+  `/api/auth/login` + `/api/auth/register` verify `captcha_id`+`captcha_answer` *before* touching the
+  password (a bad captcha never counts toward account lockout). Single-use → the login form re-fetches a
+  challenge after every attempt. Layers on top of the auth rate limiter (3/min) + per-account lockout
+  (5 fails/15 min). The live admin login is `public_html/login.html` (served at `/login.html`);
+  `back-end-pool/public/login.html` is legacy and NOT deployed — do not wire it.
+- **Admin-panel hardening (added 2026-06) — three layers:**
+  1. **Step-up (re-auth) on money/destructive/access-control actions.** `freshAdmin` middleware =
+     `secureAdmin` + `requireFreshAuth` (5-min window). Gated endpoints: `POST /api/admin/incentives/award`,
+     `…/prize-pool/topup`, `…/lottery/draw-now`, `…/database/cleanup`, `…/settings/:section/restore`,
+     `…/poolstats/update-key`, `…/security/ip-allowlist/{add,remove}`, `…/security/ip-blacklist/{add,remove}`,
+     `DELETE …/locations/:id`. Plus `POST …/settings/:section` requires step-up **only** for the high-risk
+     sections `payout` + `access` (checked inline via `authManager.isTokenFresh`; cosmetic sections save
+     with a normal session). `saveSection`/`restoreSection` in settings.html use `adminFetch`.
+     Freshness is keyed on a NEW `pwa` (password-verified-at) JWT claim, **not `iat`** — a silent
+     `/api/auth/refresh` mints `pwa=0` so it can't grant step-up; only `login` and the new
+     `POST /api/admin/reauth` (→ `AuthManager.stepUp`) set `pwa=now`. Frontend: `public_html/js/stepup.js`
+     `adminFetch()` catches `403 {challenge_required:true}`, prompts for the password, calls reauth,
+     retries once. Wired into the risky calls in `admin-panel/settings.html` (loads `/js/stepup.js`).
+     To gate a new risky endpoint: use `freshAdmin` server-side + `adminFetch` client-side.
+  2. **Auto-ban repeat offenders.** In `index.js`: ≥10 failed admin logins from one IP within 15 min →
+     `ipFilter.tempBan(ip, 1h)` (new in-memory TTL ban in `lib/ip-filter.js`; `isBlocked()` checks it).
+     The login route rejects banned IPs up front and clears the counter on success. App-layer; complements
+     the OS-level `pool_setup_fail2ban` (firewall ban) already in the installer.
+  3. **Admin panel off the public internet (nginx).** `pool_setup_nginx` emits `location /admin/` +
+     `location /api/admin/` with `allow … ; deny all;` built from the `admin_allowlist` conf key
+     (comma/space-separated IPs/CIDRs). Empty = localhost + RFC1918 only (reach via LAN/VPN/SSH-tunnel).
+     `/api/auth` (login) stays public on purpose — it's covered by captcha+lockout+auto-ban+fail2ban.
+     Widen access: set `admin_allowlist` in `/opt/grin/conf/grin_pubpool.json`, re-run 4) Setup nginx.
+- **Optional admin TOTP 2FA (added 2026-06).** Self-hosted RFC 6238 (`lib/totp.js`, SHA-1/6-digit/30s,
+  base32 — verified against the RFC test vectors), **no npm dependency, no external service**. Per-admin,
+  opt-in. State on the `users` table (`totp_secret`, `totp_enabled`, `totp_pending_secret`); one-time
+  backup codes in `admin_recovery_codes` (bcrypt-hashed, single-use).
+  - **Two-step login:** `POST /api/auth/login` (password + CAPTCHA) → if `totp_enabled`, returns
+    `{ totp_required:true, twofa_token }` (short-lived JWT `type:'2fa'`, 5 min, no session yet) instead of
+    a cookie → `POST /api/auth/login/totp` { twofa_token, code } verifies a TOTP **or** a recovery code
+    and issues the session (no second CAPTCHA). Failed 2FA codes count toward the IP auto-ban.
+  - **Management (settings.html → Access Control, all step-up `freshAdmin`):** `GET /api/admin/2fa/status`,
+    `POST …/2fa/enroll/begin` (returns secret + otpauth URI; manual key + tap-link shown, QR rendered only
+    if a `window.qrcode` lib is bundled), `…/2fa/enroll/confirm` (verify a live code → enable + return
+    recovery codes once), `…/2fa/disable` (needs a code), `…/2fa/recovery/regenerate` (needs a code).
+    `auth.js`: `begin2faEnrollment`/`confirm2faEnrollment`/`disable2fa`/`verifyTotpOrRecovery`/
+    `generateRecoveryCodes` (async — avoids blocking the shared stratum/API event loop) /
+    `generate2faToken`/`verify2faToken`/`issueSessionFor`.
+  - **Recovery if the authenticator is lost:** (1) one of the 10 backup codes; (2) **root reset on the
+    server** (you own the box — this is the ultimate, unloseable fallback). Run against the pool DB:
+    `UPDATE users SET totp_enabled=0, totp_secret=NULL, totp_pending_secret=NULL WHERE username='<admin>';`
+    then `DELETE FROM admin_recovery_codes WHERE user_id=(SELECT id FROM users WHERE username='<admin>');`
+    (DB at `/opt/grin/pubpool/mainnet/pool.db`; use the `node:sqlite` shim, not the optional sqlite3 CLI).
+- **Access Control admin tab (settings.html) is wired to the LIVE app-level ipFilter** (added 2026-06):
+  `GET /api/admin/security/ip-filter-status` (returns entries + `your_ip` for a self-lockout warning) +
+  the step-up-gated `ip-allowlist/{add,remove}` & `ip-blacklist/{add,remove}` via `adminFetch`. These are
+  **runtime-only** (ipFilter in-memory; reset on restart — a deliberate break-glass escape from a bad
+  allowlist). Permanent rules still live in config: `admin_ip_allowlist` (app) + `admin_allowlist` (nginx).
+  The tab loads on open (`switchTab('access') → loadIpFilter()`).
+  **No miner accounts — reaffirmed 2026-06.** An optional miner-account layer (`miner_users` table,
+  signup bonus, public Sign In/Register) was prototyped then deliberately removed: it adds operator
+  burden with no safety gain (the address already IS the identity, and payouts are permanently bound
+  to the mining address — `withdrawal.grin_address`, never an account-settable field, so there is no
+  redirection/theft vector to protect). Do NOT reintroduce miner accounts without explicit user
+  confirmation. Public pages therefore have **no Sign In button** — admins reach `/login.html` by
+  direct URL only.
+- **Prizes/incentives go straight to the address.** Instead of accounts, the operator awards a
+  contest/incentive prize directly to a Grin address via admin `POST /api/admin/incentives/award`
+  → `IncentivesManager.awardPrize(address, amount, {fromPrizePool=true})` (lib/incentives.js): credits
+  `miner_accounts.balance` (reference_type `prize_award`), funded from the `prize_pool` bucket by
+  default (rejects with `insufficient_prize_pool` if the bucket can't cover it; pass
+  `from_prize_pool=false` to mint when the wallet already holds the GRIN). The prize pays out via the
+  normal Tor withdrawal flow. UI: admin Settings → Incentives → "Award Prize / Bonus to an Address".
+  Human-readable note is stored in `admin_audit_log`, not `balance_log`.
 - **Config:** Stored in `/opt/grin/conf/grin_pubpool.json`; all settings via web admin panel — no bash config files
 - **Paths (renamed 2026-06 to the product-prefixed "pubpool" family):** app+DB `/opt/grin/pubpool/mainnet/`, wallet `/opt/grin/pubpoolwallet/mainnet/`, wallet password `/opt/grin/pubpool/mainnet/.wallet_pass` (600, deliberately separate from the seed dir). Legacy `/opt/grin/pool` + `grin_pool.json` are recognised by Z) Cleanup and the hub detector but never written.
 - **Script 07 role:** Infrastructure only (deploy files, systemd services, backups); business logic lives in pool web code
 - **Networks:** the public pool is a mainnet-only product (the earlier "testnet stratum-only mode" plan was not implemented); testnet mining is done via `07_grin_mining_solo.sh`
 - **Default pool fee 1.0%** (`pool_fee_percent: 1.0`, validated 0–50); min withdrawal: 5.0 GRIN
+- **Public homepage (index.html) surfaces, added 2026-06:**
+  - **Regional stratum cards** — homepage + connect.html read public `GET /api/pool/locations`
+    (one row per `pool_locations` region). `db.js seedDefaultRegions()` seeds amer/euro/asie
+    (amer.grinium.com / euro.grinium.com / asie.grinium.com) **only when the table is empty** —
+    cosmetic defaults the operator edits in admin → Regions. connect.html has a region `<select>`
+    that rewrites the host (and port if the region's `stratum_url` is `host:port`) in the generated
+    miner commands.
+  - **Service status strip** — public `GET /api/pool/status` (rate-limited, 15s cache) returns
+    coarse health only: `pool.ok`, `node {reachable,synced,peers,height}`, `wallet {reachable}`.
+    **Never** exposes wallet balance/addresses (those stay on admin-only `/api/admin/health/*`).
+  - **Branding/header** — `js/branding.js enhanceHeader()` runs site-wide (every page that has a
+    `.brand`): swaps the `.dot` for the swinging atomic-green logo (`#b8e600→#7a9700`, CSS keyframe
+    `brandSwing`, ~80° pendulum pivoting near the top, respects `prefers-reduced-motion`), adds the
+    slogan (`pool_tagline`, default "Mine Grin, anywhere") under the wordmark, and injects a
+    `🎁 Rewards` nav link → `fortune-board.html` when incentives are enabled. Footer sub-brand is
+    "GRINIUM — Grin Mining Pool" (was "Uranium Element…").
 
 ### Multi-region — hub-and-spoke (design: `docs/generated/script07_design.md` §3–4)
 

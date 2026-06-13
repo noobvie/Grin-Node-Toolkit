@@ -1155,6 +1155,36 @@
         </div>
 
         <div class="form-section">
+          <h3 class="section-title">Award Prize / Bonus to an Address</h3>
+          <div class="helper-text">
+            Credit a contest or incentive prize straight to a miner's Grin address — no account
+            needed. The prize lands on their pool balance and pays out to that address via the
+            normal Tor withdrawal flow.
+          </div>
+          <div class="form-group">
+            <label for="award-address">Grin address</label>
+            <input type="text" id="award-address" class="settings-skip" placeholder="grin1…">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="award-amount">Amount (GRIN)</label>
+              <input type="number" id="award-amount" class="settings-skip" min="0" step="0.01" placeholder="0.00">
+            </div>
+            <div class="form-group">
+              <label for="award-note">Note (optional)</label>
+              <input type="text" id="award-note" class="settings-skip" maxlength="280" placeholder="e.g. June hashrate contest — 1st place">
+            </div>
+          </div>
+          <div class="checkbox-group">
+            <input type="checkbox" id="award-from-prize-pool" class="settings-skip" checked>
+            <label for="award-from-prize-pool">Fund from the prize pool (uncheck only if the wallet already holds the extra GRIN)</label>
+          </div>
+          <div class="form-group" style="padding-top:.5rem;">
+            <button type="button" class="btn btn-secondary" onclick="awardPrize()">Award prize</button>
+          </div>
+        </div>
+
+        <div class="form-section">
           <h3 class="section-title">Join Bonus</h3>
           <div class="checkbox-group">
             <input type="checkbox" id="join_bonus_enabled" name="join_bonus_enabled">
@@ -1268,6 +1298,46 @@
     <div id="access" class="settings-content">
       <div class="settings-form">
         <div class="form-section">
+          <h3 class="section-title">Two-Factor Authentication (2FA)</h3>
+          <div id="twofa-status" class="helper-text">Loading…</div>
+
+          <div id="twofa-disabled" style="display:none;margin-top:.5rem;">
+            <div class="helper-text">Add an authenticator-app code (TOTP) to your admin login. Strongly recommended.</div>
+            <button class="btn btn-primary" onclick="begin2fa()">Enable 2FA</button>
+          </div>
+
+          <div id="twofa-enroll" style="display:none;margin-top:.5rem;">
+            <div class="helper-text"><strong>1.</strong> Add this account to your authenticator app — scan the QR, tap the link on mobile, or type the manual key:</div>
+            <div id="twofa-qr" style="margin:.6rem 0;"></div>
+            <div class="helper-text" style="word-break:break-all;">otpauth link: <a id="twofa-otpauth" href="#"></a></div>
+            <div class="helper-text">Manual key: <code id="twofa-secret" style="user-select:all;"></code></div>
+            <div class="form-group" style="margin-top:.6rem;">
+              <label for="twofa-confirm-code"><strong>2.</strong> Enter the current 6-digit code to confirm</label>
+              <input type="text" id="twofa-confirm-code" inputmode="numeric" autocomplete="off" placeholder="123456">
+            </div>
+            <button class="btn btn-primary" onclick="confirm2fa()">Confirm &amp; Enable</button>
+            <button class="btn btn-secondary" onclick="cancel2faEnroll()">Cancel</button>
+          </div>
+
+          <div id="twofa-enabled" style="display:none;margin-top:.5rem;">
+            <div class="helper-text" style="color:var(--success,#48bb78);font-weight:600;">✓ 2FA is enabled. <span id="twofa-recovery-remaining"></span></div>
+            <div class="form-group" style="margin-top:.5rem;">
+              <label for="twofa-action-code">Current 6-digit code (or a backup recovery code)</label>
+              <input type="text" id="twofa-action-code" inputmode="numeric" autocomplete="off" placeholder="123456 or XXXXX-XXXXX">
+            </div>
+            <button class="btn btn-secondary" onclick="regen2faRecovery()">Regenerate recovery codes</button>
+            <button class="btn btn-danger" onclick="disable2fa()">Disable 2FA</button>
+          </div>
+
+          <div id="twofa-recovery" style="display:none;margin-top:.75rem;">
+            <div class="helper-text" style="color:var(--danger,#ff5a52);font-weight:600;">Save these one-time backup codes now — they are shown only once:</div>
+            <pre id="twofa-recovery-list" style="white-space:pre-wrap;background:rgba(0,0,0,.05);padding:.75rem;border-radius:6px;user-select:all;"></pre>
+            <div class="helper-text">Lost your authenticator <em>and</em> these codes? Recover via root on the server (see docs: clear <code>totp_enabled/totp_secret</code> in the <code>users</code> table).</div>
+            <button class="btn btn-secondary" onclick="document.getElementById('twofa-recovery').style.display='none'">Done — I saved them</button>
+          </div>
+        </div>
+
+        <div class="form-section">
           <h3 class="section-title">Session & Security</h3>
           <div class="form-group">
             <label for="session_timeout_hours">Session Timeout (hours)</label>
@@ -1282,8 +1352,21 @@
         </div>
 
         <div class="form-section">
+          <h3 class="section-title">Live IP Filter (admin panel)</h3>
+          <div id="ipfilter-status" class="helper-text">Loading filter status…</div>
+          <div class="helper-text" style="margin-top:.4rem;">
+            ⚠ These rules apply <strong>immediately at runtime</strong> and are <strong>not</strong> saved to
+            <code>grin_pubpool.json</code>. They reset on a service restart (a built-in "break-glass" escape
+            from a bad allowlist). For permanent rules, set <code>admin_allowlist</code> (nginx) and
+            <code>admin_ip_allowlist</code> (app) in the config, then restart.
+          </div>
+          <div id="ipfilter-lockout-warn" class="helper-text"
+               style="display:none;color:var(--danger,#ff5a52);margin-top:.4rem;font-weight:600;"></div>
+        </div>
+
+        <div class="form-section">
           <h3 class="section-title">Admin IP Allowlist</h3>
-          <div class="helper-text">Only these IPs can access the admin panel</div>
+          <div class="helper-text">When non-empty, ONLY these IPs/CIDRs can reach the admin panel. Add your own IP <em>first</em> or you will lock yourself out.</div>
           <div class="list-item-input">
             <input type="text" id="admin-allowlist-input" placeholder="192.168.1.0/24 or 203.0.113.5">
             <button class="btn btn-secondary" onclick="addToAdminAllowlist()">Add</button>
@@ -1293,7 +1376,7 @@
 
         <div class="form-section">
           <h3 class="section-title">Admin IP Blacklist</h3>
-          <div class="helper-text">Block these IPs from accessing the admin panel</div>
+          <div class="helper-text">Block these IPs/CIDRs from accessing the admin panel</div>
           <div class="list-item-input">
             <input type="text" id="admin-blacklist-input" placeholder="192.168.0.0/16">
             <button class="btn btn-secondary" onclick="addToAdminBlacklist()">Add</button>
@@ -1427,6 +1510,7 @@
 
   <script src="/js/auth.js"></script>
   <script src="/js/api.js"></script>
+  <script src="/js/stepup.js"></script>
   <script src="/js/theme.js"></script>
   <script>
     // Tab switching
@@ -1443,6 +1527,7 @@
       document.getElementById(tabName).classList.add('active');
       document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
       if (tabName === 'database') loadDbStatus();
+      if (tabName === 'access') { loadIpFilter(); load2fa(); }
     }
 
     // Load settings on page load
@@ -1521,7 +1606,7 @@
       });
 
       try {
-        const response = await fetch(`/api/admin/settings/${section}`, {
+        const response = await adminFetch(`/api/admin/settings/${section}`, {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
@@ -1539,7 +1624,7 @@
       if (!confirm(`Restore ${section} to defaults?`)) return;
 
       try {
-        const response = await fetch(`/api/admin/settings/${section}/restore`, {
+        const response = await adminFetch(`/api/admin/settings/${section}/restore`, {
           method: 'POST',
           credentials: 'include'
         });
@@ -1584,7 +1669,7 @@
     async function runDbCleanup() {
       if (!confirm('Run database cleanup now?')) return;
       try {
-        const r = await fetch('/api/admin/database/cleanup', { method: 'POST', credentials: 'include' });
+        const r = await adminFetch('/api/admin/database/cleanup', { method: 'POST', credentials: 'include' });
         if (!r.ok) throw new Error('status ' + r.status);
         const { data } = await r.json();
         showToast(`Cleanup done — shares ${data.shares_deleted}, hashrate ${data.hashrate_deleted}, alerts ${data.alerts_deleted}`, 'success');
@@ -1679,18 +1764,222 @@
       input.value = '';
     }
 
-    function addToAdminAllowlist() {
-      const input = document.getElementById('admin-allowlist-input');
-      if (!input.value) return;
-      addToList('admin-allowlist', input.value);
-      input.value = '';
+    // ─── Admin TOTP 2FA (wired to /api/admin/2fa/*) ─────────────────────────────
+    function show2faState(state) {
+      ['twofa-disabled', 'twofa-enroll', 'twofa-enabled'].forEach(id => {
+        document.getElementById(id).style.display = (id === 'twofa-' + state) ? 'block' : 'none';
+      });
     }
 
-    function addToAdminBlacklist() {
+    async function load2fa() {
+      try {
+        const r = await fetch('/api/admin/2fa/status', { credentials: 'include' });
+        if (!r.ok) throw new Error('status ' + r.status);
+        const d = await r.json();
+        if (d.enabled) {
+          document.getElementById('twofa-recovery-remaining').textContent =
+            (d.recovery_codes_remaining || 0) + ' backup code(s) left.';
+          show2faState('enabled');
+        } else {
+          show2faState('disabled');
+        }
+        document.getElementById('twofa-status').textContent =
+          d.enabled ? 'Two-factor authentication is ON for your account.' : 'Two-factor authentication is OFF for your account.';
+      } catch (e) {
+        document.getElementById('twofa-status').textContent = 'Could not load 2FA status: ' + e.message;
+      }
+    }
+
+    async function begin2fa() {
+      try {
+        const r = await adminFetch('/api/admin/2fa/enroll/begin', { method: 'POST', credentials: 'include' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'Could not start enrollment');
+        document.getElementById('twofa-secret').textContent = d.secret;
+        const link = document.getElementById('twofa-otpauth');
+        link.textContent = d.otpauth_uri;
+        link.href = d.otpauth_uri;
+        // Visual QR only if a QR lib is bundled; manual key/link always work.
+        const qr = document.getElementById('twofa-qr');
+        qr.textContent = '';
+        if (window.qrcode) {
+          try { const q = window.qrcode(0, 'M'); q.addData(d.otpauth_uri); q.make(); qr.innerHTML = q.createImgTag(5); }
+          catch (e) { qr.textContent = ''; }
+        }
+        show2faState('enroll');
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
+    async function confirm2fa() {
+      const code = document.getElementById('twofa-confirm-code').value.trim();
+      if (!code) { showToast('Enter the 6-digit code', 'error'); return; }
+      try {
+        const r = await adminFetch('/api/admin/2fa/enroll/confirm', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code })
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'Confirmation failed');
+        showToast('2FA enabled', 'success');
+        showRecoveryCodes(d.recovery_codes || []);
+        load2fa();
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
+    function cancel2faEnroll() { load2fa(); }
+
+    async function disable2fa() {
+      const code = document.getElementById('twofa-action-code').value.trim();
+      if (!code) { showToast('Enter your current 2FA or recovery code', 'error'); return; }
+      if (!confirm('Disable two-factor authentication for your account?')) return;
+      try {
+        const r = await adminFetch('/api/admin/2fa/disable', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code })
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'Disable failed');
+        showToast('2FA disabled', 'success');
+        document.getElementById('twofa-action-code').value = '';
+        load2fa();
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
+    async function regen2faRecovery() {
+      const code = document.getElementById('twofa-action-code').value.trim();
+      if (!code) { showToast('Enter your current 2FA or recovery code', 'error'); return; }
+      try {
+        const r = await adminFetch('/api/admin/2fa/recovery/regenerate', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code })
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'Regenerate failed');
+        showToast('New recovery codes generated', 'success');
+        document.getElementById('twofa-action-code').value = '';
+        showRecoveryCodes(d.recovery_codes || []);
+        load2fa();
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
+    function showRecoveryCodes(codes) {
+      document.getElementById('twofa-recovery-list').textContent = codes.join('\n');
+      document.getElementById('twofa-recovery').style.display = 'block';
+    }
+
+    // ─── Live admin IP filter (wired to /api/admin/security/*) ──────────────────
+    // These hit the running ipFilter directly (step-up gated → adminFetch handles the
+    // password challenge). Source of truth is the server; we re-render from its response.
+    let ipFilterYourIp = '';
+
+    async function loadIpFilter() {
+      try {
+        const r = await fetch('/api/admin/security/ip-filter-status', { credentials: 'include' });
+        if (!r.ok) throw new Error('status ' + r.status);
+        renderIpFilter(await r.json());
+      } catch (e) {
+        document.getElementById('ipfilter-status').textContent = 'Could not load filter status: ' + e.message;
+      }
+    }
+
+    function renderIpFilter(s) {
+      ipFilterYourIp = s.your_ip || '';
+      const modeLabel = s.mode === 'whitelist' ? 'Allowlist enforced (only listed IPs)'
+                      : (s.mode === 'blacklist' ? 'Blacklist only (listed IPs blocked)' : 'Disabled (all IPs allowed)');
+      document.getElementById('ipfilter-status').innerHTML =
+        'Mode: <strong>' + escapeHtmlSafe(modeLabel) + '</strong> · Your IP: <code>' + escapeHtmlSafe(ipFilterYourIp || 'unknown') + '</code>';
+
+      renderIpList('admin-allowlist', s.allowlist_entries || [], 'allow');
+      renderIpList('admin-blacklist', s.blacklist_entries || [], 'block');
+
+      // Lockout guard: allowlist is on but the caller's IP isn't covered by any entry.
+      const warn = document.getElementById('ipfilter-lockout-warn');
+      const entries = s.allowlist_entries || [];
+      const covered = !entries.length || entries.some(e => e === ipFilterYourIp);
+      if (entries.length && !covered) {
+        warn.style.display = '';
+        warn.textContent = '⚠ Your IP (' + ipFilterYourIp + ') is not in the allowlist. Add it now or you may lose admin access. (Restart the service to clear runtime rules if locked out.)';
+      } else {
+        warn.style.display = 'none';
+      }
+    }
+
+    function renderIpList(listId, entries, kind) {
+      const list = document.getElementById(listId);
+      list.innerHTML = '';
+      if (!entries.length) {
+        const empty = document.createElement('div');
+        empty.className = 'helper-text';
+        empty.textContent = '(none)';
+        list.appendChild(empty);
+        return;
+      }
+      entries.forEach(ip => {
+        const item = document.createElement('div');
+        item.className = 'list-item';
+        const span = document.createElement('span');
+        span.textContent = ip + (ip === ipFilterYourIp ? '  (you)' : '');
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-danger';
+        btn.style.cssText = 'min-width:auto;padding:0.5rem 1rem;';
+        btn.textContent = 'Remove';
+        btn.onclick = () => removeIp(kind, ip);
+        item.appendChild(span);
+        item.appendChild(btn);
+        list.appendChild(item);
+      });
+    }
+
+    function escapeHtmlSafe(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    async function ipFilterCall(path, ip) {
+      const r = await adminFetch(path, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || ('request failed (' + r.status + ')'));
+      if (data.status) renderIpFilter(data.status); // add/remove return the fresh status
+      return data;
+    }
+
+    async function addToAdminAllowlist() {
+      const input = document.getElementById('admin-allowlist-input');
+      const ip = input.value.trim();
+      if (!ip) return;
+      if (ip !== ipFilterYourIp && !confirm('Enabling/extending the allowlist restricts admin access to listed IPs only.\n\nAdd "' + ip + '" to the allowlist?')) return;
+      try {
+        await ipFilterCall('/api/admin/security/ip-allowlist/add', ip);
+        input.value = '';
+        showToast('Added to allowlist', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
+    async function addToAdminBlacklist() {
       const input = document.getElementById('admin-blacklist-input');
-      if (!input.value) return;
-      addToList('admin-blacklist', input.value);
-      input.value = '';
+      const ip = input.value.trim();
+      if (!ip) return;
+      if (ip === ipFilterYourIp && !confirm('That is YOUR current IP. Blocking it will lock you out. Continue?')) return;
+      try {
+        await ipFilterCall('/api/admin/security/ip-blacklist/add', ip);
+        input.value = '';
+        showToast('Added to blacklist', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
+    async function removeIp(kind, ip) {
+      if (!confirm('Remove "' + ip + '" from the ' + (kind === 'allow' ? 'allowlist' : 'blacklist') + '?')) return;
+      const path = kind === 'allow' ? '/api/admin/security/ip-allowlist/remove' : '/api/admin/security/ip-blacklist/remove';
+      try {
+        await ipFilterCall(path, ip);
+        showToast('Removed', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
     }
 
     function addToList(listId, value) {
@@ -2064,7 +2353,7 @@
       const amount = parseFloat(document.getElementById('prize-topup-amount').value);
       if (!(amount > 0)) { showToast('Enter a top-up amount', 'error'); return; }
       try {
-        const r = await fetch('/api/admin/incentives/prize-pool/topup', {
+        const r = await adminFetch('/api/admin/incentives/prize-pool/topup', {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ amount })
@@ -2076,10 +2365,33 @@
       } catch (e) { showToast(e.message, 'error'); }
     }
 
+    async function awardPrize() {
+      const address = document.getElementById('award-address').value.trim();
+      const amount = parseFloat(document.getElementById('award-amount').value);
+      const note = document.getElementById('award-note').value.trim();
+      const fromPool = document.getElementById('award-from-prize-pool').checked;
+      if (!address) { showToast('Enter a Grin address', 'error'); return; }
+      if (!(amount > 0)) { showToast('Enter an award amount', 'error'); return; }
+      if (!confirm(`Award ${amount} GRIN to ${address}?`)) return;
+      try {
+        const r = await adminFetch('/api/admin/incentives/award', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address, amount, note, from_prize_pool: fromPool })
+        });
+        if (!r.ok) throw new Error((await r.json()).error || 'Award failed');
+        showToast('Prize awarded', 'success');
+        document.getElementById('award-address').value = '';
+        document.getElementById('award-amount').value = '';
+        document.getElementById('award-note').value = '';
+        loadIncentiveData();
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
     async function drawLotteryNow(type) {
       if (!confirm('Run a lottery draw now? This pays real prize-pool GRIN to winners.')) return;
       try {
-        const r = await fetch('/api/admin/incentives/lottery/draw-now', {
+        const r = await adminFetch('/api/admin/incentives/lottery/draw-now', {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ type })

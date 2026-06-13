@@ -91,13 +91,13 @@
             <a href="index.html" class="nav-link active">Dashboard</a>
             <a href="miners-stats.html" class="nav-link">Miners</a>
             <a href="payment-history.html" class="nav-link">Payouts</a>
+            <a href="fortune-board.html" class="nav-link">🎁 Rewards</a>
             <a href="pool-info.html" class="nav-link">Info</a>
             <a href="account-settings.html" class="nav-link">My Account</a>
         </nav>
         <div class="nav-right">
             <div class="theme-switcher"></div>
             <a class="btn primary sm" href="connect.html">Start Mining</a>
-            <a class="btn sm" href="login.html">Sign In</a>
         </div>
     </header>
 
@@ -108,6 +108,13 @@
                 <div class="sub" data-brand="hero_subheading">Grin Cuckatoo32 · PPLNS rewards · anonymous Tor payouts</div>
             </div>
             <span class="badge warn" id="pool-status">Connecting…</span>
+        </div>
+
+        <!-- Live service health: pool API, node (peers/sync), wallet — public /api/pool/status -->
+        <div class="status-strip" id="status-strip" aria-label="Service status">
+            <div class="status-pill" id="svc-pool"><span class="status-dot"></span><span class="status-text">Pool service</span></div>
+            <div class="status-pill" id="svc-node"><span class="status-dot"></span><span class="status-text">Node</span></div>
+            <div class="status-pill" id="svc-wallet"><span class="status-dot"></span><span class="status-text">Wallet</span></div>
         </div>
 
         <div class="grid cols-4">
@@ -154,9 +161,12 @@
             </div>
         </div>
 
-        <div class="callout">
-            <span>⛏ Point your miner at <code data-brand="stratum_url">stratum host not configured</code></span>
-            <a class="btn primary sm" href="connect.html" data-brand="cta">Start Mining</a>
+        <div class="section-title">Point your miner at your nearest region</div>
+        <div class="region-grid" id="region-grid">
+            <div class="callout" id="region-fallback">
+                <span>⛏ Point your miner at <code data-brand="stratum_url">stratum host not configured</code></span>
+                <a class="btn primary sm" href="connect.html" data-brand="cta">Start Mining</a>
+            </div>
         </div>
 
         <div class="section-title">Recent activity</div>
@@ -183,7 +193,7 @@
     </div>
 
     <footer>
-        <p data-brand="footer_text">GRINIUM — Uranium Element Mining Pool | Professional • Reliable • Secure</p>
+        <p data-brand="footer_text">GRINIUM — Grin Mining Pool | Professional • Reliable • Secure</p>
         <div data-brand="page-links"></div>
         <p data-brand="attribution" style="opacity:0.7;font-size:0.95em;margin-top:6px;">Powered by the Grin Node Toolkit</p>
     </footer>
@@ -377,13 +387,91 @@
             }
         }
 
+        // ── Service status strip (pool / node / wallet) ──────────────────────
+        function setPill(id, state, label) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.className = 'status-pill ' + state; // state: ok | bad | warn
+            var t = el.querySelector('.status-text');
+            if (t && label) t.textContent = label;
+        }
+
+        async function loadServiceStatus() {
+            try {
+                var s = await Auth.fetch('/api/pool/status');
+                if (!s) throw new Error('no status');
+                setPill('svc-pool', s.pool && s.pool.ok ? 'ok' : 'bad', 'Pool service');
+                if (s.node && s.node.reachable) {
+                    setPill('svc-node', s.node.synced ? 'ok' : 'warn',
+                        'Node · ' + (s.node.peers || 0) + ' peers' + (s.node.synced ? '' : ' · syncing'));
+                } else {
+                    setPill('svc-node', 'bad', 'Node offline');
+                }
+                setPill('svc-wallet', s.wallet && s.wallet.reachable ? 'ok' : 'bad',
+                    s.wallet && s.wallet.reachable ? 'Wallet online' : 'Wallet offline');
+            } catch (e) {
+                setPill('svc-pool', 'bad', 'Pool service');
+                setPill('svc-node', 'bad', 'Node offline');
+                setPill('svc-wallet', 'bad', 'Wallet offline');
+            }
+        }
+
+        // ── Regional stratum hosts ───────────────────────────────────────────
+        // Operator-declared regions from /api/pool/locations. All values rendered via
+        // textContent (operator-supplied). Falls back to the single stratum callout.
+        async function loadRegions() {
+            var grid = document.getElementById('region-grid');
+            if (!grid) return;
+            try {
+                var regions = await Auth.fetch('/api/pool/locations');
+                if (!Array.isArray(regions) || regions.length === 0) return; // keep fallback callout
+                grid.textContent = '';
+                regions.forEach(function (r) {
+                    var card = document.createElement('div');
+                    card.className = 'region-card';
+
+                    var head = document.createElement('div');
+                    head.className = 'region-head';
+                    var name = document.createElement('span');
+                    name.className = 'region-name';
+                    name.textContent = r.label || r.region;
+                    head.appendChild(name);
+                    card.appendChild(head);
+
+                    var hostRow = document.createElement('div');
+                    hostRow.className = 'region-host';
+                    var code = document.createElement('code');
+                    code.textContent = r.stratum_url || '—';
+                    hostRow.appendChild(code);
+                    if (r.stratum_url) {
+                        var copy = document.createElement('button');
+                        copy.className = 'btn sm';
+                        copy.type = 'button';
+                        copy.textContent = 'Copy';
+                        copy.addEventListener('click', function () {
+                            var done = function () { copy.textContent = 'Copied!'; setTimeout(function () { copy.textContent = 'Copy'; }, 1500); };
+                            if (navigator.clipboard) { navigator.clipboard.writeText(r.stratum_url).then(done); }
+                            else { done(); }
+                        });
+                        hostRow.appendChild(copy);
+                    }
+                    card.appendChild(hostRow);
+                    grid.appendChild(card);
+                });
+            } catch (e) { /* keep fallback callout */ }
+        }
+
         function refresh() {
             loadStats();
             loadBlocks();
             loadPayments();
+            loadServiceStatus();
         }
 
-        document.addEventListener('DOMContentLoaded', refresh);
+        document.addEventListener('DOMContentLoaded', function () {
+            refresh();
+            loadRegions();   // regions change rarely → load once
+        });
         setInterval(refresh, 60000);
     </script>
 </body>

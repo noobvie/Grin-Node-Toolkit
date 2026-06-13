@@ -61,7 +61,12 @@ function migrateUsers() {
     const additions = {
       failed_login_attempts: 'INTEGER NOT NULL DEFAULT 0',
       locked_until: 'INTEGER NOT NULL DEFAULT 0',
-      token_version: 'INTEGER NOT NULL DEFAULT 0'
+      token_version: 'INTEGER NOT NULL DEFAULT 0',
+      // Optional admin TOTP 2FA. totp_secret = confirmed base32 secret (NULL until enabled);
+      // totp_pending_secret = secret mid-enrollment, before the confirm code is entered.
+      totp_secret: 'TEXT DEFAULT NULL',
+      totp_enabled: 'INTEGER NOT NULL DEFAULT 0',
+      totp_pending_secret: 'TEXT DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -210,11 +215,26 @@ function createSchema() {
       failed_login_attempts INTEGER NOT NULL DEFAULT 0,
       locked_until INTEGER NOT NULL DEFAULT 0,
       token_version INTEGER NOT NULL DEFAULT 0,
+      totp_secret TEXT DEFAULT NULL,
+      totp_enabled INTEGER NOT NULL DEFAULT 0,
+      totp_pending_secret TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_user_username ON users(username)`,
+
+    // One-time backup recovery codes for admin 2FA (bcrypt-hashed, single-use). Shown to the
+    // admin once at enrollment; let an admin who lost their authenticator still log in.
+    `CREATE TABLE IF NOT EXISTS admin_recovery_codes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      code_hash TEXT NOT NULL,
+      used_at INTEGER DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_recovery_user ON admin_recovery_codes(user_id, used_at)`,
 
     `CREATE TABLE IF NOT EXISTS admin_audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -356,6 +376,31 @@ function createSchema() {
   // Additive column migrations run after the tables exist.
   migrateUsers();
   migrateShares();
+  seedDefaultRegions();
+}
+
+// Seed the three default GRINIUM regions ONLY when the operator hasn't declared any
+// (purely cosmetic defaults the admin can rename/disable/delete in the Regions panel).
+// These are the descriptive hostnames shown in the "Point your miner at" cards; the
+// actual ingestion allowlist + shared secret live in pool.json, not this table.
+function seedDefaultRegions() {
+  try {
+    const { cnt } = db.prepare('SELECT COUNT(*) AS cnt FROM pool_locations').get();
+    if (cnt > 0) return;
+    const defaults = [
+      ['amer', 'Americas (US)', 'amer.grinium.com'],
+      ['euro', 'Europe',        'euro.grinium.com'],
+      ['asie', 'Asia',          'asie.grinium.com'],
+    ];
+    const ins = db.prepare(
+      'INSERT OR IGNORE INTO pool_locations (region, label, stratum_url, is_active) VALUES (?, ?, ?, 1)'
+    );
+    const tx = db.transaction(() => { for (const d of defaults) ins.run(d[0], d[1], d[2]); });
+    tx();
+    console.warn('[db] seeded default pool_locations (amer/euro/asie) — edit in admin Regions panel');
+  } catch (e) {
+    console.error(`[db] region seed failed: ${e.message}`);
+  }
 }
 
 function closeDb() {

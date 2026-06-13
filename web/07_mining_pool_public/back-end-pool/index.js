@@ -19,6 +19,7 @@ const LotteryManager = require('./lib/lottery');
 const WalletTor = require('./lib/wallet-tor');
 const WithdrawalScheduler = require('./lib/withdrawal-scheduler');
 const AuthManager = require('./lib/auth');
+const Captcha = require('./lib/captcha');
 const { requireAuth, requireAdmin, requireFreshAuth } = require('./lib/auth-middleware');
 const HashrateTracker = require('./lib/hashrate-tracker');
 const PoolstatsReporter = require('./lib/poolstats-reporter');
@@ -104,6 +105,14 @@ let lotteryManager = null;
 let walletTor = null;
 let withdrawalScheduler = null;
 let authManager = null;
+// Self-hosted login CAPTCHA (in-memory, single process). No external dependency.
+const loginCaptcha = new Captcha();
+// Auto-ban (fail2ban-style): too many failed admin logins from one IP within the window
+// → temporary IP ban (cooldown). In-memory; pairs with ipFilter.tempBan().
+const ADMIN_LOGIN_FAIL_THRESHOLD = 10;
+const ADMIN_LOGIN_FAIL_WINDOW_MS = 15 * 60 * 1000;
+const ADMIN_LOGIN_BAN_MS = 60 * 60 * 1000;
+const adminLoginFailures = new Map(); // ip -> { count, firstAt }
 let hashrateTracker = null;
 let poolstatsReporter = null;
 let rateLimiter = null;
@@ -291,6 +300,35 @@ function setupRoutes() {
     ipFilter.middleware('admin'),
     requireAdmin(authManager)
   ];
+
+  // Step-up gate for money/destructive admin actions: same as secureAdmin but also requires
+  // a PASSWORD re-verification within the last 5 min (requireFreshAuth → token.pwa). A live
+  // (or stolen) session alone is not enough — the client must call /api/admin/reauth first.
+  const STEP_UP_MAX_AGE_S = 300;
+  const freshAdmin = [
+    rateLimiter.middleware('admin'),
+    ipFilter.middleware('admin'),
+    requireFreshAuth(authManager, STEP_UP_MAX_AGE_S)
+  ];
+
+  // Auto-ban bookkeeping shared by the password and 2FA login steps: count failures per IP
+  // within the window, temp-ban on threshold.
+  const recordAdminLoginFailure = (ip) => {
+    const now = Date.now();
+    let rec = adminLoginFailures.get(ip);
+    if (!rec || now - rec.firstAt > ADMIN_LOGIN_FAIL_WINDOW_MS) rec = { count: 0, firstAt: now };
+    rec.count++;
+    adminLoginFailures.set(ip, rec);
+    if (rec.count >= ADMIN_LOGIN_FAIL_THRESHOLD) {
+      ipFilter.tempBan(ip, ADMIN_LOGIN_BAN_MS);
+      adminLoginFailures.delete(ip);
+      try {
+        db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                    VALUES (NULL, 'ip_autoban', 'security', ?, ?, ?)`)
+          .run(ip, JSON.stringify({ reason: 'failed_admin_logins', threshold: ADMIN_LOGIN_FAIL_THRESHOLD, ban_minutes: ADMIN_LOGIN_BAN_MS / 60000 }), ip);
+      } catch (e) { /* non-fatal */ }
+    }
+  };
 
   // ─── Public Health Check (rate-limited, no auth) ───────────────────────────
   // Registered on both /health and /api/health: nginx proxies /api/* to the backend,
@@ -578,6 +616,12 @@ function setupRoutes() {
     }
   );
 
+  // Issue a self-hosted CAPTCHA challenge for the login/register forms. Public-rate-limited
+  // (60/min) so the form can fetch one without spending the strict auth budget (3/min).
+  app.get('/api/auth/captcha', rateLimiter.middleware('public'), (req, res) => {
+    res.json(loginCaptcha.issue());
+  });
+
   // FIX #7, #6, #4: Add rate limiting + first-admin gating + httpOnly cookies
   app.post('/api/auth/register',
     rateLimiter.middleware('auth'),
@@ -589,11 +633,18 @@ function setupRoutes() {
           return res.status(403).json({ error: 'Admin registration closed.' });
         }
 
+        // CAPTCHA gate (before any credential work — a wrong/expired captcha never counts
+        // as a password attempt and can't trip the account lockout).
+        if (!loginCaptcha.verify(req.body?.captcha_id, req.body?.captcha_answer)) {
+          return res.status(400).json({ success: false, error: 'Captcha incorrect or expired. Try again.' });
+        }
+
         const { username, password } = req.body;
         const result = await authManager.registerAdmin(username, password);
         if (result.success) {
-          // FIX #4: Generate tokens and set as httpOnly cookies
-          const tokens = authManager.generateTokens(result.user_id, username, true);
+          // FIX #4: Generate tokens and set as httpOnly cookies. pwa=now — the admin just
+          // set this password, so the first session starts step-up-fresh.
+          const tokens = authManager.generateTokens(result.user_id, username, true, 0, Math.floor(Date.now() / 1000));
 
           res.cookie('access_token', tokens.accessToken, {
             httpOnly: true,
@@ -636,11 +687,33 @@ function setupRoutes() {
     rateLimiter.middleware('auth'),
     async (req, res) => {
       try {
-        const { username, password } = req.body;
         const ip = req.ip;
+
+        // Auto-ban: reject IPs that tripped the failed-login threshold (temporary cooldown).
+        if (ipFilter && ipFilter.isBlocked(ip)) {
+          return res.status(403).json({ success: false, error: 'Too many failed attempts from your network. Try again later.' });
+        }
+
+        // CAPTCHA gate next — a wrong/expired captcha is rejected before the password is
+        // ever checked, so it can't be used to probe credentials or trip account lockout.
+        if (!loginCaptcha.verify(req.body?.captcha_id, req.body?.captcha_answer)) {
+          return res.status(400).json({ success: false, error: 'Captcha incorrect or expired. Try again.' });
+        }
+
+        const { username, password } = req.body;
         const result = await authManager.login(username, password, ip);
 
         if (result.success) {
+          // Password is correct → clear the auto-ban counter for this IP.
+          adminLoginFailures.delete(ip);
+
+          // 2FA gate: if this admin has TOTP enabled, DON'T issue a session yet. Return a
+          // short-lived 2fa token; the client completes via POST /api/auth/login/totp. (CAPTCHA
+          // was already consumed here, so the second step doesn't require solving it again.)
+          if (authManager.isTotpEnabled(result.user_id)) {
+            return res.json({ success: false, totp_required: true, twofa_token: authManager.generate2faToken(result.user_id) });
+          }
+
           // FIX #4: Set httpOnly, Secure cookie instead of returning token
           res.cookie('access_token', result.access_token, {
             httpOnly: true,        // JS cannot access (prevents XSS theft)
@@ -676,6 +749,7 @@ function setupRoutes() {
             VALUES (NULL, 'login_failed', 'auth', 'login', ?, ?)
           `);
           auditStmt.run(JSON.stringify({ username }), ip);
+          recordAdminLoginFailure(ip);
           res.status(401).json({ success: false, error: 'Invalid credentials' });
         }
       } catch (err) {
@@ -683,6 +757,49 @@ function setupRoutes() {
       }
     }
   );
+
+  // Second login step for 2FA-enabled admins. Takes the short-lived twofa_token from step 1
+  // (proves the password passed) plus a TOTP or recovery code. No CAPTCHA here — it was solved
+  // in step 1. Issues the real session on success.
+  app.post('/api/auth/login/totp', rateLimiter.middleware('auth'), async (req, res) => {
+    try {
+      const ip = req.ip;
+      if (ipFilter && ipFilter.isBlocked(ip)) {
+        return res.status(403).json({ success: false, error: 'Too many failed attempts from your network. Try again later.' });
+      }
+      const { twofa_token, code } = req.body || {};
+      const userId = authManager.verify2faToken(twofa_token);
+      if (!userId) return res.status(401).json({ success: false, error: '2FA session expired — please log in again.' });
+
+      const ok = await authManager.verifyTotpOrRecovery(userId, code);
+      if (!ok) {
+        try {
+          db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                      VALUES (?, 'login_2fa_failed', 'auth', 'login', NULL, ?)`).run(userId, ip);
+        } catch (e) { /* non-fatal */ }
+        recordAdminLoginFailure(ip);
+        return res.status(401).json({ success: false, error: 'Invalid 2FA code' });
+      }
+
+      const sess = authManager.issueSessionFor(userId);
+      if (!sess.success) return res.status(401).json({ success: false, error: sess.error || 'Login failed' });
+
+      res.cookie('access_token', sess.access_token, {
+        httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 3600000
+      });
+      res.cookie('refresh_token', sess.refresh_token, {
+        httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 604800000
+      });
+      adminLoginFailures.delete(ip);
+      try {
+        db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                    VALUES (?, 'login_success', 'auth', 'login', ?, ?)`).run(userId, JSON.stringify({ via: '2fa' }), ip);
+      } catch (e) { /* non-fatal */ }
+      res.json({ success: true, username: sess.username, is_admin: sess.is_admin });
+    } catch (err) {
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
 
   app.post('/api/auth/refresh', (req, res) => {
     // FIX #4: Get refresh token from cookie instead of body
@@ -717,6 +834,92 @@ function setupRoutes() {
     }
   });
 
+  // Step-up re-authentication: a logged-in admin re-enters their password to authorize a
+  // money/destructive action. Mints a fresh (pwa=now) access token; the client then retries
+  // the freshAdmin-gated request. secureAdmin (not freshAdmin) gates this — you need a valid
+  // session to step up, plus the password.
+  app.post('/api/admin/reauth', secureAdmin, async (req, res) => {
+    try {
+      const { password } = req.body || {};
+      if (!password) return res.status(400).json({ error: 'Password required' });
+      const result = await authManager.stepUp(req.user.user_id, password);
+      if (!result.success) {
+        try {
+          db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                      VALUES (?, 'reauth_failed', 'auth', 'reauth', NULL, ?)`).run(req.user.user_id, req.ip);
+        } catch (e) { /* non-fatal */ }
+        return res.status(401).json({ error: result.error || 'Re-authentication failed' });
+      }
+      res.cookie('access_token', result.access_token, {
+        httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 3600000
+      });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+  // ─── Admin TOTP 2FA management ──────────────────────────────────────────────
+  // Status is readable with a normal admin session; enabling/disabling requires step-up
+  // (freshAdmin) so a hijacked live session can't silently turn 2FA off.
+  app.get('/api/admin/2fa/status', secureAdmin, (req, res) => {
+    try {
+      res.json({
+        success: true,
+        enabled: authManager.isTotpEnabled(req.user.user_id),
+        recovery_codes_remaining: authManager.unusedRecoveryCount(req.user.user_id),
+      });
+    } catch (err) { res.status(500).json({ error: 'Server error' }); }
+  });
+
+  app.post('/api/admin/2fa/enroll/begin', freshAdmin, (req, res) => {
+    try {
+      if (authManager.isTotpEnabled(req.user.user_id)) {
+        return res.status(400).json({ error: '2FA is already enabled. Disable it first to re-enroll.' });
+      }
+      let issuer = 'Grin Pool';
+      try { issuer = (poolSettings.getSection('pool_info').pool_name) || issuer; } catch (e) {}
+      const r = authManager.begin2faEnrollment(req.user.user_id, issuer);
+      if (!r.success) return res.status(400).json({ error: r.error });
+      res.json({ success: true, secret: r.secret, otpauth_uri: r.otpauth_uri });
+    } catch (err) { res.status(500).json({ error: 'Server error' }); }
+  });
+
+  app.post('/api/admin/2fa/enroll/confirm', freshAdmin, async (req, res) => {
+    try {
+      const r = await authManager.confirm2faEnrollment(req.user.user_id, (req.body || {}).code);
+      if (!r.success) return res.status(400).json({ error: r.error });
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, '2fa_enabled', 'auth', '2fa', NULL, ?)`).run(req.user.user_id, req.ip);
+      res.json({ success: true, recovery_codes: r.recovery_codes });
+    } catch (err) { res.status(500).json({ error: 'Server error' }); }
+  });
+
+  app.post('/api/admin/2fa/disable', freshAdmin, async (req, res) => {
+    try {
+      const r = await authManager.disable2fa(req.user.user_id, (req.body || {}).code);
+      if (!r.success) return res.status(400).json({ error: r.error });
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, '2fa_disabled', 'auth', '2fa', NULL, ?)`).run(req.user.user_id, req.ip);
+      res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: 'Server error' }); }
+  });
+
+  app.post('/api/admin/2fa/recovery/regenerate', freshAdmin, async (req, res) => {
+    try {
+      if (!authManager.isTotpEnabled(req.user.user_id)) {
+        return res.status(400).json({ error: 'Enable 2FA first.' });
+      }
+      // Require a current code so only the genuine 2FA holder can mint new recovery codes.
+      const ok = await authManager.verifyTotpOrRecovery(req.user.user_id, (req.body || {}).code);
+      if (!ok) return res.status(401).json({ error: 'Incorrect 2FA / recovery code' });
+      const recovery_codes = await authManager.generateRecoveryCodes(req.user.user_id);
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, '2fa_recovery_regenerated', 'auth', '2fa', NULL, ?)`).run(req.user.user_id, req.ip);
+      res.json({ success: true, recovery_codes });
+    } catch (err) { res.status(500).json({ error: 'Server error' }); }
+  });
+
   // FIX: Add logout endpoint
   app.post('/api/auth/logout', (req, res) => {
     // Server-side revoke: bump the user's token_version so the issued refresh token
@@ -726,6 +929,7 @@ function setupRoutes() {
     res.clearCookie('refresh_token', { httpOnly: true });
     res.json({ success: true });
   });
+
 
   app.post('/api/auth/change-password', requireAuth(authManager), (req, res) => {
     const { old_password, new_password } = req.body;
@@ -779,6 +983,40 @@ function setupRoutes() {
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // Public service-health summary for the homepage status strip. Deliberately coarse —
+  // up/down + node peer count + sync flag only. NEVER exposes wallet balances or addresses
+  // (those stay on the admin-only /api/admin/health/* endpoints).
+  app.get('/api/pool/status', rateLimiter.middleware('public'), async (req, res) => {
+    const out = {
+      pool: { ok: true },
+      node: { reachable: false, synced: false, peers: 0, height: 0 },
+      wallet: { reachable: false },
+    };
+    try {
+      // getStatus() resolves (doesn't throw) with { ok: false } when the node is
+      // unreachable — gate on status.ok, not the absence of an exception.
+      const status = await blockMonitor.grinNode.getStatus();
+      if (status && status.ok) {
+        out.node = {
+          reachable: true,
+          synced: status.synced === true,
+          peers: status.peer_count || 0,
+          height: status.header_height || 0,
+        };
+      }
+    } catch (e) { /* node down → reachable stays false */ }
+
+    try {
+      if (wallet && wallet.getBalance) {
+        await wallet.getBalance();   // success = wallet API reachable; balance discarded
+        out.wallet.reachable = true;
+      }
+    } catch (e) { /* wallet down → reachable stays false */ }
+
+    res.setHeader('Cache-Control', 'public, max-age=15');
+    res.json(out);
   });
 
   app.get('/api/pool/blocks', (req, res) => {
@@ -1153,7 +1391,7 @@ function setupRoutes() {
     }
   });
 
-  app.post('/api/admin/poolstats/update-key', secureAdmin, (req, res) => {
+  app.post('/api/admin/poolstats/update-key', freshAdmin, (req, res) => {
     try {
       const { api_key } = req.body;
       if (!api_key || api_key.trim().length === 0) {
@@ -1212,13 +1450,15 @@ function setupRoutes() {
   app.get('/api/admin/security/ip-filter-status', secureAdmin, (req, res) => {
     try {
       const status = ipFilter.getStatus();
+      // Surface the caller's IP so the UI can warn before an allowlist locks them out.
+      status.your_ip = ipFilter.getClientIp(req);
       res.json(status);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post('/api/admin/security/ip-allowlist/add', secureAdmin, (req, res) => {
+  app.post('/api/admin/security/ip-allowlist/add', freshAdmin, (req, res) => {
     try {
       const { ip } = req.body;
       if (!ip) {
@@ -1235,7 +1475,7 @@ function setupRoutes() {
     }
   });
 
-  app.post('/api/admin/security/ip-allowlist/remove', secureAdmin, (req, res) => {
+  app.post('/api/admin/security/ip-allowlist/remove', freshAdmin, (req, res) => {
     try {
       const { ip } = req.body;
       if (!ip) {
@@ -1248,7 +1488,7 @@ function setupRoutes() {
     }
   });
 
-  app.post('/api/admin/security/ip-blacklist/add', secureAdmin, (req, res) => {
+  app.post('/api/admin/security/ip-blacklist/add', freshAdmin, (req, res) => {
     try {
       const { ip } = req.body;
       if (!ip) {
@@ -1265,7 +1505,7 @@ function setupRoutes() {
     }
   });
 
-  app.post('/api/admin/security/ip-blacklist/remove', secureAdmin, (req, res) => {
+  app.post('/api/admin/security/ip-blacklist/remove', freshAdmin, (req, res) => {
     try {
       const { ip } = req.body;
       if (!ip) {
@@ -1809,7 +2049,7 @@ function setupRoutes() {
     }
   });
 
-  app.delete('/api/admin/locations/:id', secureAdmin, (req, res) => {
+  app.delete('/api/admin/locations/:id', freshAdmin, (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
       const row = db.prepare('SELECT * FROM pool_locations WHERE id = ?').get(id);
@@ -1932,6 +2172,46 @@ function setupRoutes() {
     }
   });
 
+  // Award a contest/incentive prize directly to a miner's address (address-as-identity —
+  // no account needed). Funded from the prize_pool bucket by default so it's backed by real
+  // GRIN already in the wallet; the prize pays out to the address via the normal Tor flow.
+  // The note is stored in the audit log for the operator's records.
+  app.post('/api/admin/incentives/award', freshAdmin, (req, res) => {
+    try {
+      const addr = String((req.body && req.body.address) || '').trim();
+      const amount = parseFloat(req.body && req.body.amount);
+      const note = String((req.body && req.body.note) || '').slice(0, 280);
+      const fromPrizePool = (req.body && req.body.from_prize_pool) !== false; // default true
+
+      if (!/^t?grin1[ac-hj-np-z02-9]{40,}$/.test(addr)) {
+        return res.status(400).json({ error: 'Enter a valid Grin Slatepack address (grin1…)' });
+      }
+      if (isNaN(amount) || amount <= 0) {
+        return res.status(400).json({ error: 'amount must be a positive number' });
+      }
+      if (!incentivesManager) {
+        return res.status(503).json({ error: 'incentives unavailable' });
+      }
+
+      const result = incentivesManager.awardPrize(addr, amount, { fromPrizePool });
+      if (!result.ok) {
+        const msg = result.reason === 'insufficient_prize_pool'
+          ? 'Prize pool balance is too low to cover this award. Top up the prize pool or uncheck "fund from prize pool".'
+          : (result.reason || 'award failed');
+        return res.status(400).json({ error: msg });
+      }
+
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'prize_award', 'miner_account', ?, ?, ?)
+      `).run(req.user.user_id, addr, JSON.stringify({ amount, note, from_prize_pool: fromPrizePool, balance: result.balance }), req.ip);
+
+      res.json({ success: true, grin_address: addr, amount, balance: result.balance, funded_from: fromPrizePool ? 'prize_pool' : 'mint' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ─── POOL SETTINGS ENDPOINTS (Admin only) ─────────────────────────
 
   // Get all settings sections
@@ -1955,8 +2235,15 @@ function setupRoutes() {
   });
 
   // Update one settings section
+  // High-risk settings sections (payout = fee/min-withdrawal/wallet; access = admin IP rules)
+  // require step-up auth; cosmetic sections (branding/seo/…) save with a normal admin session.
+  const STEP_UP_SETTINGS_SECTIONS = new Set(['payout', 'access']);
   app.post('/api/admin/settings/:section', secureAdmin, (req, res) => {
     try {
+      if (STEP_UP_SETTINGS_SECTIONS.has(req.params.section) &&
+          !authManager.isTokenFresh(req.token, STEP_UP_MAX_AGE_S)) {
+        return res.status(403).json({ error: 'Re-authentication required for this section', challenge_required: true });
+      }
       const updated = poolSettings.updateSection(req.params.section, req.body, req.user.user_id);
       res.json({ success: true, section: req.params.section, data: updated });
     } catch (err) {
@@ -1965,7 +2252,7 @@ function setupRoutes() {
   });
 
   // Restore section to defaults
-  app.post('/api/admin/settings/:section/restore', secureAdmin, (req, res) => {
+  app.post('/api/admin/settings/:section/restore', freshAdmin, (req, res) => {
     try {
       const restored = poolSettings.resetSection(req.params.section, req.user.user_id);
       res.json({ success: true, section: req.params.section, data: restored });
@@ -1985,7 +2272,7 @@ function setupRoutes() {
     }
   });
 
-  app.post('/api/admin/database/cleanup', secureAdmin, (req, res) => {
+  app.post('/api/admin/database/cleanup', freshAdmin, (req, res) => {
     try {
       const result = retentionManager.runOnce();
       res.json({ success: true, data: result });
@@ -2012,7 +2299,7 @@ function setupRoutes() {
 
   // Manual operator top-up of the prize bucket. Accounting only — the operator must already
   // hold the GRIN in the pool wallet; this just records it as available for prizes.
-  app.post('/api/admin/incentives/prize-pool/topup', secureAdmin, (req, res) => {
+  app.post('/api/admin/incentives/prize-pool/topup', freshAdmin, (req, res) => {
     try {
       const balance = incentivesManager.manualTopup(req.body.amount);
       db.prepare(`
@@ -2038,7 +2325,7 @@ function setupRoutes() {
   });
 
   // Manually trigger a draw (testing / off-schedule special event).
-  app.post('/api/admin/incentives/lottery/draw-now', secureAdmin, async (req, res) => {
+  app.post('/api/admin/incentives/lottery/draw-now', freshAdmin, async (req, res) => {
     try {
       const type = req.body.type === 'special' ? 'special' : 'weekly';
       const result = await lotteryManager.runDraw(type, req.body.event_name || null, parseFloat(req.body.pot_grin) || 0);

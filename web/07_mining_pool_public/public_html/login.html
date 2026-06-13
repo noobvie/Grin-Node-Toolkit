@@ -265,6 +265,13 @@
           <label for="password">Password</label>
           <input type="password" id="password" name="password" placeholder="Enter admin password" required>
         </div>
+        <div class="form-group">
+          <label for="captcha-answer">
+            <span id="captcha-question">Loading verification…</span>
+            <a onclick="loadCaptcha('login')" style="float:right;font-weight:400;cursor:pointer;color:var(--primary);">↻ new</a>
+          </label>
+          <input type="text" id="captcha-answer" name="captcha-answer" inputmode="numeric" autocomplete="off" placeholder="Answer" required>
+        </div>
         <button type="submit" id="login-btn">Login</button>
       </form>
       <div class="register-link">
@@ -282,10 +289,34 @@
           <label for="reg-password">Password</label>
           <input type="password" id="reg-password" name="password" placeholder="Choose password (8+ chars)" required>
         </div>
+        <div class="form-group">
+          <label for="reg-captcha-answer">
+            <span id="reg-captcha-question">Loading verification…</span>
+            <a onclick="loadCaptcha('register')" style="float:right;font-weight:400;cursor:pointer;color:var(--primary);">↻ new</a>
+          </label>
+          <input type="text" id="reg-captcha-answer" name="captcha-answer" inputmode="numeric" autocomplete="off" placeholder="Answer" required>
+        </div>
         <button type="submit" id="register-btn">Create Admin Account</button>
       </form>
       <div class="register-link">
         Already have account? <a onclick="toggleRegister(event)">Login</a>
+      </div>
+    </div>
+
+    <div id="totp-form" style="display: none;">
+      <form onsubmit="handleTotp(event)">
+        <div class="form-group">
+          <label for="totp-code">Two-factor code</label>
+          <input type="text" id="totp-code" name="totp-code" inputmode="numeric" autocomplete="one-time-code"
+                 placeholder="6-digit code" required autofocus>
+          <div class="register-link" style="text-align:left;margin-top:.5rem;">
+            Lost your authenticator? Enter one of your <strong>backup recovery codes</strong> instead.
+          </div>
+        </div>
+        <button type="submit" id="totp-btn">Verify</button>
+      </form>
+      <div class="register-link">
+        <a onclick="cancelTotp(event)">← Back to login</a>
       </div>
     </div>
   </div>
@@ -306,12 +337,70 @@
       setTimeout(() => el.style.display = 'none', 5000);
     }
 
+    // Short-lived token from the password step, used to complete 2FA.
+    var twofaToken = null;
+
+    async function handleTotp(e) {
+      e.preventDefault();
+      const code = document.getElementById('totp-code').value;
+      const btn = document.getElementById('totp-btn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="loading"></span>Verifying...';
+      try {
+        const res = await fetch('/api/auth/login/totp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ twofa_token: twofaToken, code: code }),
+          credentials: 'include'
+        });
+        const data = await res.json();
+        if (data.success) {
+          window.location.href = '/admin-dashboard.html';
+        } else {
+          showError(data.error || 'Verification failed');
+          // 2fa session expired → back to the login form (needs a fresh password + captcha).
+          if (/expired/i.test(data.error || '')) cancelTotp();
+        }
+      } catch (err) {
+        showError('Connection error: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'Verify';
+      }
+    }
+
+    function cancelTotp(e) {
+      if (e) e.preventDefault();
+      twofaToken = null;
+      document.getElementById('totp-form').style.display = 'none';
+      document.getElementById('login-form').style.display = 'block';
+      loadCaptcha('login'); // step-1 captcha was consumed → get a fresh one
+    }
+
+    // ── Self-hosted CAPTCHA (single-use, must be re-fetched after every attempt) ──
+    var captchaIds = { login: null, register: null };
+
+    async function loadCaptcha(which) {
+      var qId = which === 'register' ? 'reg-captcha-question' : 'captcha-question';
+      var aId = which === 'register' ? 'reg-captcha-answer' : 'captcha-answer';
+      try {
+        var res = await fetch('/api/auth/captcha', { credentials: 'include' });
+        var data = await res.json();
+        captchaIds[which] = data.id;
+        document.getElementById(qId).textContent = data.question || 'Verification';
+        document.getElementById(aId).value = '';
+      } catch (e) {
+        document.getElementById(qId).textContent = 'Verification unavailable — retry ↻';
+      }
+    }
+
     function toggleRegister(e) {
       e.preventDefault();
-      document.getElementById('login-form').style.display =
-        document.getElementById('login-form').style.display === 'none' ? 'block' : 'none';
-      document.getElementById('register-form').style.display =
-        document.getElementById('register-form').style.display === 'none' ? 'block' : 'none';
+      var loginVisible = document.getElementById('login-form').style.display !== 'none';
+      document.getElementById('login-form').style.display = loginVisible ? 'none' : 'block';
+      document.getElementById('register-form').style.display = loginVisible ? 'block' : 'none';
+      // Load a fresh challenge for whichever form is now shown.
+      loadCaptcha(loginVisible ? 'register' : 'login');
     }
 
     async function handleLogin(e) {
@@ -327,7 +416,11 @@
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
+          body: JSON.stringify({
+            username, password,
+            captcha_id: captchaIds.login,
+            captcha_answer: document.getElementById('captcha-answer').value
+          }),
           credentials: 'include'  // FIX #4: Include httpOnly cookies
         });
 
@@ -337,11 +430,21 @@
           // FIX #4: Token is now in httpOnly cookie, not in response body
           // No need to store anything in localStorage
           window.location.href = '/admin-dashboard.html';
+        } else if (data.totp_required) {
+          // Password OK, but this admin has 2FA on → show the code step (no new captcha needed).
+          twofaToken = data.twofa_token;
+          document.getElementById('login-form').style.display = 'none';
+          document.getElementById('register-form').style.display = 'none';
+          document.getElementById('totp-form').style.display = 'block';
+          const c = document.getElementById('totp-code');
+          c.value = ''; c.focus();
         } else {
           showError(data.error || 'Login failed');
+          loadCaptcha('login'); // single-use → always refresh after a failed attempt
         }
       } catch (err) {
         showError('Connection error: ' + err.message);
+        loadCaptcha('login');
       } finally {
         btn.disabled = false;
         btn.innerHTML = 'Login';
@@ -371,26 +474,27 @@
         const res = await fetch('/api/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
+          body: JSON.stringify({
+            username, password,
+            captcha_id: captchaIds.register,
+            captcha_answer: document.getElementById('reg-captcha-answer').value
+          }),
           credentials: 'include'  // FIX #4: Include httpOnly cookies
         });
 
         const data = await res.json();
 
         if (data.success) {
-          showSuccess('Admin account created! Logging in...');
-          setTimeout(() => {
-            document.getElementById('username').value = username;
-            document.getElementById('password').value = password;
-            document.getElementById('login-form').style.display = 'block';
-            document.getElementById('register-form').style.display = 'none';
-            handleLogin(new Event('submit'));
-          }, 1000);
+          // Register already authenticated us (httpOnly cookies set server-side) — go straight in.
+          showSuccess('Admin account created! Redirecting…');
+          setTimeout(() => { window.location.href = '/admin-dashboard.html'; }, 800);
         } else {
           showError(data.error || 'Registration failed');
+          loadCaptcha('register'); // single-use → refresh after a failed attempt
         }
       } catch (err) {
         showError('Connection error: ' + err.message);
+        loadCaptcha('register');
       } finally {
         btn.disabled = false;
         btn.innerHTML = 'Create Admin Account';
@@ -413,6 +517,7 @@
     }
 
     checkIfLoggedIn();
+    loadCaptcha('login');
   </script>
   <script src="/js/public-theme.js"></script>
   <script src="/js/branding.js"></script>

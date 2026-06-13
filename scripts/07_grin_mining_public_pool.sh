@@ -438,7 +438,9 @@ EOF
 # ═══════════════════════════════════════════════════════════════════════════════
 
 pool_configure() {
-    echo -e "\n${BOLD}Configure Pool Manager — Mainnet${RESET}\n"
+    echo -e "\n${BOLD}Configure Pool Manager — Mainnet${RESET}"
+    echo -e "${DIM}Only the pool domain is set here — everything else defaults and is${RESET}"
+    echo -e "${DIM}edited in the web admin panel after login.${RESET}\n"
 
     # The config read/write helpers run on node (installed by step 1). Without
     # it every write fails silently, so make the missing prerequisite explicit.
@@ -448,56 +450,39 @@ pool_configure() {
     fi
     pool_ensure_defaults
 
+    # The domain is the ONLY install-time setting asked here. Everything else
+    # (pool name, fee %, min withdrawal, reward model, payout options, …) is
+    # seeded with sane defaults during 1) Install and is edited in the web admin
+    # panel after first login — so the installer stays minimal. The domain is the
+    # exception: it's REQUIRED for nginx + certbot + satellite HTTPS and is NOT
+    # editable in the admin panel, so it must be captured up front.
+    # node_stratum_port stays at its default (3334); advanced operators running
+    # the node's built-in stratum on another port edit grin_pubpool.json directly.
     local val
 
-    echo -ne "Pool title       [$(pool_read_conf "pool_name" "My Grin Pool")]: "
-    read -r val; [[ -n "$val" ]] && pool_write_conf_key "pool_name" "$val"
-
-    # Validate inputs at entry time — a bad domain otherwise only surfaces at
-    # 4) Setup nginx, and a non-numeric fee/port would be written as null.
+    # Enter keeps an existing value; with none set we loop until a valid domain
+    # is given (0 to cancel out of Configure).
     echo -e "  ${DIM}(Full domain or subdomain for the pool site, e.g. pool.example.com or example.com)${RESET}"
-    echo -ne "Domain/subdomain [$(pool_read_conf "subdomain" "")]: "
-    read -r val
-    if [[ -n "$val" ]]; then
+    local cur_domain; cur_domain=$(pool_read_conf "subdomain" "")
+    while true; do
+        echo -ne "Domain/subdomain [${cur_domain}]: "
+        read -r val
+        if [[ -z "$val" ]]; then
+            # Enter with an existing value keeps it; with none, the field is
+            # mandatory — re-prompt instead of writing an empty domain.
+            [[ -n "$cur_domain" ]] && break
+            warn "A domain is required for a public pool (HTTPS + satellites). Enter 0 to cancel Configure."
+            continue
+        fi
+        [[ "$val" == "0" ]] && { info "Configure cancelled."; return 1; }
         if nginx_validate_domain "$val"; then
-            pool_write_conf_key "subdomain" "$val"
-        else
-            warn "Invalid domain name '$val' — keeping previous value."
+            pool_write_conf_key "subdomain" "$val"; cur_domain="$val"; break
         fi
-    fi
+        warn "Invalid domain name '$val' — try again (e.g. pool.example.com), or 0 to cancel."
+    done
 
-    echo -ne "Pool fee %        [$(pool_read_conf "pool_fee_percent" "1.0")]: "
-    read -r val
-    if [[ -n "$val" ]]; then
-        if [[ "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]] \
-           && awk -v v="$val" 'BEGIN{exit !(v>=0 && v<=50)}'; then
-            pool_write_conf_key "pool_fee_percent" "$val"
-        else
-            warn "Fee must be a number from 0 to 50 — keeping previous value."
-        fi
-    fi
-
-    echo -ne "Min withdrawal   [$(pool_read_conf "min_withdrawal" "5.0")] GRIN: "
-    read -r val
-    if [[ -n "$val" ]]; then
-        if [[ "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-            pool_write_conf_key "min_withdrawal" "$val"
-        else
-            warn "Not a number — keeping previous value."
-        fi
-    fi
-
-    local default_nsp; default_nsp=$(pool_read_conf "node_stratum_port" "3334")
-    echo -e "  ${DIM}(Node stratum port — set stratum_server_addr in grin-server.toml to match)${RESET}"
-    echo -ne "Node stratum port [${default_nsp}]: "
-    read -r val
-    if [[ -n "$val" ]]; then
-        if [[ "$val" =~ ^[0-9]+$ ]] && (( val >= 1 && val <= 65535 )); then
-            pool_write_conf_key "node_stratum_port" "$val"
-        else
-            warn "Not a valid port (1–65535) — keeping previous value."
-        fi
-    fi
+    info "All other settings (name, fee, min withdrawal, payouts) default now and"
+    info "  are editable in the web admin panel after you create the admin account."
 
     # Wallet dir, pool Grin address + wallet password are NOT asked here — the
     # wallet doesn't exist yet at this point. All three are captured by
@@ -637,9 +622,11 @@ EOF
             warn "Pool stays HTTP-only until a cert exists — re-run 4) Setup nginx after certbot."
             return 0
         fi
-        local le_email
-        echo -ne "Let's Encrypt email [admin@$subdomain]: "
-        read -r le_email; [[ -z "$le_email" ]] && le_email="admin@$subdomain"
+        # Email is auto-defaulted (no prompt) — it's only used for cert-expiry
+        # notices and certbot auto-renews via its systemd timer anyway. Change it
+        # later with `certbot update_account -m <email>` if you want notices.
+        local le_email="admin@$subdomain"
+        info "Using Let's Encrypt account email: $le_email"
         if ! certbot --nginx -d "$subdomain" --non-interactive --agree-tos \
                 -m "$le_email" 2>&1 | tail -5; then
             warn "certbot failed — check that DNS for $subdomain points to this server and port 80 is open."
@@ -1214,17 +1201,6 @@ pool_reset_db() {
 
 # Pause between guided steps. Enter continues; 0 (or q) aborts the guided flow
 # (rc 1) so the caller can return to the menu. <label of the next step>
-_pool_guided_pause() {
-    local ans
-    echo ""
-    echo -ne "Press Enter to continue to ${1} (0 to abort guided setup): "
-    read -r ans
-    if [[ "${ans,,}" == "0" || "${ans,,}" == "q" ]]; then
-        info "Guided setup aborted — completed steps are kept; re-run G) or use the manual steps."
-        return 1
-    fi
-    return 0
-}
 
 # Run guided step <n> "<label>" <fn> — when the step already looks complete
 # (per _pool_step_done), offer to skip it. This makes re-running G) after a
@@ -1242,7 +1218,9 @@ _pool_guided_step() {
 pool_guided_setup() {
     echo -e "\n${BOLD}${CYAN}═══ Guided Full Setup — GRINIUM Pool (Mainnet) ═══${RESET}\n"
     pool_check_exclusivity || return 0
-    echo -e "  This will run steps 1 → 2 → 3 → 4 → 5 → 6 → 7 in sequence."
+    echo -e "  Runs steps 1 → 7 straight through (no pause between steps)."
+    echo -e "  You're only asked for real inputs: the pool domain, SSL/certbot,"
+    echo -e "  the wallet passphrase, and the admin username/password."
     echo -e "  Steps already completed (✓) can be skipped when prompted:"
     local _step_names=("Install" "Configure" "Deploy web files" "Setup nginx" \
                        "Set up wallet" "Service running" "Admin account")
@@ -1254,34 +1232,45 @@ pool_guided_setup() {
     echo -ne "  Continue? [Y/n]: "
     read -r go; [[ "${go,,}" == "n" ]] && return
 
+    # Run straight through — no "press Enter" gate between steps. Steps that need
+    # no input just print their banner and proceed; the only stops are real inputs
+    # (the pool domain, certbot, the wallet passphrase, the admin credentials).
     # Every step is ||-guarded: under set -e an unguarded failure would kill the
     # whole script instead of returning to the menu. Abort the guided flow with a
     # message on the first hard failure; the operator fixes it and re-runs.
+    echo -e "\n${BOLD}${CYAN}── Step 1/7: Install ──${RESET}"
     _pool_guided_step 1 "Install" pool_install \
         || { error "Install failed — fix the cause and re-run G) Guided setup."; return 0; }
-    _pool_guided_pause "Configure" || return 0
+
+    echo -e "\n${BOLD}${CYAN}── Step 2/7: Configure (pool domain) ──${RESET}"
     _pool_guided_step 2 "Configure" pool_configure \
         || { error "Configure failed — aborting guided setup."; return 0; }
-    _pool_guided_pause "Deploy web files" || return 0
+
+    echo -e "\n${BOLD}${CYAN}── Step 3/7: Deploy web files ──${RESET}"
     _pool_guided_step 3 "Deploy web files" pool_deploy_web \
         || { error "Web deploy failed — aborting guided setup."; return 0; }
-    _pool_guided_pause "Setup nginx" || return 0
+
+    echo -e "\n${BOLD}${CYAN}── Step 4/7: Setup nginx + SSL ──${RESET}"
     _pool_guided_step 4 "Setup nginx" pool_setup_nginx \
         || { error "Nginx setup failed — aborting guided setup."; return 0; }
-    _pool_guided_pause "Set up pool wallet (coinbase + payout listeners)" || return 0
+
     # Wallet setup must end with BOTH listeners up (pw_setup returns non-zero
     # otherwise, or on a deliberate cancel). Don't roll on to the service + admin
     # steps with a wallet that can't listen — coinbase + payouts would silently
     # fail. Default to stopping; only continue if the operator explicitly opts in.
+    echo -e "\n${BOLD}${CYAN}── Step 5/7: Set up wallet (coinbase + payout listeners) ──${RESET}"
     if ! _pool_guided_step 5 "Set up wallet" pw_setup; then
         warn "Wallet not fully set up (listeners down or setup cancelled) — finish via 5) Set up wallet."
         echo -ne "  Continue with the remaining steps anyway (service + admin)? [y/N]: "
         local go2; read -r go2
         [[ "${go2,,}" == "y" ]] || { info "Guided setup stopped — completed steps are kept."; return 0; }
     fi
-    _pool_guided_pause "start the service and create admin account" || return 0
+
+    echo -e "\n${BOLD}${CYAN}── Step 6/7: Start service ──${RESET}"
     pool_start_service || true
     sleep 2
+
+    echo -e "\n${BOLD}${CYAN}── Step 7/7: Create admin account ──${RESET}"
     _pool_guided_step 7 "Create admin account" pool_setup_admin \
         || warn "Admin account not created — run 7) Create admin account once the service is up."
 

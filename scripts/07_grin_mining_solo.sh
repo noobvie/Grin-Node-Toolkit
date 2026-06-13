@@ -1350,7 +1350,7 @@ solo_live_stats() {
 
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  Grin Solo Mining — $net_label${RESET}  ${DIM}($(date -u '+%H:%M:%S UTC'))${RESET}"
+        echo -e "${BOLD}${CYAN}  Solo Private Pool $(_solo_mode_word) · [$net_label] · Mining Stats${RESET}  ${DIM}($(date -u '+%H:%M:%S UTC'))${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
 
@@ -2485,6 +2485,10 @@ _set_solo_net() {
 }
 _clear_solo_net() { SOLO_NETWORK=""; SOLO_API_PORT=""; SOLO_STRATUM_PORT=""; }
 
+# Mode word for solo submenu banners — "Internet" (default/public) or "LAN".
+# Lets every solo screen show which front-end mode this server is running.
+_solo_mode_word() { local m="Internet"; [[ "$SOLO_NET_MODE" == "lan" ]] && m="LAN"; echo "$m"; }
+
 # _solo_pick_net <label> → echoes "mainnet"|"testnet" on stdout; rc 1 on cancel.
 # Inside a network branch (SOLO_NETWORK set) it returns that net with NO prompt;
 # at the top level (global menus) it falls back to the interactive 1/2/0 prompt.
@@ -2512,7 +2516,7 @@ wallet_menu() {
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  Central Wallet — coinbase listener${RESET}"
+        echo -e "${BOLD}${CYAN}  07) Solo Private Pool $(_solo_mode_word) · [${SOLO_NETWORK^^}] · Central Wallet${RESET}${DIM}  (coinbase listener)${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
         echo -e "${BOLD}  Listener:${RESET}"
@@ -2558,7 +2562,7 @@ watchdog_menu() {
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  Health / Watchdogs${RESET}"
+        echo -e "${BOLD}${CYAN}  07) Solo Private Pool $(_solo_mode_word) · Health / Watchdogs${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
         echo -e "${BOLD}  Node-sync watchdog:${RESET}";    gnk_watchdog_status 2>&1 | sed 's/^/    /' | head -2
@@ -2631,7 +2635,7 @@ stratum_menu() {
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  Stratum Server${RESET}"
+        echo -e "${BOLD}${CYAN}  07) Solo Private Pool $(_solo_mode_word) · [${SOLO_NETWORK^^}] · Stratum Server${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
         show_compact_status
@@ -2933,7 +2937,7 @@ solo_settlement_menu() {
     while true; do
         clear
         echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${RED}  07) Payouts & Settlement — [MAINNET]${RESET}"
+        echo -e "${BOLD}${RED}  07) Solo Private Pool $(_solo_mode_word) · [MAINNET] · Payouts & Settlement${RESET}"
         echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
         if [[ ! -f "$SOLO_MAIN_DB" ]]; then

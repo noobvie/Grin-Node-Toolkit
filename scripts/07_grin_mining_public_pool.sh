@@ -669,11 +669,23 @@ pool_setup_nginx() {
     mkdir -p "$POOL_APP_DIR/custom_assets"
     chmod o+rx /opt/grin "$POOL_APP_DIR" "$POOL_APP_DIR/custom_assets" 2>/dev/null || true
 
+    # nginx_ensure_rate_limit_zones is a no-op while its conf file exists (so operators can
+    # hand-tune rates). That means a NEW zone added to the list below would never be written
+    # on an existing install — yet the vhost references it, so `nginx -t` would then fail with
+    # "zero size shared memory zone". Self-heal: if the managed conf is missing the captcha
+    # zone (added 2026-06 to stop the login captcha being starved by static-asset traffic),
+    # delete it so the full current list regenerates. Idempotent — once present, this is skipped.
+    local _zone_conf="/etc/nginx/conf.d/script07-${POOL_SERVICE}.conf"
+    if [[ -f "$_zone_conf" ]] && ! grep -q "zone=${POOL_SERVICE}_captcha[: ]" "$_zone_conf"; then
+        rm -f "$_zone_conf"
+    fi
+
     if declare -F nginx_ensure_rate_limit_zones &>/dev/null; then
         nginx_ensure_rate_limit_zones "script07-${POOL_SERVICE}" \
-            "${POOL_SERVICE}_auth:3r/m"     \
-            "${POOL_SERVICE}_api:30r/m"     \
-            "${POOL_SERVICE}_static:60r/m"  \
+            "${POOL_SERVICE}_auth:3r/m"      \
+            "${POOL_SERVICE}_api:30r/m"      \
+            "${POOL_SERVICE}_static:60r/m"   \
+            "${POOL_SERVICE}_captcha:30r/m"  \
             "${POOL_SERVICE}_ingest:120r/m"
     fi
 
@@ -817,11 +829,18 @@ $admin_rules
     }
 
     # The CAPTCHA challenge is a read-only GET the login page fetches on load, on
-    # form-toggle, and after every failed attempt — it must NOT share the strict 3r/m
-    # brute-force budget below, or the page shows "Verification unavailable" and retry
-    # can't recover. Exact-match wins over the /api/auth/ prefix; put it on the static zone.
+    # form-toggle, and after every failed attempt — it gets its OWN dedicated zone.
+    # It must NOT share the strict 3r/m _auth brute-force budget (retry can't recover),
+    # AND must NOT share _static either: that zone is keyed per-IP and consumed by every
+    # CSS/JS/font/image on every page (a dozen+ per load), so a few page reloads during
+    # testing starve the captcha → "Verification unavailable" and "↻ new" does nothing →
+    # captcha_id stays null → the login POST is rejected at the captcha gate and you can
+    # never log in. Its own zone keeps it lit regardless of asset traffic. This is NOT the
+    # brute-force vector (the login POST stays on _auth 3r/m + per-account lockout + IP
+    # auto-ban); issuing a fresh arithmetic challenge is a cheap in-memory op, so a
+    # generous, isolated rate is safe. Exact-match wins over the /api/auth/ prefix.
     location = /api/auth/captcha {
-        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        limit_req zone=${POOL_SERVICE}_captcha burst=20 nodelay;
         proxy_pass         http://127.0.0.1:$POOL_PORT;
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
@@ -1039,6 +1058,15 @@ pool_setup_admin() {
     [[ -z "$admin_pass" ]] && return
     if [[ ${#admin_pass} -lt 8 ]]; then
         error "Password must be at least 8 characters."
+        return 1
+    fi
+
+    # Confirm the password — typos here are silent (read -rs hides input) and would
+    # otherwise lock the operator out of an account whose password they can't reproduce.
+    echo -ne "Confirm admin password: "
+    read -rs admin_pass2; echo ""
+    if [[ "$admin_pass" != "$admin_pass2" ]]; then
+        error "Passwords do not match. Nothing was created — re-run and try again."
         return 1
     fi
 

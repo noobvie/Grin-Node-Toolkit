@@ -418,13 +418,23 @@ Key design decisions (locked in — do not change without user confirmation):
   `/api/auth/login` + `/api/auth/register` verify `captcha_id`+`captcha_answer` *before* touching the
   password (a bad captcha never counts toward account lockout). Single-use → the login form re-fetches a
   challenge after every attempt. Layers on top of the auth rate limiter (3/min) + per-account lockout
-  (5 fails/15 min). **nginx zone gotcha (fixed 2026-06):** `GET /api/auth/captcha` is read-only and is
-  fetched on page load, form-toggle, and after every failed attempt — it must NOT share the strict
-  `_auth` 3r/m brute-force zone or the page shows "Verification unavailable — retry ↻" (nginx returns 503,
-  `res.json()` throws) and the retry button can't recover. `pool_setup_nginx` gives it its own
-  `location = /api/auth/captcha` on the `_static` (60r/m) zone, ahead of the `/api/auth/` prefix block
-  (exact-match wins). The app already had it on the lenient `public` limiter — the throttle was purely the
-  nginx layer. The **only** admin login page is `public_html/login.html` (served at `/login.html`,
+  (5 fails/15 min). **nginx zone gotcha (fixed 2026-06, REVISED 2026-06):** `GET /api/auth/captcha` is
+  read-only and is fetched on page load, form-toggle, and after every failed attempt — if it's throttled
+  the page shows "Verification unavailable" (nginx 503 → `res.json()` throws), the "↻ new" button can't
+  recover, `captcha_id` stays null, and the login POST is then rejected at the captcha gate so the operator
+  **can never log in** even though the backend is fine. It needs its own `location = /api/auth/captcha`
+  (exact-match wins over the `/api/auth/` prefix). **First attempt put it on `_static` (60r/m) — that was
+  still wrong:** `_static` is keyed per-IP and consumed by EVERY css/js/font/image (a dozen+ per page load,
+  served by `location /`), so a few page reloads during testing starve the captcha. **Fix: a DEDICATED
+  `${POOL_SERVICE}_captcha` zone (30r/m)**, isolated from asset traffic. Safe because the captcha is a cheap
+  in-memory challenge issue and is NOT the brute-force vector — the login POST stays on `_auth` 3r/m +
+  per-account lockout + IP auto-ban. `pool_setup_nginx` self-heals an existing install: if the managed
+  zone conf `/etc/nginx/conf.d/script07-<svc>.conf` lacks the `_captcha` zone it `rm`s it so the full zone
+  list (incl. `_captcha`) regenerates — otherwise the no-op-if-exists helper would leave the vhost
+  referencing an undefined zone and `nginx -t` fails with "zero size shared memory zone". Frontend
+  `loadCaptcha()` also nulls the stale id, checks `res.ok`, and auto-retries once on a transient 503. The
+  app already had the captcha on the lenient `public` (60/min) limiter — the throttle was purely the nginx
+  layer. The **only** admin login page is `public_html/login.html` (served at `/login.html`,
   the public zone — must stay reachable so the operator can always authenticate); on success it redirects
   straight to `/admin/` (there is **no** `admin-dashboard.html`). The whole management surface is the one
   combined `/admin/` panel — `back-end-pool/admin-panel/{index,miners,payments,settings,users,health}.html` —

@@ -290,6 +290,10 @@
           <input type="password" id="reg-password" name="password" placeholder="Choose password (8+ chars)" required>
         </div>
         <div class="form-group">
+          <label for="reg-password-confirm">Confirm password</label>
+          <input type="password" id="reg-password-confirm" name="password-confirm" placeholder="Re-enter password" required>
+        </div>
+        <div class="form-group">
           <label for="reg-captcha-answer">
             <span id="reg-captcha-question">Loading verification…</span>
             <a onclick="loadCaptcha('register')" style="float:right;font-weight:400;cursor:pointer;color:var(--primary);">↻ new</a>
@@ -380,17 +384,30 @@
     // ── Self-hosted CAPTCHA (single-use, must be re-fetched after every attempt) ──
     var captchaIds = { login: null, register: null };
 
-    async function loadCaptcha(which) {
+    async function loadCaptcha(which, _attempt) {
       var qId = which === 'register' ? 'reg-captcha-question' : 'captcha-question';
       var aId = which === 'register' ? 'reg-captcha-answer' : 'captcha-answer';
+      _attempt = _attempt || 0;
+      // Clear any stale challenge id up front: if this fetch fails, a null id makes the
+      // login gate say "captcha expired" (honest) instead of silently reusing a dead one.
+      captchaIds[which] = null;
+      document.getElementById(qId).textContent = 'Loading verification…';
       try {
-        var res = await fetch('/api/auth/captcha', { credentials: 'include' });
+        var res = await fetch('/api/auth/captcha', { credentials: 'include', cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status); // e.g. 503 from a rate limiter
         var data = await res.json();
+        if (!data || !data.id || !data.question) throw new Error('bad payload');
         captchaIds[which] = data.id;
-        document.getElementById(qId).textContent = data.question || 'Verification';
+        document.getElementById(qId).textContent = data.question;
         document.getElementById(aId).value = '';
       } catch (e) {
-        document.getElementById(qId).textContent = 'Verification unavailable — retry ↻';
+        // Transient (rate limiter / network blip): back off briefly and retry once
+        // automatically so the operator doesn't have to keep clicking "↻ new".
+        if (_attempt < 1) {
+          setTimeout(function () { loadCaptcha(which, _attempt + 1); }, 1200);
+          return;
+        }
+        document.getElementById(qId).textContent = 'Verification unavailable — click ↻ new';
       }
     }
 
@@ -455,6 +472,7 @@
       e.preventDefault();
       const username = document.getElementById('reg-username').value;
       const password = document.getElementById('reg-password').value;
+      const passwordConfirm = document.getElementById('reg-password-confirm').value;
       const btn = document.getElementById('register-btn');
 
       if (username.length < 3) {
@@ -464,6 +482,11 @@
 
       if (password.length < 8) {
         showError('Password must be at least 8 characters');
+        return;
+      }
+
+      if (password !== passwordConfirm) {
+        showError('Passwords do not match');
         return;
       }
 

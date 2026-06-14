@@ -2797,6 +2797,17 @@ solo_deploy_code() {
         done < <(grep -oE -- '--out-dir [^ ]+' "$BLOCK_COLLECTOR_WRAPPER" | awk '{print $2}' | sort -u)
     fi
 
+    # Kick one collection so a refreshed collector's new/changed fields (e.g. the
+    # network difficulty_per_block seed the stats page reads) land in the feed NOW
+    # instead of waiting up to 5 min for the next cron tick.
+    if [[ $did -eq 1 && -x "$BLOCK_COLLECTOR_WRAPPER" ]]; then
+        if "$BLOCK_COLLECTOR_WRAPPER" >/dev/null 2>&1; then
+            success "Collector run once — stats feed refreshed now."
+        else
+            warn "Initial collection errored (cron will retry in ≤5 min)."
+        fi
+    fi
+
     [[ $did -eq 0 ]] && info "Nothing to refresh yet — deploy the stats page (07 → 3) first."
     echo ""
     echo -e "  ${DIM}Menu scripts (.sh) run in-place — the pull already updated them.${RESET}"

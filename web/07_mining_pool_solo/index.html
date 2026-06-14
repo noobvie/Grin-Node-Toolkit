@@ -465,15 +465,20 @@
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
         var nw = d && d.network; if (!nw) return;
-        var s = NETS[net];
+        var s = NETS[net], seeded = false;
         if (s.netDiff == null && typeof nw.difficulty_per_block === 'number') {
           s.netDiff = nw.difficulty_per_block;
-          set(net + '-difficulty', fmtNum(s.netDiff));
+          set(net + '-difficulty', fmtNum(s.netDiff)); seeded = true;
         }
         if (s.hrGps == null && typeof nw.hashrate_gps === 'number') {
           s.hrGps = nw.hashrate_gps;
-          set(net + '-hashrate', fmtHr(s.hrGps), 'green');
+          set(net + '-hashrate', fmtHr(s.hrGps), 'green'); seeded = true;
         }
+        // Persist the seed like a live reading so a rapid page refresh paints from
+        // localStorage instantly — no dependency on a fresh fetch that a reload
+        // cancels mid-flight or nginx rate-limits. The next pollNet delta still
+        // overwrites it with the live value.
+        if (seeded) saveNetCache(net);
       })
       .catch(function () {});
   }

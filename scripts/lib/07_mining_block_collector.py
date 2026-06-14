@@ -103,6 +103,7 @@ BLOCK_RETENTION = 1830 * 86400   # bound found-block history (~5 yr, covers year
 HR_HISTORY_RETENTION_DAYS = 1830 # daily pool-hashrate history depth (~5 yr, covers yearly graph)
 RECENT_CAP = 2000                # max blocks in the output list (covers a 5-yr yearly chart)
 C32_SCALE = 16384                # Cuckatoo32 solution-rate constant (32 * 2^9)
+NET_DIFF_WINDOW = 30             # blocks to average network difficulty/hashrate over
 
 # Per-share work credit. minimum_share_difficulty defaults to 1 — below the C32
 # floor — so the node submits EVERY cycle a miner finds and logs its raw ACTUAL
@@ -435,6 +436,47 @@ def query_node_block(net, height):
         return data.get("result", {}).get("Ok")
     except Exception:
         return None
+
+
+def _block_ts_epoch(header):
+    """Epoch seconds from a get_block header RFC3339 timestamp, or None."""
+    ts = header.get("timestamp")
+    if not isinstance(ts, str):
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def network_figures_lookback(net, height):
+    """(per-block difficulty, hashrate G/s) averaged over NET_DIFF_WINDOW blocks via
+    two Foreign-API get_block calls, or (None, None) if the headers can't be fetched.
+
+    Stateless — independent of net_prev warm-up — so the feed carries a correct value
+    on the VERY FIRST run after an upgrade, instead of waiting a cron cycle for an
+    inter-tick delta to exist (which is what was leaving the Network Difficulty tile
+    blank). diff_pb = Δtotal_difficulty / Δblocks (matches the stats page's live
+    dDiff/dBlocks); hr = Δtotal_difficulty · 42 / 16384 / Δt (the C32 formula)."""
+    if height is None or height <= NET_DIFF_WINDOW:
+        return None, None
+    cur = query_node_block(net, int(height))
+    past = query_node_block(net, int(height) - NET_DIFF_WINDOW)
+    if not cur or not past:
+        return None, None
+    ch, ph = cur.get("header", {}), past.get("header", {})
+    try:
+        dd = int(ch["total_difficulty"]) - int(ph["total_difficulty"])
+        db = int(ch["height"]) - int(ph["height"])
+    except (KeyError, TypeError, ValueError):
+        return None, None
+    ct, pt = _block_ts_epoch(ch), _block_ts_epoch(ph)
+    if ct is None or pt is None:
+        return None, None
+    dt = ct - pt
+    if db <= 0 or dd <= 0 or dt <= 0:
+        return None, None
+    return round(dd / db), round(hashrate_gps(dd, dt), 3)
 
 
 # ── health probe (sanitized liveness for external monitors) ─────────────────────
@@ -997,11 +1039,8 @@ def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now,
     if status is None:
         status = query_node_status(net)
     height = diff = peers = None
-    # Carry the last-good network figures between ticks. total_difficulty only
-    # changes when a new block lands, so any collector tick with no new block has
-    # dd == 0 and can compute nothing — without this carry the feed would publish
-    # null hashrate/difficulty on those ticks, which is exactly what leaves the
-    # stats-page tiles blank on a cold load.
+    # Carry the last-good network figures as the final fallback so a transient node
+    # hiccup (or a no-new-block tick) never blanks the stats-page tiles.
     net_hr = net_prev.get("hr_gps")
     net_diff_pb = net_prev.get("diff_pb")
     if status:
@@ -1009,18 +1048,30 @@ def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now,
         height = tip.get("height")
         diff = tip.get("total_difficulty")
         peers = status.get("connections")
-        if diff is not None and net_prev.get("diff") is not None:
+        # Preferred source: a STATELESS look-back over a fixed block window (two
+        # get_block calls). Correct on every run including the first after an
+        # upgrade — no net_prev warm-up — so the Network Difficulty/Hashrate tiles
+        # seed from the feed immediately. (per-block difficulty here, NOT the
+        # cumulative `difficulty` field below.)
+        lb_diff_pb, lb_hr = network_figures_lookback(net, height)
+        if lb_diff_pb is not None:
+            net_diff_pb = lb_diff_pb
+            net_prev["diff_pb"] = net_diff_pb
+        if lb_hr is not None:
+            net_hr = lb_hr
+            net_prev["hr_gps"] = net_hr
+        # Fallback: the inter-tick delta against net_prev, used only for whichever
+        # figure the look-back couldn't produce (e.g. Foreign API briefly down).
+        if (lb_diff_pb is None or lb_hr is None) and diff is not None \
+                and net_prev.get("diff") is not None:
             dt = now - net_prev.get("ts", now)
             dd = diff - net_prev["diff"]
             prev_h = net_prev.get("height")
             if dt > 0 and dd > 0:
-                net_hr = round(hashrate_gps(dd, dt), 3)
-                net_prev["hr_gps"] = net_hr
-                # Per-block network difficulty = Δcumulative / Δblocks — the same
-                # average the stats page's live tile shows (dDiff/dBlocks). NOT the
-                # cumulative `difficulty` below. Lets the page seed the tile on
-                # first load instead of waiting for its own cross-block delta.
-                if prev_h is not None and height is not None and height - prev_h > 0:
+                if lb_hr is None:
+                    net_hr = round(hashrate_gps(dd, dt), 3)
+                    net_prev["hr_gps"] = net_hr
+                if lb_diff_pb is None and prev_h is not None and height - prev_h > 0:
                     net_diff_pb = round(dd / (height - prev_h))
                     net_prev["diff_pb"] = net_diff_pb
         if diff is not None:

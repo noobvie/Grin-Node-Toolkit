@@ -539,14 +539,25 @@ Key design decisions (locked in — do not change without user confirmation):
     `.connect-note` gives the connect fields (worker = `grin_address.worker`, password = anything —
     same for every region, port identical across regions). `loadRegions()` reads `GET
     /api/pool/stats/regions` and re-polls on the 60 s dashboard refresh so pills stay live; it filters
-    to active rows with a `stratum_url`, falling back to the single-stratum callout when none. The pill
+    to active rows with a `stratum_url`. **The multi-region grid renders only when ≥2 regions exist**
+    (`loadRegions()`: `if (regions.length < 2) keep fallback`); a single-server pool shows the simple
+    `#region-fallback` "point your miner here" callout instead of a lone 1-card grid. The pill
     `status` (`online`/`stale`/`offline`/`unknown`) is derived from the in-memory satellite heartbeat
     with a recent-shares fallback (`unknown` = no signal yet, shown neutral — never a false "down").
     To make this truthful for a *quiet* region, the satellite `lib/share-relay.js` POSTs an **empty
     idle heartbeat** (`{region, shares:[]}`) to `/api/shares` every `HEARTBEAT_MS` (60 s) when there
     are no shares to flush, so a healthy-but-empty region reads `online` instead of `offline`.
-    `db.js seedDefaultRegions()` seeds amer/euro/asie (amer/euro/asie.grinium.com) **only when the
-    table is empty** — cosmetic defaults the operator edits in admin → Regions.
+    **No demo regions are seeded (2026-06):** the old `db.js seedDefaultRegions()` (fake
+    amer/euro/asie.grinium.com cards on every install) was removed — it showed phantom regions on a
+    single-server box. Instead the pool server **self-registers its own region** via
+    `db.js ensureLocalRegion(region, stratumUrl)`, called from `index.js` startup **only when
+    `config.role === 'singlebox'`** (a bare hub runs no local stratum → relies purely on satellites).
+    It inserts ONE `pool_locations` row for `config.region` (bash default `"main"`, in
+    `pool_ensure_defaults`), `stratum_url = subdomain:stratum_port` (config.js now passes `subdomain`
+    through; backfilled on a later boot if subdomain was empty at first run), never clobbering an
+    operator's label/active/url edits. So the central box is an honest region that **auto-joins the
+    grid the moment a real satellite for another zone reports in** — the seamless single→multi path.
+    Extra zones come from real satellites the operator declares in admin → Regions, never seed data.
   - **Service status strip** — public `GET /api/pool/status` (rate-limited, 15s cache) returns
     coarse health only: `pool.ok`, `node {reachable,synced,peers,height}`, `wallet {reachable}`.
     **Never** exposes wallet balance/addresses (those stay on admin-only `/api/admin/health/*`).
@@ -559,10 +570,24 @@ Key design decisions (locked in — do not change without user confirmation):
 
 ### Multi-region — hub-and-spoke (design: `docs/generated/script07_design.md` §3–4)
 
-Script 07 supports three deployment modes, selected at launch (mode may be passed as `$1` = `singlebox|hub|satellite` for non-interactive launches):
-- **singlebox** — Hub + co-located Satellite on one server (original behaviour; the existing `pool_singlebox_loop`).
-- **hub** — Central Hub only (the brain): Central API (sole DB writer), SQLite/WAL + schema + retention job, web dashboard + admin, Grin wallet (Tor payouts), nginx. Sourced from `lib/07_lib_hub.sh`; reuses the shared `pool_*` setup functions.
-- **satellite** — Regional node + stratum proxy + share relay; **no** web/admin/DB/wallet. Sourced from `lib/07_lib_satellite.sh`. Config: `/opt/grin/conf/grin_satellite.json`.
+Script 07 has three deployment **roles** internally (`singlebox|hub|satellite`), but the interactive
+`pool_select_mode` menu was **consolidated to two options (2026-06)** to stop forcing a topology
+choice on a newcomer — there is no "central vs distributed" fork; distributed *is* central + N
+satellites:
+- **1) Pool server** → `singlebox`. The pool itself — the brain + a co-located local stratum. It IS a
+  full hub (runs the Central API + `/api/shares` ingestion), so it accepts remote satellites later with
+  zero changes to itself. Start here for any single-box install.
+- **2) Satellite agent** → `satellite`. An extra region on **another** box; node + stratum proxy + relay,
+  **no** web/admin/DB/wallet. Sourced from `lib/07_lib_satellite.sh`. Config: `/opt/grin/conf/grin_satellite.json`.
+- **`hub`** (Central Hub only — brain with **no** local stratum, satellites do all mining) is an
+  **advanced** role: dropped from the menu but still reachable as a launch arg
+  (`bash 07_grin_mining_public_pool.sh hub`). Sourced from `lib/07_lib_hub.sh`; reuses the shared
+  `pool_*` setup functions. A `singlebox` already ⊇ `hub`, so bare hub is only for offloading mining off
+  the central box at scale. All three roles may still be passed as `$1` for non-interactive launches.
+
+**Add-a-zone workflow** (central → distributed, no rebuild of the central box): (1) admin → Regions →
+declare the region (name + label + that zone's stratum URL); (2) on the new box run option 2 and enter
+region name + hub URL + shared secret. The card lights up live from the satellite's heartbeat.
 
 Locked decisions (do not change without user confirmation):
 - **Database stays SQLite (WAL), not Postgres.** The hub is **single-writer** — only the Central API process writes; satellites POST over HTTPS, they never touch the DB. Migrate to Postgres only if the Central API itself goes multi-process/replicated, the DB moves to a separate box, or hot un-prunable data exceeds ~20–50 GB. Adding satellites does NOT change this (a region is a new HTTP client, not a new DB writer).

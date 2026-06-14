@@ -2,7 +2,7 @@
 
 const express = require('express');
 const path = require('path');
-const { initDb, getDb } = require('./lib/db');
+const { initDb, getDb, ensureLocalRegion } = require('./lib/db');
 const { loadConfig, mergeDbSettings } = require('./lib/config');
 const PoolSettings = require('./lib/pool-settings');
 const AssetManager = require('./lib/asset-manager');
@@ -167,6 +167,14 @@ async function initializePool() {
     // Merge DB settings into config (applies UI-customized settings at startup)
     config = mergeDbSettings(config, db);
     console.log(`[${new Date().toISOString()}] Pool configuration merged from database`);
+
+    // Self-register this pool server's own region so it shows as a real connect card
+    // and auto-joins the grid when a satellite for another zone reports in. Only the
+    // singlebox role runs a local stratum; a bare hub relies purely on satellites.
+    if (config.role === 'singlebox') {
+      const localStratum = config.subdomain ? `${config.subdomain}:${config.stratum_port}` : '';
+      ensureLocalRegion(config.region, localStratum);
+    }
 
     // Initialize pool settings manager and asset manager
     poolSettings = new PoolSettings(db);

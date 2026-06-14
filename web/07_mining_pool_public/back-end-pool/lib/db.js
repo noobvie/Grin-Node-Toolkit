@@ -376,30 +376,33 @@ function createSchema() {
   // Additive column migrations run after the tables exist.
   migrateUsers();
   migrateShares();
-  seedDefaultRegions();
+  // No demo regions are seeded. The pool server self-registers its own region via
+  // ensureLocalRegion() (called from index.js with config); extra zones come from
+  // real satellites the operator declares in admin → Regions.
 }
 
-// Seed the three default GRINIUM regions ONLY when the operator hasn't declared any
-// (purely cosmetic defaults the admin can rename/disable/delete in the Regions panel).
-// These are the descriptive hostnames shown in the "Point your miner at" cards; the
-// actual ingestion allowlist + shared secret live in pool.json, not this table.
-function seedDefaultRegions() {
+// Self-register the pool server's own region (role=singlebox) so the central box
+// shows as a real region and auto-joins the connect grid the moment a satellite for
+// another zone reports in. Creates ONE row for `region` (skipping the generic
+// 'default'), backfills stratum_url once the public hostname is known, and never
+// clobbers an operator's label/active/url edits made in admin → Regions.
+function ensureLocalRegion(region, stratumUrl) {
+  if (!region || region === 'default') return;
   try {
-    const { cnt } = db.prepare('SELECT COUNT(*) AS cnt FROM pool_locations').get();
-    if (cnt > 0) return;
-    const defaults = [
-      ['amer', 'Americas (US)', 'amer.grinium.com'],
-      ['euro', 'Europe',        'euro.grinium.com'],
-      ['asie', 'Asia',          'asie.grinium.com'],
-    ];
-    const ins = db.prepare(
-      'INSERT OR IGNORE INTO pool_locations (region, label, stratum_url, is_active) VALUES (?, ?, ?, 1)'
-    );
-    const tx = db.transaction(() => { for (const d of defaults) ins.run(d[0], d[1], d[2]); });
-    tx();
-    console.warn('[db] seeded default pool_locations (amer/euro/asie) — edit in admin Regions panel');
+    const row = db.prepare('SELECT region, stratum_url FROM pool_locations WHERE region = ?').get(region);
+    if (!row) {
+      const label = region.charAt(0).toUpperCase() + region.slice(1);
+      db.prepare(
+        'INSERT INTO pool_locations (region, label, stratum_url, is_active) VALUES (?, ?, ?, 1)'
+      ).run(region, label, stratumUrl || null);
+      console.warn(`[db] registered local region '${region}'${stratumUrl ? ' (' + stratumUrl + ')' : ''}`);
+    } else if (stratumUrl && !row.stratum_url) {
+      // Backfill the connect address once the public hostname is configured (the row may
+      // have been created on a pre-nginx first boot when subdomain was still empty).
+      db.prepare('UPDATE pool_locations SET stratum_url = ? WHERE region = ?').run(stratumUrl, region);
+    }
   } catch (e) {
-    console.error(`[db] region seed failed: ${e.message}`);
+    console.error(`[db] ensureLocalRegion failed: ${e.message}`);
   }
 }
 
@@ -414,5 +417,6 @@ module.exports = {
   initDb,
   getDb,
   closeDb,
-  createSchema
+  createSchema,
+  ensureLocalRegion
 };

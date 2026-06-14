@@ -488,7 +488,10 @@
                 regions = regions.filter(function (r) { return r.stratum_url && r.is_active !== false; })
                                  .sort(function (a, b) { return (a.region || '').localeCompare(b.region || ''); });
                 var note = document.getElementById('connect-note');
-                if (regions.length === 0) { if (note) note.style.display = 'none'; return; } // keep fallback callout
+                // A single-region pool (one server, no satellites) shows the simple
+                // "point your miner here" callout, not a 1-card grid. The multi-region
+                // grid appears only once a second zone (satellite) reports in.
+                if (regions.length < 2) { if (note) note.style.display = 'none'; return; } // keep fallback callout
                 grid.textContent = '';
                 regions.forEach(function (r) {
                     var hostport = regionHostPort(r);

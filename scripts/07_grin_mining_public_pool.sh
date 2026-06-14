@@ -179,6 +179,12 @@ pool_ensure_defaults() {
         ["node_stratum_port"]="3334"
         ["node_stratum_host"]="127.0.0.1"
         ["pool_address"]=""
+        # The pool server's own region label. It serves local miners under this
+        # region; on startup the app self-registers one pool_locations row for it
+        # (→ subdomain:stratum_port) so the central box shows as a real region and
+        # auto-joins the connect grid the moment a satellite for another zone reports
+        # in — no rebuild. Rename it in admin → Regions.
+        ["region"]="main"
         ["pool_fee_percent"]="1.0"
         ["min_withdrawal"]="5.0"
         ["withdrawal_fee"]="0.0"
@@ -1850,32 +1856,29 @@ pool_select_mode() {
         echo -e "${BOLD}${CYAN}  Public Mining Pool Deployment Mode${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
-        echo -e "  ${DIM}Tip: don't install a brain (1/2) and a Satellite (3) on the same box —${RESET}"
-        echo -e "  ${DIM}they collide on ports 3333/3334/8080. Use Single-server for one machine.${RESET}"
+        echo -e "  ${BOLD}What are you installing?${RESET}"
         echo ""
-        echo -e "  ${BOLD}Single-server${RESET} ${DIM}(everything on one box)${RESET}"
-        echo -e "  ${DIM}─────────────────────────────────────────────${RESET}"
-        echo -e "  ${GREEN}1${RESET}) Single-server pool   ${DIM}(Hub + local Satellite, all-in-one)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Pool server      ${DIM}The pool itself — runs everything.${RESET} ${BOLD}Start here.${RESET}"
+        echo -e "                     ${DIM}Serves local miners as region \"main\"; accepts${RESET}"
+        echo -e "                     ${DIM}satellites from other zones later — no rebuild.${RESET}"
         echo ""
-        echo -e "  ${BOLD}Distributed / multi-region${RESET} ${DIM}(each role on a SEPARATE server)${RESET}"
-        echo -e "  ${CYAN}═════════════════════════════════════════════${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Central Hub          ${DIM}(the brain — one per pool)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Satellite            ${DIM}(a region — node + proxy → points at your Hub)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Satellite agent  ${DIM}An extra region on ANOTHER box: node + stratum${RESET}"
+        echo -e "                     ${DIM}proxy that reports to your pool server.${RESET}"
         echo ""
-        echo -e "  ${BOLD}${RED}Danger zone${RESET}"
-        echo -e "  ${RED}═════════════════════════════════════════════${RESET}"
         echo -e "  ${RED}Z${RESET}) Cleanup public pool  ${DIM}(remove pool/hub/satellite infra · keeps node + wallet + backups)${RESET}"
-        echo ""
         echo -e "  ${RED}0${RESET}) Back to mining hub"
         echo ""
-        echo -ne "${BOLD}Select mode: ${RESET}"
+        echo -e "  ${DIM}Run a Satellite on a DIFFERENT box from the pool server (they share${RESET}"
+        echo -e "  ${DIM}ports 3333/3334/8080). Advanced — a mining-less central hub:${RESET}"
+        echo -e "  ${DIM}\`bash 07_grin_mining_public_pool.sh hub\`.${RESET}"
+        echo ""
+        echo -ne "${BOLD}Select: ${RESET}"
         read -r m
 
         local chosen=""
         case "$m" in
             1) chosen="singlebox" ;;
-            2) chosen="hub" ;;
-            3) chosen="satellite" ;;
+            2) chosen="satellite" ;;
             z|Z) pool_cleanup || true
                  echo ""
                  echo "Press Enter to return to the menu..."

@@ -2379,16 +2379,22 @@ start_grin_tmux() {
     # is /opt/grin (root-owned, unwritable) → without this override grin panics with
     # "Error loading config file: Permission denied" trying to mkdir /opt/grin/.grin.
     # Pointing HOME at the node dir keeps everything under /opt/grin/node/<net>.
+    #
+    # 9>&- closes the script-01 lock fd in the tmux client so the long-lived tmux
+    # SERVER (and the grin node it spawns) never inherits it. Without this, the
+    # daemonised node keeps fd 9 open for its whole life, holding the exclusive
+    # flock — so the NEXT run of script 01 sees "Another instance is already
+    # running" even though only the node (not the script) is running.
     if id grin &>/dev/null; then
         chown -R grin:grin "$GRIN_DIR" 2>/dev/null || true
         tmux new-session -d -s "$session" -c "$GRIN_DIR" \
             "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$GRIN_DIR\" && HOME=\"$GRIN_DIR\" ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
-            || die "Failed to create tmux session '$session'. Is tmux installed and working?"
+            9>&- || die "Failed to create tmux session '$session'. Is tmux installed and working?"
     else
         warn "User 'grin' not found — running as current user. Re-run Script 01 to create it."
         tmux new-session -d -s "$session" -c "$GRIN_DIR" \
             "echo 'Starting Grin node...'; cd $GRIN_DIR && HOME=\"$GRIN_DIR\" ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
-            || die "Failed to create tmux session '$session'. Is tmux installed and working?"
+            9>&- || die "Failed to create tmux session '$session'. Is tmux installed and working?"
     fi
 
     success "Grin node will start shortly within 30 seconds in tmux session: $session."

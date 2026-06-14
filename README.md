@@ -37,6 +37,8 @@ Publish API testnet: https://testapi.grin.money
 Grin Global Health mainnet: https://world.grin.money
 
 Free Grin Coin Portal: https://drop.grin.money/
+
+Solo Grin Mining Pool: https://solo.grin.money (user/pass disabled for easy viewing)
 ...
 
 ---

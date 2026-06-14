@@ -198,8 +198,9 @@ pool_ensure_defaults() {
         ["fail2ban_findtime"]="600"
         ["fail2ban_bantime"]="3600"
         # Admin panel access control: comma/space-separated IPs/CIDRs allowed to reach
-        # /admin and /api/admin at the nginx layer. Empty = LAN/VPN/localhost only (the
-        # admin panel is taken off the public internet). Add your office/VPN IP here.
+        # /admin and /api/admin at the nginx layer. Empty = OPEN to all (testing default —
+        # app-layer JWT + captcha + lockout + auto-ban + TOTP still apply). Set IPs/CIDRs
+        # here to harden once you have adoption, then re-run 4) Setup nginx.
         ["admin_allowlist"]=""
     )
     for k in "${!defaults[@]}"; do
@@ -676,54 +677,34 @@ pool_setup_nginx() {
             "${POOL_SERVICE}_ingest:120r/m"
     fi
 
-    # Build nginx allow/deny rules for the admin surfaces (/admin + /api/admin). This is
-    # network-layer defense in depth ON TOP OF the app's JWT + IP filter + step-up auth.
-    # admin_allowlist (comma/space-separated IPs/CIDRs) opens it to those networks; empty =
-    # localhost + RFC1918 only, i.e. the admin panel is OFF the public internet (reach it via
-    # LAN, WireGuard/VPN, or an SSH tunnel). Public login (/api/auth) stays reachable so the
-    # operator can authenticate — it's covered by captcha + lockout + auto-ban + fail2ban.
+    # Build nginx allow/deny rules for the admin surfaces (/admin + /api/admin).
+    #
+    # DEFAULT = OPEN (bootstrap/testing posture). An empty admin_allowlist means the panel
+    # is reachable from any IP, so a fresh install is never locked out while there is no
+    # adoption yet for anyone to attack. The app-layer defenses (JWT sessions, login
+    # captcha, per-account lockout, IP auto-ban, optional TOTP 2FA, fail2ban) are ALWAYS
+    # in force regardless of this network gate — this is only the outer perimeter.
+    #
+    # HARDEN LATER: set admin_allowlist (comma/space-separated IPs/CIDRs) in $POOL_CONF and
+    # re-run 4) Setup nginx. Once it is non-empty the panel locks to localhost + those
+    # entries only (everything else is denied). localhost is always kept so an SSH tunnel
+    # and the app's own server-side calls keep working as a break-glass path.
     local admin_allow_raw; admin_allow_raw=$(pool_read_conf "admin_allowlist" "")
 
-    # First-run convenience: if no allowlist is configured yet, auto-seed the operator's
-    # current SSH client IP so they can reach /admin/ from this machine immediately —
-    # solves the chicken-and-egg where configuring the allowlist lives *behind* the
-    # allowlist. No prompt (one fewer keystroke during setup); we just announce it in
-    # yellow. One-time: once written, the conf is non-empty and we skip.
-    if [[ -z "$admin_allow_raw" ]]; then
-        local ssh_ip=""
-        if   [[ -n "${SSH_CONNECTION:-}" ]]; then ssh_ip="${SSH_CONNECTION%% *}"
-        elif [[ -n "${SSH_CLIENT:-}"     ]]; then ssh_ip="${SSH_CLIENT%% *}"
-        fi
-        # Only seed a non-local source — a LAN/localhost SSH origin is already covered
-        # by the RFC1918 + localhost rules below, so seeding it adds nothing.
-        if [[ -n "$ssh_ip" \
-              && ! "$ssh_ip" =~ ^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|::1$|fe80:) ]]; then
-            pool_write_conf_key "admin_allowlist" "$ssh_ip"
-            admin_allow_raw="$ssh_ip"
-            warn "Auto-whitelisted your current SSH IP ($ssh_ip) for admin-panel access."
-            warn "  Broaden/narrow it later in admin → Settings → Access Control, or edit \"admin_allowlist\" in $POOL_CONF."
-        fi
-    fi
-
-    # localhost (127.0.0.1 + ::1) is ALWAYS allowed so an SSH tunnel (which arrives as
-    # 127.0.0.1) and the app's own server-side calls keep working regardless of the
-    # configured allowlist — never lock yourself out of the break-glass path.
     local admin_rules="" _entry
-    admin_rules+="        allow 127.0.0.1;"$'\n'
-    admin_rules+="        allow ::1;"$'\n'
     if [[ -n "$admin_allow_raw" ]]; then
+        admin_rules+="        allow 127.0.0.1;"$'\n'
+        admin_rules+="        allow ::1;"$'\n'
         for _entry in ${admin_allow_raw//,/ }; do
             [[ -n "$_entry" ]] && admin_rules+="        allow ${_entry};"$'\n'
         done
+        admin_rules+="        deny all;"
         info "Admin panel (/admin, /api/admin) restricted to: localhost + $admin_allow_raw"
     else
-        admin_rules+="        allow 10.0.0.0/8;"$'\n'
-        admin_rules+="        allow 172.16.0.0/12;"$'\n'
-        admin_rules+="        allow 192.168.0.0/16;"$'\n'
-        warn "Admin panel limited to LAN/VPN/localhost (admin_allowlist is empty)."
-        warn "  To reach it from your public/VPN IP: set \"admin_allowlist\" in $POOL_CONF and re-run 4) Setup nginx."
+        admin_rules+="        allow all;"
+        warn "Admin panel (/admin, /api/admin) is OPEN to all IPs — admin_allowlist is empty (testing default)."
+        warn "  Harden once you have adoption: set \"admin_allowlist\" in $POOL_CONF and re-run 4) Setup nginx."
     fi
-    admin_rules+="        deny all;"
 
     local sites_enabled="/etc/nginx/sites-enabled/$(basename "$POOL_NGINX_CONF")"
     local cert_dir="/etc/letsencrypt/live/$subdomain"
@@ -815,9 +796,10 @@ server {
     # domain to script-src and connect-src below.
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self' https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com;" always;
 
-    # ── Admin panel + admin API — restricted at the nginx layer (off the public
-    # internet by default). Defense in depth on top of the app's JWT + IP filter +
-    # step-up auth. Widen via admin_allowlist in $POOL_CONF, then re-run 4) Setup nginx.
+    # ── Admin panel + admin API. Network gate is OPEN by default (empty admin_allowlist
+    # → allow all) for the testing phase; app-layer JWT + captcha + lockout + auto-ban +
+    # optional TOTP still apply. Harden by setting admin_allowlist in $POOL_CONF (locks to
+    # localhost + listed IPs/CIDRs), then re-run 4) Setup nginx. See $admin_rules above.
     location = /admin { return 301 https://\$host/admin/; }
     location /admin/ {
 $admin_rules
@@ -832,6 +814,18 @@ $admin_rules
         proxy_set_header   X-Real-IP \$remote_addr;
         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_read_timeout 30s;
+    }
+
+    # The CAPTCHA challenge is a read-only GET the login page fetches on load, on
+    # form-toggle, and after every failed attempt — it must NOT share the strict 3r/m
+    # brute-force budget below, or the page shows "Verification unavailable" and retry
+    # can't recover. Exact-match wins over the /api/auth/ prefix; put it on the static zone.
+    location = /api/auth/captcha {
+        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
     }
 
     location /api/auth/ {
@@ -1470,22 +1464,23 @@ pool_guided_setup() {
     echo -e "  ${BOLD}Public pool:${RESET}   https://$_domain"
     echo -e "  ${BOLD}Admin login:${RESET}   https://$_domain/login.html   (redirects to /admin/ after sign-in)"
     echo ""
-    echo -e "  ${BOLD}${YELLOW}The admin panel is IP-restricted${RESET} — defense in depth; the public internet"
-    echo -e "  cannot reach /admin/. The public pool + /login.html stay open to everyone."
     if [[ -n "$_allow" ]]; then
+        echo -e "  ${BOLD}${YELLOW}The admin panel is IP-restricted${RESET} — only the listed IPs can reach /admin/."
         echo -e "  Currently allowed:  ${GREEN}localhost + $_allow${RESET}"
+        echo ""
+        echo -e "  ${YELLOW}Getting 403 on /admin/?${RESET} The IP you browse from isn't on the list above"
+        echo -e "  (it can differ from your SSH IP). Add your browsing IP, then re-run ${BOLD}4) Setup nginx${RESET}:"
+        echo ""
+        echo -e "    ${CYAN}# 1) On the machine you browse from, open https://api.ipify.org to get its IP${RESET}"
+        echo -e "    ${CYAN}# 2) Add it (replace 1.2.3.4 — existing entries are kept):${RESET}"
+        echo -e "    ${CYAN}node -e 'const f=\"$POOL_CONF\",ip=process.argv[1];const d=JSON.parse(require(\"fs\").readFileSync(f,\"utf8\"));const s=new Set((d.admin_allowlist||\"\").split(/[,\\\\s]+/).filter(Boolean));s.add(ip);d.admin_allowlist=[...s].join(\",\");require(\"fs\").writeFileSync(f,JSON.stringify(d,null,2));require(\"fs\").chmodSync(f,0o600);console.log(\"admin_allowlist =\",d.admin_allowlist)' 1.2.3.4${RESET}"
+        echo -e "    ${CYAN}# 3) Re-run menu option 4) Setup nginx  (rewrites the vhost + reloads)${RESET}"
     else
-        echo -e "  Currently allowed:  ${GREEN}localhost + your LAN (RFC1918)${RESET}"
+        echo -e "  ${BOLD}${YELLOW}The admin panel is OPEN to all IPs${RESET} (testing default) — anyone who knows the"
+        echo -e "  URL can reach /admin/, gated only by login (JWT + captcha + lockout + auto-ban)."
+        echo -e "  ${BOLD}Harden once you have adoption:${RESET} set ${BOLD}admin_allowlist${RESET} in $POOL_CONF to your"
+        echo -e "  browsing/VPN IP(s), then re-run ${BOLD}4) Setup nginx${RESET} to lock it down."
     fi
-    echo ""
-    echo -e "  ${YELLOW}Getting 403 on /admin/?${RESET} Your browser's public IP isn't on the list."
-    echo -e "  (The auto-whitelist seeds your ${BOLD}SSH${RESET} IP, which can differ from the IP you"
-    echo -e "  ${BOLD}browse${RESET} from.) Add your browsing IP, then re-run ${BOLD}4) Setup nginx${RESET}:"
-    echo ""
-    echo -e "    ${CYAN}# 1) On the machine you browse from, open https://api.ipify.org to get its IP${RESET}"
-    echo -e "    ${CYAN}# 2) Add it (replace 1.2.3.4 — existing entries are kept):${RESET}"
-    echo -e "    ${CYAN}node -e 'const f=\"$POOL_CONF\",ip=process.argv[1];const d=JSON.parse(require(\"fs\").readFileSync(f,\"utf8\"));const s=new Set((d.admin_allowlist||\"\").split(/[,\\\\s]+/).filter(Boolean));s.add(ip);d.admin_allowlist=[...s].join(\",\");require(\"fs\").writeFileSync(f,JSON.stringify(d,null,2));require(\"fs\").chmodSync(f,0o600);console.log(\"admin_allowlist =\",d.admin_allowlist)' 1.2.3.4${RESET}"
-    echo -e "    ${CYAN}# 3) Re-run menu option 4) Setup nginx  (rewrites the vhost + reloads)${RESET}"
     echo ""
     return 0
 }

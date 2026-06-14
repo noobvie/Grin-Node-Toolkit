@@ -418,7 +418,13 @@ Key design decisions (locked in — do not change without user confirmation):
   `/api/auth/login` + `/api/auth/register` verify `captcha_id`+`captcha_answer` *before* touching the
   password (a bad captcha never counts toward account lockout). Single-use → the login form re-fetches a
   challenge after every attempt. Layers on top of the auth rate limiter (3/min) + per-account lockout
-  (5 fails/15 min). The **only** admin login page is `public_html/login.html` (served at `/login.html`,
+  (5 fails/15 min). **nginx zone gotcha (fixed 2026-06):** `GET /api/auth/captcha` is read-only and is
+  fetched on page load, form-toggle, and after every failed attempt — it must NOT share the strict
+  `_auth` 3r/m brute-force zone or the page shows "Verification unavailable — retry ↻" (nginx returns 503,
+  `res.json()` throws) and the retry button can't recover. `pool_setup_nginx` gives it its own
+  `location = /api/auth/captcha` on the `_static` (60r/m) zone, ahead of the `/api/auth/` prefix block
+  (exact-match wins). The app already had it on the lenient `public` limiter — the throttle was purely the
+  nginx layer. The **only** admin login page is `public_html/login.html` (served at `/login.html`,
   the public zone — must stay reachable so the operator can always authenticate); on success it redirects
   straight to `/admin/` (there is **no** `admin-dashboard.html`). The whole management surface is the one
   combined `/admin/` panel — `back-end-pool/admin-panel/{index,miners,payments,settings,users,health}.html` —
@@ -426,23 +432,23 @@ Key design decisions (locked in — do not change without user confirmation):
   zone (door) while the panel is IP-gated (rooms); you can't put one file in two nginx access zones. The
   old `back-end-pool/public/{login,admin}.html` duplicates were deleted 2026-06 (never deployed — the
   installer only rsyncs `public_html/` + `admin-panel/`). Do not recreate.
-  **403 on `/admin/` is by design, not a bug:** the nginx `admin_allowlist` keeps the admin panel off
-  the public internet. Reach it via LAN/VPN/SSH-tunnel, or set `admin_allowlist` in
-  `/opt/grin/conf/grin_pubpool.json` and re-run 4) Setup nginx. `/login.html` + `/api/auth` stay public
-  on purpose (captcha + lockout + auto-ban + fail2ban cover them).
-  **`pool_setup_nginx` allow/deny generation (`scripts/07_grin_mining_public_pool.sh`):**
-  `127.0.0.1` + `::1` are **always** emitted in both branches (an SSH tunnel arrives as localhost, plus
-  the app's own server-side calls) — never lock out the break-glass path. Empty `admin_allowlist` →
-  localhost + RFC1918 (10/8, 172.16/12, 192.168/16). Non-empty → localhost + the listed IPs/CIDRs only
-  (LAN is dropped — set it explicitly if you still want it). **First-run SSH-IP auto-seed:** when the
-  allowlist is empty, the function detects the operator's SSH client IP (`$SSH_CONNECTION`→`$SSH_CLIENT`,
-  skipped for local/RFC1918 sources) and **auto-writes** it into `admin_allowlist` (no prompt — just a
-  yellow `warn` announcing it) so they can reach `/admin/` from the install machine immediately (solves
-  the chicken-and-egg). One-time — once the conf is non-empty it's skipped. NOT defaulted to allow-all: the secure default fails closed; the
-  seed adds exactly one trusted IP rather than opening the panel to the internet. The end-of-G
-  (`pool_guided_setup`) summary prints the public-pool + `/login.html` URLs, the currently-allowed
-  admin IPs, and a copy-paste `node -e` command to add your **browsing** IP (which can differ from
-  the seeded SSH IP — the usual cause of a 403 on `/admin/`) before re-running 4) Setup nginx.
+  **Admin nginx gate is OPEN by default (reversed 2026-06):** the network perimeter on `/admin/` +
+  `/api/admin/` is a *bootstrap/testing* posture — an empty `admin_allowlist` emits `allow all;` so a
+  fresh install is reachable from anywhere and the operator is never locked out while there is no
+  adoption yet to attack. The app-layer defenses (JWT, login captcha, per-account lockout, IP auto-ban,
+  optional TOTP, fail2ban) are ALWAYS in force regardless — this gate is only the outer perimeter.
+  **Harden later** by setting `admin_allowlist` (comma/space IPs/CIDRs) in `/opt/grin/conf/grin_pubpool.json`
+  and re-running 4) Setup nginx → it then locks to `localhost + listed entries; deny all;`. `/login.html`
+  + `/api/auth` are always public (captcha + lockout + auto-ban + fail2ban cover them).
+  **`pool_setup_nginx` allow/deny generation (`scripts/07_grin_mining_public_pool.sh`):** two branches —
+  **empty `admin_allowlist` → `allow all;`** (open, the default). **Non-empty → `allow 127.0.0.1; allow ::1;`
+  + each listed IP/CIDR + `deny all;`** (localhost always kept so an SSH tunnel and the app's own
+  server-side calls survive — the break-glass path). There is **no** RFC1918 default and **no** SSH-IP
+  auto-seed anymore (both removed in the 2026-06 reversal — the auto-seed would have flipped the empty
+  default back to locked-on-one-IP). The end-of-G (`pool_guided_setup`) summary prints the public-pool +
+  `/login.html` URLs and, when the allowlist is empty, an "OPEN to all — harden later" note; when it's
+  non-empty, the currently-allowed IPs + a copy-paste `node -e` command to add your **browsing** IP
+  (which can differ from your SSH IP — the usual 403 cause) before re-running 4) Setup nginx.
 - **Admin-panel hardening (added 2026-06) — three layers:**
   1. **Step-up (re-auth) on money/destructive/access-control actions.** `freshAdmin` middleware =
      `secureAdmin` + `requireFreshAuth` (5-min window). Gated endpoints: `POST /api/admin/incentives/award`,
@@ -461,11 +467,13 @@ Key design decisions (locked in — do not change without user confirmation):
      `ipFilter.tempBan(ip, 1h)` (new in-memory TTL ban in `lib/ip-filter.js`; `isBlocked()` checks it).
      The login route rejects banned IPs up front and clears the counter on success. App-layer; complements
      the OS-level `pool_setup_fail2ban` (firewall ban) already in the installer.
-  3. **Admin panel off the public internet (nginx).** `pool_setup_nginx` emits `location /admin/` +
-     `location /api/admin/` with `allow … ; deny all;` built from the `admin_allowlist` conf key
-     (comma/space-separated IPs/CIDRs). Empty = localhost + RFC1918 only (reach via LAN/VPN/SSH-tunnel).
-     `/api/auth` (login) stays public on purpose — it's covered by captcha+lockout+auto-ban+fail2ban.
-     Widen access: set `admin_allowlist` in `/opt/grin/conf/grin_pubpool.json`, re-run 4) Setup nginx.
+  3. **Admin panel network gate (nginx) — OPEN by default (reversed 2026-06).** `pool_setup_nginx`
+     emits `location /admin/` + `location /api/admin/` from the `admin_allowlist` conf key: **empty →
+     `allow all;`** (testing default — reachable from anywhere, since layers 1/2 + login still gate it);
+     **non-empty → `allow 127.0.0.1; allow ::1;` + listed IPs/CIDRs + `deny all;`** (hardened). No RFC1918
+     default, no SSH auto-seed (removed). `/api/auth` (login) is always public — covered by
+     captcha+lockout+auto-ban+fail2ban. Harden: set `admin_allowlist` in `/opt/grin/conf/grin_pubpool.json`,
+     re-run 4) Setup nginx.
 - **Optional admin TOTP 2FA (added 2026-06).** Self-hosted RFC 6238 (`lib/totp.js`, SHA-1/6-digit/30s,
   base32 — verified against the RFC test vectors), **no npm dependency, no external service**. Per-admin,
   opt-in. State on the `users` table (`totp_secret`, `totp_enabled`, `totp_pending_secret`); one-time

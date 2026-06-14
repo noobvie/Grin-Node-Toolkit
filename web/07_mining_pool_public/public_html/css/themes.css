@@ -1,0 +1,377 @@
+/* themes.css — theme system for the public pool pages (GRINIUM mockup-v3 family).
+ *
+ * The DEFAULT look ("Atomic", no body class) is the mockup-v3 uranium-lime
+ * reactor skin and lives in each page's inline <style> block (:root legacy
+ * variables + lime palette). This file adds everything else:
+ *
+ *   · the default-look extras the inline CSS can't share (mono accents,
+ *     full-page scanline overlay),
+ *   · the two other Classic themes from the mockup — "Nexus" (cyan/magenta
+ *     cyberpunk) and "Light" (clean, low-decoration) — plus TEN white-label
+ *     extras. Each is a `body.<name>-theme` class. To stay DRY across pages
+ *     whose selectors differ slightly, every theme does two things:
+ *
+ *   1. Remaps the legacy variables the inline page CSS already consumes
+ *      (--dark-bg/-card/-text/-dim, --neon-cyan/-magenta/-lime, --uranium) to the
+ *      theme palette, so any rule using var(--dark-*) / var(--neon-*) re-skins for free.
+ *   2. Adds a constant `themed` class (added by public-theme.js alongside the
+ *      `<name>-theme` class) so the generic component rules below — written ONCE —
+ *      paint the spots the inline CSS hardcodes (header, nav chips, cards, tables).
+ *
+ * Each palette only supplies a compact set of semantic `--t-*` values + a signature
+ * background. branding.js (operator default) and public-theme.js (visitor switch)
+ * both toggle these classes, so the two entry points share one stylesheet.
+ *
+ * The old built-in looks (cyan "dark" default, black-bg "atomic", gradient
+ * "light") were retired from the public pages in 2026-06 and live on as
+ * admin-panel palettes in js/theme.js (Cyber Classic / Atomic Classic /
+ * Gradient Light). The legacy public key 'dark' now maps to the default.
+ */
+
+/* ── Built-in default look ("Atomic", no body class) ─────────────────────────
+ * Body text is sans (set inline per page); headings + data go mono, and the
+ * cyberpunk scanline overlay breathes over everything. Nexus keeps the
+ * scanlines too; Light and the white-label extras stay clean.
+ * Standalone-design pages (login, testnet guide) opt out with <body class="no-fx">. */
+body:not(.themed):not(.no-fx) h1,
+body:not(.themed):not(.no-fx) .stat-value,
+body:not(.themed):not(.no-fx) .section-title,
+body:not(.themed):not(.no-fx) .addr {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+body:not(.themed):not(.no-fx)::before,
+body.nexus-theme::before {
+  content: "";
+  position: fixed; inset: 0; z-index: 9999;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, .12) 3px,
+    rgba(0, 0, 0, 0) 4px
+  );
+  opacity: .35;
+  animation: grin-scanlines 8s linear infinite;
+}
+@keyframes grin-scanlines {
+  0% { background-position: 0 0; }
+  100% { background-position: 0 48px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body:not(.themed):not(.no-fx)::before,
+  body.nexus-theme::before { animation: none; }
+}
+
+/* ── Scalable switcher: a grouped <select> replaces the old button pill ──────── */
+.theme-switcher .theme-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 1px solid currentColor;
+  color: inherit;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 4px 22px 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  max-width: 190px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 14px) center, calc(100% - 9px) center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.theme-switcher .theme-select:focus { outline: none; }
+/* Option list always renders in the OS palette — keep it readable everywhere. */
+.theme-switcher .theme-select option,
+.theme-switcher .theme-select optgroup { color: #111; background: #fff; }
+
+/* ── Generic component theming (written once, driven by --t-* per palette) ──── */
+body.themed {
+  color: var(--t-text);
+  font-family: var(--t-font, inherit);
+}
+body.themed header {
+  background: var(--t-header);
+  border-bottom: 2px solid var(--t-border);
+}
+body.themed header::before { background: none !important; animation: none !important; }
+body.themed h1,
+body.themed .page-title,
+body.themed .section-title { color: var(--t-heading, var(--t-accent)); animation: none; }
+body.themed h1 { -webkit-text-fill-color: var(--t-heading, var(--t-accent)); }
+
+body.themed .nav-link {
+  background: var(--t-chip-bg);
+  border: 1px solid var(--t-chip-border);
+  color: var(--t-text);
+}
+body.themed .nav-link:hover,
+body.themed .nav-link.active {
+  background: var(--t-accent);
+  border-color: var(--t-accent);
+  color: var(--t-on-accent, #fff);
+}
+
+body.themed .header-btn,
+body.themed .btn {
+  background: var(--t-accent);
+  border: 1px solid var(--t-accent);
+  color: var(--t-on-accent, #fff);
+}
+body.themed .header-btn:hover,
+body.themed .btn:hover { background: var(--t-accent2); border-color: var(--t-accent2); }
+
+body.themed .stat-card,
+body.themed .card,
+body.themed .mine-box {
+  background: var(--t-card);
+  border: 1px solid var(--t-border);
+}
+body.themed .stat-value { color: var(--t-accent); }
+body.themed .stat-label { color: var(--t-dim); }
+
+body.themed .data-table thead,
+body.themed .data-table th { background: var(--t-card2); color: var(--t-text); }
+body.themed .data-table td { border-color: var(--t-border); }
+body.themed .data-table tbody tr:hover { background: var(--t-card2); }
+
+body.themed footer {
+  background: var(--t-card);
+  border-top: 1px solid var(--t-border);
+  color: var(--t-dim);
+}
+
+body.themed .theme-switcher {
+  background: var(--t-switcher-bg, rgba(0, 0, 0, 0.55));
+  border-color: var(--t-accent);
+  box-shadow: 0 0 14px var(--t-chip-border);
+}
+body.themed .theme-switcher .theme-select { color: var(--t-accent); }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  CLASSIC THEMES (mockup-v3) — Nexus + Light. Atomic is the no-class default.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* Nexus — cyan/magenta neon cyberpunk (mockup-v3 "nexus") */
+body.nexus-theme {
+  --t-bg: #07080f; --t-text: #d8ecff; --t-dim: #8aa0c8;
+  --t-card: #0e1020; --t-card2: #161a30; --t-border: #243056;
+  --t-header: linear-gradient(135deg, rgba(0, 247, 255, 0.12), rgba(255, 0, 255, 0.12));
+  --t-accent: #00f7ff; --t-accent2: #ff00ff; --t-heading: #00f7ff;
+  --t-on-accent: #06121a; --t-chip-bg: rgba(0, 247, 255, 0.10);
+  --t-chip-border: rgba(0, 247, 255, 0.28);
+  --dark-bg: #07080f; --dark-card: #0e1020; --dark-text: #d8ecff; --dark-dim: #8aa0c8;
+  --neon-cyan: #00f7ff; --neon-magenta: #ff00ff; --neon-lime: #b8e600; --uranium: #00f7ff;
+  background:
+    linear-gradient(0deg, transparent 24%, rgba(0, 247, 255, 0.05) 25%, rgba(0, 247, 255, 0.05) 26%, transparent 27%, transparent 74%, rgba(0, 247, 255, 0.05) 75%, rgba(0, 247, 255, 0.05) 76%, transparent 77%, transparent),
+    linear-gradient(90deg, transparent 24%, rgba(0, 247, 255, 0.05) 25%, rgba(0, 247, 255, 0.05) 26%, transparent 27%, transparent 74%, rgba(0, 247, 255, 0.05) 75%, rgba(0, 247, 255, 0.05) 76%, transparent 77%, transparent),
+    #07080f;
+  background-size: 50px 50px;
+  background-attachment: fixed;
+}
+
+/* Light — vibrant clean, low decoration (mockup-v3 "light") */
+body.light-theme {
+  --t-bg: #f4f6f9; --t-text: #1a2129; --t-dim: #51606f;
+  --t-card: #ffffff; --t-card2: #f0f3f7; --t-border: #dde3ea;
+  --t-header: linear-gradient(135deg, #ffffff, #eef2f7);
+  --t-accent: #1ba673; --t-accent2: #7c3aed; --t-heading: #14855c;
+  --t-on-accent: #ffffff; --t-chip-bg: rgba(27, 166, 115, 0.10);
+  --t-chip-border: rgba(27, 166, 115, 0.28); --t-switcher-bg: rgba(255, 255, 255, 0.85);
+  --t-font: 'Segoe UI', system-ui, sans-serif;
+  --dark-bg: #f4f6f9; --dark-card: #ffffff; --dark-text: #1a2129; --dark-dim: #51606f;
+  --neon-cyan: #1ba673; --neon-magenta: #7c3aed; --neon-lime: #1ba673; --uranium: #1ba673;
+  background: linear-gradient(135deg, #f5f7fb 0%, #faf7ff 50%, #fff5f8 100%);
+  background-attachment: fixed;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  THE 10 WHITE-LABEL EXTRAS
+ *  Each block: semantic --t-* palette + legacy var remap + signature background.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* 1 — Winter Frost ❄️ : icy blues, silver, deep glacier night */
+body.winter-theme {
+  --t-bg: #0b1d33; --t-text: #dff3ff; --t-dim: #8fb6cf;
+  --t-card: #102a45; --t-card2: #163a5c; --t-border: #27557d;
+  --t-header: linear-gradient(135deg, #0a2540, #15486e);
+  --t-accent: #8fd3ff; --t-accent2: #bfe9ff; --t-heading: #d6f1ff;
+  --t-on-accent: #06243d; --t-chip-bg: rgba(143, 211, 255, 0.10);
+  --t-chip-border: rgba(143, 211, 255, 0.28);
+  --dark-bg: #0b1d33; --dark-card: #102a45; --dark-text: #dff3ff; --dark-dim: #8fb6cf;
+  --neon-cyan: #8fd3ff; --neon-magenta: #bfe9ff; --neon-lime: #8fd3ff; --uranium: #8fd3ff;
+  background:
+    radial-gradient(circle at 85% 12%, rgba(143, 211, 255, 0.16), transparent 42%),
+    linear-gradient(160deg, #08182b 0%, #0b1d33 55%, #0e2a44 100%);
+  background-attachment: fixed;
+}
+
+/* 2 — Spring Blossom 🌸 : sakura pink, soft green, cream (light) */
+body.spring-theme {
+  --t-bg: #fff5f8; --t-text: #3a2b33; --t-dim: #8a6b78;
+  --t-card: #ffffff; --t-card2: #ffeef4; --t-border: #f3cdda;
+  --t-header: linear-gradient(135deg, #ffb7c5, #ffd9e2);
+  --t-accent: #ff6f9c; --t-accent2: #7bc47f; --t-heading: #d6457a;
+  --t-on-accent: #ffffff; --t-chip-bg: rgba(255, 111, 156, 0.10);
+  --t-chip-border: rgba(255, 111, 156, 0.28); --t-switcher-bg: rgba(255, 255, 255, 0.85);
+  --t-font: 'Segoe UI', system-ui, sans-serif;
+  --dark-bg: #fff5f8; --dark-card: #ffffff; --dark-text: #3a2b33; --dark-dim: #8a6b78;
+  --neon-cyan: #ff6f9c; --neon-magenta: #ff6f9c; --neon-lime: #7bc47f; --uranium: #ff6f9c;
+  background:
+    radial-gradient(circle at 12% 8%, rgba(255, 183, 197, 0.45), transparent 40%),
+    linear-gradient(160deg, #fff5f8 0%, #fdeef8 50%, #eef9f0 100%);
+  background-attachment: fixed;
+}
+
+/* 3 — Summer Wave 🌊 : turquoise sea, coral, sunshine (light) */
+body.summer-theme {
+  --t-bg: #f0fbff; --t-text: #063b46; --t-dim: #4f8593;
+  --t-card: #ffffff; --t-card2: #dff6fb; --t-border: #a9e4ef;
+  --t-header: linear-gradient(135deg, #06b6d4, #22d3ee 55%, #fbbf24);
+  --t-accent: #0891b2; --t-accent2: #f97316; --t-heading: #0e7490;
+  --t-on-accent: #ffffff; --t-chip-bg: rgba(8, 145, 178, 0.10);
+  --t-chip-border: rgba(8, 145, 178, 0.28); --t-switcher-bg: rgba(255, 255, 255, 0.85);
+  --t-font: 'Segoe UI', system-ui, sans-serif;
+  --dark-bg: #f0fbff; --dark-card: #ffffff; --dark-text: #063b46; --dark-dim: #4f8593;
+  --neon-cyan: #0891b2; --neon-magenta: #f97316; --neon-lime: #22d3ee; --uranium: #0891b2;
+  background:
+    radial-gradient(circle at 88% 6%, rgba(251, 191, 36, 0.30), transparent 38%),
+    linear-gradient(160deg, #eafaff 0%, #d6f3fb 55%, #fff7e6 100%);
+  background-attachment: fixed;
+}
+
+/* 4 — Autumn Harvest 🍂 : amber, rust, deep cocoa (warm dark) */
+body.autumn-theme {
+  --t-bg: #1c1206; --t-text: #f3e2c7; --t-dim: #c69d6e;
+  --t-card: #2a1c0c; --t-card2: #3a2710; --t-border: #5c3d18;
+  --t-header: linear-gradient(135deg, #7c2d12, #b45309);
+  --t-accent: #f59e0b; --t-accent2: #ea580c; --t-heading: #fbbf24;
+  --t-on-accent: #2a1402; --t-chip-bg: rgba(245, 158, 11, 0.10);
+  --t-chip-border: rgba(245, 158, 11, 0.28);
+  --dark-bg: #1c1206; --dark-card: #2a1c0c; --dark-text: #f3e2c7; --dark-dim: #c69d6e;
+  --neon-cyan: #f59e0b; --neon-magenta: #ea580c; --neon-lime: #f59e0b; --uranium: #f59e0b;
+  background:
+    radial-gradient(circle at 80% 10%, rgba(234, 88, 12, 0.18), transparent 42%),
+    linear-gradient(160deg, #160d04 0%, #1c1206 55%, #241405 100%);
+  background-attachment: fixed;
+}
+
+/* 5 — Halloween 🎃 : pumpkin orange, witch purple, slime green */
+body.halloween-theme {
+  --t-bg: #0d0717; --t-text: #f4e9ff; --t-dim: #a98fc4;
+  --t-card: #170d28; --t-card2: #22143a; --t-border: #4b2a73;
+  --t-header: linear-gradient(135deg, #6b21a8, #ea580c);
+  --t-accent: #ff7518; --t-accent2: #7c3aed; --t-heading: #9bff66;
+  --t-on-accent: #1a0a00; --t-chip-bg: rgba(255, 117, 24, 0.10);
+  --t-chip-border: rgba(255, 117, 24, 0.30);
+  --dark-bg: #0d0717; --dark-card: #170d28; --dark-text: #f4e9ff; --dark-dim: #a98fc4;
+  --neon-cyan: #ff7518; --neon-magenta: #7c3aed; --neon-lime: #9bff66; --uranium: #ff7518;
+  background:
+    radial-gradient(circle at 18% 8%, rgba(124, 58, 237, 0.20), transparent 40%),
+    radial-gradient(circle at 90% 92%, rgba(255, 117, 24, 0.14), transparent 42%),
+    linear-gradient(160deg, #0a0512 0%, #0d0717 100%);
+  background-attachment: fixed;
+}
+
+/* 6 — Christmas 🎄 : holly red, pine green, gold, snow */
+body.christmas-theme {
+  --t-bg: #0a1f14; --t-text: #f1f7f0; --t-dim: #9cc3a6;
+  --t-card: #0f2b1c; --t-card2: #153a26; --t-border: #1f5236;
+  --t-header: linear-gradient(135deg, #b91c1c, #166534);
+  --t-accent: #e63946; --t-accent2: #2f9e44; --t-heading: #ffd700;
+  --t-on-accent: #ffffff; --t-chip-bg: rgba(230, 57, 70, 0.12);
+  --t-chip-border: rgba(230, 57, 70, 0.30);
+  --dark-bg: #0a1f14; --dark-card: #0f2b1c; --dark-text: #f1f7f0; --dark-dim: #9cc3a6;
+  --neon-cyan: #e63946; --neon-magenta: #2f9e44; --neon-lime: #ffd700; --uranium: #e63946;
+  background:
+    radial-gradient(circle at 82% 6%, rgba(47, 158, 68, 0.16), transparent 44%),
+    radial-gradient(circle at 12% 90%, rgba(230, 57, 70, 0.12), transparent 42%),
+    linear-gradient(160deg, #07170e 0%, #0a1f14 100%);
+  background-attachment: fixed;
+}
+
+/* 7 — Galaxy ⭐ (Star Wars vibe) : deep space, hyperspace blue, saber gold, starfield */
+body.galaxy-theme {
+  --t-bg: #04060f; --t-text: #cfe3ff; --t-dim: #7e93b8;
+  --t-card: #0a0f1f; --t-card2: #111933; --t-border: #23335c;
+  --t-header: linear-gradient(135deg, #0b1a3a, #1d4ed8);
+  --t-accent: #ffe81f; --t-accent2: #3b82f6; --t-heading: #ffe81f;
+  --t-on-accent: #0a0a0a; --t-chip-bg: rgba(255, 232, 31, 0.08);
+  --t-chip-border: rgba(255, 232, 31, 0.24);
+  --t-font: 'Trebuchet MS', system-ui, sans-serif;
+  --dark-bg: #04060f; --dark-card: #0a0f1f; --dark-text: #cfe3ff; --dark-dim: #7e93b8;
+  --neon-cyan: #ffe81f; --neon-magenta: #3b82f6; --neon-lime: #ffe81f; --uranium: #ffe81f;
+  background:
+    radial-gradient(1.5px 1.5px at 20% 30%, #ffffff, transparent),
+    radial-gradient(1px 1px at 70% 60%, #cfe3ff, transparent),
+    radial-gradient(1.5px 1.5px at 40% 80%, #ffffff, transparent),
+    radial-gradient(1px 1px at 90% 25%, #ffffff, transparent),
+    radial-gradient(1px 1px at 55% 15%, #bcd4ff, transparent),
+    radial-gradient(1.5px 1.5px at 12% 65%, #ffffff, transparent),
+    linear-gradient(160deg, #04060f 0%, #070a18 100%);
+  background-attachment: fixed;
+}
+
+/* 8 — Windows XP 🪟 : Luna blue title bar, Bliss sky-to-hill, white panels */
+body.winxp-theme {
+  --t-bg: #3a6ea5; --t-text: #1a1a1a; --t-dim: #4a5568;
+  --t-card: #ffffff; --t-card2: #eef3fb; --t-border: #9db8d2;
+  --t-header: linear-gradient(180deg, #3f8cff 0%, #2058ee 10%, #245edb 100%);
+  --t-accent: #245edb; --t-accent2: #73d216; --t-heading: #0a3d91;
+  --t-on-accent: #ffffff; --t-chip-bg: rgba(255, 255, 255, 0.18);
+  --t-chip-border: rgba(255, 255, 255, 0.35); --t-switcher-bg: rgba(255, 255, 255, 0.9);
+  --t-font: 'Tahoma', 'Segoe UI', sans-serif;
+  --dark-bg: #3a6ea5; --dark-card: #ffffff; --dark-text: #1a1a1a; --dark-dim: #4a5568;
+  --neon-cyan: #245edb; --neon-magenta: #245edb; --neon-lime: #73d216; --uranium: #245edb;
+  background: linear-gradient(180deg, #4aa3ff 0%, #6db3f2 32%, #8fd36b 72%, #5fa830 100%);
+  background-attachment: fixed;
+}
+body.winxp-theme .theme-switcher .theme-select { color: #245edb; }
+/* Luna title bar is dark blue → keep its heading white; body titles stay navy. */
+body.winxp-theme header h1,
+body.winxp-theme header .page-title { color: #ffffff; -webkit-text-fill-color: #ffffff; }
+
+/* 9 — macOS Aqua 🍎 : light graphite, Aqua blue, classic pinstripes, traffic-light green */
+body.aqua-theme {
+  --t-bg: #ececec; --t-text: #1d1d1f; --t-dim: #6e6e73;
+  --t-card: #ffffff; --t-card2: #f5f5f7; --t-border: #d2d2d7;
+  --t-header: linear-gradient(180deg, #fbfbfd, #e6e6ea);
+  --t-accent: #0a84ff; --t-accent2: #34c759; --t-heading: #0a3d91;
+  --t-on-accent: #ffffff; --t-chip-bg: rgba(10, 132, 255, 0.10);
+  --t-chip-border: rgba(10, 132, 255, 0.30); --t-switcher-bg: rgba(255, 255, 255, 0.85);
+  --t-font: -apple-system, 'Lucida Grande', 'Helvetica Neue', sans-serif;
+  --dark-bg: #ececec; --dark-card: #ffffff; --dark-text: #1d1d1f; --dark-dim: #6e6e73;
+  --neon-cyan: #0a84ff; --neon-magenta: #0a84ff; --neon-lime: #34c759; --uranium: #0a84ff;
+  background:
+    repeating-linear-gradient(180deg, #efeff1 0, #efeff1 2px, #e7e7ea 2px, #e7e7ea 4px);
+  background-attachment: fixed;
+}
+body.aqua-theme .nav-link { color: #1d1d1f; }
+
+/* 10 — Comic Pop 💥 : pop-art yellow/red/blue, halftone dots, bold ink outlines */
+body.comic-theme {
+  --t-bg: #fff3bf; --t-text: #1a1a1a; --t-dim: #5a4a2a;
+  --t-card: #ffffff; --t-card2: #fff8db; --t-border: #1a1a1a;
+  --t-header: linear-gradient(135deg, #ff3b3b, #ffd23b);
+  --t-accent: #e63946; --t-accent2: #1d4ed8; --t-heading: #1d4ed8;
+  --t-on-accent: #ffffff; --t-chip-bg: #ffe066; --t-chip-border: #1a1a1a;
+  --t-switcher-bg: rgba(255, 255, 255, 0.92);
+  --t-font: 'Comic Sans MS', 'Comic Neue', 'Chalkboard SE', cursive;
+  --dark-bg: #fff3bf; --dark-card: #ffffff; --dark-text: #1a1a1a; --dark-dim: #5a4a2a;
+  --neon-cyan: #e63946; --neon-magenta: #1d4ed8; --neon-lime: #1d4ed8; --uranium: #e63946;
+  background:
+    radial-gradient(circle, rgba(0, 0, 0, 0.08) 1.5px, transparent 1.6px) 0 0 / 14px 14px,
+    linear-gradient(160deg, #fff7cc 0%, #ffe9a8 100%);
+  background-attachment: fixed;
+}
+body.comic-theme .stat-card,
+body.comic-theme .card,
+body.comic-theme .nav-link,
+body.comic-theme .header-btn,
+body.comic-theme .btn { border-width: 2px; border-color: #1a1a1a; }
+body.comic-theme .nav-link { color: #1a1a1a; }

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment History — Mining Pool</title>
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <link rel="stylesheet" href="/css/themes.css">
+</head>
+<body>
+
+    <header>
+        <div class="brand"><span class="dot" aria-hidden="true"></span><span data-brand="pool_name">GRINIUM</span></div>
+        <nav class="header-nav" aria-label="Main">
+            <a href="index.html" class="nav-link">Dashboard</a>
+            <a href="miners-stats.html" class="nav-link">Miners</a>
+            <a href="payment-history.html" class="nav-link active">Payouts</a>
+            <a href="index.html#info" class="nav-link">Info</a>
+            <a href="account-settings.html" class="nav-link">My Account</a>
+        </nav>
+        <div class="nav-right">
+            <div class="theme-switcher"></div>
+            <a class="btn primary sm" href="index.html#connect">Start Mining</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <h2 class="page-title">Payment History</h2>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Paid Out (7 days)</div>
+                <div class="stat-value" id="ph-paid-7d">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Last Payout</div>
+                <div class="stat-value" id="ph-last">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Payouts (7 days)</div>
+                <div class="stat-value" id="ph-count-7d">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Avg Payout</div>
+                <div class="stat-value" id="ph-avg">—</div>
+            </div>
+        </div>
+
+        <h3 class="section-title">Recent Payouts</h3>
+
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Date & Time</th>
+                    <th>Miner</th>
+                    <th>Amount</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="payouts">
+                <tr><td colspan="4">Loading…</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <footer>
+        <p data-brand="footer_text">GRINIUM — Uranium Element Mining Pool | Professional • Reliable • Secure</p>
+        <div data-brand="page-links"></div>
+        <p data-brand="attribution" style="opacity:0.7;font-size:0.95em;margin-top:6px;">Powered by the Grin Node Toolkit</p>
+    </footer>
+
+    <script src="/js/auth.js"></script>
+    <script>
+        // Escape any value before it goes into innerHTML (defense-in-depth on tx_hash,
+        // status, and any operator/miner-derived field rendered into the table).
+        function escHtml(v) {
+            return String(v == null ? '' : v)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // Theme switching is handled site-wide by /js/public-theme.js, which renders
+        // the theme picker and applies the 3 built-in + 10 white-label themes.
+
+        // ═════════════════════════════════════════════════════════════════
+        // API Integration: confirmed payouts from the PUBLIC endpoint
+        // (/api/pool/payments — withdrawals table, status='confirmed').
+        // Timestamps are unixepoch SECONDS → multiply by 1000 for Date.
+        // ═════════════════════════════════════════════════════════════════
+
+        function truncAddr(addr) {
+            addr = String(addr || '');
+            return addr.length > 16 ? addr.slice(0, 9) + '…' + addr.slice(-4) : addr;
+        }
+
+        function setStat(id, text) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = text;
+        }
+
+        async function loadPaymentHistory() {
+            const tbody = document.getElementById('payouts');
+            try {
+                const data = await Auth.fetch('/api/pool/payments?limit=100');
+                if (!Array.isArray(data)) throw new Error('bad response');
+
+                const now = Math.floor(Date.now() / 1000);
+                const when = w => w.confirmed_at || w.created_at || 0;
+                const last7d = data.filter(w => when(w) > now - 7 * 86400);
+                const sum = arr => arr.reduce((s, w) => s + (w.amount || 0), 0);
+
+                setStat('ph-paid-7d', sum(last7d).toFixed(2) + ' GRIN');
+                setStat('ph-count-7d', last7d.length);
+                setStat('ph-last', data.length ? new Date(when(data[0]) * 1000).toLocaleString() : 'No payouts yet');
+                setStat('ph-avg', data.length ? (sum(data) / data.length).toFixed(2) + ' GRIN' : '—');
+
+                if (tbody) {
+                    if (!data.length) {
+                        tbody.innerHTML = '<tr><td colspan="4">No payouts yet</td></tr>';
+                    } else {
+                        tbody.innerHTML = data.slice(0, 25).map(w => `
+                            <tr>
+                                <td>${escHtml(new Date(when(w) * 1000).toLocaleString())}</td>
+                                <td title="${escHtml(w.grin_address)}">${escHtml(truncAddr(w.grin_address))}</td>
+                                <td>${Number(w.amount || 0).toFixed(2)} GRIN</td>
+                                <td><span class="status-badge status-active">confirmed</span></td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+            } catch (error) {
+                if (tbody) tbody.innerHTML = '<tr><td colspan="4">Payment data unavailable</td></tr>';
+            }
+        }
+
+        // Load on page ready
+        document.addEventListener('DOMContentLoaded', loadPaymentHistory);
+
+        // Refresh every 60 seconds
+        setInterval(loadPaymentHistory, 60000);
+    </script>
+    <script src="/js/public-theme.js"></script>
+    <script src="/js/branding.js"></script>
+</body>
+</html>

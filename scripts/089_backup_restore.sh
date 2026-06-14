@@ -14,9 +14,15 @@
 #   · /opt/grin/wallet/        — wallet dirs (toml, seed, wallet_data) — optional, default Y
 #   · /opt/grin/drop-test/     — Grin Drop testnet (DB, config, secrets) — optional, default Y
 #   · /opt/grin/drop-main/     — Grin Drop mainnet (DB, config, secrets) — optional, default Y
-#   · /opt/grin/grin-stats/stats.db    — blockchain stats DB (~100 MB, expensive to rebuild)
+#   · ALL product SQLite DBs — captured via a consistent ONLINE snapshot
+#     (sqlite3 ".backup": safe even while a collector is mid-write; duplication
+#     with a service's own backup is intentional — this is the one-stop archive):
+#       /opt/grin/grin-stats/stats.db          global health — blockchain stats (~100 MB)
+#       /opt/grin/grin-price/grin-price.db     global health — price history
+#       /opt/grin/grinscan/{test,main}/grinscan.db   GrinScan explorer (per net)
+#       /opt/grin/solo-stats/*.db              solo mining — stats / payout ledger
+#       /opt/grin/drop-{test,main}/drop-*.db   Grin Drop (alongside config + secrets)
 #   · /opt/grin/grin-stats/config.env  — stats collector config
-#   · /opt/grin/grin-price/grin-price.db — price history DB (optional, default Y)
 #   · /var/lib/tor/grin-mainnet/, /var/lib/tor/grin-testnet/
 #                              — Tor HiddenService Ed25519 keys (.onion identity) — optional, default Y
 #   · /etc/nginx/sites-available/*  (Grin-related configs only)
@@ -106,7 +112,9 @@ CRON_TAG="# grin-toolkit-auto-backup"
 # In auto mode: uses default dest, includes wallet + drop, skips logs, no prompts.
 run_backup() {
     local auto=false
+    local keep_days=0          # retention in days; 0 = keep all (no auto-delete)
     [[ "${1:-}" == "--auto" ]] && auto=true
+    [[ "${2:-}" =~ ^[0-9]+$ ]] && keep_days="${2}"
 
     if [[ "$auto" == false ]]; then
         clear
@@ -132,6 +140,7 @@ run_backup() {
     _collect_nginx_grin_configs
 
     local -a sources=()
+    local -a db_sources=()        # SQLite DBs — snapshotted (not live-copied) at archive time
     local -a manifest_lines=()
 
     # /opt/grin/conf
@@ -254,7 +263,11 @@ run_backup() {
                     "$_dir/grin-wallet.toml"
                 do
                     [[ -f "$_f" ]] || continue
-                    sources+=("$_f")
+                    if [[ "$_f" == *.db ]]; then
+                        db_sources+=("$_f")        # consistent snapshot at archive time
+                    else
+                        sources+=("$_f")
+                    fi
                     manifest_lines+=("  $(basename "$_f")")
                     [[ "$auto" == false ]] && info "  ✓ $_f"
                 done
@@ -269,48 +282,47 @@ run_backup() {
         fi
     fi
 
-    # ── Step 5: Databases ────────────────────────────────────────────────────
-    # stats.db took hours of crawling to build — always include it by default.
-    # WAL checkpoint flushes any in-flight writes before we copy the file.
+    # ── Step 5: Databases (ALL products) ─────────────────────────────────────
+    # One-stop recovery archive: capture EVERY product SQLite DB — global health
+    # (stats + price), GrinScan explorer (test+main), solo mining, and Grin Drop
+    # (the drop .db was already queued in Step 4). Included by default; the user
+    # hosts services on separate boxes, so duplication here is deliberate.
+    # Each DB is captured via an online snapshot at archive time (sqlite3
+    # ".backup", see Step 7) — consistent even while a 5-min collector writes.
     if [[ "$auto" == false ]]; then
-        section "Step 5: Database files"
-        echo -e "  ${YELLOW}stats.db contains ~100 MB of crawled blockchain data — expensive to rebuild.${RESET}"
+        section "Step 5: Database files (all products)"
+        echo -e "  ${YELLOW}All product DBs are captured via a consistent online snapshot${RESET}"
+        echo -e "  ${YELLOW}(safe even while collectors are writing). Included by default.${RESET}"
         echo ""
     fi
 
+    # config.env is a plain file (not a DB) — back it up live.
+    if [[ -f /opt/grin/grin-stats/config.env ]]; then
+        sources+=("/opt/grin/grin-stats/config.env")
+        manifest_lines+=("stats-config: /opt/grin/grin-stats/config.env")
+        [[ "$auto" == false ]] && info "  ✓ /opt/grin/grin-stats/config.env"
+    fi
+
     local -A _db_labels=(
-        ["/opt/grin/grin-stats/stats.db"]="Stats DB (blockchain history)"
-        ["/opt/grin/grin-stats/config.env"]="Stats collector config"
-        ["/opt/grin/grin-price/grin-price.db"]="Price DB (GRIN/USDT + GRIN/BTC history)"
+        ["/opt/grin/grin-stats/stats.db"]="Global health — blockchain stats (~100 MB)"
+        ["/opt/grin/grin-price/grin-price.db"]="Global health — price history"
+        ["/opt/grin/grinscan/test/grinscan.db"]="GrinScan explorer — testnet"
+        ["/opt/grin/grinscan/main/grinscan.db"]="GrinScan explorer — mainnet"
     )
+    local _db
     for _db in \
-        "/opt/grin/grin-stats/stats.db" \
-        "/opt/grin/grin-stats/config.env" \
-        "/opt/grin/grin-price/grin-price.db"
+        /opt/grin/grin-stats/stats.db \
+        /opt/grin/grin-price/grin-price.db \
+        /opt/grin/grinscan/test/grinscan.db \
+        /opt/grin/grinscan/main/grinscan.db \
+        /opt/grin/solo-stats/*.db
     do
-        [[ -f "$_db" ]] || continue
+        [[ -f "$_db" ]] || continue        # unmatched glob stays literal → skipped
         local _db_size; _db_size=$(du -sh "$_db" 2>/dev/null | cut -f1)
-        local _label="${_db_labels[$_db]}"
-        local _include_db=true
-        if [[ "$auto" == false ]]; then
-            echo -e "  ${DIM}$_db${RESET}  ${DIM}($_db_size — $_label)${RESET}"
-            # config.env is tiny and always useful — include silently
-            if [[ "$_db" == *.db ]]; then
-                echo -ne "  ${BOLD}Include? [Y/n]: ${RESET}"
-                read -r _db_choice
-                [[ "${_db_choice,,}" == "n" ]] && _include_db=false
-            fi
-        fi
-        if [[ "$_include_db" == true ]]; then
-            # Flush any open WAL transactions to the main file before copying.
-            # 10s timeout guards against a locked DB hanging the whole backup.
-            if [[ "$_db" == *.db ]] && command -v sqlite3 &>/dev/null; then
-                timeout 10 sqlite3 "$_db" "PRAGMA wal_checkpoint(FULL);" &>/dev/null || true
-            fi
-            sources+=("$_db")
-            manifest_lines+=("database: $_db  ($_db_size)")
-            [[ "$auto" == false ]] && info "  ✓ $_db  ($_db_size)"
-        fi
+        local _label="${_db_labels[$_db]:-Solo mining — stats / payout ledger}"
+        db_sources+=("$_db")
+        manifest_lines+=("database: $_db  ($_db_size — $_label)")
+        [[ "$auto" == false ]] && info "  ✓ $_db  ($_db_size — $_label)"
     done
 
     # ── Step 5b: Tor HiddenService keys (.onion identity) ────────────────────
@@ -367,7 +379,7 @@ run_backup() {
         fi
     fi
 
-    if [[ ${#sources[@]} -eq 0 ]]; then
+    if [[ ${#sources[@]} -eq 0 && ${#db_sources[@]} -eq 0 ]]; then
         warn "Nothing to back up. Aborting."
         pause; return 0
     fi
@@ -434,10 +446,41 @@ run_backup() {
     [[ -f "$cron_dir/www-data.crontab" ]] && cp "$cron_dir/www-data.crontab" "$stage/crontabs/"
     [[ -f "$nginx_enabled_manifest"    ]] && cp "$nginx_enabled_manifest"     "$stage/nginx_enabled_symlinks.txt"
 
+    # Consistent SQLite snapshots — capture every product DB via the online
+    # backup API (sqlite3 ".backup") into the staging tree under its real path
+    # (leading / stripped), so the archive layout is identical to a live copy.
+    # ".backup" yields a transactionally-consistent file even while a collector
+    # is writing — no torn pages, no reliance on a timed checkpoint. Falls back
+    # to a WAL checkpoint + live copy if ".backup" can't run. The original
+    # owner/mode is copied onto the snapshot (it is created root-owned), so
+    # restore lands each DB back with the ownership its service expects.
+    local -a staged_db_rels=()
+    local _dbsrc _rel
+    for _dbsrc in "${db_sources[@]+"${db_sources[@]}"}"; do
+        [[ -f "$_dbsrc" ]] || continue
+        _rel="${_dbsrc#/}"
+        mkdir -p "$stage/$(dirname "$_rel")"
+        if command -v sqlite3 &>/dev/null \
+           && timeout 60 sqlite3 "$_dbsrc" ".backup '$stage/$_rel'" &>/dev/null \
+           && [[ -s "$stage/$_rel" ]]; then
+            chmod --reference="$_dbsrc" "$stage/$_rel" 2>/dev/null || true
+            chown --reference="$_dbsrc" "$stage/$_rel" 2>/dev/null || true
+            [[ "$auto" == false ]] && info "  ✓ snapshot $_dbsrc"
+        else
+            # Fallback: flush WAL into the main file, then a live copy (cp -a
+            # preserves owner/mode). Best effort — skip if even that fails.
+            command -v sqlite3 &>/dev/null && timeout 10 sqlite3 "$_dbsrc" "PRAGMA wal_checkpoint(FULL);" &>/dev/null || true
+            cp -a "$_dbsrc" "$stage/$_rel" 2>/dev/null || { warn "  Could not snapshot $_dbsrc — skipping."; continue; }
+            [[ "$auto" == false ]] && warn "  ~ live copy (no .backup) $_dbsrc"
+        fi
+        staged_db_rels+=("$_rel")
+    done
+
     tar -czf "$archive_tmp" \
         -C "$stage" MANIFEST.txt crontabs \
         $( [[ -f "$stage/nginx_enabled_symlinks.txt" ]] && echo "nginx_enabled_symlinks.txt" || true ) \
-        "${sources[@]}" \
+        "${staged_db_rels[@]+"${staged_db_rels[@]}"}" \
+        "${sources[@]+"${sources[@]}"}" \
         2>/dev/null || true
 
     # Encrypt archive (AES-256-CBC, password via fd to avoid ps aux exposure)
@@ -461,6 +504,22 @@ run_backup() {
     chmod 600 "$dest_dir/$archive_enc" 2>/dev/null || true
     if id grin &>/dev/null; then
         chown -R grin:grin "$dest_dir" 2>/dev/null || true
+    fi
+
+    # ── Retention — auto-delete older scheduled archives (keep_days > 0) ──────
+    # Only prunes this toolkit's own encrypted archives (temp_dir_*.tar.gz.enc),
+    # so a custom dest holding other files is never touched. -mtime +N keeps the
+    # last N days. keep_days=0 (manual "Backup now", or "Keep all") prunes nothing.
+    if [[ "$keep_days" -gt 0 ]]; then
+        local _n_pruned
+        _n_pruned=$(find "$dest_dir" -maxdepth 1 -type f -name 'temp_dir_*.tar.gz.enc' \
+                    -mtime "+$keep_days" -print 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "${_n_pruned:-0}" -gt 0 ]]; then
+            find "$dest_dir" -maxdepth 1 -type f -name 'temp_dir_*.tar.gz.enc' \
+                 -mtime "+$keep_days" -delete 2>/dev/null || true
+            log "[RETENTION] Pruned $_n_pruned archive(s) older than $keep_days days in $dest_dir"
+            [[ "$auto" == false ]] && info "Retention: pruned $_n_pruned archive(s) older than $keep_days days."
+        fi
     fi
 
     # ── Step 8: Done ─────────────────────────────────────────────────────────
@@ -763,11 +822,15 @@ run_restore() {
         log "[RESTORE] drop-$_net"
     done
 
-    # Database files (stats.db, config.env, grin-price.db)
+    # Database files — global health (stats/price) + GrinScan explorer.
+    # cp -a preserves the owner/mode that was captured into the archive when the
+    # snapshot was taken, so each DB lands back as the user its service expects.
     for _db_rel in \
         "opt/grin/grin-stats/stats.db" \
         "opt/grin/grin-stats/config.env" \
-        "opt/grin/grin-price/grin-price.db"
+        "opt/grin/grin-price/grin-price.db" \
+        "opt/grin/grinscan/test/grinscan.db" \
+        "opt/grin/grinscan/main/grinscan.db"
     do
         if [[ -f "$extract_dir/$_db_rel" ]]; then
             local _db_dest="/$_db_rel"
@@ -777,6 +840,18 @@ run_restore() {
             log "[RESTORE] $_db_dest"
         fi
     done
+
+    # Solo-mining stats DBs — one per network/key, names vary, so glob them.
+    if [[ -d "$extract_dir/opt/grin/solo-stats" ]]; then
+        mkdir -p /opt/grin/solo-stats
+        local _sdb
+        for _sdb in "$extract_dir/opt/grin/solo-stats/"*.db; do
+            [[ -f "$_sdb" ]] || continue
+            cp -a "$_sdb" "/opt/grin/solo-stats/$(basename "$_sdb")"
+            success "Restored: /opt/grin/solo-stats/$(basename "$_sdb")"
+            log "[RESTORE] /opt/grin/solo-stats/$(basename "$_sdb")"
+        done
+    fi
 
     # Logs
     if [[ -d "$extract_dir/opt/grin/logs" ]]; then
@@ -824,6 +899,7 @@ run_restore() {
     echo -e "  · Start the Grin node via ${BOLD}Script 01 → S) Start${RESET}"
     echo -e "  · Chain data will re-sync automatically, or use ${BOLD}Script 03${RESET} to stream it"
     echo -e "  · If stats.db was restored, resume the stats cron — no re-crawl needed"
+    echo -e "  · If GrinScan / solo-mining DBs were restored, (re)start those services to pick them up"
     echo -e "  · If Grin Drop was restored, restart services via ${BOLD}Script 052 → menu${RESET}"
     echo -e "  · Web content (${DIM}/var/www/${RESET}) is redeployed automatically by each setup script"
     echo ""
@@ -915,8 +991,46 @@ run_schedule() {
     local _hour="${_picked_time%%:*}"
     local _min="${_picked_time##*:}"
 
+    # ── Pick retention (auto-delete older archives after each run) ────────────
+    echo ""
+    echo -e "  ${BOLD}Retention — how long to keep backups?${RESET}"
+    echo -e "  ${DIM}After each run, encrypted archives older than this in the backup dir${RESET}"
+    echo -e "  ${DIM}are auto-deleted. The recovery seed is your ultimate backup regardless.${RESET}"
+    echo ""
+    echo -e "  ${BOLD}1${RESET})  7 days"
+    echo -e "  ${BOLD}2${RESET})  14 days"
+    echo -e "  ${BOLD}3${RESET})  30 days"
+    echo -e "  ${BOLD}4${RESET})  Keep all  ${DIM}(never auto-delete)${RESET}"
+    echo -e "  ${DIM}C)  Custom (enter a number of days)${RESET}"
+    echo ""
+    echo -ne "${BOLD}Retention [1/2/3/4/C]: ${RESET}"
+    read -r _ret_choice
+
+    local keep_days=14   # sensible default if input is unrecognized
+    case "${_ret_choice,,}" in
+        1) keep_days=7  ;;
+        2) keep_days=14 ;;
+        3) keep_days=30 ;;
+        4) keep_days=0  ;;
+        c)
+            echo -ne "${BOLD}Keep how many days: ${RESET}"
+            read -r _ret_days
+            if [[ "$_ret_days" =~ ^[0-9]+$ ]]; then
+                keep_days="$_ret_days"
+            else
+                warn "Not a number — using 14 days."; keep_days=14
+            fi
+            ;;
+        *) warn "Unrecognized — using 14 days."; keep_days=14 ;;
+    esac
+    local _ret_label
+    [[ "$keep_days" -eq 0 ]] && _ret_label="keep all (no auto-delete)" || _ret_label="keep $keep_days days"
+
     local this_script; this_script="$(realpath "${BASH_SOURCE[0]}")"
-    local cron_line="$_min $_hour * * $cron_days bash $this_script --auto-backup $CRON_TAG"
+    # --keep-days must precede $CRON_TAG (a shell '#' comment): cron passes the
+    # whole field to sh, which ignores everything from '#' on. So the flag is
+    # parsed and the tag stays a harmless comment used to find/remove the entry.
+    local cron_line="$_min $_hour * * $cron_days bash $this_script --auto-backup --keep-days $keep_days $CRON_TAG"
 
     # ── Preview + confirm ────────────────────────────────────────────────────
     echo ""
@@ -924,6 +1038,7 @@ run_schedule() {
     echo -e "  ${GREEN}$cron_line${RESET}"
     echo ""
     echo -e "  Backup runs at ${BOLD}${_picked_time}${RESET} on the selected day(s)."
+    echo -e "  Retention: ${BOLD}${_ret_label}${RESET}."
     echo -e "  Archives saved to ${BOLD}$BACKUP_DIR${RESET}."
     echo ""
     if ! confirm_step "Install this schedule?"; then
@@ -942,9 +1057,18 @@ run_schedule() {
 # MAIN MENU
 # =============================================================================
 main() {
-    # Non-interactive mode: called by cron via  bash 089_backup_restore.sh --auto-backup
+    # Non-interactive mode: called by cron via
+    #   bash 089_backup_restore.sh --auto-backup [--keep-days N]
     if [[ "${1:-}" == "--auto-backup" ]]; then
-        run_backup --auto
+        local _keep_days=0          # 0 = keep all (no pruning) unless told otherwise
+        shift
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --keep-days) _keep_days="${2:-0}"; shift 2 ;;
+                *)           shift ;;
+            esac
+        done
+        run_backup --auto "$_keep_days"
         exit $?
     fi
 
@@ -965,7 +1089,7 @@ main() {
         echo ""
 
         echo -e "  ${BOLD}B${RESET})  Backup now"
-        echo -e "     ${DIM}Saves conf, wallet, drop DBs, nginx, SSL certs, crontabs · encrypted${RESET}"
+        echo -e "     ${DIM}Saves conf, wallets, ALL product DBs (online snapshot), nginx, SSL, crontabs · encrypted${RESET}"
         echo ""
         echo -e "  ${BOLD}S${RESET})  Schedule automatic backup"
         echo -e "     ${DIM}Daily or 2 days per week · random off-peak time${RESET}"

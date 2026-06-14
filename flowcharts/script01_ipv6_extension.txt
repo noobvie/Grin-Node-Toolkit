@@ -297,7 +297,7 @@ IP. For IPv6 serving to work:
 Already done:
   • ::ffff:x.x.x.x stripped to plain IPv4 in _extract_addr ✓
   • _is_public_ip accepts native IPv6 (no blanket IPv6 block) ✓
-  • _is_valid_grin_agent filters by user agent (works for IPv6 peers too) ✓
+  • _normalize_agent normalizes user agent / blanks→Unknown (works for IPv6 peers too) ✓
 
 Still missing:
   • NAT64 prefix 64:ff9b:: — these pass _is_public_ip and get stored as

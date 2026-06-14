@@ -14,17 +14,36 @@ From these it maintains, per network:
   - a rolling record of blocks this node SOLVED  → blocks_<key>.json
   - per-worker hashrate over 15m / 12h / 24h / 48h, online/offline, with workers
     silent > 7 days pruned                        → miners_<key>.json
+  - a rolling daily-average POOL hashrate history (per UTC day, ~400 days, for the
+    daily/weekly/monthly trend chart)             → hashrate_<key>.json
   - a miningpoolstats-friendly pool+network summary → poolstats_<key>.json
+  - a sanitized liveness summary for external uptime monitors, BOTH networks merged
+    into ONE file (per-net: node/wallet/stratum up? + miners connected + blocks
+    found in 24h — booleans + counts ONLY, never height/difficulty/balance/
+    hashrate) → health.json. Each per-net run merges only its own section, so the
+    mainnet + testnet runs (sequential in the wrapper) build the combined file
+    together. Script 07 serves it with an `auth_basic off` carve-out so it stays
+    reachable even when the page is locked.
 
 It also queries the node Owner API (get_status, localhost, reading .api_secret)
 to fill network height / difficulty / hashrate for poolstats.
 
-MAINNET-only reward split (trusted-group payment calculation):
+DURABLE STATE: all long-lived state (found blocks, per-worker buckets, daily
+hashrate history, payout ledger, log position) lives in ONE SQLite database per
+network — <state-dir>/solo_mining_stats_<key>.db (Python stdlib sqlite3, no external
+dependency, rollback-journal + synchronous=FULL so a crash mid-write recovers to
+the last committed run). The JSON files above are derived VIEWS, regenerated each
+run for the static web page to fetch. On the first run after upgrading from the
+old JSON-state build, <state-dir>/stats_<key>.state.json and
+payment_ledger_main.json are auto-imported once, then left in place (inert).
+
+MAINNET-only payout split (trusted-group payment calculation):
   - an append-only DAILY ledger (UTC day-keyed: per-worker share-difficulty +
     chain-verified matured-block count) → <state-dir>/payment_ledger_main.json
   - a public per-period split (daily/weekly/monthly/yearly: nickname → % + GRIN
-    owed, NO addresses) → <out-dir>/split_main.json, enabled by a prefixes file
-    (--payment-config, default /opt/grin/conf/grin_solo_payment.json).
+    owed, NO addresses) → <out-dir>/split_main.json, toggled by --payment-config
+    (default /opt/grin/conf/grin_solo_payment.json). {"enabled": true} groups
+    miners by nickname — the text before the first dot in nickname.NN.
   This module computes only — it never holds keys, moves money, or stores a Grin
   address. Matured blocks are CHAIN-VERIFIED at 1440 maturity (Foreign API
   get_block) so an orphaned solution never inflates a payout.
@@ -51,9 +70,11 @@ import gzip
 import json
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -63,7 +84,9 @@ FOUND_RE = re.compile(
     re.I,
 )
 
-# Accepted-share line. 'd' = actual share difficulty, 'w' = worker/login.
+# Accepted-share line. 'w' = worker/login. The 'd' (actual difficulty) field is
+# matched to anchor the line shape but intentionally NOT summed — see
+# SHARE_CREDIT_DIFF for why each share is credited a fixed difficulty instead.
 SHARE_RE = re.compile(
     r"Got share at height\s+\d+.*?difficulty\s+(?P<d>\d+)\s*/\s*\d+.*?submitted by\s+(?P<w>\S+)",
     re.I,
@@ -76,17 +99,58 @@ BUCKET = 60                      # share-difficulty bucket size (seconds)
 WINDOWS = {"15m": 900, "12h": 43200, "24h": 86400, "48h": 172800}
 ONLINE_THRESHOLD = 900           # no share within 15 min ⇒ worker offline
 WORKER_TTL = 7 * 86400           # prune workers silent for 7 days
-BLOCK_RETENTION = 400 * 86400    # bound found-block history (covers 12-mo graph)
-RECENT_CAP = 500
+BLOCK_RETENTION = 1830 * 86400   # bound found-block history (~5 yr, covers yearly graph)
+HR_HISTORY_RETENTION_DAYS = 1830 # daily pool-hashrate history depth (~5 yr, covers yearly graph)
+RECENT_CAP = 2000                # max blocks in the output list (covers a 5-yr yearly chart)
 C32_SCALE = 16384                # Cuckatoo32 solution-rate constant (32 * 2^9)
+NET_DIFF_WINDOW = 30             # blocks to average network difficulty/hashrate over
+
+# Per-share work credit. minimum_share_difficulty defaults to 1 — below the C32
+# floor — so the node submits EVERY cycle a miner finds and logs its raw ACTUAL
+# difficulty. That actual difficulty is Pareto/heavy-tailed (A ≈ 16384 / U) with
+# an effectively infinite mean, so SUMMING it makes the hashrate estimate explode
+# on the occasional lucky high-difficulty share (e.g. one near-block share alone
+# can add >100 G/s to a 15-min window). Instead we credit each accepted share a
+# FIXED difficulty: the C32 floor (16384) — the lowest difficulty any valid cycle
+# can score, and thus the effective target every share clears. Fed through
+# hashrate_gps() this gives GPS = share_count × 42 / window, which is
+# self-consistent with the network hashrate formula and low-variance (Poisson in
+# the share count). It also makes the payout split credit work by share count
+# rather than by luck.
+# NOTE: assumes minimum_share_difficulty ≤ 16384 (grin/toolkit default = 1, so
+# every cycle is submitted). If an operator raises it above the floor, set this
+# to the configured target instead.
+SHARE_CREDIT_DIFF = C32_SCALE
 
 NODE_PORTS = {"mainnet": 3413, "testnet": 13413}
+# Toolkit defaults for the health probe, used when grin-server.toml has no explicit
+# value. Stratum = the port miners dial; wallet = the coinbase Foreign listener.
+STRATUM_PORTS = {"mainnet": 3416, "testnet": 13416}
+WALLET_FOREIGN_PORTS = {"mainnet": 3415, "testnet": 13415}
 
-# ── Reward split (mainnet only) ────────────────────────────────────────────────
+# ── Payout split (mainnet only) ────────────────────────────────────────────────
 BLOCK_REWARD_GRIN = 60.0         # flat coinbase reward (Grin has no halving)
 MAINNET_MATURITY = 1440          # COINBASE_MATURITY — blocks before reward spendable
 DEFAULT_PAYMENT_CONFIG = "/opt/grin/conf/grin_solo_payment.json"
 SPLIT_PERIODS = ("daily", "weekly", "monthly", "yearly")
+
+# Default pool display name for the poolstats feed. Operators override it by
+# setting "pool_name" in <out-dir>/config.json (see load_pool_name).
+DEFAULT_POOL_NAME = "Grin Solo (Node Toolkit)"
+
+# ── GRIN fiat price (mainnet dashboard only) ───────────────────────────────────
+# Fetched SERVER-SIDE (here) so the static page reads it same-origin from
+# data/price.json — the page's strict `connect-src 'self'` CSP needs no external
+# origin, and visitors never hit a rate limit or a CORS wall. CoinGecko returns
+# USD + BTC in one call; on failure we fall back to nonlogs (GRIN→BTC) × nonlogs
+# (BTC→USDT) for the USD. If every source fails the previous price.json is left
+# untouched (stale-but-shown) rather than overwritten with nulls. testnet is
+# tGRIN (no value) so no price is fetched for it.
+PRICE_COINGECKO = ("https://api.coingecko.com/api/v3/simple/price"
+                   "?ids=grin&vs_currencies=usd,btc")          # {"grin":{"usd":..,"btc":..}}
+PRICE_NONLOGS_GRINBTC = "https://api.nonlogs.io/api/markets/GRIN-BTC"   # {"market":{"last_price":".."}}
+PRICE_NONLOGS_BTCUSD = "https://api.nonlogs.io/api/markets/BTC-USDT"    # {"market":{"last_price":".."}}
+PRICE_HTTP_TIMEOUT = 8           # seconds per external price call
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -117,12 +181,32 @@ def hashrate_gps(sum_diff, window_s):
     return sum_diff * 42.0 / C32_SCALE / window_s
 
 
-def load_state(path):
+def _read_json(path):
+    """Read a JSON file → dict, or {} if missing/unreadable (legacy import only)."""
     try:
         with open(path) as fh:
             return json.load(fh)
     except (OSError, ValueError):
         return {}
+
+
+def load_pool_name(out_dir):
+    """Read the operator-set pool display name from <out-dir>/config.json.
+    Falls back to DEFAULT_POOL_NAME when out-dir is unset, the file is missing
+    /unreadable, or "pool_name" is absent or blank. config.json is the same
+    operator-editable file that already carries host + slogan, so renaming the
+    feed needs no redeploy — the next 5-min collector run picks it up.
+    """
+    if not out_dir:
+        return DEFAULT_POOL_NAME
+    try:
+        with open(os.path.join(out_dir, "config.json")) as fh:
+            name = json.load(fh).get("pool_name")
+    except (OSError, ValueError, AttributeError):
+        return DEFAULT_POOL_NAME
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return DEFAULT_POOL_NAME
 
 
 def save_json_atomic(path, obj, mode=0o600):
@@ -137,6 +221,170 @@ def save_json_atomic(path, obj, mode=0o600):
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+
+
+# ── SQLite persistence ─────────────────────────────────────────────────────────
+# All durable state lives in <state-dir>/solo_mining_stats_<key>.db (one DB per network; the
+# mainnet/testnet collector runs never share a file, so no locking contention).
+# The in-memory processing below is UNCHANGED — these helpers just load every
+# table into the same dict shapes the build_* functions already expect, and write
+# them back in a single transaction. Rollback-journal mode (the default) leaves a
+# single .db file at rest between the 5-min runs, so the tar backup of
+# /opt/grin/solo-stats/ captures a consistent snapshot; synchronous=FULL makes a
+# crash mid-write recover to the last committed run (never a torn file).
+DB_SCHEMA = """
+PRAGMA synchronous=FULL;
+CREATE TABLE IF NOT EXISTS meta          (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS found_blocks  (height INTEGER PRIMARY KEY, ts REAL NOT NULL, hash TEXT);
+CREATE TABLE IF NOT EXISTS workers       (worker TEXT PRIMARY KEY, last_seen REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS worker_buckets(worker TEXT NOT NULL, bucket INTEGER NOT NULL, diff REAL NOT NULL, PRIMARY KEY (worker, bucket));
+CREATE TABLE IF NOT EXISTS hr_days       (day TEXT PRIMARY KEY, diff_sum INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS ledger_days   (day TEXT PRIMARY KEY, blocks_matured INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS ledger_worker (day TEXT NOT NULL, worker TEXT NOT NULL, diff INTEGER NOT NULL, PRIMARY KEY (day, worker));
+CREATE TABLE IF NOT EXISTS ledger_blocks (height INTEGER PRIMARY KEY, status TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS earnings      (height INTEGER NOT NULL, nick TEXT NOT NULL, grin REAL NOT NULL, PRIMARY KEY (height, nick));
+CREATE TABLE IF NOT EXISTS payments      (id INTEGER PRIMARY KEY AUTOINCREMENT, nick TEXT NOT NULL, grin REAL NOT NULL, ts TEXT NOT NULL, note TEXT NOT NULL DEFAULT '');
+"""
+
+
+def db_connect(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fresh = not os.path.exists(path)
+    conn = sqlite3.connect(path, timeout=30)
+    conn.executescript(DB_SCHEMA)
+    if fresh:
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    return conn
+
+
+def _meta_get(conn, key, default=None):
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def _meta_set(conn, key, value):
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, value))
+
+
+def load_state_db(conn):
+    """Read every state table back into the dict shapes the build_* code expects."""
+    found, hashes = {}, {}
+    for h, ts, hsh in conn.execute("SELECT height, ts, hash FROM found_blocks"):
+        found[str(h)] = ts
+        if hsh:
+            hashes[str(h)] = hsh
+    workers = {}
+    for w, ls in conn.execute("SELECT worker, last_seen FROM workers"):
+        workers[w] = {"last_seen": ls, "buckets": {}}
+    for w, b, d in conn.execute("SELECT worker, bucket, diff FROM worker_buckets"):
+        wk = workers.get(w)
+        if wk is not None:
+            wk["buckets"][str(b)] = d
+    hr_days = {day: ds for day, ds in conn.execute("SELECT day, diff_sum FROM hr_days")}
+    net_prev = json.loads(_meta_get(conn, "net_prev", "{}"))
+    log_pos = json.loads(_meta_get(conn, "log_pos", "{}"))
+    return {"found": found, "hashes": hashes, "workers": workers,
+            "net_prev": net_prev, "hr_days": hr_days, "log_pos": log_pos}
+
+
+def save_state_db(conn, state):
+    """Replace every state table from the in-memory dicts in one transaction.
+    Full table replace (not incremental) mirrors the old whole-file JSON rewrite —
+    correct and simple; the row counts here (≤ a few ×10k buckets) are trivial for
+    SQLite, and the build_* code has already pruned the dicts before this runs."""
+    with conn:
+        conn.execute("DELETE FROM found_blocks")
+        conn.executemany(
+            "INSERT INTO found_blocks(height, ts, hash) VALUES (?, ?, ?)",
+            [(int(h), ts, state["hashes"].get(h)) for h, ts in state["found"].items()])
+        conn.execute("DELETE FROM workers")
+        conn.execute("DELETE FROM worker_buckets")
+        wrows, brows = [], []
+        for w, wk in state["workers"].items():
+            wrows.append((w, wk.get("last_seen", 0)))
+            for b, d in wk.get("buckets", {}).items():
+                brows.append((w, int(b), d))
+        conn.executemany("INSERT INTO workers(worker, last_seen) VALUES (?, ?)", wrows)
+        conn.executemany("INSERT INTO worker_buckets(worker, bucket, diff) VALUES (?, ?, ?)", brows)
+        conn.execute("DELETE FROM hr_days")
+        conn.executemany("INSERT INTO hr_days(day, diff_sum) VALUES (?, ?)",
+                         [(day, int(v)) for day, v in state["hr_days"].items()])
+        _meta_set(conn, "net_prev", json.dumps(state["net_prev"]))
+        _meta_set(conn, "log_pos", json.dumps(state["log_pos"]))
+
+
+def load_ledger_db(conn):
+    """Payout ledger (mainnet) → {days, blocks, earnings, payments}.
+
+    earnings[height][nick] = GRIN frozen to that nickname when the block matured
+    (append-only, never recomputed). payments = the operator's recorded out-of-band
+    payouts. Lifetime owed per nickname = Σ earnings − Σ payments (compute_balances)."""
+    days = {}
+    for day, bm in conn.execute("SELECT day, blocks_matured FROM ledger_days"):
+        days[day] = {"workers": {}, "blocks_matured": bm}
+    for day, w, d in conn.execute("SELECT day, worker, diff FROM ledger_worker"):
+        if day in days:
+            days[day]["workers"][w] = d
+    blocks = {str(h): s for h, s in conn.execute("SELECT height, status FROM ledger_blocks")}
+    earnings = {}
+    for h, nick, g in conn.execute("SELECT height, nick, grin FROM earnings"):
+        earnings.setdefault(str(h), {})[nick] = g
+    payments = [{"nick": n, "grin": g, "ts": ts, "note": note}
+                for n, g, ts, note in
+                conn.execute("SELECT nick, grin, ts, note FROM payments ORDER BY id")]
+    return {"days": days, "blocks": blocks, "earnings": earnings, "payments": payments}
+
+
+def save_ledger_db(conn, ledger):
+    """Persist the derived/frozen ledger state in one transaction. NOTE: the
+    payments table is intentionally NOT touched here — payments are appended only by
+    the --record-payment mode (a separate invocation between cron runs), so a full
+    DELETE+INSERT here could drop a payment written in the gap. Earnings ARE rewritten
+    (they are frozen and only ever grow, so a whole-table replace is idempotent)."""
+    with conn:
+        conn.execute("DELETE FROM ledger_days")
+        conn.execute("DELETE FROM ledger_worker")
+        conn.execute("DELETE FROM ledger_blocks")
+        conn.execute("DELETE FROM earnings")
+        drows, wrows = [], []
+        for day, e in ledger["days"].items():
+            drows.append((day, int(e.get("blocks_matured", 0))))
+            for w, d in (e.get("workers") or {}).items():
+                wrows.append((day, w, int(d)))
+        conn.executemany("INSERT INTO ledger_days(day, blocks_matured) VALUES (?, ?)", drows)
+        conn.executemany("INSERT INTO ledger_worker(day, worker, diff) VALUES (?, ?, ?)", wrows)
+        conn.executemany("INSERT INTO ledger_blocks(height, status) VALUES (?, ?)",
+                         [(int(h), s) for h, s in ledger["blocks"].items()])
+        erows = [(int(h), nick, g)
+                 for h, nicks in ledger.get("earnings", {}).items()
+                 for nick, g in nicks.items()]
+        conn.executemany("INSERT INTO earnings(height, nick, grin) VALUES (?, ?, ?)", erows)
+
+
+def migrate_legacy_json(conn, state_json, ledger_json, is_mainnet):
+    """One-time auto-import of the pre-SQLite JSON files into the DB, on the first
+    run after upgrade. Guarded by a meta flag so it runs exactly once (also set on
+    a fresh install where no legacy file exists). Legacy files are left in place
+    (inert) rather than deleted."""
+    if _meta_get(conn, "legacy_imported"):
+        return
+    obj = _read_json(state_json)
+    if isinstance(obj, dict) and obj:
+        save_state_db(conn, {
+            "found": obj.get("found", {}), "hashes": obj.get("hashes", {}),
+            "workers": obj.get("workers", {}), "net_prev": obj.get("net_prev", {}),
+            "hr_days": obj.get("hr_days", {}), "log_pos": obj.get("log_pos", {}),
+        })
+    if is_mainnet:
+        led = _read_json(ledger_json)
+        if isinstance(led, dict) and (led.get("days") or led.get("blocks")):
+            save_ledger_db(conn, {"days": led.get("days", {}),
+                                  "blocks": led.get("blocks", {})})
+    with conn:
+        _meta_set(conn, "legacy_imported", "1")
 
 
 def query_node_status(net):
@@ -190,39 +438,236 @@ def query_node_block(net, height):
         return None
 
 
-# ── reward split: UTC ledger + per-period calculation (mainnet only) ───────────
+def _block_ts_epoch(header):
+    """Epoch seconds from a get_block header RFC3339 timestamp, or None."""
+    ts = header.get("timestamp")
+    if not isinstance(ts, str):
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def network_figures_lookback(net, height):
+    """(per-block difficulty, hashrate G/s) averaged over NET_DIFF_WINDOW blocks via
+    two Foreign-API get_block calls, or (None, None) if the headers can't be fetched.
+
+    Stateless — independent of net_prev warm-up — so the feed carries a correct value
+    on the VERY FIRST run after an upgrade, instead of waiting a cron cycle for an
+    inter-tick delta to exist (which is what was leaving the Network Difficulty tile
+    blank). diff_pb = Δtotal_difficulty / Δblocks (matches the stats page's live
+    dDiff/dBlocks); hr = Δtotal_difficulty · 42 / 16384 / Δt (the C32 formula)."""
+    if height is None or height <= NET_DIFF_WINDOW:
+        return None, None
+    cur = query_node_block(net, int(height))
+    past = query_node_block(net, int(height) - NET_DIFF_WINDOW)
+    if not cur or not past:
+        return None, None
+    ch, ph = cur.get("header", {}), past.get("header", {})
+    try:
+        dd = int(ch["total_difficulty"]) - int(ph["total_difficulty"])
+        db = int(ch["height"]) - int(ph["height"])
+    except (KeyError, TypeError, ValueError):
+        return None, None
+    ct, pt = _block_ts_epoch(ch), _block_ts_epoch(ph)
+    if ct is None or pt is None:
+        return None, None
+    dt = ct - pt
+    if db <= 0 or dd <= 0 or dt <= 0:
+        return None, None
+    return round(dd / db), round(hashrate_gps(dd, dt), 3)
+
+
+# ── health probe (sanitized liveness for external monitors) ─────────────────────
+def _node_toml_path(net):
+    return f"/opt/grin/node/{net}-prune/grin-server.toml"
+
+
+def _read_toml_scalar(path, key):
+    """First top-level `key = value` from a grin-server.toml (quotes/comment
+    stripped), or None. Good enough for the flat scalars the health probe needs;
+    not a general TOML parser."""
+    try:
+        with open(path) as fh:
+            for line in fh:
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                m = re.match(r"%s\s*=\s*(.+)$" % re.escape(key), s)
+                if m:
+                    return m.group(1).strip().strip('"').strip("'")
+    except OSError:
+        return None
+    return None
+
+
+def stratum_port(net):
+    """Stratum port the node binds (from stratum_server_addr), else the default."""
+    addr = _read_toml_scalar(_node_toml_path(net), "stratum_server_addr")
+    if addr and ":" in addr:
+        tail = addr.rsplit(":", 1)[-1]
+        if tail.isdigit():
+            return int(tail)
+    return STRATUM_PORTS[net]
+
+
+def wallet_foreign_url(net):
+    """Coinbase wallet Foreign API URL the node mines to, normalised to /v2/foreign
+    (mirrors the Script 07 bash helper). Falls back to the toolkit default port."""
+    url = _read_toml_scalar(_node_toml_path(net), "wallet_listener_url")
+    if not url:
+        url = f"http://127.0.0.1:{WALLET_FOREIGN_PORTS[net]}"
+    url = url.rstrip("/")
+    if not url.endswith("/v2/foreign"):
+        url += "/v2/foreign"
+    return url
+
+
+def query_wallet_alive(net):
+    """True if the wallet Foreign listener answers AT ALL — a 200 or a 401 both
+    prove the socket is up; only a connection refusal / timeout (URLError) means
+    it is down. No secret is sent (we only need liveness, not a valid call)."""
+    body = json.dumps({"jsonrpc": "2.0", "method": "check_version",
+                       "params": [], "id": 1}).encode()
+    req = urllib.request.Request(wallet_foreign_url(net), data=body)
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=4):
+            return True
+    except urllib.error.HTTPError:
+        return True              # listener answered (e.g. 401 needs-auth) → up
+    except Exception:
+        return False
+
+
+def proc_tcp_port_stats(port):
+    """(listening, established) for a LOCAL tcp port, read from /proc/net/tcp{,6}
+    with no subprocess. The local port is the 4-hex-digit field after ':' in the
+    local_address column; state 0A = LISTEN, 01 = ESTABLISHED. ESTABLISHED rows
+    whose local port is the stratum port are inbound miner connections."""
+    listening = False
+    established = 0
+    target = "%04X" % port
+    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(path) as fh:
+                next(fh, None)                      # skip header row
+                for line in fh:
+                    parts = line.split()
+                    if len(parts) < 4:
+                        continue
+                    if parts[1].rsplit(":", 1)[-1].upper() != target:
+                        continue
+                    if parts[3] == "0A":
+                        listening = True
+                    elif parts[3] == "01":
+                        established += 1
+        except OSError:
+            continue
+    return listening, established
+
+
+def build_health_section(net, status, blocks_found_24h, now):
+    """One network's sanitized liveness section — booleans + counts ONLY (never
+    height, difficulty, balance, or hashrate), so Script 07 can serve it publicly
+    even when the page is behind the Basic-Auth lock. `ok` is the infra roll-up
+    (node up+synced, wallet up, stratum listening); miners_connected and
+    blocks_found_24h are reported but do NOT gate `ok` (a solo stratum can be up
+    with no miner attached, and a dry 24h is normal solo luck — neither is a
+    fault)."""
+    node_up = status is not None
+    node_synced = bool(status and status.get("sync_status") == "no_sync")
+    wallet_up = query_wallet_alive(net)
+    listening, miners = proc_tcp_port_stats(stratum_port(net))
+    return {
+        "updated": iso(now),
+        "ok": bool(node_up and node_synced and wallet_up and listening),
+        "node": {"up": node_up, "synced": node_synced},
+        "wallet": {"up": wallet_up},
+        "stratum": {"up": listening, "miners_connected": miners},
+        "blocks_found_24h": int(blocks_found_24h),
+    }
+
+
+def write_health_combined(out_dir, net, section):
+    """Merge this network's `section` into the shared data/health.json, preserving
+    the OTHER network's section.
+
+    Both networks live in one file under "networks": {mainnet, testnet}. The two
+    per-net collector runs execute sequentially in one wrapper invocation (mainnet
+    then testnet) and the 5-min cron firings never overlap, so this read-merge-write
+    is race-free; save_json_atomic's os.replace guarantees readers never see a torn
+    file. Top-level `ok` is the AND of every section present (so a single check can
+    gate on the whole rig), while a monitor can also watch networks.<net>.ok to
+    alert on one network only. `updated` mirrors the section just written."""
+    path = os.path.join(out_dir, "health.json")
+    doc = _read_json(path)
+    if not isinstance(doc, dict) or not isinstance(doc.get("networks"), dict):
+        doc = {"networks": {}}
+    doc["networks"][net] = section
+    doc["ok"] = all(s.get("ok") for s in doc["networks"].values())
+    doc["updated"] = section["updated"]
+    save_json_atomic(path, doc, 0o644)
+
+
+def _http_get_json(url):
+    """GET `url` → parsed JSON (dict), raising on any network/parse error."""
+    req = urllib.request.Request(url, headers={"User-Agent": "grin-solo-collector"})
+    with urllib.request.urlopen(req, timeout=PRICE_HTTP_TIMEOUT) as resp:
+        return json.loads(resp.read().decode())
+
+
+def fetch_grin_price():
+    """GRIN price in USD + BTC for the mainnet dashboard, or None if all sources fail.
+
+    Primary: CoinGecko (one call → both). Fallback: nonlogs GRIN-BTC (BTC) ×
+    nonlogs BTC-USDT (USD). In the fallback the USD leg is best-effort — if the
+    BTC→USD call fails we still return the BTC figure with usd=None so the page
+    can show at least one conversion.
+    """
+    # 1) CoinGecko — {"grin":{"usd":..,"btc":..}}
+    try:
+        g = (_http_get_json(PRICE_COINGECKO) or {}).get("grin") or {}
+        usd = float(g.get("usd") or 0)
+        btc = float(g.get("btc") or 0)
+        if usd > 0 and btc > 0:
+            return {"usd": usd, "btc": btc, "source": "coingecko"}
+    except Exception:
+        pass
+    # 2) nonlogs — GRIN→BTC, then BTC→USD for the USD leg
+    try:
+        btc = float((_http_get_json(PRICE_NONLOGS_GRINBTC).get("market") or {}).get("last_price") or 0)
+        if btc > 0:
+            usd = None
+            try:
+                btc_usd = float((_http_get_json(PRICE_NONLOGS_BTCUSD).get("market") or {}).get("last_price") or 0)
+                if btc_usd > 0:
+                    usd = round(btc * btc_usd, 8)
+            except Exception:
+                usd = None
+            return {"usd": usd, "btc": btc, "source": "nonlogs"}
+    except Exception:
+        pass
+    return None
+
+
+# ── payout split: UTC ledger + per-period calculation (mainnet only) ───────────
 def utc_day(epoch):
     """UTC calendar-day key 'YYYY-MM-DD' for an epoch (split buckets by UTC day)."""
     return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%d")
 
 
-def load_prefixes(path):
-    """Read nickname prefixes from the payment config. None ⇒ feature disabled
-    (config absent/unreadable); a list (possibly empty) ⇒ enabled."""
+def payout_split_enabled(path):
+    """Payout-split on/off. True when the config file is present and not explicitly
+    disabled ({"enabled": false}); False when absent/unreadable. Workers are grouped
+    by nickname automatically — there are no names to pre-register."""
     try:
         with open(path) as fh:
             cfg = json.load(fh)
     except (OSError, ValueError):
-        return None
-    pfx = cfg.get("prefixes", []) if isinstance(cfg, dict) else []
-    if not isinstance(pfx, list):
-        return []
-    out = []
-    for p in pfx:
-        if isinstance(p, str) and p.strip() and p.strip() not in out:
-            out.append(p.strip())
-    return out
-
-
-def load_ledger(path):
-    """Append-only payment ledger. `days` = UTC-day → {workers, blocks_matured};
-    `blocks` = found-height → 'matured'|'orphan' (idempotency: count each once)."""
-    obj = load_state(path)
-    if not isinstance(obj, dict):
-        obj = {}
-    obj.setdefault("days", {})
-    obj.setdefault("blocks", {})
-    return obj
+        return False
+    return isinstance(cfg, dict) and cfg.get("enabled") is not False
 
 
 def _daily_worker_diff(workers, day):
@@ -238,6 +683,34 @@ def _daily_worker_diff(workers, day):
     return out
 
 
+def _freeze_block_earnings(ledger, h, found, now):
+    """Freeze one matured block's BLOCK_REWARD_GRIN across nicknames, by work-share
+    on the UTC day the block was FOUND. Append-only — skips heights already credited,
+    so it is safe to call for both newly matured blocks and as a backfill over
+    previously matured ones. A block whose found-day has no recorded shares (e.g.
+    INFO logging was off that day, or the block predates this node's share history)
+    is left UNCREDITED — it still counts toward blocks_matured, but its reward is
+    not allocated to any nickname. We deliberately do NOT fall back to another day's
+    workers: the miners online when the block matured (~1440 blocks / ~1 day later)
+    may be a different population than those who actually mined it, so a fallback
+    would misattribute the reward."""
+    if str(h) in ledger.get("earnings", {}):
+        return
+    ts = found.get(str(h))
+    if ts is None:
+        return                                # no found timestamp ⇒ no defining day
+    day_workers = (ledger["days"].get(utc_day(ts)) or {}).get("workers") or {}
+    total = sum(day_workers.values())
+    if total <= 0:
+        return
+    nick_diff = {}
+    for w, v in day_workers.items():
+        nick_diff[_nick_of(w)] = nick_diff.get(_nick_of(w), 0) + v
+    credit = ledger.setdefault("earnings", {}).setdefault(str(h), {})
+    for nick, v in nick_diff.items():
+        credit[nick] = round(BLOCK_REWARD_GRIN * v / total, 6)
+
+
 def update_ledger(ledger, workers, found, hashes, status, net, now):
     """Refresh the ledger (mutates + returns it).
 
@@ -247,6 +720,8 @@ def update_ledger(ledger, workers, found, hashes, status, net, now):
     2. Count each found block ONCE, the run after it crosses 1440 maturity, but
        only if the node confirms our hash is the canonical block at that height
        (orphans are recorded and excluded; an unreachable node is retried).
+    3. Freeze the matured block's reward across nicknames (running-balance earnings),
+       and backfill any already-matured block that predates the earnings table.
     """
     for day in (utc_day(now - 86400), utc_day(now)):
         entry = ledger["days"].setdefault(day, {"workers": {}, "blocks_matured": 0})
@@ -264,24 +739,65 @@ def update_ledger(ledger, workers, found, hashes, status, net, now):
                 continue   # node unreachable — leave unmarked, retry next run
             chain_hash = ((blk.get("header") or {}).get("hash") or "").lower()
             stored = (hashes.get(h) or "").lower()
-            if chain_hash and stored and chain_hash == stored:
+            # The "Solution Found ... hash X" log line emits an ABBREVIATED hash
+            # (grin logs the first 6 bytes, e.g. 0000564ceb7e), while get_block
+            # returns the full 64-hex header.hash. Compare on the common prefix:
+            # a canonical block's full hash starts with the logged abbreviation;
+            # an orphan at the same height has a different hash (a 48-bit / 12-hex
+            # prefix collision is ~2^-48, so prefix match is safe for orphan
+            # detection). Full-equality would mark EVERY block orphan.
+            n = min(len(chain_hash), len(stored))
+            if n > 0 and chain_hash[:n] == stored[:n]:
                 e = ledger["days"].setdefault(utc_day(now),
                                               {"workers": {}, "blocks_matured": 0})
                 e["blocks_matured"] = e.get("blocks_matured", 0) + 1
                 ledger["blocks"][h] = "matured"
+                _freeze_block_earnings(ledger, h, found, now)
             else:
                 ledger["blocks"][h] = "orphan"   # node answered, hash differs
+
+    # Backfill earnings for blocks marked matured before the earnings table existed
+    # (upgrade path) — idempotent: _freeze_block_earnings skips heights already credited.
+    for h, st in ledger["blocks"].items():
+        if st == "matured":
+            _freeze_block_earnings(ledger, h, found, now)
     return ledger
 
 
-def _match_prefix(worker, prefixes):
-    """Longest registered prefix the worker name starts with, or None (no auto
-    digit-stripping — a typo must surface as 'unassigned', never a phantom)."""
-    best = None
-    for p in prefixes:
-        if worker.startswith(p) and (best is None or len(p) > len(best)):
-            best = p
-    return best
+def compute_balances(ledger):
+    """Lifetime running balance per nickname: owed = Σ earnings − Σ payments.
+    Returns rows sorted by owed desc, plus a totals summary. Nicknames + GRIN
+    only — never an address. A negative owed means the operator has overpaid
+    (a standing credit)."""
+    earned, paid, last_paid = {}, {}, {}
+    for nicks in ledger.get("earnings", {}).values():
+        for nick, g in nicks.items():
+            earned[nick] = earned.get(nick, 0.0) + g
+    for p in ledger.get("payments", []):
+        nick = p["nick"]
+        paid[nick] = paid.get(nick, 0.0) + p["grin"]
+        if nick not in last_paid or p["ts"] > last_paid[nick]:
+            last_paid[nick] = p["ts"]
+    rows = []
+    for nick in set(earned) | set(paid):
+        e = round(earned.get(nick, 0.0), 3)
+        pd = round(paid.get(nick, 0.0), 3)
+        rows.append({"nick": nick, "earned": e, "paid": pd,
+                     "owed": round(e - pd, 3), "last_paid": last_paid.get(nick)})
+    rows.sort(key=lambda x: (-x["owed"], x["nick"]))
+    totals = {
+        "earned": round(sum(r["earned"] for r in rows), 3),
+        "paid": round(sum(r["paid"] for r in rows), 3),
+        "owed": round(sum(r["owed"] for r in rows), 3),
+    }
+    return rows, totals
+
+
+def _nick_of(worker):
+    """Group key = the nickname before the first dot (the nickname.NN convention),
+    so a miner's rigs (alpha.01, alpha.02, …) settle as one payee. A worker name
+    with no dot is its own group."""
+    return worker.split(".", 1)[0]
 
 
 def _window_days(period, now):
@@ -308,9 +824,10 @@ def _window_days(period, now):
     return today.strftime("%Y"), days[0], days[-1], days
 
 
-def compute_split(ledger, prefixes, now):
-    """Per-period reward split. reward_P = Σ matured blocks × 60 GRIN, divided by
-    work share (Σ share-diff, longest-prefix match). Nicknames + % + GRIN ONLY."""
+def compute_split(ledger, now):
+    """Per-period payout split. reward_P = Σ matured blocks × 60 GRIN, divided by
+    work share (Σ share-diff). Workers are grouped by nickname (the text before the
+    first dot in nickname.NN). Nicknames + % + GRIN ONLY — never addresses."""
     periods = {}
     for period in SPLIT_PERIODS:
         label, dfrom, dto, days = _window_days(period, now)
@@ -326,10 +843,11 @@ def compute_split(ledger, prefixes, now):
         total_diff = sum(diffs.values())
         reward = blocks_matured * BLOCK_REWARD_GRIN
 
-        groups = {p: {"diff": 0, "workers": set()} for p in prefixes}
-        groups["unassigned"] = {"diff": 0, "workers": set()}
+        # Group every worker under its nickname (the text before the first dot),
+        # so all of one miner's rigs (alpha.01, alpha.02, …) settle as one payee.
+        groups = {}
         for w, v in diffs.items():
-            g = groups[_match_prefix(w, prefixes) or "unassigned"]
+            g = groups.setdefault(_nick_of(w), {"diff": 0, "workers": set()})
             g["diff"] += v
             g["workers"].add(w)
 
@@ -341,8 +859,8 @@ def compute_split(ledger, prefixes, now):
             persons.append({"name": name, "workers": len(g["workers"]),
                             "diff": int(diff), "pct": round(pct, 1),
                             "grin": round(grin, 3)})
-        # registered prefixes first (payout desc), unassigned always last
-        persons.sort(key=lambda x: (x["name"] == "unassigned", -x["grin"], x["name"]))
+        # highest payout first, then by nickname
+        persons.sort(key=lambda x: (-x["grin"], x["name"]))
         periods[period] = {
             "label": label, "from": dfrom, "to": dto,
             "blocks_matured": blocks_matured, "reward": round(reward, 3),
@@ -373,12 +891,14 @@ def scan_increment(main_log, pos_state, found, hashes, workers, backfill):
         if ms:
             ts = parse_epoch(line) or time.time()
             w = ms.group("w").strip().strip(".,")
-            d = float(ms.group("d"))
             wk = workers.setdefault(w, {"last_seen": 0, "buckets": {}})
             if ts > wk["last_seen"]:
                 wk["last_seen"] = ts
             b = str(int(ts // BUCKET) * BUCKET)
-            wk["buckets"][b] = wk["buckets"].get(b, 0.0) + d
+            # Credit a FIXED per-share difficulty (SHARE_CREDIT_DIFF), not the
+            # heavy-tailed actual difficulty the log reports, so one lucky share
+            # cannot spike the hashrate estimate or the payout split.
+            wk["buckets"][b] = wk["buckets"].get(b, 0.0) + SHARE_CREDIT_DIFF
 
     # First run (no state) — backfill found blocks from rotated logs too.
     if backfill:
@@ -472,23 +992,92 @@ def build_miners(workers, now):
     }
 
 
-def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now, status=None):
+def _daily_total_diff(workers, day):
+    """Σ accepted share-difficulty across ALL workers whose 60s bucket falls on UTC `day`."""
+    total = 0.0
+    for wk in workers.values():
+        for b, v in wk.get("buckets", {}).items():
+            if utc_day(int(b)) == day:
+                total += v
+    return total
+
+
+def update_hr_history(hr_days, workers, now):
+    """Rolling per-UTC-day pool share-difficulty → daily-average hashrate history.
+
+    Like the reward ledger, only TODAY and YESTERDAY are (re)written each run — the
+    48h bucket window always covers both, so the rewrite is idempotent and older
+    days stay frozen at the value finalised while still inside the window. Entries
+    older than HR_HISTORY_RETENTION_DAYS are pruned (bounds the 12-month graph).
+    Maintained for BOTH networks (unlike the mainnet-only reward ledger)."""
+    for day in (utc_day(now - 86400), utc_day(now)):
+        hr_days[day] = int(round(_daily_total_diff(workers, day)))
+    cutoff = utc_day(now - HR_HISTORY_RETENTION_DAYS * 86400)
+    for day in list(hr_days):
+        if day < cutoff:
+            del hr_days[day]
+    return hr_days
+
+
+def build_hr_history(hr_days, now):
+    """Daily-average pool hashrate (G/s) per UTC day, ascending. The current day is
+    divided by elapsed seconds since UTC midnight (not a full 86400) so it reads as
+    a live average rather than an artificially low partial-day figure."""
+    today = utc_day(now)
+    midnight = datetime.fromtimestamp(now, timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0).timestamp()
+    elapsed_today = max(1.0, now - midnight)
+    points = []
+    for day in sorted(hr_days):
+        secs = elapsed_today if day == today else 86400.0
+        points.append({"day": day, "gps": round(hashrate_gps(hr_days[day], secs), 3)})
+    return points
+
+
+def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now,
+                    status=None, pool_name=DEFAULT_POOL_NAME):
     if status is None:
         status = query_node_status(net)
-    height = diff = peers = net_hr = None
+    height = diff = peers = None
+    # Carry the last-good network figures as the final fallback so a transient node
+    # hiccup (or a no-new-block tick) never blanks the stats-page tiles.
+    net_hr = net_prev.get("hr_gps")
+    net_diff_pb = net_prev.get("diff_pb")
     if status:
         tip = status.get("tip", {})
         height = tip.get("height")
         diff = tip.get("total_difficulty")
         peers = status.get("connections")
-        if diff is not None and net_prev.get("diff") is not None:
+        # Preferred source: a STATELESS look-back over a fixed block window (two
+        # get_block calls). Correct on every run including the first after an
+        # upgrade — no net_prev warm-up — so the Network Difficulty/Hashrate tiles
+        # seed from the feed immediately. (per-block difficulty here, NOT the
+        # cumulative `difficulty` field below.)
+        lb_diff_pb, lb_hr = network_figures_lookback(net, height)
+        if lb_diff_pb is not None:
+            net_diff_pb = lb_diff_pb
+            net_prev["diff_pb"] = net_diff_pb
+        if lb_hr is not None:
+            net_hr = lb_hr
+            net_prev["hr_gps"] = net_hr
+        # Fallback: the inter-tick delta against net_prev, used only for whichever
+        # figure the look-back couldn't produce (e.g. Foreign API briefly down).
+        if (lb_diff_pb is None or lb_hr is None) and diff is not None \
+                and net_prev.get("diff") is not None:
             dt = now - net_prev.get("ts", now)
             dd = diff - net_prev["diff"]
+            prev_h = net_prev.get("height")
             if dt > 0 and dd > 0:
-                net_hr = round(hashrate_gps(dd, dt), 3)
+                if lb_hr is None:
+                    net_hr = round(hashrate_gps(dd, dt), 3)
+                    net_prev["hr_gps"] = net_hr
+                if lb_diff_pb is None and prev_h is not None and height - prev_h > 0:
+                    net_diff_pb = round(dd / (height - prev_h))
+                    net_prev["diff_pb"] = net_diff_pb
         if diff is not None:
             net_prev["diff"] = diff
             net_prev["ts"] = now
+            net_prev["height"] = height
 
     last_block = None
     if found:
@@ -498,7 +1087,7 @@ def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now, s
     return net_prev, {
         "ts": iso(now), "net": net,
         "pool": {
-            "name": "Grin Solo (Node Toolkit)",
+            "name": pool_name,
             "hashrate": miners_payload["total_hr_gps"], "hashrate_unit": "gps",
             "workers": miners_payload["online_count"],
             "miners": miners_payload["miner_count"],
@@ -508,6 +1097,7 @@ def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now, s
         },
         "network": {
             "height": height, "difficulty": diff,
+            "difficulty_per_block": net_diff_pb,
             "hashrate_gps": net_hr, "connections": peers,
         },
     }
@@ -517,14 +1107,66 @@ def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now, s
 def main():
     ap = argparse.ArgumentParser(description="Grin solo mining stats collector")
     ap.add_argument("--net", required=True, choices=["mainnet", "testnet"])
-    ap.add_argument("--log", required=True)
+    ap.add_argument("--log")
     ap.add_argument("--state-dir", default="/opt/grin/solo-stats")
     ap.add_argument("--out-dir")
     ap.add_argument("--payment-config", default=DEFAULT_PAYMENT_CONFIG,
-                    help="nickname-prefix file enabling the mainnet reward split")
+                    help="nickname-prefix file enabling the mainnet payout split")
     ap.add_argument("--dry-run", action="store_true")
+    # Settlement (mainnet running-balance) management — used by the Script 07 menu.
+    ap.add_argument("--list-balances", action="store_true",
+                    help="print per-nickname earned/paid/owed (JSON) and exit")
+    ap.add_argument("--list-payments", action="store_true",
+                    help="print recorded payments (JSON, newest first) and exit")
+    ap.add_argument("--record-payment", action="store_true",
+                    help="append an out-of-band payment to a nickname and exit")
+    ap.add_argument("--pay-nick", help="nickname to credit (with --record-payment)")
+    ap.add_argument("--pay-grin", type=float, help="GRIN amount (with --record-payment)")
+    ap.add_argument("--pay-note", default="", help="optional payment note")
     args = ap.parse_args()
     key = "main" if args.net == "mainnet" else "test"
+    db_path = os.path.join(args.state_dir, f"solo_mining_stats_{key}.db")
+
+    # ── Settlement modes (no log scan needed; mainnet only) ──────────────────
+    if args.list_balances or args.record_payment or args.list_payments:
+        if args.net != "mainnet":
+            print("error: settlement applies to mainnet only", file=sys.stderr)
+            return 2
+        conn = db_connect(db_path)
+        if args.record_payment:
+            nick = (args.pay_nick or "").strip()
+            if not nick or args.pay_grin is None or args.pay_grin <= 0:
+                print("error: --record-payment needs --pay-nick and a positive --pay-grin",
+                      file=sys.stderr)
+                conn.close()
+                return 2
+            ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            with conn:
+                conn.execute("INSERT INTO payments(nick, grin, ts, note) VALUES (?, ?, ?, ?)",
+                             (nick, float(args.pay_grin), ts, args.pay_note or ""))
+            rows, totals = compute_balances(load_ledger_db(conn))
+            conn.close()
+            owed = next((r["owed"] for r in rows if r["nick"] == nick), 0.0)
+            print(json.dumps({"recorded": {"nick": nick, "grin": round(float(args.pay_grin), 3),
+                                           "ts": ts, "note": args.pay_note or ""},
+                              "owed_now": owed}, indent=2))
+            return 0
+        if args.list_payments:
+            pays = [{"nick": n, "grin": round(g, 3), "ts": ts, "note": note}
+                    for n, g, ts, note in conn.execute(
+                        "SELECT nick, grin, ts, note FROM payments ORDER BY id DESC")]
+            conn.close()
+            print(json.dumps({"payments": pays}, indent=2))
+            return 0
+        rows, totals = compute_balances(load_ledger_db(conn))
+        conn.close()
+        print(json.dumps({"updated": iso(time.time()), "balances": rows, "totals": totals},
+                         indent=2))
+        return 0
+
+    if not args.log:
+        print("error: --log is required for a collector run", file=sys.stderr)
+        return 2
 
     if args.dry_run:
         nb = nsh = 0
@@ -547,13 +1189,17 @@ def main():
         return 0
 
     now = time.time()
-    state_file = os.path.join(args.state_dir, f"stats_{key}.state.json")
-    state = load_state(state_file)
-    found = state.get("found", {})
-    hashes = state.get("hashes", {})
-    workers = state.get("workers", {})
-    net_prev = state.get("net_prev", {})
-    pos_state = state.get("log_pos", {})
+    legacy_state = os.path.join(args.state_dir, f"stats_{key}.state.json")
+    legacy_ledger = os.path.join(args.state_dir, "payment_ledger_main.json")
+    conn = db_connect(db_path)
+    migrate_legacy_json(conn, legacy_state, legacy_ledger, args.net == "mainnet")
+    state = load_state_db(conn)
+    found = state["found"]
+    hashes = state["hashes"]
+    workers = state["workers"]
+    net_prev = state["net_prev"]
+    hr_days = state["hr_days"]
+    pos_state = state["log_pos"]
     backfill = not found and not workers and not pos_state
 
     pos_state = scan_increment(args.log, pos_state, found, hashes, workers, backfill)
@@ -561,32 +1207,33 @@ def main():
     status = query_node_status(args.net)
     found, hashes, blocks_payload = build_blocks(found, hashes, now)
     workers, miners_payload = build_miners(workers, now)
+    hr_days = update_hr_history(hr_days, workers, now)
     net_prev, pool_payload = build_poolstats(
-        args.net, miners_payload, blocks_payload, found, net_prev, now, status)
+        args.net, miners_payload, blocks_payload, found, net_prev, now, status,
+        pool_name=load_pool_name(args.out_dir))
 
-    save_json_atomic(state_file, {
+    save_state_db(conn, {
         "found": found, "hashes": hashes, "workers": workers,
-        "net_prev": net_prev, "log_pos": pos_state,
+        "net_prev": net_prev, "hr_days": hr_days, "log_pos": pos_state,
     })
 
-    # ── Reward split (mainnet only) ──────────────────────────────────────────
+    # ── Payout split (mainnet only) ──────────────────────────────────────────
     # The ledger is maintained unconditionally so history accrues from day one;
-    # the public split is emitted only once the operator registers prefixes.
+    # the public split is emitted only while the operator keeps it enabled.
     if args.net == "mainnet":
-        ledger_path = os.path.join(args.state_dir, "payment_ledger_main.json")
-        ledger = update_ledger(load_ledger(ledger_path), workers, found, hashes,
+        ledger = update_ledger(load_ledger_db(conn), workers, found, hashes,
                                status, args.net, now)
-        save_json_atomic(ledger_path, ledger, 0o600)
+        save_ledger_db(conn, ledger)
 
-        prefixes = load_prefixes(args.payment_config)
         if args.out_dir:
             split_path = os.path.join(args.out_dir, "split_main.json")
-            if prefixes is not None:
+            if payout_split_enabled(args.payment_config):
+                balances, totals = compute_balances(ledger)
                 save_json_atomic(split_path, {
                     "updated": iso(now), "net": "mainnet",
                     "block_reward": BLOCK_REWARD_GRIN, "maturity": MAINNET_MATURITY,
-                    "prefixes": prefixes,
-                    "periods": compute_split(ledger, prefixes, now),
+                    "periods": compute_split(ledger, now),
+                    "balances": balances, "totals": totals,
                 }, 0o644)
             elif os.path.exists(split_path):
                 try:
@@ -594,16 +1241,38 @@ def main():
                 except OSError:
                     pass
 
+        # ── GRIN fiat price (mainnet only) → data/price.json ─────────────────
+        # Drives the "All time blocks found" total-mined USD/BTC line. On a total
+        # fetch failure the previous price.json is left in place (stale-but-shown)
+        # rather than zeroed; testnet (tGRIN) never gets a price.
+        if args.out_dir:
+            price = fetch_grin_price()
+            if price:
+                save_json_atomic(os.path.join(args.out_dir, "price.json"), {
+                    "updated": iso(now), "ts": int(now),
+                    "usd": price["usd"], "btc": price["btc"],
+                    "source": price["source"], "block_reward": BLOCK_REWARD_GRIN,
+                }, 0o644)
+
     blocks_out = dict(blocks_payload); blocks_out.update({"updated": iso(now), "net": args.net})
     miners_out = dict(miners_payload); miners_out.update({"updated": iso(now), "net": args.net})
+    hashrate_out = {"updated": iso(now), "net": args.net, "unit": "gps",
+                    "points": build_hr_history(hr_days, now)}
+
+    health_section = build_health_section(
+        args.net, status, blocks_payload["found_24h"], now)
 
     if args.out_dir:
         save_json_atomic(os.path.join(args.out_dir, f"blocks_{key}.json"), blocks_out, 0o644)
         save_json_atomic(os.path.join(args.out_dir, f"miners_{key}.json"), miners_out, 0o644)
+        save_json_atomic(os.path.join(args.out_dir, f"hashrate_{key}.json"), hashrate_out, 0o644)
         save_json_atomic(os.path.join(args.out_dir, f"poolstats_{key}.json"), pool_payload, 0o644)
+        write_health_combined(args.out_dir, args.net, health_section)
     else:
         print(json.dumps({"blocks": blocks_out, "miners": miners_out,
-                          "poolstats": pool_payload}, indent=2))
+                          "hashrate": hashrate_out, "poolstats": pool_payload,
+                          "health": {args.net: health_section}}, indent=2))
+    conn.close()
     return 0
 
 

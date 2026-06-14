@@ -11,14 +11,14 @@
   :root {
     --bg-1: #05080d; --bg-2: #0d1422; --panel: #141b25; --border: #3a4658;
     --text: #f4f8fd; --text-hi: #ffffff; --muted: #c7d1dc;
-    --green: #5ee08a; --yellow: #ffd84d; --red: #ff8079;
+    --green: #5ee08a; --yellow: #ffd84d; --red: #ff8079; --link: #8ab4f8;
     --main: #ffcb45; --test: #c79bff; --chip-bg: rgba(255,255,255,0.07);
     --main-rgb: 255,203,69; --test-rgb: 199,155,255;
   }
   html[data-theme="light"] {
     --bg-1: #eef1f5; --bg-2: #ffffff; --panel: #ffffff; --border: #b9c2cd;
     --text: #11151a; --text-hi: #000000; --muted: #3a424c;
-    --green: #157f33; --yellow: #8a5d00; --red: #c0202c;
+    --green: #157f33; --yellow: #8a5d00; --red: #c0202c; --link: #1a5fb4;
     --main: #9a6b00; --test: #6f29d6; --chip-bg: rgba(0,0,0,0.05);
     --main-rgb: 154,107,0; --test-rgb: 111,41,214;
   }
@@ -55,6 +55,7 @@
   h2 .n { font-weight: 800; }
   h2 .n.main { color: var(--main); text-shadow: 0 0 16px rgba(var(--main-rgb),.5); }
   h2 .n.test { color: var(--test); text-shadow: 0 0 16px rgba(var(--test-rgb),.5); }
+  h3 { font-size: 1.02rem; color: var(--text-hi); margin: 1.1rem 0 .5rem; letter-spacing: .02em; }
   p, li { line-height: 1.7; color: var(--text); font-size: .98rem; }
   ul, ol { padding-left: 1.3rem; }
   li { margin: .45rem 0; }
@@ -64,7 +65,16 @@
   code, .code { background: var(--chip-bg); border: 1px solid var(--border); border-radius: 6px;
     padding: .15rem .5rem; color: var(--text-hi); font-family: 'Courier New', monospace; word-break: break-all; }
   .code.block { display: block; padding: .8rem 1rem; margin: .5rem 0; white-space: pre-wrap; }
-  .copy { cursor: pointer; }
+  /* ASCII flow diagram: keep alignment, scroll instead of wrapping/breaking words */
+  .code.block.diagram { white-space: pre; overflow-x: auto; word-break: normal; line-height: 1.45; }
+  .copytext { cursor: text; }
+  .copybtn { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: .12rem .55rem; font-family: inherit; font-size: .78rem;
+    cursor: pointer; white-space: nowrap; flex: none; }
+  .copybtn:hover { background: var(--border); }
+  .copybtn.ok { color: var(--green); border-color: var(--green); }
+  .copyrow { display: flex; align-items: center; gap: .55rem; margin: .5rem 0; flex-wrap: wrap; }
+  .copyrow .copytext { flex: 1 1 auto; }
   .callout { border-left: 3px solid var(--yellow); background: rgba(255,216,77,.08);
     padding: .8rem 1rem; border-radius: 0 8px 8px 0; margin: .8rem 0; color: var(--text); }
   .callout.warn { border-left-color: var(--red); background: rgba(255,128,121,.08); }
@@ -76,27 +86,79 @@
   .net-title { font-weight: 800; letter-spacing: .08em; margin-bottom: .5rem; }
   .net-title.main { color: var(--main); } .net-title.test { color: var(--test); }
 
-  /* iPollo-style field table */
-  .form-table { width: 100%; border-collapse: collapse; margin: .6rem 0 .2rem; font-size: .95rem; }
-  .form-table th, .form-table td { text-align: left; padding: .6rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
-  .form-table th { color: var(--muted); text-transform: uppercase; font-size: .72rem; letter-spacing: .05em; font-weight: 600; white-space: nowrap; }
-  .form-table td:first-child { color: var(--muted); white-space: nowrap; width: 1%; }
-  .form-table td .val { color: var(--text-hi); }
-  .form-table tr:last-child td { border-bottom: none; }
+  /* colour-coded sub-headers separating Pool 1 (your pool) from Pool 2/3 (backups) */
+  .pool-head { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap;
+    margin: 1.4rem 0 .7rem; padding: .5rem .8rem; border-radius: 0 8px 8px 0;
+    font-size: 1.04rem; font-weight: 700; color: var(--text-hi); letter-spacing: .02em; }
+  .pool-head .pdot { width: .72rem; height: .72rem; border-radius: 50%; flex: none; }
+  .pool-head.primary { background: rgba(94,224,138,.10); border-left: 4px solid var(--green); }
+  .pool-head.primary .pdot { background: var(--green); box-shadow: 0 0 9px var(--green); }
+  .pool-head.backup { background: rgba(255,216,77,.09); border-left: 4px solid var(--yellow); }
+  .pool-head.backup .pdot { background: var(--yellow); box-shadow: 0 0 9px var(--yellow); }
 
   .chip { display: inline-block; background: var(--chip-bg); border: 1px solid var(--border);
     border-radius: 999px; padding: .12rem .6rem; font-size: .78rem; color: var(--muted); letter-spacing: .04em; }
   .chip.ok { color: var(--green); border-color: var(--green); }
   .chip.tbd { color: var(--muted); }
+  .chip.primary { color: var(--main); border-color: var(--main); }
+  .chip.warn { color: var(--yellow); border-color: var(--yellow); }
+  .hint { cursor: help; color: var(--yellow); border-bottom: 1px dotted var(--yellow);
+    font-size: .82rem; white-space: nowrap; }
 
-  /* per-network pool URL lines inside the iPollo table */
+  /* live "reachable from the internet" pill — measured by an off-box prober */
+  .rpill { display: inline-block; border: 1px solid var(--border); border-radius: 999px;
+    padding: .12rem .6rem; font-size: .76rem; letter-spacing: .04em; white-space: nowrap; cursor: help; }
+  .rpill.checking { color: var(--muted); }
+  .rpill.ok  { color: var(--green); border-color: var(--green); }
+  .rpill.bad { color: var(--red);   border-color: var(--red); }
+  .rpill.unknown { color: var(--muted); border-color: var(--border); }
+
+  /* copyable pool-URL line (IP / domain) inside a net-block */
   .poolurl { display: flex; align-items: baseline; gap: .55rem; margin: .25rem 0; flex-wrap: wrap; }
-  .poolurl .net { font-weight: 800; font-size: .72rem; letter-spacing: .05em; min-width: 4.6rem; }
-  .poolurl .net.main { color: var(--main); } .poolurl .net.test { color: var(--test); }
-  .poolurl .port-note { color: var(--muted); font-size: .8rem; }
 
+  /* collapsible "Example screenshot" of the miner's Pool Configuration panel */
+  .example-shot { margin-top: .85rem; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .example-shot summary { cursor: pointer; padding: .55rem .8rem; background: var(--chip-bg);
+    color: var(--text-hi); font-size: .9rem; letter-spacing: .03em; user-select: none; }
+  .example-shot summary:hover { background: var(--border); }
+  .example-shot img { display: block; max-width: 100%; height: auto; padding: .8rem; }
+
+  /* body-text links (pool refs, miningpoolstats, …) — standard link blue,
+     theme-aware. .btn/.code/footer anchors keep their own colour (higher specificity). */
+  a { color: var(--link); }
+  a:hover { color: var(--text-hi); }
   footer { color: var(--muted); font-size: .82rem; text-align: center; margin-top: 1.5rem; max-width: 820px; line-height: 1.7; }
   footer a { color: var(--main); }
+
+  /* Phones: the two-column key/value grid overflows the card — stack it to a
+     single column and frame each field as its own bordered cell (label strip
+     on top, value below) so fields stay easy to tell apart. */
+  @media (max-width: 560px) {
+    section.card { padding: 1.2rem 1.1rem; }
+    .kv {
+      grid-template-columns: 1fr;
+      gap: 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .kv .k {
+      background: var(--chip-bg);
+      color: var(--text-hi);
+      font-size: .92rem;
+      font-weight: 700;
+      letter-spacing: .04em;
+      padding: .8rem .9rem .45rem;
+      border-top: 1px solid var(--border);
+      align-self: stretch;
+    }
+    .kv > .k:first-child { border-top: none; }
+    .kv > span:not(.k) {
+      padding: .3rem .9rem .95rem;
+      font-size: 1rem;
+      word-break: break-word;
+    }
+  }
 </style>
 </head>
 <body>
@@ -129,49 +191,70 @@
   </section>
 
   <section class="card">
-    <h2>Connection details</h2>
+    <h2>Connection details — iPollo G1 Mini / G1</h2>
+    <p>Open the miner's web panel in a browser (its IP on your LAN), log in, then go to
+       <b>Miners → Pool Configuration</b>. The G1 takes up to <b>three</b> pools and uses
+       them in order — set <b>Pool 1</b> to this solo pool, and point <b>Pool 2 / Pool 3</b>
+       at public pools so the rig keeps earning if your node goes offline.</p>
 
+    <h3 class="pool-head primary"><span class="pdot"></span>Pool 1 — this solo pool
+        <span class="chip ok">primary</span></h3>
     <div class="net-block main hidden" id="block-main">
       <div class="net-title main">MAINNET · GRIN</div>
       <div class="kv">
-        <span class="k">Pool URL</span><span><code class="copy" id="main-stratum">—</code></span>
-        <span class="k">Algorithm</span><span><code>Cuckatoo32 (C32)</code></span>
-        <span class="k">Worker</span><span><code>nickname.NN</code> <span class="muted">(e.g. <code>alpha.01</code>)</span></span>
-        <span class="k">Password</span><span><code>123</code> <span class="muted">(unused — any value)</span></span>
+        <span class="k">Select Coin</span><span><code>GRIN</code></span>
+        <span class="k">Pool 1 URL</span><span><span class="muted">choose <b>one</b> of the two below — IP <i>or</i> domain</span></span>
+        <span class="k">→ Option A · IP</span><span id="main-stratum-ip"><span class="muted">loading…</span></span>
+        <span class="k">→ Option B · domain</span><span id="main-stratum-domain"><span class="muted">loading…</span></span>
+        <span class="k">Pool1 worker</span><span><code>nickname.NN</code> <span class="muted">(e.g. <code>alpha.01</code>)</span></span>
+        <span class="k">Pool1 password</span><span><code>123</code> <span class="muted">(unused — any value)</span></span>
       </div>
+      <details class="example-shot">
+        <summary>Example screenshot</summary>
+        <img src="pool-config-example.png" loading="lazy"
+             alt="iPollo G1 Pool Configuration — Select Coin GRIN, Pool 1 stratum URL, Pool1 worker, Pool1 password">
+      </details>
     </div>
 
     <div class="net-block test hidden" id="block-test">
       <div class="net-title test">TESTNET · tGRIN</div>
       <div class="kv">
-        <span class="k">Pool URL</span><span><code class="copy" id="test-stratum">—</code></span>
-        <span class="k">Algorithm</span><span><code>Cuckatoo32 (C32)</code></span>
-        <span class="k">Worker</span><span><code>nickname.NN</code> <span class="muted">(e.g. <code>alpha.01</code>)</span></span>
-        <span class="k">Password</span><span><code>123</code> <span class="muted">(unused — any value)</span></span>
+        <span class="k">Select Coin</span><span><code>GRIN</code></span>
+        <span class="k">Pool 1 URL</span><span><span class="muted">choose <b>one</b> of the two below — IP <i>or</i> domain</span></span>
+        <span class="k">→ Option A · IP</span><span id="test-stratum-ip"><span class="muted">loading…</span></span>
+        <span class="k">→ Option B · domain</span><span id="test-stratum-domain"><span class="muted">loading…</span></span>
+        <span class="k">Pool1 worker</span><span><code>nickname.NN</code> <span class="muted">(e.g. <code>alpha.01</code>)</span></span>
+        <span class="k">Pool1 password</span><span><code>123</code> <span class="muted">(unused — any value)</span></span>
       </div>
     </div>
 
     <p class="muted" id="no-net" style="display:none">Connection details load from the
        server config — if this stays blank, the stats deploy hasn't written
        <code>data/config.json</code> yet.</p>
-    <p class="muted">Tap a <b>Pool URL</b> above to copy it.</p>
-  </section>
+    <div class="callout info">
+      <b>Pick exactly one — IP or domain — for Pool 1.</b> Both addresses reach the
+      <i>same</i> node; you only put one of them in the Pool 1 slot.
+      <ul>
+        <li><b>Option A · IP</b> <span class="chip primary">recommended</span> — the node's raw
+            public IP. Stratum is plain TCP straight to the node (never proxied), so the IP is
+            always the most reliable target. Use this unless you have a specific reason not to.</li>
+        <li><b>Option B · domain</b> <span class="chip">optional</span> — a friendlier alias, handy
+            if the node's IP ever changes. It only works when the domain's <b>A record points
+            straight at the node's public IP</b>. If it shows
+            <span class="rpill bad" style="cursor:default">🔴 unreachable</span> (or
+            <span class="hint" title="If the domain shows unreachable: point its A record at the node's public IP, and on Cloudflare set that record to DNS-only (grey cloud), not Proxied (orange). Proxied mode only handles HTTP/HTTPS and breaks raw-TCP stratum — then only the IP works.">⚠ Cloudflare?</span>),
+            fall back to the IP.</li>
+      </ul>
+      <span class="muted">Use the <b>copy</b> button next to whichever one you choose to grab the
+      exact <code>stratum+tcp://…</code> URL.</span>
+    </div>
 
-  <section class="card">
-    <h2>ASIC setup — iPollo G1 Mini / G1</h2>
-    <p>Open your miner's web panel in a browser (its IP on your LAN), log in, then go to
-       <b>Miners → Pool Configuration</b>. Fill the <b>Pool Setting</b> form exactly as below:</p>
-
-    <table class="form-table">
-      <tr><th>Field</th><th>Value</th></tr>
-      <tr><td>Select Coin</td><td><span class="val"><code>GRIN</code></span></td></tr>
-      <tr><td>Pool 1</td><td id="ipollo-pool1"><span class="muted">loading from server config…</span></td></tr>
-      <tr><td>Pool1 worker</td><td><span class="val"><code>alpha.01</code></span> <span class="muted">→ your nickname + rig number</span></td></tr>
-      <tr><td>Pool1 password</td><td><span class="val"><code>123</code></span> <span class="muted">→ anything; not checked</span></td></tr>
-      <tr><td>Pool 2</td><td id="ipollo-pool2"><span class="muted">loading from server config…</span></td></tr>
-      <tr><td>Pool2 worker</td><td><span class="val"><code>alpha.01</code></span></td></tr>
-      <tr><td>Pool2 password</td><td><span class="val"><code>123</code></span></td></tr>
-    </table>
+    <h3 class="pool-head backup"><span class="pdot"></span>Pool 2 / Pool 3 — public backups
+        <span class="chip">failover</span></h3>
+    <div class="kv">
+      <span class="k">Pool 2</span><span>check details at <a href="https://gaeapool.com" target="_blank" rel="noopener noreferrer">gaeapool.com</a></span>
+      <span class="k">Pool 3</span><span>check details at <a href="https://grin.2miners.com" target="_blank" rel="noopener noreferrer">grin.2miners.com</a></span>
+    </div>
 
     <div class="callout">
       <b>Worker naming — <code>nickname.NN</code>.</b> Pick a nickname for yourself
@@ -181,27 +264,25 @@
       machine differently if you want to tell them apart.
     </div>
     <div class="callout info">
-      <b>Pick the network's port.</b> Mainnet (real GRIN) and testnet (tGRIN, for
-      practice) listen on <i>different</i> stratum ports — use the line that matches the
-      coin you want. The exact host and ports above come straight from this server's
-      <code>data/config.json</code>.
+      <b>Pool 2 / Pool 3 are failover.</b> The G1 falls back to them, in order, only when
+      Pool 1 is unreachable — so if your node or this pool goes down, the rig keeps earning
+      on a public pool instead of idling. They're independent pools, so their
+      <b>worker is your own GRIN payout address</b> (not <code>nickname.NN</code>) and the
+      password is whatever that pool asks for — grab the exact stratum URL, port, and worker
+      format from each pool's own getting-started page. Pool 1's password is ignored.
     </div>
-    <div class="callout info">
-      <b>Pool 2 is failover.</b> The G1 falls back to Pool 2 only if Pool 1 is
-      unreachable. Point it at the same network/port as Pool 1 (resilient if your panel
-      session drops) or at a backup pool. The password field is ignored — any value works.
-    </div>
-    <p>Save the form. The miner reconnects to the new pool within a few seconds — confirm
-       under <b>CGMiner Status</b> that it shows the pool as <b>Alive</b> and shares accepted.</p>
+    <p>Save the config and reboot the miner if possible. It reconnects to Pool 1 within a few
+       seconds — confirm under <b>CGMiner Status</b> that the pool shows as <b>Alive</b> and
+       shares are accepted.</p>
   </section>
 
   <section class="card">
     <h2>GPU miners</h2>
     <p><span class="chip tbd">to be defined</span></p>
-    <p class="muted">GPU mining of Grin (Cuckatoo32) has not been tested against this node
-       yet, so no verified flags are published here. In principle any C32-capable GPU
-       miner can point at the same <b>Pool URL</b> above, but treat that as untested
-       until this section is filled in.</p>
+    <p class="muted">Set a GPU rig up the <b>same way as the iPollo above</b> — point it at the
+       same <b>Pool URL</b>, with worker <code>nickname.NN</code> and any password. The
+       creator hasn't tested GPU mining (Cuckatoo32) against this node, though, so no verified
+       miner flags are published here — treat it as unverified until this section is filled in.</p>
   </section>
 
   <section class="card">
@@ -221,6 +302,15 @@
       set <code>file_log_level = "INFO"</code> in <code>grin-server.toml</code> and restart the node.
       <span class="muted">(Found blocks still record regardless — those log at WARN.)</span>
     </div>
+    <div class="callout">
+      <b>Check you're on Pool 1, not a backup.</b> Because Pool 2 / Pool 3 are public pools, a rig
+      that can't reach Pool 1 quietly fails over and keeps hashing there — so <b>Alive</b> alone
+      doesn't prove it's on your solo pool. The definitive check is that your worker shows in the
+      <b>Miners</b> table on this stats page; a rig that fell through to gaeapool/2miners won't.
+      In <b>CGMiner Status</b>, confirm Pool 1 (priority 0) is the active pool.
+      <span class="muted">(If Pool 1 is Alive and the worker still doesn't appear, that's the
+      <code>file_log_level</code> issue above — not failover.)</span>
+    </div>
   </section>
 
   <section class="card">
@@ -238,6 +328,124 @@
       Coinbase rewards are <b>immature for 1440 blocks (~24 h)</b> before they're spendable.
       The stats page <b>Coinbase Maturing</b> tile tracks how many of your found blocks are
       still maturing.
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>High availability — keep mining during node maintenance
+        <span class="chip warn">⚠ to be tested</span></h2>
+    <p>Solo mining stops the instant your node does — so rebooting the box or patching the OS
+       means lost hashing time unless something picks up the slack. Two ways to cover that gap,
+       easiest first.</p>
+
+    <h3>Easiest — fail over to a public pool (already set up above)</h3>
+    <p>This needs <b>no extra servers</b>: <b>Pool 2 / Pool 3</b> in the setup above already point at
+       <a href="https://gaeapool.com" target="_blank" rel="noopener noreferrer">gaeapool.com</a> and
+       <a href="https://grin.2miners.com" target="_blank" rel="noopener noreferrer">grin.2miners.com</a>.
+       When your node goes down the G1 falls through to them within seconds and keeps earning — paid to
+       your own GRIN address. The only downside is you're not <i>solo</i> while the node is offline.
+       For most people this is enough.</p>
+
+    <h3>Advanced — a second solo node (true HA)</h3>
+    <p>To stay <i>solo</i> through a reboot, run a <b>second grin node</b> and let the miner fail over
+       between the two. The G1 has three pool slots tried in order, so the natural mapping is two of
+       your own nodes first, then a public pool as last resort:</p>
+
+    <div class="code block diagram"> iPollo G1 — three pool slots, tried in order
+ ─────────────────────────────────────────────
+   Pool 1  →  node-A : 3416         your two solo nodes;
+   Pool 2  →  node-B : 3416         both set wallet_listener_url
+   Pool 3  →  gaeapool / 2miners    to the SAME wallet  (public = last resort)
+
+        rig fails over   Pool 1 → 2 → 3   within seconds
+                 │
+                 ▼
+   Wallet server  (the one box you do NOT reboot during maintenance)
+     • foreign listener  : 3415   ← node-A and node-B send the coinbase here
+     • local grin node   : 3413   ← this wallet's check_node_api_http_addr
+                                    points at a co-located, always-up synced
+                                    node — NOT the remote mining nodes</div>
+
+    <p>The whole trick is that <b>both nodes pay the same wallet</b>, so it doesn't matter which one
+       solves the block — the reward lands in the same place. Reboot node-A and the rig keeps mining
+       solo on node-B; only when <i>both</i> are down does it drop to the public Pool 3.</p>
+
+    <h3>The three links to wire up</h3>
+    <p><b>1. Each node — <code>grin-server.toml</code></b> (identical on node-A and node-B):</p>
+    <div class="code block">[server.stratum_mining_config]
+enable_stratum_server = true
+stratum_server_addr   = "0.0.0.0:3416"               # bind public so remote miners reach it
+wallet_listener_url   = "http://WALLET_HOST:3415"    # SAME wallet on both nodes</div>
+
+    <p><b>2. Wallet server — <code>grin-wallet.toml</code></b>:</p>
+    <div class="code block">check_node_api_http_addr = "http://127.0.0.1:3413"   # a local, always-up, synced node</div>
+    <div class="callout warn">
+      <b>grin-wallet has no built-in node failover.</b> <code>check_node_api_http_addr</code> is a
+      <i>single</i> value — it won't rotate to a second node on its own. That's why the wallet points
+      at a <b>co-located local node</b> instead of the remote mining nodes: that local node stays up
+      regardless of which mining node you're rebooting. (The alternative — a single hostname over a
+      health-checked TCP load balancer like nginx-stream/HAProxy in front of both nodes' <code>3413</code>
+      — also works but adds more moving parts.)
+    </div>
+
+    <p><b>3. iPollo — Pool Configuration</b>:</p>
+    <div class="code block">Pool 1   stratum+tcp://node-A:3416     worker nickname.NN   pass 123
+Pool 2   stratum+tcp://node-B:3416     worker nickname.NN   pass 123
+Pool 3   gaeapool / 2miners            worker = your GRIN payout address</div>
+
+    <div class="callout info">
+      <b>A node you fail over to must be fully synced first.</b> A freshly-restarted node opens the
+      stratum port <i>before</i> it has caught up to the tip and will hand out stale block templates —
+      wasted hashrate. Confirm <code>sync_status</code> is <code>no_sync</code> via the node Owner API
+      (<code>get_status</code>) before trusting node-B. Only <b>one</b> node needs to be up at a time
+      for mining to continue.
+    </div>
+
+    <div class="callout warn">
+      <b>Not tested in production yet.</b> The creator hasn't had time to run this two-node setup
+      end-to-end — the single-node + public-pool failover above is the proven path. If you try the
+      two-node HA and get it working (or hit snags), help would be hugely appreciated: please open an
+      issue or PR on the
+      <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer">Grin Node Toolkit</a>
+      repo so this section can be marked verified.
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Additional info</h2>
+
+    <h3>How the stats update</h3>
+    <ul>
+      <li><b>Live node + wallet metrics</b> refresh every <b>10 s</b> on the stats page.</li>
+      <li><b>Blocks found</b> and <b>per-miner hashrate</b> are parsed from the node log by the collector.</li>
+      <li><b>Coinbase rewards</b> mature after <b>1440 blocks (~24 h)</b> before they're spendable.</li>
+    </ul>
+
+    <div class="callout info">
+      <b>Per-miner stats need <code>file_log_level = "INFO"</code></b> on the node — shares are
+      logged at INFO. Set it in <code>grin-server.toml</code> and restart the node.
+      <span class="muted">(Found blocks record regardless — those log at WARN.)</span>
+    </div>
+
+    <h3>External pollers</h3>
+    <p>Pool stats are also published as a machine-readable JSON feed for external tools and
+       dashboards. Copy the endpoint:</p>
+    <div class="copyrow"><code class="code copytext" id="poller-endpoint">data/poolstats_main.json</code><button class="copybtn" type="button" aria-label="Copy endpoint">copy</button></div>
+    <p class="muted">The feed is refreshed by the collector and carries both pool and network
+       figures:</p>
+    <ul>
+      <li><b>pool</b> — <code>name</code>, <code>hashrate</code> (+ <code>hashrate_unit</code>,
+          gps), <code>workers</code>, <code>miners</code>, <code>fee</code>,
+          <code>blocks_24h</code>, <code>last_block</code> (height + timestamp)</li>
+      <li><b>network</b> — <code>height</code>, <code>difficulty</code>,
+          <code>hashrate_gps</code>, <code>connections</code></li>
+      <li><b>ts</b> — ISO timestamp of the snapshot, and <code>net</code> (mainnet/testnet)</li>
+    </ul>
+    <div class="callout info">
+      <b>Submit this pool to <a href="https://miningpoolstats.stream/grin" target="_blank" rel="noopener noreferrer">miningpoolstats.stream/grin</a>.</b>
+      The feed is built in their expected shape, so you can register this endpoint with
+      MiningPoolStats to have the pool listed in the public Grin pool rankings. Testnet uses
+      <code>data/poolstats_test.json</code>.
     </div>
   </section>
 </main>
@@ -259,56 +467,198 @@
     applyTheme(next); try { localStorage.setItem('grinSoloTheme', next); } catch (e) {}
   });
 
-  var NET_META = {
-    main: { label: 'MAINNET', coin: 'GRIN' },
-    test: { label: 'TESTNET', coin: 'tGRIN' }
-  };
+  // Why the IP is primary: stratum is raw TCP straight to the node, never proxied
+  // through nginx. The IP always reaches it; the domain only does if its A record
+  // points straight at the box. On Cloudflare that means DNS-only (grey cloud) —
+  // Proxied (orange) mode proxies HTTP(S) only and silently breaks raw-TCP stratum.
+  var CF_NOTE = "On Cloudflare, set this domain's A record to DNS-only (grey cloud). "
+    + "Proxied (orange) mode only proxies HTTP/HTTPS and breaks raw-TCP stratum — "
+    + "then only the IP works.";
 
-  function show(net, host, port) {
-    var b = document.getElementById('block-' + net); if (!b) return;
-    b.classList.remove('hidden');
-    document.getElementById(net + '-stratum').textContent = 'stratum+tcp://' + host + ':' + port;
+  // Base URL of an OFF-BOX port-check service (the Office Tools backend). It must run on
+  // a different host than this node, otherwise probing our own public IP can hairpin
+  // through the local stack and report a false "open". Set via data/config.json →
+  // "portcheck_api". When unset, we fall back to the old static recommended/optional chips.
+  var PORTCHECK_API = '';
+
+  // A reachability pill (live) or the legacy chip (fallback when no prober configured).
+  // type: 'ip' | 'domain'. opts.fallbackChip → render a chip when PORTCHECK_API is unset;
+  // opts.primary → that chip is "recommended" vs "optional".
+  function reachPill(host, port, type, opts) {
+    opts = opts || {};
+    if (!PORTCHECK_API) {
+      if (!opts.fallbackChip) return '';
+      var chip = opts.primary
+        ? '<span class="chip primary">recommended</span>'
+        : '<span class="chip">optional</span>';
+      var hint = (type === 'domain')
+        ? ' <span class="hint" title="' + CF_NOTE.replace(/"/g, '&quot;') + '">⚠ Cloudflare?</span>'
+        : '';
+      return chip + hint;
+    }
+    return '<span class="rpill checking" data-host="' + host + '" data-port="' + port
+      + '" data-type="' + type + '">⏳ checking…</span>';
   }
 
-  // Build one labelled, copyable pool-URL line per available network.
-  function poolUrlLines(nets) {
-    return nets.map(function (n) {
-      return '<div class="poolurl">'
-        + '<span class="net ' + n.net + '">' + NET_META[n.net].label + '</span>'
-        + '<code class="copy">' + n.url + '</code>'
-        + '<span class="port-note">port ' + n.port + ' · ' + NET_META[n.net].coin + '</span>'
-        + '</div>';
-    }).join('');
+  function poolOption(url, host, port, type, opts) {
+    return '<div class="poolurl"><code class="copytext">' + url + '</code>'
+      + '<button class="copybtn" type="button" aria-label="Copy URL">copy</button> '
+      + reachPill(host, port, type, opts) + '</div>';
+  }
+
+  // Connection-details block: two explicit either/or options — Option A (IP, most
+  // reliable) and Option B (domain, alias). Each renders into its own kv row so the
+  // miner picks exactly one for the single Pool 1 slot.
+  function show(net, ip, domain, port) {
+    var b = document.getElementById('block-' + net); if (!b) return;
+    b.classList.remove('hidden');
+    var ipEl = document.getElementById(net + '-stratum-ip');
+    var domEl = document.getElementById(net + '-stratum-domain');
+    if (ipEl) ipEl.innerHTML = ip
+      ? poolOption('stratum+tcp://' + ip + ':' + port, ip, port, 'ip',
+          { fallbackChip: true, primary: true })
+      : '<span class="muted">no IP configured</span>';
+    if (domEl) domEl.innerHTML = domain
+      ? poolOption('stratum+tcp://' + domain + ':' + port, domain, port, 'domain',
+          { fallbackChip: true, primary: !ip })
+      : '<span class="muted">no domain configured</span>';
+  }
+
+  // Settle one pill from a probe result. type drives the failure hint.
+  function setPill(p, state, type) {
+    if (state === 'ok') {
+      p.className = 'rpill ok'; p.textContent = '🟢 reachable';
+      p.title = 'An external check connected to this address from the internet.';
+    } else if (state === 'bad') {
+      p.className = 'rpill bad'; p.textContent = '🔴 unreachable';
+      p.title = (type === 'domain')
+        ? "External check couldn't connect. The domain may not point here, or it's "
+          + "Cloudflare-proxied (orange cloud) — set the A record to DNS-only (grey cloud). "
+          + "Raw-TCP stratum is never proxied."
+        : "External check couldn't connect. Open the stratum port to your miners — "
+          + "it's raw TCP, not proxied through nginx/HTTPS.";
+    } else {
+      p.className = 'rpill unknown'; p.textContent = '⚪ check unavailable';
+      p.title = 'Could not reach the port-check service.';
+    }
+  }
+
+  // Probe every live pill against the off-box checker. Pills are grouped by host and
+  // sent as one /api/portcheckbatch call per host (one network round-trip for all that
+  // host's ports) — keeps us well under the checker's per-IP rate limit on reloads.
+  //
+  // Auto-retry on the 'unknown' outcome ONLY (the checker itself was unreachable: fetch
+  // threw, timed out, or returned non-200 — including a 429). A definitive 🟢/🔴 is never
+  // retried. Without this, a single transient blip on one host left its pill stuck on ⚪
+  // until a full manual page reload. We retry that one host up to MAX_TRY times with a
+  // growing backoff, so it self-heals while staying far under the prober's 40/min per-IP
+  // limit (worst case 3 calls per host, spaced seconds apart — not a reload storm).
+  var REACH_MAX_TRY = 3;
+  // Spam-refresh guard: cache the last DEFINITIVE result per host in localStorage for
+  // REACH_CACHE_TTL ms. A browser reload inside that window paints from cache and makes
+  // ZERO probe calls, so mashing refresh can't trip the prober's 40/min-per-IP cap. Only
+  // 🟢/🔴 are cached — ⚪ (checker unreachable) is never stored, so a failure always stays
+  // retry-able and self-heals on the next load. Shared across tabs (localStorage), which
+  // further cuts total calls. TTL is short enough that a real port up/down change shows
+  // within a minute.
+  var REACH_CACHE_TTL = 60000;
+  var REACH_CACHE_KEY = 'solo_reach_v1';
+  function reachCacheRead() {
+    try { return JSON.parse(localStorage.getItem(REACH_CACHE_KEY)) || {}; }
+    catch (e) { return {}; }
+  }
+  function reachCacheGet(host, ports) {
+    var e = reachCacheRead()[host];
+    if (!e || (Date.now() - e.ts) > REACH_CACHE_TTL || !e.ports) return null;
+    for (var i = 0; i < ports.length; i++) {
+      if (typeof e.ports[ports[i]] !== 'boolean') return null; // miss any needed port
+    }
+    return e.ports;
+  }
+  function reachCacheSet(host, portsMap) {
+    try {
+      var all = reachCacheRead();
+      all[host] = { ts: Date.now(), ports: portsMap };
+      localStorage.setItem(REACH_CACHE_KEY, JSON.stringify(all));
+    } catch (e) { /* private mode / quota — degrade to no cache */ }
+  }
+  function runReachChecks() {
+    if (!PORTCHECK_API) return;
+    var base = PORTCHECK_API.replace(/\/+$/, '');
+    var byHost = {};
+    [].forEach.call(document.querySelectorAll('.rpill.checking'), function (p) {
+      (byHost[p.dataset.host] = byHost[p.dataset.host] || []).push(p);
+    });
+    Object.keys(byHost).forEach(function (host) {
+      var group = byHost[host];
+      var ports = group.map(function (p) { return p.dataset.port; })
+        .filter(function (v, i, a) { return a.indexOf(v) === i; });
+      // Fresh cached result → paint from it, no network call (spam-refresh guard).
+      var cached = reachCacheGet(host, ports);
+      if (cached) {
+        group.forEach(function (p) {
+          setPill(p, cached[p.dataset.port] ? 'ok' : 'bad', p.dataset.type);
+        });
+        return;
+      }
+      var url = base + '/api/portcheckbatch?host=' + encodeURIComponent(host)
+        + '&ports=' + encodeURIComponent(ports.join(','));
+      var attempt = function (tryNo) {
+        // Only the checker-unreachable case retries; ok/bad are final.
+        var onUnknown = function () {
+          if (tryNo < REACH_MAX_TRY) {
+            setTimeout(function () { attempt(tryNo + 1); }, tryNo * 2500);
+          } else {
+            group.forEach(function (p) { setPill(p, 'unknown', p.dataset.type); });
+          }
+        };
+        fetch(url, { signal: AbortSignal.timeout(9000) })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) {
+            if (!d || !d.results) { onUnknown(); return; }
+            var open = {};
+            d.results.forEach(function (x) { open[x.port] = !!x.open; });
+            reachCacheSet(host, open); // cache only this definitive result
+            group.forEach(function (p) {
+              setPill(p, open[p.dataset.port] ? 'ok' : 'bad', p.dataset.type);
+            });
+          })
+          .catch(onUnknown);
+      };
+      attempt(1);
+    });
   }
 
   fetch('data/config.json', { cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (c) {
       if (!c) { document.getElementById('no-net').style.display = 'block'; return; }
-      var host = c.host || location.hostname;
-      var nets = [];
-      if (c.networks && c.networks.main) {
-        show('main', host, c.networks.main.stratum_port);
-        nets.push({ net: 'main', port: c.networks.main.stratum_port, url: 'stratum+tcp://' + host + ':' + c.networks.main.stratum_port });
-      }
-      if (c.networks && c.networks.test) {
-        show('test', host, c.networks.test.stratum_port);
-        nets.push({ net: 'test', port: c.networks.test.stratum_port, url: 'stratum+tcp://' + host + ':' + c.networks.test.stratum_port });
-      }
-      if (!nets.length) { document.getElementById('no-net').style.display = 'block'; return; }
-      // iPollo Pool 1 / Pool 2 cells: one line per network with its own port spelled out.
-      var lines = poolUrlLines(nets);
-      document.getElementById('ipollo-pool1').innerHTML = lines;
-      document.getElementById('ipollo-pool2').innerHTML = lines;
+      PORTCHECK_API = c.portcheck_api || '';
+      var domain = c.host || location.hostname;
+      var ip = c.public_ip || '';
+      var ep = document.getElementById('poller-endpoint');
+      if (ep) ep.textContent = 'https://' + domain + '/data/poolstats_main.json';
+      var shown = 0;
+      if (c.networks && c.networks.main) { show('main', ip, domain, c.networks.main.stratum_port); shown++; }
+      if (c.networks && c.networks.test) { show('test', ip, domain, c.networks.test.stratum_port); shown++; }
+      if (!shown) { document.getElementById('no-net').style.display = 'block'; return; }
+      // Pool 1 = this solo pool, filled per-network by show() (IP first, domain second).
+      // Pool 2 / Pool 3 are static public-pool backups in the markup.
+      // Fire the off-box reachability probes once every pill is in the DOM.
+      runReachChecks();
     })
     .catch(function () { document.getElementById('no-net').style.display = 'block'; });
 
-  // click-to-copy stratum strings
+  // Copy button → copies the sibling .copytext. The text is NEVER mutated (the
+  // feedback lives on the button, restored to a constant 'copy'), so rapid clicks
+  // always copy the real URL and can't permanently stick a label on either node.
   document.addEventListener('click', function (e) {
-    var el = e.target.closest('.copy'); if (!el || !navigator.clipboard) return;
-    navigator.clipboard.writeText(el.textContent).then(function () {
-      var old = el.textContent; el.textContent = 'copied ✓';
-      setTimeout(function () { el.textContent = old; }, 900);
+    var btn = e.target.closest('.copybtn'); if (!btn || !navigator.clipboard) return;
+    var row = btn.closest('.poolurl, .copyrow');
+    var src = row && row.querySelector('.copytext'); if (!src) return;
+    navigator.clipboard.writeText(src.textContent).then(function () {
+      btn.textContent = 'copied ✓'; btn.classList.add('ok');
+      setTimeout(function () { btn.textContent = 'copy'; btn.classList.remove('ok'); }, 900);
     }).catch(function () {});
   });
 })();

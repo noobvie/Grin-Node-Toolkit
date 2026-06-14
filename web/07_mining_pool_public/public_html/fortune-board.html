@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en" data-page="fortune-board">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fortune Board — Lottery Winners</title>
+    <meta name="description" content="Public lottery winner history — every prize paid, with a verifiable draw seed for full transparency.">
+    <meta name="robots" content="index, follow, max-image-preview:large">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Fortune Board — Lottery Winners | GRINIUM">
+    <meta property="og:description" content="Public lottery winner history — every prize paid, with a verifiable draw seed for full transparency.">
+    <meta property="og:url" content="https://pool.grin.money/fortune-board.html">
+    <meta property="og:site_name" content="GRINIUM Mining Pool">
+    <meta property="og:image" content="https://pool.grin.money/images/og-image.svg">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Fortune Board — Lottery Winners">
+    <meta name="twitter:image" content="https://pool.grin.money/images/twitter-card.svg">
+    <link rel="canonical" href="https://pool.grin.money/fortune-board.html">
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <style>
+        .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+        .cards { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+        .stat-card {
+            flex: 1; min-width: 200px; background: var(--t-card, #11160d);
+            border: 1px solid var(--t-border, #2d3748); border-radius: 10px; padding: 1.25rem;
+        }
+        .stat-card .label { color: var(--t-dim, #a0aec0); font-size: .85rem; text-transform: uppercase; letter-spacing: .05em; }
+        .stat-card .value { color: var(--t-accent, #b8e600); font-size: 1.5rem; font-weight: 700; margin-top: .3rem; word-break: break-all; }
+        .donate-box { display: none; }
+        .donate-box code {
+            display: block; background: var(--t-chip-bg, rgba(255,255,255,.06)); border: 1px solid var(--t-chip-border, var(--t-border, #2d3748));
+            border-radius: 6px; padding: .6rem .8rem; margin-top: .4rem; font-size: .85rem; word-break: break-all; color: var(--t-text, #e0e0e0);
+        }
+        .table-wrap { background: var(--t-card, #11160d); border: 1px solid var(--t-border, #2d3748); border-radius: 10px; overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; min-width: 640px; }
+        th, td { padding: .8rem 1rem; text-align: left; border-bottom: 1px solid var(--t-border, #2d3748); font-size: .9rem; }
+        th { color: var(--t-dim, #a0aec0); text-transform: uppercase; font-size: .75rem; letter-spacing: .05em; }
+        td .amount { color: var(--t-accent, #b8e600); font-weight: 700; }
+        td .seed { color: var(--t-dim, #a0aec0); font-size: .78rem; }
+        .pot-tag { display: inline-block; padding: .1rem .5rem; border-radius: 4px; font-size: .72rem; background: var(--t-chip-bg, rgba(255,255,255,.08)); border: 1px solid var(--t-chip-border, var(--t-border, #2d3748)); }
+        .empty, .loading { padding: 2rem; text-align: center; color: var(--t-dim, #a0aec0); }
+        .more-btn {
+            display: block; margin: 1.25rem auto 0; padding: .6rem 1.5rem; cursor: pointer;
+            background: var(--t-accent, #b8e600); color: var(--t-on-accent, #080b07); border: none; border-radius: 6px; font-weight: 700;
+        }
+        .more-btn[disabled] { opacity: .5; cursor: default; }
+        .audit-note { color: var(--t-dim, #a0aec0); font-size: .82rem; margin-top: 1rem; }
+    </style>
+    <link rel="stylesheet" href="/css/themes.css">
+</head>
+<body>
+
+    <header>
+        <div class="brand"><span class="dot" aria-hidden="true"></span><span data-brand="pool_name">GRINIUM</span></div>
+        <nav class="header-nav" aria-label="Main">
+            <a href="index.html" class="nav-link">Dashboard</a>
+            <a href="miners-stats.html" class="nav-link">Miners</a>
+            <a href="fortune-board.html" class="nav-link active">Fortune Board</a>
+            <a href="donate.html" class="nav-link">Donate</a>
+            <a href="index.html#info" class="nav-link">Info</a>
+        </nav>
+        <div class="nav-right">
+            <div class="theme-switcher"></div>
+            <a class="btn primary sm" href="index.html#connect">Start Mining</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <h2 class="page-title">🎉 Fortune Board</h2>
+        <p class="audit-note">Every prize the pool has ever paid — winner, amount, and date. Each draw lists the
+            Grin block height and hash used as its random seed, so anyone can verify the result was fair.</p>
+
+        <div class="cards" style="margin-top:1rem;">
+            <div class="stat-card">
+                <div class="label">Prize Pool</div>
+                <div class="value" data-brand="prize-pool">—</div>
+            </div>
+            <div class="stat-card donate-box" data-brand-show="donation">
+                <div class="label">Donate to the prize pool</div>
+                <code data-brand="donation-address"></code>
+            </div>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Event</th><th>Winner</th><th>Pot</th><th>Amount</th><th>Date</th><th>Draw seed (audit)</th>
+                    </tr>
+                </thead>
+                <tbody id="winners-body">
+                    <tr><td colspan="6" class="loading">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <button id="more-btn" class="more-btn" style="display:none;" onclick="loadWinners()">Load more</button>
+    </div>
+
+    <footer>
+        <span data-brand="pool_name">GRINIUM</span> — Fortune Board ·
+        <span data-brand="attribution">Provably fair lottery</span>
+    </footer>
+
+    <script>
+        // Paginated fortune board, fed by the public winner-history endpoint.
+        var offset = 0;
+        var PAGE = 25;
+        var total = 0;
+        var loadedAny = false;
+
+        function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+        function fmtDate(sec) { return sec ? new Date(sec * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'; }
+        function shortHash(h) { return h ? esc(h.slice(0, 10)) + '…' : '—'; }
+
+        function loadWinners() {
+            var btn = document.getElementById('more-btn');
+            btn.disabled = true;
+            fetch('/api/public/lottery/winners?limit=' + PAGE + '&offset=' + offset, { credentials: 'same-origin' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (json) {
+                    var body = document.getElementById('winners-body');
+                    if (!json || !json.data) { if (!loadedAny) body.innerHTML = '<tr><td colspan="6" class="empty">Winners will appear here after the first draw.</td></tr>'; return; }
+                    total = json.data.total || 0;
+                    var rows = json.data.winners || [];
+                    if (!loadedAny) body.innerHTML = '';
+                    if (!rows.length && !loadedAny) {
+                        body.innerHTML = '<tr><td colspan="6" class="empty">Winners will appear here after the first draw.</td></tr>';
+                        return;
+                    }
+                    rows.forEach(function (w) {
+                        loadedAny = true;
+                        var tr = document.createElement('tr');
+                        tr.innerHTML =
+                            '<td>' + esc(w.event) + '</td>' +
+                            '<td>' + esc(w.address) + '</td>' +
+                            '<td><span class="pot-tag">' + (w.pot === 'a' ? 'Share-weighted' : 'Equal chance') + '</span></td>' +
+                            '<td><span class="amount">' + (w.amount || 0).toFixed(4) + ' GRIN</span></td>' +
+                            '<td>' + fmtDate(w.drawn_at) + '</td>' +
+                            '<td class="seed">#' + esc(w.seed_height || '?') + ' · ' + shortHash(w.seed_hash) + '</td>';
+                        body.appendChild(tr);
+                    });
+                    offset += rows.length;
+                    btn.style.display = offset < total ? 'block' : 'none';
+                    btn.disabled = false;
+                })
+                .catch(function () {
+                    if (!loadedAny) document.getElementById('winners-body').innerHTML =
+                        '<tr><td colspan="6" class="empty">Could not load winners.</td></tr>';
+                });
+        }
+        loadWinners();
+    </script>
+    <script src="/js/public-theme.js"></script>
+    <script src="/js/branding.js"></script>
+</body>
+</html>

@@ -320,31 +320,30 @@
        the operator maps nickname → address from their own wallet address book.
        Privacy win (no address on server, none on page) and less code.
 
-   What survives: the list of NICKNAME PREFIXES. It is captured by ONE prompt in
-   the existing "S) Stats web page" deploy — no new top-level menu.
+   What survives: an on/off TOGGLE, captured by ONE prompt in the existing
+   "S) Stats web page" deploy — no new top-level menu, no names to pre-register.
 
  ─── IDENTITY: WORKER NAME → PERSON (NICKNAME) ──────────────────────────────────
 
-   Each person mines under a nickname PREFIX; rigs append any suffix. Use neutral
-   nicknames, NOT real names (the page is public):
-       you    : alpha1 alpha2 ... alpha10
-       friend : bravo1 bravo2 bravo3
+   Each person mines under a NICKNAME; rigs append ".NN". Use neutral nicknames,
+   NOT real names (the page is public):
+       you    : alpha.01 alpha.02 ... alpha.10
+       friend : bravo.01 bravo.02 bravo.03
 
-   Grouping rule: a worker belongs to the registered prefix it STARTS WITH (use
-   LONGEST-prefix match). Do NOT auto-strip trailing digits — a typo (brav2,
-   alphaa5) would silently become a phantom person and skew the split. Prefixes
-   are REGISTERED explicitly (S-deploy prompt); any worker matching no prefix →
-   "unassigned" bucket, shown plainly so typos are visible, not swallowed.
+   Grouping rule: a worker's nickname is the text BEFORE THE FIRST DOT
+   (alpha.01 → alpha). Grouping is AUTOMATIC — nothing is registered, and there is
+   no "unassigned" bucket. A worker name with no dot is simply its own group.
 
-   Requirement on miners: set the stratum username (login) to <prefix><n>.
+   Requirement on miners: set the stratum username (login) to <nickname>.<NN>.
    That is the ONLY discipline the whole scheme depends on.
 
  ─── CONFIG  /opt/grin/conf/grin_solo_payment.json ──────────────────────────────
 
    {
-     "prefixes": ["alpha", "bravo"]      // nickname prefixes only — NO addresses
+     "enabled": true                      // on/off only — no names, NO addresses
    }
-   (block_reward = 60 and maturity = 1440 are hardcoded, not config.)
+   (Grouping is automatic by nickname; block_reward = 60 and maturity = 1440 are
+   hardcoded, not config.)
 
  ─── DATA: APPEND-ONLY DAILY LEDGER  (the only new moving part) ──────────────────
 
@@ -367,8 +366,9 @@
  ─── CALCULATION (per period) ───────────────────────────────────────────────────
 
    reward_P      = Σ blocks_matured over P  × 60 GRIN
-   person_diff   = Σ share-diff of all workers whose prefix = person, over P
-   total_diff    = Σ share-diff of ALL workers (incl. unassigned), over P
+   person_diff   = Σ share-diff of all workers whose nickname = person, over P
+                   (nickname = text before the first dot)
+   total_diff    = Σ share-diff of ALL workers, over P
    person_payout = reward_P × person_diff / total_diff
 
    Period windows:
@@ -391,10 +391,9 @@
      Matured blocks: 5     Total reward: 300.000 GRIN
        alpha   10 workers   77.0%   231.000 GRIN
        bravo    3 workers   23.0%    69.000 GRIN
-       unassigned  0                   —        (ok — none)
 
-   PHASE 2 — Per-person "account" view (2miners-style; key = nickname prefix)
-     Clicking a nickname opens its detail. Lookup key is the PUBLIC prefix
+   PHASE 2 — Per-person "account" view (2miners-style; key = nickname)
+     Clicking a nickname opens its detail. Lookup key is the PUBLIC nickname
      (guessable) — fine for a consenting friend group; this is NOT the semi-
      private "look up by full address" model 2miners uses.
 
@@ -437,8 +436,8 @@
               │     · (optional) chain-verify each block before counting
               └─> recompute public split JSON for each period (daily/weekly/
                   monthly/yearly) → /var/www/<stats>/data/split_main.json
-                    · read prefixes from grin_solo_payment.json
-                    · per person: Σ share-diff (longest-prefix match), unassigned
+                    · check enabled flag in grin_solo_payment.json
+                    · per nickname (text before first dot): Σ share-diff
                     · reward_P = Σ blocks_matured × 60 ; payout = proportion
                     · nicknames + % + GRIN + hashrate ONLY (no addresses)
 
@@ -448,25 +447,24 @@
  ─── NEW / TOUCHED FILES ────────────────────────────────────────────────────────
 
    scripts/lib/07_mining_block_collector.py   extend: daily ledger + split JSON
-   scripts/07_grin_mining_solo.sh             S-deploy: prompt+write prefixes
+   scripts/07_grin_mining_solo.sh             S-deploy: prompt+write on/off toggle
                                               (NO new menu option)
    web/07_mining_pool_solo/index.html         add: Phase-1 panel + Phase-2 views
-   /opt/grin/conf/grin_solo_payment.json      runtime config: prefixes only
+   /opt/grin/conf/grin_solo_payment.json      runtime config: {"enabled": true}
    /opt/grin/solo-stats/payment_ledger_main.json   runtime append-only ledger
    /var/www/<stats>/data/split_main.json      public output (no addresses)
 
  ─── EDGE CASES / GUARDRAILS ────────────────────────────────────────────────────
 
-   · Unassigned worker (typo / unregistered prefix) → own bucket, shown plainly;
-     it still counts in total_diff so nobody is over-paid, and the operator sees
-     the leak and can fix the label.
-   · Prefix collision (one prefix is a substring of another, e.g. "al"/"alpha")
-     → require LONGEST-prefix match; validate prefixes are non-overlapping when
-     written at S-deploy.
+   · Worker name with no dot → it is its own nickname/group (e.g. "rig1" → rig1).
+     Nothing is dropped; it still counts in total_diff so nobody is over-paid.
+   · Two people picking the same nickname → they merge into one payee (any name
+     collision would). Pick distinct neutral nicknames; the dot only separates the
+     rig number, so "alpha.01" and "alpha.02" are intentionally the same person.
    · Orphaned block → excluded by counting only matured blocks; optionally
      chain-verify each block (collector's found-list is NOT chain-verified).
-   · Mid-period relabel / rig changes owner → operator edits prefixes / accepts
-     it from next period; ledger is per-day so history stays intact.
+   · Mid-period relabel / rig changes owner → miner just renames its worker
+     (new nickname applies from next share); ledger is per-day so history intact.
    · Privacy: nicknames are public and guessable; use neutral labels. No address
      is ever stored or shown. Income-per-nickname IS public by design (operator
      chose % + GRIN public) — acceptable for a consenting friend group only.
@@ -785,10 +783,10 @@
    3) STATS & WEB
         1) Live dashboard      terminal stats            (was L)
         2) Deploy / update     nginx stats page          (was S)
-                                 · prompts payment-split prefixes
+                                 · prompts payment-split on/off
                                  · prompts access lock (Basic Auth)
         3) Access lock         set / change / remove Basic Auth (quick edit)
-        4) Payment prefixes    edit nickname prefixes (quick edit)
+        4) Payment split       enable / disable (quick edit)
         0) Back
 
    4) HEALTH / WATCHDOGS
@@ -807,7 +805,7 @@
      D/I Publish Stratum ........ 2 ▸ 3
      E/J Restrict Stratum ....... 2 ▸ 4
      L  Live stats .............. 3 ▸ 1
-     S  Web page ................ 3 ▸ 2  (+ payment prefixes + access lock)
+     S  Web page ................ 3 ▸ 2  (+ payment split + access lock)
      W  Stratum watchdog ........ 4 ▸ 2
      (new) Wallet ............... 1 ▸ *
      (new) Node-sync watchdog ... 4 ▸ 1

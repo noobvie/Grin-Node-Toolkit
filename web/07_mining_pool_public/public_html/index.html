@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en" data-page="home">
+<head>
+    <!-- ===== ESSENTIAL META TAGS ===== -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="language" content="English">
+    <meta name="revisit-after" content="7 days">
+    <meta name="author" content="GRINIUM Mining Pool">
+
+    <!-- ===== DESCRIPTION & KEYWORDS ===== -->
+    <title>GRINIUM — Fast & Secure Grin Mining Pool | Uranium Network</title>
+    <meta name="description" content="GRINIUM is a high-performance Grin mining pool with real-time PPLNS rewards, Tor-based anonymous payouts, and advanced monitoring. Mine Grin efficiently with industry-leading uptime and security.">
+    <meta name="keywords" content="Grin mining pool, cryptocurrency mining, PPLNS rewards, Stratum protocol, Tor payouts, mining pool software, blockchain, crypto mining, uranium, Cuckatoo32">
+
+    <!-- ===== OPEN GRAPH (SOCIAL MEDIA) ===== -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="GRINIUM — Fast & Secure Grin Mining Pool">
+    <meta property="og:description" content="Join GRINIUM mining pool for Grin cryptocurrency. Real-time PPLNS distribution, anonymous Tor payouts, and 24/7 monitoring dashboard.">
+    <meta property="og:url" content="https://pool.grin.money/">
+    <meta property="og:site_name" content="GRINIUM Mining Pool">
+    <meta property="og:image" content="https://pool.grin.money/images/og-image.svg">
+    <meta property="og:image:type" content="image/svg+xml">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:locale" content="en_US">
+
+    <!-- ===== TWITTER CARD ===== -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="GRINIUM — Fast & Secure Grin Mining Pool">
+    <meta name="twitter:description" content="High-performance Grin mining pool with real-time PPLNS rewards, Tor-based anonymous payouts, and advanced monitoring tools.">
+    <meta name="twitter:image" content="https://pool.grin.money/images/twitter-card.svg">
+    <meta name="twitter:domain" content="pool.grin.money">
+    <meta name="twitter:site" content="@GriniumPool">
+
+    <!-- ===== CANONICAL & HREFLANG ===== -->
+    <link rel="canonical" href="https://pool.grin.money/">
+    <link rel="alternate" hreflang="en" href="https://pool.grin.money/">
+
+    <!-- ===== STRUCTURED DATA (JSON-LD) ===== -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "GRINIUM Mining Pool",
+      "description": "High-performance Grin cryptocurrency mining pool with PPLNS rewards distribution",
+      "url": "https://pool.grin.money/",
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": {
+          "@type": "EntryPoint",
+          "urlTemplate": "https://pool.grin.money/search?q={search_term_string}"
+        }
+      }
+    }
+    </script>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "name": "GRINIUM Mining Pool",
+      "description": "Secure Grin cryptocurrency mining pool with real-time monitoring",
+      "url": "https://pool.grin.money/",
+      "logo": "https://pool.grin.money/images/logo.svg",
+      "sameAs": [
+        "https://twitter.com/GriniumPool",
+        "https://github.com/griniumpool"
+      ]
+    }
+    </script>
+
+    <!-- ===== ADDITIONAL SEO ===== -->
+    <meta name="theme-color" content="#080b07">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="GRINIUM Pool">
+    <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+    <link rel="apple-touch-icon" href="/images/apple-touch-icon.svg">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="alternate" type="application/rss+xml" href="/feed.xml">
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <link rel="stylesheet" href="/css/themes.css">
+</head>
+<body>
+    <header>
+        <div class="brand"><span class="dot" aria-hidden="true"></span><span data-brand="pool_name">GRINIUM</span></div>
+        <nav class="header-nav" aria-label="Main">
+            <a href="index.html" class="nav-link active">Dashboard</a>
+            <a href="miners-stats.html" class="nav-link">Miners</a>
+            <a href="payment-history.html" class="nav-link">Payouts</a>
+            <a href="fortune-board.html" class="nav-link">🎁 Rewards</a>
+            <a href="index.html#info" class="nav-link">Info</a>
+            <a href="account-settings.html" class="nav-link">My Account</a>
+        </nav>
+        <div class="nav-right">
+            <div class="theme-switcher"></div>
+            <a class="btn primary sm" href="index.html#connect">Start Mining</a>
+        </div>
+    </header>
+
+    <div class="wrap">
+        <div class="page-head">
+            <div>
+                <h1 data-brand="hero_heading">Pool Dashboard</h1>
+                <div class="sub" data-brand="hero_subheading">Grin Cuckatoo32 · PPLNS rewards · anonymous Tor payouts</div>
+            </div>
+            <span class="badge warn" id="pool-status">Connecting…</span>
+        </div>
+
+        <!-- Live service health: pool API, node (peers/sync), wallet — public /api/pool/status -->
+        <div class="status-strip" id="status-strip" aria-label="Service status">
+            <div class="status-pill" id="svc-pool"><span class="status-dot"></span><span class="status-text">Pool service</span></div>
+            <div class="status-pill" id="svc-node"><span class="status-dot"></span><span class="status-text">Node</span></div>
+            <div class="status-pill" id="svc-wallet"><span class="status-dot"></span><span class="status-text">Wallet</span></div>
+        </div>
+
+        <div class="grid cols-4">
+            <div class="stat-card">
+                <div class="stat-label">Pool Hashrate (1h)</div>
+                <div class="stat-value" id="stat-hashrate">—</div>
+                <div class="stat-delta" id="stat-hashrate-24h"></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Miners Online</div>
+                <div class="stat-value" id="stat-miners">—</div>
+                <div class="stat-delta" id="stat-connections"></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Blocks (24h)</div>
+                <div class="stat-value" id="stat-blocks-24h">—</div>
+                <div class="stat-delta" id="stat-blocks-7d"></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Pool Fee</div>
+                <div class="stat-value" id="stat-fee">—</div>
+                <div class="stat-delta">PPLNS</div>
+            </div>
+        </div>
+
+        <div class="grid cols-4" style="margin-top:14px">
+            <div class="stat-card">
+                <div class="stat-label">Blocks Found</div>
+                <div class="stat-value" id="stat-blocks-total">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Last Block</div>
+                <div class="stat-value" id="stat-last-block">—</div>
+                <div class="stat-delta" id="stat-last-block-ago"></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Confirmed Rewards</div>
+                <div class="stat-value" id="stat-reward">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Min Payout</div>
+                <div class="stat-value" id="stat-min-payout">—</div>
+                <div class="stat-delta" id="stat-network"></div>
+            </div>
+        </div>
+
+        <div class="section-title" id="connect">Point your miner at your nearest region</div>
+        <div class="region-grid" id="region-grid">
+            <div class="callout" id="region-fallback">
+                <span>⛏ Point your miner at <code data-brand="stratum_url">stratum host not configured</code></span>
+            </div>
+        </div>
+        <div class="connect-note" id="connect-note" style="display:none">
+            <div class="kv">
+                <span class="k">Worker</span><span><code>&lt;your_grin_address&gt;.rig1</code> <span class="dim">— your Grin address is your login; <code>.rig1</code> names this machine (any label)</span></span>
+                <span class="k">Password</span><span><code>x</code> <span class="dim">— anything; it's ignored. No account or registration needed.</span></span>
+            </div>
+            <div class="region-meta">Algorithm <strong>Cuckatoo32</strong> · same port for every region · ASICs (iPollo G1, etc.): paste the host:port above into your miner's pool/stratum field.</div>
+        </div>
+
+        <div class="section-title">Recent activity</div>
+        <div class="grid cols-2">
+            <div class="card table-card">
+                <div class="card-head"><h3>Recent Blocks</h3><a href="miners-stats.html" class="dim" style="font-size:13px">View all →</a></div>
+                <table class="data-table" aria-label="Recent blocks">
+                    <thead><tr><th>Height</th><th>Status</th><th class="num">Reward</th><th class="num">Found</th></tr></thead>
+                    <tbody id="recent-blocks">
+                        <tr><td colspan="4" class="dim">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="card table-card">
+                <div class="card-head"><h3>Recent Payments</h3><a href="payment-history.html" class="dim" style="font-size:13px">View all →</a></div>
+                <table class="data-table" aria-label="Recent payments">
+                    <thead><tr><th>Miner</th><th>Method</th><th class="num">Amount</th><th class="num">When</th></tr></thead>
+                    <tbody id="recent-payments">
+                        <tr><td colspan="4" class="dim">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="section-title" id="info">Pool info, rules &amp; support</div>
+        <div class="grid cols-2">
+            <div class="card">
+                <div class="card-head"><h3>Rules &amp; payouts</h3></div>
+                <ul class="info-list">
+                    <li><strong>PPLNS</strong> (Pay Per Last N Shares) — rewards follow recent contributed work</li>
+                    <li>No account, email, or registration — your Grin address <em>is</em> your identity</li>
+                    <li>Per-miner variable difficulty (vardiff) tunes itself to your hardware</li>
+                    <li>Payouts are sent automatically over <strong>Tor</strong> to your Grin address; if your wallet is unreachable, retried every 6h for up to 7 days</li>
+                    <li>Block rewards mature after <strong>1,440 confirmations</strong> (~24h) before they are credited</li>
+                    <li>Orphaned blocks are detected automatically and their rewards reversed fairly</li>
+                </ul>
+            </div>
+            <div class="card">
+                <div class="card-head"><h3>Mining software &amp; support</h3></div>
+                <p class="dim" style="margin:0 0 10px">Any Cuckatoo32 miner works — GPU (lolMiner, GMiner, SRBMiner-MULTI) or ASIC (iPollo G1 / G1-Mini). Point it at your nearest region's host:port above, using <code>grin_address.worker_name</code> as the username (password ignored).</p>
+                <ul class="info-list" id="info-contact">
+                    <li style="display:none" id="info-email">Email: <span data-brand="contact_email"></span></li>
+                    <li style="display:none" data-brand="social-discord"><a data-brand="social-discord" href="#" rel="noopener" target="_blank">Discord</a></li>
+                    <li style="display:none" data-brand="social-telegram"><a data-brand="social-telegram" href="#" rel="noopener" target="_blank">Telegram</a></li>
+                    <li style="display:none" data-brand="social-twitter"><a data-brand="social-twitter" href="#" rel="noopener" target="_blank">Twitter / X</a></li>
+                    <li style="display:none" data-brand="social-website"><a data-brand="social-website" href="#" rel="noopener" target="_blank">Website</a></li>
+                </ul>
+                <p class="dim" id="info-no-contact" style="margin:6px 0 0">Contact channels are configured by the operator (admin → Branding → Social links).</p>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p data-brand="footer_text">GRINIUM — Grin Mining Pool | Professional • Reliable • Secure</p>
+        <div data-brand="page-links"></div>
+        <p data-brand="attribution" style="opacity:0.7;font-size:0.95em;margin-top:6px;">Powered by the Grin Node Toolkit</p>
+    </footer>
+
+    <script src="/js/auth.js"></script>
+    <script src="/js/public-theme.js"></script>
+    <script src="/js/branding.js"></script>
+    <script>
+        // Theme switching is handled site-wide by /js/public-theme.js (select rendered
+        // into the .theme-switcher container in the nav); branding.js applies the
+        // operator's default + SEO/content hooks.
+
+        // ═════════════════════════════════════════════════════════════════
+        // Live dashboard data — public endpoints, no auth required.
+        //   /api/pool/stats        blocks + miners summary
+        //   /api/stratum/hashrate  pool GPS aggregates
+        //   /api/config/pool-info  fee / min payout / network
+        //   /api/pool/blocks       recent blocks
+        //   /api/pool/payments     recent confirmed payouts
+        // ═════════════════════════════════════════════════════════════════
+
+        function setText(id, text) {
+            var el = document.getElementById(id);
+            if (el) el.textContent = text;
+        }
+
+        function setValue(id, value, unit) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.textContent = '';
+            el.appendChild(document.createTextNode(value));
+            if (unit) {
+                var small = document.createElement('small');
+                small.textContent = ' ' + unit;
+                el.appendChild(small);
+            }
+        }
+
+        // Display units follow the toolkit convention: G/s, kG/s, MG/s.
+        function fmtGps(gps) {
+            if (!isFinite(gps)) return ['—', ''];
+            if (gps >= 1e6) return [(gps / 1e6).toFixed(2), 'MG/s'];
+            if (gps >= 1e3) return [(gps / 1e3).toFixed(2), 'kG/s'];
+            return [gps.toFixed(2), 'G/s'];
+        }
+
+        function timeAgo(unixSeconds) {
+            if (!unixSeconds) return '';
+            var s = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
+            if (s < 60) return s + 's';
+            if (s < 3600) return Math.floor(s / 60) + 'm';
+            if (s < 86400) return Math.floor(s / 3600) + 'h';
+            return Math.floor(s / 86400) + 'd';
+        }
+
+        function truncAddr(addr) {
+            addr = String(addr || '');
+            return addr.length > 16 ? addr.slice(0, 9) + '…' + addr.slice(-4) : addr;
+        }
+
+        function setPoolStatus(ok) {
+            var el = document.getElementById('pool-status');
+            if (!el) return;
+            el.className = 'badge ' + (ok ? 'ok' : 'bad');
+            el.textContent = ok ? 'Pool online' : 'Pool unreachable';
+        }
+
+        async function loadStats() {
+            var anyOk = false;
+            try {
+                var stats = await Auth.fetch('/api/pool/stats');
+                if (stats) {
+                    anyOk = true;
+                    setValue('stat-miners', stats.active_miners || 0);
+                    setText('stat-connections', (stats.active_connections || 0) + ' connections');
+                    setValue('stat-blocks-24h', stats.blocks_24h || 0);
+                    setText('stat-blocks-7d', (stats.blocks_7d || 0) + ' in 7 days');
+                    setValue('stat-blocks-total', stats.total_blocks_found || 0);
+                    setValue('stat-reward', (stats.confirmed_reward || 0).toFixed(0), 'GRIN');
+                }
+            } catch (e) { /* tile keeps placeholder */ }
+
+            try {
+                var hr = await Auth.fetch('/api/stratum/hashrate');
+                if (hr) {
+                    anyOk = true;
+                    var g1 = fmtGps(hr.pool_hashrate_1h_gps || 0);
+                    setValue('stat-hashrate', g1[0], g1[1]);
+                    var g24 = fmtGps(hr.pool_hashrate_24h_gps || 0);
+                    setText('stat-hashrate-24h', g24[0] + ' ' + g24[1] + ' (24h avg)');
+                }
+            } catch (e) { /* tile keeps placeholder */ }
+
+            try {
+                var info = await Auth.fetch('/api/config/pool-info');
+                if (info) {
+                    anyOk = true;
+                    setValue('stat-fee', (info.pool_fee_percent != null ? info.pool_fee_percent : 0).toFixed(1), '%');
+                    setValue('stat-min-payout', (info.min_withdrawal != null ? info.min_withdrawal : 0).toFixed(1), 'GRIN');
+                    setText('stat-network', info.network || '');
+                }
+            } catch (e) { /* tile keeps placeholder */ }
+
+            setPoolStatus(anyOk);
+        }
+
+        function blockBadge(status) {
+            var span = document.createElement('span');
+            if (status === 'confirmed') { span.className = 'badge ok'; span.textContent = 'mature'; }
+            else if (status === 'orphaned') { span.className = 'badge bad'; span.textContent = 'orphan'; }
+            else { span.className = 'badge warn'; span.textContent = 'immature'; }
+            return span;
+        }
+
+        function emptyRow(text) {
+            var tr = document.createElement('tr');
+            var td = document.createElement('td');
+            td.colSpan = 4;
+            td.className = 'dim';
+            td.textContent = text;
+            tr.appendChild(td);
+            return tr;
+        }
+
+        // All cell content goes through textContent — addresses are miner-supplied.
+        async function loadBlocks() {
+            var tbody = document.getElementById('recent-blocks');
+            if (!tbody) return;
+            try {
+                var blocks = await Auth.fetch('/api/pool/blocks?limit=6');
+                tbody.textContent = '';
+                if (!Array.isArray(blocks) || blocks.length === 0) {
+                    tbody.appendChild(emptyRow('No blocks found yet'));
+                    return;
+                }
+                blocks.forEach(function (b) {
+                    var tr = document.createElement('tr');
+                    var tdH = document.createElement('td');
+                    tdH.className = 'mono';
+                    tdH.textContent = Number(b.height || 0).toLocaleString('en-US');
+                    var tdS = document.createElement('td');
+                    tdS.appendChild(blockBadge(b.status));
+                    var tdR = document.createElement('td');
+                    tdR.className = 'num';
+                    tdR.textContent = Number(b.reward || 0).toFixed(2);
+                    var tdT = document.createElement('td');
+                    tdT.className = 'num';
+                    tdT.textContent = timeAgo(b.found_at || b.created_at);
+                    tr.appendChild(tdH); tr.appendChild(tdS); tr.appendChild(tdR); tr.appendChild(tdT);
+                    tbody.appendChild(tr);
+                });
+            } catch (e) {
+                tbody.textContent = '';
+                tbody.appendChild(emptyRow('Block data unavailable'));
+            }
+        }
+
+        async function loadPayments() {
+            var tbody = document.getElementById('recent-payments');
+            if (!tbody) return;
+            try {
+                var payments = await Auth.fetch('/api/pool/payments?limit=6');
+                tbody.textContent = '';
+                if (!Array.isArray(payments) || payments.length === 0) {
+                    tbody.appendChild(emptyRow('No payouts yet'));
+                    return;
+                }
+                payments.forEach(function (p) {
+                    var tr = document.createElement('tr');
+                    var tdA = document.createElement('td');
+                    tdA.className = 'addr';
+                    tdA.title = '';
+                    tdA.textContent = truncAddr(p.grin_address);
+                    var tdM = document.createElement('td');
+                    var badge = document.createElement('span');
+                    badge.className = 'badge info';
+                    badge.textContent = 'tor';
+                    tdM.appendChild(badge);
+                    var tdV = document.createElement('td');
+                    tdV.className = 'num';
+                    tdV.textContent = Number(p.amount || 0).toFixed(2);
+                    var tdT = document.createElement('td');
+                    tdT.className = 'num';
+                    tdT.textContent = timeAgo(p.confirmed_at || p.created_at);
+                    tr.appendChild(tdA); tr.appendChild(tdM); tr.appendChild(tdV); tr.appendChild(tdT);
+                    tbody.appendChild(tr);
+                });
+            } catch (e) {
+                tbody.textContent = '';
+                tbody.appendChild(emptyRow('Payment data unavailable'));
+            }
+        }
+
+        // ── Service status strip (pool / node / wallet) ──────────────────────
+        function setPill(id, state, label) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.className = 'status-pill ' + state; // state: ok | bad | warn
+            var t = el.querySelector('.status-text');
+            if (t && label) t.textContent = label;
+        }
+
+        async function loadServiceStatus() {
+            try {
+                var s = await Auth.fetch('/api/pool/status');
+                if (!s) throw new Error('no status');
+                setPill('svc-pool', s.pool && s.pool.ok ? 'ok' : 'bad', 'Pool service');
+                if (s.node && s.node.reachable) {
+                    setPill('svc-node', s.node.synced ? 'ok' : 'warn',
+                        'Node · ' + (s.node.peers || 0) + ' peers' + (s.node.synced ? '' : ' · syncing'));
+                } else {
+                    setPill('svc-node', 'bad', 'Node offline');
+                }
+                setPill('svc-wallet', s.wallet && s.wallet.reachable ? 'ok' : 'bad',
+                    s.wallet && s.wallet.reachable ? 'Wallet online' : 'Wallet offline');
+            } catch (e) {
+                setPill('svc-pool', 'bad', 'Pool service');
+                setPill('svc-node', 'bad', 'Node offline');
+                setPill('svc-wallet', 'bad', 'Wallet offline');
+            }
+        }
+
+        // ── Regional stratum hosts + live up/down pill ───────────────────────
+        // Operator-declared regions from /api/pool/stats/regions (gives per-region `status`
+        // alongside the host). Each card shows the region's host:port + a live availability
+        // pill; the shared worker/password note below is identical for every region. All
+        // operator-supplied values rendered via textContent. Falls back to the single callout.
+        var BASE_PORT = '';   // pool default port — used when a region's stratum_url omits one
+
+        function regionStatusMeta(s) {
+            switch (s) {
+                case 'online':  return { cls: 's-online',  label: '● Online' };
+                case 'stale':   return { cls: 's-stale',   label: '● Degraded' };
+                case 'offline': return { cls: 's-offline', label: '● Offline' };
+                default:        return { cls: 's-unknown', label: '○ Unknown' };
+            }
+        }
+
+        // The host:port a region resolves to (region may pin a port via host:port; else default).
+        function regionHostPort(r) {
+            var parts = String(r.stratum_url || '').split(':');
+            return parts[0] + ':' + (parts[1] || BASE_PORT || '3333');
+        }
+
+        async function loadRegions() {
+            var grid = document.getElementById('region-grid');
+            if (!grid) return;
+            try {
+                // Capture the pool's default stratum port once (for regions with no explicit port).
+                if (!BASE_PORT) {
+                    try {
+                        var b = await Auth.fetch('/api/public/branding');
+                        if (b && b.data && b.data.connection) BASE_PORT = b.data.connection.stratum_port || '';
+                    } catch (e) { /* fall back to 3333 in regionHostPort */ }
+                }
+                var data = await Auth.fetch('/api/pool/stats/regions');
+                var regions = (data && Array.isArray(data.regions)) ? data.regions : [];
+                // Only operator-declared, active regions are connect targets (need a host).
+                regions = regions.filter(function (r) { return r.stratum_url && r.is_active !== false; })
+                                 .sort(function (a, b) { return (a.region || '').localeCompare(b.region || ''); });
+                var note = document.getElementById('connect-note');
+                // A single-region pool (one server, no satellites) shows the simple
+                // "point your miner here" callout, not a 1-card grid. The multi-region
+                // grid appears only once a second zone (satellite) reports in.
+                if (regions.length < 2) { if (note) note.style.display = 'none'; return; } // keep fallback callout
+                grid.textContent = '';
+                regions.forEach(function (r) {
+                    var hostport = regionHostPort(r);
+                    var card = document.createElement('div');
+                    card.className = 'region-card';
+
+                    var head = document.createElement('div');
+                    head.className = 'region-head';
+                    var name = document.createElement('span');
+                    name.className = 'region-name';
+                    name.textContent = r.label || r.region;
+                    head.appendChild(name);
+                    var pill = document.createElement('span');
+                    var m = regionStatusMeta(r.status);
+                    pill.className = 'region-pill ' + m.cls;
+                    pill.textContent = m.label;
+                    head.appendChild(pill);
+                    card.appendChild(head);
+
+                    var hostRow = document.createElement('div');
+                    hostRow.className = 'region-host';
+                    var code = document.createElement('code');
+                    code.textContent = hostport;
+                    hostRow.appendChild(code);
+                    var copy = document.createElement('button');
+                    copy.className = 'btn sm';
+                    copy.type = 'button';
+                    copy.textContent = 'Copy';
+                    copy.addEventListener('click', function () {
+                        var done = function () { copy.textContent = 'Copied!'; setTimeout(function () { copy.textContent = 'Copy'; }, 1500); };
+                        if (navigator.clipboard) { navigator.clipboard.writeText(hostport).then(done); }
+                        else { done(); }
+                    });
+                    hostRow.appendChild(copy);
+                    card.appendChild(hostRow);
+
+                    if (r.miners > 0) {
+                        var meta = document.createElement('div');
+                        meta.className = 'region-meta';
+                        meta.textContent = r.miners + (r.miners === 1 ? ' miner' : ' miners') + ' active';
+                        card.appendChild(meta);
+                    }
+                    grid.appendChild(card);
+                });
+                if (note) note.style.display = '';
+            } catch (e) { /* keep fallback callout */ }
+        }
+
+        function refresh() {
+            loadStats();
+            loadBlocks();
+            loadPayments();
+            loadServiceStatus();
+            loadRegions();   // re-poll so the per-region up/down pills stay current
+        }
+
+        // Info section contact block: branding.js fills the email text + toggles the social
+        // rows, but not the email row's visibility or the "no channels" note — do that here.
+        async function loadInfoContact() {
+            try {
+                var r = await fetch('/api/public/branding');
+                var json = r.ok ? await r.json() : null;
+                var data = (json && json.data) ? json.data : {};
+                var email = data.pool && data.pool.contact_email;
+                var social = (data.branding && data.branding.social) || {};
+                if (email) {
+                    var li = document.getElementById('info-email');
+                    if (li) li.style.display = '';
+                }
+                var anyChannel = email || ['discord', 'telegram', 'twitter', 'website'].some(function (k) { return social[k]; });
+                if (anyChannel) {
+                    var note = document.getElementById('info-no-contact');
+                    if (note) note.style.display = 'none';
+                }
+            } catch (e) { /* keep the operator note */ }
+        }
+
+        document.addEventListener('DOMContentLoaded', function () { refresh(); loadInfoContact(); });
+        setInterval(refresh, 60000);
+    </script>
+</body>
+</html>

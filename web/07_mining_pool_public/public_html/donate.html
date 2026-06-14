@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en" data-page="donate">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Donate — Support the Prize Pool</title>
+    <meta name="description" content="Two ways to support the mining pool prize pool: donate a slice of your mining payouts, or send a one-off donation by Slatepack.">
+    <meta name="robots" content="index, follow, max-image-preview:large">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Donate — Support the Prize Pool | GRINIUM">
+    <meta property="og:description" content="Two ways to support the mining pool prize pool: donate a slice of your mining payouts, or send a one-off donation by Slatepack.">
+    <meta property="og:url" content="https://pool.grin.money/donate.html">
+    <meta property="og:site_name" content="GRINIUM Mining Pool">
+    <meta property="og:image" content="https://pool.grin.money/images/og-image.svg">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Donate — Support the Prize Pool">
+    <meta name="twitter:image" content="https://pool.grin.money/images/twitter-card.svg">
+    <link rel="canonical" href="https://pool.grin.money/donate.html">
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <style>
+        .container { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem; }
+        .lead { color: var(--t-dim, #a0aec0); margin-bottom: 1.5rem; }
+        .card { background: var(--t-card, #11160d); border: 1px solid var(--t-border, #2d3748); border-radius: 10px; padding: 1.5rem; margin-bottom: 1.5rem; }
+        .card h3 { color: var(--t-heading, var(--t-accent, #b8e600)); margin-bottom: .75rem; font-size: 1.2rem; }
+        .card p { margin-bottom: .6rem; }
+        .pill { display: inline-block; background: var(--t-chip-bg, rgba(255,255,255,.08)); border: 1px solid var(--t-chip-border, var(--t-border, #2d3748)); border-radius: 999px; padding: .15rem .7rem; font-size: .8rem; color: var(--t-dim, #a0aec0); margin-bottom: .75rem; }
+        code, .mono {
+            background: var(--t-chip-bg, rgba(255,255,255,.06)); border: 1px solid var(--t-chip-border, var(--t-border, #2d3748));
+            border-radius: 6px; padding: .15rem .5rem; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; word-break: break-all; color: var(--t-text, #e0e0e0);
+        }
+        .addr-box { display: none; }
+        .addr-box .mono { display: block; padding: .8rem; margin-top: .5rem; font-size: .9rem; }
+        .copy-btn { margin-top: .6rem; padding: .45rem 1rem; cursor: pointer; background: var(--t-accent, #b8e600); color: var(--t-on-accent, #080b07); border: none; border-radius: 6px; font-weight: 700; }
+        table { width: 100%; border-collapse: collapse; margin-top: .5rem; }
+        th, td { padding: .45rem .6rem; text-align: left; border-bottom: 1px solid var(--t-border, #2d3748); font-size: .88rem; }
+        th { color: var(--t-dim, #a0aec0); font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
+        .ok { color: var(--t-accent, #b8e600); }
+        .no { color: var(--t-dim, #a0aec0); }
+        .prize { color: var(--t-accent, #b8e600); font-weight: 700; }
+        ul { margin: .3rem 0 .3rem 1.2rem; }
+        .fund-list li { margin-bottom: .25rem; }
+    </style>
+    <link rel="stylesheet" href="/css/themes.css">
+</head>
+<body>
+
+    <header>
+        <div class="brand"><span class="dot" aria-hidden="true"></span><span data-brand="pool_name">GRINIUM</span></div>
+        <nav class="header-nav" aria-label="Main">
+            <a href="index.html" class="nav-link">Dashboard</a>
+            <a href="miners-stats.html" class="nav-link">Miners</a>
+            <a href="fortune-board.html" class="nav-link">Fortune Board</a>
+            <a href="donate.html" class="nav-link active">Donate</a>
+            <a href="index.html#info" class="nav-link">Info</a>
+        </nav>
+        <div class="nav-right">
+            <div class="theme-switcher"></div>
+            <a class="btn primary sm" href="index.html#connect">Start Mining</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <h2 class="page-title">💚 Support the Prize Pool</h2>
+        <p class="lead">Donations fund the pool's <strong>prize pool</strong> — the shared pot that pays join bonuses,
+            block-finder jackpots, loyalty streaks and the weekly &amp; special-occasion lottery. Current size:
+            <span class="prize" data-brand="prize-pool">—</span></p>
+
+        <div class="card">
+            <span class="pill">Option 1 · for miners</span>
+            <h3>Donate a slice of your payouts</h3>
+            <p>No account, no extra step. Just name one of your workers <code>donate&lt;N&gt;</code> — where
+                <strong>N is the percentage</strong> of your payouts (0–100) you want to give to the prize pool.</p>
+            <p>Examples (the <code>donate</code> tag can be the whole worker name or a <code>-</code>/<code>_</code> suffix):</p>
+            <table>
+                <thead><tr><th>Worker name</th><th>Result</th></tr></thead>
+                <tbody>
+                    <tr><td><code>grin1…address.donate10</code></td><td class="ok">Donate 10% of your payouts</td></tr>
+                    <tr><td><code>grin1…address.rig01-donate5</code></td><td class="ok">Worker “rig01”, donate 5%</td></tr>
+                    <tr><td><code>grin1…address.donate0</code></td><td class="no">0% — turn a donation back off</td></tr>
+                    <tr><td><code>grin1…address.rig01</code></td><td class="no">No donation (normal worker)</td></tr>
+                    <tr><td><code>donate101</code>, <code>donate-1</code>, <code>donatexx</code></td><td class="no">Ignored — treated as a normal worker name, donates nothing</td></tr>
+                </tbody>
+            </table>
+            <p style="margin-top:.75rem;color:var(--t-dim,#a0aec0);font-size:.85rem;">Only <code>donate0</code>–<code>donate100</code>
+                donate. Anything out of range or mistyped is safely treated as an ordinary worker name — a typo can never
+                donate more than you meant. The donation is applied to each payout as it's calculated.</p>
+        </div>
+
+        <div class="card addr-box" data-brand-show="donation">
+            <span class="pill">Option 2 · for anyone</span>
+            <h3>Donate directly by Slatepack</h3>
+            <p>Not mining, or want to give a one-off gift? Send any amount to the pool's donation address. The operator
+                adds received donations to the prize pool.</p>
+            <div class="mono" data-brand="donation-address" id="donation-address"></div>
+            <button class="copy-btn" onclick="copyAddress()">Copy address</button>
+        </div>
+
+        <div class="card">
+            <h3>Where your donation goes</h3>
+            <ul class="fund-list">
+                <li>🎁 <strong>Join bonus</strong> — a one-time welcome for new miners who reach their first payout.</li>
+                <li>💥 <strong>Block-finder jackpot</strong> — a flat bonus to whoever solves a block (small miners included).</li>
+                <li>🔥 <strong>Loyalty streak</strong> — a small bonus for mining consistently, day after day.</li>
+                <li>🎉 <strong>Lottery</strong> — weekly and special-occasion draws, with an equal-chance pot so small miners can win too.</li>
+            </ul>
+            <p style="margin-top:.5rem;"><a class="nav-link" href="fortune-board.html" style="text-decoration:underline;">See every prize ever paid → Fortune Board</a></p>
+        </div>
+    </div>
+
+    <footer><span data-brand="pool_name">GRINIUM</span> — Thank you for supporting small miners 💚</footer>
+
+    <script>
+        function copyAddress() {
+            var el = document.getElementById('donation-address');
+            var text = el ? el.textContent.trim() : '';
+            if (!text) return;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(function () { flash('Copied!'); }, function () { flash('Copy failed'); });
+            } else {
+                var r = document.createRange(); r.selectNode(el);
+                var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+                try { document.execCommand('copy'); flash('Copied!'); } catch (e) { flash('Copy failed'); }
+                s.removeAllRanges();
+            }
+        }
+        function flash(msg) {
+            var btn = document.querySelector('.copy-btn'); if (!btn) return;
+            var old = btn.textContent; btn.textContent = msg;
+            setTimeout(function () { btn.textContent = old; }, 1500);
+        }
+    </script>
+    <script src="/js/public-theme.js"></script>
+    <script src="/js/branding.js"></script>
+</body>
+</html>

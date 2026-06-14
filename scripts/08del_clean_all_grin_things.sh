@@ -359,6 +359,9 @@ step_remove_install_dirs() {
     local -a candidates=(
         "/opt/grin/wallet/testnet"
         "/opt/grin/wallet/mainnet"
+        "/opt/grin/pubpool/mainnet"
+        "/opt/grin/pubpoolwallet/mainnet"
+        "/opt/grin/pool/mainnet"
         "/opt/grin/node/mainnet-prune"
         "/opt/grin/node/testnet-prune"
         "/opt/grin/node/mainnet-full"

@@ -104,6 +104,40 @@ PYEOF
 _ensure_sites_enabled_include() { nginx_ensure_sites_enabled_include "$@"; }
 
 # ═════════════════════════════════════════════════════════════════════════════
+# server_names_hash_bucket_size — prevent "could not build server_names_hash"
+# ═════════════════════════════════════════════════════════════════════════════
+# nginx's default bucket size is the processor cache-line size (32 bytes on many
+# VPS CPUs). A server_name longer than that (e.g. a multi-label subdomain like
+# solo-mining-stats.example.com) overflows it and `nginx -t` fails with:
+#   [emerg] could not build server_names_hash, you should increase
+#           server_names_hash_bucket_size: 32
+# Writing the directive to a conf.d snippet (loaded into the http context) raises
+# the bucket to 128 bytes, comfortably covering any realistic FQDN.
+#
+# Grep-guard: skip if an UNcommented server_names_hash_bucket_size already exists
+# anywhere under /etc/nginx (defining it twice in the http context is an error).
+nginx_ensure_server_names_hash() {
+    local conf_file="/etc/nginx/conf.d/00-server-names-hash.conf"
+
+    # Our own snippet already present — no-op.
+    [[ -f "$conf_file" ]] && return 0
+
+    # An uncommented definition exists elsewhere (e.g. baked into nginx.conf) —
+    # don't add a duplicate; the operator/distro already manages it.
+    if grep -rqsE '^[[:space:]]*server_names_hash_bucket_size' /etc/nginx 2>/dev/null; then
+        return 0
+    fi
+
+    mkdir -p /etc/nginx/conf.d
+    cat > "$conf_file" << 'SNHEOF'
+# Grin Node Toolkit — raise server_names_hash bucket so long FQDN server_names
+# (multi-label subdomains) don't overflow the default 32-byte bucket.
+# Helper: nginx_ensure_server_names_hash (scripts/lib/nginx_shared_helpers.sh)
+server_names_hash_bucket_size 128;
+SNHEOF
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
 # TEST + RELOAD nginx
 # ═════════════════════════════════════════════════════════════════════════════
 # Usage: nginx_test_reload "context message (optional)"
@@ -134,6 +168,7 @@ nginx_enable_site() {
         error "nginx_enable_site: config not found: $conf"; return 1
     fi
     nginx_ensure_sites_enabled_include
+    nginx_ensure_server_names_hash
     ln -sf "$conf" "/etc/nginx/sites-enabled/$name"
     nginx_test_reload "enabling site $name"
 }
@@ -161,6 +196,7 @@ nginx_install_with_certbot() {
 
     if ! $need_nginx && ! $need_certbot; then
         nginx_ensure_sites_enabled_include
+        nginx_ensure_server_names_hash
         return 0
     fi
 
@@ -190,6 +226,7 @@ nginx_install_with_certbot() {
     $need_certbot && success "Certbot installed."
 
     nginx_ensure_sites_enabled_include
+    nginx_ensure_server_names_hash
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -252,6 +289,47 @@ nginx_ensure_rate_limit_zone() {
 # zone and not overwrite it on subsequent runs.
 limit_req_zone \$binary_remote_addr zone=${zone}:${size} rate=${rate};
 RATELIMIT
+}
+
+# Generic primitive for defining nginx `limit_conn_zone` directives in conf.d/.
+# Companion to nginx_ensure_rate_limit_zone — a connection zone caps the number
+# of *concurrent* connections per key (blunts slowloris / connection floods),
+# whereas a rate zone caps request *rate*. The per-connection cap itself is set
+# by a `limit_conn <zone> <n>;` directive in the server/location block, NOT here;
+# this only declares the shared-memory zone.
+#
+# Behaviour mirrors nginx_ensure_rate_limit_zone:
+#   · No-op if the conf file already exists (lets ops customise it)
+#   · Grep-guard: skips if the zone is already defined anywhere under /etc/nginx
+#   · Writes /etc/nginx/conf.d/<conf_basename>.conf with a comment header
+#
+# Usage:
+#   nginx_ensure_conn_limit_zone <zone_name> [size=10m] [conf_basename]
+nginx_ensure_conn_limit_zone() {
+    local zone="$1" size="${2:-10m}" basename="${3:-${1}-conn-limit}"
+    if [[ -z "$zone" ]]; then
+        error "nginx_ensure_conn_limit_zone: usage: <zone_name> [size] [conf_basename]"
+        return 1
+    fi
+    local conf_file="/etc/nginx/conf.d/${basename}.conf"
+
+    # Skip if the target file already exists — re-running should be a no-op.
+    [[ -f "$conf_file" ]] && return 0
+
+    # Skip if this zone is already defined anywhere under /etc/nginx (avoids a
+    # duplicate definition → nginx "zone already bound" fatal error).
+    grep -rqsE "limit_conn_zone[^;]*zone=${zone}[: ]" /etc/nginx 2>/dev/null && return 0
+
+    mkdir -p /etc/nginx/conf.d
+    cat > "$conf_file" << CONNLIMIT
+# Grin Node Toolkit — managed connection-limit zone: ${zone}
+# Caps concurrent connections per IP (the cap value is set by a limit_conn
+# directive in the vhost, not here). ${size} shared memory zone.
+# Helper: nginx_ensure_conn_limit_zone (scripts/lib/nginx_shared_helpers.sh)
+# To customise, edit this file directly — the helper detects the existing zone
+# and will not overwrite it on subsequent runs.
+limit_conn_zone \$binary_remote_addr zone=${zone}:${size};
+CONNLIMIT
 }
 
 # ── Multi-zone variant: write several related zones to ONE conf.d file ──────

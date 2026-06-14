@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en" data-page="login" data-maintenance="exempt">
+<head>
+  <!-- ===== ESSENTIAL META TAGS ===== -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="robots" content="index, follow, max-snippet:-1">
+  <meta name="language" content="English">
+  <meta name="author" content="GRINIUM Mining Pool">
+
+  <!-- ===== DESCRIPTION & KEYWORDS ===== -->
+  <title>Admin Portal Login | GRINIUM Mining Pool Dashboard</title>
+  <meta name="description" content="Secure admin login portal for GRINIUM mining pool. Access your dashboard, manage account settings, monitor mining statistics, and view withdrawal history.">
+  <meta name="keywords" content="mining pool login, admin dashboard, account management, mining statistics, pool management">
+
+  <!-- ===== OPEN GRAPH ===== -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="GRINIUM Mining Pool — Admin Login">
+  <meta property="og:description" content="Secure admin access to mining pool dashboard and account management">
+  <meta property="og:url" content="https://pool.grin.money/login.html">
+  <meta property="og:site_name" content="GRINIUM Mining Pool">
+  <meta property="og:image" content="https://pool.grin.money/images/og-login.svg">
+
+  <!-- ===== TWITTER CARD ===== -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="GRINIUM Admin Portal">
+  <meta name="twitter:description" content="Secure mining pool login and dashboard access">
+  <meta name="twitter:domain" content="pool.grin.money">
+
+  <!-- ===== CANONICAL ===== -->
+  <link rel="canonical" href="https://pool.grin.money/login.html">
+
+  <!-- ===== ADDITIONAL SEO ===== -->
+  <meta name="theme-color" content="#080b07">
+  <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+  <link rel="manifest" href="/manifest.json">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      /* Atomic default (mockup-v3) — legacy var names; themes.css remaps them per theme */
+      --dark-bg: #080b07;
+      --dark-card: #11160d;
+      --dark-text: #e8f5cf;
+      --dark-dim: #9db077;
+      --neon-cyan: #b8e600;
+      --neon-magenta: #00f7ff;
+      --neon-lime: #d4ff3d;
+      --danger: #f56565;
+      --success: #48bb78;
+    }
+
+    body {
+      /* bridge: page tokens follow the active theme (themes.css remaps the legacy vars on body) */
+      --primary: var(--neon-cyan);
+      --secondary: var(--neon-magenta);
+      --bg-primary: var(--dark-bg);
+      --bg-card: var(--dark-card);
+      --border-color: color-mix(in srgb, var(--neon-cyan) 24%, var(--dark-bg));
+      --text-primary: var(--dark-text);
+      --text-secondary: var(--dark-text);
+      --text-muted: var(--dark-dim);
+
+      background: linear-gradient(135deg, var(--bg-primary), color-mix(in srgb, var(--bg-primary) 92%, var(--primary) 8%));
+      color: var(--text-primary);
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 1rem;
+    }
+
+    .login-container {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      animation: fadeIn 0.5s ease;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .logo {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .logo h1 {
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .logo p {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .form-group {
+      margin-bottom: 1.5rem;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: 500;
+      color: var(--text-primary);
+      font-size: 0.95rem;
+    }
+
+    input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      background: color-mix(in srgb, var(--primary) 6%, transparent);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-size: 0.95rem;
+      transition: all 0.2s ease;
+    }
+
+    input::placeholder {
+      color: var(--text-muted);
+    }
+
+    input:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent);
+    }
+
+    button {
+      width: 100%;
+      padding: 0.875rem;
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      color: var(--bg-primary);
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px color-mix(in srgb, var(--primary) 30%, transparent);
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .error {
+      background: rgba(245, 101, 101, 0.1);
+      color: var(--danger);
+      padding: 1rem;
+      border-radius: 6px;
+      border-left: 4px solid var(--danger);
+      margin-bottom: 1.5rem;
+      font-size: 0.95rem;
+      display: none;
+    }
+
+    .success {
+      background: rgba(72, 187, 120, 0.1);
+      color: var(--success);
+      padding: 1rem;
+      border-radius: 6px;
+      border-left: 4px solid var(--success);
+      margin-bottom: 1.5rem;
+      font-size: 0.95rem;
+      display: none;
+    }
+
+    .register-link {
+      text-align: center;
+      margin-top: 1.5rem;
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+    }
+
+    .register-link a {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 600;
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+
+    .register-link a:hover {
+      opacity: 0.8;
+      text-decoration: underline;
+    }
+
+    .loading {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid color-mix(in srgb, var(--primary) 20%, transparent);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 0.5rem;
+      vertical-align: middle;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 480px) {
+      .login-container {
+        padding: 1.5rem;
+      }
+
+      .logo h1 {
+        font-size: 1.5rem;
+      }
+    }
+  </style>
+  <link rel="stylesheet" href="/css/themes.css">
+</head>
+<body>
+  <div class="login-container">
+    <div class="logo">
+      <h1>⛏ GRINIUM</h1>
+      <p>Mining Pool Admin</p>
+    </div>
+
+    <div class="error" id="error-msg"></div>
+    <div class="success" id="success-msg"></div>
+
+    <div id="login-form">
+      <form onsubmit="handleLogin(event)">
+        <div class="form-group">
+          <label for="username">Username</label>
+          <input type="text" id="username" name="username" placeholder="Enter admin username" required>
+        </div>
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" placeholder="Enter admin password" required>
+        </div>
+        <div class="form-group">
+          <label for="captcha-answer">
+            <span id="captcha-question">Loading verification…</span>
+            <a onclick="loadCaptcha('login')" style="float:right;font-weight:400;cursor:pointer;color:var(--primary);">↻ new</a>
+          </label>
+          <input type="text" id="captcha-answer" name="captcha-answer" inputmode="numeric" autocomplete="off" placeholder="Answer" required>
+        </div>
+        <button type="submit" id="login-btn">Login</button>
+      </form>
+      <div class="register-link">
+        New admin? <a onclick="toggleRegister(event)">Register here</a>
+      </div>
+    </div>
+
+    <div id="register-form" style="display: none;">
+      <form onsubmit="handleRegister(event)">
+        <div class="form-group">
+          <label for="reg-username">Username</label>
+          <input type="text" id="reg-username" name="username" placeholder="Choose username (3+ chars)" required>
+        </div>
+        <div class="form-group">
+          <label for="reg-password">Password</label>
+          <input type="password" id="reg-password" name="password" placeholder="Choose password (8+ chars)" required>
+        </div>
+        <div class="form-group">
+          <label for="reg-captcha-answer">
+            <span id="reg-captcha-question">Loading verification…</span>
+            <a onclick="loadCaptcha('register')" style="float:right;font-weight:400;cursor:pointer;color:var(--primary);">↻ new</a>
+          </label>
+          <input type="text" id="reg-captcha-answer" name="captcha-answer" inputmode="numeric" autocomplete="off" placeholder="Answer" required>
+        </div>
+        <button type="submit" id="register-btn">Create Admin Account</button>
+      </form>
+      <div class="register-link">
+        Already have account? <a onclick="toggleRegister(event)">Login</a>
+      </div>
+    </div>
+
+    <div id="totp-form" style="display: none;">
+      <form onsubmit="handleTotp(event)">
+        <div class="form-group">
+          <label for="totp-code">Two-factor code</label>
+          <input type="text" id="totp-code" name="totp-code" inputmode="numeric" autocomplete="one-time-code"
+                 placeholder="6-digit code" required autofocus>
+          <div class="register-link" style="text-align:left;margin-top:.5rem;">
+            Lost your authenticator? Enter one of your <strong>backup recovery codes</strong> instead.
+          </div>
+        </div>
+        <button type="submit" id="totp-btn">Verify</button>
+      </form>
+      <div class="register-link">
+        <a onclick="cancelTotp(event)">← Back to login</a>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/auth.js"></script>
+  <script>
+    function showError(msg) {
+      const el = document.getElementById('error-msg');
+      el.textContent = msg;
+      el.style.display = 'block';
+      setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    function showSuccess(msg) {
+      const el = document.getElementById('success-msg');
+      el.textContent = msg;
+      el.style.display = 'block';
+      setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    // Short-lived token from the password step, used to complete 2FA.
+    var twofaToken = null;
+
+    async function handleTotp(e) {
+      e.preventDefault();
+      const code = document.getElementById('totp-code').value;
+      const btn = document.getElementById('totp-btn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="loading"></span>Verifying...';
+      try {
+        const res = await fetch('/api/auth/login/totp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ twofa_token: twofaToken, code: code }),
+          credentials: 'include'
+        });
+        const data = await res.json();
+        if (data.success) {
+          window.location.href = '/admin/';
+        } else {
+          showError(data.error || 'Verification failed');
+          // 2fa session expired → back to the login form (needs a fresh password + captcha).
+          if (/expired/i.test(data.error || '')) cancelTotp();
+        }
+      } catch (err) {
+        showError('Connection error: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'Verify';
+      }
+    }
+
+    function cancelTotp(e) {
+      if (e) e.preventDefault();
+      twofaToken = null;
+      document.getElementById('totp-form').style.display = 'none';
+      document.getElementById('login-form').style.display = 'block';
+      loadCaptcha('login'); // step-1 captcha was consumed → get a fresh one
+    }
+
+    // ── Self-hosted CAPTCHA (single-use, must be re-fetched after every attempt) ──
+    var captchaIds = { login: null, register: null };
+
+    async function loadCaptcha(which) {
+      var qId = which === 'register' ? 'reg-captcha-question' : 'captcha-question';
+      var aId = which === 'register' ? 'reg-captcha-answer' : 'captcha-answer';
+      try {
+        var res = await fetch('/api/auth/captcha', { credentials: 'include' });
+        var data = await res.json();
+        captchaIds[which] = data.id;
+        document.getElementById(qId).textContent = data.question || 'Verification';
+        document.getElementById(aId).value = '';
+      } catch (e) {
+        document.getElementById(qId).textContent = 'Verification unavailable — retry ↻';
+      }
+    }
+
+    function toggleRegister(e) {
+      e.preventDefault();
+      var loginVisible = document.getElementById('login-form').style.display !== 'none';
+      document.getElementById('login-form').style.display = loginVisible ? 'none' : 'block';
+      document.getElementById('register-form').style.display = loginVisible ? 'block' : 'none';
+      // Load a fresh challenge for whichever form is now shown.
+      loadCaptcha(loginVisible ? 'register' : 'login');
+    }
+
+    async function handleLogin(e) {
+      e.preventDefault();
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+      const btn = document.getElementById('login-btn');
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="loading"></span>Logging in...';
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username, password,
+            captcha_id: captchaIds.login,
+            captcha_answer: document.getElementById('captcha-answer').value
+          }),
+          credentials: 'include'  // FIX #4: Include httpOnly cookies
+        });
+
+        const data = await res.json();
+
+        if (data.success) {
+          // FIX #4: Token is now in httpOnly cookie, not in response body
+          // No need to store anything in localStorage
+          window.location.href = '/admin/';
+        } else if (data.totp_required) {
+          // Password OK, but this admin has 2FA on → show the code step (no new captcha needed).
+          twofaToken = data.twofa_token;
+          document.getElementById('login-form').style.display = 'none';
+          document.getElementById('register-form').style.display = 'none';
+          document.getElementById('totp-form').style.display = 'block';
+          const c = document.getElementById('totp-code');
+          c.value = ''; c.focus();
+        } else {
+          showError(data.error || 'Login failed');
+          loadCaptcha('login'); // single-use → always refresh after a failed attempt
+        }
+      } catch (err) {
+        showError('Connection error: ' + err.message);
+        loadCaptcha('login');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'Login';
+      }
+    }
+
+    async function handleRegister(e) {
+      e.preventDefault();
+      const username = document.getElementById('reg-username').value;
+      const password = document.getElementById('reg-password').value;
+      const btn = document.getElementById('register-btn');
+
+      if (username.length < 3) {
+        showError('Username must be at least 3 characters');
+        return;
+      }
+
+      if (password.length < 8) {
+        showError('Password must be at least 8 characters');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="loading"></span>Creating...';
+
+      try {
+        const res = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username, password,
+            captcha_id: captchaIds.register,
+            captcha_answer: document.getElementById('reg-captcha-answer').value
+          }),
+          credentials: 'include'  // FIX #4: Include httpOnly cookies
+        });
+
+        const data = await res.json();
+
+        if (data.success) {
+          // Register already authenticated us (httpOnly cookies set server-side) — go straight in.
+          showSuccess('Admin account created! Redirecting…');
+          setTimeout(() => { window.location.href = '/admin/'; }, 800);
+        } else {
+          showError(data.error || 'Registration failed');
+          loadCaptcha('register'); // single-use → refresh after a failed attempt
+        }
+      } catch (err) {
+        showError('Connection error: ' + err.message);
+        loadCaptcha('register');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'Create Admin Account';
+      }
+    }
+
+    // FIX #4: Check if already logged in by testing API access (token in httpOnly cookie).
+    // Must hit an AUTH-GATED endpoint — /api/health is public and 200 for everyone, which
+    // would redirect every visitor to the dashboard (and loop). /api/admin/dashboard returns
+    // 200 only with a valid admin cookie, so a logged-out visitor stays on this page.
+    async function checkIfLoggedIn() {
+      try {
+        const res = await fetch('/api/admin/dashboard', { credentials: 'include' });
+        if (res.status === 200) {
+          window.location.href = '/admin/';
+        }
+      } catch (e) {
+        // Not logged in, stay on login page
+      }
+    }
+
+    checkIfLoggedIn();
+    loadCaptcha('login');
+  </script>
+  <script src="/js/public-theme.js"></script>
+  <script src="/js/branding.js"></script>
+</body>
+</html>

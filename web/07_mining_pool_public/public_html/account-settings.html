@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en" data-page="account-settings" data-maintenance="exempt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Account Settings — Mining Pool</title>
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <link rel="stylesheet" href="/css/themes.css">
+</head>
+<body>
+
+    <header>
+        <div class="brand"><span class="dot" aria-hidden="true"></span><span data-brand="pool_name">GRINIUM</span></div>
+        <nav class="header-nav" aria-label="Main">
+            <a href="index.html" class="nav-link">Dashboard</a>
+            <a href="miners-stats.html" class="nav-link">Miners</a>
+            <a href="payment-history.html" class="nav-link">Payouts</a>
+            <a href="index.html#info" class="nav-link">Info</a>
+            <a href="account-settings.html" class="nav-link active">My Account</a>
+        </nav>
+        <div class="nav-right">
+            <div class="theme-switcher"></div>
+            <a class="btn primary sm" href="index.html#connect">Start Mining</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <h2 class="page-title">My Account</h2>
+
+        <div class="settings-section">
+            <h3>Look Up Your Mining Account</h3>
+            <p style="margin-bottom: 16px; color: var(--dark-dim);">
+                No login needed — your Grin address <em>is</em> your account. Enter the address
+                you mine with to see balance, hashrate, and payout history.
+            </p>
+            <div class="form-group">
+                <label for="acct-addr">Your Grin Address</label>
+                <input type="text" id="acct-addr" placeholder="grin1..." autocomplete="off" spellcheck="false">
+            </div>
+            <button class="btn-save" id="acct-lookup">View Account</button>
+            <div class="acct-msg" id="acct-msg"></div>
+        </div>
+
+        <div id="acct-view" style="display:none">
+            <div class="stats-grid">
+                <div class="stat-card"><div class="stat-label">Available Balance</div><div class="stat-value" id="acct-balance">—</div></div>
+                <div class="stat-card"><div class="stat-label">Locked / Immature</div><div class="stat-value" id="acct-locked">—</div></div>
+                <div class="stat-card"><div class="stat-label">Total Paid Out</div><div class="stat-value" id="acct-paid">—</div></div>
+                <div class="stat-card"><div class="stat-label">Hashrate (1h)</div><div class="stat-value" id="acct-hashrate">—</div></div>
+            </div>
+
+            <div class="settings-section">
+                <h3>Account Details</h3>
+                <ul class="detail-list">
+                    <li><span class="k">Status</span><span class="v" id="acct-status">—</span></li>
+                    <li><span class="k">Last seen</span><span class="v" id="acct-last-seen">—</span></li>
+                    <li><span class="k">Total shares submitted</span><span class="v" id="acct-shares">—</span></li>
+                    <li><span class="k">Last share</span><span class="v" id="acct-last-share">—</span></li>
+                    <li><span class="k">Pending withdrawals</span><span class="v" id="acct-pending">—</span></li>
+                    <li><span class="k">Minimum payout</span><span class="v" id="acct-min">—</span></li>
+                    <li><span class="k">Mining here since</span><span class="v" id="acct-since">—</span></li>
+                </ul>
+            </div>
+
+            <div class="settings-section">
+                <h3>Withdraw</h3>
+                <p style="margin-bottom: 16px; color: var(--dark-dim);">
+                    Payouts are sent automatically over Tor to this address once your balance reaches
+                    the minimum. You can also request one now — wallet reachability:
+                    <span id="acct-tor" style="font-family: ui-monospace, monospace;">checking…</span>
+                </p>
+                <button class="btn-save" id="acct-withdraw">Request Payout Now</button>
+                <div class="acct-msg" id="acct-withdraw-msg"></div>
+            </div>
+
+            <div class="settings-section">
+                <h3>Recent Activity</h3>
+                <table class="data-table" aria-label="Balance history">
+                    <thead><tr><th>When</th><th>Event</th><th class="num">Amount</th><th class="num">Balance After</th></tr></thead>
+                    <tbody id="acct-log"><tr><td colspan="4">—</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p data-brand="footer_text">GRINIUM — Uranium Element Mining Pool | Professional • Reliable • Secure</p>
+        <div data-brand="page-links"></div>
+        <p data-brand="attribution" style="opacity:0.7;font-size:0.95em;margin-top:6px;">Powered by the Grin Node Toolkit</p>
+    </footer>
+
+    <script src="/js/auth.js"></script>
+    <script>
+        // Theme switching is handled site-wide by /js/public-theme.js, which renders
+        // the theme picker and applies the 3 built-in + 10 white-label themes.
+
+        // ═════════════════════════════════════════════════════════════════
+        // Address-as-identity account view — public endpoints, no login:
+        //   GET  /api/account/:addr               summary (404 = never mined here)
+        //   GET  /api/account/:addr/balance/log   recent ledger entries
+        //   GET  /api/account/:addr/tor-check     wallet reachability hint
+        //   POST /api/account/:addr/withdraw      request a Tor payout now
+        // All DOM writes use textContent — addresses/events are external data.
+        // ═════════════════════════════════════════════════════════════════
+
+        const ADDR_KEY = 'grinium-my-address';
+        let currentAddr = '';
+
+        function $id(id) { return document.getElementById(id); }
+
+        function setMsg(el, text, ok) {
+            el.textContent = text || '';
+            el.className = 'acct-msg' + (text ? (ok ? ' ok' : ' err') : '');
+        }
+
+        function fmtGrin(v) { return Number(v || 0).toFixed(4) + ' ツ'; }
+
+        function fmtGps(gps) {
+            if (!isFinite(gps)) return '—';
+            if (gps >= 1e6) return (gps / 1e6).toFixed(2) + ' MG/s';
+            if (gps >= 1e3) return (gps / 1e3).toFixed(2) + ' kG/s';
+            return gps.toFixed(2) + ' G/s';
+        }
+
+        function fmtWhen(unixSeconds) {
+            return unixSeconds ? new Date(unixSeconds * 1000).toLocaleString() : 'never';
+        }
+
+        async function getJson(url) {
+            const r = await fetch(url, { credentials: 'same-origin' });
+            const json = await r.json().catch(() => null);
+            if (!r.ok) throw new Error((json && json.error) || ('HTTP ' + r.status));
+            return json;
+        }
+
+        async function lookup() {
+            const addr = $id('acct-addr').value.trim();
+            const msg = $id('acct-msg');
+            if (!/^grin1[a-z0-9]{20,}$/i.test(addr)) {
+                setMsg(msg, 'Enter a valid Grin address (grin1…)', false);
+                return;
+            }
+            setMsg(msg, 'Loading…', true);
+            try {
+                const a = await getJson('/api/account/' + encodeURIComponent(addr));
+                currentAddr = addr;
+                try { localStorage.setItem(ADDR_KEY, addr); } catch (e) {}
+
+                $id('acct-balance').textContent = fmtGrin(a.balance);
+                $id('acct-locked').textContent = fmtGrin(a.balance_locked);
+                $id('acct-paid').textContent = fmtGrin(a.total_paid);
+                $id('acct-hashrate').textContent = fmtGps(a.hashrate_gps || 0);
+                $id('acct-status').textContent = a.is_online ? 'Online ⛏' : 'Offline';
+                $id('acct-last-seen').textContent = fmtWhen(a.last_seen_at);
+                $id('acct-shares').textContent = Number(a.shares && a.shares.count || 0).toLocaleString('en-US');
+                $id('acct-last-share').textContent = fmtWhen(a.shares && a.shares.last_share_at);
+                $id('acct-pending').textContent = a.pending_withdrawals || 0;
+                $id('acct-min').textContent = fmtGrin(a.min_withdrawal);
+                $id('acct-since').textContent = fmtWhen(a.created_at);
+
+                const canWithdraw = (a.balance || 0) >= (a.min_withdrawal || 0) && !a.pending_withdrawals;
+                $id('acct-withdraw').disabled = !canWithdraw;
+
+                $id('acct-view').style.display = '';
+                setMsg(msg, '', true);
+                loadLog(addr);
+                torCheck(addr);
+            } catch (e) {
+                $id('acct-view').style.display = 'none';
+                setMsg(msg, e.message === 'Account not found'
+                    ? 'No mining account for this address yet — point a miner at the pool first.'
+                    : 'Lookup failed: ' + e.message, false);
+            }
+        }
+
+        async function loadLog(addr) {
+            const tbody = $id('acct-log');
+            tbody.innerHTML = '<tr><td colspan="4">Loading…</td></tr>';
+            try {
+                const data = await getJson('/api/account/' + encodeURIComponent(addr) + '/balance/log?limit=15');
+                const rows = (data && data.log) || [];
+                tbody.textContent = '';
+                if (!rows.length) {
+                    const tr = document.createElement('tr');
+                    const td = document.createElement('td');
+                    td.colSpan = 4; td.textContent = 'No activity yet';
+                    tr.appendChild(td); tbody.appendChild(tr);
+                    return;
+                }
+                rows.forEach(function (row) {
+                    const tr = document.createElement('tr');
+                    [fmtWhen(row.created_at), String(row.event_type || ''),
+                     Number(row.amount || 0).toFixed(4), Number(row.balance_after || 0).toFixed(4)
+                    ].forEach(function (text, i) {
+                        const td = document.createElement('td');
+                        if (i >= 2) td.className = 'num';
+                        td.textContent = text;
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                });
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="4">Activity unavailable</td></tr>';
+            }
+        }
+
+        async function torCheck(addr) {
+            const el = $id('acct-tor');
+            el.textContent = 'checking…';
+            try {
+                const r = await getJson('/api/account/' + encodeURIComponent(addr) + '/tor-check');
+                if (r.online === true) el.textContent = '✓ reachable over Tor';
+                else if (r.online === false) el.textContent = '✗ not reachable — keep your wallet listener running';
+                else el.textContent = 'verified at payout time';
+            } catch (e) {
+                el.textContent = 'unknown';
+            }
+        }
+
+        async function withdraw() {
+            if (!currentAddr) return;
+            const btn = $id('acct-withdraw');
+            const msg = $id('acct-withdraw-msg');
+            btn.disabled = true;
+            setMsg(msg, 'Submitting…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ method: 'tor' })
+                });
+                const json = await r.json().catch(() => null);
+                if (r.ok && json && json.success) {
+                    setMsg(msg, 'Payout queued (#' + json.withdrawal_id + ') — it will be sent to your wallet over Tor.', true);
+                    lookup(); // refresh balances + pending count
+                } else {
+                    setMsg(msg, (json && json.error) || 'Withdrawal failed', false);
+                    btn.disabled = false;
+                }
+            } catch (e) {
+                setMsg(msg, 'Withdrawal failed: ' + e.message, false);
+                btn.disabled = false;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            $id('acct-lookup').addEventListener('click', lookup);
+            $id('acct-addr').addEventListener('keydown', function (e) { if (e.key === 'Enter') lookup(); });
+            $id('acct-withdraw').addEventListener('click', withdraw);
+
+            let saved = '';
+            try { saved = localStorage.getItem(ADDR_KEY) || ''; } catch (e) {}
+            if (saved) {
+                $id('acct-addr').value = saved;
+                lookup();
+            }
+        });
+    </script>
+    <script src="/js/public-theme.js"></script>
+    <script src="/js/branding.js"></script>
+</body>
+</html>

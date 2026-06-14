@@ -210,7 +210,7 @@ check_scripts() {
         "04_grin_node_foreign_api.sh"
         "05_grin_wallet_service.sh"
         "06_global_grin_health.sh"
-        "07_grin_mining_solo.sh"
+        "07_grin_mining_hub_services.sh"
         "08_grin_node_admin.sh"
     )
     for script in "${required_scripts[@]}"; do
@@ -259,8 +259,8 @@ show_header() {
     echo " ╚██████╔╝██║  ██║██║██║ ╚████║"
     echo "  ╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝"
     echo -e "${RESET}"
-    echo -e "${BOLD} Grin Node Toolkit v2026.06.03${RESET}"
-    echo -e "${YELLOW}   Keep your Grin alive${RESET}"
+    echo -e "${BOLD} Grin Node Toolkit v2026.06.14${RESET}"
+    echo -e "${YELLOW} Keeping Grin shining bright...${RESET}"
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 }
@@ -277,9 +277,9 @@ show_main_menu() {
     echo -e "${BOLD}  Addons${RESET} "
     echo ""
     echo -e "  ${GREEN}4${RESET}) Publish Grin Node API" 
-    echo -e "  ${GREEN}5${RESET}) Grin Wallet Services (Being developed)"
+    echo -e "  ${GREEN}5${RESET}) Grin Wallet Services"
     echo -e "  ${GREEN}6${RESET}) Global Grin Health"
-    echo -e "  ${GREEN}7${RESET}) Grin Mining Services (Being developed)"
+    echo -e "  ${GREEN}7${RESET}) Grin Mining Pool Deployment"
     echo -e "  ${GREEN}8${RESET}) Admin & Maintenance"
     echo ""
     echo -e "${DIM}  ─────────────────────────────────────────${RESET}"
@@ -324,7 +324,7 @@ main() {
                 ;;
             7)
                 echo -e "\n${CYAN}Starting: Grin Mining Services...${RESET}\n"
-                run_script "07_grin_mining_solo.sh"
+                run_script "07_grin_mining_hub_services.sh"
                 ;;
             8)
                 echo -e "\n${CYAN}Starting: Admin & Maintenance...${RESET}\n"

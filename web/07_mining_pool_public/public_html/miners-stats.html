@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!-- ===== ESSENTIAL META TAGS ===== -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="robots" content="index, follow, max-snippet:-1">
+  <meta name="language" content="English">
+  <meta name="author" content="GRINIUM Mining Pool">
+  <meta name="revisit-after" content="1 days">
+
+  <!-- ===== DESCRIPTION & KEYWORDS ===== -->
+  <title>Miners Statistics — GRINIUM Mining Pool Dashboard</title>
+  <meta name="description" content="Real-time mining pool statistics and individual miner performance metrics. Track hashrate, shares, payouts, and detailed miner information at GRINIUM Grin mining pool.">
+  <meta name="keywords" content="mining pool statistics, miner stats, hashrate, shares, mining metrics, Grin pool, pool performance">
+
+  <!-- ===== OPEN GRAPH ===== -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="GRINIUM Mining Pool — Miners Statistics">
+  <meta property="og:description" content="Real-time mining pool statistics and individual miner performance metrics tracking">
+  <meta property="og:url" content="https://pool.grin.money/miners-stats.html">
+  <meta property="og:site_name" content="GRINIUM Mining Pool">
+  <meta property="og:image" content="https://pool.grin.money/images/og-miners-stats.svg">
+  <meta property="og:locale" content="en_US">
+
+  <!-- ===== TWITTER CARD ===== -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="GRINIUM Miners Statistics">
+  <meta name="twitter:description" content="Live mining pool statistics and miner performance tracking">
+  <meta name="twitter:image" content="https://pool.grin.money/images/twitter-miners-stats.svg">
+  <meta name="twitter:domain" content="pool.grin.money">
+
+  <!-- ===== CANONICAL ===== -->
+  <link rel="canonical" href="https://pool.grin.money/miners-stats.html">
+
+  <!-- ===== ADDITIONAL SEO ===== -->
+  <meta name="theme-color" content="#0f1419">
+  <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+  <link rel="apple-touch-icon" href="/images/apple-touch-icon.svg">
+  <link rel="manifest" href="/manifest.json">
+
+  <!-- ===== JSON-LD STRUCTURED DATA ===== -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "name": "GRINIUM Mining Pool — Miners Statistics",
+    "description": "Real-time mining pool statistics and individual miner performance metrics tracking",
+    "url": "https://pool.grin.money/miners-stats.html",
+    "image": "https://pool.grin.money/images/og-miners-stats.png",
+    "isPartOf": {
+      "@type": "WebSite",
+      "name": "GRINIUM Mining Pool",
+      "url": "https://pool.grin.money"
+    },
+    "mainEntity": {
+      "@type": "LocalBusiness",
+      "name": "GRINIUM Mining Pool",
+      "description": "Professional Grin cryptocurrency mining pool with advanced statistics and secure management",
+      "url": "https://pool.grin.money",
+      "image": "https://pool.grin.money/images/og-image.png"
+    }
+  }
+  </script>
+
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <link rel="stylesheet" href="/css/themes.css">
+</head>
+<body>
+
+    <header>
+        <div class="brand"><span class="dot" aria-hidden="true"></span><span data-brand="pool_name">GRINIUM</span></div>
+        <nav class="header-nav" aria-label="Main">
+            <a href="index.html" class="nav-link">Dashboard</a>
+            <a href="miners-stats.html" class="nav-link active">Miners</a>
+            <a href="payment-history.html" class="nav-link">Payouts</a>
+            <a href="index.html#info" class="nav-link">Info</a>
+            <a href="account-settings.html" class="nav-link">My Account</a>
+        </nav>
+        <div class="nav-right">
+            <div class="theme-switcher"></div>
+            <a class="btn primary sm" href="index.html#connect">Start Mining</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <h2 class="page-title">Miners Statistics</h2>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Miners Online</div>
+                <div class="stat-value" id="ms-miners">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Pool Hashrate (1h)</div>
+                <div class="stat-value" id="ms-hashrate">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Top Miner Hashrate</div>
+                <div class="stat-value" id="ms-top">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Active Connections</div>
+                <div class="stat-value" id="ms-connections">—</div>
+            </div>
+        </div>
+
+        <h3 class="section-title">Top 10 Miners by Hashrate (last hour)</h3>
+
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Miner</th>
+                    <th>Hashrate</th>
+                    <th>Peak (1h)</th>
+                </tr>
+            </thead>
+            <tbody id="top-hashrate">
+                <tr><td colspan="4">Loading…</td></tr>
+            </tbody>
+        </table>
+
+        <h3 class="section-title">Top Miners by Balance</h3>
+
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Miner</th>
+                    <th>Unpaid Balance (GRIN)</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="top-balance">
+                <tr><td colspan="4">Loading…</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <footer>
+        <p data-brand="footer_text">GRINIUM — Uranium Element Mining Pool | Professional • Reliable • Secure</p>
+        <div data-brand="page-links"></div>
+        <p data-brand="attribution" style="opacity:0.7;font-size:0.95em;margin-top:6px;">Powered by the Grin Node Toolkit</p>
+    </footer>
+
+    <script src="/js/auth.js"></script>
+    <script>
+        // Escape any value before it goes into innerHTML. Defense-in-depth: the stratum
+        // layer already restricts grin_address to bech32 chars (lib/stratum-protocol.js),
+        // but escaping here protects every interpolated field regardless of source.
+        function escHtml(v) {
+            return String(v == null ? '' : v)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // Theme switching is handled site-wide by /js/public-theme.js, which renders
+        // the theme picker and applies the 3 built-in + 10 white-label themes.
+
+        // ═════════════════════════════════════════════════════════════════
+        // API Integration: live miner statistics — public endpoints only.
+        //   /api/pool/stats        active miners / connections
+        //   /api/stratum/hashrate  pool GPS + top miners by 1h hashrate
+        //   /api/pool/miners       top miners by unpaid balance
+        // ═════════════════════════════════════════════════════════════════
+
+        function fmtGpsLabel(gps) {
+            if (!isFinite(gps)) return '—';
+            if (gps >= 1e6) return (gps / 1e6).toFixed(2) + ' MG/s';
+            if (gps >= 1e3) return (gps / 1e3).toFixed(2) + ' kG/s';
+            return gps.toFixed(2) + ' G/s';
+        }
+
+        function truncAddr(addr) {
+            addr = String(addr || '');
+            return addr.length > 16 ? addr.slice(0, 9) + '…' + addr.slice(-4) : addr;
+        }
+
+        function setStat(id, text) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = text;
+        }
+
+        function tableMessage(tbody, msg) {
+            tbody.innerHTML = '<tr><td colspan="4">' + escHtml(msg) + '</td></tr>';
+        }
+
+        async function loadMinersStats() {
+            try {
+                const stats = await Auth.fetch('/api/pool/stats');
+                if (stats) {
+                    setStat('ms-miners', stats.active_miners || 0);
+                    setStat('ms-connections', stats.active_connections || 0);
+                }
+            } catch (e) { /* tiles keep placeholders */ }
+
+            const hrTbody = document.getElementById('top-hashrate');
+            try {
+                const hr = await Auth.fetch('/api/stratum/hashrate');
+                if (hr) {
+                    setStat('ms-hashrate', fmtGpsLabel(hr.pool_hashrate_1h_gps || 0));
+                    const top = Array.isArray(hr.top_miners) ? hr.top_miners : [];
+                    setStat('ms-top', top.length ? fmtGpsLabel(top[0].hashrate_gps || 0) : '—');
+                    if (hrTbody) {
+                        if (!top.length) {
+                            tableMessage(hrTbody, 'No active miners in the last hour');
+                        } else {
+                            hrTbody.innerHTML = top.map((m, idx) => `
+                                <tr>
+                                    <td>#${idx + 1}</td>
+                                    <td title="${escHtml(m.grin_address)}">${escHtml(truncAddr(m.grin_address))}</td>
+                                    <td>${escHtml(fmtGpsLabel(m.hashrate_gps || 0))}</td>
+                                    <td>${escHtml(fmtGpsLabel(m.max_hashrate_gps || 0))}</td>
+                                </tr>
+                            `).join('');
+                        }
+                    }
+                }
+            } catch (e) {
+                if (hrTbody) tableMessage(hrTbody, 'Hashrate data unavailable');
+            }
+
+            const balTbody = document.getElementById('top-balance');
+            try {
+                const miners = await Auth.fetch('/api/pool/miners?limit=10');
+                if (balTbody) {
+                    if (!Array.isArray(miners) || !miners.length) {
+                        tableMessage(balTbody, 'No miners yet — be the first!');
+                    } else {
+                        balTbody.innerHTML = miners.map((m, idx) => `
+                            <tr>
+                                <td>#${idx + 1}</td>
+                                <td title="${escHtml(m.grin_address)}">${escHtml(truncAddr(m.grin_address))}</td>
+                                <td>${Number(m.balance || 0).toFixed(4)}</td>
+                                <td><span class="badge${m.is_online ? ' badge-online' : ''}">${m.is_online ? 'Online' : 'Offline'}</span></td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+            } catch (e) {
+                if (balTbody) tableMessage(balTbody, 'Miner data unavailable');
+            }
+        }
+
+        // Load on page ready
+        document.addEventListener('DOMContentLoaded', loadMinersStats);
+
+        // Refresh every 60 seconds
+        setInterval(loadMinersStats, 60000);
+    </script>
+    <script src="/js/public-theme.js"></script>
+    <script src="/js/branding.js"></script>
+</body>
+</html>

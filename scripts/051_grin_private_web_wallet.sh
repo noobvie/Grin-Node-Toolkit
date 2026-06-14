@@ -359,7 +359,7 @@ ww_install_binary() {
 ww_install_deps() {
     clear
     echo -e "\n${BOLD}${CYAN}── Web Wallet — 2) Install Dependencies ──${RESET}\n"
-    echo -e "  ${DIM}Required: nodejs >= 18, nginx, certbot, htpasswd${RESET}"
+    echo -e "  ${DIM}Required: nodejs >= 24, nginx, certbot, htpasswd${RESET}"
     echo -e "  ${DIM}Optional: tor (for Tor sends), qrencode (QR codes), jq (status)${RESET}"
     echo ""
 
@@ -404,19 +404,24 @@ ww_install_deps() {
     info "Updating package lists..."
     apt-get update -qq || warn "apt-get update failed — see above. Continuing anyway."
 
-    # Special handling for nodejs: prefer NodeSource 20.x if the distro nodejs is < 18.
-    if ! command -v node &>/dev/null; then
-        info "Installing nodejs (distro package)..."
-        apt-get install -y -qq nodejs npm || warn "Distro nodejs install failed — see above. Will try NodeSource."
-        local node_major
-        node_major=$(node --version 2>/dev/null | sed 's/^v//; s/\..*//')
-        if [[ -z "$node_major" || $node_major -lt 18 ]]; then
-            warn "Distro node too old (got: ${node_major:-none}). Installing NodeSource 20.x..."
-            if curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; then
-                apt-get install -y -qq nodejs || error "NodeSource nodejs install failed — see above."
-            else
-                error "NodeSource setup script failed — install nodejs manually and re-run."
-            fi
+    # nodejs: ensure 24+ (toolkit standard — node:sqlite-based products need >= 24,
+    # and we keep every toolkit product on the same floor). Upgrade via NodeSource
+    # when missing or older; a node >= 24 (e.g. 26 from a co-installed product) is
+    # left untouched so we never downgrade.
+    local node_major=0
+    command -v node &>/dev/null && node_major=$(node --version 2>/dev/null | sed 's/^v//; s/\..*//')
+    [[ "$node_major" =~ ^[0-9]+$ ]] || node_major=0
+    if [[ "$node_major" -lt 24 ]]; then
+        if [[ "$node_major" -gt 0 ]]; then
+            warn "Node.js v${node_major} found — toolkit standard is v24+. Upgrading via NodeSource 24.x..."
+        else
+            info "Installing Node.js 24.x via NodeSource..."
+        fi
+        apt-get remove -y -qq nodejs npm 2>/dev/null || true
+        if curl -fsSL https://deb.nodesource.com/setup_24.x | bash -; then
+            apt-get install -y -qq nodejs || error "NodeSource nodejs install failed — see above."
+        else
+            error "NodeSource setup script failed — install nodejs 24+ manually and re-run."
         fi
     fi
 

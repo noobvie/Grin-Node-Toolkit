@@ -1,33 +1,34 @@
 #!/bin/bash
 # =============================================================================
-# 07_grin_mining_solo.sh — Grin Solo Mining Setup
+# 07_grin_mining_solo.sh — Grin Solo Private Mining Setup
 # =============================================================================
 # Configure and manage solo mining on a Grin node.
 # Enables the node's built-in stratum server, sets your wallet reward address,
 # and publishes the port so miners can connect directly.
 #
 # ─── Menu ─────────────────────────────────────────────────────────────────────
-# Grouped sub-menus; each action prompts mainnet / testnet inside (reusing the
-# "1) Mainnet 2) Testnet" pattern), so the old per-network letter duplication
-# (B/C/D/E mainnet + F/G/I/J testnet) is gone. A) stays a letter as the always-
-# visible overview alongside the compact stratum-status header.
+# Network-as-parent (mirrors 052 Grin Drop): the top screen picks a network ONCE,
+# then every per-action prompt inside that branch is gone — SOLO_NETWORK is set
+# and inherited. Cross-network tools (both-net status, the unified stats page,
+# global watchdogs) live on the network-select screen, not inside a branch.
+# All-numeric keys; letters are reserved for destructive/admin actions.
 #
-#   A) Node & Mining Status   (node sync, tmux, stratum config + miner count)
+#   Network-select screen
+#     1) Configure solo private pool Mainnet ┐ enter the per-net branch below
+#     2) Configure solo private pool Testnet ┘
+#     3) Deploy stats web page          (both networks; public domain+SSL, or plain
+#                                        HTTP on a LAN IP if launched as `… solo.sh lan`)
+#     4) Node, Wallet & Mining Status   (both networks)
+#     5) Watchdogs (global)             (node-sync · boot autostart · wallet · stratum)
+#     6) Maintenance                    (encrypted backup · restore · schedule · seed)
+#     C) Clean up solo mining           (Danger Zone — remove solo infra · keeps node + seed + backups)
+#     0) Back to main menu
 #
-#   1) Wallet               ▸ setup/recover · listener · auto-restart · address
-#   2) Stratum              ▸ setup · configure · publish · restrict
-#   3) Stats & Web          ▸ live dashboard · web page (payment prefixes + lock)
-#   4) Health / Watchdogs   ▸ node-sync · boot autostart · wallet listener · stratum
-#
-#   0) Back to main menu
-#
-# Migration map (old letter → new home):
-#   A  Status .............. A           (kept)
-#   B/F Setup Stratum ...... 2 ▸ 1       D/I Publish Stratum .... 2 ▸ 3
-#   C/G Configure Stratum .. 2 ▸ 2       E/J Restrict Stratum ... 2 ▸ 4
-#   L  Live stats .......... 3 ▸ 1       S  Web page ............ 3 ▸ 2
-#   W  Stratum watchdog .... 4 ▸ 4       K  Wallet .............. 1
-#   H  Health/Watchdogs .... 4
+#   Per-net branch (after 1/2 — SOLO_NETWORK set)
+#     1) Wallet      ▸ setup/recover · listener · auto-restart · address
+#     2) Stratum     ▸ setup · configure · publish · restrict
+#     3) Terminal Stats  (live dashboard for the chosen net)
+#     0) Back to network select
 # =============================================================================
 
 set -euo pipefail
@@ -50,11 +51,21 @@ STRATUM_PORT_TESTNET=13416
 NODE_API_PORT_MAINNET=3413
 NODE_API_PORT_TESTNET=13413
 
+# Stats-page presentation mode, set once from $1 in main():
+#   "public" (default) — domain + Let's Encrypt SSL via certbot (the original flow).
+#   "lan"              — plain HTTP on a chosen LAN IP:port; no domain, no certbot,
+#                        no Basic Auth. For an internal/home network where the page
+#                        is never internet-reachable. ONLY the stats-page deploy
+#                        differs; all mining mechanics (node/wallet/stratum/watchdogs/
+#                        backups/collector) are identical to public mode.
+SOLO_NET_MODE="public"
+
 # Stats page resources are namespaced "grin-solo-mining-stat" (NOT "grin-stats" —
 # Script 06 / Global health owns grin-stats for its ecosystem site). ONE unified
 # vhost serves both networks side by side, so there is no per-network suffix.
 STATS_WEB_SRC="$TOOLKIT_ROOT/web/07_mining_pool_solo/index.html"
 STATS_SETUP_SRC="$TOOLKIT_ROOT/web/07_mining_pool_solo/setup-solo-mining.html"
+STATS_SHOT_SRC="$TOOLKIT_ROOT/web/07_mining_pool_solo/pool-config-example.png"
 STATS_LOGO_SRC="$TOOLKIT_ROOT/web/0z0_media/logo_favi/grin_gold.svg"
 STATS_BASENAME="grin-solo-mining-stat"
 
@@ -65,10 +76,10 @@ BLOCK_COLLECTOR_BIN="/usr/local/bin/grin-solo-mining-collector.py"
 BLOCK_COLLECTOR_WRAPPER="/usr/local/bin/grin-solo-mining-collector"
 BLOCK_COLLECTOR_CRON="/etc/cron.d/grin-solo-mining-collector"
 BLOCK_COLLECTOR_STATE_DIR="/opt/grin/solo-stats"
-# Reward-split payment calc (mainnet): nickname PREFIXES only, never addresses.
-# The collector reads this to emit split_main.json.
+# Payout-split payment calc (mainnet): nickname grouping (text before first dot)
+# only, never addresses. The collector reads this to emit split_main.json.
 PAYMENT_CONFIG="/opt/grin/conf/grin_solo_payment.json"
-# Optional stats-page access lock (HTTP Basic Auth over the certbot-managed HTTPS).
+# Optional index & setup pages access lock (HTTP Basic Auth over the certbot-managed HTTPS).
 STATS_HTPASSWD="/etc/nginx/grin-solo-stats.htpasswd"
 WATCHDOG_LOG="/opt/grin/logs/stratum-watchdog.log"
 LOG_DIR="/opt/grin/logs"
@@ -96,6 +107,10 @@ source "$SCRIPT_DIR/lib/grin_node_control.sh"
 source "$SCRIPT_DIR/lib/grin_node_keepalive.sh"
 # shellcheck source=lib/07_solo_wallet.sh
 source "$SCRIPT_DIR/lib/07_solo_wallet.sh"
+# Encrypted backup/restore/schedule (depends on SW_BASE/SW_STATE_DIR from the
+# wallet lib + PAYMENT_CONFIG above — sourced after them so those are set).
+# shellcheck source=lib/07_solo_backup.sh
+source "$SCRIPT_DIR/lib/07_solo_backup.sh"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOML DETECTION
@@ -319,6 +334,158 @@ graceful_restart_grin() {
 
 _sed_escape_rhs() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
 
+# True if $1 is a private / non-internet-routable IPv4 (RFC1918, loopback,
+# link-local, or CGNAT 100.64/10) — i.e. an address a remote miner can't dial.
+_is_private_ipv4() {
+    local ip="$1"
+    [[ "$ip" =~ ^10\. ]]                                  && return 0
+    [[ "$ip" =~ ^192\.168\. ]]                            && return 0
+    [[ "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. ]]          && return 0
+    [[ "$ip" =~ ^127\. ]]                                 && return 0
+    [[ "$ip" =~ ^169\.254\. ]]                            && return 0
+    [[ "$ip" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\. ]] && return 0
+    return 1
+}
+
+# First PUBLIC IPv4 bound locally (default-route source addr, then any other
+# global-scope addr). rc 1 if the host has only private/NAT addresses.
+_local_public_ipv4() {
+    local ip; local candidates=()
+    ip=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1 || true)
+    [[ -n "$ip" ]] && candidates+=("$ip")
+    while IFS= read -r ip; do
+        [[ -n "$ip" ]] && candidates+=("$ip")
+    done < <(ip -4 -o addr show scope global 2>/dev/null | grep -oP 'inet \K[0-9.]+' || true)
+    # Guard empty-array expansion under `set -u` (bash < 4.4 errors otherwise).
+    [[ ${#candidates[@]} -eq 0 ]] && return 1
+    for ip in "${candidates[@]}"; do
+        [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && ! _is_private_ipv4 "$ip" \
+            && { echo "$ip"; return 0; }
+    done
+    return 1
+}
+
+# External view: query up to 3 echo services and return the IP a MAJORITY agree
+# on (first one if there's a tie), or rc 1 if none answered. The majority vote
+# guards against a single service handing back a proxy/CDN address.
+_external_public_ipv4() {
+    local svc ip; local got=()
+    for svc in "https://api.ipify.org" "https://ipv4.icanhazip.com" "https://ifconfig.me/ip"; do
+        ip=$(curl -4 -sf --max-time 4 "$svc" 2>/dev/null | tr -d '[:space:]' || true)
+        [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && got+=("$ip")
+    done
+    [[ ${#got[@]} -eq 0 ]] && return 1
+    printf '%s\n' "${got[@]}" | sort | uniq -c | sort -rn | awk 'NR==1{print $2}'
+}
+
+# Cross-checked PUBLIC IPv4 for the "point your miner here" message. Reconciles
+# the locally-bound public IP against an external majority vote and reports BOTH
+# results via globals (NOT stdout — the caller can't read a global set inside a
+# `$(...)` subshell, so we set them directly here and the caller reads them):
+#   $_DETECTED_PUBLIC_IP  the chosen IP ("" if none)
+#   $_IP_DETECT_NOTE      a human confidence string:
+#     · agree                 → verified (high confidence)
+#     · only a private NIC    → behind NAT, trust the external value
+#     · disagree (multi-homed / unusual SNAT) → prefer the NIC IP (it's what's
+#       actually bound for inbound stratum) but surface BOTH so ops can confirm
+#     · external only          → no public NIC addr but a service answered
+# Returns 0 if an IP was determined, rc 1 otherwise. IPv6 added later.
+_DETECTED_PUBLIC_IP=""
+_IP_DETECT_NOTE=""
+_detect_public_ipv4() {
+    _DETECTED_PUBLIC_IP=""
+    _IP_DETECT_NOTE=""
+    local local_ip ext_ip
+    local_ip=$(_local_public_ipv4 || true)
+    ext_ip=$(_external_public_ipv4 || true)
+
+    if [[ -n "$local_ip" && -n "$ext_ip" ]]; then
+        if [[ "$local_ip" == "$ext_ip" ]]; then
+            _IP_DETECT_NOTE="verified — local NIC and external check agree"
+        else
+            _IP_DETECT_NOTE="NIC=$local_ip differs from external=$ext_ip (multi-homed/NAT?) — using the NIC IP; confirm which one miners can actually reach"
+        fi
+        _DETECTED_PUBLIC_IP="$local_ip"; return 0
+    elif [[ -n "$ext_ip" ]]; then
+        _IP_DETECT_NOTE="behind NAT — external check reports this; the NIC only has a private address"
+        _DETECTED_PUBLIC_IP="$ext_ip"; return 0
+    elif [[ -n "$local_ip" ]]; then
+        _IP_DETECT_NOTE="local NIC only — could not reach an external service to confirm"
+        _DETECTED_PUBLIC_IP="$local_ip"; return 0
+    fi
+    return 1
+}
+
+# Interactive confirm/override of the public IPv4 advertised to miners on the setup
+# page. Detection (_detect_public_ipv4) already cross-checks the local NIC against an
+# external 3-service majority vote (ipify / icanhazip / ifconfig.me); this surfaces
+# that result + its confidence note and lets the operator accept it, type a correction,
+# or clear it (page then falls back to the domain). The chosen IP is echoed on STDOUT;
+# all prompts/notes go to STDERR so `$(...)` capture stays clean. Empty = no IP.
+_confirm_public_ipv4() {
+    local fallback="$1"   # IP already in config.json, offered if live detection fails
+    _detect_public_ipv4 || true
+    local detected="${_DETECTED_PUBLIC_IP:-$fallback}"
+
+    echo >&2
+    if [[ -n "$_DETECTED_PUBLIC_IP" ]]; then
+        echo -e "  ${BOLD}Public IP check${RESET} — detected ${BOLD}${_DETECTED_PUBLIC_IP}${RESET}" >&2
+        echo -e "  ${DIM}${_IP_DETECT_NOTE}${RESET}" >&2
+    elif [[ -n "$fallback" ]]; then
+        echo -e "  ${BOLD}Public IP check${RESET} — ${YELLOW}auto-detect failed${RESET}; keeping saved value ${BOLD}${fallback}${RESET}" >&2
+    else
+        echo -e "  ${BOLD}Public IP check${RESET} — ${YELLOW}could not detect a public IPv4 and none is saved.${RESET}" >&2
+    fi
+    echo -e "  ${DIM}Miners connect to this IP + stratum port over raw TCP, so it must be the" >&2
+    echo -e "  internet-reachable address — not a private/NAT one.${RESET}" >&2
+
+    while true; do
+        if [[ -n "$detected" ]]; then
+            echo -ne "  Public IP for miners [${detected}] (Enter=accept · type to override · '-' to clear): " >&2
+        else
+            echo -ne "  Public IP for miners (type the IP, Enter to skip): " >&2
+        fi
+        local ans; read -r ans
+        if [[ -z "$ans" ]]; then
+            printf '%s' "$detected"; return 0
+        elif [[ "$ans" == "-" ]]; then
+            printf ''; return 0
+        elif [[ "$ans" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+            if _is_private_ipv4 "$ans"; then
+                echo -ne "  ${YELLOW}$ans is private/NAT — miners on the internet can't reach it. Use anyway? [y/N]: ${RESET}" >&2
+                local c; read -r c
+                [[ "$c" =~ ^[Yy]$ ]] && { printf '%s' "$ans"; return 0; }
+            else
+                printf '%s' "$ans"; return 0
+            fi
+        else
+            echo -e "  ${RED}Not a valid IPv4 — try again.${RESET}" >&2
+        fi
+    done
+}
+
+# Best-effort detection of this box's primary LAN (RFC-1918) IPv4. Used by the
+# LAN stats-page flow as the prefill for the bind address. Prefers the source IP
+# of the default route (the NIC the box actually reaches the LAN on), then falls
+# back to the first private address in `hostname -I`. Echoes the IP (empty if none);
+# the caller always lets the operator confirm/override, so a miss is non-fatal.
+_detect_lan_ipv4() {
+    local ip=""
+    ip=$(ip -4 route get 1.1.1.1 2>/dev/null \
+         | grep -oP 'src \K[0-9.]+' | head -n1 || true)
+    if [[ -n "$ip" ]] && _is_private_ipv4 "$ip"; then
+        printf '%s' "$ip"; return 0
+    fi
+    # Fall back to the first private address reported by hostname -I.
+    local cand
+    for cand in $(hostname -I 2>/dev/null); do
+        if [[ "$cand" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && _is_private_ipv4 "$cand"; then
+            printf '%s' "$cand"; return 0
+        fi
+    done
+    printf ''
+}
+
 _stratum_bind_line() {
     local toml="$1" port="$2"
     if [[ ! -f "$toml" ]]; then
@@ -344,6 +511,22 @@ show_compact_status() {
     mn_bind=$(_stratum_bind_line "${mn_toml:-}" "$STRATUM_PORT_MAINNET" 2>/dev/null || echo -e "${DIM}unknown${RESET}")
     tn_bind=$(_stratum_bind_line "${tn_toml:-}" "$STRATUM_PORT_TESTNET" 2>/dev/null || echo -e "${DIM}unknown${RESET}")
 
+    # Node line first — cheap ss-only RUNNING/OFF (no API calls, so the menu
+    # never stalls on an unreachable node). Sync state is intentionally NOT here;
+    # it needs an Owner-API call and lives behind menu A) Start here.
+    echo -e "${BOLD}  Node Status:${RESET}"
+    if ss -tlnp 2>/dev/null | grep -q ":$NODE_API_PORT_MAINNET "; then
+        echo -e "    Mainnet ($NODE_API_PORT_MAINNET): ${GREEN}RUNNING${RESET}"
+    else
+        echo -e "    Mainnet ($NODE_API_PORT_MAINNET): ${RED}OFF${RESET}     ${DIM}(build/sync in Script 01)${RESET}"
+    fi
+    if ss -tlnp 2>/dev/null | grep -q ":$NODE_API_PORT_TESTNET "; then
+        echo -e "    Testnet ($NODE_API_PORT_TESTNET): ${GREEN}RUNNING${RESET}"
+    else
+        echo -e "    Testnet ($NODE_API_PORT_TESTNET): ${RED}OFF${RESET}     ${DIM}(build/sync in Script 01)${RESET}"
+    fi
+    echo ""
+
     echo -e "${BOLD}  Stratum Status:${RESET}"
     if ss -tlnp 2>/dev/null | grep -q ":$STRATUM_PORT_MAINNET "; then
         echo -ne "    Mainnet ($STRATUM_PORT_MAINNET): ${GREEN}LISTENING${RESET}  bind: "
@@ -361,7 +544,7 @@ show_compact_status() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# A) NODE & MINING STATUS
+# NODE, WALLET & MINING STATUS  (network-select ▸ 4)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _show_node_info() {
@@ -392,6 +575,25 @@ _show_node_info() {
         fi
     else
         echo -e "    Node   : ${RED}NOT RUNNING${RESET}  ${DIM}(port $api_port not listening)${RESET}"
+    fi
+
+    # Coinbase wallet Foreign listener — where the node sends block rewards.
+    # Shown before Stratum: a solo miner's first question is "is my reward
+    # listener up?", so the screen reads node → wallet → mining top to bottom.
+    local wal_port wal_pid wal_toml wal_tmux
+    wal_port=$(sw_foreign_port "$network")
+    wal_pid=$(ss -tlnp 2>/dev/null | grep ":$wal_port " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+    wal_toml=$(sw_toml "$network" 2>/dev/null || true)
+    if [[ -n "$wal_pid" ]]; then
+        echo -e "    Wallet : ${GREEN}LISTENING${RESET}  ${DIM}(PID $wal_pid, Foreign port $wal_port)${RESET}"
+        wal_tmux=$(sw_tmux_name "$network" 2>/dev/null || true)
+        if [[ -n "$wal_tmux" ]] && tmux has-session -t "$wal_tmux" 2>/dev/null; then
+            echo -e "    Wtmux  : ${GREEN}$wal_tmux${RESET}  ${DIM}(attach: tmux attach -t $wal_tmux)${RESET}"
+        fi
+    elif [[ -n "$wal_toml" && -f "$wal_toml" ]]; then
+        echo -e "    Wallet : ${RED}NOT RUNNING${RESET}  ${DIM}(configured, Foreign port $wal_port not listening)${RESET}"
+    else
+        echo -e "    Wallet : ${DIM}not configured${RESET}  ${DIM}(Foreign port $wal_port)${RESET}"
     fi
 
     if ss -tlnp 2>/dev/null | grep -q ":$stratum_port "; then
@@ -427,7 +629,7 @@ _show_node_info() {
 show_node_status() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  A) Node & Mining Status${RESET}"
+    echo -e "${BOLD}${CYAN}  Node, Wallet & Mining Status${RESET}  ${DIM}(both networks)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     _show_node_info mainnet "$NODE_API_PORT_MAINNET" "$STRATUM_PORT_MAINNET"
@@ -435,7 +637,153 @@ show_node_status() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# B / F) SETUP STRATUM
+# START HERE — NODE PRE-CHECK  (menu ▸ A)
+# ═══════════════════════════════════════════════════════════════════════════════
+# A beginner's "step 0": solo mining needs a fully synced node on THIS server.
+# Read-only — reports node running + sync state per network and points at Script
+# 01 when no node exists yet. Sync uses one Owner-API call per net; this only
+# runs when the user opens A), so the 8s-timeout curl never blocks the top menu.
+
+# Script 01 launches in-process (mirrors Script 05's run_sub) so the user can
+# build/sync a node without backing out to the main menu. It lives in the scripts
+# dir = SCRIPT_DIR.
+_SOLO_SCRIPT01="01_build_new_grin_node.sh"
+
+# _precheck_one_net <network> <api_port> <role: primary|optional>
+# Mainnet is the primary node (real mining needs it); testnet is optional — a
+# user can run one here to practice mining safely or help the test network, even
+# without mining it (testnet GRIN has no monetary value).
+_precheck_one_net() {
+    local network="$1" api_port="$2" role="${3:-primary}"
+    local label="Mainnet"; [[ "$network" == "testnet" ]] && label="Testnet"
+    echo -e "  ${BOLD}$label:${RESET}"
+
+    if ! ss -tlnp 2>/dev/null | grep -q ":$api_port "; then
+        echo -e "    Node : ${RED}NOT RUNNING${RESET}  ${DIM}(API port $api_port not listening)${RESET}"
+        if [[ "$role" == "primary" ]]; then
+            echo -e "    ${YELLOW}→ Real mining needs this. Build & sync a mainnet node (Script 01) first.${RESET}"
+        else
+            echo -e "    ${CYAN}○ Spin one up here too!${RESET}  ${DIM}This server already has the resources —${RESET}"
+            echo -e "    ${DIM}  a testnet node grows the test network and lets you practice mining${RESET}"
+            echo -e "    ${DIM}  risk-free (testnet GRIN has no value) — Script 01 can build it.${RESET}"
+        fi
+        echo ""
+        return
+    fi
+    echo -e "    Node : ${GREEN}RUNNING${RESET}  ${DIM}(API port $api_port)${RESET}"
+
+    local json sync height peers
+    json=$(gnc_owner_get_status "$network" 6 2>/dev/null || true)
+    if [[ -z "$json" ]]; then
+        echo -e "    Sync : ${YELLOW}unknown${RESET}  ${DIM}(node up but Owner API didn't answer — check .api_secret)${RESET}"
+        echo ""
+        return
+    fi
+    sync=$(gnc_status_field "$json" sync_status 2>/dev/null || true)
+    height=$(gnc_status_field "$json" tip.height 2>/dev/null || true)
+    peers=$(gnc_status_field "$json" connections 2>/dev/null || true)
+    if [[ "$sync" == "no_sync" ]]; then
+        echo -e "    Sync : ${GREEN}SYNCED${RESET}  ${DIM}(height ${height:-?}, peers ${peers:-?})${RESET}"
+        if [[ "$role" == "primary" ]]; then
+            echo -e "    ${GREEN}✓ Ready to mine.${RESET}"
+        else
+            echo -e "    ${GREEN}✓ Synced — thanks for strengthening the test network!${RESET}  ${DIM}Great for practice too.${RESET}"
+        fi
+    else
+        echo -e "    Sync : ${YELLOW}${sync:-syncing}${RESET}  ${DIM}(height ${height:-?}, peers ${peers:-?})${RESET}"
+        echo -e "    ${YELLOW}⏳ Still syncing — wait until SYNCED (coinbase from an unsynced node is invalid).${RESET}"
+    fi
+    echo ""
+}
+
+# _precheck_next_action → echoes the single most useful "Next" action as
+# "<net>:<start|build>", or nothing when both nodes are already running.
+# Mainnet has priority (real mining needs it); testnet is only offered once
+# mainnet is up. "start" only when the node is INSTALLED (conf + binary) so
+# gnc_start_node_tmux will actually work; otherwise "build" (route to Script 01).
+# Cheap: ss + a conf-file read, no API calls.
+_precheck_next_action() {
+    local net api_port dir
+    for net in mainnet testnet; do
+        [[ "$net" == "mainnet" ]] && api_port="$NODE_API_PORT_MAINNET" || api_port="$NODE_API_PORT_TESTNET"
+        ss -tlnp 2>/dev/null | grep -q ":$api_port " && continue   # running → skip
+        if dir=$(gnc_resolve_node_dir "$net" 2>/dev/null) && gnc_node_binary "$dir" >/dev/null 2>&1; then
+            echo "$net:start"
+        else
+            echo "$net:build"
+        fi
+        return 0
+    done
+    return 0   # both running → empty
+}
+
+solo_node_precheck() {
+    local choice nextact net act s
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  A) Start Here — Node Check${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        echo -e "  Solo mining needs a ${BOLD}fully synced mainnet node on this server${RESET}."
+        echo -e "  This screen only checks — it changes nothing."
+        echo ""
+        _precheck_one_net mainnet "$NODE_API_PORT_MAINNET" primary
+        _precheck_one_net testnet "$NODE_API_PORT_TESTNET" optional
+
+        echo -e "  ${BOLD}Once mainnet is SYNCED, set up mining in this order:${RESET}"
+        echo -e "    · Pick the network    ${DIM}(1 Mainnet / 2 Testnet)${RESET}"
+        echo -e "    · Wallet              ${DIM}set up the coinbase listener — back up your seed!${RESET}"
+        echo -e "    · Stratum             ${DIM}Setup, then Publish to open it to miners${RESET}"
+        echo -e "    · Point your miner    ${DIM}stratum+tcp://YOUR_SERVER_IP:<port>${RESET}"
+        echo ""
+
+        nextact=$(_precheck_next_action)
+        net="${nextact%%:*}"; act="${nextact##*:}"
+        if [[ -n "$nextact" ]]; then
+            echo -e "  ${DIM}─── Next ─────────────────────────────────────────${RESET}"
+            if [[ "$act" == "start" && "$net" == "mainnet" ]]; then
+                echo -e "  ${GREEN}1${RESET}) Start your mainnet node now   ${DIM}(installed but stopped)${RESET}"
+            elif [[ "$act" == "start" && "$net" == "testnet" ]]; then
+                echo -e "  ${GREEN}1${RESET}) Start your testnet node now   ${DIM}(installed but stopped)${RESET}"
+            elif [[ "$net" == "mainnet" ]]; then
+                echo -e "  ${GREEN}1${RESET}) Build a Grin node now         ${DIM}(opens Script 01)${RESET}"
+            else
+                echo -e "  ${GREEN}1${RESET}) Build a testnet node          ${DIM}(opens Script 01 — run in parallel, no mining, to support the test network)${RESET}"
+            fi
+            echo -e "  ${DIM}↩  Enter to re-check · 0 to return${RESET}"
+            echo ""
+            echo -ne "${BOLD}Select [1/Enter/0]: ${RESET}"
+        else
+            echo -e "  ${GREEN}✓ Both nodes are running.${RESET}"
+            echo -e "  ${DIM}↩  Enter to re-check · 0 to return${RESET}"
+            echo ""
+            echo -ne "${BOLD}Select [Enter/0]: ${RESET}"
+        fi
+
+        read -r choice || choice=0
+        case "$choice" in
+            1)  [[ -z "$nextact" ]] && continue          # both up → no action bound to 1
+                if [[ "$act" == "start" ]]; then
+                    gnc_start_node_tmux "$net" 60 || true
+                    _solo_pause
+                else
+                    s="$SCRIPT_DIR/$_SOLO_SCRIPT01"
+                    if [[ -f "$s" ]]; then
+                        bash "$s" || true                # returns here when the user exits Script 01
+                    else
+                        error "Script 01 not found: $s"; _solo_pause
+                    fi
+                fi ;;
+            0)  return ;;
+            "") continue ;;                              # Enter → re-check (loop redraws fresh status)
+            *)  : ;;                                     # ignore stray input → redraw
+        esac
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SETUP STRATUM  (per-net branch ▸ Stratum ▸ 1)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _do_setup_stratum() {
@@ -458,13 +806,11 @@ _do_setup_stratum() {
     echo ""
 
     echo -e "${BOLD}Current stratum settings in:${RESET} $grin_toml"
-    local cur_enable cur_wallet cur_burn
+    local cur_enable cur_wallet
     cur_enable=$(grep -E '^[[:space:]]*enable_stratum_server[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 || true)
     cur_wallet=$(grep -E '^[[:space:]]*wallet_listener_url[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 || true)
-    cur_burn=$(grep -E '^[[:space:]]*burn_reward[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 || true)
     echo -e "  enable_stratum_server : ${cur_enable:-${DIM}(not set)${RESET}}"
     echo -e "  wallet_listener_url   : ${cur_wallet:-${DIM}(not set)${RESET}}"
-    echo -e "  burn_reward           : ${cur_burn:-${DIM}(not set)${RESET}}"
     echo ""
 
     echo -ne "Enable stratum server (enable_stratum_server = true)? [Y/n/0]: "
@@ -505,22 +851,18 @@ _do_setup_stratum() {
         log "Setup ($network): wallet_listener_url = $new_url in $grin_toml"
     fi
 
-    echo ""
-    echo -e "${BOLD}burn_reward${RESET} — set true to discard coinbase (testing only)."
-    echo -ne "Set burn_reward = false (keep rewards)? [Y/n/0]: "
-    read -r burn_choice
-    [[ "$burn_choice" == "0" ]] && burn_choice="n"
-    if [[ "${burn_choice,,}" != "n" ]]; then
-        if grep -qE '^#?[[:space:]]*burn_reward[[:space:]]*=' "$grin_toml" 2>/dev/null; then
-            sed -i -E \
-                "s|^#?[[:space:]]*burn_reward[[:space:]]*=.*|burn_reward = false|" \
-                "$grin_toml"
-        else
-            echo "burn_reward = false" >> "$grin_toml"
-        fi
-        success "burn_reward = false"
-        log "Setup ($network): burn_reward = false in $grin_toml"
+    # burn_reward — always force the safe default (keep rewards). This is a
+    # testing-only flag that discards coinbase; we never prompt for it so a
+    # solo miner can't accidentally burn real block rewards. A tester who
+    # genuinely wants to burn can set it by hand in grin-server.toml.
+    if grep -qE '^#?[[:space:]]*burn_reward[[:space:]]*=' "$grin_toml" 2>/dev/null; then
+        sed -i -E \
+            "s|^#?[[:space:]]*burn_reward[[:space:]]*=.*|burn_reward = false|" \
+            "$grin_toml"
+    else
+        echo "burn_reward = false" >> "$grin_toml"
     fi
+    log "Setup ($network): burn_reward = false (forced) in $grin_toml"
 
     echo ""
     success "Stratum setup complete for $network."
@@ -534,7 +876,7 @@ setup_stratum_mainnet() { _do_setup_stratum mainnet "$STRATUM_PORT_MAINNET" "$NO
 setup_stratum_testnet() { _do_setup_stratum testnet "$STRATUM_PORT_TESTNET" "$NODE_API_PORT_TESTNET"; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# C / G) CONFIGURE STRATUM
+# CONFIGURE STRATUM  (per-net branch ▸ Stratum ▸ 2)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _do_configure_stratum() {
@@ -553,18 +895,16 @@ _do_configure_stratum() {
 
     echo -e "${BOLD}Current settings in:${RESET} $grin_toml"
     echo ""
-    local cur_enable cur_addr cur_wallet cur_burn
+    local cur_enable cur_addr cur_wallet
     cur_enable=$(grep -E '^[[:space:]]*enable_stratum_server[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//' | xargs || true)
     cur_addr=$(grep -E '^[[:space:]]*stratum_server_addr[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
     cur_wallet=$(grep -E '^[[:space:]]*wallet_listener_url[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
-    cur_burn=$(grep -E '^[[:space:]]*burn_reward[[:space:]]*=' "$grin_toml" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//' | xargs || true)
     echo -e "  ${GREEN}1${RESET}) enable_stratum_server : ${cur_enable:-${DIM}not set${RESET}}"
     echo -e "  ${GREEN}2${RESET}) stratum_server_addr   : ${cur_addr:-${DIM}not set${RESET}}"
     echo -e "  ${GREEN}3${RESET}) wallet_listener_url   : ${cur_wallet:-${DIM}not set${RESET}}"
-    echo -e "  ${GREEN}4${RESET}) burn_reward           : ${cur_burn:-${DIM}not set${RESET}}"
     echo -e "  ${DIM}0) Cancel${RESET}"
     echo ""
-    echo -ne "Which setting to change [1-4/0]: "
+    echo -ne "Which setting to change [1-3/0]: "
     read -r cfg_choice
     [[ "$cfg_choice" == "0" || -z "$cfg_choice" ]] && return
 
@@ -619,23 +959,6 @@ _do_configure_stratum() {
             log "Configure ($network): wallet_listener_url = $new_wallet"
             changed=true
             ;;
-        4)
-            echo -ne "Set burn_reward [true/false] (current: ${cur_burn:-not set}): "
-            read -r new_burn
-            [[ -z "$new_burn" ]] && return
-            if [[ "$new_burn" != "true" && "$new_burn" != "false" ]]; then
-                warn "Must be exactly 'true' or 'false' — not changed."; return
-            fi
-            local esc_burn; esc_burn=$(_sed_escape_rhs "$new_burn")
-            if grep -qE '^#?[[:space:]]*burn_reward[[:space:]]*=' "$grin_toml" 2>/dev/null; then
-                sed -i -E "s|^#?[[:space:]]*burn_reward[[:space:]]*=.*|burn_reward = $esc_burn|" "$grin_toml"
-            else
-                echo "burn_reward = $new_burn" >> "$grin_toml"
-            fi
-            success "burn_reward = $new_burn"
-            log "Configure ($network): burn_reward = $new_burn"
-            changed=true
-            ;;
         *)
             warn "Invalid choice."
             return
@@ -657,47 +980,78 @@ configure_stratum_testnet() { _do_configure_stratum testnet "$STRATUM_PORT_TESTN
 
 _show_stratum_port_guide() {
     local port="$1"
-    clear
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  PORT GUIDE — Read before continuing${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
     local label="Mainnet"
     [[ "$port" == "$STRATUM_PORT_TESTNET" ]] && label="Testnet"
-    echo -e "  ${BOLD}PORT $port — Grin $label Stratum Mining Server (TCP)${RESET}"
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  Publish Stratum — $label (port $port)${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  ${CYAN}What it does${RESET} : Allows miners to connect and submit proof-of-work to your node."
-    echo -e "  ${CYAN}Who needs it${RESET} : Solo miners who want to mine directly on their own node."
-    echo -e "  ${CYAN}Expose via${RESET}   : Direct bind — patches grin-server.toml so grin listens on"
-    echo -e "               0.0.0.0:$port instead of 127.0.0.1:$port."
-    echo -e "  ${YELLOW}Requires${RESET}     : Graceful node restart for the change to take effect."
-    echo -e "  ${GREEN}Expose if${RESET}    : You want miners to point their hashrate at your node."
-    echo -e "  ${YELLOW}Skip if${RESET}      : You are mining locally (same machine as the node)."
-    echo -e "  ${DIM}Note${RESET}         : Coinbase rewards go to your local wallet — a localhost-only"
-    echo -e "               connection that does NOT need to be public."
-    echo ""
-    echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-    echo -ne "${BOLD}Type ${GREEN}yes${RESET}${BOLD} to confirm you have read the above and want to proceed [yes/N/0]: ${RESET}"
-    read -r _guide_confirm || true
-    if [[ "${_guide_confirm,,}" != "yes" ]]; then
-        info "Cancelled."
-        return 1
+    if [[ "${SOLO_NET_MODE:-public}" == "lan" ]]; then
+        echo -e "  Publishing binds grin to ${BOLD}0.0.0.0:$port${RESET} so miners on your LAN can"
+        echo -e "  reach this node. Point a miner (e.g. G1 mini) at this server's"
+        echo -e "  ${BOLD}LAN IP:$port${RESET} — no domain or public IP needed."
+    else
+        echo -e "  Publishing binds grin to ${BOLD}0.0.0.0:$port${RESET} so your miners (or friends')"
+        echo -e "  can reach this node. Point a miner (e.g. G1 mini) at your stratum"
+        echo -e "  ${BOLD}domain${RESET} or ${BOLD}YOUR_SERVER_IP:$port${RESET}. Required for any remote mining."
     fi
+    echo ""
+    echo -ne "${BOLD}Proceed? [Y/n]: ${RESET}"
+    read -r _guide_confirm || true
+    [[ "${_guide_confirm,,}" == "n" ]] && { info "Cancelled."; return 1; }
     return 0
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# D / E / I / J) PUBLISH / RESTRICT STRATUM
+# PUBLISH / RESTRICT STRATUM  (per-net branch ▸ Stratum ▸ 3 / 4)
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# Post-publish connection watch. Manual-refresh (Enter = re-check · 0 = return) to
+# match every other 07 screen — NOT a Ctrl-C trap. Reuses the same ss idiom as
+# _show_node_info. A rig usually appears ~1 min after the pool config is saved and
+# it reconnects, so this closes the loop at the moment the operator most wants to
+# know "did it connect?".
+#   $1 = stratum port   $2 = network label (Mainnet|Testnet)   $3 = miner URL
+_solo_watch_for_miner() {
+    local stratum_port="$1" label="$2" url="$3" n k
+    while true; do
+        n=$(ss -tnp 2>/dev/null | grep ":$stratum_port" | grep -c ESTAB || true)
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  Waiting for a miner — $label (port $stratum_port)${RESET}  ${DIM}($(date -u '+%H:%M:%S UTC'))${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        echo -e "  ${BOLD}Miner Pool / Server:${RESET}  ${BOLD}${CYAN}$url${RESET}"
+        echo ""
+        if [[ "${n:-0}" -gt 0 ]]; then
+            echo -e "  ${GREEN}✓ Miner connected!${RESET}  ${BOLD}$n${RESET} connection(s) on port $stratum_port"
+            echo ""
+            ss -tnp 2>/dev/null | grep ":$stratum_port" | grep ESTAB \
+                | awk '{print $5}' | head -5 | sed 's/^/      from /' || true
+        else
+            echo -e "  ${YELLOW}No miner connected yet.${RESET}  ${DIM}(0 established on port $stratum_port)${RESET}"
+            echo ""
+            echo -e "  ${DIM}A rig usually appears ~1 min after you save the pool config above and${RESET}"
+            echo -e "  ${DIM}it reconnects (the node must also have restarted after Publish). If${RESET}"
+            echo -e "  ${DIM}nothing shows after a few minutes, double-check on the miner:${RESET}"
+            echo -e "    ${DIM}· Pool/Server matches the URL above${RESET}"
+            echo -e "    ${DIM}· that IP is internet-reachable (firewall open, not a private/NAT addr)${RESET}"
+        fi
+        echo ""
+        echo -e "  ${DIM}↩  Enter to refresh status${RESET}"
+        echo -e "  ${RED}0${RESET}) Return"
+        echo ""
+        echo -ne "${BOLD}Select [Enter/0]: ${RESET}"
+        read -r k || k=0
+        [[ "$k" == "0" ]] && return
+    done
+}
 
 _enable_stratum() {
     local network="$1" stratum_port="$2" api_port="$3"
 
     _show_stratum_port_guide "$stratum_port" || return
-    echo -e "\n${BOLD}${CYAN}── Publish Stratum ($network, port $stratum_port) ──${RESET}\n"
-    echo -e "  Patches grin-server.toml: ${BOLD}0.0.0.0:$stratum_port${RESET}  (miners can connect directly)"
-    echo -e "  Requires graceful node restart."
     echo ""
 
     find_grin_server_toml "$network" "$api_port" || return
@@ -774,8 +1128,59 @@ _enable_stratum() {
 
     echo ""
     graceful_restart_grin "$api_port" "$network"
+
+    local label="Mainnet"; [[ "$network" == "testnet" ]] && label="Testnet"
+    # LAN mode advertises the server's LAN IP (miners are on the same network) so the
+    # stratum target matches the LAN stats page; Internet mode advertises the public IP.
+    local lan_mode=0
+    [[ "${SOLO_NET_MODE:-public}" == "lan" ]] && lan_mode=1
+    local pub_ip conn_host
+    if [[ $lan_mode -eq 1 ]]; then
+        pub_ip=$(_detect_lan_ipv4)
+        conn_host="${pub_ip:-YOUR_LAN_IP}"
+    else
+        # Sets globals $_DETECTED_PUBLIC_IP + $_IP_DETECT_NOTE (can't return them via
+        # $(...) — that subshell would discard the note global).
+        _detect_public_ipv4 || true
+        pub_ip="$_DETECTED_PUBLIC_IP"
+        conn_host="${pub_ip:-YOUR_SERVER_IP}"
+    fi
+    local url="stratum+tcp://${conn_host}:${stratum_port}"
+
     echo ""
-    info "Miners connect to: YOUR_SERVER_IP:$stratum_port"
+    echo -e "${BOLD}${GREEN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}  ${BOLD}Put this in your miner's Pool / Server field ($label):${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}      ${BOLD}${CYAN}$url${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}  ${BOLD}Worker / Login:${RESET} any nickname you like — ${CYAN}e.g. myname.rig1${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}(text before the dot groups earnings if payout-split is on)${RESET}"
+    echo -e "${BOLD}${GREEN}┃${RESET}"
+    if [[ $lan_mode -eq 1 ]]; then
+        if [[ -n "$pub_ip" ]]; then
+            echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}Detected LAN IPv4: $pub_ip · port $stratum_port ($label)${RESET}"
+        else
+            echo -e "${BOLD}${GREEN}┃${RESET}  ${YELLOW}Could not auto-detect a LAN IP — replace YOUR_LAN_IP above.${RESET}"
+        fi
+        echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}LAN miners connect to this private IP directly — no domain/DNS needed.${RESET}"
+    else
+        if [[ -n "$pub_ip" ]]; then
+            echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}Detected public IPv4: $pub_ip · port $stratum_port ($label)${RESET}"
+            [[ -n "$_IP_DETECT_NOTE" ]] && \
+                echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}↳ $_IP_DETECT_NOTE${RESET}"
+        else
+            echo -e "${BOLD}${GREEN}┃${RESET}  ${YELLOW}Could not auto-detect public IP — replace YOUR_SERVER_IP above.${RESET}"
+        fi
+        echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}Using a domain instead? On Cloudflare the A record MUST be${RESET}"
+        echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}\"DNS only\" (grey cloud), NOT proxied — miners can't reach a${RESET}"
+        echo -e "${BOLD}${GREEN}┃${RESET}  ${DIM}proxied record; fall back to the raw IP above (e.g. iPollo G1).${RESET}"
+    fi
+    echo -e "${BOLD}${GREEN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${RESET}"
+
+    echo ""
+    echo -ne "  ${BOLD}Watch for your first miner to connect?${RESET} ${DIM}[Y/n]${RESET}: "
+    read -r _watch_choice || true
+    [[ "${_watch_choice,,}" == "n" ]] || _solo_watch_for_miner "$stratum_port" "$label" "$url"
 }
 
 _disable_stratum() {
@@ -830,22 +1235,82 @@ publish_testnet_stratum()  { _enable_stratum  testnet "$STRATUM_PORT_TESTNET" "$
 restrict_testnet_stratum() { _disable_stratum testnet "$STRATUM_PORT_TESTNET" "$NODE_API_PORT_TESTNET"; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# L) LIVE STATS DASHBOARD
+# TERMINAL STATS DASHBOARD  (per-net branch ▸ 3)
 # ═══════════════════════════════════════════════════════════════════════════════
-# Polls node Owner API every 10s. Shows: height, difficulty, hashrate, peers,
-# connected miners. Hashrate formula: diff_delta × 42 / dt / 16384 (Cuckatoo32)
+# Polls the node Owner API (get_status) on each manual refresh and shows height,
+# difficulty, hashrate, peers, connected miners. Network hashrate is computed
+# instantly from two block headers (Foreign API get_header) over a 60-block
+# window: diff_delta × 42 / dt / 16384 (Cuckatoo32).
+
+# Fetch a block header via the node Foreign API get_header. Echoes the raw JSON
+# response (caller parses); empty on failure.
+#   $1 = node API port  $2 = foreign secret  $3 = height
+_solo_get_header() {
+    curl -sf --max-time 5 -u "grin:$2" \
+        -H 'Content-Type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"method\":\"get_header\",\"params\":[$3,null,null],\"id\":1}" \
+        "http://127.0.0.1:$1/v2/foreign" 2>/dev/null || true
+}
+
+# Network hashrate from two block headers, averaged over a window of blocks so a
+# single odd block-time doesn't skew it. Echoes a formatted G/s string, or "n/a"
+# if the headers can't be fetched (missing foreign secret, node down, genesis).
+#   $1 = node API port  $2 = foreign secret  $3 = tip height  $4 = window blocks
+_solo_network_hashrate() {
+    local port="$1" fsecret="$2" tip="$3" window="${4:-60}"
+    [[ -z "$fsecret" || ! "$tip" =~ ^[0-9]+$ ]] && { echo "n/a"; return; }
+    local old=$(( tip - window ))
+    (( old < 0 )) && old=0
+    (( old == tip )) && { echo "n/a"; return; }
+
+    local h_new h_old
+    h_new=$(_solo_get_header "$port" "$fsecret" "$tip")
+    h_old=$(_solo_get_header "$port" "$fsecret" "$old")
+    [[ -z "$h_new" || -z "$h_old" ]] && { echo "n/a"; return; }
+
+    python3 - "$h_new" "$h_old" << 'PY' 2>/dev/null || echo "n/a"
+import sys, json
+from datetime import datetime
+def ep(s): return datetime.fromisoformat(s.replace('Z', '+00:00')).timestamp()
+def hdr(j):
+    d = json.loads(j)['result']['Ok']
+    return int(d['total_difficulty']), ep(d['timestamp'])
+try:
+    td_n, ts_n = hdr(sys.argv[1])
+    td_o, ts_o = hdr(sys.argv[2])
+except Exception:
+    print("n/a"); sys.exit()
+dt = ts_n - ts_o
+dd = td_n - td_o
+if dt <= 0 or dd <= 0:
+    print("n/a"); sys.exit()
+gps = dd * 42 / dt / 16384
+if gps >= 1_000_000:
+    print(f"{gps/1_000_000:.2f} MG/s")
+elif gps >= 1_000:
+    print(f"{gps/1_000:.2f} kG/s")
+else:
+    print(f"{gps:.2f} G/s")
+PY
+}
 
 solo_live_stats() {
+    local preset_net="${1:-}"
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  L) Live Mining Stats${RESET}  ${DIM}(Ctrl+C to exit)${RESET}"
+    echo -e "${BOLD}${CYAN}  Terminal Mining Stats${RESET}  ${DIM}(Enter = refresh · 0 = return)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
 
     local net_choice
-    echo -e "  ${GREEN}1${RESET}) Mainnet  ${GREEN}2${RESET}) Testnet"
-    echo -ne "Select [1]: "
-    read -r net_choice
+    if [[ -n "$preset_net" ]]; then
+        # Network chosen by the parent branch — no prompt.
+        net_choice=1; [[ "$preset_net" == "testnet" ]] && net_choice=2
+    else
+        echo -e "  ${GREEN}1${RESET}) Mainnet  ${GREEN}2${RESET}) Testnet"
+        echo -ne "Select [1]: "
+        read -r net_choice
+    fi
 
     local api_port="$NODE_API_PORT_MAINNET"
     local stratum_port="$STRATUM_PORT_MAINNET"
@@ -868,12 +1333,12 @@ solo_live_stats() {
         [[ "$alt_secret_path" != "0" && -f "$alt_secret_path" ]] && secret=$(cat "$alt_secret_path")
     fi
 
-    local prev_diff=0 prev_ts=0
-    # Persist across iterations: blocks land ~every 60s, so most 10s polls see no
-    # difficulty change. Hold the last computed value instead of flickering.
-    local hashrate_str="calculating..."
-
-    echo -e "\n${DIM}Connecting to node on port $api_port ...${RESET}\n"
+    # Foreign API secret (same node dir) — used by get_header for the instant
+    # network-hashrate calc below. Derived from the owner secret's dir, so a custom
+    # owner path still finds its sibling foreign secret.
+    local fsecret=""
+    local foreign_secret_path="${secret_path%/.api_secret}/.foreign_api_secret"
+    [[ -f "$foreign_secret_path" ]] && fsecret=$(cat "$foreign_secret_path")
 
     while true; do
         local resp
@@ -883,67 +1348,46 @@ solo_live_stats() {
             -d '{"jsonrpc":"2.0","method":"get_status","params":[],"id":1}' \
             "http://127.0.0.1:${api_port}/v2/owner" 2>/dev/null || true)
 
-        if [[ -z "$resp" ]]; then
-            clear
-            echo -e "${RED}[ERROR]${RESET} Cannot reach node on port $api_port"
-            echo -e "  Start the node and try again, or check the API secret."
-            sleep 10
-            continue
-        fi
-
-        local height total_diff peers
-        height=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['tip']['height'])" 2>/dev/null || echo "?")
-        total_diff=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['tip']['total_difficulty'])" 2>/dev/null || echo "0")
-        peers=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['connections'])" 2>/dev/null || echo "?")
-
-        local now; now=$(date +%s)
-
-        # Cuckatoo32 hashrate: diff_delta × 42 / dt / 16384.
-        # hashrate_str carries over from the previous block; only recomputed when
-        # a new block arrives (diff_delta > 0).
-        if [[ "$prev_diff" -gt 0 && "$total_diff" -gt 0 && "$now" -gt "$prev_ts" ]]; then
-            local diff_delta dt gps
-            diff_delta=$(( total_diff - prev_diff ))
-            dt=$(( now - prev_ts ))
-            if [[ "$diff_delta" -gt 0 && "$dt" -gt 0 ]]; then
-                gps=$(python3 -c "
-d=$diff_delta; t=$dt
-gps = d * 42 / t / 16384
-if gps >= 1000000:
-    print(f'{gps/1000000:.2f} MG/s')
-elif gps >= 1000:
-    print(f'{gps/1000:.2f} kG/s')
-else:
-    print(f'{gps:.2f} G/s')
-" 2>/dev/null || echo "?")
-                hashrate_str="$gps"
-            fi
-        fi
-        prev_diff="$total_diff"
-        prev_ts="$now"
-
-        local miner_count
-        miner_count=$(ss -tnp 2>/dev/null | grep ":$stratum_port" | grep -c ESTAB || true)
-
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  Grin Solo Mining — $net_label${RESET}  ${DIM}($(date -u '+%H:%M:%S UTC'))${RESET}"
+        echo -e "${BOLD}${CYAN}  Solo Private Pool $(_solo_mode_word) · [$net_label] · Mining Stats${RESET}  ${DIM}($(date -u '+%H:%M:%S UTC'))${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
-        echo -e "  ${BOLD}Height${RESET}     : $height"
-        echo -e "  ${BOLD}Difficulty${RESET} : $total_diff"
-        echo -e "  ${BOLD}Hashrate${RESET}   : ${GREEN}$hashrate_str${RESET}"
-        echo -e "  ${BOLD}Peers${RESET}      : $peers"
-        echo -e "  ${BOLD}Miners${RESET}     : ${miner_count:-0} connected  ${DIM}(port $stratum_port)${RESET}"
-        echo ""
-        echo -e "  ${DIM}Ctrl+C to exit  ·  refreshes every 10s${RESET}"
 
-        sleep 10
+        if [[ -z "$resp" ]]; then
+            echo -e "  ${RED}[ERROR]${RESET} Cannot reach node on port $api_port"
+            echo -e "  ${DIM}Start the node and try again, or check the API secret.${RESET}"
+        else
+            local height total_diff peers
+            height=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['tip']['height'])" 2>/dev/null || echo "?")
+            total_diff=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['tip']['total_difficulty'])" 2>/dev/null || echo "0")
+            peers=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['Ok']['connections'])" 2>/dev/null || echo "?")
+
+            # Network hashrate — computed instantly from two block headers over a
+            # 60-block window (Foreign API get_header), so it never sits on
+            # "calculating...". Averaging the window smooths single odd block times.
+            local hashrate_str
+            hashrate_str=$(_solo_network_hashrate "$api_port" "$fsecret" "$height" 60)
+
+            local miner_count
+            miner_count=$(ss -tnp 2>/dev/null | grep ":$stratum_port" | grep -c ESTAB || true)
+
+            echo -e "  ${BOLD}Height${RESET}     : $height"
+            echo -e "  ${BOLD}Difficulty${RESET} : $total_diff"
+            echo -e "  ${BOLD}Hashrate${RESET}   : ${GREEN}$hashrate_str${RESET}"
+            echo -e "  ${BOLD}Peers${RESET}      : $peers"
+            echo -e "  ${BOLD}Miners${RESET}     : ${miner_count:-0} connected  ${DIM}(port $stratum_port)${RESET}"
+        fi
+
+        echo ""
+        echo -ne "  ${DIM}Press Enter to refresh · 0 to return: ${RESET}"
+        local _k; read -r _k || _k=0
+        [[ "$_k" == "0" ]] && break
     done
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# S) STATS WEB PAGE
+# STATS WEB PAGE  (network-select ▸ 3)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Deploys ONE static HTML page via nginx that polls BOTH nodes' Owner API every
 # 10s and shows mainnet + testnet side by side. nginx injects the Basic Auth
@@ -1023,7 +1467,15 @@ _solo_wallet_listener_url() {
         url=$(grep -E '^[[:space:]]*wallet_listener_url[[:space:]]*=' "$toml" 2>/dev/null \
               | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
     fi
-    echo "${url:-http://127.0.0.1:${default_port}/v2/foreign}"
+    # Normalise to the Foreign API endpoint. grin's native grin-server.toml stores
+    # this as a BASE url (e.g. http://127.0.0.1:3415) with no path; an nginx
+    # proxy_pass to a pathless url forwards the original request URI
+    # (/api/wallet/<net>), which the wallet 404s → page shows "n/a". The Foreign
+    # API the probe needs always lives at /v2/foreign, so append it when absent.
+    url="${url:-http://127.0.0.1:${default_port}}"
+    url="${url%/}"                                          # drop any trailing slash
+    [[ "$url" != */v2/foreign ]] && url="$url/v2/foreign"
+    echo "$url"
 }
 
 # Emit one nginx proxy location for a network's /api/wallet/<net> liveness probe.
@@ -1046,74 +1498,74 @@ _solo_stats_wallet_location() {
 EOF
 }
 
-# Prompt for (or edit) the mainnet reward-split nickname prefixes and write
-# $PAYMENT_CONFIG. Prefixes ONLY — never Grin addresses. Validates that no prefix
-# is a prefix of another so the collector's longest-match grouping is unambiguous.
-# Called from the S) deploy (mainnet detected); no separate menu option.
-_solo_prompt_payment_prefixes() {
-    local cur=""
-    if [[ -f "$PAYMENT_CONFIG" ]]; then
-        cur=$(python3 -c 'import json,sys
-try: print(" ".join(json.load(open(sys.argv[1])).get("prefixes",[])))
-except Exception: pass' "$PAYMENT_CONFIG" 2>/dev/null || true)
+# Toggle the mainnet payout-split calculation (on/off — no names to pre-define).
+# When ON, the collector splits matured coinbase across miners grouped BY NICKNAME
+# — the text before the first dot in nickname.NN, so all of one miner's rigs
+# (alpha.01, alpha.02, …) settle as one payee. Writes $PAYMENT_CONFIG as
+# {"enabled":true}. Display-only: solo mining always pays ONE coinbase wallet;
+# this just shows who earned what for manual settling, and never stores a Grin
+# address. Called from the Stats web page deploy (network-select ▸ 3, mainnet
+# detected).
+_solo_prompt_payout_split() {
+    # Enabled = file present AND not explicitly disabled (mirrors payout_split_enabled).
+    local enabled=0
+    if [[ -f "$PAYMENT_CONFIG" ]] && python3 -c 'import json,sys
+try: c=json.load(open(sys.argv[1]))
+except Exception: sys.exit(1)
+ok = isinstance(c,dict) and c.get("enabled") is not False
+sys.exit(0 if ok else 1)' "$PAYMENT_CONFIG" 2>/dev/null; then
+        enabled=1
     fi
 
     echo ""
-    echo -e "${BOLD}Reward-split payment calculation (mainnet)${RESET}"
-    echo -e "  ${DIM}Splits matured coinbase across nicknames by work done, shown on the page.${RESET}"
-    echo -e "  ${DIM}Stores nickname PREFIXES only — never Grin addresses. Miners log in to${RESET}"
-    echo -e "  ${DIM}stratum as user <prefix><n> (e.g. alpha1, alpha2, bravo1).${RESET}"
+    echo -e "${BOLD}Payout-split payment calculation (mainnet)${RESET}"
+    echo -e "  ${DIM}Display-only split of matured coinbase across miners by work done,${RESET}"
+    echo -e "  ${DIM}grouped automatically by nickname — the part of the worker name${RESET}"
+    echo -e "  ${DIM}before the first dot (alpha.01, alpha.02 → alpha), nothing to${RESET}"
+    echo -e "  ${DIM}pre-define. Solo mining always pays ONE coinbase wallet; this just${RESET}"
+    echo -e "  ${DIM}shows who earned what so you can settle up manually, and stores no${RESET}"
+    echo -e "  ${DIM}Grin addresses.${RESET}"
 
-    if [[ -n "$cur" ]]; then
-        echo -e "  Current prefixes: ${BOLD}${cur}${RESET}"
-        echo -ne "  [K]eep / [C]hange / [R]emove? [K]: "
-        read -r pchoice
-        case "${pchoice,,}" in
-            r) rm -f "$PAYMENT_CONFIG"; success "Reward split disabled (config removed)."; return ;;
-            c) ;;
-            *) info "Keeping existing prefixes."; return ;;
-        esac
-    else
-        echo -ne "  Enable reward-split calculation? [y/N]: "
-        read -r pen
-        [[ "${pen,,}" != "y" ]] && { info "Reward split not enabled."; return; }
+    local ans
+    if [[ $enabled -eq 1 ]]; then
+        echo -e "  Status: ${GREEN}currently ON${RESET}"
+        echo -ne "  Keep payout split enabled? [Y/n]: "
+        read -r ans
+        if [[ "${ans,,}" == "n" ]]; then
+            rm -f "$PAYMENT_CONFIG"
+            success "Payout split disabled (config removed)."
+        else
+            info "Payout split stays enabled."
+        fi
+        return
     fi
 
-    local raw json
-    while true; do
-        echo -ne "  Nickname prefixes (space-separated, e.g. alpha bravo): "
-        read -r raw
-        [[ -z "$raw" ]] && { warn "No prefixes entered — not enabling."; return; }
-        # Validate + normalise in python: token charset, dedupe, no prefix-of-another.
-        json=$(python3 -c '
-import json, re, sys
-toks = [t for t in re.split(r"[\s,]+", sys.argv[1].strip()) if t]
-if not toks: sys.exit(1)
-seen = []
-for t in toks:
-    if not re.match(r"^[A-Za-z0-9_-]+$", t): sys.exit(1)
-    if t not in seen: seen.append(t)
-for a in seen:
-    for b in seen:
-        if a != b and b.startswith(a): sys.exit(1)
-print(json.dumps({"prefixes": seen}))
-' "$raw" 2>/dev/null) && break
-        warn "Invalid: use letters/digits/_/- only, and no prefix may start another (e.g. al/alpha)."
-    done
+    echo ""
+    echo -e "  ${BOLD}${CYAN}┏━ WHEN IS THIS USEFUL? ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${RESET}"
+    echo -e "  ${BOLD}${CYAN}┃${RESET}  Turn this ON if you ${BOLD}share this solo private pool with trusted${RESET}"
+    echo -e "  ${BOLD}${CYAN}┃${RESET}  ${BOLD}friends${RESET}. The page tracks how much work each worker did,"
+    echo -e "  ${BOLD}${CYAN}┃${RESET}  so you can reconcile and ${BOLD}pay them out weekly${RESET} (or on any"
+    echo -e "  ${BOLD}${CYAN}┃${RESET}  cadence you like) by hand. If you mine alone, leave it OFF."
+    echo -e "  ${BOLD}${CYAN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${RESET}"
+    echo ""
+    echo -ne "  Enable payout-split calculation? [Y/n]: "
+    read -r ans
+    [[ "${ans,,}" == "n" ]] && { info "Payout split not enabled."; return; }
 
     mkdir -p "$(dirname "$PAYMENT_CONFIG")"
-    printf '%s\n' "$json" > "$PAYMENT_CONFIG"
+    printf '{"enabled":true}\n' > "$PAYMENT_CONFIG"
     chmod 644 "$PAYMENT_CONFIG"
-    success "Reward split enabled → $PAYMENT_CONFIG"
-    echo -e "  ${DIM}The page shows nickname → % → GRIN owed (weekly/monthly are the settlement cadence).${RESET}"
+    success "Payout split enabled → $PAYMENT_CONFIG"
+    echo -e "  ${DIM}The page shows a per-nickname running balance (owed = matured-block${RESET}"
+    echo -e "  ${DIM}earnings − payments). Record payouts in menu 7 so 'Owed' drops.${RESET}"
 }
 
-# Prompt for the optional stats-page access lock (HTTP Basic Auth). Writes an
-# apr1 htpasswd (no apache2-utils needed — nginx reads apr1 natively) and echoes,
+# Prompt for the optional index & setup pages access lock (HTTP Basic Auth over
+# HTTPS). Writes an apr1 htpasswd (no apache2-utils needed — nginx reads apr1 natively) and echoes,
 # via the named globals below, the nginx snippets the vhost writer injects:
 #   _ACCESS_AUTH_BLOCK       server-level auth_basic + auth_basic_user_file (or "")
 #   _ACCESS_PUBLIC_CARVEOUTS poolstats_*.json `auth_basic off` carve-outs (or "")
-# Basic Auth is safe here because S) always runs certbot + HTTP→HTTPS redirect, so
+# Basic Auth is safe here because the Stats web page deploy always runs certbot + HTTP→HTTPS redirect, so
 # credentials never travel over plain HTTP (the :80 block 301s before the prompt).
 _ACCESS_AUTH_BLOCK=""
 _ACCESS_PUBLIC_CARVEOUTS=""
@@ -1122,8 +1574,14 @@ _solo_prompt_access_lock() {
     _ACCESS_PUBLIC_CARVEOUTS=""
 
     echo ""
-    echo -e "${BOLD}Stats page access lock (optional)${RESET}"
-    echo -e "  ${DIM}Username/password gate (HTTP Basic Auth) — also keeps crawlers out (401).${RESET}"
+    echo -e "${BOLD}Index & setup pages access lock (recommended for solo)${RESET}"
+    echo -e "  ${DIM}Username/password gate (HTTP Basic Auth, served over HTTPS). With it ON, the${RESET}"
+    echo -e "  ${DIM}index + setup pages go fully private: every visitor — search engines included${RESET}"
+    echo -e "  ${DIM}— gets a 401 before any content, so the domain can't be crawled or indexed at${RESET}"
+    echo -e "  ${DIM}all. A solo page shows your income (found blocks, hashrate, nicknames, owed),${RESET}"
+    echo -e "  ${DIM}so locking it is the sensible default; the public miningpoolstats feed${RESET}"
+    echo -e "  ${DIM}(poolstats_*.json) stays reachable. Without the lock, the pages are public${RESET}"
+    echo -e "  ${DIM}(only a 'noindex' hint, which rogue bots ignore).${RESET}"
 
     local action="new"
     if [[ -f "$STATS_HTPASSWD" ]]; then
@@ -1136,9 +1594,9 @@ _solo_prompt_access_lock() {
             *) info "Keeping existing credentials."; action="keep" ;;
         esac
     else
-        echo -ne "  Protect the stats page with a username/password? [y/N]: "
+        echo -ne "  Protect the index & setup pages with a username/password? [Y/n]: "
         read -r alk
-        [[ "${alk,,}" != "y" ]] && { info "Access lock not enabled (page stays public)."; return; }
+        [[ "${alk,,}" == "n" ]] && { info "Access lock not enabled (pages stay public)."; return; }
     fi
 
     if [[ "$action" != "keep" ]]; then
@@ -1167,28 +1625,50 @@ _solo_prompt_access_lock() {
     # Server-level auth (every location inherits unless it opts out below).
     _ACCESS_AUTH_BLOCK=$'\n    auth_basic           "Grin Solo Mining";\n    auth_basic_user_file '"$STATS_HTPASSWD"$';'
 
-    # miningpoolstats.com polls poolstats_<net>.json — keep it public so the
-    # listing keeps working, unless the operator opts to hide it too.
-    echo -ne "  Also hide the public miningpoolstats feed (poolstats_*.json)? [y/N]: "
-    read -r hidemps
-    if [[ "${hidemps,,}" != "y" ]]; then
-        _ACCESS_PUBLIC_CARVEOUTS=$'    location = /data/poolstats_main.json { auth_basic off; }\n    location = /data/poolstats_test.json { auth_basic off; }\n\n'
-        info "miningpoolstats feed left public; everything else (incl. split_main.json) is locked."
+    # health.json is ALWAYS public (auth_basic off), independent of the poolstats
+    # choice below. ONE file carries both networks: per-net booleans + counts only
+    # (node/wallet/stratum up? + miners connected + blocks found 24h — no height/
+    # difficulty/balance/hashrate), so an external uptime monitor can verify the
+    # rig without the page password. An exact-match location beats the /data regex,
+    # so it wins by location-priority.
+    _ACCESS_PUBLIC_CARVEOUTS=$'    location = /data/health.json { auth_basic off; }\n'
+
+    # poolstats_<net>.json is the machine-readable feed miningpoolstats.stream polls.
+    # Default OFF: a freshly locked solo page keeps everything but health locked. Opt
+    # in to expose just this one feed (auth_basic off carve-out) to list the pool.
+    echo -e "  ${DIM}poolstats_*.json is the feed https://miningpoolstats.stream/grin polls to list a pool.${RESET}"
+    echo -ne "  Publish it publicly so you can list this pool there (everything else stays locked)? [y/N]: "
+    read -r pubmps
+    if [[ "${pubmps,,}" == "y" ]]; then
+        _ACCESS_PUBLIC_CARVEOUTS+=$'    location = /data/poolstats_main.json { auth_basic off; }\n    location = /data/poolstats_test.json { auth_basic off; }\n'
+        info "poolstats feed published (public); everything but health + poolstats (incl. split_main.json) stays locked."
     else
-        warn "Entire page locked — public miningpoolstats listing will stop updating."
+        info "poolstats feed locked (no public miningpoolstats listing); only the sanitized health endpoint stays public."
     fi
+    _ACCESS_PUBLIC_CARVEOUTS+=$'\n'   # blank line before the /data regex location
 }
 
 solo_deploy_stats_page() {
+    # LAN mode (SOLO_NET_MODE=lan) serves the SAME page over plain HTTP on a chosen
+    # LAN IP:port — no domain, no certbot, no Basic Auth. Only the bind + publish
+    # tail differs; the page build (HTML/config/collector/proxy blocks) is shared.
+    local lan_mode=0
+    [[ "${SOLO_NET_MODE:-public}" == "lan" ]] && lan_mode=1
+
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  S) Deploy Mining Stats Page${RESET}"
+    echo -e "${BOLD}${CYAN}  Deploy Mining Stats Page${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     echo -e "  Deploys ${BOLD}one unified stats page${RESET} showing mainnet + testnet side by side."
     echo -e "  nginx proxies /api/status/<net> → each node's Owner API with Basic Auth."
     echo -e "  Auto-detects which nodes exist; missing networks grey out on the page."
     echo -e "  No Node.js, no database, no systemd service needed."
+    if [[ $lan_mode -eq 1 ]]; then
+        echo ""
+        echo -e "  ${BOLD}LAN mode:${RESET} served over ${BOLD}plain HTTP on this server's LAN address${RESET} —"
+        echo -e "  ${DIM}no domain, no SSL, no certbot, no Basic Auth. For a trusted internal network.${RESET}"
+    fi
     echo ""
 
     if [[ ! -f "$STATS_WEB_SRC" ]]; then
@@ -1223,23 +1703,91 @@ solo_deploy_stats_page() {
     info "Detected node secret(s) for:${detected}  ·  vhost: $conf_name"
     echo ""
 
-    local subdomain
-    echo -ne "Subdomain for the stats page (e.g. mining.example.com): "
-    read -r subdomain
-    [[ -z "$subdomain" ]] && { warn "No subdomain — cancelled."; return 1; }
-
-    if ! nginx_validate_domain "$subdomain"; then
-        error "Invalid domain name: $subdomain"
-        return 1
+    # nginx + certbot must exist before we write the htpasswd, the vhost, or run
+    # `nginx -t`. On a bare node /etc/nginx does not exist yet, which is why the
+    # htpasswd write failed ("No such file or directory") and nginx_enable_site
+    # reported "nginx: command not found". Install up front so both succeed.
+    if ! command -v nginx >/dev/null 2>&1; then
+        info "nginx not installed — installing nginx + certbot first..."
     fi
+    nginx_install_with_certbot || { error "Could not install nginx/certbot — aborting deploy."; return 1; }
 
-    # DNS pre-check — certbot's HTTP-01 challenge needs this name pointing here.
-    if ! getent hosts "$subdomain" >/dev/null 2>&1; then
-        warn "$subdomain does not currently resolve in DNS."
-        echo -e "  ${DIM}certbot will fail unless an A/AAAA record points $subdomain at this server.${RESET}"
-        echo -ne "Continue anyway (deploy HTTP now, retry SSL later)? [y/N/0]: "
-        read -r dns_go
-        [[ "${dns_go,,}" != "y" ]] && { info "Cancelled — set DNS first, then re-run S."; return 1; }
+    # $subdomain doubles as the page "host" + nginx server_name. In public mode it
+    # is an FQDN; in LAN mode it is the chosen private IP. $lan_ip/$lan_port are only
+    # set (and only referenced later) in LAN mode.
+    local subdomain lan_ip lan_port lan_port_in c lan_url=""
+    if [[ $lan_mode -eq 1 ]]; then
+        # ── LAN mode: bind to a private IP:port — no domain, DNS, or certbot ─────
+        local lan_default; lan_default=$(_detect_lan_ipv4)
+        echo -e "Serve the stats page on this server's ${BOLD}LAN address${RESET}."
+        echo -e "  ${DIM}Browsers/miners on the same network reach it at http://<ip>:<port>/.${RESET}"
+        echo ""
+        while true; do
+            if [[ -n "$lan_default" ]]; then
+                echo -ne "LAN IP to serve on [${lan_default}] (Enter=accept · type to override · 0=return): "
+            else
+                echo -ne "LAN IP to serve on (type the private IP · 0=return): "
+            fi
+            read -r lan_ip
+            [[ "$lan_ip" == "0" ]] && { info "Cancelled — returning."; return 1; }
+            [[ -z "$lan_ip" ]] && lan_ip="$lan_default"
+            if [[ ! "$lan_ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+                error "Not a valid IPv4 — try again."; continue
+            fi
+            if ! _is_private_ipv4 "$lan_ip"; then
+                echo -ne "  ${YELLOW}$lan_ip is not a private/LAN address. Bind it anyway? [y/N]: ${RESET}"
+                read -r c
+                [[ "$c" =~ ^[Yy]$ ]] || continue
+            fi
+            break
+        done
+        # Default to 80 so a bare http://<ip> URL just works — nothing for LAN users
+        # to remember. (A LAN-only solo box almost never has anything else on :80;
+        # the toolkit's other web features are Internet-mode and need a domain.) If
+        # :80 on this IP is taken, nginx -t below rejects the vhost and we bail
+        # cleanly — pick a free port like 8099 then. Avoid 8080 (public pool API).
+        lan_port=80
+        echo -ne "HTTP port for the stats page [80] ${DIM}(80 = bare-IP URL, no port to type)${RESET}: "
+        read -r lan_port_in
+        [[ -n "$lan_port_in" ]] && lan_port="$lan_port_in"
+        if [[ ! "$lan_port" =~ ^[0-9]+$ ]] || (( 10#$lan_port < 1 || 10#$lan_port > 65535 )); then
+            error "Invalid port: $lan_port"; return 1
+        fi
+        lan_port=$(( 10#$lan_port ))   # normalise any leading zeros (e.g. 080 → 80)
+        subdomain="$lan_ip"
+        # Display URL hides the :80 (browsers imply it) so the bare-IP URL reads clean.
+        lan_url="http://${lan_ip}"
+        [[ "$lan_port" -ne 80 ]] && lan_url="http://${lan_ip}:${lan_port}"
+        info "LAN stats page will bind ${BOLD}${lan_ip}:${lan_port}${RESET} (plain HTTP, no SSL)."
+    else
+        echo ""
+        echo -e "${BOLD}${YELLOW}┏━━ CLOUDFLARE / DNS NOTE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${RESET}"
+        echo -e "${BOLD}${YELLOW}┃${RESET}  If this domain is on Cloudflare, set the A record to"
+        echo -e "${BOLD}${YELLOW}┃${RESET}  ${BOLD}\"DNS only\" (grey cloud)${RESET} — ${BOLD}NOT proxied (orange cloud)${RESET}."
+        echo -e "${BOLD}${YELLOW}┃${RESET}  ${DIM}A proxied record blocks miners from reaching the stratum${RESET}"
+        echo -e "${BOLD}${YELLOW}┃${RESET}  ${DIM}port via the domain — they'd have to use the raw server IP${RESET}"
+        echo -e "${BOLD}${YELLOW}┃${RESET}  ${DIM}(e.g. iPollo G1 mini: Pool name with real IP instead).${RESET}"
+        echo -e "${BOLD}${YELLOW}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${RESET}"
+        echo ""
+
+        echo -e "Subdomain for the stats page  ${DIM}(suggestion: solo.yourdomain.com)${RESET}"
+        echo -ne "Enter subdomain ${DIM}(0 = return)${RESET}: "
+        read -r subdomain
+        [[ -z "$subdomain" || "$subdomain" == "0" ]] && { info "Cancelled — returning."; return 1; }
+
+        if ! nginx_validate_domain "$subdomain"; then
+            error "Invalid domain name: $subdomain"
+            return 1
+        fi
+
+        # DNS pre-check — certbot's HTTP-01 challenge needs this name pointing here.
+        if ! getent hosts "$subdomain" >/dev/null 2>&1; then
+            warn "$subdomain does not currently resolve in DNS."
+            echo -e "  ${DIM}certbot will fail unless an A/AAAA record points $subdomain at this server.${RESET}"
+            echo -ne "Continue anyway (deploy HTTP now, retry SSL later)? [y/N/0]: "
+            read -r dns_go
+            [[ "${dns_go,,}" != "y" ]] && { info "Cancelled — set DNS first, then re-run S."; return 1; }
+        fi
     fi
 
     # ── Build per-network proxy blocks for whichever nodes exist ────────────────
@@ -1275,6 +1823,10 @@ solo_deploy_stats_page() {
     else
         warn "Setup page not found ($STATS_SETUP_SRC) — Miner Setup link will 404."
     fi
+    if [[ -f "$STATS_SHOT_SRC" ]]; then
+        cp "$STATS_SHOT_SRC" "$web_dir/pool-config-example.png"
+        chmod 644 "$web_dir/pool-config-example.png"
+    fi
     if [[ -f "$STATS_LOGO_SRC" ]]; then
         cp "$STATS_LOGO_SRC" "$web_dir/logo.svg"
         chmod 644 "$web_dir/logo.svg"
@@ -1294,6 +1846,25 @@ solo_deploy_stats_page() {
         local esc_slogan="${solo_slogan//\\/\\\\}"; esc_slogan="${esc_slogan//\"/\\\"}"
         slogan_json="\"slogan\":\"$esc_slogan\","
     fi
+
+    # Pool display name shown in the public poolstats feed (poolstats_<net>.json →
+    # "pool":{"name"}). The stats collector reads it from this config.json, so it
+    # can be changed any time by editing config.json — no redeploy needed (the next
+    # 5-min collector run picks it up). Pre-fill from the existing config so a
+    # redeploy keeps the operator's chosen name unless they type a new one.
+    local existing_name=""
+    if [[ -f "$web_dir/data/config.json" ]]; then
+        existing_name=$(grep -oP '"pool_name"\s*:\s*"\K(\\.|[^"\\])*' \
+            "$web_dir/data/config.json" 2>/dev/null || true)
+    fi
+    echo -ne "Pool display name for stats feed [${existing_name:-Grin Solo (Node Toolkit)}]: "
+    read -r solo_pool_name
+    [[ -z "$solo_pool_name" ]] && solo_pool_name="$existing_name"
+    local pool_name_json=""
+    if [[ -n "$solo_pool_name" ]]; then
+        local esc_name="${solo_pool_name//\\/\\\\}"; esc_name="${esc_name//\"/\\\"}"
+        pool_name_json="\"pool_name\":\"$esc_name\","
+    fi
     local nets_json=""
     if [[ $have_main -eq 1 ]]; then
         nets_json+="\"main\":{\"stratum_port\":$(_solo_stratum_port mainnet)}"
@@ -1302,17 +1873,77 @@ solo_deploy_stats_page() {
         [[ -n "$nets_json" ]] && nets_json+=","
         nets_json+="\"test\":{\"stratum_port\":$(_solo_stratum_port testnet)}"
     fi
-    printf '{%s"host":"%s","networks":{%s}}\n' "$slogan_json" "$subdomain" "$nets_json" \
+
+    # Public IPv4 → the setup page shows it as the PRIMARY stratum target. Stratum is
+    # raw TCP straight to the node (never proxied through nginx), so the IP always
+    # reaches it, while the domain only works if its A record points straight at this
+    # box — DNS-only; a Cloudflare-proxied (orange-cloud) record breaks raw-TCP
+    # stratum. Prefer a freshly detected IP; fall back to one already in config.json
+    # so a redeploy on a host where detection fails keeps the operator's value.
+    local existing_ip=""
+    if [[ -f "$web_dir/data/config.json" ]]; then
+        existing_ip=$(grep -oP '"public_ip"\s*:\s*"\K[0-9.]+' \
+            "$web_dir/data/config.json" 2>/dev/null || true)
+    fi
+    local pub_ip
+    if [[ $lan_mode -eq 1 ]]; then
+        # On a LAN there is no public IP — the stratum target the setup page shows IS
+        # the LAN address miners point their rigs at (raw TCP to <lan_ip>:<stratum>).
+        pub_ip="$lan_ip"
+    else
+        pub_ip=$(_confirm_public_ipv4 "$existing_ip")
+    fi
+    local public_ip_json=""
+    [[ -n "$pub_ip" ]] && public_ip_json="\"public_ip\":\"$pub_ip\","
+
+    # Off-box port-check service → the setup page turns each stratum URL into a live
+    # "🟢 reachable / 🔴 unreachable" pill. MUST be a host OTHER than this node (e.g. the
+    # public Office Tools checker), otherwise probing our own public IP can hairpin
+    # through the local stack and report a false "open". The page calls
+    # <base>/api/portcheckbatch?host=&ports= — a public CORS-open endpoint, so no
+    # per-domain setup is needed on the checker. Defaults to the canonical public
+    # Office Tools instance so the pills work out of the box; the operator can paste
+    # a self-hosted Office Tools base URL instead, or type "-" to disable the live
+    # pills (the static recommended/optional chips are kept). Existing config wins
+    # as the prefill so a re-run does not silently revert a custom/disabled choice.
+    local solo_pcapi="" portcheck_api_json=""
+    if [[ $lan_mode -eq 1 ]]; then
+        # LAN: an off-box (internet) checker can't reach a private LAN IP, so the live
+        # reachability pills are meaningless here — leave them off (page keeps the
+        # static recommended/optional chips). solo_pcapi="" also drops the external
+        # origin from connect-src below, keeping the CSP pure 'self'.
+        info "LAN mode — live off-box port-check pills disabled (can't reach private IPs)."
+    else
+        local default_pcapi="https://tools.grin.money/tools-api"
+        local existing_pcapi=""
+        if [[ -f "$web_dir/data/config.json" ]]; then
+            existing_pcapi=$(grep -oP '"portcheck_api"\s*:\s*"\K(\\.|[^"\\])*' \
+                "$web_dir/data/config.json" 2>/dev/null || true)
+        fi
+        # Prefill: a value already in config (even when re-running) else the canonical default.
+        local prefill_pcapi="${existing_pcapi:-$default_pcapi}"
+        echo -ne "External API the miner setup page uses to live-check your stratum ports' reachability (Enter to accept, '-' to disable) [$prefill_pcapi]: "
+        read -r solo_pcapi
+        [[ -z "$solo_pcapi" ]] && solo_pcapi="$prefill_pcapi"
+        [[ "$solo_pcapi" == "-" ]] && solo_pcapi=""   # explicit opt-out → omit the key, page falls back to chips
+        if [[ -n "$solo_pcapi" ]]; then
+            local esc_pcapi="${solo_pcapi//\\/\\\\}"; esc_pcapi="${esc_pcapi//\"/\\\"}"
+            portcheck_api_json="\"portcheck_api\":\"$esc_pcapi\","
+        fi
+    fi
+
+    printf '{%s%s"host":"%s",%s%s"networks":{%s}}\n' "$slogan_json" "$pool_name_json" "$subdomain" "$public_ip_json" "$portcheck_api_json" "$nets_json" \
         > "$web_dir/data/config.json"
     chmod 644 "$web_dir/data/config.json"
     [[ -n "$solo_slogan" ]] && success "Slogan + connection config written (edit $web_dir/data/config.json to change)." \
         || success "Connection config written (edit $web_dir/data/config.json for slogan/ports)."
 
-    # ── Reward-split prefixes (mainnet only) ────────────────────────────────────
-    # Optional. Writes $PAYMENT_CONFIG (nickname prefixes). Done before the initial
+    # ── Payout split (mainnet only) ─────────────────────────────────────────────
+    # Optional on/off toggle. Writes $PAYMENT_CONFIG ({"enabled":true}); the
+    # collector then splits by worker name automatically. Done before the initial
     # collector run below so split_main.json appears immediately when enabled.
     if [[ $have_main -eq 1 ]]; then
-        _solo_prompt_payment_prefixes
+        _solo_prompt_payout_split
     fi
 
     # ── Mining stats collector ──────────────────────────────────────────────────
@@ -1370,7 +2001,11 @@ CRON
         done
 
         success "Mining stats collector installed (cron every 5 min) → $data_dir"
-        echo -e "  ${DIM}miningpoolstats endpoint(s): https://$subdomain/data/poolstats_<net>.json${RESET}"
+        if [[ $lan_mode -eq 1 ]]; then
+            echo -e "  ${DIM}poolstats endpoint(s): ${lan_url}/data/poolstats_<net>.json${RESET}"
+        else
+            echo -e "  ${DIM}miningpoolstats endpoint(s): https://$subdomain/data/poolstats_<net>.json${RESET}"
+        fi
         echo -e "  ${DIM}If a scan shows 0 block matches after finding a block, the log wording may${RESET}"
         echo -e "  ${DIM}differ on your node version — adjust FOUND_RE/SHARE_RE in $BLOCK_COLLECTOR_BIN.${RESET}"
     else
@@ -1380,28 +2015,76 @@ CRON
     # ── Optional access lock (HTTP Basic Auth) ──────────────────────────────────
     # Sets $_ACCESS_AUTH_BLOCK + $_ACCESS_PUBLIC_CARVEOUTS, injected into the vhost
     # below. Safe over the certbot HTTPS redirect (creds never cross plain HTTP).
-    _solo_prompt_access_lock
+    # LAN mode has no auth path at all (plain HTTP only) — clear the blocks so the
+    # vhost carries no auth_basic lines, and skip the prompt.
+    if [[ $lan_mode -eq 1 ]]; then
+        _ACCESS_AUTH_BLOCK=""
+        _ACCESS_PUBLIC_CARVEOUTS=""
+    else
+        _solo_prompt_access_lock
+    fi
 
     # Dedicated zone (NOT the shared grin_api 30r/m used by scripts 04/06): the
     # page polls up to 4 proxied endpoints every 10s, so one viewer alone draws
     # ~24 req/min. 90r/m gives a NAT'd / multi-tab audience real headroom.
     nginx_ensure_rate_limit_zone "solo_stats_api" "90r/m" "10m" "script07-solo-stats"
 
+    # Abuse guards for the PUBLIC surface that had none. /api/* is already throttled
+    # by solo_stats_api above; the static page + /data/*.json (polled 7×/10s/viewer,
+    # ~42 req/min) and raw connections were unprotected. solo_static is sized well
+    # above legit polling (180r/m ≈ 4× a single viewer, generous for NAT/multi-tab)
+    # so it only bites a flood; solo_conn caps concurrent connections per IP to blunt
+    # slowloris. Dedicated script07- zones — unique names, no collision with 04/05/06.
+    nginx_ensure_rate_limit_zone "solo_static" "180r/m" "10m" "script07-solo-static"
+    nginx_ensure_conn_limit_zone "solo_conn" "10m" "script07-solo-conn"
+
     # Write an HTTP-only vhost FIRST. Referencing letsencrypt certs that do not
     # exist yet would make `nginx -t` fail. certbot --nginx injects the 443
     # server block + SSL directives afterward (and manages options-ssl-nginx.conf).
+    # ── Content-Security-Policy ─────────────────────────────────────────────────
+    # Locks the pages to same-origin resources. BOTH pages use inline <style> and
+    # <script> blocks (plus inline style="" attributes), so style-src/script-src
+    # MUST allow 'unsafe-inline' — drop it and the layout + all live polling break.
+    # connect-src needs 'self' (the same-origin /api/* and /data/*.json fetches)
+    # PLUS the off-box port-check origin the setup page calls for its reachability
+    # pills; we derive that origin (scheme://host[:port], path stripped) from the
+    # operator-chosen portcheck_api so the pills keep working. Checker disabled →
+    # only 'self'. No external fonts/CDN, logo is same-origin → img/font-src 'self'.
+    # Applied at server level; it inherits into every location because none of them
+    # set their own add_header (the /data location uses `expires`, not add_header,
+    # precisely to keep this inheritance).
+    local csp_connect="'self'"
+    if [[ "${solo_pcapi:-}" =~ ^https?:// ]]; then
+        local pc_origin; pc_origin=$(printf '%s' "$solo_pcapi" | sed -E 's#^(https?://[^/]+).*#\1#')
+        [[ -n "$pc_origin" ]] && csp_connect="'self' $pc_origin"
+    fi
+    local csp_value="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src $csp_connect; font-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+
+    # Bind/server_name differ by mode: public listens on :80 (certbot then adds 443);
+    # LAN binds only to the chosen private IP:port and never gets a 443 block.
+    local listen_line server_name_line vhost_ssl_note
+    if [[ $lan_mode -eq 1 ]]; then
+        listen_line="listen ${lan_ip}:${lan_port};"
+        server_name_line="server_name ${lan_ip} _;"
+        vhost_ssl_note="# LAN mode: plain HTTP only, bound to ${lan_ip}:${lan_port} — no SSL/certbot."
+    else
+        listen_line="listen 80;"
+        server_name_line="server_name $subdomain;"
+        vhost_ssl_note="# SSL is added in-place by certbot --nginx (do not hand-add a 443 block here)."
+    fi
+
     # umask 077 so the conf (which holds the base64 auth token(s)) is never
     # group/world readable, even momentarily, before the explicit chmod below.
     info "Writing nginx vhost (HTTP): $nginx_conf"
     mkdir -p "$(dirname "$nginx_conf")"
     ( umask 077; cat > "$nginx_conf" << EOF
 # Grin Solo Mining Stats (unified mainnet + testnet) — generated by 07_grin_mining_solo.sh
-# Rate-limit zone lives in /etc/nginx/conf.d/script07-solo-stats.conf
-# SSL is added in-place by certbot --nginx (do not hand-add a 443 block here).
+# Rate/conn zones live in /etc/nginx/conf.d/script07-solo-{stats,static,conn}.conf
+$vhost_ssl_note
 
 server {
-    listen 80;
-    server_name $subdomain;
+    $listen_line
+    $server_name_line
 
     root $web_dir;
     index index.html;
@@ -1409,9 +2092,32 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "$csp_value" always;
+
+    # Abuse guards (zones in script07-solo-static.conf / script07-solo-conn.conf).
+    # Server-level so they are inherited by location / and the /data JSON location.
+    # The /api/* locations define their own limit_req (solo_stats_api) so per nginx
+    # inheritance rules they keep that and are NOT also bound to solo_static; they
+    # do inherit limit_conn (they declare none of their own). limit_conn 50 leaves
+    # ample headroom for NAT'd/multi-tab viewers (HTTP/2 multiplexes to ~1 conn per
+    # tab) while stopping a single IP from holding the worker pool open. Raise it
+    # here if a large shared-NAT audience hits spurious 503s.
+    limit_req  zone=solo_static burst=20 nodelay;
+    limit_conn solo_conn 50;
 $_ACCESS_AUTH_BLOCK
 
-$proxy_blocks$_ACCESS_PUBLIC_CARVEOUTS    location / {
+$proxy_blocks$_ACCESS_PUBLIC_CARVEOUTS    location ~ ^/data/.+\.json\$ {
+        # The page re-fetches these collector outputs every 10s. A short cache
+        # lets browsers / any CDN absorb repeat + flood hits with no staleness.
+        # Uses expires (NOT add_header) so the server-level security headers and
+        # the inherited limit_req/limit_conn are preserved (add_header here would
+        # reset header inheritance for this location). Exact-match carve-outs above
+        # (= /data/poolstats_*.json) still win by location-priority.
+        expires 10s;
+        try_files \$uri =404;
+    }
+
+    location / {
         try_files \$uri \$uri/ =404;
     }
 
@@ -1428,59 +2134,96 @@ EOF
         error "nginx rejected the config — check $nginx_conf"
         return 1
     fi
-    success "nginx serving http://$subdomain"
-
-    echo ""
-    echo -ne "Run certbot for SSL on $subdomain (recommended)? [Y/n/0]: "
-    read -r do_ssl
     local page_https=0
-    if [[ "${do_ssl,,}" != "n" && "$do_ssl" != "0" ]]; then
-        # nginx_run_certbot (shared lib) handles the certbot --nginx --redirect call.
-        if nginx_run_certbot "$subdomain" "admin@$subdomain" --redirect; then
-            # certbot rewrote the conf in place — re-tighten perms (token still inside).
-            chmod 600 "$nginx_conf"
-            nginx_test_reload "reload after certbot" || true
-            page_https=1
-            success "Stats page deployed: https://$subdomain"
-        else
-            warn "certbot failed — page is live over HTTP only."
-            echo -e "  Fix DNS so $subdomain points here, then re-run S (or run certbot manually)."
-            success "Stats page deployed: http://$subdomain"
-        fi
+    if [[ $lan_mode -eq 1 ]]; then
+        # LAN mode: no domain → no certbot (HTTP-01 can't validate a private IP) and
+        # no auth (decided: LAN page is unauthenticated). The page is intentionally
+        # plain HTTP, reachable only on the LAN it is bound to.
+        success "nginx serving ${lan_url}/ (LAN only)"
+        success "Stats page deployed: ${lan_url}/"
+        echo -e "  ${DIM}Bound to ${lan_ip} — only reachable from this network. Make sure your${RESET}"
+        echo -e "  ${DIM}firewall allows TCP ${lan_port} from the LAN, and does NOT expose it to the internet.${RESET}"
+        echo ""
+        echo -e "  ${BOLD}Opening it:${RESET} browse to ${BOLD}${lan_url}/${RESET} from any device on this LAN."
+        echo -e "  ${DIM}It's plain HTTP, so browsers show a grey \"Not secure\" label (no padlock) — that is${RESET}"
+        echo -e "  ${DIM}normal and harmless on a private network; the page still loads. If it will NOT load,${RESET}"
+        echo -e "  ${DIM}the browser is forcing HTTPS — turn off Firefox \"HTTPS-Only Mode\" / Chrome \"Always${RESET}"
+        echo -e "  ${DIM}use secure connections\", or add an HTTP exception for ${lan_ip}, then reload.${RESET}"
     else
-        info "Skipped SSL — page is live over HTTP only at http://$subdomain"
-    fi
+        success "nginx serving http://$subdomain"
 
-    # Guardrail: never serve Basic Auth over plain HTTP. If a lock was configured
-    # but the page ended up HTTP-only (SSL skipped or certbot failed), strip the
-    # auth_basic lines now. The htpasswd file is kept; re-run S once SSL is up.
-    if [[ -n "$_ACCESS_AUTH_BLOCK" && $page_https -eq 0 ]]; then
-        sed -i '/^[[:space:]]*auth_basic/d' "$nginx_conf"
-        nginx_test_reload "reload after disabling HTTP-only auth lock" || true
-        warn "Access lock NOT active: refusing to serve Basic Auth over plain HTTP."
-        echo -e "  ${DIM}Credentials saved at $STATS_HTPASSWD — re-run S after SSL succeeds to enable the lock.${RESET}"
+        echo ""
+        echo -ne "Run certbot for SSL on $subdomain (recommended)? [Y/n/0]: "
+        read -r do_ssl
+        if [[ "${do_ssl,,}" != "n" && "$do_ssl" != "0" ]]; then
+            # nginx_run_certbot (shared lib) handles the certbot --nginx --redirect call.
+            if nginx_run_certbot "$subdomain" "admin@$subdomain" --redirect; then
+                # certbot rewrote the conf in place — re-tighten perms (token still inside).
+                chmod 600 "$nginx_conf"
+                nginx_test_reload "reload after certbot" || true
+                page_https=1
+                success "Stats page deployed: https://$subdomain"
+            else
+                warn "certbot failed — page is live over HTTP only."
+                echo -e "  Fix DNS so $subdomain points here, then re-run S (or run certbot manually)."
+                success "Stats page deployed: http://$subdomain"
+            fi
+        else
+            info "Skipped SSL — page is live over HTTP only at http://$subdomain"
+        fi
+
+        # Guardrail: never serve Basic Auth over plain HTTP. If a lock was configured
+        # but the page ended up HTTP-only (SSL skipped or certbot failed), strip the
+        # auth_basic lines now. The htpasswd file is kept; re-run S once SSL is up.
+        if [[ -n "$_ACCESS_AUTH_BLOCK" && $page_https -eq 0 ]]; then
+            sed -i '/^[[:space:]]*auth_basic/d' "$nginx_conf"
+            nginx_test_reload "reload after disabling HTTP-only auth lock" || true
+            warn "Access lock NOT active: refusing to serve Basic Auth over plain HTTP."
+            echo -e "  ${DIM}Credentials saved at $STATS_HTPASSWD — re-run S after SSL succeeds to enable the lock.${RESET}"
+        fi
     fi
 
     echo -e "  Page polls ${BOLD}/api/status/<net>${RESET} + ${BOLD}/api/wallet/<net>${RESET} every 10s — both networks side by side."
     echo -e "  ${DIM}Wallet Listener row flags whether the coinbase listener is up.${RESET}"
     echo -e "  ${DIM}Only the network(s) detected at deploy time are wired; others grey out.${RESET}"
+    echo -e "  Uptime monitor: ${BOLD}/data/health.json${RESET} ${DIM}— both networks, sanitized node/wallet/stratum liveness${RESET}"
+    echo -e "  ${DIM}(per-net booleans + miners-connected + blocks-found-24h; top-level ok = all nets; stays public${RESET}"
+    echo -e "  ${DIM}even with the access lock on; refreshed every 5 min).${RESET}"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# W) WATCHDOG CRON
+# STRATUM WATCHDOG CRON  (Health / Watchdogs ▸ 7 install · 8 remove)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Cron entry: every 5 minutes, verify stratum is enabled in grin-server.toml.
 # Logs a warning if stratum config was lost (e.g. node restart reset the toml).
 
-solo_watchdog_setup() {
-    clear
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  W) Stratum Watchdog Cron${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
+# Fixed paths shared by the stratum-watchdog install/remove/status trio.
+STRATUM_WATCHDOG_CRON="/etc/cron.d/grin-stratum-watchdog"
+STRATUM_WATCHDOG_BIN="/usr/local/bin/grin-stratum-watchdog"
 
-    local cron_file="/etc/cron.d/grin-stratum-watchdog"
-    local wrapper="/usr/local/bin/grin-stratum-watchdog"
+# solo_stratum_watchdog_status — cron presence + recent log tail (mirrors
+# sw_watchdog_status / gnk_watchdog_status so the Health menu reads uniformly).
+solo_stratum_watchdog_status() {
+    if [[ -f "$STRATUM_WATCHDOG_CRON" && -x "$STRATUM_WATCHDOG_BIN" ]]; then
+        success "Stratum watchdog: INSTALLED ($STRATUM_WATCHDOG_CRON)"
+    else
+        warn "Stratum watchdog: NOT installed."
+    fi
+    [[ -f "$WATCHDOG_LOG" ]] && { info "Recent log:"; tail -n 6 "$WATCHDOG_LOG" 2>/dev/null || true; }
+}
+
+# solo_stratum_watchdog_remove — drop cron.d entry + wrapper (idempotent).
+solo_stratum_watchdog_remove() {
+    rm -f "$STRATUM_WATCHDOG_CRON" "$STRATUM_WATCHDOG_BIN"
+    success "Stratum watchdog removed."
+}
+
+# solo_stratum_watchdog_install — write wrapper + cron.d entry (every 5 min).
+# Non-interactive and idempotent, matching the other watchdog installers; the
+# menu owns presentation.
+solo_stratum_watchdog_install() {
+    local cron_file="$STRATUM_WATCHDOG_CRON"
+    local wrapper="$STRATUM_WATCHDOG_BIN"
 
     # Bake the search DIRS (not a one-time snapshot of the tomls that happen to
     # exist now) so a node built AFTER the watchdog is installed is picked up on
@@ -1489,27 +2232,6 @@ solo_watchdog_setup() {
     for dir in "${_KNOWN_TOML_SEARCH_PATHS[@]}"; do
         search_dirs_literal+="    \"$dir\""$'\n'
     done
-
-    if [[ -f "$cron_file" ]]; then
-        echo -e "  Status: ${GREEN}enabled${RESET}  ($cron_file)"
-        echo ""
-        echo -e "  ${GREEN}1${RESET}) Disable watchdog"
-        echo -e "  ${DIM}0) Back${RESET}"
-        echo -ne "Choice: "
-        read -r wc
-        if [[ "$wc" == "1" ]]; then
-            rm -f "$cron_file" "$wrapper"
-            success "Watchdog disabled."
-        fi
-        return
-    fi
-
-    echo -e "  ${DIM}Checks every 5 minutes that stratum is enabled in grin-server.toml.${RESET}"
-    echo -e "  ${DIM}Logs warnings to: $WATCHDOG_LOG${RESET}"
-    echo ""
-    echo -ne "Enable stratum watchdog cron? [Y/n/0]: "
-    read -r wgo
-    [[ "${wgo,,}" == "n" || "$wgo" == "0" ]] && return
 
     mkdir -p "$LOG_DIR"
 
@@ -1558,8 +2280,177 @@ WATCHDOG
     cat > "$cron_file" << EOF
 */5 * * * * root $wrapper
 EOF
-    success "Watchdog cron enabled → $cron_file"
-    echo -e "  Log: $WATCHDOG_LOG"
+    success "Stratum watchdog installed (*/5) → $cron_file"
+    info "Log: $WATCHDOG_LOG"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLEANUP — REMOVE SOLO-MINING INFRA  (top menu ▸ Danger Zone ▸ C)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tears down everything Script 07 (solo) deploys so the server is a clean base for
+# the public pool — WITHOUT touching anything the node or the public pool also
+# needs. Each group is confirmed on its own; nothing runs until the master Y.
+#
+# REMOVED (per-group confirm):  stratum config (enable→false + firewall + restart),
+#   stats collector + state dir, stats web page + nginx vhost, stratum/wallet
+#   watchdogs, payout-split config, running wallet-listener tmux sessions.
+# PRESERVED (never touched):    the Grin node + chain data (Script 01 / 08del own
+#   that), the node-sync watchdog and boot autostart (the pool reuses them), the
+#   wallet dir $SW_BASE (your SEED), and the encrypted backups in $SB_BACKUP_DIR
+#   plus the backup key/schedule. To wipe those too, use Script 08del.
+
+# Present/absent marker for the cleanup preview list.
+_solo_cleanup_mark() {
+    if [[ -e "$1" ]]; then echo -e "${YELLOW}present${RESET}"; else echo -e "${DIM}absent${RESET}"; fi
+}
+
+# Disable stratum in a net's grin-server.toml (silent resolve — no prompts) and
+# close its firewall port. No-op when no toml is found for that net.
+_solo_cleanup_stratum_net() {
+    local net="$1" stratum_port="$2" api_port="$3" toml
+    toml=$(_resolve_stratum_toml "$net" "$api_port" 2>/dev/null || true)
+    if [[ -n "$toml" && -f "$toml" ]]; then
+        if grep -qE '^#?[[:space:]]*enable_stratum_server[[:space:]]*=' "$toml" 2>/dev/null; then
+            sed -i -E "s|^#?[[:space:]]*enable_stratum_server[[:space:]]*=.*|enable_stratum_server = false|" "$toml"
+        fi
+        success "$net: enable_stratum_server = false  ${DIM}($toml)${RESET}"
+        log "Cleanup ($net): enable_stratum_server = false in $toml"
+    else
+        info "$net: no grin-server.toml found — stratum config left as-is."
+    fi
+    # Best-effort firewall close (mirrors Restrict). A per-IP allow added via the
+    # "specific IP" path can't be matched here — remove it by hand if you want a
+    # pristine ruleset (ufw status numbered / iptables -S).
+    if command -v ufw &>/dev/null; then
+        ufw delete allow "$stratum_port/tcp" 2>/dev/null \
+            && success "$net: UFW allow for $stratum_port removed." || true
+    elif command -v iptables &>/dev/null; then
+        while iptables -D INPUT -p tcp --dport "$stratum_port" -j ACCEPT 2>/dev/null; do :; done
+        if command -v netfilter-persistent &>/dev/null; then
+            netfilter-persistent save 2>/dev/null || true
+        elif [[ -d /etc/iptables ]]; then
+            iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        fi
+        success "$net: iptables allow for $stratum_port removed."
+    fi
+}
+
+solo_cleanup() {
+    clear
+    local conf_name="$STATS_BASENAME"
+    local web_dir="/var/www/$STATS_BASENAME"
+    local nginx_conf="/etc/nginx/sites-available/$STATS_BASENAME"
+
+    echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${RED}  Clean Up Solo Mining${RESET}  ${DIM}(prep server for the public pool)${RESET}"
+    echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  Removes the solo-mining infrastructure. The node, your wallet seed,"
+    echo -e "  and your backups are ${BOLD}kept${RESET} — confirm each group below."
+    echo ""
+    echo -e "  ${BOLD}Will be removed${RESET} ${DIM}(if you confirm the group):${RESET}"
+    echo -e "    Stratum config (node toml)  ${DIM}enable→false + firewall${RESET}"
+    echo -e "    Collector                   $(_solo_cleanup_mark "$BLOCK_COLLECTOR_WRAPPER")"
+    echo -e "    Collector state dir         $(_solo_cleanup_mark "$BLOCK_COLLECTOR_STATE_DIR")"
+    echo -e "    Stats web / nginx vhost     $(_solo_cleanup_mark "$nginx_conf")"
+    echo -e "    Stratum watchdog            $(_solo_cleanup_mark "/etc/cron.d/grin-stratum-watchdog")"
+    echo -e "    Wallet-listener watchdog    $(_solo_cleanup_mark "$SW_WATCHDOG_CRON")"
+    echo -e "    Payout-split config         $(_solo_cleanup_mark "$PAYMENT_CONFIG")"
+    echo ""
+    echo -e "  ${BOLD}${GREEN}Kept — never touched:${RESET}"
+    echo -e "    ${DIM}Grin node + chain data · node-sync watchdog · boot autostart${RESET}"
+    echo -e "    ${DIM}Wallet seed ($SW_BASE) · backups ($SB_BACKUP_DIR) + key${RESET}"
+    echo -e "    ${DIM}(use Script 08del for a full wipe including those)${RESET}"
+    echo ""
+    echo -ne "${BOLD}Proceed with solo-mining cleanup? [y/N]: ${RESET}"
+    local go; read -r go || true
+    [[ "${go,,}" == "y" ]] || { info "Cancelled — nothing changed."; return; }
+    echo ""
+
+    local a r
+    # 1) Stratum config + firewall (+ optional node restart so it actually stops)
+    echo -ne "${BOLD}1)${RESET} Disable stratum (both nets) + close ports $STRATUM_PORT_MAINNET/$STRATUM_PORT_TESTNET? [Y/n]: "
+    read -r a || true
+    if [[ "${a,,}" != "n" ]]; then
+        _solo_cleanup_stratum_net mainnet "$STRATUM_PORT_MAINNET" "$NODE_API_PORT_MAINNET" || true
+        _solo_cleanup_stratum_net testnet "$STRATUM_PORT_TESTNET" "$NODE_API_PORT_TESTNET" || true
+        echo -ne "   Restart running node(s) now so stratum actually stops? [y/N]: "
+        read -r r || true
+        if [[ "${r,,}" == "y" ]]; then
+            graceful_restart_grin "$NODE_API_PORT_MAINNET" mainnet || true
+            graceful_restart_grin "$NODE_API_PORT_TESTNET" testnet || true
+        else
+            info "Stratum stays up until the node next restarts."
+        fi
+    fi
+    echo ""
+
+    # 2) Stats collector + state
+    echo -ne "${BOLD}2)${RESET} Remove stats collector + state dir ($BLOCK_COLLECTOR_STATE_DIR)? [Y/n]: "
+    read -r a || true
+    if [[ "${a,,}" != "n" ]]; then
+        rm -f "$BLOCK_COLLECTOR_BIN" "$BLOCK_COLLECTOR_WRAPPER" "$BLOCK_COLLECTOR_CRON"
+        rm -rf "$BLOCK_COLLECTOR_STATE_DIR"
+        success "Collector + state removed."
+        log "Cleanup: removed collector bin/wrapper/cron + $BLOCK_COLLECTOR_STATE_DIR"
+    fi
+    echo ""
+
+    # 3) Stats web page + nginx vhost
+    echo -ne "${BOLD}3)${RESET} Remove stats web page + nginx vhost ($conf_name)? [Y/n]: "
+    read -r a || true
+    if [[ "${a,,}" != "n" ]]; then
+        if command -v nginx &>/dev/null && [[ -e "/etc/nginx/sites-enabled/$conf_name" || -f "$nginx_conf" ]]; then
+            nginx_disable_site "$conf_name" || true
+            rm -f "$nginx_conf"
+            nginx_test_reload "after removing $conf_name vhost" || true
+        fi
+        rm -rf "$web_dir"
+        rm -f "$STATS_HTPASSWD"
+        success "Stats web page + vhost removed."
+        info "Any TLS cert under /etc/letsencrypt is left in place (harmless) — 'certbot delete' to drop it."
+        log "Cleanup: removed stats vhost $conf_name, $web_dir, $STATS_HTPASSWD"
+    fi
+    echo ""
+
+    # 4) Watchdogs — stratum + wallet-listener ONLY (node-sync/autostart kept)
+    echo -ne "${BOLD}4)${RESET} Remove stratum + wallet-listener watchdogs? [Y/n]: "
+    read -r a || true
+    if [[ "${a,,}" != "n" ]]; then
+        rm -f /etc/cron.d/grin-stratum-watchdog /usr/local/bin/grin-stratum-watchdog "$WATCHDOG_LOG"
+        success "Stratum watchdog removed."
+        sw_watchdog_remove || true
+        rm -f "$SW_WATCHDOG_LOG" 2>/dev/null || true
+        info "Node-sync watchdog + boot autostart left intact (the node/pool still need them)."
+        log "Cleanup: removed stratum + wallet-listener watchdogs"
+    fi
+    echo ""
+
+    # 5) Payout-split config
+    if [[ -f "$PAYMENT_CONFIG" ]]; then
+        echo -ne "${BOLD}5)${RESET} Remove payout-split config ($PAYMENT_CONFIG)? [Y/n]: "
+        read -r a || true
+        if [[ "${a,,}" != "n" ]]; then
+            rm -f "$PAYMENT_CONFIG"
+            success "Payout-split config removed."
+            log "Cleanup: removed $PAYMENT_CONFIG"
+        fi
+        echo ""
+    fi
+
+    # 6) Running wallet-listener sessions — wallet dir + seed are KEPT
+    echo -ne "${BOLD}6)${RESET} Stop running wallet-listener sessions? ${DIM}(seed/wallet kept)${RESET} [Y/n]: "
+    read -r a || true
+    if [[ "${a,,}" != "n" ]]; then
+        sw_listener_stop mainnet || true
+        sw_listener_stop testnet || true
+    fi
+    echo ""
+
+    success "Solo-mining cleanup complete."
+    echo -e "  ${BOLD}${GREEN}Kept:${RESET} node + chain data · node-sync watchdog · boot autostart"
+    echo -e "        wallet seed ($SW_BASE) · encrypted backups ($SB_BACKUP_DIR) + key"
+    echo -e "  ${DIM}The server is ready for the public pool.${RESET}"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1568,12 +2459,44 @@ EOF
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SUPERVISION SUBMENUS (Track B — central wallet + watchdogs)
-# Each action prompts for the network, mirroring L) Live stats. Underlying logic
-# lives in the shared libs (07_solo_wallet.sh, grin_node_keepalive.sh).
+# Inside a network branch each action inherits SOLO_NETWORK (no per-action
+# prompt); the global Watchdogs menu still prompts which net to act on. Underlying
+# logic lives in the shared libs (07_solo_wallet.sh, grin_node_keepalive.sh).
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ─── Active network (network-as-parent) ─────────────────────────────────────
+# The top menu picks a network ONCE; inside that branch SOLO_NETWORK is set and
+# every per-action call to _solo_pick_net returns it silently (no repeat prompt).
+# Cleared on the way back to the network-select screen so the global Watchdogs
+# menu still prompts for which net to act on. Mirrors 052 Grin Drop's _set_network.
+SOLO_NETWORK=""
+SOLO_API_PORT=""
+SOLO_STRATUM_PORT=""
+
+_set_solo_net() {
+    SOLO_NETWORK="$1"
+    if [[ "$1" == "mainnet" ]]; then
+        SOLO_API_PORT="$NODE_API_PORT_MAINNET"
+        SOLO_STRATUM_PORT="$STRATUM_PORT_MAINNET"
+    else
+        SOLO_API_PORT="$NODE_API_PORT_TESTNET"
+        SOLO_STRATUM_PORT="$STRATUM_PORT_TESTNET"
+    fi
+}
+_clear_solo_net() { SOLO_NETWORK=""; SOLO_API_PORT=""; SOLO_STRATUM_PORT=""; }
+
+# Mode word for solo submenu banners — "Internet" (default/public) or "LAN".
+# Lets every solo screen show which front-end mode this server is running.
+_solo_mode_word() { local m="Internet"; [[ "$SOLO_NET_MODE" == "lan" ]] && m="LAN"; echo "$m"; }
+
 # _solo_pick_net <label> → echoes "mainnet"|"testnet" on stdout; rc 1 on cancel.
+# Inside a network branch (SOLO_NETWORK set) it returns that net with NO prompt;
+# at the top level (global menus) it falls back to the interactive 1/2/0 prompt.
 _solo_pick_net() {
+    if [[ -n "${SOLO_NETWORK:-}" ]]; then
+        echo "$SOLO_NETWORK"
+        return 0
+    fi
     local label="${1:-this action}" n
     echo -e "  Network for ${BOLD}$label${RESET}:  ${GREEN}1${RESET}) Mainnet   ${GREEN}2${RESET}) Testnet   ${DIM}0) Cancel${RESET}" >&2
     echo -ne "  Select [1/2/0]: " >&2
@@ -1587,108 +2510,112 @@ _solo_pick_net() {
 
 _solo_pause() { echo ""; echo "Press Enter to continue..."; read -r || true; }
 
-# K) Central Wallet — init/recover, listener, auto-restart, address.
+# Wallet (per-net branch ▸ 1) — init/recover, listener, auto-restart, address.
 wallet_menu() {
     local choice net
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  Central Wallet — coinbase listener${RESET}"
+        echo -e "${BOLD}${CYAN}  07) Solo Private Pool $(_solo_mode_word) · [${SOLO_NETWORK^^}] · Central Wallet${RESET}${DIM}  (coinbase listener)${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
         echo -e "${BOLD}  Listener:${RESET}"
         sw_listener_status mainnet | sed 's/^/    /'
         sw_listener_status testnet | sed 's/^/    /'
         echo ""
+        echo -e "${BOLD}  Auto-restart:${RESET} ${DIM}(@reboot + */5 listener watchdog)${RESET}"
+        echo -e "    ${BOLD}Boot autostart:${RESET}";    sw_autostart_status | sed 's/^/      /'
+        echo -e "    ${BOLD}Listener watchdog:${RESET}"; sw_watchdog_status 2>&1 | sed 's/^/      /' | head -1
+        echo ""
         echo -e "  ${GREEN}1${RESET}) Setup / Recover    ${DIM}(download + init|recover + save pass + start)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Start listener"
         echo -e "  ${RED}3${RESET}) Stop listener"
-        echo -e "  ${GREEN}4${RESET}) Auto-restart       ${DIM}(@reboot + */5 listener watchdog)${RESET}"
-        echo -e "  ${GREEN}5${RESET}) Show address"
+        echo -e "  ${GREEN}4${RESET}) Show address"
+        echo -e "  ${DIM}  ── Auto-restart ──────────────────────────${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Enable boot autostart   ${DIM}(per net)${RESET}"
+        echo -e "  ${RED}6${RESET}) Disable boot autostart  ${DIM}(per net)${RESET}"
+        echo -e "  ${GREEN}7${RESET}) Install listener watchdog ${DIM}(*/5)${RESET}"
+        echo -e "  ${RED}8${RESET}) Remove listener watchdog"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1-5/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-8/0]: ${RESET}"
         read -r choice || choice=0          # EOF (Ctrl+D) → 0 → Back
         case "$choice" in
             "") continue ;;                 # Enter → refresh
             1) net=$(_solo_pick_net "wallet setup")   && { sw_setup "$net" || true; };         _solo_pause ;;
             2) net=$(_solo_pick_net "start listener") && { sw_listener_start "$net" || true; }; _solo_pause ;;
             3) net=$(_solo_pick_net "stop listener")  && { sw_listener_stop "$net" || true; };  _solo_pause ;;
-            4) _wallet_autorestart_menu || true ;;
-            5) net=$(_solo_pick_net "show address")    && { sw_show_address "$net" || true; };   _solo_pause ;;
+            4) net=$(_solo_pick_net "show address")    && { sw_show_address "$net" || true; };   _solo_pause ;;
+            5) net=$(_solo_pick_net "boot autostart") && { sw_autostart_enable "$net" || true; };  _solo_pause ;;
+            6) net=$(_solo_pick_net "boot autostart") && { sw_autostart_disable "$net" || true; }; _solo_pause ;;
+            7) sw_watchdog_install || true; _solo_pause ;;
+            8) sw_watchdog_remove  || true; _solo_pause ;;
             0) return ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done
 }
 
-_wallet_autorestart_menu() {
-    local choice net
-    clear
-    echo -e "${BOLD}${CYAN}  Wallet listener — auto-restart${RESET}\n"
-    echo -e "${BOLD}  Boot autostart:${RESET}"; sw_autostart_status | sed 's/^/    /'
-    echo -e "${BOLD}  Listener watchdog:${RESET}"; sw_watchdog_status 2>&1 | sed 's/^/    /' | head -1
-    echo ""
-    echo -e "  ${GREEN}1${RESET}) Enable boot autostart (per net)"
-    echo -e "  ${RED}2${RESET}) Disable boot autostart (per net)"
-    echo -e "  ${GREEN}3${RESET}) Install listener watchdog (*/5)"
-    echo -e "  ${RED}4${RESET}) Remove listener watchdog"
-    echo -e "  ${RED}0${RESET}) Back"
-    echo ""
-    echo -ne "${BOLD}Select [1-4/0]: ${RESET}"
-    read -r choice || choice=0
-    case "$choice" in
-        1) net=$(_solo_pick_net "boot autostart") && { sw_autostart_enable "$net" || true; } ;;
-        2) net=$(_solo_pick_net "boot autostart") && { sw_autostart_disable "$net" || true; } ;;
-        3) sw_watchdog_install || true ;;
-        4) sw_watchdog_remove || true ;;
-        0) return ;;
-        *) warn "Invalid option." ;;
-    esac
-    _solo_pause
-}
-
-# H) Health / Watchdogs — node-sync, node boot-autostart, wallet listener, stratum.
+# Watchdogs (global) (network-select ▸ 5) — node-sync, node boot-autostart, wallet listener, stratum.
 watchdog_menu() {
     local choice net
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  Health / Watchdogs${RESET}"
+        echo -e "${BOLD}${CYAN}  07) Solo Private Pool $(_solo_mode_word) · Health / Watchdogs${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
         echo -e "${BOLD}  Node-sync watchdog:${RESET}";    gnk_watchdog_status 2>&1 | sed 's/^/    /' | head -2
         echo -e "${BOLD}  Node boot-autostart:${RESET}";   gnk_autostart_status | sed 's/^/    /'
         echo -e "${BOLD}  Wallet-listener watchdog:${RESET}"; sw_watchdog_status 2>&1 | sed 's/^/    /' | head -1
+        echo -e "${BOLD}  Stratum watchdog:${RESET}"; solo_stratum_watchdog_status 2>&1 | sed 's/^/    /' | head -1
         echo ""
-        echo -e "  ${GREEN}1${RESET}) Node-sync watchdog     ${DIM}install / remove (restarts a wedged node)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Node boot-autostart    ${DIM}enable / disable @reboot (per net)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Wallet-listener wd     ${DIM}install / remove${RESET}"
-        echo -e "  ${GREEN}4${RESET}) Stratum watchdog       ${DIM}(existing W — alert if stratum drops)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Install node-sync watchdog    ${DIM}(restarts a wedged node)${RESET}"
+        echo -e "  ${RED}2${RESET}) Remove  node-sync watchdog"
+        echo -e "  ${GREEN}3${RESET}) Enable  node boot-autostart   ${DIM}(@reboot · per net / both)${RESET}"
+        echo -e "  ${RED}4${RESET}) Disable node boot-autostart   ${DIM}(per net / both)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Install wallet-listener watchdog"
+        echo -e "  ${RED}6${RESET}) Remove  wallet-listener watchdog"
+        echo -e "  ${GREEN}7${RESET}) Install stratum watchdog      ${DIM}(alert if stratum drops)${RESET}"
+        echo -e "  ${RED}8${RESET}) Remove  stratum watchdog"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1-4/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-8/0]: ${RESET}"
         read -r choice || choice=0
         case "$choice" in
             "") continue ;;
-            1)  echo -ne "  ${GREEN}i${RESET}nstall / ${RED}r${RESET}emove / ${DIM}0 cancel${RESET}: "; read -r a || true
-                case "$a" in i) gnk_watchdog_install || true ;; r) gnk_watchdog_remove || true ;; esac; _solo_pause ;;
-            2)  net=$(_solo_pick_net "boot autostart") || { _solo_pause; continue; }
-                echo -ne "  ${GREEN}e${RESET}nable / ${RED}d${RESET}isable: "; read -r a || true
-                case "$a" in e) gnk_autostart_enable "$net" || true ;; d) gnk_autostart_disable "$net" || true ;; esac; _solo_pause ;;
-            3)  echo -ne "  ${GREEN}i${RESET}nstall / ${RED}r${RESET}emove / ${DIM}0 cancel${RESET}: "; read -r a || true
-                case "$a" in i) sw_watchdog_install || true ;; r) sw_watchdog_remove || true ;; esac; _solo_pause ;;
-            4)  solo_watchdog_setup || true; _solo_pause ;;
+            1)  gnk_watchdog_install || true; _solo_pause ;;
+            2)  gnk_watchdog_remove  || true; _solo_pause ;;
+            3|4) echo -e "  Network for ${BOLD}boot autostart${RESET}:  ${GREEN}1${RESET}) Both  ${GREEN}2${RESET}) Mainnet  ${GREEN}3${RESET}) Testnet  ${DIM}0) Cancel${RESET}"
+                echo -ne "  Select [1/2/3/0]: "; read -r np || true
+                local nets=()
+                case "$np" in
+                    1) nets=(mainnet testnet) ;;
+                    2) nets=(mainnet) ;;
+                    3) nets=(testnet) ;;
+                    *) _solo_pause; continue ;;
+                esac
+                for net in "${nets[@]}"; do
+                    if [[ "$choice" == "3" ]]; then
+                        gnk_autostart_enable "$net" || true
+                    else
+                        gnk_autostart_disable "$net" || true
+                    fi
+                done
+                _solo_pause ;;
+            5)  sw_watchdog_install || true; _solo_pause ;;
+            6)  sw_watchdog_remove  || true; _solo_pause ;;
+            7)  solo_stratum_watchdog_install || true; _solo_pause ;;
+            8)  solo_stratum_watchdog_remove  || true; _solo_pause ;;
             0)  return ;;
             *)  warn "Invalid option."; sleep 1 ;;
         esac
     done
 }
 
-# 2) Stratum — Setup / Configure / Publish / Restrict, network chosen inside.
-# Was B/C/D/E (mainnet) + F/G/I/J (testnet); the per-network letters collapsed
-# into one set. Pure dispatch — each branch calls the SAME mainnet/testnet
-# wrapper the old letters did, so behaviour is unchanged.
+# Stratum (per-net branch ▸ 2) — Setup / Configure / Publish / Restrict for the
+# branch's network. Pure dispatch — maps action+net to the mainnet/testnet
+# wrapper; the network comes from the parent branch (SOLO_NETWORK), not a prompt.
 _stratum_dispatch() {
     local action="$1" net="$2"
     case "$action:$net" in
@@ -1708,12 +2635,12 @@ stratum_menu() {
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  Stratum Server${RESET}"
+        echo -e "${BOLD}${CYAN}  07) Solo Private Pool $(_solo_mode_word) · [${SOLO_NETWORK^^}] · Stratum Server${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
         show_compact_status
-        echo -e "  ${GREEN}1${RESET}) Setup       ${DIM}(enable stratum in grin-server.toml · wallet URL · burn)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Configure   ${DIM}(enable / bind / wallet / burn — single field)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Setup       ${DIM}(enable stratum in grin-server.toml · wallet URL)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Configure   ${DIM}(enable / bind / wallet — single field)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Publish     ${DIM}(open 0.0.0.0:<port> to miners + firewall)${RESET}"
         echo -e "  ${RED}4${RESET}) Restrict    ${DIM}(revert to 127.0.0.1)${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
@@ -1732,55 +2659,414 @@ stratum_menu() {
     done
 }
 
-# 3) Stats & Web — live terminal dashboard (was L) + nginx page deploy (was S).
-# The deploy itself prompts for payment-split prefixes + the optional access
-# lock, so those stay reachable through option 2 (no standalone quick-edit yet).
-stats_menu() {
-    local choice
+# Per-network branch — entered from the network-select screen after a net is
+# chosen (SOLO_NETWORK set). Holds only the genuinely per-net actions; cross-
+# network tools (both-net status, the unified stats page, global watchdogs) stay
+# on the network-select screen. Wallet/Stratum keep their own submenus — they
+# just inherit SOLO_NETWORK now instead of prompting per action.
+solo_net_menu() {
+    local choice label mode_label
+    label="Mainnet"; [[ "$SOLO_NETWORK" == "testnet" ]] && label="Testnet"
+    mode_label="Internet"; [[ "$SOLO_NET_MODE" == "lan" ]] && mode_label="LAN"
     while true; do
         clear
-        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  Stats & Web${RESET}"
-        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        if [[ "$SOLO_NETWORK" == "mainnet" ]]; then
+            echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+            echo -e "${BOLD}${RED}  07) Solo Private Pool ${mode_label} — [MAINNET — REAL GRIN]${RESET}"
+            echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        else
+            echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+            echo -e "${BOLD}${CYAN}  07) Solo Private Pool ${mode_label} — [TESTNET]${RESET}"
+            echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        fi
         echo ""
-        echo -e "  ${GREEN}1${RESET}) Live dashboard    ${DIM}(terminal stats, updates every 10s; Ctrl+C to exit)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Deploy / update   ${DIM}(nginx page; prompts payment prefixes + access lock)${RESET}"
-        echo -e "  ${RED}0${RESET}) Back"
+        _show_node_info "$SOLO_NETWORK" "$SOLO_API_PORT" "$SOLO_STRATUM_PORT"
+        echo -e "  ${GREEN}1${RESET}) Wallet          ${DIM}▸ setup/recover · listener · auto-restart · address${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Stratum         ${DIM}▸ setup · configure · publish · restrict${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Terminal Stats  ${DIM}(live dashboard for $label)${RESET}"
         echo ""
-        echo -ne "${BOLD}Select [1-2/0]: ${RESET}"
+        echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
+        echo -e "  ${RED}0${RESET}) Back to network select"
+        echo ""
+        echo -ne "${BOLD}Select [1-3/0]: ${RESET}"
         read -r choice || choice=0          # EOF (Ctrl+D) → 0 → Back
         case "$choice" in
             "") continue ;;                 # Enter → refresh
-            1) solo_live_stats || true ;;
-            2) solo_deploy_stats_page || true; _solo_pause ;;
+            1) wallet_menu  || true ;;
+            2) stratum_menu || true ;;
+            3) solo_live_stats "$SOLO_NETWORK" || true ;;
             0) return ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done
 }
 
+# ── Deploy new code (refresh runtime copies from the checkout) ──────────────
+# The .sh menus + sourced libs run IN-PLACE from the checkout, so a `git pull`
+# (Admin centre 08 → 8 Self-Update) already updates them. But two runtime files
+# are SNAPSHOTS copied out by the full stats deploy (07 → 3): the collector .py
+# (→ /usr/local/bin) and the stats web page (→ /var/www/<conf>). A pull does NOT
+# refresh those. This re-copies just those two — no prompts, no wrapper/cron
+# rewrite, no nginx reload — so a code-only update doesn't need the heavy deploy.
+# Backfill the port-check API default into an EXISTING config.json when the key is
+# missing, so a code-only "Deploy new code" makes the refreshed setup page's live
+# reachability pills work without re-running the full deploy's prompt. Deliberately
+# conservative:
+#   · no-op if the file is absent or not valid JSON (the full deploy owns creation)
+#   · no-op if "portcheck_api" is already present — a custom URL the operator set, OR
+#     a deliberate disable (full deploy omits the key), are both preserved
+# Returns 0 ONLY when it actually changed the file (so the caller logs + chmods).
+_solo_backfill_portcheck_api() {
+    local cfg="$1"
+    [[ -f "$cfg" ]] || return 1
+    python3 - "$cfg" "https://tools.grin.money/tools-api" "https://tools.grin.money/pay-api" <<'PY' || return 1
+import json, sys
+path, default, old_default = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(path) as f:
+        cfg = json.load(f)
+except Exception:
+    sys.exit(1)                      # missing / corrupt — leave it for the full deploy
+if not isinstance(cfg, dict):
+    sys.exit(1)
+if "portcheck_api" in cfg and cfg["portcheck_api"] != old_default:
+    sys.exit(1)                      # custom or disabled — never override
+cfg["portcheck_api"] = default
+with open(path, "w") as f:
+    json.dump(cfg, f, separators=(",", ":"))   # match the printf'd compact style
+sys.exit(0)
+PY
+}
+
+solo_deploy_code() {
+    echo ""
+    echo -e "  ${BOLD}Deploy new code${RESET} — refresh runtime copies from the checkout."
+    echo -e "  ${DIM}Source: $TOOLKIT_ROOT${RESET}"
+    echo -e "  ${YELLOW}Pull the latest first:${RESET} Admin centre ${BOLD}(08) → 8) Self-Update${RESET}."
+    echo ""
+    local did=0
+
+    # 1) Mining stats collector (.py) — fixed dest path, only refresh if already deployed.
+    if [[ ! -f "$BLOCK_COLLECTOR_SRC" ]]; then
+        warn "Collector source missing: $BLOCK_COLLECTOR_SRC"
+    elif [[ ! -f "$BLOCK_COLLECTOR_BIN" ]]; then
+        info "Collector not deployed yet — run 'Deploy stats web page' (07 → 3) once first."
+    elif cp "$BLOCK_COLLECTOR_SRC" "$BLOCK_COLLECTOR_BIN" && chmod 755 "$BLOCK_COLLECTOR_BIN"; then
+        success "Collector refreshed → $BLOCK_COLLECTOR_BIN"; did=1
+    else
+        warn "Could not refresh collector."
+    fi
+
+    # 2) Web assets (index.html + setup page + logo) — dest is per-deployment.
+    #    Discover the live web dir(s) from the collector wrapper's --out-dir
+    #    (= <web_dir>/data), written at deploy time; refresh only dirs that already
+    #    hold an index.html. ALL static assets the full deploy (07 → 3) lays down are
+    #    refreshed here, not just index.html, so a code-only update never leaves a
+    #    stale setup page. config.json is generated (not a static copy), so we only
+    #    backfill the port-check default when the key is absent (or still the retired
+    #    pay-api default) — never overwrite the operator's pool name / ports / a
+    #    custom portcheck_api value.
+    if [[ -f "$STATS_WEB_SRC" && -f "$BLOCK_COLLECTOR_WRAPPER" ]]; then
+        local out_dir web_dir
+        while IFS= read -r out_dir; do
+            [[ -z "$out_dir" ]] && continue
+            web_dir="$(dirname "$out_dir")"
+            [[ -f "$web_dir/index.html" ]] || continue   # only a live stats deploy
+
+            if cp "$STATS_WEB_SRC" "$web_dir/index.html" && chmod 644 "$web_dir/index.html"; then
+                success "Stats page refreshed → $web_dir/index.html"; did=1
+            fi
+            if [[ -f "$STATS_SETUP_SRC" ]] \
+               && cp "$STATS_SETUP_SRC" "$web_dir/setup-solo-mining.html" \
+               && chmod 644 "$web_dir/setup-solo-mining.html"; then
+                success "Setup page refreshed → $web_dir/setup-solo-mining.html"; did=1
+            fi
+            if [[ -f "$STATS_SHOT_SRC" ]] \
+               && cp "$STATS_SHOT_SRC" "$web_dir/pool-config-example.png" \
+               && chmod 644 "$web_dir/pool-config-example.png"; then
+                did=1
+            fi
+            if [[ -f "$STATS_LOGO_SRC" ]] \
+               && cp "$STATS_LOGO_SRC" "$web_dir/logo.svg" && chmod 644 "$web_dir/logo.svg"; then
+                did=1
+            fi
+            if _solo_backfill_portcheck_api "$web_dir/data/config.json"; then
+                chmod 644 "$web_dir/data/config.json" 2>/dev/null || true
+                success "Port-check default set → $web_dir/data/config.json (portcheck_api=https://tools.grin.money/tools-api)"; did=1
+            fi
+        done < <(grep -oE -- '--out-dir [^ ]+' "$BLOCK_COLLECTOR_WRAPPER" | awk '{print $2}' | sort -u)
+    fi
+
+    # Kick one collection so a refreshed collector's new/changed fields (e.g. the
+    # network difficulty_per_block seed the stats page reads) land in the feed NOW
+    # instead of waiting up to 5 min for the next cron tick.
+    if [[ $did -eq 1 && -x "$BLOCK_COLLECTOR_WRAPPER" ]]; then
+        if "$BLOCK_COLLECTOR_WRAPPER" >/dev/null 2>&1; then
+            success "Collector run once — stats feed refreshed now."
+        else
+            warn "Initial collection errored (cron will retry in ≤5 min)."
+        fi
+    fi
+
+    [[ $did -eq 0 ]] && info "Nothing to refresh yet — deploy the stats page (07 → 3) first."
+    echo ""
+    echo -e "  ${DIM}Menu scripts (.sh) run in-place — the pull already updated them.${RESET}"
+}
+
+# ── Payouts & settlement (mainnet running balance) ──────────────────────────
+# Records out-of-band payouts against the collector's per-nickname RUNNING BALANCE
+#   owed(nick) = Σ matured-block earnings  −  Σ recorded payments
+# so the GRIN-owed figure stops accumulating once you pay. Bookkeeping only — no
+# Grin address is ever stored or moved; the operator still sends GRIN by hand. All
+# state lives in the collector's SQLite DB and is reached ONLY through its
+# --list-balances / --record-payment / --list-payments modes (the collector owns
+# the schema; the menu never touches the DB directly).
+SOLO_MAIN_DB="$BLOCK_COLLECTOR_STATE_DIR/solo_mining_stats_main.db"
+
+_settlement_show_balances() {
+    "$BLOCK_COLLECTOR_BIN" --net mainnet --state-dir "$BLOCK_COLLECTOR_STATE_DIR" \
+        --list-balances 2>/dev/null | python3 -c '
+import json, sys
+try: d = json.load(sys.stdin)
+except Exception: d = {}
+rows = d.get("balances", []); t = d.get("totals", {})
+if not rows:
+    print("  No earnings recorded yet (no block has matured since the split was enabled).")
+    sys.exit()
+rows.sort(key=lambda r: (-r["owed"], r["nick"]))   # biggest To be Paid first; same sort the picker uses
+print("  %-3s %-22s %13s %10s %12s" % ("#", "Nickname", "All time earn", "Paid", "To be Paid"))
+print("  " + "-" * 64)
+for i, r in enumerate(rows, 1):
+    print("  %-3d %-22s %13.3f %10.3f %12.3f" % (i, r["nick"][:22], r["earned"], r["paid"], r["owed"]))
+print("  " + "-" * 64)
+print("  %-3s %-22s %13.3f %10.3f %12.3f GRIN" % ("", "TOTAL", t.get("earned",0), t.get("paid",0), t.get("owed",0)))
+'
+}
+
+_settlement_record_payment() {
+    local nick amt note confirm out bj pick owed_default
+    # Fetch the balances JSON once: drives both the numbered picker below and the
+    # index→nickname resolution. Sort here must match _settlement_show_balances so
+    # the row numbers line up with what the operator just saw on the menu screen.
+    bj="$("$BLOCK_COLLECTOR_BIN" --net mainnet --state-dir "$BLOCK_COLLECTOR_STATE_DIR" \
+        --list-balances 2>/dev/null)"
+    echo ""
+    echo "$bj" | python3 -c '
+import json, sys
+try: d = json.load(sys.stdin)
+except Exception: d = {}
+rows = d.get("balances", [])
+rows.sort(key=lambda r: (-r["owed"], r["nick"]))
+if not rows:
+    print("  No balances yet — nothing to pick from (type a nickname to record anyway).")
+    sys.exit()
+print("  %-3s %-22s %12s" % ("#", "Nickname", "To be Paid"))
+print("  " + "-" * 39)
+for i, r in enumerate(rows, 1):
+    print("  %-3d %-22s %12.3f" % (i, r["nick"][:22], r["owed"]))
+' 2>/dev/null || true
+    echo ""
+    echo -ne "  Pick # to credit, or type a nickname ${DIM}(0 = return)${RESET}: "
+    read -r nick
+    nick="$(echo "$nick" | tr -d '[:space:]')"
+    [[ -z "$nick" || "$nick" == "0" ]] && { info "Cancelled — returning."; return; }
+    # Pure number → resolve to a nickname (and its owed amount) from the same sorted list.
+    if [[ "$nick" =~ ^[0-9]+$ ]]; then
+        pick="$(echo "$bj" | python3 -c '
+import json, sys
+idx = int(sys.argv[1])
+try: d = json.load(sys.stdin)
+except Exception: d = {}
+rows = d.get("balances", [])
+rows.sort(key=lambda r: (-r["owed"], r["nick"]))
+if 1 <= idx <= len(rows):
+    r = rows[idx-1]; print("%s\t%.3f" % (r["nick"], r["owed"]))
+' "$nick" 2>/dev/null)"
+        [[ -z "$pick" ]] && { warn "No nickname at #$nick. Cancelled."; return; }
+        nick="${pick%%$'\t'*}"
+        owed_default="${pick##*$'\t'}"
+        [[ "$owed_default" == "0.000" ]] && owed_default=""   # nothing owed → no default
+        info "Selected: ${nick}${owed_default:+ (To be Paid ${owed_default} GRIN)}"
+    fi
+    echo -ne "  Amount paid in GRIN ${DIM}(e.g. 12.5${owed_default:+ · Enter = ${owed_default}} · 0 = return)${RESET}: "
+    read -r amt
+    [[ -z "$amt" && -n "$owed_default" ]] && amt="$owed_default"   # Enter = pay full owed
+    [[ "$amt" == "0" ]] && { info "Cancelled — returning."; return; }
+    # Positive decimal only.
+    if [[ ! "$amt" =~ ^[0-9]+(\.[0-9]+)?$ ]] || [[ "$amt" == "0.0" ]]; then
+        warn "Invalid amount '$amt' — must be a positive number. Cancelled."
+        return
+    fi
+    echo -ne "  Note (optional, e.g. 'weekly settle 06-04'): "
+    read -r note
+    echo ""
+    echo -e "  Record payment of ${BOLD}${amt} GRIN${RESET} to ${BOLD}${nick}${RESET}?"
+    echo -ne "  This lowers their 'To be Paid' balance. [Y/n]: "
+    read -r confirm
+    [[ "${confirm,,}" == "n" || "${confirm,,}" == "no" ]] && { info "Cancelled — nothing recorded."; return; }
+
+    out="$("$BLOCK_COLLECTOR_BIN" --net mainnet --state-dir "$BLOCK_COLLECTOR_STATE_DIR" \
+        --record-payment --pay-nick "$nick" --pay-grin "$amt" --pay-note "$note" 2>&1)" || {
+        error "Failed to record payment:"; echo "$out"; return; }
+    success "Payment recorded."
+    echo "$out" | python3 -c 'import json,sys
+try: d=json.load(sys.stdin); print("  %s now To be Paid: %.3f GRIN" % (d["recorded"]["nick"], d["owed_now"]))
+except Exception: pass' 2>/dev/null || true
+
+    # Refresh split_main.json now so the web page reflects the payment immediately
+    # (otherwise it waits for the next 5-min cron run).
+    if [[ -x "$BLOCK_COLLECTOR_WRAPPER" ]]; then
+        "$BLOCK_COLLECTOR_WRAPPER" >/dev/null 2>&1 || true
+        info "Web page balances refreshed."
+    fi
+}
+
+_settlement_show_history() {
+    echo ""
+    echo -e "  ${BOLD}Recorded payments (newest first)${RESET}"
+    "$BLOCK_COLLECTOR_BIN" --net mainnet --state-dir "$BLOCK_COLLECTOR_STATE_DIR" \
+        --list-payments 2>/dev/null | python3 -c '
+import json, sys
+LIMIT = 20   # show only the latest 20; collector still returns full history (backups/queries)
+try: d = json.load(sys.stdin)
+except Exception: d = {}
+pays = d.get("payments", [])   # already newest-first (ORDER BY id DESC)
+if not pays:
+    print("  No payments recorded yet."); sys.exit()
+print("  %-20s %12s  %-20s  %s" % ("When (UTC)", "GRIN", "Nickname", "Note"))
+print("  " + "-" * 72)
+for p in pays[:LIMIT]:
+    print("  %-20s %12.3f  %-20s  %s" % (p["ts"][:19], p["grin"], p["nick"][:20], p.get("note","")))
+if len(pays) > LIMIT:
+    print("  " + "-" * 72)
+    print("  …and %d older — showing the latest %d of %d." % (len(pays) - LIMIT, LIMIT, len(pays)))
+'
+}
+
+solo_settlement_menu() {
+    local choice
+    while true; do
+        clear
+        echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${RED}  07) Solo Private Pool $(_solo_mode_word) · [MAINNET] · Payouts & Settlement${RESET}"
+        echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        if [[ ! -f "$SOLO_MAIN_DB" ]]; then
+            warn "No mainnet stats database yet ($SOLO_MAIN_DB)."
+            echo -e "  ${DIM}Deploy the stats page (menu 3) with payout split enabled first.${RESET}"
+            _solo_pause; return
+        fi
+        echo -e "  ${DIM}All time earn = matured-block rewards · Paid = payments you record · To be Paid = earn − paid.${RESET}"
+        echo -e "  ${DIM}Pay each nickname out-of-band, then record it here so their 'To be Paid' drops.${RESET}"
+        echo ""
+        _settlement_show_balances || true   # display only — never abort the menu under set -e
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Record a payment"
+        echo -e "  ${GREEN}2${RESET}) Payment history"
+        echo ""
+        echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
+        echo -e "  ${RED}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select [1-2/0]: ${RESET}"
+        read -r choice || choice=0
+        case "$choice" in
+            "") continue ;;
+            1) _settlement_record_payment || true; _solo_pause ;;
+            2) _settlement_show_history   || true; _solo_pause ;;
+            0) return ;;
+            *) warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
+# Network-select screen (network-as-parent). Pick a net to manage (1/2), or use
+# a cross-network tool (3-7). Numeric keys for main actions; letters per the
+# toolkit menu convention: A = guided precheck, C = destructive cleanup
+# (Danger Zone).
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  07) Grin Mining Services — Solo${RESET}"
+    if [[ "$SOLO_NET_MODE" == "lan" ]]; then
+        echo -e "${BOLD}${CYAN}  07) Grin Mining Service — Solo Private Pool ${DIM}(LAN mode)${RESET}"
+    else
+        echo -e "${BOLD}${CYAN}  07) Grin Mining Service — Solo Private Pool ${DIM}(Internet mode)${RESET}"
+    fi
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     show_compact_status
 
-    echo -e "  ${GREEN}A${RESET}) Node & Mining Status  ${DIM}(node sync, tmux, stratum config + miners)${RESET}"
+    echo -e "  ${DIM}─── Set up your solo private pool — top to bottom ────────${RESET}"
+    echo -e "  ${GREEN}A${RESET}) Start here — node check      ${DIM}(is your node running & synced?)${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Configure solo private pool Mainnet  ${DIM}(real GRIN)${RESET}"
+    echo -e "  ${GREEN}2${RESET}) Configure solo private pool Testnet  ${DIM}(tGRIN — no monetary value)${RESET}"
+    if [[ "$SOLO_NET_MODE" == "lan" ]]; then
+        echo -e "  ${GREEN}3${RESET}) Deploy stats web page        ${DIM}(LAN dashboard · plain HTTP · no domain/SSL)${RESET}"
+    else
+        echo -e "  ${GREEN}3${RESET}) Deploy stats web page        ${DIM}(public dashboard, both nets)${RESET}"
+    fi
     echo ""
-    echo -e "  ${GREEN}1${RESET}) Wallet               ${DIM}▸ setup/recover · listener · auto-restart · address${RESET}"
-    echo -e "  ${GREEN}2${RESET}) Stratum              ${DIM}▸ setup · configure · publish · restrict${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Stats & Web          ${DIM}▸ live dashboard · web page${RESET}"
-    echo -e "  ${GREEN}4${RESET}) Health / Watchdogs   ${DIM}▸ node-sync · boot autostart · wallet listener · stratum${RESET}"
+    echo -e "  ${DIM}─── Overview & shared tools ──────────────────────${RESET}"
+    echo -e "  ${GREEN}4${RESET}) Node, Wallet & Mining Status  ${DIM}(both networks)${RESET}"
+    echo -e "  ${GREEN}5${RESET}) Watchdogs (global)            ${DIM}(node-sync · boot autostart · wallet · stratum)${RESET}"
+    echo -e "  ${GREEN}6${RESET}) Maintenance                   ${DIM}(encrypted backup · restore · schedule · seed)${RESET}"
+    echo -e "  ${GREEN}7${RESET}) Payouts & settlement          ${DIM}(mainnet running balance · record payments)${RESET}"
+    echo ""
+    echo -e "  ${DIM}─── Danger Zone ──────────────────────────────────${RESET}"
+    echo -e "  ${RED}C${RESET}) Clean up solo mining  ${DIM}(remove solo infra · keeps node + seed + backups)${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [A/1-4/0]: ${RESET}"
+    echo -ne "${BOLD}Select [A/1-7/C/0]: ${RESET}"
+}
+
+# Detect the mode of an already-deployed solo stats page by inspecting its vhost.
+# Echoes "Internet" or "LAN"; echoes nothing when no stats page is deployed (only
+# the stratum is set up → no stats vhost to clash with). Mirrors the hub's
+# hub_detect_solo_mode: a LAN deploy binds `listen <ipv4>:<port>`, Internet uses
+# bare `listen 80`/`443` with an FQDN server_name.
+_solo_detect_deployed_mode() {
+    local vhost="/etc/nginx/sites-available/$STATS_BASENAME"
+    [[ -f "$vhost" ]] || return 0
+    if grep -qE 'listen[[:space:]]+[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]+' "$vhost" 2>/dev/null; then
+        echo "LAN"
+    else
+        echo "Internet"
+    fi
 }
 
 main() {
+    # Optional launch mode (mirrors Script 07 pool's singlebox|hub|satellite arg):
+    #   lan → serve the stats page over plain HTTP on a LAN IP:port (no domain/SSL).
+    # Any other value (or none) keeps the default public domain + certbot flow.
+    case "${1:-}" in
+        lan) SOLO_NET_MODE="lan" ;;
+    esac
+
+    # Direct-launch mode guard. Skipped when launched via the mining hub (it sets
+    # SOLO_LAUNCHED_VIA_HUB and runs its own Internet/LAN switch confirmation, so we
+    # don't prompt twice). Internet and LAN are the same solo product — only the
+    # stats page differs — so warn before a switch that would overwrite the
+    # already-deployed stats vhost.
+    if [[ -z "${SOLO_LAUNCHED_VIA_HUB:-}" ]]; then
+        local _want_mode _cur_mode _ans
+        _want_mode="Internet"; [[ "$SOLO_NET_MODE" == "lan" ]] && _want_mode="LAN"
+        _cur_mode=$(_solo_detect_deployed_mode)
+        if [[ -n "$_cur_mode" && "$_cur_mode" != "$_want_mode" ]]; then
+            echo ""
+            warn "Solo stats page is already deployed in ${_cur_mode} mode, but you launched ${_want_mode} mode."
+            warn "Internet and LAN are the same solo setup — only the stats page differs."
+            warn "Deploying the stats page in ${_want_mode} mode rewrites the ${_cur_mode} vhost (and its URL/SSL)."
+            echo ""
+            echo -ne "${BOLD}Continue in ${_want_mode} mode? [y/N]: ${RESET}"
+            read -r _ans || _ans=""
+            if [[ "${_ans,,}" != "y" ]]; then
+                info "Cancelled — keeping ${_cur_mode} mode. Re-launch in ${_cur_mode} mode to manage it."
+                return 0
+            fi
+        fi
+    fi
+
     while true; do
         show_menu
         read -r choice || choice=0          # EOF (Ctrl+D) → 0 → Back to main menu
@@ -1788,19 +3074,26 @@ main() {
         # Every action is guarded with `|| true`: this is an interactive dispatch
         # loop, so a cancelled/failed action (e.g. "TOML not found" → `... || return`)
         # must drop back to the menu, never hard-exit the script under `set -e`.
+        # 1/2 enter a per-net branch: SOLO_NETWORK is set for its duration and
+        # cleared on return, so the global Watchdogs menu (5) still prompts for
+        # which net to act on. 3-7 and C are cross-network and run at the top level.
         case "${choice,,}" in
             "")  continue ;;                # Enter → refresh status
-            a)   show_node_status || true
+            a)   solo_node_precheck || true ;;
+            1)   _set_solo_net mainnet; solo_net_menu || true; _clear_solo_net ;;
+            2)   _set_solo_net testnet; solo_net_menu || true; _clear_solo_net ;;
+            3)   solo_deploy_stats_page || true; _solo_pause ;;
+            4)   show_node_status || true
                  echo ""; echo "Press Enter to continue..."; read -r || true ;;
-            1)   wallet_menu   || true ;;
-            2)   stratum_menu  || true ;;
-            3)   stats_menu    || true ;;
-            4)   watchdog_menu || true ;;
+            5)   watchdog_menu || true ;;
+            6)   maintenance_menu || true ;;
+            7)   solo_settlement_menu || true ;;
+            c)   solo_cleanup || true; _solo_pause ;;
             0)   break ;;
             *)   warn "Invalid option."; sleep 1 ;;
         esac
-        # Submenus (1-4) run their own loops + pauses; only the one-shot A) status
-        # view needs a pause, handled inline above.
+        # Branches/submenus run their own loops + pauses; one-shot actions pause
+        # via _solo_pause (3, C) or inline (status view 4).
     done
 }
 

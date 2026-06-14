@@ -996,7 +996,14 @@ def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now,
                     status=None, pool_name=DEFAULT_POOL_NAME):
     if status is None:
         status = query_node_status(net)
-    height = diff = peers = net_hr = None
+    height = diff = peers = None
+    # Carry the last-good network figures between ticks. total_difficulty only
+    # changes when a new block lands, so any collector tick with no new block has
+    # dd == 0 and can compute nothing — without this carry the feed would publish
+    # null hashrate/difficulty on those ticks, which is exactly what leaves the
+    # stats-page tiles blank on a cold load.
+    net_hr = net_prev.get("hr_gps")
+    net_diff_pb = net_prev.get("diff_pb")
     if status:
         tip = status.get("tip", {})
         height = tip.get("height")
@@ -1005,11 +1012,21 @@ def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now,
         if diff is not None and net_prev.get("diff") is not None:
             dt = now - net_prev.get("ts", now)
             dd = diff - net_prev["diff"]
+            prev_h = net_prev.get("height")
             if dt > 0 and dd > 0:
                 net_hr = round(hashrate_gps(dd, dt), 3)
+                net_prev["hr_gps"] = net_hr
+                # Per-block network difficulty = Δcumulative / Δblocks — the same
+                # average the stats page's live tile shows (dDiff/dBlocks). NOT the
+                # cumulative `difficulty` below. Lets the page seed the tile on
+                # first load instead of waiting for its own cross-block delta.
+                if prev_h is not None and height is not None and height - prev_h > 0:
+                    net_diff_pb = round(dd / (height - prev_h))
+                    net_prev["diff_pb"] = net_diff_pb
         if diff is not None:
             net_prev["diff"] = diff
             net_prev["ts"] = now
+            net_prev["height"] = height
 
     last_block = None
     if found:
@@ -1029,6 +1046,7 @@ def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now,
         },
         "network": {
             "height": height, "difficulty": diff,
+            "difficulty_per_block": net_diff_pb,
             "hashrate_gps": net_hr, "connections": peers,
         },
     }

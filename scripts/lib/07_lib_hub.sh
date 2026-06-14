@@ -66,6 +66,7 @@ hub_satellite_registry() {
         *) return ;;
     esac
     warn "Restart the hub ($POOL_SERVICE) to apply: option 6 → Restart."
+    _pool_pause   # self-manage feedback; the hub loop skips its own pause for R)
 }
 
 # ─── A) Ingestion auth (shared secret) ──────────────────────────────────────────
@@ -89,7 +90,7 @@ hub_ingestion_auth() {
         2) echo -ne "Secret: "; read -r secret ;;
         *) return ;;
     esac
-    [[ -z "$secret" ]] && { warn "No secret set."; return; }
+    [[ -z "$secret" ]] && { warn "No secret set."; _pool_pause; return; }
     pool_write_conf_key "hub_shared_secret" "$secret"
     success "Shared secret saved to $POOL_CONF."
     # The Central API binds 127.0.0.1:$HUB_CENTRAL_API_PORT (systemd HOST env) —
@@ -101,6 +102,7 @@ hub_ingestion_auth() {
     echo -e "    hub_shared_secret = ${secret}"
     echo -e "  ${DIM}(the nginx vhost proxies /api/shares + /api/blocks to the Central API)${RESET}"
     warn "Restart the hub ($POOL_SERVICE) to apply: option 6 → Restart."
+    _pool_pause   # self-manage feedback; the hub loop skips its own pause for A)
 }
 
 # ─── T) Retention settings ──────────────────────────────────────────────────────
@@ -130,6 +132,7 @@ hub_menu() {
     echo -e "  ${GREEN}6${RESET}) $(_pool_step_mark 6) Service control     ${DIM}(start before creating admin)${RESET}"
     echo -e "  ${GREEN}7${RESET}) $(_pool_step_mark 7) Create admin account ${DIM}(needs service running)${RESET}"
     echo -e "  ${GREEN}8${RESET}) Status"
+    echo -e "  ${GREEN}9${RESET}) Deploy new code     ${DIM}(refresh js/html/media from checkout + restart)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Multi-region (hub-specific) ──────────────────${RESET}"
     echo -e "  ${GREEN}R${RESET}) Satellite registry    ${DIM}(IP allowlist)${RESET}"
@@ -158,6 +161,7 @@ pool_hub_loop() {
             6)        pool_service_menu || true ;;
             7)        pool_setup_admin || true ;;
             8)        pool_show_status || true ;;
+            9)        pool_deploy_code || true ;;
             r)        hub_satellite_registry || true ;;
             a)        hub_ingestion_auth || true ;;
             t)        hub_retention_settings || true ;;
@@ -167,6 +171,12 @@ pool_hub_loop() {
             0|q|exit) break ;;
             *)        warn "Invalid option."; sleep 1; continue ;;
         esac
-        [[ "${choice,,}" != "l" ]] && { echo ""; echo "Press Enter to continue..."; read -r; }
+        # Skip the pause for the pager (l) and for submenus that self-manage their
+        # own feedback and return on their own 0) Back (5/6/c/r/a) — otherwise
+        # picking 0 inside one of them would trigger a second, redundant prompt here.
+        case "${choice,,}" in
+            l|5|6|c|r|a) ;;
+            *) echo ""; echo "Press Enter to continue..."; read -r ;;
+        esac
     done
 }

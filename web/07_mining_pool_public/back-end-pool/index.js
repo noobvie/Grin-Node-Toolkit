@@ -560,8 +560,9 @@ function setupRoutes() {
   );
 
   // Public pages included in the sitemap (extension-less; nginx resolves $uri.html).
-  // Note: /system-health is intentionally excluded — that page is noindex,nofollow (ops view).
-  const SITEMAP_PATHS = ['/', '/pool-info', '/miners-stats', '/connect', '/fortune-board', '/donate'];
+  // pool-info + connect were merged into the dashboard (index) 2026-06; the dashboard
+  // carries the #connect + #info anchors, so only / is listed for that content.
+  const SITEMAP_PATHS = ['/', '/miners-stats', '/fortune-board', '/donate'];
 
   app.get('/sitemap.xml',
     rateLimiter.middleware('public'),
@@ -1309,6 +1310,26 @@ function setupRoutes() {
       ).all();
       const locByRegion = new Map(locations.map(l => [l.region, l]));
 
+      // Coarse per-region liveness for the public connect-page pill. Source of truth is the
+      // satellite heartbeat (the relay pings the hub every ~60 s even when idle — see
+      // share-relay.js), so a healthy-but-empty region reads "online", not "offline". When no
+      // satellite has ever reported (e.g. a freshly-declared region, or a singlebox that has
+      // no relay) we fall back to recent-share activity, else "unknown" (never a false "down").
+      // IPs/last_seen timestamps stay admin-only (/api/admin/health/satellites).
+      const STALE_S = 180;    // no heartbeat for 3 min  → degraded
+      const OFFLINE_S = 600;  // no heartbeat for 10 min → offline
+      const nowMs = Date.now();
+      const regionStatus = (region, hasShares) => {
+        const hb = satelliteHeartbeats.get(region);
+        if (hb && hb.last_seen) {
+          const ageS = Math.floor((nowMs - hb.last_seen) / 1000);
+          if (ageS >= OFFLINE_S) return 'offline';
+          if (ageS >= STALE_S) return 'stale';
+          return 'online';
+        }
+        return hasShares ? 'online' : 'unknown';
+      };
+
       // Union of regions seen in shares and regions declared in pool_locations.
       const regions = new Set([...byRegion.keys(), ...locByRegion.keys()]);
       const out = [];
@@ -1323,6 +1344,7 @@ function setupRoutes() {
           label: loc.label || null,
           stratum_url: loc.stratum_url || null,
           is_active: loc.is_active === undefined ? null : !!loc.is_active,
+          status: regionStatus(region, a.shares > 0),
           online: a.shares > 0,
           hashrate_gps: parseFloat(gps.toFixed(6)),
           miners: a.miners,

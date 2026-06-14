@@ -418,8 +418,28 @@ Key design decisions (locked in — do not change without user confirmation):
   `/api/auth/login` + `/api/auth/register` verify `captcha_id`+`captcha_answer` *before* touching the
   password (a bad captcha never counts toward account lockout). Single-use → the login form re-fetches a
   challenge after every attempt. Layers on top of the auth rate limiter (3/min) + per-account lockout
-  (5 fails/15 min). The live admin login is `public_html/login.html` (served at `/login.html`);
-  `back-end-pool/public/login.html` is legacy and NOT deployed — do not wire it.
+  (5 fails/15 min). The **only** admin login page is `public_html/login.html` (served at `/login.html`,
+  the public zone — must stay reachable so the operator can always authenticate); on success it redirects
+  straight to `/admin/` (there is **no** `admin-dashboard.html`). The whole management surface is the one
+  combined `/admin/` panel — `back-end-pool/admin-panel/{index,miners,payments,settings,users,health}.html` —
+  rsynced to the nginx-gated docroot. login is split OUT of `/admin/` ON PURPOSE: it lives in the public
+  zone (door) while the panel is IP-gated (rooms); you can't put one file in two nginx access zones. The
+  old `back-end-pool/public/{login,admin}.html` duplicates were deleted 2026-06 (never deployed — the
+  installer only rsyncs `public_html/` + `admin-panel/`). Do not recreate.
+  **403 on `/admin/` is by design, not a bug:** the nginx `admin_allowlist` keeps the admin panel off
+  the public internet. Reach it via LAN/VPN/SSH-tunnel, or set `admin_allowlist` in
+  `/opt/grin/conf/grin_pubpool.json` and re-run 4) Setup nginx. `/login.html` + `/api/auth` stay public
+  on purpose (captcha + lockout + auto-ban + fail2ban cover them).
+  **`pool_setup_nginx` allow/deny generation (`scripts/07_grin_mining_public_pool.sh`):**
+  `127.0.0.1` + `::1` are **always** emitted in both branches (an SSH tunnel arrives as localhost, plus
+  the app's own server-side calls) — never lock out the break-glass path. Empty `admin_allowlist` →
+  localhost + RFC1918 (10/8, 172.16/12, 192.168/16). Non-empty → localhost + the listed IPs/CIDRs only
+  (LAN is dropped — set it explicitly if you still want it). **First-run SSH-IP auto-seed:** when the
+  allowlist is empty, the function detects the operator's SSH client IP (`$SSH_CONNECTION`→`$SSH_CLIENT`,
+  skipped for local/RFC1918 sources) and **auto-writes** it into `admin_allowlist` (no prompt — just a
+  yellow `warn` announcing it) so they can reach `/admin/` from the install machine immediately (solves
+  the chicken-and-egg). One-time — once the conf is non-empty it's skipped. NOT defaulted to allow-all: the secure default fails closed; the
+  seed adds exactly one trusted IP rather than opening the panel to the internet.
 - **Admin-panel hardening (added 2026-06) — three layers:**
   1. **Step-up (re-auth) on money/destructive/access-control actions.** `freshAdmin` middleware =
      `secureAdmin` + `requireFreshAuth` (5-min window). Gated endpoints: `POST /api/admin/incentives/award`,
@@ -489,13 +509,41 @@ Key design decisions (locked in — do not change without user confirmation):
 - **Script 07 role:** Infrastructure only (deploy files, systemd services, backups); business logic lives in pool web code
 - **Networks:** the public pool is a mainnet-only product (the earlier "testnet stratum-only mode" plan was not implemented); testnet mining is done via `07_grin_mining_solo.sh`
 - **Default pool fee 1.0%** (`pool_fee_percent: 1.0`, validated 0–50); min withdrawal: 5.0 GRIN
+- **Public page set consolidated 2026-06 — 8 pages in `public_html/`:** `index.html` (dashboard +
+  connect + info), `miners-stats.html`, `payment-history.html`, `account-settings.html`,
+  `fortune-board.html`, `donate.html` (last two = incentives), `login.html` (admin door, public zone),
+  and `page.html` (generic renderer for operator-authored pages via `/page.html?p=<key>`; footer
+  links + the SITEMAP authored-pages come from `poolSettings.listEnabledPages()`). **Deleted:**
+  `connect.html` + `pool-info.html` (merged into the dashboard `#connect` / `#info` anchors),
+  `home-classic.html` (orphan dup of index), `grin_mining_testnet_instruction.html` (testnet on a
+  mainnet-only product — testnet lives in the solo script), `system-health.html` +
+  `admin-dashboard.html` (the gated `/admin/` panel is the sole admin surface; login → `/admin/`).
+  When removing/renaming a public page, fix the backend `SITEMAP_PATHS` in `index.js` and every
+  `nav-link` href across the other pages. **`sitemap.xml` / `robots.txt` / `manifest.json` are
+  served dynamically by the backend** (`index.js` routes, nginx `location = /…` proxies those three
+  exact paths to Node) — there are **no** static copies in `public_html/` (the stale shadowed
+  duplicates were deleted 2026-06). Do not recreate them; edit the generators in `index.js` instead. The merged dashboard **#info** section ports pool-info's Rules/payouts + Support
+  (social hooks auto-managed by branding.js; `loadInfoContact()` toggles the email row + "no
+  channels" note, which branding.js doesn't).
 - **Public homepage (index.html) surfaces, added 2026-06:**
-  - **Regional stratum cards** — homepage + connect.html read public `GET /api/pool/locations`
-    (one row per `pool_locations` region). `db.js seedDefaultRegions()` seeds amer/euro/asie
-    (amer.grinium.com / euro.grinium.com / asie.grinium.com) **only when the table is empty** —
-    cosmetic defaults the operator edits in admin → Regions. connect.html has a region `<select>`
-    that rewrites the host (and port if the region's `stratum_url` is `host:port`) in the generated
-    miner commands.
+  - **Regional stratum cards (the connect surface) — on the DASHBOARD (`index.html`), not a
+    separate page.** `connect.html` was **deleted 2026-06** as redundant: its per-miner CLI command
+    generator (lolMiner/GMiner/SRBMiner) was misleading for the common case (G1/iPollo ASICs are
+    configured via their own web UI, not a CLI). All "Start Mining" buttons + the header nav now point
+    to `index.html#connect`. The dashboard's "Point your miner at your nearest region" section
+    (`#connect`) renders **one card per region** (all visible at once) showing `host:port` + a **live
+    up/down pill** + active-miner count, with a Copy button; below the grid a single shared
+    `.connect-note` gives the connect fields (worker = `grin_address.worker`, password = anything —
+    same for every region, port identical across regions). `loadRegions()` reads `GET
+    /api/pool/stats/regions` and re-polls on the 60 s dashboard refresh so pills stay live; it filters
+    to active rows with a `stratum_url`, falling back to the single-stratum callout when none. The pill
+    `status` (`online`/`stale`/`offline`/`unknown`) is derived from the in-memory satellite heartbeat
+    with a recent-shares fallback (`unknown` = no signal yet, shown neutral — never a false "down").
+    To make this truthful for a *quiet* region, the satellite `lib/share-relay.js` POSTs an **empty
+    idle heartbeat** (`{region, shares:[]}`) to `/api/shares` every `HEARTBEAT_MS` (60 s) when there
+    are no shares to flush, so a healthy-but-empty region reads `online` instead of `offline`.
+    `db.js seedDefaultRegions()` seeds amer/euro/asie (amer/euro/asie.grinium.com) **only when the
+    table is empty** — cosmetic defaults the operator edits in admin → Regions.
   - **Service status strip** — public `GET /api/pool/status` (rate-limited, 15s cache) returns
     coarse health only: `pool.ok`, `node {reachable,synced,peers,height}`, `wallet {reachable}`.
     **Never** exposes wallet balance/addresses (those stay on admin-only `/api/admin/health/*`).

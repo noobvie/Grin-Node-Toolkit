@@ -92,12 +92,12 @@
             <a href="miners-stats.html" class="nav-link">Miners</a>
             <a href="payment-history.html" class="nav-link">Payouts</a>
             <a href="fortune-board.html" class="nav-link">🎁 Rewards</a>
-            <a href="pool-info.html" class="nav-link">Info</a>
+            <a href="index.html#info" class="nav-link">Info</a>
             <a href="account-settings.html" class="nav-link">My Account</a>
         </nav>
         <div class="nav-right">
             <div class="theme-switcher"></div>
-            <a class="btn primary sm" href="connect.html">Start Mining</a>
+            <a class="btn primary sm" href="index.html#connect">Start Mining</a>
         </div>
     </header>
 
@@ -161,12 +161,18 @@
             </div>
         </div>
 
-        <div class="section-title">Point your miner at your nearest region</div>
+        <div class="section-title" id="connect">Point your miner at your nearest region</div>
         <div class="region-grid" id="region-grid">
             <div class="callout" id="region-fallback">
                 <span>⛏ Point your miner at <code data-brand="stratum_url">stratum host not configured</code></span>
-                <a class="btn primary sm" href="connect.html" data-brand="cta">Start Mining</a>
             </div>
+        </div>
+        <div class="connect-note" id="connect-note" style="display:none">
+            <div class="kv">
+                <span class="k">Worker</span><span><code>&lt;your_grin_address&gt;.rig1</code> <span class="dim">— your Grin address is your login; <code>.rig1</code> names this machine (any label)</span></span>
+                <span class="k">Password</span><span><code>x</code> <span class="dim">— anything; it's ignored. No account or registration needed.</span></span>
+            </div>
+            <div class="region-meta">Algorithm <strong>Cuckatoo32</strong> · same port for every region · ASICs (iPollo G1, etc.): paste the host:port above into your miner's pool/stratum field.</div>
         </div>
 
         <div class="section-title">Recent activity</div>
@@ -188,6 +194,33 @@
                         <tr><td colspan="4" class="dim">Loading…</td></tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <div class="section-title" id="info">Pool info, rules &amp; support</div>
+        <div class="grid cols-2">
+            <div class="card">
+                <div class="card-head"><h3>Rules &amp; payouts</h3></div>
+                <ul class="info-list">
+                    <li><strong>PPLNS</strong> (Pay Per Last N Shares) — rewards follow recent contributed work</li>
+                    <li>No account, email, or registration — your Grin address <em>is</em> your identity</li>
+                    <li>Per-miner variable difficulty (vardiff) tunes itself to your hardware</li>
+                    <li>Payouts are sent automatically over <strong>Tor</strong> to your Grin address; if your wallet is unreachable, retried every 6h for up to 7 days</li>
+                    <li>Block rewards mature after <strong>1,440 confirmations</strong> (~24h) before they are credited</li>
+                    <li>Orphaned blocks are detected automatically and their rewards reversed fairly</li>
+                </ul>
+            </div>
+            <div class="card">
+                <div class="card-head"><h3>Mining software &amp; support</h3></div>
+                <p class="dim" style="margin:0 0 10px">Any Cuckatoo32 miner works — GPU (lolMiner, GMiner, SRBMiner-MULTI) or ASIC (iPollo G1 / G1-Mini). Point it at your nearest region's host:port above, using <code>grin_address.worker_name</code> as the username (password ignored).</p>
+                <ul class="info-list" id="info-contact">
+                    <li style="display:none" id="info-email">Email: <span data-brand="contact_email"></span></li>
+                    <li style="display:none" data-brand="social-discord"><a data-brand="social-discord" href="#" rel="noopener" target="_blank">Discord</a></li>
+                    <li style="display:none" data-brand="social-telegram"><a data-brand="social-telegram" href="#" rel="noopener" target="_blank">Telegram</a></li>
+                    <li style="display:none" data-brand="social-twitter"><a data-brand="social-twitter" href="#" rel="noopener" target="_blank">Twitter / X</a></li>
+                    <li style="display:none" data-brand="social-website"><a data-brand="social-website" href="#" rel="noopener" target="_blank">Website</a></li>
+                </ul>
+                <p class="dim" id="info-no-contact" style="margin:6px 0 0">Contact channels are configured by the operator (admin → Branding → Social links).</p>
             </div>
         </div>
     </div>
@@ -416,17 +449,49 @@
             }
         }
 
-        // ── Regional stratum hosts ───────────────────────────────────────────
-        // Operator-declared regions from /api/pool/locations. All values rendered via
-        // textContent (operator-supplied). Falls back to the single stratum callout.
+        // ── Regional stratum hosts + live up/down pill ───────────────────────
+        // Operator-declared regions from /api/pool/stats/regions (gives per-region `status`
+        // alongside the host). Each card shows the region's host:port + a live availability
+        // pill; the shared worker/password note below is identical for every region. All
+        // operator-supplied values rendered via textContent. Falls back to the single callout.
+        var BASE_PORT = '';   // pool default port — used when a region's stratum_url omits one
+
+        function regionStatusMeta(s) {
+            switch (s) {
+                case 'online':  return { cls: 's-online',  label: '● Online' };
+                case 'stale':   return { cls: 's-stale',   label: '● Degraded' };
+                case 'offline': return { cls: 's-offline', label: '● Offline' };
+                default:        return { cls: 's-unknown', label: '○ Unknown' };
+            }
+        }
+
+        // The host:port a region resolves to (region may pin a port via host:port; else default).
+        function regionHostPort(r) {
+            var parts = String(r.stratum_url || '').split(':');
+            return parts[0] + ':' + (parts[1] || BASE_PORT || '3333');
+        }
+
         async function loadRegions() {
             var grid = document.getElementById('region-grid');
             if (!grid) return;
             try {
-                var regions = await Auth.fetch('/api/pool/locations');
-                if (!Array.isArray(regions) || regions.length === 0) return; // keep fallback callout
+                // Capture the pool's default stratum port once (for regions with no explicit port).
+                if (!BASE_PORT) {
+                    try {
+                        var b = await Auth.fetch('/api/public/branding');
+                        if (b && b.data && b.data.connection) BASE_PORT = b.data.connection.stratum_port || '';
+                    } catch (e) { /* fall back to 3333 in regionHostPort */ }
+                }
+                var data = await Auth.fetch('/api/pool/stats/regions');
+                var regions = (data && Array.isArray(data.regions)) ? data.regions : [];
+                // Only operator-declared, active regions are connect targets (need a host).
+                regions = regions.filter(function (r) { return r.stratum_url && r.is_active !== false; })
+                                 .sort(function (a, b) { return (a.region || '').localeCompare(b.region || ''); });
+                var note = document.getElementById('connect-note');
+                if (regions.length === 0) { if (note) note.style.display = 'none'; return; } // keep fallback callout
                 grid.textContent = '';
                 regions.forEach(function (r) {
+                    var hostport = regionHostPort(r);
                     var card = document.createElement('div');
                     card.className = 'region-card';
 
@@ -436,28 +501,39 @@
                     name.className = 'region-name';
                     name.textContent = r.label || r.region;
                     head.appendChild(name);
+                    var pill = document.createElement('span');
+                    var m = regionStatusMeta(r.status);
+                    pill.className = 'region-pill ' + m.cls;
+                    pill.textContent = m.label;
+                    head.appendChild(pill);
                     card.appendChild(head);
 
                     var hostRow = document.createElement('div');
                     hostRow.className = 'region-host';
                     var code = document.createElement('code');
-                    code.textContent = r.stratum_url || '—';
+                    code.textContent = hostport;
                     hostRow.appendChild(code);
-                    if (r.stratum_url) {
-                        var copy = document.createElement('button');
-                        copy.className = 'btn sm';
-                        copy.type = 'button';
-                        copy.textContent = 'Copy';
-                        copy.addEventListener('click', function () {
-                            var done = function () { copy.textContent = 'Copied!'; setTimeout(function () { copy.textContent = 'Copy'; }, 1500); };
-                            if (navigator.clipboard) { navigator.clipboard.writeText(r.stratum_url).then(done); }
-                            else { done(); }
-                        });
-                        hostRow.appendChild(copy);
-                    }
+                    var copy = document.createElement('button');
+                    copy.className = 'btn sm';
+                    copy.type = 'button';
+                    copy.textContent = 'Copy';
+                    copy.addEventListener('click', function () {
+                        var done = function () { copy.textContent = 'Copied!'; setTimeout(function () { copy.textContent = 'Copy'; }, 1500); };
+                        if (navigator.clipboard) { navigator.clipboard.writeText(hostport).then(done); }
+                        else { done(); }
+                    });
+                    hostRow.appendChild(copy);
                     card.appendChild(hostRow);
+
+                    if (r.miners > 0) {
+                        var meta = document.createElement('div');
+                        meta.className = 'region-meta';
+                        meta.textContent = r.miners + (r.miners === 1 ? ' miner' : ' miners') + ' active';
+                        card.appendChild(meta);
+                    }
                     grid.appendChild(card);
                 });
+                if (note) note.style.display = '';
             } catch (e) { /* keep fallback callout */ }
         }
 
@@ -466,12 +542,31 @@
             loadBlocks();
             loadPayments();
             loadServiceStatus();
+            loadRegions();   // re-poll so the per-region up/down pills stay current
         }
 
-        document.addEventListener('DOMContentLoaded', function () {
-            refresh();
-            loadRegions();   // regions change rarely → load once
-        });
+        // Info section contact block: branding.js fills the email text + toggles the social
+        // rows, but not the email row's visibility or the "no channels" note — do that here.
+        async function loadInfoContact() {
+            try {
+                var r = await fetch('/api/public/branding');
+                var json = r.ok ? await r.json() : null;
+                var data = (json && json.data) ? json.data : {};
+                var email = data.pool && data.pool.contact_email;
+                var social = (data.branding && data.branding.social) || {};
+                if (email) {
+                    var li = document.getElementById('info-email');
+                    if (li) li.style.display = '';
+                }
+                var anyChannel = email || ['discord', 'telegram', 'twitter', 'website'].some(function (k) { return social[k]; });
+                if (anyChannel) {
+                    var note = document.getElementById('info-no-contact');
+                    if (note) note.style.display = 'none';
+                }
+            } catch (e) { /* keep the operator note */ }
+        }
+
+        document.addEventListener('DOMContentLoaded', function () { refresh(); loadInfoContact(); });
         setInterval(refresh, 60000);
     </script>
 </body>

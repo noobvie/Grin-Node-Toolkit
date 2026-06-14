@@ -355,7 +355,7 @@
         });
         const data = await res.json();
         if (data.success) {
-          window.location.href = '/admin-dashboard.html';
+          window.location.href = '/admin/';
         } else {
           showError(data.error || 'Verification failed');
           // 2fa session expired → back to the login form (needs a fresh password + captcha).
@@ -429,7 +429,7 @@
         if (data.success) {
           // FIX #4: Token is now in httpOnly cookie, not in response body
           // No need to store anything in localStorage
-          window.location.href = '/admin-dashboard.html';
+          window.location.href = '/admin/';
         } else if (data.totp_required) {
           // Password OK, but this admin has 2FA on → show the code step (no new captcha needed).
           twofaToken = data.twofa_token;
@@ -487,7 +487,7 @@
         if (data.success) {
           // Register already authenticated us (httpOnly cookies set server-side) — go straight in.
           showSuccess('Admin account created! Redirecting…');
-          setTimeout(() => { window.location.href = '/admin-dashboard.html'; }, 800);
+          setTimeout(() => { window.location.href = '/admin/'; }, 800);
         } else {
           showError(data.error || 'Registration failed');
           loadCaptcha('register'); // single-use → refresh after a failed attempt
@@ -509,7 +509,7 @@
       try {
         const res = await fetch('/api/admin/dashboard', { credentials: 'include' });
         if (res.status === 200) {
-          window.location.href = '/admin-dashboard.html';
+          window.location.href = '/admin/';
         }
       } catch (e) {
         // Not logged in, stay on login page

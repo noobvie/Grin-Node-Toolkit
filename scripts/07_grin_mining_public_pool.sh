@@ -27,6 +27,7 @@
 #   6) Service control       (start / stop / restart)
 #   7) Create admin account  (first admin user — needs service running)
 #   8) Pool status           (service state, DB size, recent logs)
+#   9) Deploy new code       (refresh backend+frontend from checkout, then restart)
 #   B) Backup                (DB + config → /opt/grin/backups/)
 #   C) Cron schedules        (daily backup, weekly VACUUM)
 #   L) View logs             (tail -50 | less)
@@ -554,6 +555,87 @@ window.POOL_NAME = ${escaped_name};
 EOF
 }
 
+# ───────────────────────────────────────────────────────────────────────────────
+# 9) DEPLOY NEW CODE — refresh runtime copies from the checkout, then restart
+# ───────────────────────────────────────────────────────────────────────────────
+# A lightweight update path for an ordinary code pull (js/html/media only): it
+# refreshes BOTH trees the pool runs from —
+#   · backend  $POOL_APP_SRC  → $POOL_APP_DIR   (index.js, lib/*.js, admin-panel/…)
+#   · frontend $POOL_WEB_SRC  → $POOL_WEB_DIR   (via pool_deploy_web)
+# — and restarts the service so the new code is actually live. This fills the gap
+# between 3) Deploy web files (frontend ONLY — never touches the backend) and
+# 1) Install (heavy: re-runs npm/apt/fail2ban AND does not restart the service).
+#
+# The backend rsync uses --delete to mirror the checkout (so a file deleted from
+# source is removed on the server too) but EXCLUDES the four runtime artefacts the
+# app owns, never the repo: the SQLite DB (pool.db + WAL/SHM sidecars), the wallet
+# password file, node_modules (deps — refreshed only when package.json changes),
+# and custom_assets (operator-uploaded white-label media). rsync protects excluded
+# paths from --delete, so miner balances / secrets / deps survive untouched.
+pool_deploy_code() {
+    echo ""
+    echo -e "  ${BOLD}Deploy new code${RESET} — refresh backend + frontend from the checkout, then restart."
+    echo -e "  ${DIM}Source: $TOOLKIT_ROOT${RESET}"
+    echo -e "  ${YELLOW}Pull the latest first${RESET} (git pull) so the checkout holds the new code."
+    echo ""
+
+    if [[ ! -d "$POOL_APP_SRC" ]]; then
+        error "Pool app source not found: $POOL_APP_SRC"
+        return 1
+    fi
+    if [[ ! -d "$POOL_APP_DIR" ]]; then
+        error "Pool not installed yet ($POOL_APP_DIR missing) — run 1) Install first."
+        return 1
+    fi
+
+    # Did package.json change? Capture the OLD (deployed) hash before the rsync
+    # overwrites it, compare against the source. Only then do we re-run npm —
+    # an ordinary js/html refresh skips the (slow) dependency install entirely.
+    local old_pkg_hash new_pkg_hash
+    old_pkg_hash=$(sha1sum "$POOL_APP_DIR/package.json" 2>/dev/null | awk '{print $1}')
+    new_pkg_hash=$(sha1sum "$POOL_APP_SRC/package.json" 2>/dev/null | awk '{print $1}')
+
+    info "Refreshing backend code → $POOL_APP_DIR ..."
+    rsync -a --delete \
+        --exclude='pool.db' --exclude='pool.db-wal' --exclude='pool.db-shm' \
+        --exclude='.wallet_pass' --exclude='node_modules' --exclude='custom_assets' \
+        "$POOL_APP_SRC/" "$POOL_APP_DIR/" \
+        || { error "Backend rsync failed — server code unchanged."; return 1; }
+    success "Backend code refreshed."
+
+    if [[ "$old_pkg_hash" != "$new_pkg_hash" ]]; then
+        local npm_cmd="install"
+        [[ -f "$POOL_APP_DIR/package-lock.json" ]] && npm_cmd="ci"
+        warn "package.json changed — running npm $npm_cmd ..."
+        (cd "$POOL_APP_DIR" && npm "$npm_cmd" --omit=dev 2>&1 | tail -20) \
+            || { error "npm $npm_cmd failed — see /root/.npm/_logs/ (latest *-debug-0.log)."; return 1; }
+        success "Dependencies updated."
+    else
+        info "package.json unchanged — skipping npm (deps untouched)."
+    fi
+
+    # Frontend (public_html → /var/www/grin-pool) + admin panel + pool-config.js.
+    # No-op-safe if the web files were never deployed (it recreates the dir).
+    pool_deploy_web || warn "Frontend deploy reported a problem — backend is still refreshed."
+
+    # Make the new backend live. Only restart if it's already running; a stopped
+    # service is left stopped (the operator starts it via 6) Service control).
+    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        info "Restarting $POOL_SERVICE to load the new code..."
+        if systemctl restart "$POOL_SERVICE"; then
+            success "$POOL_SERVICE restarted — new code is live."
+        else
+            error "Restart failed — check: journalctl -u $POOL_SERVICE -n 50"
+            return 1
+        fi
+    else
+        info "$POOL_SERVICE is not running — start it via 6) Service control to load the new code."
+    fi
+
+    echo ""
+    success "Deploy new code complete."
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4) SETUP NGINX
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -595,15 +677,40 @@ pool_setup_nginx() {
     # LAN, WireGuard/VPN, or an SSH tunnel). Public login (/api/auth) stays reachable so the
     # operator can authenticate — it's covered by captcha + lockout + auto-ban + fail2ban.
     local admin_allow_raw; admin_allow_raw=$(pool_read_conf "admin_allowlist" "")
+
+    # First-run convenience: if no allowlist is configured yet, auto-seed the operator's
+    # current SSH client IP so they can reach /admin/ from this machine immediately —
+    # solves the chicken-and-egg where configuring the allowlist lives *behind* the
+    # allowlist. No prompt (one fewer keystroke during setup); we just announce it in
+    # yellow. One-time: once written, the conf is non-empty and we skip.
+    if [[ -z "$admin_allow_raw" ]]; then
+        local ssh_ip=""
+        if   [[ -n "${SSH_CONNECTION:-}" ]]; then ssh_ip="${SSH_CONNECTION%% *}"
+        elif [[ -n "${SSH_CLIENT:-}"     ]]; then ssh_ip="${SSH_CLIENT%% *}"
+        fi
+        # Only seed a non-local source — a LAN/localhost SSH origin is already covered
+        # by the RFC1918 + localhost rules below, so seeding it adds nothing.
+        if [[ -n "$ssh_ip" \
+              && ! "$ssh_ip" =~ ^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|::1$|fe80:) ]]; then
+            pool_write_conf_key "admin_allowlist" "$ssh_ip"
+            admin_allow_raw="$ssh_ip"
+            warn "Auto-whitelisted your current SSH IP ($ssh_ip) for admin-panel access."
+            warn "  Broaden/narrow it later in admin → Settings → Access Control, or edit \"admin_allowlist\" in $POOL_CONF."
+        fi
+    fi
+
+    # localhost (127.0.0.1 + ::1) is ALWAYS allowed so an SSH tunnel (which arrives as
+    # 127.0.0.1) and the app's own server-side calls keep working regardless of the
+    # configured allowlist — never lock yourself out of the break-glass path.
     local admin_rules="" _entry
+    admin_rules+="        allow 127.0.0.1;"$'\n'
+    admin_rules+="        allow ::1;"$'\n'
     if [[ -n "$admin_allow_raw" ]]; then
         for _entry in ${admin_allow_raw//,/ }; do
             [[ -n "$_entry" ]] && admin_rules+="        allow ${_entry};"$'\n'
         done
-        info "Admin panel (/admin, /api/admin) restricted to: $admin_allow_raw"
+        info "Admin panel (/admin, /api/admin) restricted to: localhost + $admin_allow_raw"
     else
-        admin_rules+="        allow 127.0.0.1;"$'\n'
-        admin_rules+="        allow ::1;"$'\n'
         admin_rules+="        allow 10.0.0.0/8;"$'\n'
         admin_rules+="        allow 172.16.0.0/12;"$'\n'
         admin_rules+="        allow 192.168.0.0/16;"$'\n'
@@ -1081,8 +1188,8 @@ pool_service_menu() {
         echo -ne "Choice: "
         read -r sc
         case "$sc" in
-            1) pool_service_control stop ;;
-            2) pool_service_control restart ;;
+            1) pool_service_control stop;    _pool_pause ;;
+            2) pool_service_control restart; _pool_pause ;;
         esac
     else
         echo -e "  Status: ${RED}● stopped${RESET}"
@@ -1090,7 +1197,7 @@ pool_service_menu() {
         echo -ne "Choice: "
         read -r sc
         # if-form: a trailing `[[ ]] &&` would make "0/back" return 1 → set -e kills the caller
-        if [[ "$sc" == "1" ]]; then pool_service_control start; fi
+        if [[ "$sc" == "1" ]]; then pool_service_control start; _pool_pause; fi
     fi
 }
 
@@ -1131,6 +1238,11 @@ pool_backup() {
 
     ls -t "$backup_dir"/pool_backup_*.tar.gz 2>/dev/null | tail -n +31 | xargs rm -f 2>/dev/null || true
 }
+
+# Pause helper for one-shot submenus that perform an action: keeps their success
+# output on screen. Submenus call this only after a real action (never on Back),
+# so the main loop excludes them from its own pause — no double prompt.
+_pool_pause() { echo ""; echo "Press Enter to continue..."; read -r; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # C) CRON SCHEDULES
@@ -1186,6 +1298,7 @@ SCRIPT
 EOF
                 success "Daily backup cron enabled ($cron_backup → $backup_wrapper)."
             fi
+            _pool_pause
             ;;
         2)
             if [[ -f "$cron_vacuum" ]]; then
@@ -1197,6 +1310,7 @@ EOF
 EOF
                 success "Weekly VACUUM cron enabled ($cron_vacuum)."
             fi
+            _pool_pause
             ;;
     esac
 }
@@ -1387,6 +1501,7 @@ show_menu() {
     echo ""
     echo -e "${DIM}  ─── Administration ───────────────────────────────${RESET}"
     echo -e "  ${GREEN}8${RESET}) Pool status           ${DIM}(service, port, DB, recent logs)${RESET}"
+    echo -e "  ${GREEN}9${RESET}) Deploy new code       ${DIM}(refresh js/html/media from checkout + restart)${RESET}"
     echo -e "  ${GREEN}B${RESET}) Backup pool           ${DIM}(DB + config → /opt/grin/backups/)${RESET}"
     echo -e "  ${GREEN}C${RESET}) Cron tasks            ${DIM}(backup schedule, VACUUM)${RESET}"
     echo -e "  ${GREEN}L${RESET}) View logs             ${DIM}(tail -50 | less)${RESET}"
@@ -1418,6 +1533,7 @@ pool_singlebox_loop() {
             6)     pool_service_menu || true ;;
             7)     pool_setup_admin || true ;;
             8)     pool_show_status || true ;;
+            9)     pool_deploy_code || true ;;
             b)     pool_backup || true ;;
             c)     pool_cron_schedules || true ;;
             l)     pool_view_logs || true ;;
@@ -1427,11 +1543,15 @@ pool_singlebox_loop() {
             *)     warn "Invalid option." ; sleep 1 ; continue ;;
         esac
 
-        [[ "${choice,,}" != "l" && "${choice,,}" != "s" ]] && {
-            echo ""
-            echo "Press Enter to continue..."
-            read -r
-        }
+        # Pause so action output stays readable before the menu redraws.
+        # Skipped for: l (pager) / s (editor) — they hold their own screen — and
+        # the submenus 5/6/c, which self-manage feedback and return on their own
+        # 0) Back. Without this, picking 0 inside a submenu would trigger a second,
+        # redundant "Press Enter" here even though nothing new was shown.
+        case "${choice,,}" in
+            l|s|5|6|c) ;;
+            *) echo ""; echo "Press Enter to continue..."; read -r ;;
+        esac
     done
 }
 

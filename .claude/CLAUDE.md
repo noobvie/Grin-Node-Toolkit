@@ -438,7 +438,21 @@ Key design decisions (locked in — do not change without user confirmation):
   the public zone — must stay reachable so the operator can always authenticate); on success it redirects
   straight to `/admin/` (there is **no** `admin-dashboard.html`). The whole management surface is the one
   combined `/admin/` panel — `back-end-pool/admin-panel/{index,miners,payments,settings,users,health}.html` —
-  rsynced to the nginx-gated docroot. login is split OUT of `/admin/` ON PURPOSE: it lives in the public
+  rsynced to the nginx-gated docroot.
+  **httpOnly cookie ↔ admin-page guard (CRITICAL, fixed 2026-06):** the session token is an `httpOnly`
+  cookie, so **client JS cannot read or decode it** — that is the whole point of httpOnly. Admin pages must
+  therefore NEVER try to decode the JWT locally to check auth. The original guard did
+  `const p = API.decodePayload(); if (!p || !p.is_admin) location.href='/login.html'` — `decodePayload()`
+  ALWAYS returns null with httpOnly cookies, so every admin page bounced straight to `/login.html`, and
+  `login.html`'s `checkIfLoggedIn()` (which DOES work — it asks the server `/api/admin/dashboard`) bounced
+  right back → **infinite flash loop; login worked but you could never stay on the panel.** Not a security
+  hole (the loop was the page being *over*-strict), but a total usability break. Fix: ask the SERVER who you
+  are. New endpoint `GET /api/admin/me` (secureAdmin) returns `{username,is_admin}` from `req.user`; shared
+  helper `API.guardAdminPage()` in `public_html/js/api.js` calls it, redirects to `/login.html` on non-200,
+  else wires up the `#nav-user` username + Logout. Every admin page (`index/miners/health/payments/users`
+  inline guard, `settings.html` DOMContentLoaded) calls `API.guardAdminPage()` — `decodePayload()` is dead.
+  Rule: to gate a new admin page, call `API.guardAdminPage()`, never decode the cookie client-side.
+  login is split OUT of `/admin/` ON PURPOSE: it lives in the public
   zone (door) while the panel is IP-gated (rooms); you can't put one file in two nginx access zones. The
   old `back-end-pool/public/{login,admin}.html` duplicates were deleted 2026-06 (never deployed — the
   installer only rsyncs `public_html/` + `admin-panel/`). Do not recreate.

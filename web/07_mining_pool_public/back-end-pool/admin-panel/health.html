@@ -86,14 +86,9 @@
 <script>
 // ── Admin auth check ───────────────────────────────────────────────────────
 (function () {
-  if (!API.isLoggedIn()) { window.location.href = '/login.html'; return; }
-  try {
-    const payload = API.decodePayload();
-    if (!payload || !payload.is_admin) { window.location.href = '/login.html'; return; }
-    document.getElementById('nav-user').style.display = '';
-    document.getElementById('nav-user').innerHTML =
-      `<span class="nav-username">${payload.sub}</span> <a href="#" onclick="API.clearTokens();window.location='/login.html'">Logout</a>`;
-  } catch (e) { window.location.href = '/login.html'; }
+  // Auth gate: ask the server who we are (httpOnly cookie can't be read by JS). Redirects to
+  // /login.html on 401/403; otherwise wires up the nav username + Logout. See API.guardAdminPage.
+  API.guardAdminPage();
 
   fetch('/api/pool/stats').then(r => r.json()).then(d => {
     if (d.network === 'testnet') {

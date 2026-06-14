@@ -1532,6 +1532,10 @@
 
     // Load settings on page load
     window.addEventListener('DOMContentLoaded', () => {
+      // Auth gate (server-side, httpOnly-cookie aware): redirects to /login.html if not an
+      // admin. The API calls are already secureAdmin-gated, but this avoids showing the
+      // settings chrome to a logged-out visitor. See API.guardAdminPage.
+      API.guardAdminPage();
       loadAllSettings();
     });
 

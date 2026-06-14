@@ -1638,6 +1638,20 @@ function setupRoutes() {
 
   // ─── Phase 2: New Endpoints ──────────────────────────────────────────────
 
+  // Identity of the currently-authenticated admin. The session token is an httpOnly cookie,
+  // so the browser CANNOT decode it (that's the point of httpOnly). Admin pages therefore
+  // can't read the username/is_admin client-side — they must ask the server. Without this,
+  // the pages tried to decode the cookie locally, always got null, and bounced to /login.html
+  // in an infinite loop. Gated by secureAdmin: a 200 here is itself the "you're logged in"
+  // signal; 401/403 means redirect to login.
+  app.get('/api/admin/me', secureAdmin, (req, res) => {
+    res.json({
+      username: req.user?.username || null,
+      is_admin: !!req.user?.is_admin,
+      user_id: req.user?.user_id || null
+    });
+  });
+
   // Unified Admin Dashboard
   app.get('/api/admin/dashboard', secureAdmin, async (req, res) => {
     try {

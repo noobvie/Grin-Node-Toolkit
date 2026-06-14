@@ -1456,8 +1456,31 @@ pool_guided_setup() {
     _pool_guided_step 7 "Create admin account" pool_setup_admin \
         || warn "Admin account not created — run 7) Create admin account once the service is up."
 
+    local _domain; _domain=$(pool_read_conf "subdomain" "your-domain")
+    local _allow;  _allow=$(pool_read_conf "admin_allowlist" "")
     echo ""
-    success "Guided setup complete. Open https://$(pool_read_conf "subdomain" "your-domain") to access the pool."
+    success "Guided setup complete."
+    echo ""
+    echo -e "  ${BOLD}Public pool:${RESET}   https://$_domain"
+    echo -e "  ${BOLD}Admin login:${RESET}   https://$_domain/login.html   (redirects to /admin/ after sign-in)"
+    echo ""
+    echo -e "  ${BOLD}${YELLOW}The admin panel is IP-restricted${RESET} — defense in depth; the public internet"
+    echo -e "  cannot reach /admin/. The public pool + /login.html stay open to everyone."
+    if [[ -n "$_allow" ]]; then
+        echo -e "  Currently allowed:  ${GREEN}localhost + $_allow${RESET}"
+    else
+        echo -e "  Currently allowed:  ${GREEN}localhost + your LAN (RFC1918)${RESET}"
+    fi
+    echo ""
+    echo -e "  ${YELLOW}Getting 403 on /admin/?${RESET} Your browser's public IP isn't on the list."
+    echo -e "  (The auto-whitelist seeds your ${BOLD}SSH${RESET} IP, which can differ from the IP you"
+    echo -e "  ${BOLD}browse${RESET} from.) Add your browsing IP, then re-run ${BOLD}4) Setup nginx${RESET}:"
+    echo ""
+    echo -e "    ${CYAN}# 1) On the machine you browse from, open https://api.ipify.org to get its IP${RESET}"
+    echo -e "    ${CYAN}# 2) Add it (replace 1.2.3.4 — existing entries are kept):${RESET}"
+    echo -e "    ${CYAN}node -e 'const f=\"$POOL_CONF\",ip=process.argv[1];const d=JSON.parse(require(\"fs\").readFileSync(f,\"utf8\"));const s=new Set((d.admin_allowlist||\"\").split(/[,\\\\s]+/).filter(Boolean));s.add(ip);d.admin_allowlist=[...s].join(\",\");require(\"fs\").writeFileSync(f,JSON.stringify(d,null,2));require(\"fs\").chmodSync(f,0o600);console.log(\"admin_allowlist =\",d.admin_allowlist)' 1.2.3.4${RESET}"
+    echo -e "    ${CYAN}# 3) Re-run menu option 4) Setup nginx  (rewrites the vhost + reloads)${RESET}"
+    echo ""
     return 0
 }
 

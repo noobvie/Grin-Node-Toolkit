@@ -439,7 +439,10 @@ Key design decisions (locked in — do not change without user confirmation):
   skipped for local/RFC1918 sources) and **auto-writes** it into `admin_allowlist` (no prompt — just a
   yellow `warn` announcing it) so they can reach `/admin/` from the install machine immediately (solves
   the chicken-and-egg). One-time — once the conf is non-empty it's skipped. NOT defaulted to allow-all: the secure default fails closed; the
-  seed adds exactly one trusted IP rather than opening the panel to the internet.
+  seed adds exactly one trusted IP rather than opening the panel to the internet. The end-of-G
+  (`pool_guided_setup`) summary prints the public-pool + `/login.html` URLs, the currently-allowed
+  admin IPs, and a copy-paste `node -e` command to add your **browsing** IP (which can differ from
+  the seeded SSH IP — the usual cause of a 403 on `/admin/`) before re-running 4) Setup nginx.
 - **Admin-panel hardening (added 2026-06) — three layers:**
   1. **Step-up (re-auth) on money/destructive/access-control actions.** `freshAdmin` middleware =
      `secureAdmin` + `requireFreshAuth` (5-min window). Gated endpoints: `POST /api/admin/incentives/award`,

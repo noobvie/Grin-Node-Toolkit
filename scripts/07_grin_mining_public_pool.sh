@@ -675,18 +675,49 @@ pool_setup_nginx() {
     # "zero size shared memory zone". Self-heal: if the managed conf is missing the captcha
     # zone (added 2026-06 to stop the login captcha being starved by static-asset traffic),
     # delete it so the full current list regenerates. Idempotent — once present, this is skipped.
+    # Also regenerate if it still carries the old strict auth rate (3r/m, raised to
+    # 10r/m in 2026-06 so a human fumbling the login captcha can't lock themselves out).
     local _zone_conf="/etc/nginx/conf.d/script07-${POOL_SERVICE}.conf"
-    if [[ -f "$_zone_conf" ]] && ! grep -q "zone=${POOL_SERVICE}_captcha[: ]" "$_zone_conf"; then
+    if [[ -f "$_zone_conf" ]] \
+        && { ! grep -q "zone=${POOL_SERVICE}_captcha[: ]" "$_zone_conf" \
+             || grep -q "zone=${POOL_SERVICE}_auth:[^ ]* rate=3r/m" "$_zone_conf"; }; then
         rm -f "$_zone_conf"
     fi
 
     if declare -F nginx_ensure_rate_limit_zones &>/dev/null; then
         nginx_ensure_rate_limit_zones "script07-${POOL_SERVICE}" \
-            "${POOL_SERVICE}_auth:3r/m"      \
+            "${POOL_SERVICE}_auth:10r/m"     \
             "${POOL_SERVICE}_api:30r/m"      \
             "${POOL_SERVICE}_static:60r/m"   \
             "${POOL_SERVICE}_captcha:30r/m"  \
             "${POOL_SERVICE}_ingest:120r/m"
+    fi
+
+    # ── Cloudflare proxy (orange cloud) support ───────────────────────────────
+    # If the hub sits behind Cloudflare's proxy, the origin sees Cloudflare edge IPs,
+    # which collapses every per-IP defence (rate-limit zones, fail2ban, app req.ip)
+    # onto one shared bucket → "Too many requests" for everyone. Restoring the real
+    # client IP from CF-Connecting-IP fixes all of them. Stored in $POOL_CONF so it
+    # sticks across re-runs and Guided setup.
+    local cf_proxy; cf_proxy=$(pool_read_conf "cloudflare_proxy" "")
+    if [[ -z "$cf_proxy" ]]; then
+        echo ""
+        echo -e "  ${DIM}Is this hub behind Cloudflare's proxy (orange cloud)? If yes, the toolkit${RESET}"
+        echo -e "  ${DIM}restores the real visitor IP so rate-limiting & fail2ban work per-user.${RESET}"
+        echo -ne "  Behind Cloudflare proxy? [y/N]: "
+        local _cf_ans; read -r _cf_ans
+        [[ "${_cf_ans,,}" == "y" ]] && cf_proxy="true" || cf_proxy="false"
+        pool_write_conf_key "cloudflare_proxy" "$cf_proxy"
+    fi
+
+    local cf_realip_include=""
+    if [[ "$cf_proxy" == "true" ]]; then
+        if nginx_ensure_cloudflare_realip; then
+            cf_realip_include="    include ${NGINX_CLOUDFLARE_REALIP_SNIPPET};"
+        else
+            warn "Cloudflare real-IP setup failed — vhost will be written WITHOUT it."
+            warn "  Rate-limiting would throttle all visitors as one until this is fixed."
+        fi
     fi
 
     # Build nginx allow/deny rules for the admin surfaces (/admin + /api/admin).
@@ -790,6 +821,7 @@ server {
 server {
     listen 443 ssl http2;
     server_name $subdomain;
+$cf_realip_include
 
     root $POOL_WEB_DIR;
     index index.html;
@@ -816,6 +848,10 @@ server {
     location /admin/ {
 $admin_rules
         limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        # No content hashing on these static pages, so tell browsers to revalidate
+        # every load (304 when unchanged). Without this, browsers heuristically cache
+        # the HTML and keep showing the OLD admin panel after a redeploy.
+        add_header Cache-Control "no-cache" always;
         try_files \$uri \$uri/ \$uri.html =404;
     }
     location /api/admin/ {
@@ -830,13 +866,13 @@ $admin_rules
 
     # The CAPTCHA challenge is a read-only GET the login page fetches on load, on
     # form-toggle, and after every failed attempt — it gets its OWN dedicated zone.
-    # It must NOT share the strict 3r/m _auth brute-force budget (retry can't recover),
+    # It must NOT share the strict _auth brute-force budget (retry can't recover),
     # AND must NOT share _static either: that zone is keyed per-IP and consumed by every
     # CSS/JS/font/image on every page (a dozen+ per load), so a few page reloads during
     # testing starve the captcha → "Verification unavailable" and "↻ new" does nothing →
     # captcha_id stays null → the login POST is rejected at the captcha gate and you can
     # never log in. Its own zone keeps it lit regardless of asset traffic. This is NOT the
-    # brute-force vector (the login POST stays on _auth 3r/m + per-account lockout + IP
+    # brute-force vector (the login POST stays on _auth 10r/m + per-account lockout + IP
     # auto-ban); issuing a fresh arithmetic challenge is a cheap in-memory op, so a
     # generous, isolated rate is safe. Exact-match wins over the /api/auth/ prefix.
     location = /api/auth/captcha {
@@ -903,6 +939,11 @@ $admin_rules
 
     location / {
         limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        # Pages/assets carry no content hash, so a far-future cache would serve stale
+        # HTML/JS after a redeploy (the classic "/ and /index.html differ", "old nav",
+        # "old admin" confusion — really browser cache). no-cache = store but always
+        # revalidate, so a deploy is picked up immediately while unchanged files 304.
+        add_header Cache-Control "no-cache" always;
         try_files \$uri \$uri/ \$uri.html =404;
     }
 
@@ -917,6 +958,19 @@ EOF
     nginx -t 2>&1 && systemctl reload nginx \
         && success "nginx configured for https://$subdomain" \
         || { error "nginx config test failed. Check $POOL_NGINX_CONF"; return 1; }
+
+    if [[ "$cf_proxy" == "true" ]]; then
+        echo ""
+        info "Cloudflare proxy mode is ON — real visitor IPs are restored from CF-Connecting-IP."
+        echo -e "  ${DIM}In Cloudflare DNS, set this record to ${RESET}Proxied (orange cloud)${DIM}.${RESET}"
+        echo -e "  ${YELLOW}Harden (recommended):${RESET} so attackers can't bypass Cloudflare by hitting"
+        echo -e "  the origin IP directly, allow 80/443 ONLY from Cloudflare ranges. Example (ufw):"
+        echo -e "    ${DIM}for ip in \$(curl -s https://www.cloudflare.com/ips-v4) \$(curl -s https://www.cloudflare.com/ips-v6); do${RESET}"
+        echo -e "    ${DIM}  ufw allow from \"\$ip\" to any port 443 proto tcp; ufw allow from \"\$ip\" to any port 80 proto tcp; done${RESET}"
+        echo -e "  ${DIM}Keep your SSH port open separately, then 'ufw deny 80,443' from everywhere else.${RESET}"
+        echo -e "  ${DIM}Also turn OFF any Cloudflare 'Cache Everything' page rule for HTML (the origin${RESET}"
+        echo -e "  ${DIM}sends Cache-Control: no-cache so deploys show up immediately).${RESET}"
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

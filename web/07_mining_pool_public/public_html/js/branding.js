@@ -29,6 +29,45 @@
     return last.replace(/\.html$/, '');
   }
 
+  // ── Canonical top nav (single source of truth for every public page) ────────
+  // Each public page still ships a hardcoded <nav class="header-nav"> as a no-JS
+  // fallback, but buildNav() rewrites it from this list on load so the header can
+  // never drift between pages. Add/rename/reorder links HERE, once. (The optional
+  // "🎁 Rewards" link is injected separately by injectRewardsLink when incentives
+  // are enabled, so it stays out of this static list.)
+  var NAV_LINKS = [
+    { href: 'index.html',            label: 'Dashboard' },
+    { href: 'miners-stats.html',     label: 'Miners' },
+    { href: 'payment-history.html',  label: 'Payouts' },
+    { href: 'index.html#info',       label: 'Info' },
+    { href: 'account-settings.html', label: 'My Account' }
+  ];
+
+  // Filename of the current page ('' / '/' → index.html), for active-link marking.
+  function currentPageFile() {
+    var f = (location.pathname || '/').split('/').pop();
+    return f ? f.replace(/[?#].*$/, '') : 'index.html';
+  }
+
+  // Rebuild every .header-nav from NAV_LINKS. Removes only the existing
+  // <a class="nav-link"> elements (so non-link children like .theme-switcher are
+  // preserved) and prepends the canonical set, marking the active page.
+  function buildNav() {
+    var here = currentPageFile();
+    document.querySelectorAll('nav.header-nav').forEach(function (nav) {
+      nav.querySelectorAll('a.nav-link').forEach(function (a) { a.remove(); });
+      var frag = document.createDocumentFragment();
+      NAV_LINKS.forEach(function (l) {
+        var a = document.createElement('a');
+        a.className = 'nav-link' + (l.href === here ? ' active' : '');
+        a.href = l.href;
+        a.textContent = l.label;
+        frag.appendChild(a);
+      });
+      nav.insertBefore(frag, nav.firstChild);
+    });
+  }
+
   // ── small DOM helpers ──────────────────────────────────────────────────────
   function head() { return document.head || document.getElementsByTagName('head')[0]; }
 
@@ -653,6 +692,9 @@
   }
 
   function load() {
+    // Render the canonical header first — independent of the branding fetch, so the
+    // nav is consistent across pages even if the API is unreachable.
+    try { buildNav(); } catch (e) {}
     fetch(ENDPOINT, { credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (json) { if (json && json.data) apply(json.data); })

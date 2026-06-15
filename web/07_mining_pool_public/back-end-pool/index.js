@@ -646,16 +646,19 @@ function setupRoutes() {
   );
 
   // Issue a self-hosted CAPTCHA challenge for the login/register forms. Public-rate-limited
-  // (60/min) so the form can fetch one without spending the strict auth budget (3/min).
+  // (60/min) so the form can fetch one without spending the strict auth budget (10/min).
   app.get('/api/auth/captcha', rateLimiter.middleware('public'), (req, res) => {
     res.json(loginCaptcha.issue());
   });
 
   // FIX #7, #6, #4: Add rate limiting + first-admin gating + httpOnly cookies
   app.post('/api/auth/register',
-    rateLimiter.middleware('auth'),
     async (req, res) => {
       try {
+        // Rate gate (peek, don't spend yet) — refuse early if locked/over budget.
+        const rl = rateLimiter.peek('auth', req);
+        if (!rl.allowed) return rateLimiter.sendLimited(res, rl);
+
         // Check if any admin already exists (prevent first-admin takeover)
         const adminCount = db.prepare('SELECT COUNT(*) as cnt FROM users WHERE is_admin=1').get();
         if (adminCount.cnt > 0) {
@@ -671,6 +674,9 @@ function setupRoutes() {
             !loginCaptcha.verify(req.body?.captcha_id, req.body?.captcha_answer)) {
           return res.status(400).json({ success: false, error: 'Captcha incorrect or expired. Try again.' });
         }
+
+        // Genuine credential attempt — spend one token against the auth limit.
+        rateLimiter.consume('auth', req);
 
         const { username, password } = req.body;
         const result = await authManager.registerAdmin(username, password);
@@ -717,10 +723,13 @@ function setupRoutes() {
 
   // FIX #7, #15, #4: Add rate limiting + audit logging + httpOnly cookies
   app.post('/api/auth/login',
-    rateLimiter.middleware('auth'),
     async (req, res) => {
       try {
         const ip = req.ip;
+
+        // Rate gate (peek, don't spend yet): if already locked/over budget, refuse now.
+        const rl = rateLimiter.peek('auth', req);
+        if (!rl.allowed) return rateLimiter.sendLimited(res, rl);
 
         // Auto-ban: reject IPs that tripped the failed-login threshold (temporary cooldown).
         if (ipFilter && ipFilter.isBlocked(ip)) {
@@ -729,9 +738,14 @@ function setupRoutes() {
 
         // CAPTCHA gate next — a wrong/expired captcha is rejected before the password is
         // ever checked, so it can't be used to probe credentials or trip account lockout.
+        // It is checked BEFORE consuming the auth budget, so fumbling the captcha is free
+        // and a human can't lock themselves out just by mistyping the verification answer.
         if (!loginCaptcha.verify(req.body?.captcha_id, req.body?.captcha_answer)) {
           return res.status(400).json({ success: false, error: 'Captcha incorrect or expired. Try again.' });
         }
+
+        // Genuine credential attempt — now spend one token against the auth limit.
+        rateLimiter.consume('auth', req);
 
         const { username, password } = req.body;
         const result = await authManager.login(username, password, ip);

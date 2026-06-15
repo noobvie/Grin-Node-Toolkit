@@ -10,33 +10,6 @@
 </head>
 <body>
 
-<header>
-  <div class="container">
-    <div class="header-inner">
-      <div class="site-title"><a href="/">Grin Pool <span>ツ</span></a></div>
-      <nav class="nav-links">
-        <a href="/">Home</a>
-        <a href="/admin/" id="nav-dashboard">Dashboard</a>
-        <a href="/admin/" id="nav-admin">Admin</a>
-        <a href="/admin/health.html" class="active">Health</a>
-        <a href="/login.html" id="nav-login" style="display:none">Login</a>
-        <span id="nav-user" style="display:none"></span>
-      </nav>
-      <div class="theme-switcher">
-        <button class="theme-btn" data-theme="matrix">Matrix</button>
-        <button class="theme-btn" data-theme="dark">Dark</button>
-        <button class="theme-btn" data-theme="light">Light</button>
-        <button class="theme-btn" data-theme="naruto">Naruto</button>
-        <button class="theme-btn" data-theme="japan">Japan ✿</button>
-      </div>
-    </div>
-  </div>
-</header>
-
-<div class="testnet-banner" id="testnet-banner" style="display:none">
-  ⚠ TESTNET — These coins have no real value
-</div>
-
 <main>
   <div class="container">
     <section>
@@ -75,30 +48,12 @@
   </div>
 </main>
 
-<footer>
-  <div class="container">
-    <p>Grin Pool ツ — Admin Panel</p>
-  </div>
-</footer>
-
 <script src="/js/api.js"></script>
-<script src="/js/theme.js"></script>
+<script src="/admin/admin-shell.js"></script>
 <script>
-// ── Admin auth check ───────────────────────────────────────────────────────
-(function () {
-  // Auth gate: ask the server who we are (httpOnly cookie can't be read by JS). Redirects to
-  // /login.html on 401/403; otherwise wires up the nav username + Logout. See API.guardAdminPage.
-  API.guardAdminPage();
-
-  fetch('/api/pool/stats').then(r => r.json()).then(d => {
-    if (d.network === 'testnet') {
-      document.getElementById('testnet-banner').style.display = '';
-      document.title = '[TESTNET] ' + document.title;
-    }
-    const el = document.querySelector('.site-title a');
-    if (el && d.pool_name) el.childNodes[0].textContent = d.pool_name + ' ';
-  }).catch(() => {});
-})();
+// Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
+// up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
+API.guardAdminPage();
 
 // ── Service definition map ─────────────────────────────────────────────────
 // Maps API fields to display config

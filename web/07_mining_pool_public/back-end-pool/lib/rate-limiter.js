@@ -13,9 +13,13 @@ class RateLimiter {
     this.cleanupInterval = null;
 
     // Default limits (requests per minute)
+    // `auth` covers POST login / register / 2FA. It is intentionally low to blunt
+    // password brute force, but must still allow a human to fumble the form a few
+    // times. 10/min + the peek/consume split below (a failed CAPTCHA never spends a
+    // token — see index.js) keeps legit operators from locking themselves out.
     this.limits = {
       public: 60,
-      auth: 3,
+      auth: 10,
       api: 30,
       admin: 10
     };
@@ -78,6 +82,64 @@ class RateLimiter {
   }
 
   /**
+   * Peek: would this request be allowed, WITHOUT recording it?
+   * Lets a handler gate on the limit before deciding whether the request is a
+   * genuine credential attempt (consume) or should be free (e.g. a wrong CAPTCHA).
+   * Returns { allowed:true } or { allowed:false, ip, limit, retryAfter }.
+   */
+  peek(limitType, req) {
+    const limit = this.limits[limitType];
+    if (!limit) return { allowed: true };
+
+    const ip = this.getClientIp(req);
+    const now = Date.now();
+
+    if (this.violations.has(ip)) {
+      const v = this.violations.get(ip);
+      if (v.lockedUntil > now) {
+        return { allowed: false, ip, limit, retryAfter: Math.ceil((v.lockedUntil - now) / 1000) };
+      }
+    }
+
+    const windowMs = 60 * 1000;
+    const recent = (this.requests.get(ip) || []).filter(t => now - t < windowMs);
+    if (recent.length >= limit) {
+      return { allowed: false, ip, limit, retryAfter: 60 };
+    }
+    return { allowed: true, ip, limit };
+  }
+
+  /**
+   * Consume one token against a limit (records the request; may trigger lockout).
+   * Call only for requests that should count — typically after a CAPTCHA has passed.
+   */
+  consume(limitType, req) {
+    const limit = this.limits[limitType];
+    if (!limit) return true;
+    return this.checkLimit(this.getClientIp(req), limit);
+  }
+
+  /**
+   * Emit the standard 429 response for a failed peek/consume. Mirrors the body
+   * produced by middleware() so clients see one consistent shape.
+   */
+  sendLimited(res, peekResult) {
+    const limit = peekResult.limit;
+    const retryAfter = Math.max(peekResult.retryAfter || 1, 1);
+    res.set('Retry-After', retryAfter);
+    res.set('X-RateLimit-Limit', limit);
+    res.set('X-RateLimit-Remaining', 0);
+    this.log(`Rate limit exceeded: ${peekResult.ip} (limit: ${limit}/min)`);
+    return res.status(429).json({
+      error: 'Too many requests',
+      message: `Rate limit exceeded. Retry after ${retryAfter} seconds.`,
+      retry_after_seconds: retryAfter,
+      limit: limit,
+      window_minutes: 1
+    });
+  }
+
+  /**
    * Check if request is allowed under rate limit
    * Returns true if allowed, false if limit exceeded
    */
@@ -110,7 +172,7 @@ class RateLimiter {
       // Limit exceeded — enter lockout
       const violationCount = (this.violations.get(ip)?.count || 0) + 1;
       const lockoutDuration = Math.min(
-        60000 * Math.pow(2, violationCount - 1), // Exponential backoff: 60s → 120s → 240s
+        30000 * Math.pow(2, violationCount - 1), // Exponential backoff: 30s → 60s → 120s
         3600000 // Cap at 1 hour
       );
 

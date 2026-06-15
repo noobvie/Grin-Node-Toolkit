@@ -349,12 +349,7 @@
   </style>
 </head>
 <body>
-  <nav class="nav-links">
-    <a href="/">Home</a>
-    <a href="/admin/">Dashboard</a>
-    <a href="/admin/settings.html" class="active">Settings</a>
-  </nav>
-
+  <main>
   <div class="settings-container">
     <div class="settings-header">
       <h1>⚙️ Pool Configuration</h1>
@@ -1507,11 +1502,12 @@
       </div>
     </div>
   </div>
+  </main>
 
   <script src="/js/auth.js"></script>
   <script src="/js/api.js"></script>
   <script src="/js/stepup.js"></script>
-  <script src="/js/theme.js"></script>
+  <script src="/admin/admin-shell.js"></script>
   <script>
     // Tab switching
     document.querySelectorAll('.tab-btn').forEach(btn => {

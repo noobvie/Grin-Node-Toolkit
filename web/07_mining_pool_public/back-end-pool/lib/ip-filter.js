@@ -18,6 +18,11 @@ class IpFilter {
     this.allowedRanges = [];
     this.blockedRanges = [];
 
+    // Temporary auto-bans (single IP → expiry ms). Populated by the failed-login
+    // auto-ban (fail2ban-style); pruned lazily on lookup. In-memory only — a restart
+    // clears them, which is fine for short cooldowns.
+    this.tempBans = new Map();
+
     // Parse CIDR/IP on init
     this.parseAllowlist(this.allowlist);
     this.parseBlacklist(this.blacklist);
@@ -84,6 +89,8 @@ class IpFilter {
    * Check if IP is on blacklist
    */
   isBlocked(ipStr) {
+    // Temporary auto-bans take precedence and short-circuit the CIDR scan.
+    if (this.isTempBanned(ipStr)) return true;
     try {
       const ip = ipaddr.process(ipStr);
       return this.blockedRanges.some(range => {
@@ -98,6 +105,26 @@ class IpFilter {
       this.log(`Error processing IP ${ipStr}: ${err.message}`);
       return false;
     }
+  }
+
+  /**
+   * Temporarily ban a single IP for ttlMs (auto-ban / fail2ban-style cooldown).
+   */
+  tempBan(ipStr, ttlMs) {
+    const ip = String(ipStr).replace('::ffff:', '');
+    this.tempBans.set(ip, Date.now() + ttlMs);
+    this.log(`Temp-banned ${ip} for ${Math.round(ttlMs / 1000)}s`);
+  }
+
+  /**
+   * Is this IP under an active temporary ban? Prunes the entry when expired.
+   */
+  isTempBanned(ipStr) {
+    const ip = String(ipStr).replace('::ffff:', '');
+    const exp = this.tempBans.get(ip);
+    if (!exp) return false;
+    if (exp <= Date.now()) { this.tempBans.delete(ip); return false; }
+    return true;
   }
 
   /**

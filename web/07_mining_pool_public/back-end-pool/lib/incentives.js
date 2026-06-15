@@ -192,6 +192,33 @@ class IncentivesManager {
     return tx();
   }
 
+  // ─── Manual prize/bonus award to a single address ──────────────────────────
+  // Operator awards a contest/incentive prize straight to a miner's address balance.
+  // Address-as-identity: no account needed — the credit lands on miner_accounts and pays
+  // out to that address via the normal Tor withdrawal flow. Funded from the prize_pool
+  // bucket by default (so it's backed by real GRIN already in the wallet); pass
+  // fromPrizePool=false to mint a fresh credit (operator must ensure wallet funds exist).
+  // The human-readable note is recorded by the caller in admin_audit_log.
+  // Returns { ok, reason?, balance } — ok=false with reason='insufficient_prize_pool'
+  // when the bucket can't cover a prize-pool-funded award.
+  awardPrize(address, amount, { fromPrizePool = true } = {}) {
+    const addr = String(address || '').trim();
+    const amt = parseFloat(amount);
+    if (!addr) return { ok: false, reason: 'address required' };
+    if (RESERVED_ADDRESSES.includes(addr)) return { ok: false, reason: 'cannot award a reserved address' };
+    if (!(amt > 0)) return { ok: false, reason: 'amount must be > 0' };
+
+    const tx = this.db.transaction(() => {
+      if (fromPrizePool && !this.debitPrizePool(amt, 'prize_award', 0)) return false; // insufficient
+      this._move(addr, amt, 'credit', 'prize_award', 0);
+      return true;
+    });
+    if (!tx()) return { ok: false, reason: 'insufficient_prize_pool' };
+
+    const row = this.db.prepare('SELECT balance FROM miner_accounts WHERE grin_address = ?').get(addr);
+    return { ok: true, balance: row ? row.balance : amt };
+  }
+
   // ─── Block-finder jackpot ──────────────────────────────────────────────────
   // Flat bonus to block.found_by, paid when the block matures. Idempotent per block height.
   payBlockFinderJackpot(block) {

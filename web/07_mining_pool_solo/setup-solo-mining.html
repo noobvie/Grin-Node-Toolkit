@@ -546,6 +546,42 @@ Pool 3   gaeapool / 2miners            worker = your GRIN payout address</div>
   // Probe every live pill against the off-box checker. Pills are grouped by host and
   // sent as one /api/portcheckbatch call per host (one network round-trip for all that
   // host's ports) — keeps us well under the checker's per-IP rate limit on reloads.
+  //
+  // Auto-retry on the 'unknown' outcome ONLY (the checker itself was unreachable: fetch
+  // threw, timed out, or returned non-200 — including a 429). A definitive 🟢/🔴 is never
+  // retried. Without this, a single transient blip on one host left its pill stuck on ⚪
+  // until a full manual page reload. We retry that one host up to MAX_TRY times with a
+  // growing backoff, so it self-heals while staying far under the prober's 40/min per-IP
+  // limit (worst case 3 calls per host, spaced seconds apart — not a reload storm).
+  var REACH_MAX_TRY = 3;
+  // Spam-refresh guard: cache the last DEFINITIVE result per host in localStorage for
+  // REACH_CACHE_TTL ms. A browser reload inside that window paints from cache and makes
+  // ZERO probe calls, so mashing refresh can't trip the prober's 40/min-per-IP cap. Only
+  // 🟢/🔴 are cached — ⚪ (checker unreachable) is never stored, so a failure always stays
+  // retry-able and self-heals on the next load. Shared across tabs (localStorage), which
+  // further cuts total calls. TTL is short enough that a real port up/down change shows
+  // within a minute.
+  var REACH_CACHE_TTL = 60000;
+  var REACH_CACHE_KEY = 'solo_reach_v1';
+  function reachCacheRead() {
+    try { return JSON.parse(localStorage.getItem(REACH_CACHE_KEY)) || {}; }
+    catch (e) { return {}; }
+  }
+  function reachCacheGet(host, ports) {
+    var e = reachCacheRead()[host];
+    if (!e || (Date.now() - e.ts) > REACH_CACHE_TTL || !e.ports) return null;
+    for (var i = 0; i < ports.length; i++) {
+      if (typeof e.ports[ports[i]] !== 'boolean') return null; // miss any needed port
+    }
+    return e.ports;
+  }
+  function reachCacheSet(host, portsMap) {
+    try {
+      var all = reachCacheRead();
+      all[host] = { ts: Date.now(), ports: portsMap };
+      localStorage.setItem(REACH_CACHE_KEY, JSON.stringify(all));
+    } catch (e) { /* private mode / quota — degrade to no cache */ }
+  }
   function runReachChecks() {
     if (!PORTCHECK_API) return;
     var base = PORTCHECK_API.replace(/\/+$/, '');
@@ -557,22 +593,39 @@ Pool 3   gaeapool / 2miners            worker = your GRIN payout address</div>
       var group = byHost[host];
       var ports = group.map(function (p) { return p.dataset.port; })
         .filter(function (v, i, a) { return a.indexOf(v) === i; });
-      var fail = function (state) {
-        group.forEach(function (p) { setPill(p, state, p.dataset.type); });
-      };
+      // Fresh cached result → paint from it, no network call (spam-refresh guard).
+      var cached = reachCacheGet(host, ports);
+      if (cached) {
+        group.forEach(function (p) {
+          setPill(p, cached[p.dataset.port] ? 'ok' : 'bad', p.dataset.type);
+        });
+        return;
+      }
       var url = base + '/api/portcheckbatch?host=' + encodeURIComponent(host)
         + '&ports=' + encodeURIComponent(ports.join(','));
-      fetch(url, { signal: AbortSignal.timeout(9000) })
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) {
-          if (!d || !d.results) { fail('unknown'); return; }
-          var open = {};
-          d.results.forEach(function (x) { open[x.port] = x.open; });
-          group.forEach(function (p) {
-            setPill(p, open[p.dataset.port] ? 'ok' : 'bad', p.dataset.type);
-          });
-        })
-        .catch(function () { fail('unknown'); });
+      var attempt = function (tryNo) {
+        // Only the checker-unreachable case retries; ok/bad are final.
+        var onUnknown = function () {
+          if (tryNo < REACH_MAX_TRY) {
+            setTimeout(function () { attempt(tryNo + 1); }, tryNo * 2500);
+          } else {
+            group.forEach(function (p) { setPill(p, 'unknown', p.dataset.type); });
+          }
+        };
+        fetch(url, { signal: AbortSignal.timeout(9000) })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) {
+            if (!d || !d.results) { onUnknown(); return; }
+            var open = {};
+            d.results.forEach(function (x) { open[x.port] = !!x.open; });
+            reachCacheSet(host, open); // cache only this definitive result
+            group.forEach(function (p) {
+              setPill(p, open[p.dataset.port] ? 'ok' : 'bad', p.dataset.type);
+            });
+          })
+          .catch(onUnknown);
+      };
+      attempt(1);
     });
   }
 

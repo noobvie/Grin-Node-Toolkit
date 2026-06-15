@@ -437,8 +437,8 @@
   var MATURITY = { main: 1440, test: 1440 };
   var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   var NETS = {
-    main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', hashrate: 'data/hashrate_main.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null },
-    test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', hashrate: 'data/hashrate_test.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null }
+    main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', hashrate: 'data/hashrate_main.json', poolstats: 'data/poolstats_main.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null },
+    test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', hashrate: 'data/hashrate_test.json', poolstats: 'data/poolstats_test.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null }
   };
   var STATE = { tip: { main: null, test: null }, blocks: { main: [], test: [] }, miners: { main: [], test: [] }, hashrate: { main: [], test: [] }, loaded: { main: false, test: false }, hrLoaded: { main: false, test: false }, range: 'weekly', hrRange: 'weekly', blocksPage: { main: 0, test: 0 }, price: null };
   var BLOCKS_PER_PAGE = 20;  // found-blocks table rows per page
@@ -449,7 +449,39 @@
     loadNetCache(net);
     if (NETS[net].netDiff != null) set(net + '-difficulty', fmtNum(NETS[net].netDiff));
     if (NETS[net].hrGps != null) set(net + '-hashrate', fmtHr(NETS[net].hrGps), 'green');
+    seedFromPoolstats(net);
   });
+
+  // First-load instant tiles: the live difficulty/hashrate are cross-block deltas,
+  // so on a cold cache they have nothing to show for up to a poll cycle (~120s)
+  // after a new block. The collector already publishes the same figures in
+  // poolstats_<net>.json (network.difficulty_per_block matches the live tile's
+  // dDiff/dBlocks; network.hashrate_gps uses the identical C32 formula), so borrow
+  // them when no live value exists yet. Guarded on `== null` → never overwrites a
+  // warm localStorage seed or a value the live delta has already computed; the next
+  // pollNet delta overwrites the seed regardless.
+  function seedFromPoolstats(net) {
+    fetch(NETS[net].poolstats, { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        var nw = d && d.network; if (!nw) return;
+        var s = NETS[net], seeded = false;
+        if (s.netDiff == null && typeof nw.difficulty_per_block === 'number') {
+          s.netDiff = nw.difficulty_per_block;
+          set(net + '-difficulty', fmtNum(s.netDiff)); seeded = true;
+        }
+        if (s.hrGps == null && typeof nw.hashrate_gps === 'number') {
+          s.hrGps = nw.hashrate_gps;
+          set(net + '-hashrate', fmtHr(s.hrGps), 'green'); seeded = true;
+        }
+        // Persist the seed like a live reading so a rapid page refresh paints from
+        // localStorage instantly — no dependency on a fresh fetch that a reload
+        // cancels mid-flight or nginx rate-limits. The next pollNet delta still
+        // overwrites it with the live value.
+        if (seeded) saveNetCache(net);
+      })
+      .catch(function () {});
+  }
 
   function fmtNum(n) {
     if (n >= 1e12) return (n/1e12).toFixed(2)+'T'; if (n >= 1e9) return (n/1e9).toFixed(2)+'G';

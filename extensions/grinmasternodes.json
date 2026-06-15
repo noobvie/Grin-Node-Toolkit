@@ -7,8 +7,7 @@
   },
 
   "america": {
-    "fullmain":  ["fullmain.grin.money",  "fullmain.grinily.com",  "fullmain.onlygrins.com", 
-                  "fullmain.grinnode.org"],
+    "fullmain":  ["fullmain.grin.money",  "fullmain.onlygrins.com", "fullmain.grinnode.org"],
     "prunemain": ["prunemain.grin.money", "prunemain.grinily.com","prunemain.grinnode.org"],
     "prunetest": ["prunetest.grin.money", "prunetest.onlygrins.com","prunetest.grinnode.org"]
   },

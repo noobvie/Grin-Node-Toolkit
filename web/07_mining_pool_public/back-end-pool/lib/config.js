@@ -77,6 +77,9 @@ function mergeEnvVars(config) {
     // to the hub's Central API; see lib/share-relay.js + satellite.js.
     role: config.role || process.env.POOL_ROLE || 'singlebox',
     region: config.region || process.env.POOL_REGION || 'default',
+    // Public web/stratum hostname (e.g. grinium.com). Used to derive the local
+    // region's connect address (subdomain:stratum_port) in db.ensureLocalRegion.
+    subdomain: config.subdomain || process.env.POOL_SUBDOMAIN || '',
     hub_url: config.hub_url || process.env.HUB_URL || '',
     hub_shared_secret: config.hub_shared_secret || process.env.HUB_SHARED_SECRET || '',
     satellite_ip_allowlist: config.satellite_ip_allowlist || [],

@@ -412,7 +412,133 @@ Key design decisions (locked in — do not change without user confirmation):
 - **Orphan detection:** Nonce-based verification job every 6h; reverses payouts if a found block is orphaned
 - **Race conditions:** INSERT OR IGNORE for miner auto-creation; SELECT FOR UPDATE for balance updates
 - **Stack:** Node.js/Express backend (`back-end-pool/`) + static HTML/CSS/JS frontend (`public_html/`) + SQLite via Node's built-in `node:sqlite` (needs Node 24+; `lib/sqlite-compat.js` provides the better-sqlite3-style API — pragma/transaction — always require the shim, never `node:sqlite` directly in pool code); systemd process manager (not pm2). *(The early Next.js + Tailwind plan was dropped — do not reintroduce a frontend framework. better-sqlite3 was dropped 2026-06 — the pool has no native npm modules.)*
-- **Auth:** Admin-only JWT sessions (bcrypt, IP allowlist, 60 min timeout); miners never need accounts
+- **Auth:** Admin-only JWT sessions (bcrypt, IP allowlist, 60 min timeout); miners never need accounts.
+  Login/register are gated by a **self-hosted arithmetic CAPTCHA** (`lib/captcha.js`, in-memory,
+  single-use, 5-min TTL — no external reCAPTCHA/hCaptcha): `GET /api/auth/captcha` issues `{id,question}`;
+  `/api/auth/login` + `/api/auth/register` verify `captcha_id`+`captcha_answer` *before* touching the
+  password (a bad captcha never counts toward account lockout). Single-use → the login form re-fetches a
+  challenge after every attempt. Layers on top of the auth rate limiter (3/min) + per-account lockout
+  (5 fails/15 min). **nginx zone gotcha (fixed 2026-06, REVISED 2026-06):** `GET /api/auth/captcha` is
+  read-only and is fetched on page load, form-toggle, and after every failed attempt — if it's throttled
+  the page shows "Verification unavailable" (nginx 503 → `res.json()` throws), the "↻ new" button can't
+  recover, `captcha_id` stays null, and the login POST is then rejected at the captcha gate so the operator
+  **can never log in** even though the backend is fine. It needs its own `location = /api/auth/captcha`
+  (exact-match wins over the `/api/auth/` prefix). **First attempt put it on `_static` (60r/m) — that was
+  still wrong:** `_static` is keyed per-IP and consumed by EVERY css/js/font/image (a dozen+ per page load,
+  served by `location /`), so a few page reloads during testing starve the captcha. **Fix: a DEDICATED
+  `${POOL_SERVICE}_captcha` zone (30r/m)**, isolated from asset traffic. Safe because the captcha is a cheap
+  in-memory challenge issue and is NOT the brute-force vector — the login POST stays on `_auth` 3r/m +
+  per-account lockout + IP auto-ban. `pool_setup_nginx` self-heals an existing install: if the managed
+  zone conf `/etc/nginx/conf.d/script07-<svc>.conf` lacks the `_captcha` zone it `rm`s it so the full zone
+  list (incl. `_captcha`) regenerates — otherwise the no-op-if-exists helper would leave the vhost
+  referencing an undefined zone and `nginx -t` fails with "zero size shared memory zone". Frontend
+  `loadCaptcha()` also nulls the stale id, checks `res.ok`, and auto-retries once on a transient 503. The
+  app already had the captcha on the lenient `public` (60/min) limiter — the throttle was purely the nginx
+  layer. The **only** admin login page is `public_html/login.html` (served at `/login.html`,
+  the public zone — must stay reachable so the operator can always authenticate); on success it redirects
+  straight to `/admin/` (there is **no** `admin-dashboard.html`). The whole management surface is the one
+  combined `/admin/` panel — `back-end-pool/admin-panel/{index,miners,payments,settings,users,health}.html` —
+  rsynced to the nginx-gated docroot.
+  **httpOnly cookie ↔ admin-page guard (CRITICAL, fixed 2026-06):** the session token is an `httpOnly`
+  cookie, so **client JS cannot read or decode it** — that is the whole point of httpOnly. Admin pages must
+  therefore NEVER try to decode the JWT locally to check auth. The original guard did
+  `const p = API.decodePayload(); if (!p || !p.is_admin) location.href='/login.html'` — `decodePayload()`
+  ALWAYS returns null with httpOnly cookies, so every admin page bounced straight to `/login.html`, and
+  `login.html`'s `checkIfLoggedIn()` (which DOES work — it asks the server `/api/admin/dashboard`) bounced
+  right back → **infinite flash loop; login worked but you could never stay on the panel.** Not a security
+  hole (the loop was the page being *over*-strict), but a total usability break. Fix: ask the SERVER who you
+  are. New endpoint `GET /api/admin/me` (secureAdmin) returns `{username,is_admin}` from `req.user`; shared
+  helper `API.guardAdminPage()` in `public_html/js/api.js` calls it, redirects to `/login.html` on non-200,
+  else wires up the `#nav-user` username + Logout. Every admin page (`index/miners/health/payments/users`
+  inline guard, `settings.html` DOMContentLoaded) calls `API.guardAdminPage()` — `decodePayload()` is dead.
+  Rule: to gate a new admin page, call `API.guardAdminPage()`, never decode the cookie client-side.
+  login is split OUT of `/admin/` ON PURPOSE: it lives in the public
+  zone (door) while the panel is IP-gated (rooms); you can't put one file in two nginx access zones. The
+  old `back-end-pool/public/{login,admin}.html` duplicates were deleted 2026-06 (never deployed — the
+  installer only rsyncs `public_html/` + `admin-panel/`). Do not recreate.
+  **Admin nginx gate is OPEN by default (reversed 2026-06):** the network perimeter on `/admin/` +
+  `/api/admin/` is a *bootstrap/testing* posture — an empty `admin_allowlist` emits `allow all;` so a
+  fresh install is reachable from anywhere and the operator is never locked out while there is no
+  adoption yet to attack. The app-layer defenses (JWT, login captcha, per-account lockout, IP auto-ban,
+  optional TOTP, fail2ban) are ALWAYS in force regardless — this gate is only the outer perimeter.
+  **Harden later** by setting `admin_allowlist` (comma/space IPs/CIDRs) in `/opt/grin/conf/grin_pubpool.json`
+  and re-running 4) Setup nginx → it then locks to `localhost + listed entries; deny all;`. `/login.html`
+  + `/api/auth` are always public (captcha + lockout + auto-ban + fail2ban cover them).
+  **`pool_setup_nginx` allow/deny generation (`scripts/07_grin_mining_public_pool.sh`):** two branches —
+  **empty `admin_allowlist` → `allow all;`** (open, the default). **Non-empty → `allow 127.0.0.1; allow ::1;`
+  + each listed IP/CIDR + `deny all;`** (localhost always kept so an SSH tunnel and the app's own
+  server-side calls survive — the break-glass path). There is **no** RFC1918 default and **no** SSH-IP
+  auto-seed anymore (both removed in the 2026-06 reversal — the auto-seed would have flipped the empty
+  default back to locked-on-one-IP). The end-of-G (`pool_guided_setup`) summary prints the public-pool +
+  `/login.html` URLs and, when the allowlist is empty, an "OPEN to all — harden later" note; when it's
+  non-empty, the currently-allowed IPs + a copy-paste `node -e` command to add your **browsing** IP
+  (which can differ from your SSH IP — the usual 403 cause) before re-running 4) Setup nginx.
+- **Admin-panel hardening (added 2026-06) — three layers:**
+  1. **Step-up (re-auth) on money/destructive/access-control actions.** `freshAdmin` middleware =
+     `secureAdmin` + `requireFreshAuth` (5-min window). Gated endpoints: `POST /api/admin/incentives/award`,
+     `…/prize-pool/topup`, `…/lottery/draw-now`, `…/database/cleanup`, `…/settings/:section/restore`,
+     `…/poolstats/update-key`, `…/security/ip-allowlist/{add,remove}`, `…/security/ip-blacklist/{add,remove}`,
+     `DELETE …/locations/:id`. Plus `POST …/settings/:section` requires step-up **only** for the high-risk
+     sections `payout` + `access` (checked inline via `authManager.isTokenFresh`; cosmetic sections save
+     with a normal session). `saveSection`/`restoreSection` in settings.html use `adminFetch`.
+     Freshness is keyed on a NEW `pwa` (password-verified-at) JWT claim, **not `iat`** — a silent
+     `/api/auth/refresh` mints `pwa=0` so it can't grant step-up; only `login` and the new
+     `POST /api/admin/reauth` (→ `AuthManager.stepUp`) set `pwa=now`. Frontend: `public_html/js/stepup.js`
+     `adminFetch()` catches `403 {challenge_required:true}`, prompts for the password, calls reauth,
+     retries once. Wired into the risky calls in `admin-panel/settings.html` (loads `/js/stepup.js`).
+     To gate a new risky endpoint: use `freshAdmin` server-side + `adminFetch` client-side.
+  2. **Auto-ban repeat offenders.** In `index.js`: ≥10 failed admin logins from one IP within 15 min →
+     `ipFilter.tempBan(ip, 1h)` (new in-memory TTL ban in `lib/ip-filter.js`; `isBlocked()` checks it).
+     The login route rejects banned IPs up front and clears the counter on success. App-layer; complements
+     the OS-level `pool_setup_fail2ban` (firewall ban) already in the installer.
+  3. **Admin panel network gate (nginx) — OPEN by default (reversed 2026-06).** `pool_setup_nginx`
+     emits `location /admin/` + `location /api/admin/` from the `admin_allowlist` conf key: **empty →
+     `allow all;`** (testing default — reachable from anywhere, since layers 1/2 + login still gate it);
+     **non-empty → `allow 127.0.0.1; allow ::1;` + listed IPs/CIDRs + `deny all;`** (hardened). No RFC1918
+     default, no SSH auto-seed (removed). `/api/auth` (login) is always public — covered by
+     captcha+lockout+auto-ban+fail2ban. Harden: set `admin_allowlist` in `/opt/grin/conf/grin_pubpool.json`,
+     re-run 4) Setup nginx.
+- **Optional admin TOTP 2FA (added 2026-06).** Self-hosted RFC 6238 (`lib/totp.js`, SHA-1/6-digit/30s,
+  base32 — verified against the RFC test vectors), **no npm dependency, no external service**. Per-admin,
+  opt-in. State on the `users` table (`totp_secret`, `totp_enabled`, `totp_pending_secret`); one-time
+  backup codes in `admin_recovery_codes` (bcrypt-hashed, single-use).
+  - **Two-step login:** `POST /api/auth/login` (password + CAPTCHA) → if `totp_enabled`, returns
+    `{ totp_required:true, twofa_token }` (short-lived JWT `type:'2fa'`, 5 min, no session yet) instead of
+    a cookie → `POST /api/auth/login/totp` { twofa_token, code } verifies a TOTP **or** a recovery code
+    and issues the session (no second CAPTCHA). Failed 2FA codes count toward the IP auto-ban.
+  - **Management (settings.html → Access Control, all step-up `freshAdmin`):** `GET /api/admin/2fa/status`,
+    `POST …/2fa/enroll/begin` (returns secret + otpauth URI; manual key + tap-link shown, QR rendered only
+    if a `window.qrcode` lib is bundled), `…/2fa/enroll/confirm` (verify a live code → enable + return
+    recovery codes once), `…/2fa/disable` (needs a code), `…/2fa/recovery/regenerate` (needs a code).
+    `auth.js`: `begin2faEnrollment`/`confirm2faEnrollment`/`disable2fa`/`verifyTotpOrRecovery`/
+    `generateRecoveryCodes` (async — avoids blocking the shared stratum/API event loop) /
+    `generate2faToken`/`verify2faToken`/`issueSessionFor`.
+  - **Recovery if the authenticator is lost:** (1) one of the 10 backup codes; (2) **root reset on the
+    server** (you own the box — this is the ultimate, unloseable fallback). Run against the pool DB:
+    `UPDATE users SET totp_enabled=0, totp_secret=NULL, totp_pending_secret=NULL WHERE username='<admin>';`
+    then `DELETE FROM admin_recovery_codes WHERE user_id=(SELECT id FROM users WHERE username='<admin>');`
+    (DB at `/opt/grin/pubpool/mainnet/pool.db`; use the `node:sqlite` shim, not the optional sqlite3 CLI).
+- **Access Control admin tab (settings.html) is wired to the LIVE app-level ipFilter** (added 2026-06):
+  `GET /api/admin/security/ip-filter-status` (returns entries + `your_ip` for a self-lockout warning) +
+  the step-up-gated `ip-allowlist/{add,remove}` & `ip-blacklist/{add,remove}` via `adminFetch`. These are
+  **runtime-only** (ipFilter in-memory; reset on restart — a deliberate break-glass escape from a bad
+  allowlist). Permanent rules still live in config: `admin_ip_allowlist` (app) + `admin_allowlist` (nginx).
+  The tab loads on open (`switchTab('access') → loadIpFilter()`).
+  **No miner accounts — reaffirmed 2026-06.** An optional miner-account layer (`miner_users` table,
+  signup bonus, public Sign In/Register) was prototyped then deliberately removed: it adds operator
+  burden with no safety gain (the address already IS the identity, and payouts are permanently bound
+  to the mining address — `withdrawal.grin_address`, never an account-settable field, so there is no
+  redirection/theft vector to protect). Do NOT reintroduce miner accounts without explicit user
+  confirmation. Public pages therefore have **no Sign In button** — admins reach `/login.html` by
+  direct URL only.
+- **Prizes/incentives go straight to the address.** Instead of accounts, the operator awards a
+  contest/incentive prize directly to a Grin address via admin `POST /api/admin/incentives/award`
+  → `IncentivesManager.awardPrize(address, amount, {fromPrizePool=true})` (lib/incentives.js): credits
+  `miner_accounts.balance` (reference_type `prize_award`), funded from the `prize_pool` bucket by
+  default (rejects with `insufficient_prize_pool` if the bucket can't cover it; pass
+  `from_prize_pool=false` to mint when the wallet already holds the GRIN). The prize pays out via the
+  normal Tor withdrawal flow. UI: admin Settings → Incentives → "Award Prize / Bonus to an Address".
+  Human-readable note is stored in `admin_audit_log`, not `balance_log`.
 - **Config:** Stored in `/opt/grin/conf/grin_pubpool.json`; all settings via web admin panel — no bash config files
 - **Paths (renamed 2026-06 to the product-prefixed "pubpool" family):** app+DB `/opt/grin/pubpool/mainnet/`, wallet `/opt/grin/pubpoolwallet/mainnet/`, wallet password `/opt/grin/pubpool/mainnet/.wallet_pass` (600, deliberately separate from the seed dir). Legacy `/opt/grin/pool` + `grin_pool.json` are recognised by Z) Cleanup and the hub detector but never written.
 - **Script 07 role:** Infrastructure only (deploy files, systemd services, backups); business logic lives in pool web code
@@ -429,13 +555,82 @@ All public (no admin auth), `rateLimiter.middleware('public')`:
 - `GET /api/account/:addr` now also returns `min_payout`, `effective_min_payout`, `has_recorded_ip`.
 
 **Miner source-IP capture (backs the ownership gate):** recorded into `miner_accounts.last_ip/prev_ip` (last-2 distinct, shift on change) via `minerManager.recordSourceIp` → `owner-proof.recordSourceIp`. Captured at stratum login locally; **in hub-and-spoke the satellite relays the miner IP per-share** (`source_ip` added to the relayed share object in `stratum-server.js`; `share-relay.js` forwards it verbatim incl. failover replay; hub `POST /api/shares` uses `s.source_ip`, NOT `req.ip` which is the satellite). UI: all per-account features live on `account-settings.html` (chart, workers, threshold, slatepack); pool chart + effort row on `index.html`.
+- **Public page set consolidated 2026-06 — 8 pages in `public_html/`:** `index.html` (dashboard +
+  connect + info), `miners-stats.html`, `payment-history.html`, `account-settings.html`,
+  `fortune-board.html`, `donate.html` (last two = incentives), `login.html` (admin door, public zone),
+  and `page.html` (generic renderer for operator-authored pages via `/page.html?p=<key>`; footer
+  links + the SITEMAP authored-pages come from `poolSettings.listEnabledPages()`). **Deleted:**
+  `connect.html` + `pool-info.html` (merged into the dashboard `#connect` / `#info` anchors),
+  `home-classic.html` (orphan dup of index), `grin_mining_testnet_instruction.html` (testnet on a
+  mainnet-only product — testnet lives in the solo script), `system-health.html` +
+  `admin-dashboard.html` (the gated `/admin/` panel is the sole admin surface; login → `/admin/`).
+  When removing/renaming a public page, fix the backend `SITEMAP_PATHS` in `index.js` and every
+  `nav-link` href across the other pages. **`sitemap.xml` / `robots.txt` / `manifest.json` are
+  served dynamically by the backend** (`index.js` routes, nginx `location = /…` proxies those three
+  exact paths to Node) — there are **no** static copies in `public_html/` (the stale shadowed
+  duplicates were deleted 2026-06). Do not recreate them; edit the generators in `index.js` instead. The merged dashboard **#info** section ports pool-info's Rules/payouts + Support
+  (social hooks auto-managed by branding.js; `loadInfoContact()` toggles the email row + "no
+  channels" note, which branding.js doesn't).
+- **Public homepage (index.html) surfaces, added 2026-06:**
+  - **Regional stratum cards (the connect surface) — on the DASHBOARD (`index.html`), not a
+    separate page.** `connect.html` was **deleted 2026-06** as redundant: its per-miner CLI command
+    generator (lolMiner/GMiner/SRBMiner) was misleading for the common case (G1/iPollo ASICs are
+    configured via their own web UI, not a CLI). All "Start Mining" buttons + the header nav now point
+    to `index.html#connect`. The dashboard's "Point your miner at your nearest region" section
+    (`#connect`) renders **one card per region** (all visible at once) showing `host:port` + a **live
+    up/down pill** + active-miner count, with a Copy button; below the grid a single shared
+    `.connect-note` gives the connect fields (worker = `grin_address.worker`, password = anything —
+    same for every region, port identical across regions). `loadRegions()` reads `GET
+    /api/pool/stats/regions` and re-polls on the 60 s dashboard refresh so pills stay live; it filters
+    to active rows with a `stratum_url`. **The multi-region grid renders only when ≥2 regions exist**
+    (`loadRegions()`: `if (regions.length < 2) keep fallback`); a single-server pool shows the simple
+    `#region-fallback` "point your miner here" callout instead of a lone 1-card grid. The pill
+    `status` (`online`/`stale`/`offline`/`unknown`) is derived from the in-memory satellite heartbeat
+    with a recent-shares fallback (`unknown` = no signal yet, shown neutral — never a false "down").
+    To make this truthful for a *quiet* region, the satellite `lib/share-relay.js` POSTs an **empty
+    idle heartbeat** (`{region, shares:[]}`) to `/api/shares` every `HEARTBEAT_MS` (60 s) when there
+    are no shares to flush, so a healthy-but-empty region reads `online` instead of `offline`.
+    **No demo regions are seeded (2026-06):** the old `db.js seedDefaultRegions()` (fake
+    amer/euro/asie.grinium.com cards on every install) was removed — it showed phantom regions on a
+    single-server box. Instead the pool server **self-registers its own region** via
+    `db.js ensureLocalRegion(region, stratumUrl)`, called from `index.js` startup **only when
+    `config.role === 'singlebox'`** (a bare hub runs no local stratum → relies purely on satellites).
+    It inserts ONE `pool_locations` row for `config.region` (bash default `"main"`, in
+    `pool_ensure_defaults`), `stratum_url = subdomain:stratum_port` (config.js now passes `subdomain`
+    through; backfilled on a later boot if subdomain was empty at first run), never clobbering an
+    operator's label/active/url edits. So the central box is an honest region that **auto-joins the
+    grid the moment a real satellite for another zone reports in** — the seamless single→multi path.
+    Extra zones come from real satellites the operator declares in admin → Regions, never seed data.
+  - **Service status strip** — public `GET /api/pool/status` (rate-limited, 15s cache) returns
+    coarse health only: `pool.ok`, `node {reachable,synced,peers,height}`, `wallet {reachable}`.
+    **Never** exposes wallet balance/addresses (those stay on admin-only `/api/admin/health/*`).
+  - **Branding/header** — `js/branding.js enhanceHeader()` runs site-wide (every page that has a
+    `.brand`): swaps the `.dot` for the swinging atomic-green logo (`#b8e600→#7a9700`, CSS keyframe
+    `brandSwing`, ~80° pendulum pivoting near the top, respects `prefers-reduced-motion`), adds the
+    slogan (`pool_tagline`, default "Mine Grin, anywhere") under the wordmark, and injects a
+    `🎁 Rewards` nav link → `fortune-board.html` when incentives are enabled. Footer sub-brand is
+    "GRINIUM — Grin Mining Pool" (was "Uranium Element…").
 
 ### Multi-region — hub-and-spoke (design: `docs/generated/script07_design.md` §3–4)
 
-Script 07 supports three deployment modes, selected at launch (mode may be passed as `$1` = `singlebox|hub|satellite` for non-interactive launches):
-- **singlebox** — Hub + co-located Satellite on one server (original behaviour; the existing `pool_singlebox_loop`).
-- **hub** — Central Hub only (the brain): Central API (sole DB writer), SQLite/WAL + schema + retention job, web dashboard + admin, Grin wallet (Tor payouts), nginx. Sourced from `lib/07_lib_hub.sh`; reuses the shared `pool_*` setup functions.
-- **satellite** — Regional node + stratum proxy + share relay; **no** web/admin/DB/wallet. Sourced from `lib/07_lib_satellite.sh`. Config: `/opt/grin/conf/grin_satellite.json`.
+Script 07 has three deployment **roles** internally (`singlebox|hub|satellite`), but the interactive
+`pool_select_mode` menu was **consolidated to two options (2026-06)** to stop forcing a topology
+choice on a newcomer — there is no "central vs distributed" fork; distributed *is* central + N
+satellites:
+- **1) Pool server** → `singlebox`. The pool itself — the brain + a co-located local stratum. It IS a
+  full hub (runs the Central API + `/api/shares` ingestion), so it accepts remote satellites later with
+  zero changes to itself. Start here for any single-box install.
+- **2) Satellite agent** → `satellite`. An extra region on **another** box; node + stratum proxy + relay,
+  **no** web/admin/DB/wallet. Sourced from `lib/07_lib_satellite.sh`. Config: `/opt/grin/conf/grin_satellite.json`.
+- **`hub`** (Central Hub only — brain with **no** local stratum, satellites do all mining) is an
+  **advanced** role: dropped from the menu but still reachable as a launch arg
+  (`bash 07_grin_mining_public_pool.sh hub`). Sourced from `lib/07_lib_hub.sh`; reuses the shared
+  `pool_*` setup functions. A `singlebox` already ⊇ `hub`, so bare hub is only for offloading mining off
+  the central box at scale. All three roles may still be passed as `$1` for non-interactive launches.
+
+**Add-a-zone workflow** (central → distributed, no rebuild of the central box): (1) admin → Regions →
+declare the region (name + label + that zone's stratum URL); (2) on the new box run option 2 and enter
+region name + hub URL + shared secret. The card lights up live from the satellite's heartbeat.
 
 Locked decisions (do not change without user confirmation):
 - **Database stays SQLite (WAL), not Postgres.** The hub is **single-writer** — only the Central API process writes; satellites POST over HTTPS, they never touch the DB. Migrate to Postgres only if the Central API itself goes multi-process/replicated, the DB moves to a separate box, or hot un-prunable data exceeds ~20–50 GB. Adding satellites does NOT change this (a region is a new HTTP client, not a new DB writer).

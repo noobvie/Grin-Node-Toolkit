@@ -61,7 +61,12 @@ function migrateUsers() {
     const additions = {
       failed_login_attempts: 'INTEGER NOT NULL DEFAULT 0',
       locked_until: 'INTEGER NOT NULL DEFAULT 0',
-      token_version: 'INTEGER NOT NULL DEFAULT 0'
+      token_version: 'INTEGER NOT NULL DEFAULT 0',
+      // Optional admin TOTP 2FA. totp_secret = confirmed base32 secret (NULL until enabled);
+      // totp_pending_secret = secret mid-enrollment, before the confirm code is entered.
+      totp_secret: 'TEXT DEFAULT NULL',
+      totp_enabled: 'INTEGER NOT NULL DEFAULT 0',
+      totp_pending_secret: 'TEXT DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -292,11 +297,26 @@ function createSchema() {
       failed_login_attempts INTEGER NOT NULL DEFAULT 0,
       locked_until INTEGER NOT NULL DEFAULT 0,
       token_version INTEGER NOT NULL DEFAULT 0,
+      totp_secret TEXT DEFAULT NULL,
+      totp_enabled INTEGER NOT NULL DEFAULT 0,
+      totp_pending_secret TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_user_username ON users(username)`,
+
+    // One-time backup recovery codes for admin 2FA (bcrypt-hashed, single-use). Shown to the
+    // admin once at enrollment; let an admin who lost their authenticator still log in.
+    `CREATE TABLE IF NOT EXISTS admin_recovery_codes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      code_hash TEXT NOT NULL,
+      used_at INTEGER DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_recovery_user ON admin_recovery_codes(user_id, used_at)`,
 
     `CREATE TABLE IF NOT EXISTS admin_audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -441,6 +461,34 @@ function createSchema() {
   migrateMinerAccounts();
   migrateBlocks();
   migrateWithdrawals();
+  // No demo regions are seeded. The pool server self-registers its own region via
+  // ensureLocalRegion() (called from index.js with config); extra zones come from
+  // real satellites the operator declares in admin → Regions.
+}
+
+// Self-register the pool server's own region (role=singlebox) so the central box
+// shows as a real region and auto-joins the connect grid the moment a satellite for
+// another zone reports in. Creates ONE row for `region` (skipping the generic
+// 'default'), backfills stratum_url once the public hostname is known, and never
+// clobbers an operator's label/active/url edits made in admin → Regions.
+function ensureLocalRegion(region, stratumUrl) {
+  if (!region || region === 'default') return;
+  try {
+    const row = db.prepare('SELECT region, stratum_url FROM pool_locations WHERE region = ?').get(region);
+    if (!row) {
+      const label = region.charAt(0).toUpperCase() + region.slice(1);
+      db.prepare(
+        'INSERT INTO pool_locations (region, label, stratum_url, is_active) VALUES (?, ?, ?, 1)'
+      ).run(region, label, stratumUrl || null);
+      console.warn(`[db] registered local region '${region}'${stratumUrl ? ' (' + stratumUrl + ')' : ''}`);
+    } else if (stratumUrl && !row.stratum_url) {
+      // Backfill the connect address once the public hostname is configured (the row may
+      // have been created on a pre-nginx first boot when subdomain was still empty).
+      db.prepare('UPDATE pool_locations SET stratum_url = ? WHERE region = ?').run(stratumUrl, region);
+    }
+  } catch (e) {
+    console.error(`[db] ensureLocalRegion failed: ${e.message}`);
+  }
 }
 
 function closeDb() {
@@ -454,5 +502,6 @@ module.exports = {
   initDb,
   getDb,
   closeDb,
-  createSchema
+  createSchema,
+  ensureLocalRegion
 };

@@ -308,6 +308,76 @@
     });
   }
 
+  // ── 3b. Site-wide header: swinging logo + slogan, Rewards link, miner auth ──
+  // Applied on every public page so headers stay consistent without editing each file.
+  // Acts only when a .brand element exists (skips login/admin pages that have none).
+  function enhanceHeader(cfg) {
+    injectHeaderStyles();
+    enhanceBrand(cfg);
+    injectRewardsLink(cfg);
+  }
+
+  function injectHeaderStyles() {
+    if (document.getElementById('brand-header-css')) return;
+    var css =
+      '.brand{display:flex;align-items:center;gap:.6rem;}' +
+      '.brand-logo{width:34px;height:34px;flex:0 0 auto;transform-origin:50% 8%;' +
+        'animation:brandSwing 3.2s ease-in-out infinite;}' +
+      '.brand-text{display:flex;flex-direction:column;line-height:1.04;}' +
+      '.brand-slogan{font-size:.66rem;font-weight:500;letter-spacing:.02em;opacity:.7;' +
+        'text-transform:none;white-space:nowrap;}' +
+      // Pendulum: ~80° total arc (±40°) pivoting near the top, like a clock pendulum.
+      '@keyframes brandSwing{0%{transform:rotate(-40deg);}50%{transform:rotate(40deg);}100%{transform:rotate(-40deg);}}' +
+      '@media (prefers-reduced-motion: reduce){.brand-logo{animation:none;}}';
+    var s = document.createElement('style');
+    s.id = 'brand-header-css';
+    s.textContent = css;
+    head().appendChild(s);
+  }
+
+  function enhanceBrand(cfg) {
+    var pool = cfg.pool || {};
+    var brand = cfg.branding || {};
+    document.querySelectorAll('.brand').forEach(function (el) {
+      if (el.querySelector('.brand-logo')) return; // already enhanced
+      var dot = el.querySelector('.dot');
+      var nameEl = el.querySelector('[data-brand="pool_name"]');
+
+      var logo = document.createElement('img');
+      logo.className = 'brand-logo';
+      logo.src = brand.logo_url || '/images/logo.svg';
+      logo.alt = '';
+      logo.setAttribute('aria-hidden', 'true');
+      if (dot) { el.replaceChild(logo, dot); } else { el.insertBefore(logo, el.firstChild); }
+
+      if (nameEl && !el.querySelector('.brand-text')) {
+        var col = document.createElement('span');
+        col.className = 'brand-text';
+        nameEl.parentNode.insertBefore(col, nameEl);
+        col.appendChild(nameEl);
+        var slogan = document.createElement('small');
+        slogan.className = 'brand-slogan';
+        slogan.setAttribute('data-brand', 'pool_tagline');
+        var tag = pool.tagline || '';
+        if (tag) slogan.textContent = tag;
+        col.appendChild(slogan);
+      }
+    });
+  }
+
+  // Add a "Rewards" nav link to the incentive/contest page when incentives are live.
+  function injectRewardsLink(cfg) {
+    if (!cfg.incentives || !cfg.incentives.enabled) return;
+    var nav = document.querySelector('.header-nav');
+    if (!nav || nav.querySelector('a[href$="fortune-board.html"]')) return;
+    var a = document.createElement('a');
+    a.className = 'nav-link';
+    a.href = 'fortune-board.html';
+    a.textContent = '🎁 Rewards';
+    var account = nav.querySelector('a[href$="account-settings.html"]');
+    if (account) nav.insertBefore(a, account); else nav.appendChild(a);
+  }
+
   // ── 4. Analytics + custom head HTML ────────────────────────────────────────
   function applyAnalytics(cfg) {
     var a = cfg.analytics || {};
@@ -462,6 +532,7 @@
 
     try { applySeo(cfg); } catch (e) {}
     try { applyContent(cfg); } catch (e) {}
+    try { enhanceHeader(cfg); } catch (e) {}
     try { applyIncentives(cfg.incentives || {}); } catch (e) {}
     try { renderBanners(cfg.announcements || []); } catch (e) {}
     try { applyAnalytics(cfg); } catch (e) {}

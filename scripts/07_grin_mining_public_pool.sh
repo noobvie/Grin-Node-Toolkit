@@ -27,6 +27,7 @@
 #   6) Service control       (start / stop / restart)
 #   7) Create admin account  (first admin user — needs service running)
 #   8) Pool status           (service state, DB size, recent logs)
+#   9) Deploy new code       (refresh backend+frontend from checkout, then restart)
 #   B) Backup                (DB + config → /opt/grin/backups/)
 #   C) Cron schedules        (daily backup, weekly VACUUM)
 #   L) View logs             (tail -50 | less)
@@ -178,6 +179,12 @@ pool_ensure_defaults() {
         ["node_stratum_port"]="3334"
         ["node_stratum_host"]="127.0.0.1"
         ["pool_address"]=""
+        # The pool server's own region label. It serves local miners under this
+        # region; on startup the app self-registers one pool_locations row for it
+        # (→ subdomain:stratum_port) so the central box shows as a real region and
+        # auto-joins the connect grid the moment a satellite for another zone reports
+        # in — no rebuild. Rename it in admin → Regions.
+        ["region"]="main"
         ["pool_fee_percent"]="1.0"
         ["min_withdrawal"]="5.0"
         ["withdrawal_fee"]="0.0"
@@ -190,6 +197,11 @@ pool_ensure_defaults() {
         ["fail2ban_maxretry"]="5"
         ["fail2ban_findtime"]="600"
         ["fail2ban_bantime"]="3600"
+        # Admin panel access control: comma/space-separated IPs/CIDRs allowed to reach
+        # /admin and /api/admin at the nginx layer. Empty = OPEN to all (testing default —
+        # app-layer JWT + captcha + lockout + auto-ban + TOTP still apply). Set IPs/CIDRs
+        # here to harden once you have adoption, then re-run 4) Setup nginx.
+        ["admin_allowlist"]=""
     )
     for k in "${!defaults[@]}"; do
         local existing; existing=$(pool_read_conf "$k" "__MISSING__")
@@ -438,7 +450,9 @@ EOF
 # ═══════════════════════════════════════════════════════════════════════════════
 
 pool_configure() {
-    echo -e "\n${BOLD}Configure Pool Manager — Mainnet${RESET}\n"
+    echo -e "\n${BOLD}Configure Pool Manager — Mainnet${RESET}"
+    echo -e "${DIM}Only the pool domain is set here — everything else defaults and is${RESET}"
+    echo -e "${DIM}edited in the web admin panel after login.${RESET}\n"
 
     # The config read/write helpers run on node (installed by step 1). Without
     # it every write fails silently, so make the missing prerequisite explicit.
@@ -448,56 +462,39 @@ pool_configure() {
     fi
     pool_ensure_defaults
 
+    # The domain is the ONLY install-time setting asked here. Everything else
+    # (pool name, fee %, min withdrawal, reward model, payout options, …) is
+    # seeded with sane defaults during 1) Install and is edited in the web admin
+    # panel after first login — so the installer stays minimal. The domain is the
+    # exception: it's REQUIRED for nginx + certbot + satellite HTTPS and is NOT
+    # editable in the admin panel, so it must be captured up front.
+    # node_stratum_port stays at its default (3334); advanced operators running
+    # the node's built-in stratum on another port edit grin_pubpool.json directly.
     local val
 
-    echo -ne "Pool title       [$(pool_read_conf "pool_name" "My Grin Pool")]: "
-    read -r val; [[ -n "$val" ]] && pool_write_conf_key "pool_name" "$val"
-
-    # Validate inputs at entry time — a bad domain otherwise only surfaces at
-    # 4) Setup nginx, and a non-numeric fee/port would be written as null.
+    # Enter keeps an existing value; with none set we loop until a valid domain
+    # is given (0 to cancel out of Configure).
     echo -e "  ${DIM}(Full domain or subdomain for the pool site, e.g. pool.example.com or example.com)${RESET}"
-    echo -ne "Domain/subdomain [$(pool_read_conf "subdomain" "")]: "
-    read -r val
-    if [[ -n "$val" ]]; then
+    local cur_domain; cur_domain=$(pool_read_conf "subdomain" "")
+    while true; do
+        echo -ne "Domain/subdomain [${cur_domain}]: "
+        read -r val
+        if [[ -z "$val" ]]; then
+            # Enter with an existing value keeps it; with none, the field is
+            # mandatory — re-prompt instead of writing an empty domain.
+            [[ -n "$cur_domain" ]] && break
+            warn "A domain is required for a public pool (HTTPS + satellites). Enter 0 to cancel Configure."
+            continue
+        fi
+        [[ "$val" == "0" ]] && { info "Configure cancelled."; return 1; }
         if nginx_validate_domain "$val"; then
-            pool_write_conf_key "subdomain" "$val"
-        else
-            warn "Invalid domain name '$val' — keeping previous value."
+            pool_write_conf_key "subdomain" "$val"; cur_domain="$val"; break
         fi
-    fi
+        warn "Invalid domain name '$val' — try again (e.g. pool.example.com), or 0 to cancel."
+    done
 
-    echo -ne "Pool fee %        [$(pool_read_conf "pool_fee_percent" "1.0")]: "
-    read -r val
-    if [[ -n "$val" ]]; then
-        if [[ "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]] \
-           && awk -v v="$val" 'BEGIN{exit !(v>=0 && v<=50)}'; then
-            pool_write_conf_key "pool_fee_percent" "$val"
-        else
-            warn "Fee must be a number from 0 to 50 — keeping previous value."
-        fi
-    fi
-
-    echo -ne "Min withdrawal   [$(pool_read_conf "min_withdrawal" "5.0")] GRIN: "
-    read -r val
-    if [[ -n "$val" ]]; then
-        if [[ "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-            pool_write_conf_key "min_withdrawal" "$val"
-        else
-            warn "Not a number — keeping previous value."
-        fi
-    fi
-
-    local default_nsp; default_nsp=$(pool_read_conf "node_stratum_port" "3334")
-    echo -e "  ${DIM}(Node stratum port — set stratum_server_addr in grin-server.toml to match)${RESET}"
-    echo -ne "Node stratum port [${default_nsp}]: "
-    read -r val
-    if [[ -n "$val" ]]; then
-        if [[ "$val" =~ ^[0-9]+$ ]] && (( val >= 1 && val <= 65535 )); then
-            pool_write_conf_key "node_stratum_port" "$val"
-        else
-            warn "Not a valid port (1–65535) — keeping previous value."
-        fi
-    fi
+    info "All other settings (name, fee, min withdrawal, payouts) default now and"
+    info "  are editable in the web admin panel after you create the admin account."
 
     # Wallet dir, pool Grin address + wallet password are NOT asked here — the
     # wallet doesn't exist yet at this point. All three are captured by
@@ -565,6 +562,87 @@ window.POOL_NAME = ${escaped_name};
 EOF
 }
 
+# ───────────────────────────────────────────────────────────────────────────────
+# 9) DEPLOY NEW CODE — refresh runtime copies from the checkout, then restart
+# ───────────────────────────────────────────────────────────────────────────────
+# A lightweight update path for an ordinary code pull (js/html/media only): it
+# refreshes BOTH trees the pool runs from —
+#   · backend  $POOL_APP_SRC  → $POOL_APP_DIR   (index.js, lib/*.js, admin-panel/…)
+#   · frontend $POOL_WEB_SRC  → $POOL_WEB_DIR   (via pool_deploy_web)
+# — and restarts the service so the new code is actually live. This fills the gap
+# between 3) Deploy web files (frontend ONLY — never touches the backend) and
+# 1) Install (heavy: re-runs npm/apt/fail2ban AND does not restart the service).
+#
+# The backend rsync uses --delete to mirror the checkout (so a file deleted from
+# source is removed on the server too) but EXCLUDES the four runtime artefacts the
+# app owns, never the repo: the SQLite DB (pool.db + WAL/SHM sidecars), the wallet
+# password file, node_modules (deps — refreshed only when package.json changes),
+# and custom_assets (operator-uploaded white-label media). rsync protects excluded
+# paths from --delete, so miner balances / secrets / deps survive untouched.
+pool_deploy_code() {
+    echo ""
+    echo -e "  ${BOLD}Deploy new code${RESET} — refresh backend + frontend from the checkout, then restart."
+    echo -e "  ${DIM}Source: $TOOLKIT_ROOT${RESET}"
+    echo -e "  ${YELLOW}Pull the latest first${RESET} (git pull) so the checkout holds the new code."
+    echo ""
+
+    if [[ ! -d "$POOL_APP_SRC" ]]; then
+        error "Pool app source not found: $POOL_APP_SRC"
+        return 1
+    fi
+    if [[ ! -d "$POOL_APP_DIR" ]]; then
+        error "Pool not installed yet ($POOL_APP_DIR missing) — run 1) Install first."
+        return 1
+    fi
+
+    # Did package.json change? Capture the OLD (deployed) hash before the rsync
+    # overwrites it, compare against the source. Only then do we re-run npm —
+    # an ordinary js/html refresh skips the (slow) dependency install entirely.
+    local old_pkg_hash new_pkg_hash
+    old_pkg_hash=$(sha1sum "$POOL_APP_DIR/package.json" 2>/dev/null | awk '{print $1}')
+    new_pkg_hash=$(sha1sum "$POOL_APP_SRC/package.json" 2>/dev/null | awk '{print $1}')
+
+    info "Refreshing backend code → $POOL_APP_DIR ..."
+    rsync -a --delete \
+        --exclude='pool.db' --exclude='pool.db-wal' --exclude='pool.db-shm' \
+        --exclude='.wallet_pass' --exclude='node_modules' --exclude='custom_assets' \
+        "$POOL_APP_SRC/" "$POOL_APP_DIR/" \
+        || { error "Backend rsync failed — server code unchanged."; return 1; }
+    success "Backend code refreshed."
+
+    if [[ "$old_pkg_hash" != "$new_pkg_hash" ]]; then
+        local npm_cmd="install"
+        [[ -f "$POOL_APP_DIR/package-lock.json" ]] && npm_cmd="ci"
+        warn "package.json changed — running npm $npm_cmd ..."
+        (cd "$POOL_APP_DIR" && npm "$npm_cmd" --omit=dev 2>&1 | tail -20) \
+            || { error "npm $npm_cmd failed — see /root/.npm/_logs/ (latest *-debug-0.log)."; return 1; }
+        success "Dependencies updated."
+    else
+        info "package.json unchanged — skipping npm (deps untouched)."
+    fi
+
+    # Frontend (public_html → /var/www/grin-pool) + admin panel + pool-config.js.
+    # No-op-safe if the web files were never deployed (it recreates the dir).
+    pool_deploy_web || warn "Frontend deploy reported a problem — backend is still refreshed."
+
+    # Make the new backend live. Only restart if it's already running; a stopped
+    # service is left stopped (the operator starts it via 6) Service control).
+    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        info "Restarting $POOL_SERVICE to load the new code..."
+        if systemctl restart "$POOL_SERVICE"; then
+            success "$POOL_SERVICE restarted — new code is live."
+        else
+            error "Restart failed — check: journalctl -u $POOL_SERVICE -n 50"
+            return 1
+        fi
+    else
+        info "$POOL_SERVICE is not running — start it via 6) Service control to load the new code."
+    fi
+
+    echo ""
+    success "Deploy new code complete."
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4) SETUP NGINX
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -591,12 +669,53 @@ pool_setup_nginx() {
     mkdir -p "$POOL_APP_DIR/custom_assets"
     chmod o+rx /opt/grin "$POOL_APP_DIR" "$POOL_APP_DIR/custom_assets" 2>/dev/null || true
 
+    # nginx_ensure_rate_limit_zones is a no-op while its conf file exists (so operators can
+    # hand-tune rates). That means a NEW zone added to the list below would never be written
+    # on an existing install — yet the vhost references it, so `nginx -t` would then fail with
+    # "zero size shared memory zone". Self-heal: if the managed conf is missing the captcha
+    # zone (added 2026-06 to stop the login captcha being starved by static-asset traffic),
+    # delete it so the full current list regenerates. Idempotent — once present, this is skipped.
+    local _zone_conf="/etc/nginx/conf.d/script07-${POOL_SERVICE}.conf"
+    if [[ -f "$_zone_conf" ]] && ! grep -q "zone=${POOL_SERVICE}_captcha[: ]" "$_zone_conf"; then
+        rm -f "$_zone_conf"
+    fi
+
     if declare -F nginx_ensure_rate_limit_zones &>/dev/null; then
         nginx_ensure_rate_limit_zones "script07-${POOL_SERVICE}" \
-            "${POOL_SERVICE}_auth:3r/m"     \
-            "${POOL_SERVICE}_api:30r/m"     \
-            "${POOL_SERVICE}_static:60r/m"  \
+            "${POOL_SERVICE}_auth:3r/m"      \
+            "${POOL_SERVICE}_api:30r/m"      \
+            "${POOL_SERVICE}_static:60r/m"   \
+            "${POOL_SERVICE}_captcha:30r/m"  \
             "${POOL_SERVICE}_ingest:120r/m"
+    fi
+
+    # Build nginx allow/deny rules for the admin surfaces (/admin + /api/admin).
+    #
+    # DEFAULT = OPEN (bootstrap/testing posture). An empty admin_allowlist means the panel
+    # is reachable from any IP, so a fresh install is never locked out while there is no
+    # adoption yet for anyone to attack. The app-layer defenses (JWT sessions, login
+    # captcha, per-account lockout, IP auto-ban, optional TOTP 2FA, fail2ban) are ALWAYS
+    # in force regardless of this network gate — this is only the outer perimeter.
+    #
+    # HARDEN LATER: set admin_allowlist (comma/space-separated IPs/CIDRs) in $POOL_CONF and
+    # re-run 4) Setup nginx. Once it is non-empty the panel locks to localhost + those
+    # entries only (everything else is denied). localhost is always kept so an SSH tunnel
+    # and the app's own server-side calls keep working as a break-glass path.
+    local admin_allow_raw; admin_allow_raw=$(pool_read_conf "admin_allowlist" "")
+
+    local admin_rules="" _entry
+    if [[ -n "$admin_allow_raw" ]]; then
+        admin_rules+="        allow 127.0.0.1;"$'\n'
+        admin_rules+="        allow ::1;"$'\n'
+        for _entry in ${admin_allow_raw//,/ }; do
+            [[ -n "$_entry" ]] && admin_rules+="        allow ${_entry};"$'\n'
+        done
+        admin_rules+="        deny all;"
+        info "Admin panel (/admin, /api/admin) restricted to: localhost + $admin_allow_raw"
+    else
+        admin_rules+="        allow all;"
+        warn "Admin panel (/admin, /api/admin) is OPEN to all IPs — admin_allowlist is empty (testing default)."
+        warn "  Harden once you have adoption: set \"admin_allowlist\" in $POOL_CONF and re-run 4) Setup nginx."
     fi
 
     local sites_enabled="/etc/nginx/sites-enabled/$(basename "$POOL_NGINX_CONF")"
@@ -637,9 +756,11 @@ EOF
             warn "Pool stays HTTP-only until a cert exists — re-run 4) Setup nginx after certbot."
             return 0
         fi
-        local le_email
-        echo -ne "Let's Encrypt email [admin@$subdomain]: "
-        read -r le_email; [[ -z "$le_email" ]] && le_email="admin@$subdomain"
+        # Email is auto-defaulted (no prompt) — it's only used for cert-expiry
+        # notices and certbot auto-renews via its systemd timer anyway. Change it
+        # later with `certbot update_account -m <email>` if you want notices.
+        local le_email="admin@$subdomain"
+        info "Using Let's Encrypt account email: $le_email"
         if ! certbot --nginx -d "$subdomain" --non-interactive --agree-tos \
                 -m "$le_email" 2>&1 | tail -5; then
             warn "certbot failed — check that DNS for $subdomain points to this server and port 80 is open."
@@ -686,6 +807,45 @@ server {
     # Self-hosted Plausible/Umami/Matomo on a custom domain require adding that
     # domain to script-src and connect-src below.
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self' https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com;" always;
+
+    # ── Admin panel + admin API. Network gate is OPEN by default (empty admin_allowlist
+    # → allow all) for the testing phase; app-layer JWT + captcha + lockout + auto-ban +
+    # optional TOTP still apply. Harden by setting admin_allowlist in $POOL_CONF (locks to
+    # localhost + listed IPs/CIDRs), then re-run 4) Setup nginx. See $admin_rules above.
+    location = /admin { return 301 https://\$host/admin/; }
+    location /admin/ {
+$admin_rules
+        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        try_files \$uri \$uri/ \$uri.html =404;
+    }
+    location /api/admin/ {
+$admin_rules
+        limit_req zone=${POOL_SERVICE}_api burst=10 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 30s;
+    }
+
+    # The CAPTCHA challenge is a read-only GET the login page fetches on load, on
+    # form-toggle, and after every failed attempt — it gets its OWN dedicated zone.
+    # It must NOT share the strict 3r/m _auth brute-force budget (retry can't recover),
+    # AND must NOT share _static either: that zone is keyed per-IP and consumed by every
+    # CSS/JS/font/image on every page (a dozen+ per load), so a few page reloads during
+    # testing starve the captcha → "Verification unavailable" and "↻ new" does nothing →
+    # captcha_id stays null → the login POST is rejected at the captcha gate and you can
+    # never log in. Its own zone keeps it lit regardless of asset traffic. This is NOT the
+    # brute-force vector (the login POST stays on _auth 3r/m + per-account lockout + IP
+    # auto-ban); issuing a fresh arithmetic challenge is a cheap in-memory op, so a
+    # generous, isolated rate is safe. Exact-match wins over the /api/auth/ prefix.
+    location = /api/auth/captcha {
+        limit_req zone=${POOL_SERVICE}_captcha burst=20 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
 
     location /api/auth/ {
         limit_req zone=${POOL_SERVICE}_auth burst=5 nodelay;
@@ -866,9 +1026,20 @@ pool_setup_admin() {
     local port; port=$(pool_read_conf "service_port" "$POOL_PORT")
     echo -e "\n${BOLD}Create Admin Account — Mainnet${RESET}\n"
 
+    # The service may still be binding the port — the FIRST start runs DB
+    # init/migrations, so it isn't instant. Wait briefly instead of bailing
+    # immediately (this is the common case right after 6) Start service and in
+    # the guided flow, where a 2s gap isn't enough).
+    if ! ss -tlnp 2>/dev/null | grep -q ":$port "; then
+        info "Waiting for the pool manager to listen on port $port..."
+        if declare -F gnc_wait_for_port >/dev/null 2>&1; then
+            gnc_wait_for_port "$port" 20 2 >/dev/null 2>&1 || true
+        fi
+    fi
     if ! ss -tlnp 2>/dev/null | grep -q ":$port "; then
         warn "Pool manager is not running on port $port."
         warn "Start the service (option 6) first, then run this again."
+        warn "If it won't start, check: journalctl -u $POOL_SERVICE -n 50 --no-pager"
         return 1
     fi
 
@@ -890,9 +1061,22 @@ pool_setup_admin() {
         return 1
     fi
 
+    # Confirm the password — typos here are silent (read -rs hides input) and would
+    # otherwise lock the operator out of an account whose password they can't reproduce.
+    echo -ne "Confirm admin password: "
+    read -rs admin_pass2; echo ""
+    if [[ "$admin_pass" != "$admin_pass2" ]]; then
+        error "Passwords do not match. Nothing was created — re-run and try again."
+        return 1
+    fi
+
     echo -ne "Admin email (optional): "
     read -r admin_email
 
+    # No captcha here: /api/auth/register skips the anti-robot gate for direct on-box
+    # (loopback) calls — see isLocalRequest() in back-end-pool/index.js. This guided
+    # flow always POSTs to 127.0.0.1, and the captcha only exists to slow REMOTE brute
+    # force on the public login form, not the trusted root operator doing first-admin setup.
     local payload
     payload=$(node -e "
 process.stdout.write(JSON.stringify({
@@ -1032,8 +1216,8 @@ pool_service_menu() {
         echo -ne "Choice: "
         read -r sc
         case "$sc" in
-            1) pool_service_control stop ;;
-            2) pool_service_control restart ;;
+            1) pool_service_control stop;    _pool_pause ;;
+            2) pool_service_control restart; _pool_pause ;;
         esac
     else
         echo -e "  Status: ${RED}● stopped${RESET}"
@@ -1041,7 +1225,7 @@ pool_service_menu() {
         echo -ne "Choice: "
         read -r sc
         # if-form: a trailing `[[ ]] &&` would make "0/back" return 1 → set -e kills the caller
-        if [[ "$sc" == "1" ]]; then pool_service_control start; fi
+        if [[ "$sc" == "1" ]]; then pool_service_control start; _pool_pause; fi
     fi
 }
 
@@ -1082,6 +1266,11 @@ pool_backup() {
 
     ls -t "$backup_dir"/pool_backup_*.tar.gz 2>/dev/null | tail -n +31 | xargs rm -f 2>/dev/null || true
 }
+
+# Pause helper for one-shot submenus that perform an action: keeps their success
+# output on screen. Submenus call this only after a real action (never on Back),
+# so the main loop excludes them from its own pause — no double prompt.
+_pool_pause() { echo ""; echo "Press Enter to continue..."; read -r; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # C) CRON SCHEDULES
@@ -1137,6 +1326,7 @@ SCRIPT
 EOF
                 success "Daily backup cron enabled ($cron_backup → $backup_wrapper)."
             fi
+            _pool_pause
             ;;
         2)
             if [[ -f "$cron_vacuum" ]]; then
@@ -1148,6 +1338,7 @@ EOF
 EOF
                 success "Weekly VACUUM cron enabled ($cron_vacuum)."
             fi
+            _pool_pause
             ;;
     esac
 }
@@ -1214,17 +1405,6 @@ pool_reset_db() {
 
 # Pause between guided steps. Enter continues; 0 (or q) aborts the guided flow
 # (rc 1) so the caller can return to the menu. <label of the next step>
-_pool_guided_pause() {
-    local ans
-    echo ""
-    echo -ne "Press Enter to continue to ${1} (0 to abort guided setup): "
-    read -r ans
-    if [[ "${ans,,}" == "0" || "${ans,,}" == "q" ]]; then
-        info "Guided setup aborted — completed steps are kept; re-run G) or use the manual steps."
-        return 1
-    fi
-    return 0
-}
 
 # Run guided step <n> "<label>" <fn> — when the step already looks complete
 # (per _pool_step_done), offer to skip it. This makes re-running G) after a
@@ -1242,7 +1422,9 @@ _pool_guided_step() {
 pool_guided_setup() {
     echo -e "\n${BOLD}${CYAN}═══ Guided Full Setup — GRINIUM Pool (Mainnet) ═══${RESET}\n"
     pool_check_exclusivity || return 0
-    echo -e "  This will run steps 1 → 2 → 3 → 4 → 5 → 6 → 7 in sequence."
+    echo -e "  Runs steps 1 → 7 straight through (no pause between steps)."
+    echo -e "  You're only asked for real inputs: the pool domain, SSL/certbot,"
+    echo -e "  the wallet passphrase, and the admin username/password."
     echo -e "  Steps already completed (✓) can be skipped when prompted:"
     local _step_names=("Install" "Configure" "Deploy web files" "Setup nginx" \
                        "Set up wallet" "Service running" "Admin account")
@@ -1254,38 +1436,80 @@ pool_guided_setup() {
     echo -ne "  Continue? [Y/n]: "
     read -r go; [[ "${go,,}" == "n" ]] && return
 
+    # Run straight through — no "press Enter" gate between steps. Steps that need
+    # no input just print their banner and proceed; the only stops are real inputs
+    # (the pool domain, certbot, the wallet passphrase, the admin credentials).
     # Every step is ||-guarded: under set -e an unguarded failure would kill the
     # whole script instead of returning to the menu. Abort the guided flow with a
     # message on the first hard failure; the operator fixes it and re-runs.
+    echo -e "\n${BOLD}${CYAN}── Step 1/7: Install ──${RESET}"
     _pool_guided_step 1 "Install" pool_install \
         || { error "Install failed — fix the cause and re-run G) Guided setup."; return 0; }
-    _pool_guided_pause "Configure" || return 0
+
+    echo -e "\n${BOLD}${CYAN}── Step 2/7: Configure (pool domain) ──${RESET}"
     _pool_guided_step 2 "Configure" pool_configure \
         || { error "Configure failed — aborting guided setup."; return 0; }
-    _pool_guided_pause "Deploy web files" || return 0
+
+    echo -e "\n${BOLD}${CYAN}── Step 3/7: Deploy web files ──${RESET}"
     _pool_guided_step 3 "Deploy web files" pool_deploy_web \
         || { error "Web deploy failed — aborting guided setup."; return 0; }
-    _pool_guided_pause "Setup nginx" || return 0
+
+    echo -e "\n${BOLD}${CYAN}── Step 4/7: Setup nginx + SSL ──${RESET}"
     _pool_guided_step 4 "Setup nginx" pool_setup_nginx \
         || { error "Nginx setup failed — aborting guided setup."; return 0; }
-    _pool_guided_pause "Set up pool wallet (coinbase + payout listeners)" || return 0
-    # Wallet setup is best-effort in guided mode: a missing/unsynced node shouldn't
-    # block the rest of setup — but ask before moving on, so a deliberate cancel
-    # (0 inside the wallet prompts) can also end the guided flow here.
+
+    # Wallet setup must end with BOTH listeners up (pw_setup returns non-zero
+    # otherwise, or on a deliberate cancel). Don't roll on to the service + admin
+    # steps with a wallet that can't listen — coinbase + payouts would silently
+    # fail. Default to stopping; only continue if the operator explicitly opts in.
+    echo -e "\n${BOLD}${CYAN}── Step 5/7: Set up wallet (coinbase + payout listeners) ──${RESET}"
     if ! _pool_guided_step 5 "Set up wallet" pw_setup; then
-        warn "Wallet not fully set up — finish via 5) Set up wallet (needed for coinbase + payouts)."
-        echo -ne "  Continue with the remaining steps (service + admin)? [Y/n]: "
+        warn "Wallet not fully set up (listeners down or setup cancelled) — finish via 5) Set up wallet."
+        echo -ne "  Continue with the remaining steps anyway (service + admin)? [y/N]: "
         local go2; read -r go2
-        [[ "${go2,,}" == "n" ]] && { info "Guided setup stopped — completed steps are kept."; return 0; }
+        [[ "${go2,,}" == "y" ]] || { info "Guided setup stopped — completed steps are kept."; return 0; }
     fi
-    _pool_guided_pause "start the service and create admin account" || return 0
+
+    echo -e "\n${BOLD}${CYAN}── Step 6/7: Start service ──${RESET}"
     pool_start_service || true
-    sleep 2
+    # Wait for the service to actually bind its port before creating the admin —
+    # the first start runs DB init/migrations, so it isn't instant. Without this
+    # the next step's port check can fail and skip admin creation.
+    local _svc_port; _svc_port=$(pool_read_conf "service_port" "$POOL_PORT")
+    info "Waiting for $POOL_SERVICE to listen on port $_svc_port..."
+    gnc_wait_for_port "$_svc_port" 30 2 >/dev/null 2>&1 \
+        || warn "Service not listening yet — 7) admin creation will wait/retry."
+
+    echo -e "\n${BOLD}${CYAN}── Step 7/7: Create admin account ──${RESET}"
     _pool_guided_step 7 "Create admin account" pool_setup_admin \
         || warn "Admin account not created — run 7) Create admin account once the service is up."
 
+    local _domain; _domain=$(pool_read_conf "subdomain" "your-domain")
+    local _allow;  _allow=$(pool_read_conf "admin_allowlist" "")
     echo ""
-    success "Guided setup complete. Open https://$(pool_read_conf "subdomain" "your-domain") to access the pool."
+    success "Guided setup complete."
+    echo ""
+    echo -e "  ${BOLD}Public pool:${RESET}   https://$_domain"
+    echo -e "  ${BOLD}Admin login:${RESET}   https://$_domain/login.html   (redirects to /admin/ after sign-in)"
+    echo ""
+    if [[ -n "$_allow" ]]; then
+        echo -e "  ${BOLD}${YELLOW}The admin panel is IP-restricted${RESET} — only the listed IPs can reach /admin/."
+        echo -e "  Currently allowed:  ${GREEN}localhost + $_allow${RESET}"
+        echo ""
+        echo -e "  ${YELLOW}Getting 403 on /admin/?${RESET} The IP you browse from isn't on the list above"
+        echo -e "  (it can differ from your SSH IP). Add your browsing IP, then re-run ${BOLD}4) Setup nginx${RESET}:"
+        echo ""
+        echo -e "    ${CYAN}# 1) On the machine you browse from, open https://api.ipify.org to get its IP${RESET}"
+        echo -e "    ${CYAN}# 2) Add it (replace 1.2.3.4 — existing entries are kept):${RESET}"
+        echo -e "    ${CYAN}node -e 'const f=\"$POOL_CONF\",ip=process.argv[1];const d=JSON.parse(require(\"fs\").readFileSync(f,\"utf8\"));const s=new Set((d.admin_allowlist||\"\").split(/[,\\\\s]+/).filter(Boolean));s.add(ip);d.admin_allowlist=[...s].join(\",\");require(\"fs\").writeFileSync(f,JSON.stringify(d,null,2));require(\"fs\").chmodSync(f,0o600);console.log(\"admin_allowlist =\",d.admin_allowlist)' 1.2.3.4${RESET}"
+        echo -e "    ${CYAN}# 3) Re-run menu option 4) Setup nginx  (rewrites the vhost + reloads)${RESET}"
+    else
+        echo -e "  ${BOLD}${YELLOW}The admin panel is OPEN to all IPs${RESET} (testing default) — anyone who knows the"
+        echo -e "  URL can reach /admin/, gated only by login (JWT + captcha + lockout + auto-ban)."
+        echo -e "  ${BOLD}Harden once you have adoption:${RESET} set ${BOLD}admin_allowlist${RESET} in $POOL_CONF to your"
+        echo -e "  browsing/VPN IP(s), then re-run ${BOLD}4) Setup nginx${RESET} to lock it down."
+    fi
+    echo ""
     return 0
 }
 
@@ -1329,6 +1553,7 @@ show_menu() {
     echo ""
     echo -e "${DIM}  ─── Administration ───────────────────────────────${RESET}"
     echo -e "  ${GREEN}8${RESET}) Pool status           ${DIM}(service, port, DB, recent logs)${RESET}"
+    echo -e "  ${GREEN}9${RESET}) Deploy new code       ${DIM}(refresh js/html/media from checkout + restart)${RESET}"
     echo -e "  ${GREEN}B${RESET}) Backup pool           ${DIM}(DB + config → /opt/grin/backups/)${RESET}"
     echo -e "  ${GREEN}C${RESET}) Cron tasks            ${DIM}(backup schedule, VACUUM)${RESET}"
     echo -e "  ${GREEN}L${RESET}) View logs             ${DIM}(tail -50 | less)${RESET}"
@@ -1360,6 +1585,7 @@ pool_singlebox_loop() {
             6)     pool_service_menu || true ;;
             7)     pool_setup_admin || true ;;
             8)     pool_show_status || true ;;
+            9)     pool_deploy_code || true ;;
             b)     pool_backup || true ;;
             c)     pool_cron_schedules || true ;;
             l)     pool_view_logs || true ;;
@@ -1369,11 +1595,15 @@ pool_singlebox_loop() {
             *)     warn "Invalid option." ; sleep 1 ; continue ;;
         esac
 
-        [[ "${choice,,}" != "l" && "${choice,,}" != "s" ]] && {
-            echo ""
-            echo "Press Enter to continue..."
-            read -r
-        }
+        # Pause so action output stays readable before the menu redraws.
+        # Skipped for: l (pager) / s (editor) — they hold their own screen — and
+        # the submenus 5/6/c, which self-manage feedback and return on their own
+        # 0) Back. Without this, picking 0 inside a submenu would trigger a second,
+        # redundant "Press Enter" here even though nothing new was shown.
+        case "${choice,,}" in
+            l|s|5|6|c) ;;
+            *) echo ""; echo "Press Enter to continue..."; read -r ;;
+        esac
     done
 }
 
@@ -1649,32 +1879,29 @@ pool_select_mode() {
         echo -e "${BOLD}${CYAN}  Public Mining Pool Deployment Mode${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
-        echo -e "  ${DIM}Tip: don't install a brain (1/2) and a Satellite (3) on the same box —${RESET}"
-        echo -e "  ${DIM}they collide on ports 3333/3334/8080. Use Single-server for one machine.${RESET}"
+        echo -e "  ${BOLD}What are you installing?${RESET}"
         echo ""
-        echo -e "  ${BOLD}Single-server${RESET} ${DIM}(everything on one box)${RESET}"
-        echo -e "  ${DIM}─────────────────────────────────────────────${RESET}"
-        echo -e "  ${GREEN}1${RESET}) Single-server pool   ${DIM}(Hub + local Satellite, all-in-one)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Pool server      ${DIM}The pool itself — runs everything.${RESET} ${BOLD}Start here.${RESET}"
+        echo -e "                     ${DIM}Serves local miners as region \"main\"; accepts${RESET}"
+        echo -e "                     ${DIM}satellites from other zones later — no rebuild.${RESET}"
         echo ""
-        echo -e "  ${BOLD}Distributed / multi-region${RESET} ${DIM}(each role on a SEPARATE server)${RESET}"
-        echo -e "  ${CYAN}═════════════════════════════════════════════${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Central Hub          ${DIM}(the brain — one per pool)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Satellite            ${DIM}(a region — node + proxy → points at your Hub)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Satellite agent  ${DIM}An extra region on ANOTHER box: node + stratum${RESET}"
+        echo -e "                     ${DIM}proxy that reports to your pool server.${RESET}"
         echo ""
-        echo -e "  ${BOLD}${RED}Danger zone${RESET}"
-        echo -e "  ${RED}═════════════════════════════════════════════${RESET}"
         echo -e "  ${RED}Z${RESET}) Cleanup public pool  ${DIM}(remove pool/hub/satellite infra · keeps node + wallet + backups)${RESET}"
-        echo ""
         echo -e "  ${RED}0${RESET}) Back to mining hub"
         echo ""
-        echo -ne "${BOLD}Select mode: ${RESET}"
+        echo -e "  ${DIM}Run a Satellite on a DIFFERENT box from the pool server (they share${RESET}"
+        echo -e "  ${DIM}ports 3333/3334/8080). Advanced — a mining-less central hub:${RESET}"
+        echo -e "  ${DIM}\`bash 07_grin_mining_public_pool.sh hub\`.${RESET}"
+        echo ""
+        echo -ne "${BOLD}Select: ${RESET}"
         read -r m
 
         local chosen=""
         case "$m" in
             1) chosen="singlebox" ;;
-            2) chosen="hub" ;;
-            3) chosen="satellite" ;;
+            2) chosen="satellite" ;;
             z|Z) pool_cleanup || true
                  echo ""
                  echo "Press Enter to return to the menu..."

@@ -20,6 +20,8 @@ const DEFAULT_BATCH_INTERVAL_MS = 2000;
 const MAX_BATCH = 300;          // ~75 KB/batch — stays under express.json() 100kb limit
 const FAILOVER_BLOCK_LIMIT = 50;
 const DEFAULT_POST_TIMEOUT_MS = 15000; // abort a hub POST that hangs (half-open connection)
+const HEARTBEAT_MS = 60000;     // when idle (no shares), ping the hub at least this often so
+                                // the region's public up/down pill stays "online", not "offline"
 
 class ShareRelay {
   constructor(config) {
@@ -32,6 +34,7 @@ class ShareRelay {
     this.buffer = [];           // live, in-memory accepted shares awaiting flush
     this.timer = null;
     this.flushing = false;
+    this.lastSentAt = 0;        // ms epoch of the last successful POST to the hub (heartbeat clock)
 
     // Local failover store — its own file so it never clashes with the pool DB.
     const failoverPath = config.relay_failover_path ||
@@ -95,6 +98,7 @@ class ShareRelay {
         signal: ac.signal,
       });
       if (!res.ok) throw new Error(`hub ${pathname} -> HTTP ${res.status}`);
+      this.lastSentAt = Date.now(); // any successful POST resets the idle-heartbeat clock
       return res;
     } finally {
       clearTimeout(t);
@@ -134,6 +138,17 @@ class ShareRelay {
             this._persistShares(batch); // failed mid-send → stage remainder for retry
           }
         }
+      }
+
+      // 3. Idle heartbeat. A quiet region (no miners → no shares) would otherwise never
+      // contact the hub, so its public status pill would read "offline" even though the
+      // node + stratum are perfectly healthy. When the hub is reachable and we haven't
+      // sent anything for HEARTBEAT_MS, POST an empty batch purely to refresh the hub's
+      // per-region last_seen. Empty shares[] is a no-op on the hub (accepted=0).
+      if (hubOk && Date.now() - this.lastSentAt >= HEARTBEAT_MS) {
+        try {
+          await this._post('/api/shares', { region: this.region, shares: [] });
+        } catch (e) { /* hub blipped — next flush retries */ }
       }
     } finally {
       this.flushing = false;

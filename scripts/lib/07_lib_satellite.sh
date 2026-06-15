@@ -233,8 +233,8 @@ sat_service_control() {
         echo -e "  ${GREEN}1${RESET}) Stop    ${GREEN}2${RESET}) Restart    ${DIM}0) Back${RESET}"
         echo -ne "Choice: "; read -r sc
         case "$sc" in
-            1) systemctl stop "$SAT_SERVICE" && success "Stopped." || error "Stop failed." ;;
-            2) systemctl restart "$SAT_SERVICE" && success "Restarted." || error "Restart failed." ;;
+            1) systemctl stop "$SAT_SERVICE" && success "Stopped." || error "Stop failed."; _pool_pause ;;
+            2) systemctl restart "$SAT_SERVICE" && success "Restarted." || error "Restart failed."; _pool_pause ;;
         esac
     else
         echo -e "  Status: ${RED}● stopped${RESET}"
@@ -243,6 +243,7 @@ sat_service_control() {
         # if-form: a trailing `[[ ]] &&` would make "0/back" return 1 → set -e kills the caller
         if [[ "$sc" == "1" ]]; then
             systemctl start "$SAT_SERVICE" && success "Started." || error "Start failed."
+            _pool_pause
         fi
     fi
 }
@@ -321,6 +322,11 @@ pool_satellite_loop() {
             0|q|exit) break ;;
             *)        warn "Invalid option."; sleep 1; continue ;;
         esac
-        echo ""; echo "Press Enter to continue..."; read -r
+        # 4 (service control) is a submenu that self-manages its own feedback and
+        # returns on its own 0) Back — skip here so Back doesn't double-prompt.
+        case "${choice,,}" in
+            4) ;;
+            *) echo ""; echo "Press Enter to continue..."; read -r ;;
+        esac
     done
 }

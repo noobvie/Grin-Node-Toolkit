@@ -123,6 +123,8 @@ class PoolSettings {
       alert_email_address: '',
       discord_webhook_url: '',
       slack_webhook_url: '',
+      telegram_bot_token: '',
+      telegram_chat_id: '',
       alert_large_withdrawal: 100,
       alert_tor_fails_per_week: 3,
       alert_thresholds: '{"wallet_balance_warning_grin":10,"rejection_rate_warning_percent":20,"error_rate_warning_percent":50,"difficulty_change_warning_percent":50}',

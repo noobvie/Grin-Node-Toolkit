@@ -13,6 +13,29 @@
 <main>
   <div class="container">
     <section>
+      <h2>Admin Sessions &amp; Login Activity</h2>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
+        Sessions are stateless tokens, so there is no per-device list. "Revoke sessions" invalidates
+        all refresh tokens for your account — other devices lose access within the 1-hour session
+        window and must log in again.
+      </p>
+      <div style="margin-bottom:.8rem;">
+        <button class="btn btn-sm btn-outline" id="revoke-btn" onclick="revokeSessions()">Revoke all my sessions</button>
+        <span class="success-msg" id="revoke-msg" style="display:none;margin-left:.6rem;"></span>
+      </div>
+      <div class="card" style="padding:0;margin-bottom:1.6rem;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>When</th><th>Event</th><th>User</th><th>IP</th></tr>
+            </thead>
+            <tbody id="login-tbody">
+              <tr class="loading-row"><td colspan="4"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <h2>Manage Users</h2>
 
       <div style="display:flex;gap:.6rem;align-items:center;margin-bottom:.8rem;flex-wrap:wrap;">
@@ -74,6 +97,7 @@
 
 <script src="/js/api.js"></script>
 <script src="/admin/admin-shell.js"></script>
+<script src="/js/stepup.js"></script>
 <script>
 let _isTestnet = false;
 let _allUsers  = [];
@@ -238,7 +262,58 @@ async function confirmInject() {
   }
 }
 
+// ── Sessions & login activity ────────────────────────────────────────────────
+const LOGIN_LABEL = {
+  login_success: ['badge-ok',    'Login'],
+  login_failure: ['badge-error', 'Failed login'],
+  ip_autoban:    ['badge-error', 'IP auto-banned'],
+  logout:        ['badge-dim',   'Logout'],
+};
+async function loadLoginHistory() {
+  const tbody = document.getElementById('login-tbody');
+  try {
+    const d = await API.get('/api/admin/security/login-history');
+    const rows = (d && d.history) || [];
+    if (!rows.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="4">No login activity recorded.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(r => {
+      const [cls, label] = LOGIN_LABEL[r.action] || ['badge-dim', r.action];
+      const when = r.created_at ? new Date(r.created_at * 1000).toLocaleString() : '—';
+      return `<tr>
+        <td>${escHtml(when)}</td>
+        <td><span class="badge ${cls}">${escHtml(label)}</span></td>
+        <td>${escHtml(r.username || '—')}</td>
+        <td class="mono">${escHtml(r.ip || '—')}</td>
+      </tr>`;
+    }).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">Error: ${escHtml(err.message)}</td></tr>`;
+  }
+}
+
+async function revokeSessions() {
+  if (!confirm('Revoke all of your sessions? Every device (including this one) will need to log in again soon.')) return;
+  const btn = document.getElementById('revoke-btn');
+  btn.disabled = true;
+  try {
+    const res = await adminFetch('/api/admin/security/revoke-sessions', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    const msg = document.getElementById('revoke-msg');
+    msg.textContent = body.message || 'Sessions revoked.';
+    msg.style.display = '';
+    loadLoginHistory();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', loadUsers);
+document.addEventListener('DOMContentLoaded', loadLoginHistory);
 
 // Close modal on overlay click
 document.getElementById('inject-modal').addEventListener('click', function (e) {

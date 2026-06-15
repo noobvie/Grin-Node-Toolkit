@@ -1142,6 +1142,276 @@ function setupRoutes() {
     res.json(withdrawalScheduler.getStatus());
   });
 
+  // ─── PAYOUT QUEUE CONTROL (Admin, step-up) ─────────────────────────
+  // The scheduler auto-retries Tor payouts, but a payout can still get stuck
+  // (recipient offline for days) or land in tor_failed after exhausting retries. These two
+  // actions let the operator intervene. Both move money/ledger state → freshAdmin (step-up).
+  //
+  // Funds model (see withdrawal-scheduler.js): retry_scheduled/tor_checking keep the amount in
+  // balance_locked; tor_failed has already reversed it back to spendable balance. retry/cancel
+  // must honour that so the ledger never drifts.
+
+  // Force a stuck/failed withdrawal back into the send queue immediately.
+  app.post('/api/admin/withdrawals/:id/retry', freshAdmin, (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(id);
+      if (!w) return res.status(404).json({ error: 'withdrawal not found' });
+      if (!['retry_scheduled', 'tor_failed'].includes(w.status)) {
+        return res.status(409).json({ error: `cannot retry a withdrawal in status '${w.status}'` });
+      }
+
+      const result = db.transaction(() => {
+        // tor_failed funds were reversed to spendable balance → re-lock them (CAS) before resending.
+        if (w.status === 'tor_failed') {
+          const before = db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(w.grin_address);
+          const locked = db.prepare(
+            `UPDATE miner_accounts SET balance = balance - ?, balance_locked = balance_locked + ?, updated_at = unixepoch()
+             WHERE grin_address = ? AND balance >= ?`
+          ).run(w.amount, w.amount, w.grin_address, w.amount);
+          if (locked.changes !== 1) { const e = new Error('insufficient balance to re-lock for retry'); e.code = 409; throw e; }
+          db.prepare(`
+            INSERT INTO balance_log (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+            VALUES (?, 'lock', ?, ?, ?, ?, ?, 'withdrawal', ?)
+          `).run(w.grin_address, w.amount, before.balance, before.balance - w.amount, before.balance_locked, before.balance_locked + w.amount, id);
+          db.prepare('UPDATE withdrawals SET status = ?, retry_count = 0, next_retry_at = NULL WHERE id = ?').run('tor_checking', id);
+        } else {
+          // retry_scheduled: funds already locked, just move it to the active queue now.
+          db.prepare('UPDATE withdrawals SET status = ?, next_retry_at = NULL WHERE id = ?').run('tor_checking', id);
+        }
+        db.prepare(`
+          INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+          VALUES (?, ?, 'tor_checking', 'admin', ?)
+        `).run(id, w.status, 'manual retry by admin');
+        return true;
+      })();
+
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'withdrawal_retry', 'withdrawal', ?, ?, ?)
+      `).run(req.user.user_id, String(id), JSON.stringify({ address: w.grin_address, amount: w.amount, from_status: w.status }), req.ip);
+
+      res.json({ success: true, id, queued: result });
+    } catch (err) {
+      res.status(err.code || 500).json({ error: err.message });
+    }
+  });
+
+  // Cancel a pending/failed withdrawal and return the funds to the miner's spendable balance.
+  app.post('/api/admin/withdrawals/:id/cancel', freshAdmin, (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const reason = String((req.body && req.body.reason) || '').slice(0, 280) || null;
+      const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(id);
+      if (!w) return res.status(404).json({ error: 'withdrawal not found' });
+      if (w.status === 'tor_sending') return res.status(409).json({ error: 'cannot cancel a withdrawal that is currently sending' });
+      if (!['retry_scheduled', 'tor_checking', 'tor_failed'].includes(w.status)) {
+        return res.status(409).json({ error: `cannot cancel a withdrawal in status '${w.status}'` });
+      }
+
+      db.transaction(() => {
+        // retry_scheduled / tor_checking still hold the amount in balance_locked → release it.
+        // tor_failed already reversed locked→balance, so the money is back; just record the cancel.
+        if (w.status !== 'tor_failed') {
+          const before = db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(w.grin_address);
+          db.prepare(
+            `UPDATE miner_accounts SET balance = balance + ?, balance_locked = CASE WHEN balance_locked >= ? THEN balance_locked - ? ELSE 0 END, updated_at = unixepoch()
+             WHERE grin_address = ?`
+          ).run(w.amount, w.amount, w.amount, w.grin_address);
+          db.prepare(`
+            INSERT INTO balance_log (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+            VALUES (?, 'reversal', ?, ?, ?, ?, ?, 'withdrawal', ?)
+          `).run(w.grin_address, w.amount, before.balance, before.balance + w.amount, before.balance_locked, Math.max(0, before.balance_locked - w.amount), id);
+        }
+        db.prepare('UPDATE withdrawals SET status = ?, cancelled_by = ?, cancel_reason = ? WHERE id = ?')
+          .run('cancelled', req.user.user_id, reason, id);
+        db.prepare(`
+          INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+          VALUES (?, ?, 'cancelled', 'admin', ?)
+        `).run(id, w.status, reason || 'cancelled by admin');
+      })();
+
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'withdrawal_cancel', 'withdrawal', ?, ?, ?)
+      `).run(req.user.user_id, String(id), JSON.stringify({ address: w.grin_address, amount: w.amount, from_status: w.status, reason }), req.ip);
+
+      res.json({ success: true, id, refunded: w.status !== 'tor_failed', amount: w.amount });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── WALLET ↔ LEDGER RECONCILIATION (Admin) ────────────────────────
+  // The single most important custodial safety check: does the on-chain wallet actually hold
+  // at least what the pool owes its miners? Compares wallet balance (source of truth for coins)
+  // against the SQLite ledger (source of truth for who is owed what). A negative coverage gap =
+  // the pool is under-funded; a balance_locked vs pending-withdrawals mismatch = a stuck ledger.
+  app.get('/api/admin/reconciliation', secureAdmin, async (req, res) => {
+    try {
+      const ledger = db.prepare(
+        `SELECT COALESCE(SUM(balance),0) AS sum_balance, COALESCE(SUM(balance_locked),0) AS sum_locked,
+                COUNT(*) AS accounts FROM miner_accounts`
+      ).get();
+      const pending = db.prepare(
+        `SELECT COALESCE(SUM(amount),0) AS amt, COUNT(*) AS cnt FROM withdrawals
+         WHERE status IN ('tor_checking','tor_sending','retry_scheduled')`
+      ).get();
+      const prizePool = (() => { try { return incentivesManager ? incentivesManager.prizePoolBalance() : 0; } catch (e) { return 0; } })();
+
+      // Wallet (on-chain) balance — same path as /api/admin/health/wallet.
+      let walletReachable = false;
+      let walletBalance = { total: 0, available: 0, locked: 0 };
+      if (wallet && wallet.getBalance) {
+        try {
+          const summary = await wallet.getBalance();
+          const info = Array.isArray(summary) ? summary[1] : (summary || {});
+          walletBalance = {
+            total: Number(info.total || 0) / 1e9,
+            available: Number(info.amount_currently_spendable || 0) / 1e9,
+            locked: Number(info.amount_locked || 0) / 1e9,
+          };
+          walletReachable = true;
+        } catch (e) { walletReachable = false; }
+      }
+
+      const owed = ledger.sum_balance + ledger.sum_locked; // total the pool owes (incl. prize bucket)
+      const coverage_gap = parseFloat((walletBalance.total - owed).toFixed(9)); // ≥0 healthy, <0 under-funded
+      const locked_drift = parseFloat((ledger.sum_locked - pending.amt).toFixed(9)); // should be ~0
+      const TOL = 1e-6;
+
+      res.json({
+        success: true,
+        timestamp: new Date().toISOString(),
+        wallet: { reachable: walletReachable, ...walletBalance },
+        ledger: {
+          spendable_owed: parseFloat(ledger.sum_balance.toFixed(9)),
+          locked_owed: parseFloat(ledger.sum_locked.toFixed(9)),
+          total_owed: parseFloat(owed.toFixed(9)),
+          accounts: ledger.accounts,
+          prize_pool: parseFloat((prizePool || 0).toFixed(9)),
+        },
+        pending_withdrawals: { count: pending.cnt, amount: parseFloat(pending.amt.toFixed(9)) },
+        checks: {
+          // Wallet covers what miners are owed.
+          coverage_gap,
+          coverage_ok: !walletReachable ? null : coverage_gap >= -TOL,
+          // Locked ledger equals in-flight withdrawal amounts.
+          locked_drift,
+          locked_ok: Math.abs(locked_drift) <= TOL,
+        },
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── POOL BLOCKS EXPLORER (Admin) ──────────────────────────────────
+  // Pool-found blocks with maturity countdown + GrinScan deep-links. Distinct from the public
+  // chain explorer (grinscan.org): this is only THIS pool's blocks, with payout-relevant context
+  // (status, maturity, orphan reversals) that a chain explorer cannot have.
+  app.get('/api/admin/blocks', secureAdmin, async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit || 50, 10), 500);
+      const offset = parseInt(req.query.offset || 0, 10);
+      const status = req.query.status || null;
+
+      const where = status ? 'WHERE status = ?' : '';
+      const args = status ? [status, limit, offset] : [limit, offset];
+      const rows = db.prepare(
+        `SELECT id, height, hash, nonce, reward, status, found_by, found_at, confirmed_at, created_at
+         FROM blocks ${where} ORDER BY height DESC LIMIT ? OFFSET ?`
+      ).all(...args);
+
+      // Current tip → maturity countdown. confirm_depth depends on the network.
+      const confirmDepth = config.network === 'testnet'
+        ? (config.confirm_depth_testnet || 100)
+        : (config.confirm_depth_mainnet || 1440);
+      let tipHeight = 0;
+      try {
+        const st = await blockMonitor.grinNode.getStatus();
+        tipHeight = (st && st.ok && st.height) || 0;
+      } catch (e) { tipHeight = 0; }
+
+      const grinscanBase = config.network === 'testnet'
+        ? 'https://testnet.grinscan.org/block'
+        : 'https://grinscan.org/block';
+
+      const blocks = rows.map((b) => {
+        const confirmations = tipHeight ? Math.max(0, tipHeight - b.height) : 0;
+        const blocks_to_maturity = (b.status === 'confirmed' || b.status === 'orphaned')
+          ? 0 : Math.max(0, confirmDepth - confirmations);
+        return {
+          ...b,
+          confirmations,
+          blocks_to_maturity,
+          grinscan_url: `${grinscanBase}/${b.height}`,
+        };
+      });
+
+      res.json({
+        success: true,
+        tip_height: tipHeight,
+        confirm_depth: confirmDepth,
+        network: config.network,
+        summary: blockManager.getPoolStats(),
+        count: blocks.length,
+        blocks,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── FINANCIAL EXPORT (Admin, CSV) ─────────────────────────────────
+  // Plain-CSV downloads for accounting/tax. Cookie-authenticated GETs so a normal browser
+  // download link works (same-origin sends the httpOnly session cookie); still IP+auth gated.
+  const csvCell = (v) => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const sendCsv = (res, filename, header, rows) => {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    const lines = [header.join(',')];
+    for (const r of rows) lines.push(r.map(csvCell).join(','));
+    res.send(lines.join('\r\n') + '\r\n');
+  };
+
+  // All confirmed payouts.
+  app.get('/api/admin/export/payouts.csv', secureAdmin, (req, res) => {
+    try {
+      const rows = db.prepare(
+        `SELECT id, grin_address, amount, fee, status, created_at, confirmed_at
+         FROM withdrawals WHERE status = 'confirmed' ORDER BY confirmed_at DESC`
+      ).all();
+      const iso = (t) => (t ? new Date(t * 1000).toISOString() : '');
+      sendCsv(res, `payouts-${config.network}.csv`,
+        ['id', 'grin_address', 'amount_grin', 'fee_grin', 'status', 'created_at', 'confirmed_at'],
+        rows.map((r) => [r.id, r.grin_address, r.amount, r.fee, r.status, iso(r.created_at), iso(r.confirmed_at)]));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Pool-fee revenue per found block (reward × pool_fee_percent). An honest, derived report —
+  // the pool's cut of each block, not a separately stored figure.
+  app.get('/api/admin/export/fee-revenue.csv', secureAdmin, (req, res) => {
+    try {
+      const feePct = parseFloat(config.pool_fee_percent != null ? config.pool_fee_percent : 1.0) || 0;
+      const rows = db.prepare(
+        `SELECT height, hash, reward, status, found_at FROM blocks ORDER BY height DESC`
+      ).all();
+      const iso = (t) => (t ? new Date(t * 1000).toISOString() : '');
+      sendCsv(res, `fee-revenue-${config.network}.csv`,
+        ['height', 'hash', 'reward_grin', 'pool_fee_percent', 'pool_cut_grin', 'status', 'found_at'],
+        rows.map((r) => [r.height, r.hash, r.reward, feePct,
+          parseFloat((r.reward * feePct / 100).toFixed(9)), r.status, iso(r.found_at)]));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/account/:addr/balance', (req, res) => {
     try {
       const { addr } = req.params;
@@ -1765,6 +2035,72 @@ function setupRoutes() {
   });
 
   // ─── Alert System (Real-time monitoring & notifications) ──────────────────────
+  // ─── ADMIN SESSIONS / LOGIN ACTIVITY (Admin) ───────────────────────
+  // Sessions are stateless JWTs (no server-side session table), so there is no per-device
+  // list to enumerate. What the operator CAN see + control: recent login activity (from the
+  // audit log) and a "revoke sessions" kill-switch (bumps token_version → invalidates all
+  // refresh tokens for the account; live access tokens still expire within their 1h TTL).
+  app.get('/api/admin/security/login-history', secureAdmin, (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit || 50, 10), 200);
+      const rows = db.prepare(`
+        SELECT a.id, a.action, a.ip, a.created_at, u.username
+        FROM admin_audit_log a LEFT JOIN users u ON u.id = a.admin_id
+        WHERE a.action IN ('login_success','login_failure','ip_autoban','logout')
+        ORDER BY a.id DESC LIMIT ?
+      `).all(limit);
+      res.json({ success: true, count: rows.length, history: rows });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/security/revoke-sessions', freshAdmin, (req, res) => {
+    try {
+      authManager.revokeUserTokens(req.user.user_id);
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'revoke_sessions', 'auth', ?, '{}', ?)
+      `).run(req.user.user_id, String(req.user.user_id), req.ip);
+      res.json({
+        success: true,
+        message: 'All refresh tokens revoked. Other devices lose access within the 1-hour session window; re-login required.'
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── ALERT TEST DELIVERY (Admin) ───────────────────────────────────
+  // Fire a synthetic alert through the live delivery channels (email/Discord/Slack/Telegram)
+  // so the operator can confirm notifications actually arrive before relying on them. Channels
+  // are read from the running config (pool.json) — the response reports which are configured.
+  app.post('/api/admin/alerts/test', secureAdmin, async (req, res) => {
+    try {
+      if (!alertDelivery) return res.status(503).json({ error: 'alert delivery not initialised' });
+      const channels = alertDelivery.configuredChannels ? alertDelivery.configuredChannels() : {};
+      const anyConfigured = Object.values(channels).some(Boolean);
+      if (!anyConfigured) {
+        return res.status(400).json({ error: 'No alert channels are configured. Set a webhook / email / Telegram in pool.json first.', channels });
+      }
+      await alertDelivery.send({
+        type: 'test_alert',
+        level: 'info',
+        message: `Test alert from ${config.pool_name || 'Grin Pool'} — if you see this, notifications work.`,
+        occurrence_count: 1,
+        triggered_at: Date.now(),
+        data: JSON.stringify({ test: true, network: config.network }),
+      });
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'alert_test', 'alerts', 'test', ?, ?)
+      `).run(req.user.user_id, JSON.stringify({ channels }), req.ip);
+      res.json({ success: true, channels, message: 'Test alert dispatched to all configured channels.' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/admin/alerts', secureAdmin, (req, res) => {
     try {
       const status = req.query.status || 'active'; // 'active' or 'resolved'
@@ -2338,7 +2674,7 @@ function setupRoutes() {
       const where = search ? 'WHERE ma.grin_address LIKE ?' : '';
       const args = search ? [search, limit, offset] : [limit, offset];
       const rows = db.prepare(`
-        SELECT ma.grin_address, ma.balance, ma.balance_locked, ma.is_online, ma.last_seen_at, ma.created_at,
+        SELECT ma.grin_address, ma.balance, ma.balance_locked, ma.is_online, ma.is_banned, ma.ban_reason, ma.last_seen_at, ma.created_at,
                (SELECT COUNT(*) FROM shares s WHERE s.grin_address = ma.grin_address) AS shares_count,
                (SELECT MAX(created_at) FROM shares s WHERE s.grin_address = ma.grin_address) AS last_share_at,
                (SELECT COALESCE(SUM(amount),0) FROM withdrawals w WHERE w.grin_address = ma.grin_address AND w.status='confirmed') AS total_paid
@@ -2427,6 +2763,40 @@ function setupRoutes() {
       `).run(req.user.user_id, addr, JSON.stringify({ amount, balance: injected }), req.ip);
 
       res.json({ success: true, grin_address: addr, amount, balance: injected });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Ban / unban a mining address (abuse control). Banning blocks future stratum logins +
+  // drops live sessions; the balance is left intact so anything already owed can still be
+  // paid out. Step-up gated (freshAdmin) — it's a moderation/access action.
+  app.post('/api/admin/miners/:addr/ban', freshAdmin, (req, res) => {
+    try {
+      const addr = String(req.params.addr || '').trim();
+      const reason = String((req.body && req.body.reason) || '').slice(0, 280) || null;
+      if (!addr) return res.status(400).json({ error: 'address required' });
+      minerManager.banMiner(addr, reason);
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'miner_ban', 'miner_account', ?, ?, ?)
+      `).run(req.user.user_id, addr, JSON.stringify({ reason }), req.ip);
+      res.json({ success: true, grin_address: addr, is_banned: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/miners/:addr/unban', freshAdmin, (req, res) => {
+    try {
+      const addr = String(req.params.addr || '').trim();
+      if (!addr) return res.status(400).json({ error: 'address required' });
+      minerManager.unbanMiner(addr);
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'miner_unban', 'miner_account', ?, '{}', ?)
+      `).run(req.user.user_id, addr, req.ip);
+      res.json({ success: true, grin_address: addr, is_banned: false });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

@@ -211,6 +211,18 @@ class StratumServer {
       return;
     }
 
+    // Moderation gate: a banned address is refused before a session is created, so it
+    // cannot submit shares. The balance row is left untouched (banMiner never deletes it),
+    // so anything already owed can still be paid out.
+    if (this.minerManager.isBanned(parsed.grin_address)) {
+      socket.write(JSON.stringify(
+        createLoginResponse(id, { code: -1, message: 'This address is banned from the pool.' })
+      ) + '\n');
+      socket.destroy();
+      console.warn(`[${new Date().toISOString()}] Rejected banned miner login: ${parsed.grin_address} (${ip})`);
+      return;
+    }
+
     this.minerManager.ensureMinerExists(parsed.grin_address);
 
     // Capture the miner's source IP into its last-2-IP window (backs the ownership gate for

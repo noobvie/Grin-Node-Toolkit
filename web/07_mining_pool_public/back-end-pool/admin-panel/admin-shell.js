@@ -20,6 +20,7 @@
     { file: 'index.html',    title: 'Dashboard',     ico: '📊' },
     { file: 'miners.html',   title: 'Miners',        ico: '⛏'  },
     { file: 'payments.html', title: 'Payouts',       ico: '💸' },
+    { file: 'blocks.html',   title: 'Blocks',        ico: '🧱' },
     { file: 'users.html',    title: 'Users',         ico: '👥' },
     { file: 'health.html',   title: 'System Health', ico: '🩺' },
     { file: 'settings.html', title: 'Settings',      ico: '⚙'  }

@@ -44,6 +44,32 @@
         </div>
       </div>
 
+      <!-- ── Custodial reconciliation ─────────────────────────────────────── -->
+      <h2 style="margin-top:1.6rem;">Wallet ↔ Ledger Reconciliation</h2>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
+        Does the on-chain wallet hold at least what the pool owes its miners? A negative coverage
+        gap means the pool is under-funded; locked drift should stay near zero.
+      </p>
+      <div id="recon-banner"></div>
+      <div class="kpi-grid" id="recon-kpi">
+        <div class="kpi-card"><div class="kpi-label">Wallet Total ツ</div><div class="kpi-value" id="rc-wallet">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Owed to Miners ツ</div><div class="kpi-value" id="rc-owed">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Coverage Gap ツ</div><div class="kpi-value" id="rc-gap">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Locked Drift ツ</div><div class="kpi-value" id="rc-drift">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Pending Payouts</div><div class="kpi-value" id="rc-pending">—</div></div>
+      </div>
+
+      <!-- ── Satellites ───────────────────────────────────────────────────── -->
+      <h2 style="margin-top:1.6rem;">Satellites (regions)</h2>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
+        Live heartbeat from each remote mining region. Secret rotation is config-level
+        (<span class="mono">hub_shared_secret</span> in <span class="mono">grin_pubpool.json</span> /
+        <span class="mono">grin_satellite.json</span> + restart).
+      </p>
+      <div class="health-grid" id="sat-grid">
+        <div class="health-card"><div class="health-name">Loading…</div></div>
+      </div>
+
     </section>
   </div>
 </main>
@@ -134,9 +160,69 @@ async function loadHealth() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', loadHealth);
+// ── Reconciliation ──────────────────────────────────────────────────────────
+function fmtGrin(v) { return (Number(v) || 0).toFixed(4); }
+async function loadReconciliation() {
+  try {
+    const d = await API.get('/api/admin/reconciliation');
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('rc-wallet',  d.wallet && d.wallet.reachable ? fmtGrin(d.wallet.total) : 'unreachable');
+    set('rc-owed',    fmtGrin(d.ledger.total_owed));
+    set('rc-gap',     fmtGrin(d.checks.coverage_gap));
+    set('rc-drift',   fmtGrin(d.checks.locked_drift));
+    set('rc-pending', `${d.pending_withdrawals.count} (${fmtGrin(d.pending_withdrawals.amount)} ツ)`);
+
+    const banner = document.getElementById('recon-banner');
+    const problems = [];
+    if (d.checks.coverage_ok === false) problems.push('⚠ Wallet does NOT cover what miners are owed (under-funded).');
+    if (d.checks.locked_ok === false) problems.push('⚠ Locked-balance ledger does not match in-flight withdrawals.');
+    if (d.wallet && !d.wallet.reachable) problems.push('Wallet was unreachable — coverage check skipped.');
+    if (problems.length) {
+      banner.innerHTML = `<div class="health-card error" style="margin-bottom:.8rem;">
+        <div class="health-detail">${problems.map(escHtml).join('<br>')}</div></div>`;
+    } else {
+      banner.innerHTML = `<div class="health-card ok" style="margin-bottom:.8rem;">
+        <div class="health-detail">✓ Wallet covers all miner balances; ledger is consistent.</div></div>`;
+    }
+  } catch (err) {
+    document.getElementById('recon-banner').innerHTML =
+      `<div class="health-card error" style="margin-bottom:.8rem;"><div class="health-detail">Error: ${escHtml(err.message)}</div></div>`;
+  }
+}
+
+// ── Satellites ────────────────────────────────────────────────────────────────
+async function loadSatellites() {
+  const grid = document.getElementById('sat-grid');
+  try {
+    const d = await API.get('/api/admin/health/satellites');
+    const sats = d.satellites || [];
+    if (!sats.length) {
+      const note = d.ingestion_enabled
+        ? 'No satellites have reported in yet.'
+        : 'Satellite ingestion is disabled (no hub_shared_secret set).';
+      grid.innerHTML = `<div class="health-card"><div class="health-detail">${escHtml(note)}</div></div>`;
+      return;
+    }
+    grid.innerHTML = sats.map(s => {
+      const cls = s.status === 'online' ? 'ok' : (s.status === 'stale' ? 'warn' : 'error');
+      const badge = `<span class="badge badge-${cls === 'ok' ? 'ok' : (cls === 'warn' ? 'warn' : 'error')}">${escHtml(s.status)}</span>`;
+      return `<div class="health-card ${cls}">
+        <div class="health-name">${escHtml(s.region)} ${badge}</div>
+        <div class="health-detail" style="margin-top:.4rem;">
+          Last seen: ${s.age_seconds}s ago<br>
+          Shares: ${s.shares_accepted} (${s.shares_skipped} skipped)<br>
+          Blocks: ${s.blocks} · IP: ${escHtml(s.ip || '—')}
+        </div></div>`;
+    }).join('');
+  } catch (err) {
+    grid.innerHTML = `<div class="health-card error"><div class="health-detail">Error: ${escHtml(err.message)}</div></div>`;
+  }
+}
+
+function loadAll() { loadHealth(); loadReconciliation(); loadSatellites(); }
+document.addEventListener('DOMContentLoaded', loadAll);
 // Auto-refresh every 30s
-setInterval(loadHealth, 30000);
+setInterval(loadAll, 30000);
 </script>
 </body>
 </html>

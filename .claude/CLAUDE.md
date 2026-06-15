@@ -437,8 +437,41 @@ Key design decisions (locked in — do not change without user confirmation):
   layer. The **only** admin login page is `public_html/login.html` (served at `/login.html`,
   the public zone — must stay reachable so the operator can always authenticate); on success it redirects
   straight to `/admin/` (there is **no** `admin-dashboard.html`). The whole management surface is the one
-  combined `/admin/` panel — `back-end-pool/admin-panel/{index,miners,payments,settings,users,health}.html` —
+  combined `/admin/` panel — `back-end-pool/admin-panel/{index,miners,payments,blocks,settings,users,health}.html` —
   rsynced to the nginx-gated docroot.
+  **Admin panel shell — shared chrome via `admin-shell.js` (reorg 2026-06; admin-nav.js approach dropped on merge):**
+  every admin page ships only its `<main>` content and loads `admin-panel/admin-shell.js` (served at
+  `/admin/admin-shell.js`, load order `api.js → admin-shell.js → page inline script`). admin-shell.js injects the
+  left sidebar + a topbar, wraps the page `<main>` in `.admin-main`, and removes any leftover legacy chrome
+  (`body > header`/`footer`/`.testnet-banner`). The old per-page top `<header>`/`nav-links` and the 5-theme
+  chrome switcher were **removed**. The single `NAV` array in admin-shell.js is the source of truth for nav items:
+  Dashboard / Miners / Payouts / Blocks / Users / System Health / Settings (flat — edit `NAV` once to add/reorder).
+  `settings.html` tab switching is **hash-driven** (`tabFromHash()`/`hashchange`), so a direct URL like
+  `settings.html#access` still opens the Access Control tab even though the sidebar lists a single flat Settings
+  entry. Layout uses `admin-panel/styles.css` `.admin-sidebar` (fixed) + `.admin-main` wrapper; `#nav-user` lives
+  in the topbar and is populated by `API.guardAdminPage()`. Admin chrome theme is a Dark/Light toggle handled by
+  admin-shell.js itself (storage key `admin-ui-mode` — deliberately NOT `admin-theme`, which branding.js uses for
+  the public default_theme) — Matrix/Naruto/Japan dropped from admin chrome. Pages with step-up-gated actions
+  (miners ban/unban, payouts retry/cancel, settings, users revoke) additionally load `/js/stepup.js` for `adminFetch`.
+  **Public theme simplified (2026-06):** the Branding→Theme surface is now a single "Public Site Theme" select
+  with only `{atomic(default), light}`. The Custom Theme Builder, the "themes visitors can switch between"
+  multiselect, the accent-colour picker and `custom_css` were removed. `saveSection('branding')` **forces**
+  `allow_theme_switch=false` + `enabled_themes=[default_theme]`, so `public-theme.js` renders the one chosen
+  theme with no visitor switcher. The old theme-builder JS (`renderThemeBuilder`/`collectEnabledThemes`/
+  `exportTheme`…) is now guarded dead code (no live callers). **Logo/Slogan/SEO config is untouched** — Logo &
+  Icons, App Icons, Typography, Hero/Slogan, Social (Branding tab), `pool_tagline` (Pool Info), and the whole
+  SEO tab all still work.
+  **GA4 in the SEO tab (2026-06):** the SEO tab has a convenience `#seo_ga_tracking_id` field (`settings-skip`,
+  so the generic harvester ignores it). On SEO save, `pushSeoGa4ToAnalytics()` mirrors it into the Analytics-tab
+  `#provider`/`#ga_tracking_id` and saves the **full** analytics section (`saveSection('analytics',{quiet})`) —
+  so Plausible/Umami/Matomo are never clobbered and there's ONE source of truth (`analytics.ga_tracking_id`,
+  which `branding.js loadGa4()` already reads). It's loaded back from the analytics config in `populateBuilders`.
+  **Swinging logo unified (2026-06):** public pages now ship a static `<img class="brand-logo" src="/images/logo.svg">`
+  in `.brand` (the old pulsing `.dot` span is gone), and the `brandSwing` keyframe lives in static
+  `css/dashboard.css` — so the logo swings even before/without `branding.js` (fixes the homepage looking
+  static). `branding.js enhanceBrand()` no longer early-returns when a `.brand-logo` exists: it repoints the src
+  to a custom `logo_url` and still adds the slogan. The admin sidebar brand reuses the same `.brand-logo`+
+  `brandSwing` (defined in `admin-panel/styles.css`) so public and admin match.
   **httpOnly cookie ↔ admin-page guard (CRITICAL, fixed 2026-06):** the session token is an `httpOnly`
   cookie, so **client JS cannot read or decode it** — that is the whole point of httpOnly. Admin pages must
   therefore NEVER try to decode the JWT locally to check auth. The original guard did
@@ -524,6 +557,62 @@ Key design decisions (locked in — do not change without user confirmation):
   **runtime-only** (ipFilter in-memory; reset on restart — a deliberate break-glass escape from a bad
   allowlist). Permanent rules still live in config: `admin_ip_allowlist` (app) + `admin_allowlist` (nginx).
   The tab loads on open (`switchTab('access') → loadIpFilter()`).
+- **Admin operations features (added 2026-06) — payout/ledger/blocks/moderation tooling.** Seven
+  operator tools were added on top of the existing panel. All money/destructive ones are step-up
+  gated (`freshAdmin` + `adminFetch`); read-only ones are `secureAdmin`:
+  - **Payout queue control** — `POST /api/admin/withdrawals/:id/retry` + `…/cancel` (freshAdmin).
+    Retry re-queues a `retry_scheduled`/`tor_failed` payout (a `tor_failed` one is **re-locked**
+    first via CAS `balance>=amount`, since `markFailed` already reversed locked→balance — skipping
+    that would double-spend the ledger). Cancel refunds locked→balance for `retry_scheduled`/
+    `tor_checking` (sets status `cancelled`, fills the pre-existing `withdrawals.cancelled_by`/
+    `cancel_reason` cols); a `tor_failed` cancel only records the cancel (funds already returned).
+    `tor_sending` is never actionable (in flight). UI: rewritten `admin-panel/payments.html`
+    (filter chips by real status, Retry/Cancel buttons) — the OLD payments.html was **stale**
+    (hit a nonexistent `/pay`, used `tx_slate_id`/`username`/`waiting_finalize` that aren't in the
+    real schema).
+  - **Wallet↔ledger reconciliation** — `GET /api/admin/reconciliation` (secureAdmin): compares
+    on-chain `wallet.getBalance()` total vs. ledger owed (Σ`balance`+Σ`balance_locked` over
+    miner_accounts, incl. prize bucket). `coverage_gap = wallet.total − owed` (<0 = under-funded);
+    `locked_drift = Σbalance_locked − Σ(pending withdrawal amounts)` (should be ~0). Surfaced as a
+    card on `health.html`. The single most important custodial safety check.
+  - **Pool blocks explorer** — `GET /api/admin/blocks?status=&limit=&offset=` (secureAdmin) + NEW
+    page `admin-panel/blocks.html` + a "Blocks" entry in the `admin-shell.js` `NAV` array.
+    Pool-found blocks only, with maturity countdown (`confirm_depth − (tip−height)`; tip from
+    `blockMonitor.grinNode.getStatus().height`) + a **GrinScan deep-link per block**
+    (`grinscan.org/block/<height>`, testnet→`testnet.grinscan.org`). Distinct from GrinScan (06b),
+    which is the whole-chain explorer and can't know pool payout/orphan context. Summary KPIs come
+    from `blockManager.getPoolStats()` (the standalone `blockManager`, NOT `blockMonitor` — that has
+    only `grinNode`/`orphanDetector`).
+  - **Per-miner ban (moderation)** — `miner_accounts` gained `is_banned`/`ban_reason`/`banned_at`
+    (additive `migrateMinerAccounts()` in db.js, + columns on the CREATE TABLE). `miners.js`
+    `isBanned()`/`banMiner()`/`unbanMiner()`; **stratum `handleLogin` rejects a banned address
+    before creating a session** (and `banMiner` drops live sessions). Balance is deliberately KEPT
+    on ban so owed GRIN can still pay out. Endpoints `POST /api/admin/miners/:addr/ban|unban`
+    (freshAdmin). UI: rewritten `miners.html` (also stale before — `/api/admin/miners` returns
+    `{miners:[…]}` with `grin_address`, not the old `m.worker`/array shape).
+  - **Admin sessions / login activity** — sessions are stateless JWTs (no session table), so there's
+    no per-device list. `GET /api/admin/security/login-history` (from `admin_audit_log`
+    login_success/failure/ip_autoban/logout) + `POST /api/admin/security/revoke-sessions`
+    (freshAdmin → `authManager.revokeUserTokens` bumps `token_version`). **Honest limitation:** the
+    auth middleware verifies only the JWT signature, NOT `token_version` per request, so revoke kills
+    refresh tokens but live access tokens persist up to their 1h TTL. UI panel on `users.html`
+    (which is otherwise stale — `/api/admin/users` has no backend route; admin-user CRUD was never
+    built).
+  - **Notification delivery: Telegram + test** — email/Discord/Slack already existed in
+    `lib/alert-delivery.js`; added a **Telegram** channel (Bot API `sendMessage`, reads
+    `config.telegram_bot_token`/`telegram_chat_id`) + `configuredChannels()`. `POST
+    /api/admin/alerts/test` (secureAdmin) fires a synthetic alert through the live channels. Alert
+    channels are sourced from the running `config` (pool.json), **not** the `alerts` settings
+    section (the section's webhook/email keys are informational unless wired into config — a
+    pre-existing disconnect). Telegram fields + "Send test alert" button added to the settings
+    Alerts tab; `telegram_bot_token`/`telegram_chat_id` added to the `alerts` settings defaults.
+  - **Financial export (CSV)** — `GET /api/admin/export/payouts.csv` (confirmed withdrawals) +
+    `…/fee-revenue.csv` (per-block pool cut = `reward × pool_fee_percent`, derived not stored), both
+    secureAdmin. Plain `<a href>` download links (same-origin sends the httpOnly cookie) on
+    payments.html.
+  - **Already-built, untouched:** maintenance mode (notices section + Announcements tab) was fully
+    present; satellite heartbeat health is read-only on health.html (secret rotation stays
+    config-level: `hub_shared_secret` in `grin_pubpool.json`/`grin_satellite.json` + restart).
   **No miner accounts — reaffirmed 2026-06.** An optional miner-account layer (`miner_users` table,
   signup bonus, public Sign In/Register) was prototyped then deliberately removed: it adds operator
   burden with no safety gain (the address already IS the identity, and payouts are permanently bound

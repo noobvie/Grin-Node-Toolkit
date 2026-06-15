@@ -113,6 +113,21 @@ header {
     0%, 100% { box-shadow: 0 0 0 4px var(--accent-soft), 0 0 8px var(--glow); }
     50%      { box-shadow: 0 0 0 6px var(--accent-soft), 0 0 18px var(--glow); }
 }
+/* Swinging brand logo — defined in static CSS (not only branding.js) so the swing shows even
+   if /api/public/branding is slow or blocked. Mirrors the admin sidebar logo. */
+.brand .brand-logo {
+    width: 28px; height: 28px; flex: 0 0 auto;
+    transform-origin: 50% 8%;
+    animation: brandSwing 3.2s ease-in-out infinite;
+}
+@keyframes brandSwing {
+    0%   { transform: rotate(-40deg); }
+    50%  { transform: rotate(40deg); }
+    100% { transform: rotate(-40deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .brand .brand-logo { animation: none; }
+}
 .header-nav { display: flex; gap: 4px; flex: 1; }
 .nav-link {
     color: var(--text-dim); padding: 8px 12px; border-radius: var(--radius-sm);

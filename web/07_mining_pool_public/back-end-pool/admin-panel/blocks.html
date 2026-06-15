@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blocks | Grin Pool ツ</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+</head>
+<body>
+
+<main>
+  <div class="container">
+    <section>
+      <h2>
+        Pool Blocks
+        <span id="tip-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
+      </h2>
+
+      <!-- Summary KPIs -->
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-label">Blocks Found</div><div class="kpi-value" id="kpi-total">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Confirmed</div><div class="kpi-value" id="kpi-confirmed">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Immature</div><div class="kpi-value" id="kpi-immature">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Found (24h / 7d)</div><div class="kpi-value" id="kpi-recent">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Total Reward ツ</div><div class="kpi-value" id="kpi-reward">—</div></div>
+      </div>
+
+      <div class="tabs" id="filter-chips" style="margin-top:.8rem;">
+        <button class="tab-btn active" data-filter=""          onclick="setFilter('', this)">All</button>
+        <button class="tab-btn"        data-filter="immature"  onclick="setFilter('immature', this)">Maturing</button>
+        <button class="tab-btn"        data-filter="confirmed" onclick="setFilter('confirmed', this)">Confirmed</button>
+        <button class="tab-btn"        data-filter="orphaned"  onclick="setFilter('orphaned', this)">Orphaned</button>
+      </div>
+
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Height</th>
+                <th>Status</th>
+                <th>Maturity</th>
+                <th>Reward ツ</th>
+                <th>Found by</th>
+                <th>Found at</th>
+                <th>Chain</th>
+              </tr>
+            </thead>
+            <tbody id="blocks-tbody">
+              <tr class="loading-row"><td colspan="7"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p style="font-size:.8rem;color:var(--text-dim);margin-top:.6rem;">
+        Pool-found blocks only. "Maturity" counts down the
+        <span id="depth-note">—</span>-block coinbase maturity before a block pays out;
+        orphaned blocks have their payouts reversed. The Chain link opens the block on GrinScan.
+      </p>
+    </section>
+  </div>
+</main>
+
+<script src="/js/api.js"></script>
+<script src="/admin/admin-shell.js"></script>
+<script>
+let _filter = '';
+
+// Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
+// up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
+API.guardAdminPage();
+
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtTs(t) { return t ? new Date(t * 1000).toLocaleString() : '—'; }
+function shortAddr(a) {
+  a = String(a || '');
+  return a.length > 16 ? a.slice(0, 8) + '…' + a.slice(-5) : a;
+}
+
+const STATUS = {
+  immature:  ['badge-warn',  'Maturing'],
+  confirmed: ['badge-ok',    'Confirmed'],
+  orphaned:  ['badge-error', 'Orphaned'],
+};
+
+async function loadBlocks() {
+  const tbody = document.getElementById('blocks-tbody');
+  try {
+    const q = _filter ? ('?status=' + encodeURIComponent(_filter)) : '';
+    const data = await API.get('/api/admin/blocks' + q);
+    const s = data.summary || {};
+    document.getElementById('kpi-total').textContent     = s.total_blocks_found ?? '—';
+    document.getElementById('kpi-confirmed').textContent = s.confirmed_blocks ?? '—';
+    document.getElementById('kpi-immature').textContent  = s.immature_blocks ?? '—';
+    document.getElementById('kpi-recent').textContent    = `${s.blocks_24h ?? 0} / ${s.blocks_7d ?? 0}`;
+    document.getElementById('kpi-reward').textContent    = (Number(s.total_reward) || 0).toFixed(2);
+    document.getElementById('tip-summary').textContent   =
+      data.tip_height ? `chain tip ${data.tip_height.toLocaleString()}` : 'node unreachable';
+    document.getElementById('depth-note').textContent    = data.confirm_depth || '—';
+
+    const blocks = data.blocks || [];
+    if (!blocks.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No blocks in this view.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = blocks.map(b => {
+      const [cls, label] = STATUS[b.status] || ['badge-dim', b.status];
+      const maturity = (b.status === 'confirmed' || b.status === 'orphaned')
+        ? '—'
+        : (b.blocks_to_maturity > 0 ? `${b.blocks_to_maturity.toLocaleString()} blocks left` : 'ready');
+      return `<tr>
+        <td class="mono">${b.height.toLocaleString()}</td>
+        <td><span class="badge ${cls}">${escHtml(label)}</span></td>
+        <td>${escHtml(maturity)}</td>
+        <td class="mono">${(Number(b.reward) || 0).toFixed(2)}</td>
+        <td><span class="mono" title="${escHtml(b.found_by)}">${escHtml(shortAddr(b.found_by))}</span></td>
+        <td>${fmtTs(b.found_at)}</td>
+        <td><a href="${escHtml(b.grinscan_url)}" target="_blank" rel="noopener">view ↗</a></td>
+      </tr>`;
+    }).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="7">Error: ${escHtml(err.message)}</td></tr>`;
+  }
+}
+
+function setFilter(f, btn) {
+  _filter = f;
+  document.querySelectorAll('#filter-chips .tab-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  loadBlocks();
+}
+
+document.addEventListener('DOMContentLoaded', loadBlocks);
+setInterval(loadBlocks, 60000);
+</script>
+</body>
+</html>

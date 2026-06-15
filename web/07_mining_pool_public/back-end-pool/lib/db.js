@@ -91,7 +91,10 @@ function migrateMinerAccounts() {
     const additions = {
       min_payout: 'REAL DEFAULT NULL',
       last_ip: 'TEXT DEFAULT NULL',
-      prev_ip: 'TEXT DEFAULT NULL'
+      prev_ip: 'TEXT DEFAULT NULL',
+      is_banned: 'INTEGER NOT NULL DEFAULT 0',
+      ban_reason: 'TEXT DEFAULT NULL',
+      banned_at: 'INTEGER DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -172,6 +175,9 @@ function migrateShares() {
   }
 }
 
+// Additive, non-destructive: add moderation columns to an existing miner_accounts table
+// (older DBs predate them). is_banned blocks new stratum logins for an abusive address;
+// the balance is untouched so the operator can still pay out what's owed before/after a ban.
 function createSchema() {
   migrateAdminAuditLog();
 
@@ -186,6 +192,9 @@ function createSchema() {
       min_payout REAL DEFAULT NULL,
       last_ip TEXT DEFAULT NULL,
       prev_ip TEXT DEFAULT NULL,
+      is_banned INTEGER NOT NULL DEFAULT 0,
+      ban_reason TEXT DEFAULT NULL,
+      banned_at INTEGER DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,

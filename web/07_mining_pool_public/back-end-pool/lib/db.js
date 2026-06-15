@@ -97,6 +97,30 @@ function migrateShares() {
   }
 }
 
+// Additive, non-destructive: add moderation columns to an existing miner_accounts table
+// (older DBs predate them). is_banned blocks new stratum logins for an abusive address;
+// the balance is untouched so the operator can still pay out what's owed before/after a ban.
+function migrateMinerAccounts() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(miner_accounts)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the columns
+    const have = new Set(cols.map(c => c.name));
+    const additions = {
+      is_banned: 'INTEGER NOT NULL DEFAULT 0',
+      ban_reason: 'TEXT DEFAULT NULL',
+      banned_at: 'INTEGER DEFAULT NULL',
+    };
+    for (const [name, def] of Object.entries(additions)) {
+      if (!have.has(name)) {
+        db.exec(`ALTER TABLE miner_accounts ADD COLUMN ${name} ${def}`);
+        console.warn(`[db] miner_accounts: added missing column ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error(`[db] miner_accounts migration check failed: ${e.message}`);
+  }
+}
+
 function createSchema() {
   migrateAdminAuditLog();
 
@@ -108,6 +132,9 @@ function createSchema() {
       balance_locked REAL NOT NULL DEFAULT 0.0,
       is_online INTEGER NOT NULL DEFAULT 0,
       last_seen_at INTEGER DEFAULT NULL,
+      is_banned INTEGER NOT NULL DEFAULT 0,
+      ban_reason TEXT DEFAULT NULL,
+      banned_at INTEGER DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
@@ -376,6 +403,7 @@ function createSchema() {
   // Additive column migrations run after the tables exist.
   migrateUsers();
   migrateShares();
+  migrateMinerAccounts();
   // No demo regions are seeded. The pool server self-registers its own region via
   // ensureLocalRegion() (called from index.js with config); extra zones come from
   // real satellites the operator declares in admin → Regions.

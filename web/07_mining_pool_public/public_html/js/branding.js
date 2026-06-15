@@ -339,16 +339,23 @@
     var pool = cfg.pool || {};
     var brand = cfg.branding || {};
     document.querySelectorAll('.brand').forEach(function (el) {
-      if (el.querySelector('.brand-logo')) return; // already enhanced
-      var dot = el.querySelector('.dot');
       var nameEl = el.querySelector('[data-brand="pool_name"]');
 
-      var logo = document.createElement('img');
-      logo.className = 'brand-logo';
-      logo.src = brand.logo_url || '/images/logo.svg';
-      logo.alt = '';
-      logo.setAttribute('aria-hidden', 'true');
-      if (dot) { el.replaceChild(logo, dot); } else { el.insertBefore(logo, el.firstChild); }
+      // Public pages now ship a static <img class="brand-logo"> (so the swing shows even before
+      // this fetch resolves). If one exists, just repoint it at a custom logo; otherwise create it
+      // (admin/older markup using a .dot). Either way we still add the slogan below.
+      var logo = el.querySelector('.brand-logo');
+      if (logo) {
+        if (brand.logo_url) logo.src = brand.logo_url;
+      } else {
+        var dot = el.querySelector('.dot');
+        logo = document.createElement('img');
+        logo.className = 'brand-logo';
+        logo.src = brand.logo_url || '/images/logo.svg';
+        logo.alt = '';
+        logo.setAttribute('aria-hidden', 'true');
+        if (dot) { el.replaceChild(logo, dot); } else { el.insertBefore(logo, el.firstChild); }
+      }
 
       if (nameEl && !el.querySelector('.brand-text')) {
         var col = document.createElement('span');

@@ -74,6 +74,45 @@ class MinerManager {
     }
   }
 
+  // Moderation — is this address banned from logging in / submitting shares?
+  // Cheap single-row lookup; called on every stratum login (see stratum-server handleLogin).
+  isBanned(grinAddress) {
+    try {
+      const row = this.db.prepare(
+        'SELECT is_banned FROM miner_accounts WHERE grin_address = ?'
+      ).get(grinAddress);
+      return !!(row && row.is_banned);
+    } catch (err) {
+      // Fail open: a lookup error must never silently lock everyone out of mining.
+      console.error(`Error checking ban status: ${err.message}`);
+      return false;
+    }
+  }
+
+  // Ban an abusive address: blocks future stratum logins. Balance is intentionally left
+  // intact so anything already owed can still be paid out. Idempotent (ensures the row).
+  banMiner(grinAddress, reason = null) {
+    this.ensureMinerExists(grinAddress);
+    this.db.prepare(
+      `UPDATE miner_accounts SET is_banned = 1, ban_reason = ?, banned_at = unixepoch(), updated_at = unixepoch()
+       WHERE grin_address = ?`
+    ).run(reason ? String(reason).slice(0, 280) : null, grinAddress);
+    // Drop any live sessions for the address so the ban takes effect without waiting for
+    // a reconnect.
+    for (const [sid, session] of this.activeSessions) {
+      if (session.grinAddress === grinAddress) this.activeSessions.delete(sid);
+    }
+    return true;
+  }
+
+  unbanMiner(grinAddress) {
+    this.db.prepare(
+      `UPDATE miner_accounts SET is_banned = 0, ban_reason = NULL, banned_at = NULL, updated_at = unixepoch()
+       WHERE grin_address = ?`
+    ).run(grinAddress);
+    return true;
+  }
+
   recordShare(grinAddress, difficulty) {
     try {
       for (const [, session] of this.activeSessions) {

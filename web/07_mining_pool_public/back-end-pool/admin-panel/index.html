@@ -10,28 +10,6 @@
 </head>
 <body>
 
-<header>
-  <div class="container">
-    <div class="header-inner">
-      <div class="site-title"><a href="/">Grin Pool <span>ツ</span></a></div>
-      <nav class="nav-links">
-        <a href="/">Home</a>
-        <a href="/admin/" id="nav-dashboard">Dashboard</a>
-        <a href="/admin/" class="active" id="nav-admin">Admin</a>
-        <a href="/login.html" id="nav-login" style="display:none">Login</a>
-        <span id="nav-user" style="display:none"></span>
-      </nav>
-      <div class="theme-switcher">
-        <button class="theme-btn" data-theme="matrix">Matrix</button>
-        <button class="theme-btn" data-theme="dark">Dark</button>
-        <button class="theme-btn" data-theme="light">Light</button>
-        <button class="theme-btn" data-theme="naruto">Naruto</button>
-        <button class="theme-btn" data-theme="japan">Japan ✿</button>
-      </div>
-    </div>
-  </div>
-</header>
-
 <div class="testnet-banner" id="testnet-banner" style="display:none">
   ⚠ TESTNET — These coins have no real value
 </div>
@@ -118,6 +96,7 @@
 
 <script src="/js/api.js"></script>
 <script src="/js/theme.js"></script>
+<script src="/js/admin-nav.js"></script>
 <script>
 // ── Admin auth check ───────────────────────────────────────────────────────
 (function () {
@@ -130,8 +109,7 @@
       document.getElementById('testnet-banner').style.display = '';
       document.title = '[TESTNET] ' + document.title;
     }
-    const el = document.querySelector('.site-title a');
-    if (el && d.pool_name) el.childNodes[0].textContent = d.pool_name + ' ';
+    // Pool name is shown in the sidebar brand (admin-nav.js → #sidebar-pool-name).
   }).catch(() => {});
 })();
 

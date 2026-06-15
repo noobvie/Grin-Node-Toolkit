@@ -349,11 +349,6 @@
   </style>
 </head>
 <body>
-  <nav class="nav-links">
-    <a href="/">Home</a>
-    <a href="/admin/">Dashboard</a>
-    <a href="/admin/settings.html" class="active">Settings</a>
-  </nav>
 
   <div class="settings-container">
     <div class="settings-header">
@@ -556,95 +551,17 @@
         </div>
 
         <div class="form-section">
-          <h3 class="section-title">Theme & Colors</h3>
-          <div class="form-row">
-            <div class="form-group">
-              <label for="default_theme">Default Theme</label>
-              <select id="default_theme" name="default_theme">
-                <optgroup label="Classic">
-                  <option value="atomic">Atomic ⚛ (default)</option>
-                  <option value="nexus">Nexus</option>
-                  <option value="light">Light</option>
-                </optgroup>
-                <optgroup label="Admin panel only">
-                  <option value="matrix">Matrix</option>
-                  <option value="naruto">Naruto</option>
-                  <option value="japan">Japan ✿</option>
-                  <option value="cyber">Cyber Classic 🌃 (old default)</option>
-                  <option value="uranium">Atomic Classic ☢️ (old atomic)</option>
-                  <option value="gradient">Gradient Light 🌈 (old light)</option>
-                </optgroup>
-                <optgroup label="Seasonal">
-                  <option value="winter">Winter Frost ❄️</option>
-                  <option value="spring">Spring Blossom 🌸</option>
-                  <option value="summer">Summer Wave 🌊</option>
-                  <option value="autumn">Autumn Harvest 🍂</option>
-                  <option value="halloween">Halloween 🎃</option>
-                  <option value="christmas">Christmas 🎄</option>
-                </optgroup>
-                <optgroup label="Fun">
-                  <option value="galaxy">Galaxy ⭐</option>
-                  <option value="winxp">Windows XP 🪟</option>
-                  <option value="aqua">macOS Aqua 🍎</option>
-                  <option value="comic">Comic Pop 💥</option>
-                </optgroup>
-                <option value="custom">Custom (theme builder below)</option>
-              </select>
-              <div class="helper-text">The theme visitors see by default. "Admin panel only" picks
-                style this panel; public pages fall back to Atomic for those.</div>
-            </div>
-            <div class="form-group">
-              <label for="accent_color">Accent Color</label>
-              <div class="color-input-group">
-                <input type="color" id="accent_color" name="accent_color" value="#667eea">
-                <span class="color-preview" id="accent-preview">#667eea</span>
-              </div>
-            </div>
+          <h3 class="section-title">Public Site Theme</h3>
+          <div class="helper-text" style="margin-bottom:1rem;">
+            Choose the one theme every visitor sees on the public pages. Visitor theme-switching is
+            intentionally disabled, so the public site always renders the theme you pick here.
           </div>
-
-          <div class="checkbox-group">
-            <input type="checkbox" id="allow_theme_switch" name="allow_theme_switch">
-            <label for="allow_theme_switch">Allow visitors to switch themes (remembers their choice)</label>
-          </div>
-
-          <div class="form-group" id="enabled-themes-group">
-            <label>Themes visitors can switch between</label>
-            <div class="helper-text" style="margin-bottom:.6rem;">
-              Tick the themes shown in the public theme switcher. Pick <strong>2 or more</strong>
-              to show the switcher; tick <strong>one</strong> (or untick all / turn off the toggle
-              above) to hide it and force the Default Theme. The default need not be ticked.
-            </div>
-            <!-- Hidden input holds the JSON array; assembled from the checkboxes on save.
-                 The checkboxes themselves are .settings-skip so the generic harvester ignores them. -->
-            <input type="hidden" id="enabled_themes" name="enabled_themes">
-            <div id="enabled-themes-grid"
-                 style="display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:.4rem .9rem;">
-              <!-- checkboxes injected by renderEnabledThemes() -->
-            </div>
-          </div>
-        </div>
-
-        <div class="form-section">
-          <h3 class="section-title">Custom Theme Builder</h3>
-          <div class="helper-text" style="margin-bottom: 1rem;">
-            Define your own palette. These CSS variables apply on every page when Default
-            Theme is set to <strong>Custom</strong> (and partially override any theme otherwise).
-          </div>
-          <!-- Holds the serialized JSON; assembled from the pickers below on save -->
-          <input type="hidden" id="custom_theme" name="custom_theme">
-          <div style="display:flex;gap:0.75rem;margin-bottom:1rem;flex-wrap:wrap;">
-            <button type="button" class="btn btn-secondary" style="min-width:auto;" onclick="exportTheme()">⬇ Export theme</button>
-            <button type="button" class="btn btn-secondary" style="min-width:auto;" onclick="document.getElementById('theme-import-input').click()">⬆ Import theme</button>
-            <input type="file" id="theme-import-input" accept="application/json,.json" class="settings-skip" style="display:none;" onchange="importTheme(event)">
-          </div>
-          <div class="form-row" id="theme-builder">
-            <!-- color pickers injected by JS (no id, so generic save skips them) -->
-          </div>
-
-          <div class="form-group" style="margin-top: 1.5rem;">
-            <label for="custom_css">Custom CSS (Advanced)</label>
-            <textarea id="custom_css" name="custom_css" placeholder=".header { color: red; }"></textarea>
-            <div class="helper-text">Injected last — overrides everything above</div>
+          <div class="form-group" style="max-width:320px;">
+            <label for="default_theme">Theme</label>
+            <select id="default_theme" name="default_theme">
+              <option value="atomic">Default (Atomic ⚛)</option>
+              <option value="light">Light</option>
+            </select>
           </div>
         </div>
 
@@ -823,6 +740,18 @@
         </div>
 
         <div class="form-section">
+          <h3 class="section-title">Google Analytics (GA4)</h3>
+          <div class="form-group" style="max-width:420px;">
+            <label for="seo_ga_tracking_id">GA4 Measurement ID</label>
+            <input type="text" id="seo_ga_tracking_id" name="seo_ga_tracking_id" class="settings-skip" placeholder="G-XXXXXXXXXX">
+            <div class="helper-text">Format: <code>G-XXXXXXXXXX</code>. Saving here sets the site-wide
+              Google Analytics tag — it shares one source of truth with the <strong>Analytics</strong>
+              tab (no duplicate tag). Leave blank to turn GA off. Plausible / Umami / Matomo stay on
+              the Analytics tab.</div>
+          </div>
+        </div>
+
+        <div class="form-section">
           <h3 class="section-title">Indexing & Structured Data</h3>
           <div class="form-row">
             <div class="checkbox-group">
@@ -844,7 +773,6 @@
             <a href="/robots.txt" target="_blank">/robots.txt</a> ·
             <a href="/sitemap.xml" target="_blank">/sitemap.xml</a>.
             Tick "Prevent indexing" to emit <code>Disallow: /</code> and suppress the sitemap.
-            Google Analytics moved to the <strong>Analytics</strong> tab.
           </div>
         </div>
 
@@ -1419,6 +1347,28 @@
             <input type="url" id="slack_webhook_url" name="slack_webhook_url" placeholder="https://hooks.slack.com/...">
             <div class="helper-text">Send alerts to Slack channel</div>
           </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="telegram_bot_token">Telegram Bot Token</label>
+              <input type="text" id="telegram_bot_token" name="telegram_bot_token" placeholder="123456:ABC-DEF...">
+              <div class="helper-text">From @BotFather. Pair with a chat ID below.</div>
+            </div>
+            <div class="form-group">
+              <label for="telegram_chat_id">Telegram Chat ID</label>
+              <input type="text" id="telegram_chat_id" name="telegram_chat_id" placeholder="-1001234567890">
+              <div class="helper-text">User, group, or channel ID the bot can post to.</div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <button type="button" class="btn btn-secondary" onclick="testAlert()">Send test alert</button>
+            <span id="alert-test-msg" style="margin-left:.6rem;font-size:.85rem;"></span>
+            <div class="helper-text">
+              Fires a synthetic alert through the live channels. Delivery channels are read from
+              the running config (pool.json); saving here records them for reference.
+            </div>
+          </div>
         </div>
 
         <div class="form-section">
@@ -1512,23 +1462,30 @@
   <script src="/js/api.js"></script>
   <script src="/js/stepup.js"></script>
   <script src="/js/theme.js"></script>
+  <script src="/js/admin-nav.js"></script>
   <script>
-    // Tab switching
+    // Tab switching is hash-driven so the sidebar's Settings sub-links (e.g. /admin/settings.html#access)
+    // deep-link straight to a tab, and in-page tab clicks update the URL (back/forward + sidebar sync).
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        const tab = btn.getAttribute('data-tab');
-        switchTab(tab);
+        location.hash = btn.getAttribute('data-tab');
       });
     });
 
+    function tabFromHash() { return (location.hash || '').replace(/^#/, ''); }
+
     function switchTab(tabName) {
+      if (!tabName || !document.getElementById(tabName)) return;
       document.querySelectorAll('.settings-content').forEach(el => el.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
       document.getElementById(tabName).classList.add('active');
-      document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+      const btn = document.querySelector(`[data-tab="${tabName}"]`);
+      if (btn) btn.classList.add('active');
       if (tabName === 'database') loadDbStatus();
       if (tabName === 'access') { loadIpFilter(); load2fa(); }
     }
+
+    window.addEventListener('hashchange', () => switchTab(tabFromHash()));
 
     // Load settings on page load
     window.addEventListener('DOMContentLoaded', () => {
@@ -1537,6 +1494,7 @@
       // settings chrome to a logged-out visitor. See API.guardAdminPage.
       API.guardAdminPage();
       loadAllSettings();
+      switchTab(tabFromHash()); // open the tab named in the URL hash, if any
     });
 
     async function loadAllSettings() {
@@ -1585,12 +1543,30 @@
       loadAssetPreviews();
     }
 
-    async function saveSection(section) {
+    // Fire a synthetic alert through the live delivery channels so the operator can confirm
+    // notifications actually arrive. secureAdmin (no step-up) → a plain credentialed fetch.
+    async function testAlert() {
+      const msg = document.getElementById('alert-test-msg');
+      msg.textContent = 'Sending…';
+      msg.style.color = 'var(--text-dim)';
+      try {
+        const res = await fetch('/api/admin/alerts/test', { method: 'POST', credentials: 'include' });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+        const on = Object.keys(body.channels || {}).filter(k => body.channels[k]);
+        msg.textContent = on.length ? ('✓ Sent via: ' + on.join(', ')) : '✓ Sent.';
+        msg.style.color = 'var(--success, #3fb950)';
+      } catch (err) {
+        msg.textContent = '✗ ' + err.message;
+        msg.style.color = 'var(--error, #f85149)';
+      }
+    }
+
+    async function saveSection(section, opts = {}) {
       const form = document.querySelector(`#${section} .settings-form`);
       const data = {};
 
       // Assemble JSON-backed builders into their hidden inputs before harvesting.
-      if (section === 'branding') { collectThemeBuilder(); collectEnabledThemes(); }
       if (section === 'seo') collectPageSeo();
       if (section === 'notices') collectBanners();
       if (section === 'incentives') collectIncentiveEvents();
@@ -1609,6 +1585,12 @@
         }
       });
 
+      // Public site uses one forced theme: visitor switching off, only the chosen theme enabled.
+      if (section === 'branding') {
+        data.allow_theme_switch = false;
+        data.enabled_themes = JSON.stringify([data.default_theme || 'atomic']);
+      }
+
       try {
         const response = await adminFetch(`/api/admin/settings/${section}`, {
           method: 'POST',
@@ -1618,10 +1600,29 @@
         });
 
         if (!response.ok) throw new Error('Save failed');
-        showToast(`${section} settings saved!`, 'success');
+        if (!opts.quiet) showToast(`${section} settings saved!`, 'success');
+
+        // The SEO tab exposes GA4 as a convenience; persist it through the canonical analytics
+        // section (full-form save, so Plausible/Umami/Matomo settings are never clobbered).
+        if (section === 'seo' && !opts.quiet) await pushSeoGa4ToAnalytics();
       } catch (err) {
         showToast('Error saving settings: ' + err.message, 'error');
       }
+    }
+
+    // Mirror the SEO-tab GA4 Measurement ID into the Analytics-tab fields and save that section,
+    // keeping a single source of truth (analytics.provider / analytics.ga_tracking_id) that
+    // branding.js loadGa4() already reads.
+    async function pushSeoGa4ToAnalytics() {
+      const seoGa = document.getElementById('seo_ga_tracking_id');
+      if (!seoGa) return;
+      const v = (seoGa.value || '').trim();
+      const ga = document.getElementById('ga_tracking_id');
+      const prov = document.getElementById('provider');
+      if (ga) ga.value = v;
+      if (prov && v) prov.value = 'ga4'; // empty clears the ID (GA off) without disturbing other providers
+      if (typeof updateProviderFields === 'function') updateProviderFields();
+      await saveSection('analytics', { quiet: true });
     }
 
     async function restoreSection(section) {
@@ -2425,6 +2426,11 @@
       if (settings.seo) populatePageSeo(settings.seo.page_seo);
       if (settings.notices) populateBanners(settings.notices.banners);
       if (settings.incentives) populateEvents(settings.incentives.lottery_special_events);
+      // Mirror the canonical GA4 id into the SEO-tab convenience field (single source of truth).
+      if (settings.analytics) {
+        const g = document.getElementById('seo_ga_tracking_id');
+        if (g) g.value = settings.analytics.ga_tracking_id || '';
+      }
       updateProviderFields();
       loadIncentiveData();
     }

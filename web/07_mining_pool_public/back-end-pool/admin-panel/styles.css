@@ -14,33 +14,73 @@ main {
   padding: 2rem 0;
 }
 
-/* ============== SIDEBAR ============== */
+/* ============== SIDEBAR (injected by /js/admin-nav.js) ============== */
 
 .sidebar {
-  width: 250px;
+  width: 240px;
   background: var(--bg-card);
   border-right: 1px solid var(--border-color);
-  padding: 1.5rem 0;
   position: fixed;
   left: 0;
-  top: 60px;
-  height: calc(100vh - 60px);
-  overflow-y: auto;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
+}
+
+/* Offset every page's content (main, .settings-container, footer, banners) past the sidebar.
+   Padding on <body> works regardless of each page's wrapper element. */
+body.has-sidebar {
+  padding-left: 240px;
+}
+
+/* Brand header with the swinging logo — mirrors the public-page .brand treatment. */
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1.1rem 1.25rem;
+  border-bottom: 1px solid var(--border-color);
+  text-decoration: none;
+  color: var(--text-primary);
+}
+
+.sidebar-brand-text { display: flex; flex-direction: column; line-height: 1.1; }
+.sidebar-brand-text strong { font-size: 1.05rem; letter-spacing: 0.5px; }
+.sidebar-brand-text small { font-size: 0.7rem; color: var(--text-muted); }
+
+/* Swinging logo (shared look with public pages; admin doesn't load branding.js so the
+   keyframe lives in static CSS here). */
+.brand-logo {
+  width: 30px; height: 30px; flex: 0 0 auto;
+  transform-origin: 50% 8%;
+  animation: brandSwing 3.2s ease-in-out infinite;
+}
+@keyframes brandSwing {
+  0%   { transform: rotate(-40deg); }
+  50%  { transform: rotate(40deg); }
+  100% { transform: rotate(-40deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-logo { animation: none; }
 }
 
 .sidebar-nav {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0 1rem;
+  gap: 0.25rem;
+  padding: 0.75rem 0.75rem;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .sidebar-nav a,
 .sidebar-nav button {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
+  gap: 0.6rem;
+  padding: 0.55rem 0.85rem;
   color: var(--text-secondary);
   text-decoration: none;
   border: none;
@@ -48,8 +88,14 @@ main {
   cursor: pointer;
   border-radius: 6px;
   transition: all 0.2s ease;
-  font-size: 0.95rem;
+  font-size: 0.92rem;
   border-left: 3px solid transparent;
+}
+
+.sidebar-nav a.sidebar-sub {
+  font-size: 0.85rem;
+  padding: 0.4rem 0.85rem 0.4rem 1.6rem;
+  color: var(--text-muted);
 }
 
 .sidebar-nav a:hover,
@@ -61,54 +107,81 @@ main {
   border-left-color: var(--primary);
 }
 
+.sidebar-section-title {
+  margin: 0.75rem 0.85rem 0.25rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
 .sidebar-icon {
   width: 20px;
-  height: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-/* ============== MAIN WITH SIDEBAR ============== */
-
-body.has-sidebar main {
-  margin-left: 250px;
+/* Footer: chrome theme toggle (Dark/Light only) + signed-in user/Logout. */
+.sidebar-footer {
+  border-top: 1px solid var(--border-color);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
 }
 
-body.has-sidebar header {
-  margin-left: 250px;
+.theme-toggle { display: flex; gap: 0.4rem; }
+.theme-toggle button {
+  flex: 1;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
 }
+.theme-toggle button.active {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: rgba(102, 126, 234, 0.1);
+}
+
+.sidebar-user { font-size: 0.85rem; color: var(--text-secondary); }
+.sidebar-user .nav-username { font-weight: 600; color: var(--text-primary); margin-right: 0.5rem; }
 
 @media (max-width: 768px) {
   .sidebar {
+    position: static;
     width: 100%;
     height: auto;
-    position: static;
     border-right: none;
     border-bottom: 1px solid var(--border-color);
-    padding: 1rem;
+    flex-direction: column;
+  }
+
+  body.has-sidebar {
+    padding-left: 0;
   }
 
   .sidebar-nav {
     flex-direction: row;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: 0.4rem;
+    overflow: visible;
   }
 
-  body.has-sidebar main,
-  body.has-sidebar header {
-    margin-left: 0;
-  }
+  .sidebar-section-title { flex-basis: 100%; }
 
   .sidebar-nav a,
   .sidebar-nav button {
     flex: 1;
-    min-width: 120px;
-    text-align: center;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.8rem;
+    min-width: 110px;
+    justify-content: center;
   }
+
+  .sidebar-nav a.sidebar-sub { padding-left: 0.85rem; }
 }
 
 /* ============== DASHBOARD GRID ============== */

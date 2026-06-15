@@ -36,230 +36,26 @@
         </div>
       </div>
 
-      <h2>Manage Users</h2>
-
-      <div style="display:flex;gap:.6rem;align-items:center;margin-bottom:.8rem;flex-wrap:wrap;">
-        <input type="text" id="search-input" placeholder="Search username or email…"
-               style="max-width:260px;" oninput="filterUsers()">
-        <span style="font-size:.85rem;color:var(--text-dim);" id="user-count"></span>
-      </div>
-
-      <div class="card" style="padding:0;">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Username</th>
-                <th>Email</th>
-                <th>Balance ツ</th>
-                <th>Locked ツ</th>
-                <th>Miners</th>
-                <th>Fee Exempt</th>
-                <th>Admin</th>
-                <th>Active</th>
-                <th>Joined</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="users-tbody">
-              <tr class="loading-row"><td colspan="11"><span class="spinner"></span>Loading…</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Pagination -->
-      <div class="pagination" id="pagination"></div>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:.4rem 0 0;">
+        This pool uses address-as-identity — miners have no accounts. To manage a mining
+        address (balance, ban/unban, balance injection on testnet) use the
+        <a href="miners.html">Miners</a> page.
+      </p>
     </section>
   </div>
 </main>
-
-<!-- Inject Balance Modal -->
-<div class="modal-overlay" id="inject-modal">
-  <div class="modal">
-    <h3>Inject Balance</h3>
-    <p style="font-size:.88rem;color:var(--text-dim);margin-bottom:.8rem;">
-      Testnet only — inject GRIN into user account for testing.
-    </p>
-    <input type="hidden" id="inject-user-id">
-    <div class="form-group">
-      <label for="inject-amount">Amount (GRIN)</label>
-      <input type="number" id="inject-amount" min="0.0001" step="0.0001" placeholder="10.0">
-    </div>
-    <p class="error-msg" id="inject-error"></p>
-    <div class="modal-actions">
-      <button class="btn btn-outline btn-sm" onclick="closeInjectModal()">Cancel</button>
-      <button class="btn btn-sm" id="inject-confirm-btn" onclick="confirmInject()">Inject</button>
-    </div>
-  </div>
-</div>
 
 <script src="/js/api.js"></script>
 <script src="/admin/admin-shell.js"></script>
 <script src="/js/stepup.js"></script>
 <script>
-let _isTestnet = false;
-let _allUsers  = [];
-let _page      = 1;
-const PAGE_SIZE = 25;
-
 // Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
 // up the topbar username + Logout. Pool name + testnet banner (chrome) are handled by
-// admin-shell.js; we still read pool/stats here to set _isTestnet, which gates the
-// testnet-only "Inject Balance" action.
+// admin-shell.js.
 API.guardAdminPage();
-fetch('/api/pool/stats').then(r => r.json()).then(d => {
-  if (d && d.network === 'testnet') _isTestnet = true;
-}).catch(() => {});
 
 function escHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-function fmtGrin(v)  { return (v || 0).toFixed(4); }
-function fmtDate(iso){ return iso ? new Date(iso).toLocaleDateString() : '—'; }
-
-// ── Load users ─────────────────────────────────────────────────────────────
-async function loadUsers() {
-  try {
-    const data = await API.get('/api/admin/users');
-    _allUsers = data || [];
-    document.getElementById('user-count').textContent = _allUsers.length + ' users';
-    renderPage(_page);
-  } catch (err) {
-    document.getElementById('users-tbody').innerHTML =
-      `<tr class="empty-row"><td colspan="11">Failed to load users: ${escHtml(err.message)}</td></tr>`;
-  }
-}
-
-function filterUsers() {
-  const q = document.getElementById('search-input').value.toLowerCase();
-  if (!q) {
-    renderPage(1);
-    return;
-  }
-  const filtered = _allUsers.filter(u =>
-    (u.username || '').toLowerCase().includes(q) ||
-    (u.email    || '').toLowerCase().includes(q)
-  );
-  renderFiltered(filtered);
-}
-
-function renderPage(page) {
-  _page = page;
-  const start  = (page - 1) * PAGE_SIZE;
-  const slice  = _allUsers.slice(start, start + PAGE_SIZE);
-  renderRows(slice);
-  renderPagination(_allUsers.length, page);
-}
-
-function renderFiltered(users) {
-  renderRows(users);
-  document.getElementById('pagination').innerHTML = '';
-}
-
-function renderRows(users) {
-  const tbody = document.getElementById('users-tbody');
-  if (!users.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">No users found.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = users.map(u => {
-    const injectBtn = _isTestnet
-      ? `<button class="btn btn-warn btn-sm" onclick="openInjectModal(${u.id})">Inject</button>`
-      : '';
-    return `
-      <tr id="user-row-${u.id}">
-        <td class="mono">${u.id}</td>
-        <td>${escHtml(u.username)}</td>
-        <td>${escHtml(u.email || '—')}</td>
-        <td class="mono">${fmtGrin(u.balance)}</td>
-        <td class="mono">${fmtGrin(u.locked_balance)}</td>
-        <td>${u.miner_count ?? 0}</td>
-        <td>
-          <div class="toggle-wrap">
-            <input type="checkbox" ${u.fee_exempt ? 'checked' : ''}
-              onchange="toggleField(${u.id}, 'fee_exempt', this.checked)">
-          </div>
-        </td>
-        <td>
-          <div class="toggle-wrap">
-            <input type="checkbox" ${u.is_admin ? 'checked' : ''}
-              onchange="toggleField(${u.id}, 'is_admin', this.checked)">
-          </div>
-        </td>
-        <td>
-          <div class="toggle-wrap">
-            <input type="checkbox" ${u.is_active !== false ? 'checked' : ''}
-              onchange="toggleField(${u.id}, 'is_active', this.checked)">
-          </div>
-        </td>
-        <td>${fmtDate(u.created_at)}</td>
-        <td>${injectBtn}</td>
-      </tr>
-    `;
-  }).join('');
-}
-
-function renderPagination(total, page) {
-  const pages = Math.ceil(total / PAGE_SIZE);
-  if (pages <= 1) { document.getElementById('pagination').innerHTML = ''; return; }
-  let html = `<button class="page-btn" onclick="renderPage(${page - 1})" ${page <= 1 ? 'disabled' : ''}>← Prev</button>`;
-  for (let i = 1; i <= pages; i++) {
-    html += `<button class="page-btn ${i === page ? 'active' : ''}" onclick="renderPage(${i})">${i}</button>`;
-  }
-  html += `<button class="page-btn" onclick="renderPage(${page + 1})" ${page >= pages ? 'disabled' : ''}>Next →</button>`;
-  document.getElementById('pagination').innerHTML = html;
-}
-
-// ── Toggle field ───────────────────────────────────────────────────────────
-async function toggleField(userId, field, value) {
-  try {
-    await API.put('/api/admin/users/' + userId, { [field]: value });
-  } catch (err) {
-    alert('Failed to update user: ' + err.message);
-    loadUsers(); // reload to revert checkbox
-  }
-}
-
-// ── Inject balance modal ───────────────────────────────────────────────────
-function openInjectModal(userId) {
-  document.getElementById('inject-user-id').value = userId;
-  document.getElementById('inject-amount').value  = '';
-  document.getElementById('inject-error').style.display = 'none';
-  document.getElementById('inject-modal').classList.add('open');
-}
-
-function closeInjectModal() {
-  document.getElementById('inject-modal').classList.remove('open');
-}
-
-async function confirmInject() {
-  const userId = document.getElementById('inject-user-id').value;
-  const amount = parseFloat(document.getElementById('inject-amount').value);
-  const errEl  = document.getElementById('inject-error');
-
-  if (!amount || amount <= 0) {
-    errEl.textContent = 'Enter a valid amount.';
-    errEl.style.display = '';
-    return;
-  }
-  errEl.style.display = 'none';
-
-  const btn = document.getElementById('inject-confirm-btn');
-  btn.disabled    = true;
-  btn.textContent = 'Injecting…';
-
-  try {
-    await API.post('/api/admin/users/' + userId + '/inject', { amount });
-    closeInjectModal();
-    loadUsers();
-  } catch (err) {
-    errEl.textContent = err.message;
-    errEl.style.display = '';
-    btn.disabled    = false;
-    btn.textContent = 'Inject';
-  }
 }
 
 // ── Sessions & login activity ────────────────────────────────────────────────
@@ -312,13 +108,7 @@ async function revokeSessions() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', loadUsers);
 document.addEventListener('DOMContentLoaded', loadLoginHistory);
-
-// Close modal on overlay click
-document.getElementById('inject-modal').addEventListener('click', function (e) {
-  if (e.target === this) closeInjectModal();
-});
 </script>
 </body>
 </html>

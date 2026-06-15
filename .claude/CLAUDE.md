@@ -406,7 +406,7 @@ Operational facts:
 Key design decisions (locked in — do not change without user confirmation):
 
 - **Identity:** Address-as-identity (2miners style) — miner submits `grin_address.worker_name` as stratum username; no mandatory registration
-- **Payments:** Tor-only auto-pay; slatepack interactive flow dropped entirely; on Tor failure, queue and retry every 6h up to 7 days
+- **Payments:** Tor auto-pay (default; on Tor failure, queue and retry every 6h up to 7 days) **+ an opt-in interactive Slatepack rail (re-added 2026-06).** The slatepack rail was previously dropped because the wallet owner couldn't be verified; it's now safe because the slate is emitted **encrypted to the miner's own grin address** (`create_slatepack_message` with a non-empty `recipients` list → age-encryption to that ed25519 key — the same key used as the Tor `.onion`). Only the address owner's wallet can decrypt + `receive`, so there is no theft even though miners have no accounts. Triggering a slatepack payout (and setting a per-miner payout threshold) is gated by an **IP-proof** (one of the address's last-2 mining source IPs — `lib/owner-proof.js`); this is only an anti-griefing/anti-spam throttle (shared NAT/CGNAT co-tenants can pass it), NOT the fund-safety mechanism (encryption is). Tor payouts need no IP gate (they always return to the address). Flow: `POST /api/account/:addr/withdraw {method:'slatepack'}` → armored slate → miner `receive`s → `POST …/withdraw/:id/finalize {response_slatepack}` → `finalize_tx`+`post_tx`. Unfinalized slates expire after `slatepack_ttl_hours` (default 24h), `cancel_tx` + balance reversed. Owner-API slatepack methods live in `lib/wallet.js`; state machine + expiry in `lib/withdrawal-scheduler.js`.
 - **Reward model:** PPLNS (default); configurable to Proportional or Solo via admin panel
 - **Block maturity:** 1440 blocks (mainnet) / 100 blocks (testnet) before payout; critical for reorg safety (Grin consensus `COINBASE_MATURITY = 1440`)
 - **Orphan detection:** Nonce-based verification job every 6h; reverses payouts if a found block is orphaned
@@ -418,6 +418,17 @@ Key design decisions (locked in — do not change without user confirmation):
 - **Script 07 role:** Infrastructure only (deploy files, systemd services, backups); business logic lives in pool web code
 - **Networks:** the public pool is a mainnet-only product (the earlier "testnet stratum-only mode" plan was not implemented); testnet mining is done via `07_grin_mining_solo.sh`
 - **Default pool fee 1.0%** (`pool_fee_percent: 1.0`, validated 0–50); min withdrawal: 5.0 GRIN
+- **Per-miner payout threshold:** `miner_accounts.min_payout` (NULL = pool default). Acts as that address's personal minimum-withdrawal floor in `createWithdrawal` (the pool has no auto-payout loop — payouts are miner-initiated). Can only be RAISED above `config.min_withdrawal`, never below. Set via the IP-gated `POST /api/account/:addr/min-payout`.
+
+### Public miner-facing endpoints (added 2026-06 — grin-pool parity)
+
+All public (no admin auth), `rateLimiter.middleware('public')`:
+- `GET /api/account/:addr/workers` — per-worker (rig) breakdown. Hashrate/share-count/last-share from the `shares` table (all regions, survives restarts); **reject% / stale% + online come from the LIVE in-memory stratum sessions on the box serving the request** (`minerManager.getSessionsByMiner`). **Hub-mode limit:** satellites relay only *accepted* shares, not reject/stale counters, so on a hub these columns reflect only locally-connected workers — documented, not a bug.
+- `GET /api/account/:addr/hashrate/history?hours=24` and `GET /api/pool/hashrate/history?hours=24` — time-series from `hashrate_history` (per-address per-minute samples; pool series = `SUM` per bucket), downsampled. Charted with **Chart.js vendored at `public_html/js/vendor/chart.umd.min.js`** (no CDN) via `js/charts-init.js` (`PoolCharts.renderHashrateChart`).
+- `GET /api/pool/effort` — `round_effort_pct` (Σ share diff since last block ÷ current per-block network diff), `luck_100_pct` (mean of `network_difficulty/round_shares` over last 100 blocks), `seconds_since_last_block`. Backed by additive `blocks.network_difficulty` + `blocks.round_shares` captured at find time in `lib/blocks.js creditBlock` (needs `blockManager.setNodeApi(blockMonitor.grinNode)`); current net diff cached ~60s on `app.locals`.
+- `GET /api/account/:addr` now also returns `min_payout`, `effective_min_payout`, `has_recorded_ip`.
+
+**Miner source-IP capture (backs the ownership gate):** recorded into `miner_accounts.last_ip/prev_ip` (last-2 distinct, shift on change) via `minerManager.recordSourceIp` → `owner-proof.recordSourceIp`. Captured at stratum login locally; **in hub-and-spoke the satellite relays the miner IP per-share** (`source_ip` added to the relayed share object in `stratum-server.js`; `share-relay.js` forwards it verbatim incl. failover replay; hub `POST /api/shares` uses `s.source_ip`, NOT `req.ip` which is the satellite). UI: all per-account features live on `account-settings.html` (chart, workers, threshold, slatepack); pool chart + effort row on `index.html`.
 
 ### Multi-region — hub-and-spoke (design: `docs/generated/script07_design.md` §3–4)
 

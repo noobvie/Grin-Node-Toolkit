@@ -21,6 +21,7 @@ const WithdrawalScheduler = require('./lib/withdrawal-scheduler');
 const AuthManager = require('./lib/auth');
 const { requireAuth, requireAdmin, requireFreshAuth } = require('./lib/auth-middleware');
 const HashrateTracker = require('./lib/hashrate-tracker');
+const { verifyIpProof, auditOwnerProof, normalizeIp } = require('./lib/owner-proof');
 const PoolstatsReporter = require('./lib/poolstats-reporter');
 const RateLimiter = require('./lib/rate-limiter');
 const IpFilter = require('./lib/ip-filter');
@@ -190,6 +191,10 @@ async function initializePool() {
     blockMonitor = new BlockMonitor(config);
     blockMonitor.start();
 
+    // Let BlockManager capture per-block network difficulty (for round effort / luck) by reusing
+    // the block monitor's node client. Optional — creditBlock leaves it NULL if unavailable.
+    if (blockMonitor.grinNode) blockManager.setNodeApi(blockMonitor.grinNode);
+
     rewardDistributor = new RewardDistributor(config);
     blockMonitor.setRewardDistributor(rewardDistributor);
     console.log(`[${new Date().toISOString()}] Reward distributor initialized (PPLNS window: 60 blocks)`);
@@ -213,7 +218,8 @@ async function initializePool() {
     walletTor = new WalletTor(config);
     console.log(`[${new Date().toISOString()}] Wallet Tor integration initialized`);
 
-    withdrawalScheduler = new WithdrawalScheduler(config);
+    // Pass the Owner-API wallet so the scheduler can drive the slatepack payout rail.
+    withdrawalScheduler = new WithdrawalScheduler(config, wallet);
     withdrawalScheduler.start();
 
     authManager = new AuthManager(config);
@@ -363,6 +369,9 @@ function setupRoutes() {
       if (!s || !s.grin_address || !s.share_hash || !s.height) { skipped++; continue; }
       try {
         minerManager.ensureMinerExists(s.grin_address);
+        // Record the MINER's source IP (relayed by the satellite per-share), NOT req.ip — req.ip
+        // here is the satellite. Backs the ownership gate for hub-and-spoke deployments.
+        if (s.source_ip) minerManager.recordSourceIp(s.grin_address, s.source_ip);
         const r = await shareValidator.submitShare(
           s.grin_address, s.worker_name || null, s.difficulty, s.height, s.share_hash,
           region || 'default'
@@ -916,7 +925,8 @@ function setupRoutes() {
     try {
       const { addr } = req.params;
       const acct = db.prepare(
-        `SELECT grin_address, balance, balance_locked, is_online, last_seen_at, created_at
+        `SELECT grin_address, balance, balance_locked, is_online, last_seen_at, created_at,
+                min_payout, last_ip, prev_ip
          FROM miner_accounts WHERE grin_address = ?`
       ).get(addr);
       if (!acct) return res.status(404).json({ error: 'Account not found' });
@@ -937,6 +947,10 @@ function setupRoutes() {
 
       const hr = hashrateTracker.getMinerHashrate(addr, 60) || {};
 
+      // Effective payout threshold: the account override (min_payout) if set, else the pool default.
+      // last/prev IP are NOT exposed (they back the ownership gate) — only whether one is on record.
+      const effectiveMin = (acct.min_payout != null) ? acct.min_payout : config.min_withdrawal;
+
       res.json({
         grin_address: acct.grin_address,
         balance: acct.balance,
@@ -952,7 +966,143 @@ function setupRoutes() {
           last_share_at: shareAgg.last_share_at || null
         },
         hashrate_gps: parseFloat(((hr.avg_hashrate || 0)).toFixed(6)),
-        min_withdrawal: config.min_withdrawal
+        min_withdrawal: config.min_withdrawal,
+        min_payout: acct.min_payout != null ? acct.min_payout : null,
+        effective_min_payout: effectiveMin,
+        has_recorded_ip: !!(acct.last_ip || acct.prev_ip)
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Per-worker breakdown for an address. Hashrate/share-count/last-share from the SHARES table
+  // (all regions, survives restarts); reject%/stale% + online from the live in-memory stratum
+  // sessions on THIS box (satellites don't relay reject/stale — documented hub-mode limit).
+  app.get('/api/account/:addr/workers', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const { addr } = req.params;
+      const windowMin = Math.min(Math.max(parseInt(req.query.window || 10), 1), 1440);
+      const workers = hashrateTracker.getWorkersForAccount(addr, windowMin);
+      res.json({ grin_address: addr, window_min: windowMin, workers });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Per-address hashrate time-series for charting (downsampled to ~maxPoints buckets).
+  app.get('/api/account/:addr/hashrate/history', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const { addr } = req.params;
+      const hours = Math.min(Math.max(parseInt(req.query.hours || 24), 1), 720);
+      const series = hashrateTracker.getAccountHistory(addr, hours);
+      res.json({ grin_address: addr, hours, series });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Set a per-miner payout threshold (address-as-identity, IP-gated). Anti-griefing: a random
+  // visitor must not be able to stall someone's payouts by raising their threshold. Proof = one
+  // of the address's last-2 mining source IPs. Range: cannot drop below the pool minimum.
+  app.post('/api/account/:addr/min-payout', rateLimiter.middleware('public'), (req, res) => {
+    const { addr } = req.params;
+    const reqIp = normalizeIp(req.ip);
+    try {
+      const acct = db.prepare('SELECT grin_address FROM miner_accounts WHERE grin_address = ?').get(addr);
+      if (!acct) return res.status(404).json({ error: 'Account not found' });
+
+      const ipProof = (req.body && req.body.ip_proof) || '';
+      const proof = verifyIpProof(db, addr, ipProof);
+      if (!proof.ok) {
+        auditOwnerProof(db, { action: 'set_min_payout', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
+        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
+      }
+
+      let val = req.body && req.body.min_payout;
+      // null/empty → clear the override (revert to pool default).
+      if (val === null || val === undefined || val === '') {
+        db.prepare('UPDATE miner_accounts SET min_payout = NULL, updated_at = unixepoch() WHERE grin_address = ?').run(addr);
+        auditOwnerProof(db, { action: 'set_min_payout', grinAddress: addr, ip: reqIp, ok: true, details: { min_payout: null } });
+        return res.json({ success: true, min_payout: null, effective_min_payout: config.min_withdrawal });
+      }
+
+      val = Number(val);
+      const poolMin = Number(config.min_withdrawal) || 0;
+      if (!Number.isFinite(val) || val < poolMin) {
+        return res.status(400).json({ error: `min_payout must be a number ≥ pool minimum (${poolMin})` });
+      }
+      if (val > 1e6) return res.status(400).json({ error: 'min_payout too large' });
+
+      db.prepare('UPDATE miner_accounts SET min_payout = ?, updated_at = unixepoch() WHERE grin_address = ?').run(val, addr);
+      auditOwnerProof(db, { action: 'set_min_payout', grinAddress: addr, ip: reqIp, ok: true, details: { min_payout: val } });
+      res.json({ success: true, min_payout: val, effective_min_payout: val });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Pool-wide hashrate time-series (SUM across addresses per bucket) for the dashboard chart.
+  app.get('/api/pool/hashrate/history', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const hours = Math.min(Math.max(parseInt(req.query.hours || 24), 1), 720);
+      const series = hashrateTracker.getPoolHistory(hours);
+      res.json({ hours, series });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Round effort / luck / time-since-last-block — pool-trust signals.
+  //  · round_effort_pct = Σ(share diff since last block) / current per-block network diff × 100
+  //  · luck_100_pct     = mean over last 100 blocks of (network_difficulty / round_shares) × 100
+  //    (>100% = luckier than expected; uses captured per-block columns, NULL rows skipped)
+  // Current network difficulty is cached ~60s to avoid hammering the node.
+  app.get('/api/pool/effort', rateLimiter.middleware('public'), async (req, res) => {
+    try {
+      const last = blockManager.getLastBlock();
+      const lastBlockAt = last ? last.found_at : null;
+      const now = Math.floor(Date.now() / 1000);
+
+      // Cached current per-block network difficulty.
+      if (!app.locals._netDiffCache || (Date.now() - app.locals._netDiffCache.at) > 60000) {
+        let netDiff = null;
+        try {
+          if (blockMonitor && blockMonitor.grinNode) {
+            const tip = await blockMonitor.grinNode.getTip();
+            netDiff = await blockManager._fetchNetworkDifficulty(tip.height);
+          }
+        } catch (_) { /* leave null */ }
+        app.locals._netDiffCache = { at: Date.now(), value: netDiff };
+      }
+      const netDiff = app.locals._netDiffCache.value;
+
+      const roundDiff = db.prepare(
+        'SELECT COALESCE(SUM(difficulty), 0) AS d FROM shares WHERE created_at > ?'
+      ).get(lastBlockAt || 0).d;
+
+      const roundEffortPct = (netDiff && netDiff > 0)
+        ? parseFloat(((roundDiff / netDiff) * 100).toFixed(2)) : null;
+
+      const luckRows = db.prepare(
+        `SELECT network_difficulty AS nd, round_shares AS rs FROM blocks
+         WHERE network_difficulty IS NOT NULL AND round_shares > 0
+         ORDER BY height DESC LIMIT 100`
+      ).all();
+      let luckPct = null;
+      if (luckRows.length > 0) {
+        const mean = luckRows.reduce((a, r) => a + (r.nd / r.rs), 0) / luckRows.length;
+        luckPct = parseFloat((mean * 100).toFixed(1));
+      }
+
+      res.json({
+        last_block_at: lastBlockAt,
+        seconds_since_last_block: lastBlockAt ? (now - lastBlockAt) : null,
+        round_shares: parseFloat(roundDiff.toFixed(6)),
+        network_difficulty: netDiff,
+        round_effort_pct: roundEffortPct,
+        luck_100_pct: luckPct,
+        luck_sample: luckRows.length
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -996,23 +1146,60 @@ function setupRoutes() {
     }
   });
 
-  // Miner-initiated withdrawal (address-as-identity). The payout always goes back to the
-  // requesting address via the Tor listener, so there is no theft vector even without auth —
-  // it only moves an address's own balance to itself. Rate-limited; the CAS balance lock,
-  // 1-pending-per-address cap, and ledger entry all live in WithdrawalScheduler.createWithdrawal.
-  app.post('/api/account/:addr/withdraw', rateLimiter.middleware('public'), (req, res) => {
+  // Miner-initiated withdrawal (address-as-identity). Two rails:
+  //  · tor (default) — zero-interaction; payout always goes back to the requesting address via
+  //    its Tor listener, so there is no theft vector even without auth (it only moves an
+  //    address's own balance to itself). No IP gate.
+  //  · slatepack — interactive (no Tor). Emits a slate ENCRYPTED to the requesting address, so
+  //    only that wallet can decrypt + receive (no theft). Gated by an IP-proof (one of the
+  //    address's last-2 mining IPs) purely to throttle who can trigger it.
+  // Rate-limited; CAS balance lock + 1-pending-per-address cap live in the scheduler.
+  app.post('/api/account/:addr/withdraw', rateLimiter.middleware('public'), async (req, res) => {
     try {
       const { addr } = req.params;
       const method = (req.body && req.body.method) || 'tor';
-      if (method !== 'tor') {
-        // Slatepack transport is a documented-but-unbuilt rail (design §8 / §12); only the
-        // zero-interaction Tor transport is wired today. Fail explicitly rather than silently.
-        return res.status(400).json({ error: 'Only Tor withdrawals are available; Slatepack is not yet supported.' });
+
+      if (method === 'tor') {
+        const result = withdrawalScheduler.createWithdrawal(addr, req.body && req.body.amount, method);
+        return res.json({ success: true, withdrawal_id: result.withdrawal_id, status: 'tor_checking' });
       }
-      const result = withdrawalScheduler.createWithdrawal(addr, req.body && req.body.amount, method);
-      res.json({ success: true, withdrawal_id: result.withdrawal_id, status: 'tor_checking' });
+
+      if (method === 'slatepack') {
+        const reqIp = normalizeIp(req.ip);
+        const proof = verifyIpProof(db, addr, (req.body && req.body.ip_proof) || '');
+        if (!proof.ok) {
+          auditOwnerProof(db, { action: 'slatepack_withdraw', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
+          return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
+        }
+        const result = await withdrawalScheduler.createSlatepackWithdrawal(addr, req.body && req.body.amount);
+        auditOwnerProof(db, { action: 'slatepack_withdraw', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: result.withdrawal_id, amount: result.amount } });
+        return res.json({ success: true, withdrawal_id: result.withdrawal_id, amount: result.amount, status: 'slatepack_pending', slatepack: result.slatepack });
+      }
+
+      return res.status(400).json({ error: `unsupported withdrawal method: ${method}` });
     } catch (err) {
-      res.status(err.code && err.code >= 400 && err.code < 500 ? err.code : 500).json({ error: err.message });
+      res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });
+    }
+  });
+
+  // Complete a slatepack withdrawal: the miner pastes back the RESPONSE slatepack their wallet
+  // produced after `receive`. IP-gated like the trigger. The pool finalizes + broadcasts.
+  app.post('/api/account/:addr/withdraw/:id/finalize', rateLimiter.middleware('public'), async (req, res) => {
+    try {
+      const { addr, id } = req.params;
+      const reqIp = normalizeIp(req.ip);
+      const proof = verifyIpProof(db, addr, (req.body && req.body.ip_proof) || '');
+      if (!proof.ok) {
+        auditOwnerProof(db, { action: 'slatepack_finalize', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason, withdrawal_id: id } });
+        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
+      }
+      const result = await withdrawalScheduler.finalizeSlatepackWithdrawal(
+        addr, parseInt(id, 10), (req.body && req.body.response_slatepack) || ''
+      );
+      auditOwnerProof(db, { action: 'slatepack_finalize', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: id } });
+      res.json(result);
+    } catch (err) {
+      res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });
     }
   });
 

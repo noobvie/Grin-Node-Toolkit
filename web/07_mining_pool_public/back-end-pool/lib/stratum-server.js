@@ -213,6 +213,11 @@ class StratumServer {
 
     this.minerManager.ensureMinerExists(parsed.grin_address);
 
+    // Capture the miner's source IP into its last-2-IP window (backs the ownership gate for
+    // self-service actions). Raw TCP :3333 → socket.remoteAddress is the true public IP. On a
+    // satellite this is also relayed per-share so the hub records the miner IP, not ours.
+    this.minerManager.recordSourceIp(parsed.grin_address, ip);
+
     // Optional `donateN` worker tag → record the miner's voluntary donation %.
     // No-op unless donations are enabled in the admin panel.
     if (parsed.donation_percent !== null && parsed.donation_percent !== undefined) {
@@ -330,6 +335,9 @@ class StratumServer {
           difficulty:   session.difficulty,
           height,
           share_hash:   shareHash,
+          // Relay the MINER's source IP so the hub records it (not the satellite's req.ip).
+          // share-relay.js forwards this verbatim through live + failover-replay batches.
+          source_ip:    session.ip,
           created_at:   Math.floor(Date.now() / 1000)
         });
       }

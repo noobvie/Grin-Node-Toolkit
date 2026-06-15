@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { getDb } = require('./db');
+const { recordSourceIp } = require('./owner-proof');
 
 class MinerManager {
   constructor(config) {
@@ -72,6 +73,13 @@ class MinerManager {
     } catch (err) {
       console.error(`Error ensuring miner exists: ${err.message}`);
     }
+  }
+
+  // Record the source IP seen for an address into its last-2 distinct-IP window (backs the
+  // address-as-identity ownership gate). Delegates to owner-proof.recordSourceIp; cheap no-op
+  // when the IP is unchanged. Called from stratum login (local) and hub share ingestion (relay).
+  recordSourceIp(grinAddress, ip) {
+    return recordSourceIp(this.db, grinAddress, ip);
   }
 
   recordShare(grinAddress, difficulty) {

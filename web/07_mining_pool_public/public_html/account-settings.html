@@ -51,6 +51,23 @@
             </div>
 
             <div class="settings-section">
+                <h3>Hashrate (24h)</h3>
+                <div style="position:relative;height:220px"><canvas id="acct-hashrate-chart"></canvas></div>
+            </div>
+
+            <div class="settings-section">
+                <h3>Workers</h3>
+                <p style="margin-bottom:12px;color:var(--dark-dim);">
+                    Per-rig breakdown. Reject % / stale % are shown for workers currently connected
+                    to this server (live session counters).
+                </p>
+                <table class="data-table" aria-label="Workers">
+                    <thead><tr><th>Worker</th><th class="num">Hashrate</th><th class="num">Shares</th><th class="num">Stale %</th><th class="num">Reject %</th><th>Last share</th><th>Status</th></tr></thead>
+                    <tbody id="acct-workers"><tr><td colspan="7">—</td></tr></tbody>
+                </table>
+            </div>
+
+            <div class="settings-section">
                 <h3>Account Details</h3>
                 <ul class="detail-list">
                     <li><span class="k">Status</span><span class="v" id="acct-status">—</span></li>
@@ -64,14 +81,68 @@
             </div>
 
             <div class="settings-section">
+                <h3>Verify Ownership</h3>
+                <p style="margin-bottom:12px;color:var(--dark-dim);">
+                    Changing your payout settings or requesting a Slatepack payout requires proof
+                    that you control this address. Enter <strong>one of the last two public IP
+                    addresses</strong> your miner connected from. (Tor payouts don't need this —
+                    they always return to your own address.)
+                </p>
+                <div class="form-group">
+                    <label for="acct-ip-proof">Recent mining IP</label>
+                    <input type="text" id="acct-ip-proof" placeholder="e.g. 203.0.113.42" autocomplete="off" spellcheck="false">
+                    <small id="acct-ip-hint" style="color:var(--dark-dim);"></small>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h3>Payout Threshold</h3>
+                <p style="margin-bottom:12px;color:var(--dark-dim);">
+                    Set a personal minimum balance before you withdraw. Must be at or above the pool
+                    minimum (<span id="acct-pool-min">—</span> ツ). Leave blank to use the pool default.
+                </p>
+                <div class="form-group">
+                    <label for="acct-min-payout-input">Your minimum payout (GRIN)</label>
+                    <input type="number" id="acct-min-payout-input" min="0" step="0.1" placeholder="pool default" autocomplete="off">
+                </div>
+                <button class="btn-save" id="acct-save-min">Save Threshold</button>
+                <div class="acct-msg" id="acct-min-msg"></div>
+            </div>
+
+            <div class="settings-section">
                 <h3>Withdraw</h3>
                 <p style="margin-bottom: 16px; color: var(--dark-dim);">
                     Payouts are sent automatically over Tor to this address once your balance reaches
                     the minimum. You can also request one now — wallet reachability:
                     <span id="acct-tor" style="font-family: ui-monospace, monospace;">checking…</span>
                 </p>
-                <button class="btn-save" id="acct-withdraw">Request Payout Now</button>
+                <button class="btn-save" id="acct-withdraw">Request Tor Payout Now</button>
                 <div class="acct-msg" id="acct-withdraw-msg"></div>
+
+                <hr style="margin:20px 0;border:none;border-top:1px solid var(--dark-border, #2a3038);">
+                <h4 style="margin-bottom:8px;">No Tor? Withdraw via Slatepack</h4>
+                <p style="margin-bottom:12px;color:var(--dark-dim);">
+                    Generates a slatepack <strong>encrypted to your address</strong> — only your wallet
+                    can open it, so it's safe even though no login is required. Requires ownership
+                    verification (above). Steps: 1) generate, 2) <code>receive</code> it in your wallet,
+                    3) paste the response below to finalize.
+                </p>
+                <div class="form-group">
+                    <label for="acct-sp-amount">Amount (GRIN, blank = full balance)</label>
+                    <input type="number" id="acct-sp-amount" min="0" step="0.1" placeholder="full balance" autocomplete="off">
+                </div>
+                <button class="btn-save" id="acct-sp-create">Generate Slatepack</button>
+                <div class="acct-msg" id="acct-sp-msg"></div>
+                <div id="acct-sp-out" style="display:none;margin-top:14px;">
+                    <label>Encrypted slatepack — import this into your wallet and run <code>receive</code>:</label>
+                    <textarea id="acct-sp-armored" readonly rows="5" style="width:100%;font-family:ui-monospace,monospace;font-size:12px;"></textarea>
+                    <div class="form-group" style="margin-top:12px;">
+                        <label for="acct-sp-response">Paste your wallet's response slatepack:</label>
+                        <textarea id="acct-sp-response" rows="5" style="width:100%;font-family:ui-monospace,monospace;font-size:12px;" placeholder="BEGINSLATEPACK. ..."></textarea>
+                    </div>
+                    <button class="btn-save" id="acct-sp-finalize">Finalize Payout</button>
+                    <div class="acct-msg" id="acct-sp-final-msg"></div>
+                </div>
             </div>
 
             <div class="settings-section">
@@ -91,6 +162,8 @@
     </footer>
 
     <script src="/js/auth.js"></script>
+    <script src="/js/vendor/chart.umd.min.js"></script>
+    <script src="/js/charts-init.js"></script>
     <script>
         // Theme switching is handled site-wide by /js/public-theme.js, which renders
         // the theme picker and applies the 3 built-in + 10 white-label themes.
@@ -156,16 +229,26 @@
                 $id('acct-shares').textContent = Number(a.shares && a.shares.count || 0).toLocaleString('en-US');
                 $id('acct-last-share').textContent = fmtWhen(a.shares && a.shares.last_share_at);
                 $id('acct-pending').textContent = a.pending_withdrawals || 0;
-                $id('acct-min').textContent = fmtGrin(a.min_withdrawal);
+                $id('acct-min').textContent = fmtGrin(a.effective_min_payout != null ? a.effective_min_payout : a.min_withdrawal);
                 $id('acct-since').textContent = fmtWhen(a.created_at);
 
-                const canWithdraw = (a.balance || 0) >= (a.min_withdrawal || 0) && !a.pending_withdrawals;
+                // Payout-threshold controls: prefill the override (if any), show the pool floor,
+                // and hint whether an IP is on record for the ownership gate.
+                $id('acct-pool-min').textContent = Number(a.min_withdrawal || 0).toFixed(1);
+                $id('acct-min-payout-input').value = (a.min_payout != null) ? a.min_payout : '';
+                $id('acct-ip-hint').textContent = a.has_recorded_ip
+                    ? 'A mining IP is on record for this address.'
+                    : 'No mining IP recorded yet — connect a miner first, then settings unlock.';
+
+                const canWithdraw = (a.balance || 0) >= (a.effective_min_payout != null ? a.effective_min_payout : a.min_withdrawal || 0) && !a.pending_withdrawals;
                 $id('acct-withdraw').disabled = !canWithdraw;
 
                 $id('acct-view').style.display = '';
                 setMsg(msg, '', true);
                 loadLog(addr);
                 torCheck(addr);
+                loadWorkers(addr);
+                loadAcctChart(addr);
             } catch (e) {
                 $id('acct-view').style.display = 'none';
                 setMsg(msg, e.message === 'Account not found'
@@ -245,10 +328,125 @@
             }
         }
 
+        function escHtml(v) {
+            return String(v == null ? '' : v)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // Per-rig breakdown. reject%/stale% only exist for live (connected) workers.
+        async function loadWorkers(addr) {
+            const tbody = $id('acct-workers');
+            tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+            try {
+                const data = await getJson('/api/account/' + encodeURIComponent(addr) + '/workers?window=10');
+                const ws = (data && data.workers) || [];
+                if (!ws.length) { tbody.innerHTML = '<tr><td colspan="7">No worker activity in the last 10 minutes</td></tr>'; return; }
+                tbody.innerHTML = ws.map(function (w) {
+                    const pct = function (v) { return v == null ? '—' : Number(v).toFixed(1) + '%'; };
+                    return '<tr>' +
+                        '<td>' + escHtml(w.worker_name) + '</td>' +
+                        '<td class="num">' + escHtml(fmtGps(w.hashrate_gps || 0)) + '</td>' +
+                        '<td class="num">' + Number(w.share_count || 0).toLocaleString('en-US') + '</td>' +
+                        '<td class="num">' + pct(w.stale_pct) + '</td>' +
+                        '<td class="num">' + pct(w.reject_pct) + '</td>' +
+                        '<td>' + escHtml(fmtWhen(w.last_share_at)) + '</td>' +
+                        '<td><span class="badge' + (w.online ? ' badge-online' : '') + '">' + (w.online ? 'Online' : 'Offline') + '</span></td>' +
+                        '</tr>';
+                }).join('');
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="7">Worker data unavailable</td></tr>';
+            }
+        }
+
+        async function loadAcctChart(addr) {
+            if (typeof PoolCharts === 'undefined') return;
+            try {
+                const data = await getJson('/api/account/' + encodeURIComponent(addr) + '/hashrate/history?hours=24');
+                PoolCharts.renderHashrateChart('acct-hashrate-chart', (data && data.series) || [], { label: 'Your hashrate' });
+            } catch (e) { /* chart stays empty */ }
+        }
+
+        async function saveMinPayout() {
+            if (!currentAddr) return;
+            const msg = $id('acct-min-msg');
+            const ipProof = $id('acct-ip-proof').value.trim();
+            if (!ipProof) { setMsg(msg, 'Enter a recent mining IP above to verify ownership.', false); return; }
+            const raw = $id('acct-min-payout-input').value.trim();
+            setMsg(msg, 'Saving…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/min-payout', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ min_payout: raw === '' ? null : Number(raw), ip_proof: ipProof })
+                });
+                const json = await r.json().catch(() => null);
+                if (r.ok && json && json.success) {
+                    setMsg(msg, raw === '' ? 'Reverted to pool default.' : 'Threshold saved.', true);
+                    lookup();
+                } else {
+                    setMsg(msg, (json && (json.error + (json.reason ? ' (' + json.reason + ')' : ''))) || 'Save failed', false);
+                }
+            } catch (e) { setMsg(msg, 'Save failed: ' + e.message, false); }
+        }
+
+        async function slatepackCreate() {
+            if (!currentAddr) return;
+            const msg = $id('acct-sp-msg');
+            const ipProof = $id('acct-ip-proof').value.trim();
+            if (!ipProof) { setMsg(msg, 'Enter a recent mining IP above to verify ownership.', false); return; }
+            const amt = $id('acct-sp-amount').value.trim();
+            setMsg(msg, 'Generating encrypted slatepack…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ method: 'slatepack', amount: amt === '' ? null : Number(amt), ip_proof: ipProof })
+                });
+                const json = await r.json().catch(() => null);
+                if (r.ok && json && json.success) {
+                    $id('acct-sp-armored').value = json.slatepack || '';
+                    $id('acct-sp-out').style.display = '';
+                    $id('acct-sp-finalize').dataset.wid = json.withdrawal_id;
+                    setMsg(msg, 'Slatepack #' + json.withdrawal_id + ' created (' + json.amount + ' ツ). Import it, run receive, paste the response below.', true);
+                    lookup();
+                } else {
+                    setMsg(msg, (json && (json.error + (json.reason ? ' (' + json.reason + ')' : ''))) || 'Failed', false);
+                }
+            } catch (e) { setMsg(msg, 'Failed: ' + e.message, false); }
+        }
+
+        async function slatepackFinalize() {
+            if (!currentAddr) return;
+            const msg = $id('acct-sp-final-msg');
+            const wid = $id('acct-sp-finalize').dataset.wid;
+            const ipProof = $id('acct-ip-proof').value.trim();
+            const resp = $id('acct-sp-response').value.trim();
+            if (!wid) { setMsg(msg, 'Generate a slatepack first.', false); return; }
+            if (!resp) { setMsg(msg, 'Paste the response slatepack from your wallet.', false); return; }
+            setMsg(msg, 'Finalizing + broadcasting…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw/' + encodeURIComponent(wid) + '/finalize', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ response_slatepack: resp, ip_proof: ipProof })
+                });
+                const json = await r.json().catch(() => null);
+                if (r.ok && json && json.success) {
+                    setMsg(msg, 'Payout broadcast — confirmed. 🎉', true);
+                    $id('acct-sp-out').style.display = 'none';
+                    $id('acct-sp-response').value = '';
+                    lookup();
+                } else {
+                    setMsg(msg, (json && json.error) || 'Finalize failed', false);
+                }
+            } catch (e) { setMsg(msg, 'Finalize failed: ' + e.message, false); }
+        }
+
         document.addEventListener('DOMContentLoaded', function () {
             $id('acct-lookup').addEventListener('click', lookup);
             $id('acct-addr').addEventListener('keydown', function (e) { if (e.key === 'Enter') lookup(); });
             $id('acct-withdraw').addEventListener('click', withdraw);
+            $id('acct-save-min').addEventListener('click', saveMinPayout);
+            $id('acct-sp-create').addEventListener('click', slatepackCreate);
+            $id('acct-sp-finalize').addEventListener('click', slatepackFinalize);
 
             let saved = '';
             try { saved = localStorage.getItem(ADDR_KEY) || ''; } catch (e) {}

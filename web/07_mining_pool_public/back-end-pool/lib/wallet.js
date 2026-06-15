@@ -52,6 +52,70 @@ class WalletAPI {
     }
   }
 
+  // --- Slatepack send flow (Owner API v3) -----------------------------------
+  //
+  // Reinstates the interactive (no-Tor) payout, secured by ENCRYPTION rather than transport:
+  // the slate is armored as a slatepack *encrypted to the miner's grin address* (an ed25519
+  // SlatepackAddress — the same key used as the Tor .onion). Only the wallet holding that
+  // address's private key can decrypt + `receive`, so a non-owner who triggers the payout gets
+  // an undecryptable blob → no theft. The IP gate (owner-proof.js) only throttles who can trigger.
+  //
+  // Param order matches grin-wallet Owner API v3 (docs.rs grin_wallet_api::Owner / owner_rpc).
+  // Token is passed as null (no keychain mask), consistent with retrieve_summary_info above.
+
+  // 1a. Build an unconfirmed send slate. amountGrin → nanoGRIN (u64; pool payouts stay well
+  //     under 2^53 so a JS number is safe). Returns a VersionedSlate.
+  async initSendTx(amountGrin, { minimumConfirmations = 1 } = {}) {
+    const args = {
+      src_acct_name: null,
+      amount: Math.round(Number(amountGrin) * 1e9),
+      minimum_confirmations: minimumConfirmations,
+      max_outputs: 500,
+      num_change_outputs: 1,
+      selection_strategy_is_use_all: false,
+      target_slate_version: null,
+      payment_proof_recipient_address: null,
+      ttl_blocks: null,
+      estimate_only: null,
+      late_lock: null
+    };
+    return this._call('init_send_tx', [null, args]);
+  }
+
+  // 1b. Lock the inputs the slate spends (must run before sharing the slate).
+  async txLockOutputs(slate) {
+    return this._call('tx_lock_outputs', [null, slate]);
+  }
+
+  // 1c. Armor + ENCRYPT the slate to the recipient address(es). recipients = [SlatepackAddress];
+  //     a non-empty recipients list is what triggers age-encryption to those keys. Returns the
+  //     `BEGINSLATEPACK…ENDSLATEPACK` string to hand to the miner.
+  async createSlatepackMessage(slate, recipients, senderIndex = 0) {
+    return this._call('create_slatepack_message', [null, senderIndex, recipients, slate]);
+  }
+
+  // 2. Decode the miner's returned (response) slatepack back into a slate.
+  async slateFromSlatepackMessage(message, secretIndices = [0]) {
+    return this._call('slate_from_slatepack_message', [null, message, secretIndices]);
+  }
+
+  // 3a. Finalize the round-tripped slate (adds the sender's partial signature).
+  async finalizeTx(slate) {
+    return this._call('finalize_tx', [null, slate]);
+  }
+
+  // 3b. Broadcast the finalized tx to the node (fluff = don't wait for dandelion aggregation).
+  async postTx(slate, fluff = false) {
+    return this._call('post_tx', [null, slate, fluff]);
+  }
+
+  // Cancel a pending tx by its slate UUID and release the wallet-side output locks taken by
+  // tx_lock_outputs. Used when a slatepack payout expires unfinalized. params: [token, tx_id,
+  // tx_slate_id] — pass tx_id null and match on the slate UUID.
+  async cancelTx(slateId) {
+    return this._call('cancel_tx', [null, null, slateId]);
+  }
+
   // Bech32 charset: lowercase except b, i, o, 1 → [ac-hj-np-z02-9]
   validateGrinAddress(address, network = 'testnet') {
     if (!address) return false;

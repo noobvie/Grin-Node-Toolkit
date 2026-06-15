@@ -74,6 +74,81 @@ function migrateUsers() {
   }
 }
 
+// Additive, non-destructive: add per-miner payout threshold + last-seen source IPs to an
+// existing miner_accounts table (older DBs predate them). min_payout NULL = use the pool
+// default (config.min_withdrawal). last_ip/prev_ip back the address-as-identity ownership
+// gate (one of the address's last-2 mining source IPs must be supplied for sensitive actions).
+function migrateMinerAccounts() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(miner_accounts)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the columns
+    const have = new Set(cols.map(c => c.name));
+    const additions = {
+      min_payout: 'REAL DEFAULT NULL',
+      last_ip: 'TEXT DEFAULT NULL',
+      prev_ip: 'TEXT DEFAULT NULL'
+    };
+    for (const [name, def] of Object.entries(additions)) {
+      if (!have.has(name)) {
+        db.exec(`ALTER TABLE miner_accounts ADD COLUMN ${name} ${def}`);
+        console.warn(`[db] miner_accounts: added missing column ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error(`[db] miner_accounts migration check failed: ${e.message}`);
+  }
+}
+
+// Additive, non-destructive: add the per-block stats backing round effort / luck to an existing
+// blocks table (older DBs predate them). Both NULL on legacy rows → those blocks are skipped by
+// the luck calc. Captured at find time so luck-over-N-blocks stays exact even after raw shares are
+// pruned to the PPLNS window:
+//   network_difficulty — the block's C32 network difficulty (total_diff[h] − total_diff[h-1])
+//   round_shares       — accumulated pool share-difficulty for the round that found the block
+function migrateBlocks() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(blocks)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the columns
+    const have = new Set(cols.map(c => c.name));
+    const additions = {
+      network_difficulty: 'REAL DEFAULT NULL',
+      round_shares: 'REAL DEFAULT NULL'
+    };
+    for (const [name, def] of Object.entries(additions)) {
+      if (!have.has(name)) {
+        db.exec(`ALTER TABLE blocks ADD COLUMN ${name} ${def}`);
+        console.warn(`[db] blocks: added missing column ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error(`[db] blocks migration check failed: ${e.message}`);
+  }
+}
+
+// Additive, non-destructive: add the slatepack-payout columns to an existing withdrawals table
+// (older DBs predate them). `method` distinguishes 'tor' (default) from 'slatepack'; `slate_id`
+// records the grin-wallet slate UUID so a pending slatepack can be cancelled/expired and matched
+// on finalize. The status column is free-text, so slatepack_* states need no migration.
+function migrateWithdrawals() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(withdrawals)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the columns
+    const have = new Set(cols.map(c => c.name));
+    const additions = {
+      method: "TEXT NOT NULL DEFAULT 'tor'",
+      slate_id: 'TEXT DEFAULT NULL'
+    };
+    for (const [name, def] of Object.entries(additions)) {
+      if (!have.has(name)) {
+        db.exec(`ALTER TABLE withdrawals ADD COLUMN ${name} ${def}`);
+        console.warn(`[db] withdrawals: added missing column ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error(`[db] withdrawals migration check failed: ${e.message}`);
+  }
+}
+
 // Additive, non-destructive: add the multi-region `region` column to an existing
 // shares table (older testnet DBs predate it). NOT NULL DEFAULT 'default' backfills
 // every existing row, so legacy single-region shares group under 'default'.
@@ -103,6 +178,9 @@ function createSchema() {
       balance_locked REAL NOT NULL DEFAULT 0.0,
       is_online INTEGER NOT NULL DEFAULT 0,
       last_seen_at INTEGER DEFAULT NULL,
+      min_payout REAL DEFAULT NULL,
+      last_ip TEXT DEFAULT NULL,
+      prev_ip TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
@@ -120,6 +198,8 @@ function createSchema() {
       found_by TEXT NOT NULL REFERENCES miner_accounts(grin_address),
       found_at INTEGER NOT NULL,
       confirmed_at INTEGER DEFAULT NULL,
+      network_difficulty REAL DEFAULT NULL,
+      round_shares REAL DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
@@ -159,6 +239,8 @@ function createSchema() {
       amount REAL NOT NULL,
       fee REAL NOT NULL DEFAULT 0.0,
       status TEXT NOT NULL DEFAULT 'tor_checking',
+      method TEXT NOT NULL DEFAULT 'tor',
+      slate_id TEXT DEFAULT NULL,
       retry_count INTEGER NOT NULL DEFAULT 0,
       next_retry_at INTEGER DEFAULT NULL,
       tor_check_result TEXT DEFAULT NULL,
@@ -356,6 +438,9 @@ function createSchema() {
   // Additive column migrations run after the tables exist.
   migrateUsers();
   migrateShares();
+  migrateMinerAccounts();
+  migrateBlocks();
+  migrateWithdrawals();
 }
 
 function closeDb() {

@@ -159,6 +159,32 @@
             <a class="btn primary sm" href="connect.html" data-brand="cta">Start Mining</a>
         </div>
 
+        <div class="grid cols-4" style="margin-top:14px">
+            <div class="stat-card">
+                <div class="stat-label">Round Effort</div>
+                <div class="stat-value" id="stat-effort">—</div>
+                <div class="stat-delta">since last block</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Luck (100 blocks)</div>
+                <div class="stat-value" id="stat-luck">—</div>
+                <div class="stat-delta" id="stat-luck-sample"></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Time Since Last Block</div>
+                <div class="stat-value" id="stat-since-block">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Current Round Shares</div>
+                <div class="stat-value" id="stat-round-shares">—</div>
+            </div>
+        </div>
+
+        <div class="card" style="margin-top:14px">
+            <div class="card-head"><h3>Pool Hashrate (24h)</h3></div>
+            <div style="position:relative;height:240px"><canvas id="pool-hashrate-chart"></canvas></div>
+        </div>
+
         <div class="section-title">Recent activity</div>
         <div class="grid cols-2">
             <div class="card table-card">
@@ -191,6 +217,8 @@
     <script src="/js/auth.js"></script>
     <script src="/js/public-theme.js"></script>
     <script src="/js/branding.js"></script>
+    <script src="/js/vendor/chart.umd.min.js"></script>
+    <script src="/js/charts-init.js"></script>
     <script>
         // Theme switching is handled site-wide by /js/public-theme.js (select rendered
         // into the .theme-switcher container in the nav); branding.js applies the
@@ -377,10 +405,34 @@
             }
         }
 
+        // Round effort / luck / time-since-last-block — pool-trust signals.
+        async function loadEffort() {
+            try {
+                var e = await Auth.fetch('/api/pool/effort');
+                if (!e) return;
+                setText('stat-effort', e.round_effort_pct != null ? e.round_effort_pct.toFixed(0) + '%' : '—');
+                setText('stat-luck', e.luck_100_pct != null ? e.luck_100_pct.toFixed(0) + '%' : '—');
+                setText('stat-luck-sample', e.luck_sample ? ('over ' + e.luck_sample + ' blocks') : 'no data yet');
+                setText('stat-since-block', e.seconds_since_last_block != null ? timeAgo(e.last_block_at) : '—');
+                setText('stat-round-shares', e.round_shares != null ? Number(e.round_shares).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—');
+            } catch (err) { /* tiles keep placeholders */ }
+        }
+
+        // Pool-wide hashrate chart (vendored Chart.js via /js/charts-init.js).
+        async function loadChart() {
+            if (typeof PoolCharts === 'undefined') return;
+            try {
+                var data = await Auth.fetch('/api/pool/hashrate/history?hours=24');
+                PoolCharts.renderHashrateChart('pool-hashrate-chart', (data && data.series) || [], { label: 'Pool hashrate' });
+            } catch (err) { /* chart stays empty */ }
+        }
+
         function refresh() {
             loadStats();
             loadBlocks();
             loadPayments();
+            loadEffort();
+            loadChart();
         }
 
         document.addEventListener('DOMContentLoaded', refresh);

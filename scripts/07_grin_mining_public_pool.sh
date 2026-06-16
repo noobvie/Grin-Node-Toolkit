@@ -848,12 +848,37 @@ $cf_realip_include
     location /admin/ {
 $admin_rules
         limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        # SERVER-SIDE auth gate (kills the "flash of admin page → redirect" UX bug):
+        # subrequest the backend before serving ANY admin file. The static HTML is an
+        # empty shell (data comes from authenticated /api/admin/* calls), but rendering
+        # it for a logged-out visitor looked broken. auth_request makes nginx withhold
+        # the page entirely until /api/admin/_authcheck returns 2xx; a 401/403 is caught
+        # by error_page → @admin_login → redirect to /login.html, so the browser never
+        # receives admin markup unauthenticated. The client-side API.guardAdminPage()
+        # remains as a fallback for installs whose nginx predates this block.
+        auth_request /admin/_authcheck;
+        error_page 401 403 = @admin_login;
         # No content hashing on these static pages, so tell browsers to revalidate
         # every load (304 when unchanged). Without this, browsers heuristically cache
         # the HTML and keep showing the OLD admin panel after a redeploy.
         add_header Cache-Control "no-cache" always;
         try_files \$uri \$uri/ \$uri.html =404;
     }
+    # Internal target for the auth_request above — never reachable directly (internal).
+    # No network gate / rate limit here: the parent /admin/ already applied \$admin_rules,
+    # and the backend handler deliberately skips the admin brute-force budget so per-asset
+    # subrequests stay cheap. Strip the body (we only care about the status code).
+    location = /admin/_authcheck {
+        internal;
+        proxy_pass              http://127.0.0.1:$POOL_PORT/api/admin/_authcheck;
+        proxy_pass_request_body off;
+        proxy_set_header        Content-Length "";
+        proxy_set_header        Host \$host;
+        proxy_set_header        X-Real-IP \$remote_addr;
+        proxy_set_header        X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+    # Unauthenticated visitors to /admin/* land on the public login door, not a 401 page.
+    location @admin_login { return 302 https://\$host/login.html; }
     location /api/admin/ {
 $admin_rules
         limit_req zone=${POOL_SERVICE}_api burst=10 nodelay;

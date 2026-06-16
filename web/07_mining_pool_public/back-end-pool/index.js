@@ -2189,6 +2189,22 @@ function setupRoutes() {
     });
   });
 
+  // Lightweight gate for nginx `auth_request` in front of the static /admin/ pages.
+  // Purpose: stop nginx serving the admin HTML to an unauthenticated browser AT ALL —
+  // no render, no "flash of admin page then redirect to /login.html". nginx subrequests
+  // this on every /admin/* hit and only serves the page on a 2xx; 401/403 → redirect to
+  // /login.html (handled in the nginx @admin_login fallback). Deliberately bypasses the
+  // `admin` rate limiter (just requireAdmin = a cheap cookie+JWT verify, no DB) because it
+  // fires per page AND per admin asset (admin-shell.js, styles.css) — running it through
+  // the brute-force budget would throttle normal navigation. The network perimeter is
+  // already enforced at the nginx `location /admin/` level ($admin_rules); the real
+  // /api/admin/* data endpoints keep the full secureAdmin stack. Returns 204 (no body —
+  // auth_request ignores it). client-side API.guardAdminPage() stays as a fallback for
+  // installs whose nginx wasn't re-run.
+  app.get('/api/admin/_authcheck', requireAdmin(authManager), (req, res) => {
+    res.status(204).end();
+  });
+
   // Unified Admin Dashboard
   app.get('/api/admin/dashboard', secureAdmin, async (req, res) => {
     try {

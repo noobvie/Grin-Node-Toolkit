@@ -445,10 +445,16 @@ Key design decisions (locked in — do not change without user confirmation):
   left sidebar + a topbar, wraps the page `<main>` in `.admin-main`, and removes any leftover legacy chrome
   (`body > header`/`footer`/`.testnet-banner`). The old per-page top `<header>`/`nav-links` and the 5-theme
   chrome switcher were **removed**. The single `NAV` array in admin-shell.js is the source of truth for nav items:
-  Dashboard / Miners / Payouts / Blocks / Users / System Health / Settings (flat — edit `NAV` once to add/reorder).
-  `settings.html` tab switching is **hash-driven** (`tabFromHash()`/`hashchange`), so a direct URL like
-  `settings.html#access` still opens the Access Control tab even though the sidebar lists a single flat Settings
-  entry. Layout uses `admin-panel/styles.css` `.admin-sidebar` (fixed) + `.admin-main` wrapper; `#nav-user` lives
+  Dashboard / Miners / Payouts / Blocks / Users / System Health / Settings — edit `NAV` once to add/reorder.
+  **Settings is an EXPANDABLE GROUP (added 2026-06):** a NAV entry with a `children` array (each `{tab,title}`)
+  renders as a parent link + a nested `.admin-subnav` of sub-links pointing at `settings.html#<tab>` (the 11
+  settings tabs: pool-info/branding/seo/analytics/pages/announcements/payout/incentives/access/alerts/database).
+  The group auto-expands (CSS `.admin-nav-group.open`) only while you're on `settings.html`; the `▸` caret toggles
+  it manually. `syncActiveSubtab()` (a `hashchange` listener in admin-shell.js) keeps the active sub-link
+  highlighted as the in-page tab changes. To add a settings tab: add a `data-tab` button in settings.html AND a
+  `children` entry in admin-shell.js NAV. `settings.html` tab switching is **hash-driven**
+  (`tabFromHash()`/`hashchange`), so a direct URL like `settings.html#access` opens the Access Control tab and the
+  sidebar sub-link lights up to match. Layout uses `admin-panel/styles.css` `.admin-sidebar` (fixed) + `.admin-main` wrapper; `#nav-user` lives
   in the topbar and is populated by `API.guardAdminPage()`. Admin chrome theme is a Dark/Light toggle handled by
   admin-shell.js itself (storage key `admin-ui-mode` — deliberately NOT `admin-theme`, which branding.js uses for
   the public default_theme) — Matrix/Naruto/Japan dropped from admin chrome. Pages with step-up-gated actions
@@ -485,6 +491,20 @@ Key design decisions (locked in — do not change without user confirmation):
   else wires up the `#nav-user` username + Logout. Every admin page (`index/miners/health/payments/users`
   inline guard, `settings.html` DOMContentLoaded) calls `API.guardAdminPage()` — `decodePayload()` is dead.
   Rule: to gate a new admin page, call `API.guardAdminPage()`, never decode the cookie client-side.
+  **Server-side admin gate via nginx `auth_request` (added 2026-06) — kills the "flash of admin page
+  → redirect to /login.html":** the admin HTML is static-served by nginx, so the client-side
+  `guardAdminPage()` redirect only fired AFTER the page rendered (a visible flash; not a data leak —
+  the pages are empty shells filled by authenticated `/api/admin/*` calls, but it looked broken).
+  Fix: `location /admin/` in `pool_setup_nginx` (`scripts/07_grin_mining_public_pool.sh`) now does
+  `auth_request /admin/_authcheck;` + `error_page 401 403 = @admin_login;` (→ `return 302 /login.html`),
+  so nginx withholds the markup until the subrequest passes. The internal `location = /admin/_authcheck`
+  proxies to backend `GET /api/admin/_authcheck` (in `index.js`), gated by **`requireAdmin(authManager)`
+  ONLY** — deliberately NOT the full `secureAdmin` array, so it skips the admin rate limiter (it fires
+  per page AND per admin asset like admin-shell.js/styles.css; running it through the brute-force budget
+  would throttle navigation). Returns 204. `guardAdminPage()` stays as a client-side fallback for
+  installs whose nginx predates this block. To gate a new admin page: nothing extra — it's under
+  `/admin/`, already covered. login.html staying public is correct (it's the door); the bug was that
+  the admin *pages* were also public.
   login is split OUT of `/admin/` ON PURPOSE: it lives in the public
   zone (door) while the panel is IP-gated (rooms); you can't put one file in two nginx access zones. The
   old `back-end-pool/public/{login,admin}.html` duplicates were deleted 2026-06 (never deployed — the
@@ -644,6 +664,24 @@ All public (no admin auth), `rateLimiter.middleware('public')`:
 - `GET /api/account/:addr` now also returns `min_payout`, `effective_min_payout`, `has_recorded_ip`.
 
 **Miner source-IP capture (backs the ownership gate):** recorded into `miner_accounts.last_ip/prev_ip` (last-2 distinct, shift on change) via `minerManager.recordSourceIp` → `owner-proof.recordSourceIp`. Captured at stratum login locally; **in hub-and-spoke the satellite relays the miner IP per-share** (`source_ip` added to the relayed share object in `stratum-server.js`; `share-relay.js` forwards it verbatim incl. failover replay; hub `POST /api/shares` uses `s.source_ip`, NOT `req.ip` which is the satellite). UI: all per-account features live on `account-settings.html` (chart, workers, threshold, slatepack); pool chart + effort row on `index.html`.
+- **Public chrome = `public_html/js/public-shell.js` (single source of truth, added 2026-06 — the
+  public mirror of `admin-shell.js`).** Every public page (all 7 that share the site header:
+  index, miners-stats, payment-history, account-settings, fortune-board, donate, page) now ships
+  ONLY its content (`<div class="wrap">`/`.container`) and an `<!-- header/footer injected by
+  /js/public-shell.js -->` marker; the `<header>` (brand + nav + `.theme-switcher` + "Start Mining")
+  and `<footer>` are injected SYNCHRONOUSLY at body-end by public-shell.js, so the chrome is
+  byte-identical across pages with no flash. **The `NAV` array in public-shell.js is the ONE source
+  for the public nav** — edit it once to add/rename/reorder a link. Load order on every page:
+  `public-shell.js → public-theme.js → branding.js` (shell first so `.theme-switcher`/`.header-nav`
+  exist before the other two run). **Why the earlier centralization "didn't help":** branding.js USED
+  to own a `NAV_LINKS` list + `buildNav()` that rewrote each page's *hardcoded* `<header>` nav AFTER
+  the async `/api/config` fetch — so until that resolved you saw each page's drifting hardcoded
+  fallback nav (and the surrounding header/footer markup was still duplicated in 7 files). `NAV_LINKS`
+  + `buildNav` were REMOVED from branding.js; it now only ENHANCES the injected chrome (logo/slogan via
+  `.brand`, `[data-brand]` hooks, and the incentives-gated `injectRewardsLink` 🎁 Rewards link — which
+  still inserts before the `account-settings.html` nav link). `login.html` is intentionally NOT
+  converted (standalone admin door, no site header). To change the public header/footer or nav: edit
+  public-shell.js, never re-add per-page `<header>`/`<footer>`.
 - **Public page set consolidated 2026-06 — 8 pages in `public_html/`:** `index.html` (dashboard +
   connect + info), `miners-stats.html`, `payment-history.html`, `account-settings.html`,
   `fortune-board.html`, `donate.html` (last two = incentives), `login.html` (admin door, public zone),
@@ -653,8 +691,8 @@ All public (no admin auth), `rateLimiter.middleware('public')`:
   `home-classic.html` (orphan dup of index), `grin_mining_testnet_instruction.html` (testnet on a
   mainnet-only product — testnet lives in the solo script), `system-health.html` +
   `admin-dashboard.html` (the gated `/admin/` panel is the sole admin surface; login → `/admin/`).
-  When removing/renaming a public page, fix the backend `SITEMAP_PATHS` in `index.js` and every
-  `nav-link` href across the other pages. **`sitemap.xml` / `robots.txt` / `manifest.json` are
+  When removing/renaming a public page, fix the backend `SITEMAP_PATHS` in `index.js` and the
+  `NAV` array in `public_html/js/public-shell.js` (single nav source — see next bullet). **`sitemap.xml` / `robots.txt` / `manifest.json` are
   served dynamically by the backend** (`index.js` routes, nginx `location = /…` proxies those three
   exact paths to Node) — there are **no** static copies in `public_html/` (the stale shadowed
   duplicates were deleted 2026-06). Do not recreate them; edit the generators in `index.js` instead. The merged dashboard **#info** section ports pool-info's Rules/payouts + Support

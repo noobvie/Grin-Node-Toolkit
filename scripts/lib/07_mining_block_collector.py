@@ -84,11 +84,12 @@ FOUND_RE = re.compile(
     re.I,
 )
 
-# Accepted-share line. 'w' = worker/login. The 'd' (actual difficulty) field is
-# matched to anchor the line shape but intentionally NOT summed — see
-# SHARE_CREDIT_DIFF for why each share is credited a fixed difficulty instead.
+# Accepted-share line. 'w' = worker/login, 'h' = height (used to attribute a found
+# block to the worker of its winning share — see _consume_found). The 'd' (actual
+# difficulty) field is matched to anchor the line shape but intentionally NOT summed
+# — see SHARE_CREDIT_DIFF for why each share is credited a fixed difficulty instead.
 SHARE_RE = re.compile(
-    r"Got share at height\s+\d+.*?difficulty\s+(?P<d>\d+)\s*/\s*\d+.*?submitted by\s+(?P<w>\S+)",
+    r"Got share at height\s+(?P<h>\d+).*?difficulty\s+(?P<d>\d+)\s*/\s*\d+.*?submitted by\s+(?P<w>\S+)",
     re.I,
 )
 
@@ -235,7 +236,7 @@ def save_json_atomic(path, obj, mode=0o600):
 DB_SCHEMA = """
 PRAGMA synchronous=FULL;
 CREATE TABLE IF NOT EXISTS meta          (key TEXT PRIMARY KEY, value TEXT);
-CREATE TABLE IF NOT EXISTS found_blocks  (height INTEGER PRIMARY KEY, ts REAL NOT NULL, hash TEXT);
+CREATE TABLE IF NOT EXISTS found_blocks  (height INTEGER PRIMARY KEY, ts REAL NOT NULL, hash TEXT, found_by TEXT);
 CREATE TABLE IF NOT EXISTS workers       (worker TEXT PRIMARY KEY, last_seen REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS worker_buckets(worker TEXT NOT NULL, bucket INTEGER NOT NULL, diff REAL NOT NULL, PRIMARY KEY (worker, bucket));
 CREATE TABLE IF NOT EXISTS hr_days       (day TEXT PRIMARY KEY, diff_sum INTEGER NOT NULL);
@@ -247,11 +248,22 @@ CREATE TABLE IF NOT EXISTS payments      (id INTEGER PRIMARY KEY AUTOINCREMENT, 
 """
 
 
+def _migrate_schema(conn):
+    """Additive column migrations for DBs created before a column existed.
+    found_blocks.found_by (block-finder attribution) was added later — CREATE TABLE
+    IF NOT EXISTS never alters an existing table, so add it here when missing."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(found_blocks)")}
+    if "found_by" not in cols:
+        conn.execute("ALTER TABLE found_blocks ADD COLUMN found_by TEXT")
+        conn.commit()
+
+
 def db_connect(path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fresh = not os.path.exists(path)
     conn = sqlite3.connect(path, timeout=30)
     conn.executescript(DB_SCHEMA)
+    _migrate_schema(conn)
     if fresh:
         try:
             os.chmod(path, 0o600)
@@ -271,11 +283,13 @@ def _meta_set(conn, key, value):
 
 def load_state_db(conn):
     """Read every state table back into the dict shapes the build_* code expects."""
-    found, hashes = {}, {}
-    for h, ts, hsh in conn.execute("SELECT height, ts, hash FROM found_blocks"):
+    found, hashes, found_by = {}, {}, {}
+    for h, ts, hsh, fb in conn.execute("SELECT height, ts, hash, found_by FROM found_blocks"):
         found[str(h)] = ts
         if hsh:
             hashes[str(h)] = hsh
+        if fb:
+            found_by[str(h)] = fb
     workers = {}
     for w, ls in conn.execute("SELECT worker, last_seen FROM workers"):
         workers[w] = {"last_seen": ls, "buckets": {}}
@@ -286,7 +300,7 @@ def load_state_db(conn):
     hr_days = {day: ds for day, ds in conn.execute("SELECT day, diff_sum FROM hr_days")}
     net_prev = json.loads(_meta_get(conn, "net_prev", "{}"))
     log_pos = json.loads(_meta_get(conn, "log_pos", "{}"))
-    return {"found": found, "hashes": hashes, "workers": workers,
+    return {"found": found, "hashes": hashes, "found_by": found_by, "workers": workers,
             "net_prev": net_prev, "hr_days": hr_days, "log_pos": log_pos}
 
 
@@ -297,9 +311,11 @@ def save_state_db(conn, state):
     SQLite, and the build_* code has already pruned the dicts before this runs."""
     with conn:
         conn.execute("DELETE FROM found_blocks")
+        found_by = state.get("found_by", {})
         conn.executemany(
-            "INSERT INTO found_blocks(height, ts, hash) VALUES (?, ?, ?)",
-            [(int(h), ts, state["hashes"].get(h)) for h, ts in state["found"].items()])
+            "INSERT INTO found_blocks(height, ts, hash, found_by) VALUES (?, ?, ?, ?)",
+            [(int(h), ts, state["hashes"].get(h), found_by.get(h))
+             for h, ts in state["found"].items()])
         conn.execute("DELETE FROM workers")
         conn.execute("DELETE FROM worker_buckets")
         wrows, brows = [], []
@@ -824,13 +840,27 @@ def _window_days(period, now):
     return today.strftime("%Y"), days[0], days[-1], days
 
 
-def compute_split(ledger, now):
+def compute_split(ledger, found, found_by, now):
     """Per-period payout split. reward_P = Σ matured blocks × 60 GRIN, divided by
     work share (Σ share-diff). Workers are grouped by nickname (the text before the
-    first dot in nickname.NN). Nicknames + % + GRIN ONLY — never addresses."""
+    first dot in nickname.NN). Nicknames + % + GRIN ONLY — never addresses.
+
+    Each person also carries blocks_found: how many blocks that nickname's winning
+    shares produced within the period window. This is an informational leaderboard
+    stat ONLY — payouts are split by work share above, never by who found the block."""
     periods = {}
     for period in SPLIT_PERIODS:
         label, dfrom, dto, days = _window_days(period, now)
+        day_set = set(days)
+        # Blocks found per nickname inside the window (by the finder's found-ts).
+        # Unattributed blocks (rotated-log backfill / pre-attribution history) are
+        # omitted from the per-nick tally but still count in blocks_matured.
+        blocks_by_nick = {}
+        for h, ts in found.items():
+            if utc_day(ts) in day_set:
+                w = found_by.get(h)
+                if w:
+                    blocks_by_nick[_nick_of(w)] = blocks_by_nick.get(_nick_of(w), 0) + 1
         blocks_matured = 0
         diffs = {}
         for day in days:
@@ -858,7 +888,8 @@ def compute_split(ledger, now):
             grin = (reward * diff / total_diff) if total_diff > 0 else 0.0
             persons.append({"name": name, "workers": len(g["workers"]),
                             "diff": int(diff), "pct": round(pct, 1),
-                            "grin": round(grin, 3)})
+                            "grin": round(grin, 3),
+                            "blocks_found": blocks_by_nick.get(name, 0)})
         # highest payout first, then by nickname
         persons.sort(key=lambda x: (-x["grin"], x["name"]))
         periods[period] = {
@@ -870,7 +901,7 @@ def compute_split(ledger, now):
 
 
 # ── log scanning ─────────────────────────────────────────────────────────────
-def _consume_found(line, found, hashes):
+def _consume_found(line, found, hashes, found_by=None, last_share=None):
     mf = FOUND_RE.search(line)
     if not mf:
         return False
@@ -879,18 +910,29 @@ def _consume_found(line, found, hashes):
     if h not in found or ts < found[h]:
         found[h] = ts
     hashes[h] = mf.group("hash").lower()
+    # Attribute the block to the worker of its winning share. Grin logs the
+    # "Got share at height H … submitted by W" line for the winning submission
+    # immediately before "Solution Found for block H", so the last share seen at
+    # this height is the finder. First finder wins; the rotated-log backfill has no
+    # share context and leaves the block unattributed (rendered as "unknown").
+    if (found_by is not None and last_share and last_share.get("height") == h
+            and last_share.get("worker") and h not in found_by):
+        found_by[h] = last_share["worker"]
     return True
 
 
-def scan_increment(main_log, pos_state, found, hashes, workers, backfill):
-    """Read new log content; update found{}, hashes{} and workers{}; return new pos_state."""
+def scan_increment(main_log, pos_state, found, hashes, workers, found_by, backfill):
+    """Read new log content; update found{}, hashes{}, found_by{} and workers{}; return new pos_state."""
+    last_share = {}   # most recent "Got share" line: {height, worker} — drives found_by
     def handle_line(line):
-        if _consume_found(line, found, hashes):
+        if _consume_found(line, found, hashes, found_by, last_share):
             return
         ms = SHARE_RE.search(line)
         if ms:
             ts = parse_epoch(line) or time.time()
             w = ms.group("w").strip().strip(".,")
+            last_share["height"] = str(int(ms.group("h")))
+            last_share["worker"] = w
             wk = workers.setdefault(w, {"last_seen": 0, "buckets": {}})
             if ts > wk["last_seen"]:
                 wk["last_seen"] = ts
@@ -1196,16 +1238,18 @@ def main():
     state = load_state_db(conn)
     found = state["found"]
     hashes = state["hashes"]
+    found_by = state["found_by"]
     workers = state["workers"]
     net_prev = state["net_prev"]
     hr_days = state["hr_days"]
     pos_state = state["log_pos"]
     backfill = not found and not workers and not pos_state
 
-    pos_state = scan_increment(args.log, pos_state, found, hashes, workers, backfill)
+    pos_state = scan_increment(args.log, pos_state, found, hashes, workers, found_by, backfill)
 
     status = query_node_status(args.net)
     found, hashes, blocks_payload = build_blocks(found, hashes, now)
+    found_by = {h: w for h, w in found_by.items() if h in found}   # prune to match retained blocks
     workers, miners_payload = build_miners(workers, now)
     hr_days = update_hr_history(hr_days, workers, now)
     net_prev, pool_payload = build_poolstats(
@@ -1213,7 +1257,7 @@ def main():
         pool_name=load_pool_name(args.out_dir))
 
     save_state_db(conn, {
-        "found": found, "hashes": hashes, "workers": workers,
+        "found": found, "hashes": hashes, "found_by": found_by, "workers": workers,
         "net_prev": net_prev, "hr_days": hr_days, "log_pos": pos_state,
     })
 
@@ -1232,7 +1276,7 @@ def main():
                 save_json_atomic(split_path, {
                     "updated": iso(now), "net": "mainnet",
                     "block_reward": BLOCK_REWARD_GRIN, "maturity": MAINNET_MATURITY,
-                    "periods": compute_split(ledger, now),
+                    "periods": compute_split(ledger, found, found_by, now),
                     "balances": balances, "totals": totals,
                 }, 0o644)
             elif os.path.exists(split_path):

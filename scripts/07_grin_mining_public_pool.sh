@@ -680,6 +680,7 @@ pool_setup_nginx() {
     local _zone_conf="/etc/nginx/conf.d/script07-${POOL_SERVICE}.conf"
     if [[ -f "$_zone_conf" ]] \
         && { ! grep -q "zone=${POOL_SERVICE}_captcha[: ]" "$_zone_conf" \
+             || ! grep -q "zone=${POOL_SERVICE}_admin[: ]" "$_zone_conf" \
              || grep -q "zone=${POOL_SERVICE}_auth:[^ ]* rate=3r/m" "$_zone_conf"; }; then
         rm -f "$_zone_conf"
     fi
@@ -690,6 +691,7 @@ pool_setup_nginx() {
             "${POOL_SERVICE}_api:30r/m"      \
             "${POOL_SERVICE}_static:60r/m"   \
             "${POOL_SERVICE}_captcha:30r/m"  \
+            "${POOL_SERVICE}_admin:120r/m"   \
             "${POOL_SERVICE}_ingest:120r/m"
     fi
 
@@ -847,7 +849,10 @@ $cf_realip_include
     location = /admin { return 301 https://\$host/admin/; }
     location /admin/ {
 $admin_rules
-        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        # Dedicated _admin zone (120r/m): the admin panel is a polling dashboard that pulls
+        # several assets + API calls per page, so it must NOT share the public _static/_api
+        # budgets (a few fast clicks there used to 503 admin-shell.js → blank sidebar).
+        limit_req zone=${POOL_SERVICE}_admin burst=40 nodelay;
         # No content hashing on these static pages, so tell browsers to revalidate
         # every load (304 when unchanged). Without this, browsers heuristically cache
         # the HTML and keep showing the OLD admin panel after a redeploy.
@@ -856,7 +861,7 @@ $admin_rules
     }
     location /api/admin/ {
 $admin_rules
-        limit_req zone=${POOL_SERVICE}_api burst=10 nodelay;
+        limit_req zone=${POOL_SERVICE}_admin burst=40 nodelay;
         proxy_pass         http://127.0.0.1:$POOL_PORT;
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;

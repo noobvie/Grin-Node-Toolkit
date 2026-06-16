@@ -278,6 +278,26 @@ hashrateGps = perBlockDiff * 42 / dt / 16384;          // dt = actual seconds
 hashrate_gps = row.difficulty * 42 / 60 / 16384;
 ```
 
+## Solo Mining — Block-Finder Attribution (Script 07 solo collector)
+
+The Grin node's **`Solution Found for block N` log line does NOT name the worker** — it
+only carries height + abbreviated hash. To show *which miner found a block* (the "Blocks"
+column in the stats page "Work share by period" table), the collector
+(`scripts/lib/07_mining_block_collector.py`) **derives** the finder by correlation: the
+winning submission is also logged as a `Got share at height N … submitted by W` line
+**immediately before** the `Solution Found for block N` line, so the collector tracks the
+last share seen (`last_share = {height, worker}`) and, when a `Solution Found` for the same
+height arrives, attributes `found_by[height] = worker` (first finder wins). `SHARE_RE`
+captures the share height for this; `found_blocks.found_by TEXT` persists it (additive
+`_migrate_schema` ALTER for existing DBs).
+
+Caveats (by design, documented in-code + in the UI footnote): blocks recovered from the
+**rotated-log backfill have no share context** → left unattributed ("unknown", omitted from
+the per-nick tally but still counted in `blocks_matured`). And this is a **leaderboard stat
+ONLY** — payouts stay split by *work share* (Σ share-difficulty), never by who got the lucky
+block; attributing reward to the finder would undo the fair PPLNS-style split. `compute_split`
+attaches `blocks_found` per nickname per period (bucketed by the block's found-ts UTC day).
+
 ## Nginx Configuration — Shared Helpers & Conflict Prevention
 
 **Critical:** Nginx config files from multiple scripts can conflict if they define
@@ -441,7 +461,12 @@ Key design decisions (locked in — do not change without user confirmation):
   rsynced to the nginx-gated docroot.
   **Admin panel shell — shared chrome via `admin-shell.js` (reorg 2026-06; admin-nav.js approach dropped on merge):**
   every admin page ships only its `<main>` content and loads `admin-panel/admin-shell.js` (served at
-  `/admin/admin-shell.js`, load order `api.js → admin-shell.js → page inline script`). admin-shell.js injects the
+  `/admin/admin-shell.js`, load order `auth.js → api.js → admin-shell.js → page inline script`).
+  **`api.js` REQUIRES `auth.js` (fixed 2026-06):** `public_html/js/api.js` (`API.get/post/...`) wraps a global
+  `Auth` object defined in `public_html/js/auth.js` — every admin page that loads `api.js` MUST load `auth.js`
+  first or the first `API.get()` throws `ReferenceError: Auth is not defined` (this had broken health.html's
+  health/wallet/satellite cards: only settings.html loaded auth.js; health/index/blocks/miners/payments/users
+  did not). All admin pages now load `auth.js` before `api.js`. admin-shell.js injects the
   left sidebar + a topbar, wraps the page `<main>` in `.admin-main`, and removes any leftover legacy chrome
   (`body > header`/`footer`/`.testnet-banner`). The old per-page top `<header>`/`nav-links` and the 5-theme
   chrome switcher were **removed**. The single `NAV` array in admin-shell.js is the source of truth for nav items:
@@ -453,12 +478,19 @@ Key design decisions (locked in — do not change without user confirmation):
   admin-shell.js itself (storage key `admin-ui-mode` — deliberately NOT `admin-theme`, which branding.js uses for
   the public default_theme) — Matrix/Naruto/Japan dropped from admin chrome. Pages with step-up-gated actions
   (miners ban/unban, payouts retry/cancel, settings, users revoke) additionally load `/js/stepup.js` for `adminFetch`.
-  **Public theme simplified (2026-06):** the Branding→Theme surface is now a single "Public Site Theme" select
-  with only `{atomic(default), light}`. The Custom Theme Builder, the "themes visitors can switch between"
-  multiselect, the accent-colour picker and `custom_css` were removed. `saveSection('branding')` **forces**
-  `allow_theme_switch=false` + `enabled_themes=[default_theme]`, so `public-theme.js` renders the one chosen
-  theme with no visitor switcher. The old theme-builder JS (`renderThemeBuilder`/`collectEnabledThemes`/
-  `exportTheme`…) is now guarded dead code (no live callers). **Logo/Slogan/SEO config is untouched** — Logo &
+  **Public theme — full set RESTORED (2026-06, reverses the earlier simplification):** the Branding→Theme
+  surface again offers all 13 public themes (grouped Classic/Seasonal/Fun: atomic, nexus, light, winter,
+  spring, summer, autumn, halloween, christmas, galaxy, winxp, aqua, comic — defined in
+  `public_html/css/themes.css` + `js/public-theme.js`) in the `#default_theme` select, PLUS the visitor
+  theme-switcher: an `allow_theme_switch` checkbox + the `#enabled-themes-grid` multiselect (hidden
+  `#enabled_themes` JSON input). `saveSection('branding')` serialises the ticked themes (always including the
+  default) into `enabled_themes` and sends `allow_theme_switch` from its checkbox — the old "force
+  `allow_theme_switch=false` + single theme" block was **removed**. The public path was always intact:
+  `branding.js` calls `GriniumTheme.applyDefault(default_theme, allow_theme_switch, enabled_themes)` and
+  `public-theme.js buildSwitcher()` renders a grouped `<select>` when switching is on and ≥2 themes are enabled.
+  Backend `PoolSettings.THEME_KEYS` already whitelists all 13, so no validator change was needed. The Custom
+  Theme Builder (`renderThemeBuilder`/`exportTheme`…) + accent-colour picker remain unused dead code (not
+  re-exposed). **Logo/Slogan/SEO config is untouched** — Logo &
   Icons, App Icons, Typography, Hero/Slogan, Social (Branding tab), `pool_tagline` (Pool Info), and the whole
   SEO tab all still work.
   **GA4 in the SEO tab (2026-06):** the SEO tab has a convenience `#seo_ga_tracking_id` field (`settings-skip`,
@@ -481,10 +513,26 @@ Key design decisions (locked in — do not change without user confirmation):
   right back → **infinite flash loop; login worked but you could never stay on the panel.** Not a security
   hole (the loop was the page being *over*-strict), but a total usability break. Fix: ask the SERVER who you
   are. New endpoint `GET /api/admin/me` (secureAdmin) returns `{username,is_admin}` from `req.user`; shared
-  helper `API.guardAdminPage()` in `public_html/js/api.js` calls it, redirects to `/login.html` on non-200,
-  else wires up the `#nav-user` username + Logout. Every admin page (`index/miners/health/payments/users`
-  inline guard, `settings.html` DOMContentLoaded) calls `API.guardAdminPage()` — `decodePayload()` is dead.
+  helper `API.guardAdminPage()` in `public_html/js/api.js` calls it and wires up the `#nav-user` username +
+  Logout. **It redirects to `/login.html` ONLY on a genuine auth failure (401/403) (fixed 2026-06).** It used
+  to redirect on ANY non-200, so a transient 429 (app `admin` rate limit) or 503 (nginx) — common when clicking
+  fast — logged the operator out mid-session even though the cookie was valid. Now 429/503/500/network are
+  treated as transient (warn + stay on page). Every admin page (`index/miners/health/payments/users` inline
+  guard, `settings.html` DOMContentLoaded) calls `API.guardAdminPage()` — `decodePayload()` is dead.
   Rule: to gate a new admin page, call `API.guardAdminPage()`, never decode the cookie client-side.
+  **Admin rate limits raised (fixed 2026-06):** the app `admin` limiter was **10/min** — brutal for a polling
+  dashboard (one page load = several `/api/admin/*` calls; health.html auto-refreshes every 30s), so it 429'd
+  constantly and (with the old guard) cascaded into spurious logouts + "DB status 401"-style errors. Raised to
+  **120/min** in `lib/rate-limiter.js` (still DoS-padding only — JWT + login captcha + per-account lockout + IP
+  auto-ban + optional nginx allowlist are the real controls). nginx side: `/admin/` + `/api/admin/` now use a
+  dedicated `${POOL_SERVICE}_admin` zone (**120r/m, burst 40**) instead of sharing the public `_static`/`_api`
+  zones (a few fast clicks used to 503 `admin-shell.js` → blank sidebar). `pool_setup_nginx` self-heals the
+  managed zone conf if `_admin` is missing (same pattern as the `_captcha` self-heal).
+  **Combined health endpoint (added 2026-06):** `GET /api/admin/health` (secureAdmin) aggregates
+  pool_manager/grin_node/stratum/grin_wallet/nginx/database + host `system` stats into the flat
+  `{services:{key:{status,…}},system:{…}}` shape `admin-panel/health.html` renders — in ONE call (the page was
+  calling this nonexistent combined route → all metrics stayed `—`; the per-component `/health/{node,wallet,
+  system,satellites}` routes still exist for granular use).
   login is split OUT of `/admin/` ON PURPOSE: it lives in the public
   zone (door) while the panel is IP-gated (rooms); you can't put one file in two nginx access zones. The
   old `back-end-pool/public/{login,admin}.html` duplicates were deleted 2026-06 (never deployed — the

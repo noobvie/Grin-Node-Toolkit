@@ -17,11 +17,18 @@ class RateLimiter {
     // password brute force, but must still allow a human to fumble the form a few
     // times. 10/min + the peek/consume split below (a failed CAPTCHA never spends a
     // token — see index.js) keeps legit operators from locking themselves out.
+    // `admin` covers the authenticated admin panel, which is a POLLING dashboard: a single
+    // page load fires several /api/admin/* calls (guardAdminPage's /me, health x3, settings
+    // sections, db status…) and health.html auto-refreshes every 30s. 10/min locked operators
+    // out instantly and cascaded into spurious logouts (a 429 used to bounce to /login). The
+    // admin surface is already gated by JWT + login captcha + per-account lockout + IP
+    // auto-ban + (optional) the nginx admin_allowlist, so this limiter is DoS-padding, not the
+    // brute-force control — 120/min gives the dashboard headroom without weakening that.
     this.limits = {
       public: 60,
       auth: 10,
       api: 30,
-      admin: 10
+      admin: 120
     };
 
     // Override with config

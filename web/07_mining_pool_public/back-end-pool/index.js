@@ -2381,6 +2381,113 @@ function setupRoutes() {
     }
   });
 
+  // Combined health snapshot — the single call admin-panel/health.html makes for the
+  // services grid + System Stats. The per-component routes below (/health/node, /wallet,
+  // /system, /satellites) stay for granular polling; this one aggregates them into the flat
+  // { services:{key:{status,…}}, system:{…} } shape the page renders, in ONE request (keeps
+  // the admin rate budget low). Each probe is independently try/caught so one dead component
+  // never blanks the whole grid.
+  app.get('/api/admin/health', secureAdmin, async (req, res) => {
+    const fmtUptime = (secs) => {
+      secs = Math.floor(secs || 0);
+      const d = Math.floor(secs / 86400);
+      const h = Math.floor((secs % 86400) / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      return (d ? d + 'd ' : '') + (h ? h + 'h ' : '') + m + 'm';
+    };
+    const services = {};
+
+    // pool_manager — this Node process
+    services.pool_manager = { status: 'ok', pid: process.pid, uptime: fmtUptime(process.uptime()) };
+
+    // grin_node
+    try {
+      const st = await blockMonitor.grinNode.getStatus();
+      const synced = st?.synced === true;
+      services.grin_node = {
+        status: synced ? 'ok' : 'warning',
+        height: st?.header_height || 0,
+        synced
+      };
+    } catch (e) {
+      services.grin_node = { status: 'error', message: e.message };
+    }
+
+    // stratum (local proxy) — present on singlebox/satellite roles; a pure hub has none
+    try {
+      if (minerManager && typeof minerManager.getActiveMinersCount === 'function') {
+        services.stratum = {
+          status: 'ok',
+          port: config.stratum_port || 3333,
+          miners_connected: minerManager.getActiveMinersCount()
+        };
+      } else {
+        services.stratum = { status: 'warning', message: 'no local stratum (hub mode)' };
+      }
+    } catch (e) {
+      services.stratum = { status: 'error', message: e.message };
+    }
+
+    // grin_wallet
+    try {
+      if (wallet && wallet.getBalance) {
+        const summary = await wallet.getBalance();
+        const info = Array.isArray(summary) ? summary[1] : (summary || {});
+        services.grin_wallet = {
+          status: 'ok',
+          spendable_balance: Number(info.amount_currently_spendable || 0) / 1e9
+        };
+      } else {
+        services.grin_wallet = { status: 'warning', message: 'wallet API not configured' };
+      }
+    } catch (e) {
+      services.grin_wallet = { status: 'error', message: e.message };
+    }
+
+    // nginx — the request reached us through it, so the reverse proxy is up
+    services.nginx = { status: 'ok', message: 'reachable (serving requests)' };
+
+    // database
+    try {
+      const dbst = retentionManager.status();
+      services.database = {
+        status: 'ok',
+        size_mb: dbst.db_size_bytes != null ? +(dbst.db_size_bytes / 1e6).toFixed(1) : null,
+        wal_mode: 'enabled',
+        message: `${dbst.counts?.shares ?? 0} shares`
+      };
+    } catch (e) {
+      services.database = { status: 'error', message: e.message };
+    }
+
+    // system — real host metrics (same os/statfs logic as /health/system)
+    let system = {};
+    try {
+      const load = os.loadavg();
+      const totalMem = os.totalmem();
+      const freeMem = os.freemem();
+      const memPct = totalMem ? Math.round(((totalMem - freeMem) / totalMem) * 100) : null;
+      let diskFree = null;
+      try {
+        if (typeof fs.statfsSync === 'function') {
+          let target = '/';
+          if (config.db_path && path.isAbsolute(config.db_path)) target = path.dirname(config.db_path);
+          else target = process.cwd();
+          const s = fs.statfsSync(target);
+          diskFree = +((s.bavail * s.bsize) / 1e9).toFixed(1);
+        }
+      } catch (e) { diskFree = null; }
+      system = {
+        disk_free: diskFree,
+        memory_pct: memPct,
+        load_avg: load && load.length ? load.map(n => n.toFixed(2)).join(' ') : null,
+        uptime: fmtUptime(os.uptime())
+      };
+    } catch (e) { system = {}; }
+
+    res.json({ services, system, timestamp: new Date().toISOString() });
+  });
+
   // Node Health Status - FIX #2, #14: Use async/await and remove hardcoded data
   app.get('/api/admin/health/node', secureAdmin, async (req, res) => {
     try {

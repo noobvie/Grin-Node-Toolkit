@@ -351,10 +351,8 @@
 <body>
   <main>
   <div class="settings-container">
-    <div class="settings-header">
-      <h1>⚙️ Pool Configuration</h1>
-      <p>Customize your pool settings, branding, and operational parameters</p>
-    </div>
+    <!-- Header removed: the admin-shell.js left sidebar already labels this page; the topbar
+         carries the title, so the in-page H1 just wasted vertical space above the tabs. -->
 
     <div class="settings-tabs">
       <button class="tab-btn active" data-tab="pool-info">Pool Info</button>
@@ -553,15 +551,48 @@
         <div class="form-section">
           <h3 class="section-title">Public Site Theme</h3>
           <div class="helper-text" style="margin-bottom:1rem;">
-            Choose the one theme every visitor sees on the public pages. Visitor theme-switching is
-            intentionally disabled, so the public site always renders the theme you pick here.
+            Pick the default theme every visitor sees. Optionally let visitors switch between a
+            set of themes you enable below. All themes are defined in
+            <span class="mono">public_html/css/themes.css</span> + <span class="mono">js/public-theme.js</span>.
           </div>
           <div class="form-group" style="max-width:320px;">
-            <label for="default_theme">Theme</label>
+            <label for="default_theme">Default Theme</label>
             <select id="default_theme" name="default_theme">
-              <option value="atomic">Default (Atomic ⚛)</option>
-              <option value="light">Light</option>
+              <optgroup label="Classic">
+                <option value="atomic">Atomic ⚛ (default)</option>
+                <option value="nexus">Nexus</option>
+                <option value="light">Light</option>
+              </optgroup>
+              <optgroup label="Seasonal">
+                <option value="winter">Winter Frost ❄️</option>
+                <option value="spring">Spring Blossom 🌸</option>
+                <option value="summer">Summer Wave 🌊</option>
+                <option value="autumn">Autumn Harvest 🍂</option>
+                <option value="halloween">Halloween 🎃</option>
+                <option value="christmas">Christmas 🎄</option>
+              </optgroup>
+              <optgroup label="Fun">
+                <option value="galaxy">Galaxy ⭐</option>
+                <option value="winxp">Windows XP 🪟</option>
+                <option value="aqua">macOS Aqua 🍎</option>
+                <option value="comic">Comic Pop 💥</option>
+              </optgroup>
             </select>
+          </div>
+
+          <div class="checkbox-group" style="margin-top:1rem;">
+            <input type="checkbox" id="allow_theme_switch" name="allow_theme_switch">
+            <label for="allow_theme_switch">Let visitors switch themes (shows a theme picker on the public site)</label>
+          </div>
+
+          <div class="form-group" id="enabled-themes-wrap" style="margin-top:.6rem;">
+            <label>Themes visitors can switch between</label>
+            <div class="helper-text" style="margin-bottom:.6rem;">
+              Tick the themes to offer in the public switcher. The default theme above is always
+              included automatically.
+            </div>
+            <div id="enabled-themes-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.5rem;"></div>
+            <input type="hidden" id="enabled_themes" name="enabled_themes">
           </div>
         </div>
 
@@ -1585,10 +1616,18 @@
         }
       });
 
-      // Public site uses one forced theme: visitor switching off, only the chosen theme enabled.
+      // Branding: serialise the visitor theme-switcher. The enable checkboxes carry the
+      // `settings-skip` class so the harvester ignores them — we read them directly here into
+      // the enabled_themes array. The default theme is always included so the public site can
+      // always render it. allow_theme_switch is harvested normally from its checkbox above.
       if (section === 'branding') {
-        data.allow_theme_switch = false;
-        data.enabled_themes = JSON.stringify([data.default_theme || 'atomic']);
+        const enabled = [];
+        document.querySelectorAll('#enabled-themes-grid .theme-enable').forEach(cb => {
+          if (cb.checked) enabled.push(cb.dataset.theme);
+        });
+        const def = data.default_theme || 'atomic';
+        if (!enabled.includes(def)) enabled.unshift(def);
+        data.enabled_themes = JSON.stringify(enabled);
       }
 
       try {

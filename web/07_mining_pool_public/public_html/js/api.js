@@ -86,10 +86,15 @@ const API = {
     let me = null;
     try {
       const res = await fetch('/api/admin/me', { credentials: 'include' });
-      if (res.status !== 200) { window.location.href = '/login.html'; return null; }
+      // Only a genuine auth failure should bounce to the login page. A 429 (app rate
+      // limit) or 503 (nginx rate limit) is TRANSIENT — clicking around fast must not log
+      // you out. On those (and on network errors) we stay put and let the page's own data
+      // loaders surface a soft error; the cookie is still valid.
+      if (res.status === 401 || res.status === 403) { window.location.href = '/login.html'; return null; }
+      if (res.status !== 200) { console.warn('guardAdminPage: transient', res.status); return null; }
       me = await res.json();
     } catch (e) {
-      window.location.href = '/login.html';
+      console.warn('guardAdminPage: network error, staying on page', e);
       return null;
     }
     if (!me || !me.is_admin) { window.location.href = '/login.html'; return null; }

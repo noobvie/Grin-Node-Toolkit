@@ -242,6 +242,15 @@
     .freshness { justify-content: flex-start; margin-top: 0; }
   }
 
+  /* Section navigation — clickable chips that jump to each panel/chart */
+  html { scroll-behavior: smooth; }
+  .panel, .chart-card { scroll-margin-top: 1rem; }
+  nav.toc { width: 100%; max-width: 860px; display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 1.5rem; }
+  nav.toc a { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 999px; padding: .42rem .85rem; font-size: .86rem; text-decoration: none;
+    letter-spacing: .02em; transition: background .2s; }
+  nav.toc a:hover { background: var(--border); color: var(--text-hi); }
+
   footer { color: var(--muted); font-size: .82rem; text-align: center; margin-top: 2rem; line-height: 1.7; max-width: 860px; }
   footer code { color: var(--text); }
 </style>
@@ -265,6 +274,14 @@
 <div class="freshness" id="freshness" aria-live="polite" title="Live data refreshes every 120 seconds (two Grin blocks)">
   <span class="live-dot"></span><span id="fresh-text">Connecting…</span><a class="api-link" href="data/health.json" target="_blank" rel="noopener" title="Machine-readable status for both networks (data/health.json) — node/wallet/stratum liveness + 24h blocks. Refreshed every 5 min; stays public even if this page is locked.">status JSON</a>
 </div>
+
+<nav class="toc" aria-label="Section navigation">
+  <a href="#panel-main">Mainnet</a>
+  <a href="#panel-test">Testnet</a>
+  <a href="#chart-blocks">Blocks chart</a>
+  <a href="#chart-hashrate">Hashrate chart</a>
+  <a href="#split-card" id="nav-split" style="display:none">Payout split</a>
+</nav>
 
 <!-- ── MAINNET ── -->
 <section class="panel" data-net="main" id="panel-main">
@@ -347,7 +364,7 @@
 </section>
 
 <!-- ── Found-blocks history ── -->
-<section class="chart-card accent-blocks">
+<section class="chart-card accent-blocks" id="chart-blocks">
   <div class="chart-head">
     <h2>Blocks Found History Chart</h2>
     <div class="seg" id="range-seg">
@@ -362,7 +379,7 @@
 </section>
 
 <!-- ── Pool hashrate history ── -->
-<section class="chart-card accent-hashrate">
+<section class="chart-card accent-hashrate" id="chart-hashrate">
   <div class="chart-head">
     <h2>Pool Hashrate History Chart</h2>
     <div class="seg" id="hr-range-seg">
@@ -400,7 +417,7 @@
   <div class="table-scroll"><table id="split-table"><tbody></tbody></table></div>
   <p class="split-empty" id="split-empty" style="display:none"></p>
   <div id="split-person" class="split-person" style="display:none"></div>
-  <p class="split-foot">Click a nickname for its workers. <b>Owed</b> = its share of every matured coinbase (split by work done, per nickname) minus what the operator has already paid out-of-band — it drops to zero once settled. The period table shows work share within a rolling window. No Grin address is stored or shown.</p>
+  <p class="split-foot">Click a nickname for its workers. <b>Owed</b> = its share of every matured coinbase (split by work done, per nickname) minus what the operator has already paid out-of-band — it drops to zero once settled. The period table shows work share within a rolling window. <b>Blocks</b> = blocks that nickname's winning shares found in the period — a leaderboard stat only; payouts still split by work share, never by who got lucky. No Grin address is stored or shown.</p>
   <p class="split-foot"><b>Payouts are settled manually.</b> The operator sends GRIN by hand to each miner out-of-band (e.g. friends mining to this node) and records it here — this page is bookkeeping only and moves no funds.</p>
 </section>
 
@@ -1028,10 +1045,11 @@
     var map = {}, order = [];
     persons.forEach(function (x) {
       var k = nickOf(x.name);
-      if (!map[k]) { map[k] = { name: k, workers: 0, diff: 0, grin: 0 }; order.push(k); }
+      if (!map[k]) { map[k] = { name: k, workers: 0, diff: 0, grin: 0, blocks: 0 }; order.push(k); }
       map[k].workers += x.workers || 1;
       map[k].diff += x.diff || 0;
       map[k].grin += x.grin || 0;
+      map[k].blocks += x.blocks_found || 0;
     });
     return order.map(function (k) {
       var g = map[k];
@@ -1052,12 +1070,14 @@
       .then(function (d) {
         SPLIT.data = d;
         document.getElementById('split-card').style.display = '';
+        var ns = document.getElementById('nav-split'); if (ns) ns.style.display = '';
         renderBalances();
         renderSplit();
       })
       .catch(function () {
         SPLIT.data = null;
         document.getElementById('split-card').style.display = 'none';   // feature off / mainnet absent
+        var ns = document.getElementById('nav-split'); if (ns) ns.style.display = 'none';
       });
   }
   // Lifetime running balance per nickname: owed = Σ earnings − Σ payments. Unlike
@@ -1105,11 +1125,13 @@
       empty.style.display = 'block'; return;
     }
     empty.style.display = 'none';
-    tbody.innerHTML = '<tr><th>Nickname</th><th>Workers</th><th>Work share</th><th>Earned</th></tr>'
+    tbody.innerHTML = '<tr><th>Nickname</th><th>Workers</th><th>Blocks</th><th>Work share</th><th>Earned</th></tr>'
       + persons.map(function (x) {
+          var blk = x.blocks || 0;
           return '<tr class="clk" data-name="' + esc(x.name) + '">'
             + '<td><span class="w lnk">' + esc(x.name) + '</span></td>'
             + '<td>' + x.workers + '</td>'
+            + '<td>' + (blk > 0 ? '🧱 ' + blk : '—') + '</td>'
             + '<td>' + Number(x.pct).toFixed(1) + '%</td>'
             + '<td><span class="grin">' + fmtGrin(x.grin) + '</span></td></tr>';
         }).join('');
@@ -1201,25 +1223,16 @@
   });
 
   // ── Testnet panel collapse ──
-  // Auto-collapsed unless the testnet node is live (most operators run mainnet
-  // only). pollNet() toggles `.offline` on the panel; we mirror that into a
-  // collapse. A manual click sets an override so auto-state stops flipping under
-  // the user for the rest of the session.
-  var TEST_COLLAPSE_OVERRIDDEN = false;
+  // Always collapsed by default — whether or not the testnet node is live — since
+  // most operators run mainnet only. There is no auto-expand: the panel only opens
+  // when the user clicks the header (or follows the Testnet section-nav link).
   function setTestnetCollapsed(collapsed) {
     document.getElementById('panel-test').classList.toggle('collapsed', collapsed);
     document.getElementById('test-head').setAttribute('aria-expanded', String(!collapsed));
   }
-  function autoTestnetCollapse() {
-    if (TEST_COLLAPSE_OVERRIDDEN) return;
-    var active = !document.getElementById('panel-test').classList.contains('offline')
-                 && STATE.tip.test !== null;   // reachable node returning a tip
-    setTestnetCollapsed(!active);
-  }
   (function () {
     var head = document.getElementById('test-head');
     function toggle() {
-      TEST_COLLAPSE_OVERRIDDEN = true;
       setTestnetCollapsed(!document.getElementById('panel-test').classList.contains('collapsed'));
     }
     head.addEventListener('click', toggle);
@@ -1227,6 +1240,18 @@
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
     });
   })();
+
+  // Section nav: jumping to the collapsed Testnet panel opens it (a deliberate user
+  // action), mirroring the setup page.
+  function navExpand(hash) {
+    if (hash === '#panel-test') setTestnetCollapsed(false);
+  }
+  var toc = document.querySelector('nav.toc');
+  if (toc) toc.addEventListener('click', function (e) {
+    var a = e.target.closest('a'); if (a) navExpand(a.getAttribute('href'));
+  });
+  window.addEventListener('hashchange', function () { navExpand(location.hash); });
+  navExpand(location.hash);   // honour a #panel-test deep-link on load
 
   // ── Live-data freshness indicator ──
   // Poll every 120 s — twice Grin's 60 s block time. Chain data only advances once
@@ -1256,7 +1281,6 @@
       if (lastPollOk) lastOkTs = Date.now();
       tickFresh();
       renderDerived();
-      autoTestnetCollapse();              // expand testnet only while its node is live
       if (SPLIT.person) renderPerson();   // refresh live worker hashrates each tick
     });
   }

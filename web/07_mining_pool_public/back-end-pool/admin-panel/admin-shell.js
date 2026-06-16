@@ -16,6 +16,9 @@
   'use strict';
 
   // ── Canonical admin navigation ──────────────────────────────────────────
+  // A `children` array turns an entry into an expandable group whose sub-links
+  // are the page's in-page tabs (addressed by URL hash — settings.html#<tab>).
+  // The group auto-expands when you're on that page. Edit NAV here, once.
   var NAV = [
     { file: 'index.html',    title: 'Dashboard',     ico: '📊' },
     { file: 'miners.html',   title: 'Miners',        ico: '⛏'  },
@@ -23,7 +26,19 @@
     { file: 'blocks.html',   title: 'Blocks',        ico: '🧱' },
     { file: 'users.html',    title: 'Users',         ico: '👥' },
     { file: 'health.html',   title: 'System Health', ico: '🩺' },
-    { file: 'settings.html', title: 'Settings',      ico: '⚙'  }
+    { file: 'settings.html', title: 'Settings',      ico: '⚙', defaultTab: 'pool-info', children: [
+        { tab: 'pool-info',     title: 'Pool Info' },
+        { tab: 'branding',      title: 'Branding' },
+        { tab: 'seo',           title: 'SEO' },
+        { tab: 'analytics',     title: 'Analytics' },
+        { tab: 'pages',         title: 'Pages' },
+        { tab: 'announcements', title: 'Announcements' },
+        { tab: 'payout',        title: 'Payout' },
+        { tab: 'incentives',    title: 'Incentives' },
+        { tab: 'access',        title: 'Access Control' },
+        { tab: 'alerts',        title: 'Alerts' },
+        { tab: 'database',      title: 'Database' }
+      ] }
   ];
 
   function currentFile() {
@@ -63,11 +78,38 @@
   var here = currentFile();
   var active = NAV.filter(function (n) { return n.file === here; })[0] || NAV[0];
 
-  var navHtml = NAV.map(function (n) {
-    return '<a href="' + n.file + '"' + (n.file === here ? ' class="active"' : '') + '>' +
-             '<span class="nav-ico">' + n.ico + '</span>' + esc(n.title) +
-           '</a>';
-  }).join('');
+  // Active settings sub-tab = the URL hash, falling back to the page's default tab.
+  function currentTab(n) {
+    var h = (location.hash || '').replace(/^#/, '');
+    return h || (n.defaultTab || '');
+  }
+
+  function navHtmlFor() {
+    return NAV.map(function (n) {
+      var onPage = n.file === here;
+      if (!n.children) {
+        return '<a href="' + n.file + '"' + (onPage ? ' class="active"' : '') + '>' +
+                 '<span class="nav-ico">' + n.ico + '</span>' + esc(n.title) +
+               '</a>';
+      }
+      // Expandable group. The parent links to the page itself; sub-links jump to
+      // its hash tabs. The group is open (CSS) only while you're on that page.
+      var curTab = onPage ? currentTab(n) : '';
+      var sub = n.children.map(function (c) {
+        var act = (onPage && c.tab === curTab) ? ' class="active"' : '';
+        return '<a href="' + n.file + '#' + c.tab + '"' + act +
+               ' data-subtab="' + c.tab + '">' + esc(c.title) + '</a>';
+      }).join('');
+      return '<div class="admin-nav-group' + (onPage ? ' open' : '') + '">' +
+               '<a href="' + n.file + '" class="admin-nav-parent' + (onPage ? ' active' : '') + '">' +
+                 '<span class="nav-ico">' + n.ico + '</span>' + esc(n.title) +
+                 '<span class="nav-caret" aria-hidden="true">▸</span>' +
+               '</a>' +
+               '<div class="admin-subnav">' + sub + '</div>' +
+             '</div>';
+    }).join('');
+  }
+  var navHtml = navHtmlFor();
 
   var sidebar = document.createElement('aside');
   sidebar.className = 'admin-sidebar';
@@ -133,8 +175,35 @@
       a.addEventListener('click', closeDrawer);
     });
 
+    // Caret on an expandable group toggles it open/closed without navigating.
+    sidebar.querySelectorAll('.admin-nav-parent .nav-caret').forEach(function (caret) {
+      caret.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var grp = caret.closest('.admin-nav-group');
+        if (grp) grp.classList.toggle('open');
+      });
+    });
+
+    // Keep the active sub-tab highlight in sync when the URL hash changes
+    // (clicking a sub-link on the page we're already on is a hashchange, no reload).
+    window.addEventListener('hashchange', syncActiveSubtab);
+    syncActiveSubtab();
+
     // Page title in the browser tab + topbar pool name
     decoratePoolIdentity();
+  }
+
+  // Re-mark the active .admin-subnav link from the current hash (only for the
+  // group whose page we're on). Cheap; runs on every hashchange.
+  function syncActiveSubtab() {
+    NAV.forEach(function (n) {
+      if (!n.children || n.file !== here) return;
+      var cur = currentTab(n);
+      sidebar.querySelectorAll('.admin-subnav a').forEach(function (a) {
+        a.classList.toggle('active', a.getAttribute('data-subtab') === cur);
+      });
+    });
   }
 
   // ── Pool name + testnet detection (was duplicated in every page's IIFE) ──

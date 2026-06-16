@@ -853,12 +853,37 @@ $admin_rules
         # several assets + API calls per page, so it must NOT share the public _static/_api
         # budgets (a few fast clicks there used to 503 admin-shell.js → blank sidebar).
         limit_req zone=${POOL_SERVICE}_admin burst=40 nodelay;
+        # SERVER-SIDE auth gate (kills the "flash of admin page → redirect" UX bug):
+        # subrequest the backend before serving ANY admin file. The static HTML is an
+        # empty shell (data comes from authenticated /api/admin/* calls), but rendering
+        # it for a logged-out visitor looked broken. auth_request makes nginx withhold
+        # the page entirely until /api/admin/_authcheck returns 2xx; a 401/403 is caught
+        # by error_page → @admin_login → redirect to /login.html, so the browser never
+        # receives admin markup unauthenticated. The client-side API.guardAdminPage()
+        # remains as a fallback for installs whose nginx predates this block.
+        auth_request /admin/_authcheck;
+        error_page 401 403 = @admin_login;
         # No content hashing on these static pages, so tell browsers to revalidate
         # every load (304 when unchanged). Without this, browsers heuristically cache
         # the HTML and keep showing the OLD admin panel after a redeploy.
         add_header Cache-Control "no-cache" always;
         try_files \$uri \$uri/ \$uri.html =404;
     }
+    # Internal target for the auth_request above — never reachable directly (internal).
+    # No network gate / rate limit here: the parent /admin/ already applied \$admin_rules,
+    # and the backend handler deliberately skips the admin brute-force budget so per-asset
+    # subrequests stay cheap. Strip the body (we only care about the status code).
+    location = /admin/_authcheck {
+        internal;
+        proxy_pass              http://127.0.0.1:$POOL_PORT/api/admin/_authcheck;
+        proxy_pass_request_body off;
+        proxy_set_header        Content-Length "";
+        proxy_set_header        Host \$host;
+        proxy_set_header        X-Real-IP \$remote_addr;
+        proxy_set_header        X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+    # Unauthenticated visitors to /admin/* land on the public login door, not a 401 page.
+    location @admin_login { return 302 https://\$host/login.html; }
     location /api/admin/ {
 $admin_rules
         limit_req zone=${POOL_SERVICE}_admin burst=40 nodelay;
@@ -1102,32 +1127,42 @@ pool_setup_admin() {
         return 1
     fi
 
-    echo -e "  ${DIM}(Username: at least 3 characters)${RESET}"
-    echo -ne "Admin username: "
-    read -r admin_user
-    [[ -z "$admin_user" ]] && return
-    if [[ ${#admin_user} -lt 3 ]]; then
-        error "Username must be at least 3 characters."
-        return 1
-    fi
+    # Re-prompt on validation failure instead of bailing — a single typo shouldn't
+    # send the operator back to the menu. Empty input at any prompt cancels cleanly.
+    echo -e "  ${DIM}(Username: at least 3 characters — blank to cancel)${RESET}"
+    while true; do
+        echo -ne "Admin username: "
+        read -r admin_user
+        [[ -z "$admin_user" ]] && { info "Cancelled — no admin account created."; return; }
+        if [[ ${#admin_user} -lt 3 ]]; then
+            error "Username must be at least 3 characters. Try again."
+            continue
+        fi
+        break
+    done
 
-    echo -e "  ${DIM}(Password: at least 8 characters)${RESET}"
-    echo -ne "Admin password: "
-    read -rs admin_pass; echo ""
-    [[ -z "$admin_pass" ]] && return
-    if [[ ${#admin_pass} -lt 8 ]]; then
-        error "Password must be at least 8 characters."
-        return 1
-    fi
+    # Password + confirmation share one loop: a mismatch or a too-short password
+    # re-asks both fields (typos are silent under read -rs and would otherwise lock
+    # the operator out of an account whose password they can't reproduce).
+    echo -e "  ${DIM}(Password: at least 8 characters — blank to cancel)${RESET}"
+    while true; do
+        echo -ne "Admin password: "
+        read -rs admin_pass; echo ""
+        [[ -z "$admin_pass" ]] && { info "Cancelled — no admin account created."; return; }
+        if [[ ${#admin_pass} -lt 8 ]]; then
+            error "Password must be at least 8 characters. Try again."
+            continue
+        fi
 
-    # Confirm the password — typos here are silent (read -rs hides input) and would
-    # otherwise lock the operator out of an account whose password they can't reproduce.
-    echo -ne "Confirm admin password: "
-    read -rs admin_pass2; echo ""
-    if [[ "$admin_pass" != "$admin_pass2" ]]; then
-        error "Passwords do not match. Nothing was created — re-run and try again."
-        return 1
-    fi
+        echo -ne "Confirm admin password: "
+        read -rs admin_pass2; echo ""
+        [[ -z "$admin_pass2" ]] && { info "Cancelled — no admin account created."; return; }
+        if [[ "$admin_pass" != "$admin_pass2" ]]; then
+            error "Passwords do not match. Try again."
+            continue
+        fi
+        break
+    done
 
     echo -ne "Admin email (optional): "
     read -r admin_email

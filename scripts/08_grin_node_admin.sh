@@ -7,7 +7,7 @@
 #   8.2  Service & Port Dashboard  — local PIDs, ports, tmux, binary versions
 #   8.3  Chain Sync Status         — query local node API for current tip
 #   8.4  Nginx Extended Features   — audit · reverse proxy · security · log rotation
-#   8.5  Firewall Rules Audit      — UFW/iptables review for Grin ports
+#   8.5  SSH Key Hardening         — 085_ssh_hardening.sh (key-only root login)
 #   8.6  Top 20 Bandwidth Consumers— parse nginx logs, block/limit from menu
 #   8.7  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs
 #   8.8  Self-Update               — download latest from GitHub
@@ -77,6 +77,18 @@ menu_nginx_extended() {
         pause; return
     fi
     bash "$ext_script"
+}
+
+# =============================================================================
+# 8.5  SSH Key Hardening  (085_ssh_hardening.sh)
+# =============================================================================
+menu_ssh_hardening() {
+    local ssh_script="$SCRIPT_DIR/085_ssh_hardening.sh"
+    if [[ ! -f "$ssh_script" ]]; then
+        error "085_ssh_hardening.sh not found in $SCRIPT_DIR"
+        pause; return
+    fi
+    bash "$ssh_script"
 }
 
 # =============================================================================
@@ -238,92 +250,6 @@ show_chain_sync() {
 
     echo -e "  ${DIM}Note: Compare height against a public explorer to estimate sync progress.${RESET}"
     echo -e "  ${DIM}  Mainnet: grin.blockscan.com  |  Testnet: testnet.grin.blockscan.com${RESET}"
-    pause
-}
-
-# =============================================================================
-# 8.5  Firewall Rules Audit
-# =============================================================================
-show_firewall_audit() {
-    clear
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  5  Firewall Rules Audit${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-
-    declare -A GRIN_PORTS=(
-        [3413]="Node API mainnet  — expose if public API"
-        [3414]="P2P mainnet       — should be open"
-        [3415]="Wallet mainnet    — ONLY expose publicly if you uderstand"
-        [3416]="Stratum mainnet   — open if mining pool"
-        [13413]="Node API testnet  — expose if public API"
-        [13414]="P2P testnet       — should be open"
-        [13415]="Wallet testnet    — ONLY expose publicly if you uderstand"
-        [13416]="Stratum testnet   — open if mining pool"
-    )
-
-    # ── UFW ───────────────────────────────────────────────────────────────────
-    if command -v ufw &>/dev/null; then
-        local ufw_status
-        ufw_status=$(ufw status 2>/dev/null | head -1 || echo "unknown")
-        echo -e "${BOLD}UFW Status:${RESET}  $ufw_status"
-        echo ""
-
-        echo -e "${BOLD}Grin Port Rules:${RESET}"
-        printf "  ${BOLD}%-8s %-35s %-12s %s${RESET}\n" "Port" "Purpose" "UFW Rule" "Notes"
-        printf "  %-8s %-35s %-12s %s\n" "────────" "───────────────────────────────────" "────────────" "────────────"
-
-        for port in 3413 3414 3415 3416 13413 13414 13415 13416; do
-            local label="${GRIN_PORTS[$port]}"
-            local rule
-            rule=$(ufw status numbered 2>/dev/null \
-                | grep " $port" | head -1 \
-                | grep -oP '(ALLOW|DENY|LIMIT|REJECT)\s+(IN|OUT|FWD)?' \
-                | head -1 || true)
-            rule="${rule:-none}"
-
-            # Colour rule
-            local rule_col="${DIM}none${RESET}    "
-            [[ "$rule" == "ALLOW"* ]] && rule_col="${GREEN}ALLOW${RESET}   "
-            [[ "$rule" == "DENY"*  ]] && rule_col="${RED}DENY${RESET}    "
-            [[ "$rule" == "LIMIT"* ]] && rule_col="${YELLOW}LIMIT${RESET}   "
-
-            # Flag dangerous: wallet ports open
-            local note=""
-            if [[ ( "$port" == "3415" || "$port" == "13415" ) && "$rule" == "ALLOW"* ]]; then
-                note="${RED}⚠ DANGER: wallet owner port exposed${RESET}"
-            fi
-
-            printf "  %-8s %-35s " "$port" "$label"
-            echo -ne "$rule_col  $note"
-            echo ""
-        done
-
-        echo ""
-        echo -e "${BOLD}Full UFW ruleset (Grin ports only):${RESET}"
-        ufw status numbered 2>/dev/null \
-            | grep -E "(3413|3414|3415|3416|13413|13414|13415|13416)" \
-            | while IFS= read -r line; do
-                echo -e "  ${DIM}$line${RESET}"
-            done || echo -e "  ${DIM}No Grin ports in UFW rules.${RESET}"
-
-    # ── iptables fallback ─────────────────────────────────────────────────────
-    elif command -v iptables &>/dev/null; then
-        echo -e "${BOLD}UFW not found — showing iptables INPUT rules:${RESET}"
-        echo ""
-        iptables -L INPUT -n -v 2>/dev/null \
-            | grep -E "(34[0-9]{2}|134[0-9]{2}|ACCEPT|DROP|REJECT)" \
-            | while IFS= read -r line; do
-                echo -e "  $line"
-            done || echo -e "  ${DIM}No matching iptables rules.${RESET}"
-    else
-        warn "Neither ufw nor iptables found. Cannot audit firewall."
-    fi
-
-    echo ""
-    echo -e "  ${DIM}Recommendation: Ports 3414/13414 (P2P) should be open.${RESET}"
-    echo -e "  ${DIM}                Ports 3415/13415 (Wallet) must NEVER be public.${RESET}"
-    echo -e "  ${DIM}                Ports 3413/13413 (API) — open only if running public node.${RESET}"
     pause
 }
 
@@ -887,7 +813,7 @@ show_menu() {
     echo ""
     echo -e "${BOLD}  Security & Network${RESET}"
     echo -e "  ${CYAN}4${RESET})   Nginx Extended Features   ${DIM}audit · reverse proxy · security · logs${RESET}"
-    echo -e "  ${CYAN}5${RESET})   Firewall Rules Audit      ${DIM}UFW / iptables review for Grin ports${RESET}"
+    echo -e "  ${CYAN}5${RESET})   SSH Key Hardening         ${DIM}key-only root login · disable passwords${RESET}"
     echo -e "  ${CYAN}6${RESET})   Top 20 Bandwidth Consumers${DIM} parse nginx logs, block/limit IP${RESET}"
     echo ""
     echo -e "${BOLD}  Maintenance${RESET}"
@@ -914,7 +840,7 @@ main() {
             "2")   show_service_dashboard   ;;
             "3")   show_chain_sync          ;;
             "4")   menu_nginx_extended         ;;
-            "5")   show_firewall_audit      ;;
+            "5")   menu_ssh_hardening       ;;
             "6")   show_bandwidth_consumers ;;
             "7")   clean_maintenance        ;;
             "8")   self_update              ;;

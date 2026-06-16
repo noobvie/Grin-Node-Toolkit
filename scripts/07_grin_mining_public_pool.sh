@@ -675,24 +675,31 @@ pool_setup_nginx() {
     # "zero size shared memory zone". Self-heal: if the managed conf is missing the captcha
     # zone (added 2026-06 to stop the login captcha being starved by static-asset traffic),
     # delete it so the full current list regenerates. Idempotent — once present, this is skipped.
-    # Also regenerate if it still carries the old strict auth rate (3r/m, raised to
-    # 10r/m in 2026-06 so a human fumbling the login captcha can't lock themselves out).
+    # Also regenerate if it still carries any earlier-generation rate. All zone rates
+    # were multiplied ×20 in 2026-06 ("loosen now, tighten later" testing posture) so
+    # rate-limiting never breaks normal browsing/admin polling — the real controls are
+    # JWT + login captcha + per-account lockout + IP auto-ban, not these throttles.
+    # Triggers below catch both the original generation (auth 3r/m, static 60r/m) and
+    # the immediately-prior one (auth 10r/m, static 300r/m); regenerating rewrites the
+    # full current list (also self-heals an install missing the _captcha/_admin zones).
+    # A genuinely hand-tuned conf with other rates is left untouched.
     local _zone_conf="/etc/nginx/conf.d/script07-${POOL_SERVICE}.conf"
     if [[ -f "$_zone_conf" ]] \
         && { ! grep -q "zone=${POOL_SERVICE}_captcha[: ]" "$_zone_conf" \
              || ! grep -q "zone=${POOL_SERVICE}_admin[: ]" "$_zone_conf" \
-             || grep -q "zone=${POOL_SERVICE}_auth:[^ ]* rate=3r/m" "$_zone_conf"; }; then
+             || grep -qE "zone=${POOL_SERVICE}_auth:[^ ]* rate=(3|10)r/m" "$_zone_conf" \
+             || grep -qE "zone=${POOL_SERVICE}_static:[^ ]* rate=(60|300)r/m" "$_zone_conf"; }; then
         rm -f "$_zone_conf"
     fi
 
     if declare -F nginx_ensure_rate_limit_zones &>/dev/null; then
         nginx_ensure_rate_limit_zones "script07-${POOL_SERVICE}" \
-            "${POOL_SERVICE}_auth:10r/m"     \
-            "${POOL_SERVICE}_api:30r/m"      \
-            "${POOL_SERVICE}_static:60r/m"   \
-            "${POOL_SERVICE}_captcha:30r/m"  \
-            "${POOL_SERVICE}_admin:120r/m"   \
-            "${POOL_SERVICE}_ingest:120r/m"
+            "${POOL_SERVICE}_auth:200r/m"     \
+            "${POOL_SERVICE}_api:600r/m"      \
+            "${POOL_SERVICE}_static:6000r/m"  \
+            "${POOL_SERVICE}_captcha:600r/m"  \
+            "${POOL_SERVICE}_admin:2400r/m"   \
+            "${POOL_SERVICE}_ingest:2400r/m"
     fi
 
     # ── Cloudflare proxy (orange cloud) support ───────────────────────────────
@@ -968,7 +975,12 @@ $admin_rules
     }
 
     location / {
-        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        # Generous burst: a single page load pulls the HTML + ~a dozen assets (CSS, JS
+        # incl. public-shell.js which injects the header/nav, fonts, images), and with
+        # Cache-Control:no-cache each navigation revalidates them — so fast multi-page
+        # browsing legitimately fires many requests in a few seconds. Throttling here
+        # only broke the page (plain HTML, no CSS, lost nav); it is not a DoS surface.
+        limit_req zone=${POOL_SERVICE}_static burst=100 nodelay;
         # Pages/assets carry no content hash, so a far-future cache would serve stale
         # HTML/JS after a redeploy (the classic "/ and /index.html differ", "old nav",
         # "old admin" confusion — really browser cache). no-cache = store but always

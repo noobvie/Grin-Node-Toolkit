@@ -77,9 +77,6 @@ app.use((req, res, next) => {
 
 // Validation constants
 const VALID_NETWORKS = ['mainnet', 'testnet'];
-const ALLOWED_THEMES = ['dark', 'light', 'atomic'];
-const ALLOWED_NOTIFICATION_LEVELS = ['all', 'critical', 'none'];
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Config validation
 function validateConfig(cfg) {
@@ -181,20 +178,6 @@ async function initializePool() {
     poolSettings = new PoolSettings(db);
     assetManager = new AssetManager(config, db);
     console.log(`[${new Date().toISOString()}] Pool settings and asset managers initialized`);
-
-    // Create user_settings table at startup (CRITICAL: issue #6)
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS user_settings (
-        user_id INTEGER PRIMARY KEY,
-        email TEXT,
-        preferred_pool_server TEXT DEFAULT 'US East',
-        min_payout REAL DEFAULT 10.0,
-        notification_level TEXT DEFAULT 'all',
-        theme TEXT DEFAULT 'dark',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
 
     wallet = new WalletAPI(config);
     console.log(`[${new Date().toISOString()}] Wallet API initialized (${config.network})`);
@@ -2277,81 +2260,6 @@ function setupRoutes() {
         },
         pool_fee_percent: config.pool_fee_percent || 0,
         alerts: alertMonitor?.getActiveAlerts?.() || []
-      });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // Account Settings Update - FIX #4: Add comprehensive input validation
-  app.post('/api/account/update', requireAuth(authManager), (req, res) => {
-    try {
-      const userId = req.user?.user_id;
-      const { email, preferred_pool_server, min_payout, notification_level, theme } = req.body;
-
-      if (!userId) {
-        return res.status(401).json({ error: 'User not authenticated' });
-      }
-
-      // Validate email format if provided
-      if (email && !EMAIL_REGEX.test(email)) {
-        return res.status(400).json({ error: 'Invalid email format' });
-      }
-
-      // Validate minimum payout
-      if (min_payout !== undefined && (isNaN(min_payout) || min_payout < 0.1)) {
-        return res.status(400).json({ error: 'Minimum payout must be >= 0.1' });
-      }
-
-      // Validate theme is one of allowed values
-      if (theme && !ALLOWED_THEMES.includes(theme)) {
-        return res.status(400).json({ error: `Invalid theme. Must be one of: ${ALLOWED_THEMES.join(', ')}` });
-      }
-
-      // Validate notification_level is one of allowed values
-      if (notification_level && !ALLOWED_NOTIFICATION_LEVELS.includes(notification_level)) {
-        return res.status(400).json({ error: `Invalid notification level. Must be one of: ${ALLOWED_NOTIFICATION_LEVELS.join(', ')}` });
-      }
-
-      // Insert or update settings (table created at startup)
-      const stmt = db.prepare(`
-        INSERT INTO user_settings (user_id, email, preferred_pool_server, min_payout, notification_level, theme, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(user_id) DO UPDATE SET
-          email = excluded.email,
-          preferred_pool_server = excluded.preferred_pool_server,
-          min_payout = excluded.min_payout,
-          notification_level = excluded.notification_level,
-          theme = excluded.theme,
-          updated_at = CURRENT_TIMESTAMP
-      `);
-
-      stmt.run(
-        userId,
-        email || null,
-        preferred_pool_server || 'US East',
-        min_payout || 10.0,
-        notification_level || 'all',
-        theme || 'dark'
-      );
-
-      // Log to audit
-      const auditStmt = db.prepare(`
-        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
-        VALUES (?, 'update_settings', 'user_settings', ?, ?, ?)
-      `);
-      auditStmt.run(
-        userId,
-        String(userId),
-        JSON.stringify({ email: email || null, min_payout: min_payout || null, theme: theme || null }),
-        req.ip
-      );
-
-      res.json({
-        success: true,
-        message: 'Settings updated',
-        user_id: userId,
-        updated_at: new Date().toISOString()
       });
     } catch (err) {
       res.status(500).json({ error: err.message });

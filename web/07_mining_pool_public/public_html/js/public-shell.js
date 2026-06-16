@@ -27,14 +27,16 @@
   'use strict';
 
   // ── Canonical public navigation (single source of truth) ────────────────
-  // The optional "🎁 Rewards" link is injected by branding.js injectRewardsLink
-  // only when incentives are enabled, so it stays out of this base list.
+  // Fortune Board is a permanent nav item (it replaced the redundant "Info"
+  // link, whose target index.html#info is already on the dashboard). Because
+  // fortune-board.html is now always present here, branding.js injectRewardsLink
+  // detects it and no longer adds the separate "🎁 Rewards" link.
   var NAV = [
     { href: 'index.html',            label: 'Dashboard' },
     { href: 'miners-stats.html',     label: 'Miners' },
     { href: 'payment-history.html',  label: 'Payouts' },
-    { href: 'index.html#info',       label: 'Info' },
-    { href: 'account-settings.html', label: 'My Account' }
+    { href: 'fortune-board.html',    label: 'Fortune Board' },
+    { href: 'account-settings.html', label: 'Account' }
   ];
 
   function currentFile() {
@@ -76,8 +78,14 @@
   footer.innerHTML =
     '<p data-brand="footer_text">GRINIUM — Grin Mining Pool | Professional • Reliable • Secure</p>' +
     '<div data-brand="page-links"></div>' +
-    '<p data-brand="attribution" style="opacity:0.7;font-size:0.95em;margin-top:6px;">' +
-      'Powered by the Grin Node Toolkit</p>';
+    '<p style="opacity:0.7;font-size:0.95em;margin-top:6px;">' +
+      '<span data-brand="attribution">Powered by the ' +
+        '<a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer">Grin Node Toolkit</a>' +
+      '</span>' +
+      '<span class="footer-donate" style="margin-left:1rem;">' +
+        '<a href="donate.html">Donate — support us via mining</a>' +
+      '</span>' +
+    '</p>';
 
   function mount() {
     // Remove any legacy hardcoded chrome a page might still carry (defensive —

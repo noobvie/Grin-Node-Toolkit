@@ -334,10 +334,11 @@ or the multi-zone variant `nginx_ensure_rate_limit_zones <conf_basename> <zone:r
 — with the script's own parameters:
 
 ```bash
-# In Script 07 (public pool) — actual call:
+# In Script 07 (public pool) — actual call (all rates carry the 2026-06 ×20 bump):
 nginx_ensure_rate_limit_zones "script07-${POOL_SERVICE}" \
-    "${POOL_SERVICE}_auth:3r/m"  "${POOL_SERVICE}_api:30r/m" \
-    "${POOL_SERVICE}_static:60r/m" "${POOL_SERVICE}_ingest:120r/m"
+    "${POOL_SERVICE}_auth:200r/m"   "${POOL_SERVICE}_api:600r/m" \
+    "${POOL_SERVICE}_static:6000r/m" "${POOL_SERVICE}_captcha:600r/m" \
+    "${POOL_SERVICE}_admin:2400r/m"  "${POOL_SERVICE}_ingest:2400r/m"
 ```
 
 Note: the helper is a no-op if the conf file already exists — deleting
@@ -352,7 +353,7 @@ Current named wrappers:
 
 ### Script-specific zones — stay in the script that owns them
 - `grin_conn` (Script 04 only) — defined inline in Script 04 inside `nginx.conf` http block
-- `${POOL_SERVICE}_auth/_api/_static/_ingest` (Script 07 only) — written via the multi-zone helper; `_ingest` covers satellite `/api/shares` + `/api/blocks` so relay batches aren't throttled by the public `_api` zone
+- `${POOL_SERVICE}_auth/_api/_static/_captcha/_admin/_ingest` (Script 07 only) — written via the multi-zone helper; `_ingest` covers satellite `/api/shares` + `/api/blocks` so relay batches aren't throttled by the public `_api` zone. **ALL zone rates carry a 2026-06 ×20 "loosen now, tighten later" bump** (operator request) so request throttling never breaks normal use during early testing — the real controls are JWT + login captcha + per-account lockout + IP auto-ban, NOT these throttles. Current rates: `_auth 200r/m`, `_api 600r/m`, `_static 6000r/m` (burst 100), `_captcha 600r/m`, `_admin 2400r/m`, `_ingest 2400r/m`. The `_static` bump matters most because every public page load re-fetches ~a dozen assets — incl. `public-shell.js`, which injects the header/nav — all keyed per-IP on `_static`, so the old 60r/m cap 503'd assets on a few fast navigations → pages rendered as plain HTML with no CSS and a missing nav. `pool_setup_nginx` self-heals an existing install (rm's the managed `script07-<svc>.conf` so the full zone list regenerates) when it carries any earlier-generation rate (auth `3|10r/m`, static `60|300r/m`) or is missing the `_captcha`/`_admin` zones. **To tighten later:** lower the rates in `pool_setup_nginx`'s `nginx_ensure_rate_limit_zones` call AND the app buckets in `lib/rate-limiter.js` (`this.limits` — `public 1200 / auth 200 / api 600 / admin 2400`, also ×20), then re-run 4) Setup nginx.
 - Per-domain bandwidth maps (Script 02) — defined inline in per-domain conf
 
 Name script-specific conf files with a `script##-` prefix to avoid future collisions:
@@ -530,10 +531,13 @@ Key design decisions (locked in — do not change without user confirmation):
   dashboard (one page load = several `/api/admin/*` calls; health.html auto-refreshes every 30s), so it 429'd
   constantly and (with the old guard) cascaded into spurious logouts + "DB status 401"-style errors. Raised to
   **120/min** in `lib/rate-limiter.js` (still DoS-padding only — JWT + login captcha + per-account lockout + IP
-  auto-ban + optional nginx allowlist are the real controls). nginx side: `/admin/` + `/api/admin/` now use a
-  dedicated `${POOL_SERVICE}_admin` zone (**120r/m, burst 40**) instead of sharing the public `_static`/`_api`
+  auto-ban + optional nginx allowlist are the real controls). nginx side: `/admin/` + `/api/admin/` use a
+  dedicated `${POOL_SERVICE}_admin` zone (burst 40) instead of sharing the public `_static`/`_api`
   zones (a few fast clicks used to 503 `admin-shell.js` → blank sidebar). `pool_setup_nginx` self-heals the
   managed zone conf if `_admin` is missing (same pattern as the `_captcha` self-heal).
+  **NOTE (2026-06): all the per-minute numbers above were subsequently multiplied ×20** (`admin` app bucket
+  120→2400, `_admin` zone 120→2400r/m, etc. — see the rate-limit zone section) as a temporary "loosen now,
+  tighten later" posture. The reasoning is unchanged; only the magnitudes are larger.
   **Combined health endpoint (added 2026-06):** `GET /api/admin/health` (secureAdmin) aggregates
   pool_manager/grin_node/stratum/grin_wallet/nginx/database + host `system` stats into the flat
   `{services:{key:{status,…}},system:{…}}` shape `admin-panel/health.html` renders — in ONE call (the page was
@@ -711,7 +715,7 @@ All public (no admin auth), `rateLimiter.middleware('public')`:
 - `GET /api/pool/effort` — `round_effort_pct` (Σ share diff since last block ÷ current per-block network diff), `luck_100_pct` (mean of `network_difficulty/round_shares` over last 100 blocks), `seconds_since_last_block`. Backed by additive `blocks.network_difficulty` + `blocks.round_shares` captured at find time in `lib/blocks.js creditBlock` (needs `blockManager.setNodeApi(blockMonitor.grinNode)`); current net diff cached ~60s on `app.locals`.
 - `GET /api/account/:addr` now also returns `min_payout`, `effective_min_payout`, `has_recorded_ip`.
 
-**Miner source-IP capture (backs the ownership gate):** recorded into `miner_accounts.last_ip/prev_ip` (last-2 distinct, shift on change) via `minerManager.recordSourceIp` → `owner-proof.recordSourceIp`. Captured at stratum login locally; **in hub-and-spoke the satellite relays the miner IP per-share** (`source_ip` added to the relayed share object in `stratum-server.js`; `share-relay.js` forwards it verbatim incl. failover replay; hub `POST /api/shares` uses `s.source_ip`, NOT `req.ip` which is the satellite). UI: all per-account features live on `account-settings.html` (chart, workers, threshold, slatepack); pool chart + effort row on `index.html`.
+**Miner source-IP capture (backs the ownership gate):** recorded into `miner_accounts.last_ip/prev_ip` (last-2 distinct, shift on change) via `minerManager.recordSourceIp` → `owner-proof.recordSourceIp`. Captured at stratum login locally; **in hub-and-spoke the satellite relays the miner IP per-share** (`source_ip` added to the relayed share object in `stratum-server.js`; `share-relay.js` forwards it verbatim incl. failover replay; hub `POST /api/shares` uses `s.source_ip`, NOT `req.ip` which is the satellite). UI: all per-account features live on `account-settings.html` (chart, workers, threshold, slatepack); pool chart + effort row on `index.html`. **Payout method is single-select (2026-06):** the Withdraw section has a Tor/Slatepack radio group (`name="acct-pay-method"`, Tor default) and `syncPayMethod()` shows only the selected pane (`#acct-pay-tor-pane` / `#acct-pay-slatepack-pane`) — both rails still hit `POST /api/account/:addr/withdraw {method}` gated by the IP-proof (one of the last-2 mining IPs). The nav link + page `<h2>` say "Account" (renamed from "My Account").
 - **Public chrome = `public_html/js/public-shell.js` (single source of truth, added 2026-06 — the
   public mirror of `admin-shell.js`).** Every public page (all 7 that share the site header:
   index, miners-stats, payment-history, account-settings, fortune-board, donate, page) now ships

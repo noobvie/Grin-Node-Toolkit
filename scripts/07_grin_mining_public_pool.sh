@@ -1097,32 +1097,42 @@ pool_setup_admin() {
         return 1
     fi
 
-    echo -e "  ${DIM}(Username: at least 3 characters)${RESET}"
-    echo -ne "Admin username: "
-    read -r admin_user
-    [[ -z "$admin_user" ]] && return
-    if [[ ${#admin_user} -lt 3 ]]; then
-        error "Username must be at least 3 characters."
-        return 1
-    fi
+    # Re-prompt on validation failure instead of bailing — a single typo shouldn't
+    # send the operator back to the menu. Empty input at any prompt cancels cleanly.
+    echo -e "  ${DIM}(Username: at least 3 characters — blank to cancel)${RESET}"
+    while true; do
+        echo -ne "Admin username: "
+        read -r admin_user
+        [[ -z "$admin_user" ]] && { info "Cancelled — no admin account created."; return; }
+        if [[ ${#admin_user} -lt 3 ]]; then
+            error "Username must be at least 3 characters. Try again."
+            continue
+        fi
+        break
+    done
 
-    echo -e "  ${DIM}(Password: at least 8 characters)${RESET}"
-    echo -ne "Admin password: "
-    read -rs admin_pass; echo ""
-    [[ -z "$admin_pass" ]] && return
-    if [[ ${#admin_pass} -lt 8 ]]; then
-        error "Password must be at least 8 characters."
-        return 1
-    fi
+    # Password + confirmation share one loop: a mismatch or a too-short password
+    # re-asks both fields (typos are silent under read -rs and would otherwise lock
+    # the operator out of an account whose password they can't reproduce).
+    echo -e "  ${DIM}(Password: at least 8 characters — blank to cancel)${RESET}"
+    while true; do
+        echo -ne "Admin password: "
+        read -rs admin_pass; echo ""
+        [[ -z "$admin_pass" ]] && { info "Cancelled — no admin account created."; return; }
+        if [[ ${#admin_pass} -lt 8 ]]; then
+            error "Password must be at least 8 characters. Try again."
+            continue
+        fi
 
-    # Confirm the password — typos here are silent (read -rs hides input) and would
-    # otherwise lock the operator out of an account whose password they can't reproduce.
-    echo -ne "Confirm admin password: "
-    read -rs admin_pass2; echo ""
-    if [[ "$admin_pass" != "$admin_pass2" ]]; then
-        error "Passwords do not match. Nothing was created — re-run and try again."
-        return 1
-    fi
+        echo -ne "Confirm admin password: "
+        read -rs admin_pass2; echo ""
+        [[ -z "$admin_pass2" ]] && { info "Cancelled — no admin account created."; return; }
+        if [[ "$admin_pass" != "$admin_pass2" ]]; then
+            error "Passwords do not match. Try again."
+            continue
+        fi
+        break
+    done
 
     echo -ne "Admin email (optional): "
     read -r admin_email

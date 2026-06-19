@@ -173,6 +173,16 @@ add_key_paste() {
     echo -e "On your laptop the public key is usually in ${BOLD}~/.ssh/id_ed25519.pub${RESET}"
     echo -e "(or ${BOLD}id_rsa.pub${RESET}). Print it with: ${DIM}cat ~/.ssh/id_ed25519.pub${RESET}"
     echo ""
+    echo -e "${DIM}No key yet? Generate one natively (OpenSSH ships with both OSes):${RESET}"
+    echo -e "  ${BOLD}Windows${RESET} ${DIM}(PowerShell / CMD):${RESET}"
+    echo -e "    ${DIM}ssh-keygen -t ed25519${RESET}"
+    echo -e "    ${DIM}type %USERPROFILE%\\.ssh\\id_ed25519.pub${RESET}   ${DIM}# PowerShell: cat \$env:USERPROFILE\\.ssh\\id_ed25519.pub${RESET}"
+    echo -e "  ${BOLD}Linux / macOS:${RESET}"
+    echo -e "    ${DIM}ssh-keygen -t ed25519${RESET}"
+    echo -e "    ${DIM}cat ~/.ssh/id_ed25519.pub${RESET}"
+    echo -e "  ${DIM}Press Enter at every prompt (a passphrase is optional). Copy ONLY the${RESET}"
+    echo -e "  ${DIM}.pub line (starts with 'ssh-ed25519') — never the private key.${RESET}"
+    echo ""
     echo -e "Paste one or more PUBLIC key lines below. Finish with an ${BOLD}empty line${RESET}:"
     echo ""
 
@@ -781,6 +791,59 @@ ssh_status() {
 }
 
 # =============================================================================
+# How to connect with your key (remote-tool walkthrough for new users)
+# =============================================================================
+connect_help() {
+    clear
+    echo -e "${BOLD}${CYAN}  Connect to this server with your private key${RESET}"
+    echo ""
+
+    local port ip
+    port="$(_ssh_port)"
+    # Public IP this session came in on, falling back to a best-effort lookup.
+    ip="$(awk '{print $3}' <<<"${SSH_CONNECTION:-}")"
+    [[ -z "$ip" ]] && ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    [[ -z "$ip" ]] && ip="<server-ip>"
+
+    echo -e "Your server: ${BOLD}root@${ip}${RESET}   SSH port: ${BOLD}${port}${RESET}"
+    echo -e "${DIM}You connect with the PRIVATE key that matches a public key installed here${RESET}"
+    echo -e "${DIM}(option 1). Keep the private key on your laptop — never upload it.${RESET}"
+    echo ""
+
+    echo -e "${BOLD}${GREEN}1) Windows${RESET} ${DIM}— built-in OpenSSH (PowerShell or CMD, no PuTTY needed)${RESET}"
+    echo -e "   ${DIM}Private key lives at %USERPROFILE%\\.ssh\\id_ed25519${RESET}"
+    echo -e "   ${BOLD}ssh -i %USERPROFILE%\\.ssh\\id_ed25519 root@${ip} -p ${port}${RESET}"
+    echo -e "   ${DIM}If you get a 'permissions too open' / 'bad permissions' error:${RESET}"
+    echo -e "   ${DIM}icacls \"%USERPROFILE%\\.ssh\\id_ed25519\" /inheritance:r /grant:r \"%USERNAME%:R\"${RESET}"
+    echo -e "   ${DIM}Prefer a GUI? PuTTY needs the key converted to .ppk with PuTTYgen${RESET}"
+    echo -e "   ${DIM}(Load your id_ed25519 → Save private key), then point PuTTY at the .ppk.${RESET}"
+    echo ""
+
+    echo -e "${BOLD}${GREEN}2) Linux / macOS${RESET} ${DIM}— built-in OpenSSH terminal${RESET}"
+    echo -e "   ${BOLD}chmod 600 ~/.ssh/id_ed25519${RESET}   ${DIM}# once, so ssh accepts the key${RESET}"
+    echo -e "   ${BOLD}ssh -i ~/.ssh/id_ed25519 root@${ip} -p ${port}${RESET}"
+    echo ""
+
+    echo -e "${BOLD}${GREEN}3) Save it once${RESET} ${DIM}— so you can just type 'ssh grin-vps'${RESET}"
+    echo -e "   ${DIM}Add to ~/.ssh/config (Windows: %USERPROFILE%\\.ssh\\config):${RESET}"
+    echo -e "     ${DIM}Host grin-vps${RESET}"
+    echo -e "     ${DIM}    HostName ${ip}${RESET}"
+    echo -e "     ${DIM}    User root${RESET}"
+    echo -e "     ${DIM}    Port ${port}${RESET}"
+    echo -e "     ${DIM}    IdentityFile ~/.ssh/id_ed25519${RESET}"
+    echo -e "   ${DIM}Then connect with just: ${BOLD}ssh grin-vps${RESET}"
+    echo ""
+
+    echo -e "${YELLOW}Tips${RESET}"
+    echo -e "  ${DIM}· First connect prints a host-key fingerprint — type 'yes' to trust it.${RESET}"
+    echo -e "  ${DIM}· 'Permission denied (publickey)': the matching public key isn't installed${RESET}"
+    echo -e "  ${DIM}  here yet — add it with option 1, or check option 2 to list installed keys.${RESET}"
+    echo -e "  ${DIM}· Test the key BEFORE disabling passwords (option 4). Verify with option 3.${RESET}"
+    echo ""
+    pause
+}
+
+# =============================================================================
 # Main menu
 # =============================================================================
 show_menu() {
@@ -801,11 +864,12 @@ show_menu() {
     echo ""
     echo -e "${BOLD}  Info${RESET}"
     echo -e "  ${CYAN}7${RESET})  SSH status & audit        ${DIM}effective config, keys, firewall${RESET}"
+    echo -e "  ${CYAN}8${RESET})  How to connect with key   ${DIM}remote-tool steps (Windows/Linux/macOS)${RESET}"
     echo ""
     echo -e "  ${DIM}0${RESET})  Return to admin menu"
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-7]: ${RESET}"
+    echo -ne "${BOLD}Select [0-8]: ${RESET}"
 }
 
 main() {
@@ -820,6 +884,7 @@ main() {
             5) commit_hardening      || true ;;
             6) enable_password_auth  || true ;;
             7) ssh_status            || true ;;
+            8) connect_help          || true ;;
             0) break ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac

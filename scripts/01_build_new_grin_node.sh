@@ -107,21 +107,26 @@
 #              Idempotent — safe on already-provisioned systems.
 #
 #   Step  9 — Chain Data Source & Transfer Mode
-#              User selects a download zone (America / Asia / Europe / Africa).
-#              Host list is loaded from extensions/grinmasternodes.json.
-#              Each host is checked in order:
+#              First the user chooses a transfer mode:
+#                1) On-the-fly — pipes remote tar.gz straight into tar; no
+#                   .tar.gz stored locally; auto-switches source on failure;
+#                   skips Steps 10 & 11.  cmd: wget -O - <url> | tar -xzf -
+#                2) Full download — saves .tar.gz to disk (wget -c, resumable),
+#                   auto-switches source on failure; continues to Steps 10–12.
+#                3) Slow sync — no archive at all; the node is started with an
+#                   empty chain_data/ and syncs from genesis via its P2P peers
+#                   (grin default). Returns immediately — skips zone/host
+#                   discovery AND Steps 10–12 entirely. Useful when no archive
+#                   source is fresh/reachable. Slowest (hours to days).
+#              For modes 1 & 2 only: user then selects a download zone
+#              (America / Asia / Europe / Africa). Host list is loaded from
+#              extensions/grinmasternodes.json. Each host is checked in order:
 #                1) sync-status via check_status_before_download.txt
 #                2) directory listing fetched to discover tar/sha filenames
 #                3) Last-Modified header checked — files older than 5 days skipped
 #              Hosts passing all checks are added as fallback sources.
 #              If selected zone has no fresh hosts, auto-falls back to America.
 #              If America also fails, prompts for a custom base URL or 0 to return.
-#              User then chooses transfer mode:
-#                1) On-the-fly — pipes remote tar.gz straight into tar; no
-#                   .tar.gz stored locally; auto-switches source on failure;
-#                   skips Steps 10 & 11.  cmd: wget -O - <url> | tar -xzf -
-#                2) Full download — saves .tar.gz to disk (wget -c, resumable),
-#                   auto-switches source on failure; continues to Steps 10–12.
 #
 #   Step 10 — SHA256 Checksum Verification  [full-download mode only]
 #              Runs 'sha256sum -c' against the downloaded .sha256 file.
@@ -180,6 +185,7 @@ SHA_FILE=""
 GRIN_BIN_TMP=""        # cache binary between mainnet+testnet setups
 RESTRICTED_NETWORK=""  # set by check_grin_running if one slot is already occupied
 STREAM_MODE=false      # true = on-the-fly pipe extraction (no local .tar.gz saved)
+SLOW_SYNC_MODE=false   # true = no archive; start node and sync from network peers (grin default)
 READY_SOURCES=()       # ordered list of base URLs that passed sync-status check
 SELECTED_ZONE=""       # zone chosen at Step 9 (america|asia|europe|africa|all)
 
@@ -588,7 +594,10 @@ rebuild_chain_data_only() {
     # need to re-check disk space against a fresh-install footprint).
     GRIN_SKIP_DISK_CHECK=1
     download_chain_data "$network" "$archive_mode"
-    if [[ "$STREAM_MODE" == "true" ]]; then
+    if [[ "$SLOW_SYNC_MODE" == "true" ]]; then
+        info "Slow sync selected — no archive downloaded. The node will re-sync from peers."
+        log  "[REBUILD-CHAIN-ONLY] Slow sync — skipping download/verify/extract."
+    elif [[ "$STREAM_MODE" == "true" ]]; then
         stream_extract_chain_data
     else
         verify_checksum
@@ -616,6 +625,7 @@ rebuild_chain_data_only() {
     SHA_FILE=""
     ARCHIVE_MODE=""
     STREAM_MODE=false
+    SLOW_SYNC_MODE=false
     READY_SOURCES=()
     log "[REBUILD-CHAIN-ONLY] $network ($archive_mode) — completed"
     return 0
@@ -1908,6 +1918,52 @@ download_chain_data() {
 
     step_header "Step 9: Chain Data Source & Transfer Mode"
 
+    # ── Ask the transfer mode FIRST ─────────────────────────────────────────────
+    # Asked up front (before zone selection / host discovery) so that "Slow sync"
+    # can return immediately without any source discovery — and so it stays
+    # reachable even when every archive source is stale/down (the exact case where
+    # host discovery would otherwise die() before this prompt was ever shown).
+    echo ""
+    echo -e "${BOLD}  How do you want to get the chain data?${RESET}"
+    echo ""
+    echo -e "  ${GREEN}1${RESET}) ${BOLD}On-the-fly extraction${RESET} ${DIM}(default — stream directly, no full download)${RESET}"
+    echo -e "     ${DIM}Pipes the remote archive straight into tar without saving locally.${RESET}"
+    echo -e "     ${DIM}cmd: wget -O - <url> | tar -xzf -${RESET}"
+    echo -e "     ${DIM}Saves temporary disk space and reduces total setup time.${RESET}"
+    echo -e "     ${DIM}Auto-switches to the next source if the stream fails mid-transfer.${RESET}"
+    echo -e "     ${DIM}Note: SHA256 checksum verification is skipped in this mode.${RESET}"
+    echo ""
+    echo -e "  ${CYAN}2${RESET}) ${BOLD}Full download first${RESET} ${DIM}(more resilient on slow connections)${RESET}"
+    echo -e "     ${DIM}Downloads .tar.gz to disk (wget -c, supports resume on interruption).${RESET}"
+    echo -e "     ${DIM}Verifies SHA256 checksum before extracting.${RESET}"
+    echo -e "     ${DIM}Auto-switches to the next source if download fails mid-transfer.${RESET}"
+    echo ""
+    echo -e "  ${YELLOW}3${RESET}) ${BOLD}Slow sync${RESET} ${DIM}(no archive — start the node and sync from network peers)${RESET}"
+    echo -e "     ${DIM}No download. The node syncs from genesis via its P2P peers, like a${RESET}"
+    echo -e "     ${DIM}default fresh node. Slowest (hours to days) but needs no archive${RESET}"
+    echo -e "     ${DIM}source and no extra disk for a .tar.gz.${RESET}"
+    echo -e "     ${DIM}SHA256 / disk-space checks are not applicable.${RESET}"
+    echo ""
+    echo -ne "${BOLD}Choose [1/2/3] (default: 1): ${RESET}"
+    local dl_choice
+    read -r dl_choice || true
+    dl_choice="${dl_choice:-1}"
+
+    if [[ "$dl_choice" == "3" ]]; then
+        SLOW_SYNC_MODE=true
+        STREAM_MODE=false
+        success "Slow sync selected — no archive will be downloaded."
+        info "The node will sync from network peers after it starts (Step 13)."
+        log "[STEP 9] Slow sync mode (no archive). network=$network mode=$mode"
+        return 0
+    elif [[ "$dl_choice" == "1" ]]; then
+        STREAM_MODE=true
+        SLOW_SYNC_MODE=false
+    else
+        STREAM_MODE=false
+        SLOW_SYNC_MODE=false
+    fi
+
     # Check for an existing .tar.gz in the destination directory before downloading
     local existing_tar
     existing_tar=$(find "$GRIN_DIR" -maxdepth 1 -name "*.tar.gz" 2>/dev/null | head -1)
@@ -2080,36 +2136,16 @@ download_chain_data() {
     TAR_FILE="$GRIN_DIR/$tar_name"
     SHA_FILE="$GRIN_DIR/$sha_name"
 
-    # ── Ask user: on-the-fly stream or full download ───────────────────────────
-    echo ""
-    echo -e "${BOLD}  How do you want to get the chain data?${RESET}"
-    echo ""
-    echo -e "  ${GREEN}1${RESET}) ${BOLD}On-the-fly extraction${RESET} ${DIM}(default — stream directly, no full download)${RESET}"
-    echo -e "     ${DIM}Pipes the remote archive straight into tar without saving locally.${RESET}"
-    echo -e "     ${DIM}cmd: wget -O - <url> | tar -xzf -${RESET}"
-    echo -e "     ${DIM}Saves temporary disk space and reduces total setup time.${RESET}"
-    echo -e "     ${DIM}Auto-switches to the next source if the stream fails mid-transfer.${RESET}"
-    echo -e "     ${DIM}Note: SHA256 checksum verification is skipped in this mode.${RESET}"
-    echo ""
-    echo -e "  ${CYAN}2${RESET}) ${BOLD}Full download first${RESET} ${DIM}(more resilient on slow connections)${RESET}"
-    echo -e "     ${DIM}Downloads .tar.gz to disk (wget -c, supports resume on interruption).${RESET}"
-    echo -e "     ${DIM}Verifies SHA256 checksum before extracting.${RESET}"
-    echo -e "     ${DIM}Auto-switches to the next source if download fails mid-transfer.${RESET}"
-    echo ""
-    echo -ne "${BOLD}Choose [1/2] (default: 1): ${RESET}"
-    local dl_choice
-    read -r dl_choice || true
-
-    if [[ "${dl_choice:-1}" == "1" ]]; then
-        STREAM_MODE=true
+    # ── Transfer mode already chosen at the top of this function ────────────────
+    # STREAM_MODE=true  → on-the-fly streaming (handled later by stream_extract_chain_data)
+    # STREAM_MODE=false → full download below. (Slow sync already returned early.)
+    if [[ "$STREAM_MODE" == "true" ]]; then
         info "On-the-fly extraction selected. Streaming will begin at Step 10."
         log "[STEP 9] On-the-fly mode. zone=$SELECTED_ZONE sources=(${READY_SOURCES[*]}) tar=$tar_name"
         return 0
     fi
 
     # ── Full download mode ─────────────────────────────────────────────────────
-    STREAM_MODE=false
-
     info "Downloading checksum file: $sha_name"
     curl -fsSL "${READY_SOURCES[0]}/$sha_name" -o "$SHA_FILE" \
         || die "Failed to download checksum file."
@@ -2426,6 +2462,8 @@ show_summary() {
     echo ""
     echo -e "  Network      : ${CYAN}$network${RESET}"
     echo -e "  Mode         : ${CYAN}$mode${RESET}"
+    [[ "$SLOW_SYNC_MODE" == "true" ]] && \
+        echo -e "  Chain data   : ${YELLOW}syncing from peers (slow sync — no archive)${RESET}"
     echo -e "  Directory    : ${CYAN}$GRIN_DIR${RESET}"
     echo -e "  Tmux session : ${CYAN}$session${RESET}"
     echo -e "  Time taken   : ${CYAN}${mins}m ${secs}s${RESET}"
@@ -2659,7 +2697,10 @@ setup_one_node() {
     patch_config        "$network" "$ARCHIVE_MODE"
     generate_secrets
     download_chain_data "$network" "$ARCHIVE_MODE"
-    if [[ "$STREAM_MODE" == "true" ]]; then
+    if [[ "$SLOW_SYNC_MODE" == "true" ]]; then
+        info "Slow sync selected — no archive downloaded. The node will sync from peers."
+        log  "[CHAIN DATA] Slow sync — skipping download/verify/extract."
+    elif [[ "$STREAM_MODE" == "true" ]]; then
         stream_extract_chain_data
     else
         verify_checksum
@@ -2691,6 +2732,7 @@ setup_one_node() {
     SHA_FILE=""
     ARCHIVE_MODE=""
     STREAM_MODE=false
+    SLOW_SYNC_MODE=false
     READY_SOURCES=()
 }
 

@@ -21,7 +21,9 @@
 #
 # USAGE
 #   Interactive : bash 03_grin_share_chain_data.sh
-#   Cron        : bash 03_grin_share_chain_data.sh --cron-nginx
+#   Cron        : bash 03_grin_share_chain_data.sh --cron-nginx       (both nets)
+#                 bash 03_grin_share_chain_data.sh --cron-nginx-main  (mainnet only)
+#                 bash 03_grin_share_chain_data.sh --cron-nginx-test  (testnet only)
 #                 bash 03_grin_share_chain_data.sh --cron-ssh
 #                 bash 03_grin_share_chain_data.sh --cron-clean
 #
@@ -59,7 +61,9 @@ CONF_SSH="$CONF_DIR/grin_share_ssh.conf"
 INSTANCES_CONF="$CONF_DIR/grin_instances_location.conf"
 LOG_DIR="/opt/grin/logs"
 SCHED_LOG_FILE="$LOG_DIR/schedule.log"
-CRON_COMMENT_NGINX="# grin-node-toolkit: grin_share_nginx"
+CRON_COMMENT_NGINX="# grin-node-toolkit: grin_share_nginx"            # legacy combined (both networks)
+CRON_COMMENT_NGINX_MAIN="# grin-node-toolkit: grin_share_nginx_main"  # per-network: mainnet
+CRON_COMMENT_NGINX_TEST="# grin-node-toolkit: grin_share_nginx_test"  # per-network: testnet
 CRON_COMMENT_AUTOSTART_MAIN="# grin-node-toolkit: grin_autostart_mainnet"
 CRON_COMMENT_AUTOSTART_TEST="# grin-node-toolkit: grin_autostart_testnet"
 CRON_COMMENT_CLEAN="# grin-node-toolkit: grin_clean_txhashset"
@@ -1343,8 +1347,11 @@ try_start_from_known_dir() {
     return 1
 }
 
-# Entry point for --cron-nginx  (loads nginx conf, runs both ports)
+# Entry point for --cron-nginx[-main|-test]  (loads nginx conf, runs selected ports)
+#   $1 (optional) = "mainnet" or "testnet" — restrict to one network (per-network
+#   cron job). Empty = both. Effective selection is SYNC_CHOICE (config) ∩ $1 (flag).
 run_cron_nginx() {
+    local only_net="${1:-}"
     if [[ ! -f "$CONF_NGINX" ]]; then
         echo "ERROR: Nginx config not found: $CONF_NGINX"
         echo "Run the script interactively and select option A first."
@@ -1352,38 +1359,45 @@ run_cron_nginx() {
     fi
     load_nginx_config
 
+    # Intersect config's SYNC_CHOICE with the per-network cron flag.
+    local do_main=true do_test=true
+    [ "$SYNC_CHOICE" = "mainnet" ] && do_test=false
+    [ "$SYNC_CHOICE" = "testnet" ] && do_main=false
+    [ "$only_net" = "mainnet" ]    && do_test=false
+    [ "$only_net" = "testnet" ]    && do_main=false
+
     echo "=========================================="
     echo " Grin Share — Nginx pipeline"
     echo "=========================================="
-    echo " SYNC_CHOICE: $SYNC_CHOICE"
+    echo " SYNC_CHOICE: $SYNC_CHOICE${only_net:+   (cron filter: $only_net)}"
     echo ""
 
     local has_main=false has_test=false
-    [ -n "$(get_pid_on_port "$GRIN_PORT_MAINNET")" ] && has_main=true
-    [ -n "$(get_pid_on_port "$GRIN_PORT_TESTNET")" ] && has_test=true
+    [ "$do_main" = true ] && [ -n "$(get_pid_on_port "$GRIN_PORT_MAINNET")" ] && has_main=true
+    [ "$do_test" = true ] && [ -n "$(get_pid_on_port "$GRIN_PORT_TESTNET")" ] && has_test=true
 
     # If not running, attempt auto-start from toolkit default directories
-    if [ "$has_main" = false ] && [ "$SYNC_CHOICE" != "testnet" ]; then
+    if [ "$do_main" = true ] && [ "$has_main" = false ]; then
         echo "  - Mainnet not running — attempting auto-start..."
         try_start_from_known_dir "mainnet" "$GRIN_PORT_MAINNET" && has_main=true
     fi
-    if [ "$has_test" = false ] && [ "$SYNC_CHOICE" != "mainnet" ]; then
+    if [ "$do_test" = true ] && [ "$has_test" = false ]; then
         echo "  - Testnet not running — attempting auto-start..."
         try_start_from_known_dir "testnet" "$GRIN_PORT_TESTNET" && has_test=true
     fi
 
     [ "$has_main" = false ] && [ "$has_test" = false ] && {
-        echo "ERROR: No Grin node running or started on port $GRIN_PORT_MAINNET or $GRIN_PORT_TESTNET"
+        echo "ERROR: No Grin node running or started for the selected network(s)."
         echo "Start grin manually, let it sync, then retry."
         exit 1
     }
 
-    [ "$has_main" = true ] && echo "  ✓ Mainnet ready" || echo "  - Mainnet skipped (not running / SYNC_CHOICE=$SYNC_CHOICE)"
-    [ "$has_test" = true ] && echo "  ✓ Testnet ready" || echo "  - Testnet skipped (not running / SYNC_CHOICE=$SYNC_CHOICE)"
+    [ "$do_main" = true ] && { [ "$has_main" = true ] && echo "  ✓ Mainnet ready" || echo "  - Mainnet skipped (not running)"; }
+    [ "$do_test" = true ] && { [ "$has_test" = true ] && echo "  ✓ Testnet ready" || echo "  - Testnet skipped (not running)"; }
     echo ""
 
-    run_nginx_share_for_port "$GRIN_PORT_MAINNET"
-    run_nginx_share_for_port "$GRIN_PORT_TESTNET"
+    [ "$do_main" = true ] && run_nginx_share_for_port "$GRIN_PORT_MAINNET"
+    [ "$do_test" = true ] && run_nginx_share_for_port "$GRIN_PORT_TESTNET"
 
     echo ""
     echo "=========================================="
@@ -1574,6 +1588,7 @@ show_current_schedule() {
 }
 
 list_presets() {
+    local default_expr="$1" default_label="$2"
     local now_h now_m
     now_h=$(date +%-H)
     now_m=$(date +%-M)
@@ -1607,16 +1622,26 @@ list_presets() {
 
     echo -e "${BOLD}Schedule presets (UTC):${RESET}"
     echo ""
-    echo -e "  ${GREEN}1${RESET}) Mon & Thu at 00:00  ${DIM}(0 0 * * 1,4)${RESET}  [Default]"
-    echo -e "  ${GREEN}2${RESET}) 3x/week — ${_DN[$a]}, ${_DN[$b]}, ${_DN[$c]} at ${_HM}  ${DIM}(${_PRESET2})${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Daily at ${_HM}  ${DIM}(${_PRESET3})${RESET}"
-    echo -e "  ${GREEN}4${RESET}) 2x/week — ${_DN[$p]}, ${_DN[$q]} at ${_HM}  ${DIM}(${_PRESET4})${RESET}"
+    echo -e "  ${GREEN}1${RESET}) ${default_label}  ${DIM}(${default_expr})${RESET}  [Default — fixed]"
+    echo -e "  ${GREEN}2${RESET}) 3x/week — ${_DN[$a]}, ${_DN[$b]}, ${_DN[$c]} at ${_HM}  ${DIM}(${_PRESET2})${RESET}  ${DIM}[random]${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Daily at ${_HM}  ${DIM}(${_PRESET3})${RESET}  ${DIM}[random]${RESET}"
+    echo -e "  ${GREEN}4${RESET}) 2x/week — ${_DN[$p]}, ${_DN[$q]} at ${_HM}  ${DIM}(${_PRESET4})${RESET}  ${DIM}[random]${RESET}"
     echo ""
 }
 
+# get_cron_expression <network>
+#   Sets CRON_EXPR. Presets 2-4 are re-randomised on every call, so scheduling
+#   each network in turn naturally staggers their times. Preset 1 (fixed default)
+#   is network-specific so mainnet/testnet don't collide even on the default.
 get_cron_expression() {
-    list_presets
-    echo -e "  ${DIM}0) Cancel${RESET}"
+    local net="${1:-mainnet}" default_expr default_label
+    if [ "$net" = "testnet" ]; then
+        default_expr="0 6 * * 2,5"; default_label="Tue & Fri at 06:00"
+    else
+        default_expr="0 0 * * 1,4"; default_label="Mon & Thu at 00:00"
+    fi
+    list_presets "$default_expr" "$default_label"
+    echo -e "  ${DIM}0) Cancel / skip this network${RESET}"
     echo -ne "${BOLD}Select [0-4, default=1]: ${RESET}"
     read -r preset
     [[ "$preset" == "0" ]] && return 1
@@ -1624,41 +1649,81 @@ get_cron_expression() {
         2) CRON_EXPR="$_PRESET2" ;;
         3) CRON_EXPR="$_PRESET3" ;;
         4) CRON_EXPR="$_PRESET4" ;;
-        *) CRON_EXPR="0 0 * * 1,4" ;;
+        *) CRON_EXPR="$default_expr" ;;
     esac
 }
 
-# Add or replace the nginx cron entry
+# Add or replace the nginx cron entries — ONE schedule per configured network so
+# mainnet and testnet compression never run at the same time.
 add_nginx_schedule() {
     echo -e "\n${BOLD}${CYAN}── Schedule Nginx Jobs ──${RESET}\n"
     ensure_crontab || { sched_error "crontab unavailable — install cronie/cron and retry."; return; }
+    if [[ ! -f "$CONF_NGINX" ]]; then
+        show_error_pause "Nginx config not found." "Run option A (Create Nginx config) first."
+        return
+    fi
+    load_nginx_config
     local this_script; this_script="$(realpath "${BASH_SOURCE[0]}")"
 
-    get_cron_expression || return
+    # Which networks does the saved config share?
+    local -a nets=()
+    case "$SYNC_CHOICE" in
+        mainnet) nets=(mainnet) ;;
+        testnet) nets=(testnet) ;;
+        *)       nets=(mainnet testnet) ;;
+    esac
+
+    echo -e "${DIM}Each network gets its OWN schedule + cron line so mainnet and testnet${RESET}"
+    echo -e "${DIM}never stop-and-compress at the same time. Presets 2-4 pick a random${RESET}"
+    echo -e "${DIM}time per network (set once now) to spread disk/CPU load.${RESET}"
+    echo ""
 
     local log_path="$LOG_DIR/cron_nginx.log"
     echo -ne "Cron log path [${log_path}] or 0 to cancel: "
     read -r tmp; [[ "$tmp" == "0" ]] && return
     log_path="${tmp:-$log_path}"
 
-    local cron_line="$CRON_EXPR bash $this_script --cron-nginx >> $log_path 2>&1 $CRON_COMMENT_NGINX"
     local existing; existing=$(crontab -l 2>/dev/null || true)
 
-    if echo "$existing" | grep -qF "grin_share_nginx"; then
-        sched_warn "A nginx cron job already exists."
-        echo -ne "Replace it? [Y/n/0]: "
-        read -r rep
-        [[ "$rep" == "0" ]] && return
-        if [[ "${rep,,}" == "n" ]]; then
-            sched_info "Keeping existing schedule."; echo ""; echo "Press Enter to continue..."; read -r; return
-        else
-            existing=$(echo "$existing" | grep -v "grin_share_nginx" || true)
-        fi
+    # Drop any legacy combined (both-network) line — superseded by per-network lines.
+    # The legacy marker ends in 'grin_share_nginx'; the per-network ones end in
+    # '..._main' / '..._test', so anchor to end-of-line to match only the legacy one.
+    if echo "$existing" | grep -qE 'grin_share_nginx[[:space:]]*$'; then
+        sched_info "Replacing legacy combined nginx schedule with per-network schedules."
+        existing=$(echo "$existing" | grep -vE 'grin_share_nginx[[:space:]]*$' || true)
     fi
 
-    (echo "$existing"; echo "$cron_line") | grep -v '^$' | crontab -
-    sched_success "Nginx schedule set: ${CYAN}$CRON_EXPR${RESET}"
-    sched_log "Added nginx cron: $cron_line"
+    local net flag marker label cron_line any_set=false
+    for net in "${nets[@]}"; do
+        if [ "$net" = "testnet" ]; then
+            flag="--cron-nginx-test"; marker="$CRON_COMMENT_NGINX_TEST"; label="TESTNET"
+        else
+            flag="--cron-nginx-main"; marker="$CRON_COMMENT_NGINX_MAIN"; label="MAINNET"
+        fi
+
+        echo -e "${BOLD}${CYAN}── Schedule for ${label} ──${RESET}"
+        if ! get_cron_expression "$net"; then
+            sched_info "${label}: skipped — existing schedule (if any) left unchanged."
+            echo ""
+            continue
+        fi
+
+        # Replace this network's existing line (exact marker), then append the new one.
+        existing=$(echo "$existing" | grep -vF "$marker" || true)
+        cron_line="$CRON_EXPR bash $this_script $flag >> $log_path 2>&1 $marker"
+        existing="$(printf '%s\n%s' "$existing" "$cron_line")"
+        sched_success "${label} schedule set: ${CYAN}$CRON_EXPR${RESET}"
+        sched_log "Added nginx cron ($net): $cron_line"
+        any_set=true
+        echo ""
+    done
+
+    if [ "$any_set" != true ]; then
+        sched_info "No schedules changed."
+        echo ""; echo "Press Enter to continue..."; read -r; return
+    fi
+
+    echo "$existing" | grep -v '^$' | crontab -
 
     # Show SSH cron advisory
     echo ""
@@ -1672,21 +1737,41 @@ add_nginx_schedule() {
     read -r
 }
 
-# Remove all nginx cron entries managed by this script
+# Remove nginx share cron entries managed by this script (all, or one network)
 remove_nginx_schedule() {
     echo -e "\n${BOLD}${CYAN}── Disable Nginx Jobs ──${RESET}\n"
     show_current_schedule
-    echo -ne "${YELLOW}Remove chain_data sharing cron job only? [Y/n/0]: ${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Remove ${BOLD}all${RESET} chain_data sharing jobs  ${DIM}[default]${RESET}"
+    echo -e "  ${GREEN}2${RESET}) Remove ${BOLD}mainnet${RESET} schedule only"
+    echo -e "  ${GREEN}3${RESET}) Remove ${BOLD}testnet${RESET} schedule only"
+    echo -e "  ${DIM}0${RESET}) Cancel"
+    echo -ne "${YELLOW}Select [0-3, default=1]: ${RESET}"
     read -r confirm
     [[ "$confirm" == "0" ]] && return
-    if [[ "${confirm,,}" != "n" ]]; then
-        local tmp_cron; tmp_cron=$(crontab -l 2>/dev/null | grep -v "grin_share_nginx" || true)
-        echo "$tmp_cron" | crontab -
-        sched_success "Nginx cron jobs removed."
-        sched_log "Removed nginx cron jobs"
-    else
-        sched_info "No changes made."
-    fi
+
+    local tmp_cron
+    case "${confirm:-1}" in
+        2)
+            # Match the mainnet marker only (per-network lines end in _main)
+            tmp_cron=$(crontab -l 2>/dev/null | grep -vF "$CRON_COMMENT_NGINX_MAIN" || true)
+            echo "$tmp_cron" | grep -v '^$' | crontab -
+            sched_success "Mainnet sharing cron removed."
+            sched_log "Removed mainnet nginx cron"
+            ;;
+        3)
+            tmp_cron=$(crontab -l 2>/dev/null | grep -vF "$CRON_COMMENT_NGINX_TEST" || true)
+            echo "$tmp_cron" | grep -v '^$' | crontab -
+            sched_success "Testnet sharing cron removed."
+            sched_log "Removed testnet nginx cron"
+            ;;
+        *)
+            # 'grin_share_nginx' is a substring of every variant (legacy/_main/_test)
+            tmp_cron=$(crontab -l 2>/dev/null | grep -v "grin_share_nginx" || true)
+            echo "$tmp_cron" | grep -v '^$' | crontab -
+            sched_success "All nginx sharing cron jobs removed."
+            sched_log "Removed all nginx cron jobs"
+            ;;
+    esac
     echo ""
     echo "Press Enter to continue..."
     read -r
@@ -1783,12 +1868,14 @@ add_grin_autostart() {
         if [[ "$net" == "mainnet" ]]; then
             port=$GRIN_PORT_MAINNET
             label="Mainnet"
-            default_delay=60
+            # grin v5.5 chain_data is heavier on CPU/IO during sync — bring mainnet
+            # up fast, and hold testnet well clear of the mainnet sync surge.
+            default_delay=5
             cron_marker="$CRON_COMMENT_AUTOSTART_MAIN"
         else
             port=$GRIN_PORT_TESTNET
             label="Testnet"
-            default_delay=120
+            default_delay=1500
             cron_marker="$CRON_COMMENT_AUTOSTART_TEST"
         fi
 
@@ -1818,8 +1905,36 @@ add_grin_autostart() {
             fi
         fi
 
+        # Not running — resolve an INSTALLED node without needing a live process,
+        # so autostart can be scheduled for a stopped node. Prefer the instances
+        # conf (respects mainnet full-over-prune), then fall back to a filesystem
+        # check of the standard toolkit dirs under /opt/grin/node/<net>.
         if [[ -z "$GRIN_BINARY" ]]; then
-            sched_warn "No $label grin process found on port $port."
+            local _dir=""
+            _dir=$(gnc_resolve_node_dir "$net" 2>/dev/null) || true
+            if [[ -z "$_dir" || ! -x "$_dir/grin" ]]; then
+                local _cands=() _c=""
+                if [[ "$net" == "mainnet" ]]; then
+                    _cands=(/opt/grin/node/mainnet-full /opt/grin/node/mainnet-prune)
+                else
+                    _cands=(/opt/grin/node/testnet-prune)
+                fi
+                _dir=""
+                for _c in "${_cands[@]}"; do
+                    [[ -x "$_c/grin" ]] && { _dir="$_c"; break; }
+                done
+            fi
+            if [[ -n "$_dir" && -x "$_dir/grin" ]]; then
+                GRIN_DIR="$_dir"
+                GRIN_BINARY="$_dir/grin"
+                TMUX_SESSION="$(_grin_session_name "$GRIN_DIR")"
+                sched_info "$label not running — using installed binary at $GRIN_BINARY"
+                sched_info "tmux session    : $TMUX_SESSION"
+            fi
+        fi
+
+        if [[ -z "$GRIN_BINARY" ]]; then
+            sched_warn "No $label grin process running, and no installed binary under /opt/grin/node."
             echo -ne "  Enter binary path manually (or 0 to skip): "
             local manual_bin=""
             read -r manual_bin
@@ -1838,7 +1953,11 @@ add_grin_autostart() {
             delay=$default_delay
         fi
 
-        local cron_line="@reboot sleep $delay && cd $GRIN_DIR && env SHELL=/bin/bash tmux new-session -d -s $TMUX_SESSION $GRIN_BINARY server run $cron_marker"
+        # Grin Node Launch Contract (CLAUDE.md): run as the grin user with
+        # HOME=$GRIN_DIR, after chown -R grin:grin. A root-run node leaves
+        # root:root files in the node dir → next grin-user start hits EACCES.
+        # Mirrors gnk_autostart_enable in lib/grin_node_keepalive.sh.
+        local cron_line="@reboot sleep $delay && chown -R grin:grin '$GRIN_DIR' 2>/dev/null; su -s /bin/bash grin -c \"cd '$GRIN_DIR' && env HOME='$GRIN_DIR' SHELL=/bin/bash tmux new-session -d -s $TMUX_SESSION '$GRIN_BINARY server run'\" $cron_marker"
 
         # Check for existing entry
         if echo "$existing_cron" | grep -qF "$cron_marker"; then
@@ -2064,10 +2183,12 @@ run_interactive() {
 
 main() {
     case "${1:-}" in
-        --cron-nginx)  run_cron_nginx        ;;
-        --cron-ssh)    run_cron_ssh          ;;
-        --cron-clean)  run_txhashset_cleanup ;;
-        *)             run_interactive       ;;
+        --cron-nginx)       run_cron_nginx            ;;
+        --cron-nginx-main)  run_cron_nginx mainnet    ;;
+        --cron-nginx-test)  run_cron_nginx testnet    ;;
+        --cron-ssh)         run_cron_ssh              ;;
+        --cron-clean)       run_txhashset_cleanup     ;;
+        *)                  run_interactive           ;;
     esac
 }
 

@@ -87,12 +87,35 @@
       '</span>' +
     '</p>';
 
+  // Deterministically (re)start the brand-logo swing. The @keyframes/animation rule is
+  // already present (dashboard.css is in <head>, so this script is blocked until it loads),
+  // but the animation START races with two things on a fresh load: the SVG image decode, and
+  // branding.js re-injecting an identical @keyframes <style> after its async /api/config fetch
+  // (redefining a running keyframes name can leave the swing stuck on some engines). A reflow
+  // kick after the image is ready forces a clean start, so it swings the first time, every time.
+  function startBrandSwing() {
+    var logo = header.querySelector('.brand-logo');
+    if (!logo) return;
+    var kick = function () {
+      logo.style.animation = 'none';
+      void logo.offsetWidth;        // force reflow so the restart takes effect
+      logo.style.animation = '';    // fall back to the stylesheet rule (dashboard.css)
+    };
+    if (logo.complete) {
+      kick();
+    } else {
+      logo.addEventListener('load', kick, { once: true });
+      logo.addEventListener('error', kick, { once: true }); // broken src still gets a styled box
+    }
+  }
+
   function mount() {
     // Remove any legacy hardcoded chrome a page might still carry (defensive —
     // converted pages ship none), then inject the canonical header/footer.
     document.querySelectorAll('body > header, body > footer').forEach(function (el) { el.remove(); });
     document.body.insertBefore(header, document.body.firstChild);
     document.body.appendChild(footer);
+    startBrandSwing();
   }
 
   if (document.body) {

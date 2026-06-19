@@ -196,6 +196,7 @@
 
 <main>
   <nav class="toc" aria-label="Section navigation">
+    <a href="#about">About this pool</a>
     <a href="#miner">Point your miner</a>
     <a href="#connect">Connection details</a>
     <a href="#gpu">GPU miners</a>
@@ -205,6 +206,23 @@
     <a href="#extra">Additional info</a>
     <a href="#pollers">External pollers</a>
   </nav>
+
+  <section class="card" id="about">
+    <h2>About this pool — free &amp; open source</h2>
+    <div class="callout info">
+      <p>This page is a live <b>demo</b> of the free, open-source <b>solo Grin mining pool</b>
+         I built into the <b>Grin Node Toolkit (Script 07)</b>. If you like it, you're welcome to
+         point your miners here as a <b>donation</b> — there's no obligation.</p>
+    </div>
+    <p>With the Grin Node Toolkit you can stand up <b>your own</b> solo Grin pool in minutes with a
+       single bash script. My intention is to let newcomers be <b>independent from the big mining
+       pools</b> and keep Grin mining more <b>decentralized</b> — and since it's your own pool, you
+       pay <b>no fee</b> to join anyone else's.</p>
+    <p>If you want more privacy, the pool can be <b>protected with a username / password</b>. The
+       whole script is <b>open source</b> — audit, fork, clone or refactor it however you wish:
+       <a class="code" href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank"
+          rel="noopener" style="text-decoration:none">github.com/noobvie/Grin-Node-Toolkit</a>.</p>
+  </section>
 
   <section class="card" id="miner">
     <h2>Point your miner here</h2>
@@ -447,7 +465,7 @@ Pool 3   gaeapool / 2miners            worker = your GRIN payout address</div>
 
     <h3>How the stats update</h3>
     <ul>
-      <li><b>Live node + wallet metrics</b> refresh every <b>10 s</b> on the stats page.</li>
+      <li><b>Live node + wallet metrics</b> refresh every <b>120 s</b> (two Grin blocks) on the stats page.</li>
       <li><b>Blocks found</b> and <b>per-miner hashrate</b> are parsed from the node log by the collector.</li>
       <li><b>Coinbase rewards</b> mature after <b>1440 blocks (~24 h)</b> before they're spendable.</li>
     </ul>

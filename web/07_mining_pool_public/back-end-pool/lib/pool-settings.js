@@ -482,7 +482,15 @@ class PoolSettings {
       } else if (row.value_type === 'boolean') {
         defaults[row.key] = row.value === 'true';
       } else if (row.value_type === 'json') {
-        defaults[row.key] = JSON.parse(row.value);
+        // A single corrupt json row must NOT throw out of getSection() — that would
+        // 500 the whole /api/admin/settings load and make the entire admin Settings
+        // panel unusable ("Failed to load settings"). Keep the section's default for
+        // just this key instead, and log which row needs fixing.
+        try {
+          defaults[row.key] = JSON.parse(row.value);
+        } catch (e) {
+          console.error(`[pool-settings] malformed json for ${section}.${row.key}; using default`, e.message);
+        }
       } else {
         defaults[row.key] = row.value;
       }

@@ -88,6 +88,9 @@
     <!-- header injected by /js/public-shell.js -->
 
     <div class="wrap">
+        <!-- Sidebar ad slot (filled by /js/ads.js; floats right on wide screens, hidden if empty) -->
+        <div class="ad-slot ad-slot--sidebar" data-ad-slot="sidebar" style="display:none;"></div>
+
         <div class="page-head">
             <div>
                 <h1 data-brand="hero_heading">Pool Dashboard</h1>
@@ -146,6 +149,9 @@
                 <div class="stat-delta" id="stat-network"></div>
             </div>
         </div>
+
+        <!-- In-content ad slot (filled by /js/ads.js; hidden if empty) -->
+        <div class="ad-slot ad-slot--in-content" data-ad-slot="in-content" style="display:none;"></div>
 
         <div class="section-title" id="connect">Point your miner at your nearest region</div>
         <div class="region-grid" id="region-grid">

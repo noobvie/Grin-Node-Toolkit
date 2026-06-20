@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payout · Settings | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+</head>
+<body>
+  <main>
+  <div class="settings-container">
+    <div class="page-head">
+      <h1>Payout</h1>
+      <p class="page-sub">Fees, thresholds and reward model</p>
+    </div>
+
+    <div id="payout" class="settings-content active">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Withdrawal Settings</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="min_withdrawal">Minimum Withdrawal (GRIN)</label>
+              <input type="number" id="min_withdrawal" name="min_withdrawal" min="0.01" step="0.01" value="5">
+              <div class="helper-text">Miners must accumulate at least this much to withdraw</div>
+            </div>
+            <div class="form-group">
+              <label for="payout_frequency">Auto Payout Frequency</label>
+              <select id="payout_frequency" name="payout_frequency">
+                <option value="manual">Manual (default)</option>
+                <option value="hourly">Hourly</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="auto_payout" name="auto_payout">
+            <label for="auto_payout">Enable automatic payouts</label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Block Confirmation Depth</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="confirm_depth_mainnet">Mainnet Confirm Depth</label>
+              <input type="number" id="confirm_depth_mainnet" name="confirm_depth_mainnet" value="1440">
+              <div class="helper-text">Blocks until mainnet reward is spendable (Grin COINBASE_MATURITY = 1440)</div>
+            </div>
+            <div class="form-group">
+              <label for="confirm_depth_testnet">Testnet Confirm Depth</label>
+              <input type="number" id="confirm_depth_testnet" name="confirm_depth_testnet" value="100">
+              <div class="helper-text">Blocks until testnet reward is spendable</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Rate Limiting</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="max_pending_withdrawals">Max Pending Withdrawals (Pool)</label>
+              <input type="number" id="max_pending_withdrawals" name="max_pending_withdrawals" value="100">
+              <div class="helper-text">Total concurrent withdrawal limit</div>
+            </div>
+            <div class="form-group">
+              <label for="max_user_pending">Max Pending Per Miner</label>
+              <input type="number" id="max_user_pending" name="max_user_pending" value="10">
+              <div class="helper-text">Per-address concurrent limit</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('payout')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('payout')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- INCENTIVES TAB -->
+  </div>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/stepup.js"></script>
+  <script src="/admin/admin-shell.js"></script>
+  <script>window.SETTINGS_SECTION = "payout";</script>
+  <script src="/admin/settings-common.js"></script>
+</body>
+</html>

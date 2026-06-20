@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pages | Grin Pool ツ</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/js/vendor/quill.snow.css">
+  <style>
+    .ql-editor { min-height: 240px; font-size: 1rem; }
+    .ql-toolbar.ql-snow, .ql-container.ql-snow { border-color: var(--border, #2a2a2a); }
+    .ql-container.ql-snow { border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
+    .ql-toolbar.ql-snow { border-top-left-radius: 6px; border-top-right-radius: 6px; }
+    .editor-wrap { background: var(--bg-input, #111); border-radius: 6px; }
+  </style>
+</head>
+<body>
+
+<main>
+  <div class="container">
+    <div class="page-head">
+      <h1>Pages</h1>
+      <p class="page-sub">Operator-authored standalone pages (About, Terms, custom pages…), served at
+        <code>/page.html?p=&lt;slug&gt;</code> and auto-linked where you choose.</p>
+    </div>
+
+    <!-- Create / edit form -->
+    <div class="card">
+      <h3 id="form-title" style="margin:0 0 1rem;">New page</h3>
+      <input type="hidden" id="page-id">
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="page-title-in">Title</label>
+          <input type="text" id="page-title-in" placeholder="e.g. About the pool" oninput="maybeSyncSlug()">
+        </div>
+        <div class="form-group">
+          <label for="page-slug">Slug (URL)</label>
+          <input type="text" id="page-slug" placeholder="about" oninput="slugTouched=true">
+          <div class="helper-text">Used in <code>/page.html?p=<span id="slug-preview">slug</span></code>. Auto-filled from the title.</div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Content</label>
+        <div class="editor-wrap"><div id="editor"></div></div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="page-nav">Link location</label>
+          <select id="page-nav">
+            <option value="footer">Footer</option>
+            <option value="header">Header nav</option>
+            <option value="none">Not linked (direct URL only)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="page-order">Sort order</label>
+          <input type="number" id="page-order" value="0">
+        </div>
+      </div>
+
+      <details style="margin:.4rem 0 1rem;">
+        <summary style="cursor:pointer;">SEO overrides (optional)</summary>
+        <div class="form-group" style="margin-top:.6rem;">
+          <label for="page-seo-title">SEO title</label>
+          <input type="text" id="page-seo-title" placeholder="Defaults to the page title">
+        </div>
+        <div class="form-group">
+          <label for="page-seo-desc">SEO description</label>
+          <input type="text" id="page-seo-desc" placeholder="Short summary for search engines">
+        </div>
+      </details>
+
+      <label style="display:flex;align-items:center;gap:.5rem;margin:.4rem 0 1rem;">
+        <input type="checkbox" id="page-published" checked> Published
+      </label>
+
+      <div style="display:flex;gap:.6rem;align-items:center;">
+        <button class="btn" onclick="submitPage()">Save page</button>
+        <button class="btn btn-outline" onclick="resetForm()" id="cancel-btn" style="display:none;">Cancel edit</button>
+        <span class="success-msg" id="page-msg" style="display:none;"></span>
+      </div>
+    </div>
+
+    <h2>All pages</h2>
+    <div class="card" style="padding:0;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Title</th><th>Slug</th><th>Linked</th><th>Published</th><th>Actions</th></tr>
+          </thead>
+          <tbody id="pages-tbody">
+            <tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="/js/auth.js"></script>
+<script src="/js/api.js"></script>
+<script src="/admin/admin-shell.js"></script>
+<script src="/js/vendor/quill.js"></script>
+<script src="/admin/cms-editor.js"></script>
+<script>
+API.guardAdminPage();
+
+let _pages = [];
+let editor = null;
+let slugTouched = false;
+
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+const NAV_LABEL = { footer: 'Footer', header: 'Header', none: '—' };
+
+function slugify(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+}
+function maybeSyncSlug() {
+  if (slugTouched) return;
+  const slug = slugify(document.getElementById('page-title-in').value);
+  document.getElementById('page-slug').value = slug;
+  document.getElementById('slug-preview').textContent = slug || 'slug';
+}
+
+function flash(msg, isErr) {
+  const el = document.getElementById('page-msg');
+  el.textContent = msg;
+  el.className = isErr ? 'error-msg' : 'success-msg';
+  el.style.display = '';
+  setTimeout(() => { el.style.display = 'none'; }, 5000);
+}
+
+function resetForm() {
+  document.getElementById('page-id').value = '';
+  document.getElementById('page-title-in').value = '';
+  document.getElementById('page-slug').value = '';
+  document.getElementById('slug-preview').textContent = 'slug';
+  document.getElementById('page-nav').value = 'footer';
+  document.getElementById('page-order').value = '0';
+  document.getElementById('page-seo-title').value = '';
+  document.getElementById('page-seo-desc').value = '';
+  document.getElementById('page-published').checked = true;
+  if (editor) editor.setHTML('');
+  slugTouched = false;
+  document.getElementById('form-title').textContent = 'New page';
+  document.getElementById('cancel-btn').style.display = 'none';
+}
+
+async function loadPages() {
+  const tbody = document.getElementById('pages-tbody');
+  try {
+    const d = await API.get('/api/admin/pages');
+    if (!d || d.error) throw new Error(d && d.error ? d.error : 'Failed to load pages');
+    _pages = d.pages || [];
+    if (!_pages.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No pages yet. Create one above.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = _pages.map(p => `
+      <tr>
+        <td>${escHtml(p.title)}</td>
+        <td class="mono">${escHtml(p.slug)}</td>
+        <td>${escHtml(NAV_LABEL[p.nav_location] || p.nav_location)}</td>
+        <td>${p.is_published ? '<span class="badge badge-ok">Live</span>' : '<span class="badge badge-dim">Draft</span>'}</td>
+        <td>
+          <a class="btn btn-sm btn-outline" href="/page.html?p=${encodeURIComponent(p.slug)}" target="_blank" rel="noopener">View</a>
+          <button class="btn btn-sm btn-outline" onclick="editPage(${p.id})">Edit</button>
+          <button class="btn btn-sm" onclick="deletePage(${p.id})">Delete</button>
+        </td>
+      </tr>`).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">Error: ${escHtml(err.message)}</td></tr>`;
+  }
+}
+
+function editPage(id) {
+  const p = _pages.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById('page-id').value = p.id;
+  document.getElementById('page-title-in').value = p.title || '';
+  document.getElementById('page-slug').value = p.slug || '';
+  document.getElementById('slug-preview').textContent = p.slug || 'slug';
+  document.getElementById('page-nav').value = p.nav_location || 'footer';
+  document.getElementById('page-order').value = p.sort_order != null ? p.sort_order : 0;
+  document.getElementById('page-seo-title').value = p.seo_title || '';
+  document.getElementById('page-seo-desc').value = p.seo_desc || '';
+  document.getElementById('page-published').checked = !!p.is_published;
+  if (editor) editor.setHTML(p.html || '');
+  slugTouched = true;
+  document.getElementById('form-title').textContent = 'Edit page #' + p.id;
+  document.getElementById('cancel-btn').style.display = '';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function submitPage() {
+  const id = document.getElementById('page-id').value;
+  const body = {
+    title: document.getElementById('page-title-in').value.trim(),
+    slug: document.getElementById('page-slug').value.trim(),
+    html: editor ? editor.getHTML() : '',
+    nav_location: document.getElementById('page-nav').value,
+    sort_order: parseInt(document.getElementById('page-order').value, 10) || 0,
+    seo_title: document.getElementById('page-seo-title').value.trim(),
+    seo_desc: document.getElementById('page-seo-desc').value.trim(),
+    is_published: document.getElementById('page-published').checked,
+  };
+  try {
+    const r = id ? await API.post('/api/admin/pages/' + id, body)
+                 : await API.post('/api/admin/pages', body);
+    if (!r || r.error) throw new Error(r && r.error ? r.error : 'Save failed');
+    flash('Page saved.', false);
+    resetForm();
+    loadPages();
+  } catch (err) {
+    flash(err.message, true);
+  }
+}
+
+async function deletePage(id) {
+  const p = _pages.find(x => x.id === id);
+  if (!confirm(`Delete page "${p ? p.title : id}"? This cannot be undone.`)) return;
+  try {
+    const r = await API.del('/api/admin/pages/' + id);
+    if (!r || r.error) throw new Error(r && r.error ? r.error : 'Delete failed');
+    flash('Page deleted.', false);
+    loadPages();
+  } catch (err) {
+    flash(err.message, true);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  editor = CmsEditor.mount('#editor', { placeholder: 'Write the page content…' });
+  loadPages();
+});
+</script>
+</body>
+</html>

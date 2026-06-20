@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ads | Grin Pool ツ</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+</head>
+<body>
+
+<main>
+  <div class="container">
+    <div class="page-head">
+      <h1>Ads</h1>
+      <p class="page-sub">Promotions shown on the public site — a self-hosted banner or an ad-network code snippet, bound to a placement.</p>
+    </div>
+
+    <!-- Create / edit form -->
+    <div class="card">
+      <h3 id="form-title" style="margin:0 0 1rem;">New ad</h3>
+      <input type="hidden" id="ad-id">
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="ad-name">Name (internal)</label>
+          <input type="text" id="ad-name" placeholder="e.g. Coinzilla leaderboard">
+        </div>
+        <div class="form-group">
+          <label for="ad-placement">Placement</label>
+          <select id="ad-placement">
+            <option value="header">Header / top banner</option>
+            <option value="sidebar">Sidebar</option>
+            <option value="in-content">In-content (homepage)</option>
+            <option value="footer">Footer</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="ad-type">Type</label>
+          <select id="ad-type" onchange="syncType()">
+            <option value="banner">Banner (image + link)</option>
+            <option value="code">Code snippet (HTML)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Banner fields -->
+      <div id="banner-fields">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="ad-image">Image URL</label>
+            <input type="url" id="ad-image" placeholder="https://…/banner.png">
+          </div>
+          <div class="form-group">
+            <label for="ad-link">Click-through URL</label>
+            <input type="url" id="ad-link" placeholder="https://…">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="ad-alt">Alt / title text</label>
+          <input type="text" id="ad-alt" placeholder="Describe the ad (accessibility + tooltip)">
+        </div>
+      </div>
+
+      <!-- Code fields -->
+      <div id="code-fields" style="display:none;">
+        <div class="form-group">
+          <label for="ad-code">HTML / JS snippet</label>
+          <textarea id="ad-code" rows="5" placeholder="<!-- paste your ad-network zone code here -->"></textarea>
+          <div class="helper-text">Trusted operator content — rendered as-is on public pages (like your analytics snippet). Only paste code you trust.</div>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="ad-weight">Weight (higher shows first)</label>
+          <input type="number" id="ad-weight" value="0">
+        </div>
+        <div class="form-group">
+          <label for="ad-start">Start (optional)</label>
+          <input type="datetime-local" id="ad-start">
+        </div>
+        <div class="form-group">
+          <label for="ad-end">End (optional)</label>
+          <input type="datetime-local" id="ad-end">
+        </div>
+      </div>
+
+      <label style="display:flex;align-items:center;gap:.5rem;margin:.4rem 0 1rem;">
+        <input type="checkbox" id="ad-active" checked> Active
+      </label>
+
+      <div style="display:flex;gap:.6rem;align-items:center;">
+        <button class="btn" onclick="submitAd()">Save ad</button>
+        <button class="btn btn-outline" onclick="resetForm()" id="cancel-btn" style="display:none;">Cancel edit</button>
+        <span class="success-msg" id="ad-msg" style="display:none;"></span>
+      </div>
+    </div>
+
+    <!-- Existing ads -->
+    <h2>All ads</h2>
+    <div class="card" style="padding:0;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Placement</th>
+              <th>Type</th>
+              <th>Active</th>
+              <th>Weight</th>
+              <th>Window</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="ads-tbody">
+            <tr class="loading-row"><td colspan="7"><span class="spinner"></span>Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="/js/auth.js"></script>
+<script src="/js/api.js"></script>
+<script src="/admin/admin-shell.js"></script>
+<script>
+API.guardAdminPage();
+
+let _ads = [];   // last-loaded ads, looked up by id (avoids inlining objects into onclick attrs)
+
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+const PLACEMENT_LABEL = { header:'Header', sidebar:'Sidebar', 'in-content':'In-content', footer:'Footer' };
+
+function toLocalInput(unix) {
+  if (!unix) return '';
+  const d = new Date(unix * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fromLocalInput(v) {
+  if (!v) return null;
+  const t = new Date(v).getTime();
+  return Number.isFinite(t) ? Math.floor(t / 1000) : null;
+}
+function fmtWindow(a) {
+  const s = a.start_at ? new Date(a.start_at * 1000).toLocaleDateString() : null;
+  const e = a.end_at ? new Date(a.end_at * 1000).toLocaleDateString() : null;
+  if (!s && !e) return 'always';
+  return `${s || '…'} → ${e || '…'}`;
+}
+
+function syncType() {
+  const t = document.getElementById('ad-type').value;
+  document.getElementById('banner-fields').style.display = t === 'banner' ? '' : 'none';
+  document.getElementById('code-fields').style.display   = t === 'code' ? '' : 'none';
+}
+
+function flash(msg, isErr) {
+  const el = document.getElementById('ad-msg');
+  el.textContent = msg;
+  el.className = isErr ? 'error-msg' : 'success-msg';
+  el.style.display = '';
+  setTimeout(() => { el.style.display = 'none'; }, 5000);
+}
+
+function resetForm() {
+  document.getElementById('ad-id').value = '';
+  document.getElementById('ad-name').value = '';
+  document.getElementById('ad-placement').value = 'header';
+  document.getElementById('ad-type').value = 'banner';
+  document.getElementById('ad-image').value = '';
+  document.getElementById('ad-link').value = '';
+  document.getElementById('ad-alt').value = '';
+  document.getElementById('ad-code').value = '';
+  document.getElementById('ad-weight').value = '0';
+  document.getElementById('ad-start').value = '';
+  document.getElementById('ad-end').value = '';
+  document.getElementById('ad-active').checked = true;
+  document.getElementById('form-title').textContent = 'New ad';
+  document.getElementById('cancel-btn').style.display = 'none';
+  syncType();
+}
+
+async function loadAds() {
+  const tbody = document.getElementById('ads-tbody');
+  try {
+    const d = await API.get('/api/admin/ads');
+    if (!d || d.error) throw new Error(d && d.error ? d.error : 'Failed to load ads');
+    _ads = d.ads || [];
+    if (!_ads.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No ads yet. Create one above.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = _ads.map(a => `
+      <tr>
+        <td>${escHtml(a.name)}</td>
+        <td>${escHtml(PLACEMENT_LABEL[a.placement] || a.placement)}</td>
+        <td>${escHtml(a.ad_type)}</td>
+        <td>${a.is_active ? '<span class="badge badge-ok">On</span>' : '<span class="badge badge-dim">Off</span>'}</td>
+        <td class="mono">${a.weight}</td>
+        <td>${escHtml(fmtWindow(a))}</td>
+        <td>
+          <button class="btn btn-sm btn-outline" onclick="editAd(${a.id})">Edit</button>
+          <button class="btn btn-sm" onclick="deleteAd(${a.id})">Delete</button>
+        </td>
+      </tr>`).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="7">Error: ${escHtml(err.message)}</td></tr>`;
+  }
+}
+
+function editAd(id) {
+  const a = _ads.find(x => x.id === id);
+  if (!a) return;
+  document.getElementById('ad-id').value = a.id;
+  document.getElementById('ad-name').value = a.name || '';
+  document.getElementById('ad-placement').value = a.placement || 'header';
+  document.getElementById('ad-type').value = a.ad_type || 'banner';
+  document.getElementById('ad-image').value = a.image_url || '';
+  document.getElementById('ad-link').value = a.link_url || '';
+  document.getElementById('ad-alt').value = a.alt_text || '';
+  document.getElementById('ad-code').value = a.html_code || '';
+  document.getElementById('ad-weight').value = a.weight != null ? a.weight : 0;
+  document.getElementById('ad-start').value = toLocalInput(a.start_at);
+  document.getElementById('ad-end').value = toLocalInput(a.end_at);
+  document.getElementById('ad-active').checked = !!a.is_active;
+  document.getElementById('form-title').textContent = 'Edit ad #' + a.id;
+  document.getElementById('cancel-btn').style.display = '';
+  syncType();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function submitAd() {
+  const id = document.getElementById('ad-id').value;
+  const body = {
+    name: document.getElementById('ad-name').value.trim(),
+    placement: document.getElementById('ad-placement').value,
+    ad_type: document.getElementById('ad-type').value,
+    image_url: document.getElementById('ad-image').value.trim(),
+    link_url: document.getElementById('ad-link').value.trim(),
+    alt_text: document.getElementById('ad-alt').value.trim(),
+    html_code: document.getElementById('ad-code').value,
+    weight: parseInt(document.getElementById('ad-weight').value, 10) || 0,
+    start_at: fromLocalInput(document.getElementById('ad-start').value),
+    end_at: fromLocalInput(document.getElementById('ad-end').value),
+    is_active: document.getElementById('ad-active').checked
+  };
+  try {
+    const r = id ? await API.post('/api/admin/ads/' + id, body)
+                 : await API.post('/api/admin/ads', body);
+    if (!r || r.error) throw new Error(r && r.error ? r.error : 'Save failed');
+    flash('Ad saved.', false);
+    resetForm();
+    loadAds();
+  } catch (err) {
+    flash(err.message, true);
+  }
+}
+
+async function deleteAd(id) {
+  const a = _ads.find(x => x.id === id);
+  if (!confirm(`Delete ad "${a ? a.name : id}"?`)) return;
+  try {
+    const r = await API.del('/api/admin/ads/' + id);
+    if (!r || r.error) throw new Error(r && r.error ? r.error : 'Delete failed');
+    flash('Ad deleted.', false);
+    loadAds();
+  } catch (err) {
+    flash(err.message, true);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => { syncType(); loadAds(); });
+</script>
+</body>
+</html>

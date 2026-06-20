@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Access Control · Settings | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+</head>
+<body>
+  <main>
+  <div class="settings-container">
+    <div class="page-head">
+      <h1>Access Control</h1>
+      <p class="page-sub">IP allow/blocklist and admin 2FA</p>
+    </div>
+
+    <div id="access" class="settings-content active">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Two-Factor Authentication (2FA)</h3>
+          <div id="twofa-status" class="helper-text">Loading…</div>
+
+          <div id="twofa-disabled" style="display:none;margin-top:.5rem;">
+            <div class="helper-text">Add an authenticator-app code (TOTP) to your admin login. Strongly recommended.</div>
+            <button class="btn btn-primary" onclick="begin2fa()">Enable 2FA</button>
+          </div>
+
+          <div id="twofa-enroll" style="display:none;margin-top:.5rem;">
+            <div class="helper-text"><strong>1.</strong> Add this account to your authenticator app — scan the QR, tap the link on mobile, or type the manual key:</div>
+            <div id="twofa-qr" style="margin:.6rem 0;"></div>
+            <div class="helper-text" style="word-break:break-all;">otpauth link: <a id="twofa-otpauth" href="#"></a></div>
+            <div class="helper-text">Manual key: <code id="twofa-secret" style="user-select:all;"></code></div>
+            <div class="form-group" style="margin-top:.6rem;">
+              <label for="twofa-confirm-code"><strong>2.</strong> Enter the current 6-digit code to confirm</label>
+              <input type="text" id="twofa-confirm-code" inputmode="numeric" autocomplete="off" placeholder="123456">
+            </div>
+            <button class="btn btn-primary" onclick="confirm2fa()">Confirm &amp; Enable</button>
+            <button class="btn btn-secondary" onclick="cancel2faEnroll()">Cancel</button>
+          </div>
+
+          <div id="twofa-enabled" style="display:none;margin-top:.5rem;">
+            <div class="helper-text" style="color:var(--success,#48bb78);font-weight:600;">✓ 2FA is enabled. <span id="twofa-recovery-remaining"></span></div>
+            <div class="form-group" style="margin-top:.5rem;">
+              <label for="twofa-action-code">Current 6-digit code (or a backup recovery code)</label>
+              <input type="text" id="twofa-action-code" inputmode="numeric" autocomplete="off" placeholder="123456 or XXXXX-XXXXX">
+            </div>
+            <button class="btn btn-secondary" onclick="regen2faRecovery()">Regenerate recovery codes</button>
+            <button class="btn btn-danger" onclick="disable2fa()">Disable 2FA</button>
+          </div>
+
+          <div id="twofa-recovery" style="display:none;margin-top:.75rem;">
+            <div class="helper-text" style="color:var(--danger,#ff5a52);font-weight:600;">Save these one-time backup codes now — they are shown only once:</div>
+            <pre id="twofa-recovery-list" style="white-space:pre-wrap;background:rgba(0,0,0,.05);padding:.75rem;border-radius:6px;user-select:all;"></pre>
+            <div class="helper-text">Lost your authenticator <em>and</em> these codes? Recover via root on the server (see docs: clear <code>totp_enabled/totp_secret</code> in the <code>users</code> table).</div>
+            <button class="btn btn-secondary" onclick="document.getElementById('twofa-recovery').style.display='none'">Done — I saved them</button>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Session & Security</h3>
+          <div class="form-group">
+            <label for="session_timeout_hours">Session Timeout (hours)</label>
+            <input type="number" id="session_timeout_hours" name="session_timeout_hours" min="1" max="168" value="1">
+            <div class="helper-text">How long before admin login expires</div>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="invite_codes_enabled" name="invite_codes_enabled">
+            <label for="invite_codes_enabled">Enable invite codes for private pool</label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Live IP Filter (admin panel)</h3>
+          <div id="ipfilter-status" class="helper-text">Loading filter status…</div>
+          <div class="helper-text" style="margin-top:.4rem;">
+            ⚠ These rules apply <strong>immediately at runtime</strong> and are <strong>not</strong> saved to
+            <code>grin_pubpool.json</code>. They reset on a service restart (a built-in "break-glass" escape
+            from a bad allowlist). For permanent rules, set <code>admin_allowlist</code> (nginx) and
+            <code>admin_ip_allowlist</code> (app) in the config, then restart.
+          </div>
+          <div id="ipfilter-lockout-warn" class="helper-text"
+               style="display:none;color:var(--danger,#ff5a52);margin-top:.4rem;font-weight:600;"></div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Admin IP Allowlist</h3>
+          <div class="helper-text">When non-empty, ONLY these IPs/CIDRs can reach the admin panel. Add your own IP <em>first</em> or you will lock yourself out.</div>
+          <div class="list-item-input">
+            <input type="text" id="admin-allowlist-input" placeholder="192.168.1.0/24 or 203.0.113.5">
+            <button class="btn btn-secondary" onclick="addToAdminAllowlist()">Add</button>
+          </div>
+          <div class="list-manager" id="admin-allowlist"></div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Admin IP Blacklist</h3>
+          <div class="helper-text">Block these IPs/CIDRs from accessing the admin panel</div>
+          <div class="list-item-input">
+            <input type="text" id="admin-blacklist-input" placeholder="192.168.0.0/16">
+            <button class="btn btn-secondary" onclick="addToAdminBlacklist()">Add</button>
+          </div>
+          <div class="list-manager" id="admin-blacklist"></div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('access')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('access')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ALERTS TAB -->
+  </div>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/stepup.js"></script>
+  <script src="/admin/admin-shell.js"></script>
+  <script>window.SETTINGS_SECTION = "access";</script>
+  <script src="/admin/settings-common.js"></script>
+</body>
+</html>

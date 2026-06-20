@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Branding · Settings | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+</head>
+<body>
+  <main>
+  <div class="settings-container">
+    <div class="page-head">
+      <h1>Branding</h1>
+      <p class="page-sub">Logo, theme, slogan and social links</p>
+    </div>
+
+    <div id="branding" class="settings-content active">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Logo & Icons</h3>
+          <div class="form-group">
+            <label>Pool Logo</label>
+            <div class="file-upload" onclick="document.getElementById('logo-input').click()">
+              <input type="file" id="logo-input" accept="image/*" onchange="uploadAsset('logo')">
+              <p>Click to upload logo (SVG, PNG, or GIF)</p>
+              <div class="current-asset" id="logo-current"></div>
+            </div>
+            <img id="logo-preview" class="file-preview" style="display: none;">
+          </div>
+
+          <div class="form-group">
+            <label>Logo (Light Theme variant)</label>
+            <div class="file-upload" onclick="document.getElementById('logo_dark-input').click()">
+              <input type="file" id="logo_dark-input" accept="image/*" onchange="uploadAsset('logo_dark')">
+              <p>Optional alternate logo for light backgrounds</p>
+              <div class="current-asset" id="logo_dark-current"></div>
+            </div>
+            <img id="logo_dark-preview" class="file-preview" style="display: none;">
+          </div>
+
+          <div class="form-group">
+            <label>Favicon</label>
+            <div class="file-upload" onclick="document.getElementById('favicon-input').click()">
+              <input type="file" id="favicon-input" accept="image/*" onchange="uploadAsset('favicon')">
+              <p>Click to upload favicon (32x32)</p>
+              <div class="current-asset" id="favicon-current"></div>
+            </div>
+            <img id="favicon-preview" class="file-preview" style="display: none;">
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">App Icons (PWA / "Add to Home Screen")</h3>
+          <div class="form-group">
+            <label for="app_short_name">App Short Name</label>
+            <input type="text" id="app_short_name" name="app_short_name" placeholder="GRINIUM">
+            <div class="helper-text">Shown under the home-screen icon (falls back to Pool Name)</div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Icon 192×192 (PNG)</label>
+              <div class="file-upload" onclick="document.getElementById('icon_192-input').click()">
+                <input type="file" id="icon_192-input" accept="image/png" onchange="uploadAsset('icon_192')">
+                <p>Click to upload 192×192</p>
+                <div class="current-asset" id="icon_192-current"></div>
+              </div>
+              <img id="icon_192-preview" class="file-preview" style="display: none;">
+            </div>
+            <div class="form-group">
+              <label>Icon 512×512 (PNG)</label>
+              <div class="file-upload" onclick="document.getElementById('icon_512-input').click()">
+                <input type="file" id="icon_512-input" accept="image/png" onchange="uploadAsset('icon_512')">
+                <p>Click to upload 512×512</p>
+                <div class="current-asset" id="icon_512-current"></div>
+              </div>
+              <img id="icon_512-preview" class="file-preview" style="display: none;">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Apple Touch Icon (180×180 PNG)</label>
+            <div class="file-upload" onclick="document.getElementById('apple_touch_icon-input').click()">
+              <input type="file" id="apple_touch_icon-input" accept="image/png" onchange="uploadAsset('apple_touch_icon')">
+              <p>Click to upload Apple touch icon</p>
+              <div class="current-asset" id="apple_touch_icon-current"></div>
+            </div>
+            <img id="apple_touch_icon-preview" class="file-preview" style="display: none;">
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Public Site Theme</h3>
+          <div class="helper-text" style="margin-bottom:1rem;">
+            Pick the default theme every visitor sees. Optionally let visitors switch between a
+            set of themes you enable below. All themes are defined in
+            <span class="mono">public_html/css/themes.css</span> + <span class="mono">js/public-theme.js</span>.
+          </div>
+          <div class="form-group" style="max-width:320px;">
+            <label for="default_theme">Default Theme</label>
+            <select id="default_theme" name="default_theme">
+              <optgroup label="Classic">
+                <option value="atomic">Atomic ⚛ (default)</option>
+                <option value="nexus">Nexus</option>
+                <option value="light">Light</option>
+              </optgroup>
+              <optgroup label="Seasonal">
+                <option value="winter">Winter Frost ❄️</option>
+                <option value="spring">Spring Blossom 🌸</option>
+                <option value="summer">Summer Wave 🌊</option>
+                <option value="autumn">Autumn Harvest 🍂</option>
+                <option value="halloween">Halloween 🎃</option>
+                <option value="christmas">Christmas 🎄</option>
+              </optgroup>
+              <optgroup label="Fun">
+                <option value="galaxy">Galaxy ⭐</option>
+                <option value="winxp">Windows XP 🪟</option>
+                <option value="aqua">macOS Aqua 🍎</option>
+                <option value="comic">Comic Pop 💥</option>
+              </optgroup>
+            </select>
+          </div>
+
+          <div class="checkbox-group" style="margin-top:1rem;">
+            <input type="checkbox" id="allow_theme_switch" name="allow_theme_switch">
+            <label for="allow_theme_switch">Let visitors switch themes (shows a theme picker on the public site)</label>
+          </div>
+
+          <div class="form-group" id="enabled-themes-wrap" style="margin-top:.6rem;">
+            <label>Themes visitors can switch between</label>
+            <div class="helper-text" style="margin-bottom:.6rem;">
+              Tick the themes to offer in the public switcher. The default theme above is always
+              included automatically.
+            </div>
+            <div id="enabled-themes-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.5rem;"></div>
+            <input type="hidden" id="enabled_themes" name="enabled_themes">
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Typography</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="font_family">Font Family</label>
+              <input type="text" id="font_family" name="font_family" placeholder="Inter">
+              <div class="helper-text">CSS font-family name (must match the loaded font)</div>
+            </div>
+            <div class="form-group">
+              <label for="font_url">Font Stylesheet URL</label>
+              <input type="url" id="font_url" name="font_url" placeholder="https://fonts.googleapis.com/css2?family=Inter">
+              <div class="helper-text">Optional — e.g. a Google Fonts URL</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Hero / Slogan</h3>
+          <div class="form-group">
+            <label for="hero_heading">Hero Heading</label>
+            <input type="text" id="hero_heading" name="hero_heading" placeholder="The fastest Grin pool">
+          </div>
+          <div class="form-group">
+            <label for="hero_subheading">Hero Subheading / Slogan</label>
+            <input type="text" id="hero_subheading" name="hero_subheading" placeholder="Low fees. Anonymous Tor payouts.">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="cta_text">Call-to-Action Text</label>
+              <input type="text" id="cta_text" name="cta_text" placeholder="Start Mining">
+            </div>
+            <div class="form-group">
+              <label for="cta_link">Call-to-Action Link</label>
+              <input type="url" id="cta_link" name="cta_link" placeholder="https://...">
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Social Links & Footer</h3>
+          <div class="form-group">
+            <label for="discord_link">Discord Invite URL</label>
+            <input type="url" id="discord_link" name="discord_link" placeholder="https://discord.gg/...">
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="telegram_link">Telegram Group</label>
+              <input type="url" id="telegram_link" name="telegram_link" placeholder="https://t.me/...">
+            </div>
+            <div class="form-group">
+              <label for="twitter_link">Twitter</label>
+              <input type="url" id="twitter_link" name="twitter_link" placeholder="https://twitter.com/...">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="website_link">Website URL</label>
+            <input type="url" id="website_link" name="website_link" placeholder="https://...">
+          </div>
+
+          <div class="form-group">
+            <label for="footer_text">Footer Text</label>
+            <textarea id="footer_text" name="footer_text" placeholder="© 2024 Your Pool. All rights reserved." rows="3"></textarea>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="show_attribution" name="show_attribution">
+            <label for="show_attribution">Show "powered by" attribution in the footer</label>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('branding')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('branding')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SEO TAB -->
+  </div>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/stepup.js"></script>
+  <script src="/admin/admin-shell.js"></script>
+  <script>window.SETTINGS_SECTION = "branding";</script>
+  <script src="/admin/settings-common.js"></script>
+</body>
+</html>

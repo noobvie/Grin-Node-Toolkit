@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Database · Settings | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+</head>
+<body>
+  <main>
+  <div class="settings-container">
+    <div class="page-head">
+      <h1>Database</h1>
+      <p class="page-sub">Retention, cleanup and DB status</p>
+    </div>
+
+    <div id="database" class="settings-content active">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Retention &amp; Cleanup</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="retention_enabled" name="retention_enabled">
+            <label for="retention_enabled">Enable automatic database cleanup</label>
+          </div>
+          <div class="helper-text">
+            Prunes raw shares, old hashrate history, and resolved alerts on a schedule.
+            Shares are only ever deleted below a floor of
+            <strong>confirm&nbsp;depth + PPLNS&nbsp;window&nbsp;(60) + safety&nbsp;margin</strong>,
+            and never for a block still maturing — so PPLNS payouts and orphan reversal
+            are never affected.
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Retention Windows</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="shares_margin_blocks">Shares safety margin (blocks)</label>
+              <input type="number" id="shares_margin_blocks" name="shares_margin_blocks" min="0" step="1" value="360">
+              <div class="helper-text">Extra blocks of shares kept beyond the required confirm-depth + PPLNS floor. Higher = safer, larger DB.</div>
+            </div>
+            <div class="form-group">
+              <label for="prune_interval_minutes">Cleanup interval (minutes)</label>
+              <input type="number" id="prune_interval_minutes" name="prune_interval_minutes" min="5" step="1" value="60">
+              <div class="helper-text">How often the cleanup job runs (applied after a service restart).</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="hashrate_keep_days">Keep hashrate history (days)</label>
+              <input type="number" id="hashrate_keep_days" name="hashrate_keep_days" min="1" step="1" value="30">
+              <div class="helper-text">Hashrate chart data older than this is removed.</div>
+            </div>
+            <div class="form-group">
+              <label for="resolved_alerts_keep_days">Keep resolved alerts (days)</label>
+              <input type="number" id="resolved_alerts_keep_days" name="resolved_alerts_keep_days" min="1" step="1" value="30">
+              <div class="helper-text">Resolved/acknowledged alerts older than this are removed.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Database Status</h3>
+          <div id="db-status" class="helper-text">Loading…</div>
+          <div class="form-actions" style="margin-top:.75rem;">
+            <button type="button" class="btn btn-secondary" onclick="loadDbStatus()">Refresh</button>
+            <button type="button" class="btn btn-secondary" onclick="runDbCleanup()">Run cleanup now</button>
+          </div>
+          <div class="helper-text">File size shrinks after the weekly <code>VACUUM</code> cron, not immediately after a prune.</div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('database')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('database')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/stepup.js"></script>
+  <script src="/admin/admin-shell.js"></script>
+  <script>window.SETTINGS_SECTION = "database";</script>
+  <script src="/admin/settings-common.js"></script>
+</body>
+</html>

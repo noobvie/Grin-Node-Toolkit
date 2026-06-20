@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blog | Grin Pool ツ</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/js/vendor/quill.snow.css">
+  <style>
+    .ql-editor { min-height: 300px; font-size: 1rem; }
+    .ql-toolbar.ql-snow, .ql-container.ql-snow { border-color: var(--border, #2a2a2a); }
+    .ql-container.ql-snow { border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
+    .ql-toolbar.ql-snow { border-top-left-radius: 6px; border-top-right-radius: 6px; }
+    .editor-wrap { background: var(--bg-input, #111); border-radius: 6px; }
+    .cover-preview { max-width: 220px; max-height: 130px; border-radius: 6px; margin-top: .5rem; display: none; }
+  </style>
+</head>
+<body>
+
+<main>
+  <div class="container">
+    <div class="page-head">
+      <h1>Blog</h1>
+      <p class="page-sub">Dated posts &amp; announcements — shown in a feed at <code>/blog.html</code> with a
+        permalink per post. Save as a draft, then publish when ready.</p>
+    </div>
+
+    <!-- Create / edit form -->
+    <div class="card">
+      <h3 id="form-title" style="margin:0 0 1rem;">New post</h3>
+      <input type="hidden" id="post-id">
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="post-title-in">Title</label>
+          <input type="text" id="post-title-in" placeholder="e.g. New payout threshold options" oninput="maybeSyncSlug()">
+        </div>
+        <div class="form-group">
+          <label for="post-slug">Slug (URL)</label>
+          <input type="text" id="post-slug" placeholder="new-payout-threshold-options" oninput="slugTouched=true">
+          <div class="helper-text"><code>/post.html?slug=<span id="slug-preview">slug</span></code></div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Body</label>
+        <div class="editor-wrap"><div id="editor"></div></div>
+      </div>
+
+      <div class="form-group">
+        <label for="post-excerpt">Excerpt (optional)</label>
+        <textarea id="post-excerpt" rows="2" placeholder="Short summary for the blog list + RSS. Auto-generated from the body if left blank."></textarea>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="post-tags">Tags (comma-separated)</label>
+          <input type="text" id="post-tags" placeholder="news, payouts">
+        </div>
+        <div class="form-group">
+          <label for="post-cover-file">Cover image</label>
+          <input type="file" id="post-cover-file" accept="image/png,image/jpeg,image/gif,image/webp" onchange="uploadCover()">
+          <input type="hidden" id="post-cover">
+          <img id="cover-preview" class="cover-preview" alt="cover preview">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="post-status">Status</label>
+          <select id="post-status">
+            <option value="draft">Draft</option>
+            <option value="published">Published</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="post-date">Publish date (optional)</label>
+          <input type="datetime-local" id="post-date">
+          <div class="helper-text">Defaults to now when first published.</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:.6rem;align-items:center;">
+        <button class="btn" onclick="submitPost()">Save post</button>
+        <button class="btn btn-outline" onclick="resetForm()" id="cancel-btn" style="display:none;">Cancel edit</button>
+        <span class="success-msg" id="post-msg" style="display:none;"></span>
+      </div>
+    </div>
+
+    <h2>All posts</h2>
+    <div class="card" style="padding:0;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Title</th><th>Status</th><th>Date</th><th>Tags</th><th>Actions</th></tr>
+          </thead>
+          <tbody id="posts-tbody">
+            <tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="/js/auth.js"></script>
+<script src="/js/api.js"></script>
+<script src="/admin/admin-shell.js"></script>
+<script src="/js/vendor/quill.js"></script>
+<script src="/admin/cms-editor.js"></script>
+<script>
+API.guardAdminPage();
+
+let _posts = [];
+let editor = null;
+let slugTouched = false;
+
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function slugify(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+}
+function maybeSyncSlug() {
+  if (slugTouched) return;
+  const slug = slugify(document.getElementById('post-title-in').value);
+  document.getElementById('post-slug').value = slug;
+  document.getElementById('slug-preview').textContent = slug || 'slug';
+}
+function toLocalInput(unix) {
+  if (!unix) return '';
+  const d = new Date(unix * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fromLocalInput(v) {
+  if (!v) return null;
+  const t = new Date(v).getTime();
+  return Number.isFinite(t) ? Math.floor(t / 1000) : null;
+}
+
+function flash(msg, isErr) {
+  const el = document.getElementById('post-msg');
+  el.textContent = msg;
+  el.className = isErr ? 'error-msg' : 'success-msg';
+  el.style.display = '';
+  setTimeout(() => { el.style.display = 'none'; }, 5000);
+}
+
+function setCover(url) {
+  document.getElementById('post-cover').value = url || '';
+  const img = document.getElementById('cover-preview');
+  if (url) { img.src = url; img.style.display = ''; }
+  else { img.removeAttribute('src'); img.style.display = 'none'; }
+}
+
+async function uploadCover() {
+  const input = document.getElementById('post-cover-file');
+  const file = input.files && input.files[0];
+  if (!file) return;
+  try {
+    const url = await CmsEditor.uploadImage(file);
+    setCover(url);
+    flash('Cover uploaded.', false);
+  } catch (err) {
+    flash('Cover upload failed: ' + err.message, true);
+  } finally {
+    input.value = '';
+  }
+}
+
+function resetForm() {
+  document.getElementById('post-id').value = '';
+  document.getElementById('post-title-in').value = '';
+  document.getElementById('post-slug').value = '';
+  document.getElementById('slug-preview').textContent = 'slug';
+  document.getElementById('post-excerpt').value = '';
+  document.getElementById('post-tags').value = '';
+  document.getElementById('post-status').value = 'draft';
+  document.getElementById('post-date').value = '';
+  setCover('');
+  if (editor) editor.setHTML('');
+  slugTouched = false;
+  document.getElementById('form-title').textContent = 'New post';
+  document.getElementById('cancel-btn').style.display = 'none';
+}
+
+async function loadPosts() {
+  const tbody = document.getElementById('posts-tbody');
+  try {
+    const d = await API.get('/api/admin/posts');
+    if (!d || d.error) throw new Error(d && d.error ? d.error : 'Failed to load posts');
+    _posts = d.posts || [];
+    if (!_posts.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No posts yet. Write one above.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = _posts.map(p => {
+      const when = p.published_at || p.created_at;
+      const dateStr = when ? new Date(when * 1000).toLocaleDateString() : '—';
+      const badge = p.status === 'published'
+        ? '<span class="badge badge-ok">Published</span>'
+        : '<span class="badge badge-dim">Draft</span>';
+      return `
+      <tr>
+        <td>${escHtml(p.title)}</td>
+        <td>${badge}</td>
+        <td>${escHtml(dateStr)}</td>
+        <td>${escHtml(p.tags || '')}</td>
+        <td>
+          <a class="btn btn-sm btn-outline" href="/post.html?slug=${encodeURIComponent(p.slug)}" target="_blank" rel="noopener">View</a>
+          <button class="btn btn-sm btn-outline" onclick="editPost(${p.id})">Edit</button>
+          <button class="btn btn-sm" onclick="deletePost(${p.id})">Delete</button>
+        </td>
+      </tr>`;
+    }).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">Error: ${escHtml(err.message)}</td></tr>`;
+  }
+}
+
+function editPost(id) {
+  const p = _posts.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById('post-id').value = p.id;
+  document.getElementById('post-title-in').value = p.title || '';
+  document.getElementById('post-slug').value = p.slug || '';
+  document.getElementById('slug-preview').textContent = p.slug || 'slug';
+  document.getElementById('post-excerpt').value = p.excerpt || '';
+  document.getElementById('post-tags').value = p.tags || '';
+  document.getElementById('post-status').value = p.status || 'draft';
+  document.getElementById('post-date').value = toLocalInput(p.published_at);
+  setCover(p.cover_image || '');
+  if (editor) editor.setHTML(p.body_html || '');
+  slugTouched = true;
+  document.getElementById('form-title').textContent = 'Edit post #' + p.id;
+  document.getElementById('cancel-btn').style.display = '';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function submitPost() {
+  const id = document.getElementById('post-id').value;
+  const body = {
+    title: document.getElementById('post-title-in').value.trim(),
+    slug: document.getElementById('post-slug').value.trim(),
+    body_html: editor ? editor.getHTML() : '',
+    excerpt: document.getElementById('post-excerpt').value.trim(),
+    tags: document.getElementById('post-tags').value.trim(),
+    cover_image: document.getElementById('post-cover').value.trim(),
+    status: document.getElementById('post-status').value,
+    published_at: fromLocalInput(document.getElementById('post-date').value),
+  };
+  try {
+    const r = id ? await API.post('/api/admin/posts/' + id, body)
+                 : await API.post('/api/admin/posts', body);
+    if (!r || r.error) throw new Error(r && r.error ? r.error : 'Save failed');
+    flash('Post saved.', false);
+    resetForm();
+    loadPosts();
+  } catch (err) {
+    flash(err.message, true);
+  }
+}
+
+async function deletePost(id) {
+  const p = _posts.find(x => x.id === id);
+  if (!confirm(`Delete post "${p ? p.title : id}"? This cannot be undone.`)) return;
+  try {
+    const r = await API.del('/api/admin/posts/' + id);
+    if (!r || r.error) throw new Error(r && r.error ? r.error : 'Delete failed');
+    flash('Post deleted.', false);
+    loadPosts();
+  } catch (err) {
+    flash(err.message, true);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  editor = CmsEditor.mount('#editor', { placeholder: 'Write your post…' });
+  loadPosts();
+});
+</script>
+</body>
+</html>

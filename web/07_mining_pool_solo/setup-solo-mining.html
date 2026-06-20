@@ -718,7 +718,10 @@ ERROR grin_wallet_impls::node_clients::http - Unable to contact Node to get vers
       var domain = c.host || location.hostname;
       var ip = c.public_ip || '';
       var ep = document.getElementById('poller-endpoint');
-      if (ep) ep.textContent = 'https://' + domain + '/data/poolstats_main.json';
+      // Use the page's own origin (scheme+host+port) so the URL is correct in every
+      // mode: https://solo.example.com over SSL, http://host when certbot is skipped,
+      // and http://<lan-ip>:<port> in LAN mode — instead of an always-https guess.
+      if (ep) ep.textContent = location.origin + '/data/poolstats_main.json';
       var shown = 0;
       if (c.networks && c.networks.main) { show('main', ip, domain, c.networks.main.stratum_port); shown++; }
       if (c.networks && c.networks.test) { show('test', ip, domain, c.networks.test.stratum_port); shown++; }

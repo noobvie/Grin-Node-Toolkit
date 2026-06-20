@@ -259,7 +259,7 @@
   .range-btn.active { background: var(--grin); border-color: var(--grin); color: #000; font-weight: 600; }
 
   /* ── Metric toggle buttons ───────────────────────────────────────────────── */
-  .metric-toggle, .peers-toggle {
+  .metric-toggle, .peers-toggle, .versions-toggle {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--muted);
@@ -273,14 +273,14 @@
     gap: 6px;
     white-space: nowrap;
   }
-  .metric-toggle:hover, .peers-toggle:hover { border-color: var(--text); color: var(--text); }
-  .metric-toggle.active, .peers-toggle.active {
+  .metric-toggle:hover, .peers-toggle:hover, .versions-toggle:hover { border-color: var(--text); color: var(--text); }
+  .metric-toggle.active, .peers-toggle.active, .versions-toggle.active {
     background: rgba(88,166,255,0.15);
     border-color: var(--blue);
     color: var(--blue);
     font-weight: 600;
   }
-  .metric-toggle .dot, .peers-toggle .dot {
+  .metric-toggle .dot, .peers-toggle .dot, .versions-toggle .dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
@@ -810,11 +810,22 @@
         Distribution of Grin node client versions among peers connected to this monitoring node — a live snapshot of software adoption across the network.
         <hr class="chart-info-sep">
         <h4>How it works</h4>
-        Version strings are taken verbatim from the <code>user_agent</code> each peer reports during the Grin P2P handshake, via <code>v2/owner → get_peers</code> (routing-table query, Healthy peers only). Every named peer is kept; gossiped addresses that never handshaked (blank agent) are excluded. The chart counts <strong>mainnet</strong> peers seen in the last 7 days.
+        Version strings are taken verbatim from the <code>user_agent</code> each peer reports during the Grin P2P handshake, via <code>v2/owner → get_peers</code> (routing-table query, Healthy peers only). Every named peer is kept; gossiped addresses that never handshaked (blank agent) are excluded. The chart counts peers seen in the last 7 days — use the <strong>Mainnet / Testnet / Both</strong> toggle to switch networks.
         <hr class="chart-info-sep">
         <h4>Note</h4>
-        Only mainnet peers directly connected to this node are counted here — testnet peers show on the node map but not in this chart, so this total is lower than the map's "Total peers". Peers running behind NAT or not reachable may be under-represented.
+        Only peers directly connected to (or known to) this monitoring node are counted, so the total can be lower than the map's "Total peers". Peers running behind NAT or not reachable may be under-represented.
       </div>
+    </div>
+    <div style="display: flex; gap: 12px; padding: 0 0 16px; flex-wrap: wrap;">
+      <button class="versions-toggle active" data-vnet="mainnet">
+        <span class="dot dot-grin"></span>Mainnet
+      </button>
+      <button class="versions-toggle" data-vnet="testnet">
+        <span class="dot dot-blue"></span>Testnet
+      </button>
+      <button class="versions-toggle" data-vnet="both">
+        <span class="dot dot-green"></span>Both
+      </button>
     </div>
     <div class="versions-wrap">
       <div class="donut-wrap">
@@ -935,7 +946,7 @@
           <a class="api-path" id="ep-versions" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/versions</a>
           <span class="api-chevron">▶</span>
         </div>
-        <span class="api-desc">Node version distribution — label + count for each Grin client version seen in the last 7 days</span>
+        <span class="api-desc">Node version distribution — label + count for each Grin client version seen in the last 7 days. Top-level keys are mainnet; per-network breakdown under <code>networks.{mainnet,testnet,both}</code></span>
       </div>
     </div>
     <div class="api-endpoint">
@@ -1902,14 +1913,19 @@ async function loadAll() {
 
 // ── Version donut ─────────────────────────────────────────────────────────────
 let versionChart = null;
+let versionsNetwork = "mainnet";  // "mainnet", "testnet", or "both"
 
 function renderVersions(data) {
-  const total = data.sampled_from || 0;
+  // Per-network breakdown lives under data.networks (added 2026-06); fall back to
+  // the top-level mainnet keys for older versions.json files.
+  const slice = (data.networks && data.networks[versionsNetwork]) || data;
+  const versionRows = slice.versions || [];
+  const total = slice.sampled_from || 0;
   $("donut-total").textContent    = fmt(total);
   $("versions-sample").textContent = `Sampled from ${fmt(total)} peer${total !== 1 ? "s" : ""}`;
 
-  const labels = data.versions.map(v => v.label);
-  const counts = data.versions.map(v => v.count);
+  const labels = versionRows.map(v => v.label);
+  const counts = versionRows.map(v => v.count);
   const colors = labels.map((_, i) => VERSION_COLORS[i % VERSION_COLORS.length]);
 
   if (typeof Chart === "undefined") return;  // chart.min.js not loaded
@@ -1939,7 +1955,7 @@ function renderVersions(data) {
 
   // Legend
   const leg = $("version-legend");
-  leg.innerHTML = data.versions.map((v, i) => {
+  leg.innerHTML = versionRows.map((v, i) => {
     const pct = total > 0 ? fmtNum((v.count / total) * 100, 1) : "0,0";
     return `
       <div class="vl-row">
@@ -2062,6 +2078,17 @@ function wirePeersToggles() {
   });
 }
 
+function wireVersionsToggles() {
+  document.querySelectorAll("[data-vnet]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("[data-vnet]").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      versionsNetwork = btn.dataset.vnet;
+      if (DATA_CACHE.versions) renderVersions(DATA_CACHE.versions);
+    });
+  });
+}
+
 function wireMetricToggles() {
   document.querySelectorAll(".metric-toggle").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -2086,6 +2113,7 @@ async function boot() {
   wireRangeGroup("price-btc-range",  "priceBtc",  "price");
   wireMetricToggles();
   wirePeersToggles();
+  wireVersionsToggles();
 
   try {
     if (typeof Chart !== "undefined") initCharts();

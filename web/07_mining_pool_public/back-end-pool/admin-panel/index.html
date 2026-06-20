@@ -12,81 +12,77 @@
 
 <main>
   <div class="container">
-    <section>
-      <h2>Admin Dashboard</h2>
+    <div class="page-head">
+      <h1>Overview</h1>
+      <p class="page-sub">Live pool activity, payouts and system health</p>
+    </div>
 
-      <!-- KPI cards -->
-      <div class="kpi-grid">
-        <div class="kpi-card">
-          <div class="kpi-label">Total Users</div>
-          <div class="kpi-value" id="kpi-users">—</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Active Miners</div>
-          <div class="kpi-value" id="kpi-miners">—</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Pool Hashrate</div>
-          <div class="kpi-value" id="kpi-hashrate">—</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Unclaimed Balance ツ</div>
-          <div class="kpi-value" id="kpi-unclaimed">—</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Pending Withdrawals</div>
-          <div class="kpi-value" id="kpi-pending">—</div>
-        </div>
+    <!-- KPI cards -->
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-ico">👥</div>
+        <div class="kpi-label">Total Users</div>
+        <div class="kpi-value" id="kpi-users">—</div>
       </div>
+      <div class="kpi-card">
+        <div class="kpi-ico">⛏</div>
+        <div class="kpi-label">Active Miners</div>
+        <div class="kpi-value" id="kpi-miners">—</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-ico">📈</div>
+        <div class="kpi-label">Pool Hashrate</div>
+        <div class="kpi-value" id="kpi-hashrate">—</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-ico">ツ</div>
+        <div class="kpi-label">Unclaimed Balance</div>
+        <div class="kpi-value" id="kpi-unclaimed">—</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-ico">💸</div>
+        <div class="kpi-label">Pending Withdrawals</div>
+        <div class="kpi-value" id="kpi-pending">—</div>
+      </div>
+    </div>
 
-      <!-- Quick actions -->
-      <h2>Quick Actions</h2>
-      <div class="action-grid">
-        <a href="/admin/users.html" class="action-btn">
-          <span class="action-icon">👥</span>
-          Manage Users
-        </a>
-        <a href="/admin/miners.html" class="action-btn">
-          <span class="action-icon">⛏</span>
-          View Miners
-        </a>
-        <a href="/admin/payments.html" class="action-btn">
-          <span class="action-icon">💸</span>
-          Pending Payments
-        </a>
-        <a href="/admin/health.html" class="action-btn">
-          <span class="action-icon">🩺</span>
-          System Health
-        </a>
+    <!-- 30-day pool hashrate -->
+    <div class="chart-card">
+      <div class="chart-head">
+        <h3>Pool hashrate</h3>
+        <span class="chart-sub">last 30 days</span>
       </div>
+      <div class="chart-wrap" id="hashrate-wrap"><canvas id="hashrate-chart"></canvas></div>
+    </div>
 
-      <!-- Recent withdrawals -->
-      <h2 style="margin-top:1rem;">Recent Withdrawals</h2>
-      <div class="card" style="padding:0;">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>User</th>
-                <th>Amount ツ</th>
-                <th>Status</th>
-                <th>Tx ID</th>
-              </tr>
-            </thead>
-            <tbody id="recent-tbody">
-              <tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr>
-            </tbody>
-          </table>
-        </div>
+    <!-- Recent withdrawals -->
+    <h2>Recent Withdrawals</h2>
+    <div class="card" style="padding:0;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>User</th>
+              <th>Amount ツ</th>
+              <th>Status</th>
+              <th>Tx ID</th>
+            </tr>
+          </thead>
+          <tbody id="recent-tbody">
+            <tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr>
+          </tbody>
+        </table>
       </div>
-    </section>
+    </div>
   </div>
 </main>
 
 <script src="/js/auth.js"></script>
 <script src="/js/api.js"></script>
 <script src="/admin/admin-shell.js"></script>
+<script src="/js/vendor/chart.umd.min.js"></script>
+<script src="/js/charts-init.js"></script>
 <script>
 // Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
 // up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
@@ -121,6 +117,8 @@ async function loadAdminDashboard() {
     document.getElementById('kpi-pending').textContent  = d.pending_withdrawals ?? '—';
   } catch (e) {}
 
+  loadHashrateChart();
+
   try {
     const items = await API.get('/api/admin/withdrawals?limit=10');
     const tbody = document.getElementById('recent-tbody');
@@ -142,6 +140,25 @@ async function loadAdminDashboard() {
       </tr>`;
     }).join('');
   } catch (e) {}
+}
+
+// 30-day pool hashrate — reuses the public history endpoint (no backend change) and the
+// vendored Chart.js helper. Falls back to a tidy empty state when there are no samples yet
+// or Chart.js failed to load, so the card never renders broken.
+async function loadHashrateChart() {
+  const wrap = document.getElementById('hashrate-wrap');
+  if (!wrap) return;
+  try {
+    const d = await API.get('/api/pool/hashrate/history?hours=720');
+    const series = (d && d.series) || [];
+    if (!series.length || !window.PoolCharts) {
+      wrap.innerHTML = '<div class="chart-empty">No hashrate samples yet.</div>';
+      return;
+    }
+    PoolCharts.renderHashrateChart('hashrate-chart', series, { label: 'Pool hashrate' });
+  } catch (e) {
+    wrap.innerHTML = '<div class="chart-empty">Hashrate history unavailable.</div>';
+  }
 }
 
 document.addEventListener('DOMContentLoaded', loadAdminDashboard);

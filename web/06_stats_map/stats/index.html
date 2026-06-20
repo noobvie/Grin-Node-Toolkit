@@ -416,10 +416,10 @@
     font-size: 12px;
     z-index: 2000;
     display: none;
-    max-width: 220px;
+    max-width: 293px;
     box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   }
-  #tooltip .t-ip  { color: var(--grin); font-weight: 600; margin-bottom: 4px; font-family: monospace; }
+  #tooltip .t-ip  { color: var(--grin); font-weight: 600; margin-bottom: 4px; font-family: monospace; word-break: break-all; }
   #tooltip .t-loc { color: var(--muted); }
   #tooltip .t-ua  { color: var(--blue); margin-top: 4px; }
   #tooltip .t-dir { color: var(--green); font-size: 11px; }
@@ -613,6 +613,10 @@
       <span class="lbl"><span style="color:#00bcd4">●</span> Testnet</span>
       <span class="val" id="p-testnet">—</span>
     </div>
+    <div class="stat-row">
+      <span class="lbl"><span style="color:#c850ff">●</span> Both (same IP)</span>
+      <span class="val" id="p-both">—</span>
+    </div>
     <div class="stat-row"><span class="lbl">Countries</span><span class="val" id="p-countries">—</span></div>
     <div class="stat-row"><span class="lbl">Outbound</span><span class="val" id="p-out">—</span></div>
     <div class="stat-row"><span class="lbl">Inbound</span><span class="val" id="p-in">—</span></div>
@@ -623,6 +627,7 @@
     <div class="legend-title">Colour Key</div>
     <div class="leg-row"><span class="leg-dot" style="background:#ff9900"></span><span class="leg-name">Mainnet peer</span></div>
     <div class="leg-row"><span class="leg-dot" style="background:#00bcd4"></span><span class="leg-name">Testnet peer</span></div>
+    <div class="leg-row"><span class="leg-dot" style="background:#c850ff"></span><span class="leg-name">Both (same IP)</span></div>
 
     <div class="legend-title">Version Distribution</div>
     <div class="ver-tabs">
@@ -767,7 +772,31 @@ const DATA_URL = "data/peers.json";
 const ACTIVE_WINDOW_SEC = 7 * 24 * 3600;
 
 const NET_COLOR = { mainnet: "#ff9900", testnet: "#00bcd4" };
+// Violet — distinct from orange/cyan/green and legible on both the dark
+// (#0d1117) and light (#aad3df ocean) map backgrounds. Marks one IP that
+// hosts BOTH mainnet and testnet.
+const DUAL_COLOR = "#c850ff";
 const STD_PORTS = new Set(["3414", "13414"]);
+
+// A peer is "dual" when its IP hosts BOTH mainnet and testnet. The collector
+// emits an authoritative per-record `dual` flag (computed on the real,
+// unmasked IP). Older peers.json lack it → fall back to grouping by the
+// (masked) IP, which is approximate within a /24 but the best we can do.
+let HAS_DUAL_FLAG = false;
+let DUAL_FALLBACK = new Set();
+function indexDualIps(peers) {
+  HAS_DUAL_FLAG = peers.some(p => p.dual !== undefined);
+  DUAL_FALLBACK = new Set();
+  if (HAS_DUAL_FLAG) return;
+  const nets = new Map();   // ip -> Set(networks)
+  peers.forEach(p => {
+    if (!p.ip) return;
+    if (!nets.has(p.ip)) nets.set(p.ip, new Set());
+    nets.get(p.ip).add(p.network === "testnet" ? "testnet" : "mainnet");
+  });
+  nets.forEach((s, ip) => { if (s.has("mainnet") && s.has("testnet")) DUAL_FALLBACK.add(ip); });
+}
+const isDual = p => HAS_DUAL_FLAG ? p.dual === true : (!!p.ip && DUAL_FALLBACK.has(p.ip));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -867,7 +896,8 @@ function showTooltip(peer, ev) {
   $("tt-ip").textContent  = peer.ip + port;
   $("tt-loc").textContent = [peer.city, peer.country].filter(Boolean).join(", ") || "Unknown location";
   $("tt-ua").textContent  = peer.user_agent || "Unknown";
-  $("tt-dir").textContent = (peer.direction || "") + (peer.network === "testnet" ? " · testnet" : "");
+  $("tt-dir").textContent = (peer.direction || "") +
+    (isDual(peer) ? " · mainnet + testnet" : (peer.network === "testnet" ? " · testnet" : ""));
   $("tooltip").style.display = "block";
   positionTooltip(ev);
 }
@@ -886,9 +916,17 @@ function hideTooltip() { $("tooltip").style.display = "none"; }
 // ── Build markers ─────────────────────────────────────────────────────────────
 function buildMarkers(peers) {
   markersLayer.clearLayers();
+  const drawnDual = new Set();   // collapse the two records of a dual IP to one marker
   peers.forEach(peer => {
     if (!peer.lat || !peer.lng) return;
-    const color  = NET_COLOR[peer.network] || NET_COLOR.mainnet;
+    let color;
+    if (isDual(peer)) {
+      if (drawnDual.has(peer.ip)) return;   // already plotted this IP
+      drawnDual.add(peer.ip);
+      color = DUAL_COLOR;
+    } else {
+      color = NET_COLOR[peer.network] || NET_COLOR.mainnet;
+    }
     const marker = L.circleMarker([peer.lat, peer.lng], {
       radius:      5,
       color:       color,
@@ -913,6 +951,7 @@ function updatePanel(peers, updatedTs) {
   $("p-total").textContent     = fmt(peers.length);
   $("p-mainnet").textContent   = fmt(mainnetPeers.length);
   $("p-testnet").textContent   = fmt(peers.filter(p => p.network === "testnet").length);
+  $("p-both").textContent      = fmt(new Set(peers.filter(isDual).map(p => p.ip)).size);
   $("p-countries").textContent = fmt(countries.size);
   $("p-out").textContent       = fmt(outbound);
   $("p-in").textContent        = fmt(peers.length - outbound);
@@ -1003,6 +1042,18 @@ function renderPeerList() {
   if (ipver === "4") list = list.filter(p => !isIPv6(p.ip));
   if (ipver === "6") list = list.filter(p =>  isIPv6(p.ip));
   list = [...list].sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
+  // "All networks" view: collapse a dual-net IP (one record on mainnet, one on
+  // testnet) into a single row — keep the most recent (list is sorted desc).
+  // When filtered to one net, each IP is already single-net so no dedup needed.
+  if (!network) {
+    const seen = new Set();
+    list = list.filter(p => {
+      if (!isDual(p)) return true;
+      if (seen.has(p.ip)) return false;
+      seen.add(p.ip);
+      return true;
+    });
+  }
   window._filteredPeers = list;
 
   $("lp-count").textContent = `Showing ${list.length} of ${ALL_PEERS.length} peers`;
@@ -1011,10 +1062,14 @@ function renderPeerList() {
     const flag = countryFlag(p.country_code || "");
     const loc  = [p.city, p.country].filter(Boolean).join(", ") || "Unknown";
     const seen = p.last_seen ? timeAgo(p.last_seen) : "active";
-    const dot  = `<span style="color:${NET_COLOR[p.network] || NET_COLOR.mainnet}">●</span>`;
+    const dual = !network && isDual(p);
+    const dotColor = dual ? DUAL_COLOR : (NET_COLOR[p.network] || NET_COLOR.mainnet);
+    const dot  = `<span style="color:${dotColor}">●</span>`;
+    // dual row spans two ports — show the IP without a single (misleading) port
+    const ipLabel = `${esc(p.ip)}${(!dual && p.port) ? ":" + esc(p.port) : ""}`;
     return `<div class="peer-item" data-i="${i}">
       <div class="pi-row1">
-        <span class="pi-ip">${dot} ${esc(p.ip)}${p.port ? ":" + esc(p.port) : ""}</span>
+        <span class="pi-ip">${dot} ${ipLabel}</span>
         <span class="pi-seen">${seen}</span>
       </div>
       <div class="pi-row2">
@@ -1145,6 +1200,8 @@ async function boot() {
     const peers  = (data.peers || []).filter(p =>
       p.last_seen && p.last_seen >= cutoff
     );
+
+    indexDualIps(peers);
 
     if (!leafletMap) initMap();
     buildMarkers(peers);

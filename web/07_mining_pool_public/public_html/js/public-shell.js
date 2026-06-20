@@ -35,6 +35,7 @@
     { href: 'index.html',            label: 'Dashboard' },
     { href: 'miners-stats.html',     label: 'Miners' },
     { href: 'payment-history.html',  label: 'Payouts' },
+    { href: 'blog.html',             label: 'Blog' },
     { href: 'fortune-board.html',    label: 'Fortune Board' },
     { href: 'account-settings.html', label: 'Account' }
   ];
@@ -109,13 +110,37 @@
     }
   }
 
+  // Ad slots (filled by /js/ads.js from /api/public/ads). Header sits just under the
+  // nav; footer sits just above the footer — both site-wide. Sidebar / in-content slots
+  // are declared per-page (currently the homepage) wherever the layout allows them.
+  function adSlot(placement) {
+    var d = document.createElement('div');
+    d.className = 'ad-slot ad-slot--' + placement;
+    d.setAttribute('data-ad-slot', placement);
+    d.style.display = 'none'; // ads.js reveals it only if that placement has active ads
+    return d;
+  }
+
   function mount() {
     // Remove any legacy hardcoded chrome a page might still carry (defensive —
     // converted pages ship none), then inject the canonical header/footer.
     document.querySelectorAll('body > header, body > footer').forEach(function (el) { el.remove(); });
     document.body.insertBefore(header, document.body.firstChild);
+    // Header ad slot directly after the header.
+    header.insertAdjacentElement('afterend', adSlot('header'));
+    // Footer ad slot directly before the footer.
+    document.body.appendChild(adSlot('footer'));
     document.body.appendChild(footer);
     startBrandSwing();
+
+    // Load the ad renderer once (it fills every [data-ad-slot] on the page).
+    if (!document.getElementById('ads-js')) {
+      var s = document.createElement('script');
+      s.id = 'ads-js';
+      s.src = '/js/ads.js';
+      s.defer = true;
+      document.body.appendChild(s);
+    }
   }
 
   if (document.body) {

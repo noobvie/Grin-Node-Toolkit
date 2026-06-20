@@ -641,21 +641,34 @@ class PoolSettings {
       .filter((b) => b.message.trim() !== '');
   }
 
-  // Content pages that have non-empty HTML, as [{key, title}] for footer navigation.
+  // Linked content pages (the dynamic `pages` CMS table is the source of truth since
+  // 2026-06) as [{key, title}] for footer navigation. Excludes nav_location='none'
+  // (those are reachable by direct URL only). The sitemap uses PagesManager.listEnabled()
+  // directly for the full set; this footer list intentionally honours the link choice.
   listEnabledPages() {
-    const pages = this.getSection('pages');
-    return Object.keys(PoolSettings.defaults.pages)
-      .filter((key) => pages[key] && String(pages[key]).trim() !== '')
-      .map((key) => ({ key, title: PoolSettings.pageTitles[key] || key }));
+    try {
+      return this.db.prepare(`
+        SELECT slug, title FROM pages
+        WHERE is_published = 1 AND TRIM(html) <> '' AND nav_location <> 'none'
+        ORDER BY sort_order, title
+      `).all().map((r) => ({ key: r.slug, title: r.title }));
+    } catch (e) {
+      return [];
+    }
   }
 
-  // Full content for one page (used by GET /api/public/page/:key).
+  // Full content for one published page by slug (kept for backward compatibility; the
+  // public route now calls PagesManager.getPublic directly).
   getPage(key) {
-    if (!(key in PoolSettings.defaults.pages)) return null;
-    const pages = this.getSection('pages');
-    const html = pages[key] || '';
-    if (String(html).trim() === '') return null; // disabled when empty
-    return { key, title: PoolSettings.pageTitles[key] || key, html };
+    try {
+      const row = this.db.prepare(
+        'SELECT slug, title, html FROM pages WHERE slug = ? AND is_published = 1'
+      ).get(String(key || ''));
+      if (!row || String(row.html).trim() === '') return null;
+      return { key: row.slug, title: row.title, html: row.html };
+    } catch (e) {
+      return null;
+    }
   }
 
   updateSection(section, values, userId = null) {

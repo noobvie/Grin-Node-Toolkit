@@ -453,7 +453,69 @@ function createSchema() {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
-    `CREATE INDEX IF NOT EXISTS idx_pool_locations_active ON pool_locations(is_active)`
+    `CREATE INDEX IF NOT EXISTS idx_pool_locations_active ON pool_locations(is_active)`,
+
+    // ─── Ads (operator-managed promotions shown on public pages) ──────────────
+    // Two kinds: a self-hosted `banner` (image_url + link_url) or a raw `code` snippet
+    // (operator-trusted HTML/JS from an ad network). Each is bound to a named placement
+    // (header | sidebar | in-content | footer) with an optional active window + weight.
+    `CREATE TABLE IF NOT EXISTS ads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      placement TEXT NOT NULL,
+      ad_type TEXT NOT NULL DEFAULT 'banner',
+      image_url TEXT DEFAULT NULL,
+      link_url TEXT DEFAULT NULL,
+      alt_text TEXT DEFAULT NULL,
+      html_code TEXT DEFAULT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      weight INTEGER NOT NULL DEFAULT 0,
+      start_at INTEGER DEFAULT NULL,
+      end_at INTEGER DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_ads_placement ON ads(placement, is_active, weight DESC)`,
+
+    // ─── Content pages (dynamic CMS — replaces the fixed 5-slot config section) ────
+    // Operator-authored standalone pages (About / Terms / a custom Rules page, …),
+    // served at /page.html?p=<slug>. Unlimited pages; nav_location decides where it's
+    // auto-linked (footer | header | none). HTML is operator-trusted (rendered as-is).
+    `CREATE TABLE IF NOT EXISTS pages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      html TEXT NOT NULL DEFAULT '',
+      is_published INTEGER NOT NULL DEFAULT 1,
+      nav_location TEXT NOT NULL DEFAULT 'footer',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      seo_title TEXT DEFAULT NULL,
+      seo_desc TEXT DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_pages_published ON pages(is_published, nav_location, sort_order)`,
+
+    // ─── Blog posts (dated, chronological — the WordPress-style "Posts" content type) ──
+    // Distinct from pages: posts have a publish date, appear in a reverse-chronological
+    // feed (/blog), have a permalink (/post.html?slug=) and a draft|published status.
+    `CREATE TABLE IF NOT EXISTS posts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      body_html TEXT NOT NULL DEFAULT '',
+      excerpt TEXT DEFAULT NULL,
+      cover_image TEXT DEFAULT NULL,
+      tags TEXT DEFAULT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      published_at INTEGER DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_posts_published ON posts(status, published_at DESC)`
   ];
 
   const transaction = db.transaction(() => {
@@ -470,9 +532,59 @@ function createSchema() {
   migrateMinerAccounts();
   migrateBlocks();
   migrateWithdrawals();
+  migratePagesFromConfig();
   // No demo regions are seeded. The pool server self-registers its own region via
   // ensureLocalRegion() (called from index.js with config); extra zones come from
   // real satellites the operator declares in admin → Regions.
+}
+
+// One-time seed of the dynamic `pages` table from the legacy fixed `pool_config`
+// 'pages' section (about/terms/privacy/faq/impressum). Runs exactly once, guarded by a
+// persistent marker (see below), so it never clobbers operator edits made through the new
+// CMS — and never re-seeds even if the operator later deletes every page. Pages with empty
+// HTML in the old config are seeded as unpublished drafts (slug preserved) so the operator
+// can fill them in later rather than losing the slot.
+function migratePagesFromConfig() {
+  try {
+    // One-time marker so this NEVER re-runs — not even if the operator later deletes every
+    // page (a bare "table is empty" guard would wrongly re-seed the legacy drafts on the
+    // next restart). The marker lives in pool_config under a private section.
+    const marker = db.prepare(
+      "SELECT value FROM pool_config WHERE section = '_migrations' AND key = 'pages_seeded'"
+    ).get();
+    if (marker) return;
+    const stamp = db.prepare(`
+      INSERT INTO pool_config (section, key, value, value_type)
+      VALUES ('_migrations', 'pages_seeded', '1', 'string')
+      ON CONFLICT(section, key) DO NOTHING
+    `);
+    const titles = {
+      about: 'About', terms: 'Terms of Service', privacy: 'Privacy Policy',
+      faq: 'FAQ', impressum: 'Impressum',
+    };
+    const rows = db.prepare(
+      "SELECT key, value FROM pool_config WHERE section = 'pages'"
+    ).all();
+    const byKey = {};
+    for (const r of rows) byKey[r.key] = r.value;
+    const insert = db.prepare(`
+      INSERT OR IGNORE INTO pages (slug, title, html, is_published, nav_location, sort_order)
+      VALUES (?, ?, ?, ?, 'footer', ?)
+    `);
+    let order = 0;
+    const tx = db.transaction(() => {
+      for (const slug of Object.keys(titles)) {
+        const html = (byKey[slug] || '').trim();
+        // INSERT OR IGNORE: if the operator somehow already created one of these slugs,
+        // keep theirs. The marker still records that the seed ran.
+        insert.run(slug, titles[slug], html, html ? 1 : 0, order++);
+      }
+      stamp.run();   // commit the seeds + the "done" marker atomically
+    });
+    tx();
+  } catch (e) {
+    console.error(`[db] migratePagesFromConfig failed: ${e.message}`);
+  }
 }
 
 // Self-register the pool server's own region (role=singlebox) so the central box

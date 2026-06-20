@@ -29,6 +29,10 @@ const IpFilter = require('./lib/ip-filter');
 const AlertMonitor = require('./lib/alert-monitor');
 const AlertDelivery = require('./lib/alert-delivery');
 const RetentionManager = require('./lib/retention');
+const AdsManager = require('./lib/ads');
+const PagesManager = require('./lib/pages');
+const PostsManager = require('./lib/posts');
+const multer = require('multer');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -131,6 +135,11 @@ let alertDelivery = null;
 let poolSettings = null;
 let assetManager = null;
 let retentionManager = null;
+let adsManager = null;
+let pagesManager = null;
+let postsManager = null;
+let uploadsDir = null;       // persistent media dir (served at /uploads, nginx in prod)
+let mediaUpload = null;      // configured multer instance for image uploads
 
 async function initializePool() {
   try {
@@ -214,6 +223,35 @@ async function initializePool() {
     // enabled in the admin panel. LotteryManager reuses the block monitor's node client for
     // its verifiable draw seed.
     incentivesManager = new IncentivesManager(config);
+    adsManager = new AdsManager(config);
+    pagesManager = new PagesManager(config);
+    postsManager = new PostsManager(config);
+
+    // Media uploads (cover images + in-body images from the admin CMS editor). Stored in a
+    // persistent dir OUTSIDE public_html (which is rsynced/overwritten by the installer):
+    // <db dir>/uploads, served at /uploads — by nginx in production (location /uploads/) and
+    // by the express.static fallback below in dev / if the nginx block is absent.
+    uploadsDir = config.uploads_dir || path.join(path.dirname(config.db_path || './pool.db'), 'uploads');
+    try { fs.mkdirSync(uploadsDir, { recursive: true }); }
+    catch (e) { console.error(`[media] could not create uploads dir ${uploadsDir}: ${e.message}`); }
+    const ALLOWED_IMG = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp', 'image/svg+xml': '.svg' };
+    mediaUpload = multer({
+      storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, uploadsDir),
+        filename: (req, file, cb) => {
+          const ext = ALLOWED_IMG[file.mimetype] || '.bin';
+          const safe = (file.originalname || 'image').toLowerCase()
+            .replace(/\.[^.]*$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'image';
+          cb(null, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${safe}${ext}`);
+        },
+      }),
+      limits: { fileSize: 5 * 1024 * 1024, files: 1 },  // 5 MB, single file
+      fileFilter: (req, file, cb) => {
+        if (ALLOWED_IMG[file.mimetype]) return cb(null, true);
+        cb(new Error('Only JPG, PNG, GIF, WEBP or SVG images are allowed'));
+      },
+    });
+    console.log(`[${new Date().toISOString()}] CMS managers ready (pages, posts); uploads → ${uploadsDir}`);
     lotteryManager = new LotteryManager(config, blockMonitor.grinNode);
     console.log(`[${new Date().toISOString()}] Incentives + lottery managers initialized`);
 
@@ -302,6 +340,22 @@ async function initializePool() {
 }
 
 function setupRoutes() {
+  // Serve uploaded CMS media at /uploads. In production nginx serves this dir directly
+  // (location /uploads/), but mounting it here too makes the app self-sufficient in dev
+  // and a safe fallback if the nginx block is missing. immutable: filenames are unique.
+  if (uploadsDir) {
+    app.use('/uploads', express.static(uploadsDir, {
+      maxAge: '7d', immutable: true, index: false, dotfiles: 'ignore',
+      setHeaders: (res) => {
+        // Parity with the nginx /uploads/ block: stop MIME-sniffing and neutralise any
+        // script inside a directly-opened SVG. Overrides the app's global CSP for this
+        // path (which otherwise allows 'unsafe-inline' and would let an SVG run script).
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+      },
+    }));
+  }
+
   // ─── Helper middleware: secure admin endpoints (IP filter + auth + rate limit) ────
   const secureAdmin = [
     rateLimiter.middleware('admin'),
@@ -519,17 +573,95 @@ function setupRoutes() {
     }
   );
 
-  // Single content page (About/Terms/Privacy/FAQ/Impressum) authored in the admin panel.
+  // Single content page authored in the admin CMS (dynamic `pages` table; the legacy
+  // fixed-slot config was migrated into it). `:key` is the page slug.
   app.get('/api/public/page/:key',
     rateLimiter.middleware('public'),
     (req, res) => {
       try {
-        const page = poolSettings.getPage(req.params.key);
+        const page = pagesManager.getPublic(req.params.key);
         if (!page) return res.status(404).json({ error: 'Page not found' });
         res.setHeader('Cache-Control', 'public, max-age=60');
         res.json({ success: true, data: page });
       } catch (err) {
         res.status(500).json({ error: 'Failed to load page' });
+      }
+    }
+  );
+
+  // Navigable published pages (for footer/header link lists in public-shell.js).
+  app.get('/api/public/pages',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        res.json({ success: true, data: pagesManager.listEnabled() });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to load pages' });
+      }
+    }
+  );
+
+  // Blog: paginated list of published posts (cards).
+  app.get('/api/public/posts',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const out = postsManager.listPublished({ limit: req.query.limit, offset: req.query.offset });
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        res.json({ success: true, data: out });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to load posts' });
+      }
+    }
+  );
+
+  // Blog: full published post by slug (permalink page).
+  app.get('/api/public/post/:slug',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const post = postsManager.getPublic(req.params.slug);
+        if (!post) return res.status(404).json({ error: 'Post not found' });
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        res.json({ success: true, data: post });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to load post' });
+      }
+    }
+  );
+
+  // Blog RSS 2.0 feed (latest 20 published posts). nginx proxies /blog/rss.xml here.
+  app.get('/blog/rss.xml',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const branding = poolSettings.getSection('branding');
+        const seo = poolSettings.getSection('seo');
+        const origin = siteOrigin(req);
+        const title = (branding.pool_name || seo.site_title || 'Grin Pool') + ' — Blog';
+        const { posts } = postsManager.listPublished({ limit: 20, offset: 0 });
+        const esc = (s) => String(s == null ? '' : s)
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+        xml += '<rss version="2.0"><channel>\n';
+        xml += '  <title>' + esc(title) + '</title>\n';
+        xml += '  <link>' + esc(origin + '/blog.html') + '</link>\n';
+        xml += '  <description>' + esc(seo.site_description || 'Pool news and announcements') + '</description>\n';
+        posts.forEach((p) => {
+          const url = origin + '/post.html?slug=' + encodeURIComponent(p.slug);
+          xml += '  <item>\n';
+          xml += '    <title>' + esc(p.title) + '</title>\n';
+          xml += '    <link>' + esc(url) + '</link>\n';
+          xml += '    <guid isPermaLink="true">' + esc(url) + '</guid>\n';
+          xml += '    <pubDate>' + new Date((p.published_at || 0) * 1000).toUTCString() + '</pubDate>\n';
+          xml += '    <description>' + esc(p.excerpt || '') + '</description>\n';
+          xml += '  </item>\n';
+        });
+        xml += '</channel></rss>\n';
+        res.type('application/rss+xml').send(xml);
+      } catch (err) {
+        res.status(500).type('text/plain').send('Failed to build feed');
       }
     }
   );
@@ -562,7 +694,7 @@ function setupRoutes() {
   // Public pages included in the sitemap (extension-less; nginx resolves $uri.html).
   // pool-info + connect were merged into the dashboard (index) 2026-06; the dashboard
   // carries the #connect + #info anchors, so only / is listed for that content.
-  const SITEMAP_PATHS = ['/', '/miners-stats', '/fortune-board', '/donate'];
+  const SITEMAP_PATHS = ['/', '/miners-stats', '/fortune-board', '/donate', '/blog.html'];
 
   app.get('/sitemap.xml',
     rateLimiter.middleware('public'),
@@ -575,8 +707,12 @@ function setupRoutes() {
 
         const origin = siteOrigin(req);
         const paths = SITEMAP_PATHS.slice();
-        // Append authored content pages.
-        poolSettings.listEnabledPages().forEach((p) => paths.push('/page.html?p=' + p.key));
+        // Append authored content pages (dynamic CMS) and published blog posts.
+        pagesManager.listEnabled().forEach((p) => paths.push('/page.html?p=' + p.key));
+        try {
+          postsManager.listPublished({ limit: 50, offset: 0 }).posts
+            .forEach((p) => paths.push('/post.html?slug=' + p.slug));
+        } catch (e) { /* posts optional in sitemap */ }
 
         const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
@@ -1287,6 +1423,120 @@ function setupRoutes() {
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // ─── ADS (Admin CRUD) ──────────────────────────────────────────────
+  // Operator-managed promotions (banner image OR ad-network code snippet) bound to a public
+  // placement. secureAdmin (not freshAdmin) — ads are not money/destructive of funds.
+  app.get('/api/admin/ads', secureAdmin, (req, res) => {
+    try {
+      res.json({ ads: adsManager.list(req.query.placement), placements: AdsManager.PLACEMENTS });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/ads', secureAdmin, (req, res) => {
+    try {
+      res.json({ ad: adsManager.create(req.body || {}) });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/ads/:id', secureAdmin, (req, res) => {
+    try {
+      res.json({ ad: adsManager.update(parseInt(req.params.id, 10), req.body || {}) });
+    } catch (err) {
+      res.status(err.message === 'not found' ? 404 : 400).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/admin/ads/:id', secureAdmin, (req, res) => {
+    try {
+      const ok = adsManager.remove(parseInt(req.params.id, 10));
+      if (!ok) return res.status(404).json({ error: 'not found' });
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ─── ADS (Public) ──────────────────────────────────────────────────
+  // Active, in-window ads for the public site. `?placement=header` returns one slot;
+  // no param returns all slots keyed by placement. Only render-relevant fields are exposed.
+  app.get('/api/public/ads', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const p = req.query.placement;
+      if (p) return res.json({ placement: p, ads: adsManager.publicByPlacement(p) });
+      res.json({ ads: adsManager.publicAll() });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ─── MEDIA UPLOAD (Admin) ──────────────────────────────────────────
+  // Image upload for the CMS editor (cover images + in-body images). secureAdmin — not
+  // money/destructive. Returns { url } pointing at the persistent /uploads dir. multer
+  // errors (bad type, too big) are surfaced as 400 via the wrapper.
+  app.post('/api/admin/media', secureAdmin, (req, res) => {
+    mediaUpload.single('file')(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || 'upload failed' });
+      if (!req.file) return res.status(400).json({ error: 'no file' });
+      res.json({ url: '/uploads/' + req.file.filename, filename: req.file.filename });
+    });
+  });
+
+  // ─── PAGES (Admin CRUD) ────────────────────────────────────────────
+  // Dynamic content pages (the CMS that replaced the fixed 5-slot config). secureAdmin.
+  app.get('/api/admin/pages', secureAdmin, (req, res) => {
+    try {
+      res.json({ pages: pagesManager.list(), nav_locations: PagesManager.NAV_LOCATIONS });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/pages', secureAdmin, (req, res) => {
+    try {
+      res.json({ page: pagesManager.create(req.body || {}) });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/pages/:id', secureAdmin, (req, res) => {
+    try {
+      res.json({ page: pagesManager.update(parseInt(req.params.id, 10), req.body || {}) });
+    } catch (err) {
+      res.status(err.message === 'not found' ? 404 : 400).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/admin/pages/:id', secureAdmin, (req, res) => {
+    try {
+      const ok = pagesManager.remove(parseInt(req.params.id, 10));
+      if (!ok) return res.status(404).json({ error: 'not found' });
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ─── POSTS / BLOG (Admin CRUD) ─────────────────────────────────────
+  // Dated blog/announcement posts. secureAdmin — content, not funds.
+  app.get('/api/admin/posts', secureAdmin, (req, res) => {
+    try {
+      res.json({ posts: postsManager.list(req.query.status), statuses: PostsManager.STATUSES });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/posts', secureAdmin, (req, res) => {
+    try {
+      res.json({ post: postsManager.create(req.body || {}) });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/posts/:id', secureAdmin, (req, res) => {
+    try {
+      res.json({ post: postsManager.update(parseInt(req.params.id, 10), req.body || {}) });
+    } catch (err) {
+      res.status(err.message === 'not found' ? 404 : 400).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/admin/posts/:id', secureAdmin, (req, res) => {
+    try {
+      const ok = postsManager.remove(parseInt(req.params.id, 10));
+      if (!ok) return res.status(404).json({ error: 'not found' });
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   // ─── POOL BLOCKS EXPLORER (Admin) ──────────────────────────────────

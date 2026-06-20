@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en" data-page="post">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Loading…</title>
+  <link rel="stylesheet" href="/css/dashboard.css">
+  <style>
+    .post { max-width: 820px; margin: 0 auto; padding: 2.5rem 1.5rem; }
+    .post h1 { font-size: 2rem; margin: 0 0 .4rem; }
+    .post .meta { color: var(--text-dim, #8a929c); font-size: .9rem; margin-bottom: 1.5rem; }
+    .post .cover { width: 100%; max-height: 380px; object-fit: cover; border-radius: 10px; margin-bottom: 1.5rem; }
+    .post-body { font-size: 1.05rem; line-height: 1.7; }
+    .post-body h2 { color: var(--accent, #b8e600); margin-top: 2rem; }
+    .post-body h3 { margin-top: 1.6rem; }
+    .post-body a { color: var(--accent, #b8e600); }
+    .post-body img { max-width: 100%; height: auto; border-radius: 8px; }
+    .post-body blockquote { border-left: 3px solid var(--accent, #b8e600); margin: 1rem 0; padding: .3rem 1rem; color: var(--text-dim, #8a929c); }
+    .post-body pre { background: #0d0f12; padding: 1rem; border-radius: 8px; overflow: auto; }
+    .tag { display: inline-block; font-size: .75rem; padding: .12rem .55rem; border-radius: 999px;
+      background: rgba(184,230,0,.12); color: var(--accent, #b8e600); margin: 0 .35rem 0 0; }
+    .back { display: inline-block; margin-bottom: 1.5rem; color: var(--accent, #b8e600); text-decoration: none; }
+    .muted { color: var(--text-dim, #8a929c); }
+  </style>
+  <link rel="stylesheet" href="/css/themes.css">
+</head>
+<body>
+  <!-- header injected by /js/public-shell.js -->
+
+  <main class="post">
+    <a class="back" href="/blog.html">← All posts</a>
+    <h1 id="post-title" class="muted">Loading…</h1>
+    <div id="post-meta" class="meta"></div>
+    <div id="post-cover"></div>
+    <div id="post-body" class="post-body"></div>
+    <div id="post-tags" style="margin-top:1.5rem;"></div>
+  </main>
+
+  <!-- footer injected by /js/public-shell.js -->
+
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var slug = (params.get('slug') || '').replace(/[^a-z0-9_-]/gi, '');
+      if (!slug) { renderMissing(); return; }
+
+      function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+      }
+      function fmtDate(unix) {
+        if (!unix) return '';
+        try { return new Date(unix * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }); }
+        catch (e) { return ''; }
+      }
+
+      fetch('/api/public/post/' + encodeURIComponent(slug))
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (json) {
+          if (!json || !json.data) { renderMissing(); return; }
+          var p = json.data;
+          document.title = p.title;
+          var t = document.getElementById('post-title');
+          t.textContent = p.title;
+          t.classList.remove('muted');
+          document.getElementById('post-meta').textContent = fmtDate(p.published_at);
+          if (p.cover_image) {
+            document.getElementById('post-cover').innerHTML =
+              '<img class="cover" src="' + esc(p.cover_image) + '" alt="">';
+          }
+          document.getElementById('post-body').innerHTML = p.body_html; // operator-authored
+          var tags = (p.tags || []).map(function (tg) { return '<span class="tag">' + esc(tg) + '</span>'; }).join('');
+          document.getElementById('post-tags').innerHTML = tags;
+          document.documentElement.setAttribute('data-page', 'post-' + slug);
+        })
+        .catch(renderMissing);
+
+      function renderMissing() {
+        document.title = 'Post not found';
+        document.getElementById('post-title').textContent = 'Post not found';
+        document.getElementById('post-title').classList.remove('muted');
+        document.getElementById('post-body').innerHTML =
+          '<p class="muted">This post is not available. <a href="/blog.html">Back to the blog</a>.</p>';
+      }
+    })();
+  </script>
+  <script src="/js/public-shell.js"></script>
+  <script src="/js/public-theme.js"></script>
+  <script src="/js/branding.js"></script>
+</body>
+</html>

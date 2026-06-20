@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Incentives · Settings | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+</head>
+<body>
+  <main>
+  <div class="settings-container">
+    <div class="page-head">
+      <h1>Incentives</h1>
+      <p class="page-sub">Prizes, lottery, streaks and bonuses</p>
+    </div>
+
+    <div id="incentives" class="settings-content active">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Incentives</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="incentives_enabled" name="incentives_enabled">
+            <label for="incentives_enabled">Enable incentive features (master switch)</label>
+          </div>
+          <div class="helper-text">All features below are off unless this is on. Prizes pay out of the prize pool — fund it before enabling payouts.</div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Prize Pool Funding</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="prize_fee_cut_percent">Fee cut into prize pool (%)</label>
+              <input type="number" id="prize_fee_cut_percent" name="prize_fee_cut_percent" min="0" max="100" step="1" value="0">
+              <div class="helper-text">% of the collected pool fee diverted to the prize pool.</div>
+            </div>
+            <div class="checkbox-group" style="align-self:end;padding-bottom:.75rem;">
+              <input type="checkbox" id="allow_miner_donations" name="allow_miner_donations">
+              <label for="allow_miner_donations">Allow miner donations (<code>donateN</code> worker tag)</label>
+            </div>
+          </div>
+          <div class="helper-text">
+            Miners donate N% of their payout by naming a worker <code>donate10</code> (10%) or
+            <code>rig01-donate10</code>. N is clamped 0–100; <code>donate0</code> opts out.
+          </div>
+          <div class="form-group">
+            <label for="donation_address">Public donation address (Slatepack)</label>
+            <input type="text" id="donation_address" name="donation_address" placeholder="grin1… (your pool donation receiving address)">
+            <div class="helper-text">Shown on the fortune board so anyone can donate. Reflect received donations into the prize pool with a manual top-up above.</div>
+          </div>
+          <div class="form-section" style="background:rgba(0,0,0,.03);">
+            <div class="helper-text">
+              <strong>Prize pool balance:</strong> <span id="prize-pool-balance">…</span> GRIN
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="prize-topup-amount">Manual top-up (GRIN)</label>
+                <input type="number" id="prize-topup-amount" class="settings-skip" min="0" step="0.01" placeholder="0.00">
+                <div class="helper-text">Accounting only — the GRIN must already be in the pool wallet.</div>
+              </div>
+              <div class="form-group" style="align-self:end;padding-bottom:.75rem;">
+                <button type="button" class="btn btn-secondary" onclick="topUpPrizePool()">Add to prize pool</button>
+              </div>
+            </div>
+            <div class="helper-text" id="prize-pool-ledger"></div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Award Prize / Bonus to an Address</h3>
+          <div class="helper-text">
+            Credit a contest or incentive prize straight to a miner's Grin address — no account
+            needed. The prize lands on their pool balance and pays out to that address via the
+            normal Tor withdrawal flow.
+          </div>
+          <div class="form-group">
+            <label for="award-address">Grin address</label>
+            <input type="text" id="award-address" class="settings-skip" placeholder="grin1…">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="award-amount">Amount (GRIN)</label>
+              <input type="number" id="award-amount" class="settings-skip" min="0" step="0.01" placeholder="0.00">
+            </div>
+            <div class="form-group">
+              <label for="award-note">Note (optional)</label>
+              <input type="text" id="award-note" class="settings-skip" maxlength="280" placeholder="e.g. June hashrate contest — 1st place">
+            </div>
+          </div>
+          <div class="checkbox-group">
+            <input type="checkbox" id="award-from-prize-pool" class="settings-skip" checked>
+            <label for="award-from-prize-pool">Fund from the prize pool (uncheck only if the wallet already holds the extra GRIN)</label>
+          </div>
+          <div class="form-group" style="padding-top:.5rem;">
+            <button type="button" class="btn btn-secondary" onclick="awardPrize()">Award prize</button>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Join Bonus</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="join_bonus_enabled" name="join_bonus_enabled">
+            <label for="join_bonus_enabled">Pay a one-time join bonus</label>
+          </div>
+          <div class="form-group">
+            <label for="join_bonus_amount">Join bonus amount (GRIN)</label>
+            <input type="number" id="join_bonus_amount" name="join_bonus_amount" min="0" step="0.01" value="0.1">
+            <div class="helper-text">Paid once per address, only after its first successful withdrawal (anti-Sybil gate).</div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Block-Finder Jackpot</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="jackpot_enabled" name="jackpot_enabled">
+            <label for="jackpot_enabled">Pay a flat jackpot to the miner who solves a block</label>
+          </div>
+          <div class="form-group">
+            <label for="jackpot_amount">Jackpot amount (GRIN)</label>
+            <input type="number" id="jackpot_amount" name="jackpot_amount" min="0" step="0.01" value="0">
+            <div class="helper-text">Credited when the block matures; clawed back automatically if the block is orphaned.</div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Loyalty Streak Multiplier</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="streak_enabled" name="streak_enabled">
+            <label for="streak_enabled">Reward consecutive mining days</label>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="streak_bonus_per_week_percent">Bonus per 7-day streak (%)</label>
+              <input type="number" id="streak_bonus_per_week_percent" name="streak_bonus_per_week_percent" min="0" max="100" step="0.5" value="1">
+            </div>
+            <div class="form-group">
+              <label for="streak_max_percent">Maximum bonus (%)</label>
+              <input type="number" id="streak_max_percent" name="streak_max_percent" min="0" max="100" step="0.5" value="5">
+            </div>
+          </div>
+          <div class="helper-text">Top-up funded from the prize pool — never reduces other miners' base PPLNS payout.</div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Lottery</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="lottery_enabled" name="lottery_enabled">
+            <label for="lottery_enabled">Enable lottery draws</label>
+          </div>
+          <div class="checkbox-group">
+            <input type="checkbox" id="lottery_weekly_enabled" name="lottery_weekly_enabled">
+            <label for="lottery_weekly_enabled">Run a weekly draw</label>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="lottery_pot_share_weighted_percent">Pot A — share-weighted (%)</label>
+              <input type="number" id="lottery_pot_share_weighted_percent" name="lottery_pot_share_weighted_percent" min="0" max="100" step="1" value="50">
+              <div class="helper-text">Tickets ∝ valid shares (favours contribution).</div>
+            </div>
+            <div class="form-group">
+              <label for="lottery_pot_equal_chance_percent">Pot B — equal chance (%)</label>
+              <input type="number" id="lottery_pot_equal_chance_percent" name="lottery_pot_equal_chance_percent" min="0" max="100" step="1" value="50">
+              <div class="helper-text">One entry per qualifying address (favours small miners).</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="lottery_min_shares">Minimum shares to qualify</label>
+              <input type="number" id="lottery_min_shares" name="lottery_min_shares" min="0" step="1" value="10">
+            </div>
+            <div class="form-group">
+              <label for="lottery_pot_fraction_percent">Prize pool paid out per draw (%)</label>
+              <input type="number" id="lottery_pot_fraction_percent" name="lottery_pot_fraction_percent" min="0" max="100" step="1" value="100">
+            </div>
+          </div>
+
+          <h4 style="margin-top:1rem;">Special-occasion draws</h4>
+          <div class="helper-text">Extra draws on fixed dates (e.g. Christmas, New Year, Grin Genesis Day = 01-15). Date is MM-DD, UTC.</div>
+          <input type="hidden" id="lottery_special_events" name="lottery_special_events">
+          <div id="events-list"></div>
+          <button type="button" class="btn btn-secondary" style="margin-top:1rem;" onclick="addEvent()">+ Add Event</button>
+
+          <div style="margin-top:1rem;">
+            <button type="button" class="btn btn-secondary" onclick="drawLotteryNow('weekly')">Run weekly draw now (test)</button>
+            <div class="helper-text" id="lottery-draws"></div>
+          </div>
+        </div>
+
+        <div class="form-section" style="opacity:.6;">
+          <h3 class="section-title">Grin Transporter — payout rail #3 <span style="font-weight:normal;">(coming soon)</span></h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="transporter_enabled" name="transporter_enabled" disabled>
+            <label for="transporter_enabled">Enable Grin Transporter payouts</label>
+          </div>
+          <div class="helper-text">
+            Reserved for the self-hosted store-and-forward slate relay (Script 056) — async payouts for
+            miners who aren't online when we pay. Disabled until it ships. The pool stays register-free:
+            your Grin address remains your identity across every payout rail.
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('incentives')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('incentives')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ACCESS CONTROL TAB -->
+  </div>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/stepup.js"></script>
+  <script src="/admin/admin-shell.js"></script>
+  <script>window.SETTINGS_SECTION = "incentives";</script>
+  <script src="/admin/settings-common.js"></script>
+</body>
+</html>

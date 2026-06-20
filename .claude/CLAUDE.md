@@ -471,16 +471,45 @@ Key design decisions (locked in — do not change without user confirmation):
   left sidebar + a topbar, wraps the page `<main>` in `.admin-main`, and removes any leftover legacy chrome
   (`body > header`/`footer`/`.testnet-banner`). The old per-page top `<header>`/`nav-links` and the 5-theme
   chrome switcher were **removed**. The single `NAV` array in admin-shell.js is the source of truth for nav items:
-  Dashboard / Miners / Payouts / Blocks / Users / System Health / Settings — edit `NAV` once to add/reorder.
-  **Settings is an EXPANDABLE GROUP (added 2026-06):** a NAV entry with a `children` array (each `{tab,title}`)
-  renders as a parent link + a nested `.admin-subnav` of sub-links pointing at `settings.html#<tab>` (the 11
-  settings tabs: pool-info/branding/seo/analytics/pages/announcements/payout/incentives/access/alerts/database).
-  The group auto-expands (CSS `.admin-nav-group.open`) only while you're on `settings.html`; the `▸` caret toggles
-  it manually. `syncActiveSubtab()` (a `hashchange` listener in admin-shell.js) keeps the active sub-link
-  highlighted as the in-page tab changes. To add a settings tab: add a `data-tab` button in settings.html AND a
-  `children` entry in admin-shell.js NAV. `settings.html` tab switching is **hash-driven**
-  (`tabFromHash()`/`hashchange`), so a direct URL like `settings.html#access` opens the Access Control tab and the
-  sidebar sub-link lights up to match. Layout uses `admin-panel/styles.css` `.admin-sidebar` (fixed) + `.admin-main` wrapper; `#nav-user` lives
+  just TWO always-open top-level groups — **Dashboard** (▸ Miners / Payouts / Blocks / Users / System Health) and
+  **Settings** (▸ the 11 settings pages + Ads). Edit `NAV` once to add/reorder. The data pages live under Dashboard
+  as children; **Ads** (ads.html) sits under Settings, not as a top-level item.
+  **NAV layout — flat list, NO section headers; rail only for sub-items (2026-06):** top-level items
+  (`.admin-nav a`) are plain, flush-left, with a 3px transparent left border that turns accent when active — NO
+  guide rail. The vertical guide line (`border-left` on `.admin-subnav`) is reserved for **nested sub-links only**
+  (the Settings children), which hang off it indented so the hierarchy is obvious. The earlier uppercase section
+  headers (Operations/Community/System via a `section:` field + `.admin-nav-section`) were **removed** at the
+  operator's request — `section` is gone from NAV, list order is the only ordering. The Settings group is
+  **NON-collapsible** (always rendered `open`, no caret). **Sidebar scroll is persisted** across the full-page
+  navigations (each admin page is its own HTML file → the sidebar is rebuilt every load): admin-shell.js saves
+  `.admin-nav` `scrollTop` to `sessionStorage('admin-nav-scroll')` on scroll and restores it on mount, so clicking
+  a deep item (e.g. Settings → Database) no longer jumps the sidebar to the top. The topbar also carries an
+  `#admin-refresh` button (`location.reload()`).
+  **Admin panel facelift (2026-06):** admin accent = the pool's **atomic-green/lime brand** (`--accent:#b8e600`
+  dark, darkened to `#5f7d00` light; lime buttons use dark text) so admin + public read as one product. KPI cards
+  in `admin-panel/styles.css` are left-aligned with an optional `.kpi-ico` chip and a big **plain `--text`** number
+  (NOT mono/accent — overrides pool.css; icon gutter only via `.kpi-card:has(.kpi-ico)`). The Dashboard
+  (`index.html`) leads with a `.page-head`, the KPI row, then a 30-day pool-hashrate `.chart-card` (Chart.js,
+  reuses public `GET /api/pool/hashrate/history?hours=720`, tidy `.chart-empty` fallback) — the old "Quick Actions"
+  grid was dropped. `.kpi-delta` chips exist in CSS but are unused (no prior-period figure → no fake deltas).
+  **Settings was SPLIT into 11 files (2026-06, replaces the old monolithic `settings.html`):** one page per
+  section — `settings-pool-info.html` / `settings-branding.html` / `settings-seo.html` / `settings-analytics.html`
+  / `settings-pages.html` / `settings-announcements.html` / `settings-payout.html` / `settings-incentives.html` /
+  `settings-access.html` / `settings-alerts.html` / `settings-database.html`. Shared chrome/logic moved to
+  `admin-panel/settings.css` (the old inline `<style>`) + `admin-panel/settings-common.js` (the old inline
+  `<script>`, loaded by every settings page). Each page ships ONLY its one `.settings-content` section (forced
+  visible) and declares `window.SETTINGS_SECTION='<tab>'` inline before loading settings-common.js; init is driven
+  by that var (`switchTab(window.SETTINGS_SECTION)`), and builder calls are wrapped in `_safe()` so a section
+  absent from the current page never throws (the settings API response always carries every section).
+  `loadIncentiveData()` fires only on the incentives page. **SEO→Analytics decoupled:** `pushSeoGa4ToAnalytics()`
+  can't DOM-mirror across pages anymore, so it fetches the analytics config and saves it via API (preserves
+  Plausible/Umami/Matomo). The old `settings.html` is now a REDIRECT that maps legacy `#<tab>` deep-links to the
+  new files. The NAV Settings entry is an EXPANDABLE GROUP whose `children` are now `{file,title}` (real pages,
+  NOT `#hash` tabs); the group is open + parent active whenever `here` is the parent OR any child file
+  (`onGroup()`); the old `syncActiveSubtab()`/`currentTab()` hash logic was REMOVED (active sub-link is baked at
+  render). **To add a settings page:** create `settings-<tab>.html` (copy a thin page: head → `<main>` with one
+  `.settings-content` + `.settings-form` → `window.SETTINGS_SECTION` → load settings-common.js) AND add a
+  `children` `{file,title}` entry in admin-shell.js NAV. Layout uses `admin-panel/styles.css` `.admin-sidebar` (fixed) + `.admin-main` wrapper; `#nav-user` lives
   in the topbar and is populated by `API.guardAdminPage()`. Admin chrome theme is a Dark/Light toggle handled by
   admin-shell.js itself (storage key `admin-ui-mode` — deliberately NOT `admin-theme`, which branding.js uses for
   the public default_theme) — Matrix/Naruto/Japan dropped from admin chrome. Pages with step-up-gated actions
@@ -685,6 +714,24 @@ Key design decisions (locked in — do not change without user confirmation):
   - **Already-built, untouched:** maintenance mode (notices section + Announcements tab) was fully
     present; satellite heartbeat health is read-only on health.html (secret rotation stays
     config-level: `hub_shared_secret` in `grin_pubpool.json`/`grin_satellite.json` + restart).
+  - **Ads (operator promotions, added 2026-06).** New `ads` table (created/migrated by `db.js initDb`,
+    no separate step) + `lib/ads.js` (`AdsManager`, positional-param SQL like the rest of the codebase).
+    Two kinds: **banner** (`image_url`+`link_url`+`alt_text`) or **code** (raw operator-trusted HTML/JS
+    snippet — e.g. a Coinzilla/A-ADS zone), bound to one of 4 **placements** (`header`/`sidebar`/
+    `in-content`/`footer`) with `is_active`, `weight` (higher first), and an optional `start_at`/`end_at`
+    window. Admin CRUD `GET/POST /api/admin/ads`, `POST /api/admin/ads/:id`, `DELETE /api/admin/ads/:id`
+    are **secureAdmin** (NOT freshAdmin — ads don't move funds). Public read `GET /api/public/ads`
+    (`?placement=` for one slot, else all keyed by placement) returns only active, in-window ads with
+    just render fields. Admin UI: new `admin-panel/ads.html` (banner/code toggle form + table; looks up
+    rows from a `_ads` array by id rather than inlining objects into onclick attrs — avoids quote-escaping
+    bugs in code snippets). It's a **child of the Settings** NAV group (a content/monetization page alongside
+    Pages/Announcements), reachable at `/admin/ads.html` — NOT a settings *section* (it's standalone CRUD, not
+    part of settings-common.js).
+    **Public rendering:** `public_html/js/ads.js` fills every `[data-ad-slot="<placement>"]`; `public-shell.js`
+    injects header+footer slots **site-wide** and dynamically loads `ads.js`; the homepage `index.html` adds
+    `sidebar`+`in-content` slots. Code-snippet `<script>` tags are re-created so ad-network zones actually run
+    (innerHTML won't execute them). Empty slots stay `display:none`. Styles: `.ad-slot*` in `css/dashboard.css`.
+    Banner links get `rel="noopener nofollow sponsored"`.
   **No miner accounts — reaffirmed 2026-06.** An optional miner-account layer (`miner_users` table,
   signup bonus, public Sign In/Register) was prototyped then deliberately removed: it adds operator
   burden with no safety gain (the address already IS the identity, and payouts are permanently bound
@@ -789,6 +836,50 @@ All public (no admin auth), `rateLimiter.middleware('public')`:
     slogan (`pool_tagline`, default "Mine Grin, anywhere") under the wordmark, and injects a
     `🎁 Rewards` nav link → `fortune-board.html` when incentives are enabled. Footer sub-brand is
     "GRINIUM — Grin Mining Pool" (was "Uranium Element…").
+
+### Content CMS — dynamic Pages + Blog Posts + media uploads (added 2026-06)
+
+Replaced the old **fixed 5-slot `pages` config section** (about/terms/privacy/faq/impressum as raw-HTML
+textareas in settings) with a small WYSIWYG CMS, modelled on the existing **ads.js + ads.html** CRUD
+pattern. Two content types, one shared editor:
+
+- **Pages** (static, standalone) — dynamic `pages` table (`slug` UNIQUE, `title`, `html`, `is_published`,
+  `nav_location` footer|header|none, `sort_order`, `seo_title/desc`). `lib/pages.js` `PagesManager`
+  (CRUD + `getPublic(slug)`, `listEnabled()`). Served at `/page.html?p=<slug>` (renderer unchanged — it
+  always took an arbitrary key). Admin CRUD page **`admin-panel/pages.html`** (replaced settings-pages.html,
+  which was DELETED). **Migration:** `db.js migratePagesFromConfig()` runs once while the table is empty —
+  seeds the 5 legacy slugs from the old `pool_config` 'pages' section (empty ones become unpublished drafts),
+  so nothing breaks. `pool-settings.js getPage()`/`listEnabledPages()` were **repointed to read the `pages`
+  table** (single source of truth) — `listEnabledPages()` (footer links via `/api/config`) excludes
+  `nav_location='none'`; `PagesManager.listEnabled()` (sitemap) also excludes `none`. The old config `pages`
+  section + `pageTitles` stay in pool-settings.js only as the migration seed source.
+- **Posts** (dated blog/announcements — WordPress "Posts") — `posts` table (`slug`, `title`, `body_html`,
+  `excerpt`, `cover_image`, `tags`, `status` draft|published, `published_at`). `lib/posts.js` `PostsManager`
+  (`listPublished({limit,offset})` paginated, `getPublic(slug)`, CRUD; auto-excerpt from body, auto-stamps
+  `published_at` on first publish). Admin CRUD **`admin-panel/posts.html`** ("Blog" in NAV). Public:
+  **`public_html/blog.html`** (paginated card list) + **`post.html?slug=`** (permalink) + RSS at
+  **`/blog/rss.xml`** (app-generated; nginx exact-match proxy). "Blog" added to `public-shell.js` NAV;
+  `/blog.html` + posts added to the sitemap.
+- **Editor: vendored Quill 2.x** at `public_html/js/vendor/quill.js` + `quill.snow.css` (committed +
+  rsynced, same as Chart.js — no CDN, no build). Shared init helper **`admin-panel/cms-editor.js`**
+  (`CmsEditor.mount('#editor')` → `{getHTML,setHTML}`; `CmsEditor.uploadImage(file)`). **No image ever
+  enters the document as base64**: the toolbar image button, clipboard **paste** of an image file, and
+  drag-**drop** are all intercepted (paste/drop in the capture phase, before Quill's own base64 handler)
+  and UPLOADED to `/uploads`, inserting only a short URL. So the DB stores post HTML with `<img src="/uploads/…">`,
+  never image bytes — which is why the engine stays SQLite (a few KB of HTML per post; MariaDB/Postgres would
+  not help and the hub is deliberately single-writer SQLite/WAL). Quill HTML is operator-trusted, rendered
+  via `innerHTML` (same trust model as ad code snippets). *(Edge case: an image pasted as part of copied
+  HTML containing a `data:` URL is not converted — rare; the common screenshot/file paste IS uploaded.)*
+- **Media uploads** — `POST /api/admin/media` (secureAdmin, multer single `file`, 5 MB, JPG/PNG/GIF/WEBP/SVG)
+  → returns `{url}`. Stored in **`$POOL_APP_DIR/uploads/`** (= `path.dirname(db_path)/uploads`), **OUTSIDE
+  public_html** so the installer's `rsync --delete` of the docroot never wipes media. Served at `/uploads/`
+  by **nginx `location /uploads/` (alias, nosniff + sandbox CSP, 7d immutable)** in prod, with an
+  `express.static('/uploads')` fallback in the app for dev. `pool_setup_nginx` pre-creates the dir with
+  `chmod o+rx`; the app also `mkdirSync`s it at boot.
+- **All admin CMS routes are `secureAdmin`** (content, not funds — NOT freshAdmin): `/api/admin/{pages,posts,media}`.
+  Public reads (`/api/public/{page/:key,pages,posts,post/:slug}`, `/blog/rss.xml`) are `public` rate-limited.
+  To add a content type: clone the ads.js manager + table + the `admin-panel/*.html` CRUD page, add it to the
+  `admin-shell.js` NAV Settings `children`, and wire public routes.
 
 ### Multi-region — hub-and-spoke (design: `docs/generated/script07_design.md` §3–4)
 

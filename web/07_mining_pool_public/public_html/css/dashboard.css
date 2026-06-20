@@ -440,3 +440,30 @@ footer a, footer [data-brand="page-links"] a { color: var(--text-dim); }
     .header-nav { order: 3; flex-basis: 100%; overflow-x: auto; padding-bottom: 4px; }
     .wrap, .container { padding: 20px 14px 40px; }
 }
+
+/* ── Ad slots (filled by /js/ads.js; hidden until they have active ads) ───────── */
+.ad-slot {
+  position: relative;
+  margin: 16px auto;
+  text-align: center;
+  max-width: 970px;
+}
+.ad-slot-label {
+  display: block;
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-muted, #718096);
+  opacity: .65;
+  margin-bottom: 4px;
+}
+.ad-unit { display: inline-block; max-width: 100%; }
+.ad-unit img { max-width: 100%; height: auto; display: block; border-radius: 8px; }
+.ad-slot--header { margin-top: 8px; }
+.ad-slot--footer { margin-bottom: 8px; }
+/* In-content sits inside the page flow; sidebar is a narrower right-aligned rail on wide screens. */
+.ad-slot--in-content { margin: 24px auto; }
+.ad-slot--sidebar { max-width: 320px; }
+@media (min-width: 1100px) {
+  .ad-slot--sidebar { float: right; margin: 0 0 16px 20px; }
+}

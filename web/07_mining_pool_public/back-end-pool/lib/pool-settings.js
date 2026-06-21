@@ -19,7 +19,7 @@ class PoolSettings {
     pool_info: {
       pool_name: 'GRINIUM',
       pool_tagline: 'Mine Grin, anywhere',
-      pool_description: '',
+      pool_description: 'Mine Grin and have fun while you do it. GRINIUM is a low-fee PPLNS pool with anonymous Tor payouts, a per-address identity (no accounts, no sign-up), and live per-rig stats. Stack rewards on top of your shares with prize draws, join bonuses, streak rewards and a community fortune board — fair payouts for everyone, plus a little luck for the lucky. Point your miner at the nearest region and start earning in minutes.',
       pool_visibility: 'public',
       address_whitelist: '[]',
       mining_mode: 'stratum',

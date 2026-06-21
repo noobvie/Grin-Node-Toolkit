@@ -31,10 +31,15 @@ class WalletAPI {
 
   // --- Public methods -------------------------------------------------------
 
-  async getBalance() {
+  // refresh=false reads the wallet's locally-cached balance instantly (no node scan, no
+  // LMDB write-lock) — use it for liveness/dashboard polls. refresh=true forces a full
+  // wallet→node output scan (slow; can exceed the 10s node-fetch timeout on a fresh/busy
+  // wallet → false "Down") — reserve it for the custodial reconciliation check.
+  // (Mirrors the Grin Drop pattern in 052_drop/server/app.js.)
+  async getBalance(refresh = false) {
     try {
       // retrieve_summary_info params: [keychain_mask, refresh_from_node, min_confirmations]
-      const result = await this._call('retrieve_summary_info', [null, true, 1]);
+      const result = await this._call('retrieve_summary_info', [null, !!refresh, 1]);
       return result;
     } catch (err) {
       console.error(`[Wallet] Balance error: ${err.message}`);

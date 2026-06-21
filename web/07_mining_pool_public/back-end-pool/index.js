@@ -1383,7 +1383,9 @@ function setupRoutes() {
       let walletBalance = { total: 0, available: 0, locked: 0 };
       if (wallet && wallet.getBalance) {
         try {
-          const summary = await wallet.getBalance();
+          // refresh=true: custodial coverage check needs fresh on-chain numbers (runs at
+          // a relaxed 3-min cadence from the admin page, not on every dashboard poll).
+          const summary = await wallet.getBalance(true);
           const info = Array.isArray(summary) ? summary[1] : (summary || {});
           walletBalance = {
             total: Number(info.total || 0) / 1e9,
@@ -2561,7 +2563,14 @@ function setupRoutes() {
   // { services:{key:{status,…}}, system:{…} } shape the page renders, in ONE request (keeps
   // the admin rate budget low). Each probe is independently try/caught so one dead component
   // never blanks the whole grid.
+  // Short cache (20s): the combined health payload is polled by every open admin tab and
+  // on fast nav; without this each poll would re-hit the node + wallet. Liveness data this
+  // coarse tolerates 20s staleness. Cleared implicitly by TTL only.
+  let _healthCache = { ts: 0, payload: null };
   app.get('/api/admin/health', secureAdmin, async (req, res) => {
+    if (_healthCache.payload && (Date.now() - _healthCache.ts) < 20000) {
+      return res.json({ ..._healthCache.payload, cached: true });
+    }
     const fmtUptime = (secs) => {
       secs = Math.floor(secs || 0);
       const d = Math.floor(secs / 86400);
@@ -2659,7 +2668,9 @@ function setupRoutes() {
       };
     } catch (e) { system = {}; }
 
-    res.json({ services, system, timestamp: new Date().toISOString() });
+    const payload = { services, system, timestamp: new Date().toISOString() };
+    _healthCache = { ts: Date.now(), payload };
+    res.json(payload);
   });
 
   // Node Health Status - FIX #2, #14: Use async/await and remove hardcoded data

@@ -224,10 +224,12 @@ async function loadSatellites() {
   }
 }
 
-function loadAll() { loadHealth(); loadReconciliation(); loadSatellites(); }
-document.addEventListener('DOMContentLoaded', loadAll);
-// Auto-refresh every 30s
-setInterval(loadAll, 30000);
+// Initial paint: load everything once.
+document.addEventListener('DOMContentLoaded', () => { loadHealth(); loadReconciliation(); loadSatellites(); });
+// Cheap liveness (cached node/wallet status, system stats, satellite heartbeats) — every 60s.
+setInterval(() => { loadHealth(); loadSatellites(); }, 60000);
+// Reconciliation forces a real wallet→node scan (refresh_from_node=true) — relaxed to every 3 min.
+setInterval(loadReconciliation, 180000);
 </script>
 </body>
 </html>

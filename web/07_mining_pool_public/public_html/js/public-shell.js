@@ -199,6 +199,7 @@
       .then(function (d) {
         if (!d) return;
         if (d.network) showStat('.footer-net', (d.network === 'testnet' ? 'Testnet' : 'Mainnet'));
+        if (d.network === 'testnet') showTestnetBanner();
         if (d.pool_fee_percent != null) showStat('.footer-fee', 'Fee ' + d.pool_fee_percent + '%');
         if (d.min_withdrawal != null) showStat('.footer-min', 'Min payout ' + d.min_withdrawal + ' GRIN');
       })
@@ -241,6 +242,19 @@
     if (!el) return;
     el.textContent = text;
     el.hidden = false;
+  }
+
+  // Sticky TESTNET banner so visitors never mistake test tGRIN for real coins. Idempotent;
+  // uses the existing .testnet-banner CSS (css/pool.css). Pushes the header down via the
+  // body.has-testnet-banner rule.
+  function showTestnetBanner() {
+    if (document.querySelector('.testnet-banner')) return;
+    var b = document.createElement('div');
+    b.className = 'testnet-banner';
+    b.setAttribute('role', 'status');
+    b.textContent = '⚠ TESTNET — coins here are test tGRIN with no real value.';
+    document.body.insertBefore(b, document.body.firstChild);
+    document.body.classList.add('has-testnet-banner');
   }
 
   function mount() {

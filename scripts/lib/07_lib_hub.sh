@@ -29,7 +29,7 @@ hub_retention_settings() {
 hub_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  GRINIUM — Central Hub (brain)${RESET}"
+    echo -e "${BOLD}${CYAN}  GRINIUM — Central Hub (brain) [$([[ "$POOL_NET" == testnet ]] && echo TESTNET || echo Mainnet)]${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -e "  Service: $(_pool_menu_status_line)"
     echo -e "${DIM}  Regional gateways tunnel miner stratum in over WireGuard (option W).${RESET}"

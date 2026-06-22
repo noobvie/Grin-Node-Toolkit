@@ -761,7 +761,7 @@ Key design decisions (locked in — do not change without user confirmation):
 - **Config:** Stored in `/opt/grin/conf/grin_pubpool.json`; all settings via web admin panel — no bash config files
 - **Paths (renamed 2026-06 to the product-prefixed "pubpool" family):** app+DB `/opt/grin/pubpool/mainnet/`, wallet `/opt/grin/pubpoolwallet/mainnet/`, wallet password `/opt/grin/pubpool/mainnet/.wallet_pass` (600, deliberately separate from the seed dir). Legacy `/opt/grin/pool` + `grin_pool.json` are recognised by Z) Cleanup and the hub detector but never written.
 - **Script 07 role:** Infrastructure only (deploy files, systemd services, backups); business logic lives in pool web code
-- **Networks:** the public pool is a mainnet-only product (the earlier "testnet stratum-only mode" plan was not implemented); testnet mining is done via `07_grin_mining_solo.sh`
+- **Networks:** mainnet (default) OR testnet (added 2026-06). Testnet is a **fully independent install** triggered by the `testnet` launch arg (any position, like solo's `lan`): `bash 07_grin_mining_public_pool.sh testnet`. It gets its own config (`grin_pubpool_testnet.json`), service (`grin-pool-manager-testnet`), dirs (`/opt/grin/pubpool/testnet`, `/opt/grin/pubpoolwallet/testnet`), web root (`/var/www/grin-pool-testnet`), nginx vhost, Central API port **8090** (vs 8080), public stratum **13333**, and uses the testnet node (API 13413 / built-in stratum 13334) + a `--testnet` `tgrin1…` wallet (Foreign 13415 / Owner 13420). So it runs standalone OR alongside a mainnet pool on the same box. The whole JS app was already network-aware (`config.network`); the 2026-06 work parameterized the bash installer (`POOL_NET`) + `lib/07_lib_pool_wallet.sh` (`_PW_NET`, `PW_NET_FLAG`) + a few frontend spots (public `.testnet-banner`, `t?grin1` address validation, `testnet.grinscan.org` deep-links). **Prereq:** a testnet grin node (Script 01 `testnet-prune`) with built-in stratum on 13334. Testnet's fast blocks are the way to exercise the full block→maturity(100)→reward→payout pipeline. (Solo testnet mining via `07_grin_mining_solo.sh` still exists too.)
 - **Default pool fee 1.0%** (`pool_fee_percent: 1.0`, validated 0–50); min withdrawal: 5.0 GRIN
 - **Per-miner payout threshold:** `miner_accounts.min_payout` (NULL = pool default). Acts as that address's personal minimum-withdrawal floor in `createWithdrawal` (the pool has no auto-payout loop — payouts are miner-initiated). Can only be RAISED above `config.min_withdrawal`, never below. Set via the IP-gated `POST /api/account/:addr/min-payout`.
 
@@ -832,14 +832,15 @@ rig (high stale = latency/overclock, high reject = bad shares).
   connect + info), `miners-stats.html`, `blocks.html` (public found-blocks explorer — 2miners
   `/blocks` parity: paginated `/api/pool/blocks?limit&offset&status`, per-block Luck/variance =
   `round_shares ÷ network_difficulty` coloured green ≤100% / red >100%, KPIs from `/api/pool/stats`,
-  finder shown TRUNCATED, GrinScan deep-link; mainnet-only so chain link is hardcoded grinscan.org),
+  finder shown TRUNCATED, GrinScan deep-link — network-aware base (`GRINSCAN`, set from
+  `/api/config/pool-info`: grinscan.org for mainnet, testnet.grinscan.org for testnet)),
   `payment-history.html`, `account-settings.html`,
   `fortune-board.html`, `donate.html` (last two = incentives), `login.html` (admin door, public zone),
   and `page.html` (generic renderer for operator-authored pages via `/page.html?p=<key>`; footer
   links + the SITEMAP authored-pages come from `poolSettings.listEnabledPages()`). **Deleted:**
   `connect.html` + `pool-info.html` (merged into the dashboard `#connect` / `#info` anchors),
-  `home-classic.html` (orphan dup of index), `grin_mining_testnet_instruction.html` (testnet on a
-  mainnet-only product — testnet lives in the solo script), `system-health.html` +
+  `home-classic.html` (orphan dup of index), `grin_mining_testnet_instruction.html` (a static
+  testnet how-to page — the pool now has a real testnet mode, no separate guide page), `system-health.html` +
   `admin-dashboard.html` (the gated `/admin/` panel is the sole admin surface; login → `/admin/`).
   When removing/renaming a public page, fix the backend `SITEMAP_PATHS` in `index.js` and the
   `NAV` array in `public_html/js/public-shell.js` (single nav source — see next bullet). **`sitemap.xml` / `robots.txt` / `manifest.json` are

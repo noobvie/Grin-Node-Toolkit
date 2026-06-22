@@ -38,7 +38,7 @@ scripts/
   06_  Global health + price collector
   07_  Mining services hub → 07_grin_mining_solo.sh (solo private mining) and
        07_grin_mining_public_pool.sh (GRINIUM public pool; libs 07_lib_hub.sh /
-       07_lib_satellite.sh; app code in web/07_mining_pool_public/)
+       07_lib_gateway.sh; app code in web/07_mining_pool_public/)
        Solo (07_grin_mining_solo.sh) has a `lan` launch arg (`bash 07_grin_mining_solo.sh lan`,
        sets global SOLO_NET_MODE=lan) — same product, but the stats page deploys over
        plain HTTP on a chosen LAN IP:port (no domain/certbot/Basic Auth) for internal
@@ -107,11 +107,17 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
 | Wallet Owner API | 3420 | 13420 |
 
 Script 07 (mining pool) adds operator-configurable ports not in the table above:
-- **Public stratum** — miners connect here; default `3333` (same for both networks)
+- **Public stratum** — miners connect here; default `3333` (same for both networks). On a regional
+  gateway this is HAProxy's frontend, forwarded over WireGuard to the central box.
 - **Node built-in stratum (upstream)** — localhost only; the pool's stratum proxy connects here as a client; default `3334`. Set the Grin node's `stratum_server_addr` to `127.0.0.1:3334`.
-- **Central API / Pool HTTP API** — stats + satellite share/block ingestion (`/api/shares`, `/api/blocks`); default `8080` (same for both networks). Ingestion is IP-allowlisted + shared-secret authenticated.
+- **Per-region internal stratum ports** — `region_ports` (e.g. `asia:3391`), bound to the WireGuard
+  interface ONLY (`region_listen_host`, default the central tunnel IP `10.66.66.1`). Gateways tunnel
+  here; never public. Assigned by Script 07 → W) Multi-region → Add a gateway peer.
+- **Central API / Pool HTTP API** — stats + admin only; default `8080`, binds `127.0.0.1`. (There is NO
+  satellite share/block ingestion API any more — that was removed with the relay in the Model C refactor.)
+- **WireGuard** — UDP `51820` on the central box; the only port a gateway needs to reach inbound.
 
-> All three modes use the same ports: public stratum `3333`, node built-in stratum upstream `127.0.0.1:3334` (testnet `13334`), Central API `8080`. The single-box installer was migrated off the legacy `3416/3417/3002` in 2026-06. (Solo mining — `07_grin_mining_solo.sh` — is a separate product and keeps `3416`.)
+> Core ports: public stratum `3333`, node built-in stratum upstream `127.0.0.1:3334` (testnet `13334`), Central API `127.0.0.1:8080`, WireGuard UDP `51820`. The single-box installer was migrated off the legacy `3416/3417/3002` in 2026-06. (Solo mining — `07_grin_mining_solo.sh` — is a separate product and keeps `3416`.)
 
 Secret files — two per service, each with a Foreign and Owner secret:
 
@@ -338,8 +344,10 @@ or the multi-zone variant `nginx_ensure_rate_limit_zones <conf_basename> <zone:r
 nginx_ensure_rate_limit_zones "script07-${POOL_SERVICE}" \
     "${POOL_SERVICE}_auth:200r/m"   "${POOL_SERVICE}_api:600r/m" \
     "${POOL_SERVICE}_static:6000r/m" "${POOL_SERVICE}_captcha:600r/m" \
-    "${POOL_SERVICE}_admin:2400r/m"  "${POOL_SERVICE}_ingest:2400r/m"
+    "${POOL_SERVICE}_admin:2400r/m"
 ```
+> The `_ingest` zone + the `/api/shares`+`/api/blocks` vhost blocks were **removed** in the
+> Model C refactor (no HTTP ingestion). Gateway mining traffic rides the WireGuard tunnel.
 
 Note: the helper is a no-op if the conf file already exists — deleting
 `/etc/nginx/conf.d/<basename>.conf` (or running pool cleanup) is the signal to regenerate,
@@ -353,7 +361,7 @@ Current named wrappers:
 
 ### Script-specific zones — stay in the script that owns them
 - `grin_conn` (Script 04 only) — defined inline in Script 04 inside `nginx.conf` http block
-- `${POOL_SERVICE}_auth/_api/_static/_captcha/_admin/_ingest` (Script 07 only) — written via the multi-zone helper; `_ingest` covers satellite `/api/shares` + `/api/blocks` so relay batches aren't throttled by the public `_api` zone. **ALL zone rates carry a 2026-06 ×20 "loosen now, tighten later" bump** (operator request) so request throttling never breaks normal use during early testing — the real controls are JWT + login captcha + per-account lockout + IP auto-ban, NOT these throttles. Current rates: `_auth 200r/m`, `_api 600r/m`, `_static 6000r/m` (burst 100), `_captcha 600r/m`, `_admin 2400r/m`, `_ingest 2400r/m`. The `_static` bump matters most because every public page load re-fetches ~a dozen assets — incl. `public-shell.js`, which injects the header/nav — all keyed per-IP on `_static`, so the old 60r/m cap 503'd assets on a few fast navigations → pages rendered as plain HTML with no CSS and a missing nav. `pool_setup_nginx` self-heals an existing install (rm's the managed `script07-<svc>.conf` so the full zone list regenerates) when it carries any earlier-generation rate (auth `3|10r/m`, static `60|300r/m`) or is missing the `_captcha`/`_admin` zones. **To tighten later:** lower the rates in `pool_setup_nginx`'s `nginx_ensure_rate_limit_zones` call AND the app buckets in `lib/rate-limiter.js` (`this.limits` — `public 1200 / auth 200 / api 600 / admin 2400`, also ×20), then re-run 4) Setup nginx.
+- `${POOL_SERVICE}_auth/_api/_static/_captcha/_admin` (Script 07 only) — written via the multi-zone helper. (The `_ingest` zone was removed with the relay in the Model C refactor.) **ALL zone rates carry a 2026-06 ×20 "loosen now, tighten later" bump** (operator request) so request throttling never breaks normal use during early testing — the real controls are JWT + login captcha + per-account lockout + IP auto-ban, NOT these throttles. Current rates: `_auth 200r/m`, `_api 600r/m`, `_static 6000r/m` (burst 100), `_captcha 600r/m`, `_admin 2400r/m`. The `_static` bump matters most because every public page load re-fetches ~a dozen assets — incl. `public-shell.js`, which injects the header/nav — all keyed per-IP on `_static`, so the old 60r/m cap 503'd assets on a few fast navigations → pages rendered as plain HTML with no CSS and a missing nav. `pool_setup_nginx` self-heals an existing install (rm's the managed `script07-<svc>.conf` so the full zone list regenerates) when it carries any earlier-generation rate (auth `3|10r/m`, static `60|300r/m`) or is missing the `_captcha`/`_admin` zones. **To tighten later:** lower the rates in `pool_setup_nginx`'s `nginx_ensure_rate_limit_zones` call AND the app buckets in `lib/rate-limiter.js` (`this.limits` — `public 1200 / auth 200 / api 600 / admin 2400`, also ×20), then re-run 4) Setup nginx.
 - Per-domain bandwidth maps (Script 02) — defined inline in per-domain conf
 
 Name script-specific conf files with a `script##-` prefix to avoid future collisions:
@@ -407,7 +415,7 @@ Before creating any `.md` file, check if it should be merged into an existing `s
 ## Script 07 — Mining Pool Architecture
 
 **Source of truth — the pool lives in THIS repo** (2026-06): bash in
-`scripts/07_grin_mining_public_pool.sh` + `lib/07_lib_hub.sh` / `lib/07_lib_satellite.sh`,
+`scripts/07_grin_mining_public_pool.sh` + `lib/07_lib_hub.sh` / `lib/07_lib_gateway.sh`,
 app code in `web/07_mining_pool_public/{back-end-pool,public_html}`. The standalone
 **GRINIUM repo (github.com/noobvie/Grinium) was merged into the toolkit and is
 deprecated — never apply fixes or mirror changes there.**
@@ -415,14 +423,14 @@ deprecated — never apply fixes or mirror changes there.**
 Operational facts:
 - **Exclusivity:** one mining type per server — public pool XOR solo private
   (`pool_check_exclusivity` hard-blocks; they collide on nginx zones + /opt/grin layout).
-  Likewise a brain (singlebox/hub) and a Satellite can't share a box (ports 3333/3334/8080).
+  Likewise a brain (singlebox/hub) and a regional gateway can't share a box (both bind :3333).
 - **No `init-db.js`:** the schema is created/migrated by `lib/db.js initDb()` every time
   the service starts — there is no separate DB-init step in the installer.
 - **No `package-lock.json` yet:** the installer falls back to `npm install --omit=dev`;
   commit a lockfile in `back-end-pool/` to get reproducible `npm ci` installs.
-- **Central API binds `127.0.0.1:8080`** (systemd `HOST` env) — satellites reach it only
-  through the nginx HTTPS vhost (`/api/shares` + `/api/blocks`, `_ingest` rate zone), so
-  satellite `hub_url` = `https://<pool-domain>`, never `:8080` directly.
+- **Central API binds `127.0.0.1:8080`** (systemd `HOST` env) — reached only through the nginx
+  HTTPS vhost (public stats + admin). No external ingestion endpoint exists in Model C: regional
+  gateways carry mining traffic over the WireGuard stratum tunnel, not over HTTP.
 
 Key design decisions (locked in — do not change without user confirmation):
 
@@ -571,7 +579,7 @@ Key design decisions (locked in — do not change without user confirmation):
   pool_manager/grin_node/stratum/grin_wallet/nginx/database + host `system` stats into the flat
   `{services:{key:{status,…}},system:{…}}` shape `admin-panel/health.html` renders — in ONE call (the page was
   calling this nonexistent combined route → all metrics stayed `—`; the per-component `/health/{node,wallet,
-  system,satellites}` routes still exist for granular use).
+  system,gateways}` routes still exist for granular use).
   **Server-side admin gate via nginx `auth_request` (added 2026-06) — kills the "flash of admin page
   → redirect to /login.html":** the admin HTML is static-served by nginx, so the client-side
   `guardAdminPage()` redirect only fired AFTER the page rendered (a visible flash; not a data leak —
@@ -712,11 +720,11 @@ Key design decisions (locked in — do not change without user confirmation):
     secureAdmin. Plain `<a href>` download links (same-origin sends the httpOnly cookie) on
     payments.html.
   - **Already-built, untouched:** maintenance mode (notices section + Announcements tab) was fully
-    present; satellite heartbeat health (`GET /api/admin/health/satellites`) is read-only and now
-    lives on the **Regions page** (`admin-panel/regions.html`), NOT health.html — the old health.html
-    satellite grid was removed (2026-06) and replaced with a pointer link to Regions so per-region
-    config + live status sit together. Secret rotation stays config-level: `hub_shared_secret` in
-    `grin_pubpool.json`/`grin_satellite.json` + restart.
+    present; per-region gateway health (`GET /api/admin/health/gateways`, read-only) lives on the
+    **Regions page** (`admin-panel/regions.html`), NOT health.html — the old health.html grid was
+    removed (2026-06) and replaced with a pointer link to Regions so per-region config + live status
+    sit together. (The Model C refactor renamed this from `/health/satellites` and dropped the
+    relay-heartbeat source — liveness now comes from recent shares + the WireGuard handshake.)
   - **Ads (operator promotions, added 2026-06).** New `ads` table (created/migrated by `db.js initDb`,
     no separate step) + `lib/ads.js` (`AdsManager`, positional-param SQL like the rest of the codebase).
     Two kinds: **banner** (`image_url`+`link_url`+`alt_text`) or **code** (raw operator-trusted HTML/JS
@@ -760,7 +768,7 @@ Key design decisions (locked in — do not change without user confirmation):
 ### Public miner-facing endpoints (added 2026-06 — grin-pool parity)
 
 All public (no admin auth), `rateLimiter.middleware('public')`:
-- `GET /api/account/:addr/workers` — per-worker (rig) breakdown. Hashrate/share-count/last-share from the `shares` table (all regions, survives restarts); **reject% / stale% + online come from the LIVE in-memory stratum sessions on the box serving the request** (`minerManager.getSessionsByMiner`). **Hub-mode limit:** satellites relay only *accepted* shares, not reject/stale counters, so on a hub these columns reflect only locally-connected workers — documented, not a bug.
+- `GET /api/account/:addr/workers` — per-worker (rig) breakdown. Hashrate/share-count/last-share from the `shares` table (all regions, survives restarts); **reject% / stale% + online come from the LIVE in-memory stratum sessions** (`minerManager.getSessionsByMiner`). Under Model C every region's miners terminate their session on the central box (gateways just forward TCP), so reject/stale is **complete pool-wide** — the old "hub-mode blind spot" is gone. Still live-only: resets on a worker disconnect.
 - `GET /api/account/:addr/hashrate/history?hours=24` and `GET /api/pool/hashrate/history?hours=24` — time-series from `hashrate_history` (per-address per-minute samples; pool series = `SUM` per bucket), downsampled. Charted with **Chart.js vendored at `public_html/js/vendor/chart.umd.min.js`** (no CDN) via `js/charts-init.js` (`PoolCharts.renderHashrateChart`).
 - `GET /api/pool/effort` — `round_effort_pct` (Σ share diff since last block ÷ current per-block network diff), `luck_100_pct` (mean of `network_difficulty/round_shares` over last 100 blocks), `seconds_since_last_block`. Backed by additive `blocks.network_difficulty` + `blocks.round_shares` captured at find time in `lib/blocks.js creditBlock` (needs `blockManager.setNodeApi(blockMonitor.grinNode)`); current net diff cached ~60s on `app.locals`.
 - `GET /api/account/:addr` now also returns `min_payout`, `effective_min_payout`, `has_recorded_ip`.
@@ -777,7 +785,7 @@ limit applies). Per-account stale/reject is aggregated client-side from `/api/ac
 (also live-only). **Showing stale/reject % to miners is intentional** — it's how a miner diagnoses a sick
 rig (high stale = latency/overclock, high reject = bad shares).
 
-**Miner source-IP capture (backs the ownership gate):** recorded into `miner_accounts.last_ip/prev_ip` (last-2 distinct, shift on change) via `minerManager.recordSourceIp` → `owner-proof.recordSourceIp`. Captured at stratum login locally; **in hub-and-spoke the satellite relays the miner IP per-share** (`source_ip` added to the relayed share object in `stratum-server.js`; `share-relay.js` forwards it verbatim incl. failover replay; hub `POST /api/shares` uses `s.source_ip`, NOT `req.ip` which is the satellite). UI: all per-account features live on `account-settings.html` (chart, workers, threshold, slatepack); pool chart + effort row on `index.html`. **Payout method is single-select (2026-06):** the Withdraw section has a Tor/Slatepack radio group (`name="acct-pay-method"`, Tor default) and `syncPayMethod()` shows only the selected pane (`#acct-pay-tor-pane` / `#acct-pay-slatepack-pane`) — both rails still hit `POST /api/account/:addr/withdraw {method}` gated by the IP-proof (one of the last-2 mining IPs). The nav link + page `<h2>` say "Account" (renamed from "My Account").
+**Miner source-IP capture (backs the ownership gate):** recorded into `miner_accounts.last_ip/prev_ip` (last-2 distinct, shift on change) via `minerManager.recordSourceIp` → `owner-proof.recordSourceIp`. Captured at stratum login. The real miner IP is the socket address for direct miners, or — for miners arriving via a regional gateway (Model C) — the value parsed from the gateway's **PROXY-protocol v2** header (`parseProxyV2Header` in `stratum-server.js`); both resolve to the same `ip` passed into `recordSourceIp`. UI: all per-account features live on `account-settings.html` (chart, workers, threshold, slatepack); pool chart + effort row on `index.html`. **Payout method is single-select (2026-06):** the Withdraw section has a Tor/Slatepack radio group (`name="acct-pay-method"`, Tor default) and `syncPayMethod()` shows only the selected pane (`#acct-pay-tor-pane` / `#acct-pay-slatepack-pane`) — both rails still hit `POST /api/account/:addr/withdraw {method}` gated by the IP-proof (one of the last-2 mining IPs). The nav link + page `<h2>` say "Account" (renamed from "My Account").
 - **Public chrome = `public_html/js/public-shell.js` (single source of truth, added 2026-06 — the
   public mirror of `admin-shell.js`).** Every public page (all 7 that share the site header:
   index, miners-stats, payment-history, account-settings, fortune-board, donate, page) now ships
@@ -856,12 +864,11 @@ rig (high stale = latency/overclock, high reject = bad shares).
     to active rows with a `stratum_url`, then groups by `country` (rows with no country fall into a
     per-region pseudo-group). **The multi-region grid renders only when ≥2 regions exist**
     (`loadRegions()`: `if (regions.length < 2) keep fallback`); a single-server pool shows the simple
-    `#region-fallback` "point your miner here" callout instead of a lone 1-card grid. The pill
-    `status` (`online`/`stale`/`offline`/`unknown`) is derived from the in-memory satellite heartbeat
-    with a recent-shares fallback (`unknown` = no signal yet, shown neutral — never a false "down").
-    To make this truthful for a *quiet* region, the satellite `lib/share-relay.js` POSTs an **empty
-    idle heartbeat** (`{region, shares:[]}`) to `/api/shares` every `HEARTBEAT_MS` (60 s) when there
-    are no shares to flush, so a healthy-but-empty region reads `online` instead of `offline`.
+    `#region-fallback` "point your miner here" callout instead of a lone 1-card grid. The public pill
+    `status` is **share-based** (Model C): `online` = recent shares for the region, else `unknown`
+    (shown neutral — never a false "down", since a gateway is a dumb forwarder that can't heartbeat).
+    The richer WireGuard-handshake signal is admin-only (`/api/admin/health/gateways`), not on the
+    public pill.
     **Visitor-nearest detection (2026-06):** `detectNearestRegion()` maps the browser IANA timezone
     (`Intl.DateTimeFormat().resolvedOptions().timeZone`) to the closest seeded region key — **no
     geo-IP call, no permission prompt** — so the visitor's country group floats to the top and the
@@ -885,22 +892,21 @@ rig (high stale = latency/overclock, high reject = bad shares).
     `POST /api/admin/locations` + `GET /api/pool/stats/regions` carry them. The pool server still also
     **self-registers its own region** via `ensureLocalRegion(region, stratumUrl)` (singlebox only,
     `config.region` default `"main"`, no country → its own pseudo-group), so the central box stays an
-    honest region and the seamless single→multi path is intact. Extra zones still come from real
-    satellites the operator declares in admin → Regions.
-    **Admin Regions page (`admin-panel/regions.html`, added 2026-06):** the CRUD+monitoring UI over
-    `pool_locations`, NAV child of the **Dashboard** group (operational view). Modelled on `ads.html`.
-    It merges config rows (`GET /api/admin/locations`) with live satellite health
-    (`GET /api/admin/health/satellites`, keyed by region) into one table — region/country(+flag)/
-    stratum URL/active/**live status**(online/degraded/offline, or "○ No signal" when no heartbeat)/
-    last-seen age/shares+blocks. The form takes a **host only** (not host:port): the port is shared
+    honest region and the seamless single→multi path is intact. Extra zones come from regional
+    gateways the operator declares in admin → Regions + adds as WireGuard peers (Script 07 → W).
+    **Admin Regions page (`admin-panel/regions.html`, added 2026-06; Model-C updated):** the
+    CRUD+monitoring UI over `pool_locations`, NAV child of the **Dashboard** group. Modelled on `ads.html`.
+    It merges config rows (`GET /api/admin/locations`) with live gateway health
+    (`GET /api/admin/health/gateways`, keyed by region) into one table — region/country(+flag)/
+    stratum URL/active/**live status**(online/degraded/offline, or "○ No signal")/last activity/
+    miners + shares(15m)/region port. The form takes a **host only** (not host:port): the port is shared
     pool-wide (from `/api/public/branding` `connection.stratum_port`, default 3333) and auto-appended
-    on save, so all regions stay on the same port by construction. Region key is the identity →
-    disabled on edit (upsert keyed on it). Save = `POST /api/admin/locations` (secureAdmin via
-    `API.post`); Delete = `DELETE /api/admin/locations/:id` (**freshAdmin** → loads `/js/stepup.js`,
-    calls `adminFetch`). Shows an ingestion banner when `hub_shared_secret` is unset (so the operator
-    knows *why* every region reads "No signal"). NOTE: this page is unrelated to the **"Public Stratum
-    Host"** field in `settings-pool-info.html` — that field is cosmetic (the single fallback callout +
-    footer stratum copy via `/api/public/branding`), NOT a region/satellite registration.
+    on save. Region key is the identity → disabled on edit (upsert keyed on it). Save = `POST
+    /api/admin/locations` (secureAdmin via `API.post`); Delete = `DELETE /api/admin/locations/:id`
+    (**freshAdmin** → `/js/stepup.js`, `adminFetch`). The how-to panel walks the 4-step gateway setup
+    (declare here → DNS → add wg peer on the pool box via W → bring up the gateway box). NOTE: this page
+    is unrelated to the **"Public Stratum Host"** field in `settings-pool-info.html` — that field is
+    cosmetic (the single fallback callout + footer stratum copy), NOT a region/gateway registration.
   - **Service status strip** — public `GET /api/pool/status` (rate-limited, 15s cache) returns
     coarse health only: `pool.ok`, `node {reachable,synced,peers,height}`, `wallet {reachable}`.
     **Never** exposes wallet balance/addresses (those stay on admin-only `/api/admin/health/*`).
@@ -955,33 +961,54 @@ pattern. Two content types, one shared editor:
   To add a content type: clone the ads.js manager + table + the `admin-panel/*.html` CRUD page, add it to the
   `admin-shell.js` NAV Settings `children`, and wire public routes.
 
-### Multi-region — hub-and-spoke (design: `docs/generated/script07_design.md` §3–4)
+### Multi-region — Model C: thin stratum gateways (refactored 2026-06; supersedes the old hub-and-spoke relay)
 
-Script 07 has three deployment **roles** internally (`singlebox|hub|satellite`), but the interactive
-`pool_select_mode` menu was **consolidated to two options (2026-06)** to stop forcing a topology
-choice on a newcomer — there is no "central vs distributed" fork; distributed *is* central + N
-satellites:
-- **1) Pool server** → `singlebox`. The pool itself — the brain + a co-located local stratum. It IS a
-  full hub (runs the Central API + `/api/shares` ingestion), so it accepts remote satellites later with
-  zero changes to itself. Start here for any single-box install.
-- **2) Satellite agent** → `satellite`. An extra region on **another** box; node + stratum proxy + relay,
-  **no** web/admin/DB/wallet. Sourced from `lib/07_lib_satellite.sh`. Config: `/opt/grin/conf/grin_satellite.json`.
-- **`hub`** (Central Hub only — brain with **no** local stratum, satellites do all mining) is an
-  **advanced** role: dropped from the menu but still reachable as a launch arg
-  (`bash 07_grin_mining_public_pool.sh hub`). Sourced from `lib/07_lib_hub.sh`; reuses the shared
-  `pool_*` setup functions. A `singlebox` already ⊇ `hub`, so bare hub is only for offloading mining off
-  the central box at scale. All three roles may still be passed as `$1` for non-interactive launches.
+**Plan: `flowcharts/script07_mining_public_planning.txt`.** The earlier satellite/relay
+("node + stratum proxy + share relay per region") design was **removed**. The reason was coinbase
+routing: Grin has no `getblocktemplate`-style "coinbase = an address string" call — its MimbleWimble
+coinbase must be built by a LIVE wallet holding the keychain (`build_coinbase`), so a satellite node
+had nowhere correct to send block rewards without putting the wallet on the network or seeding funds at
+every edge. **Model C deletes the problem:** the node + wallet stay co-located on ONE central box
+(coinbase = a plain localhost call, exactly like single-box), and each region is a **thin gateway** that
+just forwards stratum.
 
-**Add-a-zone workflow** (central → distributed, no rebuild of the central box): (1) admin → Regions →
-declare the region (name + label + that zone's stratum URL); (2) on the new box run option 2 and enter
-region name + hub URL + shared secret. The card lights up live from the satellite's heartbeat.
+The app (`back-end-pool/`) now only ever runs as **`singlebox`** or **`hub`**:
+- **1) Pool server** → `singlebox`. The pool itself — brain (API/DB/web/admin/wallet) + a co-located
+  local stratum. Already a full hub, so it accepts regional gateways later with zero rebuild.
+- **2) Regional gateway** → the `gateway` role. NOT a pool-app role — runs **no Node, no node, no
+  wallet, no DB**. It is HAProxy (`send-proxy-v2`) + WireGuard (`scripts/lib/07_lib_gateway.sh`,
+  config `/opt/grin/conf/grin_gateway.json`, service `grin-gateway`). Miners connect to `:3333` here;
+  HAProxy forwards the raw stratum — prefixed with a **PROXY-protocol v2** header carrying the real
+  miner IP — over the tunnel to a per-region INTERNAL port on the central box.
+- **`hub`** (brain, no local stratum) is an advanced launch arg (`bash …public_pool.sh hub`), source
+  `lib/07_lib_hub.sh`. Roles passable as `$1`: `singlebox|hub|gateway`.
+
+**Region attribution = per-region central listener port.** The central stratum-server binds the public
+`:3333` (region = `config.region`) PLUS one INTERNAL port per `region_ports` entry, bound to the
+WireGuard interface only (`region_listen_host`, never public). Each gateway's tunnel targets its
+region's port; the listener stamps that region on every share. Miners ALWAYS use the public `:3333` on
+their nearest gateway — the per-region ports are internal plumbing. PROXY-v2 parser + multi-listener
+live in `lib/stratum-server.js` (`parseProxyV2Header`, exported; tested by `scripts/test-proxy-v2.js`).
+
+**Add-a-region workflow** (no rebuild of the central box): (1) admin → Regions → declare the region
+(key + label + stratum host); (2) on the central box, Script 07 → **W) Multi-region** → *Add a gateway
+peer* (assigns a tunnel IP + region port, prints the values); (3) on the gateway box, Script 07 →
+option **2) Regional gateway** → Install → Configure (paste the values) → Bring up tunnel → Start.
+Card lights up from recent shares (+ wg handshake). There is **no** `/api/shares` ingestion API,
+`hub_shared_secret`, or relay any more.
 
 Locked decisions (do not change without user confirmation):
-- **Database stays SQLite (WAL), not Postgres.** The hub is **single-writer** — only the Central API process writes; satellites POST over HTTPS, they never touch the DB. Migrate to Postgres only if the Central API itself goes multi-process/replicated, the DB moves to a separate box, or hot un-prunable data exceeds ~20–50 GB. Adding satellites does NOT change this (a region is a new HTTP client, not a new DB writer).
-- **Share capture = own stratum proxy** in front of the node's built-in stratum (grin-pool model) — NOT log-tailing. Gives structured `address.worker` identity + per-miner vardiff. Built-in stratum binds localhost `:3334`; proxy binds public `:3333`.
-- **Satellite→Hub transport** — `POST /api/shares` (batched) + `/api/blocks` (block-found) to Central API `:8080`; IP-allowlist + shared-secret header over HTTPS (mTLS later). Relay buffers to a local SQLite failover file on Hub outage and replays.
-- **Retention** — raw shares kept only for the PPLNS window then pruned; hashrate downsampled 5m→1h→1d; financial rows kept forever. Configurable in the admin panel (Database / Cleanup); job is `retention.js` on a systemd timer. ~300–600 MB after year 1 for ~1000 miners, ~30 MB/yr after.
-- **Runtime** for proxy + relay: Node.js 24+ (`node:sqlite` via the same `sqlite-compat.js` shim for the failover buffer).
+- **Database stays SQLite (WAL), not Postgres.** The central box is **single-writer** — only the pool
+  process writes. Gateways never touch the DB (they forward TCP); a region is not a new DB writer.
+  Migrate only if the pool itself goes multi-process/replicated or hot data exceeds ~20–50 GB.
+- **Share capture = own stratum proxy** in front of the node's built-in stratum (grin-pool model) — NOT
+  log-tailing. Built-in stratum binds localhost `:3334`; the pool's public stratum binds `:3333`.
+- **Gateway transport = WireGuard ONLY** (Tor/TLS rejected — share-path latency budget is tight). The
+  central box exposes a WireGuard UDP port (`51820`); per-region stratum ports bind the wg interface
+  only. **★ Q2 (open):** forwarding every share edge→central over a real cross-continent wg link must
+  be latency-measured (stale%) before scaling to many regions — see the plan's §6.
+- **Retention** — raw shares kept only for the PPLNS window then pruned; hashrate downsampled 5m→1h→1d;
+  financial rows kept forever. Admin panel (Database / Cleanup); `retention.js` on a systemd timer.
 
 ## Debugging — Confirm Root Cause Before Editing
 When a bug or error is reported, **confirm the root cause with evidence before changing

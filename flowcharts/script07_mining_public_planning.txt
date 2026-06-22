@@ -2,10 +2,15 @@
 ║   07_grin_mining_public_pool.sh — REFACTOR PLAN: Model C (thin gateways)    ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
-  Version:  planning v1  (refactor proposal — NOT yet implemented)
-  Date:     2026-06-21
+  Version:  planning v1  (refactor proposal)
+  Date:     2026-06-21  (implemented 2026-06-22)
   Author:   design review session (see §1 for how we got here)
-  Status:   PROPOSAL — awaiting go/no-go before any code changes
+  Status:   IMPLEMENTED (Phases 1–8, branch `publicpool`, 2026-06-22). The satellite/relay
+            role is fully removed and replaced by the gateway role + central WireGuard +
+            per-region PROXY-v2 listeners. ⚠ STILL OPEN: Q2 — the cross-continent share-path
+            latency (stale%) has NOT been measured on a real link yet (see §6). Deploy ONE
+            gateway and measure before scaling to many regions; if stale% is unacceptable the
+            §6 fallback (node-per-region + Option A) is the pivot.
 
   Scope:    Re-architect the multi-region role of the public pool from
             "full grin node + share relay per region" (the CURRENT built design)

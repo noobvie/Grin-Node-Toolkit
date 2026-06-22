@@ -1671,6 +1671,215 @@ _pool_menu_status_line() {
 # MAIN MENU
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# W) MULTI-REGION — central WireGuard server + gateway peers (Model C)
+# ═══════════════════════════════════════════════════════════════════════════════
+# The central box accepts regional GATEWAYS (07_lib_gateway.sh) over a WireGuard
+# tunnel. Each gateway forwards miner stratum (with a PROXY-v2 header carrying the
+# real miner IP) to a per-region INTERNAL port here, bound to the tunnel interface
+# only (never public). This menu sets up the wg server and adds gateway peers,
+# assigning each a tunnel IP + a region listener port (written into region_ports).
+# See flowcharts/script07_mining_public_planning.txt (Model C, Phase 3).
+WG_IFACE="wg-grinpool"
+WG_CONF="/etc/wireguard/${WG_IFACE}.conf"
+WG_DIR_CONF="/opt/grin/conf/wg"
+WG_TUNNEL_NET="10.66.66"            # /24; server = .1, gateways = .2, .3, ...
+WG_LISTEN_PORT=51820
+REGION_PORT_BASE=3391               # first per-region internal stratum port
+
+pool_wg_setup_server() {
+    info "Setting up the central WireGuard server..."
+    if command -v apt-get &>/dev/null; then
+        apt-get install -y wireguard-tools 2>&1 | tail -5
+    elif command -v dnf &>/dev/null; then
+        dnf install -y wireguard-tools 2>&1 | tail -5
+    fi
+    command -v wg &>/dev/null || { error "wireguard-tools (wg) not installed."; return 1; }
+
+    mkdir -p "$WG_DIR_CONF"; chmod 700 "$WG_DIR_CONF"
+    if [[ ! -f "$WG_DIR_CONF/server_private.key" ]]; then
+        ( umask 077; wg genkey > "$WG_DIR_CONF/server_private.key" )
+        wg pubkey < "$WG_DIR_CONF/server_private.key" > "$WG_DIR_CONF/server_public.key"
+        success "Generated central WireGuard keypair."
+    fi
+
+    if [[ ! -f "$WG_CONF" ]]; then
+        local priv; priv=$(cat "$WG_DIR_CONF/server_private.key")
+        mkdir -p "$(dirname "$WG_CONF")"
+        ( umask 077; cat > "$WG_CONF" << EOF
+# Grin pool central WireGuard server — auto-generated. Add gateways via the pool menu (W).
+[Interface]
+Address = ${WG_TUNNEL_NET}.1/24
+ListenPort = ${WG_LISTEN_PORT}
+PrivateKey = ${priv}
+EOF
+        )
+        chmod 600 "$WG_CONF"
+        success "Wrote $WG_CONF (${WG_TUNNEL_NET}.1/24, UDP ${WG_LISTEN_PORT})."
+    else
+        info "$WG_CONF already exists — keeping it (add peers with option 2)."
+    fi
+
+    # Open the WireGuard UDP port. Region listener ports are NOT opened — they bind the
+    # tunnel interface only, so only authenticated wg peers can reach them.
+    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q active; then
+        ufw allow "${WG_LISTEN_PORT}/udp" >/dev/null 2>&1 || true; info "ufw: opened ${WG_LISTEN_PORT}/udp."
+    elif command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
+        firewall-cmd --permanent --add-port="${WG_LISTEN_PORT}/udp" >/dev/null 2>&1 || true
+        firewall-cmd --reload >/dev/null 2>&1 || true; info "firewalld: opened ${WG_LISTEN_PORT}/udp."
+    fi
+
+    wg-quick down "$WG_IFACE" 2>/dev/null || true
+    if wg-quick up "$WG_IFACE"; then
+        systemctl enable "wg-quick@${WG_IFACE}" 2>/dev/null || true
+        # Bind the central per-region stratum listeners to the tunnel IP (never public).
+        pool_write_conf_key "region_listen_host" "${WG_TUNNEL_NET}.1"
+        success "Central tunnel up (${WG_TUNNEL_NET}.1)."
+        echo ""
+        echo -e "  ${BOLD}Give each gateway operator these:${RESET}"
+        echo -e "    central wg public key : ${GREEN}$(cat "$WG_DIR_CONF/server_public.key")${RESET}"
+        echo -e "    central wg endpoint   : ${GREEN}$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo '<server-public-ip>'):${WG_LISTEN_PORT}${RESET}"
+        echo -e "    central tunnel IP     : ${GREEN}${WG_TUNNEL_NET}.1${RESET}"
+    else
+        error "wg-quick up failed — check $WG_CONF."
+        return 1
+    fi
+}
+
+pool_wg_add_peer() {
+    [[ -f "$WG_CONF" ]] || { error "Run 1) Setup WireGuard server first."; return 1; }
+    local region gwpub
+    echo -ne "Region key for this gateway (e.g. asia, us-east): "; read -r region
+    [[ -n "$region" ]] || { warn "Region key required."; return 1; }
+    echo -ne "Gateway's WireGuard public key: "; read -r gwpub
+    [[ -n "$gwpub" ]] || { warn "Gateway public key required."; return 1; }
+
+    # Assign the next free tunnel IP (max existing AllowedIPs octet + 1) and region port
+    # (max existing region_ports value + 1, else the base). Both computed in one node call.
+    local assign nextip nextport
+    assign=$(node -e '
+const fs = require("fs");
+const [wgConf, poolConf, net, base] = process.argv.slice(1);
+let octs = [1];
+try {
+  const t = fs.readFileSync(wgConf, "utf8");
+  const re = new RegExp("AllowedIPs\\s*=\\s*" + net.replace(/\./g,"\\.") + "\\.(\\d+)", "g");
+  let m; while ((m = re.exec(t))) octs.push(parseInt(m[1], 10));
+} catch (e) {}
+let ports = [];
+try {
+  const d = JSON.parse(fs.readFileSync(poolConf, "utf8"));
+  if (d.region_ports) ports = Object.values(d.region_ports).map(Number).filter(Boolean);
+} catch (e) {}
+const nextIp   = Math.max.apply(null, octs) + 1;
+const nextPort = ports.length ? Math.max.apply(null, ports) + 1 : parseInt(base, 10);
+process.stdout.write(nextIp + " " + nextPort);
+' "$WG_CONF" "$POOL_CONF" "$WG_TUNNEL_NET" "$REGION_PORT_BASE" 2>/dev/null) || true
+    nextip=$(echo "$assign" | awk '{print $1}')
+    nextport=$(echo "$assign" | awk '{print $2}')
+    if [[ -z "$nextip" || -z "$nextport" ]]; then
+        error "Could not compute peer IP/port — is node installed and $POOL_CONF valid?"
+        return 1
+    fi
+    local peer_ip="${WG_TUNNEL_NET}.${nextip}"
+
+    # Append the peer to the wg config and apply live without dropping existing tunnels.
+    cat >> "$WG_CONF" << EOF
+
+[Peer]
+# region: ${region}
+PublicKey = ${gwpub}
+AllowedIPs = ${peer_ip}/32
+EOF
+    if wg syncconf "$WG_IFACE" <(wg-quick strip "$WG_IFACE") 2>/dev/null; then
+        info "Applied peer to live tunnel."
+    else
+        warn "wg syncconf failed — run 3) restart, or wg-quick down/up ${WG_IFACE}."
+    fi
+
+    # Record the region → internal port mapping in pool.json (nested object; the scalar
+    # pool_write_conf_key can't express it). region_listen_host stays the tunnel IP.
+    node -e '
+const fs = require("fs");
+const [p, region, port, host] = process.argv.slice(1);
+let d = {}; try { d = JSON.parse(fs.readFileSync(p, "utf8")); } catch (e) {}
+d.region_ports = d.region_ports || {};
+d.region_ports[region] = parseInt(port, 10);
+d.region_listen_host = host;
+fs.writeFileSync(p, JSON.stringify(d, null, 2)); fs.chmodSync(p, 0o600);
+' "$POOL_CONF" "$region" "$nextport" "${WG_TUNNEL_NET}.1"
+
+    # Restart the pool so the new per-region listener binds on the tunnel IP.
+    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        systemctl restart "$POOL_SERVICE" && info "Restarted $POOL_SERVICE (new region listener binding)."
+    fi
+
+    echo ""
+    success "Added gateway peer for region '${region}'."
+    echo -e "  ${BOLD}Give this gateway operator:${RESET}"
+    echo -e "    region key            : ${GREEN}${region}${RESET}"
+    echo -e "    central wg public key : ${GREEN}$(cat "$WG_DIR_CONF/server_public.key" 2>/dev/null)${RESET}"
+    echo -e "    central wg endpoint   : ${GREEN}$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo '<server-public-ip>'):${WG_LISTEN_PORT}${RESET}"
+    echo -e "    central tunnel IP     : ${GREEN}${WG_TUNNEL_NET}.1${RESET}"
+    echo -e "    this gateway tunnel IP: ${GREEN}${peer_ip}/32${RESET}"
+    echo -e "    central region port   : ${GREEN}${nextport}${RESET}  ${DIM}(hub_endpoint = ${WG_TUNNEL_NET}.1:${nextport})${RESET}"
+    echo ""
+    echo -e "  ${DIM}Also declare region '${region}' in admin → Regions so it shows on the connect grid.${RESET}"
+}
+
+pool_wg_list() {
+    echo -e "\n${BOLD}Multi-region — gateways & tunnel${RESET}"
+    echo -e "${DIM}────────────────────────────────────────────────${RESET}"
+    if [[ ! -f "$WG_CONF" ]]; then
+        echo -e "  ${DIM}WireGuard server not set up (run option 1).${RESET}"
+        return 0
+    fi
+    echo -e "  ${BOLD}Region → internal port:${RESET}"
+    node -e '
+const fs = require("fs");
+let d = {}; try { d = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch (e) {}
+const rp = d.region_ports || {};
+const keys = Object.keys(rp);
+if (!keys.length) { console.log("    (none yet)"); }
+else keys.forEach(k => console.log("    " + k + "  ->  " + rp[k]));
+console.log("  listen host: " + (d.region_listen_host || "(unset)"));
+' "$POOL_CONF" 2>/dev/null || echo "    (could not read $POOL_CONF)"
+    echo ""
+    if wg show "$WG_IFACE" &>/dev/null; then
+        echo -e "  ${BOLD}Live tunnel (${WG_IFACE}):${RESET}"
+        wg show "$WG_IFACE" 2>/dev/null | sed 's/^/    /'
+    else
+        echo -e "  ${DIM}Tunnel ${WG_IFACE} not up.${RESET}"
+    fi
+}
+
+pool_wireguard_menu() {
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  Multi-region — WireGuard + gateways${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${DIM}  Central accepts thin regional gateways over a wg tunnel.${RESET}"
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Setup WireGuard server   ${DIM}(install, keys, tunnel, firewall)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Add a gateway peer       ${DIM}(assign tunnel IP + region port)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) List gateways / regions"
+        echo ""
+        echo -e "  ${RED}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select: ${RESET}"
+        read -r wgc
+        case "${wgc,,}" in
+            "")       continue ;;
+            1)        pool_wg_setup_server || true; _pool_pause ;;
+            2)        pool_wg_add_peer || true; _pool_pause ;;
+            3)        pool_wg_list || true; _pool_pause ;;
+            0|q|exit) break ;;
+            *)        warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -1694,6 +1903,7 @@ show_menu() {
     echo -e "${DIM}  ─── Administration ───────────────────────────────${RESET}"
     echo -e "  ${GREEN}8${RESET}) Pool status           ${DIM}(service, port, DB, recent logs)${RESET}"
     echo -e "  ${GREEN}9${RESET}) Deploy new code       ${DIM}(refresh js/html/media from checkout + restart)${RESET}"
+    echo -e "  ${GREEN}W${RESET}) Multi-region          ${DIM}(WireGuard server + add regional gateways)${RESET}"
     echo -e "  ${GREEN}B${RESET}) Backup pool           ${DIM}(DB + config → /opt/grin/backups/)${RESET}"
     echo -e "  ${GREEN}C${RESET}) Cron tasks            ${DIM}(backup schedule, VACUUM)${RESET}"
     echo -e "  ${GREEN}L${RESET}) View logs             ${DIM}(tail -50 | less)${RESET}"
@@ -1726,6 +1936,7 @@ pool_singlebox_loop() {
             7)     pool_setup_admin || true ;;
             8)     pool_show_status || true ;;
             9)     pool_deploy_code || true ;;
+            w)     pool_wireguard_menu || true ;;
             b)     pool_backup || true ;;
             c)     pool_cron_schedules || true ;;
             l)     pool_view_logs || true ;;
@@ -1741,7 +1952,7 @@ pool_singlebox_loop() {
         # 0) Back. Without this, picking 0 inside a submenu would trigger a second,
         # redundant "Press Enter" here even though nothing new was shown.
         case "${choice,,}" in
-            l|s|5|6|c) ;;
+            l|s|5|6|c|w) ;;
             *) echo ""; echo "Press Enter to continue..."; read -r ;;
         esac
     done
@@ -1771,13 +1982,16 @@ _pool_cleanup_mark() {
 
 pool_cleanup() {
     clear
-    # Satellite paths (SAT_*) live in the satellite lib — sourcing here is safe
-    # and idempotent (constants + sat_* function definitions only).
+    # Edge paths (SAT_*/GW_*) live in their libs — sourcing here is safe and
+    # idempotent (constants + function definitions only).
     # shellcheck source=lib/07_lib_satellite.sh
     source "$SCRIPT_DIR/lib/07_lib_satellite.sh"
+    # shellcheck source=lib/07_lib_gateway.sh
+    source "$SCRIPT_DIR/lib/07_lib_gateway.sh"
 
     local pool_unit="/etc/systemd/system/${POOL_SERVICE}.service"
     local sat_unit="/etc/systemd/system/${SAT_SERVICE}.service"
+    local gw_unit="/etc/systemd/system/${GW_SERVICE}.service"
     local cron_backup="/etc/cron.d/${POOL_SERVICE}-backup"
     local cron_vacuum="/etc/cron.d/${POOL_SERVICE}-vacuum"
     local backup_wrapper="/usr/local/bin/grin-pool-backup-mainnet"
@@ -1798,12 +2012,15 @@ pool_cleanup() {
     echo -e "  ${BOLD}Will be removed${RESET} ${DIM}(if you confirm the group):${RESET}"
     echo -e "    Pool service unit           $(_pool_cleanup_mark "$pool_unit")"
     echo -e "    Satellite service unit      $(_pool_cleanup_mark "$sat_unit")"
+    echo -e "    Gateway service unit        $(_pool_cleanup_mark "$gw_unit")"
     echo -e "    Pool app + DB               $(_pool_cleanup_mark "$POOL_APP_DIR")"
     echo -e "    Satellite app + staging DB  $(_pool_cleanup_mark "$SAT_APP_DIR")"
+    echo -e "    Gateway app + wg tunnel     $(_pool_cleanup_mark "$GW_DIR")"
     echo -e "    Web root + nginx vhost      $(_pool_cleanup_mark "$POOL_NGINX_CONF")"
     echo -e "    Cron / logrotate / wrapper  $(_pool_cleanup_mark "$cron_backup")"
     echo -e "    Pool config (JSON)          $(_pool_cleanup_mark "$POOL_CONF")"
     echo -e "    Satellite config (JSON)     $(_pool_cleanup_mark "$SAT_CONF")"
+    echo -e "    Gateway config (JSON)       $(_pool_cleanup_mark "$GW_CONF")"
     echo -e "    Service logs                $(_pool_cleanup_mark "$POOL_LOG")"
     echo -e "    Fail2ban jail + filter      $(_pool_cleanup_mark "$f2b_jail")"
     echo ""
@@ -1819,17 +2036,17 @@ pool_cleanup() {
 
     local a svc
     # 1) systemd services + unit files
-    echo -ne "${BOLD}1)${RESET} Stop + remove services ($POOL_SERVICE, $SAT_SERVICE)? [Y/n]: "
+    echo -ne "${BOLD}1)${RESET} Stop + remove services ($POOL_SERVICE, $SAT_SERVICE, $GW_SERVICE)? [Y/n]: "
     read -r a || true
     if [[ "${a,,}" != "n" ]]; then
-        for svc in "$POOL_SERVICE" "$SAT_SERVICE"; do
+        for svc in "$POOL_SERVICE" "$SAT_SERVICE" "$GW_SERVICE"; do
             systemctl stop "$svc" 2>/dev/null || true
             systemctl disable "$svc" 2>/dev/null || true
         done
-        rm -f "$pool_unit" "$sat_unit"
+        rm -f "$pool_unit" "$sat_unit" "$gw_unit"
         systemctl daemon-reload 2>/dev/null || true
         success "Services stopped, disabled, units removed."
-        log "Cleanup: removed $POOL_SERVICE + $SAT_SERVICE services"
+        log "Cleanup: removed $POOL_SERVICE + $SAT_SERVICE + $GW_SERVICE services"
     fi
     echo ""
 
@@ -1858,6 +2075,23 @@ pool_cleanup() {
             rm -rf "${SAT_APP_DIR:?}"
             success "Satellite app + staging DB removed."
             log "Cleanup: removed $SAT_APP_DIR"
+        fi
+        echo ""
+    fi
+
+    # 3b) Gateway app dir (keys + haproxy cfg) + WireGuard tunnel. The wg config
+    #     (/etc/wireguard/wg-grinpool.conf) is the edge peer on a gateway box OR the
+    #     server on the central box — same path; bring it down and remove on either.
+    if [[ -d "$GW_DIR" || -f "$GW_WG_CONF" ]]; then
+        echo -ne "${BOLD}3b)${RESET} Remove gateway app + WireGuard tunnel ($GW_DIR, $GW_WG_IFACE)? [Y/n]: "
+        read -r a || true
+        if [[ "${a,,}" != "n" ]]; then
+            wg-quick down "$GW_WG_IFACE" 2>/dev/null || true
+            systemctl disable "wg-quick@${GW_WG_IFACE}" 2>/dev/null || true
+            rm -f "$GW_WG_CONF"
+            rm -rf "${GW_DIR:?}" "/opt/grin/conf/wg"
+            success "Gateway app + WireGuard tunnel removed."
+            log "Cleanup: removed $GW_DIR + $GW_WG_CONF + wg server keys"
         fi
         echo ""
     fi
@@ -1898,13 +2132,13 @@ pool_cleanup() {
     fi
     echo ""
 
-    # 6) JSON configs (pool + satellite + pre-rename legacy grin_pool.json)
-    echo -ne "${BOLD}6)${RESET} Remove configs ($POOL_CONF, $SAT_CONF)? [Y/n]: "
+    # 6) JSON configs (pool + satellite + gateway + pre-rename legacy grin_pool.json)
+    echo -ne "${BOLD}6)${RESET} Remove configs ($POOL_CONF, $SAT_CONF, $GW_CONF)? [Y/n]: "
     read -r a || true
     if [[ "${a,,}" != "n" ]]; then
-        rm -f "$POOL_CONF" "$SAT_CONF" "/opt/grin/conf/grin_pool.json"
+        rm -f "$POOL_CONF" "$SAT_CONF" "$GW_CONF" "/opt/grin/conf/grin_pool.json"
         success "Configs removed."
-        log "Cleanup: removed $POOL_CONF + $SAT_CONF (+ legacy grin_pool.json)"
+        log "Cleanup: removed $POOL_CONF + $SAT_CONF + $GW_CONF (+ legacy grin_pool.json)"
     fi
     echo ""
 
@@ -1912,7 +2146,7 @@ pool_cleanup() {
     echo -ne "${BOLD}7)${RESET} Remove service logs? [Y/n]: "
     read -r a || true
     if [[ "${a,,}" != "n" ]]; then
-        rm -f "$POOL_LOG" "$POOL_LOG".* "$SAT_LOG" "$SAT_LOG".* 2>/dev/null || true
+        rm -f "$POOL_LOG" "$POOL_LOG".* "$SAT_LOG" "$SAT_LOG".* "$GW_LOG" "$GW_LOG".* 2>/dev/null || true
         rm -f "/var/log/nginx/${POOL_SERVICE}-access.log"* "/var/log/nginx/${POOL_SERVICE}-error.log"* 2>/dev/null || true
         success "Service logs removed."
         log "Cleanup: removed pool/satellite/nginx logs"
@@ -1972,32 +2206,62 @@ pool_satellite_installed() {
     systemctl list-unit-files 2>/dev/null | grep -q "^grin-satellite\.service" && return 0
     return 1
 }
+pool_gateway_installed() {
+    [[ -f "/opt/grin/conf/grin_gateway.json" ]] && return 0
+    systemctl list-unit-files 2>/dev/null | grep -q "^grin-gateway\.service" && return 0
+    return 1
+}
 
 # Returns 0 if the chosen mode is safe to install on this box; 1 (with guidance)
-# if it would collide with an existing install of the other kind.
+# if it would collide with an existing install of another kind. The brain
+# (singlebox/hub) and any edge (satellite/gateway) collide on stratum :3333; the
+# two edge roles collide with each other on :3333 too — one mining role per box.
 pool_mode_conflict_check() {
     case "$1" in
         singlebox|hub)
-            pool_satellite_installed || return 0
-            echo ""
-            warn "A Satellite install was detected on this server:"
-            echo -e "    config:  /opt/grin/conf/grin_satellite.json"
-            echo -e "    service: grin-satellite"
-            echo -e "  ${DIM}Single-server / Central Hub bind the same stratum (3333) and node${RESET}"
-            echo -e "  ${DIM}upstream (3334) ports the Satellite uses — both on one box collides.${RESET}"
-            echo -e "  ${BOLD}Clean up the Satellite first${RESET} (mode menu → Z) Cleanup), then re-run."
-            return 1
+            if pool_satellite_installed; then
+                echo ""
+                warn "A Satellite install was detected on this server:"
+                echo -e "    config:  /opt/grin/conf/grin_satellite.json"
+                echo -e "    service: grin-satellite"
+                echo -e "  ${DIM}Single-server / Central Hub bind stratum :3333, which the Satellite uses.${RESET}"
+                echo -e "  ${BOLD}Clean up the Satellite first${RESET} (mode menu → Z) Cleanup), then re-run."
+                return 1
+            fi
+            if pool_gateway_installed; then
+                echo ""
+                warn "A Regional Gateway install was detected on this server:"
+                echo -e "    config:  /opt/grin/conf/grin_gateway.json"
+                echo -e "    service: grin-gateway"
+                echo -e "  ${DIM}Single-server / Central Hub bind stratum :3333, which the Gateway uses.${RESET}"
+                echo -e "  ${BOLD}Clean up the Gateway first${RESET} (mode menu → Z) Cleanup), then re-run."
+                return 1
+            fi
             ;;
-        satellite)
-            pool_brain_installed || return 0
-            echo ""
-            warn "An existing pool / Central Hub install was detected on this server:"
-            echo -e "    config:  $POOL_CONF"
-            echo -e "    service: $POOL_SERVICE"
-            echo -e "  ${DIM}A Satellite binds stratum 3333 + node upstream 3334, which this install${RESET}"
-            echo -e "  ${DIM}already uses (plus Central API 8080) — both on one box collides.${RESET}"
-            echo -e "  ${BOLD}Clean up the public pool config first${RESET} (mode menu → Z) Cleanup), then re-run."
-            return 1
+        satellite|gateway)
+            if pool_brain_installed; then
+                echo ""
+                warn "An existing pool / Central Hub install was detected on this server:"
+                echo -e "    config:  $POOL_CONF"
+                echo -e "    service: $POOL_SERVICE"
+                echo -e "  ${DIM}An edge role binds stratum :3333, which this install already uses${RESET}"
+                echo -e "  ${DIM}(plus node upstream 3334 / Central API 8080) — both on one box collides.${RESET}"
+                echo -e "  ${BOLD}Clean up the public pool config first${RESET} (mode menu → Z) Cleanup), then re-run."
+                return 1
+            fi
+            # The two edge roles also collide with each other (both bind :3333).
+            if [[ "$1" == "gateway" ]] && pool_satellite_installed; then
+                echo ""
+                warn "A Satellite install already occupies this box (both bind :3333)."
+                echo -e "  ${BOLD}Clean it up first${RESET} (mode menu → Z) Cleanup), then re-run."
+                return 1
+            fi
+            if [[ "$1" == "satellite" ]] && pool_gateway_installed; then
+                echo ""
+                warn "A Regional Gateway already occupies this box (both bind :3333)."
+                echo -e "  ${BOLD}Clean it up first${RESET} (mode menu → Z) Cleanup), then re-run."
+                return 1
+            fi
             ;;
     esac
     return 0
@@ -2006,7 +2270,7 @@ pool_mode_conflict_check() {
 pool_select_mode() {
     local arg="${1:-}"
     case "$arg" in
-        singlebox|hub|satellite)
+        singlebox|hub|gateway|satellite)
             POOL_MODE="$arg"
             pool_mode_conflict_check "$arg" || POOL_MODE=""
             return
@@ -2025,14 +2289,14 @@ pool_select_mode() {
         echo -e "                     ${DIM}Serves local miners as region \"main\"; accepts${RESET}"
         echo -e "                     ${DIM}satellites from other zones later — no rebuild.${RESET}"
         echo ""
-        echo -e "  ${GREEN}2${RESET}) Satellite agent  ${DIM}An extra region on ANOTHER box: node + stratum${RESET}"
-        echo -e "                     ${DIM}proxy that reports to your pool server.${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Regional gateway ${DIM}A thin stratum forwarder on ANOTHER box: no node,${RESET}"
+        echo -e "                     ${DIM}no wallet — tunnels miners to your pool server (Model C).${RESET}"
         echo ""
-        echo -e "  ${RED}Z${RESET}) Cleanup public pool  ${DIM}(remove pool/hub/satellite infra · keeps node + wallet + backups)${RESET}"
+        echo -e "  ${RED}Z${RESET}) Cleanup public pool  ${DIM}(remove pool/hub/gateway infra · keeps node + wallet + backups)${RESET}"
         echo -e "  ${RED}0${RESET}) Back to mining hub"
         echo ""
-        echo -e "  ${DIM}Run a Satellite on a DIFFERENT box from the pool server (they share${RESET}"
-        echo -e "  ${DIM}ports 3333/3334/8080). Advanced — a mining-less central hub:${RESET}"
+        echo -e "  ${DIM}Run a Gateway on a DIFFERENT box from the pool server (they share${RESET}"
+        echo -e "  ${DIM}port 3333). Advanced — a mining-less central hub:${RESET}"
         echo -e "  ${DIM}\`bash 07_grin_mining_public_pool.sh hub\`.${RESET}"
         echo ""
         echo -ne "${BOLD}Select: ${RESET}"
@@ -2041,7 +2305,7 @@ pool_select_mode() {
         local chosen=""
         case "$m" in
             1) chosen="singlebox" ;;
-            2) chosen="satellite" ;;
+            2) chosen="gateway" ;;
             z|Z) pool_cleanup || true
                  echo ""
                  echo "Press Enter to return to the menu..."
@@ -2078,7 +2342,14 @@ main() {
                 source "$SCRIPT_DIR/lib/07_lib_hub.sh"
                 pool_hub_loop
                 ;;
+            gateway)
+                # shellcheck source=lib/07_lib_gateway.sh
+                source "$SCRIPT_DIR/lib/07_lib_gateway.sh"
+                pool_gateway_loop
+                ;;
             satellite)
+                # Legacy edge role — kept reachable by arg only during the Model C
+                # transition (the menu now offers Gateway). Removed in the Q2-gated cleanup.
                 # shellcheck source=lib/07_lib_satellite.sh
                 source "$SCRIPT_DIR/lib/07_lib_satellite.sh"
                 pool_satellite_loop

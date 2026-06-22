@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SEO · Settings | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+</head>
+<body>
+  <main>
+  <div class="settings-container">
+    <div class="page-head">
+      <h1>SEO</h1>
+      <p class="page-sub">Meta tags, sitemap and per-page SEO</p>
+    </div>
+
+    <div id="seo" class="settings-content active">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Meta Tags & SEO</h3>
+          <div class="form-group">
+            <label for="meta_description">Meta Description</label>
+            <textarea id="meta_description" name="meta_description" placeholder="Brief description for search engines..." rows="2"></textarea>
+            <div class="helper-text">Recommended: 155-160 characters</div>
+          </div>
+
+          <div class="form-group">
+            <label for="meta_keywords">Meta Keywords</label>
+            <input type="text" id="meta_keywords" name="meta_keywords" placeholder="grin mining, pool, cryptocurrency">
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="title_template">Title Template</label>
+              <input type="text" id="title_template" name="title_template" placeholder="%page% — %pool_name%">
+              <div class="helper-text">Tokens: <code>%page%</code>, <code>%pool_name%</code></div>
+            </div>
+            <div class="form-group">
+              <label for="site_url">Canonical Site URL</label>
+              <input type="url" id="site_url" name="site_url" placeholder="https://your-pool.com">
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Per-Page Overrides</h3>
+          <div class="helper-text" style="margin-bottom: 1rem;">
+            Override the title / description for individual pages. Page keys match the
+            <code>data-page</code> attribute (e.g. <code>home</code>, <code>miners-stats</code>, <code>account-settings</code>).
+          </div>
+          <input type="hidden" id="page_seo" name="page_seo">
+          <div id="page-seo-list"></div>
+          <div class="list-item-input" style="margin-top: 1rem;">
+            <input type="text" id="page-seo-key" class="settings-skip" placeholder="page key (e.g. miners-stats)">
+            <button type="button" class="btn btn-secondary" onclick="addPageSeoRow()">Add Page</button>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Open Graph (Social Sharing)</h3>
+          <div class="form-group">
+            <label for="og_title">OG Title</label>
+            <input type="text" id="og_title" name="og_title" placeholder="GRINIUM Mining Pool">
+          </div>
+
+          <div class="form-group">
+            <label for="og_description">OG Description</label>
+            <textarea id="og_description" name="og_description" placeholder="Join our Grin mining pool..." rows="3"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>OG Image</label>
+            <div class="file-upload" onclick="document.getElementById('og-input').click()">
+              <input type="file" id="og-input" accept="image/*" onchange="uploadAsset('og_image')">
+              <p>Click to upload OG image (1200x630 recommended)</p>
+              <div class="current-asset" id="og_image-current"></div>
+            </div>
+            <img id="og_image-preview" class="file-preview" style="display: none;">
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="og_locale">OG Locale</label>
+              <input type="text" id="og_locale" name="og_locale" placeholder="en_US">
+            </div>
+            <div class="form-group">
+              <label for="theme_color">Browser Theme Color</label>
+              <div class="color-input-group">
+                <input type="color" id="theme_color" name="theme_color" value="#667eea">
+                <span class="color-preview" id="theme_color-preview">#667eea</span>
+              </div>
+              <div class="helper-text">Mobile browser chrome colour</div>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="twitter_handle">Twitter Handle</label>
+              <input type="text" id="twitter_handle" name="twitter_handle" placeholder="@YourPool">
+            </div>
+            <div class="form-group">
+              <label for="twitter_card_type">Twitter Card Type</label>
+              <select id="twitter_card_type" name="twitter_card_type">
+                <option value="summary_large_image">Summary (large image)</option>
+                <option value="summary">Summary</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Google Analytics (GA4)</h3>
+          <div class="form-group" style="max-width:420px;">
+            <label for="seo_ga_tracking_id">GA4 Measurement ID</label>
+            <input type="text" id="seo_ga_tracking_id" name="seo_ga_tracking_id" class="settings-skip" placeholder="G-XXXXXXXXXX">
+            <div class="helper-text">Format: <code>G-XXXXXXXXXX</code>. Saving here sets the site-wide
+              Google Analytics tag — it shares one source of truth with the <strong>Analytics</strong>
+              tab (no duplicate tag). Leave blank to turn GA off. Plausible / Umami / Matomo stay on
+              the Analytics tab.</div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Indexing & Structured Data</h3>
+          <div class="form-row">
+            <div class="checkbox-group">
+              <input type="checkbox" id="sitemap_enabled" name="sitemap_enabled">
+              <label for="sitemap_enabled">Enable sitemap.xml</label>
+            </div>
+            <div class="checkbox-group">
+              <input type="checkbox" id="robots_noindex" name="robots_noindex">
+              <label for="robots_noindex">Prevent indexing (noindex)</label>
+            </div>
+          </div>
+          <div class="checkbox-group" style="margin-top: 1rem;">
+            <input type="checkbox" id="structured_data_enabled" name="structured_data_enabled">
+            <label for="structured_data_enabled">Emit JSON-LD Organization structured data</label>
+          </div>
+          <div class="helper-text" style="margin-top: 0.75rem;">
+            <code>robots.txt</code> and <code>sitemap.xml</code> are generated automatically from the
+            toggles above — search engines may index the site <strong>by default</strong>. Preview:
+            <a href="/robots.txt" target="_blank">/robots.txt</a> ·
+            <a href="/sitemap.xml" target="_blank">/sitemap.xml</a>.
+            Tick "Prevent indexing" to emit <code>Disallow: /</code> and suppress the sitemap.
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('seo')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('seo')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ANALYTICS TAB -->
+  </div>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/stepup.js"></script>
+  <script src="/admin/admin-shell.js"></script>
+  <script>window.SETTINGS_SECTION = "seo";</script>
+  <script src="/admin/settings-common.js"></script>
+</body>
+</html>

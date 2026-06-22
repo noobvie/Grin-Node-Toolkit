@@ -5,16 +5,58 @@ class BlockManager {
     this.config = config;
     this.db = getDb();
     this.lastBlockHeight = 0;
+    this.nodeApi = null; // optional GrinNodeAPI for capturing per-block network difficulty
+  }
+
+  // Wire a GrinNodeAPI so creditBlock can record the block's network difficulty. Optional —
+  // without it, network_difficulty is left NULL and that block is skipped by the luck calc.
+  setNodeApi(nodeApi) {
+    this.nodeApi = nodeApi;
+  }
+
+  // Per-block C32 network difficulty = total_difficulty[h] − total_difficulty[h-1]. Best-effort
+  // (two foreign get_header calls); returns null if the node is unreachable or h-1 is unavailable.
+  async _fetchNetworkDifficulty(height) {
+    if (!this.nodeApi || !height) return null;
+    try {
+      const [h, hPrev] = await Promise.all([
+        this.nodeApi.getHeader(height),
+        this.nodeApi.getHeader(height - 1)
+      ]);
+      const d = Number(h.total_difficulty) - Number(hPrev.total_difficulty);
+      return Number.isFinite(d) && d > 0 ? d : null;
+    } catch (e) {
+      console.warn(`[BlockManager] network difficulty fetch failed for ${height}: ${e.message}`);
+      return null;
+    }
+  }
+
+  // Accumulated pool share-difficulty for the round that found this block — shares since the
+  // previous block's found_at. Captured now so luck stays exact after raw shares are pruned.
+  _roundShareDiff(prevFoundAt) {
+    try {
+      const row = this.db.prepare(
+        'SELECT COALESCE(SUM(difficulty), 0) AS d FROM shares WHERE created_at > ?'
+      ).get(prevFoundAt || 0);
+      return row && Number.isFinite(row.d) ? row.d : null;
+    } catch (e) {
+      return null;
+    }
   }
 
   async creditBlock(height, hash, nonce, reward, minerAddress) {
     try {
+      // Capture round/network stats BEFORE inserting (round = shares since the previous block).
+      const prev = this.getLastBlock();
+      const roundShares = this._roundShareDiff(prev ? prev.found_at : 0);
+      const networkDiff = await this._fetchNetworkDifficulty(height);
+
       const stmt = this.db.prepare(`
-        INSERT INTO blocks (height, hash, nonce, reward, status, found_by, found_at)
-        VALUES (?, ?, ?, ?, 'immature', ?, unixepoch())
+        INSERT INTO blocks (height, hash, nonce, reward, status, found_by, found_at, network_difficulty, round_shares)
+        VALUES (?, ?, ?, ?, 'immature', ?, unixepoch(), ?, ?)
       `);
 
-      const result = stmt.run(height, hash, nonce, reward, minerAddress);
+      const result = stmt.run(height, hash, nonce, reward, minerAddress, networkDiff, roundShares);
 
       console.log(
         `[${new Date().toISOString()}] Block credited: height=${height}, hash=${hash.substring(0, 16)}..., reward=${reward} GRIN, miner=${minerAddress}`

@@ -44,20 +44,7 @@
 </head>
 <body>
 
-    <header>
-        <div class="brand"><span class="dot" aria-hidden="true"></span><span data-brand="pool_name">GRINIUM</span></div>
-        <nav class="header-nav" aria-label="Main">
-            <a href="index.html" class="nav-link">Dashboard</a>
-            <a href="miners-stats.html" class="nav-link">Miners</a>
-            <a href="fortune-board.html" class="nav-link">Fortune Board</a>
-            <a href="donate.html" class="nav-link active">Donate</a>
-            <a href="index.html#info" class="nav-link">Info</a>
-        </nav>
-        <div class="nav-right">
-            <div class="theme-switcher"></div>
-            <a class="btn primary sm" href="index.html#connect">Start Mining</a>
-        </div>
-    </header>
+    <!-- header injected by /js/public-shell.js -->
 
     <div class="container">
         <h2 class="page-title">💚 Support the Prize Pool</h2>
@@ -107,7 +94,7 @@
         </div>
     </div>
 
-    <footer><span data-brand="pool_name">GRINIUM</span> — Thank you for supporting small miners 💚</footer>
+    <!-- footer injected by /js/public-shell.js -->
 
     <script>
         function copyAddress() {
@@ -129,6 +116,7 @@
             setTimeout(function () { btn.textContent = old; }, 1500);
         }
     </script>
+    <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>
     <script src="/js/branding.js"></script>
 </body>

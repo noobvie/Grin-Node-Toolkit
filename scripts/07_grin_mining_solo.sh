@@ -498,7 +498,7 @@ _stratum_bind_line() {
     if [[ "$addr" == "0.0.0.0:$port" ]]; then
         echo -e "${GREEN}PUBLIC${RESET}  ${DIM}(0.0.0.0:$port)${RESET}"
     elif [[ "$addr" == "127.0.0.1:$port" ]]; then
-        echo -e "${YELLOW}LOCAL${RESET}   ${DIM}(127.0.0.1:$port)${RESET}"
+        echo -e "${RED}NOT PUBLIC${RESET} ${DIM}(127.0.0.1:$port)${RESET}"
     else
         echo -e "${DIM}${addr:-not set}${RESET}"
     fi
@@ -2641,7 +2641,7 @@ stratum_menu() {
         show_compact_status
         echo -e "  ${GREEN}1${RESET}) Setup       ${DIM}(enable stratum in grin-server.toml · wallet URL)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Configure   ${DIM}(enable / bind / wallet — single field)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Publish     ${DIM}(open 0.0.0.0:<port> to miners + firewall)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Publish     ${DIM}(allow miners to access this pool, change stratum to 0.0.0.0 + open firewall)${RESET}"
         echo -e "  ${RED}4${RESET}) Restrict    ${DIM}(revert to 127.0.0.1)${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""

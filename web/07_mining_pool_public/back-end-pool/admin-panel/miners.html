@@ -6,36 +6,8 @@
   <title>Miners | Grin Pool ツ</title>
   <link rel="stylesheet" href="/css/pool.css">
   <link rel="stylesheet" href="/admin/styles.css">
-  
 </head>
 <body>
-
-<header>
-  <div class="container">
-    <div class="header-inner">
-      <div class="site-title"><a href="/">Grin Pool <span>ツ</span></a></div>
-      <nav class="nav-links">
-        <a href="/">Home</a>
-        <a href="/admin/" id="nav-dashboard">Dashboard</a>
-        <a href="/admin/" id="nav-admin">Admin</a>
-        <a href="/admin/miners.html" class="active">Miners</a>
-        <a href="/login.html" id="nav-login" style="display:none">Login</a>
-        <span id="nav-user" style="display:none"></span>
-      </nav>
-      <div class="theme-switcher">
-        <button class="theme-btn" data-theme="matrix">Matrix</button>
-        <button class="theme-btn" data-theme="dark">Dark</button>
-        <button class="theme-btn" data-theme="light">Light</button>
-        <button class="theme-btn" data-theme="naruto">Naruto</button>
-        <button class="theme-btn" data-theme="japan">Japan ✿</button>
-      </div>
-    </div>
-  </div>
-</header>
-
-<div class="testnet-banner" id="testnet-banner" style="display:none">
-  ⚠ TESTNET — These coins have no real value
-</div>
 
 <main>
   <div class="container">
@@ -46,10 +18,13 @@
       </h2>
 
       <div style="display:flex;gap:.6rem;align-items:center;margin-bottom:.8rem;flex-wrap:wrap;">
-        <input type="text" id="search-input" placeholder="Filter by worker or username…"
-               style="max-width:280px;" oninput="filterMiners()">
+        <input type="text" id="search-input" placeholder="Filter by address…"
+               style="max-width:320px;" oninput="filterMiners()">
         <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;margin-bottom:0;">
           <input type="checkbox" id="online-only" onchange="filterMiners()"> Online only
+        </label>
+        <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;margin-bottom:0;">
+          <input type="checkbox" id="banned-only" onchange="filterMiners()"> Banned only
         </label>
       </div>
 
@@ -58,141 +33,145 @@
           <table>
             <thead>
               <tr>
-                <th>Worker</th>
-                <th>User</th>
+                <th>Address</th>
                 <th>Online</th>
-                <th>Hashrate (1h)</th>
-                <th>Hashrate (24h)</th>
-                <th>Last Seen</th>
-                <th>First Seen</th>
+                <th>Balance ツ</th>
+                <th>Locked ツ</th>
+                <th>Shares</th>
+                <th>Paid ツ</th>
+                <th>Last Share</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody id="miners-tbody">
-              <tr class="loading-row"><td colspan="7"><span class="spinner"></span>Loading…</td></tr>
+              <tr class="loading-row"><td colspan="8"><span class="spinner"></span>Loading…</td></tr>
             </tbody>
           </table>
         </div>
       </div>
+      <p class="error-msg" id="miner-msg" style="display:none;margin-top:.6rem;"></p>
     </section>
   </div>
 </main>
 
-<footer>
-  <div class="container">
-    <p>Grin Pool ツ — Admin Panel</p>
-  </div>
-</footer>
-
+<script src="/js/auth.js"></script>
 <script src="/js/api.js"></script>
-<script src="/js/theme.js"></script>
+<script src="/admin/admin-shell.js"></script>
+<script src="/js/stepup.js"></script>
 <script>
-// ── Admin auth check ───────────────────────────────────────────────────────
 let _allMiners = [];
 
-(function () {
-  if (!API.isLoggedIn()) { window.location.href = '/login.html'; return; }
-  try {
-    const payload = API.decodePayload();
-    if (!payload || !payload.is_admin) { window.location.href = '/login.html'; return; }
-    document.getElementById('nav-user').style.display = '';
-    document.getElementById('nav-user').innerHTML =
-      `<span class="nav-username">${payload.sub}</span> <a href="#" onclick="API.clearTokens();window.location='/login.html'">Logout</a>`;
-  } catch (e) { window.location.href = '/login.html'; }
-
-  fetch('/api/pool/stats').then(r => r.json()).then(d => {
-    if (d.network === 'testnet') {
-      document.getElementById('testnet-banner').style.display = '';
-      document.title = '[TESTNET] ' + document.title;
-    }
-    const el = document.querySelector('.site-title a');
-    if (el && d.pool_name) el.childNodes[0].textContent = d.pool_name + ' ';
-  }).catch(() => {});
-})();
+// Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
+// up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
+// stepup.js provides adminFetch() for the step-up-gated ban/unban actions.
+API.guardAdminPage();
 
 function escHtml(s) {
-  return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
-function fmtHashrate(gps) {
-  if (gps === null || gps === undefined) return '—';
-  if (gps >= 1000) return (gps / 1000).toFixed(2) + ' KG/s';
-  return gps.toFixed(4) + ' G/s';
-}
-function timeAgo(iso) {
-  if (!iso) return '—';
-  const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+function fmtGrin(v) { return (Number(v) || 0).toFixed(4); }
+function timeAgo(t) {
+  if (!t) return '—';
+  const diff = Math.floor(Date.now() / 1000 - t);
   if (diff < 60)    return diff + 's ago';
   if (diff < 3600)  return Math.floor(diff / 60) + 'm ago';
   if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
   return Math.floor(diff / 86400) + 'd ago';
 }
-function fmtDate(iso) {
-  return iso ? new Date(iso).toLocaleDateString() : '—';
+function shortAddr(a) {
+  a = String(a || '');
+  return a.length > 22 ? a.slice(0, 12) + '…' + a.slice(-7) : a;
 }
 
-// ── Load miners ─────────────────────────────────────────────────────────────
 async function loadMiners() {
   try {
-    const data = await API.get('/api/admin/miners');
-    _allMiners = data || [];
-    const online = _allMiners.filter(m => m.online).length;
+    const data = await API.get('/api/admin/miners?limit=500');
+    _allMiners = (data && data.miners) || [];
+    const online = _allMiners.filter(m => m.is_online).length;
+    const banned = _allMiners.filter(m => m.is_banned).length;
     document.getElementById('miner-summary').textContent =
-      `${_allMiners.length} total, ${online} online`;
-    renderMiners(_allMiners);
+      `${_allMiners.length} total · ${online} online · ${banned} banned`;
+    filterMiners();
   } catch (err) {
     document.getElementById('miners-tbody').innerHTML =
-      `<tr class="empty-row"><td colspan="7">Failed to load: ${escHtml(err.message)}</td></tr>`;
+      `<tr class="empty-row"><td colspan="8">Failed to load: ${escHtml(err.message)}</td></tr>`;
   }
 }
 
 function filterMiners() {
   const q          = document.getElementById('search-input').value.toLowerCase();
   const onlineOnly = document.getElementById('online-only').checked;
+  const bannedOnly = document.getElementById('banned-only').checked;
   let filtered = _allMiners;
-  if (onlineOnly) filtered = filtered.filter(m => m.online);
-  if (q) {
-    filtered = filtered.filter(m =>
-      (m.worker   || '').toLowerCase().includes(q) ||
-      (m.username || '').toLowerCase().includes(q)
-    );
-  }
+  if (onlineOnly) filtered = filtered.filter(m => m.is_online);
+  if (bannedOnly) filtered = filtered.filter(m => m.is_banned);
+  if (q) filtered = filtered.filter(m => (m.grin_address || '').toLowerCase().includes(q));
   renderMiners(filtered);
 }
 
 function renderMiners(miners) {
   const tbody = document.getElementById('miners-tbody');
   if (!miners.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No miners found.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No miners found.</td></tr>';
     return;
   }
+  const sorted = [...miners].sort((a, b) => (b.balance || 0) - (a.balance || 0));
+  tbody.innerHTML = sorted.map(m => {
+    const onlineBadge = m.is_online
+      ? '<span class="badge badge-ok">Online</span>'
+      : '<span class="badge badge-dim">Offline</span>';
+    const bannedBadge = m.is_banned
+      ? ` <span class="badge badge-error" title="${escHtml(m.ban_reason || '')}">Banned</span>` : '';
+    const action = m.is_banned
+      ? `<button class="btn btn-sm" onclick="unbanMiner('${escHtml(m.grin_address)}')">Unban</button>`
+      : `<button class="btn btn-sm btn-outline" onclick="banMiner('${escHtml(m.grin_address)}')">Ban</button>`;
+    return `<tr class="${m.is_banned ? '' : ''}">
+      <td><span class="mono" title="${escHtml(m.grin_address)}">${escHtml(shortAddr(m.grin_address))}</span>${bannedBadge}</td>
+      <td>${onlineBadge}</td>
+      <td class="mono">${fmtGrin(m.balance)}</td>
+      <td class="mono">${fmtGrin(m.balance_locked)}</td>
+      <td class="mono">${m.shares_count != null ? m.shares_count : 0}</td>
+      <td class="mono">${fmtGrin(m.total_paid)}</td>
+      <td>${timeAgo(m.last_share_at)}</td>
+      <td>${action}</td>
+    </tr>`;
+  }).join('');
+}
 
-  // Group by user for display — sort: online first, then by username
-  const sorted = [...miners].sort((a, b) => {
-    if (a.online !== b.online) return a.online ? -1 : 1;
-    return (a.username || '').localeCompare(b.username || '');
-  });
+function flash(msg, isErr) {
+  const el = document.getElementById('miner-msg');
+  el.textContent = msg;
+  el.className = isErr ? 'error-msg' : 'success-msg';
+  el.style.display = '';
+  setTimeout(() => { el.style.display = 'none'; }, 5000);
+}
 
-  tbody.innerHTML = sorted.map(m => `
-    <tr class="${m.online ? 'online-row' : ''}">
-      <td>
-        <span class="dot ${m.online ? 'dot-green' : 'dot-red'}"></span>
-        <span class="mono">${escHtml(m.worker)}</span>
-      </td>
-      <td>${escHtml(m.username || m.user_id || '—')}</td>
-      <td>
-        ${m.online
-          ? '<span class="badge badge-ok">Online</span>'
-          : '<span class="badge badge-dim">Offline</span>'}
-      </td>
-      <td class="mono">${fmtHashrate(m.hashrate_1h_gps)}</td>
-      <td class="mono">${fmtHashrate(m.hashrate_24h_gps)}</td>
-      <td>${timeAgo(m.last_seen)}</td>
-      <td>${fmtDate(m.first_seen || m.created_at)}</td>
-    </tr>
-  `).join('');
+async function banMiner(addr) {
+  const reason = prompt(`Ban ${addr}?\n\nThis blocks new stratum logins (balance is kept and can still be paid out).\n\nOptional reason:`);
+  if (reason === null) return;
+  try {
+    const res = await adminFetch('/api/admin/miners/' + encodeURIComponent(addr) + '/ban', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    flash('Miner banned.', false);
+    loadMiners();
+  } catch (err) { flash(err.message, true); }
+}
+
+async function unbanMiner(addr) {
+  if (!confirm(`Unban ${addr}?`)) return;
+  try {
+    const res = await adminFetch('/api/admin/miners/' + encodeURIComponent(addr) + '/unban', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    flash('Miner unbanned.', false);
+    loadMiners();
+  } catch (err) { flash(err.message, true); }
 }
 
 document.addEventListener('DOMContentLoaded', loadMiners);
-// Auto-refresh every 30s
 setInterval(loadMiners, 30000);
 </script>
 </body>

@@ -9,9 +9,8 @@ class AuthManager {
     this.config = config;
     this.db = getDb();
     this.jwtSecret = config.jwt_secret;
-    this.jwtExpiresIn = 3600;
-    this.refreshTokenExpiresIn = 86400 * 7;
-    this.sessionTimeout = 300;
+    this.jwtExpiresIn = 3600;           // access token: 1h — the effective session length
+    this.refreshTokenExpiresIn = 86400 * 7;  // refresh token: 7d (server-side; UI doesn't auto-refresh)
     // Account lockout (per-username): blunts online password guessing even when the
     // attacker rotates source IPs (which defeats the per-IP rate limiter alone).
     this.maxFailedAttempts = config.max_failed_login_attempts || 5;
@@ -73,6 +72,12 @@ class AuthManager {
       ).get(username);
 
       if (!user) {
+        // Equalize timing with the valid-username path. Without a bcrypt compare here the
+        // response for an unknown username returns measurably faster than for a known one,
+        // giving a remote attacker a username-enumeration oracle (the generic error message
+        // alone doesn't close this — the timing does). Run one throwaway compare against a
+        // cached dummy hash at the same cost so both paths take ~the same wall-clock time.
+        await this.comparePassword(password, await this._dummyHash());
         return {
           success: false,
           error: 'Invalid username or password'
@@ -439,6 +444,16 @@ class AuthManager {
       access_token: tokens.accessToken,
       refresh_token: tokens.refreshToken,
     };
+  }
+
+  // Cached dummy bcrypt hash (at the configured cost) used only to burn the same CPU time
+  // as a real comparePassword when the username doesn't exist — see login(). Computed once,
+  // lazily, against a random throwaway secret; it never matches any real password.
+  async _dummyHash() {
+    if (!this._dummyHashCache) {
+      this._dummyHashCache = await bcrypt.hash(crypto.randomBytes(16).toString('hex'), this.bcryptRounds);
+    }
+    return this._dummyHashCache;
   }
 
   async hashPassword(password) {

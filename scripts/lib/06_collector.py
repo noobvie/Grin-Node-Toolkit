@@ -1088,10 +1088,20 @@ def _update_peers():
     conn.commit()
     conn.close()
 
+    # IPs running on BOTH mainnet and testnet — computed on the REAL (unmasked)
+    # IP so two different hosts sharing a /24 aren't falsely merged once IPv4 is
+    # masked to x. Emitted as a per-peer `dual` flag the map uses for colouring.
+    _nets_by_ip = {}
+    for r in rows:
+        _nets_by_ip.setdefault(r[0], set()).add(r[1])
+    _dual_ips = {ip for ip, nets in _nets_by_ip.items()
+                 if "mainnet" in nets and "testnet" in nets}
+
     output_peers = [
         {
             "ip":           _mask_ip(r[0]),
             "network":      r[1],
+            "dual":         r[0] in _dual_ips,
             "port":         r[2],
             "user_agent":   r[3],
             "direction":    r[4],
@@ -1243,28 +1253,46 @@ def export_all_json():
             "recent":  [[r[0], r[1]] for r in recent],
         })
 
-    # ── node versions ─────────────────────────────────────────────────────────
+    # ── node versions (per network: mainnet / testnet / both) ─────────────────
     # Use all unique peers seen in the last PEER_HISTORY_DAYS for a broader sample.
     # This captures every peer we've connected to recently, not just one run's snapshot.
     version_cutoff = ts_now - PEER_HISTORY_DAYS * 86400
-    ver_rows = conn.execute(
-        "SELECT user_agent, COUNT(*) as cnt FROM known_peers "
-        "WHERE last_seen >= ? AND network='mainnet' "
-        "GROUP BY user_agent ORDER BY cnt DESC",
-        (version_cutoff,),
-    ).fetchall()
 
-    versions    = []
-    total_peers = 0
-    if ver_rows:
-        total_peers = sum(r[1] for r in ver_rows)
-        top   = ver_rows[:5]
-        other = sum(r[1] for r in ver_rows[5:])
-        versions = [{"label": r[0], "count": r[1]} for r in top]
+    def _ver_rows(net):
+        return conn.execute(
+            "SELECT user_agent, COUNT(*) AS cnt FROM known_peers "
+            "WHERE last_seen >= ? AND network=? "
+            "GROUP BY user_agent ORDER BY cnt DESC",
+            (version_cutoff, net),
+        ).fetchall()
+
+    def _ver_list(rows):
+        """rows: (user_agent, count) sorted desc → top-5 + 'Other' list, total."""
+        total = sum(r[1] for r in rows)
+        top   = rows[:5]
+        other = sum(r[1] for r in rows[5:])
+        vlist = [{"label": r[0], "count": r[1]} for r in top]
         if other > 0:
-            versions.append({"label": "Other", "count": other})
-    else:
-        # Fall back to latest peer_snapshots if known_peers has no data yet
+            vlist.append({"label": "Other", "count": other})
+        return vlist, total
+
+    mnet_rows = _ver_rows("mainnet")
+    tnet_rows = _ver_rows("testnet")
+
+    # "both": merge raw per-agent counts across networks, then re-rank.
+    both_counter = Counter()
+    for ua, cnt in mnet_rows:
+        both_counter[ua] += cnt
+    for ua, cnt in tnet_rows:
+        both_counter[ua] += cnt
+    both_rows = both_counter.most_common()
+
+    mnet_versions, mnet_total = _ver_list(mnet_rows)
+    tnet_versions, tnet_total = _ver_list(tnet_rows)
+    both_versions, both_total = _ver_list(both_rows)
+
+    # Fall back to latest peer_snapshots (mainnet-only) if known_peers has no data yet
+    if not mnet_rows and not tnet_rows:
         latest_snap_ts = conn.execute(
             "SELECT MAX(sampled_at) FROM peer_snapshots"
         ).fetchone()[0]
@@ -1273,18 +1301,21 @@ def export_all_json():
                 "SELECT user_agent, count FROM peer_snapshots WHERE sampled_at=? ORDER BY count DESC",
                 (latest_snap_ts,),
             ).fetchall()
-            total_peers = sum(r[1] for r in rows)
-            top   = rows[:5]
-            other = sum(r[1] for r in rows[5:])
-            versions = [{"label": r[0], "count": r[1]} for r in top]
-            if other > 0:
-                versions.append({"label": "Other", "count": other})
+            mnet_versions, mnet_total = _ver_list(rows)
+            both_versions, both_total = mnet_versions, mnet_total
 
-    # Always write versions.json so the page can load even with no snapshot data
+    # Always write versions.json so the page can load even with no snapshot data.
+    # Top-level keys stay mainnet for backward compatibility; the per-network
+    # breakdown lives under "networks" for the page's Mainnet/Testnet/Both toggle.
     _write_json("versions.json", {
         "updated":      ts_now,
-        "sampled_from": total_peers,
-        "versions":     versions,
+        "sampled_from": mnet_total,
+        "versions":     mnet_versions,
+        "networks": {
+            "mainnet": {"versions": mnet_versions, "sampled_from": mnet_total},
+            "testnet": {"versions": tnet_versions, "sampled_from": tnet_total},
+            "both":    {"versions": both_versions, "sampled_from": both_total},
+        },
     })
 
     # ── active peers history ──────────────────────────────────────────────────

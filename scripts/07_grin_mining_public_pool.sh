@@ -198,8 +198,9 @@ pool_ensure_defaults() {
         ["fail2ban_findtime"]="600"
         ["fail2ban_bantime"]="3600"
         # Admin panel access control: comma/space-separated IPs/CIDRs allowed to reach
-        # /admin and /api/admin at the nginx layer. Empty = LAN/VPN/localhost only (the
-        # admin panel is taken off the public internet). Add your office/VPN IP here.
+        # /admin and /api/admin at the nginx layer. Empty = OPEN to all (testing default —
+        # app-layer JWT + captcha + lockout + auto-ban + TOTP still apply). Set IPs/CIDRs
+        # here to harden once you have adoption, then re-run 4) Setup nginx.
         ["admin_allowlist"]=""
     )
     for k in "${!defaults[@]}"; do
@@ -668,62 +669,100 @@ pool_setup_nginx() {
     mkdir -p "$POOL_APP_DIR/custom_assets"
     chmod o+rx /opt/grin "$POOL_APP_DIR" "$POOL_APP_DIR/custom_assets" 2>/dev/null || true
 
+    # CMS media uploads (admin blog/pages editor) live here, served by nginx at /uploads/.
+    # The app also creates this at boot, but pre-create + o+rx so nginx can traverse/read it
+    # on a fresh install before the service has written its first file.
+    mkdir -p "$POOL_APP_DIR/uploads"
+    chmod o+rx "$POOL_APP_DIR/uploads" 2>/dev/null || true
+
+    # nginx_ensure_rate_limit_zones is a no-op while its conf file exists (so operators can
+    # hand-tune rates). That means a NEW zone added to the list below would never be written
+    # on an existing install — yet the vhost references it, so `nginx -t` would then fail with
+    # "zero size shared memory zone". Self-heal: if the managed conf is missing the captcha
+    # zone (added 2026-06 to stop the login captcha being starved by static-asset traffic),
+    # delete it so the full current list regenerates. Idempotent — once present, this is skipped.
+    # Also regenerate if it still carries any earlier-generation rate. All zone rates
+    # were multiplied ×20 in 2026-06 ("loosen now, tighten later" testing posture) so
+    # rate-limiting never breaks normal browsing/admin polling — the real controls are
+    # JWT + login captcha + per-account lockout + IP auto-ban, not these throttles.
+    # Triggers below catch both the original generation (auth 3r/m, static 60r/m) and
+    # the immediately-prior one (auth 10r/m, static 300r/m); regenerating rewrites the
+    # full current list (also self-heals an install missing the _captcha/_admin zones).
+    # A genuinely hand-tuned conf with other rates is left untouched.
+    local _zone_conf="/etc/nginx/conf.d/script07-${POOL_SERVICE}.conf"
+    if [[ -f "$_zone_conf" ]] \
+        && { ! grep -q "zone=${POOL_SERVICE}_captcha[: ]" "$_zone_conf" \
+             || ! grep -q "zone=${POOL_SERVICE}_admin[: ]" "$_zone_conf" \
+             || grep -qE "zone=${POOL_SERVICE}_auth:[^ ]* rate=(3|10)r/m" "$_zone_conf" \
+             || grep -qE "zone=${POOL_SERVICE}_static:[^ ]* rate=(60|300)r/m" "$_zone_conf"; }; then
+        rm -f "$_zone_conf"
+    fi
+
     if declare -F nginx_ensure_rate_limit_zones &>/dev/null; then
         nginx_ensure_rate_limit_zones "script07-${POOL_SERVICE}" \
-            "${POOL_SERVICE}_auth:3r/m"     \
-            "${POOL_SERVICE}_api:30r/m"     \
-            "${POOL_SERVICE}_static:60r/m"  \
-            "${POOL_SERVICE}_ingest:120r/m"
+            "${POOL_SERVICE}_auth:200r/m"     \
+            "${POOL_SERVICE}_api:600r/m"      \
+            "${POOL_SERVICE}_static:6000r/m"  \
+            "${POOL_SERVICE}_captcha:600r/m"  \
+            "${POOL_SERVICE}_admin:2400r/m"   \
+            "${POOL_SERVICE}_ingest:2400r/m"
     fi
 
-    # Build nginx allow/deny rules for the admin surfaces (/admin + /api/admin). This is
-    # network-layer defense in depth ON TOP OF the app's JWT + IP filter + step-up auth.
-    # admin_allowlist (comma/space-separated IPs/CIDRs) opens it to those networks; empty =
-    # localhost + RFC1918 only, i.e. the admin panel is OFF the public internet (reach it via
-    # LAN, WireGuard/VPN, or an SSH tunnel). Public login (/api/auth) stays reachable so the
-    # operator can authenticate — it's covered by captcha + lockout + auto-ban + fail2ban.
+    # ── Cloudflare proxy (orange cloud) support ───────────────────────────────
+    # If the hub sits behind Cloudflare's proxy, the origin sees Cloudflare edge IPs,
+    # which collapses every per-IP defence (rate-limit zones, fail2ban, app req.ip)
+    # onto one shared bucket → "Too many requests" for everyone. Restoring the real
+    # client IP from CF-Connecting-IP fixes all of them. Stored in $POOL_CONF so it
+    # sticks across re-runs and Guided setup.
+    local cf_proxy; cf_proxy=$(pool_read_conf "cloudflare_proxy" "")
+    if [[ -z "$cf_proxy" ]]; then
+        echo ""
+        echo -e "  ${DIM}Is this hub behind Cloudflare's proxy (orange cloud)? If yes, the toolkit${RESET}"
+        echo -e "  ${DIM}restores the real visitor IP so rate-limiting & fail2ban work per-user.${RESET}"
+        echo -ne "  Behind Cloudflare proxy? [y/N]: "
+        local _cf_ans; read -r _cf_ans
+        [[ "${_cf_ans,,}" == "y" ]] && cf_proxy="true" || cf_proxy="false"
+        pool_write_conf_key "cloudflare_proxy" "$cf_proxy"
+    fi
+
+    local cf_realip_include=""
+    if [[ "$cf_proxy" == "true" ]]; then
+        if nginx_ensure_cloudflare_realip; then
+            cf_realip_include="    include ${NGINX_CLOUDFLARE_REALIP_SNIPPET};"
+        else
+            warn "Cloudflare real-IP setup failed — vhost will be written WITHOUT it."
+            warn "  Rate-limiting would throttle all visitors as one until this is fixed."
+        fi
+    fi
+
+    # Build nginx allow/deny rules for the admin surfaces (/admin + /api/admin).
+    #
+    # DEFAULT = OPEN (bootstrap/testing posture). An empty admin_allowlist means the panel
+    # is reachable from any IP, so a fresh install is never locked out while there is no
+    # adoption yet for anyone to attack. The app-layer defenses (JWT sessions, login
+    # captcha, per-account lockout, IP auto-ban, optional TOTP 2FA, fail2ban) are ALWAYS
+    # in force regardless of this network gate — this is only the outer perimeter.
+    #
+    # HARDEN LATER: set admin_allowlist (comma/space-separated IPs/CIDRs) in $POOL_CONF and
+    # re-run 4) Setup nginx. Once it is non-empty the panel locks to localhost + those
+    # entries only (everything else is denied). localhost is always kept so an SSH tunnel
+    # and the app's own server-side calls keep working as a break-glass path.
     local admin_allow_raw; admin_allow_raw=$(pool_read_conf "admin_allowlist" "")
 
-    # First-run convenience: if no allowlist is configured yet, auto-seed the operator's
-    # current SSH client IP so they can reach /admin/ from this machine immediately —
-    # solves the chicken-and-egg where configuring the allowlist lives *behind* the
-    # allowlist. No prompt (one fewer keystroke during setup); we just announce it in
-    # yellow. One-time: once written, the conf is non-empty and we skip.
-    if [[ -z "$admin_allow_raw" ]]; then
-        local ssh_ip=""
-        if   [[ -n "${SSH_CONNECTION:-}" ]]; then ssh_ip="${SSH_CONNECTION%% *}"
-        elif [[ -n "${SSH_CLIENT:-}"     ]]; then ssh_ip="${SSH_CLIENT%% *}"
-        fi
-        # Only seed a non-local source — a LAN/localhost SSH origin is already covered
-        # by the RFC1918 + localhost rules below, so seeding it adds nothing.
-        if [[ -n "$ssh_ip" \
-              && ! "$ssh_ip" =~ ^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|::1$|fe80:) ]]; then
-            pool_write_conf_key "admin_allowlist" "$ssh_ip"
-            admin_allow_raw="$ssh_ip"
-            warn "Auto-whitelisted your current SSH IP ($ssh_ip) for admin-panel access."
-            warn "  Broaden/narrow it later in admin → Settings → Access Control, or edit \"admin_allowlist\" in $POOL_CONF."
-        fi
-    fi
-
-    # localhost (127.0.0.1 + ::1) is ALWAYS allowed so an SSH tunnel (which arrives as
-    # 127.0.0.1) and the app's own server-side calls keep working regardless of the
-    # configured allowlist — never lock yourself out of the break-glass path.
     local admin_rules="" _entry
-    admin_rules+="        allow 127.0.0.1;"$'\n'
-    admin_rules+="        allow ::1;"$'\n'
     if [[ -n "$admin_allow_raw" ]]; then
+        admin_rules+="        allow 127.0.0.1;"$'\n'
+        admin_rules+="        allow ::1;"$'\n'
         for _entry in ${admin_allow_raw//,/ }; do
             [[ -n "$_entry" ]] && admin_rules+="        allow ${_entry};"$'\n'
         done
+        admin_rules+="        deny all;"
         info "Admin panel (/admin, /api/admin) restricted to: localhost + $admin_allow_raw"
     else
-        admin_rules+="        allow 10.0.0.0/8;"$'\n'
-        admin_rules+="        allow 172.16.0.0/12;"$'\n'
-        admin_rules+="        allow 192.168.0.0/16;"$'\n'
-        warn "Admin panel limited to LAN/VPN/localhost (admin_allowlist is empty)."
-        warn "  To reach it from your public/VPN IP: set \"admin_allowlist\" in $POOL_CONF and re-run 4) Setup nginx."
+        admin_rules+="        allow all;"
+        warn "Admin panel (/admin, /api/admin) is OPEN to all IPs — admin_allowlist is empty (testing default)."
+        warn "  Harden once you have adoption: set \"admin_allowlist\" in $POOL_CONF and re-run 4) Setup nginx."
     fi
-    admin_rules+="        deny all;"
 
     local sites_enabled="/etc/nginx/sites-enabled/$(basename "$POOL_NGINX_CONF")"
     local cert_dir="/etc/letsencrypt/live/$subdomain"
@@ -797,6 +836,7 @@ server {
 server {
     listen 443 ssl http2;
     server_name $subdomain;
+$cf_realip_include
 
     root $POOL_WEB_DIR;
     index index.html;
@@ -815,23 +855,78 @@ server {
     # domain to script-src and connect-src below.
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self' https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com;" always;
 
-    # ── Admin panel + admin API — restricted at the nginx layer (off the public
-    # internet by default). Defense in depth on top of the app's JWT + IP filter +
-    # step-up auth. Widen via admin_allowlist in $POOL_CONF, then re-run 4) Setup nginx.
+    # ── Admin panel + admin API. Network gate is OPEN by default (empty admin_allowlist
+    # → allow all) for the testing phase; app-layer JWT + captcha + lockout + auto-ban +
+    # optional TOTP still apply. Harden by setting admin_allowlist in $POOL_CONF (locks to
+    # localhost + listed IPs/CIDRs), then re-run 4) Setup nginx. See $admin_rules above.
     location = /admin { return 301 https://\$host/admin/; }
     location /admin/ {
 $admin_rules
-        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        # Dedicated _admin zone (120r/m): the admin panel is a polling dashboard that pulls
+        # several assets + API calls per page, so it must NOT share the public _static/_api
+        # budgets (a few fast clicks there used to 503 admin-shell.js → blank sidebar).
+        limit_req zone=${POOL_SERVICE}_admin burst=40 nodelay;
+        # SERVER-SIDE auth gate (kills the "flash of admin page → redirect" UX bug):
+        # subrequest the backend before serving ANY admin file. The static HTML is an
+        # empty shell (data comes from authenticated /api/admin/* calls), but rendering
+        # it for a logged-out visitor looked broken. auth_request makes nginx withhold
+        # the page entirely until /api/admin/_authcheck returns 2xx; a 401/403 is caught
+        # by error_page → @admin_login → redirect to /login.html, so the browser never
+        # receives admin markup unauthenticated. The client-side API.guardAdminPage()
+        # remains as a fallback for installs whose nginx predates this block.
+        auth_request /admin/_authcheck;
+        error_page 401 403 = @admin_login;
+        # No content hashing on these static pages, so tell browsers to revalidate
+        # every load (304 when unchanged). Without this, browsers heuristically cache
+        # the HTML and keep showing the OLD admin panel after a redeploy.
+        add_header Cache-Control "no-cache" always;
         try_files \$uri \$uri/ \$uri.html =404;
     }
+    # Internal target for the auth_request above — never reachable directly (internal).
+    # No network gate / rate limit here: the parent /admin/ already applied \$admin_rules,
+    # and the backend handler deliberately skips the admin brute-force budget so per-asset
+    # subrequests stay cheap. Strip the body (we only care about the status code).
+    location = /admin/_authcheck {
+        internal;
+        proxy_pass              http://127.0.0.1:$POOL_PORT/api/admin/_authcheck;
+        proxy_pass_request_body off;
+        proxy_set_header        Content-Length "";
+        proxy_set_header        Host \$host;
+        proxy_set_header        X-Real-IP \$remote_addr;
+        proxy_set_header        X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+    # Unauthenticated visitors to /admin/* land on the public login door, not a 401 page.
+    location @admin_login { return 302 https://\$host/login.html; }
     location /api/admin/ {
 $admin_rules
-        limit_req zone=${POOL_SERVICE}_api burst=10 nodelay;
+        limit_req zone=${POOL_SERVICE}_admin burst=40 nodelay;
+        # CMS media upload (POST /api/admin/media) accepts images up to 5 MB; nginx's 1 MB
+        # default would 413 them before they reach the app. 6m leaves multipart overhead.
+        client_max_body_size 6m;
         proxy_pass         http://127.0.0.1:$POOL_PORT;
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_read_timeout 30s;
+    }
+
+    # The CAPTCHA challenge is a read-only GET the login page fetches on load, on
+    # form-toggle, and after every failed attempt — it gets its OWN dedicated zone.
+    # It must NOT share the strict _auth brute-force budget (retry can't recover),
+    # AND must NOT share _static either: that zone is keyed per-IP and consumed by every
+    # CSS/JS/font/image on every page (a dozen+ per load), so a few page reloads during
+    # testing starve the captcha → "Verification unavailable" and "↻ new" does nothing →
+    # captcha_id stays null → the login POST is rejected at the captcha gate and you can
+    # never log in. Its own zone keeps it lit regardless of asset traffic. This is NOT the
+    # brute-force vector (the login POST stays on _auth 10r/m + per-account lockout + IP
+    # auto-ban); issuing a fresh arithmetic challenge is a cheap in-memory op, so a
+    # generous, isolated rate is safe. Exact-match wins over the /api/auth/ prefix.
+    location = /api/auth/captcha {
+        limit_req zone=${POOL_SERVICE}_captcha burst=20 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
     }
 
     location /api/auth/ {
@@ -874,6 +969,20 @@ $admin_rules
     location = /robots.txt    { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
     location = /sitemap.xml   { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
     location = /manifest.json { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
+    # Blog RSS is generated by the app (not a static file).
+    location = /blog/rss.xml  { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
+
+    # CMS media (cover images + in-body images uploaded via the admin editor). Stored in a
+    # persistent dir OUTSIDE public_html so a code redeploy (rsync --delete of the docroot)
+    # never wipes them. Same SVG hardening as /custom/: nosniff + sandbox CSP neutralises any
+    # script in a directly-opened SVG; correct image MIME types are kept for <img> rendering.
+    location /uploads/ {
+        alias $POOL_APP_DIR/uploads/;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; sandbox" always;
+        add_header Cache-Control "public, max-age=604800, immutable" always;
+        try_files \$uri =404;
+    }
 
     # Operator-uploaded white-label assets (served from assets_dir in pool.json).
     # Uploads are magic-byte validated and given server-controlled names, but we still
@@ -888,8 +997,29 @@ $admin_rules
         try_files \$uri =404;
     }
 
+    # Clean blog-post permalinks: /blog/<slug> serves the static post.html shell,
+    # which reads the slug from its own path (falling back to ?slug= for legacy links).
+    # The exact-match "location = /blog/rss.xml" above wins over this regex, and the blog
+    # index /blog.html doesn't match (no slash after "blog"). Slug charset mirrors slugify()
+    # in lib/posts.js (lowercase alnum + hyphen); underscores allowed for safety.
+    location ~ ^/blog/([A-Za-z0-9_-]+)/?\$ {
+        limit_req zone=${POOL_SERVICE}_static burst=100 nodelay;
+        add_header Cache-Control "no-cache" always;
+        try_files /post.html =404;
+    }
+
     location / {
-        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        # Generous burst: a single page load pulls the HTML + ~a dozen assets (CSS, JS
+        # incl. public-shell.js which injects the header/nav, fonts, images), and with
+        # Cache-Control:no-cache each navigation revalidates them — so fast multi-page
+        # browsing legitimately fires many requests in a few seconds. Throttling here
+        # only broke the page (plain HTML, no CSS, lost nav); it is not a DoS surface.
+        limit_req zone=${POOL_SERVICE}_static burst=100 nodelay;
+        # Pages/assets carry no content hash, so a far-future cache would serve stale
+        # HTML/JS after a redeploy (the classic "/ and /index.html differ", "old nav",
+        # "old admin" confusion — really browser cache). no-cache = store but always
+        # revalidate, so a deploy is picked up immediately while unchanged files 304.
+        add_header Cache-Control "no-cache" always;
         try_files \$uri \$uri/ \$uri.html =404;
     }
 
@@ -904,6 +1034,19 @@ EOF
     nginx -t 2>&1 && systemctl reload nginx \
         && success "nginx configured for https://$subdomain" \
         || { error "nginx config test failed. Check $POOL_NGINX_CONF"; return 1; }
+
+    if [[ "$cf_proxy" == "true" ]]; then
+        echo ""
+        info "Cloudflare proxy mode is ON — real visitor IPs are restored from CF-Connecting-IP."
+        echo -e "  ${DIM}In Cloudflare DNS, set this record to ${RESET}Proxied (orange cloud)${DIM}.${RESET}"
+        echo -e "  ${YELLOW}Harden (recommended):${RESET} so attackers can't bypass Cloudflare by hitting"
+        echo -e "  the origin IP directly, allow 80/443 ONLY from Cloudflare ranges. Example (ufw):"
+        echo -e "    ${DIM}for ip in \$(curl -s https://www.cloudflare.com/ips-v4) \$(curl -s https://www.cloudflare.com/ips-v6); do${RESET}"
+        echo -e "    ${DIM}  ufw allow from \"\$ip\" to any port 443 proto tcp; ufw allow from \"\$ip\" to any port 80 proto tcp; done${RESET}"
+        echo -e "  ${DIM}Keep your SSH port open separately, then 'ufw deny 80,443' from everywhere else.${RESET}"
+        echo -e "  ${DIM}Also turn OFF any Cloudflare 'Cache Everything' page rule for HTML (the origin${RESET}"
+        echo -e "  ${DIM}sends Cache-Control: no-cache so deploys show up immediately).${RESET}"
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1030,23 +1173,42 @@ pool_setup_admin() {
         return 1
     fi
 
-    echo -e "  ${DIM}(Username: at least 3 characters)${RESET}"
-    echo -ne "Admin username: "
-    read -r admin_user
-    [[ -z "$admin_user" ]] && return
-    if [[ ${#admin_user} -lt 3 ]]; then
-        error "Username must be at least 3 characters."
-        return 1
-    fi
+    # Re-prompt on validation failure instead of bailing — a single typo shouldn't
+    # send the operator back to the menu. Empty input at any prompt cancels cleanly.
+    echo -e "  ${DIM}(Username: at least 3 characters — blank to cancel)${RESET}"
+    while true; do
+        echo -ne "Admin username: "
+        read -r admin_user
+        [[ -z "$admin_user" ]] && { info "Cancelled — no admin account created."; return; }
+        if [[ ${#admin_user} -lt 3 ]]; then
+            error "Username must be at least 3 characters. Try again."
+            continue
+        fi
+        break
+    done
 
-    echo -e "  ${DIM}(Password: at least 8 characters)${RESET}"
-    echo -ne "Admin password: "
-    read -rs admin_pass; echo ""
-    [[ -z "$admin_pass" ]] && return
-    if [[ ${#admin_pass} -lt 8 ]]; then
-        error "Password must be at least 8 characters."
-        return 1
-    fi
+    # Password + confirmation share one loop: a mismatch or a too-short password
+    # re-asks both fields (typos are silent under read -rs and would otherwise lock
+    # the operator out of an account whose password they can't reproduce).
+    echo -e "  ${DIM}(Password: at least 8 characters — blank to cancel)${RESET}"
+    while true; do
+        echo -ne "Admin password: "
+        read -rs admin_pass; echo ""
+        [[ -z "$admin_pass" ]] && { info "Cancelled — no admin account created."; return; }
+        if [[ ${#admin_pass} -lt 8 ]]; then
+            error "Password must be at least 8 characters. Try again."
+            continue
+        fi
+
+        echo -ne "Confirm admin password: "
+        read -rs admin_pass2; echo ""
+        [[ -z "$admin_pass2" ]] && { info "Cancelled — no admin account created."; return; }
+        if [[ "$admin_pass" != "$admin_pass2" ]]; then
+            error "Passwords do not match. Try again."
+            continue
+        fi
+        break
+    done
 
     echo -ne "Admin email (optional): "
     read -r admin_email
@@ -1470,22 +1632,23 @@ pool_guided_setup() {
     echo -e "  ${BOLD}Public pool:${RESET}   https://$_domain"
     echo -e "  ${BOLD}Admin login:${RESET}   https://$_domain/login.html   (redirects to /admin/ after sign-in)"
     echo ""
-    echo -e "  ${BOLD}${YELLOW}The admin panel is IP-restricted${RESET} — defense in depth; the public internet"
-    echo -e "  cannot reach /admin/. The public pool + /login.html stay open to everyone."
     if [[ -n "$_allow" ]]; then
+        echo -e "  ${BOLD}${YELLOW}The admin panel is IP-restricted${RESET} — only the listed IPs can reach /admin/."
         echo -e "  Currently allowed:  ${GREEN}localhost + $_allow${RESET}"
+        echo ""
+        echo -e "  ${YELLOW}Getting 403 on /admin/?${RESET} The IP you browse from isn't on the list above"
+        echo -e "  (it can differ from your SSH IP). Add your browsing IP, then re-run ${BOLD}4) Setup nginx${RESET}:"
+        echo ""
+        echo -e "    ${CYAN}# 1) On the machine you browse from, open https://api.ipify.org to get its IP${RESET}"
+        echo -e "    ${CYAN}# 2) Add it (replace 1.2.3.4 — existing entries are kept):${RESET}"
+        echo -e "    ${CYAN}node -e 'const f=\"$POOL_CONF\",ip=process.argv[1];const d=JSON.parse(require(\"fs\").readFileSync(f,\"utf8\"));const s=new Set((d.admin_allowlist||\"\").split(/[,\\\\s]+/).filter(Boolean));s.add(ip);d.admin_allowlist=[...s].join(\",\");require(\"fs\").writeFileSync(f,JSON.stringify(d,null,2));require(\"fs\").chmodSync(f,0o600);console.log(\"admin_allowlist =\",d.admin_allowlist)' 1.2.3.4${RESET}"
+        echo -e "    ${CYAN}# 3) Re-run menu option 4) Setup nginx  (rewrites the vhost + reloads)${RESET}"
     else
-        echo -e "  Currently allowed:  ${GREEN}localhost + your LAN (RFC1918)${RESET}"
+        echo -e "  ${BOLD}${YELLOW}The admin panel is OPEN to all IPs${RESET} (testing default) — anyone who knows the"
+        echo -e "  URL can reach /admin/, gated only by login (JWT + captcha + lockout + auto-ban)."
+        echo -e "  ${BOLD}Harden once you have adoption:${RESET} set ${BOLD}admin_allowlist${RESET} in $POOL_CONF to your"
+        echo -e "  browsing/VPN IP(s), then re-run ${BOLD}4) Setup nginx${RESET} to lock it down."
     fi
-    echo ""
-    echo -e "  ${YELLOW}Getting 403 on /admin/?${RESET} Your browser's public IP isn't on the list."
-    echo -e "  (The auto-whitelist seeds your ${BOLD}SSH${RESET} IP, which can differ from the IP you"
-    echo -e "  ${BOLD}browse${RESET} from.) Add your browsing IP, then re-run ${BOLD}4) Setup nginx${RESET}:"
-    echo ""
-    echo -e "    ${CYAN}# 1) On the machine you browse from, open https://api.ipify.org to get its IP${RESET}"
-    echo -e "    ${CYAN}# 2) Add it (replace 1.2.3.4 — existing entries are kept):${RESET}"
-    echo -e "    ${CYAN}node -e 'const f=\"$POOL_CONF\",ip=process.argv[1];const d=JSON.parse(require(\"fs\").readFileSync(f,\"utf8\"));const s=new Set((d.admin_allowlist||\"\").split(/[,\\\\s]+/).filter(Boolean));s.add(ip);d.admin_allowlist=[...s].join(\",\");require(\"fs\").writeFileSync(f,JSON.stringify(d,null,2));require(\"fs\").chmodSync(f,0o600);console.log(\"admin_allowlist =\",d.admin_allowlist)' 1.2.3.4${RESET}"
-    echo -e "    ${CYAN}# 3) Re-run menu option 4) Setup nginx  (rewrites the vhost + reloads)${RESET}"
     echo ""
     return 0
 }

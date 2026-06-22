@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Announcements · Settings | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+</head>
+<body>
+  <main>
+  <div class="settings-container">
+    <div class="page-head">
+      <h1>Announcements</h1>
+      <p class="page-sub">Site notices and maintenance banners</p>
+    </div>
+
+    <div id="announcements" class="settings-content active">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Maintenance Mode</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="maintenance_mode" name="maintenance_mode">
+            <label for="maintenance_mode">Enable maintenance mode</label>
+          </div>
+          <div class="helper-text" style="margin: 0.5rem 0 1rem;">
+            Shows a branded full-page notice to visitors. The admin panel stays accessible and
+            miners keep mining (stratum is unaffected). Login / dashboard / account pages remain reachable.
+          </div>
+          <div class="form-group">
+            <label for="maintenance_title">Title</label>
+            <input type="text" id="maintenance_title" name="maintenance_title" placeholder="Under Maintenance">
+          </div>
+          <div class="form-group">
+            <label for="maintenance_message">Message (HTML allowed)</label>
+            <textarea id="maintenance_message" name="maintenance_message" rows="3" placeholder="We'll be back shortly..."></textarea>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Announcement Banners</h3>
+          <div class="helper-text" style="margin-bottom: 1rem;">
+            Short messages shown site-wide at the top of every public page. Each banner has a type,
+            optional link, on/off toggle, optional dismiss button, and an optional start/end date.
+          </div>
+          <input type="hidden" id="banners" name="banners">
+          <div id="banners-list"></div>
+          <button type="button" class="btn btn-secondary" style="margin-top: 1rem;" onclick="addBanner()">+ Add Banner</button>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('notices')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('notices')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAYOUT TAB -->
+  </div>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/stepup.js"></script>
+  <script src="/admin/admin-shell.js"></script>
+  <script>window.SETTINGS_SECTION = "announcements";</script>
+  <script src="/admin/settings-common.js"></script>
+</body>
+</html>

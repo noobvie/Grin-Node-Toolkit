@@ -397,6 +397,64 @@ nginx_ensure_rate_limit_zones() {
     } > "$conf_file"
 }
 
+# ═════════════════════════════════════════════════════════════════════════════
+# CLOUDFLARE — restore the real visitor IP behind the orange-cloud proxy
+# ═════════════════════════════════════════════════════════════════════════════
+# When a site is proxied by Cloudflare, the origin's $remote_addr is a Cloudflare
+# edge IP, NOT the visitor. Every per-IP feature then collapses onto that shared
+# edge IP: rate-limit zones throttle ALL users together, fail2ban bans Cloudflare,
+# and the app's req.ip is wrong. This writes an nginx snippet that lists Cloudflare's
+# published edge ranges and restores the true client from the CF-Connecting-IP header.
+#
+# Spoof-safe: real_ip only rewrites the address for connections whose ACTUAL source
+# ($remote_addr) is in set_real_ip_from (i.e. genuinely from Cloudflare). A direct
+# hit on the origin from any other IP keeps its own address, so the header can't be
+# forged by bypassing Cloudflare. (To make the CF protection unbypassable, also
+# firewall 80/443 to Cloudflare ranges only — see the caller's guidance.)
+#
+# The snippet is written to /etc/nginx/snippets/ (NOT conf.d, which auto-loads into
+# the http context) so the caller `include`s it ONLY inside the proxied server{}
+# block — keeping CF trust scoped to that vhost. set_real_ip_from is valid in the
+# server context.
+#
+# Usage: nginx_ensure_cloudflare_realip   → writes the snippet, returns 0 on success.
+#        Snippet path: /etc/nginx/snippets/cloudflare-realip.conf
+# Re-run to refresh after Cloudflare changes its ranges (rare).
+NGINX_CLOUDFLARE_REALIP_SNIPPET="/etc/nginx/snippets/cloudflare-realip.conf"
+nginx_ensure_cloudflare_realip() {
+    local snip="$NGINX_CLOUDFLARE_REALIP_SNIPPET"
+    mkdir -p /etc/nginx/snippets
+
+    local v4 v6
+    v4=$(curl -fsS --max-time 10 https://www.cloudflare.com/ips-v4 2>/dev/null)
+    v6=$(curl -fsS --max-time 10 https://www.cloudflare.com/ips-v6 2>/dev/null)
+
+    if [[ -z "$v4" || -z "$v6" ]]; then
+        if [[ -f "$snip" ]]; then
+            warn "Could not refresh Cloudflare IP ranges — keeping existing $snip"
+            return 0
+        fi
+        error "Could not fetch Cloudflare IP ranges (network?) and no cached snippet exists."
+        return 1
+    fi
+
+    {
+        echo "# Managed by Grin Node Toolkit — Cloudflare real client IP restoration"
+        echo "# Refreshed $(date -u +%FT%TZ) from https://www.cloudflare.com/ips-v4 + ips-v6"
+        echo "# Helper: nginx_ensure_cloudflare_realip (scripts/lib/nginx_shared_helpers.sh)"
+        echo "# Re-run the caller's 'Setup nginx' step to refresh if Cloudflare changes ranges."
+        local cidr
+        while IFS= read -r cidr; do
+            [[ -n "$cidr" ]] && echo "set_real_ip_from $cidr;"
+        done <<< "$v4"
+        while IFS= read -r cidr; do
+            [[ -n "$cidr" ]] && echo "set_real_ip_from $cidr;"
+        done <<< "$v6"
+        echo "real_ip_header CF-Connecting-IP;"
+    } > "$snip"
+    success "Cloudflare real-IP snippet written: $snip"
+}
+
 # ── Named wrapper: grin_api zone (shared by Scripts 04, 06) ──────────────────
 # Both scripts call this, both pass identical args → byte-identical output → safe
 # co-writes regardless of which script runs first.

@@ -50,20 +50,7 @@
 </head>
 <body>
 
-    <header>
-        <div class="brand"><span class="dot" aria-hidden="true"></span><span data-brand="pool_name">GRINIUM</span></div>
-        <nav class="header-nav" aria-label="Main">
-            <a href="index.html" class="nav-link">Dashboard</a>
-            <a href="miners-stats.html" class="nav-link">Miners</a>
-            <a href="fortune-board.html" class="nav-link active">Fortune Board</a>
-            <a href="donate.html" class="nav-link">Donate</a>
-            <a href="index.html#info" class="nav-link">Info</a>
-        </nav>
-        <div class="nav-right">
-            <div class="theme-switcher"></div>
-            <a class="btn primary sm" href="index.html#connect">Start Mining</a>
-        </div>
-    </header>
+    <!-- header injected by /js/public-shell.js -->
 
     <div class="container">
         <h2 class="page-title">🎉 Fortune Board</h2>
@@ -96,10 +83,7 @@
         <button id="more-btn" class="more-btn" style="display:none;" onclick="loadWinners()">Load more</button>
     </div>
 
-    <footer>
-        <span data-brand="pool_name">GRINIUM</span> — Fortune Board ·
-        <span data-brand="attribution">Provably fair lottery</span>
-    </footer>
+    <!-- footer injected by /js/public-shell.js -->
 
     <script>
         // Paginated fortune board, fed by the public winner-history endpoint.
@@ -150,6 +134,7 @@
         }
         loadWinners();
     </script>
+    <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>
     <script src="/js/branding.js"></script>
 </body>

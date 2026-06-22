@@ -2,7 +2,7 @@
 
 const express = require('express');
 const path = require('path');
-const { initDb, getDb, ensureLocalRegion } = require('./lib/db');
+const { initDb, getDb, ensureLocalRegion, seedDefaultRegions } = require('./lib/db');
 const { loadConfig, mergeDbSettings } = require('./lib/config');
 const PoolSettings = require('./lib/pool-settings');
 const AssetManager = require('./lib/asset-manager');
@@ -22,12 +22,17 @@ const AuthManager = require('./lib/auth');
 const Captcha = require('./lib/captcha');
 const { requireAuth, requireAdmin, requireFreshAuth } = require('./lib/auth-middleware');
 const HashrateTracker = require('./lib/hashrate-tracker');
+const { verifyIpProof, auditOwnerProof, normalizeIp } = require('./lib/owner-proof');
 const PoolstatsReporter = require('./lib/poolstats-reporter');
 const RateLimiter = require('./lib/rate-limiter');
 const IpFilter = require('./lib/ip-filter');
 const AlertMonitor = require('./lib/alert-monitor');
 const AlertDelivery = require('./lib/alert-delivery');
 const RetentionManager = require('./lib/retention');
+const AdsManager = require('./lib/ads');
+const PagesManager = require('./lib/pages');
+const PostsManager = require('./lib/posts');
+const multer = require('multer');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -76,9 +81,6 @@ app.use((req, res, next) => {
 
 // Validation constants
 const VALID_NETWORKS = ['mainnet', 'testnet'];
-const ALLOWED_THEMES = ['dark', 'light', 'atomic'];
-const ALLOWED_NOTIFICATION_LEVELS = ['all', 'critical', 'none'];
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Config validation
 function validateConfig(cfg) {
@@ -133,6 +135,11 @@ let alertDelivery = null;
 let poolSettings = null;
 let assetManager = null;
 let retentionManager = null;
+let adsManager = null;
+let pagesManager = null;
+let postsManager = null;
+let uploadsDir = null;       // persistent media dir (served at /uploads, nginx in prod)
+let mediaUpload = null;      // configured multer instance for image uploads
 
 async function initializePool() {
   try {
@@ -168,6 +175,13 @@ async function initializePool() {
     config = mergeDbSettings(config, db);
     console.log(`[${new Date().toISOString()}] Pool configuration merged from database`);
 
+    // One-time seed of the default grinium regional endpoints (grouped by country),
+    // so the public "nearest region" connect grid is populated out of the box. Idempotent
+    // (guarded by a persistent marker) — never clobbers operator edits in admin → Regions.
+    // Gated to the real grinium.com deployment: a fork running its own domain must NOT
+    // advertise grinium.com hosts (its miners would connect to the wrong pool).
+    seedDefaultRegions(config.stratum_port, config.subdomain);
+
     // Self-register this pool server's own region so it shows as a real connect card
     // and auto-joins the grid when a satellite for another zone reports in. Only the
     // singlebox role runs a local stratum; a bare hub relies purely on satellites.
@@ -180,20 +194,6 @@ async function initializePool() {
     poolSettings = new PoolSettings(db);
     assetManager = new AssetManager(config, db);
     console.log(`[${new Date().toISOString()}] Pool settings and asset managers initialized`);
-
-    // Create user_settings table at startup (CRITICAL: issue #6)
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS user_settings (
-        user_id INTEGER PRIMARY KEY,
-        email TEXT,
-        preferred_pool_server TEXT DEFAULT 'US East',
-        min_payout REAL DEFAULT 10.0,
-        notification_level TEXT DEFAULT 'all',
-        theme TEXT DEFAULT 'dark',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
 
     wallet = new WalletAPI(config);
     console.log(`[${new Date().toISOString()}] Wallet API initialized (${config.network})`);
@@ -218,6 +218,10 @@ async function initializePool() {
     blockMonitor = new BlockMonitor(config);
     blockMonitor.start();
 
+    // Let BlockManager capture per-block network difficulty (for round effort / luck) by reusing
+    // the block monitor's node client. Optional — creditBlock leaves it NULL if unavailable.
+    if (blockMonitor.grinNode) blockManager.setNodeApi(blockMonitor.grinNode);
+
     rewardDistributor = new RewardDistributor(config);
     blockMonitor.setRewardDistributor(rewardDistributor);
     console.log(`[${new Date().toISOString()}] Reward distributor initialized (PPLNS window: 60 blocks)`);
@@ -226,6 +230,35 @@ async function initializePool() {
     // enabled in the admin panel. LotteryManager reuses the block monitor's node client for
     // its verifiable draw seed.
     incentivesManager = new IncentivesManager(config);
+    adsManager = new AdsManager(config);
+    pagesManager = new PagesManager(config);
+    postsManager = new PostsManager(config);
+
+    // Media uploads (cover images + in-body images from the admin CMS editor). Stored in a
+    // persistent dir OUTSIDE public_html (which is rsynced/overwritten by the installer):
+    // <db dir>/uploads, served at /uploads — by nginx in production (location /uploads/) and
+    // by the express.static fallback below in dev / if the nginx block is absent.
+    uploadsDir = config.uploads_dir || path.join(path.dirname(config.db_path || './pool.db'), 'uploads');
+    try { fs.mkdirSync(uploadsDir, { recursive: true }); }
+    catch (e) { console.error(`[media] could not create uploads dir ${uploadsDir}: ${e.message}`); }
+    const ALLOWED_IMG = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp', 'image/svg+xml': '.svg' };
+    mediaUpload = multer({
+      storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, uploadsDir),
+        filename: (req, file, cb) => {
+          const ext = ALLOWED_IMG[file.mimetype] || '.bin';
+          const safe = (file.originalname || 'image').toLowerCase()
+            .replace(/\.[^.]*$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'image';
+          cb(null, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${safe}${ext}`);
+        },
+      }),
+      limits: { fileSize: 5 * 1024 * 1024, files: 1 },  // 5 MB, single file
+      fileFilter: (req, file, cb) => {
+        if (ALLOWED_IMG[file.mimetype]) return cb(null, true);
+        cb(new Error('Only JPG, PNG, GIF, WEBP or SVG images are allowed'));
+      },
+    });
+    console.log(`[${new Date().toISOString()}] CMS managers ready (pages, posts); uploads → ${uploadsDir}`);
     lotteryManager = new LotteryManager(config, blockMonitor.grinNode);
     console.log(`[${new Date().toISOString()}] Incentives + lottery managers initialized`);
 
@@ -241,7 +274,8 @@ async function initializePool() {
     walletTor = new WalletTor(config);
     console.log(`[${new Date().toISOString()}] Wallet Tor integration initialized`);
 
-    withdrawalScheduler = new WithdrawalScheduler(config);
+    // Pass the Owner-API wallet so the scheduler can drive the slatepack payout rail.
+    withdrawalScheduler = new WithdrawalScheduler(config, wallet);
     withdrawalScheduler.start();
 
     authManager = new AuthManager(config);
@@ -313,6 +347,22 @@ async function initializePool() {
 }
 
 function setupRoutes() {
+  // Serve uploaded CMS media at /uploads. In production nginx serves this dir directly
+  // (location /uploads/), but mounting it here too makes the app self-sufficient in dev
+  // and a safe fallback if the nginx block is missing. immutable: filenames are unique.
+  if (uploadsDir) {
+    app.use('/uploads', express.static(uploadsDir, {
+      maxAge: '7d', immutable: true, index: false, dotfiles: 'ignore',
+      setHeaders: (res) => {
+        // Parity with the nginx /uploads/ block: stop MIME-sniffing and neutralise any
+        // script inside a directly-opened SVG. Overrides the app's global CSP for this
+        // path (which otherwise allows 'unsafe-inline' and would let an SVG run script).
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+      },
+    }));
+  }
+
   // ─── Helper middleware: secure admin endpoints (IP filter + auth + rate limit) ────
   const secureAdmin = [
     rateLimiter.middleware('admin'),
@@ -420,6 +470,9 @@ function setupRoutes() {
       if (!s || !s.grin_address || !s.share_hash || !s.height) { skipped++; continue; }
       try {
         minerManager.ensureMinerExists(s.grin_address);
+        // Record the MINER's source IP (relayed by the satellite per-share), NOT req.ip — req.ip
+        // here is the satellite. Backs the ownership gate for hub-and-spoke deployments.
+        if (s.source_ip) minerManager.recordSourceIp(s.grin_address, s.source_ip);
         const r = await shareValidator.submitShare(
           s.grin_address, s.worker_name || null, s.difficulty, s.height, s.share_hash,
           region || 'default'
@@ -508,6 +561,108 @@ function setupRoutes() {
     }
   );
 
+  // ─── Public GRIN price (footer ticker) — cached external lookup ────────────────
+  // The pool box has a node + wallet but no market data, so price comes from a public
+  // market API (CoinGecko). Fetched server-side (avoids CORS + a per-visitor key) and
+  // cached ~5 min. On any failure we serve the last good value, or {available:false}.
+  let _priceCache = { ts: 0, data: null };
+  const PRICE_TTL_MS = 5 * 60 * 1000;
+  app.get('/api/public/price',
+    rateLimiter.middleware('public'),
+    async (req, res) => {
+      const now = Date.now();
+      if (_priceCache.data && (now - _priceCache.ts) < PRICE_TTL_MS) {
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.json({ success: true, data: _priceCache.data });
+      }
+      try {
+        const ctrl = AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined;
+        const r = await fetch(
+          'https://api.coingecko.com/api/v3/simple/price?ids=grin&vs_currencies=usd,btc',
+          { signal: ctrl, headers: { accept: 'application/json' } }
+        );
+        if (!r.ok) throw new Error('upstream ' + r.status);
+        const j = await r.json();
+        const g = j && j.grin ? j.grin : {};
+        const data = {
+          available: typeof g.usd === 'number' || typeof g.btc === 'number',
+          usd: typeof g.usd === 'number' ? g.usd : null,
+          btc: typeof g.btc === 'number' ? g.btc : null,
+          source: 'coingecko',
+          updated_at: now,
+        };
+        if (data.available) _priceCache = { ts: now, data };
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.json({ success: true, data: _priceCache.data || data });
+      } catch (err) {
+        // Serve stale-if-error; otherwise report unavailable (footer hides the ticker).
+        if (_priceCache.data) return res.json({ success: true, data: _priceCache.data });
+        res.json({ success: true, data: { available: false } });
+      }
+    }
+  );
+
+  // ─── Public API reference — auto-generated from the live Express route table ───
+  // Always accurate (it reflects the routes actually mounted), self-documenting. Only
+  // public-safe prefixes are exposed; admin/auth routes are never listed. api-docs.html
+  // renders this. Descriptions are a best-effort lookup keyed by "METHOD path"; an
+  // unknown route still appears (with an empty description) so the list can't drift.
+  const PUBLIC_API_PREFIXES = [
+    '/api/public/', '/api/account/', '/api/config/', '/api/pool/',
+  ];
+  const API_DOC_DESCRIPTIONS = {
+    'GET /api/public/branding': 'White-label config (name, theme, SEO, social, footer links).',
+    'GET /api/public/price': 'Cached GRIN price (USD + BTC).',
+    'GET /api/public/status': 'Coarse pool/node/wallet health (no balances).',
+    'GET /api/public/ads': 'Active operator ads by placement.',
+    'GET /api/public/lottery/winners': 'Fortune-board winner history (truncated addresses).',
+    'GET /api/public/endpoints': 'This API reference (machine-readable).',
+    'GET /api/config/pool-info': 'Network, pool fee %, minimum withdrawal.',
+    'GET /api/pool/stats': 'Live pool stats: hashrate, miners, blocks, share quality.',
+    'GET /api/pool/stats/regions': 'Per-region stratum endpoints + live status.',
+    'GET /api/pool/blocks': 'Pool-found blocks (paginated: limit, offset, status).',
+    'GET /api/pool/effort': 'Current round effort, recent luck, time since last block.',
+    'GET /api/pool/hashrate/history': 'Pool hashrate time-series (?hours=).',
+    'GET /api/pool/status': 'Coarse service status strip.',
+    'GET /api/account/:addr': 'Account summary: balance, paid, min payout, effort.',
+    'GET /api/account/:addr/workers': 'Per-worker (rig) hashrate + share quality.',
+    'GET /api/account/:addr/hashrate/history': 'Account hashrate time-series (?hours=).',
+    'POST /api/account/:addr/withdraw': 'Request a payout (Tor or Slatepack); IP-proof gated.',
+    'POST /api/account/:addr/min-payout': 'Set this address’s personal payout threshold.',
+  };
+  app.get('/api/public/endpoints',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const stack = (req.app._router && req.app._router.stack) || [];
+        const seen = new Set();
+        const out = [];
+        for (const layer of stack) {
+          const route = layer && layer.route;
+          if (!route || !route.path) continue;
+          const paths = Array.isArray(route.path) ? route.path : [route.path];
+          for (const p of paths) {
+            if (typeof p !== 'string') continue;
+            if (!PUBLIC_API_PREFIXES.some((pre) => p === pre || p.startsWith(pre))) continue;
+            const methods = Object.keys(route.methods || {})
+              .filter((m) => m !== '_all').map((m) => m.toUpperCase());
+            for (const m of methods) {
+              const key = m + ' ' + p;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              out.push({ method: m, path: p, description: API_DOC_DESCRIPTIONS[key] || '' });
+            }
+          }
+        }
+        out.sort((a, b) => (a.path === b.path ? a.method.localeCompare(b.method) : a.path.localeCompare(b.path)));
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.json({ success: true, data: { count: out.length, endpoints: out } });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to build API reference' });
+      }
+    }
+  );
+
   // ─── Public Fortune Board: lottery winner history (no auth, rate-limited) ──────
   // Transparency/audit feed — winner (truncated address) + amount + date + verifiable seed.
   app.get('/api/public/lottery/winners',
@@ -527,17 +682,95 @@ function setupRoutes() {
     }
   );
 
-  // Single content page (About/Terms/Privacy/FAQ/Impressum) authored in the admin panel.
+  // Single content page authored in the admin CMS (dynamic `pages` table; the legacy
+  // fixed-slot config was migrated into it). `:key` is the page slug.
   app.get('/api/public/page/:key',
     rateLimiter.middleware('public'),
     (req, res) => {
       try {
-        const page = poolSettings.getPage(req.params.key);
+        const page = pagesManager.getPublic(req.params.key);
         if (!page) return res.status(404).json({ error: 'Page not found' });
         res.setHeader('Cache-Control', 'public, max-age=60');
         res.json({ success: true, data: page });
       } catch (err) {
         res.status(500).json({ error: 'Failed to load page' });
+      }
+    }
+  );
+
+  // Navigable published pages (for footer/header link lists in public-shell.js).
+  app.get('/api/public/pages',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        res.json({ success: true, data: pagesManager.listEnabled() });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to load pages' });
+      }
+    }
+  );
+
+  // Blog: paginated list of published posts (cards).
+  app.get('/api/public/posts',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const out = postsManager.listPublished({ limit: req.query.limit, offset: req.query.offset });
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        res.json({ success: true, data: out });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to load posts' });
+      }
+    }
+  );
+
+  // Blog: full published post by slug (permalink page).
+  app.get('/api/public/post/:slug',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const post = postsManager.getPublic(req.params.slug);
+        if (!post) return res.status(404).json({ error: 'Post not found' });
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        res.json({ success: true, data: post });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to load post' });
+      }
+    }
+  );
+
+  // Blog RSS 2.0 feed (latest 20 published posts). nginx proxies /blog/rss.xml here.
+  app.get('/blog/rss.xml',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const branding = poolSettings.getSection('branding');
+        const seo = poolSettings.getSection('seo');
+        const origin = siteOrigin(req);
+        const title = (branding.pool_name || seo.site_title || 'Grin Pool') + ' — Blog';
+        const { posts } = postsManager.listPublished({ limit: 20, offset: 0 });
+        const esc = (s) => String(s == null ? '' : s)
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+        xml += '<rss version="2.0"><channel>\n';
+        xml += '  <title>' + esc(title) + '</title>\n';
+        xml += '  <link>' + esc(origin + '/blog.html') + '</link>\n';
+        xml += '  <description>' + esc(seo.site_description || 'Pool news and announcements') + '</description>\n';
+        posts.forEach((p) => {
+          const url = origin + '/blog/' + encodeURIComponent(p.slug);
+          xml += '  <item>\n';
+          xml += '    <title>' + esc(p.title) + '</title>\n';
+          xml += '    <link>' + esc(url) + '</link>\n';
+          xml += '    <guid isPermaLink="true">' + esc(url) + '</guid>\n';
+          xml += '    <pubDate>' + new Date((p.published_at || 0) * 1000).toUTCString() + '</pubDate>\n';
+          xml += '    <description>' + esc(p.excerpt || '') + '</description>\n';
+          xml += '  </item>\n';
+        });
+        xml += '</channel></rss>\n';
+        res.type('application/rss+xml').send(xml);
+      } catch (err) {
+        res.status(500).type('text/plain').send('Failed to build feed');
       }
     }
   );
@@ -570,7 +803,7 @@ function setupRoutes() {
   // Public pages included in the sitemap (extension-less; nginx resolves $uri.html).
   // pool-info + connect were merged into the dashboard (index) 2026-06; the dashboard
   // carries the #connect + #info anchors, so only / is listed for that content.
-  const SITEMAP_PATHS = ['/', '/miners-stats', '/fortune-board', '/donate'];
+  const SITEMAP_PATHS = ['/', '/miners-stats', '/blocks.html', '/fortune-board', '/donate', '/blog.html', '/api-docs.html'];
 
   app.get('/sitemap.xml',
     rateLimiter.middleware('public'),
@@ -583,8 +816,12 @@ function setupRoutes() {
 
         const origin = siteOrigin(req);
         const paths = SITEMAP_PATHS.slice();
-        // Append authored content pages.
-        poolSettings.listEnabledPages().forEach((p) => paths.push('/page.html?p=' + p.key));
+        // Append authored content pages (dynamic CMS) and published blog posts.
+        pagesManager.listEnabled().forEach((p) => paths.push('/page.html?p=' + p.key));
+        try {
+          postsManager.listPublished({ limit: 50, offset: 0 }).posts
+            .forEach((p) => paths.push('/blog/' + p.slug));
+        } catch (e) { /* posts optional in sitemap */ }
 
         const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
@@ -637,16 +874,19 @@ function setupRoutes() {
   );
 
   // Issue a self-hosted CAPTCHA challenge for the login/register forms. Public-rate-limited
-  // (60/min) so the form can fetch one without spending the strict auth budget (3/min).
+  // (60/min) so the form can fetch one without spending the strict auth budget (10/min).
   app.get('/api/auth/captcha', rateLimiter.middleware('public'), (req, res) => {
     res.json(loginCaptcha.issue());
   });
 
   // FIX #7, #6, #4: Add rate limiting + first-admin gating + httpOnly cookies
   app.post('/api/auth/register',
-    rateLimiter.middleware('auth'),
     async (req, res) => {
       try {
+        // Rate gate (peek, don't spend yet) — refuse early if locked/over budget.
+        const rl = rateLimiter.peek('auth', req);
+        if (!rl.allowed) return rateLimiter.sendLimited(res, rl);
+
         // Check if any admin already exists (prevent first-admin takeover)
         const adminCount = db.prepare('SELECT COUNT(*) as cnt FROM users WHERE is_admin=1').get();
         if (adminCount.cnt > 0) {
@@ -662,6 +902,9 @@ function setupRoutes() {
             !loginCaptcha.verify(req.body?.captcha_id, req.body?.captcha_answer)) {
           return res.status(400).json({ success: false, error: 'Captcha incorrect or expired. Try again.' });
         }
+
+        // Genuine credential attempt — spend one token against the auth limit.
+        rateLimiter.consume('auth', req);
 
         const { username, password } = req.body;
         const result = await authManager.registerAdmin(username, password);
@@ -708,10 +951,13 @@ function setupRoutes() {
 
   // FIX #7, #15, #4: Add rate limiting + audit logging + httpOnly cookies
   app.post('/api/auth/login',
-    rateLimiter.middleware('auth'),
     async (req, res) => {
       try {
         const ip = req.ip;
+
+        // Rate gate (peek, don't spend yet): if already locked/over budget, refuse now.
+        const rl = rateLimiter.peek('auth', req);
+        if (!rl.allowed) return rateLimiter.sendLimited(res, rl);
 
         // Auto-ban: reject IPs that tripped the failed-login threshold (temporary cooldown).
         if (ipFilter && ipFilter.isBlocked(ip)) {
@@ -720,9 +966,14 @@ function setupRoutes() {
 
         // CAPTCHA gate next — a wrong/expired captcha is rejected before the password is
         // ever checked, so it can't be used to probe credentials or trip account lockout.
+        // It is checked BEFORE consuming the auth budget, so fumbling the captcha is free
+        // and a human can't lock themselves out just by mistyping the verification answer.
         if (!loginCaptcha.verify(req.body?.captcha_id, req.body?.captcha_answer)) {
           return res.status(400).json({ success: false, error: 'Captcha incorrect or expired. Try again.' });
         }
+
+        // Genuine credential attempt — now spend one token against the auth limit.
+        rateLimiter.consume('auth', req);
 
         const { username, password } = req.body;
         const result = await authManager.login(username, password, ip);
@@ -986,9 +1237,22 @@ function setupRoutes() {
   // These endpoints are unprotected and allow arbitrary data manipulation.
   // For testing in development, use curl with direct database queries.
 
-  app.get('/api/stratum/stats', (req, res) => {
+  app.get('/api/stratum/stats', rateLimiter.middleware('public'), (req, res) => {
     try {
       const stats = stratumServer.getStats();
+      // Public, unauthenticated endpoint: truncate miner addresses so the live session list
+      // can't be scraped to enumerate every miner's full identity (same privacy posture as
+      // the blocks/fortune-board pages). Internal callers use getStats() directly for the
+      // full address; this route is the only public surface and never needs it.
+      if (Array.isArray(stats.sessions)) {
+        stats.sessions = stats.sessions.map((s) => {
+          const a = String(s.grin_address || '');
+          return {
+            ...s,
+            grin_address: a.length > 16 ? a.slice(0, 9) + '…' + a.slice(-4) : a
+          };
+        });
+      }
       res.json(stats);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -999,10 +1263,21 @@ function setupRoutes() {
     try {
       const blockStats = blockManager.getPoolStats();
       const minerCount = minerManager.getActiveMinersCount();
+      const sstats = stratumServer.getStats();
+      // Pool-wide live share quality (accepted/stale/rejected) summed across local stratum
+      // sessions. LIVE-only: empty on a pure hub (satellites don't relay reject/stale counters,
+      // a documented hub-mode limit) and resets when a worker disconnects.
+      const sq = { accepted: 0, stale: 0, rejected: 0 };
+      for (const s of (sstats.sessions || [])) {
+        sq.accepted += s.accepted || 0;
+        sq.stale    += s.stale    || 0;
+        sq.rejected += s.rejected || 0;
+      }
       res.json({
         ...blockStats,
         active_miners: minerCount,
-        active_connections: stratumServer.getStats().active_connections
+        active_connections: sstats.active_connections,
+        share_quality: sq
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -1043,13 +1318,21 @@ function setupRoutes() {
     res.json(out);
   });
 
+  // Public pool-found blocks, newest first. Paginated (limit+offset) with an optional status
+  // filter for the public blocks explorer. Response stays a plain array (back-compat with the
+  // homepage recent-blocks table); callers detect the last page when fewer than `limit` return.
   app.get('/api/pool/blocks', (req, res) => {
     try {
-      const limit = Math.min(parseInt(req.query.limit || 50), 500);
-      const stmt = db.prepare(`
-        SELECT * FROM blocks ORDER BY height DESC LIMIT ?
-      `);
-      const blocks = stmt.all(limit);
+      const limit = Math.min(Math.max(parseInt(req.query.limit || 50, 10), 1), 500);
+      const offset = Math.max(parseInt(req.query.offset || 0, 10), 0);
+      const status = req.query.status;
+      const valid = ['immature', 'confirmed', 'orphaned'];
+      let sql = 'SELECT * FROM blocks';
+      const params = [];
+      if (status && valid.includes(status)) { sql += ' WHERE status = ?'; params.push(status); }
+      sql += ' ORDER BY height DESC LIMIT ? OFFSET ?';
+      params.push(limit, offset);
+      const blocks = db.prepare(sql).all(...params);
       res.json(blocks);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -1119,6 +1402,392 @@ function setupRoutes() {
     res.json(withdrawalScheduler.getStatus());
   });
 
+  // ─── PAYOUT QUEUE CONTROL (Admin, step-up) ─────────────────────────
+  // The scheduler auto-retries Tor payouts, but a payout can still get stuck
+  // (recipient offline for days) or land in tor_failed after exhausting retries. These two
+  // actions let the operator intervene. Both move money/ledger state → freshAdmin (step-up).
+  //
+  // Funds model (see withdrawal-scheduler.js): retry_scheduled/tor_checking keep the amount in
+  // balance_locked; tor_failed has already reversed it back to spendable balance. retry/cancel
+  // must honour that so the ledger never drifts.
+
+  // Force a stuck/failed withdrawal back into the send queue immediately.
+  app.post('/api/admin/withdrawals/:id/retry', freshAdmin, (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(id);
+      if (!w) return res.status(404).json({ error: 'withdrawal not found' });
+      if (!['retry_scheduled', 'tor_failed'].includes(w.status)) {
+        return res.status(409).json({ error: `cannot retry a withdrawal in status '${w.status}'` });
+      }
+
+      const result = db.transaction(() => {
+        // tor_failed funds were reversed to spendable balance → re-lock them (CAS) before resending.
+        if (w.status === 'tor_failed') {
+          const before = db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(w.grin_address);
+          const locked = db.prepare(
+            `UPDATE miner_accounts SET balance = balance - ?, balance_locked = balance_locked + ?, updated_at = unixepoch()
+             WHERE grin_address = ? AND balance >= ?`
+          ).run(w.amount, w.amount, w.grin_address, w.amount);
+          if (locked.changes !== 1) { const e = new Error('insufficient balance to re-lock for retry'); e.code = 409; throw e; }
+          db.prepare(`
+            INSERT INTO balance_log (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+            VALUES (?, 'lock', ?, ?, ?, ?, ?, 'withdrawal', ?)
+          `).run(w.grin_address, w.amount, before.balance, before.balance - w.amount, before.balance_locked, before.balance_locked + w.amount, id);
+          db.prepare('UPDATE withdrawals SET status = ?, retry_count = 0, next_retry_at = NULL WHERE id = ?').run('tor_checking', id);
+        } else {
+          // retry_scheduled: funds already locked, just move it to the active queue now.
+          db.prepare('UPDATE withdrawals SET status = ?, next_retry_at = NULL WHERE id = ?').run('tor_checking', id);
+        }
+        db.prepare(`
+          INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+          VALUES (?, ?, 'tor_checking', 'admin', ?)
+        `).run(id, w.status, 'manual retry by admin');
+        return true;
+      })();
+
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'withdrawal_retry', 'withdrawal', ?, ?, ?)
+      `).run(req.user.user_id, String(id), JSON.stringify({ address: w.grin_address, amount: w.amount, from_status: w.status }), req.ip);
+
+      res.json({ success: true, id, queued: result });
+    } catch (err) {
+      res.status(err.code || 500).json({ error: err.message });
+    }
+  });
+
+  // Cancel a pending/failed withdrawal and return the funds to the miner's spendable balance.
+  app.post('/api/admin/withdrawals/:id/cancel', freshAdmin, (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const reason = String((req.body && req.body.reason) || '').slice(0, 280) || null;
+      const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(id);
+      if (!w) return res.status(404).json({ error: 'withdrawal not found' });
+      if (w.status === 'tor_sending') return res.status(409).json({ error: 'cannot cancel a withdrawal that is currently sending' });
+      if (!['retry_scheduled', 'tor_checking', 'tor_failed'].includes(w.status)) {
+        return res.status(409).json({ error: `cannot cancel a withdrawal in status '${w.status}'` });
+      }
+
+      db.transaction(() => {
+        // retry_scheduled / tor_checking still hold the amount in balance_locked → release it.
+        // tor_failed already reversed locked→balance, so the money is back; just record the cancel.
+        if (w.status !== 'tor_failed') {
+          const before = db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(w.grin_address);
+          db.prepare(
+            `UPDATE miner_accounts SET balance = balance + ?, balance_locked = CASE WHEN balance_locked >= ? THEN balance_locked - ? ELSE 0 END, updated_at = unixepoch()
+             WHERE grin_address = ?`
+          ).run(w.amount, w.amount, w.amount, w.grin_address);
+          db.prepare(`
+            INSERT INTO balance_log (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+            VALUES (?, 'reversal', ?, ?, ?, ?, ?, 'withdrawal', ?)
+          `).run(w.grin_address, w.amount, before.balance, before.balance + w.amount, before.balance_locked, Math.max(0, before.balance_locked - w.amount), id);
+        }
+        db.prepare('UPDATE withdrawals SET status = ?, cancelled_by = ?, cancel_reason = ? WHERE id = ?')
+          .run('cancelled', req.user.user_id, reason, id);
+        db.prepare(`
+          INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+          VALUES (?, ?, 'cancelled', 'admin', ?)
+        `).run(id, w.status, reason || 'cancelled by admin');
+      })();
+
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'withdrawal_cancel', 'withdrawal', ?, ?, ?)
+      `).run(req.user.user_id, String(id), JSON.stringify({ address: w.grin_address, amount: w.amount, from_status: w.status, reason }), req.ip);
+
+      res.json({ success: true, id, refunded: w.status !== 'tor_failed', amount: w.amount });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── WALLET ↔ LEDGER RECONCILIATION (Admin) ────────────────────────
+  // The single most important custodial safety check: does the on-chain wallet actually hold
+  // at least what the pool owes its miners? Compares wallet balance (source of truth for coins)
+  // against the SQLite ledger (source of truth for who is owed what). A negative coverage gap =
+  // the pool is under-funded; a balance_locked vs pending-withdrawals mismatch = a stuck ledger.
+  app.get('/api/admin/reconciliation', secureAdmin, async (req, res) => {
+    try {
+      const ledger = db.prepare(
+        `SELECT COALESCE(SUM(balance),0) AS sum_balance, COALESCE(SUM(balance_locked),0) AS sum_locked,
+                COUNT(*) AS accounts FROM miner_accounts`
+      ).get();
+      const pending = db.prepare(
+        `SELECT COALESCE(SUM(amount),0) AS amt, COUNT(*) AS cnt FROM withdrawals
+         WHERE status IN ('tor_checking','tor_sending','retry_scheduled')`
+      ).get();
+      const prizePool = (() => { try { return incentivesManager ? incentivesManager.prizePoolBalance() : 0; } catch (e) { return 0; } })();
+
+      // Wallet (on-chain) balance — same path as /api/admin/health/wallet.
+      let walletReachable = false;
+      let walletBalance = { total: 0, available: 0, locked: 0 };
+      if (wallet && wallet.getBalance) {
+        try {
+          // refresh=true: custodial coverage check needs fresh on-chain numbers (runs at
+          // a relaxed 3-min cadence from the admin page, not on every dashboard poll).
+          const summary = await wallet.getBalance(true);
+          const info = Array.isArray(summary) ? summary[1] : (summary || {});
+          walletBalance = {
+            total: Number(info.total || 0) / 1e9,
+            available: Number(info.amount_currently_spendable || 0) / 1e9,
+            locked: Number(info.amount_locked || 0) / 1e9,
+          };
+          walletReachable = true;
+        } catch (e) { walletReachable = false; }
+      }
+
+      const owed = ledger.sum_balance + ledger.sum_locked; // total the pool owes (incl. prize bucket)
+      const coverage_gap = parseFloat((walletBalance.total - owed).toFixed(9)); // ≥0 healthy, <0 under-funded
+      const locked_drift = parseFloat((ledger.sum_locked - pending.amt).toFixed(9)); // should be ~0
+      const TOL = 1e-6;
+
+      res.json({
+        success: true,
+        timestamp: new Date().toISOString(),
+        wallet: { reachable: walletReachable, ...walletBalance },
+        ledger: {
+          spendable_owed: parseFloat(ledger.sum_balance.toFixed(9)),
+          locked_owed: parseFloat(ledger.sum_locked.toFixed(9)),
+          total_owed: parseFloat(owed.toFixed(9)),
+          accounts: ledger.accounts,
+          prize_pool: parseFloat((prizePool || 0).toFixed(9)),
+        },
+        pending_withdrawals: { count: pending.cnt, amount: parseFloat(pending.amt.toFixed(9)) },
+        checks: {
+          // Wallet covers what miners are owed.
+          coverage_gap,
+          coverage_ok: !walletReachable ? null : coverage_gap >= -TOL,
+          // Locked ledger equals in-flight withdrawal amounts.
+          locked_drift,
+          locked_ok: Math.abs(locked_drift) <= TOL,
+        },
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── ADS (Admin CRUD) ──────────────────────────────────────────────
+  // Operator-managed promotions (banner image OR ad-network code snippet) bound to a public
+  // placement. secureAdmin (not freshAdmin) — ads are not money/destructive of funds.
+  app.get('/api/admin/ads', secureAdmin, (req, res) => {
+    try {
+      res.json({ ads: adsManager.list(req.query.placement), placements: AdsManager.PLACEMENTS });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/ads', secureAdmin, (req, res) => {
+    try {
+      res.json({ ad: adsManager.create(req.body || {}) });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/ads/:id', secureAdmin, (req, res) => {
+    try {
+      res.json({ ad: adsManager.update(parseInt(req.params.id, 10), req.body || {}) });
+    } catch (err) {
+      res.status(err.message === 'not found' ? 404 : 400).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/admin/ads/:id', secureAdmin, (req, res) => {
+    try {
+      const ok = adsManager.remove(parseInt(req.params.id, 10));
+      if (!ok) return res.status(404).json({ error: 'not found' });
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ─── ADS (Public) ──────────────────────────────────────────────────
+  // Active, in-window ads for the public site. `?placement=header` returns one slot;
+  // no param returns all slots keyed by placement. Only render-relevant fields are exposed.
+  app.get('/api/public/ads', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const p = req.query.placement;
+      if (p) return res.json({ placement: p, ads: adsManager.publicByPlacement(p) });
+      res.json({ ads: adsManager.publicAll() });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ─── MEDIA UPLOAD (Admin) ──────────────────────────────────────────
+  // Image upload for the CMS editor (cover images + in-body images). secureAdmin — not
+  // money/destructive. Returns { url } pointing at the persistent /uploads dir. multer
+  // errors (bad type, too big) are surfaced as 400 via the wrapper.
+  app.post('/api/admin/media', secureAdmin, (req, res) => {
+    mediaUpload.single('file')(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || 'upload failed' });
+      if (!req.file) return res.status(400).json({ error: 'no file' });
+      res.json({ url: '/uploads/' + req.file.filename, filename: req.file.filename });
+    });
+  });
+
+  // ─── PAGES (Admin CRUD) ────────────────────────────────────────────
+  // Dynamic content pages (the CMS that replaced the fixed 5-slot config). secureAdmin.
+  app.get('/api/admin/pages', secureAdmin, (req, res) => {
+    try {
+      res.json({ pages: pagesManager.list(), nav_locations: PagesManager.NAV_LOCATIONS });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/pages', secureAdmin, (req, res) => {
+    try {
+      res.json({ page: pagesManager.create(req.body || {}) });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/pages/:id', secureAdmin, (req, res) => {
+    try {
+      res.json({ page: pagesManager.update(parseInt(req.params.id, 10), req.body || {}) });
+    } catch (err) {
+      res.status(err.message === 'not found' ? 404 : 400).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/admin/pages/:id', secureAdmin, (req, res) => {
+    try {
+      const ok = pagesManager.remove(parseInt(req.params.id, 10));
+      if (!ok) return res.status(404).json({ error: 'not found' });
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ─── POSTS / BLOG (Admin CRUD) ─────────────────────────────────────
+  // Dated blog/announcement posts. secureAdmin — content, not funds.
+  app.get('/api/admin/posts', secureAdmin, (req, res) => {
+    try {
+      res.json({ posts: postsManager.list(req.query.status), statuses: PostsManager.STATUSES });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/posts', secureAdmin, (req, res) => {
+    try {
+      res.json({ post: postsManager.create(req.body || {}) });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/posts/:id', secureAdmin, (req, res) => {
+    try {
+      res.json({ post: postsManager.update(parseInt(req.params.id, 10), req.body || {}) });
+    } catch (err) {
+      res.status(err.message === 'not found' ? 404 : 400).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/admin/posts/:id', secureAdmin, (req, res) => {
+    try {
+      const ok = postsManager.remove(parseInt(req.params.id, 10));
+      if (!ok) return res.status(404).json({ error: 'not found' });
+      res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ─── POOL BLOCKS EXPLORER (Admin) ──────────────────────────────────
+  // Pool-found blocks with maturity countdown + GrinScan deep-links. Distinct from the public
+  // chain explorer (grinscan.org): this is only THIS pool's blocks, with payout-relevant context
+  // (status, maturity, orphan reversals) that a chain explorer cannot have.
+  app.get('/api/admin/blocks', secureAdmin, async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit || 50, 10), 500);
+      const offset = parseInt(req.query.offset || 0, 10);
+      const status = req.query.status || null;
+
+      const where = status ? 'WHERE status = ?' : '';
+      const args = status ? [status, limit, offset] : [limit, offset];
+      const rows = db.prepare(
+        `SELECT id, height, hash, nonce, reward, status, found_by, found_at, confirmed_at, created_at
+         FROM blocks ${where} ORDER BY height DESC LIMIT ? OFFSET ?`
+      ).all(...args);
+
+      // Current tip → maturity countdown. confirm_depth depends on the network.
+      const confirmDepth = config.network === 'testnet'
+        ? (config.confirm_depth_testnet || 100)
+        : (config.confirm_depth_mainnet || 1440);
+      let tipHeight = 0;
+      try {
+        const st = await blockMonitor.grinNode.getStatus();
+        tipHeight = (st && st.ok && st.height) || 0;
+      } catch (e) { tipHeight = 0; }
+
+      const grinscanBase = config.network === 'testnet'
+        ? 'https://testnet.grinscan.org/block'
+        : 'https://grinscan.org/block';
+
+      const blocks = rows.map((b) => {
+        const confirmations = tipHeight ? Math.max(0, tipHeight - b.height) : 0;
+        const blocks_to_maturity = (b.status === 'confirmed' || b.status === 'orphaned')
+          ? 0 : Math.max(0, confirmDepth - confirmations);
+        return {
+          ...b,
+          confirmations,
+          blocks_to_maturity,
+          grinscan_url: `${grinscanBase}/${b.height}`,
+        };
+      });
+
+      res.json({
+        success: true,
+        tip_height: tipHeight,
+        confirm_depth: confirmDepth,
+        network: config.network,
+        summary: blockManager.getPoolStats(),
+        count: blocks.length,
+        blocks,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── FINANCIAL EXPORT (Admin, CSV) ─────────────────────────────────
+  // Plain-CSV downloads for accounting/tax. Cookie-authenticated GETs so a normal browser
+  // download link works (same-origin sends the httpOnly session cookie); still IP+auth gated.
+  const csvCell = (v) => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const sendCsv = (res, filename, header, rows) => {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    const lines = [header.join(',')];
+    for (const r of rows) lines.push(r.map(csvCell).join(','));
+    res.send(lines.join('\r\n') + '\r\n');
+  };
+
+  // All confirmed payouts.
+  app.get('/api/admin/export/payouts.csv', secureAdmin, (req, res) => {
+    try {
+      const rows = db.prepare(
+        `SELECT id, grin_address, amount, fee, status, created_at, confirmed_at
+         FROM withdrawals WHERE status = 'confirmed' ORDER BY confirmed_at DESC`
+      ).all();
+      const iso = (t) => (t ? new Date(t * 1000).toISOString() : '');
+      sendCsv(res, `payouts-${config.network}.csv`,
+        ['id', 'grin_address', 'amount_grin', 'fee_grin', 'status', 'created_at', 'confirmed_at'],
+        rows.map((r) => [r.id, r.grin_address, r.amount, r.fee, r.status, iso(r.created_at), iso(r.confirmed_at)]));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Pool-fee revenue per found block (reward × pool_fee_percent). An honest, derived report —
+  // the pool's cut of each block, not a separately stored figure.
+  app.get('/api/admin/export/fee-revenue.csv', secureAdmin, (req, res) => {
+    try {
+      const feePct = parseFloat(config.pool_fee_percent != null ? config.pool_fee_percent : 1.0) || 0;
+      const rows = db.prepare(
+        `SELECT height, hash, reward, status, found_at FROM blocks ORDER BY height DESC`
+      ).all();
+      const iso = (t) => (t ? new Date(t * 1000).toISOString() : '');
+      sendCsv(res, `fee-revenue-${config.network}.csv`,
+        ['height', 'hash', 'reward_grin', 'pool_fee_percent', 'pool_cut_grin', 'status', 'found_at'],
+        rows.map((r) => [r.height, r.hash, r.reward, feePct,
+          parseFloat((r.reward * feePct / 100).toFixed(9)), r.status, iso(r.found_at)]));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/account/:addr/balance', (req, res) => {
     try {
       const { addr } = req.params;
@@ -1178,7 +1847,8 @@ function setupRoutes() {
     try {
       const { addr } = req.params;
       const acct = db.prepare(
-        `SELECT grin_address, balance, balance_locked, is_online, last_seen_at, created_at
+        `SELECT grin_address, balance, balance_locked, is_online, last_seen_at, created_at,
+                min_payout, last_ip, prev_ip
          FROM miner_accounts WHERE grin_address = ?`
       ).get(addr);
       if (!acct) return res.status(404).json({ error: 'Account not found' });
@@ -1199,6 +1869,10 @@ function setupRoutes() {
 
       const hr = hashrateTracker.getMinerHashrate(addr, 60) || {};
 
+      // Effective payout threshold: the account override (min_payout) if set, else the pool default.
+      // last/prev IP are NOT exposed (they back the ownership gate) — only whether one is on record.
+      const effectiveMin = (acct.min_payout != null) ? acct.min_payout : config.min_withdrawal;
+
       res.json({
         grin_address: acct.grin_address,
         balance: acct.balance,
@@ -1214,7 +1888,143 @@ function setupRoutes() {
           last_share_at: shareAgg.last_share_at || null
         },
         hashrate_gps: parseFloat(((hr.avg_hashrate || 0)).toFixed(6)),
-        min_withdrawal: config.min_withdrawal
+        min_withdrawal: config.min_withdrawal,
+        min_payout: acct.min_payout != null ? acct.min_payout : null,
+        effective_min_payout: effectiveMin,
+        has_recorded_ip: !!(acct.last_ip || acct.prev_ip)
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Per-worker breakdown for an address. Hashrate/share-count/last-share from the SHARES table
+  // (all regions, survives restarts); reject%/stale% + online from the live in-memory stratum
+  // sessions on THIS box (satellites don't relay reject/stale — documented hub-mode limit).
+  app.get('/api/account/:addr/workers', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const { addr } = req.params;
+      const windowMin = Math.min(Math.max(parseInt(req.query.window || 10), 1), 1440);
+      const workers = hashrateTracker.getWorkersForAccount(addr, windowMin);
+      res.json({ grin_address: addr, window_min: windowMin, workers });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Per-address hashrate time-series for charting (downsampled to ~maxPoints buckets).
+  app.get('/api/account/:addr/hashrate/history', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const { addr } = req.params;
+      const hours = Math.min(Math.max(parseInt(req.query.hours || 24), 1), 720);
+      const series = hashrateTracker.getAccountHistory(addr, hours);
+      res.json({ grin_address: addr, hours, series });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Set a per-miner payout threshold (address-as-identity, IP-gated). Anti-griefing: a random
+  // visitor must not be able to stall someone's payouts by raising their threshold. Proof = one
+  // of the address's last-2 mining source IPs. Range: cannot drop below the pool minimum.
+  app.post('/api/account/:addr/min-payout', rateLimiter.middleware('public'), (req, res) => {
+    const { addr } = req.params;
+    const reqIp = normalizeIp(req.ip);
+    try {
+      const acct = db.prepare('SELECT grin_address FROM miner_accounts WHERE grin_address = ?').get(addr);
+      if (!acct) return res.status(404).json({ error: 'Account not found' });
+
+      const ipProof = (req.body && req.body.ip_proof) || '';
+      const proof = verifyIpProof(db, addr, ipProof);
+      if (!proof.ok) {
+        auditOwnerProof(db, { action: 'set_min_payout', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
+        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
+      }
+
+      let val = req.body && req.body.min_payout;
+      // null/empty → clear the override (revert to pool default).
+      if (val === null || val === undefined || val === '') {
+        db.prepare('UPDATE miner_accounts SET min_payout = NULL, updated_at = unixepoch() WHERE grin_address = ?').run(addr);
+        auditOwnerProof(db, { action: 'set_min_payout', grinAddress: addr, ip: reqIp, ok: true, details: { min_payout: null } });
+        return res.json({ success: true, min_payout: null, effective_min_payout: config.min_withdrawal });
+      }
+
+      val = Number(val);
+      const poolMin = Number(config.min_withdrawal) || 0;
+      if (!Number.isFinite(val) || val < poolMin) {
+        return res.status(400).json({ error: `min_payout must be a number ≥ pool minimum (${poolMin})` });
+      }
+      if (val > 1e6) return res.status(400).json({ error: 'min_payout too large' });
+
+      db.prepare('UPDATE miner_accounts SET min_payout = ?, updated_at = unixepoch() WHERE grin_address = ?').run(val, addr);
+      auditOwnerProof(db, { action: 'set_min_payout', grinAddress: addr, ip: reqIp, ok: true, details: { min_payout: val } });
+      res.json({ success: true, min_payout: val, effective_min_payout: val });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Pool-wide hashrate time-series (SUM across addresses per bucket) for the dashboard chart.
+  app.get('/api/pool/hashrate/history', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const hours = Math.min(Math.max(parseInt(req.query.hours || 24), 1), 720);
+      const series = hashrateTracker.getPoolHistory(hours);
+      res.json({ hours, series });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Round effort / luck / time-since-last-block — pool-trust signals.
+  //  · round_effort_pct = Σ(share diff since last block) / current per-block network diff × 100
+  //  · luck_100_pct     = mean over last 100 blocks of (network_difficulty / round_shares) × 100
+  //    (>100% = luckier than expected; uses captured per-block columns, NULL rows skipped)
+  // Current network difficulty is cached ~60s to avoid hammering the node.
+  app.get('/api/pool/effort', rateLimiter.middleware('public'), async (req, res) => {
+    try {
+      const last = blockManager.getLastBlock();
+      const lastBlockAt = last ? last.found_at : null;
+      const now = Math.floor(Date.now() / 1000);
+
+      // Cached current per-block network difficulty.
+      if (!app.locals._netDiffCache || (Date.now() - app.locals._netDiffCache.at) > 60000) {
+        let netDiff = null;
+        try {
+          if (blockMonitor && blockMonitor.grinNode) {
+            const tip = await blockMonitor.grinNode.getTip();
+            netDiff = await blockManager._fetchNetworkDifficulty(tip.height);
+          }
+        } catch (_) { /* leave null */ }
+        app.locals._netDiffCache = { at: Date.now(), value: netDiff };
+      }
+      const netDiff = app.locals._netDiffCache.value;
+
+      const roundDiff = db.prepare(
+        'SELECT COALESCE(SUM(difficulty), 0) AS d FROM shares WHERE created_at > ?'
+      ).get(lastBlockAt || 0).d;
+
+      const roundEffortPct = (netDiff && netDiff > 0)
+        ? parseFloat(((roundDiff / netDiff) * 100).toFixed(2)) : null;
+
+      const luckRows = db.prepare(
+        `SELECT network_difficulty AS nd, round_shares AS rs FROM blocks
+         WHERE network_difficulty IS NOT NULL AND round_shares > 0
+         ORDER BY height DESC LIMIT 100`
+      ).all();
+      let luckPct = null;
+      if (luckRows.length > 0) {
+        const mean = luckRows.reduce((a, r) => a + (r.nd / r.rs), 0) / luckRows.length;
+        luckPct = parseFloat((mean * 100).toFixed(1));
+      }
+
+      res.json({
+        last_block_at: lastBlockAt,
+        seconds_since_last_block: lastBlockAt ? (now - lastBlockAt) : null,
+        round_shares: parseFloat(roundDiff.toFixed(6)),
+        network_difficulty: netDiff,
+        round_effort_pct: roundEffortPct,
+        luck_100_pct: luckPct,
+        luck_sample: luckRows.length
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -1258,23 +2068,60 @@ function setupRoutes() {
     }
   });
 
-  // Miner-initiated withdrawal (address-as-identity). The payout always goes back to the
-  // requesting address via the Tor listener, so there is no theft vector even without auth —
-  // it only moves an address's own balance to itself. Rate-limited; the CAS balance lock,
-  // 1-pending-per-address cap, and ledger entry all live in WithdrawalScheduler.createWithdrawal.
-  app.post('/api/account/:addr/withdraw', rateLimiter.middleware('public'), (req, res) => {
+  // Miner-initiated withdrawal (address-as-identity). Two rails:
+  //  · tor (default) — zero-interaction; payout always goes back to the requesting address via
+  //    its Tor listener, so there is no theft vector even without auth (it only moves an
+  //    address's own balance to itself). No IP gate.
+  //  · slatepack — interactive (no Tor). Emits a slate ENCRYPTED to the requesting address, so
+  //    only that wallet can decrypt + receive (no theft). Gated by an IP-proof (one of the
+  //    address's last-2 mining IPs) purely to throttle who can trigger it.
+  // Rate-limited; CAS balance lock + 1-pending-per-address cap live in the scheduler.
+  app.post('/api/account/:addr/withdraw', rateLimiter.middleware('public'), async (req, res) => {
     try {
       const { addr } = req.params;
       const method = (req.body && req.body.method) || 'tor';
-      if (method !== 'tor') {
-        // Slatepack transport is a documented-but-unbuilt rail (design §8 / §12); only the
-        // zero-interaction Tor transport is wired today. Fail explicitly rather than silently.
-        return res.status(400).json({ error: 'Only Tor withdrawals are available; Slatepack is not yet supported.' });
+
+      if (method === 'tor') {
+        const result = withdrawalScheduler.createWithdrawal(addr, req.body && req.body.amount, method);
+        return res.json({ success: true, withdrawal_id: result.withdrawal_id, status: 'tor_checking' });
       }
-      const result = withdrawalScheduler.createWithdrawal(addr, req.body && req.body.amount, method);
-      res.json({ success: true, withdrawal_id: result.withdrawal_id, status: 'tor_checking' });
+
+      if (method === 'slatepack') {
+        const reqIp = normalizeIp(req.ip);
+        const proof = verifyIpProof(db, addr, (req.body && req.body.ip_proof) || '');
+        if (!proof.ok) {
+          auditOwnerProof(db, { action: 'slatepack_withdraw', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
+          return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
+        }
+        const result = await withdrawalScheduler.createSlatepackWithdrawal(addr, req.body && req.body.amount);
+        auditOwnerProof(db, { action: 'slatepack_withdraw', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: result.withdrawal_id, amount: result.amount } });
+        return res.json({ success: true, withdrawal_id: result.withdrawal_id, amount: result.amount, status: 'slatepack_pending', slatepack: result.slatepack });
+      }
+
+      return res.status(400).json({ error: `unsupported withdrawal method: ${method}` });
     } catch (err) {
-      res.status(err.code && err.code >= 400 && err.code < 500 ? err.code : 500).json({ error: err.message });
+      res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });
+    }
+  });
+
+  // Complete a slatepack withdrawal: the miner pastes back the RESPONSE slatepack their wallet
+  // produced after `receive`. IP-gated like the trigger. The pool finalizes + broadcasts.
+  app.post('/api/account/:addr/withdraw/:id/finalize', rateLimiter.middleware('public'), async (req, res) => {
+    try {
+      const { addr, id } = req.params;
+      const reqIp = normalizeIp(req.ip);
+      const proof = verifyIpProof(db, addr, (req.body && req.body.ip_proof) || '');
+      if (!proof.ok) {
+        auditOwnerProof(db, { action: 'slatepack_finalize', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason, withdrawal_id: id } });
+        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
+      }
+      const result = await withdrawalScheduler.finalizeSlatepackWithdrawal(
+        addr, parseInt(id, 10), (req.body && req.body.response_slatepack) || ''
+      );
+      auditOwnerProof(db, { action: 'slatepack_finalize', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: id } });
+      res.json(result);
+    } catch (err) {
+      res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });
     }
   });
 
@@ -1314,7 +2161,7 @@ function setupRoutes() {
       const byRegion = new Map(agg.map(r => [r.region, r]));
 
       const locations = db.prepare(
-        `SELECT region, label, stratum_url, is_active FROM pool_locations`
+        `SELECT region, label, country, country_code, stratum_url, is_active FROM pool_locations`
       ).all();
       const locByRegion = new Map(locations.map(l => [l.region, l]));
 
@@ -1350,6 +2197,8 @@ function setupRoutes() {
         out.push({
           region,
           label: loc.label || null,
+          country: loc.country || null,
+          country_code: loc.country_code || null,
           stratum_url: loc.stratum_url || null,
           is_active: loc.is_active === undefined ? null : !!loc.is_active,
           status: regionStatus(region, a.shares > 0),
@@ -1564,6 +2413,72 @@ function setupRoutes() {
   });
 
   // ─── Alert System (Real-time monitoring & notifications) ──────────────────────
+  // ─── ADMIN SESSIONS / LOGIN ACTIVITY (Admin) ───────────────────────
+  // Sessions are stateless JWTs (no server-side session table), so there is no per-device
+  // list to enumerate. What the operator CAN see + control: recent login activity (from the
+  // audit log) and a "revoke sessions" kill-switch (bumps token_version → invalidates all
+  // refresh tokens for the account; live access tokens still expire within their 1h TTL).
+  app.get('/api/admin/security/login-history', secureAdmin, (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit || 50, 10), 200);
+      const rows = db.prepare(`
+        SELECT a.id, a.action, a.ip, a.created_at, u.username
+        FROM admin_audit_log a LEFT JOIN users u ON u.id = a.admin_id
+        WHERE a.action IN ('login_success','login_failure','ip_autoban','logout')
+        ORDER BY a.id DESC LIMIT ?
+      `).all(limit);
+      res.json({ success: true, count: rows.length, history: rows });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/security/revoke-sessions', freshAdmin, (req, res) => {
+    try {
+      authManager.revokeUserTokens(req.user.user_id);
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'revoke_sessions', 'auth', ?, '{}', ?)
+      `).run(req.user.user_id, String(req.user.user_id), req.ip);
+      res.json({
+        success: true,
+        message: 'All refresh tokens revoked. Other devices lose access within the 1-hour session window; re-login required.'
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── ALERT TEST DELIVERY (Admin) ───────────────────────────────────
+  // Fire a synthetic alert through the live delivery channels (email/Discord/Slack/Telegram)
+  // so the operator can confirm notifications actually arrive before relying on them. Channels
+  // are read from the running config (pool.json) — the response reports which are configured.
+  app.post('/api/admin/alerts/test', secureAdmin, async (req, res) => {
+    try {
+      if (!alertDelivery) return res.status(503).json({ error: 'alert delivery not initialised' });
+      const channels = alertDelivery.configuredChannels ? alertDelivery.configuredChannels() : {};
+      const anyConfigured = Object.values(channels).some(Boolean);
+      if (!anyConfigured) {
+        return res.status(400).json({ error: 'No alert channels are configured. Set a webhook / email / Telegram in pool.json first.', channels });
+      }
+      await alertDelivery.send({
+        type: 'test_alert',
+        level: 'info',
+        message: `Test alert from ${config.pool_name || 'Grin Pool'} — if you see this, notifications work.`,
+        occurrence_count: 1,
+        triggered_at: Date.now(),
+        data: JSON.stringify({ test: true, network: config.network }),
+      });
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'alert_test', 'alerts', 'test', ?, ?)
+      `).run(req.user.user_id, JSON.stringify({ channels }), req.ip);
+      res.json({ success: true, channels, message: 'Test alert dispatched to all configured channels.' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/admin/alerts', secureAdmin, (req, res) => {
     try {
       const status = req.query.status || 'active'; // 'active' or 'resolved'
@@ -1637,6 +2552,36 @@ function setupRoutes() {
   });
 
   // ─── Phase 2: New Endpoints ──────────────────────────────────────────────
+
+  // Identity of the currently-authenticated admin. The session token is an httpOnly cookie,
+  // so the browser CANNOT decode it (that's the point of httpOnly). Admin pages therefore
+  // can't read the username/is_admin client-side — they must ask the server. Without this,
+  // the pages tried to decode the cookie locally, always got null, and bounced to /login.html
+  // in an infinite loop. Gated by secureAdmin: a 200 here is itself the "you're logged in"
+  // signal; 401/403 means redirect to login.
+  app.get('/api/admin/me', secureAdmin, (req, res) => {
+    res.json({
+      username: req.user?.username || null,
+      is_admin: !!req.user?.is_admin,
+      user_id: req.user?.user_id || null
+    });
+  });
+
+  // Lightweight gate for nginx `auth_request` in front of the static /admin/ pages.
+  // Purpose: stop nginx serving the admin HTML to an unauthenticated browser AT ALL —
+  // no render, no "flash of admin page then redirect to /login.html". nginx subrequests
+  // this on every /admin/* hit and only serves the page on a 2xx; 401/403 → redirect to
+  // /login.html (handled in the nginx @admin_login fallback). Deliberately bypasses the
+  // `admin` rate limiter (just requireAdmin = a cheap cookie+JWT verify, no DB) because it
+  // fires per page AND per admin asset (admin-shell.js, styles.css) — running it through
+  // the brute-force budget would throttle normal navigation. The network perimeter is
+  // already enforced at the nginx `location /admin/` level ($admin_rules); the real
+  // /api/admin/* data endpoints keep the full secureAdmin stack. Returns 204 (no body —
+  // auth_request ignores it). client-side API.guardAdminPage() stays as a fallback for
+  // installs whose nginx wasn't re-run.
+  app.get('/api/admin/_authcheck', requireAdmin(authManager), (req, res) => {
+    res.status(204).end();
+  });
 
   // Unified Admin Dashboard
   app.get('/api/admin/dashboard', secureAdmin, async (req, res) => {
@@ -1716,81 +2661,6 @@ function setupRoutes() {
     }
   });
 
-  // Account Settings Update - FIX #4: Add comprehensive input validation
-  app.post('/api/account/update', requireAuth(authManager), (req, res) => {
-    try {
-      const userId = req.user?.user_id;
-      const { email, preferred_pool_server, min_payout, notification_level, theme } = req.body;
-
-      if (!userId) {
-        return res.status(401).json({ error: 'User not authenticated' });
-      }
-
-      // Validate email format if provided
-      if (email && !EMAIL_REGEX.test(email)) {
-        return res.status(400).json({ error: 'Invalid email format' });
-      }
-
-      // Validate minimum payout
-      if (min_payout !== undefined && (isNaN(min_payout) || min_payout < 0.1)) {
-        return res.status(400).json({ error: 'Minimum payout must be >= 0.1' });
-      }
-
-      // Validate theme is one of allowed values
-      if (theme && !ALLOWED_THEMES.includes(theme)) {
-        return res.status(400).json({ error: `Invalid theme. Must be one of: ${ALLOWED_THEMES.join(', ')}` });
-      }
-
-      // Validate notification_level is one of allowed values
-      if (notification_level && !ALLOWED_NOTIFICATION_LEVELS.includes(notification_level)) {
-        return res.status(400).json({ error: `Invalid notification level. Must be one of: ${ALLOWED_NOTIFICATION_LEVELS.join(', ')}` });
-      }
-
-      // Insert or update settings (table created at startup)
-      const stmt = db.prepare(`
-        INSERT INTO user_settings (user_id, email, preferred_pool_server, min_payout, notification_level, theme, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(user_id) DO UPDATE SET
-          email = excluded.email,
-          preferred_pool_server = excluded.preferred_pool_server,
-          min_payout = excluded.min_payout,
-          notification_level = excluded.notification_level,
-          theme = excluded.theme,
-          updated_at = CURRENT_TIMESTAMP
-      `);
-
-      stmt.run(
-        userId,
-        email || null,
-        preferred_pool_server || 'US East',
-        min_payout || 10.0,
-        notification_level || 'all',
-        theme || 'dark'
-      );
-
-      // Log to audit
-      const auditStmt = db.prepare(`
-        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
-        VALUES (?, 'update_settings', 'user_settings', ?, ?, ?)
-      `);
-      auditStmt.run(
-        userId,
-        String(userId),
-        JSON.stringify({ email: email || null, min_payout: min_payout || null, theme: theme || null }),
-        req.ip
-      );
-
-      res.json({
-        success: true,
-        message: 'Settings updated',
-        user_id: userId,
-        updated_at: new Date().toISOString()
-      });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   // Top Miners List - FIX #3: Use real data, not hardcoded values
   app.get('/api/miners/top', (req, res) => {
     try {
@@ -1828,6 +2698,122 @@ function setupRoutes() {
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // Combined health snapshot — the single call admin-panel/health.html makes for the
+  // services grid + System Stats. The per-component routes below (/health/node, /wallet,
+  // /system, /satellites) stay for granular polling; this one aggregates them into the flat
+  // { services:{key:{status,…}}, system:{…} } shape the page renders, in ONE request (keeps
+  // the admin rate budget low). Each probe is independently try/caught so one dead component
+  // never blanks the whole grid.
+  // Short cache (20s): the combined health payload is polled by every open admin tab and
+  // on fast nav; without this each poll would re-hit the node + wallet. Liveness data this
+  // coarse tolerates 20s staleness. Cleared implicitly by TTL only.
+  let _healthCache = { ts: 0, payload: null };
+  app.get('/api/admin/health', secureAdmin, async (req, res) => {
+    if (_healthCache.payload && (Date.now() - _healthCache.ts) < 20000) {
+      return res.json({ ..._healthCache.payload, cached: true });
+    }
+    const fmtUptime = (secs) => {
+      secs = Math.floor(secs || 0);
+      const d = Math.floor(secs / 86400);
+      const h = Math.floor((secs % 86400) / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      return (d ? d + 'd ' : '') + (h ? h + 'h ' : '') + m + 'm';
+    };
+    const services = {};
+
+    // pool_manager — this Node process
+    services.pool_manager = { status: 'ok', pid: process.pid, uptime: fmtUptime(process.uptime()) };
+
+    // grin_node
+    try {
+      const st = await blockMonitor.grinNode.getStatus();
+      const synced = st?.synced === true;
+      services.grin_node = {
+        status: synced ? 'ok' : 'warning',
+        height: st?.header_height || 0,
+        synced
+      };
+    } catch (e) {
+      services.grin_node = { status: 'error', message: e.message };
+    }
+
+    // stratum (local proxy) — present on singlebox/satellite roles; a pure hub has none
+    try {
+      if (minerManager && typeof minerManager.getActiveMinersCount === 'function') {
+        services.stratum = {
+          status: 'ok',
+          port: config.stratum_port || 3333,
+          miners_connected: minerManager.getActiveMinersCount()
+        };
+      } else {
+        services.stratum = { status: 'warning', message: 'no local stratum (hub mode)' };
+      }
+    } catch (e) {
+      services.stratum = { status: 'error', message: e.message };
+    }
+
+    // grin_wallet
+    try {
+      if (wallet && wallet.getBalance) {
+        const summary = await wallet.getBalance();
+        const info = Array.isArray(summary) ? summary[1] : (summary || {});
+        services.grin_wallet = {
+          status: 'ok',
+          spendable_balance: Number(info.amount_currently_spendable || 0) / 1e9
+        };
+      } else {
+        services.grin_wallet = { status: 'warning', message: 'wallet API not configured' };
+      }
+    } catch (e) {
+      services.grin_wallet = { status: 'error', message: e.message };
+    }
+
+    // nginx — the request reached us through it, so the reverse proxy is up
+    services.nginx = { status: 'ok', message: 'reachable (serving requests)' };
+
+    // database
+    try {
+      const dbst = retentionManager.status();
+      services.database = {
+        status: 'ok',
+        size_mb: dbst.db_size_bytes != null ? +(dbst.db_size_bytes / 1e6).toFixed(1) : null,
+        wal_mode: 'enabled',
+        message: `${dbst.counts?.shares ?? 0} shares`
+      };
+    } catch (e) {
+      services.database = { status: 'error', message: e.message };
+    }
+
+    // system — real host metrics (same os/statfs logic as /health/system)
+    let system = {};
+    try {
+      const load = os.loadavg();
+      const totalMem = os.totalmem();
+      const freeMem = os.freemem();
+      const memPct = totalMem ? Math.round(((totalMem - freeMem) / totalMem) * 100) : null;
+      let diskFree = null;
+      try {
+        if (typeof fs.statfsSync === 'function') {
+          let target = '/';
+          if (config.db_path && path.isAbsolute(config.db_path)) target = path.dirname(config.db_path);
+          else target = process.cwd();
+          const s = fs.statfsSync(target);
+          diskFree = +((s.bavail * s.bsize) / 1e9).toFixed(1);
+        }
+      } catch (e) { diskFree = null; }
+      system = {
+        disk_free: diskFree,
+        memory_pct: memPct,
+        load_avg: load && load.length ? load.map(n => n.toFixed(2)).join(' ') : null,
+        uptime: fmtUptime(os.uptime())
+      };
+    } catch (e) { system = {}; }
+
+    const payload = { services, system, timestamp: new Date().toISOString() };
+    _healthCache = { ts: Date.now(), payload };
+    res.json(payload);
   });
 
   // Node Health Status - FIX #2, #14: Use async/await and remove hardcoded data
@@ -2066,27 +3052,30 @@ function setupRoutes() {
   // Create or update a region by its unique `region` key (upsert).
   app.post('/api/admin/locations', secureAdmin, (req, res) => {
     try {
-      const { region, label, api_url, stratum_url } = req.body || {};
+      const { region, label, country, country_code, api_url, stratum_url } = req.body || {};
       const is_active = req.body && req.body.is_active === false ? 0 : 1;
       const reg = String(region || '').trim();
       if (!reg) return res.status(400).json({ error: 'region is required' });
+      const cc = country_code ? String(country_code).trim().toUpperCase().slice(0, 2) : null;
 
       db.prepare(`
-        INSERT INTO pool_locations (region, label, api_url, stratum_url, is_active, updated_at)
-        VALUES (?, ?, ?, ?, ?, unixepoch())
+        INSERT INTO pool_locations (region, label, country, country_code, api_url, stratum_url, is_active, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
         ON CONFLICT(region) DO UPDATE SET
           label = excluded.label,
+          country = excluded.country,
+          country_code = excluded.country_code,
           api_url = excluded.api_url,
           stratum_url = excluded.stratum_url,
           is_active = excluded.is_active,
           updated_at = unixepoch()
-      `).run(reg, label || null, api_url || null, stratum_url || null, is_active);
+      `).run(reg, label || null, country || null, cc, api_url || null, stratum_url || null, is_active);
 
       const row = db.prepare('SELECT * FROM pool_locations WHERE region = ?').get(reg);
       db.prepare(`
         INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
         VALUES (?, 'location_upsert', 'pool_location', ?, ?, ?)
-      `).run(req.user.user_id, reg, JSON.stringify({ label, api_url, stratum_url, is_active }), req.ip);
+      `).run(req.user.user_id, reg, JSON.stringify({ label, country, country_code: cc, api_url, stratum_url, is_active }), req.ip);
 
       res.json({ success: true, location: row });
     } catch (err) {
@@ -2123,7 +3112,7 @@ function setupRoutes() {
       const where = search ? 'WHERE ma.grin_address LIKE ?' : '';
       const args = search ? [search, limit, offset] : [limit, offset];
       const rows = db.prepare(`
-        SELECT ma.grin_address, ma.balance, ma.balance_locked, ma.is_online, ma.last_seen_at, ma.created_at,
+        SELECT ma.grin_address, ma.balance, ma.balance_locked, ma.is_online, ma.is_banned, ma.ban_reason, ma.last_seen_at, ma.created_at,
                (SELECT COUNT(*) FROM shares s WHERE s.grin_address = ma.grin_address) AS shares_count,
                (SELECT MAX(created_at) FROM shares s WHERE s.grin_address = ma.grin_address) AS last_share_at,
                (SELECT COALESCE(SUM(amount),0) FROM withdrawals w WHERE w.grin_address = ma.grin_address AND w.status='confirmed') AS total_paid
@@ -2212,6 +3201,40 @@ function setupRoutes() {
       `).run(req.user.user_id, addr, JSON.stringify({ amount, balance: injected }), req.ip);
 
       res.json({ success: true, grin_address: addr, amount, balance: injected });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Ban / unban a mining address (abuse control). Banning blocks future stratum logins +
+  // drops live sessions; the balance is left intact so anything already owed can still be
+  // paid out. Step-up gated (freshAdmin) — it's a moderation/access action.
+  app.post('/api/admin/miners/:addr/ban', freshAdmin, (req, res) => {
+    try {
+      const addr = String(req.params.addr || '').trim();
+      const reason = String((req.body && req.body.reason) || '').slice(0, 280) || null;
+      if (!addr) return res.status(400).json({ error: 'address required' });
+      minerManager.banMiner(addr, reason);
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'miner_ban', 'miner_account', ?, ?, ?)
+      `).run(req.user.user_id, addr, JSON.stringify({ reason }), req.ip);
+      res.json({ success: true, grin_address: addr, is_banned: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/miners/:addr/unban', freshAdmin, (req, res) => {
+    try {
+      const addr = String(req.params.addr || '').trim();
+      if (!addr) return res.status(400).json({ error: 'address required' });
+      minerManager.unbanMiner(addr);
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'miner_unban', 'miner_account', ?, '{}', ?)
+      `).run(req.user.user_id, addr, req.ip);
+      res.json({ success: true, grin_address: addr, is_banned: false });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

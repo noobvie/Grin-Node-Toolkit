@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Alerts · Settings | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+</head>
+<body>
+  <main>
+  <div class="settings-container">
+    <div class="page-head">
+      <h1>Alerts</h1>
+      <p class="page-sub">Notification channels and tests</p>
+    </div>
+
+    <div id="alerts" class="settings-content active">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Alert Delivery</h3>
+          <div class="form-group">
+            <label for="alert_check_interval_secs">Check Interval (seconds)</label>
+            <input type="number" id="alert_check_interval_secs" name="alert_check_interval_secs" min="5" max="3600" value="60">
+            <div class="helper-text">How often to check for alert conditions (5-3600 sec)</div>
+          </div>
+
+          <div class="form-group">
+            <label for="alert_email_address">Email Address</label>
+            <input type="email" id="alert_email_address" name="alert_email_address" placeholder="admin@pool.com">
+            <div class="helper-text">Receive alerts via email</div>
+          </div>
+
+          <div class="form-group">
+            <label for="discord_webhook_url">Discord Webhook URL</label>
+            <input type="url" id="discord_webhook_url" name="discord_webhook_url" placeholder="https://discord.com/api/webhooks/...">
+            <div class="helper-text">Send alerts to Discord channel</div>
+          </div>
+
+          <div class="form-group">
+            <label for="slack_webhook_url">Slack Webhook URL</label>
+            <input type="url" id="slack_webhook_url" name="slack_webhook_url" placeholder="https://hooks.slack.com/...">
+            <div class="helper-text">Send alerts to Slack channel</div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="telegram_bot_token">Telegram Bot Token</label>
+              <input type="text" id="telegram_bot_token" name="telegram_bot_token" placeholder="123456:ABC-DEF...">
+              <div class="helper-text">From @BotFather. Pair with a chat ID below.</div>
+            </div>
+            <div class="form-group">
+              <label for="telegram_chat_id">Telegram Chat ID</label>
+              <input type="text" id="telegram_chat_id" name="telegram_chat_id" placeholder="-1001234567890">
+              <div class="helper-text">User, group, or channel ID the bot can post to.</div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <button type="button" class="btn btn-secondary" onclick="testAlert()">Send test alert</button>
+            <span id="alert-test-msg" style="margin-left:.6rem;font-size:.85rem;"></span>
+            <div class="helper-text">
+              Fires a synthetic alert through the live channels. Delivery channels are read from
+              the running config (pool.json); saving here records them for reference.
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Alert Thresholds</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="alert_large_withdrawal">Large Withdrawal (GRIN)</label>
+              <input type="number" id="alert_large_withdrawal" name="alert_large_withdrawal" value="100">
+              <div class="helper-text">Alert if withdrawal exceeds this amount</div>
+            </div>
+            <div class="form-group">
+              <label for="alert_tor_fails_per_week">Tor Failures / Week</label>
+              <input type="number" id="alert_tor_fails_per_week" name="alert_tor_fails_per_week" value="3">
+              <div class="helper-text">Alert if Tor connectivity fails this many times</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('alerts')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('alerts')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- DATABASE TAB -->
+  </div>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/stepup.js"></script>
+  <script src="/admin/admin-shell.js"></script>
+  <script>window.SETTINGS_SECTION = "alerts";</script>
+  <script src="/admin/settings-common.js"></script>
+</body>
+</html>

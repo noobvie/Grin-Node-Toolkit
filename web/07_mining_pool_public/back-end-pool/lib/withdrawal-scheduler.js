@@ -3,13 +3,19 @@ const WalletTor = require('./wallet-tor');
 const IncentivesManager = require('./incentives');
 
 class WithdrawalScheduler {
-  constructor(config) {
+  constructor(config, wallet = null) {
     this.config = config;
     this.db = getDb();
     this.walletTor = new WalletTor(config);
+    // WalletAPI (Owner API v3) — required only for the slatepack payout rail. Tor payouts use
+    // walletTor (CLI). Left null in deployments that never enable slatepack.
+    this.wallet = wallet;
     this.incentives = new IncentivesManager(config);
     this.isRunning = false;
     this.checkInterval = 60000;
+    // How long an unfinalized slatepack payout stays pending before it's cancelled and the
+    // locked balance is returned (the miner never imported/returned the slate).
+    this.slatepackTtlSeconds = (config.slatepack_ttl_hours || 24) * 3600;
     this.retryDelays = config.withdrawal_retry_delays || [
       6 * 3600,
       12 * 3600,
@@ -35,6 +41,7 @@ class WithdrawalScheduler {
       try {
         await this.processRetryQueue();
         await this.processTorChecks();
+        await this.processSlatepackExpiry();
       } catch (err) {
         console.error(`[ERROR] Withdrawal scheduler error: ${err.message}`);
       }
@@ -312,7 +319,7 @@ class WithdrawalScheduler {
     if (method !== 'tor') fail('only Tor withdrawals are supported', 400);
 
     const acct0 = this.db.prepare(
-      'SELECT balance FROM miner_accounts WHERE grin_address = ?'
+      'SELECT balance, min_payout FROM miner_accounts WHERE grin_address = ?'
     ).get(grinAddress);
     if (!acct0) fail('account not found', 404);
 
@@ -323,7 +330,10 @@ class WithdrawalScheduler {
     if (isNaN(amt) || amt <= 0) fail('invalid amount', 400);
     amt = parseFloat(amt.toFixed(9));
 
-    const minW = this.config.min_withdrawal || 5.0;
+    // Per-miner payout threshold: the account's own min_payout (set via the IP-gated endpoint)
+    // overrides the pool default when present. It can only RAISE the floor (enforced at write
+    // time), so this never lets a withdrawal slip below the pool minimum.
+    const minW = (acct0.min_payout != null) ? acct0.min_payout : (this.config.min_withdrawal || 5.0);
     if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
 
     const txn = this.db.transaction(() => {
@@ -374,6 +384,189 @@ class WithdrawalScheduler {
     const withdrawal_id = txn();
     console.log(`[${new Date().toISOString()}] Withdrawal ${withdrawal_id} created for ${grinAddress} (${amt} GRIN, locked)`);
     return { success: true, withdrawal_id, amount: amt };
+  }
+
+  // ─── Slatepack payout (interactive, encrypted, no-Tor) ──────────────────────
+  // Reinstated rail: emits a slatepack ENCRYPTED to the miner's own address so only that wallet
+  // can decrypt + receive (no theft even if the IP gate is passed by a NAT co-tenant). The IP
+  // gate (verified in the route) just throttles who can trigger this. Two steps:
+  //   createSlatepackWithdrawal → returns the armored slate to hand to the miner (status pending)
+  //   finalizeSlatepackWithdrawal → consumes the miner's response slate, finalizes, posts, confirms
+
+  // Same balance lock + caps as createWithdrawal, but parks the row in 'slatepack_pending' and
+  // generates the encrypted slate. Returns { withdrawal_id, amount, slatepack }.
+  async createSlatepackWithdrawal(grinAddress, amount) {
+    const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
+    if (!grinAddress) fail('address required', 400);
+    if (!this.wallet) fail('slatepack payouts are not configured on this pool', 503);
+
+    const PENDING = "status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')";
+
+    const acct0 = this.db.prepare(
+      'SELECT balance, min_payout FROM miner_accounts WHERE grin_address = ?'
+    ).get(grinAddress);
+    if (!acct0) fail('account not found', 404);
+
+    let amt = amount === undefined || amount === null || amount === '' ? acct0.balance : parseFloat(amount);
+    if (isNaN(amt) || amt <= 0) fail('invalid amount', 400);
+    amt = parseFloat(amt.toFixed(9));
+
+    const minW = (acct0.min_payout != null) ? acct0.min_payout : (this.config.min_withdrawal || 5.0);
+    if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
+
+    // Lock the pool-side balance first (authoritative for accounting); the wallet-side output
+    // lock happens during tx_lock_outputs below, and is released via cancelTx on failure.
+    const txn = this.db.transaction(() => {
+      const totalPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING}`).get().c;
+      if (totalPending >= this.MAX_PENDING_WITHDRAWALS) fail(`pool has reached maximum pending withdrawals (${this.MAX_PENDING_WITHDRAWALS})`, 429);
+      const userPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND ${PENDING}`).get(grinAddress).c;
+      if (userPending >= 1) fail('you already have a pending withdrawal', 429);
+
+      const before = this.db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(grinAddress);
+      const locked = this.db.prepare(
+        `UPDATE miner_accounts SET balance = balance - ?, balance_locked = balance_locked + ?, updated_at = unixepoch()
+         WHERE grin_address = ? AND balance >= ?`
+      ).run(amt, amt, grinAddress, amt);
+      if (locked.changes !== 1) fail('insufficient balance', 409);
+
+      const wid = this.db.prepare(
+        "INSERT INTO withdrawals (grin_address, amount, fee, status, method) VALUES (?, ?, 0, 'slatepack_pending', 'slatepack')"
+      ).run(grinAddress, amt).lastInsertRowid;
+
+      this.db.prepare(`
+        INSERT INTO balance_log
+        (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+        VALUES (?, 'lock', ?, ?, ?, ?, ?, 'withdrawal', ?)
+      `).run(grinAddress, amt, before.balance, before.balance - amt, before.balance_locked, before.balance_locked + amt, wid);
+
+      this.db.prepare(`
+        INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+        VALUES (?, NULL, 'slatepack_pending', 'miner', ?)
+      `).run(wid, `slatepack withdrawal requested (${amt} GRIN)`);
+
+      return wid;
+    });
+
+    const withdrawalId = txn();
+
+    // Build the encrypted slate. On any wallet failure, cancel the wallet-side tx and reverse the
+    // pool balance lock so the miner's funds are never stranded.
+    let slate = null;
+    try {
+      slate = await this.wallet.initSendTx(amt);
+      await this.wallet.txLockOutputs(slate);
+      const armored = await this.wallet.createSlatepackMessage(slate, [grinAddress]);
+      const slateId = slate && slate.id ? slate.id : null;
+      this.db.prepare('UPDATE withdrawals SET slate_id = ? WHERE id = ?').run(slateId, withdrawalId);
+      console.log(`[${new Date().toISOString()}] Slatepack withdrawal ${withdrawalId} created for ${grinAddress} (${amt} GRIN, slate ${slateId})`);
+      return { success: true, withdrawal_id: withdrawalId, amount: amt, slatepack: armored };
+    } catch (err) {
+      try { if (slate && slate.id) await this.wallet.cancelTx(slate.id); } catch (_) { /* best-effort */ }
+      this._reverseLock(withdrawalId, 'slatepack_failed', 'slatepack_pending', `slate creation failed: ${err.message}`);
+      const e = new Error(`failed to create slatepack: ${err.message}`); e.code = 502; throw e;
+    }
+  }
+
+  // Consume the miner's RESPONSE slatepack, finalize, broadcast, and confirm the payout.
+  async finalizeSlatepackWithdrawal(grinAddress, withdrawalId, responseSlatepack) {
+    const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
+    if (!this.wallet) fail('slatepack payouts are not configured on this pool', 503);
+    if (!responseSlatepack || typeof responseSlatepack !== 'string') fail('response slatepack required', 400);
+
+    const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
+    if (!w) fail('withdrawal not found', 404);
+    if (w.grin_address !== grinAddress) fail('withdrawal does not belong to this address', 403);
+    if (w.status !== 'slatepack_pending') fail(`withdrawal is not awaiting a slatepack (status: ${w.status})`, 409);
+
+    let finalized;
+    try {
+      const slate = await this.wallet.slateFromSlatepackMessage(responseSlatepack, [0]);
+      // Bind the response to the slate we issued — rejects a pasted slate for a different tx.
+      if (w.slate_id && slate && slate.id && slate.id !== w.slate_id) {
+        fail('slatepack does not match this withdrawal', 400);
+      }
+      finalized = await this.wallet.finalizeTx(slate);
+      await this.wallet.postTx(finalized, true);
+    } catch (err) {
+      if (err.code) throw err; // our own 4xx (e.g. mismatch) — surface as-is, stay pending
+      const e = new Error(`failed to finalize slatepack: ${err.message}`); e.code = 502; throw e;
+    }
+
+    this._creditConfirm(withdrawalId, 'slatepack_pending', 'slatepack finalized + posted');
+    return { success: true, withdrawal_id: withdrawalId, status: 'confirmed' };
+  }
+
+  // Cancel + reverse slatepack payouts the miner never completed within the TTL.
+  async processSlatepackExpiry() {
+    try {
+      const cutoff = Math.floor(Date.now() / 1000) - this.slatepackTtlSeconds;
+      const stale = this.db.prepare(
+        "SELECT * FROM withdrawals WHERE status = 'slatepack_pending' AND created_at <= ? ORDER BY created_at ASC LIMIT 10"
+      ).all(cutoff);
+      for (const w of stale) {
+        if (this.wallet && w.slate_id) {
+          try { await this.wallet.cancelTx(w.slate_id); } catch (e) { console.warn(`[slatepack] cancelTx ${w.slate_id}: ${e.message}`); }
+        }
+        this._reverseLock(w.id, 'slatepack_expired', 'slatepack_pending', 'slatepack not returned within TTL — reversed');
+        console.warn(`⚠️  Slatepack withdrawal ${w.id} expired (${w.amount} GRIN reversed to ${w.grin_address})`);
+      }
+    } catch (err) {
+      console.error(`Error processing slatepack expiry: ${err.message}`);
+    }
+  }
+
+  // Confirm a payout: mark confirmed, release the lock (locked −= amount = paid out), ledger debit,
+  // join-bonus. Generic over fromStatus so both the Tor and slatepack rails reuse it.
+  _creditConfirm(withdrawalId, fromStatus, note) {
+    try {
+      this.db.prepare("UPDATE withdrawals SET status = 'confirmed', confirmed_at = unixepoch() WHERE id = ?").run(withdrawalId);
+      this.db.prepare(`
+        INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+        VALUES (?, ?, 'confirmed', 'scheduler', ?)
+      `).run(withdrawalId, fromStatus, note);
+
+      const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
+      this.db.prepare(`
+        UPDATE miner_accounts
+        SET balance_locked = CASE WHEN balance_locked >= ? THEN balance_locked - ? ELSE 0 END
+        WHERE grin_address = ?
+      `).run(w.amount, w.amount, w.grin_address);
+      this.db.prepare(`
+        INSERT INTO balance_log
+        (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+        VALUES (?, 'debit', ?, 0, 0, 0, 0, 'withdrawal', ?)
+      `).run(w.grin_address, w.amount, withdrawalId);
+
+      console.log(`[${new Date().toISOString()}] Withdrawal ${withdrawalId} confirmed (${w.amount} GRIN to ${w.grin_address})`);
+      try { this.incentives.maybePayJoinBonus(w.grin_address); }
+      catch (e) { console.error(`Error paying join bonus for ${w.grin_address}: ${e.message}`); }
+    } catch (err) {
+      console.error(`Error confirming withdrawal ${withdrawalId}: ${err.message}`);
+    }
+  }
+
+  // Reverse a locked balance back to spendable and park the withdrawal in a terminal state.
+  // Generic over fromStatus/newStatus so the slatepack rail reuses the same accounting as markFailed.
+  _reverseLock(withdrawalId, newStatus, fromStatus, note) {
+    try {
+      this.db.prepare('UPDATE withdrawals SET status = ? WHERE id = ?').run(newStatus, withdrawalId);
+      this.db.prepare(`
+        INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+        VALUES (?, ?, ?, 'scheduler', ?)
+      `).run(withdrawalId, fromStatus, newStatus, note);
+
+      const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
+      this.db.prepare(
+        'UPDATE miner_accounts SET balance = balance + ?, balance_locked = balance_locked - ? WHERE grin_address = ?'
+      ).run(w.amount, w.amount, w.grin_address);
+      this.db.prepare(`
+        INSERT INTO balance_log
+        (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+        VALUES (?, 'reversal', ?, 0, 0, 0, 0, 'withdrawal', ?)
+      `).run(w.grin_address, w.amount, withdrawalId);
+    } catch (err) {
+      console.error(`Error reversing withdrawal ${withdrawalId}: ${err.message}`);
+    }
   }
 
   // FIX #7: Check withdrawal rate limits to prevent DoS

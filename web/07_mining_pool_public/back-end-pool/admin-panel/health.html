@@ -10,33 +10,6 @@
 </head>
 <body>
 
-<header>
-  <div class="container">
-    <div class="header-inner">
-      <div class="site-title"><a href="/">Grin Pool <span>ツ</span></a></div>
-      <nav class="nav-links">
-        <a href="/">Home</a>
-        <a href="/admin/" id="nav-dashboard">Dashboard</a>
-        <a href="/admin/" id="nav-admin">Admin</a>
-        <a href="/admin/health.html" class="active">Health</a>
-        <a href="/login.html" id="nav-login" style="display:none">Login</a>
-        <span id="nav-user" style="display:none"></span>
-      </nav>
-      <div class="theme-switcher">
-        <button class="theme-btn" data-theme="matrix">Matrix</button>
-        <button class="theme-btn" data-theme="dark">Dark</button>
-        <button class="theme-btn" data-theme="light">Light</button>
-        <button class="theme-btn" data-theme="naruto">Naruto</button>
-        <button class="theme-btn" data-theme="japan">Japan ✿</button>
-      </div>
-    </div>
-  </div>
-</header>
-
-<div class="testnet-banner" id="testnet-banner" style="display:none">
-  ⚠ TESTNET — These coins have no real value
-</div>
-
 <main>
   <div class="container">
     <section>
@@ -54,56 +27,61 @@
       <h2 style="margin-top:1.6rem;">System Stats</h2>
       <div class="kpi-grid" id="sys-kpi">
         <div class="kpi-card">
+          <div class="kpi-ico">💾</div>
           <div class="kpi-label">Disk Free</div>
           <div class="kpi-value" id="sys-disk">—</div>
         </div>
         <div class="kpi-card">
+          <div class="kpi-ico">🧠</div>
           <div class="kpi-label">Memory Used</div>
           <div class="kpi-value" id="sys-mem">—</div>
         </div>
         <div class="kpi-card">
+          <div class="kpi-ico">📊</div>
           <div class="kpi-label">Load Average</div>
           <div class="kpi-value" id="sys-load">—</div>
         </div>
         <div class="kpi-card">
+          <div class="kpi-ico">⏱</div>
           <div class="kpi-label">Uptime</div>
           <div class="kpi-value" id="sys-uptime">—</div>
         </div>
       </div>
 
+      <!-- ── Custodial reconciliation ─────────────────────────────────────── -->
+      <h2 style="margin-top:1.6rem;">Wallet ↔ Ledger Reconciliation</h2>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
+        Does the on-chain wallet hold at least what the pool owes its miners? A negative coverage
+        gap means the pool is under-funded; locked drift should stay near zero.
+      </p>
+      <div id="recon-banner"></div>
+      <div class="kpi-grid" id="recon-kpi">
+        <div class="kpi-card"><div class="kpi-label">Wallet Total ツ</div><div class="kpi-value" id="rc-wallet">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Owed to Miners ツ</div><div class="kpi-value" id="rc-owed">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Coverage Gap ツ</div><div class="kpi-value" id="rc-gap">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Locked Drift ツ</div><div class="kpi-value" id="rc-drift">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Pending Payouts</div><div class="kpi-value" id="rc-pending">—</div></div>
+      </div>
+
+      <!-- ── Satellites (moved) ───────────────────────────────────────────── -->
+      <h2 style="margin-top:1.6rem;">Satellites (regions)</h2>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
+        Live per-region satellite health now lives on the <a href="regions.html">Regions</a> page,
+        alongside each region's connect endpoint and setup steps.
+      </p>
+      <p><a class="btn btn-outline btn-sm" href="regions.html">→ Open Regions</a></p>
+
     </section>
   </div>
 </main>
 
-<footer>
-  <div class="container">
-    <p>Grin Pool ツ — Admin Panel</p>
-  </div>
-</footer>
-
+<script src="/js/auth.js"></script>
 <script src="/js/api.js"></script>
-<script src="/js/theme.js"></script>
+<script src="/admin/admin-shell.js"></script>
 <script>
-// ── Admin auth check ───────────────────────────────────────────────────────
-(function () {
-  if (!API.isLoggedIn()) { window.location.href = '/login.html'; return; }
-  try {
-    const payload = API.decodePayload();
-    if (!payload || !payload.is_admin) { window.location.href = '/login.html'; return; }
-    document.getElementById('nav-user').style.display = '';
-    document.getElementById('nav-user').innerHTML =
-      `<span class="nav-username">${payload.sub}</span> <a href="#" onclick="API.clearTokens();window.location='/login.html'">Logout</a>`;
-  } catch (e) { window.location.href = '/login.html'; }
-
-  fetch('/api/pool/stats').then(r => r.json()).then(d => {
-    if (d.network === 'testnet') {
-      document.getElementById('testnet-banner').style.display = '';
-      document.title = '[TESTNET] ' + document.title;
-    }
-    const el = document.querySelector('.site-title a');
-    if (el && d.pool_name) el.childNodes[0].textContent = d.pool_name + ' ';
-  }).catch(() => {});
-})();
+// Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
+// up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
+API.guardAdminPage();
 
 // ── Service definition map ─────────────────────────────────────────────────
 // Maps API fields to display config
@@ -184,9 +162,42 @@ async function loadHealth() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', loadHealth);
-// Auto-refresh every 30s
-setInterval(loadHealth, 30000);
+// ── Reconciliation ──────────────────────────────────────────────────────────
+function fmtGrin(v) { return (Number(v) || 0).toFixed(4); }
+async function loadReconciliation() {
+  try {
+    const d = await API.get('/api/admin/reconciliation');
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('rc-wallet',  d.wallet && d.wallet.reachable ? fmtGrin(d.wallet.total) : 'unreachable');
+    set('rc-owed',    fmtGrin(d.ledger.total_owed));
+    set('rc-gap',     fmtGrin(d.checks.coverage_gap));
+    set('rc-drift',   fmtGrin(d.checks.locked_drift));
+    set('rc-pending', `${d.pending_withdrawals.count} (${fmtGrin(d.pending_withdrawals.amount)} ツ)`);
+
+    const banner = document.getElementById('recon-banner');
+    const problems = [];
+    if (d.checks.coverage_ok === false) problems.push('⚠ Wallet does NOT cover what miners are owed (under-funded).');
+    if (d.checks.locked_ok === false) problems.push('⚠ Locked-balance ledger does not match in-flight withdrawals.');
+    if (d.wallet && !d.wallet.reachable) problems.push('Wallet was unreachable — coverage check skipped.');
+    if (problems.length) {
+      banner.innerHTML = `<div class="health-card error" style="margin-bottom:.8rem;">
+        <div class="health-detail">${problems.map(escHtml).join('<br>')}</div></div>`;
+    } else {
+      banner.innerHTML = `<div class="health-card ok" style="margin-bottom:.8rem;">
+        <div class="health-detail">✓ Wallet covers all miner balances; ledger is consistent.</div></div>`;
+    }
+  } catch (err) {
+    document.getElementById('recon-banner').innerHTML =
+      `<div class="health-card error" style="margin-bottom:.8rem;"><div class="health-detail">Error: ${escHtml(err.message)}</div></div>`;
+  }
+}
+
+// Initial paint: load everything once.
+document.addEventListener('DOMContentLoaded', () => { loadHealth(); loadReconciliation(); });
+// Cheap liveness (cached node/wallet status, system stats) — every 60s.
+setInterval(() => { loadHealth(); }, 60000);
+// Reconciliation forces a real wallet→node scan (refresh_from_node=true) — relaxed to every 3 min.
+setInterval(loadReconciliation, 180000);
 </script>
 </body>
 </html>

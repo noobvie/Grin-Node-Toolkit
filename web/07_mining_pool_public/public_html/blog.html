@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en" data-page="blog">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blog</title>
+  <meta name="description" content="Pool news, updates and announcements.">
+  <link rel="stylesheet" href="/css/dashboard.css">
+  <link rel="alternate" type="application/rss+xml" title="Blog RSS" href="/blog/rss.xml">
+  <style>
+    .blog-wrap { max-width: 900px; margin: 0 auto; padding: 2rem 1.25rem; }
+    .blog-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .blog-head h1 { margin: 0; }
+    .post-grid { display: grid; gap: 1.25rem; margin-top: 1.5rem; }
+    .post-card { display: grid; grid-template-columns: 200px 1fr; gap: 1rem; background: var(--card-bg, #14161a);
+      border: 1px solid var(--border, #262a30); border-radius: 10px; overflow: hidden; text-decoration: none; color: inherit; }
+    .post-card:hover { border-color: var(--accent, #b8e600); }
+    .post-card .cover { width: 200px; height: 130px; object-fit: cover; background: #0d0f12; }
+    .post-card .no-cover { width: 200px; height: 130px; display: flex; align-items: center; justify-content: center;
+      background: #0d0f12; color: var(--accent, #b8e600); font-size: 2rem; }
+    .post-card .body { padding: 1rem 1.1rem 1.1rem 0; }
+    .post-card h2 { margin: 0 0 .35rem; font-size: 1.25rem; }
+    .post-card .meta { color: var(--text-dim, #8a929c); font-size: .85rem; margin-bottom: .5rem; }
+    .post-card .excerpt { color: var(--text, #cfd3d9); font-size: .95rem; line-height: 1.5; }
+    .tag { display: inline-block; font-size: .72rem; padding: .1rem .5rem; border-radius: 999px;
+      background: rgba(184,230,0,.12); color: var(--accent, #b8e600); margin: .35rem .35rem 0 0; }
+    .blog-pager { display: flex; justify-content: center; gap: .75rem; margin: 2rem 0 0; }
+    .blog-pager button { padding: .5rem 1rem; border-radius: 6px; border: 1px solid var(--border, #262a30);
+      background: transparent; color: inherit; cursor: pointer; }
+    .blog-pager button[disabled] { opacity: .4; cursor: default; }
+    .muted { color: var(--text-dim, #8a929c); }
+    @media (max-width: 620px) {
+      .post-card { grid-template-columns: 1fr; }
+      .post-card .cover, .post-card .no-cover { width: 100%; }
+      .post-card .body { padding: 0 1.1rem 1.1rem; }
+    }
+  </style>
+  <link rel="stylesheet" href="/css/themes.css">
+</head>
+<body>
+  <!-- header injected by /js/public-shell.js -->
+
+  <main class="blog-wrap">
+    <div class="blog-head">
+      <h1>Blog</h1>
+      <a class="muted" href="/blog/rss.xml" title="RSS feed">RSS ⤵</a>
+    </div>
+    <div id="post-grid" class="post-grid">
+      <p class="muted">Loading…</p>
+    </div>
+    <div id="pager" class="blog-pager" style="display:none;">
+      <button id="prev" onclick="go(-1)">← Newer</button>
+      <button id="next" onclick="go(1)">Older →</button>
+    </div>
+  </main>
+
+  <!-- footer injected by /js/public-shell.js -->
+
+  <script>
+    (function () {
+      var PAGE_SIZE = 8;
+      var offset = 0, total = 0;
+
+      function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+      }
+      function fmtDate(unix) {
+        if (!unix) return '';
+        try { return new Date(unix * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
+        catch (e) { return ''; }
+      }
+
+      function render(data) {
+        var grid = document.getElementById('post-grid');
+        var posts = (data && data.posts) || [];
+        total = (data && data.total) || 0;
+        if (!posts.length) {
+          grid.innerHTML = '<p class="muted">No posts yet. Check back soon.</p>';
+          document.getElementById('pager').style.display = 'none';
+          return;
+        }
+        grid.innerHTML = posts.map(function (p) {
+          var href = '/blog/' + encodeURIComponent(p.slug);
+          var cover = p.cover_image
+            ? '<img class="cover" src="' + esc(p.cover_image) + '" alt="">'
+            : '<div class="no-cover">📝</div>';
+          var tags = (p.tags || []).map(function (t) { return '<span class="tag">' + esc(t) + '</span>'; }).join('');
+          return '<a class="post-card" href="' + href + '">' +
+            cover +
+            '<div class="body">' +
+              '<h2>' + esc(p.title) + '</h2>' +
+              '<div class="meta">' + esc(fmtDate(p.published_at)) + '</div>' +
+              '<div class="excerpt">' + esc(p.excerpt || '') + '</div>' +
+              '<div>' + tags + '</div>' +
+            '</div>' +
+          '</a>';
+        }).join('');
+
+        var pager = document.getElementById('pager');
+        if (total > PAGE_SIZE) {
+          pager.style.display = '';
+          document.getElementById('prev').disabled = offset <= 0;
+          document.getElementById('next').disabled = offset + PAGE_SIZE >= total;
+        } else {
+          pager.style.display = 'none';
+        }
+      }
+
+      function load() {
+        fetch('/api/public/posts?limit=' + PAGE_SIZE + '&offset=' + offset)
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (j) { render(j && j.data); window.scrollTo({ top: 0 }); })
+          .catch(function () {
+            document.getElementById('post-grid').innerHTML = '<p class="muted">Could not load posts.</p>';
+          });
+      }
+
+      window.go = function (dir) {
+        offset = Math.max(0, offset + dir * PAGE_SIZE);
+        load();
+      };
+
+      load();
+    })();
+  </script>
+  <script src="/js/public-shell.js"></script>
+  <script src="/js/public-theme.js"></script>
+  <script src="/js/branding.js"></script>
+</body>
+</html>

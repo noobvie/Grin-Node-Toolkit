@@ -10,135 +10,92 @@
 </head>
 <body>
 
-<header>
+<main>
   <div class="container">
-    <div class="header-inner">
-      <div class="site-title"><a href="/">Grin Pool <span>ツ</span></a></div>
-      <nav class="nav-links">
-        <a href="/">Home</a>
-        <a href="/admin/" id="nav-dashboard">Dashboard</a>
-        <a href="/admin/" class="active" id="nav-admin">Admin</a>
-        <a href="/login.html" id="nav-login" style="display:none">Login</a>
-        <span id="nav-user" style="display:none"></span>
-      </nav>
-      <div class="theme-switcher">
-        <button class="theme-btn" data-theme="matrix">Matrix</button>
-        <button class="theme-btn" data-theme="dark">Dark</button>
-        <button class="theme-btn" data-theme="light">Light</button>
-        <button class="theme-btn" data-theme="naruto">Naruto</button>
-        <button class="theme-btn" data-theme="japan">Japan ✿</button>
+    <div class="page-head">
+      <h1>Overview</h1>
+      <p class="page-sub">Live pool activity, payouts and system health</p>
+    </div>
+
+    <!-- KPI cards -->
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-ico">👥</div>
+        <div class="kpi-label">Total Users</div>
+        <div class="kpi-value" id="kpi-users">—</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-ico">⛏</div>
+        <div class="kpi-label">Active Miners</div>
+        <div class="kpi-value" id="kpi-miners">—</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-ico">📈</div>
+        <div class="kpi-label">Pool Hashrate</div>
+        <div class="kpi-value" id="kpi-hashrate">—</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-ico">ツ</div>
+        <div class="kpi-label">Unclaimed Balance</div>
+        <div class="kpi-value" id="kpi-unclaimed">—</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-ico">💸</div>
+        <div class="kpi-label">Pending Withdrawals</div>
+        <div class="kpi-value" id="kpi-pending">—</div>
+      </div>
+    </div>
+
+    <!-- 30-day pool hashrate -->
+    <div class="chart-card">
+      <div class="chart-head">
+        <h3>Pool hashrate</h3>
+        <span class="chart-sub">last 30 days</span>
+      </div>
+      <div class="chart-wrap" id="hashrate-wrap"><canvas id="hashrate-chart"></canvas></div>
+    </div>
+
+    <!-- live share quality -->
+    <div class="chart-card">
+      <div class="chart-head">
+        <h3>Share quality</h3>
+        <span class="chart-sub">live — connected workers</span>
+      </div>
+      <div class="chart-wrap" id="quality-wrap"><canvas id="quality-chart"></canvas></div>
+    </div>
+
+    <!-- Recent withdrawals -->
+    <h2>Recent Withdrawals</h2>
+    <div class="card" style="padding:0;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>User</th>
+              <th>Amount ツ</th>
+              <th>Status</th>
+              <th>Tx ID</th>
+            </tr>
+          </thead>
+          <tbody id="recent-tbody">
+            <tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
-</header>
-
-<div class="testnet-banner" id="testnet-banner" style="display:none">
-  ⚠ TESTNET — These coins have no real value
-</div>
-
-<main>
-  <div class="container">
-    <section>
-      <h2>Admin Dashboard</h2>
-
-      <!-- KPI cards -->
-      <div class="kpi-grid">
-        <div class="kpi-card">
-          <div class="kpi-label">Total Users</div>
-          <div class="kpi-value" id="kpi-users">—</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Active Miners</div>
-          <div class="kpi-value" id="kpi-miners">—</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Pool Hashrate</div>
-          <div class="kpi-value" id="kpi-hashrate">—</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Unclaimed Balance ツ</div>
-          <div class="kpi-value" id="kpi-unclaimed">—</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Pending Withdrawals</div>
-          <div class="kpi-value" id="kpi-pending">—</div>
-        </div>
-      </div>
-
-      <!-- Quick actions -->
-      <h2>Quick Actions</h2>
-      <div class="action-grid">
-        <a href="/admin/users.html" class="action-btn">
-          <span class="action-icon">👥</span>
-          Manage Users
-        </a>
-        <a href="/admin/miners.html" class="action-btn">
-          <span class="action-icon">⛏</span>
-          View Miners
-        </a>
-        <a href="/admin/payments.html" class="action-btn">
-          <span class="action-icon">💸</span>
-          Pending Payments
-        </a>
-        <a href="/admin/health.html" class="action-btn">
-          <span class="action-icon">🩺</span>
-          System Health
-        </a>
-      </div>
-
-      <!-- Recent withdrawals -->
-      <h2 style="margin-top:1rem;">Recent Withdrawals</h2>
-      <div class="card" style="padding:0;">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>User</th>
-                <th>Amount ツ</th>
-                <th>Status</th>
-                <th>Tx ID</th>
-              </tr>
-            </thead>
-            <tbody id="recent-tbody">
-              <tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-  </div>
 </main>
 
-<footer>
-  <div class="container">
-    <p>Grin Pool ツ — Admin Panel</p>
-  </div>
-</footer>
-
+<script src="/js/auth.js"></script>
 <script src="/js/api.js"></script>
-<script src="/js/theme.js"></script>
+<script src="/admin/admin-shell.js"></script>
+<script src="/js/vendor/chart.umd.min.js"></script>
+<script src="/js/charts-init.js"></script>
 <script>
-// ── Admin auth check ───────────────────────────────────────────────────────
-(function () {
-  if (!API.isLoggedIn()) { window.location.href = '/login.html'; return; }
-  try {
-    const payload = API.decodePayload();
-    if (!payload || !payload.is_admin) { window.location.href = '/login.html'; return; }
-    document.getElementById('nav-user').style.display = '';
-    document.getElementById('nav-user').innerHTML =
-      `<span class="nav-username">${payload.sub}</span> <a href="#" onclick="API.clearTokens();window.location='/login.html'">Logout</a>`;
-  } catch (e) { window.location.href = '/login.html'; }
-
-  fetch('/api/pool/stats').then(r => r.json()).then(d => {
-    if (d.network === 'testnet') {
-      document.getElementById('testnet-banner').style.display = '';
-      document.title = '[TESTNET] ' + document.title;
-    }
-    const el = document.querySelector('.site-title a');
-    if (el && d.pool_name) el.childNodes[0].textContent = d.pool_name + ' ';
-  }).catch(() => {});
-})();
+// Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
+// up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
+API.guardAdminPage();
 
 function fmtGrin(v) { return (v || 0).toFixed(4); }
 function fmtHashrate(gps) {
@@ -169,6 +126,9 @@ async function loadAdminDashboard() {
     document.getElementById('kpi-pending').textContent  = d.pending_withdrawals ?? '—';
   } catch (e) {}
 
+  loadHashrateChart();
+  loadShareQuality();
+
   try {
     const items = await API.get('/api/admin/withdrawals?limit=10');
     const tbody = document.getElementById('recent-tbody');
@@ -190,6 +150,46 @@ async function loadAdminDashboard() {
       </tr>`;
     }).join('');
   } catch (e) {}
+}
+
+// 30-day pool hashrate — reuses the public history endpoint (no backend change) and the
+// vendored Chart.js helper. Falls back to a tidy empty state when there are no samples yet
+// or Chart.js failed to load, so the card never renders broken.
+async function loadHashrateChart() {
+  const wrap = document.getElementById('hashrate-wrap');
+  if (!wrap) return;
+  try {
+    const d = await API.get('/api/pool/hashrate/history?hours=720');
+    const series = (d && d.series) || [];
+    if (!series.length || !window.PoolCharts) {
+      wrap.innerHTML = '<div class="chart-empty">No hashrate samples yet.</div>';
+      return;
+    }
+    PoolCharts.renderHashrateChart('hashrate-chart', series, { label: 'Pool hashrate' });
+  } catch (e) {
+    wrap.innerHTML = '<div class="chart-empty">Hashrate history unavailable.</div>';
+  }
+}
+
+// Live pool-wide share quality (valid/stale/rejected). Reuses the public /api/pool/stats
+// aggregate. Empty state on a pure hub or with no connected rigs.
+async function loadShareQuality() {
+  const wrap = document.getElementById('quality-wrap');
+  if (!wrap) return;
+  try {
+    const s = await API.get('/api/pool/stats');
+    const q = (s && s.share_quality) || {};
+    const acc = Number(q.accepted) || 0, stl = Number(q.stale) || 0, rej = Number(q.rejected) || 0;
+    if (acc + stl + rej === 0 || !window.PoolCharts) {
+      wrap.innerHTML = '<div class="chart-empty">No live share data yet.</div>';
+      return;
+    }
+    PoolCharts.renderDoughnutChart('quality-chart',
+      ['Valid', 'Stale', 'Rejected'], [acc, stl, rej],
+      { colors: ['#3fb950', '#d29922', '#f85149'] });
+  } catch (e) {
+    wrap.innerHTML = '<div class="chart-empty">Share quality unavailable.</div>';
+  }
 }
 
 document.addEventListener('DOMContentLoaded', loadAdminDashboard);

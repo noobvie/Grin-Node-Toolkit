@@ -9,23 +9,10 @@
 </head>
 <body>
 
-    <header>
-        <div class="brand"><span class="dot" aria-hidden="true"></span><span data-brand="pool_name">GRINIUM</span></div>
-        <nav class="header-nav" aria-label="Main">
-            <a href="index.html" class="nav-link">Dashboard</a>
-            <a href="miners-stats.html" class="nav-link">Miners</a>
-            <a href="payment-history.html" class="nav-link">Payouts</a>
-            <a href="index.html#info" class="nav-link">Info</a>
-            <a href="account-settings.html" class="nav-link active">My Account</a>
-        </nav>
-        <div class="nav-right">
-            <div class="theme-switcher"></div>
-            <a class="btn primary sm" href="index.html#connect">Start Mining</a>
-        </div>
-    </header>
+    <!-- header injected by /js/public-shell.js -->
 
     <div class="container">
-        <h2 class="page-title">My Account</h2>
+        <h2 class="page-title">Account</h2>
 
         <div class="settings-section">
             <h3>Look Up Your Mining Account</h3>
@@ -50,6 +37,52 @@
             </div>
 
             <div class="settings-section">
+                <h3>Hashrate (24h)</h3>
+                <div style="position:relative;height:220px"><canvas id="acct-hashrate-chart"></canvas></div>
+            </div>
+
+            <div class="settings-section">
+                <h3>Workers</h3>
+                <p style="margin-bottom:12px;color:var(--dark-dim);">
+                    Per-rig breakdown. Reject % / stale % are shown for workers currently connected
+                    to this server (live session counters).
+                </p>
+                <div id="acct-workers-chart-wrap" style="position:relative;height:200px;margin-bottom:18px;display:none">
+                    <canvas id="acct-workers-chart"></canvas>
+                </div>
+                <table class="data-table" aria-label="Workers">
+                    <thead><tr><th>Worker</th><th class="num">Hashrate</th><th class="num">Shares</th><th class="num">Stale %</th><th class="num">Reject %</th><th>Last share</th><th>Status</th></tr></thead>
+                    <tbody id="acct-workers"><tr><td colspan="7">—</td></tr></tbody>
+                </table>
+            </div>
+
+            <div class="settings-section" id="acct-quality-section" style="display:none">
+                <h3>Share Quality <span style="font-weight:normal;font-size:13px;color:var(--dark-dim)">(live — connected workers)</span></h3>
+                <p style="margin-bottom:12px;color:var(--dark-dim);">
+                    Valid vs. stale vs. rejected shares for rigs currently connected to this server.
+                    A healthy rig is <strong>&gt;98% valid</strong>. High <strong>stale %</strong> usually
+                    means network latency or too-aggressive overclock (you submitted a share for a block
+                    the pool already moved past); high <strong>reject %</strong> means invalid shares
+                    (bad config / failing hardware).
+                </p>
+                <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center;">
+                    <div style="position:relative;height:180px;width:180px;flex:0 0 auto;">
+                        <canvas id="acct-quality-chart"></canvas>
+                    </div>
+                    <ul class="detail-list" style="flex:1 1 240px;min-width:240px;margin:0;">
+                        <li><span class="k">Valid shares</span><span class="v" id="q-valid">—</span></li>
+                        <li><span class="k">Stale shares</span><span class="v" id="q-stale">—</span></li>
+                        <li><span class="k">Rejected shares</span><span class="v" id="q-reject">—</span></li>
+                    </ul>
+                </div>
+                <p id="acct-quality-empty" style="display:none;color:var(--dark-dim);margin-top:10px;">
+                    No live worker sessions on this server right now — share-quality counters are
+                    in-memory and reset when a worker disconnects. Your hashrate history above is
+                    persistent and unaffected.
+                </p>
+            </div>
+
+            <div class="settings-section">
                 <h3>Account Details</h3>
                 <ul class="detail-list">
                     <li><span class="k">Status</span><span class="v" id="acct-status">—</span></li>
@@ -63,14 +96,88 @@
             </div>
 
             <div class="settings-section">
+                <h3>Verify Ownership</h3>
+                <p style="margin-bottom:12px;color:var(--dark-dim);">
+                    Changing your payout settings or requesting a Slatepack payout requires proof
+                    that you control this address. Enter <strong>one of the last two public IP
+                    addresses</strong> your miner connected from. (Tor payouts don't need this —
+                    they always return to your own address.)
+                </p>
+                <div class="form-group">
+                    <label for="acct-ip-proof">Recent mining IP</label>
+                    <input type="text" id="acct-ip-proof" placeholder="e.g. 203.0.113.42" autocomplete="off" spellcheck="false">
+                    <small id="acct-ip-hint" style="color:var(--dark-dim);"></small>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h3>Payout Threshold</h3>
+                <p style="margin-bottom:12px;color:var(--dark-dim);">
+                    Set a personal minimum balance before you withdraw. Must be at or above the pool
+                    minimum (<span id="acct-pool-min">—</span> ツ). Leave blank to use the pool default.
+                </p>
+                <div class="form-group">
+                    <label for="acct-min-payout-input">Your minimum payout (GRIN)</label>
+                    <input type="number" id="acct-min-payout-input" min="0" step="0.1" placeholder="pool default" autocomplete="off">
+                </div>
+                <button class="btn-save" id="acct-save-min">Save Threshold</button>
+                <div class="acct-msg" id="acct-min-msg"></div>
+            </div>
+
+            <div class="settings-section">
                 <h3>Withdraw</h3>
                 <p style="margin-bottom: 16px; color: var(--dark-dim);">
-                    Payouts are sent automatically over Tor to this address once your balance reaches
-                    the minimum. You can also request one now — wallet reachability:
-                    <span id="acct-tor" style="font-family: ui-monospace, monospace;">checking…</span>
+                    Choose one payout method. <strong>Tor</strong> is fully automatic;
+                    <strong>Slatepack</strong> is a manual, interactive fallback when you have no
+                    Tor listener.
                 </p>
-                <button class="btn-save" id="acct-withdraw">Request Payout Now</button>
-                <div class="acct-msg" id="acct-withdraw-msg"></div>
+                <div class="form-group" role="radiogroup" aria-label="Payout method">
+                    <label style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;cursor:pointer;">
+                        <input type="radio" name="acct-pay-method" id="acct-pay-tor" value="tor" checked>
+                        <span>Tor (automatic)</span>
+                    </label>
+                    <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="radio" name="acct-pay-method" id="acct-pay-slatepack" value="slatepack">
+                        <span>Slatepack (manual)</span>
+                    </label>
+                </div>
+
+                <!-- Tor method -->
+                <div id="acct-pay-tor-pane">
+                    <p style="margin-bottom: 16px; color: var(--dark-dim);">
+                        Payouts are sent automatically over Tor to this address once your balance reaches
+                        the minimum. You can also request one now — wallet reachability:
+                        <span id="acct-tor" style="font-family: ui-monospace, monospace;">checking…</span>
+                    </p>
+                    <button class="btn-save" id="acct-withdraw">Request Tor Payout Now</button>
+                    <div class="acct-msg" id="acct-withdraw-msg"></div>
+                </div>
+
+                <!-- Slatepack method -->
+                <div id="acct-pay-slatepack-pane" style="display:none;">
+                    <p style="margin-bottom:12px;color:var(--dark-dim);">
+                        Generates a slatepack <strong>encrypted to your address</strong> — only your wallet
+                        can open it, so it's safe even though no login is required. Requires ownership
+                        verification (above). Steps: 1) generate, 2) <code>receive</code> it in your wallet,
+                        3) paste the response below to finalize.
+                    </p>
+                    <div class="form-group">
+                        <label for="acct-sp-amount">Amount (GRIN, blank = full balance)</label>
+                        <input type="number" id="acct-sp-amount" min="0" step="0.1" placeholder="full balance" autocomplete="off">
+                    </div>
+                    <button class="btn-save" id="acct-sp-create">Generate Slatepack</button>
+                    <div class="acct-msg" id="acct-sp-msg"></div>
+                    <div id="acct-sp-out" style="display:none;margin-top:14px;">
+                        <label>Encrypted slatepack — import this into your wallet and run <code>receive</code>:</label>
+                        <textarea id="acct-sp-armored" readonly rows="5" style="width:100%;font-family:ui-monospace,monospace;font-size:12px;"></textarea>
+                        <div class="form-group" style="margin-top:12px;">
+                            <label for="acct-sp-response">Paste your wallet's response slatepack:</label>
+                            <textarea id="acct-sp-response" rows="5" style="width:100%;font-family:ui-monospace,monospace;font-size:12px;" placeholder="BEGINSLATEPACK. ..."></textarea>
+                        </div>
+                        <button class="btn-save" id="acct-sp-finalize">Finalize Payout</button>
+                        <div class="acct-msg" id="acct-sp-final-msg"></div>
+                    </div>
+                </div>
             </div>
 
             <div class="settings-section">
@@ -83,13 +190,11 @@
         </div>
     </div>
 
-    <footer>
-        <p data-brand="footer_text">GRINIUM — Uranium Element Mining Pool | Professional • Reliable • Secure</p>
-        <div data-brand="page-links"></div>
-        <p data-brand="attribution" style="opacity:0.7;font-size:0.95em;margin-top:6px;">Powered by the Grin Node Toolkit</p>
-    </footer>
+    <!-- footer injected by /js/public-shell.js -->
 
     <script src="/js/auth.js"></script>
+    <script src="/js/vendor/chart.umd.min.js"></script>
+    <script src="/js/charts-init.js"></script>
     <script>
         // Theme switching is handled site-wide by /js/public-theme.js, which renders
         // the theme picker and applies the 3 built-in + 10 white-label themes.
@@ -155,16 +260,26 @@
                 $id('acct-shares').textContent = Number(a.shares && a.shares.count || 0).toLocaleString('en-US');
                 $id('acct-last-share').textContent = fmtWhen(a.shares && a.shares.last_share_at);
                 $id('acct-pending').textContent = a.pending_withdrawals || 0;
-                $id('acct-min').textContent = fmtGrin(a.min_withdrawal);
+                $id('acct-min').textContent = fmtGrin(a.effective_min_payout != null ? a.effective_min_payout : a.min_withdrawal);
                 $id('acct-since').textContent = fmtWhen(a.created_at);
 
-                const canWithdraw = (a.balance || 0) >= (a.min_withdrawal || 0) && !a.pending_withdrawals;
+                // Payout-threshold controls: prefill the override (if any), show the pool floor,
+                // and hint whether an IP is on record for the ownership gate.
+                $id('acct-pool-min').textContent = Number(a.min_withdrawal || 0).toFixed(1);
+                $id('acct-min-payout-input').value = (a.min_payout != null) ? a.min_payout : '';
+                $id('acct-ip-hint').textContent = a.has_recorded_ip
+                    ? 'A mining IP is on record for this address.'
+                    : 'No mining IP recorded yet — connect a miner first, then settings unlock.';
+
+                const canWithdraw = (a.balance || 0) >= (a.effective_min_payout != null ? a.effective_min_payout : a.min_withdrawal || 0) && !a.pending_withdrawals;
                 $id('acct-withdraw').disabled = !canWithdraw;
 
                 $id('acct-view').style.display = '';
                 setMsg(msg, '', true);
                 loadLog(addr);
                 torCheck(addr);
+                loadWorkers(addr);
+                loadAcctChart(addr);
             } catch (e) {
                 $id('acct-view').style.display = 'none';
                 setMsg(msg, e.message === 'Account not found'
@@ -244,10 +359,188 @@
             }
         }
 
+        function escHtml(v) {
+            return String(v == null ? '' : v)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // Per-rig breakdown. reject%/stale% only exist for live (connected) workers.
+        async function loadWorkers(addr) {
+            const tbody = $id('acct-workers');
+            tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+            try {
+                const data = await getJson('/api/account/' + encodeURIComponent(addr) + '/workers?window=10');
+                const ws = (data && data.workers) || [];
+                renderWorkerCharts(ws);
+                if (!ws.length) { tbody.innerHTML = '<tr><td colspan="7">No worker activity in the last 10 minutes</td></tr>'; return; }
+                tbody.innerHTML = ws.map(function (w) {
+                    const pct = function (v) { return v == null ? '—' : Number(v).toFixed(1) + '%'; };
+                    return '<tr>' +
+                        '<td>' + escHtml(w.worker_name) + '</td>' +
+                        '<td class="num">' + escHtml(fmtGps(w.hashrate_gps || 0)) + '</td>' +
+                        '<td class="num">' + Number(w.share_count || 0).toLocaleString('en-US') + '</td>' +
+                        '<td class="num">' + pct(w.stale_pct) + '</td>' +
+                        '<td class="num">' + pct(w.reject_pct) + '</td>' +
+                        '<td>' + escHtml(fmtWhen(w.last_share_at)) + '</td>' +
+                        '<td><span class="badge' + (w.online ? ' badge-online' : '') + '">' + (w.online ? 'Online' : 'Offline') + '</span></td>' +
+                        '</tr>';
+                }).join('');
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="7">Worker data unavailable</td></tr>';
+            }
+        }
+
+        // Per-worker hashrate bar chart + aggregate share-quality doughnut. accepted/stale/
+        // rejected counts exist only for workers with a LIVE session on this box (null otherwise);
+        // we sum the ones that report them and show the doughnut, else a "no live sessions" note.
+        function renderWorkerCharts(ws) {
+            ws = Array.isArray(ws) ? ws : [];
+
+            // Hashrate per rig (bar). Hidden when there's nothing to show.
+            if (typeof PoolCharts !== 'undefined' && PoolCharts.renderBarChart) {
+                const wrap = $id('acct-workers-chart-wrap');
+                const withRate = ws.filter(function (w) { return (Number(w.hashrate_gps) || 0) > 0; });
+                if (withRate.length) {
+                    wrap.style.display = '';
+                    PoolCharts.renderBarChart('acct-workers-chart',
+                        withRate.map(function (w) { return w.worker_name || 'default'; }),
+                        withRate.map(function (w) { return Number(w.hashrate_gps) || 0; }),
+                        { label: 'Hashrate', valueFmt: fmtGps });
+                } else {
+                    wrap.style.display = 'none';
+                }
+            }
+
+            // Aggregate live share quality across rigs that have counters.
+            let acc = 0, stl = 0, rej = 0, haveLive = false;
+            ws.forEach(function (w) {
+                if (w.accepted != null || w.stale != null || w.rejected != null) {
+                    haveLive = true;
+                    acc += Number(w.accepted) || 0;
+                    stl += Number(w.stale) || 0;
+                    rej += Number(w.rejected) || 0;
+                }
+            });
+            const section = $id('acct-quality-section');
+            const empty = $id('acct-quality-empty');
+            section.style.display = '';
+            const total = acc + stl + rej;
+            if (!haveLive || total === 0) {
+                empty.style.display = '';
+                $id('q-valid').textContent = $id('q-stale').textContent = $id('q-reject').textContent = '—';
+                return;
+            }
+            empty.style.display = 'none';
+            const pct = function (v) { return (v / total * 100).toFixed(1) + '%'; };
+            $id('q-valid').textContent  = acc.toLocaleString('en-US') + ' (' + pct(acc) + ')';
+            $id('q-stale').textContent  = stl.toLocaleString('en-US') + ' (' + pct(stl) + ')';
+            $id('q-reject').textContent = rej.toLocaleString('en-US') + ' (' + pct(rej) + ')';
+            if (typeof PoolCharts !== 'undefined' && PoolCharts.renderDoughnutChart) {
+                PoolCharts.renderDoughnutChart('acct-quality-chart',
+                    ['Valid', 'Stale', 'Rejected'], [acc, stl, rej],
+                    { colors: ['#3fb950', '#d29922', '#f85149'] });
+            }
+        }
+
+        async function loadAcctChart(addr) {
+            if (typeof PoolCharts === 'undefined') return;
+            try {
+                const data = await getJson('/api/account/' + encodeURIComponent(addr) + '/hashrate/history?hours=24');
+                PoolCharts.renderHashrateChart('acct-hashrate-chart', (data && data.series) || [], { label: 'Your hashrate' });
+            } catch (e) { /* chart stays empty */ }
+        }
+
+        async function saveMinPayout() {
+            if (!currentAddr) return;
+            const msg = $id('acct-min-msg');
+            const ipProof = $id('acct-ip-proof').value.trim();
+            if (!ipProof) { setMsg(msg, 'Enter a recent mining IP above to verify ownership.', false); return; }
+            const raw = $id('acct-min-payout-input').value.trim();
+            setMsg(msg, 'Saving…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/min-payout', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ min_payout: raw === '' ? null : Number(raw), ip_proof: ipProof })
+                });
+                const json = await r.json().catch(() => null);
+                if (r.ok && json && json.success) {
+                    setMsg(msg, raw === '' ? 'Reverted to pool default.' : 'Threshold saved.', true);
+                    lookup();
+                } else {
+                    setMsg(msg, (json && (json.error + (json.reason ? ' (' + json.reason + ')' : ''))) || 'Save failed', false);
+                }
+            } catch (e) { setMsg(msg, 'Save failed: ' + e.message, false); }
+        }
+
+        async function slatepackCreate() {
+            if (!currentAddr) return;
+            const msg = $id('acct-sp-msg');
+            const ipProof = $id('acct-ip-proof').value.trim();
+            if (!ipProof) { setMsg(msg, 'Enter a recent mining IP above to verify ownership.', false); return; }
+            const amt = $id('acct-sp-amount').value.trim();
+            setMsg(msg, 'Generating encrypted slatepack…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ method: 'slatepack', amount: amt === '' ? null : Number(amt), ip_proof: ipProof })
+                });
+                const json = await r.json().catch(() => null);
+                if (r.ok && json && json.success) {
+                    $id('acct-sp-armored').value = json.slatepack || '';
+                    $id('acct-sp-out').style.display = '';
+                    $id('acct-sp-finalize').dataset.wid = json.withdrawal_id;
+                    setMsg(msg, 'Slatepack #' + json.withdrawal_id + ' created (' + json.amount + ' ツ). Import it, run receive, paste the response below.', true);
+                    lookup();
+                } else {
+                    setMsg(msg, (json && (json.error + (json.reason ? ' (' + json.reason + ')' : ''))) || 'Failed', false);
+                }
+            } catch (e) { setMsg(msg, 'Failed: ' + e.message, false); }
+        }
+
+        async function slatepackFinalize() {
+            if (!currentAddr) return;
+            const msg = $id('acct-sp-final-msg');
+            const wid = $id('acct-sp-finalize').dataset.wid;
+            const ipProof = $id('acct-ip-proof').value.trim();
+            const resp = $id('acct-sp-response').value.trim();
+            if (!wid) { setMsg(msg, 'Generate a slatepack first.', false); return; }
+            if (!resp) { setMsg(msg, 'Paste the response slatepack from your wallet.', false); return; }
+            setMsg(msg, 'Finalizing + broadcasting…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw/' + encodeURIComponent(wid) + '/finalize', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ response_slatepack: resp, ip_proof: ipProof })
+                });
+                const json = await r.json().catch(() => null);
+                if (r.ok && json && json.success) {
+                    setMsg(msg, 'Payout broadcast — confirmed. 🎉', true);
+                    $id('acct-sp-out').style.display = 'none';
+                    $id('acct-sp-response').value = '';
+                    lookup();
+                } else {
+                    setMsg(msg, (json && json.error) || 'Finalize failed', false);
+                }
+            } catch (e) { setMsg(msg, 'Finalize failed: ' + e.message, false); }
+        }
+
+        // Only one payout method is shown at a time (radio-driven).
+        function syncPayMethod() {
+            const slatepack = $id('acct-pay-slatepack').checked;
+            $id('acct-pay-tor-pane').style.display = slatepack ? 'none' : '';
+            $id('acct-pay-slatepack-pane').style.display = slatepack ? '' : 'none';
+        }
+
         document.addEventListener('DOMContentLoaded', function () {
             $id('acct-lookup').addEventListener('click', lookup);
             $id('acct-addr').addEventListener('keydown', function (e) { if (e.key === 'Enter') lookup(); });
             $id('acct-withdraw').addEventListener('click', withdraw);
+            $id('acct-save-min').addEventListener('click', saveMinPayout);
+            $id('acct-sp-create').addEventListener('click', slatepackCreate);
+            $id('acct-sp-finalize').addEventListener('click', slatepackFinalize);
+            $id('acct-pay-tor').addEventListener('change', syncPayMethod);
+            $id('acct-pay-slatepack').addEventListener('change', syncPayMethod);
+            syncPayMethod();
 
             let saved = '';
             try { saved = localStorage.getItem(ADDR_KEY) || ''; } catch (e) {}
@@ -257,6 +550,7 @@
             }
         });
     </script>
+    <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>
     <script src="/js/branding.js"></script>
 </body>

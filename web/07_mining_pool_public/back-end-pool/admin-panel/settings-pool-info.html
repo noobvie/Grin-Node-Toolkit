@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pool Info · Settings | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+</head>
+<body>
+  <main>
+  <div class="settings-container">
+    <div class="page-head">
+      <h1>Pool Info</h1>
+      <p class="page-sub">Pool identity, contact and description</p>
+    </div>
+
+    <div id="pool_info" class="settings-content active">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Pool Identity</h3>
+          <div class="form-group">
+            <label for="pool_name">Pool Name</label>
+            <input type="text" id="pool_name" name="pool_name" placeholder="GRINIUM">
+            <div class="helper-text">The name displayed to miners (e.g., on the homepage)</div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="pool_tagline">Tagline</label>
+              <input type="text" id="pool_tagline" name="pool_tagline" placeholder="Grin Mining Pool">
+              <div class="helper-text">Short subtitle or slogan</div>
+            </div>
+            <div class="form-group">
+              <label for="contact_email">Contact Email</label>
+              <input type="email" id="contact_email" name="contact_email">
+              <div class="helper-text">Public contact for miners</div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="pool_description">Description</label>
+            <textarea id="pool_description" name="pool_description" placeholder="Tell miners about your pool..."></textarea>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Visibility & Mining</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="pool_visibility">Pool Visibility</label>
+              <select id="pool_visibility" name="pool_visibility">
+                <option value="public">Public (open to all)</option>
+                <option value="private">Private (whitelisted only)</option>
+              </select>
+              <div class="helper-text">Maintenance mode is on the <strong>Announcements</strong> tab.</div>
+            </div>
+            <div class="form-group">
+              <label for="mining_mode">Mining Mode</label>
+              <select id="mining_mode" name="mining_mode">
+                <option value="stratum">Stratum (traditional pool)</option>
+                <option value="solo">Solo (solo mining proxy)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group" id="address-whitelist-group" style="display: none;">
+            <label>Address Whitelist (Private Mode)</label>
+            <div class="list-item-input">
+              <input type="text" id="whitelist-input" placeholder="grin1xxxxx..." required>
+              <button class="btn btn-secondary" onclick="addToWhitelist()">Add</button>
+            </div>
+            <div class="list-manager" id="whitelist-list"></div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Pool Economics</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="pool_fee_percent">Pool Fee (%)</label>
+              <div class="slider-group">
+                <input type="range" id="pool_fee_percent" name="pool_fee_percent" min="0" max="50" step="0.1" value="1">
+                <span class="slider-value"><span id="fee-value">1</span>%</span>
+              </div>
+              <div class="helper-text">Retained by pool operator (0-50%)</div>
+            </div>
+            <div class="form-group">
+              <label for="max_miners">Max Miners</label>
+              <input type="number" id="max_miners" name="max_miners" min="0" placeholder="0 (unlimited)">
+              <div class="helper-text">0 = no limit</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Connection</h3>
+          <div class="form-group">
+            <label for="public_stratum_host">Public Stratum Host</label>
+            <input type="text" id="public_stratum_host" name="public_stratum_host" placeholder="stratum.your-pool.com">
+            <div class="helper-text">Hostname miners connect to (shown by the /connect config generator). Leave blank to use the site host. Port comes from pool.json.</div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Footer &amp; Legal</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="founded_year">Go-Live Year</label>
+              <input type="number" id="founded_year" name="founded_year" min="2019" max="2100" placeholder="2024">
+              <div class="helper-text">Shown in the footer copyright as © &lt;year&gt;–&lt;current year&gt;. Leave blank to show only the current year.</div>
+            </div>
+            <div class="form-group">
+              <label for="security_contact">Security / Abuse Contact</label>
+              <input type="email" id="security_contact" name="security_contact" placeholder="abuse@your-pool.com">
+              <div class="helper-text">Footer address for security/abuse reports. Falls back to nothing when blank.</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="pgp_key_url">PGP Public Key URL (optional)</label>
+            <input type="url" id="pgp_key_url" name="pgp_key_url" placeholder="https://your-pool.com/pgp.txt">
+            <div class="helper-text">Link to a published PGP key for encrypted security reports. Shown next to the security contact when set.</div>
+          </div>
+          <div class="form-group">
+            <label for="support_forum_url">Community / Support Link (optional)</label>
+            <input type="url" id="support_forum_url" name="support_forum_url" placeholder="https://forum.grin.mw/u/hellogrin">
+            <div class="helper-text">An email-free alternative shown in the footer (e.g. a Grin forum profile). Contact emails are obfuscated; this gives visitors a one-click public channel. Blank hides the footer "Community" link.</div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Homepage</h3>
+          <div class="form-group">
+            <label for="homepage_banner">Banner Message</label>
+            <textarea id="homepage_banner" name="homepage_banner" placeholder="Optional announcement for miners..."></textarea>
+            <div class="helper-text">HTML/Markdown supported</div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('pool_info')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('pool_info')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- BRANDING TAB -->
+  </div>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/stepup.js"></script>
+  <script src="/admin/admin-shell.js"></script>
+  <script>window.SETTINGS_SECTION = "pool_info";</script>
+  <script src="/admin/settings-common.js"></script>
+</body>
+</html>

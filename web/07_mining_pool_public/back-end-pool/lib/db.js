@@ -79,6 +79,84 @@ function migrateUsers() {
   }
 }
 
+// Additive, non-destructive: add per-miner payout threshold + last-seen source IPs to an
+// existing miner_accounts table (older DBs predate them). min_payout NULL = use the pool
+// default (config.min_withdrawal). last_ip/prev_ip back the address-as-identity ownership
+// gate (one of the address's last-2 mining source IPs must be supplied for sensitive actions).
+function migrateMinerAccounts() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(miner_accounts)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the columns
+    const have = new Set(cols.map(c => c.name));
+    const additions = {
+      min_payout: 'REAL DEFAULT NULL',
+      last_ip: 'TEXT DEFAULT NULL',
+      prev_ip: 'TEXT DEFAULT NULL',
+      is_banned: 'INTEGER NOT NULL DEFAULT 0',
+      ban_reason: 'TEXT DEFAULT NULL',
+      banned_at: 'INTEGER DEFAULT NULL'
+    };
+    for (const [name, def] of Object.entries(additions)) {
+      if (!have.has(name)) {
+        db.exec(`ALTER TABLE miner_accounts ADD COLUMN ${name} ${def}`);
+        console.warn(`[db] miner_accounts: added missing column ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error(`[db] miner_accounts migration check failed: ${e.message}`);
+  }
+}
+
+// Additive, non-destructive: add the per-block stats backing round effort / luck to an existing
+// blocks table (older DBs predate them). Both NULL on legacy rows → those blocks are skipped by
+// the luck calc. Captured at find time so luck-over-N-blocks stays exact even after raw shares are
+// pruned to the PPLNS window:
+//   network_difficulty — the block's C32 network difficulty (total_diff[h] − total_diff[h-1])
+//   round_shares       — accumulated pool share-difficulty for the round that found the block
+function migrateBlocks() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(blocks)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the columns
+    const have = new Set(cols.map(c => c.name));
+    const additions = {
+      network_difficulty: 'REAL DEFAULT NULL',
+      round_shares: 'REAL DEFAULT NULL'
+    };
+    for (const [name, def] of Object.entries(additions)) {
+      if (!have.has(name)) {
+        db.exec(`ALTER TABLE blocks ADD COLUMN ${name} ${def}`);
+        console.warn(`[db] blocks: added missing column ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error(`[db] blocks migration check failed: ${e.message}`);
+  }
+}
+
+// Additive, non-destructive: add the slatepack-payout columns to an existing withdrawals table
+// (older DBs predate them). `method` distinguishes 'tor' (default) from 'slatepack'; `slate_id`
+// records the grin-wallet slate UUID so a pending slatepack can be cancelled/expired and matched
+// on finalize. The status column is free-text, so slatepack_* states need no migration.
+function migrateWithdrawals() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(withdrawals)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the columns
+    const have = new Set(cols.map(c => c.name));
+    const additions = {
+      method: "TEXT NOT NULL DEFAULT 'tor'",
+      slate_id: 'TEXT DEFAULT NULL'
+    };
+    for (const [name, def] of Object.entries(additions)) {
+      if (!have.has(name)) {
+        db.exec(`ALTER TABLE withdrawals ADD COLUMN ${name} ${def}`);
+        console.warn(`[db] withdrawals: added missing column ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error(`[db] withdrawals migration check failed: ${e.message}`);
+  }
+}
+
 // Additive, non-destructive: add the multi-region `region` column to an existing
 // shares table (older testnet DBs predate it). NOT NULL DEFAULT 'default' backfills
 // every existing row, so legacy single-region shares group under 'default'.
@@ -97,6 +175,9 @@ function migrateShares() {
   }
 }
 
+// Additive, non-destructive: add moderation columns to an existing miner_accounts table
+// (older DBs predate them). is_banned blocks new stratum logins for an abusive address;
+// the balance is untouched so the operator can still pay out what's owed before/after a ban.
 function createSchema() {
   migrateAdminAuditLog();
 
@@ -108,6 +189,12 @@ function createSchema() {
       balance_locked REAL NOT NULL DEFAULT 0.0,
       is_online INTEGER NOT NULL DEFAULT 0,
       last_seen_at INTEGER DEFAULT NULL,
+      min_payout REAL DEFAULT NULL,
+      last_ip TEXT DEFAULT NULL,
+      prev_ip TEXT DEFAULT NULL,
+      is_banned INTEGER NOT NULL DEFAULT 0,
+      ban_reason TEXT DEFAULT NULL,
+      banned_at INTEGER DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
@@ -125,6 +212,8 @@ function createSchema() {
       found_by TEXT NOT NULL REFERENCES miner_accounts(grin_address),
       found_at INTEGER NOT NULL,
       confirmed_at INTEGER DEFAULT NULL,
+      network_difficulty REAL DEFAULT NULL,
+      round_shares REAL DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
@@ -164,6 +253,8 @@ function createSchema() {
       amount REAL NOT NULL,
       fee REAL NOT NULL DEFAULT 0.0,
       status TEXT NOT NULL DEFAULT 'tor_checking',
+      method TEXT NOT NULL DEFAULT 'tor',
+      slate_id TEXT DEFAULT NULL,
       retry_count INTEGER NOT NULL DEFAULT 0,
       next_retry_at INTEGER DEFAULT NULL,
       tor_check_result TEXT DEFAULT NULL,
@@ -355,6 +446,8 @@ function createSchema() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       region TEXT NOT NULL UNIQUE,
       label TEXT DEFAULT NULL,
+      country TEXT DEFAULT NULL,
+      country_code TEXT DEFAULT NULL,
       api_url TEXT DEFAULT NULL,
       stratum_url TEXT DEFAULT NULL,
       is_active INTEGER NOT NULL DEFAULT 1,
@@ -362,7 +455,69 @@ function createSchema() {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
-    `CREATE INDEX IF NOT EXISTS idx_pool_locations_active ON pool_locations(is_active)`
+    `CREATE INDEX IF NOT EXISTS idx_pool_locations_active ON pool_locations(is_active)`,
+
+    // ─── Ads (operator-managed promotions shown on public pages) ──────────────
+    // Two kinds: a self-hosted `banner` (image_url + link_url) or a raw `code` snippet
+    // (operator-trusted HTML/JS from an ad network). Each is bound to a named placement
+    // (header | sidebar | in-content | footer) with an optional active window + weight.
+    `CREATE TABLE IF NOT EXISTS ads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      placement TEXT NOT NULL,
+      ad_type TEXT NOT NULL DEFAULT 'banner',
+      image_url TEXT DEFAULT NULL,
+      link_url TEXT DEFAULT NULL,
+      alt_text TEXT DEFAULT NULL,
+      html_code TEXT DEFAULT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      weight INTEGER NOT NULL DEFAULT 0,
+      start_at INTEGER DEFAULT NULL,
+      end_at INTEGER DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_ads_placement ON ads(placement, is_active, weight DESC)`,
+
+    // ─── Content pages (dynamic CMS — replaces the fixed 5-slot config section) ────
+    // Operator-authored standalone pages (About / Terms / a custom Rules page, …),
+    // served at /page.html?p=<slug>. Unlimited pages; nav_location decides where it's
+    // auto-linked (footer | header | none). HTML is operator-trusted (rendered as-is).
+    `CREATE TABLE IF NOT EXISTS pages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      html TEXT NOT NULL DEFAULT '',
+      is_published INTEGER NOT NULL DEFAULT 1,
+      nav_location TEXT NOT NULL DEFAULT 'footer',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      seo_title TEXT DEFAULT NULL,
+      seo_desc TEXT DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_pages_published ON pages(is_published, nav_location, sort_order)`,
+
+    // ─── Blog posts (dated, chronological — the WordPress-style "Posts" content type) ──
+    // Distinct from pages: posts have a publish date, appear in a reverse-chronological
+    // feed (/blog), have a clean permalink (/blog/<slug>) and a draft|published status.
+    `CREATE TABLE IF NOT EXISTS posts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      body_html TEXT NOT NULL DEFAULT '',
+      excerpt TEXT DEFAULT NULL,
+      cover_image TEXT DEFAULT NULL,
+      tags TEXT DEFAULT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      published_at INTEGER DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_posts_published ON posts(status, published_at DESC)`
   ];
 
   const transaction = db.transaction(() => {
@@ -376,9 +531,92 @@ function createSchema() {
   // Additive column migrations run after the tables exist.
   migrateUsers();
   migrateShares();
-  // No demo regions are seeded. The pool server self-registers its own region via
-  // ensureLocalRegion() (called from index.js with config); extra zones come from
-  // real satellites the operator declares in admin → Regions.
+  migrateMinerAccounts();
+  migrateBlocks();
+  migrateWithdrawals();
+  migrateLocations();
+  migratePagesFromConfig();
+  // The default grinium regional endpoints are seeded once (see seedDefaultRegions,
+  // called from index.js with the configured stratum port). The pool server also
+  // self-registers its own region via ensureLocalRegion(); extra zones come from real
+  // satellites the operator declares in admin → Regions.
+}
+
+// Additive, non-destructive: add the country grouping columns to an existing
+// pool_locations table (older DBs predate them). Lets the public connect grid group
+// regional cards under country headings + show a flag.
+function migrateLocations() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(pool_locations)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE above has the columns
+    const have = new Set(cols.map(c => c.name));
+    const additions = {
+      country: 'TEXT DEFAULT NULL',
+      country_code: 'TEXT DEFAULT NULL'
+    };
+    for (const [name, def] of Object.entries(additions)) {
+      if (!have.has(name)) {
+        db.exec(`ALTER TABLE pool_locations ADD COLUMN ${name} ${def}`);
+        console.warn(`[db] pool_locations: added missing column ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error(`[db] pool_locations migration check failed: ${e.message}`);
+  }
+}
+
+// One-time seed of the dynamic `pages` table from the legacy fixed `pool_config`
+// 'pages' section (about/terms/privacy/faq/impressum). Runs exactly once, guarded by a
+// persistent marker (see below), so it never clobbers operator edits made through the new
+// CMS — and never re-seeds even if the operator later deletes every page. Pages with empty
+// HTML in the old config are seeded as unpublished drafts (slug preserved) so the operator
+// can fill them in later rather than losing the slot.
+function migratePagesFromConfig() {
+  try {
+    // One-time marker so this NEVER re-runs — not even if the operator later deletes every
+    // page (a bare "table is empty" guard would wrongly re-seed the legacy drafts on the
+    // next restart). The marker lives in pool_config under a private section.
+    const marker = db.prepare(
+      "SELECT value FROM pool_config WHERE section = '_migrations' AND key = 'pages_seeded'"
+    ).get();
+    if (marker) return;
+    const stamp = db.prepare(`
+      INSERT INTO pool_config (section, key, value, value_type)
+      VALUES ('_migrations', 'pages_seeded', '1', 'string')
+      ON CONFLICT(section, key) DO NOTHING
+    `);
+    const titles = {
+      about: 'About', terms: 'Terms of Service', privacy: 'Privacy Policy',
+      faq: 'FAQ', impressum: 'Impressum',
+    };
+    const rows = db.prepare(
+      "SELECT key, value FROM pool_config WHERE section = 'pages'"
+    ).all();
+    const byKey = {};
+    for (const r of rows) byKey[r.key] = r.value;
+    // Fall back to the shipped GRINIUM defaults (about/terms/privacy/faq) when the operator
+    // never saved a 'pages' config row, so a fresh install gets real, published pages.
+    // Required lazily to avoid a load-order cycle at module top.
+    const defaultPages = (require('./pool-settings').defaults || {}).pages || {};
+    const insert = db.prepare(`
+      INSERT OR IGNORE INTO pages (slug, title, html, is_published, nav_location, sort_order)
+      VALUES (?, ?, ?, ?, 'footer', ?)
+    `);
+    let order = 0;
+    const tx = db.transaction(() => {
+      for (const slug of Object.keys(titles)) {
+        const html = (byKey[slug] || defaultPages[slug] || '').trim();
+        // INSERT OR IGNORE: if the operator somehow already created one of these slugs,
+        // keep theirs. The marker still records that the seed ran. Non-empty pages are
+        // published immediately (footer-linked); empty ones (e.g. impressum) stay drafts.
+        insert.run(slug, titles[slug], html, html ? 1 : 0, order++);
+      }
+      stamp.run();   // commit the seeds + the "done" marker atomically
+    });
+    tx();
+  } catch (e) {
+    console.error(`[db] migratePagesFromConfig failed: ${e.message}`);
+  }
 }
 
 // Self-register the pool server's own region (role=singlebox) so the central box
@@ -386,6 +624,59 @@ function createSchema() {
 // another zone reports in. Creates ONE row for `region` (skipping the generic
 // 'default'), backfills stratum_url once the public hostname is known, and never
 // clobbers an operator's label/active/url edits made in admin → Regions.
+// One-time seed of the default grinium regional endpoints, grouped by country so the
+// public connect grid can show "Point your miner at your nearest region" cards under
+// country headings. Runs exactly once, guarded by a persistent marker (like
+// migratePagesFromConfig), so it never re-seeds even after the operator deletes/edits
+// rows in admin → Regions. INSERT OR IGNORE keeps any operator row that already owns a
+// region tag. `stratumPort` is the configured public stratum port (default 3333).
+//
+// `poolDomain` is the pool's own public hostname (config.subdomain). These are GRINIUM's
+// real regional endpoints, so they're seeded ONLY for the actual grinium.com deployment —
+// a fork running its own domain must never advertise grinium.com hosts (its miners would
+// connect to the wrong pool). Forks get a clean slate and rely on ensureLocalRegion()
+// (their own domain as region 1) + admin → Regions to declare more. No marker is stamped
+// on the skip path, so once a grinium domain is configured the seed still runs on restart.
+function seedDefaultRegions(stratumPort, poolDomain) {
+  try {
+    const dom = String(poolDomain || '').toLowerCase();
+    if (!(dom === 'grinium.com' || dom.endsWith('.grinium.com'))) return;
+    const marker = db.prepare(
+      "SELECT value FROM pool_config WHERE section = '_migrations' AND key = 'regions_seeded'"
+    ).get();
+    if (marker) return;
+    const port = stratumPort || 3333;
+    // city = label; country/country_code drive grouping + flag on the dashboard.
+    const REGIONS = [
+      { region: 'han', label: 'Hanoi',       country: 'Vietnam',        cc: 'VN', host: 'han.grinium.com' },
+      { region: 'nyc', label: 'New York',    country: 'United States',  cc: 'US', host: 'nyc.grinium.com' },
+      { region: 'lax', label: 'Los Angeles', country: 'United States',  cc: 'US', host: 'lax.grinium.com' },
+      { region: 'yyz', label: 'Toronto',     country: 'Canada',         cc: 'CA', host: 'yyz.grinium.com' },
+      { region: 'ams', label: 'Amsterdam',   country: 'Netherlands',    cc: 'NL', host: 'ams.grinium.com' }
+    ];
+    const insert = db.prepare(`
+      INSERT OR IGNORE INTO pool_locations
+        (region, label, country, country_code, stratum_url, is_active)
+      VALUES (?, ?, ?, ?, ?, 1)
+    `);
+    const stamp = db.prepare(`
+      INSERT INTO pool_config (section, key, value, value_type)
+      VALUES ('_migrations', 'regions_seeded', '1', 'string')
+      ON CONFLICT(section, key) DO NOTHING
+    `);
+    const tx = db.transaction(() => {
+      for (const r of REGIONS) {
+        insert.run(r.region, r.label, r.country, r.cc, `${r.host}:${port}`);
+      }
+      stamp.run(); // seed + "done" marker committed atomically
+    });
+    tx();
+    console.warn(`[db] seeded ${REGIONS.length} default regional endpoints (port ${port})`);
+  } catch (e) {
+    console.error(`[db] seedDefaultRegions failed: ${e.message}`);
+  }
+}
+
 function ensureLocalRegion(region, stratumUrl) {
   if (!region || region === 'default') return;
   try {
@@ -418,5 +709,6 @@ module.exports = {
   getDb,
   closeDb,
   createSchema,
-  ensureLocalRegion
+  ensureLocalRegion,
+  seedDefaultRegions
 };

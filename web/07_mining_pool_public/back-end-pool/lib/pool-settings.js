@@ -19,17 +19,29 @@ class PoolSettings {
     pool_info: {
       pool_name: 'GRINIUM',
       pool_tagline: 'Mine Grin, anywhere',
-      pool_description: '',
+      pool_description: 'Mine Grin and have fun while you do it. GRINIUM is a low-fee PPLNS pool with anonymous Tor payouts, a per-address identity (no accounts, no sign-up), and live per-rig stats. Stack rewards on top of your shares with prize draws, join bonuses, streak rewards and a community fortune board — fair payouts for everyone, plus a little luck for the lucky. Point your miner at the nearest region and start earning in minutes.',
       pool_visibility: 'public',
       address_whitelist: '[]',
       mining_mode: 'stratum',
       pool_fee_percent: 1.0,
       max_miners: 0,
-      contact_email: '',
+      contact_email: 'support@grinium.com',
       homepage_banner: '',
       // Public stratum host shown by the connect/config generator (defaults to the
       // request host at runtime when left blank). Port comes from pool.json.
       public_stratum_host: '',
+      // Footer "go-live" year for the copyright line (© <founded>–<current>). Blank
+      // collapses to just the current year. Stored as a 4-digit string.
+      founded_year: '',
+      // Security / abuse contact surfaced in the footer (email). Falls back to nothing
+      // when blank (the footer just omits the row). pgp_key_url is an optional link to a
+      // published PGP public key for encrypted security reports.
+      security_contact: 'support@grinium.com',
+      pgp_key_url: '',
+      // Public community/support channel shown in the footer as an email-free alternative
+      // (e.g. a forum profile). Safe to expose in plaintext (it's a public URL, not an
+      // address). Blank hides the footer "Community" link.
+      support_forum_url: 'https://forum.grin.mw/u/hellogrin',
     },
     branding: {
       logo_file: '',
@@ -52,32 +64,32 @@ class PoolSettings {
       font_family: '',
       font_url: '',
       // PWA: short name for the home-screen icon (falls back to pool_name)
-      app_short_name: '',
+      app_short_name: 'GRINIUM',
       // Show the "powered by" footer attribution
       show_attribution: 'true',
       // Hero / slogan block (rendered into [data-brand] hooks on public pages)
-      hero_heading: '',
-      hero_subheading: '',
+      hero_heading: 'Mine Grin, Earn More, Have Fun',
+      hero_subheading: 'Low-fee PPLNS pool with anonymous Tor payouts, prize draws and bonuses — no sign-up, just point your miner and go.',
       cta_text: '',
       cta_link: '',
       discord_link: '',
       telegram_link: '',
-      twitter_link: '',
-      website_link: '',
+      twitter_link: 'https://twitter.com/grinium',
+      website_link: 'https://grinium.com',
       footer_text: '',
     },
     seo: {
-      meta_description: '',
-      meta_keywords: '',
+      meta_description: 'GRINIUM is a low-fee Grin (GRIN) mining pool — PPLNS rewards, anonymous Tor payouts, prize draws and bonuses. No sign-up; point your miner and start earning.',
+      meta_keywords: 'grin mining pool, grin pool, GRIN, mimblewimble, cuckatoo32, PPLNS pool, anonymous mining, tor payout, asic mining, cryptocurrency mining, GRINIUM',
       title_template: '%page% — %pool_name%',
-      og_title: '',
-      og_description: '',
+      og_title: 'GRINIUM — Grin Mining Pool',
+      og_description: 'Mine Grin with low fees, PPLNS rewards and anonymous Tor payouts — plus prize draws, join bonuses and a community fortune board. No account needed.',
       og_image_file: '',
       og_locale: 'en_US',
-      twitter_handle: '',
+      twitter_handle: '@grinium',
       twitter_card_type: 'summary_large_image',
-      theme_color: '',
-      site_url: '',
+      theme_color: '#b8e600',
+      site_url: 'https://grinium.com',
       // page_seo: JSON map of page key -> {title, description}
       page_seo: '{}',
       structured_data_enabled: 'true',
@@ -86,8 +98,8 @@ class PoolSettings {
     },
     analytics: {
       // provider selects which analytics script loads: none|ga4|plausible|umami|matomo
-      provider: 'none',
-      ga_tracking_id: '',
+      provider: 'ga4',
+      ga_tracking_id: 'G-GMYJ4PVG4L',
       plausible_domain: '',
       plausible_src: 'https://plausible.io/js/script.js',
       umami_website_id: '',
@@ -123,16 +135,153 @@ class PoolSettings {
       alert_email_address: '',
       discord_webhook_url: '',
       slack_webhook_url: '',
+      telegram_bot_token: '',
+      telegram_chat_id: '',
       alert_large_withdrawal: 100,
       alert_tor_fails_per_week: 3,
       alert_thresholds: '{"wallet_balance_warning_grin":10,"rejection_rate_warning_percent":20,"error_rate_warning_percent":50,"difficulty_change_warning_percent":50}',
     },
     // Operator-authored content pages (HTML). Empty content = page disabled / hidden.
+    // about/terms/privacy/faq ship with editable GRINIUM defaults (seeded once into the
+    // `pages` CMS table by db.js migratePagesFromConfig — operators edit them in admin →
+    // Pages). impressum stays blank (German legal imprint = operator-specific).
     pages: {
-      about: '',
-      terms: '',
-      privacy: '',
-      faq: '',
+      about: `<p class="muted">Last updated: June 2026</p>
+<p><strong>GRINIUM</strong> is a community mining pool for <strong>Grin (GRIN)</strong>, the privacy-preserving, Mimblewimble-based cryptocurrency. We run the heavy infrastructure — full nodes, multi-region stratum servers, and payout wallets — so you can point a miner at us and start earning without operating any of it yourself.</p>
+
+<h2>What is Grin?</h2>
+<p>Grin is a lightweight implementation of the Mimblewimble protocol. It stores no addresses or amounts on-chain, has no pre-mine and no founder's reward, and follows a simple, fair emission of 1 GRIN per second, forever. Mining uses the ASIC-friendly <strong>Cuckatoo32 (C32)</strong> proof-of-work.</p>
+
+<h2>Why mine with GRINIUM?</h2>
+<ul>
+  <li><strong>Low fee.</strong> A flat 1% pool fee (the live value is shown on the homepage).</li>
+  <li><strong>PPLNS rewards.</strong> Pay-Per-Last-N-Shares spreads rewards fairly and resists pool-hopping.</li>
+  <li><strong>Private payouts.</strong> Rewards are delivered to your Grin address over Tor.</li>
+  <li><strong>No account, no KYC.</strong> Your Grin address <em>is</em> your identity — there is nothing to sign up for.</li>
+  <li><strong>Global regions.</strong> Connect to the nearest stratum endpoint for low latency and fewer stale shares.</li>
+</ul>
+
+<h2>How it works</h2>
+<p>You connect your miner using your Grin address as the username, in the form <code>grin1youraddress.workername</code>. The pool credits every valid share you submit. When the pool finds a block and it matures, your portion of the reward is added to your balance, ready to withdraw to your wallet.</p>
+
+<!-- TO BE UPDATED: confirm incentive details before publishing -->
+<h2>Rewards &amp; extras</h2>
+<p>Beyond block rewards, GRINIUM may run optional community incentives — for example a prize pool, a block-finder jackpot, loyalty streaks, and a periodic lottery, with winners shown on the public fortune board. <em>(To be updated.)</em></p>
+
+<p>Ready to start? See the <a href="/">homepage</a> for connection details, or read the <a href="/page.html?p=faq">FAQ</a>.</p>`,
+
+      terms: `<p class="muted">Last updated: June 2026</p>
+<p>These Terms of Service ("Terms") govern your use of the GRINIUM mining pool and its website (the "Service"). By connecting a miner or using the website you agree to these Terms. If you do not agree, do not use the Service.</p>
+
+<h2>1. The Service</h2>
+<p>GRINIUM is a Grin (GRIN) mining pool. We aggregate the hashpower of participating miners, submit work to the Grin network, and distribute block rewards according to the pool's reward scheme. The Service is provided on a best-effort basis with no guarantee of uptime, profitability, or that any block will be found in a given period.</p>
+
+<h2>2. Identity and accounts</h2>
+<p>The Service does not use registered miner accounts. Your Grin address is your identity: rewards earned by hashpower submitted under an address are credited to, and payable only to, that address. You are solely responsible for the security and correctness of the address you mine to. <strong>Rewards paid to an address you do not control cannot be recovered.</strong></p>
+
+<h2>3. Fees and payouts</h2>
+<ul>
+  <li>The pool retains a fee from block rewards (default 1%; the current value is shown on the website).</li>
+  <li>Block rewards are credited only after the network coinbase maturity period (1,440 blocks on mainnet) to protect against chain reorganisations.</li>
+  <li>Payouts are subject to a minimum withdrawal threshold (default 5 GRIN), which you may raise for your own address.</li>
+  <li>If a block is later orphaned by the network, the associated credits are reversed.</li>
+</ul>
+
+<h2>4. Acceptable use</h2>
+<p>You agree not to: submit invalid or fraudulent shares; attempt to overload, attack, or gain unauthorised access to the Service; reverse-engineer or disrupt the stratum or API endpoints; or use the Service for any unlawful purpose. We may, at our discretion, throttle, ban, or refuse service to any address or IP that abuses the Service.</p>
+
+<h2>5. No warranty</h2>
+<p>The Service is provided "as is" and "as available", without warranties of any kind. Cryptocurrency mining carries financial and technical risk, including costs of hardware and electricity, network difficulty changes, and coin-price volatility. You mine at your own risk.</p>
+
+<h2>6. Limitation of liability</h2>
+<p>To the maximum extent permitted by law, GRINIUM and its operators shall not be liable for any indirect, incidental, or consequential damages, or for any loss of profits, rewards, or data arising from your use of the Service.</p>
+
+<h2>7. Changes</h2>
+<p>We may update these Terms or the pool's parameters (fees, thresholds, reward scheme) at any time. Continued use after a change constitutes acceptance.</p>
+
+<!-- TO BE UPDATED: confirm incentive details before publishing -->
+<h2>8. Promotions and incentives</h2>
+<p>Any prize pool, bonus, jackpot, streak reward, or lottery is optional, discretionary, and may be changed, suspended, or withdrawn at any time. Where a draw is offered, its method is intended to be publicly verifiable. <em>(To be updated.)</em></p>
+
+<h2>9. Contact</h2>
+<p>Questions about these Terms can be directed to the pool operator using the contact links in the website footer, or via the Grin forum (<a href="https://forum.grin.mw/u/hellogrin" target="_blank" rel="noopener">hellogrin on forum.grin.mw</a>).</p>`,
+
+      privacy: `<p class="muted">Last updated: June 2026</p>
+<p>This Privacy Policy explains what information the GRINIUM mining pool processes when you mine with us or visit our website. Grin is a privacy-focused cryptocurrency, and we keep data collection to the minimum needed to run the pool.</p>
+
+<h2>What we collect</h2>
+<ul>
+  <li><strong>Your Grin address.</strong> Submitted as your stratum username; it is your public mining identity and the destination for your payouts.</li>
+  <li><strong>Worker source IP address.</strong> We record the last one or two IP addresses an address mines from. This powers the ownership check that gates payout settings (so a stranger cannot change your threshold or trigger a withdrawal) and helps us detect abuse.</li>
+  <li><strong>Mining metrics.</strong> Shares, hashrate samples, worker names, and reject/stale counts — used to calculate rewards and display statistics.</li>
+  <li><strong>Website analytics &amp; preferences.</strong> Aggregate analytics (e.g. page views) and a locally-stored theme preference.</li>
+</ul>
+
+<h2>What we do NOT collect</h2>
+<p>We do not ask for or store your name, email address, government ID, or any KYC information. There are no miner accounts and no passwords (the stratum "password" field is ignored). We never see or store your wallet's private keys or seed phrase.</p>
+
+<h2>Cookies and analytics</h2>
+<p>The website may use cookies and a third-party analytics provider (such as Google Analytics) to understand aggregate traffic. Your theme choice is stored in your browser's local storage, not on our servers. You can block cookies in your browser without affecting mining.</p>
+
+<h2>Data retention</h2>
+<p>Raw share data is kept only for the duration of the reward (PPLNS) window and then pruned; hashrate history is downsampled over time. Financial records (balances and payouts) are retained for accounting and audit integrity.</p>
+
+<h2>Third parties</h2>
+<p>Payouts are delivered over the <strong>Tor network</strong> to your address; routing is handled by Tor, not by us. Analytics data is processed by the analytics provider under their own privacy policy. We do not sell or rent your data.</p>
+
+<!-- TO BE UPDATED: confirm incentive details before publishing -->
+<h2>Incentives and the fortune board</h2>
+<p>If optional incentives are enabled, winning Grin addresses (often in shortened form) and prize amounts may be shown publicly on the fortune board. No other personal information is published. <em>(To be updated.)</em></p>
+
+<h2>Your control</h2>
+<p>Because mining is address-based and pseudonymous, you can stop participating at any time by disconnecting your miner. To ask about data tied to your address, contact the operator via the footer contact links or the Grin forum (<a href="https://forum.grin.mw/u/hellogrin" target="_blank" rel="noopener">hellogrin on forum.grin.mw</a>).</p>`,
+
+      faq: `<p class="muted">Last updated: June 2026</p>
+
+<h2>What is GRINIUM?</h2>
+<p>GRINIUM is a mining pool for Grin (GRIN). We combine many miners' hashpower to find blocks more steadily and share the rewards.</p>
+
+<h2>Do I need to register an account?</h2>
+<p>No. There are no accounts and no sign-up. Your Grin address is your identity — just start mining to it.</p>
+
+<h2>How do I start mining?</h2>
+<p>Point your miner at the nearest region's stratum endpoint (shown on the homepage), using:</p>
+<ul>
+  <li><strong>Username:</strong> <code>your_grin_address.worker_name</code> (e.g. <code>grin1abc….rig1</code>)</li>
+  <li><strong>Password:</strong> anything — it is ignored.</li>
+  <li><strong>Port:</strong> the stratum port on the homepage (default 3333), the same across all regions.</li>
+</ul>
+<p>Grin-capable ASICs (the iPollo G1 and G1 mini) are configured in their own web interface; GPU miners need a Cuckatoo32-capable miner and a card with more than 8&nbsp;GB of VRAM.</p>
+
+<h2>What does it cost?</h2>
+<p>The pool fee is 1% by default (the live value is on the homepage). There are no hidden charges.</p>
+
+<h2>How are rewards calculated?</h2>
+<p>By default the pool uses <strong>PPLNS</strong> (Pay-Per-Last-N-Shares): when the pool finds a block, the reward is split across the most recent shares, so consistent miners earn their fair share and the scheme resists pool-hopping.</p>
+
+<h2>When and how do I get paid?</h2>
+<p>A found block must mature (1,440 blocks on mainnet) before its reward is credited — this protects against chain reorganisations. Once your balance reaches the minimum payout (5 GRIN by default), you request a withdrawal from the <a href="/account-settings.html">Account</a> page. Two payout methods are available, and both confirm you own the address by checking it against one of the last two IP addresses you have mined from:</p>
+<ul>
+  <li><strong>Tor (automatic):</strong> the pool sends your payout to your address over the Tor network.</li>
+  <li><strong>Slatepack (interactive):</strong> the pool produces an encrypted Slatepack that only your wallet can receive and finalise.</li>
+</ul>
+
+<h2>Can I set my own minimum payout?</h2>
+<p>Yes. From the Account page you can raise your personal payout threshold above the pool minimum (it can be raised, not lowered). Changing payout settings requires a quick ownership check against an IP you have recently mined from.</p>
+
+<h2>What happens if a block is orphaned?</h2>
+<p>If a block we found is later orphaned by the network, the credits from that block are reversed. This is normal and rare.</p>
+
+<h2>Is mining anonymous?</h2>
+<p>Grin is built on Mimblewimble, so on-chain data is private. We require no personal information, and payouts travel over Tor. See our <a href="/page.html?p=privacy">Privacy Policy</a> for details.</p>
+
+<!-- TO BE UPDATED: confirm incentive details before publishing -->
+<h2>Are there prizes or bonuses?</h2>
+<p>GRINIUM may offer optional extras such as a prize pool, jackpots, loyalty streaks, and a lottery with a publicly verifiable draw. When these are enabled, results appear on the fortune board. <em>(To be updated.)</em></p>
+
+<h2>I need help.</h2>
+<p>Check the connection details on the homepage, post on the Grin forum (<a href="https://forum.grin.mw/u/hellogrin" target="_blank" rel="noopener">hellogrin on forum.grin.mw</a>), or use the contact links in the footer.</p>`,
+
       impressum: '',
     },
     // Incentive features (prize pool, join bonus, jackpot, streaks, lottery).
@@ -480,7 +629,15 @@ class PoolSettings {
       } else if (row.value_type === 'boolean') {
         defaults[row.key] = row.value === 'true';
       } else if (row.value_type === 'json') {
-        defaults[row.key] = JSON.parse(row.value);
+        // A single corrupt json row must NOT throw out of getSection() — that would
+        // 500 the whole /api/admin/settings load and make the entire admin Settings
+        // panel unusable ("Failed to load settings"). Keep the section's default for
+        // just this key instead, and log which row needs fixing.
+        try {
+          defaults[row.key] = JSON.parse(row.value);
+        } catch (e) {
+          console.error(`[pool-settings] malformed json for ${section}.${row.key}; using default`, e.message);
+        }
       } else {
         defaults[row.key] = row.value;
       }
@@ -512,6 +669,9 @@ class PoolSettings {
       try { return JSON.parse(v); } catch (e) { return fallback; }
     };
 
+    // Light obfuscation for contact emails in the public payload (base64, not encryption).
+    const b64 = (v) => (v ? Buffer.from(String(v), 'utf8').toString('base64') : '');
+
     // GA id can live in analytics (new) or seo (legacy leftover) — prefer analytics.
     const gaId = a.ga_tracking_id || seo.ga_tracking_id || '';
 
@@ -520,10 +680,17 @@ class PoolSettings {
         name: pool.pool_name || '',
         tagline: pool.pool_tagline || '',
         description: pool.pool_description || '',
-        contact_email: pool.contact_email || '',
+        // Emails are base64-encoded (not plaintext) so the public /api config response
+        // can't be grepped for an address by harvesters; the frontend decodes them and
+        // assembles the mailto: only on user interaction. See branding.js decodeEmail().
+        contact_email_enc: b64(pool.contact_email),
         homepage_banner: pool.homepage_banner || '',
         visibility: pool.pool_visibility || 'public',
         public_stratum_host: pool.public_stratum_host || '',
+        founded_year: pool.founded_year || '',
+        security_contact_enc: b64(pool.security_contact),
+        pgp_key_url: pool.pgp_key_url || '',
+        support_forum_url: pool.support_forum_url || '',
       },
       branding: {
         accent_color: b.accent_color || '',
@@ -631,21 +798,34 @@ class PoolSettings {
       .filter((b) => b.message.trim() !== '');
   }
 
-  // Content pages that have non-empty HTML, as [{key, title}] for footer navigation.
+  // Linked content pages (the dynamic `pages` CMS table is the source of truth since
+  // 2026-06) as [{key, title}] for footer navigation. Excludes nav_location='none'
+  // (those are reachable by direct URL only). The sitemap uses PagesManager.listEnabled()
+  // directly for the full set; this footer list intentionally honours the link choice.
   listEnabledPages() {
-    const pages = this.getSection('pages');
-    return Object.keys(PoolSettings.defaults.pages)
-      .filter((key) => pages[key] && String(pages[key]).trim() !== '')
-      .map((key) => ({ key, title: PoolSettings.pageTitles[key] || key }));
+    try {
+      return this.db.prepare(`
+        SELECT slug, title FROM pages
+        WHERE is_published = 1 AND TRIM(html) <> '' AND nav_location <> 'none'
+        ORDER BY sort_order, title
+      `).all().map((r) => ({ key: r.slug, title: r.title }));
+    } catch (e) {
+      return [];
+    }
   }
 
-  // Full content for one page (used by GET /api/public/page/:key).
+  // Full content for one published page by slug (kept for backward compatibility; the
+  // public route now calls PagesManager.getPublic directly).
   getPage(key) {
-    if (!(key in PoolSettings.defaults.pages)) return null;
-    const pages = this.getSection('pages');
-    const html = pages[key] || '';
-    if (String(html).trim() === '') return null; // disabled when empty
-    return { key, title: PoolSettings.pageTitles[key] || key, html };
+    try {
+      const row = this.db.prepare(
+        'SELECT slug, title, html FROM pages WHERE slug = ? AND is_published = 1'
+      ).get(String(key || ''));
+      if (!row || String(row.html).trim() === '') return null;
+      return { key: row.slug, title: row.title, html: row.html };
+    } catch (e) {
+      return null;
+    }
   }
 
   updateSection(section, values, userId = null) {

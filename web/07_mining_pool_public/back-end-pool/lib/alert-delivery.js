@@ -14,8 +14,23 @@ class AlertDelivery {
     this.discordWebhook = config.discord_webhook_url;
     this.slackWebhook = config.slack_webhook_url;
     this.alertEmail = config.alert_email_address;
+    // Telegram: bot token (from @BotFather) + chat id (a user, group, or channel id).
+    // Both must be set for delivery; the bot must have been started by / added to the chat.
+    this.telegramBotToken = config.telegram_bot_token;
+    this.telegramChatId = config.telegram_chat_id;
 
-    this.log('Initialized (email, Discord, Slack)');
+    this.log('Initialized (email, Discord, Slack, Telegram)');
+  }
+
+  // Which channels are configured — surfaced to the admin panel so the operator can see
+  // at a glance what a test/alert will actually reach.
+  configuredChannels() {
+    return {
+      email: !!(this.alertEmail && this.smtpConfig.enabled),
+      discord: !!this.discordWebhook,
+      slack: !!this.slackWebhook,
+      telegram: !!(this.telegramBotToken && this.telegramChatId),
+    };
   }
 
   /**
@@ -42,7 +57,35 @@ class AlertDelivery {
       ));
     }
 
+    if (this.telegramBotToken && this.telegramChatId) {
+      promises.push(this.sendTelegram(alert).catch(err =>
+        this.error(`Telegram delivery failed: ${err.message}`)
+      ));
+    }
+
     await Promise.allSettled(promises);
+  }
+
+  /**
+   * Send alert to Telegram via the Bot API (sendMessage). HTML parse mode.
+   */
+  async sendTelegram(alert) {
+    const emoji = { critical: '🔴', warning: '🟡', info: '🔵' }[alert.level] || '⚪';
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const text =
+      `${emoji} <b>${esc(this.formatAlertType(alert.type))}</b>\n` +
+      `${esc(alert.message)}\n\n` +
+      `Level: <b>${esc(alert.level.toUpperCase())}</b>  ·  Occurrences: ${alert.occurrence_count}\n` +
+      `${new Date(alert.triggered_at).toISOString()}`;
+
+    const url = new URL(`https://api.telegram.org/bot${this.telegramBotToken}/sendMessage`);
+    const payload = JSON.stringify({
+      chat_id: this.telegramChatId,
+      text,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+    });
+    return this.postWebhook(url, payload);
   }
 
   /**

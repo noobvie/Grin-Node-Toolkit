@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { getDb } = require('./db');
+const { recordSourceIp } = require('./owner-proof');
 
 class MinerManager {
   constructor(config) {
@@ -72,6 +73,52 @@ class MinerManager {
     } catch (err) {
       console.error(`Error ensuring miner exists: ${err.message}`);
     }
+  }
+
+  // Record the source IP seen for an address into its last-2 distinct-IP window (backs the
+  // address-as-identity ownership gate). Delegates to owner-proof.recordSourceIp; cheap no-op
+  // when the IP is unchanged. Called from stratum login (local) and hub share ingestion (relay).
+  recordSourceIp(grinAddress, ip) {
+    return recordSourceIp(this.db, grinAddress, ip);
+  }
+
+  // Moderation — is this address banned from logging in / submitting shares?
+  // Cheap single-row lookup; called on every stratum login (see stratum-server handleLogin).
+  isBanned(grinAddress) {
+    try {
+      const row = this.db.prepare(
+        'SELECT is_banned FROM miner_accounts WHERE grin_address = ?'
+      ).get(grinAddress);
+      return !!(row && row.is_banned);
+    } catch (err) {
+      // Fail open: a lookup error must never silently lock everyone out of mining.
+      console.error(`Error checking ban status: ${err.message}`);
+      return false;
+    }
+  }
+
+  // Ban an abusive address: blocks future stratum logins. Balance is intentionally left
+  // intact so anything already owed can still be paid out. Idempotent (ensures the row).
+  banMiner(grinAddress, reason = null) {
+    this.ensureMinerExists(grinAddress);
+    this.db.prepare(
+      `UPDATE miner_accounts SET is_banned = 1, ban_reason = ?, banned_at = unixepoch(), updated_at = unixepoch()
+       WHERE grin_address = ?`
+    ).run(reason ? String(reason).slice(0, 280) : null, grinAddress);
+    // Drop any live sessions for the address so the ban takes effect without waiting for
+    // a reconnect.
+    for (const [sid, session] of this.activeSessions) {
+      if (session.grinAddress === grinAddress) this.activeSessions.delete(sid);
+    }
+    return true;
+  }
+
+  unbanMiner(grinAddress) {
+    this.db.prepare(
+      `UPDATE miner_accounts SET is_banned = 0, ban_reason = NULL, banned_at = NULL, updated_at = unixepoch()
+       WHERE grin_address = ?`
+    ).run(grinAddress);
+    return true;
   }
 
   recordShare(grinAddress, difficulty) {

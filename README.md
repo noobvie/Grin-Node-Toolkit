@@ -37,6 +37,8 @@ Publish API testnet: https://testapi.grin.money
 Grin Global Health mainnet: https://world.grin.money
 
 Free Grin Coin Portal: https://drop.grin.money/
+
+Solo Grin Mining Pool: https://solo.grin.money (user/pass disabled for easy viewing)
 ...
 
 ---
@@ -60,11 +62,9 @@ Free Grin Coin Portal: https://drop.grin.money/
 
 ## Quick Start
 
-> **Need a cheap VPS?** A low-cost SSD VPS works great for running a Grin node.
-> Try searching Google for:
-> - `racknerd vps sale` or `racknerd vps blackfriday`
-> - `cloudcone vps sale` or `cloudcone vps blackfriday`
-> - Browse [LowEndBox](https://lowendbox.com) for deals around **$2/month**
+> **Need a cheap VPS?** A low-cost SSD/NVMe VPS works great for running a Grin node —
+> around **$30/year** is plenty. Browse [LowEndTalk](https://lowendtalk.com) or
+> [LowEndBox](https://lowendbox.com) for deals.
 
 ```bash
 git clone https://github.com/noobvie/grin-node-toolkit.git
@@ -225,7 +225,7 @@ Automates Grin blockchain backup and sharing so others can bootstrap from your n
 - Dual sync-status verification before snapshot; graceful node shutdown/restart
 - **A/B) Nginx sharing** — set up nginx config and trigger share immediately
 - **C/D) SSH sharing** — optional SSH remote upload
-- **E/F) Nginx schedule** — add/remove cron jobs (preset Mon & Thu 00:00 UTC or custom expression)
+- **E/F) Nginx schedule** — add/remove cron jobs, **one schedule per network** (separate cron lines for mainnet and testnet) so the two never stop-and-compress at the same time; presets 2–4 pick a random time per network, set once at setup, to stagger disk/CPU load. F removes all or just one network's schedule.
 - **G) Auto startup** — adds a crontab `@reboot sleep N && tmux new-session -d -s SESSION BINARY` entry; detects running binary via port → PID → `/proc/$pid/exe`; configurable boot delay (default 60s mainnet, 120s testnet)
 - **H) Disable auto startup** — removes the `@reboot` crontab entries
 - **I) Auto-delete txhashset snapshots** — schedules a cron job to purge old snapshot files from the nginx web root, keeping disk usage under control

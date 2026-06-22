@@ -28,7 +28,7 @@ const IncentivesManager = require('./incentives');
 const JOB_WINDOW = 10;
 
 // Grin block reward is a fixed 60 GRIN (no halving). Used when crediting a found
-// block to the local DB (single-box / hub-primary). Satellites relay instead.
+// block to the local DB. Under Model C all regions submit here, so this box always credits.
 const GRIN_BLOCK_REWARD = 60;
 
 // PROXY-protocol v2 12-byte signature: "\r\n\r\n\0\r\nQUIT\n".
@@ -98,11 +98,7 @@ class StratumServer {
     this.jobCounter = 0;
     // Set by index.js after both are constructed
     this.nodeStratumClient = null;
-    // Optional: set by the satellite entrypoint (setShareRelay) to forward accepted
-    // shares / found blocks to the Central Hub. null in single-box/hub mode.
-    this.shareRelay = null;
-    // Optional: set by index.js (setBlockManager) so found blocks are credited to the
-    // local DB in single-box/hub mode. null on satellites (the hub credits instead).
+    // Set by index.js (setBlockManager) so found blocks are credited to the local DB.
     this.blockManager = null;
   }
 
@@ -111,13 +107,7 @@ class StratumServer {
     this.nodeStratumClient = client;
   }
 
-  // Wire the share relay (satellite mode). Additive: when set, every accepted share
-  // and found block is also emitted to the hub. When null, behaviour is unchanged.
-  setShareRelay(relay) {
-    this.shareRelay = relay;
-  }
-
-  // Wire the block manager (single-box/hub mode) so found blocks are recorded locally.
+  // Wire the block manager so found blocks are recorded locally.
   setBlockManager(bm) {
     this.blockManager = bm;
   }
@@ -330,8 +320,8 @@ class StratumServer {
     this.minerManager.ensureMinerExists(parsed.grin_address);
 
     // Capture the miner's source IP into its last-2-IP window (backs the ownership gate for
-    // self-service actions). Raw TCP :3333 → socket.remoteAddress is the true public IP. On a
-    // satellite this is also relayed per-share so the hub records the miner IP, not ours.
+    // self-service actions). `ip` is the real miner IP — direct on :3333, or recovered from
+    // the gateway's PROXY-protocol v2 header on a per-region listener (see handleNewConnection).
     this.minerManager.recordSourceIp(parsed.grin_address, ip);
 
     // Optional `donateN` worker tag → record the miner's voluntary donation %.
@@ -443,36 +433,11 @@ class StratumServer {
       this.minerManager.recordShare(session.grinAddress, session.difficulty);
       this._stat(sessionId, 'accepted');
 
-      // Satellite mode: forward the accepted share to the Central Hub (idempotent —
-      // the hub dedups by share_hash UNIQUE). No-op in single-box/hub mode.
-      if (this.shareRelay) {
-        this.shareRelay.recordShare({
-          grin_address: session.grinAddress,
-          worker_name:  session.workerName,
-          difficulty:   session.difficulty,
-          height,
-          share_hash:   shareHash,
-          // Relay the MINER's source IP so the hub records it (not the satellite's req.ip).
-          // share-relay.js forwards this verbatim through live + failover-replay batches.
-          source_ip:    session.ip,
-          created_at:   Math.floor(Date.now() / 1000)
-        });
-      }
-
       if (nodeResult.blockHash) {
         console.log(`[${new Date().toISOString()}] BLOCK FOUND: height=${height} hash=${nodeResult.blockHash} miner=${session.grinAddress}`);
-        // Record the found block exactly once:
-        //  · satellite mode → relay to the hub (hub dedups by hash UNIQUE)
-        //  · single-box/hub → credit the local DB (creditBlock dedups by hash UNIQUE)
-        if (this.shareRelay) {
-          this.shareRelay.recordBlock({
-            height,
-            hash:       nodeResult.blockHash,
-            nonce,
-            found_by:   session.grinAddress,
-            created_at: Math.floor(Date.now() / 1000)
-          });
-        } else if (this.blockManager) {
+        // Credit the found block to the local DB (creditBlock dedups by hash UNIQUE). Under
+        // Model C every region's submits arrive here, so the central box is the sole crediter.
+        if (this.blockManager) {
           try {
             await this.blockManager.creditBlock(
               height, nodeResult.blockHash, nonce, GRIN_BLOCK_REWARD, session.grinAddress

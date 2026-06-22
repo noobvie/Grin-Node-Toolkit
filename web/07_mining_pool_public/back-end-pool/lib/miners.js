@@ -80,7 +80,8 @@ class MinerManager {
 
   // Record the source IP seen for an address into its last-2 distinct-IP window (backs the
   // address-as-identity ownership gate). Delegates to owner-proof.recordSourceIp; cheap no-op
-  // when the IP is unchanged. Called from stratum login (local) and hub share ingestion (relay).
+  // when the IP is unchanged. Called from stratum login with the real miner IP (direct socket
+  // address, or the gateway's PROXY-protocol v2 header value under Model C).
   recordSourceIp(grinAddress, ip) {
     return recordSourceIp(this.db, grinAddress, ip);
   }

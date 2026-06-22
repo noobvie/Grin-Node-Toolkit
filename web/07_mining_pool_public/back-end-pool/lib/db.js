@@ -436,12 +436,11 @@ function createSchema() {
     `CREATE INDEX IF NOT EXISTS idx_lottery_winners_draw ON lottery_winners(draw_id)`,
     `CREATE INDEX IF NOT EXISTS idx_lottery_winners_address ON lottery_winners(grin_address, created_at DESC)`,
 
-    // ─── Multi-region — operator-declared regional endpoints (hub-and-spoke) ───
-    // One row per region/satellite the hub knows about. `region` matches the tag the
-    // satellite relay stamps on shares (config.region → POST /api/shares { region }),
-    // so /api/pool/stats/regions can left-join live share aggregates onto these labels.
-    // Purely descriptive: the IP allowlist + shared secret in pool.json (not this table)
-    // are what actually authorise ingestion.
+    // ─── Multi-region — operator-declared regional endpoints (Model C) ───
+    // One row per region/gateway the pool advertises. `region` matches the tag the central
+    // stratum-server stamps on shares (from the per-region listener), so /api/pool/stats/regions
+    // can left-join live share aggregates onto these labels. Purely descriptive: the real region
+    // wiring is the WireGuard peer + per-region port set up by Script 07 (W) Multi-region).
     `CREATE TABLE IF NOT EXISTS pool_locations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       region TEXT NOT NULL UNIQUE,
@@ -538,8 +537,8 @@ function createSchema() {
   migratePagesFromConfig();
   // The default grinium regional endpoints are seeded once (see seedDefaultRegions,
   // called from index.js with the configured stratum port). The pool server also
-  // self-registers its own region via ensureLocalRegion(); extra zones come from real
-  // satellites the operator declares in admin → Regions.
+  // self-registers its own region via ensureLocalRegion(); extra zones come from
+  // regional gateways the operator declares in admin → Regions.
 }
 
 // Additive, non-destructive: add the country grouping columns to an existing
@@ -620,8 +619,8 @@ function migratePagesFromConfig() {
 }
 
 // Self-register the pool server's own region (role=singlebox) so the central box
-// shows as a real region and auto-joins the connect grid the moment a satellite for
-// another zone reports in. Creates ONE row for `region` (skipping the generic
+// shows as a real region and auto-joins the connect grid the moment a gateway for
+// another zone forwards shares in. Creates ONE row for `region` (skipping the generic
 // 'default'), backfills stratum_url once the public hostname is known, and never
 // clobbers an operator's label/active/url edits made in admin → Regions.
 // One-time seed of the default grinium regional endpoints, grouped by country so the

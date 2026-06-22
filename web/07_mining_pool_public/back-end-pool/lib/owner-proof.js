@@ -13,8 +13,9 @@
 // slatepack being age-encrypted to the owner's address — a non-owner who passes the gate gets
 // an undecryptable blob. min_payout is griefing-only risk.
 //
-// Source-IP capture lives at the stratum layer (singlebox/hub-local) and is relayed per-share
-// from satellites (POST /api/shares → s.source_ip). Both converge on recordSourceIp() here.
+// Source-IP capture lives at the stratum layer. The real miner IP is the socket address for
+// direct miners, or the PROXY-protocol v2 header value for miners arriving via a regional
+// gateway (Model C) — both resolved in stratum-server before calling recordSourceIp() here.
 
 // Strip the IPv4-mapped-IPv6 prefix Express/Node attaches (e.g. "::ffff:1.2.3.4" → "1.2.3.4").
 function normalizeIp(ip) {

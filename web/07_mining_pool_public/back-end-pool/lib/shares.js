@@ -7,11 +7,11 @@ class ShareValidator {
     this.db = getDb();
   }
 
-  // `region` tags which region a share came from (multi-region hub-and-spoke):
-  //  · local stratum shares omit it → default to this box's config.region
-  //  · hub ingestion (POST /api/shares) passes the satellite's region per batch
-  // It is purely an aggregation dimension (see GET /api/pool/stats/regions); it has
-  // no bearing on PPLNS weighting, which is region-agnostic.
+  // `region` tags which region a share came from (Model C multi-region). The central
+  // stratum-server stamps it from the listener the share arrived on: the public port →
+  // config.region; a per-region internal port → that region (the gateway tunnelled it in).
+  // Omitted → default to this box's config.region. It is purely an aggregation dimension
+  // (see GET /api/pool/stats/regions); no bearing on PPLNS weighting, which is region-agnostic.
   async submitShare(grinAddress, workerName, difficulty, blockHeight, shareHash, region) {
     try {
       if (!grinAddress || !shareHash) {

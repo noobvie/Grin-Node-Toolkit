@@ -72,9 +72,11 @@ function mergeEnvVars(config) {
       48 * 3600
     ],
 
-    // ─── Multi-region (hub-and-spoke) ───────────────────────────────────────
-    // role: singlebox (default) | hub | satellite. Satellites relay shares/blocks
-    // to the hub's Central API; see lib/share-relay.js + satellite.js.
+    // ─── Multi-region (Model C: thin stratum gateways) ──────────────────────
+    // role: singlebox (default) | hub. Regional GATEWAYS are NOT a pool app role — they
+    // run no Node process; they are HAProxy+WireGuard forwarders (scripts/lib/07_lib_gateway.sh)
+    // that tunnel miner stratum to a per-region internal port on this central box. So this
+    // app only ever runs as singlebox or hub. (The legacy 'satellite' role + relay are gone.)
     role: config.role || process.env.POOL_ROLE || 'singlebox',
     region: config.region || process.env.POOL_REGION || 'default',
 
@@ -95,30 +97,21 @@ function mergeEnvVars(config) {
 
     // Public web/stratum hostname (e.g. grinium.com). Used to derive the local
     // region's connect address (subdomain:stratum_port) in db.ensureLocalRegion.
-    subdomain: config.subdomain || process.env.POOL_SUBDOMAIN || '',
-    hub_url: config.hub_url || process.env.HUB_URL || '',
-    hub_shared_secret: config.hub_shared_secret || process.env.HUB_SHARED_SECRET || '',
-    satellite_ip_allowlist: config.satellite_ip_allowlist || [],
-    relay_batch_interval_ms: config.relay_batch_interval_ms || 2000
+    subdomain: config.subdomain || process.env.POOL_SUBDOMAIN || ''
   };
 }
 
 function validateConfig(config) {
-  // Satellites run mining ingress + relay only — no web/admin/auth — so they carry no
-  // jwt_secret. The fail-loud JWT check applies only to roles that serve admin auth
-  // (singlebox/hub). Without this guard the satellite (grin_satellite.json has no
-  // jwt_secret) would refuse to boot.
-  if (config.role !== 'satellite') {
-    // Fail loudly on a missing/weak JWT secret rather than auto-generating one at boot —
-    // a fresh secret each restart silently logs out every admin and breaks refresh tokens.
-    // The installer must write a persistent jwt_secret into pool.json (Script 07 install/configure).
-    if (!config.jwt_secret || String(config.jwt_secret).length < 32) {
-      throw new Error(
-        'FATAL: jwt_secret is missing or too short (need ≥32 chars) in pool.json. ' +
-        'It must be generated ONCE at install and persisted, never minted at boot. ' +
-        'Re-run the Script 07 installer/configure step to set it.'
-      );
-    }
+  // Both remaining roles (singlebox/hub) serve the admin auth surface, so a persistent
+  // jwt_secret is always required. Fail loudly on a missing/weak one rather than
+  // auto-generating at boot — a fresh secret each restart silently logs out every admin
+  // and breaks refresh tokens. The Script 07 installer writes it once into pool.json.
+  if (!config.jwt_secret || String(config.jwt_secret).length < 32) {
+    throw new Error(
+      'FATAL: jwt_secret is missing or too short (need ≥32 chars) in pool.json. ' +
+      'It must be generated ONCE at install and persisted, never minted at boot. ' +
+      'Re-run the Script 07 installer/configure step to set it.'
+    );
   }
 
   const required = ['wallet_dir', 'node_api_url', 'db_path'];

@@ -35,8 +35,8 @@
 #   DEL) Reset database      (⚠ permanently wipes all data)
 #   0) Exit
 # Mode-selector menu (before the above): Z) Cleanup public mining pool —
-#   removes pool/hub/satellite infra for fast rebuild tests; keeps node,
-#   wallet seed and backups (mirrors the solo cleanup in 07_grin_mining_solo.sh).
+#   removes pool/hub/gateway infra (+ any legacy satellite) for fast rebuild tests;
+#   keeps node, wallet seed and backups (mirrors solo cleanup in 07_grin_mining_solo.sh).
 # =============================================================================
 
 set -euo pipefail
@@ -182,8 +182,8 @@ pool_ensure_defaults() {
         # The pool server's own region label. It serves local miners under this
         # region; on startup the app self-registers one pool_locations row for it
         # (→ subdomain:stratum_port) so the central box shows as a real region and
-        # auto-joins the connect grid the moment a satellite for another zone reports
-        # in — no rebuild. Rename it in admin → Regions.
+        # auto-joins the connect grid the moment a gateway for another zone forwards
+        # shares in — no rebuild. Rename it in admin → Regions.
         ["region"]="main"
         ["pool_fee_percent"]="1.0"
         ["min_withdrawal"]="5.0"
@@ -296,8 +296,8 @@ pool_show_status() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Ensure Node.js 24+ (node:sqlite needs >= 24). Installs or upgrades via
-# NodeSource when the box has no node or one that is too old. Shared by the
-# pool install and the satellite install (lib is sourced from this script).
+# NodeSource when the box has no node or one that is too old. Used by the pool
+# (singlebox/hub) install — regional gateways run no Node and don't call this.
 pool_ensure_node24() {
     local node_ver=0
     command -v node &>/dev/null && \
@@ -338,8 +338,8 @@ pool_install() {
     # rc 1 on a guard block (not 0): the guided flow must treat a refused install
     # as a failure and abort, not continue to Configure on a blocked box.
     pool_check_exclusivity || return 1
-    # Defense-in-depth: refuse if a Satellite already occupies this box (in case
-    # the selector guard was bypassed via a direct/non-interactive entry).
+    # Defense-in-depth: refuse if a gateway (or legacy satellite) already occupies this
+    # box (in case the selector guard was bypassed via a direct/non-interactive entry).
     pool_mode_conflict_check "${POOL_MODE:-singlebox}" || return 1
 
     if [[ ! -d "$POOL_APP_SRC" ]]; then
@@ -466,8 +466,8 @@ pool_configure() {
     # (pool name, fee %, min withdrawal, reward model, payout options, …) is
     # seeded with sane defaults during 1) Install and is edited in the web admin
     # panel after first login — so the installer stays minimal. The domain is the
-    # exception: it's REQUIRED for nginx + certbot + satellite HTTPS and is NOT
-    # editable in the admin panel, so it must be captured up front.
+    # exception: it's REQUIRED for nginx + certbot (the public site + admin HTTPS) and
+    # is NOT editable in the admin panel, so it must be captured up front.
     # node_stratum_port stays at its default (3334); advanced operators running
     # the node's built-in stratum on another port edit grin_pubpool.json directly.
     local val
@@ -483,7 +483,7 @@ pool_configure() {
             # Enter with an existing value keeps it; with none, the field is
             # mandatory — re-prompt instead of writing an empty domain.
             [[ -n "$cur_domain" ]] && break
-            warn "A domain is required for a public pool (HTTPS + satellites). Enter 0 to cancel Configure."
+            warn "A domain is required for a public pool (HTTPS for the site + admin). Enter 0 to cancel Configure."
             continue
         fi
         [[ "$val" == "0" ]] && { info "Configure cancelled."; return 1; }
@@ -704,8 +704,7 @@ pool_setup_nginx() {
             "${POOL_SERVICE}_api:600r/m"      \
             "${POOL_SERVICE}_static:6000r/m"  \
             "${POOL_SERVICE}_captcha:600r/m"  \
-            "${POOL_SERVICE}_admin:2400r/m"   \
-            "${POOL_SERVICE}_ingest:2400r/m"
+            "${POOL_SERVICE}_admin:2400r/m"
     fi
 
     # ── Cloudflare proxy (orange cloud) support ───────────────────────────────
@@ -937,23 +936,6 @@ $admin_rules
         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
     }
 
-    # Satellite share/block ingestion (Central API). The app authenticates these
-    # (IP allowlist + shared secret); they get their own zone because a satellite
-    # batching every ~2 s ≈ 30 r/m would sit exactly at the public API ceiling.
-    location = /api/shares {
-        limit_req zone=${POOL_SERVICE}_ingest burst=30 nodelay;
-        proxy_pass         http://127.0.0.1:$POOL_PORT;
-        proxy_set_header   Host \$host;
-        proxy_set_header   X-Real-IP \$remote_addr;
-        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
-    }
-    location = /api/blocks {
-        limit_req zone=${POOL_SERVICE}_ingest burst=30 nodelay;
-        proxy_pass         http://127.0.0.1:$POOL_PORT;
-        proxy_set_header   Host \$host;
-        proxy_set_header   X-Real-IP \$remote_addr;
-        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
-    }
 
     location /api/ {
         limit_req zone=${POOL_SERVICE}_api burst=10 nodelay;
@@ -1964,11 +1946,11 @@ pool_singlebox_loop() {
 # Mirrors solo_cleanup (07_grin_mining_solo.sh): preview with present/absent
 # marks, a master confirm, then per-group confirms — nothing runs until the
 # master Y. Removes whatever GRINIUM roles are on this box — brain (single-server
-# / Central Hub) and/or Satellite — WITHOUT touching anything the node or wallet
-# needs, so an operator can rebuild binary/source/services from scratch quickly.
+# / Central Hub), regional gateway, and/or any legacy satellite — WITHOUT touching
+# anything the node or wallet needs, so an operator can rebuild from scratch quickly.
 #
 # REMOVED (per-group confirm):  systemd services + units, pool app dir (incl.
-#   pool.db + .wallet_pass), satellite app dir (incl. staging/failover DBs),
+#   pool.db + .wallet_pass), gateway app + WireGuard tunnel (+ legacy satellite dir),
 #   web root + nginx vhost + rate-limit zones conf, cron jobs + logrotate +
 #   backup wrapper, JSON configs, service logs.
 # PRESERVED (never touched):    the Grin node + chain data + grin-server.toml
@@ -1982,12 +1964,17 @@ _pool_cleanup_mark() {
 
 pool_cleanup() {
     clear
-    # Edge paths (SAT_*/GW_*) live in their libs — sourcing here is safe and
-    # idempotent (constants + function definitions only).
-    # shellcheck source=lib/07_lib_satellite.sh
-    source "$SCRIPT_DIR/lib/07_lib_satellite.sh"
+    # Gateway paths (GW_*) live in the gateway lib — sourcing here is safe and idempotent
+    # (constants + function definitions only).
     # shellcheck source=lib/07_lib_gateway.sh
     source "$SCRIPT_DIR/lib/07_lib_gateway.sh"
+
+    # Legacy SATELLITE footprint (role removed in the Model C refactor; its lib is gone).
+    # Hardcoded so a box that ran the old satellite can still be cleaned up here.
+    local SAT_SERVICE="grin-satellite"
+    local SAT_CONF="/opt/grin/conf/grin_satellite.json"
+    local SAT_APP_DIR="/opt/grin/satellite"
+    local SAT_LOG="/opt/grin/logs/grin-satellite.log"
 
     local pool_unit="/etc/systemd/system/${POOL_SERVICE}.service"
     local sat_unit="/etc/systemd/system/${SAT_SERVICE}.service"
@@ -2005,22 +1992,22 @@ pool_cleanup() {
     echo -e "${BOLD}${RED}  Clean Up Public Mining Pool${RESET}  ${DIM}(rebuild from scratch quickly)${RESET}"
     echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  Removes the GRINIUM footprint on this box — brain (single-server /"
-    echo -e "  Central Hub) and/or Satellite. The node, your wallet seed, and your"
-    echo -e "  backups are ${BOLD}kept${RESET} — confirm each group below."
+    echo -e "  Removes the GRINIUM footprint on this box — brain (single-server / Central"
+    echo -e "  Hub), regional gateway, and/or any legacy satellite. The node, your wallet"
+    echo -e "  seed, and your backups are ${BOLD}kept${RESET} — confirm each group below."
     echo ""
     echo -e "  ${BOLD}Will be removed${RESET} ${DIM}(if you confirm the group):${RESET}"
     echo -e "    Pool service unit           $(_pool_cleanup_mark "$pool_unit")"
-    echo -e "    Satellite service unit      $(_pool_cleanup_mark "$sat_unit")"
     echo -e "    Gateway service unit        $(_pool_cleanup_mark "$gw_unit")"
+    echo -e "    Legacy satellite unit       $(_pool_cleanup_mark "$sat_unit")"
     echo -e "    Pool app + DB               $(_pool_cleanup_mark "$POOL_APP_DIR")"
-    echo -e "    Satellite app + staging DB  $(_pool_cleanup_mark "$SAT_APP_DIR")"
     echo -e "    Gateway app + wg tunnel     $(_pool_cleanup_mark "$GW_DIR")"
+    echo -e "    Legacy satellite app dir    $(_pool_cleanup_mark "$SAT_APP_DIR")"
     echo -e "    Web root + nginx vhost      $(_pool_cleanup_mark "$POOL_NGINX_CONF")"
     echo -e "    Cron / logrotate / wrapper  $(_pool_cleanup_mark "$cron_backup")"
     echo -e "    Pool config (JSON)          $(_pool_cleanup_mark "$POOL_CONF")"
-    echo -e "    Satellite config (JSON)     $(_pool_cleanup_mark "$SAT_CONF")"
     echo -e "    Gateway config (JSON)       $(_pool_cleanup_mark "$GW_CONF")"
+    echo -e "    Legacy satellite config     $(_pool_cleanup_mark "$SAT_CONF")"
     echo -e "    Service logs                $(_pool_cleanup_mark "$POOL_LOG")"
     echo -e "    Fail2ban jail + filter      $(_pool_cleanup_mark "$f2b_jail")"
     echo ""
@@ -2067,13 +2054,13 @@ pool_cleanup() {
         echo ""
     fi
 
-    # 3) Satellite app dir — includes staging + relay failover SQLite
+    # 3) Legacy satellite app dir (removed role) — staging + relay failover SQLite
     if [[ -d "$SAT_APP_DIR" ]]; then
-        echo -ne "${BOLD}3)${RESET} Remove satellite app + staging DB ($SAT_APP_DIR)? [Y/n]: "
+        echo -ne "${BOLD}3)${RESET} Remove legacy satellite app + staging DB ($SAT_APP_DIR)? [Y/n]: "
         read -r a || true
         if [[ "${a,,}" != "n" ]]; then
             rm -rf "${SAT_APP_DIR:?}"
-            success "Satellite app + staging DB removed."
+            success "Legacy satellite app + staging DB removed."
             log "Cleanup: removed $SAT_APP_DIR"
         fi
         echo ""
@@ -2182,20 +2169,21 @@ pool_cleanup() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # DEPLOYMENT MODE SELECTOR (multi-region split)
 # ═══════════════════════════════════════════════════════════════════════════════
-# Three deployment directions — see docs/generated/script07_design.md §3:
-#   singlebox — Hub + co-located Satellite on one server (original behaviour)
-#   hub       — Central Hub only (brain: API/DB/web/admin/wallet); satellites relay in
-#   satellite — Regional node + stratum proxy + share relay → points at a Hub
-# Mode may be passed as $1 (singlebox|hub|satellite) for non-interactive launches
-# (e.g. from the mining hub); otherwise it is chosen interactively.
+# Two deployment directions (Model C) — see docs/generated/script07_design.md §3:
+#   singlebox — the pool: brain (API/DB/web/admin/wallet) + a co-located local stratum.
+#               Already a full hub, so it accepts regional gateways later with no rebuild.
+#   hub       — Central Hub only (brain, no local stratum); all mining is via gateways.
+# Regional GATEWAYS are NOT a pool-app role — they run no Node process (HAProxy + WireGuard,
+# see lib/07_lib_gateway.sh) and are launched via the `gateway` arg / menu option 2.
+# Mode may be passed as $1 (singlebox|hub|gateway) for non-interactive launches.
 POOL_MODE=""
 
 # ─── Install-footprint detectors (collision guard) ──────────────────────────────
 # Single-server pool and Central Hub share the same "brain" footprint
-# ($POOL_CONF + $POOL_SERVICE); a Satellite has its own (grin_satellite.json +
-# grin-satellite). Co-locating a brain and a satellite on one box collides on
-# stratum 3333 / node upstream 3334 (and Central API 8080), so we refuse at
-# selection time and point the operator at cleanup.
+# ($POOL_CONF + $POOL_SERVICE); a Gateway has its own (grin_gateway.json + grin-gateway).
+# Co-locating a brain and a gateway on one box collides on stratum 3333, so we refuse at
+# selection time and point the operator at cleanup. pool_satellite_installed detects a
+# LEGACY satellite install (role removed in the Model C refactor) so cleanup can still find it.
 pool_brain_installed() {
     [[ -f "$POOL_CONF" ]] && return 0
     systemctl list-unit-files 2>/dev/null | grep -q "^${POOL_SERVICE}\.service" && return 0
@@ -2214,20 +2202,11 @@ pool_gateway_installed() {
 
 # Returns 0 if the chosen mode is safe to install on this box; 1 (with guidance)
 # if it would collide with an existing install of another kind. The brain
-# (singlebox/hub) and any edge (satellite/gateway) collide on stratum :3333; the
-# two edge roles collide with each other on :3333 too — one mining role per box.
+# (singlebox/hub) and a gateway collide on stratum :3333 — one mining role per box.
+# (A legacy satellite, if present, also collides and is detected the same way.)
 pool_mode_conflict_check() {
     case "$1" in
         singlebox|hub)
-            if pool_satellite_installed; then
-                echo ""
-                warn "A Satellite install was detected on this server:"
-                echo -e "    config:  /opt/grin/conf/grin_satellite.json"
-                echo -e "    service: grin-satellite"
-                echo -e "  ${DIM}Single-server / Central Hub bind stratum :3333, which the Satellite uses.${RESET}"
-                echo -e "  ${BOLD}Clean up the Satellite first${RESET} (mode menu → Z) Cleanup), then re-run."
-                return 1
-            fi
             if pool_gateway_installed; then
                 echo ""
                 warn "A Regional Gateway install was detected on this server:"
@@ -2237,28 +2216,31 @@ pool_mode_conflict_check() {
                 echo -e "  ${BOLD}Clean up the Gateway first${RESET} (mode menu → Z) Cleanup), then re-run."
                 return 1
             fi
+            if pool_satellite_installed; then
+                echo ""
+                warn "A legacy Satellite install was detected on this server:"
+                echo -e "    config:  /opt/grin/conf/grin_satellite.json"
+                echo -e "    service: grin-satellite"
+                echo -e "  ${DIM}The satellite role was replaced by Regional Gateways (Model C).${RESET}"
+                echo -e "  ${BOLD}Clean up the legacy Satellite first${RESET} (mode menu → Z) Cleanup), then re-run."
+                return 1
+            fi
             ;;
-        satellite|gateway)
+        gateway)
             if pool_brain_installed; then
                 echo ""
                 warn "An existing pool / Central Hub install was detected on this server:"
                 echo -e "    config:  $POOL_CONF"
                 echo -e "    service: $POOL_SERVICE"
-                echo -e "  ${DIM}An edge role binds stratum :3333, which this install already uses${RESET}"
+                echo -e "  ${DIM}A gateway binds stratum :3333, which this install already uses${RESET}"
                 echo -e "  ${DIM}(plus node upstream 3334 / Central API 8080) — both on one box collides.${RESET}"
                 echo -e "  ${BOLD}Clean up the public pool config first${RESET} (mode menu → Z) Cleanup), then re-run."
                 return 1
             fi
-            # The two edge roles also collide with each other (both bind :3333).
-            if [[ "$1" == "gateway" ]] && pool_satellite_installed; then
+            # A legacy satellite would also collide (both bind :3333).
+            if pool_satellite_installed; then
                 echo ""
-                warn "A Satellite install already occupies this box (both bind :3333)."
-                echo -e "  ${BOLD}Clean it up first${RESET} (mode menu → Z) Cleanup), then re-run."
-                return 1
-            fi
-            if [[ "$1" == "satellite" ]] && pool_gateway_installed; then
-                echo ""
-                warn "A Regional Gateway already occupies this box (both bind :3333)."
+                warn "A legacy Satellite install already occupies this box (both bind :3333)."
                 echo -e "  ${BOLD}Clean it up first${RESET} (mode menu → Z) Cleanup), then re-run."
                 return 1
             fi
@@ -2270,7 +2252,7 @@ pool_mode_conflict_check() {
 pool_select_mode() {
     local arg="${1:-}"
     case "$arg" in
-        singlebox|hub|gateway|satellite)
+        singlebox|hub|gateway)
             POOL_MODE="$arg"
             pool_mode_conflict_check "$arg" || POOL_MODE=""
             return
@@ -2287,7 +2269,7 @@ pool_select_mode() {
         echo ""
         echo -e "  ${GREEN}1${RESET}) Pool server      ${DIM}The pool itself — runs everything.${RESET} ${BOLD}Start here.${RESET}"
         echo -e "                     ${DIM}Serves local miners as region \"main\"; accepts${RESET}"
-        echo -e "                     ${DIM}satellites from other zones later — no rebuild.${RESET}"
+        echo -e "                     ${DIM}regional gateways from other zones later — no rebuild.${RESET}"
         echo ""
         echo -e "  ${GREEN}2${RESET}) Regional gateway ${DIM}A thin stratum forwarder on ANOTHER box: no node,${RESET}"
         echo -e "                     ${DIM}no wallet — tunnels miners to your pool server (Model C).${RESET}"
@@ -2346,13 +2328,6 @@ main() {
                 # shellcheck source=lib/07_lib_gateway.sh
                 source "$SCRIPT_DIR/lib/07_lib_gateway.sh"
                 pool_gateway_loop
-                ;;
-            satellite)
-                # Legacy edge role — kept reachable by arg only during the Model C
-                # transition (the menu now offers Gateway). Removed in the Q2-gated cleanup.
-                # shellcheck source=lib/07_lib_satellite.sh
-                source "$SCRIPT_DIR/lib/07_lib_satellite.sh"
-                pool_satellite_loop
                 ;;
             *)
                 info "No mode selected — returning to mining hub."

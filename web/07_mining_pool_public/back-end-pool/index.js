@@ -37,13 +37,40 @@ const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
+const { execSync } = require('child_process');
+
+// Best-effort WireGuard handshake per region (Model C gateway liveness). Maps each peer's
+// public key → region using the "# region: <name>" comment the installer writes above every
+// [Peer] in /etc/wireguard/wg-grinpool.conf, then reads `wg show ... latest-handshakes`.
+// Returns { <region>: { handshake: <unix_ts> } }; {} on ANY failure (wg not installed, not the
+// central box, no permission, dev/Windows) so callers fall back to the share-activity signal.
+function readWgHandshakes() {
+  const out = {};
+  try {
+    const conf = fs.readFileSync('/etc/wireguard/wg-grinpool.conf', 'utf8');
+    const pubToRegion = {};
+    let curRegion = null;
+    for (const line of conf.split('\n')) {
+      const rm = line.match(/^\s*#\s*region:\s*(.+?)\s*$/i);
+      if (rm) { curRegion = rm[1]; continue; }
+      const pm = line.match(/^\s*PublicKey\s*=\s*(.+?)\s*$/i);
+      if (pm && curRegion) { pubToRegion[pm[1]] = curRegion; curRegion = null; }
+    }
+    const dump = execSync('wg show wg-grinpool latest-handshakes', { timeout: 2000 }).toString();
+    for (const line of dump.split('\n')) {
+      const [pub, ts] = line.trim().split(/\s+/);
+      if (pub && ts && pubToRegion[pub]) out[pubToRegion[pub]] = { handshake: parseInt(ts, 10) || 0 };
+    }
+  } catch (e) { /* wg unavailable — share-activity signal is used instead */ }
+  return out;
+}
 
 const app = express();
 // Trust X-Forwarded-For ONLY when the connection comes from our own nginx on loopback.
 // This makes req.ip the real client IP from XFF (instead of nginx's 127.0.0.1) while making
 // raw XFF UNspoofable: a direct hit on :8080 (not via the local proxy) gets its real socket
-// IP, not a forged header. Without this the rate-limiter, admin IP allowlist, and satellite
-// ingestion allowlist (requireSatellite) all compare against the wrong/forgeable address.
+// IP, not a forged header. Without this the rate-limiter and admin IP allowlist all compare
+// against the wrong/forgeable address.
 // 'loopback' matches the toolkit convention (see web/051_wallet/server.js); app-scoped, so
 // no collision with other toolkit Express products.
 app.set('trust proxy', 'loopback');
@@ -144,9 +171,8 @@ let mediaUpload = null;      // configured multer instance for image uploads
 async function initializePool() {
   try {
     // GRIN_POOL_CONF is set by the Script 07 systemd unit (/opt/grin/conf/
-    // grin_pubpool.json); ./pool.json is the manual/testnet fallback. Same
-    // resolution as satellite.js — without it the installed service ignored
-    // the operator's config entirely.
+    // grin_pubpool.json); ./pool.json is the manual/testnet fallback. Without
+    // it the installed service would ignore the operator's config entirely.
     config = loadConfig(process.env.GRIN_POOL_CONF || './pool.json');
     console.log(`[${new Date().toISOString()}] Loading pool configuration...`);
 
@@ -183,8 +209,8 @@ async function initializePool() {
     seedDefaultRegions(config.stratum_port, config.subdomain);
 
     // Self-register this pool server's own region so it shows as a real connect card
-    // and auto-joins the grid when a satellite for another zone reports in. Only the
-    // singlebox role runs a local stratum; a bare hub relies purely on satellites.
+    // and auto-joins the grid when a gateway for another zone forwards shares in. Only the
+    // singlebox role runs a local stratum; a bare hub relies purely on regional gateways.
     if (config.role === 'singlebox') {
       const localStratum = config.subdomain ? `${config.subdomain}:${config.stratum_port}` : '';
       ensureLocalRegion(config.region, localStratum);
@@ -413,99 +439,14 @@ function setupRoutes() {
     }
   );
 
-  // ─── Satellite ingestion (Central Hub) ─────────────────────────────────────
-  // Satellites POST accepted shares / found blocks here (see lib/share-relay.js).
-  // Auth: shared-secret header (+ optional IP allowlist). Idempotent: shares dedup
-  // by share_hash UNIQUE, blocks by hash UNIQUE. Inert unless hub_shared_secret is set.
-  const GRIN_BLOCK_REWARD = 60; // Grin block reward is a fixed 60 GRIN (no halving)
-
-  // In-memory satellite liveness, keyed by region. The Central API is the sole DB writer
-  // and runs single-process, so a plain Map is sufficient — no locking needed. It resets
-  // on restart, which is fine: this is a liveness monitor, not a financial record (those
-  // live in the shares/blocks tables). Surfaced read-only via /api/admin/health/satellites.
-  const satelliteHeartbeats = new Map();
-
-  function recordSatelliteHeartbeat(region, ip, { accepted = 0, skipped = 0, blocks = 0, shareHeight = 0, blockHeight = 0 }) {
-    const key = region || 'default';
-    const hb = satelliteHeartbeats.get(key) || {
-      region: key, shares_accepted: 0, shares_skipped: 0, blocks: 0,
-      last_share_height: 0, last_block_height: 0
-    };
-    hb.ip = ip || hb.ip || null;
-    hb.last_seen = Date.now();
-    hb.shares_accepted += accepted;
-    hb.shares_skipped += skipped;
-    hb.blocks += blocks;
-    if (shareHeight > hb.last_share_height) hb.last_share_height = shareHeight;
-    if (blockHeight > hb.last_block_height) hb.last_block_height = blockHeight;
-    satelliteHeartbeats.set(key, hb);
-  }
-
-  function satelliteSecretOk(provided) {
-    const expected = config.hub_shared_secret || '';
-    if (!expected) return false;
-    const a = Buffer.from(String(provided));
-    const b = Buffer.from(String(expected));
-    if (a.length !== b.length) return false;
-    return crypto.timingSafeEqual(a, b);
-  }
-
-  function requireSatellite(req, res, next) {
-    if (!satelliteSecretOk(req.get('x-pool-secret') || '')) {
-      return res.status(401).json({ error: 'unauthorized' });
-    }
-    const allow = config.satellite_ip_allowlist || [];
-    if (Array.isArray(allow) && allow.length > 0) {
-      const ip = String(req.ip || (req.connection && req.connection.remoteAddress) || '').replace('::ffff:', '');
-      if (!allow.includes(ip)) return res.status(403).json({ error: 'ip not allowed' });
-    }
-    next();
-  }
-
-  app.post('/api/shares', requireSatellite, async (req, res) => {
-    const { region, shares } = req.body || {};
-    if (!Array.isArray(shares)) return res.status(400).json({ error: 'shares[] required' });
-    let accepted = 0, skipped = 0, maxHeight = 0;
-    for (const s of shares) {
-      if (!s || !s.grin_address || !s.share_hash || !s.height) { skipped++; continue; }
-      try {
-        minerManager.ensureMinerExists(s.grin_address);
-        // Record the MINER's source IP (relayed by the satellite per-share), NOT req.ip — req.ip
-        // here is the satellite. Backs the ownership gate for hub-and-spoke deployments.
-        if (s.source_ip) minerManager.recordSourceIp(s.grin_address, s.source_ip);
-        const r = await shareValidator.submitShare(
-          s.grin_address, s.worker_name || null, s.difficulty, s.height, s.share_hash,
-          region || 'default'
-        );
-        if (r.success) accepted++; else skipped++; // duplicate (UNIQUE) or invalid → skip
-        if (s.height > maxHeight) maxHeight = s.height;
-      } catch (e) {
-        skipped++;
-      }
-    }
-    const ip = String(req.ip || '').replace('::ffff:', '');
-    recordSatelliteHeartbeat(region, ip, { accepted, skipped, shareHeight: maxHeight });
-    res.json({ success: true, region: region || null, accepted, skipped });
-  });
-
-  app.post('/api/blocks', requireSatellite, async (req, res) => {
-    const { region, block } = req.body || {};
-    if (!block || block.height === undefined || !block.hash || !block.found_by) {
-      return res.status(400).json({ error: 'block {height,hash,found_by} required' });
-    }
-    try {
-      minerManager.ensureMinerExists(block.found_by);
-      const r = await blockManager.creditBlock(
-        block.height, block.hash, block.nonce, GRIN_BLOCK_REWARD, block.found_by
-      );
-      const ip = String(req.ip || '').replace('::ffff:', '');
-      recordSatelliteHeartbeat(region, ip, { blocks: 1, blockHeight: block.height });
-      // Duplicate hash (UNIQUE) → already recorded; treat as success/idempotent.
-      res.json({ success: true, region: region || null, block_id: r.block_id || null, duplicate: !r.success });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
+  // ─── Multi-region (Model C) ─────────────────────────────────────────────────
+  // There is NO satellite share/block ingestion API any more. Regional GATEWAYS are
+  // thin stratum forwarders (HAProxy + WireGuard, scripts/lib/07_lib_gateway.sh): they
+  // forward raw stratum to a per-region internal port on THIS box (PROXY-protocol v2
+  // carries the real miner IP). The central stratum-server records those shares directly
+  // into the local DB with the region stamped from the listener — exactly like local
+  // miners — so all accounting stays single-writer here. Per-region liveness is derived
+  // from recent shares (+ best-effort WireGuard handshake); see /api/admin/health/gateways.
 
   // ─── Public White-Label Config (rate-limited, no auth) ─────────────────────
   // Serves the curated branding/SEO/analytics payload consumed by /js/branding.js
@@ -1264,9 +1205,10 @@ function setupRoutes() {
       const blockStats = blockManager.getPoolStats();
       const minerCount = minerManager.getActiveMinersCount();
       const sstats = stratumServer.getStats();
-      // Pool-wide live share quality (accepted/stale/rejected) summed across local stratum
-      // sessions. LIVE-only: empty on a pure hub (satellites don't relay reject/stale counters,
-      // a documented hub-mode limit) and resets when a worker disconnects.
+      // Pool-wide live share quality (accepted/stale/rejected) summed across stratum
+      // sessions. Under Model C EVERY miner's session terminates here (gateways just forward
+      // TCP), so this is complete pool-wide — no more hub-mode reject/stale blind spot. Still
+      // LIVE-only (in-memory): empty on a bare hub with no sessions, resets on disconnect.
       const sq = { accepted: 0, stale: 0, rejected: 0 };
       for (const s of (sstats.sessions || [])) {
         sq.accepted += s.accepted || 0;
@@ -1900,7 +1842,8 @@ function setupRoutes() {
 
   // Per-worker breakdown for an address. Hashrate/share-count/last-share from the SHARES table
   // (all regions, survives restarts); reject%/stale% + online from the live in-memory stratum
-  // sessions on THIS box (satellites don't relay reject/stale — documented hub-mode limit).
+  // sessions. Under Model C every region's miners terminate their session here, so reject/stale
+  // is complete pool-wide (it is still live-only, so it resets on a worker disconnect).
   app.get('/api/account/:addr/workers', rateLimiter.middleware('public'), (req, res) => {
     try {
       const { addr } = req.params;
@@ -2142,9 +2085,9 @@ function setupRoutes() {
 
   // Per-region live stats. Hashrate is derived from accepted-share difficulty over a short
   // window using the canonical C32 formula (GPS = Σdiff × 42 / window_s / 16384 — matches
-  // hashrate-tracker.js and CLAUDE.md), grouped by the `region` tag the relay stamps on each
-  // share. Regions with a pool_locations row but no recent shares appear with online=false.
-  // Satellite IPs are deliberately NOT exposed here (that's admin-only /health/satellites).
+  // hashrate-tracker.js and CLAUDE.md), grouped by the `region` tag the central stratum
+  // stamps on each share (per-region listener / Model C gateway). Regions with a
+  // pool_locations row but no recent shares appear with online=false / status "unknown".
   app.get('/api/pool/stats/regions', rateLimiter.middleware('public'), (req, res) => {
     try {
       const WINDOW_S = 900; // 15-minute window for "current" regional hashrate
@@ -2165,25 +2108,12 @@ function setupRoutes() {
       ).all();
       const locByRegion = new Map(locations.map(l => [l.region, l]));
 
-      // Coarse per-region liveness for the public connect-page pill. Source of truth is the
-      // satellite heartbeat (the relay pings the hub every ~60 s even when idle — see
-      // share-relay.js), so a healthy-but-empty region reads "online", not "offline". When no
-      // satellite has ever reported (e.g. a freshly-declared region, or a singlebox that has
-      // no relay) we fall back to recent-share activity, else "unknown" (never a false "down").
-      // IPs/last_seen timestamps stay admin-only (/api/admin/health/satellites).
-      const STALE_S = 180;    // no heartbeat for 3 min  → degraded
-      const OFFLINE_S = 600;  // no heartbeat for 10 min → offline
-      const nowMs = Date.now();
-      const regionStatus = (region, hasShares) => {
-        const hb = satelliteHeartbeats.get(region);
-        if (hb && hb.last_seen) {
-          const ageS = Math.floor((nowMs - hb.last_seen) / 1000);
-          if (ageS >= OFFLINE_S) return 'offline';
-          if (ageS >= STALE_S) return 'stale';
-          return 'online';
-        }
-        return hasShares ? 'online' : 'unknown';
-      };
+      // Coarse per-region liveness for the public connect-page pill. With Model C the edge
+      // is a dumb forwarder that never calls back, so the honest public signal is recent
+      // share activity: shares in the window → "online"; none → "unknown" (a freshly-declared
+      // or simply-quiet region — never a false "down"). The richer wg-handshake signal is
+      // admin-only (/api/admin/health/gateways), not exposed on the public pill.
+      const regionStatus = (region, hasShares) => (hasShares ? 'online' : 'unknown');
 
       // Union of regions seen in shares and regions declared in pool_locations.
       const regions = new Set([...byRegion.keys(), ...locByRegion.keys()]);
@@ -2702,7 +2632,7 @@ function setupRoutes() {
 
   // Combined health snapshot — the single call admin-panel/health.html makes for the
   // services grid + System Stats. The per-component routes below (/health/node, /wallet,
-  // /system, /satellites) stay for granular polling; this one aggregates them into the flat
+  // /system, /gateways) stay for granular polling; this one aggregates them into the flat
   // { services:{key:{status,…}}, system:{…} } shape the page renders, in ONE request (keeps
   // the admin rate budget low). Each probe is independently try/caught so one dead component
   // never blanks the whole grid.
@@ -2739,7 +2669,7 @@ function setupRoutes() {
       services.grin_node = { status: 'error', message: e.message };
     }
 
-    // stratum (local proxy) — present on singlebox/satellite roles; a pure hub has none
+    // stratum (local proxy) — present on the singlebox role; a pure hub has none
     try {
       if (minerManager && typeof minerManager.getActiveMinersCount === 'function') {
         services.stratum = {
@@ -2996,50 +2926,71 @@ function setupRoutes() {
     }
   });
 
-  // Share-relay liveness — confirms each satellite region is still POSTing shares/blocks to
-  // the hub. Status thresholds are share-age based: a satellite is only "online" while shares
-  // keep arriving. In single-box mode the local stratum feeds the Central API directly, so no
-  // remote satellites are expected (the page renders an explanatory note instead).
-  app.get('/api/admin/health/satellites', secureAdmin, (req, res) => {
-    const STALE_S = 180;    // no shares for 3 min  → stale (relay lagging / region quiet)
-    const OFFLINE_S = 600;  // no shares for 10 min → offline (relay or region down)
-    const now = Date.now();
-    const satellites = Array.from(satelliteHeartbeats.values()).map((s) => {
-      const ageS = Math.floor((now - s.last_seen) / 1000);
-      let status = 'online';
-      if (ageS >= OFFLINE_S) status = 'offline';
-      else if (ageS >= STALE_S) status = 'stale';
-      return {
-        region: s.region,
-        ip: s.ip || null,
+  // Per-region GATEWAY liveness (Model C). Gateways are dumb stratum forwarders that never
+  // call the Central API, so liveness is derived from two honest signals:
+  //   (a) recent shares stamped with the region (financial-grade, survives restart), and
+  //   (b) best-effort WireGuard peer last-handshake — the truest "tunnel up" signal for a
+  //       region that is healthy but momentarily idle (no miners connected).
+  // The freshest of the two wins. region_ports declares the expected regions so an admin
+  // sees a configured-but-silent gateway too. (Replaces the old relay-heartbeat endpoint.)
+  app.get('/api/admin/health/gateways', secureAdmin, (req, res) => {
+    const STALE_S = 180, OFFLINE_S = 600;
+    const now = Math.floor(Date.now() / 1000);
+
+    let shareRows = [];
+    try {
+      shareRows = db.prepare(
+        `SELECT region, COUNT(*) AS shares, MAX(created_at) AS last_share,
+                MAX(block_height) AS last_height, COUNT(DISTINCT grin_address) AS miners
+         FROM shares WHERE created_at > ? GROUP BY region`
+      ).all(now - 900);
+    } catch (e) { /* table may be empty */ }
+    const byRegion = new Map(shareRows.map(r => [r.region, r]));
+
+    const wgByRegion = readWgHandshakes(); // {} on any failure (wg absent / not central box)
+
+    const declared = Object.keys(config.region_ports || {});
+    const regions = new Set([...declared, ...byRegion.keys(), ...Object.keys(wgByRegion)]);
+    const gateways = [];
+    for (const region of regions) {
+      const s = byRegion.get(region);
+      const wg = wgByRegion[region];
+      const shareAge = s && s.last_share ? now - s.last_share : null;
+      const hsAge = wg && wg.handshake ? now - wg.handshake : null;
+      const ages = [shareAge, hsAge].filter((a) => a !== null);
+      let status = 'unknown', ageS = null;
+      if (ages.length) {
+        ageS = Math.min.apply(null, ages);
+        status = ageS >= OFFLINE_S ? 'offline' : ageS >= STALE_S ? 'stale' : 'online';
+      }
+      gateways.push({
+        region,
+        port: (config.region_ports || {})[region] || null,
         status,
         age_seconds: ageS,
-        last_seen: new Date(s.last_seen).toISOString(),
-        last_share_height: s.last_share_height || 0,
-        last_block_height: s.last_block_height || 0,
-        shares_accepted: s.shares_accepted || 0,
-        shares_skipped: s.shares_skipped || 0,
-        blocks: s.blocks || 0
-      };
-    }).sort((a, b) => a.region.localeCompare(b.region));
+        last_share_height: s ? (s.last_height || 0) : 0,
+        shares_window: s ? s.shares : 0,
+        miners: s ? s.miners : 0,
+        tunnel_handshake_age: hsAge
+      });
+    }
+    gateways.sort((a, b) => a.region.localeCompare(b.region));
 
     res.json({
       role: config.role || 'singlebox',
-      // Ingestion is inert until the operator sets hub_shared_secret; surface that so the
-      // admin knows whether a missing satellite means "down" vs "hub not configured to accept".
-      ingestion_enabled: !!config.hub_shared_secret,
       stale_threshold_seconds: STALE_S,
       offline_threshold_seconds: OFFLINE_S,
-      satellite_count: satellites.length,
-      satellites,
+      gateway_count: gateways.length,
+      gateways,
       timestamp: new Date().toISOString()
     });
   });
 
   // ─── MULTI-REGION LOCATIONS (Admin only) ──────────────────────────
-  // CRUD over pool_locations — the operator's descriptive registry of regions/satellites
+  // CRUD over pool_locations — the operator's descriptive registry of regions/gateways
   // (labels + public stratum URLs surfaced to miners via /api/pool/locations). This is
-  // metadata only; ingestion is still gated by the IP allowlist + shared secret in pool.json.
+  // metadata only; the actual region wiring is the WireGuard peer + per-region port set up
+  // by Script 07 (W) Multi-region) — live status comes from /api/admin/health/gateways.
   app.get('/api/admin/locations', secureAdmin, (req, res) => {
     try {
       const rows = db.prepare('SELECT * FROM pool_locations ORDER BY region ASC').all();

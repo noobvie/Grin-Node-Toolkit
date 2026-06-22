@@ -468,7 +468,8 @@
         }
 
         // Pool-wide live share quality (valid/stale/rejected) doughnut. Live-only — empty on a
-        // pure hub (satellites don't relay reject/stale) or when no rigs are connected.
+        // bare hub with no sessions, or when no rigs are connected (Model C terminates every
+        // region's sessions here, so reject/stale is otherwise complete).
         async function loadShareQuality() {
             if (typeof PoolCharts === 'undefined' || !PoolCharts.renderDoughnutChart) return;
             var canvas = document.getElementById('pool-quality-chart');
@@ -650,7 +651,7 @@
                 // Only operator-declared, active regions are connect targets (need a host).
                 regions = regions.filter(function (r) { return r.stratum_url && r.is_active !== false; });
                 var note = document.getElementById('connect-note');
-                // A single-region pool (one server, no satellites) shows the simple
+                // A single-region pool (one server, no gateways) shows the simple
                 // "point your miner here" callout, not a 1-card grid. The multi-region
                 // grid appears only once a second zone reports in.
                 if (regions.length < 2) { if (note) note.style.display = 'none'; return; } // keep fallback callout

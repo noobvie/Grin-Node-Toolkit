@@ -77,6 +77,22 @@ function mergeEnvVars(config) {
     // to the hub's Central API; see lib/share-relay.js + satellite.js.
     role: config.role || process.env.POOL_ROLE || 'singlebox',
     region: config.region || process.env.POOL_REGION || 'default',
+
+    // ─── Model C: regional stratum gateways ─────────────────────────────────
+    // Internal per-region stratum listener ports on THIS central box, bound to the
+    // WireGuard interface ONLY (never public). A regional gateway forwards its miners'
+    // stratum traffic — prefixed with a PROXY-protocol v2 header carrying the real miner
+    // IP — over the tunnel to its region's port here; the central stratum-server stamps
+    // that listener's region label on every share. Map of { "<region>": <port> },
+    // e.g. { "asia": 3391, "us": 3392 }. Empty {} = single-box (only the public
+    // stratum_port listener runs). Miners ALWAYS connect to the public stratum_port on
+    // their nearest gateway — these ports are internal plumbing, never miner-facing.
+    region_ports: config.region_ports || {},
+    // Address the per-region listeners bind to. MUST be the WireGuard server IP in prod so
+    // only tunnelled gateways can reach them; defaults to loopback so a misconfigured box
+    // never exposes them publicly. The Script 07 installer sets this to the wg server IP.
+    region_listen_host: config.region_listen_host || process.env.REGION_LISTEN_HOST || '127.0.0.1',
+
     // Public web/stratum hostname (e.g. grinium.com). Used to derive the local
     // region's connect address (subdomain:stratum_port) in db.ensureLocalRegion.
     subdomain: config.subdomain || process.env.POOL_SUBDOMAIN || '',

@@ -31,11 +31,63 @@ const JOB_WINDOW = 10;
 // block to the local DB (single-box / hub-primary). Satellites relay instead.
 const GRIN_BLOCK_REWARD = 60;
 
+// PROXY-protocol v2 12-byte signature: "\r\n\r\n\0\r\nQUIT\n".
+// Regional gateways (HAProxy `send-proxy-v2`) prepend this binary header to each forwarded
+// stratum connection so the central box recovers the REAL miner IP instead of the tunnel IP.
+const PROXY_V2_SIG = Buffer.from([0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A]);
+
+// Largest PROXY v2 header we will buffer before deciding. A basic `send-proxy-v2` TCP header
+// is 16 + 12 (IPv4) or 16 + 36 (IPv6) bytes; 256 leaves generous room for small TLVs while
+// capping a junk/slowloris header that matches the signature but never completes.
+const PROXY_V2_MAX = 256;
+
+// Parse a PROXY-protocol v2 header from the front of `buf` (pure JS, no native module).
+// Returns one of:
+//   { state: 'need-more' }               — not enough bytes yet to decide or complete
+//   { state: 'absent' }                  — present bytes are NOT a PROXY v2 header (direct miner)
+//   { state: 'parsed', ip, consumed }    — header consumed; `ip` = real client IP (null for LOCAL/
+//                                          unknown family → keep the socket's own address)
+function parseProxyV2Header(buf) {
+  // Reject as soon as any known signature byte mismatches — a real stratum client's first byte
+  // is '{' (0x7B) ≠ 0x0D, so direct connections decide 'absent' on byte 0.
+  const cmp = Math.min(buf.length, PROXY_V2_SIG.length);
+  for (let i = 0; i < cmp; i++) {
+    if (buf[i] !== PROXY_V2_SIG[i]) return { state: 'absent' };
+  }
+  if (buf.length < 16) return { state: 'need-more' };       // need the full fixed header
+
+  const verCmd = buf[12];
+  if ((verCmd & 0xF0) !== 0x20) return { state: 'absent' }; // high nibble must be version 2
+  const command  = verCmd & 0x0F;                            // 0 = LOCAL, 1 = PROXY
+  const family   = (buf[13] & 0xF0) >> 4;                    // 1 = AF_INET, 2 = AF_INET6
+  const addrLen  = buf.readUInt16BE(14);
+  const total    = 16 + addrLen;
+  if (buf.length < total) return { state: 'need-more' };
+
+  // LOCAL (e.g. a health probe) carries no meaningful address — keep the socket's own IP.
+  if (command === 0) return { state: 'parsed', ip: null, consumed: total };
+
+  let ip = null;
+  if (family === 1 && addrLen >= 12) {
+    // IPv4 address block: src(4) dst(4) sport(2) dport(2)
+    ip = `${buf[16]}.${buf[17]}.${buf[18]}.${buf[19]}`;
+  } else if (family === 2 && addrLen >= 36) {
+    // IPv6 address block: src(16) dst(16) sport(2) dport(2)
+    const parts = [];
+    for (let i = 0; i < 16; i += 2) parts.push(buf.readUInt16BE(16 + i).toString(16));
+    ip = parts.join(':');
+  }
+  // AF_UNIX / unknown family → leave ip null (caller falls back to socket.remoteAddress).
+  return { state: 'parsed', ip, consumed: total };
+}
+
 class StratumServer {
   constructor(config) {
     this.config = config;
     this.port = config.stratum_port || 3333;
-    this.server = null;
+    // One net.Server per listener: the public stratum_port (direct/local miners) plus one
+    // internal port per region (Model C gateways). All share the socket registry + job below.
+    this.servers = [];
     this.shareValidator = new ShareValidator(config);
     this.minerManager = new MinerManager(config);
     this.incentives = new IncentivesManager(config);
@@ -71,17 +123,37 @@ class StratumServer {
   }
 
   start() {
-    this.server = net.createServer((socket) => this.handleNewConnection(socket));
+    // Public listener: direct + local miners. Region = config.region (default single-box).
+    this._listen(this.port, '0.0.0.0', this.config.region || 'default');
 
-    this.server.listen(this.port, '0.0.0.0', () => {
-      console.log(`[${new Date().toISOString()}] Stratum server listening on :${this.port}`);
-    });
-
-    this.server.on('error', (err) => {
-      console.error(`[ERROR] Stratum server: ${err.message}`);
-    });
+    // Model C: one internal listener per region, bound to the WireGuard interface only.
+    // Regional gateways tunnel here with a PROXY-v2 header; the listener's region label is
+    // stamped on every share that arrives on it. Empty region_ports = single-box (no-op).
+    const regionPorts = this.config.region_ports || {};
+    const host = this.config.region_listen_host || '127.0.0.1';
+    for (const [region, rawPort] of Object.entries(regionPorts)) {
+      const p = parseInt(rawPort, 10);
+      if (!p || p === this.port) {
+        console.error(`[ERROR] Invalid or duplicate region port for "${region}": ${rawPort} — skipped`);
+        continue;
+      }
+      this._listen(p, host, region);
+    }
 
     setInterval(() => this.pruneInactiveSessions(), 60000);
+  }
+
+  // Bind one TCP stratum listener. `region` is the static label stamped on every share that
+  // arrives on this socket (so attribution is bound by the tunnel wiring, not a typed string).
+  _listen(port, host, region) {
+    const server = net.createServer((socket) => this.handleNewConnection(socket, region));
+    server.listen(port, host, () => {
+      console.log(`[${new Date().toISOString()}] Stratum listener ${host}:${port} (region=${region})`);
+    });
+    server.on('error', (err) => {
+      console.error(`[ERROR] Stratum listener ${host}:${port} (region=${region}): ${err.message}`);
+    });
+    this.servers.push(server);
   }
 
   // Called by block-monitor whenever the Grin node provides a new block template.
@@ -111,10 +183,16 @@ class StratumServer {
     }
   }
 
-  handleNewConnection(socket) {
-    const ip = socket.remoteAddress || 'unknown';
+  handleNewConnection(socket, region) {
+    // `ip` may be overwritten below by the PROXY-v2 header (real miner IP behind a gateway).
+    let ip = socket.remoteAddress || 'unknown';
     let sessionId = null;
     let lineBuffer = '';
+    // PROXY-protocol v2 phase: a gateway connection is prefixed with a binary PROXY v2 header;
+    // direct/local miners send none. We buffer raw bytes until we can decide, then switch to
+    // line-based stratum parsing. `proxyDone` flips once the decision is made (parsed or absent).
+    let proxyDone = false;
+    let preBuf = Buffer.alloc(0);
 
     socket.setKeepAlive(true, 60000);
     socket.setTimeout(600000);
@@ -129,10 +207,9 @@ class StratumServer {
       }
     };
 
-    socket.on('data', (data) => {
-      // Buffer incoming bytes and only process complete newline-terminated messages.
-      // Protects against TCP fragmentation splitting a JSON message across data events.
-      lineBuffer += data.toString();
+    // Process whatever complete newline-terminated stratum messages are buffered.
+    // Protects against TCP fragmentation splitting a JSON message across data events.
+    const processLines = () => {
       const lines = lineBuffer.split('\n');
       lineBuffer = lines.pop(); // last element may be partial — keep buffered
 
@@ -151,9 +228,36 @@ class StratumServer {
 
         this.handleMessage(socket, msg, ip,
           (sid) => { sessionId = sid; this.sockets.set(socket, sid); },
-          ()    => sessionId
+          ()    => sessionId,
+          region
         );
       }
+    };
+
+    socket.on('data', (data) => {
+      if (!proxyDone) {
+        preBuf = preBuf.length ? Buffer.concat([preBuf, data]) : Buffer.from(data);
+        const r = parseProxyV2Header(preBuf);
+        if (r.state === 'need-more') {
+          // A signature match that never completes (junk/slowloris) must not buffer forever.
+          if (preBuf.length > PROXY_V2_MAX) { socket.destroy(); }
+          return;
+        }
+        proxyDone = true;
+        let rest;
+        if (r.state === 'parsed') {
+          if (r.ip) ip = r.ip;             // real miner IP from the gateway
+          rest = preBuf.subarray(r.consumed);
+        } else {
+          rest = preBuf;                   // 'absent' → every buffered byte is stratum data
+        }
+        preBuf = Buffer.alloc(0);
+        lineBuffer += rest.toString();
+        processLines();
+        return;
+      }
+      lineBuffer += data.toString();
+      processLines();
     });
 
     socket.on('error', cleanup);
@@ -162,10 +266,10 @@ class StratumServer {
     socket.on('timeout', () => { socket.destroy(); cleanup(); });
   }
 
-  handleMessage(socket, msg, ip, setSession, getSession) {
+  handleMessage(socket, msg, ip, setSession, getSession, region) {
     switch (msg.method) {
       case 'login':
-        this.handleLogin(socket, msg, ip, setSession);
+        this.handleLogin(socket, msg, ip, setSession, region);
         break;
 
       case 'submit':
@@ -195,7 +299,7 @@ class StratumServer {
     }
   }
 
-  handleLogin(socket, msg, ip, setSession) {
+  handleLogin(socket, msg, ip, setSession, region) {
     const { id, params } = msg;
     // params may be an object { login, pass, agent } or a positional array
     const login = params && (typeof params === 'object'
@@ -240,7 +344,7 @@ class StratumServer {
       }
     }
 
-    const sessionId = this.minerManager.createSession(parsed.grin_address, parsed.worker_name, ip);
+    const sessionId = this.minerManager.createSession(parsed.grin_address, parsed.worker_name, ip, region);
     setSession(sessionId);
 
     socket.write(JSON.stringify(createLoginResponse(id)) + '\n');
@@ -324,7 +428,8 @@ class StratumServer {
         session.workerName,
         session.difficulty,
         height,
-        shareHash
+        shareHash,
+        session.region
       );
       if (!result.success) {
         // Node accepted the PoW but we couldn't record it (duplicate share_hash UNIQUE, or DB
@@ -437,7 +542,9 @@ class StratumServer {
   }
 
   stop() {
-    if (this.server) this.server.close();
+    for (const server of this.servers) {
+      try { server.close(); } catch (e) { /* already closed */ }
+    }
   }
 
   getStats() {
@@ -462,3 +569,5 @@ class StratumServer {
 }
 
 module.exports = StratumServer;
+// Exposed for unit testing the gateway PROXY-protocol v2 path (see scripts/test-proxy-v2.js).
+module.exports.parseProxyV2Header = parseProxyV2Header;

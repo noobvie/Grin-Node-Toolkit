@@ -27,6 +27,7 @@
         { file: 'payments.html', title: 'Payouts' },
         { file: 'blocks.html',   title: 'Blocks' },
         { file: 'users.html',    title: 'Users' },
+        { file: 'regions.html',  title: 'Regions' },
         { file: 'health.html',   title: 'System Health' }
       ] },
     // Settings was split into one file per section (2026-06). A `children` array with `file`

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="index, follow, max-snippet:-1">
+  <title>API Reference — Grin Mining Pool</title>
+  <meta name="description" content="Public HTTP API for the mining pool: pool stats, per-account stats, regions, blocks, effort and price endpoints. Auto-generated from the live route table, so it never drifts.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="API Reference — Grin Mining Pool">
+  <meta property="og:description" content="Read-only public API: pool stats, account stats, blocks, regions, price.">
+  <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/css/dashboard.css">
+  <link rel="stylesheet" href="/css/themes.css">
+  <style>
+    .api-group { margin: 22px 0; }
+    .api-group h3 { margin: 0 0 10px; font-size: 14px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-mute); }
+    .api-row {
+      display: grid; grid-template-columns: 64px 1fr; gap: 12px; align-items: baseline;
+      padding: 9px 0; border-bottom: 1px solid var(--border);
+    }
+    .api-method {
+      font-size: 11px; font-weight: 700; text-align: center; padding: 2px 0; border-radius: 5px;
+      background: var(--bg-card2, rgba(127,127,127,.14)); color: var(--text-dim); letter-spacing: .04em;
+    }
+    .api-method.get { color: #2f855a; }
+    .api-method.post { color: #c05621; }
+    .api-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: var(--text); word-break: break-all; }
+    .api-desc { color: var(--text-mute); font-size: 12.5px; margin-top: 2px; }
+    .api-note { color: var(--text-mute); font-size: 12.5px; max-width: 72ch; }
+    .api-base code, .api-path code { background: var(--bg-card2, rgba(127,127,127,.12)); padding: 1px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+
+  <!-- header injected by /js/public-shell.js -->
+
+  <div class="container">
+    <h2 class="page-title">API Reference</h2>
+    <p class="api-note" style="margin-bottom:14px;">
+      The pool exposes a small, read-only public HTTP API (JSON). These endpoints power the
+      dashboard, per-account stats and the blocks explorer — you can use them to build your own
+      monitor or bot. This page is <strong>auto-generated from the live route table</strong>, so it
+      always matches what the server actually serves. All responses are
+      <code>{ "success": true, "data": … }</code> unless noted; rate-limited per IP.
+    </p>
+    <p class="api-base api-note" style="margin-bottom:8px;">
+      Base URL: <code id="api-base">…</code> &nbsp;·&nbsp; <code>:addr</code> = a Grin address.
+    </p>
+
+    <div id="api-list">
+      <p class="dim" style="color:var(--text-mute);">Loading endpoints…</p>
+    </div>
+  </div>
+
+  <!-- footer injected by /js/public-shell.js -->
+
+  <script src="/js/auth.js"></script>
+  <script>
+    // Auto-generated API reference. The endpoint list comes from /api/public/endpoints
+    // (server walks its own Express route table → always accurate). Grouped by the path's
+    // second segment (public / account / pool / config / stratum). All values escaped.
+    function escHtml(v) {
+      return String(v == null ? '' : v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    var GROUP_LABELS = {
+      pool: 'Pool', account: 'Account', public: 'Public', config: 'Config', stratum: 'Stratum',
+    };
+    function groupOf(path) {
+      var seg = path.split('/').filter(Boolean); // ['api','pool',...]
+      return (seg[1] || 'public');
+    }
+
+    function render(endpoints) {
+      var list = document.getElementById('api-list');
+      if (!endpoints || !endpoints.length) {
+        list.innerHTML = '<p style="color:var(--text-mute);">No public endpoints reported.</p>';
+        return;
+      }
+      var groups = {};
+      endpoints.forEach(function (e) {
+        var g = groupOf(e.path);
+        (groups[g] = groups[g] || []).push(e);
+      });
+      // Stable, friendly ordering.
+      var order = ['pool', 'account', 'public', 'config', 'stratum'];
+      var keys = Object.keys(groups).sort(function (a, b) {
+        var ia = order.indexOf(a), ib = order.indexOf(b);
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+      });
+
+      var html = '';
+      keys.forEach(function (g) {
+        html += '<div class="api-group"><h3>' + escHtml(GROUP_LABELS[g] || g) + '</h3>';
+        groups[g].forEach(function (e) {
+          var m = (e.method || 'GET').toLowerCase();
+          html += '<div class="api-row">' +
+            '<span class="api-method ' + escHtml(m) + '">' + escHtml(e.method) + '</span>' +
+            '<div><div class="api-path">' + escHtml(e.path) + '</div>' +
+            (e.description ? '<div class="api-desc">' + escHtml(e.description) + '</div>' : '') +
+            '</div></div>';
+        });
+        html += '</div>';
+      });
+      list.innerHTML = html;
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      document.getElementById('api-base').textContent = location.origin;
+      fetch('/api/public/endpoints', { credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) { render(j && j.data && j.data.endpoints); })
+        .catch(function () {
+          document.getElementById('api-list').innerHTML =
+            '<p style="color:var(--text-mute);">API reference is temporarily unavailable.</p>';
+        });
+    });
+  </script>
+  <script src="/js/public-shell.js"></script>
+  <script src="/js/public-theme.js"></script>
+  <script src="/js/branding.js"></script>
+</body>
+</html>

@@ -2,7 +2,7 @@
 
 const express = require('express');
 const path = require('path');
-const { initDb, getDb, ensureLocalRegion } = require('./lib/db');
+const { initDb, getDb, ensureLocalRegion, seedDefaultRegions } = require('./lib/db');
 const { loadConfig, mergeDbSettings } = require('./lib/config');
 const PoolSettings = require('./lib/pool-settings');
 const AssetManager = require('./lib/asset-manager');
@@ -174,6 +174,13 @@ async function initializePool() {
     // Merge DB settings into config (applies UI-customized settings at startup)
     config = mergeDbSettings(config, db);
     console.log(`[${new Date().toISOString()}] Pool configuration merged from database`);
+
+    // One-time seed of the default grinium regional endpoints (grouped by country),
+    // so the public "nearest region" connect grid is populated out of the box. Idempotent
+    // (guarded by a persistent marker) — never clobbers operator edits in admin → Regions.
+    // Gated to the real grinium.com deployment: a fork running its own domain must NOT
+    // advertise grinium.com hosts (its miners would connect to the wrong pool).
+    seedDefaultRegions(config.stratum_port, config.subdomain);
 
     // Self-register this pool server's own region so it shows as a real connect card
     // and auto-joins the grid when a satellite for another zone reports in. Only the
@@ -554,6 +561,108 @@ function setupRoutes() {
     }
   );
 
+  // ─── Public GRIN price (footer ticker) — cached external lookup ────────────────
+  // The pool box has a node + wallet but no market data, so price comes from a public
+  // market API (CoinGecko). Fetched server-side (avoids CORS + a per-visitor key) and
+  // cached ~5 min. On any failure we serve the last good value, or {available:false}.
+  let _priceCache = { ts: 0, data: null };
+  const PRICE_TTL_MS = 5 * 60 * 1000;
+  app.get('/api/public/price',
+    rateLimiter.middleware('public'),
+    async (req, res) => {
+      const now = Date.now();
+      if (_priceCache.data && (now - _priceCache.ts) < PRICE_TTL_MS) {
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.json({ success: true, data: _priceCache.data });
+      }
+      try {
+        const ctrl = AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined;
+        const r = await fetch(
+          'https://api.coingecko.com/api/v3/simple/price?ids=grin&vs_currencies=usd,btc',
+          { signal: ctrl, headers: { accept: 'application/json' } }
+        );
+        if (!r.ok) throw new Error('upstream ' + r.status);
+        const j = await r.json();
+        const g = j && j.grin ? j.grin : {};
+        const data = {
+          available: typeof g.usd === 'number' || typeof g.btc === 'number',
+          usd: typeof g.usd === 'number' ? g.usd : null,
+          btc: typeof g.btc === 'number' ? g.btc : null,
+          source: 'coingecko',
+          updated_at: now,
+        };
+        if (data.available) _priceCache = { ts: now, data };
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.json({ success: true, data: _priceCache.data || data });
+      } catch (err) {
+        // Serve stale-if-error; otherwise report unavailable (footer hides the ticker).
+        if (_priceCache.data) return res.json({ success: true, data: _priceCache.data });
+        res.json({ success: true, data: { available: false } });
+      }
+    }
+  );
+
+  // ─── Public API reference — auto-generated from the live Express route table ───
+  // Always accurate (it reflects the routes actually mounted), self-documenting. Only
+  // public-safe prefixes are exposed; admin/auth routes are never listed. api-docs.html
+  // renders this. Descriptions are a best-effort lookup keyed by "METHOD path"; an
+  // unknown route still appears (with an empty description) so the list can't drift.
+  const PUBLIC_API_PREFIXES = [
+    '/api/public/', '/api/account/', '/api/config/', '/api/pool/',
+  ];
+  const API_DOC_DESCRIPTIONS = {
+    'GET /api/public/branding': 'White-label config (name, theme, SEO, social, footer links).',
+    'GET /api/public/price': 'Cached GRIN price (USD + BTC).',
+    'GET /api/public/status': 'Coarse pool/node/wallet health (no balances).',
+    'GET /api/public/ads': 'Active operator ads by placement.',
+    'GET /api/public/lottery/winners': 'Fortune-board winner history (truncated addresses).',
+    'GET /api/public/endpoints': 'This API reference (machine-readable).',
+    'GET /api/config/pool-info': 'Network, pool fee %, minimum withdrawal.',
+    'GET /api/pool/stats': 'Live pool stats: hashrate, miners, blocks, share quality.',
+    'GET /api/pool/stats/regions': 'Per-region stratum endpoints + live status.',
+    'GET /api/pool/blocks': 'Pool-found blocks (paginated: limit, offset, status).',
+    'GET /api/pool/effort': 'Current round effort, recent luck, time since last block.',
+    'GET /api/pool/hashrate/history': 'Pool hashrate time-series (?hours=).',
+    'GET /api/pool/status': 'Coarse service status strip.',
+    'GET /api/account/:addr': 'Account summary: balance, paid, min payout, effort.',
+    'GET /api/account/:addr/workers': 'Per-worker (rig) hashrate + share quality.',
+    'GET /api/account/:addr/hashrate/history': 'Account hashrate time-series (?hours=).',
+    'POST /api/account/:addr/withdraw': 'Request a payout (Tor or Slatepack); IP-proof gated.',
+    'POST /api/account/:addr/min-payout': 'Set this address’s personal payout threshold.',
+  };
+  app.get('/api/public/endpoints',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const stack = (req.app._router && req.app._router.stack) || [];
+        const seen = new Set();
+        const out = [];
+        for (const layer of stack) {
+          const route = layer && layer.route;
+          if (!route || !route.path) continue;
+          const paths = Array.isArray(route.path) ? route.path : [route.path];
+          for (const p of paths) {
+            if (typeof p !== 'string') continue;
+            if (!PUBLIC_API_PREFIXES.some((pre) => p === pre || p.startsWith(pre))) continue;
+            const methods = Object.keys(route.methods || {})
+              .filter((m) => m !== '_all').map((m) => m.toUpperCase());
+            for (const m of methods) {
+              const key = m + ' ' + p;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              out.push({ method: m, path: p, description: API_DOC_DESCRIPTIONS[key] || '' });
+            }
+          }
+        }
+        out.sort((a, b) => (a.path === b.path ? a.method.localeCompare(b.method) : a.path.localeCompare(b.path)));
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.json({ success: true, data: { count: out.length, endpoints: out } });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to build API reference' });
+      }
+    }
+  );
+
   // ─── Public Fortune Board: lottery winner history (no auth, rate-limited) ──────
   // Transparency/audit feed — winner (truncated address) + amount + date + verifiable seed.
   app.get('/api/public/lottery/winners',
@@ -649,7 +758,7 @@ function setupRoutes() {
         xml += '  <link>' + esc(origin + '/blog.html') + '</link>\n';
         xml += '  <description>' + esc(seo.site_description || 'Pool news and announcements') + '</description>\n';
         posts.forEach((p) => {
-          const url = origin + '/post.html?slug=' + encodeURIComponent(p.slug);
+          const url = origin + '/blog/' + encodeURIComponent(p.slug);
           xml += '  <item>\n';
           xml += '    <title>' + esc(p.title) + '</title>\n';
           xml += '    <link>' + esc(url) + '</link>\n';
@@ -694,7 +803,7 @@ function setupRoutes() {
   // Public pages included in the sitemap (extension-less; nginx resolves $uri.html).
   // pool-info + connect were merged into the dashboard (index) 2026-06; the dashboard
   // carries the #connect + #info anchors, so only / is listed for that content.
-  const SITEMAP_PATHS = ['/', '/miners-stats', '/fortune-board', '/donate', '/blog.html'];
+  const SITEMAP_PATHS = ['/', '/miners-stats', '/blocks.html', '/fortune-board', '/donate', '/blog.html', '/api-docs.html'];
 
   app.get('/sitemap.xml',
     rateLimiter.middleware('public'),
@@ -711,7 +820,7 @@ function setupRoutes() {
         pagesManager.listEnabled().forEach((p) => paths.push('/page.html?p=' + p.key));
         try {
           postsManager.listPublished({ limit: 50, offset: 0 }).posts
-            .forEach((p) => paths.push('/post.html?slug=' + p.slug));
+            .forEach((p) => paths.push('/blog/' + p.slug));
         } catch (e) { /* posts optional in sitemap */ }
 
         const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1128,9 +1237,22 @@ function setupRoutes() {
   // These endpoints are unprotected and allow arbitrary data manipulation.
   // For testing in development, use curl with direct database queries.
 
-  app.get('/api/stratum/stats', (req, res) => {
+  app.get('/api/stratum/stats', rateLimiter.middleware('public'), (req, res) => {
     try {
       const stats = stratumServer.getStats();
+      // Public, unauthenticated endpoint: truncate miner addresses so the live session list
+      // can't be scraped to enumerate every miner's full identity (same privacy posture as
+      // the blocks/fortune-board pages). Internal callers use getStats() directly for the
+      // full address; this route is the only public surface and never needs it.
+      if (Array.isArray(stats.sessions)) {
+        stats.sessions = stats.sessions.map((s) => {
+          const a = String(s.grin_address || '');
+          return {
+            ...s,
+            grin_address: a.length > 16 ? a.slice(0, 9) + '…' + a.slice(-4) : a
+          };
+        });
+      }
       res.json(stats);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -1141,10 +1263,21 @@ function setupRoutes() {
     try {
       const blockStats = blockManager.getPoolStats();
       const minerCount = minerManager.getActiveMinersCount();
+      const sstats = stratumServer.getStats();
+      // Pool-wide live share quality (accepted/stale/rejected) summed across local stratum
+      // sessions. LIVE-only: empty on a pure hub (satellites don't relay reject/stale counters,
+      // a documented hub-mode limit) and resets when a worker disconnects.
+      const sq = { accepted: 0, stale: 0, rejected: 0 };
+      for (const s of (sstats.sessions || [])) {
+        sq.accepted += s.accepted || 0;
+        sq.stale    += s.stale    || 0;
+        sq.rejected += s.rejected || 0;
+      }
       res.json({
         ...blockStats,
         active_miners: minerCount,
-        active_connections: stratumServer.getStats().active_connections
+        active_connections: sstats.active_connections,
+        share_quality: sq
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -1185,13 +1318,21 @@ function setupRoutes() {
     res.json(out);
   });
 
+  // Public pool-found blocks, newest first. Paginated (limit+offset) with an optional status
+  // filter for the public blocks explorer. Response stays a plain array (back-compat with the
+  // homepage recent-blocks table); callers detect the last page when fewer than `limit` return.
   app.get('/api/pool/blocks', (req, res) => {
     try {
-      const limit = Math.min(parseInt(req.query.limit || 50), 500);
-      const stmt = db.prepare(`
-        SELECT * FROM blocks ORDER BY height DESC LIMIT ?
-      `);
-      const blocks = stmt.all(limit);
+      const limit = Math.min(Math.max(parseInt(req.query.limit || 50, 10), 1), 500);
+      const offset = Math.max(parseInt(req.query.offset || 0, 10), 0);
+      const status = req.query.status;
+      const valid = ['immature', 'confirmed', 'orphaned'];
+      let sql = 'SELECT * FROM blocks';
+      const params = [];
+      if (status && valid.includes(status)) { sql += ' WHERE status = ?'; params.push(status); }
+      sql += ' ORDER BY height DESC LIMIT ? OFFSET ?';
+      params.push(limit, offset);
+      const blocks = db.prepare(sql).all(...params);
       res.json(blocks);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -2020,7 +2161,7 @@ function setupRoutes() {
       const byRegion = new Map(agg.map(r => [r.region, r]));
 
       const locations = db.prepare(
-        `SELECT region, label, stratum_url, is_active FROM pool_locations`
+        `SELECT region, label, country, country_code, stratum_url, is_active FROM pool_locations`
       ).all();
       const locByRegion = new Map(locations.map(l => [l.region, l]));
 
@@ -2056,6 +2197,8 @@ function setupRoutes() {
         out.push({
           region,
           label: loc.label || null,
+          country: loc.country || null,
+          country_code: loc.country_code || null,
           stratum_url: loc.stratum_url || null,
           is_active: loc.is_active === undefined ? null : !!loc.is_active,
           status: regionStatus(region, a.shares > 0),
@@ -2909,27 +3052,30 @@ function setupRoutes() {
   // Create or update a region by its unique `region` key (upsert).
   app.post('/api/admin/locations', secureAdmin, (req, res) => {
     try {
-      const { region, label, api_url, stratum_url } = req.body || {};
+      const { region, label, country, country_code, api_url, stratum_url } = req.body || {};
       const is_active = req.body && req.body.is_active === false ? 0 : 1;
       const reg = String(region || '').trim();
       if (!reg) return res.status(400).json({ error: 'region is required' });
+      const cc = country_code ? String(country_code).trim().toUpperCase().slice(0, 2) : null;
 
       db.prepare(`
-        INSERT INTO pool_locations (region, label, api_url, stratum_url, is_active, updated_at)
-        VALUES (?, ?, ?, ?, ?, unixepoch())
+        INSERT INTO pool_locations (region, label, country, country_code, api_url, stratum_url, is_active, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
         ON CONFLICT(region) DO UPDATE SET
           label = excluded.label,
+          country = excluded.country,
+          country_code = excluded.country_code,
           api_url = excluded.api_url,
           stratum_url = excluded.stratum_url,
           is_active = excluded.is_active,
           updated_at = unixepoch()
-      `).run(reg, label || null, api_url || null, stratum_url || null, is_active);
+      `).run(reg, label || null, country || null, cc, api_url || null, stratum_url || null, is_active);
 
       const row = db.prepare('SELECT * FROM pool_locations WHERE region = ?').get(reg);
       db.prepare(`
         INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
         VALUES (?, 'location_upsert', 'pool_location', ?, ?, ?)
-      `).run(req.user.user_id, reg, JSON.stringify({ label, api_url, stratum_url, is_active }), req.ip);
+      `).run(req.user.user_id, reg, JSON.stringify({ label, country, country_code: cc, api_url, stratum_url, is_active }), req.ip);
 
       res.json({ success: true, location: row });
     } catch (err) {

@@ -213,6 +213,29 @@
   }
 
   // ── 3. Content hooks ([data-brand="..."]) ──────────────────────────────────
+  // Decode a base64-encoded contact email from the public config. Returns '' on anything
+  // unexpected so a bad value just hides the contact rather than throwing.
+  function decodeEmail(enc) {
+    if (!enc) return '';
+    try {
+      var s = (typeof atob === 'function') ? atob(enc) : '';
+      return /@/.test(s) ? s : '';
+    } catch (e) { return ''; }
+  }
+
+  // Wire an <a> as a mailto without ever placing the plaintext address in the DOM href:
+  // the mailto: is built in JS at click time, defeating href-scraping harvesters.
+  function wireMailto(el, addr, label) {
+    if (!el || !addr) return;
+    el.textContent = label || addr;
+    el.setAttribute('href', '#');
+    el.setAttribute('rel', 'nofollow');
+    el.addEventListener('click', function (e) {
+      e.preventDefault();
+      window.location.href = 'mailto:' + addr;
+    });
+  }
+
   function applyContent(cfg) {
     var pool = cfg.pool || {};
     var brand = cfg.branding || {};
@@ -224,8 +247,7 @@
       pool_description: pool.description,
       hero_heading: brand.hero_heading,
       hero_subheading: brand.hero_subheading,
-      footer_text: brand.footer_text,
-      contact_email: pool.contact_email
+      footer_text: brand.footer_text
     };
     Object.keys(map).forEach(function (key) {
       if (!map[key]) return;
@@ -233,6 +255,15 @@
         el.textContent = map[key];
       });
     });
+
+    // Contact email is delivered base64-encoded (decodeEmail) and only ever rendered by JS,
+    // so it never appears in static HTML or the public config as a plaintext address.
+    var contactEmail = decodeEmail(pool.contact_email_enc);
+    if (contactEmail) {
+      document.querySelectorAll('[data-brand="contact_email"]').forEach(function (el) {
+        el.textContent = contactEmail;
+      });
+    }
 
     // CTA button: set text + link if a hook exists.
     document.querySelectorAll('[data-brand="cta"]').forEach(function (el) {
@@ -276,7 +307,8 @@
       });
     }
 
-    // Content-page footer links (About / Terms / Privacy / FAQ / Impressum).
+    // Content-page footer links (About / Terms / Privacy / FAQ / Impressum). Rendered as
+    // plain block links so the footer column CSS lays them out; no inline spacing.
     var pages = cfg.pages || [];
     document.querySelectorAll('[data-brand="page-links"]').forEach(function (container) {
       if (!pages.length) return;
@@ -285,10 +317,52 @@
         var a = document.createElement('a');
         a.href = '/page.html?p=' + encodeURIComponent(p.key);
         a.textContent = p.title;
-        a.style.margin = '0 .5rem';
         container.appendChild(a);
       });
     });
+
+    // Footer copyright: "© <founded>–<year> <pool_name>". Collapses to a single year
+    // when founded_year is blank or equals the current year.
+    var year = new Date().getFullYear();
+    var founded = parseInt(pool.founded_year, 10);
+    var range = (founded && founded < year) ? (founded + '–' + year) : String(year);
+    document.querySelectorAll('[data-brand="copyright"]').forEach(function (el) {
+      el.textContent = '© ' + range + (pool.name ? ' ' + pool.name : '');
+    });
+
+    // Legal-column "Contact" link, shown only when a contact email is set. The mailto: is
+    // assembled lazily (wireMailto) so the plaintext address is never in the DOM until click.
+    if (contactEmail) {
+      document.querySelectorAll('[data-brand="contact-link"]').forEach(function (el) {
+        wireMailto(el, contactEmail, el.textContent || 'Contact');
+        el.style.display = '';
+      });
+    }
+
+    // Footer "Community" alternative — an email-free public channel (e.g. Grin forum).
+    if (pool.support_forum_url) {
+      document.querySelectorAll('[data-brand="forum-link"]').forEach(function (el) {
+        el.setAttribute('href', pool.support_forum_url);
+        el.style.display = '';
+      });
+    }
+
+    // Footer security/abuse contact (lazy mailto) + optional PGP link.
+    var secEmail = decodeEmail(pool.security_contact_enc);
+    if (secEmail) {
+      document.querySelectorAll('[data-brand="security-link"]').forEach(function (el) {
+        wireMailto(el, secEmail, secEmail);
+      });
+      if (pool.pgp_key_url) {
+        document.querySelectorAll('[data-brand="pgp-link"]').forEach(function (el) {
+          el.setAttribute('href', pool.pgp_key_url);
+          el.style.display = '';
+        });
+      }
+      document.querySelectorAll('[data-brand-show="security"]').forEach(function (el) {
+        el.style.display = '';
+      });
+    }
 
     // Connection details for the miner-config generator.
     var conn = cfg.connection || {};
@@ -306,6 +380,13 @@
         el.textContent = connMap[key];
       });
     });
+
+    // Reveal the footer stratum stat (with its copy button) once we have a real address.
+    if (stratumUrl) {
+      document.querySelectorAll('.footer-stratum').forEach(function (el) {
+        el.hidden = false;
+      });
+    }
   }
 
   // ── 3b. Site-wide header: swinging logo + slogan, Rewards link, miner auth ──
@@ -327,8 +408,8 @@
       '.brand-slogan{font-size:.66rem;font-weight:500;letter-spacing:.02em;opacity:.7;' +
         'text-transform:none;white-space:nowrap;}' +
       // Pendulum: ~80° total arc (±40°) pivoting near the top, like a clock pendulum.
-      '@keyframes brandSwing{0%{transform:rotate(-40deg);}50%{transform:rotate(40deg);}100%{transform:rotate(-40deg);}}' +
-      '@media (prefers-reduced-motion: reduce){.brand-logo{animation:none;}}';
+      // Swing is intentionally NOT gated by prefers-reduced-motion (operator request).
+      '@keyframes brandSwing{0%{transform:rotate(-40deg);}50%{transform:rotate(40deg);}100%{transform:rotate(-40deg);}}';
     var s = document.createElement('style');
     s.id = 'brand-header-css';
     s.textContent = css;

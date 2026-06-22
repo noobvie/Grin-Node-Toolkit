@@ -125,9 +125,8 @@ header {
     50%  { transform: rotate(40deg); }
     100% { transform: rotate(-40deg); }
 }
-@media (prefers-reduced-motion: reduce) {
-    .brand .brand-logo { animation: none; }
-}
+/* Note: the brand-logo swing is intentionally exempt from prefers-reduced-motion —
+   it's a tiny decorative element the operator explicitly wants always animated. */
 .header-nav { display: flex; gap: 4px; flex: 1; }
 .nav-link {
     color: var(--text-dim); padding: 8px 12px; border-radius: var(--radius-sm);
@@ -362,10 +361,63 @@ header {
 
 /* ── Footer ────────────────────────────────────────────────────────────── */
 footer {
-    text-align: center; color: var(--text-mute); font-size: 13px;
-    padding: 30px 16px 16px; border-top: 1px solid var(--border); margin-top: 40px;
+    color: var(--text-mute); font-size: 13px;
+    padding: 40px 16px 20px; border-top: 1px solid var(--border); margin-top: 48px;
 }
-footer a, footer [data-brand="page-links"] a { color: var(--text-dim); }
+footer a { color: var(--text-dim); text-decoration: none; }
+footer a:hover { color: var(--accent); }
+
+/* Columns */
+.footer-cols {
+    max-width: 1100px; margin: 0 auto;
+    display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 28px;
+}
+.footer-col { display: flex; flex-direction: column; gap: 8px; }
+.footer-col h4 {
+    margin: 0 0 4px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--text-mute); font-weight: 700;
+}
+.footer-col a { font-size: 13px; line-height: 1.5; }
+.footer-brand .brand { margin-bottom: 4px; }
+.footer-tagline { margin: 0; color: var(--text-mute); font-size: 12.5px; max-width: 32ch; }
+.footer-social { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
+.footer-social a { font-size: 12.5px; }
+
+/* Live mini-stats bar */
+.footer-stats {
+    max-width: 1100px; margin: 28px auto 0; padding-top: 16px;
+    border-top: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center;
+    font-size: 12.5px; color: var(--text-mute);
+}
+.footer-stat { display: inline-flex; align-items: center; gap: 6px; }
+.footer-stat[hidden] { display: none; }
+.footer-stratum code {
+    background: var(--bg-card2, rgba(127,127,127,.12)); padding: 2px 7px; border-radius: 5px;
+    font-size: 12px; color: var(--text-dim);
+}
+.footer-copy {
+    background: none; border: 1px solid var(--border); color: var(--text-dim);
+    border-radius: 5px; padding: 1px 8px; font-size: 11px; cursor: pointer;
+}
+.footer-copy:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Bottom legal row */
+.footer-bottom {
+    max-width: 1100px; margin: 18px auto 0; padding-top: 14px;
+    border-top: 1px solid var(--border); text-align: center;
+}
+.footer-bottom p { margin: 3px 0; }
+.footer-copyright { color: var(--text-dim); font-weight: 600; }
+.footer-meta { opacity: .75; font-size: 12px; }
+
+@media (max-width: 760px) {
+    .footer-cols { grid-template-columns: 1fr 1fr; gap: 22px; }
+    .footer-stats { justify-content: center; }
+}
+@media (max-width: 440px) {
+    .footer-cols { grid-template-columns: 1fr; }
+}
 
 /* ── Service status strip (homepage) ───────────────────────────────────── */
 .status-strip {
@@ -387,13 +439,29 @@ footer a, footer [data-brand="page-links"] a { color: var(--text-dim); }
 .status-pill.ok   .status-text { color: var(--text); }
 
 /* ── Regional stratum host cards (homepage) ────────────────────────────── */
+/* Outer container: stacks the per-country groups vertically. */
+.region-zones { display: flex; flex-direction: column; gap: 18px; margin: 12px 0; }
+.region-country-group { display: flex; flex-direction: column; gap: 10px; }
+.region-country {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 700; letter-spacing: .02em;
+    color: var(--text); text-transform: uppercase;
+}
+.region-country .region-flag { font-size: 18px; line-height: 1; }
 .region-grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 12px; margin: 12px 0;
+    gap: 12px; margin: 0;
 }
 .region-card {
     background: var(--bg-card); border: 1px solid var(--border-color);
     border-radius: var(--radius); padding: 14px 16px;
+}
+/* The visitor's geo-nearest region gets an accent ring + badge. */
+.region-card--nearest { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.region-nearest {
+    display: inline-block; align-self: flex-start; margin-bottom: 8px;
+    font-size: 11px; font-weight: 700; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 999px; padding: 2px 8px;
 }
 .region-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .region-name { font-weight: 600; }

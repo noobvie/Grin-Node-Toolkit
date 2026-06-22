@@ -63,16 +63,13 @@
         <div class="kpi-card"><div class="kpi-label">Pending Payouts</div><div class="kpi-value" id="rc-pending">—</div></div>
       </div>
 
-      <!-- ── Satellites ───────────────────────────────────────────────────── -->
+      <!-- ── Satellites (moved) ───────────────────────────────────────────── -->
       <h2 style="margin-top:1.6rem;">Satellites (regions)</h2>
       <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
-        Live heartbeat from each remote mining region. Secret rotation is config-level
-        (<span class="mono">hub_shared_secret</span> in <span class="mono">grin_pubpool.json</span> /
-        <span class="mono">grin_satellite.json</span> + restart).
+        Live per-region satellite health now lives on the <a href="regions.html">Regions</a> page,
+        alongside each region's connect endpoint and setup steps.
       </p>
-      <div class="health-grid" id="sat-grid">
-        <div class="health-card"><div class="health-name">Loading…</div></div>
-      </div>
+      <p><a class="btn btn-outline btn-sm" href="regions.html">→ Open Regions</a></p>
 
     </section>
   </div>
@@ -195,39 +192,10 @@ async function loadReconciliation() {
   }
 }
 
-// ── Satellites ────────────────────────────────────────────────────────────────
-async function loadSatellites() {
-  const grid = document.getElementById('sat-grid');
-  try {
-    const d = await API.get('/api/admin/health/satellites');
-    const sats = d.satellites || [];
-    if (!sats.length) {
-      const note = d.ingestion_enabled
-        ? 'No satellites have reported in yet.'
-        : 'Satellite ingestion is disabled (no hub_shared_secret set).';
-      grid.innerHTML = `<div class="health-card"><div class="health-detail">${escHtml(note)}</div></div>`;
-      return;
-    }
-    grid.innerHTML = sats.map(s => {
-      const cls = s.status === 'online' ? 'ok' : (s.status === 'stale' ? 'warn' : 'error');
-      const badge = `<span class="badge badge-${cls === 'ok' ? 'ok' : (cls === 'warn' ? 'warn' : 'error')}">${escHtml(s.status)}</span>`;
-      return `<div class="health-card ${cls}">
-        <div class="health-name">${escHtml(s.region)} ${badge}</div>
-        <div class="health-detail" style="margin-top:.4rem;">
-          Last seen: ${s.age_seconds}s ago<br>
-          Shares: ${s.shares_accepted} (${s.shares_skipped} skipped)<br>
-          Blocks: ${s.blocks} · IP: ${escHtml(s.ip || '—')}
-        </div></div>`;
-    }).join('');
-  } catch (err) {
-    grid.innerHTML = `<div class="health-card error"><div class="health-detail">Error: ${escHtml(err.message)}</div></div>`;
-  }
-}
-
 // Initial paint: load everything once.
-document.addEventListener('DOMContentLoaded', () => { loadHealth(); loadReconciliation(); loadSatellites(); });
-// Cheap liveness (cached node/wallet status, system stats, satellite heartbeats) — every 60s.
-setInterval(() => { loadHealth(); loadSatellites(); }, 60000);
+document.addEventListener('DOMContentLoaded', () => { loadHealth(); loadReconciliation(); });
+// Cheap liveness (cached node/wallet status, system stats) — every 60s.
+setInterval(() => { loadHealth(); }, 60000);
 // Reconciliation forces a real wallet→node scan (refresh_from_node=true) — relaxed to every 3 min.
 setInterval(loadReconciliation, 180000);
 </script>

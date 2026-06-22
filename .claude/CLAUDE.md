@@ -471,7 +471,7 @@ Key design decisions (locked in — do not change without user confirmation):
   left sidebar + a topbar, wraps the page `<main>` in `.admin-main`, and removes any leftover legacy chrome
   (`body > header`/`footer`/`.testnet-banner`). The old per-page top `<header>`/`nav-links` and the 5-theme
   chrome switcher were **removed**. The single `NAV` array in admin-shell.js is the source of truth for nav items:
-  just TWO always-open top-level groups — **Dashboard** (▸ Miners / Payouts / Blocks / Users / System Health) and
+  just TWO always-open top-level groups — **Dashboard** (▸ Miners / Payouts / Blocks / Users / Regions / System Health) and
   **Settings** (▸ the 11 settings pages + Ads). Edit `NAV` once to add/reorder. The data pages live under Dashboard
   as children; **Ads** (ads.html) sits under Settings, not as a top-level item.
   **NAV layout — flat list, NO section headers; rail only for sub-items (2026-06):** top-level items
@@ -712,8 +712,11 @@ Key design decisions (locked in — do not change without user confirmation):
     secureAdmin. Plain `<a href>` download links (same-origin sends the httpOnly cookie) on
     payments.html.
   - **Already-built, untouched:** maintenance mode (notices section + Announcements tab) was fully
-    present; satellite heartbeat health is read-only on health.html (secret rotation stays
-    config-level: `hub_shared_secret` in `grin_pubpool.json`/`grin_satellite.json` + restart).
+    present; satellite heartbeat health (`GET /api/admin/health/satellites`) is read-only and now
+    lives on the **Regions page** (`admin-panel/regions.html`), NOT health.html — the old health.html
+    satellite grid was removed (2026-06) and replaced with a pointer link to Regions so per-region
+    config + live status sit together. Secret rotation stays config-level: `hub_shared_secret` in
+    `grin_pubpool.json`/`grin_satellite.json` + restart.
   - **Ads (operator promotions, added 2026-06).** New `ads` table (created/migrated by `db.js initDb`,
     no separate step) + `lib/ads.js` (`AdsManager`, positional-param SQL like the rest of the codebase).
     Two kinds: **banner** (`image_url`+`link_url`+`alt_text`) or **code** (raw operator-trusted HTML/JS
@@ -762,12 +765,26 @@ All public (no admin auth), `rateLimiter.middleware('public')`:
 - `GET /api/pool/effort` — `round_effort_pct` (Σ share diff since last block ÷ current per-block network diff), `luck_100_pct` (mean of `network_difficulty/round_shares` over last 100 blocks), `seconds_since_last_block`. Backed by additive `blocks.network_difficulty` + `blocks.round_shares` captured at find time in `lib/blocks.js creditBlock` (needs `blockManager.setNodeApi(blockMonitor.grinNode)`); current net diff cached ~60s on `app.locals`.
 - `GET /api/account/:addr` now also returns `min_payout`, `effective_min_payout`, `has_recorded_ip`.
 
+**Chart helper — `js/charts-init.js` is no longer line-only (2026-06):** `PoolCharts` now also exports
+`renderBarChart(canvasId, labels, data, {label, valueFmt})` and `renderDoughnutChart(canvasId, labels,
+data, {colors})` alongside `renderHashrateChart`. Both are theme-aware (read `--accent`), update in
+place on refresh, and no-op safely when Chart.js/the canvas is missing. Used by: **per-worker hashrate
+bar chart** + **share-quality doughnut** (valid/stale/rejected) on `account-settings.html`; the
+share-quality doughnut also on public `index.html` and admin `index.html`. Share-quality data comes from
+**`GET /api/pool/stats` → `share_quality:{accepted,stale,rejected}`** (pool-wide, summed from LIVE local
+stratum sessions — empty on a pure hub or with no connected rigs; the documented hub-mode reject/stale
+limit applies). Per-account stale/reject is aggregated client-side from `/api/account/:addr/workers`
+(also live-only). **Showing stale/reject % to miners is intentional** — it's how a miner diagnoses a sick
+rig (high stale = latency/overclock, high reject = bad shares).
+
 **Miner source-IP capture (backs the ownership gate):** recorded into `miner_accounts.last_ip/prev_ip` (last-2 distinct, shift on change) via `minerManager.recordSourceIp` → `owner-proof.recordSourceIp`. Captured at stratum login locally; **in hub-and-spoke the satellite relays the miner IP per-share** (`source_ip` added to the relayed share object in `stratum-server.js`; `share-relay.js` forwards it verbatim incl. failover replay; hub `POST /api/shares` uses `s.source_ip`, NOT `req.ip` which is the satellite). UI: all per-account features live on `account-settings.html` (chart, workers, threshold, slatepack); pool chart + effort row on `index.html`. **Payout method is single-select (2026-06):** the Withdraw section has a Tor/Slatepack radio group (`name="acct-pay-method"`, Tor default) and `syncPayMethod()` shows only the selected pane (`#acct-pay-tor-pane` / `#acct-pay-slatepack-pane`) — both rails still hit `POST /api/account/:addr/withdraw {method}` gated by the IP-proof (one of the last-2 mining IPs). The nav link + page `<h2>` say "Account" (renamed from "My Account").
 - **Public chrome = `public_html/js/public-shell.js` (single source of truth, added 2026-06 — the
   public mirror of `admin-shell.js`).** Every public page (all 7 that share the site header:
   index, miners-stats, payment-history, account-settings, fortune-board, donate, page) now ships
   ONLY its content (`<div class="wrap">`/`.container`) and an `<!-- header/footer injected by
-  /js/public-shell.js -->` marker; the `<header>` (brand + nav + `.theme-switcher` + "Start Mining")
+  /js/public-shell.js -->` marker; the `<header>` (brand + nav + `.theme-switcher`; the old
+  "Start Mining" CTA button was removed 2026-06 — the Dashboard nav link + the homepage `#connect`
+  section already cover it, and it crowded the mobile header)
   and `<footer>` are injected SYNCHRONOUSLY at body-end by public-shell.js, so the chrome is
   byte-identical across pages with no flash. **The `NAV` array in public-shell.js is the ONE source
   for the public nav** — edit it once to add/rename/reorder a link. Load order on every page:
@@ -781,8 +798,34 @@ All public (no admin auth), `rateLimiter.middleware('public')`:
   still inserts before the `account-settings.html` nav link). `login.html` is intentionally NOT
   converted (standalone admin door, no site header). To change the public header/footer or nav: edit
   public-shell.js, never re-add per-page `<header>`/`<footer>`.
-- **Public page set consolidated 2026-06 — 8 pages in `public_html/`:** `index.html` (dashboard +
-  connect + info), `miners-stats.html`, `payment-history.html`, `account-settings.html`,
+  **Footer is a 4-column layout (added 2026-06):** public-shell.js injects **Brand** (logo + tagline +
+  social) / **Pool** (reuses `NAV`, minus Blog) / **Resources** (Get Started, Blog, API Docs, Toolkit) /
+  **Legal** (CMS `[data-brand="page-links"]` + Contact + Donate), then a **live mini-stats bar**
+  (network / fee % / min payout from `/api/config/pool-info`, GRIN price from `/api/public/price`, and a
+  copy-able stratum `host:port`), then a **bottom row** with the dynamic copyright, attribution, and
+  security/abuse contact. public-shell.js owns the stats-bar fetches + the stratum copy button; branding.js
+  fills the brand/social hooks, the CMS page-links, the `[data-brand="copyright"]` line (`© <founded>–<year>
+  <pool_name>`, collapses to one year when `founded_year` is blank/equal), the legal Contact `mailto`, and
+  the `[data-brand-show="security"]` block (security_contact mailto + optional PGP link); it also unhides
+  `.footer-stratum` once it has a real `stratum_url`. **New `pool_info` config keys:** `founded_year`,
+  `security_contact`, `pgp_key_url` (defaults + `buildPublicConfig` `pool` object in pool-settings.js;
+  fields on `settings-pool-info.html` Footer & Legal section). **New public endpoints (index.js):**
+  `GET /api/public/price` (server-side CoinGecko `grin` usd+btc, 5-min cache, stale-if-error, hides ticker
+  when unavailable) and `GET /api/public/endpoints` (introspects `req.app._router.stack`, filtered to
+  public prefixes `/api/public|account|config|pool|stratum`, with a best-effort description map — always
+  accurate since it reflects mounted routes). New public page **`api-docs.html`** renders the latter
+  (grouped by path segment); added to `SITEMAP_PATHS`. The legacy CMS drafts (About / Terms / Privacy /
+  FAQ / Impressum, seeded by `migratePagesFromConfig`) populate the Legal column **only once the operator
+  publishes them** in admin → Pages. **Bug fixed in passing:** `settings-pool-info.html` had `id="pool-info"`
+  while `saveSection('pool_info')` (and the canonical section key) use the underscore — the div id +
+  `window.SETTINGS_SECTION` were corrected to `pool_info`, so Pool Info **Save** actually works now
+  (was a no-op/throw before).
+- **Public page set consolidated 2026-06 — 9 pages in `public_html/`:** `index.html` (dashboard +
+  connect + info), `miners-stats.html`, `blocks.html` (public found-blocks explorer — 2miners
+  `/blocks` parity: paginated `/api/pool/blocks?limit&offset&status`, per-block Luck/variance =
+  `round_shares ÷ network_difficulty` coloured green ≤100% / red >100%, KPIs from `/api/pool/stats`,
+  finder shown TRUNCATED, GrinScan deep-link; mainnet-only so chain link is hardcoded grinscan.org),
+  `payment-history.html`, `account-settings.html`,
   `fortune-board.html`, `donate.html` (last two = incentives), `login.html` (admin door, public zone),
   and `page.html` (generic renderer for operator-authored pages via `/page.html?p=<key>`; footer
   links + the SITEMAP authored-pages come from `poolSettings.listEnabledPages()`). **Deleted:**
@@ -801,14 +844,17 @@ All public (no admin auth), `rateLimiter.middleware('public')`:
   - **Regional stratum cards (the connect surface) — on the DASHBOARD (`index.html`), not a
     separate page.** `connect.html` was **deleted 2026-06** as redundant: its per-miner CLI command
     generator (lolMiner/GMiner/SRBMiner) was misleading for the common case (G1/iPollo ASICs are
-    configured via their own web UI, not a CLI). All "Start Mining" buttons + the header nav now point
-    to `index.html#connect`. The dashboard's "Point your miner at your nearest region" section
-    (`#connect`) renders **one card per region** (all visible at once) showing `host:port` + a **live
-    up/down pill** + active-miner count, with a Copy button; below the grid a single shared
-    `.connect-note` gives the connect fields (worker = `grin_address.worker`, password = anything —
-    same for every region, port identical across regions). `loadRegions()` reads `GET
+    configured via their own web UI, not a CLI). Any remaining in-page "Start Mining" links + the
+    header Dashboard nav point to `index.html#connect` (the standalone header CTA button was removed
+    2026-06). The dashboard's "Point your miner at your nearest region" section
+    (`#connect`) renders region cards **grouped under country headings** (with a flag emoji from
+    `country_code`), each card showing the full `stratum+tcp://host:port` connect URI + a **live
+    up/down pill** + active-miner count, with a Copy button (copies the full URI); below the grid a
+    single shared `.connect-note` gives the connect fields (worker = `grin_address.worker`, password =
+    anything — same for every region, port identical across regions). `loadRegions()` reads `GET
     /api/pool/stats/regions` and re-polls on the 60 s dashboard refresh so pills stay live; it filters
-    to active rows with a `stratum_url`. **The multi-region grid renders only when ≥2 regions exist**
+    to active rows with a `stratum_url`, then groups by `country` (rows with no country fall into a
+    per-region pseudo-group). **The multi-region grid renders only when ≥2 regions exist**
     (`loadRegions()`: `if (regions.length < 2) keep fallback`); a single-server pool shows the simple
     `#region-fallback` "point your miner here" callout instead of a lone 1-card grid. The pill
     `status` (`online`/`stale`/`offline`/`unknown`) is derived from the in-memory satellite heartbeat
@@ -816,17 +862,45 @@ All public (no admin auth), `rateLimiter.middleware('public')`:
     To make this truthful for a *quiet* region, the satellite `lib/share-relay.js` POSTs an **empty
     idle heartbeat** (`{region, shares:[]}`) to `/api/shares` every `HEARTBEAT_MS` (60 s) when there
     are no shares to flush, so a healthy-but-empty region reads `online` instead of `offline`.
-    **No demo regions are seeded (2026-06):** the old `db.js seedDefaultRegions()` (fake
-    amer/euro/asie.grinium.com cards on every install) was removed — it showed phantom regions on a
-    single-server box. Instead the pool server **self-registers its own region** via
-    `db.js ensureLocalRegion(region, stratumUrl)`, called from `index.js` startup **only when
-    `config.role === 'singlebox'`** (a bare hub runs no local stratum → relies purely on satellites).
-    It inserts ONE `pool_locations` row for `config.region` (bash default `"main"`, in
-    `pool_ensure_defaults`), `stratum_url = subdomain:stratum_port` (config.js now passes `subdomain`
-    through; backfilled on a later boot if subdomain was empty at first run), never clobbering an
-    operator's label/active/url edits. So the central box is an honest region that **auto-joins the
-    grid the moment a real satellite for another zone reports in** — the seamless single→multi path.
-    Extra zones come from real satellites the operator declares in admin → Regions, never seed data.
+    **Visitor-nearest detection (2026-06):** `detectNearestRegion()` maps the browser IANA timezone
+    (`Intl.DateTimeFormat().resolvedOptions().timeZone`) to the closest seeded region key — **no
+    geo-IP call, no permission prompt** — so the visitor's country group floats to the top and the
+    matched card gets an accent ring + "📍 Nearest to you" badge. Coarse on purpose (exact-tz map +
+    continent fallback + America east/west split); only floats a group up, never hides anything.
+    **Default regions ARE seeded (2026-06 — reverses the earlier "no demo regions" decision):**
+    `db.js seedDefaultRegions(stratumPort, poolDomain)` does a **one-time** seed (guarded by a persistent
+    `pool_config('_migrations','regions_seeded')` marker, `INSERT OR IGNORE`, like
+    `migratePagesFromConfig`) of the 5 real grinium regional endpoints — Vietnam `han` (Hanoi/VN),
+    United States `nyc` (New York) + `lax` (Los Angeles), Canada `yyz` (Toronto/CA), Netherlands `ams`
+    (Amsterdam/NL) — each `stratum_url = <host>.grinium.com:<stratum_port>`. Called from `index.js`
+    startup (after `initDb`) with `config.subdomain`. **GATED to the real grinium.com deployment
+    (2026-06):** the seed runs ONLY when `poolDomain === 'grinium.com'` or ends in `.grinium.com` — a
+    fork running its own domain must NOT advertise grinium.com hosts (its miners would connect to the
+    wrong pool), so forks get a clean slate and rely on `ensureLocalRegion()` (own domain = region 1) +
+    admin → Regions. The skip path stamps no marker, so once a grinium domain is configured the seed
+    still runs on the next restart. It NEVER re-seeds after operator edits/deletes. The
+    seed differs from the removed fake-region seed: those were phantom *un-routable demo* cards; these
+    are grinium's actual endpoints (grinium pool is THE product baked into the toolkit). `pool_locations`
+    gained `country` + `country_code` columns (additive `migrateLocations()`); the admin upsert
+    `POST /api/admin/locations` + `GET /api/pool/stats/regions` carry them. The pool server still also
+    **self-registers its own region** via `ensureLocalRegion(region, stratumUrl)` (singlebox only,
+    `config.region` default `"main"`, no country → its own pseudo-group), so the central box stays an
+    honest region and the seamless single→multi path is intact. Extra zones still come from real
+    satellites the operator declares in admin → Regions.
+    **Admin Regions page (`admin-panel/regions.html`, added 2026-06):** the CRUD+monitoring UI over
+    `pool_locations`, NAV child of the **Dashboard** group (operational view). Modelled on `ads.html`.
+    It merges config rows (`GET /api/admin/locations`) with live satellite health
+    (`GET /api/admin/health/satellites`, keyed by region) into one table — region/country(+flag)/
+    stratum URL/active/**live status**(online/degraded/offline, or "○ No signal" when no heartbeat)/
+    last-seen age/shares+blocks. The form takes a **host only** (not host:port): the port is shared
+    pool-wide (from `/api/public/branding` `connection.stratum_port`, default 3333) and auto-appended
+    on save, so all regions stay on the same port by construction. Region key is the identity →
+    disabled on edit (upsert keyed on it). Save = `POST /api/admin/locations` (secureAdmin via
+    `API.post`); Delete = `DELETE /api/admin/locations/:id` (**freshAdmin** → loads `/js/stepup.js`,
+    calls `adminFetch`). Shows an ingestion banner when `hub_shared_secret` is unset (so the operator
+    knows *why* every region reads "No signal"). NOTE: this page is unrelated to the **"Public Stratum
+    Host"** field in `settings-pool-info.html` — that field is cosmetic (the single fallback callout +
+    footer stratum copy via `/api/public/branding`), NOT a region/satellite registration.
   - **Service status strip** — public `GET /api/pool/status` (rate-limited, 15s cache) returns
     coarse health only: `pool.ok`, `node {reachable,synced,peers,height}`, `wallet {reachable}`.
     **Never** exposes wallet balance/addresses (those stay on admin-only `/api/admin/health/*`).

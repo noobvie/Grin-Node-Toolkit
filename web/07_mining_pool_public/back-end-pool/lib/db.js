@@ -446,6 +446,8 @@ function createSchema() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       region TEXT NOT NULL UNIQUE,
       label TEXT DEFAULT NULL,
+      country TEXT DEFAULT NULL,
+      country_code TEXT DEFAULT NULL,
       api_url TEXT DEFAULT NULL,
       stratum_url TEXT DEFAULT NULL,
       is_active INTEGER NOT NULL DEFAULT 1,
@@ -500,7 +502,7 @@ function createSchema() {
 
     // ─── Blog posts (dated, chronological — the WordPress-style "Posts" content type) ──
     // Distinct from pages: posts have a publish date, appear in a reverse-chronological
-    // feed (/blog), have a permalink (/post.html?slug=) and a draft|published status.
+    // feed (/blog), have a clean permalink (/blog/<slug>) and a draft|published status.
     `CREATE TABLE IF NOT EXISTS posts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       slug TEXT NOT NULL UNIQUE,
@@ -532,10 +534,35 @@ function createSchema() {
   migrateMinerAccounts();
   migrateBlocks();
   migrateWithdrawals();
+  migrateLocations();
   migratePagesFromConfig();
-  // No demo regions are seeded. The pool server self-registers its own region via
-  // ensureLocalRegion() (called from index.js with config); extra zones come from
-  // real satellites the operator declares in admin → Regions.
+  // The default grinium regional endpoints are seeded once (see seedDefaultRegions,
+  // called from index.js with the configured stratum port). The pool server also
+  // self-registers its own region via ensureLocalRegion(); extra zones come from real
+  // satellites the operator declares in admin → Regions.
+}
+
+// Additive, non-destructive: add the country grouping columns to an existing
+// pool_locations table (older DBs predate them). Lets the public connect grid group
+// regional cards under country headings + show a flag.
+function migrateLocations() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(pool_locations)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE above has the columns
+    const have = new Set(cols.map(c => c.name));
+    const additions = {
+      country: 'TEXT DEFAULT NULL',
+      country_code: 'TEXT DEFAULT NULL'
+    };
+    for (const [name, def] of Object.entries(additions)) {
+      if (!have.has(name)) {
+        db.exec(`ALTER TABLE pool_locations ADD COLUMN ${name} ${def}`);
+        console.warn(`[db] pool_locations: added missing column ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error(`[db] pool_locations migration check failed: ${e.message}`);
+  }
 }
 
 // One-time seed of the dynamic `pages` table from the legacy fixed `pool_config`
@@ -567,6 +594,10 @@ function migratePagesFromConfig() {
     ).all();
     const byKey = {};
     for (const r of rows) byKey[r.key] = r.value;
+    // Fall back to the shipped GRINIUM defaults (about/terms/privacy/faq) when the operator
+    // never saved a 'pages' config row, so a fresh install gets real, published pages.
+    // Required lazily to avoid a load-order cycle at module top.
+    const defaultPages = (require('./pool-settings').defaults || {}).pages || {};
     const insert = db.prepare(`
       INSERT OR IGNORE INTO pages (slug, title, html, is_published, nav_location, sort_order)
       VALUES (?, ?, ?, ?, 'footer', ?)
@@ -574,9 +605,10 @@ function migratePagesFromConfig() {
     let order = 0;
     const tx = db.transaction(() => {
       for (const slug of Object.keys(titles)) {
-        const html = (byKey[slug] || '').trim();
+        const html = (byKey[slug] || defaultPages[slug] || '').trim();
         // INSERT OR IGNORE: if the operator somehow already created one of these slugs,
-        // keep theirs. The marker still records that the seed ran.
+        // keep theirs. The marker still records that the seed ran. Non-empty pages are
+        // published immediately (footer-linked); empty ones (e.g. impressum) stay drafts.
         insert.run(slug, titles[slug], html, html ? 1 : 0, order++);
       }
       stamp.run();   // commit the seeds + the "done" marker atomically
@@ -592,6 +624,59 @@ function migratePagesFromConfig() {
 // another zone reports in. Creates ONE row for `region` (skipping the generic
 // 'default'), backfills stratum_url once the public hostname is known, and never
 // clobbers an operator's label/active/url edits made in admin → Regions.
+// One-time seed of the default grinium regional endpoints, grouped by country so the
+// public connect grid can show "Point your miner at your nearest region" cards under
+// country headings. Runs exactly once, guarded by a persistent marker (like
+// migratePagesFromConfig), so it never re-seeds even after the operator deletes/edits
+// rows in admin → Regions. INSERT OR IGNORE keeps any operator row that already owns a
+// region tag. `stratumPort` is the configured public stratum port (default 3333).
+//
+// `poolDomain` is the pool's own public hostname (config.subdomain). These are GRINIUM's
+// real regional endpoints, so they're seeded ONLY for the actual grinium.com deployment —
+// a fork running its own domain must never advertise grinium.com hosts (its miners would
+// connect to the wrong pool). Forks get a clean slate and rely on ensureLocalRegion()
+// (their own domain as region 1) + admin → Regions to declare more. No marker is stamped
+// on the skip path, so once a grinium domain is configured the seed still runs on restart.
+function seedDefaultRegions(stratumPort, poolDomain) {
+  try {
+    const dom = String(poolDomain || '').toLowerCase();
+    if (!(dom === 'grinium.com' || dom.endsWith('.grinium.com'))) return;
+    const marker = db.prepare(
+      "SELECT value FROM pool_config WHERE section = '_migrations' AND key = 'regions_seeded'"
+    ).get();
+    if (marker) return;
+    const port = stratumPort || 3333;
+    // city = label; country/country_code drive grouping + flag on the dashboard.
+    const REGIONS = [
+      { region: 'han', label: 'Hanoi',       country: 'Vietnam',        cc: 'VN', host: 'han.grinium.com' },
+      { region: 'nyc', label: 'New York',    country: 'United States',  cc: 'US', host: 'nyc.grinium.com' },
+      { region: 'lax', label: 'Los Angeles', country: 'United States',  cc: 'US', host: 'lax.grinium.com' },
+      { region: 'yyz', label: 'Toronto',     country: 'Canada',         cc: 'CA', host: 'yyz.grinium.com' },
+      { region: 'ams', label: 'Amsterdam',   country: 'Netherlands',    cc: 'NL', host: 'ams.grinium.com' }
+    ];
+    const insert = db.prepare(`
+      INSERT OR IGNORE INTO pool_locations
+        (region, label, country, country_code, stratum_url, is_active)
+      VALUES (?, ?, ?, ?, ?, 1)
+    `);
+    const stamp = db.prepare(`
+      INSERT INTO pool_config (section, key, value, value_type)
+      VALUES ('_migrations', 'regions_seeded', '1', 'string')
+      ON CONFLICT(section, key) DO NOTHING
+    `);
+    const tx = db.transaction(() => {
+      for (const r of REGIONS) {
+        insert.run(r.region, r.label, r.country, r.cc, `${r.host}:${port}`);
+      }
+      stamp.run(); // seed + "done" marker committed atomically
+    });
+    tx();
+    console.warn(`[db] seeded ${REGIONS.length} default regional endpoints (port ${port})`);
+  } catch (e) {
+    console.error(`[db] seedDefaultRegions failed: ${e.message}`);
+  }
+}
+
 function ensureLocalRegion(region, stratumUrl) {
   if (!region || region === 'default') return;
   try {
@@ -624,5 +709,6 @@ module.exports = {
   getDb,
   closeDb,
   createSchema,
-  ensureLocalRegion
+  ensureLocalRegion,
+  seedDefaultRegions
 };

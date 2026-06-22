@@ -40,9 +40,19 @@
 
   <script>
     (function () {
-      var params = new URLSearchParams(location.search);
-      var slug = (params.get('slug') || '').replace(/[^a-z0-9_-]/gi, '');
+      // Slug from the clean permalink /blog/<slug>; fall back to the legacy ?slug= form.
+      var pathMatch = location.pathname.match(/^\/blog\/([A-Za-z0-9_-]+)/);
+      var rawSlug = pathMatch ? pathMatch[1] : (new URLSearchParams(location.search).get('slug') || '');
+      var slug = rawSlug.replace(/[^a-z0-9_-]/gi, '');
       if (!slug) { renderMissing(); return; }
+
+      // Canonical URL is always the clean /blog/<slug> form (dedupes the legacy ?slug= path for SEO).
+      (function () {
+        var link = document.createElement('link');
+        link.rel = 'canonical';
+        link.href = location.origin + '/blog/' + slug;
+        document.head.appendChild(link);
+      })();
 
       function esc(s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {

@@ -41,6 +41,7 @@
                 <th>Height</th>
                 <th>Status</th>
                 <th>Maturity</th>
+                <th title="Round shares ÷ network difficulty. Under 100% = lucky (found with fewer shares than expected).">Luck</th>
                 <th>Reward ツ</th>
                 <th>Found by</th>
                 <th>Found at</th>
@@ -48,7 +49,7 @@
               </tr>
             </thead>
             <tbody id="blocks-tbody">
-              <tr class="loading-row"><td colspan="7"><span class="spinner"></span>Loading…</td></tr>
+              <tr class="loading-row"><td colspan="8"><span class="spinner"></span>Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -80,6 +81,16 @@ function shortAddr(a) {
   a = String(a || '');
   return a.length > 16 ? a.slice(0, 8) + '…' + a.slice(-5) : a;
 }
+// 2miners-style luck/variance: round_shares ÷ network_difficulty. <100% = lucky (green),
+// >100% = unlucky (red). Older blocks captured before the columns existed show "—".
+function luckCell(b) {
+  const nd = Number(b.network_difficulty) || 0;
+  const rs = Number(b.round_shares) || 0;
+  if (nd <= 0 || rs <= 0) return '<td class="mono" style="color:var(--text-dim)">—</td>';
+  const v = (rs / nd) * 100;
+  const color = v <= 100 ? '#3fb950' : '#f85149';
+  return `<td class="mono" style="color:${color}" title="round shares ÷ network difficulty">${v.toFixed(0)}%</td>`;
+}
 
 const STATUS = {
   immature:  ['badge-warn',  'Maturing'],
@@ -104,7 +115,7 @@ async function loadBlocks() {
 
     const blocks = data.blocks || [];
     if (!blocks.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No blocks in this view.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No blocks in this view.</td></tr>';
       return;
     }
     tbody.innerHTML = blocks.map(b => {
@@ -116,6 +127,7 @@ async function loadBlocks() {
         <td class="mono">${b.height.toLocaleString()}</td>
         <td><span class="badge ${cls}">${escHtml(label)}</span></td>
         <td>${escHtml(maturity)}</td>
+        ${luckCell(b)}
         <td class="mono">${(Number(b.reward) || 0).toFixed(2)}</td>
         <td><span class="mono" title="${escHtml(b.found_by)}">${escHtml(shortAddr(b.found_by))}</span></td>
         <td>${fmtTs(b.found_at)}</td>
@@ -123,7 +135,7 @@ async function loadBlocks() {
       </tr>`;
     }).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="7">Error: ${escHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">Error: ${escHtml(err.message)}</td></tr>`;
   }
 }
 

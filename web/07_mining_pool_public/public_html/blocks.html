@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="index, follow, max-snippet:-1">
+  <title>Found Blocks — Grin Mining Pool</title>
+  <meta name="description" content="Live list of blocks found by the pool: height, luck/variance, reward, finder and confirmation status. Full transparency — every block is verifiable on the Grin chain explorer.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Found Blocks — Grin Mining Pool">
+  <meta property="og:description" content="Every block the pool has found, with luck/variance and on-chain links.">
+  <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/css/dashboard.css">
+  <link rel="stylesheet" href="/css/themes.css">
+  <style>
+    .chip.active { background: var(--accent); color: #111; border-color: var(--accent); }
+    .dim { color: var(--dark-dim); }
+  </style>
+</head>
+<body>
+
+  <!-- header injected by /js/public-shell.js -->
+
+  <div class="container">
+    <h2 class="page-title">Found Blocks</h2>
+    <p style="margin-bottom:18px;color:var(--dark-dim);max-width:70ch;">
+      Every block this pool has found. <strong>Luck</strong> is the round's shares ÷ the network
+      difficulty — under 100% means the block was found with fewer shares than statistically
+      expected (lucky), over 100% means it took more (unlucky). Each block is independently
+      verifiable on the Grin chain explorer.
+    </p>
+
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-label">Blocks Found</div><div class="stat-value" id="kpi-total">—</div></div>
+      <div class="stat-card"><div class="stat-label">Confirmed</div><div class="stat-value" id="kpi-confirmed">—</div></div>
+      <div class="stat-card"><div class="stat-label">Maturing</div><div class="stat-value" id="kpi-immature">—</div></div>
+      <div class="stat-card"><div class="stat-label">Found (24h / 7d)</div><div class="stat-value" id="kpi-recent">—</div></div>
+    </div>
+
+    <div class="filter-chips" id="filter-chips" style="display:flex;gap:8px;flex-wrap:wrap;margin:18px 0 12px;">
+      <button class="btn sm chip active" data-filter="">All</button>
+      <button class="btn sm chip" data-filter="immature">Maturing</button>
+      <button class="btn sm chip" data-filter="confirmed">Confirmed</button>
+      <button class="btn sm chip" data-filter="orphaned">Orphaned</button>
+    </div>
+
+    <table class="data-table" aria-label="Found blocks">
+      <thead>
+        <tr>
+          <th>Height</th>
+          <th>Status</th>
+          <th class="num" title="Round shares ÷ network difficulty. Under 100% = lucky.">Luck</th>
+          <th class="num">Reward</th>
+          <th>Found by</th>
+          <th class="num">Age</th>
+          <th>Chain</th>
+        </tr>
+      </thead>
+      <tbody id="blocks-tbody">
+        <tr><td colspan="7">Loading…</td></tr>
+      </tbody>
+    </table>
+
+    <div id="pager" style="display:flex;align-items:center;justify-content:center;gap:14px;margin-top:16px;">
+      <button class="btn sm" id="prev-btn" disabled>‹ Newer</button>
+      <span class="dim" id="page-label" style="font-size:13px;">Page 1</span>
+      <button class="btn sm" id="next-btn" disabled>Older ›</button>
+    </div>
+  </div>
+
+  <!-- footer injected by /js/public-shell.js -->
+
+  <script src="/js/auth.js"></script>
+  <script>
+    // Public blocks explorer. All data comes from public endpoints:
+    //   /api/pool/stats               summary KPIs (total/confirmed/immature/24h/7d)
+    //   /api/pool/blocks?limit&offset&status   paginated rows (plain array; last page = short page)
+    // Mainnet-only product, so the chain link is grinscan.org. All external fields rendered via
+    // textContent / escaped — never trust block.found_by etc. as markup.
+    const PAGE_SIZE = 25;
+    let _page = 0;       // zero-based
+    let _filter = '';
+    let _lastFull = false; // did the last fetch return a full page (more may exist)?
+
+    function escHtml(v) {
+      return String(v == null ? '' : v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function shortAddr(a) {
+      a = String(a || '');
+      if (!a || a === 'unknown') return '—';
+      return a.length > 16 ? a.slice(0, 9) + '…' + a.slice(-4) : a;
+    }
+    function fmtTs(t) { return t ? new Date(t * 1000).toLocaleString() : '—'; }
+    function timeAgo(t) {
+      if (!t) return '—';
+      const s = Math.max(0, Math.floor(Date.now() / 1000) - t);
+      if (s < 60) return s + 's ago';
+      if (s < 3600) return Math.floor(s / 60) + 'm ago';
+      if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+      return Math.floor(s / 86400) + 'd ago';
+    }
+
+    const STATUS = {
+      immature:  ['Maturing',  '#d29922'],
+      confirmed: ['Confirmed', '#3fb950'],
+      orphaned:  ['Orphaned',  '#f85149'],
+    };
+    function statusCell(st) {
+      const [label, color] = STATUS[st] || [st || 'unknown', 'var(--dark-dim)'];
+      return '<span class="badge" style="background:' + color + '22;color:' + color +
+             ';border:1px solid ' + color + '55;">' + escHtml(label) + '</span>';
+    }
+    function luckCell(b) {
+      const nd = Number(b.network_difficulty) || 0;
+      const rs = Number(b.round_shares) || 0;
+      if (nd <= 0 || rs <= 0) return '<td class="num dim">—</td>';
+      const v = (rs / nd) * 100;
+      const color = v <= 100 ? '#3fb950' : '#f85149';
+      return '<td class="num" style="color:' + color + '" title="round shares ÷ network difficulty">' +
+             v.toFixed(0) + '%</td>';
+    }
+
+    async function getJson(url) {
+      const r = await fetch(url, { credentials: 'same-origin' });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+      return j;
+    }
+
+    async function loadSummary() {
+      try {
+        const s = await getJson('/api/pool/stats');
+        const g = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        g('kpi-total', s.total_blocks_found != null ? s.total_blocks_found : '—');
+        g('kpi-confirmed', s.confirmed_blocks != null ? s.confirmed_blocks : '—');
+        g('kpi-immature', s.immature_blocks != null ? s.immature_blocks : '—');
+        g('kpi-recent', (s.blocks_24h != null ? s.blocks_24h : 0) + ' / ' + (s.blocks_7d != null ? s.blocks_7d : 0));
+      } catch (e) { /* KPIs keep placeholders */ }
+    }
+
+    async function loadBlocks() {
+      const tbody = document.getElementById('blocks-tbody');
+      tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+      try {
+        const q = '?limit=' + PAGE_SIZE + '&offset=' + (_page * PAGE_SIZE) +
+                  (_filter ? '&status=' + encodeURIComponent(_filter) : '');
+        const blocks = await getJson('/api/pool/blocks' + q);
+        const rows = Array.isArray(blocks) ? blocks : [];
+        _lastFull = rows.length === PAGE_SIZE;
+        if (!rows.length) {
+          tbody.innerHTML = '<tr><td colspan="7">' +
+            (_page === 0 ? 'No blocks found yet — the pool is still searching.' : 'No more blocks.') +
+            '</td></tr>';
+        } else {
+          tbody.innerHTML = rows.map(function (b) {
+            return '<tr>' +
+              '<td>' + Number(b.height || 0).toLocaleString('en-US') + '</td>' +
+              '<td>' + statusCell(b.status) + '</td>' +
+              luckCell(b) +
+              '<td class="num">' + (Number(b.reward) || 0).toFixed(2) + ' ツ</td>' +
+              '<td title="' + escHtml(b.found_by) + '">' + escHtml(shortAddr(b.found_by)) + '</td>' +
+              '<td class="num" title="' + escHtml(fmtTs(b.found_at)) + '">' + escHtml(timeAgo(b.found_at)) + '</td>' +
+              '<td><a href="https://grinscan.org/block/' + Number(b.height || 0) +
+                '" target="_blank" rel="noopener">view ↗</a></td>' +
+              '</tr>';
+          }).join('');
+        }
+      } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="7">Block data unavailable</td></tr>';
+        _lastFull = false;
+      }
+      updatePager();
+    }
+
+    function updatePager() {
+      document.getElementById('prev-btn').disabled = _page === 0;
+      document.getElementById('next-btn').disabled = !_lastFull;
+      document.getElementById('page-label').textContent = 'Page ' + (_page + 1);
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      document.getElementById('prev-btn').addEventListener('click', function () {
+        if (_page > 0) { _page--; loadBlocks(); }
+      });
+      document.getElementById('next-btn').addEventListener('click', function () {
+        if (_lastFull) { _page++; loadBlocks(); }
+      });
+      document.querySelectorAll('#filter-chips .chip').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          document.querySelectorAll('#filter-chips .chip').forEach(function (b) { b.classList.remove('active'); });
+          btn.classList.add('active');
+          _filter = btn.getAttribute('data-filter') || '';
+          _page = 0;
+          loadBlocks();
+        });
+      });
+      loadSummary();
+      loadBlocks();
+      setInterval(function () { loadSummary(); if (_page === 0) loadBlocks(); }, 60000);
+    });
+  </script>
+  <script src="/js/public-shell.js"></script>
+  <script src="/js/public-theme.js"></script>
+  <script src="/js/branding.js"></script>
+</body>
+</html>

@@ -900,6 +900,47 @@ def compute_split(ledger, found, found_by, now):
     return periods
 
 
+def compute_daily(ledger, found, now, max_days=366):
+    """Per-UTC-day earnings facts for the front-end trend chart (GRIN / miner / day).
+
+    Emits RAW per-day facts only — the smoothing (rolling estimate line) and the
+    pool-average-per-miner line are derived client-side over whatever span the page's
+    period selector picks, so the same payload serves weekly/monthly/yearly views.
+
+    Attribution is by block FOUND-day (the day the coinbase was solved), matching
+    compute_split's `utc_day(found_ts)` bucketing — not the +1440-block maturity day.
+    A day's reward (blocks_found × 60) is split across nicknames by the work share
+    (Σ share-diff) recorded that same day; a day with blocks but no recorded work
+    leaves `nicks` empty (reward still shown at the pool level)."""
+    cutoff = utc_day(now - max_days * 86400)
+
+    blocks_by_day = {}
+    for h, ts in found.items():
+        d = utc_day(ts)
+        if d >= cutoff:
+            blocks_by_day[d] = blocks_by_day.get(d, 0) + 1
+
+    day_keys = set(blocks_by_day)
+    for d, e in (ledger.get("days") or {}).items():
+        if d >= cutoff and (e.get("workers")):
+            day_keys.add(d)
+
+    out = []
+    for d in sorted(day_keys):
+        blocks = blocks_by_day.get(d, 0)
+        reward = blocks * BLOCK_REWARD_GRIN
+        diffs = {}
+        for w, v in ((ledger.get("days") or {}).get(d, {}).get("workers") or {}).items():
+            diffs[_nick_of(w)] = diffs.get(_nick_of(w), 0) + v
+        total = sum(diffs.values())
+        nicks = {name: {"diff": int(dv),
+                        "grin": round(reward * dv / total, 3) if total > 0 else 0.0}
+                 for name, dv in diffs.items()}
+        out.append({"day": d, "blocks": blocks, "reward": round(reward, 3),
+                    "total_diff": int(total), "nicks": nicks})
+    return out
+
+
 # ── log scanning ─────────────────────────────────────────────────────────────
 def _consume_found(line, found, hashes, found_by=None, last_share=None):
     mf = FOUND_RE.search(line)
@@ -1277,6 +1318,7 @@ def main():
                     "updated": iso(now), "net": "mainnet",
                     "block_reward": BLOCK_REWARD_GRIN, "maturity": MAINNET_MATURITY,
                     "periods": compute_split(ledger, found, found_by, now),
+                    "daily": compute_daily(ledger, found, now),
                     "balances": balances, "totals": totals,
                 }, 0o644)
             elif os.path.exists(split_path):

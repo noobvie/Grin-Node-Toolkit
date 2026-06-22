@@ -55,6 +55,15 @@
       <div class="chart-wrap" id="hashrate-wrap"><canvas id="hashrate-chart"></canvas></div>
     </div>
 
+    <!-- live share quality -->
+    <div class="chart-card">
+      <div class="chart-head">
+        <h3>Share quality</h3>
+        <span class="chart-sub">live — connected workers</span>
+      </div>
+      <div class="chart-wrap" id="quality-wrap"><canvas id="quality-chart"></canvas></div>
+    </div>
+
     <!-- Recent withdrawals -->
     <h2>Recent Withdrawals</h2>
     <div class="card" style="padding:0;">
@@ -118,6 +127,7 @@ async function loadAdminDashboard() {
   } catch (e) {}
 
   loadHashrateChart();
+  loadShareQuality();
 
   try {
     const items = await API.get('/api/admin/withdrawals?limit=10');
@@ -158,6 +168,27 @@ async function loadHashrateChart() {
     PoolCharts.renderHashrateChart('hashrate-chart', series, { label: 'Pool hashrate' });
   } catch (e) {
     wrap.innerHTML = '<div class="chart-empty">Hashrate history unavailable.</div>';
+  }
+}
+
+// Live pool-wide share quality (valid/stale/rejected). Reuses the public /api/pool/stats
+// aggregate. Empty state on a pure hub or with no connected rigs.
+async function loadShareQuality() {
+  const wrap = document.getElementById('quality-wrap');
+  if (!wrap) return;
+  try {
+    const s = await API.get('/api/pool/stats');
+    const q = (s && s.share_quality) || {};
+    const acc = Number(q.accepted) || 0, stl = Number(q.stale) || 0, rej = Number(q.rejected) || 0;
+    if (acc + stl + rej === 0 || !window.PoolCharts) {
+      wrap.innerHTML = '<div class="chart-empty">No live share data yet.</div>';
+      return;
+    }
+    PoolCharts.renderDoughnutChart('quality-chart',
+      ['Valid', 'Stale', 'Rejected'], [acc, stl, rej],
+      { colors: ['#3fb950', '#d29922', '#f85149'] });
+  } catch (e) {
+    wrap.innerHTML = '<div class="chart-empty">Share quality unavailable.</div>';
   }
 }
 

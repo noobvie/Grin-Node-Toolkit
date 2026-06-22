@@ -997,6 +997,17 @@ $admin_rules
         try_files \$uri =404;
     }
 
+    # Clean blog-post permalinks: /blog/<slug> serves the static post.html shell,
+    # which reads the slug from its own path (falling back to ?slug= for legacy links).
+    # The exact-match "location = /blog/rss.xml" above wins over this regex, and the blog
+    # index /blog.html doesn't match (no slash after "blog"). Slug charset mirrors slugify()
+    # in lib/posts.js (lowercase alnum + hyphen); underscores allowed for safety.
+    location ~ ^/blog/([A-Za-z0-9_-]+)/?\$ {
+        limit_req zone=${POOL_SERVICE}_static burst=100 nodelay;
+        add_header Cache-Control "no-cache" always;
+        try_files /post.html =404;
+    }
+
     location / {
         # Generous burst: a single page load pulls the HTML + ~a dozen assets (CSS, JS
         # incl. public-shell.js which injects the header/nav, fonts, images), and with

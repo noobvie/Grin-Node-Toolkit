@@ -154,7 +154,7 @@
         <div class="ad-slot ad-slot--in-content" data-ad-slot="in-content" style="display:none;"></div>
 
         <div class="section-title" id="connect">Point your miner at your nearest region</div>
-        <div class="region-grid" id="region-grid">
+        <div class="region-zones" id="region-grid">
             <div class="callout" id="region-fallback">
                 <span>⛏ Point your miner at <code data-brand="stratum_url">stratum host not configured</code></span>
             </div>
@@ -164,7 +164,7 @@
                 <span class="k">Worker</span><span><code>&lt;your_grin_address&gt;.rig1</code> <span class="dim">— your Grin address is your login; <code>.rig1</code> names this machine (any label)</span></span>
                 <span class="k">Password</span><span><code>x</code> <span class="dim">— anything; it's ignored. No account or registration needed.</span></span>
             </div>
-            <div class="region-meta">Algorithm <strong>Cuckatoo32</strong> · same port for every region · ASICs (iPollo G1, etc.): paste the host:port above into your miner's pool/stratum field.</div>
+            <div class="region-meta">Algorithm <strong>Cuckatoo32</strong> · same port for every region · paste a region's <code>stratum+tcp://host:port</code> into your miner's pool/stratum field (ASICs like the iPollo G1 may want just the <code>host:port</code> part).</div>
         </div>
 
         <div class="grid cols-4" style="margin-top:14px">
@@ -188,15 +188,22 @@
             </div>
         </div>
 
-        <div class="card" style="margin-top:14px">
-            <div class="card-head"><h3>Pool Hashrate (24h)</h3></div>
-            <div style="position:relative;height:240px"><canvas id="pool-hashrate-chart"></canvas></div>
+        <div class="grid cols-2" style="margin-top:14px">
+            <div class="card">
+                <div class="card-head"><h3>Pool Hashrate (24h)</h3></div>
+                <div style="position:relative;height:240px"><canvas id="pool-hashrate-chart"></canvas></div>
+            </div>
+            <div class="card" id="quality-card">
+                <div class="card-head"><h3>Share Quality <span class="dim" style="font-size:13px;font-weight:normal">live</span></h3></div>
+                <div style="position:relative;height:240px"><canvas id="pool-quality-chart"></canvas></div>
+                <p class="dim" id="pool-quality-empty" style="display:none;text-align:center;margin:0;padding:20px">No live share data right now.</p>
+            </div>
         </div>
 
         <div class="section-title">Recent activity</div>
         <div class="grid cols-2">
             <div class="card table-card">
-                <div class="card-head"><h3>Recent Blocks</h3><a href="miners-stats.html" class="dim" style="font-size:13px">View all →</a></div>
+                <div class="card-head"><h3>Recent Blocks</h3><a href="blocks.html" class="dim" style="font-size:13px">View all →</a></div>
                 <table class="data-table" aria-label="Recent blocks">
                     <thead><tr><th>Height</th><th>Status</th><th class="num">Reward</th><th class="num">Found</th></tr></thead>
                     <tbody id="recent-blocks">
@@ -233,6 +240,7 @@
                 <p class="dim" style="margin:0 0 10px">Any Cuckatoo32 miner works — GPU (lolMiner, GMiner, SRBMiner-MULTI) or ASIC (iPollo G1 / G1-Mini). Point it at your nearest region's host:port above, using <code>grin_address.worker_name</code> as the username (password ignored).</p>
                 <ul class="info-list" id="info-contact">
                     <li style="display:none" id="info-email">Email: <span data-brand="contact_email"></span></li>
+                    <li style="display:none" id="info-forum">Forum: <a id="info-forum-link" href="#" rel="noopener" target="_blank">hellogrin on forum.grin.mw</a></li>
                     <li style="display:none" data-brand="social-discord"><a data-brand="social-discord" href="#" rel="noopener" target="_blank">Discord</a></li>
                     <li style="display:none" data-brand="social-telegram"><a data-brand="social-telegram" href="#" rel="noopener" target="_blank">Telegram</a></li>
                     <li style="display:none" data-brand="social-twitter"><a data-brand="social-twitter" href="#" rel="noopener" target="_blank">Twitter / X</a></li>
@@ -459,6 +467,32 @@
             } catch (err) { /* chart stays empty */ }
         }
 
+        // Pool-wide live share quality (valid/stale/rejected) doughnut. Live-only — empty on a
+        // pure hub (satellites don't relay reject/stale) or when no rigs are connected.
+        async function loadShareQuality() {
+            if (typeof PoolCharts === 'undefined' || !PoolCharts.renderDoughnutChart) return;
+            var canvas = document.getElementById('pool-quality-chart');
+            var empty = document.getElementById('pool-quality-empty');
+            try {
+                var s = await Auth.fetch('/api/pool/stats');
+                var q = (s && s.share_quality) || {};
+                var acc = Number(q.accepted) || 0, stl = Number(q.stale) || 0, rej = Number(q.rejected) || 0;
+                if (acc + stl + rej === 0) {
+                    if (canvas) canvas.style.display = 'none';
+                    if (empty) empty.style.display = '';
+                    return;
+                }
+                if (canvas) canvas.style.display = '';
+                if (empty) empty.style.display = 'none';
+                PoolCharts.renderDoughnutChart('pool-quality-chart',
+                    ['Valid', 'Stale', 'Rejected'], [acc, stl, rej],
+                    { colors: ['#3fb950', '#d29922', '#f85149'] });
+            } catch (err) {
+                if (canvas) canvas.style.display = 'none';
+                if (empty) empty.style.display = '';
+            }
+        }
+
         // ── Service status strip (pool / node / wallet) ──────────────────────
         function setPill(id, state, label) {
             var el = document.getElementById(id);
@@ -489,10 +523,13 @@
         }
 
         // ── Regional stratum hosts + live up/down pill ───────────────────────
-        // Operator-declared regions from /api/pool/stats/regions (gives per-region `status`
-        // alongside the host). Each card shows the region's host:port + a live availability
-        // pill; the shared worker/password note below is identical for every region. All
-        // operator-supplied values rendered via textContent. Falls back to the single callout.
+        // Operator-declared regions from /api/pool/stats/regions (per-region `status`,
+        // host, country). Cards are grouped under country headings; each shows the
+        // region's full stratum+tcp://host:port URI + a live availability pill. The
+        // visitor's nearest region is detected from the browser timezone (no network,
+        // privacy-friendly) and floated to the top with a "Nearest" badge. The shared
+        // worker/password note below is identical for every region. All operator-supplied
+        // values rendered via textContent. Falls back to the single callout.
         var BASE_PORT = '';   // pool default port — used when a region's stratum_url omits one
 
         function regionStatusMeta(s) {
@@ -509,6 +546,93 @@
             var parts = String(r.stratum_url || '').split(':');
             return parts[0] + ':' + (parts[1] || BASE_PORT || '3333');
         }
+        // The full miner-pasteable connect URI (lolMiner/GMiner/most ASIC pool fields).
+        function regionStratumUri(r) { return 'stratum+tcp://' + regionHostPort(r); }
+
+        // ISO-3166 alpha-2 → flag emoji (regional-indicator pair). '' when unknown.
+        function flagEmoji(cc) {
+            if (!cc || cc.length !== 2) return '';
+            cc = cc.toUpperCase();
+            if (!/^[A-Z]{2}$/.test(cc)) return '';
+            return String.fromCodePoint(0x1F1E6 + cc.charCodeAt(0) - 65) +
+                   String.fromCodePoint(0x1F1E6 + cc.charCodeAt(1) - 65);
+        }
+
+        // Best-effort "nearest region" from the browser's IANA timezone — no geo-IP call,
+        // no permission prompt. Returns a region key present in `keys` (the live region
+        // set) or null. Coarse on purpose: it only floats the likely-closest group up.
+        function detectNearestRegion(keys) {
+            var tz = '';
+            try { tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || ''; } catch (e) { return null; }
+            if (!tz) return null;
+            var has = function (k) { return keys.indexOf(k) !== -1 ? k : null; };
+            var exact = {
+                'Asia/Ho_Chi_Minh': 'han', 'America/New_York': 'nyc',
+                'America/Los_Angeles': 'lax', 'America/Toronto': 'yyz',
+                'Europe/Amsterdam': 'ams'
+            };
+            if (exact[tz] && has(exact[tz])) return exact[tz];
+            var area = tz.split('/')[0];
+            if (area === 'America') {
+                if (/Los_Angeles|Vancouver|Tijuana|Phoenix|Denver|Edmonton|Boise|Anchorage|Whitehorse|Dawson|Mazatlan/.test(tz)) return has('lax') || has('nyc') || has('yyz');
+                if (/Toronto|Montreal|Halifax|Winnipeg|Regina|St_Johns/.test(tz)) return has('yyz') || has('nyc');
+                return has('nyc') || has('yyz') || has('lax');
+            }
+            var pref = { Asia: 'han', Australia: 'han', Indian: 'han', Pacific: 'lax',
+                         Europe: 'ams', Africa: 'ams', Atlantic: 'ams', Antarctica: 'lax' };
+            return pref[area] ? has(pref[area]) : null;
+        }
+
+        function buildRegionCard(r, isNearest) {
+            var uri = regionStratumUri(r);
+            var card = document.createElement('div');
+            card.className = 'region-card' + (isNearest ? ' region-card--nearest' : '');
+
+            var head = document.createElement('div');
+            head.className = 'region-head';
+            var name = document.createElement('span');
+            name.className = 'region-name';
+            name.textContent = r.label || r.region;
+            head.appendChild(name);
+            var pill = document.createElement('span');
+            var m = regionStatusMeta(r.status);
+            pill.className = 'region-pill ' + m.cls;
+            pill.textContent = m.label;
+            head.appendChild(pill);
+            card.appendChild(head);
+
+            if (isNearest) {
+                var badge = document.createElement('div');
+                badge.className = 'region-nearest';
+                badge.textContent = '📍 Nearest to you';
+                card.appendChild(badge);
+            }
+
+            var hostRow = document.createElement('div');
+            hostRow.className = 'region-host';
+            var code = document.createElement('code');
+            code.textContent = uri;
+            hostRow.appendChild(code);
+            var copy = document.createElement('button');
+            copy.className = 'btn sm';
+            copy.type = 'button';
+            copy.textContent = 'Copy';
+            copy.addEventListener('click', function () {
+                var done = function () { copy.textContent = 'Copied!'; setTimeout(function () { copy.textContent = 'Copy'; }, 1500); };
+                if (navigator.clipboard) { navigator.clipboard.writeText(uri).then(done); }
+                else { done(); }
+            });
+            hostRow.appendChild(copy);
+            card.appendChild(hostRow);
+
+            if (r.miners > 0) {
+                var meta = document.createElement('div');
+                meta.className = 'region-meta';
+                meta.textContent = r.miners + (r.miners === 1 ? ' miner' : ' miners') + ' active';
+                card.appendChild(meta);
+            }
+            return card;
+        }
 
         async function loadRegions() {
             var grid = document.getElementById('region-grid');
@@ -524,56 +648,60 @@
                 var data = await Auth.fetch('/api/pool/stats/regions');
                 var regions = (data && Array.isArray(data.regions)) ? data.regions : [];
                 // Only operator-declared, active regions are connect targets (need a host).
-                regions = regions.filter(function (r) { return r.stratum_url && r.is_active !== false; })
-                                 .sort(function (a, b) { return (a.region || '').localeCompare(b.region || ''); });
+                regions = regions.filter(function (r) { return r.stratum_url && r.is_active !== false; });
                 var note = document.getElementById('connect-note');
                 // A single-region pool (one server, no satellites) shows the simple
                 // "point your miner here" callout, not a 1-card grid. The multi-region
-                // grid appears only once a second zone (satellite) reports in.
+                // grid appears only once a second zone reports in.
                 if (regions.length < 2) { if (note) note.style.display = 'none'; return; } // keep fallback callout
-                grid.textContent = '';
+
+                var nearestKey = detectNearestRegion(regions.map(function (r) { return r.region; }));
+                var nearestCountry = null;
+                if (nearestKey) {
+                    var nr = regions.filter(function (r) { return r.region === nearestKey; })[0];
+                    if (nr) nearestCountry = nr.country || ('__' + nr.region);
+                }
+
+                // Group regions by country (fall back to a per-region pseudo-group when a
+                // region has no country set, e.g. the self-registered local region).
+                var groups = {}, order = [];
                 regions.forEach(function (r) {
-                    var hostport = regionHostPort(r);
-                    var card = document.createElement('div');
-                    card.className = 'region-card';
+                    var key = r.country || ('__' + r.region);
+                    if (!groups[key]) { groups[key] = { country: r.country || (r.label || r.region), cc: r.country_code || '', rows: [] }; order.push(key); }
+                    groups[key].rows.push(r);
+                });
+                // Sort: the visitor's country first, then by most-active (miner count) desc, then name.
+                order.sort(function (a, b) {
+                    if (a === nearestCountry) return -1;
+                    if (b === nearestCountry) return 1;
+                    var ma = groups[a].rows.reduce(function (s, r) { return s + (r.miners || 0); }, 0);
+                    var mb = groups[b].rows.reduce(function (s, r) { return s + (r.miners || 0); }, 0);
+                    if (mb !== ma) return mb - ma;
+                    return groups[a].country.localeCompare(groups[b].country);
+                });
 
-                    var head = document.createElement('div');
-                    head.className = 'region-head';
-                    var name = document.createElement('span');
-                    name.className = 'region-name';
-                    name.textContent = r.label || r.region;
-                    head.appendChild(name);
-                    var pill = document.createElement('span');
-                    var m = regionStatusMeta(r.status);
-                    pill.className = 'region-pill ' + m.cls;
-                    pill.textContent = m.label;
-                    head.appendChild(pill);
-                    card.appendChild(head);
+                grid.textContent = '';
+                order.forEach(function (key) {
+                    var g = groups[key];
+                    var section = document.createElement('div');
+                    section.className = 'region-country-group';
 
-                    var hostRow = document.createElement('div');
-                    hostRow.className = 'region-host';
-                    var code = document.createElement('code');
-                    code.textContent = hostport;
-                    hostRow.appendChild(code);
-                    var copy = document.createElement('button');
-                    copy.className = 'btn sm';
-                    copy.type = 'button';
-                    copy.textContent = 'Copy';
-                    copy.addEventListener('click', function () {
-                        var done = function () { copy.textContent = 'Copied!'; setTimeout(function () { copy.textContent = 'Copy'; }, 1500); };
-                        if (navigator.clipboard) { navigator.clipboard.writeText(hostport).then(done); }
-                        else { done(); }
-                    });
-                    hostRow.appendChild(copy);
-                    card.appendChild(hostRow);
+                    var heading = document.createElement('div');
+                    heading.className = 'region-country';
+                    var flag = flagEmoji(g.cc);
+                    if (flag) { var fs = document.createElement('span'); fs.className = 'region-flag'; fs.textContent = flag; heading.appendChild(fs); }
+                    var cname = document.createElement('span');
+                    cname.textContent = g.country;
+                    heading.appendChild(cname);
+                    section.appendChild(heading);
 
-                    if (r.miners > 0) {
-                        var meta = document.createElement('div');
-                        meta.className = 'region-meta';
-                        meta.textContent = r.miners + (r.miners === 1 ? ' miner' : ' miners') + ' active';
-                        card.appendChild(meta);
-                    }
-                    grid.appendChild(card);
+                    var cards = document.createElement('div');
+                    cards.className = 'region-grid';
+                    g.rows.sort(function (a, b) { return (a.label || a.region).localeCompare(b.label || b.region); });
+                    g.rows.forEach(function (r) { cards.appendChild(buildRegionCard(r, r.region === nearestKey)); });
+                    section.appendChild(cards);
+
+                    grid.appendChild(section);
                 });
                 if (note) note.style.display = '';
             } catch (e) { /* keep fallback callout */ }
@@ -585,6 +713,7 @@
             loadPayments();
             loadEffort();
             loadChart();
+            loadShareQuality();
             loadServiceStatus();
             loadRegions();   // re-poll so the per-region up/down pills stay current
         }
@@ -596,13 +725,22 @@
                 var r = await fetch('/api/public/branding');
                 var json = r.ok ? await r.json() : null;
                 var data = (json && json.data) ? json.data : {};
-                var email = data.pool && data.pool.contact_email;
+                var enc = data.pool && data.pool.contact_email_enc;
+                var email = '';
+                try { email = enc ? atob(enc) : ''; } catch (e) { email = ''; }
+                var forum = (data.pool && data.pool.support_forum_url) || '';
                 var social = (data.branding && data.branding.social) || {};
                 if (email) {
                     var li = document.getElementById('info-email');
                     if (li) li.style.display = '';
                 }
-                var anyChannel = email || ['discord', 'telegram', 'twitter', 'website'].some(function (k) { return social[k]; });
+                if (forum) {
+                    var fli = document.getElementById('info-forum');
+                    var fa = document.getElementById('info-forum-link');
+                    if (fa) fa.setAttribute('href', forum);
+                    if (fli) fli.style.display = '';
+                }
+                var anyChannel = email || forum || ['discord', 'telegram', 'twitter', 'website'].some(function (k) { return social[k]; });
                 if (anyChannel) {
                     var note = document.getElementById('info-no-contact');
                     if (note) note.style.display = 'none';

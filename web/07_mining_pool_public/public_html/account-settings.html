@@ -47,10 +47,39 @@
                     Per-rig breakdown. Reject % / stale % are shown for workers currently connected
                     to this server (live session counters).
                 </p>
+                <div id="acct-workers-chart-wrap" style="position:relative;height:200px;margin-bottom:18px;display:none">
+                    <canvas id="acct-workers-chart"></canvas>
+                </div>
                 <table class="data-table" aria-label="Workers">
                     <thead><tr><th>Worker</th><th class="num">Hashrate</th><th class="num">Shares</th><th class="num">Stale %</th><th class="num">Reject %</th><th>Last share</th><th>Status</th></tr></thead>
                     <tbody id="acct-workers"><tr><td colspan="7">—</td></tr></tbody>
                 </table>
+            </div>
+
+            <div class="settings-section" id="acct-quality-section" style="display:none">
+                <h3>Share Quality <span style="font-weight:normal;font-size:13px;color:var(--dark-dim)">(live — connected workers)</span></h3>
+                <p style="margin-bottom:12px;color:var(--dark-dim);">
+                    Valid vs. stale vs. rejected shares for rigs currently connected to this server.
+                    A healthy rig is <strong>&gt;98% valid</strong>. High <strong>stale %</strong> usually
+                    means network latency or too-aggressive overclock (you submitted a share for a block
+                    the pool already moved past); high <strong>reject %</strong> means invalid shares
+                    (bad config / failing hardware).
+                </p>
+                <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center;">
+                    <div style="position:relative;height:180px;width:180px;flex:0 0 auto;">
+                        <canvas id="acct-quality-chart"></canvas>
+                    </div>
+                    <ul class="detail-list" style="flex:1 1 240px;min-width:240px;margin:0;">
+                        <li><span class="k">Valid shares</span><span class="v" id="q-valid">—</span></li>
+                        <li><span class="k">Stale shares</span><span class="v" id="q-stale">—</span></li>
+                        <li><span class="k">Rejected shares</span><span class="v" id="q-reject">—</span></li>
+                    </ul>
+                </div>
+                <p id="acct-quality-empty" style="display:none;color:var(--dark-dim);margin-top:10px;">
+                    No live worker sessions on this server right now — share-quality counters are
+                    in-memory and reset when a worker disconnects. Your hashrate history above is
+                    persistent and unaffected.
+                </p>
             </div>
 
             <div class="settings-section">
@@ -343,6 +372,7 @@
             try {
                 const data = await getJson('/api/account/' + encodeURIComponent(addr) + '/workers?window=10');
                 const ws = (data && data.workers) || [];
+                renderWorkerCharts(ws);
                 if (!ws.length) { tbody.innerHTML = '<tr><td colspan="7">No worker activity in the last 10 minutes</td></tr>'; return; }
                 tbody.innerHTML = ws.map(function (w) {
                     const pct = function (v) { return v == null ? '—' : Number(v).toFixed(1) + '%'; };
@@ -358,6 +388,58 @@
                 }).join('');
             } catch (e) {
                 tbody.innerHTML = '<tr><td colspan="7">Worker data unavailable</td></tr>';
+            }
+        }
+
+        // Per-worker hashrate bar chart + aggregate share-quality doughnut. accepted/stale/
+        // rejected counts exist only for workers with a LIVE session on this box (null otherwise);
+        // we sum the ones that report them and show the doughnut, else a "no live sessions" note.
+        function renderWorkerCharts(ws) {
+            ws = Array.isArray(ws) ? ws : [];
+
+            // Hashrate per rig (bar). Hidden when there's nothing to show.
+            if (typeof PoolCharts !== 'undefined' && PoolCharts.renderBarChart) {
+                const wrap = $id('acct-workers-chart-wrap');
+                const withRate = ws.filter(function (w) { return (Number(w.hashrate_gps) || 0) > 0; });
+                if (withRate.length) {
+                    wrap.style.display = '';
+                    PoolCharts.renderBarChart('acct-workers-chart',
+                        withRate.map(function (w) { return w.worker_name || 'default'; }),
+                        withRate.map(function (w) { return Number(w.hashrate_gps) || 0; }),
+                        { label: 'Hashrate', valueFmt: fmtGps });
+                } else {
+                    wrap.style.display = 'none';
+                }
+            }
+
+            // Aggregate live share quality across rigs that have counters.
+            let acc = 0, stl = 0, rej = 0, haveLive = false;
+            ws.forEach(function (w) {
+                if (w.accepted != null || w.stale != null || w.rejected != null) {
+                    haveLive = true;
+                    acc += Number(w.accepted) || 0;
+                    stl += Number(w.stale) || 0;
+                    rej += Number(w.rejected) || 0;
+                }
+            });
+            const section = $id('acct-quality-section');
+            const empty = $id('acct-quality-empty');
+            section.style.display = '';
+            const total = acc + stl + rej;
+            if (!haveLive || total === 0) {
+                empty.style.display = '';
+                $id('q-valid').textContent = $id('q-stale').textContent = $id('q-reject').textContent = '—';
+                return;
+            }
+            empty.style.display = 'none';
+            const pct = function (v) { return (v / total * 100).toFixed(1) + '%'; };
+            $id('q-valid').textContent  = acc.toLocaleString('en-US') + ' (' + pct(acc) + ')';
+            $id('q-stale').textContent  = stl.toLocaleString('en-US') + ' (' + pct(stl) + ')';
+            $id('q-reject').textContent = rej.toLocaleString('en-US') + ' (' + pct(rej) + ')';
+            if (typeof PoolCharts !== 'undefined' && PoolCharts.renderDoughnutChart) {
+                PoolCharts.renderDoughnutChart('acct-quality-chart',
+                    ['Valid', 'Stale', 'Rejected'], [acc, stl, rej],
+                    { colors: ['#3fb950', '#d29922', '#f85149'] });
             }
         }
 

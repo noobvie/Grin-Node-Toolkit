@@ -82,7 +82,7 @@
           return;
         }
         grid.innerHTML = posts.map(function (p) {
-          var href = '/post.html?slug=' + encodeURIComponent(p.slug);
+          var href = '/blog/' + encodeURIComponent(p.slug);
           var cover = p.cover_image
             ? '<img class="cover" src="' + esc(p.cover_image) + '" alt="">'
             : '<div class="no-cover">📝</div>';

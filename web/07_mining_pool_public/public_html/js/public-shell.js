@@ -31,13 +31,16 @@
   // link, whose target index.html#info is already on the dashboard). Because
   // fortune-board.html is now always present here, branding.js injectRewardsLink
   // detects it and no longer adds the separate "🎁 Rewards" link.
+  // Each item carries an icon: on narrow screens the header collapses to icons-only
+  // (the .nav-label is hidden via CSS) so the mobile header stays tidy; desktop shows
+  // icon + label. The footer "Pool" column reuses the labels only (always text).
   var NAV = [
-    { href: 'index.html',            label: 'Dashboard' },
-    { href: 'miners-stats.html',     label: 'Pool Stats' },
-    { href: 'account-settings.html', label: 'My Stats' },
-    { href: 'blocks.html',           label: 'Blocks' },
-    { href: 'payment-history.html',  label: 'Payouts' },
-    { href: 'fortune-board.html',    label: 'Fortune Board' }
+    { href: 'index.html',            label: 'Dashboard',     icon: '🏠' },
+    { href: 'miners-stats.html',     label: 'Pool Stats',    icon: '📊' },
+    { href: 'account-settings.html', label: 'My Stats',      icon: '👤' },
+    { href: 'blocks.html',           label: 'Blocks',        icon: '🧱' },
+    { href: 'payment-history.html',  label: 'Payouts',       icon: '💸' },
+    { href: 'fortune-board.html',    label: 'Fortune Board', icon: '🎁' }
   ];
   // Blog is intentionally NOT in NAV (header) — it lives in the footer "Resources"
   // column only, to keep the header focused on critical mining/stats links.
@@ -59,7 +62,10 @@
 
   var navLinks = NAV.map(function (l) {
     var active = fileOf(l.href) === here ? ' active' : '';
-    return '<a href="' + l.href + '" class="nav-link' + active + '">' + esc(l.label) + '</a>';
+    return '<a href="' + l.href + '" class="nav-link' + active + '" title="' + esc(l.label) + '">' +
+      '<span class="nav-ico" aria-hidden="true">' + (l.icon || '') + '</span>' +
+      '<span class="nav-label">' + esc(l.label) + '</span>' +
+    '</a>';
   }).join('');
 
   // ── Header: byte-identical to the old per-page markup so existing CSS and
@@ -107,8 +113,12 @@
           '<a data-brand="social-twitter" href="#" target="_blank" rel="noopener" style="display:none">Twitter / X</a>' +
           '<a data-brand="social-discord" href="#" target="_blank" rel="noopener" style="display:none">Discord</a>' +
           '<a data-brand="social-telegram" href="#" target="_blank" rel="noopener" style="display:none">Telegram</a>' +
-          '<a data-brand="social-website" href="#" target="_blank" rel="noopener" style="display:none">Website</a>' +
         '</div>' +
+        // Donate lives in the brand column, highlighted with a heart, as the primary
+        // community call-to-action (moved out of the Legal column).
+        '<a class="footer-donate" href="donate.html">' +
+          '<span class="footer-donate-ico" aria-hidden="true">❤</span> Donate' +
+        '</a>' +
       '</div>' +
       // Pool navigation
       '<div class="footer-col">' +
@@ -125,10 +135,10 @@
       // Legal + contact (page-links injected by branding.js from the CMS)
       '<div class="footer-col footer-legal">' +
         '<h4>Legal</h4>' +
+        // page-links (About / Terms / Privacy / FAQ …) are appended by branding.js; the CSS
+        // makes this container a flex column so each lands on its own line. Forum/Donate moved out.
         '<div data-brand="page-links"></div>' +
         '<a class="footer-contact" data-brand="contact-link" href="#" style="display:none">Contact</a>' +
-        '<a class="footer-forum" data-brand="forum-link" href="#" target="_blank" rel="noopener nofollow" style="display:none">Community (Grin forum)</a>' +
-        '<a href="donate.html">Donate</a>' +
       '</div>' +
     '</div>' +
     // Live mini-stats bar (filled by this script's fetches; rows hide until populated).

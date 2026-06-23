@@ -85,7 +85,9 @@ if [[ "$POOL_NET" == "testnet" ]]; then
     POOL_WEB_DIR="/var/www/grin-pool-testnet"
     POOL_PORT=8090
     POOL_SERVICE="grin-pool-manager-testnet"
-    POOL_NGINX_CONF="/etc/nginx/sites-available/grin-pool-testnet"
+    POOL_NGINX_CONF="/etc/nginx/sites-available/grin-public-pool-testnet"
+    # Legacy vhost basename (pre-2026-06 rename) — cleaned up on Setup nginx / Cleanup.
+    POOL_NGINX_CONF_LEGACY="/etc/nginx/sites-available/grin-pool-testnet"
     POOL_LOG="/opt/grin/logs/grin-pool-testnet.log"
 else
     POOL_CONF="/opt/grin/conf/grin_pubpool.json"
@@ -94,7 +96,10 @@ else
     POOL_WEB_DIR="/var/www/grin-pool"
     POOL_PORT=8080
     POOL_SERVICE="grin-pool-manager"
-    POOL_NGINX_CONF="/etc/nginx/sites-available/grin-pool"
+    POOL_NGINX_CONF="/etc/nginx/sites-available/grin-public-pool-mainnet"
+    # Legacy vhost basename (pre-2026-06 rename, was the unsuffixed "grin-pool") —
+    # cleaned up on Setup nginx / Cleanup so a re-run migrates the old install.
+    POOL_NGINX_CONF_LEGACY="/etc/nginx/sites-available/grin-pool"
     POOL_LOG="/opt/grin/logs/grin-pool.log"
 fi
 
@@ -223,6 +228,13 @@ pool_ensure_defaults() {
         # auto-joins the connect grid the moment a gateway for another zone forwards
         # shares in — no rebuild. Rename it in admin → Regions.
         ["region"]="main"
+        # Human-facing location of this pool server's own region, shown on the public
+        # connect card (label + country flag). Most operators sit behind Cloudflare so
+        # geo-IP can't infer it — it's captured in 2) Configure and editable in admin →
+        # Regions. Empty country/country_code → the card just shows the label, no flag.
+        ["region_label"]=""
+        ["region_country"]=""
+        ["region_country_code"]=""
         ["pool_fee_percent"]="1.0"
         ["min_withdrawal"]="5.0"
         ["withdrawal_fee"]="0.0"
@@ -531,6 +543,35 @@ pool_configure() {
         warn "Invalid domain name '$val' — try again (e.g. pool.example.com), or 0 to cancel."
     done
 
+    # ── This server's region location (public connect card) ──────────────────
+    # Optional but recommended: most pools sit behind Cloudflare, so the public site
+    # can't geo-locate the box — the operator tells us where it is. Shown as the
+    # region's label + country flag on the homepage connect card. All editable later
+    # in admin → Regions. Enter keeps the current value; blank country = no flag.
+    echo
+    echo -e "  ${DIM}(Where is THIS pool server? Shown on the public connect card. Optional — Enter to skip.)${RESET}"
+    local cur_rlabel; cur_rlabel=$(pool_read_conf "region_label" "")
+    echo -ne "Region display name (e.g. Hanoi, Frankfurt) [${cur_rlabel}]: "
+    read -r val
+    [[ -n "$val" ]] && pool_write_conf_key "region_label" "$val"
+    local cur_rcountry; cur_rcountry=$(pool_read_conf "region_country" "")
+    echo -ne "Country name (e.g. Vietnam, Germany) [${cur_rcountry}]: "
+    read -r val
+    [[ -n "$val" ]] && pool_write_conf_key "region_country" "$val"
+    local cur_rcc; cur_rcc=$(pool_read_conf "region_country_code" "")
+    echo -e "  ${DIM}(2-letter ISO country code for the flag, e.g. VN, DE, US. Blank = no flag.)${RESET}"
+    echo -ne "Country code [${cur_rcc}]: "
+    read -r val
+    if [[ -n "$val" ]]; then
+        # Normalise to uppercase A–Z; reject anything that isn't a 2-letter code.
+        val=$(printf '%s' "$val" | tr '[:lower:]' '[:upper:]')
+        if [[ "$val" =~ ^[A-Z]{2}$ ]]; then
+            pool_write_conf_key "region_country_code" "$val"
+        else
+            warn "Ignoring '$val' — country code must be exactly two letters (e.g. VN)."
+        fi
+    fi
+
     info "All other settings (name, fee, min withdrawal, payouts) default now and"
     info "  are editable in the web admin panel after you create the admin account."
 
@@ -701,6 +742,17 @@ pool_setup_nginx() {
 
     mkdir -p "$(dirname "$POOL_NGINX_CONF")"
 
+    # Migrate a pre-rename install: the vhost was renamed to grin-public-pool-<net>
+    # (was the unsuffixed "grin-pool" on mainnet / "grin-pool-testnet" on testnet).
+    # Drop the legacy conf + its sites-enabled symlink so this run regenerates under
+    # the new name instead of leaving two vhosts bound to the same server_name.
+    if [[ -n "${POOL_NGINX_CONF_LEGACY:-}" && "$POOL_NGINX_CONF_LEGACY" != "$POOL_NGINX_CONF" ]]; then
+        if [[ -f "$POOL_NGINX_CONF_LEGACY" || -L "/etc/nginx/sites-enabled/$(basename "$POOL_NGINX_CONF_LEGACY")" ]]; then
+            info "Migrating legacy vhost $(basename "$POOL_NGINX_CONF_LEGACY") → $(basename "$POOL_NGINX_CONF")"
+            rm -f "/etc/nginx/sites-enabled/$(basename "$POOL_NGINX_CONF_LEGACY")" "$POOL_NGINX_CONF_LEGACY"
+        fi
+    fi
+
     # Uploaded white-label assets (logos/icons/OG image) are written here by the app
     # (assets_dir in pool.json) and served by nginx at /custom/. Ensure the directory
     # exists and that nginx can traverse into it (o+rX on the dir and its parents).
@@ -805,6 +857,20 @@ pool_setup_nginx() {
 
     local sites_enabled="/etc/nginx/sites-enabled/$(basename "$POOL_NGINX_CONF")"
     local cert_dir="/etc/letsencrypt/live/$subdomain"
+    # The canonical host is the bare domain; www.<domain> 301-redirects to it. The cert
+    # must carry www.<domain> as a SAN or the TLS handshake on www fails BEFORE the
+    # redirect can run, so every certbot call below requests both names.
+    local www_alias="www.$subdomain"
+
+    # Does an existing cert already cover the www alias? (a pre-www install won't —
+    # we then certbot --expand below so the www→apex HTTPS block has a valid cert).
+    local cert_has_www="no"
+    if [[ -f "$cert_dir/fullchain.pem" ]] && command -v openssl &>/dev/null; then
+        if openssl x509 -in "$cert_dir/fullchain.pem" -noout -text 2>/dev/null \
+             | grep -qi "DNS:$www_alias"; then
+            cert_has_www="yes"
+        fi
+    fi
 
     # ── Certbot bootstrap (same pattern as 052_lib_nginx) ─────────────────────
     # The HTTPS vhost references the Let's Encrypt cert files, so writing it
@@ -816,7 +882,7 @@ pool_setup_nginx() {
 # GRINIUM Grin Pool — HTTP bootstrap (pre-certbot) — generated by Script 07
 server {
     listen 80;
-    server_name $subdomain;
+    server_name $subdomain $www_alias;
     root $POOL_WEB_DIR;
     index index.html;
 
@@ -846,13 +912,27 @@ EOF
         # later with `certbot update_account -m <email>` if you want notices.
         local le_email="admin@$subdomain"
         info "Using Let's Encrypt account email: $le_email"
-        if ! certbot --nginx -d "$subdomain" --non-interactive --agree-tos \
+        if ! certbot --nginx -d "$subdomain" -d "$www_alias" --non-interactive --agree-tos \
                 -m "$le_email" 2>&1 | tail -5; then
-            warn "certbot failed — check that DNS for $subdomain points to this server and port 80 is open."
+            warn "certbot failed — check that DNS for $subdomain AND $www_alias point to this server and port 80 is open."
             warn "Pool stays HTTP-only; fix the cause and re-run 4) Setup nginx."
             return 0
         fi
-        success "SSL certificate issued."
+        cert_has_www="yes"
+        success "SSL certificate issued (covers $subdomain + $www_alias)."
+    elif [[ "$cert_has_www" == "no" ]]; then
+        # Cert exists but predates the www alias — expand it so the www→apex redirect
+        # presents a valid cert. Best-effort: if DNS for www isn't set yet this fails,
+        # and we fall back to an apex-only vhost (no www block) further down.
+        info "Existing cert for $subdomain doesn't cover $www_alias — expanding..."
+        if certbot --nginx --expand -d "$subdomain" -d "$www_alias" \
+                --non-interactive --agree-tos -m "admin@$subdomain" 2>&1 | tail -5; then
+            cert_has_www="yes"
+            success "Certificate expanded to cover $www_alias."
+        else
+            warn "Could not expand cert to $www_alias (is its DNS pointed here?)."
+            warn "  Skipping the www→apex HTTPS redirect for now — re-run 4) Setup nginx once www DNS resolves."
+        fi
     fi
 
     # certbot --nginx creates options-ssl-nginx.conf; include it only when present
@@ -861,18 +941,35 @@ EOF
     [[ -f /etc/letsencrypt/options-ssl-nginx.conf ]] \
         && ssl_extra="include /etc/letsencrypt/options-ssl-nginx.conf;"
 
+    # www → apex redirect on HTTPS. Only emitted when the cert covers www.<domain>
+    # (otherwise serving www on :443 presents a name-mismatched cert). The :80 block
+    # below normalises http://www regardless.
+    local www_https_block=""
+    if [[ "$cert_has_www" == "yes" ]]; then
+        www_https_block="server {
+    listen 443 ssl http2;
+    server_name $www_alias;
+    ssl_certificate     /etc/letsencrypt/live/$subdomain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$subdomain/privkey.pem;
+    $ssl_extra
+    return 301 https://$subdomain\$request_uri;
+}
+"
+    fi
+
     info "Writing nginx vhost (${POOL_NET_LABEL}): $POOL_NGINX_CONF"
     cat > "$POOL_NGINX_CONF" << EOF
 # GRINIUM Grin Pool — ${POOL_NET_LABEL} — generated by Script 07 (pool_setup_nginx)
 # Rate-limit zones live in /etc/nginx/conf.d/script07-${POOL_SERVICE}.conf
 
+# HTTP → HTTPS, and www → apex (canonical host is the bare domain)
 server {
     listen 80;
-    server_name $subdomain;
-    return 301 https://\$host\$request_uri;
+    server_name $subdomain $www_alias;
+    return 301 https://$subdomain\$request_uri;
 }
 
-server {
+${www_https_block}server {
     listen 443 ssl http2;
     server_name $subdomain;
 $cf_realip_include
@@ -2149,13 +2246,17 @@ pool_cleanup() {
     read -r a || true
     if [[ "${a,,}" != "n" ]]; then
         local conf_name; conf_name=$(basename "$POOL_NGINX_CONF")
+        # Also drop the pre-rename legacy vhost (grin-pool / grin-pool-testnet) if present.
+        local legacy_name=""; [[ -n "${POOL_NGINX_CONF_LEGACY:-}" ]] && legacy_name=$(basename "$POOL_NGINX_CONF_LEGACY")
         if command -v nginx &>/dev/null && [[ -e "/etc/nginx/sites-enabled/$conf_name" || -f "$POOL_NGINX_CONF" ]]; then
             nginx_disable_site "$conf_name" || true
-            rm -f "$POOL_NGINX_CONF" "$zones_conf"
+            [[ -n "$legacy_name" ]] && nginx_disable_site "$legacy_name" || true
+            rm -f "$POOL_NGINX_CONF" "$POOL_NGINX_CONF_LEGACY" "$zones_conf"
             nginx_test_reload "after removing $conf_name vhost" || true
         else
             # nginx absent (or only a dangling symlink left) — remove files directly
             rm -f "/etc/nginx/sites-enabled/$conf_name" "$POOL_NGINX_CONF" "$zones_conf"
+            [[ -n "$legacy_name" ]] && rm -f "/etc/nginx/sites-enabled/$legacy_name" "$POOL_NGINX_CONF_LEGACY" || true
         fi
         rm -rf "${POOL_WEB_DIR:?}"
         success "Web files + vhost + rate-limit zones removed."

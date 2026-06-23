@@ -147,9 +147,13 @@ class WalletAPI {
       throw new Error('init_secure_api returned unexpected value');
     }
 
-    // 3. Derive AES-256 key: sha256 of the ECDH shared secret
-    const sharedSecret = ecdh.computeSecret(Buffer.from(serverPubkey, 'hex'));
-    this.aesKey = crypto.createHash('sha256').update(sharedSecret).digest();
+    // 3. AES-256 key = the ECDH shared secret AS-IS. grin-wallet uses the shared point's
+    //    32-byte X-coordinate directly as the key (NO extra hash); Node's computeSecret()
+    //    already returns exactly that X-coordinate. An earlier sha256() over it corrupted
+    //    the key, so the wallet rejected every encrypted call with "EncryptedBody:
+    //    decryption failed" (balance + payouts never worked). Matches the known-good
+    //    051_wallet/server.js ownerApiSession() implementation.
+    this.aesKey = ecdh.computeSecret(Buffer.from(serverPubkey, 'hex'));
 
     // 4. open_wallet — first encrypted call; unlocks the wallet for this session
     const password = this._readPassword();
@@ -171,8 +175,12 @@ class WalletAPI {
     try {
       return await this._encryptedCall(method, params);
     } catch (err) {
-      // Session may have expired (wallet restarted) — invalidate and retry once
-      if (err.message.includes('unauthorized') || err.message.includes('session')) {
+      // Session may have expired (wallet restarted) — invalidate and retry once. Match
+      // case-insensitively: node-fetch surfaces a 401 as "HTTP 401: Unauthorized" (capital
+      // U), and a stale ECDH session surfaces as a "decryption failed" body — both mean the
+      // session must be re-established.
+      const m = String(err.message || '').toLowerCase();
+      if (m.includes('unauthorized') || m.includes('session') || m.includes('decryption failed')) {
         this.aesKey      = null;
         this.sessionOpen = false;
         await this.initSession();

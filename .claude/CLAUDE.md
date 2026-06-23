@@ -187,6 +187,20 @@ The toolkit no longer patches `api_secret_path` in grin-wallet.toml; grin-wallet
 Owner API v3 session flow: `init_secure_api` → ECDH key exchange → `open_wallet` → AES-256-GCM encrypted calls.
 Foreign API v2: Basic Auth + secret file, no ECDH.
 
+**ECDH key-derivation gotcha (the AES key is the shared secret AS-IS — do NOT hash it):**
+grin-wallet uses the ECDH shared point's 32-byte **X-coordinate directly** as the AES-256-GCM
+key. Node's `crypto.ECDH.computeSecret()` already returns exactly that X-coordinate, so the key
+is `ecdh.computeSecret(serverPubkeyBuf)` with **no extra `sha256()`**. Wrapping it in
+`crypto.createHash('sha256')` corrupts the key → the wallet rejects the very first encrypted
+call (`open_wallet`) with `RPC error: Decryption error: EncryptedBody: decryption failed`, which
+looks like a transport/auth problem but is purely the key. Symptom: the pool's Wallet status pill
+shows "offline" and ALL Owner-API ops (balance, payouts) fail even though 13420/3420 is listening
+and Basic auth + the handshake succeed. Canonical correct impl: `web/051_wallet/server.js`
+`ownerApiSession()` (`sharedKey = ecdh.computeSecret(...)` used directly in
+`createCipheriv('aes-256-gcm', sharedKey, nonce)`). Fixed in `lib/wallet.js initSession()`
+2026-06. NB: a Foreign-API listener on 13415/3415 being up proves NOTHING about Owner-API health
+— the balance/payout path is Owner API (13420/3420) + this ECDH, a different port and protocol.
+
 ### Wallet ↔ Node — two opposite directions (don't conflate)
 
 There are **two separate node↔wallet links**, on different ports, doing different jobs:
@@ -760,6 +774,8 @@ Key design decisions (locked in — do not change without user confirmation):
   Human-readable note is stored in `admin_audit_log`, not `balance_log`.
 - **Config:** Stored in `/opt/grin/conf/grin_pubpool.json`; all settings via web admin panel — no bash config files
 - **Paths (renamed 2026-06 to the product-prefixed "pubpool" family):** app+DB `/opt/grin/pubpool/mainnet/`, wallet `/opt/grin/pubpoolwallet/mainnet/`, wallet password `/opt/grin/pubpool/mainnet/.wallet_pass` (600, deliberately separate from the seed dir). Legacy `/opt/grin/pool` + `grin_pool.json` are recognised by Z) Cleanup and the hub detector but never written.
+- **nginx vhost naming (renamed 2026-06):** the vhost basename is now `grin-public-pool-<net>` — `grin-public-pool-mainnet` / `grin-public-pool-testnet` in `/etc/nginx/sites-available/` (`POOL_NGINX_CONF`). This is the ONLY name carrying the `-mainnet` suffix; `POOL_SERVICE` (`grin-pool-manager`), web root (`/var/www/grin-pool`), and log stay on the toolkit's "mainnet = no suffix" convention. The pre-rename names (`grin-pool` / `grin-pool-testnet`) are kept in `POOL_NGINX_CONF_LEGACY` and auto-migrated: `pool_setup_nginx` removes the legacy conf + sites-enabled symlink on re-run, and Z) Cleanup also drops it. Solo uses `grin-solo-mining-stat` (no collision).
+- **www → apex redirect (added 2026-06):** `pool_setup_nginx` canonicalises to the bare domain. `:80` block matches `<domain> + www.<domain>` → `301 https://<domain>`; a dedicated `:443 server_name www.<domain>` block 301s www→apex but is emitted ONLY when the cert covers www (else a name-mismatched cert). certbot is always called with `-d <domain> -d www.<domain>`; an existing apex-only cert is `certbot --expand`ed (best-effort — needs www DNS pointed at the box, else the www HTTPS block is skipped with a warning and a re-run note). www coverage detected via `openssl x509 … grep DNS:www.<domain>`.
 - **Script 07 role:** Infrastructure only (deploy files, systemd services, backups); business logic lives in pool web code
 - **Networks:** mainnet (default) OR testnet (added 2026-06). Testnet is a **fully independent install** triggered by the `testnet` launch arg (any position, like solo's `lan`): `bash 07_grin_mining_public_pool.sh testnet`. It gets its own config (`grin_pubpool_testnet.json`), service (`grin-pool-manager-testnet`), dirs (`/opt/grin/pubpool/testnet`, `/opt/grin/pubpoolwallet/testnet`), web root (`/var/www/grin-pool-testnet`), nginx vhost, Central API port **8090** (vs 8080), public stratum **13333**, and uses the testnet node (API 13413 / built-in stratum 13334) + a `--testnet` `tgrin1…` wallet (Foreign 13415 / Owner 13420). So it runs standalone OR alongside a mainnet pool on the same box. The whole JS app was already network-aware (`config.network`); the 2026-06 work parameterized the bash installer (`POOL_NET`) + `lib/07_lib_pool_wallet.sh` (`_PW_NET`, `PW_NET_FLAG`) + a few frontend spots (public `.testnet-banner`, `t?grin1` address validation, `testnet.grinscan.org` deep-links). **Prereq:** a testnet grin node (Script 01 `testnet-prune`) with built-in stratum on 13334. Testnet's fast blocks are the way to exercise the full block→maturity(100)→reward→payout pipeline. (Solo testnet mining via `07_grin_mining_solo.sh` still exists too.)
 - **Default pool fee 1.0%** (`pool_fee_percent: 1.0`, validated 0–50); min withdrawal: 5.0 GRIN

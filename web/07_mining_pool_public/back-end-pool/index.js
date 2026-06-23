@@ -213,7 +213,11 @@ async function initializePool() {
     // singlebox role runs a local stratum; a bare hub relies purely on regional gateways.
     if (config.role === 'singlebox') {
       const localStratum = config.subdomain ? `${config.subdomain}:${config.stratum_port}` : '';
-      ensureLocalRegion(config.region, localStratum);
+      ensureLocalRegion(config.region, localStratum, {
+        label: config.region_label,
+        country: config.region_country,
+        country_code: config.region_country_code
+      });
     }
 
     // Initialize pool settings manager and asset manager
@@ -2117,7 +2121,14 @@ function setupRoutes() {
       // share activity: shares in the window → "online"; none → "unknown" (a freshly-declared
       // or simply-quiet region — never a false "down"). The richer wg-handshake signal is
       // admin-only (/api/admin/health/gateways), not exposed on the public pill.
-      const regionStatus = (region, hasShares) => (hasShares ? 'online' : 'unknown');
+      //
+      // EXCEPTION — the LOCAL region (the singlebox/central box itself): its stratum is this
+      // very process's in-bound listener, so if this API is answering, the local stratum is
+      // bound and accepting miners. Report it "online" regardless of recent shares — otherwise
+      // a quiet-but-healthy main host wrongly shows "○ Unknown" even with :3333/:13333 listening.
+      const localRegion = (config && config.role === 'singlebox') ? config.region : null;
+      const regionStatus = (region, hasShares) =>
+        (hasShares || region === localRegion) ? 'online' : 'unknown';
 
       // Union of regions seen in shares and regions declared in pool_locations.
       const regions = new Set([...byRegion.keys(), ...locByRegion.keys()]);
@@ -2136,7 +2147,7 @@ function setupRoutes() {
           stratum_url: loc.stratum_url || null,
           is_active: loc.is_active === undefined ? null : !!loc.is_active,
           status: regionStatus(region, a.shares > 0),
-          online: a.shares > 0,
+          online: a.shares > 0 || region === localRegion,
           hashrate_gps: parseFloat(gps.toFixed(6)),
           miners: a.miners,
           shares_window: a.shares

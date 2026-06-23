@@ -153,20 +153,6 @@
         <!-- In-content ad slot (filled by /js/ads.js; hidden if empty) -->
         <div class="ad-slot ad-slot--in-content" data-ad-slot="in-content" style="display:none;"></div>
 
-        <div class="section-title" id="connect">Point your miner at your nearest region</div>
-        <div class="region-zones" id="region-grid">
-            <div class="callout" id="region-fallback">
-                <span>⛏ Point your miner at <code data-brand="stratum_url">stratum host not configured</code></span>
-            </div>
-        </div>
-        <div class="connect-note" id="connect-note" style="display:none">
-            <div class="kv">
-                <span class="k">Worker</span><span><code>&lt;your_grin_address&gt;.rig1</code> <span class="dim">— your Grin address is your login; <code>.rig1</code> names this machine (any label)</span></span>
-                <span class="k">Password</span><span><code>x</code> <span class="dim">— anything; it's ignored. No account or registration needed.</span></span>
-            </div>
-            <div class="region-meta">Algorithm <strong>Cuckatoo32</strong> · same port for every region · paste a region's <code>stratum+tcp://host:port</code> into your miner's pool/stratum field (ASICs like the iPollo G1 may want just the <code>host:port</code> part).</div>
-        </div>
-
         <div class="grid cols-4" style="margin-top:14px">
             <div class="stat-card">
                 <div class="stat-label">Round Effort</div>
@@ -222,9 +208,28 @@
             </div>
         </div>
 
+        <div class="section-title" id="connect">Point your miner at your nearest region</div>
+        <div class="card connect-card" id="region-card">
+            <!-- Single-server pools show this simple callout; the tabbed multi-region
+                 UI below appears once a second zone reports in. -->
+            <div class="callout" id="region-fallback">
+                <span>⛏ Point your miner at <code data-brand="stratum_url">stratum host not configured</code></span>
+            </div>
+            <!-- One tab per region (nearest first), then a panel for the selected region. -->
+            <div class="region-tabs" id="region-tabs" role="tablist" aria-label="Mining regions" style="display:none"></div>
+            <div class="region-panel" id="region-panel" style="display:none"></div>
+            <div class="connect-note" id="connect-note" style="display:none">
+                <div class="kv">
+                    <span class="k">Worker</span><span><code>&lt;your_grin_address&gt;.rig1</code> <span class="dim">— your Grin address is your login; <code>.rig1</code> names this machine (any label)</span></span>
+                    <span class="k">Password</span><span><code>x</code> <span class="dim">— anything; it's ignored. No account or registration needed.</span></span>
+                </div>
+                <div class="region-meta">Algorithm <strong>Cuckatoo32</strong> · same port for every region · paste the selected region's <code>stratum+tcp://host:port</code> into your miner's pool/stratum field (ASICs like the iPollo G1 may want just the <code>host:port</code> part).</div>
+            </div>
+        </div>
+
         <div class="section-title" id="info">Pool info, rules &amp; support</div>
         <div class="grid cols-2">
-            <div class="card">
+            <div class="card info-card">
                 <div class="card-head"><h3>Rules &amp; payouts</h3></div>
                 <ul class="info-list">
                     <li><strong>PPLNS</strong> (Pay Per Last N Shares) — rewards follow recent contributed work</li>
@@ -235,7 +240,7 @@
                     <li>Orphaned blocks are detected automatically and their rewards reversed fairly</li>
                 </ul>
             </div>
-            <div class="card">
+            <div class="card info-card">
                 <div class="card-head"><h3>Mining software &amp; support</h3></div>
                 <p class="dim" style="margin:0 0 10px">Any Cuckatoo32 miner works — GPU (lolMiner, GMiner, SRBMiner-MULTI) or ASIC (iPollo G1 / G1-Mini). Point it at your nearest region's host:port above, using <code>grin_address.worker_name</code> as the username (password ignored).</p>
                 <ul class="info-list" id="info-contact">
@@ -312,11 +317,15 @@
             return addr.length > 16 ? addr.slice(0, 9) + '…' + addr.slice(-4) : addr;
         }
 
-        function setPoolStatus(ok) {
+        // The top-right badge is a COMPOSITE health summary (pool + node + wallet), driven
+        // by /api/pool/status in loadServiceStatus() — green only when all three are healthy.
+        // (It used to just mean "any public API answered", which was redundant with the
+        // Pool-service pill in the status strip.)
+        function setPoolBadge(state, label) {
             var el = document.getElementById('pool-status');
             if (!el) return;
-            el.className = 'badge ' + (ok ? 'ok' : 'bad');
-            el.textContent = ok ? 'Pool online' : 'Pool unreachable';
+            el.className = 'badge ' + state; // ok | warn | bad
+            el.textContent = label;
         }
 
         async function loadStats() {
@@ -354,8 +363,9 @@
                     setText('stat-network', info.network || '');
                 }
             } catch (e) { /* tile keeps placeholder */ }
-
-            setPoolStatus(anyOk);
+            // The composite header badge is owned by loadServiceStatus() (pool+node+wallet);
+            // loadStats no longer sets it. `anyOk` is retained only as a local liveness hint.
+            void anyOk;
         }
 
         function blockBadge(status) {
@@ -507,30 +517,50 @@
             try {
                 var s = await Auth.fetch('/api/pool/status');
                 if (!s) throw new Error('no status');
-                setPill('svc-pool', s.pool && s.pool.ok ? 'ok' : 'bad', 'Pool service');
-                if (s.node && s.node.reachable) {
-                    setPill('svc-node', s.node.synced ? 'ok' : 'warn',
-                        'Node · ' + (s.node.peers || 0) + ' peers' + (s.node.synced ? '' : ' · syncing'));
+                var poolOk = !!(s.pool && s.pool.ok);
+                var nodeOk = !!(s.node && s.node.reachable);
+                var nodeSynced = nodeOk && s.node.synced === true;
+                var walletOk = !!(s.wallet && s.wallet.reachable);
+
+                setPill('svc-pool', poolOk ? 'ok' : 'bad', 'Pool service');
+                if (nodeOk) {
+                    setPill('svc-node', nodeSynced ? 'ok' : 'warn',
+                        'Node · ' + (s.node.peers || 0) + ' peers' + (nodeSynced ? '' : ' · syncing'));
                 } else {
                     setPill('svc-node', 'bad', 'Node offline');
                 }
-                setPill('svc-wallet', s.wallet && s.wallet.reachable ? 'ok' : 'bad',
-                    s.wallet && s.wallet.reachable ? 'Wallet online' : 'Wallet offline');
+                setPill('svc-wallet', walletOk ? 'ok' : 'bad', walletOk ? 'Wallet online' : 'Wallet offline');
+
+                // Composite header badge: green only when pool + node (synced) + wallet are all OK.
+                if (!poolOk) {
+                    setPoolBadge('bad', 'Pool unreachable');
+                } else if (nodeOk && nodeSynced && walletOk) {
+                    setPoolBadge('ok', 'All systems operational');
+                } else {
+                    var issues = [];
+                    if (!nodeOk) issues.push('node offline');
+                    else if (!nodeSynced) issues.push('node syncing');
+                    if (!walletOk) issues.push('wallet offline');
+                    setPoolBadge('warn', 'Degraded · ' + issues.join(', '));
+                }
             } catch (e) {
                 setPill('svc-pool', 'bad', 'Pool service');
                 setPill('svc-node', 'bad', 'Node offline');
                 setPill('svc-wallet', 'bad', 'Wallet offline');
+                setPoolBadge('bad', 'Pool unreachable');
             }
         }
 
-        // ── Regional stratum hosts + live up/down pill ───────────────────────
+        // ── Regional stratum hosts — single card, one tab per region ─────────
         // Operator-declared regions from /api/pool/stats/regions (per-region `status`,
-        // host, country). Cards are grouped under country headings; each shows the
-        // region's full stratum+tcp://host:port URI + a live availability pill. The
-        // visitor's nearest region is detected from the browser timezone (no network,
-        // privacy-friendly) and floated to the top with a "Nearest" badge. The shared
-        // worker/password note below is identical for every region. All operator-supplied
-        // values rendered via textContent. Falls back to the single callout.
+        // host, country). Rendered as ONE card with a tab strip (nearest region first,
+        // flag + live status dot per tab); selecting a tab shows that region's full
+        // stratum+tcp://host:port URI + availability pill + miner count. The visitor's
+        // nearest region is detected from the browser timezone (no network call,
+        // privacy-friendly) and floated to the front with a 📍 pin, selected by default.
+        // The shared worker/password note below is identical for every region. All
+        // operator-supplied values rendered via textContent. Falls back to a single
+        // callout when there is only one region.
         var BASE_PORT = '';   // pool default port — used when a region's stratum_url omits one
 
         function regionStatusMeta(s) {
@@ -584,30 +614,75 @@
             return pref[area] ? has(pref[area]) : null;
         }
 
-        function buildRegionCard(r, isNearest) {
+        // A region's flag: the legacy South Vietnam (Heritage & Freedom) SVG for VN —
+        // there is no Unicode emoji for it — and the standard regional-indicator emoji
+        // for every other country. Returns an element or null when no flag is known.
+        function flagNode(cc) {
+            cc = String(cc || '').toUpperCase();
+            if (cc === 'VN') {
+                var img = document.createElement('img');
+                img.className = 'region-flag-img';
+                img.src = '/images/flags/vn-legacy.svg';
+                img.alt = 'Vietnam';
+                return img;
+            }
+            var em = flagEmoji(cc);
+            if (!em) return null;
+            var s = document.createElement('span');
+            s.className = 'region-flag';
+            s.textContent = em;
+            return s;
+        }
+
+        // One tab per region: flag + name + a live status dot (+ a pin on the nearest).
+        function buildTab(r, isActive, isNearest) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'region-tab' + (isActive ? ' active' : '') + (isNearest ? ' nearest' : '');
+            btn.setAttribute('role', 'tab');
+            btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            btn.dataset.region = r.region;
+            var f = flagNode(r.country_code);
+            if (f) btn.appendChild(f);
+            var nm = document.createElement('span');
+            nm.className = 'region-tab-name';
+            nm.textContent = r.label || r.region;
+            btn.appendChild(nm);
+            if (isNearest) {
+                var pin = document.createElement('span');
+                pin.className = 'region-tab-pin';
+                pin.title = 'Nearest to you';
+                pin.textContent = '📍';
+                btn.appendChild(pin);
+            }
+            var dot = document.createElement('span');
+            dot.className = 'region-tab-dot ' + regionStatusMeta(r.status).cls;
+            btn.appendChild(dot);
+            return btn;
+        }
+
+        // The panel for the selected region: status pill, copyable stratum URI, miner count.
+        function buildPanel(r) {
             var uri = regionStratumUri(r);
-            var card = document.createElement('div');
-            card.className = 'region-card' + (isNearest ? ' region-card--nearest' : '');
+            var panel = document.createElement('div');
+            panel.className = 'region-panel-inner';
 
             var head = document.createElement('div');
-            head.className = 'region-head';
+            head.className = 'region-panel-head';
             var name = document.createElement('span');
-            name.className = 'region-name';
-            name.textContent = r.label || r.region;
+            name.className = 'region-panel-name';
+            var f = flagNode(r.country_code);
+            if (f) name.appendChild(f);
+            var t = document.createElement('span');
+            t.textContent = (r.label || r.region) + (r.country ? ' · ' + r.country : '');
+            name.appendChild(t);
             head.appendChild(name);
             var pill = document.createElement('span');
             var m = regionStatusMeta(r.status);
             pill.className = 'region-pill ' + m.cls;
             pill.textContent = m.label;
             head.appendChild(pill);
-            card.appendChild(head);
-
-            if (isNearest) {
-                var badge = document.createElement('div');
-                badge.className = 'region-nearest';
-                badge.textContent = '📍 Nearest to you';
-                card.appendChild(badge);
-            }
+            panel.appendChild(head);
 
             var hostRow = document.createElement('div');
             hostRow.className = 'region-host';
@@ -624,20 +699,44 @@
                 else { done(); }
             });
             hostRow.appendChild(copy);
-            card.appendChild(hostRow);
+            panel.appendChild(hostRow);
 
-            if (r.miners > 0) {
-                var meta = document.createElement('div');
-                meta.className = 'region-meta';
-                meta.textContent = r.miners + (r.miners === 1 ? ' miner' : ' miners') + ' active';
-                card.appendChild(meta);
+            var meta = document.createElement('div');
+            meta.className = 'region-meta';
+            meta.textContent = r.miners > 0
+                ? r.miners + (r.miners === 1 ? ' miner' : ' miners') + ' active'
+                : 'No miners connected right now';
+            panel.appendChild(meta);
+            return panel;
+        }
+
+        function renderRegionPanel(regions, key) {
+            var panelEl = document.getElementById('region-panel');
+            if (!panelEl) return;
+            var r = regions.filter(function (x) { return x.region === key; })[0];
+            if (!r) return;
+            panelEl.textContent = '';
+            panelEl.appendChild(buildPanel(r));
+        }
+
+        function selectRegion(regions, key) {
+            var tabsEl = document.getElementById('region-tabs');
+            if (tabsEl) {
+                tabsEl.querySelectorAll('.region-tab').forEach(function (t) {
+                    var on = t.dataset.region === key;
+                    t.classList.toggle('active', on);
+                    t.setAttribute('aria-selected', on ? 'true' : 'false');
+                });
             }
-            return card;
+            renderRegionPanel(regions, key);
         }
 
         async function loadRegions() {
-            var grid = document.getElementById('region-grid');
-            if (!grid) return;
+            var tabsEl = document.getElementById('region-tabs');
+            var panelEl = document.getElementById('region-panel');
+            var fallback = document.getElementById('region-fallback');
+            var note = document.getElementById('connect-note');
+            if (!tabsEl || !panelEl) return;
             try {
                 // Capture the pool's default stratum port once (for regions with no explicit port).
                 if (!BASE_PORT) {
@@ -650,60 +749,46 @@
                 var regions = (data && Array.isArray(data.regions)) ? data.regions : [];
                 // Only operator-declared, active regions are connect targets (need a host).
                 regions = regions.filter(function (r) { return r.stratum_url && r.is_active !== false; });
-                var note = document.getElementById('connect-note');
-                // A single-region pool (one server, no gateways) shows the simple
-                // "point your miner here" callout, not a 1-card grid. The multi-region
-                // grid appears only once a second zone reports in.
-                if (regions.length < 2) { if (note) note.style.display = 'none'; return; } // keep fallback callout
 
-                var nearestKey = detectNearestRegion(regions.map(function (r) { return r.region; }));
-                var nearestCountry = null;
-                if (nearestKey) {
-                    var nr = regions.filter(function (r) { return r.region === nearestKey; })[0];
-                    if (nr) nearestCountry = nr.country || ('__' + nr.region);
+                // A single-region pool (one server, no gateways) shows the simple
+                // "point your miner here" callout, not a 1-tab strip. The tabbed UI
+                // appears only once a second zone reports in.
+                if (regions.length < 2) {
+                    tabsEl.style.display = 'none';
+                    panelEl.style.display = 'none';
+                    if (note) note.style.display = 'none';
+                    if (fallback) fallback.style.display = '';
+                    return;
                 }
 
-                // Group regions by country (fall back to a per-region pseudo-group when a
-                // region has no country set, e.g. the self-registered local region).
-                var groups = {}, order = [];
+                // Order: the visitor's nearest region (browser-timezone, no geo-IP) first,
+                // then by most-active (miner count) desc, then by name. "Shortest" = nearest.
+                var nearestKey = detectNearestRegion(regions.map(function (r) { return r.region; }));
+                regions.sort(function (a, b) {
+                    if (a.region === nearestKey) return -1;
+                    if (b.region === nearestKey) return 1;
+                    if ((b.miners || 0) !== (a.miners || 0)) return (b.miners || 0) - (a.miners || 0);
+                    return (a.label || a.region).localeCompare(b.label || b.region);
+                });
+
+                // Preserve the visitor's current tab across the 60s refresh; otherwise
+                // default to the first (nearest) region.
+                var prev = tabsEl.querySelector('.region-tab.active');
+                var selectedKey = prev ? prev.dataset.region : null;
+                if (!selectedKey || !regions.some(function (r) { return r.region === selectedKey; })) {
+                    selectedKey = regions[0].region;
+                }
+
+                if (fallback) fallback.style.display = 'none';
+                tabsEl.style.display = '';
+                panelEl.style.display = '';
+                tabsEl.textContent = '';
                 regions.forEach(function (r) {
-                    var key = r.country || ('__' + r.region);
-                    if (!groups[key]) { groups[key] = { country: r.country || (r.label || r.region), cc: r.country_code || '', rows: [] }; order.push(key); }
-                    groups[key].rows.push(r);
+                    var tab = buildTab(r, r.region === selectedKey, r.region === nearestKey);
+                    tab.addEventListener('click', function () { selectRegion(regions, r.region); });
+                    tabsEl.appendChild(tab);
                 });
-                // Sort: the visitor's country first, then by most-active (miner count) desc, then name.
-                order.sort(function (a, b) {
-                    if (a === nearestCountry) return -1;
-                    if (b === nearestCountry) return 1;
-                    var ma = groups[a].rows.reduce(function (s, r) { return s + (r.miners || 0); }, 0);
-                    var mb = groups[b].rows.reduce(function (s, r) { return s + (r.miners || 0); }, 0);
-                    if (mb !== ma) return mb - ma;
-                    return groups[a].country.localeCompare(groups[b].country);
-                });
-
-                grid.textContent = '';
-                order.forEach(function (key) {
-                    var g = groups[key];
-                    var section = document.createElement('div');
-                    section.className = 'region-country-group';
-
-                    var heading = document.createElement('div');
-                    heading.className = 'region-country';
-                    var flag = flagEmoji(g.cc);
-                    if (flag) { var fs = document.createElement('span'); fs.className = 'region-flag'; fs.textContent = flag; heading.appendChild(fs); }
-                    var cname = document.createElement('span');
-                    cname.textContent = g.country;
-                    heading.appendChild(cname);
-                    section.appendChild(heading);
-
-                    var cards = document.createElement('div');
-                    cards.className = 'region-grid';
-                    g.rows.sort(function (a, b) { return (a.label || a.region).localeCompare(b.label || b.region); });
-                    g.rows.forEach(function (r) { cards.appendChild(buildRegionCard(r, r.region === nearestKey)); });
-                    section.appendChild(cards);
-
-                    grid.appendChild(section);
-                });
+                renderRegionPanel(regions, selectedKey);
                 if (note) note.style.display = '';
             } catch (e) { /* keep fallback callout */ }
         }

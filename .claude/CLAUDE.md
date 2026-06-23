@@ -109,7 +109,7 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
 Script 07 (mining pool) adds operator-configurable ports not in the table above:
 - **Public stratum** — miners connect here; default `3333` (same for both networks). On a regional
   gateway this is HAProxy's frontend, forwarded over WireGuard to the central box.
-- **Node built-in stratum (upstream)** — localhost only; the pool's stratum proxy connects here as a client; default `3334`. Set the Grin node's `stratum_server_addr` to `127.0.0.1:3334`.
+- **Node built-in stratum (upstream)** — localhost only; the pool's stratum proxy connects here as a client; default `3416` (testnet `13416`) = **Grin's native `stratum_server_addr` default**. Script 01 enables the node's built-in stratum (`enable_stratum_server = true`) but does **NOT** change the addr, so the node listens on `127.0.0.1:3416`/`13416` out of the box and the pool dials the same port — no node patching. (Was `3334`/`13334` before 2026-06; realigned to Grin's default so a stock Script 01 node + Script 07 pool connect with zero edits. Pool ⇄ solo exclusivity means nothing else contends for `3416` on a pool box.)
 - **Per-region internal stratum ports** — `region_ports` (e.g. `asia:3391`), bound to the WireGuard
   interface ONLY (`region_listen_host`, default the central tunnel IP `10.66.66.1`). Gateways tunnel
   here; never public. Assigned by Script 07 → W) Multi-region → Add a gateway peer.
@@ -117,7 +117,7 @@ Script 07 (mining pool) adds operator-configurable ports not in the table above:
   satellite share/block ingestion API any more — that was removed with the relay in the Model C refactor.)
 - **WireGuard** — UDP `51820` on the central box; the only port a gateway needs to reach inbound.
 
-> Core ports: public stratum `3333`, node built-in stratum upstream `127.0.0.1:3334` (testnet `13334`), Central API `127.0.0.1:8080`, WireGuard UDP `51820`. The single-box installer was migrated off the legacy `3416/3417/3002` in 2026-06. (Solo mining — `07_grin_mining_solo.sh` — is a separate product and keeps `3416`.)
+> Core ports: public stratum `3333`, node built-in stratum upstream `127.0.0.1:3416` (testnet `13416`, = Grin's native default), Central API `127.0.0.1:8080`, WireGuard UDP `51820`. Solo mining (`07_grin_mining_solo.sh`) also uses `3416` — fine, since pool ⇄ solo are mutually exclusive on a box.
 
 Secret files — two per service, each with a Foreign and Owner secret:
 
@@ -1019,7 +1019,7 @@ Locked decisions (do not change without user confirmation):
   process writes. Gateways never touch the DB (they forward TCP); a region is not a new DB writer.
   Migrate only if the pool itself goes multi-process/replicated or hot data exceeds ~20–50 GB.
 - **Share capture = own stratum proxy** in front of the node's built-in stratum (grin-pool model) — NOT
-  log-tailing. Built-in stratum binds localhost `:3334`; the pool's public stratum binds `:3333`.
+  log-tailing. Built-in stratum binds localhost `:3416` (testnet `:13416`); the pool's public stratum binds `:3333`.
 - **Gateway transport = WireGuard ONLY** (Tor/TLS rejected — share-path latency budget is tight). The
   central box exposes a WireGuard UDP port (`51820`); per-region stratum ports bind the wg interface
   only. **★ Q2 (open):** forwarding every share edge→central over a real cross-continent wg link must

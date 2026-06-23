@@ -85,7 +85,10 @@ function mergeEnvVars(config) {
     node_dir: config.node_dir || process.env.NODE_DIR || '',
 
     node_stratum_host: config.node_stratum_host || '127.0.0.1',
-    node_stratum_port: config.node_stratum_port || (isMain ? 3334 : 13334),
+    // Grin's native default stratum_server_addr port (mainnet 3416 / testnet 13416). Script 01
+    // enables the node's built-in stratum but leaves the addr at this default, so the pool must
+    // dial the same port out of the box — overridable via node_stratum_port in pool config.
+    node_stratum_port: config.node_stratum_port || (isMain ? 3416 : 13416),
     pool_address:      config.pool_address || '',
     wallet_pass_file:  config.wallet_pass_file || '',
 

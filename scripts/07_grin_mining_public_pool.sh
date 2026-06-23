@@ -203,14 +203,17 @@ fs.chmodSync(path, 0o600);
 
 pool_ensure_defaults() {
     # Per-network node + stratum defaults. Testnet uses the 13xxx ports (node API 13413,
-    # built-in stratum 13334) and a distinct public stratum port (13333) so a testnet pool
+    # built-in stratum 13416) and a distinct public stratum port (13333) so a testnet pool
     # never clashes with a mainnet one on the same box. node_api_url is written explicitly
     # (the app reads node_api_url, NOT node_api_port) so the pool talks to the right node.
+    # node_stratum is Grin's NATIVE default stratum_server_addr port (mainnet 3416 / testnet
+    # 13416) — Script 01 enables the node's built-in stratum but leaves the addr at this default,
+    # so the pool must dial the same port (the node is not patched).
     local d_network="$POOL_NET" d_node_api d_node_strat d_pub_strat d_node_url
     if [[ "$POOL_NET" == "testnet" ]]; then
-        d_node_api="13413"; d_node_strat="13334"; d_pub_strat="13333"; d_node_url="http://127.0.0.1:13413"
+        d_node_api="13413"; d_node_strat="13416"; d_pub_strat="13333"; d_node_url="http://127.0.0.1:13413"
     else
-        d_node_api="3413";  d_node_strat="3334";  d_pub_strat="3333";  d_node_url="http://127.0.0.1:3413"
+        d_node_api="3413";  d_node_strat="3416";  d_pub_strat="3333";  d_node_url="http://127.0.0.1:3413"
     fi
     local -A defaults=(
         ["pool_name"]="My Grin Pool"
@@ -518,8 +521,9 @@ pool_configure() {
     # panel after first login — so the installer stays minimal. The domain is the
     # exception: it's REQUIRED for nginx + certbot (the public site + admin HTTPS) and
     # is NOT editable in the admin panel, so it must be captured up front.
-    # node_stratum_port stays at its default (3334); advanced operators running
-    # the node's built-in stratum on another port edit grin_pubpool.json directly.
+    # node_stratum_port stays at its default (3416 / testnet 13416 — Grin's native
+    # stratum_server_addr port); advanced operators running the node's built-in stratum
+    # on another port edit grin_pubpool.json directly.
     local val
 
     # Enter keeps an existing value; with none set we loop until a valid domain
@@ -2426,7 +2430,7 @@ pool_mode_conflict_check() {
                 echo -e "    config:  $POOL_CONF"
                 echo -e "    service: $POOL_SERVICE"
                 echo -e "  ${DIM}A gateway binds stratum :3333, which this install already uses${RESET}"
-                echo -e "  ${DIM}(plus node upstream 3334 / Central API 8080) — both on one box collides.${RESET}"
+                echo -e "  ${DIM}(plus node upstream 3416 / Central API 8080) — both on one box collides.${RESET}"
                 echo -e "  ${BOLD}Clean up the public pool config first${RESET} (mode menu → Z) Cleanup), then re-run."
                 return 1
             fi

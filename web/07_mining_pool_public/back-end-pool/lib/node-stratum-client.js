@@ -25,7 +25,7 @@ const SUBMIT_TIMEOUT_MS  = 15000;
 class NodeStratumClient {
   constructor(config, stratumServer) {
     this.host         = config.node_stratum_host || '127.0.0.1';
-    this.port         = config.node_stratum_port || (config.network === 'mainnet' ? 3334 : 13334);
+    this.port         = config.node_stratum_port || (config.network === 'mainnet' ? 3416 : 13416);
     this.poolAddress  = config.pool_address || '';
     this.stratumServer = stratumServer;
     this.socket       = null;

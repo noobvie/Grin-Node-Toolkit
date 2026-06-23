@@ -458,7 +458,9 @@ pw_setup() {
     if declare -F pool_write_conf_key >/dev/null 2>&1; then
         echo ""
         local pool_addr
-        pool_addr=$( (pw_show_address 2>/dev/null || true) | grep -oE 'grin1[a-z0-9]{40,}' | head -1 || true)
+        # t?grin1 — keep the leading 't' on testnet addresses (tgrin1…); a bare grin1
+        # pattern would let grep -o strip the 't' and save a mainnet-format address.
+        pool_addr=$( (pw_show_address 2>/dev/null || true) | grep -oiE 't?grin1[a-z0-9]{40,}' | head -1 || true)
         if [[ -n "$pool_addr" ]]; then
             pool_write_conf_key "pool_address" "$pool_addr"
             success "Pool Grin address saved to config: $pool_addr"

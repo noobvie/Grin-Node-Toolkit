@@ -59,7 +59,7 @@ class WalletTor {
   }
 
   isPayoutAddress(address) {
-    return /^(grin1|tgrin1)[ac-hj-np-z02-9]{54}$/i.test(String(address || ''));
+    return /^(grin1|tgrin1)[ac-hj-np-z02-9]{58}$/i.test(String(address || ''));
   }
 
   // args: string[] — passed directly to spawn, never interpolated into a shell string.

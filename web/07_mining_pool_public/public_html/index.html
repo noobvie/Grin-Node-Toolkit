@@ -614,15 +614,15 @@
             return pref[area] ? has(pref[area]) : null;
         }
 
-        // A region's flag: the legacy South Vietnam (Heritage & Freedom) SVG for VN —
-        // there is no Unicode emoji for it — and the standard regional-indicator emoji
-        // for every other country. Returns an element or null when no flag is known.
+        // A region's flag: a custom SVG for VN — there is no matching Unicode emoji —
+        // and the standard regional-indicator emoji for every other country.
+        // Returns an element or null when no flag is known.
         function flagNode(cc) {
             cc = String(cc || '').toUpperCase();
             if (cc === 'VN') {
                 var img = document.createElement('img');
                 img.className = 'region-flag-img';
-                img.src = '/images/flags/vn-legacy.svg';
+                img.src = '/images/flags/vn-future.svg';
                 img.alt = 'Vietnam';
                 return img;
             }

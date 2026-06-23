@@ -326,7 +326,11 @@ class PoolSettings {
       maintenance_title: 'Under Maintenance',
       maintenance_message: 'We are performing scheduled maintenance and will be back shortly.',
       // banners: JSON array of {id,type,message,link,link_text,dismissible,enabled,start,end}
-      banners: '[]',
+      // Seeded ON by default: a fresh pool is pre-launch, so every new operator wants the
+      // "under development" notice up from day one. It renders site-wide via branding.js
+      // renderBanners() and is fully overridable — edit/disable it in admin → Settings →
+      // Announcements the moment the pool goes live (a saved row overrides this default).
+      banners: '[{"id":"under-dev","type":"warning","message":"This website is under development & testing — data may be incomplete or reset without notice. When the pool goes live, the official announcement will be posted on the Grin Forum.","link":"https://forum.grin.mw/","link_text":"Grin Forum","dismissible":false,"enabled":true}]',
     },
     // Database retention / cleanup. Keeps the SQLite file bounded WITHOUT ever
     // deleting shares still needed for PPLNS distribution or orphan reversal:

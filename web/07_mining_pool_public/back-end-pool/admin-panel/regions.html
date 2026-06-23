@@ -18,6 +18,17 @@
       border-top: 1px solid var(--border, #2a2a2a); padding-top: .7rem;
     }
     .howto code { font-family: var(--mono); }
+
+    /* Field guide — a collapsible (closed by default) explaining each form field.
+       Replaces hover tooltips, which are hard to discover and clip on small screens. */
+    .fieldguide { margin: 0 0 1rem; }
+    .fieldguide > summary { cursor: pointer; font-size: .95rem; padding: .2rem 0; }
+    .fieldguide > summary::marker { color: var(--accent, #b8e600); }
+    .fieldguide dl { margin: .7rem 0 0; }
+    .fieldguide dt { font-weight: 700; margin: .6rem 0 .15rem; }
+    .fieldguide dd { margin: 0 0 .15rem; color: var(--text-dim); line-height: 1.5; }
+    .fieldguide .step { color: var(--accent, #b8e600); font-weight: 700; }
+    .fieldguide code { font-family: var(--mono); }
   </style>
 </head>
 <body>
@@ -57,14 +68,45 @@
 
     <!-- Create / edit form -->
     <div class="card">
-      <h3 id="form-title" style="margin:0 0 1rem;">New region</h3>
+      <h3 style="margin:0 0 .8rem;"><span id="form-title">New region</span></h3>
+
+      <!-- Per-field help, collapsed by default so it's there when needed but not in the way -->
+      <details class="fieldguide">
+        <summary>What goes in each field? (click for a quick guide)</summary>
+        <dl>
+          <dt>Region key <span class="step">— STEP 1</span></dt>
+          <dd>Short permanent identifier for this location. <strong>Suggestion:</strong> a 3-letter airport (IATA)
+              code — <code>nyc</code>, <code>lax</code>, <code>ams</code>, <code>yyz</code>, <code>han</code> — or a
+              2-letter country code (<code>us</code>, <code>nl</code>, <code>vn</code>) when a country has one region.
+              Shares get tagged with it, so it can't be renamed later, and it MUST exactly match the key you give in
+              STEP 3 when adding the gateway's WireGuard peer (Script 07 → W → Add a gateway peer).</dd>
+          <dt>Label / City</dt>
+          <dd>Human-friendly name shown on the public connect card (e.g. New York). Cosmetic — doesn't affect routing.</dd>
+          <dt>Country &amp; country code</dt>
+          <dd>Group regions by country on the dashboard (two US regions appear under one heading). The ISO-2 code
+              (<code>US</code>, <code>NL</code>) draws the flag emoji. Leave the code blank for no flag.</dd>
+          <dt>Stratum host <span class="step">— STEP 2</span></dt>
+          <dd>The hostname miners point their rigs at for this region (e.g. <code>nyc.grinium.com</code>). Create a DNS
+              A-record for it that resolves to the <strong>gateway box's</strong> public IP. Enter the host only — the
+              shared stratum port is appended automatically.</dd>
+          <dt>Active</dt>
+          <dd>When on, the card shows on the public connect grid (as “No signal” until the gateway is up — STEPS 3 &amp; 4).
+              Turn off to hide a region without deleting it.</dd>
+        </dl>
+        <p class="howto-note" style="margin-top:.7rem;">
+          Saving this form is <span class="step">STEP 1 of 4</span> — it only declares the card. Then: STEP 2 point DNS →
+          STEP 3 add the WireGuard peer on the pool box (Script 07 → W) → STEP 4 stand up the gateway box (Script 07 → 2).
+          Full walkthrough in <strong>“How regions work”</strong> above.
+        </p>
+      </details>
+
       <input type="hidden" id="r-id">
 
       <div class="form-row">
         <div class="form-group">
           <label for="r-region">Region key</label>
-          <input type="text" id="r-region" placeholder="e.g. nyc" autocomplete="off">
-          <div class="helper-text">Short region tag. Lowercase, no spaces. Must match the region key you assign when adding this gateway's WireGuard peer (Script 07 → W) Multi-region).</div>
+          <input type="text" id="r-region" placeholder="e.g. nyc (airport code)" autocomplete="off">
+          <div class="helper-text">Short region tag, lowercase, no spaces. <strong>Suggestion:</strong> a 3-letter airport code (<code>nyc</code>, <code>ams</code>, <code>han</code>) or a 2-letter country code (<code>us</code>, <code>nl</code>) — easy to recognise and unlikely to collide. Must match the region key you assign when adding this gateway's WireGuard peer (Script 07 → W) Multi-region).</div>
         </div>
         <div class="form-group">
           <label for="r-label">Label / City</label>

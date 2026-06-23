@@ -751,9 +751,11 @@ pool_setup_nginx() {
         echo ""
         echo -e "  ${DIM}Is this hub behind Cloudflare's proxy (orange cloud)? If yes, the toolkit${RESET}"
         echo -e "  ${DIM}restores the real visitor IP so rate-limiting & fail2ban work per-user.${RESET}"
-        echo -ne "  Behind Cloudflare proxy? [y/N]: "
+        echo -ne "  Behind Cloudflare proxy? [Y/n]: "
         local _cf_ans; read -r _cf_ans
-        [[ "${_cf_ans,,}" == "y" ]] && cf_proxy="true" || cf_proxy="false"
+        # Default YES — most public pools front the origin with Cloudflare's proxy. Only an
+        # explicit "n" opts out (if you later go direct, re-run 4) Setup nginx and answer n).
+        if [[ "${_cf_ans,,}" == "n" ]]; then cf_proxy="false"; else cf_proxy="true"; fi
         pool_write_conf_key "cloudflare_proxy" "$cf_proxy"
     fi
 
@@ -1884,6 +1886,13 @@ pool_wireguard_menu() {
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo -e "${BOLD}${CYAN}  Multi-region — WireGuard + gateways${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "  ${YELLOW}${BOLD}OPTIONAL — you do NOT need this for a normal pool.${RESET}"
+        echo -e "  ${DIM}Your pool already serves all your miners on :$(pool_read_conf stratum_port 3333) as region \"main\".${RESET}"
+        echo -e "  ${DIM}Use this ONLY when you add a regional gateway server in ANOTHER zone/${RESET}"
+        echo -e "  ${DIM}continent (a separate box near distant miners, to cut their latency).${RESET}"
+        echo -e "  ${DIM}One server = skip this menu entirely. Steps: 1) here, 2) add each peer${RESET}"
+        echo -e "  ${DIM}here, then install \"2) Regional gateway\" on the OTHER box.${RESET}"
+        echo ""
         echo -e "${DIM}  Central accepts thin regional gateways over a wg tunnel.${RESET}"
         echo ""
         echo -e "  ${GREEN}1${RESET}) Setup WireGuard server   ${DIM}(install, keys, tunnel, firewall)${RESET}"
@@ -2358,7 +2367,18 @@ pool_select_mode() {
 }
 
 main() {
-    local arg="${1:-}"
+    # Launch args may carry a NETWORK selector (`testnet`, handled globally via POOL_NET)
+    # and/or a real deployment-MODE arg (singlebox|hub|gateway). Only a true mode arg means
+    # "non-interactive: run that one mode and exit". `testnet` ALONE is NOT a mode — it still
+    # shows the interactive mode selector, so 0) Back from a mode menu must return to that
+    # selector (one level up), NOT skip it and exit to the mining hub. So derive `arg` from a
+    # real mode token only; `testnet`/other tokens leave it empty → interactive + loop-back.
+    local arg="" _a
+    for _a in "$@"; do
+        case "$_a" in
+            singlebox|hub|gateway) arg="$_a" ;;
+        esac
+    done
     # Loop so leaving a mode menu (0) returns here, to the deployment-mode
     # selector — only the selector's own 0 exits the script back to the mining
     # hub. A direct mode arg (non-interactive entry) runs that mode once and exits.

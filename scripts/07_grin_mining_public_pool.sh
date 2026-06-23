@@ -622,7 +622,24 @@ pool_deploy_web() {
 
     pool_write_web_config_js
 
+    # Ownership + perms: the docroot is rsync'd as root, leaving files root:root.
+    # nginx (www-data) must be able to traverse + read every file it serves, so
+    # normalise the WHOLE tree (incl. /admin and the just-written pool-config.js)
+    # to www-data:www-data with dirs 755 / files 644. Idempotent; cheap.
+    pool_fix_web_perms
+
     success "Web files deployed to $POOL_WEB_DIR"
+}
+
+# Normalise the deployed docroot to the nginx web user with sane perms. Called by
+# every web-deploy path (3) Deploy web files, 9) Deploy new code → pool_deploy_web,
+# and the guided setup) so a redeploy never leaves root:root or over-tight modes
+# that nginx (www-data) can't read.
+pool_fix_web_perms() {
+    [[ -d "$POOL_WEB_DIR" ]] || return 0
+    chown -R www-data:www-data "$POOL_WEB_DIR" 2>/dev/null || true
+    find "$POOL_WEB_DIR" -type d -exec chmod 755 {} + 2>/dev/null || true
+    find "$POOL_WEB_DIR" -type f -exec chmod 644 {} + 2>/dev/null || true
 }
 
 # (Re)generate the static frontend config. Called by 3) Deploy and by
@@ -751,6 +768,20 @@ pool_setup_nginx() {
             info "Migrating legacy vhost $(basename "$POOL_NGINX_CONF_LEGACY") → $(basename "$POOL_NGINX_CONF")"
             rm -f "/etc/nginx/sites-enabled/$(basename "$POOL_NGINX_CONF_LEGACY")" "$POOL_NGINX_CONF_LEGACY"
         fi
+    fi
+
+    # Disable the stock Debian/Ubuntu "default" site if it's still enabled. Its
+    # `listen 80 default_server` + `server_name _` catch-all serves the generic
+    # "Welcome to nginx!" page for ANY request whose Host doesn't match the pool
+    # (e.g. the raw server IP, or http before DNS resolves) — which looks like the
+    # pool homepage is broken. We drop only the sites-enabled SYMLINK (the
+    # sites-available/default file is kept, so it's fully reversible) and only when
+    # it's the catch-all default_server, never a real operator vhost. The vhost
+    # write + reload later in this function picks up the change.
+    local _default_site="/etc/nginx/sites-enabled/default"
+    if [[ -L "$_default_site" || -f "$_default_site" ]] && grep -qs 'default_server' "$_default_site"; then
+        info "Disabling stock nginx default site (catch-all 'Welcome to nginx' page)..."
+        rm -f "$_default_site"
     fi
 
     # Uploaded white-label assets (logos/icons/OG image) are written here by the app

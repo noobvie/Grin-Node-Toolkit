@@ -362,8 +362,12 @@ async function initializePool() {
 
     setupRoutes();
 
-    app.listen(config.port, () => {
-      console.log(`[${new Date().toISOString()}] Pool API listening on port ${config.port}`);
+    // Bind the configured host (default 127.0.0.1). The app sits behind nginx and relies on
+    // trust proxy='loopback' + the admin IP allowlist, both of which assume a loopback-only
+    // bind — binding all interfaces would let a direct off-box hit bypass nginx with a forged
+    // X-Forwarded-For. config.host comes from the systemd HOST env / pool.json.
+    app.listen(config.port, config.host, () => {
+      console.log(`[${new Date().toISOString()}] Pool API listening on ${config.host}:${config.port}`);
     });
 
   } catch (err) {

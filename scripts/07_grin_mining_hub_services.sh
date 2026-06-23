@@ -120,14 +120,21 @@ hub_detect_solo_mode() {
 
 hub_detect_public() {
     local m
+    # Detect EITHER network — mainnet (grin_pubpool.json / pubpool/mainnet, + pre-rename
+    # legacy grin_pool.json / pool/mainnet) OR testnet (the _testnet/testnet siblings).
+    # File checks come first so a pool that's been Configured but not yet Installed (config
+    # written, no systemd unit yet) is still detected; the systemd grep is the backstop.
     for m in \
         "/opt/grin/conf/grin_pubpool.json" \
         "/opt/grin/pubpool/mainnet" \
+        "/opt/grin/conf/grin_pubpool_testnet.json" \
+        "/opt/grin/pubpool/testnet" \
         "/opt/grin/conf/grin_pool.json" \
         "/opt/grin/pool/mainnet"
     do
         [[ -e "$m" ]] && { echo "$m"; return 0; }
     done
+    # Substring match catches both grin-pool-manager AND grin-pool-manager-testnet.
     if systemctl list-units --type=service --all 2>/dev/null | grep -q 'grin-pool-manager'; then
         echo "systemd: grin-pool-manager service"; return 0
     fi

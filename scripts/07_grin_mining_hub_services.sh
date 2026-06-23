@@ -15,9 +15,16 @@
 #        a chosen LAN IP:port — no domain, no certbot, no auth. For an internal
 #        network. Same exclusivity bucket as (1): it IS solo, just a LAN front-end.
 #
-#   3) PUBLIC mining pool             → 07_grin_mining_public_pool.sh  (GRINIUM)
+#   3) PUBLIC mining pool — Mainnet  → 07_grin_mining_public_pool.sh  (GRINIUM)
 #        Full PPLNS pool: many miners, address-as-identity, Tor auto-payouts,
-#        web dashboard + admin panel. Best for a public-facing pool operator.
+#        web dashboard + admin panel. Real GRIN. Best for a public pool operator.
+#
+#   4) PUBLIC mining pool — TESTNET  → 07_grin_mining_public_pool.sh testnet
+#        The SAME pool, but a fully independent test install (own config/service/
+#        dirs/ports — Central API 8090, stratum 13333, grin-pool-manager-testnet).
+#        Test the whole block→maturity(100)→payout pipeline on fast tGRIN blocks,
+#        then replicate on (3) Mainnet. Can coexist with a mainnet pool on one box;
+#        only collides with SOLO. Needs a testnet grin node (Script 01 testnet-prune).
 #
 # ─── ONE SETUP PER SERVER ─────────────────────────────────────────────────────
 # A single server runs ONE of the above — NEVER two. They collide on:
@@ -150,7 +157,18 @@ hub_launch() {
             other_marker=$(hub_detect_public || true)
             ;;
         public)
+            # No arg → the pool script defaults to mainnet (real GRIN). Kept explicitly
+            # bare so testnet config can never leak into the mainnet flow.
             want_script="$PUBLIC_SCRIPT"
+            other_name="Solo PRIVATE mining"
+            other_marker=$(hub_detect_solo || true)
+            ;;
+        public-testnet)
+            # `testnet` launch arg → fully independent test install (8090 / 13333 /
+            # grin-pool-manager-testnet). Same SOLO-only collision as mainnet public;
+            # it can coexist with a mainnet public pool on the same box.
+            want_script="$PUBLIC_SCRIPT"
+            want_arg="testnet"
             other_name="Solo PRIVATE mining"
             other_marker=$(hub_detect_solo || true)
             ;;
@@ -254,7 +272,8 @@ show_menu() {
     echo -e "  ${GREEN}2${RESET}) Solo PRIVATE mining — LAN       ${DIM}(internal network · plain HTTP stats page · no domain/SSL)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Public Mining Pool ${DIM}(open to anyone)──────────────────${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Public mining pool           ${DIM}(PPLNS rewards, miners join by address, Tor payouts, web dashboard)${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Public mining pool — Mainnet   ${DIM}(real GRIN · PPLNS, Tor payouts, web dashboard)${RESET}"
+    echo -e "  ${GREEN}4${RESET}) Public mining pool — TESTNET   ${DIM}(independent test install · fast blocks · tGRIN, no real value)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
@@ -264,12 +283,13 @@ show_menu() {
 main() {
     while true; do
         show_menu
-        echo -ne "${BOLD}Select [0-3]: ${RESET}"
+        echo -ne "${BOLD}Select [0-4]: ${RESET}"
         read -r choice
         case "$choice" in
             1) hub_launch solo ;;
             2) hub_launch solo-lan ;;
             3) hub_launch public ;;
+            4) hub_launch public-testnet ;;
             0|q|exit) break ;;
             "") continue ;;
             *) warn "Invalid option."; sleep 1 ;;

@@ -92,7 +92,10 @@ class GrinNodeAPI {
 
   async getHeader(height) {
     try {
-      const result = await this._foreignRpcCall('get_header', [height]);
+      // Foreign API get_header(height, hash, commit) — all 3 params are required positionally
+      // (the last two are Option, passed as null). Sending only [height] → node replies
+      // "WrongNumberOfArgs. Expected 3. Actual 1".
+      const result = await this._foreignRpcCall('get_header', [height, null, null]);
       return {
         height: result.height,
         hash: result.hash,
@@ -108,7 +111,8 @@ class GrinNodeAPI {
 
   async getBlock(height) {
     try {
-      const result = await this._foreignRpcCall('get_block', [height]);
+      // get_block(height, hash, commit) — same 3-param Foreign API contract as get_header.
+      const result = await this._foreignRpcCall('get_block', [height, null, null]);
       return {
         header: {
           height: result.header.height,

@@ -108,10 +108,18 @@ function createSubmitResponse(id, accepted, blockHash = null, error = null) {
 }
 
 // Server → miner: response to "getjobtemplate"
+// NOTE: the `method` field is REQUIRED. The Grin stratum convention (and the
+// grin node's own stratum server) echoes the request method back in the
+// response, and grin-miner's RpcResponse struct makes `method` non-optional AND
+// routes on it (match res.method => "getjobtemplate"). Omitting it makes the
+// response unparseable to grin-miner ("Error parsing response") even though the
+// job still arrives via the `job` notification. Keep parity with createLogin/
+// SubmitResponse, which already include it.
 function createJobTemplateResponse(id, jobId, height, difficulty, prePow) {
   return {
     id,
     jsonrpc: '2.0',
+    method: 'getjobtemplate',
     result: { difficulty, height, job_id: jobId, pre_pow: prePow },
     error: null
   };
@@ -123,6 +131,7 @@ function createStatusResponse(id, sessionStats) {
   return {
     id,
     jsonrpc: '2.0',
+    method: 'status',  // required — grin-miner routes responses on `method` (see createJobTemplateResponse)
     result: {
       id:         sessionStats.sessionId,
       height:     sessionStats.height,

@@ -2433,10 +2433,15 @@ start_grin_tmux() {
             9>&- || die "Failed to create tmux session '$session'. Is tmux installed and working?"
     fi
 
+    # Install the gtmux viewer: the node runs as the 'grin' user, so its tmux
+    # server is on grin's socket — a plain `tmux ls`/`tmux attach` from a root
+    # shell cannot see it. gtmux (shared lib) points tmux at grin's socket.
+    gnc_install_gtmux_helper
+
     success "Grin node will start shortly within 30 seconds in tmux session: $session."
-    info "  Attach  : tmux attach -t $session"
+    info "  Attach  : gtmux attach -t $session   ${DIM}(grin-owned — plain 'tmux attach' won't find it)${RESET}"
     info "  Detach  : Ctrl+B, then D"
-    info "  List    : tmux ls"
+    info "  List    : gtmux ls"
     log "[STEP 13] Tmux session=$session started."
 }
 

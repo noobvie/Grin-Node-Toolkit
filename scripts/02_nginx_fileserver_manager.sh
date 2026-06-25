@@ -131,7 +131,10 @@ suggest_grin_web_dir() {
 
     pid=""
     if command -v lsof &>/dev/null; then
-        pid=$(lsof -ti :"$port" 2>/dev/null)
+        # -sTCP:LISTEN: match only the listening socket, not the many peer
+        # connections a P2P port (3414) carries — otherwise lsof returns
+        # multiple PIDs and the multi-line value breaks /proc/$pid/exe below.
+        pid=$(lsof -ti :"$port" -sTCP:LISTEN 2>/dev/null | head -1)
     fi
     if [[ -z "$pid" ]] && command -v ss &>/dev/null; then
         pid=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)
@@ -905,7 +908,9 @@ _chain_data_for_prefix() {
         # Found the matching node — resolve its binary dir and chain_data path
         pid=""
         if command -v lsof &>/dev/null; then
-            pid=$(lsof -ti :"$port" 2>/dev/null)
+            # -sTCP:LISTEN: only the listening socket, not the P2P peer
+            # connections (multi-line PIDs would break /proc/$pid/exe below).
+            pid=$(lsof -ti :"$port" -sTCP:LISTEN 2>/dev/null | head -1)
         fi
         if [[ -z "$pid" ]] && command -v ss &>/dev/null; then
             pid=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)

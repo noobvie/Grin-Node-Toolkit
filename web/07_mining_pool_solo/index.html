@@ -191,8 +191,6 @@
   .legend i.bar { background: rgba(var(--main-rgb), .45); }
   .legend i.est { background: var(--main); }
   .legend i.avg { background: var(--test); border-radius: 1px; }
-  .earn-nick { background: var(--chip-bg); color: var(--text-hi); border: 1px solid var(--border); border-radius: 999px; font-family: inherit; font-size: .9rem; padding: .45rem .9rem; cursor: pointer; }
-  .earn-nick:focus-visible { outline: 2px solid var(--main); outline-offset: -2px; }
   #chart svg, #hr-chart svg, #earn-chart svg { width: 100%; height: auto; display: block; }
   #chart text, #hr-chart text, #earn-chart text { fill: var(--muted); font-size: 11px; font-family: 'Courier New', monospace; }
   .chart-empty { color: var(--muted); font-size: .95rem; padding: 1.5rem 0; text-align: center; }
@@ -433,12 +431,17 @@
 <section class="chart-card accent-payout" id="earn-card" style="display:none">
   <div class="chart-head">
     <h2>GRIN / miner / day · <span style="color:var(--main)">Mainnet</span></h2>
-    <select id="earn-nick" class="earn-nick" aria-label="Choose miner"></select>
+    <div class="seg" id="earn-seg">
+      <button type="button" data-period="daily">Daily</button>
+      <button type="button" data-period="weekly" class="active">Weekly</button>
+      <button type="button" data-period="monthly">Monthly</button>
+      <button type="button" data-period="yearly">Yearly</button>
+    </div>
   </div>
   <div class="legend"><span><i class="bar"></i>actual / day</span><span><i class="est"></i>estimate</span><span><i class="avg"></i>pool avg / miner</span></div>
   <p class="split-meta" id="earn-meta">—</p>
   <div id="earn-chart"><div class="chart-empty">Loading earnings…</div></div>
-  <p class="split-foot"><b>Span follows the period selector above</b> (Weekly = last 7 days · Monthly = this month · Yearly = this year, shown as weekly averages). Bars are the <b>actual</b> GRIN credited that day — lumpy, because solo blocks arrive irregularly. The <b>estimate</b> line removes that block-luck: the day's work share × the average block rate over the shown span. <b>Pool avg / miner</b> = that day's smoothed pool reward ÷ how many miners were active that day (the count changes day to day). The estimate is a projection, not a promise — attribution is by the block's found day.</p>
+  <p class="split-foot"><b>Span follows this chart's period selector</b> (Weekly = last 7 days · Monthly = this month · Yearly = this year, shown as weekly averages). Bars are the <b>actual</b> GRIN credited that day — lumpy, because solo blocks arrive irregularly. The <b>estimate</b> line removes that block-luck: the day's work share × the average block rate over the shown span. <b>Pool avg / miner</b> = that day's smoothed pool reward ÷ how many miners were active that day (the count changes day to day). The estimate is a projection, not a promise — attribution is by the block's found day.</p>
 </section>
 
 <footer>
@@ -1046,7 +1049,7 @@
   }
 
   // ── Payout split (payment calc, mainnet) ──
-  var SPLIT = { period: 'weekly', data: null, person: null, nick: '__pool__' };
+  var SPLIT = { period: 'weekly', data: null, person: null, earnPeriod: 'weekly' };
   function fmtGrin(g) { return (g == null ? 0 : g).toFixed(3); }
 
   // Nickname = the part of a worker name before the first dot — byte-identical to
@@ -1093,7 +1096,6 @@
         var ns = document.getElementById('nav-split'); if (ns) ns.style.display = '';
         renderBalances();
         renderSplit();
-        populateEarnNicks();
         renderEarnChart();
         var nve = document.getElementById('nav-earn');
         if (nve) nve.style.display = ((d.daily || []).length ? '' : 'none');
@@ -1220,28 +1222,20 @@
     var btn = e.target.closest('button'); if (!btn) return;
     SPLIT.period = btn.getAttribute('data-period');
     Array.prototype.forEach.call(this.querySelectorAll('button'), function (x) { x.classList.remove('active'); });
-    btn.classList.add('active'); renderSplit(); renderEarnChart();
+    btn.classList.add('active'); renderSplit();
   });
-  document.getElementById('earn-nick').addEventListener('change', function () {
-    SPLIT.nick = this.value; renderEarnChart();
+  document.getElementById('earn-seg').addEventListener('click', function (e) {
+    var btn = e.target.closest('button'); if (!btn) return;
+    SPLIT.earnPeriod = btn.getAttribute('data-period');
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function (x) { x.classList.remove('active'); });
+    btn.classList.add('active'); renderEarnChart();
   });
 
   // ── GRIN / miner / day chart (actual bars + smoothed estimate + pool-average) ──
   // Data: split_main.json `daily` (raw per-day {blocks, reward, total_diff, nicks}).
   // The estimate removes block-luck (avg block rate over the span × that day's work
   // share); the pool-average line is smoothed reward ÷ that day's active-miner count.
-  function populateEarnNicks() {
-    var sel = document.getElementById('earn-nick');
-    var d = SPLIT.data, daily = (d && d.daily) || [];
-    var seen = {};
-    daily.forEach(function (e) { Object.keys(e.nicks || {}).forEach(function (n) { seen[n] = true; }); });
-    var list = Object.keys(seen).sort();
-    if (SPLIT.nick !== '__pool__' && list.indexOf(SPLIT.nick) === -1) SPLIT.nick = '__pool__';
-    sel.innerHTML = '<option value="__pool__">Whole pool</option>'
-      + list.map(function (n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('');
-    sel.value = SPLIT.nick;
-    sel.style.display = list.length ? '' : 'none';   // no nicknames yet → pool-only view
-  }
+  // Whole-pool view only; the period (Daily/Weekly/Monthly/Yearly) is this chart's own.
 
   // UTC day-keys for the selected span — always one point per day (yearly is
   // downsampled to weekly *averages* later so the y-axis stays "GRIN/day").
@@ -1281,7 +1275,7 @@
     var d = SPLIT.data;
     if (!d || !(d.daily || []).length) { card.style.display = 'none'; return; }
     card.style.display = '';
-    if (SPLIT.period === 'daily') {
+    if (SPLIT.earnPeriod === 'daily') {
       meta.textContent = '—';
       holder.innerHTML = '<div class="chart-empty">A single day is just one point — pick Weekly, Monthly or Yearly to see the per-day trend.</div>';
       return;
@@ -1289,7 +1283,7 @@
 
     var byDay = {};
     d.daily.forEach(function (e) { byDay[e.day] = e; });
-    var keys = earnDayKeys(SPLIT.period);
+    var keys = earnDayKeys(SPLIT.earnPeriod);
     var REWARD = d.block_reward || 60;
 
     // Smoothed daily block rate over the visible span (block-luck removed).
@@ -1298,37 +1292,29 @@
     var avgBlocksPerDay = keys.length ? totalBlocks / keys.length : 0;
     var estPoolPerDay = avgBlocksPerDay * REWARD;
 
-    var isPool = (SPLIT.nick === '__pool__'), nick = SPLIT.nick;
     var actual = [], estimate = [], avgPerMiner = [];
     keys.forEach(function (k) {
       var e = byDay[k];
       var active = e ? Object.keys(e.nicks || {}).length : 0;
       avgPerMiner.push(active > 0 ? estPoolPerDay / active : 0);
-      if (isPool) {
-        actual.push(e ? (e.reward || 0) : 0);
-        estimate.push(estPoolPerDay);
-      } else {
-        var ne = (e && e.nicks) ? e.nicks[nick] : null;
-        var share = (e && e.total_diff > 0 && ne) ? (ne.diff / e.total_diff) : 0;
-        actual.push(ne ? (ne.grin || 0) : 0);
-        estimate.push(estPoolPerDay * share);
-      }
+      actual.push(e ? (e.reward || 0) : 0);
+      estimate.push(estPoolPerDay);
     });
 
     var labels = keys.slice();
-    if (SPLIT.period === 'yearly') {
+    if (SPLIT.earnPeriod === 'yearly') {
       var ds = earnDownsampleWeekly(keys, [actual, estimate, avgPerMiner]);
       labels = ds.labels; actual = ds.series[0]; estimate = ds.series[1]; avgPerMiner = ds.series[2];
     }
 
-    var periodLabel = { weekly: 'Last 7 days', monthly: 'This month', yearly: 'This year (weekly avg)' }[SPLIT.period] || SPLIT.period;
-    meta.innerHTML = esc(periodLabel) + ' · <b>' + esc(isPool ? 'Whole pool' : nick) + '</b>'
+    var periodLabel = { weekly: 'Last 7 days', monthly: 'This month', yearly: 'This year (weekly avg)' }[SPLIT.earnPeriod] || SPLIT.earnPeriod;
+    meta.innerHTML = esc(periodLabel) + ' · <b>Whole pool</b>'
       + ' · pool averaging <b>' + avgBlocksPerDay.toFixed(2) + '</b> block' + (avgBlocksPerDay === 1 ? '' : 's') + '/day';
 
     var allVals = actual.concat(estimate, avgPerMiner);
     var realMax = allVals.length ? Math.max.apply(null, allVals) : 0;
     var maxV = realMax > 0 ? realMax : 1;
-    var W = 720, H = 240, L = 34, R = 64, T = 14, B = 30;
+    var W = 720, H = 240, L = 64, R = 16, T = 14, B = 30;
     var plotW = W - L - R, plotH = H - T - B, n = labels.length, baseY = T + plotH;
     var band = plotW / Math.max(1, n);
     var barW = Math.max(2, Math.min(band * 0.6, 24));
@@ -1338,12 +1324,13 @@
 
     var every = Math.max(1, Math.ceil(n / 8));
     var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="'
-      + esc('GRIN per ' + (isPool ? 'pool' : nick) + ' per day, ' + periodLabel) + '">';
+      + esc('GRIN per pool per day, ' + periodLabel) + '">';
     var GRID = 4;
     for (var g = 0; g <= GRID; g++) {
       var gv = maxV * g / GRID, gy = yAt(gv).toFixed(1);
       svg += '<line x1="' + L + '" y1="' + gy + '" x2="' + (W - R) + '" y2="' + gy + '" stroke="var(--border)"' + (g === 0 ? '' : ' stroke-opacity="0.35" stroke-dasharray="3 3"') + '/>';
-      svg += '<text x="' + (W - R + 6) + '" y="' + (parseFloat(gy) + 4) + '" text-anchor="start">' + fmtGrin(gv) + '</text>';
+      // GRIN-mined value labels on the LEFT axis
+      svg += '<text x="' + (L - 6) + '" y="' + (parseFloat(gy) + 4) + '" text-anchor="end">' + fmtGrin(gv) + '</text>';
     }
     // Actual bars
     for (var i = 0; i < n; i++) {

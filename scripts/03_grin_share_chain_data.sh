@@ -1839,6 +1839,12 @@ add_grin_autostart() {
     echo -e "\n${BOLD}${CYAN}── Auto Startup Grin Node ──${RESET}\n"
     ensure_crontab || { sched_error "crontab unavailable — install cronie/cron and retry."; return; }
 
+    # Install the gtmux viewer helper so the operator can see the grin-owned
+    # session(s) this option schedules (a plain root `tmux ls` cannot). Shared
+    # primitive from lib/grin_node_control.sh — same install used by Script 01
+    # and the keepalive autostart, so the helper exists regardless of path.
+    gnc_install_gtmux_helper
+
     echo -e "  Which network to autostart?"
     echo -e "  ${GREEN}1${RESET}) Mainnet"
     echo -e "  ${GREEN}2${RESET}) Testnet"
@@ -1979,7 +1985,10 @@ add_grin_autostart() {
         fi
 
         sched_info "  Delay  : ${delay}s after boot"
-        sched_info "  Attach : tmux attach -t $TMUX_SESSION"
+        # The node runs as the 'grin' user, so its tmux server is on grin's
+        # socket — a plain `tmux attach` from a root shell will NOT find it.
+        # Use the gtmux helper (installed above) instead.
+        sched_info "  Attach : gtmux attach -t $TMUX_SESSION   ${DIM}(plain 'tmux attach' won't find it — grin-owned)${RESET}"
     done
 
     if [[ -n "$new_lines" ]]; then
@@ -1987,6 +1996,10 @@ add_grin_autostart() {
         echo ""
         sched_success "Crontab updated. Run 'crontab -l' to verify."
     fi
+    echo ""
+    sched_info "Viewer installed: ${BOLD}gtmux${RESET}  — the node runs as the 'grin' user, so use:"
+    sched_info "    ${DIM}gtmux ls${RESET}                       list grin node session(s)"
+    sched_info "    ${DIM}gtmux attach -t <session>${RESET}      attach  (Ctrl+B then D to detach)"
     echo ""
     echo "Press Enter to continue..."
     read -r

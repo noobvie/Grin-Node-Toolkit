@@ -14,6 +14,7 @@
 #   gnc_start_node_tmux <network>     (re)start the node in tmux (SHELL=/bin/bash)
 #   gnc_owner_get_status <network>    raw get_status JSON (Owner API, localhost)
 #   gnc_status_field <json> <path>    extract a dotted field from get_status JSON
+#   gnc_install_gtmux_helper          install /usr/local/bin/gtmux (view grin sessions)
 #
 # Conventions (see .claude/CLAUDE.md):
 #   · Lib file — sourced, never executed → NO shebang, NO `set -euo pipefail`.
@@ -184,8 +185,38 @@ gnc_start_node_tmux() {
         success "Grin ($network) is up on port $port (session '$sess')."
         return 0
     fi
-    warn "Grin ($network) did not bind port $port within ${wait_timeout}s. Check: tmux attach -t $sess"
+    warn "Grin ($network) did not bind port $port within ${wait_timeout}s. Check: gtmux attach -t $sess"
     return 1
+}
+
+# -----------------------------------------------------------------------------
+# gnc_install_gtmux_helper
+# Install /usr/local/bin/gtmux — a one-word wrapper to list/attach the grin-user
+# tmux session(s). Node autostart runs `grin server run` as the unprivileged
+# 'grin' user, so its tmux server lives on grin's per-user socket — invisible to
+# a plain `tmux ls` from a root shell. This wrapper points tmux at grin's socket
+# (root bypasses the socket-dir perms, so no sudo needed). Idempotent: overwrites
+# in place. Best-effort — never fails the caller (always returns 0).
+# -----------------------------------------------------------------------------
+gnc_install_gtmux_helper() {
+    local dest="/usr/local/bin/gtmux"
+    cat > "$dest" 2>/dev/null <<'GTMUX_EOF' || return 0
+#!/bin/bash
+# gtmux — list/attach the Grin node tmux session(s) from a root shell.
+# Installed by grin-node-toolkit. The node autostart runs `grin server run` as
+# the unprivileged 'grin' user, so its tmux server lives on grin's per-user
+# socket, not root's. This wrapper points tmux at grin's socket. Examples:
+#   gtmux ls
+#   gtmux attach -t grin_pruned_mainnet      # Ctrl+B then D to detach
+GRIN_UID="$(id -u grin 2>/dev/null)"
+if [[ -n "$GRIN_UID" && -S "/tmp/tmux-${GRIN_UID}/default" ]]; then
+    exec tmux -S "/tmp/tmux-${GRIN_UID}/default" "$@"
+fi
+# grin user missing or its socket not found — fall back to the default server.
+exec tmux "$@"
+GTMUX_EOF
+    chmod 755 "$dest" 2>/dev/null || true
+    return 0
 }
 
 # -----------------------------------------------------------------------------

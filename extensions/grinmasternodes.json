@@ -7,9 +7,9 @@
   },
 
   "america": {
-    "fullmain":  ["fullmain.grin.money",  "fullmain.onlygrins.com", "fullmain.grinnode.org"],
-    "prunemain": ["prunemain.grin.money", "prunemain.grinily.com","prunemain.grinnode.org"],
-    "prunetest": ["prunetest.grin.money", "prunetest.onlygrins.com","prunetest.grinnode.org"]
+    "fullmain":  ["fullmain.grin.money", "fullmain.grinnode.org"],
+    "prunemain": ["prunemain.grin.money", "prunemain.grinnode.org"],
+    "prunetest": ["prunetest.grin.money", "prunetest.grinnode.org"]
   },
 
   "asia": {
@@ -19,9 +19,9 @@
   },
 
   "europe": {
-    "fullmain":  [],
-    "prunemain": [],
-    "prunetest": []
+    "fullmain":  ["fullmain.onlygrins.com"],
+    "prunemain": ["prunemain.grinily.com"],
+    "prunetest": ["prunetest.onlygrins.com"]
   },
 
   "africa": {

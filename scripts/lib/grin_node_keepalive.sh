@@ -103,7 +103,10 @@ gnk_autostart_enable() {
         info "Adding $net autostart entry."
     fi
     { echo "$cron"; echo "$line"; } | grep -v '^[[:space:]]*$' | crontab -
-    success "$net autostart enabled (delay ${delay}s, session $sess)."
+    # Install the gtmux viewer so the operator can attach this grin-owned
+    # session from a root shell (a plain `tmux ls` as root cannot see it).
+    gnc_install_gtmux_helper
+    success "$net autostart enabled (delay ${delay}s, session $sess). View: gtmux attach -t $sess"
 }
 
 # gnk_autostart_disable <network|all>

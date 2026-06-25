@@ -441,7 +441,7 @@
   <div class="legend"><span><i class="bar"></i>actual / day</span><span><i class="est"></i>estimate</span><span><i class="avg"></i>pool avg / miner</span></div>
   <p class="split-meta" id="earn-meta">—</p>
   <div id="earn-chart"><div class="chart-empty">Loading earnings…</div></div>
-  <p class="split-foot"><b>Span follows this chart's period selector</b> (Weekly = last 7 days · Monthly = this month · Yearly = this year, shown as weekly averages). Bars are the <b>actual</b> GRIN credited that day — lumpy, because solo blocks arrive irregularly. The <b>estimate</b> line removes that block-luck: the day's work share × the average block rate over the shown span. <b>Pool avg / miner</b> = that day's smoothed pool reward ÷ how many miners were active that day (the count changes day to day). The estimate is a projection, not a promise — attribution is by the block's found day.</p>
+  <p class="split-foot"><b>Span follows this chart's period selector</b> (Weekly = last 7 days · Monthly = this month · Yearly = this year, shown as weekly averages). The <b>left axis counts blocks found</b>; the <b>right axis is GRIN mined</b> (the two are the same scale — GRIN = blocks × block reward). Bars are the <b>actual</b> GRIN credited that day — lumpy, because solo blocks arrive irregularly. The <b>estimate</b> line removes that block-luck: the day's work share × the average block rate over the shown span. <b>Pool avg / miner</b> = that day's smoothed pool reward ÷ how many miners were active that day (the count changes day to day). The estimate is a projection, not a promise — attribution is by the block's found day.</p>
 </section>
 
 <footer>
@@ -1051,6 +1051,8 @@
   // ── Payout split (payment calc, mainnet) ──
   var SPLIT = { period: 'weekly', data: null, person: null, earnPeriod: 'weekly' };
   function fmtGrin(g) { return (g == null ? 0 : g).toFixed(3); }
+  // Block-count axis tick: ≤2 decimals, trailing zeros stripped (e.g. 0, 0.5, 1.25).
+  function fmtBlocks(b) { return String(Math.round((b == null ? 0 : b) * 100) / 100); }
 
   // Nickname = the part of a worker name before the first dot — byte-identical to
   // the collector's _nick_of (worker.split(".",1)[0]): no dot ⇒ the whole name;
@@ -1314,7 +1316,7 @@
     var allVals = actual.concat(estimate, avgPerMiner);
     var realMax = allVals.length ? Math.max.apply(null, allVals) : 0;
     var maxV = realMax > 0 ? realMax : 1;
-    var W = 720, H = 240, L = 64, R = 16, T = 14, B = 30;
+    var W = 720, H = 240, L = 44, R = 64, T = 14, B = 30;
     var plotW = W - L - R, plotH = H - T - B, n = labels.length, baseY = T + plotH;
     var band = plotW / Math.max(1, n);
     var barW = Math.max(2, Math.min(band * 0.6, 24));
@@ -1326,11 +1328,15 @@
     var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="'
       + esc('GRIN per pool per day, ' + periodLabel) + '">';
     var GRID = 4;
+    // Dual scale: gv is GRIN; blocks = GRIN ÷ block reward (the bars are reward = blocks × REWARD).
+    svg += '<text x="' + (L - 6) + '" y="' + (T - 3) + '" text-anchor="end" fill-opacity="0.7">blocks</text>';
+    svg += '<text x="' + (W - R + 6) + '" y="' + (T - 3) + '" text-anchor="start" fill-opacity="0.7">GRIN</text>';
     for (var g = 0; g <= GRID; g++) {
       var gv = maxV * g / GRID, gy = yAt(gv).toFixed(1);
       svg += '<line x1="' + L + '" y1="' + gy + '" x2="' + (W - R) + '" y2="' + gy + '" stroke="var(--border)"' + (g === 0 ? '' : ' stroke-opacity="0.35" stroke-dasharray="3 3"') + '/>';
-      // GRIN-mined value labels on the LEFT axis
-      svg += '<text x="' + (L - 6) + '" y="' + (parseFloat(gy) + 4) + '" text-anchor="end">' + fmtGrin(gv) + '</text>';
+      // LEFT axis = blocks found · RIGHT axis = GRIN mined
+      svg += '<text x="' + (L - 6) + '" y="' + (parseFloat(gy) + 4) + '" text-anchor="end">' + fmtBlocks(gv / REWARD) + '</text>';
+      svg += '<text x="' + (W - R + 6) + '" y="' + (parseFloat(gy) + 4) + '" text-anchor="start">' + fmtGrin(gv) + '</text>';
     }
     // Actual bars
     for (var i = 0; i < n; i++) {

@@ -432,7 +432,6 @@
   <div class="chart-head">
     <h2>GRIN / miner / day · <span style="color:var(--main)">Mainnet</span></h2>
     <div class="seg" id="earn-seg">
-      <button type="button" data-period="daily">Daily</button>
       <button type="button" data-period="weekly" class="active">Weekly</button>
       <button type="button" data-period="monthly">Monthly</button>
       <button type="button" data-period="yearly">Yearly</button>
@@ -1277,11 +1276,6 @@
     var d = SPLIT.data;
     if (!d || !(d.daily || []).length) { card.style.display = 'none'; return; }
     card.style.display = '';
-    if (SPLIT.earnPeriod === 'daily') {
-      meta.textContent = '—';
-      holder.innerHTML = '<div class="chart-empty">A single day is just one point — pick Weekly, Monthly or Yearly to see the per-day trend.</div>';
-      return;
-    }
 
     var byDay = {};
     d.daily.forEach(function (e) { byDay[e.day] = e; });
@@ -1446,6 +1440,14 @@
     });
   }
   poll(); setInterval(poll, POLL_MS); setInterval(tickFresh, 1000);
+  // Background tabs throttle setInterval, so while hidden the node tip stops
+  // refreshing and the coinbase-maturity countdown (derived from tip − height)
+  // freezes at a stale, inflated value — it only corrects on a manual reload.
+  // Re-poll the instant the tab is shown again so returning always paints a fresh
+  // tip (and real maturity time) with no refresh needed.
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) poll();
+  });
 })();
 </script>
 </body>

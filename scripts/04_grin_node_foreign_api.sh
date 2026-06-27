@@ -177,12 +177,15 @@ show_port_guide() {
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -ne "${BOLD}Press ${GREEN}y${RESET}${BOLD} to confirm you have read the above and want to proceed [y/N/0]: ${RESET}"
+    echo -ne "${BOLD}Press ${GREEN}Enter${RESET}${BOLD} to confirm you have read the above and proceed [Y/n/0]: ${RESET}"
     read -r _guide_confirm || true
-    if [[ "${_guide_confirm,,}" != "y" ]]; then
-        info "Cancelled."
-        return 1
-    fi
+    # Default to Yes — only an explicit no/0 cancels.
+    case "${_guide_confirm,,}" in
+        n|no|0)
+            info "Cancelled."
+            return 1
+            ;;
+    esac
     return 0
 }
 
@@ -247,63 +250,59 @@ _nginx_domain() {
 
 # _ensure_sites_enabled_include is provided by lib/nginx_shared_helpers.sh (sourced above).
 
-# Ensure both rate-limit zones referenced by this script's nginx config exist:
-#   · grin_api  (limit_req_zone)   — SHARED with Script 06; created via shared helper
-#   · grin_conn (limit_conn_zone)  — Script 04-only; created in nginx.conf http block
-# Idempotent: safe to call every setup.
-_nginx_add_limit_req_zone() {
+# Remove the legacy inline grin_conn limit_conn_zone that older versions of this
+# script patched directly into nginx.conf's http {} block. That was fragile: a
+# Debian nginx package upgrade resets nginx.conf to its default (which still
+# auto-includes conf.d/* AND sites-enabled/*), wiping the inline zone while the
+# site config that references `limit_conn grin_conn` survives — so nginx then fails
+# to start with `zero size shared memory zone "grin_conn"`. The zone now lives in a
+# conf.d/ file instead (auto-loaded, survives upgrades). Marker-guarded, idempotent.
+_nginx_strip_legacy_inline_conn_zone() {
     local nginx_conf="/etc/nginx/nginx.conf"
-
-    # 1. Shared grin_api zone — delegated to nginx_shared_helpers.sh
-    nginx_ensure_grin_api_zone
-
-    # 2. Script 04-specific grin_conn zone — lives in nginx.conf http {} block
-    grep -q "zone=grin_conn" "$nginx_conf" 2>/dev/null && return 0
+    [[ -f "$nginx_conf" ]] || return 0
+    grep -q "Grin Node Toolkit.*connection-limit zone" "$nginx_conf" 2>/dev/null || return 0
     python3 - "$nginx_conf" << 'PYEOF'
 import sys, re
 conf_file = sys.argv[1]
 with open(conf_file) as fh:
     txt = fh.read()
-if 'zone=grin_conn' in txt:
-    sys.exit(0)
-# Remove any old single-zone block left by a previous version of this script
+# Remove our marker comment + the single limit_conn_zone line that follows it.
+# Tightly scoped to the connection-limit (grin_conn) zone only — the request-rate
+# grin_api zone has always lived in conf.d via nginx_ensure_grin_api_zone, never
+# inline — and to exactly one directive line, so it can't eat unrelated config
+# (unlike the old greedy 1-6 line regex).
 txt = re.sub(
-    r'\n    # Grin Node Toolkit[^\n]*\n(?:    [^\n]+\n){1,6}',
+    r'\n[ \t]*# Grin Node Toolkit[^\n]*connection-limit zone[^\n]*\n'
+    r'[ \t]*limit_conn_zone[^\n]*\n',
     '\n', txt)
-insert = (
-    '\n    # Grin Node Toolkit — connection-limit zone for public API\n'
-    '    limit_conn_zone $binary_remote_addr zone=grin_conn:10m;\n'
-)
-idx = txt.find('http {')
-if idx == -1:
-    idx = txt.find('http{')
-if idx == -1:
-    print('ERROR: http { block not found in ' + conf_file, file=sys.stderr)
-    sys.exit(1)
-nl = txt.find('\n', idx)
-txt = txt[:nl] + insert + txt[nl:]
 with open(conf_file, 'w') as fh:
     fh.write(txt)
 PYEOF
 }
 
-# Remove the limit_conn_zone added by this script (marker-guarded).
-# Does NOT touch /etc/nginx/conf.d/grin-rate-limit.conf — that file is shared
-# with Script 06, so removing it here would break Script 06's setup.
+# Ensure both zones referenced by this script's nginx config exist as conf.d files:
+#   · grin_api  (limit_req_zone)   — SHARED with Script 06; via nginx_ensure_grin_api_zone
+#   · grin_conn (limit_conn_zone)  — via nginx_ensure_conn_limit_zone
+# Both write to /etc/nginx/conf.d/*.conf (auto-loaded into the http context and
+# untouched by nginx package upgrades), NOT inline in nginx.conf. Idempotent.
+_nginx_add_limit_req_zone() {
+    # 1. Shared grin_api request-rate zone — delegated to nginx_shared_helpers.sh
+    nginx_ensure_grin_api_zone
+
+    # 2. grin_conn connection-limit zone. Strip any legacy inline copy FIRST — the
+    #    conf.d helper grep-guards against a zone already defined anywhere under
+    #    /etc/nginx, so a leftover inline definition would block the conf.d write and
+    #    leave the fragile copy in place.
+    _nginx_strip_legacy_inline_conn_zone
+    nginx_ensure_conn_limit_zone "grin_conn" "10m" "grin-conn-limit"
+}
+
+# grin_conn now lives in a shared conf.d file (grin-conn-limit.conf). On proxy
+# removal we deliberately LEAVE it: an unreferenced limit_conn_zone is harmless, and
+# the other network's proxy (mainnet vs testnet) may still reference it — removing it
+# here used to break the surviving network. We only clean up any legacy inline copy.
 _nginx_remove_limit_req_zone() {
-    local nginx_conf="/etc/nginx/nginx.conf"
-    grep -q "Grin Node Toolkit.*connection-limit zone\|Grin Node Toolkit.*rate-limit zone" "$nginx_conf" 2>/dev/null || return 0
-    python3 - "$nginx_conf" << 'PYEOF'
-import sys, re
-conf_file = sys.argv[1]
-with open(conf_file) as fh:
-    txt = fh.read()
-txt = re.sub(
-    r'\n    # Grin Node Toolkit[^\n]*\n(?:    [^\n]+\n){1,6}',
-    '\n', txt)
-with open(conf_file, 'w') as fh:
-    fh.write(txt)
-PYEOF
+    _nginx_strip_legacy_inline_conn_zone
 }
 
 # Patch (or unpatch) an nginx site config for the status page.
@@ -642,8 +641,23 @@ _enable_node_api_nginx() {
     # Ensure sites-enabled include is in nginx.conf (self-heals after nginx upgrades).
     _ensure_sites_enabled_include
 
-    # Ensure rate/connection-limit zones are in nginx.conf before writing the site config.
+    # Ensure rate/connection-limit zones exist (conf.d) before writing the site config.
     _nginx_add_limit_req_zone
+
+    # Cloudflare real-IP restoration. If this domain is proxied through Cloudflare
+    # (orange cloud), the origin's $remote_addr is a Cloudflare edge IP, not the
+    # visitor — which collapses the per-IP limit_req/limit_conn zones below onto a
+    # handful of shared edge IPs and makes legit callers hit 429/503. The snippet
+    # restores the true client from CF-Connecting-IP. It is SPOOF-SAFE: real_ip only
+    # rewrites for connections actually originating from Cloudflare's published ranges,
+    # so it is harmless when the domain is NOT behind Cloudflare. Best-effort (needs
+    # outbound to fetch CF ranges) — if it can't be written we simply skip the include.
+    local _cf_realip_include=""
+    nginx_ensure_cloudflare_realip || true
+    if [[ -f "$NGINX_CLOUDFLARE_REALIP_SNIPPET" ]]; then
+        _cf_realip_include="    include $NGINX_CLOUDFLARE_REALIP_SNIPPET;"
+        info "Cloudflare real-IP restoration enabled for $domain (safe whether or not the domain is proxied)."
+    fi
 
     # Write HTTP-only config first — certbot will add the SSL block itself.
     # Writing SSL cert paths before certbot runs causes nginx -t to fail.
@@ -655,6 +669,9 @@ server {
     # Dedicated log files — rotated by /etc/logrotate.d/$nginx_symlink (5 days / 5 MB)
     access_log /var/log/nginx/$nginx_symlink.access.log;
     error_log  /var/log/nginx/$nginx_symlink.error.log warn;
+
+    # Restore real client IP when proxied through Cloudflare (no-op otherwise).
+${_cf_realip_include}
 
     # Public V2 Foreign API — JSON-RPC (no auth required for callers):
     #   get_tip, get_version, get_block, get_header, get_kernel,
@@ -725,8 +742,16 @@ LREOF
     systemctl reload nginx
 
     info "Requesting Let's Encrypt SSL certificate for $domain..."
-    certbot --nginx -d "$domain" --non-interactive --agree-tos -m "$email" \
-        || { warn "certbot failed — check /var/log/letsencrypt/letsencrypt.log"; return; }
+    if ! certbot --nginx -d "$domain" --non-interactive --agree-tos -m "$email"; then
+        warn "certbot failed — check /var/log/letsencrypt/letsencrypt.log"
+        warn "If $domain is proxied through Cloudflare (orange cloud), the HTTP-01"
+        warn "challenge on port 80 can be blocked by Cloudflare. To issue the cert:"
+        warn "  · TEMPORARILY set the DNS record to 'DNS only' (grey cloud) in Cloudflare,"
+        warn "    re-run option 4, then re-enable the orange cloud — OR"
+        warn "  · turn off 'Always Use HTTPS' / SSL 'Flexible' during issuance."
+        warn "Once the cert exists, Cloudflare proxied mode works fine (origin keeps HTTPS)."
+        return
+    fi
 
     # Re-apply status page + REST patches if they were active before this rebuild.
     # Writing a fresh config above wipes those patches; restore them here so the
@@ -1097,7 +1122,7 @@ EOF
         if [[ -f "$_deploy_dir/config.js" ]]; then
             sed -i "s|const GRIN_ONION_URL = \"[^\"]*\";|const GRIN_ONION_URL = \"http://${_onion}\";|" \
                 "$_deploy_dir/config.js" || true
-            chown www-data:www-data "$_deploy_dir/config.js" 2>/dev/null || true
+            chown "$(nginx_web_owner)" "$_deploy_dir/config.js" 2>/dev/null || true
             success "Status page updated — Tor card now shows http://${_onion}"
         fi
     fi
@@ -1136,7 +1161,7 @@ _disable_tor_nginx() {
     if [[ -f "$_deploy_dir/config.js" ]]; then
         sed -i "s|const GRIN_ONION_URL = \"[^\"]*\";|const GRIN_ONION_URL = \"\";|" \
             "$_deploy_dir/config.js" || true
-        chown www-data:www-data "$_deploy_dir/config.js" 2>/dev/null || true
+        chown "$(nginx_web_owner)" "$_deploy_dir/config.js" 2>/dev/null || true
     fi
 
     log "[TOR-04] Tor onion disabled: network=$network"
@@ -1222,8 +1247,8 @@ _enable_status_page() {
         printf 'const GRIN_ONION_URL = "%s";\n' "$_onion_url"
     } > "$deploy_dir/config.js"
 
-    # Set ownership and permissions for nginx (www-data)
-    chown -R www-data:www-data "$deploy_dir"   2>/dev/null || true
+    # Set ownership and permissions for the nginx web user (distro-detected)
+    chown -R "$(nginx_web_owner)" "$deploy_dir" 2>/dev/null || true
     find "$deploy_dir" -type d -exec chmod 755 {} \; 2>/dev/null || true
     find "$deploy_dir" -type f -exec chmod 644 {} \; 2>/dev/null || true
 
@@ -1691,24 +1716,33 @@ _enable_rest_api() {
     grin_user=$(stat -c '%U' "$grin_data_dir" 2>/dev/null || echo "grin")
     info "Grin data dir owner (node-collector will run as): $grin_user"
 
-    # 3. Create the REST directory — www-data owns it (nginx reads), grin_user gets
-    #    group-write via the www-data group so node-collector can write node.json.
+    # Detect the nginx web user (www-data on Debian/Ubuntu, nginx on RHEL/Rocky/Alma
+    # or the nginx.org repo). The REST dir, secret group, and collector cron all use
+    # it so this works regardless of distro — hardcoding www-data 403s / breaks cron
+    # on RHEL-family hosts.
+    local web_user web_owner
+    web_user=$(nginx_web_user)
+    web_owner=$(nginx_web_owner)
+    info "Nginx web user (REST collector will run as): $web_user"
+
+    # 3. Create the REST directory — the web user owns it (nginx reads), grin_user gets
+    #    group-write via the web-user group so node-collector can write node.json.
     mkdir -p "$rest_dir"
-    chown www-data:www-data "$rest_dir"
+    chown "$web_owner" "$rest_dir"
     chmod 775 "$rest_dir"
     info "REST directory ready: $rest_dir"
 
-    # If a .foreign_api_secret exists, www-data must be able to read it so the
+    # If a .foreign_api_secret exists, the web user must be able to read it so the
     # rest-collector can authenticate to the Grin foreign API (script 01 always
     # creates this file and enables Basic Auth on the foreign API port).
     local _foreign_secret_file="$grin_data_dir/.foreign_api_secret"
     if [[ -f "$_foreign_secret_file" ]]; then
-        chown root:www-data "$_foreign_secret_file"
+        chown "root:$web_user" "$_foreign_secret_file"
         chmod 640 "$_foreign_secret_file"
-        info "Foreign API secret readable by www-data: $_foreign_secret_file"
+        info "Foreign API secret readable by $web_user: $_foreign_secret_file"
     fi
 
-    # 4. Write the main cron job — www-data queries the foreign API.
+    # 4. Write the main cron job — the web user queries the foreign API.
     #    Pass the secret path so rest-collector can inject Basic Auth when needed.
     #    /etc/cron.d/ files are root-owned 644 and must declare SHELL/PATH.
     cat > "$cron_file" << EOF
@@ -1718,7 +1752,7 @@ _enable_rest_api() {
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
-* * * * * www-data python3 $REST_COLLECTOR_DEST $port $rest_dir $_foreign_secret_file 2>/dev/null || true
+* * * * * $web_user python3 $REST_COLLECTOR_DEST $port $rest_dir $_foreign_secret_file 2>/dev/null || true
 EOF
     chmod 644 "$cron_file"
     chown root:root "$cron_file"
@@ -1762,7 +1796,7 @@ EOF
 
     # 6. Run initial REST collection now so JSON files exist before nginx reload.
     info "Running initial REST collection..."
-    if sudo -u www-data python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" "$_foreign_secret_file" 2>/dev/null; then
+    if sudo -u "$web_user" python3 "$REST_COLLECTOR_DEST" "$port" "$rest_dir" "$_foreign_secret_file" 2>/dev/null; then
         success "Initial REST data collected."
     else
         warn "Initial REST collection failed (node may not be running yet)."
@@ -1794,7 +1828,7 @@ EOF
         echo "    curl -s https://$domain/rest/supply.json"
         echo ""
         info "Cron jobs:"
-        info "  REST collector  (www-data) : $cron_file"
+        info "  REST collector  ($web_user) : $cron_file"
         local node_cron_file
         [[ "$network" == "mainnet" ]] && node_cron_file="$NODE_CRON_MAINNET" \
                                       || node_cron_file="$NODE_CRON_TESTNET"

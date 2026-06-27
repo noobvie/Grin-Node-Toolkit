@@ -352,7 +352,18 @@ Current named wrappers:
 | `grin_api` (limit_req) | `nginx_ensure_grin_api_zone` | `30r/m` | Scripts 04, 06 |
 
 ### Script-specific zones — stay in the script that owns them
-- `grin_conn` (Script 04 only) — defined inline in Script 04 inside `nginx.conf` http block
+- `grin_conn` (limit_conn, Script 04 only) — written to `/etc/nginx/conf.d/grin-conn-limit.conf`
+  via `nginx_ensure_conn_limit_zone "grin_conn"` (the limit_conn companion to the rate-limit
+  primitive). **It must NOT be patched inline into `nginx.conf`** — a Debian nginx package
+  upgrade resets `nginx.conf` to its default (which still auto-includes `conf.d/*` and
+  `sites-enabled/*`), wiping an inline zone while the site config that references
+  `limit_conn grin_conn` survives → boot fails with `zero size shared memory zone "grin_conn"`.
+  Shared safely across mainnet+testnet vhosts (no-op-if-exists; left in place on disable —
+  an unreferenced zone is harmless). `_nginx_strip_legacy_inline_conn_zone` migrates old installs
+  that still carry the inline copy (run on every option-4 setup and on disable). Script 04's
+  MODE B vhost also `include`s `cloudflare-realip.conf` (via `nginx_ensure_cloudflare_realip`) so
+  the per-IP `grin_api`/`grin_conn` limits use the real visitor IP, not a Cloudflare edge IP,
+  when the domain is orange-clouded (spoof-safe, no-op when not behind Cloudflare).
 - `${POOL_SERVICE}_auth/_api/_static/_captcha/_admin/_ingest` (Script 07 only) — written via the multi-zone helper; `_ingest` covers satellite `/api/shares` + `/api/blocks` so relay batches aren't throttled by the public `_api` zone. **ALL zone rates carry a 2026-06 ×20 "loosen now, tighten later" bump** (operator request) so request throttling never breaks normal use during early testing — the real controls are JWT + login captcha + per-account lockout + IP auto-ban, NOT these throttles. Current rates: `_auth 200r/m`, `_api 600r/m`, `_static 6000r/m` (burst 100), `_captcha 600r/m`, `_admin 2400r/m`, `_ingest 2400r/m`. The `_static` bump matters most because every public page load re-fetches ~a dozen assets — incl. `public-shell.js`, which injects the header/nav — all keyed per-IP on `_static`, so the old 60r/m cap 503'd assets on a few fast navigations → pages rendered as plain HTML with no CSS and a missing nav. `pool_setup_nginx` self-heals an existing install (rm's the managed `script07-<svc>.conf` so the full zone list regenerates) when it carries any earlier-generation rate (auth `3|10r/m`, static `60|300r/m`) or is missing the `_captcha`/`_admin` zones. **To tighten later:** lower the rates in `pool_setup_nginx`'s `nginx_ensure_rate_limit_zones` call AND the app buckets in `lib/rate-limiter.js` (`this.limits` — `public 1200 / auth 200 / api 600 / admin 2400`, also ×20), then re-run 4) Setup nginx.
 - Per-domain bandwidth maps (Script 02) — defined inline in per-domain conf
 

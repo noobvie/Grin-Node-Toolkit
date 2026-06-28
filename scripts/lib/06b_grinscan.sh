@@ -949,6 +949,252 @@ grinscan_nuke() {
     pause
 }
 
+# ── Backup / Restore DB ───────────────────────────────────────────────────────
+# The SQLite DB (blocks + prices history) is the only piece of GrinScan state
+# that is expensive to recreate — the server rebuilds it by crawling the node
+# from genesis/horizon, which is slow and node-heavy. Backing it up lets an
+# operator move GrinScan to a new server WITHOUT re-crawling: install +
+# configure on the new box, copy the backup over, restore, start.
+
+GRINSCAN_BACKUP_DIR="${GRINSCAN_DIR}/backups"
+
+# Ensure the sqlite3 CLI exists (used for consistent online snapshots).
+_grinscan_ensure_sqlite3() {
+    command -v sqlite3 &>/dev/null && return 0
+    info "Installing sqlite3 CLI…"
+    if command -v apt-get &>/dev/null; then
+        apt-get install -y sqlite3 -qq 2>/dev/null || true
+    elif command -v dnf &>/dev/null; then
+        dnf install -y sqlite3 2>/dev/null || true
+    fi
+    command -v sqlite3 &>/dev/null
+}
+
+grinscan_backup() {
+    require_root
+    clear
+    echo -e "\n${BOLD}${CYAN}── GrinScan: Backup DB ──${RESET}\n"
+    echo -e "  ${DIM}Creates a consistent, compressed snapshot of the SQLite DB so a new${RESET}"
+    echo -e "  ${DIM}server never has to re-crawl the chain. Safe to run while running.${RESET}\n"
+
+    _grinscan_ensure_sqlite3 || { die "sqlite3 CLI not available — cannot snapshot."; pause; return; }
+
+    local net_choice; net_choice=$(_grinscan_pick_net) || return
+    local nets; IFS=',' read -ra nets <<< "$net_choice"
+
+    mkdir -p "$GRINSCAN_BACKUP_DIR"
+    local stamp; stamp=$(date +%Y%m%d_%H%M%S)
+    local made_any=0
+
+    for net in "${nets[@]}"; do
+        local net_short; net_short=$( [[ "$net" == "testnet" ]] && echo "test" || echo "main" )
+        local db_path="${GRINSCAN_DIR}/${net_short}/grinscan.db"
+
+        echo ""
+        echo -e "  ${BOLD}${CYAN}${net^^}${RESET}"
+        if [[ ! -f "$db_path" ]]; then
+            warn "  No DB found at ${db_path} — has the service run yet? Skipping."
+            continue
+        fi
+
+        local out="${GRINSCAN_BACKUP_DIR}/grinscan-${net_short}-${stamp}.db"
+        info "  Snapshotting ${db_path}…"
+        if ! timeout 120 sqlite3 "$db_path" ".backup '${out}'" 2>/dev/null || [[ ! -s "$out" ]]; then
+            # Fallback: checkpoint WAL into the main file, then plain copy
+            timeout 15 sqlite3 "$db_path" "PRAGMA wal_checkpoint(FULL);" &>/dev/null || true
+            cp -a "$db_path" "$out" 2>/dev/null || { error "  Snapshot failed for ${net}."; rm -f "$out"; continue; }
+            warn "  Used live copy (sqlite .backup unavailable)."
+        fi
+
+        # Integrity check before we trust it
+        local integ; integ=$(sqlite3 "$out" "PRAGMA integrity_check;" 2>/dev/null | head -1)
+        if [[ "$integ" != "ok" ]]; then
+            error "  Integrity check FAILED (${integ:-no output}) — discarding snapshot."
+            rm -f "$out"
+            continue
+        fi
+
+        local blocks max_h
+        blocks=$(sqlite3 "$out" "SELECT COUNT(*) FROM blocks;"   2>/dev/null || echo "?")
+        max_h=$( sqlite3 "$out" "SELECT MAX(height) FROM blocks;" 2>/dev/null || echo "?")
+
+        gzip -f "$out"
+        local gz="${out}.gz"
+        chown www-data:www-data "$gz" 2>/dev/null || true
+        local size; size=$(du -h "$gz" 2>/dev/null | cut -f1)
+
+        success "  Backup OK → ${gz}"
+        echo -e "    ${DIM}blocks: ${blocks}   tip height: ${max_h}   size: ${size}${RESET}"
+        made_any=1
+        log "grinscan_backup: ${net} → ${gz} (blocks=${blocks}, tip=${max_h})"
+    done
+
+    if [[ $made_any -eq 1 ]]; then
+        echo ""
+        echo -e "  ${BOLD}To copy a backup off this server (run on your LOCAL machine):${RESET}"
+        echo -e "    ${CYAN}scp root@$(hostname -I 2>/dev/null | awk '{print $1}'):${GRINSCAN_BACKUP_DIR}/grinscan-*.db.gz .${RESET}"
+        echo ""
+        echo -e "  ${DIM}Backups kept in: ${GRINSCAN_BACKUP_DIR}${RESET}"
+    fi
+    pause
+}
+
+grinscan_restore() {
+    require_root
+    clear
+    echo -e "\n${BOLD}${CYAN}── GrinScan: Restore DB ──${RESET}\n"
+    echo -e "  ${BOLD}Move GrinScan to a new server in 4 steps (no re-crawl):${RESET}"
+    echo -e "    ${GREEN}1.${RESET} On the NEW server: run ${BOLD}Install (1)${RESET} then ${BOLD}Configure (2)${RESET}."
+    echo -e "    ${GREEN}2.${RESET} Copy the backup over. From your LOCAL machine:"
+    echo -e "       ${CYAN}scp grinscan-main-YYYYMMDD_HHMMSS.db.gz root@NEW_SERVER_IP:${GRINSCAN_BACKUP_DIR}/${RESET}"
+    echo -e "       ${DIM}(mkdir -p ${GRINSCAN_BACKUP_DIR} on the new server first if scp says no such dir)${RESET}"
+    echo -e "    ${GREEN}3.${RESET} Run this Restore — pick the file below."
+    echo -e "    ${GREEN}4.${RESET} Start the service: ${BOLD}Service Control (3) → Start${RESET}."
+    echo -e "  ${DIM}Restore overwrites the current DB (a safety copy is kept first).${RESET}\n"
+
+    _grinscan_ensure_sqlite3 || { die "sqlite3 CLI not available — cannot verify restore."; pause; return; }
+
+    local net_choice; net_choice=$(_grinscan_pick_net) || return
+    [[ "$net_choice" == *,* ]] && { warn "Restore one network at a time. Pick a single network."; pause; return; }
+    local net="$net_choice"
+    local net_short; net_short=$( [[ "$net" == "testnet" ]] && echo "test" || echo "main" )
+    local db_path="${GRINSCAN_DIR}/${net_short}/grinscan.db"
+    local svc="grinscan-${net_short}"
+
+    # Build a list of candidate backups for this network
+    local -a backups=()
+    if [[ -d "$GRINSCAN_BACKUP_DIR" ]]; then
+        local f
+        while IFS= read -r f; do [[ -n "$f" ]] && backups+=("$f"); done < <(
+            ls -1t "${GRINSCAN_BACKUP_DIR}"/grinscan-${net_short}-*.db.gz 2>/dev/null
+        )
+    fi
+
+    echo ""
+    local src=""
+    if [[ ${#backups[@]} -gt 0 ]]; then
+        echo -e "  ${BOLD}Available ${net} backups:${RESET}"
+        local i=1
+        for f in "${backups[@]}"; do
+            local sz; sz=$(du -h "$f" 2>/dev/null | cut -f1)
+            echo -e "    ${GREEN}${i}${RESET}) $(basename "$f")  ${DIM}(${sz})${RESET}"
+            i=$((i+1))
+        done
+        echo -e "    ${GREEN}P${RESET}) Enter a custom file path"
+        echo -e "    ${DIM}0) Cancel${RESET}"
+        echo ""
+        echo -ne "  ${BOLD}Select [1-$((i-1))/P/0]: ${RESET}"
+        read -r sel
+        case "${sel^^}" in
+            0|"") info "Cancelled."; return ;;
+            P) echo -ne "  Full path to backup (.db.gz or .db): "; read -r src ;;
+            *)
+                if [[ "$sel" =~ ^[0-9]+$ ]] && (( sel >= 1 && sel <= ${#backups[@]} )); then
+                    src="${backups[$((sel-1))]}"
+                else
+                    warn "Invalid selection."; pause; return
+                fi
+                ;;
+        esac
+    else
+        warn "No ${net} backups found in ${GRINSCAN_BACKUP_DIR}."
+        echo -ne "  Full path to backup (.db.gz or .db): "
+        read -r src
+    fi
+
+    [[ -z "$src" ]] && { info "Cancelled."; return; }
+    [[ ! -f "$src" ]] && { die "File not found: ${src}"; pause; return; }
+
+    # Decompress (if needed) to a temp file we can verify before swapping in
+    local tmp; tmp=$(mktemp "${GRINSCAN_DIR}/${net_short}/.restore.XXXXXX.db" 2>/dev/null || mktemp)
+    if [[ "$src" == *.gz ]]; then
+        info "Decompressing…"
+        gunzip -c "$src" > "$tmp" 2>/dev/null || { die "Decompression failed."; rm -f "$tmp"; pause; return; }
+    else
+        cp -f "$src" "$tmp" || { die "Copy failed."; rm -f "$tmp"; pause; return; }
+    fi
+
+    # Verify the restored DB BEFORE swapping it in
+    local integ; integ=$(sqlite3 "$tmp" "PRAGMA integrity_check;" 2>/dev/null | head -1)
+    if [[ "$integ" != "ok" ]]; then
+        die "Restore aborted — backup failed integrity check (${integ:-unreadable}). DB unchanged."
+        rm -f "$tmp"; pause; return
+    fi
+    local blocks max_h
+    blocks=$(sqlite3 "$tmp" "SELECT COUNT(*) FROM blocks;"   2>/dev/null || echo "?")
+    max_h=$( sqlite3 "$tmp" "SELECT MAX(height) FROM blocks;" 2>/dev/null || echo "?")
+    echo ""
+    success "Backup verified: ${blocks} blocks, tip height ${max_h}."
+    echo ""
+    echo -ne "  ${BOLD}${YELLOW}Overwrite ${db_path}? [y/N]: ${RESET}"
+    read -r ok
+    [[ "${ok,,}" != "y" ]] && { info "Cancelled — DB unchanged."; rm -f "$tmp"; return; }
+
+    # Stop the service so it isn't writing while we swap files
+    local was_active=0
+    if systemctl is-active "$svc" &>/dev/null; then
+        was_active=1
+        info "Stopping ${svc}…"
+        systemctl stop "$svc" 2>/dev/null || true
+        sleep 1
+    fi
+
+    # Safety copy of the existing DB (+ drop stale WAL/SHM from the old DB)
+    if [[ -f "$db_path" ]]; then
+        local safety="${db_path}.pre-restore.$(date +%Y%m%d_%H%M%S)"
+        cp -a "$db_path" "$safety" 2>/dev/null && info "Previous DB saved → ${safety}"
+    fi
+    rm -f "${db_path}-wal" "${db_path}-shm" 2>/dev/null || true
+
+    mv -f "$tmp" "$db_path"
+    chown www-data:www-data "$db_path" 2>/dev/null || true
+    chmod 644 "$db_path" 2>/dev/null || true
+    success "DB restored → ${db_path}"
+
+    if [[ $was_active -eq 1 ]]; then
+        info "Restarting ${svc}…"
+        systemctl start "$svc" 2>/dev/null && success "${svc} started." || warn "Failed to start ${svc} — check logs."
+    else
+        echo -e "  ${DIM}Service was not running — start it via Service Control (3).${RESET}"
+    fi
+    log "grinscan_restore: ${net} ← ${src} (blocks=${blocks}, tip=${max_h})"
+    pause
+}
+
+grinscan_backup_restore() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── GrinScan: Backup / Restore DB ──${RESET}\n"
+    echo -e "  ${DIM}The SQLite DB holds the crawled block + price history. Backing it up${RESET}"
+    echo -e "  ${DIM}lets you migrate to a new server without re-crawling the chain.${RESET}\n"
+
+    # ── Reminder box: how to migrate to a new server, correctly ──────────────
+    echo -e "  ${BOLD}${YELLOW}┌──────────────────────────────────────────────────────────────────┐${RESET}"
+    echo -e "  ${BOLD}${YELLOW}│${RESET}  ${BOLD}Migrate GrinScan to a new server — no re-crawl needed${RESET}             ${BOLD}${YELLOW}│${RESET}"
+    echo -e "  ${BOLD}${YELLOW}├──────────────────────────────────────────────────────────────────┤${RESET}"
+    echo -e "  ${BOLD}${YELLOW}│${RESET}  ${GREEN}1.${RESET} OLD server:  run ${BOLD}B) Backup DB${RESET}  → writes a .db.gz file       ${BOLD}${YELLOW}│${RESET}"
+    echo -e "  ${BOLD}${YELLOW}│${RESET}  ${GREEN}2.${RESET} Copy it down, then up to the NEW server (use ${BOLD}scp${RESET})          ${BOLD}${YELLOW}│${RESET}"
+    echo -e "  ${BOLD}${YELLOW}│${RESET}  ${GREEN}3.${RESET} NEW server:  run ${BOLD}Install (1)${RESET} → ${BOLD}Configure (2)${RESET} first      ${BOLD}${YELLOW}│${RESET}"
+    echo -e "  ${BOLD}${YELLOW}│${RESET}  ${GREEN}4.${RESET} NEW server:  run ${BOLD}R) Restore DB${RESET}  → pick the file          ${BOLD}${YELLOW}│${RESET}"
+    echo -e "  ${BOLD}${YELLOW}│${RESET}  ${GREEN}5.${RESET} NEW server:  ${BOLD}Service Control (3) → Start${RESET}                ${BOLD}${YELLOW}│${RESET}"
+    echo -e "  ${BOLD}${YELLOW}│${RESET}  ${DIM}Backups live in: ${GRINSCAN_BACKUP_DIR}${RESET}            ${BOLD}${YELLOW}│${RESET}"
+    echo -e "  ${BOLD}${YELLOW}│${RESET}  ${DIM}Backup is safe to run live · Restore keeps a pre-restore copy${RESET}    ${BOLD}${YELLOW}│${RESET}"
+    echo -e "  ${BOLD}${YELLOW}└──────────────────────────────────────────────────────────────────┘${RESET}"
+    echo ""
+
+    echo -e "  ${GREEN}B${RESET}) Backup DB   ${DIM}consistent snapshot → ${GRINSCAN_BACKUP_DIR}${RESET}"
+    echo -e "  ${GREEN}R${RESET}) Restore DB  ${DIM}from a backup file (incl. migration steps)${RESET}"
+    echo -e "  ${DIM}0) Back${RESET}"
+    echo ""
+    echo -ne "${BOLD}Select [B/R/0]: ${RESET}"
+    read -r choice
+    case "${choice^^}" in
+        B) grinscan_backup  || true ;;
+        R) grinscan_restore || true ;;
+        0|"") return ;;
+        *) warn "Invalid choice."; sleep 1 ;;
+    esac
+}
+
 _grinscan_pick_net() {
     echo -e "  ${GREEN}1${RESET}) Testnet"  >/dev/tty
     echo -e "  ${GREEN}2${RESET}) Mainnet"  >/dev/tty

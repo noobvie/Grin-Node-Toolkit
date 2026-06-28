@@ -126,6 +126,25 @@ Node API method split — use this to decide which endpoint a new call should ta
 - **Foreign API** (`/v2/foreign`, `.foreign_api_secret`): `get_block`, `get_header`, `get_outputs`, `get_unspent_outputs`, `get_pool_size`, `push_transaction` — public chain data. Used by: wallets connecting to a public node, external block data queries.
 - **Note:** prefer `get_status` over `get_tip` for the node Owner API — `get_tip` returns "Method not found" in practice.
 
+**Pruned vs archive node — the `get_block` horizon (don't conflate headers with blocks).**
+A **pruned** node (`mainnet-prune`, `archive_mode=false`) retains the full **header** chain and the full
+**kernel** set, so `get_header(N)` works for *all* heights (incl. 0) and supply/difficulty/fee/tx-count data
+(header+kernel-derived) is available for any height. But `get_block(N)` returns the full block **body**
+(outputs/rangeproofs), which are pruned below the horizon — so **`get_block` FAILS for old/genesis heights on
+a pruned node** ("not found"); only blocks within the pruning horizon (~last few weeks) are retrievable.
+An **archive** node (`mainnet-full`, `archive_mode=true`) serves `get_block` for every height since genesis.
+- Proof in-repo: GrinScan's `node_mode` probe (`web/06b_grinscan/server.js`) uses `get_block(1)`
+  success/failure as the literal archive-vs-pruned discriminator.
+- Service impact when on a pruned node: **aglkm grin-explorer** (Script 06b option C, Rust+Rocket) *requires*
+  archive — it reads blocks live from the node and won't serve history (refuses install on pruned). **GrinScan**
+  degrades gracefully — it keeps a rolling `history_days` window in its own SQLite (`startupBackfill` +
+  `historyBackfill`, which stops at the pruning horizon) and serves recent blocks; genesis/old lookups beyond
+  its cache return "not found". **Peer-map collector** (`06_collector.py`) is unaffected — it owns a full
+  genesis→tip import in its own `stats.db` (`_fetch_block_stats_range(0, tip)`), independent of the node.
+- Sizing: an archive node's `chain_data` (~18 GB+ and growing, mostly rangeproofs) must fit the box's RAM as
+  page cache or it thrashes (`get_block` latency → minutes; swap fills; kswapd pegged). A ~4 GB VPS cannot host
+  archive + the 06/06b services — use a pruned node there, or move archive to an 8 GB+ box.
+
 Auth format for node API calls (both endpoints): `grin:<secret>` as HTTP Basic Auth username:password.
 The secret is NEVER sent over the internet — only used for server-to-server calls on localhost.
 

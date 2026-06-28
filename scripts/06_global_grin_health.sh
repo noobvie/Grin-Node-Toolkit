@@ -1576,6 +1576,56 @@ stop_explorer() {
     pause
 }
 
+# ── B-X: Nuke — remove service, nginx, crontab, data dir ──────────────────────
+nuke_explorer() {
+    require_root
+    clear
+    echo -e "\n${BOLD}${RED}── Grin Explorer: Nuke ──${RESET}\n"
+    echo -e "  ${YELLOW}Destroys all Grin Explorer (aglkm/grincoin.org) state:${RESET}"
+    echo -e "  ${DIM}  • Kills the tmux session (${EXPLORER_SESSION})${RESET}"
+    echo -e "  ${DIM}  • Removes the @reboot auto-start cron entry${RESET}"
+    echo -e "  ${DIM}  • Removes the Nginx vhost + enabled symlink + logrotate${RESET}"
+    echo -e "  ${DIM}  • Deletes the app dir (clone, built binary, Explorer.toml, SQLite DB)${RESET}"
+    echo -e "  ${DIM}  • Does NOT touch the Grin node, its chain_data, or Rust/cargo${RESET}"
+    echo ""
+    echo -ne "  ${BOLD}${RED}Type 'nuke' to confirm: ${RESET}"
+    read -r confirm
+    [[ "$confirm" != "nuke" ]] && { info "Cancelled — nothing removed."; sleep 1; return; }
+    echo ""
+
+    # tmux session
+    if tmux has-session -t "$EXPLORER_SESSION" 2>/dev/null; then
+        tmux kill-session -t "$EXPLORER_SESSION" 2>/dev/null && success "  Stopped tmux session ${EXPLORER_SESSION}"
+    fi
+
+    # Auto-start cron entry
+    if crontab -l 2>/dev/null | grep -q "grin_explorer"; then
+        crontab -l 2>/dev/null | grep -v "grin_explorer" | crontab - && success "  Removed @reboot cron entry"
+    fi
+
+    # Nginx vhost + enabled symlink + logrotate
+    local nginx_link="/etc/nginx/sites-enabled/grin-explorer"
+    [[ -f "$NGINX_EXPLORER_CONF" ]]                && rm -f "$NGINX_EXPLORER_CONF"            && success "  Removed ${NGINX_EXPLORER_CONF}"
+    [[ -L "$nginx_link" ]]                         && rm -f "$nginx_link"                     && success "  Removed ${nginx_link}"
+    [[ -f "/etc/logrotate.d/grin-explorer" ]]      && rm -f "/etc/logrotate.d/grin-explorer"  && success "  Removed logrotate config"
+
+    # Reload nginx if running and config still valid
+    if command -v nginx &>/dev/null && systemctl is-active nginx &>/dev/null; then
+        nginx -t &>/dev/null && systemctl reload nginx && success "  Nginx reloaded." || \
+            warn "  Nginx config test failed after nuke — reload manually."
+    fi
+
+    # App directory (clone + built binary + Explorer.toml + SQLite DB)
+    if [[ -d "$EXPLORER_DIR" ]]; then
+        rm -rf "${EXPLORER_DIR:?}" && success "  Removed ${EXPLORER_DIR}"
+    fi
+
+    echo ""
+    success "Nuke complete. Run Install & Build (1) → Configure (2) to rebuild."
+    log "nuke_explorer: removed service, nginx, cron, ${EXPLORER_DIR}"
+    pause
+}
+
 # ── B-5: Setup Nginx ──────────────────────────────────────────────────────────
 setup_nginx_explorer() {
     require_root
@@ -1809,6 +1859,7 @@ show_menu_b() {
     echo -e "  ${GREEN}5${RESET})   Auto-Start      ${DIM}systemctl enable (survive reboots)${RESET}"
     echo -e "  ${GREEN}6${RESET})   Status"
     echo -e "  ${GREEN}7${RESET})   View Logs"
+    echo -e "  ${GREEN}8${RESET})   Backup / Restore DB  ${DIM}migrate to a new server without re-crawling${RESET}"
     echo -e "  ${GREEN}U${RESET})   Update App      ${DIM}redeploy server.js + web files from toolkit, refresh npm deps${RESET}"
     echo -e "  ${RED}Z${RESET})   Nuke            ${DIM}stop + remove service, data dir, nginx config (clean rebuild)${RESET}"
     echo ""
@@ -1817,7 +1868,7 @@ show_menu_b() {
     echo -e "  ${DIM}DNS: ensure A-record points to this server before running Setup Nginx (4)${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-7, U, Z]: ${RESET}"
+    echo -ne "${BOLD}Select [0-8, U, Z]: ${RESET}"
 }
 
 show_menu_c() {
@@ -1846,12 +1897,13 @@ show_menu_c() {
     echo -e "  ${GREEN}6${RESET})   Auto-Start on Boot  ${DIM}@reboot cron via tmux${RESET}  [$_xcron]"
     echo -e "  ${GREEN}7${RESET})   Status"
     echo -e "  ${YELLOW}Z${RESET})   Stop             ${DIM}kill tmux session${RESET}"
+    echo -e "  ${RED}X${RESET})   Nuke             ${DIM}remove service, nginx, crontab, data dir (clean rebuild)${RESET}"
     echo ""
     echo -e "  ${DIM}0) Back${RESET}"
     echo -e "  ${DIM}[Enter] Refresh menu${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-7, Z]: ${RESET}"
+    echo -ne "${BOLD}Select [0-7, Z, X]: ${RESET}"
 }
 
 show_main_menu() {
@@ -1925,6 +1977,7 @@ run_menu_b() {
             5) grinscan_autostart                  || true ;;
             6) grinscan_status                     || true ;;
             7) grinscan_logs                       || true ;;
+            8) grinscan_backup_restore             || true ;;
             U) grinscan_update                     || true ;;
             Z) grinscan_nuke                       || true ;;
             0) break                                        ;;
@@ -1947,6 +2000,7 @@ run_menu_c() {
             6) schedule_explorer_autostart     || true ;;
             7) status_explorer                 || true ;;
             Z) stop_explorer                   || true ;;
+            X) nuke_explorer                   || true ;;
             0) break                                    ;;
             "") ;;  # Enter = refresh menu
             *) warn "Invalid option."; sleep 1         ;;

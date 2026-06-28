@@ -737,6 +737,9 @@ _drop_write_toml() {
         if [[ -n "$node_secret_path" ]]; then
             _patch_toml "$toml" "node_api_secret_path" "\"$node_secret_path\""
             info "Node API secret: $node_secret_path"
+            # Enable box-wide secret self-heal so node_api_secret_path is
+            # auto-refreshed after a future node rebuild (idempotent; needs root).
+            declare -F grin_install_secret_sync >/dev/null 2>&1 && { grin_install_secret_sync || true; }
         else
             warn "Node secret not found — run script 01 to build the node first."
         fi

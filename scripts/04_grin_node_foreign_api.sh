@@ -149,6 +149,10 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 # If this file is missing, the toolkit is broken; fail loudly rather than silently.
 # shellcheck source=lib/nginx_shared_helpers.sh
 source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+# Shared node-secret resolver + self-heal (keeps the nginx Basic-Auth header in
+# sync with the live node's foreign secret after a node rebuild).
+# shellcheck source=lib/grin_node_secrets.sh
+source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
 
 # ─── Port guide popup ─────────────────────────────────────────────────────────
 show_port_guide() {
@@ -740,6 +744,11 @@ LREOF
         return
     fi
     systemctl reload nginx
+
+    # Enable box-wide secret self-heal so the foreign-secret Basic-Auth header in
+    # this vhost is auto-refreshed after a future node rebuild (grin_sync_node_api_nginx
+    # re-embeds it + reloads nginx). Idempotent; no-op without root.
+    grin_install_secret_sync || true
 
     info "Requesting Let's Encrypt SSL certificate for $domain..."
     if ! certbot --nginx -d "$domain" --non-interactive --agree-tos -m "$email"; then

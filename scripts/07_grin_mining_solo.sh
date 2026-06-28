@@ -99,6 +99,10 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 # ─── Source shared libs ─────────────────────────────────────────────────────
 # shellcheck source=lib/nginx_shared_helpers.sh
 source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+# Shared node-secret resolver + self-heal (keeps the solo wallet's
+# node_api_secret_path in sync with the live node after a node rebuild).
+# shellcheck source=lib/grin_node_secrets.sh
+source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
 # Node supervision: control primitives + keepalive (boot autostart + node-sync
 # watchdog). Central wallet pulls in grin_wallet_install.sh + control (guarded).
 # shellcheck source=lib/grin_node_control.sh

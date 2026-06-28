@@ -40,6 +40,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLKIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# ─── Shared node-secret resolver + self-heal (used across products) ───────────
+# shellcheck source=lib/grin_node_secrets.sh
+source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
+
 # ─── GrinScan lib (sourced after TOOLKIT_ROOT is set) ────────────────────────
 # shellcheck source=lib/06b_grinscan.sh
 source "$SCRIPT_DIR/lib/06b_grinscan.sh"
@@ -51,6 +55,11 @@ LOG_FILE="$LOG_DIR/global_grin_health_$(date +%Y%m%d_%H%M%S).log"
 DATA_DIR="/opt/grin/grin-stats"
 WWW_DIR="/var/www/grin-stats"
 COLLECTOR_BIN="/usr/local/bin/grin-stats-collector"
+# Self-heal: the shared lib (grin_node_secrets.sh) re-resolves the live node's
+# api/foreign secret paths into config.env before every collector run and via a
+# systemd timer, so a node rebuild (prune↔main changes both the node dir AND the
+# secrets) doesn't break the collector with HTTP 401. $GNS_SYNC_BIN is the CLI it
+# installs (default /usr/local/bin/grin-secret-sync).
 DB_PATH="$DATA_DIR/stats.db"
 PRICE_COLLECTOR_BIN="/usr/local/bin/grin-price-collector"
 PRICE_DIR="/opt/grin/grin-price"
@@ -180,6 +189,17 @@ _resolve_secret_from_toml() {
     # Expand ~ to the grin user home (/opt/grin) — grin runs as the grin user
     resolved="${raw/#\~//opt/grin}"
     [[ -f "$resolved" ]] && echo "$resolved" || echo "$default"
+}
+
+# ─── Self-heal: re-resolve the live node's secrets before a collector run ─────
+# Delegates to the shared lib (grin_node_secrets.sh, sourced above) so a node
+# rebuild — which changes both the node dir (mainnet-prune ↔ mainnet-full) and
+# regenerates the secrets — no longer breaks the collector with HTTP 401 until
+# someone remembers to re-run Install. Best-effort: never fails the caller.
+# (The installed $GNS_SYNC_BIN CLI + systemd timer do the same box-wide on a
+# schedule; this is the belt-and-braces call right before the interactive run.)
+_resync_collector_secrets() {
+    grin_sync_collector 2>/dev/null || true
 }
 
 # ─── Detect running Grin node ─────────────────────────────────────────────────
@@ -637,6 +657,11 @@ EOF
     chmod 600 "$DATA_DIR/config.env"
     info "Config written to $DATA_DIR/config.env"
     info "If your secret files are in a different location, edit that file manually."
+    # Install the shared secret self-heal (lib + CLI + systemd timer) so f)
+    # Incremental update, the cron job, and a 5-min timer all re-resolve secret
+    # paths against the live node after any future rebuild — across ALL products.
+    grin_install_secret_sync || warn "Could not install grin-secret-sync timer (non-fatal)."
+    info "Secret self-heal installed: $GNS_SYNC_BIN + grin-secret-sync.timer"
     # Re-apply SEO (canonical/og/sitemap) if a domain was already set; else the
     # __SITE_URL__ token stays and is resolved at runtime by the page's JS fallback
     # until Setup Nginx (5) runs and finalizes it.
@@ -802,6 +827,9 @@ import_data() {
     echo ""
     local rc=0
     if [[ "$bin" == "$COLLECTOR_BIN" || "$bin" == "$ECOSYSTEM_CHECKER_BIN" ]]; then
+        # Self-heal secret paths against the live node before a collector run, so
+        # a node rebuild (prune↔main) doesn't surface as an HTTP 401 here.
+        [[ "$bin" == "$COLLECTOR_BIN" ]] && _resync_collector_secrets
         # shellcheck disable=SC2046
         env $(cat "$DATA_DIR/config.env" | tr '\n' ' ') \
             python3 "$bin" $cmd || rc=$?
@@ -824,6 +852,9 @@ import_data() {
 start_updates() {
     require_root
     [[ ! -f "$COLLECTOR_BIN" ]] && { die "Not installed. Run Install (1) first."; return; }
+    # Make sure the shared secret self-heal CLI exists before the cron references
+    # it (regenerate for installs that predate it).
+    [[ -x "$GNS_SYNC_BIN" ]] || grin_install_secret_sync || true
     clear
     echo -e "\n${BOLD}${CYAN}── Start Live Updates ──${RESET}\n"
 
@@ -843,7 +874,9 @@ start_updates() {
     # (slow get_block on a busy/full node), the next cron tick skips instead of
     # piling a second collector on top — which would saturate the node API and
     # freeze every JSON export. The collector also self-locks (acquire_run_lock).
-    local cron_line="*/5 * * * * flock -n $DATA_DIR/grin_stats_update.lock env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $COLLECTOR_BIN --update >> $LOG_DIR/grin_stats_cron.log 2>&1 && chown -R www-data:www-data $WWW_DIR/data >> /dev/null 2>&1 $CRON_MARKER_STATS"
+    # Self-heal the node secret paths (best-effort, never blocks the update) under
+    # the same lock right before the collector runs, so a node rebuild can't 401 us.
+    local cron_line="*/5 * * * * flock -n $DATA_DIR/grin_stats_update.lock /bin/bash -c '$GNS_SYNC_BIN >/dev/null 2>&1 || true; env \$(cat $DATA_DIR/config.env | tr \"\\n\" \" \") python3 $COLLECTOR_BIN --update' >> $LOG_DIR/grin_stats_cron.log 2>&1 && chown -R www-data:www-data $WWW_DIR/data >> /dev/null 2>&1 $CRON_MARKER_STATS"
 
     # Remove any stale price / ecosystem crons before re-adding
     existing=$(echo "$existing" | grep -v "grin_price_update"     || true)

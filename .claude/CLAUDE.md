@@ -174,6 +174,40 @@ curl -s -u "grin:$SECRET" \
 GrinScan copies node secrets into `/opt/grin/grinscan/{test,main}/` during Configure (2).
 If node secrets are regenerated (Script 01 rebuild), re-run GrinScan Configure (2) to refresh copies.
 
+### Secret self-heal — `scripts/lib/grin_node_secrets.sh` (shared, sourced)
+
+**A node rebuild changes BOTH the node dir (mainnet-prune ↔ mainnet-full) AND
+regenerates the api/foreign secrets** — silently breaking every consumer that froze
+a secret path/value at setup time (the classic symptom: stats collector `get_tip`
+→ HTTP 401). This shared lib is the single source of truth that re-resolves from the
+*live* node and re-applies to all consumers, so no per-product setup re-run is needed.
+
+- **Canonical resolver:** `grin_live_node_dir <mainnet|testnet>` (running-node-aware:
+  tmux session `grin_full_mainnet`/`grin_pruned_mainnet`/`grin_pruned_testnet` →
+  instances-conf registry → standard path; mainnet prefers full archive) and
+  `grin_node_secret_path <net> <foreign|owner>`. Use these instead of re-deriving
+  node dirs/secret paths in new code.
+- **Idempotent appliers:** `grin_env_set` (env file KEY), `grin_toml_set_key`
+  (toml key), per-consumer `grin_sync_collector` / `grin_grinscan_sync` (re-copy +
+  restart `grinscan-{main,test}` on change) / `grin_sync_wallets` (patch
+  `node_api_secret_path`; local-node + correct-net only; does NOT restart the
+  listener — takes effect on the wallet's next start) / `grin_sync_node_api_nginx`
+  (re-embed the Basic-Auth header in all 4 Script-04 vhosts incl. the Tor ones,
+  reload nginx on change). `grin_secrets_sync_all` runs them all; each is a no-op
+  when its product is absent or already correct.
+- **Auto self-heal:** `grin_install_secret_sync` copies the lib to
+  `/opt/grin/lib/grin_node_secrets.sh`, writes the `/usr/local/bin/grin-secret-sync`
+  CLI, and enables a `grin-secret-sync.timer` (every 5 min). Called from the setup
+  flow of every product that consumes node secrets (Scripts 06 Install, 04 nginx
+  setup, 05/052/07-pool/07-solo wallet setup, 06b GrinScan Configure) — installing
+  ANY of them activates box-wide self-heal. The Script 06 stats cron also runs
+  `grin-secret-sync` before each collector `--update` (belt-and-braces under the
+  same flock).
+- **To add a new consumer:** source the lib, add a `grin_sync_<x>` function +
+  call it in `grin_secrets_sync_all`, and call `grin_install_secret_sync` in that
+  product's setup. Don't re-implement node-dir/secret resolution.
+- **Manual one-shot:** run `grin-secret-sync` (root) to force a re-sync now.
+
 **grin-wallet** (`$WALLET_DIR/`) — both created by `grin-wallet init/recover`
 `grin-wallet init -hr` to recover wallet from seed and store config/secret files in same dir.
 `grin-wallet recover` to display seed

@@ -364,11 +364,23 @@ BANNERS
         log "grinscan_configure: ${net} → ${config_path}"
     done
 
+    # Install the shared secret self-heal timer so the copied secrets are
+    # auto-refreshed after a future node rebuild (grin_grinscan_sync re-copies +
+    # restarts grinscan-{main,test} when the node's secret changes). Falls back to
+    # the manual Configure re-run if the helper is unavailable.
+    if declare -F grin_install_secret_sync >/dev/null 2>&1; then
+        grin_install_secret_sync || true
+    fi
+
     echo ""
     echo -e "  Next: run ${BOLD}Service Control (3)${RESET} to launch the service."
     echo ""
-    echo -e "  ${YELLOW}⚠  If you rebuild the node or reset its API secrets (Script 01),${RESET}"
-    echo -e "  ${YELLOW}   re-run Configure (2) to refresh the secret copies in this dir.${RESET}"
+    if declare -F grin_install_secret_sync >/dev/null 2>&1; then
+        echo -e "  ${DIM}Node secrets are auto-refreshed by grin-secret-sync.timer after a rebuild.${RESET}"
+    else
+        echo -e "  ${YELLOW}⚠  If you rebuild the node or reset its API secrets (Script 01),${RESET}"
+        echo -e "  ${YELLOW}   re-run Configure (2) to refresh the secret copies in this dir.${RESET}"
+    fi
     pause
 }
 
@@ -736,7 +748,10 @@ grinscan_setup_nginx() {
     fi
 
     # Ensure rate-limit zone exists — via shared helper, with inline fallback
-    local api_snippet="/etc/nginx/snippets/grin-api.conf"
+    # GrinScan uses its OWN proxy snippet (grinscan-proxy.conf), NOT the shared
+    # grin-api.conf owned by Script 06 — keeping the two services decoupled so
+    # neither install order nor teardown can clobber the other's nginx config.
+    local proxy_snippet="/etc/nginx/snippets/grinscan-proxy.conf"
     if declare -F nginx_ensure_rate_limit_zone &>/dev/null; then
         nginx_ensure_rate_limit_zone "grinscan_api" "30r/m" "10m" "grinscan-rate-limit"
     else
@@ -748,9 +763,9 @@ limit_req_zone $binary_remote_addr zone=grinscan_api:10m rate=30r/m;
 RATELIMIT
         fi
     fi
-    if [[ ! -f "$api_snippet" ]]; then
+    if [[ ! -f "$proxy_snippet" ]]; then
         mkdir -p /etc/nginx/snippets
-        cat > "$api_snippet" <<'SNIPPET'
+        cat > "$proxy_snippet" <<'SNIPPET'
 proxy_set_header Host              $host;
 proxy_set_header X-Real-IP         $remote_addr;
 proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
@@ -766,7 +781,7 @@ server {
     server_name ${domain};
 
     location /rest/ {
-        include snippets/grin-api.conf;
+        include snippets/grinscan-proxy.conf;
         limit_req zone=grinscan_api burst=20 nodelay;
         proxy_pass http://127.0.0.1:${svc_port};
     }
@@ -788,7 +803,7 @@ server {
     }
 
     location / {
-        include snippets/grin-api.conf;
+        include snippets/grinscan-proxy.conf;
         proxy_pass http://127.0.0.1:${svc_port};
     }
 }
@@ -918,10 +933,16 @@ grinscan_nuke() {
 
     # Shared files — only when nuking both networks
     if [[ $nuke_shared -eq 1 ]]; then
+        # Remove GrinScan's OWN nginx files only: the grinscan_api rate-limit zone
+        # conf and the grinscan-proxy.conf snippet.
+        # Do NOT touch /etc/nginx/snippets/grin-api.conf — that snippet is created
+        # and OWNED by Script 06 (the world.grin.money stats vhost includes it).
+        # Deleting it here used to break Script 06's vhost (nginx [emerg] open()
+        # grin-api.conf failed → nginx won't start → site down).
         local rate_conf="/etc/nginx/conf.d/grinscan-rate-limit.conf"
-        local api_snippet="/etc/nginx/snippets/grin-api.conf"
-        [[ -f "$rate_conf"   ]] && rm -f "$rate_conf"   && success "Removed ${rate_conf}"
-        [[ -f "$api_snippet" ]] && rm -f "$api_snippet" && success "Removed ${api_snippet}"
+        local proxy_snippet="/etc/nginx/snippets/grinscan-proxy.conf"
+        [[ -f "$rate_conf"     ]] && rm -f "$rate_conf"     && success "Removed ${rate_conf}"
+        [[ -f "$proxy_snippet" ]] && rm -f "$proxy_snippet" && success "Removed ${proxy_snippet}"
 
         # Offer to remove the deployed app dir (node_modules etc.)
         if [[ -d "${GRINSCAN_APP}" ]]; then

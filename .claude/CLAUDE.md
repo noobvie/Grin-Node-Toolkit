@@ -141,9 +141,42 @@ An **archive** node (`mainnet-full`, `archive_mode=true`) serves `get_block` for
   `historyBackfill`, which stops at the pruning horizon) and serves recent blocks; genesis/old lookups beyond
   its cache return "not found". **Peer-map collector** (`06_collector.py`) is unaffected — it owns a full
   genesis→tip import in its own `stats.db` (`_fetch_block_stats_range(0, tip)`), independent of the node.
-- Sizing: an archive node's `chain_data` (~18 GB+ and growing, mostly rangeproofs) must fit the box's RAM as
-  page cache or it thrashes (`get_block` latency → minutes; swap fills; kswapd pegged). A ~4 GB VPS cannot host
-  archive + the 06/06b services — use a pruned node there, or move archive to an 8 GB+ box.
+- **GrinScan block import is LAZY by default (2026-06) — mirrors grin-explorer's model.** Verified from
+  aglkm/grin-explorer source: its SQLite holds ONLY a daily stats rollup (one row/day: hashrate/txns/fees/
+  utxos/kernels in `database.rs`), NOT per-block rows — block pages are read LIVE (`get_recent_blocks` pulls
+  just the last 10 via live `get_block`; block-by-hash via live `get_header`). That's why it has no import
+  step. GrinScan DOES keep per-block rows (for paginated `/blocks` + per-block difficulty charts via the
+  `height−1` self-join), so it can't be fully import-free — but the **eager `historicalBackfill` is now
+  OPT-IN** (`config.backfill_history`, default `false`; new key in `06b_grinscan.sh` config writer; absent in
+  old configs → falsy → lazy). In lazy mode GrinScan caches only the recent `blocks_cache` window
+  (`startupBackfill`, ~tip−500, sequential/gentle), the poller fills FORWARD (blocks are never pruned, only
+  prices at 90d — so charts accrue over time), and old blocks are served live on cache-miss in `/api/block`
+  (`fetchBlockLive`, archive only, no DB insert — that fallback already existed). **Why this matters:** the
+  unconditional `historicalBackfill` at startup was the resource storm — on low-tip **testnet** `tip −
+  history_days*1440` clamps to 0, so it crawled the WHOLE chain from genesis (10-wide concurrent cold-
+  rangeproof `get_block` reads → page-cache thrash → 10s `get_block` timeouts). Even when opted-in,
+  backfill is now gentle: concurrency 10→3 + a 150ms inter-batch pause. Lazy is light enough for a 4 GB box
+  in archive mode (single on-demand block reads, not bulk). Server.js timeout is a hardcoded 10s in `jsonRpc`.
+- **GrinScan `daily_stats` rollup (2026-06) — long-range charts without a per-block crawl.** grin-explorer's
+  SQLite is ONLY a daily table (one snapshot/day, forward-only, no reconstruction). GrinScan now has the same
+  compact `daily_stats` table BUT **derives** it by aggregating its per-block `blocks` table per UTC day
+  (exact Σtx/Σfees + cumulative-difficulty deltas → `hashrate_gps = work×42/sec/16384`), so rows are accurate,
+  not single-moment snapshots. `rollupDailyStats()` (server.js) is incremental + cheap: it recomputes only the
+  tail (last-finalised day → today); a day is marked `final=1` once a later day exists and is then never
+  recomputed (cross-day work delta seeded from the prior day's stored `end_cum_diff`/`end_ts`). Called at
+  startup + after each poll insert. `/api/history` now serves **≤7d from per-block** (`source:"blocks"`,
+  hourly, works in lazy mode's recent window) and **>7d from `daily_stats`** (`source:"daily"`, downsampled
+  to ≤800 pts). The daily table is permanent + tiny → it would survive any future pruning of `blocks`. Like
+  grin-explorer, deep history only goes back as far as the blocks the DB has accumulated (recent window
+  forward, or the opt-in `backfill_history` range) — it is NOT reconstructed to genesis.
+- Sizing: an archive node's `chain_data` (~18 GB+ and growing, mostly rangeproofs) doesn't fully fit a small
+  box's RAM as page cache, so any workload that does **bulk random `get_block` reads** thrashes (latency →
+  minutes; swap fills; kswapd pegged). This is why the old eager `historicalBackfill` (10-wide concurrent
+  genesis crawl) blew up a 4 GB archive box. **Steady-state GrinScan in lazy mode is fine on ~4 GB archive**
+  (it does single on-demand block reads, not bulk) — the earlier blanket "a 4 GB VPS cannot host archive +
+  06/06b" was too strong; it's the *bulk import* that can't, not normal operation. The aglkm grin-explorer
+  (option C, archive-required) is also fine because it only live-reads the last 10 blocks + on-demand lookups.
+  Pre-warming (`backfill_history: true`) or a heavy crawl still wants an 8 GB+ box.
 
 Auth format for node API calls (both endpoints): `grin:<secret>` as HTTP Basic Auth username:password.
 The secret is NEVER sent over the internet — only used for server-to-server calls on localhost.

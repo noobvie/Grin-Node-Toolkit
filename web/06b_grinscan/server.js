@@ -80,6 +80,23 @@ db.exec(`
     price_usd   REAL    NOT NULL DEFAULT 0,
     source      TEXT    NOT NULL DEFAULT ''
   );
+
+  -- Daily rollup (grin-explorer-style compact history). Derived by aggregating the
+  -- blocks table per UTC day, so long-range charts don't need a per-block crawl and
+  -- can outlive any future pruning of the blocks table. One row per day; permanent.
+  CREATE TABLE IF NOT EXISTS daily_stats (
+    day          TEXT    PRIMARY KEY,           -- 'YYYY-MM-DD' (UTC)
+    ts           INTEGER NOT NULL DEFAULT 0,    -- midnight-UTC unix (chart x-axis)
+    block_count  INTEGER NOT NULL DEFAULT 0,
+    tx_count     INTEGER NOT NULL DEFAULT 0,
+    fee_total    INTEGER NOT NULL DEFAULT 0,
+    difficulty   INTEGER NOT NULL DEFAULT 0,    -- avg per-block target that day
+    hashrate_gps REAL    NOT NULL DEFAULT 0,
+    end_cum_diff INTEGER NOT NULL DEFAULT 0,    -- cumulative total_difficulty at day's last block
+    end_ts       INTEGER NOT NULL DEFAULT 0,    -- timestamp of day's last block
+    last_height  INTEGER NOT NULL DEFAULT 0,
+    final        INTEGER NOT NULL DEFAULT 0     -- 1 once a later day exists (day complete)
+  );
 `);
 
 const stmtInsertBlock = db.prepare(`
@@ -118,6 +135,39 @@ const stmtPrice24h    = db.prepare(
 );
 const stmtPriceHist   = db.prepare(
   'SELECT timestamp, price_btc, price_usd FROM prices WHERE timestamp >= ? ORDER BY timestamp ASC'
+);
+
+// ── Daily rollup statements ────────────────────────────────────────────────────
+const stmtDailyUpsert = db.prepare(`
+  INSERT OR REPLACE INTO daily_stats
+    (day, ts, block_count, tx_count, fee_total, difficulty, hashrate_gps, end_cum_diff, end_ts, last_height, final)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const stmtLastFinalDay = db.prepare(
+  'SELECT day, end_cum_diff, end_ts FROM daily_stats WHERE final = 1 ORDER BY day DESC LIMIT 1'
+);
+const stmtBlockBefore = db.prepare(
+  'SELECT difficulty AS cum, timestamp AS ts FROM blocks WHERE timestamp < ? ORDER BY height DESC LIMIT 1'
+);
+// Per-UTC-day aggregate of the blocks table. difficulty column is cumulative
+// total_difficulty (monotonic) → MAX = day's last block, MIN = day's first.
+const stmtDayAggSince = db.prepare(`
+  SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch') AS day,
+         COUNT(*)        AS block_count,
+         SUM(tx_count)   AS tx_count,
+         SUM(fee_total)  AS fee_total,
+         MAX(difficulty) AS end_cum_diff,
+         MAX(timestamp)  AS end_ts,
+         MIN(difficulty) AS start_cum_diff,
+         MIN(timestamp)  AS start_ts,
+         MAX(height)     AS last_height
+  FROM   blocks
+  WHERE  timestamp >= ?
+  GROUP  BY day
+  ORDER  BY day ASC
+`);
+const stmtDailyRange = db.prepare(
+  'SELECT ts, difficulty, hashrate_gps, tx_count, fee_total, last_height FROM daily_stats WHERE ts >= ? ORDER BY ts ASC'
 );
 
 // ── In-memory state ──────────────────────────────────────────────────────────
@@ -266,6 +316,73 @@ function insertBlock(blockData) {
   );
 }
 
+// ── Daily rollup ───────────────────────────────────────────────────────────────
+// grin-explorer keeps a once-per-day stats row; we build the same compact daily
+// table but DERIVE it from our per-block rows (exact sums, not a single live
+// snapshot). Incremental + cheap: only the tail (last-finalised day → today) is
+// recomputed each call; finalised days are never touched. Long-range charts read
+// this table instead of self-joining thousands of per-block rows, and it survives
+// any future pruning of the blocks table.
+//
+// Hashrate per day uses cumulative-difficulty deltas (DB `difficulty` = cumulative
+// total_difficulty): work = end_cum_diff[day] − end_cum_diff[prev day]; GPS =
+// work × 42 / seconds / 16384 (same constants as 06_collector.py / grin-explorer).
+
+function rollupDailyStats() {
+  try {
+    const todayUTC = new Date().toISOString().slice(0, 10);
+
+    // Resume after the last finalised day; that day's end carries the cross-day delta.
+    const lastFinal = stmtLastFinalDay.get();
+    let sinceTs = 0;
+    let prev    = null;
+    if (lastFinal) {
+      sinceTs = Math.floor(Date.parse(lastFinal.day + 'T00:00:00Z') / 1000) + 86400;
+      prev    = { cum: lastFinal.end_cum_diff, ts: lastFinal.end_ts };
+    }
+
+    const aggRows = stmtDayAggSince.all(sinceTs);
+    if (!aggRows.length) return;
+
+    // First run (no finalised day yet): seed the delta from the block just before
+    // the first day in range, if one exists.
+    if (!prev) {
+      const firstDayTs = Math.floor(Date.parse(aggRows[0].day + 'T00:00:00Z') / 1000);
+      const before = stmtBlockBefore.get(firstDayTs);
+      if (before) prev = { cum: before.cum, ts: before.ts };
+    }
+
+    let updated = 0;
+    for (const r of aggRows) {
+      let work, dt;
+      if (prev) {
+        work = r.end_cum_diff - prev.cum;
+        dt   = r.end_ts       - prev.ts;
+      } else {
+        // Very first day ever, no prior block: use within-day span (undercounts the
+        // single first block — negligible).
+        work = r.end_cum_diff - r.start_cum_diff;
+        dt   = r.end_ts       - r.start_ts;
+      }
+      const hashrate = (dt > 0 && work > 0) ? work * 42 / dt / 16384 : 0;
+      const avgDiff  = (r.block_count > 0 && work > 0) ? Math.round(work / r.block_count) : 0;
+      const ts       = Math.floor(Date.parse(r.day + 'T00:00:00Z') / 1000);
+      const isFinal  = r.day < todayUTC ? 1 : 0;
+
+      stmtDailyUpsert.run(
+        r.day, ts, r.block_count, r.tx_count || 0, r.fee_total || 0,
+        avgDiff, Math.round(hashrate * 100) / 100,
+        r.end_cum_diff, r.end_ts, r.last_height, isFinal,
+      );
+      prev = { cum: r.end_cum_diff, ts: r.end_ts };
+      updated++;
+    }
+    if (updated > 0) log(`Daily rollup: ${updated} day(s) updated (through ${aggRows[aggRows.length - 1].day}).`);
+  } catch (e) {
+    log(`[WARN] rollupDailyStats: ${e.message}`);
+  }
+}
+
 // ── Startup backfill ──────────────────────────────────────────────────────────
 
 async function startupBackfill(tipHeight) {
@@ -301,13 +418,16 @@ async function startupBackfill(tipHeight) {
   log(`Backfill complete.`);
 }
 
-// ── Historical backfill ───────────────────────────────────────────────────────
-// Runs in background on startup when DB doesn't cover config.history_days.
-// Uses parallel fetching (10 concurrent) — 50 days ≈ 72k blocks ≈ 2 min on localhost.
+// ── Historical backfill (OPT-IN only — see startup gate) ───────────────────────
+// Disabled by default; runs only when config.backfill_history is true. Pre-warms
+// charts by importing up to config.history_days of blocks.
 // Self-skipping: if minCachedHeight already covers the target, logs and returns.
 // Pruned-node safe: stops after 3 consecutive all-failed batches (horizon reached).
+// Gentle by design: low concurrency + an inter-batch pause so it never thrashes the
+// node's page cache (the cause of the get_block timeout storm on smaller boxes).
 
-const HISTORY_BACKFILL_CONCURRENCY = 10;
+const HISTORY_BACKFILL_CONCURRENCY = 3;
+const HISTORY_BACKFILL_BATCH_PAUSE_MS = 150;
 
 async function historicalBackfill(tipHeight) {
   const days = Math.min(50, Math.max(0, config.history_days || 0));
@@ -355,6 +475,10 @@ async function historicalBackfill(tipHeight) {
     if (stored > 0 && stored % 5000 === 0) {
       log(`History backfill: ${stored}/${total} stored…`);
     }
+
+    // Yield between batches so the node's page cache isn't hammered by back-to-back
+    // cold rangeproof reads (prevents the get_block timeout storm on smaller boxes).
+    await new Promise(r => setTimeout(r, HISTORY_BACKFILL_BATCH_PAUSE_MS));
   }
 
   log(`History backfill complete: ${stored} stored, ${skipped} skipped.`);
@@ -390,6 +514,8 @@ async function pollBlocks() {
         }
       }
       broadcastNewBlock({ height: tipHeight });
+      // Refresh the daily rollup (tail only — cheap) whenever new blocks land.
+      rollupDailyStats();
     }
 
     // Per-block difficulty = total_difficulty[tip] - total_difficulty[tip-1]
@@ -756,31 +882,49 @@ app.get('/api/history', (req, res) => {
     since = now - days * 86400;
   }
   const spanDays = (now - since) / 86400;
-  // Adaptive sampling to keep response size reasonable
-  let step;
-  if      (spanDays <= 7)   step =    3600; // 1h
-  else if (spanDays <= 30)  step =   14400; // 4h
-  else if (spanDays <= 365) step =   86400; // 1d
-  else                      step =  604800; // 1 week
   // Longer ranges change slowly — cache aggressively
   const maxAge = spanDays <= 1 ? 60 : spanDays <= 7 ? 300 : 3600;
   res.setHeader('Cache-Control', `public, max-age=${maxAge}`);
 
-  const points = [];
-  for (let t = since; t <= now; t += step) {
-    const row = stmtHistory.get(t - step / 2, t + step / 2, t);
-    if (row) {
-      points.push({
-        height:       row.height,
-        timestamp:    row.timestamp,
-        difficulty:   row.difficulty,
-        hashrate_gps: Math.round(row.difficulty * 42 / 60 / 16384 * 100) / 100,
-        tx_count:     row.tx_count  || 0,
-        fee_total:    row.fee_total || 0,
-      });
+  // Fine-grained recent ranges (≤7d) come from the per-block table, which lazy mode
+  // keeps populated for the recent window. Longer ranges come from the compact daily
+  // rollup — no per-block crawl needed, and it covers all days the rollup has built.
+  if (spanDays <= 7) {
+    const step   = 3600; // 1h
+    const points = [];
+    for (let t = since; t <= now; t += step) {
+      const row = stmtHistory.get(t - step / 2, t + step / 2, t);
+      if (row) {
+        points.push({
+          height:       row.height,
+          timestamp:    row.timestamp,
+          difficulty:   row.difficulty,
+          hashrate_gps: Math.round(row.difficulty * 42 / 60 / 16384 * 100) / 100,
+          tx_count:     row.tx_count  || 0,
+          fee_total:    row.fee_total || 0,
+        });
+      }
     }
+    return res.json({ ok: true, rows: points, source: 'blocks' });
   }
-  res.json({ ok: true, rows: points });
+
+  // Long range → daily rollup (one row per UTC day in range). Downsample only if a
+  // very long span would return an unwieldy number of points.
+  let daily = stmtDailyRange.all(since);
+  const MAX_POINTS = 800;
+  if (daily.length > MAX_POINTS) {
+    const stride = Math.ceil(daily.length / MAX_POINTS);
+    daily = daily.filter((_, i) => i % stride === 0 || i === daily.length - 1);
+  }
+  const rows = daily.map(r => ({
+    height:       r.last_height,
+    timestamp:    r.ts,
+    difficulty:   r.difficulty,
+    hashrate_gps: r.hashrate_gps,
+    tx_count:     r.tx_count  || 0,
+    fee_total:    r.fee_total || 0,
+  }));
+  res.json({ ok: true, rows, source: 'daily' });
 });
 
 
@@ -941,7 +1085,20 @@ app.listen(config.port, '127.0.0.1', async () => {
     tipState.hash   = tip.last_block_h;
     lastTipHeight   = tipHeight;
     await startupBackfill(tipHeight);
-    historicalBackfill(tipHeight).catch(e => log(`[WARN] History backfill: ${e.message}`));
+    // Deep historical backfill is OPT-IN (config.backfill_history, default false).
+    // Lazy mode (the default) mirrors aglkm/grin-explorer: we do NOT bulk-import the
+    // chain. Old blocks are served live from an archive node on cache-miss (see
+    // /api/block), and the blocks table fills FORWARD from the poller (blocks are
+    // never pruned), so charts accrue over time. This avoids the genesis-crawl
+    // resource storm — critical on low-tip testnet, where tip − history_days*1440
+    // clamps to 0 and the old eager path crawled the entire chain.
+    if (config.backfill_history) {
+      historicalBackfill(tipHeight).catch(e => log(`[WARN] History backfill: ${e.message}`));
+    } else {
+      log('History backfill: disabled (lazy mode) — old blocks served live on demand. Set "backfill_history": true to pre-warm.');
+    }
+    // Build/refresh the compact daily rollup from whatever blocks we have.
+    rollupDailyStats();
   } catch (e) {
     log(`[WARN] Initial tip fetch failed: ${e.message}`);
   }

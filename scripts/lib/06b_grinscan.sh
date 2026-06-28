@@ -316,6 +316,7 @@ grinscan_configure() {
   "poll_interval_ms":    30000,
   "blocks_cache":        500,
   "history_days":        50,
+  "backfill_history":    false,
   "web_dir":             "${GRINSCAN_APP}/public",
   "node_data_dir":       "${node_dir}/chain_data",
   "ga4_measurement_id":  "${ga4_id}",
@@ -361,6 +362,10 @@ BANNERS
             echo ""
         fi
         echo -e "  ${DIM}Note: SQLite DB is created automatically on first Start — no import step needed.${RESET}"
+        echo -e "  ${DIM}Lazy mode (default): GrinScan does NOT bulk-crawl the chain. It caches recent${RESET}"
+        echo -e "  ${DIM}blocks + fills forward from the tip; old blocks are read live from an archive${RESET}"
+        echo -e "  ${DIM}node on demand. This avoids the heavy genesis backfill / get_block timeouts.${RESET}"
+        echo -e "  ${DIM}To pre-warm charts with history, set ${BOLD}\"backfill_history\": true${RESET}${DIM} in ${config_path} and restart.${RESET}"
         log "grinscan_configure: ${net} → ${config_path}"
     done
 

@@ -60,6 +60,13 @@ function log(msg) {
 // ── SQLite ───────────────────────────────────────────────────────────────────
 
 const db = new DatabaseSync(config.db_path);
+// WAL: readers (sqlite3 CLI, the backup feature's `.backup` snapshot, ad-hoc queries)
+// don't block the writer and vice-versa — avoids "database is locked" errors.
+// busy_timeout: wait up to 5s for a lock instead of failing immediately.
+try {
+  db.exec('PRAGMA journal_mode = WAL;');
+  db.exec('PRAGMA busy_timeout = 5000;');
+} catch (e) { /* non-fatal: falls back to default rollback journal */ }
 db.exec(`
   CREATE TABLE IF NOT EXISTS blocks (
     height        INTEGER PRIMARY KEY,
@@ -505,7 +512,12 @@ async function pollBlocks() {
     const maxCached = row.m ?? -1;
 
     if (tipHeight > maxCached) {
-      for (let h = maxCached + 1; h <= tipHeight; h++) {
+      // Lazy-mode safety clamp: on a cold/empty DB never crawl from genesis — seed
+      // only the recent window (same as startupBackfill). Without this, an empty DB
+      // (maxCached = -1) would fetch 0…tip and re-introduce the genesis-crawl storm.
+      const blocksCacheN = config.blocks_cache || 500;
+      const from = maxCached < 0 ? Math.max(0, tipHeight - blocksCacheN) : maxCached + 1;
+      for (let h = from; h <= tipHeight; h++) {
         try {
           const block = await foreignApi('get_block', [h, null, null]);
           insertBlock(block);
@@ -1083,7 +1095,6 @@ app.listen(config.port, '127.0.0.1', async () => {
     if (tipHeight == null) throw new Error(`get_status returned no tip height — response: ${JSON.stringify(status).slice(0, 200)}`);
     tipState.height = tipHeight;
     tipState.hash   = tip.last_block_h;
-    lastTipHeight   = tipHeight;
     await startupBackfill(tipHeight);
     // Deep historical backfill is OPT-IN (config.backfill_history, default false).
     // Lazy mode (the default) mirrors aglkm/grin-explorer: we do NOT bulk-import the

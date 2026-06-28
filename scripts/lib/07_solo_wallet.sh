@@ -241,6 +241,9 @@ sw_setup() {
             fi
             success "Patched node_api_secret_path → $secret"
         fi
+        # Enable box-wide secret self-heal so node_api_secret_path is
+        # auto-refreshed after a future node rebuild (idempotent; needs root).
+        declare -F grin_install_secret_sync >/dev/null 2>&1 && { grin_install_secret_sync || true; }
     else
         warn "Node ($net) not in instances conf or .foreign_api_secret missing —"
         warn "  set node_api_secret_path in $toml manually if the node uses a foreign secret."

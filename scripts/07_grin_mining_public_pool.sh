@@ -121,6 +121,10 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 # other toolkit script, so rate-limit/conn zones never collide.
 # shellcheck source=lib/nginx_shared_helpers.sh
 source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+# Shared node-secret resolver + self-heal (keeps the pool wallet's
+# node_api_secret_path in sync with the live node after a node rebuild).
+# shellcheck source=lib/grin_node_secrets.sh
+source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
 
 # ─── Source pool wallet lib (coinbase Foreign 3415 + payout Owner 3420) ────────
 # pw_* functions: install/init the pool wallet, run BOTH listeners, autostart +

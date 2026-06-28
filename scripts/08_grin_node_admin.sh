@@ -50,6 +50,15 @@ CHAIN_SHARE_DIR="${GRIN_SHARE_DIR:-/var/www/html/grin}"
 GRIN_DATA_DIR="${GRIN_DATA_PATH:-$HOME/.grin}"
 GRIN_LOG_DIR="${GRIN_LOG_PATH:-$HOME/.grin/main/log}"
 
+# ─── Automatic disk cleanup (8.7) ─────────────────────────────────────────────
+AUTO_CLEANUP_SCRIPT="/opt/grin/auto_cleanup.sh"
+AUTO_CLEANUP_CRON="/etc/cron.d/grin-auto-cleanup"
+AUTO_CLEANUP_RETENTION_DEFAULT=7
+# Rotation for the toolkit's continuous (fixed-name) logs — watchdogs, scheduler,
+# solo-backup, satellite. Service logs that already ship their own
+# /etc/logrotate.d/grin-* (e.g. grin-pool.log) are deliberately NOT listed here.
+TOOLKIT_LOGROTATE="/etc/logrotate.d/grin-toolkit-logs"
+
 # ─── Press-enter helper ───────────────────────────────────────────────────────
 pause() { echo ""; echo "Press Enter to return to menu..."; read -r; }
 
@@ -450,6 +459,161 @@ _clean_txhashset()    {
     done <<< "$file_list"
     success "Removed $count txhashset file(s)."; }
 
+# ── Automatic (scheduled) cleanup ─────────────────────────────────────────────
+# Installs a self-contained cleanup script + /etc/cron.d entry that, once a day,
+# deletes txhashset fast-sync snapshots and prunes /opt/grin/logs older than N
+# days. Snapshots are regenerated on demand by the node, so removing them is safe;
+# the live chain_data/txhashset/ PMMR directory is never touched (we only match
+# the snapshot zips / *.txhashset temp files with -type f).
+_auto_cleanup_enabled() { [[ -f "$AUTO_CLEANUP_CRON" ]]; }
+
+# Bound the toolkit's continuous fixed-name logs (watchdogs run every minute, so
+# they can't be per-run dated — they get rotated instead). copytruncate keeps
+# daemons that hold the file open (e.g. the satellite) writing to the same fd;
+# missingok skips any product that isn't installed. Picked up by the OS's daily
+# logrotate run — no extra cron needed.
+_install_toolkit_logrotate() {
+    cat > "$TOOLKIT_LOGROTATE" << 'LREOF'
+# Grin Node Toolkit — rotation for the toolkit's continuous (fixed-name) logs.
+# Installed by 08_grin_node_admin.sh (Automatic Disk Cleanup). Service logs that
+# carry their own /etc/logrotate.d/grin-* config (e.g. grin-pool.log) are excluded.
+/opt/grin/logs/node-watchdog.log
+/opt/grin/logs/wallet-watchdog.log
+/opt/grin/logs/stratum-watchdog.log
+/opt/grin/logs/pubpool-wallet-watchdog.log
+/opt/grin/logs/grin-satellite.log
+/opt/grin/logs/schedule.log
+/opt/grin/logs/solo-backup.log
+{
+    weekly
+    rotate 4
+    size 10M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}
+LREOF
+    chmod 644 "$TOOLKIT_LOGROTATE"; chown root:root "$TOOLKIT_LOGROTATE"
+    log "INSTALLED toolkit logrotate: $TOOLKIT_LOGROTATE"
+}
+
+_remove_toolkit_logrotate() { rm -f "$TOOLKIT_LOGROTATE"; log "REMOVED toolkit logrotate"; }
+
+_install_auto_cleanup() {
+    local days="$1"
+    # 1. Self-contained worker script (runs as root from cron) -----------------
+    cat > "$AUTO_CLEANUP_SCRIPT" << 'CLEANEOF'
+#!/bin/bash
+# Grin Node Toolkit — automatic disk cleanup (installed by 08_grin_node_admin.sh).
+# Usage: auto_cleanup.sh [log_retention_days]   (default 7)
+set -uo pipefail
+LOG_RETENTION_DAYS="${1:-7}"
+mkdir -p /opt/grin/logs 2>/dev/null || true
+# Dated log — a fresh file per day so runs never reuse/append to an old log;
+# old dated logs self-rotate via the /opt/grin/logs prune below.
+LOG="/opt/grin/logs/auto_cleanup_$(date -u +%Y%m%d).log"
+note() { echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*" >> "$LOG" 2>/dev/null || true; }
+exec >> "$LOG" 2>&1
+
+# 1) txhashset fast-sync snapshots — search temp + node data dirs, only the
+#    snapshot zips / temp files (never the live PMMR data inside txhashset/).
+removed=0
+while IFS= read -r f; do
+    [[ -f "$f" ]] || continue
+    rm -f "$f" && { note "DELETED txhashset snapshot: $f"; removed=$((removed+1)); }
+done < <(find /tmp /opt/grin/node -type f \
+            \( -name 'txhashset*.zip' -o -name '*.txhashset' \) 2>/dev/null)
+note "txhashset snapshots removed: $removed"
+
+# 2) /opt/grin/logs older than N days (keep the current run's own log).
+if [[ -d /opt/grin/logs ]]; then
+    purged=$(find /opt/grin/logs -type f -mtime +"$LOG_RETENTION_DAYS" \
+                ! -name "$(basename "$LOG")" -print -delete 2>/dev/null | wc -l)
+    note "log files older than ${LOG_RETENTION_DAYS}d removed: $purged"
+fi
+CLEANEOF
+    chmod 755 "$AUTO_CLEANUP_SCRIPT"
+
+    # 2. Cron.d entry — daily at 04:30. Root-owned 644, declares SHELL/PATH. ----
+    cat > "$AUTO_CLEANUP_CRON" << EOF
+# Grin Node Toolkit — automatic disk cleanup
+# Removes txhashset fast-sync snapshots and prunes /opt/grin/logs older than ${days} days.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+30 4 * * * root $AUTO_CLEANUP_SCRIPT $days >/dev/null 2>&1
+EOF
+    chmod 644 "$AUTO_CLEANUP_CRON"; chown root:root "$AUTO_CLEANUP_CRON"
+    log "INSTALLED auto-cleanup cron (retention ${days}d)"
+
+    # 3. Rotate the toolkit's continuous fixed-name logs (watchdogs, scheduler…)
+    _install_toolkit_logrotate
+}
+
+_remove_auto_cleanup() {
+    rm -f "$AUTO_CLEANUP_CRON" "$AUTO_CLEANUP_SCRIPT"
+    _remove_toolkit_logrotate
+    log "REMOVED auto-cleanup cron + script + logrotate"
+}
+
+manage_auto_cleanup() {
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  Automatic Disk Cleanup${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        if _auto_cleanup_enabled; then
+            local sched
+            sched="$(grep -E '^[0-9*].*root.*auto_cleanup' "$AUTO_CLEANUP_CRON" 2>/dev/null | head -1 || true)"
+            success "Status: ENABLED  ${DIM}(daily 04:30)${RESET}"
+            [[ -n "$sched" ]] && echo -e "  ${DIM}$sched${RESET}"
+        else
+            warn "Status: DISABLED"
+        fi
+        [[ -f "$TOOLKIT_LOGROTATE" ]] && echo -e "  ${DIM}log rotation: $TOOLKIT_LOGROTATE${RESET}"
+        echo ""
+        echo -e "${BOLD}Runs daily and:${RESET}"
+        echo -e "  ${DIM}•${RESET} deletes txhashset fast-sync snapshots ${DIM}(regenerated on demand)${RESET}"
+        echo -e "  ${DIM}•${RESET} deletes /opt/grin/logs files older than N days"
+        echo -e "  ${DIM}•${RESET} installs logrotate for the continuous watchdog/scheduler logs"
+        echo ""
+        echo -e "${BOLD}Actions:${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Enable / update  ${DIM}(set log retention days)${RESET}"
+        echo -e "  ${YELLOW}2${RESET}) Disable"
+        echo -e "  ${CYAN}3${RESET}) Run now"
+        echo -e "  ${DIM}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select: ${RESET}"
+        local c; read -r c
+        case "$c" in
+            1)
+                echo -ne "Keep /opt/grin/logs from last N days [default $AUTO_CLEANUP_RETENTION_DEFAULT]: "
+                local days; read -r days; days="${days:-$AUTO_CLEANUP_RETENTION_DEFAULT}"
+                if ! [[ "$days" =~ ^[0-9]+$ ]]; then warn "Not a number — using $AUTO_CLEANUP_RETENTION_DEFAULT."; days="$AUTO_CLEANUP_RETENTION_DEFAULT"; fi
+                _install_auto_cleanup "$days"
+                success "Auto-cleanup enabled (runs daily 04:30, log retention ${days}d)."
+                sleep 2 ;;
+            2)
+                if _auto_cleanup_enabled; then _remove_auto_cleanup; success "Auto-cleanup disabled."
+                else info "Already disabled."; fi
+                sleep 2 ;;
+            3)
+                if [[ -x "$AUTO_CLEANUP_SCRIPT" ]]; then
+                    info "Running cleanup now..."; "$AUTO_CLEANUP_SCRIPT" "$AUTO_CLEANUP_RETENTION_DEFAULT" || true
+                    success "Done. See /opt/grin/logs/auto_cleanup_$(date -u +%Y%m%d).log"
+                else
+                    warn "Not installed yet — choose 1) Enable first."
+                fi
+                sleep 2 ;;
+            0) break ;;
+            *) warn "Invalid selection."; sleep 1 ;;
+        esac
+    done
+}
+
 clean_maintenance() {
     while true; do
         clear
@@ -522,6 +686,14 @@ clean_maintenance() {
         echo -e "  ${CYAN}E${RESET}) Grin-toolkit logs       : ${YELLOW}$toolkit_log_size${RESET}"
 
         echo ""
+        # ── Auto-cleanup status ───────────────────────────────────────────────
+        if _auto_cleanup_enabled; then
+            echo -e "${BOLD}Auto-cleanup:${RESET} ${GREEN}ENABLED${RESET} ${DIM}(daily: txhashset snapshots + /opt/grin/logs >N days)${RESET}"
+        else
+            echo -e "${BOLD}Auto-cleanup:${RESET} ${DIM}disabled${RESET}"
+        fi
+
+        echo ""
         echo -e "${BOLD}Actions:${RESET}"
         echo -e "  ${YELLOW}1${RESET}) Delete ALL tar archives"
         echo -e "  ${YELLOW}2${RESET}) Keep newest N tar archives, delete rest"
@@ -531,6 +703,7 @@ clean_maintenance() {
         if [[ ${#nginx_dirs[@]} -gt 0 ]]; then
             echo -e "  ${GREEN}6${RESET}) Delete nginx web dir contents  ${DIM}(choose directory)${RESET}"
         fi
+        echo -e "  ${CYAN}7${RESET}) Automatic cleanup schedule  ${DIM}(txhashset snapshots + /opt/grin/logs >N days)${RESET}"
         echo -e "  ${DIM}0${RESET}) Return to main menu"
         echo ""
         echo -ne "${BOLD}Select: ${RESET}"
@@ -644,6 +817,7 @@ clean_maintenance() {
                 fi
                 sleep 2
                 ;;
+            7) manage_auto_cleanup || true ;;
             0) break ;;
             *) warn "Invalid selection."; sleep 1 ;;
         esac

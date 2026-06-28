@@ -56,6 +56,11 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
+try:
+    import fcntl   # Linux only — used for the single-run lock (cmd_update)
+except ImportError:
+    fcntl = None
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 # Foreign API (mainnet) — block headers, tip, tx stats.
@@ -117,7 +122,7 @@ TESTNET_API_SECRET = _load_secret(TESTNET_SECRET_PATH)
 
 # ── Grin JSON-RPC helper ──────────────────────────────────────────────────────
 
-def _rpc(url, method, params=None, secret="", retries=3):
+def _rpc(url, method, params=None, secret="", retries=3, timeout=15):
     """Generic JSON-RPC call to any Grin API URL with optional Basic Auth."""
     payload = json.dumps({
         "jsonrpc": "2.0",
@@ -134,7 +139,7 @@ def _rpc(url, method, params=None, secret="", retries=3):
         req.add_header("Authorization", f"Basic {creds}")
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read())
             result = data.get("result", {})
             if isinstance(result, dict) and "Err" in result:
@@ -146,9 +151,9 @@ def _rpc(url, method, params=None, secret="", retries=3):
             time.sleep(1 + attempt)
     return None
 
-def grin_rpc(method, params=None, retries=3):
+def grin_rpc(method, params=None, retries=3, timeout=15):
     """Foreign API call — block headers, tip, tx data."""
-    return _rpc(NODE_URL, method, params, secret=FOREIGN_SECRET, retries=retries)
+    return _rpc(NODE_URL, method, params, secret=FOREIGN_SECRET, retries=retries, timeout=timeout)
 
 # ── Timestamp helpers ─────────────────────────────────────────────────────────
 
@@ -171,6 +176,29 @@ def parse_ts(ts_str):
 
 def now_ts():
     return int(time.time())
+
+# ── Single-run lock ─────────────────────────────────────────────────────────
+# cron fires --update every 5 min. If a run overruns (slow get_block on a busy
+# node) the next cron piles a second collector on top, which slows the node
+# further → unbounded pile-up that saturates the node API and freezes every
+# JSON export. This non-blocking flock guarantees at most one --update at a time;
+# a run that finds the lock held simply exits. Released automatically on process
+# exit. (The cron line also wraps the call in `flock -n`; this is the in-process
+# belt-and-suspenders that also covers manual runs.)
+_LOCK_FH = None
+
+def acquire_run_lock(name="grin-stats-update"):
+    """Return True if we acquired the singleton lock, False if another run holds it."""
+    global _LOCK_FH
+    if fcntl is None:
+        return True  # non-Linux dev box — skip locking
+    lock_path = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"{name}.lock")
+    try:
+        _LOCK_FH = open(lock_path, "w")
+        fcntl.flock(_LOCK_FH.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
 
 # ── Database ──────────────────────────────────────────────────────────────────
 
@@ -302,7 +330,10 @@ def fetch_headers_batch(heights, workers=8):
 def fetch_full_block(height):
     """Fetch full block (kernels + outputs) for tx/fee stats."""
     try:
-        data = grin_rpc("get_block", [height, None, None], retries=5)
+        # get_block is heavy on a full/archival node. Keep the per-block budget
+        # small (retries=2, timeout=8) so a slow block costs ~17s, not ~75s —
+        # the gap-fill must never starve the JSON export at the end of cmd_update.
+        data = grin_rpc("get_block", [height, None, None], retries=2, timeout=8)
         if not data:
             return None
         header   = data.get("header", {})
@@ -458,6 +489,11 @@ def cmd_init_history():
 # ── Incremental update ────────────────────────────────────────────────────────
 
 def cmd_update():
+    if not acquire_run_lock():
+        print("[INFO] Another --update run is still in progress — skipping "
+              "(node may be slow; preventing overlap pile-up).")
+        return
+
     conn = open_db()
     init_schema(conn)
 
@@ -511,9 +547,23 @@ def cmd_update():
         conn_gap.close()
         missing = [h for h in range(gap_start, tip_height + 1) if h not in have]
         if missing:
-            print(f"[INFO] Fetching stats for {len(missing):,} block(s) "
-                  f"({len(missing) - (tip_height - last_height):+,} gap-fill in last {HOURLY_DAYS}d)...")
-            _fetch_block_stats_range(gap_start, tip_height, heights=missing)
+            # Cap the per-run gap-fill and give it a hard deadline so a slow
+            # get_block can never delay _update_peers()/export_all_json() below
+            # (which refresh ALL the public JSON files). Newest-missing first so
+            # recent tx/fee charts fill in immediately; older gaps catch up over
+            # subsequent runs. Partial progress is committed and resumed next run.
+            MAX_GAPFILL_PER_RUN = 60
+            GAPFILL_DEADLINE_SEC = 120
+            missing.sort(reverse=True)
+            batch = sorted(missing[:MAX_GAPFILL_PER_RUN])
+            print(f"[INFO] Gap-fill: {len(batch):,} of {len(missing):,} missing block(s) "
+                  f"this run (cap {MAX_GAPFILL_PER_RUN}, {GAPFILL_DEADLINE_SEC}s deadline)...")
+            try:
+                _fetch_block_stats_range(gap_start, tip_height, heights=batch,
+                                         deadline=time.time() + GAPFILL_DEADLINE_SEC)
+            except Exception as exc:
+                print(f"[WARN] gap-fill interrupted ({exc}) — exporting current data anyway.",
+                      file=sys.stderr)
 
     _update_peers()
     export_all_json()
@@ -553,7 +603,7 @@ def _progress(done, total, t0):
         end="", flush=True,
     )
 
-def _fetch_block_stats_range(start, end, workers=1, heights=None):
+def _fetch_block_stats_range(start, end, workers=1, heights=None, deadline=None):
     """
     Fetch block stats (tx/fee data) one block at a time (workers=1, default).
 
@@ -563,6 +613,10 @@ def _fetch_block_stats_range(start, end, workers=1, heights=None):
 
     Pass workers > 1 only when the node can handle parallel requests
     (e.g. a fast remote node or a small catch-up batch).
+
+    deadline: optional Unix time after which the fetch stops early (committing
+    whatever it has). Used by cmd_update so a slow get_block can never starve the
+    JSON export; the remaining blocks are picked up on the next run.
     """
     if heights is None:
         heights = list(range(max(0, start), end + 1))
@@ -574,17 +628,24 @@ def _fetch_block_stats_range(start, end, workers=1, heights=None):
     conn       = open_db()
     init_schema(conn)
     done = committed = 0
+    hit_deadline = False
     t0   = time.time()
 
     print(f"  Fetching {total:,} blocks (workers={workers}, commit every {chunk_size:,})")
 
     for ci in range(0, total, chunk_size):
+        if deadline and time.time() > deadline:
+            hit_deadline = True
+            break
         chunk = heights[ci : ci + chunk_size]
         batch = []
 
         if workers == 1:
             # ── Sequential: one request at a time, no thread overhead ──────────
             for h in chunk:
+                if deadline and time.time() > deadline:
+                    hit_deadline = True
+                    break
                 row = fetch_full_block(h)
                 if row:
                     batch.append(row)
@@ -612,9 +673,16 @@ def _fetch_block_stats_range(start, end, workers=1, heights=None):
             conn.commit()
             committed += len(batch)
 
+        if hit_deadline:
+            break
+
     print()  # newline after progress bar
     conn.close()
-    print(f"[INFO] Committed {committed:,} block stats to database")
+    if hit_deadline:
+        print(f"[INFO] Gap-fill deadline reached — committed {committed:,} stats "
+              f"({done:,}/{total:,} attempted); remaining blocks resume next run.")
+    else:
+        print(f"[INFO] Committed {committed:,} block stats to database")
 
 def cmd_backfill_stats(days=None):
     """

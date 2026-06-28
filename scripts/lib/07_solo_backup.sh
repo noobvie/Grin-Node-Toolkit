@@ -269,6 +269,27 @@ sb_restore() {
 
     command -v openssl >/dev/null 2>&1 || { error "openssl not found — cannot decrypt."; return 1; }
 
+    # Make sure the drop spot exists on a brand-new box, so the operator has a
+    # place to scp/rsync the archive into before re-running this option.
+    mkdir -p "$SB_BACKUP_DIR" 2>/dev/null || true
+
+    # ── How-to box — primarily for migrating to a NEW server ────────────────────
+    echo -e "${BOLD}${YELLOW}┏━ HOW TO RESTORE (e.g. migrating to a new server) ━━━━━━━━━━┓${RESET}"
+    echo -e "${BOLD}${YELLOW}┃${RESET} ${BOLD}1.${RESET} Copy the backup archive from the OLD box onto THIS one, into:"
+    echo -e "${BOLD}${YELLOW}┃${RESET}      ${CYAN}$SB_BACKUP_DIR/${RESET}"
+    echo -e "${BOLD}${YELLOW}┃${RESET}      ${DIM}(the ${SB_PREFIX}DDMMYYYY.tar.gz.enc file · scp or rsync it over)${RESET}"
+    echo -e "${BOLD}${YELLOW}┃${RESET} ${BOLD}2.${RESET} Pick it from the list below."
+    echo -e "${BOLD}${YELLOW}┃${RESET} ${BOLD}3.${RESET} Type the ${BOLD}personal key${RESET} you set on the old box. ${DIM}(The date is${RESET}"
+    echo -e "${BOLD}${YELLOW}┃${RESET}      ${DIM}auto-read from the filename.)${RESET} ${RED}No key → cannot decrypt.${RESET}"
+    echo -e "${BOLD}${YELLOW}┃${RESET} ${BOLD}4.${RESET} Confirm — files extract to their original ${BOLD}/opt/grin/…${RESET} paths"
+    echo -e "${BOLD}${YELLOW}┃${RESET}      ${DIM}(wallets + seed + saved passphrase, stats history, payout cfg).${RESET}"
+    echo -e "${BOLD}${YELLOW}┃${RESET} ${DIM}Then resume mining (full steps print again after restore):${RESET}"
+    echo -e "${BOLD}${YELLOW}┃${RESET}   ${DIM}Build node (01) → Wallet ▸ Start → Stratum ▸ Publish → Stats.${RESET}"
+    echo -e "${BOLD}${YELLOW}┃${RESET}   ${DIM}(On a fresh box the node is NOT in the backup — Script 01${RESET}"
+    echo -e "${BOLD}${YELLOW}┃${RESET}   ${DIM} downloads the binary and syncs the chain first.)${RESET}"
+    echo -e "${BOLD}${YELLOW}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${RESET}"
+    echo ""
+
     local -a baks=()
     while IFS= read -r f; do [[ -n "$f" ]] && baks+=("$f"); done \
         < <(ls -t "$SB_BACKUP_DIR/${SB_PREFIX}"*.tar.gz.enc 2>/dev/null || true)
@@ -339,7 +360,9 @@ sb_restore() {
     success "Restore complete — wallets, stats history, and config are back in place."
     echo ""
     echo -e "  ${BOLD}To resume mining (order matters — restore does NOT start anything):${RESET}"
-    echo -e "    1) Build / start the node (Script 01), let it sync"
+    echo -e "    1) Build the node with ${BOLD}Script 01${RESET} — it is ${BOLD}NOT${RESET} in the backup, so on a"
+    echo -e "       fresh server this downloads the grin binary and syncs the chain."
+    echo -e "       ${DIM}(If this box already has a built node, just start it and let it sync.)${RESET}"
     echo -e "    2) Wallet ▸ Start listener — the restored .passphrase opens it with"
     echo -e "       ${BOLD}no password prompt${RESET}. Must be UP before mining: the node calls it"
     echo -e "       to build your coinbase reward when a block is found."

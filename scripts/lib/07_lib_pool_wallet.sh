@@ -428,6 +428,9 @@ pw_setup() {
             _pw_set_toml_key "$toml" "node_api_secret_path" "\"$secret\"" \
                 && success "Patched node_api_secret_path → $secret" \
                 || echo "node_api_secret_path = \"$secret\"" >> "$toml"
+            # Enable box-wide secret self-heal so node_api_secret_path is
+            # auto-refreshed after a future node rebuild (idempotent; needs root).
+            declare -F grin_install_secret_sync >/dev/null 2>&1 && { grin_install_secret_sync || true; }
         else
             warn "Node ${_PW_NODE_NET} dir/.foreign_api_secret not found — set node_api_secret_path in"
             warn "  $toml manually if the node uses a foreign secret."

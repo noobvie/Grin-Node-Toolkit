@@ -534,6 +534,25 @@ step_remove_crontab() {
         log "[STEP 7] No user crontab Grin entries."
     fi
 
+    # ── 7a2) /etc/logrotate.d/grin* configs ─────────────────────────────────────
+    # Scripts 04/06/07/08 install logrotate drop-ins (grin-pool, grin-explorer,
+    # grin-toolkit-logs, …). Removed here so a full nuke leaves no orphan configs.
+    local -a lrot=()
+    while IFS= read -r f; do
+        [[ -n "$f" ]] && lrot+=("$f")
+    done < <(find /etc/logrotate.d -maxdepth 1 -type f -iname 'grin*' 2>/dev/null || true)
+    if [[ ${#lrot[@]} -gt 0 ]]; then
+        info "Found Grin logrotate configs:"
+        for f in "${lrot[@]}"; do echo -e "  ${YELLOW}→${RESET} $f"; done
+        if confirm_step "Remove these /etc/logrotate.d Grin configs?"; then
+            for f in "${lrot[@]}"; do
+                rm -f "$f"; success "Removed: $f"; log "[STEP 7] DELETED logrotate: $f"
+            done
+        else
+            info "Skipped — logrotate configs kept."; log "[STEP 7] logrotate SKIPPED by user."
+        fi
+    fi
+
     # ── 7b) /etc/cron.d drop-ins (stats collector, stratum watchdog, …) ─────────
     # Scripts 06/07 install cron.d files (e.g. grin-solo-mining-collector,
     # grin-stratum-watchdog) — these are NOT in the user crontab above.

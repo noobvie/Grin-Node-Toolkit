@@ -105,6 +105,10 @@ DROP_WEB_SRC="$TOOLKIT_ROOT/web/052_drop/public_html"
 # undefined zones and nginx fails with "zero size shared memory zone".
 # shellcheck source=lib/nginx_shared_helpers.sh
 source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+# Shared node-secret resolver + self-heal (keeps the drop wallet's
+# node_api_secret_path in sync with the live node after a node rebuild).
+# shellcheck source=lib/grin_node_secrets.sh
+source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
 # shellcheck source=lib/052_lib_wallet.sh
 source "$SCRIPT_DIR/lib/052_lib_wallet.sh"
 # shellcheck source=lib/052_lib_app.sh

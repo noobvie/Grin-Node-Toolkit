@@ -837,6 +837,29 @@ function countryFlag(code) {
   } catch { return ""; }
 }
 
+// Display-only flag overrides. The yellow/3-red-stripe flag has no Unicode
+// emoji, so it is rendered as an inline SVG instead of a codepoint flag.
+const FLAG_SVG = {
+  VN: '<svg viewBox="0 0 36 24" width="18" height="12" ' +
+      'style="vertical-align:-2px;border:1px solid rgba(0,0,0,.2)" aria-label="Saigon">' +
+      '<rect width="36" height="24" fill="#f9d616"/>' +
+      '<rect y="9"  width="36" height="2.4" fill="#da251d"/>' +
+      '<rect y="12.6" width="36" height="2.4" fill="#da251d"/>' +
+      '<rect y="16.2" width="36" height="2.4" fill="#da251d"/></svg>',
+};
+function displayFlag(code) {
+  if (!code) return "";
+  return FLAG_SVG[code.toUpperCase()] || countryFlag(code);
+}
+
+// Display-only city relabels (GeoIP data is left untouched).
+const CITY_RELABEL = {
+  "Ho Chi Minh City": "Saigon",
+};
+function displayCity(city) {
+  return CITY_RELABEL[city] || city;
+}
+
 function esc(s) {
   return String(s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;")
@@ -894,7 +917,7 @@ function initMap() {
 function showTooltip(peer, ev) {
   const port = peer.port ? `:${peer.port}` : "";
   $("tt-ip").textContent  = peer.ip + port;
-  $("tt-loc").textContent = [peer.city, peer.country].filter(Boolean).join(", ") || "Unknown location";
+  $("tt-loc").textContent = [displayCity(peer.city), peer.country].filter(Boolean).join(", ") || "Unknown location";
   $("tt-ua").textContent  = peer.user_agent || "Unknown";
   $("tt-dir").textContent = (peer.direction || "") +
     (isDual(peer) ? " · mainnet + testnet" : (peer.network === "testnet" ? " · testnet" : ""));
@@ -1059,8 +1082,8 @@ function renderPeerList() {
   $("lp-count").textContent = `Showing ${list.length} of ${ALL_PEERS.length} peers`;
 
   $("peer-list").innerHTML = list.map((p, i) => {
-    const flag = countryFlag(p.country_code || "");
-    const loc  = [p.city, p.country].filter(Boolean).join(", ") || "Unknown";
+    const flag = displayFlag(p.country_code || "");
+    const loc  = [displayCity(p.city), p.country].filter(Boolean).join(", ") || "Unknown";
     const seen = p.last_seen ? timeAgo(p.last_seen) : "active";
     const dual = !network && isDual(p);
     const dotColor = dual ? DUAL_COLOR : (NET_COLOR[p.network] || NET_COLOR.mainnet);

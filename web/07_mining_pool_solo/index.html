@@ -469,8 +469,27 @@
     .then(function (c) {
       if (!c) return;
       if (c.slogan) document.getElementById('slogan').textContent = c.slogan;
+      initGA4(c.ga4_id);
     })
     .catch(function () {});
+
+  // ── Optional Google Analytics 4 (config.json {"ga4_id":"G-…"}) ───────────────
+  // Opt-in operator traffic analytics. Loads gtag.js ONLY when a valid Measurement
+  // ID was set at deploy (S) — default-off means zero third-party script and the
+  // CSP stays pure 'self' for scripts. The deploy widens the CSP to Google's
+  // domains only when an ID is present, so a hand-edited id without re-running S
+  // would be CSP-blocked (by design). LAN deploys never offer it (internal traffic).
+  function initGA4(id) {
+    if (!id || !/^G-[A-Z0-9]+$/i.test(id) || window.gtag) return;
+    var s = document.createElement('script');
+    s.async = true;
+    s.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(id);
+    document.head.appendChild(s);
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = function () { window.dataLayer.push(arguments); };
+    window.gtag('js', new Date());
+    window.gtag('config', id);
+  }
 
   // ── State ──
   var MATURITY = { main: 1440, test: 1440 };

@@ -839,7 +839,11 @@ start_updates() {
         fi
     fi
 
-    local cron_line="*/5 * * * * env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $COLLECTOR_BIN --update >> $LOG_DIR/grin_stats_cron.log 2>&1 && chown -R www-data:www-data $WWW_DIR/data >> /dev/null 2>&1 $CRON_MARKER_STATS"
+    # flock -n prevents overlapping runs: if a --update overruns the 5-min interval
+    # (slow get_block on a busy/full node), the next cron tick skips instead of
+    # piling a second collector on top — which would saturate the node API and
+    # freeze every JSON export. The collector also self-locks (acquire_run_lock).
+    local cron_line="*/5 * * * * flock -n $DATA_DIR/grin_stats_update.lock env \$(cat $DATA_DIR/config.env | tr '\\n' ' ') python3 $COLLECTOR_BIN --update >> $LOG_DIR/grin_stats_cron.log 2>&1 && chown -R www-data:www-data $WWW_DIR/data >> /dev/null 2>&1 $CRON_MARKER_STATS"
 
     # Remove any stale price / ecosystem crons before re-adding
     existing=$(echo "$existing" | grep -v "grin_price_update"     || true)

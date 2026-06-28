@@ -1932,7 +1932,38 @@ solo_deploy_stats_page() {
         fi
     fi
 
-    printf '{%s%s"host":"%s",%s%s"networks":{%s}}\n' "$slogan_json" "$pool_name_json" "$subdomain" "$public_ip_json" "$portcheck_api_json" "$nets_json" \
+    # ── Optional Google Analytics 4 (public mode only) ──────────────────────────
+    # Opt-in GA4 Measurement ID (G-XXXXXXXXXX) so an operator can track visits to the
+    # public stats + setup pages. Default OFF — empty omits the key, the pages load
+    # zero third-party script, and the CSP below stays pure 'self' for scripts. LAN
+    # mode serves an internal network, so global-traffic analytics is meaningless
+    # there → not offered (and the CSP is never widened to Google in LAN mode). The
+    # key is editable in config.json, but TOGGLING it on/off needs a re-run of S so
+    # the CSP is regenerated to allow (or re-deny) Google's domains. $solo_ga4 is
+    # also read by the CSP block further down to widen script/connect/img-src.
+    local solo_ga4="" ga4_json=""
+    if [[ $lan_mode -eq 0 ]]; then
+        local existing_ga4=""
+        if [[ -f "$web_dir/data/config.json" ]]; then
+            existing_ga4=$(grep -oP '"ga4_id"\s*:\s*"\K[A-Za-z0-9-]+' \
+                "$web_dir/data/config.json" 2>/dev/null || true)
+        fi
+        echo -ne "Google Analytics 4 Measurement ID for the stats page (e.g. G-XXXXXXXXXX · Enter to ${existing_ga4:+keep '$existing_ga4'}${existing_ga4:-skip} · '-' to disable): "
+        read -r solo_ga4
+        [[ -z "$solo_ga4" ]] && solo_ga4="$existing_ga4"
+        [[ "$solo_ga4" == "-" ]] && solo_ga4=""
+        if [[ -n "$solo_ga4" ]]; then
+            if [[ "$solo_ga4" =~ ^G-[A-Za-z0-9]+$ ]]; then
+                ga4_json="\"ga4_id\":\"$solo_ga4\","
+                info "GA4 enabled ($solo_ga4) — CSP will allow Google Analytics domains."
+            else
+                warn "\"$solo_ga4\" is not a GA4 Measurement ID (expected G-XXXXXXXXXX) — analytics skipped."
+                solo_ga4=""
+            fi
+        fi
+    fi
+
+    printf '{%s%s"host":"%s",%s%s%s"networks":{%s}}\n' "$slogan_json" "$pool_name_json" "$subdomain" "$public_ip_json" "$portcheck_api_json" "$ga4_json" "$nets_json" \
         > "$web_dir/data/config.json"
     chmod 644 "$web_dir/data/config.json"
     [[ -n "$solo_slogan" ]] && success "Slogan + connection config written (edit $web_dir/data/config.json to change)." \
@@ -2058,7 +2089,18 @@ CRON
         local pc_origin; pc_origin=$(printf '%s' "$solo_pcapi" | sed -E 's#^(https?://[^/]+).*#\1#')
         [[ -n "$pc_origin" ]] && csp_connect="'self' $pc_origin"
     fi
-    local csp_value="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src $csp_connect; font-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+    # When GA4 is enabled, widen ONLY the directives gtag.js needs: the script host
+    # (googletagmanager), the collect/beacon endpoints (google-analytics +
+    # analytics.google.com regional hosts), and img-src for GA's pixel fallback.
+    # Untouched when GA4 is off → the CSP stays pure 'self' for scripts.
+    local csp_script="'self' 'unsafe-inline'"
+    local csp_img="'self'"
+    if [[ -n "${solo_ga4:-}" ]]; then
+        csp_script="$csp_script https://www.googletagmanager.com"
+        csp_connect="$csp_connect https://www.googletagmanager.com https://www.google-analytics.com https://*.google-analytics.com https://*.analytics.google.com"
+        csp_img="$csp_img https://www.google-analytics.com https://*.google-analytics.com"
+    fi
+    local csp_value="default-src 'self'; script-src $csp_script; style-src 'self' 'unsafe-inline'; img-src $csp_img; connect-src $csp_connect; font-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
 
     # Bind/server_name differ by mode: public listens on :80 (certbot then adds 443);
     # LAN binds only to the chosen private IP:port and never gets a 443 block.

@@ -236,12 +236,15 @@ step_header() { echo ""; echo -e "${BOLD}${DIM}━━━ $* ━━━━━━�
 # HELPER: GRACEFUL GRIN SHUTDOWN
 # -----------------------------------------------------------------------------
 # Stops all running Grin nodes cleanly (same strategy as script 03):
-#   Step 1 — SIGTERM by PID (from P2P ports 3414 / 13414), wait up to 30 s.
+#   Step 1 — SIGTERM by PID (from P2P ports 3414 / 13414), wait up to 300 s.
+#            (grin v5.5+ may be mid LMDB/heed migration or a clean MMR flush on
+#             shutdown; a short kill window truncates that and forces the slow
+#             work to re-run on the next boot — so we wait generously.)
 #   Step 2 — SIGKILL any process that did not exit within the timeout.
 #   Step 3 — Kill every tmux session whose name starts with 'grin_'.
 # =============================================================================
 stop_grin_gracefully() {
-    local stop_timeout=30
+    local stop_timeout=300
 
     # Step 1+2: graceful stop for each running node, identified by P2P port
     for port in 3414 13414; do
@@ -328,7 +331,7 @@ _remove_instance_dirs() {
 # =============================================================================
 stop_grin_one() {
     local target_port="$1"
-    local stop_timeout=30
+    local stop_timeout=300
 
     local pid
     pid=$(ss -tlnp "sport = :$target_port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1 || true)
@@ -1201,7 +1204,92 @@ check_os_and_deps() {
         log "[STEP 2] tor enabled+started."
     fi
 
+    ensure_swap_and_tuning
+
     log "[STEP 2] Deps OK."
+}
+
+# =============================================================================
+# [2b] ENSURE SWAP + MEMORY/IO TUNING  (runs once, inside Step 2)
+# -----------------------------------------------------------------------------
+# A Grin node's startup is memory- and IO-heavy: opening LMDB plus an O(n)
+# bitmap-accumulator rebuild over the whole output MMR (single-threaded). On a
+# low-RAM VPS a cold boot can OOM-kill the node mid-rebuild — which then re-runs
+# from scratch on the next start, looking like a permanently slow node. A small
+# swapfile + low swappiness prevents that OOM-kill and keeps more page cache for
+# the mmap'd chain files. Idempotent; degrades gracefully on containers (OpenVZ/
+# LXC) that forbid swapon — it warns and continues rather than failing the build.
+# =============================================================================
+ensure_swap_and_tuning() {
+    step_header "Step 2b: Swap & Memory Tuning"
+
+    # ── Persistent VM tuning: prefer page cache over swap during the cold boot ──
+    local sysctl_file="/etc/sysctl.d/99-grin-node.conf"
+    cat > "$sysctl_file" <<'EOF'
+# Grin Node Toolkit — favour file/page cache over swap during node startup.
+# The node's startup reads several GB of mmap'd chain files on one core; keeping
+# them cached (low swappiness) is the single biggest cold-boot speedup we control.
+vm.swappiness = 10
+vm.vfs_cache_pressure = 50
+EOF
+    sysctl -p "$sysctl_file" >/dev/null 2>&1 || true
+    success "Applied vm.swappiness=10, vm.vfs_cache_pressure=50 ($sysctl_file)."
+
+    # ── Skip swapfile creation if usable swap already exists (≥ ~2 GB) ──────────
+    local active_swap_kb active_swap_mb
+    active_swap_kb=$(awk '/SwapTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    active_swap_mb=$(( active_swap_kb / 1024 ))
+    if (( active_swap_mb >= 1900 )); then
+        success "Swap already present (${active_swap_mb} MB) — no swapfile needed."
+        log "[STEP 2b] swap present=${active_swap_mb}MB swappiness=10"
+        return 0
+    fi
+
+    # ── Size: 2 GB default; 4 GB when RAM < 2 GB (more headroom for boot rebuild)──
+    local mem_kb mem_mb swap_gb
+    mem_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    mem_mb=$(( mem_kb / 1024 ))
+    if (( mem_mb > 0 && mem_mb < 2048 )); then swap_gb=4; else swap_gb=2; fi
+
+    local swapfile="/swapfile"
+    if [[ -f "$swapfile" ]] && swapon --show=NAME --noheadings 2>/dev/null | grep -qx "$swapfile"; then
+        success "$swapfile already active."
+        return 0
+    fi
+
+    # Disk-space guard: need swap_gb + 1 GB free on / before allocating.
+    local free_mb
+    free_mb=$(df -Pm / | awk 'NR==2{print $4}')
+    if (( free_mb < swap_gb * 1024 + 1024 )); then
+        warn "Only ${free_mb} MB free on / — too little for a ${swap_gb} GB swapfile. Skipping swap."
+        return 0
+    fi
+
+    info "Creating ${swap_gb} GB swapfile at $swapfile (RAM detected: ${mem_mb} MB)..."
+    rm -f "$swapfile" 2>/dev/null || true
+    if ! fallocate -l "${swap_gb}G" "$swapfile" 2>/dev/null; then
+        info "fallocate unavailable — falling back to dd (slower)..."
+        if ! dd if=/dev/zero of="$swapfile" bs=1M count=$(( swap_gb * 1024 )) status=none 2>/dev/null; then
+            warn "Could not allocate swapfile (likely a container) — continuing without swap."
+            rm -f "$swapfile" 2>/dev/null || true
+            return 0
+        fi
+    fi
+    chmod 600 "$swapfile"
+    if ! mkswap "$swapfile" >/dev/null 2>&1; then
+        warn "mkswap failed — removing swapfile and continuing without swap."
+        rm -f "$swapfile"; return 0
+    fi
+    if ! swapon "$swapfile" 2>/dev/null; then
+        warn "swapon failed (container may forbid swap) — removing swapfile and continuing."
+        rm -f "$swapfile"; return 0
+    fi
+    # Persist across reboots (only add the fstab line once).
+    if ! grep -qE "^[[:space:]]*$swapfile[[:space:]]" /etc/fstab 2>/dev/null; then
+        echo "$swapfile none swap sw 0 0" >> /etc/fstab
+    fi
+    success "${swap_gb} GB swap active and persisted in /etc/fstab."
+    log "[STEP 2b] swapfile=${swap_gb}G ram=${mem_mb}MB swappiness=10"
 }
 
 # =============================================================================
@@ -2017,7 +2105,7 @@ download_chain_data() {
             fi
             _zi=$(( _zi + 1 ))
         done
-        echo -e "  ${DIM}0${RESET}) Skip  ${DIM}(use all known servers, shuffled)${RESET}"
+        echo -e "  ${GREEN}0${RESET}) Auto  ${DIM}(all zones, fastest available — recommended fallback)${RESET}"
         echo ""
         echo -ne "${BOLD}Zone [1]: ${RESET}"
         local _zone_choice
@@ -2065,17 +2153,20 @@ download_chain_data() {
         _check_and_add_host "$host" "$_MAX_AGE_DAYS" "$site_key" || true
     done
 
-    # Auto-fallback to America hardcoded hosts if selected zone yielded nothing
-    if [[ ${#READY_SOURCES[@]} -eq 0 && "$SELECTED_ZONE" != "america" && "$SELECTED_ZONE" != "all" ]]; then
-        info "No fresh hosts in ${SELECTED_ZONE^} — trying America fallback..."
-        local _am_hosts=()
-        mapfile -t _am_hosts < <(
-            _get_zone_hosts "america" "$site_key" "$REGISTRY" | tr ' ' '\n' | grep -v '^$' | shuf
-        )
-        for host in "${_am_hosts[@]}"; do
+    # Auto-fallback to ALL zones (shuffled) if the selected single zone yielded nothing.
+    # (Skipped when the user already chose "all" — that pool was just exhausted.)
+    if [[ ${#READY_SOURCES[@]} -eq 0 && "$SELECTED_ZONE" != "all" ]]; then
+        info "No fresh hosts in ${SELECTED_ZONE^} — trying all zones (fastest available)..."
+        local _all_hosts="" _fb_hosts=()
+        for _z in "${_zone_order[@]}"; do
+            local _zh; _zh=$(_get_zone_hosts "$_z" "$site_key" "$REGISTRY")
+            [[ -n "$_zh" ]] && _all_hosts+=" $_zh"
+        done
+        mapfile -t _fb_hosts < <(tr ' ' '\n' <<< "$_all_hosts" | grep -v '^$' | sort -u | shuf)
+        for host in "${_fb_hosts[@]}"; do
             _check_and_add_host "$host" "$_MAX_AGE_DAYS" "$site_key" || true
         done
-        [[ ${#READY_SOURCES[@]} -gt 0 ]] && SELECTED_ZONE="america"
+        [[ ${#READY_SOURCES[@]} -gt 0 ]] && SELECTED_ZONE="all"
     fi
 
     # All known hosts failed — prompt for custom URL or exit

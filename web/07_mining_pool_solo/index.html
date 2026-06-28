@@ -432,7 +432,6 @@
   <div class="chart-head">
     <h2>GRIN / miner / day · <span style="color:var(--main)">Mainnet</span></h2>
     <div class="seg" id="earn-seg">
-      <button type="button" data-period="daily">Daily</button>
       <button type="button" data-period="weekly" class="active">Weekly</button>
       <button type="button" data-period="monthly">Monthly</button>
       <button type="button" data-period="yearly">Yearly</button>
@@ -470,8 +469,27 @@
     .then(function (c) {
       if (!c) return;
       if (c.slogan) document.getElementById('slogan').textContent = c.slogan;
+      initGA4(c.ga4_id);
     })
     .catch(function () {});
+
+  // ── Optional Google Analytics 4 (config.json {"ga4_id":"G-…"}) ───────────────
+  // Opt-in operator traffic analytics. Loads gtag.js ONLY when a valid Measurement
+  // ID was set at deploy (S) — default-off means zero third-party script and the
+  // CSP stays pure 'self' for scripts. The deploy widens the CSP to Google's
+  // domains only when an ID is present, so a hand-edited id without re-running S
+  // would be CSP-blocked (by design). LAN deploys never offer it (internal traffic).
+  function initGA4(id) {
+    if (!id || !/^G-[A-Z0-9]+$/i.test(id) || window.gtag) return;
+    var s = document.createElement('script');
+    s.async = true;
+    s.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(id);
+    document.head.appendChild(s);
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = function () { window.dataLayer.push(arguments); };
+    window.gtag('js', new Date());
+    window.gtag('config', id);
+  }
 
   // ── State ──
   var MATURITY = { main: 1440, test: 1440 };
@@ -1277,11 +1295,6 @@
     var d = SPLIT.data;
     if (!d || !(d.daily || []).length) { card.style.display = 'none'; return; }
     card.style.display = '';
-    if (SPLIT.earnPeriod === 'daily') {
-      meta.textContent = '—';
-      holder.innerHTML = '<div class="chart-empty">A single day is just one point — pick Weekly, Monthly or Yearly to see the per-day trend.</div>';
-      return;
-    }
 
     var byDay = {};
     d.daily.forEach(function (e) { byDay[e.day] = e; });
@@ -1446,6 +1459,14 @@
     });
   }
   poll(); setInterval(poll, POLL_MS); setInterval(tickFresh, 1000);
+  // Background tabs throttle setInterval, so while hidden the node tip stops
+  // refreshing and the coinbase-maturity countdown (derived from tip − height)
+  // freezes at a stale, inflated value — it only corrects on a manual reload.
+  // Re-poll the instant the tab is shown again so returning always paints a fresh
+  // tip (and real maturity time) with no refresh needed.
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) poll();
+  });
 })();
 </script>
 </body>

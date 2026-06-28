@@ -710,10 +710,26 @@ ERROR grin_wallet_impls::node_clients::http - Unable to contact Node to get vers
     });
   }
 
+  // ── Optional Google Analytics 4 (config.json {"ga4_id":"G-…"}) ───────────────
+  // Shares the stats page's ga4_id so both pages report into one GA4 property.
+  // Loads gtag.js only when a valid ID was set at deploy; default-off = no script.
+  function initGA4(id) {
+    if (!id || !/^G-[A-Z0-9]+$/i.test(id) || window.gtag) return;
+    var s = document.createElement('script');
+    s.async = true;
+    s.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(id);
+    document.head.appendChild(s);
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = function () { window.dataLayer.push(arguments); };
+    window.gtag('js', new Date());
+    window.gtag('config', id);
+  }
+
   fetch('data/config.json', { cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (c) {
       if (!c) { document.getElementById('no-net').style.display = 'block'; return; }
+      initGA4(c.ga4_id);   // opt-in GA4, shares the stats page's config.json ga4_id
       PORTCHECK_API = c.portcheck_api || '';
       var domain = c.host || location.hostname;
       var ip = c.public_ip || '';

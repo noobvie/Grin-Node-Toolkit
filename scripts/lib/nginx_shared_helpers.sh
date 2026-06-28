@@ -244,6 +244,55 @@ nginx_evict_apache2() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
+# WEB USER — the user nginx workers actually run as (distro/repo independent)
+# ═════════════════════════════════════════════════════════════════════════════
+# The correct web user is NOT constant across our supported targets:
+#   · Debian/Ubuntu distro nginx     → www-data
+#   · RHEL/Rocky/Alma distro nginx   → nginx
+#   · official nginx.org stable repo → nginx  (on ALL distros, incl. Debian)
+# Hardcoding either name silently breaks on the others: `chown www-data … || true`
+# no-ops into root:root (→ nginx workers get 403), and a cron line naming a
+# non-existent user is rejected so collectors never run.
+#
+# So DETECT it. Resolution order:
+#   1. The `user` directive from the fully-resolved running config (`nginx -T`) —
+#      authoritative: it is exactly what the master sets its worker processes to.
+#   2. Distro fallback (www-data then nginx) if the directive is absent/unreadable
+#      or nginx isn't installed/valid yet.
+#   3. root as a last resort, so a chown NEVER silently no-ops into root:root.
+# Cached after first lookup (the value can't change without an nginx restart).
+nginx_web_user() {
+    [[ -n "${_NGINX_WEB_USER:-}" ]] && { printf '%s\n' "$_NGINX_WEB_USER"; return 0; }
+    local u=""
+    # 1. Authoritative: only the main-context `user` directive starts a line with
+    #    `user ` (auth_basic_user_file / userid_* don't), so this can't false-match.
+    if command -v nginx >/dev/null 2>&1; then
+        u=$(nginx -T 2>/dev/null \
+            | sed -n 's/^[[:space:]]*user[[:space:]]\{1,\}\([^;[:space:]]\{1,\}\).*/\1/p' \
+            | head -n1)
+    fi
+    # 2. Distro fallback.
+    if [[ -z "$u" ]]; then
+        if   id -u www-data >/dev/null 2>&1; then u=www-data
+        elif id -u nginx    >/dev/null 2>&1; then u=nginx
+        fi
+    fi
+    # 3. The resolved user must actually exist — otherwise chown is a silent no-op.
+    if [[ -z "$u" ]] || ! id -u "$u" >/dev/null 2>&1; then
+        u=root
+    fi
+    _NGINX_WEB_USER="$u"
+    printf '%s\n' "$u"
+}
+
+# Convenience: "user:group" for `chown`. nginx's primary group name matches its user
+# name on every target we support (www-data:www-data, nginx:nginx), so user==group.
+nginx_web_owner() {
+    local u; u=$(nginx_web_user)
+    printf '%s:%s\n' "$u" "$u"
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
 # RATE-LIMIT ZONE primitive + named wrappers
 # ═════════════════════════════════════════════════════════════════════════════
 # Generic primitive for defining nginx `limit_req_zone` directives in conf.d/.

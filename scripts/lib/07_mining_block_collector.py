@@ -176,6 +176,16 @@ def iso(epoch):
     return datetime.fromtimestamp(epoch).isoformat(timespec="seconds")
 
 
+def iso_utc(epoch):
+    # UTC ISO-8601 WITH an explicit offset (…+00:00). A naive string like
+    # "2026-06-27T14:30:00" is parsed by the browser as VISITOR-local time, so a
+    # block's wall-clock numbers get shown verbatim under whatever timezone the
+    # visitor is in (wrong instant). Stamping the offset makes new Date() parse the
+    # absolute instant, and the page's local getHours()/getDate() then render it in
+    # the visitor's own timezone — for the found-blocks table and its date buckets.
+    return datetime.fromtimestamp(epoch, timezone.utc).isoformat(timespec="seconds")
+
+
 def hashrate_gps(sum_diff, window_s):
     if window_s <= 0:
         return 0.0
@@ -1020,7 +1030,7 @@ def build_blocks(found, hashes, now):
     found = {h: t for h, t in found.items() if t >= cutoff}
     hashes = {h: v for h, v in hashes.items() if h in found}
     blocks = sorted(
-        ({"height": int(h), "ts": iso(t), "hash": hashes.get(h)}
+        ({"height": int(h), "ts": iso_utc(t), "hash": hashes.get(h)}
          for h, t in found.items()),
         key=lambda b: b["height"], reverse=True)[:RECENT_CAP]
 

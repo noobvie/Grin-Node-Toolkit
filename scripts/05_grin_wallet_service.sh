@@ -25,6 +25,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Shared node-secret resolver + self-heal (keeps grin-wallet.toml
+# node_api_secret_path in sync with the live node after a node rebuild).
+# shellcheck source=lib/grin_node_secrets.sh
+source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -457,6 +462,9 @@ _cmd_wallet_setup_for_net() {
         _cmd_patch_toml "$toml_file" "node_api_secret_path" "\"$node_dir/.foreign_api_secret\""
         _did_patch="$node_dir"
     fi
+    # Enable box-wide secret self-heal so this wallet's node_api_secret_path is
+    # auto-refreshed after a future node rebuild (idempotent; no-op without root).
+    grin_install_secret_sync || true
 
     # ── Step 6: Start listener ────────────────────────────────────────────────
     _cmd_start_listener "$wallet_dir" "$wallet_bin" "$net_flag" \

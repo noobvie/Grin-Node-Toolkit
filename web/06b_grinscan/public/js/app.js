@@ -564,7 +564,7 @@ function initApiPage() {
     { path: '/api/stats',     desc: 'Latest tip, hashrate, difficulty, peers, price, pool size, DB size', cache: 'live',      link: true  },
     { path: '/api/blocks',    desc: 'Paginated block list — <code>?limit=N&amp;offset=M</code> (max 100)',           cache: 'live',      link: true  },
     { path: '/api/block/:id', desc: 'Single block by height or hash — includes <code>_prev_timestamp</code>',        cache: 'live',      link: false },
-    { path: '/api/history',   desc: 'Hashrate/difficulty samples — <code>?days=N</code> (max 5000) or <code>?days=0</code> for full range. Returns <code>{ ok, rows }</code>. Data range limited to cached blocks window.', cache: 'live', link: true },
+    { path: '/api/history',   desc: 'Hashrate/difficulty samples — <code>?days=N</code> (max 5000) or <code>?days=0</code> for full range. Returns <code>{ ok, rows, source }</code>: ≤7d is per-block (<code>source:"blocks"</code>), longer ranges use the compact daily rollup (<code>source:"daily"</code>).', cache: 'live', link: true },
     { path: '/api/peers',     desc: 'Connected peer list (addr, direction, user_agent)',                              cache: 'live',      link: true  },
     { path: '/api/price',     desc: 'GRIN price (USD + BTC), 24h change, price history',                             cache: '2 min',     link: true  },
     { path: '/api/tip',       desc: 'Current tip height + hash',                                                     cache: 'live',      link: true  },

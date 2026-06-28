@@ -46,6 +46,27 @@ scripts/
        are shared. The 07 hub menu exposes it as option 3 (hub_launch solo-lan); LAN and
        public solo are the SAME exclusivity bucket (same ports/dirs).
   08_  Node admin centre (monitoring, nginx, firewall, backup)
+       Disk Cleanup (menu 7) has manual cleanup PLUS an "Automatic cleanup
+       schedule" (action 7 → manage_auto_cleanup): installs worker
+       /opt/grin/auto_cleanup.sh + cron /etc/cron.d/grin-auto-cleanup (daily
+       04:30) that deletes txhashset fast-sync snapshots (txhashset*.zip /
+       *.txhashset, -type f only, under /tmp + /opt/grin/node — never the live
+       chain_data/txhashset/ PMMR dir) and prunes /opt/grin/logs older than N
+       days (default 7). Worker self-logs to a DATED file
+       /opt/grin/logs/auto_cleanup_YYYYMMDD.log (fresh per day, never appends to
+       an old log; today's file is exempt from the prune, older dated logs
+       self-rotate via the same N-day prune). Cron redirects to /dev/null since
+       the worker captures its own output via exec. Enable/disable/run-now in-menu.
+       Enable ALSO installs /etc/logrotate.d/grin-toolkit-logs (weekly, 10M,
+       copytruncate, missingok) covering the toolkit's CONTINUOUS fixed-name logs
+       — the watchdogs (node/wallet/stratum/pubpool-wallet), schedule.log,
+       solo-backup.log, grin-satellite.log. These can't be per-run dated
+       (watchdogs fire every minute → file explosion; daemons hold a fixed fd),
+       so they get rotated instead. Service logs that ship their OWN logrotate
+       (grin-pool.log via /etc/logrotate.d/<svc>; 04 API; 06 explorer) are
+       excluded to avoid duplicate-rotation errors. All toolkit interactive
+       SESSION logs already use _$(date +%Y%m%d_%H%M%S).log. 08del STEP 7a2 now
+       sweeps /etc/logrotate.d/grin* so a full nuke leaves no orphan configs.
   08del_ Full cleanup (destructive)
   lib/ Sourced libraries — always prefixed with parent script number
        e.g. 052_lib_wallet.sh, 052_lib_nginx.sh

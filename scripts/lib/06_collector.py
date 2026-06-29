@@ -264,7 +264,8 @@ def init_schema(conn):
         CREATE TABLE IF NOT EXISTS peer_count_history (
             sampled_at      INTEGER NOT NULL,
             mainnet_count   INTEGER NOT NULL DEFAULT 0,
-            testnet_count   INTEGER NOT NULL DEFAULT 0
+            testnet_count   INTEGER NOT NULL DEFAULT 0,
+            country_count   INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_pch_ts ON peer_count_history(sampled_at);
 
@@ -287,6 +288,14 @@ def init_schema(conn):
             ALTER TABLE peer_count_history ADD COLUMN testnet_count INTEGER NOT NULL DEFAULT 0;
             UPDATE peer_count_history SET mainnet_count = count;
         """)
+        conn.commit()
+        cols.update({"mainnet_count", "testnet_count"})
+    # Add country_count to existing peer_count_history (distinct mainnet countries
+    # per sample). Historical rows stay 0 — no backfill, the trend builds going forward.
+    if "country_count" not in cols:
+        conn.execute(
+            "ALTER TABLE peer_count_history ADD COLUMN country_count INTEGER NOT NULL DEFAULT 0"
+        )
         conn.commit()
 
 def get_meta(conn, key, default=None):
@@ -1150,9 +1159,13 @@ def _update_peers():
     # ── 9. Record peer count snapshot for history chart ──────────────────────
     mnet_count = sum(1 for r in rows if r[1] == "mainnet")
     tnet_count = sum(1 for r in rows if r[1] == "testnet")
+    # Distinct countries hosting a mainnet node this sample (country_code = r[8]).
+    # Mainnet only — testnet is dev traffic and would inflate the "adoption" trend.
+    country_count = len({r[8] for r in rows if r[1] == "mainnet" and r[8]})
     conn.execute(
-        "INSERT INTO peer_count_history(sampled_at, mainnet_count, testnet_count) VALUES(?,?,?)",
-        (ts, mnet_count, tnet_count),
+        "INSERT INTO peer_count_history"
+        "(sampled_at, mainnet_count, testnet_count, country_count) VALUES(?,?,?,?)",
+        (ts, mnet_count, tnet_count, country_count),
     )
     conn.execute(
         "DELETE FROM peer_count_history WHERE sampled_at < ?",
@@ -1391,6 +1404,52 @@ def export_all_json():
         },
     })
 
+    # ── top countries (per network: mainnet / testnet / both) ─────────────────
+    # Same window + structure as versions; counts distinct peers per country.
+    def _country_rows(net):
+        return conn.execute(
+            "SELECT country_code, country, COUNT(*) AS cnt FROM known_peers "
+            "WHERE last_seen >= ? AND network=? AND country_code != '' "
+            "GROUP BY country_code ORDER BY cnt DESC",
+            (version_cutoff, net),
+        ).fetchall()
+
+    def _country_list(rows):
+        """rows: (code, name, count) sorted desc → top-10 + 'Other countries', total."""
+        total = sum(r[2] for r in rows)
+        top   = rows[:10]
+        other = sum(r[2] for r in rows[10:])
+        clist = [{"label": r[1] or r[0], "code": r[0], "count": r[2]} for r in top]
+        if other > 0:
+            clist.append({"label": "Other countries", "code": "", "count": other})
+        return clist, total
+
+    mnet_crows = _country_rows("mainnet")
+    tnet_crows = _country_rows("testnet")
+
+    # "both": merge per-country counts across networks (keep a name per code), re-rank.
+    both_ccount = Counter()
+    both_cname  = {}
+    for code, name, cnt in mnet_crows + tnet_crows:
+        both_ccount[code] += cnt
+        both_cname.setdefault(code, name)
+    both_crows = [(code, both_cname[code], cnt) for code, cnt in both_ccount.most_common()]
+
+    mnet_countries, mnet_ctotal = _country_list(mnet_crows)
+    tnet_countries, tnet_ctotal = _country_list(tnet_crows)
+    both_countries, both_ctotal = _country_list(both_crows)
+
+    _write_json("countries.json", {
+        "updated":      ts_now,
+        "sampled_from": mnet_ctotal,
+        "countries":    mnet_countries,
+        "networks": {
+            "mainnet": {"countries": mnet_countries, "sampled_from": mnet_ctotal},
+            "testnet": {"countries": tnet_countries, "sampled_from": tnet_ctotal},
+            "both":    {"countries": both_countries, "sampled_from": both_ctotal},
+        },
+    })
+
     # ── active peers history ──────────────────────────────────────────────────
     cutoff_peer_30d = ts_now - 30 * 86400
     cutoff_peer_24h = ts_now - 86400
@@ -1420,9 +1479,10 @@ def export_all_json():
         }
 
     _write_json("active_peers.json", {
-        "updated":  ts_now,
-        "mainnet":  _peer_series("mainnet_count"),
-        "testnet":  _peer_series("testnet_count"),
+        "updated":   ts_now,
+        "mainnet":   _peer_series("mainnet_count"),
+        "testnet":   _peer_series("testnet_count"),
+        "countries": _peer_series("country_count"),  # distinct mainnet countries; builds forward
     })
 
     # ── summary (for the header stats bar) ───────────────────────────────────

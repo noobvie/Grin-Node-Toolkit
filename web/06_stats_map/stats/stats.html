@@ -259,7 +259,7 @@
   .range-btn.active { background: var(--grin); border-color: var(--grin); color: #000; font-weight: 600; }
 
   /* ── Metric toggle buttons ───────────────────────────────────────────────── */
-  .metric-toggle, .peers-toggle, .versions-toggle {
+  .metric-toggle, .peers-toggle, .peers-overlay-toggle, .versions-toggle {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--muted);
@@ -273,14 +273,21 @@
     gap: 6px;
     white-space: nowrap;
   }
-  .metric-toggle:hover, .peers-toggle:hover, .versions-toggle:hover { border-color: var(--text); color: var(--text); }
+  .metric-toggle:hover, .peers-toggle:hover, .peers-overlay-toggle:hover, .versions-toggle:hover { border-color: var(--text); color: var(--text); }
   .metric-toggle.active, .peers-toggle.active, .versions-toggle.active {
     background: rgba(88,166,255,0.15);
     border-color: var(--blue);
     color: var(--blue);
     font-weight: 600;
   }
-  .metric-toggle .dot, .peers-toggle .dot, .versions-toggle .dot {
+  /* Overlay toggle uses the country line's purple when active, to match its axis/line */
+  .peers-overlay-toggle.active {
+    background: rgba(188,140,255,0.15);
+    border-color: #bc8cff;
+    color: #bc8cff;
+    font-weight: 600;
+  }
+  .metric-toggle .dot, .peers-toggle .dot, .peers-overlay-toggle .dot, .versions-toggle .dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
@@ -647,7 +654,7 @@
   <!-- Active Peers chart -->
   <div class="card">
     <div class="card-header">
-      <div class="card-title"><span class="dot dot-green"></span><span class="chart-info-toggle" onclick="toggleChartInfo('peers-info')" id="peers-info-btn">Active Peers</span></div>
+      <div class="card-title"><span class="dot dot-green"></span><span class="chart-info-toggle" onclick="toggleChartInfo('peers-info')" id="peers-info-btn">Active Peers / Countries</span></div>
       <div class="range-btns" id="peers-range">
         <button class="range-btn" data-r="day">Day</button>
         <button class="range-btn" data-r="week">Week</button>
@@ -662,7 +669,7 @@
         The number of Grin peers with an <b>active TCP connection to this monitoring node</b> at each sample point. Grin nodes maintain 8–30 outbound connections — this chart tracks that count over time as a health indicator, not a census of the full network.
         <hr class="chart-info-sep">
         <h4>Sampling</h4>
-        Queried every ~5 min via <code>v2/owner → get_connected_peers</code> (live sessions only). Mainnet and Testnet are tracked separately. The <b>Peer Map</b> tab gives the broader global view — it uses the full routing table (<code>get_peers</code>) to discover and geolocate nodes worldwide.
+        Queried every ~5 min via <code>v2/owner → get_connected_peers</code> (live sessions only). Mainnet and Testnet are tracked separately. The <b>Countries</b> line counts the distinct countries hosting a mainnet node at each sample — a network-decentralisation trend that <b>builds forward</b> from when tracking began (earlier history isn't backfilled). It overlays on a separate <b>right-hand axis</b> and toggles on/off independently of the Mainnet/Testnet selector. The <b>Peer Map</b> tab gives the broader global view — it uses the full routing table (<code>get_peers</code>) to discover and geolocate nodes worldwide.
         <hr class="chart-info-sep">
         <h4>Note</h4>
         Fluctuations are normal — peers connect and disconnect continuously. A sustained drop may indicate network issues or low node count.
@@ -678,8 +685,62 @@
       <button class="peers-toggle" data-net="testnet">
         <span class="dot dot-blue"></span>Testnet
       </button>
+      <button class="peers-overlay-toggle active" data-overlay="countries" style="margin-left:auto;" title="Overlay the number of distinct countries hosting a mainnet node (right axis)">
+        <span class="dot" style="background:#bc8cff"></span>Countries
+      </button>
     </div>
     <div class="chart-wrap"><canvas id="chart-peers"></canvas></div>
+  </div>
+
+  <!-- Node versions -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleChartInfo('versions-info')" id="versions-info-btn">Top 10 Version Distribution</span></div>
+      <span id="versions-sample" style="color:var(--muted);font-size:12px;"></span>
+    </div>
+    <div class="chart-info-panel" id="versions-info-panel">
+      <div class="chart-info-panel-inner">
+        <h4>What's shown</h4>
+        Distribution of Grin node client versions among peers connected to this monitoring node — a live snapshot of software adoption across the network.
+        <hr class="chart-info-sep">
+        <h4>How it works</h4>
+        Version strings are taken verbatim from the <code>user_agent</code> each peer reports during the Grin P2P handshake, via <code>v2/owner → get_peers</code> (routing-table query, Healthy peers only). Every named peer is kept; gossiped addresses that never handshaked (blank agent) are excluded. The chart counts peers seen in the last 7 days across <strong>both mainnet and testnet</strong> combined.
+        <hr class="chart-info-sep">
+        <h4>Note</h4>
+        Only peers directly connected to (or known to) this monitoring node are counted, so the total can be lower than the map's "Total peers". Peers running behind NAT or not reachable may be under-represented.
+      </div>
+    </div>
+    <div class="versions-wrap">
+      <div class="donut-wrap">
+        <canvas id="chart-versions"></canvas>
+        <div class="donut-center">
+          <span class="dc-num" id="donut-total">—</span>
+          <span class="dc-lbl">peers</span>
+        </div>
+      </div>
+      <div class="version-legend" id="version-legend"></div>
+    </div>
+  </div>
+
+  <!-- Top countries -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleChartInfo('countries-info')" id="countries-info-btn">Top 10 Countries</span></div>
+      <span id="countries-sample" style="color:var(--muted);font-size:12px;"></span>
+    </div>
+    <div class="chart-info-panel" id="countries-info-panel">
+      <div class="chart-info-panel-inner">
+        <h4>What's shown</h4>
+        The countries hosting the most Grin nodes — a ranking of where peers connected to this monitoring node are physically located.
+        <hr class="chart-info-sep">
+        <h4>How it works</h4>
+        Each peer's IP is geolocated via <code>ip-api.com</code> and grouped by country over peers seen in the last 7 days across <strong>both mainnet and testnet</strong>. The top 10 countries are shown individually; everything else is summed into <em>Other countries</em>.
+        <hr class="chart-info-sep">
+        <h4>Note</h4>
+        Geolocation is approximate, and peers behind VPNs or NAT may be attributed to the exit country rather than the operator's.
+      </div>
+    </div>
+    <div class="chart-wrap" style="height:340px;padding:8px 24px 16px;"><canvas id="chart-countries"></canvas></div>
   </div>
 
   <!-- Price chart — USDT -->
@@ -798,36 +859,6 @@
     </div>
   </div>
 
-  <!-- Node versions -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title"><span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleChartInfo('versions-info')" id="versions-info-btn">Top 10 Version Distribution</span></div>
-      <span id="versions-sample" style="color:var(--muted);font-size:12px;"></span>
-    </div>
-    <div class="chart-info-panel" id="versions-info-panel">
-      <div class="chart-info-panel-inner">
-        <h4>What's shown</h4>
-        Distribution of Grin node client versions among peers connected to this monitoring node — a live snapshot of software adoption across the network.
-        <hr class="chart-info-sep">
-        <h4>How it works</h4>
-        Version strings are taken verbatim from the <code>user_agent</code> each peer reports during the Grin P2P handshake, via <code>v2/owner → get_peers</code> (routing-table query, Healthy peers only). Every named peer is kept; gossiped addresses that never handshaked (blank agent) are excluded. The chart counts peers seen in the last 7 days across <strong>both mainnet and testnet</strong> combined.
-        <hr class="chart-info-sep">
-        <h4>Note</h4>
-        Only peers directly connected to (or known to) this monitoring node are counted, so the total can be lower than the map's "Total peers". Peers running behind NAT or not reachable may be under-represented.
-      </div>
-    </div>
-    <div class="versions-wrap">
-      <div class="donut-wrap">
-        <canvas id="chart-versions"></canvas>
-        <div class="donut-center">
-          <span class="dc-num" id="donut-total">—</span>
-          <span class="dc-lbl">peers</span>
-        </div>
-      </div>
-      <div class="version-legend" id="version-legend"></div>
-    </div>
-  </div>
-
 </main>
 
 <section style="max-width:860px;margin:0 auto;padding:24px 24px 8px;font-size:12px;color:var(--muted);line-height:1.8;">
@@ -936,6 +967,16 @@
           <span class="api-chevron">▶</span>
         </div>
         <span class="api-desc">Node version distribution — label + count for each Grin client version seen in the last 7 days. Top-level keys are mainnet; per-network breakdown under <code>networks.{mainnet,testnet,both}</code></span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-countries" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/countries</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Top countries hosting nodes — label + ISO <code>code</code> + count for the top 10 countries (plus <em>Other countries</em>) seen in the last 7 days. Per-network breakdown under <code>networks.{mainnet,testnet,both}</code></span>
       </div>
     </div>
     <div class="api-endpoint">
@@ -1560,9 +1601,10 @@ function updateInflationM2Gold(inflJson) {
 
 function makePeersChart(id) {
   const ctx = $(id).getContext("2d");
-  const mkDs = (label, color) => ({
+  const mkDs = (label, color, axis) => ({
     label,
     data: [],
+    yAxisID: axis || "y",
     borderColor: color,
     backgroundColor: color + "18",
     borderWidth: 1.5,
@@ -1572,7 +1614,9 @@ function makePeersChart(id) {
   });
   return new Chart(ctx, {
     type: "line",
-    data: { datasets: [mkDs("Mainnet", "#ff9900"), mkDs("Testnet", "#58a6ff")] },
+    // Countries rides a separate right-hand axis (y1) so its ~tens scale stays
+    // readable next to the peer lines' ~hundreds scale.
+    data: { datasets: [mkDs("Mainnet", "#ff9900"), mkDs("Testnet", "#58a6ff"), mkDs("Countries", "#bc8cff", "y1")] },
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -1582,14 +1626,25 @@ function makePeersChart(id) {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.parsed.y, 0)} peers`,
+            label: ctx => {
+              const unit = ctx.dataset.label === "Countries" ? "countries" : "peers";
+              return ` ${ctx.dataset.label}: ${fmt(ctx.parsed.y, 0)} ${unit}`;
+            },
             title: items => new Date(items[0].parsed.x).toLocaleString(),
           }
         }
       },
       scales: {
-        x: { type: "time", time: { tooltipFormat: "MMM d yyyy HH:mm" }, ticks: { maxTicksLimit: 8 } },
-        y: { ticks: { callback: v => fmt(v, 0) } }
+        x:  { type: "time", time: { tooltipFormat: "MMM d yyyy HH:mm" }, ticks: { maxTicksLimit: 8 } },
+        y:  { ticks: { callback: v => fmt(v, 0) } },
+        y1: {
+          position: "right",
+          display: false,            // shown only while the Countries overlay is active
+          beginAtZero: true,
+          grid: { drawOnChartArea: false },
+          title: { display: true, text: "Countries", color: "#bc8cff" },
+          ticks: { precision: 0, color: "#bc8cff", callback: v => fmt(v, 0) },
+        },
       }
     }
   });
@@ -1598,7 +1653,8 @@ function makePeersChart(id) {
 // ── Chart instances ───────────────────────────────────────────────────────────
 const charts = {};
 let activityMetric = "both";  // "tx", "fee", or "both"
-let peersNetwork   = "both";  // "mainnet", "testnet", or "both"
+let peersNetwork       = "both";  // "mainnet", "testnet", or "both" — controls peer lines
+let peersShowCountries = true;    // independent overlay: distinct-country line on the right axis
 
 function initCharts() {
   // Chart.defaults (color, borderColor, font) are set by initTheme() before this runs
@@ -1726,7 +1782,11 @@ function updatePeersChart(json, range, network) {
     }
     const byTs = new Map();
     pts.forEach(([ts, v]) => byTs.set(ts, v));
-    return [...byTs.entries()].sort((a, b) => a[0] - b[0]).map(([ts, v]) => ({x: ts * 1000, y: v}));
+    let out = [...byTs.entries()].sort((a, b) => a[0] - b[0]).map(([ts, v]) => ({x: ts * 1000, y: v}));
+    // country_count wasn't recorded before this feature shipped (historical rows = 0);
+    // drop those zeros so the trend line starts when real tracking began, not at 0.
+    if (series === "countries") out = out.filter(p => p.y > 0);
+    return out;
   };
 
   // Set time unit per range so tick labels match the selected timeframe.
@@ -1737,10 +1797,16 @@ function updatePeersChart(json, range, network) {
   delete charts.activePeers.options.scales.x.min;
   delete charts.activePeers.options.scales.x.max;
 
+  // Peer lines follow the network toggle; Countries is an independent overlay on y1.
+  const countryPts = getPoints("countries");
   charts.activePeers.data.datasets[0].data   = getPoints("mainnet");
   charts.activePeers.data.datasets[1].data   = getPoints("testnet");
+  charts.activePeers.data.datasets[2].data   = countryPts;
   charts.activePeers.data.datasets[0].hidden = network === "testnet";
   charts.activePeers.data.datasets[1].hidden = network === "mainnet";
+  charts.activePeers.data.datasets[2].hidden = !peersShowCountries;
+  // Only reveal the right axis when the overlay is on AND has data to plot.
+  charts.activePeers.options.scales.y1.display = peersShowCountries && countryPts.length > 0;
   charts.activePeers.update("none");
 }
 
@@ -1833,7 +1899,7 @@ function updatePriceChartBTC(data, range) {
 let DATA_CACHE = {};
 
 async function loadAll() {
-  const [summary, hashrate, difficulty, transactions, fees, versions, peers, activePeers, price, inflation] =
+  const [summary, hashrate, difficulty, transactions, fees, versions, countries, peers, activePeers, price, inflation] =
     await Promise.all([
       tryFetchJSON(DATA + "summary.json"),
       tryFetchJSON(DATA + "hashrate.json"),
@@ -1841,6 +1907,7 @@ async function loadAll() {
       tryFetchJSON(DATA + "transactions.json"),
       tryFetchJSON(DATA + "fees.json"),
       tryFetchJSON(DATA + "versions.json"),
+      tryFetchJSON(DATA + "countries.json"),
       tryFetchJSON(DATA + "peers.json"),
       tryFetchJSON(DATA + "active_peers.json"),
       tryFetchJSON(DATA + "price.json"),
@@ -1899,6 +1966,8 @@ async function loadAll() {
 
   // Versions donut
   if (versions) renderVersions(versions);
+  // Top countries bar
+  if (countries) renderCountries(countries);
 }
 
 // ── Version donut ─────────────────────────────────────────────────────────────
@@ -1955,6 +2024,60 @@ function renderVersions(data) {
         <span class="vl-pct">${pct}%</span>
       </div>`;
   }).join("");
+}
+
+// ── Top countries bar ─────────────────────────────────────────────────────────
+// Regional-indicator flag emoji from a 2-letter ISO country code (e.g. US → 🇺🇸).
+function countryFlag(code) {
+  if (!code || code.length !== 2) return "";
+  const base = 0x1F1E6 - 65;
+  try {
+    return String.fromCodePoint(...code.toUpperCase().split("").map(c => base + c.charCodeAt(0)));
+  } catch { return ""; }
+}
+
+function renderCountries(data) {
+  const slice = (data.networks && data.networks.both) || data;
+  const rows  = slice.countries || [];
+  const total = slice.sampled_from || 0;
+  $("countries-sample").textContent = `Sampled from ${fmt(total)} peer${total !== 1 ? "s" : ""}`;
+
+  if (typeof Chart === "undefined") return;  // chart.min.js not loaded
+  const labels = rows.map(r => `${countryFlag(r.code)} ${r.label}`.trim());
+  const counts = rows.map(r => r.count);
+  const colors = rows.map((_, i) => VERSION_COLORS[i % VERSION_COLORS.length]);
+  const tipLabel = ctx => {
+    const pct = total > 0 ? fmtNum((ctx.parsed.x / total) * 100, 1) : "0";
+    return ` ${fmt(ctx.parsed.x)} node${ctx.parsed.x !== 1 ? "s" : ""} (${pct}%)`;
+  };
+
+  if (!charts.countries) {
+    charts.countries = new Chart($("chart-countries").getContext("2d"), {
+      type: "bar",
+      data: { labels, datasets: [{ data: counts, backgroundColor: colors, borderWidth: 0, borderRadius: 3 }] },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: tipLabel } }
+        },
+        scales: {
+          x: { beginAtZero: true, ticks: { precision: 0 } },
+          y: { ticks: { autoSkip: false, font: { size: 12 } } }
+        }
+      }
+    });
+  } else {
+    const c = charts.countries;
+    c.data.labels                      = labels;
+    c.data.datasets[0].data            = counts;
+    c.data.datasets[0].backgroundColor = colors;
+    c.options.plugins.tooltip.callbacks.label = tipLabel;
+    c.update("none");
+  }
 }
 
 // Price pills are now updated within loadAll() from data/price.json (07_price_collector.py).
@@ -2058,11 +2181,20 @@ function wireRangeGroup(groupId, chartKey, cacheKey) {
 }
 
 function wirePeersToggles() {
+  // Network toggle (mutually exclusive) — controls the peer lines.
   document.querySelectorAll(".peers-toggle").forEach(btn => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".peers-toggle").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
       peersNetwork = btn.dataset.net;
+      if (DATA_CACHE.activePeers) updatePeersChart(DATA_CACHE.activePeers, rangeState.activePeers, peersNetwork);
+    });
+  });
+  // Countries overlay (independent on/off) — toggles the right-axis country line.
+  document.querySelectorAll(".peers-overlay-toggle").forEach(btn => {
+    btn.addEventListener("click", () => {
+      peersShowCountries = !peersShowCountries;
+      btn.classList.toggle("active", peersShowCountries);
       if (DATA_CACHE.activePeers) updatePeersChart(DATA_CACHE.activePeers, rangeState.activePeers, peersNetwork);
     });
   });
@@ -2117,7 +2249,7 @@ document.addEventListener("DOMContentLoaded", boot);
   function openModal() {
     const base = window.location.origin;
     $("api-base-url").innerHTML = 'Base URL: <span>' + base + '</span>';
-    ["summary", "hashrate", "difficulty", "transactions", "fees", "active_peers", "versions", "price", "issuance"].forEach(ep => {
+    ["summary", "hashrate", "difficulty", "transactions", "fees", "active_peers", "versions", "countries", "price", "issuance"].forEach(ep => {
       const el = $("ep-" + ep);
       if (el) el.href = base + "/api/" + ep;
     });

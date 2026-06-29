@@ -1002,6 +1002,7 @@ server {
     #   /api/fees         → fees-per-block history                    (06_collector.py)
     #   /api/active_peers → mainnet+testnet peer count history        (06_collector.py)
     #   /api/versions     → node version distribution                 (06_collector.py)
+    #   /api/countries    → top countries hosting nodes               (06_collector.py)
     #   /api/price        → GRIN/USDT price, OHLCV history            (06_price_collector.py)
     #   /api/issuance     → annual supply inflation: grin/usd_m2/gold  (06_collector.py)
     #   /api/ecosystem    → DNS seeds + ecosystem services status     (06_ecosystem_checker.py)
@@ -1014,6 +1015,7 @@ server {
     location = /api/fees         { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/fees.json;         }
     location = /api/active_peers { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/active_peers.json; }
     location = /api/versions     { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/versions.json;     }
+    location = /api/countries    { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/countries.json;    }
     location = /api/price        { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/price.json;        }
     location = /api/issuance     { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/issuance.json;     }
     location = /api/ecosystem    { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/ecosystem.json;    }
@@ -1122,7 +1124,7 @@ status_stats() {
 
     # JSON data files
     echo -e "  JSON exports"
-    for f in summary hashrate difficulty transactions fees active_peers versions peers price issuance ecosystem; do
+    for f in summary hashrate difficulty transactions fees active_peers versions countries peers price issuance ecosystem; do
         local jf="$WWW_DIR/data/${f}.json"
         if [[ -f "$jf" ]]; then
             local age; age=$(( ($(date +%s) - $(stat -c %Y "$jf" 2>/dev/null || echo 0)) / 60 ))

@@ -290,8 +290,9 @@ def init_schema(conn):
         """)
         conn.commit()
         cols.update({"mainnet_count", "testnet_count"})
-    # Add country_count to existing peer_count_history (distinct mainnet countries
-    # per sample). Historical rows stay 0 — no backfill, the trend builds going forward.
+    # Add country_count to existing peer_count_history (distinct countries hosting
+    # a node per sample, both networks). Historical rows stay 0 — no backfill, the
+    # trend builds going forward.
     if "country_count" not in cols:
         conn.execute(
             "ALTER TABLE peer_count_history ADD COLUMN country_count INTEGER NOT NULL DEFAULT 0"
@@ -1159,9 +1160,10 @@ def _update_peers():
     # ── 9. Record peer count snapshot for history chart ──────────────────────
     mnet_count = sum(1 for r in rows if r[1] == "mainnet")
     tnet_count = sum(1 for r in rows if r[1] == "testnet")
-    # Distinct countries hosting a mainnet node this sample (country_code = r[8]).
-    # Mainnet only — testnet is dev traffic and would inflate the "adoption" trend.
-    country_count = len({r[8] for r in rows if r[1] == "mainnet" and r[8]})
+    # Distinct countries hosting a node this sample (country_code = r[8]), across
+    # BOTH networks — same definition as the header "X countries" and the Top-10
+    # Countries card, so all three displays agree.
+    country_count = len({r[8] for r in rows if r[8]})
     conn.execute(
         "INSERT INTO peer_count_history"
         "(sampled_at, mainnet_count, testnet_count, country_count) VALUES(?,?,?,?)",
@@ -1482,7 +1484,7 @@ def export_all_json():
         "updated":   ts_now,
         "mainnet":   _peer_series("mainnet_count"),
         "testnet":   _peer_series("testnet_count"),
-        "countries": _peer_series("country_count"),  # distinct mainnet countries; builds forward
+        "countries": _peer_series("country_count"),  # distinct countries, both networks; builds forward
     })
 
     # ── summary (for the header stats bar) ───────────────────────────────────

@@ -666,13 +666,13 @@
     <div class="chart-info-panel" id="peers-info-panel">
       <div class="chart-info-panel-inner">
         <h4>What's shown</h4>
-        The number of Grin peers with an <b>active TCP connection to this monitoring node</b> at each sample point. Grin nodes maintain 8–30 outbound connections — this chart tracks that count over time as a health indicator, not a census of the full network.
+        The number of distinct Grin peers this monitoring node has <b>seen in the last 7 days</b> — both peers with a live TCP connection and peers learned from the routing table. We only retain peer data for 7 days, so this is a <b>rolling 7-day count</b>, not a live connection count or a census of the full network. Mainnet and Testnet are tracked separately.
         <hr class="chart-info-sep">
         <h4>Sampling</h4>
-        Queried every ~5 min via <code>v2/owner → get_connected_peers</code> (live sessions only). Mainnet and Testnet are tracked separately. The <b>Countries</b> line counts the distinct countries hosting a mainnet node at each sample — a network-decentralisation trend that <b>builds forward</b> from when tracking began (earlier history isn't backfilled). It overlays on a separate <b>right-hand axis</b> and toggles on/off independently of the Mainnet/Testnet selector. The <b>Peer Map</b> tab gives the broader global view — it uses the full routing table (<code>get_peers</code>) to discover and geolocate nodes worldwide.
+        Sampled every ~5 min: live peers via <code>v2/owner → get_connected_peers</code> plus routing-table peers via <code>get_peers</code> (Healthy only), de-duplicated by IP into a rolling 7-day window (older entries fall out of the count). The <b>Countries</b> line counts the distinct countries hosting a node (mainnet + testnet combined, matching the header and Top&nbsp;10 Countries card) at each sample — a network-decentralisation trend that <b>builds forward</b> from when tracking began (earlier history isn't backfilled). It overlays on a separate <b>right-hand axis</b> and toggles on/off independently of the Mainnet/Testnet selector. The <b>Peer Map</b> tab gives the broader global view — it uses the full routing table (<code>get_peers</code>) to discover and geolocate nodes worldwide.
         <hr class="chart-info-sep">
         <h4>Note</h4>
-        Fluctuations are normal — peers connect and disconnect continuously. A sustained drop may indicate network issues or low node count.
+        Movement is normal — the count rises as new nodes are seen and eases as nodes drop off the 7-day window. A sustained decline may indicate network issues or a falling node count.
       </div>
     </div>
     <div style="display: flex; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--border); flex-wrap: wrap;">
@@ -685,7 +685,7 @@
       <button class="peers-toggle" data-net="testnet">
         <span class="dot dot-blue"></span>Testnet
       </button>
-      <button class="peers-overlay-toggle active" data-overlay="countries" style="margin-left:auto;" title="Overlay the number of distinct countries hosting a mainnet node (right axis)">
+      <button class="peers-overlay-toggle active" data-overlay="countries" style="margin-left:auto;" title="Overlay the number of distinct countries hosting a node, mainnet + testnet (right axis)">
         <span class="dot" style="background:#bc8cff"></span>Countries
       </button>
     </div>
@@ -956,7 +956,7 @@
           <a class="api-path" id="ep-active_peers" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/active_peers</a>
           <span class="api-chevron">▶</span>
         </div>
-        <span class="api-desc">Active peer count by network — <code>{"mainnet": {daily, hourly, recent}, "testnet": {…}}</code> — each array contains <code>[timestamp, count]</code> pairs, sampled every ~5 min</span>
+        <span class="api-desc">Active peer count by network — <code>{"mainnet": {daily, hourly, recent}, "testnet": {…}, "countries": {…}}</code> — each array contains <code>[timestamp, count]</code> pairs, sampled every ~5 min. <code>countries</code> is the distinct-country count (both networks) and builds forward from when tracking began</span>
       </div>
     </div>
     <div class="api-endpoint">
@@ -1608,7 +1608,11 @@ function makePeersChart(id) {
     borderColor: color,
     backgroundColor: color + "18",
     borderWidth: 1.5,
-    pointRadius: 0,
+    // Countries builds forward and starts as a single sample — a 0-radius line
+    // would draw nothing. Give it a small visible point so a lone/sparse value
+    // is still readable; the peer lines stay point-less.
+    pointRadius: label === "Countries" ? 2.5 : 0,
+    pointHoverRadius: label === "Countries" ? 4 : 3,
     fill: false,
     tension: 0.3,
   });
@@ -1625,6 +1629,9 @@ function makePeersChart(id) {
       plugins: {
         legend: { display: false },
         tooltip: {
+          // Skip null placeholder points (e.g. Countries before tracking began) so
+          // they don't render an empty row in the shared index tooltip.
+          filter: item => item.parsed.y != null,
           callbacks: {
             label: ctx => {
               const unit = ctx.dataset.label === "Countries" ? "countries" : "peers";
@@ -1783,9 +1790,12 @@ function updatePeersChart(json, range, network) {
     const byTs = new Map();
     pts.forEach(([ts, v]) => byTs.set(ts, v));
     let out = [...byTs.entries()].sort((a, b) => a[0] - b[0]).map(([ts, v]) => ({x: ts * 1000, y: v}));
-    // country_count wasn't recorded before this feature shipped (historical rows = 0);
-    // drop those zeros so the trend line starts when real tracking began, not at 0.
-    if (series === "countries") out = out.filter(p => p.y > 0);
+    // country_count wasn't recorded before this feature shipped (historical rows = 0).
+    // Null those points rather than dropping them: a null y draws no line (so the
+    // trend still starts when real tracking began, not at 0), but the array stays
+    // the same length and timestamp-aligned with the peer lines — which is what the
+    // index-mode hover tooltip needs to show Countries alongside Mainnet/Testnet.
+    if (series === "countries") out = out.map(p => ({x: p.x, y: p.y > 0 ? p.y : null}));
     return out;
   };
 
@@ -1805,8 +1815,10 @@ function updatePeersChart(json, range, network) {
   charts.activePeers.data.datasets[0].hidden = network === "testnet";
   charts.activePeers.data.datasets[1].hidden = network === "mainnet";
   charts.activePeers.data.datasets[2].hidden = !peersShowCountries;
-  // Only reveal the right axis when the overlay is on AND has data to plot.
-  charts.activePeers.options.scales.y1.display = peersShowCountries && countryPts.length > 0;
+  // Only reveal the right axis when the overlay is on AND has a real (non-null)
+  // value to plot — the array now keeps null placeholders for index alignment.
+  const hasCountryData = countryPts.some(p => p.y != null);
+  charts.activePeers.options.scales.y1.display = peersShowCountries && hasCountryData;
   charts.activePeers.update("none");
 }
 

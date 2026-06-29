@@ -686,6 +686,25 @@ clean_maintenance() {
         echo -e "  ${CYAN}E${RESET}) Grin-toolkit logs       : ${YELLOW}$toolkit_log_size${RESET}"
 
         echo ""
+        # ── /opt/grin disk usage report ───────────────────────────────────────
+        echo -e "${BOLD}/opt/grin Disk Usage  ${DIM}(GB)${RESET}"
+        if [[ -d /opt/grin ]]; then
+            local og_total
+            og_total="$(du -sBG /opt/grin 2>/dev/null | awk '{print $1}' || echo '?')"
+            # Per top-level subdirectory, largest first
+            while IFS=$'\t' read -r sz path; do
+                [[ -z "$path" ]] && continue
+                echo -e "  ${YELLOW}▶${RESET} $(basename "$path")  ${DIM}(${sz})${RESET}"
+            done < <(du -BG --max-depth=1 /opt/grin 2>/dev/null \
+                        | grep -vE '[[:space:]]/opt/grin$' \
+                        | sort -rn -k1 \
+                        | awk '{print $1"\t"$2}' || true)
+            echo -e "  ${BOLD}Total: ${GREEN}${og_total}${RESET}  ${DIM}(/opt/grin)${RESET}"
+        else
+            echo -e "  ${DIM}/opt/grin not found.${RESET}"
+        fi
+
+        echo ""
         # ── Auto-cleanup status ───────────────────────────────────────────────
         if _auto_cleanup_enabled; then
             echo -e "${BOLD}Auto-cleanup:${RESET} ${GREEN}ENABLED${RESET} ${DIM}(daily: txhashset snapshots + /opt/grin/logs >N days)${RESET}"

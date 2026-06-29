@@ -50,6 +50,9 @@
     --purple:    #bc8cff;
     --red:       #f85149;
     --chart-h:   260px;
+    /* Combined height of the sticky header + sub-nav; updated at runtime by JS so
+       anchor jumps land below them. Seed value avoids a first-jump misalign. */
+    --sticky-offset: 104px;
   }
   /* ── Light theme ─────────────────────────────────────────────────────────── */
   html[data-theme="light"] {
@@ -120,6 +123,68 @@
   }
 
   #last-updated { color: var(--muted); font-size: 12px; }
+
+  /* ── In-page sub-nav (sticks under the header) ───────────────────────────── */
+  .subnav {
+    position: sticky;
+    top: 0;                       /* JS sets this to the header's height */
+    z-index: 1040;                /* below header (1050), above content */
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 6px;
+    padding: 8px 24px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+  .subnav::-webkit-scrollbar { height: 4px; }
+  .subnav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .subnav a {
+    flex: 0 0 auto;
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 12px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    white-space: nowrap;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .subnav a:hover { color: var(--text); border-color: var(--muted); }
+  .subnav a.active {
+    color: #000;
+    background: var(--grin);
+    border-color: var(--grin);
+    font-weight: 600;
+  }
+  /* Anchor targets clear the sticky header + sub-nav when jumped to */
+  main .card[id] { scroll-margin-top: var(--sticky-offset); }
+  #sec-price-metrics { scroll-margin-top: var(--sticky-offset); }
+
+  /* ── Mini metric strip (market cap / 24h vol / change %) ─────────────────── */
+  .metric-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .metric-strip .mini {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+  }
+  .metric-strip .mini-label {
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .metric-strip .mini-value { font-size: 20px; font-weight: 700; margin-top: 3px; }
+  .metric-strip .mini-sub   { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .chg-pos { color: var(--green); }
+  .chg-neg { color: var(--red); }
 
   /* ── Stats bar ───────────────────────────────────────────────────────────── */
   .stats-bar {
@@ -259,7 +324,7 @@
   .range-btn.active { background: var(--grin); border-color: var(--grin); color: #000; font-weight: 600; }
 
   /* ── Metric toggle buttons ───────────────────────────────────────────────── */
-  .metric-toggle, .peers-toggle, .peers-overlay-toggle, .versions-toggle {
+  .metric-toggle, .peers-toggle, .peers-overlay-toggle, .versions-toggle, .chain-toggle {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--muted);
@@ -273,8 +338,8 @@
     gap: 6px;
     white-space: nowrap;
   }
-  .metric-toggle:hover, .peers-toggle:hover, .peers-overlay-toggle:hover, .versions-toggle:hover { border-color: var(--text); color: var(--text); }
-  .metric-toggle.active, .peers-toggle.active, .versions-toggle.active {
+  .metric-toggle:hover, .peers-toggle:hover, .peers-overlay-toggle:hover, .versions-toggle:hover, .chain-toggle:hover { border-color: var(--text); color: var(--text); }
+  .metric-toggle.active, .peers-toggle.active, .versions-toggle.active, .chain-toggle.active {
     background: rgba(88,166,255,0.15);
     border-color: var(--blue);
     color: var(--blue);
@@ -287,7 +352,7 @@
     color: #bc8cff;
     font-weight: 600;
   }
-  .metric-toggle .dot, .peers-toggle .dot, .peers-overlay-toggle .dot, .versions-toggle .dot {
+  .metric-toggle .dot, .peers-toggle .dot, .peers-overlay-toggle .dot, .versions-toggle .dot, .chain-toggle .dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
@@ -296,6 +361,10 @@
 
   /* ── Canvas wrapper ──────────────────────────────────────────────────────── */
   .chart-wrap { position: relative; height: var(--chart-h); }
+  /* Country names are painted on the bars (countriesBarLabels), so this chart
+     needs no left y-axis gutter — let it span the full card width. */
+  .chart-countries-wrap { padding: 8px 12px 16px; }
+  @media (max-width: 640px) { .chart-countries-wrap { padding: 8px 6px 12px; } }
 
   /* ── Two-column grid ─────────────────────────────────────────────────────── */
   .grid-2 {
@@ -476,6 +545,12 @@
     .stat-item { padding: 10px 14px; }
     .stat-value { font-size: 18px; }
 
+    .subnav { padding: 7px 12px; gap: 5px; }
+    .subnav a { font-size: 11px; padding: 3px 9px; }
+    .metric-strip { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .metric-strip .mini { padding: 10px 12px; }
+    .metric-strip .mini-value { font-size: 17px; }
+
     main { padding: 12px; }
     .card { padding: 12px; margin-bottom: 12px; }
     .card-title { font-size: 13px; }
@@ -522,6 +597,20 @@
 
 <!--#include virtual="/_header.html"-->
 
+<!-- ── In-page sub-nav (jump links + scroll-spy) ─────────────────────────── -->
+<nav class="subnav" id="subnav" aria-label="Jump to section">
+  <a href="#sec-hashrate"   data-spy="sec-hashrate">Hashrate</a>
+  <a href="#sec-difficulty" data-spy="sec-difficulty">Difficulty</a>
+  <a href="#sec-activity"   data-spy="sec-activity">Activity</a>
+  <a href="#sec-mempool"    data-spy="sec-mempool">Mempool</a>
+  <a href="#sec-chain"      data-spy="sec-chain">Kernels &amp; Outputs</a>
+  <a href="#sec-peers"      data-spy="sec-peers">Peers</a>
+  <a href="#sec-versions"   data-spy="sec-versions">Versions</a>
+  <a href="#sec-countries"  data-spy="sec-countries">Countries</a>
+  <a href="#sec-price-metrics" data-spy="sec-price-metrics">Price</a>
+  <a href="#sec-issuance"   data-spy="sec-issuance">Issuance</a>
+</nav>
+
 <!-- ── Stats bar ─────────────────────────────────────────────────────────── -->
 <div class="stats-bar">
   <div class="stat-item">
@@ -556,7 +645,7 @@
 <main>
 
   <!-- Hashrate chart -->
-  <div class="card">
+  <div class="card" id="sec-hashrate">
     <div class="card-header">
       <div class="card-title"><span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleChartInfo('hr-info')" id="hr-info-btn">Network Hashrate (GPS)</span></div>
       <div class="range-btns" id="hr-range">
@@ -583,7 +672,7 @@
   </div>
 
   <!-- Difficulty chart -->
-  <div class="card">
+  <div class="card" id="sec-difficulty">
     <div class="card-header">
       <div class="card-title"><span class="dot dot-blue"></span><span class="chart-info-toggle" onclick="toggleChartInfo('diff-info')" id="diff-info-btn">Network Difficulty</span></div>
       <div class="range-btns" id="diff-range">
@@ -610,7 +699,7 @@
   </div>
 
   <!-- Transactions + Fees (Combined) -->
-  <div class="card">
+  <div class="card" id="sec-activity">
     <div class="card-header">
       <div class="card-title"><span class="dot dot-green"></span><span class="chart-info-toggle" onclick="toggleChartInfo('activity-info')" id="activity-info-btn">Block Activity</span></div>
       <div class="range-btns" id="activity-range">
@@ -651,8 +740,94 @@
     </div>
   </div>
 
+  <!-- Mempool size (forward-only) -->
+  <div class="card" id="sec-mempool">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-purple"></span><span class="chart-info-toggle" onclick="toggleChartInfo('mempool-info')" id="mempool-info-btn">Mempool Size</span>
+        <span id="mempool-current" style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;"></span>
+      </div>
+      <div class="range-btns" id="mempool-range">
+        <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="week">Week</button>
+        <button class="range-btn active" data-r="month">Month</button>
+        <button class="range-btn" data-r="year">Year</button>
+        <button class="range-btn" data-r="all">All Time</button>
+      </div>
+    </div>
+    <div class="chart-info-panel" id="mempool-info-panel">
+      <div class="chart-info-panel-inner">
+        <h4>What is the mempool?</h4>
+        The pool of <b>transactions waiting to be confirmed</b> in the next block. On Grin this usually sits near zero — blocks aren't congested — so a spike means a sudden burst of activity.
+        <hr class="chart-info-sep">
+        <h4>Why it matters</h4>
+        A live pulse of how busy the network is <i>right now</i>, and whether a payment you send might wait for the next block or two.
+        <hr class="chart-info-sep">
+        <h4>Data source</h4>
+        Local Grin node Foreign API (<code>get_pool_size</code>), sampled every ~5 min. The node only knows its <b>current</b> pool, so this chart <b>builds forward</b> from when tracking began — there's no historical mempool to backfill.
+      </div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart-mempool"></canvas>
+      <div id="mempool-no-data" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column;gap:8px;pointer-events:none;">
+        <span style="color:var(--muted);font-size:13px;">No mempool samples yet</span>
+        <span style="color:var(--muted);font-size:12px;">History builds forward as the collector runs every ~5 min</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Kernels & Outputs (chain state, since genesis) -->
+  <div class="card" id="sec-chain">
+    <div class="card-header">
+      <div class="card-title"><span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleChartInfo('chain-info')" id="chain-info-btn">Kernels &amp; Outputs</span>
+        <span id="utxo-current" style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;"></span>
+      </div>
+      <div class="range-btns" id="chain-range">
+        <button class="range-btn" data-r="day">Day</button>
+        <button class="range-btn" data-r="week">Week</button>
+        <button class="range-btn" data-r="month">Month</button>
+        <button class="range-btn active" data-r="year">Year</button>
+        <button class="range-btn" data-r="all">All Time</button>
+      </div>
+    </div>
+    <div class="chart-info-panel" id="chain-info-panel">
+      <div class="chart-info-panel-inner">
+        <h4>What's shown</h4>
+        <b>Kernels</b> — every Grin transaction permanently leaves one cryptographic "kernel" (a receipt that it happened, even though amounts and addresses stay private). The total is the all-time count of transactions ever settled on-chain.<br>
+        <b>Outputs</b> — the total number of transaction outputs (coin bundles) ever committed to the chain.<br>
+        <b>Unspent (UTXO)</b> — how many of those outputs are <i>currently unspent</i> — the live "coins in circulation" set. Far smaller than total outputs because Grin's cut-through permanently removes spent ones.
+        <hr class="chart-info-sep">
+        <h4>Why it matters</h4>
+        The kernel line is the clearest on-chain measure of <b>cumulative real usage</b> — a steadily rising curve means the network is actually being used. Total outputs track chain growth; the <b>UTXO set</b> tracks the live state size (and how lean cut-through keeps it).
+        <hr class="chart-info-sep">
+        <h4>Data source</h4>
+        Kernels &amp; total outputs: each block header's <code>kernel_mmr_size</code> / <code>output_mmr_size</code> (converted to leaf counts), charted <b>since genesis</b> (run <code>--backfill-mmr</code> once to populate older points). <b>UTXO set</b>: counted by paginating the node's <code>get_unspent_outputs</code> (same method grincoin.org uses); it's a live count, so that line <b>builds forward</b> from when sampling began.
+      </div>
+    </div>
+    <div style="display: flex; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--border); flex-wrap: wrap;">
+      <button class="chain-toggle active" data-metric="both" title="Show Both Metrics">
+        <span class="dot dot-grin"></span>Both
+      </button>
+      <button class="chain-toggle" data-metric="kernels" title="Total kernels">
+        <span class="dot dot-grin"></span>Kernels
+      </button>
+      <button class="chain-toggle" data-metric="outputs" title="Total outputs ever">
+        <span class="dot dot-blue"></span>Outputs
+      </button>
+      <button class="chain-toggle" data-metric="utxo" title="Live unspent output set (builds forward)">
+        <span class="dot dot-green"></span>Unspent (UTXO)
+      </button>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart-chain"></canvas>
+      <div id="chain-no-data" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column;gap:8px;pointer-events:none;">
+        <span style="color:var(--muted);font-size:13px;">No chain-state data yet</span>
+        <span style="color:var(--muted);font-size:12px;">Run <code style="background:rgba(255,153,0,0.1);color:var(--grin);padding:2px 6px;border-radius:3px;font-family:monospace">--backfill-mmr</code> to populate kernel/output history</span>
+      </div>
+    </div>
+  </div>
+
   <!-- Active Peers chart -->
-  <div class="card">
+  <div class="card" id="sec-peers">
     <div class="card-header">
       <div class="card-title"><span class="dot dot-green"></span><span class="chart-info-toggle" onclick="toggleChartInfo('peers-info')" id="peers-info-btn">Active Peers / Countries</span></div>
       <div class="range-btns" id="peers-range">
@@ -693,7 +868,7 @@
   </div>
 
   <!-- Node versions -->
-  <div class="card">
+  <div class="card" id="sec-versions">
     <div class="card-header">
       <div class="card-title"><span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleChartInfo('versions-info')" id="versions-info-btn">Top 10 Version Distribution</span></div>
       <span id="versions-sample" style="color:var(--muted);font-size:12px;"></span>
@@ -723,7 +898,7 @@
   </div>
 
   <!-- Top countries -->
-  <div class="card">
+  <div class="card" id="sec-countries">
     <div class="card-header">
       <div class="card-title"><span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleChartInfo('countries-info')" id="countries-info-btn">Top 10 Countries</span></div>
       <span id="countries-sample" style="color:var(--muted);font-size:12px;"></span>
@@ -740,7 +915,31 @@
         Geolocation is approximate, and peers behind VPNs or NAT may be attributed to the exit country rather than the operator's.
       </div>
     </div>
-    <div class="chart-wrap" style="height:340px;padding:8px 24px 16px;"><canvas id="chart-countries"></canvas></div>
+    <div class="chart-wrap chart-countries-wrap" style="height:340px;"><canvas id="chart-countries"></canvas></div>
+  </div>
+
+  <!-- Price summary metrics (market cap / 24h volume / change %) -->
+  <div class="metric-strip" id="sec-price-metrics">
+    <div class="mini">
+      <div class="mini-label">Market Cap</div>
+      <div class="mini-value" id="m-mktcap">—</div>
+      <div class="mini-sub" id="m-mktcap-sub">circulating supply × price</div>
+    </div>
+    <div class="mini">
+      <div class="mini-label">24h Volume</div>
+      <div class="mini-value" id="m-vol">—</div>
+      <div class="mini-sub">Gate.io · GRIN/USDT</div>
+    </div>
+    <div class="mini">
+      <div class="mini-label">24h Change</div>
+      <div class="mini-value" id="m-change">—</div>
+      <div class="mini-sub" id="m-change-sub">GRIN/USDT</div>
+    </div>
+    <div class="mini">
+      <div class="mini-label">Price · USD</div>
+      <div class="mini-value grin" id="m-price">—</div>
+      <div class="mini-sub" id="m-price-btc">— sat</div>
+    </div>
   </div>
 
   <!-- Price chart — USDT -->
@@ -806,7 +1005,7 @@
   </div>
 
   <!-- Supply Issuance Rate -->
-  <div class="card">
+  <div class="card" id="sec-issuance">
     <div class="card-header" style="align-items:flex-start;">
       <div class="card-title">
         <span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleInflInfo()" id="infl-info-btn">Supply Issuance Rate</span>
@@ -953,6 +1152,46 @@
       <span class="api-method">GET</span>
       <div style="flex:1;min-width:0">
         <div class="api-row">
+          <a class="api-path" id="ep-mempool" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/mempool</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Unconfirmed transaction pool size — <code>current</code> plus <code>daily</code> / <code>hourly</code> / <code>recent</code> history. Forward-only (the node keeps no past mempool state), so history builds from when sampling began</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-kernels" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/kernels</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Cumulative kernel count (all transactions ever settled) since genesis — <code>daily</code> / <code>hourly</code> / <code>recent</code> history, derived from header <code>kernel_mmr_size</code></span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-outputs" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/outputs</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Cumulative output count since genesis — <code>daily</code> / <code>hourly</code> / <code>recent</code> history, derived from header <code>output_mmr_size</code></span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
+          <a class="api-path" id="ep-utxo" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/utxo</a>
+          <span class="api-chevron">▶</span>
+        </div>
+        <span class="api-desc">Live UTXO-set size (count of unspent outputs) — <code>current</code> plus <code>daily</code> / <code>hourly</code> / <code>recent</code> history. Counted by paginating <code>get_unspent_outputs</code>; forward-only (the unspent set only exists at the tip)</span>
+      </div>
+    </div>
+    <div class="api-endpoint">
+      <span class="api-method">GET</span>
+      <div style="flex:1;min-width:0">
+        <div class="api-row">
           <a class="api-path" id="ep-active_peers" href="#" target="_blank" rel="noopener" onclick="event.stopPropagation()">/api/active_peers</a>
           <span class="api-chevron">▶</span>
         </div>
@@ -1071,6 +1310,26 @@ const fmtFeeTick = v => {
   if (g >= 10)  return fmtNum(g, 0) + " Grin";   // daily totals (Year/All Time)
   if (g >= 0.1) return fmtNum(g, 2) + " Grin";   // hourly totals (Month/Week)
   return fmtNum(g, 3) + " Grin";                  // per-block (Day)
+};
+// Compact integer counts (kernels / outputs): 1.23M, 4.56K …
+const fmtCount = v => {
+  if (v >= 1e9) return fmtNum(v / 1e9, 2) + "B";
+  if (v >= 1e6) return fmtNum(v / 1e6, 2) + "M";
+  if (v >= 1e3) return fmtNum(v / 1e3, 1) + "K";
+  return fmtNum(v, 0);
+};
+const fmtCountTick = v => {
+  if (v >= 1e6) return fmtNum(v / 1e6, 0) + "M";
+  if (v >= 1e3) return fmtNum(v / 1e3, 0) + "K";
+  return fmtNum(v, 0);
+};
+// USD money with magnitude suffix: $1.23M, $4.56K, $789
+const fmtUSD = v => {
+  if (v == null || isNaN(v)) return "—";
+  if (v >= 1e9) return "$" + fmtNum(v / 1e9, 2) + "B";
+  if (v >= 1e6) return "$" + fmtNum(v / 1e6, 2) + "M";
+  if (v >= 1e3) return "$" + fmtNum(v / 1e3, 1) + "K";
+  return "$" + fmtNum(v, 0);
 };
 const timeAgo = ts => {
   const s = Math.floor(Date.now()/1000) - ts;
@@ -1229,6 +1488,67 @@ function makeMultiChart(id, yFmt1, yFmt2, yFmt1Tick = null, yFmt2Tick = null) {
           position: "right",
           ticks: { callback: v => (yFmt2Tick || yFmt2)(v) },
           title: { display: true, text: "Fees" },
+          grid: { drawOnChartArea: false }
+        }
+      }
+    }
+  });
+}
+
+// Kernels (left axis) + Outputs (right axis) — cumulative chain-state levels.
+function makeChainChart(id) {
+  const ctx = $(id).getContext("2d");
+  return new Chart(ctx, {
+    type: "line",
+    data: {
+      datasets: [
+        {
+          label: "Kernels", data: [], borderColor: "#ff9900",
+          backgroundColor: "#ff990018", borderWidth: 1.5, pointRadius: 0,
+          fill: true, tension: 0.3, yAxisID: "y1", hidden: false,
+        },
+        {
+          label: "Outputs", data: [], borderColor: "#58a6ff",
+          backgroundColor: "#58a6ff18", borderWidth: 1.5, pointRadius: 0,
+          fill: false, tension: 0.3, yAxisID: "y2", hidden: false,
+        },
+        {
+          label: "Unspent (UTXO)", data: [], borderColor: "#3fb950",
+          backgroundColor: "#3fb95018", borderWidth: 1.5, pointRadius: 0,
+          fill: false, tension: 0.3, yAxisID: "y2", hidden: true,
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => ctx.dataset.label + ": " + fmtCount(ctx.parsed.y),
+            title: items => new Date(items[0].parsed.x).toLocaleString(),
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: "time",
+          time: { tooltipFormat: "MMM d yyyy HH:mm" },
+          bounds: "data",
+          ticks: { maxTicksLimit: 8 },
+        },
+        y1: {
+          type: "linear", position: "left",
+          ticks: { callback: v => fmtCountTick(v) },
+          title: { display: true, text: "Kernels" }
+        },
+        y2: {
+          type: "linear", position: "right",
+          ticks: { callback: v => fmtCountTick(v) },
+          title: { display: true, text: "Outputs" },
           grid: { drawOnChartArea: false }
         }
       }
@@ -1682,6 +2002,7 @@ function makePeersChart(id) {
 // ── Chart instances ───────────────────────────────────────────────────────────
 const charts = {};
 let activityMetric = "both";  // "tx", "fee", or "both"
+let chainMetric    = "both";  // "kernels", "outputs", or "both"
 let peersNetwork       = "both";  // "mainnet", "testnet", or "both" — controls peer lines
 let peersShowCountries = true;    // independent overlay: distinct-country line on the right axis
 
@@ -1690,6 +2011,8 @@ function initCharts() {
   charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS,  undefined, fmtGPSTick);
   charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff, undefined, fmtDiffTick);
   charts.activity    = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee, v => fmt(v,0), fmtFeeTick);
+  charts.mempool     = makeLineChart("chart-mempool", "Mempool", "#bc8cff", v => fmt(v,0) + " tx", undefined, v => fmt(v,0));
+  charts.chain       = makeChainChart("chart-chain");
   charts.activePeers = makePeersChart("chart-peers");
   charts.priceUsdt   = makePriceChartUSDT("chart-price-usdt");
   charts.priceBtc    = makePriceChartBTC("chart-price-btc");
@@ -1698,7 +2021,7 @@ function initCharts() {
 }
 
 // Range state
-const rangeState = { hr: "year", diff: "year", activity: "year", activePeers: "month", priceUsdt: "year", priceBtc: "month" };
+const rangeState = { hr: "year", diff: "year", activity: "year", mempool: "month", chain: "year", activePeers: "month", priceUsdt: "year", priceBtc: "month" };
 
 function updateChartData(chart, json, range) {
   let pts;
@@ -1788,6 +2111,63 @@ function updateActivityChart(txJson, feeJson, range, metric) {
   charts.activity.data.datasets[1].hidden = metric === "tx";
   
   charts.activity.update("none");
+}
+
+// Shared range filter for level/line metrics (average aggregation to daily).
+function filterLevelByRange(json, range) {
+  const nowMs = Date.now();
+  if (range === "all") {
+    return [...(json.daily||[]), ...aggToDaily(json.hourly||[])];
+  } else if (range === "year") {
+    const cutoff = nowMs - 365 * 86400000;
+    return [
+      ...(json.daily||[]).filter(([ts]) => ts*1000 >= cutoff),
+      ...aggToDaily(json.hourly||[]),
+    ];
+  } else if (range === "month") {
+    const cutoff = nowMs - 30 * 86400000;
+    return (json.hourly||[]).filter(([ts]) => ts*1000 >= cutoff);
+  } else if (range === "week") {
+    const cutoff = nowMs - 7 * 86400000;
+    return (json.hourly||[]).filter(([ts]) => ts*1000 >= cutoff);
+  }
+  return [...(json.recent||[])];   // day
+}
+
+const _toXY = pts => {
+  const map = new Map();
+  pts.forEach(([ts, v]) => map.set(ts, v));
+  return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([ts, v]) => ({x: ts*1000, y: v}));
+};
+
+function updateMempoolChart(json, range) {
+  if (!charts.mempool || !json) return;
+  const data = _toXY(filterLevelByRange(json, range));
+  const noDataEl = $("mempool-no-data");
+  if (noDataEl) noDataEl.style.display = data.length === 0 ? "flex" : "none";
+  charts.mempool.data.datasets[0].data = data;
+  charts.mempool.update("none");
+}
+
+function updateChainChart(kernelsJson, outputsJson, utxoJson, range, metric) {
+  if (!charts.chain) return;
+  const kData = kernelsJson ? _toXY(filterLevelByRange(kernelsJson, range)) : [];
+  const oData = outputsJson ? _toXY(filterLevelByRange(outputsJson, range)) : [];
+  const uData = utxoJson    ? _toXY(filterLevelByRange(utxoJson, range))    : [];
+  const noDataEl = $("chain-no-data");
+  const shown = metric === "utxo" ? uData.length
+              : metric === "outputs" ? oData.length
+              : metric === "kernels" ? kData.length
+              : (kData.length + oData.length);
+  if (noDataEl) noDataEl.style.display = shown === 0 ? "flex" : "none";
+  charts.chain.data.datasets[0].data = kData;
+  charts.chain.data.datasets[1].data = oData;
+  charts.chain.data.datasets[2].data = uData;
+  // "both" = kernels + total outputs; the others isolate one line.
+  charts.chain.data.datasets[0].hidden = !(metric === "both" || metric === "kernels");
+  charts.chain.data.datasets[1].hidden = !(metric === "both" || metric === "outputs");
+  charts.chain.data.datasets[2].hidden = metric !== "utxo";
+  charts.chain.update("none");
 }
 
 function updatePeersChart(json, range, network) {
@@ -1943,13 +2323,17 @@ function updatePriceChartBTC(data, range) {
 let DATA_CACHE = {};
 
 async function loadAll() {
-  const [summary, hashrate, difficulty, transactions, fees, versions, countries, peers, activePeers, price, inflation] =
+  const [summary, hashrate, difficulty, transactions, fees, mempool, kernels, outputs, utxo, versions, countries, peers, activePeers, price, inflation] =
     await Promise.all([
       tryFetchJSON(DATA + "summary.json"),
       tryFetchJSON(DATA + "hashrate.json"),
       tryFetchJSON(DATA + "difficulty.json"),
       tryFetchJSON(DATA + "transactions.json"),
       tryFetchJSON(DATA + "fees.json"),
+      tryFetchJSON(DATA + "mempool.json"),
+      tryFetchJSON(DATA + "kernels.json"),
+      tryFetchJSON(DATA + "outputs.json"),
+      tryFetchJSON(DATA + "utxo.json"),
       tryFetchJSON(DATA + "versions.json"),
       tryFetchJSON(DATA + "countries.json"),
       tryFetchJSON(DATA + "peers.json"),
@@ -1964,7 +2348,7 @@ async function loadAll() {
     return;
   }
 
-  DATA_CACHE = { hashrate, difficulty, transactions, fees, versions, price, activePeers, inflation };
+  DATA_CACHE = { hashrate, difficulty, transactions, fees, mempool, kernels, outputs, utxo, versions, countries, peers, price, activePeers, inflation };
 
   // Stats bar
   if (summary) {
@@ -1999,13 +2383,52 @@ async function loadAll() {
     $("h-btc-price").textContent = btc?.last  != null ? Math.round(btc.last * 1e8) + " sat" : "— sat";
     updatePriceChartUSDT(price, rangeState.priceUsdt);
     updatePriceChartBTC(price, rangeState.priceBtc);
+
+    // ── Price metric strip (market cap / 24h volume / change %) ──────────────
+    const last   = usdt?.last;
+    const supply = summary ? summary.tip_height * 60 : null;   // 60 GRIN/block, deterministic
+    // Market cap = circulating supply × USD price (computed locally — no CMC/CoinGecko).
+    if (last != null && supply) {
+      $("m-mktcap").textContent     = fmtUSD(supply * last);
+      $("m-mktcap-sub").textContent = fmtSupply(supply) + " circulating";
+    }
+    // 24h volume — Gate.io base volume (GRIN) valued in USD at the last price.
+    if (usdt?.volume_24h != null && last != null) {
+      $("m-vol").textContent = fmtUSD(usdt.volume_24h * last);
+    }
+    // 24h change %
+    if (usdt?.change_pct != null) {
+      const chg = usdt.change_pct;
+      const el  = $("m-change");
+      el.textContent = (chg >= 0 ? "+" : "") + fmtNum(chg, 2) + "%";
+      el.className   = "mini-value " + (chg >= 0 ? "chg-pos" : "chg-neg");
+    }
+    if (last != null) $("m-price").textContent = "$" + fmtNum(last, 4);
+    $("m-price-btc").textContent = btc?.last != null ? Math.round(btc.last * 1e8) + " sat" : "— sat";
   }
 
   // Charts (skipped if chart.min.js didn't load)
   if (charts.hashrate   && hashrate)     updateChartData(charts.hashrate,   hashrate,     rangeState.hr);
   if (charts.difficulty && difficulty)   updateChartData(charts.difficulty, difficulty,   rangeState.diff);
   if (charts.activity    && transactions && fees) updateActivityChart(transactions, fees, rangeState.activity, activityMetric);
+  if (charts.mempool     && mempool)             updateMempoolChart(mempool, rangeState.mempool);
+  if (charts.chain       && (kernels || outputs || utxo)) updateChainChart(kernels, outputs, utxo, rangeState.chain, chainMetric);
   if (charts.activePeers && activePeers)         updatePeersChart(activePeers, rangeState.activePeers, peersNetwork);
+
+  // Mempool current-value badge (prefer the live summary, fall back to mempool.json)
+  const curMempool = (summary && summary.current_mempool != null)
+    ? summary.current_mempool
+    : (mempool && mempool.current != null ? mempool.current : null);
+  if (curMempool != null) {
+    $("mempool-current").textContent = `${fmt(curMempool)} tx waiting`;
+  }
+  // UTXO-set current-value badge on the Kernels & Outputs card
+  const curUtxo = (summary && summary.current_utxo != null)
+    ? summary.current_utxo
+    : (utxo && utxo.current != null ? utxo.current : null);
+  if (curUtxo != null) {
+    $("utxo-current").textContent = `${fmt(curUtxo)} unspent (UTXO set)`;
+  }
   if (charts.inflation   && inflation)           updateInflationM2Gold(inflation);
 
   // Versions donut
@@ -2025,7 +2448,7 @@ function renderVersions(data) {
   const versionRows = slice.versions || [];
   const total = slice.sampled_from || 0;
   $("donut-total").textContent    = fmt(total);
-  $("versions-sample").textContent = `Sampled from ${fmt(total)} peer${total !== 1 ? "s" : ""}`;
+  $("versions-sample").textContent = `Sampled from ${fmt(total)} peer${total !== 1 ? "s" : ""} over the last 7 days`;
 
   const labels = versionRows.map(v => v.label);
   const counts = versionRows.map(v => v.count);
@@ -2080,11 +2503,73 @@ function countryFlag(code) {
   } catch { return ""; }
 }
 
+// Relative luminance of a #rrggbb colour → pick dark/light text for contrast.
+function _barTextColor(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
+  if (!m) return "#0b0f14";
+  const lin = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+  const L = 0.2126 * lin(parseInt(m[1],16)) + 0.7152 * lin(parseInt(m[2],16)) + 0.0722 * lin(parseInt(m[3],16));
+  return L > 0.5 ? "#0b0f14" : "#ffffff";
+}
+
+// Draw each country name on its own bar instead of on the y-axis, so the chart
+// uses the full width and stays readable on mobile. Wide enough → name sits
+// inside the bar (contrast-picked colour); too short → name sits just past the
+// bar end in the chart's tick colour, using the empty space on the right. The
+// node count is always drawn at the bar end so the value is visible at a glance.
+const countriesBarLabels = {
+  id: "countriesBarLabels",
+  afterDatasetsDraw(chart) {
+    const ctx = chart.ctx;
+    const meta = chart.getDatasetMeta(0);
+    const labels = chart.data.labels || [];
+    const counts = chart.data.datasets[0].data || [];
+    const colors = chart.data.datasets[0].backgroundColor || [];
+    const area = chart.chartArea;
+    const pad = 8;
+    ctx.save();
+    ctx.textBaseline = "middle";
+    meta.data.forEach((bar, i) => {
+      const text = labels[i];
+      if (!text) return;
+      const barW = bar.x - bar.base;
+
+      // Country name: inside the bar if it fits, else just past the bar end.
+      ctx.textAlign = "left";
+      ctx.font = "600 12px system-ui, -apple-system, 'Segoe UI', sans-serif";
+      const textW = ctx.measureText(text).width;
+      let nameEnd;                                 // x where the name finishes
+      if (barW >= textW + pad * 2) {
+        ctx.fillStyle = _barTextColor(colors[i]);
+        ctx.fillText(text, bar.base + pad, bar.y);
+        nameEnd = bar.x;                           // count goes after the bar
+      } else {
+        ctx.fillStyle = Chart.defaults.color;
+        let x = bar.x + pad;
+        if (x + textW > area.right) x = Math.max(area.left, area.right - textW);
+        ctx.fillText(text, x, bar.y);
+        nameEnd = x + textW;                        // count goes after the name
+      }
+
+      // Node count at the bar end, in the muted tick colour.
+      const cnt = fmt(counts[i]);
+      ctx.textAlign = "left";
+      ctx.font = "600 11px system-ui, -apple-system, 'Segoe UI', sans-serif";
+      const cntW = ctx.measureText(cnt).width;
+      let cx = nameEnd + pad;
+      if (cx + cntW > area.right) cx = area.right - cntW;   // keep on-canvas
+      ctx.fillStyle = Chart.defaults.color;
+      ctx.fillText(cnt, cx, bar.y);
+    });
+    ctx.restore();
+  }
+};
+
 function renderCountries(data) {
   const slice = (data.networks && data.networks.both) || data;
   const rows  = slice.countries || [];
   const total = slice.sampled_from || 0;
-  $("countries-sample").textContent = `Sampled from ${fmt(total)} peer${total !== 1 ? "s" : ""}`;
+  $("countries-sample").textContent = `Sampled from ${fmt(total)} peer${total !== 1 ? "s" : ""} over the last 7 days`;
 
   if (typeof Chart === "undefined") return;  // chart.min.js not loaded
   const labels = rows.map(r => `${countryFlag(r.code)} ${r.label}`.trim());
@@ -2099,18 +2584,23 @@ function renderCountries(data) {
     charts.countries = new Chart($("chart-countries").getContext("2d"), {
       type: "bar",
       data: { labels, datasets: [{ data: counts, backgroundColor: colors, borderWidth: 0, borderRadius: 3 }] },
+      plugins: [countriesBarLabels],
       options: {
         indexAxis: "y",
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
+        // Names are drawn on the bars by countriesBarLabels — drop the left
+        // y-axis gutter so the bars span the full width; small right pad lets
+        // labels on short bars sit in the empty space without clipping.
+        layout: { padding: { right: 36 } },
         plugins: {
           legend: { display: false },
           tooltip: { callbacks: { label: tipLabel } }
         },
         scales: {
           x: { beginAtZero: true, ticks: { precision: 0 } },
-          y: { ticks: { autoSkip: false, font: { size: 12 } } }
+          y: { ticks: { display: false }, grid: { display: false } }
         }
       }
     });
@@ -2208,6 +2698,12 @@ function wireRangeGroup(groupId, chartKey, cacheKey) {
         if (DATA_CACHE.transactions && DATA_CACHE.fees) {
           updateActivityChart(DATA_CACHE.transactions, DATA_CACHE.fees, rangeState.activity, activityMetric);
         }
+      } else if (chartKey === "mempool") {
+        if (DATA_CACHE.mempool) updateMempoolChart(DATA_CACHE.mempool, rangeState.mempool);
+      } else if (chartKey === "chain") {
+        if (DATA_CACHE.kernels || DATA_CACHE.outputs || DATA_CACHE.utxo) {
+          updateChainChart(DATA_CACHE.kernels, DATA_CACHE.outputs, DATA_CACHE.utxo, rangeState.chain, chainMetric);
+        }
       } else if (chartKey === "activePeers") {
         if (DATA_CACHE.activePeers) updatePeersChart(DATA_CACHE.activePeers, rangeState.activePeers, peersNetwork);
       } else if (chartKey === "priceUsdt") {
@@ -2257,17 +2753,88 @@ function wireMetricToggles() {
   });
 }
 
+function wireChainToggles() {
+  document.querySelectorAll(".chain-toggle").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".chain-toggle").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      chainMetric = btn.dataset.metric;
+      if (DATA_CACHE.kernels || DATA_CACHE.outputs || DATA_CACHE.utxo) {
+        updateChainChart(DATA_CACHE.kernels, DATA_CACHE.outputs, DATA_CACHE.utxo, rangeState.chain, chainMetric);
+      }
+    });
+  });
+}
+
+// ── In-page sub-nav: sticky offset + scroll-spy ───────────────────────────────
+function initSubnav() {
+  const subnav = $("subnav");
+  const header = document.querySelector("header");
+  if (!subnav) return;
+
+  // Keep the sub-nav pinned just below the (variable-height) header, and expose the
+  // combined height as --sticky-offset so anchor jumps clear both sticky bars.
+  const syncOffsets = () => {
+    const hH = header ? header.offsetHeight : 0;
+    subnav.style.top = hH + "px";
+    document.documentElement.style.setProperty(
+      "--sticky-offset", (hH + subnav.offsetHeight + 8) + "px");
+  };
+  syncOffsets();
+  window.addEventListener("resize", syncOffsets);
+  window.addEventListener("load", syncOffsets);   // re-measure once fonts/pills settle
+
+  const links    = [...subnav.querySelectorAll("a[data-spy]")];
+  const sections = links
+    .map(a => ({ a, el: document.getElementById(a.dataset.spy) }))
+    .filter(s => s.el);
+
+  // Highlight the chip for whichever section is currently nearest the top.
+  if ("IntersectionObserver" in window) {
+    const visible = new Map();
+    const obs = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) visible.set(e.target.id, e.intersectionRatio);
+        else visible.delete(e.target.id);
+      });
+      let topId = null;
+      // Pick the topmost section that's intersecting the viewport.
+      for (const { el } of sections) {
+        if (visible.has(el.id)) { topId = el.id; break; }
+      }
+      if (topId) {
+        links.forEach(a => a.classList.toggle("active", a.dataset.spy === topId));
+        const active = subnav.querySelector("a.active");
+        if (active) active.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+    }, { rootMargin: "-45% 0px -50% 0px", threshold: 0 });
+    sections.forEach(s => obs.observe(s.el));
+  }
+
+  // Smooth-scroll on click (CSS scroll-margin-top handles the sticky offset).
+  links.forEach(a => a.addEventListener("click", (e) => {
+    const el = document.getElementById(a.dataset.spy);
+    if (!el) return;
+    e.preventDefault();
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }));
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 async function boot() {
   initTheme();   // apply saved theme before charts are created
   wireRangeGroup("hr-range",       "hr",       "hashrate");
   wireRangeGroup("diff-range",     "diff",     "difficulty");
   wireRangeGroup("activity-range", "activity",     "transactions");
+  wireRangeGroup("mempool-range",  "mempool",      "mempool");
+  wireRangeGroup("chain-range",    "chain",        "kernels");
   wireRangeGroup("peers-range",    "activePeers",  "activePeers");
   wireRangeGroup("price-usdt-range", "priceUsdt",  "price");
   wireRangeGroup("price-btc-range",  "priceBtc",  "price");
   wireMetricToggles();
+  wireChainToggles();
   wirePeersToggles();
+  initSubnav();
 
   try {
     if (typeof Chart !== "undefined") initCharts();
@@ -2293,7 +2860,7 @@ document.addEventListener("DOMContentLoaded", boot);
   function openModal() {
     const base = window.location.origin;
     $("api-base-url").innerHTML = 'Base URL: <span>' + base + '</span>';
-    ["summary", "hashrate", "difficulty", "transactions", "fees", "active_peers", "versions", "countries", "price", "issuance"].forEach(ep => {
+    ["summary", "hashrate", "difficulty", "transactions", "fees", "mempool", "kernels", "outputs", "utxo", "active_peers", "versions", "countries", "price", "issuance"].forEach(ep => {
       const el = $("ep-" + ep);
       if (el) el.href = base + "/api/" + ep;
     });

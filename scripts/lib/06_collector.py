@@ -216,10 +216,31 @@ def init_schema(conn):
             timestamp       INTEGER NOT NULL,
             total_diff      INTEGER NOT NULL,
             hashrate        REAL,
+            kernel_mmr      INTEGER NOT NULL DEFAULT 0,
+            output_mmr      INTEGER NOT NULL DEFAULT 0,
             bucket          TEXT NOT NULL DEFAULT 'recent'
         );
         CREATE INDEX IF NOT EXISTS idx_blocks_ts     ON blocks(timestamp);
         CREATE INDEX IF NOT EXISTS idx_blocks_bucket ON blocks(bucket);
+
+        -- Mempool (unconfirmed tx pool) size sampled every --update run.
+        -- Forward-only: the node has no record of past pool sizes, so this builds
+        -- a history going forward from when sampling began (like peer counts).
+        CREATE TABLE IF NOT EXISTS mempool_history (
+            sampled_at  INTEGER PRIMARY KEY,
+            pool_size   INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_mempool_ts ON mempool_history(sampled_at);
+
+        -- Live UTXO-set size (count of unspent outputs) — derived by paginating the
+        -- node's get_unspent_outputs (same method grincoin.org/aglkm uses). Throttled
+        -- (not every run) and forward-only: the unspent set only exists at the tip, so
+        -- past sizes can't be reconstructed and the history builds forward.
+        CREATE TABLE IF NOT EXISTS utxo_history (
+            sampled_at  INTEGER PRIMARY KEY,
+            utxo_count  INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_utxo_ts ON utxo_history(sampled_at);
 
         CREATE TABLE IF NOT EXISTS block_stats (
             height          INTEGER PRIMARY KEY,
@@ -299,6 +320,15 @@ def init_schema(conn):
         )
         conn.commit()
 
+    # Add kernel_mmr / output_mmr to existing blocks tables (header MMR sizes →
+    # kernel & output counts since genesis). Historical rows stay 0 until a
+    # `--backfill-mmr` run re-reads the headers; new blocks fill them via --update.
+    bcols = {r[1] for r in conn.execute("PRAGMA table_info(blocks)")}
+    for col in ("kernel_mmr", "output_mmr"):
+        if col not in bcols:
+            conn.execute(f"ALTER TABLE blocks ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
+    conn.commit()
+
 def get_meta(conn, key, default=None):
     row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
     return row[0] if row else default
@@ -309,8 +339,28 @@ def set_meta(conn, key, value):
 
 # ── Block fetching ────────────────────────────────────────────────────────────
 
+def mmr_leaves(mmr_size):
+    """
+    Convert a Merkle Mountain Range size (total node positions, as reported in the
+    block header's *_mmr_size fields) into the number of leaves — i.e. the real
+    count of kernels / outputs ever committed. An MMR of N leaves stores parent
+    hashes too, so size > leaves; we sum the leaves of each perfect-tree "peak".
+    """
+    size   = int(mmr_size or 0)
+    leaves = 0
+    while size > 0:
+        k = 0
+        while (1 << (k + 2)) - 1 <= size:   # largest peak (2^(k+1)-1 nodes) fitting in size
+            k += 1
+        leaves += 1 << k                    # that peak contributes 2^k leaves
+        size   -= (1 << (k + 1)) - 1        # …and 2^(k+1)-1 nodes
+    return leaves
+
 def fetch_header(height):
-    """Fetch a single block header. Returns (height, timestamp_int, total_diff) or None."""
+    """Fetch a single block header.
+    Returns (height, timestamp_int, total_diff, kernel_mmr_size, output_mmr_size) or None.
+    The MMR sizes are header fields available for every height on pruned and archive
+    nodes alike (header chain is never pruned)."""
     try:
         data = grin_rpc("get_header", [height, None, None], retries=5)
         if not data or "height" not in data:
@@ -320,6 +370,8 @@ def fetch_header(height):
             int(data["height"]),
             parse_ts(data.get("timestamp", "")),
             int(data.get("total_difficulty", 0)),
+            int(data.get("kernel_mmr_size", 0)),
+            int(data.get("output_mmr_size", 0)),
         )
     except Exception as exc:
         print(f"  [ERROR] Failed height {height}: {exc}", file=sys.stderr)
@@ -363,11 +415,41 @@ def fetch_full_block(height):
         print(f"  [WARN] block {height}: {exc}", file=sys.stderr)
         return None
 
+def fetch_utxo_count():
+    """
+    Count the live unspent-output set (UTXO-set size) by paginating the Foreign API
+    get_unspent_outputs — the same approach grincoin.org (aglkm/grin-explorer) uses.
+    Each call returns up to `page` unspent outputs plus the MMR index it stopped at;
+    we resume from there and sum the counts. The unspent set is kept small by Grin's
+    cut-through, so this is only a handful of calls. Returns int or None on failure.
+    """
+    page  = 10000
+    start = 1
+    total = 0
+    guard = 0
+    while True:
+        guard += 1
+        if guard > 5000:            # hard safety cap — never loop forever
+            print("[WARN] utxo count: iteration cap hit; returning partial", file=sys.stderr)
+            break
+        resp = grin_rpc("get_unspent_outputs", [start, None, page, False], retries=2, timeout=20)
+        if not resp:
+            return None if total == 0 else total
+        outs = resp.get("outputs", []) or []
+        total += len(outs)
+        highest = int(resp.get("highest_index", 0) or 0)
+        last    = int(resp.get("last_retrieved_index", 0) or 0)
+        # Done when we've scanned to the tip of the output MMR, or made no progress.
+        if not outs or last <= start - 1 or last >= highest:
+            break
+        start = last + 1
+    return total
+
 # ── Hashrate calculation ──────────────────────────────────────────────────────
 
 def calc_hashrate(rows):
     """
-    Given list of (height, ts, total_diff) sorted by height,
+    Given list of (height, ts, total_diff[, kernel_mmr, output_mmr]) sorted by height,
     compute per-point hashrate (GPS) using the Cuckatoo32 formula from aglkm/grin-explorer:
         hashrate_GPS = net_diff * 42 / block_time_seconds / 16384
     where:
@@ -375,18 +457,23 @@ def calc_hashrate(rows):
         42          = Cuckoo cycle length for Cuckatoo32
         16384       = C32 solution rate = 32 × 2^(32-23) = 32 × 512
         block_time  = actual seconds between the two sampled blocks
-    Returns list of (height, ts, total_diff, hashrate).
+    Returns list of (height, ts, total_diff, hashrate, kernel_mmr, output_mmr). MMR
+    fields pass straight through (default 0 when a row doesn't carry them, e.g. the
+    base reference row in _append_hashrate).
     """
     # Cuckatoo32 constants (matches aglkm/grin-explorer formula)
     CUCKOO_CYCLE  = 42.0
     C32_RATE      = 16384.0   # 32 × 2^9
 
     out = []
-    for i, (h, ts, diff) in enumerate(rows):
+    for i, row in enumerate(rows):
+        h, ts, diff = row[0], row[1], row[2]
+        kmmr = row[3] if len(row) > 3 else 0
+        ommr = row[4] if len(row) > 4 else 0
         if i == 0:
-            out.append((h, ts, diff, 0.0))
+            out.append((h, ts, diff, 0.0, kmmr, ommr))
             continue
-        ph, pts, pdiff = rows[i - 1]
+        pts, pdiff = rows[i - 1][1], rows[i - 1][2]
         dt = ts - pts
         dd = diff - pdiff
         if dt > 0 and dd > 0:
@@ -395,7 +482,7 @@ def calc_hashrate(rows):
             # Invalid data: same or earlier timestamp, or difficulty decreased
             # Do NOT copy previous hashrate (prevents propagation of anomalies)
             hr = 0.0
-        out.append((h, ts, diff, hr))
+        out.append((h, ts, diff, hr, kmmr, ommr))
     return out
 
 # ── Bucket assignment ─────────────────────────────────────────────────────────
@@ -473,8 +560,10 @@ def cmd_init_history():
     print("[INFO] Writing to database...")
     conn.execute("DELETE FROM blocks")
     conn.executemany(
-        "INSERT OR REPLACE INTO blocks(height,timestamp,total_diff,hashrate,bucket) VALUES(?,?,?,?,?)",
-        [(h, ts, diff, hr, assign_bucket(ts)) for h, ts, diff, hr in rows_with_hr],
+        "INSERT OR REPLACE INTO blocks"
+        "(height,timestamp,total_diff,hashrate,kernel_mmr,output_mmr,bucket) VALUES(?,?,?,?,?,?,?)",
+        [(h, ts, diff, hr, kmmr, ommr, assign_bucket(ts))
+         for h, ts, diff, hr, kmmr, ommr in rows_with_hr],
     )
     set_meta(conn, "last_height", tip_height)
     set_meta(conn, "last_updated", now_ts())
@@ -516,6 +605,50 @@ def cmd_update():
         sys.exit(1)
 
     tip_height = int(tip["height"])
+
+    # ── Sample mempool (unconfirmed tx pool) size — forward-only history ───────
+    # Runs every cycle regardless of new blocks; the node only knows the *current*
+    # pool, so past values can't be backfilled (the series builds going forward).
+    try:
+        pool_size = grin_rpc("get_pool_size", [], retries=2, timeout=8)
+        if pool_size is not None:
+            conn_mp = open_db()
+            conn_mp.execute(
+                "INSERT OR REPLACE INTO mempool_history(sampled_at, pool_size) VALUES(?,?)",
+                (now_ts(), int(pool_size)),
+            )
+            # Keep ~1 year of 5-min samples (~105k rows ≈ 2 MB); older points fall off.
+            conn_mp.execute(
+                "DELETE FROM mempool_history WHERE sampled_at < ?", (now_ts() - 366 * 86400,)
+            )
+            conn_mp.commit()
+            conn_mp.close()
+            print(f"[INFO] Mempool: {int(pool_size)} unconfirmed tx in pool")
+    except Exception as exc:
+        print(f"[WARN] mempool sample failed: {exc}", file=sys.stderr)
+
+    # ── Sample UTXO-set size — throttled to ~20 min (pagination is heavier than a
+    # single RPC, so don't run it on every 5-min cron tick). Forward-only history.
+    try:
+        conn_ut = open_db()
+        last_utxo_ts = int(get_meta(conn_ut, "last_utxo_sample", 0))
+        if now_ts() - last_utxo_ts >= 20 * 60:
+            utxo = fetch_utxo_count()
+            if utxo is not None:
+                conn_ut.execute(
+                    "INSERT OR REPLACE INTO utxo_history(sampled_at, utxo_count) VALUES(?,?)",
+                    (now_ts(), int(utxo)),
+                )
+                conn_ut.execute(
+                    "DELETE FROM utxo_history WHERE sampled_at < ?", (now_ts() - 366 * 86400,)
+                )
+                set_meta(conn_ut, "last_utxo_sample", now_ts())
+                conn_ut.commit()
+                print(f"[INFO] UTXO set: {int(utxo):,} unspent outputs")
+        conn_ut.close()
+    except Exception as exc:
+        print(f"[WARN] utxo sample failed: {exc}", file=sys.stderr)
+
     if tip_height <= last_height:
         print(f"[INFO] No new blocks (tip: {tip_height:,}).")
     else:
@@ -527,8 +660,10 @@ def cmd_update():
 
         conn = open_db()
         conn.executemany(
-            "INSERT OR REPLACE INTO blocks(height,timestamp,total_diff,hashrate,bucket) VALUES(?,?,?,?,?)",
-            [(h, ts, diff, hr, assign_bucket(ts)) for h, ts, diff, hr in rows_with_hr],
+            "INSERT OR REPLACE INTO blocks"
+            "(height,timestamp,total_diff,hashrate,kernel_mmr,output_mmr,bucket) VALUES(?,?,?,?,?,?,?)",
+            [(h, ts, diff, hr, kmmr, ommr, assign_bucket(ts))
+             for h, ts, diff, hr, kmmr, ommr in rows_with_hr],
         )
         # Re-bucket older rows that may have shifted time windows
         conn.execute(
@@ -742,6 +877,47 @@ def cmd_backfill_stats(days=None):
         _fetch_block_stats_range(start, tip_height, heights=heights)
     export_all_json()
     print("[OK] Backfill complete.")
+
+def cmd_backfill_mmr():
+    """
+    Populate kernel_mmr / output_mmr for blocks rows that still have them at 0
+    (i.e. rows written before the columns existed). Reads only headers — cheap and
+    works on pruned nodes — and only for the already-sampled heights in `blocks`
+    (a few thousand rows), so this finishes in minutes, not the hours --init-history
+    takes. New blocks get their MMR sizes automatically via --update.
+    """
+    conn = open_db()
+    init_schema(conn)
+    heights = [r[0] for r in conn.execute(
+        "SELECT height FROM blocks WHERE kernel_mmr = 0 ORDER BY height"
+    ).fetchall()]
+    conn.close()
+
+    if not heights:
+        print("[OK] All blocks rows already have MMR sizes — nothing to backfill.")
+        export_all_json()
+        return
+
+    print(f"[INFO] Backfilling kernel/output MMR for {len(heights):,} sampled block(s)...")
+    conn = open_db()
+    done = updated = 0
+    t0 = time.time()
+    for i in range(0, len(heights), 70):
+        batch = heights[i: i + 70]
+        rows  = fetch_headers_batch(batch, workers=8)   # (h, ts, diff, kmmr, ommr)
+        conn.executemany(
+            "UPDATE blocks SET kernel_mmr=?, output_mmr=? WHERE height=?",
+            [(r[3], r[4], r[0]) for r in rows],
+        )
+        conn.commit()
+        updated += len(rows)
+        done    += len(batch)
+        _progress(done, len(heights), t0)
+    print()
+    conn.close()
+    print(f"[INFO] Updated MMR sizes on {updated:,} rows.")
+    export_all_json()
+    print("[OK] MMR backfill complete.")
 
 # ── Peer update ───────────────────────────────────────────────────────────────
 
@@ -1341,6 +1517,97 @@ def export_all_json():
             "recent":  [[r[0], r[1]] for r in recent],
         })
 
+    # ── kernels + outputs (cumulative counts since genesis) ────────────────────
+    # Header MMR sizes → real leaf counts. These are *levels* (monotonic), so each
+    # time bucket takes the MAX MMR in that window (not a sum). Coverage matches the
+    # blocks table sampling: daily since genesis, hourly for ~30d, per-block recent.
+    cur_kernels = cur_outputs = 0
+    for metric, col in (("kernels", "kernel_mmr"), ("outputs", "output_mmr")):
+        daily_raw = conn.execute(
+            f"SELECT (timestamp/86400)*86400 AS bts, MAX({col}) "
+            f"FROM blocks WHERE bucket='daily' AND {col} > 0 GROUP BY bts ORDER BY bts"
+        ).fetchall()
+        hourly_raw = conn.execute(
+            f"SELECT (timestamp/3600)*3600 AS bts, MAX({col}) "
+            f"FROM blocks WHERE bucket='hourly' AND {col} > 0 GROUP BY bts ORDER BY bts"
+        ).fetchall()
+        recent_raw = conn.execute(
+            f"SELECT timestamp, {col} FROM blocks "
+            f"WHERE bucket='recent' AND {col} > 0 ORDER BY height"
+        ).fetchall()
+
+        latest = conn.execute(
+            f"SELECT {col} FROM blocks WHERE {col} > 0 ORDER BY height DESC LIMIT 1"
+        ).fetchone()
+        if latest:
+            if col == "kernel_mmr": cur_kernels = mmr_leaves(latest[0])
+            else:                   cur_outputs = mmr_leaves(latest[0])
+
+        _write_json(f"{metric}.json", {
+            "updated": ts_now,
+            "daily":   [[r[0], mmr_leaves(r[1])] for r in daily_raw],
+            "hourly":  [[r[0], mmr_leaves(r[1])] for r in hourly_raw],
+            "recent":  [[r[0], mmr_leaves(r[1])] for r in recent_raw],
+        })
+
+    # ── mempool (unconfirmed tx pool) — forward-only gauge ─────────────────────
+    # A level metric: bucket with AVG (not sum). recent = raw samples (last 24h),
+    # hourly = per-hour average for ~30d, daily = per-day average beyond that.
+    mp_recent = conn.execute(
+        "SELECT sampled_at, pool_size FROM mempool_history WHERE sampled_at >= ? ORDER BY sampled_at",
+        (cutoff_24h,),
+    ).fetchall()
+    mp_hourly = conn.execute(
+        "SELECT (sampled_at/3600)*3600 AS bts, AVG(pool_size) "
+        "FROM mempool_history WHERE sampled_at >= ? GROUP BY bts ORDER BY bts",
+        (cutoff_30d,),
+    ).fetchall()
+    mp_daily = conn.execute(
+        "SELECT (sampled_at/86400)*86400 AS bts, AVG(pool_size) "
+        "FROM mempool_history WHERE sampled_at < ? GROUP BY bts ORDER BY bts",
+        (cutoff_30d,),
+    ).fetchall()
+    mp_latest = conn.execute(
+        "SELECT pool_size FROM mempool_history ORDER BY sampled_at DESC LIMIT 1"
+    ).fetchone()
+    cur_mempool = int(mp_latest[0]) if mp_latest else None
+
+    _write_json("mempool.json", {
+        "updated": ts_now,
+        "current": cur_mempool,
+        "daily":   [[r[0], round(r[1], 2) if r[1] is not None else 0] for r in mp_daily],
+        "hourly":  [[r[0], round(r[1], 2) if r[1] is not None else 0] for r in mp_hourly],
+        "recent":  [[r[0], r[1]] for r in mp_recent],
+    })
+
+    # ── UTXO set size (live unspent outputs) — forward-only level metric ───────
+    ut_recent = conn.execute(
+        "SELECT sampled_at, utxo_count FROM utxo_history WHERE sampled_at >= ? ORDER BY sampled_at",
+        (cutoff_24h,),
+    ).fetchall()
+    ut_hourly = conn.execute(
+        "SELECT (sampled_at/3600)*3600 AS bts, AVG(utxo_count) "
+        "FROM utxo_history WHERE sampled_at >= ? GROUP BY bts ORDER BY bts",
+        (cutoff_30d,),
+    ).fetchall()
+    ut_daily = conn.execute(
+        "SELECT (sampled_at/86400)*86400 AS bts, AVG(utxo_count) "
+        "FROM utxo_history WHERE sampled_at < ? GROUP BY bts ORDER BY bts",
+        (cutoff_30d,),
+    ).fetchall()
+    ut_latest = conn.execute(
+        "SELECT utxo_count FROM utxo_history ORDER BY sampled_at DESC LIMIT 1"
+    ).fetchone()
+    cur_utxo = int(ut_latest[0]) if ut_latest else None
+
+    _write_json("utxo.json", {
+        "updated": ts_now,
+        "current": cur_utxo,
+        "daily":   [[r[0], round(r[1]) if r[1] is not None else 0] for r in ut_daily],
+        "hourly":  [[r[0], round(r[1]) if r[1] is not None else 0] for r in ut_hourly],
+        "recent":  [[r[0], r[1]] for r in ut_recent],
+    })
+
     # ── node versions (per network: mainnet / testnet / both) ─────────────────
     # Use all unique peers seen in the last PEER_HISTORY_DAYS for a broader sample.
     # This captures every peer we've connected to recently, not just one run's snapshot.
@@ -1518,6 +1785,10 @@ def export_all_json():
         "tip_height":         tip_height,
         "current_hashrate":   avg_hr,
         "current_difficulty": current_diff,
+        "current_kernels":    cur_kernels,
+        "current_outputs":    cur_outputs,
+        "current_mempool":    cur_mempool,
+        "current_utxo":       cur_utxo,
     })
 
     conn.close()
@@ -1708,6 +1979,8 @@ def main():
     group.add_argument("--peers-only",     action="store_true", help="Update peer data only")
     group.add_argument("--backfill-stats", nargs="?", const=180, metavar="DAYS|all",
                        help="Fetch TX/fee stats for last N days or 'all' for complete history (default: 180)")
+    group.add_argument("--backfill-mmr", action="store_true",
+                       help="Populate kernel/output MMR sizes on existing blocks rows from headers (fast, header-only)")
     group.add_argument("--export-inflation", action="store_true",
                        help="Write issuance.json — fetches USD M2 from World Bank + Gold from WGC, stores in DB, exports JSON")
     args = parser.parse_args()
@@ -1722,6 +1995,8 @@ def main():
         conn.close()
         _update_peers()
         export_all_json()
+    elif args.backfill_mmr:
+        cmd_backfill_mmr()
     elif args.export_inflation:
         os.makedirs(WWW_DATA, exist_ok=True)
         export_inflation_json()

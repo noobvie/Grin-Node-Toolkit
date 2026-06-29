@@ -1142,6 +1142,10 @@ function makeLineChart(id, label, color, yFmt, suggestedMax, yFmtTick = null) {
         x: {
           type: "time",
           time: { tooltipFormat: "MMM d yyyy HH:mm" },
+          // 'data' (vs the default 'ticks') spans the axis exactly first→last candle
+          // so sparse ranges (e.g. a 3-month BTC year view) don't get padded out to
+          // the nearest month boundary, leaving big empty bands on both ends.
+          bounds: "data",
           ticks: { maxTicksLimit: 8 },
         },
         y: {
@@ -1208,6 +1212,10 @@ function makeMultiChart(id, yFmt1, yFmt2, yFmt1Tick = null, yFmt2Tick = null) {
         x: {
           type: "time",
           time: { tooltipFormat: "MMM d yyyy HH:mm" },
+          // 'data' (vs the default 'ticks') spans the axis exactly first→last candle
+          // so sparse ranges (e.g. a 3-month BTC year view) don't get padded out to
+          // the nearest month boundary, leaving big empty bands on both ends.
+          bounds: "data",
           ticks: { maxTicksLimit: 8 },
         },
         y1: {
@@ -1280,6 +1288,10 @@ function makePriceChartUSDT(id) {
         x: {
           type: "time",
           time: { tooltipFormat: "MMM d yyyy HH:mm" },
+          // 'data' (vs the default 'ticks') spans the axis exactly first→last candle
+          // so sparse ranges (e.g. a 3-month BTC year view) don't get padded out to
+          // the nearest month boundary, leaving big empty bands on both ends.
+          bounds: "data",
           ticks: { maxTicksLimit: 8 },
         },
         y: {
@@ -1351,6 +1363,10 @@ function makePriceChartBTC(id) {
         x: {
           type: "time",
           time: { tooltipFormat: "MMM d yyyy HH:mm" },
+          // 'data' (vs the default 'ticks') spans the axis exactly first→last candle
+          // so sparse ranges (e.g. a 3-month BTC year view) don't get padded out to
+          // the nearest month boundary, leaving big empty bands on both ends.
+          bounds: "data",
           ticks: { maxTicksLimit: 8 },
         },
         y: {

@@ -1088,15 +1088,21 @@ const tryFetchJSON = async url => { try { return await fetchJSON(url); } catch {
 // Aggregate hourly [[ts,v],...] data down to one point per calendar day.
 // sum=false (default): average — used for hashrate/difficulty (rate metrics).
 // sum=true: total — used for transactions/fees (count/amount metrics).
-function aggToDaily(pts, sum = false) {
+// zeroAsNull: treat a 0 value as "no sample that hour" (e.g. country_count before
+// tracking began) — exclude it from the day's average but keep the day present so
+// the series stays index-aligned with the peer lines. Days with only zeros emit null.
+function aggToDaily(pts, sum = false, zeroAsNull = false) {
   const byDay = new Map();
   (pts || []).forEach(([ts, v]) => {
     const dk = Math.floor(ts / 86400) * 86400;
-    if (!byDay.has(dk)) byDay.set(dk, [0, 0]);
+    if (!byDay.has(dk)) byDay.set(dk, [0, 0]);      // mark the day as seen
+    if (zeroAsNull && v <= 0) return;               // don't fold a no-sample value in
     const [s, c] = byDay.get(dk);
     byDay.set(dk, [s + v, c + 1]);
   });
-  return [...byDay.entries()].map(([dk, [s, c]]) => [dk, sum ? s : s / c]);
+  return [...byDay.entries()].map(([dk, [s, c]]) =>
+    [dk, c > 0 ? (sum ? s : s / c) : (zeroAsNull ? null : 0)]
+  );
 }
 
 function makeLineChart(id, label, color, yFmt, suggestedMax, yFmtTick = null) {
@@ -1608,10 +1614,10 @@ function makePeersChart(id) {
     borderColor: color,
     backgroundColor: color + "18",
     borderWidth: 1.5,
-    // Countries builds forward and starts as a single sample — a 0-radius line
-    // would draw nothing. Give it a small visible point so a lone/sparse value
-    // is still readable; the peer lines stay point-less.
-    pointRadius: label === "Countries" ? 2.5 : 0,
+    // Peer lines stay point-less. The Countries line gets dots only at its first and
+    // last real points (radius array set per-update in updatePeersChart) so a lone
+    // sample is still visible without cluttering a dense line.
+    pointRadius: 0,
     pointHoverRadius: label === "Countries" ? 4 : 3,
     fill: false,
     tension: 0.3,
@@ -1643,7 +1649,7 @@ function makePeersChart(id) {
       },
       scales: {
         x:  { type: "time", time: { tooltipFormat: "MMM d yyyy HH:mm" }, ticks: { maxTicksLimit: 8 } },
-        y:  { ticks: { callback: v => fmt(v, 0) } },
+        y:  { title: { display: true, text: "Peers" }, ticks: { callback: v => fmt(v, 0) } },
         y1: {
           position: "right",
           display: false,            // shown only while the Countries overlay is active
@@ -1774,12 +1780,15 @@ function updatePeersChart(json, range, network) {
 
   const getPoints = (series) => {
     const s = json[series] || {};
+    // For countries, daily aggregation must skip the pre-tracking zeros so a
+    // partial first day doesn't average down to a misleadingly small value.
+    const isCountries = series === "countries";
     let pts;
     if (range === "all") {
-      pts = [...(s.daily||[]), ...aggToDaily(s.hourly||[])];
+      pts = [...(s.daily||[]), ...aggToDaily(s.hourly||[], false, isCountries)];
     } else if (range === "year") {
       const cutoff = nowMs - 365 * 86400000;
-      pts = [...(s.daily||[]).filter(([ts]) => ts*1000 >= cutoff), ...aggToDaily(s.hourly||[])];
+      pts = [...(s.daily||[]).filter(([ts]) => ts*1000 >= cutoff), ...aggToDaily(s.hourly||[], false, isCountries)];
     } else if (range === "month") {
       pts = (s.hourly||[]).filter(([ts]) => ts*1000 >= nowMs - 30 * 86400000);
     } else if (range === "week") {
@@ -1812,6 +1821,13 @@ function updatePeersChart(json, range, network) {
   charts.activePeers.data.datasets[0].data   = getPoints("mainnet");
   charts.activePeers.data.datasets[1].data   = getPoints("testnet");
   charts.activePeers.data.datasets[2].data   = countryPts;
+  // Dot only the first and last real (non-null) country points — keeps a lone
+  // sample visible while leaving a dense line clean (one dot at each end).
+  const realIdx = [];
+  countryPts.forEach((p, i) => { if (p.y != null) realIdx.push(i); });
+  const firstReal = realIdx[0], lastReal = realIdx[realIdx.length - 1];
+  charts.activePeers.data.datasets[2].pointRadius =
+    countryPts.map((_, i) => (i === firstReal || i === lastReal) ? 3 : 0);
   charts.activePeers.data.datasets[0].hidden = network === "testnet";
   charts.activePeers.data.datasets[1].hidden = network === "mainnet";
   charts.activePeers.data.datasets[2].hidden = !peersShowCountries;

@@ -736,10 +736,14 @@ def cmd_backfill_stats(days=None):
 # ── Peer update ───────────────────────────────────────────────────────────────
 
 def _mask_ip(ip):
-    """Mask the last octet of an IPv4 address to protect peer privacy (1.2.3.4 → 1.2.3.x).
-    IPv6 addresses are returned as-is (already non-trivial to correlate)."""
+    """Mask the last group of an IP to protect peer privacy:
+    IPv4 last octet (1.2.3.4 → 1.2.3.x), IPv6 last hextet (2001:db8::1 → 2001:db8::x)."""
+    if ":" in ip and not ip.startswith("["):
+        parts = ip.split(":")
+        parts[-1] = "x"
+        return ":".join(parts)
     parts = ip.rsplit(".", 1)
-    if len(parts) == 2 and not ip.startswith("["):
+    if len(parts) == 2:
         return parts[0] + ".x"
     return ip
 
@@ -1336,13 +1340,13 @@ def export_all_json():
         ).fetchall()
 
     def _ver_list(rows):
-        """rows: (user_agent, count) sorted desc → top-5 + 'Other' list, total."""
+        """rows: (user_agent, count) sorted desc → top-10 + 'Other versions' list, total."""
         total = sum(r[1] for r in rows)
-        top   = rows[:5]
-        other = sum(r[1] for r in rows[5:])
+        top   = rows[:10]
+        other = sum(r[1] for r in rows[10:])
         vlist = [{"label": r[0], "count": r[1]} for r in top]
         if other > 0:
-            vlist.append({"label": "Other", "count": other})
+            vlist.append({"label": "Other versions", "count": other})
         return vlist, total
 
     mnet_rows = _ver_rows("mainnet")

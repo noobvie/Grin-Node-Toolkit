@@ -12,7 +12,6 @@
 
   "wallet_dir": "/opt/grin/pool-test/",
   "wallet_owner_port": 13420,
-  "wallet_foreign_port": 13415,
 
   "node_api_url": "http://127.0.0.1:13413",
   "_comment_node_secrets": "Leave the two secrets blank to auto-read /opt/grin/node/<net>-prune/.api_secret and .foreign_api_secret (the pool runs as root). Or set the value directly, or point *_path at the files.",

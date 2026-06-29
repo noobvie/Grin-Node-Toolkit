@@ -69,10 +69,20 @@
       background: linear-gradient(135deg, var(--bg-primary), color-mix(in srgb, var(--bg-primary) 92%, var(--primary) 8%));
       color: var(--text-primary);
       font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      /* Column flex so a site-wide banner injected at body.firstChild (branding.js
+         renderBanners / the testnet banner) stacks full-width ABOVE the form instead of
+         becoming a left-hand flex column next to it. The wrapper does the centering. */
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    .login-wrap {
+      flex: 1;
       display: flex;
       align-items: center;
       justify-content: center;
-      min-height: 100vh;
+      width: 100%;
       padding: 1rem;
     }
 
@@ -246,6 +256,7 @@
   <link rel="stylesheet" href="/css/themes.css">
 </head>
 <body>
+  <div class="login-wrap">
   <div class="login-container">
     <div class="logo">
       <h1>⛏ GRINIUM</h1>
@@ -323,6 +334,7 @@
         <a onclick="cancelTotp(event)">← Back to login</a>
       </div>
     </div>
+  </div>
   </div>
 
   <script src="/js/auth.js"></script>

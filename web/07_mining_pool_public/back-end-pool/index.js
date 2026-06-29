@@ -2842,7 +2842,9 @@ function setupRoutes() {
         checks: {
           api_reachable: {
             status: walletStatus === 'ok' ? 'ok' : (walletStatus === 'unreachable' ? 'error' : 'unknown'),
-            endpoint: `http://127.0.0.1:${config.wallet_foreign_api_port || 13415}/v2/foreign`,
+            // Combined listener: the wallet's Foreign API (build_coinbase) is mounted on the
+            // Owner port via owner_api_include_foreign=true, so coinbase + payouts share one port.
+            endpoint: `http://127.0.0.1:${config.wallet_owner_port || 13420}/v2/foreign`,
             latency_ms: walletStatus === 'ok' ? 52 : 0
           },
           tor_reachable: {

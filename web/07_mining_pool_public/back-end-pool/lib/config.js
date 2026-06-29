@@ -64,13 +64,13 @@ function mergeEnvVars(config) {
     // falls back to grin_wallet_dir, but mergeEnvVars' allowlist dropped that key before
     // it ever reached WalletAPI.)
     wallet_dir: config.wallet_dir || config.grin_wallet_dir || process.env.POOL_WALLET_DIR || '/opt/grin/pool-test/',
-    // Network-aware defaults (mirrors node_stratum_port below). The Script 07 installer
-    // does NOT write these keys, so the default is what every install actually uses — a
-    // flat 13420/13415 made the mainnet pool point its Owner API client at the TESTNET
-    // wallet port (3420 vs 13420). WalletAPI has the same fallback, but it was dead code
-    // because this always supplied 13420 first.
+    // Network-aware default (mirrors node_stratum_port below). The Script 07 installer
+    // does NOT write this key, so the default is what every install actually uses — a
+    // flat 13420 made the mainnet pool point its Owner API client at the TESTNET wallet
+    // port (3420 vs 13420). The combined listener serves the Foreign API (build_coinbase)
+    // on THIS owner port via owner_api_include_foreign=true, so there is no separate
+    // foreign port to configure anymore.
     wallet_owner_port: config.wallet_owner_port || (isMain ? 3420 : 13420),
-    wallet_foreign_port: config.wallet_foreign_port || (isMain ? 3415 : 13415),
 
     // Node Owner/Foreign API base URL — network-aware default (mainnet 3413 / testnet 13413)
     // so a missing installer key never points a mainnet pool at the testnet node.

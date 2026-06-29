@@ -39,7 +39,7 @@ hub_menu() {
     echo -e "  ${GREEN}2${RESET}) $(_pool_step_mark 2) Configure           ${DIM}(pool name, domain, fee, stratum port)${RESET}"
     echo -e "  ${GREEN}3${RESET}) $(_pool_step_mark 3) Deploy web files"
     echo -e "  ${GREEN}4${RESET}) $(_pool_step_mark 4) Setup nginx         ${DIM}(vhost + SSL)${RESET}"
-    echo -e "  ${GREEN}5${RESET}) $(_pool_step_mark 5) Set up wallet       ${DIM}(coinbase Foreign 3415 + payout Owner 3420)${RESET}"
+    echo -e "  ${GREEN}5${RESET}) $(_pool_step_mark 5) Set up wallet       ${DIM}(combined coinbase + payout, Owner+Foreign 3420)${RESET}"
     echo -e "  ${GREEN}6${RESET}) $(_pool_step_mark 6) Service control     ${DIM}(start before creating admin)${RESET}"
     echo -e "  ${GREEN}7${RESET}) $(_pool_step_mark 7) Create admin account ${DIM}(needs service running)${RESET}"
     echo -e "  ${GREEN}8${RESET}) Status"

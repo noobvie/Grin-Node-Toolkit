@@ -41,10 +41,20 @@
     // no-op instead of throwing (every page loads this whole shared script).
     function _safe(fn) { try { fn(); } catch (e) { /* not on this page */ } }
 
-    async function loadAllSettings() {
+    async function loadAllSettings(_attempt) {
+      _attempt = _attempt || 0;
       try {
-        const response = await fetch('/api/admin/settings', { credentials: 'include' });
-        if (!response.ok) throw new Error('Failed to load settings');
+        const response = await fetch('/api/admin/settings', { credentials: 'include', cache: 'no-store' });
+        // A 429 (app rate limit) or 503 (nginx rate limit) is TRANSIENT — every Settings
+        // sub-page re-fetches the whole config, so clicking quickly through the sidebar can
+        // trip the limiter. Mirror guardAdminPage (api.js): back off briefly and retry a
+        // couple of times instead of throwing the scary "Failed to load settings" toast.
+        if ((response.status === 429 || response.status === 503) && _attempt < 2) {
+          return setTimeout(() => loadAllSettings(_attempt + 1), 1000 + _attempt * 1000);
+        }
+        // A real auth failure is handled (redirect) by guardAdminPage; don't double-toast it.
+        if (response.status === 401 || response.status === 403) return;
+        if (!response.ok) throw new Error('Failed to load settings (HTTP ' + response.status + ')');
         const data = await response.json();
         populateForm(data.data);
         populateBuilders(data.data);

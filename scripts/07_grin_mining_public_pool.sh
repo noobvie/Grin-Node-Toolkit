@@ -23,7 +23,7 @@
 #   2) Configure             (pool name, domain, fee, wallet dir, stratum port)
 #   3) Deploy web files      (frontend → /var/www/grin-pool)
 #   4) Setup nginx           (vhost + rate limits + SSL via certbot)
-#   5) Set up wallet         (coinbase Foreign 3415 + payout Owner 3420 listeners)
+#   5) Set up wallet         (combined coinbase + payout listener, Owner+Foreign 3420)
 #   6) Service control       (start / stop / restart)
 #   7) Create admin account  (first admin user — needs service running)
 #   8) Pool status           (service state, DB size, recent logs)
@@ -126,7 +126,7 @@ source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
 # shellcheck source=lib/grin_node_secrets.sh
 source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
 
-# ─── Source pool wallet lib (coinbase Foreign 3415 + payout Owner 3420) ────────
+# ─── Source pool wallet lib (combined coinbase + payout, Owner+Foreign 3420) ───
 # pw_* functions: install/init the pool wallet, run BOTH listeners, autostart +
 # watchdog. Same technique as lib/07_solo_wallet.sh, pool naming/dirs. Resolvers
 # read live pool config (grin_wallet_dir / wallet_pass_file) at call time, so
@@ -1427,7 +1427,7 @@ let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 5) POOL WALLET (coinbase Foreign 3415 + payout Owner 3420)
+# 5) POOL WALLET (combined coinbase + payout listener, Owner+Foreign 3420)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Thin menu over the pw_* functions in lib/07_lib_pool_wallet.sh. The pool needs
 # BOTH wallet APIs running: Foreign (the node's stratum builds coinbase here →
@@ -1437,15 +1437,15 @@ let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
 
 pool_wallet_menu() {
     while true; do
-        echo -e "\n${BOLD}Pool Wallet — ${POOL_NET_LABEL} — coinbase (Foreign ${PW_FOREIGN_PORT}) + payouts (Owner ${PW_OWNER_PORT})${RESET}"
+        echo -e "\n${BOLD}Pool Wallet — ${POOL_NET_LABEL} — combined coinbase + payouts (Owner+Foreign ${PW_OWNER_PORT})${RESET}"
         pw_listener_status
         local wd_tag
         if [[ -f "$PW_WATCHDOG_CRON" ]]; then wd_tag="${GREEN}[OK] watchdog${RESET}"; else wd_tag="${DIM}[--] watchdog${RESET}"; fi
         echo -e "  $(pw_autostart_status)    $wd_tag"
         echo ""
         echo -e "  ${GREEN}1${RESET}) Set up wallet        ${DIM}(install + init/recover + save pass/address + start)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Start listeners      ${DIM}(Foreign ${PW_FOREIGN_PORT} + Owner ${PW_OWNER_PORT})${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Stop listeners"
+        echo -e "  ${GREEN}2${RESET}) Start listener       ${DIM}(owner_api + include_foreign, Owner+Foreign ${PW_OWNER_PORT}, auto-unlock)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Stop listener"
         echo -e "  ${GREEN}4${RESET}) Show pool address"
         echo -e "  ${GREEN}5${RESET}) Patch node wallet_listener_url"
         echo -e "  ${GREEN}6${RESET}) Auto-restart on boot ${DIM}(enable / disable)${RESET}"
@@ -1757,11 +1757,11 @@ pool_guided_setup() {
     _pool_guided_step 4 "Setup nginx" pool_setup_nginx \
         || { error "Nginx setup failed — aborting guided setup."; return 0; }
 
-    # Wallet setup must end with BOTH listeners up (pw_setup returns non-zero
-    # otherwise, or on a deliberate cancel). Don't roll on to the service + admin
-    # steps with a wallet that can't listen — coinbase + payouts would silently
-    # fail. Default to stopping; only continue if the operator explicitly opts in.
-    echo -e "\n${BOLD}${CYAN}── Step 5/7: Set up wallet (coinbase + payout listeners) ──${RESET}"
+    # Wallet setup must end with the combined listener up AND unlocked (pw_setup
+    # returns non-zero otherwise, or on a deliberate cancel). Don't roll on to the
+    # service + admin steps with a wallet that can't listen/open — coinbase + payouts
+    # would silently fail. Default to stopping; only continue if the operator opts in.
+    echo -e "\n${BOLD}${CYAN}── Step 5/7: Set up wallet (combined coinbase + payout listener) ──${RESET}"
     if ! _pool_guided_step 5 "Set up wallet" pw_setup; then
         warn "Wallet not fully set up (listeners down or setup cancelled) — finish via 5) Set up wallet."
         echo -ne "  Continue with the remaining steps anyway (service + admin)? [y/N]: "
@@ -2013,6 +2013,32 @@ if (!keys.length) { console.log("    (none yet)"); }
 else keys.forEach(k => console.log("    " + k + "  ->  " + rp[k]));
 console.log("  listen host: " + (d.region_listen_host || "(unset)"));
 ' "$POOL_CONF" 2>/dev/null || echo "    (could not read $POOL_CONF)"
+
+    # UX guard: a region wired here (region_ports) but NOT declared in admin → Regions
+    # (pool_locations) still mines + credits fine — but shows on the public connect grid
+    # only as an unlabelled card derived from live shares. Warn so the operator can add
+    # the label/country. Uses node:sqlite (always present); stays SILENT when the DB is
+    # absent/unreadable (can't verify → don't cry wolf), matching _pool_db_scalar.
+    local _wg_unmatched
+    _wg_unmatched=$(node -e '
+const fs = require("fs");
+let d = {}; try { d = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch (e) { process.exit(0); }
+const regions = Object.keys(d.region_ports || {});
+if (!regions.length) process.exit(0);
+const have = new Set();
+try {
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(process.argv[2]);
+  for (const r of db.prepare("SELECT region FROM pool_locations").all()) have.add(r.region);
+} catch (e) { process.exit(0); }   // DB missing / table not created yet → cannot verify
+const missing = regions.filter(r => !have.has(r));
+if (missing.length) process.stdout.write(missing.join(" "));
+' "$POOL_CONF" "$POOL_APP_DIR/pool.db" 2>/dev/null || true)
+    if [[ -n "$_wg_unmatched" ]]; then
+        warn "Region(s) wired but not declared in admin → Regions: ${_wg_unmatched}"
+        echo -e "  ${DIM}They mine + credit fine, but show as unlabelled cards on the public${RESET}"
+        echo -e "  ${DIM}connect grid until you add them in the admin panel → Regions.${RESET}"
+    fi
     echo ""
     if wg show "$WG_IFACE" &>/dev/null; then
         echo -e "  ${BOLD}Live tunnel (${WG_IFACE}):${RESET}"
@@ -2072,7 +2098,7 @@ show_menu() {
     echo -e "  ${GREEN}2${RESET}) $(_pool_step_mark 2) Configure           ${DIM}(pool name, domain, fee, stratum port)${RESET}"
     echo -e "  ${GREEN}3${RESET}) $(_pool_step_mark 3) Deploy web files    ${DIM}(frontend → $POOL_WEB_DIR)${RESET}"
     echo -e "  ${GREEN}4${RESET}) $(_pool_step_mark 4) Setup nginx         ${DIM}(vhost + SSL + rate limits)${RESET}"
-    echo -e "  ${GREEN}5${RESET}) $(_pool_step_mark 5) Set up wallet       ${DIM}(coinbase Foreign ${PW_FOREIGN_PORT} + payout Owner ${PW_OWNER_PORT})${RESET}"
+    echo -e "  ${GREEN}5${RESET}) $(_pool_step_mark 5) Set up wallet       ${DIM}(combined coinbase + payout, Owner+Foreign ${PW_OWNER_PORT})${RESET}"
     echo -e "  ${GREEN}6${RESET}) $(_pool_step_mark 6) Service control     ${DIM}(start / stop — start before creating admin)${RESET}"
     echo -e "  ${GREEN}7${RESET}) $(_pool_step_mark 7) Create admin account ${DIM}(first admin user — needs service running)${RESET}"
     echo ""

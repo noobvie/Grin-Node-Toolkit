@@ -1541,6 +1541,7 @@ _GOLD_MINE_PROD_T = {
     2022: 3612,
     2023: 3644,
     2024: 3661,
+    2025: 3672,   # WGC Gold Demand Trends FY2025 — record 3,671.6t (initial est.)
 }
 _GOLD_STOCK_END_2018 = 190_000   # tonnes above-ground stock at end of 2018 (WGC)
 _GOLD_DEFAULT_PROD   = 3_650     # tonne/yr fallback for years not yet in WGC report

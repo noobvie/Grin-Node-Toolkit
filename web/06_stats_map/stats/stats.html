@@ -1304,6 +1304,11 @@ const fmtNum = (n, d=0) => {
   return d > 0 ? intFmt + "," + dec : intFmt;
 };
 const fmt = (n, d=0) => fmtNum(n, d);
+// Mempool buckets (week+) are small per-hour / per-day AVERAGES, often fractional
+// (e.g. 0.5). Plain fmt(v,0) rounded those to "0", so week/month/year/all looked
+// empty even with real values. Show one decimal while fractional, plain integers
+// once whole: 0.5, 1, 1.5 … then 4, 5, 6. Used for both ticks and tooltips.
+const fmtMp = v => Number.isInteger(v) ? fmt(v, 0) : fmt(v, 1);
 const fmtGPS = v => {
   if (v >= 1e6) return fmtNum(v/1e6, 2) + " MG/s";
   if (v >= 1e3) return fmtNum(v/1e3, 2) + " kG/s";
@@ -2050,7 +2055,7 @@ function initCharts() {
   charts.hashrate   = makeLineChart("chart-hashrate",   "Hashrate",     "#ff9900", fmtGPS,  undefined, fmtGPSTick);
   charts.difficulty = makeLineChart("chart-difficulty", "Difficulty",   "#58a6ff", fmtDiff, undefined, fmtDiffTick);
   charts.activity    = makeMultiChart("chart-activity", v => fmt(v,1), fmtFee, v => fmt(v,0), fmtFeeTick);
-  charts.mempool     = makeLineChart("chart-mempool", "Mempool", "#bc8cff", v => fmt(v,0) + " tx", undefined, v => fmt(v,0));
+  charts.mempool     = makeLineChart("chart-mempool", "Mempool", "#bc8cff", v => fmtMp(v) + " tx", undefined, fmtMp);
   charts.chain       = makeChainChart("chart-chain");
   charts.activePeers = makePeersChart("chart-peers");
   charts.priceUsdt   = makePriceChartUSDT("chart-price-usdt");
@@ -2240,6 +2245,11 @@ function updateChainChart(kernelsJson, outputsJson, utxoJson, range, metric) {
   // (the stray "1" tick). Kernels → left (y1); Outputs/UTXO → right (y2).
   charts.chain.options.scales.y1.display = (metric === "both" || metric === "kernels");
   charts.chain.options.scales.y2.display = (metric === "both" || metric === "outputs" || metric === "utxo");
+  // Kernels axis sits left only in the dual-axis "both" view (Outputs owns the
+  // right there). When Kernels is the sole metric, park its value axis on the
+  // RIGHT — matching the isolated Outputs/UTXO views (which already use y2/right)
+  // so every single-line chain view is right-aligned like mempool/UTXO.
+  charts.chain.options.scales.y1.position = (metric === "both") ? "left" : "right";
   charts.chain.options.scales.y2.title.text = metric === "utxo" ? "Unspent (UTXO)" : "Outputs";
   // Auto-fit the x-axis to the actual data (bounds:"data" set in the factory) so
   // every metric's line spans edge-to-edge with no empty band against the vertical

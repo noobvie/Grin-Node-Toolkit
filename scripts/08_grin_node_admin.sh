@@ -9,7 +9,7 @@
 #   8.4  Nginx Extended Features   — audit · reverse proxy · security · log rotation
 #   8.5  SSH Key Hardening         — 085_ssh_hardening.sh (key-only root login)
 #   8.6  Top 20 Bandwidth Consumers— parse nginx logs, block/limit from menu
-#   8.7  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs
+#   8.7  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs + swap manager
 #   8.8  Self-Update               — download latest from GitHub
 #   8.9  Backup & Restore          — 089_backup_restore.sh
 #   DEL  Full Grin Cleanup         — 08del_clean_all_grin_things.sh
@@ -614,6 +614,233 @@ manage_auto_cleanup() {
     done
 }
 
+# =============================================================================
+# Swap Manager — sub-item of 8.7 Disk Cleanup
+# =============================================================================
+# Swapfiles are just files on disk, so swap sizing lives under Disk Cleanup.
+# We manage a STACK of swapfiles under $SWAP_DIR (swap-001, swap-002, …):
+#   • Add  → create a NEW swapfile of N GB and swapon it. This never touches the
+#            existing swap, so adding works even while current swap is heavily in
+#            use — you just accumulate another file (no risky swapoff needed).
+#   • Remove → swapoff + delete a chosen file (or all). swapoff can fail if the
+#            file holds pages that can't be relocated (not enough free RAM +
+#            remaining swap) — we report that instead of leaving a half state.
+# Each file gets its own /etc/fstab entry so it is re-enabled on boot. Removal
+# also picks up any pre-existing file swap (e.g. a legacy /swapfile) so you can
+# clear it from here too.
+SWAP_DIR="/opt/grin/swap"
+
+# Human-readable byte size (matches the GB/MB style used elsewhere on screen).
+_human_bytes() {
+    awk -v b="$1" 'BEGIN{
+        if      (b>=1073741824) printf "%.2f GB", b/1073741824;
+        else if (b>=1048576)    printf "%.2f MB", b/1048576;
+        else if (b>=1024)       printf "%.2f KB", b/1024;
+        else                    printf "%d B", b;
+    }'
+}
+
+# Every file-backed swap the manager should know about: anything currently
+# active as a file PLUS any swap-* file sitting in $SWAP_DIR (sorted, unique).
+_swap_managed_files() {
+    {
+        swapon --show=NAME,TYPE --noheadings 2>/dev/null | awk '$2=="file"{print $1}'
+        [[ -d "$SWAP_DIR" ]] && find "$SWAP_DIR" -maxdepth 1 -type f -name 'swap-*' 2>/dev/null
+    } | sort -u
+}
+
+_swap_is_active() { swapon --show=NAME --noheadings 2>/dev/null | grep -qx "$1"; }
+
+# Size (bytes) of a given swap path: live swapon size if active, else on-disk.
+_swap_file_bytes() {
+    local f="$1" b
+    b="$(swapon --show=NAME,SIZE --bytes --noheadings 2>/dev/null | awk -v f="$f" '$1==f{print $2; exit}')"
+    [[ -z "$b" && -f "$f" ]] && b="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+    echo "${b:-0}"
+}
+
+# Next free swap-NNN path inside $SWAP_DIR.
+_swap_next_path() {
+    local i=1 p
+    while :; do
+        p="$(printf '%s/swap-%03d' "$SWAP_DIR" "$i")"
+        [[ -e "$p" ]] || { echo "$p"; return; }
+        i=$((i+1))
+    done
+}
+
+# Ensure / remove a per-file fstab entry so it is re-enabled on boot.
+_swap_fstab_ensure() {
+    local f="$1"
+    grep -qsE "^[[:space:]]*${f}[[:space:]]" /etc/fstab && return 0
+    printf '%s none swap sw 0 0\n' "$f" >> /etc/fstab
+}
+_swap_fstab_remove() {
+    local f="$1"
+    [[ -f /etc/fstab ]] || return 0
+    sed -i "\#^[[:space:]]*${f}[[:space:]]#d" /etc/fstab
+}
+
+# Create + enable a brand-new swapfile of <gb> GB. Leaves all existing swap
+# untouched, so it is safe even while swap is in use. fallocate first (fast),
+# dd fallback (handles filesystems that reject fallocate'd swapfiles). chmod 600
+# is mandatory — swapon refuses world-readable swapfiles.
+_swap_add() {
+    local gb="$1"
+    local bytes=$(( gb * 1073741824 ))
+    mkdir -p "$SWAP_DIR"; chmod 700 "$SWAP_DIR"
+
+    local avail
+    avail="$(df -B1 --output=avail "$SWAP_DIR" 2>/dev/null | tail -1 | tr -d ' ' || true)"
+    if [[ -n "$avail" ]] && (( bytes > avail )); then
+        error "Not enough free disk: need ~$(_human_bytes "$bytes"), available $(_human_bytes "$avail")."
+        return 1
+    fi
+
+    local path; path="$(_swap_next_path)"
+    info "Creating $path ($(_human_bytes "$bytes"))..."
+    if ! fallocate -l "$bytes" "$path" 2>/dev/null; then
+        local mb=$(( (bytes + 1048575) / 1048576 ))
+        dd if=/dev/zero of="$path" bs=1M count="$mb" status=none 2>/dev/null \
+            || { error "Allocation failed."; rm -f "$path"; return 1; }
+    fi
+    chmod 600 "$path"
+    if ! mkswap "$path" >/dev/null 2>&1; then error "mkswap failed."; rm -f "$path"; return 1; fi
+    if ! swapon "$path" 2>/dev/null; then
+        warn "swapon failed — retrying with a dd-allocated file..."
+        local mb=$(( (bytes + 1048575) / 1048576 ))
+        rm -f "$path"; dd if=/dev/zero of="$path" bs=1M count="$mb" status=none 2>/dev/null
+        chmod 600 "$path"; mkswap "$path" >/dev/null 2>&1
+        if ! swapon "$path" 2>/dev/null; then error "swapon still failing. Check 'dmesg'."; rm -f "$path"; return 1; fi
+    fi
+    _swap_fstab_ensure "$path"
+    success "Added swap: $(_human_bytes "$bytes") at $path (persisted in /etc/fstab)."
+    log "SWAP added $bytes bytes ($path)"
+}
+
+# Disable + delete one swapfile. Fails loudly (without deleting) if swapoff
+# can't relocate the file's in-use pages.
+_swap_remove_file() {
+    local f="$1"
+    if _swap_is_active "$f"; then
+        info "Disabling $f..."
+        if ! swapoff "$f" 2>/dev/null; then
+            error "swapoff failed for $f — its pages can't be relocated (need more free RAM/other swap)."
+            return 1
+        fi
+    fi
+    rm -f "$f"
+    _swap_fstab_remove "$f"
+    success "Removed swap: $f"
+    log "SWAP removed ($f)"
+}
+
+# Validate a positive-integer GB amount; echoes the value or empty on failure.
+_swap_read_gb() {
+    local prompt="$1" gb
+    echo -ne "$prompt" >&2
+    read -r gb
+    [[ "$gb" =~ ^[0-9]+$ ]] && (( gb > 0 )) && { echo "$gb"; return 0; }
+    return 1
+}
+
+manage_swap() {
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  Swap Manager${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+
+        # ── Active swap (whole system) ────────────────────────────────────────
+        echo -e "${BOLD}Active swap (system):${RESET}"
+        local sw_lines
+        sw_lines="$(swapon --show=NAME,TYPE,SIZE,USED,PRIO --noheadings 2>/dev/null || true)"
+        if [[ -n "$sw_lines" ]]; then
+            printf "  ${BOLD}%-22s %-6s %-9s %-9s %s${RESET}\n" "NAME" "TYPE" "SIZE" "USED" "PRIO"
+            while IFS= read -r l; do echo -e "  ${GREEN}▶${RESET} $l"; done <<< "$sw_lines"
+        else
+            echo -e "  ${DIM}No active swap.${RESET}"
+        fi
+
+        # ── Managed swapfiles (the stack we add to / remove from) ──────────────
+        local -a files=()
+        while IFS= read -r f; do [[ -n "$f" ]] && files+=("$f"); done < <(_swap_managed_files)
+        echo ""
+        echo -e "${BOLD}Managed swapfiles:${RESET}"
+        local total=0
+        if (( ${#files[@]} == 0 )); then
+            echo -e "  ${DIM}none yet — 'Add swap' creates the first under $SWAP_DIR${RESET}"
+        else
+            local idx=1 fb st
+            for f in "${files[@]}"; do
+                fb="$(_swap_file_bytes "$f")"; total=$(( total + fb ))
+                if _swap_is_active "$f"; then st="${GREEN}active${RESET}"; else st="${DIM}inactive${RESET}"; fi
+                printf "  ${YELLOW}%s${RESET}) %-26s ${YELLOW}%9s${RESET}  " "$idx" "$f" "$(_human_bytes "$fb")"
+                echo -e "$st"
+                idx=$(( idx + 1 ))
+            done
+            echo -e "  ${BOLD}Total managed: $(_human_bytes "$total")${RESET}"
+        fi
+
+        # ── Free disk where new swapfiles are created ─────────────────────────
+        local avail
+        avail="$(df -B1 --output=avail "$SWAP_DIR" 2>/dev/null | tail -1 | tr -d ' ' \
+                 || df -B1 --output=avail / 2>/dev/null | tail -1 | tr -d ' ' || true)"
+        [[ -n "$avail" ]] && echo -e "  ${DIM}Free disk for new swap ($SWAP_DIR): $(_human_bytes "$avail")${RESET}"
+
+        echo ""
+        echo -e "${BOLD}Actions:${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Add swap        ${DIM}(enter GB — adds a new file, safe while in use)${RESET}"
+        echo -e "  ${YELLOW}2${RESET}) Remove a swapfile ${DIM}(pick from the list above)${RESET}"
+        echo -e "  ${RED}3${RESET}) Remove ALL managed swap"
+        echo -e "  ${DIM}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select: ${RESET}"
+        local c; read -r c
+        case "$c" in
+            1)
+                local gb; gb="$(_swap_read_gb "GB to ADD [integer]: ")" \
+                    || { warn "Enter a positive whole number of GB."; sleep 1; continue; }
+                echo -ne "${YELLOW}Create a new ${gb} GB swapfile and enable it? [y/N]: ${RESET}"
+                read -r confirm
+                [[ "${confirm,,}" == "y" ]] && { _swap_add "$gb" || true; } || info "Cancelled."
+                sleep 2
+                ;;
+            2)
+                if (( ${#files[@]} == 0 )); then warn "No managed swapfiles to remove."; sleep 1; continue; fi
+                echo -ne "Number of swapfile to remove [1-${#files[@]}, 0 cancel]: "
+                read -r n
+                if [[ "$n" =~ ^[0-9]+$ ]] && (( n >= 1 && n <= ${#files[@]} )); then
+                    local target="${files[$((n-1))]}"
+                    echo -ne "${RED}Disable and delete $target? [y/N]: ${RESET}"
+                    read -r confirm
+                    [[ "${confirm,,}" == "y" ]] && { _swap_remove_file "$target" || true; } || info "Cancelled."
+                else
+                    [[ "$n" != "0" ]] && warn "Invalid selection."
+                fi
+                sleep 2
+                ;;
+            3)
+                if (( ${#files[@]} == 0 )); then warn "No managed swapfiles present."; sleep 1; continue; fi
+                echo -ne "${RED}Disable and delete ALL ${#files[@]} managed swapfile(s)? [y/N]: ${RESET}"
+                read -r confirm
+                if [[ "${confirm,,}" == "y" ]]; then
+                    local failed=0
+                    for f in "${files[@]}"; do _swap_remove_file "$f" || failed=$(( failed + 1 )); done
+                    (( failed > 0 )) && warn "$failed swapfile(s) could not be removed (still in use)." \
+                                     || success "All managed swap removed."
+                else
+                    info "Cancelled."
+                fi
+                sleep 2
+                ;;
+            0) break ;;
+            *) warn "Invalid selection."; sleep 1 ;;
+        esac
+    done
+}
+
 clean_maintenance() {
     while true; do
         clear
@@ -723,6 +950,7 @@ clean_maintenance() {
             echo -e "  ${GREEN}6${RESET}) Delete nginx web dir contents  ${DIM}(choose directory)${RESET}"
         fi
         echo -e "  ${CYAN}7${RESET}) Automatic cleanup schedule  ${DIM}(txhashset snapshots + /opt/grin/logs >N days)${RESET}"
+        echo -e "  ${CYAN}8${RESET}) Swap manager  ${DIM}(add/remove swapfiles by GB)${RESET}"
         echo -e "  ${DIM}0${RESET}) Return to main menu"
         echo ""
         echo -ne "${BOLD}Select: ${RESET}"
@@ -837,6 +1065,7 @@ clean_maintenance() {
                 sleep 2
                 ;;
             7) manage_auto_cleanup || true ;;
+            8) manage_swap || true ;;
             0) break ;;
             *) warn "Invalid selection."; sleep 1 ;;
         esac

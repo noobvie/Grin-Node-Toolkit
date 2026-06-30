@@ -1643,6 +1643,10 @@ function makePriceChartUSDT(id) {
           // so sparse ranges (e.g. a 3-month BTC year view) don't get padded out to
           // the nearest month boundary, leaving big empty bands on both ends.
           bounds: "data",
+          // A bar dataset (volume) otherwise switches the time scale into offset
+          // mode, padding half a candle of empty space at each edge so the price
+          // line never reaches the vertical axes. Force it off → line spans flush.
+          offset: false,
           ticks: { maxTicksLimit: 8 },
         },
         y: {
@@ -1718,6 +1722,10 @@ function makePriceChartBTC(id) {
           // so sparse ranges (e.g. a 3-month BTC year view) don't get padded out to
           // the nearest month boundary, leaving big empty bands on both ends.
           bounds: "data",
+          // A bar dataset (volume) otherwise switches the time scale into offset
+          // mode, padding half a candle of empty space at each edge so the price
+          // line never reaches the vertical axes. Force it off → line spans flush.
+          offset: false,
           ticks: { maxTicksLimit: 8 },
         },
         y: {
@@ -2196,6 +2204,14 @@ function updateMempoolChart(json, range) {
   const data = _toXY(filterLevelByRange(json, range));
   const noDataEl = $("mempool-no-data");
   if (noDataEl) noDataEl.style.display = data.length === 0 ? "flex" : "none";
+  // Mempool builds forward (newest sample flush-right), so park the value axis on
+  // the RIGHT — it then sits next to where the data actually is instead of across
+  // the empty left gap. position is reasserted each update so it survives a theme
+  // re-init that rebuilds scale options.
+  charts.mempool.options.scales.y.position = "right";
+  // Tick unit per timeframe so e.g. Week reads in days, not hours.
+  const _mpUnit = { day: "hour", week: "day", month: "day", year: "month", all: "month" };
+  charts.mempool.options.scales.x.time.unit = _mpUnit[range] ?? "month";
   charts.mempool.data.datasets[0].data = data;
   applyRangeBounds(charts.mempool.options.scales.x, range, data);
   charts.mempool.update("none");
@@ -2225,12 +2241,16 @@ function updateChainChart(kernelsJson, outputsJson, utxoJson, range, metric) {
   charts.chain.options.scales.y1.display = (metric === "both" || metric === "kernels");
   charts.chain.options.scales.y2.display = (metric === "both" || metric === "outputs" || metric === "utxo");
   charts.chain.options.scales.y2.title.text = metric === "utxo" ? "Unspent (UTXO)" : "Outputs";
-  // Pin the x-axis to the selected timeframe so every metric shares one horizon.
-  // The UTXO line only builds forward from when sampling began, so without this
-  // its view would collapse to that short recent window instead of matching the
-  // Day/Week/Month/Year/All horizon the kernels & outputs views use. "all" spans
-  // the union of all three series (kernels/outputs reach back to genesis).
-  applyRangeBounds(charts.chain.options.scales.x, range, [...kData, ...oData, ...uData]);
+  // Auto-fit the x-axis to the actual data (bounds:"data" set in the factory) so
+  // every metric's line spans edge-to-edge with no empty band against the vertical
+  // axes — matches the peers/price charts. Forcing the full Day/Week/Month window
+  // here was what left the big gap (and an inconsistent spread between the
+  // kernels/outputs/both toggles, since each series fills a different fraction of
+  // that window). Tick unit per timeframe so Week reads in days, not hours.
+  const _chainUnit = { day: "hour", week: "day", month: "day", year: "month", all: "month" };
+  charts.chain.options.scales.x.time.unit = _chainUnit[range] ?? "month";
+  delete charts.chain.options.scales.x.min;
+  delete charts.chain.options.scales.x.max;
   charts.chain.update("none");
 }
 
@@ -2342,6 +2362,11 @@ function updatePriceChartUSDT(data, range) {
 
   // Break flat lines across data gaps (Gate.io has no candles on zero-volume days)
   pts = breakGaps(pts, _PRICE_GAP_MS[range] ?? 4 * 86400e3);
+
+  // Tick unit per timeframe for readable labels (auto-fit to data, so the line
+  // spreads edge-to-edge on every range — matching day/week).
+  const _usdtUnit = { day: "hour", week: "day", month: "week", year: "month", all: "month" };
+  charts.priceUsdt.options.scales.x.time.unit = _usdtUnit[range] ?? "month";
 
   // Show point markers when data is sparse so individual candles are visible
   const realPts = pts.filter(p => p.y !== null).length;
@@ -2590,6 +2615,26 @@ function countryFlag(code) {
   } catch { return ""; }
 }
 
+// Display-only flag override. The legacy yellow / 3-red-stripe flag has no Unicode
+// emoji, so the peer map renders it as inline SVG; the countries chart draws labels
+// on canvas, so we paint the same flag with fillRect. Mirrors index.html FLAG_SVG.
+const CANVAS_FLAG = { VN: true };
+function drawCanvasFlag(ctx, code, x, yMid, w, h) {
+  if ((code || "").toUpperCase() !== "VN") return 0;
+  const top = yMid - h / 2;
+  ctx.save();
+  ctx.fillStyle = "#f9d616";                          // yellow field
+  ctx.fillRect(x, top, w, h);
+  ctx.fillStyle = "#da251d";                          // 3 red stripes (per SVG ratios)
+  const sh = h * 0.1;
+  [0.375, 0.525, 0.675].forEach(f => ctx.fillRect(x, top + h * f, w, sh));
+  ctx.strokeStyle = "rgba(0,0,0,0.2)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, top + 0.5, w - 1, h - 1);
+  ctx.restore();
+  return w;
+}
+
 // Relative luminance of a #rrggbb colour → pick dark/light text for contrast.
 function _barTextColor(hex) {
   const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
@@ -2612,8 +2657,10 @@ const countriesBarLabels = {
     const labels = chart.data.labels || [];
     const counts = chart.data.datasets[0].data || [];
     const colors = chart.data.datasets[0].backgroundColor || [];
+    const codes  = chart.data.datasets[0]._codes || [];
     const area = chart.chartArea;
     const pad = 8;
+    const FLAG_W = 18, FLAG_H = 12, FLAG_GAP = 5;    // canvas-drawn flag box
     ctx.save();
     ctx.textBaseline = "middle";
     meta.data.forEach((bar, i) => {
@@ -2621,20 +2668,28 @@ const countriesBarLabels = {
       if (!text) return;
       const barW = bar.x - bar.base;
 
+      // Countries with no Unicode emoji (e.g. VN legacy flag) get a canvas flag
+      // box drawn before the name; reserve its width in the fit calculation.
+      const code = codes[i] || "";
+      const flagSlot = CANVAS_FLAG[(code || "").toUpperCase()] ? FLAG_W + FLAG_GAP : 0;
+
       // Country name: inside the bar if it fits, else just past the bar end.
       ctx.textAlign = "left";
       ctx.font = "600 12px system-ui, -apple-system, 'Segoe UI', sans-serif";
-      const textW = ctx.measureText(text).width;
+      const textW = ctx.measureText(text).width + flagSlot;
       let nameEnd;                                 // x where the name finishes
       if (barW >= textW + pad * 2) {
+        const startX = bar.base + pad;
+        if (flagSlot) drawCanvasFlag(ctx, code, startX, bar.y, FLAG_W, FLAG_H);
         ctx.fillStyle = _barTextColor(colors[i]);
-        ctx.fillText(text, bar.base + pad, bar.y);
+        ctx.fillText(text, startX + flagSlot, bar.y);
         nameEnd = bar.x;                           // count goes after the bar
       } else {
-        ctx.fillStyle = Chart.defaults.color;
         let x = bar.x + pad;
         if (x + textW > area.right) x = Math.max(area.left, area.right - textW);
-        ctx.fillText(text, x, bar.y);
+        if (flagSlot) drawCanvasFlag(ctx, code, x, bar.y, FLAG_W, FLAG_H);
+        ctx.fillStyle = Chart.defaults.color;
+        ctx.fillText(text, x + flagSlot, bar.y);
         nameEnd = x + textW;                        // count goes after the name
       }
 
@@ -2659,7 +2714,13 @@ function renderCountries(data) {
   $("countries-sample").textContent = tfCaption(total, tfState.countries, "node");
 
   if (typeof Chart === "undefined") return;  // chart.min.js not loaded
-  const labels = rows.map(r => `${countryFlag(r.code)} ${r.label}`.trim());
+  // VN has no Unicode emoji for its legacy flag — draw that on canvas (see
+  // countriesBarLabels), so omit the emoji here and leave the name only.
+  const labels = rows.map(r =>
+    CANVAS_FLAG[(r.code || "").toUpperCase()]
+      ? r.label
+      : `${countryFlag(r.code)} ${r.label}`.trim());
+  const codes  = rows.map(r => r.code || "");
   const counts = rows.map(r => r.count);
   const colors = rows.map((_, i) => VERSION_COLORS[i % VERSION_COLORS.length]);
   const tipLabel = ctx => {
@@ -2670,7 +2731,7 @@ function renderCountries(data) {
   if (!charts.countries) {
     charts.countries = new Chart($("chart-countries").getContext("2d"), {
       type: "bar",
-      data: { labels, datasets: [{ data: counts, backgroundColor: colors, borderWidth: 0, borderRadius: 3 }] },
+      data: { labels, datasets: [{ data: counts, backgroundColor: colors, borderWidth: 0, borderRadius: 3, _codes: codes }] },
       plugins: [countriesBarLabels],
       options: {
         indexAxis: "y",
@@ -2696,6 +2757,7 @@ function renderCountries(data) {
     c.data.labels                      = labels;
     c.data.datasets[0].data            = counts;
     c.data.datasets[0].backgroundColor = colors;
+    c.data.datasets[0]._codes          = codes;
     c.options.plugins.tooltip.callbacks.label = tipLabel;
     c.update("none");
   }

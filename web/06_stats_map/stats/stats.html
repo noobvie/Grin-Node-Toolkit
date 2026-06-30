@@ -2527,8 +2527,14 @@ async function loadAll() {
 }
 
 // ── Top-10 timeframe toggle (Versions + Countries) ─────────────────────────────
-// week/month read live from known_peers; year/all are averaged from the forward-
-// building daily aggregate, so their caption says "avg nodes" not raw "peers".
+// Two DIFFERENT metrics share this toggle, so the caption must say which one:
+//  • week/month read live from known_peers = the CUMULATIVE set of distinct nodes
+//    DISCOVERED across the window. Because our node rotates its peer connections,
+//    the longer the window the more of the real network it has seen → caption "seen".
+//  • year/all are averaged from the forward-building daily aggregate = the TYPICAL
+//    number of nodes online on a given day → caption "avg …/day". This is a smaller
+//    number than the cumulative "seen" count by design — not fewer nodes, a different
+//    measure — so the wording keeps them from being read as the same quantity.
 const tfState = { versions: "week", countries: "week" };
 const TF_META = {
   week:  { label: "last 7 days",  avg: false },
@@ -2544,9 +2550,10 @@ function tfSlice(data, tf, net) {
 }
 function tfCaption(total, tf, noun) {
   const m = TF_META[tf] || TF_META.week;
+  const plural = total !== 1 ? "s" : "";
   return m.avg
-    ? `≈ ${fmt(total)} avg ${noun} · ${m.label}`
-    : `${fmt(total)} ${noun}${total !== 1 ? "s" : ""} · ${m.label}`;
+    ? `≈ ${fmt(total)} avg ${noun}${plural}/day · ${m.label}`
+    : `${fmt(total)} ${noun}${plural} seen · ${m.label}`;
 }
 
 // ── Version donut ─────────────────────────────────────────────────────────────

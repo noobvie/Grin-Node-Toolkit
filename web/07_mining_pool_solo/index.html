@@ -204,13 +204,14 @@
   #split-table { min-width: 420px; }
   #split-table td .grin { color: var(--green); font-weight: bold; }
 
-  /* solo-health (orphan / stale / reject) table */
-  #quality-table, #quality-worker-table { min-width: 600px; }
+  /* solo-health (orphan / stale / reject) table — rate is the hero, raw counts a caption */
+  #quality-table, #quality-worker-table { min-width: 460px; }
   #quality-table .qv, #quality-worker-table .qv { font-weight: bold; }
   #quality-table .qv.green, #quality-worker-table .qv.green { color: var(--green); }
   #quality-table .qv.yellow, #quality-worker-table .qv.yellow { color: var(--yellow); }
   #quality-table .qv.red, #quality-worker-table .qv.red { color: var(--red); }
   #quality-table .dimv, #quality-worker-table .dimv { color: var(--muted); }
+  #quality-table .qcap, #quality-worker-table .qcap { color: var(--muted); font-size: .8rem; white-space: nowrap; }
   .split-sub { font-size: 1.02rem; margin: 1.3rem 0 .55rem; }
   .split-sub:first-of-type { margin-top: .2rem; }
   #balance-table { min-width: 460px; }
@@ -631,6 +632,22 @@
     if (v < 999.5)  return '' + v;                                      // 0–999
     if (v < 999500) { var k = v/1e3; return (k < 9.95 ? k.toFixed(1) : Math.round(k)) + 'k'; }
     var m = v/1e6;  return (m < 9.95 ? m.toFixed(1) : Math.round(m)) + 'M';
+  }
+  // Solo-health count: readable separators for the everyday range, compact (k/M) only
+  // once a long-running node pushes a count past 6 figures so the caption never blows
+  // out the cell. Used for the raw "num / denom" caption under each rate.
+  function fmtQ(n) {
+    n = Number(n) || 0;
+    return n >= 100000 ? fmtCount(n) : n.toLocaleString();
+  }
+  // A solo-health metric cell: the rate is the hero (bold, colour-banded green/yellow/red
+  // below `warn` / up to `bad` / at-or-above), with the raw "bad / total" counts demoted
+  // to a small muted caption. `—` when the window has no data to rate yet.
+  function metricCell(pct, warn, bad, num, denom, hasData) {
+    if (!hasData) return '<td><span class="dimv">—</span></td>';
+    var c = pct >= bad ? 'red' : (pct >= warn ? 'yellow' : 'green');
+    return '<td><span class="qv ' + c + '">' + Number(pct).toFixed(2) + '%</span>'
+      + ' <span class="qcap">' + fmtQ(num) + ' / ' + fmtQ(denom) + '</span></td>';
   }
   // One-line text summary of a two-series chart for the SVG aria-label, so screen
   // readers get the gist (peak + latest per network) instead of silence.
@@ -1330,8 +1347,9 @@
 
   // ── Solo Health: orphan-block rate + stale/rejected share rate ──
   // Data: split_main.json `quality.windows` (daily / weekly / monthly / yearly / all),
-  // each {accepted, stale, rejected, *_pct, matured, orphan, orphan_pct}. One row per
-  // window so the full daily→yearly trend is visible at a glance.
+  // each {accepted, stale, rejected, *_pct, matured, orphan, orphan_pct}. The table shows
+  // only the bounded rolling windows (daily/weekly/monthly) with the rate as the hero and
+  // the raw counts a caption; the unbounded yearly/all-time totals go in the meta line.
   function renderQuality() {
     var card = document.getElementById('quality-card');
     var nq = document.getElementById('nav-quality');
@@ -1342,37 +1360,27 @@
     if (nq) nq.style.display = '';
     var meta = document.getElementById('quality-meta');
     var tbody = document.querySelector('#quality-table tbody');
-    var order = [['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly'],
-                 ['yearly', 'Yearly'], ['all', 'All time']];
-    // Colour a percentage cell: green below `warn`, yellow up to `bad`, red at/above.
-    function pctCell(v, warn, bad, hasData) {
-      if (!hasData) return '<td><span class="dimv">—</span></td>';
-      var c = v >= bad ? 'red' : (v >= warn ? 'yellow' : 'green');
-      return '<td><span class="qv ' + c + '">' + Number(v).toFixed(2) + '%</span></td>';
-    }
+    // Only the bounded rolling windows live in the table — yearly/all-time grow without
+    // bound and converge to a slow-moving average that stops being actionable, so the
+    // lifetime totals go in the meta line below instead of an ever-growing row.
+    var order = [['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']];
     var rows = order.map(function (o) {
       var w = q[o[0]] || {};
       var found = (w.matured || 0) + (w.orphan || 0);
       var submitted = (w.accepted || 0) + (w.stale || 0) + (w.rejected || 0);
       return '<tr><td><span class="w">' + o[1] + '</span></td>'
-        + '<td>' + found + '</td>'
-        + '<td>' + (w.orphan || 0) + '</td>'
-        + pctCell(w.orphan_pct || 0, 2, 5, found > 0)
-        + '<td>' + (w.accepted || 0) + '</td>'
-        + '<td>' + (w.stale || 0) + '</td>'
-        + pctCell(w.stale_pct || 0, 3, 8, submitted > 0)
-        + '<td>' + (w.rejected || 0) + '</td>'
-        + pctCell(w.reject_pct || 0, 1, 5, submitted > 0)
+        + metricCell(w.orphan_pct || 0, 2, 5, w.orphan || 0, found, found > 0)
+        + metricCell(w.stale_pct || 0, 3, 8, w.stale || 0, submitted, submitted > 0)
+        + metricCell(w.reject_pct || 0, 1, 5, w.rejected || 0, submitted, submitted > 0)
         + '</tr>';
     }).join('');
-    tbody.innerHTML = '<tr><th>Period</th><th>Found</th><th>Orphaned</th><th>Orphan %</th>'
-      + '<th>Accepted</th><th>Stale</th><th>Stale %</th><th>Rejected</th><th>Reject %</th></tr>'
+    tbody.innerHTML = '<tr><th>Period</th><th>Orphaned</th><th>Stale</th><th>Rejected</th></tr>'
       + rows;
     var all = q.all || {};
     var allFound = (all.matured || 0) + (all.orphan || 0);
-    meta.innerHTML = 'All-time: <b>' + (all.orphan || 0) + '</b> orphaned of <b>' + allFound
+    meta.innerHTML = 'All-time: <b>' + fmtQ(all.orphan || 0) + '</b> orphaned of <b>' + fmtQ(allFound)
       + '</b> found block' + (allFound === 1 ? '' : 's')
-      + ' · <b>' + (all.stale || 0) + '</b> stale + <b>' + (all.rejected || 0)
+      + ' · <b>' + fmtQ(all.stale || 0) + '</b> stale + <b>' + fmtQ(all.rejected || 0)
       + '</b> rejected shares';
     renderQualityWorkers();
   }
@@ -1395,11 +1403,6 @@
     var note = document.getElementById('quality-worker-note');
     var q = SPLIT.data && SPLIT.data.quality && SPLIT.data.quality.windows;
     var list = (q && q[SPLIT.qualityWindow] && q[SPLIT.qualityWindow].by_worker) || [];
-    function pctCell(v, warn, bad, hasData) {
-      if (!hasData) return '<td><span class="dimv">—</span></td>';
-      var c = v >= bad ? 'red' : (v >= warn ? 'yellow' : 'green');
-      return '<td><span class="qv ' + c + '">' + Number(v).toFixed(2) + '%</span></td>';
-    }
     // "unknown" is not a real rig — it's unattributed stale/rejected shares (log lines
     // with no login). It has zero accepted shares, so its stale% is always a misleading
     // 100%; keep it OUT of the ranked rows and instead report its raw counts in the note,
@@ -1434,18 +1437,12 @@
       var found = (w.matured || 0) + (w.orphan || 0);
       var submitted = (w.accepted || 0) + (w.stale || 0) + (w.rejected || 0);
       return '<tr><td><span class="w">' + esc(w.worker || 'unknown') + '</span></td>'
-        + '<td>' + found + '</td>'
-        + '<td>' + (w.orphan || 0) + '</td>'
-        + pctCell(w.orphan_pct || 0, 2, 5, found > 0)
-        + '<td>' + (w.accepted || 0) + '</td>'
-        + '<td>' + (w.stale || 0) + '</td>'
-        + pctCell(w.stale_pct || 0, 3, 8, submitted > 0)
-        + '<td>' + (w.rejected || 0) + '</td>'
-        + pctCell(w.reject_pct || 0, 1, 5, submitted > 0)
+        + metricCell(w.orphan_pct || 0, 2, 5, w.orphan || 0, found, found > 0)
+        + metricCell(w.stale_pct || 0, 3, 8, w.stale || 0, submitted, submitted > 0)
+        + metricCell(w.reject_pct || 0, 1, 5, w.rejected || 0, submitted, submitted > 0)
         + '</tr>';
     }).join('');
-    tbody.innerHTML = '<tr><th>Worker</th><th>Found</th><th>Orphaned</th><th>Orphan %</th>'
-      + '<th>Accepted</th><th>Stale</th><th>Stale %</th><th>Rejected</th><th>Reject %</th></tr>'
+    tbody.innerHTML = '<tr><th>Worker</th><th>Orphaned</th><th>Stale</th><th>Rejected</th></tr>'
       + rows;
     var realTotal = list.length - (unknown ? 1 : 0);
     var clean = realTotal - problems.length;

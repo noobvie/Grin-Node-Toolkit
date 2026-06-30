@@ -202,6 +202,14 @@
   .split-meta b { color: var(--text-hi); }
   #split-table { min-width: 420px; }
   #split-table td .grin { color: var(--green); font-weight: bold; }
+
+  /* solo-health (orphan / stale / reject) table */
+  #quality-table { min-width: 600px; }
+  #quality-table .qv { font-weight: bold; }
+  #quality-table .qv.green { color: var(--green); }
+  #quality-table .qv.yellow { color: var(--yellow); }
+  #quality-table .qv.red { color: var(--red); }
+  #quality-table .dimv { color: var(--muted); }
   .split-sub { font-size: 1.02rem; margin: 1.3rem 0 .55rem; }
   .split-sub:first-of-type { margin-top: .2rem; }
   #balance-table { min-width: 460px; }
@@ -287,6 +295,7 @@
   <a href="#chart-hashrate">Hashrate chart</a>
   <a href="#split-card" id="nav-split" style="display:none">Payout split</a>
   <a href="#earn-card" id="nav-earn" style="display:none">Earnings / day</a>
+  <a href="#quality-card" id="nav-quality" style="display:none">Solo health</a>
 </nav>
 
 <!-- ── MAINNET ── -->
@@ -441,6 +450,17 @@
   <p class="split-meta" id="earn-meta">—</p>
   <div id="earn-chart"><div class="chart-empty">Loading earnings…</div></div>
   <p class="split-foot"><b>Span follows this chart's period selector</b> (Weekly = last 7 days · Monthly = this month · Yearly = this year, shown as weekly averages). The <b>left axis counts blocks found</b>; the <b>right axis is GRIN mined</b> (the two are the same scale — GRIN = blocks × block reward). Bars are the <b>actual</b> GRIN credited that day — lumpy, because solo blocks arrive irregularly. The <b>estimate</b> line removes that block-luck: the day's work share × the average block rate over the shown span. <b>Pool avg / miner</b> = that day's smoothed pool reward ÷ how many miners were active that day (the count changes day to day). The estimate is a projection, not a promise — attribution is by the block's found day.</p>
+</section>
+
+<!-- ── Solo Health: orphaned blocks + stale/rejected shares (mainnet) — the two ways solo silently loses effective hashrate vs a pool; hidden unless data/split_main.json exists ── -->
+<section class="chart-card accent-payout" id="quality-card" style="display:none">
+  <div class="chart-head">
+    <h2>Solo Health · <span style="color:var(--main)">Mainnet</span></h2>
+  </div>
+  <p class="split-meta" id="quality-meta">—</p>
+  <div class="table-scroll"><table id="quality-table"><tbody></tbody></table></div>
+  <p class="split-empty" id="quality-empty" style="display:none"></p>
+  <p class="split-foot">At equal <b>effective</b> hashrate, solo and a pool earn the same on average (minus the pool fee) — solo just has higher variance. A persistent shortfall vs a pool usually means lost effective hashrate, and these are the two culprits. <b>Orphaned</b> = a block you found that lost the propagation race and was reorged out (earns nothing) — high orphan&nbsp;% points to poor peering / slow block propagation, so <b>raise your node's peer count</b>. <b>Stale</b> = a solution that arrived after the chain moved on (pure latency loss) — high stale&nbsp;% points to slow job refresh or miner↔node latency. <b>Rejected</b> = invalid/duplicate submissions. Orphans only settle at 1440-block maturity, so very recent windows can read 0. Stale/rejected counts depend on the node logging at <code>INFO</code>; verify the parser caught your node's wording with <code>--dry-run</code>.</p>
 </section>
 
 <footer>
@@ -1117,6 +1137,7 @@
         renderBalances();
         renderSplit();
         renderEarnChart();
+        renderQuality();
         var nve = document.getElementById('nav-earn');
         if (nve) nve.style.display = ((d.daily || []).length ? '' : 'none');
       })
@@ -1124,8 +1145,10 @@
         SPLIT.data = null;
         document.getElementById('split-card').style.display = 'none';   // feature off / mainnet absent
         document.getElementById('earn-card').style.display = 'none';
+        document.getElementById('quality-card').style.display = 'none';
         var ns = document.getElementById('nav-split'); if (ns) ns.style.display = 'none';
         var ne = document.getElementById('nav-earn'); if (ne) ne.style.display = 'none';
+        var nq = document.getElementById('nav-quality'); if (nq) nq.style.display = 'none';
       });
   }
   // Lifetime running balance per nickname: owed = Σ earnings − Σ payments. Unlike
@@ -1250,6 +1273,54 @@
     Array.prototype.forEach.call(this.querySelectorAll('button'), function (x) { x.classList.remove('active'); });
     btn.classList.add('active'); renderEarnChart();
   });
+
+  // ── Solo Health: orphan-block rate + stale/rejected share rate ──
+  // Data: split_main.json `quality.windows` (daily / weekly / monthly / yearly / all),
+  // each {accepted, stale, rejected, *_pct, matured, orphan, orphan_pct}. One row per
+  // window so the full daily→yearly trend is visible at a glance.
+  function renderQuality() {
+    var card = document.getElementById('quality-card');
+    var nq = document.getElementById('nav-quality');
+    var d = SPLIT.data;
+    var q = d && d.quality && d.quality.windows;
+    if (!q) { card.style.display = 'none'; if (nq) nq.style.display = 'none'; return; }
+    card.style.display = '';
+    if (nq) nq.style.display = '';
+    var meta = document.getElementById('quality-meta');
+    var tbody = document.querySelector('#quality-table tbody');
+    var order = [['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly'],
+                 ['yearly', 'Yearly'], ['all', 'All time']];
+    // Colour a percentage cell: green below `warn`, yellow up to `bad`, red at/above.
+    function pctCell(v, warn, bad, hasData) {
+      if (!hasData) return '<td><span class="dimv">—</span></td>';
+      var c = v >= bad ? 'red' : (v >= warn ? 'yellow' : 'green');
+      return '<td><span class="qv ' + c + '">' + Number(v).toFixed(2) + '%</span></td>';
+    }
+    var rows = order.map(function (o) {
+      var w = q[o[0]] || {};
+      var found = (w.matured || 0) + (w.orphan || 0);
+      var submitted = (w.accepted || 0) + (w.stale || 0) + (w.rejected || 0);
+      return '<tr><td><span class="w">' + o[1] + '</span></td>'
+        + '<td>' + found + '</td>'
+        + '<td>' + (w.orphan || 0) + '</td>'
+        + pctCell(w.orphan_pct || 0, 2, 5, found > 0)
+        + '<td>' + (w.accepted || 0) + '</td>'
+        + '<td>' + (w.stale || 0) + '</td>'
+        + pctCell(w.stale_pct || 0, 3, 8, submitted > 0)
+        + '<td>' + (w.rejected || 0) + '</td>'
+        + pctCell(w.reject_pct || 0, 1, 5, submitted > 0)
+        + '</tr>';
+    }).join('');
+    tbody.innerHTML = '<tr><th>Period</th><th>Found</th><th>Orphaned</th><th>Orphan %</th>'
+      + '<th>Accepted</th><th>Stale</th><th>Stale %</th><th>Rejected</th><th>Reject %</th></tr>'
+      + rows;
+    var all = q.all || {};
+    var allFound = (all.matured || 0) + (all.orphan || 0);
+    meta.innerHTML = 'All-time: <b>' + (all.orphan || 0) + '</b> orphaned of <b>' + allFound
+      + '</b> found block' + (allFound === 1 ? '' : 's')
+      + ' · <b>' + (all.stale || 0) + '</b> stale + <b>' + (all.rejected || 0)
+      + '</b> rejected shares';
+  }
 
   // ── GRIN / miner / day chart (actual bars + smoothed estimate + pool-average) ──
   // Data: split_main.json `daily` (raw per-day {blocks, reward, total_diff, nicks}).

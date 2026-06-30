@@ -140,6 +140,11 @@
   }
   .subnav::-webkit-scrollbar { height: 4px; }
   .subnav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  /* Auto-margins on the end chips center the group when it fits, and collapse to 0
+     on overflow — so narrow screens scroll from the start instead of clipping the
+     leftmost (and otherwise unreachable) chips, the classic flex+overflow bug. */
+  .subnav > a:first-child { margin-left: auto; }
+  .subnav > a:last-child  { margin-right: auto; }
   .subnav a {
     flex: 0 0 auto;
     color: var(--muted);
@@ -151,6 +156,8 @@
     white-space: nowrap;
     transition: color .15s, border-color .15s, background .15s;
   }
+  /* Desktop: text labels only; the emoji icon is the mobile fallback. */
+  .subnav a .ic { display: none; }
   .subnav a:hover { color: var(--text); border-color: var(--muted); }
   .subnav a.active {
     color: #000;
@@ -309,6 +316,8 @@
   }
 
   /* ── Time range buttons ──────────────────────────────────────────────────── */
+  /* Right-side header stack: timeframe toggle above its sample caption. */
+  .hdr-right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
   .range-btns { display: flex; gap: 4px; }
   .range-btn {
     background: transparent;
@@ -545,8 +554,12 @@
     .stat-item { padding: 10px 14px; }
     .stat-value { font-size: 18px; }
 
-    .subnav { padding: 7px 12px; gap: 5px; }
-    .subnav a { font-size: 11px; padding: 3px 9px; }
+    /* Mobile: screen too narrow for long labels — show emoji icons instead.
+       Bigger font + square-ish padding keep each chip a comfortable tap target. */
+    .subnav { padding: 7px 10px; gap: 6px; }
+    .subnav a { font-size: 16px; padding: 4px 9px; line-height: 1; }
+    .subnav a .tx { display: none; }
+    .subnav a .ic { display: inline; }
     .metric-strip { grid-template-columns: repeat(2, 1fr); gap: 10px; }
     .metric-strip .mini { padding: 10px 12px; }
     .metric-strip .mini-value { font-size: 17px; }
@@ -599,16 +612,16 @@
 
 <!-- ── In-page sub-nav (jump links + scroll-spy) ─────────────────────────── -->
 <nav class="subnav" id="subnav" aria-label="Jump to section">
-  <a href="#sec-hashrate"   data-spy="sec-hashrate">Hashrate</a>
-  <a href="#sec-difficulty" data-spy="sec-difficulty">Difficulty</a>
-  <a href="#sec-activity"   data-spy="sec-activity">Activity</a>
-  <a href="#sec-mempool"    data-spy="sec-mempool">Mempool</a>
-  <a href="#sec-chain"      data-spy="sec-chain">Kernels &amp; Outputs</a>
-  <a href="#sec-peers"      data-spy="sec-peers">Peers</a>
-  <a href="#sec-versions"   data-spy="sec-versions">Versions</a>
-  <a href="#sec-countries"  data-spy="sec-countries">Countries</a>
-  <a href="#sec-price-metrics" data-spy="sec-price-metrics">Price</a>
-  <a href="#sec-issuance"   data-spy="sec-issuance">Issuance</a>
+  <a href="#sec-hashrate"   data-spy="sec-hashrate"   aria-label="Hashrate"><span class="ic" aria-hidden="true">⚡</span><span class="tx">Hashrate</span></a>
+  <a href="#sec-difficulty" data-spy="sec-difficulty" aria-label="Difficulty"><span class="ic" aria-hidden="true">🎯</span><span class="tx">Difficulty</span></a>
+  <a href="#sec-activity"   data-spy="sec-activity"   aria-label="Activity"><span class="ic" aria-hidden="true">📊</span><span class="tx">Activity</span></a>
+  <a href="#sec-mempool"    data-spy="sec-mempool"    aria-label="Mempool"><span class="ic" aria-hidden="true">⏳</span><span class="tx">Mempool</span></a>
+  <a href="#sec-chain"      data-spy="sec-chain"      aria-label="Chain (Kernels &amp; Outputs)"><span class="ic" aria-hidden="true">🔗</span><span class="tx">Chain</span></a>
+  <a href="#sec-peers"      data-spy="sec-peers"      aria-label="Peers"><span class="ic" aria-hidden="true">🌐</span><span class="tx">Peers</span></a>
+  <a href="#sec-versions"   data-spy="sec-versions"   aria-label="Versions"><span class="ic" aria-hidden="true">🏷️</span><span class="tx">Versions</span></a>
+  <a href="#sec-countries"  data-spy="sec-countries"  aria-label="Countries"><span class="ic" aria-hidden="true">🗺️</span><span class="tx">Countries</span></a>
+  <a href="#sec-price-metrics" data-spy="sec-price-metrics" aria-label="Price"><span class="ic" aria-hidden="true">💲</span><span class="tx">Price</span></a>
+  <a href="#sec-issuance"   data-spy="sec-issuance"   aria-label="Issuance"><span class="ic" aria-hidden="true">🪙</span><span class="tx">Issuance</span></a>
 </nav>
 
 <!-- ── Stats bar ─────────────────────────────────────────────────────────── -->
@@ -871,7 +884,15 @@
   <div class="card" id="sec-versions">
     <div class="card-header">
       <div class="card-title"><span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleChartInfo('versions-info')" id="versions-info-btn">Top 10 Version Distribution</span></div>
-      <span id="versions-sample" style="color:var(--muted);font-size:12px;"></span>
+      <div class="hdr-right">
+        <div class="range-btns" id="versions-range">
+          <button class="range-btn active" data-r="week">Week</button>
+          <button class="range-btn" data-r="month">Month</button>
+          <button class="range-btn" data-r="year">Year</button>
+          <button class="range-btn" data-r="all">All Time</button>
+        </div>
+        <span id="versions-sample" style="color:var(--muted);font-size:12px;"></span>
+      </div>
     </div>
     <div class="chart-info-panel" id="versions-info-panel">
       <div class="chart-info-panel-inner">
@@ -879,7 +900,7 @@
         Distribution of Grin node client versions among peers connected to this monitoring node — a live snapshot of software adoption across the network.
         <hr class="chart-info-sep">
         <h4>How it works</h4>
-        Version strings are taken verbatim from the <code>user_agent</code> each peer reports during the Grin P2P handshake, via <code>v2/owner → get_peers</code> (routing-table query, Healthy peers only). Every named peer is kept; gossiped addresses that never handshaked (blank agent) are excluded. The chart counts peers seen in the last 7 days across <strong>both mainnet and testnet</strong> combined.
+        Version strings are taken verbatim from the <code>user_agent</code> each peer reports during the Grin P2P handshake, via <code>v2/owner → get_peers</code> (routing-table query, Healthy peers only). Every named peer is kept; gossiped addresses that never handshaked (blank agent) are excluded. Counts cover <strong>both mainnet and testnet</strong> combined; use the timeframe toggle to switch the window — <strong>Week</strong> / <strong>Month</strong> count live peers, <strong>Year</strong> / <strong>All-time</strong> show average concurrent nodes from a forward-building daily history.
         <hr class="chart-info-sep">
         <h4>Note</h4>
         Only peers directly connected to (or known to) this monitoring node are counted, so the total can be lower than the map's "Total peers". Peers running behind NAT or not reachable may be under-represented.
@@ -901,7 +922,15 @@
   <div class="card" id="sec-countries">
     <div class="card-header">
       <div class="card-title"><span class="dot dot-grin"></span><span class="chart-info-toggle" onclick="toggleChartInfo('countries-info')" id="countries-info-btn">Top 10 Countries</span></div>
-      <span id="countries-sample" style="color:var(--muted);font-size:12px;"></span>
+      <div class="hdr-right">
+        <div class="range-btns" id="countries-range">
+          <button class="range-btn active" data-r="week">Week</button>
+          <button class="range-btn" data-r="month">Month</button>
+          <button class="range-btn" data-r="year">Year</button>
+          <button class="range-btn" data-r="all">All Time</button>
+        </div>
+        <span id="countries-sample" style="color:var(--muted);font-size:12px;"></span>
+      </div>
     </div>
     <div class="chart-info-panel" id="countries-info-panel">
       <div class="chart-info-panel-inner">
@@ -909,7 +938,7 @@
         The countries hosting the most Grin nodes — a ranking of where peers connected to this monitoring node are physically located.
         <hr class="chart-info-sep">
         <h4>How it works</h4>
-        Each peer's IP is geolocated via <code>ip-api.com</code> and grouped by country over peers seen in the last 7 days across <strong>both mainnet and testnet</strong>. The top 10 countries are shown individually; everything else is summed into <em>Other countries</em>.
+        Each peer's IP is geolocated via <code>ip-api.com</code> and grouped by country across <strong>both mainnet and testnet</strong>. Use the timeframe toggle to switch the ranking window: <strong>Week</strong> / <strong>Month</strong> count distinct peers seen live; <strong>Year</strong> / <strong>All-time</strong> show the average concurrent nodes per country from a daily history that builds forward (so they fill in over time). The top 10 countries are shown individually; everything else is summed into <em>Other countries</em>.
         <hr class="chart-info-sep">
         <h4>Note</h4>
         Geolocation is approximate, and peers behind VPNs or NAT may be attributed to the exit country rather than the operator's.
@@ -1319,8 +1348,10 @@ const fmtCount = v => {
   return fmtNum(v, 0);
 };
 const fmtCountTick = v => {
-  if (v >= 1e6) return fmtNum(v / 1e6, 0) + "M";
-  if (v >= 1e3) return fmtNum(v / 1e3, 0) + "K";
+  // 1 decimal so a tight axis (e.g. 5.1M–5.9M) keeps resolution instead of
+  // collapsing every tick to a duplicated "5M"/"6M".
+  if (v >= 1e6) return fmtNum(v / 1e6, 1) + "M";
+  if (v >= 1e3) return fmtNum(v / 1e3, 1) + "K";
   return fmtNum(v, 0);
 };
 // USD money with magnitude suffix: $1.23M, $4.56K, $789
@@ -2140,12 +2171,33 @@ const _toXY = pts => {
   return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([ts, v]) => ({x: ts*1000, y: v}));
 };
 
+// X-axis bounds (ms) that reflect the *selected* timeframe rather than just
+// where data happens to exist. A forward-only series (mempool, UTXO) otherwise
+// collapses the axis to its short sampling window; this keeps the newest point
+// flush right and the window exactly Day/Week/Month/Year wide. "all" spans from
+// the earliest sample to now. Returns {} when there's nothing to anchor to.
+const _RANGE_DAYS = { day: 1, week: 7, month: 30, year: 365 };
+function rangeAxisBounds(range, pts) {
+  const xs = pts.map(p => p.x);
+  const max = Math.max(Date.now(), xs.length ? Math.max(...xs) : 0);
+  const days = _RANGE_DAYS[range];
+  if (days) return { min: max - days * 86400000, max };
+  if (xs.length) return { min: Math.min(...xs), max };   // "all"
+  return {};
+}
+function applyRangeBounds(scaleX, range, pts) {
+  const b = rangeAxisBounds(range, pts);
+  if (b.min != null) scaleX.min = b.min; else delete scaleX.min;
+  if (b.max != null) scaleX.max = b.max; else delete scaleX.max;
+}
+
 function updateMempoolChart(json, range) {
   if (!charts.mempool || !json) return;
   const data = _toXY(filterLevelByRange(json, range));
   const noDataEl = $("mempool-no-data");
   if (noDataEl) noDataEl.style.display = data.length === 0 ? "flex" : "none";
   charts.mempool.data.datasets[0].data = data;
+  applyRangeBounds(charts.mempool.options.scales.x, range, data);
   charts.mempool.update("none");
 }
 
@@ -2167,6 +2219,18 @@ function updateChainChart(kernelsJson, outputsJson, utxoJson, range, metric) {
   charts.chain.data.datasets[0].hidden = !(metric === "both" || metric === "kernels");
   charts.chain.data.datasets[1].hidden = !(metric === "both" || metric === "outputs");
   charts.chain.data.datasets[2].hidden = metric !== "utxo";
+  // Show only the axes the visible metric uses. Otherwise a hidden series leaves
+  // its axis with no data, and Chart.js falls back to a meaningless 0–1 scale
+  // (the stray "1" tick). Kernels → left (y1); Outputs/UTXO → right (y2).
+  charts.chain.options.scales.y1.display = (metric === "both" || metric === "kernels");
+  charts.chain.options.scales.y2.display = (metric === "both" || metric === "outputs" || metric === "utxo");
+  charts.chain.options.scales.y2.title.text = metric === "utxo" ? "Unspent (UTXO)" : "Outputs";
+  // Pin the x-axis to the selected timeframe so every metric shares one horizon.
+  // The UTXO line only builds forward from when sampling began, so without this
+  // its view would collapse to that short recent window instead of matching the
+  // Day/Week/Month/Year/All horizon the kernels & outputs views use. "all" spans
+  // the union of all three series (kernels/outputs reach back to genesis).
+  applyRangeBounds(charts.chain.options.scales.x, range, [...kData, ...oData, ...uData]);
   charts.chain.update("none");
 }
 
@@ -2437,18 +2501,41 @@ async function loadAll() {
   if (countries) renderCountries(countries);
 }
 
+// ── Top-10 timeframe toggle (Versions + Countries) ─────────────────────────────
+// week/month read live from known_peers; year/all are averaged from the forward-
+// building daily aggregate, so their caption says "avg nodes" not raw "peers".
+const tfState = { versions: "week", countries: "week" };
+const TF_META = {
+  week:  { label: "last 7 days",  avg: false },
+  month: { label: "last 30 days", avg: false },
+  year:  { label: "past year",    avg: true  },
+  all:   { label: "all-time",     avg: true  },
+};
+// Pick the timeframe slice for a given network, gracefully falling back to the
+// pre-timeframe shape (data.networks / top-level) for older JSON files.
+function tfSlice(data, tf, net) {
+  const t = data.timeframes && data.timeframes[tf];
+  return (t && t[net]) || (data.networks && data.networks[net]) || data;
+}
+function tfCaption(total, tf, noun) {
+  const m = TF_META[tf] || TF_META.week;
+  return m.avg
+    ? `≈ ${fmt(total)} avg ${noun} · ${m.label}`
+    : `${fmt(total)} ${noun}${total !== 1 ? "s" : ""} · ${m.label}`;
+}
+
 // ── Version donut ─────────────────────────────────────────────────────────────
 let versionChart = null;
 let versionsNetwork = "both";  // combined mainnet + testnet (toggle removed)
 
 function renderVersions(data) {
-  // Per-network breakdown lives under data.networks (added 2026-06); fall back to
-  // the top-level mainnet keys for older versions.json files.
-  const slice = (data.networks && data.networks[versionsNetwork]) || data;
+  // Per-network breakdown lives under data.timeframes[tf]/data.networks (added
+  // 2026-06); fall back to the top-level mainnet keys for older versions.json files.
+  const slice = tfSlice(data, tfState.versions, versionsNetwork);
   const versionRows = slice.versions || [];
   const total = slice.sampled_from || 0;
   $("donut-total").textContent    = fmt(total);
-  $("versions-sample").textContent = `Sampled from ${fmt(total)} peer${total !== 1 ? "s" : ""} over the last 7 days`;
+  $("versions-sample").textContent = tfCaption(total, tfState.versions, "node");
 
   const labels = versionRows.map(v => v.label);
   const counts = versionRows.map(v => v.count);
@@ -2566,10 +2653,10 @@ const countriesBarLabels = {
 };
 
 function renderCountries(data) {
-  const slice = (data.networks && data.networks.both) || data;
+  const slice = tfSlice(data, tfState.countries, "both");
   const rows  = slice.countries || [];
   const total = slice.sampled_from || 0;
-  $("countries-sample").textContent = `Sampled from ${fmt(total)} peer${total !== 1 ? "s" : ""} over the last 7 days`;
+  $("countries-sample").textContent = tfCaption(total, tfState.countries, "node");
 
   if (typeof Chart === "undefined") return;  // chart.min.js not loaded
   const labels = rows.map(r => `${countryFlag(r.code)} ${r.label}`.trim());
@@ -2686,6 +2773,22 @@ function initTheme() {
   });
 }
 
+// ── Top-10 timeframe wiring (Versions / Countries) ────────────────────────────
+// Re-renders from the already-loaded JSON (no refetch) — the timeframe variants
+// all live in the same countries.json / versions.json under .timeframes.
+function wireTimeframeGroup(groupId, key, cacheKey, renderFn) {
+  const grp = $(groupId);
+  if (!grp) return;
+  grp.querySelectorAll(".range-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      grp.querySelectorAll(".range-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      tfState[key] = btn.dataset.r;
+      if (DATA_CACHE[cacheKey]) renderFn(DATA_CACHE[cacheKey]);
+    });
+  });
+}
+
 // ── Range button wiring ───────────────────────────────────────────────────────
 function wireRangeGroup(groupId, chartKey, cacheKey) {
   $(groupId).querySelectorAll(".range-btn").forEach(btn => {
@@ -2783,6 +2886,14 @@ function initSubnav() {
   syncOffsets();
   window.addEventListener("resize", syncOffsets);
   window.addEventListener("load", syncOffsets);   // re-measure once fonts/pills settle
+  // The header height changes after first paint — the network/market pills
+  // populate asynchronously from loadAll() and can re-wrap to a different number
+  // of rows. Without re-measuring, the sub-nav stays pinned at the stale (taller)
+  // offset, leaving a gap above it where page content shows through. A
+  // ResizeObserver re-syncs on every real height change (pills, fonts, theme).
+  if (header && "ResizeObserver" in window) {
+    new ResizeObserver(syncOffsets).observe(header);
+  }
 
   const links    = [...subnav.querySelectorAll("a[data-spy]")];
   const sections = links
@@ -2831,6 +2942,8 @@ async function boot() {
   wireRangeGroup("peers-range",    "activePeers",  "activePeers");
   wireRangeGroup("price-usdt-range", "priceUsdt",  "price");
   wireRangeGroup("price-btc-range",  "priceBtc",  "price");
+  wireTimeframeGroup("versions-range",  "versions",  "versions",  renderVersions);
+  wireTimeframeGroup("countries-range", "countries", "countries", renderCountries);
   wireMetricToggles();
   wireChainToggles();
   wirePeersToggles();

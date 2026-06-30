@@ -298,6 +298,32 @@ def init_schema(conn):
             fetched  INTEGER NOT NULL,   -- unix ts when this row was last written
             PRIMARY KEY (year, asset)
         );
+
+        -- Daily per-country node counts. One row per (day, network, country); the
+        -- last collector run of each day REPLACEs it. Powers the week/month/year/
+        -- all-time Top-10 toggle (AVG of daily counts over the window). known_peers
+        -- is pruned at 30d, so this is the only source for year/all-time rankings —
+        -- it builds forward, no backfill of older history is possible.
+        CREATE TABLE IF NOT EXISTS country_daily (
+            day_ts       INTEGER NOT NULL,
+            network      TEXT    NOT NULL,
+            country_code TEXT    NOT NULL,
+            country_name TEXT    NOT NULL DEFAULT '',
+            peer_count   INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (day_ts, network, country_code)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cd_day ON country_daily(day_ts);
+
+        -- Daily per-version (user-agent) node counts. Same shape/role as
+        -- country_daily, powering the Versions Top-10 timeframe toggle.
+        CREATE TABLE IF NOT EXISTS version_daily (
+            day_ts      INTEGER NOT NULL,
+            network     TEXT    NOT NULL,
+            user_agent  TEXT    NOT NULL,
+            count       INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (day_ts, network, user_agent)
+        );
+        CREATE INDEX IF NOT EXISTS idx_vd_day ON version_daily(day_ts);
     """)
     conn.commit()
 
@@ -1608,17 +1634,51 @@ def export_all_json():
         "recent":  [[r[0], r[1]] for r in ut_recent],
     })
 
-    # ── node versions (per network: mainnet / testnet / both) ─────────────────
-    # Use all unique peers seen in the last PEER_HISTORY_DAYS for a broader sample.
-    # This captures every peer we've connected to recently, not just one run's snapshot.
-    version_cutoff = ts_now - PEER_HISTORY_DAYS * 86400
+    # ── Daily aggregate snapshot (powers the year/all-time Top-10 toggle) ──────
+    # known_peers is pruned at PEER_RETENTION_DAYS (30d), so week/month rankings can
+    # read it live but year/all-time cannot. Each run records the day's active-node
+    # counts (last 24h) per country and per version into *_daily, REPLACEing today's
+    # rows so the last run of the day wins. These tables build forward — no backfill
+    # of pre-existing history is possible. See timeframe builders below.
+    day_ts     = (ts_now // 86400) * 86400
+    day_cutoff = ts_now - 86400
+    for _net in ("mainnet", "testnet"):
+        conn.execute("DELETE FROM country_daily WHERE day_ts=? AND network=?", (day_ts, _net))
+        for _code, _name, _cnt in conn.execute(
+            "SELECT country_code, country, COUNT(*) FROM known_peers "
+            "WHERE last_seen>=? AND network=? AND country_code<>'' GROUP BY country_code",
+            (day_cutoff, _net),
+        ):
+            conn.execute(
+                "INSERT OR REPLACE INTO country_daily"
+                "(day_ts,network,country_code,country_name,peer_count) VALUES(?,?,?,?,?)",
+                (day_ts, _net, _code, _name or _code, _cnt))
+        conn.execute("DELETE FROM version_daily WHERE day_ts=? AND network=?", (day_ts, _net))
+        for _ua, _cnt in conn.execute(
+            "SELECT user_agent, COUNT(*) FROM known_peers "
+            "WHERE last_seen>=? AND network=? AND user_agent IS NOT NULL "
+            "AND TRIM(user_agent)<>'' AND user_agent<>'Unknown' GROUP BY user_agent",
+            (day_cutoff, _net),
+        ):
+            conn.execute(
+                "INSERT OR REPLACE INTO version_daily(day_ts,network,user_agent,count) "
+                "VALUES(?,?,?,?)", (day_ts, _net, _ua, _cnt))
+    conn.commit()
 
-    def _ver_rows(net):
+    # Timeframe windows. week/month query known_peers live (both within the 30d
+    # retention); year/all read the accumulating *_daily tables. year_since=None on
+    # the daily side means "all rows", capped to 365d here.
+    version_cutoff = ts_now - PEER_HISTORY_DAYS * 86400   # 7d  → "week"
+    month_cutoff   = ts_now - 30 * 86400                  # 30d → "month" (retention edge)
+    year_since     = day_ts - 364 * 86400                 # 365 daily points → "year"
+
+    # ── node versions (per network: mainnet / testnet / both) ─────────────────
+    def _ver_rows(net, cutoff):
         return conn.execute(
             "SELECT user_agent, COUNT(*) AS cnt FROM known_peers "
             "WHERE last_seen >= ? AND network=? "
             "GROUP BY user_agent ORDER BY cnt DESC",
-            (version_cutoff, net),
+            (cutoff, net),
         ).fetchall()
 
     def _ver_list(rows):
@@ -1631,23 +1691,42 @@ def export_all_json():
             vlist.append({"label": "Other versions", "count": other})
         return vlist, total
 
-    mnet_rows = _ver_rows("mainnet")
-    tnet_rows = _ver_rows("testnet")
+    def _ver_networks(rank_fn):
+        """rank_fn(net) → [(user_agent, count)] desc; builds the mainnet/testnet/both dict."""
+        m = rank_fn("mainnet")
+        t = rank_fn("testnet")
+        b = Counter()
+        for ua, cnt in m: b[ua] += cnt
+        for ua, cnt in t: b[ua] += cnt
+        mv, mt = _ver_list(m)
+        tv, tt = _ver_list(t)
+        bv, bt = _ver_list(b.most_common())
+        return {
+            "mainnet": {"versions": mv, "sampled_from": mt},
+            "testnet": {"versions": tv, "sampled_from": tt},
+            "both":    {"versions": bv, "sampled_from": bt},
+        }
 
-    # "both": merge raw per-agent counts across networks, then re-rank.
-    both_counter = Counter()
-    for ua, cnt in mnet_rows:
-        both_counter[ua] += cnt
-    for ua, cnt in tnet_rows:
-        both_counter[ua] += cnt
-    both_rows = both_counter.most_common()
+    def _ver_daily_rank(net, since):
+        """AVG concurrent nodes per version over the window (absent days count as 0)."""
+        where, params = "network=?", [net]
+        if since is not None:
+            where += " AND day_ts>=?"; params.append(since)
+        ndays = conn.execute(
+            f"SELECT COUNT(DISTINCT day_ts) FROM version_daily WHERE {where}", params
+        ).fetchone()[0] or 1
+        rows = conn.execute(
+            f"SELECT user_agent, SUM(count) FROM version_daily WHERE {where} GROUP BY user_agent",
+            params,
+        ).fetchall()
+        out = [(ua, max(1, round(s / ndays))) for ua, s in rows]
+        out.sort(key=lambda r: -r[1])
+        return out
 
-    mnet_versions, mnet_total = _ver_list(mnet_rows)
-    tnet_versions, tnet_total = _ver_list(tnet_rows)
-    both_versions, both_total = _ver_list(both_rows)
+    week_vnets  = _ver_networks(lambda n: _ver_rows(n, version_cutoff))
 
     # Fall back to latest peer_snapshots (mainnet-only) if known_peers has no data yet
-    if not mnet_rows and not tnet_rows:
+    if week_vnets["mainnet"]["sampled_from"] == 0 and week_vnets["testnet"]["sampled_from"] == 0:
         latest_snap_ts = conn.execute(
             "SELECT MAX(sampled_at) FROM peer_snapshots"
         ).fetchone()[0]
@@ -1656,31 +1735,35 @@ def export_all_json():
                 "SELECT user_agent, count FROM peer_snapshots WHERE sampled_at=? ORDER BY count DESC",
                 (latest_snap_ts,),
             ).fetchall()
-            mnet_versions, mnet_total = _ver_list(rows)
-            both_versions, both_total = mnet_versions, mnet_total
+            sv, st = _ver_list(rows)
+            week_vnets["mainnet"] = {"versions": sv, "sampled_from": st}
+            week_vnets["both"]    = {"versions": sv, "sampled_from": st}
 
     # Always write versions.json so the page can load even with no snapshot data.
-    # Top-level keys stay mainnet for backward compatibility; the per-network
-    # breakdown lives under "networks" for the page's Mainnet/Testnet/Both toggle.
+    # Top-level keys mirror the "week" mainnet view for backward compatibility; the
+    # per-network breakdown lives under "networks", and "timeframes" carries the
+    # week/month/year/all variants for the page's Top-10 timeframe toggle.
     _write_json("versions.json", {
         "updated":      ts_now,
-        "sampled_from": mnet_total,
-        "versions":     mnet_versions,
-        "networks": {
-            "mainnet": {"versions": mnet_versions, "sampled_from": mnet_total},
-            "testnet": {"versions": tnet_versions, "sampled_from": tnet_total},
-            "both":    {"versions": both_versions, "sampled_from": both_total},
+        "sampled_from": week_vnets["mainnet"]["sampled_from"],
+        "versions":     week_vnets["mainnet"]["versions"],
+        "networks":     week_vnets,
+        "timeframes": {
+            "week":  week_vnets,
+            "month": _ver_networks(lambda n: _ver_rows(n, month_cutoff)),
+            "year":  _ver_networks(lambda n: _ver_daily_rank(n, year_since)),
+            "all":   _ver_networks(lambda n: _ver_daily_rank(n, None)),
         },
     })
 
     # ── top countries (per network: mainnet / testnet / both) ─────────────────
-    # Same window + structure as versions; counts distinct peers per country.
-    def _country_rows(net):
+    # Same windows + structure as versions; counts distinct peers per country.
+    def _country_rows(net, cutoff):
         return conn.execute(
             "SELECT country_code, country, COUNT(*) AS cnt FROM known_peers "
             "WHERE last_seen >= ? AND network=? AND country_code != '' "
             "GROUP BY country_code ORDER BY cnt DESC",
-            (version_cutoff, net),
+            (cutoff, net),
         ).fetchall()
 
     def _country_list(rows):
@@ -1693,29 +1776,52 @@ def export_all_json():
             clist.append({"label": "Other countries", "code": "", "count": other})
         return clist, total
 
-    mnet_crows = _country_rows("mainnet")
-    tnet_crows = _country_rows("testnet")
+    def _country_networks(rank_fn):
+        """rank_fn(net) → [(code, name, count)] desc; builds the mainnet/testnet/both dict."""
+        m = rank_fn("mainnet")
+        t = rank_fn("testnet")
+        bc, bn = Counter(), {}
+        for code, name, cnt in m + t:
+            bc[code] += cnt
+            bn.setdefault(code, name)
+        b = [(code, bn[code], cnt) for code, cnt in bc.most_common()]
+        mc, mt = _country_list(m)
+        tc, tt = _country_list(t)
+        bcl, bt = _country_list(b)
+        return {
+            "mainnet": {"countries": mc,  "sampled_from": mt},
+            "testnet": {"countries": tc,  "sampled_from": tt},
+            "both":    {"countries": bcl, "sampled_from": bt},
+        }
 
-    # "both": merge per-country counts across networks (keep a name per code), re-rank.
-    both_ccount = Counter()
-    both_cname  = {}
-    for code, name, cnt in mnet_crows + tnet_crows:
-        both_ccount[code] += cnt
-        both_cname.setdefault(code, name)
-    both_crows = [(code, both_cname[code], cnt) for code, cnt in both_ccount.most_common()]
+    def _country_daily_rank(net, since):
+        """AVG concurrent nodes per country over the window (absent days count as 0)."""
+        where, params = "network=? AND country_code<>''", [net]
+        if since is not None:
+            where += " AND day_ts>=?"; params.append(since)
+        ndays = conn.execute(
+            f"SELECT COUNT(DISTINCT day_ts) FROM country_daily WHERE {where}", params
+        ).fetchone()[0] or 1
+        rows = conn.execute(
+            f"SELECT country_code, MAX(country_name), SUM(peer_count) "
+            f"FROM country_daily WHERE {where} GROUP BY country_code", params,
+        ).fetchall()
+        out = [(code, name, max(1, round(s / ndays))) for code, name, s in rows]
+        out.sort(key=lambda r: -r[2])
+        return out
 
-    mnet_countries, mnet_ctotal = _country_list(mnet_crows)
-    tnet_countries, tnet_ctotal = _country_list(tnet_crows)
-    both_countries, both_ctotal = _country_list(both_crows)
+    week_cnets = _country_networks(lambda n: _country_rows(n, version_cutoff))
 
     _write_json("countries.json", {
         "updated":      ts_now,
-        "sampled_from": mnet_ctotal,
-        "countries":    mnet_countries,
-        "networks": {
-            "mainnet": {"countries": mnet_countries, "sampled_from": mnet_ctotal},
-            "testnet": {"countries": tnet_countries, "sampled_from": tnet_ctotal},
-            "both":    {"countries": both_countries, "sampled_from": both_ctotal},
+        "sampled_from": week_cnets["mainnet"]["sampled_from"],
+        "countries":    week_cnets["mainnet"]["countries"],
+        "networks":     week_cnets,
+        "timeframes": {
+            "week":  week_cnets,
+            "month": _country_networks(lambda n: _country_rows(n, month_cutoff)),
+            "year":  _country_networks(lambda n: _country_daily_rank(n, year_since)),
+            "all":   _country_networks(lambda n: _country_daily_rank(n, None)),
         },
     })
 

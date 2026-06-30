@@ -17,6 +17,9 @@ From these it maintains, per network:
   - a rolling daily-average POOL hashrate history (per UTC day, ~400 days, for the
     daily/weekly/monthly trend chart)             → hashrate_<key>.json
   - a miningpoolstats-friendly pool+network summary → poolstats_<key>.json
+  - (mainnet) solo-health diagnostics — orphaned-block rate (from the chain-verified
+    ledger) + stale/rejected share rate (parsed from the node log) over 7d/30d/all
+    → the "quality" block of split_main.json (shown under the GRIN/miner/day chart)
   - a sanitized liveness summary for external uptime monitors, BOTH networks merged
     into ONE file (per-net: node/wallet/stratum up? + miners connected + blocks
     found in 24h — booleans + counts ONLY, never height/difficulty/balance/
@@ -92,6 +95,34 @@ SHARE_RE = re.compile(
     r"Got share at height\s+(?P<h>\d+).*?difficulty\s+(?P<d>\d+)\s*/\s*\d+.*?submitted by\s+(?P<w>\S+)",
     re.I,
 )
+
+
+def classify_share_quality(line):
+    """Classify a NON-accepted share-submission log line as 'stale' | 'rejected',
+    or None if the line is not a share rejection.
+
+    The grin stratum logs a rejection at WARN/ERROR when a miner's submission is not
+    a usable accepted share — separate lines from the "Got share …" accepted line
+    (handled by SHARE_RE) and the "Solution Found …" block line (FOUND_RE), so this
+    never double-counts those. Two buckets:
+      * STALE  — a valid solution that arrived for a height the chain already passed
+                 ("submitted too late"). Pure latency loss: faster job refresh / lower
+                 miner↔node latency reduces it.
+      * REJECT — a submission that failed PoW validation, was a duplicate, or was
+                 otherwise invalid.
+    grin's exact wording has drifted across versions, so we match on stable tokens
+    rather than a rigid format. `--dry-run` prints stale/rejected counts so an operator
+    can confirm these patterns against their own node and widen them if needed."""
+    low = line.lower()
+    if "height" not in low or "got share" in low or "solution found" in low:
+        return None
+    if "too late" in low or ("stale" in low and "share" in low):
+        return "stale"
+    if ("failed to validate solution" in low or "duplicate share" in low
+            or "invalid solution" in low or "share rejected" in low
+            or "rejected share" in low):
+        return "rejected"
+    return None
 
 # grin log timestamp prefix, e.g. "20260531 12:00:00.123"
 TS_RE = re.compile(r"^(\d{8})\s+(\d{2}:\d{2}:\d{2})(?:\.\d+)?")
@@ -250,6 +281,7 @@ CREATE TABLE IF NOT EXISTS found_blocks  (height INTEGER PRIMARY KEY, ts REAL NO
 CREATE TABLE IF NOT EXISTS workers       (worker TEXT PRIMARY KEY, last_seen REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS worker_buckets(worker TEXT NOT NULL, bucket INTEGER NOT NULL, diff REAL NOT NULL, PRIMARY KEY (worker, bucket));
 CREATE TABLE IF NOT EXISTS hr_days       (day TEXT PRIMARY KEY, diff_sum INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS share_quality (day TEXT PRIMARY KEY, accepted INTEGER NOT NULL DEFAULT 0, stale INTEGER NOT NULL DEFAULT 0, rejected INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS ledger_days   (day TEXT PRIMARY KEY, blocks_matured INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS ledger_worker (day TEXT NOT NULL, worker TEXT NOT NULL, diff INTEGER NOT NULL, PRIMARY KEY (day, worker));
 CREATE TABLE IF NOT EXISTS ledger_blocks (height INTEGER PRIMARY KEY, status TEXT NOT NULL);
@@ -308,10 +340,14 @@ def load_state_db(conn):
         if wk is not None:
             wk["buckets"][str(b)] = d
     hr_days = {day: ds for day, ds in conn.execute("SELECT day, diff_sum FROM hr_days")}
+    quality = {}
+    for day, a, s, r in conn.execute(
+            "SELECT day, accepted, stale, rejected FROM share_quality"):
+        quality[day] = {"accepted": a, "stale": s, "rejected": r}
     net_prev = json.loads(_meta_get(conn, "net_prev", "{}"))
     log_pos = json.loads(_meta_get(conn, "log_pos", "{}"))
     return {"found": found, "hashes": hashes, "found_by": found_by, "workers": workers,
-            "net_prev": net_prev, "hr_days": hr_days, "log_pos": log_pos}
+            "net_prev": net_prev, "hr_days": hr_days, "quality": quality, "log_pos": log_pos}
 
 
 def save_state_db(conn, state):
@@ -338,6 +374,11 @@ def save_state_db(conn, state):
         conn.execute("DELETE FROM hr_days")
         conn.executemany("INSERT INTO hr_days(day, diff_sum) VALUES (?, ?)",
                          [(day, int(v)) for day, v in state["hr_days"].items()])
+        conn.execute("DELETE FROM share_quality")
+        conn.executemany(
+            "INSERT INTO share_quality(day, accepted, stale, rejected) VALUES (?, ?, ?, ?)",
+            [(day, int(q.get("accepted", 0)), int(q.get("stale", 0)), int(q.get("rejected", 0)))
+             for day, q in state.get("quality", {}).items()])
         _meta_set(conn, "net_prev", json.dumps(state["net_prev"]))
         _meta_set(conn, "log_pos", json.dumps(state["log_pos"]))
 
@@ -951,6 +992,71 @@ def compute_daily(ledger, found, now, max_days=366):
     return out
 
 
+def build_quality(quality_days, ledger, found, now):
+    """Solo-health diagnostics over rolling windows (daily / weekly / monthly / yearly
+    / all-time): orphaned-block rate and stale/rejected share rate. Surfaced under the
+    GRIN/miner/day chart so an operator can see the two ways solo silently loses
+    effective hashrate vs. a pool:
+
+      * ORPHANS — a block we found that lost the propagation race and was reorged out
+        (earns nothing). Taken from the CHAIN-VERIFIED payout ledger
+        (ledger['blocks'][height] = 'matured' | 'orphan'), windowed by the block's
+        found-day. orphan_pct = orphan / (matured + orphan). High → poor peering /
+        slow propagation (raise peer count).
+      * STALE / REJECTED shares — work submitted too late (chain moved on) or invalid,
+        counted from the node log. _pct is of all submitted shares (accepted+stale+
+        rejected). High stale → slow job refresh / miner↔node latency.
+
+    Each window draws on the SAME daily counters (share_quality, ~5 yr retention) +
+    ledger block statuses, so daily→yearly are just different roll-up spans of one
+    history. A window with no matured/orphaned blocks yet (orphans only settle at 1440
+    maturity) reports zeros — expected for a fresh node."""
+    blocks = (ledger or {}).get("blocks", {})
+
+    def window(day_edge, ts_edge):
+        """day_edge — earliest UTC day-key to include (None = all); ts_edge — matching
+        epoch floor for block found-times (None = all)."""
+        a = s = r = 0
+        for day, q in quality_days.items():
+            if day_edge is not None and day < day_edge:
+                continue
+            a += int(q.get("accepted", 0))
+            s += int(q.get("stale", 0))
+            r += int(q.get("rejected", 0))
+        m = o = 0
+        for h, st in blocks.items():
+            if ts_edge is not None:
+                ts = found.get(h)
+                if ts is None or ts < ts_edge:
+                    continue
+            if st == "matured":
+                m += 1
+            elif st == "orphan":
+                o += 1
+        submitted = a + s + r
+        found_blocks = m + o
+        return {
+            "accepted": a, "stale": s, "rejected": r,
+            "stale_pct": round(s / submitted * 100, 2) if submitted else 0.0,
+            "reject_pct": round(r / submitted * 100, 2) if submitted else 0.0,
+            "matured": m, "orphan": o,
+            "orphan_pct": round(o / found_blocks * 100, 2) if found_blocks else 0.0,
+        }
+
+    def back(days):
+        return utc_day(now - days * 86400), now - days * 86400
+
+    midnight = datetime.fromtimestamp(now, timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0).timestamp()
+    return {"windows": {
+        "daily":   window(utc_day(now), midnight),   # today (UTC) only
+        "weekly":  window(*back(7)),
+        "monthly": window(*back(30)),
+        "yearly":  window(*back(365)),
+        "all":     window(None, None),
+    }}
+
+
 # ── log scanning ─────────────────────────────────────────────────────────────
 def _consume_found(line, found, hashes, found_by=None, last_share=None):
     mf = FOUND_RE.search(line)
@@ -972,8 +1078,21 @@ def _consume_found(line, found, hashes, found_by=None, last_share=None):
     return True
 
 
-def scan_increment(main_log, pos_state, found, hashes, workers, found_by, backfill):
-    """Read new log content; update found{}, hashes{}, found_by{} and workers{}; return new pos_state."""
+def _bump_quality(quality, ts, kind):
+    """Increment the day-bucketed share-quality counter (accepted/stale/rejected).
+    Day-keyed (UTC) and accumulated incrementally as NEW log lines are scanned (the
+    log_pos cursor guarantees each line is counted once), unlike hr_days which is
+    recomputed each run from the sliding bucket window."""
+    if quality is None:
+        return
+    q = quality.setdefault(utc_day(ts), {"accepted": 0, "stale": 0, "rejected": 0})
+    q[kind] = q.get(kind, 0) + 1
+
+
+def scan_increment(main_log, pos_state, found, hashes, workers, found_by, backfill,
+                   quality=None):
+    """Read new log content; update found{}, hashes{}, found_by{}, workers{} and the
+    day-bucketed quality{} share counters; return new pos_state."""
     last_share = {}   # most recent "Got share" line: {height, worker} — drives found_by
     def handle_line(line):
         if _consume_found(line, found, hashes, found_by, last_share):
@@ -992,6 +1111,11 @@ def scan_increment(main_log, pos_state, found, hashes, workers, found_by, backfi
             # heavy-tailed actual difficulty the log reports, so one lucky share
             # cannot spike the hashrate estimate or the payout split.
             wk["buckets"][b] = wk["buckets"].get(b, 0.0) + SHARE_CREDIT_DIFF
+            _bump_quality(quality, ts, "accepted")
+            return
+        kind = classify_share_quality(line)
+        if kind:
+            _bump_quality(quality, parse_epoch(line) or time.time(), kind)
 
     # First run (no state) — backfill found blocks from rotated logs too.
     if backfill:
@@ -1262,8 +1386,9 @@ def main():
         return 2
 
     if args.dry_run:
-        nb = nsh = 0
+        nb = nsh = nstale = nrej = 0
         seen = set()
+        sample = {"stale": None, "rejected": None}
         files = [args.log] + [f for f in sorted(glob.glob(args.log + "*")) if f != args.log]
         for fpath in files:
             try:
@@ -1275,10 +1400,25 @@ def main():
                         if ms:
                             nsh += 1
                             seen.add(ms.group("w").strip().strip(".,"))
+                            continue
+                        kind = classify_share_quality(line)
+                        if kind == "stale":
+                            nstale += 1
+                            sample["stale"] = sample["stale"] or line.strip()
+                        elif kind == "rejected":
+                            nrej += 1
+                            sample["rejected"] = sample["rejected"] or line.strip()
             except OSError:
                 continue
-        print(f"[dry-run] {nb} block-solved line(s), {nsh} share line(s), "
+        print(f"[dry-run] {nb} block-solved line(s), {nsh} accepted-share line(s), "
               f"{len(seen)} worker(s): {', '.join(sorted(seen)) or '—'}")
+        print(f"[dry-run] {nstale} stale share line(s), {nrej} rejected share line(s)")
+        # If these counts look wrong for your grin version, the first matched sample
+        # of each shows what the patterns caught — widen classify_share_quality if needed.
+        if sample["stale"]:
+            print(f"[dry-run]   stale e.g.: {sample['stale']}")
+        if sample["rejected"]:
+            print(f"[dry-run]   rejected e.g.: {sample['rejected']}")
         return 0
 
     now = time.time()
@@ -1293,10 +1433,15 @@ def main():
     workers = state["workers"]
     net_prev = state["net_prev"]
     hr_days = state["hr_days"]
+    quality = state["quality"]
     pos_state = state["log_pos"]
     backfill = not found and not workers and not pos_state
 
-    pos_state = scan_increment(args.log, pos_state, found, hashes, workers, found_by, backfill)
+    pos_state = scan_increment(args.log, pos_state, found, hashes, workers, found_by,
+                               backfill, quality)
+    cutoff_q = utc_day(now - HR_HISTORY_RETENTION_DAYS * 86400)
+    for day in [d for d in quality if d < cutoff_q]:
+        del quality[day]
 
     status = query_node_status(args.net)
     found, hashes, blocks_payload = build_blocks(found, hashes, now)
@@ -1309,7 +1454,7 @@ def main():
 
     save_state_db(conn, {
         "found": found, "hashes": hashes, "found_by": found_by, "workers": workers,
-        "net_prev": net_prev, "hr_days": hr_days, "log_pos": pos_state,
+        "net_prev": net_prev, "hr_days": hr_days, "quality": quality, "log_pos": pos_state,
     })
 
     # ── Payout split (mainnet only) ──────────────────────────────────────────
@@ -1329,6 +1474,7 @@ def main():
                     "block_reward": BLOCK_REWARD_GRIN, "maturity": MAINNET_MATURITY,
                     "periods": compute_split(ledger, found, found_by, now),
                     "daily": compute_daily(ledger, found, now),
+                    "quality": build_quality(quality, ledger, found, now),
                     "balances": balances, "totals": totals,
                 }, 0o644)
             elif os.path.exists(split_path):

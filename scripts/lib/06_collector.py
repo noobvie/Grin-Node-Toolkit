@@ -299,36 +299,10 @@ def init_schema(conn):
             PRIMARY KEY (year, asset)
         );
 
-        -- Daily per-country node counts. One row per (day, network, country); the
-        -- last collector run of each day REPLACEs it. Powers the week/month/year/
-        -- all-time Top-10 toggle (AVG of daily counts over the window). known_peers
-        -- is pruned at 30d, so this is the only source for year/all-time rankings —
-        -- it builds forward, no backfill of older history is possible.
-        CREATE TABLE IF NOT EXISTS country_daily (
-            day_ts       INTEGER NOT NULL,
-            network      TEXT    NOT NULL,
-            country_code TEXT    NOT NULL,
-            country_name TEXT    NOT NULL DEFAULT '',
-            peer_count   INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (day_ts, network, country_code)
-        );
-        CREATE INDEX IF NOT EXISTS idx_cd_day ON country_daily(day_ts);
-
-        -- Daily per-version (user-agent) node counts. Same shape/role as
-        -- country_daily, powering the Versions Top-10 timeframe toggle.
-        CREATE TABLE IF NOT EXISTS version_daily (
-            day_ts      INTEGER NOT NULL,
-            network     TEXT    NOT NULL,
-            user_agent  TEXT    NOT NULL,
-            count       INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (day_ts, network, user_agent)
-        );
-        CREATE INDEX IF NOT EXISTS idx_vd_day ON version_daily(day_ts);
-
         -- Cumulative registry of EVERY distinct node ever seen (one row per ip+network,
-        -- upserted each run). known_peers is pruned at 30d and the *_daily tables store
-        -- only counts, so this is the ONLY source able to count DISTINCT nodes ever for
-        -- the "All Time" Top-10 ranking. Builds forward from first deploy; tiny
+        -- upserted each run). known_peers is pruned at 30d, so this is the ONLY source
+        -- able to count DISTINCT nodes ever for both the Year (last_seen within 365d) and
+        -- "All Time" Top-10 rankings. Builds forward from first deploy; tiny
         -- (~100 B/row → single-digit MB even at tens of thousands of nodes). geo/version
         -- reflect the node's most-recent attribution (refreshed on each upsert).
         CREATE TABLE IF NOT EXISTS seen_peers (
@@ -371,6 +345,16 @@ def init_schema(conn):
     for col in ("kernel_mmr", "output_mmr"):
         if col not in bcols:
             conn.execute(f"ALTER TABLE blocks ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
+    conn.commit()
+
+    # Drop the retired daily-rollup tables. The Year/All-Time Top-10 toggle now reads
+    # DISTINCT nodes from seen_peers (year = last_seen within 365d), so these per-day
+    # count aggregates are dead weight on any DB deployed before the switch. Inert on
+    # fresh DBs (tables never created).
+    conn.executescript("""
+        DROP TABLE IF EXISTS country_daily;
+        DROP TABLE IF EXISTS version_daily;
+    """)
     conn.commit()
 
 def get_meta(conn, key, default=None):
@@ -1652,41 +1636,12 @@ def export_all_json():
         "recent":  [[r[0], r[1]] for r in ut_recent],
     })
 
-    # ── Daily aggregate snapshot (powers the year/all-time Top-10 toggle) ──────
-    # known_peers is pruned at PEER_RETENTION_DAYS (30d), so week/month rankings can
-    # read it live but year/all-time cannot. Each run records the day's active-node
-    # counts (last 24h) per country and per version into *_daily, REPLACEing today's
-    # rows so the last run of the day wins. These tables build forward — no backfill
-    # of pre-existing history is possible. See timeframe builders below.
-    day_ts     = (ts_now // 86400) * 86400
-    day_cutoff = ts_now - 86400
-    for _net in ("mainnet", "testnet"):
-        conn.execute("DELETE FROM country_daily WHERE day_ts=? AND network=?", (day_ts, _net))
-        for _code, _name, _cnt in conn.execute(
-            "SELECT country_code, country, COUNT(*) FROM known_peers "
-            "WHERE last_seen>=? AND network=? AND country_code<>'' GROUP BY country_code",
-            (day_cutoff, _net),
-        ):
-            conn.execute(
-                "INSERT OR REPLACE INTO country_daily"
-                "(day_ts,network,country_code,country_name,peer_count) VALUES(?,?,?,?,?)",
-                (day_ts, _net, _code, _name or _code, _cnt))
-        conn.execute("DELETE FROM version_daily WHERE day_ts=? AND network=?", (day_ts, _net))
-        for _ua, _cnt in conn.execute(
-            "SELECT user_agent, COUNT(*) FROM known_peers "
-            "WHERE last_seen>=? AND network=? AND user_agent IS NOT NULL "
-            "AND TRIM(user_agent)<>'' AND user_agent<>'Unknown' GROUP BY user_agent",
-            (day_cutoff, _net),
-        ):
-            conn.execute(
-                "INSERT OR REPLACE INTO version_daily(day_ts,network,user_agent,count) "
-                "VALUES(?,?,?,?)", (day_ts, _net, _ua, _cnt))
-
-    # Accumulate the all-time distinct-node registry (powers the "All Time" Top-10 =
-    # DISTINCT nodes ever seen). UPSERT from the live known_peers set: first_seen keeps
-    # the earliest ever recorded, last_seen + geo/version refresh to the most recent.
-    # One row per (ip, network) forever — the only structure that can count distinct
-    # nodes across all time, since known_peers is pruned at 30d.
+    # ── Distinct-node registry (powers the Year + All-Time Top-10 toggle) ──────
+    # known_peers is pruned at PEER_RETENTION_DAYS (30d), so year/all-time rankings
+    # cannot read it live — they read seen_peers instead. Accumulate it here: UPSERT
+    # from the live known_peers set (first_seen keeps the earliest ever recorded,
+    # last_seen + geo/version refresh to the most recent). One row per (ip, network)
+    # forever — the only structure that can count distinct nodes across all time.
     conn.execute("""
         INSERT INTO seen_peers (ip, network, country_code, country, user_agent, first_seen, last_seen)
         SELECT ip, network, country_code, country, COALESCE(user_agent, ''), first_seen, last_seen
@@ -1700,12 +1655,13 @@ def export_all_json():
     """)
     conn.commit()
 
-    # Timeframe windows. week/month query known_peers live (both within the 30d
-    # retention); year/all read the accumulating *_daily tables. year_since=None on
-    # the daily side means "all rows", capped to 365d here.
-    version_cutoff = ts_now - PEER_HISTORY_DAYS * 86400   # 7d  → "week"
-    month_cutoff   = ts_now - 30 * 86400                  # 30d → "month" (retention edge)
-    year_since     = day_ts - 364 * 86400                 # 365 daily points → "year"
+    # Timeframe windows. All four are DISTINCT-node counts, so they nest
+    # week <= month <= year <= all. week/month query known_peers live (both within the
+    # 30d retention); year/all read the seen_peers registry — year filters last_seen to
+    # the past 365d, all counts every distinct node ever.
+    version_cutoff = ts_now - PEER_HISTORY_DAYS * 86400   # 7d   → "week"
+    month_cutoff   = ts_now - 30 * 86400                  # 30d  → "month" (retention edge)
+    year_cutoff    = ts_now - 365 * 86400                 # 365d → "year" (seen_peers.last_seen)
 
     # ── node versions (per network: mainnet / testnet / both) ─────────────────
     def _ver_rows(net, cutoff):
@@ -1742,29 +1698,17 @@ def export_all_json():
             "both":    {"versions": bv, "sampled_from": bt},
         }
 
-    def _ver_daily_rank(net, since):
-        """AVG concurrent nodes per version over the window (absent days count as 0)."""
-        where, params = "network=?", [net]
+    def _ver_seen_unique(net, since=None):
+        """DISTINCT nodes seen, grouped by version, from seen_peers. since=None →
+        all-time; since=<ts> → nodes with last_seen in that window (Year = past 365d)."""
+        where = ("network=? AND user_agent IS NOT NULL AND TRIM(user_agent)<>'' "
+                 "AND user_agent<>'Unknown'")
+        params = [net]
         if since is not None:
-            where += " AND day_ts>=?"; params.append(since)
-        ndays = conn.execute(
-            f"SELECT COUNT(DISTINCT day_ts) FROM version_daily WHERE {where}", params
-        ).fetchone()[0] or 1
+            where += " AND last_seen>=?"; params.append(since)
         rows = conn.execute(
-            f"SELECT user_agent, SUM(count) FROM version_daily WHERE {where} GROUP BY user_agent",
+            f"SELECT user_agent, COUNT(*) FROM seen_peers WHERE {where} GROUP BY user_agent",
             params,
-        ).fetchall()
-        out = [(ua, max(1, round(s / ndays))) for ua, s in rows]
-        out.sort(key=lambda r: -r[1])
-        return out
-
-    def _ver_seen_unique(net):
-        """All-time: COUNT of DISTINCT nodes ever seen, grouped by version (from seen_peers)."""
-        rows = conn.execute(
-            "SELECT user_agent, COUNT(*) FROM seen_peers "
-            "WHERE network=? AND user_agent IS NOT NULL AND TRIM(user_agent)<>'' "
-            "AND user_agent<>'Unknown' GROUP BY user_agent",
-            (net,),
         ).fetchall()
         out = [(ua, cnt) for ua, cnt in rows]
         out.sort(key=lambda r: -r[1])
@@ -1798,7 +1742,7 @@ def export_all_json():
         "timeframes": {
             "week":  week_vnets,
             "month": _ver_networks(lambda n: _ver_rows(n, month_cutoff)),
-            "year":  _ver_networks(lambda n: _ver_daily_rank(n, year_since)),
+            "year":  _ver_networks(lambda n: _ver_seen_unique(n, year_cutoff)),
             "all":   _ver_networks(lambda n: _ver_seen_unique(n)),
         },
     })
@@ -1841,28 +1785,15 @@ def export_all_json():
             "both":    {"countries": bcl, "sampled_from": bt},
         }
 
-    def _country_daily_rank(net, since):
-        """AVG concurrent nodes per country over the window (absent days count as 0)."""
+    def _country_seen_unique(net, since=None):
+        """DISTINCT nodes seen, grouped by country, from seen_peers. since=None →
+        all-time; since=<ts> → nodes with last_seen in that window (Year = past 365d)."""
         where, params = "network=? AND country_code<>''", [net]
         if since is not None:
-            where += " AND day_ts>=?"; params.append(since)
-        ndays = conn.execute(
-            f"SELECT COUNT(DISTINCT day_ts) FROM country_daily WHERE {where}", params
-        ).fetchone()[0] or 1
+            where += " AND last_seen>=?"; params.append(since)
         rows = conn.execute(
-            f"SELECT country_code, MAX(country_name), SUM(peer_count) "
-            f"FROM country_daily WHERE {where} GROUP BY country_code", params,
-        ).fetchall()
-        out = [(code, name, max(1, round(s / ndays))) for code, name, s in rows]
-        out.sort(key=lambda r: -r[2])
-        return out
-
-    def _country_seen_unique(net):
-        """All-time: COUNT of DISTINCT nodes ever seen, grouped by country (from seen_peers)."""
-        rows = conn.execute(
-            "SELECT country_code, MAX(country), COUNT(*) "
-            "FROM seen_peers WHERE network=? AND country_code<>'' GROUP BY country_code",
-            (net,),
+            f"SELECT country_code, MAX(country), COUNT(*) "
+            f"FROM seen_peers WHERE {where} GROUP BY country_code", params,
         ).fetchall()
         out = [(code, name, cnt) for code, name, cnt in rows]
         out.sort(key=lambda r: -r[2])
@@ -1878,7 +1809,7 @@ def export_all_json():
         "timeframes": {
             "week":  week_cnets,
             "month": _country_networks(lambda n: _country_rows(n, month_cutoff)),
-            "year":  _country_networks(lambda n: _country_daily_rank(n, year_since)),
+            "year":  _country_networks(lambda n: _country_seen_unique(n, year_cutoff)),
             "all":   _country_networks(lambda n: _country_seen_unique(n)),
         },
     })

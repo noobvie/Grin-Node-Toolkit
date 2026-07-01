@@ -900,7 +900,7 @@
         Distribution of Grin node client versions among peers connected to this monitoring node — a live snapshot of software adoption across the network.
         <hr class="chart-info-sep">
         <h4>How it works</h4>
-        Version strings are taken verbatim from the <code>user_agent</code> each peer reports during the Grin P2P handshake, via <code>v2/owner → get_peers</code> (routing-table query, Healthy peers only). Every named peer is kept; gossiped addresses that never handshaked (blank agent) are excluded. Counts cover <strong>both mainnet and testnet</strong> combined; use the timeframe toggle to switch the window — <strong>Week</strong> / <strong>Month</strong> count live peers, <strong>Year</strong> shows the average concurrent nodes per day, and <strong>All Time</strong> counts every distinct node ever seen (cumulative reach, so it grows forever and starts small).
+        Version strings are taken verbatim from the <code>user_agent</code> each peer reports during the Grin P2P handshake, via <code>v2/owner → get_peers</code> (routing-table query, Healthy peers only). Every named peer is kept; gossiped addresses that never handshaked (blank agent) are excluded. Counts cover <strong>both mainnet and testnet</strong> combined; use the timeframe toggle to switch the window — <strong>Week</strong> / <strong>Month</strong> count live peers; <strong>Year</strong> counts distinct nodes active in the past 365 days; <strong>All Time</strong> counts every distinct node ever seen (cumulative reach — it builds forward, so it starts small, grows over time, and matches Year until a full year of history has accrued).
         <hr class="chart-info-sep">
         <h4>Note</h4>
         Only peers directly connected to (or known to) this monitoring node are counted, so the total can be lower than the map's "Total peers". Peers running behind NAT or not reachable may be under-represented.
@@ -938,7 +938,7 @@
         The countries hosting the most Grin nodes — a ranking of where peers connected to this monitoring node are physically located.
         <hr class="chart-info-sep">
         <h4>How it works</h4>
-        Each peer's IP is geolocated via <code>ip-api.com</code> and grouped by country across <strong>both mainnet and testnet</strong>. Use the timeframe toggle to switch the ranking window: <strong>Week</strong> / <strong>Month</strong> count distinct peers seen live; <strong>Year</strong> shows the average concurrent nodes per country per day; <strong>All Time</strong> counts every distinct node ever seen per country (cumulative reach — it builds forward, so it starts small and grows over time). The top 10 countries are shown individually; everything else is summed into <em>Other countries</em>.
+        Each peer's IP is geolocated via <code>ip-api.com</code> and grouped by country across <strong>both mainnet and testnet</strong>. Use the timeframe toggle to switch the ranking window: <strong>Week</strong> / <strong>Month</strong> count distinct peers seen live; <strong>Year</strong> counts distinct nodes per country active in the past 365 days; <strong>All Time</strong> counts every distinct node ever seen per country (cumulative reach — it builds forward, so it starts small, grows over time, and matches Year until a full year of history has accrued). The top 10 countries are shown individually; everything else is summed into <em>Other countries</em>.
         <hr class="chart-info-sep">
         <h4>Note</h4>
         Geolocation is approximate, and peers behind VPNs or NAT may be attributed to the exit country rather than the operator's.
@@ -2537,21 +2537,20 @@ async function loadAll() {
 }
 
 // ── Top-10 timeframe toggle (Versions + Countries) ─────────────────────────────
-// THREE different metrics share this toggle, so the caption must say which one:
-//  • week/month ("seen") read live from known_peers = the CUMULATIVE set of distinct
-//    nodes DISCOVERED across the window. Because our node rotates its peer
-//    connections, the longer the window the more of the real network it has seen.
-//  • year ("avg") reads the forward-building daily aggregate = the TYPICAL number of
-//    nodes online on a given day (average concurrent) over the past 365 days.
-//  • all ("total") reads the seen_peers registry = the count of DISTINCT nodes EVER
-//    seen (cumulative reach). This is the biggest number — it never forgets a node
-//    and never double-counts one that stays up. Builds forward, so it starts small.
+// All four windows count DISTINCT nodes, so they nest week<=month<=year<=all and the
+// caption just names the window. Two data sources under the hood:
+//  • week/month ("seen") read live from known_peers (30d retention) = distinct nodes
+//    seen in the window. Peer rotation means the longer the window, the more seen.
+//  • year/all ("distinct") read the seen_peers registry: year = distinct nodes active
+//    in the past 365d (last_seen filter), all = every distinct node ever seen
+//    (cumulative reach). Builds forward, so year == all until >1yr of history exists,
+//    then all-time pulls ahead permanently.
 const tfState = { versions: "week", countries: "week" };
 const TF_META = {
-  week:  { label: "last 7 days",  mode: "seen"  },
-  month: { label: "last 30 days", mode: "seen"  },
-  year:  { label: "past year",    mode: "avg"   },
-  all:   { label: "all-time",     mode: "total" },
+  week:  { label: "last 7 days",  mode: "seen"     },
+  month: { label: "last 30 days", mode: "seen"     },
+  year:  { label: "past year",    mode: "distinct" },
+  all:   { label: "all-time",     mode: "distinct" },
 };
 // Pick the timeframe slice for a given network, gracefully falling back to the
 // pre-timeframe shape (data.networks / top-level) for older JSON files.
@@ -2562,10 +2561,8 @@ function tfSlice(data, tf, net) {
 function tfCaption(total, tf, noun) {
   const m = TF_META[tf] || TF_META.week;
   const plural = total !== 1 ? "s" : "";
-  if (m.mode === "avg")
-    return `≈ ${fmt(total)} avg ${noun}${plural}/day · ${m.label}`;
-  if (m.mode === "total")
-    return `${fmt(total)} distinct ${noun}${plural} ever · all-time`;
+  if (m.mode === "distinct")
+    return `${fmt(total)} distinct ${noun}${plural} · ${m.label}`;
   return `${fmt(total)} ${noun}${plural} seen · ${m.label}`;
 }
 

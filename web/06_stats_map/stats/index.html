@@ -1217,7 +1217,7 @@ async function boot() {
   try {
     const data = await fetch(DATA_URL + "?t=" + Date.now()).then(r => r.json());
 
-    // Filter to peers active in the last 48 hours
+    // Filter to peers active in the last 7 days (ACTIVE_WINDOW_SEC = PEER_HISTORY_DAYS)
     const now    = Math.floor(Date.now() / 1000);
     const cutoff = now - ACTIVE_WINDOW_SEC;
     const peers  = (data.peers || []).filter(p =>

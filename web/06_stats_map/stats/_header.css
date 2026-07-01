@@ -18,6 +18,8 @@ header {
   align-items: center;
   flex-shrink: 0;
   gap: 12px;
+  position: sticky;
+  top: 0;
   z-index: 1050;
 }
 .logo { display: flex; align-items: center; gap: 8px; }

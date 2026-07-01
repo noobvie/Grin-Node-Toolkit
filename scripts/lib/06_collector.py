@@ -216,10 +216,31 @@ def init_schema(conn):
             timestamp       INTEGER NOT NULL,
             total_diff      INTEGER NOT NULL,
             hashrate        REAL,
+            kernel_mmr      INTEGER NOT NULL DEFAULT 0,
+            output_mmr      INTEGER NOT NULL DEFAULT 0,
             bucket          TEXT NOT NULL DEFAULT 'recent'
         );
         CREATE INDEX IF NOT EXISTS idx_blocks_ts     ON blocks(timestamp);
         CREATE INDEX IF NOT EXISTS idx_blocks_bucket ON blocks(bucket);
+
+        -- Mempool (unconfirmed tx pool) size sampled every --update run.
+        -- Forward-only: the node has no record of past pool sizes, so this builds
+        -- a history going forward from when sampling began (like peer counts).
+        CREATE TABLE IF NOT EXISTS mempool_history (
+            sampled_at  INTEGER PRIMARY KEY,
+            pool_size   INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_mempool_ts ON mempool_history(sampled_at);
+
+        -- Live UTXO-set size (count of unspent outputs) — derived by paginating the
+        -- node's get_unspent_outputs (same method grincoin.org/aglkm uses). Throttled
+        -- (not every run) and forward-only: the unspent set only exists at the tip, so
+        -- past sizes can't be reconstructed and the history builds forward.
+        CREATE TABLE IF NOT EXISTS utxo_history (
+            sampled_at  INTEGER PRIMARY KEY,
+            utxo_count  INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_utxo_ts ON utxo_history(sampled_at);
 
         CREATE TABLE IF NOT EXISTS block_stats (
             height          INTEGER PRIMARY KEY,
@@ -264,7 +285,8 @@ def init_schema(conn):
         CREATE TABLE IF NOT EXISTS peer_count_history (
             sampled_at      INTEGER NOT NULL,
             mainnet_count   INTEGER NOT NULL DEFAULT 0,
-            testnet_count   INTEGER NOT NULL DEFAULT 0
+            testnet_count   INTEGER NOT NULL DEFAULT 0,
+            country_count   INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_pch_ts ON peer_count_history(sampled_at);
 
@@ -276,6 +298,32 @@ def init_schema(conn):
             fetched  INTEGER NOT NULL,   -- unix ts when this row was last written
             PRIMARY KEY (year, asset)
         );
+
+        -- Daily per-country node counts. One row per (day, network, country); the
+        -- last collector run of each day REPLACEs it. Powers the week/month/year/
+        -- all-time Top-10 toggle (AVG of daily counts over the window). known_peers
+        -- is pruned at 30d, so this is the only source for year/all-time rankings —
+        -- it builds forward, no backfill of older history is possible.
+        CREATE TABLE IF NOT EXISTS country_daily (
+            day_ts       INTEGER NOT NULL,
+            network      TEXT    NOT NULL,
+            country_code TEXT    NOT NULL,
+            country_name TEXT    NOT NULL DEFAULT '',
+            peer_count   INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (day_ts, network, country_code)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cd_day ON country_daily(day_ts);
+
+        -- Daily per-version (user-agent) node counts. Same shape/role as
+        -- country_daily, powering the Versions Top-10 timeframe toggle.
+        CREATE TABLE IF NOT EXISTS version_daily (
+            day_ts      INTEGER NOT NULL,
+            network     TEXT    NOT NULL,
+            user_agent  TEXT    NOT NULL,
+            count       INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (day_ts, network, user_agent)
+        );
+        CREATE INDEX IF NOT EXISTS idx_vd_day ON version_daily(day_ts);
     """)
     conn.commit()
 
@@ -288,6 +336,24 @@ def init_schema(conn):
             UPDATE peer_count_history SET mainnet_count = count;
         """)
         conn.commit()
+        cols.update({"mainnet_count", "testnet_count"})
+    # Add country_count to existing peer_count_history (distinct countries hosting
+    # a node per sample, both networks). Historical rows stay 0 — no backfill, the
+    # trend builds going forward.
+    if "country_count" not in cols:
+        conn.execute(
+            "ALTER TABLE peer_count_history ADD COLUMN country_count INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.commit()
+
+    # Add kernel_mmr / output_mmr to existing blocks tables (header MMR sizes →
+    # kernel & output counts since genesis). Historical rows stay 0 until a
+    # `--backfill-mmr` run re-reads the headers; new blocks fill them via --update.
+    bcols = {r[1] for r in conn.execute("PRAGMA table_info(blocks)")}
+    for col in ("kernel_mmr", "output_mmr"):
+        if col not in bcols:
+            conn.execute(f"ALTER TABLE blocks ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
+    conn.commit()
 
 def get_meta(conn, key, default=None):
     row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
@@ -299,8 +365,28 @@ def set_meta(conn, key, value):
 
 # ── Block fetching ────────────────────────────────────────────────────────────
 
+def mmr_leaves(mmr_size):
+    """
+    Convert a Merkle Mountain Range size (total node positions, as reported in the
+    block header's *_mmr_size fields) into the number of leaves — i.e. the real
+    count of kernels / outputs ever committed. An MMR of N leaves stores parent
+    hashes too, so size > leaves; we sum the leaves of each perfect-tree "peak".
+    """
+    size   = int(mmr_size or 0)
+    leaves = 0
+    while size > 0:
+        k = 0
+        while (1 << (k + 2)) - 1 <= size:   # largest peak (2^(k+1)-1 nodes) fitting in size
+            k += 1
+        leaves += 1 << k                    # that peak contributes 2^k leaves
+        size   -= (1 << (k + 1)) - 1        # …and 2^(k+1)-1 nodes
+    return leaves
+
 def fetch_header(height):
-    """Fetch a single block header. Returns (height, timestamp_int, total_diff) or None."""
+    """Fetch a single block header.
+    Returns (height, timestamp_int, total_diff, kernel_mmr_size, output_mmr_size) or None.
+    The MMR sizes are header fields available for every height on pruned and archive
+    nodes alike (header chain is never pruned)."""
     try:
         data = grin_rpc("get_header", [height, None, None], retries=5)
         if not data or "height" not in data:
@@ -310,6 +396,8 @@ def fetch_header(height):
             int(data["height"]),
             parse_ts(data.get("timestamp", "")),
             int(data.get("total_difficulty", 0)),
+            int(data.get("kernel_mmr_size", 0)),
+            int(data.get("output_mmr_size", 0)),
         )
     except Exception as exc:
         print(f"  [ERROR] Failed height {height}: {exc}", file=sys.stderr)
@@ -353,11 +441,41 @@ def fetch_full_block(height):
         print(f"  [WARN] block {height}: {exc}", file=sys.stderr)
         return None
 
+def fetch_utxo_count():
+    """
+    Count the live unspent-output set (UTXO-set size) by paginating the Foreign API
+    get_unspent_outputs — the same approach grincoin.org (aglkm/grin-explorer) uses.
+    Each call returns up to `page` unspent outputs plus the MMR index it stopped at;
+    we resume from there and sum the counts. The unspent set is kept small by Grin's
+    cut-through, so this is only a handful of calls. Returns int or None on failure.
+    """
+    page  = 10000
+    start = 1
+    total = 0
+    guard = 0
+    while True:
+        guard += 1
+        if guard > 5000:            # hard safety cap — never loop forever
+            print("[WARN] utxo count: iteration cap hit; returning partial", file=sys.stderr)
+            break
+        resp = grin_rpc("get_unspent_outputs", [start, None, page, False], retries=2, timeout=20)
+        if not resp:
+            return None if total == 0 else total
+        outs = resp.get("outputs", []) or []
+        total += len(outs)
+        highest = int(resp.get("highest_index", 0) or 0)
+        last    = int(resp.get("last_retrieved_index", 0) or 0)
+        # Done when we've scanned to the tip of the output MMR, or made no progress.
+        if not outs or last <= start - 1 or last >= highest:
+            break
+        start = last + 1
+    return total
+
 # ── Hashrate calculation ──────────────────────────────────────────────────────
 
 def calc_hashrate(rows):
     """
-    Given list of (height, ts, total_diff) sorted by height,
+    Given list of (height, ts, total_diff[, kernel_mmr, output_mmr]) sorted by height,
     compute per-point hashrate (GPS) using the Cuckatoo32 formula from aglkm/grin-explorer:
         hashrate_GPS = net_diff * 42 / block_time_seconds / 16384
     where:
@@ -365,18 +483,23 @@ def calc_hashrate(rows):
         42          = Cuckoo cycle length for Cuckatoo32
         16384       = C32 solution rate = 32 × 2^(32-23) = 32 × 512
         block_time  = actual seconds between the two sampled blocks
-    Returns list of (height, ts, total_diff, hashrate).
+    Returns list of (height, ts, total_diff, hashrate, kernel_mmr, output_mmr). MMR
+    fields pass straight through (default 0 when a row doesn't carry them, e.g. the
+    base reference row in _append_hashrate).
     """
     # Cuckatoo32 constants (matches aglkm/grin-explorer formula)
     CUCKOO_CYCLE  = 42.0
     C32_RATE      = 16384.0   # 32 × 2^9
 
     out = []
-    for i, (h, ts, diff) in enumerate(rows):
+    for i, row in enumerate(rows):
+        h, ts, diff = row[0], row[1], row[2]
+        kmmr = row[3] if len(row) > 3 else 0
+        ommr = row[4] if len(row) > 4 else 0
         if i == 0:
-            out.append((h, ts, diff, 0.0))
+            out.append((h, ts, diff, 0.0, kmmr, ommr))
             continue
-        ph, pts, pdiff = rows[i - 1]
+        pts, pdiff = rows[i - 1][1], rows[i - 1][2]
         dt = ts - pts
         dd = diff - pdiff
         if dt > 0 and dd > 0:
@@ -385,7 +508,7 @@ def calc_hashrate(rows):
             # Invalid data: same or earlier timestamp, or difficulty decreased
             # Do NOT copy previous hashrate (prevents propagation of anomalies)
             hr = 0.0
-        out.append((h, ts, diff, hr))
+        out.append((h, ts, diff, hr, kmmr, ommr))
     return out
 
 # ── Bucket assignment ─────────────────────────────────────────────────────────
@@ -463,8 +586,10 @@ def cmd_init_history():
     print("[INFO] Writing to database...")
     conn.execute("DELETE FROM blocks")
     conn.executemany(
-        "INSERT OR REPLACE INTO blocks(height,timestamp,total_diff,hashrate,bucket) VALUES(?,?,?,?,?)",
-        [(h, ts, diff, hr, assign_bucket(ts)) for h, ts, diff, hr in rows_with_hr],
+        "INSERT OR REPLACE INTO blocks"
+        "(height,timestamp,total_diff,hashrate,kernel_mmr,output_mmr,bucket) VALUES(?,?,?,?,?,?,?)",
+        [(h, ts, diff, hr, kmmr, ommr, assign_bucket(ts))
+         for h, ts, diff, hr, kmmr, ommr in rows_with_hr],
     )
     set_meta(conn, "last_height", tip_height)
     set_meta(conn, "last_updated", now_ts())
@@ -506,6 +631,50 @@ def cmd_update():
         sys.exit(1)
 
     tip_height = int(tip["height"])
+
+    # ── Sample mempool (unconfirmed tx pool) size — forward-only history ───────
+    # Runs every cycle regardless of new blocks; the node only knows the *current*
+    # pool, so past values can't be backfilled (the series builds going forward).
+    try:
+        pool_size = grin_rpc("get_pool_size", [], retries=2, timeout=8)
+        if pool_size is not None:
+            conn_mp = open_db()
+            conn_mp.execute(
+                "INSERT OR REPLACE INTO mempool_history(sampled_at, pool_size) VALUES(?,?)",
+                (now_ts(), int(pool_size)),
+            )
+            # Keep ~1 year of 5-min samples (~105k rows ≈ 2 MB); older points fall off.
+            conn_mp.execute(
+                "DELETE FROM mempool_history WHERE sampled_at < ?", (now_ts() - 366 * 86400,)
+            )
+            conn_mp.commit()
+            conn_mp.close()
+            print(f"[INFO] Mempool: {int(pool_size)} unconfirmed tx in pool")
+    except Exception as exc:
+        print(f"[WARN] mempool sample failed: {exc}", file=sys.stderr)
+
+    # ── Sample UTXO-set size — throttled to ~20 min (pagination is heavier than a
+    # single RPC, so don't run it on every 5-min cron tick). Forward-only history.
+    try:
+        conn_ut = open_db()
+        last_utxo_ts = int(get_meta(conn_ut, "last_utxo_sample", 0))
+        if now_ts() - last_utxo_ts >= 20 * 60:
+            utxo = fetch_utxo_count()
+            if utxo is not None:
+                conn_ut.execute(
+                    "INSERT OR REPLACE INTO utxo_history(sampled_at, utxo_count) VALUES(?,?)",
+                    (now_ts(), int(utxo)),
+                )
+                conn_ut.execute(
+                    "DELETE FROM utxo_history WHERE sampled_at < ?", (now_ts() - 366 * 86400,)
+                )
+                set_meta(conn_ut, "last_utxo_sample", now_ts())
+                conn_ut.commit()
+                print(f"[INFO] UTXO set: {int(utxo):,} unspent outputs")
+        conn_ut.close()
+    except Exception as exc:
+        print(f"[WARN] utxo sample failed: {exc}", file=sys.stderr)
+
     if tip_height <= last_height:
         print(f"[INFO] No new blocks (tip: {tip_height:,}).")
     else:
@@ -517,8 +686,10 @@ def cmd_update():
 
         conn = open_db()
         conn.executemany(
-            "INSERT OR REPLACE INTO blocks(height,timestamp,total_diff,hashrate,bucket) VALUES(?,?,?,?,?)",
-            [(h, ts, diff, hr, assign_bucket(ts)) for h, ts, diff, hr in rows_with_hr],
+            "INSERT OR REPLACE INTO blocks"
+            "(height,timestamp,total_diff,hashrate,kernel_mmr,output_mmr,bucket) VALUES(?,?,?,?,?,?,?)",
+            [(h, ts, diff, hr, kmmr, ommr, assign_bucket(ts))
+             for h, ts, diff, hr, kmmr, ommr in rows_with_hr],
         )
         # Re-bucket older rows that may have shifted time windows
         conn.execute(
@@ -733,13 +904,58 @@ def cmd_backfill_stats(days=None):
     export_all_json()
     print("[OK] Backfill complete.")
 
+def cmd_backfill_mmr():
+    """
+    Populate kernel_mmr / output_mmr for blocks rows that still have them at 0
+    (i.e. rows written before the columns existed). Reads only headers — cheap and
+    works on pruned nodes — and only for the already-sampled heights in `blocks`
+    (a few thousand rows), so this finishes in minutes, not the hours --init-history
+    takes. New blocks get their MMR sizes automatically via --update.
+    """
+    conn = open_db()
+    init_schema(conn)
+    heights = [r[0] for r in conn.execute(
+        "SELECT height FROM blocks WHERE kernel_mmr = 0 ORDER BY height"
+    ).fetchall()]
+    conn.close()
+
+    if not heights:
+        print("[OK] All blocks rows already have MMR sizes — nothing to backfill.")
+        export_all_json()
+        return
+
+    print(f"[INFO] Backfilling kernel/output MMR for {len(heights):,} sampled block(s)...")
+    conn = open_db()
+    done = updated = 0
+    t0 = time.time()
+    for i in range(0, len(heights), 70):
+        batch = heights[i: i + 70]
+        rows  = fetch_headers_batch(batch, workers=8)   # (h, ts, diff, kmmr, ommr)
+        conn.executemany(
+            "UPDATE blocks SET kernel_mmr=?, output_mmr=? WHERE height=?",
+            [(r[3], r[4], r[0]) for r in rows],
+        )
+        conn.commit()
+        updated += len(rows)
+        done    += len(batch)
+        _progress(done, len(heights), t0)
+    print()
+    conn.close()
+    print(f"[INFO] Updated MMR sizes on {updated:,} rows.")
+    export_all_json()
+    print("[OK] MMR backfill complete.")
+
 # ── Peer update ───────────────────────────────────────────────────────────────
 
 def _mask_ip(ip):
-    """Mask the last octet of an IPv4 address to protect peer privacy (1.2.3.4 → 1.2.3.x).
-    IPv6 addresses are returned as-is (already non-trivial to correlate)."""
+    """Mask the last group of an IP to protect peer privacy:
+    IPv4 last octet (1.2.3.4 → 1.2.3.x), IPv6 last hextet (2001:db8::1 → 2001:db8::x)."""
+    if ":" in ip and not ip.startswith("["):
+        parts = ip.split(":")
+        parts[-1] = "x"
+        return ":".join(parts)
     parts = ip.rsplit(".", 1)
-    if len(parts) == 2 and not ip.startswith("["):
+    if len(parts) == 2:
         return parts[0] + ".x"
     return ip
 
@@ -1146,9 +1362,14 @@ def _update_peers():
     # ── 9. Record peer count snapshot for history chart ──────────────────────
     mnet_count = sum(1 for r in rows if r[1] == "mainnet")
     tnet_count = sum(1 for r in rows if r[1] == "testnet")
+    # Distinct countries hosting a node this sample (country_code = r[8]), across
+    # BOTH networks — same definition as the header "X countries" and the Top-10
+    # Countries card, so all three displays agree.
+    country_count = len({r[8] for r in rows if r[8]})
     conn.execute(
-        "INSERT INTO peer_count_history(sampled_at, mainnet_count, testnet_count) VALUES(?,?,?)",
-        (ts, mnet_count, tnet_count),
+        "INSERT INTO peer_count_history"
+        "(sampled_at, mainnet_count, testnet_count, country_count) VALUES(?,?,?,?)",
+        (ts, mnet_count, tnet_count, country_count),
     )
     conn.execute(
         "DELETE FROM peer_count_history WHERE sampled_at < ?",
@@ -1322,46 +1543,190 @@ def export_all_json():
             "recent":  [[r[0], r[1]] for r in recent],
         })
 
-    # ── node versions (per network: mainnet / testnet / both) ─────────────────
-    # Use all unique peers seen in the last PEER_HISTORY_DAYS for a broader sample.
-    # This captures every peer we've connected to recently, not just one run's snapshot.
-    version_cutoff = ts_now - PEER_HISTORY_DAYS * 86400
+    # ── kernels + outputs (cumulative counts since genesis) ────────────────────
+    # Header MMR sizes → real leaf counts. These are *levels* (monotonic), so each
+    # time bucket takes the MAX MMR in that window (not a sum). Coverage matches the
+    # blocks table sampling: daily since genesis, hourly for ~30d, per-block recent.
+    cur_kernels = cur_outputs = 0
+    for metric, col in (("kernels", "kernel_mmr"), ("outputs", "output_mmr")):
+        daily_raw = conn.execute(
+            f"SELECT (timestamp/86400)*86400 AS bts, MAX({col}) "
+            f"FROM blocks WHERE bucket='daily' AND {col} > 0 GROUP BY bts ORDER BY bts"
+        ).fetchall()
+        hourly_raw = conn.execute(
+            f"SELECT (timestamp/3600)*3600 AS bts, MAX({col}) "
+            f"FROM blocks WHERE bucket='hourly' AND {col} > 0 GROUP BY bts ORDER BY bts"
+        ).fetchall()
+        recent_raw = conn.execute(
+            f"SELECT timestamp, {col} FROM blocks "
+            f"WHERE bucket='recent' AND {col} > 0 ORDER BY height"
+        ).fetchall()
 
-    def _ver_rows(net):
+        latest = conn.execute(
+            f"SELECT {col} FROM blocks WHERE {col} > 0 ORDER BY height DESC LIMIT 1"
+        ).fetchone()
+        if latest:
+            if col == "kernel_mmr": cur_kernels = mmr_leaves(latest[0])
+            else:                   cur_outputs = mmr_leaves(latest[0])
+
+        _write_json(f"{metric}.json", {
+            "updated": ts_now,
+            "daily":   [[r[0], mmr_leaves(r[1])] for r in daily_raw],
+            "hourly":  [[r[0], mmr_leaves(r[1])] for r in hourly_raw],
+            "recent":  [[r[0], mmr_leaves(r[1])] for r in recent_raw],
+        })
+
+    # ── mempool (unconfirmed tx pool) — forward-only gauge ─────────────────────
+    # A level metric: bucket with AVG (not sum). recent = raw samples (last 24h),
+    # hourly = per-hour average for ~30d, daily = per-day average beyond that.
+    mp_recent = conn.execute(
+        "SELECT sampled_at, pool_size FROM mempool_history WHERE sampled_at >= ? ORDER BY sampled_at",
+        (cutoff_24h,),
+    ).fetchall()
+    mp_hourly = conn.execute(
+        "SELECT (sampled_at/3600)*3600 AS bts, AVG(pool_size) "
+        "FROM mempool_history WHERE sampled_at >= ? GROUP BY bts ORDER BY bts",
+        (cutoff_30d,),
+    ).fetchall()
+    mp_daily = conn.execute(
+        "SELECT (sampled_at/86400)*86400 AS bts, AVG(pool_size) "
+        "FROM mempool_history WHERE sampled_at < ? GROUP BY bts ORDER BY bts",
+        (cutoff_30d,),
+    ).fetchall()
+    mp_latest = conn.execute(
+        "SELECT pool_size FROM mempool_history ORDER BY sampled_at DESC LIMIT 1"
+    ).fetchone()
+    cur_mempool = int(mp_latest[0]) if mp_latest else None
+
+    _write_json("mempool.json", {
+        "updated": ts_now,
+        "current": cur_mempool,
+        "daily":   [[r[0], round(r[1], 2) if r[1] is not None else 0] for r in mp_daily],
+        "hourly":  [[r[0], round(r[1], 2) if r[1] is not None else 0] for r in mp_hourly],
+        "recent":  [[r[0], r[1]] for r in mp_recent],
+    })
+
+    # ── UTXO set size (live unspent outputs) — forward-only level metric ───────
+    ut_recent = conn.execute(
+        "SELECT sampled_at, utxo_count FROM utxo_history WHERE sampled_at >= ? ORDER BY sampled_at",
+        (cutoff_24h,),
+    ).fetchall()
+    ut_hourly = conn.execute(
+        "SELECT (sampled_at/3600)*3600 AS bts, AVG(utxo_count) "
+        "FROM utxo_history WHERE sampled_at >= ? GROUP BY bts ORDER BY bts",
+        (cutoff_30d,),
+    ).fetchall()
+    ut_daily = conn.execute(
+        "SELECT (sampled_at/86400)*86400 AS bts, AVG(utxo_count) "
+        "FROM utxo_history WHERE sampled_at < ? GROUP BY bts ORDER BY bts",
+        (cutoff_30d,),
+    ).fetchall()
+    ut_latest = conn.execute(
+        "SELECT utxo_count FROM utxo_history ORDER BY sampled_at DESC LIMIT 1"
+    ).fetchone()
+    cur_utxo = int(ut_latest[0]) if ut_latest else None
+
+    _write_json("utxo.json", {
+        "updated": ts_now,
+        "current": cur_utxo,
+        "daily":   [[r[0], round(r[1]) if r[1] is not None else 0] for r in ut_daily],
+        "hourly":  [[r[0], round(r[1]) if r[1] is not None else 0] for r in ut_hourly],
+        "recent":  [[r[0], r[1]] for r in ut_recent],
+    })
+
+    # ── Daily aggregate snapshot (powers the year/all-time Top-10 toggle) ──────
+    # known_peers is pruned at PEER_RETENTION_DAYS (30d), so week/month rankings can
+    # read it live but year/all-time cannot. Each run records the day's active-node
+    # counts (last 24h) per country and per version into *_daily, REPLACEing today's
+    # rows so the last run of the day wins. These tables build forward — no backfill
+    # of pre-existing history is possible. See timeframe builders below.
+    day_ts     = (ts_now // 86400) * 86400
+    day_cutoff = ts_now - 86400
+    for _net in ("mainnet", "testnet"):
+        conn.execute("DELETE FROM country_daily WHERE day_ts=? AND network=?", (day_ts, _net))
+        for _code, _name, _cnt in conn.execute(
+            "SELECT country_code, country, COUNT(*) FROM known_peers "
+            "WHERE last_seen>=? AND network=? AND country_code<>'' GROUP BY country_code",
+            (day_cutoff, _net),
+        ):
+            conn.execute(
+                "INSERT OR REPLACE INTO country_daily"
+                "(day_ts,network,country_code,country_name,peer_count) VALUES(?,?,?,?,?)",
+                (day_ts, _net, _code, _name or _code, _cnt))
+        conn.execute("DELETE FROM version_daily WHERE day_ts=? AND network=?", (day_ts, _net))
+        for _ua, _cnt in conn.execute(
+            "SELECT user_agent, COUNT(*) FROM known_peers "
+            "WHERE last_seen>=? AND network=? AND user_agent IS NOT NULL "
+            "AND TRIM(user_agent)<>'' AND user_agent<>'Unknown' GROUP BY user_agent",
+            (day_cutoff, _net),
+        ):
+            conn.execute(
+                "INSERT OR REPLACE INTO version_daily(day_ts,network,user_agent,count) "
+                "VALUES(?,?,?,?)", (day_ts, _net, _ua, _cnt))
+    conn.commit()
+
+    # Timeframe windows. week/month query known_peers live (both within the 30d
+    # retention); year/all read the accumulating *_daily tables. year_since=None on
+    # the daily side means "all rows", capped to 365d here.
+    version_cutoff = ts_now - PEER_HISTORY_DAYS * 86400   # 7d  → "week"
+    month_cutoff   = ts_now - 30 * 86400                  # 30d → "month" (retention edge)
+    year_since     = day_ts - 364 * 86400                 # 365 daily points → "year"
+
+    # ── node versions (per network: mainnet / testnet / both) ─────────────────
+    def _ver_rows(net, cutoff):
         return conn.execute(
             "SELECT user_agent, COUNT(*) AS cnt FROM known_peers "
             "WHERE last_seen >= ? AND network=? "
             "GROUP BY user_agent ORDER BY cnt DESC",
-            (version_cutoff, net),
+            (cutoff, net),
         ).fetchall()
 
     def _ver_list(rows):
-        """rows: (user_agent, count) sorted desc → top-5 + 'Other' list, total."""
+        """rows: (user_agent, count) sorted desc → top-10 + 'Other versions' list, total."""
         total = sum(r[1] for r in rows)
-        top   = rows[:5]
-        other = sum(r[1] for r in rows[5:])
+        top   = rows[:10]
+        other = sum(r[1] for r in rows[10:])
         vlist = [{"label": r[0], "count": r[1]} for r in top]
         if other > 0:
-            vlist.append({"label": "Other", "count": other})
+            vlist.append({"label": "Other versions", "count": other})
         return vlist, total
 
-    mnet_rows = _ver_rows("mainnet")
-    tnet_rows = _ver_rows("testnet")
+    def _ver_networks(rank_fn):
+        """rank_fn(net) → [(user_agent, count)] desc; builds the mainnet/testnet/both dict."""
+        m = rank_fn("mainnet")
+        t = rank_fn("testnet")
+        b = Counter()
+        for ua, cnt in m: b[ua] += cnt
+        for ua, cnt in t: b[ua] += cnt
+        mv, mt = _ver_list(m)
+        tv, tt = _ver_list(t)
+        bv, bt = _ver_list(b.most_common())
+        return {
+            "mainnet": {"versions": mv, "sampled_from": mt},
+            "testnet": {"versions": tv, "sampled_from": tt},
+            "both":    {"versions": bv, "sampled_from": bt},
+        }
 
-    # "both": merge raw per-agent counts across networks, then re-rank.
-    both_counter = Counter()
-    for ua, cnt in mnet_rows:
-        both_counter[ua] += cnt
-    for ua, cnt in tnet_rows:
-        both_counter[ua] += cnt
-    both_rows = both_counter.most_common()
+    def _ver_daily_rank(net, since):
+        """AVG concurrent nodes per version over the window (absent days count as 0)."""
+        where, params = "network=?", [net]
+        if since is not None:
+            where += " AND day_ts>=?"; params.append(since)
+        ndays = conn.execute(
+            f"SELECT COUNT(DISTINCT day_ts) FROM version_daily WHERE {where}", params
+        ).fetchone()[0] or 1
+        rows = conn.execute(
+            f"SELECT user_agent, SUM(count) FROM version_daily WHERE {where} GROUP BY user_agent",
+            params,
+        ).fetchall()
+        out = [(ua, max(1, round(s / ndays))) for ua, s in rows]
+        out.sort(key=lambda r: -r[1])
+        return out
 
-    mnet_versions, mnet_total = _ver_list(mnet_rows)
-    tnet_versions, tnet_total = _ver_list(tnet_rows)
-    both_versions, both_total = _ver_list(both_rows)
+    week_vnets  = _ver_networks(lambda n: _ver_rows(n, version_cutoff))
 
     # Fall back to latest peer_snapshots (mainnet-only) if known_peers has no data yet
-    if not mnet_rows and not tnet_rows:
+    if week_vnets["mainnet"]["sampled_from"] == 0 and week_vnets["testnet"]["sampled_from"] == 0:
         latest_snap_ts = conn.execute(
             "SELECT MAX(sampled_at) FROM peer_snapshots"
         ).fetchone()[0]
@@ -1370,20 +1735,93 @@ def export_all_json():
                 "SELECT user_agent, count FROM peer_snapshots WHERE sampled_at=? ORDER BY count DESC",
                 (latest_snap_ts,),
             ).fetchall()
-            mnet_versions, mnet_total = _ver_list(rows)
-            both_versions, both_total = mnet_versions, mnet_total
+            sv, st = _ver_list(rows)
+            week_vnets["mainnet"] = {"versions": sv, "sampled_from": st}
+            week_vnets["both"]    = {"versions": sv, "sampled_from": st}
 
     # Always write versions.json so the page can load even with no snapshot data.
-    # Top-level keys stay mainnet for backward compatibility; the per-network
-    # breakdown lives under "networks" for the page's Mainnet/Testnet/Both toggle.
+    # Top-level keys mirror the "week" mainnet view for backward compatibility; the
+    # per-network breakdown lives under "networks", and "timeframes" carries the
+    # week/month/year/all variants for the page's Top-10 timeframe toggle.
     _write_json("versions.json", {
         "updated":      ts_now,
-        "sampled_from": mnet_total,
-        "versions":     mnet_versions,
-        "networks": {
-            "mainnet": {"versions": mnet_versions, "sampled_from": mnet_total},
-            "testnet": {"versions": tnet_versions, "sampled_from": tnet_total},
-            "both":    {"versions": both_versions, "sampled_from": both_total},
+        "sampled_from": week_vnets["mainnet"]["sampled_from"],
+        "versions":     week_vnets["mainnet"]["versions"],
+        "networks":     week_vnets,
+        "timeframes": {
+            "week":  week_vnets,
+            "month": _ver_networks(lambda n: _ver_rows(n, month_cutoff)),
+            "year":  _ver_networks(lambda n: _ver_daily_rank(n, year_since)),
+            "all":   _ver_networks(lambda n: _ver_daily_rank(n, None)),
+        },
+    })
+
+    # ── top countries (per network: mainnet / testnet / both) ─────────────────
+    # Same windows + structure as versions; counts distinct peers per country.
+    def _country_rows(net, cutoff):
+        return conn.execute(
+            "SELECT country_code, country, COUNT(*) AS cnt FROM known_peers "
+            "WHERE last_seen >= ? AND network=? AND country_code != '' "
+            "GROUP BY country_code ORDER BY cnt DESC",
+            (cutoff, net),
+        ).fetchall()
+
+    def _country_list(rows):
+        """rows: (code, name, count) sorted desc → top-10 + 'Other countries', total."""
+        total = sum(r[2] for r in rows)
+        top   = rows[:10]
+        other = sum(r[2] for r in rows[10:])
+        clist = [{"label": r[1] or r[0], "code": r[0], "count": r[2]} for r in top]
+        if other > 0:
+            clist.append({"label": "Other countries", "code": "", "count": other})
+        return clist, total
+
+    def _country_networks(rank_fn):
+        """rank_fn(net) → [(code, name, count)] desc; builds the mainnet/testnet/both dict."""
+        m = rank_fn("mainnet")
+        t = rank_fn("testnet")
+        bc, bn = Counter(), {}
+        for code, name, cnt in m + t:
+            bc[code] += cnt
+            bn.setdefault(code, name)
+        b = [(code, bn[code], cnt) for code, cnt in bc.most_common()]
+        mc, mt = _country_list(m)
+        tc, tt = _country_list(t)
+        bcl, bt = _country_list(b)
+        return {
+            "mainnet": {"countries": mc,  "sampled_from": mt},
+            "testnet": {"countries": tc,  "sampled_from": tt},
+            "both":    {"countries": bcl, "sampled_from": bt},
+        }
+
+    def _country_daily_rank(net, since):
+        """AVG concurrent nodes per country over the window (absent days count as 0)."""
+        where, params = "network=? AND country_code<>''", [net]
+        if since is not None:
+            where += " AND day_ts>=?"; params.append(since)
+        ndays = conn.execute(
+            f"SELECT COUNT(DISTINCT day_ts) FROM country_daily WHERE {where}", params
+        ).fetchone()[0] or 1
+        rows = conn.execute(
+            f"SELECT country_code, MAX(country_name), SUM(peer_count) "
+            f"FROM country_daily WHERE {where} GROUP BY country_code", params,
+        ).fetchall()
+        out = [(code, name, max(1, round(s / ndays))) for code, name, s in rows]
+        out.sort(key=lambda r: -r[2])
+        return out
+
+    week_cnets = _country_networks(lambda n: _country_rows(n, version_cutoff))
+
+    _write_json("countries.json", {
+        "updated":      ts_now,
+        "sampled_from": week_cnets["mainnet"]["sampled_from"],
+        "countries":    week_cnets["mainnet"]["countries"],
+        "networks":     week_cnets,
+        "timeframes": {
+            "week":  week_cnets,
+            "month": _country_networks(lambda n: _country_rows(n, month_cutoff)),
+            "year":  _country_networks(lambda n: _country_daily_rank(n, year_since)),
+            "all":   _country_networks(lambda n: _country_daily_rank(n, None)),
         },
     })
 
@@ -1416,9 +1854,10 @@ def export_all_json():
         }
 
     _write_json("active_peers.json", {
-        "updated":  ts_now,
-        "mainnet":  _peer_series("mainnet_count"),
-        "testnet":  _peer_series("testnet_count"),
+        "updated":   ts_now,
+        "mainnet":   _peer_series("mainnet_count"),
+        "testnet":   _peer_series("testnet_count"),
+        "countries": _peer_series("country_count"),  # distinct countries, both networks; builds forward
     })
 
     # ── summary (for the header stats bar) ───────────────────────────────────
@@ -1452,6 +1891,10 @@ def export_all_json():
         "tip_height":         tip_height,
         "current_hashrate":   avg_hr,
         "current_difficulty": current_diff,
+        "current_kernels":    cur_kernels,
+        "current_outputs":    cur_outputs,
+        "current_mempool":    cur_mempool,
+        "current_utxo":       cur_utxo,
     })
 
     conn.close()
@@ -1475,6 +1918,7 @@ _GOLD_MINE_PROD_T = {
     2022: 3612,
     2023: 3644,
     2024: 3661,
+    2025: 3672,   # WGC Gold Demand Trends FY2025 — record 3,671.6t (initial est.)
 }
 _GOLD_STOCK_END_2018 = 190_000   # tonnes above-ground stock at end of 2018 (WGC)
 _GOLD_DEFAULT_PROD   = 3_650     # tonne/yr fallback for years not yet in WGC report
@@ -1641,6 +2085,8 @@ def main():
     group.add_argument("--peers-only",     action="store_true", help="Update peer data only")
     group.add_argument("--backfill-stats", nargs="?", const=180, metavar="DAYS|all",
                        help="Fetch TX/fee stats for last N days or 'all' for complete history (default: 180)")
+    group.add_argument("--backfill-mmr", action="store_true",
+                       help="Populate kernel/output MMR sizes on existing blocks rows from headers (fast, header-only)")
     group.add_argument("--export-inflation", action="store_true",
                        help="Write issuance.json — fetches USD M2 from World Bank + Gold from WGC, stores in DB, exports JSON")
     args = parser.parse_args()
@@ -1655,6 +2101,8 @@ def main():
         conn.close()
         _update_peers()
         export_all_json()
+    elif args.backfill_mmr:
+        cmd_backfill_mmr()
     elif args.export_inflation:
         os.makedirs(WWW_DATA, exist_ok=True)
         export_inflation_json()

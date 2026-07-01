@@ -741,6 +741,7 @@ import_data() {
     echo -e "  ${GREEN}e${RESET}) Backfill entire chain        ${DIM}(TX + fees from block 0 — several hours)${RESET}"
     echo -e "  ${GREEN}f${RESET}) Incremental update only      ${DIM}(new blocks since last run)${RESET}"
     echo -e "  ${GREEN}g${RESET}) Peers geolocation only       ${DIM}(refresh peer map + active peers chart, no blockchain data)${RESET}"
+    echo -e "  ${GREEN}n${RESET}) Backfill kernel/output MMR   ${DIM}(header-only, fast — fills Kernels & Outputs chart since genesis)${RESET}"
     echo ""
     echo -e "  ${BOLD}── Inflation Comparison  (USD M2 + Gold supply inflation → SQLite) ──${RESET}"
     echo ""
@@ -770,7 +771,7 @@ import_data() {
     fi
     echo -e "  ${DIM}0) Cancel${RESET}"
     echo ""
-    echo -ne "${BOLD}Select [a-m / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [a-n / 0]: ${RESET}"
     read -r imp_choice
     [[ "$imp_choice" == "0" || -z "$imp_choice" ]] && return
 
@@ -792,6 +793,7 @@ import_data() {
         e) bin="$COLLECTOR_BIN"; cmd="--backfill-stats all"; desc="Stats: Backfill entire chain TX/fees" ;;
         f) bin="$COLLECTOR_BIN"; cmd="--update";             desc="Stats: Incremental update" ;;
         g) bin="$COLLECTOR_BIN"; cmd="--peers-only";          desc="Stats: Peers geolocation + active peers chart update" ;;
+        n) bin="$COLLECTOR_BIN"; cmd="--backfill-mmr";       desc="Stats: Backfill kernel/output MMR (header-only)" ;;
         # ── Inflation comparison ─────────────────────────────────────────────
         k) bin="$COLLECTOR_BIN"; cmd="--export-inflation";   desc="Inflation: Fetch USD M2 (World Bank FM.LBL.BMNY.ZG) + Gold (WGC) → store in DB + write issuance.json" ;;
         # ── Price collector ──────────────────────────────────────────────────
@@ -1000,8 +1002,13 @@ server {
     #   /api/difficulty   → difficulty history                        (06_collector.py)
     #   /api/transactions → tx-per-block history                      (06_collector.py)
     #   /api/fees         → fees-per-block history                    (06_collector.py)
+    #   /api/mempool      → unconfirmed tx pool size (forward-only)   (06_collector.py)
+    #   /api/kernels      → cumulative kernel count since genesis     (06_collector.py)
+    #   /api/outputs      → cumulative output count since genesis     (06_collector.py)
+    #   /api/utxo         → live unspent-output (UTXO set) size        (06_collector.py)
     #   /api/active_peers → mainnet+testnet peer count history        (06_collector.py)
     #   /api/versions     → node version distribution                 (06_collector.py)
+    #   /api/countries    → top countries hosting nodes               (06_collector.py)
     #   /api/price        → GRIN/USDT price, OHLCV history            (06_price_collector.py)
     #   /api/issuance     → annual supply inflation: grin/usd_m2/gold  (06_collector.py)
     #   /api/ecosystem    → DNS seeds + ecosystem services status     (06_ecosystem_checker.py)
@@ -1012,8 +1019,13 @@ server {
     location = /api/difficulty   { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/difficulty.json;   }
     location = /api/transactions { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/transactions.json; }
     location = /api/fees         { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/fees.json;         }
+    location = /api/mempool      { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/mempool.json;      }
+    location = /api/kernels      { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/kernels.json;      }
+    location = /api/outputs      { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/outputs.json;      }
+    location = /api/utxo         { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/utxo.json;         }
     location = /api/active_peers { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/active_peers.json; }
     location = /api/versions     { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/versions.json;     }
+    location = /api/countries    { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/countries.json;    }
     location = /api/price        { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/price.json;        }
     location = /api/issuance     { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/issuance.json;     }
     location = /api/ecosystem    { include /etc/nginx/snippets/grin-api.conf; alias ${WWW_DIR}/data/ecosystem.json;    }
@@ -1122,7 +1134,7 @@ status_stats() {
 
     # JSON data files
     echo -e "  JSON exports"
-    for f in summary hashrate difficulty transactions fees active_peers versions peers price issuance ecosystem; do
+    for f in summary hashrate difficulty transactions fees active_peers versions countries peers price issuance ecosystem; do
         local jf="$WWW_DIR/data/${f}.json"
         if [[ -f "$jf" ]]; then
             local age; age=$(( ($(date +%s) - $(stat -c %Y "$jf" 2>/dev/null || echo 0)) / 60 ))

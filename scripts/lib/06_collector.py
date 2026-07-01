@@ -1723,6 +1723,16 @@ def export_all_json():
         out.sort(key=lambda r: -r[1])
         return out
 
+    def _ver_daily_peak(net):
+        """All-time high: peak concurrent nodes per version ever recorded (MAX daily count)."""
+        rows = conn.execute(
+            "SELECT user_agent, MAX(count) FROM version_daily WHERE network=? GROUP BY user_agent",
+            (net,),
+        ).fetchall()
+        out = [(ua, cnt) for ua, cnt in rows]
+        out.sort(key=lambda r: -r[1])
+        return out
+
     week_vnets  = _ver_networks(lambda n: _ver_rows(n, version_cutoff))
 
     # Fall back to latest peer_snapshots (mainnet-only) if known_peers has no data yet
@@ -1752,7 +1762,7 @@ def export_all_json():
             "week":  week_vnets,
             "month": _ver_networks(lambda n: _ver_rows(n, month_cutoff)),
             "year":  _ver_networks(lambda n: _ver_daily_rank(n, year_since)),
-            "all":   _ver_networks(lambda n: _ver_daily_rank(n, None)),
+            "all":   _ver_networks(lambda n: _ver_daily_peak(n)),
         },
     })
 
@@ -1810,6 +1820,17 @@ def export_all_json():
         out.sort(key=lambda r: -r[2])
         return out
 
+    def _country_daily_peak(net):
+        """All-time high: peak concurrent nodes per country ever recorded (MAX daily count)."""
+        rows = conn.execute(
+            "SELECT country_code, MAX(country_name), MAX(peer_count) "
+            "FROM country_daily WHERE network=? AND country_code<>'' GROUP BY country_code",
+            (net,),
+        ).fetchall()
+        out = [(code, name, cnt) for code, name, cnt in rows]
+        out.sort(key=lambda r: -r[2])
+        return out
+
     week_cnets = _country_networks(lambda n: _country_rows(n, version_cutoff))
 
     _write_json("countries.json", {
@@ -1821,7 +1842,7 @@ def export_all_json():
             "week":  week_cnets,
             "month": _country_networks(lambda n: _country_rows(n, month_cutoff)),
             "year":  _country_networks(lambda n: _country_daily_rank(n, year_since)),
-            "all":   _country_networks(lambda n: _country_daily_rank(n, None)),
+            "all":   _country_networks(lambda n: _country_daily_peak(n)),
         },
     })
 

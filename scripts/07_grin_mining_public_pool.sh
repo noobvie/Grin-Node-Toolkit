@@ -1985,13 +1985,20 @@ fs.writeFileSync(p, JSON.stringify(d, null, 2)); fs.chmodSync(p, 0o600);
 
     echo ""
     success "Added gateway peer for region '${region}'."
+    local hub_pub pub_ep
+    hub_pub=$(cat "$WG_DIR_CONF/server_public.key" 2>/dev/null)
+    pub_ep="$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo '<server-public-ip>'):${WG_LISTEN_PORT}"
     echo -e "  ${BOLD}Give this gateway operator:${RESET}"
     echo -e "    region key            : ${GREEN}${region}${RESET}"
-    echo -e "    central wg public key : ${GREEN}$(cat "$WG_DIR_CONF/server_public.key" 2>/dev/null)${RESET}"
-    echo -e "    central wg endpoint   : ${GREEN}$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo '<server-public-ip>'):${WG_LISTEN_PORT}${RESET}"
+    echo -e "    central wg public key : ${GREEN}${hub_pub}${RESET}"
+    echo -e "    central wg endpoint   : ${GREEN}${pub_ep}${RESET}"
     echo -e "    central tunnel IP     : ${GREEN}${WG_TUNNEL_NET}.1${RESET}"
     echo -e "    this gateway tunnel IP: ${GREEN}${peer_ip}/32${RESET}"
     echo -e "    central region port   : ${GREEN}${nextport}${RESET}  ${DIM}(hub_endpoint = ${WG_TUNNEL_NET}.1:${nextport})${RESET}"
+    echo ""
+    echo -e "  ${BOLD}Or hand over this ONE-LINE pairing string${RESET} ${DIM}(paste it at the gateway's 2) Configure${RESET}"
+    echo -e "  ${DIM}to fill every tunnel field at once; re-printable via 3) List gateways):${RESET}"
+    echo -e "    ${GREEN}GRINGW1|${region}|${hub_pub}|${pub_ep}|${WG_TUNNEL_NET}.1|${peer_ip}/32|${nextport}${RESET}"
     echo ""
     echo -e "  ${DIM}Also declare region '${region}' in admin → Regions so it shows on the connect grid.${RESET}"
 }
@@ -2013,6 +2020,28 @@ if (!keys.length) { console.log("    (none yet)"); }
 else keys.forEach(k => console.log("    " + k + "  ->  " + rp[k]));
 console.log("  listen host: " + (d.region_listen_host || "(unset)"));
 ' "$POOL_CONF" 2>/dev/null || echo "    (could not read $POOL_CONF)"
+
+    # Re-print each peer's one-line pairing string (same format as add-peer prints),
+    # so an operator who lost the add-peer output can still hand it to the gateway.
+    local _hub_pub _pub_ep
+    _hub_pub=$(cat "$WG_DIR_CONF/server_public.key" 2>/dev/null)
+    _pub_ep="$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo '<server-public-ip>'):${WG_LISTEN_PORT}"
+    echo ""
+    echo -e "  ${BOLD}Pairing strings${RESET} ${DIM}(paste into the matching gateway's 2) Configure):${RESET}"
+    node -e '
+const fs = require("fs");
+const [wgConf, poolConf, hubPub, pubEp, hubIp] = process.argv.slice(1);
+let txt = ""; try { txt = fs.readFileSync(wgConf, "utf8"); } catch (e) {}
+let d = {};  try { d = JSON.parse(fs.readFileSync(poolConf, "utf8")); } catch (e) {}
+const ports = d.region_ports || {};
+const re = /# region: (\S+)[^[]*?AllowedIPs\s*=\s*(\S+)/g;
+let m, n = 0;
+while ((m = re.exec(txt))) {
+  console.log("    GRINGW1|" + m[1] + "|" + hubPub + "|" + pubEp + "|" + hubIp + "|" + m[2] + "|" + (ports[m[1]] || "?"));
+  n++;
+}
+if (!n) console.log("    (no gateway peers yet — add one with option 2)");
+' "$WG_CONF" "$POOL_CONF" "$_hub_pub" "$_pub_ep" "${WG_TUNNEL_NET}.1" 2>/dev/null || true
 
     # UX guard: a region wired here (region_ports) but NOT declared in admin → Regions
     # (pool_locations) still mines + credits fine — but shows on the public connect grid

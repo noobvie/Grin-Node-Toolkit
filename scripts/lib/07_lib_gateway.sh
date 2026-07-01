@@ -153,44 +153,89 @@ EOF
 }
 
 # ─── 2) Configure ───────────────────────────────────────────────────────────────
+# Parse the one-line pairing string the central pool box prints on "Add a gateway
+# peer" (and re-prints on "List gateways"):
+#   GRINGW1|region|hub_wg_pubkey|hub_public_endpoint|hub_tunnel_ip|gw_tunnel_ip/32|region_port
+# Returns 1 (writing nothing) unless the tag matches and all 6 fields are present.
+gw_apply_pairing_string() {
+    local tag region pub ep hubip gwip port
+    IFS='|' read -r tag region pub ep hubip gwip port <<< "$1"
+    [[ "$tag" == "GRINGW1" ]] || return 1
+    if [[ -z "$region" || -z "$pub" || -z "$ep" || -z "$hubip" || -z "$gwip" || ! "$port" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    [[ "$gwip" == */* ]] || gwip="${gwip}/32"
+    gw_write_conf_key "region"          "$region"
+    gw_write_conf_key "wg_hub_pubkey"   "$pub"
+    gw_write_conf_key "wg_hub_endpoint" "$ep"
+    gw_write_conf_key "wg_hub_ip"       "$hubip"
+    gw_write_conf_key "wg_address"      "$gwip"
+    gw_write_conf_key "hub_endpoint"    "${hubip}:${port}"
+    success "Pairing applied: region '${region}', tunnel ${gwip} → hub ${hubip}:${port}."
+}
+
 gw_configure() {
     echo -e "\n${BOLD}Configure Regional Gateway${RESET}\n"
     gw_ensure_defaults
-    local val
+    local val paired=0
 
-    echo -e "  ${DIM}(Region key — short airport-style code, must match the key the operator${RESET}"
-    echo -e "  ${DIM} created in admin → Regions AND the key used when adding this peer on the pool box)${RESET}"
-    echo -ne "Region key (e.g. nyc, sgn, ams) [$(gw_read_conf region "")]: "
-    read -r val; [[ -n "$val" ]] && gw_write_conf_key "region" "$val"
+    echo -e "  ${DIM}Every tunnel value below is ASSIGNED BY THE CENTRAL POOL BOX when the${RESET}"
+    echo -e "  ${DIM}operator adds this gateway's public key there (pool menu → Multi-region →${RESET}"
+    echo -e "  ${DIM}2) Add a gateway peer). That step prints a one-line GRINGW1|... pairing${RESET}"
+    echo -e "  ${DIM}string (re-printable any time via 3) List gateways) — paste it here to${RESET}"
+    echo -e "  ${DIM}fill every field at once, or press Enter to type them one by one.${RESET}"
+    echo -ne "Pairing string from the pool box (Enter = manual entry): "
+    read -r val
+    if [[ -n "$val" ]]; then
+        if gw_apply_pairing_string "$val"; then
+            paired=1
+        else
+            warn "Not a valid GRINGW1|... pairing string — continuing with manual entry."
+        fi
+    fi
+
+    if (( ! paired )); then
+        echo ""
+        echo -e "  ${DIM}(Region key — short airport-style code, must match the key the operator${RESET}"
+        echo -e "  ${DIM} created in admin → Regions AND the key used when adding this peer on the pool box)${RESET}"
+        echo -ne "Region key (e.g. nyc, sgn, ams) [$(gw_read_conf region "")]: "
+        read -r val; [[ -n "$val" ]] && gw_write_conf_key "region" "$val"
+    fi
 
     echo -ne "Public stratum port (miners connect here) [$(gw_read_conf public_stratum_port "3333")]: "
     read -r val; [[ -n "$val" ]] && gw_write_conf_key "public_stratum_port" "$val"
 
-    echo ""
-    echo -e "  ${DIM}── WireGuard tunnel to the central pool box ──${RESET}"
-    echo -e "  ${DIM}The operator gives you these after adding your public key as a peer.${RESET}"
+    if (( ! paired )); then
+        echo ""
+        echo -e "  ${DIM}── WireGuard tunnel to the central pool box ──${RESET}"
+        echo -e "  ${DIM}The operator gives you these after adding your public key as a peer${RESET}"
+        echo -e "  ${DIM}(on the central box they also live in /etc/wireguard/wg-grinpool*.conf:${RESET}"
+        echo -e "  ${DIM} Interface Address = central tunnel IP, your [Peer] AllowedIPs = your /32).${RESET}"
 
-    echo -ne "Central wg public key        [$( [[ -n "$(gw_read_conf wg_hub_pubkey '')" ]] && echo '*** keep ***' || echo none)]: "
-    read -r val; [[ -n "$val" ]] && gw_write_conf_key "wg_hub_pubkey" "$val"
+        echo -ne "Central wg public key        [$( [[ -n "$(gw_read_conf wg_hub_pubkey '')" ]] && echo '*** keep ***' || echo none)]: "
+        read -r val; [[ -n "$val" ]] && gw_write_conf_key "wg_hub_pubkey" "$val"
 
-    echo -ne "Central PUBLIC wg endpoint (ip:51820) [$(gw_read_conf wg_hub_endpoint "")]: "
-    read -r val; [[ -n "$val" ]] && gw_write_conf_key "wg_hub_endpoint" "$val"
+        echo -ne "Central PUBLIC wg endpoint (ip:51820) [$(gw_read_conf wg_hub_endpoint "")]: "
+        read -r val; [[ -n "$val" ]] && gw_write_conf_key "wg_hub_endpoint" "$val"
 
-    echo -ne "Central tunnel IP (e.g. 10.66.66.1) [$(gw_read_conf wg_hub_ip "")]: "
-    read -r val; [[ -n "$val" ]] && gw_write_conf_key "wg_hub_ip" "$val"
+        echo -e "  ${DIM}(central is always .1 on the tunnel: 10.66.66.1 mainnet / 10.66.67.1 testnet)${RESET}"
+        echo -ne "Central tunnel IP (e.g. 10.66.66.1) [$(gw_read_conf wg_hub_ip "")]: "
+        read -r val; [[ -n "$val" ]] && gw_write_conf_key "wg_hub_ip" "$val"
 
-    echo -ne "This gateway's tunnel IP (e.g. 10.66.66.2/32) [$(gw_read_conf wg_address "")]: "
-    read -r val; [[ -n "$val" ]] && gw_write_conf_key "wg_address" "$val"
+        echo -e "  ${DIM}(the /32 the pool box assigned to THIS gateway — first gateway is .2)${RESET}"
+        echo -ne "This gateway's tunnel IP (e.g. 10.66.66.2/32) [$(gw_read_conf wg_address "")]: "
+        read -r val; [[ -n "$val" ]] && gw_write_conf_key "wg_address" "$val"
 
-    echo ""
-    echo -e "  ${DIM}This region's INTERNAL stratum port on the central box (the operator${RESET}"
-    echo -e "  ${DIM}assigns it when adding your peer, e.g. sgn->3391). Combined with the${RESET}"
-    echo -e "  ${DIM}central tunnel IP into hub_endpoint, e.g. 10.66.66.1:3391.${RESET}"
-    local hub_ip; hub_ip=$(gw_read_conf wg_hub_ip "")
-    echo -ne "Central region port (e.g. 3391) [$(gw_read_conf hub_endpoint "" | sed 's/.*://')]: "
-    read -r val
-    if [[ -n "$val" && -n "$hub_ip" ]]; then
-        gw_write_conf_key "hub_endpoint" "${hub_ip}:${val}"
+        echo ""
+        echo -e "  ${DIM}This region's INTERNAL stratum port on the central box (the operator${RESET}"
+        echo -e "  ${DIM}assigns it when adding your peer, e.g. sgn->3391). Combined with the${RESET}"
+        echo -e "  ${DIM}central tunnel IP into hub_endpoint, e.g. 10.66.66.1:3391.${RESET}"
+        local hub_ip; hub_ip=$(gw_read_conf wg_hub_ip "")
+        echo -ne "Central region port (e.g. 3391) [$(gw_read_conf hub_endpoint "" | sed 's/.*://')]: "
+        read -r val
+        if [[ -n "$val" && -n "$hub_ip" ]]; then
+            gw_write_conf_key "hub_endpoint" "${hub_ip}:${val}"
+        fi
     fi
 
     gw_render_forwarder

@@ -2546,11 +2546,14 @@ async function loadAll() {
 //    (cumulative reach). Builds forward, so year == all until >1yr of history exists,
 //    then all-time pulls ahead permanently.
 const tfState = { versions: "week", countries: "week" };
+// All-time is cumulative from when the seen_peers registry began accumulating — NOT a
+// true network-genesis "all-time" — so the label carries that start date to stay honest.
+const ALLTIME_SINCE = "01.07.2026";
 const TF_META = {
   week:  { label: "last 7 days",  mode: "seen"     },
   month: { label: "last 30 days", mode: "seen"     },
   year:  { label: "past year",    mode: "distinct" },
-  all:   { label: "all-time",     mode: "distinct" },
+  all:   { label: `all-time since ${ALLTIME_SINCE}`, mode: "distinct" },
 };
 // Pick the timeframe slice for a given network, gracefully falling back to the
 // pre-timeframe shape (data.networks / top-level) for older JSON files.

@@ -14,8 +14,9 @@
           │                         │                          │
   ┌───────▼──────┐         ┌────────▼────────┐       ┌────────▼────────┐
   │ [WARN] both  │         │  free slot:     │       │  free slot:     │
-  │ B/M/T/K/0 ? │         │ B/M/S/1/0       │       │ B/T/S/1/0       │
+  │A/B/M/T/K/0  │         │A/B/M/S/1/0      │       │A/B/T/S/1/0      │
   └──────────────┘         └─────────────────┘       └─────────────────┘
+   A→run_super_auto ★      A→run_super_auto ★         A→run_super_auto ★
    B→update_binary_only     B→update_binary_only       B→update_binary_only
    M→stop_grin_one(3414)    M→stop_grin_one(3414)      T→stop_grin_one(13414)
      _remove_instance_dirs    _remove_instance_dirs       _remove_instance_dirs
@@ -31,19 +32,31 @@
      exec "$0" ↺
    0→exit
 
+   ★ A (Super Auto) is offered from EVERY Step-1 branch. On success it
+     exit 0's the script; on cancel it falls back to that branch's menu.
+     See the "SUPER AUTO — one-hit" box below.
+
           │                         │                          │
           │         Neither running — stale/orphan check       │
           │         (pgrep, ss ports 3413/3414/13414/3415)     │
           │         also detects installed-but-not-running      │
           │         nodes (conf file or binary on disk)         │
           │                                                     │
+          │   IF conflicts found  [A/K/C/S/(R)/N/0]:            │
+          │         A → run_super_auto ★ (wipe+rebuild both)    │
           │         K → kill all conflicting processes          │
           │             truncate conf → continue build          │
           │         C → continue with warning only              │
           │         S → _start_installed_node (all nets)        │
           │             → exit 0                                │
+          │         R → rebuild a detected installed node       │
           │         N/0 → abort                                 │
           │         Enter → recheck                             │
+          │                                                     │
+          │   ELSE no conflicts  [A/1/0, Enter = 1]:            │
+          │         A → run_super_auto ★ (fresh install both)   │
+          │         1 → custom wizard (default) → continue ↓    │
+          │         0 → return to main menu                     │
           └─────────────────────────┴──────────────────────────┘
                                     │
                     ┌───────────────▼────────────────────────┐
@@ -54,6 +67,55 @@
                     │   0 → return to master script          │
                     └───────────────────────────────────────-┘
                                     │
+         ┌──────────────────────────▼────────────────────────────────────────┐
+         │   SUPER AUTO — one-hit: wipe & rebuild BOTH nodes (run_super_auto) │
+         │   (chosen via A from any Step-1 branch; sets SUPER_AUTO=true)      │
+         │───────────────────────────────────────────────────────────────────│
+         │  Opinionated, near-zero-interaction path. Hard-wired choices:      │
+         │    • BOTH networks, PRUNED only   • on-the-fly STREAMED chain data │
+         │    • zone = "all" (auto-pick fastest fresh source across zones)    │
+         │                                                                    │
+         │  1. Soft disk gate — free GiB on fs holding /opt/grin/node.        │
+         │        _super_auto_free_gb  (walks up to first existing parent).   │
+         │        < 20 GiB → warn; type FORCE to override, else cancel (→1).  │
+         │        This gate IS the disk check → sets GRIN_SKIP_DISK_CHECK=1.  │
+         │                                                                    │
+         │  2. State-aware confirmation (detect running ports + installed):   │
+         │        running(3414/13414) OR installed → DESTRUCTIVE list;        │
+         │            type REBUILD to proceed, else cancel (→1)               │
+         │        clean box → simple [Y/n]                                    │
+         │                                                                    │
+         │  3. Kill + wipe (reuses K-path helpers, no duplicated logic):      │
+         │        stop_grin_gracefully → _remove_instance_dirs all            │
+         │        → truncate INSTANCES_CONF                                   │
+         │                                                                    │
+         │  4. check_os_and_deps → check_legacy_grin_dir                      │
+         │        SUPER_AUTO=true ; GRIN_SKIP_DISK_CHECK=1                    │
+         │        setup_one_node "mainnet"  → setup_one_node "testnet"        │
+         │        (each: Steps 4–14 with prompts SUPPRESSED — see below)      │
+         │                                                                    │
+         │  SUPER_AUTO suppresses per-step prompts:                           │
+         │    Step 4  select_archive_mode  → forced "pruned", no prompt       │
+         │    Step 9  download_chain_data  → forced stream (choice 1)         │
+         │    Step 9  zone select          → forced "all"                     │
+         │    Step 14 show_summary         → "auto-start/watchdog/logrotate   │
+         │                                    being configured" (no reminder) │
+         │                                                                    │
+         │  Per-node POST-BUILD HARDENING  (_super_auto_harden, after         │
+         │  save_instance_location so node dir resolves from INSTANCES_CONF): │
+         │    • gnk_autostart_enable <net>   @reboot crontab autostart        │
+         │    • gnk_watchdog_install         */5 node-sync watchdog           │
+         │    • _install_grin_logrotate      /etc/logrotate.d/grin-node-<net> │
+         │        copytruncate REQUIRED (grin holds log open, no SIGHUP       │
+         │        reopen) — daily, size 50M, rotate 7, compress delaycompress │
+         │    (gnk_* from lib/grin_node_keepalive.sh, sourced at top; all     │
+         │     three steps idempotent; failures warn, don't abort)            │
+         │                                                                    │
+         │  Returns: 0 = both built (caller exit 0) ; 1 = cancel (fall back). │
+         └───────────────────────────────────────────────────────────────────┘
+                                    │  (Super Auto path re-enters the same
+                                    │   Steps 2→14 pipeline below, per-node)
+                                    ▼
                     ┌───────────────▼───────────────┐
                     │  STEP 2 — System Update &     │
                     │  Dependency Check             │
@@ -97,6 +159,8 @@
          │   2=full archive (~25 GiB)    │
          │     (mainnet only)            │
          │   disk space warning if low   │
+         │   [SUPER_AUTO] force pruned,  │
+         │     skip prompt               │
          └───────────────────────────────┘
                          │
          ┌───────────────▼───────────────┐
@@ -145,9 +209,13 @@
          │                               │
          │   ┌─────────────────────────┐ │
          │   │ How to download?        │ │
-         │   │ A = On-the-fly stream   │ │
-         │   │ B = Full download first │ │
+         │   │ 1 = On-the-fly stream   │ │
+         │   │ 2 = Full download first │ │
+         │   │ 3 = Slow-sync (no data) │ │
          │   └─────────────────────────┘ │
+         │   [SUPER_AUTO] force choice 1  │
+         │     (stream) + zone "all",    │
+         │     skip both prompts         │
          └───────────────────────────────┘
                          │
               ┌──────────┴──────────┐
@@ -238,6 +306,10 @@
          │   onion URL (polls up to 20s) │
          │   backup reminder → script089 │
          │   recovery chown hint         │
+         │   [SUPER_AUTO] show "autostart│
+         │     /watchdog/logrotate being │
+         │     configured" (no manual    │
+         │     autostart reminder)       │
          └───────────────────────────────┘
                          │
          ┌───────────────▼───────────────┐
@@ -249,6 +321,18 @@
          │   clears sibling mainnet key  │
          │   (PRUNEMAIN↔FULLMAIN mutual  │
          │    exclusion enforced here)   │
+         └───────────────────────────────┘
+                         │
+         ┌───────────────▼───────────────┐
+         │  [SUPER_AUTO only]            │
+         │  _super_auto_harden(net,dir)  │
+         │  runs AFTER save_instance_loc │
+         │  so node dir resolves from    │
+         │  INSTANCES_CONF:              │
+         │  • gnk_autostart_enable       │
+         │  • gnk_watchdog_install       │
+         │  • _install_grin_logrotate    │
+         │  (idempotent; warn on fail)   │
          └───────────────────────────────┘
                          │
               ┌──────────┴──────────┐
@@ -267,6 +351,24 @@
 
 
 Key flows to highlight:
+
+A (Super Auto — one-hit wipe & rebuild both) — run_super_auto, offered from EVERY Step-1
+  branch (both-running, mainnet-only, testnet-only, stale/orphan, AND the no-conflict fresh
+  case which now prompts A/1/0). Unlike M/T/K it does NOT exec "$0" — it runs the whole
+  pipeline inline in one process:
+    1. Soft 20 GB disk gate (_super_auto_free_gb; < 20 → warn + FORCE override, else cancel).
+       This gate replaces the per-node disk check → GRIN_SKIP_DISK_CHECK=1.
+    2. State-aware confirm: destructive (running port OR installed node) → type REBUILD;
+       clean box → [Y/n].
+    3. Reuses K-path wipe: stop_grin_gracefully → _remove_instance_dirs all → truncate conf.
+    4. check_os_and_deps → check_legacy_grin_dir → SUPER_AUTO=true →
+       setup_one_node mainnet → setup_one_node testnet (both pruned + streamed).
+  SUPER_AUTO=true suppresses the archive-mode prompt (forced pruned), the transfer-mode
+  prompt (forced stream / choice 1), and the zone prompt (forced "all"). Per-node, after
+  save_instance_location, _super_auto_harden adds @reboot autostart (gnk_autostart_enable),
+  the */5 node-sync watchdog (gnk_watchdog_install), and copytruncate logrotate
+  (_install_grin_logrotate). gnk_* come from lib/grin_node_keepalive.sh (sourced at top).
+  On success → caller exit 0; on cancel → return 1 → caller re-shows its own menu.
 
 B (binary update) — completely bypasses steps 2–14. Reads conf → downloads binary once → stop_grin_gracefully (no conf wipe) → replace binary → restart tmux per instance.
 

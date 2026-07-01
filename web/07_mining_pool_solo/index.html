@@ -196,12 +196,22 @@
   .chart-empty { color: var(--muted); font-size: .95rem; padding: 1.5rem 0; text-align: center; }
   .mtag { font-size: .78rem; padding: .1rem .55rem; border-radius: 999px; border: 1px solid var(--border); }
   .mtag.maturing { color: var(--yellow); } .mtag.mature { color: var(--green); } .mtag.unknown { color: var(--muted); }
+  .mtag.orphan { color: var(--red); border-color: var(--red); }
 
   /* payout split (payment calc) */
   .split-meta { color: var(--muted); font-size: .92rem; margin-bottom: .9rem; }
   .split-meta b { color: var(--text-hi); }
   #split-table { min-width: 420px; }
   #split-table td .grin { color: var(--green); font-weight: bold; }
+
+  /* solo-health (orphan / stale / reject) table — rate is the hero, raw counts a caption */
+  #quality-table, #quality-worker-table { min-width: 460px; }
+  #quality-table .qv, #quality-worker-table .qv { font-weight: bold; }
+  #quality-table .qv.green, #quality-worker-table .qv.green { color: var(--green); }
+  #quality-table .qv.yellow, #quality-worker-table .qv.yellow { color: var(--yellow); }
+  #quality-table .qv.red, #quality-worker-table .qv.red { color: var(--red); }
+  #quality-table .dimv, #quality-worker-table .dimv { color: var(--muted); }
+  #quality-table .qcap, #quality-worker-table .qcap { color: var(--muted); font-size: .8rem; white-space: nowrap; }
   .split-sub { font-size: 1.02rem; margin: 1.3rem 0 .55rem; }
   .split-sub:first-of-type { margin-top: .2rem; }
   #balance-table { min-width: 460px; }
@@ -209,6 +219,16 @@
   #balance-table td .owed.zero { color: var(--muted); font-weight: normal; }
   #balance-table td .paid { color: var(--muted); }
   .split-foot { color: var(--muted); font-size: .82rem; margin-top: .9rem; line-height: 1.6; }
+  /* Collapsible "ⓘ Info" wrapper for the explanatory text under a chart — collapsed by
+     default (native <details>), so the page stays clean and the help is one click away. */
+  .info-toggle { margin-top: .9rem; }
+  .info-toggle > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: .4rem; color: var(--muted); font-size: .8rem; user-select: none; border: 1px solid var(--border); border-radius: 999px; padding: .22rem .72rem; width: max-content; }
+  .info-toggle > summary::-webkit-details-marker { display: none; }
+  .info-toggle > summary::marker { content: ''; }
+  .info-toggle > summary:hover { color: var(--text-hi); border-color: var(--main); }
+  .info-toggle[open] > summary { margin-bottom: .5rem; }
+  .info-toggle .split-foot { margin-top: 0; }
+  .info-toggle .split-foot + .split-foot { margin-top: .7rem; }
   .split-empty { color: var(--muted); font-size: .92rem; padding: .6rem 0; }
   #split-table tr.clk { cursor: pointer; }
   #split-table tr.clk:hover td { background: var(--border); }
@@ -287,6 +307,7 @@
   <a href="#chart-hashrate">Hashrate chart</a>
   <a href="#split-card" id="nav-split" style="display:none">Payout split</a>
   <a href="#earn-card" id="nav-earn" style="display:none">Earnings / day</a>
+  <a href="#quality-card" id="nav-quality" style="display:none">Solo health</a>
 </nav>
 
 <!-- ── MAINNET ── -->
@@ -423,8 +444,11 @@
   <div class="table-scroll"><table id="split-table"><tbody></tbody></table></div>
   <p class="split-empty" id="split-empty" style="display:none"></p>
   <div id="split-person" class="split-person" style="display:none"></div>
-  <p class="split-foot">Click a nickname for its workers. <b>Owed</b> = its share of every matured coinbase (split by work done, per nickname) minus what the operator has already paid out-of-band — it drops to zero once settled. The period table shows work share within a rolling window. <b>Blocks</b> = blocks that nickname's winning shares found in the period — a leaderboard stat only; payouts still split by work share, never by who got lucky. No Grin address is stored or shown.</p>
-  <p class="split-foot"><b>Payouts are settled manually.</b> The operator sends GRIN by hand to each miner out-of-band (e.g. friends mining to this node) and records it here — this page is bookkeeping only and moves no funds.</p>
+  <details class="info-toggle">
+    <summary>ⓘ About this table</summary>
+    <p class="split-foot">Click a nickname for its workers. <b>Owed</b> = its share of every matured coinbase (split by work done, per nickname) minus what the operator has already paid out-of-band — it drops to zero once settled. The period table shows work share within a rolling window. <b>Blocks</b> = blocks that nickname's winning shares found in the period — a leaderboard stat only; payouts still split by work share, never by who got lucky. No Grin address is stored or shown.</p>
+    <p class="split-foot"><b>Payouts are settled manually.</b> The operator sends GRIN by hand to each miner out-of-band (e.g. friends mining to this node) and records it here — this page is bookkeeping only and moves no funds.</p>
+  </details>
 </section>
 
 <!-- ── GRIN per miner / day (actual bars + estimate line, mainnet) — shares split-card's data + period selector; hidden unless data/split_main.json exists ── -->
@@ -440,7 +464,42 @@
   <div class="legend"><span><i class="bar"></i>actual / day</span><span><i class="est"></i>estimate</span><span><i class="avg"></i>pool avg / miner</span></div>
   <p class="split-meta" id="earn-meta">—</p>
   <div id="earn-chart"><div class="chart-empty">Loading earnings…</div></div>
-  <p class="split-foot"><b>Span follows this chart's period selector</b> (Weekly = last 7 days · Monthly = this month · Yearly = this year, shown as weekly averages). The <b>left axis counts blocks found</b>; the <b>right axis is GRIN mined</b> (the two are the same scale — GRIN = blocks × block reward). Bars are the <b>actual</b> GRIN credited that day — lumpy, because solo blocks arrive irregularly. The <b>estimate</b> line removes that block-luck: the day's work share × the average block rate over the shown span. <b>Pool avg / miner</b> = that day's smoothed pool reward ÷ how many miners were active that day (the count changes day to day). The estimate is a projection, not a promise — attribution is by the block's found day.</p>
+  <details class="info-toggle">
+    <summary>ⓘ About this chart</summary>
+    <p class="split-foot"><b>Span follows this chart's period selector</b> (Weekly = last 7 days · Monthly = this month · Yearly = this year, shown as weekly averages). The <b>left axis counts blocks found</b>; the <b>right axis is GRIN mined</b> (the two are the same scale — GRIN = blocks × block reward). Bars are the <b>actual</b> GRIN credited that day — lumpy, because solo blocks arrive irregularly. The <b>estimate</b> line removes that block-luck: the day's work share × the average block rate over the shown span. <b>Pool avg / miner</b> = that day's smoothed pool reward ÷ how many miners were active that day (the count changes day to day). The estimate is a projection, not a promise — attribution is by the block's found day.</p>
+  </details>
+</section>
+
+<!-- ── Solo Health: orphaned blocks + stale/rejected shares (mainnet) — the two ways solo silently loses effective hashrate vs a pool; hidden unless data/split_main.json exists ── -->
+<section class="chart-card accent-payout" id="quality-card" style="display:none">
+  <div class="chart-head">
+    <h2>Solo Health · <span style="color:var(--main)">Mainnet</span></h2>
+  </div>
+  <p class="split-meta" id="quality-meta">—</p>
+  <div class="table-scroll"><table id="quality-table"><tbody></tbody></table></div>
+
+  <!-- Per-worker breakdown: which miner is losing the effective hashrate, so the operator
+       knows exactly who to troubleshoot. Window toggle mirrors the aggregate rows above. -->
+  <div class="chart-head" style="margin-top:1.4rem">
+    <h3 class="split-sub" style="margin:0">By worker</h3>
+    <div class="seg" id="quality-worker-seg" role="group" aria-label="Per-worker window">
+      <button type="button" data-window="daily">Daily</button>
+      <button type="button" data-window="weekly" class="active">Weekly</button>
+      <button type="button" data-window="monthly">Monthly</button>
+      <button type="button" data-window="yearly">Yearly</button>
+      <button type="button" data-window="all">All</button>
+    </div>
+  </div>
+  <div class="table-scroll"><table id="quality-worker-table"><tbody></tbody></table></div>
+  <p class="split-meta" id="quality-worker-note" style="margin-top:.5rem"></p>
+  <p class="split-empty" id="quality-worker-empty" style="display:none">No worker shares recorded in this window yet.</p>
+
+  <p class="split-empty" id="quality-empty" style="display:none"></p>
+  <details class="info-toggle">
+    <summary>ⓘ About this card</summary>
+    <p class="split-foot">At equal <b>effective</b> hashrate, solo and a pool earn the same on average (minus the pool fee) — solo just has higher variance. A persistent shortfall vs a pool usually means lost effective hashrate, and these are the two culprits. <b>Orphaned</b> = a block you found that lost the propagation race and was reorged out (earns nothing) — high orphan&nbsp;% points to poor peering / slow block propagation, so <b>raise your node's peer count</b>. <b>Stale</b> = a solution that arrived after the chain moved on (pure latency loss) — high stale&nbsp;% points to slow job refresh or miner↔node latency. <b>Rejected</b> = invalid/duplicate submissions. Stale/rejected counts depend on the node logging at <code>INFO</code>; verify the parser caught your node's wording with <code>--dry-run</code>. The <b>By worker</b> table lists only workers that currently have a problem (orphaned or stale/rejected&nbsp;> 0), ranked worst-first so you can spot which rig to fix — clean workers are hidden (the count is noted under the table) and a long problem list is capped at the worst 25. Orphans are attributed exactly (to the worker whose share found the block), while stale/rejected are attributed to the worker only when your node names the login on its reject lines — any that don't are counted as <b>unattributed</b> in the note under the table (not shown as a worker row, since they belong to no single rig). <code>--dry-run</code> reports how many of your reject lines carry a login.</p>
+    <p class="split-foot"><b>Why "found" here can be lower than the "All blocks we found" total:</b> Solo Health only counts a block once its fate is chain-verified at <b>1440-block maturity</b> (~24&nbsp;h), so it can be classified as matured or orphaned. Your most recently found blocks are still immature — they show in the all-blocks list but aren't counted here yet, so a small gap (e.g. 33 found vs 31 matured+orphaned) just means those last blocks haven't matured. They'll roll in within ~a day. For the same reason, very recent windows can read 0 orphans.</p>
+  </details>
 </section>
 
 <footer>
@@ -573,6 +632,22 @@
     if (v < 999.5)  return '' + v;                                      // 0–999
     if (v < 999500) { var k = v/1e3; return (k < 9.95 ? k.toFixed(1) : Math.round(k)) + 'k'; }
     var m = v/1e6;  return (m < 9.95 ? m.toFixed(1) : Math.round(m)) + 'M';
+  }
+  // Solo-health count: readable separators for the everyday range, compact (k/M) only
+  // once a long-running node pushes a count past 6 figures so the caption never blows
+  // out the cell. Used for the raw "num / denom" caption under each rate.
+  function fmtQ(n) {
+    n = Number(n) || 0;
+    return n >= 100000 ? fmtCount(n) : n.toLocaleString();
+  }
+  // A solo-health metric cell: the rate is the hero (bold, colour-banded green/yellow/red
+  // below `warn` / up to `bad` / at-or-above), with the raw "bad / total" counts demoted
+  // to a small muted caption. `—` when the window has no data to rate yet.
+  function metricCell(pct, warn, bad, num, denom, hasData) {
+    if (!hasData) return '<td><span class="dimv">—</span></td>';
+    var c = pct >= bad ? 'red' : (pct >= warn ? 'yellow' : 'green');
+    return '<td><span class="qv ' + c + '">' + Number(pct).toFixed(2) + '%</span>'
+      + ' <span class="qcap">' + fmtQ(num) + ' / ' + fmtQ(denom) + '</span></td>';
   }
   // One-line text summary of a two-series chart for the SVG aria-label, so screen
   // readers get the gist (peak + latest per network) instead of silence.
@@ -796,9 +871,13 @@
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]; }); }
 
   // ── Maturity ──
-  function maturityOf(net, height) {
+  // A block the collector confirmed is off-chain (b.orphan) is ORPHANED — it earns
+  // nothing, so it must never read as "maturing" (pending income). Orphan wins over the
+  // height/tip countdown.
+  function maturityOf(net, b) {
+    if (b.orphan) return { state: 'orphan', text: 'orphaned' };
     var tip = STATE.tip[net]; if (tip === null) return { state: 'unknown', text: 'depth n/a' };
-    var depth = tip - height, need = MATURITY[net];
+    var depth = tip - b.height, need = MATURITY[net];
     if (depth >= need) return { state: 'mature', text: 'mature' };
     var hrs = ((need - depth) * 60) / 3600;
     return { state: 'maturing', text: 'maturing ~' + (hrs >= 1 ? hrs.toFixed(0) + 'h' : '<1h') };
@@ -807,7 +886,8 @@
     var tip = STATE.tip[net];
     if (!STATE.loaded[net]) { set(net + '-maturing', 'n/a', 'dim'); return; }
     if (tip === null) { set(net + '-maturing', '?', 'dim'); return; }
-    var n = 0; STATE.blocks[net].forEach(function (b) { if (tip - b.height < MATURITY[net]) n++; });
+    // Count only genuinely-maturing coinbases — exclude orphans (they never mature).
+    var n = 0; STATE.blocks[net].forEach(function (b) { if (!b.orphan && tip - b.height < MATURITY[net]) n++; });
     set(net + '-maturing', String(n), n > 0 ? 'yellow' : 'dim');
   }
 
@@ -1007,12 +1087,17 @@
     }
 
     var blocks = STATE.blocks[net];   // already height-desc from the collector
-    // Total mined = blocks × flat coinbase (60 GRIN, no halving). Mainnet adds a
+    // Total mined = NON-orphan blocks × flat coinbase (60 GRIN, no halving) — an orphaned
+    // block earns nothing, so it counts as "found" but not as GRIN mined. Mainnet adds a
     // ≈ USD/BTC conversion from the server-fetched price (testnet tGRIN: count only).
     var reward = (STATE.price && STATE.price.block_reward) || 60;
-    var totalGrin = blocks.length * reward;
+    var orphanCount = 0; blocks.forEach(function (b) { if (b.orphan) orphanCount++; });
+    var minedCount = blocks.length - orphanCount;
+    var totalGrin = minedCount * reward;
     var cur = (net === 'main') ? 'GRIN' : 'tGRIN';
-    var sumHtml = '<b>' + fmtCount(blocks.length) + '</b> found · <b>' + fmtCount(totalGrin) + '</b> ' + cur + ' mined';
+    var sumHtml = '<b>' + fmtCount(blocks.length) + '</b> found'
+      + (orphanCount ? ' <span class="mtag orphan">' + orphanCount + ' orphaned</span>' : '')
+      + ' · <b>' + fmtCount(totalGrin) + '</b> ' + cur + ' mined';
     if (net === 'main' && totalGrin > 0 && STATE.price) {
       var p = STATE.price;   // null legs stay null (don't coerce to 0 → "$0.00")
       var fiat = [
@@ -1044,7 +1129,7 @@
     var shown = blocks.slice(start, start + BLOCKS_PER_PAGE);
     tbody.innerHTML = '<tr><th>Date</th><th>Time</th><th>Height</th><th>Hash</th><th>Maturity</th></tr>'
       + shown.map(function (b) {
-        var d = new Date(b.ts), m = maturityOf(net, b.height);
+        var d = new Date(b.ts), m = maturityOf(net, b);
         var heightTxt = Number(b.height).toLocaleString();
         var heightCell = '<td><a class="h" href="' + blockExplorerUrl(net, b.height) + '" target="_blank" rel="noopener noreferrer">' + heightTxt + '</a></td>';
         return '<tr>'
@@ -1067,7 +1152,7 @@
   }
 
   // ── Payout split (payment calc, mainnet) ──
-  var SPLIT = { period: 'weekly', data: null, person: null, earnPeriod: 'weekly' };
+  var SPLIT = { period: 'weekly', data: null, person: null, earnPeriod: 'weekly', qualityWindow: 'weekly' };
   function fmtGrin(g) { return (g == null ? 0 : g).toFixed(3); }
   // Block-count axis tick: ≤2 decimals, trailing zeros stripped (e.g. 0, 0.5, 1.25).
   function fmtBlocks(b) { return String(Math.round((b == null ? 0 : b) * 100) / 100); }
@@ -1117,6 +1202,7 @@
         renderBalances();
         renderSplit();
         renderEarnChart();
+        renderQuality();
         var nve = document.getElementById('nav-earn');
         if (nve) nve.style.display = ((d.daily || []).length ? '' : 'none');
       })
@@ -1124,8 +1210,10 @@
         SPLIT.data = null;
         document.getElementById('split-card').style.display = 'none';   // feature off / mainnet absent
         document.getElementById('earn-card').style.display = 'none';
+        document.getElementById('quality-card').style.display = 'none';
         var ns = document.getElementById('nav-split'); if (ns) ns.style.display = 'none';
         var ne = document.getElementById('nav-earn'); if (ne) ne.style.display = 'none';
+        var nq = document.getElementById('nav-quality'); if (nq) nq.style.display = 'none';
       });
   }
   // Lifetime running balance per nickname: owed = Σ earnings − Σ payments. Unlike
@@ -1250,6 +1338,120 @@
     Array.prototype.forEach.call(this.querySelectorAll('button'), function (x) { x.classList.remove('active'); });
     btn.classList.add('active'); renderEarnChart();
   });
+  document.getElementById('quality-worker-seg').addEventListener('click', function (e) {
+    var btn = e.target.closest('button'); if (!btn) return;
+    SPLIT.qualityWindow = btn.getAttribute('data-window');
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function (x) { x.classList.remove('active'); });
+    btn.classList.add('active'); renderQualityWorkers();
+  });
+
+  // ── Solo Health: orphan-block rate + stale/rejected share rate ──
+  // Data: split_main.json `quality.windows` (daily / weekly / monthly / yearly / all),
+  // each {accepted, stale, rejected, *_pct, matured, orphan, orphan_pct}. The table shows
+  // only the bounded rolling windows (daily/weekly/monthly) with the rate as the hero and
+  // the raw counts a caption; the unbounded yearly/all-time totals go in the meta line.
+  function renderQuality() {
+    var card = document.getElementById('quality-card');
+    var nq = document.getElementById('nav-quality');
+    var d = SPLIT.data;
+    var q = d && d.quality && d.quality.windows;
+    if (!q) { card.style.display = 'none'; if (nq) nq.style.display = 'none'; return; }
+    card.style.display = '';
+    if (nq) nq.style.display = '';
+    var meta = document.getElementById('quality-meta');
+    var tbody = document.querySelector('#quality-table tbody');
+    // Only the bounded rolling windows live in the table — yearly/all-time grow without
+    // bound and converge to a slow-moving average that stops being actionable, so the
+    // lifetime totals go in the meta line below instead of an ever-growing row.
+    var order = [['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']];
+    var rows = order.map(function (o) {
+      var w = q[o[0]] || {};
+      var found = (w.matured || 0) + (w.orphan || 0);
+      var submitted = (w.accepted || 0) + (w.stale || 0) + (w.rejected || 0);
+      return '<tr><td><span class="w">' + o[1] + '</span></td>'
+        + metricCell(w.orphan_pct || 0, 2, 5, w.orphan || 0, found, found > 0)
+        + metricCell(w.stale_pct || 0, 3, 8, w.stale || 0, submitted, submitted > 0)
+        + metricCell(w.reject_pct || 0, 1, 5, w.rejected || 0, submitted, submitted > 0)
+        + '</tr>';
+    }).join('');
+    tbody.innerHTML = '<tr><th>Period</th><th>Orphaned</th><th>Stale</th><th>Rejected</th></tr>'
+      + rows;
+    var all = q.all || {};
+    var allFound = (all.matured || 0) + (all.orphan || 0);
+    meta.innerHTML = 'All-time: <b>' + fmtQ(all.orphan || 0) + '</b> orphaned of <b>' + fmtQ(allFound)
+      + '</b> found block' + (allFound === 1 ? '' : 's')
+      + ' · <b>' + fmtQ(all.stale || 0) + '</b> stale + <b>' + fmtQ(all.rejected || 0)
+      + '</b> rejected shares';
+    renderQualityWorkers();
+  }
+
+  // ── Solo Health · per-worker breakdown ──
+  // Data: split_main.json `quality.windows[<window>].by_worker` — a list (already sorted
+  // worst-first by the collector) of {worker, accepted, stale, rejected, *_pct, matured,
+  // orphan, orphan_pct}. The window toggle (Daily…All) mirrors the aggregate rows above so
+  // the operator can tell a freshly-degraded rig from a chronic one. The "unknown" worker
+  // row collects stale/rejected shares whose log line didn't name a login.
+  //
+  // This is a TROUBLESHOOTING table, so it shows only workers that actually have a problem
+  // (orphaned or stale/rejected > 0) — a clean worker is noise here and the aggregate table
+  // already carries the totals. That keeps the list short even with hundreds of miners; the
+  // worst offenders sit on top and a long problem list is capped with a note.
+  var QUALITY_WORKER_CAP = 25;
+  function renderQualityWorkers() {
+    var tbody = document.querySelector('#quality-worker-table tbody');
+    var empty = document.getElementById('quality-worker-empty');
+    var note = document.getElementById('quality-worker-note');
+    var q = SPLIT.data && SPLIT.data.quality && SPLIT.data.quality.windows;
+    var list = (q && q[SPLIT.qualityWindow] && q[SPLIT.qualityWindow].by_worker) || [];
+    // "unknown" is not a real rig — it's unattributed stale/rejected shares (log lines
+    // with no login). It has zero accepted shares, so its stale% is always a misleading
+    // 100%; keep it OUT of the ranked rows and instead report its raw counts in the note,
+    // so the per-worker numbers still reconcile with the aggregate stale/reject totals.
+    var unknown = null;
+    var problems = [];
+    list.forEach(function (w) {
+      if (w.worker === 'unknown') { unknown = w; return; }
+      if ((w.orphan || 0) + (w.stale || 0) + (w.rejected || 0) > 0) problems.push(w);
+    });
+    function unattributedSuffix() {
+      if (!unknown) return '';
+      var parts = [];
+      if (unknown.stale) parts.push(unknown.stale + ' stale');
+      if (unknown.rejected) parts.push(unknown.rejected + ' rejected');
+      if (!parts.length) return '';
+      return ' · ' + parts.join(' + ') + " unattributed (no login on the node's log line)";
+    }
+    var shown = problems.slice(0, QUALITY_WORKER_CAP);   // already worst-first from collector
+    if (!shown.length) {
+      tbody.innerHTML = '';
+      var ua = unattributedSuffix();
+      empty.textContent = list.length
+        ? '✓ No orphaned or stale/rejected shares attributed to a worker in this window.'
+        : 'No worker shares recorded in this window yet.';
+      empty.style.display = 'block';
+      note.textContent = ua ? ua.replace(/^ · /, '') : '';
+      return;
+    }
+    empty.style.display = 'none';
+    var rows = shown.map(function (w) {
+      var found = (w.matured || 0) + (w.orphan || 0);
+      var submitted = (w.accepted || 0) + (w.stale || 0) + (w.rejected || 0);
+      return '<tr><td><span class="w">' + esc(w.worker || 'unknown') + '</span></td>'
+        + metricCell(w.orphan_pct || 0, 2, 5, w.orphan || 0, found, found > 0)
+        + metricCell(w.stale_pct || 0, 3, 8, w.stale || 0, submitted, submitted > 0)
+        + metricCell(w.reject_pct || 0, 1, 5, w.rejected || 0, submitted, submitted > 0)
+        + '</tr>';
+    }).join('');
+    tbody.innerHTML = '<tr><th>Worker</th><th>Orphaned</th><th>Stale</th><th>Rejected</th></tr>'
+      + rows;
+    var realTotal = list.length - (unknown ? 1 : 0);
+    var clean = realTotal - problems.length;
+    var msg = 'Showing ' + shown.length + ' worker' + (shown.length === 1 ? '' : 's') + ' with issues';
+    if (problems.length > shown.length) msg += ' (worst ' + QUALITY_WORKER_CAP + ' of ' + problems.length + ')';
+    if (clean > 0) msg += ' · ' + clean + ' clean worker' + (clean === 1 ? '' : 's') + ' hidden';
+    msg += unattributedSuffix();
+    note.textContent = msg;
+  }
 
   // ── GRIN / miner / day chart (actual bars + smoothed estimate + pool-average) ──
   // Data: split_main.json `daily` (raw per-day {blocks, reward, total_diff, nicks}).

@@ -6,6 +6,5 @@
   {"category": "Development progress", "name": "Grin++",                "url": "https://github.com/GrinPlusPlus/GrinPlusPlus",                "since": null,       "type": "github"},
   {"category": "Development progress", "name": "Grin Node Toolkit",     "url": "https://github.com/noobvie/Grin-Node-Toolkit",                "since": null,       "type": "github"},
   {"category": "Development progress", "name": "Goblin Wallet",         "url": "https://github.com/2ro/goblin",                "since": null,       "type": "github"},
-  {"category": "Development progress", "name": "Grin Node Toolkit",     "url": "https://github.com/noobvie/Grin-Node-Toolkit",                "since": null,       "type": "github"},
   {"category": "Development progress", "name": "Grin Node for Umbrel",  "url": "https://github.com/wiesche89/umbrel-community-app-store",     "since": null,       "type": "github"}
 ]

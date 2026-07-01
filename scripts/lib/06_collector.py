@@ -324,6 +324,24 @@ def init_schema(conn):
             PRIMARY KEY (day_ts, network, user_agent)
         );
         CREATE INDEX IF NOT EXISTS idx_vd_day ON version_daily(day_ts);
+
+        -- Cumulative registry of EVERY distinct node ever seen (one row per ip+network,
+        -- upserted each run). known_peers is pruned at 30d and the *_daily tables store
+        -- only counts, so this is the ONLY source able to count DISTINCT nodes ever for
+        -- the "All Time" Top-10 ranking. Builds forward from first deploy; tiny
+        -- (~100 B/row → single-digit MB even at tens of thousands of nodes). geo/version
+        -- reflect the node's most-recent attribution (refreshed on each upsert).
+        CREATE TABLE IF NOT EXISTS seen_peers (
+            ip           TEXT    NOT NULL,
+            network      TEXT    NOT NULL DEFAULT 'mainnet',
+            country_code TEXT    DEFAULT '',
+            country      TEXT    DEFAULT '',
+            user_agent   TEXT    DEFAULT '',
+            first_seen   INTEGER NOT NULL,
+            last_seen    INTEGER NOT NULL,
+            PRIMARY KEY (ip, network)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sp_country ON seen_peers(country_code);
     """)
     conn.commit()
 
@@ -1663,6 +1681,23 @@ def export_all_json():
             conn.execute(
                 "INSERT OR REPLACE INTO version_daily(day_ts,network,user_agent,count) "
                 "VALUES(?,?,?,?)", (day_ts, _net, _ua, _cnt))
+
+    # Accumulate the all-time distinct-node registry (powers the "All Time" Top-10 =
+    # DISTINCT nodes ever seen). UPSERT from the live known_peers set: first_seen keeps
+    # the earliest ever recorded, last_seen + geo/version refresh to the most recent.
+    # One row per (ip, network) forever — the only structure that can count distinct
+    # nodes across all time, since known_peers is pruned at 30d.
+    conn.execute("""
+        INSERT INTO seen_peers (ip, network, country_code, country, user_agent, first_seen, last_seen)
+        SELECT ip, network, country_code, country, COALESCE(user_agent, ''), first_seen, last_seen
+        FROM known_peers WHERE ip IS NOT NULL AND TRIM(ip) <> ''
+        ON CONFLICT(ip, network) DO UPDATE SET
+            first_seen   = MIN(seen_peers.first_seen, excluded.first_seen),
+            last_seen    = MAX(seen_peers.last_seen, excluded.last_seen),
+            country_code = CASE WHEN excluded.country_code <> '' THEN excluded.country_code ELSE seen_peers.country_code END,
+            country      = CASE WHEN excluded.country <> ''      THEN excluded.country      ELSE seen_peers.country END,
+            user_agent   = CASE WHEN TRIM(excluded.user_agent) <> '' THEN excluded.user_agent ELSE seen_peers.user_agent END
+    """)
     conn.commit()
 
     # Timeframe windows. week/month query known_peers live (both within the 30d
@@ -1723,10 +1758,12 @@ def export_all_json():
         out.sort(key=lambda r: -r[1])
         return out
 
-    def _ver_daily_peak(net):
-        """All-time high: peak concurrent nodes per version ever recorded (MAX daily count)."""
+    def _ver_seen_unique(net):
+        """All-time: COUNT of DISTINCT nodes ever seen, grouped by version (from seen_peers)."""
         rows = conn.execute(
-            "SELECT user_agent, MAX(count) FROM version_daily WHERE network=? GROUP BY user_agent",
+            "SELECT user_agent, COUNT(*) FROM seen_peers "
+            "WHERE network=? AND user_agent IS NOT NULL AND TRIM(user_agent)<>'' "
+            "AND user_agent<>'Unknown' GROUP BY user_agent",
             (net,),
         ).fetchall()
         out = [(ua, cnt) for ua, cnt in rows]
@@ -1762,7 +1799,7 @@ def export_all_json():
             "week":  week_vnets,
             "month": _ver_networks(lambda n: _ver_rows(n, month_cutoff)),
             "year":  _ver_networks(lambda n: _ver_daily_rank(n, year_since)),
-            "all":   _ver_networks(lambda n: _ver_daily_peak(n)),
+            "all":   _ver_networks(lambda n: _ver_seen_unique(n)),
         },
     })
 
@@ -1820,11 +1857,11 @@ def export_all_json():
         out.sort(key=lambda r: -r[2])
         return out
 
-    def _country_daily_peak(net):
-        """All-time high: peak concurrent nodes per country ever recorded (MAX daily count)."""
+    def _country_seen_unique(net):
+        """All-time: COUNT of DISTINCT nodes ever seen, grouped by country (from seen_peers)."""
         rows = conn.execute(
-            "SELECT country_code, MAX(country_name), MAX(peer_count) "
-            "FROM country_daily WHERE network=? AND country_code<>'' GROUP BY country_code",
+            "SELECT country_code, MAX(country), COUNT(*) "
+            "FROM seen_peers WHERE network=? AND country_code<>'' GROUP BY country_code",
             (net,),
         ).fetchall()
         out = [(code, name, cnt) for code, name, cnt in rows]
@@ -1842,7 +1879,7 @@ def export_all_json():
             "week":  week_cnets,
             "month": _country_networks(lambda n: _country_rows(n, month_cutoff)),
             "year":  _country_networks(lambda n: _country_daily_rank(n, year_since)),
-            "all":   _country_networks(lambda n: _country_daily_peak(n)),
+            "all":   _country_networks(lambda n: _country_seen_unique(n)),
         },
     })
 

@@ -270,11 +270,20 @@
   /* Section navigation — clickable chips that jump to each panel/chart */
   html { scroll-behavior: smooth; }
   .panel, .chart-card { scroll-margin-top: 1rem; }
-  nav.toc { width: 100%; max-width: 860px; display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 1.5rem; }
+  nav.toc { width: 100%; max-width: 860px; display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; margin: 0 0 1.5rem; }
   nav.toc a { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
     border-radius: 999px; padding: .42rem .85rem; font-size: .86rem; text-decoration: none;
-    letter-spacing: .02em; transition: background .2s; }
+    letter-spacing: .02em; transition: background .2s;
+    display: inline-flex; align-items: center; gap: .4rem; }
   nav.toc a:hover { background: var(--border); color: var(--text-hi); }
+  nav.toc .ico { font-size: 1rem; line-height: 1; }
+  /* Phones: drop the text, keep the emoji — a compact centred icon strip. */
+  @media (max-width: 560px) {
+    nav.toc { gap: .45rem; }
+    nav.toc .lbl { display: none; }
+    nav.toc a { padding: .5rem .7rem; }
+    nav.toc .ico { font-size: 1.15rem; }
+  }
 
   footer { color: var(--muted); font-size: .82rem; text-align: center; margin-top: 2rem; line-height: 1.7; max-width: 860px; }
   footer code { color: var(--text); }
@@ -300,14 +309,17 @@
   <span class="live-dot"></span><span id="fresh-text">Connecting…</span><a class="api-link" href="data/health.json" target="_blank" rel="noopener" title="Machine-readable status for both networks (data/health.json) — node/wallet/stratum liveness + 24h blocks. Refreshed every 5 min; stays public even if this page is locked.">status JSON</a>
 </div>
 
+<!-- Each link carries an emoji (.ico, always shown) + text (.lbl, hidden on phones
+     via the ≤560px media query) so the nav stays legible on desktop but collapses to
+     a compact icon strip on mobile. title= keeps the name discoverable when icon-only. -->
 <nav class="toc" aria-label="Section navigation">
-  <a href="#panel-main">Mainnet</a>
-  <a href="#panel-test">Testnet</a>
-  <a href="#chart-blocks">Blocks chart</a>
-  <a href="#chart-hashrate">Hashrate chart</a>
-  <a href="#split-card" id="nav-split" style="display:none">Payout split</a>
-  <a href="#earn-card" id="nav-earn" style="display:none">Earnings / day</a>
-  <a href="#quality-card" id="nav-quality" style="display:none">Solo health</a>
+  <a href="#panel-main" title="Mainnet"><span class="ico" aria-hidden="true">🌐</span><span class="lbl">Mainnet</span></a>
+  <a href="#panel-test" title="Testnet"><span class="ico" aria-hidden="true">🧪</span><span class="lbl">Testnet</span></a>
+  <a href="#chart-blocks" title="Blocks chart"><span class="ico" aria-hidden="true">🧱</span><span class="lbl">Blocks</span></a>
+  <a href="#chart-hashrate" title="Hashrate chart"><span class="ico" aria-hidden="true">⚡</span><span class="lbl">Hashrate</span></a>
+  <a href="#split-card" id="nav-split" style="display:none" title="Payout split"><span class="ico" aria-hidden="true">💰</span><span class="lbl">Payout</span></a>
+  <a href="#earn-card" id="nav-earn" style="display:none" title="Earnings / day"><span class="ico" aria-hidden="true">📈</span><span class="lbl">Earnings</span></a>
+  <a href="#quality-card" id="nav-quality" style="display:none" title="Solo health"><span class="ico" aria-hidden="true">🫀</span><span class="lbl">Health</span></a>
 </nav>
 
 <!-- ── MAINNET ── -->

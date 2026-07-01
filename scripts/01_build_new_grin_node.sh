@@ -175,6 +175,10 @@ GRIN_GITHUB_API="https://api.github.com/repos/mimblewimble/grin/releases/latest"
 # Shared node primitives (canonical _grin_session_name, etc.). Source-guarded,
 # no side effects; defines info/warn/error fallbacks only if absent.
 source "$SCRIPT_DIR/lib/grin_node_control.sh"
+# Keepalive/watchdog policy layer (reboot autostart + node-sync watchdog).
+# Source-guarded, no side effects; provides gnk_autostart_enable / gnk_watchdog_install
+# used by Super Auto's post-build hardening.
+source "$SCRIPT_DIR/lib/grin_node_keepalive.sh"
 
 # --- Session state (reset per node) ---
 NETWORK_TYPE=""
@@ -186,6 +190,9 @@ GRIN_BIN_TMP=""        # cache binary between mainnet+testnet setups
 RESTRICTED_NETWORK=""  # set by check_grin_running if one slot is already occupied
 STREAM_MODE=false      # true = on-the-fly pipe extraction (no local .tar.gz saved)
 SLOW_SYNC_MODE=false   # true = no archive; start node and sync from network peers (grin default)
+SUPER_AUTO=false       # true = one-hit auto path: wipe & rebuild BOTH nodes (pruned, streamed)
+                       #        + reboot autostart + sync watchdog + log rotation. Suppresses
+                       #        the per-step prompts (archive mode / transfer mode / zone).
 READY_SOURCES=()       # ordered list of base URLs that passed sync-status check
 SELECTED_ZONE=""       # zone chosen at Step 9 (america|asia|europe|africa|all)
 
@@ -720,6 +727,163 @@ _start_installed_node() {
     return 0
 }
 
+# =============================================================================
+# [SUPER AUTO] One-hit: wipe & rebuild BOTH nodes (pruned) + full hardening
+# -----------------------------------------------------------------------------
+# Opinionated, minimal-interaction path offered from every Step-1 branch:
+#   • both networks, PRUNED only     • on-the-fly streamed chain data
+#   • kills every running node and deletes existing binaries + chain_data first
+#   • after each build: @reboot autostart + node-sync watchdog + log rotation
+# The ONLY interaction is a soft 20 GB free-space gate (warn + FORCE override)
+# and a single state-aware confirmation. Reuses the existing K-path helpers
+# (stop_grin_gracefully / _remove_instance_dirs) — no duplicated kill/wipe logic.
+# =============================================================================
+
+# Free GiB on the filesystem that holds (or will hold) /opt/grin/node.
+_super_auto_free_gb() {
+    local p="/opt/grin/node"
+    while [[ ! -d "$p" && "$p" != "/" ]]; do p=$(dirname "$p"); done
+    local kb; kb=$(df -Pk "$p" 2>/dev/null | awk 'NR==2{print $4}') || kb=0
+    echo $(( kb / 1024 / 1024 ))
+}
+
+# Install logrotate for one node's grin-server.log.
+# grin holds the log open for the life of the process and does NOT reopen it on
+# SIGHUP, so rotation MUST use copytruncate (copy then zero in place) — a
+# rename/create cycle would leave grin writing to the old inode and rotation
+# would silently stop after the first cycle. Idempotent (overwrites its own file).
+_install_grin_logrotate() {
+    local network="$1" node_dir="$2"
+    local conf="/etc/logrotate.d/grin-node-${network}"
+    local logpath="${node_dir}/grin-server.log"
+
+    if [[ ! -d /etc/logrotate.d ]]; then
+        warn "logrotate not present (/etc/logrotate.d missing) — skipping log rotation for ${network}."
+        return 0
+    fi
+
+    cat > "$conf" <<EOF
+# grin-node-toolkit: Super Auto log rotation for the ${network} node.
+# copytruncate is required — grin keeps the log open and never reopens on SIGHUP.
+${logpath} {
+    daily
+    rotate 7
+    size 50M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}
+EOF
+    chmod 644 "$conf"
+    success "Log rotation installed: ${conf} (daily, 50M cap, keep 7, compressed)."
+    log "[SUPER AUTO] logrotate → $conf for $logpath"
+}
+
+# Post-build hardening bundle for one network (autostart + watchdog + logrotate).
+# Runs from setup_one_node AFTER save_instance_location so gnk_autostart_enable
+# can resolve the node dir from INSTANCES_CONF. All three steps are idempotent.
+_super_auto_harden() {
+    local network="$1" node_dir="$2"
+    step_header "Super Auto: Post-build hardening (${network})"
+    gnk_autostart_enable "$network" || warn "Autostart enable failed for ${network} — set it up later via Script 03 → G."
+    gnk_watchdog_install            || warn "Watchdog install failed — set it up later via Script 07 health menu."
+    _install_grin_logrotate "$network" "$node_dir" || warn "Log rotation setup failed for ${network}."
+}
+
+# run_super_auto — the one-hit handler. Returns 0 on completion (caller exits 0),
+# 1 on cancel (caller re-shows its menu / falls through).
+run_super_auto() {
+    step_header "Super Auto — Wipe & Rebuild Both Nodes (pruned)"
+
+    # ── 1. Soft 20 GB disk gate (warn + FORCE override) ─────────────────────────
+    local _min_gb=20 _free_gb
+    _free_gb=$(_super_auto_free_gb)
+    echo ""
+    echo -e "  Free space (fs holding /opt/grin/node): ${BOLD}${_free_gb} GiB${RESET}  (required: ${_min_gb} GiB)"
+    if (( _free_gb < _min_gb )); then
+        echo ""
+        warn "Low disk space: ${_free_gb} GiB free — Super Auto recommends ≥ ${_min_gb} GiB"
+        warn "for two pruned nodes (streamed chain data + headroom)."
+        echo ""
+        echo -ne "  Type ${BOLD}FORCE${RESET} to proceed anyway, or Enter to cancel: "
+        local _fc; read -r _fc || true
+        if [[ "$_fc" != "FORCE" ]]; then
+            info "Super Auto cancelled — free up space and retry."
+            return 1
+        fi
+        warn "Overriding disk gate on user request."
+    else
+        success "Disk space OK for Super Auto."
+    fi
+
+    # ── 2. State-aware confirmation ─────────────────────────────────────────────
+    # NOTE: under `set -e`, a bare `cmd && var=true` aborts the script when cmd is
+    # false, so every detection below uses the if-form.
+    local _running=false _installed=false
+    if ss -tlnp "sport = :3414"  2>/dev/null | grep -q ":3414 ";  then _running=true; fi
+    if ss -tlnp "sport = :13414" 2>/dev/null | grep -q ":13414 "; then _running=true; fi
+    detect_installed_nodes
+    if [[ ${#INSTALLED_NETS[@]} -gt 0 ]]; then _installed=true; fi
+
+    echo ""
+    echo -e "${BOLD}  Super Auto will:${RESET}"
+    echo -e "    • Build ${BOLD}mainnet-prune${RESET} + ${BOLD}testnet-prune${RESET}  ${DIM}(on-the-fly streamed chain data)${RESET}"
+    echo -e "    • Enable ${GREEN}@reboot autostart${RESET}, ${GREEN}sync watchdog${RESET}, and ${GREEN}log rotation${RESET}"
+    echo -e "    • Set up a ${GREEN}Tor .onion${RESET} mirror per node"
+
+    if $_running || $_installed; then
+        echo ""
+        warn "  ⚠  DESTRUCTIVE — existing Grin data will be removed:"
+        if $_installed; then
+            local _i
+            for _i in "${!INSTALLED_NETS[@]}"; do
+                echo -e "       ${RED}✗${RESET} ${INSTALLED_NETS[$_i]} (${INSTALLED_MODES[$_i]}) — ${DIM}${INSTALLED_DIRS[$_i]}${RESET}"
+                echo -e "           ${DIM}$(_describe_installed_node "${INSTALLED_DIRS[$_i]}")${RESET}"
+            done
+        fi
+        if $_running; then echo -e "       ${RED}✗${RESET} all running Grin processes will be ${BOLD}killed${RESET}"; fi
+        echo -e "       ${RED}✗${RESET} binaries + chain_data for BOTH networks will be ${BOLD}deleted${RESET}"
+        echo ""
+        echo -ne "  Type ${RED}${BOLD}REBUILD${RESET} to proceed, or Enter to cancel: "
+        local _cf; read -r _cf || true
+        if [[ "$_cf" != "REBUILD" ]]; then
+            info "Super Auto cancelled — no changes made."
+            return 1
+        fi
+    else
+        echo ""
+        echo -ne "  ${BOLD}Proceed? [Y/n]: ${RESET}"
+        local _cf; read -r _cf || true
+        if [[ "${_cf,,}" == "n" ]]; then info "Super Auto cancelled."; return 1; fi
+    fi
+
+    # ── 3. Kill + wipe everything (reuse existing K-path) ────────────────────────
+    stop_grin_gracefully
+    _remove_instance_dirs all
+    if [[ -f "$INSTANCES_CONF" ]]; then : > "$INSTANCES_CONF"; log "Conf cleared (super-auto rebuild)."; fi
+
+    # ── 4. Deps, then build both (pruned, streamed) with per-node hardening ──────
+    check_os_and_deps
+    check_legacy_grin_dir
+    SUPER_AUTO=true
+    # The 20 GB gate above IS the disk check; stream mode also skips the per-node
+    # disk check, and create_node_dir must not re-die on space after a wipe.
+    GRIN_SKIP_DISK_CHECK=1
+
+    info "Super Auto: building MAINNET (pruned)..."
+    setup_one_node "mainnet"
+    echo ""
+    info "Super Auto: building TESTNET (pruned)..."
+    setup_one_node "testnet"
+
+    echo ""
+    success "Super Auto complete — both nodes built; autostart + watchdog + log rotation enabled."
+    log "[SUPER AUTO] Completed both networks."
+    return 0
+}
+
 check_grin_running() {
     step_header "Step 1: Process & Port Check"
 
@@ -743,15 +907,19 @@ check_grin_running() {
         echo ""
         local _both_choice
         while true; do
+            echo -e "  ${GREEN}A${RESET} — 🚀 Super Auto  ${DIM}⚠ WIPE ALL & rebuild both (pruned) + autostart/watchdog/logrotate${RESET}"
             echo -e "  ${CYAN}B${RESET} — update binary only  (no chain data rebuild)"
             echo -e "  ${YELLOW}M${RESET} — kill mainnet  & rebuild mainnet"
             echo -e "  ${YELLOW}T${RESET} — kill testnet  & rebuild testnet"
             echo -e "  ${RED}K${RESET} — kill all Grin processes & rebuild both networks"
             echo -e "  ${GREEN}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[B/M/T/K/0]: ${RESET}"
+            echo -ne "${DIM}[A/B/M/T/K/0]: ${RESET}"
             read -r _both_choice || true
             case "${_both_choice:-}" in
+                [Aa])
+                    if run_super_auto; then exit 0; fi
+                    ;;
                 [Bb])
                     update_binary_only
                     ;;
@@ -775,7 +943,7 @@ check_grin_running() {
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose B, M, T, K, or 0."
+                    warn "Invalid input — choose A, B, M, T, K, or 0."
                     echo ""
                     ;;
             esac
@@ -798,6 +966,7 @@ check_grin_running() {
 
         local _main_choice
         while true; do
+            echo -e "  ${GREEN}A${RESET} — 🚀 Super Auto  ${DIM}⚠ WIPE ALL & rebuild both (pruned) + autostart/watchdog/logrotate${RESET}"
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
             echo -e "  ${RED}M${RESET} — kill mainnet  & rebuild mainnet"
             if $_testnet_installed; then
@@ -809,11 +978,14 @@ check_grin_running() {
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
             $_testnet_installed \
-                && echo -ne "${DIM}[B/M/S/0, Enter = S]: ${RESET}" \
-                || echo -ne "${DIM}[B/M/1/0, Enter = 1]: ${RESET}"
+                && echo -ne "${DIM}[A/B/M/S/0, Enter = S]: ${RESET}" \
+                || echo -ne "${DIM}[A/B/M/1/0, Enter = 1]: ${RESET}"
             read -r _main_choice || true
             [[ -z "$_main_choice" ]] && { $_testnet_installed && _main_choice="s" || _main_choice="1"; }
             case "${_main_choice,,}" in
+                a)
+                    if run_super_auto; then exit 0; fi
+                    ;;
                 b)
                     update_binary_only
                     ;;
@@ -846,8 +1018,8 @@ check_grin_running() {
                     ;;
                 *)
                     $_testnet_installed \
-                        && warn "Invalid input — choose B, M, S, or 0." \
-                        || warn "Invalid input — choose B, M, 1, or 0."
+                        && warn "Invalid input — choose A, B, M, S, or 0." \
+                        || warn "Invalid input — choose A, B, M, 1, or 0."
                     echo ""
                     ;;
             esac
@@ -870,6 +1042,7 @@ check_grin_running() {
 
         local _test_choice
         while true; do
+            echo -e "  ${GREEN}A${RESET} — 🚀 Super Auto  ${DIM}⚠ WIPE ALL & rebuild both (pruned) + autostart/watchdog/logrotate${RESET}"
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
             echo -e "  ${RED}T${RESET} — kill testnet  & rebuild testnet"
             if $_mainnet_installed; then
@@ -884,11 +1057,14 @@ check_grin_running() {
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
             $_mainnet_installed \
-                && echo -ne "${DIM}[B/T/S/0, Enter = S]: ${RESET}" \
-                || echo -ne "${DIM}[B/T/1/0, Enter = 1]: ${RESET}"
+                && echo -ne "${DIM}[A/B/T/S/0, Enter = S]: ${RESET}" \
+                || echo -ne "${DIM}[A/B/T/1/0, Enter = 1]: ${RESET}"
             read -r _test_choice || true
             [[ -z "$_test_choice" ]] && { $_mainnet_installed && _test_choice="s" || _test_choice="1"; }
             case "${_test_choice,,}" in
+                a)
+                    if run_super_auto; then exit 0; fi
+                    ;;
                 b)
                     update_binary_only
                     ;;
@@ -921,8 +1097,8 @@ check_grin_running() {
                     ;;
                 *)
                     $_mainnet_installed \
-                        && warn "Invalid input — choose B, T, S, or 0." \
-                        || warn "Invalid input — choose B, T, 1, or 0."
+                        && warn "Invalid input — choose A, B, T, S, or 0." \
+                        || warn "Invalid input — choose A, B, T, 1, or 0."
                     echo ""
                     ;;
             esac
@@ -972,6 +1148,7 @@ check_grin_running() {
 
         if [[ $found -eq 1 ]]; then
             echo ""
+            echo -e "  ${GREEN}A${RESET}) 🚀 Super Auto — ${BOLD}WIPE ALL${RESET} & rebuild both (pruned) + autostart/watchdog/logrotate"
             echo -e "  ${GREEN}K${RESET}) Kill all conflicting processes and continue"
             echo -e "  ${YELLOW}C${RESET}) Continue anyway with warning only (if processes are unrelated to Grin)"
             if $_inst_detected; then
@@ -984,11 +1161,12 @@ check_grin_running() {
             echo -e "  ${DIM}0${RESET}) Return to main menu"
             echo -e "  ${DIM}Enter${RESET}) Recheck"
             echo ""
-            local _prompt_keys="K/C/S/N/0"
-            $_inst_detected && _prompt_keys="K/C/S/R/N/0"
+            local _prompt_keys="A/K/C/S/N/0"
+            $_inst_detected && _prompt_keys="A/K/C/S/R/N/0"
             echo -ne "${BOLD}${RED}Choose [${_prompt_keys}]: ${RESET}"
             read -r confirm || true
             case "${confirm,,}" in
+                a) if run_super_auto; then exit 0; fi ;;
                 k) stop_grin_gracefully
                    [[ -f "$INSTANCES_CONF" ]] && { : > "$INSTANCES_CONF"; log "Conf cleared (stale-process kill)."; }
                    break ;;
@@ -1044,6 +1222,18 @@ check_grin_running() {
             esac
         else
             success "No Grin processes or port conflicts found."
+            echo ""
+            echo -e "  ${GREEN}A${RESET}) 🚀 Super Auto — install both nodes (mainnet + testnet, pruned) + autostart/watchdog/logrotate"
+            echo -e "  ${GREEN}1${RESET}) Custom wizard — pick network / mode / source yourself  ${DIM}(default)${RESET}"
+            echo -e "  ${DIM}0${RESET}) Return to main menu"
+            echo ""
+            echo -ne "${BOLD}Choice [A/1/0, Enter = 1]: ${RESET}"
+            local _fresh_choice; read -r _fresh_choice || true
+            case "${_fresh_choice,,}" in
+                a) if run_super_auto; then exit 0; fi
+                   ;;   # cancelled → fall through to the custom wizard
+                0) exit 0 ;;
+            esac
             break
         fi
     done
@@ -1400,6 +1590,15 @@ select_network() {
 select_archive_mode() {
     local network="$1"
     step_header "Step 4: Archive Mode (${network})"
+
+    # Super Auto: always pruned, no prompt (both networks are pruned-only).
+    if [[ "$SUPER_AUTO" == "true" ]]; then
+        ARCHIVE_MODE="pruned"
+        info "Super Auto: pruned mode (${network})."
+        log "[STEP 4] ArchiveMode=pruned (super-auto)"
+        return
+    fi
+
     echo ""
     echo -e "  ${GREEN}1${RESET}) Pruned       (default, recommended — smaller storage, ~10 GiB)"
     echo -e "  ${YELLOW}2${RESET}) Full archive (mainnet only — full UTXO history, ~25 GiB)"
@@ -1776,14 +1975,8 @@ patch_config() {
         warn "enable_stratum_server not found in config — appended."
     fi
 
-    # p2p host — use "::" (IPv6 any-address) instead of "0.0.0.0" so the node
-    # accepts both IPv4 and IPv6 inbound connections on dual-stack systems.
-    # Only replaces the default 0.0.0.0; custom addresses are left untouched.
-    if grep -qE '^#?[[:space:]]*host[[:space:]]*=[[:space:]]*"0\.0\.0\.0"' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*host[[:space:]]*=[[:space:]]*"0\.0\.0\.0"/host = "::"/' "$config"
-    else
-        warn "host = \"0.0.0.0\" not found in p2p_config — skipping IPv6 patch."
-    fi
+    # p2p host — no patch needed: grin v5.5+ already defaults to host = "::"
+    # (IPv6 any-address, dual-stack). The old 0.0.0.0→:: sed is obsolete.
 
     success "Config patched:"
     info "  archive_mode                      = $archive_val"
@@ -1796,8 +1989,8 @@ patch_config() {
     info "  peer_min_preferred_outbound_count = 199"
     info "  log_max_files                     = 3"
     info "  enable_stratum_server             = true"
-    info "  host (p2p)                        = \"::\"  (IPv4 + IPv6 dual-stack)"
-    log "[STEP 8] archive_mode=$archive_val db_root=$db_root api_secret=$GRIN_DIR/.api_secret peer_limits=999in/199out/199min log_max_files=3 stratum=true p2p_host=::"
+    info "  host (p2p)                        = \"::\"  (v5.5 default — IPv4 + IPv6 dual-stack)"
+    log "[STEP 8] archive_mode=$archive_val db_root=$db_root api_secret=$GRIN_DIR/.api_secret peer_limits=999in/199out/199min log_max_files=3 stratum=true p2p_host=default(::)"
 }
 
 # =============================================================================
@@ -2011,6 +2204,7 @@ download_chain_data() {
     # can return immediately without any source discovery — and so it stays
     # reachable even when every archive source is stale/down (the exact case where
     # host discovery would otherwise die() before this prompt was ever shown).
+    if [[ "$SUPER_AUTO" != "true" ]]; then
     echo ""
     echo -e "${BOLD}  How do you want to get the chain data?${RESET}"
     echo ""
@@ -2033,8 +2227,14 @@ download_chain_data() {
     echo -e "     ${DIM}SHA256 / disk-space checks are not applicable.${RESET}"
     echo ""
     echo -ne "${BOLD}Choose [1/2/3] (default: 1): ${RESET}"
+    fi
     local dl_choice
-    read -r dl_choice || true
+    if [[ "$SUPER_AUTO" == "true" ]]; then
+        dl_choice=1
+        info "Super Auto: on-the-fly streaming from the fastest available source."
+    else
+        read -r dl_choice || true
+    fi
     dl_choice="${dl_choice:-1}"
 
     if [[ "$dl_choice" == "3" ]]; then
@@ -2087,6 +2287,9 @@ download_chain_data() {
     if [[ ! -f "$REGISTRY" ]]; then
         warn "grinmasternodes.json not found — using built-in America servers."
         SELECTED_ZONE="america"
+    elif [[ "$SUPER_AUTO" == "true" ]]; then
+        SELECTED_ZONE="all"
+        info "Super Auto: auto-selecting the fastest fresh source across all zones."
     else
         echo ""
         echo -e "${BOLD}  Select a download zone:${RESET}"
@@ -2593,8 +2796,12 @@ show_summary() {
     echo -e "     ${DIM}  chmod 700 /var/lib/tor/grin-${network}-raw-tcp/${RESET}"
     echo -e "     ${DIM}  systemctl restart tor   # full restart required to re-read keys${RESET}"
     echo ""
-    echo -e "  ${YELLOW}⚠  Remember:${RESET} schedule auto-start on reboot via"
-    echo -e "     ${BOLD}3) Share Grin Chain Data / Schedule${RESET} → option ${GREEN}G) Auto startup Grin node${RESET}"
+    if [[ "$SUPER_AUTO" == "true" ]]; then
+        echo -e "  ${GREEN}✓  Auto-start, watchdog & log rotation${RESET} are being configured automatically."
+    else
+        echo -e "  ${YELLOW}⚠  Remember:${RESET} schedule auto-start on reboot via"
+        echo -e "     ${BOLD}3) Share Grin Chain Data / Schedule${RESET} → option ${GREEN}G) Auto startup Grin node${RESET}"
+    fi
     echo -e "${BOLD}${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 
     log "[STEP 14] DONE. network=$network mode=$mode dir=$GRIN_DIR time=${mins}m${secs}s onion=${_onion_addr:-pending}"
@@ -2820,6 +3027,14 @@ setup_one_node() {
 
     show_summary        "$network" "$ARCHIVE_MODE"
     save_instance_location "$network" "$ARCHIVE_MODE"
+
+    # Super Auto post-build hardening — autostart + watchdog + logrotate.
+    # Runs AFTER save_instance_location so gnk_autostart_enable can resolve the
+    # node dir from INSTANCES_CONF. No-op in the custom wizard (SUPER_AUTO=false),
+    # which keeps the existing "remember to schedule autostart" reminder instead.
+    if [[ "$SUPER_AUTO" == "true" ]]; then
+        _super_auto_harden "$network" "$GRIN_DIR"
+    fi
 
     # Reset per-node state for the next network (if "both" selected).
     # GRIN_BIN_TMP is intentionally NOT reset — reused by the second setup_one_node call.

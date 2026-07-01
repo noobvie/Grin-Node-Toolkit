@@ -22,31 +22,48 @@ GW_WG_IFACE="wg-grinpool"
 GW_WG_CONF="/etc/wireguard/${GW_WG_IFACE}.conf"
 
 # ─── Config helpers (mirror the parent, targeting GW_CONF) ──────────────────────
+# python3, NOT node: the gateway box deliberately has no Node.js (pure forwarder),
+# so these must never shell out to `node` — that's what broke Configure with
+# "node: command not found". python3 ships on every supported distro and is
+# installed explicitly in gw_install as a safety net.
 gw_read_conf() {
     local key="$1" default="${2:-}"
     [[ -f "$GW_CONF" ]] || { echo "$default"; return; }
-    node -e "
-try {
-  const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
-  const v = d[process.argv[2]];
-  process.stdout.write(v !== undefined ? String(v) : process.argv[3]);
-} catch(e) { process.stdout.write(process.argv[3]); }
-" "$GW_CONF" "$key" "$default" 2>/dev/null || echo "$default"
+    python3 - "$GW_CONF" "$key" "$default" 2>/dev/null << 'PY' || echo "$default"
+import json, sys
+path, key, default = sys.argv[1:4]
+try:
+    with open(path) as f:
+        v = json.load(f).get(key)
+    sys.stdout.write(default if v is None else str(v))
+except Exception:
+    sys.stdout.write(default)
+PY
 }
 
 gw_write_conf_key() {
     local key="$1" val="$2"
     mkdir -p "$(dirname "$GW_CONF")"
-    node -e "
-const fs = require('fs');
-const [path, key, val] = process.argv.slice(1);
-const NUMS = new Set(['public_stratum_port']);
-let d = {};
-try { d = JSON.parse(fs.readFileSync(path, 'utf8')); } catch(e) {}
-d[key] = NUMS.has(key) ? parseFloat(val) : val;
-fs.writeFileSync(path, JSON.stringify(d, null, 2));
-fs.chmodSync(path, 0o600);
-" "$GW_CONF" "$key" "$val"
+    python3 - "$GW_CONF" "$key" "$val" << 'PY'
+import json, os, sys
+path, key, val = sys.argv[1:4]
+NUMS = {'public_stratum_port'}
+d = {}
+try:
+    with open(path) as f:
+        d = json.load(f)
+except Exception:
+    pass
+if key in NUMS:
+    try:
+        val = int(val)
+    except ValueError:
+        pass
+d[key] = val
+with open(path, 'w') as f:
+    json.dump(d, f, indent=2)
+os.chmod(path, 0o600)
+PY
 }
 
 gw_ensure_defaults() {
@@ -78,15 +95,20 @@ gw_install() {
     info "Installing packages (haproxy + wireguard-tools)..."
     # NO node, NO npm, NO grin node, NO build tools — the edge is a pure forwarder.
     if command -v apt-get &>/dev/null; then
-        apt-get install -y haproxy wireguard-tools 2>&1 | tail -8
+        # Refresh the package index first: a stale index 404s on fetch when the
+        # mirror has since moved to a newer build (nothing else on this thin edge
+        # runs apt-get update for us — the pool roles get it via NodeSource).
+        apt-get update 2>&1 | tail -3 || warn "apt-get update failed — install may fetch stale package URLs."
+        apt-get install -y haproxy wireguard-tools python3 2>&1 | tail -8
     elif command -v dnf &>/dev/null; then
-        dnf install -y haproxy wireguard-tools 2>&1 | tail -8
+        dnf install -y haproxy wireguard-tools python3 2>&1 | tail -8
     else
         error "No apt-get or dnf — install haproxy + wireguard-tools manually."
         return 1
     fi
     command -v haproxy &>/dev/null || { error "haproxy not installed."; return 1; }
     command -v wg      &>/dev/null || { error "wireguard-tools (wg) not installed."; return 1; }
+    command -v python3 &>/dev/null || { error "python3 not installed (needed for gateway config read/write)."; return 1; }
 
     mkdir -p "$GW_DIR" "$(dirname "$GW_LOG")"
     chmod 700 "$GW_DIR"
@@ -136,8 +158,9 @@ gw_configure() {
     gw_ensure_defaults
     local val
 
-    echo -e "  ${DIM}(Region label — must match the key the operator created in admin → Regions)${RESET}"
-    echo -ne "Region name (e.g. asia, us-east) [$(gw_read_conf region "")]: "
+    echo -e "  ${DIM}(Region key — short airport-style code, must match the key the operator${RESET}"
+    echo -e "  ${DIM} created in admin → Regions AND the key used when adding this peer on the pool box)${RESET}"
+    echo -ne "Region key (e.g. nyc, sgn, ams) [$(gw_read_conf region "")]: "
     read -r val; [[ -n "$val" ]] && gw_write_conf_key "region" "$val"
 
     echo -ne "Public stratum port (miners connect here) [$(gw_read_conf public_stratum_port "3333")]: "
@@ -161,7 +184,7 @@ gw_configure() {
 
     echo ""
     echo -e "  ${DIM}This region's INTERNAL stratum port on the central box (the operator${RESET}"
-    echo -e "  ${DIM}assigns it when adding your peer, e.g. asia->3391). Combined with the${RESET}"
+    echo -e "  ${DIM}assigns it when adding your peer, e.g. sgn->3391). Combined with the${RESET}"
     echo -e "  ${DIM}central tunnel IP into hub_endpoint, e.g. 10.66.66.1:3391.${RESET}"
     local hub_ip; hub_ip=$(gw_read_conf wg_hub_ip "")
     echo -ne "Central region port (e.g. 3391) [$(gw_read_conf hub_endpoint "" | sed 's/.*://')]: "

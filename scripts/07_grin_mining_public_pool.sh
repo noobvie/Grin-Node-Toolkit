@@ -559,11 +559,11 @@ pool_configure() {
     echo
     echo -e "  ${DIM}(Where is THIS pool server? Shown on the public connect card. Optional — Enter to skip.)${RESET}"
     local cur_rlabel; cur_rlabel=$(pool_read_conf "region_label" "")
-    echo -ne "Region display name (e.g. Hanoi, Frankfurt) [${cur_rlabel}]: "
+    echo -ne "Region display name (e.g. Saigon, New York) [${cur_rlabel}]: "
     read -r val
     [[ -n "$val" ]] && pool_write_conf_key "region_label" "$val"
     local cur_rcountry; cur_rcountry=$(pool_read_conf "region_country" "")
-    echo -ne "Country name (e.g. Vietnam, Germany) [${cur_rcountry}]: "
+    echo -ne "Country name (e.g. Vietnam, United States) [${cur_rcountry}]: "
     read -r val
     [[ -n "$val" ]] && pool_write_conf_key "region_country" "$val"
     local cur_rcc; cur_rcc=$(pool_read_conf "region_country_code" "")
@@ -1918,7 +1918,7 @@ EOF
 pool_wg_add_peer() {
     [[ -f "$WG_CONF" ]] || { error "Run 1) Setup WireGuard server first."; return 1; }
     local region gwpub
-    echo -ne "Region key for this gateway (e.g. asia, us-east): "; read -r region
+    echo -ne "Region key for this gateway (airport-style code, e.g. nyc, sgn, ams): "; read -r region
     [[ -n "$region" ]] || { warn "Region key required."; return 1; }
     echo -ne "Gateway's WireGuard public key: "; read -r gwpub
     [[ -n "$gwpub" ]] || { warn "Gateway public key required."; return 1; }

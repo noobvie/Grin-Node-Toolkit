@@ -473,6 +473,11 @@ footer a:hover { color: var(--accent); }
     object-fit: cover; box-shadow: 0 0 0 1px var(--border-color);
 }
 .region-flag { font-size: 16px; line-height: 1; }
+/* Single-region pools: flag + city shown inline after the fallback callout text. */
+.region-fallback-loc {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-left: 10px; color: var(--text-dim);
+}
 
 .region-tabs {
     display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px;

@@ -29,6 +29,13 @@
     .fieldguide dd { margin: 0 0 .15rem; color: var(--text-dim); line-height: 1.5; }
     .fieldguide .step { color: var(--accent, #b8e600); font-weight: 700; }
     .fieldguide code { font-family: var(--mono); }
+
+    /* Custom SVG flags (VN) — sized to sit inline with the emoji flags. */
+    .flag-img {
+      width: 20px; height: 14px; vertical-align: -2px;
+      border-radius: 2px; object-fit: cover;
+      box-shadow: 0 0 0 1px var(--border, #2a2a2a);
+    }
   </style>
 </head>
 <body>
@@ -41,23 +48,37 @@
     </div>
 
     <!-- How regions work — the order of operations, so the admin isn't guessing -->
-    <details class="card howto" id="howto" open>
+    <details class="card howto" id="howto">
       <summary><strong>How regions work — add a gateway in 4 steps (Model C)</strong></summary>
       <p class="howto-intro">
-        A region has <em>two halves</em>: the <strong>connect card</strong> you declare <em>here</em> (what miners see), and the
-        <strong>gateway</strong> — a thin box running just HAProxy + WireGuard that forwards miners' stratum to this pool over a
-        tunnel (no node, no wallet). The pool stays the single brain. <strong>Declare the card here</strong>, add the gateway's
-        WireGuard peer on this box, then stand the gateway up.
+        A <strong>gateway</strong> is a small extra server in another location. It runs <em>only</em> HAProxy + WireGuard —
+        no grin node, no wallet, no database. Miners in that location connect to the gateway, and it forwards their
+        stratum traffic through an encrypted tunnel to <em>this</em> pool box. This box stays the single brain:
+        all shares, blocks and payouts are still handled here.
+      </p>
+      <p class="howto-intro">
+        Every region needs one <strong>region key</strong> — a short airport-style code like <code>nyc</code>,
+        <code>sgn</code>, <code>ams</code>. You will type the <em>exact same key</em> in steps 1, 3 and 4.
+        Then, one step at a time:
       </p>
       <ol class="howto-steps">
-        <li><strong>Declare the region here</strong> (form below): pick a short <em>region key</em> (e.g. <code>nyc</code>),
-            its country, and the stratum host. Save → the card appears on the public dashboard as <em>○ No signal</em>.</li>
-        <li><strong>Point DNS</strong>: make the stratum host (e.g. <code>nyc.grinium.com</code>) resolve to the gateway box's IP.</li>
-        <li><strong>On this pool box</strong>: run <code>07_grin_mining_public_pool.sh</code> → <strong>W) Multi-region</strong> →
-            <em>Add a gateway peer</em> with the <em>same region key</em>. It assigns a tunnel IP + internal region port and prints
-            the values to hand to the gateway operator.</li>
-        <li><strong>On the gateway box</strong>: run <code>07_grin_mining_public_pool.sh</code> → option <strong>2) Regional gateway</strong>,
-            Install → Configure (paste the values from step 3) → Bring up tunnel → Start. The card flips to <em>● Online</em> once miners connect.</li>
+        <li><strong>STEP 1 — Declare the region (on this page).</strong><br>
+            Fill in the form below: region key, city, country, and the stratum hostname miners will use
+            (e.g. <code>sgn.grinium.com</code>). Click <em>Save region</em>.<br>
+            <span class="dim">Result: the card appears on the public dashboard as ○ No signal.</span></li>
+        <li><strong>STEP 2 — Point DNS at the gateway box.</strong><br>
+            At your DNS provider, create an A-record so the stratum hostname from step 1 resolves to the
+            <em>gateway box's</em> public IP (not this pool's IP).<br>
+            <span class="dim">Result: miners who connect to that hostname reach the gateway box.</span></li>
+        <li><strong>STEP 3 — Register the gateway on THIS pool box (SSH).</strong><br>
+            Run <code>07_grin_mining_public_pool.sh</code> → <strong>W) Multi-region</strong> → <em>Add a gateway peer</em>.
+            Enter the same region key. The script assigns a tunnel IP + an internal region port and prints
+            the connection values.<br>
+            <span class="dim">Result: a printout of values to hand to whoever runs the gateway box.</span></li>
+        <li><strong>STEP 4 — Set up the gateway box itself (SSH).</strong><br>
+            On the gateway server, run <code>07_grin_mining_public_pool.sh</code> → <strong>2) Regional gateway</strong>, then in order:
+            <em>1) Install</em> → <em>2) Configure</em> (paste the values from step 3) → <em>3) Bring up tunnel</em> → <em>4) Start</em>.<br>
+            <span class="dim">Result: the card on this page flips to ● Online once miners start mining through it.</span></li>
       </ol>
       <p class="howto-note">
         <strong>Single-box pool?</strong> You don't need gateways — the pool auto-registers its own region and miners just use that one host.
@@ -66,8 +87,41 @@
       </p>
     </details>
 
+    <!-- Existing regions + live status -->
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;">
+      <h2 style="margin:0;">All regions status</h2>
+      <button class="btn btn-sm btn-outline" onclick="loadRegions()">↻ Refresh</button>
+    </div>
+    <div class="card" style="padding:0;margin-top:.6rem;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Region</th>
+              <th>Country</th>
+              <th>Stratum URL</th>
+              <th>Active</th>
+              <th>Live status</th>
+              <th>Last activity</th>
+              <th>Miners / Shares (15m)</th>
+              <th>Region port</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="regions-tbody">
+            <tr class="loading-row"><td colspan="9"><span class="spinner"></span>Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <p class="helper-text" style="margin-top:.6rem;">
+      <strong>Live status</strong> comes from recent shares (miners actually mining the region) plus, when available, the
+      WireGuard tunnel's last handshake. <em>No signal</em> = no recent shares and no tunnel handshake for this region yet —
+      expected for a region you've declared but whose gateway isn't up, or for the pool's own region in single-box mode.
+    </p>
+
     <!-- Create / edit form -->
-    <div class="card">
+    <div class="card" id="region-form" style="margin-top:1.4rem;">
       <h3 style="margin:0 0 .8rem;"><span id="form-title">New region</span></h3>
 
       <!-- Per-field help, collapsed by default so it's there when needed but not in the way -->
@@ -147,39 +201,6 @@
         <span class="success-msg" id="r-msg" style="display:none;"></span>
       </div>
     </div>
-
-    <!-- Existing regions + live status -->
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-top:1.4rem;">
-      <h2 style="margin:0;">All regions</h2>
-      <button class="btn btn-sm btn-outline" onclick="loadRegions()">↻ Refresh</button>
-    </div>
-    <div class="card" style="padding:0;margin-top:.6rem;">
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Region</th>
-              <th>Country</th>
-              <th>Stratum URL</th>
-              <th>Active</th>
-              <th>Live status</th>
-              <th>Last activity</th>
-              <th>Miners / Shares (15m)</th>
-              <th>Region port</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="regions-tbody">
-            <tr class="loading-row"><td colspan="9"><span class="spinner"></span>Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-    <p class="helper-text" style="margin-top:.6rem;">
-      <strong>Live status</strong> comes from recent shares (miners actually mining the region) plus, when available, the
-      WireGuard tunnel's last handshake. <em>No signal</em> = no recent shares and no tunnel handshake for this region yet —
-      expected for a region you've declared but whose gateway isn't up, or for the pool's own region in single-box mode.
-    </p>
   </div>
 </main>
 
@@ -207,9 +228,19 @@ function flagEmoji(cc) {
          String.fromCodePoint(0x1F1E6 + cc.charCodeAt(1) - 65);
 }
 
+// Flag as HTML: VN uses the custom yellow Heritage & Freedom SVG (same as the
+// public dashboard — no Unicode emoji exists for it); everyone else gets the
+// regional-indicator emoji. '' when no flag. Output is fixed markup or a
+// validated emoji, so it's safe to inject.
+function flagHtml(cc) {
+  cc = String(cc || '').toUpperCase();
+  if (cc === 'VN') return '<img class="flag-img" src="/images/flags/vn-future.svg" alt="Vietnam">';
+  return flagEmoji(cc);
+}
+
 function syncFlag() {
-  const f = flagEmoji(document.getElementById('r-cc').value);
-  document.getElementById('flag-preview').textContent = f || '—';
+  const f = flagHtml(document.getElementById('r-cc').value);
+  document.getElementById('flag-preview').innerHTML = f || '—';
 }
 
 // Split a stored "host:port" into just the host (the port is fixed pool-wide).
@@ -288,12 +319,12 @@ async function loadRegions(silent) {
     if (!d || d.error) throw new Error(d && d.error ? d.error : 'Failed to load regions');
     _regions = d.locations || [];
     if (!_regions.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No regions yet. Add one above.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No regions yet. Add one with the form below.</td></tr>';
       return;
     }
     tbody.innerHTML = _regions.map(r => {
       const hb = _hb[r.region];
-      const flag = flagEmoji(r.country_code);
+      const flag = flagHtml(r.country_code);
       const country = r.country ? `${flag ? flag + ' ' : ''}${escHtml(r.country)}` : '<span class="dim">—</span>';
       const url = r.stratum_url ? `stratum+tcp://${escHtml(r.stratum_url)}` : '<span class="dim">—</span>';
       const minersShares = hb
@@ -335,7 +366,7 @@ function editRegion(id) {
   document.getElementById('form-title').textContent = 'Edit region: ' + r.region;
   document.getElementById('cancel-btn').style.display = '';
   syncFlag();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  document.getElementById('region-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function submitRegion() {
@@ -362,12 +393,25 @@ async function submitRegion() {
 }
 
 // Delete is freshAdmin (step-up) → adminFetch handles the re-auth challenge.
+// 429 (app rate limit) / 503 (nginx rate limit) are TRANSIENT — the admin shell +
+// this page's 60s auto-refresh share the same per-IP budget, so a click can land on
+// an exhausted window. Deleting is idempotent, so retry once after a short pause
+// (same posture as settings-common.js) instead of surfacing "Too many requests".
 async function deleteRegion(id) {
   const r = _regions.find(x => x.id === id);
   if (!confirm(`Delete region "${r ? (r.label || r.region) : id}"? This only removes the connect card — it does not remove the gateway's WireGuard peer or tunnel (do that on the box).`)) return;
   try {
-    const res = await adminFetch('/api/admin/locations/' + id, { method: 'DELETE' });
+    const url = '/api/admin/locations/' + id;
+    let res = await adminFetch(url, { method: 'DELETE' });
+    if (res.status === 429 || res.status === 503) {
+      await new Promise(w => setTimeout(w, 2500));
+      res = await adminFetch(url, { method: 'DELETE' });
+    }
     const body = await res.json().catch(() => ({}));
+    if (res.status === 429 || res.status === 503) {
+      const wait = body.retry_after_seconds || 30;
+      throw new Error('Rate-limited right now — wait ~' + wait + 's and try again (nothing was deleted).');
+    }
     if (!res.ok || body.error) throw new Error(body.error || ('Delete failed (' + res.status + ')'));
     flash('Region deleted.', false);
     loadRegions();
@@ -378,7 +422,9 @@ async function deleteRegion(id) {
 
 document.addEventListener('DOMContentLoaded', () => { syncFlag(); loadPort(); loadRegions(); });
 // Keep live status fresh (heartbeats update ~60s). Silent = no spinner flash, form untouched.
-setInterval(() => loadRegions(true), 60000);
+// Skip while the tab is hidden — background polling burns the shared per-IP rate budget
+// that user actions (e.g. Delete) draw from.
+setInterval(() => { if (!document.hidden) loadRegions(true); }, 60000);
 </script>
 </body>
 </html>

@@ -323,14 +323,12 @@ async function initializePool() {
     });
     poolstatsReporter.start();
 
-    // Initialize rate limiter
+    // Initialize rate limiter. Do NOT provide an inline fallback here: rate-limiter.js
+    // owns the defaults (public 1200 / auth 200 / api 600 / admin 2400 — the 2026-06
+    // "loosen now" posture). An earlier fallback object here (admin: 10/min) silently
+    // overrode those via Object.assign and 429'd the admin settings pages.
     rateLimiter = new RateLimiter({
-      rate_limits: config.rate_limits || {
-        public: 60,
-        auth: 3,
-        api: 30,
-        admin: 10
-      }
+      rate_limits: config.rate_limits
     });
     console.log(`[${new Date().toISOString()}] Rate limiter initialized`);
 

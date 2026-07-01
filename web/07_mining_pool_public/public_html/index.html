@@ -214,6 +214,7 @@
                  UI below appears once a second zone reports in. -->
             <div class="callout" id="region-fallback">
                 <span>⛏ Point your miner at <code data-brand="stratum_url">stratum host not configured</code></span>
+                <span class="region-fallback-loc" id="region-fallback-loc" style="display:none"></span>
             </div>
             <!-- One tab per region (nearest first), then a panel for the selected region. -->
             <div class="region-tabs" id="region-tabs" role="tablist" aria-label="Mining regions" style="display:none"></div>
@@ -597,20 +598,23 @@
             try { tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || ''; } catch (e) { return null; }
             if (!tz) return null;
             var has = function (k) { return keys.indexOf(k) !== -1 ? k : null; };
+            // Ho Chi Minh City IS Saigon — prefer sgn, fall back to han (the Asia pref
+            // below also lands on han/sgn when the exact zone isn't a live region).
             var exact = {
-                'Asia/Ho_Chi_Minh': 'han', 'America/New_York': 'nyc',
+                'Asia/Ho_Chi_Minh': 'sgn', 'America/New_York': 'nyc',
                 'America/Los_Angeles': 'lax', 'America/Toronto': 'yyz',
                 'Europe/Amsterdam': 'ams'
             };
             if (exact[tz] && has(exact[tz])) return exact[tz];
+            if (tz === 'Asia/Ho_Chi_Minh' && has('han')) return 'han';
             var area = tz.split('/')[0];
             if (area === 'America') {
                 if (/Los_Angeles|Vancouver|Tijuana|Phoenix|Denver|Edmonton|Boise|Anchorage|Whitehorse|Dawson|Mazatlan/.test(tz)) return has('lax') || has('nyc') || has('yyz');
                 if (/Toronto|Montreal|Halifax|Winnipeg|Regina|St_Johns/.test(tz)) return has('yyz') || has('nyc');
                 return has('nyc') || has('yyz') || has('lax');
             }
-            var pref = { Asia: 'han', Australia: 'han', Indian: 'han', Pacific: 'lax',
-                         Europe: 'ams', Africa: 'ams', Atlantic: 'ams', Antarctica: 'lax' };
+            if (area === 'Asia' || area === 'Australia' || area === 'Indian') return has('han') || has('sgn');
+            var pref = { Pacific: 'lax', Europe: 'ams', Africa: 'ams', Atlantic: 'ams', Antarctica: 'lax' };
             return pref[area] ? has(pref[area]) : null;
         }
 
@@ -757,7 +761,21 @@
                     tabsEl.style.display = 'none';
                     panelEl.style.display = 'none';
                     if (note) note.style.display = 'none';
-                    if (fallback) fallback.style.display = '';
+                    if (fallback) {
+                        // Show the pool's own region flag + name next to the callout
+                        // (VN gets the custom yellow heritage SVG, like the tab strip).
+                        var only = regions[0];
+                        var slot = document.getElementById('region-fallback-loc');
+                        if (only && slot && !slot.childNodes.length) {
+                            var fl = flagNode(only.country_code);
+                            if (fl) slot.appendChild(fl);
+                            var lbl = document.createElement('span');
+                            lbl.textContent = only.label || only.region || '';
+                            slot.appendChild(lbl);
+                            slot.style.display = '';
+                        }
+                        fallback.style.display = '';
+                    }
                     return;
                 }
 

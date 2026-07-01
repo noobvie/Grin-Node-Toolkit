@@ -640,19 +640,28 @@ function seedDefaultRegions(stratumPort, poolDomain) {
   try {
     const dom = String(poolDomain || '').toLowerCase();
     if (!(dom === 'grinium.com' || dom.endsWith('.grinium.com'))) return;
+    // Versioned seed: v1 (2026-06) shipped han/nyc/lax/yyz/ams; v2 adds sgn (Saigon).
+    // The marker value stores the applied version — the legacy marker wrote '1', which
+    // reads back as "v1 applied", so an already-seeded install inserts ONLY the newer
+    // additions. Rows the operator deleted from an already-applied version are never
+    // re-created (that version doesn't re-run).
+    const SEED_VERSION = 2;
     const marker = db.prepare(
       "SELECT value FROM pool_config WHERE section = '_migrations' AND key = 'regions_seeded'"
     ).get();
-    if (marker) return;
+    const applied = marker ? (parseInt(marker.value, 10) || 1) : 0;
+    if (applied >= SEED_VERSION) return;
     const port = stratumPort || 3333;
     // city = label; country/country_code drive grouping + flag on the dashboard.
     const REGIONS = [
-      { region: 'han', label: 'Hanoi',       country: 'Vietnam',        cc: 'VN', host: 'han.grinium.com' },
-      { region: 'nyc', label: 'New York',    country: 'United States',  cc: 'US', host: 'nyc.grinium.com' },
-      { region: 'lax', label: 'Los Angeles', country: 'United States',  cc: 'US', host: 'lax.grinium.com' },
-      { region: 'yyz', label: 'Toronto',     country: 'Canada',         cc: 'CA', host: 'yyz.grinium.com' },
-      { region: 'ams', label: 'Amsterdam',   country: 'Netherlands',    cc: 'NL', host: 'ams.grinium.com' }
+      { v: 1, region: 'han', label: 'Hanoi',       country: 'Vietnam',        cc: 'VN', host: 'han.grinium.com' },
+      { v: 1, region: 'nyc', label: 'New York',    country: 'United States',  cc: 'US', host: 'nyc.grinium.com' },
+      { v: 1, region: 'lax', label: 'Los Angeles', country: 'United States',  cc: 'US', host: 'lax.grinium.com' },
+      { v: 1, region: 'yyz', label: 'Toronto',     country: 'Canada',         cc: 'CA', host: 'yyz.grinium.com' },
+      { v: 1, region: 'ams', label: 'Amsterdam',   country: 'Netherlands',    cc: 'NL', host: 'ams.grinium.com' },
+      { v: 2, region: 'sgn', label: 'Saigon',      country: 'Vietnam',        cc: 'VN', host: 'sgn.grinium.com' }
     ];
+    const pending = REGIONS.filter(r => r.v > applied);
     const insert = db.prepare(`
       INSERT OR IGNORE INTO pool_locations
         (region, label, country, country_code, stratum_url, is_active)
@@ -660,17 +669,17 @@ function seedDefaultRegions(stratumPort, poolDomain) {
     `);
     const stamp = db.prepare(`
       INSERT INTO pool_config (section, key, value, value_type)
-      VALUES ('_migrations', 'regions_seeded', '1', 'string')
-      ON CONFLICT(section, key) DO NOTHING
+      VALUES ('_migrations', 'regions_seeded', ?, 'string')
+      ON CONFLICT(section, key) DO UPDATE SET value = excluded.value
     `);
     const tx = db.transaction(() => {
-      for (const r of REGIONS) {
+      for (const r of pending) {
         insert.run(r.region, r.label, r.country, r.cc, `${r.host}:${port}`);
       }
-      stamp.run(); // seed + "done" marker committed atomically
+      stamp.run(String(SEED_VERSION)); // seed + "done" marker committed atomically
     });
     tx();
-    console.warn(`[db] seeded ${REGIONS.length} default regional endpoints (port ${port})`);
+    console.warn(`[db] seeded ${pending.length} default regional endpoints (v${applied}→v${SEED_VERSION}, port ${port})`);
   } catch (e) {
     console.error(`[db] seedDefaultRegions failed: ${e.message}`);
   }

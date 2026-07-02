@@ -86,7 +86,7 @@
         <li><strong>STEP 4 — Set up the gateway box itself (SSH).</strong><br>
             On the gateway server, run <code>07_grin_mining_public_pool.sh</code> → <strong>2) Regional gateway</strong>, then in order:
             <em>1) Install</em> → <em>2) Configure</em> (paste the values from step 3) → <em>3) Bring up tunnel</em> → <em>4) Start</em>.<br>
-            <span class="dim">Result: the card on this page flips to ● Online once miners start mining through it.</span></li>
+            <span class="dim">Result: the card on this page flips to ● Active once miners start mining through it.</span></li>
       </ol>
       <p class="howto-note">
         <strong>Single-box pool?</strong> You don't need gateways — the pool auto-registers its own region and miners just use that one host.
@@ -108,11 +108,11 @@
               <th>Region</th>
               <th>Country</th>
               <th>Stratum URL</th>
-              <th>Active</th>
-              <th>Live status</th>
+              <th id="th-portcheck" title="Reachability of the public MINER port (the one in Stratum URL) — not the internal region port">Port check</th>
+              <th title="Passive signal — recent shares from this region + WireGuard last handshake. No port is dialed; that's the Port column">Mining activity</th>
               <th>Last activity</th>
               <th>Miners / Shares (15m)</th>
-              <th>Region port</th>
+              <th title="Internal tunnel-only listener on the pool box — UNIQUE per region (shares are stamped with the region by the port they arrive on). Auto-assigned by 'Add a gateway peer' (3391+ / 13391+). Miners never see it — they all share the public port">Region port</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -123,12 +123,16 @@
       </div>
     </div>
     <p class="helper-text" style="margin-top:.6rem;">
-      <strong>Active</strong> is your own show/hide switch (the checkbox in the form below): On = the card appears on the
-      public connect grid. It is a setting, not a health check — a dead gateway still shows On until you turn it off.
-      <strong>Live status</strong> is the real health signal: recent shares (miners actually mining the region) plus, when
-      available, the WireGuard tunnel's last handshake. <em>No signal</em> = no recent shares and no tunnel handshake for
-      this region yet — expected for a region you've declared but whose gateway isn't up, or for the pool's own region in
-      single-box mode.
+      The <strong>Port :NNNN</strong> column (named after your public miner port) is an active wire test: on every
+      refresh the pool box TCP-dials the region's public stratum <code>host:port</code> — the exact connection a
+      miner's rig makes; the badge repeats the exact port it dialed. <em>✓ open</em> = the gateway's forwarder
+      answered (with round-trip ms); <em>✗ unreachable</em> = refused / timed out / DNS failed. This is the miner
+      port only — it is not the internal Region port, the WireGuard port, or the grin node's stratum port.
+      <strong>Mining activity</strong> is the passive signal — no port is dialed for it: recent shares (miners actually
+      mining the region) plus, when available, the WireGuard tunnel's last handshake; <em>Active</em> &lt;3&nbsp;min,
+      <em>Stalling</em> 3–10&nbsp;min, <em>Silent</em> &gt;10&nbsp;min. Port ✓ with <em>No signal</em> simply means
+      the gateway is up but no miner is on it yet. A <span class="badge badge-dim">hidden</span> tag on a region name
+      means you've unchecked "Visible on site" in the form below — that region is hidden from the public connect grid.
     </p>
 
     <!-- Create / edit form -->
@@ -154,9 +158,10 @@
           <dd>The hostname miners point their rigs at for this region (e.g. <code>nyc.grinium.com</code>). Create a DNS
               A-record for it that resolves to the <strong>gateway box's</strong> public IP. Enter the host only — the
               shared stratum port is appended automatically.</dd>
-          <dt>Active</dt>
-          <dd>When on, the card shows on the public connect grid (as “No signal” until the gateway is up — STEPS 3 &amp; 4).
-              Turn off to hide a region without deleting it.</dd>
+          <dt>Visible on site</dt>
+          <dd>A show/hide switch, nothing more — when on, the card appears on the public connect grid (as “No signal”
+              until the gateway is up — STEPS 3 &amp; 4). Turn off to hide a region without deleting it. It does not
+              check whether the gateway is running; that's the <strong>Port</strong> and <strong>Mining activity</strong> columns.</dd>
         </dl>
         <p class="howto-note" style="margin-top:.7rem;">
           Saving this form is <span class="step">STEP 1 of 4</span> — it only declares the card. Then: STEP 2 point DNS →
@@ -203,7 +208,7 @@
       </div>
 
       <label style="display:flex;align-items:center;gap:.5rem;margin:.4rem 0 1rem;">
-        <input type="checkbox" id="r-active" checked> Active (shown on the public connect grid)
+        <input type="checkbox" id="r-active" checked> Visible on site (show this region's card on the public connect grid)
       </label>
 
       <div style="display:flex;gap:.6rem;align-items:center;">
@@ -260,16 +265,15 @@ function hostOf(stratumUrl) {
 }
 
 const STATUS_META = {
-  online:  { cls: 'badge-ok',    label: '● Online' },
-  stale:   { cls: 'badge-warn',  label: '● Degraded' },
-  offline: { cls: 'badge-error', label: '● Offline' },
-  unknown: { cls: 'badge-dim',   label: '○ No signal' }
+  online:  { cls: 'badge-ok',    label: '● Active',  tip: 'Shares or a WireGuard handshake seen within the last 3 minutes' },
+  stale:   { cls: 'badge-warn',  label: '● Stalling', tip: 'Last share / tunnel handshake 3–10 minutes ago' },
+  offline: { cls: 'badge-error', label: '● Silent',  tip: 'No shares and no tunnel handshake for over 10 minutes' },
+  unknown: { cls: 'badge-dim',   label: '○ No signal', tip: 'Never seen shares or a tunnel handshake from this region' }
 };
 function statusBadge(region) {
   const hb = _hb[region];
-  if (!hb || hb.status === 'unknown') return '<span class="badge badge-dim">○ No signal</span>';
-  const m = STATUS_META[hb.status] || STATUS_META.offline;
-  return `<span class="badge ${m.cls}">${m.label}</span>`;
+  const m = (!hb || !STATUS_META[hb.status]) ? STATUS_META.unknown : STATUS_META[hb.status];
+  return `<span class="badge ${m.cls}" title="${m.tip}">${m.label}</span>`;
 }
 
 function fmtAge(s) {
@@ -309,6 +313,10 @@ async function loadPort() {
     if (p) STRATUM_PORT = String(p);
   } catch (e) { /* keep 3333 */ }
   document.getElementById('port-suffix').textContent = ':' + STRATUM_PORT;
+  // Name the check column after the real port it dials — "Port check" alone is
+  // ambiguous next to Region port / WG / node stratum ports.
+  const th = document.getElementById('th-portcheck');
+  if (th) th.textContent = 'Port :' + STRATUM_PORT;
 }
 
 async function loadGateways() {
@@ -342,12 +350,23 @@ async function loadRegions(silent) {
         ? `${(hb.miners || 0).toLocaleString()} <span class="dim">/ ${(hb.shares_window || 0).toLocaleString()} sh</span>`
         : '—';
       const port = hb && hb.port ? `<span class="mono">${hb.port}</span>` : '<span class="dim">—</span>';
+      // Show the EXACT port that was dialed (from this row's stratum_url) — with several
+      // port kinds on this page (region port, WG, node stratum), a bare "open" is ambiguous.
+      const dialM = r.stratum_url ? String(r.stratum_url).match(/:(\d+)$/) : null;
+      const dialPort = dialM ? ':' + dialM[1] : '';
+      let portCheck = '<span class="dim" title="No stratum host declared — nothing to dial">—</span>';
+      if (hb && hb.stratum_reachable === true) {
+        portCheck = `<span class="badge badge-ok" title="Pool box TCP-connected to ${escHtml(r.stratum_url || '')} (what a miner does)">✓ ${dialPort} open${hb.stratum_probe_ms != null ? ' · ' + hb.stratum_probe_ms + 'ms' : ''}</span>`;
+      } else if (hb && hb.stratum_reachable === false) {
+        portCheck = `<span class="badge badge-error" title="TCP dial to ${escHtml(r.stratum_url || '')} failed (refused / timeout / DNS)">✗ ${dialPort} unreachable</span>`;
+      }
+      const hiddenTag = r.is_active ? '' : ' <span class="badge badge-dim" title="Hidden from the public connect grid (checkbox in the form below)">hidden</span>';
       return `
         <tr>
-          <td><strong>${escHtml(r.label || r.region)}</strong><br><span class="dim mono">${escHtml(r.region)}</span></td>
+          <td><strong>${escHtml(r.label || r.region)}</strong>${hiddenTag}<br><span class="dim mono">${escHtml(r.region)}</span></td>
           <td>${country}</td>
           <td class="mono" style="word-break:break-all;">${url}</td>
-          <td>${r.is_active ? '<span class="badge badge-ok">On</span>' : '<span class="badge badge-dim">Off</span>'}</td>
+          <td>${portCheck}</td>
           <td>${statusBadge(r.region)}</td>
           <td>${hb && hb.age_seconds != null ? fmtAge(hb.age_seconds) : '—'}</td>
           <td>${minersShares}</td>

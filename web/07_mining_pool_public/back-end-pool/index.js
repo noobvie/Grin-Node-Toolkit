@@ -37,6 +37,7 @@ const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
+const net = require('net');
 const { execSync } = require('child_process');
 
 // Best-effort WireGuard handshake per region (Model C gateway liveness). Maps each peer's
@@ -2944,14 +2945,36 @@ function setupRoutes() {
     }
   });
 
+  // Active wire check: TCP-dial a region's PUBLIC stratum host:port — the exact path a
+  // miner's rig takes. Resolves ms-to-connect on success, null on refuse/timeout/DNS fail.
+  // Never rejects. Connect-only (no stratum handshake): proves the gateway's HAProxy is
+  // up and reachable, which is all the edge can prove without a fake miner login.
+  function probeStratumTcp(host, port, timeoutMs = 2500) {
+    return new Promise((resolve) => {
+      const started = Date.now();
+      let sock;
+      const done = (ok) => {
+        if (sock) { sock.removeAllListeners(); sock.destroy(); }
+        resolve(ok ? Date.now() - started : null);
+      };
+      try { sock = net.connect({ host, port: +port }); } catch (e) { return resolve(null); }
+      sock.setTimeout(timeoutMs, () => done(false));
+      sock.once('connect', () => done(true));
+      sock.once('error', () => done(false));
+    });
+  }
+
   // Per-region GATEWAY liveness (Model C). Gateways are dumb stratum forwarders that never
   // call the Central API, so liveness is derived from two honest signals:
   //   (a) recent shares stamped with the region (financial-grade, survives restart), and
   //   (b) best-effort WireGuard peer last-handshake — the truest "tunnel up" signal for a
-  //       region that is healthy but momentarily idle (no miners connected).
-  // The freshest of the two wins. region_ports declares the expected regions so an admin
-  // sees a configured-but-silent gateway too. (Replaces the old relay-heartbeat endpoint.)
-  app.get('/api/admin/health/gateways', secureAdmin, (req, res) => {
+  //       region that is healthy but momentarily idle (no miners connected),
+  // plus one ACTIVE probe: a TCP dial of the region's public stratum URL (pool_locations),
+  // reported separately as stratum_reachable so the admin sees "port open but no miners yet"
+  // vs "gateway dead" at a glance.
+  // The freshest of (a)/(b) wins for status. region_ports declares the expected regions so
+  // an admin sees a configured-but-silent gateway too. (Replaces the relay-heartbeat endpoint.)
+  app.get('/api/admin/health/gateways', secureAdmin, async (req, res) => {
     const STALE_S = 180, OFFLINE_S = 600;
     const now = Math.floor(Date.now() / 1000);
 
@@ -2967,8 +2990,18 @@ function setupRoutes() {
 
     const wgByRegion = readWgHandshakes(); // {} on any failure (wg absent / not central box)
 
+    // Public stratum URLs per region (for the active TCP probe below).
+    const locByRegion = new Map();
+    try {
+      for (const l of db.prepare('SELECT region, stratum_url FROM pool_locations').all()) {
+        locByRegion.set(l.region, l.stratum_url);
+      }
+    } catch (e) { /* table may not exist yet */ }
+
     const declared = Object.keys(config.region_ports || {});
-    const regions = new Set([...declared, ...byRegion.keys(), ...Object.keys(wgByRegion)]);
+    // Include admin-declared locations too, so a region added in the panel gets its
+    // public port probed even before its WireGuard peer / first share exists.
+    const regions = new Set([...declared, ...byRegion.keys(), ...Object.keys(wgByRegion), ...locByRegion.keys()]);
     const gateways = [];
     for (const region of regions) {
       const s = byRegion.get(region);
@@ -2989,10 +3022,23 @@ function setupRoutes() {
         last_share_height: s ? (s.last_height || 0) : 0,
         shares_window: s ? s.shares : 0,
         miners: s ? s.miners : 0,
-        tunnel_handshake_age: hsAge
+        tunnel_handshake_age: hsAge,
+        stratum_reachable: null,   // filled by the probe below when a stratum_url exists
+        stratum_probe_ms: null
       });
     }
     gateways.sort((a, b) => a.region.localeCompare(b.region));
+
+    // Active probe, all regions in parallel — bounded by the 2.5s per-dial timeout.
+    // stratum_reachable stays null when no public URL is declared (nothing to dial).
+    await Promise.all(gateways.map(async (g) => {
+      const url = locByRegion.get(g.region);
+      const m = url ? String(url).match(/^(.+):(\d+)$/) : null;
+      if (!m) return;
+      const ms = await probeStratumTcp(m[1], m[2]);
+      g.stratum_reachable = ms !== null;
+      g.stratum_probe_ms = ms;
+    }));
 
     res.json({
       role: config.role || 'singlebox',

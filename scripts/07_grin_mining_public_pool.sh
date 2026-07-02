@@ -2010,15 +2010,15 @@ pool_wg_list() {
         echo -e "  ${DIM}WireGuard server not set up (run option 1).${RESET}"
         return 0
     fi
-    echo -e "  ${BOLD}Region → internal port:${RESET}"
+    echo -e "  ${BOLD}Region → central listener${RESET} ${DIM}(tunnel-only host:port each gateway forwards to):${RESET}"
     node -e '
 const fs = require("fs");
 let d = {}; try { d = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch (e) {}
 const rp = d.region_ports || {};
+const host = d.region_listen_host || "(unset)";
 const keys = Object.keys(rp);
-if (!keys.length) { console.log("    (none yet)"); }
-else keys.forEach(k => console.log("    " + k + "  ->  " + rp[k]));
-console.log("  listen host: " + (d.region_listen_host || "(unset)"));
+if (!keys.length) { console.log("    (none yet — option 2 assigns each gateway a host:port here)"); }
+else keys.forEach(k => console.log("    " + k + "  ->  " + host + ":" + rp[k]));
 ' "$POOL_CONF" 2>/dev/null || echo "    (could not read $POOL_CONF)"
 
     # Re-print each peer's one-line pairing string (same format as add-peer prints),
@@ -2071,6 +2071,7 @@ if (missing.length) process.stdout.write(missing.join(" "));
     echo ""
     if wg show "$WG_IFACE" &>/dev/null; then
         echo -e "  ${BOLD}Live tunnel (${WG_IFACE}):${RESET}"
+        echo -e "    central wg endpoint: ${GREEN}${_pub_ep}${RESET}  ${DIM}(what each gateway dials from outside)${RESET}"
         wg show "$WG_IFACE" 2>/dev/null | sed 's/^/    /'
     else
         echo -e "  ${DIM}Tunnel ${WG_IFACE} not up.${RESET}"

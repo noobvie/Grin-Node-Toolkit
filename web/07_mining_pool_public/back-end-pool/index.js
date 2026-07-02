@@ -41,13 +41,16 @@ const { execSync } = require('child_process');
 
 // Best-effort WireGuard handshake per region (Model C gateway liveness). Maps each peer's
 // public key → region using the "# region: <name>" comment the installer writes above every
-// [Peer] in /etc/wireguard/wg-grinpool.conf, then reads `wg show ... latest-handshakes`.
+// [Peer] in the central wg config, then reads `wg show ... latest-handshakes`. The iface is
+// per-network to match the bash installer (07 pool menu W): mainnet "wg-grinpool", testnet
+// "wg-grinpool-tn".
 // Returns { <region>: { handshake: <unix_ts> } }; {} on ANY failure (wg not installed, not the
 // central box, no permission, dev/Windows) so callers fall back to the share-activity signal.
 function readWgHandshakes() {
   const out = {};
   try {
-    const conf = fs.readFileSync('/etc/wireguard/wg-grinpool.conf', 'utf8');
+    const iface = (config && config.network === 'testnet') ? 'wg-grinpool-tn' : 'wg-grinpool';
+    const conf = fs.readFileSync(`/etc/wireguard/${iface}.conf`, 'utf8');
     const pubToRegion = {};
     let curRegion = null;
     for (const line of conf.split('\n')) {
@@ -56,7 +59,7 @@ function readWgHandshakes() {
       const pm = line.match(/^\s*PublicKey\s*=\s*(.+?)\s*$/i);
       if (pm && curRegion) { pubToRegion[pm[1]] = curRegion; curRegion = null; }
     }
-    const dump = execSync('wg show wg-grinpool latest-handshakes', { timeout: 2000 }).toString();
+    const dump = execSync(`wg show ${iface} latest-handshakes`, { timeout: 2000 }).toString();
     for (const line of dump.split('\n')) {
       const [pub, ts] = line.trim().split(/\s+/);
       if (pub && ts && pubToRegion[pub]) out[pubToRegion[pub]] = { handshake: parseInt(ts, 10) || 0 };

@@ -179,12 +179,15 @@ gw_configure() {
     gw_ensure_defaults
     local val paired=0
 
-    echo -e "  ${DIM}Every tunnel value below is ASSIGNED BY THE CENTRAL POOL BOX when the${RESET}"
-    echo -e "  ${DIM}operator adds this gateway's public key there (pool menu → Multi-region →${RESET}"
-    echo -e "  ${DIM}2) Add a gateway peer). That step prints a one-line GRINGW1|... pairing${RESET}"
-    echo -e "  ${DIM}string (re-printable any time via 3) List gateways) — paste it here to${RESET}"
-    echo -e "  ${DIM}fill every field at once, or press Enter to type them one by one.${RESET}"
-    echo -ne "Pairing string from the pool box (Enter = manual entry): "
+    echo -e "  ${DIM}All tunnel values are assigned by the CENTRAL POOL BOX. To get them:${RESET}"
+    echo -e "  ${DIM}  1. On this box: 1) Install printed this gateway's wg public key.${RESET}"
+    echo -e "  ${DIM}  2. On the POOL box: menu W) Multi-region → 2) Add a gateway peer,${RESET}"
+    echo -e "  ${DIM}     paste that public key there.${RESET}"
+    echo -e "  ${DIM}  3. That step prints ONE line starting with GRINGW1| — it carries every${RESET}"
+    echo -e "  ${DIM}     value this form needs. Paste it below to fill all fields at once.${RESET}"
+    echo -e "  ${DIM}The GRINGW1 line does NOT exist until step 2 has been done on the pool${RESET}"
+    echo -e "  ${DIM}box; after that it can be re-printed there via 3) List gateways.${RESET}"
+    echo -ne "Paste GRINGW1|... pairing string (Enter = type each value manually): "
     read -r val
     if [[ -n "$val" ]]; then
         if gw_apply_pairing_string "$val"; then
@@ -222,14 +225,19 @@ gw_configure() {
         echo -ne "Central tunnel IP (e.g. 10.66.66.1) [$(gw_read_conf wg_hub_ip "")]: "
         read -r val; [[ -n "$val" ]] && gw_write_conf_key "wg_hub_ip" "$val"
 
-        echo -e "  ${DIM}(the /32 the pool box assigned to THIS gateway — first gateway is .2)${RESET}"
+        echo -e "  ${DIM}(NOT guessed — the pool box assigned this /32 when your peer was added;${RESET}"
+        echo -e "  ${DIM} it prints it as 'this gateway tunnel IP' and inside the GRINGW1 line.${RESET}"
+        echo -e "  ${DIM} First gateway is .2, second .3, ... Re-print: pool box W → 3) List gateways)${RESET}"
         echo -ne "This gateway's tunnel IP (e.g. 10.66.66.2/32) [$(gw_read_conf wg_address "")]: "
         read -r val; [[ -n "$val" ]] && gw_write_conf_key "wg_address" "$val"
 
         echo ""
-        echo -e "  ${DIM}This region's INTERNAL stratum port on the central box (the operator${RESET}"
-        echo -e "  ${DIM}assigns it when adding your peer, e.g. sgn->3391). Combined with the${RESET}"
-        echo -e "  ${DIM}central tunnel IP into hub_endpoint, e.g. 10.66.66.1:3391.${RESET}"
+        echo -e "  ${DIM}Central region port = this region's private stratum listener on the pool${RESET}"
+        echo -e "  ${DIM}box, assigned when your peer was added (first is 3391 mainnet / 13391${RESET}"
+        echo -e "  ${DIM}testnet; printed as 'central region port' and in the GRINGW1 line;${RESET}"
+        echo -e "  ${DIM}re-print via pool box W → 3) List gateways). It is NOT the public miner${RESET}"
+        echo -e "  ${DIM}port (3333) and NOT the grin node stratum (3416/13416). It combines with${RESET}"
+        echo -e "  ${DIM}the central tunnel IP into hub_endpoint, e.g. 10.66.66.1:3391.${RESET}"
         local hub_ip; hub_ip=$(gw_read_conf wg_hub_ip "")
         echo -ne "Central region port (e.g. 3391) [$(gw_read_conf hub_endpoint "" | sed 's/.*://')]: "
         read -r val
@@ -398,6 +406,16 @@ gw_status() {
             echo -e "  ${BOLD}Tunnel${RESET}    : ${GREEN}● up${RESET}  ${DIM}(last handshake ${age}s ago)${RESET}"
         else
             echo -e "  ${BOLD}Tunnel${RESET}    : ${YELLOW}up, no handshake yet${RESET}"
+            local _ep _hip
+            _ep=$(gw_read_conf wg_hub_endpoint "(unset)")
+            _hip=$(gw_read_conf wg_hub_ip "(central tunnel IP)")
+            echo -e "    ${DIM}No handshake = the central box never answered. Check, in order:${RESET}"
+            echo -e "    ${DIM} 1. The pool box added THIS gateway's public key as a peer${RESET}"
+            echo -e "    ${DIM}    (pool menu W → 2 Add a gateway peer — key shown below).${RESET}"
+            echo -e "    ${DIM} 2. Endpoint ${_ep} is the pool box's PUBLIC ip:wg-port${RESET}"
+            echo -e "    ${DIM}    (51820 mainnet / 51821 testnet) and that UDP port is open there.${RESET}"
+            echo -e "    ${DIM} 3. Re-run 3) Bring up tunnel here, then: ping ${_hip}${RESET}"
+            echo -e "    ${DIM}    (handshake appears within ~25s once both sides are correct).${RESET}"
         fi
     else
         echo -e "  ${BOLD}Tunnel${RESET}    : ${DIM}${GW_WG_IFACE} not up${RESET}"

@@ -2098,7 +2098,10 @@ CRON
     # analytics.google.com regional hosts), and img-src for GA's pixel fallback.
     # Untouched when GA4 is off → the CSP stays pure 'self' for scripts.
     local csp_script="'self' 'unsafe-inline'"
-    local csp_img="'self'"
+    # img-src also allows data: so the stats page's per-chart PNG export can rasterise
+    # its inline SVG through a canvas (the <img> loads a self-generated data: URI — no
+    # external host). Harmless for the rest of the page (all real images are same-origin).
+    local csp_img="'self' data:"
     if [[ -n "${solo_ga4:-}" ]]; then
         csp_script="$csp_script https://www.googletagmanager.com"
         csp_connect="$csp_connect https://www.googletagmanager.com https://www.google-analytics.com https://*.google-analytics.com https://*.analytics.google.com"

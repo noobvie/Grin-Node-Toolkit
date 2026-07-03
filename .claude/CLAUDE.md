@@ -187,6 +187,16 @@ The toolkit no longer patches `api_secret_path` (grin-wallet's default is used);
 - **Official docs:** https://docs.grin.mw — slatepack spec, tx lifecycle
 - **Grin forum:** https://forum.grin.mw
 
+### Community reference — Goblin ecosystem (author "dog", github.com/2ro)
+Independent Grin projects useful as reference when stuck (Nostr slatepack transport, mixnet
+privacy, merchant payments). Full overlap analysis → memory `reference_goblin_ecosystem`.
+- **goblin** (Rust) — P2P wallet, pay-by-username, slatepacks over Nostr DMs via Nym mixnet; Grim-based
+- **floonet-rs / floonet-strfry / floonet-mixexit** — self-hostable Grin-native relay stack (docs.floonet.dev)
+- **GoblinPay** (Rust) — receive-only merchant payment server (QR codes)
+- **eranos** (TS) — private Grin fundraising; **magick.market** (TS) — Nostr Grin marketplace
+- **grin-btcpay-woocommerce** (PHP) — WooCommerce↔BTCPay gateway (compare with our Script 053)
+- Forum thread: https://forum.grin.mw/t/goblin-p2p-grin-with-nostr-and-mixnet-updated/12633 — docs: https://docs.goblin.st
+
 Owner API v3 session flow: `init_secure_api` → ECDH key exchange → `open_wallet` → AES-256-GCM encrypted calls.
 Foreign API v2: Basic Auth + secret file, no ECDH.
 

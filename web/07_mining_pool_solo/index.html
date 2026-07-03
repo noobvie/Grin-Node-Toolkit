@@ -191,9 +191,26 @@
   .legend i.bar { background: rgba(var(--main-rgb), .45); }
   .legend i.est { background: var(--main); }
   .legend i.avg { background: var(--test); border-radius: 1px; }
-  #chart svg, #hr-chart svg, #earn-chart svg { width: 100%; height: auto; display: block; }
-  #chart text, #hr-chart text, #earn-chart text { fill: var(--muted); font-size: 11px; font-family: 'Courier New', monospace; }
+  #chart svg, #hr-chart svg, #earn-chart svg, #hour-chart svg { width: 100%; height: auto; display: block; }
+  #chart text, #hr-chart text, #earn-chart text, #hour-chart text { fill: var(--muted); font-size: 11px; font-family: 'Courier New', monospace; }
   .chart-empty { color: var(--muted); font-size: .95rem; padding: 1.5rem 0; text-align: center; }
+
+  /* right-side cluster of a chart head: view toggle(s) + export control, wraps on mobile */
+  .chart-head-tools { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+  /* per-chart export (PNG image / CSV data) */
+  .chart-export { position: relative; flex: none; }
+  .chart-export .exp-btn { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; width: 36px; height: 34px; font-size: 1.15rem; line-height: 1; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; transition: background .2s; }
+  .chart-export .exp-btn:hover { background: var(--border); color: var(--text-hi); }
+  .chart-export .exp-btn:focus-visible { outline: 2px solid var(--main); outline-offset: 2px; }
+  .chart-export .exp-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: .35rem;
+    min-width: 150px; box-shadow: 0 12px 30px rgba(0,0,0,.42); display: flex; flex-direction: column; gap: .15rem; }
+  .chart-export .exp-menu[hidden] { display: none; }
+  .chart-export .exp-menu button { background: transparent; border: none; color: var(--text); font-family: inherit;
+    font-size: .9rem; text-align: left; padding: .5rem .6rem; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+  .chart-export .exp-menu button:hover { background: var(--chip-bg); color: var(--text-hi); }
   .mtag { font-size: .78rem; padding: .1rem .55rem; border-radius: 999px; border: 1px solid var(--border); }
   .mtag.maturing { color: var(--yellow); } .mtag.mature { color: var(--green); } .mtag.unknown { color: var(--muted); }
   .mtag.orphan { color: var(--red); border-color: var(--red); }
@@ -402,30 +419,64 @@
   <p class="miners-empty" id="test-note" style="display:none"></p>
 </section>
 
-<!-- ── Found-blocks history ── -->
+<!-- ── Found-blocks: History line chart + By-hour heatmap (two views, one card) ── -->
 <section class="chart-card accent-blocks" id="chart-blocks">
   <div class="chart-head">
-    <h2>Blocks Found History Chart</h2>
-    <div class="seg" id="range-seg">
-      <button type="button" data-range="daily">Daily</button>
-      <button type="button" data-range="weekly" class="active">Weekly</button>
-      <button type="button" data-range="monthly">Monthly</button>
-      <button type="button" data-range="yearly">Yearly</button>
+    <h2>Blocks Found</h2>
+    <div class="chart-head-tools">
+      <div class="seg" id="blocks-view-seg" role="group" aria-label="Blocks view">
+        <button type="button" data-view="history" class="active">History</button>
+        <button type="button" data-view="hour">By hour</button>
+      </div>
+      <div class="seg" id="range-seg">
+        <button type="button" data-range="daily">Daily</button>
+        <button type="button" data-range="weekly" class="active">Weekly</button>
+        <button type="button" data-range="monthly">Monthly</button>
+        <button type="button" data-range="yearly">Yearly</button>
+      </div>
+      <div class="chart-export" data-export="blocks">
+        <button type="button" class="exp-btn" aria-haspopup="true" aria-expanded="false" title="Export chart" aria-label="Export chart">⤓</button>
+        <div class="exp-menu" hidden>
+          <button type="button" data-fmt="png">PNG image</button>
+          <button type="button" data-fmt="csv">CSV data</button>
+        </div>
+      </div>
     </div>
   </div>
-  <div class="legend"><span><i class="m"></i>Mainnet</span><span><i class="t"></i>Testnet</span></div>
-  <div id="chart"><div class="chart-empty">Loading block history…</div></div>
+  <!-- History view: mainnet + testnet finds over time -->
+  <div id="blocks-view-history">
+    <div class="legend"><span><i class="m"></i>Mainnet</span><span><i class="t"></i>Testnet</span></div>
+    <div id="chart"><div class="chart-empty">Loading block history…</div></div>
+  </div>
+  <!-- By-hour view: mainnet-only heatmap of finds bucketed by local hour of day -->
+  <div id="blocks-view-hour" hidden>
+    <p class="split-meta" id="hour-meta">—</p>
+    <div id="hour-chart"><div class="chart-empty">Loading…</div></div>
+    <details class="info-toggle">
+      <summary>ⓘ About this chart</summary>
+      <p class="split-foot"><b>Mainnet only.</b> Every block we've ever found, bucketed by the <b>hour of day</b> it was found — in <b>your local time</b> (<span id="hour-tz">local</span>). Darker cells = more finds. This looks back at when finds have landed; it is <b>not a forecast</b>. Block discovery is random (memoryless), so a “hot” hour is past luck and won't predict the next block — don't schedule mining or node maintenance around expected finds. For real power savings, mine on your cheapest electricity hours, which are set by your tariff, not by this chart.</p>
+    </details>
+  </div>
 </section>
 
 <!-- ── Pool hashrate history ── -->
 <section class="chart-card accent-hashrate" id="chart-hashrate">
   <div class="chart-head">
     <h2>Pool Hashrate History Chart</h2>
-    <div class="seg" id="hr-range-seg">
-      <button type="button" data-range="daily">Daily</button>
-      <button type="button" data-range="weekly" class="active">Weekly</button>
-      <button type="button" data-range="monthly">Monthly</button>
-      <button type="button" data-range="yearly">Yearly</button>
+    <div class="chart-head-tools">
+      <div class="seg" id="hr-range-seg">
+        <button type="button" data-range="daily">Daily</button>
+        <button type="button" data-range="weekly" class="active">Weekly</button>
+        <button type="button" data-range="monthly">Monthly</button>
+        <button type="button" data-range="yearly">Yearly</button>
+      </div>
+      <div class="chart-export" data-export="hashrate">
+        <button type="button" class="exp-btn" aria-haspopup="true" aria-expanded="false" title="Export chart" aria-label="Export chart">⤓</button>
+        <div class="exp-menu" hidden>
+          <button type="button" data-fmt="png">PNG image</button>
+          <button type="button" data-fmt="csv">CSV data</button>
+        </div>
+      </div>
     </div>
   </div>
   <div class="legend"><span><i class="m"></i>Mainnet</span><span><i class="t"></i>Testnet</span></div>
@@ -467,10 +518,19 @@
 <section class="chart-card accent-payout" id="earn-card" style="display:none">
   <div class="chart-head">
     <h2>GRIN / miner / day · <span style="color:var(--main)">Mainnet</span></h2>
-    <div class="seg" id="earn-seg">
-      <button type="button" data-period="weekly" class="active">Weekly</button>
-      <button type="button" data-period="monthly">Monthly</button>
-      <button type="button" data-period="yearly">Yearly</button>
+    <div class="chart-head-tools">
+      <div class="seg" id="earn-seg">
+        <button type="button" data-period="weekly" class="active">Weekly</button>
+        <button type="button" data-period="monthly">Monthly</button>
+        <button type="button" data-period="yearly">Yearly</button>
+      </div>
+      <div class="chart-export" data-export="earn">
+        <button type="button" class="exp-btn" aria-haspopup="true" aria-expanded="false" title="Export chart" aria-label="Export chart">⤓</button>
+        <div class="exp-menu" hidden>
+          <button type="button" data-fmt="png">PNG image</button>
+          <button type="button" data-fmt="csv">CSV data</button>
+        </div>
+      </div>
     </div>
   </div>
   <div class="legend"><span><i class="bar"></i>actual / day</span><span><i class="est"></i>estimate</span><span><i class="avg"></i>pool avg / miner</span></div>
@@ -1585,7 +1645,205 @@
     holder.innerHTML = svg + '</svg>';
   }
 
-  function renderDerived() { renderMaturity('main'); renderMaturity('test'); renderChart(); renderHrChart(); renderBlocks('main'); renderBlocks('test'); }
+  // ── Blocks-by-hour heatmap (mainnet only) ──
+  // Buckets every mainnet block we've ever found by the LOCAL-time hour it was found
+  // (the browser's zone, so the hours mean what the operator expects). A look-back
+  // only: block discovery is Poisson/memoryless, so a busy hour is past luck, not a
+  // predictor — the card's info note spells that out.
+  var HOUR = { counts: null, tz: '' };
+  function localTzLabel() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time'; } catch (e) { return 'local time'; }
+  }
+  function computeHourCounts() {
+    var c = []; for (var i = 0; i < 24; i++) c.push(0);
+    (STATE.blocks.main || []).forEach(function (b) {
+      var d = new Date(b.ts); if (isNaN(d)) return; c[d.getHours()]++;
+    });
+    return c;
+  }
+  function renderHourChart() {
+    var holder = document.getElementById('hour-chart');
+    var meta = document.getElementById('hour-meta');
+    var tzEl = document.getElementById('hour-tz');
+    HOUR.tz = localTzLabel();
+    if (tzEl) tzEl.textContent = HOUR.tz;
+    if (!STATE.loaded.main) {
+      holder.innerHTML = '<div class="chart-empty">Block collector not installed yet — run the stats deploy (S) to enable.</div>';
+      meta.textContent = '—'; HOUR.counts = null; return;
+    }
+    var counts = computeHourCounts();
+    HOUR.counts = counts;
+    var total = counts.reduce(function (a, v) { return a + v; }, 0);
+    var maxV = Math.max.apply(null, counts);
+    if (total === 0) {
+      holder.innerHTML = '<div class="chart-empty">No mainnet blocks found yet — the heatmap fills in as blocks arrive.</div>';
+      meta.innerHTML = 'Mainnet · <b>0</b> blocks so far'; return;
+    }
+    var peakH = 0; for (var p = 0; p < 24; p++) { if (counts[p] === maxV) { peakH = p; break; } }
+    meta.innerHTML = 'Mainnet · <b>' + total + '</b> block' + (total === 1 ? '' : 's') + ' all-time'
+      + ' · busiest hour <b>' + pad2(peakH) + ':00</b> (' + maxV + ')';
+    var W = 720, H = 132, L = 8, R = 8, T = 12, B = 24;
+    var plotW = W - L - R, plotH = H - T - B, cellW = plotW / 24, gap = 2, baseY = T + plotH;
+    var aria = 'Mainnet blocks found by hour of day (' + HOUR.tz + '), ' + total + ' total, busiest ' + pad2(peakH) + ':00';
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="' + esc(aria) + '">';
+    for (var hh = 0; hh < 24; hh++) {
+      var x = L + hh * cellW, c = counts[hh], fill, fo;
+      // Single-hue ramp on var(--main) via fill-opacity → theme-aware (light/dark) for
+      // free; empty hours get a faint border wash so the 24-cell grid stays visible.
+      if (c === 0) { fill = 'var(--border)'; fo = '0.14'; }
+      else { fill = 'var(--main)'; fo = (0.18 + 0.82 * (c / maxV)).toFixed(3); }
+      var title = esc(pad2(hh) + ':00–' + pad2((hh + 1) % 24) + ':00 · ' + c + ' block' + (c === 1 ? '' : 's'));
+      svg += '<rect x="' + (x + gap / 2).toFixed(1) + '" y="' + T + '" width="' + (cellW - gap).toFixed(1)
+        + '" height="' + plotH + '" rx="2" fill="' + fill + '" fill-opacity="' + fo + '"><title>' + title + '</title></rect>';
+    }
+    for (var t = 0; t < 24; t += 3) {
+      var lx = L + (t + 0.5) * cellW;
+      svg += '<text x="' + lx.toFixed(1) + '" y="' + (baseY + 15) + '" text-anchor="middle">' + pad2(t) + '</text>';
+    }
+    holder.innerHTML = svg + '</svg>';
+  }
+
+  // ── Chart export (PNG image / CSV data) ──
+  // Each SVG chart registers a provider: getSvg() → the live <svg> for the current
+  // view; getCsv() → { name, rows[][] }. PNG rasterises a clone of the live SVG, but
+  // the live chart paints through CSS custom properties (var(--main) etc.) that don't
+  // survive serialisation — so we freeze the computed presentation styles onto the
+  // clone first, then draw it via a canvas. The <img> loads a data: URI, so the
+  // deploy CSP must allow img-src data: (widened in 07_grin_mining_solo.sh).
+  var BLOCKS_VIEW = 'history';
+  var EXPORT_PROVIDERS = {
+    blocks: {
+      getSvg: function () { return document.querySelector((BLOCKS_VIEW === 'hour' ? '#hour-chart' : '#chart') + ' svg'); },
+      getCsv: function () {
+        if (BLOCKS_VIEW === 'hour') {
+          var c = HOUR.counts || computeHourCounts();
+          var rows = [['hour_local', 'blocks_found']];
+          for (var h = 0; h < 24; h++) rows.push([pad2(h) + ':00', c[h]]);
+          return { name: 'blocks-by-hour-mainnet', rows: rows };
+        }
+        var b = rangeBuckets(STATE.range);
+        var sm = countSeries(STATE.blocks.main, b.keys, STATE.range);
+        var st = countSeries(STATE.blocks.test, b.keys, STATE.range);
+        var r2 = [['period', 'mainnet_blocks', 'testnet_blocks']];
+        b.labels.forEach(function (lb, i) { r2.push([lb, sm[i], st[i]]); });
+        return { name: 'blocks-history-' + STATE.range, rows: r2 };
+      }
+    },
+    hashrate: {
+      getSvg: function () { return document.querySelector('#hr-chart svg'); },
+      getCsv: function () {
+        var b = rangeBuckets(STATE.hrRange);
+        var sm = avgSeries(STATE.hashrate.main, b.keys, STATE.hrRange);
+        var st = avgSeries(STATE.hashrate.test, b.keys, STATE.hrRange);
+        var rows = [['period', 'mainnet_gps', 'testnet_gps']];
+        b.labels.forEach(function (lb, i) { rows.push([lb, sm[i].toFixed(3), st[i].toFixed(3)]); });
+        return { name: 'pool-hashrate-' + STATE.hrRange, rows: rows };
+      }
+    },
+    earn: {
+      getSvg: function () { return document.querySelector('#earn-chart svg'); },
+      getCsv: function () {
+        var d = SPLIT.data; if (!d) return null;
+        var byDay = {}; (d.daily || []).forEach(function (e) { byDay[e.day] = e; });
+        var keys = earnDayKeys(SPLIT.earnPeriod), REWARD = d.block_reward || 60;
+        var totalBlocks = 0; keys.forEach(function (k) { totalBlocks += (byDay[k] ? byDay[k].blocks : 0); });
+        var estPoolPerDay = (keys.length ? totalBlocks / keys.length : 0) * REWARD;
+        var rows = [['day', 'actual_grin', 'estimate_grin', 'pool_avg_per_miner_grin', 'active_miners', 'blocks_found']];
+        keys.forEach(function (k) {
+          var e = byDay[k], active = e ? Object.keys(e.nicks || {}).length : 0;
+          rows.push([k, (e ? (e.reward || 0) : 0).toFixed(3), estPoolPerDay.toFixed(3),
+            (active > 0 ? estPoolPerDay / active : 0).toFixed(3), active, e ? e.blocks : 0]);
+        });
+        return { name: 'earnings-' + SPLIT.earnPeriod, rows: rows };
+      }
+    }
+  };
+  function pad2ts() {
+    var d = new Date();
+    return d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '_' + pad2(d.getHours()) + pad2(d.getMinutes());
+  }
+  function downloadBlob(blob, filename) {
+    var url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+  }
+  function exportCsv(prov) {
+    var data = prov.getCsv(); if (!data || !data.rows || !data.rows.length) return;
+    var csv = data.rows.map(function (r) {
+      return r.map(function (cell) {
+        var s = String(cell);
+        return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      }).join(',');
+    }).join('\r\n');
+    // Prepend a BOM (U+FEFF) so Excel reads UTF-8 correctly.
+    downloadBlob(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }), data.name + '_' + pad2ts() + '.csv');
+  }
+  var SVG_STYLE_PROPS = ['fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-opacity',
+    'stroke-dasharray', 'stroke-linejoin', 'stroke-linecap', 'opacity', 'font-family', 'font-size', 'text-anchor'];
+  function inlineStyles(src, dst) {
+    var cs = window.getComputedStyle(src), decl = '';
+    SVG_STYLE_PROPS.forEach(function (p) { var v = cs.getPropertyValue(p); if (v) decl += p + ':' + v + ';'; });
+    if (decl) dst.setAttribute('style', decl);
+    var s = src.firstElementChild, d = dst.firstElementChild;
+    while (s && d) { inlineStyles(s, d); s = s.nextElementSibling; d = d.nextElementSibling; }
+  }
+  function exportPng(prov, name) {
+    var svg = prov.getSvg(); if (!svg) return;
+    var vb = svg.viewBox && svg.viewBox.baseVal;
+    var w = (vb && vb.width) || svg.clientWidth || 720;
+    var h = (vb && vb.height) || svg.clientHeight || 240;
+    var clone = svg.cloneNode(true);
+    inlineStyles(svg, clone);
+    clone.setAttribute('width', w); clone.setAttribute('height', h);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    var card = svg.closest('.chart-card');
+    var bg = (card && window.getComputedStyle(card).backgroundColor) || '#141b25';
+    if (bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') bg = '#141b25';
+    var out = new XMLSerializer().serializeToString(clone)
+      .replace(/(<svg[^>]*>)/, '$1<rect x="0" y="0" width="' + w + '" height="' + h + '" fill="' + bg + '"/>');
+    var scale = 2, img = new Image();
+    img.onload = function () {
+      try {
+        var canvas = document.createElement('canvas');
+        canvas.width = w * scale; canvas.height = h * scale;
+        var ctx = canvas.getContext('2d'); ctx.scale(scale, scale); ctx.drawImage(img, 0, 0);
+        canvas.toBlob(function (blob) { if (blob) downloadBlob(blob, name + '_' + pad2ts() + '.png'); }, 'image/png');
+      } catch (e) { /* canvas tainted / unsupported — fail quietly, CSV still works */ }
+    };
+    img.onerror = function () { /* CSP img-src blocks data: on an un-redeployed server */ };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(out);
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.chart-export'), function (container) {
+    var prov = EXPORT_PROVIDERS[container.getAttribute('data-export')]; if (!prov) return;
+    var btn = container.querySelector('.exp-btn'), menu = container.querySelector('.exp-menu');
+    function close() { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); }
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (menu.hidden) { menu.hidden = false; btn.setAttribute('aria-expanded', 'true'); } else { close(); }
+    });
+    menu.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b) return;
+      if (b.getAttribute('data-fmt') === 'csv') { exportCsv(prov); }
+      else { var meta = prov.getCsv(); exportPng(prov, (meta && meta.name) || 'chart'); }
+      close();
+    });
+    document.addEventListener('click', function (e) { if (!container.contains(e.target)) close(); });
+  });
+
+  function renderDerived() { renderMaturity('main'); renderMaturity('test'); renderChart(); renderHourChart(); renderHrChart(); renderBlocks('main'); renderBlocks('test'); }
+
+  document.getElementById('blocks-view-seg').addEventListener('click', function (e) {
+    var btn = e.target.closest('button'); if (!btn) return;
+    BLOCKS_VIEW = btn.getAttribute('data-view');
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function (x) { x.classList.remove('active'); });
+    btn.classList.add('active');
+    var hist = (BLOCKS_VIEW === 'history');
+    document.getElementById('blocks-view-history').hidden = !hist;
+    document.getElementById('blocks-view-hour').hidden = hist;
+    document.getElementById('range-seg').style.display = hist ? '' : 'none';
+    if (hist) renderChart(); else renderHourChart();
+  });
 
   document.getElementById('range-seg').addEventListener('click', function (e) {
     var btn = e.target.closest('button'); if (!btn) return;

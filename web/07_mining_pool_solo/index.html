@@ -325,7 +325,7 @@
   </div>
   <div class="header-actions">
     <a class="theme-toggle" href="setup-solo-mining.html">⚙ Miner Setup</a>
-    <button class="theme-toggle" id="tz-toggle" type="button" aria-label="Toggle UTC / local time">🕓 UTC</button>
+    <button class="theme-toggle" id="tz-toggle" type="button" aria-label="Toggle UTC / local time">🕓 Local</button>
     <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme">☾ Dark</button>
   </div>
 </header>
@@ -373,7 +373,7 @@
   </div>
   <div class="blocks">
     <div class="blocks-head">
-      <h3>All blocks we found <span class="tz-badge js-tz-event" title="Date/time shown in this timezone — toggle it with the clock button in the header. Hover a row for both UTC and local.">UTC</span></h3>
+      <h3>All blocks we found <span class="tz-badge js-tz-event" title="Date/time shown in this timezone — toggle it with the clock button in the header. Hover a row for both UTC and local.">Local</span></h3>
       <span class="blocks-sum" id="main-blocks-sum">—</span>
     </div>
     <div class="table-scroll"><table id="main-blocks-table"><tbody></tbody></table></div>
@@ -413,7 +413,7 @@
   </div>
   <div class="blocks">
     <div class="blocks-head">
-      <h3>All blocks we found <span class="tz-badge js-tz-event" title="Date/time shown in this timezone — toggle it with the clock button in the header. Hover a row for both UTC and local.">UTC</span></h3>
+      <h3>All blocks we found <span class="tz-badge js-tz-event" title="Date/time shown in this timezone — toggle it with the clock button in the header. Hover a row for both UTC and local.">Local</span></h3>
       <span class="blocks-sum" id="test-blocks-sum">—</span>
     </div>
     <div class="table-scroll"><table id="test-blocks-table"><tbody></tbody></table></div>
@@ -453,7 +453,7 @@
   </div>
   <!-- History view: mainnet + testnet finds over time -->
   <div id="blocks-view-history">
-    <div class="legend"><span><i class="m"></i>Mainnet</span><span><i class="t"></i>Testnet</span><span class="tz-badge js-tz-event" title="Days are bucketed in this timezone — toggle it with the clock button in the header">UTC</span></div>
+    <div class="legend"><span><i class="m"></i>Mainnet</span><span><i class="t"></i>Testnet</span><span class="tz-badge js-tz-event" title="Days are bucketed in this timezone — toggle it with the clock button in the header">Local</span></div>
     <div id="chart"><div class="chart-empty">Loading block history…</div></div>
   </div>
   <!-- By-hour view: mainnet-only heatmap of finds bucketed by local hour of day -->
@@ -462,7 +462,7 @@
     <div id="hour-chart"><div class="chart-empty">Loading…</div></div>
     <details class="info-toggle">
       <summary>ⓘ About this chart</summary>
-      <p class="split-foot"><b>Mainnet only.</b> Every block we've ever found, bucketed by the <b>hour of day</b> it was found — in <b><span id="hour-tz">UTC</span></b> (toggle UTC/your local zone with the 🕓 clock in the header). Darker cells = more finds. This looks back at when finds have landed; it is <b>not a forecast</b>. Block discovery is random (memoryless), so a “hot” hour is past luck and won't predict the next block — don't schedule mining or node maintenance around expected finds. For real power savings, mine on your cheapest electricity hours, which are set by your tariff, not by this chart.</p>
+      <p class="split-foot"><b>Mainnet only.</b> Every block we've ever found, bucketed by the <b>hour of day</b> it was found — in <b><span id="hour-tz">local time</span></b> (toggle your local zone/UTC with the 🕓 clock in the header). Darker cells = more finds. This looks back at when finds have landed; it is <b>not a forecast</b>. Block discovery is random (memoryless), so a “hot” hour is past luck and won't predict the next block — don't schedule mining or node maintenance around expected finds. For real power savings, mine on your cheapest electricity hours, which are set by your tariff, not by this chart.</p>
     </details>
   </div>
 </section>
@@ -974,11 +974,13 @@
   // ── Timezone mode (per-event views only) ──
   // Block-level views (found-blocks table, blocks-history chart, by-hour heatmap,
   // miners "last seen") carry an absolute instant in b.ts / m.last_seen, so the
-  // browser can render them in ANY zone. TZMODE picks UTC (default — keeps every
-  // card consistent with the UTC-day aggregates) or the visitor's local zone.
-  // Pre-aggregated day series (earnings / solo-health / hashrate) are bucketed by
-  // UTC day server-side and CANNOT be re-bucketed here, so they stay UTC always.
-  var TZMODE = 'utc';
+  // browser can render them in ANY zone. TZMODE defaults to the visitor's LOCAL zone
+  // (most intuitive for the operator); a UTC option is one click away. Pre-aggregated
+  // day series (earnings / solo-health / hashrate) are bucketed by UTC day server-side
+  // and CANNOT be re-bucketed here, so they stay UTC always (labelled "UTC days"); in
+  // local mode a late-UTC-day block can therefore sit on a different calendar day in
+  // those cards than in the found-blocks views — the badges + notes flag this.
+  var TZMODE = 'local';
   try { var _tz = localStorage.getItem('grinSoloTz'); if (_tz === 'utc' || _tz === 'local') TZMODE = _tz; } catch (e) {}
   // Date-part accessors for a given zone ('utc' | 'local'). addDays / startOfDay /
   // monthStart use the matching UTC-or-local setters so bucketing stays DST-safe.

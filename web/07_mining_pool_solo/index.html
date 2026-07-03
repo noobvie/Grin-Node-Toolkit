@@ -200,7 +200,7 @@
   /* per-chart export (PNG image / CSV data) */
   .chart-export { position: relative; flex: none; }
   .chart-export .exp-btn { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
-    border-radius: 8px; width: 36px; height: 34px; font-size: 1.15rem; line-height: 1; cursor: pointer;
+    border-radius: 8px; width: 38px; height: 38px; font-size: 1.15rem; line-height: 1; cursor: pointer;
     display: inline-flex; align-items: center; justify-content: center; transition: background .2s; }
   .chart-export .exp-btn:hover { background: var(--border); color: var(--text-hi); }
   .chart-export .exp-btn:focus-visible { outline: 2px solid var(--main); outline-offset: 2px; }
@@ -211,6 +211,13 @@
   .chart-export .exp-menu button { background: transparent; border: none; color: var(--text); font-family: inherit;
     font-size: .9rem; text-align: left; padding: .5rem .6rem; border-radius: 6px; cursor: pointer; white-space: nowrap; }
   .chart-export .exp-menu button:hover { background: var(--chip-bg); color: var(--text-hi); }
+  /* small pill naming the timezone a per-event view is currently rendered in */
+  .tz-badge { font-size: .72rem; color: var(--muted); background: var(--chip-bg); border: 1px solid var(--border);
+    border-radius: 999px; padding: .1rem .5rem; letter-spacing: .03em; white-space: nowrap; }
+  .tz-badge.fixed { cursor: help; }
+  /* On phones the head tools wrap; keep the export control hugging the right edge so
+     its right-anchored dropdown always opens inward (never off the left of the card). */
+  @media (max-width: 560px) { .chart-export { margin-left: auto; } }
   .mtag { font-size: .78rem; padding: .1rem .55rem; border-radius: 999px; border: 1px solid var(--border); }
   .mtag.maturing { color: var(--yellow); } .mtag.mature { color: var(--green); } .mtag.unknown { color: var(--muted); }
   .mtag.orphan { color: var(--red); border-color: var(--red); }
@@ -318,6 +325,7 @@
   </div>
   <div class="header-actions">
     <a class="theme-toggle" href="setup-solo-mining.html">⚙ Miner Setup</a>
+    <button class="theme-toggle" id="tz-toggle" type="button" aria-label="Toggle UTC / local time">🕓 UTC</button>
     <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme">☾ Dark</button>
   </div>
 </header>
@@ -365,7 +373,7 @@
   </div>
   <div class="blocks">
     <div class="blocks-head">
-      <h3>All blocks we found</h3>
+      <h3>All blocks we found <span class="tz-badge js-tz-event" title="Date/time shown in this timezone — toggle it with the clock button in the header. Hover a row for both UTC and local.">UTC</span></h3>
       <span class="blocks-sum" id="main-blocks-sum">—</span>
     </div>
     <div class="table-scroll"><table id="main-blocks-table"><tbody></tbody></table></div>
@@ -405,7 +413,7 @@
   </div>
   <div class="blocks">
     <div class="blocks-head">
-      <h3>All blocks we found</h3>
+      <h3>All blocks we found <span class="tz-badge js-tz-event" title="Date/time shown in this timezone — toggle it with the clock button in the header. Hover a row for both UTC and local.">UTC</span></h3>
       <span class="blocks-sum" id="test-blocks-sum">—</span>
     </div>
     <div class="table-scroll"><table id="test-blocks-table"><tbody></tbody></table></div>
@@ -445,7 +453,7 @@
   </div>
   <!-- History view: mainnet + testnet finds over time -->
   <div id="blocks-view-history">
-    <div class="legend"><span><i class="m"></i>Mainnet</span><span><i class="t"></i>Testnet</span></div>
+    <div class="legend"><span><i class="m"></i>Mainnet</span><span><i class="t"></i>Testnet</span><span class="tz-badge js-tz-event" title="Days are bucketed in this timezone — toggle it with the clock button in the header">UTC</span></div>
     <div id="chart"><div class="chart-empty">Loading block history…</div></div>
   </div>
   <!-- By-hour view: mainnet-only heatmap of finds bucketed by local hour of day -->
@@ -454,7 +462,7 @@
     <div id="hour-chart"><div class="chart-empty">Loading…</div></div>
     <details class="info-toggle">
       <summary>ⓘ About this chart</summary>
-      <p class="split-foot"><b>Mainnet only.</b> Every block we've ever found, bucketed by the <b>hour of day</b> it was found — in <b>your local time</b> (<span id="hour-tz">local</span>). Darker cells = more finds. This looks back at when finds have landed; it is <b>not a forecast</b>. Block discovery is random (memoryless), so a “hot” hour is past luck and won't predict the next block — don't schedule mining or node maintenance around expected finds. For real power savings, mine on your cheapest electricity hours, which are set by your tariff, not by this chart.</p>
+      <p class="split-foot"><b>Mainnet only.</b> Every block we've ever found, bucketed by the <b>hour of day</b> it was found — in <b><span id="hour-tz">UTC</span></b> (toggle UTC/your local zone with the 🕓 clock in the header). Darker cells = more finds. This looks back at when finds have landed; it is <b>not a forecast</b>. Block discovery is random (memoryless), so a “hot” hour is past luck and won't predict the next block — don't schedule mining or node maintenance around expected finds. For real power savings, mine on your cheapest electricity hours, which are set by your tariff, not by this chart.</p>
     </details>
   </div>
 </section>
@@ -479,7 +487,7 @@
       </div>
     </div>
   </div>
-  <div class="legend"><span><i class="m"></i>Mainnet</span><span><i class="t"></i>Testnet</span></div>
+  <div class="legend"><span><i class="m"></i>Mainnet</span><span><i class="t"></i>Testnet</span><span class="tz-badge fixed" title="This is a pre-aggregated daily series, so it is always bucketed by UTC day (it can't be re-bucketed per visitor).">UTC days</span></div>
   <div id="hr-chart"><div class="chart-empty">Loading hashrate history…</div></div>
 </section>
 
@@ -533,19 +541,19 @@
       </div>
     </div>
   </div>
-  <div class="legend"><span><i class="bar"></i>actual / day</span><span><i class="est"></i>estimate</span><span><i class="avg"></i>pool avg / miner</span></div>
+  <div class="legend"><span><i class="bar"></i>actual / day</span><span><i class="est"></i>estimate</span><span><i class="avg"></i>pool avg / miner</span><span class="tz-badge fixed" title="Blocks are attributed to the UTC day they were found (a pre-aggregated series that can't be re-bucketed per visitor). A block found late in the UTC day may sit on a different local calendar day than the found-blocks table shows in Local mode.">UTC days</span></div>
   <p class="split-meta" id="earn-meta">—</p>
   <div id="earn-chart"><div class="chart-empty">Loading earnings…</div></div>
   <details class="info-toggle">
     <summary>ⓘ About this chart</summary>
-    <p class="split-foot"><b>Span follows this chart's period selector</b> (Weekly = last 7 days · Monthly = this month · Yearly = this year, shown as weekly averages). The <b>left axis counts blocks found</b>; the <b>right axis is GRIN mined</b> (the two are the same scale — GRIN = blocks × block reward). Bars are the <b>actual</b> GRIN credited that day — lumpy, because solo blocks arrive irregularly. The <b>estimate</b> line removes that block-luck: the day's work share × the average block rate over the shown span. <b>Pool avg / miner</b> = that day's smoothed pool reward ÷ how many miners were active that day (the count changes day to day). The estimate is a projection, not a promise — attribution is by the block's found day.</p>
+    <p class="split-foot"><b>Span follows this chart's period selector</b> (Weekly = last 7 days · Monthly = this month · Yearly = this year, shown as weekly averages). The <b>left axis counts blocks found</b>; the <b>right axis is GRIN mined</b> (the two are the same scale — GRIN = blocks × block reward). Bars are the <b>actual</b> GRIN credited that day — lumpy, because solo blocks arrive irregularly. The <b>estimate</b> line removes that block-luck: the day's work share × the average block rate over the shown span. <b>Pool avg / miner</b> = that day's smoothed pool reward ÷ how many miners were active that day (the count changes day to day). The estimate is a projection, not a promise — attribution is by the block's found day. <b>Days here are UTC days</b> (this is a pre-aggregated series, so it can't be re-bucketed per visitor): if you flip the found-blocks table/heatmap to Local time with the 🕓 header clock, a block found late in the UTC day can appear on the next local calendar day there while it stays on the UTC day here.</p>
   </details>
 </section>
 
 <!-- ── Solo Health: orphaned blocks + stale/rejected shares (mainnet) — the two ways solo silently loses effective hashrate vs a pool; hidden unless data/split_main.json exists ── -->
 <section class="chart-card accent-payout" id="quality-card" style="display:none">
   <div class="chart-head">
-    <h2>Solo Health · <span style="color:var(--main)">Mainnet</span></h2>
+    <h2>Solo Health · <span style="color:var(--main)">Mainnet</span> <span class="tz-badge fixed" title="Daily counts are bucketed by UTC day (a pre-aggregated series that can't be re-bucketed per visitor).">UTC days</span></h2>
   </div>
   <p class="split-meta" id="quality-meta">—</p>
   <div class="table-scroll"><table id="quality-table"><tbody></tbody></table></div>
@@ -963,21 +971,47 @@
     set(net + '-maturing', String(n), n > 0 ? 'yellow' : 'dim');
   }
 
+  // ── Timezone mode (per-event views only) ──
+  // Block-level views (found-blocks table, blocks-history chart, by-hour heatmap,
+  // miners "last seen") carry an absolute instant in b.ts / m.last_seen, so the
+  // browser can render them in ANY zone. TZMODE picks UTC (default — keeps every
+  // card consistent with the UTC-day aggregates) or the visitor's local zone.
+  // Pre-aggregated day series (earnings / solo-health / hashrate) are bucketed by
+  // UTC day server-side and CANNOT be re-bucketed here, so they stay UTC always.
+  var TZMODE = 'utc';
+  try { var _tz = localStorage.getItem('grinSoloTz'); if (_tz === 'utc' || _tz === 'local') TZMODE = _tz; } catch (e) {}
+  // Date-part accessors for a given zone ('utc' | 'local'). addDays / startOfDay /
+  // monthStart use the matching UTC-or-local setters so bucketing stays DST-safe.
+  function dparts(tz) {
+    var u = (tz === 'utc');
+    return {
+      Y: function (d) { return u ? d.getUTCFullYear() : d.getFullYear(); },
+      M: function (d) { return u ? d.getUTCMonth() : d.getMonth(); },
+      D: function (d) { return u ? d.getUTCDate() : d.getDate(); },
+      W: function (d) { return u ? d.getUTCDay() : d.getDay(); },
+      h: function (d) { return u ? d.getUTCHours() : d.getHours(); },
+      m: function (d) { return u ? d.getUTCMinutes() : d.getMinutes(); },
+      addDays: function (d, n) { u ? d.setUTCDate(d.getUTCDate() + n) : d.setDate(d.getDate() + n); return d; },
+      startOfDay: function (d) { u ? d.setUTCHours(0, 0, 0, 0) : d.setHours(0, 0, 0, 0); return d; },
+      monthStart: function (y, mo) { return u ? new Date(Date.UTC(y, mo, 1)) : new Date(y, mo, 1); }
+    };
+  }
+
   // ── Chart ──
-  function dayKey(d) { return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
-  function startOfWeek(d) { var x = new Date(d); var day = (x.getDay() + 6) % 7; x.setDate(x.getDate() - day); x.setHours(0,0,0,0); return x; }
-  function rangeBuckets(range) {
-    var keys = [], labels = [], now = new Date(), i, d;
-    if (range === 'daily') { for (i = 29; i >= 0; i--) { d = new Date(now); d.setDate(d.getDate() - i); keys.push(dayKey(d)); labels.push((d.getMonth()+1)+'/'+d.getDate()); } }
-    else if (range === 'weekly') { var mon = startOfWeek(now); for (i = 11; i >= 0; i--) { d = new Date(mon); d.setDate(d.getDate() - i*7); keys.push(dayKey(d)); labels.push((d.getMonth()+1)+'/'+d.getDate()); } }
-    else if (range === 'yearly') { for (i = 4; i >= 0; i--) { var yr = now.getFullYear() - i; keys.push(String(yr)); labels.push(String(yr)); } }
-    else { for (i = 11; i >= 0; i--) { d = new Date(now.getFullYear(), now.getMonth() - i, 1); keys.push(d.getFullYear()+'-'+(d.getMonth()+1)); labels.push(MONTHS[d.getMonth()]); } }
+  function dayKey(d, tz) { var P = dparts(tz); return P.Y(d) + '-' + (P.M(d) + 1) + '-' + P.D(d); }
+  function startOfWeek(d, tz) { var P = dparts(tz); var x = new Date(d); var day = (P.W(x) + 6) % 7; P.addDays(x, -day); P.startOfDay(x); return x; }
+  function rangeBuckets(range, tz) {
+    var P = dparts(tz), keys = [], labels = [], now = new Date(), i, d;
+    if (range === 'daily') { for (i = 29; i >= 0; i--) { d = new Date(now); P.addDays(d, -i); keys.push(dayKey(d, tz)); labels.push((P.M(d)+1)+'/'+P.D(d)); } }
+    else if (range === 'weekly') { var mon = startOfWeek(now, tz); for (i = 11; i >= 0; i--) { d = new Date(mon); P.addDays(d, -i*7); keys.push(dayKey(d, tz)); labels.push((P.M(d)+1)+'/'+P.D(d)); } }
+    else if (range === 'yearly') { for (i = 4; i >= 0; i--) { var yr = P.Y(now) - i; keys.push(String(yr)); labels.push(String(yr)); } }
+    else { for (i = 11; i >= 0; i--) { d = P.monthStart(P.Y(now), P.M(now) - i); keys.push(P.Y(d)+'-'+(P.M(d)+1)); labels.push(MONTHS[P.M(d)]); } }
     return { keys: keys, labels: labels };
   }
-  function keyForDate(d, range) { if (range === 'daily') return dayKey(d); if (range === 'weekly') return dayKey(startOfWeek(d)); if (range === 'yearly') return String(d.getFullYear()); return d.getFullYear()+'-'+(d.getMonth()+1); }
-  function countSeries(blocks, keys, range) {
+  function keyForDate(d, range, tz) { if (range === 'daily') return dayKey(d, tz); if (range === 'weekly') return dayKey(startOfWeek(d, tz), tz); if (range === 'yearly') return String(dparts(tz).Y(d)); var P = dparts(tz); return P.Y(d)+'-'+(P.M(d)+1); }
+  function countSeries(blocks, keys, range, tz) {
     var idx = {}, c = keys.map(function () { return 0; }); keys.forEach(function (k, i) { idx[k] = i; });
-    blocks.forEach(function (b) { var d = new Date(b.ts); if (isNaN(d)) return; var k = keyForDate(d, range); if (k in idx) c[idx[k]]++; });
+    blocks.forEach(function (b) { var d = new Date(b.ts); if (isNaN(d)) return; var k = keyForDate(d, range, tz); if (k in idx) c[idx[k]]++; });
     return c;
   }
   function renderChart() {
@@ -985,9 +1019,9 @@
     if (!STATE.loaded.main && !STATE.loaded.test) {
       holder.innerHTML = '<div class="chart-empty">Block-history collector not installed yet — run the stats deploy (S) to enable.</div>'; return;
     }
-    var b = rangeBuckets(STATE.range);
-    var sm = countSeries(STATE.blocks.main, b.keys, STATE.range);
-    var st = countSeries(STATE.blocks.test, b.keys, STATE.range);
+    var b = rangeBuckets(STATE.range, TZMODE);
+    var sm = countSeries(STATE.blocks.main, b.keys, STATE.range, TZMODE);
+    var st = countSeries(STATE.blocks.test, b.keys, STATE.range, TZMODE);
     var realMax = Math.max.apply(null, sm.concat(st));   // 0 when nothing in range
     var maxV = Math.max(1, realMax);
     // Y-axis ticks live in the RIGHT gutter (R) so the scale sits next to the
@@ -1045,12 +1079,15 @@
   // Reuses the block chart's bucket keys (daily 30d / weekly 12w / monthly 12mo)
   // but AVERAGES the daily-average G/s points within each bucket instead of
   // counting events. Points come from data/hashrate_<net>.json ({day, gps}).
+  // NOTE: hashrate is a pre-aggregated UTC-day series (no per-event instants to
+  // re-bucket), so it is ALWAYS bucketed in UTC regardless of the page's TZMODE —
+  // the day-key is parsed as UTC noon ('…T12:00:00Z') and matched to UTC buckets.
   function avgSeries(points, keys, range) {
     var idx = {}, sum = keys.map(function () { return 0; }), cnt = keys.map(function () { return 0; });
     keys.forEach(function (k, i) { idx[k] = i; });
     points.forEach(function (p) {
-      var d = new Date(p.day + 'T12:00:00'); if (isNaN(d)) return;
-      var k = keyForDate(d, range); if (!(k in idx)) return;
+      var d = new Date(p.day + 'T12:00:00Z'); if (isNaN(d)) return;
+      var k = keyForDate(d, range, 'utc'); if (!(k in idx)) return;
       var i = idx[k]; sum[i] += (p.gps || 0); cnt[i]++;
     });
     return sum.map(function (s, i) { return cnt[i] ? s / cnt[i] : 0; });
@@ -1063,7 +1100,7 @@
     if (STATE.hashrate.main.length === 0 && STATE.hashrate.test.length === 0) {
       holder.innerHTML = '<div class="chart-empty">No hashrate history yet — it builds up as miners submit shares.</div>'; return;
     }
-    var b = rangeBuckets(STATE.hrRange);
+    var b = rangeBuckets(STATE.hrRange, 'utc');
     var sm = avgSeries(STATE.hashrate.main, b.keys, STATE.hrRange);
     var st = avgSeries(STATE.hashrate.test, b.keys, STATE.hrRange);
     var realMax = Math.max.apply(null, sm.concat(st));   // 0 when nothing in range
@@ -1121,9 +1158,18 @@
   }
 
   // ── Found-blocks table (per network) ──
+  // Date/time render in the active TZMODE (UTC default, or visitor-local). b.ts /
+  // m.last_seen are absolute instants, so both zones are exact.
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
-  function fmtDate(d) { return pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
-  function fmtTime(d) { return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+  function fmtDate(d) { var P = dparts(TZMODE); return pad2(P.M(d) + 1) + '-' + pad2(P.D(d)); }
+  function fmtTime(d) { var P = dparts(TZMODE); return pad2(P.h(d)) + ':' + pad2(P.m(d)); }
+  // Full dual-zone stamp for a per-event tooltip, e.g.
+  // "2026-06-27 14:30 UTC · 2026-06-27 21:30 local". Given the absolute instant we
+  // can always show both, so a reader never has to guess which zone a row is in.
+  function fullStamp(d) {
+    function s(P) { return P.Y(d) + '-' + pad2(P.M(d) + 1) + '-' + pad2(P.D(d)) + ' ' + pad2(P.h(d)) + ':' + pad2(P.m(d)); }
+    return s(dparts('utc')) + ' UTC · ' + s(dparts('local')) + ' local';
+  }
   function shortHash(h) {
     if (!h) return '—';
     h = String(h);
@@ -1204,9 +1250,10 @@
         var d = new Date(b.ts), m = maturityOf(net, b);
         var heightTxt = Number(b.height).toLocaleString();
         var heightCell = '<td><a class="h" href="' + blockExplorerUrl(net, b.height) + '" target="_blank" rel="noopener noreferrer">' + heightTxt + '</a></td>';
+        var stamp = esc(fullStamp(d));   // dual-zone tooltip on the date/time cells
         return '<tr>'
-          + '<td>' + fmtDate(d) + '</td>'
-          + '<td>' + fmtTime(d) + '</td>'
+          + '<td title="' + stamp + '">' + fmtDate(d) + '</td>'
+          + '<td title="' + stamp + '">' + fmtTime(d) + '</td>'
           + heightCell
           + '<td><span class="hash">' + esc(shortHash(b.hash)) + '</span></td>'
           + '<td><span class="mtag ' + m.state + '">' + m.text + '</span></td></tr>';
@@ -1646,18 +1693,22 @@
   }
 
   // ── Blocks-by-hour heatmap (mainnet only) ──
-  // Buckets every mainnet block we've ever found by the LOCAL-time hour it was found
-  // (the browser's zone, so the hours mean what the operator expects). A look-back
-  // only: block discovery is Poisson/memoryless, so a busy hour is past luck, not a
-  // predictor — the card's info note spells that out.
+  // Buckets every mainnet block we've ever found by the hour of day it was found, in
+  // the active TZMODE (UTC default, or the visitor's local zone — the hour comes from
+  // the absolute b.ts, so both are exact). A look-back only: block discovery is
+  // Poisson/memoryless, so a busy hour is past luck, not a predictor — the card's info
+  // note spells that out.
   var HOUR = { counts: null, tz: '' };
   function localTzLabel() {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time'; } catch (e) { return 'local time'; }
   }
+  // Zone label for the per-event views: 'UTC' or the resolved local zone name.
+  function tzModeLabel() { return TZMODE === 'utc' ? 'UTC' : localTzLabel(); }
   function computeHourCounts() {
     var c = []; for (var i = 0; i < 24; i++) c.push(0);
+    var P = dparts(TZMODE);
     (STATE.blocks.main || []).forEach(function (b) {
-      var d = new Date(b.ts); if (isNaN(d)) return; c[d.getHours()]++;
+      var d = new Date(b.ts); if (isNaN(d)) return; c[P.h(d)]++;
     });
     return c;
   }
@@ -1665,7 +1716,7 @@
     var holder = document.getElementById('hour-chart');
     var meta = document.getElementById('hour-meta');
     var tzEl = document.getElementById('hour-tz');
-    HOUR.tz = localTzLabel();
+    HOUR.tz = tzModeLabel();
     if (tzEl) tzEl.textContent = HOUR.tz;
     if (!STATE.loaded.main) {
       holder.innerHTML = '<div class="chart-empty">Block collector not installed yet — run the stats deploy (S) to enable.</div>';
@@ -1715,27 +1766,28 @@
     blocks: {
       getSvg: function () { return document.querySelector((BLOCKS_VIEW === 'hour' ? '#hour-chart' : '#chart') + ' svg'); },
       getCsv: function () {
+        var tzTag = (TZMODE === 'utc') ? 'utc' : 'local';
         if (BLOCKS_VIEW === 'hour') {
           var c = HOUR.counts || computeHourCounts();
-          var rows = [['hour_local', 'blocks_found']];
+          var rows = [['hour_' + tzTag, 'blocks_found']];
           for (var h = 0; h < 24; h++) rows.push([pad2(h) + ':00', c[h]]);
-          return { name: 'blocks-by-hour-mainnet', rows: rows };
+          return { name: 'blocks-by-hour-mainnet-' + tzTag, rows: rows };
         }
-        var b = rangeBuckets(STATE.range);
-        var sm = countSeries(STATE.blocks.main, b.keys, STATE.range);
-        var st = countSeries(STATE.blocks.test, b.keys, STATE.range);
-        var r2 = [['period', 'mainnet_blocks', 'testnet_blocks']];
+        var b = rangeBuckets(STATE.range, TZMODE);
+        var sm = countSeries(STATE.blocks.main, b.keys, STATE.range, TZMODE);
+        var st = countSeries(STATE.blocks.test, b.keys, STATE.range, TZMODE);
+        var r2 = [['period_' + tzTag, 'mainnet_blocks', 'testnet_blocks']];
         b.labels.forEach(function (lb, i) { r2.push([lb, sm[i], st[i]]); });
-        return { name: 'blocks-history-' + STATE.range, rows: r2 };
+        return { name: 'blocks-history-' + STATE.range + '-' + tzTag, rows: r2 };
       }
     },
     hashrate: {
       getSvg: function () { return document.querySelector('#hr-chart svg'); },
       getCsv: function () {
-        var b = rangeBuckets(STATE.hrRange);
+        var b = rangeBuckets(STATE.hrRange, 'utc');
         var sm = avgSeries(STATE.hashrate.main, b.keys, STATE.hrRange);
         var st = avgSeries(STATE.hashrate.test, b.keys, STATE.hrRange);
-        var rows = [['period', 'mainnet_gps', 'testnet_gps']];
+        var rows = [['period_utc', 'mainnet_gps', 'testnet_gps']];
         b.labels.forEach(function (lb, i) { rows.push([lb, sm[i].toFixed(3), st[i].toFixed(3)]); });
         return { name: 'pool-hashrate-' + STATE.hrRange, rows: rows };
       }
@@ -1748,7 +1800,7 @@
         var keys = earnDayKeys(SPLIT.earnPeriod), REWARD = d.block_reward || 60;
         var totalBlocks = 0; keys.forEach(function (k) { totalBlocks += (byDay[k] ? byDay[k].blocks : 0); });
         var estPoolPerDay = (keys.length ? totalBlocks / keys.length : 0) * REWARD;
-        var rows = [['day', 'actual_grin', 'estimate_grin', 'pool_avg_per_miner_grin', 'active_miners', 'blocks_found']];
+        var rows = [['day_utc', 'actual_grin', 'estimate_grin', 'pool_avg_per_miner_grin', 'active_miners', 'blocks_found']];
         keys.forEach(function (k) {
           var e = byDay[k], active = e ? Object.keys(e.nicks || {}).length : 0;
           rows.push([k, (e ? (e.reward || 0) : 0).toFixed(3), estPoolPerDay.toFixed(3),
@@ -1844,6 +1896,26 @@
     document.getElementById('range-seg').style.display = hist ? '' : 'none';
     if (hist) renderChart(); else renderHourChart();
   });
+
+  // ── Timezone toggle (UTC ⇄ local) — drives the per-event views only ──
+  // Aggregated day-series (earnings / health / hashrate) are UTC-fixed and unaffected.
+  var tzBtn = document.getElementById('tz-toggle');
+  function updateTzUI() {
+    var utc = (TZMODE === 'utc');
+    tzBtn.textContent = '🕓 ' + (utc ? 'UTC' : 'Local');
+    tzBtn.title = utc ? 'Times shown in UTC — click for your local zone (' + localTzLabel() + ')'
+                      : 'Times shown in your local zone (' + localTzLabel() + ') — click for UTC';
+    var lbl = utc ? 'UTC' : 'Local';
+    Array.prototype.forEach.call(document.querySelectorAll('.js-tz-event'), function (el) { el.textContent = lbl; });
+    var htz = document.getElementById('hour-tz'); if (htz) htz.textContent = tzModeLabel();
+  }
+  tzBtn.addEventListener('click', function () {
+    TZMODE = (TZMODE === 'utc') ? 'local' : 'utc';
+    try { localStorage.setItem('grinSoloTz', TZMODE); } catch (e) {}
+    updateTzUI();
+    renderDerived();   // re-render every per-event view (block tables, history, heatmap)
+  });
+  updateTzUI();        // reflect the persisted/default mode on first paint
 
   document.getElementById('range-seg').addEventListener('click', function (e) {
     var btn = e.target.closest('button'); if (!btn) return;

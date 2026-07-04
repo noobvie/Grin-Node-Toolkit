@@ -11,27 +11,10 @@
 #   gnc_node_binary <dir>             path to the grin binary if executable
 #   gnc_get_pid_on_port <port>        listening PID on a TCP port
 #   gnc_wait_for_port <port> [to] [iv]   block until a port listens (or timeout)
-#   gnc_grin_tmux_socket              grin user's tmux socket path (rc 1 if absent)
-#   gnc_has_grin_session <sess>       session exists on EITHER tmux server
-#   gnc_kill_grin_session <sess>      kill named session on BOTH tmux servers
-#   gnc_kill_all_grin_sessions        kill every grin_* session on BOTH servers
-#   gnc_kill_grin_procs [dir] [grace] TERM→wait→KILL grin server processes
-#   gnc_launch_node_session <dir> <bin> <sess>   THE ONLY sanctioned node launcher
-#   gnc_start_node_tmux <network>     conf-resolved wrapper around the launcher
+#   gnc_start_node_tmux <network>     (re)start the node in tmux (SHELL=/bin/bash)
 #   gnc_owner_get_status <network>    raw get_status JSON (Owner API, localhost)
 #   gnc_status_field <json> <path>    extract a dotted field from get_status JSON
 #   gnc_install_gtmux_helper          install /usr/local/bin/gtmux (view grin sessions)
-#
-# TWO TMUX SERVERS — the root cause of every "lock file is held by another
-# grin process" duplicate: a session started by root lives on root's default
-# socket (/tmp/tmux-0/default), while a session started AS the grin user (the
-# @reboot autostart, and now ALL launches) lives on grin's per-user socket
-# (/tmp/tmux-<uid>/default — what the gtmux CLI helper targets). A kill or
-# has-session check that only looks at one server misses nodes on the other →
-# a second grin is started → LMDB lock error. Rules:
-#   · START nodes only via gnc_launch_node_session → always grin-owned, always
-#     on grin's socket, always visible via `gtmux` (never plain root `tmux ls`).
-#   · STOP/CHECK sessions only via the gnc_* helpers below → both servers.
 #
 # Conventions (see .claude/CLAUDE.md):
 #   · Lib file — sourced, never executed → NO shebang, NO `set -euo pipefail`.
@@ -62,8 +45,9 @@ if ! declare -F success >/dev/null 2>&1; then success() { echo "[OK]    $*"; }; 
 # _grin_session_name <node_dir>
 # tmux session name convention: grin_<nodetype>_<networktype>.
 # Canonical copy (previously duplicated in 01/03/07). Uses UNDERSCORES so the
-# name matches the `grep '^grin_'` session sweeps (a dashed name would escape
-# them). All scripts (01/03/04/07/081) now derive names from this function.
+# name matches `_find_grin_session_for_pid`'s `grep '^grin_'`. NOTE: Script 03's
+# autostart cron currently builds a DASHED name (grin-pruned-mainnet) — that is
+# the outlier and should be reconciled to this form when 03 is wired to the lib.
 # -----------------------------------------------------------------------------
 _grin_session_name() {
     case "$(basename "${1:-}")" in
@@ -149,160 +133,10 @@ gnc_wait_for_port() {
 }
 
 # -----------------------------------------------------------------------------
-# gnc_grin_tmux_socket   → grin user's per-user tmux socket path, rc 1 if the
-# grin user is missing or its tmux server has never started (no socket file).
-# Root bypasses the socket-dir perms, so root can drive this server directly.
-# -----------------------------------------------------------------------------
-gnc_grin_tmux_socket() {
-    local uid sock
-    uid=$(id -u grin 2>/dev/null) || return 1
-    sock="/tmp/tmux-${uid}/default"
-    [[ -S "$sock" ]] || return 1
-    echo "$sock"
-}
-
-# -----------------------------------------------------------------------------
-# gnc_has_grin_session <sess>   → rc 0 if the session exists on EITHER tmux
-# server. Sets GNC_SESSION_SOCKET to "grin" or "root" so callers can print the
-# right attach command (gtmux vs plain tmux).
-# -----------------------------------------------------------------------------
-gnc_has_grin_session() {
-    local sess="${1:-}" sock
-    GNC_SESSION_SOCKET=""
-    [[ -n "$sess" ]] || return 1
-    if sock=$(gnc_grin_tmux_socket) && tmux -S "$sock" has-session -t "$sess" 2>/dev/null; then
-        GNC_SESSION_SOCKET="grin"
-        return 0
-    fi
-    if tmux has-session -t "$sess" 2>/dev/null; then
-        GNC_SESSION_SOCKET="root"
-        return 0
-    fi
-    return 1
-}
-
-# -----------------------------------------------------------------------------
-# gnc_kill_grin_session <sess>  — kill the named session on BOTH tmux servers
-# (root leftovers from before the gtmux unification included). Never fails.
-# -----------------------------------------------------------------------------
-gnc_kill_grin_session() {
-    local sess="${1:-}" sock
-    [[ -n "$sess" ]] || return 0
-    tmux kill-session -t "$sess" 2>/dev/null || true
-    if sock=$(gnc_grin_tmux_socket); then
-        tmux -S "$sock" kill-session -t "$sess" 2>/dev/null || true
-    fi
-    return 0
-}
-
-# -----------------------------------------------------------------------------
-# gnc_kill_all_grin_sessions  — kill every grin_* session on BOTH tmux servers.
-# -----------------------------------------------------------------------------
-gnc_kill_all_grin_sessions() {
-    local sess sock
-    while IFS= read -r sess; do
-        [[ -n "$sess" ]] || continue
-        tmux kill-session -t "$sess" 2>/dev/null && info "Tmux session '$sess' closed (root socket)." || true
-    done < <(tmux ls -F '#{session_name}' 2>/dev/null | grep '^grin_' || true)
-    if sock=$(gnc_grin_tmux_socket); then
-        while IFS= read -r sess; do
-            [[ -n "$sess" ]] || continue
-            tmux -S "$sock" kill-session -t "$sess" 2>/dev/null && info "Tmux session '$sess' closed (grin socket)." || true
-        done < <(tmux -S "$sock" ls -F '#{session_name}' 2>/dev/null | grep '^grin_' || true)
-    fi
-    return 0
-}
-
-# -----------------------------------------------------------------------------
-# gnc_kill_grin_procs [dir] [grace=30]
-# TERM→wait→KILL every `grin server run` process on the OS — regardless of
-# which tmux server (or none) hosts it. With <dir>, only processes whose
-# cwd or binary dir matches (so mainnet/testnet never kill each other);
-# without, ALL grin server processes (full-stop paths only). A survivor here
-# is exactly what holds the LMDB/grin lock and breaks the next start.
-# -----------------------------------------------------------------------------
-gnc_kill_grin_procs() {
-    local dir="${1:-}" grace="${2:-30}"
-    local -a pids=()
-    local pid cwd exe
-    while IFS= read -r pid; do
-        [[ -n "$pid" ]] || continue
-        if [[ -n "$dir" ]]; then
-            cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
-            exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
-            [[ "$cwd" == "$dir" || "$exe" == "$dir/grin" ]] || continue
-        fi
-        pids+=("$pid")
-    done < <(pgrep -f 'grin server run' 2>/dev/null || true)
-    # if-form throughout: this runs under callers' `set -e` (see CLAUDE.md).
-    if [[ ${#pids[@]} -eq 0 ]]; then return 0; fi
-
-    info "Stopping leftover grin process(es): ${pids[*]} (SIGTERM, up to ${grace}s)..."
-    kill -TERM "${pids[@]}" 2>/dev/null || true
-    local waited=0 alive
-    while (( waited < grace )); do
-        alive=""
-        for pid in "${pids[@]}"; do
-            if ps -p "$pid" >/dev/null 2>&1; then alive=1; break; fi
-        done
-        if [[ -z "$alive" ]]; then break; fi
-        sleep 2
-        waited=$(( waited + 2 ))
-    done
-    for pid in "${pids[@]}"; do
-        if ps -p "$pid" >/dev/null 2>&1; then
-            warn "PID $pid still alive after ${grace}s — sending SIGKILL."
-            kill -KILL "$pid" 2>/dev/null || true
-        fi
-    done
-    return 0
-}
-
-# -----------------------------------------------------------------------------
-# gnc_launch_node_session <node_dir> <binary> <session>
-# THE ONLY sanctioned node launcher (launch contract, .claude/CLAUDE.md):
-#   1. Kills the named session on BOTH tmux servers.
-#   2. Sweeps every remaining `grin server run` process for this node dir —
-#      a hidden duplicate on the other tmux server is what causes the
-#      "lock file is held by another grin process" error.
-#   3. Starts the node AS the grin user (su) with HOME=$dir, so the tmux
-#      SERVER itself runs on grin's per-user socket → view via `gtmux`
-#      (a plain root `tmux ls` will NOT show it — by design).
-# 9>&- closes Script 01's flock fd so the long-lived tmux server never
-# inherits it (harmless no-op when fd 9 is not open).
-# -----------------------------------------------------------------------------
-gnc_launch_node_session() {
-    local dir="${1:-}" binary="${2:-}" sess="${3:-}"
-    [[ -n "$dir" && -n "$binary" && -n "$sess" ]] || { error "gnc_launch_node_session: dir/binary/session required."; return 1; }
-    command -v tmux &>/dev/null || { error "tmux not installed — cannot start node."; return 1; }
-
-    gnc_kill_grin_session "$sess"
-    gnc_kill_grin_procs "$dir"
-
-    if id grin &>/dev/null; then
-        # chown first reclaims any root-owned leftovers from an earlier root-run
-        # start (a root-run node writes root:root files that EACCES-block grin).
-        chown -R grin:grin "$dir" 2>/dev/null || true
-        info "Starting grin in grin-owned tmux session '$sess' — dir $dir"
-        su -s /bin/bash grin -c "cd '$dir' && env HOME='$dir' SHELL=/bin/bash tmux new-session -d -s '$sess' 'echo Starting Grin node...; $binary server run; echo; echo Grin process exited. Press Enter to close.; read'" 9>&- \
-            || { error "Failed to create grin-owned tmux session '$sess'. Start manually: cd $dir && su -s /bin/bash -c 'HOME=$dir ./grin server run' grin"; return 1; }
-    else
-        warn "User 'grin' not found — running node as current user. Re-run Script 01 to create it."
-        SHELL=/bin/bash tmux new-session -d -s "$sess" -c "$dir" \
-            "echo 'Starting Grin node...'; cd '$dir' && HOME='$dir' '$binary' server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" 9>&- \
-            || { error "Failed to create tmux session '$sess'. Start manually: cd $dir && ./grin server run"; return 1; }
-    fi
-
-    # Make sure the operator can actually see the grin-owned session.
-    gnc_install_gtmux_helper
-    info "View: gtmux attach -t $sess   (grin-owned — plain 'tmux attach' won't find it; detach: Ctrl+B then D)"
-    return 0
-}
-
-# -----------------------------------------------------------------------------
 # gnc_start_node_tmux <network> [wait_timeout=120]
-# Conf-resolved wrapper around gnc_launch_node_session. Returns 0 once the API
-# port is listening, else 1.
+# Resolve the node dir from conf, kill any stale session of the same name, and
+# (re)start `grin server run` in a detached tmux session. Returns 0 once the API
+# port is listening, else 1. SHELL=/bin/bash is mandatory for cron-launched tmux.
 # -----------------------------------------------------------------------------
 gnc_start_node_tmux() {
     local network="${1:-mainnet}" wait_timeout="${2:-120}"
@@ -319,7 +153,33 @@ gnc_start_node_tmux() {
     sess=$(_grin_session_name "$dir")
     port=$(gnc_node_api_port "$network")
 
-    gnc_launch_node_session "$dir" "$binary" "$sess" || return 1
+    command -v tmux &>/dev/null || {
+        error "tmux not installed — cannot start node."
+        return 1
+    }
+
+    # Kill any stale session with this name before starting fresh.
+    tmux kill-session -t "$sess" 2>/dev/null || true
+
+    info "Starting grin ($network) in tmux session '$sess' — dir $dir"
+    # Run as the grin user with HOME=$dir (same contract as Script 01's start_grin):
+    #  - grin 5.4.0 needs a WRITABLE $HOME to create its .grin/<chain> work area, even
+    #    though it loads the cwd grin-server.toml; pointing HOME at the node dir keeps
+    #    everything under /opt/grin/node/<net> and avoids the root-owned /opt/grin/.grin.
+    #  - Never start grin as root: a root-run node writes root:root files (grin-server.log,
+    #    chain_data) that then EACCES-block the grin user on the next grin-owned start.
+    # chown first to reclaim any root-owned leftovers from an earlier root-run start.
+    if id grin &>/dev/null; then
+        chown -R grin:grin "$dir" 2>/dev/null || true
+        SHELL=/bin/bash tmux new-session -d -s "$sess" -c "$dir" \
+            "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$dir\" && HOME=\"$dir\" \"$binary\" server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            || { error "Failed to create tmux session '$sess'. Start manually: cd $dir && ./grin server run"; return 1; }
+    else
+        warn "User 'grin' not found — running node as current user. Re-run Script 01 to create it."
+        SHELL=/bin/bash tmux new-session -d -s "$sess" -c "$dir" \
+            "echo 'Starting Grin node...'; cd '$dir' && HOME='$dir' '$binary' server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+            || { error "Failed to create tmux session '$sess'. Start manually: cd $dir && ./grin server run"; return 1; }
+    fi
 
     if gnc_wait_for_port "$port" "$wait_timeout"; then
         success "Grin ($network) is up on port $port (session '$sess')."

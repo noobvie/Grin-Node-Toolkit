@@ -17,7 +17,7 @@
 #   053  053_grin_woocommerce.sh          WooCommerce payment gateway
 #   054  054_grin_payment_pro.sh          Payment Pro (coming soon)
 #   055  055_grin_public_web_wallet.sh    Public WASM wallet (coming soon)
-#   056  056_grin_transporter.sh          Store-and-forward slate relay (coming soon)
+#   (Grin Transporter moved to the Grin Connectivity Hub → scripts/091_grin_transporter.sh)
 #
 # =============================================================================
 
@@ -204,8 +204,7 @@ show_menu() {
     echo -e "  ${DIM}5) Public Web Wallet        (coming soon)${RESET}"
     echo -e "     ${DIM}   Client-side WASM wallet — no server keys${RESET}"
     echo ""
-    echo -e "  ${DIM}6) Grin Transporter         (coming soon)${RESET}"
-    echo -e "     ${DIM}   Store-and-forward slate relay — offline auto-payouts${RESET}"
+    echo -e "${DIM}  Grin Transporter moved → main menu 09 (Grin Connectivity Hub)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Quick Tools ─────────────────────────────────────${RESET}"
     echo ""
@@ -214,7 +213,7 @@ show_menu() {
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [1-6 / C / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [1-5 / C / 0]: ${RESET}"
 }
 
 run_sub() {
@@ -653,7 +652,6 @@ main() {
             3) run_sub "053_grin_woocommerce.sh"        ;;
             4) run_sub "054_grin_payment_pro.sh"        ;;
             5) run_sub "055_grin_public_web_wallet.sh"  ;;
-            6) run_sub "056_grin_transporter.sh"        ;;
             [Cc]) cmd_wallet_run || true                ;;
             0) break ;;
             "") continue ;;

@@ -1,7 +1,10 @@
 #!/bin/bash
 # =============================================================================
-# 056_grin_transporter.sh — Grin Transporter (store-and-forward slate relay)
+# 091_grin_transporter.sh — Grin Transporter (store-and-forward slate relay)
 # =============================================================================
+#
+#  Member of the Grin Connectivity Hub (Script 09). Renumbered from the earlier
+#  "Script 056" plan (was a sub of the Script 05 wallet hub) on 2026-07-04.
 #
 #  Self-hosted store-and-forward relay for Grin transaction slates.
 #  Fills the gap Slatepack and Tor don't: automated AND offline-tolerant sends.
@@ -12,7 +15,7 @@
 #  behind nginx, holding encrypted slates keyed by slatepack address.
 #
 #  Status: COMING SOON — this script is a placeholder.
-#  Design: docs/generated/script056_design.md
+#  Design: docs/generated/script09_design.md  (Part A — 091)
 #
 #  Planned port assignments (127.0.0.1, nginx-fronted only):
 #    Mainnet relay : 7456
@@ -32,7 +35,7 @@ RESET='\033[0m'
 
 clear
 echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-echo -e "${BOLD}${CYAN} 056) GRIN TRANSPORTER${RESET}"
+echo -e "${BOLD}${CYAN} 091) GRIN TRANSPORTER${RESET}"
 echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 echo ""
 echo -e "  ${YELLOW}⚠  Coming soon — not yet implemented.${RESET}"
@@ -53,8 +56,8 @@ echo -e "  ${DIM}Relay ports (planned, 127.0.0.1 behind nginx):${RESET}"
 echo -e "  ${DIM}  Mainnet : 7456${RESET}"
 echo -e "  ${DIM}  Testnet : 7466${RESET}"
 echo ""
-echo -e "  ${DIM}Design doc : docs/generated/script056_design.md${RESET}"
+echo -e "  ${DIM}Design doc : docs/generated/script09_design.md${RESET}"
 echo -e "  ${DIM}Follow development at: https://github.com/noobvie/grin-node-toolkit${RESET}"
 echo ""
-echo -ne "${DIM}Press Enter to return to main menu...${RESET}"
+echo -ne "${DIM}Press Enter to return to the hub...${RESET}"
 read -r || true

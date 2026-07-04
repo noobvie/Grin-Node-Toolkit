@@ -212,6 +212,7 @@ check_scripts() {
         "06_global_grin_health.sh"
         "07_grin_mining_hub_services.sh"
         "08_grin_node_admin.sh"
+        "09_grin_comms_hub.sh"
     )
     for script in "${required_scripts[@]}"; do
         if [[ ! -f "$SCRIPTS_DIR/$script" ]]; then
@@ -280,6 +281,9 @@ show_main_menu() {
     echo -e "  ${GREEN}5${RESET}) Grin Wallet Services"
     echo -e "  ${GREEN}6${RESET}) Global Grin Health"
     echo -e "  ${GREEN}7${RESET}) Grin Mining Pool Deployment"
+    echo -e "  ${GREEN}9${RESET}) Grin Connectivity Hub"
+    echo ""
+    echo -e "${DIM}  ─────────────────────────────────────────${RESET}"
     echo -e "  ${GREEN}8${RESET}) Admin & Maintenance"
     echo ""
     echo -e "${DIM}  ─────────────────────────────────────────${RESET}"
@@ -294,7 +298,7 @@ main() {
 
     while true; do
         show_main_menu
-        echo -ne "${BOLD}Select an option [0-8]: ${RESET}"
+        echo -ne "${BOLD}Select an option [0-9]: ${RESET}"
         read -r choice
 
         case "$choice" in
@@ -330,12 +334,16 @@ main() {
                 echo -e "\n${CYAN}Starting: Admin & Maintenance...${RESET}\n"
                 run_script "08_grin_node_admin.sh"
                 ;;
+            9)
+                echo -e "\n${CYAN}Starting: Grin Connectivity Hub...${RESET}\n"
+                run_script "09_grin_comms_hub.sh"
+                ;;
             0)
                 echo -e "\n${GREEN}Goodbye!${RESET}\n"
                 exit 0
                 ;;
             *)
-                echo -e "\n${RED}Invalid option. Please enter a number between 0 and 8.${RESET}"
+                echo -e "\n${RED}Invalid option. Please enter a number between 0 and 9.${RESET}"
                 sleep 1
                 ;;
         esac

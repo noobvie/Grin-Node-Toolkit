@@ -1171,49 +1171,15 @@ mass_deploy_run() {
 }
 
 # -----------------------------------------------------------------------------
-# Shared REMOTE node-control snippets (sent over SSH — the remote box has no
-# toolkit libs, so these are self-contained). Single source for start/stop/
-# restart/upgrade. Launch contract (see .claude/CLAUDE.md):
-#   · nodes start AS the grin user with HOME=<dir> via su, so the tmux SERVER
-#     lives on grin's per-user socket — view remotely via `gtmux`, never a
-#     plain root `tmux ls`; never run the node as root;
-#   · session checks/kills cover BOTH tmux servers (root default + grin
-#     socket) — a session missed on either hides a duplicate node;
-#   · leftover `grin server run` processes are cleared before any start and
-#     swept after a stop, so no stale process ever holds the LMDB lock
-#     ("lock file is held by another grin process").
-# Callers append their own `echo __OK__` terminator.
+# _md_ctrl_start — start grin nodes on selected servers
 # -----------------------------------------------------------------------------
-_MD_NODE_STOP_SNIPPET='
-PIDS=""
-for port in 3414 13414; do
-    pid=$(ss -tlnp 2>/dev/null | grep ":${port} " | grep -oE "pid=[0-9]+" | head -1 | cut -d= -f2 || true)
-    [[ -z "$pid" ]] && continue
-    kill -TERM "$pid" 2>/dev/null && { echo "  SIGTERM pid $pid (port $port)"; PIDS="$PIDS $pid"; } || true
-done
-n=0
-while [[ -n "$PIDS" && $n -lt 60 ]]; do
-    alive=""
-    for p in $PIDS; do kill -0 "$p" 2>/dev/null && alive=1; done
-    [[ -z "$alive" ]] && break
-    sleep 2; n=$((n+2))
-done
-GUID=$(id -u grin 2>/dev/null || true)
-for SOPT in "" "-S /tmp/tmux-$GUID/default"; do
-    [[ "$SOPT" == "-S /tmp/tmux-/default" ]] && continue
-    while IFS= read -r sess; do
-        [[ -z "$sess" ]] && continue
-        tmux $SOPT kill-session -t "$sess" 2>/dev/null && echo "  closed tmux: $sess" || true
-    done < <(tmux $SOPT ls -F "#{session_name}" 2>/dev/null | grep "^grin_" || true)
-done
-pkill -KILL -f "grin server run" 2>/dev/null || true
-'
-
-_MD_NODE_START_SNIPPET='
+_md_ctrl_start() {
+    if ! _md_select_servers; then
+        echo "Press Enter to continue..."; read -r
+        return
+    fi
+    local _script='
 started=0
-GUID=$(id -u grin 2>/dev/null || true)
-GSOCK=""
-[[ -n "$GUID" && -S "/tmp/tmux-$GUID/default" ]] && GSOCK="/tmp/tmux-$GUID/default"
 for dir in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/node/testnet-prune; do
     [[ -x "$dir/grin" ]] || continue
     case "$(basename "$dir")" in
@@ -1222,42 +1188,25 @@ for dir in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/no
         testnet-prune) sess="grin_pruned_testnet" ;;
         *)             sess="grin_$(basename "$dir")" ;;
     esac
-    if { [[ -n "$GSOCK" ]] && tmux -S "$GSOCK" has-session -t "$sess" 2>/dev/null; } || tmux has-session -t "$sess" 2>/dev/null; then
+    if tmux has-session -t "$sess" 2>/dev/null; then
         echo "  already running: $sess"
         continue
     fi
-    L=""
-    for p in $(pgrep -f "grin server run" 2>/dev/null); do
-        [[ "$(readlink /proc/$p/cwd 2>/dev/null)" == "$dir" ]] && L="$L $p"
-    done
-    if [[ -n "$L" ]]; then
-        echo "  clearing leftover grin process(es):$L"
-        kill -TERM $L 2>/dev/null; sleep 5; kill -KILL $L 2>/dev/null
-    fi
     if id grin &>/dev/null; then
         chown -R grin:grin "$dir" 2>/dev/null || true
-        su -s /bin/bash grin -c "cd $dir && env HOME=$dir SHELL=/bin/bash tmux new-session -d -s $sess \"./grin server run; echo; read\"" && \
-            echo "  started: $sess (view: gtmux attach -t $sess)" || echo "  tmux failed: $sess"
+        tmux new-session -d -s "$sess" -c "$dir" \
+            "su -s /bin/bash -c '"'"'cd '"'"'$dir'"'"' && ./grin server run'"'"' grin; echo; read" 2>/dev/null && \
+            echo "  started: $sess" || echo "  tmux failed: $sess"
     else
-        SHELL=/bin/bash tmux new-session -d -s "$sess" -c "$dir" "cd $dir && HOME=$dir ./grin server run; echo; read" 2>/dev/null && \
+        tmux new-session -d -s "$sess" -c "$dir" \
+            "cd $dir && ./grin server run; echo; read" 2>/dev/null && \
             echo "  started: $sess" || echo "  tmux failed: $sess"
     fi
     started=$((started+1))
 done
-[[ $started -eq 0 ]] && echo "  no grin nodes started (none installed, or all already running)"
-'
-
-# -----------------------------------------------------------------------------
-# _md_ctrl_start — start grin nodes on selected servers
-# -----------------------------------------------------------------------------
-_md_ctrl_start() {
-    if ! _md_select_servers; then
-        echo "Press Enter to continue..."; read -r
-        return
-    fi
-    local _script="${_MD_NODE_START_SNIPPET}
+[[ $started -eq 0 ]] && echo "  no grin binaries found in standard locations"
 echo __OK__
-"
+'
     _md_run_on_servers "Start grin nodes" "$_script"
 }
 
@@ -1269,9 +1218,18 @@ _md_ctrl_stop() {
         echo "Press Enter to continue..."; read -r
         return
     fi
-    local _script="${_MD_NODE_STOP_SNIPPET}
+    local _script='
+for port in 3414 13414; do
+    pid=$(ss -tlnp 2>/dev/null | grep ":${port} " | grep -oE '"'"'pid=[0-9]+'"'"' | head -1 | cut -d= -f2 || true)
+    [[ -z "$pid" ]] && continue
+    kill -TERM "$pid" 2>/dev/null && echo "  SIGTERM pid $pid (port $port)" || true
+done
+while IFS= read -r sess; do
+    [[ -z "$sess" ]] && continue
+    tmux kill-session -t "$sess" 2>/dev/null && echo "  closed tmux: $sess" || true
+done < <(tmux ls -F '"'"'#{session_name}'"'"' 2>/dev/null | grep '"'"'^grin_'"'"' || true)
 echo __OK__
-"
+'
     _md_run_on_servers "Stop grin nodes" "$_script"
 }
 
@@ -1283,12 +1241,48 @@ _md_ctrl_restart() {
         echo "Press Enter to continue..."; read -r
         return
     fi
-    local _stop_script="${_MD_NODE_STOP_SNIPPET}
+    local _stop_script='
+for port in 3414 13414; do
+    pid=$(ss -tlnp 2>/dev/null | grep ":${port} " | grep -oE '"'"'pid=[0-9]+'"'"' | head -1 | cut -d= -f2 || true)
+    [[ -z "$pid" ]] && continue
+    kill -TERM "$pid" 2>/dev/null && echo "  SIGTERM pid $pid (port $port)" || true
+done
+while IFS= read -r sess; do
+    [[ -z "$sess" ]] && continue
+    tmux kill-session -t "$sess" 2>/dev/null && echo "  closed tmux: $sess" || true
+done < <(tmux ls -F '"'"'#{session_name}'"'"' 2>/dev/null | grep '"'"'^grin_'"'"' || true)
+sleep 3
 echo __OK__
-"
-    local _start_script="${_MD_NODE_START_SNIPPET}
+'
+    local _start_script='
+started=0
+for dir in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/node/testnet-prune; do
+    [[ -x "$dir/grin" ]] || continue
+    case "$(basename "$dir")" in
+        mainnet-full)  sess="grin_full_mainnet"   ;;
+        mainnet-prune) sess="grin_pruned_mainnet" ;;
+        testnet-prune) sess="grin_pruned_testnet" ;;
+        *)             sess="grin_$(basename "$dir")" ;;
+    esac
+    if tmux has-session -t "$sess" 2>/dev/null; then
+        echo "  already running: $sess"
+        continue
+    fi
+    if id grin &>/dev/null; then
+        chown -R grin:grin "$dir" 2>/dev/null || true
+        tmux new-session -d -s "$sess" -c "$dir" \
+            "su -s /bin/bash -c '"'"'cd '"'"'$dir'"'"' && ./grin server run'"'"' grin; echo; read" 2>/dev/null && \
+            echo "  started: $sess" || echo "  tmux failed: $sess"
+    else
+        tmux new-session -d -s "$sess" -c "$dir" \
+            "cd $dir && ./grin server run; echo; read" 2>/dev/null && \
+            echo "  started: $sess" || echo "  tmux failed: $sess"
+    fi
+    started=$((started+1))
+done
+[[ $started -eq 0 ]] && echo "  no grin binaries found in standard locations"
 echo __OK__
-"
+'
     echo ""
     info "Stopping nodes on selected servers..."
     _md_run_on_servers "Stop grin nodes (restart)" "$_stop_script"
@@ -1322,15 +1316,31 @@ for dir in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/no
 done
 rm -rf "$TMP"
 [[ $upgraded -eq 0 ]] && { echo "  no node dirs found"; exit 0; }
-set +e
-'
-    # Restart via the shared stop+start snippets: stop clears sessions on BOTH
-    # tmux servers and sweeps grin processes; start relaunches grin-owned on
-    # grin's tmux socket (gtmux) — never root-run.
-    _script+="${_MD_NODE_STOP_SNIPPET}
-${_MD_NODE_START_SNIPPET}
+for port in 3414 13414; do
+    pid=$(ss -tlnp 2>/dev/null | grep ":${port} " | grep -oE '"'"'pid=[0-9]+'"'"' | head -1 | cut -d= -f2 || true)
+    [[ -z "$pid" ]] && continue
+    kill -TERM "$pid" 2>/dev/null || true
+done
+sleep 5
+for dir in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/node/testnet-prune; do
+    [[ -x "$dir/grin" ]] || continue
+    case "$(basename "$dir")" in
+        mainnet-full)  sess="grin_full_mainnet"   ;;
+        mainnet-prune) sess="grin_pruned_mainnet" ;;
+        testnet-prune) sess="grin_pruned_testnet" ;;
+        *)             sess="grin_$(basename "$dir")" ;;
+    esac
+    tmux has-session -t "$sess" 2>/dev/null && tmux kill-session -t "$sess" 2>/dev/null || true
+    if id grin &>/dev/null; then
+        tmux new-session -d -s "$sess" -c "$dir" \
+            "su -s /bin/bash -c '"'"'cd '"'"'$dir'"'"' && ./grin server run'"'"' grin; echo; read" 2>/dev/null || true
+    else
+        tmux new-session -d -s "$sess" -c "$dir" "cd $dir && ./grin server run; echo; read" 2>/dev/null || true
+    fi
+    echo "  restarted: $sess"
+done
 echo __OK__
-"
+'
     _md_run_on_servers "Upgrade grin binary" "$_script"
 }
 

@@ -248,31 +248,16 @@ _is_descendant_of() {
     return 1
 }
 
-# Searches BOTH tmux servers: grin's per-user socket first (nodes run
-# grin-owned there — the gtmux socket), then root's default socket (legacy).
-# Sets GRIN_SESSION_SOCKET to "grin"/"root" so callers print the right attach
-# command (gtmux vs tmux).
 _find_grin_session_for_pid() {
-    local target_pid="$1" sock sess pane_pid v
-    GRIN_SESSION_SOCKET=""
-    local -a variants=()
-    if sock=$(gnc_grin_tmux_socket 2>/dev/null); then
-        variants+=("-S ${sock}")
-    fi
-    variants+=("")
-    for v in "${variants[@]}"; do
-        # $v intentionally unquoted: expands to "-S <socket>" (path has no
-        # spaces) or to nothing for the default server.
-        while IFS= read -r sess; do
-            while IFS= read -r pane_pid; do
-                if _is_descendant_of "$target_pid" "$pane_pid" 2>/dev/null; then
-                    if [[ -n "$v" ]]; then GRIN_SESSION_SOCKET="grin"; else GRIN_SESSION_SOCKET="root"; fi
-                    echo "$sess"
-                    return 0
-                fi
-            done < <(tmux $v list-panes -t "$sess" -F '#{pane_pid}' 2>/dev/null || true)
-        done < <(tmux $v ls -F '#{session_name}' 2>/dev/null | grep '^grin_' || true)
-    done
+    local target_pid="$1"
+    while IFS= read -r sess; do
+        while IFS= read -r pane_pid; do
+            if _is_descendant_of "$target_pid" "$pane_pid" 2>/dev/null; then
+                echo "$sess"
+                return 0
+            fi
+        done < <(tmux list-panes -t "$sess" -F '#{pane_pid}' 2>/dev/null || true)
+    done < <(tmux ls -F '#{session_name}' 2>/dev/null | grep '^grin_' || true)
     return 1
 }
 
@@ -330,21 +315,21 @@ graceful_restart_grin() {
     success "Grin ($network) node stopped."
 
     local session_name="${target_session:-$(_grin_session_name "$grin_dir")}"
+    tmux kill-session -t "$session_name" 2>/dev/null || true
+    sleep 1
 
-    # Relaunch via the shared contract launcher (lib/grin_node_control.sh):
-    # kills the session on BOTH tmux servers, sweeps leftover grin processes
-    # for this dir (lock-file protection), then starts the node AS the grin
-    # user with HOME=$grin_dir on grin's tmux socket — never root-run.
-    gnc_launch_node_session "$grin_dir" "$grin_binary" "$session_name" \
-        || { warn "Failed to restart node. Start manually: cd $grin_dir && su -s /bin/bash -c 'HOME=$grin_dir ./grin server run' grin"; return 1; }
+    info "Starting grin in tmux session: $session_name"
+    SHELL=/bin/bash tmux new-session -d -s "$session_name" -c "$grin_dir" \
+        "echo 'Starting Grin node...'; cd '$grin_dir' && '$grin_binary' server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+        || { warn "Failed to create tmux session. Start manually: cd $grin_dir && $grin_binary server run"; return 1; }
 
     sleep 3
     if ss -tlnp 2>/dev/null | grep -q ":$api_port "; then
         success "Grin ($network) node is back up on port $api_port."
     else
-        warn "Grin may still be initializing. Check: gtmux attach -t $session_name"
+        warn "Grin may still be initializing. Check: tmux attach -t $session_name"
     fi
-    info "View: gtmux attach -t $session_name   ${DIM}(grin-owned — plain 'tmux attach' won't find it)${RESET}"
+    info "View: tmux attach -t $session_name"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -588,13 +573,9 @@ _show_node_info() {
         local tmux_sess
         tmux_sess=$(_find_grin_session_for_pid "$pid" 2>/dev/null || true)
         if [[ -n "$tmux_sess" ]]; then
-            # Re-resolve in THIS shell (the $() above ran in a subshell) to
-            # learn which tmux server hosts it → right attach command.
-            local _att="gtmux"
-            if gnc_has_grin_session "$tmux_sess" && [[ "$GNC_SESSION_SOCKET" == "root" ]]; then _att="tmux"; fi
-            echo -e "    tmux   : ${GREEN}$tmux_sess${RESET}  ${DIM}(attach: $_att attach -t $tmux_sess)${RESET}"
+            echo -e "    tmux   : ${GREEN}$tmux_sess${RESET}  ${DIM}(attach: tmux attach -t $tmux_sess)${RESET}"
         else
-            echo -e "    tmux   : ${DIM}no grin_ session found — try 'gtmux ls'${RESET}"
+            echo -e "    tmux   : ${DIM}no grin_ session found${RESET}"
         fi
     else
         echo -e "    Node   : ${RED}NOT RUNNING${RESET}  ${DIM}(port $api_port not listening)${RESET}"

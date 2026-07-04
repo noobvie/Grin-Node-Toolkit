@@ -1198,20 +1198,21 @@ restart_grin_node() {
     cd "$GRIN_DIR" || error_exit "Cannot access $GRIN_DIR"
     ensure_package tmux tmux || log "WARNING: could not install tmux — start may fail"
 
-    # Shared contract launcher (lib/grin_node_control.sh): kills any stale
-    # session with this name on BOTH tmux servers, sweeps leftover grin
-    # processes for this dir (lock-file protection), and starts the node AS
-    # the grin user with HOME=$GRIN_DIR on grin's tmux socket (view via gtmux).
-    log "Starting in tmux session '$TMUX_SESSION' (grin-owned — view via gtmux)..."
-    gnc_launch_node_session "$GRIN_DIR" "$GRIN_BINARY" "$TMUX_SESSION" \
-        || { log "WARNING: launch failed — start manually: cd $GRIN_DIR && su -s /bin/bash -c 'HOME=$GRIN_DIR ./grin server run' grin"; return 1; }
+    # Kill any stale session with this name (e.g. left over after stop_grin_node
+    # killed the process but not the tmux session)
+    tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+
+    log "Starting in tmux session '$TMUX_SESSION'..."
+    tmux new-session -d -s "$TMUX_SESSION" -c "$GRIN_DIR" \
+        "echo 'Starting Grin node...'; cd $GRIN_DIR && $GRIN_BINARY server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read"
     sleep 5
 
     if is_grin_running; then
         log "✓ Grin started (PID: $(get_pid_on_port "$GRIN_PORT"))"
-        log "  Attach: gtmux attach -t $TMUX_SESSION  |  Detach: Ctrl+B D  (plain 'tmux attach' won't find it)"
+        log "  Attach: tmux attach -t $TMUX_SESSION  |  Detach: Ctrl+B D"
     else
-        log "WARNING: Grin did not start within 5s — check: gtmux attach -t $TMUX_SESSION"
+        log "WARNING: Grin did not start within 5s — start manually:"
+        log "  tmux new-session -s $TMUX_SESSION '$GRIN_BINARY'"
         return 1
     fi
 }
@@ -1321,11 +1322,15 @@ try_start_from_known_dir() {
     # Session name convention: grin_<nodetype>_<networktype>
     local sess; sess="$(_grin_session_name "$found_dir")"
 
-    # Shared contract launcher: stale-session kill on BOTH tmux servers +
-    # leftover-process sweep + grin-owned start on grin's tmux socket. The
-    # launcher sets SHELL=/bin/bash itself (this path may run from cron).
-    gnc_launch_node_session "$found_dir" "$found_binary" "$sess" || true
-    echo "  → Started in tmux session '$sess' (view: gtmux attach -t $sess) — waiting for port $port (up to 120s)..."
+    # Kill any stale session with this name before starting fresh
+    tmux kill-session -t "$sess" 2>/dev/null || true
+
+    # SHELL=/bin/bash: this path may run from cron (which sets SHELL=/bin/sh);
+    # tmux child sessions inherit it and a bare `sh` breaks the launch.
+    SHELL=/bin/bash tmux new-session -d -s "$sess" -c "$found_dir" \
+        "echo 'Starting Grin node...'; cd $found_dir && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
+        2>/dev/null || true
+    echo "  → Started in tmux session '$sess' — waiting for port $port (up to 120s)..."
 
     local elapsed=0
     while [ $elapsed -lt 120 ]; do
@@ -1876,10 +1881,7 @@ add_grin_autostart() {
         else
             port=$GRIN_PORT_TESTNET
             label="Testnet"
-            # ~17 min after boot — well clear of the whole mainnet startup
-            # surge (grin v5.5 is heavy; a slow VPS can't boot two nodes at
-            # once). Same default as gnk_autostart_enable (Script 01 Super Auto).
-            default_delay=1000
+            default_delay=1500
             cron_marker="$CRON_COMMENT_AUTOSTART_TEST"
         fi
 

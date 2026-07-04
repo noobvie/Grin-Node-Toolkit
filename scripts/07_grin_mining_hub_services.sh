@@ -240,7 +240,7 @@ hub_status_line() {
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  Grin Mining Services${RESET}"
+    echo -e "${BOLD}${CYAN}  Grin Mining Services${RESET} ${YELLOW}(IN DEVELOPMENT)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     hub_status_line

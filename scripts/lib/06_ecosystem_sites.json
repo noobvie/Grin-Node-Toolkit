@@ -13,6 +13,7 @@
   {"category": "Wallet",      "name": "Grin++",                     "url": "https://grinplusplus.github.io/",                     "since": null},
   {"category": "Wallet",      "name": "Easy Grin",                  "url": "https://wallet.easygrin.org/",                        "since": null},
   {"category": "Wallet",      "name": "MWC Wallet",                 "url": "https://mwcwallet.com/",                              "since": null},
+  {"category": "Wallet",      "name": "Goblin",                     "url": "https://goblin.st/",                                  "since": null},
 
   {"category": "Community",   "name": "grin.mw",                   "url": "https://grin.mw",                                     "since": "Jan 2019"},
   {"category": "Community",   "name": "Grin Forum",                 "url": "https://forum.grin.mw",                               "since": "Jan 2019"},
@@ -25,6 +26,7 @@
   {"category": "Community",   "name": "GrinNode.live",              "url": "https://grinnode.live/",                              "since": null},
   {"category": "Community",   "name": "Popular Grin Nodes",         "url": "https://grin.fail/",                                "since": "May 2026"},
   {"category": "Community",   "name": "Grinffindor ecosystem",      "url": "https://grinffindor.org/",                                "since": null},
+  {"category": "Community",   "name": "Goblin Ecosystem discussion", "url": "https://bbs.goblin.st/",                             "since": null},
 
   {"category": "Ecommerce",   "name": "Grinily",                    "url": "https://grinily.com",                                 "since": null},
 

@@ -18,8 +18,8 @@
 #   5) Remove current domain   (delete nginx config + SSL)
 #   6) Google Analytics        (GA4 tracking — optional)
 #   7) Turnstile               (Cloudflare bot protection — optional)
-#   B) Backup                  (encrypted archive: testnet + mainnet)
-#   R) Restore                 (decrypt + restore backup)
+#   B) Backup & Restore        (encrypted archive: wallets+seed+DB+config; daily cron)
+#   R) Restore                 (decrypt + restore backup — shortcut into B)
 #   D) Delete                  (wipe everything: services, wallets, config, nginx — testing)
 #   0) Back to main menu
 #
@@ -117,6 +117,9 @@ source "$SCRIPT_DIR/lib/052_lib_app.sh"
 source "$SCRIPT_DIR/lib/052_lib_nginx.sh"
 # shellcheck source=lib/052_lib_admin.sh
 source "$SCRIPT_DIR/lib/052_lib_admin.sh"
+# Encrypted backup / restore / schedule (ported from the solo-mining approach).
+# shellcheck source=lib/052_lib_backup.sh
+source "$SCRIPT_DIR/lib/052_lib_backup.sh"
 
 # =============================================================================
 # NETWORK SELECTION
@@ -161,8 +164,8 @@ select_network() {
     echo -e "  ${CYAN}6${RESET}) Google Analytics  ${DIM}(GA4 tracking — optional)${RESET}"
     echo ""
     echo -e "${DIM}  ─── Admin (both networks) ────────────────────────${RESET}"
-    echo -e "  ${YELLOW}B${RESET}) Backup   ${DIM}(encrypted archive: testnet + mainnet)${RESET}"
-    echo -e "  ${YELLOW}R${RESET}) Restore  ${DIM}(decrypt + restore backup)${RESET}"
+    echo -e "  ${YELLOW}B${RESET}) Backup & Restore ${DIM}(encrypted wallets+seed+DB; daily schedule)${RESET}"
+    echo -e "  ${YELLOW}R${RESET}) Restore  ${DIM}(decrypt + restore backup — shortcut)${RESET}"
     echo -e "  ${RED}D${RESET}) Delete   ${DIM}(wipe all drop data — services, wallets, config, nginx)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
@@ -178,8 +181,8 @@ select_network() {
         5) drop_remove_domain; return 1 ;;
         6) drop_ga4_menu; return 1 ;;
         7) drop_turnstile_menu; return 1 ;;
-        b) drop_backup; return 1 ;;
-        r) drop_restore; return 1 ;;
+        b) drop_backup_menu || true; return 1 ;;
+        r) dbk_restore || true; return 1 ;;
         d) drop_nuke; return 1 ;;
         0) return 2 ;;
         *) warn "Invalid option."; return 1 ;;
@@ -460,7 +463,7 @@ drop_ensure_defaults() {
         drop_name_default="Grin Drop [TESTNET]"
         global_daily_cap_default="2000"
         global_hourly_cap_default="100"
-        claim_grin_default="3.0"          # max claim amount on testnet
+        claim_grin_default="10.0"         # max claim amount on testnet
         theme_default="matrix"
     fi
 

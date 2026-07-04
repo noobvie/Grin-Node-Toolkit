@@ -190,6 +190,16 @@
   }
   .metric-strip .mini-value { font-size: 20px; font-weight: 700; margin-top: 3px; }
   .metric-strip .mini-sub   { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  /* Dual USD·BTC figures (price, volume): both values same size, distinct colors
+     (USD/Gate.io = grin, BTC/nonlogs = blue). */
+  .metric-strip .mini-value.dual-val  { font-size: 16px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px; }
+  .metric-strip .mini-value .grin     { color: var(--grin); }
+  .metric-strip .mini-value .sat      { color: var(--blue); }
+  .metric-strip .mini-value .dual-sep { color: var(--muted); font-weight: 400; }
+  /* Secondary inline 24h-change chip (BTC) shown in a card's sub-line. */
+  .metric-strip .mini-sub .chg-inline { font-weight: 600; }
+  .metric-strip .mini-sub .chg-inline.chg-pos { color: var(--green); }
+  .metric-strip .mini-sub .chg-inline.chg-neg { color: var(--red); }
   .chg-pos { color: var(--green); }
   .chg-neg { color: var(--red); }
 
@@ -370,6 +380,22 @@
 
   /* ── Canvas wrapper ──────────────────────────────────────────────────────── */
   .chart-wrap { position: relative; height: var(--chart-h); }
+  /* Fixed hover readout box, pinned to the chart corner so it never covers the data
+     (replaces the cursor-following tooltip on the price charts). */
+  .chart-readout {
+    position: absolute; top: 8px; right: 8px;
+    min-width: 96px; max-width: 62%;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 9px;
+    font-size: 11px; line-height: 1.5; color: var(--text);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+    pointer-events: none; opacity: 0; transition: opacity .12s ease;
+    z-index: 5;
+  }
+  .chart-readout.show { opacity: 0.97; }
+  .chart-readout .ro-title { font-size: 10px; font-weight: 600; color: var(--muted); margin-bottom: 3px; }
+  .chart-readout .ro-row   { white-space: nowrap; }
+  .chart-readout .ro-dot   { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
   /* Country names are painted on the bars (countriesBarLabels), so this chart
      needs no left y-axis gutter — let it span the full card width. */
   .chart-countries-wrap { padding: 8px 12px 16px; }
@@ -956,18 +982,21 @@
     </div>
     <div class="mini">
       <div class="mini-label">24h Volume</div>
-      <div class="mini-value" id="m-vol">—</div>
-      <div class="mini-sub">Gate.io · GRIN/USDT</div>
+      <div class="mini-value dual-val">
+        <span class="grin" id="m-vol">—</span><span class="dual-sep">·</span><span class="sat" id="m-vol-btc">—</span>
+      </div>
+      <div class="mini-sub">Gate.io (USD) · nonlogs (BTC)</div>
     </div>
     <div class="mini">
       <div class="mini-label">24h Change</div>
       <div class="mini-value" id="m-change">—</div>
-      <div class="mini-sub" id="m-change-sub">GRIN/USDT</div>
+      <div class="mini-sub" id="m-change-sub">USDT · BTC <span id="m-change-btc" class="chg-inline">—</span></div>
     </div>
     <div class="mini">
-      <div class="mini-label">Price · USD</div>
-      <div class="mini-value grin" id="m-price">—</div>
-      <div class="mini-sub" id="m-price-btc">— sat</div>
+      <div class="mini-label">Price · USD / BTC</div>
+      <div class="mini-value dual-val">
+        <span class="grin" id="m-price">—</span><span class="dual-sep">·</span><span class="sat" id="m-price-btc">— sat</span>
+      </div>
     </div>
   </div>
 
@@ -1000,7 +1029,7 @@
       <code style="background:rgba(255,153,0,0.1);color:var(--grin);padding:2px 6px;border-radius:3px;font-family:monospace">06_price_collector.py --init-history</code>
       first
     </div>
-    <div class="chart-wrap" id="price-usdt-chart-wrap"><canvas id="chart-price-usdt"></canvas></div>
+    <div class="chart-wrap" id="price-usdt-chart-wrap"><canvas id="chart-price-usdt"></canvas><div class="chart-readout" id="readout-price-usdt"></div></div>
   </div>
 
   <!-- Price chart — BTC -->
@@ -1030,7 +1059,7 @@
     <div id="price-btc-no-data" style="display:none;padding:32px;text-align:center;color:var(--muted);font-size:13px;">
       No BTC price data yet — collector builds history from live snapshots over time
     </div>
-    <div class="chart-wrap" id="price-btc-chart-wrap"><canvas id="chart-price-btc"></canvas></div>
+    <div class="chart-wrap" id="price-btc-chart-wrap"><canvas id="chart-price-btc"></canvas><div class="chart-readout" id="readout-price-btc"></div></div>
   </div>
 
   <!-- Supply Issuance Rate -->
@@ -1592,6 +1621,41 @@ function makeChainChart(id) {
   });
 }
 
+// Append a 2-digit alpha to a #rrggbb hex; passes through anything else unchanged.
+function hexAlpha(hex, alpha) {
+  const h = (hex || "").trim();
+  if (!/^#[0-9a-fA-F]{6}$/.test(h)) return h || "#58a6ff";
+  return h + Math.round(alpha * 255).toString(16).padStart(2, "0");
+}
+
+// Volume bars use the current theme's --blue so they stay legible on every theme
+// (dark / light / matrix / hp) and read as distinct from the price line's hue.
+function volBarColor() {
+  const blue = getComputedStyle(document.documentElement).getPropertyValue("--blue");
+  return hexAlpha(blue, 0.6);
+}
+
+// External tooltip: renders the hover readout into a fixed box pinned to the chart
+// corner instead of a cursor-following popup, so it never covers the data underneath.
+// Reuses each chart's existing label/title callbacks (via tt.title / tt.body).
+function makeExternalReadout(readoutId) {
+  return (context) => {
+    const el = document.getElementById(readoutId);
+    if (!el) return;
+    const tt = context.tooltip;
+    if (!tt || tt.opacity === 0) { el.classList.remove("show"); return; }
+    const title = (tt.title && tt.title[0]) || "";
+    const rows = (tt.body || []).map((b, i) => {
+      const lc  = (tt.labelColors && tt.labelColors[i]) || {};
+      const col = (lc.borderColor && lc.borderColor !== "transparent")
+                ? lc.borderColor : (lc.backgroundColor || "var(--text)");
+      return `<div class="ro-row"><span class="ro-dot" style="background:${col}"></span>${b.lines.join(" ")}</div>`;
+    }).join("");
+    el.innerHTML = `<div class="ro-title">${title}</div>${rows}`;
+    el.classList.add("show");
+  };
+}
+
 function makePriceChartUSDT(id) {
   const ctx = $(id).getContext("2d");
   return new Chart(ctx, {
@@ -1615,7 +1679,7 @@ function makePriceChartUSDT(id) {
           type: "bar",
           label: "Volume (GRIN)",
           data: [],
-          backgroundColor: "#3fb95030",
+          backgroundColor: "#58a6ff99",
           borderColor: "transparent",
           borderWidth: 0,
           yAxisID: "yVol",
@@ -1631,10 +1695,12 @@ function makePriceChartUSDT(id) {
       plugins: {
         legend: { display: false },
         tooltip: {
+          enabled: false,
+          external: makeExternalReadout("readout-price-usdt"),
           callbacks: {
             label: ctx => {
-              if (ctx.datasetIndex === 0) return ` $${fmtNum(ctx.parsed.y, 5)}`;
-              return ` Vol: ${fmtNum(ctx.parsed.y, 0)} GRIN`;
+              if (ctx.datasetIndex === 0) return `$${fmtNum(ctx.parsed.y, 5)}`;
+              return `Vol: ${fmtNum(ctx.parsed.y, 0)} GRIN`;
             },
             title: items => new Date(items[0].parsed.x).toLocaleString(),
           }
@@ -1694,7 +1760,7 @@ function makePriceChartBTC(id) {
           type: "bar",
           label: "Volume (GRIN)",
           data: [],
-          backgroundColor: "#ffd70030",
+          backgroundColor: "#58a6ff99",
           borderColor: "transparent",
           borderWidth: 0,
           yAxisID: "yVol",
@@ -1710,10 +1776,12 @@ function makePriceChartBTC(id) {
       plugins: {
         legend: { display: false },
         tooltip: {
+          enabled: false,
+          external: makeExternalReadout("readout-price-btc"),
           callbacks: {
             label: ctx => {
-              if (ctx.datasetIndex === 0) return ` ${fmtNum(ctx.parsed.y, 0)} sat`;
-              return ` Vol: ${fmtNum(ctx.parsed.y, 0)} GRIN`;
+              if (ctx.datasetIndex === 0) return `${fmtNum(ctx.parsed.y, 0)} sat`;
+              return `Vol: ${fmtNum(ctx.parsed.y, 0)} GRIN`;
             },
             title: items => new Date(items[0].parsed.x).toLocaleString(),
           }
@@ -2382,11 +2450,14 @@ function updatePriceChartUSDT(data, range) {
   const realPts = pts.filter(p => p.y !== null).length;
   charts.priceUsdt.data.datasets[0].pointRadius = realPts < 60 ? 2 : 0;
 
+  // Scale volume axis so the tallest bar reaches ~33% of chart height (visible but
+  // still recessive under the price line).
   const maxVol = Math.max(...volPts.map(p => p.y).filter(v => v > 0), 1);
-  charts.priceUsdt.options.scales.yVol.max = maxVol * 5;
+  charts.priceUsdt.options.scales.yVol.max = maxVol * 3;
 
   charts.priceUsdt.data.datasets[0].data = pts;
   charts.priceUsdt.data.datasets[1].data = volPts;
+  charts.priceUsdt.data.datasets[1].backgroundColor = volBarColor();
   $("price-usdt-no-data").style.display    = realPts ? "none"  : "block";
   $("price-usdt-chart-wrap").style.display = realPts ? "block" : "none";
   charts.priceUsdt.update("none");
@@ -2407,12 +2478,13 @@ function updatePriceChartBTC(data, range) {
   delete charts.priceBtc.options.scales.x.min;
   delete charts.priceBtc.options.scales.x.max;
 
-  // Scale volume axis so bars occupy ~20% of chart height
+  // Scale volume axis so the tallest bar reaches ~33% of chart height.
   const maxVol = Math.max(...volPts.map(p => p.y), 1);
-  charts.priceBtc.options.scales.yVol.max = maxVol * 5;
+  charts.priceBtc.options.scales.yVol.max = maxVol * 3;
 
   charts.priceBtc.data.datasets[0].data = pts;
   charts.priceBtc.data.datasets[1].data = volPts;
+  charts.priceBtc.data.datasets[1].backgroundColor = volBarColor();
   $("price-btc-no-data").style.display    = pts.length ? "none"  : "block";
   $("price-btc-chart-wrap").style.display = pts.length ? "block" : "none";
   charts.priceBtc.update("none");
@@ -2495,12 +2567,25 @@ async function loadAll() {
     if (usdt?.volume_24h != null && last != null) {
       $("m-vol").textContent = fmtUSD(usdt.volume_24h * last);
     }
-    // 24h change %
+    // nonlogs GRIN/BTC market volume ≈ base GRIN volume × BTC price (self-sourced,
+    // no CoinGecko) — shown natively in BTC beside the Gate.io USD figure.
+    if (btc?.volume_24h != null && btc?.last != null) {
+      $("m-vol-btc").textContent = fmtNum(btc.volume_24h * btc.last, 3) + " BTC";
+    }
+    // 24h change % — Gate.io/USDT is the primary (headline) value.
     if (usdt?.change_pct != null) {
       const chg = usdt.change_pct;
       const el  = $("m-change");
       el.textContent = (chg >= 0 ? "+" : "") + fmtNum(chg, 2) + "%";
       el.className   = "mini-value " + (chg >= 0 ? "chg-pos" : "chg-neg");
+    }
+    // Secondary: GRIN vs BTC change (nonlogs). Thin market → noisier, so it sits in
+    // the sub-line rather than as the headline.
+    if (btc?.change_pct != null) {
+      const bchg = btc.change_pct;
+      const bel  = $("m-change-btc");
+      bel.textContent = (bchg >= 0 ? "+" : "") + fmtNum(bchg, 2) + "%";
+      bel.className   = "chg-inline " + (bchg >= 0 ? "chg-pos" : "chg-neg");
     }
     if (last != null) $("m-price").textContent = "$" + fmtNum(last, 4);
     $("m-price-btc").textContent = btc?.last != null ? Math.round(btc.last * 1e8) + " sat" : "— sat";
@@ -2826,6 +2911,10 @@ function applyTheme(theme) {
     Chart.defaults.borderColor = tc.grid;
     Chart.defaults.color       = tc.tick;
     Chart.defaults.font.family = theme === "matrix" ? monoFont : sansFont;
+    // Volume bars track the theme's --blue so they stay visible on every theme.
+    [charts.priceUsdt, charts.priceBtc].forEach(c => {
+      if (c?.data?.datasets?.[1]) c.data.datasets[1].backgroundColor = volBarColor();
+    });
     Object.values(charts).forEach(c => {
       if (!c?.options?.scales) return;
       Object.keys(c.options.scales).forEach(ax => {

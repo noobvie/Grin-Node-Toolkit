@@ -19,6 +19,7 @@ Usage:
     python3 06_price_collector.py --init-history   Backfill Gate.io GRIN/USDT history
     python3 06_price_collector.py --update         Fetch current prices + export JSON (default)
     python3 06_price_collector.py --export         Re-export JSON only, no fetch
+    python3 06_price_collector.py --fix-btc-volume One-time: rescale inflated old GRIN_BTC candle volumes
 
 Config (env vars or /opt/grin/grin-price/config.env):
     PRICE_WWW_DATA   Path to write price.json  (default: /var/www/grin-stats/data)
@@ -264,13 +265,21 @@ def aggregate_snapshots(conn, pair, interval):
         pts    = sorted(buckets[bucket_ts])
         prices = [p for _, p, _ in pts]
         vols   = [v for _, _, v in pts]
+        # `vols` are rolling trailing-24h volume snapshots (nonlogs.io exposes no
+        # per-period volume and has no OHLCV history API). Summing them would count
+        # the same 24h figure once per 5-min sample (up to 288×/day), inflating a
+        # candle's volume ~N-fold — a 6h candle showed ~72× the real number. Instead
+        # estimate the candle-period volume by scaling the average 24h volume down to
+        # the bucket's duration:  period_vol ≈ mean(24h_vol) × bucket_secs / 86400.
+        avg_24h_vol = (sum(vols) / len(vols)) if vols else 0.0
+        period_vol  = avg_24h_vol * bucket_secs / 86400.0
         result.append((
             bucket_ts,
             prices[0],            # open
             max(prices),          # high
             min(prices),          # low
             prices[-1],           # close
-            sum(vols),            # sum of volumes captured in this bucket
+            period_vol,           # est. period volume from rolling-24h snapshots
         ))
     return result
 
@@ -466,6 +475,34 @@ def cmd_init_history():
     print("[OK] History import complete.")
     print(f"[INFO] GRIN/BTC history will build automatically as --update runs every 5 min.")
 
+def cmd_fix_btc_volume():
+    """
+    One-time migration: correct historical GRIN_BTC candle volumes.
+
+    Old candles were built with sum(rolling_24h_volume) over every 5-min snapshot,
+    inflating volume by up to 288× (samples per day). Candles still inside the 7-day
+    snapshot window self-heal on the next --update (they get re-aggregated from live
+    snapshots with the corrected formula); candles older than that have had their
+    source snapshots pruned and can only be corrected approximately. A fully-sampled
+    day carries the 24h figure 288 times, so dividing by 288 recovers the intended
+    per-period estimate (mean_24h_vol × bucket_secs / 86400). Idempotent via meta flag.
+    """
+    conn = open_db()
+    init_schema(conn)
+    if get_meta(conn, "btc_vol_fixed") == "1":
+        print("[SKIP] GRIN_BTC volumes already rescaled (meta btc_vol_fixed=1).")
+        conn.close()
+        return
+    n = conn.execute(
+        "UPDATE ohlcv SET volume = volume / 288.0 WHERE pair='GRIN_BTC'"
+    ).rowcount
+    set_meta(conn, "btc_vol_fixed", "1")
+    conn.commit()
+    conn.close()
+    print(f"[OK] Rescaled {n} GRIN_BTC candle volumes (÷288 approximation).")
+    print("[INFO] The last 7 days will be re-derived exactly on the next --update.")
+    export_price_json()
+
 def cmd_update():
     """Fetch current prices, update candles, aggregate BTC OHLCV, export JSON."""
     conn = open_db()
@@ -562,6 +599,8 @@ def main():
                        help="Fetch current prices + export JSON (default)")
     group.add_argument("--export",       action="store_true",
                        help="Re-export JSON from existing DB, no fetch")
+    group.add_argument("--fix-btc-volume", action="store_true",
+                       help="One-time: rescale inflated historical GRIN_BTC candle volumes")
     args = parser.parse_args()
 
     if args.init_db:
@@ -573,6 +612,8 @@ def main():
         cmd_init_history()
     elif args.export:
         export_price_json()
+    elif args.fix_btc_volume:
+        cmd_fix_btc_volume()
     else:
         cmd_update()
 

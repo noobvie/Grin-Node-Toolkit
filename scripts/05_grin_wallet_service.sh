@@ -122,7 +122,7 @@ _cmd_status() {
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN} 05) GRIN WALLET SERVICES${RESET}"
+    echo -e "${BOLD}${CYAN} 05) GRIN WALLET SERVICES${RESET} ${YELLOW}(IN DEVELOPMENT)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     echo -e "  ${YELLOW}Tip:${RESET} ${DIM}Install each service on its own dedicated server.${RESET}"

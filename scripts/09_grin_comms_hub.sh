@@ -88,7 +88,7 @@ _badge() {
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN} 09) GRIN CONNECTIVITY HUB${RESET}"
+    echo -e "${BOLD}${CYAN} 09) GRIN CONNECTIVITY HUB${RESET} ${YELLOW}(IN DEVELOPMENT)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     echo -e "  ${DIM}How Grin participants reach each other — transport, relays, messaging.${RESET}"

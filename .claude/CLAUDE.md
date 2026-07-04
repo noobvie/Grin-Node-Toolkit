@@ -41,6 +41,10 @@ scripts/
        07_lib_satellite.sh; app code in web/07_mining_pool_public/)
   08_  Node admin centre (monitoring, nginx, firewall, backup, disk cleanup)
   08del_ Full cleanup (destructive)
+  09_  Grin Connectivity Hub → 091_ Grin Transporter (store-and-forward slate queue, was
+       "Script 056"; Node+SQLite+Tor) and 092_ Floonet relay deployer (deploys 2ro's floonet-rs
+       via nginx/certbot — we deploy, don't fork). Design → docs/generated/script09_design.md,
+       memory project_comms_hub_09. Menu grouping is display-only; the number stays the label.
   lib/ Sourced libraries — always prefixed with parent script number
        e.g. 052_lib_wallet.sh, 052_lib_nginx.sh
 ```
@@ -186,6 +190,16 @@ The toolkit no longer patches `api_secret_path` (grin-wallet's default is used);
 - **grin node repo:** https://github.com/mimblewimble/grin
 - **Official docs:** https://docs.grin.mw — slatepack spec, tx lifecycle
 - **Grin forum:** https://forum.grin.mw
+
+### Community reference — Goblin ecosystem (author "dog", github.com/2ro)
+Independent Grin projects useful as reference when stuck (Nostr slatepack transport, mixnet
+privacy, merchant payments). Full overlap analysis → memory `reference_goblin_ecosystem`.
+- **goblin** (Rust) — P2P wallet, pay-by-username, slatepacks over Nostr DMs via Nym mixnet; Grim-based
+- **floonet-rs / floonet-strfry / floonet-mixexit** — self-hostable Grin-native relay stack (docs.floonet.dev)
+- **GoblinPay** (Rust) — receive-only merchant payment server (QR codes)
+- **eranos** (TS) — private Grin fundraising; **magick.market** (TS) — Nostr Grin marketplace
+- **grin-btcpay-woocommerce** (PHP) — WooCommerce↔BTCPay gateway (compare with our Script 053)
+- Forum thread: https://forum.grin.mw/t/goblin-p2p-grin-with-nostr-and-mixnet-updated/12633 — docs: https://docs.goblin.st
 
 Owner API v3 session flow: `init_secure_api` → ECDH key exchange → `open_wallet` → AES-256-GCM encrypted calls.
 Foreign API v2: Basic Auth + secret file, no ECDH.

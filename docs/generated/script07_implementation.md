@@ -100,7 +100,7 @@ pattern as `052_lib_wallet.sh`). The backend handles SIGTERM/SIGINT → stop sch
 | Public-page XSS escaping | ✅ | `escHtml` on `miners-stats`/`payment-history` sinks (+ existing `fortune-board`), atop stratum bech32 address regex |
 | System-health metrics | ✅ | real CPU/mem/disk/uptime now served by admin `GET /api/admin/health/system` (Node `os` + `fs.statfsSync`); health page moved into the admin panel (was a public page with hardcoded values). ⚠ verify the old public `system-health.html` no longer renders the fake cards |
 | Money precision (REAL → nanoGRIN) | ❌ | balances still `REAL` GRIN in `db.js` — design follow-up |
-| Grin Transporter payout rail | ❌ | `lib/wallet-transporter.js` is a forced-off stub ([Script 056](script056_design.md)) |
+| Grin Transporter payout rail | ❌ | `lib/wallet-transporter.js` is a forced-off stub ([091 Transporter](script09_design.md)) |
 
 ### Remaining operator responsibility (not code)
 - **`grin-server.toml` `wallet_listener_url`** — the satellite node's stratum coinbase must point at
@@ -119,7 +119,7 @@ Listed here so we don't re-litigate or accidentally re-implement.
 | D1 | **System-health fake metrics** | ✅ **Resolved 2026-06-08** — real metrics via admin `GET /api/admin/health/system`; health page moved into the admin panel (gated, not public). ⚠ confirm the legacy public `system-health.html` / `miners-stats` uptime no longer render hardcoded values. | Done (backend + page move). Frontend verification owed. |
 | D2 | **Money precision `REAL` GRIN → integer nanoGRIN** | Touches all payout/reward/withdrawal/balance_log math + display. High blast radius. | Do as its **own PR + full testnet soak**, never as a side-change. Engine-independent (do it in SQLite, carries to Postgres). |
 | D3 | **mTLS satellite→hub** | v1 is shared-secret header over HTTPS (+ IP allowlist), which is acceptable. | Infra/manual (cert provisioning) — defer until multi-operator trust needs it. |
-| D4 | **Grin Transporter payout rail** | `lib/wallet-transporter.js` is a forced-off stub; blocked on Script 056 (not built). | Keep stub off until [Script 056](script056_design.md) ships. |
+| D4 | **Grin Transporter payout rail** | `lib/wallet-transporter.js` is a forced-off stub; blocked on Script 091 (not built). | Keep stub off until [091 Transporter](script09_design.md) ships. |
 | D5 | **Theme-system unification** (public `body.<theme>-theme` → `theme.js` CSS variables) | Cosmetic; refactor risk across 13 themes. | Defer; not launch-blocking. |
 | D6 | **i18n / multi-language content** | Product scope; content + tooling. | Defer (phase 2). |
 | D7 | **Fiat (USD/EUR/BTC) price display** | Feature; could wire to the Script 06 price collector. | Optional — your call on data source. |

@@ -17,7 +17,8 @@
 #   053  053_grin_woocommerce.sh          WooCommerce payment gateway
 #   054  054_grin_payment_pro.sh          Payment Pro (coming soon)
 #   055  055_grin_public_web_wallet.sh    Public WASM wallet (coming soon)
-#   056  056_grin_transporter.sh          Store-and-forward slate relay (coming soon)
+#   056  056_grin_goblinpay.sh            GoblinPay receive-only merchant server (planned)
+#   (Grin Transporter moved to the Grin Connectivity Hub → scripts/091_grin_transporter.sh)
 #
 # =============================================================================
 
@@ -122,7 +123,7 @@ _cmd_status() {
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN} 05) GRIN WALLET SERVICES${RESET}"
+    echo -e "${BOLD}${CYAN} 05) GRIN WALLET & PAYMENT SERVICES${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     echo -e "  ${YELLOW}Tip:${RESET} ${DIM}Install each service on its own dedicated server.${RESET}"
@@ -187,30 +188,25 @@ show_menu() {
     fi
 
     echo ""
-    echo -e "${DIM}  ─── Launch ────────────────────────────────────────${RESET}"
+    echo -e "  ${DIM}✅ ready   🔧 building   🕒 planned${RESET}"
     echo ""
-    echo -e "  ${GREEN}1${RESET}) Private Web Wallet (in progress)"
-    echo -e "     ${DIM}Personal browser UI — nginx + PHP + Basic Auth${RESET}"
+    echo -e "${DIM}  ── Wallets ──────────── hold & spend your own GRIN${RESET}"
     echo ""
-    echo -e "  ${GREEN}2${RESET}) Grin Drop (Done)"
-    echo -e "     ${DIM}Giveaway + donation portal — NodeJs + systemd${RESET}"
+    echo -e "  ${GREEN}1${RESET}) 051 · Private Web Wallet   🔧  ${DIM}browser UI, server-held keys${RESET}"
+    echo -e "  ${DIM}5) 055 · Public Web Wallet    🕒  client-side WASM, no server keys${RESET}"
+    echo -e "  ${GREEN}C${RESET}) CMD Wallet Quick Setup     ✅  ${DIM}download + init + listen (CLI / testing)${RESET}"
     echo ""
-    echo -e "  ${GREEN}3${RESET}) WooCommerce Payment Gateway (in progress)"
-    echo -e "     ${DIM}Flask bridge + WordPress/WooCommerce plugin${RESET}"
+    echo -e "${DIM}  ── Accept Payments ──── receive GRIN from customers${RESET}"
     echo ""
-    echo -e "  ${DIM}4) Payment Pro              (coming soon)${RESET}"
-    echo -e "     ${DIM}   Shopify / custom API payment processor${RESET}"
+    echo -e "  ${GREEN}3${RESET}) 053 · WooCommerce Gateway  🔧  ${DIM}WordPress/WooCommerce plugin${RESET}"
+    echo -e "  ${DIM}4) 054 · Payment Pro          🕒  Shopify / custom API${RESET}"
+    echo -e "  ${DIM}6) 056 · GoblinPay            🕒  receive-only merchant server (Nostr + slatepack)${RESET}"
     echo ""
-    echo -e "  ${DIM}5) Public Web Wallet        (coming soon)${RESET}"
-    echo -e "     ${DIM}   Client-side WASM wallet — no server keys${RESET}"
+    echo -e "${DIM}  ── Giveaways & Donations ─ hand GRIN out${RESET}"
     echo ""
-    echo -e "  ${DIM}6) Grin Transporter         (coming soon)${RESET}"
-    echo -e "     ${DIM}   Store-and-forward slate relay — offline auto-payouts${RESET}"
+    echo -e "  ${GREEN}2${RESET}) 052 · Grin Drop            ✅  ${DIM}giveaway faucet + donation portal${RESET}"
     echo ""
-    echo -e "${DIM}  ─── Quick Tools ─────────────────────────────────────${RESET}"
-    echo ""
-    echo -e "  ${GREEN}C${RESET}) Grin Wallet Quick Setup"
-    echo -e "     ${DIM}Download + init + listen — for direct CLI use or testing${RESET}"
+    echo -e "${DIM}  Grin Transporter moved → main menu 09 (Grin Connectivity Hub)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
@@ -643,6 +639,27 @@ cmd_wallet_run() {
     done
 }
 
+# 056 — GoblinPay is designed but not yet implemented (no script file yet).
+# Show a planned notice instead of run_sub's "script not found" error.
+_goblinpay_planned() {
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN} 056) GOBLINPAY — RECEIVE-ONLY MERCHANT SERVER${RESET} ${YELLOW}(PLANNED)${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  ${DIM}Deploy github.com/2ro/GoblinPay the toolkit way — a receive-only Grin${RESET}"
+    echo -e "  ${DIM}merchant till: Nostr gift-wrapped slatepacks + direct-slatepack QR,${RESET}"
+    echo -e "  ${DIM}fiat rate-lock invoices, hosted checkout, HMAC webhooks, admin panel.${RESET}"
+    echo ""
+    echo -e "  ${DIM}Optional Nostr relay: bundled, or reuse a Grin Connectivity Hub (09)${RESET}"
+    echo -e "  ${DIM}Floonet relay if one is already installed.${RESET}"
+    echo ""
+    echo -e "  ${DIM}Design → docs/generated/script09_design.md (PART C). Not yet implemented.${RESET}"
+    echo ""
+    echo -ne "  ${DIM}Press Enter to return...${RESET}"
+    read -r || true
+}
+
 main() {
     while true; do
         show_menu
@@ -653,7 +670,7 @@ main() {
             3) run_sub "053_grin_woocommerce.sh"        ;;
             4) run_sub "054_grin_payment_pro.sh"        ;;
             5) run_sub "055_grin_public_web_wallet.sh"  ;;
-            6) run_sub "056_grin_transporter.sh"        ;;
+            6) _goblinpay_planned || true               ;;
             [Cc]) cmd_wallet_run || true                ;;
             0) break ;;
             "") continue ;;

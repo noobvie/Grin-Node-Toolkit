@@ -320,7 +320,7 @@ same slate round-trip, so there is **one** withdrawal state machine with a `meth
 |---|---|---|---|
 | **Tor** | nothing (listener auto-signs) | no | `init_send_tx` → post over Tor → `finalize_tx` |
 | **Slatepack** | copy-paste S1 → sign → paste S2 | yes | `init_send_tx` (lazy) → miner returns S2 → `finalize_tx` |
-| *Relay (future)* | nothing (relay delivers async) | yes | Grin Transporter / [Script 056](script056_design.md) |
+| *Relay (future)* | nothing (relay delivers async) | yes | Grin Transporter / [091 Transporter](script09_design.md) |
 
 **Auto-payout** (6h scheduler, no human) can only attempt the zero-interaction method (Tor); on Tor
 failure to an offline miner the withdrawal becomes **Slatepack-claimable** instead of reversing.
@@ -386,7 +386,7 @@ miner `donateN` worker tags + manual top-ups / published Slatepack donation addr
 
 Public pages: `donate.html` (channels + live prize-pool size), `fortune-board.html` (winner history
 + draw seed for audit). **Grin Transporter** payout rail (#3) is a reserved, forced-off placeholder
-([Script 056](script056_design.md)).
+([091 Transporter](script09_design.md)).
 
 > Known register-free trade-off: pot B + per-address bonuses are partly Sybil-farmable; share-weighting
 > + min-shares bar + the Sybil-*proof* features (jackpot, streak, fee-cut) carry the fairness load.

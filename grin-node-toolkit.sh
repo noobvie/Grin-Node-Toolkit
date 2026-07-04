@@ -270,7 +270,7 @@ show_main_menu() {
     show_header
     echo -e "${BOLD}  Core Features${RESET}"
     echo ""
-    echo -e "  ${GREEN}1${RESET}) Setup Grin New Node"
+    echo -e "  ${GREEN}1${RESET}) Build/Control Grin Node"
     echo -e "  ${GREEN}2${RESET}) Manage Nginx Server"
     echo -e "  ${GREEN}3${RESET}) Share Grin Chain Data / Schedule"
     echo ""
@@ -303,7 +303,7 @@ main() {
 
         case "$choice" in
             1)
-                echo -e "\n${CYAN}Starting: Setup Grin New Node...${RESET}\n"
+                echo -e "\n${CYAN}Starting: Build/Control Grin Node...${RESET}\n"
                 run_script "01_build_new_grin_node.sh"
                 ;;
             2)

@@ -92,7 +92,7 @@ sudo ./grin-node-toolkit.sh
 Grin Node Toolkit
 │
 ├── Core Features
-│   ├── 1) Setup Grin New Node           → 01_build_new_grin_node.sh
+│   ├── 1) Build/Control Grin Node       → 01_build_new_grin_node.sh
 │   ├── 2) Manage Nginx Server           → 02_nginx_fileserver_manager.sh
 │   │   ├── 1) Setup New File Server
 │   │   ├── 2) Add Domain
@@ -187,7 +187,7 @@ Grin Node Toolkit
 
 ## Features
 
-### 1. Setup Grin New Node — `01_build_new_grin_node.sh`
+### 1. Build/Control Grin Node — `01_build_new_grin_node.sh`
 
 A guided setup that downloads, verifies, configures, and launches a Grin node — including a pre-synced chain snapshot so your node is operational in under one hour.
 

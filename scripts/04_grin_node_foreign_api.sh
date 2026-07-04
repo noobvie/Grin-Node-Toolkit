@@ -153,6 +153,10 @@ source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
 # sync with the live node's foreign secret after a node rebuild).
 # shellcheck source=lib/grin_node_secrets.sh
 source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
+# Shared node-control primitives — gnc_launch_node_session (grin-owned start on
+# the gtmux socket) + both-server session helpers for the node-restart offer.
+# shellcheck source=lib/grin_node_control.sh
+source "$SCRIPT_DIR/lib/grin_node_control.sh"
 
 # ─── Port guide popup ─────────────────────────────────────────────────────────
 show_port_guide() {
@@ -1465,34 +1469,24 @@ _offer_node_restart() {
     _restart_confirm="${_restart_confirm:-y}"
 
     if [[ "${_restart_confirm,,}" == "n" ]]; then
-        warn "Node not restarted — restart manually for changes to take effect:"
-        echo "    tmux kill-session -t $session"
-        echo "    cd $grin_dir && tmux new-session -d -s $session './grin server run'"
+        warn "Node not restarted — restart manually for changes to take effect (Script 01/03, or):"
+        echo "    su -s /bin/bash grin -c \"cd '$grin_dir' && env HOME='$grin_dir' SHELL=/bin/bash tmux new-session -d -s $session './grin server run'\""
         return
     fi
 
-    info "Stopping Grin node tmux session '$session'..."
-    tmux kill-session -t "$session" 2>/dev/null || true
-    sleep 1
-
-    info "Starting Grin node in tmux session '$session'..."
-    if id grin &>/dev/null; then
-        tmux new-session -d -s "$session" -c "$grin_dir" \
-            "echo 'Starting Grin node...'; su -s /bin/bash -c 'cd \"$grin_dir\" && ./grin server run' grin; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
-            2>/dev/null || true
-    else
-        tmux new-session -d -s "$session" -c "$grin_dir" \
-            "echo 'Starting Grin node...'; cd \"$grin_dir\" && ./grin server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" \
-            2>/dev/null || true
-    fi
+    # Shared contract launcher: kills the session on BOTH tmux servers, sweeps
+    # leftover grin processes for this dir (lock-file protection), and starts
+    # the node AS the grin user with HOME=$grin_dir on grin's tmux socket.
+    info "Restarting Grin node in grin-owned tmux session '$session'..."
+    gnc_launch_node_session "$grin_dir" "$grin_dir/grin" "$session" || true
 
     sleep 1
-    if tmux has-session -t "$session" 2>/dev/null; then
+    if gnc_has_grin_session "$session"; then
         success "Grin node restarted in tmux session '$session'."
-        info "Attach with: tmux attach -t $session"
+        info "Attach with: gtmux attach -t $session   (grin-owned — plain 'tmux attach' won't find it)"
     else
         warn "tmux session '$session' not found after restart attempt."
-        warn "Restart manually: cd $grin_dir && ./grin server run"
+        warn "Restart manually: cd $grin_dir && su -s /bin/bash -c 'HOME=$grin_dir ./grin server run' grin"
     fi
 }
 

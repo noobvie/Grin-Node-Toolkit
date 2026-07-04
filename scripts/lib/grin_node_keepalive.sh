@@ -68,11 +68,17 @@ gnk_autostart_status() {
     echo -e "${out%    }"
 }
 
-# gnk_autostart_enable <network> [delay=20]
+# gnk_autostart_enable <network> [delay]
 # Resolves the node dir CONF-ONLY, then writes/replaces ONE tagged @reboot line.
+# Default boot delay is per-network: mainnet 5 s (start almost immediately),
+# testnet 1000 s (~17 min — grin v5.5 startup is heavy on CPU/disk and a slow
+# VPS cannot handle two nodes booting together; hold testnet well clear of the
+# whole mainnet startup surge). Same defaults as Script 03 → G.
 gnk_autostart_enable() {
-    local net="${1:-mainnet}" delay="${2:-20}"
-    [[ "$delay" =~ ^[0-9]+$ ]] || delay=20
+    local net="${1:-mainnet}" delay="${2:-}"
+    if [[ ! "$delay" =~ ^[0-9]+$ ]]; then
+        if [[ "$net" == "testnet" ]]; then delay=1000; else delay=5; fi
+    fi
 
     local dir binary sess tag line cron
     dir=$(gnc_resolve_node_dir "$net") || {

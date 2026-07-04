@@ -23,9 +23,21 @@ to match the 05/07 hub family). Menu label shows **09**; underlying files keep 0
 ```
 09_  Grin Connectivity Hub          one menu entry; launches the members below
   091_ Grin Transporter             self-hosted store-and-forward slate queue (HTTP + SQLite, opt. Tor)
-  092_ Floonet relay                deploy the community Nostr relay stack (floonet-rs + systemd + nginx)
-  093+ (reserved)                    future: NIP-05 identity, payout/payment notifications, etc.
+  092_ Floonet relay                deploy a Grin-native Nostr relay (floonet-rs + systemd + nginx);
+                                    NIP-05 name-authority and Nym mixnet-exit are config TOGGLES
+                                    inside this one deployer, not separate scripts
+  093+ (reserved)                    future: payout/payment notifications, etc.
 ```
+
+> **NIP-05 identity + mixnet-exit are folded into 092, not new numbers** (decided 2026-07-04).
+> `floonet-rs` is modular — its name-authority and Nym mixnet-exit are `config.toml` flags on the
+> same binary, so both are set during 092's setup/config step. A *standalone* `goblin-nip05d`
+> (identity without a relay) is niche enough that it does not earn its own script; if that demand
+> ever appears it is a 092 sub-mode. The earlier "093 = NIP-05 identity" reservation is retired.
+
+> **Shared relay infrastructure — see PART C.** The hard part of both 092 *and* the GoblinPay
+> payment server (a Script-05 product) is the same primitive: deploy a `nostr-rs-relay` behind
+> nginx+certbot over `wss://`. That is factored into one shared lib and documented in PART C.
 
 Grouping rule for the hub: **things about Grin participants reaching each other** — transport,
 relays, messaging, identity, notifications. NOT the node's own p2p (that's 01/04) and NOT
@@ -439,6 +451,62 @@ No `web/092_*` — Floonet ships its own relay + optional name-authority; we don
 
 ---
 
+# PART C — Shared relay infrastructure & GoblinPay (05) composition
+
+**Status:** Design decision (2026-07-04). Ties 092 (a 09 member) to GoblinPay (a **Script-05**
+payment product). GoblinPay's own product detail lives in the Script-05 docs/memory; **only the
+relay relationship is a 09 concern** and is recorded here.
+
+## C.1 The shared primitive — one `nostr-rs-relay` deployer
+
+`floonet-rs` **is** a `nostr-rs-relay` (Rust single binary) + Grin extras. GoblinPay's default
+"bundled mode" **co-locates its own `nostr-rs-relay`**. Both therefore need the identical, and
+only genuinely fiddly, piece of infrastructure:
+
+> deploy a `nostr-rs-relay` publicly reachable over `wss://`, TLS-terminated, with the
+> `Upgrade`/`Connection` headers a WebSocket vhost needs (the 092 B.4 #2 open question).
+
+Factor this **once** into a shared sourced lib so the gotchas are solved in one place, not twice:
+
+```
+scripts/lib/nostr_relay_deploy.sh   deploy a nostr-rs-relay behind nginx+certbot (wss), hardened
+                                    systemd, ufw; parametrised by binary path + config + net
+```
+- **092** calls it to stand up `floonet-rs` (then layers name-authority / mixnet-exit toggles).
+- **GoblinPay's 05 sub-option** calls it for the bundled relay (or skips it in external mode).
+- We replace upstream's **Caddy** with our **nginx+certbot** in both cases (same as the rest of
+  the toolkit; CLAUDE.md Let's Encrypt HTTP-first-then-SSL bootstrap applies).
+
+## C.2 GoblinPay ↔ 092 — compose-when-present, never a hard dependency
+
+GoblinPay (github.com/2ro/GoblinPay — receive-only Grin merchant server, Rust/Actix+SQLite,
+Nostr gift-wrapped slatepacks *plus* a direct-slatepack QR rail, fiat rate-lock invoices, hosted
+zero-JS checkout, HMAC webhooks, WooCommerce/Medusa/REST connectors, `/admin` dashboard) ships a
+bare-metal **systemd** path, so it deploys the toolkit way (deploy, don't fork — like floonet-rs).
+
+It does **not require** 092. Three relay modes the 05 sub-option should offer:
+
+| Mode | When | What deploys | Needs 092? |
+|---|---|---|---|
+| **Direct-only** | operator wants no Nostr at all | GoblinPay + our nginx/certbot; no relay | no |
+| **Bundled relay** (GoblinPay default) | wants Nostr, no existing relay | GoblinPay's own `nostr-rs-relay` via `nostr_relay_deploy.sh` | no |
+| **External → 092** | already runs a Floonet relay | GoblinPay `external mode` config points at the 092 relay | reuses it |
+
+Rule: if 092 is already installed, the GoblinPay setup **auto-offers "use your existing Floonet
+relay"**; otherwise it bundles its own. Same compose-when-present philosophy as the rest of the
+hub — 092 is an *optional shared relay*, not a gate.
+
+## C.3 Why GoblinPay lives under 05, not 09
+
+Function-not-vendor (the toolkit numbers by function, never by author): GoblinPay is a **payment
+processor** → Script-05 (Wallet & Payments), alongside 053 (WooCommerce) / 054 (Payment Pro). Only
+the *relay it may lean on* is connectivity (09). So GoblinPay is a 05 member that optionally
+consumes a 09 relay — the two hubs compose, they don't merge. (GoblinPay's WooCommerce connector
+is more complete than a from-scratch 053; treat GoblinPay as the adopt-don't-rebuild option and
+keep our own 053/054 only as the deliberate **no-Nostr, no-external-deps** alternative.)
+
+---
+
 ## Recommendation (hub build order)
 
 1. **091 Phase 1** — Transporter server + auth challenge + CLI agent; prove a testnet round trip
@@ -448,4 +516,7 @@ No `web/092_*` — Floonet ships its own relay + optional name-authority; we don
 2. **091 Phase 2** — wire into payouts (Script 07 enqueues via 091 instead of Tor-direct +
    7-day retry) and 052 Drop "send to my Transporter" claims — *gated on A.9 #6 receive-support*.
 3. **092** — Floonet relay deployer (floonet-rs bare-metal + nginx/certbot + admin), independent
-   of 091; ships whenever the deployer is ready. Verify release/build path (B.4 #1) first.
+   of 091; ships whenever the deployer is ready. Verify release/build path (B.4 #1) first. Build
+   `scripts/lib/nostr_relay_deploy.sh` (PART C.1) here — 092 is its first consumer.
+4. **GoblinPay under 05** — reuse `nostr_relay_deploy.sh` for bundled mode; auto-detect and offer
+   an installed 092 relay for external mode (PART C.2). Lands in the 05 hub, not 09.

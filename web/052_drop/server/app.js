@@ -337,7 +337,7 @@ app.post('/api/claim', async (req, res) => {
     return err(res, 'Hourly claim limit reached. Try again in a few minutes.', 503);
   }
 
-  const maxAmount       = parseFloat(cfg.claim_grin_per_tx) || (cfg.network === 'mainnet' ? 0.008 : 3.0);
+  const maxAmount       = parseFloat(cfg.claim_grin_per_tx) || (cfg.network === 'mainnet' ? 0.008 : 10.0);
   const requestedAmount = body.amount != null ? parseFloat(body.amount) : null;
   const amount = (requestedAmount != null && requestedAmount > 0)
     ? Math.min(Math.max(requestedAmount, 0.0001), maxAmount)

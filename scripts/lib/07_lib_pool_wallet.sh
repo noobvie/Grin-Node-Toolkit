@@ -7,7 +7,8 @@
 #   · `grin-wallet owner_api`  (Owner port 3420) started WITHOUT -p, with
 #       `owner_api_include_foreign = true` in grin-wallet.toml so the Foreign
 #       API (/v2/foreign, build_coinbase) is mounted on the SAME port. The
-#       node's stratum calls wallet_listener_url = .../v2/foreign on 3420 to
+#       node's stratum calls wallet_listener_url (base URL, port 3420 — the
+#       node appends /v2/foreign itself) to
 #       build_coinbase when a miner finds a block → THIS is how the pool
 #       receives block rewards. The pool backend opens its own ECDH session on
 #       /v3/owner here to check balance + send Tor payouts.
@@ -27,7 +28,7 @@
 #   pw_unlock               open_wallet over ECDH (passphrase from file)
 #   pw_coinbase_probe       0=open 1=locked 2=unknown (build_coinbase probe)
 #   pw_show_address         print the pool wallet's Grin address
-#   pw_patch_node_toml      point the node's wallet_listener_url at 3420/v2/foreign
+#   pw_patch_node_toml      point the node's wallet_listener_url at :3420 (base URL)
 #   pw_autostart_enable / pw_autostart_disable / pw_autostart_status
 #   pw_watchdog_install / pw_watchdog_remove / pw_watchdog_status
 #
@@ -399,8 +400,10 @@ pw_show_address() {
 # The node's stratum sends every block's coinbase to wallet_listener_url. For a
 # pool that MUST be the pool wallet's Foreign API (now served on the Owner port
 # via include_foreign), or rewards go to the wrong wallet.
+# BASE URL ONLY — the node appends /v2/foreign itself (mine_block.rs:
+# `format!("{}/v2/foreign", dest)`); writing the path here doubles it → 404.
 pw_patch_node_toml() {
-    local node_dir toml wlu="http://127.0.0.1:${PW_OWNER_PORT}/v2/foreign"
+    local node_dir toml wlu="http://127.0.0.1:${PW_OWNER_PORT}"
     node_dir=$(gnc_resolve_node_dir "$_PW_NODE_NET" 2>/dev/null || true)
     if [[ -z "$node_dir" ]]; then
         local default_toml="/opt/grin/node/${_PW_NODE_NET}-prune/grin-server.toml"
@@ -556,7 +559,8 @@ pw_setup() {
         _pw_set_toml_key "$toml" "owner_api_listen_port" "$PW_OWNER_PORT"   && info "grin-wallet.toml owner_api_listen_port → $PW_OWNER_PORT"
         # Combined listener: serve the Foreign API (build_coinbase) on the Owner
         # port so ONE `owner_api` process (started without -p) handles coinbase +
-        # payouts. The node's wallet_listener_url points at :$PW_OWNER_PORT/v2/foreign.
+        # payouts. The node's wallet_listener_url points at :$PW_OWNER_PORT (base
+        # URL — the node appends /v2/foreign itself).
         _pw_ensure_toml_key "$toml" "owner_api_include_foreign" "true" "wallet" \
             && info "grin-wallet.toml owner_api_include_foreign → true"
         _pw_set_toml_key "$toml" "log_max_files"         "5"
@@ -634,7 +638,7 @@ pw_setup() {
     echo -e "  ${YELLOW:-}only briefly during init/recover/address one-shots.${RESET:-}"
     echo -e "  ${YELLOW:-}→ Keep the hot balance low; sweep coinbase to a wallet on a box you control.${RESET:-}"
     echo ""
-    info "Coinbase path : node stratum → wallet_listener_url http://127.0.0.1:${PW_OWNER_PORT}/v2/foreign"
+    info "Coinbase path : node stratum → wallet_listener_url http://127.0.0.1:${PW_OWNER_PORT} (+/v2/foreign appended by the node)"
     info "Payout path   : backend → Owner API http://127.0.0.1:${PW_OWNER_PORT}/v3/owner"
     info "Enable Auto-restart so the listener survives reboot/crash (it re-unlocks automatically)."
 }

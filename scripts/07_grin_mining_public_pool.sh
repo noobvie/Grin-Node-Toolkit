@@ -2087,6 +2087,119 @@ if (missing.length) process.stdout.write(missing.join(" "));
     fi
 }
 
+pool_wg_remove_peer() {
+    [[ -f "$WG_CONF" ]] || { error "WireGuard server not set up ($WG_CONF missing) — nothing to remove."; return 1; }
+
+    # Show the real peers so the operator picks an existing region key.
+    local peers
+    peers=$(node -e '
+const fs = require("fs");
+let txt = ""; try { txt = fs.readFileSync(process.argv[1], "utf8"); } catch (e) {}
+const re = /# region: (\S+)[^[]*?AllowedIPs\s*=\s*(\S+)/g;
+let m; while ((m = re.exec(txt))) console.log("    " + m[1] + "  " + m[2]);
+' "$WG_CONF" 2>/dev/null) || true
+    if [[ -z "$peers" ]]; then
+        info "No gateway peers in $WG_CONF — nothing to remove."
+        return 0
+    fi
+    echo -e "  ${BOLD}Current gateway peers:${RESET}"
+    echo "$peers"
+    echo ""
+    local region
+    echo -ne "Region key of the gateway to REMOVE: "; read -r region
+    [[ -n "$region" ]] || { warn "Region key required."; return 1; }
+
+    # Resolve the peer's public key — needed for the liveness check below, and its
+    # absence means the region key doesn't match any "# region:" tag in the conf.
+    local gwpub
+    gwpub=$(node -e '
+const fs = require("fs");
+const [conf, region] = process.argv.slice(1);
+const txt = fs.readFileSync(conf, "utf8");
+for (const p of txt.split(/(?=^\[Peer\])/m)) {
+  if (!p.startsWith("[Peer]")) continue;
+  const rm = p.match(/^# region: (\S+)/m);
+  if (!rm || rm[1] !== region) continue;
+  const km = p.match(/^PublicKey\s*=\s*(\S+)/m);
+  if (km) process.stdout.write(km[1]);
+  break;
+}
+' "$WG_CONF" "$region" 2>/dev/null) || true
+    [[ -n "$gwpub" ]] || { error "No gateway peer tagged '# region: ${region}' in $WG_CONF."; return 1; }
+
+    # Liveness guard: a fresh wg handshake means the tunnel is up and miners may be
+    # routed through this gateway right now — same signal the admin Regions page uses.
+    local hs age
+    hs=$(wg show "$WG_IFACE" latest-handshakes 2>/dev/null | awk -v k="$gwpub" '$1==k {print $2}' || true)
+    if [[ -n "$hs" && "$hs" != "0" ]]; then
+        age=$(( $(date +%s) - hs ))
+        if (( age < 180 )); then
+            warn "This gateway's tunnel handshook ${age}s ago — it looks LIVE (miners may be on it)."
+        fi
+    fi
+    echo -e "  ${YELLOW}This removes: the wg peer (key revoked), region '${region}' port mapping in${RESET}"
+    echo -e "  ${YELLOW}pool.json, and the '${region}' card in admin → Regions (pool.db).${RESET}"
+    echo -e "  ${DIM}Share/credit history for the region is kept; its internal port is never reused.${RESET}"
+    local confirm
+    echo -ne "Type the region key again to confirm removal: "; read -r confirm
+    [[ "$confirm" == "$region" ]] || { warn "Confirmation mismatch — nothing removed."; return 1; }
+
+    # 1) Drop the [Peer] block from the wg config and apply live without touching
+    #    other tunnels (same syncconf pattern as add-peer).
+    node -e '
+const fs = require("fs");
+const [conf, region] = process.argv.slice(1);
+const txt = fs.readFileSync(conf, "utf8");
+const kept = txt.split(/(?=^\[Peer\])/m).filter(p =>
+  !(p.startsWith("[Peer]") && (p.match(/^# region: (\S+)/m) || [])[1] === region));
+fs.writeFileSync(conf, kept.join("").replace(/\n{3,}/g, "\n\n").replace(/\n*$/, "\n"));
+fs.chmodSync(conf, 0o600);
+' "$WG_CONF" "$region" || { error "Failed to rewrite $WG_CONF — nothing removed."; return 1; }
+    if wg syncconf "$WG_IFACE" <(wg-quick strip "$WG_IFACE") 2>/dev/null; then
+        info "Revoked peer on the live tunnel."
+    else
+        warn "wg syncconf failed — peer removed from config; run wg-quick down/up ${WG_IFACE} to apply."
+    fi
+
+    # 2) Drop the region → internal port mapping (the pool stops binding its listener
+    #    on restart). Freed ports are NOT reused: add-peer assigns max+1, so a stale
+    #    gateway config can never collide with a future peer.
+    node -e '
+const fs = require("fs");
+const [p, region] = process.argv.slice(1);
+let d = {}; try { d = JSON.parse(fs.readFileSync(p, "utf8")); } catch (e) {}
+if (d.region_ports) delete d.region_ports[region];
+fs.writeFileSync(p, JSON.stringify(d, null, 2)); fs.chmodSync(p, 0o600);
+' "$POOL_CONF" "$region" || warn "Could not update region_ports in $POOL_CONF — remove '${region}' manually."
+
+    # 3) Drop the admin → Regions card (pool_locations is display metadata; shares
+    #    keep their region tag). Silent when the DB/table doesn't exist yet.
+    local _deleted
+    _deleted=$(node -e '
+try {
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(process.argv[1]);
+  const r = db.prepare("DELETE FROM pool_locations WHERE region = ?").run(process.argv[2]);
+  process.stdout.write(String(r.changes));
+} catch (e) {}
+' "$POOL_APP_DIR/pool.db" "$region" 2>/dev/null) || true
+    if [[ "$_deleted" == "1" ]]; then
+        info "Deleted the '${region}' card from admin → Regions."
+    else
+        info "No '${region}' card in admin → Regions (nothing to delete there)."
+    fi
+
+    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+        systemctl restart "$POOL_SERVICE" && info "Restarted $POOL_SERVICE (region listener unbound)."
+    fi
+
+    echo ""
+    success "Gateway '${region}' removed — wg key revoked, port mapping + admin card deleted."
+    echo -e "  ${DIM}The gateway box itself still has its local config; it can no longer reach${RESET}"
+    echo -e "  ${DIM}the pool. Power it off or repurpose it. Re-adding later: option 2 (it gets${RESET}"
+    echo -e "  ${DIM}a NEW tunnel IP + port — re-pair the gateway with the new pairing string).${RESET}"
+}
+
 pool_wireguard_menu() {
     while true; do
         clear
@@ -2105,6 +2218,7 @@ pool_wireguard_menu() {
         echo -e "  ${GREEN}1${RESET}) Setup WireGuard server   ${DIM}(install, keys, tunnel, firewall)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Add a gateway peer       ${DIM}(assign tunnel IP + region port)${RESET}"
         echo -e "  ${GREEN}3${RESET}) List gateways / regions"
+        echo -e "  ${GREEN}4${RESET}) Remove a gateway        ${DIM}(revoke wg key, free port mapping, drop admin card)${RESET}"
         echo ""
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
@@ -2115,6 +2229,7 @@ pool_wireguard_menu() {
             1)        pool_wg_setup_server || true; _pool_pause ;;
             2)        pool_wg_add_peer || true; _pool_pause ;;
             3)        pool_wg_list || true; _pool_pause ;;
+            4)        pool_wg_remove_peer || true; _pool_pause ;;
             0|q|exit) break ;;
             *)        warn "Invalid option."; sleep 1 ;;
         esac

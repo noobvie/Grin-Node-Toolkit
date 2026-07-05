@@ -71,7 +71,7 @@
       </p>
       <ol class="howto-steps">
         <li><strong>STEP 1 — Declare the region (on this page).</strong><br>
-            Fill in the form below: region key, city, country, and the stratum hostname miners will use
+            Click ➕ New region below and fill in the form: region key, city, country, and the stratum hostname miners will use
             (e.g. <code>sgn.grinium.com</code>). Click <em>Save region</em>.<br>
             <span class="dim">Result: the card appears on the public dashboard as ○ No signal.</span></li>
         <li><strong>STEP 2 — Point DNS at the gateway box.</strong><br>
@@ -132,11 +132,16 @@
       mining the region) plus, when available, the WireGuard tunnel's last handshake; <em>Active</em> &lt;3&nbsp;min,
       <em>Stalling</em> 3–10&nbsp;min, <em>Silent</em> &gt;10&nbsp;min. Port ✓ with <em>No signal</em> simply means
       the gateway is up but no miner is on it yet. A <span class="badge badge-dim">hidden</span> tag on a region name
-      means you've unchecked "Visible on site" in the form below — that region is hidden from the public connect grid.
+      means you've unchecked "Visible on site" in its edit form — that region is hidden from the public connect grid.
     </p>
 
-    <!-- Create / edit form -->
-    <div class="card" id="region-form" style="margin-top:1.4rem;">
+    <!-- Create / edit form — collapsed until ➕ New region or a row's Edit opens it;
+         the flash message lives on the toolbar so it stays visible after the form closes -->
+    <div style="margin-top:1.4rem;display:flex;gap:.6rem;align-items:center;">
+      <button class="btn" id="new-region-btn" onclick="openNewRegion()">➕ New region</button>
+      <span class="success-msg" id="r-msg" style="display:none;"></span>
+    </div>
+    <div class="card" id="region-form" style="margin-top:.8rem;display:none;">
       <h3 style="margin:0 0 .8rem;"><span id="form-title">New region</span></h3>
 
       <!-- Per-field help, collapsed by default so it's there when needed but not in the way -->
@@ -213,8 +218,7 @@
 
       <div style="display:flex;gap:.6rem;align-items:center;">
         <button class="btn" onclick="submitRegion()">Save region</button>
-        <button class="btn btn-outline" onclick="resetForm()" id="cancel-btn" style="display:none;">Cancel edit</button>
-        <span class="success-msg" id="r-msg" style="display:none;"></span>
+        <button class="btn btn-outline" onclick="closeForm()">Cancel</button>
       </div>
     </div>
   </div>
@@ -302,8 +306,26 @@ function resetForm() {
   document.getElementById('r-host').value = '';
   document.getElementById('r-active').checked = true;
   document.getElementById('form-title').textContent = 'New region';
-  document.getElementById('cancel-btn').style.display = 'none';
   syncFlag();
+}
+
+// Form card is collapsed by default — ➕ New region / a row's Edit open it,
+// Cancel and a successful save close it again.
+function openFormCard() {
+  document.getElementById('region-form').style.display = '';
+  document.getElementById('new-region-btn').style.display = 'none';
+}
+
+function closeForm() {
+  resetForm();
+  document.getElementById('region-form').style.display = 'none';
+  document.getElementById('new-region-btn').style.display = '';
+}
+
+function openNewRegion() {
+  resetForm();
+  openFormCard();
+  document.getElementById('r-region').focus();
 }
 
 async function loadPort() {
@@ -338,7 +360,7 @@ async function loadRegions(silent) {
     if (!d || d.error) throw new Error(d && d.error ? d.error : 'Failed to load regions');
     _regions = d.locations || [];
     if (!_regions.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No regions yet. Add one with the form below.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No regions yet. Add one with the ➕ New region button below.</td></tr>';
       return;
     }
     tbody.innerHTML = _regions.map(r => {
@@ -360,7 +382,7 @@ async function loadRegions(silent) {
       } else if (hb && hb.stratum_reachable === false) {
         portCheck = `<span class="badge badge-error" title="TCP dial to ${escHtml(r.stratum_url || '')} failed (refused / timeout / DNS)">✗ ${dialPort} unreachable</span>`;
       }
-      const hiddenTag = r.is_active ? '' : ' <span class="badge badge-dim" title="Hidden from the public connect grid (checkbox in the form below)">hidden</span>';
+      const hiddenTag = r.is_active ? '' : ' <span class="badge badge-dim" title="Hidden from the public connect grid (checkbox in the edit form)">hidden</span>';
       return `
         <tr>
           <td><strong>${escHtml(r.label || r.region)}</strong>${hiddenTag}<br><span class="dim mono">${escHtml(r.region)}</span></td>
@@ -394,7 +416,7 @@ function editRegion(id) {
   document.getElementById('r-host').value = hostOf(r.stratum_url);
   document.getElementById('r-active').checked = !!r.is_active;
   document.getElementById('form-title').textContent = 'Edit region: ' + r.region;
-  document.getElementById('cancel-btn').style.display = '';
+  openFormCard();
   syncFlag();
   document.getElementById('region-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -415,7 +437,7 @@ async function submitRegion() {
     const r = await API.post('/api/admin/locations', body);
     if (!r || r.error) throw new Error(r && r.error ? r.error : 'Save failed');
     flash('Region saved.', false);
-    resetForm();
+    closeForm();
     loadRegions();
   } catch (err) {
     flash(err.message, true);
@@ -429,7 +451,7 @@ async function submitRegion() {
 // (same posture as settings-common.js) instead of surfacing "Too many requests".
 async function deleteRegion(id) {
   const r = _regions.find(x => x.id === id);
-  if (!confirm(`Delete region "${r ? (r.label || r.region) : id}"? This only removes the connect card — it does not remove the gateway's WireGuard peer or tunnel (do that on the box).`)) return;
+  if (!confirm(`Delete region "${r ? (r.label || r.region) : id}"? This only removes the connect card — the gateway's WireGuard peer and region port stay wired. To remove the whole gateway (peer + port + this card in one go), use Script 07 → W → 4) Remove a gateway on the pool box.`)) return;
   try {
     const url = '/api/admin/locations/' + id;
     let res = await adminFetch(url, { method: 'DELETE' });

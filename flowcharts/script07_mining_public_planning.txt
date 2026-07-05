@@ -158,6 +158,26 @@
  ║   └─────────────────────┘                                            ║
  ╚═══════════════════════════════════════════════════════════════════════╝
 
+  WHY "ECDH auto-unlock" + password stored on disk (.wallet_pass, 600 root)
+    `owner_api` mode boots LOCKED (no -p flag exists for it) — listener up,
+    seed still encrypted, and Owner API v3 only accepts encrypted calls, so
+    the ONLY unlock path is init_secure_api (ECDH) → open_wallet(password).
+    That unlock MUST be automatic, because in Grin RECEIVING IS A SIGNING OP:
+    the node calls build_coinbase for EVERY block template (~15s), which needs
+    the decrypted keychain. Locked wallet ≠ "miss a reward" — it means NO jobs,
+    the whole pool halts (symptom: miners Alive, GetWorks=0). After any app
+    crash / server reboot the decrypted seed is gone from RAM, so boot script
+    + */5 watchdog re-run the ECDH unlock unattended — which requires the
+    password on the box. No way around it: grin has no BTC-style cold receive
+    address, and grin-wallet has no scoped tokens (unlocked-for-coinbase =
+    capable-of-send, so deferring payouts is policy, not privilege reduction).
+    Not our invention: we checked grin-pool (MWGrinPool) and open-grin-pool —
+    both keep the wallet password in service config the same way (and solo's
+    `listen -p` even exposes it in `ps`, weaker than a 600 file).
+    Mitigations = wallet on hub ONLY, low hot balance, sweep to cold. Full
+    operator-facing writeup: docs/generated/script07_security_audit.md
+    § "Residual / accepted risks".
+
   REGION ATTRIBUTION (how the central box knows which region a share is from)
     Chosen method: ONE central stratum listener PORT per region (e.g. asia→:3391,
     us→:3392, eu→:3393), each statically mapped region=<name>. Each gateway's

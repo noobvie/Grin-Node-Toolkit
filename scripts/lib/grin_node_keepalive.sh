@@ -37,7 +37,12 @@ source "$GNK_CONTROL_LIB"
 GNK_WATCHDOG_BIN="${GNK_WATCHDOG_BIN:-/usr/local/bin/grin-node-sync-watchdog}"
 GNK_WATCHDOG_CRON="${GNK_WATCHDOG_CRON:-/etc/cron.d/grin-node-sync-watchdog}"
 GNK_WATCHDOG_CONF="${GNK_WATCHDOG_CONF:-/opt/grin/conf/grin_node_watchdog.json}"
-GNK_STATE_DIR="${GNK_STATE_DIR:-/opt/grin/solo-stats}"
+# Node-scoped state dir. NEVER a solo-mining path: this watchdog ships with
+# every node build, and parking its state in /opt/grin/solo-stats made every
+# plain node box false-detect as a solo-mining install (and resurrect the dir
+# 5 min after solo cleanup removed it).
+GNK_STATE_DIR="${GNK_STATE_DIR:-/opt/grin/watchdog}"
+GNK_LEGACY_STATE_DIR="/opt/grin/solo-stats"
 GNK_WATCHDOG_LOG="${GNK_WATCHDOG_LOG:-/opt/grin/logs/node-watchdog.log}"
 
 # Crontab comment tags — MUST match Script 03 (interoperable single entry).
@@ -446,8 +451,18 @@ EOF
 }
 
 # gnk_watchdog_install — config (if absent) + watchdog bin + cron.d entry.
+# Also migrates state files out of the legacy solo-stats dir (see GNK_STATE_DIR
+# note) — regenerating the bin is what re-points an already-deployed watchdog.
 gnk_watchdog_install() {
     mkdir -p "$GNK_STATE_DIR" "$(dirname "$GNK_WATCHDOG_LOG")" 2>/dev/null || true
+    local _net _legacy
+    for _net in mainnet testnet; do
+        _legacy="$GNK_LEGACY_STATE_DIR/node_watchdog_$_net.json"
+        if [[ -f "$_legacy" ]]; then
+            mv -f "$_legacy" "$GNK_STATE_DIR/" 2>/dev/null || rm -f "$_legacy"
+            info "Migrated watchdog state: $_legacy → $GNK_STATE_DIR/"
+        fi
+    done
     _gnk_write_default_conf
     _gnk_write_watchdog_bin
     _gnk_write_watchdog_cron
@@ -471,6 +486,7 @@ gnk_watchdog_status() {
     local net sf
     for net in mainnet testnet; do
         sf="$GNK_STATE_DIR/node_watchdog_$net.json"
+        [[ -f "$sf" ]] || sf="$GNK_LEGACY_STATE_DIR/node_watchdog_$net.json"   # pre-migration install
         [[ -f "$sf" ]] && info "$net state: $(cat "$sf" 2>/dev/null)"
     done
     [[ -f "$GNK_WATCHDOG_LOG" ]] && {

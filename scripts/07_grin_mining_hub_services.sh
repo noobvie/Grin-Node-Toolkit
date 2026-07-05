@@ -64,10 +64,19 @@ hub_detect_solo() {
     for m in \
         "/opt/grin/conf/grin_solo_payment.json" \
         "/etc/cron.d/grin-solo-mining-collector" \
-        "/opt/grin/solo-stats" \
         "/etc/nginx/grin-solo-stats.htpasswd"
     do
         [[ -e "$m" ]] && { echo "$m"; return 0; }
+    done
+    # /opt/grin/solo-stats counts ONLY when it holds solo collector data. The
+    # node-sync watchdog (installed with EVERY node build) used to keep its
+    # node_watchdog_*.json state here — bare-dir existence falsely flagged
+    # every plain node box as a solo-mining install.
+    local f
+    for f in /opt/grin/solo-stats/*; do
+        [[ -e "$f" ]] || continue                      # unmatched glob stays literal
+        case "$(basename "$f")" in node_watchdog_*.json) continue ;; esac
+        echo "$f"; return 0
     done
     if systemctl list-units --type=service --all 2>/dev/null | grep -q 'grin-solo'; then
         echo "systemd: grin-solo-* service"; return 0

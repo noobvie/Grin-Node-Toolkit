@@ -2459,6 +2459,15 @@ solo_cleanup() {
     if [[ "${a,,}" != "n" ]]; then
         rm -f "$BLOCK_COLLECTOR_BIN" "$BLOCK_COLLECTOR_WRAPPER" "$BLOCK_COLLECTOR_CRON"
         rm -rf "$BLOCK_COLLECTOR_STATE_DIR"
+        # A node-sync watchdog deployed before the state-dir split still bakes
+        # STATE_DIR=/opt/grin/solo-stats and would re-create this dir within
+        # 5 min (cron), resurrecting the "solo is installed" detection. Re-run
+        # the installer so the regenerated bin points at the node-scoped dir.
+        if [[ -x "$GNK_WATCHDOG_BIN" ]] \
+           && grep -q "STATE_DIR=\"$BLOCK_COLLECTOR_STATE_DIR\"" "$GNK_WATCHDOG_BIN" 2>/dev/null; then
+            gnk_watchdog_install >/dev/null 2>&1 || true
+            info "Node-sync watchdog re-pointed to $GNK_STATE_DIR (was re-creating $BLOCK_COLLECTOR_STATE_DIR)."
+        fi
         success "Collector + state removed."
         log "Cleanup: removed collector bin/wrapper/cron + $BLOCK_COLLECTOR_STATE_DIR"
     fi

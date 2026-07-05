@@ -6,7 +6,7 @@
 //   1. Miner connects via TCP
 //   2. Miner sends "login" (grin_address[.worker_name])
 //   3. Server replies "ok" and immediately pushes current job
-//   4. Server pushes "job" to ALL miners whenever block-monitor calls setNewJob()
+//   4. Server pushes "job" to ALL miners whenever NodeStratumClient calls setNewJob()
 //   5. Miner sends "submit" with { edge_bits, height, job_id, nonce, pow: [...] }
 //   6. Miner may also send "getjobtemplate" or "status" at any time
 
@@ -96,6 +96,11 @@ class StratumServer {
     // Current job pushed by NodeStratumClient via setNewJob()
     this.currentJob = null;
     this.jobCounter = 0;
+    // Map<pool job_id, node job_id> for every job in the valid window. Miners submit
+    // OUR job_id; the node only accepts ITS OWN (the block-version index it re-issues
+    // every ~15s). Forwarding without this translation makes the node call every share
+    // stale. Per-job (not latest-only): a submit may race a fresh job push.
+    this.jobIdMap = new Map();
     // Set by index.js after both are constructed
     this.nodeStratumClient = null;
     // Set by index.js (setBlockManager) so found blocks are credited to the local DB.
@@ -146,8 +151,8 @@ class StratumServer {
     this.servers.push(server);
   }
 
-  // Called by block-monitor whenever the Grin node provides a new block template.
-  // job = { height: number, difficulty: number, pre_pow: string }
+  // Called by NodeStratumClient whenever the node pushes a new job.
+  // job = { height: number, difficulty: number, pre_pow: string, node_job_id: number }
   setNewJob(job) {
     this.jobCounter++;
     this.currentJob = {
@@ -156,6 +161,13 @@ class StratumServer {
       difficulty: job.difficulty,
       pre_pow:    job.pre_pow
     };
+    // Remember which node job this pool job wraps; drop entries older than the
+    // submit window (keys ascend in insertion order, so stop at the first keeper).
+    this.jobIdMap.set(this.jobCounter, job.node_job_id);
+    for (const k of this.jobIdMap.keys()) {
+      if (k >= this.jobCounter - JOB_WINDOW) break;
+      this.jobIdMap.delete(k);
+    }
     console.log(`[${new Date().toISOString()}] New job #${this.jobCounter} height=${job.height} diff=${job.difficulty}`);
     this.broadcastJob();
   }
@@ -402,7 +414,12 @@ class StratumServer {
     (async () => {
       let nodeResult = { accepted: true, blockHash: null, error: null };
       if (this.nodeStratumClient) {
-        nodeResult = await this.nodeStratumClient.forwardSubmit(params);
+        // Translate OUR job_id to the node's own id for this job — the node rejects
+        // its unknown ids as stale (see jobIdMap in the constructor).
+        const nodeJobId = this.jobIdMap.get(job_id);
+        nodeResult = await this.nodeStratumClient.forwardSubmit(
+          nodeJobId === undefined ? params : { ...params, job_id: nodeJobId }
+        );
         if (!nodeResult.accepted) {
           this._stat(sessionId, 'rejected');
           console.warn(`[${new Date().toISOString()}] Node rejected share from ${session.grinAddress}: ${nodeResult.error}`);

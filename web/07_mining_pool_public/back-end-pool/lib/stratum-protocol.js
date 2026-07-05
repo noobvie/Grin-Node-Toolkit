@@ -9,7 +9,17 @@
 
 function parseStratumMessage(jsonStr) {
   try {
-    return JSON.parse(jsonStr.trim());
+    const msg = JSON.parse(jsonStr.trim());
+    // u64 nonce guard: JSON.parse rounds integers past 2^53, so a miner's nonce like
+    // 17293822569102704642 silently becomes …640 — the node then rejects the share as
+    // "Invalid PoW" (its log shows nonces ending in zeros). Re-extract the literal
+    // digits and carry the nonce as a STRING; NodeStratumClient.send() re-emits it as
+    // a bare number on the node's wire.
+    if (msg && msg.params && msg.params.nonce !== undefined) {
+      const m = jsonStr.match(/"nonce"\s*:\s*(\d+)/);
+      if (m) msg.params.nonce = m[1];
+    }
+    return msg;
   } catch {
     return null;
   }

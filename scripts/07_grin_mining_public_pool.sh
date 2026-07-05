@@ -1932,27 +1932,61 @@ pool_wg_add_peer() {
     echo -ne "Gateway's WireGuard public key: "; read -r gwpub
     [[ -n "$gwpub" ]] || { warn "Gateway public key required."; return 1; }
 
-    # Assign the next free tunnel IP (max existing AllowedIPs octet + 1) and region port
-    # (max existing region_ports value + 1, else the base). Both computed in one node call.
+    # Idempotent re-add guard. wg keeps ONE entry per PublicKey, so re-adding an existing
+    # key appends a second [Peer] block whose AllowedIPs silently REPLACES the live one —
+    # the gateway keeps its old tunnel IP while the hub now only routes the new IP:
+    # handshake still succeeds, every TCP packet is dropped (cryptokey routing mismatch,
+    # the exact 10.66.67.2-vs-.4 failure debugged 2026-07-05). Reuse + re-print instead.
+    if grep -qF "PublicKey = ${gwpub}" "$WG_CONF"; then
+        warn "This public key is ALREADY a gateway peer — keeping its existing tunnel IP/port."
+        local _hub_pub _pub_ep
+        _hub_pub=$(cat "$WG_DIR_CONF/server_public.key" 2>/dev/null)
+        _pub_ep="$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo '<server-public-ip>'):${WG_LISTEN_PORT}"
+        echo -e "  ${BOLD}Existing pairing string for this key:${RESET}"
+        node -e '
+const fs = require("fs");
+const [conf, poolConf, key, hubPub, pubEp, hubIp] = process.argv.slice(1);
+const txt = fs.readFileSync(conf, "utf8");
+let d = {}; try { d = JSON.parse(fs.readFileSync(poolConf, "utf8")); } catch (e) {}
+const ports = d.region_ports || {};
+for (const p of txt.split(/(?=^\[Peer\])/m)) {
+  if (!p.startsWith("[Peer]") || !p.includes("PublicKey = " + key)) continue;
+  const region = (p.match(/^# region: (\S+)/m) || [])[1] || "?";
+  const ip = (p.match(/^AllowedIPs\s*=\s*(\S+)/m) || [])[1] || "?";
+  console.log("    GRINGW1|" + region + "|" + hubPub + "|" + pubEp + "|" + hubIp + "|" + ip + "|" + (ports[region] || "?"));
+  break;
+}
+' "$WG_CONF" "$POOL_CONF" "$gwpub" "$_hub_pub" "$_pub_ep" "${WG_TUNNEL_NET}.1" 2>/dev/null \
+            || warn "Could not re-print the pairing string — see 3) List gateways."
+        info "To re-pair from scratch, remove the peer first (R) — then add it again."
+        return 0
+    fi
+
+    # Assign the next free tunnel IP (max existing AllowedIPs octet + 1) and region port.
+    # A region already in region_ports KEEPS its port (replacing a region's gateway box
+    # must not move its hub_endpoint); otherwise max existing + 1, else the base.
     local assign nextip nextport
     assign=$(node -e '
 const fs = require("fs");
-const [wgConf, poolConf, net, base] = process.argv.slice(1);
+const [wgConf, poolConf, net, base, region] = process.argv.slice(1);
 let octs = [1];
 try {
   const t = fs.readFileSync(wgConf, "utf8");
   const re = new RegExp("AllowedIPs\\s*=\\s*" + net.replace(/\./g,"\\.") + "\\.(\\d+)", "g");
   let m; while ((m = re.exec(t))) octs.push(parseInt(m[1], 10));
 } catch (e) {}
-let ports = [];
+let ports = [], keep = 0;
 try {
   const d = JSON.parse(fs.readFileSync(poolConf, "utf8"));
-  if (d.region_ports) ports = Object.values(d.region_ports).map(Number).filter(Boolean);
+  if (d.region_ports) {
+    ports = Object.values(d.region_ports).map(Number).filter(Boolean);
+    keep  = parseInt(d.region_ports[region], 10) || 0;
+  }
 } catch (e) {}
 const nextIp   = Math.max.apply(null, octs) + 1;
-const nextPort = ports.length ? Math.max.apply(null, ports) + 1 : parseInt(base, 10);
+const nextPort = keep || (ports.length ? Math.max.apply(null, ports) + 1 : parseInt(base, 10));
 process.stdout.write(nextIp + " " + nextPort);
-' "$WG_CONF" "$POOL_CONF" "$WG_TUNNEL_NET" "$REGION_PORT_BASE" 2>/dev/null) || true
+' "$WG_CONF" "$POOL_CONF" "$WG_TUNNEL_NET" "$REGION_PORT_BASE" "$region" 2>/dev/null) || true
     nextip=$(echo "$assign" | awk '{print $1}')
     nextport=$(echo "$assign" | awk '{print $2}')
     if [[ -z "$nextip" || -z "$nextport" ]]; then

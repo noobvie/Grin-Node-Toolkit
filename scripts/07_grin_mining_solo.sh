@@ -600,23 +600,24 @@ _show_node_info() {
         echo -e "    Node   : ${RED}NOT RUNNING${RESET}  ${DIM}(port $api_port not listening)${RESET}"
     fi
 
-    # Coinbase wallet Foreign listener — where the node sends block rewards.
-    # Shown before Stratum: a solo miner's first question is "is my reward
-    # listener up?", so the screen reads node → wallet → mining top to bottom.
+    # Coinbase wallet listener (combined Owner+Foreign on the Owner port) —
+    # where the node sends block rewards. Shown before Stratum: a solo miner's
+    # first question is "is my reward listener up?", so the screen reads
+    # node → wallet → mining top to bottom.
     local wal_port wal_pid wal_toml wal_tmux
-    wal_port=$(sw_foreign_port "$network")
+    wal_port=$(sw_listener_port "$network")
     wal_pid=$(ss -tlnp 2>/dev/null | grep ":$wal_port " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
     wal_toml=$(sw_toml "$network" 2>/dev/null || true)
     if [[ -n "$wal_pid" ]]; then
-        echo -e "    Wallet : ${GREEN}LISTENING${RESET}  ${DIM}(PID $wal_pid, Foreign port $wal_port)${RESET}"
+        echo -e "    Wallet : ${GREEN}LISTENING${RESET}  ${DIM}(PID $wal_pid, Owner+Foreign port $wal_port)${RESET}"
         wal_tmux=$(sw_tmux_name "$network" 2>/dev/null || true)
         if [[ -n "$wal_tmux" ]] && tmux has-session -t "$wal_tmux" 2>/dev/null; then
             echo -e "    Wtmux  : ${GREEN}$wal_tmux${RESET}  ${DIM}(attach: tmux attach -t $wal_tmux)${RESET}"
         fi
     elif [[ -n "$wal_toml" && -f "$wal_toml" ]]; then
-        echo -e "    Wallet : ${RED}NOT RUNNING${RESET}  ${DIM}(configured, Foreign port $wal_port not listening)${RESET}"
+        echo -e "    Wallet : ${RED}NOT RUNNING${RESET}  ${DIM}(configured, Owner+Foreign port $wal_port not listening)${RESET}"
     else
-        echo -e "    Wallet : ${DIM}not configured${RESET}  ${DIM}(Foreign port $wal_port)${RESET}"
+        echo -e "    Wallet : ${DIM}not configured${RESET}  ${DIM}(Owner+Foreign port $wal_port)${RESET}"
     fi
 
     if ss -tlnp 2>/dev/null | grep -q ":$stratum_port "; then
@@ -856,8 +857,10 @@ _do_setup_stratum() {
 
     # BASE URL only — the node appends /v2/foreign itself when calling
     # build_coinbase; a stored ".../v2/foreign" doubles the path and 404s.
-    local default_wallet_url="http://127.0.0.1:3415"
-    [[ "$network" == "testnet" ]] && default_wallet_url="http://127.0.0.1:13415"
+    # Owner port: the solo wallet is a combined Owner+Foreign listener, so the
+    # coinbase Foreign API lives on 3420/13420 (owner_api_include_foreign).
+    local default_wallet_url="http://127.0.0.1:3420"
+    [[ "$network" == "testnet" ]] && default_wallet_url="http://127.0.0.1:13420"
     echo ""
     echo -e "${BOLD}Wallet listener URL${RESET} — where coinbase block rewards are sent."
     echo -e "  Default for local wallet: ${DIM}$default_wallet_url${RESET}  ${DIM}(base URL — the node adds /v2/foreign itself)${RESET}"

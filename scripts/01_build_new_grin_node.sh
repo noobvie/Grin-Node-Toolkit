@@ -92,7 +92,7 @@
 #                log_file_path        → <node_dir>/grin-server.log
 #                api_secret_path      → <node_dir>/.api_secret
 #                foreign_api_secret_path → <node_dir>/.foreign_api_secret
-#              Also sets peer limits and enables stratum server.
+#              Also sets peer limits (stratum is left to Script 07).
 #
 #   Step  8b — Generate API Secret Files
 #              Creates .api_secret and .foreign_api_secret in the node
@@ -2004,13 +2004,11 @@ patch_config() {
         warn "log_max_files not found in config — appended."
     fi
 
-    # enable_stratum_server — enable the built-in stratum mining server
-    if grep -qE '^#?[[:space:]]*enable_stratum_server' "$config"; then
-        sed -i -E 's/^#?[[:space:]]*enable_stratum_server[[:space:]]*=.*/enable_stratum_server = true/' "$config"
-    else
-        echo "enable_stratum_server = true" >> "$config"
-        warn "enable_stratum_server not found in config — appended."
-    fi
+    # enable_stratum_server — deliberately NOT patched here. Stratum is a mining
+    # concern owned by Script 07 (solo setup / pool setup enable it; solo cleanup
+    # disables it). Forcing it true on every node build would silently re-enable
+    # mining config after a 07 cleanup and confuse the 07 setup flow. The grin
+    # default (false) is kept for a freshly built node.
 
     # p2p host — no patch needed: grin v5.5+ already defaults to host = "::"
     # (IPv6 any-address, dual-stack). The old 0.0.0.0→:: sed is obsolete.
@@ -2025,9 +2023,9 @@ patch_config() {
     info "  peer_max_outbound_count           = 199"
     info "  peer_min_preferred_outbound_count = 199"
     info "  log_max_files                     = 3"
-    info "  enable_stratum_server             = true"
+    info "  enable_stratum_server             = (untouched — Script 07 owns stratum)"
     info "  host (p2p)                        = \"::\"  (v5.5 default — IPv4 + IPv6 dual-stack)"
-    log "[STEP 8] archive_mode=$archive_val db_root=$db_root api_secret=$GRIN_DIR/.api_secret peer_limits=999in/199out/199min log_max_files=3 stratum=true p2p_host=default(::)"
+    log "[STEP 8] archive_mode=$archive_val db_root=$db_root api_secret=$GRIN_DIR/.api_secret peer_limits=999in/199out/199min log_max_files=3 stratum=untouched p2p_host=default(::)"
 }
 
 # =============================================================================

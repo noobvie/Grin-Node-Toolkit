@@ -144,12 +144,21 @@ pool_check_exclusivity() {
     local solo_markers=(
         "/opt/grin/conf/grin_solo_payment.json"
         "/etc/cron.d/grin-solo-mining-collector"
-        "/opt/grin/solo-stats"
         "/etc/nginx/grin-solo-stats.htpasswd"
     )
     local found=() m
     for m in "${solo_markers[@]}"; do
         [[ -e "$m" ]] && found+=("$m")
+    done
+    # /opt/grin/solo-stats counts ONLY when it holds solo collector data — the
+    # node-sync watchdog (installed with EVERY node build) used to keep its
+    # node_watchdog_*.json state here, which falsely hard-blocked the pool on
+    # every plain node box.
+    for m in /opt/grin/solo-stats/*; do
+        [[ -e "$m" ]] || continue                      # unmatched glob stays literal
+        case "$(basename "$m")" in node_watchdog_*.json) continue ;; esac
+        found+=("$m")
+        break
     done
     if systemctl list-units --type=service --all 2>/dev/null | grep -q 'grin-solo'; then
         found+=("systemd: grin-solo-* service")

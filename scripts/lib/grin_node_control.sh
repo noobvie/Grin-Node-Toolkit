@@ -284,7 +284,12 @@ gnc_launch_node_session() {
         # start (a root-run node writes root:root files that EACCES-block grin).
         chown -R grin:grin "$dir" 2>/dev/null || true
         info "Starting grin in grin-owned tmux session '$sess' — dir $dir"
-        su -s /bin/bash grin -c "cd '$dir' && env HOME='$dir' SHELL=/bin/bash tmux new-session -d -s '$sess' 'echo Starting Grin node...; $binary server run; echo; echo Grin process exited. Press Enter to close.; read'" 9>&- \
+        # env -u TMUX*: the operator may be running the toolkit INSIDE a root
+        # tmux session. su preserves the environment, and an inherited $TMUX
+        # makes grin's tmux client connect to ROOT's socket
+        # (/tmp/tmux-0/default → Permission denied) instead of starting its
+        # own server on grin's per-user socket.
+        su -s /bin/bash grin -c "cd '$dir' && env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR HOME='$dir' SHELL=/bin/bash tmux new-session -d -s '$sess' 'echo Starting Grin node...; $binary server run; echo; echo Grin process exited. Press Enter to close.; read'" 9>&- \
             || { error "Failed to create grin-owned tmux session '$sess'. Start manually: cd $dir && su -s /bin/bash -c 'HOME=$dir ./grin server run' grin"; return 1; }
     else
         warn "User 'grin' not found — running node as current user. Re-run Script 01 to create it."

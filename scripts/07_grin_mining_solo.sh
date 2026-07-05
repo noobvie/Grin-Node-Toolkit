@@ -26,7 +26,7 @@
 #
 #   Per-net branch (after 1/2 — SOLO_NETWORK set)
 #     1) Wallet      ▸ setup/recover · listener · auto-restart · address
-#     2) Stratum     ▸ setup · configure · publish · restrict
+#     2) Stratum     ▸ setup & publish · manual config · restrict
 #     3) Terminal Stats  (live dashboard for the chosen net)
 #     0) Back to network select
 # =============================================================================
@@ -757,7 +757,7 @@ solo_node_precheck() {
         echo -e "  ${BOLD}Once mainnet is SYNCED, set up mining in this order:${RESET}"
         echo -e "    · Pick the network    ${DIM}(1 Mainnet / 2 Testnet)${RESET}"
         echo -e "    · Wallet              ${DIM}set up the coinbase listener — back up your seed!${RESET}"
-        echo -e "    · Stratum             ${DIM}Setup, then Publish to open it to miners${RESET}"
+        echo -e "    · Stratum             ${DIM}Setup & Publish opens it to miners in one step${RESET}"
         echo -e "    · Point your miner    ${DIM}stratum+tcp://YOUR_SERVER_IP:<port>${RESET}"
         echo ""
 
@@ -806,8 +806,11 @@ solo_node_precheck() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SETUP STRATUM  (per-net branch ▸ Stratum ▸ 1)
+# SETUP & PUBLISH STRATUM  (per-net branch ▸ Stratum ▸ 1)
 # ═══════════════════════════════════════════════════════════════════════════════
+# One command: enable stratum + wallet listener URL in grin-server.toml, then
+# flow straight into Publish (bind 0.0.0.0 + firewall + node restart). The old
+# separate Publish step is gone from the menu — _enable_stratum is called here.
 
 _do_setup_stratum() {
     local network="$1" stratum_port="$2" api_port="$3"
@@ -816,12 +819,12 @@ _do_setup_stratum() {
 
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  Setup Stratum Server — $label (port $stratum_port)${RESET}"
+    echo -e "${BOLD}${CYAN}  Setup & Publish Stratum — $label (port $stratum_port)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "  Enables the stratum server in grin-server.toml and sets the"
-    echo -e "  wallet listener URL for coinbase block rewards."
-    echo -e "  Use ${BOLD}Stratum ▸ 3) Publish${RESET} to open it to miners after setup."
+    echo -e "  Enables the stratum server in grin-server.toml, sets the wallet"
+    echo -e "  listener URL for coinbase block rewards, then publishes the port"
+    echo -e "  so miners can connect (bind 0.0.0.0 + firewall + node restart)."
     echo ""
 
     find_grin_server_toml "$network" "$api_port" || return
@@ -851,17 +854,26 @@ _do_setup_stratum() {
         log "Setup ($network): enable_stratum_server = true in $grin_toml"
     fi
 
-    local default_wallet_url="http://127.0.0.1:3415/v2/foreign"
-    [[ "$network" == "testnet" ]] && default_wallet_url="http://127.0.0.1:13415/v2/foreign"
+    # BASE URL only — the node appends /v2/foreign itself when calling
+    # build_coinbase; a stored ".../v2/foreign" doubles the path and 404s.
+    local default_wallet_url="http://127.0.0.1:3415"
+    [[ "$network" == "testnet" ]] && default_wallet_url="http://127.0.0.1:13415"
     echo ""
     echo -e "${BOLD}Wallet listener URL${RESET} — where coinbase block rewards are sent."
-    echo -e "  Default for local wallet: ${DIM}$default_wallet_url${RESET}"
+    echo -e "  Default for local wallet: ${DIM}$default_wallet_url${RESET}  ${DIM}(base URL — the node adds /v2/foreign itself)${RESET}"
     echo -ne "Enter wallet_listener_url (Enter for default, 0 to skip): "
     read -r wallet_url
     [[ "$wallet_url" == "0" ]] && wallet_url=""
 
-    if [[ -n "$wallet_url" || -z "$cur_wallet" ]]; then
+    # Rewrite when: the operator typed a URL, none is set yet, OR the stored one
+    # carries the legacy /v2/foreign suffix (older setups wrote it — normalise).
+    if [[ -n "$wallet_url" || -z "$cur_wallet" || "$cur_wallet" == *"/v2/foreign\""* ]]; then
         local new_url="${wallet_url:-$default_wallet_url}"
+        # Legacy value being normalised with Enter → keep its host:port, drop the path.
+        if [[ -z "$wallet_url" && "$cur_wallet" == *"/v2/foreign\""* ]]; then
+            new_url="${cur_wallet#*\"}"; new_url="${new_url%\"*}"
+        fi
+        new_url="${new_url%/}"; new_url="${new_url%/v2/foreign}"
         local esc_url; esc_url=$(_sed_escape_rhs "$new_url")
         if grep -qE '^#?[[:space:]]*wallet_listener_url[[:space:]]*=' "$grin_toml" 2>/dev/null; then
             sed -i -E \
@@ -888,19 +900,23 @@ _do_setup_stratum() {
     log "Setup ($network): burn_reward = false (forced) in $grin_toml"
 
     echo ""
-    success "Stratum setup complete for $network."
+    success "Stratum setup complete for $network — continuing to Publish..."
     echo ""
-    info "Stratum is configured but bound to localhost by default."
-    echo -e "  Use ${BOLD}Stratum ▸ 3) Publish${RESET} to open it to miners."
-    echo -e "  Restart the grin node to apply changes."
+    if ! _enable_stratum "$network" "$stratum_port" "$api_port"; then
+        info "Publish skipped — stratum stays bound to 127.0.0.1."
+        echo -e "  Re-run ${BOLD}Stratum ▸ 1) Setup & Publish${RESET} when ready to open it to miners."
+        echo -e "  Restart the grin node to apply the setup changes made above."
+    fi
 }
 
 setup_stratum_mainnet() { _do_setup_stratum mainnet "$STRATUM_PORT_MAINNET" "$NODE_API_PORT_MAINNET"; }
 setup_stratum_testnet() { _do_setup_stratum testnet "$STRATUM_PORT_TESTNET" "$NODE_API_PORT_TESTNET"; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CONFIGURE STRATUM  (per-net branch ▸ Stratum ▸ 2)
+# MANUAL STRATUM CONFIG  (per-net branch ▸ Stratum ▸ 2)
 # ═══════════════════════════════════════════════════════════════════════════════
+# Single-field editor for operators who want to hand-tune one value; the normal
+# path is 1) Setup & Publish, which sets everything automatically.
 
 _do_configure_stratum() {
     local network="$1" stratum_port="$2" api_port="$3"
@@ -908,7 +924,7 @@ _do_configure_stratum() {
 
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  Configure Stratum — $label (port $stratum_port)${RESET}"
+    echo -e "${BOLD}${CYAN}  Manual Stratum Config — $label (port $stratum_port)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
 
@@ -1027,7 +1043,7 @@ _show_stratum_port_guide() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PUBLISH / RESTRICT STRATUM  (per-net branch ▸ Stratum ▸ 3 / 4)
+# PUBLISH / RESTRICT STRATUM  (publish runs inside Setup & Publish ▸ 1; restrict ▸ 3)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Post-publish connection watch. Manual-refresh (Enter = re-check · 0 = return) to
@@ -1252,9 +1268,7 @@ _disable_stratum() {
     graceful_restart_grin "$api_port" "$network"
 }
 
-publish_mainnet_stratum()  { _enable_stratum  mainnet "$STRATUM_PORT_MAINNET" "$NODE_API_PORT_MAINNET"; }
 restrict_mainnet_stratum() { _disable_stratum mainnet "$STRATUM_PORT_MAINNET" "$NODE_API_PORT_MAINNET"; }
-publish_testnet_stratum()  { _enable_stratum  testnet "$STRATUM_PORT_TESTNET" "$NODE_API_PORT_TESTNET"; }
 restrict_testnet_stratum() { _disable_stratum testnet "$STRATUM_PORT_TESTNET" "$NODE_API_PORT_TESTNET"; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2690,9 +2704,10 @@ watchdog_menu() {
     done
 }
 
-# Stratum (per-net branch ▸ 2) — Setup / Configure / Publish / Restrict for the
-# branch's network. Pure dispatch — maps action+net to the mainnet/testnet
+# Stratum (per-net branch ▸ 2) — Setup & Publish / Manual config / Restrict for
+# the branch's network. Pure dispatch — maps action+net to the mainnet/testnet
 # wrapper; the network comes from the parent branch (SOLO_NETWORK), not a prompt.
+# (Publish is no longer a separate action — Setup flows into it.)
 _stratum_dispatch() {
     local action="$1" net="$2"
     case "$action:$net" in
@@ -2700,8 +2715,6 @@ _stratum_dispatch() {
         setup:testnet)     setup_stratum_testnet ;;
         configure:mainnet) configure_stratum_mainnet ;;
         configure:testnet) configure_stratum_testnet ;;
-        publish:mainnet)   publish_mainnet_stratum ;;
-        publish:testnet)   publish_testnet_stratum ;;
         restrict:mainnet)  restrict_mainnet_stratum ;;
         restrict:testnet)  restrict_testnet_stratum ;;
     esac
@@ -2716,20 +2729,18 @@ stratum_menu() {
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
         show_compact_status
-        echo -e "  ${GREEN}1${RESET}) Setup       ${DIM}(enable stratum in grin-server.toml · wallet URL)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Configure   ${DIM}(enable / bind / wallet — single field)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Publish     ${DIM}(allow miners to access this pool, change stratum to 0.0.0.0 + open firewall)${RESET}"
-        echo -e "  ${RED}4${RESET}) Restrict    ${DIM}(revert to 127.0.0.1)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Setup & Publish  ${DIM}(enable stratum + wallet URL → bind 0.0.0.0 + firewall + restart — all in one)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Manual config    ${DIM}(hand-edit one field: enable / bind / wallet)${RESET}"
+        echo -e "  ${RED}3${RESET}) Restrict         ${DIM}(revert to 127.0.0.1)${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1-4/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-3/0]: ${RESET}"
         read -r choice || choice=0          # EOF (Ctrl+D) → 0 → Back
         case "$choice" in
             "") continue ;;                 # Enter → refresh
-            1) net=$(_solo_pick_net "setup stratum")     && { _stratum_dispatch setup "$net"     || true; }; _solo_pause ;;
-            2) net=$(_solo_pick_net "configure stratum") && { _stratum_dispatch configure "$net" || true; }; _solo_pause ;;
-            3) net=$(_solo_pick_net "publish stratum")   && { _stratum_dispatch publish "$net"   || true; }; _solo_pause ;;
-            4) net=$(_solo_pick_net "restrict stratum")  && { _stratum_dispatch restrict "$net"  || true; }; _solo_pause ;;
+            1) net=$(_solo_pick_net "setup & publish stratum") && { _stratum_dispatch setup "$net"     || true; }; _solo_pause ;;
+            2) net=$(_solo_pick_net "manual stratum config")   && { _stratum_dispatch configure "$net" || true; }; _solo_pause ;;
+            3) net=$(_solo_pick_net "restrict stratum")        && { _stratum_dispatch restrict "$net"  || true; }; _solo_pause ;;
             0) return ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
@@ -2759,7 +2770,7 @@ solo_net_menu() {
         echo ""
         _show_node_info "$SOLO_NETWORK" "$SOLO_API_PORT" "$SOLO_STRATUM_PORT"
         echo -e "  ${GREEN}1${RESET}) Wallet          ${DIM}▸ setup/recover · listener · auto-restart · address${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Stratum         ${DIM}▸ setup · configure · publish · restrict${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Stratum         ${DIM}▸ setup & publish · manual config · restrict${RESET}"
         echo -e "  ${GREEN}3${RESET}) Terminal Stats  ${DIM}(live dashboard for $label)${RESET}"
         echo ""
         echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"

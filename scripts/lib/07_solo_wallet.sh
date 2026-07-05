@@ -274,7 +274,7 @@ sw_setup() {
     echo -e "  ${YELLOW:-}→ If you don't fully trust this provider, keep the balance low and sweep${RESET:-}"
     echo -e "  ${YELLOW:-}  coinbase rewards to a wallet on a private machine you control.${RESET:-}"
     echo ""
-    info "wallet_listener_url default ($net): http://127.0.0.1:$(sw_foreign_port "$net")/v2/foreign"
+    info "wallet_listener_url default ($net): http://127.0.0.1:$(sw_foreign_port "$net")  (base URL — the node appends /v2/foreign itself)"
     info "Enable auto-restart (Setup → Auto-restart) so the listener survives reboot/crash."
 }
 

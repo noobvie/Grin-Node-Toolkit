@@ -837,6 +837,19 @@ run_super_auto() {
     if ss -tlnp "sport = :13414" 2>/dev/null | grep -q ":13414 "; then _running=true; fi
     detect_installed_nodes
     if [[ ${#INSTALLED_NETS[@]} -gt 0 ]]; then _installed=true; fi
+    # Flag a FULL archive specifically. It is the expensive-to-rebuild asset
+    # (~18-25 GB, hours-to-days to re-sync) and is unrecoverable once deleted.
+    # Super Auto only ever builds PRUNED nodes, so an existing full archive is
+    # not just wiped — it is silently downgraded to pruned. That asymmetry (a
+    # cheap prune wipe vs. losing a costly archive) warrants a louder, distinct
+    # confirmation token so it cannot be muscle-memoried through.
+    local _has_full=false _full_dir="" _fi
+    for _fi in "${!INSTALLED_MODES[@]}"; do
+        if [[ "${INSTALLED_MODES[$_fi]}" == "full" ]]; then
+            _has_full=true
+            _full_dir="${INSTALLED_DIRS[$_fi]}"
+        fi
+    done
 
     echo ""
     echo -e "${BOLD}  Super Auto will:${RESET}"
@@ -856,11 +869,38 @@ run_super_auto() {
         fi
         if $_running; then echo -e "       ${RED}✗${RESET} all running Grin processes will be ${BOLD}killed${RESET}"; fi
         echo -e "       ${RED}✗${RESET} binaries + chain_data for BOTH networks will be ${BOLD}deleted${RESET}"
+
+        # Escalate when a FULL archive is on the chopping block: it is the one
+        # asset here that costs hours-to-days to rebuild and cannot be recovered
+        # without a full re-sync. Loud, cost-explicit block + a distinct token.
+        local _token="REBUILD"
+        if $_has_full; then
+            echo ""
+            echo -e "  ${RED}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+            echo -e "  ${RED}${BOLD}⚠  FULL ARCHIVE NODE DETECTED — READ BEFORE YOU PROCEED${RESET}"
+            echo -e "  ${RED}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+            echo -e "     ${DIM}${_full_dir}${RESET}"
+            echo -e "     You have a ${BOLD}full archive${RESET} mainnet node ${DIM}(~18-25 GB, typically${RESET}"
+            echo -e "     ${DIM}hours to days to sync)${RESET}. Super Auto builds ${BOLD}pruned only${RESET} — it will"
+            echo -e "     ${RED}${BOLD}DELETE this archive${RESET} and replace it with a pruned node."
+            echo -e "     ${YELLOW}This is unrecoverable without a full re-sync.${RESET}"
+            echo ""
+            echo -e "     ${DIM}To keep the archive, cancel now and either:${RESET}"
+            echo -e "       ${DIM}• back it up first  (Script 089 — Backup / Restore)${RESET}"
+            echo -e "       ${DIM}• stream it out     (Script 03 — Share Chain Data)${RESET}"
+            echo -e "       ${DIM}• or use the custom wizard to rebuild only what you need${RESET}"
+            _token="DELETE-ARCHIVE"
+        fi
+
         echo ""
-        echo -ne "  Type ${RED}${BOLD}REBUILD${RESET} to proceed, or Enter to cancel: "
+        echo -ne "  Type ${RED}${BOLD}${_token}${RESET} to proceed, or Enter to cancel: "
         local _cf; read -r _cf || true
-        if [[ "$_cf" != "REBUILD" ]]; then
-            info "Super Auto cancelled — no changes made."
+        if [[ "$_cf" != "$_token" ]]; then
+            if $_has_full; then
+                info "Super Auto cancelled — full archive preserved, no changes made."
+            else
+                info "Super Auto cancelled — no changes made."
+            fi
             return 1
         fi
     else

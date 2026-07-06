@@ -16,6 +16,7 @@
 #   gnc_kill_grin_session <sess>      kill named session on BOTH tmux servers
 #   gnc_kill_all_grin_sessions        kill every grin_* session on BOTH servers
 #   gnc_kill_grin_procs [dir] [grace] TERM→wait→KILL grin server processes
+#   _gnc_heal_grin_socket_dir         reclaim /tmp/tmux-<grin uid> from a foreign owner
 #   gnc_launch_node_session <dir> <bin> <sess>   THE ONLY sanctioned node launcher
 #   gnc_start_node_tmux <network>     conf-resolved wrapper around the launcher
 #   gnc_owner_get_status <network>    raw get_status JSON (Owner API, localhost)
@@ -259,6 +260,35 @@ gnc_kill_grin_procs() {
 }
 
 # -----------------------------------------------------------------------------
+# _gnc_heal_grin_socket_dir — reclaim grin's tmux socket path from a foreign owner.
+# tmux as grin reports "error connecting to /tmp/tmux-<uid>/default (Permission
+# denied)" ONLY when the socket file or its dir is not accessible to grin — a
+# stale grin-owned socket is never an error (tmux gets ECONNREFUSED and starts a
+# fresh server transparently). Classic cause: a ROOT tmux server squatting on
+# grin's socket path (e.g. bare `gtmux` run while the socket was stale started a
+# root server there; its socket mode denies grin's connect). The squatter also
+# survives gnc_kill_grin_session — its session is named "0", not grin_*.
+# Only acts on wrong ownership; a healthy grin-owned path is left untouched.
+# Root connects to any tmux server regardless of socket perms, so kill-server
+# works on the squatter too. Never fails the caller (set -e safe).
+# -----------------------------------------------------------------------------
+_gnc_heal_grin_socket_dir() {
+    local uid dir sock downer sowner
+    uid=$(id -u grin 2>/dev/null) || return 0
+    dir="/tmp/tmux-${uid}"
+    sock="$dir/default"
+    [[ -e "$dir" ]] || return 0
+    downer=$(stat -c %u "$dir" 2>/dev/null || echo "?")
+    sowner="$uid"
+    if [[ -e "$sock" ]]; then sowner=$(stat -c %u "$sock" 2>/dev/null || echo "?"); fi
+    if [[ "$downer" == "$uid" && "$sowner" == "$uid" ]]; then return 0; fi
+    warn "grin's tmux socket path $dir is not grin-owned (dir uid=$downer, socket uid=$sowner) — reclaiming it."
+    tmux -S "$sock" kill-server 2>/dev/null || true
+    rm -rf "$dir" 2>/dev/null || true
+    return 0
+}
+
+# -----------------------------------------------------------------------------
 # gnc_launch_node_session <node_dir> <binary> <session>
 # THE ONLY sanctioned node launcher (launch contract, .claude/CLAUDE.md):
 #   1. Kills the named session on BOTH tmux servers.
@@ -283,6 +313,9 @@ gnc_launch_node_session() {
         # chown first reclaims any root-owned leftovers from an earlier root-run
         # start (a root-run node writes root:root files that EACCES-block grin).
         chown -R grin:grin "$dir" 2>/dev/null || true
+        # Reclaim grin's tmux socket path if a root/foreign owner squats on it
+        # ("error connecting to /tmp/tmux-<uid>/default (Permission denied)").
+        _gnc_heal_grin_socket_dir
         info "Starting grin in grin-owned tmux session '$sess' — dir $dir"
         # env -u TMUX*: the operator may be running the toolkit INSIDE a root
         # tmux session. su preserves the environment, and an inherited $TMUX
@@ -290,7 +323,16 @@ gnc_launch_node_session() {
         # (/tmp/tmux-0/default → Permission denied) instead of starting its
         # own server on grin's per-user socket.
         su -s /bin/bash grin -c "cd '$dir' && env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR HOME='$dir' SHELL=/bin/bash tmux new-session -d -s '$sess' 'echo Starting Grin node...; $binary server run; echo; echo Grin process exited. Press Enter to close.; read'" 9>&- \
-            || { error "Failed to create grin-owned tmux session '$sess'. Start manually: cd $dir && su -s /bin/bash -c 'HOME=$dir ./grin server run' grin"; return 1; }
+            || {
+                error "Failed to create grin-owned tmux session '$sess'."
+                # Dump the socket-path state — wrong ownership here is the usual cause.
+                local _guid _l
+                _guid=$(id -u grin 2>/dev/null || echo "?")
+                while IFS= read -r _l; do error "  $_l"; done \
+                    < <(ls -ldn "/tmp/tmux-${_guid}" "/tmp/tmux-${_guid}/default" 2>/dev/null || true)
+                error "Start manually: cd $dir && su -s /bin/bash -c 'HOME=$dir ./grin server run' grin"
+                return 1
+            }
     else
         warn "User 'grin' not found — running node as current user. Re-run Script 01 to create it."
         SHELL=/bin/bash tmux new-session -d -s "$sess" -c "$dir" \
@@ -354,8 +396,19 @@ gnc_install_gtmux_helper() {
 #   gtmux ls
 #   gtmux attach -t grin_pruned_mainnet      # Ctrl+B then D to detach
 GRIN_UID="$(id -u grin 2>/dev/null)"
-if [[ -n "$GRIN_UID" && -S "/tmp/tmux-${GRIN_UID}/default" ]]; then
-    exec tmux -S "/tmp/tmux-${GRIN_UID}/default" "$@"
+GSOCK="/tmp/tmux-${GRIN_UID}/default"
+if [[ -n "$GRIN_UID" && -S "$GSOCK" ]]; then
+    # Use the socket ONLY when a live grin-owned server answers on it. Running
+    # tmux as root on a STALE socket (e.g. bare `gtmux`) would start a ROOT
+    # server squatting on grin's path — after which every grin-user node start
+    # fails with "error connecting to $GSOCK (Permission denied)".
+    if [[ "$(stat -c %u "$GSOCK" 2>/dev/null)" == "$GRIN_UID" ]] && tmux -S "$GSOCK" ls >/dev/null 2>&1; then
+        exec tmux -S "$GSOCK" "$@"
+    fi
+    echo "gtmux: no live grin-owned tmux server on $GSOCK (stale or foreign-owned socket)." >&2
+    echo "       Refusing to run tmux on it as root (that would break grin's node starts)." >&2
+    echo "       Start the node via the toolkit — its launcher reclaims the path automatically." >&2
+    exit 1
 fi
 # grin user missing or its socket not found — fall back to the default server.
 exec tmux "$@"

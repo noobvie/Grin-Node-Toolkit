@@ -89,9 +89,17 @@ step_stop_processes() {
         $already || named_pids+=("$pid")
     done < <(pgrep -f 'grin server run\|grin-wallet' 2>/dev/null || true)
 
-    # ── Detect tmux sessions ───────────────────────────────────────────────────
+    # ── Detect tmux sessions — on BOTH tmux servers ────────────────────────────
+    # Nodes run grin-owned on the grin user's tmux socket (the gtmux socket);
+    # wallets and legacy sessions live on root's default socket. A session
+    # missed on either server would keep its process alive past this step.
+    local grin_sock=""
+    local _guid; _guid=$(id -u grin 2>/dev/null || true)
+    if [[ -n "$_guid" && -S "/tmp/tmux-${_guid}/default" ]]; then grin_sock="/tmp/tmux-${_guid}/default"; fi
     local tmux_sessions=""
-    tmux_sessions=$(tmux ls -F '#{session_name}' 2>/dev/null | grep '^grin_' || true)
+    tmux_sessions=$( { tmux ls -F '#{session_name}' 2>/dev/null || true
+                       [[ -n "$grin_sock" ]] && tmux -S "$grin_sock" ls -F '#{session_name}' 2>/dev/null || true
+                     } | grep '^grin_' | sort -u || true)
 
     if [[ ${#found_ports[@]} -eq 0 && ${#named_pids[@]} -eq 0 && -z "$tmux_sessions" ]]; then
         success "No Grin processes or tmux sessions running. Skipping."
@@ -137,12 +145,17 @@ step_stop_processes() {
             log "[STEP 1] Stopped port $port PID $pid"
         done
 
-        # ── Kill tmux sessions ────────────────────────────────────────────────
+        # ── Kill tmux sessions — on BOTH tmux servers ─────────────────────────
         if [[ -n "$tmux_sessions" ]]; then
             while IFS= read -r sess; do
-                tmux kill-session -t "$sess" 2>/dev/null \
-                    && success "tmux session '$sess' closed." \
-                    || warn "Could not close tmux session '$sess'."
+                local killed=false
+                if tmux kill-session -t "$sess" 2>/dev/null; then killed=true; fi
+                if [[ -n "$grin_sock" ]] && tmux -S "$grin_sock" kill-session -t "$sess" 2>/dev/null; then killed=true; fi
+                if $killed; then
+                    success "tmux session '$sess' closed."
+                else
+                    warn "Could not close tmux session '$sess'."
+                fi
                 log "[STEP 1] Killed tmux session: $sess"
             done <<< "$tmux_sessions"
         fi

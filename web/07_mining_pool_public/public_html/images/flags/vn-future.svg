@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Heritage & Freedom Flag (former Republic of Vietnam / South Vietnam):
+     golden-yellow field with three horizontal red stripes through the centre.
+     Each band is 1/13 of the height; the three red stripes + two yellow gaps
+     occupy the central 5/13. Used as the regional flag for Vietnam at the
+     operator's request (no Unicode emoji exists for this flag). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 195 130" width="195" height="130" role="img" aria-label="Vietnam (Heritage & Freedom flag)">
+  <rect width="195" height="130" fill="#FFCE00"/>
+  <rect x="0" y="40" width="195" height="10" fill="#D52B1E"/>
+  <rect x="0" y="60" width="195" height="10" fill="#D52B1E"/>
+  <rect x="0" y="80" width="195" height="10" fill="#D52B1E"/>
+</svg>

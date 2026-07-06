@@ -436,12 +436,11 @@ function createSchema() {
     `CREATE INDEX IF NOT EXISTS idx_lottery_winners_draw ON lottery_winners(draw_id)`,
     `CREATE INDEX IF NOT EXISTS idx_lottery_winners_address ON lottery_winners(grin_address, created_at DESC)`,
 
-    // ─── Multi-region — operator-declared regional endpoints (hub-and-spoke) ───
-    // One row per region/satellite the hub knows about. `region` matches the tag the
-    // satellite relay stamps on shares (config.region → POST /api/shares { region }),
-    // so /api/pool/stats/regions can left-join live share aggregates onto these labels.
-    // Purely descriptive: the IP allowlist + shared secret in pool.json (not this table)
-    // are what actually authorise ingestion.
+    // ─── Multi-region — operator-declared regional endpoints (Model C) ───
+    // One row per region/gateway the pool advertises. `region` matches the tag the central
+    // stratum-server stamps on shares (from the per-region listener), so /api/pool/stats/regions
+    // can left-join live share aggregates onto these labels. Purely descriptive: the real region
+    // wiring is the WireGuard peer + per-region port set up by Script 07 (W) Multi-region).
     `CREATE TABLE IF NOT EXISTS pool_locations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       region TEXT NOT NULL UNIQUE,
@@ -538,8 +537,8 @@ function createSchema() {
   migratePagesFromConfig();
   // The default grinium regional endpoints are seeded once (see seedDefaultRegions,
   // called from index.js with the configured stratum port). The pool server also
-  // self-registers its own region via ensureLocalRegion(); extra zones come from real
-  // satellites the operator declares in admin → Regions.
+  // self-registers its own region via ensureLocalRegion(); extra zones come from
+  // regional gateways the operator declares in admin → Regions.
 }
 
 // Additive, non-destructive: add the country grouping columns to an existing
@@ -620,8 +619,8 @@ function migratePagesFromConfig() {
 }
 
 // Self-register the pool server's own region (role=singlebox) so the central box
-// shows as a real region and auto-joins the connect grid the moment a satellite for
-// another zone reports in. Creates ONE row for `region` (skipping the generic
+// shows as a real region and auto-joins the connect grid the moment a gateway for
+// another zone forwards shares in. Creates ONE row for `region` (skipping the generic
 // 'default'), backfills stratum_url once the public hostname is known, and never
 // clobbers an operator's label/active/url edits made in admin → Regions.
 // One-time seed of the default grinium regional endpoints, grouped by country so the
@@ -641,19 +640,28 @@ function seedDefaultRegions(stratumPort, poolDomain) {
   try {
     const dom = String(poolDomain || '').toLowerCase();
     if (!(dom === 'grinium.com' || dom.endsWith('.grinium.com'))) return;
+    // Versioned seed: v1 (2026-06) shipped han/nyc/lax/yyz/ams; v2 adds sgn (Saigon).
+    // The marker value stores the applied version — the legacy marker wrote '1', which
+    // reads back as "v1 applied", so an already-seeded install inserts ONLY the newer
+    // additions. Rows the operator deleted from an already-applied version are never
+    // re-created (that version doesn't re-run).
+    const SEED_VERSION = 2;
     const marker = db.prepare(
       "SELECT value FROM pool_config WHERE section = '_migrations' AND key = 'regions_seeded'"
     ).get();
-    if (marker) return;
+    const applied = marker ? (parseInt(marker.value, 10) || 1) : 0;
+    if (applied >= SEED_VERSION) return;
     const port = stratumPort || 3333;
     // city = label; country/country_code drive grouping + flag on the dashboard.
     const REGIONS = [
-      { region: 'han', label: 'Hanoi',       country: 'Vietnam',        cc: 'VN', host: 'han.grinium.com' },
-      { region: 'nyc', label: 'New York',    country: 'United States',  cc: 'US', host: 'nyc.grinium.com' },
-      { region: 'lax', label: 'Los Angeles', country: 'United States',  cc: 'US', host: 'lax.grinium.com' },
-      { region: 'yyz', label: 'Toronto',     country: 'Canada',         cc: 'CA', host: 'yyz.grinium.com' },
-      { region: 'ams', label: 'Amsterdam',   country: 'Netherlands',    cc: 'NL', host: 'ams.grinium.com' }
+      { v: 1, region: 'han', label: 'Hanoi',       country: 'Vietnam',        cc: 'VN', host: 'han.grinium.com' },
+      { v: 1, region: 'nyc', label: 'New York',    country: 'United States',  cc: 'US', host: 'nyc.grinium.com' },
+      { v: 1, region: 'lax', label: 'Los Angeles', country: 'United States',  cc: 'US', host: 'lax.grinium.com' },
+      { v: 1, region: 'yyz', label: 'Toronto',     country: 'Canada',         cc: 'CA', host: 'yyz.grinium.com' },
+      { v: 1, region: 'ams', label: 'Amsterdam',   country: 'Netherlands',    cc: 'NL', host: 'ams.grinium.com' },
+      { v: 2, region: 'sgn', label: 'Saigon',      country: 'Vietnam',        cc: 'VN', host: 'sgn.grinium.com' }
     ];
+    const pending = REGIONS.filter(r => r.v > applied);
     const insert = db.prepare(`
       INSERT OR IGNORE INTO pool_locations
         (region, label, country, country_code, stratum_url, is_active)
@@ -661,36 +669,53 @@ function seedDefaultRegions(stratumPort, poolDomain) {
     `);
     const stamp = db.prepare(`
       INSERT INTO pool_config (section, key, value, value_type)
-      VALUES ('_migrations', 'regions_seeded', '1', 'string')
-      ON CONFLICT(section, key) DO NOTHING
+      VALUES ('_migrations', 'regions_seeded', ?, 'string')
+      ON CONFLICT(section, key) DO UPDATE SET value = excluded.value
     `);
     const tx = db.transaction(() => {
-      for (const r of REGIONS) {
+      for (const r of pending) {
         insert.run(r.region, r.label, r.country, r.cc, `${r.host}:${port}`);
       }
-      stamp.run(); // seed + "done" marker committed atomically
+      stamp.run(String(SEED_VERSION)); // seed + "done" marker committed atomically
     });
     tx();
-    console.warn(`[db] seeded ${REGIONS.length} default regional endpoints (port ${port})`);
+    console.warn(`[db] seeded ${pending.length} default regional endpoints (v${applied}→v${SEED_VERSION}, port ${port})`);
   } catch (e) {
     console.error(`[db] seedDefaultRegions failed: ${e.message}`);
   }
 }
 
-function ensureLocalRegion(region, stratumUrl) {
+// Register / keep up to date the central box's own region row. `opts` carries the
+// operator-supplied location (set in 2) Configure → region_label/country/country_code):
+//   { label, country, country_code }
+// Backfilling rule mirrors stratum_url: only fill a field that is still empty/NULL, so a
+// fresh config edit applies on the next restart but admin → Regions edits are never clobbered.
+function ensureLocalRegion(region, stratumUrl, opts = {}) {
   if (!region || region === 'default') return;
+  const label = opts.label || (region.charAt(0).toUpperCase() + region.slice(1));
+  const country = opts.country || null;
+  const cc = opts.country_code ? String(opts.country_code).toUpperCase() : null;
   try {
-    const row = db.prepare('SELECT region, stratum_url FROM pool_locations WHERE region = ?').get(region);
+    const row = db.prepare(
+      'SELECT region, label, country, country_code, stratum_url FROM pool_locations WHERE region = ?'
+    ).get(region);
     if (!row) {
-      const label = region.charAt(0).toUpperCase() + region.slice(1);
       db.prepare(
-        'INSERT INTO pool_locations (region, label, stratum_url, is_active) VALUES (?, ?, ?, 1)'
-      ).run(region, label, stratumUrl || null);
+        'INSERT INTO pool_locations (region, label, country, country_code, stratum_url, is_active) VALUES (?, ?, ?, ?, ?, 1)'
+      ).run(region, label, country, cc, stratumUrl || null);
       console.warn(`[db] registered local region '${region}'${stratumUrl ? ' (' + stratumUrl + ')' : ''}`);
-    } else if (stratumUrl && !row.stratum_url) {
-      // Backfill the connect address once the public hostname is configured (the row may
-      // have been created on a pre-nginx first boot when subdomain was still empty).
-      db.prepare('UPDATE pool_locations SET stratum_url = ? WHERE region = ?').run(stratumUrl, region);
+      return;
+    }
+    // Backfill only empty fields (the row may predate these columns, or have been created
+    // on a pre-nginx first boot when subdomain/location were still blank).
+    const sets = [], vals = [];
+    if (stratumUrl && !row.stratum_url)      { sets.push('stratum_url = ?');  vals.push(stratumUrl); }
+    if (opts.label && !row.label)            { sets.push('label = ?');        vals.push(label); }
+    if (country && !row.country)             { sets.push('country = ?');      vals.push(country); }
+    if (cc && !row.country_code)             { sets.push('country_code = ?'); vals.push(cc); }
+    if (sets.length) {
+      vals.push(region);
+      db.prepare(`UPDATE pool_locations SET ${sets.join(', ')} WHERE region = ?`).run(...vals);
     }
   } catch (e) {
     console.error(`[db] ensureLocalRegion failed: ${e.message}`);

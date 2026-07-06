@@ -870,8 +870,6 @@
     <div class="card-header">
       <div class="card-title"><span class="dot dot-green"></span><span class="chart-info-toggle" onclick="toggleChartInfo('peers-info')" id="peers-info-btn">Active Peers / Countries</span></div>
       <div class="range-btns" id="peers-range">
-        <button class="range-btn" data-r="day">Day</button>
-        <button class="range-btn" data-r="week">Week</button>
         <button class="range-btn active" data-r="month">Month</button>
         <button class="range-btn" data-r="year">Year</button>
         <button class="range-btn" data-r="all">All Time</button>
@@ -880,13 +878,13 @@
     <div class="chart-info-panel" id="peers-info-panel">
       <div class="chart-info-panel-inner">
         <h4>What's shown</h4>
-        The number of distinct Grin peers this monitoring node has <b>seen in the last 7 days</b> — both peers with a live TCP connection and peers learned from the routing table. We only retain peer data for 7 days, so this is a <b>rolling 7-day count</b>, not a live connection count or a census of the full network. Mainnet and Testnet are tracked separately.
+        The number of distinct Grin peers this monitoring node has <b>seen in the last 30 days</b> — both peers with a live TCP connection and peers learned from the routing table. We only retain peer data for 30 days, so this is a <b>rolling 30-day count</b>, not a live connection count or a census of the full network. Mainnet and Testnet are tracked separately.
         <hr class="chart-info-sep">
         <h4>Sampling</h4>
-        Sampled every ~5 min: live peers via <code>v2/owner → get_connected_peers</code> plus routing-table peers via <code>get_peers</code> (Healthy only), de-duplicated by IP into a rolling 7-day window (older entries fall out of the count). The <b>Countries</b> line counts the distinct countries hosting a node (mainnet + testnet combined, matching the header and Top&nbsp;10 Countries card) at each sample — a network-decentralisation trend that <b>builds forward</b> from when tracking began (earlier history isn't backfilled). It overlays on a separate <b>right-hand axis</b> and toggles on/off independently of the Mainnet/Testnet selector. The <b>Peer Map</b> tab gives the broader global view — it uses the full routing table (<code>get_peers</code>) to discover and geolocate nodes worldwide.
+        Sampled every ~5 min: live peers via <code>v2/owner → get_connected_peers</code> plus routing-table peers via <code>get_peers</code> (Healthy only), de-duplicated by IP into a rolling 30-day window (older entries fall out of the count). The <b>Countries</b> line counts the distinct countries hosting a node (mainnet + testnet combined, matching the header and Top&nbsp;10 Countries card) at each sample — a network-decentralisation trend that <b>builds forward</b> from when tracking began (earlier history isn't backfilled). It overlays on a separate <b>right-hand axis</b> and toggles on/off independently of the Mainnet/Testnet selector. The <b>Peer Map</b> tab gives the broader global view — it uses the full routing table (<code>get_peers</code>) to discover and geolocate nodes worldwide.
         <hr class="chart-info-sep">
         <h4>Note</h4>
-        Movement is normal — the count rises as new nodes are seen and eases as nodes drop off the 7-day window. A sustained decline may indicate network issues or a falling node count.
+        Movement is normal — the count rises as new nodes are seen and eases as nodes drop off the 30-day window. A sustained decline may indicate network issues or a falling node count.
       </div>
     </div>
     <div style="display: flex; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--border); flex-wrap: wrap;">
@@ -1142,7 +1140,7 @@
 </section>
 
 <footer>
-  Data sourced from local Grin node &nbsp;·&nbsp;
+  Made with ❤️ from Saigon <svg viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes" style="vertical-align:-2px;border-radius:2px"><rect width="27" height="18" fill="#FFCD00"/><rect y="4" width="27" height="2" fill="#DA251D"/><rect y="8" width="27" height="2" fill="#DA251D"/><rect y="12" width="27" height="2" fill="#DA251D"/></svg> &nbsp;·&nbsp;
   <a href="https://grin.mw/"                             target="_blank" rel="noopener">grin.mw</a>
   <a href="https://forum.grin.mw/"                       target="_blank" rel="noopener">Forum</a>
   <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>

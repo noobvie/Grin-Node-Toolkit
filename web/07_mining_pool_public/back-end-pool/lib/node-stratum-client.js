@@ -25,7 +25,7 @@ const SUBMIT_TIMEOUT_MS  = 15000;
 class NodeStratumClient {
   constructor(config, stratumServer) {
     this.host         = config.node_stratum_host || '127.0.0.1';
-    this.port         = config.node_stratum_port || (config.network === 'mainnet' ? 3334 : 13334);
+    this.port         = config.node_stratum_port || (config.network === 'mainnet' ? 3416 : 13416);
     this.poolAddress  = config.pool_address || '';
     this.stratumServer = stratumServer;
     this.socket       = null;
@@ -96,11 +96,14 @@ class NodeStratumClient {
   }
 
   handleMessage(msg) {
-    // Job push from the node — relay to all connected miners
+    // Job push from the node — relay to all connected miners.
+    // node_job_id MUST travel along: the node's job_id is its block-version index and
+    // re-versions every ~15s; a submit echoing the pool's own counter instead of the
+    // node's id is rejected as stale by the node → 100% stale from every miner.
     if (msg.method === 'job') {
       const { difficulty, height, job_id, pre_pow } = msg.params || {};
       if (height !== undefined && pre_pow) {
-        this.stratumServer.setNewJob({ height, difficulty, pre_pow });
+        this.stratumServer.setNewJob({ height, difficulty, pre_pow, node_job_id: job_id });
       }
       return;
     }
@@ -156,7 +159,12 @@ class NodeStratumClient {
     if (!msgObj.id)       msgObj.id = ++this.msgId;
     if (!msgObj.jsonrpc)  msgObj.jsonrpc = '2.0';
     if (this.socket && !this.socket.destroyed) {
-      this.socket.write(JSON.stringify(msgObj) + '\n');
+      // The nonce travels through the pool as a STRING (a u64 above 2^53 would be
+      // rounded by JSON.parse — the node then logs nonces ending in zeros and rejects
+      // the share as Invalid PoW). The node's serde wants a bare u64 number, so strip
+      // the quotes on the wire only.
+      const payload = JSON.stringify(msgObj).replace(/"nonce":"(\d+)"/, '"nonce":$1');
+      this.socket.write(payload + '\n');
     }
   }
 

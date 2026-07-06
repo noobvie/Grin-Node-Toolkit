@@ -96,14 +96,19 @@
     allThemeClasses().forEach(function (c) { body.classList.remove(c); });
     classesFor(key).forEach(function (c) { body.classList.add(c); });
 
-    var select = document.getElementById('grinium-theme-select');
-    if (select && isKnown(select.value) && hasOption(select, key)) select.value = key;
+    updateCycleButton(key);
 
     if (persist) setSaved(key);
   }
 
-  function hasOption(select, key) {
-    return !!select.querySelector('option[value="' + key + '"]');
+  function labelFor(key) { return (BY_KEY[key] && BY_KEY[key].label) || key; }
+
+  // Keep the palette button's tooltip/aria in sync with the active theme.
+  function updateCycleButton(key) {
+    var btn = document.getElementById('grinium-theme-cycle');
+    if (!btn) return;
+    btn.setAttribute('aria-label', 'Theme: ' + labelFor(key) + ' — click to switch');
+    btn.title = labelFor(key);
   }
 
   function getContainer(create) {
@@ -120,42 +125,38 @@
     return container;
   }
 
-  // Build a grouped <select> containing ONLY the given enabled keys (in THEMES order).
+  // The set of themes the cycle button rotates through (enabled keys, THEMES order).
+  var enabledOrder = [];
+
+  // Render the theme control as a single palette icon. Clicking it advances to the next
+  // enabled theme (no dropdown) — the operator asked for "just a paint icon, click to
+  // switch". Direct jump-to-a-specific-theme is intentionally dropped in favour of this
+  // compact, mobile-friendly control. The enabled list still comes from the admin config.
   function buildSwitcher(enabledKeys) {
+    enabledOrder = enabledKeys.slice();
     var container = getContainer(true);
     if (!container) return;
     container.style.display = '';
     container.innerHTML = '';
 
-    var select = document.createElement('select');
-    select.id = 'grinium-theme-select';
-    select.className = 'theme-select';
-    select.setAttribute('aria-label', 'Choose colour theme');
+    var btn = document.createElement('button');
+    btn.id = 'grinium-theme-cycle';
+    btn.type = 'button';
+    btn.className = 'theme-cycle-btn';
+    btn.innerHTML = '<span class="theme-cycle-ico" aria-hidden="true">🎨</span>';
+    btn.addEventListener('click', cycleTheme);
+    container.appendChild(btn);
 
-    var groups = {};
-    var order = [];
-    THEMES.forEach(function (t) {
-      if (enabledKeys.indexOf(t.key) === -1) return;
-      if (!groups[t.group]) { groups[t.group] = []; order.push(t.group); }
-      groups[t.group].push(t);
-    });
-    order.forEach(function (groupName) {
-      var og = document.createElement('optgroup');
-      og.label = groupName;
-      groups[groupName].forEach(function (t) {
-        var opt = document.createElement('option');
-        opt.value = t.key;
-        opt.textContent = t.label;
-        og.appendChild(opt);
-      });
-      select.appendChild(og);
-    });
+    updateCycleButton(currentFromBody());
+  }
 
-    select.addEventListener('change', function () {
-      applyTheme(select.value, true);
-    });
-
-    container.appendChild(select);
+  // Advance to the next enabled theme, wrapping around.
+  function cycleTheme() {
+    if (enabledOrder.length < 2) return;
+    var cur = currentFromBody();
+    var i = enabledOrder.indexOf(cur);
+    var next = enabledOrder[(i + 1) % enabledOrder.length];
+    applyTheme(next, true);
   }
 
   function hideSwitcher() {

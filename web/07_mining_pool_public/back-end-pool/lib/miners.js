@@ -9,13 +9,16 @@ class MinerManager {
     this.activeSessions = new Map();
   }
 
-  createSession(grinAddress, workerName, ip) {
+  createSession(grinAddress, workerName, ip, region) {
     const sessionId = crypto.randomBytes(16).toString('hex');
     const session = {
       sessionId,
       grinAddress,
       workerName,
       ip,
+      // Region the miner connected through (which stratum listener accepted it). Stamped on
+      // every share for per-region aggregation; falls back to this box's configured region.
+      region: region || this.config.region || 'default',
       difficulty: 1.0,
       subscribedAt: Date.now(),
       lastShareAt: null,
@@ -77,7 +80,8 @@ class MinerManager {
 
   // Record the source IP seen for an address into its last-2 distinct-IP window (backs the
   // address-as-identity ownership gate). Delegates to owner-proof.recordSourceIp; cheap no-op
-  // when the IP is unchanged. Called from stratum login (local) and hub share ingestion (relay).
+  // when the IP is unchanged. Called from stratum login with the real miner IP (direct socket
+  // address, or the gateway's PROXY-protocol v2 header value under Model C).
   recordSourceIp(grinAddress, ip) {
     return recordSourceIp(this.db, grinAddress, ip);
   }

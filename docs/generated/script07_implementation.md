@@ -1,5 +1,11 @@
 # Script 07 — Public Mining Pool (Implementation)
 
+> ⚠ **Multi-region (satellite/relay) sections are SUPERSEDED by Model C (2026-06).** Any
+> satellite install/relay/ingestion steps here are obsolete: regions are now thin stratum
+> gateways (HAProxy + WireGuard). Authoritative:
+> [`flowcharts/script07_mining_public_planning.txt`](../../flowcharts/script07_mining_public_planning.txt)
+> + the Model C section of `.claude/CLAUDE.md`. Single-box deploy/runbook below is current.
+
 Deployment layout, build/wiring status, database runbook, pre-launch checklist, and
 troubleshooting for the public pool. Design lives in
 [`script07_design.md`](script07_design.md); security in

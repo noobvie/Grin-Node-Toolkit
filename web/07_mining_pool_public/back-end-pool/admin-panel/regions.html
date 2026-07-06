@@ -18,6 +18,32 @@
       border-top: 1px solid var(--border, #2a2a2a); padding-top: .7rem;
     }
     .howto code { font-family: var(--mono); }
+
+    /* Field guide — a collapsible (closed by default) explaining each form field.
+       Replaces hover tooltips, which are hard to discover and clip on small screens. */
+    .fieldguide { margin: 0 0 1rem; }
+    .fieldguide > summary { cursor: pointer; font-size: .95rem; padding: .2rem 0; }
+    .fieldguide > summary::marker { color: var(--accent, #b8e600); }
+    .fieldguide dl { margin: .7rem 0 0; }
+    .fieldguide dt { font-weight: 700; margin: .6rem 0 .15rem; }
+    .fieldguide dd { margin: 0 0 .15rem; color: var(--text-dim); line-height: 1.5; }
+    .fieldguide .step { color: var(--accent, #b8e600); font-weight: 700; }
+    .fieldguide code { font-family: var(--mono); }
+
+    /* Icon-only action buttons — the label lives in title/aria-label. */
+    .btn-icon {
+      padding: .25rem .45rem; font-size: .95rem; line-height: 1;
+      background: transparent; border: 1px solid var(--border, #2a2a2a);
+    }
+    .btn-icon:hover { border-color: var(--accent, #b8e600); background: transparent; }
+    .btn-icon.btn-icon-danger:hover { border-color: var(--error-color, #cc3333); }
+
+    /* Custom SVG flags (VN) — sized to sit inline with the emoji flags. */
+    .flag-img {
+      width: 20px; height: 14px; vertical-align: -2px;
+      border-radius: 2px; object-fit: cover;
+      box-shadow: 0 0 0 1px var(--border, #2a2a2a);
+    }
   </style>
 </head>
 <body>
@@ -26,46 +52,136 @@
   <div class="container">
     <div class="page-head">
       <h1>Regions</h1>
-      <p class="page-sub">The regional connect endpoints shown on the public dashboard — and the live health of each region's satellite. A card lights up green only while a satellite for that region keeps reporting in.</p>
+      <p class="page-sub">The regional connect endpoints shown on the public dashboard — and the live health of each region's gateway. A card lights up green while miners are mining that region (or its WireGuard tunnel is freshly handshaking).</p>
     </div>
 
     <!-- How regions work — the order of operations, so the admin isn't guessing -->
-    <details class="card howto" id="howto" open>
-      <summary><strong>How regions work — set one up in 4 steps</strong></summary>
+    <details class="card howto" id="howto">
+      <summary><strong>How regions work — add a gateway in 4 steps (Model C)</strong></summary>
       <p class="howto-intro">
-        A region has <em>two halves</em>: the <strong>connect card</strong> you declare <em>here</em> (what miners see), and the
-        <strong>satellite</strong> — a separate box running the node + stratum proxy that actually does the mining and reports
-        back. <strong>Declare the card here first</strong>, then stand up the satellite with the matching region key.
+        A <strong>gateway</strong> is a small extra server in another location. It runs <em>only</em> HAProxy + WireGuard —
+        no grin node, no wallet, no database. Miners in that location connect to the gateway, and it forwards their
+        stratum traffic through an encrypted tunnel to <em>this</em> pool box. This box stays the single brain:
+        all shares, blocks and payouts are still handled here.
+      </p>
+      <p class="howto-intro">
+        Every region needs one <strong>region key</strong> — a short airport-style code like <code>nyc</code>,
+        <code>sgn</code>, <code>ams</code>. You will type the <em>exact same key</em> in steps 1, 3 and 4.
+        Then, one step at a time:
       </p>
       <ol class="howto-steps">
-        <li><strong>Declare the region here</strong> (form below): pick a short <em>region key</em> (e.g. <code>nyc</code>),
-            its country, and the stratum host. Save → the card appears on the public dashboard as <em>○ No signal</em>.</li>
-        <li><strong>Point DNS</strong>: make the stratum host (e.g. <code>nyc.grinium.com</code>) resolve to the satellite box's IP.</li>
-        <li><strong>On the satellite box</strong>: run <code>07_grin_mining_public_pool.sh</code> → option <strong>2) Satellite agent</strong>,
-            entering the <em>same region key</em>, this pool's hub URL (<code>https://&lt;your-pool-domain&gt;</code>), and the shared secret.</li>
-        <li><strong>Enable ingestion on the hub</strong>: set <code>hub_shared_secret</code> (matching the satellite) in
-            <code>/opt/grin/conf/grin_pubpool.json</code> and restart the pool. The card then flips to <em>● Online</em> from the satellite's heartbeat.</li>
+        <li><strong>STEP 1 — Declare the region (on this page).</strong><br>
+            Click ➕ New region below and fill in the form: region key, city, country, and the stratum hostname miners will use
+            (e.g. <code>sgn.grinium.com</code>). Click <em>Save region</em>.<br>
+            <span class="dim">Result: the card appears on the public dashboard as ○ No signal.</span></li>
+        <li><strong>STEP 2 — Point DNS at the gateway box.</strong><br>
+            At your DNS provider, create an A-record so the stratum hostname from step 1 resolves to the
+            <em>gateway box's</em> public IP (not this pool's IP).<br>
+            <span class="dim">Result: miners who connect to that hostname reach the gateway box.</span></li>
+        <li><strong>STEP 3 — Register the gateway on THIS pool box (SSH).</strong><br>
+            Run <code>07_grin_mining_public_pool.sh</code> → <strong>W) Multi-region</strong> → <em>Add a gateway peer</em>.
+            Enter the same region key. The script assigns a tunnel IP + an internal region port and prints
+            the connection values.<br>
+            <span class="dim">Result: a printout of values to hand to whoever runs the gateway box.</span></li>
+        <li><strong>STEP 4 — Set up the gateway box itself (SSH).</strong><br>
+            On the gateway server, run <code>07_grin_mining_public_pool.sh</code> → <strong>2) Regional gateway</strong>, then in order:
+            <em>1) Install</em> → <em>2) Configure</em> (paste the values from step 3) → <em>3) Bring up tunnel</em> → <em>4) Start</em>.<br>
+            <span class="dim">Result: the card on this page flips to ● Active once miners start mining through it.</span></li>
       </ol>
       <p class="howto-note">
-        <strong>Single-box pool?</strong> You don't need satellites — the pool auto-registers its own region and miners just use that one host.
+        <strong>Single-box pool?</strong> You don't need gateways — the pool auto-registers its own region and miners just use that one host.
         Add regions here only when you're expanding to other locations.
-        <br><strong>This page ≠ "Public Stratum Host"</strong> in Pool Info — that field is only the cosmetic fallback host, not a region/satellite registration.
+        <br><strong>This page ≠ "Public Stratum Host"</strong> in Pool Info — that field is only the cosmetic fallback host, not a region/gateway registration.
       </p>
     </details>
 
-    <!-- Ingestion / role banner (why a satellite might not show) -->
-    <div class="card" id="ingest-banner" style="display:none;"></div>
+    <!-- Existing regions + live status -->
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;">
+      <h2 style="margin:0;">All regions status</h2>
+      <button class="btn btn-sm btn-outline" onclick="loadRegions()">↻ Refresh</button>
+    </div>
+    <div class="card" style="padding:0;margin-top:.6rem;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Region</th>
+              <th>Country</th>
+              <th>Stratum URL</th>
+              <th id="th-portcheck" title="Reachability of the public MINER port (the one in Stratum URL) — not the internal region port">Port check</th>
+              <th title="Passive signal — recent shares from this region + WireGuard last handshake. No port is dialed; that's the Port column">Mining activity</th>
+              <th>Last activity</th>
+              <th>Miners / Shares (15m)</th>
+              <th title="Internal tunnel-only listener on the pool box — UNIQUE per region (shares are stamped with the region by the port they arrive on). Auto-assigned by 'Add a gateway peer' (3391+ / 13391+). Miners never see it — they all share the public port">Region port</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="regions-tbody">
+            <tr class="loading-row"><td colspan="9"><span class="spinner"></span>Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <p class="helper-text" style="margin-top:.6rem;">
+      The <strong>Port :NNNN</strong> column (named after your public miner port) is an active wire test: on every
+      refresh the pool box TCP-dials the region's public stratum <code>host:port</code> — the exact connection a
+      miner's rig makes; the badge repeats the exact port it dialed. <em>✓ open</em> = the gateway's forwarder
+      answered (with round-trip ms); <em>✗ unreachable</em> = refused / timed out / DNS failed. This is the miner
+      port only — it is not the internal Region port, the WireGuard port, or the grin node's stratum port.
+      <strong>Mining activity</strong> is the passive signal — no port is dialed for it: recent shares (miners actually
+      mining the region) plus, when available, the WireGuard tunnel's last handshake; <em>Active</em> &lt;3&nbsp;min,
+      <em>Stalling</em> 3–10&nbsp;min, <em>Silent</em> &gt;10&nbsp;min. Port ✓ with <em>No signal</em> simply means
+      the gateway is up but no miner is on it yet. A <span class="badge badge-dim">hidden</span> tag on a region name
+      means you've unchecked "Visible on site" in its edit form — that region is hidden from the public connect grid.
+    </p>
 
-    <!-- Create / edit form -->
-    <div class="card">
-      <h3 id="form-title" style="margin:0 0 1rem;">New region</h3>
+    <!-- Create / edit form — collapsed until ➕ New region or a row's Edit opens it;
+         the flash message lives on the toolbar so it stays visible after the form closes -->
+    <div style="margin-top:1.4rem;display:flex;gap:.6rem;align-items:center;">
+      <button class="btn" id="new-region-btn" onclick="openNewRegion()">➕ New region</button>
+      <span class="success-msg" id="r-msg" style="display:none;"></span>
+    </div>
+    <div class="card" id="region-form" style="margin-top:.8rem;display:none;">
+      <h3 style="margin:0 0 .8rem;"><span id="form-title">New region</span></h3>
+
+      <!-- Per-field help, collapsed by default so it's there when needed but not in the way -->
+      <details class="fieldguide">
+        <summary>What goes in each field? (click for a quick guide)</summary>
+        <dl>
+          <dt>Region key <span class="step">— STEP 1</span></dt>
+          <dd>Short permanent identifier for this location. <strong>Suggestion:</strong> a 3-letter airport (IATA)
+              code — <code>nyc</code>, <code>lax</code>, <code>ams</code>, <code>yyz</code>, <code>han</code> — or a
+              2-letter country code (<code>us</code>, <code>nl</code>, <code>vn</code>) when a country has one region.
+              Shares get tagged with it, so it can't be renamed later, and it MUST exactly match the key you give in
+              STEP 3 when adding the gateway's WireGuard peer (Script 07 → W → Add a gateway peer).</dd>
+          <dt>Label / City</dt>
+          <dd>Human-friendly name shown on the public connect card (e.g. New York). Cosmetic — doesn't affect routing.</dd>
+          <dt>Country &amp; country code</dt>
+          <dd>Group regions by country on the dashboard (two US regions appear under one heading). The ISO-2 code
+              (<code>US</code>, <code>NL</code>) draws the flag emoji. Leave the code blank for no flag.</dd>
+          <dt>Stratum host <span class="step">— STEP 2</span></dt>
+          <dd>The hostname miners point their rigs at for this region (e.g. <code>nyc.grinium.com</code>). Create a DNS
+              A-record for it that resolves to the <strong>gateway box's</strong> public IP. Enter the host only — the
+              shared stratum port is appended automatically.</dd>
+          <dt>Visible on site</dt>
+          <dd>A show/hide switch, nothing more — when on, the card appears on the public connect grid (as “No signal”
+              until the gateway is up — STEPS 3 &amp; 4). Turn off to hide a region without deleting it. It does not
+              check whether the gateway is running; that's the <strong>Port</strong> and <strong>Mining activity</strong> columns.</dd>
+        </dl>
+        <p class="howto-note" style="margin-top:.7rem;">
+          Saving this form is <span class="step">STEP 1 of 4</span> — it only declares the card. Then: STEP 2 point DNS →
+          STEP 3 add the WireGuard peer on the pool box (Script 07 → W) → STEP 4 stand up the gateway box (Script 07 → 2).
+          Full walkthrough in <strong>“How regions work”</strong> above.
+        </p>
+      </details>
+
       <input type="hidden" id="r-id">
 
       <div class="form-row">
         <div class="form-group">
           <label for="r-region">Region key</label>
-          <input type="text" id="r-region" placeholder="e.g. nyc" autocomplete="off">
-          <div class="helper-text">Short tag the satellite stamps on shares (<code>config.region</code>). Lowercase, no spaces. Must match the satellite's region.</div>
+          <input type="text" id="r-region" placeholder="e.g. nyc (airport code)" autocomplete="off">
+          <div class="helper-text">Short region tag, lowercase, no spaces. <strong>Suggestion:</strong> a 3-letter airport code (<code>nyc</code>, <code>ams</code>, <code>han</code>) or a 2-letter country code (<code>us</code>, <code>nl</code>) — easy to recognise and unlikely to collide. Must match the region key you assign when adding this gateway's WireGuard peer (Script 07 → W) Multi-region).</div>
         </div>
         <div class="form-group">
           <label for="r-label">Label / City</label>
@@ -97,48 +213,14 @@
       </div>
 
       <label style="display:flex;align-items:center;gap:.5rem;margin:.4rem 0 1rem;">
-        <input type="checkbox" id="r-active" checked> Active (shown on the public connect grid)
+        <input type="checkbox" id="r-active" checked> Visible on site (show this region's card on the public connect grid)
       </label>
 
       <div style="display:flex;gap:.6rem;align-items:center;">
         <button class="btn" onclick="submitRegion()">Save region</button>
-        <button class="btn btn-outline" onclick="resetForm()" id="cancel-btn" style="display:none;">Cancel edit</button>
-        <span class="success-msg" id="r-msg" style="display:none;"></span>
+        <button class="btn btn-outline" onclick="closeForm()">Cancel</button>
       </div>
     </div>
-
-    <!-- Existing regions + live status -->
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-top:1.4rem;">
-      <h2 style="margin:0;">All regions</h2>
-      <button class="btn btn-sm btn-outline" onclick="loadRegions()">↻ Refresh</button>
-    </div>
-    <div class="card" style="padding:0;margin-top:.6rem;">
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Region</th>
-              <th>Country</th>
-              <th>Stratum URL</th>
-              <th>Active</th>
-              <th>Live status</th>
-              <th>Last seen</th>
-              <th>Shares / Blocks</th>
-              <th>Satellite IP</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="regions-tbody">
-            <tr class="loading-row"><td colspan="9"><span class="spinner"></span>Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-    <p class="helper-text" style="margin-top:.6rem;">
-      <strong>Live status</strong> comes from the satellite heartbeat (the relay pings the hub every ~60 s, even when idle).
-      <em>No signal</em> = no satellite has reported for this region yet — expected for a region you've declared but not yet stood up,
-      or for the pool's own region in single-box mode.
-    </p>
   </div>
 </main>
 
@@ -150,7 +232,7 @@
 API.guardAdminPage();
 
 let _regions = [];          // last-loaded pool_locations rows, looked up by id
-let _hb = {};               // region → satellite heartbeat (live status)
+let _hb = {};               // region → gateway health (live status)
 let STRATUM_PORT = '3333';  // shared across all regions (from pool.json via /api/public/branding)
 
 function escHtml(s) {
@@ -166,9 +248,19 @@ function flagEmoji(cc) {
          String.fromCodePoint(0x1F1E6 + cc.charCodeAt(1) - 65);
 }
 
+// Flag as HTML: VN uses the custom yellow Heritage & Freedom SVG (same as the
+// public dashboard — no Unicode emoji exists for it); everyone else gets the
+// regional-indicator emoji. '' when no flag. Output is fixed markup or a
+// validated emoji, so it's safe to inject.
+function flagHtml(cc) {
+  cc = String(cc || '').toUpperCase();
+  if (cc === 'VN') return '<img class="flag-img" src="/images/flags/vn-future.svg" alt="Vietnam">';
+  return flagEmoji(cc);
+}
+
 function syncFlag() {
-  const f = flagEmoji(document.getElementById('r-cc').value);
-  document.getElementById('flag-preview').textContent = f || '—';
+  const f = flagHtml(document.getElementById('r-cc').value);
+  document.getElementById('flag-preview').innerHTML = f || '—';
 }
 
 // Split a stored "host:port" into just the host (the port is fixed pool-wide).
@@ -177,15 +269,15 @@ function hostOf(stratumUrl) {
 }
 
 const STATUS_META = {
-  online:  { cls: 'badge-ok',    label: '● Online' },
-  stale:   { cls: 'badge-warn',  label: '● Degraded' },
-  offline: { cls: 'badge-error', label: '● Offline' }
+  online:  { cls: 'badge-ok',    label: '● Active',  tip: 'Shares or a WireGuard handshake seen within the last 3 minutes' },
+  stale:   { cls: 'badge-warn',  label: '● Stalling', tip: 'Last share / tunnel handshake 3–10 minutes ago' },
+  offline: { cls: 'badge-error', label: '● Silent',  tip: 'No shares and no tunnel handshake for over 10 minutes' },
+  unknown: { cls: 'badge-dim',   label: '○ No signal', tip: 'Never seen shares or a tunnel handshake from this region' }
 };
 function statusBadge(region) {
   const hb = _hb[region];
-  if (!hb) return '<span class="badge badge-dim">○ No signal</span>';
-  const m = STATUS_META[hb.status] || STATUS_META.offline;
-  return `<span class="badge ${m.cls}">${m.label}</span>`;
+  const m = (!hb || !STATUS_META[hb.status]) ? STATUS_META.unknown : STATUS_META[hb.status];
+  return `<span class="badge ${m.cls}" title="${m.tip}">${m.label}</span>`;
 }
 
 function fmtAge(s) {
@@ -214,8 +306,26 @@ function resetForm() {
   document.getElementById('r-host').value = '';
   document.getElementById('r-active').checked = true;
   document.getElementById('form-title').textContent = 'New region';
-  document.getElementById('cancel-btn').style.display = 'none';
   syncFlag();
+}
+
+// Form card is collapsed by default — ➕ New region / a row's Edit open it,
+// Cancel and a successful save close it again.
+function openFormCard() {
+  document.getElementById('region-form').style.display = '';
+  document.getElementById('new-region-btn').style.display = 'none';
+}
+
+function closeForm() {
+  resetForm();
+  document.getElementById('region-form').style.display = 'none';
+  document.getElementById('new-region-btn').style.display = '';
+}
+
+function openNewRegion() {
+  resetForm();
+  openFormCard();
+  document.getElementById('r-region').focus();
 }
 
 async function loadPort() {
@@ -225,64 +335,67 @@ async function loadPort() {
     if (p) STRATUM_PORT = String(p);
   } catch (e) { /* keep 3333 */ }
   document.getElementById('port-suffix').textContent = ':' + STRATUM_PORT;
+  // Name the check column after the real port it dials — "Port check" alone is
+  // ambiguous next to Region port / WG / node stratum ports.
+  const th = document.getElementById('th-portcheck');
+  if (th) th.textContent = 'Port :' + STRATUM_PORT;
 }
 
-async function loadHeartbeats() {
+async function loadGateways() {
   _hb = {};
   try {
-    const d = await API.get('/api/admin/health/satellites');
-    if (d && Array.isArray(d.satellites)) {
-      d.satellites.forEach(s => { _hb[s.region] = s; });
+    const d = await API.get('/api/admin/health/gateways');
+    if (d && Array.isArray(d.gateways)) {
+      d.gateways.forEach(g => { _hb[g.region] = g; });
     }
-    // Ingestion banner — tells the operator whether the hub will even accept satellites.
-    const banner = document.getElementById('ingest-banner');
-    if (d && d.ingestion_enabled === false) {
-      banner.className = 'card';
-      banner.style.display = '';
-      banner.innerHTML = '<strong>⚠ Satellite ingestion is OFF.</strong> No <code>hub_shared_secret</code> is set in ' +
-        '<code>/opt/grin/conf/grin_pubpool.json</code>, so satellites cannot report in (every region will read ' +
-        '<em>No signal</em>). Set the secret and restart the pool to accept satellites. Role: <code>' +
-        escHtml(d.role || 'singlebox') + '</code>.';
-    } else if (banner) {
-      banner.style.display = 'none';
-    }
-  } catch (e) { /* heartbeats are best-effort; table still renders config */ }
+  } catch (e) { /* health is best-effort; table still renders config */ }
 }
 
 async function loadRegions(silent) {
   const tbody = document.getElementById('regions-tbody');
   if (!silent) tbody.innerHTML = '<tr class="loading-row"><td colspan="9"><span class="spinner"></span>Loading…</td></tr>';
-  await loadHeartbeats();
+  await loadGateways();
   try {
     const d = await API.get('/api/admin/locations');
     if (!d || d.error) throw new Error(d && d.error ? d.error : 'Failed to load regions');
     _regions = d.locations || [];
     if (!_regions.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No regions yet. Add one above.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No regions yet. Add one with the ➕ New region button below.</td></tr>';
       return;
     }
     tbody.innerHTML = _regions.map(r => {
       const hb = _hb[r.region];
-      const flag = flagEmoji(r.country_code);
+      const flag = flagHtml(r.country_code);
       const country = r.country ? `${flag ? flag + ' ' : ''}${escHtml(r.country)}` : '<span class="dim">—</span>';
       const url = r.stratum_url ? `stratum+tcp://${escHtml(r.stratum_url)}` : '<span class="dim">—</span>';
-      const sharesBlocks = hb
-        ? `${(hb.shares_accepted || 0).toLocaleString()}${hb.shares_skipped ? ` <span class="dim">(${hb.shares_skipped} skipped)</span>` : ''} / ${hb.blocks || 0}`
+      const minersShares = hb
+        ? `${(hb.miners || 0).toLocaleString()} <span class="dim">/ ${(hb.shares_window || 0).toLocaleString()} sh</span>`
         : '—';
-      const ip = hb && hb.ip ? escHtml(hb.ip) : '<span class="dim">—</span>';
+      const port = hb && hb.port ? `<span class="mono">${hb.port}</span>` : '<span class="dim">—</span>';
+      // Show the EXACT port that was dialed (from this row's stratum_url) — with several
+      // port kinds on this page (region port, WG, node stratum), a bare "open" is ambiguous.
+      const dialM = r.stratum_url ? String(r.stratum_url).match(/:(\d+)$/) : null;
+      const dialPort = dialM ? ':' + dialM[1] : '';
+      let portCheck = '<span class="dim" title="No stratum host declared — nothing to dial">—</span>';
+      if (hb && hb.stratum_reachable === true) {
+        portCheck = `<span class="badge badge-ok" title="Pool box TCP-connected to ${escHtml(r.stratum_url || '')} (what a miner does)">✓ ${dialPort} open${hb.stratum_probe_ms != null ? ' · ' + hb.stratum_probe_ms + 'ms' : ''}</span>`;
+      } else if (hb && hb.stratum_reachable === false) {
+        portCheck = `<span class="badge badge-error" title="TCP dial to ${escHtml(r.stratum_url || '')} failed (refused / timeout / DNS)">✗ ${dialPort} unreachable</span>`;
+      }
+      const hiddenTag = r.is_active ? '' : ' <span class="badge badge-dim" title="Hidden from the public connect grid (checkbox in the edit form)">hidden</span>';
       return `
         <tr>
-          <td><strong>${escHtml(r.label || r.region)}</strong><br><span class="dim mono">${escHtml(r.region)}</span></td>
+          <td><strong>${escHtml(r.label || r.region)}</strong>${hiddenTag}<br><span class="dim mono">${escHtml(r.region)}</span></td>
           <td>${country}</td>
           <td class="mono" style="word-break:break-all;">${url}</td>
-          <td>${r.is_active ? '<span class="badge badge-ok">On</span>' : '<span class="badge badge-dim">Off</span>'}</td>
+          <td>${portCheck}</td>
           <td>${statusBadge(r.region)}</td>
-          <td>${hb ? fmtAge(hb.age_seconds) : '—'}</td>
-          <td class="mono">${sharesBlocks}</td>
-          <td class="mono">${ip}</td>
-          <td>
-            <button class="btn btn-sm btn-outline" onclick="editRegion(${r.id})">Edit</button>
-            <button class="btn btn-sm" onclick="deleteRegion(${r.id})">Delete</button>
+          <td>${hb && hb.age_seconds != null ? fmtAge(hb.age_seconds) : '—'}</td>
+          <td>${minersShares}</td>
+          <td>${port}</td>
+          <td style="white-space:nowrap;">
+            <button class="btn btn-icon" onclick="editRegion(${r.id})" title="Edit region" aria-label="Edit region ${escHtml(r.region)}">✏️</button>
+            <button class="btn btn-icon btn-icon-danger" onclick="deleteRegion(${r.id})" title="Delete region" aria-label="Delete region ${escHtml(r.region)}">🗑️</button>
           </td>
         </tr>`;
     }).join('');
@@ -303,9 +416,9 @@ function editRegion(id) {
   document.getElementById('r-host').value = hostOf(r.stratum_url);
   document.getElementById('r-active').checked = !!r.is_active;
   document.getElementById('form-title').textContent = 'Edit region: ' + r.region;
-  document.getElementById('cancel-btn').style.display = '';
+  openFormCard();
   syncFlag();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  document.getElementById('region-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function submitRegion() {
@@ -324,7 +437,7 @@ async function submitRegion() {
     const r = await API.post('/api/admin/locations', body);
     if (!r || r.error) throw new Error(r && r.error ? r.error : 'Save failed');
     flash('Region saved.', false);
-    resetForm();
+    closeForm();
     loadRegions();
   } catch (err) {
     flash(err.message, true);
@@ -332,12 +445,25 @@ async function submitRegion() {
 }
 
 // Delete is freshAdmin (step-up) → adminFetch handles the re-auth challenge.
+// 429 (app rate limit) / 503 (nginx rate limit) are TRANSIENT — the admin shell +
+// this page's 60s auto-refresh share the same per-IP budget, so a click can land on
+// an exhausted window. Deleting is idempotent, so retry once after a short pause
+// (same posture as settings-common.js) instead of surfacing "Too many requests".
 async function deleteRegion(id) {
   const r = _regions.find(x => x.id === id);
-  if (!confirm(`Delete region "${r ? (r.label || r.region) : id}"? This only removes the connect card — it does not stop a running satellite.`)) return;
+  if (!confirm(`Delete region "${r ? (r.label || r.region) : id}"? This only removes the connect card — the gateway's WireGuard peer and region port stay wired. To remove the whole gateway (peer + port + this card in one go), use Script 07 → W → 4) Remove a gateway on the pool box.`)) return;
   try {
-    const res = await adminFetch('/api/admin/locations/' + id, { method: 'DELETE' });
+    const url = '/api/admin/locations/' + id;
+    let res = await adminFetch(url, { method: 'DELETE' });
+    if (res.status === 429 || res.status === 503) {
+      await new Promise(w => setTimeout(w, 2500));
+      res = await adminFetch(url, { method: 'DELETE' });
+    }
     const body = await res.json().catch(() => ({}));
+    if (res.status === 429 || res.status === 503) {
+      const wait = body.retry_after_seconds || 30;
+      throw new Error('Rate-limited right now — wait ~' + wait + 's and try again (nothing was deleted).');
+    }
     if (!res.ok || body.error) throw new Error(body.error || ('Delete failed (' + res.status + ')'));
     flash('Region deleted.', false);
     loadRegions();
@@ -348,7 +474,9 @@ async function deleteRegion(id) {
 
 document.addEventListener('DOMContentLoaded', () => { syncFlag(); loadPort(); loadRegions(); });
 // Keep live status fresh (heartbeats update ~60s). Silent = no spinner flash, form untouched.
-setInterval(() => loadRegions(true), 60000);
+// Skip while the tab is hidden — background polling burns the shared per-IP rate budget
+// that user actions (e.g. Delete) draw from.
+setInterval(() => { if (!document.hidden) loadRegions(true); }, 60000);
 </script>
 </body>
 </html>

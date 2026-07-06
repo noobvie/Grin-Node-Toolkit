@@ -234,14 +234,17 @@ detect_node() {
     NODE_URL="http://127.0.0.1:${NODE_PORT}/v2/foreign"
 
     if [[ $NODE_PORT -eq $MAINNET_PORT ]]; then
-        # Script 01 names tmux sessions grin_<nodetype>_<networktype>, so the active
-        # session name reliably identifies which node is running on port 3413.
-        # mainnet-full (archive) is always preferred: it provides complete block
-        # history required by the explorer and the stats incremental updater.
-        if tmux has-session -t "grin_full_mainnet" 2>/dev/null; then
+        # Script 01 names tmux sessions grin_<nodetype>_<networktype>, launched
+        # as the grin user on its own tmux socket (see grin_node_control.sh) —
+        # _gns_has_grin_session checks that socket first, then the root one,
+        # so the active session name reliably identifies which node is running
+        # on port 3413. mainnet-full (archive) is always preferred: it provides
+        # complete block history required by the explorer and the stats
+        # incremental updater.
+        if _gns_has_grin_session "grin_full_mainnet"; then
             NODE_DIR="/opt/grin/node/mainnet-full"
             NODE_TYPE="full"
-        elif tmux has-session -t "grin_pruned_mainnet" 2>/dev/null; then
+        elif _gns_has_grin_session "grin_pruned_mainnet"; then
             NODE_DIR="/opt/grin/node/mainnet-prune"
             NODE_TYPE="prune"
         elif [[ -d /opt/grin/node/mainnet-full ]]; then

@@ -76,9 +76,11 @@
     // Public blocks explorer. All data comes from public endpoints:
     //   /api/pool/stats               summary KPIs (total/confirmed/immature/24h/7d)
     //   /api/pool/blocks?limit&offset&status   paginated rows (plain array; last page = short page)
-    // Mainnet-only product, so the chain link is grinscan.org. All external fields rendered via
-    // textContent / escaped — never trust block.found_by etc. as markup.
+    // GrinScan deep-link base is network-aware (set from /api/config/pool-info on load):
+    // grinscan.org for mainnet, testnet.grinscan.org for testnet. All external fields rendered
+    // via textContent / escaped — never trust block.found_by etc. as markup.
     const PAGE_SIZE = 25;
+    let GRINSCAN = 'https://grinscan.org';   // overridden to testnet.grinscan.org if testnet
     let _page = 0;       // zero-based
     let _filter = '';
     let _lastFull = false; // did the last fetch return a full page (more may exist)?
@@ -163,7 +165,7 @@
               '<td class="num">' + (Number(b.reward) || 0).toFixed(2) + ' ツ</td>' +
               '<td title="' + escHtml(b.found_by) + '">' + escHtml(shortAddr(b.found_by)) + '</td>' +
               '<td class="num" title="' + escHtml(fmtTs(b.found_at)) + '">' + escHtml(timeAgo(b.found_at)) + '</td>' +
-              '<td><a href="https://grinscan.org/block/' + Number(b.height || 0) +
+              '<td><a href="' + GRINSCAN + '/block/' + Number(b.height || 0) +
                 '" target="_blank" rel="noopener">view ↗</a></td>' +
               '</tr>';
           }).join('');
@@ -197,8 +199,13 @@
           loadBlocks();
         });
       });
-      loadSummary();
-      loadBlocks();
+      // Resolve the GrinScan base from the pool network (testnet → testnet.grinscan.org),
+      // then load — so block deep-links point at the right chain explorer.
+      fetch('/api/config/pool-info', { credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { if (d && d.network === 'testnet') GRINSCAN = 'https://testnet.grinscan.org'; })
+        .catch(function () {})
+        .finally(function () { loadSummary(); loadBlocks(); });
       setInterval(function () { loadSummary(); if (_page === 0) loadBlocks(); }, 60000);
     });
   </script>

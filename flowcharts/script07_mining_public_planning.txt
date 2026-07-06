@@ -2,10 +2,17 @@
 ║   07_grin_mining_public_pool.sh — REFACTOR PLAN: Model C (thin gateways)    ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
-  Version:  planning v1  (refactor proposal — NOT yet implemented)
-  Date:     2026-06-21
+  Version:  planning v1  (refactor proposal) + live-test results (§8)
+  Date:     2026-06-21  (implemented 2026-06-22, LIVE-VERIFIED 2026-07-05)
   Author:   design review session (see §1 for how we got here)
-  Status:   PROPOSAL — awaiting go/no-go before any code changes
+  Status:   IMPLEMENTED (Phases 1–8, branch `publicpool`, 2026-06-22). The satellite/relay
+            role is fully removed and replaced by the gateway role + central WireGuard +
+            per-region PROXY-v2 listeners.
+            ✔ LIVE-VERIFIED 2026-07-05 (testnet, see §8): a real regional gateway
+            forwarded miner hashrate over WireGuard to the central pool and the pool
+            FOUND BLOCKS from those shares; the coinbase arrived in the central
+            wallet's combined Owner+Foreign listener. Q2 is answered: latency was
+            never the stale cause — two share-forwarding protocol bugs were (§8).
 
   Scope:    Re-architect the multi-region role of the public pool from
             "full grin node + share relay per region" (the CURRENT built design)
@@ -140,12 +147,36 @@
  ║   │   Grin Node :3334   │                                           ║
  ║   └─────────┬───────────┘                                            ║
  ║             │ build_coinbase (localhost, automatic) → POOL wallet    ║
- ║             ▼ 127.0.0.1:3415                                         ║
+ ║             ▼ wallet_listener_url = http://127.0.0.1:3420            ║
+ ║             │ (BASE url — the node appends /v2/foreign itself;       ║
+ ║             │  a pathed url doubles it → 404)                        ║
  ║   ┌─────────────────────┐  owns ALL coinbase — never on the network  ║
- ║   │  Grin Wallet :3415  │──► Tor payouts ──► miners                  ║
- ║   │           (+ :3420) │                                           ║
+ ║   │  Grin Wallet :3420  │──► Tor payouts ──► miners                  ║
+ ║   │ ONE combined lstnr: │  owner_api + include_foreign = true        ║
+ ║   │ Owner+Foreign, ECDH │  (:3415 retired; testnet = 13420)          ║
+ ║   │ auto-unlock         │                                            ║
  ║   └─────────────────────┘                                            ║
  ╚═══════════════════════════════════════════════════════════════════════╝
+
+  WHY "ECDH auto-unlock" + password stored on disk (.wallet_pass, 600 root)
+    `owner_api` mode boots LOCKED (no -p flag exists for it) — listener up,
+    seed still encrypted, and Owner API v3 only accepts encrypted calls, so
+    the ONLY unlock path is init_secure_api (ECDH) → open_wallet(password).
+    That unlock MUST be automatic, because in Grin RECEIVING IS A SIGNING OP:
+    the node calls build_coinbase for EVERY block template (~15s), which needs
+    the decrypted keychain. Locked wallet ≠ "miss a reward" — it means NO jobs,
+    the whole pool halts (symptom: miners Alive, GetWorks=0). After any app
+    crash / server reboot the decrypted seed is gone from RAM, so boot script
+    + */5 watchdog re-run the ECDH unlock unattended — which requires the
+    password on the box. No way around it: grin has no BTC-style cold receive
+    address, and grin-wallet has no scoped tokens (unlocked-for-coinbase =
+    capable-of-send, so deferring payouts is policy, not privilege reduction).
+    Not our invention: we checked grin-pool (MWGrinPool) and open-grin-pool —
+    both keep the wallet password in service config the same way (and solo's
+    `listen -p` even exposes it in `ps`, weaker than a 600 file).
+    Mitigations = wallet on hub ONLY, low hot balance, sweep to cold. Full
+    operator-facing writeup: docs/generated/script07_security_audit.md
+    § "Residual / accepted risks".
 
   REGION ATTRIBUTION (how the central box knows which region a share is from)
     Chosen method: ONE central stratum listener PORT per region (e.g. asia→:3391,
@@ -335,25 +366,24 @@
       (no native module). Verify HAProxy `send-proxy-v2` / nginx `proxy_protocol`
       byte layout against the parser. (Stratum is line-delimited JSON AFTER the
       binary PROXY header — make sure the header is fully consumed first.)
-  Q2  LATENCY: does forwarding every share edge→central across a real
-      cross-continent WireGuard link raise stale% unacceptably? MEASURE with one
-      Asia gateway before building more. This is the make-or-break for C.
-  Q3  Does grin's per-new-tip job push survive the extra hop without excessive
-      stale shares vs a local-node region? (related to Q2)
+  Q2  ★ RESOLVED (2026-07-05): measured on a real link — the gateway path found
+      blocks. The 100%-stale episodes seen during testing were PROTOCOL BUGS
+      (job_id translation + u64 nonce rounding, §8), not latency. Rule of thumb:
+      100% stale/reject is NEVER latency.
+  Q3  ★ RESOLVED (2026-07-05): yes — job pushes survive the extra hop fine once
+      the node's own job_id is echoed back on submit (§8a).
   Q4  ★ RESOLVED (2026-06-22): WireGuard ONLY. Tor rejected — cannot accept the
       added latency on the share path. (Cost: the central box must expose a
       WireGuard UDP port; acceptable.)
-  Q5  Gateway DDoS exposure: the edge :3333 is public. Without the central
-      node's validation locally, can a flood of junk logins overwhelm the tunnel?
-      Add basic connection rate-limit at the gateway (HAProxy stick-tables).
+  Q5  ★ RESOLVED: HAProxy stick-table conn-rate limit implemented in
+      gw_render_forwarder (100 conn/10s per source IP, tune for reconnect-happy
+      miners).
   Q6  Migration: an operator already running the CURRENT satellite design — do we
       provide a convert path, or is this greenfield only (cleanup + reinstall)?
       (Likely greenfield: the product has no adoption yet — confirm.)
 
-  ⚠ DO NOT start coding until Q2 is answered with a real measurement. If the
-    share-path latency is a problem, the CURRENT node-per-region design + Option A
-    (WireGuard to the central wallet) becomes the pragmatic fallback, because it
-    keeps the node local to the miner. This plan assumes Q2 passes.
+  (Historical note: the "do not code until Q2 is measured" gate below was honored —
+   one gateway was deployed and measured 2026-07-05; Q2 passed, no pivot needed.)
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -368,6 +398,52 @@
   Central pool app : LARGELY UNCHANGED — it is the existing single-box pool with
                      a proxy-aware front door. That is the whole appeal of C.
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  8. LIVE TEST RESULTS  (testnet, 2026-07-05 — branch `publicpool`)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  VERIFIED WORKING END-TO-END
+    ① COINBASE: node stratum → build_coinbase → pool wallet, on the wallet's
+       ONE combined listener (owner_api + include_foreign on 3420/13420, ECDH
+       auto-unlock from .wallet_pass). The separate :3415 Foreign listener is
+       retired. wallet_listener_url MUST be the BASE url — the node itself
+       appends /v2/foreign (mine_block.rs); a pathed url doubles the path → 404.
+       pw_patch_node_toml writes the base url. Foreign-on-13420 needs NO auth.
+    ② HASHRATE FORWARDING: miner → gateway :3333 → HAProxy (send-proxy-v2)
+       → WireGuard → central per-region listener (region stamped by port)
+       → pool stratum → node built-in stratum (localhost). Blocks were FOUND
+       through this full path; real miner IP recovered from PROXY-v2.
+
+  BUGS FOUND DURING THE TEST  (all now fixed in the repo)
+    a) 100% STALE: the pool forwarded its OWN jobCounter as job_id to the node.
+       The node only accepts ITS OWN job_id (its block-version index, re-issued
+       every ~15s). FIX: jobIdMap pool→node id, kept per-job for the whole
+       submit window (latest-only is insufficient — a submit can race a fresh
+       job push). stratum-server.js + node-stratum-client.js.
+    b) PERSISTENT "Invalid PoW" + node-logged nonces ENDING IN ZEROS: JSON.parse
+       rounds a u64 nonce past 2^53. FIX: the nonce is re-extracted from the raw
+       line and carried as a STRING end-to-end (stratum-protocol.js); the
+       node-facing send() re-emits it as a bare number on the wire.
+    c) MINER "Dead" BUT PING OK: gateway hub_endpoint pointed at a guessed port
+       (13416, the node stratum) instead of the ASSIGNED central region port
+       (13391). Diagnose with a raw stratum login via nc over the tunnel. The
+       GRINGW1|... pairing string exists to make this impossible to mistype.
+    d) HANDSHAKE OK BUT ALL TCP DEAD (WireGuard cryptokey routing drop): a
+       duplicate add-peer moved the hub's live AllowedIPs to a fresh tunnel IP
+       while the gateway kept its old one (10.66.67.2 vs .4; hot-fixed live via
+       `wg set`). FIX in repo: pool_wg_add_peer now refuses to re-add an
+       existing pubkey (it re-prints the existing pairing string instead), and
+       a region keeps its central port when its gateway box is replaced.
+       To genuinely re-pair: remove the peer (R) first, then add.
+
+  RULES OF THUMB (earned the hard way)
+    • 100% stale/reject is NEVER latency — suspect the protocol first.
+    • "Coinbase arrived" does NOT prove the wallet→node direction works
+      (build_coinbase is local); only `grin-wallet info` / a send exercises it.
+    • Handshake age (wg show latest-handshakes) proves the tunnel, not routing —
+      cryptokey (AllowedIPs) mismatch drops traffic silently after handshake.
+
   ────────────────────────────────────────────────────────────────────────
-  END — planning v1. No code changed. Awaiting go/no-go (esp. Q2 measurement).
+  END — planning v1 + §8 live-test results (2026-07-05). Model C is verified;
+  next: GUI/UI/UX pass on web + bash (add-ons branch), then mainnet sizing.
   ────────────────────────────────────────────────────────────────────────

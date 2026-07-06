@@ -1,5 +1,14 @@
 # Script 07 — Public Mining Pool (Design)
 
+> ⚠ **SUPERSEDED — multi-region (§3–4) was re-architected to Model C (2026-06).**
+> The satellite/relay "node + stratum proxy + share relay per region" design described in
+> §3, §4, and §11 below is **removed**. Regions are now **thin stratum gateways** (HAProxy +
+> WireGuard) that forward miner stratum to ONE central node + wallet — no edge node/wallet, no
+> `/api/shares` ingestion API, no `hub_shared_secret`. **Authoritative Model C design:**
+> [`flowcharts/script07_mining_public_planning.txt`](../../flowcharts/script07_mining_public_planning.txt)
+> and the "Multi-region — Model C" section of `.claude/CLAUDE.md`. The rest of this doc (database,
+> API, reward pipeline, payments, white-label, UI) is still current.
+
 **Product:** `scripts/07_grin_mining_public_pool.sh` + web app under `web/07_mining_pool_public/`.
 **Scope:** the complete public-pool design — architecture, deployment modes, multi-region
 federation, database, API, reward pipeline, payments, white-label, and UI/UX.
@@ -102,7 +111,9 @@ writes a `withdrawal_events` row.
 
 ---
 
-## 3. Deployment modes (hub-and-spoke)
+## 3. Deployment modes (hub-and-spoke) — ⚠ SUPERSEDED by Model C
+> The `satellite` role below was removed. Roles are now `singlebox | hub` (app) plus a thin
+> `gateway` (HAProxy+WireGuard, no app). See the Model C plan + CLAUDE.md.
 
 Script 07 has a **mode selector** (may be passed non-interactively as `$1`):
 
@@ -123,7 +134,11 @@ Script 07 ─ install mode:
 
 ---
 
-## 4. Multi-region — why SQLite stays, and how shares federate
+## 4. Multi-region — why SQLite stays, and how shares federate — ⚠ SUPERSEDED by Model C
+> Shares no longer "federate" over HTTP. Gateways forward raw stratum over WireGuard to a
+> per-region central listener port; the central box records every share directly (still
+> single-writer SQLite). The `/api/shares` + `/api/blocks` transport below is removed.
+> The SQLite-single-writer rationale still holds. See the Model C plan + CLAUDE.md.
 
 ### Single-writer by design
 Trace every arrow that reaches the DB: there is exactly **one** — `Central API → DB`. Satellites,

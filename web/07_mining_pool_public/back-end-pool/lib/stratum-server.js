@@ -6,7 +6,7 @@
 //   1. Miner connects via TCP
 //   2. Miner sends "login" (grin_address[.worker_name])
 //   3. Server replies "ok" and immediately pushes current job
-//   4. Server pushes "job" to ALL miners whenever block-monitor calls setNewJob()
+//   4. Server pushes "job" to ALL miners whenever NodeStratumClient calls setNewJob()
 //   5. Miner sends "submit" with { edge_bits, height, job_id, nonce, pow: [...] }
 //   6. Miner may also send "getjobtemplate" or "status" at any time
 
@@ -28,14 +28,66 @@ const IncentivesManager = require('./incentives');
 const JOB_WINDOW = 10;
 
 // Grin block reward is a fixed 60 GRIN (no halving). Used when crediting a found
-// block to the local DB (single-box / hub-primary). Satellites relay instead.
+// block to the local DB. Under Model C all regions submit here, so this box always credits.
 const GRIN_BLOCK_REWARD = 60;
+
+// PROXY-protocol v2 12-byte signature: "\r\n\r\n\0\r\nQUIT\n".
+// Regional gateways (HAProxy `send-proxy-v2`) prepend this binary header to each forwarded
+// stratum connection so the central box recovers the REAL miner IP instead of the tunnel IP.
+const PROXY_V2_SIG = Buffer.from([0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A]);
+
+// Largest PROXY v2 header we will buffer before deciding. A basic `send-proxy-v2` TCP header
+// is 16 + 12 (IPv4) or 16 + 36 (IPv6) bytes; 256 leaves generous room for small TLVs while
+// capping a junk/slowloris header that matches the signature but never completes.
+const PROXY_V2_MAX = 256;
+
+// Parse a PROXY-protocol v2 header from the front of `buf` (pure JS, no native module).
+// Returns one of:
+//   { state: 'need-more' }               — not enough bytes yet to decide or complete
+//   { state: 'absent' }                  — present bytes are NOT a PROXY v2 header (direct miner)
+//   { state: 'parsed', ip, consumed }    — header consumed; `ip` = real client IP (null for LOCAL/
+//                                          unknown family → keep the socket's own address)
+function parseProxyV2Header(buf) {
+  // Reject as soon as any known signature byte mismatches — a real stratum client's first byte
+  // is '{' (0x7B) ≠ 0x0D, so direct connections decide 'absent' on byte 0.
+  const cmp = Math.min(buf.length, PROXY_V2_SIG.length);
+  for (let i = 0; i < cmp; i++) {
+    if (buf[i] !== PROXY_V2_SIG[i]) return { state: 'absent' };
+  }
+  if (buf.length < 16) return { state: 'need-more' };       // need the full fixed header
+
+  const verCmd = buf[12];
+  if ((verCmd & 0xF0) !== 0x20) return { state: 'absent' }; // high nibble must be version 2
+  const command  = verCmd & 0x0F;                            // 0 = LOCAL, 1 = PROXY
+  const family   = (buf[13] & 0xF0) >> 4;                    // 1 = AF_INET, 2 = AF_INET6
+  const addrLen  = buf.readUInt16BE(14);
+  const total    = 16 + addrLen;
+  if (buf.length < total) return { state: 'need-more' };
+
+  // LOCAL (e.g. a health probe) carries no meaningful address — keep the socket's own IP.
+  if (command === 0) return { state: 'parsed', ip: null, consumed: total };
+
+  let ip = null;
+  if (family === 1 && addrLen >= 12) {
+    // IPv4 address block: src(4) dst(4) sport(2) dport(2)
+    ip = `${buf[16]}.${buf[17]}.${buf[18]}.${buf[19]}`;
+  } else if (family === 2 && addrLen >= 36) {
+    // IPv6 address block: src(16) dst(16) sport(2) dport(2)
+    const parts = [];
+    for (let i = 0; i < 16; i += 2) parts.push(buf.readUInt16BE(16 + i).toString(16));
+    ip = parts.join(':');
+  }
+  // AF_UNIX / unknown family → leave ip null (caller falls back to socket.remoteAddress).
+  return { state: 'parsed', ip, consumed: total };
+}
 
 class StratumServer {
   constructor(config) {
     this.config = config;
     this.port = config.stratum_port || 3333;
-    this.server = null;
+    // One net.Server per listener: the public stratum_port (direct/local miners) plus one
+    // internal port per region (Model C gateways). All share the socket registry + job below.
+    this.servers = [];
     this.shareValidator = new ShareValidator(config);
     this.minerManager = new MinerManager(config);
     this.incentives = new IncentivesManager(config);
@@ -44,13 +96,14 @@ class StratumServer {
     // Current job pushed by NodeStratumClient via setNewJob()
     this.currentJob = null;
     this.jobCounter = 0;
+    // Map<pool job_id, node job_id> for every job in the valid window. Miners submit
+    // OUR job_id; the node only accepts ITS OWN (the block-version index it re-issues
+    // every ~15s). Forwarding without this translation makes the node call every share
+    // stale. Per-job (not latest-only): a submit may race a fresh job push.
+    this.jobIdMap = new Map();
     // Set by index.js after both are constructed
     this.nodeStratumClient = null;
-    // Optional: set by the satellite entrypoint (setShareRelay) to forward accepted
-    // shares / found blocks to the Central Hub. null in single-box/hub mode.
-    this.shareRelay = null;
-    // Optional: set by index.js (setBlockManager) so found blocks are credited to the
-    // local DB in single-box/hub mode. null on satellites (the hub credits instead).
+    // Set by index.js (setBlockManager) so found blocks are credited to the local DB.
     this.blockManager = null;
   }
 
@@ -59,33 +112,47 @@ class StratumServer {
     this.nodeStratumClient = client;
   }
 
-  // Wire the share relay (satellite mode). Additive: when set, every accepted share
-  // and found block is also emitted to the hub. When null, behaviour is unchanged.
-  setShareRelay(relay) {
-    this.shareRelay = relay;
-  }
-
-  // Wire the block manager (single-box/hub mode) so found blocks are recorded locally.
+  // Wire the block manager so found blocks are recorded locally.
   setBlockManager(bm) {
     this.blockManager = bm;
   }
 
   start() {
-    this.server = net.createServer((socket) => this.handleNewConnection(socket));
+    // Public listener: direct + local miners. Region = config.region (default single-box).
+    this._listen(this.port, '0.0.0.0', this.config.region || 'default');
 
-    this.server.listen(this.port, '0.0.0.0', () => {
-      console.log(`[${new Date().toISOString()}] Stratum server listening on :${this.port}`);
-    });
-
-    this.server.on('error', (err) => {
-      console.error(`[ERROR] Stratum server: ${err.message}`);
-    });
+    // Model C: one internal listener per region, bound to the WireGuard interface only.
+    // Regional gateways tunnel here with a PROXY-v2 header; the listener's region label is
+    // stamped on every share that arrives on it. Empty region_ports = single-box (no-op).
+    const regionPorts = this.config.region_ports || {};
+    const host = this.config.region_listen_host || '127.0.0.1';
+    for (const [region, rawPort] of Object.entries(regionPorts)) {
+      const p = parseInt(rawPort, 10);
+      if (!p || p === this.port) {
+        console.error(`[ERROR] Invalid or duplicate region port for "${region}": ${rawPort} — skipped`);
+        continue;
+      }
+      this._listen(p, host, region);
+    }
 
     setInterval(() => this.pruneInactiveSessions(), 60000);
   }
 
-  // Called by block-monitor whenever the Grin node provides a new block template.
-  // job = { height: number, difficulty: number, pre_pow: string }
+  // Bind one TCP stratum listener. `region` is the static label stamped on every share that
+  // arrives on this socket (so attribution is bound by the tunnel wiring, not a typed string).
+  _listen(port, host, region) {
+    const server = net.createServer((socket) => this.handleNewConnection(socket, region));
+    server.listen(port, host, () => {
+      console.log(`[${new Date().toISOString()}] Stratum listener ${host}:${port} (region=${region})`);
+    });
+    server.on('error', (err) => {
+      console.error(`[ERROR] Stratum listener ${host}:${port} (region=${region}): ${err.message}`);
+    });
+    this.servers.push(server);
+  }
+
+  // Called by NodeStratumClient whenever the node pushes a new job.
+  // job = { height: number, difficulty: number, pre_pow: string, node_job_id: number }
   setNewJob(job) {
     this.jobCounter++;
     this.currentJob = {
@@ -94,6 +161,13 @@ class StratumServer {
       difficulty: job.difficulty,
       pre_pow:    job.pre_pow
     };
+    // Remember which node job this pool job wraps; drop entries older than the
+    // submit window (keys ascend in insertion order, so stop at the first keeper).
+    this.jobIdMap.set(this.jobCounter, job.node_job_id);
+    for (const k of this.jobIdMap.keys()) {
+      if (k >= this.jobCounter - JOB_WINDOW) break;
+      this.jobIdMap.delete(k);
+    }
     console.log(`[${new Date().toISOString()}] New job #${this.jobCounter} height=${job.height} diff=${job.difficulty}`);
     this.broadcastJob();
   }
@@ -111,10 +185,16 @@ class StratumServer {
     }
   }
 
-  handleNewConnection(socket) {
-    const ip = socket.remoteAddress || 'unknown';
+  handleNewConnection(socket, region) {
+    // `ip` may be overwritten below by the PROXY-v2 header (real miner IP behind a gateway).
+    let ip = socket.remoteAddress || 'unknown';
     let sessionId = null;
     let lineBuffer = '';
+    // PROXY-protocol v2 phase: a gateway connection is prefixed with a binary PROXY v2 header;
+    // direct/local miners send none. We buffer raw bytes until we can decide, then switch to
+    // line-based stratum parsing. `proxyDone` flips once the decision is made (parsed or absent).
+    let proxyDone = false;
+    let preBuf = Buffer.alloc(0);
 
     socket.setKeepAlive(true, 60000);
     socket.setTimeout(600000);
@@ -129,10 +209,9 @@ class StratumServer {
       }
     };
 
-    socket.on('data', (data) => {
-      // Buffer incoming bytes and only process complete newline-terminated messages.
-      // Protects against TCP fragmentation splitting a JSON message across data events.
-      lineBuffer += data.toString();
+    // Process whatever complete newline-terminated stratum messages are buffered.
+    // Protects against TCP fragmentation splitting a JSON message across data events.
+    const processLines = () => {
       const lines = lineBuffer.split('\n');
       lineBuffer = lines.pop(); // last element may be partial — keep buffered
 
@@ -151,9 +230,36 @@ class StratumServer {
 
         this.handleMessage(socket, msg, ip,
           (sid) => { sessionId = sid; this.sockets.set(socket, sid); },
-          ()    => sessionId
+          ()    => sessionId,
+          region
         );
       }
+    };
+
+    socket.on('data', (data) => {
+      if (!proxyDone) {
+        preBuf = preBuf.length ? Buffer.concat([preBuf, data]) : Buffer.from(data);
+        const r = parseProxyV2Header(preBuf);
+        if (r.state === 'need-more') {
+          // A signature match that never completes (junk/slowloris) must not buffer forever.
+          if (preBuf.length > PROXY_V2_MAX) { socket.destroy(); }
+          return;
+        }
+        proxyDone = true;
+        let rest;
+        if (r.state === 'parsed') {
+          if (r.ip) ip = r.ip;             // real miner IP from the gateway
+          rest = preBuf.subarray(r.consumed);
+        } else {
+          rest = preBuf;                   // 'absent' → every buffered byte is stratum data
+        }
+        preBuf = Buffer.alloc(0);
+        lineBuffer += rest.toString();
+        processLines();
+        return;
+      }
+      lineBuffer += data.toString();
+      processLines();
     });
 
     socket.on('error', cleanup);
@@ -162,10 +268,10 @@ class StratumServer {
     socket.on('timeout', () => { socket.destroy(); cleanup(); });
   }
 
-  handleMessage(socket, msg, ip, setSession, getSession) {
+  handleMessage(socket, msg, ip, setSession, getSession, region) {
     switch (msg.method) {
       case 'login':
-        this.handleLogin(socket, msg, ip, setSession);
+        this.handleLogin(socket, msg, ip, setSession, region);
         break;
 
       case 'submit':
@@ -195,7 +301,7 @@ class StratumServer {
     }
   }
 
-  handleLogin(socket, msg, ip, setSession) {
+  handleLogin(socket, msg, ip, setSession, region) {
     const { id, params } = msg;
     // params may be an object { login, pass, agent } or a positional array
     const login = params && (typeof params === 'object'
@@ -226,8 +332,8 @@ class StratumServer {
     this.minerManager.ensureMinerExists(parsed.grin_address);
 
     // Capture the miner's source IP into its last-2-IP window (backs the ownership gate for
-    // self-service actions). Raw TCP :3333 → socket.remoteAddress is the true public IP. On a
-    // satellite this is also relayed per-share so the hub records the miner IP, not ours.
+    // self-service actions). `ip` is the real miner IP — direct on :3333, or recovered from
+    // the gateway's PROXY-protocol v2 header on a per-region listener (see handleNewConnection).
     this.minerManager.recordSourceIp(parsed.grin_address, ip);
 
     // Optional `donateN` worker tag → record the miner's voluntary donation %.
@@ -240,7 +346,7 @@ class StratumServer {
       }
     }
 
-    const sessionId = this.minerManager.createSession(parsed.grin_address, parsed.worker_name, ip);
+    const sessionId = this.minerManager.createSession(parsed.grin_address, parsed.worker_name, ip, region);
     setSession(sessionId);
 
     socket.write(JSON.stringify(createLoginResponse(id)) + '\n');
@@ -308,7 +414,12 @@ class StratumServer {
     (async () => {
       let nodeResult = { accepted: true, blockHash: null, error: null };
       if (this.nodeStratumClient) {
-        nodeResult = await this.nodeStratumClient.forwardSubmit(params);
+        // Translate OUR job_id to the node's own id for this job — the node rejects
+        // its unknown ids as stale (see jobIdMap in the constructor).
+        const nodeJobId = this.jobIdMap.get(job_id);
+        nodeResult = await this.nodeStratumClient.forwardSubmit(
+          nodeJobId === undefined ? params : { ...params, job_id: nodeJobId }
+        );
         if (!nodeResult.accepted) {
           this._stat(sessionId, 'rejected');
           console.warn(`[${new Date().toISOString()}] Node rejected share from ${session.grinAddress}: ${nodeResult.error}`);
@@ -324,7 +435,8 @@ class StratumServer {
         session.workerName,
         session.difficulty,
         height,
-        shareHash
+        shareHash,
+        session.region
       );
       if (!result.success) {
         // Node accepted the PoW but we couldn't record it (duplicate share_hash UNIQUE, or DB
@@ -338,36 +450,11 @@ class StratumServer {
       this.minerManager.recordShare(session.grinAddress, session.difficulty);
       this._stat(sessionId, 'accepted');
 
-      // Satellite mode: forward the accepted share to the Central Hub (idempotent —
-      // the hub dedups by share_hash UNIQUE). No-op in single-box/hub mode.
-      if (this.shareRelay) {
-        this.shareRelay.recordShare({
-          grin_address: session.grinAddress,
-          worker_name:  session.workerName,
-          difficulty:   session.difficulty,
-          height,
-          share_hash:   shareHash,
-          // Relay the MINER's source IP so the hub records it (not the satellite's req.ip).
-          // share-relay.js forwards this verbatim through live + failover-replay batches.
-          source_ip:    session.ip,
-          created_at:   Math.floor(Date.now() / 1000)
-        });
-      }
-
       if (nodeResult.blockHash) {
         console.log(`[${new Date().toISOString()}] BLOCK FOUND: height=${height} hash=${nodeResult.blockHash} miner=${session.grinAddress}`);
-        // Record the found block exactly once:
-        //  · satellite mode → relay to the hub (hub dedups by hash UNIQUE)
-        //  · single-box/hub → credit the local DB (creditBlock dedups by hash UNIQUE)
-        if (this.shareRelay) {
-          this.shareRelay.recordBlock({
-            height,
-            hash:       nodeResult.blockHash,
-            nonce,
-            found_by:   session.grinAddress,
-            created_at: Math.floor(Date.now() / 1000)
-          });
-        } else if (this.blockManager) {
+        // Credit the found block to the local DB (creditBlock dedups by hash UNIQUE). Under
+        // Model C every region's submits arrive here, so the central box is the sole crediter.
+        if (this.blockManager) {
           try {
             await this.blockManager.creditBlock(
               height, nodeResult.blockHash, nonce, GRIN_BLOCK_REWARD, session.grinAddress
@@ -437,7 +524,9 @@ class StratumServer {
   }
 
   stop() {
-    if (this.server) this.server.close();
+    for (const server of this.servers) {
+      try { server.close(); } catch (e) { /* already closed */ }
+    }
   }
 
   getStats() {
@@ -462,3 +551,5 @@ class StratumServer {
 }
 
 module.exports = StratumServer;
+// Exposed for unit testing the gateway PROXY-protocol v2 path (see scripts/test-proxy-v2.js).
+module.exports.parseProxyV2Header = parseProxyV2Header;

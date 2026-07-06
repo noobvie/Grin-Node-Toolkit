@@ -22,7 +22,7 @@
             </p>
             <div class="form-group">
                 <label for="acct-addr">Your Grin Address</label>
-                <input type="text" id="acct-addr" placeholder="grin1..." autocomplete="off" spellcheck="false">
+                <input type="text" id="acct-addr" placeholder="grin1… or tgrin1…" autocomplete="off" spellcheck="false">
             </div>
             <button class="btn-save" id="acct-lookup">View Account</button>
             <div class="acct-msg" id="acct-msg"></div>
@@ -241,8 +241,9 @@
         async function lookup() {
             const addr = $id('acct-addr').value.trim();
             const msg = $id('acct-msg');
-            if (!/^grin1[a-z0-9]{20,}$/i.test(addr)) {
-                setMsg(msg, 'Enter a valid Grin address (grin1…)', false);
+            // Accept mainnet grin1… and testnet tgrin1… (the backend validates per-network).
+            if (!/^t?grin1[a-z0-9]{20,}$/i.test(addr)) {
+                setMsg(msg, 'Enter a valid Grin address (grin1… or tgrin1…)', false);
                 return;
             }
             setMsg(msg, 'Loading…', true);

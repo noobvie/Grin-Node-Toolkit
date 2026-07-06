@@ -603,7 +603,7 @@
 
   <div id="panel">
     <h2>Network Snapshot</h2>
-    <p class="filter-note">Active peers — last 7 days</p>
+    <p class="filter-note">Active peers — last 30 days</p>
     <div class="stat-row"><span class="lbl">Total peers</span><span class="val" id="p-total">—</span></div>
     <div class="stat-row">
       <span class="lbl"><span style="color:#ff9900">●</span> Mainnet</span>
@@ -768,8 +768,8 @@
 <script>
 const DATA_URL = "data/peers.json";
 
-// Show peers seen within the last 7 days (matches PEER_HISTORY_DAYS in collector)
-const ACTIVE_WINDOW_SEC = 7 * 24 * 3600;
+// Show peers seen within the last 30 days (matches PEER_HISTORY_DAYS in collector)
+const ACTIVE_WINDOW_SEC = 30 * 24 * 3600;
 
 const NET_COLOR = { mainnet: "#ff9900", testnet: "#00bcd4" };
 // Violet — distinct from orange/cyan/green and legible on both the dark
@@ -1217,7 +1217,7 @@ async function boot() {
   try {
     const data = await fetch(DATA_URL + "?t=" + Date.now()).then(r => r.json());
 
-    // Filter to peers active in the last 7 days (ACTIVE_WINDOW_SEC = PEER_HISTORY_DAYS)
+    // Filter to peers active in the last 30 days (ACTIVE_WINDOW_SEC = PEER_HISTORY_DAYS)
     const now    = Math.floor(Date.now() / 1000);
     const cutoff = now - ACTIVE_WINDOW_SEC;
     const peers  = (data.peers || []).filter(p =>

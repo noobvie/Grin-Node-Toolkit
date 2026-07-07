@@ -600,23 +600,24 @@ _show_node_info() {
         echo -e "    Node   : ${RED}NOT RUNNING${RESET}  ${DIM}(port $api_port not listening)${RESET}"
     fi
 
-    # Coinbase wallet Foreign listener — where the node sends block rewards.
-    # Shown before Stratum: a solo miner's first question is "is my reward
-    # listener up?", so the screen reads node → wallet → mining top to bottom.
+    # Coinbase wallet listener (combined Owner+Foreign on the Owner port) —
+    # where the node sends block rewards. Shown before Stratum: a solo miner's
+    # first question is "is my reward listener up?", so the screen reads
+    # node → wallet → mining top to bottom.
     local wal_port wal_pid wal_toml wal_tmux
-    wal_port=$(sw_foreign_port "$network")
+    wal_port=$(sw_listener_port "$network")
     wal_pid=$(ss -tlnp 2>/dev/null | grep ":$wal_port " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
     wal_toml=$(sw_toml "$network" 2>/dev/null || true)
     if [[ -n "$wal_pid" ]]; then
-        echo -e "    Wallet : ${GREEN}LISTENING${RESET}  ${DIM}(PID $wal_pid, Foreign port $wal_port)${RESET}"
+        echo -e "    Wallet : ${GREEN}LISTENING${RESET}  ${DIM}(PID $wal_pid, Owner+Foreign port $wal_port)${RESET}"
         wal_tmux=$(sw_tmux_name "$network" 2>/dev/null || true)
         if [[ -n "$wal_tmux" ]] && tmux has-session -t "$wal_tmux" 2>/dev/null; then
             echo -e "    Wtmux  : ${GREEN}$wal_tmux${RESET}  ${DIM}(attach: tmux attach -t $wal_tmux)${RESET}"
         fi
     elif [[ -n "$wal_toml" && -f "$wal_toml" ]]; then
-        echo -e "    Wallet : ${RED}NOT RUNNING${RESET}  ${DIM}(configured, Foreign port $wal_port not listening)${RESET}"
+        echo -e "    Wallet : ${RED}NOT RUNNING${RESET}  ${DIM}(configured, Owner+Foreign port $wal_port not listening)${RESET}"
     else
-        echo -e "    Wallet : ${DIM}not configured${RESET}  ${DIM}(Foreign port $wal_port)${RESET}"
+        echo -e "    Wallet : ${DIM}not configured${RESET}  ${DIM}(Owner+Foreign port $wal_port)${RESET}"
     fi
 
     if ss -tlnp 2>/dev/null | grep -q ":$stratum_port "; then
@@ -856,8 +857,10 @@ _do_setup_stratum() {
 
     # BASE URL only — the node appends /v2/foreign itself when calling
     # build_coinbase; a stored ".../v2/foreign" doubles the path and 404s.
-    local default_wallet_url="http://127.0.0.1:3415"
-    [[ "$network" == "testnet" ]] && default_wallet_url="http://127.0.0.1:13415"
+    # Owner port: the solo wallet is a combined Owner+Foreign listener, so the
+    # coinbase Foreign API lives on 3420/13420 (owner_api_include_foreign).
+    local default_wallet_url="http://127.0.0.1:3420"
+    [[ "$network" == "testnet" ]] && default_wallet_url="http://127.0.0.1:13420"
     echo ""
     echo -e "${BOLD}Wallet listener URL${RESET} — where coinbase block rewards are sent."
     echo -e "  Default for local wallet: ${DIM}$default_wallet_url${RESET}  ${DIM}(base URL — the node adds /v2/foreign itself)${RESET}"
@@ -865,14 +868,23 @@ _do_setup_stratum() {
     read -r wallet_url
     [[ "$wallet_url" == "0" ]] && wallet_url=""
 
+    # A stored value is "legacy" and must be normalised if it carries the
+    # /v2/foreign suffix (older setups wrote it → doubles the path) OR still
+    # points at the old Foreign port 3415/13415 (pre-combined-listener; grin's
+    # stock toml ships this uncommented). The solo wallet now serves the Foreign
+    # build_coinbase on the Owner port (3420/13420, owner_api_include_foreign),
+    # so a surviving 3415 leaves the node calling a dead port → no coinbase.
+    local legacy_wallet=0
+    if [[ "$cur_wallet" == *"/v2/foreign\""* || "$cur_wallet" == *":3415\""* || "$cur_wallet" == *":13415\""* ]]; then
+        legacy_wallet=1
+    fi
     # Rewrite when: the operator typed a URL, none is set yet, OR the stored one
-    # carries the legacy /v2/foreign suffix (older setups wrote it — normalise).
-    if [[ -n "$wallet_url" || -z "$cur_wallet" || "$cur_wallet" == *"/v2/foreign\""* ]]; then
+    # is legacy (stale path or old Foreign port).
+    if [[ -n "$wallet_url" || -z "$cur_wallet" || $legacy_wallet -eq 1 ]]; then
         local new_url="${wallet_url:-$default_wallet_url}"
-        # Legacy value being normalised with Enter → keep its host:port, drop the path.
-        if [[ -z "$wallet_url" && "$cur_wallet" == *"/v2/foreign\""* ]]; then
-            new_url="${cur_wallet#*\"}"; new_url="${new_url%\"*}"
-        fi
+        # Legacy value normalised with Enter → snap to the network's Owner-port
+        # default (solo wallet is always local, so 127.0.0.1:<owner_port>).
+        [[ -z "$wallet_url" && $legacy_wallet -eq 1 ]] && new_url="$default_wallet_url"
         new_url="${new_url%/}"; new_url="${new_url%/v2/foreign}"
         local esc_url; esc_url=$(_sed_escape_rhs "$new_url")
         if grep -qE '^#?[[:space:]]*wallet_listener_url[[:space:]]*=' "$grin_toml" 2>/dev/null; then
@@ -1497,8 +1509,11 @@ _solo_node_file_log_level() {
 # the network's grin-server.toml; falls back to the toolkit default foreign port.
 #   $1 = network (mainnet|testnet)  →  echoes a full http URL ending in /v2/foreign
 _solo_wallet_listener_url() {
-    local net="$1" default_port=3415 toml url=""
-    [[ "$net" == "testnet" ]] && default_port=13415
+    # Fallback port is the combined listener's Owner port (owner_api_include_foreign
+    # serves the Foreign API here) — matches the wallet on 3420/13420, not the old
+    # 3415/13415 Foreign listener. The direct probe still needs the /v2/foreign path.
+    local net="$1" default_port=3420 toml url=""
+    [[ "$net" == "testnet" ]] && default_port=13420
     toml="/opt/grin/node/${net}-prune/grin-server.toml"
     if [[ -f "$toml" ]]; then
         url=$(grep -E '^[[:space:]]*wallet_listener_url[[:space:]]*=' "$toml" 2>/dev/null \

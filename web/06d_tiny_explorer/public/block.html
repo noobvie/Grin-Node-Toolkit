@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Block — Tiny Explorer | Grin Block Details</title>
+  <meta name="description" content="Grin mainnet block details on Tiny Explorer: height, hash, timestamp, difficulty, PoW nonce, kernels, inputs, outputs, fees, and reward.">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#ff8c00">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Tiny Explorer">
+  <meta property="og:title" content="Grin Block Details — Tiny Explorer">
+  <meta property="og:description" content="Full Grin block detail: hash, difficulty, PoW nonce, kernels, inputs, outputs, fees, and reward.">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/tiny-explorer.css">
+  <script>(function(){var t=localStorage.getItem('tinyexp-theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
+</head>
+<body data-page="block">
+
+  <header class="tx-header">
+    <div class="tx-header-inner">
+      <a href="/" class="tx-brand">
+        <img src="/grin-logo.svg" class="tx-logo" alt="Grin logo">
+        <span class="tx-brand-text">
+          <span class="tx-title">Tiny<span class="tx-accent">Explorer</span></span>
+          <span class="tx-slogan" id="tx-slogan">The featherweight window into Grin — every block, one link away.</span>
+        </span>
+      </a>
+      <div class="tx-header-spacer"></div>
+      <form class="tx-search" id="tx-search-form" role="search">
+        <input id="tx-search-input" type="text" placeholder="Block height or hash…  ( / )" autocomplete="off" spellcheck="false" aria-label="Search by block height or hash">
+        <button class="tx-btn" type="submit">Search</button>
+      </form>
+      <button id="tx-theme-toggle" class="tx-theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">☾</button>
+    </div>
+  </header>
+
+  <main class="tx-wrap tx-main">
+
+    <div id="block-loading">
+      <div class="tx-block-head"><h1>Loading block…</h1></div>
+      <div class="tx-rows">
+        <div class="tx-row"><span class="tx-skel"></span></div>
+        <div class="tx-row"><span class="tx-skel"></span></div>
+        <div class="tx-row"><span class="tx-skel"></span></div>
+      </div>
+    </div>
+
+    <div id="block-content" style="display:none">
+      <div class="tx-block-head">
+        <h1 id="block-title">Block</h1>
+        <nav class="tx-nav">
+          <a id="nav-prev" href="#">← Prev</a>
+          <a id="nav-next" href="#">Next →</a>
+        </nav>
+      </div>
+
+      <div class="tx-rows" id="block-rows"></div>
+
+      <div class="tx-list">
+        <h3 id="kernels-heading">Kernels</h3>
+        <div class="tx-list-body" id="kernels-body"></div>
+      </div>
+
+      <div class="tx-note">
+        The <strong>kernel excess</strong> is Grin's equivalent of a transaction ID. Because amounts and
+        addresses never appear on-chain, a payer proves a payment settled by pointing to the kernel excess
+        of the block that included it — no amount or address is revealed.
+      </div>
+
+      <details class="tx-list" style="padding:0">
+        <summary style="padding:13px 16px;cursor:pointer;font-weight:700" id="inputs-heading">Inputs</summary>
+        <div class="tx-list-body" id="inputs-body"></div>
+      </details>
+
+      <details class="tx-list" style="padding:0">
+        <summary style="padding:13px 16px;cursor:pointer;font-weight:700" id="outputs-heading">Outputs</summary>
+        <div class="tx-list-body" id="outputs-body"></div>
+      </details>
+
+      <details class="tx-details">
+        <summary>Raw block data</summary>
+        <div class="tx-details-body" style="padding:0"><pre class="tx-raw" id="raw-json"></pre></div>
+      </details>
+    </div>
+
+  </main>
+
+  <footer class="tx-footer">
+    <div id="tx-footer-text"></div>
+  </footer>
+
+  <div id="tx-toast" class="tx-toast" role="status" aria-live="polite"></div>
+
+  <script src="/js/tiny-explorer.js"></script>
+  <script src="/js/analytics.js"></script>
+</body>
+</html>

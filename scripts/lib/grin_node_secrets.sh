@@ -173,6 +173,19 @@ grin_grinscan_sync() {
     return 0
 }
 
+# Tiny Explorer 06d — re-copy the mainnet secret VALUES into its data dir; restart
+# grin-tiny-explorer on change. No-op when the product is absent.
+grin_sync_tiny_explorer() {
+    local base="/opt/grin/tiny-explorer" dir changed=0
+    [[ -d "$base" ]] || return 0
+    dir=$(grin_live_node_dir mainnet 2>/dev/null || true)
+    [[ -n "$dir" ]] || return 0
+    _gns_copy_if_changed "$dir/.foreign_api_secret" "$base/.foreign_api_secret" && changed=1 || true
+    _gns_copy_if_changed "$dir/.api_secret"         "$base/.api_secret"         && changed=1 || true
+    [[ "$changed" == 1 ]] && { systemctl restart grin-tiny-explorer 2>/dev/null || true; }
+    return 0
+}
+
 # grin-wallet products — repoint node_api_secret_path to the live node's foreign
 # secret. Only touches wallets pointed at a LOCAL node. Does NOT restart the
 # listener (the patch takes effect on the wallet's next start — auto-restarting a
@@ -231,6 +244,7 @@ grin_sync_node_api_nginx() {
 grin_secrets_sync_all() {
     grin_sync_collector       || true
     grin_grinscan_sync        || true
+    grin_sync_tiny_explorer   || true
     grin_sync_wallets         || true
     grin_sync_node_api_nginx  || true
     return 0

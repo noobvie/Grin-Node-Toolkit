@@ -58,9 +58,11 @@
   .slogan { color: var(--text); font-size: 1rem; margin-top: .45rem; opacity: .92; }
   .theme-toggle {
     background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
-    border-radius: 999px; padding: .5rem .9rem; font-family: inherit; font-size: .95rem;
+    border-radius: 999px; padding: .4rem .7rem; font-family: inherit; font-size: .85rem;
     cursor: pointer; flex: none; transition: background .2s; text-decoration: none; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: .35rem;
   }
+  .theme-toggle .ico { font-size: 1rem; line-height: 1; }
   .theme-toggle:hover { background: var(--border); }
 
   .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%;
@@ -286,6 +288,9 @@
   @media (max-width: 560px) {
     header { flex-direction: column; align-items: stretch; gap: .9rem; }
     .header-actions { flex-wrap: wrap; }
+    /* phones: header buttons collapse to icon-only — emoji + title carry the meaning */
+    .header-actions .lbl { display: none; }
+    .header-actions .theme-toggle { padding: .5rem .6rem; }
     .freshness { justify-content: flex-start; margin-top: 0; }
     /* one tile per row on mobile — avoids the ragged 2+1 wrap */
     .tiles { grid-template-columns: 1fr; }
@@ -336,9 +341,9 @@
     </div>
   </div>
   <div class="header-actions">
-    <a class="theme-toggle" href="setup-solo-mining.html">⚙ Miner Setup</a>
-    <button class="theme-toggle" id="tz-toggle" type="button" aria-label="Toggle UTC / local time">🕓 Local</button>
-    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme">☾ Dark</button>
+    <a class="theme-toggle" href="setup-solo-mining.html" title="Miner setup"><span class="ico" aria-hidden="true">⚙</span><span class="lbl">Setup</span></a>
+    <button class="theme-toggle" id="tz-toggle" type="button" aria-label="Toggle UTC / local time"><span class="ico" aria-hidden="true">🕓</span><span class="lbl" id="tz-lbl">Local</span></button>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme"><span class="ico" aria-hidden="true" id="theme-ico">☾</span><span class="lbl" id="theme-lbl">Dark</span></button>
   </div>
 </header>
 
@@ -596,6 +601,8 @@
 
 <footer>
   Run by <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer" style="color:var(--main)">Grin Node Toolkit</a> — script 07 (Grin Solo Mining Pool Setup). Happy Grinning (ツ)
+  &nbsp;·&nbsp;
+  Made with ❤️ from Saigon <svg viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes" style="vertical-align:-2px;border-radius:2px"><rect width="27" height="18" fill="#FFCD00"/><rect y="4" width="27" height="2" fill="#DA251D"/><rect y="8" width="27" height="2" fill="#DA251D"/><rect y="12" width="27" height="2" fill="#DA251D"/></svg>
 </footer>
 
 <script>
@@ -604,7 +611,12 @@
 
   // ── Theme ──
   var root = document.documentElement, toggle = document.getElementById('theme-toggle');
-  function applyTheme(t) { root.setAttribute('data-theme', t); toggle.textContent = (t === 'light') ? '☀ Light' : '☾ Dark'; }
+  function applyTheme(t) {
+    root.setAttribute('data-theme', t);
+    var lt = (t === 'light');
+    document.getElementById('theme-ico').textContent = lt ? '☀' : '☾';
+    document.getElementById('theme-lbl').textContent = lt ? 'Light' : 'Dark';
+  }
   var saved = null; try { saved = localStorage.getItem('grinSoloTheme'); } catch (e) {}
   if (!saved) saved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
   applyTheme(saved);
@@ -1922,7 +1934,7 @@
   var tzBtn = document.getElementById('tz-toggle');
   function updateTzUI() {
     var utc = (TZMODE === 'utc');
-    tzBtn.textContent = '🕓 ' + (utc ? 'UTC' : 'Local');
+    document.getElementById('tz-lbl').textContent = utc ? 'UTC' : 'Local';
     tzBtn.title = utc ? 'Times shown in UTC — click for your local zone (' + localTzLabel() + ')'
                       : 'Times shown in your local zone (' + localTzLabel() + ') — click for UTC';
     var lbl = utc ? 'UTC' : 'Local';
@@ -2008,6 +2020,16 @@
     else { freshBox.className = 'freshness stale'; freshText.textContent = 'Stale · updated ' + relAge(age) + ' ago'; }
   }
 
+  // ── Initial-load fast retry ──
+  // The regular cadence is one poll every 120s (POLL_MS). If the FIRST poll after a
+  // page load returns no node data (a transient blip — e.g. a burst 503 on a hard
+  // refresh, or the node a beat slow to answer), the panels would otherwise sit blank
+  // for the full 120s until the next poll. Instead, retry quickly a few times so a
+  // one-off failure self-heals in ~1s. Bounded (INITIAL_RETRY_MAX) so a genuinely
+  // unreachable node is not hammered — once that budget is spent we fall back to the
+  // normal 120s cadence, which still recovers on its own.
+  var INITIAL_RETRY_MS = 100, INITIAL_RETRY_MAX = 8, initialRetries = 0, gotFirstData = false;
+
   function poll() {
     Promise.all([
       pollNet('main'), pollNet('test'), pollWallet('main'), pollWallet('test'),
@@ -2020,6 +2042,10 @@
       tickFresh();
       renderDerived();
       if (SPLIT.person) renderPerson();   // refresh live worker hashrates each tick
+      if (lastPollOk) { gotFirstData = true; }
+      else if (!gotFirstData && initialRetries < INITIAL_RETRY_MAX) {
+        initialRetries++; setTimeout(poll, INITIAL_RETRY_MS);
+      }
     });
   }
   poll(); setInterval(poll, POLL_MS); setInterval(tickFresh, 1000);

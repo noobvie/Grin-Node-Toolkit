@@ -1450,7 +1450,7 @@ _solo_stats_proxy_location() {
     cat << EOF
     # Proxy → $1 node Owner API (auth injected here, never exposed to the browser)
     location = /api/status/$1 {
-        limit_req zone=solo_stats_api burst=10 nodelay;
+        limit_req zone=solo_stats_api burst=40 nodelay;
         proxy_pass         http://127.0.0.1:$2/v2/owner;
         proxy_method       POST;
         proxy_set_header   Content-Type "application/json";
@@ -1538,7 +1538,7 @@ _solo_stats_wallet_location() {
     cat << EOF
     # Liveness probe → $1 wallet Foreign API (the listener the node builds coinbase from)
     location = /api/wallet/$1 {
-        limit_req zone=solo_stats_api burst=10 nodelay;
+        limit_req zone=solo_stats_api burst=40 nodelay;
         proxy_pass            $2;
         proxy_method          POST;
         proxy_set_header      Content-Type "application/json";
@@ -2107,17 +2107,26 @@ CRON
         _solo_prompt_access_lock
     fi
 
-    # Dedicated zone (NOT the shared grin_api 30r/m used by scripts 04/06): the
-    # page polls up to 4 proxied endpoints every 10s, so one viewer alone draws
-    # ~24 req/min. 90r/m gives a NAT'd / multi-tab audience real headroom.
+    # Dedicated zone (NOT the shared grin_api 30r/m used by scripts 04/06): each page
+    # load fires 4 proxied /api/* calls, and the page's initial-load fast-retry can
+    # re-fire them a few times to self-heal a transient blank load. The 90r/m rate is
+    # ample for steady state (the page polls only every 120s); the burst (set to 40 on
+    # the /api/* locations below) is what absorbs the per-load fan-out + those retries
+    # and several rapid hard-refreshes without 503-ing the panels.
     nginx_ensure_rate_limit_zone "solo_stats_api" "90r/m" "10m" "script07-solo-stats"
 
     # Abuse guards for the PUBLIC surface that had none. /api/* is already throttled
-    # by solo_stats_api above; the static page + /data/*.json (polled 7×/10s/viewer,
-    # ~42 req/min) and raw connections were unprotected. solo_static is sized well
-    # above legit polling (180r/m ≈ 4× a single viewer, generous for NAT/multi-tab)
-    # so it only bites a flood; solo_conn caps concurrent connections per IP to blunt
-    # slowloris. Dedicated script07- zones — unique names, no collision with 04/05/06.
+    # by solo_stats_api above; the static page + /data/*.json and raw connections were
+    # unprotected. Sizing note: the guard protects against a genuine flood, but each
+    # ordinary PAGE LOAD is itself a burst — one load fires ~13 requests against this
+    # one server-level bucket (index.html + logo + config.json + 8 polled data JSON +
+    # price + split; the 4 /api/* calls use solo_stats_api, not this zone). Steady
+    # state is trivial (the page polls only every 120s ≈ 6 req/min/viewer), so the
+    # RATE is generous; the value that matters is BURST, which must swallow several
+    # rapid full reloads. burst=60 ≈ ~4–5 back-to-back loads before throttling — a fast
+    # refresh no longer 503s the HTML document, while a sustained >3/s flood still bites.
+    # solo_conn caps concurrent connections per IP to blunt slowloris. Dedicated
+    # script07- zones — unique names, no collision with 04/05/06.
     nginx_ensure_rate_limit_zone "solo_static" "180r/m" "10m" "script07-solo-static"
     nginx_ensure_conn_limit_zone "solo_conn" "10m" "script07-solo-conn"
 
@@ -2199,7 +2208,10 @@ server {
     # ample headroom for NAT'd/multi-tab viewers (HTTP/2 multiplexes to ~1 conn per
     # tab) while stopping a single IP from holding the worker pool open. Raise it
     # here if a large shared-NAT audience hits spurious 503s.
-    limit_req  zone=solo_static burst=20 nodelay;
+    # burst=60: each page load is a ~13-request burst (see zone note above), so a small
+    # burst 503s the HTML document itself on a fast refresh. 60 swallows ~4–5 rapid
+    # reloads; nodelay serves them immediately rather than queuing.
+    limit_req  zone=solo_static burst=60 nodelay;
     limit_conn solo_conn 50;
 $_ACCESS_AUTH_BLOCK
 

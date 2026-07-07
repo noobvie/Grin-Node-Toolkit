@@ -3,20 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Block — Tiny Explorer | Grin Block Details</title>
-  <meta name="description" content="Grin mainnet block details on Tiny Explorer: height, hash, timestamp, difficulty, PoW nonce, kernels, inputs, outputs, fees, and reward.">
+  <title>Output — Tiny Explorer | Grin Commitment Lookup</title>
+  <meta name="description" content="Look up a Grin output by commitment on Tiny Explorer: type, spent/unspent status, block height, timestamp, and confirmations on the MimbleWimble blockchain.">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#ff8c00">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Tiny Explorer">
-  <meta property="og:title" content="Grin Block Details — Tiny Explorer">
-  <meta property="og:description" content="Full Grin block detail: hash, difficulty, PoW nonce, kernels, inputs, outputs, fees, and reward.">
+  <meta property="og:title" content="Grin Output Lookup — Tiny Explorer">
+  <meta property="og:description" content="Look up a Grin output by its commitment: coinbase or transaction, spent or unspent, block height, and confirmations.">
   <meta name="twitter:card" content="summary">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/css/tiny-explorer.css">
   <script>(function(){var t=localStorage.getItem('tinyexp-theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
 </head>
-<body data-page="block">
+<body data-page="output">
 
   <header class="tx-header">
     <div class="tx-header-inner">
@@ -29,7 +29,7 @@
       </a>
       <div class="tx-header-spacer"></div>
       <form class="tx-search" id="tx-search-form" role="search">
-        <input id="tx-search-input" type="text" placeholder="Block height or hash…  ( / )" autocomplete="off" spellcheck="false" aria-label="Search by block height or hash">
+        <input id="tx-search-input" type="text" placeholder="Height, hash, kernel or output…  ( / )" autocomplete="off" spellcheck="false" aria-label="Search by block height, hash, kernel excess or output commitment">
         <button class="tx-btn" type="submit">Search</button>
       </form>
       <button id="tx-theme-toggle" class="tx-theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">☾</button>
@@ -38,8 +38,8 @@
 
   <main class="tx-wrap tx-main">
 
-    <div id="block-loading">
-      <div class="tx-block-head"><h1>Loading block…</h1></div>
+    <div id="entity-loading">
+      <div class="tx-block-head"><h1>Looking up output…</h1></div>
       <div class="tx-rows">
         <div class="tx-row"><span class="tx-skel"></span></div>
         <div class="tx-row"><span class="tx-skel"></span></div>
@@ -47,43 +47,26 @@
       </div>
     </div>
 
-    <div id="block-content" style="display:none">
+    <div id="entity-content" style="display:none">
       <div class="tx-block-head">
-        <h1 id="block-title">Block</h1>
-        <nav class="tx-nav">
-          <a id="nav-prev" href="#">← Prev</a>
-          <a id="nav-next" href="#">Next →</a>
-        </nav>
+        <h1 id="entity-title">Output</h1>
       </div>
 
-      <div class="tx-rows" id="block-rows"></div>
-
-      <div class="tx-list">
-        <h3 id="kernels-heading">Kernels</h3>
-        <div class="tx-list-body" id="kernels-body"></div>
-      </div>
+      <div class="tx-rows" id="entity-rows"></div>
 
       <div class="tx-note">
-        The <strong>kernel excess</strong> is Grin's equivalent of a transaction ID. Because amounts and
-        addresses never appear on-chain, a payer proves a payment settled by pointing to the kernel excess
-        of the block that included it — no amount or address is revealed.
+        An <strong>output commitment</strong> is a Pedersen commitment that hides the amount it holds. A
+        commitment stays in the UTXO set until it is spent; once spent (and pruned) it can no longer be
+        located on a pruned node. This page shows the current status only — never the amount.
       </div>
 
-      <details class="tx-list" style="padding:0">
-        <summary style="padding:13px 16px;cursor:pointer;font-weight:700" id="inputs-heading">Inputs</summary>
-        <div class="tx-list-body" id="inputs-body"></div>
-      </details>
-
-      <details class="tx-list" style="padding:0">
-        <summary style="padding:13px 16px;cursor:pointer;font-weight:700" id="outputs-heading">Outputs</summary>
-        <div class="tx-list-body" id="outputs-body"></div>
-      </details>
-
       <details class="tx-details">
-        <summary>Raw block data</summary>
+        <summary>Raw output data</summary>
         <div class="tx-details-body" style="padding:0"><pre class="tx-raw" id="raw-json"></pre></div>
       </details>
     </div>
+
+    <div id="entity-notfound" style="display:none"></div>
 
   </main>
 

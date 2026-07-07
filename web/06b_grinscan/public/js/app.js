@@ -299,6 +299,19 @@ function startAgeCountdown() {
   }, 1000);
 }
 
+// Route a search term to the right page by format. Height = decimal; block hash
+// = 64 hex (32 bytes); kernel excess and output commitment are both 66 hex
+// (33-byte compressed points) so they can't be told apart here — 66-hex goes to
+// the kernel page, which auto-falls-back to the output page on a miss. Unknown
+// shapes fall through to the block page for a clean server-side 404.
+function searchTarget(q) {
+  const s = q.trim().replace(/^0x/i, '');
+  if (/^\d+$/.test(s))             return '/block.html?h='  + encodeURIComponent(s);
+  if (/^[0-9a-fA-F]{64}$/.test(s)) return '/block.html?h='  + encodeURIComponent(s);
+  if (/^[0-9a-fA-F]{66}$/.test(s)) return '/kernel.html?ex=' + encodeURIComponent(s);
+  return '/block.html?h=' + encodeURIComponent(s);
+}
+
 // Search
 function initSearch() {
   const form = document.getElementById('search-form');
@@ -308,7 +321,7 @@ function initSearch() {
     e.preventDefault();
     const q = inp.value.trim();
     if (!q) return;
-    window.location.href = '/block.html?h=' + encodeURIComponent(q);
+    window.location.href = searchTarget(q);
   });
   // "/" shortcut
   document.addEventListener('keydown', e => {
@@ -383,11 +396,14 @@ function setBlockDetail(block) {
       const lockTag = k.lock_height
         ? `<span style="color:var(--muted);font-size:12px;">lock: ${fmtNum(k.lock_height)}</span>`
         : '';
+      const excessEl = k.excess
+        ? `<a class="gs-kernel-excess gs-entity-link" href="/kernel.html?ex=${encodeURIComponent(k.excess)}" title="Look up kernel">${k.excess}</a>`
+        : `<span class="gs-kernel-excess"></span>`;
       div.innerHTML = `
         <span class="badge ${kernelBadgeClass(k.features)}">${kernelBadgeLabel(k.features)}</span>
         <span style="color:var(--muted);font-size:12px;">fee: ${fee}</span>
         ${lockTag}
-        <span class="gs-kernel-excess">${k.excess || ''}</span>`;
+        ${excessEl}`;
       kList.appendChild(div);
     });
   }
@@ -440,9 +456,10 @@ function setBlockDetail(block) {
       spentSpan.className   = 'gs-spent-tag ' + (o.spent ? 'spent' : 'unspent');
       spentSpan.textContent = o.spent ? 'SPENT' : 'UNSPENT';
 
-      const commitSpan = document.createElement('span');
-      commitSpan.className   = 'gs-kernel-excess';
+      const commitSpan = document.createElement(commit ? 'a' : 'span');
+      commitSpan.className   = 'gs-kernel-excess' + (commit ? ' gs-entity-link' : '');
       commitSpan.textContent = commit;
+      if (commit) { commitSpan.href = '/output.html?c=' + encodeURIComponent(commit); commitSpan.title = 'Look up output'; }
 
       div.appendChild(badge);
       div.appendChild(spentSpan);
@@ -553,6 +570,161 @@ function showCacheMiss() {
   }
 }
 
+// ── KERNEL / OUTPUT DETAIL PAGES ──────────────────────────────────────────────
+
+// Build a gs-detail-row. If href is given the value is a link (→ containing block).
+function gsRow(label, valueText, copyVal, href) {
+  const row = document.createElement('div'); row.className = 'gs-detail-row';
+  const l = document.createElement('span'); l.className = 'gs-detail-label'; l.textContent = label;
+  const v = document.createElement('span'); v.className = 'gs-detail-value';
+  const t = document.createElement(href ? 'a' : 'span');
+  t.className = 'gs-detail-value-text'; t.style.wordBreak = 'break-all'; t.textContent = valueText;
+  if (href) { t.href = href; t.classList.add('gs-entity-link'); }
+  v.appendChild(t);
+  if (copyVal) {
+    const b = document.createElement('button'); b.className = 'gs-copy-btn'; b.textContent = '📋 Copy';
+    b.addEventListener('click', () => copyText(copyVal, b));
+    v.appendChild(b);
+  }
+  row.appendChild(l); row.appendChild(v);
+  return row;
+}
+
+// Grin serialises kernel features as a bare string ("Coinbase") or an
+// externally-tagged object ({"Plain":{"fee":7000000}} / {"HeightLocked":{…}}).
+function kernelFeatures(tk) {
+  const f = tk && tk.features;
+  if (typeof f === 'string') return { type: f, fee: tk.fee, lock_height: tk.lock_height };
+  if (f && typeof f === 'object') {
+    const type = Object.keys(f)[0] || 'Unknown';
+    const inner = f[type] || {};
+    const fee = typeof inner.fee === 'number' ? inner.fee : undefined;
+    return { type, fee, lock_height: inner.lock_height };
+  }
+  return { type: 'Unknown' };
+}
+
+function showEntity() {
+  const w = document.getElementById('entity-detail-wrap');
+  const e = document.getElementById('entity-error');
+  if (w) w.style.display = '';
+  if (e) e.style.display = 'none';
+}
+
+function renderKernel(located, ref) {
+  const tk   = located.tx_kernel || {};
+  const feat = kernelFeatures(tk);
+  const excess = tk.excess || ref;
+
+  document.title = 'Kernel ' + excess.slice(0, 12) + '… — GrinScan';
+  const bc = document.getElementById('entity-breadcrumb');
+  if (bc) bc.textContent = 'Kernel';
+
+  const rows = document.getElementById('entity-rows');
+  rows.innerHTML = '';
+  rows.appendChild(gsRow('Excess', excess, excess));
+  rows.appendChild(gsRow('Type', feat.type));
+  if (feat.type !== 'Coinbase') rows.appendChild(gsRow('Fee', feat.fee != null ? fmtFee(feat.fee) : '—'));
+  if (feat.lock_height) rows.appendChild(gsRow('Lock Height', fmtNum(feat.lock_height)));
+  if (located.height != null) rows.appendChild(gsRow('Block Height', fmtNum(located.height), null, '/block.html?h=' + located.height));
+  if (located._block_hash) rows.appendChild(gsRow('Block Hash', located._block_hash, located._block_hash, '/block.html?h=' + located._block_hash));
+  if (located._timestamp) rows.appendChild(gsRow('Timestamp', new Date(located._timestamp * 1000).toUTCString() + '  (' + fmtAge(located._timestamp) + ')'));
+  if (located._confirmations != null) rows.appendChild(gsRow('Confirmations', fmtNum(located._confirmations)));
+  if (located.mmr_index != null) rows.appendChild(gsRow('Kernel MMR Index', fmtNum(located.mmr_index)));
+  if (tk.excess_sig) rows.appendChild(gsRow('Excess Signature', tk.excess_sig, tk.excess_sig));
+
+  wireRaw(located);
+  showEntity();
+}
+
+function renderOutput(out, ref) {
+  const commit = out.commit || ref;
+  const isCb = (out.output_type || '').toLowerCase() === 'coinbase';
+
+  document.title = 'Output ' + commit.slice(0, 12) + '… — GrinScan';
+  const bc = document.getElementById('entity-breadcrumb');
+  if (bc) bc.textContent = 'Output';
+
+  const rows = document.getElementById('entity-rows');
+  rows.innerHTML = '';
+  rows.appendChild(gsRow('Commitment', commit, commit));
+  rows.appendChild(gsRow('Type', isCb ? 'Coinbase' : 'Transaction'));
+  rows.appendChild(gsRow('Status', out.spent ? 'SPENT' : 'UNSPENT'));
+  if (out.block_height != null) rows.appendChild(gsRow('Block Height', fmtNum(out.block_height), null, '/block.html?h=' + out.block_height));
+  if (out._block_hash) rows.appendChild(gsRow('Block Hash', out._block_hash, out._block_hash, '/block.html?h=' + out._block_hash));
+  if (out._timestamp) rows.appendChild(gsRow('Timestamp', new Date(out._timestamp * 1000).toUTCString() + '  (' + fmtAge(out._timestamp) + ')'));
+  if (out._confirmations != null) rows.appendChild(gsRow('Confirmations', fmtNum(out._confirmations)));
+  if (out.mmr_index != null) rows.appendChild(gsRow('Output MMR Index', fmtNum(out.mmr_index)));
+  if (out.proof) rows.appendChild(gsRow('Range Proof', out.proof.slice(0, 18) + '…  (' + out.proof.length / 2 + ' bytes)', out.proof));
+
+  wireRaw(out);
+  showEntity();
+}
+
+function wireRaw(obj) {
+  const toggle = document.getElementById('raw-toggle');
+  const pre    = document.getElementById('raw-json');
+  if (!toggle || !pre) return;
+  toggle.addEventListener('click', () => {
+    const open = pre.style.display !== 'none';
+    pre.style.display = open ? 'none' : 'block';
+    toggle.textContent = (open ? '▶' : '▼') + toggle.textContent.slice(1);
+    if (!open && !pre.textContent) pre.textContent = JSON.stringify(obj, null, 2);
+  });
+}
+
+// 66-hex kernel/output share a format — if a lookup misses, transparently probe
+// the other kind and redirect when it hits, so a search that guessed wrong still
+// lands on the right page.
+async function entityNotFound(kind, ref) {
+  const other    = kind === 'kernel' ? 'output' : 'kernel';
+  const otherUrl = kind === 'kernel' ? '/output.html?c=' : '/kernel.html?ex=';
+  if (/^[0-9a-fA-F]{66}$/.test(ref)) {
+    try {
+      const r = await fetch('/api/' + other + '/' + encodeURIComponent(ref));
+      if (r.ok) { window.location.replace(otherUrl + encodeURIComponent(ref)); return; }
+    } catch {}
+  }
+  const wrap = document.getElementById('entity-detail-wrap');
+  const err  = document.getElementById('entity-error');
+  if (wrap) wrap.style.display = 'none';
+  if (err) {
+    err.style.display = '';
+    err.innerHTML =
+      '<h3>' + (kind === 'kernel' ? 'Kernel' : 'Output') + ' not found</h3>' +
+      '<p>No ' + kind + ' matches this reference on the ' + (window.GRINSCAN_NETWORK || 'mainnet') + ' node.</p>' +
+      '<p>A pruned node keeps every <strong>kernel</strong>, but a <strong>spent</strong> output that has ' +
+      'been pruned can no longer be located here.</p>' +
+      '<p><a href="' + otherUrl + encodeURIComponent(ref) + '">Try looking it up as ' +
+      (other === 'kernel' ? 'a kernel' : 'an output') + ' →</a></p>';
+  }
+}
+
+function showEntityError(msg) {
+  const wrap = document.getElementById('entity-detail-wrap');
+  const err  = document.getElementById('entity-error');
+  if (wrap) wrap.style.display = 'none';
+  if (err) {
+    err.style.display = '';
+    const msgEl = err.querySelector('.error-msg');
+    if (msgEl) msgEl.textContent = msg;
+  }
+}
+
+async function loadEntityDetail(kind) {
+  const params = new URLSearchParams(window.location.search);
+  const ref = params.get(kind === 'kernel' ? 'ex' : 'c');
+  if (!ref) { showEntityError('No ' + kind + ' reference in URL.'); return; }
+  try {
+    const r = await fetch('/api/' + kind + '/' + encodeURIComponent(ref));
+    if (r.status === 404) { return entityNotFound(kind, ref); }
+    if (!r.ok) { return showEntityError('Server error ' + r.status); }
+    const data = await r.json();
+    if (kind === 'kernel') renderKernel(data, ref);
+    else renderOutput(data, ref);
+  } catch (e) { showEntityError('Failed to load ' + kind + ': ' + e.message); }
+}
+
 // ── API reference page ───────────────────────────────────────────────────────
 
 function initApiPage() {
@@ -564,6 +736,8 @@ function initApiPage() {
     { path: '/api/stats',     desc: 'Latest tip, hashrate, difficulty, peers, price, pool size, DB size', cache: 'live',      link: true  },
     { path: '/api/blocks',    desc: 'Paginated block list — <code>?limit=N&amp;offset=M</code> (max 100)',           cache: 'live',      link: true  },
     { path: '/api/block/:id', desc: 'Single block by height or hash — includes <code>_prev_timestamp</code>',        cache: 'live',      link: false },
+    { path: '/api/kernel/:excess', desc: 'Kernel by excess (66-hex) — block height, features, fee, confirmations. Works on pruned nodes.', cache: 'live', link: false },
+    { path: '/api/output/:commit', desc: 'Output by commitment (66-hex) — type, spent/unspent, block height. Spent+pruned outputs 404.',   cache: 'live', link: false },
     { path: '/api/history',   desc: 'Hashrate/difficulty samples — <code>?days=N</code> (max 5000) or <code>?days=0</code> for full range. Returns <code>{ ok, rows, source }</code>: ≤7d is per-block (<code>source:"blocks"</code>), longer ranges use the compact daily rollup (<code>source:"daily"</code>).', cache: 'live', link: true },
     { path: '/api/peers',     desc: 'Connected peer list (addr, direction, user_agent)',                              cache: 'live',      link: true  },
     { path: '/api/price',     desc: 'GRIN price (USD + BTC), 24h change, price history',                             cache: '2 min',     link: true  },
@@ -651,7 +825,7 @@ function setNavActive() {
   document.querySelectorAll('.nav-link').forEach(a => {
     const page = a.dataset.page;
     let active = false;
-    if (page === 'explorer') active = (path === '/' || path === '/index.html' || path === '/block.html');
+    if (page === 'explorer') active = (path === '/' || path === '/index.html' || path === '/block.html' || path === '/kernel.html' || path === '/output.html');
     if (page === 'info')     active = path === '/info.html';
     if (page === 'api')      active = path === '/api.html';
     a.classList.toggle('active', active);
@@ -738,6 +912,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (page === 'block') {
     loadBlockDetail();
+    initSearch();
+  }
+
+  if (page === 'kernel') {
+    loadEntityDetail('kernel');
+    initSearch();
+  }
+
+  if (page === 'output') {
+    loadEntityDetail('output');
     initSearch();
   }
 

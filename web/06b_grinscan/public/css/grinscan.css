@@ -589,6 +589,9 @@ a:hover { text-decoration: underline; }
   min-width: 0;
   white-space: nowrap;
 }
+/* Clickable excess/commit + linked detail values (→ kernel/output/block pages) */
+a.gs-entity-link { color: var(--accent); text-decoration: none; cursor: pointer; }
+a.gs-entity-link:hover { text-decoration: underline; }
 .gs-spent-tag {
   font-size: 12px;
   font-family: var(--font-mono);

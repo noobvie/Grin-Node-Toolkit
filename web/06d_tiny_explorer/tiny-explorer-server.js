@@ -141,6 +141,8 @@ const tipCache    = makeTtlCache(config.tip_cache_ms   || 30000);
 const latestCache = makeTtlCache(config.block_cache_ms || 45000);
 const priceCache  = makeTtlCache(config.price_cache_ms || 120000);
 const peersCache  = makeTtlCache(config.peers_cache_ms || 3600000);
+const dailyHrCache = makeTtlCache(config.daily_hr_cache_ms || 300000);
+const syncCache    = makeTtlCache(config.sync_cache_ms || 60000);
 
 // Block LRU (ref → {block, at}); capped, TTL-checked on read.
 const BLOCK_CACHE_MAX = 300;
@@ -183,6 +185,12 @@ function isValidRef(ref) {
   return /^\d+$/.test(ref) || /^[0-9a-fA-F]{8,}$/.test(ref);
 }
 
+// Kernel excess and output commitment are both 33-byte compressed points → 66 hex
+// chars (a block hash is 32 bytes → 64 hex). The two share a format, so the search
+// box can't tell them apart — the dedicated /kernel and /output routes are
+// unambiguous because the caller (a pool deep-link) already knows the type.
+function isCommitLike(s) { return /^[0-9a-fA-F]{64,66}$/.test(s); }
+
 async function fetchBlockLive(ref) {
   if (!ref) return null;
   try {
@@ -213,6 +221,67 @@ async function getBlock(ref) {
     if (h) { blockCacheSet(String(h.height), block); if (h.hash) blockCacheSet(h.hash, block); }
   }
   return block;
+}
+
+// ── Kernel & output lookup (payout / payment-proof deep-links) ────────────────
+// get_kernel and get_outputs both live on the Foreign API and both work on a
+// PRUNED node: the kernel MMR is fully retained (so any kernel resolves for all
+// heights), and get_outputs answers from the live UTXO set (unspent outputs +
+// spent-status). A spent output that's been pruned won't be found — that's the
+// expected pruned-horizon limit, surfaced to the user as "not found".
+
+const kernelCache = new Map(); // excess → { data, at } — kernels are immutable, long TTL
+const outputCache = new Map(); // commit → { data, at } — spent-status mutable, short TTL
+const ENTITY_CACHE_MAX = 500;
+function entityCacheGet(map, key, ttl) {
+  const e = map.get(key);
+  if (!e) return undefined;
+  if (Date.now() - e.at >= ttl) { map.delete(key); return undefined; }
+  map.delete(key); map.set(key, e); // refresh recency
+  return e.data;
+}
+function entityCacheSet(map, key, data) {
+  map.set(key, { data, at: Date.now() });
+  while (map.size > ENTITY_CACHE_MAX) map.delete(map.keys().next().value);
+}
+
+// Cheap header fetch to attach the containing block's hash + timestamp (get_header
+// works at any height on a pruned node), so the detail page can link to the block.
+async function attachBlockRef(obj, height) {
+  if (height == null) return obj;
+  try {
+    const hdr = await foreignApi('get_header', [height, null, null]);
+    if (hdr) {
+      obj._block_hash = hdr.hash;
+      obj._timestamp  = Math.floor(new Date(hdr.timestamp).getTime() / 1000);
+    }
+  } catch {}
+  return obj;
+}
+
+async function getKernel(excess) {
+  const ttl = config.entity_cache_ms || 300000;
+  const hit = entityCacheGet(kernelCache, excess, ttl);
+  if (hit) return hit;
+  // Ok(None) → null when the excess isn't in the kernel set.
+  const located = await foreignApi('get_kernel', [excess, null, null]);
+  if (!located || located.height == null) return null;
+  await attachBlockRef(located, located.height);
+  entityCacheSet(kernelCache, excess, located);
+  return located;
+}
+
+async function getOutput(commit) {
+  const ttl = config.output_cache_ms || 60000;
+  const hit = entityCacheGet(outputCache, commit, ttl);
+  if (hit) return hit;
+  // get_outputs returns a list for the commits it can locate in the output set.
+  const arr = await foreignApi('get_outputs', [[commit], null, null, true, false]);
+  const out = Array.isArray(arr) && arr.length ? arr[0] : null;
+  if (!out) return null;
+  if (out.block_height != null) await attachBlockRef(out, out.block_height);
+  entityCacheSet(outputCache, commit, out);
+  return out;
 }
 
 // ── Latest blocks (summaries) + hashrate ──────────────────────────────────────
@@ -268,6 +337,29 @@ function computeHashrate(summaries) {
   return 0;
 }
 
+// Day-average network hashrate over ~24h (1440 blocks) from two header reads —
+// much smoother than the ~20-block instantaneous rate. Used for the G1/day
+// estimate so the number doesn't jump around with per-block luck. get_header
+// works at any height on a pruned node, so this is cheap and archive-independent.
+async function getDailyAvgHashrate() {
+  const cached = ttlGet(dailyHrCache);
+  if (cached != null) return cached;
+  try {
+    const tip  = await getTip();
+    const span = Math.min(1440, tip.height);
+    if (span < 2) return ttlSet(dailyHrCache, 0);
+    const [newer, older] = await Promise.all([
+      foreignApi('get_header', [tip.height, null, null]),
+      foreignApi('get_header', [tip.height - span, null, null]),
+    ]);
+    const delta = Number(newer.total_difficulty) - Number(older.total_difficulty);
+    const dt = Math.floor(new Date(newer.timestamp).getTime() / 1000)
+             - Math.floor(new Date(older.timestamp).getTime() / 1000);
+    if (dt > 0 && delta > 0) return ttlSet(dailyHrCache, Math.round((delta * 42 / dt / 16384) * 100) / 100);
+    return ttlSet(dailyHrCache, 0);
+  } catch { return cached != null ? cached : 0; }
+}
+
 // ── Price (Gate.io USD + nonlogs.io BTC), on-demand, cached ────────────────────
 
 function httpsGetJson(hostname, urlPath) {
@@ -283,6 +375,82 @@ function httpsGetJson(hostname, urlPath) {
     req.on('error',   reject);
     req.on('timeout', () => req.destroy(new Error('timeout')));
     req.end();
+  });
+}
+
+function httpsPostJson(hostname, urlPath, bodyObj) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(bodyObj);
+    const req = https.request(
+      { hostname, path: urlPath, method: 'POST', timeout: 8000,
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+      res => {
+        let d = '';
+        res.on('data', c => { d += c; });
+        res.on('end',  () => { try { resolve(JSON.parse(d)); } catch (e) { reject(e); } });
+      }
+    );
+    req.on('error',   reject);
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.write(body);
+    req.end();
+  });
+}
+
+// ── Sync status: cross-check our node's tip against independent public explorers.
+// Sources are JSON-only, no-auth, server-side (no browser CORS):
+//   1) several public Grin node Foreign APIs `get_tip` (default: api.grin.money,
+//      main.gri.mw, grinnode.live — queried in parallel so ≥2 stay independent
+//      even when the explorer's own node is one of them)
+//   2) the Global Grin Health summary `tip_height` (default world.grin.money)
+// "Behind by ≤ tolerance (default 5) — or ahead" counts as synced. grincoin.org
+// is intentionally not used: it exposes no JSON API (HTML-only Rocket app).
+
+const DEFAULT_SYNC_NODES = [
+  'https://api.grin.money/v2/foreign',
+  'https://main.gri.mw/v2/foreign',
+  'https://grinnode.live/v2/foreign',
+];
+
+async function getSyncStatus() {
+  const cached = ttlGet(syncCache);
+  if (cached) return cached;
+
+  let ours = null;
+  try { ours = (await getTip()).height; } catch {}
+
+  const nodeUrls = (Array.isArray(config.sync_ref_nodes) && config.sync_ref_nodes.length)
+    ? config.sync_ref_nodes
+    : (config.sync_ref_node_url ? [config.sync_ref_node_url] : DEFAULT_SYNC_NODES);
+
+  const refs = [];
+  const nodeResults = await Promise.allSettled(nodeUrls.map(async raw => {
+    const nodeRef = new URL(raw);
+    const d = await httpsPostJson(nodeRef.hostname, nodeRef.pathname,
+      { jsonrpc: '2.0', method: 'get_tip', params: [], id: 1 });
+    const h = d?.result?.Ok?.height ?? d?.result?.height;
+    if (typeof h !== 'number') throw new Error('no height');
+    return { source: nodeRef.hostname, height: h };
+  }));
+  nodeResults.forEach(r => { if (r.status === 'fulfilled') refs.push(r.value); });
+
+  try {
+    const healthBase = (config.peers_stats_url || 'https://world.grin.money').replace(/\/+$/, '');
+    const u = new URL(healthBase + '/api/summary');
+    const d = await httpsGetJson(u.hostname, u.pathname);
+    if (typeof d?.tip_height === 'number') refs.push({ source: u.hostname, height: d.tip_height });
+  } catch {}
+
+  if (ours == null || refs.length === 0) {
+    return ttlSet(syncCache, { synced: null, our_height: ours, ref_height: null, ref_source: null, lag: null, ref_count: 0 });
+  }
+  // Reference = the most-ahead external peer (highest height seen).
+  const top = refs.reduce((a, b) => (b.height > a.height ? b : a));
+  const lag = top.height - ours;                              // >0 → we're behind
+  const synced = lag <= (config.sync_tolerance || 5);        // ahead or within tolerance = ok
+  return ttlSet(syncCache, {
+    synced, our_height: ours, ref_height: top.height, ref_source: top.source, lag,
+    ref_count: refs.length,
   });
 }
 
@@ -329,17 +497,21 @@ async function getPeersStat() {
   const cached = ttlGet(peersCache);
   if (cached) return cached;
 
-  // Primary: operator's Global Grin Health stats — /api/countries carries the
-  // 30d distinct-node total in timeframes.month.mainnet.sampled_from.
-  const statsUrl = config.peers_stats_url || 'https://world.grin.money';
-  try {
-    const u = new URL(statsUrl.replace(/\/+$/, '') + '/api/countries');
-    const data = await httpsGetJson(u.hostname, u.pathname + u.search);
-    const cnt = data?.timeframes?.month?.mainnet?.sampled_from;
-    if (typeof cnt === 'number' && cnt > 0) {
-      return ttlSet(peersCache, { count: cnt, source: 'world30d', label: 'Node peers · 30d' });
-    }
-  } catch {}
+  // Primary: operator's Global Grin Health stats — /api/versions (and the older
+  // /api/countries) carry the 30d distinct-node total in
+  // timeframes.month.mainnet.sampled_from. Deployments vary in which alias exists
+  // (some serve only /api/versions), so try each until one resolves.
+  const statsBase = (config.peers_stats_url || 'https://world.grin.money').replace(/\/+$/, '');
+  for (const p of ['/api/versions', '/api/countries']) {
+    try {
+      const u = new URL(statsBase + p);
+      const data = await httpsGetJson(u.hostname, u.pathname + u.search);
+      const cnt = data?.timeframes?.month?.mainnet?.sampled_from;
+      if (typeof cnt === 'number' && cnt > 0) {
+        return ttlSet(peersCache, { count: cnt, source: 'world30d', label: 'Node peers · 30d' });
+      }
+    } catch {}
+  }
 
   // Fallback: this node's live connected-peer count.
   try {
@@ -375,6 +547,14 @@ app.get('/api/tip', async (_req, res) => {
   } catch (e) { res.status(502).json({ error: 'node unreachable' }); }
 });
 
+app.get('/api/sync', async (_req, res) => {
+  try {
+    const s = await getSyncStatus();
+    res.setHeader('Cache-Control', 'public, max-age=30');
+    res.json(s);
+  } catch (e) { res.status(502).json({ error: 'sync check failed' }); }
+});
+
 app.get('/api/latest', async (req, res) => {
   const n = Math.min(config.latest_count || 20, Math.max(1, parseInt(req.query.n) || 20));
   try {
@@ -386,19 +566,23 @@ app.get('/api/latest', async (req, res) => {
 
 app.get('/api/stats', async (_req, res) => {
   try {
-    const [tip, latest, price, peers] = await Promise.all([
+    const [tip, latest, price, peers, dailyHr] = await Promise.all([
       getTip(),
       getLatest(config.latest_count || 20).catch(() => []),
       getPrice().catch(() => null),
       getPeersStat().catch(() => ({ count: null, source: 'none', label: 'Node peers · 30d' })),
+      getDailyAvgHashrate().catch(() => 0),
     ]);
     const hashrate = computeHashrate(latest);
     const supply   = tip.height * 60;
     const perBlockDiff = latest.length >= 2
       ? Math.max(0, Number(latest[0].total_difficulty) - Number(latest[1].total_difficulty))
       : 0;
-    // Est. IPOLLO G1 mini (1.2 G/s) daily yield: 1.2 / net_gps × 86400 ツ (60 ツ × 1440)
-    const g1PerDay = hashrate > 0 ? Math.round((1.2 / hashrate * 86400) * 100) / 100 : null;
+    // Est. IPOLLO G1 mini (1.2 G/s) daily yield: 1.2 / net_gps × 86400 ツ (60 ツ × 1440).
+    // Basis is the DAY-AVERAGE hashrate (smoother); fall back to the instantaneous
+    // rate only if the day-average couldn't be computed.
+    const g1Basis  = dailyHr > 0 ? dailyHr : hashrate;
+    const g1PerDay = g1Basis > 0 ? Math.round((1.2 / g1Basis * 86400) * 100) / 100 : null;
 
     res.setHeader('Cache-Control', 'public, max-age=15');
     res.json({
@@ -435,6 +619,36 @@ app.get('/api/block/:ref', async (req, res) => {
   }
 });
 
+app.get('/api/kernel/:excess', async (req, res) => {
+  const ex = req.params.excess;
+  if (!isCommitLike(ex)) return res.status(400).json({ error: 'Invalid kernel excess' });
+  try {
+    const located = await getKernel(ex);
+    if (!located) return res.status(404).json({ error: 'Kernel not found', hint: nodeMode });
+    // Confirmations are live (tip moves) — compute on a shallow copy so the cached
+    // kernel keeps only its immutable fields.
+    const out = Object.assign({}, located);
+    try { const tip = await getTip(); out._confirmations = tip.height - located.height + 1; } catch {}
+    res.setHeader('Cache-Control', 'public, max-age=30');
+    return res.json(out);
+  } catch (e) { return res.status(502).json({ error: 'node unreachable' }); }
+});
+
+app.get('/api/output/:commit', async (req, res) => {
+  const c = req.params.commit;
+  if (!isCommitLike(c)) return res.status(400).json({ error: 'Invalid output commitment' });
+  try {
+    const output = await getOutput(c);
+    if (!output) return res.status(404).json({ error: 'Output not found', hint: nodeMode });
+    const out = Object.assign({}, output);
+    if (out.block_height != null) {
+      try { const tip = await getTip(); out._confirmations = tip.height - out.block_height + 1; } catch {}
+    }
+    res.setHeader('Cache-Control', 'public, max-age=15');
+    return res.json(out);
+  } catch (e) { return res.status(502).json({ error: 'node unreachable' }); }
+});
+
 // ── GA4 analytics (before static) ────────────────────────────────────────────
 
 app.get('/js/analytics.js', (_req, res) => {
@@ -450,16 +664,24 @@ app.get('/js/analytics.js', (_req, res) => {
 
 // ── HTML pages with injected SEO + globals ────────────────────────────────────
 
-const SLOGAN = config.slogan || 'The featherweight window into Grin — every block, one link away.';
+const SLOGAN = config.slogan || 'Every Grin block, one link away.';
 
 const _pageMeta = {
   index: {
-    title: `${domain} — Grin Block Explorer`,
+    title: `${domain} — Tiny Grin Explorer`,
     desc:  `${domain}: a fast, lightweight Grin (GRIN) mainnet block explorer. Live tip height, Cuckatoo32 hashrate, difficulty, supply, price, and the latest blocks on the MimbleWimble blockchain.`,
   },
   block: {
     title: `Block — ${domain}`,
     desc:  `Grin mainnet block details on ${domain}: height, hash, timestamp, difficulty, PoW nonce, kernels, inputs, outputs, fees, and reward.`,
+  },
+  kernel: {
+    title: `Kernel — ${domain}`,
+    desc:  `Look up a Grin transaction kernel by excess on ${domain}: block height, timestamp, features, fee, and confirmations. The kernel excess is Grin's payment proof — a transaction-ID equivalent that reveals no amount or address.`,
+  },
+  output: {
+    title: `Output — ${domain}`,
+    desc:  `Look up a Grin output by commitment on ${domain}: type, spent/unspent status, block height, timestamp, and confirmations on the MimbleWimble blockchain.`,
   },
   notfound: {
     title: `Not found — ${domain}`,
@@ -471,7 +693,11 @@ function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').
 
 function injectGlobals(html, pageKey) {
   const meta  = _pageMeta[pageKey] || _pageMeta.index;
-  const canonPath = pageKey === 'index' ? '/' : (pageKey === 'block' ? '' : '/404.html');
+  // index gets a self-canonical; per-entity pages (block/kernel/output) are
+  // per-ref so they carry no canonical; anything else points at /404.html.
+  const canonPath = pageKey === 'index' ? '/'
+    : (pageKey === 'block' || pageKey === 'kernel' || pageKey === 'output') ? ''
+    : '/404.html';
   const canon = (baseUrl && canonPath) ? `\n<link rel="canonical" href="${baseUrl}${canonPath}">` : '';
   const ogImage = baseUrl ? `${baseUrl}/grin-logo.svg` : '/grin-logo.svg';
   const jsonLd = pageKey === 'index'
@@ -516,14 +742,22 @@ app.get('/', (_req, res) => {
   } catch { res.status(500).send('index unavailable'); }
 });
 
-app.get('/block/:ref', (req, res) => {
+// Per-entity deep-link pages share one server-side render path: read the static
+// shell, inject SEO + globals for the page key, serve. /block, /kernel and
+// /output are all pool deep-link targets — they must reach this app, never a
+// static rule (the ref segment is resolved client-side against /api/*).
+function sendEntityPage(res, file, pageKey) {
   try {
-    const html = fs.readFileSync(path.join(webDir, 'block.html'), 'utf8');
+    const html = fs.readFileSync(path.join(webDir, file), 'utf8');
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
-    res.send(injectGlobals(html, 'block'));
-  } catch { res.status(500).send('block page unavailable'); }
-});
+    res.send(injectGlobals(html, pageKey));
+  } catch { res.status(500).send(pageKey + ' page unavailable'); }
+}
+
+app.get('/block/:ref',  (_req, res) => sendEntityPage(res, 'block.html',  'block'));
+app.get('/kernel/:ref', (_req, res) => sendEntityPage(res, 'kernel.html', 'kernel'));
+app.get('/output/:ref', (_req, res) => sendEntityPage(res, 'output.html', 'output'));
 
 // ── Static files ──────────────────────────────────────────────────────────────
 

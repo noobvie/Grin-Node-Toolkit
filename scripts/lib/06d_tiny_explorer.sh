@@ -181,7 +181,7 @@ tinyx_configure() {
   "ga4_measurement_id":  "${ga4_id}",
   "fallback_explorers": [
     { "name": "Grincoin.org", "url": "https://grincoin.org", "blurb": "Full archive explorer — deep block bodies since genesis." },
-    { "name": "GrinScan",     "url": "https://grinscan.net", "blurb": "Dual-network explorer with charts, peers, price, and a REST API." }
+    { "name": "GrinScan",     "url": "https://grinscan.org", "blurb": "Dual-network explorer with charts, peers, price, and a REST API." }
   ]
 }
 JSON
@@ -332,6 +332,8 @@ LOGROTATE
     success "Nginx + SSL setup complete."
     echo -e "  URL: ${CYAN}https://${domain}${RESET}"
     echo -e "  Deep-link test: ${CYAN}https://${domain}/block/<height>${RESET}"
+    echo -e "  Kernel proof:   ${CYAN}https://${domain}/kernel/<excess>${RESET}"
+    echo -e "  Output lookup:  ${CYAN}https://${domain}/output/<commit>${RESET}"
     log "tinyx_setup_nginx: ${domain}"
     pause
 }

@@ -14,6 +14,9 @@ function fmtAge(ts) {
   if (s < 86400) return Math.floor(s / 3600) + 'h ago';
   return Math.floor(s / 86400) + 'd ago';
 }
+// Compact age for the "Age" table column — the header already says "Age", so the
+// per-row " ago" suffix is redundant (5m, 2h, 1d …). Prose contexts keep fmtAge.
+function fmtAgeCompact(ts) { return fmtAge(ts).replace(/ ago$/, ''); }
 function ageClass(ts) {
   const s = Math.floor(Date.now() / 1000) - ts;
   if (s < 300) return '';
@@ -101,7 +104,7 @@ function initChrome() {
     const ver = window.TINYEXP_VERSION ? ' v' + window.TINYEXP_VERSION : '';
     ft.innerHTML =
       `Tiny Explorer${ver} &nbsp;·&nbsp; ` +
-      `<a href="https://grinscan.net" target="_blank" rel="noopener">GrinScan</a>` +
+      `<a href="https://grinscan.org" target="_blank" rel="noopener">GrinScan</a>` +
       ` &nbsp;·&nbsp; <a href="https://forum.grin.mw" target="_blank" rel="noopener">Grin Forum</a>` +
       ` &nbsp;·&nbsp; <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Node Toolkit</a>` +
       ` &nbsp;·&nbsp; Made with &#10084;&#65039; from Saigon ` +
@@ -116,13 +119,27 @@ function initChrome() {
     form.addEventListener('submit', e => {
       e.preventDefault();
       const q = inp.value.trim();
-      if (q) window.location.href = '/block/' + encodeURIComponent(q);
+      if (q) window.location.href = searchTarget(q);
     });
     document.addEventListener('keydown', e => {
       if (e.key === '/' && document.activeElement !== inp) { e.preventDefault(); inp.focus(); }
       if (e.key === 'Escape') inp.blur();
     });
   }
+}
+
+// Route a search term to the right detail page by format. A block height is
+// decimal; a block hash is 64 hex (32 bytes); a kernel excess and an output
+// commitment are both 66 hex (33-byte compressed points) so they can't be told
+// apart here — 66-hex goes to /kernel, whose page auto-falls-back to /output if
+// the excess isn't a kernel. Unknown shapes fall through to /block for a clean
+// server-side 404.
+function searchTarget(q) {
+  const s = q.trim().replace(/^0x/i, '');
+  if (/^\d+$/.test(s))               return '/block/'  + encodeURIComponent(s);
+  if (/^[0-9a-fA-F]{64}$/.test(s))   return '/block/'  + encodeURIComponent(s);
+  if (/^[0-9a-fA-F]{66}$/.test(s))   return '/kernel/' + encodeURIComponent(s);
+  return '/block/' + encodeURIComponent(s);
 }
 
 // ── INDEX PAGE ────────────────────────────────────────────────────────────────
@@ -177,12 +194,16 @@ function blockRow(b) {
   tr.innerHTML =
     `<td class="col-h">${fmtNum(b.height)}</td>` +
     `<td class="tx-hash" title="${b.hash || ''}">${fmtHashShort(b.hash)}</td>` +
-    `<td class="${ageClass(b.timestamp)}" data-ts="${b.timestamp}">${fmtAge(b.timestamp)}</td>` +
+    `<td class="${ageClass(b.timestamp)}" data-ts="${b.timestamp}">${fmtAgeCompact(b.timestamp)}</td>` +
     `<td>${b.tx_count ?? 0}</td>` +
     `<td>${fmtFee(b.fee_total)}</td>`;
   tr.addEventListener('click', () => { window.location.href = '/block/' + b.height; });
   return tr;
 }
+
+const LATEST_INTERVAL_MS = 120000; // 2-min cooldown between table refreshes
+let _lastUpdatedStr = '';
+let _nextLatestAt   = 0;
 
 async function loadLatest() {
   try {
@@ -193,26 +214,72 @@ async function loadLatest() {
     if (!tb) return;
     tb.innerHTML = '';
     blocks.forEach(b => tb.appendChild(blockRow(b)));
-    const up = document.getElementById('tx-updated');
-    if (up) up.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    _lastUpdatedStr = new Date().toLocaleTimeString();
+    _nextLatestAt   = Date.now() + LATEST_INTERVAL_MS;
+    renderUpdated();
   } catch {}
+}
+
+// "Updated 12:34:56 · next in 1:59" — the cooldown countdown, ticked every second.
+function renderUpdated() {
+  const up = document.getElementById('tx-updated');
+  if (!up || !_lastUpdatedStr) return;
+  const remain = Math.max(0, Math.round((_nextLatestAt - Date.now()) / 1000));
+  const mm = Math.floor(remain / 60), ss = remain % 60;
+  up.textContent = 'Updated ' + _lastUpdatedStr + ' · next in ' + mm + ':' + String(ss).padStart(2, '0');
+}
+
+// Sync badge: compare our tip to public explorers via /api/sync (server-side).
+async function checkSync() {
+  const el = document.getElementById('tx-sync');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/sync');
+    if (!r.ok) throw new Error();
+    const s = await r.json();
+    if (s.synced == null) {
+      el.className = 'tx-sync unknown'; el.textContent = 'sync ?';
+      el.title = 'Could not reach a reference explorer';
+      return;
+    }
+    const lag = s.lag;
+    const ref = s.ref_source + ' ' + fmtNum(s.ref_height);
+    const via = s.ref_count ? ' · checked vs ' + s.ref_count + ' source' + (s.ref_count === 1 ? '' : 's') : '';
+    if (s.synced) {
+      el.className = 'tx-sync ok'; el.textContent = 'Synced';
+      el.title = 'Height ' + fmtNum(s.our_height) + ' · in step with ' + ref +
+        (lag > 0 ? ' (' + lag + ' behind, within tolerance)' : lag < 0 ? ' (' + (-lag) + ' ahead)' : '') + via;
+    } else {
+      el.className = 'tx-sync warn'; el.textContent = lag + ' behind';
+      el.title = 'Height ' + fmtNum(s.our_height) + ' vs ' + ref + ' — ' + lag + ' blocks behind' + via;
+    }
+  } catch {
+    el.className = 'tx-sync unknown'; el.textContent = 'sync ?';
+    el.title = 'Sync check unavailable';
+  }
 }
 
 function startAgeTick() {
   setInterval(() => {
     document.querySelectorAll('[data-ts]').forEach(el => {
       const ts = parseInt(el.dataset.ts);
-      el.textContent = fmtAge(ts);
+      el.textContent = fmtAgeCompact(ts);
       el.className = el.className.replace(/age-\w+/g, '').trim() + ' ' + ageClass(ts);
     });
+    renderUpdated(); // tick the refresh countdown
   }, 1000);
 }
 
 function initIndex() {
   pollStats();
   loadLatest();
+  checkSync();
   startAgeTick();
-  setInterval(() => { pollStats(); loadLatest(); }, 30000);
+  // Stats (tip/price/hashrate) stay near-live at 30s; the Latest Blocks table
+  // is heavier and blocks only land ~every 60s, so refresh it + the sync badge
+  // on a 2-min cooldown (with a live countdown shown to the user).
+  setInterval(pollStats, 30000);
+  setInterval(() => { loadLatest(); checkSync(); }, LATEST_INTERVAL_MS);
 }
 
 // ── BLOCK DETAIL PAGE ───────────────────────────────────────────────────────────
@@ -376,6 +443,150 @@ function showBlockError(msg) {
     '<p><a href="/">← Back to explorer</a></p></div>';
 }
 
+// ── KERNEL / OUTPUT DETAIL PAGES ──────────────────────────────────────────────
+
+// row() variant whose value is a link (e.g. → the containing block).
+function rowLink(label, text, href, copyVal) {
+  const div = document.createElement('div'); div.className = 'tx-row';
+  const l = document.createElement('div'); l.className = 'tx-row-label'; l.textContent = label;
+  const v = document.createElement('div'); v.className = 'tx-row-value';
+  const a = document.createElement('a'); a.href = href; a.textContent = text; a.className = 'tx-link';
+  v.appendChild(a);
+  div.appendChild(l); div.appendChild(v);
+  if (copyVal) {
+    const b = document.createElement('button'); b.className = 'tx-copy'; b.textContent = 'Copy';
+    b.addEventListener('click', () => copyText(copyVal, b));
+    div.appendChild(b);
+  } else { div.appendChild(document.createElement('span')); }
+  return div;
+}
+
+function entityRefFromPath(kind) {
+  const m = window.location.pathname.match(new RegExp('/' + kind + '/([^/?#]+)'));
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
+// Grin serialises kernel features either as a bare string ("Coinbase") or an
+// externally-tagged object ({"Plain":{"fee":7000000}} / {"HeightLocked":{…}}).
+// Normalise both to { type, fee, lock_height }.
+function kernelFeatures(tk) {
+  const f = tk && tk.features;
+  if (typeof f === 'string') return { type: f, fee: tk.fee, lock_height: tk.lock_height };
+  if (f && typeof f === 'object') {
+    const type = Object.keys(f)[0] || 'Unknown';
+    const inner = f[type] || {};
+    const fee = typeof inner.fee === 'number' ? inner.fee : undefined;
+    return { type, fee, lock_height: inner.lock_height };
+  }
+  return { type: 'Unknown' };
+}
+
+function showEntity() {
+  const l = document.getElementById('entity-loading');
+  if (l) l.style.display = 'none';
+  const c = document.getElementById('entity-content');
+  if (c) c.style.display = '';
+}
+
+function renderKernel(located, ref) {
+  const tk = located.tx_kernel || {};
+  const feat = kernelFeatures(tk);
+  const excess = tk.excess || ref;
+
+  document.title = 'Kernel ' + excess.slice(0, 12) + '… — ' + (window.TINYEXP_DOMAIN || 'Tiny Explorer');
+  setText('entity-title', 'Kernel');
+
+  const rows = document.getElementById('entity-rows');
+  rows.innerHTML = '';
+  rows.appendChild(row('Excess', excess, excess));
+  rows.appendChild(row('Type', feat.type));
+  if (feat.type !== 'Coinbase') rows.appendChild(row('Fee', feat.fee != null ? fmtFee(feat.fee) : '—'));
+  if (feat.lock_height) rows.appendChild(row('Lock height', fmtNum(feat.lock_height)));
+  if (located.height != null) rows.appendChild(rowLink('Block height', fmtNum(located.height), '/block/' + located.height));
+  if (located._block_hash) rows.appendChild(rowLink('Block hash', fmtHashShort(located._block_hash), '/block/' + located._block_hash, located._block_hash));
+  if (located._timestamp) rows.appendChild(row('Timestamp', new Date(located._timestamp * 1000).toUTCString() + '  (' + fmtAge(located._timestamp) + ')'));
+  if (located._confirmations != null) rows.appendChild(row('Confirmations', fmtNum(located._confirmations)));
+  if (located.mmr_index != null) rows.appendChild(row('Kernel MMR index', fmtNum(located.mmr_index)));
+  if (tk.excess_sig) rows.appendChild(row('Excess signature', tk.excess_sig, tk.excess_sig));
+
+  const raw = document.getElementById('raw-json');
+  if (raw) raw.textContent = JSON.stringify(located, null, 2);
+  showEntity();
+}
+
+function renderOutput(out, ref) {
+  const commit = out.commit || ref;
+  const isCb = (out.output_type || '').toLowerCase() === 'coinbase';
+
+  document.title = 'Output ' + commit.slice(0, 12) + '… — ' + (window.TINYEXP_DOMAIN || 'Tiny Explorer');
+  setText('entity-title', 'Output');
+
+  const rows = document.getElementById('entity-rows');
+  rows.innerHTML = '';
+  rows.appendChild(row('Commitment', commit, commit));
+  rows.appendChild(row('Type', isCb ? 'Coinbase' : 'Transaction'));
+  rows.appendChild(row('Status', out.spent ? 'SPENT' : 'UNSPENT'));
+  if (out.block_height != null) rows.appendChild(rowLink('Block height', fmtNum(out.block_height), '/block/' + out.block_height));
+  if (out._block_hash) rows.appendChild(rowLink('Block hash', fmtHashShort(out._block_hash), '/block/' + out._block_hash, out._block_hash));
+  if (out._timestamp) rows.appendChild(row('Timestamp', new Date(out._timestamp * 1000).toUTCString() + '  (' + fmtAge(out._timestamp) + ')'));
+  if (out._confirmations != null) rows.appendChild(row('Confirmations', fmtNum(out._confirmations)));
+  if (out.mmr_index != null) rows.appendChild(row('Output MMR index', fmtNum(out.mmr_index)));
+  if (out.proof) rows.appendChild(row('Range proof', out.proof.slice(0, 18) + '…  (' + out.proof.length / 2 + ' bytes)', out.proof));
+
+  const raw = document.getElementById('raw-json');
+  if (raw) raw.textContent = JSON.stringify(out, null, 2);
+  showEntity();
+}
+
+// 66-hex kernel/output share a format — if a lookup misses, transparently probe
+// the other kind and redirect when it hits, so a search that guessed wrong still
+// lands on the right page.
+async function entityNotFound(kind, ref) {
+  const other = kind === 'kernel' ? 'output' : 'kernel';
+  if (/^[0-9a-fA-F]{66}$/.test(ref)) {
+    try {
+      const r = await fetch('/api/' + other + '/' + encodeURIComponent(ref));
+      if (r.ok) { window.location.replace('/' + other + '/' + encodeURIComponent(ref)); return; }
+    } catch {}
+  }
+  const l = document.getElementById('entity-loading');
+  if (l) l.style.display = 'none';
+  const nf = document.getElementById('entity-notfound');
+  if (nf) {
+    nf.style.display = '';
+    nf.innerHTML =
+      '<div class="tx-error"><h2>' + (kind === 'kernel' ? 'Kernel' : 'Output') + ' not found</h2>' +
+      '<p>No ' + kind + ' matches <code class="commit">' + esc(ref) + '</code> on this node.</p>' +
+      '<p>A pruned node keeps every <strong>kernel</strong>, but a <strong>spent</strong> output that has ' +
+      'been pruned can no longer be located here.</p>' +
+      '<p><a href="/' + other + '/' + encodeURIComponent(ref) + '">Try looking it up as ' + (other === 'kernel' ? 'a kernel' : 'an output') + ' →</a></p>' +
+      '<p><a href="/">← Back to explorer</a></p></div>';
+  }
+}
+
+function showEntityError(msg) {
+  const l = document.getElementById('entity-loading');
+  if (l) l.innerHTML = '<div class="tx-error"><h2>Lookup failed</h2><p>' + esc(msg) + '</p>' +
+    '<p><a href="/">← Back to explorer</a></p></div>';
+}
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+async function loadEntity(kind) {
+  const ref = entityRefFromPath(kind);
+  if (!ref) { window.location.replace('/404.html'); return; }
+  try {
+    const r = await fetch('/api/' + kind + '/' + encodeURIComponent(ref));
+    if (r.status === 404) { return entityNotFound(kind, ref); }
+    if (!r.ok) { return showEntityError('Server error ' + r.status); }
+    const data = await r.json();
+    if (kind === 'kernel') renderKernel(data, ref);
+    else renderOutput(data, ref);
+  } catch (e) { showEntityError('Failed to load: ' + e.message); }
+}
+
 // ── 404 PAGE ────────────────────────────────────────────────────────────────────
 
 function init404() {
@@ -387,7 +598,7 @@ function init404() {
     ? window.TINYEXP_FALLBACKS
     : [
         { name: 'Grincoin.org', url: 'https://grincoin.org', blurb: 'Full archive explorer — deep block bodies since genesis.' },
-        { name: 'GrinScan', url: 'https://grinscan.net', blurb: 'Dual-network explorer with charts, peers, price, and a REST API.' },
+        { name: 'GrinScan', url: 'https://grinscan.org', blurb: 'Dual-network explorer with charts, peers, price, and a REST API.' },
       ];
   if (wrap) wrap.innerHTML = fallbacks.map(f =>
     `<a class="tx-fallback" href="${f.url}" target="_blank" rel="noopener">` +
@@ -402,5 +613,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const page = document.body.dataset.page;
   if (page === 'index') initIndex();
   if (page === 'block') loadBlock();
+  if (page === 'kernel') loadEntity('kernel');
+  if (page === 'output') loadEntity('output');
   if (page === 'notfound') init404();
 });

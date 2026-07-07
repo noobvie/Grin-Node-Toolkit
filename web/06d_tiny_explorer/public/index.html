@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Tiny Explorer — Grin Block Explorer | Live Blocks, Hashrate &amp; Difficulty</title>
+  <title>Tiny Grin Explorer | Live Blocks, Hashrate &amp; Difficulty</title>
   <meta name="description" content="Tiny Explorer: a fast, lightweight Grin (GRIN) mainnet block explorer. Live tip height, Cuckatoo32 hashrate, difficulty, supply, price, and the latest blocks on the MimbleWimble blockchain.">
   <meta name="keywords" content="Grin block explorer, GRIN blockchain, MimbleWimble explorer, Grin hashrate, Grin difficulty, GRIN price, Grin mainnet, Cuckatoo32, tiny explorer, scan.grin.money">
   <meta name="robots" content="index, follow">
@@ -28,7 +28,7 @@
         <img src="/grin-logo.svg" class="tx-logo" alt="Grin logo">
         <span class="tx-brand-text">
           <span class="tx-title">Tiny<span class="tx-accent">Explorer</span></span>
-          <span class="tx-slogan" id="tx-slogan">The featherweight window into Grin — every block, one link away.</span>
+          <span class="tx-slogan" id="tx-slogan">Every Grin block, one link away.</span>
         </span>
       </a>
       <div class="tx-header-spacer"></div>
@@ -87,7 +87,7 @@
       </div>
       <div class="tx-card">
         <div class="tx-card-label">Est. G1 mini / day
-          <span class="tx-info" tabindex="0" role="tooltip" data-tip="Rough daily yield for an IPOLLO G1 mini (1.2 G/s): 1.2 ÷ network hashrate × 86,400 ツ. Falls as network hashrate rises.">i</span>
+          <span class="tx-info" tabindex="0" role="tooltip" data-tip="Rough daily yield for an IPOLLO G1 mini (1.2 G/s): 1.2 ÷ hashrate × 86,400 ツ, using the 24h-average network hashrate (smoother than the live rate). Falls as the network grows.">i</span>
         </div>
         <div class="tx-card-value" id="stat-g1">—</div>
       </div>
@@ -121,7 +121,10 @@
 
     <div class="tx-section-head">
       <h2>Latest Blocks</h2>
-      <span class="tx-updated" id="tx-updated">Loading…</span>
+      <div class="tx-section-meta">
+        <span class="tx-sync" id="tx-sync" title="Checking tip against public explorers…">⟳ checking…</span>
+        <span class="tx-updated" id="tx-updated">Loading…</span>
+      </div>
     </div>
     <div class="tx-table-wrap">
       <table class="tx-table" aria-label="Latest blocks">

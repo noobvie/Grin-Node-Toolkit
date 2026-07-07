@@ -24,7 +24,9 @@ Prune node mainnet: https://prunemain.grin.money
 
 Prune node testnet: https://prunetest.grin.money
 
-Grin explorer (clone of grincoin.org) https://scan.grin.money
+Clone Grin Explorer Rust integration from https://grincoin.org
+
+Grin tiny explorer https://scan.grin.money
 
 GrinScan block explorer mainnet: https://grinscan.org
 

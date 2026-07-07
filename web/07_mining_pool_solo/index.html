@@ -291,12 +291,24 @@
     .tiles { grid-template-columns: 1fr; }
   }
 
-  /* Section navigation — clickable chips that jump to each panel/chart */
+  /* Section navigation — clickable chips that jump to each panel/chart.
+     Sticky one-line strip: pinned to the top on scroll (z above the panels),
+     never wraps (nowrap) so it stays a single row; the tighter gap/padding lets
+     all chips fit at max-width, and overflow-x:auto lets it scroll rather than
+     wrap only on a viewport too narrow for the icon strip. */
   html { scroll-behavior: smooth; }
-  .panel, .chart-card { scroll-margin-top: 1rem; }
-  nav.toc { width: 100%; max-width: 860px; display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; margin: 0 0 1.5rem; }
-  nav.toc a { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
-    border-radius: 999px; padding: .42rem .85rem; font-size: .86rem; text-decoration: none;
+  /* clear the sticky bar on anchor-jump so a target heading isn't hidden under it */
+  .panel, .chart-card, #split-card, #earn-card, #quality-card { scroll-margin-top: 4rem; }
+  nav.toc { position: sticky; top: 0; z-index: 50;
+    width: 100%; max-width: 860px; display: flex; flex-wrap: nowrap; justify-content: center;
+    gap: .4rem; margin: 0 0 1.5rem; padding: .5rem .45rem;
+    overflow-x: auto; scrollbar-width: none;
+    background: var(--panel); border: 1px solid var(--border); border-top: none;
+    border-radius: 0 0 14px 14px; box-shadow: 0 6px 16px rgba(0,0,0,.18); }
+  nav.toc::-webkit-scrollbar { display: none; }
+  nav.toc a { flex: none; white-space: nowrap;
+    background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 999px; padding: .4rem .7rem; font-size: .82rem; text-decoration: none;
     letter-spacing: .02em; transition: background .2s;
     display: inline-flex; align-items: center; gap: .4rem; }
   nav.toc a:hover { background: var(--border); color: var(--text-hi); }

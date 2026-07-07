@@ -126,6 +126,33 @@ function initChrome() {
       if (e.key === 'Escape') inp.blur();
     });
   }
+
+  initTooltips();
+}
+
+// Touch-friendly tooltips: tap the ℹ icon to toggle its bubble; tapping anywhere
+// else (or the bubble itself — it's pointer-events:none) or pressing Escape
+// closes it. Hover-capable devices still get plain CSS hover; this only adds the
+// tap behaviour that hover can't provide on touch.
+function initTooltips() {
+  const tips = document.querySelectorAll('.tx-info[data-tip]');
+  if (!tips.length) return;
+  function closeAll(except) {
+    document.querySelectorAll('.tx-info.tip-open').forEach(t => {
+      if (t !== except) { t.classList.remove('tip-open'); t.blur(); }
+    });
+  }
+  tips.forEach(t => {
+    t.addEventListener('click', e => {
+      e.stopPropagation();               // don't let the document handler close it
+      const willOpen = !t.classList.contains('tip-open');
+      closeAll(t);
+      if (willOpen) { t.classList.add('tip-open'); }
+      else { t.classList.remove('tip-open'); t.blur(); }
+    });
+  });
+  document.addEventListener('click', () => closeAll(null));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeAll(null); });
 }
 
 // Route a search term to the right detail page by format. A block height is

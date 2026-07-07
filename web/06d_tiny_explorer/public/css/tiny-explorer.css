@@ -174,12 +174,33 @@ a:hover { text-decoration: underline; }
   font-weight: 700;
 }
 .tx-info[data-tip] { position: relative; }
-.tx-info[data-tip]:hover::after, .tx-info[data-tip]:focus::after {
+/* The bubble is always in the DOM but hidden; visibility is flipped per state
+   below. pointer-events:none means a tap on the bubble passes through to the
+   document, which closes it (see initTooltips). */
+.tx-info[data-tip]::after {
   content: attr(data-tip); position: absolute; left: 0; top: 130%;
   width: max-content; max-width: 240px; z-index: 30;
   background: var(--value); color: var(--bg); padding: 8px 10px;
   border-radius: 7px; font-size: 11px; font-weight: 500; line-height: 1.4;
   letter-spacing: 0; text-transform: none; box-shadow: var(--shadow);
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .12s;
+}
+.tx-info[data-tip]:focus::after,
+.tx-info[data-tip].tip-open::after { opacity: 1; visibility: visible; }
+/* Only true pointer devices get hover-to-show — on touch, hover is "sticky"
+   and a tap-away wouldn't dismiss it, so touch uses the tap toggle instead. */
+@media (hover: hover) {
+  .tx-info[data-tip]:hover::after { opacity: 1; visibility: visible; }
+}
+/* On narrow screens anchor the tooltip to the card (not the tiny icon) so it
+   wraps inside the card zone instead of overflowing the viewport to the right
+   — a right-side overflow forces the mobile browser to zoom the whole page out. */
+@media (max-width: 860px) {
+  .tx-info[data-tip] { position: static; }
+  .tx-info[data-tip]::after {
+    left: 12px; right: 12px; top: 34px;
+    width: auto; max-width: none; white-space: normal;
+  }
 }
 
 .live-dot {

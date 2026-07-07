@@ -868,14 +868,23 @@ _do_setup_stratum() {
     read -r wallet_url
     [[ "$wallet_url" == "0" ]] && wallet_url=""
 
+    # A stored value is "legacy" and must be normalised if it carries the
+    # /v2/foreign suffix (older setups wrote it → doubles the path) OR still
+    # points at the old Foreign port 3415/13415 (pre-combined-listener; grin's
+    # stock toml ships this uncommented). The solo wallet now serves the Foreign
+    # build_coinbase on the Owner port (3420/13420, owner_api_include_foreign),
+    # so a surviving 3415 leaves the node calling a dead port → no coinbase.
+    local legacy_wallet=0
+    if [[ "$cur_wallet" == *"/v2/foreign\""* || "$cur_wallet" == *":3415\""* || "$cur_wallet" == *":13415\""* ]]; then
+        legacy_wallet=1
+    fi
     # Rewrite when: the operator typed a URL, none is set yet, OR the stored one
-    # carries the legacy /v2/foreign suffix (older setups wrote it — normalise).
-    if [[ -n "$wallet_url" || -z "$cur_wallet" || "$cur_wallet" == *"/v2/foreign\""* ]]; then
+    # is legacy (stale path or old Foreign port).
+    if [[ -n "$wallet_url" || -z "$cur_wallet" || $legacy_wallet -eq 1 ]]; then
         local new_url="${wallet_url:-$default_wallet_url}"
-        # Legacy value being normalised with Enter → keep its host:port, drop the path.
-        if [[ -z "$wallet_url" && "$cur_wallet" == *"/v2/foreign\""* ]]; then
-            new_url="${cur_wallet#*\"}"; new_url="${new_url%\"*}"
-        fi
+        # Legacy value normalised with Enter → snap to the network's Owner-port
+        # default (solo wallet is always local, so 127.0.0.1:<owner_port>).
+        [[ -z "$wallet_url" && $legacy_wallet -eq 1 ]] && new_url="$default_wallet_url"
         new_url="${new_url%/}"; new_url="${new_url%/v2/foreign}"
         local esc_url; esc_url=$(_sed_escape_rhs "$new_url")
         if grep -qE '^#?[[:space:]]*wallet_listener_url[[:space:]]*=' "$grin_toml" 2>/dev/null; then
@@ -1500,8 +1509,11 @@ _solo_node_file_log_level() {
 # the network's grin-server.toml; falls back to the toolkit default foreign port.
 #   $1 = network (mainnet|testnet)  →  echoes a full http URL ending in /v2/foreign
 _solo_wallet_listener_url() {
-    local net="$1" default_port=3415 toml url=""
-    [[ "$net" == "testnet" ]] && default_port=13415
+    # Fallback port is the combined listener's Owner port (owner_api_include_foreign
+    # serves the Foreign API here) — matches the wallet on 3420/13420, not the old
+    # 3415/13415 Foreign listener. The direct probe still needs the /v2/foreign path.
+    local net="$1" default_port=3420 toml url=""
+    [[ "$net" == "testnet" ]] && default_port=13420
     toml="/opt/grin/node/${net}-prune/grin-server.toml"
     if [[ -f "$toml" ]]; then
         url=$(grep -E '^[[:space:]]*wallet_listener_url[[:space:]]*=' "$toml" 2>/dev/null \

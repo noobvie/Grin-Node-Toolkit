@@ -410,7 +410,7 @@
                  │
                  ▼
    Wallet server  (the one box you do NOT reboot during maintenance)
-     • foreign listener  : 3415   ← node-A and node-B send the coinbase here
+     • wallet listener   : 3420   ← node-A and node-B send the coinbase here
      • local grin node   : 3413   ← this wallet's check_node_api_http_addr
                                     points at a co-located, always-up synced
                                     node — NOT the remote mining nodes</div>
@@ -424,7 +424,18 @@
     <div class="code block">[server.stratum_mining_config]
 enable_stratum_server = true
 stratum_server_addr   = "0.0.0.0:3416"               # bind public so remote miners reach it
-wallet_listener_url   = "http://WALLET_HOST:3415"    # SAME wallet on both nodes</div>
+wallet_listener_url   = "http://WALLET_HOST:3420"    # SAME wallet on both nodes (combined listener port)</div>
+
+    <div class="callout warn">
+      <b>Combined listener rides the Owner port.</b> The toolkit wallet now runs
+      <code>grin-wallet -p &lt;pass&gt; owner_api</code> with <code>owner_api_include_foreign = true</code>,
+      so <code>build_coinbase</code> is served on the <b>Owner port 3420</b> — not the old standalone
+      Foreign listener on 3415. On a single box this is all localhost and needs nothing extra. For this
+      <i>remote</i> two-node layout, the wallet must accept off-box connections, which means setting
+      <code>owner_api_listen_interface = "0.0.0.0"</code> in <code>grin-wallet.toml</code> — and because
+      the Owner API (send/spend) shares that port, <b>keep the wallet server and mining nodes on a
+      trusted private network or a WireGuard/SSH tunnel; never expose 3420 to the public internet.</b>
+    </div>
 
     <p><b>2. Wallet server — <code>grin-wallet.toml</code></b>:</p>
     <div class="code block">check_node_api_http_addr = "http://127.0.0.1:3413"   # a local, always-up, synced node</div>
@@ -484,9 +495,9 @@ ERROR grin_wallet_impls::node_clients::http - Unable to contact Node to get vers
       <b>Safe to ignore for solo mining.</b> This is the wallet's periodic version probe to the
       <b>node's</b> Foreign API on port <code>3413</code> (wallet&nbsp;→&nbsp;node). Solo mining does
       <b>not</b> use that direction to receive payment: your block rewards land because the
-      <b>node calls the wallet listener</b> on port <code>3415</code> (<code>build_coinbase</code>, a
-      local operation) — that path is independent of the failing probe. So coinbase keeps arriving
-      even while these errors repeat.
+      <b>node calls the wallet listener</b> on port <code>3420</code> (<code>build_coinbase</code>, a
+      local operation on the combined <code>owner_api</code> listener) — that path is independent of the
+      failing probe. So coinbase keeps arriving even while these errors repeat.
       <span class="muted">It only affects on-demand balance refresh and spending; if you later want
       those, make sure the node is running and reachable on <code>127.0.0.1:3413</code>.</span>
     </div>

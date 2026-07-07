@@ -2,3 +2,7 @@
 .DS_Store
 **/.DS_Store
 .vscode/
+
+# Python bytecode (collectors/checkers in scripts/lib are run in place)
+__pycache__/
+*.py[cod]

@@ -84,11 +84,11 @@ DROP_DB=""
 DROP_SERVICE=""
 DROP_PORT=""
 DROP_LOG=""
-DROP_TMUX_TOR=""    # tmux: wallet listen  (Foreign API)
-DROP_TMUX_OWNER=""  # tmux: wallet owner_api (Owner API v3)
+DROP_TMUX_TOR=""    # LEGACY: old standalone `listen` session — retired by the combined listener; kept only for migration cleanup
+DROP_TMUX_OWNER=""  # tmux: combined `owner_api` session (Owner API v3 + Foreign API via owner_api_include_foreign)
 DROP_NODE_PORT=""   # Grin node Foreign API port (3413 mainnet / 13413 testnet)
-DROP_TOR_PORT=""    # wallet Foreign API port  (3415 mainnet / 13415 testnet)
-DROP_OWNER_PORT=""  # wallet Owner API port    (3420 mainnet / 13420 testnet)
+DROP_TOR_PORT=""    # LEGACY: old standalone Foreign `listen` port (3415/13415) — retired; kept only for migration cleanup
+DROP_OWNER_PORT=""  # wallet combined Owner+Foreign port (3420 mainnet / 13420 testnet)
 
 # Shared (cross-network) config — stores unified domain + ssl_type
 DROP_SHARED_CONF="/opt/grin/conf/drop_shared.conf"
@@ -481,9 +481,10 @@ drop_ensure_defaults() {
         # Donation
         "donation_enabled:true"
         "donation_invoice_timeout:30"
-        # Wallet
+        # Wallet — combined listener: Foreign API rides the Owner port
+        # (owner_api_include_foreign), so both point at DROP_OWNER_PORT.
         "wallet_address:"
-        "wallet_foreign_api_port:$DROP_TOR_PORT"
+        "wallet_foreign_api_port:$DROP_OWNER_PORT"
         "wallet_owner_api_port:$DROP_OWNER_PORT"
         "wallet_foreign_secret:${DROP_WALLET_DIR}/.foreign_api_secret"
         "wallet_owner_secret:${DROP_WALLET_DIR}/.owner_api_secret"
@@ -604,17 +605,15 @@ drop_menu_status() {
         echo -e "  ${BOLD}Grin node${RESET}  : ${RED}✗ not running${RESET}  ${YELLOW}⚠ run Script 01${RESET}"
     fi
 
-    # Wallet sessions
-    local tor_st owner_st
-    tmux has-session -t "$DROP_TMUX_TOR"   2>/dev/null && tor_st="${GREEN}● listening${RESET}"   || tor_st="${YELLOW}stopped${RESET}"
+    # Wallet listener — single combined Owner+Foreign session
+    local owner_st
     tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null && owner_st="${GREEN}● listening${RESET}" || owner_st="${YELLOW}stopped${RESET}"
     if [[ ! -x "$DROP_WALLET_BIN" ]]; then
         echo -e "  ${BOLD}Wallet${RESET}     : ${RED}✗ not installed${RESET}  ${DIM}run option 1${RESET}"
     elif [[ ! -f "$DROP_WALLET_DIR/grin-wallet.toml" ]]; then
         echo -e "  ${BOLD}Wallet${RESET}     : ${RED}✗ not initialized${RESET}  ${DIM}run option 1${RESET}"
     else
-        echo -e "  ${BOLD}Wallet TOR${RESET} : $tor_st  ${DIM}($DROP_TMUX_TOR)${RESET}"
-        echo -e "  ${BOLD}Wallet OWN${RESET} : $owner_st  ${DIM}($DROP_TMUX_OWNER)${RESET}"
+        echo -e "  ${BOLD}Wallet${RESET}     : $owner_st  ${DIM}(Owner+Foreign :$DROP_OWNER_PORT · $DROP_TMUX_OWNER)${RESET}"
     fi
 
     # Steps 3–6
@@ -662,7 +661,7 @@ drop_menu() {
 
         echo -e "${DIM}  ─── First-time setup (run in order) ─────────────${RESET}"
         echo -e "  ${GREEN}1${RESET}) Setup wallet          ${DIM}(download + 5-step init flow)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Wallet listening      ${DIM}(TOR: $DROP_TMUX_TOR + Owner: $DROP_TMUX_OWNER)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Wallet listening      ${DIM}(combined Owner+Foreign · $DROP_TMUX_OWNER)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Install               ${DIM}(Node.js + npm + systemd service)${RESET}"
         echo -e "  ${GREEN}4${RESET}) Configure             ${DIM}(modes, wallet API ports/secrets)${RESET}"
         echo -e "  ${GREEN}5${RESET}) Deploy web files      ${DIM}(copy to $DROP_APP_DIR/public_html/)${RESET}"

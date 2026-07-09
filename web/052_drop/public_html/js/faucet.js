@@ -131,7 +131,7 @@ async function apiPost(path, body, timeoutMs) {
       signal: ctrl ? ctrl.signal : undefined,
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw Object.assign(new Error(json.error || `HTTP ${res.status}`), { status: res.status });
+    if (!res.ok) throw Object.assign(new Error(json.error || `HTTP ${res.status}`), { status: res.status, reason: json.reason });
     return json;
   } catch (e) {
     if (e.name === "AbortError") {
@@ -149,6 +149,24 @@ async function apiGet(path) {
   const res = await fetch(path);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
+}
+
+// Turn an apiPost rejection into a user-facing message.  The backend attaches a
+// machine-readable `reason` (node_unreachable / wallet_down / insufficient_funds /
+// busy / unavailable) plus an already-friendly `error` string; a client-side
+// timeout has neither.  Only a genuine 'busy' reason (or a timeout) points at a
+// wallet scan — every other case names the real cause instead of the old blanket
+// "full scan / LMDB write lock" text.  `item` labels what's unavailable (e.g.
+// "Slatepack", "Invoice") in the busy/timeout hint.
+function walletErrorMessage(err, item) {
+  const what = item || 'This';
+  const torHint = " Try again in a minute, or switch to Tab 1 · TOR Direct which always works during a scan.";
+  if (err.timedOut)
+    return `The wallet is taking longer than usual to respond — it may be syncing.${torHint}`;
+  if (err.reason === 'busy')
+    return `Wallet is busy syncing — ${what} is unavailable right now.${torHint}`;
+  if (err.reason) return err.message;   // node_unreachable / wallet_down / insufficient_funds / unavailable
+  return "Error: " + err.message;
 }
 
 // ── Copy helper ───────────────────────────────────────────────────────────────
@@ -458,7 +476,7 @@ async function submitClaim() {
       showError("claim-error", "You already claimed recently. " + err.message);
     } else {
       trackEvent('claim_error', { method: 'address' });
-      showError("claim-error", "Error: " + err.message);
+      showError("claim-error", walletErrorMessage(err));
     }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = origBtnText || "Claim GRIN"; }
@@ -494,7 +512,7 @@ async function submitFinalize() {
       setStep(1);
     } else {
       trackEvent('finalize_error');
-      showError("finalize-error", "Error: " + err.message);
+      showError("finalize-error", walletErrorMessage(err));
     }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "Finalize Transaction"; }
@@ -568,7 +586,7 @@ async function submitClaimAnon() {
       showError("anon-claim-error", "You already claimed recently. " + err.message);
     } else {
       trackEvent('claim_error', { method: 'anonymous' });
-      showError("anon-claim-error", "Error: " + err.message);
+      showError("anon-claim-error", walletErrorMessage(err));
     }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = origText || "Claim — No Address Needed"; }
@@ -639,7 +657,6 @@ async function submitDonateReceive() {
   const btn = $("donate-receive-btn");
   if (btn) { btn.disabled = true; btn.textContent = "Processing…"; }
 
-  const SCAN_MSG = "Wallet is busy (full scan / LMDB write lock) — Slatepack is unavailable right now. Try again in a minute, or switch to Tab 1 · TOR Direct which always works during a scan.";
   try {
     const data = await apiPost(API + "/api/donate/receive", { send_slate: slate }, 25000);
     trackEvent('donate_slatepack_received');
@@ -650,8 +667,7 @@ async function submitDonateReceive() {
     hide("donate-rcv-s1");
     show("donate-rcv-s2");
   } catch (err) {
-    const msg = (err.timedOut || err.status === 503) ? SCAN_MSG : "Error: " + err.message;
-    showError("donate-receive-error", msg);
+    showError("donate-receive-error", walletErrorMessage(err, "Slatepack"));
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "Process Donation →"; }
   }
@@ -716,7 +732,6 @@ async function submitDonateInvoice() {
   const btn = $("donate-invoice-btn");
   if (btn) { btn.disabled = true; btn.textContent = "Creating invoice…"; }
 
-  const SCAN_MSG_INV = "Wallet is busy (full scan / LMDB write lock) — Invoice is unavailable right now. Try again in a minute, or switch to Tab 1 · TOR Direct which always works during a scan.";
   try {
     const data = await apiPost(API + "/api/donate/invoice", { amount: _invAmount, address }, 25000);
     _invoiceId = data.invoice_id;
@@ -730,8 +745,7 @@ async function submitDonateInvoice() {
     show("donate-inv-s2");
     return; // success — leave button hidden with step
   } catch (err) {
-    const msg = (err.timedOut || err.status === 503) ? SCAN_MSG_INV : "Error: " + err.message;
-    showError("donate-invoice-error", msg);
+    showError("donate-invoice-error", walletErrorMessage(err, "Invoice"));
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "Create Invoice →"; }
   }
@@ -765,7 +779,7 @@ async function submitDonateFinalize() {
       hide("donate-inv-s2");
       show("donate-inv-s1");
     } else {
-      showError("donate-invoice-finalize-error", "Error: " + err.message);
+      showError("donate-invoice-finalize-error", walletErrorMessage(err));
     }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "Finalize Donation →"; }

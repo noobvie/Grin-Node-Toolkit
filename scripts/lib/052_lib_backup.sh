@@ -52,11 +52,12 @@ DBK_LOG="${DBK_LOG:-/opt/grin/logs/drop-backup.log}"
 
 # Absolute source paths (existing only). The two drop dirs carry the wallet;
 # the shared conf carries cross-network domain/ssl settings. drop-<net>.db lives
-# INSIDE each drop dir and is snapshotted separately in _dbk_make_tar.
+# in a SEPARATE data dir (outside the wallet dir, so a wallet re-install can't
+# wipe it) and is snapshotted separately in _dbk_make_tar.
 DBK_TEST_DIR="${DBK_TEST_DIR:-/opt/grin/drop-test}"
 DBK_MAIN_DIR="${DBK_MAIN_DIR:-/opt/grin/drop-main}"
-DBK_TEST_DB="${DBK_TEST_DB:-/opt/grin/drop-test/drop-test.db}"
-DBK_MAIN_DB="${DBK_MAIN_DB:-/opt/grin/drop-main/drop-main.db}"
+DBK_TEST_DB="${DBK_TEST_DB:-/opt/grin/drop-test-data/drop-test.db}"
+DBK_MAIN_DB="${DBK_MAIN_DB:-/opt/grin/drop-main-data/drop-main.db}"
 
 _dbk_sources() {
     local s
@@ -322,6 +323,31 @@ _dbk_fix_perms() {
         chmod 600 "$dir"/.word_* 2>/dev/null || true
         chown root:root "$dir"/.word_* 2>/dev/null || true
     done
+    # DBs now live outside the drop dirs (own data dir). Two things to fix here —
+    # this runs only during restore, with the drop services already stopped:
+    #   1. A PRE-MOVE backup extracts its DB back INSIDE the wallet dir
+    #      (/opt/grin/drop-<net>/drop-<net>.db). Relocate it to the data dir, else
+    #      the app restarts and creates a fresh EMPTY DB at the new path, silently
+    #      ignoring the restored data. (In steady state migration already removed
+    #      the in-dir copy, so this only fires right after such a restore.)
+    #   2. tar extracts as root (--same-owner), so the data DIR lands root:root —
+    #      chown the DIR (not just the file), else SQLite (as grin) can't create
+    #      its WAL/-shm/journal files inside it and every write fails.
+    local db dbdir old_indir sfx
+    for db in "$DBK_TEST_DB" "$DBK_MAIN_DB"; do
+        dbdir="$(dirname "$db")"
+        old_indir="${dbdir%-data}/$(basename "$db")"   # data dir → sibling wallet dir
+        if [[ "$old_indir" != "$db" && -f "$old_indir" ]]; then
+            mkdir -p "$dbdir"
+            for sfx in "" "-wal" "-shm" "-journal"; do
+                [[ -f "$old_indir$sfx" ]] && mv -f "$old_indir$sfx" "$db$sfx" 2>/dev/null || true
+            done
+        fi
+        [[ -d "$dbdir" ]] || continue
+        id grin &>/dev/null && chown -R grin:grin "$dbdir" 2>/dev/null || true
+        chmod 700 "$dbdir" 2>/dev/null || true
+        [[ -f "$db" ]] && chmod 600 "$db" 2>/dev/null || true
+    done
     [[ -f "${DROP_SHARED_CONF:-/opt/grin/conf/drop_shared.conf}" ]] && \
         chmod 600 "${DROP_SHARED_CONF:-/opt/grin/conf/drop_shared.conf}" 2>/dev/null || true
 }
@@ -487,14 +513,14 @@ _dbk_restore_legacy() {
 
     if [[ -d "$tmp_dir/testnet" ]]; then
         info "Restoring testnet ..."
-        [[ -f "$tmp_dir/testnet/drop.db" ]]        && { cp "$tmp_dir/testnet/drop.db"        "$DBK_TEST_DB";                          chmod 600 "$DBK_TEST_DB";                          id grin &>/dev/null && chown grin:grin "$DBK_TEST_DB" 2>/dev/null || true; success "Testnet DB restored."; }
+        [[ -f "$tmp_dir/testnet/drop.db" ]]        && { mkdir -p "$(dirname "$DBK_TEST_DB")"; cp "$tmp_dir/testnet/drop.db"        "$DBK_TEST_DB";                          chmod 600 "$DBK_TEST_DB";                          id grin &>/dev/null && chown grin:grin "$DBK_TEST_DB" 2>/dev/null || true; success "Testnet DB restored."; }
         [[ -f "$tmp_dir/testnet/grin_drop.conf" ]] && { cp "$tmp_dir/testnet/grin_drop.conf" "$DBK_TEST_DIR/grin_drop_test.conf";     chmod 600 "$DBK_TEST_DIR/grin_drop_test.conf";     id grin &>/dev/null && chown grin:grin "$DBK_TEST_DIR/grin_drop_test.conf" 2>/dev/null || true; success "Testnet config restored."; }
         [[ -f "$tmp_dir/testnet/wallet_pass" ]]    && { cp "$tmp_dir/testnet/wallet_pass"    "$DBK_TEST_DIR/.temp_test";              chmod 600 "$DBK_TEST_DIR/.temp_test";              id grin &>/dev/null && chown grin:grin "$DBK_TEST_DIR/.temp_test" 2>/dev/null || true; success "Testnet wallet pass restored."; }
         [[ -f "$tmp_dir/testnet/seed-words" ]]     && { cp "$tmp_dir/testnet/seed-words"     "$DBK_TEST_DIR/.word_test";              chmod 600 "$DBK_TEST_DIR/.word_test";              chown root:root "$DBK_TEST_DIR/.word_test" 2>/dev/null || true; success "Testnet seed words restored."; }
     fi
     if [[ -d "$tmp_dir/mainnet" ]]; then
         info "Restoring mainnet ..."
-        [[ -f "$tmp_dir/mainnet/drop.db" ]]        && { cp "$tmp_dir/mainnet/drop.db"        "$DBK_MAIN_DB";                          chmod 600 "$DBK_MAIN_DB";                          id grin &>/dev/null && chown grin:grin "$DBK_MAIN_DB" 2>/dev/null || true; success "Mainnet DB restored."; }
+        [[ -f "$tmp_dir/mainnet/drop.db" ]]        && { mkdir -p "$(dirname "$DBK_MAIN_DB")"; cp "$tmp_dir/mainnet/drop.db"        "$DBK_MAIN_DB";                          chmod 600 "$DBK_MAIN_DB";                          id grin &>/dev/null && chown grin:grin "$DBK_MAIN_DB" 2>/dev/null || true; success "Mainnet DB restored."; }
         [[ -f "$tmp_dir/mainnet/grin_drop.conf" ]] && { cp "$tmp_dir/mainnet/grin_drop.conf" "$DBK_MAIN_DIR/grin_drop_main.conf";     chmod 600 "$DBK_MAIN_DIR/grin_drop_main.conf";     id grin &>/dev/null && chown grin:grin "$DBK_MAIN_DIR/grin_drop_main.conf" 2>/dev/null || true; success "Mainnet config restored."; }
         [[ -f "$tmp_dir/mainnet/wallet_pass" ]]    && { cp "$tmp_dir/mainnet/wallet_pass"    "$DBK_MAIN_DIR/.temp_main";              chmod 600 "$DBK_MAIN_DIR/.temp_main";              id grin &>/dev/null && chown grin:grin "$DBK_MAIN_DIR/.temp_main" 2>/dev/null || true; success "Mainnet wallet pass restored."; }
         [[ -f "$tmp_dir/mainnet/seed-words" ]]     && { cp "$tmp_dir/mainnet/seed-words"     "$DBK_MAIN_DIR/.word_main";              chmod 600 "$DBK_MAIN_DIR/.word_main";              chown root:root "$DBK_MAIN_DIR/.word_main" 2>/dev/null || true; success "Mainnet seed words restored."; }
@@ -506,6 +532,7 @@ _dbk_restore_legacy() {
     }
     rm -rf "$tmp_dir"
 
+    _dbk_fix_perms   # also chowns the new drop-<net>-data DB dirs to grin
     _dbk_restart_services
     echo ""
     warn "Legacy backups DO NOT include wallet_data/ — run Setup wallet ▸ Scan (or"

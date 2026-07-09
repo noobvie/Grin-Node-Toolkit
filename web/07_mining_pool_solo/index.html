@@ -126,6 +126,8 @@
   .tile .label { font-size: .76rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .4rem; }
   .tile .value { font-size: 1.5rem; font-weight: bold; color: var(--text-hi); word-break: break-all; }
   .tile .value .pct { font-size: .72rem; font-weight: 600; color: var(--muted); margin-left: .35rem; white-space: nowrap; }
+  .tile .sub { font-size: .68rem; font-weight: 600; color: var(--muted); margin-top: .4rem; line-height: 1.3; }
+  .tile .sub.warn { color: var(--yellow); }
   .tile .value.green { color: var(--green); } .tile .value.yellow { color: var(--yellow); }
   .tile .value.red { color: var(--red); } .tile .value.dim { color: var(--muted); font-size: 1.05rem; }
 
@@ -371,11 +373,23 @@
     <span class="panel-status"><span id="main-dot" class="dot"></span><span id="main-state">—</span></span>
   </div>
   <div class="tiles">
-    <div class="tile"><div class="label">Blocks Found (24h)</div><div class="value" id="main-blocks24">—</div></div>
-    <div class="tile"><div class="label">Coinbase Maturing</div><div class="value dim" id="main-maturing">—</div></div>
+    <div class="tile" title="Blocks this pool found in the last 24h, and how many of those coinbases are still maturing (1,440-block lock ≈ 24h) before they're spendable. Orphans are excluded from the maturing count.">
+      <div class="label">Found in last 24h</div>
+      <div class="value dim" id="main-blocks24">—</div>
+      <div class="sub" id="main-maturing"></div>
+    </div>
     <div class="tile"><div class="label">Active Miners</div><div class="value dim" id="main-miners">—</div></div>
     <div class="tile"><div class="label">Wallet Listener</div><div class="value dim" id="main-wallet">—</div></div>
-    <div class="tile"><div class="label">Block Height</div><div class="value" id="main-height">—</div></div>
+    <div class="tile" title="Rough daily GRIN this pool would earn at its 24h-average hashrate share of the network: share × 1,440 blocks × 60 ツ. Smoothed over 24h so per-block luck doesn't swing it.">
+      <div class="label">Est. Earnings / day</div>
+      <div class="value dim" id="main-earnest">—</div>
+      <div class="sub">pool · 24h avg</div>
+    </div>
+    <div class="tile" title="Reference yield for one IPOLLO G1 mini (1.2 G/s) at today's network size: 1.2 ÷ network hashrate × 86,400 ツ (60 ツ × 1,440 blocks), using the 24h-average network hashrate. Falls as the network grows.">
+      <div class="label">Est. G1 mini / day</div>
+      <div class="value dim" id="main-g1est">—</div>
+      <div class="sub">1.2 G/s · 24h avg</div>
+    </div>
     <div class="tile"><div class="label">Network Difficulty</div><div class="value" id="main-difficulty">—</div></div>
     <div class="tile"><div class="label">Network Hashrate</div><div class="value green" id="main-hashrate">—</div></div>
     <div class="tile"><div class="label">Pool Hashrate</div><div class="value green" id="main-poolhr">—</div></div>
@@ -411,11 +425,23 @@
     <span class="panel-status"><span id="test-dot" class="dot"></span><span id="test-state">—</span><span class="chevron" id="test-chevron" aria-hidden="true">▾</span></span>
   </div>
   <div class="tiles">
-    <div class="tile"><div class="label">Blocks Found (24h)</div><div class="value" id="test-blocks24">—</div></div>
-    <div class="tile"><div class="label">Coinbase Maturing</div><div class="value dim" id="test-maturing">—</div></div>
+    <div class="tile" title="Blocks this pool found in the last 24h, and how many of those coinbases are still maturing (1,440-block lock ≈ 24h) before they're spendable. Orphans are excluded from the maturing count.">
+      <div class="label">Found in last 24h</div>
+      <div class="value dim" id="test-blocks24">—</div>
+      <div class="sub" id="test-maturing"></div>
+    </div>
     <div class="tile"><div class="label">Active Miners</div><div class="value dim" id="test-miners">—</div></div>
     <div class="tile"><div class="label">Wallet Listener</div><div class="value dim" id="test-wallet">—</div></div>
-    <div class="tile"><div class="label">Block Height</div><div class="value" id="test-height">—</div></div>
+    <div class="tile" title="Rough daily tGRIN this pool would earn at its 24h-average hashrate share of the network: share × 1,440 blocks × 60 ツ. Smoothed over 24h so per-block luck doesn't swing it.">
+      <div class="label">Est. Earnings / day</div>
+      <div class="value dim" id="test-earnest">—</div>
+      <div class="sub">pool · 24h avg</div>
+    </div>
+    <div class="tile" title="Reference yield for one IPOLLO G1 mini (1.2 G/s) at today's network size: 1.2 ÷ network hashrate × 86,400 ツ (60 ツ × 1,440 blocks), using the 24h-average network hashrate. Falls as the network grows.">
+      <div class="label">Est. G1 mini / day</div>
+      <div class="value dim" id="test-g1est">—</div>
+      <div class="sub">1.2 G/s · 24h avg</div>
+    </div>
     <div class="tile"><div class="label">Network Difficulty</div><div class="value" id="test-difficulty">—</div></div>
     <div class="tile"><div class="label">Network Hashrate</div><div class="value green" id="test-hashrate">—</div></div>
     <div class="tile"><div class="label">Pool Hashrate</div><div class="value green" id="test-poolhr">—</div></div>
@@ -658,8 +684,8 @@
   var MATURITY = { main: 1440, test: 1440 };
   var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   var NETS = {
-    main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', hashrate: 'data/hashrate_main.json', poolstats: 'data/poolstats_main.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null },
-    test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', hashrate: 'data/hashrate_test.json', poolstats: 'data/poolstats_test.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null }
+    main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', hashrate: 'data/hashrate_main.json', poolstats: 'data/poolstats_main.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null, pool24hGps: null },
+    test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', hashrate: 'data/hashrate_test.json', poolstats: 'data/poolstats_test.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null, pool24hGps: null }
   };
   var STATE = { tip: { main: null, test: null }, blocks: { main: [], test: [] }, miners: { main: [], test: [] }, hashrate: { main: [], test: [] }, loaded: { main: false, test: false }, hrLoaded: { main: false, test: false }, range: 'weekly', hrRange: 'weekly', blocksPage: { main: 0, test: 0 }, price: null };
   var BLOCKS_PER_PAGE = 20;  // found-blocks table rows per page
@@ -827,6 +853,29 @@
       el.appendChild(span);
     }
   }
+  // Two earnings tiles, both keyed off the day's block reward
+  // (1,440 blocks × 60 ツ = 86,400 ツ mined network-wide per day):
+  //   • Est. Earnings / day  = this pool's 24h-average hashrate share × 86,400 ツ
+  //     (smoothed pool rate, so per-block luck doesn't swing it).
+  //   • Est. G1 mini / day   = a fixed yardstick — one IPOLLO G1 mini (1.2 G/s)
+  //     at today's network size (1.2 ÷ net hashrate × 86,400), matching
+  //     scan.grin.money's card. Both use the 24h-average network hashrate.
+  var DAY_COINBASE = 60 * 1440;   // 86,400 ツ network-wide per day (60 ツ × 1,440 blocks)
+  function setEarnTile(id, gps, netGps, unit) {
+    var el = document.getElementById(id); if (!el) return;
+    if (gps != null && gps > 0 && netGps != null && netGps > 0) {
+      el.className = 'value green';
+      el.textContent = fmtGrin(gps / netGps * DAY_COINBASE) + ' ' + unit;
+    } else {
+      el.className = 'value dim';
+      el.textContent = '—';
+    }
+  }
+  function updateEarnEst(net) {
+    var unit = (net === 'main') ? 'GRIN' : 'tGRIN', netGps = NETS[net].hrGps;
+    setEarnTile(net + '-earnest', NETS[net].pool24hGps, netGps, unit);  // pool share
+    setEarnTile(net + '-g1est', 1.2, netGps, unit);                     // G1 mini (1.2 G/s)
+  }
   function relAge(s) {
     if (s == null) return '';
     if (s < 90) return Math.max(0, Math.round(s)) + 's';
@@ -841,10 +890,11 @@
     document.getElementById(net + '-state').textContent = stateText;
     var n = document.getElementById(net + '-note');
     n.textContent = note; n.style.display = note ? 'block' : 'none';
-    set(net + '-height', '—'); set(net + '-difficulty', '—'); set(net + '-hashrate', '—');
+    set(net + '-difficulty', '—'); set(net + '-hashrate', '—');
     STATE.tip[net] = null;
     NETS[net].baseHeight = null; NETS[net].baseDiff = null; NETS[net].baseTs = null;
-    NETS[net].netDiff = null; NETS[net].hrGps = null;
+    NETS[net].netDiff = null; NETS[net].hrGps = null; NETS[net].pool24hGps = null;
+    updateEarnEst(net);
   }
 
   function pollNet(net) {
@@ -864,14 +914,19 @@
         // Peer count now rides on the sync-status line (its own tile was replaced
         // by Pool Hashrate): e.g. "synced · 8 nodes". The dot keeps the sync colour.
         var peerN = (peers !== undefined && peers !== null) ? Number(peers) : null;
+        // Tip height now rides on the sync-status line beside the badge (its own
+        // "Block Height" tile was retired for the Est. Earnings tile), e.g.
+        // "synced 1,234,567 · 8 nodes". The dot keeps the sync colour.
+        var heightStr = (height !== undefined && height !== null) ? Number(height).toLocaleString() : '';
         document.getElementById(net + '-dot').className = 'dot ' + sync.cls;
         document.getElementById(net + '-state').textContent =
-          sync.text + (peerN !== null ? ' · ' + peerN + ' node' + (peerN === 1 ? '' : 's') : '');
-        set(net + '-height', height !== undefined ? Number(height).toLocaleString() : '—');
+          sync.text + (heightStr ? ' ' + heightStr : '')
+          + (peerN !== null ? ' · ' + peerN + ' node' + (peerN === 1 ? '' : 's') : '');
         updateDiffHashrate(net, height !== undefined ? Number(height) : null, diff !== undefined ? Number(diff) : null, nowTs);
         var s = NETS[net];
         set(net + '-difficulty', s.netDiff != null ? fmtNum(s.netDiff) : '—');
         set(net + '-hashrate', s.hrGps != null ? fmtHr(s.hrGps) : '—', s.hrGps != null ? 'green' : 'dim');
+        updateEarnEst(net);
         return true;
       })
       .catch(function (err) {
@@ -896,9 +951,11 @@
       .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
       .then(function (data) {
         STATE.blocks[net] = Array.isArray(data.blocks) ? data.blocks : []; STATE.loaded[net] = true;
-        set(net + '-blocks24', String(data.found_24h != null ? data.found_24h : 0), (data.found_24h > 0) ? 'green' : 'dim');
+        var f24 = data.found_24h != null ? data.found_24h : 0;
+        set(net + '-blocks24', f24 + ' block' + (f24 === 1 ? '' : 's'), (f24 > 0) ? 'green' : 'dim');
+        renderMaturity(net);   // maturing sub-line shares this tile — refresh it now
       })
-      .catch(function () { STATE.loaded[net] = false; set(net + '-blocks24', 'n/a', 'dim'); });
+      .catch(function () { STATE.loaded[net] = false; set(net + '-blocks24', 'n/a', 'dim'); renderMaturity(net); });
   }
 
   function pollHashrate(net) {
@@ -932,6 +989,10 @@
         var mc = data.miner_count || 0, oc = data.online_count || 0;
         set(net + '-miners', oc + ' / ' + mc, mc === 0 ? 'dim' : (oc === mc ? 'green' : 'yellow'));
         setPoolHr(net, data.total_hr_gps);
+        // Pool 24h-average hashrate = sum of each miner's own 24h rate — a smooth
+        // basis for the Est. Earnings tile that ignores per-block share luck.
+        NETS[net].pool24hGps = miners.reduce(function (a, m) { return a + (Number(m.hr_24h) || 0); }, 0);
+        updateEarnEst(net);
         sum.innerHTML = '<b>' + oc + '</b>/' + mc + ' online · total <b>' + fmtHr(data.total_hr_gps) + '</b>';
         if (miners.length === 0) {
           tbody.innerHTML = '';
@@ -986,13 +1047,16 @@
     var hrs = ((need - depth) * 60) / 3600;
     return { state: 'maturing', text: 'maturing ~' + (hrs >= 1 ? hrs.toFixed(0) + 'h' : '<1h') };
   }
+  // Maturing coinbases now render as the sub-line of the "Found in last 24h" tile,
+  // so this writes the .sub element directly (not via set(), which would stamp a
+  // .value class over it). Blank until blocks + tip are both known.
   function renderMaturity(net) {
+    var el = document.getElementById(net + '-maturing'); if (!el) return;
     var tip = STATE.tip[net];
-    if (!STATE.loaded[net]) { set(net + '-maturing', 'n/a', 'dim'); return; }
-    if (tip === null) { set(net + '-maturing', '?', 'dim'); return; }
+    if (!STATE.loaded[net] || tip === null) { el.textContent = ''; el.className = 'sub'; return; }
     // Count only genuinely-maturing coinbases — exclude orphans (they never mature).
     var n = 0; STATE.blocks[net].forEach(function (b) { if (!b.orphan && tip - b.height < MATURITY[net]) n++; });
-    set(net + '-maturing', String(n), n > 0 ? 'yellow' : 'dim');
+    el.textContent = n + ' maturing'; el.className = 'sub' + (n > 0 ? ' warn' : '');
   }
 
   // ── Timezone mode (per-event views only) ──

@@ -299,43 +299,70 @@ nginx_web_owner() {
 # Use directly for script-specific zones, or wrap in a named helper for zones
 # shared across multiple scripts (see nginx_ensure_grin_api_zone below).
 #
-# Behaviour:
+# Behaviour (default, idempotent mode):
+#   · No-op if the conf file already exists (lets ops hand-tune the rate)
 #   · Grep-guard: skips if the zone is already defined anywhere under /etc/nginx
-#     (lets ops override the rate by editing the conf file directly — the helper
-#     will detect the existing zone and not clobber it)
+#     (avoids a duplicate definition in the http context)
 #   · Writes /etc/nginx/conf.d/<conf_basename>.conf with a comment header
 #   · For SHARED zones: callers must pass identical args so every overwrite is
 #     byte-identical (last-write-wins is then safe)
 #
+# Force mode (pass a non-empty 5th arg):
+#   · Re-asserts the rate from the toolkit source on EVERY setup run — so editing
+#     the value in this lib (or the calling wrapper) and re-running the product's
+#     setup actually applies it, matching first-install behaviour. Without this,
+#     the on-disk file wins forever after the first write and source edits never
+#     reach an already-deployed box.
+#   · Still refuses to write if the SAME zone is defined in a DIFFERENT file
+#     (excluding our own conf_file) — two definitions of one zone is a fatal error.
+#
 # Usage:
-#   nginx_ensure_rate_limit_zone <zone_name> <rate> [size=10m] [conf_basename]
+#   nginx_ensure_rate_limit_zone <zone_name> <rate> [size=10m] [conf_basename] [force]
 #     · zone_name      e.g. "grin_api", "pool_api_main"
 #     · rate           nginx rate string, e.g. "30r/m", "10r/s"
 #     · size           shared memory zone size, default "10m" (~160k IPs)
 #     · conf_basename  filename under /etc/nginx/conf.d/ WITHOUT .conf suffix,
 #                      default "<zone_name>-rate-limit"
+#     · force          non-empty → re-assert the source rate even if the file exists
 nginx_ensure_rate_limit_zone() {
-    local zone="$1" rate="$2" size="${3:-10m}" basename="${4:-${1}-rate-limit}"
+    local zone="$1" rate="$2" size="${3:-10m}" basename="${4:-${1}-rate-limit}" force="${5:-}"
     if [[ -z "$zone" || -z "$rate" ]]; then
-        error "nginx_ensure_rate_limit_zone: usage: <zone_name> <rate> [size] [conf_basename]"
+        error "nginx_ensure_rate_limit_zone: usage: <zone_name> <rate> [size] [conf_basename] [force]"
         return 1
     fi
     local conf_file="/etc/nginx/conf.d/${basename}.conf"
 
-    # Skip if the target file already exists — re-running should be a no-op.
-    [[ -f "$conf_file" ]] && return 0
-
-    # Skip if this zone is already defined anywhere under /etc/nginx (avoids
-    # creating a duplicate definition).
-    grep -rqsE "limit_req_zone[^;]*zone=${zone}[: ]" /etc/nginx 2>/dev/null && return 0
+    if [[ -z "$force" ]]; then
+        # Idempotent mode (default): once we've written the file, re-running is a
+        # no-op, and we never touch a definition an operator may have hand-tuned.
+        [[ -f "$conf_file" ]] && return 0
+        # Also skip if this zone is defined anywhere under /etc/nginx (duplicate guard).
+        grep -rqsE "limit_req_zone[^;]*zone=${zone}[: ]" /etc/nginx 2>/dev/null && return 0
+    else
+        # Force mode: re-assert on every run. Still refuse to write if the zone is
+        # defined in a DIFFERENT file (exclude our own conf_file) — a duplicate zone
+        # in the http context is a fatal nginx error.
+        if grep -rlsE "limit_req_zone[^;]*zone=${zone}[: ]" /etc/nginx 2>/dev/null \
+             | grep -qvFx "$conf_file"; then
+            warn "nginx_ensure_rate_limit_zone: zone '${zone}' also defined outside ${conf_file} — not overwriting to avoid a duplicate."
+            return 0
+        fi
+    fi
 
     mkdir -p /etc/nginx/conf.d
+    local custom_note
+    if [[ -n "$force" ]]; then
+        custom_note="# Managed from the toolkit source and re-asserted on every setup run — change the
+# rate in scripts/lib/nginx_shared_helpers.sh (or the calling wrapper), not here."
+    else
+        custom_note="# To customise, edit this file directly — the helper will detect the existing
+# zone and not overwrite it on subsequent runs."
+    fi
     cat > "$conf_file" << RATELIMIT
 # Grin Node Toolkit — managed rate-limit zone: ${zone}
 # Rate ${rate} per IP, ${size} shared memory zone.
 # Helper: nginx_ensure_rate_limit_zone (scripts/lib/nginx_shared_helpers.sh)
-# To customise, edit this file directly — the helper will detect the existing
-# zone and not overwrite it on subsequent runs.
+${custom_note}
 limit_req_zone \$binary_remote_addr zone=${zone}:${size} rate=${rate};
 RATELIMIT
 }
@@ -506,9 +533,11 @@ nginx_ensure_cloudflare_realip() {
 
 # ── Named wrapper: grin_api zone (shared by Scripts 04, 06) ──────────────────
 # Both scripts call this, both pass identical args → byte-identical output → safe
-# co-writes regardless of which script runs first.
+# co-writes regardless of which script runs first. Uses FORCE so re-running either
+# script's setup re-asserts the rate below onto an already-deployed box (edit the
+# rate here, re-run option 4 / Script 06 setup, done — no manual conf.d rm needed).
 nginx_ensure_grin_api_zone() {
-    nginx_ensure_rate_limit_zone "grin_api" "30r/m" "10m" "grin-rate-limit"
+    nginx_ensure_rate_limit_zone "grin_api" "300r/m" "10m" "grin-rate-limit" "force"
 }
 
 # ═════════════════════════════════════════════════════════════════════════════

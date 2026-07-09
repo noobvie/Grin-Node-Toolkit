@@ -81,6 +81,9 @@ ROBOTS_EOF
         warn "User 'grin' not found — skipping chown (running as $USER)"
     fi
 
+    # DB lives outside the app dir (survives wallet re-install) — own it separately.
+    _drop_ensure_data_dir
+
     # Unified homepage — served directly by nginx (www-data), not by Node.js
     # /var/www/grin-drop-home/ → https://domain/  (nginx root)
     # /opt/grin/drop-test/public_html/ → https://domain/testnet/  (Node.js proxy)

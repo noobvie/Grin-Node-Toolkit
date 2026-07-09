@@ -312,7 +312,8 @@ missing (no-op if the file exists — delete the file to regenerate).
    the file exists; never put shell syntax (`2>/dev/null`) inside an nginx config.
 
 ## Generated & Temporary Files
-ALL generated docs go to `docs/generated/` — never scatter into `web/`, `flowcharts/`, etc.
+ALL generated docs go to `docs/generated/` — never scatter into `web/` etc. The old
+`flowcharts/` dir was merged into `docs/generated/` (2026-07-09); don't recreate it.
 
 **Naming:** `script<XX>_<type>_<optional_service>_<optional_date>.md`
 - `script<XX>` — REQUIRED prefix; `type` — `design`/`implementation`/`security_audit`/`analysis`/`reference`/`report`; `date` — `YYYY-MM-DD` only when multiple versions exist.

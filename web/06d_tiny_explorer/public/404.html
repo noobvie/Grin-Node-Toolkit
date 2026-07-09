@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Not found — Tiny Explorer</title>
+  <meta name="description" content="That block or page could not be found on Tiny Explorer. Try a deeper Grin block explorer.">
+  <meta name="robots" content="noindex, follow">
+  <meta name="theme-color" content="#ff8c00">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/tiny-explorer.css">
+  <script>(function(){var t=localStorage.getItem('tinyexp-theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
+</head>
+<body data-page="notfound">
+
+  <header class="tx-header">
+    <div class="tx-header-inner">
+      <a href="/" class="tx-brand">
+        <img src="/grin-logo.svg" class="tx-logo" alt="Grin logo">
+        <span class="tx-brand-text">
+          <span class="tx-title">Tiny<span class="tx-accent">Explorer</span></span>
+          <span class="tx-slogan" id="tx-slogan">Every Grin block, one link away.</span>
+        </span>
+      </a>
+      <div class="tx-header-spacer"></div>
+      <form class="tx-search" id="tx-search-form" role="search">
+        <input id="tx-search-input" type="text" placeholder="Block height or hash…  ( / )" autocomplete="off" spellcheck="false" aria-label="Search by block height or hash">
+        <button class="tx-btn" type="submit">Search</button>
+      </form>
+      <button id="tx-theme-toggle" class="tx-theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">☾</button>
+    </div>
+  </header>
+
+  <main class="tx-wrap tx-main">
+    <div class="tx-404">
+      <h1>404</h1>
+      <p>We couldn't find <span id="tx-404-query">that block or page</span>. It may be above the current
+        tip, mistyped, or genuinely unavailable here.</p>
+      <p><a href="/">← Jump to the latest blocks</a></p>
+    </div>
+
+    <h2 style="text-align:center;font-size:16px;margin:8px 0 0;color:var(--value)">Try a deeper explorer</h2>
+    <div class="tx-fallbacks" id="tx-fallbacks"></div>
+  </main>
+
+  <footer class="tx-footer">
+    <div id="tx-footer-text"></div>
+  </footer>
+
+  <script src="/js/tiny-explorer.js"></script>
+</body>
+</html>

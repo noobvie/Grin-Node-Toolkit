@@ -58,9 +58,11 @@
   .slogan { color: var(--text); font-size: 1rem; margin-top: .45rem; opacity: .92; }
   .theme-toggle {
     background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
-    border-radius: 999px; padding: .5rem .9rem; font-family: inherit; font-size: .95rem;
+    border-radius: 999px; padding: .4rem .7rem; font-family: inherit; font-size: .85rem;
     cursor: pointer; flex: none; transition: background .2s; text-decoration: none; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: .35rem;
   }
+  .theme-toggle .ico { font-size: 1rem; line-height: 1; }
   .theme-toggle:hover { background: var(--border); }
 
   .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%;
@@ -286,17 +288,32 @@
   @media (max-width: 560px) {
     header { flex-direction: column; align-items: stretch; gap: .9rem; }
     .header-actions { flex-wrap: wrap; }
+    /* phones: header buttons collapse to icon-only — emoji + title carry the meaning */
+    .header-actions .lbl { display: none; }
+    .header-actions .theme-toggle { padding: .5rem .6rem; }
     .freshness { justify-content: flex-start; margin-top: 0; }
     /* one tile per row on mobile — avoids the ragged 2+1 wrap */
     .tiles { grid-template-columns: 1fr; }
   }
 
-  /* Section navigation — clickable chips that jump to each panel/chart */
+  /* Section navigation — clickable chips that jump to each panel/chart.
+     Sticky one-line strip: pinned to the top on scroll (z above the panels),
+     never wraps (nowrap) so it stays a single row; the tighter gap/padding lets
+     all chips fit at max-width, and overflow-x:auto lets it scroll rather than
+     wrap only on a viewport too narrow for the icon strip. */
   html { scroll-behavior: smooth; }
-  .panel, .chart-card { scroll-margin-top: 1rem; }
-  nav.toc { width: 100%; max-width: 860px; display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; margin: 0 0 1.5rem; }
-  nav.toc a { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
-    border-radius: 999px; padding: .42rem .85rem; font-size: .86rem; text-decoration: none;
+  /* clear the sticky bar on anchor-jump so a target heading isn't hidden under it */
+  .panel, .chart-card, #split-card, #earn-card, #quality-card { scroll-margin-top: 4rem; }
+  nav.toc { position: sticky; top: 0; z-index: 50;
+    width: 100%; max-width: 860px; display: flex; flex-wrap: nowrap; justify-content: center;
+    gap: .4rem; margin: 0 0 1.5rem; padding: .5rem .45rem;
+    overflow-x: auto; scrollbar-width: none;
+    background: var(--panel); border: 1px solid var(--border); border-top: none;
+    border-radius: 0 0 14px 14px; box-shadow: 0 6px 16px rgba(0,0,0,.18); }
+  nav.toc::-webkit-scrollbar { display: none; }
+  nav.toc a { flex: none; white-space: nowrap;
+    background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 999px; padding: .4rem .7rem; font-size: .82rem; text-decoration: none;
     letter-spacing: .02em; transition: background .2s;
     display: inline-flex; align-items: center; gap: .4rem; }
   nav.toc a:hover { background: var(--border); color: var(--text-hi); }
@@ -324,9 +341,9 @@
     </div>
   </div>
   <div class="header-actions">
-    <a class="theme-toggle" href="setup-solo-mining.html">⚙ Miner Setup</a>
-    <button class="theme-toggle" id="tz-toggle" type="button" aria-label="Toggle UTC / local time">🕓 Local</button>
-    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme">☾ Dark</button>
+    <a class="theme-toggle" href="setup-solo-mining.html" title="Miner setup"><span class="ico" aria-hidden="true">⚙</span><span class="lbl">Setup</span></a>
+    <button class="theme-toggle" id="tz-toggle" type="button" aria-label="Toggle UTC / local time"><span class="ico" aria-hidden="true">🕓</span><span class="lbl" id="tz-lbl">Local</span></button>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme"><span class="ico" aria-hidden="true" id="theme-ico">☾</span><span class="lbl" id="theme-lbl">Dark</span></button>
   </div>
 </header>
 
@@ -433,8 +450,8 @@
     <h2>Blocks Found</h2>
     <div class="chart-head-tools">
       <div class="seg" id="blocks-view-seg" role="group" aria-label="Blocks view">
-        <button type="button" data-view="history" class="active">History</button>
-        <button type="button" data-view="hour">By hour</button>
+        <button type="button" data-view="history" class="active" title="History" aria-label="History">📈</button>
+        <button type="button" data-view="hour" title="By hour heatmap" aria-label="By hour heatmap">🔥</button>
       </div>
       <div class="seg" id="range-seg">
         <button type="button" data-range="daily">Daily</button>
@@ -462,7 +479,7 @@
     <div id="hour-chart"><div class="chart-empty">Loading…</div></div>
     <details class="info-toggle">
       <summary>ⓘ About this chart</summary>
-      <p class="split-foot"><b>Mainnet only.</b> Every block we've ever found, bucketed by the <b>hour of day</b> it was found — in <b><span id="hour-tz">local time</span></b> (toggle your local zone/UTC with the 🕓 clock in the header). Stronger-coloured cells = more finds; faint cells = fewer. This looks back at when finds have landed; it is <b>not a forecast</b>. Block discovery is random (memoryless), so a “hot” hour is past luck and won't predict the next block — don't schedule mining or node maintenance around expected finds. For real power savings, mine on your cheapest electricity hours, which are set by your tariff, not by this chart.</p>
+      <p class="split-foot"><b>Mainnet only.</b> Every block we've ever found, bucketed by the <b>hour of day</b> it was found — in <b><span id="hour-tz">local time</span></b> (toggle your local zone/UTC with the 🕓 clock in the header). Cells run <b>yellow</b> (fewer finds) → <b>red</b> (the busiest hours); blank cells had no finds. This looks back at when finds have landed; it is <b>not a forecast</b>. Block discovery is random (memoryless), so a “hot” hour is past luck and won't predict the next block — don't schedule mining or node maintenance around expected finds. For real power savings, mine on your cheapest electricity hours, which are set by your tariff, not by this chart.</p>
     </details>
   </div>
 </section>
@@ -584,6 +601,8 @@
 
 <footer>
   Run by <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer" style="color:var(--main)">Grin Node Toolkit</a> — script 07 (Grin Solo Mining Pool Setup). Happy Grinning (ツ)
+  <br>
+  Made with ❤️ from Saigon <svg viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes" style="vertical-align:-2px;border-radius:2px"><rect width="27" height="18" fill="#FFCD00"/><rect y="4" width="27" height="2" fill="#DA251D"/><rect y="8" width="27" height="2" fill="#DA251D"/><rect y="12" width="27" height="2" fill="#DA251D"/></svg>
 </footer>
 
 <script>
@@ -592,7 +611,12 @@
 
   // ── Theme ──
   var root = document.documentElement, toggle = document.getElementById('theme-toggle');
-  function applyTheme(t) { root.setAttribute('data-theme', t); toggle.textContent = (t === 'light') ? '☀ Light' : '☾ Dark'; }
+  function applyTheme(t) {
+    root.setAttribute('data-theme', t);
+    var lt = (t === 'light');
+    document.getElementById('theme-ico').textContent = lt ? '☀' : '☾';
+    document.getElementById('theme-lbl').textContent = lt ? 'Light' : 'Dark';
+  }
   var saved = null; try { saved = localStorage.getItem('grinSoloTheme'); } catch (e) {}
   if (!saved) saved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
   applyTheme(saved);
@@ -1741,10 +1765,16 @@
     var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="' + esc(aria) + '">';
     for (var hh = 0; hh < 24; hh++) {
       var x = L + hh * cellW, c = counts[hh], fill, fo;
-      // Single-hue ramp on var(--main) via fill-opacity → theme-aware (light/dark) for
-      // free; empty hours get a faint border wash so the 24-cell grid stays visible.
-      if (c === 0) { fill = 'var(--border)'; fo = '0.14'; }
-      else { fill = 'var(--main)'; fo = (0.18 + 0.82 * (c / maxV)).toFixed(3); }
+      // Heat ramp: yellow (lowest) → red (busiest) via hue interpolation, so intensity
+      // reads as colour not just brightness. Empty hours stay a faint blank wash so the
+      // 24-cell grid is still visible. Concrete hsl() (not var(--main)) also survives the
+      // PNG-export style freeze cleanly.
+      if (c === 0) { fill = 'var(--border)'; fo = '0.12'; }
+      else {
+        var t = maxV > 0 ? (c / maxV) : 1;         // 0 … 1 relative intensity
+        var hue = (48 * (1 - t)).toFixed(0);       // 48 = yellow → 0 = red
+        fill = 'hsl(' + hue + ', 92%, 52%)'; fo = '0.95';
+      }
       var title = esc(pad2(hh) + ':00–' + pad2((hh + 1) % 24) + ':00 · ' + c + ' block' + (c === 1 ? '' : 's'));
       svg += '<rect x="' + (x + gap / 2).toFixed(1) + '" y="' + T + '" width="' + (cellW - gap).toFixed(1)
         + '" height="' + plotH + '" rx="2" fill="' + fill + '" fill-opacity="' + fo + '"><title>' + title + '</title></rect>';
@@ -1904,7 +1934,7 @@
   var tzBtn = document.getElementById('tz-toggle');
   function updateTzUI() {
     var utc = (TZMODE === 'utc');
-    tzBtn.textContent = '🕓 ' + (utc ? 'UTC' : 'Local');
+    document.getElementById('tz-lbl').textContent = utc ? 'UTC' : 'Local';
     tzBtn.title = utc ? 'Times shown in UTC — click for your local zone (' + localTzLabel() + ')'
                       : 'Times shown in your local zone (' + localTzLabel() + ') — click for UTC';
     var lbl = utc ? 'UTC' : 'Local';
@@ -1990,6 +2020,16 @@
     else { freshBox.className = 'freshness stale'; freshText.textContent = 'Stale · updated ' + relAge(age) + ' ago'; }
   }
 
+  // ── Initial-load fast retry ──
+  // The regular cadence is one poll every 120s (POLL_MS). If the FIRST poll after a
+  // page load returns no node data (a transient blip — e.g. a burst 503 on a hard
+  // refresh, or the node a beat slow to answer), the panels would otherwise sit blank
+  // for the full 120s until the next poll. Instead, retry quickly a few times so a
+  // one-off failure self-heals in ~1s. Bounded (INITIAL_RETRY_MAX) so a genuinely
+  // unreachable node is not hammered — once that budget is spent we fall back to the
+  // normal 120s cadence, which still recovers on its own.
+  var INITIAL_RETRY_MS = 100, INITIAL_RETRY_MAX = 8, initialRetries = 0, gotFirstData = false;
+
   function poll() {
     Promise.all([
       pollNet('main'), pollNet('test'), pollWallet('main'), pollWallet('test'),
@@ -2002,6 +2042,10 @@
       tickFresh();
       renderDerived();
       if (SPLIT.person) renderPerson();   // refresh live worker hashrates each tick
+      if (lastPollOk) { gotFirstData = true; }
+      else if (!gotFirstData && initialRetries < INITIAL_RETRY_MAX) {
+        initialRetries++; setTimeout(poll, INITIAL_RETRY_MS);
+      }
     });
   }
   poll(); setInterval(poll, POLL_MS); setInterval(tickFresh, 1000);

@@ -170,9 +170,11 @@ SHARE_CREDIT_DIFF = C32_SCALE
 
 NODE_PORTS = {"mainnet": 3413, "testnet": 13413}
 # Toolkit defaults for the health probe, used when grin-server.toml has no explicit
-# value. Stratum = the port miners dial; wallet = the coinbase Foreign listener.
+# value. Stratum = the port miners dial; wallet = the coinbase Foreign API, now
+# served on the combined listener's Owner port (owner_api_include_foreign =
+# 3420/13420), not the old standalone 3415/13415 Foreign listener.
 STRATUM_PORTS = {"mainnet": 3416, "testnet": 13416}
-WALLET_FOREIGN_PORTS = {"mainnet": 3415, "testnet": 13415}
+WALLET_FOREIGN_PORTS = {"mainnet": 3420, "testnet": 13420}
 
 # ── Payout split (mainnet only) ────────────────────────────────────────────────
 BLOCK_REWARD_GRIN = 60.0         # flat coinbase reward (Grin has no halving)

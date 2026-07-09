@@ -268,7 +268,7 @@ drop_configure() {
     # ── Wallet API ports + secret paths (info only) ───────────────────────────
     echo ""
     echo -e "  ${BOLD}Wallet HTTP API [$DROP_NET_LABEL]:${RESET}"
-    echo -e "  ${DIM}Foreign API port : $(drop_read_conf "wallet_foreign_api_port" "$DROP_TOR_PORT")${RESET}"
+    echo -e "  ${DIM}Foreign API port : $(drop_read_conf "wallet_foreign_api_port" "$DROP_OWNER_PORT")  ${DIM}(combined — rides Owner port)${RESET}"
     echo -e "  ${DIM}Owner API port   : $(drop_read_conf "wallet_owner_api_port" "$DROP_OWNER_PORT")${RESET}"
     local fsec; fsec=$(drop_read_conf "wallet_foreign_secret" "${DROP_WALLET_DIR}/.foreign_api_secret")
     local osec; osec=$(drop_read_conf "wallet_owner_secret"   "${DROP_WALLET_DIR}/.owner_api_secret")

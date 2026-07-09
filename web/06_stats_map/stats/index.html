@@ -603,7 +603,7 @@
 
   <div id="panel">
     <h2>Network Snapshot</h2>
-    <p class="filter-note">Active peers — last 7 days</p>
+    <p class="filter-note">Active peers — last 30 days</p>
     <div class="stat-row"><span class="lbl">Total peers</span><span class="val" id="p-total">—</span></div>
     <div class="stat-row">
       <span class="lbl"><span style="color:#ff9900">●</span> Mainnet</span>
@@ -655,6 +655,7 @@
 
 <footer>
   <span class="footer-desc">Real-time interactive world map of active <a href="https://grin.mw/" target="_blank" rel="noopener">Grin cryptocurrency</a> network peers — explore live mainnet &amp; testnet nodes by country, client version, and connection direction.</span>
+  Made with ❤️ from Saigon <svg viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes" style="vertical-align:-2px;border-radius:2px"><rect width="27" height="18" fill="#FFCD00"/><rect y="4" width="27" height="2" fill="#DA251D"/><rect y="8" width="27" height="2" fill="#DA251D"/><rect y="12" width="27" height="2" fill="#DA251D"/></svg> &nbsp;·&nbsp;
   <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Run by Grin Node Toolkit</a>
   <a href="https://forum.grin.mw/"                       target="_blank" rel="noopener">Join our team</a>
 </footer>
@@ -768,8 +769,8 @@
 <script>
 const DATA_URL = "data/peers.json";
 
-// Show peers seen within the last 7 days (matches PEER_HISTORY_DAYS in collector)
-const ACTIVE_WINDOW_SEC = 7 * 24 * 3600;
+// Show peers seen within the last 30 days (matches PEER_HISTORY_DAYS in collector)
+const ACTIVE_WINDOW_SEC = 30 * 24 * 3600;
 
 const NET_COLOR = { mainnet: "#ff9900", testnet: "#00bcd4" };
 // Violet — distinct from orange/cyan/green and legible on both the dark
@@ -1217,7 +1218,7 @@ async function boot() {
   try {
     const data = await fetch(DATA_URL + "?t=" + Date.now()).then(r => r.json());
 
-    // Filter to peers active in the last 7 days (ACTIVE_WINDOW_SEC = PEER_HISTORY_DAYS)
+    // Filter to peers active in the last 30 days (ACTIVE_WINDOW_SEC = PEER_HISTORY_DAYS)
     const now    = Math.floor(Date.now() / 1000);
     const cutoff = now - ACTIVE_WINDOW_SEC;
     const peers  = (data.peers || []).filter(p =>

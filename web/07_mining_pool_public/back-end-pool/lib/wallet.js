@@ -27,6 +27,7 @@ class WalletAPI {
     // Session state — reset on error, re-established on next call
     this.aesKey      = null;
     this.sessionOpen = false;
+    this.token       = null; // keychain mask returned by open_wallet
   }
 
   // --- Public methods -------------------------------------------------------
@@ -39,6 +40,7 @@ class WalletAPI {
   async getBalance(refresh = false) {
     try {
       // retrieve_summary_info params: [keychain_mask, refresh_from_node, min_confirmations]
+      // (the mask slot is filled in by _call from the open_wallet token)
       const result = await this._call('retrieve_summary_info', [null, !!refresh, 1]);
       return result;
     } catch (err) {
@@ -66,7 +68,9 @@ class WalletAPI {
   // an undecryptable blob → no theft. The IP gate (owner-proof.js) only throttles who can trigger.
   //
   // Param order matches grin-wallet Owner API v3 (docs.rs grin_wallet_api::Owner / owner_rpc).
-  // Token is passed as null (no keychain mask), consistent with retrieve_summary_info above.
+  // Every method's first param is the keychain-mask token from open_wallet; call sites leave
+  // it null and _call() substitutes the live session token (same as 052 Drop's ownerApiSession —
+  // passing an actual null gets "Supplied keychain mask is invalid" from the LMDB backend).
 
   // 1a. Build an unconfirmed send slate. amountGrin → nanoGRIN (u64; pool payouts stay well
   //     under 2^53 so a JS number is safe). Returns a VersionedSlate.
@@ -147,13 +151,19 @@ class WalletAPI {
       throw new Error('init_secure_api returned unexpected value');
     }
 
-    // 3. Derive AES-256 key: sha256 of the ECDH shared secret
-    const sharedSecret = ecdh.computeSecret(Buffer.from(serverPubkey, 'hex'));
-    this.aesKey = crypto.createHash('sha256').update(sharedSecret).digest();
+    // 3. AES-256 key = the ECDH shared secret AS-IS. grin-wallet uses the shared point's
+    //    32-byte X-coordinate directly as the key (NO extra hash); Node's computeSecret()
+    //    already returns exactly that X-coordinate. An earlier sha256() over it corrupted
+    //    the key, so the wallet rejected every encrypted call with "EncryptedBody:
+    //    decryption failed" (balance + payouts never worked). Matches the known-good
+    //    051_wallet/server.js ownerApiSession() implementation.
+    this.aesKey = ecdh.computeSecret(Buffer.from(serverPubkey, 'hex'));
 
-    // 4. open_wallet — first encrypted call; unlocks the wallet for this session
+    // 4. open_wallet — first encrypted call; unlocks the wallet for this session.
+    //    It returns the keychain-mask token every subsequent Owner call must carry;
+    //    each open_wallet re-masks the seed, so any previously issued token dies here.
     const password = this._readPassword();
-    await this._encryptedCall('open_wallet', [null, password]);
+    this.token = await this._encryptedCall('open_wallet', [null, password]);
 
     this.sessionOpen = true;
   }
@@ -164,18 +174,28 @@ class WalletAPI {
   }
 
   // Ensure session is open before making a call; re-init if it was dropped.
+  // params[0] is always the keychain-mask slot in Owner API v3 — filled with the
+  // live open_wallet token here (and re-filled on retry, since re-init rotates it).
   async _call(method, params) {
     if (!this.sessionOpen) {
       await this.initSession();
     }
+    params[0] = this.token;
     try {
       return await this._encryptedCall(method, params);
     } catch (err) {
-      // Session may have expired (wallet restarted) — invalidate and retry once
-      if (err.message.includes('unauthorized') || err.message.includes('session')) {
+      // Session may have expired (wallet restarted) — invalidate and retry once. Match
+      // case-insensitively: node-fetch surfaces a 401 as "HTTP 401: Unauthorized" (capital
+      // U), a stale ECDH session surfaces as a "decryption failed" body, and a stale token
+      // (the boot/watchdog unlock re-ran open_wallet, rotating the mask) surfaces as
+      // "keychain mask is invalid" — all mean the session must be re-established.
+      const m = String(err.message || '').toLowerCase();
+      if (m.includes('unauthorized') || m.includes('session') ||
+          m.includes('decryption failed') || m.includes('keychain mask')) {
         this.aesKey      = null;
         this.sessionOpen = false;
         await this.initSession();
+        params[0] = this.token;
         return this._encryptedCall(method, params);
       }
       throw err;

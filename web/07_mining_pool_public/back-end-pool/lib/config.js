@@ -17,10 +17,35 @@ function loadConfig(configPath = './pool.json') {
 }
 
 function mergeEnvVars(config) {
+  // Resolve the network FIRST so every per-network default below keys off one value.
+  // Raw input (file → env) → 'testnet' fallback, matching validateConfig's allowed set.
+  // EVERY network-dependent port/URL default below is derived from `isMain` — so even a
+  // hand-written pool.json that omits a port still binds the correct port for its network.
+  const net = config.network || process.env.POOL_NETWORK || 'testnet';
+  const isMain = net === 'mainnet';
+  const intEnv = (v) => { const n = parseInt(v || '', 10); return Number.isNaN(n) ? null : n; };
   return {
-    port: config.port || parseInt(process.env.POOL_PORT || '8080', 10),
-    stratum_port: config.stratum_port || parseInt(process.env.STRATUM_PORT || '3333', 10),
-    network: config.network || process.env.POOL_NETWORK || 'testnet',
+    // FORWARD-COMPAT: preserve every key the Script 07 installer wrote. mergeEnvVars used
+    // to be an allowlist that returned ONLY the keys it enumerated, silently DROPPING any
+    // other installer key — that single behaviour caused the service_port, grin_wallet_dir
+    // and wallet-port bugs (the installer wrote a key the app never read). Spreading the raw
+    // config first means a NEW installer key is carried through automatically; the normalized
+    // keys below still OVERRIDE it with env fallbacks + per-network defaults, so they win.
+    ...config,
+    // API port. Accept every name the installer supplies — JSON key `service_port` and the
+    // systemd `PORT` env (NOT `port`/`POOL_PORT`). Falls back to the network's own port, so a
+    // testnet install can never silently bind mainnet's 8080.
+    port: config.port || config.service_port
+          || intEnv(process.env.PORT) || intEnv(process.env.POOL_PORT) || (isMain ? 8080 : 8090),
+    // Bind address. The systemd unit exports HOST=127.0.0.1; the app is always behind nginx,
+    // and trust proxy='loopback' + the admin IP allowlist ASSUME a loopback-only bind (a direct
+    // off-box hit must get its real socket IP, not a forged XFF). Default loopback so a missing
+    // HOST never exposes the API on all interfaces.
+    host: config.host || process.env.HOST || '127.0.0.1',
+    // Public stratum port — network-aware default (mainnet 3333 / testnet 13333), same as
+    // every other port here, so it's correct even if the installer key is absent.
+    stratum_port: config.stratum_port || intEnv(process.env.STRATUM_PORT) || (isMain ? 3333 : 13333),
+    network: net,
     // NOTE: no auto-generate fallback — a missing secret must fail loudly at boot
     // (see validateConfig). Auto-minting one here would silently invalidate every admin
     // session on each restart. The Script 07 installer writes it once into pool.json.
@@ -32,11 +57,24 @@ function mergeEnvVars(config) {
     confirm_depth_mainnet: config.confirm_depth_mainnet || 1440,
     confirm_depth_testnet: config.confirm_depth_testnet || 100,
 
-    wallet_dir: config.wallet_dir || process.env.POOL_WALLET_DIR || '/opt/grin/pool-test/',
-    wallet_owner_port: config.wallet_owner_port || 13420,
-    wallet_foreign_port: config.wallet_foreign_port || 13415,
+    // The Script 07 installer writes the key `grin_wallet_dir` (per-network:
+    // /opt/grin/pubpoolwallet/<net>), NOT `wallet_dir`. Read both, else this drops to
+    // the /opt/grin/pool-test/ default on EVERY install → WalletAPI/wallet-tor look for
+    // .owner_api_secret in the wrong dir and all payouts/Tor sends fail. (WalletAPI also
+    // falls back to grin_wallet_dir, but mergeEnvVars' allowlist dropped that key before
+    // it ever reached WalletAPI.)
+    wallet_dir: config.wallet_dir || config.grin_wallet_dir || process.env.POOL_WALLET_DIR || '/opt/grin/pool-test/',
+    // Network-aware default (mirrors node_stratum_port below). The Script 07 installer
+    // does NOT write this key, so the default is what every install actually uses — a
+    // flat 13420 made the mainnet pool point its Owner API client at the TESTNET wallet
+    // port (3420 vs 13420). The combined listener serves the Foreign API (build_coinbase)
+    // on THIS owner port via owner_api_include_foreign=true, so there is no separate
+    // foreign port to configure anymore.
+    wallet_owner_port: config.wallet_owner_port || (isMain ? 3420 : 13420),
 
-    node_api_url: config.node_api_url || process.env.NODE_API_URL || 'http://127.0.0.1:13413',
+    // Node Owner/Foreign API base URL — network-aware default (mainnet 3413 / testnet 13413)
+    // so a missing installer key never points a mainnet pool at the testnet node.
+    node_api_url: config.node_api_url || process.env.NODE_API_URL || (isMain ? 'http://127.0.0.1:3413' : 'http://127.0.0.1:13413'),
     // Owner + Foreign API secrets. Either pass the value directly, or a *_path to the
     // node's secret file, or leave all blank and let grin-node.js read the standard
     // /opt/grin/node/<net>-prune/.{api,foreign_api}_secret files (pool runs as root).
@@ -47,7 +85,10 @@ function mergeEnvVars(config) {
     node_dir: config.node_dir || process.env.NODE_DIR || '',
 
     node_stratum_host: config.node_stratum_host || '127.0.0.1',
-    node_stratum_port: config.node_stratum_port || (config.network === 'mainnet' ? 3334 : 13334),
+    // Grin's native default stratum_server_addr port (mainnet 3416 / testnet 13416). Script 01
+    // enables the node's built-in stratum but leaves the addr at this default, so the pool must
+    // dial the same port out of the box — overridable via node_stratum_port in pool config.
+    node_stratum_port: config.node_stratum_port || (isMain ? 3416 : 13416),
     pool_address:      config.pool_address || '',
     wallet_pass_file:  config.wallet_pass_file || '',
 
@@ -72,37 +113,46 @@ function mergeEnvVars(config) {
       48 * 3600
     ],
 
-    // ─── Multi-region (hub-and-spoke) ───────────────────────────────────────
-    // role: singlebox (default) | hub | satellite. Satellites relay shares/blocks
-    // to the hub's Central API; see lib/share-relay.js + satellite.js.
+    // ─── Multi-region (Model C: thin stratum gateways) ──────────────────────
+    // role: singlebox (default) | hub. Regional GATEWAYS are NOT a pool app role — they
+    // run no Node process; they are HAProxy+WireGuard forwarders (scripts/lib/07_lib_gateway.sh)
+    // that tunnel miner stratum to a per-region internal port on this central box. So this
+    // app only ever runs as singlebox or hub. (The legacy 'satellite' role + relay are gone.)
     role: config.role || process.env.POOL_ROLE || 'singlebox',
     region: config.region || process.env.POOL_REGION || 'default',
+
+    // ─── Model C: regional stratum gateways ─────────────────────────────────
+    // Internal per-region stratum listener ports on THIS central box, bound to the
+    // WireGuard interface ONLY (never public). A regional gateway forwards its miners'
+    // stratum traffic — prefixed with a PROXY-protocol v2 header carrying the real miner
+    // IP — over the tunnel to its region's port here; the central stratum-server stamps
+    // that listener's region label on every share. Map of { "<region>": <port> },
+    // e.g. { "asia": 3391, "us": 3392 }. Empty {} = single-box (only the public
+    // stratum_port listener runs). Miners ALWAYS connect to the public stratum_port on
+    // their nearest gateway — these ports are internal plumbing, never miner-facing.
+    region_ports: config.region_ports || {},
+    // Address the per-region listeners bind to. MUST be the WireGuard server IP in prod so
+    // only tunnelled gateways can reach them; defaults to loopback so a misconfigured box
+    // never exposes them publicly. The Script 07 installer sets this to the wg server IP.
+    region_listen_host: config.region_listen_host || process.env.REGION_LISTEN_HOST || '127.0.0.1',
+
     // Public web/stratum hostname (e.g. grinium.com). Used to derive the local
     // region's connect address (subdomain:stratum_port) in db.ensureLocalRegion.
-    subdomain: config.subdomain || process.env.POOL_SUBDOMAIN || '',
-    hub_url: config.hub_url || process.env.HUB_URL || '',
-    hub_shared_secret: config.hub_shared_secret || process.env.HUB_SHARED_SECRET || '',
-    satellite_ip_allowlist: config.satellite_ip_allowlist || [],
-    relay_batch_interval_ms: config.relay_batch_interval_ms || 2000
+    subdomain: config.subdomain || process.env.POOL_SUBDOMAIN || ''
   };
 }
 
 function validateConfig(config) {
-  // Satellites run mining ingress + relay only — no web/admin/auth — so they carry no
-  // jwt_secret. The fail-loud JWT check applies only to roles that serve admin auth
-  // (singlebox/hub). Without this guard the satellite (grin_satellite.json has no
-  // jwt_secret) would refuse to boot.
-  if (config.role !== 'satellite') {
-    // Fail loudly on a missing/weak JWT secret rather than auto-generating one at boot —
-    // a fresh secret each restart silently logs out every admin and breaks refresh tokens.
-    // The installer must write a persistent jwt_secret into pool.json (Script 07 install/configure).
-    if (!config.jwt_secret || String(config.jwt_secret).length < 32) {
-      throw new Error(
-        'FATAL: jwt_secret is missing or too short (need ≥32 chars) in pool.json. ' +
-        'It must be generated ONCE at install and persisted, never minted at boot. ' +
-        'Re-run the Script 07 installer/configure step to set it.'
-      );
-    }
+  // Both remaining roles (singlebox/hub) serve the admin auth surface, so a persistent
+  // jwt_secret is always required. Fail loudly on a missing/weak one rather than
+  // auto-generating at boot — a fresh secret each restart silently logs out every admin
+  // and breaks refresh tokens. The Script 07 installer writes it once into pool.json.
+  if (!config.jwt_secret || String(config.jwt_secret).length < 32) {
+    throw new Error(
+      'FATAL: jwt_secret is missing or too short (need ≥32 chars) in pool.json. ' +
+      'It must be generated ONCE at install and persisted, never minted at boot. ' +
+      'Re-run the Script 07 installer/configure step to set it.'
+    );
   }
 
   const required = ['wallet_dir', 'node_api_url', 'db_path'];

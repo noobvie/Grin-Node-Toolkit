@@ -44,7 +44,10 @@ const DEFAULTS = {
   wallet_address:            '',
 
   // ── Wallet HTTP API ports ──────────────────────────────────────────────────
-  wallet_foreign_api_port:   _IS_MAINNET ? 3415  : 13415,
+  // Combined listener: ONE `grin-wallet owner_api` process serves both APIs via
+  // owner_api_include_foreign, so the Foreign API rides the Owner port (the old
+  // standalone `listen` port 3415/13415 is retired). Foreign path stays /v2/foreign.
+  wallet_foreign_api_port:   _IS_MAINNET ? 3420  : 13420,
   wallet_owner_api_port:     _IS_MAINNET ? 3420  : 13420,
 
   // ── Wallet API secret files (absolute paths, chmod 600) ───────────────────

@@ -131,6 +131,38 @@ alert thresholds. `:key` is validated against the fixed `pages` allowlist; `page
 
 ## Residual / accepted risks
 
+### Hot wallet with password on disk — forced by Grin's receive path, not a shortcut
+
+The pool wallet password is stored in plaintext at `/opt/grin/pubpool/<net>/.wallet_pass`
+(root-owned, `chmod 600`; written by `07_lib_pool_wallet.sh`) so the boot script and watchdog
+can auto-unlock the wallet (Owner API v3: `init_secure_api` ECDH → `open_wallet`). Operators
+regularly ask why the password must live on the server at all. The answer:
+
+1. **In Grin, *receiving* is a signing operation.** There are no addresses: the node's stratum
+   calls the wallet's `build_coinbase` for **every block template it builds** (re-versioned
+   ~every 15 s, not just when a block is found), and that call derives a key, builds the output
+   commitment + rangeproof, and signs the kernel — all requiring the decrypted seed in memory.
+   A BTC pool can receive to a cold address with zero hot keys; a Grin pool cannot. There is no
+   watch-only option for the coinbase side.
+2. **A locked wallet halts the pool, it doesn't just miss rewards.** If `build_coinbase` fails,
+   the node cannot construct block templates → stratum has no jobs → every miner idles
+   (observed symptom: miners "Alive" but GetWorks = 0). So the wallet must re-unlock unattended
+   after any reboot/crash — which requires the secret to be on the box. Postponing *payouts* is
+   policy, but it doesn't remove the hot keychain: grin-wallet has no scoped tokens, so the same
+   `open_wallet` token that builds coinbases can also `send`.
+3. **This matches the wider ecosystem.** grin-pool (MWGrinPool) and open-grin-pool both keep the
+   wallet password in service config; `grin-wallet listen -p <pass>` (solo mode) exposes it in
+   the process list, which is *weaker* than a 600 file read once at unlock. Encrypting
+   `.wallet_pass` would only relocate the problem (key-to-decrypt-the-key on the same box); an
+   attacker with root gets the encrypted seed file alongside it anyway.
+
+**Actual mitigations** (the security boundary is the box, not the file): wallet exists only on
+the hub — never on gateways/edges; ECDH keeps the password/token off the wire and port 3420
+unusable to a non-root local process; keep the hot balance ≈ the pending-payout float and sweep
+accumulated coinbase to cold storage on a schedule.
+
+### Other accepted risks
+
 - **Admin-authored HTML is stored, site-wide XSS by design.** `custom_css`, `custom_head_html`,
   `custom_body_html`, content-page HTML, banner/maintenance messages are injected verbatim into every
   visitor's browser — inherent to "inject custom HTML" white-label features. Mitigation is the admin

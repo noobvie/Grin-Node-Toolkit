@@ -139,9 +139,9 @@ class HashrateTracker {
 
   // Per-worker breakdown for one address. Hashrate + share count + last_share come from the
   // SHARES table (works across restarts and all regions); accepted/rejected/stale + online come
-  // from the LIVE in-memory stratum sessions (this box only — satellites don't relay reject/stale,
-  // a documented hub-mode limit). Workers seen in shares but with no live session show online:false
-  // and null reject/stale.
+  // from the LIVE in-memory stratum sessions. Under Model C every region's miners terminate
+  // their session on this box, so reject/stale is complete pool-wide. Workers seen in shares but
+  // with no live session show online:false and null reject/stale.
   getWorkersForAccount(minerAddress, windowMinutes = 10) {
     try {
       const windowSeconds = windowMinutes * 60;

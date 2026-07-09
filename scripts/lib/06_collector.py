@@ -98,7 +98,7 @@ GEO_URL       = "http://ip-api.com/batch?fields=status,lat,lon,country,countryCo
 # Peer retention: keep known_peers not seen for more than this many days
 PEER_RETENTION_DAYS = 30
 # How many days back to include in peers.json (must match ACTIVE_WINDOW_SEC in map.html)
-PEER_HISTORY_DAYS   = 7
+PEER_HISTORY_DAYS   = 30
 
 # Standard Grin P2P ports.
 # Testnet: used as a strict filter (all testnet nodes run on 13414).
@@ -1659,7 +1659,7 @@ def export_all_json():
     # week <= month <= year <= all. week/month query known_peers live (both within the
     # 30d retention); year/all read the seen_peers registry — year filters last_seen to
     # the past 365d, all counts every distinct node ever.
-    version_cutoff = ts_now - PEER_HISTORY_DAYS * 86400   # 7d   → "week"
+    version_cutoff = ts_now - 7 * 86400                   # 7d   → "week" (fixed; PEER_HISTORY_DAYS is now 30)
     month_cutoff   = ts_now - 30 * 86400                  # 30d  → "month" (retention edge)
     year_cutoff    = ts_now - 365 * 86400                 # 365d → "year" (seen_peers.last_seen)
 

@@ -202,13 +202,26 @@ _gbp_configure() {
     _gbp_write_cli
     success "Saved → $GBP_CONF   ·   CLI installed → $GBP_BIN"
     echo ""
-    echo -e "  ${BOLD}Authorize this key on the remote box${RESET} (or use ssh-copy-id, option 3):"
-    echo -e "  ${DIM}$(cat "${GBP_KEY}.pub" 2>/dev/null || echo '(public key unreadable)')${RESET}"
-    echo ""
-    echo ""
     echo -e "  ${DIM}Note: the remote host key is trusted on first contact${RESET}"
     echo -e "  ${DIM}(StrictHostKeyChecking=accept-new) — a MITM at that first push is${RESET}"
     echo -e "  ${DIM}not detected. On an untrusted network, pre-seed ~/.ssh/known_hosts.${RESET}"
+    echo ""
+    # Authorize the key on the remote NOW so Configure ends handshaken, not just
+    # "saved". ssh-copy-id prompts for the remote password once; if it isn't
+    # available / fails, fall back to the paste-ready command (option 2).
+    echo -e "  ${BOLD}Authorize this key on the remote now?${RESET}"
+    echo -e "  ${DIM}Installs it via ssh-copy-id — you'll enter ${GBP_USER}@${GBP_HOST}'s password once.${RESET}"
+    echo -ne "  Install now? [Y/n]: "
+    local a; read -r a || true
+    if [[ "${a,,}" != "n" ]]; then
+        if ! _gbp_copy_id; then
+            echo ""
+            warn "Automatic install didn't complete — run this on the remote instead:"
+            _gbp_show_key || true
+        fi
+    else
+        echo -e "  ${DIM}Skipped — later use option 3 (ssh-copy-id) or option 2 (paste command).${RESET}"
+    fi
     echo ""
     echo -ne "  Test the connection now? [Y/n]: "
     local t; read -r t || true
@@ -223,11 +236,33 @@ _gbp_configure() {
 _gbp_show_key() {
     gbp_ensure_key || return 1
     gbp_load_conf
+    local keyline dir user host
+    keyline="$(cat "${GBP_KEY}.pub" 2>/dev/null)"
+    [[ -n "$keyline" ]] || { error "Public key unreadable: ${GBP_KEY}.pub"; return 1; }
+    dir="${GBP_DIR:-/opt/grin-offsite-backups}"
+    user="${GBP_USER:-<user>}"; host="${GBP_HOST:-<host>}"
     echo ""
-    echo -e "  ${BOLD}Public key${RESET} — append this line to ${BOLD}~/.ssh/authorized_keys${RESET} of the"
-    echo -e "  remote user (${DIM}${GBP_USER:-<user>}@${GBP_HOST:-<host>}${RESET}):"
+    echo -e "  ${BOLD}Authorize this node on the remote backup box${RESET}"
+    echo -e "  ${DIM}Paste the whole block below into ONE terminal on the remote,${RESET}"
+    echo -e "  ${DIM}logged in as the user you configured (${BOLD}${user}${RESET}${DIM}@${host}). Safe to re-run.${RESET}"
     echo ""
-    echo "  $(cat "${GBP_KEY}.pub")"
+    echo -e "  ${CYAN}────────────────────────────────────────────────────────────${RESET}"
+    # Printed plain (no color) so the operator can copy it cleanly. The key and
+    # dir are substituted in; \$K stays literal so the block runs on the remote.
+    cat <<EOF
+install -d -m 700 ~/.ssh
+K='${keyline}'
+grep -qxF "\$K" ~/.ssh/authorized_keys 2>/dev/null || echo "\$K" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+mkdir -p '${dir}'
+EOF
+    echo -e "  ${CYAN}────────────────────────────────────────────────────────────${RESET}"
+    echo ""
+    echo -e "  ${DIM}It fixes ~/.ssh perms, appends the key only once, and creates the${RESET}"
+    echo -e "  ${DIM}backup dir. Then verify from here with option 4 (Test connection).${RESET}"
+    echo ""
+    echo -e "  ${DIM}Bare key line only (if you manage authorized_keys yourself):${RESET}"
+    echo -e "  ${DIM}${keyline}${RESET}"
     return 0
 }
 
@@ -329,7 +364,7 @@ gbp_setup() {
         echo -e "  ${YELLOW}   anyone who obtains them.${RESET}"
         echo ""
         echo -e "  ${GREEN}1${RESET}) Configure target        ${DIM}(host / port / user / dir · generates the key)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Show public key          ${DIM}(paste into remote authorized_keys)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Show target-host command  ${DIM}(paste on the remote to authorize)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Send key with ssh-copy-id ${DIM}(asks the remote password once)${RESET}"
         echo -e "  ${GREEN}4${RESET}) Test connection"
         echo -e "  ${GREEN}5${RESET}) Remote retention days"

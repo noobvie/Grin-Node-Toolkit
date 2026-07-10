@@ -476,14 +476,32 @@ _install_toolkit_logrotate() {
     cat > "$TOOLKIT_LOGROTATE" << 'LREOF'
 # Grin Node Toolkit — rotation for the toolkit's continuous (fixed-name) logs.
 # Installed by 08_grin_node_admin.sh (Automatic Disk Cleanup). Service logs that
-# carry their own /etc/logrotate.d/grin-* config (e.g. grin-pool.log) are excluded.
+# carry their own /etc/logrotate.d/grin-* config (grin-pool.log via USR2, the
+# nginx access/error logs, GrinScan, tiny-explorer, grin-node-<net>) are excluded
+# to avoid logrotate "duplicate log entry" errors — do NOT glob /opt/grin/logs/*.log.
+# When adding a new fixed-name (non-dated) log under /opt/grin/logs, list it here.
+#
+# Watchdogs / daemons (Script 01/03/07)
 /opt/grin/logs/node-watchdog.log
 /opt/grin/logs/wallet-watchdog.log
 /opt/grin/logs/stratum-watchdog.log
 /opt/grin/logs/pubpool-wallet-watchdog.log
+/opt/grin/logs/pubpool-wallet-watchdog-testnet.log
 /opt/grin/logs/grin-satellite.log
+/opt/grin/logs/grin-gateway.log
 /opt/grin/logs/schedule.log
+# Collector / stats crons (Script 06) — these are the ones that grow fastest
+/opt/grin/logs/grin_stats_cron.log
+/opt/grin/logs/price_cron.log
+/opt/grin/logs/grin_ecosystem.log
+# Share-chain crons (Script 03)
+/opt/grin/logs/cron_clean_txhashset.log
+/opt/grin/logs/cron_nginx.log
+/opt/grin/logs/cron_ssh.log
+# Backup engines (Script 052 / solo / offsite push)
 /opt/grin/logs/solo-backup.log
+/opt/grin/logs/drop-backup.log
+/opt/grin/logs/backup-push.log
 {
     weekly
     rotate 4

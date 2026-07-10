@@ -32,9 +32,9 @@ Drop's `web/052_drop/server/` already implements **every wallet-side step** of b
 **What does NOT exist anywhere in the repo:** any Nostr client code (grep for `nostr|nip44|1059`
 comes up empty outside docs). The bridge is genuinely new — but it is transport only.
 
-Related planning: `docs/generated/script09_design.md` — 091 Transporter is **not** usable here
-(Goblin doesn't speak it); 092 (Floonet relay deployer) is **optional** infrastructure for this
-feature, not a dependency (§4.4).
+Related planning: `docs/generated/script09_design.md` — 092 Transporter is **not** usable here
+(Goblin doesn't speak it); 091 (Floonet relay deployer) is **optional** infrastructure for this
+feature, not a dependency (§4.4). *(09x numbers swapped 2026-07-10: Floonet relay = 091.)*
 
 ---
 
@@ -266,12 +266,12 @@ pure toolkit-style nginx work.)
 
 ### 4.4 Relation to Script 09
 
-- **091 Transporter: not involved.** Goblin clients can't poll it.
-- **092 Floonet relay: optional composition, not a dependency.** Phase 1 rides
-  `relay.floonet.dev` + public Tor-friendly relays. If the operator later deploys 092, the
-  bridge's relay list (config key) simply gains `wss://relay.<owndomain>` — and the 092 bundled
+- **092 Transporter: not involved.** Goblin clients can't poll it.
+- **091 Floonet relay: optional composition, not a dependency.** Phase 1 rides
+  `relay.floonet.dev` + public Tor-friendly relays. If the operator later deploys 091, the
+  bridge's relay list (config key) simply gains `wss://relay.<owndomain>` — and the 091 bundled
   name authority could host the Drop's username too. Compose-when-present, same rule as
-  GoblinPay×092 (script09_design.md PART C).
+  GoblinPay×091 (script09_design.md PART C).
 
 ### 4.5 New config keys (DEFAULTS in `config.js`, admin-panel editable)
 
@@ -305,7 +305,7 @@ goblin_home_domain        "goblin.st"  default domain for bare usernames
 4. **Relay availability/retention.** Public relays may drop events or throttle; gift wraps are
    ephemeral-ish (retention is the real TTL). Mitigations already in the design: publish to
    recipient set ∪ ours, shared floor pinned, read-back confirm, and the operator can deploy
-   092 for a self-owned relay. Accept that delivery is best-effort — the claim row + re-send
+   091 for a self-owned relay. Accept that delivery is best-effort — the claim row + re-send
    (same slate, new wrap) on "not picked up in N hours" covers the gap goblin covers with its
    sent-pending state.
 5. **Testnet story is weak.** goblin.st usernames and Goblin builds target mainnet Grin;
@@ -332,7 +332,7 @@ goblin_home_domain        "goblin.st"  default domain for bare usernames
 3. **Phase 2 — donations:** our NIP-05 well-known via `052_lib_nginx.sh`, donate-page "pay
    from Goblin" (shows `drop@domain` + nprofile QR via existing `qrcode` dep), S1-ingest path.
 4. **Phase 3 — mainnet pilot** with a real Goblin phone wallet, tiny amounts; then optional
-   extras: invoice-over-Nostr donations, void control messages, 092 composition.
+   extras: invoice-over-Nostr donations, void control messages, 091 composition.
 5. **Where it lives:** all inside 052 (it's a Drop feature). If the bridge later proves useful
    to the pool (payouts to Goblin miners) — extract it into a shared lib under the Script 09
    umbrella then, not before. Update `project_comms_hub_09` A.9 #6 at that point: for

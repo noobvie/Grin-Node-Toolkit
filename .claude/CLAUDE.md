@@ -41,10 +41,12 @@ scripts/
        07_lib_satellite.sh; app code in web/07_mining_pool_public/)
   08_  Node admin centre (monitoring, nginx, firewall, backup, disk cleanup)
   08del_ Full cleanup (destructive)
-  09_  Grin Connectivity Hub → 091_ Grin Transporter (store-and-forward slate queue, was
-       "Script 056"; Node+SQLite+Tor) and 092_ Floonet relay deployer (deploys 2ro's floonet-rs
-       via nginx/certbot — we deploy, don't fork). Design → docs/generated/script09_design.md,
-       memory project_comms_hub_09. Menu grouping is display-only; the number stays the label.
+  09_  Grin Connectivity Hub → 091_ Floonet relay deployer (deploys 2ro's floonet-rs via
+       nginx/certbot — we deploy, don't fork; BUILD PRIORITY) and 092_ Grin Transporter
+       (store-and-forward slate queue, was "Script 056"; Node+SQLite+Tor; DEFERRED).
+       Numbers swapped 2026-07-10 (Floonet first — serves existing users). Design →
+       docs/generated/script09_design.md, memory project_comms_hub_09. Menu grouping is
+       display-only; the number stays the label.
   lib/ Sourced libraries — always prefixed with parent script number
        e.g. 052_lib_wallet.sh, 052_lib_nginx.sh
 ```

@@ -317,7 +317,7 @@ class PoolSettings {
         { name: 'New Year', date: '01-01', pot_grin: 0, enabled: false },
         { name: 'Grin Genesis Day', date: '01-15', pot_grin: 0, enabled: false },
       ]),
-      // Grin Transporter (payout rail #3, Script 091) — reserved, forced off until it ships
+      // Grin Transporter (payout rail #3, Script 092) — reserved, forced off until it ships
       transporter_enabled: 'false',
     },
     // Site-wide maintenance mode + announcement banners.

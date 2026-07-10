@@ -1,9 +1,18 @@
 # Script 09 — Grin Connectivity Hub (design)
 
-**Status:** Design proposal (no code yet). Supersedes the earlier "Script 056 Transporter under
-the Script 05 wallet hub" plan — renumbered **2026-07-03** to its own top-level hub.
+**Status:** Design proposal (placeholder scripts only). Supersedes the earlier "Script 056
+Transporter under the Script 05 wallet hub" plan — renumbered **2026-07-03** to its own
+top-level hub.
 **Name:** Grin Connectivity Hub (working title; "Connectivity Layer" considered — "Hub" chosen
 to match the 05/07 hub family). Menu label shows **09**; underlying files keep 09x numbering.
+
+> **2026-07-10 — member numbers swapped + upstream verified.** The Floonet relay deployer is
+> now **091** (menu option 1, build priority #1) and the Grin Transporter is **092** (menu
+> option 2, **deferred**). Rationale: the Floonet relay serves an *existing* user base (Goblin
+> wallet users, the Floonet network) the moment it deploys, while the Transporter is an
+> internal toolkit rail gated on the receive-support question (B.9 #6) — "revisit in future."
+> Same day, PART A's upstream assumptions were **verified against the live floonet-rs repo +
+> docs.floonet.dev** (see A.2b).
 
 > **Why a hub, and why its own number** (settled in the 2026-07 direction discussion):
 > Transport/messaging is a *shared infrastructure layer* consumed by both the wallet/payment
@@ -22,20 +31,24 @@ to match the 05/07 hub family). Menu label shows **09**; underlying files keep 0
 
 ```
 09_  Grin Connectivity Hub          one menu entry; launches the members below
-  091_ Grin Transporter             self-hosted store-and-forward slate queue (HTTP + SQLite, opt. Tor)
-  092_ Floonet relay                deploy a Grin-native Nostr relay (floonet-rs + systemd + nginx);
-                                    NIP-05 name-authority and Nym mixnet-exit are config TOGGLES
-                                    inside this one deployer, not separate scripts
+  091_ Floonet relay                deploy a Grin-native Nostr relay (floonet-rs + systemd + nginx);
+                                    NIP-05 name-authority is a config.toml TOGGLE; the Nym
+                                    mixnet-exit is an optional separate floonet-mixexit binary
+                                    installed alongside (same installer) — both inside this ONE
+                                    deployer, not separate scripts
+  092_ Grin Transporter             self-hosted store-and-forward slate queue (HTTP + SQLite, opt. Tor)
+                                    — DEFERRED (internal rail; revisit after 091)
   093+ (reserved)                    future: payout/payment notifications, etc.
 ```
 
-> **NIP-05 identity + mixnet-exit are folded into 092, not new numbers** (decided 2026-07-04).
-> `floonet-rs` is modular — its name-authority and Nym mixnet-exit are `config.toml` flags on the
-> same binary, so both are set during 092's setup/config step. A *standalone* `goblin-nip05d`
+> **NIP-05 identity + mixnet-exit are folded into 091, not new numbers** (decided 2026-07-04).
+> `floonet-rs` is modular — its name-authority is a `config.toml` flag on the same binary, and
+> the Nym mixnet-exit is an optional co-installed `floonet-mixexit` binary its own installer
+> handles when present (verified 2026-07-10 — see A.2b). A *standalone* `goblin-nip05d`
 > (identity without a relay) is niche enough that it does not earn its own script; if that demand
-> ever appears it is a 092 sub-mode. The earlier "093 = NIP-05 identity" reservation is retired.
+> ever appears it is a 091 sub-mode. The earlier "093 = NIP-05 identity" reservation is retired.
 
-> **Shared relay infrastructure — see PART C.** The hard part of both 092 *and* the GoblinPay
+> **Shared relay infrastructure — see PART C.** The hard part of both 091 *and* the GoblinPay
 > payment server (a Script-05 product) is the same primitive: deploy a `nostr-rs-relay` behind
 > nginx+certbot over `wss://`. That is factored into one shared lib and documented in PART C.
 
@@ -56,18 +69,21 @@ We are **not** competing with Floonet's public P2P privacy network. The differen
 | Goal | anonymity (mixnet, cover traffic) | **deliverability + audit** (know the slate was retrieved, retry, log) |
 | Ownership | shared federated network | **self-sovereign, one per operator** |
 
-So the hub does two complementary things:
-1. **091 Transporter** — our own operator-scoped transport for *our* products' flows. Explicitly
-   single-operator; must never drift into a public utility (that would just be a worse Floonet
-   and would fragment the ecosystem). It generalises what **Grin Drop (052) already does** — a
-   web-based slate exchange — into one reusable transport the payment products and pool share.
-2. **092 Floonet relay deployer** — the toolkit's core competence (nginx, systemd, certbot,
-   firewall around someone's binaries) applied to `floonet-rs`, so operators who *do* want to
+So the hub does two complementary things (priority order as of 2026-07-10):
+1. **091 Floonet relay deployer** — the toolkit's core competence (nginx, systemd, certbot,
+   firewall around someone's binaries) applied to `floonet-rs`, so operators who want to
    join the P2P privacy network can stand up a relay the toolkit way. We deploy his software; we
-   don't fork it. Gaps we hit in his installer/docs are upstream PR candidates.
+   don't fork it. Gaps we hit in his installer/docs are upstream PR candidates. **Immediately
+   useful to the existing Goblin/Floonet user base.**
+2. **092 Transporter** *(deferred)* — our own operator-scoped transport for *our* products'
+   flows. Explicitly single-operator; must never drift into a public utility (that would just be
+   a worse Floonet and would fragment the ecosystem). It generalises what **Grin Drop (052)
+   already does** — a web-based slate exchange — into one reusable transport the payment
+   products and pool share. Deferred until the receive-support question (B.9 #6) is answered
+   and a concrete internal consumer (pool payouts) is ready to wire in.
 
-Result: the toolkit becomes **the deployment layer for Grin connectivity**, our own transport
-included and Floonet's network included — they compose rather than compete.
+Result: the toolkit becomes **the deployment layer for Grin connectivity**, Floonet's network
+included and (later) our own transport included — they compose rather than compete.
 
 ### Menu integration (display-layer grouping, no renumbering)
 
@@ -86,14 +102,141 @@ Maintenance        08  Admin      08del  Full cleanup
 ```
 
 Hub wiring (in `grin-node-toolkit.sh`): 09 dispatches to `09_grin_comms_hub.sh`, which offers
-`1) Transporter  2) Floonet relay` with `_09x_installed` / `_09x_status` detectors, same shape
+`1) Floonet relay  2) Transporter` with `_09x_installed` / `_09x_status` detectors, same shape
 as the 05 and 07 hubs.
 
 ---
 
-# PART A — 091 Grin Transporter (store-and-forward slate relay)
+# PART A — 091 Floonet relay deployer
 
-> API method names + R8 auth gates **resolved 2026-06-09** (see A.3, A.5). Items tagged
+**Status:** Verified design (2026-07-10) — upstream repo + docs checked, ready to build.
+Deploys **external software** (github.com/2ro, Apache/MIT) the toolkit way — we write the
+deployer + admin wrapper, not the relay.
+
+## A.1 What Floonet is (and why deploy it here)
+
+Floonet is a **network of Grin-native Nostr relays** (docs.floonet.dev) carrying encrypted
+slatepacks as Nostr DMs, usernames (NIP-05), and marketplace events, with an optional co-located
+Nym mixnet exit. It's the transport behind the **Goblin** P2P wallet. Operators can charge GRIN
+(via GoblinPay) for name registration / write access. Default-deny event-kind whitelist keeps
+relays lean (8 kinds for wallet, ~23 for marketplace).
+
+Deploying it fits the toolkit's core competence exactly: wrap someone's binary in our
+`grin` user + systemd + nginx/certbot + firewall + backup conventions. It gives operators who
+want to join the **P2P privacy network** (reach Goblin users) a one-command path, and positions
+the toolkit as the deployment layer for the *whole* ecosystem, not just our own products.
+
+## A.2 Package choice — floonet-rs over floonet-strfry
+
+Both produce the same relay; both offer Docker / bare-metal / source. **Pick `floonet-rs`** for
+the toolkit's first pass:
+
+| | floonet-rs | floonet-strfry |
+|---|---|---|
+| Core | Rust (nostr-rs-relay fork), **single binary** | C++ strfry (unmodified upstream) |
+| Bare-metal | `deploy/install.sh` + hardened systemd unit | `apply-spec.sh` + systemd |
+| Extra services | modular (name authority in `config.toml`; mixnet exit = optional co-installed binary) | separate Rust name-authority process |
+| Storage | SQLite, auto-migration (Postgres also supported) | (strfry's LMDB) |
+| TLS | Caddy (docker) — **we replace with nginx+certbot** | Caddy |
+
+floonet-rs is a single Rust binary + one `config.toml` + SQLite — matches our deployment style
+with the fewest moving parts. floonet-strfry drags in a C++ build plus a separate name-authority
+service. (We do **not** use his Docker path; bare-metal binary + systemd is the toolkit way.)
+
+## A.2b Upstream verification results (2026-07-10, live repo @ master + docs.floonet.dev)
+
+All former open questions **resolved**:
+
+1. **Binary distribution — SOURCE BUILD REQUIRED (for now).** The GitHub releases page is
+   **empty** — no prebuilt binaries. `deploy/install.sh` *does* support a "release archive
+   layout" (looks for `./floonet-rs` first, then `target/release/floonet-rs`), so prebuilt
+   archives are anticipated upstream but not published yet. Today the deployer must run
+   `cargo build --release`, which needs the **Rust toolchain + `protoc`** (protobuf compiler,
+   for the gRPC nauthz extension point) on the VPS. Design the deployer prebuilt-first (probe
+   the releases page at run time) with source-build as the working path.
+2. **nginx WebSocket config — SOLVED BY UPSTREAM.** `docs/reverse-proxy.md` in the repo ships a
+   tested nginx block: `proxy_pass http://localhost:8080`, `proxy_http_version 1.1`,
+   `Upgrade`/`Connection "Upgrade"` headers, `proxy_read_timeout 1d` (long-lived WebSocket),
+   Let's Encrypt cert paths. We wrap it in our HTTP-first-then-certbot bootstrap
+   (CLAUDE.md Let's Encrypt rules) — no unknowns left here.
+3. **Upstream installer & unit confirmed.** `deploy/install.sh` is idempotent (upgrades binary
+   + unit, **never overwrites an existing `/etc/floonet-rs/config.toml`**), installs to
+   `/usr/local/bin/floonet-rs`, config at `/etc/floonet-rs/config.toml` (0600), and enables
+   `floonet-rs.service`. The unit is hardened beyond our usual (DynamicUser, ProtectSystem=strict,
+   MemoryDenyWriteExecute, syscall filtering, only `StateDirectory=/var/lib/floonet-rs` writable).
+   **Adopt his unit as-is** — swap `DynamicUser=yes` for a stable `User=floonet` only if our
+   backup flow needs a stable owner on the data dir.
+4. **Config schema confirmed** (defaults: `[network] address=127.0.0.1, port=8080` — already
+   loopback-bound, perfect for nginx-fronting):
+   - `info.relay_url` — the one **mandatory** edit
+   - `limits.event_kind_allowlist` (24-kind default-deny), `limits.max_event_bytes` (sized for
+     gift-wrapped slatepacks)
+   - `authorization.nip42_auth` / `nip42_dms` / `pubkey_whitelist` / `public_note_authors`
+   - `name_authority.enabled` / `domain` / `base_url` (NIP-05; base_url must match public relay
+     URL for NIP-98 verification)
+   - `goblinpay.pay_mode` (`off`/`name`/`write`) / `url` / `api_token` / `name_price_grin` /
+     `admission_price_grin` — token also settable via env (`FLOONET_GOBLINPAY_TOKEN` etc. in an
+     optional `EnvironmentFile=/etc/floonet-rs/env`, keep 0600)
+5. **Mixnet exit ≠ config-only toggle** (correction to the earlier design). It requires the
+   **separate optional `floonet-mixexit` binary**; `install.sh` installs it when present next to
+   the relay binary and skips gracefully otherwise. Treat it as an optional add-on step in the
+   091 menu, not a plain config flag.
+
+## A.3 What we build vs reuse
+
+We do **not** fork or modify floonet-rs. We build a deployer + day-2 admin wrapper:
+
+| Need | Approach |
+|---|---|
+| Fetch binary / build | probe releases for a prebuilt archive; today: install Rust + `protoc`, `cargo build --release` (source fallback is the working path — A.2b #1) |
+| Service user + systemd | **reuse his `deploy/floonet-rs.service`** (harder than our own template); decide DynamicUser vs stable `User=floonet` for backup friendliness |
+| Install layout | **reuse his `deploy/install.sh` conventions** (`/usr/local/bin`, `/etc/floonet-rs/config.toml`, `/var/lib/floonet-rs`) — call it or replicate it, don't invent a parallel layout |
+| **TLS + reverse proxy** | **replace his Caddy with our nginx + certbot** using his own `docs/reverse-proxy.md` nginx block inside our HTTP-first-then-SSL vhost pattern (A.2b #2) |
+| Config | wrap `config.toml` (verified schema, A.2b #4): set `info.relay_url`, event-kind whitelist, NIP-42 auth + pubkey allowlist, name-authority on/off, GoblinPay pay-mode — surface as admin menu edits, not hand-editing |
+| Firewall | ufw/iptables: open nginx 443 only; relay stays on 127.0.0.1:8080 behind the proxy |
+| Day-2 admin | status/restart, `config.toml` edits, SQLite backup (shared backup engine), log view (`journalctl -u floonet-rs`) — same shape as other scripts' admin sections |
+| Optional | `floonet-mixexit` co-install (A.2b #5); GoblinPay paid-registration integration |
+
+Proposed files:
+```
+scripts/091_grin_floonet_relay.sh       infra: fetch/build, service user, systemd, nginx+certbot, ufw, admin
+scripts/lib/091_lib_floonet.sh          config.toml helpers, backup, status (sourced)
+scripts/lib/nostr_relay_deploy.sh       shared wss relay primitive (PART C.1) — 091 is its first consumer
+```
+
+No `web/091_*` — Floonet ships its own relay + optional name-authority; we don't add app code.
+
+## A.4 Remaining open questions (091)
+
+1. ~~Binary distribution~~ **resolved 2026-07-10** — no prebuilt releases; cargo + protoc
+   source build is the working path (A.2b #1).
+2. ~~nginx WebSocket config~~ **resolved 2026-07-10** — upstream `docs/reverse-proxy.md`
+   provides the tested block (A.2b #2).
+3. **Mainnet/testnet stance.** Floonet is network-agnostic transport (carries whatever slatepack
+   is inside). Decide whether we run one relay or expose net-tagged instances like other scripts.
+   *Leaning: ONE relay per operator* — the relay never touches chain state, and upstream runs a
+   single `floonet-rs.service` (no per-net units).
+4. **DynamicUser vs stable service user** — his unit uses `DynamicUser=yes`; our backup engine
+   may want a stable owner on `/var/lib/floonet-rs`. Decide at implementation.
+5. **Rust toolchain policy** — rustup as the `floonet` build user vs distro rust; VPS disk/RAM
+   cost of a cargo build on small boxes (check against our 4 GB baseline).
+6. **Upstream coordination.** Gaps found in his installer/config docs → PR to the floonet repos
+   rather than patching around them locally. First candidate: publish prebuilt release archives
+   (his install.sh already supports the layout).
+7. **Scope creep guard.** Keep 091 a *relay deployer*. NIP-05 identity as a standalone service,
+   notifications, marketplace bridges = future 093+ members, not bolt-ons here.
+
+---
+
+# PART B — 092 Grin Transporter (store-and-forward slate relay)
+
+> **Status: DEFERRED (2026-07-10).** Design retained in full below — the API groundwork
+> (method names, R8 auth) is resolved and stays valid. Deferred because it is an **internal
+> toolkit rail** (pool payouts, Drop claims) with no external user base until a mainstream
+> wallet can receive from a relay (open question B.9 #6 — the make-or-break). Revisit after
+> 091 ships and/or when Script 07 payouts are ready to wire in a rail #3.
+
+> API method names + R8 auth gates **resolved 2026-06-09** (see B.3, B.5). Items tagged
 > `⚠VERIFY` still need a 30-second curl against the *deployed* grin-wallet binary before coding
 > the agent (CLAUDE.md `get_tip` rule) — not a blocker.
 
@@ -104,7 +247,7 @@ as the 05 and 07 hubs.
 > terms. **"grinbox" is a historical citation only** (`vault713/grinbox`, the legacy transport
 > Grin core removed) — it names prior art, never our component. Ours is the **Grin Transporter**.
 
-## A.1 Why it exists
+## B.1 Why it exists
 
 Every Grin transaction is **interactive** — a round trip of "slates" between sender and receiver.
 The toolkit already supports the two standard transports:
@@ -133,7 +276,7 @@ slatepack. Both parties online and technical → Tor direct. Maximum privacy →
 Transporter still knows *which address talked to which, and when* (it cannot read amounts);
 Slatepack over a channel you control leaks no server-side metadata.
 
-## A.2 Where it sits among Grin's transports
+## B.2 Where it sits among Grin's transports
 
 Grin transactions are interactive; every transport below is just a different way to *move the
 slates* — none change the on-chain tx. The Transporter (row 7) is the only one that is
@@ -167,7 +310,7 @@ Fair pushback + answers:
   old **secp256k1** grinbox addressing. Ours keeps Grin's **ed25519 Slatepack** crypto untouched
   and adds only the queue, self-hosted per operator. We borrow their *architecture*, not cipher.
 
-## A.3 What grin-wallet already gives us (so we build less)
+## B.3 What grin-wallet already gives us (so we build less)
 
 We implement **zero cryptography** — grin-wallet's Slatepack inherited grinbox's whole value
 ("encrypt a tx to an address only its owner can open"):
@@ -199,7 +342,7 @@ primary slatepack address, same key as its Tor onion v3 address.
 > `decode_slatepack_message` is **Owner-only**. The agent decodes via the Owner ECDH session,
 > then hands the plain slate to Foreign `receive_tx`.
 
-## A.4 Requirements
+## B.4 Requirements
 
 **Functional** — R1 accept+store an encrypted slatepack addressed to a slatepack address; R2
 only the addressed recipient can retrieve/delete; R3 support the full round trip S1 (payer→payee)
@@ -213,7 +356,7 @@ behind their slatepack address — no accounts/passwords, mirrors the pool's add
 R9 bind Node to `127.0.0.1`, nginx is the only public surface (rate limit + SSL); R10 optional
 **Tor hidden service** front; R11 no plaintext secrets on argv (reuse launcher-reads-passfile).
 
-## A.5 Architecture
+## B.5 Architecture
 
 Two deliverables, mirroring the toolkit's "infra script + app code" split:
 
@@ -224,13 +367,13 @@ B) Transporter client/agent  — polls + does encrypt/decrypt/receive/finalize v
 
 ```
                     ┌──────────────────────────────────────────────┐
-                    │            091 TRANSPORTER SERVER              │
+                    │            092 TRANSPORTER SERVER              │
    PAYER side       │   Node/Express  →  SQLite (slates by addr)     │     PAYEE side
    (e.g. pool)      │   127.0.0.1:7456  ── nginx ── HTTPS / .onion    │   (e.g. miner)
  ┌──────────────┐   └──────────────▲───────────────────▲────────────┘   ┌──────────────┐
  │ grin-wallet  │                  │ PUT/GET ciphertext │                 │ grin-wallet  │
  │ owner_api    │   ┌──────────────┴──────┐   ┌─────────┴────────────┐   │ owner_api    │
- │ (ECDH)       │◄──┤ 091 client/agent     │   │ 091 client/agent     ├──►│ + Foreign    │
+ │ (ECDH)       │◄──┤ 092 client/agent     │   │ 092 client/agent     ├──►│ + Foreign    │
  └──────────────┘   │ (payer): build S1,   │   │ (payee): pull S1,    │   │ receive_tx   │
                     │ encrypt, enqueue;    │   │ receive_tx, encrypt  │   └──────────────┘
                     │ poll for S2, finalize│   │ S2, enqueue reply    │
@@ -243,7 +386,7 @@ edges through the **Owner API ECDH session** the toolkit already uses (051 `serv
 ### Data flow — one payout, both parties offline-tolerant
 
 ```
-   PAYER (pool)                  TRANSPORTER (091)               PAYEE (miner)
+   PAYER (pool)                  TRANSPORTER (092)               PAYEE (miner)
   1. init_send_tx                                                (offline OK)
   2. create_slatepack_message (encrypt S1 → payee addr)
   3. PUT /queue/<payee_addr>  ───────► store ciphertext (S1)
@@ -271,7 +414,7 @@ over the ECDH session adds nothing to the threat model; the key never leaves the
 signature crosses the wire. Chosen over (b) decrypt-to-prove (equivalent, less direct now) and
 (c) per-recipient bearer token (weakest — shared secret + server-side storage to leak).
 
-## A.6 Backend setup (target VPS)
+## B.6 Backend setup (target VPS)
 
 ```
 /opt/grin/transporter-main/             mainnet instance
@@ -310,7 +453,7 @@ nginx zone (never inline `limit_req_zone` — CLAUDE.md): script-specific, `scri
 nginx_ensure_rate_limit_zone "transporter_${net}" "60r/m" "10m" "script09-transporter-${net}"
 ```
 
-## A.7 Reuse map (≈80% already exists)
+## B.7 Reuse map (≈80% already exists)
 
 | Need | Reuse from | New work |
 |---|---|---|
@@ -322,21 +465,20 @@ nginx_ensure_rate_limit_zone "transporter_${net}" "60r/m" "10m" "script09-transp
 | Node+Express+SQLite service | 052 Drop app (better-sqlite3) | **relay server.js + schema** |
 | systemd / nginx SSL / rate limit | 051/052 heredocs, `nginx_shared_helpers.sh` | new unit + `script09-` zone |
 | @reboot autostart + watchdog cron | `_drop_toggle_reboot_cron`, `_drop_toggle_watchdog_cron` | new tags |
-| Hub integration | 05/07 hub `run_sub` + status detectors | 09 hub menu + `_091_installed/_091_status` |
+| Hub integration | 05/07 hub `run_sub` + status detectors | 09 hub menu + `_092_installed/_092_status` |
 | Tor (.onion front) | `systemctl tor@default`, 051 Tor-status pattern | hidden-service block |
 
 Proposed files:
 ```
-scripts/09_grin_comms_hub.sh            hub menu → launches 091 / 092
-scripts/091_grin_transporter.sh         infra: deps, deploy, systemd, nginx, tor, status
-scripts/lib/091_lib_server.sh           server deploy/config helpers (sourced, no shebang)
-scripts/lib/091_lib_client.sh           payer/payee agent install + cron poll
-web/091_transporter/server.js           Express relay (ciphertext queue)
-web/091_transporter/package.json        express + better-sqlite3
-web/091_transporter/client/agent.js     poll/encrypt/decrypt/receive/finalize agent
+scripts/092_grin_transporter.sh         infra: deps, deploy, systemd, nginx, tor, status
+scripts/lib/092_lib_server.sh           server deploy/config helpers (sourced, no shebang)
+scripts/lib/092_lib_client.sh           payer/payee agent install + cron poll
+web/092_transporter/server.js           Express relay (ciphertext queue)
+web/092_transporter/package.json        express + better-sqlite3
+web/092_transporter/client/agent.js     poll/encrypt/decrypt/receive/finalize agent
 ```
 
-## A.8 Prior art & references
+## B.8 Prior art & references
 
 grinbox lineage — borrow the *transport/relay architecture* (queue, address-as-identity,
 challenge auth), **not** the cryptography (grinbox/MQS use old secp256k1; we use ed25519
@@ -357,7 +499,7 @@ SMTP/email** — same decision we made. It differs by being central+federated (d
 architecture. Read its source for the **message lifecycle / subscribe-poll handshake** early in
 coding. `⚠VERIFY`: exact mwc713 path; whether MQS auth is signed-challenge vs bearer.
 
-## A.9 Open questions (091)
+## B.9 Open questions (092)
 
 1. ~~R8 signing primitive~~ **resolved** — (a) signature challenge via `get_slatepack_secret_key`.
 2. ~~Owner API method names~~ **resolved** against `docs.rs`; one curl vs deployed binary remains.
@@ -368,92 +510,21 @@ coding. `⚠VERIFY`: exact mwc713 path; whether MQS auth is signed-challenge vs 
    recipient-advertised Transporter later.
 5. **Abuse bounds on open PUT.** Size cap (slatepack ≤ ~16 KB per 051), per-IP 60r/m, plus a
    per-recipient queue-depth cap.
-6. **⚠ Make-or-break for pool integration (payout rail #3).** Does the wallet a miner *already
-   runs* support receiving on a relay? Standard grin-wallet speaks Tor + HTTP listener + manual
-   slatepack — to our knowledge **no built-in relay/MQS client** (that was an MWC addition Grin
-   upstream never took). If receiving via Transporter needs non-standard tooling, adoption is
-   ~zero. **Confirm receive-support across grin-wallet / Grim / GrinPlusPlus / Ironbelly first.**
-   Until then the pool keeps Tor (rail #1) + manual slatepack claim (rail #2), and the pool's
-   `incentives.transporter_enabled` stays `false` (stub: `web/07_mining_pool_public/back-end-pool/
-   lib/wallet-transporter.js`, interface mirrors `WalletTor`).
-
----
-
-# PART B — 092 Floonet relay deployer
-
-**Status:** Design proposal (no code yet). Deploys **external software** (github.com/2ro,
-Apache/MIT) the toolkit way — we write the deployer + admin wrapper, not the relay.
-
-## B.1 What Floonet is (and why deploy it here)
-
-Floonet is a **network of Grin-native Nostr relays** (docs.floonet.dev) carrying encrypted
-slatepacks as Nostr DMs, usernames (NIP-05), and marketplace events, with an optional co-located
-Nym mixnet exit. It's the transport behind the **Goblin** P2P wallet. Operators can charge GRIN
-(via GoblinPay) for name registration / write access. Default-deny event-kind whitelist keeps
-relays lean (8 kinds for wallet, ~23 for marketplace).
-
-Deploying it fits the toolkit's core competence exactly: wrap someone's binary in our
-`grin` user + systemd + nginx/certbot + firewall + backup conventions. It gives operators who
-want to join the **P2P privacy network** (reach Goblin users) a one-command path, and positions
-the toolkit as the deployment layer for the *whole* ecosystem, not just our own products.
-
-## B.2 Package choice — floonet-rs over floonet-strfry
-
-Both produce the same relay; both offer Docker / bare-metal / source. **Pick `floonet-rs`** for
-the toolkit's first pass:
-
-| | floonet-rs | floonet-strfry |
-|---|---|---|
-| Core | Rust (nostr-rs-relay), **single binary** | C++ strfry (unmodified upstream) |
-| Bare-metal | installer script + hardened systemd unit | `apply-spec.sh` + systemd |
-| Extra services | modular (name authority, mixnet exit toggled in `config.toml`) | separate Rust name-authority process |
-| Storage | SQLite, auto-migration | (strfry's LMDB) |
-| TLS | Caddy (docker) — **we replace with nginx+certbot** | Caddy |
-
-floonet-rs is a single Rust binary + one `config.toml` + SQLite — matches our deployment style
-with the fewest moving parts. floonet-strfry drags in a C++ build plus a separate name-authority
-service. (We do **not** use his Docker path; bare-metal binary + systemd is the toolkit way.)
-
-## B.3 What we build vs reuse
-
-We do **not** fork or modify floonet-rs. We build a deployer + day-2 admin wrapper:
-
-| Need | Approach |
-|---|---|
-| Fetch binary / build | download release, or `cargo build --release` (needs Rust + `protoc` for gRPC) — offer prebuilt-first, source fallback (like grin binary install) |
-| Service user + systemd | our `grin`-style unprivileged user, hardened unit (his ships `ProtectSystem=strict`, only `/var/lib/floonet-rs` writable) — adopt/align with our conventions |
-| **TLS + reverse proxy** | **replace his Caddy with our nginx + certbot** HTTP-first-then-SSL vhost pattern; WebSocket relay needs `Upgrade`/`Connection` headers for `wss://` (CLAUDE.md Let's Encrypt bootstrap rules apply) |
-| Config | wrap `config.toml`: set `info.relay_url`, network address, event-kind whitelist, NIP-42 auth + pubkey allowlist, name-authority on/off, mixnet-exit on/off — surface as admin menu edits, not hand-editing |
-| Firewall | ufw/iptables: open the nginx 443 only; relay Node bound behind proxy |
-| Day-2 admin | status/restart, `config.toml` edits, SQLite backup, log view — same shape as other scripts' admin sections |
-| Optional | GoblinPay paid-registration integration; Nym mixnet exit toggle |
-
-Proposed files:
-```
-scripts/092_grin_floonet_relay.sh       infra: fetch/build, service user, systemd, nginx+certbot, ufw, admin
-scripts/lib/092_lib_floonet.sh          config.toml helpers, backup, status (sourced)
-```
-
-No `web/092_*` — Floonet ships its own relay + optional name-authority; we don't add app code.
-
-## B.4 Open questions (092)
-
-1. **Binary distribution.** Does 2ro publish prebuilt `floonet-rs` releases, or is `cargo build`
-   required on the VPS? (Affects deps: Rust toolchain + `protoc`.) `⚠VERIFY` on the releases page.
-2. **nginx WebSocket config** for nostr-rs-relay — confirm exact `location`/upgrade-header block
-   and that certbot's `--nginx` plays with it (HTTP-first bootstrap, then SSL vhost).
-3. **Mainnet/testnet stance.** Floonet is network-agnostic transport (carries whatever slatepack
-   is inside). Decide whether we run one relay or expose net-tagged instances like other scripts.
-4. **Upstream coordination.** Gaps found in his installer/config docs → PR to the floonet repos
-   rather than patching around them locally.
-5. **Scope creep guard.** Keep 092 a *relay deployer*. NIP-05 identity as a standalone service,
-   notifications, marketplace bridges = future 093+ members, not bolt-ons here.
+6. **⚠ Make-or-break for pool integration (payout rail #3) — the reason 092 is deferred.**
+   Does the wallet a miner *already runs* support receiving on a relay? Standard grin-wallet
+   speaks Tor + HTTP listener + manual slatepack — to our knowledge **no built-in relay/MQS
+   client** (that was an MWC addition Grin upstream never took). If receiving via Transporter
+   needs non-standard tooling, adoption is ~zero. **Confirm receive-support across grin-wallet /
+   Grim / GrinPlusPlus / Ironbelly first.** Until then the pool keeps Tor (rail #1) + manual
+   slatepack claim (rail #2), and the pool's `incentives.transporter_enabled` stays `false`
+   (stub: `web/07_mining_pool_public/back-end-pool/lib/wallet-transporter.js`, interface mirrors
+   `WalletTor`).
 
 ---
 
 # PART C — Shared relay infrastructure & GoblinPay (05) composition
 
-**Status:** Design decision (2026-07-04). Ties 092 (a 09 member) to GoblinPay (a **Script-05**
+**Status:** Design decision (2026-07-04). Ties 091 (a 09 member) to GoblinPay (a **Script-05**
 payment product). GoblinPay's own product detail lives in the Script-05 docs/memory; **only the
 relay relationship is a 09 concern** and is recorded here.
 
@@ -464,7 +535,8 @@ relay relationship is a 09 concern** and is recorded here.
 only genuinely fiddly, piece of infrastructure:
 
 > deploy a `nostr-rs-relay` publicly reachable over `wss://`, TLS-terminated, with the
-> `Upgrade`/`Connection` headers a WebSocket vhost needs (the 092 B.4 #2 open question).
+> `Upgrade`/`Connection` headers a WebSocket vhost needs (**solved** — upstream's
+> `docs/reverse-proxy.md` nginx block, see A.2b #2).
 
 Factor this **once** into a shared sourced lib so the gotchas are solved in one place, not twice:
 
@@ -472,29 +544,29 @@ Factor this **once** into a shared sourced lib so the gotchas are solved in one 
 scripts/lib/nostr_relay_deploy.sh   deploy a nostr-rs-relay behind nginx+certbot (wss), hardened
                                     systemd, ufw; parametrised by binary path + config + net
 ```
-- **092** calls it to stand up `floonet-rs` (then layers name-authority / mixnet-exit toggles).
+- **091** calls it to stand up `floonet-rs` (then layers name-authority / mixnet-exit toggles).
 - **GoblinPay's 05 sub-option** calls it for the bundled relay (or skips it in external mode).
 - We replace upstream's **Caddy** with our **nginx+certbot** in both cases (same as the rest of
   the toolkit; CLAUDE.md Let's Encrypt HTTP-first-then-SSL bootstrap applies).
 
-## C.2 GoblinPay ↔ 092 — compose-when-present, never a hard dependency
+## C.2 GoblinPay ↔ 091 — compose-when-present, never a hard dependency
 
 GoblinPay (github.com/2ro/GoblinPay — receive-only Grin merchant server, Rust/Actix+SQLite,
 Nostr gift-wrapped slatepacks *plus* a direct-slatepack QR rail, fiat rate-lock invoices, hosted
 zero-JS checkout, HMAC webhooks, WooCommerce/Medusa/REST connectors, `/admin` dashboard) ships a
 bare-metal **systemd** path, so it deploys the toolkit way (deploy, don't fork — like floonet-rs).
 
-It does **not require** 092. Three relay modes the 05 sub-option should offer:
+It does **not require** 091. Three relay modes the 05 sub-option should offer:
 
-| Mode | When | What deploys | Needs 092? |
+| Mode | When | What deploys | Needs 091? |
 |---|---|---|---|
 | **Direct-only** | operator wants no Nostr at all | GoblinPay + our nginx/certbot; no relay | no |
 | **Bundled relay** (GoblinPay default) | wants Nostr, no existing relay | GoblinPay's own `nostr-rs-relay` via `nostr_relay_deploy.sh` | no |
-| **External → 092** | already runs a Floonet relay | GoblinPay `external mode` config points at the 092 relay | reuses it |
+| **External → 091** | already runs a Floonet relay | GoblinPay `external mode` config points at the 091 relay | reuses it |
 
-Rule: if 092 is already installed, the GoblinPay setup **auto-offers "use your existing Floonet
+Rule: if 091 is already installed, the GoblinPay setup **auto-offers "use your existing Floonet
 relay"**; otherwise it bundles its own. Same compose-when-present philosophy as the rest of the
-hub — 092 is an *optional shared relay*, not a gate.
+hub — 091 is an *optional shared relay*, not a gate.
 
 ## C.3 Why GoblinPay lives under 05, not 09
 
@@ -507,16 +579,19 @@ keep our own 053/054 only as the deliberate **no-Nostr, no-external-deps** alter
 
 ---
 
-## Recommendation (hub build order)
+## Recommendation (hub build order — revised 2026-07-10)
 
-1. **091 Phase 1** — Transporter server + auth challenge + CLI agent; prove a testnet round trip
-   between two wallets **never online simultaneously** (headless, mirrors the pool's testnet
-   rule). Do **not** fork grinbox/MQS — reimplement only the addressed offline queue on our
-   Node+SQLite+Tor+grin-wallet stack, Slatepack crypto from grin-wallet.
-2. **091 Phase 2** — wire into payouts (Script 07 enqueues via 091 instead of Tor-direct +
-   7-day retry) and 052 Drop "send to my Transporter" claims — *gated on A.9 #6 receive-support*.
-3. **092** — Floonet relay deployer (floonet-rs bare-metal + nginx/certbot + admin), independent
-   of 091; ships whenever the deployer is ready. Verify release/build path (B.4 #1) first. Build
-   `scripts/lib/nostr_relay_deploy.sh` (PART C.1) here — 092 is its first consumer.
-4. **GoblinPay under 05** — reuse `nostr_relay_deploy.sh` for bundled mode; auto-detect and offer
-   an installed 092 relay for external mode (PART C.2). Lands in the 05 hub, not 09.
+1. **091 Floonet relay deployer — BUILD NOW.** Upstream verified (A.2b): floonet-rs bare-metal
+   (source build: Rust + protoc), reuse his `install.sh` conventions + hardened systemd unit,
+   replace Caddy with our nginx/certbot using his own tested nginx-WebSocket block, day-2 admin.
+   Build `scripts/lib/nostr_relay_deploy.sh` (PART C.1) here — 091 is its first consumer.
+   Immediately useful to the existing Goblin/Floonet user base.
+2. **GoblinPay under 05** — reuse `nostr_relay_deploy.sh` for bundled mode; auto-detect and offer
+   an installed 091 relay for external mode (PART C.2). Lands in the 05 hub, not 09.
+3. **092 Transporter Phase 1 — DEFERRED.** Server + auth challenge + CLI agent; prove a testnet
+   round trip between two wallets **never online simultaneously**. Do **not** fork grinbox/MQS —
+   reimplement only the addressed offline queue on our Node+SQLite+Tor+grin-wallet stack,
+   Slatepack crypto from grin-wallet. Revisit when an internal consumer is ready.
+4. **092 Transporter Phase 2 — DEFERRED, gated.** Wire into payouts (Script 07 enqueues via 092
+   instead of Tor-direct + 7-day retry) and 052 Drop "send to my Transporter" claims — *gated on
+   B.9 #6 receive-support*.

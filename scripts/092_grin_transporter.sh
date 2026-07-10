@@ -1,10 +1,11 @@
 #!/bin/bash
 # =============================================================================
-# 091_grin_transporter.sh — Grin Transporter (store-and-forward slate relay)
+# 092_grin_transporter.sh — Grin Transporter (store-and-forward slate relay)
 # =============================================================================
 #
 #  Member of the Grin Connectivity Hub (Script 09). Renumbered from the earlier
-#  "Script 056" plan (was a sub of the Script 05 wallet hub) on 2026-07-04.
+#  "Script 056" plan (was a sub of the Script 05 wallet hub) on 2026-07-04;
+#  swapped 091→092 with the Floonet relay on 2026-07-10 (Floonet ships first).
 #
 #  Self-hosted store-and-forward relay for Grin transaction slates.
 #  Fills the gap Slatepack and Tor don't: automated AND offline-tolerant sends.
@@ -14,8 +15,8 @@
 #  NOT email/SMTP — it is a small HTTP(S) service (Node + Express + SQLite)
 #  behind nginx, holding encrypted slates keyed by slatepack address.
 #
-#  Status: COMING SOON — this script is a placeholder.
-#  Design: docs/generated/script09_design.md  (Part A — 091)
+#  Status: DEFERRED — internal toolkit rail; revisit after 091 ships.
+#  Design: docs/generated/script09_design.md  (Part B — 092)
 #
 #  Planned port assignments (127.0.0.1, nginx-fronted only):
 #    Mainnet relay : 7456
@@ -35,7 +36,7 @@ RESET='\033[0m'
 
 clear
 echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-echo -e "${BOLD}${CYAN} 091) GRIN TRANSPORTER${RESET}"
+echo -e "${BOLD}${CYAN} 092) GRIN TRANSPORTER${RESET}"
 echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 echo ""
 echo -e "  ${YELLOW}⚠  Coming soon — not yet implemented.${RESET}"

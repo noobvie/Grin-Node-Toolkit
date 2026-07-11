@@ -1,8 +1,9 @@
 # Script 09 — Grin Connectivity Hub (design)
 
-**Status:** Design proposal (placeholder scripts only). Supersedes the earlier "Script 056
-Transporter under the Script 05 wallet hub" plan — renumbered **2026-07-03** to its own
-top-level hub.
+**Status:** 091 Floonet relay deployer **IMPLEMENTED 2026-07-10** (see
+`script09_implementation.md` for the built shape); 092 Transporter remains a deferred
+placeholder. Supersedes the earlier "Script 056 Transporter under the Script 05 wallet hub"
+plan — renumbered **2026-07-03** to its own top-level hub.
 **Name:** Grin Connectivity Hub (working title; "Connectivity Layer" considered — "Hub" chosen
 to match the 05/07 hub family). Menu label shows **09**; underlying files keep 09x numbering.
 
@@ -109,7 +110,8 @@ as the 05 and 07 hubs.
 
 # PART A — 091 Floonet relay deployer
 
-**Status:** Verified design (2026-07-10) — upstream repo + docs checked, ready to build.
+**Status:** **IMPLEMENTED 2026-07-10** — built shape + locked decisions (ONE relay per
+operator, stable-user fallback unit, rustup policy) recorded in `script09_implementation.md`.
 Deploys **external software** (github.com/2ro, Apache/MIT) the toolkit way — we write the
 deployer + admin wrapper, not the relay.
 

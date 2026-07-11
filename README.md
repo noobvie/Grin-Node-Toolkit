@@ -41,6 +41,9 @@ Grin Global Health mainnet: https://world.grin.money
 Free Grin Coin Portal: https://drop.grin.money/
 
 Solo Grin Mining Pool: https://solo.grin.money (user/pass disabled for easy viewing)
+
+Public Grin Mining Pool: https://grinium.com/ (under developement)
+
 ...
 
 ---

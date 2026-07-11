@@ -8,7 +8,7 @@
 #  value-holding wallets (05).
 #
 #  ─── Members ───────────────────────────────────────────────────────────────
-#   091  091_grin_floonet_relay.sh    Floonet (floonet-rs) relay deployer (coming soon)
+#   091  091_grin_floonet_relay.sh    Floonet (floonet-rs) relay deployer
 #   092  092_grin_transporter.sh      Store-and-forward slate relay (deferred)
 #   093+ (reserved)                   NIP-05 identity, notifications, …
 #
@@ -36,9 +36,12 @@ RESET='\033[0m'
 # INSTALLATION DETECTION
 # =============================================================================
 
-# 091 — installed if the floonet-rs service unit exists
+# 091 — installed if the floonet-rs service unit exists (ours lands in
+# /etc/systemd/system; upstream's install.sh may use /usr/lib) or the binary does
 _091_installed() {
-    [[ -f /etc/systemd/system/floonet-rs.service ]]
+    [[ -f /etc/systemd/system/floonet-rs.service ]] \
+        || [[ -f /usr/lib/systemd/system/floonet-rs.service ]] \
+        || [[ -x /usr/local/bin/floonet-rs ]]
 }
 
 # 091 — running status from systemd

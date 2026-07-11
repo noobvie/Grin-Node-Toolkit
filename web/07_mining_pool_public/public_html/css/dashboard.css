@@ -18,14 +18,17 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-    /* Atomic default (mockup-v3) — legacy var names kept; themes.css remaps them per theme */
-    --dark-bg: #080b07;
-    --dark-card: #11160d;
-    --dark-text: #e8f5cf;
-    --dark-dim: #9db077;
-    --neon-cyan: #b8e600;
-    --neon-magenta: #00f7ff;
-    --neon-lime: #d4ff3d;
+    /* Reactor default (v4 control-room skin) — legacy var names kept; themes.css remaps
+       them per theme. Slot mapping: cyan-slot = phosphor green (accent/ok), magenta-slot =
+       hot magenta (accent2), lime-slot = instrument amber (gold). The old uranium-lime
+       default lives on as body.uranium-theme ("Uranium Classic"). */
+    --dark-bg: #07090c;
+    --dark-card: #10141a;
+    --dark-text: #cfd8d3;
+    --dark-dim: #8a978f;
+    --neon-cyan: #5dff73;
+    --neon-magenta: #ff4fd8;
+    --neon-lime: #ffb63d;
     /* structural tokens (theme-independent) */
     --radius: 10px;
     --radius-sm: 6px;
@@ -64,11 +67,10 @@ body {
     --btn-text: var(--dark-bg);
 
     background-color: var(--bg);
-    /* faint reactor grid in the theme accent */
+    /* control-room ambience: soft overhead glow instead of the old full-page grid
+       (the reactor panels carry their own graph-paper texture) */
     background-image:
-        linear-gradient(0deg, transparent 23%, color-mix(in srgb, var(--accent) 4%, transparent) 24%, color-mix(in srgb, var(--accent) 4%, transparent) 26%, transparent 27%, transparent 73%, color-mix(in srgb, var(--accent) 4%, transparent) 74%, color-mix(in srgb, var(--accent) 4%, transparent) 76%, transparent 77%),
-        linear-gradient(90deg, transparent 23%, color-mix(in srgb, var(--accent) 4%, transparent) 24%, color-mix(in srgb, var(--accent) 4%, transparent) 26%, transparent 27%, transparent 73%, color-mix(in srgb, var(--accent) 4%, transparent) 74%, color-mix(in srgb, var(--accent) 4%, transparent) 76%, transparent 77%);
-    background-size: 48px 48px;
+        radial-gradient(1100px 520px at 50% -12%, color-mix(in srgb, var(--accent) 6%, var(--bg-elev)), transparent 70%);
     background-attachment: fixed;
     color: var(--text);
     font-family: var(--sans);

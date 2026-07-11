@@ -55,9 +55,9 @@ class PoolSettings {
       // enabled_themes: JSON array of theme keys visitors may switch between on the
       // public pages. With ≤1 entry (or allow_theme_switch off) no switcher is shown
       // and default_theme is forced. default_theme need not be in this list.
-      // Default = the two polished looks (Atomic dark + Light); nexus and the 10
-      // white-label extras stay opt-in via the admin panel checkbox grid.
-      enabled_themes: '["atomic","light"]',
+      // Default = the polished looks (Reactor + Uranium Classic + Light); nexus and
+      // the 10 white-label extras stay opt-in via the admin panel checkbox grid.
+      enabled_themes: '["atomic","uranium","light"]',
       // custom_theme: JSON map of CSS variable name -> value (theme builder output)
       custom_theme: '{}',
       custom_css: '',
@@ -356,9 +356,10 @@ class PoolSettings {
 
   // Every valid theme key (public_html/css/themes.css + js/theme.js + js/public-theme.js).
   // 'dark' is the retired pre-mockup public default — still accepted for stored
-  // configs; the public pages normalise it to 'atomic'. 'nexus' is public+admin;
-  // 'cyber'/'uranium'/'gradient' (the moved old looks) and matrix/naruto/japan
-  // are admin-panel-only palettes.
+  // configs; the public pages normalise it to 'atomic' (since 2026-07 that default is
+  // the Reactor control-room skin). 'nexus' is public+admin; 'uranium' is BOTH the
+  // public "Uranium Classic" theme (the pre-2026-07 uranium-lime default) and an
+  // admin-panel palette; 'cyber'/'gradient' and matrix/naruto/japan are admin-only.
   static THEME_KEYS = [
     'atomic', 'nexus', 'light', 'dark', 'custom',
     'matrix', 'naruto', 'japan', 'cyber', 'uranium', 'gradient',

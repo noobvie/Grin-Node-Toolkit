@@ -25,9 +25,12 @@
 
   var STORAGE_KEY = 'grinium-theme';
 
-  // group: shown as an <optgroup>. 'atomic' is the inline no-class default.
+  // group: shown as an <optgroup>. 'atomic' is the inline no-class default — since
+  // 2026-07 that default is the "Reactor" control-room skin (key kept for stored
+  // configs); the old uranium-lime default is the 'uranium' theme below.
   var THEMES = [
-    { key: 'atomic',    label: 'Atomic ⚛',      group: 'Classic',  builtin: true },
+    { key: 'atomic',    label: 'Reactor ⚛',     group: 'Classic',  builtin: true },
+    { key: 'uranium',   label: 'Uranium Classic ☢', group: 'Classic' },
     { key: 'nexus',     label: 'Nexus',         group: 'Classic' },
     { key: 'light',     label: 'Light',         group: 'Classic' },
     { key: 'winter',    label: 'Winter Frost ❄️',   group: 'Seasonal' },

@@ -42,8 +42,9 @@ scripts/
   08_  Node admin centre (monitoring, nginx, firewall, backup, disk cleanup)
   08del_ Full cleanup (destructive)
   09_  Grin Connectivity Hub → 091_ Floonet relay deployer (deploys 2ro's floonet-rs via
-       nginx/certbot — we deploy, don't fork; BUILD PRIORITY) and 092_ Grin Transporter
-       (store-and-forward slate queue, was "Script 056"; Node+SQLite+Tor; DEFERRED).
+       nginx/certbot — we deploy, don't fork) and 092_ Grin Transporter (store-and-forward
+       slate queue, was "Script 056"; Node+SQLite+Tor; Phase 1 built 2026-07-11 STANDALONE —
+       wiring into 052/07 stays deferred on wallet relay-receive support, design B.9 #6).
        Numbers swapped 2026-07-10 (Floonet first — serves existing users). Design →
        docs/generated/script09_design.md, memory project_comms_hub_09. Menu grouping is
        display-only; the number stays the label.

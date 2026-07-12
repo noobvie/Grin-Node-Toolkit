@@ -139,4 +139,82 @@ checksum on that path by design, HTTPS+GitHub trust only).
 ### Not built / future
 
 - GoblinPay-side composition (05 member consuming this relay) — PART C.2.
-- 092 Transporter remains deferred (design PART B unchanged).
+- ~~092 Transporter remains deferred~~ → Phase 1 built 2026-07-11, see below.
+
+---
+
+## 092 — Grin Transporter Phase 1 (implemented 2026-07-11)
+
+**Standalone only** (user decision 2026-07-11): server + auth + CLI agent. NO
+product wiring — Grin Drop 052 stays untouched and the pool's
+`incentives.transporter_enabled` stays `false`, both gated on design B.9 #6
+(no mainstream wallet can receive from a relay; a Drop claimant / pool miner
+would need to run our agent). Phase-1 value: operator-to-operator sends and
+the testnet round-trip proof. Not yet exercised on a live VPS (`bash -n` +
+`node --check` clean; crypto interop 20/20 and server HTTP E2E 18/18 pass
+locally against the real code).
+
+### Files
+
+```
+scripts/092_grin_transporter.sh        wizard: net select → server/agent menus (trp_set_network vars)
+scripts/lib/092_lib_server.sh          trp_* — node24 install, app deploy, systemd, nginx+certbot, tor, status, uninstall
+scripts/lib/092_lib_client.sh          trp_agent_* — agent install (Drop auto-detect), cron poll toggle, actions submenu
+web/092_transporter/server.js          Express + node:sqlite queue (NO wallet, ciphertext only)
+web/092_transporter/package.json       express only (SQLite via node:sqlite builtin — 052 model, not better-sqlite3)
+web/092_transporter/client/agent.js    zero-dep CLI: address/status/send/poll/cancel (Owner v3 ECDH + Foreign v2)
+```
+
+### Layout / ports (per net, independent)
+
+- `/opt/grin/transporter-{main,test}/` — `app/`, `config.json`, `transporter.db`
+- `/opt/grin/transporter-agent-{mainnet,testnet}/` — `agent.js`, `agent.json` (0600)
+- Ports 7456 main / 7466 test, `127.0.0.1` only; services `grin-transporter-{main,test}`
+  (hardened unit: NoNewPrivileges, PrivateTmp, ProtectSystem=full, ReadWritePaths=dir)
+- nginx vhost `grin-transporter-<net>`, zone `transporter_<net>` 60r/m in
+  `conf.d/script09-transporter-<net>.conf`; HTTP-first → certbot → SSL vhost
+- Optional tor front: `HiddenServicePort 80 → local port`, marker-guarded torrc block
+- Deployer state `/opt/grin/conf/grin_transporter.conf` (key=value); agent cron
+  `/etc/cron.d/grin-transporter-agent-<net>` as `grin` + logrotated fixed-name log
+
+### Server protocol (as designed B.6, verified by local E2E)
+
+`GET /health` (redacted counts) · `GET /auth/challenge?addr=` → single-use
+nonce (2 min) · `POST /auth {addr,nonce,signature}` → 15-min HMAC bearer token
+(per-boot secret, stateless) · `PUT|POST /queue/:addr {slatepack}` open deposit
+(armor check, size cap 16 KB default, per-addr depth cap 100, TTL 336 h sweep)
+· `GET /queue/:addr` + `DELETE /queue/:addr/:id` token-gated. Signature =
+ed25519 over the UTF-8 nonce string; pubkey decoded from the bech32 address
+(inline BIP-173 decoder, HRP `grin`/`tgrin` enforced per net — wrong-net
+addresses are rejected at the door).
+
+### Agent decisions (delta vs Drop's flows — deliberate)
+
+- **Locks outputs at SEND time** (init → `tx_lock_outputs` → deliver S1), not
+  at finalize like Drop: the reply may take days and the wallet must not
+  re-select those inputs. `cancel <tx_slate_id>` releases an unanswered send.
+  At finalize, a second lock attempt is tolerated (crash cover).
+- **`sender_index: 0` + `recipients: [dest]`** (Drop uses null/[]): the payee
+  agent needs the sender address from `decode_slatepack_message` to route S2
+  back; S1 with no sender is skipped (left to expire).
+- `payment_proof_recipient_address: null` kept — same KernelSumMismatch war
+  story as 052.
+- Poll ordering: `receive_tx` → build reply → PUT reply → only then DELETE
+  original; a crash-dupe re-poll hits grin-wallet's "already received" and is
+  then consumed. If the reply PUT fails the armored S2 is logged for manual
+  delivery.
+- `get_slatepack_secret_key` result: first 32 bytes used (64- or 128-hex
+  tolerated); PKCS8-wrapped for node:crypto signing; key never leaves the agent.
+
+### ⚠ VPS-test watchlist (first live run)
+
+1. The one remaining design `⚠VERIFY`: `get_slatepack_secret_key(token, 0)`
+   response shape against the deployed grin-wallet binary (agent tolerates
+   64/128-hex, but confirm).
+2. `decode_slatepack_message` sender field serialization (string vs object) on
+   the deployed binary — agent expects a bech32 string.
+3. Foreign `receive_tx` over the combined owner_api port with empty foreign
+   secret (memory says no auth needed on 13420 — verified for pool, reconfirm
+   from the agent).
+4. node:sqlite emits an ExperimentalWarning on Node 24 — cosmetic (052 lives
+   with the same).

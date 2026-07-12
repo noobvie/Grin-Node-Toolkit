@@ -1,8 +1,9 @@
 # Script 09 — Grin Connectivity Hub (design)
 
-**Status:** 091 Floonet relay deployer **IMPLEMENTED 2026-07-10** (see
-`script09_implementation.md` for the built shape); 092 Transporter remains a deferred
-placeholder. Supersedes the earlier "Script 056 Transporter under the Script 05 wallet hub"
+**Status:** 091 Floonet relay deployer **IMPLEMENTED 2026-07-10**; 092 Transporter
+**Phase 1 IMPLEMENTED 2026-07-11 — standalone only** (server + agent; NO Drop/pool wiring,
+still gated on B.9 #6; see `script09_implementation.md` for both built shapes).
+Supersedes the earlier "Script 056 Transporter under the Script 05 wallet hub"
 plan — renumbered **2026-07-03** to its own top-level hub.
 **Name:** Grin Connectivity Hub (working title; "Connectivity Layer" considered — "Hub" chosen
 to match the 05/07 hub family). Menu label shows **09**; underlying files keep 09x numbering.
@@ -232,11 +233,13 @@ No `web/091_*` — Floonet ships its own relay + optional name-authority; we don
 
 # PART B — 092 Grin Transporter (store-and-forward slate relay)
 
-> **Status: DEFERRED (2026-07-10).** Design retained in full below — the API groundwork
-> (method names, R8 auth) is resolved and stays valid. Deferred because it is an **internal
-> toolkit rail** (pool payouts, Drop claims) with no external user base until a mainstream
-> wallet can receive from a relay (open question B.9 #6 — the make-or-break). Revisit after
-> 091 ships and/or when Script 07 payouts are ready to wire in a rail #3.
+> **Status: Phase 1 IMPLEMENTED 2026-07-11 — STANDALONE ONLY** (user decision same day:
+> build server + auth + CLI agent; keep Grin Drop 052 completely untouched). Built shape →
+> `script09_implementation.md` §092. **Phase 2 (product wiring — pool payout rail #3, Drop
+> claims) stays DEFERRED**, gated on B.9 #6: no mainstream wallet (grin-wallet / Grim /
+> GrinPlusPlus / Ironbelly) can receive from a relay, so a Drop claimant or pool miner would
+> have to run our agent — near-zero audience. Standalone still delivers operator-to-operator
+> sends and the testnet round-trip proof.
 
 > API method names + R8 auth gates **resolved 2026-06-09** (see B.3, B.5). Items tagged
 > `⚠VERIFY` still need a 30-second curl against the *deployed* grin-wallet binary before coding
@@ -590,10 +593,10 @@ keep our own 053/054 only as the deliberate **no-Nostr, no-external-deps** alter
    Immediately useful to the existing Goblin/Floonet user base.
 2. **GoblinPay under 05** — reuse `nostr_relay_deploy.sh` for bundled mode; auto-detect and offer
    an installed 091 relay for external mode (PART C.2). Lands in the 05 hub, not 09.
-3. **092 Transporter Phase 1 — DEFERRED.** Server + auth challenge + CLI agent; prove a testnet
-   round trip between two wallets **never online simultaneously**. Do **not** fork grinbox/MQS —
-   reimplement only the addressed offline queue on our Node+SQLite+Tor+grin-wallet stack,
-   Slatepack crypto from grin-wallet. Revisit when an internal consumer is ready.
+3. **092 Transporter Phase 1 — ✅ BUILT 2026-07-11 (standalone).** Server + auth challenge +
+   CLI agent on the Node+SQLite+Tor+grin-wallet stack, Slatepack crypto from grin-wallet, no
+   grinbox/MQS fork. Local verification done (crypto interop + HTTP E2E); the **testnet round
+   trip between two wallets never online simultaneously** is the remaining live-VPS proof.
 4. **092 Transporter Phase 2 — DEFERRED, gated.** Wire into payouts (Script 07 enqueues via 092
    instead of Tor-direct + 7-day retry) and 052 Drop "send to my Transporter" claims — *gated on
    B.9 #6 receive-support*.

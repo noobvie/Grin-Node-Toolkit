@@ -9,7 +9,7 @@
 #
 #  ─── Members ───────────────────────────────────────────────────────────────
 #   091  091_grin_floonet_relay.sh    Floonet (floonet-rs) relay deployer
-#   092  092_grin_transporter.sh      Store-and-forward slate relay (deferred)
+#   092  092_grin_transporter.sh      Store-and-forward slate relay (Phase 1 built 2026-07-11)
 #   093+ (reserved)                   NIP-05 identity, notifications, …
 #
 #  (Numbers swapped 2026-07-10: Floonet relay ships first — it serves the

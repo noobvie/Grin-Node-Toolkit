@@ -51,7 +51,7 @@ FLR_STATE="/var/lib/floonet-rs"
 FLR_SVC="floonet-rs"
 FLR_CONF="/opt/grin/conf/grin_floonet.conf"
 FLR_SITE_NAME="floonet-relay"
-FLR_DEFAULT_PORT=8080
+FLR_DEFAULT_PORT=8181
 
 # nginx zones (script-specific, script09- prefixed per CLAUDE.md rules)
 FLR_REQ_ZONE="floonet_ws"
@@ -667,28 +667,30 @@ flr_logs() {
 }
 
 flr_service_control() {
-    clear
-    echo -e "${BOLD}${CYAN}── Floonet relay — service control ──${RESET}\n"
-    echo -e "  Current state: ${BOLD}$(flr_svc_state)${RESET}\n"
-    echo -e "  ${GREEN}1${RESET}) Restart"
-    echo -e "  ${GREEN}2${RESET}) Start"
-    echo -e "  ${GREEN}3${RESET}) Stop"
-    echo -e "  ${GREEN}4${RESET}) Enable autostart on boot"
-    echo -e "  ${GREEN}5${RESET}) Disable autostart"
-    echo -e "  ${DIM}0) Back${RESET}\n"
-    echo -ne "${BOLD}Select: ${RESET}"
-    local c; read -r c || true
-    case "$c" in
-        1) systemctl restart "$FLR_SVC" && success "Restarted." || error "Restart failed — check logs." ;;
-        2) systemctl start "$FLR_SVC" && success "Started." || error "Start failed — check logs." ;;
-        3) systemctl stop "$FLR_SVC" && success "Stopped." || error "Stop failed." ;;
-        4) systemctl enable "$FLR_SVC" >/dev/null 2>&1 && success "Autostart enabled." || error "Failed." ;;
-        5) systemctl disable "$FLR_SVC" >/dev/null 2>&1 && success "Autostart disabled." || error "Failed." ;;
-        *) return 0 ;;
-    esac
-    sleep 1
-    [[ "$c" =~ ^[123]$ ]] && { sleep 2; echo -e "  State now: ${BOLD}$(flr_svc_state)${RESET}"; }
-    pause
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}── Floonet relay — service control ──${RESET}\n"
+        echo -e "  Current state: ${BOLD}$(flr_svc_state)${RESET}\n"
+        echo -e "  ${GREEN}1${RESET}) Restart"
+        echo -e "  ${GREEN}2${RESET}) Start"
+        echo -e "  ${GREEN}3${RESET}) Stop"
+        echo -e "  ${GREEN}4${RESET}) Enable autostart on boot"
+        echo -e "  ${GREEN}5${RESET}) Disable autostart"
+        echo -e "  ${DIM}0) Back${RESET}\n"
+        echo -ne "${BOLD}Select: ${RESET}"
+        local c; read -r c || true
+        case "$c" in
+            1) systemctl restart "$FLR_SVC" && success "Restarted." || error "Restart failed — check logs." ;;
+            2) systemctl start "$FLR_SVC" && success "Started." || error "Start failed — check logs." ;;
+            3) systemctl stop "$FLR_SVC" && success "Stopped." || error "Stop failed." ;;
+            4) systemctl enable "$FLR_SVC" >/dev/null 2>&1 && success "Autostart enabled." || error "Failed." ;;
+            5) systemctl disable "$FLR_SVC" >/dev/null 2>&1 && success "Autostart disabled." || error "Failed." ;;
+            0|"") return 0 ;;
+            *) warn "Invalid option."; sleep 1; continue ;;
+        esac
+        [[ "$c" =~ ^[123]$ ]] && { sleep 2; echo -e "  State now: ${BOLD}$(flr_svc_state)${RESET}"; }
+        pause
+    done
 }
 
 flr_test_relay() {
@@ -1064,23 +1066,24 @@ flr_uninstall() {
     success "Service, binary, and nginx config removed."
 
     echo ""
-    echo -ne "  Also DELETE relay data (${FLR_STATE}) and config (${FLR_ETC})? [y/N]: "
+    echo -ne "  Also DELETE relay data (${FLR_STATE}) and config (${FLR_ETC})? [Y/n]: "
     read -r c || true
-    if [[ "${c,,}" == "y" ]]; then
+    if [[ "${c,,}" != "n" ]]; then
         rm -rf "${FLR_STATE:?}" "${FLR_ETC:?}"
         rm -f "$FLR_CONF"
         success "Data and config deleted."
     else
         info "Data and config kept — a reinstall will pick them up."
     fi
+    echo -e "  ${DIM}Keeping the cert lets a reinstall reuse it (avoids Let's Encrypt rate limits).${RESET}"
     echo -ne "  Delete the Let's Encrypt certificate for ${FLR_DOMAIN:-'(no domain)'}? [y/N]: "
     read -r c || true
     if [[ "${c,,}" == "y" && -n "$FLR_DOMAIN" ]]; then
         nginx_delete_certbot_cert "$FLR_DOMAIN"
     fi
-    echo -ne "  Delete the source/build dir (${FLR_SRC%/*})? [y/N]: "
+    echo -ne "  Delete the source/build dir (${FLR_SRC%/*})? [Y/n]: "
     read -r c || true
-    if [[ "${c,,}" == "y" ]]; then
+    if [[ "${c,,}" != "n" ]]; then
         rm -rf "${FLR_SRC:?}"
         rm -rf "${FLR_SRC%/*}"
     fi

@@ -194,7 +194,7 @@ nrd_firewall_open_web() {
 
 # ─── Verification helpers ─────────────────────────────────────────────────────
 # WebSocket handshake test: expects "HTTP/1.1 101 Switching Protocols".
-# nrd_ws_handshake_test <base_url>   e.g. https://relay.example.com or http://127.0.0.1:8080
+# nrd_ws_handshake_test <base_url>   e.g. https://relay.example.com or http://127.0.0.1:8181
 nrd_ws_handshake_test() {
     local url="$1" first=""
     # || true guards pipefail: grabbing only the status line SIGPIPEs curl.

@@ -140,12 +140,20 @@ flr_guided_setup() {
     read -r rdesc || true
     rdesc="${rdesc:-Grin-native Nostr relay on the Floonet network}"
 
+    # NIP-05 usernames — default on: the relay exists to serve wallet users, and
+    # pay-by-username is core to that. Self-service, NIP-98-authenticated; can be
+    # turned off later via menu 9. base_url is derived from the domain.
+    echo -ne "  Offer name@${domain} usernames to your users (NIP-05)? [Y/n]: "
+    read -r rnames || true
+    [[ "${rnames,,}" == "n" ]] && want_names=0 || want_names=1
+
     echo ""
     echo -e "  ${BOLD}Summary${RESET}"
     echo -e "   Relay URL   : ${BOLD}wss://${domain}/${RESET}"
     echo -e "   SSL email   : ${email}"
     echo -e "   Relay name  : ${rname}"
     echo -e "   Description : ${rdesc}"
+    echo -e "   Usernames   : $( [[ "$want_names" -eq 1 ]] && echo "name@${domain} (NIP-05)" || echo "off" )"
     echo -e "   ${DIM}Layout: /usr/local/bin/floonet-rs · /etc/floonet-rs/config.toml · /var/lib/floonet-rs${RESET}"
     echo ""
     echo -ne "${BOLD}Proceed? [Y/n]: ${RESET}"
@@ -181,6 +189,10 @@ flr_guided_setup() {
     echo -e "${BOLD}[6/8] Configure relay identity${RESET}"
     flr_configure_identity "$domain" "$rname" "$rdesc" \
         || { _flr_setup_failed "configuration"; return 0; }
+    if [[ "$want_names" -eq 1 ]]; then
+        flr_enable_name_authority "$domain" \
+            || warn "Could not enable NIP-05 name authority — set it later via menu 9."
+    fi
 
     echo ""
     echo -e "${BOLD}[7/8] nginx + SSL certificate + firewall${RESET}"
@@ -211,7 +223,11 @@ flr_guided_setup() {
     echo -e "   ${BOLD}Recommended next steps:${RESET}"
     echo -e "    • Menu ${BOLD}3${RESET} — status dashboard (service, SSL, stored events)"
     echo -e "    • Menu ${BOLD}B${RESET} — enable the encrypted daily backup"
-    echo -e "    • Menu ${BOLD}9${RESET} — offer name@${domain} usernames (NIP-05)"
+    if [[ "$want_names" -eq 1 ]]; then
+        echo -e "    • ${GREEN}Usernames live${RESET} — users can register name@${domain} (manage via menu ${BOLD}9${RESET})"
+    else
+        echo -e "    • Menu ${BOLD}9${RESET} — offer name@${domain} usernames (NIP-05)"
+    fi
     log "guided setup complete: wss://${domain} ssl_ok=${NRD_SSL_OK:-0}"
     pause
 }
@@ -253,6 +269,23 @@ flr_domain_ssl_setup() {
     [[ "${c,,}" != "n" ]] && systemctl restart "$FLR_SVC" 2>/dev/null || true
     [[ "${NRD_SSL_OK:-0}" -eq 1 ]] && success "wss://${domain} is set up." \
         || warn "SSL still pending — relay serves ws:// until certbot succeeds."
+    pause
+}
+
+# Rebuild the public landing page and reload nginx — no cert/relay disruption.
+flr_menu_refresh_landing() {
+    clear
+    echo -e "${BOLD}${CYAN}── Refresh landing page ──${RESET}\n"
+    flr_installed || { warn "Install the relay first (option 1)."; pause; return 0; }
+    flr_load_conf
+    [[ -n "$FLR_DOMAIN" ]] || { warn "No domain configured yet — run guided setup (option 1) first."; pause; return 0; }
+    echo -e "  Rebuilds the public homepage from config.toml and reloads nginx."
+    echo -e "  ${DIM}The relay service and SSL certificate are left untouched.${RESET}\n"
+    if flr_nginx_setup "$FLR_DOMAIN" "$FLR_EMAIL"; then
+        success "Landing page live at https://${FLR_DOMAIN}/"
+    else
+        error "Refresh failed — see the message above."
+    fi
     pause
 }
 
@@ -308,6 +341,7 @@ show_menu() {
     echo -e "  ${GREEN}9${RESET}) NIP-05 usernames ${DIM}(name authority)${RESET}"
     echo -e "  ${GREEN}10${RESET}) GoblinPay ${DIM}(charge GRIN for names / write access)${RESET}"
     echo -e "  ${GREEN}11${RESET}) Edit config.toml directly"
+    echo -e "  ${GREEN}L${RESET})  Refresh landing page ${DIM}(rebuild the public homepage)${RESET}"
     echo ""
     echo -e "  ${BOLD}Maintenance${RESET}"
     echo -e "  ${GREEN}B${RESET}) Backup & restore    ${GREEN}U${RESET}) Update floonet-rs"
@@ -347,6 +381,7 @@ main() {
             9)  _flr_need_install && flr_menu_name_authority || true ;;
             10) _flr_need_install && flr_menu_goblinpay      || true ;;
             11) _flr_need_install && flr_edit_config         || true ;;
+            [lL]) flr_menu_refresh_landing || true ;;
             [bB]) flr_backup_menu      || true ;;
             [uU]) _flr_need_install && flr_update   || true ;;
             [mM]) _flr_need_install && flr_mixexit  || true ;;

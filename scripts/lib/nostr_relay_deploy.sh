@@ -45,15 +45,36 @@ type success >/dev/null 2>&1 || success() { echo "[OK]    $*"; }
 NRD_SSL_OK=0
 
 # ─── Internal: the shared WebSocket proxy location block ─────────────────────
-# $1 = upstream port, $2 = req zone (may be empty), $3 = conn zone (may be empty)
+# $1 = upstream port, $2 = req zone (may be empty), $3 = conn zone (may be empty),
+# $4 = landing-page root (may be empty).
+#
+# When $4 is empty the block proxies EVERY request to the relay (original
+# behaviour — GoblinPay and any caller that omits the arg are unaffected).
+#
+# When $4 is a directory, the block splits traffic: real Nostr clients — a
+# WebSocket upgrade, or a NIP-11 fetch (`Accept: application/nostr+json`) — reach
+# the relay, while an ordinary browser GET is served the static index.html from
+# that directory. This is the standard relay-with-landing-page nginx idiom: the
+# proxy plumbing sits at location level (inherited into the implicit `if`
+# locations), and `proxy_pass` lives ONLY inside the two `if`s, so a request that
+# matches neither falls through to the static root. `try_files` is deliberately
+# avoided here — `if` + `try_files` in one location is the genuinely broken combo.
+#
+# The NIP-05 name authority (floonet's built-in username registrar) serves plain
+# HTTP on /.well-known/nostr.json and /api/v1/* — NOT a WS upgrade, NOT
+# nostr+json — so with a landing page those would wrongly fall through to the
+# static root and 404. Explicit exact/prefix locations carve them back to the
+# relay (they out-rank the regex-less `location /`). Only added in the landing
+# variant; the pure-proxy variant already sends everything to the relay.
 _nrd_ws_location() {
-    local port="$1" req_zone="${2:-}" conn_zone="${3:-}"
+    local port="$1" req_zone="${2:-}" conn_zone="${3:-}" landing="${4:-}"
     local limits=""
     [[ -n "$req_zone"  ]] && limits+="        limit_req zone=${req_zone} burst=30 nodelay;"$'\n'
     [[ -n "$conn_zone" ]] && limits+="        limit_conn ${conn_zone} 20;"$'\n'
-    cat <<WSLOC
-    location / {
-${limits}        proxy_pass http://127.0.0.1:${port};
+
+    # Proxy plumbing shared by both variants (everything EXCEPT proxy_pass).
+    local pheaders
+    pheaders=$(cat <<PHDR
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "Upgrade";
@@ -65,15 +86,47 @@ ${limits}        proxy_pass http://127.0.0.1:${port};
         proxy_read_timeout 1d;
         proxy_send_timeout 1d;
         proxy_buffering off;
+PHDR
+)
+
+    if [[ -z "$landing" ]]; then
+        cat <<WSLOC
+    location / {
+${limits}        proxy_pass http://127.0.0.1:${port};
+${pheaders}
     }
 WSLOC
+    else
+        cat <<WSLOC
+    # NIP-05 name authority (when enabled) serves these paths as plain HTTP,
+    # so they must reach the relay, not the static landing page. Exact + prefix
+    # location matches take priority over the catch-all location / below.
+    location = /.well-known/nostr.json {
+${limits}        proxy_pass http://127.0.0.1:${port};
+${pheaders}
+    }
+    location /api/v1/ {
+${limits}        proxy_pass http://127.0.0.1:${port};
+${pheaders}
+    }
+    location / {
+${limits}        # Relay clients (WebSocket upgrade) + NIP-11 (nostr+json) → relay;
+        # ordinary browsers fall through to the static landing page below.
+        if (\$http_upgrade ~* websocket)               { proxy_pass http://127.0.0.1:${port}; }
+        if (\$http_accept  ~  "application/nostr\\+json") { proxy_pass http://127.0.0.1:${port}; }
+        root  ${landing};
+        index index.html;
+${pheaders}
+    }
+WSLOC
+    fi
 }
 
 # ─── Phase 1 vhost: HTTP-only bootstrap (pre-certificate) ────────────────────
 # Never references /etc/letsencrypt — safe to load before the cert exists.
-# nrd_write_http_vhost <conf_path> <site_name> <domain> <port> [req_zone] [conn_zone]
+# nrd_write_http_vhost <conf_path> <site_name> <domain> <port> [req_zone] [conn_zone] [landing_root]
 nrd_write_http_vhost() {
-    local conf="$1" name="$2" domain="$3" port="$4" req_zone="${5:-}" conn_zone="${6:-}"
+    local conf="$1" name="$2" domain="$3" port="$4" req_zone="${5:-}" conn_zone="${6:-}" landing="${7:-}"
     mkdir -p "$(dirname "$conf")"
     cat > "$conf" <<HTTPVHOST
 # Grin Node Toolkit — Nostr relay vhost (${name}) — HTTP bootstrap phase
@@ -86,16 +139,16 @@ server {
     access_log /var/log/nginx/${name}.access.log;
     error_log  /var/log/nginx/${name}.error.log;
 
-$(_nrd_ws_location "$port" "$req_zone" "$conn_zone")
+$(_nrd_ws_location "$port" "$req_zone" "$conn_zone" "$landing")
 }
 HTTPVHOST
 }
 
 # ─── Phase 2 vhost: full SSL (wss://) + HTTP→HTTPS redirect ──────────────────
 # Only call AFTER the Let's Encrypt cert exists.
-# nrd_write_ssl_vhost <conf_path> <site_name> <domain> <port> [req_zone] [conn_zone]
+# nrd_write_ssl_vhost <conf_path> <site_name> <domain> <port> [req_zone] [conn_zone] [landing_root]
 nrd_write_ssl_vhost() {
-    local conf="$1" name="$2" domain="$3" port="$4" req_zone="${5:-}" conn_zone="${6:-}"
+    local conf="$1" name="$2" domain="$3" port="$4" req_zone="${5:-}" conn_zone="${6:-}" landing="${7:-}"
     local live="/etc/letsencrypt/live/${domain}"
     if [[ ! -f "$live/fullchain.pem" ]]; then
         error "nrd_write_ssl_vhost: no cert at $live — refusing to write an SSL vhost that would fail nginx -t."
@@ -132,32 +185,36 @@ ${ssl_extra}
     access_log /var/log/nginx/${name}.access.log;
     error_log  /var/log/nginx/${name}.error.log;
 
-$(_nrd_ws_location "$port" "$req_zone" "$conn_zone")
+$(_nrd_ws_location "$port" "$req_zone" "$conn_zone" "$landing")
 }
 SSLVHOST
 }
 
 # ─── Orchestrator: full HTTP-first → certbot → SSL bootstrap ─────────────────
-# nrd_deploy_wss_vhost <site_name> <domain> <email> <port> [req_zone] [conn_zone]
+# nrd_deploy_wss_vhost <site_name> <domain> <email> <port> [req_zone] [conn_zone] [landing_root]
+#
+# When [landing_root] is a directory, browsers get its static index.html while
+# WebSocket + NIP-11 clients still reach the relay (see _nrd_ws_location). Omit
+# it for a pure proxy vhost.
 #
 # Returns 0 when at least the HTTP vhost is serving (check NRD_SSL_OK for
 # whether wss:// is actually live); returns 1 on hard nginx failure.
 nrd_deploy_wss_vhost() {
-    local name="$1" domain="$2" email="$3" port="$4" req_zone="${5:-}" conn_zone="${6:-}"
+    local name="$1" domain="$2" email="$3" port="$4" req_zone="${5:-}" conn_zone="${6:-}" landing="${7:-}"
     local conf="/etc/nginx/sites-available/${name}"
     NRD_SSL_OK=0
 
     nginx_install_with_certbot || { error "nginx/certbot install failed."; return 1; }
 
     # Phase 1 — HTTP bootstrap vhost (never references letsencrypt paths).
-    nrd_write_http_vhost "$conf" "$name" "$domain" "$port" "$req_zone" "$conn_zone"
+    nrd_write_http_vhost "$conf" "$name" "$domain" "$port" "$req_zone" "$conn_zone" "$landing"
     nginx_enable_site "$conf" "$name" || { error "HTTP bootstrap vhost failed nginx -t."; return 1; }
     success "HTTP bootstrap vhost live: http://${domain} → 127.0.0.1:${port}"
 
     # Phase 2 — certificate, then the real wss:// vhost.
     if [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ]] \
         || nginx_run_certbot "$domain" "$email" --no-redirect; then
-        if nrd_write_ssl_vhost "$conf" "$name" "$domain" "$port" "$req_zone" "$conn_zone" \
+        if nrd_write_ssl_vhost "$conf" "$name" "$domain" "$port" "$req_zone" "$conn_zone" "$landing" \
             && nginx_test_reload "SSL vhost for $name"; then
             NRD_SSL_OK=1
             nginx_write_logrotate "$name"
@@ -165,7 +222,7 @@ nrd_deploy_wss_vhost() {
         else
             # Fall back to the HTTP vhost so the site keeps working.
             warn "SSL vhost failed — reverting to the HTTP bootstrap vhost."
-            nrd_write_http_vhost "$conf" "$name" "$domain" "$port" "$req_zone" "$conn_zone"
+            nrd_write_http_vhost "$conf" "$name" "$domain" "$port" "$req_zone" "$conn_zone" "$landing"
             nginx_test_reload "revert to HTTP vhost for $name" || true
         fi
     else

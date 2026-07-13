@@ -21,6 +21,8 @@
 #     4) Node, Wallet & Mining Status   (both networks)
 #     5) Watchdogs (global)             (node-sync · boot autostart · wallet · stratum)
 #     6) Maintenance                    (encrypted backup · restore · schedule · seed)
+#     7) Payouts & settlement           (mainnet running balance · record payments)
+#     8) Quiet hours (energy saver)     (auto-pause stratum in set hours so miners idle)
 #     C) Clean up solo mining           (Danger Zone — remove solo infra · keeps node + seed + backups)
 #     0) Back to main menu
 #
@@ -115,6 +117,10 @@ source "$SCRIPT_DIR/lib/07_solo_wallet.sh"
 # wallet lib + PAYMENT_CONFIG above — sourced after them so those are set).
 # shellcheck source=lib/07_solo_backup.sh
 source "$SCRIPT_DIR/lib/07_solo_backup.sh"
+# Quiet hours (energy saver): scheduled firewall gate on the stratum port(s).
+# Needs STRATUM_PORT_* (above) + colors/logging + _solo_pause — all defined here.
+# shellcheck source=lib/07_solo_quiet.sh
+source "$SCRIPT_DIR/lib/07_solo_quiet.sh"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOML DETECTION
@@ -2544,6 +2550,20 @@ solo_cleanup() {
     fi
     echo ""
 
+    # 4b) Quiet hours (energy saver) — cron + wrapper + conf; reopens the stratum
+    #     port so cleanup never leaves miners locked out by a stale DROP rule.
+    if [[ -f "$SQ_CRON" || -f "$SQ_WRAPPER" || -f "$SQ_CONF" ]]; then
+        echo -ne "${BOLD}4b)${RESET} Remove quiet-hours schedule (energy saver) + reopen stratum? [Y/n]: "
+        read -r a || true
+        if [[ "${a,,}" != "n" ]]; then
+            [[ -x "$SQ_WRAPPER" ]] && "$SQ_WRAPPER" resume >/dev/null 2>&1 || true
+            rm -f "$SQ_CRON" "$SQ_WRAPPER" "$SQ_CONF" "$SQ_LOG"
+            success "Quiet-hours schedule removed; stratum reopened."
+            log "Cleanup: removed quiet-hours cron/wrapper/conf"
+        fi
+        echo ""
+    fi
+
     # 5) Payout-split config
     if [[ -f "$PAYMENT_CONFIG" ]]; then
         echo -ne "${BOLD}5)${RESET} Remove payout-split config ($PAYMENT_CONFIG)? [Y/n]: "
@@ -3125,6 +3145,7 @@ show_menu() {
     echo -e "  ${GREEN}5${RESET}) Watchdogs (global)            ${DIM}(node-sync · boot autostart · wallet · stratum)${RESET}"
     echo -e "  ${GREEN}6${RESET}) Maintenance                   ${DIM}(encrypted backup · restore · schedule · seed)${RESET}"
     echo -e "  ${GREEN}7${RESET}) Payouts & settlement          ${DIM}(mainnet running balance · record payments)${RESET}"
+    echo -e "  ${GREEN}8${RESET}) Quiet hours (energy saver)    ${DIM}(auto-pause stratum in set hours · miners idle)${RESET}"
     echo ""
     echo -e "  ${DIM}─── Danger Zone ──────────────────────────────────${RESET}"
     echo -e "  ${RED}C${RESET}) Clean up solo mining  ${DIM}(remove solo infra · keeps node + seed + backups)${RESET}"
@@ -3132,7 +3153,7 @@ show_menu() {
     echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [A/1-7/C/0]: ${RESET}"
+    echo -ne "${BOLD}Select [A/1-8/C/0]: ${RESET}"
 }
 
 # Detect the mode of an already-deployed solo stats page by inspecting its vhost.
@@ -3203,6 +3224,7 @@ main() {
             5)   watchdog_menu || true ;;
             6)   maintenance_menu || true ;;
             7)   solo_settlement_menu || true ;;
+            8)   quiet_hours_menu || true ;;
             c)   solo_cleanup || true; _solo_pause ;;
             0)   break ;;
             *)   warn "Invalid option."; sleep 1 ;;

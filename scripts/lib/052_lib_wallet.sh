@@ -4,7 +4,8 @@
 #
 #  Functions exported:
 #    drop_setup_wallet    — step 1: download binary, init/recover, write toml
-#    drop_wallet_listener — step 2: manage two tmux sessions (TOR + Owner API)
+#    drop_wallet_listener — step 2: manage the single combined Owner+Foreign
+#                           listener (grin-wallet -p owner_api, owner_api_include_foreign)
 #
 
 # ─── Public nodes ─────────────────────────────────────────────────────────────
@@ -286,6 +287,11 @@ _drop_wallet_reinstall() {
     echo -e "  ${BOLD}— System user${RESET}"
     _drop_ensure_system_user || { pause; return; }
     echo ""
+
+    # Rescue the DB out of the wallet dir BEFORE the rm -rf below wipes it
+    # (migrates a legacy in-dir DB to the persistent DROP_DATA_DIR; no-op if
+    # already relocated). Claim history / cooldowns / donations then survive.
+    _drop_ensure_data_dir
 
     echo -e "  ${BOLD}— Clean existing installation${RESET}"
     if [[ -d "$DROP_WALLET_DIR" ]] && [[ -n "$(ls -A "$DROP_WALLET_DIR" 2>/dev/null)" ]]; then
@@ -636,10 +642,10 @@ _drop_init_wallet() {
     echo -e "  ${YELLOW}  It is stored in PLAIN TEXT — your hosting provider and anyone${RESET}"
     echo -e "  ${YELLOW}  with root access can read it. Keep balance low.${RESET}"
     echo ""
-    echo -ne "  Save passphrase for auto-start? [y/N]: "
+    echo -ne "  Save passphrase for auto-start? [Y/n]: "
     local save_pass
     read -r save_pass || true
-    [[ "${save_pass,,}" == "y" ]] && _drop_save_pass "$wallet_pass"
+    [[ "${save_pass,,}" != "n" ]] && _drop_save_pass "$wallet_pass"
     echo ""
 
     # ── Save seed words ──────────────────────────────────────────────────────
@@ -700,8 +706,9 @@ _drop_save_seed() {
 
 _drop_write_toml() {
     # grin-wallet init writes chain_type correctly based on --testnet, but the
-    # listen ports (api_listen_port, owner_api_listen_port) default to 3415/3420
-    # even on testnet — they must be explicitly patched here.
+    # owner_api_listen_port defaults to 3420 even on testnet, and
+    # owner_api_include_foreign defaults to false — both are patched below to set
+    # up the single combined Owner+Foreign listener.
     local node_url="$1"
     local toml="$DROP_WALLET_DIR/grin-wallet.toml"
 
@@ -745,9 +752,15 @@ _drop_write_toml() {
         fi
     fi
 
-    # 3. Listen ports — enforce network-correct values (init defaults to 3415/3420 even for testnet)
-    _patch_toml "$toml" "api_listen_port"       "$DROP_TOR_PORT"
-    _patch_toml "$toml" "owner_api_listen_port" "$DROP_OWNER_PORT"
+    # 3. Combined listener — ONE `owner_api` process serves BOTH the Owner API and
+    #    the Foreign API. owner_api_include_foreign mounts the Foreign API on the
+    #    Owner port ($DROP_OWNER_PORT), so the old standalone `listen` port
+    #    (api_listen_port / $DROP_TOR_PORT) is retired. Started with `-p` (see
+    #    _drop_start_session), the wallet is unlocked at boot so receive_tx
+    #    (donations) and owner send both work with NO ECDH unlock step. Same
+    #    combined-port model as solo mining and the public pool.
+    _patch_toml "$toml" "owner_api_listen_port"     "$DROP_OWNER_PORT"
+    _patch_toml "$toml" "owner_api_include_foreign" "true"
 
     # 4. Wallet Owner API secret — absolute path (grin-wallet default is relative)
     # Foreign API secret (.foreign_api_secret) is left at grin-wallet's own default — no override needed.
@@ -762,7 +775,7 @@ _drop_write_toml() {
 }
 
 # =============================================================================
-# OPTION 2 — Wallet listener (two tmux sessions + cron + watchdog)
+# OPTION 2 — Wallet listener (single combined Owner+Foreign session + cron + watchdog)
 # =============================================================================
 
 drop_wallet_listener() {
@@ -780,20 +793,26 @@ drop_wallet_listener() {
             info "Installing tmux..."; apt-get install -y tmux || { warn "apt-get failed."; pause; return; }
         fi
 
-        # Status
-        local tor_st owner_st
-        tmux has-session -t "$DROP_TMUX_TOR" 2>/dev/null \
-            && tor_st="${GREEN}● running${RESET}" || tor_st="${DIM}○ stopped${RESET}"
+        # Status — ONE combined Owner+Foreign listener (owner_api_include_foreign)
+        local sess_st
         tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null \
-            && owner_st="${GREEN}● running${RESET}" || owner_st="${DIM}○ stopped${RESET}"
+            && sess_st="${GREEN}● running${RESET}" || sess_st="${DIM}○ stopped${RESET}"
 
-        local port_tor_st port_owner_st
-        ss -tlnp 2>/dev/null | grep -q ":${DROP_TOR_PORT} "   && port_tor_st="${GREEN}listening${RESET}"   || port_tor_st="${DIM}not listening${RESET}"
-        ss -tlnp 2>/dev/null | grep -q ":${DROP_OWNER_PORT} " && port_owner_st="${GREEN}listening${RESET}" || port_owner_st="${DIM}not listening${RESET}"
+        local port_st
+        ss -tlnp 2>/dev/null | grep -q ":${DROP_OWNER_PORT} " \
+            && port_st="${GREEN}listening${RESET}" || port_st="${DIM}not listening${RESET}"
 
-        echo -e "  ${BOLD}TOR session${RESET}  ($DROP_TMUX_TOR)   : $tor_st   port :${DROP_TOR_PORT} $port_tor_st"
-        echo -e "  ${BOLD}Owner session${RESET}($DROP_TMUX_OWNER): $owner_st   port :${DROP_OWNER_PORT} $port_owner_st"
+        echo -e "  ${BOLD}Wallet listener${RESET} ($DROP_TMUX_OWNER): $sess_st"
+        echo -e "  ${DIM}Combined Owner API + Foreign API on port :${DROP_OWNER_PORT} — $port_st${RESET}"
         echo ""
+
+        # Legacy standalone `listen` session/port from before the migration — flag
+        # it if still up so the operator knows 'Stop' will retire it.
+        if tmux has-session -t "$DROP_TMUX_TOR" 2>/dev/null \
+           || ss -tlnp 2>/dev/null | grep -q ":${DROP_TOR_PORT} "; then
+            echo -e "  ${YELLOW}⚠  Legacy 'listen' session/port :${DROP_TOR_PORT} still active — Start or Stop will retire it.${RESET}"
+            echo ""
+        fi
 
         local cron_reboot_note="${DIM}not set${RESET}"
         crontab -l 2>/dev/null | grep -q "drop-${DROP_NETWORK}" \
@@ -804,46 +823,38 @@ drop_wallet_listener() {
         echo -e "  Auto-start @reboot : $cron_reboot_note   Watchdog : $watchdog_note"
         echo ""
 
-        # Passphrase file — required by the Node.js server to call Owner API open_wallet
+        # Passphrase file — REQUIRED: `-p owner_api` reads it to unlock the wallet
+        # at boot, and the Node.js server reads it to open_wallet over ECDH.
         local pass_note
         if [[ -s "$DROP_PASS" ]]; then
             pass_note="${GREEN}✓ exists${RESET}"
+            echo -e "  Passphrase file    : $pass_note  ${DIM}($DROP_PASS)${RESET}"
         else
-            pass_note="${RED}✗ MISSING${RESET} — ${YELLOW}Node.js server cannot open the wallet (balance/claim/donate will fail)${RESET}"
+            pass_note="${RED}✗ MISSING${RESET} — ${YELLOW}wallet boots LOCKED; balance/claim/donate will all fail${RESET}"
             echo -e "  ${RED}⚠  Passphrase file: $pass_note${RESET}"
             echo -e "  ${DIM}   Fix: re-run 'Setup wallet' (option 1) and choose 'Save passphrase for auto-start'.${RESET}"
         fi
-        [[ -s "$DROP_PASS" ]] && echo -e "  Passphrase file    : $pass_note  ${DIM}($DROP_PASS)${RESET}"
         echo ""
 
-        echo -e "  ${GREEN}1${RESET}) Start / restart TOR session   ${DIM}($DROP_TMUX_TOR)${RESET}"
-        echo -e "  ${GREEN}2${RESET}) Start / restart Owner API session  ${DIM}($DROP_TMUX_OWNER)${RESET}"
-        echo -e "  ${GREEN}3${RESET}) Start / restart Both"
+        echo -e "  ${GREEN}1${RESET}) Start / restart wallet listener   ${DIM}(combined Owner+Foreign, $DROP_TMUX_OWNER)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Stop wallet listener"
         echo -e "  ${DIM}──────────────────────────────────────────${RESET}"
-        echo -e "  ${GREEN}4${RESET}) Stop TOR session"
-        echo -e "  ${GREEN}5${RESET}) Stop Owner API session"
-        echo -e "  ${GREEN}6${RESET}) Stop both"
+        echo -e "  ${GREEN}3${RESET}) Auto-start wallet @reboot              ${DIM}[$cron_reboot_note${DIM}]${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Watchdog: auto-restart wallet on crash ${DIM}[$watchdog_note${DIM}]${RESET}"
         echo -e "  ${DIM}──────────────────────────────────────────${RESET}"
-        echo -e "  ${GREEN}7${RESET}) Auto-start TOR/API wallets @reboot    ${DIM}[$cron_reboot_note${DIM}]${RESET}"
-        echo -e "  ${GREEN}8${RESET}) Watchdog: auto-restart wallet on crash ${DIM}[$watchdog_note${DIM}]${RESET}"
-        echo -e "  ${DIM}──────────────────────────────────────────${RESET}"
-        echo -e "  ${DIM}To view wallet output: Ctrl+B then S to switch tmux sessions${RESET}"
+        echo -e "  ${DIM}To view wallet output: tmux attach -t $DROP_TMUX_OWNER${RESET}"
         echo -e "  ${DIM}↩  Refresh status${RESET}"
         echo -e "  ${DIM}0) Back${RESET}"
         echo ""
-        echo -ne "${BOLD}Select [1-8/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-4/0]: ${RESET}"
         local choice
         read -r choice || true
 
         case "$choice" in
-            1)  _drop_start_session tor   ;;
-            2)  _drop_start_session owner ;;
-            3)  _drop_start_session both  ;;
-            4)  _drop_stop_session  tor   ;;
-            5)  _drop_stop_session  owner ;;
-            6)  _drop_stop_session  both  ;;
-            7)  _drop_toggle_reboot_cron   ;;
-            8)  _drop_toggle_watchdog_cron ;;
+            1)  _drop_start_session ;;
+            2)  _drop_stop_session  ;;
+            3)  _drop_toggle_reboot_cron   ;;
+            4)  _drop_toggle_watchdog_cron ;;
             0)  break ;;
             "")  continue ;;
             *)  warn "Invalid option."; sleep 1 ;;
@@ -877,112 +888,93 @@ _drop_launch_session() {
 }
 
 _drop_start_session() {
-    # $1 = "tor" | "owner" | "both"
-    local target="$1"
+    # Start (or restart) the single combined Owner+Foreign wallet listener:
+    #   grin-wallet -p <pass> owner_api        (owner_api_include_foreign = true)
+    # `-p` opens the wallet at boot so receive_tx (donations) and owner send both
+    # work with NO ECDH unlock step; the Foreign API rides the Owner port.
     local wallet_pass
     wallet_pass=$(_drop_read_saved_pass)
 
     # Security trade-off: -p embeds the passphrase as a literal string in the tmux
     # command and exposes it in `ps aux` / /proc/<pid>/cmdline for the full lifetime
-    # of the grin-wallet listen/owner_api process (persistent, not just during startup).
-    # grin-wallet has no stdin or env-var passphrase input — -p is the only option.
+    # of the owner_api process. Same exposure as the retired `-p listen`; on a
+    # single box you own it is a non-issue. grin-wallet has no stdin/env passphrase
+    # input — -p is the only option.
     local pass_arg=""
     [[ -n "$wallet_pass" ]] && pass_arg="-p '$wallet_pass'"
     local base_cmd="'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg"
 
-    if [[ "$target" == "tor" || "$target" == "both" ]]; then
-        tmux kill-session -t "$DROP_TMUX_TOR" 2>/dev/null || true
-        _drop_kill_wallet_processes "$DROP_TOR_PORT"
-        _drop_launch_session "$DROP_TMUX_TOR" "$base_cmd listen"
-        sleep 1
-        if tmux has-session -t "$DROP_TMUX_TOR" 2>/dev/null; then
-            success "TOR/Foreign session started: $DROP_TMUX_TOR"
-        else
-            warn "TOR session may have exited — check wallet config."
-        fi
+    # Retire any legacy standalone `listen` session/port from before the migration.
+    tmux kill-session -t "$DROP_TMUX_TOR" 2>/dev/null \
+        && info "Retired legacy 'listen' session: $DROP_TMUX_TOR" || true
+    _drop_kill_wallet_processes "$DROP_TOR_PORT"
+
+    # (Re)start the combined Owner+Foreign listener.
+    tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null || true
+    _drop_kill_wallet_processes "$DROP_OWNER_PORT"
+    _drop_launch_session "$DROP_TMUX_OWNER" "$base_cmd owner_api"
+    sleep 1
+    if tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null; then
+        success "Wallet listener started: $DROP_TMUX_OWNER (Owner+Foreign on :$DROP_OWNER_PORT)"
+    else
+        warn "Listener session may have exited — check config (tmux attach -t $DROP_TMUX_OWNER)."
     fi
 
-    if [[ "$target" == "owner" || "$target" == "both" ]]; then
-        tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null || true
-        _drop_kill_wallet_processes "$DROP_OWNER_PORT"
-        _drop_launch_session "$DROP_TMUX_OWNER" "$base_cmd owner_api"
-        sleep 1
-        if tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null; then
-            success "Owner API session started: $DROP_TMUX_OWNER"
-        else
-            warn "Owner API session may have exited — check wallet config."
-        fi
-
-        # Auto-fetch wallet address and save to config so the donate tab shows
-        # the correct address even if the owner API is temporarily unreachable.
-        info "Fetching wallet address (waiting 5s for owner_api to initialise)…"
-        sleep 5
-        local fetched_addr=""
-        fetched_addr=$("$DROP_WALLET_BIN" $DROP_NET_FLAG \
-            --top_level_dir "$DROP_WALLET_DIR" \
-            ${wallet_pass:+-p "$wallet_pass"} address 2>/dev/null \
-            | grep -oE '(tgrin1|grin1)[a-z0-9]{40,}' | head -1 || true)
-        if [[ -n "$fetched_addr" ]]; then
-            drop_write_conf_key "wallet_address" "$fetched_addr"
-            success "Wallet address saved to config: $fetched_addr"
-        else
-            info "Could not auto-fetch wallet address — set it manually via option 4 Configure."
-        fi
+    # Auto-fetch wallet address and save to config so the donate tab shows the
+    # correct address even if the owner API is temporarily unreachable.
+    info "Fetching wallet address (waiting 5s for owner_api to initialise)…"
+    sleep 5
+    local fetched_addr=""
+    fetched_addr=$("$DROP_WALLET_BIN" $DROP_NET_FLAG \
+        --top_level_dir "$DROP_WALLET_DIR" \
+        ${wallet_pass:+-p "$wallet_pass"} address 2>/dev/null \
+        | grep -oE '(tgrin1|grin1)[a-z0-9]{40,}' | head -1 || true)
+    if [[ -n "$fetched_addr" ]]; then
+        drop_write_conf_key "wallet_address" "$fetched_addr"
+        success "Wallet address saved to config: $fetched_addr"
+    else
+        info "Could not auto-fetch wallet address — set it manually via option 4 Configure."
     fi
 
-    # Warn if passphrase file is missing — the Node.js server reads it to call
-    # open_wallet on the Owner API. Without it, balance/claim/donate all fail.
-    if [[ "$target" == "owner" || "$target" == "both" ]]; then
-        if [[ ! -s "$DROP_PASS" ]]; then
-            echo ""
-            warn "Passphrase file not found: $DROP_PASS"
-            warn "The Node.js server (grin-drop service) calls the Owner API on every request."
-            warn "It reads the wallet passphrase from this file to call open_wallet."
-            warn "Without it, balance / claim / donate features will all fail."
-            echo ""
-            echo -ne "  Save the passphrase to $DROP_PASS now? [y/N]: "
-            local save_now; read -r save_now || true
-            if [[ "${save_now,,}" == "y" ]]; then
-                echo -ne "  Enter wallet passphrase: "
-                local manual_pass; read -rs manual_pass; echo ""
-                if [[ -n "$manual_pass" ]]; then
-                    _drop_save_pass "$manual_pass"
-                    unset manual_pass
-                else
-                    warn "Empty passphrase — not saved."
-                fi
+    # Passphrase file is required — `-p owner_api` reads it to unlock the wallet at
+    # boot, and the Node.js server reads it to open_wallet on every request.
+    if [[ ! -s "$DROP_PASS" ]]; then
+        echo ""
+        warn "Passphrase file not found: $DROP_PASS"
+        warn "The wallet boots LOCKED without it — balance / claim / donate will all fail."
+        echo ""
+        echo -ne "  Save the passphrase to $DROP_PASS now? [Y/n]: "
+        local save_now; read -r save_now || true
+        if [[ "${save_now,,}" != "n" ]]; then
+            echo -ne "  Enter wallet passphrase: "
+            local manual_pass; read -rs manual_pass; echo ""
+            if [[ -n "$manual_pass" ]]; then
+                _drop_save_pass "$manual_pass"
+                unset manual_pass
+            else
+                warn "Empty passphrase — not saved."
             fi
         fi
     fi
 
     unset wallet_pass pass_arg base_cmd
-    log "[drop_start_session:$target] network=$DROP_NETWORK"
+    log "[drop_start_session:combined] network=$DROP_NETWORK"
     pause
 }
 
 _drop_stop_session() {
-    # $1 = "tor" | "owner" | "both"
-    local target="$1"
-    if [[ "$target" == "tor" || "$target" == "both" ]]; then
-        tmux kill-session -t "$DROP_TMUX_TOR" 2>/dev/null \
-            && success "Stopped tmux: $DROP_TMUX_TOR" \
-            || info "Tmux not running: $DROP_TMUX_TOR"
-        _drop_kill_wallet_processes "$DROP_TOR_PORT"
-    fi
-    if [[ "$target" == "owner" || "$target" == "both" ]]; then
-        tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null \
-            && success "Stopped tmux: $DROP_TMUX_OWNER" \
-            || info "Tmux not running: $DROP_TMUX_OWNER"
-        _drop_kill_wallet_processes "$DROP_OWNER_PORT"
-    fi
-    if [[ "$target" == "both" ]]; then
-        # Kill the scan session and any surviving wallet processes (orphaned or scan)
-        local scan_tmux="drop-${DROP_NETWORK}-scan"
-        tmux kill-session -t "$scan_tmux" 2>/dev/null \
-            && info "Stopped tmux: $scan_tmux" || true
-        _drop_kill_wallet_processes  # full stop — catches scan + PPID=1 orphans
-    fi
-    log "[drop_stop_session:$target] network=$DROP_NETWORK"
+    # Stop the combined listener, retire any legacy `listen` session, and sweep
+    # the scan session + orphaned wallet processes.
+    tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null \
+        && success "Stopped tmux: $DROP_TMUX_OWNER" \
+        || info "Tmux not running: $DROP_TMUX_OWNER"
+    tmux kill-session -t "$DROP_TMUX_TOR" 2>/dev/null \
+        && info "Retired legacy 'listen' session: $DROP_TMUX_TOR" || true
+    local scan_tmux="drop-${DROP_NETWORK}-scan"
+    tmux kill-session -t "$scan_tmux" 2>/dev/null \
+        && info "Stopped tmux: $scan_tmux" || true
+    _drop_kill_wallet_processes  # full stop — both ports + scan + PPID=1 orphans
+    log "[drop_stop_session:combined] network=$DROP_NETWORK"
     pause
 }
 
@@ -1013,10 +1005,9 @@ _drop_toggle_reboot_cron() {
         cat > "$wrapper" << WRAPPER_EOF
 #!/bin/bash
 # Auto-generated by 052_grin_drop.sh — do not edit manually
+# Single combined Owner+Foreign listener (owner_api_include_foreign). -p opens
+# the wallet at boot so donations/claims work with no ECDH unlock step.
 sleep $delay
-SHELL=/bin/bash tmux new-session -d -s "$DROP_TMUX_TOR" -c "$DROP_WALLET_DIR" \\
-    "'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg listen"
-sleep 3
 SHELL=/bin/bash tmux new-session -d -s "$DROP_TMUX_OWNER" -c "$DROP_WALLET_DIR" \\
     "'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg owner_api"
 WRAPPER_EOF
@@ -1043,9 +1034,7 @@ _drop_toggle_watchdog_cron() {
         cat > "$wrapper" << WATCHDOG_EOF
 #!/bin/bash
 # Watchdog — auto-generated by 052_grin_drop.sh
-ss -tlnp | grep -q ":${DROP_TOR_PORT} " || \\
-    SHELL=/bin/bash tmux new-session -d -s "$DROP_TMUX_TOR" -c "$DROP_WALLET_DIR" \\
-        "'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg listen"
+# Restart the single combined Owner+Foreign listener if its port is not listening.
 ss -tlnp | grep -q ":${DROP_OWNER_PORT} " || \\
     SHELL=/bin/bash tmux new-session -d -s "$DROP_TMUX_OWNER" -c "$DROP_WALLET_DIR" \\
         "'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg owner_api"

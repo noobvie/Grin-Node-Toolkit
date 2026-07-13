@@ -1,0 +1,15 @@
+{
+  "name": "grin-tiny-explorer",
+  "version": "1.0.0",
+  "description": "Tiny Explorer — stateless, mainnet-only Grin block explorer for pool deep-links",
+  "main": "tiny-explorer-server.js",
+  "scripts": {
+    "start": "node tiny-explorer-server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

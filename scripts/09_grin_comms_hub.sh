@@ -8,9 +8,12 @@
 #  value-holding wallets (05).
 #
 #  ─── Members ───────────────────────────────────────────────────────────────
-#   091  091_grin_transporter.sh      Store-and-forward slate relay (coming soon)
-#   092  092_grin_floonet_relay.sh    Floonet (floonet-rs) relay deployer (coming soon)
+#   091  091_grin_floonet_relay.sh    Floonet (floonet-rs) relay deployer
+#   092  092_grin_transporter.sh      Store-and-forward slate relay (Phase 1 built 2026-07-11)
 #   093+ (reserved)                   NIP-05 identity, notifications, …
+#
+#  (Numbers swapped 2026-07-10: Floonet relay ships first — it serves the
+#   existing Goblin/Floonet user base; the Transporter is an internal rail.)
 #
 #  Design: docs/generated/script09_design.md
 #  Memory: project_comms_hub_09
@@ -33,13 +36,26 @@ RESET='\033[0m'
 # INSTALLATION DETECTION
 # =============================================================================
 
-# 091 — installed if a Transporter instance dir exists for either network
+# 091 — installed if the floonet-rs service unit exists (ours lands in
+# /etc/systemd/system; upstream's install.sh may use /usr/lib) or the binary does
 _091_installed() {
-    [[ -d /opt/grin/transporter-main ]] || [[ -d /opt/grin/transporter-test ]]
+    [[ -f /etc/systemd/system/floonet-rs.service ]] \
+        || [[ -f /usr/lib/systemd/system/floonet-rs.service ]] \
+        || [[ -x /usr/local/bin/floonet-rs ]]
 }
 
 # 091 — running status from systemd
 _091_status() {
+    if systemctl is-active --quiet floonet-rs 2>/dev/null; then echo "active"; else echo ""; fi
+}
+
+# 092 — installed if a Transporter instance dir exists for either network
+_092_installed() {
+    [[ -d /opt/grin/transporter-main ]] || [[ -d /opt/grin/transporter-test ]]
+}
+
+# 092 — running status from systemd
+_092_status() {
     local mn="" tn=""
     systemctl is-active --quiet grin-transporter-main 2>/dev/null && mn="mainnet"
     systemctl is-active --quiet grin-transporter-test 2>/dev/null && tn="testnet"
@@ -48,16 +64,6 @@ _091_status() {
     elif [[ -n "$tn" ]];           then echo "testnet"
     else                                echo ""
     fi
-}
-
-# 092 — installed if the floonet-rs service unit exists
-_092_installed() {
-    [[ -f /etc/systemd/system/floonet-rs.service ]]
-}
-
-# 092 — running status from systemd
-_092_status() {
-    if systemctl is-active --quiet floonet-rs 2>/dev/null; then echo "active"; else echo ""; fi
 }
 
 # =============================================================================
@@ -93,11 +99,11 @@ show_menu() {
     echo ""
     echo -e "  ${DIM}How Grin participants reach each other — transport, relays, messaging.${RESET}"
     echo ""
-    echo -e "  ${GREEN}1${RESET}) Grin Transporter        $(_badge _091_installed _091_status)"
-    echo -e "     ${DIM}Store-and-forward slate relay — offline auto-payouts (HTTP, not SMTP)${RESET}"
-    echo ""
-    echo -e "  ${GREEN}2${RESET}) Floonet Relay           $(_badge _092_installed _092_status)"
+    echo -e "  ${GREEN}1${RESET}) Floonet Relay           $(_badge _091_installed _091_status)"
     echo -e "     ${DIM}Deploy floonet-rs — join the P2P privacy relay network${RESET}"
+    echo ""
+    echo -e "  ${GREEN}2${RESET}) Grin Transporter        $(_badge _092_installed _092_status)"
+    echo -e "     ${DIM}Store-and-forward slate relay — offline auto-payouts (HTTP, not SMTP)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
@@ -109,8 +115,8 @@ main() {
         show_menu
         read -r choice || true
         case "$choice" in
-            1) run_sub "091_grin_transporter.sh"    || true ;;
-            2) run_sub "092_grin_floonet_relay.sh"  || true ;;
+            1) run_sub "091_grin_floonet_relay.sh"  || true ;;
+            2) run_sub "092_grin_transporter.sh"    || true ;;
             0) break ;;
             "") continue ;;
             *) echo -e "\n${RED}Invalid option.${RESET}"; sleep 1 ;;

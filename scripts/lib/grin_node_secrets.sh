@@ -33,6 +33,24 @@ _gns_conf_var() {
     ( set +u; source "$GNS_INSTANCES_CONF" 2>/dev/null || true; printf '%s' "${!1:-}" )
 }
 
+# _gns_has_grin_session <sess> → rc 0 if the session exists on EITHER tmux
+# server: the grin user's own socket (gnc_launch_node_session / su-grin
+# launches, see grin_node_control.sh) or the plain root socket (legacy/manual
+# launches). The node launch contract runs `grin server run` as the `grin`
+# user on its own tmux socket, so a bare `tmux has-session` from a root
+# context never finds it — this must be checked first or mainnet full/pruned
+# detection silently falls back to a directory-existence guess.
+_gns_has_grin_session() {
+    local sess="$1" uid sock
+    [[ -n "$sess" ]] || return 1
+    uid=$(id -u grin 2>/dev/null) || uid=""
+    if [[ -n "$uid" ]]; then
+        sock="/tmp/tmux-${uid}/default"
+        [[ -S "$sock" ]] && tmux -S "$sock" has-session -t "$sess" 2>/dev/null && return 0
+    fi
+    tmux has-session -t "$sess" 2>/dev/null
+}
+
 # ─── Canonical resolver ───────────────────────────────────────────────────────
 # grin_live_node_dir <mainnet|testnet> → echoes the node dir actually serving the
 # network. Preference: active toolkit tmux session (the running node) → instances
@@ -41,12 +59,12 @@ _gns_conf_var() {
 grin_live_node_dir() {
     local net="$1" dir=""
     if [[ "$net" == "testnet" ]]; then
-        tmux has-session -t grin_pruned_testnet 2>/dev/null && dir=/opt/grin/node/testnet-prune
+        _gns_has_grin_session grin_pruned_testnet && dir=/opt/grin/node/testnet-prune
         [[ -z "$dir" ]] && dir=$(_gns_conf_var PRUNETEST_GRIN_DIR)
         [[ -n "$dir" && -d "$dir" ]] || dir=/opt/grin/node/testnet-prune
     else
-        if   tmux has-session -t grin_full_mainnet   2>/dev/null; then dir=/opt/grin/node/mainnet-full
-        elif tmux has-session -t grin_pruned_mainnet 2>/dev/null; then dir=/opt/grin/node/mainnet-prune
+        if   _gns_has_grin_session grin_full_mainnet;   then dir=/opt/grin/node/mainnet-full
+        elif _gns_has_grin_session grin_pruned_mainnet; then dir=/opt/grin/node/mainnet-prune
         fi
         if [[ -z "$dir" ]]; then
             dir=$(_gns_conf_var FULLMAIN_GRIN_DIR)
@@ -155,6 +173,19 @@ grin_grinscan_sync() {
     return 0
 }
 
+# Tiny Explorer 06d — re-copy the mainnet secret VALUES into its data dir; restart
+# grin-tiny-explorer on change. No-op when the product is absent.
+grin_sync_tiny_explorer() {
+    local base="/opt/grin/tiny-explorer" dir changed=0
+    [[ -d "$base" ]] || return 0
+    dir=$(grin_live_node_dir mainnet 2>/dev/null || true)
+    [[ -n "$dir" ]] || return 0
+    _gns_copy_if_changed "$dir/.foreign_api_secret" "$base/.foreign_api_secret" && changed=1 || true
+    _gns_copy_if_changed "$dir/.api_secret"         "$base/.api_secret"         && changed=1 || true
+    [[ "$changed" == 1 ]] && { systemctl restart grin-tiny-explorer 2>/dev/null || true; }
+    return 0
+}
+
 # grin-wallet products — repoint node_api_secret_path to the live node's foreign
 # secret. Only touches wallets pointed at a LOCAL node. Does NOT restart the
 # listener (the patch takes effect on the wallet's next start — auto-restarting a
@@ -213,6 +244,7 @@ grin_sync_node_api_nginx() {
 grin_secrets_sync_all() {
     grin_sync_collector       || true
     grin_grinscan_sync        || true
+    grin_sync_tiny_explorer   || true
     grin_sync_wallets         || true
     grin_sync_node_api_nginx  || true
     return 0

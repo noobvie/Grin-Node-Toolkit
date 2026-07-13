@@ -58,9 +58,11 @@
   .slogan { color: var(--text); font-size: 1rem; margin-top: .45rem; opacity: .92; }
   .theme-toggle {
     background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
-    border-radius: 999px; padding: .5rem .9rem; font-family: inherit; font-size: .95rem;
+    border-radius: 999px; padding: .4rem .7rem; font-family: inherit; font-size: .85rem;
     cursor: pointer; flex: none; transition: background .2s; text-decoration: none; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: .35rem;
   }
+  .theme-toggle .ico { font-size: 1rem; line-height: 1; }
   .theme-toggle:hover { background: var(--border); }
 
   .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%;
@@ -124,8 +126,14 @@
   .tile .label { font-size: .76rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .4rem; }
   .tile .value { font-size: 1.5rem; font-weight: bold; color: var(--text-hi); word-break: break-all; }
   .tile .value .pct { font-size: .72rem; font-weight: 600; color: var(--muted); margin-left: .35rem; white-space: nowrap; }
+  .tile .sub { font-size: .68rem; font-weight: 600; color: var(--muted); margin-top: .4rem; line-height: 1.3; }
+  .tile .sub.warn { color: var(--yellow); }
   .tile .value.green { color: var(--green); } .tile .value.yellow { color: var(--yellow); }
   .tile .value.red { color: var(--red); } .tile .value.dim { color: var(--muted); font-size: 1.05rem; }
+  /* Hero+sub cards (earnings + found-24h): slightly smaller hero, kept on one line
+     so "12.340 ツ" / "3 blocks" never wraps. ID specificity beats the .value sizes. */
+  #main-earnest, #test-earnest, #main-g1est, #test-g1est,
+  #main-blocks24, #test-blocks24 { font-size: 1.2rem; white-space: nowrap; }
 
   /* miners */
   .miners { margin-top: 1.4rem; border-top: 1px solid var(--border); padding-top: 1.1rem; }
@@ -286,17 +294,32 @@
   @media (max-width: 560px) {
     header { flex-direction: column; align-items: stretch; gap: .9rem; }
     .header-actions { flex-wrap: wrap; }
+    /* phones: header buttons collapse to icon-only — emoji + title carry the meaning */
+    .header-actions .lbl { display: none; }
+    .header-actions .theme-toggle { padding: .5rem .6rem; }
     .freshness { justify-content: flex-start; margin-top: 0; }
     /* one tile per row on mobile — avoids the ragged 2+1 wrap */
     .tiles { grid-template-columns: 1fr; }
   }
 
-  /* Section navigation — clickable chips that jump to each panel/chart */
+  /* Section navigation — clickable chips that jump to each panel/chart.
+     Sticky one-line strip: pinned to the top on scroll (z above the panels),
+     never wraps (nowrap) so it stays a single row; the tighter gap/padding lets
+     all chips fit at max-width, and overflow-x:auto lets it scroll rather than
+     wrap only on a viewport too narrow for the icon strip. */
   html { scroll-behavior: smooth; }
-  .panel, .chart-card { scroll-margin-top: 1rem; }
-  nav.toc { width: 100%; max-width: 860px; display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; margin: 0 0 1.5rem; }
-  nav.toc a { background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
-    border-radius: 999px; padding: .42rem .85rem; font-size: .86rem; text-decoration: none;
+  /* clear the sticky bar on anchor-jump so a target heading isn't hidden under it */
+  .panel, .chart-card, #split-card, #earn-card, #quality-card { scroll-margin-top: 4rem; }
+  nav.toc { position: sticky; top: 0; z-index: 50;
+    width: 100%; max-width: 860px; display: flex; flex-wrap: nowrap; justify-content: center;
+    gap: .4rem; margin: 0 0 1.5rem; padding: .5rem .45rem;
+    overflow-x: auto; scrollbar-width: none;
+    background: var(--panel); border: 1px solid var(--border); border-top: none;
+    border-radius: 0 0 14px 14px; box-shadow: 0 6px 16px rgba(0,0,0,.18); }
+  nav.toc::-webkit-scrollbar { display: none; }
+  nav.toc a { flex: none; white-space: nowrap;
+    background: var(--chip-bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 999px; padding: .4rem .7rem; font-size: .82rem; text-decoration: none;
     letter-spacing: .02em; transition: background .2s;
     display: inline-flex; align-items: center; gap: .4rem; }
   nav.toc a:hover { background: var(--border); color: var(--text-hi); }
@@ -324,9 +347,9 @@
     </div>
   </div>
   <div class="header-actions">
-    <a class="theme-toggle" href="setup-solo-mining.html">⚙ Miner Setup</a>
-    <button class="theme-toggle" id="tz-toggle" type="button" aria-label="Toggle UTC / local time">🕓 Local</button>
-    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme">☾ Dark</button>
+    <a class="theme-toggle" href="setup-solo-mining.html" title="Miner setup"><span class="ico" aria-hidden="true">⚙</span><span class="lbl">Setup</span></a>
+    <button class="theme-toggle" id="tz-toggle" type="button" aria-label="Toggle UTC / local time"><span class="ico" aria-hidden="true">🕓</span><span class="lbl" id="tz-lbl">Local</span></button>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light/dark theme"><span class="ico" aria-hidden="true" id="theme-ico">☾</span><span class="lbl" id="theme-lbl">Dark</span></button>
   </div>
 </header>
 
@@ -354,11 +377,23 @@
     <span class="panel-status"><span id="main-dot" class="dot"></span><span id="main-state">—</span></span>
   </div>
   <div class="tiles">
-    <div class="tile"><div class="label">Blocks Found (24h)</div><div class="value" id="main-blocks24">—</div></div>
-    <div class="tile"><div class="label">Coinbase Maturing</div><div class="value dim" id="main-maturing">—</div></div>
+    <div class="tile" title="Blocks this pool found in the last 24h, and how many of those coinbases are still maturing (1,440-block lock ≈ 24h) before they're spendable. Orphans are excluded from the maturing count.">
+      <div class="label">Found in last 24h</div>
+      <div class="value dim" id="main-blocks24">—</div>
+      <div class="sub" id="main-maturing"></div>
+    </div>
     <div class="tile"><div class="label">Active Miners</div><div class="value dim" id="main-miners">—</div></div>
     <div class="tile"><div class="label">Wallet Listener</div><div class="value dim" id="main-wallet">—</div></div>
-    <div class="tile"><div class="label">Block Height</div><div class="value" id="main-height">—</div></div>
+    <div class="tile" title="Rough daily GRIN this pool would earn at its 24h-average hashrate share of the network: share × 1,440 blocks × 60 ツ. Smoothed over 24h so per-block luck doesn't swing it.">
+      <div class="label">Est. Earnings / day</div>
+      <div class="value dim" id="main-earnest">—</div>
+      <div class="sub">pool · 24h avg</div>
+    </div>
+    <div class="tile" title="Reference yield for one IPOLLO G1 mini (1.2 G/s) at today's network size: 1.2 ÷ network hashrate × 86,400 ツ (60 ツ × 1,440 blocks), using the 24h-average network hashrate. Falls as the network grows.">
+      <div class="label">Est. G1 mini / day</div>
+      <div class="value dim" id="main-g1est">—</div>
+      <div class="sub">1.2 G/s · 24h avg</div>
+    </div>
     <div class="tile"><div class="label">Network Difficulty</div><div class="value" id="main-difficulty">—</div></div>
     <div class="tile"><div class="label">Network Hashrate</div><div class="value green" id="main-hashrate">—</div></div>
     <div class="tile"><div class="label">Pool Hashrate</div><div class="value green" id="main-poolhr">—</div></div>
@@ -394,11 +429,23 @@
     <span class="panel-status"><span id="test-dot" class="dot"></span><span id="test-state">—</span><span class="chevron" id="test-chevron" aria-hidden="true">▾</span></span>
   </div>
   <div class="tiles">
-    <div class="tile"><div class="label">Blocks Found (24h)</div><div class="value" id="test-blocks24">—</div></div>
-    <div class="tile"><div class="label">Coinbase Maturing</div><div class="value dim" id="test-maturing">—</div></div>
+    <div class="tile" title="Blocks this pool found in the last 24h, and how many of those coinbases are still maturing (1,440-block lock ≈ 24h) before they're spendable. Orphans are excluded from the maturing count.">
+      <div class="label">Found in last 24h</div>
+      <div class="value dim" id="test-blocks24">—</div>
+      <div class="sub" id="test-maturing"></div>
+    </div>
     <div class="tile"><div class="label">Active Miners</div><div class="value dim" id="test-miners">—</div></div>
     <div class="tile"><div class="label">Wallet Listener</div><div class="value dim" id="test-wallet">—</div></div>
-    <div class="tile"><div class="label">Block Height</div><div class="value" id="test-height">—</div></div>
+    <div class="tile" title="Rough daily tGRIN this pool would earn at its 24h-average hashrate share of the network: share × 1,440 blocks × 60 ツ. Smoothed over 24h so per-block luck doesn't swing it.">
+      <div class="label">Est. Earnings / day</div>
+      <div class="value dim" id="test-earnest">—</div>
+      <div class="sub">pool · 24h avg</div>
+    </div>
+    <div class="tile" title="Reference yield for one IPOLLO G1 mini (1.2 G/s) at today's network size: 1.2 ÷ network hashrate × 86,400 ツ (60 ツ × 1,440 blocks), using the 24h-average network hashrate. Falls as the network grows.">
+      <div class="label">Est. G1 mini / day</div>
+      <div class="value dim" id="test-g1est">—</div>
+      <div class="sub">1.2 G/s · 24h avg</div>
+    </div>
     <div class="tile"><div class="label">Network Difficulty</div><div class="value" id="test-difficulty">—</div></div>
     <div class="tile"><div class="label">Network Hashrate</div><div class="value green" id="test-hashrate">—</div></div>
     <div class="tile"><div class="label">Pool Hashrate</div><div class="value green" id="test-poolhr">—</div></div>
@@ -433,8 +480,8 @@
     <h2>Blocks Found</h2>
     <div class="chart-head-tools">
       <div class="seg" id="blocks-view-seg" role="group" aria-label="Blocks view">
-        <button type="button" data-view="history" class="active">History</button>
-        <button type="button" data-view="hour">By hour</button>
+        <button type="button" data-view="history" class="active" title="History" aria-label="History">📈</button>
+        <button type="button" data-view="hour" title="By hour heatmap" aria-label="By hour heatmap">🔥</button>
       </div>
       <div class="seg" id="range-seg">
         <button type="button" data-range="daily">Daily</button>
@@ -462,7 +509,7 @@
     <div id="hour-chart"><div class="chart-empty">Loading…</div></div>
     <details class="info-toggle">
       <summary>ⓘ About this chart</summary>
-      <p class="split-foot"><b>Mainnet only.</b> Every block we've ever found, bucketed by the <b>hour of day</b> it was found — in <b><span id="hour-tz">local time</span></b> (toggle your local zone/UTC with the 🕓 clock in the header). Stronger-coloured cells = more finds; faint cells = fewer. This looks back at when finds have landed; it is <b>not a forecast</b>. Block discovery is random (memoryless), so a “hot” hour is past luck and won't predict the next block — don't schedule mining or node maintenance around expected finds. For real power savings, mine on your cheapest electricity hours, which are set by your tariff, not by this chart.</p>
+      <p class="split-foot"><b>Mainnet only.</b> Every block we've ever found, bucketed by the <b>hour of day</b> it was found — in <b><span id="hour-tz">local time</span></b> (toggle your local zone/UTC with the 🕓 clock in the header). Cells run <b>yellow</b> (fewer finds) → <b>red</b> (the busiest hours); blank cells had no finds. This looks back at when finds have landed; it is <b>not a forecast</b>. Block discovery is random (memoryless), so a “hot” hour is past luck and won't predict the next block — don't schedule mining or node maintenance around expected finds. For real power savings, mine on your cheapest electricity hours, which are set by your tariff, not by this chart.</p>
     </details>
   </div>
 </section>
@@ -584,6 +631,8 @@
 
 <footer>
   Run by <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener noreferrer" style="color:var(--main)">Grin Node Toolkit</a> — script 07 (Grin Solo Mining Pool Setup). Happy Grinning (ツ)
+  <br>
+  Made with ❤️ from Saigon <svg viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes" style="vertical-align:-2px;border-radius:2px"><rect width="27" height="18" fill="#FFCD00"/><rect y="4" width="27" height="2" fill="#DA251D"/><rect y="8" width="27" height="2" fill="#DA251D"/><rect y="12" width="27" height="2" fill="#DA251D"/></svg>
 </footer>
 
 <script>
@@ -592,7 +641,12 @@
 
   // ── Theme ──
   var root = document.documentElement, toggle = document.getElementById('theme-toggle');
-  function applyTheme(t) { root.setAttribute('data-theme', t); toggle.textContent = (t === 'light') ? '☀ Light' : '☾ Dark'; }
+  function applyTheme(t) {
+    root.setAttribute('data-theme', t);
+    var lt = (t === 'light');
+    document.getElementById('theme-ico').textContent = lt ? '☀' : '☾';
+    document.getElementById('theme-lbl').textContent = lt ? 'Light' : 'Dark';
+  }
   var saved = null; try { saved = localStorage.getItem('grinSoloTheme'); } catch (e) {}
   if (!saved) saved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
   applyTheme(saved);
@@ -634,8 +688,8 @@
   var MATURITY = { main: 1440, test: 1440 };
   var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   var NETS = {
-    main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', hashrate: 'data/hashrate_main.json', poolstats: 'data/poolstats_main.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null },
-    test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', hashrate: 'data/hashrate_test.json', poolstats: 'data/poolstats_test.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null }
+    main: { status: '/api/status/main', wallet: '/api/wallet/main', blocks: 'data/blocks_main.json', miners: 'data/miners_main.json', hashrate: 'data/hashrate_main.json', poolstats: 'data/poolstats_main.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null, netHr24h: null, pool24hGps: null },
+    test: { status: '/api/status/test', wallet: '/api/wallet/test', blocks: 'data/blocks_test.json', miners: 'data/miners_test.json', hashrate: 'data/hashrate_test.json', poolstats: 'data/poolstats_test.json', baseHeight: null, baseDiff: null, baseTs: null, netDiff: null, hrGps: null, netHr24h: null, pool24hGps: null }
   };
   var STATE = { tip: { main: null, test: null }, blocks: { main: [], test: [] }, miners: { main: [], test: [] }, hashrate: { main: [], test: [] }, loaded: { main: false, test: false }, hrLoaded: { main: false, test: false }, range: 'weekly', hrRange: 'weekly', blocksPage: { main: 0, test: 0 }, price: null };
   var BLOCKS_PER_PAGE = 20;  // found-blocks table rows per page
@@ -646,6 +700,7 @@
     loadNetCache(net);
     if (NETS[net].netDiff != null) set(net + '-difficulty', fmtNum(NETS[net].netDiff));
     if (NETS[net].hrGps != null) set(net + '-hashrate', fmtHr(NETS[net].hrGps), 'green');
+    updateEarnEst(net);   // paint G1 card from the cached 24h rate before any fetch
     seedFromPoolstats(net);
   });
 
@@ -670,6 +725,13 @@
         if (s.hrGps == null && typeof nw.hashrate_gps === 'number') {
           s.hrGps = nw.hashrate_gps;
           set(net + '-hashrate', fmtHr(s.hrGps), 'green'); seeded = true;
+        }
+        // Smooth 24h network hashrate → the earnings-estimate denominator. Always
+        // refreshed (not seed-guarded, since nothing else computes it) so a long-open
+        // page tracks the server value; persisted so a reload paints earnings at once.
+        if (typeof nw.hashrate_gps_24h === 'number') {
+          s.netHr24h = nw.hashrate_gps_24h; seeded = true;
+          updateEarnEst(net);
         }
         // Persist the seed like a live reading so a rapid page refresh paints from
         // localStorage instantly — no dependency on a fresh fetch that a reload
@@ -769,7 +831,7 @@
   function netCacheKey(net) { return 'grinSoloNet_' + net; }
   function saveNetCache(net) {
     try { localStorage.setItem(netCacheKey(net),
-      JSON.stringify({ netDiff: NETS[net].netDiff, hrGps: NETS[net].hrGps })); } catch (e) {}
+      JSON.stringify({ netDiff: NETS[net].netDiff, hrGps: NETS[net].hrGps, netHr24h: NETS[net].netHr24h })); } catch (e) {}
   }
   function loadNetCache(net) {
     try {
@@ -777,6 +839,7 @@
       if (v && typeof v === 'object') {
         if (typeof v.netDiff === 'number') NETS[net].netDiff = v.netDiff;
         if (typeof v.hrGps === 'number') NETS[net].hrGps = v.hrGps;
+        if (typeof v.netHr24h === 'number') NETS[net].netHr24h = v.netHr24h;
       }
     } catch (e) {}
   }
@@ -803,6 +866,32 @@
       el.appendChild(span);
     }
   }
+  // Two earnings tiles, both keyed off the day's block reward
+  // (1,440 blocks × 60 ツ = 86,400 ツ mined network-wide per day):
+  //   • Est. Earnings / day  = this pool's 24h-average hashrate share × 86,400 ツ
+  //     (smoothed pool rate, so per-block luck doesn't swing it).
+  //   • Est. G1 mini / day   = a fixed yardstick — one IPOLLO G1 mini (1.2 G/s)
+  //     at today's network size (1.2 ÷ net hashrate × 86,400), matching
+  //     scan.grin.money's card. Both use the 24h-average network hashrate.
+  var DAY_COINBASE = 60 * 1440;   // 86,400 ツ network-wide per day (60 ツ × 1,440 blocks)
+  function setEarnTile(id, gps, netGps) {
+    var el = document.getElementById(id); if (!el) return;
+    if (gps != null && gps > 0 && netGps != null && netGps > 0) {
+      el.className = 'value green';
+      el.textContent = fmtGrin(gps / netGps * DAY_COINBASE) + ' ツ';
+    } else {
+      el.className = 'value dim';
+      el.textContent = '—';
+    }
+  }
+  function updateEarnEst(net) {
+    // Denominator = the SMOOTH 24h-average network hashrate from the collector, so
+    // the 1/hashrate ratio doesn't inherit the jitter of the ~10-block live figure.
+    // Fall back to the live rate only until the 24h value has been fetched.
+    var netGps = NETS[net].netHr24h != null ? NETS[net].netHr24h : NETS[net].hrGps;
+    setEarnTile(net + '-earnest', NETS[net].pool24hGps, netGps);  // pool share
+    setEarnTile(net + '-g1est', 1.2, netGps);                     // G1 mini (1.2 G/s)
+  }
   function relAge(s) {
     if (s == null) return '';
     if (s < 90) return Math.max(0, Math.round(s)) + 's';
@@ -817,10 +906,11 @@
     document.getElementById(net + '-state').textContent = stateText;
     var n = document.getElementById(net + '-note');
     n.textContent = note; n.style.display = note ? 'block' : 'none';
-    set(net + '-height', '—'); set(net + '-difficulty', '—'); set(net + '-hashrate', '—');
+    set(net + '-difficulty', '—'); set(net + '-hashrate', '—');
     STATE.tip[net] = null;
     NETS[net].baseHeight = null; NETS[net].baseDiff = null; NETS[net].baseTs = null;
-    NETS[net].netDiff = null; NETS[net].hrGps = null;
+    NETS[net].netDiff = null; NETS[net].hrGps = null; NETS[net].pool24hGps = null;
+    updateEarnEst(net);
   }
 
   function pollNet(net) {
@@ -840,14 +930,19 @@
         // Peer count now rides on the sync-status line (its own tile was replaced
         // by Pool Hashrate): e.g. "synced · 8 nodes". The dot keeps the sync colour.
         var peerN = (peers !== undefined && peers !== null) ? Number(peers) : null;
+        // Tip height now rides on the sync-status line beside the badge (its own
+        // "Block Height" tile was retired for the Est. Earnings tile), e.g.
+        // "synced 1,234,567 · 8 nodes". The dot keeps the sync colour.
+        var heightStr = (height !== undefined && height !== null) ? Number(height).toLocaleString() : '';
         document.getElementById(net + '-dot').className = 'dot ' + sync.cls;
         document.getElementById(net + '-state').textContent =
-          sync.text + (peerN !== null ? ' · ' + peerN + ' node' + (peerN === 1 ? '' : 's') : '');
-        set(net + '-height', height !== undefined ? Number(height).toLocaleString() : '—');
+          sync.text + (heightStr ? ' ' + heightStr : '')
+          + (peerN !== null ? ' · ' + peerN + ' node' + (peerN === 1 ? '' : 's') : '');
         updateDiffHashrate(net, height !== undefined ? Number(height) : null, diff !== undefined ? Number(diff) : null, nowTs);
         var s = NETS[net];
         set(net + '-difficulty', s.netDiff != null ? fmtNum(s.netDiff) : '—');
         set(net + '-hashrate', s.hrGps != null ? fmtHr(s.hrGps) : '—', s.hrGps != null ? 'green' : 'dim');
+        updateEarnEst(net);
         return true;
       })
       .catch(function (err) {
@@ -872,9 +967,11 @@
       .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
       .then(function (data) {
         STATE.blocks[net] = Array.isArray(data.blocks) ? data.blocks : []; STATE.loaded[net] = true;
-        set(net + '-blocks24', String(data.found_24h != null ? data.found_24h : 0), (data.found_24h > 0) ? 'green' : 'dim');
+        var f24 = data.found_24h != null ? data.found_24h : 0;
+        set(net + '-blocks24', f24 + ' block' + (f24 === 1 ? '' : 's'), (f24 > 0) ? 'green' : 'dim');
+        renderMaturity(net);   // maturing sub-line shares this tile — refresh it now
       })
-      .catch(function () { STATE.loaded[net] = false; set(net + '-blocks24', 'n/a', 'dim'); });
+      .catch(function () { STATE.loaded[net] = false; set(net + '-blocks24', 'n/a', 'dim'); renderMaturity(net); });
   }
 
   function pollHashrate(net) {
@@ -908,6 +1005,10 @@
         var mc = data.miner_count || 0, oc = data.online_count || 0;
         set(net + '-miners', oc + ' / ' + mc, mc === 0 ? 'dim' : (oc === mc ? 'green' : 'yellow'));
         setPoolHr(net, data.total_hr_gps);
+        // Pool 24h-average hashrate = sum of each miner's own 24h rate — a smooth
+        // basis for the Est. Earnings tile that ignores per-block share luck.
+        NETS[net].pool24hGps = miners.reduce(function (a, m) { return a + (Number(m.hr_24h) || 0); }, 0);
+        updateEarnEst(net);
         sum.innerHTML = '<b>' + oc + '</b>/' + mc + ' online · total <b>' + fmtHr(data.total_hr_gps) + '</b>';
         if (miners.length === 0) {
           tbody.innerHTML = '';
@@ -962,13 +1063,16 @@
     var hrs = ((need - depth) * 60) / 3600;
     return { state: 'maturing', text: 'maturing ~' + (hrs >= 1 ? hrs.toFixed(0) + 'h' : '<1h') };
   }
+  // Maturing coinbases now render as the sub-line of the "Found in last 24h" tile,
+  // so this writes the .sub element directly (not via set(), which would stamp a
+  // .value class over it). Blank until blocks + tip are both known.
   function renderMaturity(net) {
+    var el = document.getElementById(net + '-maturing'); if (!el) return;
     var tip = STATE.tip[net];
-    if (!STATE.loaded[net]) { set(net + '-maturing', 'n/a', 'dim'); return; }
-    if (tip === null) { set(net + '-maturing', '?', 'dim'); return; }
+    if (!STATE.loaded[net] || tip === null) { el.textContent = ''; el.className = 'sub'; return; }
     // Count only genuinely-maturing coinbases — exclude orphans (they never mature).
     var n = 0; STATE.blocks[net].forEach(function (b) { if (!b.orphan && tip - b.height < MATURITY[net]) n++; });
-    set(net + '-maturing', String(n), n > 0 ? 'yellow' : 'dim');
+    el.textContent = n + ' maturing'; el.className = 'sub' + (n > 0 ? ' warn' : '');
   }
 
   // ── Timezone mode (per-event views only) ──
@@ -1741,10 +1845,16 @@
     var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="' + esc(aria) + '">';
     for (var hh = 0; hh < 24; hh++) {
       var x = L + hh * cellW, c = counts[hh], fill, fo;
-      // Single-hue ramp on var(--main) via fill-opacity → theme-aware (light/dark) for
-      // free; empty hours get a faint border wash so the 24-cell grid stays visible.
-      if (c === 0) { fill = 'var(--border)'; fo = '0.14'; }
-      else { fill = 'var(--main)'; fo = (0.18 + 0.82 * (c / maxV)).toFixed(3); }
+      // Heat ramp: yellow (lowest) → red (busiest) via hue interpolation, so intensity
+      // reads as colour not just brightness. Empty hours stay a faint blank wash so the
+      // 24-cell grid is still visible. Concrete hsl() (not var(--main)) also survives the
+      // PNG-export style freeze cleanly.
+      if (c === 0) { fill = 'var(--border)'; fo = '0.12'; }
+      else {
+        var t = maxV > 0 ? (c / maxV) : 1;         // 0 … 1 relative intensity
+        var hue = (48 * (1 - t)).toFixed(0);       // 48 = yellow → 0 = red
+        fill = 'hsl(' + hue + ', 92%, 52%)'; fo = '0.95';
+      }
       var title = esc(pad2(hh) + ':00–' + pad2((hh + 1) % 24) + ':00 · ' + c + ' block' + (c === 1 ? '' : 's'));
       svg += '<rect x="' + (x + gap / 2).toFixed(1) + '" y="' + T + '" width="' + (cellW - gap).toFixed(1)
         + '" height="' + plotH + '" rx="2" fill="' + fill + '" fill-opacity="' + fo + '"><title>' + title + '</title></rect>';
@@ -1904,7 +2014,7 @@
   var tzBtn = document.getElementById('tz-toggle');
   function updateTzUI() {
     var utc = (TZMODE === 'utc');
-    tzBtn.textContent = '🕓 ' + (utc ? 'UTC' : 'Local');
+    document.getElementById('tz-lbl').textContent = utc ? 'UTC' : 'Local';
     tzBtn.title = utc ? 'Times shown in UTC — click for your local zone (' + localTzLabel() + ')'
                       : 'Times shown in your local zone (' + localTzLabel() + ') — click for UTC';
     var lbl = utc ? 'UTC' : 'Local';
@@ -1990,7 +2100,20 @@
     else { freshBox.className = 'freshness stale'; freshText.textContent = 'Stale · updated ' + relAge(age) + ' ago'; }
   }
 
+  // ── Initial-load fast retry ──
+  // The regular cadence is one poll every 120s (POLL_MS). If the FIRST poll after a
+  // page load returns no node data (a transient blip — e.g. a burst 503 on a hard
+  // refresh, or the node a beat slow to answer), the panels would otherwise sit blank
+  // for the full 120s until the next poll. Instead, retry quickly a few times so a
+  // one-off failure self-heals in ~1s. Bounded (INITIAL_RETRY_MAX) so a genuinely
+  // unreachable node is not hammered — once that budget is spent we fall back to the
+  // normal 120s cadence, which still recovers on its own.
+  var INITIAL_RETRY_MS = 100, INITIAL_RETRY_MAX = 8, initialRetries = 0, gotFirstData = false;
+
   function poll() {
+    // Refresh the smooth 24h network hashrate (earnings denominator) each cycle;
+    // fire-and-forget so it never gates the main poll's results array.
+    seedFromPoolstats('main'); seedFromPoolstats('test');
     Promise.all([
       pollNet('main'), pollNet('test'), pollWallet('main'), pollWallet('test'),
       pollBlocks('main'), pollBlocks('test'), pollMiners('main'), pollMiners('test'),
@@ -2002,6 +2125,10 @@
       tickFresh();
       renderDerived();
       if (SPLIT.person) renderPerson();   // refresh live worker hashrates each tick
+      if (lastPollOk) { gotFirstData = true; }
+      else if (!gotFirstData && initialRetries < INITIAL_RETRY_MAX) {
+        initialRetries++; setTimeout(poll, INITIAL_RETRY_MS);
+      }
     });
   }
   poll(); setInterval(poll, POLL_MS); setInterval(tickFresh, 1000);

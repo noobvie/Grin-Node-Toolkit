@@ -2,7 +2,7 @@
 
 // ─── Grin Transporter — payout rail #3 (PLACEHOLDER) ─────────────────────────
 //
-// Reserved stub for the planned self-hosted store-and-forward slate relay (Script 091,
+// Reserved stub for the planned self-hosted store-and-forward slate relay (Script 092,
 // Grin Connectivity Hub). It will let the pool deliver payouts to miners who are NOT
 // online/reachable when we pay — the slate is dropped into a relay queue and the miner picks
 // it up later. This is the async rail that benefits small/casual miners most.
@@ -19,7 +19,7 @@
 class WalletTransporter {
   constructor(config) {
     this.config = config || {};
-    this.available = false; // never advertise as a usable rail until Script 091 lands
+    this.available = false; // never advertise as a usable rail until Script 092 lands
   }
 
   isAvailable() {
@@ -31,7 +31,7 @@ class WalletTransporter {
   }
 
   async send(/* grinAddress, amount */) {
-    throw new Error('Grin Transporter payout rail is not implemented yet (Script 091). ' +
+    throw new Error('Grin Transporter payout rail is not implemented yet (Script 092). ' +
       'Use the Tor rail; the admin toggle is reserved and disabled.');
   }
 }

@@ -24,7 +24,9 @@ Prune node mainnet: https://prunemain.grin.money
 
 Prune node testnet: https://prunetest.grin.money
 
-Grin explorer (clone of grincoin.org) https://scan.grin.money
+Clone Grin Explorer Rust integration from https://grincoin.org
+
+Grin tiny explorer https://scan.grin.money
 
 GrinScan block explorer mainnet: https://grinscan.org
 
@@ -39,6 +41,9 @@ Grin Global Health mainnet: https://world.grin.money
 Free Grin Coin Portal: https://drop.grin.money/
 
 Solo Grin Mining Pool: https://solo.grin.money (user/pass disabled for easy viewing)
+
+Public Grin Mining Pool: https://grinium.com/ (in development)
+
 ...
 
 ---
@@ -46,17 +51,17 @@ Solo Grin Mining Pool: https://solo.grin.money (user/pass disabled for easy view
 ## Requirements
 
 - **Linux — supported distributions:**
-  - Ubuntu 22.04 LTS or later — **fully tested and recommended**
+  - Ubuntu **22.04 / 24.04 / 26.04 LTS** — **tested and recommended**
   - Other Debian-based distros (Debian, Mint, Pop!\_OS, Kali, etc.) — best effort, **not fully tested**
-  - Rocky Linux / AlmaLinux 10+ (RHEL clones) — **experimental, may not work** (not fully tested; use at your own risk)
+  - Rocky Linux / AlmaLinux 10+ (RHEL clones) — runs, but **not fully tested** (use at your own risk)
   - Rocky Linux / AlmaLinux 9 or older — **not supported** (glibc too old); upgrade instructions shown at startup
   - Other systems (Fedora, Arch, etc.) — **not supported, script will exit**
 - `bash` 4.0+
 - `curl`, `wget`, `jq`, `tar`, `tmux` (installed automatically where possible)
 - Root / `sudo` access for system-level operations
-- **Free disk space: 10 GB minimum** (pruned mode) — more recommended for full archive or hosting snapshots
+- **Free disk space: 10 GB minimum** (pruned mode) — more for full archive or hosting snapshots
 
-> **Ubuntu is the only fully tested platform.** The main script checks your OS at startup. Unsupported distros exit immediately with a clear error. Rocky/AlmaLinux 10+ may run but are experimental and not fully tested; older Rocky/Alma versions receive upgrade instructions instead of a hard stop.
+> **Ubuntu (22.04–26.04) is the primary tested platform.** The main script checks your OS at startup: unsupported distros exit with a clear message, and older Rocky/Alma versions get upgrade instructions instead of a hard stop. Rocky/AlmaLinux 10+ run but are not fully tested.
 
 ---
 
@@ -164,7 +169,7 @@ Grin Node Toolkit
 │   │       ├── 6) Service control · 7) Create admin · 8) Pool status
 │   │       ├── B) Backup · C) Cron · L) Logs · S) Edit config · DEL) Reset DB
 │   │       └── Z) Cleanup (mode-selector) · 0) Exit   (modes: singlebox / hub / satellite)
-│   └── 8) Admin & Maintenance           → 08_grin_node_admin.sh
+│   ├── 8) Admin & Maintenance           → 08_grin_node_admin.sh
 │       ├── 1) Remote Node Monitor       (081_host_monitor_port.sh — also cron-ready)
 │       │   ├── 1) Run check now         (registry hosts first, then custom conf hosts)
 │       │   ├── 2) Reconfigure host list
@@ -179,6 +184,20 @@ Grin Node Toolkit
 │       ├── 8) Self-Update               (git pull from GitHub)
 │       ├── DEL) Full Grin Cleanup       (08del_clean_all_grin_things.sh)
 │       └── 0) Back
+│   └── 9) Grin Connectivity Hub        → 09_grin_comms_hub.sh   (IN DEVELOPMENT)
+│       ├── 1) Floonet Relay            → 091_grin_floonet_relay.sh
+│       │   ├── 1) Guided setup  ·  2) Domain & SSL only
+│       │   ├── 3) Status  ·  4) Live logs  ·  5) Start/Stop/Restart  ·  6) Test relay
+│       │   ├── 7) Relay settings  ·  8) Access control  ·  9) NIP-05 usernames
+│       │   ├── 10) GoblinPay  ·  11) Edit config.toml
+│       │   ├── B) Backup & restore  ·  U) Update  ·  M) Nym mixnet exit  ·  D) Uninstall
+│       │   └── 0) Back                 (relay binds 127.0.0.1:8181 → nginx wss)
+│       └── 2) Grin Transporter         → 092_grin_transporter.sh
+│           ├── Network select          (1) Testnet  ·  2) Mainnet)
+│           ├── Server  1) Install · 2) Configure · 3) Domain & SSL · 4) Tor hidden service
+│           │           5) Start/Stop · 6) Status
+│           ├── Agent   7) Install poll agent · 8) Agent actions (address/send/poll/cron)
+│           └── L) Logs  ·  D) Delete instance  ·  0) Back
 │
 └── 0) Exit
 ```
@@ -189,195 +208,55 @@ Grin Node Toolkit
 
 ### 1. Build/Control Grin Node — `01_build_new_grin_node.sh`
 
-A guided setup that downloads, verifies, configures, and launches a Grin node — including a pre-synced chain snapshot so your node is operational in under one hour.
-
-- Choose mainnet or testnet, and full archive or pruned mode
-- Downloads the official Grin binary, verifies its SHA256, patches `grin-server.toml`
-- **Zone selection** — choose America, Asia, Europe, or Africa; hosts are loaded from `extensions/grinmasternodes.json` (a community-maintained registry); auto-falls back to America if the chosen zone has no fresh hosts
-- **Per-host freshness filter** — each candidate host passes a 4-gate check: directory reachability → sync-complete status → directory listing (tar filename) → `Last-Modified` age on the `.tar.gz` file; hosts with data older than 5 days are silently skipped
-- **Transfer mode choice at download time:**
-  - **On-the-fly extraction** — streams the remote archive directly into tar with no local `.tar.gz` saved (`wget -O - <url> | tar -xzvf -`); saves temporary disk space and reduces total setup time; SHA256 verification is skipped
-  - **Full download** — downloads `.tar.gz` to disk (supports `-c` resume on interruption), verifies SHA256 checksum, then extracts
-- **Auto-fallback** — if a stream or download fails mid-transfer, the script automatically switches to the next available source without user intervention; applies to both transfer modes
-- Launches the node in a named `tmux` session; displays elapsed time and session name
+Guided node setup: downloads the official binary (**SHA256-verified**), patches `grin-server.toml`, and bootstraps from a **pre-synced chain snapshot** so you're running in under an hour. Choose mainnet/testnet and full/pruned; pick a download zone (America/Asia/Europe/Africa) from the community registry with per-host freshness checks; stream-extract or full-download with automatic source fallback. Launches in a named `tmux` session.
 
 ### 2. Manage Nginx Server — `02_nginx_fileserver_manager.sh`
 
-Manages an nginx file server for hosting and distributing Grin chain snapshots. Per-action logs are written to `log/nginx-<action>-<datetime>.log`.
-
-**Domain Management (1–4)**
-- Setup, Add Domain, Remove Domain, List Domains — full SSL via Let's Encrypt, HSTS, directory listing
-
-**Traffic Control (5–6)**
-- **Limit Rate** — per-IP download speed cap via nginx `geo` + `limit_rate`; stored in `/etc/nginx/conf.d/grin_ip_limits.conf`
-- **Lift Rate** — remove the cap for a specific IP, or clear all limits; includes option to remove injected `limit_rate` directives from domain configs
-
-**Security (7–9)**
-- **Install fail2ban** — installs fail2ban, configures `limit_req_zone` in nginx (20 req/s, burst 30), creates fail2ban jails for nginx auth, rate-limit, and bots
-- **Fail2ban Management** — check jail status, unban IPs, list currently banned IPs; each action logged to a timestamped file
-- **IP Filtering** — block or unblock IPs and CIDR ranges via ufw or iptables; maintains `/etc/grin-toolkit/blocked_ips.list`
+nginx file server for hosting and distributing chain snapshots. Domain management with Let's Encrypt SSL + HSTS + directory listing, per-IP download-rate caps, fail2ban install + management, and IP/CIDR filtering via ufw/iptables.
 
 ### 3. Share Grin Chain Data / Schedule — `03_grin_share_chain_data.sh`
 
-Automates Grin blockchain backup and sharing so others can bootstrap from your node.
+Auto-detects node type/network, verifies sync, and shares snapshots over **nginx** or **SSH**. Per-network cron schedules are staggered so mainnet and testnet never compress at the same time; also `@reboot` node autostart and scheduled txhashset cleanup.
 
-- Auto-detects node type (full/pruned) and network (mainnet/testnet)
-- Dual sync-status verification before snapshot; graceful node shutdown/restart
-- **A/B) Nginx sharing** — set up nginx config and trigger share immediately
-- **C/D) SSH sharing** — optional SSH remote upload
-- **E/F) Nginx schedule** — add/remove cron jobs, **one schedule per network** (separate cron lines for mainnet and testnet) so the two never stop-and-compress at the same time; presets 2–4 pick a random time per network, set once at setup, to stagger disk/CPU load. F removes all or just one network's schedule.
-- **G) Auto startup** — adds a crontab `@reboot sleep N && tmux new-session -d -s SESSION BINARY` entry; detects running binary via port → PID → `/proc/$pid/exe`; configurable boot delay (default 60s mainnet, 120s testnet)
-- **H) Disable auto startup** — removes the `@reboot` crontab entries
-- **I) Auto-delete txhashset snapshots** — schedules a cron job to purge old snapshot files from the nginx web root, keeping disk usage under control
-
-**Contributing your node to the community registry**
-
-Once your node is publicly sharing chain data via nginx (options A → B → E), you can add it to `extensions/grinmasternodes.json` so other users can download from your server when setting up a new node:
-
-1. Fork the [Grin Node Toolkit repository](https://github.com/noobvie/grin-node-toolkit) on GitHub
-2. Open `extensions/grinmasternodes.json` and add your hostname(s) under the correct zone and site key using the standard subdomain format `<site_key>.yourdomain.com`:
-   - `fullmain.yourdomain.com` — full archive node, mainnet
-   - `prunemain.yourdomain.com` — pruned node, mainnet
-   - `prunetest.yourdomain.com` — pruned node, testnet
-3. Add a `_contacts` entry keyed by your **base domain** (e.g. `yourdomain.com`) with your owner name and a contact URL
-4. Submit a pull request — the toolkit's `081_host_monitor_port.sh` will verify freshness and sync status of your host automatically
+**Contribute your node to the community registry:** once you're sharing chain data over nginx, fork the repo and add your hostname(s) to `extensions/grinmasternodes.json` under the right zone/site-key (`fullmain.` / `prunemain.` / `prunetest.<yourdomain>`), add a `_contacts` entry, and open a PR — `081_host_monitor_port.sh` verifies freshness automatically.
 
 ### 4. Publish Grin Node Services — `04_grin_node_foreign_api.sh`
 
-**Node Public API (port 3413 / 13413)**
-- Exposes `/v2/foreign` only via nginx HTTPS reverse proxy; blocks `/v2/owner` (returns 403)
-- Enables light wallets, block explorers, and tools to query your node
-
-### 7. Grin Mining Services — `07_grin_mining_hub_services.sh` (hub) + solo / public pool
-
-A hub that deploys **one** mining setup per server — solo private *or* a public pool, never both (they collide on the stratum port, nginx zones, and the `/opt/grin` layout, so the hub hard-blocks a second type). Three options:
-
-#### 1) Solo PRIVATE — Internet · 2) Solo PRIVATE — LAN — `07_grin_mining_solo.sh`
-
-Both run the **same solo product** on the node's built-in stratum; they differ only in how the stats dashboard is served. The LAN variant launches as `07_grin_mining_solo.sh lan` (`SOLO_NET_MODE=lan`):
-
-| | Stats dashboard | Best for |
-|---|---|---|
-| **Internet** | Public domain + Let's Encrypt SSL (certbot); optional HTTP Basic-Auth lock; off-box reachability pills | A pool reachable over the internet |
-| **LAN** | Plain HTTP bound to a chosen private IP:port — no domain, no certbot, no auth | A trusted internal / home network |
-
-> **Solo mining pays block rewards directly to your listening wallet** (via `wallet_listener_url`) — no Tor, no pool, no third party. You keep the full coinbase of every block you find.
-
-The solo menu is **network-as-parent** (pick a network once, no repeated prompts):
-- **A) Node check** · **1/2) Configure Mainnet/Testnet** → per-net branch: **Wallet** (setup/recover, listener, address), **Stratum** (setup, configure wallet address / `burn_reward` / timeout, publish, restrict), **Terminal stats** (live dashboard, 10s refresh)
-- **3) Deploy stats web page** (both networks side by side; Internet or LAN per launch mode) · **4) Node, Wallet & Mining Status** · **5) Watchdogs** (node-sync, boot autostart, wallet, stratum) · **6) Maintenance** (encrypted backup / restore / schedule / seed) · **7) Payouts & settlement** · **C) Clean up**
-- Stratum binds **3416** (mainnet) / **13416** (testnet); *publish* patches `grin-server.toml` to `0.0.0.0:PORT` + opens the firewall, *restrict* reverts to `127.0.0.1:PORT`. The toml is auto-detected via the running process (`/proc/$pid/exe`) or known toolkit directories.
-
-#### 3) Public mining pool (GRINIUM) — `07_grin_mining_public_pool.sh`
-
-A full self-hosted **PPLNS** pool: **address-as-identity** (miners submit `grin_address.worker` as the stratum user — no accounts), **Tor-only auto-payouts**, Node.js/Express + SQLite backend, a static dashboard, and a JWT-protected admin panel. **G) Guided Full Setup** runs install → configure → deploy web → nginx+SSL → wallet listeners → service → create admin in sequence; individual steps and Backup/Cron/Logs/Reset are also available. Deploys as a **singlebox**, or split into a central **hub** + regional **satellites**. Ports: public stratum **3333**, node built-in stratum upstream **127.0.0.1:3334**, central API **8080** (nginx-proxied). App code in `web/07_mining_pool_public/`.
+Exposes the node's `/v2/foreign` API (3413 / 13413) over an nginx HTTPS reverse proxy and blocks `/v2/owner` (returns 403) — lets light wallets, block explorers, and tools query your node.
 
 ### 5. Grin Wallet Services — `05_grin_wallet_service.sh` (hub) + `051`–`055`
 
-`05_grin_wallet_service.sh` is a **hub launcher** — it shows the live status of all installed wallet services and dispatches to each sub-script. Each sub-script is fully self-contained with its own wallet binary, config, and systemd service.
+A **hub launcher** showing live status of each self-contained wallet service:
+- **051 Private Web Wallet** — personal browser UI (**Node.js**); one process serves many wallets across both networks; nginx + Basic Auth (owner-only), Tor + QR supported.
+- **052 Grin Drop** — GRIN giveaway + donation portal (**Node/Express + `node:sqlite`**); rate-limited 3-step slatepack claims and/or a donation address + QR, modes independently toggleable.
+- **053 WooCommerce Gateway** — WordPress/WooCommerce **PHP plugin** + Node bridge to the wallet Owner API; slatepack invoice flow (buyer pastes response → auto-confirmed).
+- **054 Payment Pro** — *coming soon* (Shopify / custom-API processor).
+- **055 Public Web Wallet** — *coming soon* (client-side **WASM**, keys never leave the browser).
 
-> **Tip:** Install each service on its own dedicated server to avoid port conflicts and config collisions. Each server can run both mainnet and testnet simultaneously.
-
-**051 — Private Web Wallet** (`051_grin_private_web_wallet.sh`)
-- Personal browser UI for your own wallet — **Node.js** (ported from GrinSuite) + nginx + Basic Auth (owner-only, not public)
-- **One Node.js process serves many wallets across both networks** — app at `/opt/grin/webwallet/app/`, single shared `grin-wallet` binary, per-wallet dirs `/opt/grin/webwallet/wallet_<net>_<name>/`, registry `wallets_info.json`
-- nginx reverse-proxies `127.0.0.1:7420`; Tor + qrencode supported
-- Setup: install deps (nodejs, nginx, certbot, htpasswd, tor, qrencode) → deploy files + systemd → nginx → SSL → Basic Auth → firewall
-
-**052 — Grin Drop** (`052_grin_drop.sh`)
-- Configurable GRIN giveaway + donation portal — **Node.js/Express + SQLite (`node:sqlite`)** + systemd
-- **Giveaway mode**: interactive 3-step slatepack claim, rate-limited per address per 24h
-- **Donation mode**: shows wallet address + QR code for receiving GRIN
-- Both modes are independently toggleable; works on testnet (default) or mainnet
-- Testnet service: `grin-drop-test` (port 3004, `/opt/grin/drop-test/`); mainnet: `grin-drop-main` (port 3005, `/opt/grin/drop-main/`)
-
-**053 — WooCommerce Payment Gateway** (`053_grin_woocommerce.sh`)
-- Grin payment plugin for WordPress / WooCommerce — **PHP plugin** + **Node.js/Express bridge** (`server.js`)
-- Bridge proxies the PHP plugin to the local grin-wallet **Owner API** (3420 mainnet / 13420 testnet); listens on `127.0.0.1:3006` (mainnet) / `3007` (testnet), config in `/opt/grin/woocommerce/{mainnet,testnet}/`
-- Slatepack invoice flow: buyer copies invoice slate → pastes response → auto-confirmed
-
-**054 — Payment Pro** (`054_grin_payment_pro.sh`) — *coming soon*
-- Grin payment processor for Shopify, custom APIs, and other non-WooCommerce platforms
-
-**055 — Public Web Wallet** (`055_grin_public_web_wallet.sh`) — *coming soon*
-- Self-custodial, client-side wallet — all crypto runs in the browser via WebAssembly
-- Private keys never leave the user's device; `wallet_data` stored in browser IndexedDB (AES-GCM / PBKDF2)
-- Server role: nginx static file host only — no keys, no wallet processes, scales to any number of users
-- Inspired by [mwcwallet.com](https://mwcwallet.com/) and [MWC-Wallet-Standalone](https://github.com/NicolasFlamel1/MWC-Wallet-Standalone)
+> **Tip:** run each service on its own server to avoid port/config collisions; each server can run mainnet and testnet at once.
 
 ### 6. Global Grin Health — `06_global_grin_health.sh`
 
-A self-hosted network monitoring dashboard with two components that share a single install, Python collector, SQLite database, and nginx virtual host.
+A self-hosted network dashboard (Python collector + SQLite + nginx) with two parts:
+- **Network Stats + Peer Map** (`stats.yourdomain.com`) — Leaflet world map of all known peers (mainnet/testnet, last IP octet masked), Chart.js history for hashrate/difficulty/tx/fees, and a version-distribution donut. A 5-min cron collector uses smart sampling (per-block 24 h, hourly 30 d, daily full history) to keep the DB under 3 MB.
+- **GrinScan** (`grinscan.yourdomain.com`) — self-hosted Express block explorer (ports 3010/3011) that powers [grinscan.org](https://grinscan.org) / [test.grinscan.org](https://test.grinscan.org).
 
-**A) Network Stats + Peer Map** — served at `stats.yourdomain.com`
+### 7. Grin Mining Services — `07_grin_mining_hub_services.sh` (hub) + solo / public pool
 
-*Peer Map page (`index.html` — served at `/`)*
-- Leaflet 2D interactive world map with peer markers
-- Queries **owner API `get_peers`** for all known peers (100–500+) vs only direct connections
-- Mainnet (orange) and testnet (teal) peers shown simultaneously
-- Filterable peer list panel: filter by country or node version; click a row to center the map on that peer
-- **IP privacy**: last IPv4 octet masked (`1.2.3.x`); last IPv6 group masked
-- **Last seen**: peers are persisted in `known_peers` SQLite table for 30 days; JSON includes up to 7 days of history with `last_seen` timestamps
-- Country flag emojis via Unicode regional indicator symbols
-- Non-standard port shown in tooltip; testnet peers labelled `· testnet`
-- Fully responsive — works on mobile browsers
+A hub that deploys **one** mining setup per server — solo private *or* a public pool, never both (they collide on stratum port, nginx zones, and the `/opt/grin` layout).
 
-*Network Stats page (`stats.html`)*
-- Live stats bar: block height, hashrate (GPS), difficulty, avg block time, peer count
-- Chart.js line charts (24h / 30d / All time) for: Hashrate, Difficulty, Transactions/block, Fees/block
-- Node version distribution donut chart
-- Data collected by a Python cron job every 5 minutes; JSON files served statically
-- Smart sampling: every block for last 24 h, hourly for last 30 d, daily for full chain history → SQLite DB under 3 MB
-- Fully responsive — works on mobile browsers
-
-*Collector (`scripts/lib/06_collector.py`)*
-- Backfills and incrementally updates blocks, peers, and inflation-comparison data into SQLite; geo-locates peers via ip-api.com
-- Queries mainnet (3413) and testnet (13413) owner APIs independently
-- Companion collectors in `scripts/lib/`: `06_price_collector.py`, `06_ecosystem_checker.py`, `06_node_submit_server.py`
-
-**B) GrinScan — Lightweight Block Explorer** (Node.js) — served at `grinscan.yourdomain.com`
-- Self-hosted Express block explorer (`web/06b_grinscan/`) — powers [grinscan.org](https://grinscan.org) / [test.grinscan.org](https://test.grinscan.org)
-- Testnet on port `3010`, mainnet on `3011`; systemd `grinscan-{test,main}`
-- Configure writes `config.json` per network and copies node API secrets into `/opt/grin/grinscan/{test,main}/`
+- **Solo PRIVATE (Internet / LAN)** — mines on the node's built-in stratum; block rewards go **straight to your listening wallet** (no pool, no Tor, full coinbase). Internet mode serves a public stats page + SSL; LAN mode is plain HTTP on a private IP. Menu is network-as-parent: wallet, stratum (publish/restrict), watchdogs, encrypted backup, payouts. Stratum **3416 / 13416**.
+- **Public pool (GRINIUM)** — full self-hosted **PPLNS** pool: **address-as-identity** (no accounts), **Tor-only auto-payouts**, Node/Express + SQLite, static dashboard + JWT admin. Guided setup chains install → configure → web → nginx+SSL → wallet → service → admin. Deploys as **singlebox** or **hub + regional satellites**. Stratum **3333**. Code in `web/07_mining_pool_public/`.
 
 ### 8. Admin & Maintenance — `08_grin_node_admin.sh`
 
-**1 · Remote Node Monitor** (`081_host_monitor_port.sh`)
-- Persistent submenu: run check, reconfigure hosts, view crontab setup
-- **"Run check now" always starts with the registry scan** — reads `extensions/grinmasternodes.json`, checks every registered host for: HTTP 200 reachability, `.tar.gz` age ≤ 5 days (via `Last-Modified`), and sync-complete status (`check_status_before_download.txt`); stale/down hosts show the owner contact
-- Results logged to `grin_master_nodes_status_<datetime>.log`
-- Then checks all custom hosts from `/opt/grin/conf/host_monitor_port.conf` via TCP (`nc`); detects state changes; logs to `grin_nodes_status_<datetime>.log`
-- Emails on change (or always with `--force`); cron-ready standalone script
+Operations toolbox: **remote node monitor** (registry + custom hosts, emails on state change, cron-ready), **service/port dashboard**, **chain-sync status**, **nginx/SSL audit** (cert expiry), **firewall audit** (flags exposed wallet ports), **top bandwidth consumers**, **disk cleanup**, and **git self-update** with a branch selector. **DEL** runs the full nuclear cleanup (`08del_…`, requires typing `DESTROY`).
 
-**2 · Service & Port Dashboard**
-- All 8 Grin ports (open/closed/PID), tmux sessions, running processes, and binary versions extracted from live process paths (not PATH)
+### 9. Grin Connectivity Hub — `09_grin_comms_hub.sh` *(in development)*
 
-**3 · Chain Sync Status**
-- Queries `get_tip` JSON-RPC on both mainnet (3413) and testnet (13413); no jq required
-
-**4 · nginx Config & SSL Audit**
-- Lists `*grin*` nginx configs (enabled, proxy vs fileserver), SSL certificate expiry with color-coded days remaining
-
-**5 · Firewall Rules Audit**
-- UFW / iptables review for all Grin ports; flags wallet ports (3415/13415) as dangerous if exposed; flags bridge ports (3006/3007) as localhost-only
-
-**6 · Top 20 Bandwidth Consumers**
-- Parses nginx access logs; shows top IPs by bytes served; block (UFW) or rate-limit (iptables hashlimit) from the results
-
-**7 · Disk Cleanup** — single merged screen:
-- Chain data tar archives: delete all / keep newest N / delete older than N days
-- Nginx web directories (scanned from nginx config): delete one or all
-- OS & logs: `/tmp`, txhashset zips, Grin node logs, system journal, toolkit logs
-
-**8 · Self-Update**
-- Repo hardcoded to `noobvie/Grin-Node-Toolkit`; override for forks by saving a slug to `/opt/grin/conf/github_repo.conf`
-- **Branch selector**: choose `main` (stable), `addons` (addon development), `corefeatures` (core development), or type any custom branch name — useful for testing in-progress features before they merge to `main`
-- Downloads tarball from `github.com/REPO/archive/refs/heads/BRANCH.tar.gz`, extracts, and overwrites toolkit files in-place
-- Works whether installed via `git clone` or zip download
-
-**DEL · Full Grin Cleanup** (`08del_clean_all_grin_things.sh`)
-- Requires typing `DESTROY`; then confirms each of 6 steps individually:
-  stop processes → delete nginx web roots → remove nginx configs → remove binaries → delete `$HOME/.grin/` → delete toolkit logs
+Deploys the privacy / transport layer shared by wallets and the pool:
+- **091 Floonet Relay** — deploys the community Grin-native Nostr relay (`floonet-rs` by [github.com/2ro](https://github.com/2ro)) the toolkit way: hardened systemd + nginx/certbot over `wss` + firewall + encrypted backups. Optional NIP-05 usernames, NIP-42 access control, GoblinPay monetisation, and a Nym mixnet exit. We deploy upstream's software (not a fork).
+- **092 Grin Transporter** — self-hosted **store-and-forward slate queue** (Node + SQLite): the sender enqueues an encrypted slate and the receiver polls later, so the two are never online together — the only transport that's automated *and* offline-tolerant. Optional Tor `.onion` front. Standalone (Phase 1); wallet wiring pending.
 
 ---
 
@@ -385,59 +264,18 @@ A self-hosted network monitoring dashboard with two components that share a sing
 
 ```
 grin-node-toolkit/
-├── grin-node-toolkit.sh                  # Main menu entry point
+├── grin-node-toolkit.sh        # Main menu entry point
 ├── README.md
-├── log/                                  # Per-action logs (auto-created)
-│   ├── nginx-<action>-<datetime>.log
-│   ├── grin_nodes_status_<datetime>.log          # Node monitor results
-│   ├── grin_full_cleanup_<datetime>.log          # Full cleanup audit trail
-│   └── non_debian_upgrade_instructions.log       # Rocky/Alma upgrade steps (if applicable)
+├── log/                        # Per-action logs (auto-created)
 ├── extensions/
-│   └── grinmasternodes.json              # Community host registry (zone → site_key → hostnames)
-├── scripts/
-│   ├── 01_build_new_grin_node.sh         # Feature 1 : node installation
-│   ├── 02_nginx_fileserver_manager.sh    # Feature 2 : nginx management
-│   ├── 03_grin_share_chain_data.sh       # Feature 3 : chain data sharing + schedule
-│   ├── 04_grin_node_foreign_api.sh       # Feature 4 : node services (Node API)
-│   ├── 05_grin_wallet_service.sh         # Feature 5 : wallet services hub launcher
-│   ├── 051_grin_private_web_wallet.sh    # Feature 5a: personal browser wallet UI
-│   ├── 052_grin_drop.sh                  # Feature 5b: GRIN giveaway + donation portal
-│   ├── 053_grin_woocommerce.sh           # Feature 5c: WooCommerce payment gateway
-│   ├── 054_grin_payment_pro.sh           # Feature 5d: payment pro (coming soon)
-│   ├── 055_grin_public_web_wallet.sh     # Feature 5e: public WASM wallet (coming soon)
-│   ├── 06_global_grin_health.sh          # Feature 6 : Global Grin Health menu
-│   ├── 07_grin_mining_hub_services.sh    # Feature 7 : mining hub (solo XOR public pool)
-│   ├── 07_grin_mining_solo.sh            #   solo private mining (Internet + LAN modes)
-│   ├── 07_grin_mining_public_pool.sh     #   GRINIUM public PPLNS pool (singlebox/hub/satellite)
-│   ├── 08_grin_node_admin.sh             # Addon  8 : admin & maintenance menu
-│   ├── 081_host_monitor_port.sh          # Remote node port monitor (standalone / cron)
-│   ├── 08del_clean_all_grin_things.sh    # Full Grin removal (nuclear cleanup)
-│   └── lib/                              # Sourced libs + collectors + data files
-│       ├── 06_collector.py               # Stats + peer collector (Python)
-│       ├── 06_price_collector.py         # GRIN price collector
-│       ├── 06_ecosystem_checker.py       # Ecosystem site checker
-│       ├── 06_node_submit_server.py      # Community node submission server
-│       ├── 06b_grinscan.sh               # GrinScan install/configure helpers
-│       ├── 052_lib_*.sh                  # Grin Drop libs (app, wallet, nginx, admin)
-│       ├── 07_lib_hub.sh / 07_lib_satellite.sh   # Public pool hub + satellite libs
-│       ├── 07_solo_*.sh                  # Solo mining libs (wallet, backup)
-│       ├── 07_mining_block_collector.py  # Solo mining stats collector (log → JSON)
-│       └── nginx_shared_helpers.sh       # Shared nginx rate-limit zone helpers
-└── web/
-    ├── 04_node_api/                      # Feature 4 : Node API status page + collectors
-    ├── 051_wallet/                       # Feature 5a: Private Web Wallet (Node.js)
-    │   ├── server.js · package.json      #   → deployed to /opt/grin/webwallet/app/
-    │   └── client/                       #   browser UI (index.html, app.js, css, svg)
-    ├── 052_drop/                         # Feature 5b: Grin Drop (Node.js/Express)
-    │   ├── server/                       #   app.js · db.js · wallet.js · config.js (→ /opt/grin/drop-{main,test}/)
-    │   └── public_html/                  #   static frontend (claim + donation)
-    ├── 053_woocommerce/                  # Feature 5c: WooCommerce gateway
-    │   ├── bridge/                       #   server.js Node/Express bridge (→ /opt/grin/woocommerce/{mainnet,testnet}/)
-    │   └── plugin/                       #   PHP WordPress/WooCommerce plugin
-    ├── 06_stats_map/stats/               # Feature 6 : Network stats + peer map (index.html, stats.html)
-    ├── 06b_grinscan/                     # Feature 6 : GrinScan explorer (server.js + public/)
-    ├── 07_mining_pool_solo/              # Feature 7 : solo stats page (index.html, setup page)
-    └── 07_mining_pool_public/            # Feature 7 : GRINIUM pool (back-end-pool/ + public_html/)
+│   └── grinmasternodes.json    # Community host registry (zone → site_key → hosts)
+├── scripts/                    # One script per feature — 01–08 (+ 081, 08del),
+│   │                           #   05 wallet hub + 051–055, 09 hub + 091/092
+│   └── lib/                    # Sourced libs, Python collectors, shared nginx helpers
+└── web/                        # App code deployed to /opt/grin/* (Node / PHP / static)
+    ├── 04_node_api/  051_wallet/  052_drop/  053_woocommerce/
+    ├── 06_stats_map/  06b_grinscan/  06d_tiny_explorer/
+    └── 07_mining_pool_solo/  07_mining_pool_public/  092_transporter/
 ```
 
 > Scripts 054 (Payment Pro) and 055 (Public WASM Wallet) are placeholders — no web files yet.
@@ -470,28 +308,66 @@ grin-node-toolkit/
 
 ## Port Reference
 
+> **Loopback vs public.** Ports marked *localhost* bind `127.0.0.1` only and are reached
+> through the nginx HTTPS / `wss` front-end — they never need a firewall opening, and each can
+> be remapped in that service's config if another app on the box already uses the port. (For
+> example, the Floonet relay defaults to **8181** specifically to avoid the very common `8080`
+> clash with pool/arcade/dev servers.) Only **80/443**, the **P2P** ports (3414 / 13414), and
+> any **published** stratum port need to be reachable from the internet.
+
+**Grin node & wallet** (per network)
+
 | Port  | Protocol | Purpose                                                     |
 |-------|----------|-------------------------------------------------------------|
 | 3413  | HTTP     | Grin mainnet node API V2 (`/v2/foreign` via nginx)          |
-| 3414  | P2P      | Grin mainnet peer connections                               |
-| 3415  | HTTP     | Grin mainnet wallet Foreign API                             |
+| 3414  | P2P      | Grin mainnet peer connections *(public)*                    |
+| 3415  | HTTP     | Grin mainnet wallet Foreign API (localhost)                 |
+| 3420  | HTTP     | Grin mainnet wallet Owner API (localhost)                   |
 | 3416  | TCP      | Grin mainnet stratum mining server (solo private)           |
 | 13413 | HTTP     | Grin testnet node API V2 (`/v2/foreign` via nginx)          |
-| 13414 | P2P      | Grin testnet peer connections                               |
-| 13415 | HTTP     | Grin testnet wallet Foreign API                             |
+| 13414 | P2P      | Grin testnet peer connections *(public)*                    |
+| 13415 | HTTP     | Grin testnet wallet Foreign API (localhost)                 |
+| 13420 | HTTP     | Grin testnet wallet Owner API (localhost)                   |
 | 13416 | TCP      | Grin testnet stratum mining server (solo private)           |
+
+**Web & wallet services**
+
+| Port  | Protocol | Purpose                                                     |
+|-------|----------|-------------------------------------------------------------|
 | 3004  | HTTP     | Grin Drop — testnet (Node.js, proxied by nginx)             |
 | 3005  | HTTP     | Grin Drop — mainnet (Node.js, proxied by nginx)             |
 | 3006  | HTTP     | WooCommerce bridge — mainnet (Node.js, localhost only)      |
 | 3007  | HTTP     | WooCommerce bridge — testnet (Node.js, localhost only)      |
 | 3010  | HTTP     | GrinScan explorer — testnet (Node.js, proxied by nginx)     |
 | 3011  | HTTP     | GrinScan explorer — mainnet (Node.js, proxied by nginx)     |
-| 3333  | TCP      | Public pool (GRINIUM) stratum — miners connect here         |
-| 3334  | TCP      | Public pool node built-in stratum upstream (localhost only) |
-| 8080  | HTTP     | Public pool central API (localhost, nginx-proxied)          |
 | 7420  | HTTP     | Private Web Wallet — Node.js (localhost, proxied by nginx)  |
-| 80    | HTTP     | nginx (redirects to HTTPS)                                  |
-| 443   | HTTPS    | nginx file server / proxy                                   |
+| 8471  | HTTP     | Tiny Explorer (06d, mainnet, localhost, proxied by nginx)   |
+
+**Connectivity Hub (Script 09)**
+
+| Port  | Protocol | Purpose                                                     |
+|-------|----------|-------------------------------------------------------------|
+| 8181  | HTTP     | Floonet relay (091) — localhost, nginx `wss` front-end; configurable |
+| 7456  | HTTP     | Grin Transporter (092) — mainnet (localhost, proxied by nginx) |
+| 7466  | HTTP     | Grin Transporter (092) — testnet (localhost, proxied by nginx) |
+
+**Public mining pool (GRINIUM)**
+
+| Port  | Protocol | Purpose                                                     |
+|-------|----------|-------------------------------------------------------------|
+| 3333  | TCP      | Public pool stratum — miners connect here *(public)*        |
+| 3334  | TCP      | Public pool node built-in stratum upstream — mainnet (localhost) |
+| 13334 | TCP      | Public pool node built-in stratum upstream — testnet (localhost) |
+| 8080  | HTTP     | Public pool central API (localhost, nginx-proxied)          |
+| 51820 | UDP      | Public pool WireGuard — hub ↔ gateway federation            |
+| 51821 | UDP      | Public pool WireGuard — secondary tunnel                    |
+
+**nginx front-end**
+
+| Port  | Protocol | Purpose                                                     |
+|-------|----------|-------------------------------------------------------------|
+| 80    | HTTP     | nginx (redirects to HTTPS) *(public)*                       |
+| 443   | HTTPS    | nginx file server / proxy *(public)*                        |
 
 ---
 

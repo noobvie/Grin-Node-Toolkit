@@ -44,7 +44,10 @@ const DEFAULTS = {
   wallet_address:            '',
 
   // ── Wallet HTTP API ports ──────────────────────────────────────────────────
-  wallet_foreign_api_port:   _IS_MAINNET ? 3415  : 13415,
+  // Combined listener: ONE `grin-wallet owner_api` process serves both APIs via
+  // owner_api_include_foreign, so the Foreign API rides the Owner port (the old
+  // standalone `listen` port 3415/13415 is retired). Foreign path stays /v2/foreign.
+  wallet_foreign_api_port:   _IS_MAINNET ? 3420  : 13420,
   wallet_owner_api_port:     _IS_MAINNET ? 3420  : 13420,
 
   // ── Wallet API secret files (absolute paths, chmod 600) ───────────────────
@@ -69,6 +72,12 @@ const DEFAULTS = {
 
   // ── Wallet cleanup ────────────────────────────────────────────────────────
   wallet_cleanup_hours:   1,     // auto-cancel unfinalized wallet txs older than this; 0 = disabled
+
+  // ── Balance auto-refresh ──────────────────────────────────────────────────
+  // Server-side interval (minutes) for one refresh_from_node scan that keeps the
+  // cached balance shown on /api/status fresh; 0 = disabled (balance then only
+  // updates when the node is scanned elsewhere, e.g. a manual `grin-wallet info`).
+  balance_refresh_minutes: 3,
 
   // ── Cloudflare Turnstile (optional bot protection) ────────────────────────
   turnstile_secret:       '',    // server-side secret key; empty = Turnstile disabled
@@ -111,6 +120,7 @@ function writeConfigKey(key, value) {
     'global_daily_claims_cap', 'global_hourly_claims_cap',
     'service_port', 'wallet_foreign_api_port', 'wallet_owner_api_port',
     'donation_invoice_timeout', 'low_balance_alert_grin', 'wallet_cleanup_hours',
+    'balance_refresh_minutes',
   ]);
   const boolKeys = new Set([
     'giveaway_enabled', 'donation_enabled', 'show_public_stats',

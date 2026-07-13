@@ -21,6 +21,8 @@
 #     4) Node, Wallet & Mining Status   (both networks)
 #     5) Watchdogs (global)             (node-sync · boot autostart · wallet · stratum)
 #     6) Maintenance                    (encrypted backup · restore · schedule · seed)
+#     7) Payouts & settlement           (mainnet running balance · record payments)
+#     8) Quiet hours (energy saver)     (auto-pause stratum in set hours so miners idle)
 #     C) Clean up solo mining           (Danger Zone — remove solo infra · keeps node + seed + backups)
 #     0) Back to main menu
 #
@@ -115,6 +117,10 @@ source "$SCRIPT_DIR/lib/07_solo_wallet.sh"
 # wallet lib + PAYMENT_CONFIG above — sourced after them so those are set).
 # shellcheck source=lib/07_solo_backup.sh
 source "$SCRIPT_DIR/lib/07_solo_backup.sh"
+# Quiet hours (energy saver): scheduled firewall gate on the stratum port(s).
+# Needs STRATUM_PORT_* (above) + colors/logging + _solo_pause — all defined here.
+# shellcheck source=lib/07_solo_quiet.sh
+source "$SCRIPT_DIR/lib/07_solo_quiet.sh"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOML DETECTION
@@ -600,23 +606,24 @@ _show_node_info() {
         echo -e "    Node   : ${RED}NOT RUNNING${RESET}  ${DIM}(port $api_port not listening)${RESET}"
     fi
 
-    # Coinbase wallet Foreign listener — where the node sends block rewards.
-    # Shown before Stratum: a solo miner's first question is "is my reward
-    # listener up?", so the screen reads node → wallet → mining top to bottom.
+    # Coinbase wallet listener (combined Owner+Foreign on the Owner port) —
+    # where the node sends block rewards. Shown before Stratum: a solo miner's
+    # first question is "is my reward listener up?", so the screen reads
+    # node → wallet → mining top to bottom.
     local wal_port wal_pid wal_toml wal_tmux
-    wal_port=$(sw_foreign_port "$network")
+    wal_port=$(sw_listener_port "$network")
     wal_pid=$(ss -tlnp 2>/dev/null | grep ":$wal_port " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
     wal_toml=$(sw_toml "$network" 2>/dev/null || true)
     if [[ -n "$wal_pid" ]]; then
-        echo -e "    Wallet : ${GREEN}LISTENING${RESET}  ${DIM}(PID $wal_pid, Foreign port $wal_port)${RESET}"
+        echo -e "    Wallet : ${GREEN}LISTENING${RESET}  ${DIM}(PID $wal_pid, Owner+Foreign port $wal_port)${RESET}"
         wal_tmux=$(sw_tmux_name "$network" 2>/dev/null || true)
         if [[ -n "$wal_tmux" ]] && tmux has-session -t "$wal_tmux" 2>/dev/null; then
             echo -e "    Wtmux  : ${GREEN}$wal_tmux${RESET}  ${DIM}(attach: tmux attach -t $wal_tmux)${RESET}"
         fi
     elif [[ -n "$wal_toml" && -f "$wal_toml" ]]; then
-        echo -e "    Wallet : ${RED}NOT RUNNING${RESET}  ${DIM}(configured, Foreign port $wal_port not listening)${RESET}"
+        echo -e "    Wallet : ${RED}NOT RUNNING${RESET}  ${DIM}(configured, Owner+Foreign port $wal_port not listening)${RESET}"
     else
-        echo -e "    Wallet : ${DIM}not configured${RESET}  ${DIM}(Foreign port $wal_port)${RESET}"
+        echo -e "    Wallet : ${DIM}not configured${RESET}  ${DIM}(Owner+Foreign port $wal_port)${RESET}"
     fi
 
     if ss -tlnp 2>/dev/null | grep -q ":$stratum_port "; then
@@ -856,8 +863,10 @@ _do_setup_stratum() {
 
     # BASE URL only — the node appends /v2/foreign itself when calling
     # build_coinbase; a stored ".../v2/foreign" doubles the path and 404s.
-    local default_wallet_url="http://127.0.0.1:3415"
-    [[ "$network" == "testnet" ]] && default_wallet_url="http://127.0.0.1:13415"
+    # Owner port: the solo wallet is a combined Owner+Foreign listener, so the
+    # coinbase Foreign API lives on 3420/13420 (owner_api_include_foreign).
+    local default_wallet_url="http://127.0.0.1:3420"
+    [[ "$network" == "testnet" ]] && default_wallet_url="http://127.0.0.1:13420"
     echo ""
     echo -e "${BOLD}Wallet listener URL${RESET} — where coinbase block rewards are sent."
     echo -e "  Default for local wallet: ${DIM}$default_wallet_url${RESET}  ${DIM}(base URL — the node adds /v2/foreign itself)${RESET}"
@@ -865,14 +874,23 @@ _do_setup_stratum() {
     read -r wallet_url
     [[ "$wallet_url" == "0" ]] && wallet_url=""
 
+    # A stored value is "legacy" and must be normalised if it carries the
+    # /v2/foreign suffix (older setups wrote it → doubles the path) OR still
+    # points at the old Foreign port 3415/13415 (pre-combined-listener; grin's
+    # stock toml ships this uncommented). The solo wallet now serves the Foreign
+    # build_coinbase on the Owner port (3420/13420, owner_api_include_foreign),
+    # so a surviving 3415 leaves the node calling a dead port → no coinbase.
+    local legacy_wallet=0
+    if [[ "$cur_wallet" == *"/v2/foreign\""* || "$cur_wallet" == *":3415\""* || "$cur_wallet" == *":13415\""* ]]; then
+        legacy_wallet=1
+    fi
     # Rewrite when: the operator typed a URL, none is set yet, OR the stored one
-    # carries the legacy /v2/foreign suffix (older setups wrote it — normalise).
-    if [[ -n "$wallet_url" || -z "$cur_wallet" || "$cur_wallet" == *"/v2/foreign\""* ]]; then
+    # is legacy (stale path or old Foreign port).
+    if [[ -n "$wallet_url" || -z "$cur_wallet" || $legacy_wallet -eq 1 ]]; then
         local new_url="${wallet_url:-$default_wallet_url}"
-        # Legacy value being normalised with Enter → keep its host:port, drop the path.
-        if [[ -z "$wallet_url" && "$cur_wallet" == *"/v2/foreign\""* ]]; then
-            new_url="${cur_wallet#*\"}"; new_url="${new_url%\"*}"
-        fi
+        # Legacy value normalised with Enter → snap to the network's Owner-port
+        # default (solo wallet is always local, so 127.0.0.1:<owner_port>).
+        [[ -z "$wallet_url" && $legacy_wallet -eq 1 ]] && new_url="$default_wallet_url"
         new_url="${new_url%/}"; new_url="${new_url%/v2/foreign}"
         local esc_url; esc_url=$(_sed_escape_rhs "$new_url")
         if grep -qE '^#?[[:space:]]*wallet_listener_url[[:space:]]*=' "$grin_toml" 2>/dev/null; then
@@ -1438,7 +1456,7 @@ _solo_stats_proxy_location() {
     cat << EOF
     # Proxy → $1 node Owner API (auth injected here, never exposed to the browser)
     location = /api/status/$1 {
-        limit_req zone=solo_stats_api burst=10 nodelay;
+        limit_req zone=solo_stats_api burst=40 nodelay;
         proxy_pass         http://127.0.0.1:$2/v2/owner;
         proxy_method       POST;
         proxy_set_header   Content-Type "application/json";
@@ -1497,8 +1515,11 @@ _solo_node_file_log_level() {
 # the network's grin-server.toml; falls back to the toolkit default foreign port.
 #   $1 = network (mainnet|testnet)  →  echoes a full http URL ending in /v2/foreign
 _solo_wallet_listener_url() {
-    local net="$1" default_port=3415 toml url=""
-    [[ "$net" == "testnet" ]] && default_port=13415
+    # Fallback port is the combined listener's Owner port (owner_api_include_foreign
+    # serves the Foreign API here) — matches the wallet on 3420/13420, not the old
+    # 3415/13415 Foreign listener. The direct probe still needs the /v2/foreign path.
+    local net="$1" default_port=3420 toml url=""
+    [[ "$net" == "testnet" ]] && default_port=13420
     toml="/opt/grin/node/${net}-prune/grin-server.toml"
     if [[ -f "$toml" ]]; then
         url=$(grep -E '^[[:space:]]*wallet_listener_url[[:space:]]*=' "$toml" 2>/dev/null \
@@ -1523,7 +1544,7 @@ _solo_stats_wallet_location() {
     cat << EOF
     # Liveness probe → $1 wallet Foreign API (the listener the node builds coinbase from)
     location = /api/wallet/$1 {
-        limit_req zone=solo_stats_api burst=10 nodelay;
+        limit_req zone=solo_stats_api burst=40 nodelay;
         proxy_pass            $2;
         proxy_method          POST;
         proxy_set_header      Content-Type "application/json";
@@ -2092,17 +2113,26 @@ CRON
         _solo_prompt_access_lock
     fi
 
-    # Dedicated zone (NOT the shared grin_api 30r/m used by scripts 04/06): the
-    # page polls up to 4 proxied endpoints every 10s, so one viewer alone draws
-    # ~24 req/min. 90r/m gives a NAT'd / multi-tab audience real headroom.
+    # Dedicated zone (NOT the shared grin_api 30r/m used by scripts 04/06): each page
+    # load fires 4 proxied /api/* calls, and the page's initial-load fast-retry can
+    # re-fire them a few times to self-heal a transient blank load. The 90r/m rate is
+    # ample for steady state (the page polls only every 120s); the burst (set to 40 on
+    # the /api/* locations below) is what absorbs the per-load fan-out + those retries
+    # and several rapid hard-refreshes without 503-ing the panels.
     nginx_ensure_rate_limit_zone "solo_stats_api" "90r/m" "10m" "script07-solo-stats"
 
     # Abuse guards for the PUBLIC surface that had none. /api/* is already throttled
-    # by solo_stats_api above; the static page + /data/*.json (polled 7×/10s/viewer,
-    # ~42 req/min) and raw connections were unprotected. solo_static is sized well
-    # above legit polling (180r/m ≈ 4× a single viewer, generous for NAT/multi-tab)
-    # so it only bites a flood; solo_conn caps concurrent connections per IP to blunt
-    # slowloris. Dedicated script07- zones — unique names, no collision with 04/05/06.
+    # by solo_stats_api above; the static page + /data/*.json and raw connections were
+    # unprotected. Sizing note: the guard protects against a genuine flood, but each
+    # ordinary PAGE LOAD is itself a burst — one load fires ~13 requests against this
+    # one server-level bucket (index.html + logo + config.json + 8 polled data JSON +
+    # price + split; the 4 /api/* calls use solo_stats_api, not this zone). Steady
+    # state is trivial (the page polls only every 120s ≈ 6 req/min/viewer), so the
+    # RATE is generous; the value that matters is BURST, which must swallow several
+    # rapid full reloads. burst=60 ≈ ~4–5 back-to-back loads before throttling — a fast
+    # refresh no longer 503s the HTML document, while a sustained >3/s flood still bites.
+    # solo_conn caps concurrent connections per IP to blunt slowloris. Dedicated
+    # script07- zones — unique names, no collision with 04/05/06.
     nginx_ensure_rate_limit_zone "solo_static" "180r/m" "10m" "script07-solo-static"
     nginx_ensure_conn_limit_zone "solo_conn" "10m" "script07-solo-conn"
 
@@ -2184,7 +2214,10 @@ server {
     # ample headroom for NAT'd/multi-tab viewers (HTTP/2 multiplexes to ~1 conn per
     # tab) while stopping a single IP from holding the worker pool open. Raise it
     # here if a large shared-NAT audience hits spurious 503s.
-    limit_req  zone=solo_static burst=20 nodelay;
+    # burst=60: each page load is a ~13-request burst (see zone note above), so a small
+    # burst 503s the HTML document itself on a fast refresh. 60 swallows ~4–5 rapid
+    # reloads; nodelay serves them immediately rather than queuing.
+    limit_req  zone=solo_static burst=60 nodelay;
     limit_conn solo_conn 50;
 $_ACCESS_AUTH_BLOCK
 
@@ -2516,6 +2549,20 @@ solo_cleanup() {
         log "Cleanup: removed stratum + wallet-listener watchdogs"
     fi
     echo ""
+
+    # 4b) Quiet hours (energy saver) — cron + wrapper + conf; reopens the stratum
+    #     port so cleanup never leaves miners locked out by a stale DROP rule.
+    if [[ -f "$SQ_CRON" || -f "$SQ_WRAPPER" || -f "$SQ_CONF" ]]; then
+        echo -ne "${BOLD}4b)${RESET} Remove quiet-hours schedule (energy saver) + reopen stratum? [Y/n]: "
+        read -r a || true
+        if [[ "${a,,}" != "n" ]]; then
+            [[ -x "$SQ_WRAPPER" ]] && "$SQ_WRAPPER" resume >/dev/null 2>&1 || true
+            rm -f "$SQ_CRON" "$SQ_WRAPPER" "$SQ_CONF" "$SQ_LOG"
+            success "Quiet-hours schedule removed; stratum reopened."
+            log "Cleanup: removed quiet-hours cron/wrapper/conf"
+        fi
+        echo ""
+    fi
 
     # 5) Payout-split config
     if [[ -f "$PAYMENT_CONFIG" ]]; then
@@ -3098,6 +3145,7 @@ show_menu() {
     echo -e "  ${GREEN}5${RESET}) Watchdogs (global)            ${DIM}(node-sync · boot autostart · wallet · stratum)${RESET}"
     echo -e "  ${GREEN}6${RESET}) Maintenance                   ${DIM}(encrypted backup · restore · schedule · seed)${RESET}"
     echo -e "  ${GREEN}7${RESET}) Payouts & settlement          ${DIM}(mainnet running balance · record payments)${RESET}"
+    echo -e "  ${GREEN}8${RESET}) Quiet hours (energy saver)    ${DIM}(auto-pause stratum in set hours · miners idle)${RESET}"
     echo ""
     echo -e "  ${DIM}─── Danger Zone ──────────────────────────────────${RESET}"
     echo -e "  ${RED}C${RESET}) Clean up solo mining  ${DIM}(remove solo infra · keeps node + seed + backups)${RESET}"
@@ -3105,7 +3153,7 @@ show_menu() {
     echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [A/1-7/C/0]: ${RESET}"
+    echo -ne "${BOLD}Select [A/1-8/C/0]: ${RESET}"
 }
 
 # Detect the mode of an already-deployed solo stats page by inspecting its vhost.
@@ -3176,6 +3224,7 @@ main() {
             5)   watchdog_menu || true ;;
             6)   maintenance_menu || true ;;
             7)   solo_settlement_menu || true ;;
+            8)   quiet_hours_menu || true ;;
             c)   solo_cleanup || true; _solo_pause ;;
             0)   break ;;
             *)   warn "Invalid option."; sleep 1 ;;

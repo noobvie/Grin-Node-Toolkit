@@ -1,5 +1,5 @@
 ╔══════════════════════════════════════════════════════════════════════════╗
-║           script01_ipv6_extension.txt  —  PLANNING NOTES                ║
+║           script01_ipv6_extension.md  —  PLANNING NOTES                ║
 ║           IPv6 support for build + chain-data download/share             ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 

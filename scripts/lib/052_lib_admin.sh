@@ -81,6 +81,9 @@ ROBOTS_EOF
         warn "User 'grin' not found — skipping chown (running as $USER)"
     fi
 
+    # DB lives outside the app dir (survives wallet re-install) — own it separately.
+    _drop_ensure_data_dir
+
     # Unified homepage — served directly by nginx (www-data), not by Node.js
     # /var/www/grin-drop-home/ → https://domain/  (nginx root)
     # /opt/grin/drop-test/public_html/ → https://domain/testnet/  (Node.js proxy)
@@ -201,21 +204,20 @@ drop_status_screen() {
     echo -e "  ${BOLD}Port${RESET}       : $port"
     [[ -n "$subdomain" ]] && echo -e "  ${BOLD}URL${RESET}        : ${GREEN}https://$subdomain/${DROP_NETWORK}/${RESET}"
 
-    # Wallet tmux sessions
+    # Wallet listener — single combined Owner+Foreign session (owner_api_include_foreign)
     echo ""
-    tmux has-session -t "$DROP_TMUX_TOR" 2>/dev/null \
-        && echo -e "  ${BOLD}TOR session${RESET}  : ${GREEN}● running${RESET}  (tmux: $DROP_TMUX_TOR)" \
-        || echo -e "  ${BOLD}TOR session${RESET}  : ${RED}not running${RESET}  ${DIM}(run option 2)${RESET}"
     tmux has-session -t "$DROP_TMUX_OWNER" 2>/dev/null \
-        && echo -e "  ${BOLD}Owner session${RESET}: ${GREEN}● running${RESET}  (tmux: $DROP_TMUX_OWNER)" \
-        || echo -e "  ${BOLD}Owner session${RESET}: ${RED}not running${RESET}  ${DIM}(run option 2)${RESET}"
+        && echo -e "  ${BOLD}Wallet listener${RESET}: ${GREEN}● running${RESET}  (tmux: $DROP_TMUX_OWNER)" \
+        || echo -e "  ${BOLD}Wallet listener${RESET}: ${RED}not running${RESET}  ${DIM}(run option 2)${RESET}"
 
-    ss -tlnp 2>/dev/null | grep -q ":${DROP_TOR_PORT} " \
-        && echo -e "  ${BOLD}Port :${DROP_TOR_PORT}${RESET}   : ${GREEN}listening${RESET}" \
-        || echo -e "  ${BOLD}Port :${DROP_TOR_PORT}${RESET}   : ${DIM}not listening${RESET}"
     ss -tlnp 2>/dev/null | grep -q ":${DROP_OWNER_PORT} " \
-        && echo -e "  ${BOLD}Port :${DROP_OWNER_PORT}${RESET}  : ${GREEN}listening${RESET}" \
+        && echo -e "  ${BOLD}Port :${DROP_OWNER_PORT}${RESET}  : ${GREEN}listening${RESET}  ${DIM}(Owner + Foreign API)${RESET}" \
         || echo -e "  ${BOLD}Port :${DROP_OWNER_PORT}${RESET}  : ${DIM}not listening${RESET}"
+
+    # Legacy standalone `listen` port — flag if a pre-migration session is still up.
+    if ss -tlnp 2>/dev/null | grep -q ":${DROP_TOR_PORT} "; then
+        echo -e "  ${YELLOW}⚠  Legacy port :${DROP_TOR_PORT} still listening — retire via option 2 (Stop).${RESET}"
+    fi
 
     # DB
     echo ""

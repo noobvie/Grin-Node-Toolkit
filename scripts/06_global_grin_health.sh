@@ -47,6 +47,8 @@ source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
 # ─── GrinScan lib (sourced after TOOLKIT_ROOT is set) ────────────────────────
 # shellcheck source=lib/06b_grinscan.sh
 source "$SCRIPT_DIR/lib/06b_grinscan.sh"
+# shellcheck source=lib/06d_tiny_explorer.sh
+source "$SCRIPT_DIR/lib/06d_tiny_explorer.sh"
 WEB_SRC="$TOOLKIT_ROOT/web/06_stats_map/stats"
 LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/global_grin_health_$(date +%Y%m%d_%H%M%S).log"
@@ -234,14 +236,17 @@ detect_node() {
     NODE_URL="http://127.0.0.1:${NODE_PORT}/v2/foreign"
 
     if [[ $NODE_PORT -eq $MAINNET_PORT ]]; then
-        # Script 01 names tmux sessions grin_<nodetype>_<networktype>, so the active
-        # session name reliably identifies which node is running on port 3413.
-        # mainnet-full (archive) is always preferred: it provides complete block
-        # history required by the explorer and the stats incremental updater.
-        if tmux has-session -t "grin_full_mainnet" 2>/dev/null; then
+        # Script 01 names tmux sessions grin_<nodetype>_<networktype>, launched
+        # as the grin user on its own tmux socket (see grin_node_control.sh) —
+        # _gns_has_grin_session checks that socket first, then the root one,
+        # so the active session name reliably identifies which node is running
+        # on port 3413. mainnet-full (archive) is always preferred: it provides
+        # complete block history required by the explorer and the stats
+        # incremental updater.
+        if _gns_has_grin_session "grin_full_mainnet"; then
             NODE_DIR="/opt/grin/node/mainnet-full"
             NODE_TYPE="full"
-        elif tmux has-session -t "grin_pruned_mainnet" 2>/dev/null; then
+        elif _gns_has_grin_session "grin_pruned_mainnet"; then
             NODE_DIR="/opt/grin/node/mainnet-prune"
             NODE_TYPE="prune"
         elif [[ -d /opt/grin/node/mainnet-full ]]; then
@@ -1951,6 +1956,40 @@ show_menu_c() {
     echo -ne "${BOLD}Select [0-7, Z, X]: ${RESET}"
 }
 
+show_menu_d() {
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  D) Tiny Explorer — single-block deep-link explorer${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  ${DIM}Node.js / Express — stateless, mainnet-only, no SQLite, no crawler${RESET}"
+    echo -e "  ${DIM}Answers /block/<height> for pool deep-links (e.g. scan.grin.money)${RESET}"
+    echo -e "  ${DIM}Port: ${TINYX_PORT}  ·  best on an ARCHIVE node (old permalinks resolve)${RESET}"
+    echo ""
+
+    local inst="${RED}✗${RESET}" run="${YELLOW}stopped${RESET}" ngx="${YELLOW}not configured${RESET}"
+    [[ -f "$TINYX_CONFIG" ]] && inst="${GREEN}✓${RESET}"
+    systemctl is-active "$TINYX_SVC" &>/dev/null && run="${GREEN}running${RESET}"
+    [[ -f "$NGINX_TINYX_CONF" ]] && ngx="${GREEN}✓ configured${RESET}"
+
+    echo -e "  ${GREEN}1${RESET})   Install         ${DIM}Node.js + npm deps + systemd unit${RESET}"
+    echo -e "  ${GREEN}2${RESET})   Configure       ${DIM}write config.json (prompts domain)${RESET}  [$inst]"
+    echo -e "  ${GREEN}3${RESET})   Service Control ${DIM}Start / Stop / Remove${RESET}  [$run]"
+    echo -e "  ${GREEN}4${RESET})   Setup Nginx     ${DIM}HTTPS reverse proxy + certbot (repoints C's domain if reused)${RESET}  [$ngx]"
+    echo -e "  ${GREEN}5${RESET})   Auto-Start      ${DIM}systemctl enable (survive reboots)${RESET}"
+    echo -e "  ${GREEN}6${RESET})   Status"
+    echo -e "  ${GREEN}7${RESET})   View Logs"
+    echo -e "  ${GREEN}U${RESET})   Update App      ${DIM}redeploy server.js + web files, refresh npm deps${RESET}"
+    echo -e "  ${RED}Z${RESET})   Nuke            ${DIM}stop + remove service, data dir, nginx config${RESET}"
+    echo ""
+    echo -e "  ${DIM}0) Back${RESET}"
+    echo -e "  ${DIM}[Enter] Refresh menu${RESET}"
+    echo -e "  ${DIM}DNS: ensure A-record points to this server before running Setup Nginx (4)${RESET}"
+    echo ""
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -ne "${BOLD}Select [0-7, U, Z]: ${RESET}"
+}
+
 show_main_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -1965,7 +2004,7 @@ show_main_menu() {
         && _nginx_st="${GREEN}[OK]${RESET} " \
         || _nginx_st="${RED}[NOK]${RESET}"
     echo -e "  ${BOLD}Requirements:${RESET}"
-    echo -e "  ${_node_st}  Grin node running  ${DIM}(A requires mainnet · B needs pruned or full · C requires archive)${RESET}"
+    echo -e "  ${_node_st}  Grin node running  ${DIM}(A requires mainnet · B needs pruned or full · C & D require archive)${RESET}"
     echo -e "  ${_nginx_st}  Nginx installed    ${DIM}(use option N to install)${RESET}"
     echo -e "  ${YELLOW}[--]${RESET}  DNS A-records — confirm via A→4 or C→4 before nginx setup (B: see DNS hint in menu)"
     echo ""
@@ -1984,10 +2023,13 @@ show_main_menu() {
     echo -e "  ${GREEN}C${RESET})   Grin Explorer by Grincoin.org"
     echo -e "      ${DIM}Rust + Rocket — archive node required${RESET}"
     echo ""
+    echo -e "  ${GREEN}D${RESET})   Tiny Explorer"
+    echo -e "      ${DIM}Stateless single-block explorer for pool deep-links — mainnet, archive node (e.g. scan.grin.money)${RESET}"
+    echo ""
     echo -e "  ${DIM}0) Back to main menu${RESET}"
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [N/A/B/C/0]: ${RESET}"
+    echo -ne "${BOLD}Select [N/A/B/C/D/0]: ${RESET}"
 }
 
 run_menu_a() {
@@ -2053,6 +2095,27 @@ run_menu_c() {
     done
 }
 
+run_menu_d() {
+    while true; do
+        show_menu_d
+        read -r choice
+        case "${choice^^}" in
+            1) tinyx_install         || true ;;
+            2) tinyx_configure       || true ;;
+            3) tinyx_service_control || true ;;
+            4) tinyx_setup_nginx     || true ;;
+            5) tinyx_autostart       || true ;;
+            6) tinyx_status          || true ;;
+            7) tinyx_logs            || true ;;
+            U) tinyx_update          || true ;;
+            Z) tinyx_nuke            || true ;;
+            0) break                          ;;
+            "") ;;  # Enter = refresh menu
+            *) warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
 run_interactive() {
     while true; do
         show_main_menu
@@ -2062,6 +2125,7 @@ run_interactive() {
             A) run_menu_a            ;;
             B) run_menu_b            ;;
             C) run_menu_c            ;;
+            D) run_menu_d            ;;
             0) break                 ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac

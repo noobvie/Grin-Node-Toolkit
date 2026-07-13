@@ -36,7 +36,7 @@
 #   3/5)  nginx HTTPS reverse proxy  (/v2/foreign, JSON-RPC)  (MODE B)
 #           · Exposes the read-only Foreign API — Owner API stays private
 #           · CORS enabled so any website can query from a browser
-#           · Rate-limited (10 r/s, burst 20) and connection-limited (20 conn/IP)
+#           · Rate-limited (300 r/m, burst 200) and connection-limited (20 conn/IP)
 #           · Returns HTTP 429 on excess; active from proxy setup, no status page required
 #
 #   5/7)  Live status page  (https://domain/)
@@ -440,7 +440,7 @@ REST_BLOCK = (
     '        add_header Access-Control-Allow-Origin  "*" always;\n'
     '        add_header Access-Control-Allow-Methods "GET, OPTIONS" always;\n'
     '        add_header Cache-Control        "public, max-age=60" always;\n'
-    '        limit_req  zone=grin_api burst=30 nodelay;\n'
+    '        limit_req  zone=grin_api burst=200 nodelay;\n'
     '        try_files $uri =404;\n'
     '    }\n'
     '\n'
@@ -711,7 +711,7 @@ ${_proxy_auth_header}
         proxy_set_header   X-Forwarded-Proto \$scheme;
         proxy_read_timeout 60;
         client_max_body_size 8k;
-        limit_req  zone=grin_api  burst=20 nodelay;
+        limit_req  zone=grin_api  burst=200 nodelay;
         limit_conn grin_conn 20;
     }
 

@@ -2,10 +2,10 @@
 /**
  * db.js — SQLite schema and helpers for Grin Drop (better-sqlite3).
  *
- * DB path:
- *   Mainnet: /opt/grin/drop-main/grin_drop_main.db
- *   Testnet: /opt/grin/drop-test/grin_drop_test.db
- *   (set via DROP_DB environment variable)
+ * DB path (set via the DROP_DB environment variable by the systemd unit):
+ *   Mainnet: /opt/grin/drop-main-data/drop-main.db
+ *   Testnet: /opt/grin/drop-test-data/drop-test.db
+ *   The DB lives OUTSIDE the wallet/app dir so a wallet re-install can't wipe it.
  *
  * Tables:
  *   claims    — one row per giveaway transaction
@@ -22,8 +22,10 @@ const fs       = require('fs');
 const path     = require('path');
 const { DatabaseSync: Database } = require('node:sqlite');
 
-const DB_PATH = process.env.DROP_DB
-  || '/opt/grin/drop-test/grin_drop_test.db';
+const DB_PATH = process.env.DROP_DB;
+if (!DB_PATH) {
+  throw new Error('DROP_DB environment variable is not set — the systemd unit must provide it.');
+}
 
 let _db = null;
 

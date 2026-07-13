@@ -881,6 +881,100 @@ app.get('/api/block/:ref', async (req, res) => {
   res.status(404).json({ error: 'Block not found', hint: 'cache_miss' });
 });
 
+// ── Kernel & output lookup ─────────────────────────────────────────────────────
+// get_kernel and get_outputs both live on the Foreign API and both work on a
+// PRUNED node (no archive gate needed): the kernel MMR is fully retained (any
+// excess resolves for all heights) and get_outputs answers from the live UTXO
+// set. A spent + pruned output can no longer be located — surfaced as "not found".
+// In-memory TTL caches (kept out of SQLite to keep the DB block-only): kernels are
+// immutable → long TTL; output spent-status is mutable → short TTL.
+
+const kernelCache = new Map(); // excess → { data, at }
+const outputCache = new Map(); // commit → { data, at }
+const ENTITY_CACHE_MAX = 500;
+function entityCacheGet(map, key, ttl) {
+  const e = map.get(key);
+  if (!e) return undefined;
+  if (Date.now() - e.at >= ttl) { map.delete(key); return undefined; }
+  map.delete(key); map.set(key, e); // refresh recency
+  return e.data;
+}
+function entityCacheSet(map, key, data) {
+  map.set(key, { data, at: Date.now() });
+  while (map.size > ENTITY_CACHE_MAX) map.delete(map.keys().next().value);
+}
+
+// Kernel excess and output commitment are both 33-byte compressed points → 66 hex.
+function isCommitLike(s) { return /^[0-9a-fA-F]{64,66}$/.test(s); }
+
+// Cheap header read to attach the containing block's hash + timestamp so the
+// detail page can link back to the block (get_header works at any height on a
+// pruned node). Prefers the local blocks table when the height is cached.
+async function attachBlockRef(obj, height) {
+  if (height == null) return obj;
+  try {
+    const cached = db.prepare('SELECT hash, timestamp FROM blocks WHERE height = ?').get(height);
+    if (cached) { obj._block_hash = cached.hash; obj._timestamp = cached.timestamp; return obj; }
+  } catch {}
+  try {
+    const hdr = await foreignApi('get_header', [height, null, null]);
+    if (hdr) {
+      obj._block_hash = hdr.hash;
+      obj._timestamp  = Math.floor(new Date(hdr.timestamp).getTime() / 1000);
+    }
+  } catch {}
+  return obj;
+}
+
+async function getKernel(excess) {
+  const ttl = config.entity_cache_ms || 300000;
+  const hit = entityCacheGet(kernelCache, excess, ttl);
+  if (hit) return hit;
+  const located = await foreignApi('get_kernel', [excess, null, null]); // Ok(None) → null
+  if (!located || located.height == null) return null;
+  await attachBlockRef(located, located.height);
+  entityCacheSet(kernelCache, excess, located);
+  return located;
+}
+
+async function getOutput(commit) {
+  const ttl = config.output_cache_ms || 60000;
+  const hit = entityCacheGet(outputCache, commit, ttl);
+  if (hit) return hit;
+  const arr = await foreignApi('get_outputs', [[commit], null, null, true, false]);
+  const out = Array.isArray(arr) && arr.length ? arr[0] : null;
+  if (!out) return null;
+  if (out.block_height != null) await attachBlockRef(out, out.block_height);
+  entityCacheSet(outputCache, commit, out);
+  return out;
+}
+
+app.get('/api/kernel/:excess', async (req, res) => {
+  const ex = req.params.excess;
+  if (!isCommitLike(ex)) return res.status(400).json({ error: 'Invalid kernel excess' });
+  try {
+    const located = await getKernel(ex);
+    if (!located) return res.status(404).json({ error: 'Kernel not found', hint: tipState.node_mode });
+    const out = Object.assign({}, located); // keep live confirmations off the cached object
+    if (tipState.height) out._confirmations = tipState.height - located.height + 1;
+    res.setHeader('Cache-Control', 'public, max-age=30');
+    return res.json(out);
+  } catch (e) { return res.status(502).json({ error: 'node unreachable' }); }
+});
+
+app.get('/api/output/:commit', async (req, res) => {
+  const c = req.params.commit;
+  if (!isCommitLike(c)) return res.status(400).json({ error: 'Invalid output commitment' });
+  try {
+    const output = await getOutput(c);
+    if (!output) return res.status(404).json({ error: 'Output not found', hint: tipState.node_mode });
+    const out = Object.assign({}, output);
+    if (tipState.height && out.block_height != null) out._confirmations = tipState.height - out.block_height + 1;
+    res.setHeader('Cache-Control', 'public, max-age=15');
+    return res.json(out);
+  } catch (e) { return res.status(502).json({ error: 'node unreachable' }); }
+});
+
 
 app.get('/api/history', (req, res) => {
   const GENESIS_TS = 1547520000; // 2019-01-15 UTC
@@ -1008,6 +1102,14 @@ const _pageMeta = {
     title: `Block — GrinScan ${_netLabel}`,
     desc:  `Grin ${_netLabel} block details: hash, timestamp, difficulty, kernels, and outputs.`,
   },
+  kernel: {
+    title: `Kernel — GrinScan ${_netLabel}`,
+    desc:  `Look up a Grin ${_netLabel} transaction kernel by excess: block height, features, fee, and confirmations. The kernel excess is Grin's payment proof — a transaction-ID equivalent revealing no amount or address.`,
+  },
+  output: {
+    title: `Output — GrinScan ${_netLabel}`,
+    desc:  `Look up a Grin ${_netLabel} output by commitment: type, spent/unspent status, block height, and confirmations on the MimbleWimble blockchain.`,
+  },
   info: {
     title: `Info — GrinScan ${_netLabel}`,
     desc:  `Grin ${_netLabel} network info: emission schedule, live stats, hashrate charts, peer list, and API reference.`,
@@ -1062,7 +1164,7 @@ window.GRINSCAN_BANNERS=${JSON.stringify(readBanners())};
   return out;
 }
 
-['index.html', 'block.html', 'info.html', 'api.html'].forEach(page => {
+['index.html', 'block.html', 'kernel.html', 'output.html', 'info.html', 'api.html'].forEach(page => {
   const route   = page === 'index.html' ? '/' : '/' + page;
   const pageKey = page.replace('.html', '');
   app.get(route, (_req, res) => {

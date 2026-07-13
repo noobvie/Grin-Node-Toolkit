@@ -7,7 +7,7 @@
 # forwards the raw stratum TCP — prefixed with a PROXY-protocol v2 header carrying
 # the real miner IP — over a WireGuard tunnel to this region's internal port on the
 # central pool box. The central stratum-server stamps the region from that port.
-# See flowcharts/script07_mining_public_planning.txt (Model C, Phases 2–3).
+# See docs/generated/script07_implementation.md (Model C appendix, Phases 2–3).
 #
 # Sourced, not executed — inherits colors/log helpers from the parent script
 # (info/warn/success/error/log, $TOOLKIT_ROOT, _pool_pause, pool_mode_conflict_check).

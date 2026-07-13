@@ -192,3 +192,68 @@ accumulated coinbase to cold storage on a schedule.
 - [~] `admin_audit_log` single shape **done** (`migrateAdminAuditLog`); "every admin action audited" — *not line-audited per handler*
 - [x] confirm_depth 1440 set; [ ] no Tor probe / nonce orphan check + exact reversal / idempotent sends — *verify money logic against live DB*
 - [ ] HTTPS enforced; secrets only in `pool.json`, never in code
+
+---
+
+## C. Re-audit 2026-07-10 (fresh pass — auth + money path verified against current code)
+
+Verified the auth stack and the fund-moving path line-by-line. **Auth is solid** — TOTP login
+returns *no* session cookie until the second factor passes ([index.js:939-941](../../web/07_mining_pool_public/back-end-pool/index.js#L939-L941));
+money/destructive routes use `freshAdmin` (password step-up via `pwa`); refresh tokens rotate on
+`token_version`; account lockout + timing-equalized login (`_dummyHash`). **Withdrawal money
+logic is solid** — CAS balance lock (`WHERE balance >= ?`), one-pending-per-address, exact
+reversal on fail/expiry, slate-id binding on slatepack finalize. **Incentives** never overdraw
+(`debitPrizePool` floor-checks) and the join bonus is Sybil-gated on first real payout.
+
+New / still-open findings:
+
+### C1 — [Medium] `/api/pool/miners` and `/api/pool/payments` leak full raw data, unauthenticated *and* un-rate-limited
+- **Evidence:** [index.js:1767-1779](../../web/07_mining_pool_public/back-end-pool/index.js#L1767-L1779)
+  returns `grin_address, balance, is_online` for the top-500 addresses by balance (full addresses
+  + exact live balances). [index.js:1781-1793](../../web/07_mining_pool_public/back-end-pool/index.js#L1781-L1793)
+  runs `SELECT * FROM withdrawals … LIMIT 500` — full payout history with complete addresses,
+  amounts, timestamps, and every current/future column. **Neither has `rateLimiter.middleware('public')`**
+  (most other public routes do), so both are freely scrapeable.
+- **Impact:** On a privacy coin this is the worst public-leak class — anyone can enumerate every
+  miner's payout address, exact balance, and full payment cadence, and correlate the two lists.
+  This is the audit's long-standing open item ("public payments/miners aggregated or gated —
+  *verify*"); **it is still unaddressed in the current code.**
+- **Fix:** Return aggregates/anonymized rows only — truncated addresses (`grin1abc…wxyz`), bucketed
+  or omitted balances, totals/counts. Replace `SELECT *` with an explicit safe column list. Add the
+  `public` rate-limiter. (Per-address pages already correctly show only that exact address's data.)
+
+### C2 — [Low-Medium] Tor-rail withdrawal has no ownership gate → balance-lock griefing / forced payout
+- **Evidence:** `POST /api/account/:addr/withdraw` with `method:'tor'` (the default) takes **no**
+  IP-proof — any anonymous caller triggers a full-balance withdrawal for *any* address
+  ([index.js:2037-2040](../../web/07_mining_pool_public/back-end-pool/index.js#L2037-L2040)). The
+  design note is right that this can't *steal* (funds go to the address's own Tor listener), but:
+- **Impact:** (a) A griefer can force-lock a victim's balance in a pending withdrawal; the
+  one-pending-per-address cap then blocks the *real* owner from withdrawing for the full retry
+  window (up to 6+12+24+48h) if the victim's Tor listener is offline. Re-triggerable → indefinite
+  withdrawal denial. (b) Forces premature output consolidation / payout timing on the victim.
+  No fund loss, but a cheap, unauthenticated DoS on any miner's payouts.
+- **Fix:** Apply the same `verifyIpProof` throttle to the Tor rail (or a per-address re-trigger
+  cooldown), and/or let the owner cancel a pending Tor withdrawal they didn't start.
+
+### C3 — [Low] Access token survives logout & password-change until it expires (≤1h)
+- **Evidence:** `revokeUserTokens()` only bumps `token_version` (invalidates *refresh* tokens);
+  `verifyAccessToken()` never re-checks `tv` against the DB ([auth.js:206-218](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L206-L218),
+  [280-290](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L280-L290)). So a stolen/live
+  access token keeps working for up to 1h after the victim logs out or changes their password.
+- **Impact:** Standard stateless-JWT tradeoff; low, given the 1h TTL and httpOnly+sameSite cookies.
+  Worth closing for the admin surface: either check `tv` (one indexed lookup) on `secureAdmin`/
+  `freshAdmin`, or shorten the admin access TTL.
+
+### C4 — [Info] Confirmations of accepted/known items
+- **IP-proof gate** ([owner-proof.js](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js)):
+  the "proof" is a *client-submitted* low-entropy IP string, throttled 8/10 min. Fine as an
+  anti-griefing gate — the slatepack payout's real protection is age-encryption to the owner
+  address (a non-owner who passes the gate gets an undecryptable blob). No change needed; documented.
+- **Fake metrics** on the public system-health surface + per-handler audit-log coverage remain the
+  open items from §B (D1). `/api/admin/health/system` fake metrics are admin-only (lower severity
+  than a public page). `/api/admin/miners/:addr/inject` credits balance under `secureAdmin` (not
+  `freshAdmin`) — if it can move funds, consider promoting it to `freshAdmin`.
+
+**Not re-examined this pass (flagged for a future deep dive):** stratum share-validation/PPLNS
+accounting internals, the lottery draw RNG/verifiable-seed, and orphan-reversal against a live DB
+— the existing §B checklist covers their requirements but they were not line-verified here.

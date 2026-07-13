@@ -150,6 +150,9 @@ HR_HISTORY_RETENTION_DAYS = 1830 # daily pool-hashrate history depth (~5 yr, cov
 RECENT_CAP = 2000                # max blocks in the output list (covers a 5-yr yearly chart)
 C32_SCALE = 16384                # Cuckatoo32 solution-rate constant (32 * 2^9)
 NET_DIFF_WINDOW = 30             # blocks to average network difficulty/hashrate over
+NET_HR_24H_WINDOW = 1440         # blocks (~24h) for the SMOOTH network hashrate the
+                                 # stats-page earnings estimates divide by (low-variance;
+                                 # the 30-block figure above is too noisy for a 1/hr ratio)
 
 # Per-share work credit. minimum_share_difficulty defaults to 1 — below the C32
 # floor — so the node submits EVERY cycle a miner finds and logs its raw ACTUAL
@@ -539,6 +542,54 @@ def query_node_block(net, height):
         return data.get("result", {}).get("Ok")
     except Exception:
         return None
+
+
+def query_node_header(net, height):
+    """Foreign API get_header 'Ok' dict (the header itself, not wrapped in .header)
+    for `height`, or None. Unlike get_block, get_header resolves at ANY height on a
+    pruned node (the header+kernel chain is complete), so it's the safe call for a
+    24h-deep look-back that could otherwise fall below the block-body pruning horizon.
+    """
+    secret_path = f"/opt/grin/node/{net}-prune/.foreign_api_secret"
+    try:
+        with open(secret_path) as fh:
+            secret = fh.read().strip()
+    except OSError:
+        return None
+    port = NODE_PORTS[net]
+    body = json.dumps({"jsonrpc": "2.0", "method": "get_header",
+                       "params": [int(height), None, None], "id": 1}).encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/v2/foreign", data=body)
+    req.add_header("Content-Type", "application/json")
+    tok = base64.b64encode(f"grin:{secret}".encode()).decode()
+    req.add_header("Authorization", "Basic " + tok)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+        return data.get("result", {}).get("Ok")
+    except Exception:
+        return None
+
+
+def network_hashrate_24h(net, height):
+    """24h-average network hashrate (G/s) from two get_header calls NET_HR_24H_WINDOW
+    blocks apart, or None. Δtotal_difficulty · 42 / 16384 / Δt over ~1440 blocks — the
+    same C32 formula as the live figure but low-variance, so the stats page can divide
+    by it for the earnings estimates without inheriting per-block jitter."""
+    if height is None or height <= NET_HR_24H_WINDOW:
+        return None
+    cur = query_node_header(net, int(height))
+    past = query_node_header(net, int(height) - NET_HR_24H_WINDOW)
+    if not cur or not past:
+        return None
+    try:
+        dd = int(cur["total_difficulty"]) - int(past["total_difficulty"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    ct, pt = _block_ts_epoch(cur), _block_ts_epoch(past)
+    if ct is None or pt is None or dd <= 0 or ct - pt <= 0:
+        return None
+    return round(hashrate_gps(dd, ct - pt), 3)
 
 
 def _block_ts_epoch(header):
@@ -1374,12 +1425,21 @@ def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now,
     # Carry the last-good network figures as the final fallback so a transient node
     # hiccup (or a no-new-block tick) never blanks the stats-page tiles.
     net_hr = net_prev.get("hr_gps")
+    net_hr_24h = net_prev.get("hr_gps_24h")
     net_diff_pb = net_prev.get("diff_pb")
     if status:
         tip = status.get("tip", {})
         height = tip.get("height")
         diff = tip.get("total_difficulty")
         peers = status.get("connections")
+        # Smooth 24h-average network hashrate (get_header look-back, ~1440 blocks) —
+        # the stats page divides the earnings estimates by this, not the noisy live
+        # short-window figure. Last-good carried in net_prev so a transient node blip
+        # (or height < window on a young testnet) never zeroes it.
+        lb_hr_24h = network_hashrate_24h(net, height)
+        if lb_hr_24h is not None:
+            net_hr_24h = lb_hr_24h
+            net_prev["hr_gps_24h"] = net_hr_24h
         # Preferred source: a STATELESS look-back over a fixed block window (two
         # get_block calls). Correct on every run including the first after an
         # upgrade — no net_prev warm-up — so the Network Difficulty/Hashrate tiles
@@ -1430,7 +1490,8 @@ def build_poolstats(net, miners_payload, blocks_payload, found, net_prev, now,
         "network": {
             "height": height, "difficulty": diff,
             "difficulty_per_block": net_diff_pb,
-            "hashrate_gps": net_hr, "connections": peers,
+            "hashrate_gps": net_hr, "hashrate_gps_24h": net_hr_24h,
+            "connections": peers,
         },
     }
 

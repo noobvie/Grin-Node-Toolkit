@@ -288,6 +288,11 @@ _drop_wallet_reinstall() {
     _drop_ensure_system_user || { pause; return; }
     echo ""
 
+    # Rescue the DB out of the wallet dir BEFORE the rm -rf below wipes it
+    # (migrates a legacy in-dir DB to the persistent DROP_DATA_DIR; no-op if
+    # already relocated). Claim history / cooldowns / donations then survive.
+    _drop_ensure_data_dir
+
     echo -e "  ${BOLD}— Clean existing installation${RESET}"
     if [[ -d "$DROP_WALLET_DIR" ]] && [[ -n "$(ls -A "$DROP_WALLET_DIR" 2>/dev/null)" ]]; then
         warn "Existing wallet installation detected in $DROP_WALLET_DIR"
@@ -637,10 +642,10 @@ _drop_init_wallet() {
     echo -e "  ${YELLOW}  It is stored in PLAIN TEXT — your hosting provider and anyone${RESET}"
     echo -e "  ${YELLOW}  with root access can read it. Keep balance low.${RESET}"
     echo ""
-    echo -ne "  Save passphrase for auto-start? [y/N]: "
+    echo -ne "  Save passphrase for auto-start? [Y/n]: "
     local save_pass
     read -r save_pass || true
-    [[ "${save_pass,,}" == "y" ]] && _drop_save_pass "$wallet_pass"
+    [[ "${save_pass,,}" != "n" ]] && _drop_save_pass "$wallet_pass"
     echo ""
 
     # ── Save seed words ──────────────────────────────────────────────────────
@@ -938,9 +943,9 @@ _drop_start_session() {
         warn "Passphrase file not found: $DROP_PASS"
         warn "The wallet boots LOCKED without it — balance / claim / donate will all fail."
         echo ""
-        echo -ne "  Save the passphrase to $DROP_PASS now? [y/N]: "
+        echo -ne "  Save the passphrase to $DROP_PASS now? [Y/n]: "
         local save_now; read -r save_now || true
-        if [[ "${save_now,,}" == "y" ]]; then
+        if [[ "${save_now,,}" != "n" ]]; then
             echo -ne "  Enter wallet passphrase: "
             local manual_pass; read -rs manual_pass; echo ""
             if [[ -n "$manual_pass" ]]; then

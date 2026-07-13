@@ -67,9 +67,54 @@ function actLog(level, msg) {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function err(res, msg, code = 400) {
-  return res.status(code).json({ error: msg });
+function err(res, msg, code = 400, reason = null) {
+  const body = { error: msg };
+  if (reason) body.reason = reason;
+  return res.status(code).json(body);
 }
+
+// ── Wallet error classification ──────────────────────────────────────────────
+// Every wallet-touching endpoint used to collapse all failures into one opaque
+// 503 ("Wallet temporarily unavailable"), and the frontend then blamed a "full
+// scan / LMDB write lock" for ANY 503 — masking the real cause (node down,
+// wallet listener down, out of funds).  classifyWalletError() maps the
+// underlying error string to a machine-readable `reason` + a user-facing message
+// so the UI can state the truth.  Order matters: wallet.js already labels
+// owner-listener problems explicitly (OWNER_API_DOWN etc.), so check those first;
+// a node-unreachable error carries "get_tip … Connection refused" instead.
+function classifyWalletError(e) {
+  const m = (e && e.message) ? String(e.message) : String(e);
+  if (/OWNER_API_DOWN|OWNER_API_TIMEOUT|OWNER_SECRET_|FOREIGN_SECRET_|init_secure_api|HTTP 401/i.test(m))
+    return { reason: 'wallet_down',
+             message: 'The wallet service is not responding right now — please try again shortly.' };
+  if (/get_tip|Connection refused|error trying to connect|Node not ready|NodeNotReady|node_api/i.test(m))
+    return { reason: 'node_unreachable',
+             message: 'The Grin node is unreachable right now — the wallet cannot reach the blockchain. Please try again shortly.' };
+  if (/Not enough funds|NotEnoughFunds|insufficient/i.test(m))
+    return { reason: 'insufficient_funds',
+             message: 'The drop wallet is temporarily out of spendable funds — please try again later.' };
+  if (/TimeoutError|timeout|busy|restarting|write lock|LMDB/i.test(m))
+    return { reason: 'busy',
+             message: 'The wallet is busy syncing — please try again in a minute.' };
+  return { reason: 'unavailable',
+           message: 'Wallet temporarily unavailable — try again shortly.' };
+}
+
+// Send a classified 503 for a caught wallet/node error.
+function walletErr(res, e) {
+  const { reason, message } = classifyWalletError(e);
+  return err(res, message, 503, reason);
+}
+
+// ── Wallet activity tracker ──────────────────────────────────────────────────
+// The background balance refresher (see BACKGROUND INTERVALS) runs a
+// refresh_from_node scan that holds grin-wallet's single LMDB write lock for its
+// whole duration.  To keep it from delaying a real user transaction, every
+// wallet-mutating endpoint stamps the current time here; the refresher skips its
+// cycle if a user op ran within WALLET_QUIET_MS.
+let _lastWalletActivity = 0;
+const WALLET_QUIET_MS = 35_000;
+function markWalletActivity() { _lastWalletActivity = Date.now(); }
 
 function truncAddr(addr) {
   return addr.length > 12 ? addr.slice(0, 6) + '...' + addr.slice(-4) : addr;
@@ -346,6 +391,7 @@ app.post('/api/claim', async (req, res) => {
   const timeoutMin = parseInt(cfg.slatepack_expire_min, 10) || 5;
   const claimId    = db.createClaim(address, amount, timeoutMin);
   actLog('INFO', `CLAIM_INIT addr=${truncAddr(address)} claim_id=${claimId}`);
+  markWalletActivity();
 
   let slatepack = '';
   try {
@@ -389,7 +435,7 @@ app.post('/api/claim', async (req, res) => {
   } catch (e) {
     db.setClaimStatus(claimId, 'failed');
     actLog('ERROR', `WALLET_FAIL cmd=init_send claim_id=${claimId} err=${e.message}`);
-    return err(res, 'Wallet temporarily unavailable — try again shortly', 503);
+    return walletErr(res, e);
   }
 
   db.setSlatepackOut(claimId, slatepack);
@@ -444,6 +490,7 @@ app.post('/api/claim/anonymous', async (req, res) => {
   const timeoutMin = parseInt(cfg.slatepack_expire_min, 10) || 5;
   const claimId    = db.createClaim(anonAddr, anonAmount, timeoutMin);
   actLog('INFO', `ANON_CLAIM_INIT ip_hash=${anonAddr.slice(0, 12)} claim_id=${claimId} amount=${anonAmount}`);
+  markWalletActivity();
 
   let slatepack = '';
   try {
@@ -475,7 +522,7 @@ app.post('/api/claim/anonymous', async (req, res) => {
   } catch (e) {
     db.setClaimStatus(claimId, 'failed');
     actLog('ERROR', `WALLET_FAIL cmd=anon_claim claim_id=${claimId} err=${e.message}`);
-    return err(res, 'Wallet temporarily unavailable — try again shortly', 503);
+    return walletErr(res, e);
   }
 
   db.setSlatepackOut(claimId, slatepack);
@@ -510,6 +557,7 @@ app.post('/api/finalize', async (req, res) => {
   }
 
   actLog('INFO', `FINALIZE_ATTEMPT claim_id=${claimId}`);
+  markWalletActivity();
 
   let txSlateId = '';
   try {
@@ -560,7 +608,7 @@ app.post('/api/finalize', async (req, res) => {
     }
   } catch (e) {
     actLog('ERROR', `WALLET_FAIL cmd=finalize claim_id=${claimId} err=${e.message}`);
-    return err(res, 'Wallet temporarily unavailable — try again shortly', 503);
+    return walletErr(res, e);
   }
 
   db.setClaimFinalized(claimId, responseSplate, txSlateId);
@@ -591,6 +639,7 @@ app.post('/api/donate/receive', async (req, res) => {
   if (!validateSlatepack(sendSlate)) return err(res, 'Invalid slatepack — must be BEGINSLATEPACK...ENDSLATEPACK (max 8192 bytes)');
 
   actLog('INFO', 'DONATE_RECEIVE_ATTEMPT');
+  markWalletActivity();
 
   try {
     const session = await ownerApiSession();
@@ -635,7 +684,7 @@ app.post('/api/donate/receive', async (req, res) => {
     res.json({ response_slatepack: responseSlatepack });
   } catch (e) {
     actLog('ERROR', `DONATE_RECEIVE_FAIL err=${e.message}`);
-    return err(res, 'Wallet temporarily unavailable — try again shortly', 503);
+    return walletErr(res, e);
   }
 });
 
@@ -664,6 +713,7 @@ app.post('/api/donate/invoice', async (req, res) => {
   const timeoutMin = parseInt(cfg.donation_invoice_timeout, 10) || 30;
 
   actLog('INFO', `DONATE_INVOICE_ATTEMPT amount=${amount} addr=${truncAddr(address)}`);
+  markWalletActivity();
 
   try {
     const session = await ownerApiSession();
@@ -701,7 +751,7 @@ app.post('/api/donate/invoice', async (req, res) => {
     res.json({ invoice_id: invoiceId, invoice_slatepack: invoiceSlatepack });
   } catch (e) {
     actLog('ERROR', `DONATE_INVOICE_FAIL err=${e.message}`);
-    return err(res, 'Wallet temporarily unavailable — try again shortly', 503);
+    return walletErr(res, e);
   }
 });
 
@@ -727,6 +777,7 @@ app.post('/api/donate/finalize', async (req, res) => {
   }
 
   actLog('INFO', `DONATE_FINALIZE_ATTEMPT invoice_id=${invoiceId}`);
+  markWalletActivity();
 
   let txId = '';
   try {
@@ -762,7 +813,7 @@ app.post('/api/donate/finalize', async (req, res) => {
     }
   } catch (e) {
     actLog('ERROR', `DONATE_FINALIZE_FAIL invoice_id=${invoiceId} err=${e.message}`);
-    return err(res, 'Wallet temporarily unavailable — try again shortly', 503);
+    return walletErr(res, e);
   }
 
   db.confirmInvoiceDonation(invoiceId, txId);
@@ -845,6 +896,45 @@ setInterval(async () => {
   try { await cancelAbandonedWalletTxs(); }
   catch (e) { actLog('WARN', `WALLET_CLEANUP_ERR err=${e.message}`); }
 }, 600_000);
+
+// Keep the cached balance fresh with a single server-side node scan.
+// /api/status reads with refresh_from_node:false (cheap, no lock), so without
+// this the balance only updates when something else scans the node (e.g. a
+// manual `grin-wallet info`).  ONE scanner runs here — not one per visitor —
+// so we never fan out concurrent scans against the LMDB write lock.
+// Guards: (1) never overlap a previous scan; (2) defer if a user wallet op ran
+// within WALLET_QUIET_MS, so a background refresh never delays a real claim or
+// donation.  Interval is config-driven (balance_refresh_minutes, 0 = disabled).
+let _balanceRefreshInFlight = false;
+async function refreshCachedBalance() {
+  if (_balanceRefreshInFlight) return;                          // guard (1)
+  if (Date.now() - _lastWalletActivity < WALLET_QUIET_MS) return; // guard (2)
+  _balanceRefreshInFlight = true;
+  try {
+    const { headers, sharedKey, ownerUrl, token } = await ownerApiSession();
+    await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'retrieve_summary_info', {
+      token,
+      minimum_confirmations: 1,
+      refresh_from_node:     true,   // the point of this job — pull fresh state
+    });
+    actLog('INFO', 'BAL_REFRESH_OK');
+  } catch (e) {
+    actLog('WARN', `BAL_REFRESH_FAIL err=${e.message}`);
+  } finally {
+    _balanceRefreshInFlight = false;
+  }
+}
+
+{
+  const mins = parseFloat(loadConfig().balance_refresh_minutes);
+  const refreshMin = Number.isFinite(mins) ? mins : 3;   // default 3 min
+  if (refreshMin > 0) {
+    setInterval(refreshCachedBalance, refreshMin * 60_000);
+    actLog('INFO', `BAL_REFRESH_ENABLED every=${refreshMin}min`);
+  } else {
+    actLog('INFO', 'BAL_REFRESH_DISABLED');
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // START

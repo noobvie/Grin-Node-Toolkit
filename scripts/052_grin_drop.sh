@@ -80,6 +80,7 @@ DROP_PASS=""
 DROP_WORD=""
 DROP_APP_DIR=""
 DROP_CONF=""
+DROP_DATA_DIR=""
 DROP_DB=""
 DROP_SERVICE=""
 DROP_PORT=""
@@ -201,7 +202,10 @@ _set_network() {
         DROP_WORD="/opt/grin/drop-main/.word_main"
         DROP_APP_DIR="/opt/grin/drop-main"
         DROP_CONF="/opt/grin/drop-main/grin_drop_main.conf"
-        DROP_DB="/opt/grin/drop-main/drop-main.db"
+        # DB lives OUTSIDE the wallet/app dir so a wallet re-install (rm -rf of
+        # DROP_WALLET_DIR) can't wipe claim history / cooldowns / donations.
+        DROP_DATA_DIR="/opt/grin/drop-main-data"
+        DROP_DB="/opt/grin/drop-main-data/drop-main.db"
         DROP_SERVICE="grin-drop-main"
         DROP_PORT="3005"
         DROP_LOG="/opt/grin/drop-main/grin_drop_main.log"
@@ -219,7 +223,10 @@ _set_network() {
         DROP_WORD="/opt/grin/drop-test/.word_test"
         DROP_APP_DIR="/opt/grin/drop-test"
         DROP_CONF="/opt/grin/drop-test/grin_drop_test.conf"
-        DROP_DB="/opt/grin/drop-test/drop-test.db"
+        # DB lives OUTSIDE the wallet/app dir so a wallet re-install (rm -rf of
+        # DROP_WALLET_DIR) can't wipe claim history / cooldowns / donations.
+        DROP_DATA_DIR="/opt/grin/drop-test-data"
+        DROP_DB="/opt/grin/drop-test-data/drop-test.db"
         DROP_SERVICE="grin-drop-test"
         DROP_PORT="3004"
         DROP_LOG="/opt/grin/drop-test/grin_drop_test.log"
@@ -730,8 +737,8 @@ drop_nuke() {
 
     # ── Filesystem ──
     echo -e "  ${DIM}● App directories (wallets, DB, config, logs)${RESET}"
-    echo -e "    /opt/grin/drop-test/"
-    echo -e "    /opt/grin/drop-main/"
+    echo -e "    /opt/grin/drop-test/       /opt/grin/drop-test-data/"
+    echo -e "    /opt/grin/drop-main/       /opt/grin/drop-main-data/"
     echo -e "    /opt/grin/conf/drop_shared.conf"
     echo -e "    /opt/grin/logs/grin_drop_*.log"
 
@@ -818,8 +825,9 @@ drop_nuke() {
         [[ -d "$_d" ]] && rm -rf "$_d" && info "Removed $_d"
     done
 
-    # ── Remove app + wallet directories ──────────────────────────────────────
-    for dir in /opt/grin/drop-test /opt/grin/drop-main; do
+    # ── Remove app + wallet directories (incl. the separate DB data dirs) ────
+    for dir in /opt/grin/drop-test /opt/grin/drop-main \
+               /opt/grin/drop-test-data /opt/grin/drop-main-data; do
         if [[ -d "$dir" ]]; then
             rm -rf "$dir" && info "Removed $dir/"
         fi

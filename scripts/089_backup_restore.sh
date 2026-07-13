@@ -5,9 +5,16 @@
 # Backs up and restores all Grin-related configuration, nginx, SSL certs,
 # wallets, databases, and cron schedules — but NOT chain data (re-syncable).
 #
-# Archive: /opt/grin/temp/temp_dir_YYYYMMDD_HHMMSS.tar.gz.enc
-# Encryption: AES-256-CBC · default password = DDMMYYYY from the filename
-#             e.g.  temp_dir_20260421_143015.tar.gz.enc  →  password: 21042026
+# Archive: /opt/grin/backups/grin_toolkit_backup_DDMMYYYY.tar.gz.enc
+#          (standard naming/location — lib/grin_backup_engine.sh; one archive
+#          per day, a same-day backup overwrites that day's file)
+# Encryption: AES-256-CBC · password = <personal_key><DDMMYYYY> — the shared
+#             personal key (grin_backup.conf) + the date from the filename.
+# Legacy: pre-engine temp_dir_YYYYMMDD_HHMMSS.tar.gz.enc archives (password =
+#         DDMMYYYY derived from the filename) remain restorable from
+#         /opt/grin/temp or /opt/grin/backups.
+# Offsite: menu P configures an scp push (lib/grin_backup_push.sh) — every
+#          finished archive is auto-copied to one remote target.
 #
 # What is backed up:
 #   · /opt/grin/conf/          — node configs, instances registry, API secrets
@@ -41,11 +48,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Shared backup engine — key (ONE personal key for all products), standard
+# naming/location, crypto, offsite push. Also provides the gbp_* push helpers.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/grin_backup_engine.sh"
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
 LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/grin_backup_restore_$(date +%Y%m%d_%H%M%S).log"
 CONF_DIR="/opt/grin/conf"
-BACKUP_DIR="/opt/grin/temp"
+BACKUP_DIR="$GBE_BACKUP_DIR"              # /opt/grin/backups — standard location
+LEGACY_BACKUP_DIR="/opt/grin/temp"        # pre-engine temp_dir_* archives live here
 mkdir -p "$LOG_DIR"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
@@ -135,6 +148,19 @@ run_backup() {
     mkdir -p "$dest_dir" || { error "Cannot create $dest_dir"; return 1; }
     [[ "$auto" == false ]] && success "Destination: $dest_dir"
 
+    # ── Encryption key — shared personal key, standard across ALL products ───
+    # Password = <personal_key><DDMMYYYY>; the key is stored (mode 600) so the
+    # cron run works unattended, and typed BY HAND on restore.
+    if [[ "$auto" == true ]]; then
+        gbe_load_key
+        if [[ -z "$GBE_PERSONAL_KEY" ]]; then
+            log "[AUTO-BACKUP] ERROR: no backup personal key set — open 08 ▸ 9 once and set one."
+            return 1
+        fi
+    else
+        gbe_require_key || { error "Backup needs a personal key."; pause; return 1; }
+    fi
+
     # ── Step 2: Collect sources ──────────────────────────────────────────────
     [[ "$auto" == false ]] && section "Step 2: Collecting Grin sources"
     _collect_nginx_grin_configs
@@ -220,9 +246,16 @@ run_backup() {
     fi
 
     # ── Step 4: Grin Drop data ───────────────────────────────────────────────
+    # The Drop DB moved OUT of the wallet dir (2026-07) into its own data dir
+    # /opt/grin/drop-<net>-data/ so a wallet re-install can't wipe it. Detect a
+    # deployment via the NEW db path, the legacy in-dir db, or the config file.
     local -a _drop_nets=()
     for _net in test main; do
-        [[ -f "/opt/grin/drop-$_net/drop-$_net.db" ]] && _drop_nets+=("$_net")
+        if [[ -f "/opt/grin/drop-${_net}-data/drop-$_net.db" \
+              || -f "/opt/grin/drop-$_net/drop-$_net.db" \
+              || -f "/opt/grin/drop-$_net/grin_drop_$_net.conf" ]]; then
+            _drop_nets+=("$_net")
+        fi
     done
 
     if [[ ${#_drop_nets[@]} -gt 0 ]]; then
@@ -254,6 +287,7 @@ run_backup() {
                 local _net_label; [[ "$_net" == "test" ]] && _net_label="testnet" || _net_label="mainnet"
                 manifest_lines+=("drop-$_net_label:")
                 for _f in \
+                    "/opt/grin/drop-${_net}-data/drop-$_net.db" \
                     "$_dir/drop-$_net.db" \
                     "$_dir/grin_drop_$_net.conf" \
                     "$_dir/.temp_$_net" \
@@ -387,10 +421,10 @@ run_backup() {
     # ── Step 7: Create archive ───────────────────────────────────────────────
     [[ "$auto" == false ]] && section "Step 7: Creating archive"
     [[ "$auto" == true  ]] && log "[AUTO-BACKUP] Starting automated backup to $dest_dir"
-    local ts; ts=$(date +%Y%m%d_%H%M%S)
-    # Derive encryption password: DDMMYYYY from the timestamp YYYYMMDD_HHMMSS
-    local enc_pass="${ts:6:2}${ts:4:2}${ts:0:4}"
-    local archive_basename="temp_dir_${ts}"
+    # Standard naming (lib/grin_backup_engine.sh): one archive per day —
+    # password = <personal_key><DDMMYYYY-from-filename>.
+    local d; d=$(gbe_date)
+    local archive_basename="grin_toolkit_backup_${d}"
     local archive_gz="$archive_basename.tar.gz"
     local archive_enc="$archive_basename.tar.gz.enc"
     local tmp_dir; tmp_dir=$(mktemp -d)
@@ -476,22 +510,40 @@ run_backup() {
         staged_db_rels+=("$_rel")
     done
 
+    # Never let the shared personal key (grin_backup.conf) or the offsite target
+    # (grin_backup_remote.conf) travel INSIDE the archive: the whole security
+    # model is "key lives in the operator's head, typed by hand on restore".
+    # Both are regenerated via 08▸9 after a restore.
     tar -czf "$archive_tmp" \
+        --exclude='*/grin_backup.conf' --exclude='*/grin_backup_remote.conf' \
         -C "$stage" MANIFEST.txt crontabs \
         $( [[ -f "$stage/nginx_enabled_symlinks.txt" ]] && echo "nginx_enabled_symlinks.txt" || true ) \
         "${staged_db_rels[@]+"${staged_db_rels[@]}"}" \
         "${sources[@]+"${sources[@]}"}" \
         2>/dev/null || true
 
-    # Encrypt archive (AES-256-CBC, password via fd to avoid ps aux exposure)
+    # tar rc is tolerated ("file changed as we read it" is benign) — but a
+    # ZERO-BYTE archive is a real failure (disk full mid-write): never encrypt,
+    # keep, or push that. (A gzip header is ~20 bytes, so this is a truncation
+    # guard, not a "captured nothing" guard — the stage always holds MANIFEST.)
+    if [[ ! -s "$archive_tmp" ]]; then
+        error "Archive came out empty (zero bytes) — aborting (disk full?)."
+        log "[BACKUP] ERROR: empty archive, aborted"
+        trap - EXIT; rm -rf "$tmp_dir"
+        [[ "$auto" == false ]] && pause
+        return 1
+    fi
+
+    # Encrypt archive (engine: AES-256-CBC/PBKDF2, password via fd:3)
     [[ "$auto" == false ]] && info "Encrypting archive..."
     local archive_enc_tmp="$tmp_dir/$archive_enc"
-    {
-        openssl enc -aes-256-cbc -pbkdf2 -iter 600000 \
-            -in "$archive_tmp" \
-            -out "$archive_enc_tmp" \
-            -pass fd:3
-    } 3< <(printf '%s' "$enc_pass")
+    if ! gbe_encrypt "$archive_tmp" "$archive_enc_tmp" "${GBE_PERSONAL_KEY}${d}"; then
+        error "openssl encryption failed — aborting."
+        log "[BACKUP] ERROR: encryption failed"
+        trap - EXIT; rm -rf "$tmp_dir"
+        [[ "$auto" == false ]] && pause
+        return 1
+    fi
     rm "$archive_tmp"
 
     # Move to final destination atomically
@@ -501,21 +553,35 @@ run_backup() {
 
     local size; size=$(du -sh "$dest_dir/$archive_enc" 2>/dev/null | cut -f1)
 
+    # Standard archive perms (match solo/drop): 600 root:root, dir 700.
     chmod 600 "$dest_dir/$archive_enc" 2>/dev/null || true
-    if id grin &>/dev/null; then
-        chown -R grin:grin "$dest_dir" 2>/dev/null || true
+    chown root:root "$dest_dir/$archive_enc" 2>/dev/null || true
+    chmod 700 "$dest_dir" 2>/dev/null || true
+
+    # ── Offsite push (scp) — no-op unless configured via menu P ──────────────
+    if gbp_configured; then
+        if gbp_push_file "$dest_dir/$archive_enc"; then
+            [[ "$auto" == false ]] && success "Offsite copy pushed → ${GBP_USER}@${GBP_HOST}:${GBP_DIR}"
+            log "[PUSH] $archive_enc → ${GBP_USER}@${GBP_HOST}:${GBP_DIR}"
+        else
+            [[ "$auto" == false ]] && warn "Offsite push FAILED — local archive is safe. See $GBP_LOG"
+            log "[PUSH] FAILED for $archive_enc — see $GBP_LOG"
+        fi
     fi
 
     # ── Retention — auto-delete older scheduled archives (keep_days > 0) ──────
-    # Only prunes this toolkit's own encrypted archives (temp_dir_*.tar.gz.enc),
-    # so a custom dest holding other files is never touched. -mtime +N keeps the
-    # last N days. keep_days=0 (manual "Backup now", or "Keep all") prunes nothing.
+    # Only prunes this toolkit's own encrypted archives (grin_toolkit_backup_* and
+    # legacy temp_dir_*), so a custom dest holding other files is never touched.
+    # -mtime +N keeps the last N days. keep_days=0 (manual "Backup now", or
+    # "Keep all") prunes nothing.
     if [[ "$keep_days" -gt 0 ]]; then
         local _n_pruned
-        _n_pruned=$(find "$dest_dir" -maxdepth 1 -type f -name 'temp_dir_*.tar.gz.enc' \
+        _n_pruned=$(find "$dest_dir" -maxdepth 1 -type f \
+                    \( -name 'grin_toolkit_backup_*.tar.gz.enc' -o -name 'temp_dir_*.tar.gz.enc' \) \
                     -mtime "+$keep_days" -print 2>/dev/null | wc -l | tr -d ' ')
         if [[ "${_n_pruned:-0}" -gt 0 ]]; then
-            find "$dest_dir" -maxdepth 1 -type f -name 'temp_dir_*.tar.gz.enc' \
+            find "$dest_dir" -maxdepth 1 -type f \
+                 \( -name 'grin_toolkit_backup_*.tar.gz.enc' -o -name 'temp_dir_*.tar.gz.enc' \) \
                  -mtime "+$keep_days" -delete 2>/dev/null || true
             log "[RETENTION] Pruned $_n_pruned archive(s) older than $keep_days days in $dest_dir"
             [[ "$auto" == false ]] && info "Retention: pruned $_n_pruned archive(s) older than $keep_days days."
@@ -528,7 +594,7 @@ run_backup() {
         success "Archive  : $dest_dir/$archive_enc"
         success "Size     : $size"
         echo ""
-        echo -e "  ${YELLOW}Encrypted — password: ${BOLD}${enc_pass}${RESET}${YELLOW}  (DDMMYYYY of backup date)${RESET}"
+        echo -e "  ${YELLOW}Encrypted — password: ${BOLD}your personal key + ${d}${RESET}${YELLOW}  (date in the filename)${RESET}"
         log "[BACKUP] Created: $dest_dir/$archive_enc ($size)"
         pause
     else
@@ -545,26 +611,29 @@ run_restore() {
     echo -e "${BOLD}${CYAN}  RESTORE — Grin Node Toolkit${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    warn "Restore will OVERWRITE existing files. Make sure Grin is stopped first."
+    warn "Restore will OVERWRITE existing files. Stop the node AND any wallet"
+    warn "listeners first — extracting wallet_data/ (LMDB) over an open wallet"
+    warn "can corrupt it."
     echo ""
 
     # ── Step 1: Choose archive ───────────────────────────────────────────────
     section "Step 1: Select backup archive"
 
+    # Standard format (grin_toolkit_backup_*) + legacy encrypted (temp_dir_*)
+    # + legacy unencrypted (grin_backup_*), from both the standard dir and the
+    # old /opt/grin/temp location, newest first.
     local -a archives=()
-    if [[ -d "$BACKUP_DIR" ]]; then
-        # New encrypted format + legacy unencrypted format
-        while IFS= read -r _f; do
-            archives+=("$_f")
-        done < <(find "$BACKUP_DIR" -maxdepth 1 \
-                 \( -name 'temp_dir_*.tar.gz.enc' -o -name 'grin_backup_*.tar.gz' \) \
-                 -type f | sort -r 2>/dev/null || true)
-    fi
+    while IFS= read -r _f; do
+        [[ -n "$_f" ]] && archives+=("$_f")
+    done < <(ls -t "$BACKUP_DIR"/grin_toolkit_backup_*.tar.gz.enc \
+                   "$BACKUP_DIR"/temp_dir_*.tar.gz.enc \
+                   "$LEGACY_BACKUP_DIR"/temp_dir_*.tar.gz.enc \
+                   "$LEGACY_BACKUP_DIR"/grin_backup_*.tar.gz 2>/dev/null || true)
 
     local chosen_archive=""
 
     if [[ ${#archives[@]} -gt 0 ]]; then
-        echo -e "  Available archives in ${BOLD}$BACKUP_DIR${RESET}:"
+        echo -e "  Available archives (${BOLD}$BACKUP_DIR${RESET} + legacy ${DIM}$LEGACY_BACKUP_DIR${RESET}):"
         echo ""
         local i=1
         for _a in "${archives[@]}"; do
@@ -611,8 +680,33 @@ run_restore() {
     local tmp_dir; tmp_dir=$(mktemp -d)
     trap 'rm -rf "$tmp_dir"' EXIT
 
-    if [[ "$chosen_archive" == *.enc ]]; then
+    if [[ "$(basename "$chosen_archive")" == grin_toolkit_backup_*.tar.gz.enc ]]; then
+        # ── Standard format: password = <personal_key><DDMMYYYY-from-filename>
         section "Step 2: Decrypting archive"
+        local _d
+        if ! _d=$(gbe_parse_date "$chosen_archive"); then
+            error "Cannot read the date from the filename: $(basename "$chosen_archive")"
+            rm -rf "$tmp_dir"; trap - EXIT; pause; return 1
+        fi
+        echo -e "  ${DIM}Password = your personal key + ${_d} (auto-read from the filename).${RESET}"
+        local _key _pass
+        read -rs -p "  Personal key for this backup: " _key; echo ""
+        if [[ -z "$_key" ]]; then
+            warn "No key entered."
+            rm -rf "$tmp_dir"; trap - EXIT; pause; return 1
+        fi
+        _pass="${_key}${_d}"; unset _key
+        local _decrypted="$tmp_dir/archive.tar.gz"
+        if ! gbe_decrypt "$chosen_archive" "$_decrypted" "$_pass"; then
+            unset _pass
+            error "Wrong key or corrupt backup."
+            rm -rf "$tmp_dir"; trap - EXIT; pause; return 1
+        fi
+        unset _pass
+        success "Decrypted successfully."
+        working_archive="$_decrypted"
+    elif [[ "$chosen_archive" == *.enc ]]; then
+        section "Step 2: Decrypting archive (legacy temp_dir format)"
         # Derive password from YYYYMMDD embedded in filename
         local _bname; _bname=$(basename "$chosen_archive")
         local _date_part; _date_part=$(echo "$_bname" | grep -oP '\d{8}' | head -1 || true)
@@ -777,7 +871,10 @@ run_restore() {
         find /opt/grin/wallet -maxdepth 1 -mindepth 1 -type d | while IFS= read -r _wd; do
             chmod 700 "$_wd" 2>/dev/null || true
             [[ -d "$_wd/wallet_data" ]] && chmod 700 "$_wd/wallet_data" 2>/dev/null || true
-            for _s in "$_wd/wallet_data/.api_secret" "$_wd/wallet_data/.owner_api_secret"; do
+            # The live secrets are .foreign_api_secret / .owner_api_secret (in the
+            # wallet dir). .api_secret is a dead legacy override — harden the real ones.
+            for _s in "$_wd/.foreign_api_secret" "$_wd/.owner_api_secret" \
+                      "$_wd/wallet_data/.api_secret" "$_wd/wallet_data/.owner_api_secret"; do
                 [[ -f "$_s" ]] && chmod 600 "$_s" 2>/dev/null || true
             done
         done
@@ -791,13 +888,13 @@ run_restore() {
     # Grin Drop dirs (individual files extracted from absolute paths)
     for _net in test main; do
         local _drop_src="$extract_dir/opt/grin/drop-$_net"
-        [[ -d "$_drop_src" ]] || continue
+        local _drop_data_src="$extract_dir/opt/grin/drop-${_net}-data"
+        [[ -d "$_drop_src" || -d "$_drop_data_src" ]] || continue
         local _drop_dest="/opt/grin/drop-$_net"
         mkdir -p "$_drop_dest"
         local _net_label; [[ "$_net" == "test" ]] && _net_label="testnet" || _net_label="mainnet"
 
         for _f in \
-            "drop-$_net.db" \
             "grin_drop_$_net.conf" \
             ".temp_$_net" \
             ".word_$_net" \
@@ -818,6 +915,29 @@ run_restore() {
         if id grin &>/dev/null; then
             chown -R grin:grin "$_drop_dest" 2>/dev/null || true
         fi
+
+        # DB → its own data dir (post-2026-07 layout: survives wallet
+        # re-install). Accept either archive layout: new (drop-<net>-data/)
+        # or legacy (db inside the wallet dir) — never land it back in the
+        # wallet dir, or the app restarts with a fresh empty DB.
+        local _dbsrc=""
+        if [[ -f "$_drop_data_src/drop-$_net.db" ]]; then
+            _dbsrc="$_drop_data_src/drop-$_net.db"
+        elif [[ -f "$_drop_src/drop-$_net.db" ]]; then
+            _dbsrc="$_drop_src/drop-$_net.db"
+        fi
+        if [[ -n "$_dbsrc" ]]; then
+            local _dbdir="/opt/grin/drop-${_net}-data"
+            mkdir -p "$_dbdir"
+            cp -a "$_dbsrc" "$_dbdir/drop-$_net.db"
+            chmod 700 "$_dbdir" 2>/dev/null || true
+            chmod 600 "$_dbdir/drop-$_net.db" 2>/dev/null || true
+            if id grin &>/dev/null; then
+                chown -R grin:grin "$_dbdir" 2>/dev/null || true
+            fi
+            success "Restored: $_dbdir/drop-$_net.db"
+        fi
+
         success "Restored: Grin Drop $_net_label"
         log "[RESTORE] drop-$_net"
     done
@@ -946,6 +1066,9 @@ run_schedule() {
             *) warn "Invalid option."; sleep 1; return ;;
         esac
     fi
+
+    # ── Require the shared personal key (the cron run encrypts with it) ──────
+    gbe_require_key || { error "Scheduling needs a personal key."; pause; return; }
 
     # ── Pick frequency ───────────────────────────────────────────────────────
     echo ""
@@ -1086,6 +1209,11 @@ main() {
         else
             echo -e "  ${DIM}Auto-backup: not scheduled${RESET}"
         fi
+        if gbp_configured; then
+            echo -e "  ${GREEN}Offsite push:${RESET} ${DIM}${GBP_USER}@${GBP_HOST}:${GBP_DIR}${RESET}"
+        else
+            echo -e "  ${DIM}Offsite push: not configured${RESET}"
+        fi
         echo ""
 
         echo -e "  ${BOLD}B${RESET})  Backup now"
@@ -1097,15 +1225,22 @@ main() {
         echo -e "  ${BOLD}R${RESET})  Restore from a backup"
         echo -e "     ${DIM}Restores files from a previous backup archive${RESET}"
         echo ""
+        echo -e "  ${BOLD}P${RESET})  Offsite push (scp to a remote server)"
+        echo -e "     ${DIM}Auto-copy every finished archive to a remote box over ssh${RESET}"
+        echo ""
         echo -e "  ${DIM}0)  Return${RESET}"
         echo ""
-        echo -ne "${BOLD}Choice [B/S/R/0]: ${RESET}"
+        echo -ne "${BOLD}Choice [B/S/R/P/0]: ${RESET}"
         read -r _choice
 
+        # Every dispatch is ||-guarded: these functions return 1 on cancel /
+        # invalid input, which under `set -e` would otherwise kill the script
+        # instead of returning to the menu (CLAUDE.md menu-loop rule).
         case "${_choice,,}" in
-            b) run_backup    ;;
-            s) run_schedule  ;;
-            r) run_restore   ;;
+            b) run_backup    || true ;;
+            s) run_schedule  || true ;;
+            r) run_restore   || true ;;
+            p) gbp_setup     || true ;;
             0) break         ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac

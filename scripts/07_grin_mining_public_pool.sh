@@ -1847,7 +1847,7 @@ _pool_menu_status_line() {
 # real miner IP) to a per-region INTERNAL port here, bound to the tunnel interface
 # only (never public). This menu sets up the wg server and adds gateway peers,
 # assigning each a tunnel IP + a region listener port (written into region_ports).
-# See flowcharts/script07_mining_public_planning.txt (Model C, Phase 3).
+# See docs/generated/script07_implementation.md (Model C appendix, Phase 3).
 # Per-network so a testnet pool's tunnel never collides with a mainnet one on the same box
 # (iface kept ≤15 chars for Linux IFNAMSIZ — "wg-grinpool-tn").
 if [[ "$POOL_NET" == "testnet" ]]; then

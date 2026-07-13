@@ -1,0 +1,13 @@
+{
+  "name": "grin-transporter",
+  "version": "0.1.0",
+  "description": "Grin Transporter — self-hosted store-and-forward queue for encrypted Grin slates (Script 092)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.0"
+  }
+}

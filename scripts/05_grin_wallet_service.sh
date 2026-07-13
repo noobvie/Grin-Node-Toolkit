@@ -18,7 +18,7 @@
 #   054  054_grin_payment_pro.sh          Payment Pro (coming soon)
 #   055  055_grin_public_web_wallet.sh    Public WASM wallet (coming soon)
 #   056  056_grin_goblinpay.sh            GoblinPay receive-only merchant server (planned)
-#   (Grin Transporter moved to the Grin Connectivity Hub → scripts/091_grin_transporter.sh)
+#   (Grin Transporter moved to the Grin Connectivity Hub → scripts/092_grin_transporter.sh)
 #
 # =============================================================================
 

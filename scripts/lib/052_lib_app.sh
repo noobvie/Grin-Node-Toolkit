@@ -8,6 +8,44 @@
 #
 
 # =============================================================================
+# Persistent DB directory (survives a wallet re-install)
+# =============================================================================
+# The SQLite DB lives in DROP_DATA_DIR (a sibling of the wallet/app dir) so that
+# `rm -rf "$DROP_WALLET_DIR"` in _drop_wallet_reinstall never wipes claim history,
+# cooldowns or donation records. Ensures the dir exists, is owned by the service
+# user, and migrates any legacy in-dir DB (from before the split) on first run.
+# Idempotent — safe to call from any entry point.
+_drop_ensure_data_dir() {
+    mkdir -p "$DROP_DATA_DIR"
+
+    # One-time migration: relocate a legacy DB that still lives inside the app dir.
+    local legacy="$DROP_APP_DIR/$(basename "$DROP_DB")"
+    if [[ -f "$legacy" && ! -f "$DROP_DB" ]]; then
+        info "Migrating existing DB → $DROP_DATA_DIR/ (survives wallet re-install)"
+        # Stop the app first so SQLite (WAL) isn't mid-write while its files move,
+        # and so the service later restarts with the NEW DROP_DB env (a plain
+        # `systemctl start` is a no-op on an already-running unit — old path sticks).
+        if systemctl is-active --quiet "$DROP_SERVICE" 2>/dev/null; then
+            systemctl stop "$DROP_SERVICE" 2>/dev/null || true
+            warn "Stopped $DROP_SERVICE for the one-time DB move — start it again via Install or 'Start service'."
+        fi
+        local suffix
+        # Move main DB first, then its WAL sidecars — all paired on the same fs so
+        # SQLite recovers cleanly on next open at the new path.
+        for suffix in "" "-wal" "-shm" "-journal"; do
+            [[ -f "$legacy$suffix" ]] && mv -f "$legacy$suffix" "$DROP_DB$suffix" 2>/dev/null || true
+        done
+        success "DB migrated to $DROP_DB"
+    fi
+
+    if id grin &>/dev/null; then
+        chown -R grin:grin "$DROP_DATA_DIR" 2>/dev/null || true
+    fi
+    chmod 700 "$DROP_DATA_DIR" 2>/dev/null || true
+    [[ -f "$DROP_DB" ]] && chmod 600 "$DROP_DB" 2>/dev/null || true
+}
+
+# =============================================================================
 # OPTION 3 — Install (Node.js + npm + systemd)
 # =============================================================================
 
@@ -108,6 +146,9 @@ $DROP_LOG {
 }
 LOGROTATE
     success "logrotate config: /etc/logrotate.d/${DROP_SERVICE}"
+
+    # ── Persistent DB directory (survives wallet re-install) ───────────────────
+    _drop_ensure_data_dir
 
     # ── Systemd service ────────────────────────────────────────────────────────
     drop_ensure_defaults

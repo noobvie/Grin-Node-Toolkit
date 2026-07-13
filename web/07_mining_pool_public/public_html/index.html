@@ -73,7 +73,7 @@
     </script>
 
     <!-- ===== ADDITIONAL SEO ===== -->
-    <meta name="theme-color" content="#080b07">
+    <meta name="theme-color" content="#07090c">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="GRINIUM Pool">
@@ -83,177 +83,218 @@
     <link rel="alternate" type="application/rss+xml" href="/feed.xml">
     <link rel="stylesheet" href="/css/dashboard.css">
     <link rel="stylesheet" href="/css/themes.css">
+    <link rel="stylesheet" href="/css/reactor.css">
 </head>
 <body>
-    <!-- header injected by /js/public-shell.js -->
+    <!-- header injected by /js/public-shell.js (brand logo keeps its swing) -->
 
     <div class="wrap">
         <!-- Sidebar ad slot (filled by /js/ads.js; floats right on wide screens, hidden if empty) -->
         <div class="ad-slot ad-slot--sidebar" data-ad-slot="sidebar" style="display:none;"></div>
 
-        <div class="page-head">
+        <!-- ═══ Operator strip: heading + UTC station clock + master status lamp ═══ -->
+        <div class="deck-head">
             <div>
                 <h1 data-brand="hero_heading">Pool Dashboard</h1>
                 <div class="sub" data-brand="hero_subheading">Grin Cuckatoo32 · PPLNS rewards · anonymous Tor payouts</div>
             </div>
-            <span class="badge warn" id="pool-status">Connecting…</span>
-        </div>
-
-        <!-- Live service health: pool API, node (peers/sync), wallet — public /api/pool/status -->
-        <div class="status-strip" id="status-strip" aria-label="Service status">
-            <div class="status-pill" id="svc-pool"><span class="status-dot"></span><span class="status-text">Pool service</span></div>
-            <div class="status-pill" id="svc-node"><span class="status-dot"></span><span class="status-text">Node</span></div>
-            <div class="status-pill" id="svc-wallet"><span class="status-dot"></span><span class="status-text">Wallet</span></div>
-        </div>
-
-        <div class="grid cols-4">
-            <div class="stat-card">
-                <div class="stat-label">Pool Hashrate (1h)</div>
-                <div class="stat-value" id="stat-hashrate">—</div>
-                <div class="stat-delta" id="stat-hashrate-24h"></div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Miners Online</div>
-                <div class="stat-value" id="stat-miners">—</div>
-                <div class="stat-delta" id="stat-connections"></div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Blocks (24h)</div>
-                <div class="stat-value" id="stat-blocks-24h">—</div>
-                <div class="stat-delta" id="stat-blocks-7d"></div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Pool Fee</div>
-                <div class="stat-value" id="stat-fee">—</div>
-                <div class="stat-delta">PPLNS</div>
+            <div class="deck-clockrow">
+                <span class="utc num" id="rx-utc">--:--:-- UTC</span>
+                <span class="master-lamp warn" id="rx-master"><span class="led"></span><span id="rx-master-text">Connecting…</span></span>
             </div>
         </div>
 
-        <div class="grid cols-4" style="margin-top:14px">
-            <div class="stat-card">
-                <div class="stat-label">Blocks Found</div>
-                <div class="stat-value" id="stat-blocks-total">—</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Last Block</div>
-                <div class="stat-value" id="stat-last-block">—</div>
-                <div class="stat-delta" id="stat-last-block-ago"></div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Confirmed Rewards</div>
-                <div class="stat-value" id="stat-reward">—</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Min Payout</div>
-                <div class="stat-value" id="stat-min-payout">—</div>
-                <div class="stat-delta" id="stat-network"></div>
-            </div>
+        <!-- ═══ Spec placard: the static pool facts, engraved (live values from pool-info) ═══ -->
+        <div class="placard" aria-label="Pool specifications">
+            <span>FEE <b id="pl-fee">—</b></span>
+            <span>SCHEME <b>PPLNS</b></span>
+            <span>MIN PAYOUT <b id="pl-min">—</b></span>
+            <span>PAYOUT VIA <b>TOR</b></span>
+            <span>REGISTRATION <b>NONE</b></span>
+            <span>NETWORK <b id="pl-net">—</b></span>
         </div>
 
-        <!-- In-content ad slot (filled by /js/ads.js; hidden if empty) -->
-        <div class="ad-slot ad-slot--in-content" data-ad-slot="in-content" style="display:none;"></div>
+        <div class="deck">
 
-        <div class="grid cols-4" style="margin-top:14px">
-            <div class="stat-card">
-                <div class="stat-label">Round Effort</div>
-                <div class="stat-value" id="stat-effort">—</div>
-                <div class="stat-delta">since last block</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Luck (100 blocks)</div>
-                <div class="stat-value" id="stat-luck">—</div>
-                <div class="stat-delta" id="stat-luck-sample"></div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Time Since Last Block</div>
-                <div class="stat-value" id="stat-since-block">—</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Current Round Shares</div>
-                <div class="stat-value" id="stat-round-shares">—</div>
-            </div>
-        </div>
-
-        <div class="grid cols-2" style="margin-top:14px">
-            <div class="card">
-                <div class="card-head"><h3>Pool Hashrate (24h)</h3></div>
-                <div style="position:relative;height:240px"><canvas id="pool-hashrate-chart"></canvas></div>
-            </div>
-            <div class="card" id="quality-card">
-                <div class="card-head"><h3>Share Quality <span class="dim" style="font-size:13px;font-weight:normal">live</span></h3></div>
-                <div style="position:relative;height:240px"><canvas id="pool-quality-chart"></canvas></div>
-                <p class="dim" id="pool-quality-empty" style="display:none;text-align:center;margin:0;padding:20px">No live share data right now.</p>
-            </div>
-        </div>
-
-        <div class="section-title">Recent activity</div>
-        <div class="grid cols-2">
-            <div class="card table-card">
-                <div class="card-head"><h3>Recent Blocks</h3><a href="blocks.html" class="dim" style="font-size:13px">View all →</a></div>
-                <table class="data-table" aria-label="Recent blocks">
-                    <thead><tr><th>Height</th><th>Status</th><th class="num">Reward</th><th class="num">Found</th></tr></thead>
-                    <tbody id="recent-blocks">
-                        <tr><td colspan="4" class="dim">Loading…</td></tr>
-                    </tbody>
-                </table>
-            </div>
-            <div class="card table-card">
-                <div class="card-head"><h3>Recent Payments</h3><a href="payment-history.html" class="dim" style="font-size:13px">View all →</a></div>
-                <table class="data-table" aria-label="Recent payments">
-                    <thead><tr><th>Miner</th><th>Method</th><th class="num">Amount</th><th class="num">When</th></tr></thead>
-                    <tbody id="recent-payments">
-                        <tr><td colspan="4" class="dim">Loading…</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="section-title" id="connect">Point your miner at your nearest region</div>
-        <div class="card connect-card" id="region-card">
-            <!-- Single-server pools show this simple callout; the tabbed multi-region
-                 UI below appears once a second zone reports in. -->
-            <div class="callout" id="region-fallback">
-                <span>⛏ Point your miner at <code data-brand="stratum_url">stratum host not configured</code></span>
-                <span class="region-fallback-loc" id="region-fallback-loc" style="display:none"></span>
-            </div>
-            <!-- One tab per region (nearest first), then a panel for the selected region. -->
-            <div class="region-tabs" id="region-tabs" role="tablist" aria-label="Mining regions" style="display:none"></div>
-            <div class="region-panel" id="region-panel" style="display:none"></div>
-            <div class="connect-note" id="connect-note" style="display:none">
-                <div class="kv">
-                    <span class="k">Worker</span><span><code>&lt;your_grin_address&gt;.rig1</code> <span class="dim">— your Grin address is your login; <code>.rig1</code> names this machine. The worker label is optional, uses lowercase letters, digits, <code>-</code> and <code>_</code> (e.g. <code>rig1</code>, <code>gpu_01</code>), and is limited to <strong>10 characters</strong> — longer labels are shortened automatically.</span></span>
-                    <span class="k">Password</span><span><code>x</code> <span class="dim">— anything; it's ignored. No account or registration needed.</span></span>
+            <div class="deck-row main">
+                <!-- ═══ P-01 · PRIMARY INSTRUMENTS: gauges + counters + share-quality LED bar ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-01</span> Primary instruments <span class="right">live · 60s refresh</span></h2>
+                    <div class="panel-body">
+                        <div class="instruments">
+                            <div class="gauge-block">
+                                <canvas id="g-hash" width="190" height="150" aria-label="Pool hashrate gauge" role="img"></canvas>
+                                <div class="gauge-label">Pool hashrate<br><b class="num" id="g-hash-v">—</b><br><span id="g-hash-avg"></span></div>
+                            </div>
+                            <div class="gauge-block">
+                                <canvas id="g-effort" width="190" height="150" aria-label="Round effort gauge" role="img"></canvas>
+                                <div class="gauge-label">Round effort<br><b class="num" id="g-effort-v">—</b><br><span id="g-effort-luck"></span></div>
+                            </div>
+                            <div>
+                                <div class="counters">
+                                    <div class="counter"><div class="k">Block height</div><div class="v num" id="c-height">—</div></div>
+                                    <div class="counter alt"><div class="k">Miners online</div><div class="v num"><span id="c-miners">—</span> <small id="c-miners-sub"></small></div></div>
+                                    <div class="counter"><div class="k">Blocks · 24h</div><div class="v num"><span id="c-blocks24">—</span> <small id="c-blocks24-sub"></small></div></div>
+                                    <div class="counter alt"><div class="k">Last block</div><div class="v num" id="c-last">—</div></div>
+                                    <div class="counter"><div class="k">Blocks found</div><div class="v num" id="c-total">—</div></div>
+                                    <div class="counter alt"><div class="k">Confirmed</div><div class="v num"><span id="c-reward">—</span> <small>GRIN</small></div></div>
+                                </div>
+                                <div class="ledbar-wrap">
+                                    <div class="ledbar-title">Share quality — live sessions <span id="led-note"></span></div>
+                                    <div class="ledbar" id="rx-ledbar" role="img" aria-label="Share quality"></div>
+                                    <div class="ledbar-key num">
+                                        <span class="g" id="led-g">■ VALID —</span>
+                                        <span class="a" id="led-a">■ STALE —</span>
+                                        <span class="r" id="led-r">■ REJECT —</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div class="region-meta">Algorithm <strong>Cuckatoo32</strong> · same port for every region · paste the selected region's <code>stratum+tcp://host:port</code> into your miner's pool/stratum field (ASICs like the iPollo G1 may want just the <code>host:port</code> part).</div>
-            </div>
-        </div>
 
-        <div class="section-title" id="info">Pool info, rules &amp; support</div>
-        <div class="grid cols-2">
-            <div class="card info-card">
-                <div class="card-head"><h3>Rules &amp; payouts</h3></div>
-                <ul class="info-list">
-                    <li><strong>PPLNS</strong> (Pay Per Last N Shares) — rewards follow recent contributed work</li>
-                    <li>No account, email, or registration — your Grin address <em>is</em> your identity</li>
-                    <li>Per-miner variable difficulty (vardiff) tunes itself to your hardware</li>
-                    <li>Payouts are sent automatically over <strong>Tor</strong> to your Grin address; if your wallet is unreachable, retried every 6h for up to 7 days</li>
-                    <li>Block rewards mature after <strong>1,440 confirmations</strong> (~24h) before they are credited</li>
-                    <li>Orphaned blocks are detected automatically and their rewards reversed fairly</li>
-                </ul>
+                <!-- ═══ P-02 · ANNUNCIATOR: service + region warning lamps ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-02</span> Annunciator</h2>
+                    <div class="panel-body">
+                        <div class="annun">
+                            <div class="lamp" id="an-pool">Pool svc<small>…</small></div>
+                            <div class="lamp" id="an-node">Node sync<small>…</small></div>
+                            <div class="lamp" id="an-wallet">Wallet link<small>…</small></div>
+                            <div class="lamp" id="an-stale">High stale<small>&lt; 5%</small></div>
+                            <!-- one lamp per operator-declared region, rebuilt on each poll -->
+                            <div id="an-regions" style="display:contents"></div>
+                            <div class="lamp" id="an-orphan">Orphan det.<small>none</small></div>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="card info-card">
-                <div class="card-head"><h3>Mining software &amp; support</h3></div>
-                <p class="dim" style="margin:0 0 10px">Any Cuckatoo32 miner works — GPU (lolMiner, GMiner, SRBMiner-MULTI) or ASIC (iPollo G1 / G1-Mini). Point it at your nearest region's host:port above, using <code>grin_address.worker_name</code> as the username (password ignored).</p>
-                <ul class="info-list" id="info-contact">
-                    <li style="display:none" id="info-email">Email: <span data-brand="contact_email"></span></li>
-                    <li style="display:none" id="info-forum">Forum: <a id="info-forum-link" href="#" rel="noopener" target="_blank">hellogrin on forum.grin.mw</a></li>
-                    <li style="display:none" data-brand="social-discord"><a data-brand="social-discord" href="#" rel="noopener" target="_blank">Discord</a></li>
-                    <li style="display:none" data-brand="social-telegram"><a data-brand="social-telegram" href="#" rel="noopener" target="_blank">Telegram</a></li>
-                    <li style="display:none" data-brand="social-twitter"><a data-brand="social-twitter" href="#" rel="noopener" target="_blank">Twitter / X</a></li>
-                    <li style="display:none" data-brand="social-website"><a data-brand="social-website" href="#" rel="noopener" target="_blank">Website</a></li>
-                </ul>
-                <p class="dim" id="info-no-contact" style="margin:6px 0 0">Contact channels are configured by the operator (admin → Branding → Social links).</p>
+
+            <!-- In-content ad slot (filled by /js/ads.js; hidden if empty) -->
+            <div class="ad-slot ad-slot--in-content" data-ad-slot="in-content" style="display:none;"></div>
+
+            <!-- ═══ P-03 · PROCESS MIMIC: share & payout circuit ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-03</span> Process mimic — share &amp; payout circuit</h2>
+                <div class="panel-body mimic-wrap">
+                    <svg class="mimic" viewBox="0 0 920 200" role="img" aria-label="Flow diagram: miners feed shares through the stratum bus into the pool core, the core submits to the Grin node, and the wallet pays out over Tor">
+                        <!-- pipes + animated flows -->
+                        <path class="pipe" d="M150 60 H 260"/><path class="flow" d="M150 60 H 260"/>
+                        <path class="pipe" d="M420 60 H 530"/><path class="flow" d="M420 60 H 530"/>
+                        <path class="pipe" d="M690 60 H 800"/><path class="flow cy" d="M690 60 H 800"/>
+                        <path class="pipe" d="M610 100 V 140 H 420"/><path class="flow mg" d="M610 100 V 140 H 420"/>
+                        <path class="pipe" d="M260 140 H 150"/><path class="flow mg" d="M260 140 H 150"/>
+                        <!-- stations -->
+                        <rect class="box" x="20" y="30" width="130" height="60" rx="6"/>
+                        <text class="lbl" x="34" y="52">MINER ARRAY</text>
+                        <text class="val cy" x="34" y="74" id="mi-miners">— UNITS</text>
+                        <rect class="box" x="260" y="30" width="160" height="60" rx="6"/>
+                        <text class="lbl" x="276" y="52">STRATUM BUS</text>
+                        <text class="val" x="276" y="74" id="mi-regions">—</text>
+                        <rect class="box core" x="530" y="20" width="160" height="80" rx="6"/>
+                        <text class="lbl" x="546" y="42">POOL CORE</text>
+                        <text class="val" x="546" y="64" id="mi-core-effort">EFFORT —</text>
+                        <text class="val" x="546" y="86" id="mi-core-shares">— SHARES</text>
+                        <rect class="box" x="800" y="30" width="105" height="60" rx="6"/>
+                        <text class="lbl" x="814" y="52">GRIN NODE</text>
+                        <text class="val cy" x="814" y="74" id="mi-node">…</text>
+                        <rect class="box" x="260" y="110" width="160" height="60" rx="6"/>
+                        <text class="lbl" x="276" y="132">WALLET · TOR</text>
+                        <text class="val mg" x="276" y="154">AUTO PAYOUT</text>
+                        <rect class="box" x="20" y="110" width="130" height="60" rx="6"/>
+                        <text class="lbl" x="34" y="132">MINER WALLETS</text>
+                        <text class="val mg" x="34" y="154">PAID VIA TOR</text>
+                        <!-- flow labels -->
+                        <text class="lbl" x="176" y="50">SHARES ▸</text>
+                        <text class="lbl" x="446" y="50">WORK ▸</text>
+                        <text class="lbl" x="706" y="50">BLOCKS ▸</text>
+                        <text class="lbl" x="180" y="132">◂ GRIN</text>
+                    </svg>
+                </div>
             </div>
+
+            <div class="deck-row half">
+                <!-- ═══ P-04 · CHART RECORDER: 24h pool hashrate ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-04</span> Chart recorder — hashrate <span class="right">24h</span></h2>
+                    <div class="panel-body chart-wrap">
+                        <canvas id="rx-chart" aria-label="Pool hashrate over the last 24 hours" role="img"></canvas>
+                        <div class="chart-tip" id="rx-tip"></div>
+                        <div class="chart-empty" id="rx-chart-empty">NO TRACE DATA YET</div>
+                    </div>
+                </div>
+
+                <!-- ═══ P-05 · REGION PATCH BAY: connect your miner ═══ -->
+                <div class="panel" id="connect"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-05</span> Region patch bay — connect here</h2>
+                    <div class="panel-body">
+                        <div class="patchbay">
+                            <div class="switchbank" id="rx-switches" role="tablist" aria-label="Mining regions"></div>
+                            <div class="patch-readout">
+                                <div class="k">Stratum endpoint — paste into your miner</div>
+                                <div class="uri-row">
+                                    <code id="rx-uri">stratum host not configured</code>
+                                    <button class="btn sm" id="rx-copy" type="button">Copy</button>
+                                </div>
+                                <div class="patch-meta" id="rx-meta"></div>
+                                <div class="patch-note">
+                                    USER <code>&lt;your_grin_address&gt;.rig1</code> — your address is your login, no account or
+                                    registration; <code>.rig1</code> names this machine (optional, lowercase letters/digits/<code>-</code>/<code>_</code>,
+                                    max <strong>10 chars</strong> — longer labels are shortened automatically).
+                                    PASS <code>x</code> (ignored). Algorithm <strong>Cuckatoo32</strong> — any GPU
+                                    (lolMiner, GMiner, SRBMiner-MULTI) or ASIC (iPollo G1 / G1-Mini) works; ASICs may
+                                    want just the <code>host:port</code> part.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="deck-row half">
+                <!-- ═══ P-06 · MATURATION ARRAY: recent blocks as fuel rods ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-06</span> Maturation array — recent blocks
+                        <span class="right"><a href="blocks.html" class="dim">view all →</a></span></h2>
+                    <div class="panel-body">
+                        <div class="rods" id="rx-rods" aria-label="Recent blocks and their maturity (1,440 confirmations ≈ 24h)">
+                            <div class="rods-empty">LOADING…</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ P-07 · PAYOUT TELETYPE ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-07</span> Payout teletype
+                        <span class="right"><a href="payment-history.html" class="dim">view all →</a></span></h2>
+                    <div class="panel-body">
+                        <div class="tty" id="rx-tty" aria-label="Recent payouts log"><div>LOADING…</div></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ P-08 · OPERATING PROCEDURES: rules + support ═══ -->
+            <div class="panel" id="info"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-08</span> Operating procedures</h2>
+                <div class="panel-body">
+                    <ul class="proc">
+                        <li><b>PPLNS</b> (Pay Per Last N Shares) — rewards follow your recent contributed work</li>
+                        <li>No account, email, or registration — your Grin address <b>is</b> your identity</li>
+                        <li>Per-miner variable difficulty (vardiff) tunes itself to your hardware</li>
+                        <li>Payouts are sent automatically over <b>Tor</b>; unreachable wallets are retried every 6h for up to 7 days</li>
+                        <li>Block rewards mature after <b>1,440 confirmations</b> (~24h) before they are credited</li>
+                        <li>Orphaned blocks are detected automatically and their rewards reversed fairly</li>
+                        <li style="display:none" id="info-email">Email: <span data-brand="contact_email"></span></li>
+                        <li style="display:none" id="info-forum">Forum: <a id="info-forum-link" href="#" rel="noopener" target="_blank">forum.grin.mw</a></li>
+                        <li style="display:none" data-brand="social-discord"><a data-brand="social-discord" href="#" rel="noopener" target="_blank">Discord</a></li>
+                        <li style="display:none" data-brand="social-telegram"><a data-brand="social-telegram" href="#" rel="noopener" target="_blank">Telegram</a></li>
+                        <li style="display:none" data-brand="social-twitter"><a data-brand="social-twitter" href="#" rel="noopener" target="_blank">Twitter / X</a></li>
+                        <li style="display:none" data-brand="social-website"><a data-brand="social-website" href="#" rel="noopener" target="_blank">Website</a></li>
+                        <li id="info-no-contact">Contact channels are configured by the operator (admin → Branding → Social links)</li>
+                    </ul>
+                </div>
+            </div>
+
         </div>
     </div>
 
@@ -263,597 +304,6 @@
     <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>
     <script src="/js/branding.js"></script>
-    <script src="/js/vendor/chart.umd.min.js"></script>
-    <script src="/js/charts-init.js"></script>
-    <script>
-        // Theme switching is handled site-wide by /js/public-theme.js (select rendered
-        // into the .theme-switcher container in the nav); branding.js applies the
-        // operator's default + SEO/content hooks.
-
-        // ═════════════════════════════════════════════════════════════════
-        // Live dashboard data — public endpoints, no auth required.
-        //   /api/pool/stats        blocks + miners summary
-        //   /api/stratum/hashrate  pool GPS aggregates
-        //   /api/config/pool-info  fee / min payout / network
-        //   /api/pool/blocks       recent blocks
-        //   /api/pool/payments     recent confirmed payouts
-        // ═════════════════════════════════════════════════════════════════
-
-        function setText(id, text) {
-            var el = document.getElementById(id);
-            if (el) el.textContent = text;
-        }
-
-        function setValue(id, value, unit) {
-            var el = document.getElementById(id);
-            if (!el) return;
-            el.textContent = '';
-            el.appendChild(document.createTextNode(value));
-            if (unit) {
-                var small = document.createElement('small');
-                small.textContent = ' ' + unit;
-                el.appendChild(small);
-            }
-        }
-
-        // Display units follow the toolkit convention: G/s, kG/s, MG/s.
-        function fmtGps(gps) {
-            if (!isFinite(gps)) return ['—', ''];
-            if (gps >= 1e6) return [(gps / 1e6).toFixed(2), 'MG/s'];
-            if (gps >= 1e3) return [(gps / 1e3).toFixed(2), 'kG/s'];
-            return [gps.toFixed(2), 'G/s'];
-        }
-
-        function timeAgo(unixSeconds) {
-            if (!unixSeconds) return '';
-            var s = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
-            if (s < 60) return s + 's';
-            if (s < 3600) return Math.floor(s / 60) + 'm';
-            if (s < 86400) return Math.floor(s / 3600) + 'h';
-            return Math.floor(s / 86400) + 'd';
-        }
-
-        function truncAddr(addr) {
-            addr = String(addr || '');
-            return addr.length > 16 ? addr.slice(0, 9) + '…' + addr.slice(-4) : addr;
-        }
-
-        // The top-right badge is a COMPOSITE health summary (pool + node + wallet), driven
-        // by /api/pool/status in loadServiceStatus() — green only when all three are healthy.
-        // (It used to just mean "any public API answered", which was redundant with the
-        // Pool-service pill in the status strip.)
-        function setPoolBadge(state, label) {
-            var el = document.getElementById('pool-status');
-            if (!el) return;
-            el.className = 'badge ' + state; // ok | warn | bad
-            el.textContent = label;
-        }
-
-        async function loadStats() {
-            var anyOk = false;
-            try {
-                var stats = await Auth.fetch('/api/pool/stats');
-                if (stats) {
-                    anyOk = true;
-                    setValue('stat-miners', stats.active_miners || 0);
-                    setText('stat-connections', (stats.active_connections || 0) + ' connections');
-                    setValue('stat-blocks-24h', stats.blocks_24h || 0);
-                    setText('stat-blocks-7d', (stats.blocks_7d || 0) + ' in 7 days');
-                    setValue('stat-blocks-total', stats.total_blocks_found || 0);
-                    setValue('stat-reward', (stats.confirmed_reward || 0).toFixed(0), 'GRIN');
-                }
-            } catch (e) { /* tile keeps placeholder */ }
-
-            try {
-                var hr = await Auth.fetch('/api/stratum/hashrate');
-                if (hr) {
-                    anyOk = true;
-                    var g1 = fmtGps(hr.pool_hashrate_1h_gps || 0);
-                    setValue('stat-hashrate', g1[0], g1[1]);
-                    var g24 = fmtGps(hr.pool_hashrate_24h_gps || 0);
-                    setText('stat-hashrate-24h', g24[0] + ' ' + g24[1] + ' (24h avg)');
-                }
-            } catch (e) { /* tile keeps placeholder */ }
-
-            try {
-                var info = await Auth.fetch('/api/config/pool-info');
-                if (info) {
-                    anyOk = true;
-                    setValue('stat-fee', (info.pool_fee_percent != null ? info.pool_fee_percent : 0).toFixed(1), '%');
-                    setValue('stat-min-payout', (info.min_withdrawal != null ? info.min_withdrawal : 0).toFixed(1), 'GRIN');
-                    setText('stat-network', info.network || '');
-                }
-            } catch (e) { /* tile keeps placeholder */ }
-            // The composite header badge is owned by loadServiceStatus() (pool+node+wallet);
-            // loadStats no longer sets it. `anyOk` is retained only as a local liveness hint.
-            void anyOk;
-        }
-
-        function blockBadge(status) {
-            var span = document.createElement('span');
-            if (status === 'confirmed') { span.className = 'badge ok'; span.textContent = 'mature'; }
-            else if (status === 'orphaned') { span.className = 'badge bad'; span.textContent = 'orphan'; }
-            else { span.className = 'badge warn'; span.textContent = 'immature'; }
-            return span;
-        }
-
-        function emptyRow(text) {
-            var tr = document.createElement('tr');
-            var td = document.createElement('td');
-            td.colSpan = 4;
-            td.className = 'dim';
-            td.textContent = text;
-            tr.appendChild(td);
-            return tr;
-        }
-
-        // All cell content goes through textContent — addresses are miner-supplied.
-        async function loadBlocks() {
-            var tbody = document.getElementById('recent-blocks');
-            if (!tbody) return;
-            try {
-                var blocks = await Auth.fetch('/api/pool/blocks?limit=6');
-                tbody.textContent = '';
-                if (!Array.isArray(blocks) || blocks.length === 0) {
-                    tbody.appendChild(emptyRow('No blocks found yet'));
-                    return;
-                }
-                blocks.forEach(function (b) {
-                    var tr = document.createElement('tr');
-                    var tdH = document.createElement('td');
-                    tdH.className = 'mono';
-                    tdH.textContent = Number(b.height || 0).toLocaleString('en-US');
-                    var tdS = document.createElement('td');
-                    tdS.appendChild(blockBadge(b.status));
-                    var tdR = document.createElement('td');
-                    tdR.className = 'num';
-                    tdR.textContent = Number(b.reward || 0).toFixed(2);
-                    var tdT = document.createElement('td');
-                    tdT.className = 'num';
-                    tdT.textContent = timeAgo(b.found_at || b.created_at);
-                    tr.appendChild(tdH); tr.appendChild(tdS); tr.appendChild(tdR); tr.appendChild(tdT);
-                    tbody.appendChild(tr);
-                });
-            } catch (e) {
-                tbody.textContent = '';
-                tbody.appendChild(emptyRow('Block data unavailable'));
-            }
-        }
-
-        async function loadPayments() {
-            var tbody = document.getElementById('recent-payments');
-            if (!tbody) return;
-            try {
-                var payments = await Auth.fetch('/api/pool/payments?limit=6');
-                tbody.textContent = '';
-                if (!Array.isArray(payments) || payments.length === 0) {
-                    tbody.appendChild(emptyRow('No payouts yet'));
-                    return;
-                }
-                payments.forEach(function (p) {
-                    var tr = document.createElement('tr');
-                    var tdA = document.createElement('td');
-                    tdA.className = 'addr';
-                    tdA.title = '';
-                    tdA.textContent = truncAddr(p.grin_address);
-                    var tdM = document.createElement('td');
-                    var badge = document.createElement('span');
-                    badge.className = 'badge info';
-                    badge.textContent = 'tor';
-                    tdM.appendChild(badge);
-                    var tdV = document.createElement('td');
-                    tdV.className = 'num';
-                    tdV.textContent = Number(p.amount || 0).toFixed(2);
-                    var tdT = document.createElement('td');
-                    tdT.className = 'num';
-                    tdT.textContent = timeAgo(p.confirmed_at || p.created_at);
-                    tr.appendChild(tdA); tr.appendChild(tdM); tr.appendChild(tdV); tr.appendChild(tdT);
-                    tbody.appendChild(tr);
-                });
-            } catch (e) {
-                tbody.textContent = '';
-                tbody.appendChild(emptyRow('Payment data unavailable'));
-            }
-        }
-
-        // Round effort / luck / time-since-last-block — pool-trust signals.
-        async function loadEffort() {
-            try {
-                var e = await Auth.fetch('/api/pool/effort');
-                if (!e) return;
-                setText('stat-effort', e.round_effort_pct != null ? e.round_effort_pct.toFixed(0) + '%' : '—');
-                setText('stat-luck', e.luck_100_pct != null ? e.luck_100_pct.toFixed(0) + '%' : '—');
-                setText('stat-luck-sample', e.luck_sample ? ('over ' + e.luck_sample + ' blocks') : 'no data yet');
-                setText('stat-since-block', e.seconds_since_last_block != null ? timeAgo(e.last_block_at) : '—');
-                setText('stat-round-shares', e.round_shares != null ? Number(e.round_shares).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—');
-            } catch (err) { /* tiles keep placeholders */ }
-        }
-
-        // Pool-wide hashrate chart (vendored Chart.js via /js/charts-init.js).
-        async function loadChart() {
-            if (typeof PoolCharts === 'undefined') return;
-            try {
-                var data = await Auth.fetch('/api/pool/hashrate/history?hours=24');
-                PoolCharts.renderHashrateChart('pool-hashrate-chart', (data && data.series) || [], { label: 'Pool hashrate' });
-            } catch (err) { /* chart stays empty */ }
-        }
-
-        // Pool-wide live share quality (valid/stale/rejected) doughnut. Live-only — empty on a
-        // bare hub with no sessions, or when no rigs are connected (Model C terminates every
-        // region's sessions here, so reject/stale is otherwise complete).
-        async function loadShareQuality() {
-            if (typeof PoolCharts === 'undefined' || !PoolCharts.renderDoughnutChart) return;
-            var canvas = document.getElementById('pool-quality-chart');
-            var empty = document.getElementById('pool-quality-empty');
-            try {
-                var s = await Auth.fetch('/api/pool/stats');
-                var q = (s && s.share_quality) || {};
-                var acc = Number(q.accepted) || 0, stl = Number(q.stale) || 0, rej = Number(q.rejected) || 0;
-                if (acc + stl + rej === 0) {
-                    if (canvas) canvas.style.display = 'none';
-                    if (empty) empty.style.display = '';
-                    return;
-                }
-                if (canvas) canvas.style.display = '';
-                if (empty) empty.style.display = 'none';
-                PoolCharts.renderDoughnutChart('pool-quality-chart',
-                    ['Valid', 'Stale', 'Rejected'], [acc, stl, rej],
-                    { colors: ['#3fb950', '#d29922', '#f85149'] });
-            } catch (err) {
-                if (canvas) canvas.style.display = 'none';
-                if (empty) empty.style.display = '';
-            }
-        }
-
-        // ── Service status strip (pool / node / wallet) ──────────────────────
-        function setPill(id, state, label) {
-            var el = document.getElementById(id);
-            if (!el) return;
-            el.className = 'status-pill ' + state; // state: ok | bad | warn
-            var t = el.querySelector('.status-text');
-            if (t && label) t.textContent = label;
-        }
-
-        async function loadServiceStatus() {
-            try {
-                var s = await Auth.fetch('/api/pool/status');
-                if (!s) throw new Error('no status');
-                var poolOk = !!(s.pool && s.pool.ok);
-                var nodeOk = !!(s.node && s.node.reachable);
-                var nodeSynced = nodeOk && s.node.synced === true;
-                var walletOk = !!(s.wallet && s.wallet.reachable);
-
-                setPill('svc-pool', poolOk ? 'ok' : 'bad', 'Pool service');
-                if (nodeOk) {
-                    setPill('svc-node', nodeSynced ? 'ok' : 'warn',
-                        'Node · ' + (s.node.peers || 0) + ' peers' + (nodeSynced ? '' : ' · syncing'));
-                } else {
-                    setPill('svc-node', 'bad', 'Node offline');
-                }
-                setPill('svc-wallet', walletOk ? 'ok' : 'bad', walletOk ? 'Wallet online' : 'Wallet offline');
-
-                // Composite header badge: green only when pool + node (synced) + wallet are all OK.
-                if (!poolOk) {
-                    setPoolBadge('bad', 'Pool unreachable');
-                } else if (nodeOk && nodeSynced && walletOk) {
-                    setPoolBadge('ok', 'All systems operational');
-                } else {
-                    var issues = [];
-                    if (!nodeOk) issues.push('node offline');
-                    else if (!nodeSynced) issues.push('node syncing');
-                    if (!walletOk) issues.push('wallet offline');
-                    setPoolBadge('warn', 'Degraded · ' + issues.join(', '));
-                }
-            } catch (e) {
-                setPill('svc-pool', 'bad', 'Pool service');
-                setPill('svc-node', 'bad', 'Node offline');
-                setPill('svc-wallet', 'bad', 'Wallet offline');
-                setPoolBadge('bad', 'Pool unreachable');
-            }
-        }
-
-        // ── Regional stratum hosts — single card, one tab per region ─────────
-        // Operator-declared regions from /api/pool/stats/regions (per-region `status`,
-        // host, country). Rendered as ONE card with a tab strip (nearest region first,
-        // flag + live status dot per tab); selecting a tab shows that region's full
-        // stratum+tcp://host:port URI + availability pill + miner count. The visitor's
-        // nearest region is detected from the browser timezone (no network call,
-        // privacy-friendly) and floated to the front with a 📍 pin, selected by default.
-        // The shared worker/password note below is identical for every region. All
-        // operator-supplied values rendered via textContent. Falls back to a single
-        // callout when there is only one region.
-        var BASE_PORT = '';   // pool default port — used when a region's stratum_url omits one
-
-        function regionStatusMeta(s) {
-            switch (s) {
-                case 'online':  return { cls: 's-online',  label: '● Online' };
-                case 'stale':   return { cls: 's-stale',   label: '● Degraded' };
-                case 'offline': return { cls: 's-offline', label: '● Offline' };
-                default:        return { cls: 's-unknown', label: '○ Unknown' };
-            }
-        }
-
-        // The host:port a region resolves to (region may pin a port via host:port; else default).
-        function regionHostPort(r) {
-            var parts = String(r.stratum_url || '').split(':');
-            return parts[0] + ':' + (parts[1] || BASE_PORT || '3333');
-        }
-        // The full miner-pasteable connect URI (lolMiner/GMiner/most ASIC pool fields).
-        function regionStratumUri(r) { return 'stratum+tcp://' + regionHostPort(r); }
-
-        // ISO-3166 alpha-2 → flag emoji (regional-indicator pair). '' when unknown.
-        function flagEmoji(cc) {
-            if (!cc || cc.length !== 2) return '';
-            cc = cc.toUpperCase();
-            if (!/^[A-Z]{2}$/.test(cc)) return '';
-            return String.fromCodePoint(0x1F1E6 + cc.charCodeAt(0) - 65) +
-                   String.fromCodePoint(0x1F1E6 + cc.charCodeAt(1) - 65);
-        }
-
-        // Best-effort "nearest region" from the browser's IANA timezone — no geo-IP call,
-        // no permission prompt. Returns a region key present in `keys` (the live region
-        // set) or null. Coarse on purpose: it only floats the likely-closest group up.
-        function detectNearestRegion(keys) {
-            var tz = '';
-            try { tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || ''; } catch (e) { return null; }
-            if (!tz) return null;
-            var has = function (k) { return keys.indexOf(k) !== -1 ? k : null; };
-            // Ho Chi Minh City IS Saigon — prefer sgn, fall back to han (the Asia pref
-            // below also lands on han/sgn when the exact zone isn't a live region).
-            var exact = {
-                'Asia/Ho_Chi_Minh': 'sgn', 'America/New_York': 'nyc',
-                'America/Los_Angeles': 'lax', 'America/Toronto': 'yyz',
-                'Europe/Amsterdam': 'ams'
-            };
-            if (exact[tz] && has(exact[tz])) return exact[tz];
-            if (tz === 'Asia/Ho_Chi_Minh' && has('han')) return 'han';
-            var area = tz.split('/')[0];
-            if (area === 'America') {
-                if (/Los_Angeles|Vancouver|Tijuana|Phoenix|Denver|Edmonton|Boise|Anchorage|Whitehorse|Dawson|Mazatlan/.test(tz)) return has('lax') || has('nyc') || has('yyz');
-                if (/Toronto|Montreal|Halifax|Winnipeg|Regina|St_Johns/.test(tz)) return has('yyz') || has('nyc');
-                return has('nyc') || has('yyz') || has('lax');
-            }
-            if (area === 'Asia' || area === 'Australia' || area === 'Indian') return has('han') || has('sgn');
-            var pref = { Pacific: 'lax', Europe: 'ams', Africa: 'ams', Atlantic: 'ams', Antarctica: 'lax' };
-            return pref[area] ? has(pref[area]) : null;
-        }
-
-        // A region's flag: a custom SVG for VN — there is no matching Unicode emoji —
-        // and the standard regional-indicator emoji for every other country.
-        // Returns an element or null when no flag is known.
-        function flagNode(cc) {
-            cc = String(cc || '').toUpperCase();
-            if (cc === 'VN') {
-                var img = document.createElement('img');
-                img.className = 'region-flag-img';
-                img.src = '/images/flags/vn-future.svg';
-                img.alt = 'Vietnam';
-                return img;
-            }
-            var em = flagEmoji(cc);
-            if (!em) return null;
-            var s = document.createElement('span');
-            s.className = 'region-flag';
-            s.textContent = em;
-            return s;
-        }
-
-        // One tab per region: flag + name + a live status dot (+ a pin on the nearest).
-        function buildTab(r, isActive, isNearest) {
-            var btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'region-tab' + (isActive ? ' active' : '') + (isNearest ? ' nearest' : '');
-            btn.setAttribute('role', 'tab');
-            btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
-            btn.dataset.region = r.region;
-            var f = flagNode(r.country_code);
-            if (f) btn.appendChild(f);
-            var nm = document.createElement('span');
-            nm.className = 'region-tab-name';
-            nm.textContent = r.label || r.region;
-            btn.appendChild(nm);
-            if (isNearest) {
-                var pin = document.createElement('span');
-                pin.className = 'region-tab-pin';
-                pin.title = 'Nearest to you';
-                pin.textContent = '📍';
-                btn.appendChild(pin);
-            }
-            var dot = document.createElement('span');
-            dot.className = 'region-tab-dot ' + regionStatusMeta(r.status).cls;
-            btn.appendChild(dot);
-            return btn;
-        }
-
-        // The panel for the selected region: status pill, copyable stratum URI, miner count.
-        function buildPanel(r) {
-            var uri = regionStratumUri(r);
-            var panel = document.createElement('div');
-            panel.className = 'region-panel-inner';
-
-            var head = document.createElement('div');
-            head.className = 'region-panel-head';
-            var name = document.createElement('span');
-            name.className = 'region-panel-name';
-            var f = flagNode(r.country_code);
-            if (f) name.appendChild(f);
-            var t = document.createElement('span');
-            t.textContent = (r.label || r.region) + (r.country ? ' · ' + r.country : '');
-            name.appendChild(t);
-            head.appendChild(name);
-            var pill = document.createElement('span');
-            var m = regionStatusMeta(r.status);
-            pill.className = 'region-pill ' + m.cls;
-            pill.textContent = m.label;
-            head.appendChild(pill);
-            panel.appendChild(head);
-
-            var hostRow = document.createElement('div');
-            hostRow.className = 'region-host';
-            var code = document.createElement('code');
-            code.textContent = uri;
-            hostRow.appendChild(code);
-            var copy = document.createElement('button');
-            copy.className = 'btn sm';
-            copy.type = 'button';
-            copy.textContent = 'Copy';
-            copy.addEventListener('click', function () {
-                var done = function () { copy.textContent = 'Copied!'; setTimeout(function () { copy.textContent = 'Copy'; }, 1500); };
-                if (navigator.clipboard) { navigator.clipboard.writeText(uri).then(done); }
-                else { done(); }
-            });
-            hostRow.appendChild(copy);
-            panel.appendChild(hostRow);
-
-            var meta = document.createElement('div');
-            meta.className = 'region-meta';
-            meta.textContent = r.miners > 0
-                ? r.miners + (r.miners === 1 ? ' miner' : ' miners') + ' active'
-                : 'No miners connected right now';
-            panel.appendChild(meta);
-            return panel;
-        }
-
-        function renderRegionPanel(regions, key) {
-            var panelEl = document.getElementById('region-panel');
-            if (!panelEl) return;
-            var r = regions.filter(function (x) { return x.region === key; })[0];
-            if (!r) return;
-            panelEl.textContent = '';
-            panelEl.appendChild(buildPanel(r));
-        }
-
-        function selectRegion(regions, key) {
-            var tabsEl = document.getElementById('region-tabs');
-            if (tabsEl) {
-                tabsEl.querySelectorAll('.region-tab').forEach(function (t) {
-                    var on = t.dataset.region === key;
-                    t.classList.toggle('active', on);
-                    t.setAttribute('aria-selected', on ? 'true' : 'false');
-                });
-            }
-            renderRegionPanel(regions, key);
-        }
-
-        async function loadRegions() {
-            var tabsEl = document.getElementById('region-tabs');
-            var panelEl = document.getElementById('region-panel');
-            var fallback = document.getElementById('region-fallback');
-            var note = document.getElementById('connect-note');
-            if (!tabsEl || !panelEl) return;
-            try {
-                // Capture the pool's default stratum port once (for regions with no explicit port).
-                if (!BASE_PORT) {
-                    try {
-                        var b = await Auth.fetch('/api/public/branding');
-                        if (b && b.data && b.data.connection) BASE_PORT = b.data.connection.stratum_port || '';
-                    } catch (e) { /* fall back to 3333 in regionHostPort */ }
-                }
-                var data = await Auth.fetch('/api/pool/stats/regions');
-                var regions = (data && Array.isArray(data.regions)) ? data.regions : [];
-                // Only operator-declared, active regions are connect targets (need a host).
-                regions = regions.filter(function (r) { return r.stratum_url && r.is_active !== false; });
-
-                // A single-region pool (one server, no gateways) shows the simple
-                // "point your miner here" callout, not a 1-tab strip. The tabbed UI
-                // appears only once a second zone reports in.
-                if (regions.length < 2) {
-                    tabsEl.style.display = 'none';
-                    panelEl.style.display = 'none';
-                    if (note) note.style.display = 'none';
-                    if (fallback) {
-                        // Show the pool's own region flag + name next to the callout
-                        // (VN gets the custom yellow heritage SVG, like the tab strip).
-                        var only = regions[0];
-                        var slot = document.getElementById('region-fallback-loc');
-                        if (only && slot && !slot.childNodes.length) {
-                            var fl = flagNode(only.country_code);
-                            if (fl) slot.appendChild(fl);
-                            var lbl = document.createElement('span');
-                            lbl.textContent = only.label || only.region || '';
-                            slot.appendChild(lbl);
-                            slot.style.display = '';
-                        }
-                        fallback.style.display = '';
-                    }
-                    return;
-                }
-
-                // Order: the visitor's nearest region (browser-timezone, no geo-IP) first,
-                // then by most-active (miner count) desc, then by name. "Shortest" = nearest.
-                var nearestKey = detectNearestRegion(regions.map(function (r) { return r.region; }));
-                regions.sort(function (a, b) {
-                    if (a.region === nearestKey) return -1;
-                    if (b.region === nearestKey) return 1;
-                    if ((b.miners || 0) !== (a.miners || 0)) return (b.miners || 0) - (a.miners || 0);
-                    return (a.label || a.region).localeCompare(b.label || b.region);
-                });
-
-                // Preserve the visitor's current tab across the 60s refresh; otherwise
-                // default to the first (nearest) region.
-                var prev = tabsEl.querySelector('.region-tab.active');
-                var selectedKey = prev ? prev.dataset.region : null;
-                if (!selectedKey || !regions.some(function (r) { return r.region === selectedKey; })) {
-                    selectedKey = regions[0].region;
-                }
-
-                if (fallback) fallback.style.display = 'none';
-                tabsEl.style.display = '';
-                panelEl.style.display = '';
-                tabsEl.textContent = '';
-                regions.forEach(function (r) {
-                    var tab = buildTab(r, r.region === selectedKey, r.region === nearestKey);
-                    tab.addEventListener('click', function () { selectRegion(regions, r.region); });
-                    tabsEl.appendChild(tab);
-                });
-                renderRegionPanel(regions, selectedKey);
-                if (note) note.style.display = '';
-            } catch (e) { /* keep fallback callout */ }
-        }
-
-        function refresh() {
-            loadStats();
-            loadBlocks();
-            loadPayments();
-            loadEffort();
-            loadChart();
-            loadShareQuality();
-            loadServiceStatus();
-            loadRegions();   // re-poll so the per-region up/down pills stay current
-        }
-
-        // Info section contact block: branding.js fills the email text + toggles the social
-        // rows, but not the email row's visibility or the "no channels" note — do that here.
-        async function loadInfoContact() {
-            try {
-                var r = await fetch('/api/public/branding');
-                var json = r.ok ? await r.json() : null;
-                var data = (json && json.data) ? json.data : {};
-                var enc = data.pool && data.pool.contact_email_enc;
-                var email = '';
-                try { email = enc ? atob(enc) : ''; } catch (e) { email = ''; }
-                var forum = (data.pool && data.pool.support_forum_url) || '';
-                var social = (data.branding && data.branding.social) || {};
-                if (email) {
-                    var li = document.getElementById('info-email');
-                    if (li) li.style.display = '';
-                }
-                if (forum) {
-                    var fli = document.getElementById('info-forum');
-                    var fa = document.getElementById('info-forum-link');
-                    if (fa) fa.setAttribute('href', forum);
-                    if (fli) fli.style.display = '';
-                }
-                var anyChannel = email || forum || ['discord', 'telegram', 'twitter', 'website'].some(function (k) { return social[k]; });
-                if (anyChannel) {
-                    var note = document.getElementById('info-no-contact');
-                    if (note) note.style.display = 'none';
-                }
-            } catch (e) { /* keep the operator note */ }
-        }
-
-        document.addEventListener('DOMContentLoaded', function () { refresh(); loadInfoContact(); });
-        setInterval(refresh, 60000);
-    </script>
+    <script src="/js/reactor-dashboard.js"></script>
 </body>
 </html>

@@ -623,7 +623,8 @@
     // ── Enabled-themes picker (drives the public theme switcher) ────────────────
     // Must match the public switcher's known themes (public_html/js/public-theme.js).
     const PUBLIC_THEMES = [
-      { key: 'atomic', label: 'Atomic ⚛' }, { key: 'nexus', label: 'Nexus' }, { key: 'light', label: 'Light' },
+      { key: 'atomic', label: 'Reactor ⚛' }, { key: 'uranium', label: 'Uranium Classic ☢' },
+      { key: 'nexus', label: 'Nexus' }, { key: 'light', label: 'Light' },
       { key: 'winter', label: 'Winter Frost ❄️' }, { key: 'spring', label: 'Spring Blossom 🌸' },
       { key: 'summer', label: 'Summer Wave 🌊' }, { key: 'autumn', label: 'Autumn Harvest 🍂' },
       { key: 'halloween', label: 'Halloween 🎃' }, { key: 'christmas', label: 'Christmas 🎄' },

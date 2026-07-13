@@ -1,0 +1,319 @@
+/* reactor.css — "Reactor Control" homepage components (v4 control-room skin).
+ *
+ * Loaded ONLY by index.html, AFTER dashboard.css + themes.css. Every color is
+ * derived from the theme token bridge dashboard.css sets on <body>
+ * (--bg/--bg-elev/--border/--text/--accent/--gold/--warn/--danger/--info/--glow),
+ * so the public theme switcher re-skins the whole panel deck for free. Canvas
+ * instruments (gauges, strip chart) read the same tokens at draw time in
+ * js/reactor-dashboard.js and re-render on theme change.
+ *
+ * Component map (mirrors a reactor operator's panel wall):
+ *   .placard        engraved spec strip (fee / scheme / min payout — static facts)
+ *   .panel          bezelled instrument panel with corner screws + title strip
+ *   .annun/.lamp    annunciator warning-light grid (service + region health)
+ *   .counter        seven-segment style numeric readouts
+ *   .ledbar         segmented LED bargraph (share quality)
+ *   .mimic          SVG process-flow diagram (miners → stratum → core → node)
+ *   .switchbank     region patch-bay toggle switches
+ *   .rods           fuel-rod block-maturity columns
+ *   .tty            payout teletype log
+ */
+
+/* derived chrome tokens (neutral bezels regardless of theme accent) */
+body {
+  --rx-inset: color-mix(in srgb, var(--bg) 80%, #000);
+  --rx-bezel: color-mix(in srgb, var(--text) 16%, var(--bg));
+  --rx-bezel-hi: color-mix(in srgb, var(--text) 28%, var(--bg));
+  --rx-line: color-mix(in srgb, var(--text) 9%, var(--bg));
+}
+
+/* ── page head: operator strip (UTC clock + master lamp) ────────────────── */
+.deck-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 14px; flex-wrap: wrap; margin-bottom: 14px;
+}
+.deck-head h1 {
+  font-family: var(--mono); font-size: 22px; margin: 0; font-weight: 700;
+  letter-spacing: .5px; color: var(--text); text-shadow: 0 0 10px var(--glow);
+}
+.deck-head .sub { color: var(--text-dim); font-size: 14px; }
+.deck-clockrow { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.utc {
+  font-family: var(--mono); font-size: 13px; color: var(--info); letter-spacing: .12em;
+  background: var(--rx-inset); border: 1px solid var(--rx-bezel); border-radius: 5px;
+  padding: 6px 12px; box-shadow: inset 0 2px 6px rgba(0, 0, 0, .6);
+  font-variant-numeric: tabular-nums;
+}
+.master-lamp {
+  display: inline-flex; align-items: center; gap: 9px;
+  font-family: var(--mono); font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 45%, var(--bg));
+  border-radius: 5px; padding: 6px 13px;
+  background: color-mix(in srgb, var(--ok) 7%, transparent);
+  box-shadow: 0 0 14px -4px var(--glow);
+}
+.master-lamp .led {
+  width: 9px; height: 9px; border-radius: 50%; background: var(--ok);
+  box-shadow: 0 0 8px var(--ok); animation: rx-lampbeat 3s ease-in-out infinite; flex: none;
+}
+.master-lamp.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--bg)); background: color-mix(in srgb, var(--warn) 7%, transparent); box-shadow: none; }
+.master-lamp.warn .led { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+.master-lamp.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--bg)); background: color-mix(in srgb, var(--danger) 7%, transparent); box-shadow: none; }
+.master-lamp.bad .led { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+@keyframes rx-lampbeat { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+
+/* ── spec placard (static pool facts, engraved) ─────────────────────────── */
+.placard {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  border: 1px solid var(--rx-bezel); border-radius: 6px; overflow: hidden;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-elev) 80%, var(--text) 4%), var(--bg-elev));
+  box-shadow: inset 0 1px 0 var(--rx-bezel-hi);
+  margin-bottom: 16px;
+}
+.placard span {
+  text-align: center; padding: 9px 12px;
+  font-family: var(--mono); font-size: 11.5px; letter-spacing: .12em;
+  color: var(--text-dim); text-transform: uppercase; white-space: nowrap;
+  border-right: 1px solid var(--rx-line); border-bottom: 1px solid var(--rx-line);
+}
+.placard b { color: var(--accent); font-weight: 700; text-shadow: 0 0 8px var(--glow); }
+
+/* ── panel chrome: bezel + corner screws + engraved title strip ─────────── */
+.deck { display: flex; flex-direction: column; gap: 16px; }
+.deck-row { display: grid; gap: 16px; }
+.deck-row.half { grid-template-columns: 1fr 1fr; }
+.deck-row.main { grid-template-columns: 1.35fr 1fr; }
+
+.panel {
+  position: relative; border: 1px solid var(--rx-bezel); border-radius: var(--radius);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-elev) 86%, var(--text) 3%), var(--bg-elev));
+  box-shadow: inset 0 1px 0 var(--rx-bezel-hi), 0 10px 30px -18px #000;
+}
+.panel::before, .panel::after,
+.panel > .screws::before, .panel > .screws::after {
+  content: ""; position: absolute; width: 7px; height: 7px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--rx-bezel-hi), var(--rx-inset) 70%);
+  box-shadow: inset 0 0 2px #000;
+}
+.panel::before { top: 7px; left: 7px; } .panel::after { top: 7px; right: 7px; }
+.panel > .screws::before { bottom: 7px; left: 7px; } .panel > .screws::after { bottom: 7px; right: 7px; }
+.panel-title {
+  display: flex; align-items: center; gap: 10px; margin: 0;
+  padding: 11px 22px 9px; border-bottom: 1px solid var(--rx-line);
+  font-family: var(--mono); font-size: 11.5px; font-weight: 700;
+  letter-spacing: .22em; text-transform: uppercase; color: var(--text-dim);
+  text-shadow: none;
+}
+.panel-title .tag { color: var(--accent2); letter-spacing: .1em; white-space: nowrap; }
+.panel-title .right { margin-left: auto; color: var(--text-mute); letter-spacing: .06em; font-weight: 400; text-transform: none; text-align: right; }
+.panel-body { padding: 18px 22px 20px; }
+
+/* ── annunciator grid ───────────────────────────────────────────────────── */
+.annun { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
+.lamp {
+  border: 1px solid var(--rx-line); border-radius: 5px; text-align: center;
+  padding: 10px 8px 9px; font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: .12em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--text-dim) 45%, var(--bg));
+  background: var(--rx-inset); box-shadow: inset 0 2px 8px rgba(0, 0, 0, .5);
+}
+.lamp small { display: block; font-size: 9px; letter-spacing: .08em; margin-top: 2px; color: inherit; opacity: .8; }
+.lamp.ok {
+  color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--bg));
+  background: color-mix(in srgb, var(--ok) 7%, var(--rx-inset));
+  text-shadow: 0 0 8px var(--glow); box-shadow: inset 0 0 14px color-mix(in srgb, var(--ok) 10%, transparent);
+}
+.lamp.warn {
+  color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--bg));
+  background: color-mix(in srgb, var(--warn) 7%, var(--rx-inset));
+  text-shadow: 0 0 8px color-mix(in srgb, var(--warn) 50%, transparent);
+  animation: rx-annblink 2.2s step-end infinite;
+}
+.lamp.alarm {
+  color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--bg));
+  background: color-mix(in srgb, var(--danger) 7%, var(--rx-inset));
+  text-shadow: 0 0 8px color-mix(in srgb, var(--danger) 50%, transparent);
+  animation: rx-annblink 1.1s step-end infinite;
+}
+@keyframes rx-annblink { 0%, 60% { opacity: 1; } 61%, 100% { opacity: .45; } }
+
+/* ── instruments: gauges + counters + LED bargraph ──────────────────────── */
+.instruments { display: grid; grid-template-columns: auto auto 1fr; gap: 22px; align-items: center; }
+.gauge-block { text-align: center; }
+.gauge-block canvas { display: block; margin: 0 auto; }
+.gauge-label {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--text-dim); margin-top: 4px; line-height: 1.6;
+}
+.gauge-label b { color: var(--accent); text-shadow: 0 0 8px var(--glow); font-size: 12.5px; }
+.counters { display: grid; grid-template-columns: repeat(2, minmax(140px, 1fr)); gap: 12px; }
+.counter {
+  background: var(--rx-inset); border: 1px solid var(--rx-line); border-radius: 6px;
+  padding: 10px 14px 9px; box-shadow: inset 0 2px 10px rgba(0, 0, 0, .55);
+}
+.counter .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--text-mute); }
+.counter .v {
+  font-family: var(--mono); font-size: 24px; font-weight: 700; letter-spacing: .06em;
+  margin-top: 3px; color: var(--accent); text-shadow: 0 0 10px var(--glow);
+  font-variant-numeric: tabular-nums; text-align: left;
+}
+.counter .v small { font-size: 12px; color: var(--text-dim); text-shadow: none; letter-spacing: .04em; }
+.counter.alt .v { color: var(--info); text-shadow: 0 0 10px color-mix(in srgb, var(--info) 45%, transparent); }
+
+.ledbar-wrap { margin-top: 14px; }
+.ledbar-title { font-family: var(--mono); font-size: 9.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--text-mute); margin-bottom: 6px; }
+.ledbar { display: flex; gap: 3px; height: 16px; }
+.ledbar span { flex: 1; border-radius: 2px; background: color-mix(in srgb, var(--text) 6%, var(--rx-inset)); }
+.ledbar span.g { background: color-mix(in srgb, var(--ok) 62%, var(--bg)); box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 35%, transparent); }
+.ledbar span.a { background: color-mix(in srgb, var(--warn) 62%, var(--bg)); box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 30%, transparent); }
+.ledbar span.r { background: color-mix(in srgb, var(--danger) 62%, var(--bg)); box-shadow: 0 0 6px color-mix(in srgb, var(--danger) 30%, transparent); }
+.ledbar-key { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--text-dim); letter-spacing: .05em; font-variant-numeric: tabular-nums; }
+.ledbar-key .g { color: var(--ok); } .ledbar-key .a { color: var(--warn); } .ledbar-key .r { color: var(--danger); }
+
+/* ── mimic flow diagram ─────────────────────────────────────────────────── */
+.mimic-wrap { overflow-x: auto; scrollbar-width: thin; }
+.mimic { min-width: 760px; width: 100%; display: block; }
+.mimic .box { fill: var(--rx-inset); stroke: var(--rx-bezel); stroke-width: 1; }
+.mimic .box.core { stroke: color-mix(in srgb, var(--accent) 55%, var(--bg)); }
+.mimic .lbl { fill: var(--text-dim); font: 700 10px var(--mono); letter-spacing: .16em; }
+.mimic .val { fill: var(--accent); font: 700 13px var(--mono); letter-spacing: .05em; }
+.mimic .val.cy { fill: var(--info); } .mimic .val.mg { fill: var(--accent2); }
+.mimic .val.bad { fill: var(--danger); }
+.mimic .pipe { stroke: color-mix(in srgb, var(--text) 14%, var(--bg)); stroke-width: 2; fill: none; }
+.mimic .flow { stroke: var(--accent); stroke-width: 2; fill: none; stroke-dasharray: 3 9; animation: rx-flow 1.6s linear infinite; opacity: .9; }
+.mimic .flow.cy { stroke: var(--info); }
+.mimic .flow.mg { stroke: var(--accent2); animation-duration: 2.6s; }
+@keyframes rx-flow { to { stroke-dashoffset: -12; } }
+
+/* ── strip chart ────────────────────────────────────────────────────────── */
+.chart-wrap { position: relative; }
+.chart-wrap canvas { display: block; width: 100%; height: 240px; }
+.chart-tip {
+  position: absolute; pointer-events: none; display: none; z-index: 5;
+  background: var(--rx-inset); border: 1px solid var(--rx-bezel); border-radius: 5px;
+  padding: 6px 10px; font-family: var(--mono); font-size: 12px; color: var(--accent);
+  white-space: nowrap; box-shadow: 0 6px 18px rgba(0, 0, 0, .55); font-variant-numeric: tabular-nums;
+}
+.chart-tip .t { color: var(--text-mute); }
+.chart-empty { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--text-mute); font-family: var(--mono); font-size: 12px; letter-spacing: .12em; }
+
+/* ── region patch bay ───────────────────────────────────────────────────── */
+.patchbay { display: grid; grid-template-columns: auto 1fr; gap: 26px; align-items: start; }
+.switchbank { display: flex; gap: 18px; flex-wrap: wrap; }
+.switch {
+  display: flex; flex-direction: column; align-items: center; gap: 7px; cursor: pointer;
+  background: none; border: none; padding: 0; font-family: var(--mono);
+}
+.switch .lamp-dot { width: 9px; height: 9px; border-radius: 50%; background: color-mix(in srgb, var(--text) 12%, var(--bg)); }
+.switch.on .lamp-dot { background: var(--ok); box-shadow: 0 0 9px var(--ok); }
+.switch.on.s-stale .lamp-dot { background: var(--warn); box-shadow: 0 0 9px var(--warn); }
+.switch.s-offline .name { color: var(--danger); }
+.switch .toggle {
+  width: 26px; height: 46px; border-radius: 6px; position: relative;
+  background: linear-gradient(180deg, var(--rx-inset), color-mix(in srgb, var(--text) 8%, var(--bg)));
+  border: 1px solid var(--rx-bezel); box-shadow: inset 0 2px 8px rgba(0, 0, 0, .65);
+}
+.switch .knob {
+  position: absolute; left: 3px; right: 3px; height: 18px; bottom: 3px; border-radius: 4px;
+  background: linear-gradient(180deg, var(--rx-bezel-hi), var(--rx-bezel));
+  box-shadow: 0 2px 4px rgba(0, 0, 0, .6), inset 0 1px 0 color-mix(in srgb, var(--text) 40%, var(--bg));
+  transition: bottom .12s ease;
+}
+.switch.on .knob {
+  bottom: 23px;
+  background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 55%, var(--bg)));
+  box-shadow: 0 0 10px var(--glow), inset 0 1px 0 color-mix(in srgb, var(--accent) 40%, #fff);
+}
+.switch .name { font-size: 10px; letter-spacing: .14em; color: var(--text-dim); text-transform: uppercase; display: inline-flex; align-items: center; gap: 5px; }
+.switch.on .name { color: var(--accent); }
+.switch .pin { font-size: 10px; }
+.patch-readout .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--text-mute); margin-bottom: 6px; }
+.uri-row { display: flex; gap: 8px; align-items: stretch; }
+.uri-row code {
+  flex: 1; display: flex; align-items: center; font-family: var(--mono); font-size: 13.5px;
+  padding: 11px 14px; background: var(--rx-inset);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--bg)); border-radius: 5px;
+  color: var(--accent); text-shadow: 0 0 8px var(--glow); word-break: break-all;
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, .55);
+}
+.patch-meta { font-family: var(--mono); font-size: 11.5px; color: var(--text-mute); margin-top: 8px; letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+.patch-note { margin-top: 14px; font-size: 13px; color: var(--text-dim); line-height: 1.75; }
+.patch-note code {
+  font-family: var(--mono); color: var(--info); background: var(--rx-inset);
+  border: 1px solid var(--rx-line); border-radius: 4px; padding: 1px 6px; font-size: 12px;
+}
+
+/* ── fuel-rod block maturity ────────────────────────────────────────────── */
+.rods { display: flex; gap: 18px; align-items: flex-end; overflow-x: auto; padding: 6px 2px 2px; scrollbar-width: thin; }
+.rods .rods-empty { color: var(--text-mute); font-family: var(--mono); font-size: 12px; letter-spacing: .1em; padding: 30px 0; }
+.rod { display: flex; flex-direction: column; align-items: center; gap: 7px; flex: 0 0 auto; }
+.rod .tube {
+  width: 26px; height: 120px; border-radius: 6px; position: relative; overflow: hidden;
+  background: var(--rx-inset); border: 1px solid var(--rx-line);
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, .6);
+}
+.rod .fill {
+  position: absolute; left: 2px; right: 2px; bottom: 2px; border-radius: 4px; min-height: 3px;
+  background: linear-gradient(180deg, var(--warn), color-mix(in srgb, var(--warn) 55%, var(--bg)));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--warn) 35%, transparent);
+}
+.rod.done .fill {
+  background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 45%, var(--bg)));
+  box-shadow: 0 0 10px var(--glow);
+}
+.rod.orphan .fill {
+  background: linear-gradient(180deg, var(--danger), color-mix(in srgb, var(--danger) 55%, var(--bg)));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--danger) 35%, transparent);
+}
+.rod .h { font-family: var(--mono); font-size: 10.5px; color: var(--text); letter-spacing: .03em; font-variant-numeric: tabular-nums; }
+.rod .m { font-family: var(--mono); font-size: 9.5px; color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.rod.done .m { color: var(--ok); }
+.rod.orphan .m { color: var(--danger); }
+
+/* ── payout teletype ────────────────────────────────────────────────────── */
+.tty {
+  background: var(--rx-inset); border: 1px solid var(--rx-line); border-radius: 6px;
+  box-shadow: inset 0 2px 12px rgba(0, 0, 0, .55);
+  padding: 13px 16px; font-family: var(--mono); font-size: 12px; line-height: 1.9;
+  color: var(--text-dim); height: 172px; overflow: hidden; position: relative;
+  font-variant-numeric: tabular-nums;
+}
+.tty div b { color: var(--accent); font-weight: 600; }
+.tty div .via { color: var(--info); }
+.tty::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 34px;
+  background: linear-gradient(var(--rx-inset), transparent); pointer-events: none;
+}
+
+/* ── procedures ─────────────────────────────────────────────────────────── */
+.proc { list-style: none; margin: 0; padding: 0; columns: 2; column-gap: 40px; }
+.proc li {
+  break-inside: avoid; padding: 8px 0 8px 24px; position: relative;
+  color: var(--text-dim); font-size: 13.5px; border-bottom: 1px dashed var(--rx-line);
+}
+.proc li::before { content: "▸"; position: absolute; left: 4px; color: var(--accent2); }
+.proc b { color: var(--text); }
+
+/* ── motion & responsive ────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .master-lamp .led, .lamp.warn, .lamp.alarm, .mimic .flow { animation: none !important; }
+}
+@media (max-width: 1020px) {
+  .instruments { grid-template-columns: auto 1fr; }
+  .instruments .gauge-block:nth-child(2) { order: 3; }
+}
+@media (max-width: 900px) {
+  .deck-row.half, .deck-row.main { grid-template-columns: 1fr; }
+  .patchbay { grid-template-columns: 1fr; gap: 18px; }
+  .proc { columns: 1; }
+  .panel-body { padding: 15px 16px 17px; }
+  .panel-title { padding: 10px 16px 8px; letter-spacing: .16em; }
+}
+@media (max-width: 640px) {
+  .instruments { grid-template-columns: 1fr; justify-items: center; gap: 16px; }
+  .instruments .gauge-block:nth-child(2) { order: 0; }
+  .counters { width: 100%; }
+  .annun { grid-template-columns: repeat(2, 1fr); }
+  .deck-head { align-items: flex-start; flex-direction: column; }
+  .counter .v { font-size: 21px; }
+}

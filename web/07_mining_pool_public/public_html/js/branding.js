@@ -69,14 +69,31 @@
     var pageSeo = (seo.page_seo && seo.page_seo[page]) || {};
 
     var poolName = pool.name || '';
+    var tagline = pool.tagline || '';
     var pageLabel = pageSeo.label || prettyPage(page);
+    var isHome = (page === 'home' || page === 'index');
 
-    // Title: per-page override wins, else the title_template, else leave as-is.
-    var title = pageSeo.title;
-    if (!title && seo.title_template && poolName) {
-      title = seo.title_template
+    function fillTokens(tpl) {
+      return tpl
         .replace(/%page%/g, pageLabel || poolName)
-        .replace(/%pool_name%/g, poolName);
+        .replace(/%pool_name%/g, poolName)
+        .replace(/%tagline%/g, tagline);
+    }
+
+    // Title precedence:
+    //   1. explicit per-page override (page_seo[page].title)
+    //   2. home page → home_title (the %page% token is empty on home, so the
+    //      generic template would duplicate the pool name)
+    //   3. the generic title_template
+    // …else leave the hard-coded <title> as-is.
+    var title = pageSeo.title;
+    if (!title && isHome && poolName) {
+      // Home never uses the generic template (its %page% token is empty and would
+      // duplicate the pool name). Use home_title, else the pool name alone.
+      title = seo.home_title ? fillTokens(seo.home_title) : poolName;
+    }
+    if (!title && seo.title_template && poolName) {
+      title = fillTokens(seo.title_template);
     }
     if (title) document.title = title;
 

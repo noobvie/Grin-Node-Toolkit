@@ -55,9 +55,10 @@ class PoolSettings {
       // enabled_themes: JSON array of theme keys visitors may switch between on the
       // public pages. With ≤1 entry (or allow_theme_switch off) no switcher is shown
       // and default_theme is forced. default_theme need not be in this list.
-      // Default = the polished looks (Reactor + Uranium Classic + Light); nexus and
-      // the 10 white-label extras stay opt-in via the admin panel checkbox grid.
-      enabled_themes: '["atomic","uranium","light"]',
+      // Default = a clean two-way pick: the original "Reactor" dark and "Light".
+      // Uranium/Nexus and the 10 white-label extras stay opt-in via the admin
+      // panel checkbox grid.
+      enabled_themes: '["atomic","light"]',
       // custom_theme: JSON map of CSS variable name -> value (theme builder output)
       custom_theme: '{}',
       custom_css: '',
@@ -82,6 +83,10 @@ class PoolSettings {
       meta_description: 'GRINIUM is a low-fee Grin (GRIN) mining pool — PPLNS rewards, anonymous Tor payouts, prize draws and bonuses. No sign-up; point your miner and start earning.',
       meta_keywords: 'grin mining pool, grin pool, GRIN, mimblewimble, cuckatoo32, PPLNS pool, anonymous mining, tor payout, asic mining, cryptocurrency mining, GRINIUM',
       title_template: '%page% — %pool_name%',
+      // Home page gets its own title (the %page% token is empty on home, so the
+      // generic template would render "%pool_name% — %pool_name%"). Tokens:
+      // %pool_name%, %tagline%. Leave blank to fall back to the pool name alone.
+      home_title: '%pool_name% — Fast & Secure Grin Mining Pool',
       og_title: 'GRINIUM — Grin Mining Pool',
       og_description: 'Mine Grin with low fees, PPLNS rewards and anonymous Tor payouts — plus prize draws, join bonuses and a community fortune board. No account needed.',
       og_image_file: '',
@@ -443,6 +448,10 @@ class PoolSettings {
         if (val && val.length > 120) throw new Error('title_template too long (max 120)');
         return val;
       },
+      home_title: (val) => {
+        if (val && val.length > 120) throw new Error('home_title too long (max 120)');
+        return val;
+      },
       twitter_card_type: (val) => {
         if (val && !['summary', 'summary_large_image'].includes(val)) {
           throw new Error('invalid twitter_card_type');
@@ -730,6 +739,7 @@ class PoolSettings {
         meta_description: seo.meta_description || '',
         meta_keywords: seo.meta_keywords || '',
         title_template: seo.title_template || '%page% — %pool_name%',
+        home_title: seo.home_title || '',
         og_title: seo.og_title || '',
         og_description: seo.og_description || '',
         og_image_url: assetUrlFor('og_image'),

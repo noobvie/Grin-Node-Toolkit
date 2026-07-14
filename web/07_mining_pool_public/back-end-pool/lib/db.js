@@ -640,7 +640,10 @@ function seedDefaultRegions(stratumPort, poolDomain) {
   try {
     const dom = String(poolDomain || '').toLowerCase();
     if (!(dom === 'grinium.com' || dom.endsWith('.grinium.com'))) return;
-    // Versioned seed: v1 (2026-06) shipped han/nyc/lax/yyz/ams; v2 adds sgn (Saigon).
+    // Versioned seed: v1 (2026-06) originally shipped han/nyc/lax/yyz/ams; v2 adds sgn
+    // (Saigon). The 'han' (Hanoi) row was later dropped from the seed — fresh installs no
+    // longer get it; already-seeded installs keep any han row until the operator removes it
+    // via the admin Regions page (the seed never retroactively deletes).
     // The marker value stores the applied version — the legacy marker wrote '1', which
     // reads back as "v1 applied", so an already-seeded install inserts ONLY the newer
     // additions. Rows the operator deleted from an already-applied version are never
@@ -654,7 +657,6 @@ function seedDefaultRegions(stratumPort, poolDomain) {
     const port = stratumPort || 3333;
     // city = label; country/country_code drive grouping + flag on the dashboard.
     const REGIONS = [
-      { v: 1, region: 'han', label: 'Hanoi',       country: 'Vietnam',        cc: 'VN', host: 'han.grinium.com' },
       { v: 1, region: 'nyc', label: 'New York',    country: 'United States',  cc: 'US', host: 'nyc.grinium.com' },
       { v: 1, region: 'lax', label: 'Los Angeles', country: 'United States',  cc: 'US', host: 'lax.grinium.com' },
       { v: 1, region: 'yyz', label: 'Toronto',     country: 'Canada',         cc: 'CA', host: 'yyz.grinium.com' },

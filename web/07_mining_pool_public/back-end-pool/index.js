@@ -109,6 +109,20 @@ function readWgHandshakes() {
   return out;
 }
 
+// Cached wrapper for the public /api/pool/stats/regions path: that endpoint is unauthenticated
+// and polled every ~60s by every open dashboard, so calling readGatewayStatus() (which spawns
+// grin-gateway-ctl / `wg show`) on every hit is a needless per-request subprocess. A 15s TTL
+// collapses a burst of public hits to at most one handshake read every 15s while staying fresh
+// enough for a liveness pill. The admin endpoint keeps its own uncached read (low call volume).
+let _gwStatusCache = { ts: 0, data: {} };
+async function cachedGatewayStatus() {
+  const now = Date.now();
+  if (now - _gwStatusCache.ts < 15000) return _gwStatusCache.data;
+  const data = await readGatewayStatus();
+  _gwStatusCache = { ts: now, data };
+  return data;
+}
+
 const app = express();
 // Trust X-Forwarded-For ONLY when the connection comes from our own nginx on loopback.
 // This makes req.ip the real client IP from XFF (instead of nginx's 127.0.0.1) while making
@@ -612,7 +626,7 @@ function setupRoutes() {
     'GET /api/pool/stats': 'Live pool stats: hashrate, miners, blocks, share quality.',
     'GET /api/pool/stats/regions': 'Per-region stratum endpoints + live status.',
     'GET /api/pool/blocks': 'Pool-found blocks (paginated: limit, offset, status).',
-    'GET /api/pool/effort': 'Current round effort, recent luck, time since last block.',
+    'GET /api/pool/effort': 'Pool network share, recent luck, round effort, time since last block.',
     'GET /api/pool/hashrate/history': 'Pool hashrate time-series (?hours=).',
     'GET /api/pool/status': 'Coarse service status strip.',
     'GET /api/account/:addr': 'Account summary: balance, paid, min payout, effort.',
@@ -1968,9 +1982,10 @@ function setupRoutes() {
     }
   });
 
-  // Round effort / luck / time-since-last-block — pool-trust signals.
-  //  · round_effort_pct = Σ(share diff since last block) / current per-block network diff × 100
-  //  · luck_100_pct     = mean over last 100 blocks of (network_difficulty / round_shares) × 100
+  // Network share / luck / round effort / time-since-last-block — pool-trust signals.
+  //  · network_share_pct = pool 1h GPS / live network GPS × 100 (how often this pool wins)
+  //  · round_effort_pct  = Σ(share diff since last block) / current per-block network diff × 100
+  //  · luck_100_pct      = mean over last 100 blocks of (network_difficulty / round_shares) × 100
   //    (>100% = luckier than expected; uses captured per-block columns, NULL rows skipped)
   // Current network difficulty is cached ~60s to avoid hammering the node.
   app.get('/api/pool/effort', rateLimiter.middleware('public'), async (req, res) => {
@@ -1999,6 +2014,17 @@ function setupRoutes() {
       const roundEffortPct = (netDiff && netDiff > 0)
         ? parseFloat(((roundDiff / netDiff) * 100).toFixed(2)) : null;
 
+      // Pool's share of the live network hashrate — how often this pool wins blocks.
+      // Both hashrates use the same C32 constants, so the ratio is the honest share.
+      // Network GPS uses the 60s block target (no per-block timestamp here):
+      //   GPS = diff × 42 / 60 / 16384   (see CLAUDE.md hashrate formula)
+      const networkGps = (netDiff && netDiff > 0)
+        ? (netDiff * 42) / 60 / 16384 : null;
+      let poolGps = null;
+      try { poolGps = hashrateTracker.getHashrateStats().pool_hashrate_1h_gps || 0; } catch (_) { /* null */ }
+      const networkSharePct = (networkGps && networkGps > 0 && poolGps != null)
+        ? parseFloat(((poolGps / networkGps) * 100).toFixed(2)) : null;
+
       const luckRows = db.prepare(
         `SELECT network_difficulty AS nd, round_shares AS rs FROM blocks
          WHERE network_difficulty IS NOT NULL AND round_shares > 0
@@ -2016,6 +2042,8 @@ function setupRoutes() {
         round_shares: parseFloat(roundDiff.toFixed(6)),
         network_difficulty: netDiff,
         round_effort_pct: roundEffortPct,
+        network_hashrate_gps: networkGps != null ? parseFloat(networkGps.toFixed(6)) : null,
+        network_share_pct: networkSharePct,
         luck_100_pct: luckPct,
         luck_sample: luckRows.length
       });
@@ -2136,19 +2164,25 @@ function setupRoutes() {
   // Per-region live stats. Hashrate is derived from accepted-share difficulty over a short
   // window using the canonical C32 formula (GPS = Σdiff × 42 / window_s / 16384 — matches
   // hashrate-tracker.js and CLAUDE.md), grouped by the `region` tag the central stratum
-  // stamps on each share (per-region listener / Model C gateway). Regions with a
-  // pool_locations row but no recent shares appear with online=false / status "unknown".
-  app.get('/api/pool/stats/regions', rateLimiter.middleware('public'), (req, res) => {
+  // stamps on each share (per-region listener / Model C gateway). Per-region `status` is
+  // 'online' (up + active miners) | 'idle' (up, no recent miners) | 'offline' (WireGuard
+  // tunnel down / never handshaked); see regionStatus() below for the liveness rules.
+  app.get('/api/pool/stats/regions', rateLimiter.middleware('public'), async (req, res) => {
     try {
-      const WINDOW_S = 900; // 15-minute window for "current" regional hashrate
+      const WINDOW_S = 900;  // 15-minute window for "current" regional hashrate
+      const OFFLINE_S = 600; // a WireGuard handshake older than this (or none at all) = gateway
+                             // down. Aligned with /api/admin/health/gateways so the public pill
+                             // and the admin health view never disagree about who is offline.
       const CYCLE_LENGTH = 42, SOLUTION_RATE = 16384;
-      const cutoff = Math.floor(Date.now() / 1000) - WINDOW_S;
+      const nowS = Math.floor(Date.now() / 1000);
+      const cutoff = nowS - WINDOW_S;
 
       const agg = db.prepare(
         `SELECT region,
                 COUNT(*) AS shares,
                 COUNT(DISTINCT grin_address) AS miners,
-                COALESCE(SUM(difficulty), 0) AS sumdiff
+                COALESCE(SUM(difficulty), 0) AS sumdiff,
+                MAX(created_at) AS last_share
          FROM shares WHERE created_at > ? GROUP BY region`
       ).all(cutoff);
       const byRegion = new Map(agg.map(r => [r.region, r]));
@@ -2158,29 +2192,53 @@ function setupRoutes() {
       ).all();
       const locByRegion = new Map(locations.map(l => [l.region, l]));
 
-      // Coarse per-region liveness for the public connect-page pill. With Model C the edge
-      // is a dumb forwarder that never calls back, so the honest public signal is recent
-      // share activity: shares in the window → "online"; none → "unknown" (a freshly-declared
-      // or simply-quiet region — never a false "down"). The richer wg-handshake signal is
-      // admin-only (/api/admin/health/gateways), not exposed on the public pill.
-      //
-      // EXCEPTION — the LOCAL region (the singlebox/central box itself): its stratum is this
-      // very process's in-bound listener, so if this API is answering, the local stratum is
-      // bound and accepting miners. Report it "online" regardless of recent shares — otherwise
-      // a quiet-but-healthy main host wrongly shows "○ Unknown" even with :3333/:13333 listening.
+      // Per-region tunnel liveness (Model C): WireGuard latest-handshake per gateway. Peers
+      // carry PersistentKeepalive=25, so a healthy tunnel re-handshakes every ~25s regardless
+      // of miner traffic — a handshake older than OFFLINE_S (or none at all) means the gateway
+      // is genuinely DOWN, not merely quiet. Returns {} when wg is unavailable (singlebox with
+      // no gateways, not the central box, dev/Windows): in that case we can't judge liveness,
+      // so we never mark anyone offline and degrade to the 2-state online/idle signal.
+      const wgByRegion = await cachedGatewayStatus();
+      const wgAvailable = Object.keys(wgByRegion).length > 0;
+
+      // The LOCAL/singlebox region has no WG peer (it IS the box); this API answering proves
+      // its own stratum is bound, so it is always "up" — never offline.
       const localRegion = (config && config.role === 'singlebox') ? config.region : null;
-      const regionStatus = (region, hasShares) =>
-        (hasShares || region === localRegion) ? 'online' : 'unknown';
+
+      // Three honest public states for a miner choosing where to point their rig:
+      //   online  — tunnel up AND ≥1 share in the window (miners active here right now)
+      //   idle    — tunnel up, no recent miners (perfectly fine to connect, just quiet)
+      //   offline — tunnel down / never handshaked (don't bother — you can't mine here)
+      // "up" = a fresh WireGuard handshake OR recent shares. Recent shares are independent
+      // proof-of-life: if miners are actively submitting through a region it IS reachable,
+      // even if the handshake read is momentarily stale/absent — otherwise a single-region
+      // handshake blip would flip an actively-mined region to red while its card still shows
+      // miners > 0. Matches the admin health endpoint, which takes min(shareAge, handshakeAge).
+      const regionStatus = (region, hasShares, shareAge) => {
+        let up;
+        if (region === localRegion || !wgAvailable) {
+          up = true; // local box, or liveness unknowable → assume up (never false-offline)
+        } else {
+          const wg = wgByRegion[region];
+          const hsFresh = !!(wg && wg.handshake && (nowS - wg.handshake) < OFFLINE_S);
+          const sharesFresh = shareAge !== null && shareAge < OFFLINE_S;
+          up = hsFresh || sharesFresh;
+        }
+        if (!up) return 'offline';
+        return hasShares ? 'online' : 'idle';
+      };
 
       // Union of regions seen in shares and regions declared in pool_locations.
       const regions = new Set([...byRegion.keys(), ...locByRegion.keys()]);
       const out = [];
       let totalGps = 0, totalMiners = 0, totalShares = 0;
       for (const region of regions) {
-        const a = byRegion.get(region) || { shares: 0, miners: 0, sumdiff: 0 };
+        const a = byRegion.get(region) || { shares: 0, miners: 0, sumdiff: 0, last_share: 0 };
         const loc = locByRegion.get(region) || {};
         const gps = (a.sumdiff * CYCLE_LENGTH) / (WINDOW_S * SOLUTION_RATE);
         totalGps += gps; totalMiners += a.miners; totalShares += a.shares;
+        const shareAge = a.last_share ? (nowS - a.last_share) : null;
+        const status = regionStatus(region, a.shares > 0, shareAge);
         out.push({
           region,
           label: loc.label || null,
@@ -2188,8 +2246,8 @@ function setupRoutes() {
           country_code: loc.country_code || null,
           stratum_url: loc.stratum_url || null,
           is_active: loc.is_active === undefined ? null : !!loc.is_active,
-          status: regionStatus(region, a.shares > 0),
-          online: a.shares > 0 || region === localRegion,
+          status,                       // 'online' | 'idle' | 'offline'
+          online: status !== 'offline', // reachable? (up regardless of miner count)
           hashrate_gps: parseFloat(gps.toFixed(6)),
           miners: a.miners,
           shares_window: a.shares

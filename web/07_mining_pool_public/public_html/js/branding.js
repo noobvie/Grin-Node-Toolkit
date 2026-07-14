@@ -429,13 +429,18 @@
       if (logo) {
         if (brand.logo_url) logo.src = brand.logo_url;
       } else {
+        // Only synthesise a logo for admin/older markup that ships a .dot placeholder.
+        // A .brand with neither a logo nor a dot (e.g. the footer brand) intentionally
+        // has no logo — don't recreate one, or the footer logo comes back.
         var dot = el.querySelector('.dot');
-        logo = document.createElement('img');
-        logo.className = 'brand-logo';
-        logo.src = brand.logo_url || '/images/logo.svg';
-        logo.alt = '';
-        logo.setAttribute('aria-hidden', 'true');
-        if (dot) { el.replaceChild(logo, dot); } else { el.insertBefore(logo, el.firstChild); }
+        if (dot) {
+          logo = document.createElement('img');
+          logo.className = 'brand-logo';
+          logo.src = brand.logo_url || '/images/grin_lime.svg';
+          logo.alt = '';
+          logo.setAttribute('aria-hidden', 'true');
+          el.replaceChild(logo, dot);
+        }
       }
 
       if (nameEl && !el.querySelector('.brand-text')) {

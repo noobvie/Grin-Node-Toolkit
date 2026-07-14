@@ -99,19 +99,21 @@
                 <div class="sub" data-brand="hero_subheading">Grin Cuckatoo32 · PPLNS rewards · anonymous Tor payouts</div>
             </div>
             <div class="deck-clockrow">
-                <span class="utc num" id="rx-utc">--:--:-- UTC</span>
                 <span class="master-lamp warn" id="rx-master"><span class="led"></span><span id="rx-master-text">Connecting…</span></span>
             </div>
         </div>
 
-        <!-- ═══ Spec placard: the static pool facts, engraved (live values from pool-info) ═══ -->
+        <!-- ═══ Spec placard: live pool terms + network conditions (engraved plate) ═══
+             Pool terms from /api/config/pool-info; network facts refresh with the poll.
+             Static "scheme / payout-via / registration" facts intentionally live in the
+             hero subheading + P-03 mimic instead of being engraved a third time here. -->
         <div class="placard" aria-label="Pool specifications">
-            <span>FEE <b id="pl-fee">—</b></span>
-            <span>SCHEME <b>PPLNS</b></span>
-            <span>MIN PAYOUT <b id="pl-min">—</b></span>
-            <span>PAYOUT VIA <b>TOR</b></span>
-            <span>REGISTRATION <b>NONE</b></span>
-            <span>NETWORK <b id="pl-net">—</b></span>
+            <span><i>Fee</i><b id="pl-fee">—</b></span>
+            <span><i>Min payout</i><b id="pl-min">—</b></span>
+            <span><i>Network</i><b id="pl-net">—</b></span>
+            <span><i>Net hashrate</i><b id="pl-nethash">—</b></span>
+            <span><i>Net difficulty</i><b id="pl-netdiff">—</b></span>
+            <span><i>Active regions</i><b id="pl-regions">—</b></span>
         </div>
 
         <div class="deck">
@@ -119,7 +121,7 @@
             <div class="deck-row main">
                 <!-- ═══ P-01 · PRIMARY INSTRUMENTS: gauges + counters + share-quality LED bar ═══ -->
                 <div class="panel"><span class="screws"></span>
-                    <h2 class="panel-title"><span class="tag">P-01</span> Primary instruments <span class="right">live · 60s refresh</span></h2>
+                    <h2 class="panel-title"><span class="tag">P-01</span> Primary instruments <span class="right"><span class="pt-clock" id="rx-utc">--:--:-- UTC</span> · live · 60s refresh</span></h2>
                     <div class="panel-body">
                         <div class="instruments">
                             <div class="gauge-block">
@@ -127,8 +129,8 @@
                                 <div class="gauge-label">Pool hashrate<br><b class="num" id="g-hash-v">—</b><br><span id="g-hash-avg"></span></div>
                             </div>
                             <div class="gauge-block">
-                                <canvas id="g-effort" width="190" height="150" aria-label="Round effort gauge" role="img"></canvas>
-                                <div class="gauge-label">Round effort<br><b class="num" id="g-effort-v">—</b><br><span id="g-effort-luck"></span></div>
+                                <canvas id="g-share" width="190" height="150" aria-label="Network share gauge" role="img"></canvas>
+                                <div class="gauge-label">Network share<br><b class="num" id="g-share-v">—</b><br><span id="g-share-luck"></span></div>
                             </div>
                             <div>
                                 <div class="counters">
@@ -177,39 +179,39 @@
             <div class="panel"><span class="screws"></span>
                 <h2 class="panel-title"><span class="tag">P-03</span> Process mimic — share &amp; payout circuit</h2>
                 <div class="panel-body mimic-wrap">
-                    <svg class="mimic" viewBox="0 0 920 200" role="img" aria-label="Flow diagram: miners feed shares through the stratum bus into the pool core, the core submits to the Grin node, and the wallet pays out over Tor">
-                        <!-- pipes + animated flows -->
-                        <path class="pipe" d="M150 60 H 260"/><path class="flow" d="M150 60 H 260"/>
-                        <path class="pipe" d="M420 60 H 530"/><path class="flow" d="M420 60 H 530"/>
-                        <path class="pipe" d="M690 60 H 800"/><path class="flow cy" d="M690 60 H 800"/>
-                        <path class="pipe" d="M610 100 V 140 H 420"/><path class="flow mg" d="M610 100 V 140 H 420"/>
-                        <path class="pipe" d="M260 140 H 150"/><path class="flow mg" d="M260 140 H 150"/>
-                        <!-- stations -->
-                        <rect class="box" x="20" y="30" width="130" height="60" rx="6"/>
-                        <text class="lbl" x="34" y="52">MINER ARRAY</text>
-                        <text class="val cy" x="34" y="74" id="mi-miners">— UNITS</text>
-                        <rect class="box" x="260" y="30" width="160" height="60" rx="6"/>
-                        <text class="lbl" x="276" y="52">STRATUM BUS</text>
-                        <text class="val" x="276" y="74" id="mi-regions">—</text>
-                        <rect class="box core" x="530" y="20" width="160" height="80" rx="6"/>
-                        <text class="lbl" x="546" y="42">POOL CORE</text>
-                        <text class="val" x="546" y="64" id="mi-core-effort">EFFORT —</text>
-                        <text class="val" x="546" y="86" id="mi-core-shares">— SHARES</text>
-                        <rect class="box" x="800" y="30" width="105" height="60" rx="6"/>
-                        <text class="lbl" x="814" y="52">GRIN NODE</text>
-                        <text class="val cy" x="814" y="74" id="mi-node">…</text>
-                        <rect class="box" x="260" y="110" width="160" height="60" rx="6"/>
-                        <text class="lbl" x="276" y="132">WALLET · TOR</text>
-                        <text class="val mg" x="276" y="154">AUTO PAYOUT</text>
-                        <rect class="box" x="20" y="110" width="130" height="60" rx="6"/>
-                        <text class="lbl" x="34" y="132">MINER WALLETS</text>
-                        <text class="val mg" x="34" y="154">PAID VIA TOR</text>
-                        <!-- flow labels -->
-                        <text class="lbl" x="176" y="50">SHARES ▸</text>
-                        <text class="lbl" x="446" y="50">WORK ▸</text>
-                        <text class="lbl" x="706" y="50">BLOCKS ▸</text>
-                        <text class="lbl" x="180" y="132">◂ GRIN</text>
-                    </svg>
+                    <div class="mimic" role="img" aria-label="Flow diagram: miners feed shares through the stratum bus into the pool core, the core submits found blocks to the Grin node, and the wallet pays miners back as encrypted Slatepacks over Tor">
+                        <div class="mnode">
+                            <span class="lbl">Miner array</span>
+                            <span class="val cy" id="mi-miners">— UNITS</span>
+                        </div>
+                        <div class="mlink" data-flow="SHARES"><i></i></div>
+                        <div class="mnode">
+                            <span class="lbl">Stratum bus</span>
+                            <span class="val" id="mi-regions">—</span>
+                        </div>
+                        <div class="mlink" data-flow="WORK"><i></i></div>
+                        <div class="mnode core">
+                            <span class="lbl">Pool core</span>
+                            <span class="val" id="mi-core-share">NET-SHARE —</span>
+                            <span class="val" id="mi-core-shares">— SHARES</span>
+                        </div>
+                        <div class="mlink" data-flow="BLOCKS"><i></i></div>
+                        <div class="mnode">
+                            <span class="lbl">Grin node</span>
+                            <span class="val cy" id="mi-node">…</span>
+                        </div>
+                        <div class="mlink" data-flow="BLOCK FOUND"><i></i></div>
+                        <div class="mnode">
+                            <span class="lbl">Wallet · Tor</span>
+                            <span class="val mg">SLATEPACK ▸ AUTO</span>
+                        </div>
+                        <div class="mlink" data-flow="PAYOUT"><i></i></div>
+                        <div class="mnode">
+                            <span class="lbl">Miner wallets</span>
+                            <span class="val mg">PAID · SLATEPACK / TOR</span>
+                        </div>
+                    </div>
+                    <p class="mimic-note">Payouts are encrypted <b>Slatepacks</b> delivered over <b>Tor</b> to each miner&rsquo;s wallet listener &mdash; your address is your identity, no account needed. <span class="dim">Nostr / Goblin transport planned.</span></p>
                 </div>
             </div>
 
@@ -230,6 +232,18 @@
                     <div class="panel-body">
                         <div class="patchbay">
                             <div class="switchbank" id="rx-switches" role="tablist" aria-label="Mining regions"></div>
+                            <div class="rgn-legend" id="rx-legend" hidden>
+                                <span><i class="l-online"></i> online — miners active</span>
+                                <span><i class="l-idle"></i> idle — ready, no miners yet</span>
+                                <span><i class="l-down"></i> offline — gateway unreachable</span>
+                            </div>
+                            <p class="rgn-note" id="rx-note" hidden>
+                                Connect to any <b class="c-ok">green</b> or <b class="c-info">blue</b>
+                                region — blue only means it is up and ready with no miners on it yet,
+                                not broken. A <b class="c-bad">red</b> region is temporarily unreachable,
+                                so just pick another. Your rewards are identical on every region, so
+                                choose the one nearest you for the lowest stale-share rate.
+                            </p>
                             <div class="patch-readout">
                                 <div class="k">Stratum endpoint — paste into your miner</div>
                                 <div class="uri-row">
@@ -239,11 +253,11 @@
                                 <div class="patch-meta" id="rx-meta"></div>
                                 <div class="patch-note">
                                     USER <code>&lt;your_grin_address&gt;.rig1</code> — your address is your login, no account or
-                                    registration; <code>.rig1</code> names this machine (optional, lowercase letters/digits/<code>-</code>/<code>_</code>,
-                                    max <strong>10 chars</strong> — longer labels are shortened automatically).
-                                    PASS <code>x</code> (ignored). Algorithm <strong>Cuckatoo32</strong> — any GPU
-                                    (lolMiner, GMiner, SRBMiner-MULTI) or ASIC (iPollo G1 / G1-Mini) works; ASICs may
-                                    want just the <code>host:port</code> part.
+                                    registration needed. <code>.rig1</code> optionally names this machine (lowercase
+                                    letters/digits/<code>-</code>/<code>_</code>, max <strong>10 chars</strong> — longer
+                                    labels are shortened automatically).
+                                    PASS — any value (e.g. <code>x</code>); it is ignored by the pool.
+                                    Algorithm <strong>Cuckatoo32</strong>.
                                 </div>
                             </div>
                         </div>

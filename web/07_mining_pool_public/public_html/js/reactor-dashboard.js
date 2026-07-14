@@ -5,7 +5,7 @@
  *   /api/pool/stats            miners / blocks / rewards / share_quality
  *   /api/stratum/hashrate      pool GPS aggregates (hashrate gauge)
  *   /api/config/pool-info      fee / min payout / network (spec placard)
- *   /api/pool/effort           round effort / luck / round shares (effort gauge)
+ *   /api/pool/effort           network share / luck / round shares (share gauge)
  *   /api/pool/status           pool+node+wallet health (annunciator, master lamp)
  *   /api/pool/blocks           fuel-rod maturity array
  *   /api/pool/payments         payout teletype
@@ -180,11 +180,10 @@
   }
 
   var gaugeHash = Gauge('g-hash', { min: 0, max: 2, ticks: 8, unit: 'kG/s' });
-  var gaugeEffort = Gauge('g-effort', { min: 0, max: 150, ticks: 6, unit: '%' });
-  function effortZones() {
-    return [[0, 100, C.accent], [100, 130, C.warn], [130, 150, C.danger]];
-  }
-  if (gaugeEffort) gaugeEffort.setScale(0, 150, '%', effortZones(), 6);
+  // Pool's share of the network hashrate. Auto-scaled per reading (like the hashrate
+  // dial) with a 5% floor so a small pool's needle is still readable; the big numeral
+  // always carries the honest value. Higher is better → single accent zone, no warn.
+  var gaugeShare = Gauge('g-share', { min: 0, max: 5, ticks: 8, unit: '%' });
 
   // ── LED bargraph (share quality) ──────────────────────────────────────────
   var LED_SEGS = 40;
@@ -414,21 +413,41 @@
     } catch (e) { /* counters keep placeholders */ }
   }
 
-  async function loadEffort() {
+  // More decimals for a small share so it isn't rounded to "0%".
+  function fmtShare(v) { return v.toFixed(v < 1 ? 2 : v < 10 ? 1 : 0) + '%'; }
+
+  // Compact big numbers for the spec plate (2.11 M, 58.3 K) — difficulty can be huge.
+  function fmtCompact(n) {
+    n = Number(n) || 0;
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + ' G';
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + ' M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + ' K';
+    return String(Math.round(n));
+  }
+
+  async function loadShare() {
     try {
       var e = await Auth.fetch('/api/pool/effort');
       if (!e) return;
-      var eff = e.round_effort_pct;
-      setText('g-effort-v', eff != null ? eff.toFixed(0) + '%' : '—');
-      setText('g-effort-luck', e.luck_100_pct != null
+      var share = e.network_share_pct;
+      // Spec-plate network conditions (same endpoint already carries them).
+      if (e.network_hashrate_gps != null) {
+        var gh = fmtGps(e.network_hashrate_gps);
+        setText('pl-nethash', gh[0] + ' ' + gh[1]);
+      }
+      setText('pl-netdiff', e.network_difficulty != null ? fmtCompact(e.network_difficulty) : '—');
+      setText('g-share-v', share != null ? fmtShare(share) : '—');
+      setText('g-share-luck', e.luck_100_pct != null
         ? 'luck ' + e.luck_100_pct.toFixed(0) + '% · ' + (e.luck_sample || 0) + ' blk'
         : 'luck — · no data yet');
-      if (gaugeEffort) {
-        gaugeEffort.setScale(0, 150, '%', effortZones(), 6);
-        gaugeEffort.setValue(eff != null ? Math.min(eff, 150) : 0);
+      if (gaugeShare) {
+        var v = share != null ? share : 0;
+        var max = niceCeil(Math.max(v * 1.25, 5));
+        gaugeShare.setScale(0, max, '%', [[0, max, C.accent]], 8);
+        gaugeShare.setValue(Math.min(v, max));
       }
       setText('c-last', e.last_block_at ? timeAgo(e.last_block_at) : '—');
-      setText('mi-core-effort', 'EFFORT ' + (eff != null ? eff.toFixed(0) + '%' : '—'));
+      setText('mi-core-share', 'NET-SHARE ' + (share != null ? fmtShare(share) : '—'));
       setText('mi-core-shares', e.round_shares != null
         ? Number(e.round_shares).toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' SHARES'
         : '— SHARES');
@@ -593,9 +612,16 @@
     var parts = String(r.stratum_url || '').split(':');
     return parts[0] + ':' + (parts[1] || BASE_PORT || '3333');
   }
-  function regionStratumUri(r) { return 'stratum+tcp://' + regionHostPort(r); }
+  // host:port only — iPollo G1/G1-Mini and lolMiner/GMiner all accept a bare
+  // host:port; the stratum+tcp:// scheme prefix is unnecessary and just clutters
+  // the field (operator request 2026-07-14).
+  function regionStratumUri(r) { return regionHostPort(r); }
   function statusCls(s) {
-    return s === 'online' ? 's-online' : s === 'stale' ? 's-stale' : s === 'offline' ? 's-offline' : 's-unknown';
+    // The public regions API emits 'online' | 'idle' | 'offline'. online = tunnel up + active
+    // miners (green); idle = tunnel up, no recent miners — fine to connect (amber); offline =
+    // WireGuard tunnel down / never handshaked, don't bother (red). Backed by the gateway
+    // handshake signal server-side, so 'offline' is a real "down", not a guess.
+    return s === 'online' ? 's-online' : s === 'offline' ? 's-down' : 's-idle';
   }
 
   // Best-effort nearest region from the browser IANA timezone (no geo-IP; same
@@ -626,9 +652,9 @@
   function selectRegion(regions, key) {
     var bank = $('rx-switches');
     if (bank) {
-      bank.querySelectorAll('.switch').forEach(function (sw) {
+      bank.querySelectorAll('.rgn').forEach(function (sw) {
         var on = sw.dataset.region === key;
-        sw.classList.toggle('on', on);
+        sw.classList.toggle('sel', on);
         sw.setAttribute('aria-selected', on ? 'true' : 'false');
       });
     }
@@ -636,7 +662,7 @@
     if (!r) return;
     var uri = regionStratumUri(r);
     setText('rx-uri', uri);
-    var m = r.status === 'online' ? '● ONLINE' : r.status === 'stale' ? '● DEGRADED' : r.status === 'offline' ? '● OFFLINE' : '○ UNKNOWN';
+    var m = r.status === 'online' ? '● ONLINE' : r.status === 'offline' ? '● OFFLINE' : '○ IDLE';
     setText('rx-meta',
       String(r.label || r.region).toUpperCase() +
       (r.country ? ' · ' + String(r.country).toUpperCase() : '') +
@@ -653,7 +679,7 @@
           var conn = b && b.data && b.data.connection;
           if (conn) {
             BASE_PORT = conn.stratum_port || BASE_PORT;
-            if (conn.stratum_host) DEFAULT_URI = 'stratum+tcp://' + conn.stratum_host + ':' + (conn.stratum_port || '3333');
+            if (conn.stratum_host) DEFAULT_URI = conn.stratum_host + ':' + (conn.stratum_port || '3333');
           }
         } catch (e) { /* fall back to 3333 */ }
       }
@@ -667,12 +693,11 @@
         lampHost.textContent = '';
         regions.slice(0, 6).forEach(function (r) {
           var lamp = document.createElement('div');
-          var st = r.status === 'online' ? 'ok' : r.status === 'stale' ? 'warn' : r.status === 'offline' ? 'alarm' : '';
+          var st = r.status === 'online' ? 'ok' : r.status === 'offline' ? 'alarm' : '';
           lamp.className = 'lamp' + (st ? ' ' + st : '');
           lamp.appendChild(document.createTextNode('REG ' + String(r.region || '').toUpperCase()));
           var small = document.createElement('small');
           small.textContent = r.status === 'offline' ? 'offline'
-            : r.status === 'stale' ? 'degraded'
             : (r.miners > 0 ? r.miners + (r.miners === 1 ? ' miner' : ' miners') : 'idle');
           lamp.appendChild(small);
           lampHost.appendChild(lamp);
@@ -681,15 +706,29 @@
       setText('mi-regions', regions.length + (regions.length === 1 ? ' REGION' : ' REGIONS') +
         (BASE_PORT ? ' · :' + BASE_PORT : ''));
 
+      // Spec-plate "active regions" = declared regions that aren't offline (idle counts —
+      // a tunnel that's up but momentarily miner-less is still available to connect). A
+      // single-endpoint pool (no declared regions) reports its one endpoint as active.
+      var activeRegions = regions.length === 0
+        ? (DEFAULT_URI ? 1 : 0)
+        : regions.filter(function (r) { return r.status !== 'offline'; }).length;
+      setText('pl-regions', String(activeRegions));
+
+      var legend = $('rx-legend');
+      var note = $('rx-note');
       if (!bank) return;
       if (regions.length === 0) {
         // No declared regions: hide the switch bank, show the operator's configured host.
         bank.style.display = 'none';
+        if (legend) legend.hidden = true;
+        if (note) note.hidden = true;
         if (DEFAULT_URI) setText('rx-uri', DEFAULT_URI);
         setText('rx-meta', 'SINGLE ENDPOINT · CUCKATOO32');
         return;
       }
       bank.style.display = '';
+      if (legend) legend.hidden = false;
+      if (note) note.hidden = false;
 
       // Nearest region first, then most miners, then name — same order as before.
       var nearestKey = detectNearestRegion(regions.map(function (r) { return r.region; }));
@@ -701,7 +740,7 @@
       });
 
       // Preserve the visitor's current selection across the 60s refresh.
-      var prev = bank.querySelector('.switch.on');
+      var prev = bank.querySelector('.rgn.sel');
       var selectedKey = prev ? prev.dataset.region : null;
       if (!selectedKey || !regions.some(function (r) { return r.region === selectedKey; })) {
         selectedKey = regions[0].region;
@@ -711,29 +750,28 @@
       regions.forEach(function (r) {
         var sw = document.createElement('button');
         sw.type = 'button';
-        sw.className = 'switch ' + statusCls(r.status) + (r.region === selectedKey ? ' on' : '');
+        sw.className = 'rgn ' + statusCls(r.status) + (r.region === selectedKey ? ' sel' : '');
         sw.dataset.region = r.region;
         sw.setAttribute('role', 'tab');
         sw.setAttribute('aria-selected', r.region === selectedKey ? 'true' : 'false');
-        sw.title = (r.label || r.region) + (r.country ? ' · ' + r.country : '');
-        var dot = document.createElement('span');
-        dot.className = 'lamp-dot';
-        var toggle = document.createElement('span');
-        toggle.className = 'toggle';
-        var knob = document.createElement('span');
-        knob.className = 'knob';
-        toggle.appendChild(knob);
+        sw.title = (r.label || r.region) + (r.country ? ' · ' + r.country : '') +
+          ' — ' + (r.status === 'online' ? 'online — miners active'
+            : r.status === 'offline' ? 'offline — gateway unreachable'
+            : 'idle — no recent miners');
+        var led = document.createElement('span');
+        led.className = 'rgn-led';
         var name = document.createElement('span');
-        name.className = 'name';
+        name.className = 'rgn-name';
         name.textContent = String(r.region || '').toUpperCase();
+        sw.appendChild(led);
+        sw.appendChild(name);
         if (r.region === nearestKey) {
           var pin = document.createElement('span');
-          pin.className = 'pin';
+          pin.className = 'rgn-pin';
           pin.title = 'Nearest to you';
           pin.textContent = '📍';
-          name.appendChild(pin);
+          sw.appendChild(pin);
         }
-        sw.appendChild(dot); sw.appendChild(toggle); sw.appendChild(name);
         sw.addEventListener('click', function () { selectRegion(regions, r.region); });
         bank.appendChild(sw);
       });
@@ -786,7 +824,7 @@
   new MutationObserver(function () {
     readTokens();
     if (gaugeHash) gaugeHash.render();
-    if (gaugeEffort) { gaugeEffort.setScale(0, 150, '%', effortZones(), 6); gaugeEffort.render(); }
+    if (gaugeShare) gaugeShare.render();
     chart.render();
   }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
@@ -796,7 +834,7 @@
     loadPoolInfo();
     loadHashrate();
     loadStats();
-    loadEffort();
+    loadShare();
     loadBlocks();
     loadPayments();
     loadHistory();

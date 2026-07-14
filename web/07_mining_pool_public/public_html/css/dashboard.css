@@ -151,7 +151,11 @@ header {
     background: var(--bg-elev2); color: var(--accent); line-height: 1;
 }
 .theme-cycle-btn:hover { background: var(--accent-soft); border-color: var(--accent); }
-.theme-cycle-btn .theme-cycle-ico { font-size: 18px; line-height: 1; }
+/* Kill the default square focus outline (it framed the round button when clicking to
+   switch); replace with a circular ring that follows the 50% radius. */
+.theme-cycle-btn:focus { outline: none; }
+.theme-cycle-btn:focus-visible { box-shadow: 0 0 0 3px var(--accent-soft); border-color: var(--accent); }
+.theme-cycle-btn .theme-cycle-ico { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 
 /* ── Buttons (new + every legacy button class) ─────────────────────────── */
 .btn, .header-btn, .copy-btn, .more-btn {

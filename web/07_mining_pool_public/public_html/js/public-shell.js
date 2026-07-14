@@ -74,7 +74,7 @@
   var header = document.createElement('header');
   header.innerHTML =
     '<div class="brand">' +
-      '<img class="brand-logo" src="/images/logo.svg" alt="" aria-hidden="true">' +
+      '<img class="brand-logo" src="/images/grin_lime.svg" alt="" aria-hidden="true">' +
       '<span data-brand="pool_name">GRINIUM</span>' +
     '</div>' +
     '<nav class="header-nav" aria-label="Main" data-shell="1">' + navLinks + '</nav>' +
@@ -104,8 +104,9 @@
     '<div class="footer-cols">' +
       // Brand + tagline + social
       '<div class="footer-col footer-brand">' +
+        // No logo image here on purpose — the header already carries the swinging
+        // brand logo; a second one in the footer just duplicates that animation.
         '<div class="brand">' +
-          '<img class="brand-logo" src="/images/logo.svg" alt="" aria-hidden="true">' +
           '<span data-brand="pool_name">GRINIUM</span>' +
         '</div>' +
         '<p class="footer-tagline" data-brand="pool_tagline">Mine Grin, anywhere</p>' +
@@ -155,7 +156,15 @@
     // Bottom row: copyright + attribution + security contact.
     '<div class="footer-bottom">' +
       '<p class="footer-copyright" data-brand="copyright">© ' + YEAR + ' GRINIUM</p>' +
-      '<p data-brand="footer_text">Grin Mining Pool — Professional • Reliable • Secure</p>' +
+      // Personal signature — matches GrinScan / Tiny Explorer (hardcoded, not a
+      // branding hook so it stays put). Yellow flag with three red stripes = Saigon.
+      '<p class="footer-saigon">Made with &#10084;&#65039; from Saigon ' +
+        '<svg viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes" style="vertical-align:-2px;border-radius:2px">' +
+          '<rect width="27" height="18" fill="#FFCD00"/>' +
+          '<rect y="4" width="27" height="2" fill="#DA251D"/>' +
+          '<rect y="8" width="27" height="2" fill="#DA251D"/>' +
+          '<rect y="12" width="27" height="2" fill="#DA251D"/>' +
+        '</svg></p>' +
       '<p class="footer-meta">' +
         '<span data-brand="attribution">Powered by the ' +
           '<a href="' + GITHUB + '" target="_blank" rel="noopener noreferrer">Grin Node Toolkit</a>' +

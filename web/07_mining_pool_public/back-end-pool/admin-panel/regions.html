@@ -116,7 +116,7 @@
               <th title="Passive signal — recent shares from this region + WireGuard last handshake. No port is dialed; that's the Port column">Mining activity</th>
               <th>Last activity</th>
               <th>Miners / Shares (15m)</th>
-              <th title="Internal tunnel-only listener on the pool box — UNIQUE per region (shares are stamped with the region by the port they arrive on). Auto-assigned by 'Add a gateway peer' (3391+ / 13391+). Miners never see it — they all share the public port">Region port</th>
+              <th title="Internal tunnel-only listener on the pool box — UNIQUE per region (shares are stamped with the region by the port they arrive on). Auto-assigned when the gateway key is paired (3391+ / 13391+), here or via the SSH fallback. Miners never see it — they all share the public port">Region port</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -195,8 +195,9 @@
               gateway box while keeping its tunnel IP + port.</dd>
           <dt>Visible on site</dt>
           <dd>A show/hide switch, nothing more — when on, the card appears on the public connect grid (as “No signal”
-              until the gateway is up — STEPS 3 &amp; 4). Turn off to hide a region without deleting it. It does not
-              check whether the gateway is running; that's the <strong>Port</strong> and <strong>Mining activity</strong> columns.</dd>
+              until the gateway box has its pairing string applied and starts forwarding — STEP 3). Turn off to hide a
+              region without deleting it. It does not check whether the gateway is running; that's the
+              <strong>Port</strong>, <strong>Tunnel</strong> and <strong>Mining activity</strong> columns.</dd>
         </dl>
         <p class="howto-note" style="margin-top:.7rem;">
           With a gateway key pasted, saving this form declares the card AND pairs the tunnel in one step — what's left is
@@ -211,7 +212,7 @@
         <div class="form-group">
           <label for="r-region">Region key</label>
           <input type="text" id="r-region" placeholder="e.g. nyc (airport code)" autocomplete="off">
-          <div class="helper-text">Short region tag, lowercase, no spaces. <strong>Suggestion:</strong> a 3-letter airport code (<code>nyc</code>, <code>ams</code>, <code>han</code>) or a 2-letter country code (<code>us</code>, <code>nl</code>) — easy to recognise and unlikely to collide. Must match the region key you assign when adding this gateway's WireGuard peer (Script 07 → W) Multi-region).</div>
+          <div class="helper-text">Short region tag — 2–12 lowercase letters/digits/dashes. <strong>Suggestion:</strong> a 3-letter airport code (<code>nyc</code>, <code>ams</code>, <code>han</code>) or a 2-letter country code (<code>us</code>, <code>nl</code>) — easy to recognise and unlikely to collide. When you paste a gateway key below, this key automatically becomes the WireGuard peer tag — no separate registration step.</div>
         </div>
         <div class="form-group">
           <label for="r-label">Label / City</label>

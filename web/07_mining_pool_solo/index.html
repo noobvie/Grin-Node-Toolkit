@@ -289,6 +289,15 @@
   .freshness .api-link::before { content: "·"; margin-right: .45rem; opacity: .6; }
   .freshness .api-link:hover, .freshness .api-link:focus-visible { color: var(--text-hi); text-decoration: underline; }
 
+  /* profit-maximizer (quiet hours) banner — hidden unless data/quiet.json says so */
+  .quietbar { width: 100%; max-width: 860px; display: flex; align-items: baseline; gap: .55rem;
+    margin: -0.6rem 0 1.4rem; padding: .55rem .9rem; font-size: .85rem; line-height: 1.5;
+    color: var(--muted); background: var(--chip-bg); border: 1px solid var(--border); border-radius: 10px; }
+  .quietbar .ico { flex: none; line-height: 1; }
+  .quietbar b { color: var(--text-hi); }
+  .quietbar.paused { color: var(--yellow); border-color: var(--yellow); }
+  .quietbar.paused b { color: var(--yellow); }
+
   /* header actions — wrap onto their own row on narrow screens */
   .header-actions { display: flex; gap: .6rem; align-items: center; flex: none; }
   @media (max-width: 560px) {
@@ -355,6 +364,13 @@
 
 <div class="freshness" id="freshness" aria-live="polite" title="Live data refreshes every 120 seconds (two Grin blocks)">
   <span class="live-dot"></span><span id="fresh-text">Connecting…</span><a class="api-link" href="data/health.json" target="_blank" rel="noopener" title="Machine-readable status for both networks (data/health.json) — node/wallet/stratum liveness + 24h blocks. Refreshed every 5 min; stays public even if this page is locked.">status JSON</a>
+</div>
+
+<!-- ── Profit-maximizer (quiet hours) banner — shows the operator's energy-saver
+     schedule from data/quiet.json (written server-side by grin-solo-quiet on every
+     pause/resume). Hidden when the feature was never configured. ── -->
+<div class="quietbar" id="quiet-bar" hidden>
+  <span class="ico" aria-hidden="true">⚡</span><span id="quiet-text"></span>
 </div>
 
 <!-- Each link carries an emoji (.ico, always shown) + text (.lbl, hidden on phones
@@ -2026,6 +2042,7 @@
     try { localStorage.setItem('grinSoloTz', TZMODE); } catch (e) {}
     updateTzUI();
     renderDerived();   // re-render every per-event view (block tables, history, heatmap)
+    renderQuiet();     // quiet-hours banner shows its schedule in the active zone too
   });
   updateTzUI();        // reflect the persisted/default mode on first paint
 
@@ -2100,6 +2117,49 @@
     else { freshBox.className = 'freshness stale'; freshText.textContent = 'Stale · updated ' + relAge(age) + ' ago'; }
   }
 
+  // ── Profit-maximizer (quiet hours) banner ──
+  // data/quiet.json is published by the server-side grin-solo-quiet wrapper on every
+  // pause/resume/enforce: {enabled, pause:"HH:MM", resume:"HH:MM", nets, tz,
+  // utc_offset_min, paused}. pause/resume are the SERVER's local wall-clock (that is
+  // what electricity tariffs are keyed to); utc_offset_min converts them here so the
+  // banner honours the page's UTC ⇄ local toggle. Missing file (feature never
+  // configured) → 404 → banner stays hidden.
+  var QUIET = null;
+  function quietTime(hhmm, offMin) {
+    var p = hhmm.split(':'), mins = (+p[0]) * 60 + (+p[1]) - offMin;   // server-local → UTC
+    if (TZMODE !== 'utc') mins -= new Date().getTimezoneOffset();      // UTC → viewer-local
+    mins = ((mins % 1440) + 1440) % 1440;
+    return pad2(Math.floor(mins / 60)) + ':' + pad2(mins % 60);
+  }
+  function renderQuiet() {
+    var bar = document.getElementById('quiet-bar'), txt = document.getElementById('quiet-text');
+    if (!QUIET || !QUIET.pause || (!QUIET.enabled && !QUIET.paused)) { bar.hidden = true; return; }
+    var off = (typeof QUIET.utc_offset_min === 'number') ? QUIET.utc_offset_min : 0;
+    var netsNote = (QUIET.nets === 'mainnet') ? ' · mainnet only'
+                 : (QUIET.nets === 'testnet') ? ' · testnet only' : '';
+    var html;
+    if (QUIET.enabled) {
+      html = 'Profit maximizer: mining pauses during high-cost electricity hours, daily <b>' +
+             quietTime(QUIET.pause, off) + '</b> → <b>' + quietTime(QUIET.resume, off) + '</b> ' +
+             tzModeLabel() + netsNote;
+      if (QUIET.paused) html += ' · <b>paused now</b> — rigs with a failover pool mine there meanwhile';
+    } else {
+      // No schedule, but the operator hit "pause now" — explain the idle miners.
+      html = 'Mining <b>paused</b> by the operator — stratum port closed' + netsNote;
+    }
+    txt.innerHTML = html;   // safe: built only from numbers-derived times + fixed strings
+    bar.classList.toggle('paused', !!QUIET.paused);
+    bar.title = 'Operator schedule in server time: pause ' + QUIET.pause + ' → resume ' +
+                QUIET.resume + ' (' + (QUIET.tz || 'server local') + ')';
+    bar.hidden = false;
+  }
+  function pollQuiet() {
+    return fetch('data/quiet.json', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (q) { QUIET = q; renderQuiet(); })
+      .catch(function () {});
+  }
+
   // ── Initial-load fast retry ──
   // The regular cadence is one poll every 120s (POLL_MS). If the FIRST poll after a
   // page load returns no node data (a transient blip — e.g. a burst 503 on a hard
@@ -2112,8 +2172,9 @@
 
   function poll() {
     // Refresh the smooth 24h network hashrate (earnings denominator) each cycle;
-    // fire-and-forget so it never gates the main poll's results array.
-    seedFromPoolstats('main'); seedFromPoolstats('test');
+    // fire-and-forget so it never gates the main poll's results array. Same for the
+    // quiet-hours banner — its "paused now" state flips at the cron window edges.
+    seedFromPoolstats('main'); seedFromPoolstats('test'); pollQuiet();
     Promise.all([
       pollNet('main'), pollNet('test'), pollWallet('main'), pollWallet('test'),
       pollBlocks('main'), pollBlocks('test'), pollMiners('main'), pollMiners('test'),

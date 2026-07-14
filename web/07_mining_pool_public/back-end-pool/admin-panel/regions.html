@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Regions | Grin Pool ツ</title>
+  <title>Regions &amp; Gateways | Grin Pool ツ</title>
   <link rel="stylesheet" href="/css/pool.css">
   <link rel="stylesheet" href="/admin/styles.css">
   <style>
@@ -51,13 +51,13 @@
 <main>
   <div class="container">
     <div class="page-head">
-      <h1>Regions</h1>
-      <p class="page-sub">The regional connect endpoints shown on the public dashboard — and the live health of each region's gateway. A card lights up green while miners are mining that region (or its WireGuard tunnel is freshly handshaking).</p>
+      <h1>Regions &amp; Gateways</h1>
+      <p class="page-sub">The regional connect endpoints shown on the public dashboard — and the live health of each region's gateway. Pairing a gateway's WireGuard key happens right here in the region form (no SSH session on this box). A card lights up green while miners are mining that region (or its WireGuard tunnel is freshly handshaking).</p>
     </div>
 
     <!-- How regions work — the order of operations, so the admin isn't guessing -->
     <details class="card howto" id="howto">
-      <summary><strong>How regions work — add a gateway in 4 steps (Model C)</strong></summary>
+      <summary><strong>How regions work — add a gateway in 2 hops (Model C)</strong></summary>
       <p class="howto-intro">
         A <strong>gateway</strong> is a small extra server in another location. It runs <em>only</em> HAProxy + WireGuard —
         no grin node, no wallet, no database. Miners in that location connect to the gateway, and it forwards their
@@ -66,32 +66,35 @@
       </p>
       <p class="howto-intro">
         Every region needs one <strong>region key</strong> — a short airport-style code like <code>nyc</code>,
-        <code>sgn</code>, <code>ams</code>. You will type the <em>exact same key</em> in steps 1, 3 and 4.
-        Then, one step at a time:
+        <code>sgn</code>, <code>ams</code>. Two hops between the two boxes:
       </p>
       <ol class="howto-steps">
-        <li><strong>STEP 1 — Declare the region (on this page).</strong><br>
-            Click ➕ New region below and fill in the form: region key, city, country, and the stratum hostname miners will use
-            (e.g. <code>sgn.grinium.com</code>). Click <em>Save region</em>.<br>
-            <span class="dim">Result: the card appears on the public dashboard as ○ No signal.</span></li>
-        <li><strong>STEP 2 — Point DNS at the gateway box.</strong><br>
-            At your DNS provider, create an A-record so the stratum hostname from step 1 resolves to the
-            <em>gateway box's</em> public IP (not this pool's IP).<br>
-            <span class="dim">Result: miners who connect to that hostname reach the gateway box.</span></li>
-        <li><strong>STEP 3 — Register the gateway on THIS pool box (SSH).</strong><br>
-            Run <code>07_grin_mining_public_pool.sh</code> → <strong>W) Multi-region</strong> → <em>Add a gateway peer</em>.
-            Enter the same region key. The script assigns a tunnel IP + an internal region port and prints
-            the connection values.<br>
-            <span class="dim">Result: a printout of values to hand to whoever runs the gateway box.</span></li>
-        <li><strong>STEP 4 — Set up the gateway box itself (SSH).</strong><br>
-            On the gateway server, run <code>07_grin_mining_public_pool.sh</code> → <strong>2) Regional gateway</strong>, then in order:
-            <em>1) Install</em> → <em>2) Configure</em> (paste the values from step 3) → <em>3) Bring up tunnel</em> → <em>4) Start</em>.<br>
-            <span class="dim">Result: the card on this page flips to ● Active once miners start mining through it.</span></li>
+        <li><strong>STEP 1 — Install on the gateway box (SSH there, not here).</strong><br>
+            On the gateway server, run <code>07_grin_mining_public_pool.sh</code> → <strong>2) Regional gateway</strong> →
+            <em>1) Install</em>. It prints that box's <strong>WireGuard public key</strong> — copy it.<br>
+            <span class="dim">Result: one 44-character key ending in <code>=</code>.</span></li>
+        <li><strong>STEP 2 — Create the region + pair the key (on this page).</strong><br>
+            Click ➕ New region: fill region key, city, country, the stratum hostname miners will use
+            (e.g. <code>sgn.grinium.com</code> — point its DNS A-record at the <em>gateway box's</em> IP),
+            and paste the gateway's public key into the <strong>Gateway WireGuard public key</strong> field. Save.<br>
+            <span class="dim">Result: the page shows a one-line <code>GRINGW1|…</code> pairing string with a copy button.
+            The tunnel listener is live immediately — no service restart.</span></li>
+        <li><strong>STEP 3 — Paste the string on the gateway box.</strong><br>
+            Back on the gateway: <em>2) Configure</em> → paste the <code>GRINGW1|…</code> line (fills every field) →
+            <em>3) Bring up tunnel</em> → <em>4) Start</em>.<br>
+            <span class="dim">Result: done on that box.</span></li>
+        <li><strong>STEP 4 — Watch the Tunnel chip go green (this page).</strong><br>
+            Within ~30s the region's row shows 🔒 with a fresh handshake age. The status flips to ● Active once
+            miners start mining through it.</li>
       </ol>
       <p class="howto-note">
         <strong>Single-box pool?</strong> You don't need gateways — the pool auto-registers its own region and miners just use that one host.
-        Add regions here only when you're expanding to other locations.
+        Leave the key field empty to save a metadata-only region card (no tunnel).
+        <br><strong>Lost the pairing string?</strong> Use the row's 🔑 button — it re-derives the exact same line.
+        <br><strong>Replacing a gateway box?</strong> Pair the NEW box's key under the SAME region key — the region keeps
+        its tunnel IP and port, so nothing else changes.
         <br><strong>This page ≠ "Public Stratum Host"</strong> in Pool Info — that field is only the cosmetic fallback host, not a region/gateway registration.
+        <br><span class="dim">SSH fallback: Script 07 → W) Multi-region does the same pairing from the terminal — both paths share one helper, so they never drift.</span>
       </p>
     </details>
 
@@ -109,6 +112,7 @@
               <th>Country</th>
               <th>Stratum URL</th>
               <th id="th-portcheck" title="Reachability of the public MINER port (the one in Stratum URL) — not the internal region port">Port check</th>
+              <th title="WireGuard tunnel health — age of the gateway's last handshake with this box. Grey = no wg peer paired for this region">Tunnel</th>
               <th title="Passive signal — recent shares from this region + WireGuard last handshake. No port is dialed; that's the Port column">Mining activity</th>
               <th>Last activity</th>
               <th>Miners / Shares (15m)</th>
@@ -117,7 +121,7 @@
             </tr>
           </thead>
           <tbody id="regions-tbody">
-            <tr class="loading-row"><td colspan="9"><span class="spinner"></span>Loading…</td></tr>
+            <tr class="loading-row"><td colspan="10"><span class="spinner"></span>Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -135,6 +139,25 @@
       means you've unchecked "Visible on site" in its edit form — that region is hidden from the public connect grid.
     </p>
 
+    <!-- Pairing result card — shown after a save-with-pubkey or the 🔑 row action.
+         Holds the GRINGW1 string + copy button + what-next mini-guide. -->
+    <div class="card" id="pairing-card" style="margin-top:1rem;display:none;">
+      <h3 style="margin:0 0 .5rem;">🔑 Gateway pairing string — <span id="pairing-region" class="mono"></span></h3>
+      <div id="pairing-warn" class="helper-text" style="display:none;color:var(--warning-color,#e0b040);margin-bottom:.5rem;"></div>
+      <div style="display:flex;gap:.6rem;align-items:flex-start;">
+        <pre class="mono" id="pairing-string" style="flex:1;margin:0;padding:.6rem .8rem;border:1px solid var(--border,#2a2a2a);border-radius:4px;white-space:pre-wrap;word-break:break-all;font-family:var(--mono);"></pre>
+        <button class="btn btn-sm" onclick="copyPairing()" title="Copy the pairing string">📋 Copy</button>
+      </div>
+      <p class="helper-text" style="margin:.7rem 0 0;">
+        <strong>On the gateway box now:</strong>
+        1&nbsp;Script 07 → 2) Regional gateway → <em>2) Configure</em> → paste this line →
+        2&nbsp;<em>3) Bring up tunnel</em> →
+        3&nbsp;<em>4) Start</em> →
+        4&nbsp;watch this row's Tunnel chip go green (~30s).
+      </p>
+      <button class="btn btn-sm btn-outline" style="margin-top:.6rem;" onclick="document.getElementById('pairing-card').style.display='none'">Close</button>
+    </div>
+
     <!-- Create / edit form — collapsed until ➕ New region or a row's Edit opens it;
          the flash message lives on the toolbar so it stays visible after the form closes -->
     <div style="margin-top:1.4rem;display:flex;gap:.6rem;align-items:center;">
@@ -148,29 +171,36 @@
       <details class="fieldguide">
         <summary>What goes in each field? (click for a quick guide)</summary>
         <dl>
-          <dt>Region key <span class="step">— STEP 1</span></dt>
-          <dd>Short permanent identifier for this location. <strong>Suggestion:</strong> a 3-letter airport (IATA)
-              code — <code>nyc</code>, <code>lax</code>, <code>ams</code>, <code>yyz</code>, <code>han</code> — or a
-              2-letter country code (<code>us</code>, <code>nl</code>, <code>vn</code>) when a country has one region.
-              Shares get tagged with it, so it can't be renamed later, and it MUST exactly match the key you give in
-              STEP 3 when adding the gateway's WireGuard peer (Script 07 → W → Add a gateway peer).</dd>
+          <dt>Region key</dt>
+          <dd>Short permanent identifier for this location — lowercase letters/digits/dashes, 2–12 chars.
+              <strong>Suggestion:</strong> a 3-letter airport (IATA) code — <code>nyc</code>, <code>lax</code>,
+              <code>ams</code>, <code>yyz</code>, <code>han</code> — or a 2-letter country code (<code>us</code>,
+              <code>nl</code>, <code>vn</code>) when a country has one region. Shares get tagged with it, so it
+              can't be renamed later; it also becomes the WireGuard peer tag when you pair a gateway key below.</dd>
           <dt>Label / City</dt>
           <dd>Human-friendly name shown on the public connect card (e.g. New York). Cosmetic — doesn't affect routing.</dd>
           <dt>Country &amp; country code</dt>
           <dd>Group regions by country on the dashboard (two US regions appear under one heading). The ISO-2 code
               (<code>US</code>, <code>NL</code>) draws the flag emoji. Leave the code blank for no flag.</dd>
-          <dt>Stratum host <span class="step">— STEP 2</span></dt>
+          <dt>Stratum host</dt>
           <dd>The hostname miners point their rigs at for this region (e.g. <code>nyc.grinium.com</code>). Create a DNS
               A-record for it that resolves to the <strong>gateway box's</strong> public IP. Enter the host only — the
               shared stratum port is appended automatically.</dd>
+          <dt>Gateway WireGuard public key <span class="step">— optional</span></dt>
+          <dd>The 44-character key (ends <code>=</code>) that the gateway box's <em>1) Install</em> printed. Paste it and
+              Save does the whole pairing: the wg peer is added, a tunnel IP + internal region port are assigned, the
+              region's stratum listener binds immediately (no restart), and you get the <code>GRINGW1|…</code> string to
+              paste back on the gateway box. Leave empty for a metadata-only card (single-box region, or a gateway paired
+              earlier via SSH). Re-pairing the SAME key changes nothing; pairing a NEW key under the same region swaps the
+              gateway box while keeping its tunnel IP + port.</dd>
           <dt>Visible on site</dt>
           <dd>A show/hide switch, nothing more — when on, the card appears on the public connect grid (as “No signal”
               until the gateway is up — STEPS 3 &amp; 4). Turn off to hide a region without deleting it. It does not
               check whether the gateway is running; that's the <strong>Port</strong> and <strong>Mining activity</strong> columns.</dd>
         </dl>
         <p class="howto-note" style="margin-top:.7rem;">
-          Saving this form is <span class="step">STEP 1 of 4</span> — it only declares the card. Then: STEP 2 point DNS →
-          STEP 3 add the WireGuard peer on the pool box (Script 07 → W) → STEP 4 stand up the gateway box (Script 07 → 2).
+          With a gateway key pasted, saving this form declares the card AND pairs the tunnel in one step — what's left is
+          pasting the resulting <code>GRINGW1|…</code> string on the gateway box and watching the Tunnel chip go green.
           Full walkthrough in <strong>“How regions work”</strong> above.
         </p>
       </details>
@@ -209,6 +239,16 @@
             <span class="mono" id="port-suffix" style="color:var(--text-dim);white-space:nowrap;">:3333</span>
           </div>
           <div class="helper-text">Hostname miners connect to. <strong>All regions share the same port</strong> (from pool.json) — it's appended automatically. Miners use <code>stratum+tcp://host:port</code>.</div>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group" style="flex:2;">
+          <label for="r-wgkey">Gateway WireGuard public key <span class="dim">(optional — pairs the gateway in this same step)</span></label>
+          <input type="text" id="r-wgkey" placeholder="e.g. hFf1Qz…= (44 chars, ends =)" autocomplete="off" spellcheck="false" class="mono">
+          <div class="helper-text">From the gateway box's <em>1) Install</em> printout. Leave empty for a metadata-only region
+            (single-box, or already paired via SSH). Saving with a key adds the wg peer + region port and shows the
+            <code>GRINGW1|…</code> pairing string to paste on the gateway box.</div>
         </div>
       </div>
 
@@ -288,6 +328,64 @@ function fmtAge(s) {
   return Math.floor(s / 86400) + 'd ago';
 }
 
+// WireGuard tunnel chip (design §13.4): handshake age <3min green / <10min
+// yellow / older red; grey "no peer" when the region has no wg peer at all.
+function tunnelChip(region) {
+  const hb = _hb[region];
+  const age = hb ? hb.tunnel_handshake_age : null;
+  if (age == null) {
+    return '<span class="badge badge-dim" title="No WireGuard peer paired for this region (single-box region, or gateway not paired yet)">— no peer</span>';
+  }
+  const cls = age < 180 ? 'badge-ok' : age < 600 ? 'badge-warn' : 'badge-error';
+  const tip = 'Last WireGuard handshake with this region\'s gateway'
+    + (hb.tunnel_rx_bytes != null ? ' · rx ' + fmtBytes(hb.tunnel_rx_bytes) + ' / tx ' + fmtBytes(hb.tunnel_tx_bytes) : '');
+  return `<span class="badge ${cls}" title="${tip}">🔒 ${fmtAge(age)}</span>`;
+}
+
+function fmtBytes(b) {
+  if (b == null) return '—';
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+  return (b / 1073741824).toFixed(2) + ' GB';
+}
+
+// ── Pairing card (GRINGW1 string + copy) ─────────────────────────────────────
+let _lastPairing = '';
+function showPairingCard(region, pairing, warnMsg) {
+  _lastPairing = pairing || '';
+  document.getElementById('pairing-region').textContent = region;
+  document.getElementById('pairing-string').textContent = pairing || '(no pairing string)';
+  const w = document.getElementById('pairing-warn');
+  if (warnMsg) { w.textContent = warnMsg; w.style.display = ''; }
+  else { w.style.display = 'none'; }
+  const card = document.getElementById('pairing-card');
+  card.style.display = '';
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+async function copyPairing() {
+  if (!_lastPairing) return;
+  try {
+    await navigator.clipboard.writeText(_lastPairing);
+    flash('Pairing string copied to clipboard.', false);
+  } catch (e) {
+    // Clipboard API can be blocked — the string is selectable in the box.
+    flash('Copy blocked by the browser — select the string manually.', true);
+  }
+}
+
+// Row action: re-derive a lost pairing string (replaces SSH `W → 3`).
+async function showPairing(region) {
+  try {
+    const d = await API.get('/api/admin/gateways/' + encodeURIComponent(region) + '/pairing');
+    if (!d || d.error) throw new Error(d && d.error ? d.error : 'No pairing found');
+    showPairingCard(region, d.pairing, '');
+  } catch (err) {
+    flash(err.message, true);
+  }
+}
+
 function flash(msg, isErr) {
   const el = document.getElementById('r-msg');
   el.textContent = msg;
@@ -304,6 +402,7 @@ function resetForm() {
   document.getElementById('r-country').value = '';
   document.getElementById('r-cc').value = '';
   document.getElementById('r-host').value = '';
+  document.getElementById('r-wgkey').value = '';
   document.getElementById('r-active').checked = true;
   document.getElementById('form-title').textContent = 'New region';
   syncFlag();
@@ -353,14 +452,14 @@ async function loadGateways() {
 
 async function loadRegions(silent) {
   const tbody = document.getElementById('regions-tbody');
-  if (!silent) tbody.innerHTML = '<tr class="loading-row"><td colspan="9"><span class="spinner"></span>Loading…</td></tr>';
+  if (!silent) tbody.innerHTML = '<tr class="loading-row"><td colspan="10"><span class="spinner"></span>Loading…</td></tr>';
   await loadGateways();
   try {
     const d = await API.get('/api/admin/locations');
     if (!d || d.error) throw new Error(d && d.error ? d.error : 'Failed to load regions');
     _regions = d.locations || [];
     if (!_regions.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No regions yet. Add one with the ➕ New region button below.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No regions yet. Add one with the ➕ New region button below.</td></tr>';
       return;
     }
     tbody.innerHTML = _regions.map(r => {
@@ -383,24 +482,32 @@ async function loadRegions(silent) {
         portCheck = `<span class="badge badge-error" title="TCP dial to ${escHtml(r.stratum_url || '')} failed (refused / timeout / DNS)">✗ ${dialPort} unreachable</span>`;
       }
       const hiddenTag = r.is_active ? '' : ' <span class="badge badge-dim" title="Hidden from the public connect grid (checkbox in the edit form)">hidden</span>';
+      // 🔑 only makes sense when a wg peer exists (tunnel age present) OR a region
+      // port is mapped — otherwise there is nothing to re-print.
+      const hasPeer = hb && (hb.tunnel_handshake_age != null || hb.port);
+      const pairingBtn = hasPeer
+        ? `<button class="btn btn-icon" onclick="showPairing('${escHtml(r.region)}')" title="Show pairing string (GRINGW1|…)" aria-label="Show pairing string for ${escHtml(r.region)}">🔑</button>`
+        : '';
       return `
         <tr>
           <td><strong>${escHtml(r.label || r.region)}</strong>${hiddenTag}<br><span class="dim mono">${escHtml(r.region)}</span></td>
           <td>${country}</td>
           <td class="mono" style="word-break:break-all;">${url}</td>
           <td>${portCheck}</td>
+          <td>${tunnelChip(r.region)}</td>
           <td>${statusBadge(r.region)}</td>
           <td>${hb && hb.age_seconds != null ? fmtAge(hb.age_seconds) : '—'}</td>
           <td>${minersShares}</td>
           <td>${port}</td>
           <td style="white-space:nowrap;">
             <button class="btn btn-icon" onclick="editRegion(${r.id})" title="Edit region" aria-label="Edit region ${escHtml(r.region)}">✏️</button>
+            ${pairingBtn}
             <button class="btn btn-icon btn-icon-danger" onclick="deleteRegion(${r.id})" title="Delete region" aria-label="Delete region ${escHtml(r.region)}">🗑️</button>
           </td>
         </tr>`;
     }).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">Error: ${escHtml(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="10">Error: ${escHtml(err.message)}</td></tr>`;
   }
 }
 
@@ -414,6 +521,9 @@ function editRegion(id) {
   document.getElementById('r-country').value = r.country || '';
   document.getElementById('r-cc').value = r.country_code || '';
   document.getElementById('r-host').value = hostOf(r.stratum_url);
+  // Keys are never stored/echoed back — leave empty; pasting one here (re-)pairs
+  // the gateway on save (same region = keeps its tunnel IP + port).
+  document.getElementById('r-wgkey').value = '';
   document.getElementById('r-active').checked = !!r.is_active;
   document.getElementById('form-title').textContent = 'Edit region: ' + r.region;
   openFormCard();
@@ -425,6 +535,15 @@ async function submitRegion() {
   const region = document.getElementById('r-region').value.trim().toLowerCase();
   if (!region) { flash('Region key is required.', true); return; }
   const host = hostOf(document.getElementById('r-host').value.trim());  // strip any port the user typed
+  const wgKey = document.getElementById('r-wgkey').value.trim();
+  if (wgKey && !/^[A-Za-z0-9+/]{43}=$/.test(wgKey)) {
+    flash('That is not a WireGuard public key — expected 44 base64 chars ending "=" (from the gateway box\'s 1) Install).', true);
+    return;
+  }
+  if (wgKey && !/^[a-z0-9-]{2,12}$/.test(region)) {
+    flash('A gateway region key must be 2–12 lowercase letters/digits/dashes (it becomes the wg peer tag).', true);
+    return;
+  }
   const body = {
     region,
     label: document.getElementById('r-label').value.trim(),
@@ -433,11 +552,30 @@ async function submitRegion() {
     stratum_url: host ? `${host}:${STRATUM_PORT}` : '',
     is_active: document.getElementById('r-active').checked
   };
+  if (wgKey) body.wg_pubkey = wgKey;
   try {
     const r = await API.post('/api/admin/locations', body);
-    if (!r || r.error) throw new Error(r && r.error ? r.error : 'Save failed');
-    flash('Region saved.', false);
-    closeForm();
+    if (!r || r.error) {
+      // 502 with wg_error = the region card IS saved; only the pairing failed.
+      if (r && r.wg_error) {
+        flash('Region saved, but gateway pairing FAILED: ' + r.wg_error, true);
+        closeForm();
+        loadRegions();
+        return;
+      }
+      throw new Error(r && r.error ? r.error : 'Save failed');
+    }
+    if (r.pairing) {
+      let warn = '';
+      if (r.existing) warn = '⚠ This key was already paired — the existing tunnel IP and region port were kept, nothing changed.';
+      else if (r.replaced) warn = 'ℹ Gateway key replaced for this region — tunnel IP and port kept, paste the new string on the NEW box.';
+      flash('Region saved and gateway paired — listener live, no restart needed.', false);
+      closeForm();
+      showPairingCard(region, r.pairing, warn);
+    } else {
+      flash('Region saved.', false);
+      closeForm();
+    }
     loadRegions();
   } catch (err) {
     flash(err.message, true);
@@ -451,9 +589,21 @@ async function submitRegion() {
 // (same posture as settings-common.js) instead of surfacing "Too many requests".
 async function deleteRegion(id) {
   const r = _regions.find(x => x.id === id);
-  if (!confirm(`Delete region "${r ? (r.label || r.region) : id}"? This only removes the connect card — the gateway's WireGuard peer and region port stay wired. To remove the whole gateway (peer + port + this card in one go), use Script 07 → W → 4) Remove a gateway on the pool box.`)) return;
+  if (!confirm(`Delete region "${r ? (r.label || r.region) : id}"? This removes the connect card; the next dialog asks whether to also unpair the gateway's WireGuard peer. Share/credit history is kept either way.`)) return;
+  // "Checkbox" as a second confirm (native dialogs can't host one): OK = also
+  // revoke the wg peer + region port (full unpair, what W → 4 does over SSH);
+  // Cancel = card only, the tunnel keeps working.
+  const hb = _hb[r ? r.region : ''];
+  const hasPeer = hb && (hb.tunnel_handshake_age != null || hb.port);
+  let unpair = false;
+  if (hasPeer) {
+    unpair = confirm(`Also remove the WireGuard peer (unpair the gateway box for "${r.region}")?\n\nOK = revoke the wg key + free the region port — the gateway box loses its tunnel.\nCancel = keep the tunnel wired, delete only the display card.`);
+    if (unpair && hb.tunnel_handshake_age != null && hb.tunnel_handshake_age < 180) {
+      if (!confirm(`⚠ This gateway handshook ${hb.tunnel_handshake_age}s ago — it looks LIVE (miners may be routed through it right now). Unpair anyway?`)) return;
+    }
+  }
   try {
-    const url = '/api/admin/locations/' + id;
+    const url = '/api/admin/locations/' + id + (unpair ? '?remove_peer=1' : '');
     let res = await adminFetch(url, { method: 'DELETE' });
     if (res.status === 429 || res.status === 503) {
       await new Promise(w => setTimeout(w, 2500));
@@ -465,7 +615,13 @@ async function deleteRegion(id) {
       throw new Error('Rate-limited right now — wait ~' + wait + 's and try again (nothing was deleted).');
     }
     if (!res.ok || body.error) throw new Error(body.error || ('Delete failed (' + res.status + ')'));
-    flash('Region deleted.', false);
+    if (unpair && body.wg_removed === false) {
+      flash('Region card deleted, but the WireGuard peer could NOT be removed: ' + (body.wg_error || 'unknown') + ' — retry via Script 07 → W → 4.', true);
+    } else if (unpair) {
+      flash('Region deleted and gateway unpaired (wg key revoked). The freed listener idles until the next service restart.', false);
+    } else {
+      flash('Region card deleted — the gateway tunnel (if any) stays wired.', false);
+    }
     loadRegions();
   } catch (err) {
     flash(err.message, true);

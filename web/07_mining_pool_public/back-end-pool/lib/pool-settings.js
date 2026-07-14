@@ -114,7 +114,7 @@ class PoolSettings {
       cookie_consent_text: 'We use analytics cookies to improve your experience.',
     },
     payout: {
-      min_withdrawal: 5.0,
+      min_withdrawal: 25.0,
       auto_payout: 'false',
       payout_frequency: 'manual',
       confirm_depth_mainnet: 1440,

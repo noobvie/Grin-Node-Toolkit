@@ -333,7 +333,7 @@ class WithdrawalScheduler {
     // Per-miner payout threshold: the account's own min_payout (set via the IP-gated endpoint)
     // overrides the pool default when present. It can only RAISE the floor (enforced at write
     // time), so this never lets a withdrawal slip below the pool minimum.
-    const minW = (acct0.min_payout != null) ? acct0.min_payout : (this.config.min_withdrawal || 5.0);
+    const minW = (acct0.min_payout != null) ? acct0.min_payout : (this.config.min_withdrawal || 25.0);
     if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
 
     const txn = this.db.transaction(() => {
@@ -411,7 +411,7 @@ class WithdrawalScheduler {
     if (isNaN(amt) || amt <= 0) fail('invalid amount', 400);
     amt = parseFloat(amt.toFixed(9));
 
-    const minW = (acct0.min_payout != null) ? acct0.min_payout : (this.config.min_withdrawal || 5.0);
+    const minW = (acct0.min_payout != null) ? acct0.min_payout : (this.config.min_withdrawal || 25.0);
     if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
 
     // Lock the pool-side balance first (authoritative for accounting); the wallet-side output

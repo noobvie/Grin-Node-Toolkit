@@ -38,15 +38,55 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const net = require('net');
-const { execSync } = require('child_process');
+const { execSync, execFile } = require('child_process');
+
+// ─── grin-gateway-ctl bridge (design §13.2/§13.3) ────────────────────────────
+// The root helper is the SINGLE WireGuard mutation path (peer add/remove +
+// region_ports persistence), shared with the CLI (Script 07 menu W). The
+// de-rooted grin-pool-manager reaches it via a one-line scoped sudoers entry
+// (pool_deroot); `sudo -n` never blocks on a password prompt. argv array only —
+// never a shell string — and the helper re-validates every input itself.
+const GWCTL = '/usr/local/bin/grin-gateway-ctl';
+function gwctl(args) {
+  return new Promise((resolve, reject) => {
+    const net = (config && config.network === 'testnet') ? 'testnet' : 'mainnet';
+    execFile('sudo', ['-n', GWCTL, ...args, '--net', net],
+      { timeout: 10000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+        let out = null;
+        try { out = JSON.parse(String(stdout || '').trim()); } catch (e) { /* not JSON */ }
+        if (out && out.ok) return resolve(out);
+        reject(new Error((out && out.error) ? out.error : (err ? err.message : 'gateway helper failed')));
+      });
+  });
+}
+
+// Per-region tunnel liveness for the health endpoint: helper `status` first
+// (works de-rooted, adds rx/tx), silent fallback to the direct root-only read
+// below so an old install (no helper/sudoers yet) or a gateway-only box
+// degrades to share-recency status exactly as before (§13.9 step 5).
+async function readGatewayStatus() {
+  try {
+    const st = await gwctl(['status']);
+    const out = {};
+    for (const g of st.gateways || []) {
+      if (!g.handshake) continue;
+      out[g.region] = { handshake: g.handshake, rx_bytes: g.rx_bytes, tx_bytes: g.tx_bytes };
+    }
+    return out;
+  } catch (e) {
+    return readWgHandshakes();
+  }
+}
 
 // Best-effort WireGuard handshake per region (Model C gateway liveness). Maps each peer's
 // public key → region using the "# region: <name>" comment the installer writes above every
 // [Peer] in the central wg config, then reads `wg show ... latest-handshakes`. The iface is
 // per-network to match the bash installer (07 pool menu W): mainnet "wg-grinpool", testnet
 // "wg-grinpool-tn".
-// Returns { <region>: { handshake: <unix_ts> } }; {} on ANY failure (wg not installed, not the
-// central box, no permission, dev/Windows) so callers fall back to the share-activity signal.
+// Legacy/fallback path — requires root (reads /etc/wireguard); readGatewayStatus() is the
+// primary. Returns { <region>: { handshake: <unix_ts> } }; {} on ANY failure (wg not
+// installed, not the central box, no permission, dev/Windows) so callers fall back to the
+// share-activity signal.
 function readWgHandshakes() {
   const out = {};
   try {
@@ -2859,7 +2899,7 @@ function setupRoutes() {
             total: walletBalance.total || 0,
             available: walletBalance.available || 0,
             locked: walletBalance.locked || 0,
-            min_required: config.min_withdrawal || 5.0
+            min_required: config.min_withdrawal || 25.0
           },
           synced: {
             status: 'ok',
@@ -2988,7 +3028,7 @@ function setupRoutes() {
     } catch (e) { /* table may be empty */ }
     const byRegion = new Map(shareRows.map(r => [r.region, r]));
 
-    const wgByRegion = readWgHandshakes(); // {} on any failure (wg absent / not central box)
+    const wgByRegion = await readGatewayStatus(); // {} on any failure (wg absent / not central box)
 
     // Public stratum URLs per region (for the active TCP probe below).
     const locByRegion = new Map();
@@ -3023,6 +3063,8 @@ function setupRoutes() {
         shares_window: s ? s.shares : 0,
         miners: s ? s.miners : 0,
         tunnel_handshake_age: hsAge,
+        tunnel_rx_bytes: wg && wg.rx_bytes !== undefined ? wg.rx_bytes : null,
+        tunnel_tx_bytes: wg && wg.tx_bytes !== undefined ? wg.tx_bytes : null,
         stratum_reachable: null,   // filled by the probe below when a stratum_url exists
         stratum_probe_ms: null
       });
@@ -3065,12 +3107,24 @@ function setupRoutes() {
   });
 
   // Create or update a region by its unique `region` key (upsert).
-  app.post('/api/admin/locations', secureAdmin, (req, res) => {
+  // Optional `wg_pubkey` (design §13.3): when present, the WireGuard gateway peer
+  // is paired in the SAME step via grin-gateway-ctl — the panel replaces the old
+  // 4-hop SSH ping-pong. Metadata save is never hostage to wg state: a helper
+  // failure still keeps the saved location and reports 502 + wg_error.
+  app.post('/api/admin/locations', secureAdmin, async (req, res) => {
     try {
       const { region, label, country, country_code, api_url, stratum_url } = req.body || {};
       const is_active = req.body && req.body.is_active === false ? 0 : 1;
       const reg = String(region || '').trim();
       if (!reg) return res.status(400).json({ error: 'region is required' });
+      const wgPubkey = req.body && req.body.wg_pubkey ? String(req.body.wg_pubkey).trim() : '';
+      // A malformed key is a typo, not wg state — fail fast before saving anything.
+      if (wgPubkey && !/^[A-Za-z0-9+/]{43}=$/.test(wgPubkey)) {
+        return res.status(400).json({ error: 'wg_pubkey is not a WireGuard public key (44 base64 chars ending "=")' });
+      }
+      if (wgPubkey && !/^[a-z0-9-]{2,12}$/.test(reg)) {
+        return res.status(400).json({ error: 'a gateway region key must match ^[a-z0-9-]{2,12}$ (it becomes the wg peer tag)' });
+      }
       const cc = country_code ? String(country_code).trim().toUpperCase().slice(0, 2) : null;
 
       db.prepare(`
@@ -3092,13 +3146,70 @@ function setupRoutes() {
         VALUES (?, 'location_upsert', 'pool_location', ?, ?, ?)
       `).run(req.user.user_id, reg, JSON.stringify({ label, country, country_code: cc, api_url, stratum_url, is_active }), req.ip);
 
-      res.json({ success: true, location: row });
+      if (!wgPubkey) return res.json({ success: true, location: row });
+
+      let pair;
+      try {
+        pair = await gwctl(['add-peer', '--region', reg, '--pubkey', wgPubkey]);
+      } catch (e) {
+        return res.status(502).json({
+          success: false, location: row, wg_error: e.message,
+          error: 'Region saved, but WireGuard pairing failed: ' + e.message
+        });
+      }
+
+      // Hot-bind (§13.3): the helper persisted region_ports in pool.json; mirror it
+      // in the in-memory config and bind the tunnel listener NOW — no service
+      // restart, zero disruption to connected miners. On the next boot the
+      // listener is rebuilt from pool.json anyway. `existing` (dup pubkey) and
+      // `replaced` (new box, same region) keep their port, so bind is a no-op then.
+      if (pair.region_port) {
+        config.region_ports = config.region_ports || {};
+        config.region_ports[pair.region] = pair.region_port;
+        if (pair.hub_tunnel_ip) config.region_listen_host = pair.hub_tunnel_ip;
+        if (stratumServer) {
+          try { stratumServer.bindRegionListener(pair.region, pair.region_port); }
+          catch (e) { console.error(`[ERROR] hot-bind region listener ${pair.region}: ${e.message}`); }
+        }
+      }
+
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'gateway_pair', 'wg_peer', ?, ?, ?)
+      `).run(req.user.user_id, pair.region, JSON.stringify({
+        region: pair.region, pubkey: wgPubkey, peer_ip: pair.peer_ip,
+        region_port: pair.region_port, existing: !!pair.existing, replaced: !!pair.replaced
+      }), req.ip);
+
+      res.json({
+        success: true, location: row,
+        pairing: pair.pairing, peer_ip: pair.peer_ip, region_port: pair.region_port,
+        existing: !!pair.existing, replaced: !!pair.replaced
+      });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
   });
 
-  app.delete('/api/admin/locations/:id', freshAdmin, (req, res) => {
+  // Re-print a region's GRINGW1 pairing string (replaces SSH `W → 3` for a lost
+  // string). Read-only — the helper re-derives it from the live wg conf + pool.json.
+  app.get('/api/admin/gateways/:region/pairing', secureAdmin, async (req, res) => {
+    try {
+      const region = String(req.params.region || '').trim();
+      if (!/^[a-z0-9-]{2,12}$/.test(region)) return res.status(400).json({ error: 'invalid region key' });
+      const list = await gwctl(['list']);
+      const g = (list.gateways || []).find((x) => x.region === region);
+      if (!g) return res.status(404).json({ error: `no WireGuard gateway peer for region "${region}"` });
+      res.json({ success: true, region, pairing: g.pairing, peer_ip: g.peer_ip, region_port: g.region_port });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  // Peer removal is destructive (revokes the gateway's tunnel) → stays behind
+  // freshAdmin with the delete. `?remove_peer=1` also unpairs the wg peer; without
+  // it only the display card goes (the tunnel keeps working — legacy behaviour).
+  app.delete('/api/admin/locations/:id', freshAdmin, async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
       const row = db.prepare('SELECT * FROM pool_locations WHERE id = ?').get(id);
@@ -3108,7 +3219,24 @@ function setupRoutes() {
         INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
         VALUES (?, 'location_delete', 'pool_location', ?, ?, ?)
       `).run(req.user.user_id, row.region, JSON.stringify(row), req.ip);
-      res.json({ success: true, deleted: row.region });
+
+      if (String(req.query.remove_peer || '') !== '1') {
+        return res.json({ success: true, deleted: row.region });
+      }
+      try {
+        const rm = await gwctl(['remove-peer', '--region', row.region]);
+        if (config.region_ports) delete config.region_ports[row.region];
+        // v1 does NOT hot-unbind the listener (rare op) — it idles on the tunnel
+        // IP until the next natural service restart rebuilds from pool.json.
+        db.prepare(`
+          INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+          VALUES (?, 'gateway_unpair', 'wg_peer', ?, ?, ?)
+        `).run(req.user.user_id, row.region, JSON.stringify({ region: row.region, synced: rm.synced !== false }), req.ip);
+        res.json({ success: true, deleted: row.region, wg_removed: true });
+      } catch (e) {
+        // The card is already gone — surface the peer failure instead of 500ing.
+        res.json({ success: true, deleted: row.region, wg_removed: false, wg_error: e.message });
+      }
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

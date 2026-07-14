@@ -138,6 +138,24 @@ class StratumServer {
     setInterval(() => this.pruneInactiveSessions(), 60000);
   }
 
+  // Runtime region-listener add (design §13.3 hot-bind): the admin-panel pairing
+  // flow lives in THIS process, so it can't restart the service to pick up a new
+  // region_ports entry — it calls this instead. Same accept/stamp logic as the
+  // boot-time loop; idempotent (a port that is already served is left alone), so
+  // re-pairing an existing region is a no-op. Caller updates config.region_ports
+  // first (the helper already persisted it to pool.json for the next boot).
+  bindRegionListener(region, rawPort) {
+    const p = parseInt(rawPort, 10);
+    if (!p || p === this.port) return false;
+    for (const s of this.servers) {
+      const a = typeof s.address === 'function' ? s.address() : null;
+      if (a && a.port === p) return false; // already bound — hot-add is idempotent
+    }
+    const host = this.config.region_listen_host || '127.0.0.1';
+    this._listen(p, host, region);
+    return true;
+  }
+
   // Bind one TCP stratum listener. `region` is the static label stamped on every share that
   // arrives on this socket (so attribution is bound by the tunnel wiring, not a typed string).
   _listen(port, host, region) {

@@ -51,7 +51,7 @@ function mergeEnvVars(config) {
     // session on each restart. The Script 07 installer writes it once into pool.json.
     jwt_secret: config.jwt_secret || process.env.JWT_SECRET || '',
     pool_fee_percent: config.pool_fee_percent !== undefined ? config.pool_fee_percent : 1.0,
-    min_withdrawal: config.min_withdrawal !== undefined ? config.min_withdrawal : 5.0,
+    min_withdrawal: config.min_withdrawal !== undefined ? config.min_withdrawal : 25.0,
     // Grin COINBASE_MATURITY = 1440; a coinbase cannot be spent until 1440 confirmations,
     // so payouts must wait at least that long to be reorg-safe.
     confirm_depth_mainnet: config.confirm_depth_mainnet || 1440,

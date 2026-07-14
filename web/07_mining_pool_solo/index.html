@@ -293,6 +293,7 @@
   .quietbar { width: 100%; max-width: 860px; display: flex; align-items: baseline; gap: .55rem;
     margin: -0.6rem 0 1.4rem; padding: .55rem .9rem; font-size: .85rem; line-height: 1.5;
     color: var(--muted); background: var(--chip-bg); border: 1px solid var(--border); border-radius: 10px; }
+  .quietbar[hidden] { display: none; }   /* display:flex above would defeat the hidden attribute */
   .quietbar .ico { flex: none; line-height: 1; }
   .quietbar b { color: var(--text-hi); }
   .quietbar.paused { color: var(--yellow); border-color: var(--yellow); }

@@ -927,6 +927,178 @@
           ).join('<br>');
         }
       } catch (e) { /* non-fatal */ }
+      loadCampaigns();
+    }
+
+    // ─── Contest campaigns ──────────────────────────────────────────────────
+    let _campaignsCache = [];
+
+    // datetime-local value (interpreted as UTC) → unix seconds, or null if blank.
+    function campToEpoch(val) {
+      if (!val) return null;
+      const iso = val.length === 16 ? val + ':00Z' : val + 'Z';
+      const ms = new Date(iso).getTime();
+      return isNaN(ms) ? null : Math.floor(ms / 1000);
+    }
+    // unix seconds → datetime-local value in UTC ("YYYY-MM-DDTHH:MM").
+    function epochToCamp(sec) {
+      if (!sec) return '';
+      return new Date(sec * 1000).toISOString().slice(0, 16);
+    }
+    function campNum(id) {
+      const v = document.getElementById(id).value.trim();
+      return v === '' ? null : v;   // '' → null so the backend inherits the global default
+    }
+
+    function resetCampaignForm() {
+      ['camp-name', 'camp-desc', 'camp-start', 'camp-end', 'camp-pot-grin', 'camp-pot-fraction',
+       'camp-weighted', 'camp-equal', 'camp-min-days', 'camp-whale-cap', 'camp-edit-id']
+        .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      document.getElementById('camp-recurring').value = 'none';
+      const p = document.getElementById('camp-preset'); if (p) p.value = '';
+    }
+
+    // Contest recipes — each fills the rule overrides (blank field = inherit global). A friendly
+    // default name is suggested only when the name box is still empty, so an edit isn't clobbered.
+    const CAMPAIGN_PRESETS = {
+      balanced: { name: 'Balanced Contest',       weighted: 50,  equal: 50,  minDays: '',  whale: '',  fraction: '' },
+      small:    { name: 'Small-Miner Contest',    weighted: 0,   equal: 100, minDays: 3,   whale: 5,   fraction: '' },
+      whale:    { name: 'Hashrate King',          weighted: 100, equal: 0,   minDays: '',  whale: '',  fraction: '' },
+      loyalty:  { name: 'Loyalty Week',           weighted: 0,   equal: 100, minDays: 5,   whale: '',  fraction: '' },
+      jackpot:  { name: 'Jackpot Blowout',        weighted: 30,  equal: 70,  minDays: 1,   whale: '',  fraction: 100 },
+    };
+
+    function applyCampaignPreset(key) {
+      const p = CAMPAIGN_PRESETS[key];
+      if (!p) return;
+      const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = (v === '' || v == null ? '' : v); };
+      const nameEl = document.getElementById('camp-name');
+      if (nameEl && !nameEl.value.trim()) nameEl.value = p.name;
+      set('camp-weighted', p.weighted);
+      set('camp-equal', p.equal);
+      set('camp-min-days', p.minDays);
+      set('camp-whale-cap', p.whale);
+      set('camp-pot-fraction', p.fraction);
+    }
+
+    // Duration quick-set: start = now (UTC), end = now + N days.
+    function setCampaignDuration(days) {
+      const now = new Date();
+      const end = new Date(now.getTime() + days * 86400 * 1000);
+      const toLocalInput = (d) => new Date(d.getTime()).toISOString().slice(0, 16); // UTC value
+      document.getElementById('camp-start').value = toLocalInput(now);
+      document.getElementById('camp-end').value = toLocalInput(end);
+    }
+
+    async function saveCampaign() {
+      const id = document.getElementById('camp-edit-id').value.trim();
+      const payload = {
+        name: document.getElementById('camp-name').value.trim(),
+        description: document.getElementById('camp-desc').value.trim(),
+        starts_at: campToEpoch(document.getElementById('camp-start').value),
+        ends_at: campToEpoch(document.getElementById('camp-end').value),
+        recurring: document.getElementById('camp-recurring').value,
+        pot_grin: campNum('camp-pot-grin') || 0,
+        pot_fraction_percent: campNum('camp-pot-fraction'),
+        weighted_percent: campNum('camp-weighted'),
+        equal_chance_percent: campNum('camp-equal'),
+        min_active_days: campNum('camp-min-days'),
+        max_ticket_share_percent: campNum('camp-whale-cap'),
+      };
+      if (!payload.name) { showToast('Campaign needs a name', 'error'); return; }
+      if (!payload.starts_at || !payload.ends_at) { showToast('Set start and end times', 'error'); return; }
+      try {
+        const url = id ? '/api/admin/incentives/campaigns/' + id : '/api/admin/incentives/campaigns';
+        const r = await adminFetch(url, {
+          method: id ? 'PUT' : 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Save failed');
+        showToast(id ? 'Campaign updated' : 'Campaign scheduled', 'success');
+        resetCampaignForm();
+        loadCampaigns();
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
+    function editCampaign(id) {
+      const c = _campaignsCache.find(x => x.id === id);
+      if (!c) return;
+      document.getElementById('camp-edit-id').value = c.id;
+      document.getElementById('camp-name').value = c.name || '';
+      document.getElementById('camp-desc').value = c.description || '';
+      document.getElementById('camp-start').value = epochToCamp(c.starts_at);
+      document.getElementById('camp-end').value = epochToCamp(c.ends_at);
+      document.getElementById('camp-recurring').value = c.recurring || 'none';
+      const setv = (id2, v) => { document.getElementById(id2).value = (v == null ? '' : v); };
+      setv('camp-pot-grin', c.pot_grin || '');
+      setv('camp-pot-fraction', c.pot_fraction_percent);
+      setv('camp-weighted', c.weighted_percent);
+      setv('camp-equal', c.equal_chance_percent);
+      setv('camp-min-days', c.min_active_days);
+      setv('camp-whale-cap', c.max_ticket_share_percent);
+      document.getElementById('camp-name').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    async function runCampaignNow(id) {
+      if (!confirm('Run this campaign draw now? This pays real prize-pool GRIN to winners.')) return;
+      try {
+        const r = await adminFetch('/api/admin/incentives/campaigns/' + id + '/run', {
+          method: 'POST', credentials: 'include'
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Run failed');
+        showToast('Draw complete: ' + ((d.result && d.result.winners) || []).length + ' winner(s)', 'success');
+        loadCampaigns();
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
+    async function cancelCampaign(id) {
+      if (!confirm('Cancel this scheduled campaign?')) return;
+      try {
+        const r = await adminFetch('/api/admin/incentives/campaigns/' + id + '/cancel', {
+          method: 'POST', credentials: 'include'
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Cancel failed');
+        showToast('Campaign cancelled', 'success');
+        loadCampaigns();
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
+    async function loadCampaigns() {
+      const el = document.getElementById('campaigns-list');
+      if (!el) return;
+      try {
+        const r = await fetch('/api/admin/incentives/campaigns', { credentials: 'include' });
+        if (!r.ok) { el.textContent = 'Could not load campaigns.'; return; }
+        const d = await r.json();
+        _campaignsCache = d.campaigns || [];
+        if (!_campaignsCache.length) { el.textContent = 'No campaigns yet.'; return; }
+        const esc = (typeof escapeHtmlSafe === 'function') ? escapeHtmlSafe : (s => s);
+        const fmt = (sec) => sec ? new Date(sec * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '—';
+        el.innerHTML = _campaignsCache.map(c => {
+          const scheduled = c.status === 'scheduled';
+          const actions = scheduled
+            ? `<button type="button" class="btn btn-secondary" style="padding:.2rem .6rem;" onclick="editCampaign(${c.id})">Edit</button>
+               <button type="button" class="btn btn-secondary" style="padding:.2rem .6rem;" onclick="runCampaignNow(${c.id})">Run now</button>
+               <button type="button" class="btn btn-danger" style="padding:.2rem .6rem;" onclick="cancelCampaign(${c.id})">Cancel</button>`
+            : '';
+          const rules = [
+            c.weighted_percent != null ? `A ${c.weighted_percent}%` : null,
+            c.equal_chance_percent != null ? `B ${c.equal_chance_percent}%` : null,
+            c.min_active_days != null ? `${c.min_active_days}d min` : null,
+            c.max_ticket_share_percent ? `cap ${c.max_ticket_share_percent}%` : null,
+            c.recurring && c.recurring !== 'none' ? `↻ ${c.recurring}` : null,
+          ].filter(Boolean).join(' · ');
+          const pot = c.pot_grin > 0 ? `${c.pot_grin} GRIN` : (c.pot_fraction_percent != null ? `${c.pot_fraction_percent}% pool` : 'pool %');
+          return `<div style="padding:.5rem 0;border-bottom:1px solid rgba(128,128,128,.2);">
+            <strong>${esc(c.name)}</strong> <span style="text-transform:uppercase;font-size:.75rem;opacity:.7;">[${esc(c.status)}]</span><br>
+            ${fmt(c.starts_at)} → ${fmt(c.ends_at)} · pot ${esc(pot)}${rules ? ' · ' + esc(rules) : ''}
+            ${actions ? '<div style="margin-top:.3rem;display:flex;gap:.4rem;">' + actions + '</div>' : ''}
+          </div>`;
+        }).join('');
+      } catch (e) { el.textContent = 'Could not load campaigns.'; }
     }
 
     async function topUpPrizePool() {

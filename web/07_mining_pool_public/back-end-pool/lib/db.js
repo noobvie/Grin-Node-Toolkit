@@ -157,6 +157,22 @@ function migrateWithdrawals() {
   }
 }
 
+// Additive, non-destructive: link an existing lottery_draws table to campaigns (older DBs
+// predate the campaigns feature). campaign_id NULL = a plain weekly/special draw.
+function migrateLotteryDraws() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(lottery_draws)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the column
+    const have = new Set(cols.map(c => c.name));
+    if (!have.has('campaign_id')) {
+      db.exec(`ALTER TABLE lottery_draws ADD COLUMN campaign_id INTEGER DEFAULT NULL`);
+      console.warn(`[db] lottery_draws: added missing column campaign_id`);
+    }
+  } catch (e) {
+    console.error(`[db] lottery_draws migration check failed: ${e.message}`);
+  }
+}
+
 // Additive, non-destructive: add the multi-region `region` column to an existing
 // shares table (older testnet DBs predate it). NOT NULL DEFAULT 'default' backfills
 // every existing row, so legacy single-region shares group under 'default'.
@@ -246,6 +262,21 @@ function createSchema() {
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_hashrate_address ON hashrate_history(grin_address, recorded_at DESC)`,
+
+    // Pool-wide hourly rollup — one row per hour, aggregated across ALL miners, so its size is
+    // independent of miner count (~1 MB/year). NEVER pruned (kept out of lib/retention.js) so the
+    // public trend charts (miners-stats.html) have Day→All-Time history. Written each hour by
+    // HashrateTracker.rollupCompletedHours() from shares/blocks/withdrawals BEFORE those tables
+    // prune. No backfill: the series grows from first run forward.
+    `CREATE TABLE IF NOT EXISTS pool_metrics_hourly (
+      bucket_start      INTEGER PRIMARY KEY,   -- unix ts floored to the hour
+      pool_hashrate_gps REAL    NOT NULL DEFAULT 0,  -- avg pool GPS that hour (from shares)
+      miner_count       INTEGER NOT NULL DEFAULT 0,  -- distinct miners active that hour
+      blocks_found      INTEGER NOT NULL DEFAULT 0,  -- blocks found that hour (by found_at)
+      earnings          REAL    NOT NULL DEFAULT 0,  -- block rewards confirmed that hour (by confirmed_at)
+      payout            REAL    NOT NULL DEFAULT 0,  -- withdrawals confirmed that hour (by confirmed_at)
+      updated_at        INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
 
     `CREATE TABLE IF NOT EXISTS withdrawals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -416,6 +447,7 @@ function createSchema() {
       pot_a_amount REAL NOT NULL DEFAULT 0,
       pot_b_amount REAL NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'pending',
+      campaign_id INTEGER DEFAULT NULL,
       drawn_at INTEGER DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
@@ -435,6 +467,36 @@ function createSchema() {
 
     `CREATE INDEX IF NOT EXISTS idx_lottery_winners_draw ON lottery_winners(draw_id)`,
     `CREATE INDEX IF NOT EXISTS idx_lottery_winners_address ON lottery_winners(grin_address, created_at DESC)`,
+
+    // Contest campaigns — operator-defined draws with an explicit date-range window and optional
+    // per-campaign rule overrides (pot split, min active days, whale cap). A campaign runs one
+    // lottery draw at/after ends_at (via the scheduler or a manual "run now"); the resulting
+    // lottery_draws row is linked back via draw_id. NULL override columns inherit the global
+    // lottery_* settings. Eligibility/scoring uses hashrate_history (persistent ~30d), so a
+    // multi-day/week window counts real sustained activity — see lib/lottery.js.
+    `CREATE TABLE IF NOT EXISTS campaigns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT NULL,
+      status TEXT NOT NULL DEFAULT 'scheduled',   -- scheduled | drawn | paid | empty | cancelled
+      starts_at INTEGER NOT NULL,
+      ends_at INTEGER NOT NULL,                    -- draw fires at/after this time
+      recurring TEXT NOT NULL DEFAULT 'none',      -- none | weekly | yearly
+      pot_grin REAL NOT NULL DEFAULT 0,            -- fixed pot; 0 = use pot_fraction_percent of the bucket
+      pot_fraction_percent REAL DEFAULT NULL,      -- override; NULL = global lottery_pot_fraction_percent
+      weighted_percent REAL DEFAULT NULL,          -- Pot A split; NULL = global
+      equal_chance_percent REAL DEFAULT NULL,      -- Pot B split; NULL = global
+      min_active_days INTEGER DEFAULT NULL,        -- small-miner / anti-sybil gate; NULL = global
+      max_ticket_share_percent REAL DEFAULT NULL,  -- whale cap on Pot A tickets; NULL/0 = off
+      draw_id INTEGER DEFAULT NULL REFERENCES lottery_draws(id),
+      seed_height INTEGER DEFAULT NULL,
+      seed_hash TEXT DEFAULT NULL,
+      drawn_at INTEGER DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status, ends_at)`,
 
     // ─── Multi-region — operator-declared regional endpoints (Model C) ───
     // One row per region/gateway the pool advertises. `region` matches the tag the central
@@ -533,6 +595,7 @@ function createSchema() {
   migrateMinerAccounts();
   migrateBlocks();
   migrateWithdrawals();
+  migrateLotteryDraws();
   migrateLocations();
   migratePagesFromConfig();
   // The default grinium regional endpoints are seeded once (see seedDefaultRegions,

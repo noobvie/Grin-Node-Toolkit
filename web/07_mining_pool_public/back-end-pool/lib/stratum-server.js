@@ -329,7 +329,7 @@ class StratumServer {
     const parsed = validateUsername(login);
     if (!parsed) {
       socket.write(JSON.stringify(
-        createLoginResponse(id, { code: -1, message: 'Invalid login. Use grin_address or grin_address.worker_name' })
+        createLoginResponse(id, { code: -1, message: 'Invalid login. Use grin_address or grin_address.worker_name (worker name auto-shortens to 25 chars; keep it under 40)' })
       ) + '\n');
       socket.destroy();
       return;

@@ -357,6 +357,7 @@ async function initializePool() {
     }, 24 * 3600 * 1000);
     setInterval(() => {
       lotteryManager.runDueDraws().catch((e) => console.error(`[Lottery] scheduler tick failed: ${e.message}`));
+      lotteryManager.runDueCampaigns().catch((e) => console.error(`[Campaigns] scheduler tick failed: ${e.message}`));
     }, 3600 * 1000);
 
     walletTor = new WalletTor(config);
@@ -628,6 +629,7 @@ function setupRoutes() {
     'GET /api/pool/blocks': 'Pool-found blocks (paginated: limit, offset, status).',
     'GET /api/pool/effort': 'Pool network share, recent luck, round effort, time since last block.',
     'GET /api/pool/hashrate/history': 'Pool hashrate time-series (?hours=).',
+    'GET /api/pool/metrics/history': 'Durable pool trend series: hashrate, miners, earnings, payout (?range=day|week|month|year|all).',
     'GET /api/pool/status': 'Coarse service status strip.',
     'GET /api/account/:addr': 'Account summary: balance, paid, min payout, effort.',
     'GET /api/account/:addr/workers': 'Per-worker (rig) hashrate + share quality.',
@@ -1832,6 +1834,31 @@ function setupRoutes() {
     }
   });
 
+  // Top block finders over a recent window (default 30 days) — the "lucky miners" leaderboard.
+  // Blocks are never pruned (only raw shares are), so this window can be arbitrarily long.
+  // Orphaned blocks don't count as a find; total_reward sums the landed rewards.
+  app.get('/api/pool/top-block-finders', (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit || 500, 10) || 500, 1000);
+      const days = Math.min(parseInt(req.query.days || 30, 10) || 30, 3650);
+      const cutoff = Math.floor(Date.now() / 1000) - days * 86400;
+      const rows = db.prepare(`
+        SELECT found_by AS grin_address,
+               COUNT(*) AS blocks_found,
+               COALESCE(SUM(reward), 0) AS total_reward,
+               MAX(found_at) AS last_found_at
+        FROM blocks
+        WHERE status != 'orphaned' AND found_at > ?
+        GROUP BY found_by
+        ORDER BY blocks_found DESC, total_reward DESC
+        LIMIT ?
+      `).all(cutoff, limit);
+      res.json({ days, top_finders: rows });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/pool/payments', (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 100), 500);
@@ -1977,6 +2004,18 @@ function setupRoutes() {
       const hours = Math.min(Math.max(parseInt(req.query.hours || 24), 1), 720);
       const series = hashrateTracker.getPoolHistory(hours);
       res.json({ hours, series });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Durable pool-wide trend series (hashrate · miners · earnings · payout) from pool_metrics_hourly.
+  // One fetch feeds all three miners-stats.html charts; ?range selects span + bucket size.
+  app.get('/api/pool/metrics/history', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const allowed = ['day', 'week', 'month', 'year', 'all'];
+      const range = allowed.includes(req.query.range) ? req.query.range : 'day';
+      res.json(hashrateTracker.getMetricsHistory(range));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -2275,6 +2314,37 @@ function setupRoutes() {
     try {
       const stats = hashrateTracker.getHashrateStats();
       res.json(stats);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Top miners by hashrate over an arbitrary window (default 24h) — powers the paginated
+  // leaderboard on miners-stats.html. Separate from /api/stratum/hashrate (fixed 10 @ 1h,
+  // shared with the poolstats reporter) so we can serve a larger list without churning it.
+  app.get('/api/stratum/top-miners', (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit || 500, 10) || 500, 1000);
+      const windowMinutes = Math.min(parseInt(req.query.window || 1440, 10) || 1440, 1440);
+      const miners = hashrateTracker.getTopMiners(limit, windowMinutes).map(m => ({
+        grin_address: m.grin_address,
+        hashrate_gps: parseFloat((m.avg_hashrate || 0).toFixed(6))
+      }));
+      res.json({ window_minutes: windowMinutes, top_miners: miners });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Top miners by AVERAGE hashrate over a multi-day window (default 30 days) — the "sustained
+  // contribution" leaderboard on miners-stats.html. Backed by hashrate_history (retained ~30d),
+  // not the shares table (pruned ~1d), so a 30-day window is meaningful.
+  app.get('/api/stratum/top-avg-hashrate', (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit || 500, 10) || 500, 1000);
+      const days = Math.min(parseInt(req.query.days || 30, 10) || 30, 90);
+      const miners = hashrateTracker.getTopAvgHashrate(days, limit);
+      res.json({ days, top_miners: miners });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -3597,11 +3667,82 @@ function setupRoutes() {
   app.post('/api/admin/incentives/lottery/draw-now', freshAdmin, async (req, res) => {
     try {
       const type = req.body.type === 'special' ? 'special' : 'weekly';
-      const result = await lotteryManager.runDraw(type, req.body.event_name || null, parseFloat(req.body.pot_grin) || 0);
+      const result = await lotteryManager.runDraw(type, {
+        eventName: req.body.event_name || null,
+        potGrinOverride: parseFloat(req.body.pot_grin) || 0,
+      });
       db.prepare(`
         INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
         VALUES (?, 'lottery_draw_now', 'lottery', ?, ?)
       `).run(req.user.user_id, String(result.draw_id || ''), JSON.stringify(result));
+      res.json({ success: true, result });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ─── Contest campaigns (admin CRUD) ─────────────────────────────────────────
+  // A campaign is a scheduled lottery draw with an explicit date-range window and optional
+  // per-campaign rule overrides (pot split, min active days, whale cap). See lib/lottery.js.
+
+  app.get('/api/admin/incentives/campaigns', secureAdmin, (req, res) => {
+    try {
+      res.json({ success: true, campaigns: lotteryManager.listCampaigns(50) });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to load campaigns' });
+    }
+  });
+
+  app.post('/api/admin/incentives/campaigns', freshAdmin, (req, res) => {
+    try {
+      const campaign = lotteryManager.createCampaign(req.body || {});
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+        VALUES (?, 'campaign_create', 'campaign', ?, ?)
+      `).run(req.user.user_id, String(campaign.id), JSON.stringify(campaign));
+      res.json({ success: true, campaign });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/admin/incentives/campaigns/:id', freshAdmin, (req, res) => {
+    try {
+      const campaign = lotteryManager.updateCampaign(parseInt(req.params.id, 10), req.body || {});
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+        VALUES (?, 'campaign_update', 'campaign', ?, ?)
+      `).run(req.user.user_id, String(campaign.id), JSON.stringify(campaign));
+      res.json({ success: true, campaign });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/incentives/campaigns/:id/cancel', freshAdmin, (req, res) => {
+    try {
+      const campaign = lotteryManager.cancelCampaign(parseInt(req.params.id, 10));
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+        VALUES (?, 'campaign_cancel', 'campaign', ?, ?)
+      `).run(req.user.user_id, String(campaign.id), JSON.stringify({ id: campaign.id }));
+      res.json({ success: true, campaign });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Manually run a scheduled campaign now (testing / early close). Pays real prize-pool GRIN.
+  app.post('/api/admin/incentives/campaigns/:id/run', freshAdmin, async (req, res) => {
+    try {
+      const c = lotteryManager.getCampaign(parseInt(req.params.id, 10));
+      if (!c) return res.status(404).json({ error: 'campaign not found' });
+      if (c.status !== 'scheduled') return res.status(400).json({ error: 'campaign already drawn or cancelled' });
+      const result = await lotteryManager.runCampaign(c);
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+        VALUES (?, 'campaign_run_now', 'campaign', ?, ?)
+      `).run(req.user.user_id, String(c.id), JSON.stringify(result));
       res.json({ success: true, result });
     } catch (err) {
       res.status(400).json({ error: err.message });

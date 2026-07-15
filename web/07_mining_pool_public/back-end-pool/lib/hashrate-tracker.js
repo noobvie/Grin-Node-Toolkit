@@ -22,6 +22,8 @@ class HashrateTracker {
     while (this.isRunning) {
       try {
         await this.recordHashrates();
+        // Cheap + idempotent: only writes when a fresh completed hour exists (no-op otherwise).
+        this.rollupCompletedHours();
       } catch (err) {
         console.error(`[ERROR] Hashrate tracking error: ${err.message}`);
       }
@@ -35,6 +37,7 @@ class HashrateTracker {
   // accepted work — NOT from a static per-session difficulty.
   static CYCLE_LENGTH = 42;
   static SOLUTION_RATE = 16384;
+  static HOUR = 3600;
 
   // Snapshot each active miner's hashrate over the last sampling window into hashrate_history
   // (time-series for charts). Computed from shares actually accepted in the window.
@@ -133,6 +136,36 @@ class HashrateTracker {
       }));
     } catch (err) {
       console.error(`Error fetching top miners: ${err.message}`);
+      return [];
+    }
+  }
+
+  // Top miners by AVERAGE hashrate over a multi-day window, from the persistent hashrate_history
+  // samples (retained ~30 days) — unlike getTopMiners (a short live snapshot off the shares table,
+  // pruned after ~1 day). Each sample covers window_seconds of mining at hashrate_gps, so
+  // SUM(gps × window_seconds) / totalWindowSeconds is the time-weighted average GPS across the
+  // whole window (gaps count as zero), rewarding sustained mining rather than a peak burst.
+  getTopAvgHashrate(days = 30, limit = 500) {
+    try {
+      const windowSeconds = days * 86400;
+      const cutoffTime = Math.floor(Date.now() / 1000) - windowSeconds;
+
+      const rows = this.db.prepare(`
+        SELECT grin_address,
+               COALESCE(SUM(hashrate_gps * window_seconds), 0) / ? AS avg_gps
+        FROM hashrate_history
+        WHERE recorded_at > ?
+        GROUP BY grin_address
+        ORDER BY avg_gps DESC
+        LIMIT ?
+      `).all(windowSeconds, cutoffTime, limit);
+
+      return rows.map(r => ({
+        grin_address: r.grin_address,
+        avg_hashrate_gps: parseFloat((r.avg_gps || 0).toFixed(6))
+      }));
+    } catch (err) {
+      console.error(`Error fetching top avg hashrate: ${err.message}`);
       return [];
     }
   }
@@ -256,6 +289,138 @@ class HashrateTracker {
     } catch (err) {
       console.error(`Error fetching pool history: ${err.message}`);
       return [];
+    }
+  }
+
+  // ── Durable pool-wide hourly rollup (pool_metrics_hourly) ─────────────────────────────────
+  // Collapse every fully-completed hour that isn't rolled up yet into one aggregate row, computed
+  // from shares (pool GPS + distinct miners), blocks (found + confirmed rewards) and withdrawals
+  // (confirmed payouts) BEFORE those source tables prune. The table is NEVER pruned, so the public
+  // trend charts have Day→All-Time history at ~1 MB/year (size independent of miner count).
+  // Idempotent upsert (safe to re-run a bucket). No backfill: an empty table starts at the
+  // just-completed hour. Called every tracking loop; a no-op on minutes with no new completed hour.
+  rollupCompletedHours() {
+    try {
+      const H = HashrateTracker.HOUR;
+      const nowHour = Math.floor(Date.now() / 1000 / H) * H;   // start of the current (incomplete) hour
+      const lastRow = this.db.prepare('SELECT MAX(bucket_start) AS b FROM pool_metrics_hourly').get();
+      let start = (lastRow && lastRow.b != null) ? lastRow.b + H : nowHour - H;
+      // Bound catch-up after a long outage — no backfill is wanted, and shares older than ~1 day are
+      // already pruned, so skip ancient gaps straight to the just-completed hour.
+      const MAX_HOURS = 1000;
+      if (start < nowHour - MAX_HOURS * H) start = nowHour - H;
+      if (start > nowHour - H) return 0; // no fully-completed hour to roll up yet
+
+      const upsert = this.db.prepare(`
+        INSERT INTO pool_metrics_hourly
+          (bucket_start, pool_hashrate_gps, miner_count, blocks_found, earnings, payout, updated_at)
+        VALUES (@b, @gps, @miners, @blocks, @earnings, @payout, unixepoch())
+        ON CONFLICT(bucket_start) DO UPDATE SET
+          pool_hashrate_gps = excluded.pool_hashrate_gps,
+          miner_count       = excluded.miner_count,
+          blocks_found      = excluded.blocks_found,
+          earnings          = excluded.earnings,
+          payout            = excluded.payout,
+          updated_at        = unixepoch()
+      `);
+      const shareStmt = this.db.prepare(`
+        SELECT COALESCE(SUM(difficulty), 0) AS sumdiff, COUNT(DISTINCT grin_address) AS miners
+        FROM shares WHERE created_at >= ? AND created_at < ?`);
+      const blockStmt = this.db.prepare(`
+        SELECT COUNT(*) AS n FROM blocks
+        WHERE found_at >= ? AND found_at < ? AND status != 'orphaned'`);
+      const earnStmt = this.db.prepare(`
+        SELECT COALESCE(SUM(reward), 0) AS s FROM blocks
+        WHERE confirmed_at >= ? AND confirmed_at < ? AND status != 'orphaned'`);
+      const payStmt = this.db.prepare(`
+        SELECT COALESCE(SUM(amount), 0) AS s FROM withdrawals
+        WHERE status = 'confirmed' AND confirmed_at >= ? AND confirmed_at < ?`);
+
+      const factor = HashrateTracker.CYCLE_LENGTH / (H * HashrateTracker.SOLUTION_RATE);
+      let wrote = 0;
+      const tx = this.db.transaction(() => {
+        for (let b = start; b <= nowHour - H; b += H) {
+          const sh = shareStmt.get(b, b + H);
+          const bl = blockStmt.get(b, b + H);
+          const en = earnStmt.get(b, b + H);
+          const pa = payStmt.get(b, b + H);
+          upsert.run({
+            b,
+            gps: parseFloat((sh.sumdiff * factor).toFixed(6)),
+            miners: sh.miners || 0,
+            blocks: bl.n || 0,
+            earnings: parseFloat((en.s || 0).toFixed(9)),
+            payout: parseFloat((pa.s || 0).toFixed(9))
+          });
+          wrote++;
+        }
+      });
+      tx();
+      return wrote;
+    } catch (err) {
+      console.error(`Error rolling up hourly metrics: ${err.message}`);
+      return 0;
+    }
+  }
+
+  // Read the durable rollup for the public trend charts. `range` selects span + bucket size:
+  //   day → 24×1h · week → 7d×1h · month → 30d×1d · year → 365d×1d · all → whole series, bucket
+  //   auto-scaled by total span (≤90d→1d, ≤2y→1w, else 1m). Hourly rows are re-bucketed by integer
+  //   division on bucket_start (UTC-aligned). Aggregation: hashrate = AVG of hourly avgs, miners =
+  //   AVG concurrent (rounded), blocks/earnings/payout = SUM. Returns { range, bucket_seconds, points }.
+  getMetricsHistory(range = 'day') {
+    try {
+      const H = HashrateTracker.HOUR;
+      const DAY = 86400;
+      const now = Math.floor(Date.now() / 1000);
+      let bucket, cutoff;
+
+      if (range === 'all') {
+        const first = this.db.prepare('SELECT MIN(bucket_start) AS b FROM pool_metrics_hourly').get();
+        const earliest = (first && first.b != null) ? first.b : now - DAY;
+        const totalSpan = now - earliest;
+        bucket = totalSpan <= 90 * DAY ? DAY : (totalSpan <= 730 * DAY ? 7 * DAY : 30 * DAY);
+        cutoff = earliest;
+      } else {
+        let span;
+        switch (range) {
+          case 'week':  span = 7 * DAY;   bucket = H;   break;
+          case 'month': span = 30 * DAY;  bucket = DAY; break;
+          case 'year':  span = 365 * DAY; bucket = DAY; break;
+          case 'day':
+          default:      span = 24 * H;    bucket = H;   break;
+        }
+        cutoff = now - span;
+      }
+
+      const rows = this.db.prepare(`
+        SELECT CAST(bucket_start / ? AS INTEGER) * ?  AS t,
+               AVG(pool_hashrate_gps)           AS hashrate_gps,
+               AVG(miner_count)                 AS miner_count,
+               COALESCE(SUM(blocks_found), 0)   AS blocks_found,
+               COALESCE(SUM(earnings), 0)       AS earnings,
+               COALESCE(SUM(payout), 0)         AS payout
+        FROM pool_metrics_hourly
+        WHERE bucket_start >= ?
+        GROUP BY t
+        ORDER BY t ASC
+      `).all(bucket, bucket, cutoff);
+
+      return {
+        range,
+        bucket_seconds: bucket,
+        points: rows.map(r => ({
+          t: r.t,
+          hashrate_gps: parseFloat((r.hashrate_gps || 0).toFixed(6)),
+          miner_count: Math.round(r.miner_count || 0),
+          blocks_found: r.blocks_found || 0,
+          earnings: parseFloat((r.earnings || 0).toFixed(9)),
+          payout: parseFloat((r.payout || 0).toFixed(9))
+        }))
+      };
+    } catch (err) {
+      console.error(`Error fetching metrics history: ${err.message}`);
+      return { range, bucket_seconds: null, points: [] };
     }
   }
 

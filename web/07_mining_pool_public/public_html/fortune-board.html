@@ -31,6 +31,13 @@
             display: block; background: var(--t-chip-bg, rgba(255,255,255,.06)); border: 1px solid var(--t-chip-border, var(--t-border, #2d3748));
             border-radius: 6px; padding: .6rem .8rem; margin-top: .4rem; font-size: .85rem; word-break: break-all; color: var(--t-text, #e0e0e0);
         }
+        .fb-toolbar { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; margin-bottom: .8rem; }
+        .fb-toolbar input, .fb-toolbar select {
+            background: var(--t-card, #11160d); color: var(--t-text, #e0e0e0);
+            border: 1px solid var(--t-border, #2d3748); border-radius: 6px; padding: .55rem .8rem; font-size: .9rem;
+        }
+        .fb-toolbar input { flex: 1; min-width: 220px; }
+        .fb-count { color: var(--t-dim, #a0aec0); font-size: .82rem; margin-left: auto; }
         .table-wrap { background: var(--t-card, #11160d); border: 1px solid var(--t-border, #2d3748); border-radius: 10px; overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; min-width: 640px; }
         th, td { padding: .8rem 1rem; text-align: left; border-bottom: 1px solid var(--t-border, #2d3748); font-size: .9rem; }
@@ -68,6 +75,21 @@
             </div>
         </div>
 
+        <div class="settings-section" data-brand-show="campaigns" style="display:none;margin-top:1rem;">
+            <h3 style="margin-bottom:.5rem;">🏆 Upcoming Contests</h3>
+            <div data-brand="upcoming-campaigns"></div>
+        </div>
+
+        <div class="fb-toolbar">
+            <input id="fb-search" type="search" placeholder="🔍 Search winner address, event, or seed hash…" autocomplete="off">
+            <select id="fb-pot" aria-label="Filter by pot type">
+                <option value="">All pots</option>
+                <option value="a">Share-weighted</option>
+                <option value="b">Equal chance</option>
+            </select>
+            <span id="fb-count" class="fb-count"></span>
+        </div>
+
         <div class="table-wrap">
             <table>
                 <thead>
@@ -86,15 +108,58 @@
     <!-- footer injected by /js/public-shell.js -->
 
     <script>
-        // Paginated fortune board, fed by the public winner-history endpoint.
+        // Paginated fortune board, fed by the public winner-history endpoint. All fetched winners
+        // accumulate in `all`; the search box + pot filter narrow them client-side (over what's
+        // loaded), and "Load more" pulls older draws into the searchable set.
         var offset = 0;
         var PAGE = 25;
         var total = 0;
         var loadedAny = false;
+        var all = [];
 
         function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
         function fmtDate(sec) { return sec ? new Date(sec * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'; }
         function shortHash(h) { return h ? esc(h.slice(0, 10)) + '…' : '—'; }
+        function potLabel(p) { return p === 'a' ? 'Share-weighted' : 'Equal chance'; }
+
+        function filtered() {
+            var q = (document.getElementById('fb-search').value || '').trim().toLowerCase();
+            var pot = document.getElementById('fb-pot').value;
+            return all.filter(function (w) {
+                if (pot && w.pot !== pot) return false;
+                if (!q) return true;
+                var hay = (w.address + ' ' + (w.event || '') + ' ' + (w.seed_hash || '') + ' ' + potLabel(w.pot)).toLowerCase();
+                return hay.indexOf(q) !== -1;
+            });
+        }
+
+        function render() {
+            var body = document.getElementById('winners-body');
+            var count = document.getElementById('fb-count');
+            if (!loadedAny) return; // initial loading / empty states handled in loadWinners
+            var rows = filtered();
+            var q = (document.getElementById('fb-search').value || '').trim();
+            var isFiltering = q || document.getElementById('fb-pot').value;
+            if (!rows.length) {
+                body.innerHTML = '<tr><td colspan="6" class="empty">' +
+                    (isFiltering ? 'No loaded winners match — try “Load more” to search older draws.' : 'No winners yet.') +
+                    '</td></tr>';
+            } else {
+                body.innerHTML = rows.map(function (w) {
+                    return '<tr>' +
+                        '<td>' + esc(w.event) + '</td>' +
+                        '<td>' + esc(w.address) + '</td>' +
+                        '<td><span class="pot-tag">' + potLabel(w.pot) + '</span></td>' +
+                        '<td><span class="amount">' + (w.amount || 0).toFixed(4) + ' GRIN</span></td>' +
+                        '<td>' + fmtDate(w.drawn_at) + '</td>' +
+                        '<td class="seed">#' + esc(w.seed_height || '?') + ' · ' + shortHash(w.seed_hash) + '</td>' +
+                        '</tr>';
+                }).join('');
+            }
+            count.textContent = isFiltering
+                ? (rows.length + ' of ' + all.length + ' loaded' + (all.length < total ? ' · ' + total + ' total' : ''))
+                : (all.length + (all.length < total ? ' of ' + total + ' total' : ' total'));
+        }
 
         function loadWinners() {
             var btn = document.getElementById('more-btn');
@@ -106,24 +171,14 @@
                     if (!json || !json.data) { if (!loadedAny) body.innerHTML = '<tr><td colspan="6" class="empty">Winners will appear here after the first draw.</td></tr>'; return; }
                     total = json.data.total || 0;
                     var rows = json.data.winners || [];
-                    if (!loadedAny) body.innerHTML = '';
                     if (!rows.length && !loadedAny) {
                         body.innerHTML = '<tr><td colspan="6" class="empty">Winners will appear here after the first draw.</td></tr>';
                         return;
                     }
-                    rows.forEach(function (w) {
-                        loadedAny = true;
-                        var tr = document.createElement('tr');
-                        tr.innerHTML =
-                            '<td>' + esc(w.event) + '</td>' +
-                            '<td>' + esc(w.address) + '</td>' +
-                            '<td><span class="pot-tag">' + (w.pot === 'a' ? 'Share-weighted' : 'Equal chance') + '</span></td>' +
-                            '<td><span class="amount">' + (w.amount || 0).toFixed(4) + ' GRIN</span></td>' +
-                            '<td>' + fmtDate(w.drawn_at) + '</td>' +
-                            '<td class="seed">#' + esc(w.seed_height || '?') + ' · ' + shortHash(w.seed_hash) + '</td>';
-                        body.appendChild(tr);
-                    });
+                    loadedAny = true;
+                    all = all.concat(rows);
                     offset += rows.length;
+                    render();
                     btn.style.display = offset < total ? 'block' : 'none';
                     btn.disabled = false;
                 })
@@ -132,6 +187,9 @@
                         '<tr><td colspan="6" class="empty">Could not load winners.</td></tr>';
                 });
         }
+
+        document.getElementById('fb-search').addEventListener('input', render);
+        document.getElementById('fb-pot').addEventListener('change', render);
         loadWinners();
     </script>
     <script src="/js/public-shell.js"></script>

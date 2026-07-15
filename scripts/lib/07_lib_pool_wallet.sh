@@ -82,6 +82,19 @@ if ! declare -F warn    >/dev/null 2>&1; then warn()    { echo "[WARN]  $*"; }; 
 if ! declare -F error   >/dev/null 2>&1; then error()   { echo "[ERROR] $*" >&2; }; fi
 if ! declare -F success >/dev/null 2>&1; then success() { echo "[OK]    $*"; }; fi
 
+# De-root: hand .wallet_pass to the grinpool service user so the de-rooted backend
+# can read it to unlock the wallet over ECDH. The file is written root:root 600;
+# without this a wallet (re)setup run AFTER de-root leaves it root-owned and the
+# grinpool listener gets "EACCES … open '.../.wallet_pass'" → open_wallet never
+# runs → the homepage "Wallet link" lamp stays offline. Ownership (owner-read 600)
+# is enough; no world/group read is granted. No-op when not root or pre-de-root.
+_pw_own_pass_file() {
+    local f="$1"
+    if [[ -f "$f" && $(id -u) -eq 0 ]] && id grinpool >/dev/null 2>&1; then
+        chown grinpool:grinpool "$f" 2>/dev/null || true
+    fi
+}
+
 # ─── Path resolvers (read live pool config when available) ──────────────────
 # pool_read_conf / the POOL_* vars are defined by the parent pool script. When
 # this lib is exercised standalone the env fallbacks keep the resolvers working.
@@ -532,6 +545,7 @@ pw_setup() {
 
         install -m 600 /dev/null "$pass_file" 2>/dev/null || true
         printf '%s' "$pass" > "$pass_file"; chmod 600 "$pass_file"; unset pass
+        _pw_own_pass_file "$pass_file"
         if declare -F pool_write_conf_key >/dev/null 2>&1; then
             pool_write_conf_key "wallet_pass_file" "$pass_file"
         fi
@@ -556,6 +570,7 @@ pw_setup() {
         done
         install -m 600 /dev/null "$pass_file" 2>/dev/null || true
         printf '%s' "$exist_pass" > "$pass_file"; chmod 600 "$pass_file"; unset exist_pass
+        _pw_own_pass_file "$pass_file"
         if declare -F pool_write_conf_key >/dev/null 2>&1; then
             pool_write_conf_key "wallet_pass_file" "$pass_file"
         fi

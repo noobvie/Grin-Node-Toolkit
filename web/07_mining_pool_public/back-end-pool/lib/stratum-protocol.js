@@ -43,16 +43,25 @@ function parseStratumMessage(jsonStr) {
 // treated as NOT a donation and kept as a literal worker name — a typo like `donate101`,
 // `donate999`, `donate-1`, `donatexx`, or `donate` alone never causes an accidental donation.
 //
-// Worker label length: the *visible* label is capped at MAX_WORKER_NAME_LEN chars. A longer
-// label is silently TRUNCATED (not rejected) so a miner with a long rig name still connects —
-// the cap just keeps the public stats tidy and limits junk/abuse. The regex's own bound is a
-// looser anti-abuse guard on raw input size; the donateN token is parsed before truncation so
-// `…rig01verylong-donate10` still donates and shows a 10-char label.
-const MAX_WORKER_NAME_LEN = 10;
+// Worker label length — accept-and-shorten, never reject a realistic login:
+//   · The *visible* label is capped at MAX_WORKER_NAME_LEN and a longer label is TRUNCATED from
+//     the left (slice(0,N)), not rejected — a miner with a long rig name still connects and just
+//     shows a tidy shortened label in public stats.
+//   · MAX_WORKER_RAW_LEN is the raw accept ceiling (label + any donate token). It exists ONLY to
+//     refuse pathological/abuse input; it sits well above a full 25-char label + the longest
+//     `-donate100` token (35), so no real miner is ever rejected for length.
+//
+// Why we DON'T just cut the raw suffix to N from the left before parsing: the donateN token
+// lives at the END of the name, so a left-cut would silently corrupt it — `…rig-donate100`
+// clipped to `…rig-donate10` would donate 10% instead of 100%, or drop the donation entirely.
+// So the token is parsed and stripped FIRST (from the full suffix), and only the leftover
+// *label* is truncated — the donation % is always honored no matter how long the raw name was.
+const MAX_WORKER_NAME_LEN = 25;
+const MAX_WORKER_RAW_LEN = 40;
 function validateUsername(username) {
   if (!username || typeof username !== 'string') return null;
   const bech32 = '[ac-hj-np-z02-9]';
-  const re = new RegExp(`^(grin1|tgrin1)(${bech32}{58})(\\.([a-z0-9_-]{1,64}))?$`);
+  const re = new RegExp(`^(grin1|tgrin1)(${bech32}{58})(\\.([a-z0-9_-]{1,${MAX_WORKER_RAW_LEN}}))?$`);
   const m = username.match(re);
   if (!m) return null;
 

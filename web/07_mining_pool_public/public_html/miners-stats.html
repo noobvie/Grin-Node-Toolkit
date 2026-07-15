@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-page="miners-stats">
 <head>
   <!-- ===== ESSENTIAL META TAGS ===== -->
   <meta charset="UTF-8">
@@ -12,13 +12,13 @@
 
   <!-- ===== DESCRIPTION & KEYWORDS ===== -->
   <title>Miners Statistics — GRINIUM Mining Pool Dashboard</title>
-  <meta name="description" content="Real-time mining pool statistics and individual miner performance metrics. Track hashrate, shares, payouts, and detailed miner information at GRINIUM Grin mining pool.">
-  <meta name="keywords" content="mining pool statistics, miner stats, hashrate, shares, mining metrics, Grin pool, pool performance">
+  <meta name="description" content="Real-time mining pool statistics and historical trends. Track pool hashrate, miner count, and payouts over Day, Week, Month, Year and All-Time at GRINIUM Grin mining pool.">
+  <meta name="keywords" content="mining pool statistics, miner stats, hashrate history, pool payouts, mining metrics, Grin pool, pool performance">
 
   <!-- ===== OPEN GRAPH ===== -->
   <meta property="og:type" content="website">
   <meta property="og:title" content="GRINIUM Mining Pool — Miners Statistics">
-  <meta property="og:description" content="Real-time mining pool statistics and individual miner performance metrics tracking">
+  <meta property="og:description" content="Real-time mining pool statistics and historical hashrate, miner-count and payout trends">
   <meta property="og:url" content="https://pool.grin.money/miners-stats.html">
   <meta property="og:site_name" content="GRINIUM Mining Pool">
   <meta property="og:image" content="https://pool.grin.money/images/og-miners-stats.svg">
@@ -27,7 +27,7 @@
   <!-- ===== TWITTER CARD ===== -->
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="GRINIUM Miners Statistics">
-  <meta name="twitter:description" content="Live mining pool statistics and miner performance tracking">
+  <meta name="twitter:description" content="Live mining pool statistics and historical performance trends">
   <meta name="twitter:image" content="https://pool.grin.money/images/twitter-miners-stats.svg">
   <meta name="twitter:domain" content="pool.grin.money">
 
@@ -35,7 +35,7 @@
   <link rel="canonical" href="https://pool.grin.money/miners-stats.html">
 
   <!-- ===== ADDITIONAL SEO ===== -->
-  <meta name="theme-color" content="#0f1419">
+  <meta name="theme-color" content="#07090c">
   <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
   <link rel="apple-touch-icon" href="/images/apple-touch-icon.svg">
   <link rel="manifest" href="/manifest.json">
@@ -46,89 +46,186 @@
     "@context": "https://schema.org",
     "@type": "WebPage",
     "name": "GRINIUM Mining Pool — Miners Statistics",
-    "description": "Real-time mining pool statistics and individual miner performance metrics tracking",
+    "description": "Real-time mining pool statistics and historical performance trends",
     "url": "https://pool.grin.money/miners-stats.html",
-    "image": "https://pool.grin.money/images/og-miners-stats.png",
     "isPartOf": {
       "@type": "WebSite",
       "name": "GRINIUM Mining Pool",
       "url": "https://pool.grin.money"
-    },
-    "mainEntity": {
-      "@type": "LocalBusiness",
-      "name": "GRINIUM Mining Pool",
-      "description": "Professional Grin cryptocurrency mining pool with advanced statistics and secure management",
-      "url": "https://pool.grin.money",
-      "image": "https://pool.grin.money/images/og-image.png"
     }
   }
   </script>
 
-    <link rel="stylesheet" href="/css/dashboard.css">
-    <link rel="stylesheet" href="/css/themes.css">
+  <link rel="stylesheet" href="/css/dashboard.css">
+  <link rel="stylesheet" href="/css/themes.css">
+  <link rel="stylesheet" href="/css/reactor.css">
+  <style>
+    /* Full miner address, clickable → account lookup. Monospace + break-all so the whole
+       address is visible and easy to copy on any width without blowing out the table. */
+    .addr-link {
+      font-family: var(--mono, ui-monospace, monospace);
+      font-size: 12px;
+      word-break: break-all;
+      color: var(--accent, #58a6ff);
+      text-decoration: none;
+    }
+    .addr-link:hover { text-decoration: underline; }
+
+    /* Shared timeframe toggle driving all three trend charts (Day/Week/Month/Year/All). */
+    .rangebar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 2px; }
+    .rangebar .rng-btn {
+      font: inherit; font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+      padding: 6px 13px; border-radius: 6px; cursor: pointer;
+      background: var(--panel-2, rgba(255,255,255,.04)); color: var(--text-dim, #9aa4b2);
+      border: 1px solid var(--border, rgba(255,255,255,.10)); transition: background .12s, color .12s;
+    }
+    .rangebar .rng-btn:hover { color: var(--text, #e6edf3); }
+    .rangebar .rng-btn.active {
+      background: var(--accent, #7cb342); color: #07090c;
+      border-color: var(--accent, #7cb342); font-weight: 600;
+    }
+    .rangebar .rng-spacer { margin-left: auto; }
+    .rangebar .rng-note {
+      color: var(--text-mute, #6b7480); font-family: var(--mono, monospace);
+      font-size: 11px; letter-spacing: .1em;
+    }
+  </style>
 </head>
 <body>
 
     <!-- header injected by /js/public-shell.js -->
 
-    <div class="container">
-        <h2 class="page-title">Miners Statistics</h2>
+    <div class="wrap">
+        <!-- Sidebar ad slot (filled by /js/ads.js; hidden if empty) -->
+        <div class="ad-slot ad-slot--sidebar" data-ad-slot="sidebar" style="display:none;"></div>
 
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-label">Miners Online</div>
-                <div class="stat-value" id="ms-miners">—</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Pool Hashrate (1h)</div>
-                <div class="stat-value" id="ms-hashrate">—</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Top Miner Hashrate</div>
-                <div class="stat-value" id="ms-top">—</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Active Connections</div>
-                <div class="stat-value" id="ms-connections">—</div>
+        <!-- ═══ Operator strip: heading + master status ═══ -->
+        <div class="deck-head">
+            <div>
+                <h1>Miners Statistics</h1>
+                <div class="sub">Live pool metrics &middot; historical trends &middot; leaderboards <span class="dim">(all times UTC)</span></div>
             </div>
         </div>
 
-        <h3 class="section-title">Top 10 Miners by Hashrate (last hour)</h3>
+        <!-- ═══ Spec placard: compact live tiles (was the 4 stat cards) ═══ -->
+        <div class="placard" aria-label="Live pool figures">
+            <span><i>Miners online</i><b id="ms-miners">—</b></span>
+            <span><i>Pool hashrate · 1h</i><b id="ms-hashrate">—</b></span>
+            <span><i>Top miner</i><b id="ms-top">—</b></span>
+            <span><i>Connections</i><b id="ms-connections">—</b></span>
+        </div>
 
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Rank</th>
-                    <th>Miner</th>
-                    <th>Hashrate</th>
-                    <th>Peak (1h)</th>
-                </tr>
-            </thead>
-            <tbody id="top-hashrate">
-                <tr><td colspan="4">Loading…</td></tr>
-            </tbody>
-        </table>
+        <div class="deck">
 
-        <h3 class="section-title">Top Miners by Balance</h3>
+            <!-- ═══ Shared timeframe toggle for the three trend recorders ═══ -->
+            <div class="rangebar" id="ms-rangebar" role="tablist" aria-label="Chart timeframe">
+                <button class="rng-btn active" data-range="day"   role="tab">Day</button>
+                <button class="rng-btn"        data-range="week"  role="tab">Week</button>
+                <button class="rng-btn"        data-range="month" role="tab">Month</button>
+                <button class="rng-btn"        data-range="year"  role="tab">Year</button>
+                <button class="rng-btn"        data-range="all"   role="tab">All Time</button>
+                <span class="rng-spacer"></span>
+                <span class="rng-note" id="ms-range-note">last 24h &middot; hourly</span>
+            </div>
 
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Rank</th>
-                    <th>Miner</th>
-                    <th>Unpaid Balance (GRIN)</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody id="top-balance">
-                <tr><td colspan="4">Loading…</td></tr>
-            </tbody>
-        </table>
+            <div class="deck-row half">
+                <!-- ═══ P-01 · POOL HASHRATE TREND ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-01</span> Chart recorder — pool hashrate</h2>
+                    <div class="panel-body chart-wrap">
+                        <canvas id="ms-chart-hashrate" aria-label="Pool hashrate over the selected timeframe" role="img"></canvas>
+                        <div class="chart-empty" id="ms-empty-hashrate">NO TRACE DATA YET</div>
+                    </div>
+                </div>
+
+                <!-- ═══ P-02 · MINERS COUNT TREND ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-02</span> Chart recorder — miners online</h2>
+                    <div class="panel-body chart-wrap">
+                        <canvas id="ms-chart-miners" aria-label="Active miner count over the selected timeframe" role="img"></canvas>
+                        <div class="chart-empty" id="ms-empty-miners">NO TRACE DATA YET</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ P-03 · EARNINGS vs PAYOUT ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-03</span> Ledger recorder — earnings vs payout
+                    <span class="right">block rewards confirmed vs paid to miners</span></h2>
+                <div class="panel-body chart-wrap">
+                    <canvas id="ms-chart-ledger" aria-label="Pool earnings and payouts over the selected timeframe" role="img"></canvas>
+                    <div class="chart-empty" id="ms-empty-ledger">NO LEDGER DATA YET</div>
+                </div>
+            </div>
+
+            <!-- ═══ P-04 · TOP MINERS BY HASHRATE (24h) ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-04</span> Top miners by hashrate <span class="right">last 24 hours</span></h2>
+                <div class="panel-body">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Rank</th><th>Miner</th><th>Hashrate (24h)</th></tr>
+                        </thead>
+                        <tbody id="top-hashrate">
+                            <tr><td colspan="3">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                    <div class="pager" id="hr-pager" style="display:none;align-items:center;justify-content:center;gap:14px;margin-top:16px;">
+                        <button class="btn sm" id="hr-prev" disabled>‹ Prev</button>
+                        <span class="dim" id="hr-page-label" style="font-size:13px;">Page 1</span>
+                        <button class="btn sm" id="hr-next" disabled>Next ›</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ P-05 · TOP LUCKY MINERS BY BLOCKS FOUND (30d) ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-05</span> Top lucky miners — blocks found <span class="right">last 30 days</span></h2>
+                <div class="panel-body">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Rank</th><th>Miner</th><th class="num">Blocks Found</th><th class="num">Reward (ツ)</th></tr>
+                        </thead>
+                        <tbody id="top-finders">
+                            <tr><td colspan="4">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                    <div class="pager" id="fnd-pager" style="display:none;align-items:center;justify-content:center;gap:14px;margin-top:16px;">
+                        <button class="btn sm" id="fnd-prev" disabled>‹ Prev</button>
+                        <span class="dim" id="fnd-page-label" style="font-size:13px;">Page 1</span>
+                        <button class="btn sm" id="fnd-next" disabled>Next ›</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ P-06 · TOP MINERS BY AVG HASHRATE (30d) ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-06</span> Top miners by avg hashrate <span class="right">last 30 days</span></h2>
+                <div class="panel-body">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Rank</th><th>Miner</th><th class="num">Avg Hashrate (30d)</th></tr>
+                        </thead>
+                        <tbody id="top-avg">
+                            <tr><td colspan="3">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                    <div class="pager" id="avg-pager" style="display:none;align-items:center;justify-content:center;gap:14px;margin-top:16px;">
+                        <button class="btn sm" id="avg-prev" disabled>‹ Prev</button>
+                        <span class="dim" id="avg-page-label" style="font-size:13px;">Page 1</span>
+                        <button class="btn sm" id="avg-next" disabled>Next ›</button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
     </div>
 
     <!-- footer injected by /js/public-shell.js -->
 
     <script src="/js/auth.js"></script>
+    <script src="/js/vendor/chart.umd.min.js"></script>
+    <script src="/js/charts-init.js"></script>
     <script>
         // Escape any value before it goes into innerHTML. Defense-in-depth: the stratum
         // layer already restricts grin_address to bech32 chars (lib/stratum-protocol.js),
@@ -139,14 +236,14 @@
                 .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
-        // Theme switching is handled site-wide by /js/public-theme.js, which renders
-        // the theme picker and applies the 3 built-in + 10 white-label themes.
-
         // ═════════════════════════════════════════════════════════════════
-        // API Integration: live miner statistics — public endpoints only.
-        //   /api/pool/stats        active miners / connections
-        //   /api/stratum/hashrate  pool GPS + top miners by 1h hashrate
-        //   /api/pool/miners       top miners by unpaid balance
+        // API Integration — public endpoints only.
+        //   /api/pool/stats                 active miners / connections (placard)
+        //   /api/stratum/hashrate           pool GPS 1h (placard)
+        //   /api/stratum/top-miners         top miners by 24h hashrate (P-04)
+        //   /api/pool/top-block-finders     top lucky miners by blocks found, 30d (P-05)
+        //   /api/stratum/top-avg-hashrate   top miners by avg hashrate, 30d (P-06)
+        //   /api/pool/metrics/history       durable pool trend series → P-01/P-02/P-03
         // ═════════════════════════════════════════════════════════════════
 
         function fmtGpsLabel(gps) {
@@ -156,9 +253,16 @@
             return gps.toFixed(2) + ' G/s';
         }
 
-        function truncAddr(addr) {
+        // GRIN amount for the ledger chart y-axis / tooltips (ツ = Grin symbol, matches the tables).
+        function fmtGrin(v) {
+            return Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' ツ';
+        }
+
+        // Full miner address rendered as a link into the account view.
+        function addrCell(addr) {
             addr = String(addr || '');
-            return addr.length > 16 ? addr.slice(0, 9) + '…' + addr.slice(-4) : addr;
+            const href = '/account-settings.html?addr=' + encodeURIComponent(addr);
+            return '<a class="addr-link" href="' + href + '">' + escHtml(addr) + '</a>';
         }
 
         function setStat(id, text) {
@@ -166,8 +270,137 @@
             if (el) el.textContent = text;
         }
 
-        function tableMessage(tbody, msg) {
-            tbody.innerHTML = '<tr><td colspan="4">' + escHtml(msg) + '</td></tr>';
+        function tableMessage(tbody, cols, msg) {
+            tbody.innerHTML = '<tr><td colspan="' + cols + '">' + escHtml(msg) + '</td></tr>';
+        }
+
+        // ── Client-side pagination (20 rows/page) ────────────────────────────
+        const PAGE_SIZE = 20;
+        let hrMiners = [], hrPage = 0;    // top miners by 24h hashrate
+        let fndMiners = [], fndPage = 0;  // top lucky miners by blocks found (30d)
+        let avgMiners = [], avgPage = 0;  // top miners by avg hashrate (30d)
+
+        function updatePager(prefix, page, pages) {
+            const pager = document.getElementById(prefix + '-pager');
+            if (pager) pager.style.display = pages > 1 ? 'flex' : 'none';
+            const label = document.getElementById(prefix + '-page-label');
+            if (label) label.textContent = 'Page ' + (page + 1) + ' of ' + Math.max(pages, 1);
+            const prev = document.getElementById(prefix + '-prev');
+            const next = document.getElementById(prefix + '-next');
+            if (prev) prev.disabled = page <= 0;
+            if (next) next.disabled = page >= pages - 1;
+        }
+
+        function renderHrPage() {
+            const tbody = document.getElementById('top-hashrate');
+            if (!tbody) return;
+            const total = hrMiners.length;
+            if (!total) { tableMessage(tbody, 3, 'No active miners in the last 24 hours'); updatePager('hr', 0, 0); return; }
+            const pages = Math.ceil(total / PAGE_SIZE);
+            if (hrPage >= pages) hrPage = pages - 1;
+            if (hrPage < 0) hrPage = 0;
+            const start = hrPage * PAGE_SIZE;
+            tbody.innerHTML = hrMiners.slice(start, start + PAGE_SIZE).map((m, i) => `
+                <tr>
+                    <td>#${start + i + 1}</td>
+                    <td>${addrCell(m.grin_address)}</td>
+                    <td>${escHtml(fmtGpsLabel(m.hashrate_gps || 0))}</td>
+                </tr>
+            `).join('');
+            updatePager('hr', hrPage, pages);
+        }
+
+        function renderFndPage() {
+            const tbody = document.getElementById('top-finders');
+            if (!tbody) return;
+            const total = fndMiners.length;
+            if (!total) { tableMessage(tbody, 4, 'No blocks found in the last 30 days yet — be the first!'); updatePager('fnd', 0, 0); return; }
+            const pages = Math.ceil(total / PAGE_SIZE);
+            if (fndPage >= pages) fndPage = pages - 1;
+            if (fndPage < 0) fndPage = 0;
+            const start = fndPage * PAGE_SIZE;
+            tbody.innerHTML = fndMiners.slice(start, start + PAGE_SIZE).map((m, i) => `
+                <tr>
+                    <td>#${start + i + 1}</td>
+                    <td>${addrCell(m.grin_address)}</td>
+                    <td class="num">${Number(m.blocks_found || 0).toLocaleString('en-US')}</td>
+                    <td class="num">${Number(m.total_reward || 0).toFixed(2)}</td>
+                </tr>
+            `).join('');
+            updatePager('fnd', fndPage, pages);
+        }
+
+        function renderAvgPage() {
+            const tbody = document.getElementById('top-avg');
+            if (!tbody) return;
+            const total = avgMiners.length;
+            if (!total) { tableMessage(tbody, 3, 'No mining activity in the last 30 days yet'); updatePager('avg', 0, 0); return; }
+            const pages = Math.ceil(total / PAGE_SIZE);
+            if (avgPage >= pages) avgPage = pages - 1;
+            if (avgPage < 0) avgPage = 0;
+            const start = avgPage * PAGE_SIZE;
+            tbody.innerHTML = avgMiners.slice(start, start + PAGE_SIZE).map((m, i) => `
+                <tr>
+                    <td>#${start + i + 1}</td>
+                    <td>${addrCell(m.grin_address)}</td>
+                    <td class="num">${escHtml(fmtGpsLabel(m.avg_hashrate_gps || 0))}</td>
+                </tr>
+            `).join('');
+            updatePager('avg', avgPage, pages);
+        }
+
+        // ── Historical trend charts (P-01/P-02/P-03), driven by the shared range toggle ──────
+        let msRange = 'day';
+        const RANGE_NOTE = {
+            day:   'last 24h · hourly',
+            week:  'last 7 days · hourly',
+            month: 'last 30 days · daily',
+            year:  'last 365 days · daily',
+            all:   'all time · auto-scaled'
+        };
+
+        function toggleEmpty(emptyId, show) {
+            const el = document.getElementById(emptyId);
+            if (el) el.style.display = show ? 'flex' : 'none';
+        }
+
+        async function loadMetrics() {
+            const note = document.getElementById('ms-range-note');
+            if (note) note.textContent = RANGE_NOTE[msRange] || '';
+            if (typeof PoolCharts === 'undefined') return;
+            try {
+                const data = await Auth.fetch('/api/pool/metrics/history?range=' + encodeURIComponent(msRange));
+                const points = (data && Array.isArray(data.points)) ? data.points : [];
+                const bucket = data && data.bucket_seconds;
+                const has = points.length > 0;
+
+                toggleEmpty('ms-empty-hashrate', !has);
+                toggleEmpty('ms-empty-miners', !has);
+                toggleEmpty('ms-empty-ledger', !has);
+
+                PoolCharts.renderTrendLine('ms-chart-hashrate',
+                    points.map(p => ({ t: p.t, v: p.hashrate_gps })),
+                    { label: 'Pool hashrate', bucketSeconds: bucket, valueFmt: PoolCharts.fmtGps });
+
+                PoolCharts.renderTrendLine('ms-chart-miners',
+                    points.map(p => ({ t: p.t, v: p.miner_count })),
+                    { label: 'Miners online', bucketSeconds: bucket, valueFmt: PoolCharts.fmtInt, color: '#58a6ff' });
+
+                const labels = points.map(p => {
+                    const d = new Date(p.t * 1000);
+                    return bucket && bucket >= 86400
+                        ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+                        : d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
+                });
+                PoolCharts.renderGroupedBarChart('ms-chart-ledger', labels, [
+                    { label: 'Earnings', data: points.map(p => p.earnings), color: '#7cb342' },
+                    { label: 'Payout',   data: points.map(p => p.payout),   color: '#d29922' }
+                ], { valueFmt: fmtGrin });
+            } catch (e) {
+                toggleEmpty('ms-empty-hashrate', true);
+                toggleEmpty('ms-empty-miners', true);
+                toggleEmpty('ms-empty-ledger', true);
+            }
         }
 
         async function loadMinersStats() {
@@ -179,59 +412,87 @@
                 }
             } catch (e) { /* tiles keep placeholders */ }
 
-            const hrTbody = document.getElementById('top-hashrate');
+            // Pool hashrate tile stays a 1h figure; the P-01 chart shows the selected timeframe.
             try {
                 const hr = await Auth.fetch('/api/stratum/hashrate');
-                if (hr) {
-                    setStat('ms-hashrate', fmtGpsLabel(hr.pool_hashrate_1h_gps || 0));
-                    const top = Array.isArray(hr.top_miners) ? hr.top_miners : [];
-                    setStat('ms-top', top.length ? fmtGpsLabel(top[0].hashrate_gps || 0) : '—');
-                    if (hrTbody) {
-                        if (!top.length) {
-                            tableMessage(hrTbody, 'No active miners in the last hour');
-                        } else {
-                            hrTbody.innerHTML = top.map((m, idx) => `
-                                <tr>
-                                    <td>#${idx + 1}</td>
-                                    <td title="${escHtml(m.grin_address)}">${escHtml(truncAddr(m.grin_address))}</td>
-                                    <td>${escHtml(fmtGpsLabel(m.hashrate_gps || 0))}</td>
-                                    <td>${escHtml(fmtGpsLabel(m.max_hashrate_gps || 0))}</td>
-                                </tr>
-                            `).join('');
-                        }
-                    }
-                }
+                if (hr) setStat('ms-hashrate', fmtGpsLabel(hr.pool_hashrate_1h_gps || 0));
+            } catch (e) { /* tile keeps placeholder */ }
+
+            const hrTbody = document.getElementById('top-hashrate');
+            try {
+                const data = await Auth.fetch('/api/stratum/top-miners?window=1440&limit=500');
+                hrMiners = (data && Array.isArray(data.top_miners)) ? data.top_miners : [];
+                setStat('ms-top', hrMiners.length ? fmtGpsLabel(hrMiners[0].hashrate_gps || 0) : '—');
+                renderHrPage();
             } catch (e) {
-                if (hrTbody) tableMessage(hrTbody, 'Hashrate data unavailable');
+                hrMiners = [];
+                if (hrTbody) tableMessage(hrTbody, 3, 'Hashrate data unavailable');
+                updatePager('hr', 0, 0);
             }
 
-            const balTbody = document.getElementById('top-balance');
+            const fndTbody = document.getElementById('top-finders');
             try {
-                const miners = await Auth.fetch('/api/pool/miners?limit=10');
-                if (balTbody) {
-                    if (!Array.isArray(miners) || !miners.length) {
-                        tableMessage(balTbody, 'No miners yet — be the first!');
-                    } else {
-                        balTbody.innerHTML = miners.map((m, idx) => `
-                            <tr>
-                                <td>#${idx + 1}</td>
-                                <td title="${escHtml(m.grin_address)}">${escHtml(truncAddr(m.grin_address))}</td>
-                                <td>${Number(m.balance || 0).toFixed(4)}</td>
-                                <td><span class="badge${m.is_online ? ' badge-online' : ''}">${m.is_online ? 'Online' : 'Offline'}</span></td>
-                            </tr>
-                        `).join('');
-                    }
-                }
+                const data = await Auth.fetch('/api/pool/top-block-finders?days=30&limit=500');
+                fndMiners = (data && Array.isArray(data.top_finders)) ? data.top_finders : [];
+                renderFndPage();
             } catch (e) {
-                if (balTbody) tableMessage(balTbody, 'Miner data unavailable');
+                fndMiners = [];
+                if (fndTbody) tableMessage(fndTbody, 4, 'Block-finder data unavailable');
+                updatePager('fnd', 0, 0);
+            }
+
+            const avgTbody = document.getElementById('top-avg');
+            try {
+                const data = await Auth.fetch('/api/stratum/top-avg-hashrate?days=30&limit=500');
+                avgMiners = (data && Array.isArray(data.top_miners)) ? data.top_miners : [];
+                renderAvgPage();
+            } catch (e) {
+                avgMiners = [];
+                if (avgTbody) tableMessage(avgTbody, 3, 'Hashrate history unavailable');
+                updatePager('avg', 0, 0);
             }
         }
 
-        // Load on page ready
-        document.addEventListener('DOMContentLoaded', loadMinersStats);
+        document.addEventListener('DOMContentLoaded', function () {
+            document.getElementById('hr-prev').addEventListener('click', function () {
+                if (hrPage > 0) { hrPage--; renderHrPage(); }
+            });
+            document.getElementById('hr-next').addEventListener('click', function () {
+                hrPage++; renderHrPage();
+            });
+            document.getElementById('fnd-prev').addEventListener('click', function () {
+                if (fndPage > 0) { fndPage--; renderFndPage(); }
+            });
+            document.getElementById('fnd-next').addEventListener('click', function () {
+                fndPage++; renderFndPage();
+            });
+            document.getElementById('avg-prev').addEventListener('click', function () {
+                if (avgPage > 0) { avgPage--; renderAvgPage(); }
+            });
+            document.getElementById('avg-next').addEventListener('click', function () {
+                avgPage++; renderAvgPage();
+            });
 
-        // Refresh every 60 seconds
-        setInterval(loadMinersStats, 60000);
+            // Timeframe toggle → reload the three trend charts (leaderboards are unaffected).
+            const bar = document.getElementById('ms-rangebar');
+            if (bar) {
+                bar.addEventListener('click', function (e) {
+                    const btn = e.target.closest('.rng-btn');
+                    if (!btn) return;
+                    const r = btn.getAttribute('data-range');
+                    if (!r || r === msRange) return;
+                    msRange = r;
+                    bar.querySelectorAll('.rng-btn').forEach(b => b.classList.toggle('active', b === btn));
+                    loadMetrics();
+                });
+            }
+
+            loadMinersStats();
+            loadMetrics();
+        });
+
+        // Refresh live tiles, leaderboards and the selected trend charts every 60s.
+        setInterval(function () { loadMinersStats(); loadMetrics(); }, 60000);
     </script>
     <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>

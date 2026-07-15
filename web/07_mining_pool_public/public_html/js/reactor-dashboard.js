@@ -714,21 +714,18 @@
         : regions.filter(function (r) { return r.status !== 'offline'; }).length;
       setText('pl-regions', String(activeRegions));
 
-      var legend = $('rx-legend');
-      var note = $('rx-note');
+      var help = $('rx-help');  // collapsed colour-legend + guidance disclosure
       if (!bank) return;
       if (regions.length === 0) {
         // No declared regions: hide the switch bank, show the operator's configured host.
         bank.style.display = 'none';
-        if (legend) legend.hidden = true;
-        if (note) note.hidden = true;
+        if (help) help.hidden = true;
         if (DEFAULT_URI) setText('rx-uri', DEFAULT_URI);
         setText('rx-meta', 'SINGLE ENDPOINT · CUCKATOO32');
         return;
       }
       bank.style.display = '';
-      if (legend) legend.hidden = false;
-      if (note) note.hidden = false;
+      if (help) help.hidden = false;
 
       // Nearest region first, then most miners, then name — same order as before.
       var nearestKey = detectNearestRegion(regions.map(function (r) { return r.region; }));

@@ -232,18 +232,23 @@
                     <div class="panel-body">
                         <div class="patchbay">
                             <div class="switchbank" id="rx-switches" role="tablist" aria-label="Mining regions"></div>
-                            <div class="rgn-legend" id="rx-legend" hidden>
-                                <span><i class="l-online"></i> online — miners active</span>
-                                <span><i class="l-idle"></i> idle — ready, no miners yet</span>
-                                <span><i class="l-down"></i> offline — gateway unreachable</span>
-                            </div>
-                            <p class="rgn-note" id="rx-note" hidden>
-                                Connect to any <b class="c-ok">green</b> or <b class="c-info">blue</b>
-                                region — blue only means it is up and ready with no miners on it yet,
-                                not broken. A <b class="c-bad">red</b> region is temporarily unreachable,
-                                so just pick another. Your rewards are identical on every region, so
-                                choose the one nearest you for the lowest stale-share rate.
-                            </p>
+                            <!-- Colour legend + guidance folded into a collapsed disclosure so the
+                                 patch bay stays compact; it opens on demand (operator request 2026-07-14). -->
+                            <details class="rgn-help" id="rx-help" hidden>
+                                <summary>What do the region colours mean?</summary>
+                                <div class="rgn-legend">
+                                    <span><i class="l-online"></i> online — miners active</span>
+                                    <span><i class="l-idle"></i> idle — ready, no miners yet</span>
+                                    <span><i class="l-down"></i> offline — gateway unreachable</span>
+                                </div>
+                                <p class="rgn-note">
+                                    Connect to any <b class="c-ok">green</b> or <b class="c-info">blue</b>
+                                    region — blue only means it is up and ready with no miners on it yet,
+                                    not broken. A <b class="c-bad">red</b> region is temporarily unreachable,
+                                    so just pick another. Your rewards are identical on every region, so
+                                    choose the one nearest you for the lowest stale-share rate.
+                                </p>
+                            </details>
                             <div class="patch-readout">
                                 <div class="k">Stratum endpoint — paste into your miner</div>
                                 <div class="uri-row">
@@ -254,9 +259,11 @@
                                 <div class="patch-note">
                                     USER <code>&lt;your_grin_address&gt;.rig1</code> — your address is your login, no account or
                                     registration needed. <code>.rig1</code> optionally names this machine (lowercase
-                                    letters/digits/<code>-</code>/<code>_</code>, max <strong>10 chars</strong> — longer
-                                    labels are shortened automatically).
-                                    PASS — any value (e.g. <code>x</code>); it is ignored by the pool.
+                                    letters/digits/<code>-</code>/<code>_</code>, max <strong>25 chars</strong> — longer
+                                    names are shortened automatically, so you never get rejected).
+                                    PASS — put any text or number you like (e.g. <code>x</code>). The pool
+                                    doesn&rsquo;t check it today, so pick something memorable: a future release
+                                    may read it to verify a payment method or other account settings.
                                     Algorithm <strong>Cuckatoo32</strong>.
                                 </div>
                             </div>

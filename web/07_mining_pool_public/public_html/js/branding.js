@@ -669,6 +669,28 @@
       }
     });
 
+    // Upcoming contest campaigns teaser (e.g. the fortune board). Fed by inc.lottery.campaigns
+    // (scheduled, not-yet-drawn) from /api/public/branding → LotteryManager.nextScheduled().
+    var campaigns = (inc.lottery && inc.lottery.campaigns) || [];
+    var fmtUtc = function (sec) {
+      return sec ? new Date(sec * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '—';
+    };
+    document.querySelectorAll('[data-brand="upcoming-campaigns"]').forEach(function (container) {
+      var wrap = container.closest('[data-brand-show="campaigns"]');
+      if (!inc.enabled || !campaigns.length) { if (wrap) wrap.style.display = 'none'; return; }
+      if (wrap) wrap.style.display = '';
+      container.innerHTML = '';
+      campaigns.forEach(function (c) {
+        var pot = (c.pot_grin > 0) ? (' — ' + c.pot_grin + ' GRIN') : '';
+        var row = document.createElement('div');
+        row.style.cssText = 'padding:.4rem 0;border-bottom:1px solid rgba(128,128,128,.2);';
+        row.innerHTML = '<strong>🏆 ' + escapeText(c.name) + '</strong>' + escapeText(pot) +
+          (c.description ? '<br><span style="opacity:.8;">' + escapeText(c.description) + '</span>' : '') +
+          '<br><span style="font-size:.85em;opacity:.7;">Draws ' + escapeText(fmtUtc(c.ends_at)) + '</span>';
+        container.appendChild(row);
+      });
+    });
+
     // Compact recent-winners list (e.g. a homepage "🎉 Latest winners" widget).
     var winners = inc.recent_winners || [];
     document.querySelectorAll('[data-brand="fortune-board"]').forEach(function (container) {

@@ -543,8 +543,16 @@
             $id('acct-pay-slatepack').addEventListener('change', syncPayMethod);
             syncPayMethod();
 
+            // Deep-link support: ?addr=grin1… (e.g. from the miners-stats leaderboard) takes
+            // priority over the last-viewed address stashed in localStorage.
             let saved = '';
-            try { saved = localStorage.getItem(ADDR_KEY) || ''; } catch (e) {}
+            try {
+                const qp = new URLSearchParams(window.location.search).get('addr');
+                if (qp) saved = qp.trim();
+            } catch (e) {}
+            if (!saved) {
+                try { saved = localStorage.getItem(ADDR_KEY) || ''; } catch (e) {}
+            }
             if (saved) {
                 $id('acct-addr').value = saved;
                 lookup();

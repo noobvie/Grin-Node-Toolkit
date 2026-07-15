@@ -292,7 +292,8 @@ class PoolSettings {
     // Incentive features (prize pool, join bonus, jackpot, streaks, lottery).
     // All funded from a single prize_pool pseudo-address bucket; see lib/incentives.js.
     incentives: {
-      incentives_enabled: 'false',           // master switch
+      incentives_enabled: 'true',            // master switch (on by default; no payouts until the
+                                             // prize pool is funded and a specific feature is enabled)
       // Funding
       prize_fee_cut_percent: 0,              // % OF the collected pool fee diverted to prize_pool (0-100)
       allow_miner_donations: 'true',         // miners opt in via a `donateN` worker-name tag
@@ -312,9 +313,12 @@ class PoolSettings {
       // Lottery
       lottery_enabled: 'false',
       lottery_weekly_enabled: 'true',
-      lottery_pot_share_weighted_percent: 50,  // Pot A: tickets ∝ valid shares
+      lottery_pot_share_weighted_percent: 50,  // Pot A: tickets ∝ sustained work (hashrate_history)
       lottery_pot_equal_chance_percent: 50,    // Pot B: one entry per qualifying address
-      lottery_min_shares: 10,                  // min valid shares in the period to qualify
+      lottery_min_shares: 10,                  // legacy gate (unused since eligibility moved to
+                                               // hashrate_history; kept for backward compat)
+      lottery_min_active_days: 1,              // min distinct active days to qualify (anti-sybil gate)
+      lottery_max_ticket_share_percent: 0,     // whale cap on Pot A tickets (% of total; 0 = off)
       lottery_pot_fraction_percent: 100,       // % of prize_pool paid out per draw
       // special events: JSON array of {name, date:"MM-DD", pot_grin, enabled}
       lottery_special_events: JSON.stringify([
@@ -344,7 +348,8 @@ class PoolSettings {
     database: {
       retention_enabled: 'true',
       shares_margin_blocks: 360,        // safety blocks kept BEYOND confirm_depth + PPLNS window
-      hashrate_keep_days: 30,           // prune hashrate_history rows older than this
+      hashrate_keep_days: 100,          // prune per-miner hashrate_history rows older than this
+                                        // (pool-wide trends live forever in pool_metrics_hourly)
       resolved_alerts_keep_days: 30,    // prune resolved/acknowledged alerts older than this
       prune_interval_minutes: 60,       // how often retention.js runs (applied at restart)
     },
@@ -580,6 +585,8 @@ class PoolSettings {
         lottery_pot_equal_chance_percent: percent('lottery_pot_equal_chance_percent'),
         lottery_pot_fraction_percent: percent('lottery_pot_fraction_percent'),
         lottery_min_shares: intRange('lottery_min_shares', 0, 1000000),
+        lottery_min_active_days: intRange('lottery_min_active_days', 0, 366),
+        lottery_max_ticket_share_percent: percent('lottery_max_ticket_share_percent'),
         lottery_special_events: (val) => {
           let arr = val;
           if (typeof arr === 'string') {

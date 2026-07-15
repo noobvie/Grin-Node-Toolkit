@@ -71,7 +71,7 @@ class RetentionManager {
     }
 
     const margin = parseInt(s.shares_margin_blocks, 10) || 0;
-    const hashrateKeepDays = parseInt(s.hashrate_keep_days, 10) || 30;
+    const hashrateKeepDays = parseInt(s.hashrate_keep_days, 10) || 100;
     const alertsKeepDays = parseInt(s.resolved_alerts_keep_days, 10) || 30;
     const now = Math.floor(Date.now() / 1000);
 

@@ -87,7 +87,10 @@ body {
    wide/unbreakable dynamic content (long payout lines, rods) blow its track past the
    viewport and desync sibling widths. minmax(0,…) lets tracks shrink below content. */
 .deck-row.half { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.deck-row.main { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); }
+/* align-items:start so P-01 (tall: gauges + counters + LED bar) and P-02 (short lamp grid)
+   size to their own content — the annunciator no longer stretches to P-01's height and leaves
+   a dead strip at its foot. (half rows stay stretched so their side-by-side panels stay matched.) */
+.deck-row.main { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: start; }
 
 .panel {
   min-width: 0;  /* pair with minmax(0,…) so overflow:auto children clip instead of expanding the panel */
@@ -146,11 +149,12 @@ body {
 }
 @keyframes rx-annblink { 0%, 60% { opacity: 1; } 61%, 100% { opacity: .45; } }
 
-/* ── instruments: gauges + counters + LED bargraph ──────────────────────── */
-/* minmax(0,…) on the readout column (not a bare 1fr = minmax(auto,1fr)) so it can shrink
-   below its content's min-content — otherwise the counters' 2×min(140px) floor plus the two
-   fixed-width gauges push the grid past the panel edge and spill into P-02. */
-.instruments { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 22px; align-items: center; }
+/* ── instruments: gauges (top) + counters + LED bargraph (below) ─────────── */
+/* Stacked flex column so the two gauges sit on their own row and the counters/LED bar run
+   full width beneath them — no more vertical-centering gap beside a taller readout column,
+   and it mirrors the mobile stack so there's a single layout to reason about. */
+.instruments { display: flex; flex-direction: column; gap: 18px; }
+.gauge-row { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; gap: clamp(16px, 5vw, 52px); }
 .gauge-block { text-align: center; }
 .gauge-block canvas { display: block; margin: 0 auto; }
 .gauge-label {
@@ -158,9 +162,10 @@ body {
   text-transform: uppercase; color: var(--text-dim); margin-top: 4px; line-height: 1.6;
 }
 .gauge-label b { color: var(--accent); text-shadow: 0 0 8px var(--glow); font-size: 12.5px; }
-/* minmax(0,1fr) (not minmax(140px,…)) lets the two tiles shrink to their track; each .counter
-   is overflow:hidden + container-type so labels clip and values self-shrink instead of overflowing. */
-.counters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+/* Full-width 3-column strip under the gauges (6 readouts → 2 rows); minmax(0,1fr) lets each
+   tile shrink to its track, and each .counter is overflow:hidden + container-type so labels
+   clip and values self-shrink instead of overflowing. Drops to 2 columns on phones. */
+.counters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .counter {
   background: var(--rx-inset); border: 1px solid var(--rx-line); border-radius: 6px;
   padding: 10px 14px 9px; box-shadow: inset 0 2px 10px rgba(0, 0, 0, .55);
@@ -389,12 +394,6 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .master-lamp .led, .lamp.warn, .lamp.alarm, .mimic .mlink i { animation: none !important; }
 }
-/* 1180 (was 1020): with two 190px gauges the 3-col readout stays too cramped well above
-   1020px, so drop the 2nd gauge below and give the counters/LED bar a full-width track sooner. */
-@media (max-width: 1180px) {
-  .instruments { grid-template-columns: auto minmax(0, 1fr); }
-  .instruments .gauge-block:nth-child(2) { order: 3; }
-}
 @media (max-width: 900px) {
   .deck-row.half, .deck-row.main { grid-template-columns: minmax(0, 1fr); }
   .patchbay { gap: 18px; }
@@ -403,9 +402,9 @@ body {
   .panel-title { padding: 10px 16px 8px; letter-spacing: .16em; }
 }
 @media (max-width: 640px) {
-  .instruments { grid-template-columns: 1fr; justify-items: center; gap: 16px; }
-  .instruments .gauge-block:nth-child(2) { order: 0; }
-  .counters { width: 100%; }
+  /* gauge-row flex-wraps the two gauges to a vertical stack on its own; counters tighten to
+     2 columns so the readouts stay legible on a phone. */
+  .counters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .annun { grid-template-columns: repeat(2, 1fr); }
   .deck-head { align-items: flex-start; flex-direction: column; }
 }

@@ -124,15 +124,17 @@
                     <h2 class="panel-title"><span class="tag">P-01</span> Primary instruments <span class="right"><span class="pt-clock" id="rx-utc">--:--:-- UTC</span> · live · 60s refresh</span></h2>
                     <div class="panel-body">
                         <div class="instruments">
-                            <div class="gauge-block">
-                                <canvas id="g-hash" width="190" height="150" aria-label="Pool hashrate gauge" role="img"></canvas>
-                                <div class="gauge-label">Pool hashrate<br><b class="num" id="g-hash-v">—</b><br><span id="g-hash-avg"></span></div>
+                            <div class="gauge-row">
+                                <div class="gauge-block">
+                                    <canvas id="g-hash" width="190" height="150" aria-label="Pool hashrate gauge" role="img"></canvas>
+                                    <div class="gauge-label">Pool hashrate<br><b class="num" id="g-hash-v">—</b><br><span id="g-hash-avg"></span></div>
+                                </div>
+                                <div class="gauge-block">
+                                    <canvas id="g-share" width="190" height="150" aria-label="Network share gauge" role="img"></canvas>
+                                    <div class="gauge-label">Network share<br><b class="num" id="g-share-v">—</b><br><span id="g-share-luck"></span></div>
+                                </div>
                             </div>
-                            <div class="gauge-block">
-                                <canvas id="g-share" width="190" height="150" aria-label="Network share gauge" role="img"></canvas>
-                                <div class="gauge-label">Network share<br><b class="num" id="g-share-v">—</b><br><span id="g-share-luck"></span></div>
-                            </div>
-                            <div>
+                            <div class="readouts">
                                 <div class="counters">
                                     <div class="counter"><div class="k">Block height</div><div class="v num" id="c-height">—</div></div>
                                     <div class="counter alt"><div class="k">Miners online</div><div class="v num"><span id="c-miners">—</span> <small id="c-miners-sub"></small></div></div>

@@ -627,9 +627,11 @@ function setupRoutes() {
     'GET /api/pool/stats': 'Live pool stats: hashrate, miners, blocks, share quality.',
     'GET /api/pool/stats/regions': 'Per-region stratum endpoints + live status.',
     'GET /api/pool/blocks': 'Pool-found blocks (paginated: limit, offset, status).',
+    'GET /api/pool/blocks/history': 'Durable block series: luck, per-period counts, status, reward (?range=week|month|year|all).',
     'GET /api/pool/effort': 'Pool network share, recent luck, round effort, time since last block.',
     'GET /api/pool/hashrate/history': 'Pool hashrate time-series (?hours=).',
     'GET /api/pool/metrics/history': 'Durable pool trend series: hashrate, miners, earnings, payout (?range=day|week|month|year|all).',
+    'GET /api/pool/payments/history': 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee + lifetime totals (?range=day|week|month|year|all).',
     'GET /api/pool/status': 'Coarse service status strip.',
     'GET /api/account/:addr': 'Account summary: balance, paid, min payout, effort.',
     'GET /api/account/:addr/workers': 'Per-worker (rig) hashrate + share quality.',
@@ -1347,6 +1349,20 @@ function setupRoutes() {
     }
   });
 
+  // Durable block-history series for the public blocks.html deck (one fetch → all four charts:
+  // luck trend, blocks-per-period columns, status doughnut, cumulative reward). Blocks are never
+  // pruned, so ?range can be arbitrarily long. See BlockManager.getBlocksHistory.
+  app.get('/api/pool/blocks/history', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const allowed = ['week', 'month', 'year', 'all'];
+      const range = allowed.includes(req.query.range) ? req.query.range : 'month';
+      res.json(blockManager ? blockManager.getBlocksHistory(range)
+                            : { range, bucket_seconds: null, points: [], luck: [], status: { confirmed: 0, immature: 0, orphaned: 0 } });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/account/:addr/shares', (req, res) => {
     try {
       const { addr } = req.params;
@@ -2016,6 +2032,19 @@ function setupRoutes() {
       const allowed = ['day', 'week', 'month', 'year', 'all'];
       const range = allowed.includes(req.query.range) ? req.query.range : 'day';
       res.json(hashrateTracker.getMetricsHistory(range));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Durable payments & transparency series (payouts · reward split · giveaways · donations · fee)
+  // from the never-pruned withdrawals + balance_log tables. One fetch feeds the whole
+  // payment-history.html ledger deck; ?range selects span + bucket size (totals stay lifetime).
+  app.get('/api/pool/payments/history', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const allowed = ['day', 'week', 'month', 'year', 'all'];
+      const range = allowed.includes(req.query.range) ? req.query.range : 'month';
+      res.json(hashrateTracker.getPaymentsHistory(range));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

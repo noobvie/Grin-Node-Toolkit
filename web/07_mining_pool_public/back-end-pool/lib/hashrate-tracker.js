@@ -424,6 +424,159 @@ class HashrateTracker {
     }
   }
 
+  // Durable payments & transparency series for payment-history.html. Every money movement is
+  // recorded forever (withdrawals + balance_log are never pruned — see lib/retention.js), so we
+  // bucket straight from source and stay accurate at every range. One call feeds the whole page:
+  //   points        time-bucketed { payout, to_miners, fee, donations, giveaways } (drives the
+  //                 cumulative-paid area, reward-split doughnut and giveaways-over-time bar)
+  //   distribution  payout-size histogram over the window (fixed GRIN buckets)
+  //   totals        LIFETIME figures for the transparency tiles (range-independent), incl. an
+  //                 effective fee % derived from the ledger itself (fee ÷ (fee+to-miners)) so it
+  //                 needs no config and matches what was actually taken.
+  // Ledger taxonomy (verified against rewards.js / incentives.js / lottery.js):
+  //   reference_type 'block'    credit → block reward distributed to miners
+  //                  'pool_fee' credit → operator fee collected (to the 'pool_fee' bucket)
+  //                  'donation' debit  → reward voluntarily donated by a miner
+  //   giveaways = credits of streak/join_bonus/prize_award/jackpot/lottery to REAL miner addresses
+  //   (reserved buckets 'pool_fee'/'prize_pool' are funding-side, excluded). Reversals subtract.
+  // Synchronous (all sqlite .all/.get). UTC-aligned buckets, mirroring getMetricsHistory/getBlocksHistory.
+  getPaymentsHistory(range = 'month') {
+    const H = HashrateTracker.HOUR;
+    const DAY = 86400;
+    const GIVEAWAY_TYPES = "('streak','join_bonus','prize_award','jackpot','lottery')";
+    const RESERVED = "('pool_fee','prize_pool')";
+    const empty = {
+      range, bucket_seconds: null, points: [], distribution: [],
+      totals: {
+        paid_all: 0, payout_count: 0, avg_payout: 0, last_payout_at: null,
+        fee_all: 0, donations_all: 0, giveaways_all: 0, to_miners_all: 0, fee_percent: 0
+      }
+    };
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      let bucket, cutoff;
+
+      if (range === 'all') {
+        const first = this.db.prepare(`
+          SELECT MIN(t) AS b FROM (
+            SELECT MIN(confirmed_at) AS t FROM withdrawals WHERE status = 'confirmed'
+            UNION ALL SELECT MIN(created_at) AS t FROM balance_log
+          )`).get();
+        const earliest = (first && first.b != null) ? first.b : now - 30 * DAY;
+        const totalSpan = Math.max(now - earliest, DAY);
+        bucket = totalSpan <= 90 * DAY ? DAY : (totalSpan <= 730 * DAY ? 7 * DAY : 30 * DAY);
+        cutoff = earliest;
+      } else {
+        let span;
+        switch (range) {
+          case 'day':   span = 24 * H;      bucket = H;      break;
+          case 'week':  span = 7 * DAY;     bucket = DAY;    break;
+          case 'year':  span = 365 * DAY;   bucket = 7 * DAY; break;
+          case 'month':
+          default:      span = 30 * DAY;    bucket = DAY;    break;
+        }
+        cutoff = now - span;
+      }
+
+      // Confirmed payouts per bucket (actual GRIN sent to miners), keyed by confirmed_at.
+      const payRows = this.db.prepare(`
+        SELECT CAST(confirmed_at / ? AS INTEGER) * ? AS t,
+               COALESCE(SUM(amount), 0) AS payout
+        FROM withdrawals
+        WHERE status = 'confirmed' AND confirmed_at >= ?
+        GROUP BY t
+      `).all(bucket, bucket, cutoff);
+
+      // Ledger movements per bucket, split by category, keyed by created_at.
+      const ledRows = this.db.prepare(`
+        SELECT CAST(created_at / ? AS INTEGER) * ? AS t,
+               COALESCE(SUM(CASE WHEN reference_type = 'block'    AND event_type = 'credit' THEN amount ELSE 0 END), 0) AS to_miners,
+               COALESCE(SUM(CASE WHEN reference_type = 'pool_fee' AND event_type = 'credit' THEN amount ELSE 0 END), 0) AS fee,
+               COALESCE(SUM(CASE WHEN reference_type = 'donation' AND event_type = 'debit'  THEN amount ELSE 0 END), 0) AS donations,
+               COALESCE(SUM(CASE WHEN reference_type IN ${GIVEAWAY_TYPES} AND grin_address NOT IN ${RESERVED} AND event_type = 'credit'   THEN amount
+                               WHEN reference_type IN ${GIVEAWAY_TYPES} AND grin_address NOT IN ${RESERVED} AND event_type = 'reversal' THEN -amount
+                               ELSE 0 END), 0) AS giveaways
+        FROM balance_log
+        WHERE created_at >= ?
+        GROUP BY t
+      `).all(bucket, bucket, cutoff);
+
+      // Merge the two source series into one bucket map (a bucket may appear in either or both).
+      const byT = new Map();
+      const slot = t => {
+        let s = byT.get(t);
+        if (!s) { s = { t, payout: 0, to_miners: 0, fee: 0, donations: 0, giveaways: 0 }; byT.set(t, s); }
+        return s;
+      };
+      for (const r of payRows) slot(r.t).payout = r.payout || 0;
+      for (const r of ledRows) {
+        const s = slot(r.t);
+        s.to_miners = r.to_miners || 0;
+        s.fee = r.fee || 0;
+        s.donations = r.donations || 0;
+        s.giveaways = r.giveaways || 0;
+      }
+      const round9 = v => parseFloat((Number(v) || 0).toFixed(9));
+      const points = Array.from(byT.values())
+        .sort((a, b) => a.t - b.t)
+        .map(s => ({
+          t: s.t,
+          payout: round9(s.payout),
+          to_miners: round9(s.to_miners),
+          fee: round9(s.fee),
+          donations: round9(s.donations),
+          giveaways: round9(s.giveaways)
+        }));
+
+      // Payout-size histogram over the window (fixed GRIN buckets). Edges chosen for typical
+      // Grin payout magnitudes; the last bucket is open-ended.
+      const edges = [1, 5, 10, 25, 50, 100];
+      const labels = ['<1', '1–5', '5–10', '10–25', '25–50', '50–100', '≥100'];
+      const counts = new Array(labels.length).fill(0);
+      this.db.prepare(`
+        SELECT amount FROM withdrawals WHERE status = 'confirmed' AND confirmed_at >= ?
+      `).all(cutoff).forEach(w => {
+        const a = Number(w.amount) || 0;
+        let i = edges.findIndex(e => a < e);
+        if (i === -1) i = labels.length - 1;
+        counts[i]++;
+      });
+      const distribution = labels.map((label, i) => ({ label, count: counts[i] }));
+
+      // Lifetime totals for the transparency tiles (range-independent).
+      const pay = this.db.prepare(`
+        SELECT COALESCE(SUM(amount), 0) AS paid, COUNT(*) AS cnt, MAX(confirmed_at) AS last
+        FROM withdrawals WHERE status = 'confirmed'
+      `).get();
+      const led = this.db.prepare(`
+        SELECT COALESCE(SUM(CASE WHEN reference_type = 'block'    AND event_type = 'credit' THEN amount ELSE 0 END), 0) AS to_miners,
+               COALESCE(SUM(CASE WHEN reference_type = 'pool_fee' AND event_type = 'credit' THEN amount ELSE 0 END), 0) AS fee,
+               COALESCE(SUM(CASE WHEN reference_type = 'donation' AND event_type = 'debit'  THEN amount ELSE 0 END), 0) AS donations,
+               COALESCE(SUM(CASE WHEN reference_type IN ${GIVEAWAY_TYPES} AND grin_address NOT IN ${RESERVED} AND event_type = 'credit'   THEN amount
+                               WHEN reference_type IN ${GIVEAWAY_TYPES} AND grin_address NOT IN ${RESERVED} AND event_type = 'reversal' THEN -amount
+                               ELSE 0 END), 0) AS giveaways
+        FROM balance_log
+      `).get();
+      const paidAll = led.to_miners + led.fee; // gross block reward accounted in the ledger
+      const totals = {
+        paid_all: round9(pay.paid),
+        payout_count: pay.cnt || 0,
+        avg_payout: pay.cnt ? round9(pay.paid / pay.cnt) : 0,
+        last_payout_at: pay.last || null,
+        fee_all: round9(led.fee),
+        donations_all: round9(led.donations),
+        giveaways_all: round9(led.giveaways),
+        to_miners_all: round9(led.to_miners),
+        fee_percent: paidAll > 0 ? parseFloat(((led.fee / paidAll) * 100).toFixed(2)) : 0
+      };
+
+      return { range, bucket_seconds: bucket, points, distribution, totals };
+    } catch (err) {
+      console.error(`Error fetching payments history: ${err.message}`);
+      return empty;
+    }
+  }
+
   // Evenly downsample a dense oldest→newest series to at most maxPoints (keeps the last point).
   static _thin(rows, maxPoints) {
     if (rows.length <= maxPoints) {

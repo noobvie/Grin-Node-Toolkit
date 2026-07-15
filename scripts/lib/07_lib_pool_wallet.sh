@@ -183,16 +183,46 @@ _pw_archive_wallet_dir() {
     return 1
 }
 
+# ─── Is <pid> OUR wallet? (cmdline carries --top_level_dir <our dir>) ─────────
+# The de-rooted listener runs `grin-wallet ... --top_level_dir <dir> owner_api`
+# as the grinpool user; the dir uniquely identifies it (testnet ≠ mainnet, and
+# no other service uses our dir). Root can always read /proc/<pid>/cmdline.
+_pw_pid_is_ours() {
+    local pid="$1" dir="$2" cmd
+    [[ -n "$pid" && -r "/proc/$pid/cmdline" ]] || return 1
+    cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+    [[ "$cmd" == *"--top_level_dir $dir"* ]]
+}
+
 # ─── Port-collision guard ───────────────────────────────────────────────────
 # 3420 is a grin-wallet default — another wallet service (05C, 051/055, a 052
-# drop) may already hold it. NEVER auto-kill another service's wallet. Returns 0
-# if free OR already held by OUR session; rc 1 if a foreign process holds it.
+# drop) may already hold it. NEVER auto-kill ANOTHER service's wallet. But the
+# de-rooted listener (exec su grinpool) survives its tmux session dying, so on a
+# redeploy the port is held by an ORPHAN of OUR OWN wallet with no session — that
+# we may safely reclaim (identified by --top_level_dir matching our dir). Returns
+# 0 if free / held by our session / reclaimed; rc 1 only if a FOREIGN process holds it.
 # <port> <our-tmux-name>
 _pw_port_collision_check() {
-    local port="$1" tmux_name="$2"
-    gnc_get_pid_on_port "$port" >/dev/null 2>&1 || return 0   # free → OK
+    local port="$1" tmux_name="$2" pid dir n
+    pid=$(gnc_get_pid_on_port "$port") || return 0   # free → OK
     if tmux has-session -t "$tmux_name" 2>/dev/null; then
         info "Port $port already served by our session '$tmux_name'."
+        return 0
+    fi
+    dir=$(pw_wallet_dir)
+    if _pw_pid_is_ours "$pid" "$dir"; then
+        warn "Port $port held by an ORPHANED pool wallet (our dir, no tmux session) — reclaiming (pid $pid)."
+        kill "$pid" 2>/dev/null || true
+        n=0; while gnc_get_pid_on_port "$port" >/dev/null 2>&1 && (( n < 10 )); do sleep 1; n=$((n+1)); done
+        if gnc_get_pid_on_port "$port" >/dev/null 2>&1; then
+            pkill -f -- "--top_level_dir $dir" 2>/dev/null || true   # escalate (su child)
+            sleep 2
+        fi
+        if gnc_get_pid_on_port "$port" >/dev/null 2>&1; then
+            error "Could not reclaim port $port from the orphaned wallet (pid $pid) — kill it manually."
+            return 1
+        fi
+        success "Reclaimed port $port from the orphaned pool wallet."
         return 0
     fi
     error "Port $port is in use by ANOTHER process (not '$tmux_name')."
@@ -390,6 +420,16 @@ pw_listener_stop() {
             stopped=1
         fi
     done
+    # De-root orphan sweep: killing the tmux session leaves the `exec su grinpool`
+    # grin-wallet child holding the owner port (it lives in its own session/pgroup).
+    # Kill any grin-wallet for OUR dir by cmdline — dir-scoped, so it never touches
+    # another net's wallet or another service. This is why redeploys tripped the
+    # collision guard before the sweep existed.
+    local dir; dir=$(pw_wallet_dir)
+    if pkill -f -- "--top_level_dir $dir" 2>/dev/null; then
+        success "Swept orphaned grin-wallet process for $dir."
+        stopped=1
+    fi
     [[ "$stopped" -eq 1 ]] || info "No running pool wallet listener sessions."
 }
 

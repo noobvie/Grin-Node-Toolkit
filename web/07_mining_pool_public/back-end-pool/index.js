@@ -4,6 +4,7 @@ const express = require('express');
 const path = require('path');
 const { initDb, getDb, ensureLocalRegion, seedDefaultRegions } = require('./lib/db');
 const { loadConfig, mergeDbSettings } = require('./lib/config');
+const { computeReconciliation, auditWalletSends, probeWalletIdentity, adoptWalletIdentity } = require('./lib/reconciliation');
 const PoolSettings = require('./lib/pool-settings');
 const AssetManager = require('./lib/asset-manager');
 const WalletAPI = require('./lib/wallet');
@@ -622,6 +623,7 @@ function setupRoutes() {
     'GET /api/public/status': 'Coarse pool/node/wallet health (no balances).',
     'GET /api/public/ads': 'Active operator ads by placement.',
     'GET /api/public/lottery/winners': 'Fortune-board winner history (truncated addresses).',
+    'GET /api/public/lottery/stats': 'Fortune-board aggregates: total prizes/winners/draws, Pot A/B split, monthly series.',
     'GET /api/public/endpoints': 'This API reference (machine-readable).',
     'GET /api/config/pool-info': 'Network, pool fee %, minimum withdrawal.',
     'GET /api/pool/stats': 'Live pool stats: hashrate, miners, blocks, share quality.',
@@ -637,6 +639,9 @@ function setupRoutes() {
     'GET /api/account/:addr/workers': 'Per-worker (rig) hashrate + share quality.',
     'GET /api/account/:addr/hashrate/history': 'Account hashrate time-series (?hours=).',
     'POST /api/account/:addr/withdraw': 'Request a payout (Tor or Slatepack); IP-proof gated.',
+    'POST /api/account/:addr/withdraw/:id/cancel': 'Cancel a parked pending payout (funds return to balance).',
+    'GET /api/account/:addr/balance/log': 'Address ledger (?direction=in|out, ?days=, ?format=csv).',
+    'GET /api/account/:addr/earnings': 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals.',
     'POST /api/account/:addr/min-payout': 'Set this address’s personal payout threshold.',
   };
   app.get('/api/public/endpoints',
@@ -687,6 +692,26 @@ function setupRoutes() {
         res.json({ success: true, data: lotteryManager.winnerHistory(limit, offset) });
       } catch (err) {
         res.status(500).json({ error: 'Failed to load winners' });
+      }
+    }
+  );
+
+  // Aggregate fortune-board stats (headline tiles + charts). Covers all history, unlike the
+  // paginated winners feed above. Empty payload when incentives are disabled.
+  app.get('/api/public/lottery/stats',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        if (!incentivesManager || !incentivesManager.enabled()) {
+          return res.json({
+            success: true,
+            data: { total_prizes_grin: 0, total_winners: 0, unique_winners: 0, total_draws: 0, by_pot: [], by_event: [], monthly: [] },
+          });
+        }
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        res.json({ success: true, data: lotteryManager.stats() });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to load lottery stats' });
       }
     }
   );
@@ -1439,6 +1464,9 @@ function setupRoutes() {
   app.post('/api/admin/withdrawals/:id/retry', freshAdmin, (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
+      if (getPayoutControl().frozen) {
+        return res.status(409).json({ error: 'payouts are frozen — resume payouts before retrying' });
+      }
       const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(id);
       if (!w) return res.status(404).json({ error: 'withdrawal not found' });
       if (!['retry_scheduled', 'tor_failed'].includes(w.status)) {
@@ -1526,70 +1554,104 @@ function setupRoutes() {
     }
   });
 
+  // Read the payout kill-switch state (single row id=1; absence = not frozen).
+  const getPayoutControl = () => {
+    const row = db.prepare('SELECT frozen, reason, frozen_by, frozen_at FROM payout_control WHERE id = 1').get();
+    return {
+      frozen: !!(row && row.frozen),
+      reason: row ? row.reason : null,
+      frozen_by: row ? row.frozen_by : null,
+      frozen_at: row ? row.frozen_at : null,
+    };
+  };
+
   // ─── WALLET ↔ LEDGER RECONCILIATION (Admin) ────────────────────────
-  // The single most important custodial safety check: does the on-chain wallet actually hold
-  // at least what the pool owes its miners? Compares wallet balance (source of truth for coins)
-  // against the SQLite ledger (source of truth for who is owed what). A negative coverage gap =
-  // the pool is under-funded; a balance_locked vs pending-withdrawals mismatch = a stuck ledger.
+  // The pool's custodial money statement (coverage, flow, buckets, integrity invariant). The
+  // full computation lives in lib/reconciliation.js so the AlertMonitor money detectors and
+  // this endpoint share one source of truth. Forces a fresh wallet→node scan (slow) — the admin
+  // page polls it on its own 3-min cadence, never the fast liveness loops.
   app.get('/api/admin/reconciliation', secureAdmin, async (req, res) => {
     try {
-      const ledger = db.prepare(
-        `SELECT COALESCE(SUM(balance),0) AS sum_balance, COALESCE(SUM(balance_locked),0) AS sum_locked,
-                COUNT(*) AS accounts FROM miner_accounts`
-      ).get();
-      const pending = db.prepare(
-        `SELECT COALESCE(SUM(amount),0) AS amt, COUNT(*) AS cnt FROM withdrawals
-         WHERE status IN ('tor_checking','tor_sending','retry_scheduled')`
-      ).get();
-      const prizePool = (() => { try { return incentivesManager ? incentivesManager.prizePoolBalance() : 0; } catch (e) { return 0; } })();
-
-      // Wallet (on-chain) balance — same path as /api/admin/health/wallet.
-      let walletReachable = false;
-      let walletBalance = { total: 0, available: 0, locked: 0 };
-      if (wallet && wallet.getBalance) {
-        try {
-          // refresh=true: custodial coverage check needs fresh on-chain numbers (runs at
-          // a relaxed 3-min cadence from the admin page, not on every dashboard poll).
-          const summary = await wallet.getBalance(true);
-          const info = Array.isArray(summary) ? summary[1] : (summary || {});
-          walletBalance = {
-            total: Number(info.total || 0) / 1e9,
-            available: Number(info.amount_currently_spendable || 0) / 1e9,
-            locked: Number(info.amount_locked || 0) / 1e9,
-          };
-          walletReachable = true;
-        } catch (e) { walletReachable = false; }
-      }
-
-      const owed = ledger.sum_balance + ledger.sum_locked; // total the pool owes (incl. prize bucket)
-      const coverage_gap = parseFloat((walletBalance.total - owed).toFixed(9)); // ≥0 healthy, <0 under-funded
-      const locked_drift = parseFloat((ledger.sum_locked - pending.amt).toFixed(9)); // should be ~0
-      const TOL = 1e-6;
-
-      res.json({
-        success: true,
-        timestamp: new Date().toISOString(),
-        wallet: { reachable: walletReachable, ...walletBalance },
-        ledger: {
-          spendable_owed: parseFloat(ledger.sum_balance.toFixed(9)),
-          locked_owed: parseFloat(ledger.sum_locked.toFixed(9)),
-          total_owed: parseFloat(owed.toFixed(9)),
-          accounts: ledger.accounts,
-          prize_pool: parseFloat((prizePool || 0).toFixed(9)),
-        },
-        pending_withdrawals: { count: pending.cnt, amount: parseFloat(pending.amt.toFixed(9)) },
-        checks: {
-          // Wallet covers what miners are owed.
-          coverage_gap,
-          coverage_ok: !walletReachable ? null : coverage_gap >= -TOL,
-          // Locked ledger equals in-flight withdrawal amounts.
-          locked_drift,
-          locked_ok: Math.abs(locked_drift) <= TOL,
-        },
-      });
+      const recon = await computeReconciliation(db, wallet, true);
+      res.json({ success: true, ...recon, payout_control: getPayoutControl() });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // ─── PAYOUT KILL-SWITCH (Admin) ────────────────────────────────────
+  // Emergency freeze of the withdrawal scheduler. Set automatically by AlertMonitor on a critical
+  // money trip (coverage shortfall / integrity drift / wallet drain) and manually here. Reading is
+  // secureAdmin (surfaced on the Payments page); mutating is freshAdmin (step-up — it's money-control).
+  app.get('/api/admin/payouts/control', secureAdmin, (req, res) => {
+    try { res.json({ success: true, ...getPayoutControl() }); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/payouts/freeze', freshAdmin, (req, res) => {
+    try {
+      const reason = (req.body && req.body.reason || '').toString().slice(0, 500) || 'manual admin freeze';
+      if (withdrawalScheduler && withdrawalScheduler.freeze) withdrawalScheduler.freeze(reason, `admin:${req.user.username}`);
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'payouts_freeze', 'payouts', 'payouts', ?, ?)`)
+        .run(req.user.user_id, JSON.stringify({ reason }), req.ip);
+      res.json({ success: true, ...getPayoutControl() });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/payouts/resume', freshAdmin, (req, res) => {
+    try {
+      if (withdrawalScheduler && withdrawalScheduler.resume) withdrawalScheduler.resume(`admin:${req.user.username}`);
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'payouts_resume', 'payouts', 'payouts', ?, ?)`)
+        .run(req.user.user_id, JSON.stringify({}), req.ip);
+      res.json({ success: true, ...getPayoutControl() });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Wallet-send audit — matches the wallet's OWN confirmed outbound sends against the pool's
+  // withdrawals. Any unmatched send is an out-of-band `grin-wallet send` (invisible to the
+  // ledger). Forces a fresh wallet scan (slow) → the Payments page polls on the 3-min cadence.
+  app.get('/api/admin/payouts/wallet-audit', secureAdmin, async (req, res) => {
+    try {
+      const audit = await auditWalletSends(db, wallet, {});
+      res.json({ success: true, ...audit });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── WALLET-IDENTITY GUARD + SWITCH WIZARD (Admin) ─────────────────
+  // The pool pins its wallet's slatepack address (index 0, seed-deterministic). AlertMonitor
+  // freezes payouts if the live wallet stops matching. A PLANNED switch re-adopts the new wallet
+  // here so the guard doesn't fight an intentional migration. Reading is secureAdmin (forces a
+  // fresh owner-API call → the wizard polls it); adopting moves the trust anchor → freshAdmin.
+  app.get('/api/admin/wallet/identity', secureAdmin, async (req, res) => {
+    try {
+      const id = await probeWalletIdentity(db, wallet);
+      res.json({ success: true, ...id });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Adopt the CURRENTLY-connected wallet as the pool's identity anchor (step 4 of the switch
+  // wizard). Resolves the wallet_identity_changed alert; does NOT auto-resume payouts (resume is a
+  // deliberate separate step). Refuses if the wallet is unreachable — you must not adopt a phantom.
+  app.post('/api/admin/wallet/adopt-identity', freshAdmin, async (req, res) => {
+    try {
+      const id = await probeWalletIdentity(db, wallet);
+      if (!id.reachable) return res.status(503).json({ error: 'wallet unreachable — cannot adopt an unconfirmed wallet identity' });
+      const prev = id.firstRun ? null : id.expected;
+      adoptWalletIdentity(db, id.live, `admin:${req.user.username}`);
+      if (alertMonitor && typeof alertMonitor.resolveAlert === 'function') {
+        await alertMonitor.resolveAlert('wallet_identity_changed');
+      }
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'wallet_adopt_identity', 'wallet', 'wallet', ?, ?)`)
+        .run(req.user.user_id, JSON.stringify({ previous: prev, adopted: id.live }), req.ip);
+      res.json({ success: true, adopted: id.live, previous: prev });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   // ─── ADS (Admin CRUD) ──────────────────────────────────────────────
@@ -1907,9 +1969,18 @@ function setupRoutes() {
          WHERE grin_address = ? AND status = 'confirmed'`
       ).get(addr).total;
 
+      // Pending set must match the scheduler's one-pending-per-address cap (which includes
+      // slatepack_pending) — otherwise the UI shows 0 pending while a new request would 429.
+      // The full row is exposed so the account page can show status/next-retry and offer Cancel.
+      const pendingRow = db.prepare(
+        `SELECT id, amount, method, status, retry_count, next_retry_at, created_at
+         FROM withdrawals
+         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')
+         ORDER BY created_at DESC LIMIT 1`
+      ).get(addr);
       const pending = db.prepare(
         `SELECT COUNT(*) AS c FROM withdrawals
-         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled')`
+         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')`
       ).get(addr).c;
 
       const shareAgg = db.prepare(
@@ -1929,6 +2000,7 @@ function setupRoutes() {
         total: acct.balance + acct.balance_locked,
         total_paid: paid,
         pending_withdrawals: pending,
+        pending_withdrawal: pendingRow || null,
         is_online: !!acct.is_online,
         last_seen_at: acct.last_seen_at || null,
         created_at: acct.created_at,
@@ -2122,18 +2194,89 @@ function setupRoutes() {
 
   // Append-only ledger for an address (every balance/locked change). No auth — the
   // ledger only exposes the address's own money movements, and the address is identity.
+  // Filters: ?direction=in|out splits the ledger by money flow (in = credits + payout
+  // reversals returned to balance; out = payout debits + donations + orphan clawbacks;
+  // 'lock' events are neutral — the pending payout, surfaced separately — and only appear
+  // in the unfiltered view). ?days=30|90|365 bounds the window (default: all history).
+  // ?format=csv streams the filtered window as a CSV download (row-capped, rate-limited).
+  const LEDGER_DIRECTION_SQL = {
+    in: `(event_type = 'credit' OR (event_type = 'reversal' AND reference_type = 'withdrawal'))`,
+    out: `(event_type = 'debit' OR (event_type = 'reversal' AND reference_type != 'withdrawal'))`
+  };
   app.get('/api/account/:addr/balance/log', rateLimiter.middleware('public'), (req, res) => {
     try {
       const { addr } = req.params;
+      const direction = LEDGER_DIRECTION_SQL[req.query.direction] ? req.query.direction : null;
+      const days = parseInt(req.query.days || 0);
+      const cutoff = (days > 0) ? Math.floor(Date.now() / 1000) - Math.min(days, 3650) * 86400 : 0;
+      const where = `grin_address = ? AND created_at >= ?` +
+        (direction ? ` AND ${LEDGER_DIRECTION_SQL[direction]}` : '');
+
+      if (req.query.format === 'csv') {
+        const CSV_MAX_ROWS = 50000;
+        const rows = db.prepare(
+          `SELECT event_type, reference_type, reference_id, amount, balance_after, created_at
+           FROM balance_log WHERE ${where}
+           ORDER BY created_at DESC, id DESC LIMIT ${CSV_MAX_ROWS}`
+        ).all(addr, cutoff);
+        const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+        const lines = ['created_at_utc,event_type,reference_type,reference_id,amount,balance_after'];
+        for (const r of rows) {
+          lines.push([
+            new Date(r.created_at * 1000).toISOString(),
+            esc(r.event_type), esc(r.reference_type), r.reference_id,
+            r.amount, r.balance_after
+          ].join(','));
+        }
+        const tag = direction || 'all';
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition',
+          `attachment; filename="pool-ledger-${tag}-${addr.slice(0, 12)}-${days > 0 ? days + 'd' : 'all'}.csv"`);
+        return res.send(lines.join('\n') + '\n');
+      }
+
       const limit = Math.min(parseInt(req.query.limit || 50), 500);
       const offset = parseInt(req.query.offset || 0);
+      const total = db.prepare(`SELECT COUNT(*) AS c FROM balance_log WHERE ${where}`).get(addr, cutoff).c;
       const rows = db.prepare(
         `SELECT event_type, amount, balance_before, balance_after, locked_before, locked_after,
                 reference_type, reference_id, created_at
-         FROM balance_log WHERE grin_address = ?
+         FROM balance_log WHERE ${where}
          ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
-      ).all(addr, limit, offset);
-      res.json({ grin_address: addr, count: rows.length, log: rows });
+      ).all(addr, cutoff, limit, offset);
+      res.json({ grin_address: addr, direction, total, count: rows.length, log: rows });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Credited earnings summed per period (block rewards + bonuses/giveaways), plus the 30-day
+  // outflow total — drives the account page's earnings table and the ledger Σ titles. All
+  // periods work regardless of retention: balance_log is never pruned.
+  app.get('/api/account/:addr/earnings', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const { addr } = req.params;
+      const now = Math.floor(Date.now() / 1000);
+      // Earnings = true credits only. A payout reversal is "money in" for the ledger card but
+      // NOT earnings — counting it would inflate the table every time a payout is cancelled.
+      const sums = db.prepare(
+        `SELECT
+           COALESCE(SUM(CASE WHEN created_at > ? THEN amount END), 0) AS h1,
+           COALESCE(SUM(CASE WHEN created_at > ? THEN amount END), 0) AS h24,
+           COALESCE(SUM(CASE WHEN created_at > ? THEN amount END), 0) AS d7,
+           COALESCE(SUM(CASE WHEN created_at > ? THEN amount END), 0) AS d30
+         FROM balance_log
+         WHERE grin_address = ? AND event_type = 'credit'`
+      ).get(now - 3600, now - 86400, now - 7 * 86400, now - 30 * 86400, addr);
+      const in30 = db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) AS s FROM balance_log
+         WHERE grin_address = ? AND created_at > ? AND ${LEDGER_DIRECTION_SQL.in}`
+      ).get(addr, now - 30 * 86400).s;
+      const out30 = db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) AS s FROM balance_log
+         WHERE grin_address = ? AND created_at > ? AND ${LEDGER_DIRECTION_SQL.out}`
+      ).get(addr, now - 30 * 86400).s;
+      res.json({ grin_address: addr, periods: sums, in_30d: in30, out_30d: out30 });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -2208,6 +2351,20 @@ function setupRoutes() {
         addr, parseInt(id, 10), (req.body && req.body.response_slatepack) || ''
       );
       auditOwnerProof(db, { action: 'slatepack_finalize', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: id } });
+      res.json(result);
+    } catch (err) {
+      res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });
+    }
+  });
+
+  // Cancel a PARKED pending payout (retry_scheduled / slatepack_pending) — frees the
+  // one-pending-per-address slot and returns the locked amount to spendable balance.
+  // No IP gate: like the Tor request itself, it only moves the address's own funds back to
+  // its own balance (no theft vector); worst case is a nuisance cancel of an auto-retry.
+  app.post('/api/account/:addr/withdraw/:id/cancel', rateLimiter.middleware('public'), async (req, res) => {
+    try {
+      const { addr, id } = req.params;
+      const result = await withdrawalScheduler.cancelWithdrawal(addr, parseInt(id, 10));
       res.json(result);
     } catch (err) {
       res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });

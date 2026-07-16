@@ -97,8 +97,9 @@
     return _charts[canvasId];
   }
 
-  // Generic vertical bar chart (e.g. per-worker hashrate). `labels` + `data` are parallel
-  // arrays. opts.valueFmt(v) formats the tooltip/y-axis (defaults to fmtGps for hashrate).
+  // Generic bar chart (e.g. per-worker hashrate). `labels` + `data` are parallel arrays.
+  // opts.valueFmt(v) formats the tooltip/value-axis (defaults to fmtGps for hashrate).
+  // opts.horizontal=true lays bars horizontally (value on x) — better for long category labels.
   // Returns the Chart instance, or null if Chart.js / the canvas is missing.
   function renderBarChart(canvasId, labels, data, opts) {
     opts = opts || {};
@@ -108,6 +109,7 @@
     data = Array.isArray(data) ? data.map(Number) : [];
     const col = accent();
     const valueFmt = typeof opts.valueFmt === 'function' ? opts.valueFmt : fmtGps;
+    const horizontal = !!opts.horizontal;
 
     if (_charts[canvasId]) {
       const ch = _charts[canvasId];
@@ -134,14 +136,20 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        indexAxis: horizontal ? 'y' : 'x',
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: (ctx) => valueFmt(ctx.parsed.y) } }
+          tooltip: { callbacks: { label: (ctx) => valueFmt(horizontal ? ctx.parsed.x : ctx.parsed.y) } }
         },
-        scales: {
-          x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
-          y: { beginAtZero: true, ticks: { callback: (v) => valueFmt(v) } }
-        }
+        scales: horizontal
+          ? {
+              x: { beginAtZero: true, ticks: { callback: (v) => valueFmt(v) } },
+              y: { grid: { display: false } }
+            }
+          : {
+              x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
+              y: { beginAtZero: true, ticks: { callback: (v) => valueFmt(v) } }
+            }
       }
     });
     return _charts[canvasId];

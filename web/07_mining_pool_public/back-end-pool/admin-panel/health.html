@@ -48,20 +48,13 @@
         </div>
       </div>
 
-      <!-- ── Custodial reconciliation ─────────────────────────────────────── -->
+      <!-- ── Custodial reconciliation (summary; full statement on Payments) ──── -->
       <h2 style="margin-top:1.6rem;">Wallet ↔ Ledger Reconciliation</h2>
       <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
-        Does the on-chain wallet hold at least what the pool owes its miners? A negative coverage
-        gap means the pool is under-funded; locked drift should stay near zero.
+        Solvency + ledger-integrity summary. The full money statement (flow, buckets, coverage
+        split) lives on the <a href="payments.html">Payments</a> page.
       </p>
       <div id="recon-banner"></div>
-      <div class="kpi-grid" id="recon-kpi">
-        <div class="kpi-card"><div class="kpi-label">Wallet Total ツ</div><div class="kpi-value" id="rc-wallet">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Owed to Miners ツ</div><div class="kpi-value" id="rc-owed">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Coverage Gap ツ</div><div class="kpi-value" id="rc-gap">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Locked Drift ツ</div><div class="kpi-value" id="rc-drift">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Pending Payouts</div><div class="kpi-value" id="rc-pending">—</div></div>
-      </div>
 
       <!-- ── Gateways (moved) ─────────────────────────────────────────────── -->
       <h2 style="margin-top:1.6rem;">Regional gateways</h2>
@@ -163,42 +156,42 @@ async function loadHealth() {
   }
 }
 
-// ── Reconciliation ──────────────────────────────────────────────────────────
-function fmtGrin(v) { return (Number(v) || 0).toFixed(4); }
+// ── Reconciliation summary ───────────────────────────────────────────────────
+// One-shot solvency/integrity verdict. Reconciliation forces a full wallet→node output
+// scan (slow), so health loads it ONCE on page open — the full statement + its own 3-min
+// poll live on payments.html. Never wire this into the 60s liveness loop.
+function fmtSigned(v) { const n = Number(v) || 0; return (n >= 0 ? '+' : '') + n.toFixed(4); }
 async function loadReconciliation() {
+  const banner = document.getElementById('recon-banner');
   try {
     const d = await API.get('/api/admin/reconciliation');
-    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-    set('rc-wallet',  d.wallet && d.wallet.reachable ? fmtGrin(d.wallet.total) : 'unreachable');
-    set('rc-owed',    fmtGrin(d.ledger.total_owed));
-    set('rc-gap',     fmtGrin(d.checks.coverage_gap));
-    set('rc-drift',   fmtGrin(d.checks.locked_drift));
-    set('rc-pending', `${d.pending_withdrawals.count} (${fmtGrin(d.pending_withdrawals.amount)} ツ)`);
-
-    const banner = document.getElementById('recon-banner');
+    const c = d.checks || {};
     const problems = [];
-    if (d.checks.coverage_ok === false) problems.push('⚠ Wallet does NOT cover what miners are owed (under-funded).');
-    if (d.checks.locked_ok === false) problems.push('⚠ Locked-balance ledger does not match in-flight withdrawals.');
-    if (d.wallet && !d.wallet.reachable) problems.push('Wallet was unreachable — coverage check skipped.');
+    if (c.coverage_liquid_ok === false) problems.push(`⚠ Cannot pay out now — liquid gap ${fmtSigned(c.coverage_liquid_gap)} ツ.`);
+    if (c.coverage_full_ok === false) problems.push(`⚠ Under-funded — full coverage gap ${fmtSigned(c.coverage_full_gap)} ツ.`);
+    if (c.locked_ok === false) problems.push('⚠ Locked-balance ledger does not match in-flight withdrawals.');
+    if (c.integrity_ok === false) problems.push(`⚠ INTEGRITY DRIFT ${fmtSigned(c.integrity_drift)} ツ — a balance moved without a ledger row.`);
+    if (d.wallet && !d.wallet.reachable) problems.push('Wallet was unreachable — coverage checks skipped.');
     if (problems.length) {
+      problems.push('→ Open the <a href="payments.html">Payments</a> page for the full statement.');
       banner.innerHTML = `<div class="health-card error" style="margin-bottom:.8rem;">
-        <div class="health-detail">${problems.map(escHtml).join('<br>')}</div></div>`;
+        <div class="health-detail">${problems.join('<br>')}</div></div>`;
     } else {
       banner.innerHTML = `<div class="health-card ok" style="margin-bottom:.8rem;">
-        <div class="health-detail">✓ Wallet covers all miner balances; ledger is consistent.</div></div>`;
+        <div class="health-detail">✓ Wallet covers all balances; ledger reconciles with the log.
+        <a href="payments.html">Full statement →</a></div></div>`;
     }
   } catch (err) {
-    document.getElementById('recon-banner').innerHTML =
+    banner.innerHTML =
       `<div class="health-card error" style="margin-bottom:.8rem;"><div class="health-detail">Error: ${escHtml(err.message)}</div></div>`;
   }
 }
 
 // Initial paint: load everything once.
 document.addEventListener('DOMContentLoaded', () => { loadHealth(); loadReconciliation(); });
-// Cheap liveness (cached node/wallet status, system stats) — every 60s.
+// Cheap liveness (cached node/wallet status, system stats) — every 60s. Reconciliation is
+// NOT in this loop (it forces a slow wallet→node scan); it stays a one-shot on load here.
 setInterval(() => { loadHealth(); }, 60000);
-// Reconciliation forces a real wallet→node scan (refresh_from_node=true) — relaxed to every 3 min.
-setInterval(loadReconciliation, 180000);
 </script>
 </body>
 </html>

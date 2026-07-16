@@ -338,13 +338,14 @@
       });
     });
 
-    // Footer copyright: "© <founded>–<year> <pool_name>". Collapses to a single year
-    // when founded_year is blank or equals the current year.
+    // Footer copyright: "Since <founded>". Uses the founding year when set, otherwise
+    // the current year. Pool name is intentionally omitted — it already appears in the
+    // footer brand column, so repeating it here is redundant.
     var year = new Date().getFullYear();
     var founded = parseInt(pool.founded_year, 10);
-    var range = (founded && founded < year) ? (founded + '–' + year) : String(year);
+    var since = (founded && founded <= year) ? founded : year;
     document.querySelectorAll('[data-brand="copyright"]').forEach(function (el) {
-      el.textContent = '© ' + range + (pool.name ? ' ' + pool.name : '');
+      el.textContent = 'Since ' + since;
     });
 
     // Legal-column "Contact" link, shown only when a contact email is set. The mailto: is

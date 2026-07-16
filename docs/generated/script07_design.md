@@ -208,7 +208,8 @@ Core tables (`/opt/grin/pubpool/<net>/pool.sqlite`):
 | `shares` | PPLNS input (grin_address, worker, difficulty, block_height, **region**, created_at) — `region` tags the originating region (local stratum → `config.region`; ingested → satellite's region) for per-region stats; PPLNS weighting is region-agnostic | sliding window (pruned) |
 | `blocks` | found blocks + maturity (height, hash, nonce, reward, status, found_by) | forever |
 | `withdrawals` | payouts (amount, fee, method tor\|slatepack, status, retry_count, txid) | forever |
-| `balance_log` | append-only ledger of every balance/locked change | forever |
+| `balance_log` | append-only ledger of every balance/locked change | raw window `balance_log_keep_days` (default 60, floor 45) — rolled into `balance_log_daily` first; see §14 |
+| `balance_log_daily` | daily rollup of the ledger — (UTC day, address, event_type, reference_type) → total_amount, event_count | **forever** (≈150 MB/10 yr @1000 miners) |
 | `withdrawal_events` | per-withdrawal state-transition log | forever |
 | `users` | admin accounts only (bcrypt, lockout columns) | forever |
 | `admin_audit_log` | every admin mutation (admin_id, action, target, before/after, ip) | forever |
@@ -776,6 +777,85 @@ keep the old dir until balance is zero.
 public `POST /api/gateway/enroll` and receives the pairing payload (zero human key-carrying).
 Bolts onto this design (same helper, same response shape); revisit only if third-party
 operators run gateways at scale.
+
+---
+
+## 14. Data retention & ledger rollup — IMPLEMENTED 2026-07-16 (branch `add-ons`; NOT VPS-tested)
+
+Industry-standard three-tier retention (mirrors Miningcore/NOMP/commercial pools: raw shares
+ephemeral, daily earnings kept for years, blocks/payouts forever). Keeps the SQLite file at a
+**bounded steady state (~2–4 GB modest / ~8–12 GB at 1000-miner scale)** instead of unbounded
+growth (~30+ GB/yr raw), while every *lifetime* public/audit figure stays exact forever.
+
+### 14.1 What is kept, what is pruned
+
+| Tier | Table | Retention | Why safe |
+|---|---|---|---|
+| working buffer | `shares` | height floor: confirm_depth + PPLNS 60 + `shares_margin_blocks` (default 360 → ~31 h) | PPLNS + orphan reversal read nothing older; luck/effort snapshotted into `blocks.network_difficulty`/`round_shares` at find time |
+| display detail | `hashrate_history` | `hashrate_keep_days` (100) | per-miner wiggle-line only; pool-wide trends live forever in `pool_metrics_hourly` |
+| **ledger detail** | `balance_log` | `balance_log_keep_days` (default 60, **floor 45**) | rolled into `balance_log_daily` first, verify-before-delete (14.2) |
+| aggregates | `pool_metrics_hourly`, `balance_log_daily` | **forever** (~1 MB/yr + ~150 MB/10 yr) | size independent of miner count × time detail |
+| money record | `blocks`, `withdrawals`, `withdrawal_events`, lottery | **forever** (~50 MB/yr) | the actual audit/tax record; payouts also mirrored on-chain |
+
+Floor 45 on `balance_log_keep_days`: raw-only readers use windows up to 30 d (reconciliation
+wallet-send audit `window_days=30`, account earnings 30 d, payments day/week/month ranges) + slack.
+
+### 14.2 Ledger rollup — `lib/ledger-rollup.js` (the one contract to remember)
+
+`balance_log_daily (day, grin_address, event_type, reference_type, total_amount, event_count)`
+— these dimensions exactly reconstruct every lifetime consumer (verified by test, 14.4).
+
+**Horizon contract:** marker `pool_config('_state','balance_log_rollup_horizon')` = **H**
+(UTC-day-aligned) ⇒ rollup fully covers `created_at < H`. Composite lifetime reads =
+`rollup(day < H) + raw(created_at >= H)` — no gap, no double-count, at every prune state.
+Window reads with cutoff ≥ now − keep_days may read raw only.
+
+Retention pass (hourly, `lib/retention.js`): ① `rollupCompletedDays` — whole completed UTC days,
+idempotent replace-on-conflict, marker advanced in the same tx; ② `verifyAndPruneRaw` — deletes
+one day at a time, **only after** that day's raw COUNT/SUM matches its rollup; a mismatch halts
+pruning (`ledger_rollup_mismatch` in retention status/log) and never deletes an unverified day.
+Rollup rows are never pruned. File space reclaimed by the weekly VACUUM cron, as before.
+
+### 14.3 Consumers repointed to composite reads (all in this change)
+
+- `hashrate-tracker.getPaymentsHistory` — lifetime totals (fee %, to-miners, giveaways) always
+  composite; `year`/`all` series merge rollup+raw **additively** per bucket (a week/month bucket
+  can straddle H); day/week/month ranges stay raw-only (≤30 d < floor 45).
+- `lib/reconciliation.js` — lifetime flows, `pool_fee`/`prize_pool` funding detail, and the
+  **integrity invariant** (Σledger vs Σbalances, feeds auto-freeze) are composite; d1/d7 raw.
+- NOT repointed (verified within raw window): account earnings 1h/24h/7d/30d, ledger statement +
+  CSV (row detail now labeled "kept 60 days", presets 30/60/all-retained), incentives jackpot
+  dedup, prize-pool activity feed.
+
+### 14.4 Chart/stat ↔ retention audit (2026-07-16, all pages)
+
+| Surface | Source | Longest window | Verdict |
+|---|---|---|---|
+| Dashboard strip-chart + 24h peak, KPIs, top-miners 1h | `hashrate_history` 24 h; `shares` ≤24 h | 24 h vs ~31 h shares floor | ✅ (height-based prune fails toward *keeping more*) |
+| miners-stats trends Day→All-Time | `pool_metrics_hourly` | all-time | ✅ forever |
+| miners-stats leaderboards (30 d) | `blocks` / `hashrate_history` | 30 d vs forever/100 d | ✅ |
+| blocks page explorer + P-01…P-04 (incl. luck) | `blocks` (+ snapshot cols) | all-time | ✅ forever |
+| payment-history tiles + 4 charts, every range | `withdrawals` + composite ledger | all-time | ✅ exact via rollup |
+| account P-01 hashrate (Day/Week/Month) | `hashrate_history` | 30 d vs 100 d | ✅ (Year/All already disabled with note) |
+| account earnings / ledger cards | raw `balance_log` | 30 d vs 45-floor | ✅ |
+| account P-06/P-07 row ledger + CSV | raw `balance_log` | keep_days | ✅ labeled; older detail = daily granularity |
+| admin reconciliation + money alerts | composite + raw d1/d7; wallet-send audit 30 d | ✅ |
+| lottery/campaign eligibility | `hashrate_history` | campaign window | ✅ while campaigns ≤ `hashrate_keep_days` (100) — enforce if longer campaigns are ever added |
+
+**Smoke-tested** (scratchpad `test-ledger-rollup.js`, node:sqlite): synthetic 90-day ledger
+(1526 rows) → rollup + prune to 45 d (763 rows deleted) ⇒ payments `all` totals, `year` series
+bucket-by-bucket, reconciliation lifetime flows, fee/prize buckets and `integrity_drift = 0`
+all **identical** before/after; re-run is a no-op. NOT yet run against a live VPS DB.
+
+### 14.5 Size forecast (5–7 yr, with this design)
+
+Modest pool (~20 blk/day): **2–4 GB** total. Large pool (1000 miners, ~400 blk/day): **8–12 GB**
+— dominated by *constant-size* working windows (shares ~1 GB, hashrate ~1.5 GB, raw ledger 60 d
+~4–5 GB), plus slow-growing forever-tables (~0.2 GB/yr). Deferred (size-only, not correctness):
+vardiff (bounds share-row rate), per-miner **hourly** hashrate rollup w/ optional `worker_name`
+dimension (would allow cutting `hashrate_keep_days` and enable per-rig history >24 h — worker
+detail today exists only in `shares`). Optional future: yearly SQLite/CSV cold archive of pruned
+raw ledger as a public transparency download.
 
 ---
 

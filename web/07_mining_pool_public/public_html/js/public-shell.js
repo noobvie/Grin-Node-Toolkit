@@ -88,7 +88,6 @@
   // branding.js ([data-brand="page-links"]); brand/social/copyright/security hooks are
   // also enhanced by branding.js once /api/public/branding resolves. The mini-stats bar
   // (network/fee/min/price/stratum) is filled by this script's own light fetches below.
-  var YEAR = new Date().getFullYear();
 
   // Pool column reuses the canonical NAV (no anchor stays active in the footer), minus
   // Blog — it lives in the Resources column below to avoid a duplicate link.
@@ -155,25 +154,18 @@
     '</div>' +
     // Bottom row: copyright + attribution + security contact.
     '<div class="footer-bottom">' +
-      '<p class="footer-copyright" data-brand="copyright">© ' + YEAR + ' GRINIUM</p>' +
-      // Personal signature — matches GrinScan / Tiny Explorer (hardcoded, not a
-      // branding hook so it stays put). Yellow flag with three red stripes = Saigon.
-      '<p class="footer-saigon">Made with &#10084;&#65039; from Saigon ' +
+      // Copyright + Saigon signature share one line. The signature is hardcoded
+      // (matches GrinScan / Tiny Explorer) — not a branding hook — so it stays put.
+      // Yellow flag with three red stripes = Saigon.
+      '<p class="footer-copyright" data-brand="copyright">Since 2026</p>' +
+      '<span class="footer-sep" aria-hidden="true">·</span>' +
+      '<span class="footer-saigon">Made with &#10084;&#65039; from Saigon ' +
         '<svg viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes" style="vertical-align:-2px;border-radius:2px">' +
           '<rect width="27" height="18" fill="#FFCD00"/>' +
           '<rect y="4" width="27" height="2" fill="#DA251D"/>' +
           '<rect y="8" width="27" height="2" fill="#DA251D"/>' +
           '<rect y="12" width="27" height="2" fill="#DA251D"/>' +
-        '</svg></p>' +
-      '<p class="footer-meta">' +
-        '<span data-brand="attribution">Powered by the ' +
-          '<a href="' + GITHUB + '" target="_blank" rel="noopener noreferrer">Grin Node Toolkit</a>' +
-        '</span>' +
-        '<span class="footer-security" data-brand-show="security" style="display:none">' +
-          ' · Security: <a data-brand="security-link" href="#"></a>' +
-          '<a class="footer-pgp" data-brand="pgp-link" href="#" target="_blank" rel="noopener" style="display:none"> (PGP)</a>' +
-        '</span>' +
-      '</p>' +
+        '</svg></span>' +
     '</div>';
 
   // Deterministically (re)start the brand-logo swing. The @keyframes/animation rule is

@@ -96,6 +96,10 @@
     var W = 190, H = 150;
     var dpr = window.devicePixelRatio || 1;
     cv.width = W * dpr; cv.height = H * dpr;
+    // Pin the CSS display size independent of the backing store, otherwise the
+    // browser falls back to the width/height attributes (= W*dpr) as CSS pixels
+    // and the gauge balloons dpr× on HiDPI screens (real iPhone Safari, dpr=3).
+    cv.style.width = W + 'px'; cv.style.height = H + 'px';
     var c = cv.getContext('2d');
     c.scale(dpr, dpr);
 
@@ -701,6 +705,7 @@
     if (!r) return;
     var uri = regionStratumUri(r);
     setText('rx-uri', uri);
+    setText('rx-guide-uri', uri);  // Pool 1 field in the collapsed miner-setup mock follows the selection
     var m = r.status === 'online' ? '● ONLINE' : r.status === 'offline' ? '● OFFLINE' : '○ IDLE';
     setText('rx-meta',
       String(r.label || r.region).toUpperCase() +
@@ -765,7 +770,7 @@
         // No declared regions: hide the switch bank, show the operator's configured host.
         bank.style.display = 'none';
         if (help) help.hidden = true;
-        if (DEFAULT_URI) setText('rx-uri', DEFAULT_URI);
+        if (DEFAULT_URI) { setText('rx-uri', DEFAULT_URI); setText('rx-guide-uri', DEFAULT_URI); }
         setText('rx-meta', 'SINGLE ENDPOINT · CUCKATOO32');
         return;
       }

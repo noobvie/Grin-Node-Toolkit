@@ -352,6 +352,11 @@ class PoolSettings {
                                         // (pool-wide trends live forever in pool_metrics_hourly)
       resolved_alerts_keep_days: 30,    // prune resolved/acknowledged alerts older than this
       prune_interval_minutes: 60,       // how often retention.js runs (applied at restart)
+      balance_log_keep_days: 60,        // raw ledger rows older than this are pruned AFTER being
+                                        // rolled up into balance_log_daily (verified per day; the
+                                        // rollup is never pruned so lifetime analytics stay exact).
+                                        // Runtime floor 45: raw-only readers use windows up to 30d
+                                        // (reconciliation wallet-send audit, account earnings).
     },
   };
 
@@ -630,6 +635,11 @@ class PoolSettings {
       prune_interval_minutes: (val) => {
         const n = parseInt(val, 10);
         if (isNaN(n) || n < 5 || n > 10080) throw new Error('prune_interval_minutes must be 5-10080');
+        return n;
+      },
+      balance_log_keep_days: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 45 || n > 3650) throw new Error('balance_log_keep_days must be 45-3650');
         return n;
       },
     },

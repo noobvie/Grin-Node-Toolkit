@@ -437,10 +437,15 @@ footer a:hover { color: var(--accent); }
 .footer-bottom {
     max-width: 1100px; margin: 18px auto 0; padding-top: 14px;
     border-top: 1px solid var(--border); text-align: center;
+    /* Copyright + Saigon signature share one centered line; on narrow screens each
+       phrase stays intact (no mid-phrase break) and they stack, still centered. */
+    display: flex; flex-wrap: wrap; justify-content: center;
+    align-items: baseline; column-gap: 8px;
 }
 .footer-bottom p { margin: 3px 0; }
-.footer-copyright { color: var(--text-dim); font-weight: 600; }
-.footer-meta { opacity: .75; font-size: 12px; }
+.footer-copyright { color: var(--text-dim); font-weight: 600; white-space: nowrap; }
+.footer-saigon { white-space: nowrap; }
+.footer-sep { color: var(--text-dim); opacity: .6; }
 
 @media (max-width: 760px) {
     .footer-cols { grid-template-columns: 1fr 1fr; gap: 22px; }
@@ -448,6 +453,8 @@ footer a:hover { color: var(--accent); }
 }
 @media (max-width: 440px) {
     .footer-cols { grid-template-columns: 1fr; }
+    /* Copyright + Saigon stack here — drop the now-dangling separator. */
+    .footer-sep { display: none; }
 }
 
 /* ── Service status strip (homepage) ───────────────────────────────────── */

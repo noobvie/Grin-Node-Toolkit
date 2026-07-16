@@ -1,4 +1,5 @@
 const { getDb } = require('./db');
+const { getHorizon } = require('./ledger-rollup');
 
 class HashrateTracker {
   constructor(config, minerManager) {
@@ -425,8 +426,11 @@ class HashrateTracker {
   }
 
   // Durable payments & transparency series for payment-history.html. Every money movement is
-  // recorded forever (withdrawals + balance_log are never pruned — see lib/retention.js), so we
-  // bucket straight from source and stay accurate at every range. One call feeds the whole page:
+  // recorded forever — withdrawals are never pruned, and the ledger survives as
+  // balance_log_daily (never pruned) + a raw balance_log window of balance_log_keep_days
+  // (min 45d — see lib/ledger-rollup.js). Composite-read rule: rollup for day < horizon H,
+  // raw for created_at >= H. Ranges day/week/month span ≤30d < the 45d raw floor, so they
+  // read raw only; year/all merge both sources additively per bucket. One call feeds the page:
   //   points        time-bucketed { payout, to_miners, fee, donations, giveaways } (drives the
   //                 cumulative-paid area, reward-split doughnut and giveaways-over-time bar)
   //   distribution  payout-size histogram over the window (fixed GRIN buckets)
@@ -454,6 +458,7 @@ class HashrateTracker {
     };
     try {
       const now = Math.floor(Date.now() / 1000);
+      const H = getHorizon(this.db); // balance_log_daily covers created_at < H; 0 = no rollup yet
       let bucket, cutoff;
 
       if (range === 'all') {
@@ -461,6 +466,7 @@ class HashrateTracker {
           SELECT MIN(t) AS b FROM (
             SELECT MIN(confirmed_at) AS t FROM withdrawals WHERE status = 'confirmed'
             UNION ALL SELECT MIN(created_at) AS t FROM balance_log
+            UNION ALL SELECT MIN(day) AS t FROM balance_log_daily
           )`).get();
         const earliest = (first && first.b != null) ? first.b : now - 30 * DAY;
         const totalSpan = Math.max(now - earliest, DAY);
@@ -487,8 +493,29 @@ class HashrateTracker {
         GROUP BY t
       `).all(bucket, bucket, cutoff);
 
-      // Ledger movements per bucket, split by category, keyed by created_at.
-      const ledRows = this.db.prepare(`
+      // Ledger movements per bucket, split by category. Composite: year/all pull days
+      // below the rollup horizon from balance_log_daily and the rest from raw; shorter
+      // ranges are entirely inside the raw window (≥45d) and skip the rollup. A bucket
+      // wider than a day (week/month) can straddle the horizon and receive rows from
+      // BOTH sources, so the merge below must be additive, not assignment.
+      const ledSeries = [];
+      const useRollup = H > 0 && (range === 'year' || range === 'all');
+      if (useRollup && H > cutoff) {
+        ledSeries.push(...this.db.prepare(`
+          SELECT CAST(day / ? AS INTEGER) * ? AS t,
+                 COALESCE(SUM(CASE WHEN reference_type = 'block'    AND event_type = 'credit' THEN total_amount ELSE 0 END), 0) AS to_miners,
+                 COALESCE(SUM(CASE WHEN reference_type = 'pool_fee' AND event_type = 'credit' THEN total_amount ELSE 0 END), 0) AS fee,
+                 COALESCE(SUM(CASE WHEN reference_type = 'donation' AND event_type = 'debit'  THEN total_amount ELSE 0 END), 0) AS donations,
+                 COALESCE(SUM(CASE WHEN reference_type IN ${GIVEAWAY_TYPES} AND grin_address NOT IN ${RESERVED} AND event_type = 'credit'   THEN total_amount
+                                 WHEN reference_type IN ${GIVEAWAY_TYPES} AND grin_address NOT IN ${RESERVED} AND event_type = 'reversal' THEN -total_amount
+                                 ELSE 0 END), 0) AS giveaways
+          FROM balance_log_daily
+          WHERE day >= ? AND day < ?
+          GROUP BY t
+        `).all(bucket, bucket, Math.floor(cutoff / DAY) * DAY, H));
+      }
+      const rawFrom = useRollup ? Math.max(cutoff, H) : cutoff;
+      ledSeries.push(...this.db.prepare(`
         SELECT CAST(created_at / ? AS INTEGER) * ? AS t,
                COALESCE(SUM(CASE WHEN reference_type = 'block'    AND event_type = 'credit' THEN amount ELSE 0 END), 0) AS to_miners,
                COALESCE(SUM(CASE WHEN reference_type = 'pool_fee' AND event_type = 'credit' THEN amount ELSE 0 END), 0) AS fee,
@@ -499,22 +526,22 @@ class HashrateTracker {
         FROM balance_log
         WHERE created_at >= ?
         GROUP BY t
-      `).all(bucket, bucket, cutoff);
+      `).all(bucket, bucket, rawFrom));
 
-      // Merge the two source series into one bucket map (a bucket may appear in either or both).
+      // Merge the source series into one bucket map (a bucket may appear in any of them).
       const byT = new Map();
       const slot = t => {
         let s = byT.get(t);
         if (!s) { s = { t, payout: 0, to_miners: 0, fee: 0, donations: 0, giveaways: 0 }; byT.set(t, s); }
         return s;
       };
-      for (const r of payRows) slot(r.t).payout = r.payout || 0;
-      for (const r of ledRows) {
+      for (const r of payRows) slot(r.t).payout += r.payout || 0;
+      for (const r of ledSeries) {
         const s = slot(r.t);
-        s.to_miners = r.to_miners || 0;
-        s.fee = r.fee || 0;
-        s.donations = r.donations || 0;
-        s.giveaways = r.giveaways || 0;
+        s.to_miners += r.to_miners || 0;
+        s.fee += r.fee || 0;
+        s.donations += r.donations || 0;
+        s.giveaways += r.giveaways || 0;
       }
       const round9 = v => parseFloat((Number(v) || 0).toFixed(9));
       const points = Array.from(byT.values())
@@ -548,15 +575,32 @@ class HashrateTracker {
         SELECT COALESCE(SUM(amount), 0) AS paid, COUNT(*) AS cnt, MAX(confirmed_at) AS last
         FROM withdrawals WHERE status = 'confirmed'
       `).get();
-      const led = this.db.prepare(`
+      // Lifetime ledger sums = rollup(day < H) + raw(created_at >= H). Exact at every
+      // prune state: raw rows below H still present simply aren't read twice.
+      const ledRaw = this.db.prepare(`
         SELECT COALESCE(SUM(CASE WHEN reference_type = 'block'    AND event_type = 'credit' THEN amount ELSE 0 END), 0) AS to_miners,
                COALESCE(SUM(CASE WHEN reference_type = 'pool_fee' AND event_type = 'credit' THEN amount ELSE 0 END), 0) AS fee,
                COALESCE(SUM(CASE WHEN reference_type = 'donation' AND event_type = 'debit'  THEN amount ELSE 0 END), 0) AS donations,
                COALESCE(SUM(CASE WHEN reference_type IN ${GIVEAWAY_TYPES} AND grin_address NOT IN ${RESERVED} AND event_type = 'credit'   THEN amount
                                WHEN reference_type IN ${GIVEAWAY_TYPES} AND grin_address NOT IN ${RESERVED} AND event_type = 'reversal' THEN -amount
                                ELSE 0 END), 0) AS giveaways
-        FROM balance_log
-      `).get();
+        FROM balance_log WHERE created_at >= ?
+      `).get(H);
+      const ledAgg = H > 0 ? this.db.prepare(`
+        SELECT COALESCE(SUM(CASE WHEN reference_type = 'block'    AND event_type = 'credit' THEN total_amount ELSE 0 END), 0) AS to_miners,
+               COALESCE(SUM(CASE WHEN reference_type = 'pool_fee' AND event_type = 'credit' THEN total_amount ELSE 0 END), 0) AS fee,
+               COALESCE(SUM(CASE WHEN reference_type = 'donation' AND event_type = 'debit'  THEN total_amount ELSE 0 END), 0) AS donations,
+               COALESCE(SUM(CASE WHEN reference_type IN ${GIVEAWAY_TYPES} AND grin_address NOT IN ${RESERVED} AND event_type = 'credit'   THEN total_amount
+                               WHEN reference_type IN ${GIVEAWAY_TYPES} AND grin_address NOT IN ${RESERVED} AND event_type = 'reversal' THEN -total_amount
+                               ELSE 0 END), 0) AS giveaways
+        FROM balance_log_daily WHERE day < ?
+      `).get(H) : { to_miners: 0, fee: 0, donations: 0, giveaways: 0 };
+      const led = {
+        to_miners: ledRaw.to_miners + ledAgg.to_miners,
+        fee: ledRaw.fee + ledAgg.fee,
+        donations: ledRaw.donations + ledAgg.donations,
+        giveaways: ledRaw.giveaways + ledAgg.giveaways
+      };
       const paidAll = led.to_miners + led.fee; // gross block reward accounted in the ledger
       const totals = {
         paid_all: round9(pay.paid),

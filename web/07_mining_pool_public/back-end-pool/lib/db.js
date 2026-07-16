@@ -315,6 +315,25 @@ function createSchema() {
     `CREATE INDEX IF NOT EXISTS idx_balance_log_address ON balance_log(grin_address, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_balance_log_time ON balance_log(created_at DESC)`,
 
+    // Daily rollup of balance_log — one row per (UTC day, address, event_type, reference_type),
+    // written by lib/ledger-rollup.js from the retention pass BEFORE raw rows are pruned
+    // (verify-before-delete). NEVER pruned: these dimensions exactly reconstruct every lifetime
+    // consumer (payments/transparency totals + long-range series, reconciliation flows and the
+    // integrity invariant, pool_fee/prize_pool bucket detail) at ~150 MB per 10 years, so the
+    // raw ledger can be kept to a short window (database.balance_log_keep_days). Composite-read
+    // rule (rollup vs raw split at the rollup horizon) is documented in lib/ledger-rollup.js.
+    `CREATE TABLE IF NOT EXISTS balance_log_daily (
+      day INTEGER NOT NULL,
+      grin_address TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      reference_type TEXT NOT NULL,
+      total_amount REAL NOT NULL DEFAULT 0,
+      event_count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (day, grin_address, event_type, reference_type)
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_bld_address ON balance_log_daily(grin_address, day)`,
+
     `CREATE TABLE IF NOT EXISTS withdrawal_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       withdrawal_id INTEGER NOT NULL REFERENCES withdrawals(id),
@@ -392,6 +411,32 @@ function createSchema() {
     `CREATE INDEX IF NOT EXISTS idx_alert_type ON alerts(type, status)`,
     `CREATE INDEX IF NOT EXISTS idx_alert_status ON alerts(status, triggered_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_alert_time ON alerts(triggered_at DESC)`,
+
+    // Single-row (id=1) payout kill-switch. When frozen=1 the withdrawal scheduler skips all
+    // outbound send paths. Set automatically by AlertMonitor on a critical money trip
+    // (coverage shortfall / integrity drift / wallet drain) and manually from the admin
+    // Payments page. A missing row means "not frozen" (scheduler treats absence as unfrozen).
+    `CREATE TABLE IF NOT EXISTS payout_control (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      frozen INTEGER NOT NULL DEFAULT 0,
+      reason TEXT DEFAULT NULL,
+      frozen_by TEXT DEFAULT NULL,
+      frozen_at INTEGER DEFAULT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    // Wallet-identity anchor (single row, id=1). Stores the pool wallet's slatepack address at
+    // derivation index 0 — deterministic from the seed, so a stable per-wallet fingerprint. The
+    // AlertMonitor compares the live wallet's address against this; a mismatch means the wallet at
+    // the owner API is not the one the pool adopted (accidental/malicious swap, or an unannounced
+    // switch) → critical alert + auto-freeze. A planned switch re-adopts via the switch wizard.
+    // Absence = never adopted; the first reachable money check adopts on first-use (TOFU).
+    `CREATE TABLE IF NOT EXISTS wallet_identity (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      slatepack_address TEXT NOT NULL,
+      adopted_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      adopted_by TEXT DEFAULT NULL
+    )`,
 
     `CREATE TABLE IF NOT EXISTS pool_config (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -402,6 +402,57 @@ class LotteryManager {
     };
   }
 
+  // Aggregate winner stats for the public fortune-board charts + headline tiles. Server-side
+  // so the figures cover ALL history (the paginated winnerHistory only reflects loaded pages).
+  //   total_prizes_grin / total_winners / unique_winners / total_draws — headline placard
+  //   by_pot   — Pot A (share-weighted) vs Pot B (equal-chance) GRIN + winner counts (doughnut)
+  //   monthly  — GRIN paid + winner count per calendar month, UTC (bar chart), oldest→newest
+  stats() {
+    const totals = this.db.prepare(`
+      SELECT COUNT(*) AS winners,
+             COUNT(DISTINCT grin_address) AS unique_winners,
+             COALESCE(SUM(amount), 0) AS total_grin
+      FROM lottery_winners
+    `).get();
+    const totalDraws = this.db.prepare('SELECT COUNT(*) AS c FROM lottery_draws').get().c;
+    const byPot = this.db.prepare(`
+      SELECT pot, COUNT(*) AS count, COALESCE(SUM(amount), 0) AS amount
+      FROM lottery_winners GROUP BY pot
+    `).all();
+    // Prize total per event/campaign (top 12 by GRIN). event_name defaults mirror winnerHistory().
+    const byEvent = this.db.prepare(`
+      SELECT COALESCE(NULLIF(d.event_name, ''),
+                      CASE d.draw_type WHEN 'special' THEN 'Special' ELSE 'Weekly' END) AS event,
+             COUNT(*) AS count,
+             COALESCE(SUM(w.amount), 0) AS amount
+      FROM lottery_winners w
+      JOIN lottery_draws d ON d.id = w.draw_id
+      GROUP BY event
+      ORDER BY amount DESC
+      LIMIT 12
+    `).all();
+    const monthly = this.db.prepare(`
+      SELECT strftime('%Y-%m', d.drawn_at, 'unixepoch') AS month,
+             MIN(d.drawn_at) AS ts,
+             COUNT(*) AS count,
+             COALESCE(SUM(w.amount), 0) AS amount
+      FROM lottery_winners w
+      JOIN lottery_draws d ON d.id = w.draw_id
+      WHERE d.drawn_at IS NOT NULL
+      GROUP BY month
+      ORDER BY month ASC
+    `).all();
+    return {
+      total_prizes_grin: totals.total_grin,
+      total_winners: totals.winners,
+      unique_winners: totals.unique_winners,
+      total_draws: totalDraws,
+      by_pot: byPot.map((r) => ({ pot: r.pot, count: r.count, amount: r.amount })),
+      by_event: byEvent.map((r) => ({ event: r.event, count: r.count, amount: r.amount })),
+      monthly: monthly.map((r) => ({ month: r.month, ts: r.ts, count: r.count, amount: r.amount })),
+    };
+  }
+
   // Next scheduled weekly draw + upcoming enabled special events (for the public payload).
   nextScheduled() {
     const s = this.settingsView();

@@ -1,191 +1,447 @@
 <!DOCTYPE html>
 <html lang="en" data-page="account-settings" data-maintenance="exempt">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Account Settings — Mining Pool</title>
-    <link rel="stylesheet" href="/css/dashboard.css">
-    <link rel="stylesheet" href="/css/themes.css">
+  <!-- ===== ESSENTIAL META TAGS ===== -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="robots" content="index, follow, max-snippet:-1">
+  <meta name="language" content="English">
+  <meta name="author" content="GRINIUM Mining Pool">
+
+  <!-- ===== DESCRIPTION & KEYWORDS ===== -->
+  <title>Account — GRINIUM Mining Pool</title>
+  <meta name="description" content="Check your mining account with just your Grin address — no login. Balance, per-rig hashrate, share quality, earnings in BTC/USD, payout controls and full ledger history.">
+  <meta name="keywords" content="mining account, miner balance, grin address lookup, payout, worker stats, mining pool account, Grin pool">
+
+  <!-- ===== OPEN GRAPH ===== -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="GRINIUM Mining Pool — Your Account">
+  <meta property="og:description" content="Your Grin address is your account: balance, workers, earnings and payout controls — no login needed">
+  <meta property="og:url" content="https://pool.grin.money/account-settings.html">
+  <meta property="og:site_name" content="GRINIUM Mining Pool">
+  <meta property="og:image" content="https://pool.grin.money/images/og-image.svg">
+  <meta property="og:locale" content="en_US">
+
+  <!-- ===== TWITTER CARD ===== -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="GRINIUM Mining Pool — Your Account">
+  <meta name="twitter:description" content="Balance, workers, earnings and payout controls — your address is your account">
+  <meta name="twitter:image" content="https://pool.grin.money/images/twitter-card.svg">
+  <meta name="twitter:domain" content="pool.grin.money">
+
+  <!-- ===== CANONICAL ===== -->
+  <link rel="canonical" href="https://pool.grin.money/account-settings.html">
+
+  <!-- ===== ADDITIONAL SEO ===== -->
+  <meta name="theme-color" content="#07090c">
+  <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+  <link rel="apple-touch-icon" href="/images/apple-touch-icon.svg">
+  <link rel="manifest" href="/manifest.json">
+
+  <!-- ===== JSON-LD STRUCTURED DATA ===== -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "name": "GRINIUM Mining Pool — Account",
+    "description": "Look up your mining account by Grin address: balance, workers, earnings and payout controls",
+    "url": "https://pool.grin.money/account-settings.html",
+    "isPartOf": {
+      "@type": "WebSite",
+      "name": "GRINIUM Mining Pool",
+      "url": "https://pool.grin.money"
+    }
+  }
+  </script>
+
+  <link rel="stylesheet" href="/css/dashboard.css">
+  <link rel="stylesheet" href="/css/themes.css">
+  <link rel="stylesheet" href="/css/reactor.css">
+  <style>
+    /* ── lookup console row ─────────────────────────────────────────────── */
+    .lookup-row { display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap; }
+    .lookup-row .form-group { flex: 1 1 420px; margin: 0; }
+    .lookup-row .btn-save { flex: 0 0 auto; align-self: flex-end; }
+
+    /* ── shared timeframe toggle (same pattern as miners-stats) ─────────── */
+    .rangebar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+    .rangebar .rng-btn {
+      font: inherit; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+      padding: 6px 13px; border-radius: 6px; cursor: pointer;
+      background: var(--panel-2, rgba(255,255,255,.04)); color: var(--text-dim, #9aa4b2);
+      border: 1px solid var(--border, rgba(255,255,255,.10)); transition: background .12s, color .12s;
+    }
+    .rangebar .rng-btn:hover { color: var(--text, #e6edf3); }
+    .rangebar .rng-btn.active {
+      background: var(--accent, #7cb342); color: #07090c;
+      border-color: var(--accent, #7cb342); font-weight: 600;
+    }
+    .rangebar .rng-btn:disabled { opacity: .35; cursor: not-allowed; }
+    .rangebar .rng-spacer { margin-left: auto; }
+    .rangebar .rng-note {
+      color: var(--text-mute, #6b7480); font-family: var(--mono, monospace);
+      font-size: 11px; letter-spacing: .1em;
+    }
+
+    /* ── worker status LED (replaces a Status text column) ──────────────── */
+    .wled {
+      display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+      margin-right: 9px; vertical-align: baseline; flex: none;
+      background: color-mix(in srgb, var(--text) 20%, var(--bg));
+    }
+    .wled.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: wled-beat 2.2s ease-in-out infinite; }
+    .wled.dead { background: var(--danger); box-shadow: 0 0 6px color-mix(in srgb, var(--danger) 55%, transparent); }
+    @keyframes wled-beat { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+    @media (prefers-reduced-motion: reduce) { .wled.on { animation: none; } }
+    .wled-legend { margin: 10px 0 0; font-size: 12px; color: var(--text-dim); }
+
+    /* ── payout console: main row + ownership gate + two control columns ── */
+    .deck-row.acct-main { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: start; }
+    @media (max-width: 900px) { .deck-row.acct-main { grid-template-columns: minmax(0, 1fr); } }
+    .gate-block {
+      border: 1px solid color-mix(in srgb, var(--info) 35%, var(--bg));
+      background: color-mix(in srgb, var(--info) 5%, transparent);
+      border-radius: 6px; padding: 14px 16px; margin-bottom: 18px;
+    }
+    .gate-block .gate-title {
+      font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .18em;
+      text-transform: uppercase; color: var(--info); margin-bottom: 10px;
+    }
+    .controls-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 22px; }
+    @media (max-width: 640px) { .controls-cols { grid-template-columns: minmax(0, 1fr); } }
+    .controls-cols h4 {
+      font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .16em;
+      text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px;
+      padding-bottom: 7px; border-bottom: 1px solid var(--border-soft);
+    }
+    .radio-row { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
+    .radio-row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 14px; color: var(--text); font-weight: 400; margin: 0; }
+    .radio-row input { width: auto; accent-color: var(--accent); }
+
+    /* one-pending payout strip (status + cancel) */
+    .pending-strip {
+      display: none; margin-top: 16px; padding: 11px 14px; border-radius: 6px;
+      border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--bg));
+      background: color-mix(in srgb, var(--warn) 6%, transparent);
+      font-family: var(--mono); font-size: 12.5px; color: var(--text-dim);
+      align-items: center; gap: 12px; flex-wrap: wrap;
+    }
+    .pending-strip b { color: var(--warn); font-weight: 600; }
+    .pending-strip .btn.sm { margin-left: auto; }
+
+    /* ── compact earnings → BTC/USD table (account details card) ────────── */
+    .fx-head {
+      font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .18em;
+      text-transform: uppercase; color: var(--text-mute); margin: 18px 0 8px;
+      padding-top: 14px; border-top: 1px solid var(--border-soft);
+      display: flex; justify-content: space-between; align-items: baseline;
+    }
+    .fx-head .src { font-weight: 400; letter-spacing: .06em; text-transform: none; }
+    .fx-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .fx-table th {
+      text-align: right; font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase;
+      color: var(--text-mute); font-weight: 600; padding: 4px 0 6px; border-bottom: 1px solid var(--border-soft);
+    }
+    .fx-table th:first-child, .fx-table td:first-child { text-align: left; }
+    .fx-table td { text-align: right; padding: 5px 0; border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
+    .fx-table td:first-child { color: var(--text-dim); }
+    .fx-table tr:last-child td { border-bottom: none; }
+    .fx-table td.grin { color: var(--accent); }
+    .fx-table td + td { padding-left: 12px; }
+
+    /* ── ledger pager + export row ───────────────────────────────────────── */
+    .pager-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+    .pager-row .pg-label { font-size: 13px; color: var(--text-dim); }
+    .pager-row .spacer { margin-left: auto; }
+    .export-sel {
+      background: var(--bg); color: var(--text-dim); border: 1px solid var(--border);
+      border-radius: 5px; font: 11.5px var(--mono); padding: 4px 8px; cursor: pointer; width: auto;
+    }
+    .export-link { font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em; color: var(--info); }
+
+    .panel-body p.note { margin: 0 0 14px; color: var(--text-dim); font-size: 13.5px; line-height: 1.6; }
+    .panel-body p.note b { color: var(--text); }
+    .table-scroll { overflow-x: auto; }
+    .table-scroll .data-table { margin-bottom: 0; background: transparent; border-color: var(--border-soft); box-shadow: none; animation: none; }
+    .amt-in { color: var(--ok); }
+    .amt-out { color: var(--gold); }
+  </style>
 </head>
 <body>
 
     <!-- header injected by /js/public-shell.js -->
 
-    <div class="container">
-        <h2 class="page-title">Account</h2>
-
-        <div class="settings-section">
-            <h3>Look Up Your Mining Account</h3>
-            <p style="margin-bottom: 16px; color: var(--dark-dim);">
-                No login needed — your Grin address <em>is</em> your account. Enter the address
-                you mine with to see balance, hashrate, and payout history.
-            </p>
-            <div class="form-group">
-                <label for="acct-addr">Your Grin Address</label>
-                <input type="text" id="acct-addr" placeholder="grin1… or tgrin1…" autocomplete="off" spellcheck="false">
+    <div class="wrap">
+        <!-- ═══ Operator strip: heading + miner master lamp ═══ -->
+        <div class="deck-head">
+            <div>
+                <h1>Account</h1>
+                <div class="sub">balance &middot; workers &middot; payout controls <span class="dim">(all times UTC)</span></div>
             </div>
-            <button class="btn-save" id="acct-lookup">View Account</button>
-            <div class="acct-msg" id="acct-msg"></div>
+            <span class="master-lamp" id="acct-lamp" style="display:none"><span class="led"></span><span id="acct-lamp-text">Miner online</span></span>
+        </div>
+
+        <div class="deck" style="margin-bottom:16px">
+            <!-- ═══ P-00 · LOOKUP CONSOLE ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-00</span> Operator console — account lookup <span class="right">no login &middot; your address is your account</span></h2>
+                <div class="panel-body">
+                    <p class="note">No login needed — your Grin address <b>is</b> your account. Enter the address you mine with to see balance, hashrate and payout history.</p>
+                    <div class="lookup-row">
+                        <div class="form-group">
+                            <label for="acct-addr">Your Grin address</label>
+                            <input type="text" id="acct-addr" placeholder="grin1… or tgrin1…" autocomplete="off" spellcheck="false">
+                        </div>
+                        <button class="btn-save" id="acct-lookup">View Account</button>
+                    </div>
+                    <div class="acct-msg" id="acct-msg"></div>
+                </div>
+            </div>
         </div>
 
         <div id="acct-view" style="display:none">
-            <div class="stats-grid">
-                <div class="stat-card"><div class="stat-label">Available Balance</div><div class="stat-value" id="acct-balance">—</div></div>
-                <div class="stat-card"><div class="stat-label">Locked / Immature</div><div class="stat-value" id="acct-locked">—</div></div>
-                <div class="stat-card"><div class="stat-label">Total Paid Out</div><div class="stat-value" id="acct-paid">—</div></div>
-                <div class="stat-card"><div class="stat-label">Hashrate (1h)</div><div class="stat-value" id="acct-hashrate">—</div></div>
+
+            <!-- ═══ Spec placard: live account figures ═══ -->
+            <div class="placard" aria-label="Live account figures">
+                <span><i>Available balance</i><b id="acct-balance">—</b></span>
+                <span><i>Locked / immature</i><b id="acct-locked">—</b></span>
+                <span><i>Total paid out</i><b id="acct-paid">—</b></span>
+                <span><i>Hashrate &middot; 1h</i><b id="acct-hashrate">—</b></span>
+                <span><i>Workers online</i><b id="pl-workers">—</b></span>
+                <span><i>Pending payout</i><b id="pl-pending">—</b></span>
             </div>
 
-            <div class="settings-section">
-                <h3>Hashrate (24h)</h3>
-                <div style="position:relative;height:220px"><canvas id="acct-hashrate-chart"></canvas></div>
-            </div>
+            <div class="deck">
 
-            <div class="settings-section">
-                <h3>Workers</h3>
-                <p style="margin-bottom:12px;color:var(--dark-dim);">
-                    Per-rig breakdown. Reject % / stale % are shown for workers currently connected
-                    to this server (live session counters).
-                </p>
-                <div id="acct-workers-chart-wrap" style="position:relative;height:200px;margin-bottom:18px;display:none">
-                    <canvas id="acct-workers-chart"></canvas>
-                </div>
-                <table class="data-table" aria-label="Workers">
-                    <thead><tr><th>Worker</th><th class="num">Hashrate</th><th class="num">Shares</th><th class="num">Stale %</th><th class="num">Reject %</th><th>Last share</th><th>Status</th></tr></thead>
-                    <tbody id="acct-workers"><tr><td colspan="7">—</td></tr></tbody>
-                </table>
-            </div>
-
-            <div class="settings-section" id="acct-quality-section" style="display:none">
-                <h3>Share Quality <span style="font-weight:normal;font-size:13px;color:var(--dark-dim)">(live — connected workers)</span></h3>
-                <p style="margin-bottom:12px;color:var(--dark-dim);">
-                    Valid vs. stale vs. rejected shares for rigs currently connected to this server.
-                    A healthy rig is <strong>&gt;98% valid</strong>. High <strong>stale %</strong> usually
-                    means network latency or too-aggressive overclock (you submitted a share for a block
-                    the pool already moved past); high <strong>reject %</strong> means invalid shares
-                    (bad config / failing hardware).
-                </p>
-                <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center;">
-                    <div style="position:relative;height:180px;width:180px;flex:0 0 auto;">
-                        <canvas id="acct-quality-chart"></canvas>
-                    </div>
-                    <ul class="detail-list" style="flex:1 1 240px;min-width:240px;margin:0;">
-                        <li><span class="k">Valid shares</span><span class="v" id="q-valid">—</span></li>
-                        <li><span class="k">Stale shares</span><span class="v" id="q-stale">—</span></li>
-                        <li><span class="k">Rejected shares</span><span class="v" id="q-reject">—</span></li>
-                    </ul>
-                </div>
-                <p id="acct-quality-empty" style="display:none;color:var(--dark-dim);margin-top:10px;">
-                    No live worker sessions on this server right now — share-quality counters are
-                    in-memory and reset when a worker disconnects. Your hashrate history above is
-                    persistent and unaffected.
-                </p>
-            </div>
-
-            <div class="settings-section">
-                <h3>Account Details</h3>
-                <ul class="detail-list">
-                    <li><span class="k">Status</span><span class="v" id="acct-status">—</span></li>
-                    <li><span class="k">Last seen</span><span class="v" id="acct-last-seen">—</span></li>
-                    <li><span class="k">Total shares submitted</span><span class="v" id="acct-shares">—</span></li>
-                    <li><span class="k">Last share</span><span class="v" id="acct-last-share">—</span></li>
-                    <li><span class="k">Pending withdrawals</span><span class="v" id="acct-pending">—</span></li>
-                    <li><span class="k">Minimum payout</span><span class="v" id="acct-min">—</span></li>
-                    <li><span class="k">Mining here since</span><span class="v" id="acct-since">—</span></li>
-                </ul>
-            </div>
-
-            <div class="settings-section">
-                <h3>Verify Ownership</h3>
-                <p style="margin-bottom:12px;color:var(--dark-dim);">
-                    Changing your payout settings or requesting a Slatepack payout requires proof
-                    that you control this address. Enter <strong>one of the last two public IP
-                    addresses</strong> your miner connected from. (Tor payouts don't need this —
-                    they always return to your own address.)
-                </p>
-                <div class="form-group">
-                    <label for="acct-ip-proof">Recent mining IP</label>
-                    <input type="text" id="acct-ip-proof" placeholder="e.g. 203.0.113.42" autocomplete="off" spellcheck="false">
-                    <small id="acct-ip-hint" style="color:var(--dark-dim);"></small>
-                </div>
-            </div>
-
-            <div class="settings-section">
-                <h3>Payout Threshold</h3>
-                <p style="margin-bottom:12px;color:var(--dark-dim);">
-                    Set a personal minimum balance before you withdraw. Must be at or above the pool
-                    minimum (<span id="acct-pool-min">—</span> ツ). Leave blank to use the pool default.
-                </p>
-                <div class="form-group">
-                    <label for="acct-min-payout-input">Your minimum payout (GRIN)</label>
-                    <input type="number" id="acct-min-payout-input" min="0" step="0.1" placeholder="pool default" autocomplete="off">
-                </div>
-                <button class="btn-save" id="acct-save-min">Save Threshold</button>
-                <div class="acct-msg" id="acct-min-msg"></div>
-            </div>
-
-            <div class="settings-section">
-                <h3>Withdraw</h3>
-                <p style="margin-bottom: 16px; color: var(--dark-dim);">
-                    Choose one payout method. <strong>Tor</strong> is fully automatic;
-                    <strong>Slatepack</strong> is a manual, interactive fallback when you have no
-                    Tor listener.
-                </p>
-                <div class="form-group" role="radiogroup" aria-label="Payout method">
-                    <label style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;cursor:pointer;">
-                        <input type="radio" name="acct-pay-method" id="acct-pay-tor" value="tor" checked>
-                        <span>Tor (automatic)</span>
-                    </label>
-                    <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
-                        <input type="radio" name="acct-pay-method" id="acct-pay-slatepack" value="slatepack">
-                        <span>Slatepack (manual)</span>
-                    </label>
-                </div>
-
-                <!-- Tor method -->
-                <div id="acct-pay-tor-pane">
-                    <p style="margin-bottom: 16px; color: var(--dark-dim);">
-                        Payouts are sent automatically over Tor to this address once your balance reaches
-                        the minimum. You can also request one now — wallet reachability:
-                        <span id="acct-tor" style="font-family: ui-monospace, monospace;">checking…</span>
-                    </p>
-                    <button class="btn-save" id="acct-withdraw">Request Tor Payout Now</button>
-                    <div class="acct-msg" id="acct-withdraw-msg"></div>
-                </div>
-
-                <!-- Slatepack method -->
-                <div id="acct-pay-slatepack-pane" style="display:none;">
-                    <p style="margin-bottom:12px;color:var(--dark-dim);">
-                        Generates a slatepack <strong>encrypted to your address</strong> — only your wallet
-                        can open it, so it's safe even though no login is required. Requires ownership
-                        verification (above). Steps: 1) generate, 2) <code>receive</code> it in your wallet,
-                        3) paste the response below to finalize.
-                    </p>
-                    <div class="form-group">
-                        <label for="acct-sp-amount">Amount (GRIN, blank = full balance)</label>
-                        <input type="number" id="acct-sp-amount" min="0" step="0.1" placeholder="full balance" autocomplete="off">
-                    </div>
-                    <button class="btn-save" id="acct-sp-create">Generate Slatepack</button>
-                    <div class="acct-msg" id="acct-sp-msg"></div>
-                    <div id="acct-sp-out" style="display:none;margin-top:14px;">
-                        <label>Encrypted slatepack — import this into your wallet and run <code>receive</code>:</label>
-                        <textarea id="acct-sp-armored" readonly rows="5" style="width:100%;font-family:ui-monospace,monospace;font-size:12px;"></textarea>
-                        <div class="form-group" style="margin-top:12px;">
-                            <label for="acct-sp-response">Paste your wallet's response slatepack:</label>
-                            <textarea id="acct-sp-response" rows="5" style="width:100%;font-family:ui-monospace,monospace;font-size:12px;" placeholder="BEGINSLATEPACK. ..."></textarea>
+                <div class="deck-row half">
+                    <!-- ═══ P-01 · HASHRATE RECORDER ═══ -->
+                    <div class="panel"><span class="screws"></span>
+                        <h2 class="panel-title"><span class="tag">P-01</span> Chart recorder — your hashrate <span class="right">history kept 100 days</span></h2>
+                        <div class="panel-body">
+                            <div class="rangebar" id="acct-rangebar" role="tablist" aria-label="Chart timeframe">
+                                <button class="rng-btn active" data-range="day"   role="tab">Day</button>
+                                <button class="rng-btn"        data-range="week"  role="tab">Week</button>
+                                <button class="rng-btn"        data-range="month" role="tab">Month</button>
+                                <button class="rng-btn" disabled title="Beyond per-miner retention (100 days)">Year</button>
+                                <button class="rng-btn" disabled title="Beyond per-miner retention (100 days)">All</button>
+                                <span class="rng-spacer"></span>
+                                <span class="rng-note" id="acct-range-note">last 24h</span>
+                            </div>
+                            <div class="chart-wrap" style="position:relative;height:240px">
+                                <canvas id="acct-hashrate-chart" aria-label="Your hashrate over the selected timeframe" role="img"></canvas>
+                                <div class="chart-empty" id="acct-empty-hashrate">NO TRACE DATA YET</div>
+                            </div>
                         </div>
-                        <button class="btn-save" id="acct-sp-finalize">Finalize Payout</button>
-                        <div class="acct-msg" id="acct-sp-final-msg"></div>
+                    </div>
+
+                    <!-- ═══ P-02 · SHARE QUALITY ═══ -->
+                    <div class="panel"><span class="screws"></span>
+                        <h2 class="panel-title"><span class="tag">P-02</span> Share quality <span class="right">live &middot; connected workers</span></h2>
+                        <div class="panel-body">
+                            <p class="note">A healthy rig is <b>&gt;98% valid</b>. High stale% = latency or too-aggressive overclock; high reject% = bad config / failing hardware. <b>Live only</b> — counters reset when a worker disconnects; they are not stored.</p>
+                            <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center;">
+                                <div style="position:relative;height:180px;width:180px;flex:0 0 auto;">
+                                    <canvas id="acct-quality-chart" aria-label="Valid, stale and rejected share split" role="img"></canvas>
+                                </div>
+                                <ul class="detail-list" style="flex:1 1 220px;min-width:220px;margin:0;">
+                                    <li><span class="k">Valid shares</span><span class="v" id="q-valid">—</span></li>
+                                    <li><span class="k">Stale shares</span><span class="v" id="q-stale">—</span></li>
+                                    <li><span class="k">Rejected shares</span><span class="v" id="q-reject">—</span></li>
+                                </ul>
+                            </div>
+                            <p id="acct-quality-empty" style="display:none;color:var(--text-dim);margin-top:10px;font-size:13px;">
+                                No live worker sessions on this server right now — share-quality counters are
+                                in-memory and reset when a worker disconnects. Your hashrate history is
+                                persistent and unaffected.
+                            </p>
+                        </div>
                     </div>
                 </div>
-            </div>
 
-            <div class="settings-section">
-                <h3>Recent Activity</h3>
-                <table class="data-table" aria-label="Balance history">
-                    <thead><tr><th>When</th><th>Event</th><th class="num">Amount</th><th class="num">Balance After</th></tr></thead>
-                    <tbody id="acct-log"><tr><td colspan="4">—</td></tr></tbody>
-                </table>
+                <!-- ═══ P-03 · WORKERS ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-03</span> Workers — per-rig breakdown <span class="right">stale/reject % = live sessions</span></h2>
+                    <div class="panel-body">
+                        <div id="acct-workers-chart-wrap" style="position:relative;height:200px;margin-bottom:18px;display:none">
+                            <canvas id="acct-workers-chart" aria-label="Hashrate per worker" role="img"></canvas>
+                        </div>
+                        <div class="table-scroll">
+                            <table class="data-table" aria-label="Workers">
+                                <thead><tr><th>Worker</th><th class="num">10 min</th><th class="num">24 h</th><th class="num">Shares &middot; 24h</th><th class="num">Stale %</th><th class="num">Reject %</th><th>Last share</th></tr></thead>
+                                <tbody id="acct-workers"><tr><td colspan="7">—</td></tr></tbody>
+                            </table>
+                        </div>
+                        <p class="wled-legend">
+                            <span class="wled on" style="animation:none"></span>online &nbsp;&middot;&nbsp;
+                            <span class="wled dead"></span>dropped &lt;24h — check the rig &nbsp;&middot;&nbsp;
+                            <span class="wled"></span>offline
+                        </p>
+                    </div>
+                </div>
+
+                <div class="deck-row acct-main">
+                    <!-- ═══ P-04 · PAYOUT CONTROLS (one ownership gate) ═══ -->
+                    <div class="panel"><span class="screws"></span>
+                        <h2 class="panel-title"><span class="tag">P-04</span> Payout controls <span class="right">threshold &middot; withdraw &middot; one ownership gate</span></h2>
+                        <div class="panel-body">
+
+                            <div class="gate-block">
+                                <div class="gate-title">🔐 Ownership gate — verify before changing anything</div>
+                                <div class="form-group" style="margin-bottom:0">
+                                    <label for="acct-ip-proof">Recent mining IP (one of the last two your miner connected from)</label>
+                                    <input type="text" id="acct-ip-proof" placeholder="e.g. 203.0.113.42" autocomplete="off" spellcheck="false">
+                                    <small id="acct-ip-hint" style="color:var(--text-dim);"></small>
+                                    <small style="color:var(--text-mute);">Required for: <b>threshold changes</b> and <b>Slatepack payouts</b>. Tor payouts don't need it — they can only pay to this address's own wallet.</small>
+                                </div>
+                            </div>
+
+                            <div class="controls-cols">
+                                <div>
+                                    <h4>Payout threshold</h4>
+                                    <div class="form-group">
+                                        <label for="acct-min-payout-input">Minimum payout (≥ <span id="acct-pool-min">—</span> ツ)</label>
+                                        <input type="number" id="acct-min-payout-input" min="0" step="0.1" placeholder="pool default" autocomplete="off">
+                                    </div>
+                                    <button class="btn-save" id="acct-save-min">Save Threshold</button>
+                                    <div class="acct-msg" id="acct-min-msg"></div>
+                                </div>
+                                <div>
+                                    <h4>Withdraw</h4>
+                                    <div class="radio-row" role="radiogroup" aria-label="Payout method">
+                                        <label><input type="radio" name="acct-pay-method" id="acct-pay-tor" value="tor" checked> Tor</label>
+                                        <label><input type="radio" name="acct-pay-method" id="acct-pay-slatepack" value="slatepack"> Slatepack (manual)</label>
+                                    </div>
+
+                                    <!-- Tor method -->
+                                    <div id="acct-pay-tor-pane">
+                                        <p class="note" style="margin-bottom:12px">Sends your balance to this address's wallet over Tor. Wallet reachability:
+                                            <span id="acct-tor" style="font-family:var(--mono);">checking…</span></p>
+                                        <button class="btn-save" id="acct-withdraw">Request Tor Payout</button>
+                                        <div class="acct-msg" id="acct-withdraw-msg"></div>
+                                    </div>
+
+                                    <!-- Slatepack method -->
+                                    <div id="acct-pay-slatepack-pane" style="display:none;">
+                                        <p class="note" style="margin-bottom:12px">
+                                            Generates a slatepack <b>encrypted to your address</b> — only your wallet can open it.
+                                            Steps: 1) generate, 2) <code>receive</code> it in your wallet, 3) paste the response to finalize.
+                                        </p>
+                                        <div class="form-group">
+                                            <label for="acct-sp-amount">Amount (GRIN, blank = full balance)</label>
+                                            <input type="number" id="acct-sp-amount" min="0" step="0.1" placeholder="full balance" autocomplete="off">
+                                        </div>
+                                        <button class="btn-save" id="acct-sp-create">Generate Slatepack</button>
+                                        <div class="acct-msg" id="acct-sp-msg"></div>
+                                        <div id="acct-sp-out" style="display:none;margin-top:14px;">
+                                            <label>Encrypted slatepack — import into your wallet and run <code>receive</code>:</label>
+                                            <textarea id="acct-sp-armored" readonly rows="5" style="width:100%;font-family:var(--mono);font-size:12px;"></textarea>
+                                            <div class="form-group" style="margin-top:12px;">
+                                                <label for="acct-sp-response">Paste your wallet's response slatepack:</label>
+                                                <textarea id="acct-sp-response" rows="5" style="width:100%;font-family:var(--mono);font-size:12px;" placeholder="BEGINSLATEPACK. ..."></textarea>
+                                            </div>
+                                            <button class="btn-save" id="acct-sp-finalize">Finalize Payout</button>
+                                            <div class="acct-msg" id="acct-sp-final-msg"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="pending-strip" id="acct-pending-strip">
+                                <span id="acct-pending-text"></span>
+                                <button class="btn sm" id="acct-pending-cancel" style="display:none">Cancel</button>
+                            </div>
+                            <div class="acct-msg" id="acct-cancel-msg"></div>
+
+                            <p class="note" style="margin:16px 0 0;font-size:12.5px;color:var(--text-mute);">
+                                One payout at a time — while one is in flight it appears above with its status
+                                and, when parked between retries, a <b>Cancel</b> option (cancelling returns the
+                                amount to your balance).
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- ═══ P-05 · ACCOUNT DETAILS + EARNINGS ═══ -->
+                    <div class="panel"><span class="screws"></span>
+                        <h2 class="panel-title"><span class="tag">P-05</span> Account details</h2>
+                        <div class="panel-body">
+                            <ul class="detail-list">
+                                <li><span class="k">Status</span><span class="v" id="acct-status">—</span></li>
+                                <li><span class="k">Last seen</span><span class="v" id="acct-last-seen">—</span></li>
+                                <li><span class="k">Total shares submitted</span><span class="v" id="acct-shares">—</span></li>
+                                <li><span class="k">Last share</span><span class="v" id="acct-last-share">—</span></li>
+                                <li><span class="k">Pending withdrawals</span><span class="v" id="acct-pending">—</span></li>
+                                <li><span class="k">Minimum payout</span><span class="v" id="acct-min">—</span></li>
+                                <li><span class="k">Mining here since</span><span class="v" id="acct-since">—</span></li>
+                            </ul>
+
+                            <div class="fx-head">Earnings <span class="src" id="fx-src">est. &middot; spot price</span></div>
+                            <table class="fx-table" aria-label="Earnings converted to BTC and USD">
+                                <thead><tr><th>Period</th><th>GRIN</th><th>BTC</th><th>USD</th></tr></thead>
+                                <tbody id="fx-body">
+                                    <tr><td>Last 60 minutes</td><td class="grin">—</td><td>—</td><td>—</td></tr>
+                                    <tr><td>Last 24 hours</td><td class="grin">—</td><td>—</td><td>—</td></tr>
+                                    <tr><td>Last 7 days</td><td class="grin">—</td><td>—</td><td>—</td></tr>
+                                    <tr><td>Last 30 days</td><td class="grin">—</td><td>—</td><td>—</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ P-06/P-07 · LEDGER: MONEY IN / MONEY OUT ═══ -->
+                <div class="deck-row half">
+                    <div class="panel"><span class="screws"></span>
+                        <h2 class="panel-title"><span class="tag">P-06</span> Ledger — money in <span class="right"><span class="dim">row detail kept 60 days · </span><span class="amt-in" id="in-sum"></span></span></h2>
+                        <div class="panel-body">
+                            <p class="note">Block rewards (PPLNS), contest bonuses, giveaways and returned payouts. 20 entries per page — full history is kept forever.</p>
+                            <div class="table-scroll">
+                                <table class="data-table" aria-label="Money in">
+                                    <thead><tr><th>When</th><th>Event</th><th class="num">Amount</th><th class="num">Balance after</th></tr></thead>
+                                    <tbody id="log-in"><tr><td colspan="4">—</td></tr></tbody>
+                                </table>
+                            </div>
+                            <div class="pager-row">
+                                <button class="btn sm" id="in-prev" disabled>&lsaquo; Prev</button>
+                                <span class="pg-label" id="in-page-label">Page 1</span>
+                                <button class="btn sm" id="in-next" disabled>Next &rsaquo;</button>
+                                <span class="spacer"></span>
+                                <select class="export-sel" id="in-export-days" aria-label="Export range">
+                                    <option value="30" selected>Last 30 days</option>
+                                    <option value="60">Last 60 days</option>
+                                    <option value="">All retained detail</option>
+                                </select>
+                                <a class="export-link" id="in-export" href="#" download>&#10515; CSV</a>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="panel"><span class="screws"></span>
+                        <h2 class="panel-title"><span class="tag">P-07</span> Ledger — money out <span class="right"><span class="dim">row detail kept 60 days · </span><span class="amt-out" id="out-sum"></span></span></h2>
+                        <div class="panel-body">
+                            <p class="note">Payouts to your wallet, voluntary donations (donateNN worker tag) and orphan clawbacks. 20 entries per page — full history is kept forever.</p>
+                            <div class="table-scroll">
+                                <table class="data-table" aria-label="Money out">
+                                    <thead><tr><th>When</th><th>Event</th><th class="num">Amount</th><th class="num">Balance after</th></tr></thead>
+                                    <tbody id="log-out"><tr><td colspan="4">—</td></tr></tbody>
+                                </table>
+                            </div>
+                            <div class="pager-row">
+                                <button class="btn sm" id="out-prev" disabled>&lsaquo; Prev</button>
+                                <span class="pg-label" id="out-page-label">Page 1</span>
+                                <button class="btn sm" id="out-next" disabled>Next &rsaquo;</button>
+                                <span class="spacer"></span>
+                                <select class="export-sel" id="out-export-days" aria-label="Export range">
+                                    <option value="30" selected>Last 30 days</option>
+                                    <option value="60">Last 60 days</option>
+                                    <option value="">All retained detail</option>
+                                </select>
+                                <a class="export-link" id="out-export" href="#" download>&#10515; CSV</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>
@@ -196,20 +452,32 @@
     <script src="/js/vendor/chart.umd.min.js"></script>
     <script src="/js/charts-init.js"></script>
     <script>
-        // Theme switching is handled site-wide by /js/public-theme.js, which renders
-        // the theme picker and applies the 3 built-in + 10 white-label themes.
-
+        // Theme switching is handled site-wide by /js/public-theme.js.
+        //
         // ═════════════════════════════════════════════════════════════════
         // Address-as-identity account view — public endpoints, no login:
-        //   GET  /api/account/:addr               summary (404 = never mined here)
-        //   GET  /api/account/:addr/balance/log   recent ledger entries
-        //   GET  /api/account/:addr/tor-check     wallet reachability hint
-        //   POST /api/account/:addr/withdraw      request a Tor payout now
-        // All DOM writes use textContent — addresses/events are external data.
+        //   GET  /api/account/:addr                    summary (404 = never mined here)
+        //   GET  /api/account/:addr/workers            per-rig live + windowed stats
+        //   GET  /api/account/:addr/hashrate/history   time-series (?hours=)
+        //   GET  /api/account/:addr/earnings           credited sums per period + 30d in/out
+        //   GET  /api/account/:addr/balance/log        ledger (?direction=in|out, ?format=csv)
+        //   GET  /api/account/:addr/tor-check          wallet reachability hint
+        //   GET  /api/public/price                     cached GRIN spot price (USD + BTC)
+        //   POST /api/account/:addr/withdraw           request a payout
+        //   POST /api/account/:addr/withdraw/:id/cancel  cancel a parked pending payout
+        // All DOM writes use textContent or escHtml — addresses/events are external data.
+        //
+        // Demo mode: the address below renders a built-in sample dataset with no API calls,
+        // so the page can be explored on a fresh pool (actions are disabled).
         // ═════════════════════════════════════════════════════════════════
 
         const ADDR_KEY = 'grinium-my-address';
+        const DEMO_ADDR = 'grin1demodemodemodemodemodemo';
+        const PAGE_SIZE = 20;
         let currentAddr = '';
+        let isDemo = false;
+        let acctRange = 'day';
+        const ledger = { in: { page: 0, total: 0 }, out: { page: 0, total: 0 } };
 
         function $id(id) { return document.getElementById(id); }
 
@@ -227,8 +495,28 @@
             return gps.toFixed(2) + ' G/s';
         }
 
+        // All times UTC (stated once in the page head — no per-value suffix).
+        function pad2(n) { return String(n).padStart(2, '0'); }
         function fmtWhen(unixSeconds) {
-            return unixSeconds ? new Date(unixSeconds * 1000).toLocaleString() : 'never';
+            if (!unixSeconds) return 'never';
+            const d = new Date(unixSeconds * 1000);
+            return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate())
+                 + ' ' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
+        }
+        // Compact form for tables: same UTC day → "HH:MM", else "Jul 12 03:19".
+        function fmtShort(unixSeconds) {
+            if (!unixSeconds) return 'never';
+            const d = new Date(unixSeconds * 1000), now = new Date();
+            const hm = pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
+            if (d.getUTCFullYear() === now.getUTCFullYear() && d.getUTCMonth() === now.getUTCMonth() &&
+                d.getUTCDate() === now.getUTCDate()) return hm;
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) + ' ' + hm;
+        }
+
+        function escHtml(v) {
+            return String(v == null ? '' : v)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
         async function getJson(url) {
@@ -238,9 +526,12 @@
             return json;
         }
 
+        // ── Lookup ─────────────────────────────────────────────────────────
         async function lookup() {
             const addr = $id('acct-addr').value.trim();
             const msg = $id('acct-msg');
+            if (addr.toLowerCase() === DEMO_ADDR) { renderDemo(); return; }
+            isDemo = false;
             // Accept mainnet grin1… and testnet tgrin1… (the backend validates per-network).
             if (!/^t?grin1[a-z0-9]{20,}$/i.test(addr)) {
                 setMsg(msg, 'Enter a valid Grin address (grin1… or tgrin1…)', false);
@@ -252,74 +543,337 @@
                 currentAddr = addr;
                 try { localStorage.setItem(ADDR_KEY, addr); } catch (e) {}
 
-                $id('acct-balance').textContent = fmtGrin(a.balance);
-                $id('acct-locked').textContent = fmtGrin(a.balance_locked);
-                $id('acct-paid').textContent = fmtGrin(a.total_paid);
-                $id('acct-hashrate').textContent = fmtGps(a.hashrate_gps || 0);
-                $id('acct-status').textContent = a.is_online ? 'Online ⛏' : 'Offline';
-                $id('acct-last-seen').textContent = fmtWhen(a.last_seen_at);
-                $id('acct-shares').textContent = Number(a.shares && a.shares.count || 0).toLocaleString('en-US');
-                $id('acct-last-share').textContent = fmtWhen(a.shares && a.shares.last_share_at);
-                $id('acct-pending').textContent = a.pending_withdrawals || 0;
-                $id('acct-min').textContent = fmtGrin(a.effective_min_payout != null ? a.effective_min_payout : a.min_withdrawal);
-                $id('acct-since').textContent = fmtWhen(a.created_at);
-
-                // Payout-threshold controls: prefill the override (if any), show the pool floor,
-                // and hint whether an IP is on record for the ownership gate.
-                $id('acct-pool-min').textContent = Number(a.min_withdrawal || 0).toFixed(1);
-                $id('acct-min-payout-input').value = (a.min_payout != null) ? a.min_payout : '';
-                $id('acct-ip-hint').textContent = a.has_recorded_ip
-                    ? 'A mining IP is on record for this address.'
-                    : 'No mining IP recorded yet — connect a miner first, then settings unlock.';
-
-                const canWithdraw = (a.balance || 0) >= (a.effective_min_payout != null ? a.effective_min_payout : a.min_withdrawal || 0) && !a.pending_withdrawals;
-                $id('acct-withdraw').disabled = !canWithdraw;
-
+                renderSummary(a);
                 $id('acct-view').style.display = '';
                 setMsg(msg, '', true);
-                loadLog(addr);
+                ledger.in.page = 0; ledger.out.page = 0;
+                loadChart();
+                loadWorkers();
+                loadEarnings();
+                loadLedger('in');
+                loadLedger('out');
                 torCheck(addr);
-                loadWorkers(addr);
-                loadAcctChart(addr);
             } catch (e) {
                 $id('acct-view').style.display = 'none';
+                $id('acct-lamp').style.display = 'none';
                 setMsg(msg, e.message === 'Account not found'
                     ? 'No mining account for this address yet — point a miner at the pool first.'
                     : 'Lookup failed: ' + e.message, false);
             }
         }
 
-        async function loadLog(addr) {
-            const tbody = $id('acct-log');
-            tbody.innerHTML = '<tr><td colspan="4">Loading…</td></tr>';
+        function renderSummary(a) {
+            $id('acct-balance').textContent = fmtGrin(a.balance);
+            $id('acct-locked').textContent = fmtGrin(a.balance_locked);
+            $id('acct-paid').textContent = fmtGrin(a.total_paid);
+            $id('acct-hashrate').textContent = fmtGps(a.hashrate_gps || 0);
+            $id('acct-status').textContent = a.is_online ? 'Online ⛏' : 'Offline';
+            $id('acct-status').style.color = a.is_online ? 'var(--ok)' : '';
+            $id('acct-last-seen').textContent = fmtWhen(a.last_seen_at);
+            $id('acct-shares').textContent = Number(a.shares && a.shares.count || 0).toLocaleString('en-US');
+            $id('acct-last-share').textContent = fmtWhen(a.shares && a.shares.last_share_at);
+            $id('acct-pending').textContent = (a.pending_withdrawals || 0) + ' (max 1 per address)';
+            $id('acct-min').textContent = fmtGrin(a.effective_min_payout != null ? a.effective_min_payout : a.min_withdrawal);
+            $id('acct-since').textContent = fmtWhen(a.created_at);
+
+            const lamp = $id('acct-lamp');
+            lamp.style.display = '';
+            lamp.className = 'master-lamp' + (a.is_online ? '' : ' warn');
+            $id('acct-lamp-text').textContent = a.is_online ? 'Miner online' : 'Miner offline';
+
+            $id('acct-pool-min').textContent = Number(a.min_withdrawal || 0).toFixed(1);
+            $id('acct-min-payout-input').value = (a.min_payout != null) ? a.min_payout : '';
+            $id('acct-ip-hint').textContent = a.has_recorded_ip
+                ? 'A mining IP is on record for this address.'
+                : 'No mining IP recorded yet — connect a miner first, then settings unlock.';
+
+            const canWithdraw = (a.balance || 0) >= (a.effective_min_payout != null ? a.effective_min_payout : a.min_withdrawal || 0) && !a.pending_withdrawals;
+            $id('acct-withdraw').disabled = !canWithdraw;
+
+            renderPending(a.pending_withdrawal);
+        }
+
+        // ── Pending payout strip (one-pending-per-address slot) ────────────
+        const PENDING_LABEL = {
+            tor_checking: 'sending over Tor now…',
+            tor_sending: 'sending over Tor now…',
+            retry_scheduled: 'wallet unreachable — parked for retry',
+            slatepack_pending: 'awaiting your response slatepack'
+        };
+        function renderPending(p) {
+            const strip = $id('acct-pending-strip');
+            const cancelBtn = $id('acct-pending-cancel');
+            setMsg($id('acct-cancel-msg'), '', true);
+            if (!p) {
+                strip.style.display = 'none';
+                $id('pl-pending').textContent = 'none';
+                return;
+            }
+            const cancellable = p.status === 'retry_scheduled' || p.status === 'slatepack_pending';
+            let text = 'Pending payout #' + p.id + ' · ' + fmtGrin(p.amount) + ' · ' + (p.method || 'tor')
+                     + ' — ' + (PENDING_LABEL[p.status] || p.status);
+            if (p.status === 'retry_scheduled' && p.next_retry_at) text += ' · next attempt ' + fmtWhen(p.next_retry_at);
+            $id('acct-pending-text').innerHTML = escHtml(text).replace('Pending payout', '<b>Pending payout</b>');
+            cancelBtn.style.display = cancellable ? '' : 'none';
+            cancelBtn.dataset.wid = p.id;
+            strip.style.display = 'flex';
+            $id('pl-pending').textContent = '#' + p.id + ' · ' + (p.method || 'tor');
+        }
+
+        async function cancelPending() {
+            if (!currentAddr || isDemo) { if (isDemo) setMsg($id('acct-cancel-msg'), 'Demo account — actions are disabled.', false); return; }
+            const wid = $id('acct-pending-cancel').dataset.wid;
+            const msg = $id('acct-cancel-msg');
+            if (!wid) return;
+            setMsg(msg, 'Cancelling…', true);
             try {
-                const data = await getJson('/api/account/' + encodeURIComponent(addr) + '/balance/log?limit=15');
-                const rows = (data && data.log) || [];
-                tbody.textContent = '';
-                if (!rows.length) {
-                    const tr = document.createElement('tr');
-                    const td = document.createElement('td');
-                    td.colSpan = 4; td.textContent = 'No activity yet';
-                    tr.appendChild(td); tbody.appendChild(tr);
-                    return;
-                }
-                rows.forEach(function (row) {
-                    const tr = document.createElement('tr');
-                    [fmtWhen(row.created_at), String(row.event_type || ''),
-                     Number(row.amount || 0).toFixed(4), Number(row.balance_after || 0).toFixed(4)
-                    ].forEach(function (text, i) {
-                        const td = document.createElement('td');
-                        if (i >= 2) td.className = 'num';
-                        td.textContent = text;
-                        tr.appendChild(td);
-                    });
-                    tbody.appendChild(tr);
+                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw/' + encodeURIComponent(wid) + '/cancel', {
+                    method: 'POST', credentials: 'same-origin'
                 });
+                const json = await r.json().catch(() => null);
+                if (r.ok && json && json.success) {
+                    setMsg(msg, 'Payout #' + wid + ' cancelled — ' + fmtGrin(json.amount) + ' returned to your balance.', true);
+                    lookup();
+                } else {
+                    setMsg(msg, (json && json.error) || 'Cancel failed', false);
+                }
+            } catch (e) { setMsg(msg, 'Cancel failed: ' + e.message, false); }
+        }
+
+        // ── P-01 hashrate chart (Day/Week/Month; retention caps at 100 days) ──
+        const RANGES = {
+            day:   { hours: 24,  bucket: 3600,  note: 'last 24h' },
+            week:  { hours: 168, bucket: 86400, note: 'last 7 days' },
+            month: { hours: 720, bucket: 86400, note: 'last 30 days' }
+        };
+        function renderChart(series) {
+            const r = RANGES[acctRange] || RANGES.day;
+            $id('acct-range-note').textContent = r.note;
+            const has = Array.isArray(series) && series.length > 0;
+            $id('acct-empty-hashrate').style.display = has ? 'none' : 'flex';
+            if (typeof PoolCharts === 'undefined') return;
+            PoolCharts.renderTrendLine('acct-hashrate-chart',
+                (series || []).map(p => ({ t: p.t, v: p.gps })),
+                { label: 'Your hashrate', bucketSeconds: r.bucket, valueFmt: PoolCharts.fmtGps });
+        }
+        async function loadChart() {
+            if (isDemo) { renderChart(DEMO.series(acctRange)); return; }
+            try {
+                const r = RANGES[acctRange] || RANGES.day;
+                const data = await getJson('/api/account/' + encodeURIComponent(currentAddr) + '/hashrate/history?hours=' + r.hours);
+                renderChart((data && data.series) || []);
+            } catch (e) { renderChart([]); }
+        }
+
+        // ── P-03 workers: 10-min + 24h windows merged, LED status ──────────
+        function ledClass(w) {
+            if (w.online) return 'wled on';
+            const day = Math.floor(Date.now() / 1000) - 86400;
+            if ((w.last_share_at || 0) > day) return 'wled dead';
+            return 'wled';
+        }
+        function renderWorkers(w10, w24) {
+            const tbody = $id('acct-workers');
+            const byName = new Map();
+            (w24 || []).forEach(w => byName.set(w.worker_name, {
+                name: w.worker_name, hr10: 0, hr24: w.hashrate_gps || 0,
+                shares: w.share_count || 0, last_share_at: w.last_share_at || 0,
+                online: !!w.online, accepted: w.accepted, rejected: w.rejected, stale: w.stale,
+                stale_pct: w.stale_pct, reject_pct: w.reject_pct
+            }));
+            (w10 || []).forEach(w => {
+                const m = byName.get(w.worker_name) || { name: w.worker_name, hr24: 0, shares: w.share_count || 0 };
+                m.hr10 = w.hashrate_gps || 0;
+                m.online = !!w.online || m.online;
+                m.last_share_at = Math.max(m.last_share_at || 0, w.last_share_at || 0);
+                if (w.accepted != null) { m.accepted = w.accepted; m.rejected = w.rejected; m.stale = w.stale; }
+                if (w.stale_pct != null) m.stale_pct = w.stale_pct;
+                if (w.reject_pct != null) m.reject_pct = w.reject_pct;
+                byName.set(w.worker_name, m);
+            });
+            const ws = [...byName.values()].sort((a, b) => (b.hr24 || 0) - (a.hr24 || 0));
+
+            const online = ws.filter(w => w.online).length;
+            $id('pl-workers').textContent = ws.length ? (online + ' / ' + ws.length) : '0';
+
+            renderWorkerCharts(ws);
+            if (!ws.length) { tbody.innerHTML = '<tr><td colspan="7">No worker activity in the last 24 hours</td></tr>'; return; }
+            const pct = v => v == null ? '—' : Number(v).toFixed(1) + '%';
+            const rate = v => (v > 0 ? fmtGps(v) : '—');
+            tbody.innerHTML = ws.map(w =>
+                '<tr>' +
+                '<td><span class="' + ledClass(w) + '" title="' + (w.online ? 'Online' : 'Offline') + '"></span>' + escHtml(w.name || 'default') + '</td>' +
+                '<td class="num">' + escHtml(rate(w.hr10)) + '</td>' +
+                '<td class="num">' + escHtml(rate(w.hr24)) + '</td>' +
+                '<td class="num">' + Number(w.shares || 0).toLocaleString('en-US') + '</td>' +
+                '<td class="num">' + pct(w.stale_pct) + '</td>' +
+                '<td class="num">' + pct(w.reject_pct) + '</td>' +
+                '<td>' + escHtml(fmtShort(w.last_share_at)) + '</td>' +
+                '</tr>').join('');
+        }
+        async function loadWorkers() {
+            const tbody = $id('acct-workers');
+            if (isDemo) { renderWorkers(DEMO.workers10, DEMO.workers24); return; }
+            tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+            try {
+                const [d10, d24] = await Promise.all([
+                    getJson('/api/account/' + encodeURIComponent(currentAddr) + '/workers?window=10'),
+                    getJson('/api/account/' + encodeURIComponent(currentAddr) + '/workers?window=1440')
+                ]);
+                renderWorkers((d10 && d10.workers) || [], (d24 && d24.workers) || []);
             } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="4">Activity unavailable</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7">Worker data unavailable</td></tr>';
             }
         }
 
+        // Per-worker hashrate bars (10-min rates) + aggregate live share-quality doughnut.
+        function renderWorkerCharts(ws) {
+            ws = Array.isArray(ws) ? ws : [];
+            if (typeof PoolCharts !== 'undefined' && PoolCharts.renderBarChart) {
+                const wrap = $id('acct-workers-chart-wrap');
+                const withRate = ws.filter(w => (Number(w.hr10) || 0) > 0);
+                if (withRate.length) {
+                    wrap.style.display = '';
+                    PoolCharts.renderBarChart('acct-workers-chart',
+                        withRate.map(w => w.name || 'default'),
+                        withRate.map(w => Number(w.hr10) || 0),
+                        { label: 'Hashrate', valueFmt: fmtGps });
+                } else {
+                    wrap.style.display = 'none';
+                }
+            }
+
+            let acc = 0, stl = 0, rej = 0, haveLive = false;
+            ws.forEach(w => {
+                if (w.accepted != null || w.stale != null || w.rejected != null) {
+                    haveLive = true;
+                    acc += Number(w.accepted) || 0;
+                    stl += Number(w.stale) || 0;
+                    rej += Number(w.rejected) || 0;
+                }
+            });
+            const empty = $id('acct-quality-empty');
+            const total = acc + stl + rej;
+            if (!haveLive || total === 0) {
+                empty.style.display = '';
+                $id('q-valid').textContent = $id('q-stale').textContent = $id('q-reject').textContent = '—';
+                return;
+            }
+            empty.style.display = 'none';
+            const pct = v => (v / total * 100).toFixed(1) + '%';
+            $id('q-valid').textContent  = acc.toLocaleString('en-US') + ' (' + pct(acc) + ')';
+            $id('q-stale').textContent  = stl.toLocaleString('en-US') + ' (' + pct(stl) + ')';
+            $id('q-reject').textContent = rej.toLocaleString('en-US') + ' (' + pct(rej) + ')';
+            if (typeof PoolCharts !== 'undefined' && PoolCharts.renderDoughnutChart) {
+                PoolCharts.renderDoughnutChart('acct-quality-chart',
+                    ['Valid', 'Stale', 'Rejected'], [acc, stl, rej],
+                    { colors: ['#3fb950', '#d29922', '#f85149'] });
+            }
+        }
+
+        // ── P-05 earnings table (credits per period × cached spot price) ───
+        function renderEarnings(earn, price) {
+            const p = (price && price.data) || {};
+            const rowsSpec = [
+                ['Last 60 minutes', earn.periods.h1],
+                ['Last 24 hours', earn.periods.h24],
+                ['Last 7 days', earn.periods.d7],
+                ['Last 30 days', earn.periods.d30]
+            ];
+            $id('fx-body').innerHTML = rowsSpec.map(([label, grin]) => {
+                const g = Number(grin) || 0;
+                const btc = (typeof p.btc === 'number') ? (g * p.btc).toFixed(8) : '—';
+                const usd = (typeof p.usd === 'number') ? (g * p.usd).toFixed(2) : '—';
+                return '<tr><td>' + label + '</td><td class="grin">' + g.toFixed(4) + '</td><td>' + btc + '</td><td>' + usd + '</td></tr>';
+            }).join('');
+            $id('in-sum').textContent = 'Σ 30d +' + Number(earn.in_30d || 0).toFixed(2) + ' ツ';
+            $id('out-sum').textContent = 'Σ 30d −' + Number(earn.out_30d || 0).toFixed(2) + ' ツ';
+        }
+        async function loadEarnings() {
+            if (isDemo) { renderEarnings(DEMO.earnings, DEMO.price); return; }
+            try {
+                const [earn, price] = await Promise.all([
+                    getJson('/api/account/' + encodeURIComponent(currentAddr) + '/earnings'),
+                    getJson('/api/public/price').catch(() => null)
+                ]);
+                renderEarnings(earn, price);
+            } catch (e) { /* table keeps placeholders */ }
+        }
+
+        // ── P-06/P-07 split ledgers (server-paged, 20/page) ────────────────
+        const EVENT_LABEL = {
+            'credit/block': 'block reward',
+            'credit/streak': 'streak bonus',
+            'credit/join_bonus': 'join bonus',
+            'credit/prize_award': 'prize',
+            'credit/jackpot': 'jackpot',
+            'credit/admin_inject': 'adjustment',
+            'debit/withdrawal': 'payout',
+            'debit/donation': 'donation',
+            'reversal/withdrawal': 'payout returned',
+            'reversal/block': 'orphan clawback',
+            'reversal/jackpot': 'jackpot clawback'
+        };
+        function eventLabel(row) {
+            return EVENT_LABEL[row.event_type + '/' + row.reference_type] ||
+                   (row.event_type + (row.reference_type ? ' · ' + row.reference_type : ''));
+        }
+        function renderLedger(dir, rows, total) {
+            const tbody = $id('log-' + dir);
+            const st = ledger[dir];
+            st.total = total || 0;
+            tbody.textContent = '';
+            if (!rows.length) {
+                const tr = document.createElement('tr');
+                const td = document.createElement('td');
+                td.colSpan = 4; td.textContent = st.page > 0 ? 'No more entries' : 'No activity yet';
+                tr.appendChild(td); tbody.appendChild(tr);
+            }
+            rows.forEach(row => {
+                const tr = document.createElement('tr');
+                const sign = dir === 'in' ? '+' : '−';
+                [fmtShort(row.created_at), eventLabel(row),
+                 sign + Number(row.amount || 0).toFixed(4), Number(row.balance_after || 0).toFixed(4)
+                ].forEach((text, i) => {
+                    const td = document.createElement('td');
+                    if (i >= 2) td.className = 'num' + (i === 2 ? (dir === 'in' ? ' amt-in' : ' amt-out') : '');
+                    td.textContent = text;
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+            const pages = Math.max(1, Math.ceil(st.total / PAGE_SIZE));
+            $id(dir + '-page-label').textContent = 'Page ' + (st.page + 1) + ' of ' + pages;
+            $id(dir + '-prev').disabled = st.page <= 0;
+            $id(dir + '-next').disabled = st.page >= pages - 1;
+            updateExportLink(dir);
+        }
+        async function loadLedger(dir) {
+            if (isDemo) {
+                const all = DEMO.ledger[dir];
+                const start = ledger[dir].page * PAGE_SIZE;
+                renderLedger(dir, all.slice(start, start + PAGE_SIZE), all.length);
+                return;
+            }
+            const tbody = $id('log-' + dir);
+            tbody.innerHTML = '<tr><td colspan="4">Loading…</td></tr>';
+            try {
+                const data = await getJson('/api/account/' + encodeURIComponent(currentAddr) +
+                    '/balance/log?direction=' + dir + '&limit=' + PAGE_SIZE + '&offset=' + (ledger[dir].page * PAGE_SIZE));
+                renderLedger(dir, (data && data.log) || [], (data && data.total) || 0);
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="4">Ledger unavailable</td></tr>';
+            }
+        }
+        function updateExportLink(dir) {
+            const a = $id(dir + '-export');
+            if (isDemo) { a.href = '#'; return; }
+            const days = $id(dir + '-export-days').value;
+            a.href = '/api/account/' + encodeURIComponent(currentAddr) +
+                '/balance/log?direction=' + dir + '&format=csv' + (days ? '&days=' + days : '');
+        }
+
+        // ── Tor reachability hint ──────────────────────────────────────────
         async function torCheck(addr) {
             const el = $id('acct-tor');
             el.textContent = 'checking…';
@@ -333,10 +887,18 @@
             }
         }
 
+        // ── Mutations (threshold / withdraw / slatepack) ───────────────────
+        function demoBlock(msgEl) {
+            if (!isDemo) return false;
+            setMsg(msgEl, 'Demo account — actions are disabled.', false);
+            return true;
+        }
+
         async function withdraw() {
             if (!currentAddr) return;
             const btn = $id('acct-withdraw');
             const msg = $id('acct-withdraw-msg');
+            if (demoBlock(msg)) return;
             btn.disabled = true;
             setMsg(msg, 'Submitting…', true);
             try {
@@ -349,7 +911,7 @@
                 const json = await r.json().catch(() => null);
                 if (r.ok && json && json.success) {
                     setMsg(msg, 'Payout queued (#' + json.withdrawal_id + ') — it will be sent to your wallet over Tor.', true);
-                    lookup(); // refresh balances + pending count
+                    lookup(); // refresh balances + pending strip
                 } else {
                     setMsg(msg, (json && json.error) || 'Withdrawal failed', false);
                     btn.disabled = false;
@@ -360,103 +922,12 @@
             }
         }
 
-        function escHtml(v) {
-            return String(v == null ? '' : v)
-                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-        }
-
-        // Per-rig breakdown. reject%/stale% only exist for live (connected) workers.
-        async function loadWorkers(addr) {
-            const tbody = $id('acct-workers');
-            tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
-            try {
-                const data = await getJson('/api/account/' + encodeURIComponent(addr) + '/workers?window=10');
-                const ws = (data && data.workers) || [];
-                renderWorkerCharts(ws);
-                if (!ws.length) { tbody.innerHTML = '<tr><td colspan="7">No worker activity in the last 10 minutes</td></tr>'; return; }
-                tbody.innerHTML = ws.map(function (w) {
-                    const pct = function (v) { return v == null ? '—' : Number(v).toFixed(1) + '%'; };
-                    return '<tr>' +
-                        '<td>' + escHtml(w.worker_name) + '</td>' +
-                        '<td class="num">' + escHtml(fmtGps(w.hashrate_gps || 0)) + '</td>' +
-                        '<td class="num">' + Number(w.share_count || 0).toLocaleString('en-US') + '</td>' +
-                        '<td class="num">' + pct(w.stale_pct) + '</td>' +
-                        '<td class="num">' + pct(w.reject_pct) + '</td>' +
-                        '<td>' + escHtml(fmtWhen(w.last_share_at)) + '</td>' +
-                        '<td><span class="badge' + (w.online ? ' badge-online' : '') + '">' + (w.online ? 'Online' : 'Offline') + '</span></td>' +
-                        '</tr>';
-                }).join('');
-            } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="7">Worker data unavailable</td></tr>';
-            }
-        }
-
-        // Per-worker hashrate bar chart + aggregate share-quality doughnut. accepted/stale/
-        // rejected counts exist only for workers with a LIVE session on this box (null otherwise);
-        // we sum the ones that report them and show the doughnut, else a "no live sessions" note.
-        function renderWorkerCharts(ws) {
-            ws = Array.isArray(ws) ? ws : [];
-
-            // Hashrate per rig (bar). Hidden when there's nothing to show.
-            if (typeof PoolCharts !== 'undefined' && PoolCharts.renderBarChart) {
-                const wrap = $id('acct-workers-chart-wrap');
-                const withRate = ws.filter(function (w) { return (Number(w.hashrate_gps) || 0) > 0; });
-                if (withRate.length) {
-                    wrap.style.display = '';
-                    PoolCharts.renderBarChart('acct-workers-chart',
-                        withRate.map(function (w) { return w.worker_name || 'default'; }),
-                        withRate.map(function (w) { return Number(w.hashrate_gps) || 0; }),
-                        { label: 'Hashrate', valueFmt: fmtGps });
-                } else {
-                    wrap.style.display = 'none';
-                }
-            }
-
-            // Aggregate live share quality across rigs that have counters.
-            let acc = 0, stl = 0, rej = 0, haveLive = false;
-            ws.forEach(function (w) {
-                if (w.accepted != null || w.stale != null || w.rejected != null) {
-                    haveLive = true;
-                    acc += Number(w.accepted) || 0;
-                    stl += Number(w.stale) || 0;
-                    rej += Number(w.rejected) || 0;
-                }
-            });
-            const section = $id('acct-quality-section');
-            const empty = $id('acct-quality-empty');
-            section.style.display = '';
-            const total = acc + stl + rej;
-            if (!haveLive || total === 0) {
-                empty.style.display = '';
-                $id('q-valid').textContent = $id('q-stale').textContent = $id('q-reject').textContent = '—';
-                return;
-            }
-            empty.style.display = 'none';
-            const pct = function (v) { return (v / total * 100).toFixed(1) + '%'; };
-            $id('q-valid').textContent  = acc.toLocaleString('en-US') + ' (' + pct(acc) + ')';
-            $id('q-stale').textContent  = stl.toLocaleString('en-US') + ' (' + pct(stl) + ')';
-            $id('q-reject').textContent = rej.toLocaleString('en-US') + ' (' + pct(rej) + ')';
-            if (typeof PoolCharts !== 'undefined' && PoolCharts.renderDoughnutChart) {
-                PoolCharts.renderDoughnutChart('acct-quality-chart',
-                    ['Valid', 'Stale', 'Rejected'], [acc, stl, rej],
-                    { colors: ['#3fb950', '#d29922', '#f85149'] });
-            }
-        }
-
-        async function loadAcctChart(addr) {
-            if (typeof PoolCharts === 'undefined') return;
-            try {
-                const data = await getJson('/api/account/' + encodeURIComponent(addr) + '/hashrate/history?hours=24');
-                PoolCharts.renderHashrateChart('acct-hashrate-chart', (data && data.series) || [], { label: 'Your hashrate' });
-            } catch (e) { /* chart stays empty */ }
-        }
-
         async function saveMinPayout() {
             if (!currentAddr) return;
             const msg = $id('acct-min-msg');
+            if (demoBlock(msg)) return;
             const ipProof = $id('acct-ip-proof').value.trim();
-            if (!ipProof) { setMsg(msg, 'Enter a recent mining IP above to verify ownership.', false); return; }
+            if (!ipProof) { setMsg(msg, 'Enter a recent mining IP in the ownership gate above.', false); return; }
             const raw = $id('acct-min-payout-input').value.trim();
             setMsg(msg, 'Saving…', true);
             try {
@@ -477,8 +948,9 @@
         async function slatepackCreate() {
             if (!currentAddr) return;
             const msg = $id('acct-sp-msg');
+            if (demoBlock(msg)) return;
             const ipProof = $id('acct-ip-proof').value.trim();
-            if (!ipProof) { setMsg(msg, 'Enter a recent mining IP above to verify ownership.', false); return; }
+            if (!ipProof) { setMsg(msg, 'Enter a recent mining IP in the ownership gate above.', false); return; }
             const amt = $id('acct-sp-amount').value.trim();
             setMsg(msg, 'Generating encrypted slatepack…', true);
             try {
@@ -502,6 +974,7 @@
         async function slatepackFinalize() {
             if (!currentAddr) return;
             const msg = $id('acct-sp-final-msg');
+            if (demoBlock(msg)) return;
             const wid = $id('acct-sp-finalize').dataset.wid;
             const ipProof = $id('acct-ip-proof').value.trim();
             const resp = $id('acct-sp-response').value.trim();
@@ -532,6 +1005,81 @@
             $id('acct-pay-slatepack-pane').style.display = slatepack ? '' : 'none';
         }
 
+        // ── Demo dataset (address grin1demo…) — explore the page on any pool ──
+        const DEMO = (function () {
+            const now = Math.floor(Date.now() / 1000);
+            function series(range) {
+                const cfg = { day: [96, 900], week: [168, 3600], month: [120, 21600] }[range] || [96, 900];
+                const out = [];
+                for (let i = 0; i < cfg[0]; i++) {
+                    const t = now - (cfg[0] - 1 - i) * cfg[1];
+                    const dip = (i > cfg[0] * 0.45 && i < cfg[0] * 0.58) ? 1.5 : 0;
+                    out.push({ t, gps: Math.max(0.2, 4.8 - dip + Math.sin(i * 0.7) * 0.18 + Math.sin(i * 0.13) * 0.25) });
+                }
+                return out;
+            }
+            const workers24 = [
+                { worker_name: 'ipollo-01', hashrate_gps: 3.18, share_count: 121540, last_share_at: now - 40, online: true, accepted: 121540, stale: 1360, rejected: 300, stale_pct: 0.8, reject_pct: 0.1 },
+                { worker_name: 'ipollo-02', hashrate_gps: 1.64, share_count: 62110, last_share_at: now - 95, online: true, accepted: 60806, stale: 744, rejected: 212, stale_pct: 1.4, reject_pct: 0.4 },
+                { worker_name: 'rack-rig', hashrate_gps: 1.02, share_count: 18432, last_share_at: now - 7 * 3600, online: false, accepted: null, stale: null, rejected: null },
+                { worker_name: 'garage-rig', hashrate_gps: 0, share_count: 557, last_share_at: now - 4 * 86400, online: false, accepted: null, stale: null, rejected: null }
+            ];
+            const workers10 = [
+                { worker_name: 'ipollo-01', hashrate_gps: 3.21, share_count: 41, last_share_at: now - 40, online: true, accepted: 121540, stale: 1360, rejected: 300, stale_pct: 0.8, reject_pct: 0.1 },
+                { worker_name: 'ipollo-02', hashrate_gps: 1.61, share_count: 20, last_share_at: now - 95, online: true, accepted: 60806, stale: 744, rejected: 212, stale_pct: 1.4, reject_pct: 0.4 }
+            ];
+            const logIn = [];
+            let bal = 31.221;
+            for (let i = 0; i < 28; i++) {
+                const amt = (i === 2) ? 2.0 : 1.45 + ((i * 7) % 10) / 100;
+                logIn.push({
+                    created_at: now - 6 * 3600 - i * 7 * 3600,
+                    event_type: 'credit',
+                    reference_type: (i === 2) ? 'jackpot' : 'block',
+                    amount: amt, balance_after: bal
+                });
+                bal = Math.max(0.5, bal - amt);
+            }
+            const logOut = [
+                { created_at: now - 3 * 86400, event_type: 'debit', reference_type: 'withdrawal', amount: 25.0, balance_after: 21.7245 },
+                { created_at: now - 4 * 86400, event_type: 'debit', reference_type: 'donation', amount: 0.742, balance_after: 44.9518 },
+                { created_at: now - 8 * 86400, event_type: 'debit', reference_type: 'withdrawal', amount: 25.0, balance_after: 18.3306 },
+                { created_at: now - 15 * 86400, event_type: 'debit', reference_type: 'withdrawal', amount: 30.0, balance_after: 12.7981 }
+            ];
+            return {
+                summary: {
+                    grin_address: DEMO_ADDR,
+                    balance: 31.221, balance_locked: 3.75, total_paid: 208.5,
+                    pending_withdrawals: 0, pending_withdrawal: null,
+                    is_online: true, last_seen_at: now - 40, created_at: now - 75 * 86400,
+                    shares: { count: 184207, last_share_at: now - 40 },
+                    hashrate_gps: 4.82, min_withdrawal: 25.0, min_payout: null,
+                    effective_min_payout: 25.0, has_recorded_ip: true
+                },
+                series, workers10, workers24,
+                earnings: { periods: { h1: 0.2604, h24: 6.1418, d7: 41.0317, d30: 172.4402 }, in_30d: 174.4402, out_30d: 50.742 },
+                price: { data: { usd: 0.0181, btc: 0.00000028 } },
+                ledger: { in: logIn, out: logOut }
+            };
+        })();
+
+        function renderDemo() {
+            isDemo = true;
+            currentAddr = DEMO_ADDR;   // demo is never saved to localStorage
+            renderSummary(DEMO.summary);
+            $id('acct-view').style.display = '';
+            setMsg($id('acct-msg'), 'Demo account — sample data, no API calls. Actions are disabled.', true);
+            ledger.in.page = 0; ledger.out.page = 0;
+            renderChart(DEMO.series(acctRange));
+            renderWorkers(DEMO.workers10, DEMO.workers24);
+            renderEarnings(DEMO.earnings, DEMO.price);
+            loadLedger('in');
+            loadLedger('out');
+            $id('acct-tor').textContent = '✓ reachable over Tor (demo)';
+            $id('acct-withdraw').disabled = false;
+        }
+
+        // ── Wiring ─────────────────────────────────────────────────────────
         document.addEventListener('DOMContentLoaded', function () {
             $id('acct-lookup').addEventListener('click', lookup);
             $id('acct-addr').addEventListener('keydown', function (e) { if (e.key === 'Enter') lookup(); });
@@ -539,9 +1087,35 @@
             $id('acct-save-min').addEventListener('click', saveMinPayout);
             $id('acct-sp-create').addEventListener('click', slatepackCreate);
             $id('acct-sp-finalize').addEventListener('click', slatepackFinalize);
+            $id('acct-pending-cancel').addEventListener('click', cancelPending);
             $id('acct-pay-tor').addEventListener('change', syncPayMethod);
             $id('acct-pay-slatepack').addEventListener('change', syncPayMethod);
             syncPayMethod();
+
+            // Hashrate range toggle
+            $id('acct-rangebar').addEventListener('click', function (e) {
+                const btn = e.target.closest('.rng-btn');
+                if (!btn || btn.disabled) return;
+                const r = btn.getAttribute('data-range');
+                if (!r || r === acctRange) return;
+                acctRange = r;
+                this.querySelectorAll('.rng-btn').forEach(b => b.classList.toggle('active', b === btn));
+                loadChart();
+            });
+
+            // Ledger pagers + export ranges
+            ['in', 'out'].forEach(function (dir) {
+                $id(dir + '-prev').addEventListener('click', function () {
+                    if (ledger[dir].page > 0) { ledger[dir].page--; loadLedger(dir); }
+                });
+                $id(dir + '-next').addEventListener('click', function () {
+                    ledger[dir].page++; loadLedger(dir);
+                });
+                $id(dir + '-export-days').addEventListener('change', function () { updateExportLink(dir); });
+                $id(dir + '-export').addEventListener('click', function (e) {
+                    if (isDemo) { e.preventDefault(); setMsg($id('acct-msg'), 'Demo account — export is disabled.', false); }
+                });
+            });
 
             // Deep-link support: ?addr=grin1… (e.g. from the miners-stats leaderboard) takes
             // priority over the last-viewed address stashed in localStorage.

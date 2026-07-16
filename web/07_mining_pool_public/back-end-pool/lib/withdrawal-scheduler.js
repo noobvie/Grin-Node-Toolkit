@@ -39,15 +39,60 @@ class WithdrawalScheduler {
   async schedulerLoop() {
     while (this.isRunning) {
       try {
-        await this.processRetryQueue();
-        await this.processTorChecks();
-        await this.processSlatepackExpiry();
+        if (this.isFrozen()) {
+          // Kill-switch engaged (auto by AlertMonitor on a critical money trip, or manual admin).
+          // Skip every OUTBOUND send path; still run slatepack expiry (it only REFUNDS expired
+          // slates back to miners — safe and desirable while frozen).
+          await this.processSlatepackExpiry();
+        } else {
+          await this.processRetryQueue();
+          await this.processTorChecks();
+          await this.processSlatepackExpiry();
+        }
       } catch (err) {
         console.error(`[ERROR] Withdrawal scheduler error: ${err.message}`);
       }
 
       await this.sleep(this.checkInterval);
     }
+  }
+
+  // ─── Payout kill-switch ──────────────────────────────────────────────────────
+  // State lives in payout_control (single row id=1) so it survives restarts and is shared with
+  // the admin API + AlertMonitor. A missing row means "not frozen".
+  isFrozen() {
+    try {
+      const row = this.db.prepare('SELECT frozen FROM payout_control WHERE id = 1').get();
+      return !!(row && row.frozen);
+    } catch (e) { return false; }
+  }
+
+  freeze(reason, by) {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      this.db.prepare(`
+        INSERT INTO payout_control (id, frozen, reason, frozen_by, frozen_at, updated_at)
+        VALUES (1, 1, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET frozen = 1, reason = excluded.reason,
+          frozen_by = excluded.frozen_by, frozen_at = excluded.frozen_at, updated_at = excluded.updated_at
+      `).run(reason || null, by || null, now, now);
+      console.warn(`[${new Date().toISOString()}] ⛔ PAYOUTS FROZEN by ${by || 'unknown'}: ${reason || ''}`);
+      return true;
+    } catch (e) { console.error(`freeze() failed: ${e.message}`); return false; }
+  }
+
+  resume(by) {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      this.db.prepare(`
+        INSERT INTO payout_control (id, frozen, reason, frozen_by, frozen_at, updated_at)
+        VALUES (1, 0, NULL, ?, NULL, ?)
+        ON CONFLICT(id) DO UPDATE SET frozen = 0, reason = NULL, frozen_by = excluded.frozen_by,
+          frozen_at = NULL, updated_at = excluded.updated_at
+      `).run(by || null, now);
+      console.warn(`[${new Date().toISOString()}] ▶ PAYOUTS RESUMED by ${by || 'unknown'}`);
+      return true;
+    } catch (e) { console.error(`resume() failed: ${e.message}`); return false; }
   }
 
   async processRetryQueue() {
@@ -110,10 +155,13 @@ class WithdrawalScheduler {
 
       if (!withdrawal) return;
 
-      const stmt = this.db.prepare(`
-        UPDATE withdrawals SET status = 'tor_checking' WHERE id = ?
-      `);
-      stmt.run(withdrawalId);
+      // Guarded transition: only a row still in retry_scheduled may be picked up. A miner
+      // cancel (or a competing pass) between the retry-queue SELECT and this call would
+      // otherwise be flipped back to tor_checking AFTER its lock was reversed — double-pay.
+      const claimed = this.db.prepare(`
+        UPDATE withdrawals SET status = 'tor_checking' WHERE id = ? AND status = 'retry_scheduled'
+      `).run(withdrawalId);
+      if (claimed.changes !== 1) return;
 
       const eventStmt = this.db.prepare(`
         INSERT INTO withdrawal_events
@@ -494,6 +542,59 @@ class WithdrawalScheduler {
 
     this._creditConfirm(withdrawalId, 'slatepack_pending', 'slatepack finalized + posted');
     return { success: true, withdrawal_id: withdrawalId, status: 'confirmed' };
+  }
+
+  // Miner-initiated cancel: frees the one-pending-per-address slot and returns the locked
+  // amount to spendable balance. Only PARKED states are cancellable — retry_scheduled (Tor
+  // payout waiting hours for its next attempt) and slatepack_pending (miner never returned
+  // the slate). tor_checking/tor_sending are actively being sent and must settle first.
+  // The status transition is a guarded UPDATE inside a transaction, so it can never race the
+  // scheduler (whose pickup is likewise guarded in initiateWithdrawal) into a double-reverse.
+  async cancelWithdrawal(grinAddress, withdrawalId) {
+    const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
+    if (!grinAddress) fail('address required', 400);
+
+    const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
+    if (!w) fail('withdrawal not found', 404);
+    if (w.grin_address !== grinAddress) fail('withdrawal does not belong to this address', 403);
+    if (w.status !== 'retry_scheduled' && w.status !== 'slatepack_pending') {
+      fail(`withdrawal cannot be cancelled while ${w.status} — wait for the current attempt to settle`, 409);
+    }
+
+    const txn = this.db.transaction(() => {
+      const claimed = this.db.prepare(
+        "UPDATE withdrawals SET status = 'cancelled' WHERE id = ? AND status = ?"
+      ).run(withdrawalId, w.status);
+      if (claimed.changes !== 1) fail('withdrawal state changed — refresh and try again', 409);
+
+      this.db.prepare(`
+        INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+        VALUES (?, ?, 'cancelled', 'miner', 'cancelled by miner')
+      `).run(withdrawalId, w.status);
+
+      const before = this.db.prepare(
+        'SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?'
+      ).get(grinAddress);
+      this.db.prepare(
+        'UPDATE miner_accounts SET balance = balance + ?, balance_locked = balance_locked - ?, updated_at = unixepoch() WHERE grin_address = ?'
+      ).run(w.amount, w.amount, grinAddress);
+      this.db.prepare(`
+        INSERT INTO balance_log
+        (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+        VALUES (?, 'reversal', ?, ?, ?, ?, ?, 'withdrawal', ?)
+      `).run(grinAddress, w.amount, before.balance, before.balance + w.amount,
+             before.balance_locked, Math.max(0, before.balance_locked - w.amount), withdrawalId);
+    });
+    txn();
+
+    // Best-effort wallet-side cleanup — a slatepack payout locked wallet outputs at creation.
+    if (w.status === 'slatepack_pending' && this.wallet && w.slate_id) {
+      try { await this.wallet.cancelTx(w.slate_id); }
+      catch (e) { console.warn(`[cancel] cancelTx ${w.slate_id}: ${e.message}`); }
+    }
+
+    console.log(`[${new Date().toISOString()}] Withdrawal ${withdrawalId} cancelled by miner (${w.amount} GRIN returned to ${grinAddress})`);
+    return { success: true, withdrawal_id: withdrawalId, status: 'cancelled', amount: w.amount };
   }
 
   // Cancel + reverse slatepack payouts the miner never completed within the TTL.

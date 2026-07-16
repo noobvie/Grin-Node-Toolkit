@@ -128,10 +128,11 @@
                                 <div class="gauge-block">
                                     <canvas id="g-hash" width="190" height="150" aria-label="Pool hashrate gauge" role="img"></canvas>
                                     <div class="gauge-label">Pool hashrate<br><b class="num" id="g-hash-v">—</b><br><span id="g-hash-avg"></span></div>
+                                    <div class="gauge-peakkey"><i class="pk"></i> 24h peak</div>
                                 </div>
                                 <div class="gauge-block">
-                                    <canvas id="g-share" width="190" height="150" aria-label="Network share gauge" role="img"></canvas>
-                                    <div class="gauge-label">Network share<br><b class="num" id="g-share-v">—</b><br><span id="g-share-luck"></span></div>
+                                    <canvas id="g-share" width="190" height="150" aria-label="Round effort gauge" role="img"></canvas>
+                                    <div class="gauge-label">Round effort<br><b class="num" id="g-share-v">—</b><br><span id="g-share-luck"></span></div>
                                 </div>
                             </div>
                             <div class="readouts">
@@ -157,18 +158,39 @@
                     </div>
                 </div>
 
-                <!-- ═══ P-02 · ANNUNCIATOR: service + region warning lamps ═══ -->
-                <div class="panel"><span class="screws"></span>
-                    <h2 class="panel-title"><span class="tag">P-02</span> Annunciator</h2>
-                    <div class="panel-body">
-                        <div class="annun">
-                            <div class="lamp" id="an-pool">Pool svc<small>…</small></div>
-                            <div class="lamp" id="an-node">Node sync<small>…</small></div>
-                            <div class="lamp" id="an-wallet">Wallet link<small>…</small></div>
-                            <div class="lamp" id="an-stale">High stale<small>&lt; 5%</small></div>
-                            <!-- one lamp per operator-declared region, rebuilt on each poll -->
-                            <div id="an-regions" style="display:contents"></div>
-                            <div class="lamp" id="an-orphan">Orphan det.<small>none</small></div>
+                <!-- ═══ Right column: annunciator + gateway array stacked so the
+                     shorter lamp panels together balance P-01's height ═══ -->
+                <div class="deck-col">
+                    <!-- ═══ P-02 · ANNUNCIATOR: service + integrity warning lamps ═══
+                         Grouped by category (Services / Integrity); region lamps moved
+                         out to P-02b. Services is an even 4-wide row. -->
+                    <div class="panel"><span class="screws"></span>
+                        <h2 class="panel-title"><span class="tag">P-02</span> Annunciator</h2>
+                        <div class="panel-body">
+                            <div class="annun">
+                                <div class="annun-cat">Services</div>
+                                <div class="lamp" id="an-pool">Pool svc<small>…</small></div>
+                                <div class="lamp" id="an-node">Node sync<small>…</small></div>
+                                <div class="lamp" id="an-wallet">Wallet link<small>…</small></div>
+                                <div class="lamp" id="an-payouts">Payouts<small>…</small></div>
+                                <div class="annun-cat">Integrity</div>
+                                <div class="lamp" id="an-stale">High stale<small>&lt; 5%</small></div>
+                                <div class="lamp" id="an-orphan">Orphan det.<small>none</small></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ═══ P-02b · GATEWAY ARRAY: per-region gateway health ═══
+                         One lamp per operator-declared region (rebuilt each poll by
+                         reactor-dashboard.js). Grows with region count and stretches to
+                         fill the column so it balances P-01. Health framing (status +
+                         miner count), distinct from P-05's "connect here" list. -->
+                    <div class="panel gateways-panel"><span class="screws"></span>
+                        <h2 class="panel-title"><span class="tag">P-02b</span> Gateway array <span class="right">region health</span></h2>
+                        <div class="panel-body">
+                            <div class="gateways" id="an-regions">
+                                <div class="gateways-empty">LOADING…</div>
+                            </div>
                         </div>
                     </div>
                 </div>

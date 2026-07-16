@@ -120,8 +120,37 @@ body {
 .panel-title .pt-clock { color: var(--info); font-variant-numeric: tabular-nums; }
 .panel-body { padding: 18px 22px 20px; }
 
+/* ── right column: P-02 annunciator + P-02b gateway array stacked ─────────
+   The two short lamp panels stack in one grid cell; the cell stretches to
+   P-01's height (overriding the row's align-items:start) and the gateway panel
+   flex-grows to absorb the slack — so the right column no longer leaves a dead
+   band below the annunciator. */
+.deck-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.deck-row.main .deck-col { align-self: stretch; }
+.deck-row.main .gateways-panel { flex: 1 1 auto; display: flex; flex-direction: column; }
+.gateways-panel .panel-body { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+
 /* ── annunciator grid ───────────────────────────────────────────────────── */
 .annun { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
+/* Category divider label — spans the full lamp grid, engraved-plate styling. */
+.annun-cat {
+  grid-column: 1 / -1; margin-top: 6px; padding-left: 2px;
+  font-family: var(--mono); font-size: 9px; font-weight: 700;
+  letter-spacing: .2em; text-transform: uppercase; color: var(--text-mute);
+}
+.annun-cat:first-child { margin-top: 0; }
+/* Integrity has 2 lamps — span each across 2 of the 4 columns so the row fills evenly
+   instead of leaving a ragged gap. Targeted by id (not a class) because setLamp() rebuilds
+   each lamp's className every poll, which would wipe a modifier class. */
+#an-stale, #an-orphan { grid-column: span 2; }
+
+/* ── gateway array (P-02b): region health lamps, 2-wide for larger targets ── */
+.gateways { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; }
+.gateways-empty {
+  grid-column: 1 / -1; text-align: center; padding: 18px 8px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--text-mute);
+}
 .lamp {
   border: 1px solid var(--rx-line); border-radius: 5px; text-align: center;
   padding: 10px 8px 9px; font-family: var(--mono); font-size: 10.5px;
@@ -162,6 +191,15 @@ body {
   text-transform: uppercase; color: var(--text-dim); margin-top: 4px; line-height: 1.6;
 }
 .gauge-label b { color: var(--accent); text-shadow: 0 0 8px var(--glow); font-size: 12.5px; }
+/* Legend for the hashrate dial's info-blue 24h-peak reference tick (matches --info). */
+.gauge-peakkey {
+  font-family: var(--mono); font-size: 8.5px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--text-mute); margin-top: 3px;
+}
+.gauge-peakkey .pk {
+  display: inline-block; width: 2px; height: 8px; margin-right: 4px; vertical-align: -1px;
+  background: var(--info); box-shadow: 0 0 6px var(--info);
+}
 /* Full-width 3-column strip under the gauges (6 readouts → 2 rows); minmax(0,1fr) lets each
    tile shrink to its track, and each .counter is overflow:hidden + container-type so labels
    clip and values self-shrink instead of overflowing. Drops to 2 columns on phones. */

@@ -100,7 +100,7 @@
     c.scale(dpr, dpr);
 
     var g = {
-      min: 0, max: 1, ticks: 8, unit: '', zones: [],
+      min: 0, max: 1, ticks: 8, unit: '', zones: [], marker: null,
       target: 0, cur: 0, wob: 0, running: false
     };
     Object.assign(g, opts || {});
@@ -139,6 +139,18 @@
           c.fillText(txt, cx + Math.cos(a) * (R - 22), cy + Math.sin(a) * (R - 22));
         }
       }
+      // reference marker (e.g. 24h hashrate peak) — a bright info-blue pip on the rim.
+      // It's a reference, not a danger line: higher hashrate is good, so no red at top.
+      if (g.marker != null && g.marker >= g.min && g.marker <= g.max) {
+        var ma = A((g.marker - g.min) / (g.max - g.min || 1));
+        c.save();
+        c.strokeStyle = C.info; c.lineWidth = 2.4; c.lineCap = 'round';
+        c.beginPath();
+        c.moveTo(cx + Math.cos(ma) * (R + 3), cy + Math.sin(ma) * (R + 3));
+        c.lineTo(cx + Math.cos(ma) * (R - 11), cy + Math.sin(ma) * (R - 11));
+        c.stroke();
+        c.restore();
+      }
       // needle
       var na = A(g.cur);
       c.save();
@@ -169,6 +181,7 @@
       if (zones) g.zones = zones;
       if (ticks) g.ticks = ticks;
     };
+    g.setMarker = function (v) { g.marker = v; };
     g.setValue = function (v) {
       g.target = (v - g.min) / (g.max - g.min || 1);
       if (REDUCED) { g.cur = g.target; render(); }
@@ -179,11 +192,14 @@
     return g;
   }
 
-  var gaugeHash = Gauge('g-hash', { min: 0, max: 2, ticks: 8, unit: 'kG/s' });
-  // Pool's share of the network hashrate. Auto-scaled per reading (like the hashrate
-  // dial) with a 5% floor so a small pool's needle is still readable; the big numeral
-  // always carries the honest value. Higher is better → single accent zone, no warn.
-  var gaugeShare = Gauge('g-share', { min: 0, max: 5, ticks: 8, unit: '%' });
+  // Pool hashrate. Stable 0–200 G/s dial that auto-bumps only when the live value or the
+  // 24h peak would exceed it (never pins); higher is better → single accent zone (no red
+  // danger band), with an info-blue tick marking the 24h peak as a reference.
+  var gaugeHash = Gauge('g-hash', { min: 0, max: 200, ticks: 8, unit: 'G/s' });
+  // Round effort — current round's Σ share-diff / one block's network diff, live. <100% =
+  // nominal (green), 100–150% = running long (amber), >150% = overdue/unlucky (red). The
+  // big numeral carries the true %; luck (100-block) + network share ride the sub-line.
+  var gaugeShare = Gauge('g-share', { min: 0, max: 200, ticks: 8, unit: '%' });
 
   // ── LED bargraph (share quality) ──────────────────────────────────────────
   var LED_SEGS = 40;
@@ -363,6 +379,7 @@
   // ── data loaders ──────────────────────────────────────────────────────────
   var nodeHeight = 0;      // for fuel-rod confirmation depth
   var BASE_PORT = '';      // pool default stratum port (regions may omit one)
+  var hashPeakGps = 0;     // 24h peak (from the P-04 history series) → hashrate dial marker
   var DEFAULT_URI = '';    // operator's configured stratum host:port (zero-region fallback)
 
   async function loadPoolInfo() {
@@ -389,9 +406,14 @@
         var unit = g1[1] || 'G/s';
         var div = unit === 'MG/s' ? 1e6 : unit === 'kG/s' ? 1e3 : 1;
         var val = gps / div;
-        // Dial floor keeps an idle pool's scale sane (100 G/s or 1 kG/s minimum).
-        var max = niceCeil(Math.max(val * 1.25, unit === 'G/s' ? 100 : 1));
+        var peak = hashPeakGps / div;
+        // Stable 200 G/s dial (floor); grows only when the live value OR the 24h peak
+        // would exceed it, so the needle never pins and the peak tick always fits.
+        var floor = unit === 'G/s' ? 200 : 1;
+        var max = Math.max(floor, niceCeil(Math.max(val, peak) * 1.15));
+        // Higher hashrate is good → one accent sweep, no red danger band at the top.
         gaugeHash.setScale(0, max, unit, [[0, max, C.accent]], 8);
+        gaugeHash.setMarker(peak > 0 ? peak : null);
         gaugeHash.setValue(val);
       }
     } catch (e) { /* gauge keeps last position */ }
@@ -436,15 +458,20 @@
         setText('pl-nethash', gh[0] + ' ' + gh[1]);
       }
       setText('pl-netdiff', e.network_difficulty != null ? fmtCompact(e.network_difficulty) : '—');
-      setText('g-share-v', share != null ? fmtShare(share) : '—');
-      setText('g-share-luck', e.luck_100_pct != null
-        ? 'luck ' + e.luck_100_pct.toFixed(0) + '% · ' + (e.luck_sample || 0) + ' blk'
-        : 'luck — · no data yet');
+      // Round-effort gauge: live current-round effort. The 100-block luck + network share
+      // (both still useful, but not gauge-shaped) ride the sub-line under the numeral.
+      var effort = e.round_effort_pct != null ? e.round_effort_pct : 0;
+      setText('g-share-v', e.round_effort_pct != null ? Math.round(effort) + '%' : '—');
+      setText('g-share-luck',
+        (e.luck_100_pct != null ? 'luck ' + e.luck_100_pct.toFixed(0) + '%' : 'luck —') +
+        ' · ' + (share != null ? 'share ' + fmtShare(share) : 'share —'));
       if (gaugeShare) {
-        var v = share != null ? share : 0;
-        var max = niceCeil(Math.max(v * 1.25, 5));
-        gaugeShare.setScale(0, max, '%', [[0, max, C.accent]], 8);
-        gaugeShare.setValue(Math.min(v, max));
+        // Stable 0–200% dial (bumps if a very unlucky round runs past it). Zones:
+        // 0–100 nominal, 100–150 running long, 150→top overdue.
+        var emax = Math.max(200, niceCeil(effort * 1.1));
+        gaugeShare.setScale(0, emax, '%',
+          [[0, 100, C.accent], [100, 150, C.warn], [150, emax, C.danger]], 8);
+        gaugeShare.setValue(Math.min(effort, emax));
       }
       setText('c-last', e.last_block_at ? timeAgo(e.last_block_at) : '—');
       setText('mi-core-share', 'NET-SHARE ' + (share != null ? fmtShare(share) : '—'));
@@ -573,8 +600,16 @@
         var d = document.createElement('div');
         d.textContent = 'NO PAYOUTS YET — first payout prints here';
         tty.appendChild(d);
+        // A quiet/new pool with no payouts yet is normal — neutral, never an alarm.
+        setLamp('an-payouts', '', 'none yet');
         return;
       }
+      // Payouts lamp: last payout age (green = auto-pay is flowing). Info, not an alarm —
+      // gaps between payouts are expected when miners haven't crossed the min payout.
+      var newestPay = payments.reduce(function (m, p) {
+        return Math.max(m, p.confirmed_at || p.created_at || 0);
+      }, 0);
+      setLamp('an-payouts', newestPay ? 'ok' : '', newestPay ? timeAgo(newestPay) + ' ago' : 'none yet');
       // Print oldest → newest so the freshest line sits at the bottom (printer style).
       payments.slice().reverse().forEach(function (p) {
         var ts = p.confirmed_at || p.created_at || 0;
@@ -597,13 +632,17 @@
       var d2 = document.createElement('div');
       d2.textContent = 'PAYMENT DATA UNAVAILABLE';
       tty.appendChild(d2);
+      setLamp('an-payouts', 'warn', 'no data');
     }
   }
 
   async function loadHistory() {
     try {
       var data = await Auth.fetch('/api/pool/hashrate/history?hours=24');
-      chart.setSeries((data && data.series) || []);
+      var series = (data && data.series) || [];
+      chart.setSeries(series);
+      // 24h peak feeds the hashrate dial's reference tick (base G/s; the dial converts).
+      hashPeakGps = series.reduce(function (m, p) { return Math.max(m, Number(p.gps) || 0); }, 0);
     } catch (e) { /* chart keeps last trace */ }
   }
 
@@ -687,11 +726,17 @@
       var regions = (data && Array.isArray(data.regions)) ? data.regions : [];
       regions = regions.filter(function (r) { return r.stratum_url && r.is_active !== false; });
 
-      // Region lamps in the annunciator (rebuilt on each poll, capped at 6).
+      // Gateway array (P-02b): one lamp per region, rebuilt each poll (capped at 8).
       var lampHost = $('an-regions');
       if (lampHost) {
         lampHost.textContent = '';
-        regions.slice(0, 6).forEach(function (r) {
+        if (regions.length === 0) {
+          var empty = document.createElement('div');
+          empty.className = 'gateways-empty';
+          empty.textContent = 'NO REGIONS ONLINE';
+          lampHost.appendChild(empty);
+        }
+        regions.slice(0, 8).forEach(function (r) {
           var lamp = document.createElement('div');
           var st = r.status === 'online' ? 'ok' : r.status === 'offline' ? 'alarm' : '';
           lamp.className = 'lamp' + (st ? ' ' + st : '');

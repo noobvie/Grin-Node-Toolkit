@@ -592,6 +592,10 @@ footer a:hover { color: var(--accent); }
 }
 .ad-unit { display: inline-block; max-width: 100%; }
 .ad-unit img { max-width: 100%; height: auto; display: block; border-radius: 8px; }
+/* Rotation (ads.js): slots with 2+ ads cycle them one at a time; the incoming ad fades in. */
+.ad-unit--hidden { display: none; }
+.ad-unit--rotor:not(.ad-unit--hidden) { animation: ad-fade-in .6s ease; }
+@keyframes ad-fade-in { from { opacity: 0; } to { opacity: 1; } }
 .ad-slot--header { margin-top: 8px; }
 .ad-slot--footer { margin-bottom: 8px; }
 /* In-content sits inside the page flow; sidebar is a narrower right-aligned rail on wide screens. */

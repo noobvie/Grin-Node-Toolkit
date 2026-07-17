@@ -153,7 +153,7 @@
       if (canonical) ld.url = canonical;
       if (ogImage) ld.logo = ogImage;
       var social = (cfg.branding && cfg.branding.social) || {};
-      var sameAs = [social.twitter, social.discord, social.telegram, social.website].filter(Boolean);
+      var sameAs = [social.twitter, social.discord, social.telegram, social.nostr, social.website].filter(Boolean);
       if (sameAs.length) ld.sameAs = sameAs;
 
       var s = document.createElement('script');

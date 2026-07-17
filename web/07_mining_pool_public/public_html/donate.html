@@ -1,102 +1,245 @@
 <!DOCTYPE html>
 <html lang="en" data-page="donate">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Donate — Support the Prize Pool</title>
-    <meta name="description" content="Two ways to support the mining pool prize pool: donate a slice of your mining payouts, or send a one-off donation by Slatepack.">
-    <meta name="robots" content="index, follow, max-image-preview:large">
-    <meta property="og:type" content="website">
-    <meta property="og:title" content="Donate — Support the Prize Pool | GRINIUM">
-    <meta property="og:description" content="Two ways to support the mining pool prize pool: donate a slice of your mining payouts, or send a one-off donation by Slatepack.">
-    <meta property="og:url" content="https://pool.grin.money/donate.html">
-    <meta property="og:site_name" content="GRINIUM Mining Pool">
-    <meta property="og:image" content="https://pool.grin.money/images/og-image.svg">
-    <meta name="twitter:card" content="summary">
-    <meta name="twitter:title" content="Donate — Support the Prize Pool">
-    <meta name="twitter:image" content="https://pool.grin.money/images/twitter-card.svg">
-    <link rel="canonical" href="https://pool.grin.money/donate.html">
-    <link rel="stylesheet" href="/css/dashboard.css">
-    <style>
-        .container { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem; }
-        .lead { color: var(--t-dim, #a0aec0); margin-bottom: 1.5rem; }
-        .card { background: var(--t-card, #11160d); border: 1px solid var(--t-border, #2d3748); border-radius: 10px; padding: 1.5rem; margin-bottom: 1.5rem; }
-        .card h3 { color: var(--t-heading, var(--t-accent, #b8e600)); margin-bottom: .75rem; font-size: 1.2rem; }
-        .card p { margin-bottom: .6rem; }
-        .pill { display: inline-block; background: var(--t-chip-bg, rgba(255,255,255,.08)); border: 1px solid var(--t-chip-border, var(--t-border, #2d3748)); border-radius: 999px; padding: .15rem .7rem; font-size: .8rem; color: var(--t-dim, #a0aec0); margin-bottom: .75rem; }
-        code, .mono {
-            background: var(--t-chip-bg, rgba(255,255,255,.06)); border: 1px solid var(--t-chip-border, var(--t-border, #2d3748));
-            border-radius: 6px; padding: .15rem .5rem; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; word-break: break-all; color: var(--t-text, #e0e0e0);
-        }
-        .addr-box { display: none; }
-        .addr-box .mono { display: block; padding: .8rem; margin-top: .5rem; font-size: .9rem; }
-        .copy-btn { margin-top: .6rem; padding: .45rem 1rem; cursor: pointer; background: var(--t-accent, #b8e600); color: var(--t-on-accent, #080b07); border: none; border-radius: 6px; font-weight: 700; }
-        table { width: 100%; border-collapse: collapse; margin-top: .5rem; }
-        th, td { padding: .45rem .6rem; text-align: left; border-bottom: 1px solid var(--t-border, #2d3748); font-size: .88rem; }
-        th { color: var(--t-dim, #a0aec0); font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
-        .ok { color: var(--t-accent, #b8e600); }
-        .no { color: var(--t-dim, #a0aec0); }
-        .prize { color: var(--t-accent, #b8e600); font-weight: 700; }
-        ul { margin: .3rem 0 .3rem 1.2rem; }
-        .fund-list li { margin-bottom: .25rem; }
-    </style>
-    <link rel="stylesheet" href="/css/themes.css">
+  <!-- ===== ESSENTIAL META TAGS ===== -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <meta name="language" content="English">
+  <meta name="author" content="GRINIUM Mining Pool">
+
+  <!-- ===== DESCRIPTION & KEYWORDS ===== -->
+  <title>Donate — Support the Prize Pool | GRINIUM Mining Pool</title>
+  <meta name="description" content="Support the GRINIUM mining pool prize pool: donate a slice of your mining payouts with a donate worker tag, or send a one-off Slatepack donation. See the donor wall of supporters.">
+  <meta name="keywords" content="grin donation, mining pool prize pool, donate mining payouts, slatepack donation, grin pool giveaway, donor wall">
+
+  <!-- ===== OPEN GRAPH ===== -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Donate — Support the Prize Pool | GRINIUM">
+  <meta property="og:description" content="Donate a slice of your mining payouts or send a one-off Slatepack gift. Donations fund join bonuses, jackpots, streaks and lotteries.">
+  <meta property="og:url" content="https://pool.grin.money/donate.html">
+  <meta property="og:site_name" content="GRINIUM Mining Pool">
+  <meta property="og:image" content="https://pool.grin.money/images/og-image.svg">
+  <meta property="og:locale" content="en_US">
+
+  <!-- ===== TWITTER CARD ===== -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Donate — Support the Prize Pool">
+  <meta name="twitter:description" content="Donate a payout slice or a one-off Slatepack gift — fund the pool's jackpots, streaks and lotteries.">
+  <meta name="twitter:image" content="https://pool.grin.money/images/twitter-card.svg">
+  <meta name="twitter:domain" content="pool.grin.money">
+
+  <!-- ===== CANONICAL ===== -->
+  <link rel="canonical" href="https://pool.grin.money/donate.html">
+
+  <!-- ===== ADDITIONAL SEO ===== -->
+  <meta name="theme-color" content="#07090c">
+  <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+  <link rel="apple-touch-icon" href="/images/apple-touch-icon.svg">
+  <link rel="manifest" href="/manifest.json">
+
+  <!-- ===== JSON-LD STRUCTURED DATA ===== -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "name": "Donate — Support the Prize Pool",
+    "description": "Donate a slice of your mining payouts or a one-off Slatepack gift to fund the pool's community prize pool.",
+    "url": "https://pool.grin.money/donate.html",
+    "isPartOf": {
+      "@type": "WebSite",
+      "name": "GRINIUM Mining Pool",
+      "url": "https://pool.grin.money"
+    }
+  }
+  </script>
+
+  <link rel="stylesheet" href="/css/dashboard.css">
+  <link rel="stylesheet" href="/css/themes.css">
+  <link rel="stylesheet" href="/css/reactor.css">
+  <style>
+    /* Full miner address, clickable → account lookup (mirrors miners-stats.html). */
+    .addr-link {
+      font-family: var(--mono, ui-monospace, monospace);
+      font-size: 12px;
+      word-break: break-all;
+      color: var(--accent, #58a6ff);
+      text-decoration: none;
+    }
+    .addr-link:hover { text-decoration: underline; }
+
+    /* Worker-name example rows: the ok/no verdict colours. */
+    .ok { color: var(--accent, #7cb342); }
+    .no { color: var(--text-dim, #9aa4b2); }
+
+    .panel-body code {
+      padding: .1rem .45rem; border-radius: 5px; word-break: break-all;
+      font-family: var(--mono, ui-monospace, 'SF Mono', Menlo, Consolas, monospace);
+      font-size: .85em; color: var(--text, #e6edf3);
+      background: var(--panel-2, rgba(255,255,255,.05));
+      border: 1px solid var(--border, rgba(255,255,255,.10));
+    }
+
+    /* Slatepack donation address + copy button. */
+    .donate-addr {
+      display: block; padding: .8rem; margin-top: .5rem; font-size: .9rem;
+      font-family: var(--mono, ui-monospace, monospace); word-break: break-all;
+      background: var(--panel-2, rgba(255,255,255,.04));
+      border: 1px solid var(--border, rgba(255,255,255,.10)); border-radius: 6px;
+      color: var(--text, #e6edf3);
+    }
+    .copy-btn {
+      margin-top: .6rem; padding: .45rem 1rem; cursor: pointer;
+      background: var(--accent, #7cb342); color: #07090c;
+      border: none; border-radius: 6px; font-weight: 700;
+    }
+
+    /* ── Donor wall: vcard grid ────────────────────────────────────────────── */
+    .donor-grid {
+      display: grid; gap: 10px;
+      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    }
+    .donor-card {
+      position: relative; padding: 12px 14px; border-radius: 8px;
+      background: var(--panel-2, rgba(255,255,255,.04));
+      border: 1px solid var(--border, rgba(255,255,255,.10));
+    }
+    .donor-rank {
+      position: absolute; top: 10px; right: 12px;
+      font-family: var(--mono, monospace); font-size: 12px;
+      color: var(--text-mute, #6b7480);
+    }
+    .donor-total {
+      margin-top: 6px; font-family: var(--mono, monospace);
+      font-size: 18px; font-weight: 700; color: var(--accent, #7cb342);
+    }
+    .donor-total small { font-size: 11px; font-weight: 400; color: var(--text-dim, #9aa4b2); }
+    .donor-badge {
+      display: inline-block; margin-top: 6px; padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; letter-spacing: .05em; text-transform: uppercase;
+      border: 1px solid var(--border, rgba(255,255,255,.10));
+    }
+    .donor-badge.on  { color: var(--accent, #7cb342); border-color: var(--accent, #7cb342); }
+    .donor-badge.off { color: var(--text-mute, #6b7480); }
+    .donor-meta {
+      margin-top: 8px; font-size: 11.5px; line-height: 1.6;
+      color: var(--text-dim, #9aa4b2); font-family: var(--mono, monospace);
+    }
+    .donor-meta b { color: var(--text, #e6edf3); font-weight: 600; }
+    .donor-empty {
+      padding: 1.2rem; text-align: center; font-family: var(--mono, monospace);
+      font-size: 12px; letter-spacing: .12em; color: var(--text-mute, #6b7480);
+    }
+
+    /* Where-donations-go fund list. */
+    .fund-list { margin: .3rem 0 .3rem 1.2rem; }
+    .fund-list li { margin-bottom: .35rem; }
+    .pill {
+      display: inline-block; margin-bottom: .6rem; padding: .15rem .7rem;
+      border-radius: 999px; font-size: .8rem; color: var(--text-dim, #9aa4b2);
+      background: var(--panel-2, rgba(255,255,255,.04));
+      border: 1px solid var(--border, rgba(255,255,255,.10));
+    }
+    .panel-note { margin-top: .75rem; color: var(--text-dim, #9aa4b2); font-size: .85rem; }
+  </style>
 </head>
 <body>
 
     <!-- header injected by /js/public-shell.js -->
 
-    <div class="container">
-        <h2 class="page-title">💚 Support the Prize Pool</h2>
-        <p class="lead">Donations fund the pool's <strong>prize pool</strong> — the shared pot that pays join bonuses,
-            block-finder jackpots, loyalty streaks and the weekly &amp; special-occasion lottery. Current size:
-            <span class="prize" data-brand="prize-pool">—</span></p>
+    <div class="wrap">
+        <!-- Sidebar ad slot (filled by /js/ads.js; hidden if empty) -->
+        <div class="ad-slot ad-slot--sidebar" data-ad-slot="sidebar" style="display:none;"></div>
 
-        <div class="card">
-            <span class="pill">Option 1 · for miners</span>
-            <h3>Donate a slice of your payouts</h3>
-            <p>No account, no extra step. Just name one of your workers <code>donate&lt;N&gt;</code> — where
-                <strong>N is the percentage</strong> of your payouts (0–100) you want to give to the prize pool.</p>
-            <p>Examples (the <code>donate</code> tag can be the whole worker name or a <code>-</code>/<code>_</code> suffix):</p>
-            <table>
-                <thead><tr><th>Worker name</th><th>Result</th></tr></thead>
-                <tbody>
-                    <tr><td><code>grin1…address.donate10</code></td><td class="ok">Donate 10% of your payouts</td></tr>
-                    <tr><td><code>grin1…address.rig01-donate5</code></td><td class="ok">Worker “rig01”, donate 5%</td></tr>
-                    <tr><td><code>grin1…address.donate0</code></td><td class="no">0% — turn a donation back off</td></tr>
-                    <tr><td><code>grin1…address.rig01</code></td><td class="no">No donation (normal worker)</td></tr>
-                    <tr><td><code>donate101</code>, <code>donate-1</code>, <code>donatexx</code></td><td class="no">Ignored — treated as a normal worker name, donates nothing</td></tr>
-                </tbody>
-            </table>
-            <p style="margin-top:.75rem;color:var(--t-dim,#a0aec0);font-size:.85rem;">Only <code>donate0</code>–<code>donate100</code>
-                donate. Anything out of range or mistyped is safely treated as an ordinary worker name — a typo can never
-                donate more than you meant. The donation is applied to each payout as it's calculated.</p>
+        <!-- ═══ Operator strip: heading + intent ═══ -->
+        <div class="deck-head">
+            <div>
+                <h1>💚 Support the Prize Pool</h1>
+                <div class="sub">Donations fund join bonuses, jackpots, streaks &amp; lotteries <span class="dim">(all times UTC)</span></div>
+            </div>
         </div>
 
-        <div class="card addr-box" data-brand-show="donation">
-            <span class="pill">Option 2 · for anyone</span>
-            <h3>Donate directly by Slatepack</h3>
-            <p>Not mining, or want to give a one-off gift? Send any amount to the pool's donation address. The operator
-                adds received donations to the prize pool.</p>
-            <div class="mono" data-brand="donation-address" id="donation-address"></div>
-            <button class="copy-btn" onclick="copyAddress()">Copy address</button>
+        <!-- ═══ Spec placard: prize pool + donor figures ═══ -->
+        <div class="placard" aria-label="Prize pool and donor figures">
+            <span><i>Prize pool now</i><b data-brand="prize-pool">—</b></span>
+            <span><i>Donated all-time</i><b id="dn-total">—</b></span>
+            <span><i>Donors</i><b id="dn-count">—</b></span>
+            <span><i>Currently donating</i><b id="dn-active">—</b></span>
         </div>
 
-        <div class="card">
-            <h3>Where your donation goes</h3>
-            <ul class="fund-list">
-                <li>🎁 <strong>Join bonus</strong> — a one-time welcome for new miners who reach their first payout.</li>
-                <li>💥 <strong>Block-finder jackpot</strong> — a flat bonus to whoever solves a block (small miners included).</li>
-                <li>🔥 <strong>Loyalty streak</strong> — a small bonus for mining consistently, day after day.</li>
-                <li>🎉 <strong>Lottery</strong> — weekly and special-occasion draws, with an equal-chance pot so small miners can win too.</li>
-            </ul>
-            <p style="margin-top:.5rem;"><a class="nav-link" href="fortune-board.html" style="text-decoration:underline;">See every prize ever paid → Fortune Board</a></p>
+        <div class="deck">
+
+            <!-- ═══ D-01 · DONATE A SLICE OF YOUR PAYOUTS ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">D-01</span> Donate a slice of your payouts
+                    <span class="right">for miners — no account, no extra step</span></h2>
+                <div class="panel-body">
+                    <span class="pill">Option 1 · for miners</span>
+                    <p>Just name one of your workers <code>donate&lt;N&gt;</code> — where <strong>N is the
+                        percentage</strong> of your payouts (0–100) you want to give to the prize pool.
+                        The <code>donate</code> tag can be the whole worker name or a <code>-</code>/<code>_</code> suffix:</p>
+                    <table class="data-table">
+                        <thead><tr><th>Worker name</th><th>Result</th></tr></thead>
+                        <tbody>
+                            <tr><td><code>grin1…address.donate10</code></td><td class="ok">Donate 10% of your payouts</td></tr>
+                            <tr><td><code>grin1…address.rig01-donate5</code></td><td class="ok">Worker “rig01”, donate 5%</td></tr>
+                            <tr><td><code>grin1…address.donate0</code></td><td class="no">0% — turn a donation back off</td></tr>
+                            <tr><td><code>grin1…address.rig01</code></td><td class="no">No donation (normal worker)</td></tr>
+                            <tr><td><code>donate101</code>, <code>donate-1</code>, <code>donatexx</code></td><td class="no">Ignored — treated as a normal worker name, donates nothing</td></tr>
+                        </tbody>
+                    </table>
+                    <p class="panel-note">Only <code>donate0</code>–<code>donate100</code> donate. Anything out of
+                        range or mistyped is safely treated as an ordinary worker name — a typo can never donate
+                        more than you meant. The donation is applied to each payout as it's calculated.</p>
+                </div>
+            </div>
+
+            <!-- ═══ D-02 · DIRECT SLATEPACK DONATION (revealed by branding.js when configured) ═══ -->
+            <div class="panel" data-brand-show="donation" style="display:none;"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">D-02</span> Donate directly by Slatepack
+                    <span class="right">one-off gifts — for anyone</span></h2>
+                <div class="panel-body">
+                    <span class="pill">Option 2 · for anyone</span>
+                    <p>Not mining, or want to give a one-off gift? Send any amount to the pool's donation
+                        address. The operator adds received donations to the prize pool.</p>
+                    <div class="donate-addr" data-brand="donation-address" id="donation-address"></div>
+                    <button class="copy-btn" onclick="copyAddress()">Copy address</button>
+                </div>
+            </div>
+
+            <!-- ═══ D-03 · DONOR WALL ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">D-03</span> Donor wall
+                    <span class="right">every miner who has donated payout slices</span></h2>
+                <div class="panel-body">
+                    <div class="donor-grid" id="donor-grid" style="display:none;"></div>
+                    <div class="donor-empty" id="donor-empty">LOADING DONORS…</div>
+                </div>
+            </div>
+
+            <!-- ═══ D-04 · WHERE YOUR DONATION GOES ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">D-04</span> Where your donation goes
+                    <span class="right">100% flows back to miners</span></h2>
+                <div class="panel-body">
+                    <ul class="fund-list">
+                        <li>🎁 <strong>Join bonus</strong> — a one-time welcome for new miners who reach their first payout.</li>
+                        <li>💥 <strong>Block-finder jackpot</strong> — a flat bonus to whoever solves a block (small miners included).</li>
+                        <li>🔥 <strong>Loyalty streak</strong> — a small bonus for mining consistently, day after day.</li>
+                        <li>🎉 <strong>Lottery</strong> — weekly and special-occasion draws, with an equal-chance pot so small miners can win too.</li>
+                    </ul>
+                    <p class="panel-note"><a class="nav-link" href="fortune-board.html" style="text-decoration:underline;">See every prize ever paid → Fortune Board</a></p>
+                </div>
+            </div>
+
         </div>
     </div>
 
     <!-- footer injected by /js/public-shell.js -->
 
     <script>
+        // ── Slatepack address copy ─────────────────────────────────────────────
         function copyAddress() {
             var el = document.getElementById('donation-address');
             var text = el ? el.textContent.trim() : '';
@@ -115,6 +258,76 @@
             var old = btn.textContent; btn.textContent = msg;
             setTimeout(function () { btn.textContent = old; }, 1500);
         }
+
+        // ── Donor wall (/api/pool/donors) ──────────────────────────────────────
+        (function () {
+            'use strict';
+
+            function escHtml(s) {
+                return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            }
+            function truncAddr(a) {
+                return a.length > 22 ? a.slice(0, 12) + '…' + a.slice(-6) : a;
+            }
+            // Dates shown as plain UTC days (page-wide UTC note in the header strip).
+            function utcDay(sec) {
+                return sec ? new Date(sec * 1000).toISOString().slice(0, 10) : '—';
+            }
+            function fmtGrin(v) {
+                return (typeof v === 'number' ? v : 0).toFixed(4);
+            }
+
+            function donorCard(d, idx) {
+                var medal = ['🥇', '🥈', '🥉'][idx] || ('#' + (idx + 1));
+                var href = '/account-settings.html?addr=' + encodeURIComponent(d.address);
+                var badge = d.current_percent > 0
+                    ? '<span class="donor-badge on">donating ' + escHtml(d.current_percent) + '%</span>'
+                    : '<span class="donor-badge off">paused</span>';
+                return '<div class="donor-card">' +
+                    '<div class="donor-rank">' + medal + '</div>' +
+                    '<a class="addr-link" href="' + href + '" title="' + escHtml(d.address) + '">' + escHtml(truncAddr(d.address)) + '</a>' +
+                    '<div class="donor-total">' + fmtGrin(d.total_donated) + ' <small>GRIN</small></div>' +
+                    badge +
+                    '<div class="donor-meta">' +
+                        'First donation <b>' + utcDay(d.first_donated_at) + '</b><br>' +
+                        'Most recent <b>' + utcDay(d.last_donated_at) + '</b><br>' +
+                        'Donated on <b>' + escHtml(d.donation_count) + '</b> payout' + (d.donation_count === 1 ? '' : 's') +
+                    '</div>' +
+                '</div>';
+            }
+
+            function render(data) {
+                var donors = (data && data.donors) || [];
+                var totals = (data && data.totals) || {};
+                var set = function (id, v) {
+                    var el = document.getElementById(id);
+                    if (el && v != null) el.textContent = v;
+                };
+                set('dn-total', fmtGrin(totals.total_donated) + ' ツ');
+                set('dn-count', totals.donor_count != null ? String(totals.donor_count) : '—');
+                set('dn-active', totals.active_donors != null ? String(totals.active_donors) : '—');
+
+                var grid = document.getElementById('donor-grid');
+                var empty = document.getElementById('donor-empty');
+                if (!donors.length) {
+                    empty.textContent = 'NO DONORS YET — BE THE FIRST 💚';
+                    return;
+                }
+                grid.innerHTML = donors.map(donorCard).join('');
+                grid.style.display = '';
+                empty.style.display = 'none';
+            }
+
+            fetch('/api/pool/donors', { credentials: 'same-origin' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (json) {
+                    if (json) { render(json); }
+                    else { document.getElementById('donor-empty').textContent = 'DONOR DATA UNAVAILABLE'; }
+                })
+                .catch(function () {
+                    document.getElementById('donor-empty').textContent = 'DONOR DATA UNAVAILABLE';
+                });
+        })();
     </script>
     <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>

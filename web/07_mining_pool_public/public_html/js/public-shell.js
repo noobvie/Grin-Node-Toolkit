@@ -113,6 +113,7 @@
           '<a data-brand="social-twitter" href="#" target="_blank" rel="noopener" style="display:none">Twitter / X</a>' +
           '<a data-brand="social-discord" href="#" target="_blank" rel="noopener" style="display:none">Discord</a>' +
           '<a data-brand="social-telegram" href="#" target="_blank" rel="noopener" style="display:none">Telegram</a>' +
+          '<a data-brand="social-nostr" href="#" target="_blank" rel="noopener" style="display:none">Nostr</a>' +
         '</div>' +
         // Donate lives in the brand column, highlighted with a heart, as the primary
         // community call-to-action (moved out of the Legal column).

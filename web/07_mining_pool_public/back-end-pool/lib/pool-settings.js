@@ -76,6 +76,9 @@ class PoolSettings {
       discord_link: '',
       telegram_link: '',
       twitter_link: 'https://twitter.com/grinium',
+      // Nostr profile as a full web URL (e.g. https://njump.me/npub1...) so the footer
+      // link works for visitors without a Nostr client.
+      nostr_link: '',
       website_link: 'https://grinium.com',
       footer_text: '',
     },
@@ -743,6 +746,7 @@ class PoolSettings {
           discord: b.discord_link || '',
           telegram: b.telegram_link || '',
           twitter: b.twitter_link || '',
+          nostr: b.nostr_link || '',
           website: b.website_link || '',
         },
         logo_url: assetUrlFor('logo'),

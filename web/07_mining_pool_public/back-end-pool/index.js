@@ -23,6 +23,7 @@ const AuthManager = require('./lib/auth');
 const Captcha = require('./lib/captcha');
 const { requireAuth, requireAdmin, requireFreshAuth } = require('./lib/auth-middleware');
 const HashrateTracker = require('./lib/hashrate-tracker');
+const { getHorizon: getLedgerRollupHorizon } = require('./lib/ledger-rollup');
 const { verifyOwnerProof, auditOwnerProof, normalizeIp, migrateOwnerProofHashes } = require('./lib/owner-proof');
 const PoolstatsReporter = require('./lib/poolstats-reporter');
 const RateLimiter = require('./lib/rate-limiter');
@@ -327,6 +328,9 @@ async function initializePool() {
     // its verifiable draw seed.
     incentivesManager = new IncentivesManager(config);
     adsManager = new AdsManager(config);
+    try {
+      if (adsManager.seedSelfPromo()) console.log(`[${new Date().toISOString()}] [ads] seeded 4 starter self-promo banners (header/sidebar×2/footer)`);
+    } catch (e) { console.error(`[ads] self-promo seed failed: ${e.message}`); }
     pagesManager = new PagesManager(config);
     postsManager = new PostsManager(config);
 
@@ -642,7 +646,8 @@ function setupRoutes() {
     'GET /api/public/branding': 'White-label config (name, theme, SEO, social, footer links).',
     'GET /api/public/price': 'Cached GRIN price (USD + BTC).',
     'GET /api/public/status': 'Coarse pool/node/wallet health (no balances).',
-    'GET /api/public/ads': 'Active operator ads by placement.',
+    'GET /api/public/ads': 'Active operator ads by placement (+ rotation interval).',
+    'POST /api/public/ads/event': 'Ad impression/click beacon — aggregate counters only, no visitor data.',
     'GET /api/public/lottery/winners': 'Fortune-board winner history (truncated addresses).',
     'GET /api/public/lottery/stats': 'Fortune-board aggregates: total prizes/winners/draws, Pot A/B split, monthly series.',
     'GET /api/public/endpoints': 'This API reference (machine-readable).',
@@ -656,6 +661,7 @@ function setupRoutes() {
     'GET /api/pool/metrics/history': 'Durable pool trend series: hashrate, miners, earnings, payout, network hashrate (?range=day|week|month|year|all).',
     'GET /api/pool/metrics/history/regions': 'Per-region miners/hashrate trend series (?range=day|week|month|year|all).',
     'GET /api/pool/payments/history': 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee + lifetime totals (?range=day|week|month|year|all).',
+    'GET /api/pool/donors': 'Donor wall: per-address lifetime donations to the prize pool, first/last donation date, current donate-tag %.',
     'GET /api/pool/status': 'Coarse service status strip.',
     'GET /api/account/:addr': 'Account summary: balance, paid, pending payout, effort.',
     'GET /api/account/:addr/workers': 'Per-worker (rig) hashrate + share quality.',
@@ -1682,7 +1688,7 @@ function setupRoutes() {
   // placement. secureAdmin (not freshAdmin) — ads are not money/destructive of funds.
   app.get('/api/admin/ads', secureAdmin, (req, res) => {
     try {
-      res.json({ ads: adsManager.list(req.query.placement), placements: AdsManager.PLACEMENTS });
+      res.json({ ads: adsManager.list(req.query.placement), placements: AdsManager.PLACEMENTS, rotate_ms: adsManager.getRotateMs() });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -1708,15 +1714,33 @@ function setupRoutes() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // Rotation interval for the public renderer (stored in pool_config, clamped 2–60 s).
+  app.post('/api/admin/ads-config', secureAdmin, (req, res) => {
+    try {
+      res.json({ rotate_ms: adsManager.setRotateMs((req.body || {}).rotate_ms) });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
   // ─── ADS (Public) ──────────────────────────────────────────────────
   // Active, in-window ads for the public site. `?placement=header` returns one slot;
-  // no param returns all slots keyed by placement. Only render-relevant fields are exposed.
+  // no param returns all slots keyed by placement. Only render-relevant fields are
+  // exposed. Cached 60 s (every visitor on every page hits this) — ad edits take up
+  // to a minute to appear publicly.
   app.get('/api/public/ads', rateLimiter.middleware('public'), (req, res) => {
     try {
+      res.set('Cache-Control', 'public, max-age=60');
       const p = req.query.placement;
-      if (p) return res.json({ placement: p, ads: adsManager.publicByPlacement(p) });
-      res.json({ ads: adsManager.publicAll() });
+      if (p) return res.json({ placement: p, ads: adsManager.publicByPlacement(p), rotate_ms: adsManager.getRotateMs() });
+      res.json({ ads: adsManager.publicAll(), rotate_ms: adsManager.getRotateMs() });
     } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Impression/click beacon — coarse per-ad counters only (no per-visitor rows, no
+  // IPs). Ids are sanitised + capped in recordEvents; always 204 so the client never
+  // retries or logs (ads are non-essential).
+  app.post('/api/public/ads/event', rateLimiter.middleware('public'), (req, res) => {
+    try { adsManager.recordEvents(req.body || {}); } catch (err) { /* counters only — never fail the page */ }
+    res.status(204).end();
   });
 
   // ─── MEDIA UPLOAD (Admin) ──────────────────────────────────────────
@@ -2114,6 +2138,54 @@ function setupRoutes() {
       const allowed = ['day', 'week', 'month', 'year', 'all'];
       const range = allowed.includes(req.query.range) ? req.query.range : 'month';
       res.json(hashrateTracker.getPaymentsHistory(range));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Donor wall — every address that has donated payout slices (donateN worker tag) to the
+  // prize pool, with lifetime total and first/last donation date. Composite read per the
+  // ledger-rollup horizon contract: rollup(day < H) + raw(created_at >= H), so totals stay
+  // exact forever while raw rows age out. first/last dates from rolled days are UTC-day
+  // aligned — day precision is all the public wall displays anyway. Current donate-% comes
+  // from miner_incentives (0 = paused; past donors stay on the wall).
+  app.get('/api/pool/donors', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const H = getLedgerRollupHorizon(db); // 0 = no rollup yet → whole ledger is raw
+      const donors = db.prepare(`
+        SELECT d.grin_address AS address,
+               d.total_donated, d.first_donated_at, d.last_donated_at, d.donation_count,
+               COALESCE(mi.donation_percent, 0) AS current_percent
+        FROM (
+          SELECT grin_address,
+                 SUM(amt) AS total_donated,
+                 MIN(t)   AS first_donated_at,
+                 MAX(t)   AS last_donated_at,
+                 SUM(cnt) AS donation_count
+          FROM (
+            SELECT grin_address, total_amount AS amt, day AS t, event_count AS cnt
+            FROM balance_log_daily
+            WHERE event_type = 'debit' AND reference_type = 'donation' AND day < ?
+            UNION ALL
+            SELECT grin_address, amount, created_at, 1
+            FROM balance_log
+            WHERE event_type = 'debit' AND reference_type = 'donation' AND created_at >= ?
+          )
+          GROUP BY grin_address
+        ) d
+        LEFT JOIN miner_incentives mi ON mi.grin_address = d.grin_address
+        WHERE d.total_donated > 0
+        ORDER BY d.total_donated DESC
+        LIMIT 100
+      `).all(H, H);
+
+      const totals = {
+        donor_count: donors.length,
+        active_donors: donors.filter((r) => r.current_percent > 0).length,
+        total_donated: parseFloat(donors.reduce((a, r) => a + r.total_donated, 0).toFixed(9))
+      };
+      donors.forEach((r) => { r.total_donated = parseFloat(r.total_donated.toFixed(9)); });
+      res.json({ donors, totals });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

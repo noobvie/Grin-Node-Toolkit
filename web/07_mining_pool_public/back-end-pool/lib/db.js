@@ -112,6 +112,30 @@ function migrateMinerAccounts() {
   }
 }
 
+// Additive, non-destructive: add impression/click counters + the admin-only sponsor
+// memo to an existing ads table (2026-07-17; older DBs predate them). Counters are
+// coarse aggregates bumped by the public beacon endpoint — no per-visitor rows.
+function migrateAds() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(ads)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the columns
+    const have = new Set(cols.map(c => c.name));
+    const additions = {
+      impressions: 'INTEGER NOT NULL DEFAULT 0',
+      clicks: 'INTEGER NOT NULL DEFAULT 0',
+      notes: 'TEXT DEFAULT NULL'
+    };
+    for (const [name, def] of Object.entries(additions)) {
+      if (!have.has(name)) {
+        db.exec(`ALTER TABLE ads ADD COLUMN ${name} ${def}`);
+        console.warn(`[db] ads: added missing column ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error(`[db] ads migration check failed: ${e.message}`);
+  }
+}
+
 // Additive, non-destructive: add the per-block stats backing round effort / luck to an existing
 // blocks table (older DBs predate them). Both NULL on legacy rows → those blocks are skipped by
 // the luck calc. Captured at find time so luck-over-N-blocks stays exact even after raw shares are
@@ -619,6 +643,9 @@ function createSchema() {
       weight INTEGER NOT NULL DEFAULT 0,
       start_at INTEGER DEFAULT NULL,
       end_at INTEGER DEFAULT NULL,
+      impressions INTEGER NOT NULL DEFAULT 0,
+      clicks INTEGER NOT NULL DEFAULT 0,
+      notes TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
@@ -682,6 +709,7 @@ function createSchema() {
   migrateLotteryDraws();
   migratePoolMetricsHourly();
   migrateLocations();
+  migrateAds();
   migratePagesFromConfig();
   // The default grinium regional endpoints are seeded once (see seedDefaultRegions,
   // called from index.js with the configured stratum port). The pool server also

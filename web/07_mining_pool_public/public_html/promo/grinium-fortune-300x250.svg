@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="250" viewBox="0 0 300 250" role="img" aria-label="Feeling lucky? Jackpots, prize draws and streak rewards on the GRINIUM fortune board">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#120a14"/>
+      <stop offset=".5" stop-color="#07090c"/>
+      <stop offset="1" stop-color="#140a12"/>
+    </linearGradient>
+    <radialGradient id="magGlow" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#ff4fd8" stop-opacity=".8"/>
+      <stop offset=".5" stop-color="#ff4fd8" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#ff4fd8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cta" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff6ae0"/>
+      <stop offset="1" stop-color="#d63bb2"/>
+    </linearGradient>
+    <clipPath id="frame"><rect x="1" y="1" width="298" height="248" rx="10"/></clipPath>
+  </defs>
+
+  <rect x="1" y="1" width="298" height="248" rx="10" fill="url(#bg)" stroke="#3a1d33" stroke-width="1.5"/>
+
+  <g clip-path="url(#frame)">
+    <!-- confetti sparks -->
+    <g fill="#ffb63d">
+      <circle cx="38" cy="52" r="2"><animate attributeName="opacity" values="1;.15;1" dur="2.2s" repeatCount="indefinite"/></circle>
+      <circle cx="262" cy="44" r="2.5"><animate attributeName="opacity" values=".2;1;.2" dur="1.8s" repeatCount="indefinite"/></circle>
+      <circle cx="245" cy="120" r="2"><animate attributeName="opacity" values="1;.2;1" dur="2.6s" repeatCount="indefinite"/></circle>
+      <circle cx="52" cy="128" r="2.2"><animate attributeName="opacity" values=".3;1;.3" dur="2s" repeatCount="indefinite"/></circle>
+    </g>
+    <g fill="#ff4fd8">
+      <circle cx="70" cy="34" r="1.8"><animate attributeName="opacity" values=".2;1;.2" dur="2.4s" repeatCount="indefinite"/></circle>
+      <circle cx="228" cy="76" r="1.8"><animate attributeName="opacity" values="1;.25;1" dur="2s" repeatCount="indefinite"/></circle>
+      <circle cx="30" cy="90" r="1.6"><animate attributeName="opacity" values=".4;1;.4" dur="1.7s" repeatCount="indefinite"/></circle>
+    </g>
+
+    <!-- jackpot orb -->
+    <g transform="translate(150,78)">
+      <circle r="52" fill="url(#magGlow)">
+        <animate attributeName="opacity" values=".7;1;.7" dur="3s" repeatCount="indefinite"/>
+      </circle>
+      <circle r="31" fill="#150a13" stroke="#ff4fd8" stroke-opacity=".8" stroke-width="1.5"/>
+      <circle r="38" fill="none" stroke="#ffb63d" stroke-opacity=".45" stroke-width="1" stroke-dasharray="3 7">
+        <animateTransform attributeName="transform" type="rotate" from="360" to="0" dur="16s" repeatCount="indefinite"/>
+      </circle>
+      <text x="0" y="11" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="30" fill="#ffb63d">7</text>
+      <text x="-16" y="-8" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="13" fill="#ff4fd8">★</text>
+      <text x="17" y="-6" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10" fill="#ff4fd8">★</text>
+    </g>
+
+    <!-- copy -->
+    <g font-family="ui-monospace,Menlo,Consolas,monospace" text-anchor="middle">
+      <text x="150" y="156" font-size="21" font-weight="bold" fill="#f2e6ef" letter-spacing="1.5">FEELING LUCKY?</text>
+      <text x="150" y="177" font-size="11.5" fill="#8a978f">Block jackpots · prize draws</text>
+      <text x="150" y="193" font-size="11.5" fill="#8a978f">streak rewards · monthly lottery</text>
+    </g>
+
+    <!-- CTA -->
+    <g transform="translate(66,208)">
+      <rect x="0" y="0" width="168" height="30" rx="7" fill="url(#cta)"/>
+      <text x="84" y="20" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="13" font-weight="bold" fill="#120612" letter-spacing="1">FORTUNE BOARD →</text>
+    </g>
+  </g>
+</svg>

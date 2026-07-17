@@ -555,7 +555,14 @@ async function submitRegion() {
   };
   if (wgKey) body.wg_pubkey = wgKey;
   try {
-    const r = await API.post('/api/admin/locations', body);
+    // adminFetch (not API.post): pairing a gateway key is step-up gated server-side, so the
+    // save must go through the challenge_required → reauth → retry flow (same as delete).
+    const res = await adminFetch('/api/admin/locations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const r = res ? await res.json().catch(() => null) : null;
     if (!r || r.error) {
       // 502 with wg_error = the region card IS saved; only the pairing failed.
       if (r && r.wg_error) {

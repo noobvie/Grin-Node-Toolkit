@@ -73,11 +73,15 @@ class ShareValidator {
     }
   }
 
-  // Dedup key for a submitted share. Includes grin_address so two different miners that share
-  // a worker name (e.g. the default) can never collide on (job, worker, nonce) and have one's
-  // valid share rejected as the other's duplicate.
-  generateShareHash(grinAddress, jobId, workerName, nonce) {
-    const input = `${grinAddress}-${jobId}-${workerName}-${nonce}`;
+  // Dedup key for a submitted share. Keyed on `workId` = the job's pre_pow (the identity of the
+  // actual work), NOT the pool's incrementing job_id: the node re-issues many job_ids for one
+  // identical pre_pow, and keying on job_id let the same solved (nonce,pow) be credited once per
+  // wrapping job. pre_pow collapses every re-version of a template to one dedup identity, so a
+  // resubmitted solution always hits the share_hash UNIQUE constraint. Includes grin_address so
+  // two different miners that share a worker name (e.g. the default) can never collide on
+  // (work, worker, nonce) and have one's valid share rejected as the other's duplicate.
+  generateShareHash(grinAddress, workId, workerName, nonce) {
+    const input = `${grinAddress}-${workId}-${workerName}-${nonce}`;
     return crypto.createHash('sha256').update(input).digest('hex');
   }
 

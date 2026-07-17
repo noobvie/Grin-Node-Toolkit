@@ -10,7 +10,8 @@
  *   /api/pool/blocks           fuel-rod maturity array
  *   /api/pool/payments         payout teletype
  *   /api/pool/stats/regions    patch-bay switches + region lamps
- *   /api/pool/hashrate/history strip-chart recorder
+ *   /api/pool/hashrate/history fine 24h pool trace + gauge 24h-peak marker
+ *   /api/pool/metrics/history  P-04 trend recorders (pool/network hashrate, miners online)
  *   /api/public/branding       default stratum host/port fallback
  *
  * All canvas instruments read their colors from the theme token bridge on <body>
@@ -260,125 +261,17 @@
     setText('rx-master-text', label);
   }
 
-  // ── strip-chart recorder ──────────────────────────────────────────────────
-  var chart = (function () {
-    var cv = $('rx-chart'), tip = $('rx-tip'), empty = $('rx-chart-empty');
-    if (!cv) return { setSeries: function () {}, render: function () {} };
-    var c, W, H, series = [];
-    var padL = 46, padB = 20, padT = 8, padR = 10;
-    var lo = 0, hi = 1, gridVals = [];
+  // ── chart recorders (P-04) ────────────────────────────────────────────────
+  // Rendered with PoolCharts (Chart.js, charts-init.js) — the same recorder the other
+  // public pages use, replacing the old hand-rolled 24h strip chart (2026-07-17). Pool
+  // and network hashrate are two ALIGNED single-axis charts, never one dual-axis chart:
+  // network GPS runs orders of magnitude above pool GPS and would flatten the pool trace.
+  var chartRange = 'day'; // 24H | 7D | 30D → /api/pool/metrics/history range vocabulary
 
-    function fit() {
-      var dpr = window.devicePixelRatio || 1;
-      var r = cv.getBoundingClientRect();
-      W = r.width; H = r.height;
-      cv.width = W * dpr; cv.height = H * dpr;
-      c = cv.getContext('2d');
-      c.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-    fit();
-
-    function X(i) { return padL + i * (W - padL - padR) / Math.max(series.length - 1, 1); }
-    function Y(v) { return padT + (hi - v) * (H - padT - padB) / (hi - lo || 1); }
-    function gpsLabel(v) {
-      var f = fmtGps(v);
-      return f[0] + (f[1] ? ' ' + f[1] : '');
-    }
-
-    function computeScale() {
-      var vals = series.map(function (p) { return Number(p.gps) || 0; });
-      var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
-      if (!isFinite(mn) || !isFinite(mx)) { lo = 0; hi = 1; gridVals = []; return; }
-      if (mx <= 0) { lo = 0; hi = 1; }
-      else {
-        hi = niceCeil(mx * 1.08);
-        lo = Math.max(0, mn - (hi - mn) * 0.15);
-        lo = Math.floor(lo / (hi / 4)) * (hi / 4);
-      }
-      gridVals = [];
-      for (var i = 0; i <= 4; i++) gridVals.push(lo + (hi - lo) * i / 4);
-    }
-
-    function render(hidx) {
-      if (!c) return;
-      c.clearRect(0, 0, W, H);
-      if (!series.length) { if (empty) empty.style.display = 'flex'; return; }
-      if (empty) empty.style.display = 'none';
-      // graph paper
-      var fine = 18;
-      c.strokeStyle = 'rgba(127,160,127,.07)';
-      c.lineWidth = 1;
-      for (var gx = padL; gx <= W - padR; gx += fine) { c.beginPath(); c.moveTo(gx, padT); c.lineTo(gx, H - padB); c.stroke(); }
-      for (var gy = padT; gy <= H - padB; gy += fine) { c.beginPath(); c.moveTo(padL, gy); c.lineTo(W - padR, gy); c.stroke(); }
-      c.font = '10px ' + MONO;
-      gridVals.forEach(function (v) {
-        c.strokeStyle = 'rgba(127,160,127,.16)';
-        c.beginPath(); c.moveTo(padL, Y(v)); c.lineTo(W - padR, Y(v)); c.stroke();
-        c.fillStyle = C.mute; c.textAlign = 'right'; c.textBaseline = 'middle';
-        c.fillText(gpsLabel(v), padL - 6, Y(v));
-      });
-      // x time labels at 5 anchors
-      c.textAlign = 'center'; c.textBaseline = 'alphabetic';
-      [0, 0.25, 0.5, 0.75, 1].forEach(function (f) {
-        var i = Math.round(f * (series.length - 1));
-        var d = new Date((series[i].t || 0) * 1000);
-        c.fillStyle = C.mute;
-        c.fillText(pad2(d.getHours()) + ':' + pad2(d.getMinutes()), X(i), H - 5);
-      });
-      // phosphor trace
-      c.save();
-      c.shadowColor = C.accent; c.shadowBlur = 6;
-      c.beginPath();
-      series.forEach(function (p, i) {
-        var y = Y(Number(p.gps) || 0);
-        if (i) c.lineTo(X(i), y); else c.moveTo(X(i), y);
-      });
-      c.strokeStyle = C.accent; c.lineWidth = 1.8; c.lineJoin = 'round'; c.stroke();
-      c.restore();
-      var li = series.length - 1;
-      c.beginPath(); c.arc(X(li), Y(Number(series[li].gps) || 0), 3, 0, 7);
-      c.fillStyle = C.accent; c.fill();
-      // hover crosshair
-      if (hidx != null && series[hidx]) {
-        var hx = X(hidx), hy = Y(Number(series[hidx].gps) || 0);
-        c.strokeStyle = C.dim; c.lineWidth = 1; c.setLineDash([2, 3]);
-        c.beginPath(); c.moveTo(hx, padT); c.lineTo(hx, H - padB); c.stroke();
-        c.setLineDash([]);
-        c.beginPath(); c.arc(hx, hy, 4, 0, 7); c.fillStyle = C.accent; c.fill();
-        c.beginPath(); c.arc(hx, hy, 4, 0, 7); c.strokeStyle = C.bg; c.lineWidth = 2; c.stroke();
-      }
-    }
-
-    cv.addEventListener('pointermove', function (e) {
-      if (!series.length || !tip) return;
-      var r = cv.getBoundingClientRect();
-      var i = Math.round((e.clientX - r.left - padL) / ((W - padL - padR) / Math.max(series.length - 1, 1)));
-      if (i < 0 || i >= series.length) { tip.style.display = 'none'; render(null); return; }
-      render(i);
-      var d = new Date((series[i].t || 0) * 1000);
-      tip.textContent = '';
-      var t = document.createElement('span');
-      t.className = 't';
-      t.textContent = pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ' ';
-      tip.appendChild(t);
-      tip.appendChild(document.createTextNode(gpsLabel(Number(series[i].gps) || 0)));
-      tip.style.display = 'block';
-      var tx = X(i) + 12;
-      if (tx > W - 130) tx = X(i) - tip.offsetWidth - 12;
-      tip.style.left = tx + 'px';
-      tip.style.top = (Y(Number(series[i].gps) || 0) - 14) + 'px';
-    });
-    cv.addEventListener('pointerleave', function () {
-      if (tip) tip.style.display = 'none';
-      render(null);
-    });
-    window.addEventListener('resize', function () { fit(); render(null); });
-
-    return {
-      setSeries: function (s) { series = Array.isArray(s) ? s : []; computeScale(); render(null); },
-      render: function () { render(null); }
-    };
-  })();
+  function toggleChartEmpty(id, show) {
+    var el = $(id);
+    if (el) el.style.display = show ? 'flex' : 'none';
+  }
 
   // ── data loaders ──────────────────────────────────────────────────────────
   var nodeHeight = 0;      // for fuel-rod confirmation depth
@@ -640,15 +533,86 @@
     }
   }
 
-  async function loadHistory() {
+  async function loadTrendCharts() {
+    if (typeof PoolCharts === 'undefined') return;
+
+    // Fine-grained (5-min) 24h pool series: always fetched — it feeds the hashrate
+    // dial's 24h-peak marker — and it IS the pool trace when the 24H range is selected.
+    var fine = [];
     try {
       var data = await Auth.fetch('/api/pool/hashrate/history?hours=24');
-      var series = (data && data.series) || [];
-      chart.setSeries(series);
-      // 24h peak feeds the hashrate dial's reference tick (base G/s; the dial converts).
-      hashPeakGps = series.reduce(function (m, p) { return Math.max(m, Number(p.gps) || 0); }, 0);
+      fine = (data && data.series) || [];
+      hashPeakGps = fine.reduce(function (m, p) { return Math.max(m, Number(p.gps) || 0); }, 0);
+    } catch (e) { /* keep last peak / trace */ }
+
+    // Durable hourly/daily rollup for the selected range (pool 7D/30D + network line).
+    var points = [], bucket = 3600;
+    try {
+      var m = await Auth.fetch('/api/pool/metrics/history?range=' + chartRange);
+      points = (m && m.points) || [];
+      bucket = (m && m.bucket_seconds) || 3600;
+    } catch (e) { /* charts keep last trace */ }
+
+    var pool = chartRange === 'day'
+      ? fine.map(function (p) { return { t: p.t, v: p.gps }; })
+      : points.map(function (p) { return { t: p.t, v: p.hashrate_gps }; });
+    toggleChartEmpty('rx-chart-empty', pool.length === 0);
+    PoolCharts.renderTrendLine('rx-chart', pool, {
+      label: 'Pool hashrate',
+      bucketSeconds: chartRange === 'day' ? 300 : bucket,
+      valueFmt: PoolCharts.fmtGps
+    });
+
+    // Network hashrate — hourly samples stored by the rollup; NULL rows (pre-deploy hours,
+    // node unreachable) are skipped, so the series simply starts when sampling started.
+    var net = [];
+    points.forEach(function (p) {
+      if (p.network_hashrate_gps != null) net.push({ t: p.t, v: p.network_hashrate_gps });
+    });
+    toggleChartEmpty('rx-chart-net-empty', net.length === 0);
+    PoolCharts.renderTrendLine('rx-chart-net', net, {
+      label: 'Network hashrate',
+      bucketSeconds: bucket,
+      valueFmt: PoolCharts.fmtGps,
+      color: '#3987e5'
+    });
+
+    // Miners online — fixed 30 days (the miners-stats P-02 chart at range=month).
+    try {
+      var mm = (chartRange === 'month')
+        ? { points: points, bucket_seconds: bucket }
+        : await Auth.fetch('/api/pool/metrics/history?range=month');
+      var mpts = (mm && mm.points) || [];
+      toggleChartEmpty('rx-chart-miners-empty', mpts.length === 0);
+      PoolCharts.renderTrendLine('rx-chart-miners',
+        mpts.map(function (p) { return { t: p.t, v: p.miner_count }; }),
+        {
+          label: 'Miners online',
+          bucketSeconds: (mm && mm.bucket_seconds) || 86400,
+          valueFmt: PoolCharts.fmtInt,
+          color: '#3987e5'
+        });
     } catch (e) { /* chart keeps last trace */ }
   }
+
+  // 24H / 7D / 30D toggle on the P-04 title → redraw the hashrate pair.
+  (function wireChartRange() {
+    var bar = $('rx-range');
+    if (!bar) return;
+    bar.addEventListener('click', function (e) {
+      var btn = e.target.closest('button[data-range]');
+      if (!btn) return;
+      var r = btn.getAttribute('data-range');
+      if (!r || r === chartRange) return;
+      chartRange = r;
+      bar.querySelectorAll('button').forEach(function (b) {
+        var on = b === btn;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      loadTrendCharts();
+    });
+  })();
 
   // ── region patch bay + region annunciator lamps ───────────────────────────
   function regionHostPort(r) {
@@ -872,7 +836,8 @@
     readTokens();
     if (gaugeHash) gaugeHash.render();
     if (gaugeShare) gaugeShare.render();
-    chart.render();
+    // Trend charts re-read the theme accent on their update path — refresh redraws them.
+    loadTrendCharts();
   }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
   // ── refresh cycle ─────────────────────────────────────────────────────────
@@ -884,7 +849,7 @@
     loadShare();
     loadBlocks();
     loadPayments();
-    loadHistory();
+    loadTrendCharts();
     loadRegions();
   }
 

@@ -887,7 +887,11 @@ class PoolSettings {
           validated = validators[key](value);
         }
 
-        let valueStr = value;
+        // Persist the VALIDATED value, not the raw input: validators normalise
+        // (trim donation_address, dedupe enabled_themes, re-serialise cleaned JSON) and a
+        // validator may turn an object/array input into a storable JSON string — storing
+        // `value` would silently keep the un-normalised raw (or bind a raw array).
+        let valueStr = validated;
         let valueType = 'string';
 
         if (typeof validated === 'number') {

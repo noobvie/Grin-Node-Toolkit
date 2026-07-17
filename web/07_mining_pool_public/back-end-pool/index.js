@@ -23,7 +23,7 @@ const AuthManager = require('./lib/auth');
 const Captcha = require('./lib/captcha');
 const { requireAuth, requireAdmin, requireFreshAuth } = require('./lib/auth-middleware');
 const HashrateTracker = require('./lib/hashrate-tracker');
-const { verifyIpProof, auditOwnerProof, normalizeIp } = require('./lib/owner-proof');
+const { verifyOwnerProof, auditOwnerProof, normalizeIp, migrateOwnerProofHashes } = require('./lib/owner-proof');
 const PoolstatsReporter = require('./lib/poolstats-reporter');
 const RateLimiter = require('./lib/rate-limiter');
 const IpFilter = require('./lib/ip-filter');
@@ -70,8 +70,15 @@ async function readGatewayStatus() {
     const st = await gwctl(['status']);
     const out = {};
     for (const g of st.gateways || []) {
-      if (!g.handshake) continue;
-      out[g.region] = { handshake: g.handshake, rx_bytes: g.rx_bytes, tx_bytes: g.tx_bytes };
+      // Include peers that have NEVER handshaked (handshake 0/absent). Skipping them made
+      // an all-gateways-down pool return {} — indistinguishable from "wg unavailable" — so
+      // /api/pool/stats/regions could never mark anything offline and every dead gateway
+      // showed as idle (blue) instead of red. A present-but-zero entry keeps the map
+      // non-empty ("wg data IS available") while regionStatus() treats the 0 handshake as
+      // stale → offline. The wg-less fallback below already behaves this way (`wg show
+      // latest-handshakes` prints 0 for never-handshaked peers).
+      if (!g.region) continue;
+      out[g.region] = { handshake: g.handshake || 0, rx_bytes: g.rx_bytes, tx_bytes: g.tx_bytes };
     }
     return out;
   } catch (e) {
@@ -368,10 +375,24 @@ async function initializePool() {
     withdrawalScheduler = new WithdrawalScheduler(config, wallet);
     withdrawalScheduler.start();
 
+    // One-time background upgrade of legacy plaintext ownership-proof IPs to salted hashes
+    // (owner-proof.js v1$ format). Non-blocking; verify accepts both forms while it runs.
+    migrateOwnerProofHashes(db);
+
     authManager = new AuthManager(config);
     console.log(`[${new Date().toISOString()}] Authentication manager initialized`);
 
     hashrateTracker = new HashrateTracker(config, minerManager);
+    // Hourly network-hashrate sample for the durable rollup (homepage pool-vs-network trend).
+    // Reuses the block monitor's node client; the tracker calls this at most once per completed
+    // hour and stores NULL when the node is unreachable. 60s-target formula, same constants as
+    // /api/pool/effort: GPS = diff × 42 / 60 / 16384 (CLAUDE.md hashrate formula).
+    hashrateTracker.networkGpsProvider = async () => {
+      if (!blockMonitor || !blockMonitor.grinNode || !blockManager) return null;
+      const tip = await blockMonitor.grinNode.getTip();
+      const diff = await blockManager._fetchNetworkDifficulty(tip.height);
+      return (diff && diff > 0) ? (diff * 42) / 60 / 16384 : null;
+    };
     hashrateTracker.start();
 
     // Initialize poolstats reporter (push to miningpoolstats.stream)
@@ -632,17 +653,17 @@ function setupRoutes() {
     'GET /api/pool/blocks/history': 'Durable block series: luck, per-period counts, status, reward (?range=week|month|year|all).',
     'GET /api/pool/effort': 'Pool network share, recent luck, round effort, time since last block.',
     'GET /api/pool/hashrate/history': 'Pool hashrate time-series (?hours=).',
-    'GET /api/pool/metrics/history': 'Durable pool trend series: hashrate, miners, earnings, payout (?range=day|week|month|year|all).',
+    'GET /api/pool/metrics/history': 'Durable pool trend series: hashrate, miners, earnings, payout, network hashrate (?range=day|week|month|year|all).',
+    'GET /api/pool/metrics/history/regions': 'Per-region miners/hashrate trend series (?range=day|week|month|year|all).',
     'GET /api/pool/payments/history': 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee + lifetime totals (?range=day|week|month|year|all).',
     'GET /api/pool/status': 'Coarse service status strip.',
-    'GET /api/account/:addr': 'Account summary: balance, paid, min payout, effort.',
+    'GET /api/account/:addr': 'Account summary: balance, paid, pending payout, effort.',
     'GET /api/account/:addr/workers': 'Per-worker (rig) hashrate + share quality.',
     'GET /api/account/:addr/hashrate/history': 'Account hashrate time-series (?hours=).',
-    'POST /api/account/:addr/withdraw': 'Request a payout (Tor or Slatepack); IP-proof gated.',
-    'POST /api/account/:addr/withdraw/:id/cancel': 'Cancel a parked pending payout (funds return to balance).',
+    'POST /api/account/:addr/withdraw': 'Request a payout (Tor or Slatepack); ownership-gated (recent mining IP or stratum password).',
+    'POST /api/account/:addr/withdraw/:id/cancel': 'Cancel a parked pending payout (ownership-gated; funds return to balance).',
     'GET /api/account/:addr/balance/log': 'Address ledger (?direction=in|out, ?days=, ?format=csv).',
     'GET /api/account/:addr/earnings': 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals.',
-    'POST /api/account/:addr/min-payout': 'Set this address’s personal payout threshold.',
   };
   app.get('/api/public/endpoints',
     rateLimiter.middleware('public'),
@@ -1110,7 +1131,7 @@ function setupRoutes() {
     }
   });
 
-  app.post('/api/auth/refresh', (req, res) => {
+  app.post('/api/auth/refresh', rateLimiter.middleware('auth'), (req, res) => {
     // FIX #4: Get refresh token from cookie instead of body
     const refreshToken = req.cookies.refresh_token || req.body.refresh_token;
     if (!refreshToken) {
@@ -1230,7 +1251,7 @@ function setupRoutes() {
   });
 
   // FIX: Add logout endpoint
-  app.post('/api/auth/logout', (req, res) => {
+  app.post('/api/auth/logout', rateLimiter.middleware('auth'), (req, res) => {
     // Server-side revoke: bump the user's token_version so the issued refresh token
     // can't be replayed after logout (clearing the cookie alone only affects this browser).
     authManager.revokeByRefreshToken(req.cookies?.refresh_token || req.body?.refresh_token);
@@ -1240,7 +1261,9 @@ function setupRoutes() {
   });
 
 
-  app.post('/api/auth/change-password', requireAuth(authManager), (req, res) => {
+  // Rate-limited like login: old_password is verified here, so an unthrottled endpoint would
+  // let a hijacked live session brute-force the account password.
+  app.post('/api/auth/change-password', rateLimiter.middleware('auth'), requireAuth(authManager), (req, res) => {
     const { old_password, new_password } = req.body;
     authManager.changePassword(req.user.user_id, old_password, new_password)
       .then(result => {
@@ -1256,7 +1279,7 @@ function setupRoutes() {
       });
   });
 
-  app.get('/api/config/pool-info', (req, res) => {
+  app.get('/api/config/pool-info', rateLimiter.middleware('public'), (req, res) => {
     res.json({
       network: config.network,
       pool_fee_percent: config.pool_fee_percent,
@@ -1293,7 +1316,7 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/pool/stats', (req, res) => {
+  app.get('/api/pool/stats', rateLimiter.middleware('public'), (req, res) => {
     try {
       const blockStats = blockManager.getPoolStats();
       const minerCount = minerManager.getActiveMinersCount();
@@ -1356,7 +1379,7 @@ function setupRoutes() {
   // Public pool-found blocks, newest first. Paginated (limit+offset) with an optional status
   // filter for the public blocks explorer. Response stays a plain array (back-compat with the
   // homepage recent-blocks table); callers detect the last page when fewer than `limit` return.
-  app.get('/api/pool/blocks', (req, res) => {
+  app.get('/api/pool/blocks', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(Math.max(parseInt(req.query.limit || 50, 10), 1), 500);
       const offset = Math.max(parseInt(req.query.offset || 0, 10), 0);
@@ -1388,7 +1411,7 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/account/:addr/shares', (req, res) => {
+  app.get('/api/account/:addr/shares', rateLimiter.middleware('public'), (req, res) => {
     try {
       const { addr } = req.params;
       const limit = Math.min(parseInt(req.query.limit || 100), 500);
@@ -1874,7 +1897,7 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/account/:addr/balance', (req, res) => {
+  app.get('/api/account/:addr/balance', rateLimiter.middleware('public'), (req, res) => {
     try {
       const { addr } = req.params;
 
@@ -1898,7 +1921,7 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/pool/miners', (req, res) => {
+  app.get('/api/pool/miners', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 50), 500);
       const stmt = db.prepare(`
@@ -1915,7 +1938,7 @@ function setupRoutes() {
   // Top block finders over a recent window (default 30 days) — the "lucky miners" leaderboard.
   // Blocks are never pruned (only raw shares are), so this window can be arbitrarily long.
   // Orphaned blocks don't count as a find; total_reward sums the landed rewards.
-  app.get('/api/pool/top-block-finders', (req, res) => {
+  app.get('/api/pool/top-block-finders', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 500, 10) || 500, 1000);
       const days = Math.min(parseInt(req.query.days || 30, 10) || 30, 3650);
@@ -1937,7 +1960,7 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/pool/payments', (req, res) => {
+  app.get('/api/pool/payments', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 100), 500);
       const stmt = db.prepare(`
@@ -1959,7 +1982,7 @@ function setupRoutes() {
       const { addr } = req.params;
       const acct = db.prepare(
         `SELECT grin_address, balance, balance_locked, is_online, last_seen_at, created_at,
-                min_payout, last_ip, prev_ip
+                last_ip, prev_ip, last_pass_hash, prev_pass_hash
          FROM miner_accounts WHERE grin_address = ?`
       ).get(addr);
       if (!acct) return res.status(404).json({ error: 'Account not found' });
@@ -1989,10 +2012,8 @@ function setupRoutes() {
 
       const hr = hashrateTracker.getMinerHashrate(addr, 60) || {};
 
-      // Effective payout threshold: the account override (min_payout) if set, else the pool default.
-      // last/prev IP are NOT exposed (they back the ownership gate) — only whether one is on record.
-      const effectiveMin = (acct.min_payout != null) ? acct.min_payout : config.min_withdrawal;
-
+      // Proof values are NOT exposed (they back the ownership gate; hashed at rest anyway) —
+      // only whether one is on record, so the UI can hint which proof kinds will work.
       res.json({
         grin_address: acct.grin_address,
         balance: acct.balance,
@@ -2010,9 +2031,8 @@ function setupRoutes() {
         },
         hashrate_gps: parseFloat(((hr.avg_hashrate || 0)).toFixed(6)),
         min_withdrawal: config.min_withdrawal,
-        min_payout: acct.min_payout != null ? acct.min_payout : null,
-        effective_min_payout: effectiveMin,
-        has_recorded_ip: !!(acct.last_ip || acct.prev_ip)
+        has_recorded_ip: !!(acct.last_ip || acct.prev_ip),
+        has_recorded_pass: !!(acct.last_pass_hash || acct.prev_pass_hash)
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -2046,45 +2066,10 @@ function setupRoutes() {
     }
   });
 
-  // Set a per-miner payout threshold (address-as-identity, IP-gated). Anti-griefing: a random
-  // visitor must not be able to stall someone's payouts by raising their threshold. Proof = one
-  // of the address's last-2 mining source IPs. Range: cannot drop below the pool minimum.
-  app.post('/api/account/:addr/min-payout', rateLimiter.middleware('public'), (req, res) => {
-    const { addr } = req.params;
-    const reqIp = normalizeIp(req.ip);
-    try {
-      const acct = db.prepare('SELECT grin_address FROM miner_accounts WHERE grin_address = ?').get(addr);
-      if (!acct) return res.status(404).json({ error: 'Account not found' });
-
-      const ipProof = (req.body && req.body.ip_proof) || '';
-      const proof = verifyIpProof(db, addr, ipProof);
-      if (!proof.ok) {
-        auditOwnerProof(db, { action: 'set_min_payout', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
-        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
-      }
-
-      let val = req.body && req.body.min_payout;
-      // null/empty → clear the override (revert to pool default).
-      if (val === null || val === undefined || val === '') {
-        db.prepare('UPDATE miner_accounts SET min_payout = NULL, updated_at = unixepoch() WHERE grin_address = ?').run(addr);
-        auditOwnerProof(db, { action: 'set_min_payout', grinAddress: addr, ip: reqIp, ok: true, details: { min_payout: null } });
-        return res.json({ success: true, min_payout: null, effective_min_payout: config.min_withdrawal });
-      }
-
-      val = Number(val);
-      const poolMin = Number(config.min_withdrawal) || 0;
-      if (!Number.isFinite(val) || val < poolMin) {
-        return res.status(400).json({ error: `min_payout must be a number ≥ pool minimum (${poolMin})` });
-      }
-      if (val > 1e6) return res.status(400).json({ error: 'min_payout too large' });
-
-      db.prepare('UPDATE miner_accounts SET min_payout = ?, updated_at = unixepoch() WHERE grin_address = ?').run(val, addr);
-      auditOwnerProof(db, { action: 'set_min_payout', grinAddress: addr, ip: reqIp, ok: true, details: { min_payout: val } });
-      res.json({ success: true, min_payout: val, effective_min_payout: val });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  // REMOVED (2026-07-17): POST /api/account/:addr/min-payout — the per-account payout threshold
+  // was an auto-payout-era relic. Withdrawals are miner-initiated with an explicit amount, so
+  // only the pool-wide config.min_withdrawal floor applies (enforced in withdrawal-scheduler).
+  // The miner_accounts.min_payout column stays in the schema but is read by nothing.
 
   // Pool-wide hashrate time-series (SUM across addresses per bucket) for the dashboard chart.
   app.get('/api/pool/hashrate/history', rateLimiter.middleware('public'), (req, res) => {
@@ -2104,6 +2089,18 @@ function setupRoutes() {
       const allowed = ['day', 'week', 'month', 'year', 'all'];
       const range = allowed.includes(req.query.range) ? req.query.range : 'day';
       res.json(hashrateTracker.getMetricsHistory(range));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Per-region (gateway) companion to /api/pool/metrics/history: durable miners/hashrate trend
+  // per stratum region, for the "miners by gateway" chart. Same ?range vocabulary.
+  app.get('/api/pool/metrics/history/regions', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const allowed = ['day', 'week', 'month', 'year', 'all'];
+      const range = allowed.includes(req.query.range) ? req.query.range : 'day';
+      res.json(hashrateTracker.getRegionMetricsHistory(range));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -2300,33 +2297,36 @@ function setupRoutes() {
     }
   });
 
-  // Miner-initiated withdrawal (address-as-identity). Two rails:
-  //  · tor (default) — zero-interaction; payout always goes back to the requesting address via
-  //    its Tor listener, so there is no theft vector even without auth (it only moves an
-  //    address's own balance to itself). No IP gate.
-  //  · slatepack — interactive (no Tor). Emits a slate ENCRYPTED to the requesting address, so
-  //    only that wallet can decrypt + receive (no theft). Gated by an IP-proof (one of the
-  //    address's last-2 mining IPs) purely to throttle who can trigger it.
-  // Rate-limited; CAS balance lock + 1-pending-per-address cap live in the scheduler.
+  // Miner-initiated withdrawal (address-as-identity). Two rails, BOTH ownership-gated
+  // (operator decision 2026-07-17 — "every money action goes behind the gate"): even though
+  // neither rail can steal (Tor pays only to the address's own wallet; a slatepack is encrypted
+  // to the address), an ungated trigger let anyone reading the public leaderboard force payouts
+  // for other people's addresses — burning pool-paid network fees, consuming hot-wallet outputs
+  // and force-moving coins the owner didn't ask to move. Proof = a recent mining IP (v4/v6) OR
+  // the rig's stratum password (lib/owner-proof.js; single `proof` field, legacy `ip_proof`
+  // still accepted). Rate-limited; CAS balance lock + 1-pending-per-address cap in the scheduler.
   app.post('/api/account/:addr/withdraw', rateLimiter.middleware('public'), async (req, res) => {
     try {
       const { addr } = req.params;
       const method = (req.body && req.body.method) || 'tor';
+      const reqIp = normalizeIp(req.ip);
+      const submitted = (req.body && (req.body.proof || req.body.ip_proof)) || '';
+
+      const proof = await verifyOwnerProof(db, addr, submitted);
+      if (!proof.ok) {
+        auditOwnerProof(db, { action: `withdraw_${method}`, grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
+        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
+      }
 
       if (method === 'tor') {
         const result = withdrawalScheduler.createWithdrawal(addr, req.body && req.body.amount, method);
+        auditOwnerProof(db, { action: 'withdraw_tor', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: result.withdrawal_id, amount: result.amount, proof_method: proof.method } });
         return res.json({ success: true, withdrawal_id: result.withdrawal_id, status: 'tor_checking' });
       }
 
       if (method === 'slatepack') {
-        const reqIp = normalizeIp(req.ip);
-        const proof = verifyIpProof(db, addr, (req.body && req.body.ip_proof) || '');
-        if (!proof.ok) {
-          auditOwnerProof(db, { action: 'slatepack_withdraw', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
-          return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
-        }
         const result = await withdrawalScheduler.createSlatepackWithdrawal(addr, req.body && req.body.amount);
-        auditOwnerProof(db, { action: 'slatepack_withdraw', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: result.withdrawal_id, amount: result.amount } });
+        auditOwnerProof(db, { action: 'withdraw_slatepack', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: result.withdrawal_id, amount: result.amount, proof_method: proof.method } });
         return res.json({ success: true, withdrawal_id: result.withdrawal_id, amount: result.amount, status: 'slatepack_pending', slatepack: result.slatepack });
       }
 
@@ -2337,12 +2337,12 @@ function setupRoutes() {
   });
 
   // Complete a slatepack withdrawal: the miner pastes back the RESPONSE slatepack their wallet
-  // produced after `receive`. IP-gated like the trigger. The pool finalizes + broadcasts.
+  // produced after `receive`. Ownership-gated like the trigger. The pool finalizes + broadcasts.
   app.post('/api/account/:addr/withdraw/:id/finalize', rateLimiter.middleware('public'), async (req, res) => {
     try {
       const { addr, id } = req.params;
       const reqIp = normalizeIp(req.ip);
-      const proof = verifyIpProof(db, addr, (req.body && req.body.ip_proof) || '');
+      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '');
       if (!proof.ok) {
         auditOwnerProof(db, { action: 'slatepack_finalize', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason, withdrawal_id: id } });
         return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
@@ -2359,11 +2359,18 @@ function setupRoutes() {
 
   // Cancel a PARKED pending payout (retry_scheduled / slatepack_pending) — frees the
   // one-pending-per-address slot and returns the locked amount to spendable balance.
-  // No IP gate: like the Tor request itself, it only moves the address's own funds back to
-  // its own balance (no theft vector); worst case is a nuisance cancel of an auto-retry.
+  // Ownership-gated with the rest of the money actions (consistent rule: nothing touches a
+  // balance without proof; an open cancel was only a nuisance vector, but "always a gate"
+  // is simpler to reason about and to explain to miners).
   app.post('/api/account/:addr/withdraw/:id/cancel', rateLimiter.middleware('public'), async (req, res) => {
     try {
       const { addr, id } = req.params;
+      const reqIp = normalizeIp(req.ip);
+      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '');
+      if (!proof.ok) {
+        auditOwnerProof(db, { action: 'withdraw_cancel', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason, withdrawal_id: id } });
+        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
+      }
       const result = await withdrawalScheduler.cancelWithdrawal(addr, parseInt(id, 10));
       res.json(result);
     } catch (err) {
@@ -2496,7 +2503,7 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/stratum/hashrate', (req, res) => {
+  app.get('/api/stratum/hashrate', rateLimiter.middleware('public'), (req, res) => {
     try {
       const stats = hashrateTracker.getHashrateStats();
       res.json(stats);
@@ -2508,7 +2515,7 @@ function setupRoutes() {
   // Top miners by hashrate over an arbitrary window (default 24h) — powers the paginated
   // leaderboard on miners-stats.html. Separate from /api/stratum/hashrate (fixed 10 @ 1h,
   // shared with the poolstats reporter) so we can serve a larger list without churning it.
-  app.get('/api/stratum/top-miners', (req, res) => {
+  app.get('/api/stratum/top-miners', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 500, 10) || 500, 1000);
       const windowMinutes = Math.min(parseInt(req.query.window || 1440, 10) || 1440, 1440);
@@ -2525,7 +2532,7 @@ function setupRoutes() {
   // Top miners by AVERAGE hashrate over a multi-day window (default 30 days) — the "sustained
   // contribution" leaderboard on miners-stats.html. Backed by hashrate_history (retained ~30d),
   // not the shares table (pruned ~1d), so a 30-day window is meaningful.
-  app.get('/api/stratum/top-avg-hashrate', (req, res) => {
+  app.get('/api/stratum/top-avg-hashrate', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 500, 10) || 500, 1000);
       const days = Math.min(parseInt(req.query.days || 30, 10) || 30, 90);
@@ -2963,7 +2970,7 @@ function setupRoutes() {
   });
 
   // Top Miners List - FIX #3: Use real data, not hardcoded values
-  app.get('/api/miners/top', (req, res) => {
+  app.get('/api/miners/top', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 10), 100);
       const offset = parseInt(req.query.offset || 0);
@@ -3438,6 +3445,15 @@ function setupRoutes() {
       }
       if (wgPubkey && !/^[a-z0-9-]{2,12}$/.test(reg)) {
         return res.status(400).json({ error: 'a gateway region key must match ^[a-z0-9-]{2,12}$ (it becomes the wg peer tag)' });
+      }
+      // Step-up gate for the PAIRING branch only: adding a wg peer grants a remote box a
+      // trusted tunnel that forwards stratum with PROXY-protocol source IPs (which feed the
+      // miner ownership gate) — at least as sensitive as peer REMOVAL, which is already
+      // freshAdmin. Metadata-only saves (no wg_pubkey) stay plain secureAdmin so routine
+      // region edits don't prompt. Same challenge contract as requireFreshAuth, so the
+      // admin client's adminFetch() step-up flow handles it transparently.
+      if (wgPubkey && !authManager.isTokenFresh(req.token, STEP_UP_MAX_AGE_S)) {
+        return res.status(403).json({ error: 'Session expired', challenge_required: true });
       }
       const cc = country_code ? String(country_code).trim().toUpperCase().slice(0, 2) : null;
 

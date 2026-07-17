@@ -222,7 +222,7 @@ New / still-open findings:
   or omitted balances, totals/counts. Replace `SELECT *` with an explicit safe column list. Add the
   `public` rate-limiter. (Per-address pages already correctly show only that exact address's data.)
 
-### C2 — [Low-Medium] Tor-rail withdrawal has no ownership gate → balance-lock griefing / forced payout
+### C2 — [Low-Medium] Tor-rail withdrawal has no ownership gate → balance-lock griefing / forced payout — **FIXED 2026-07-17, see §E**
 - **Evidence:** `POST /api/account/:addr/withdraw` with `method:'tor'` (the default) takes **no**
   IP-proof — any anonymous caller triggers a full-balance withdrawal for *any* address
   ([index.js:2037-2040](../../web/07_mining_pool_public/back-end-pool/index.js#L2037-L2040)). The
@@ -257,3 +257,86 @@ New / still-open findings:
 **Not re-examined this pass (flagged for a future deep dive):** stratum share-validation/PPLNS
 accounting internals, the lottery draw RNG/verifiable-seed, and orphan-reversal against a live DB
 — the existing §B checklist covers their requirements but they were not line-verified here.
+
+## D. Re-audit 2026-07-17 (P3 pass — HTTP API + admin auth, ownership gate, SQL, rate limits, XSS)
+
+Scope: `index.js` routes, `lib/miners.js`, `lib/pool-settings.js`, admin-panel pages, and the
+front-end pages that echo miner-supplied data. Verified + corrected in the same pass.
+
+### Verified clean (no change needed)
+- **Ownership gate is single-sourced:** every mutating account API goes through
+  `verifyIpProof()` in [owner-proof.js](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js)
+  (min-payout, slatepack withdraw, slatepack finalize). The ungated paths are the documented
+  no-theft-vector ones (Tor withdraw = pay-to-self; cancel = own-funds unlock). No bypass found.
+- **Admin coverage:** `/api/admin/reconciliation`, payout `control` (GET) and `wallet-audit`
+  are `secureAdmin` (rate limit + IP filter + JWT); `freeze`/`resume`, `adopt-identity`,
+  withdrawal retry/cancel, ban/unban, award, campaigns are `freshAdmin` (step-up). 2FA is
+  enforced at session issuance (`/api/auth/login` returns `totp_required` and only
+  `/api/auth/login/totp` mints cookies), so every admin route inherits it.
+  `/api/admin/_authcheck` deliberately bypasses the limiter/IP filter (documented nginx
+  `auth_request` shim; JWT-only, 204, no data).
+- **SQL:** all statements parameterized. The only dynamic fragments are whitelisted:
+  `LEDGER_DIRECTION_SQL` (fixed map), CMS `_clean()`-built SET clauses (fixed key set),
+  retention table names (internal constants).
+- **XSS:** miner identity charset is locked at the stratum boundary
+  (`validateUsername`: bech32 address regex + `[a-z0-9_-]` worker names, donate tag → int),
+  and the public/admin pages that render addresses/worker names/reasons all escape
+  (`escHtml`/`esc`). Uploaded SVGs are served with a sandboxing CSP.
+
+### Corrected this pass
+1. **Rate limiting gaps closed** — 12 public GETs had no limiter (`/api/pool/stats|blocks|
+   miners|payments|top-block-finders`, `/api/account/:addr/shares|balance`, `/api/stratum/
+   hashrate|top-miners|top-avg-hashrate`, `/api/miners/top`, `/api/config/pool-info`) → all now
+   `rateLimiter.middleware('public')`; `/api/auth/refresh|logout|change-password` → `'auth'`
+   (change-password verifies old_password, so unthrottled = session-holder brute force).
+2. **Ownership-gate evidence hardened** — source IP was recorded at stratum **login**
+   (unauthenticated: the address is the username), so a bare TCP connect under a victim's
+   address could poison/evict its last-2-IP window. Now recorded once per session on the
+   **first node-accepted share** (stratum-server `handleSubmit`) — IP evidence requires PoW.
+3. **Gateway pairing step-up** — POST `/api/admin/locations` with `wg_pubkey` (pairs a
+   WireGuard gateway peer that may forward PROXY-v2 source IPs into the ownership gate) now
+   requires fresh auth like peer *removal* already did (inline `isTokenFresh` +
+   `challenge_required`; regions.html save switched to `adminFetch` for the reauth flow).
+   Metadata-only region saves stay plain `secureAdmin`.
+4. **pool-settings `updateSection` stored the raw input, not the validator's output** —
+   normalisations (trimmed `donation_address`, deduped `enabled_themes`, cleaned
+   `lottery_special_events`) were silently dropped, and an array input whose validator
+   returned a JSON string fell through to the binder as a raw array. Now persists `validated`.
+
+### Still open (carried from §C)
+C1/C2 (Tor-withdraw trigger/cancel griefing), C3 (access-token survives logout ≤1h),
+C4 inject-under-`secureAdmin` promotion — unchanged this pass.
+*(Update: C2 and the cancel-griefing half of this item were closed later the same day — §E.)*
+
+## E. Ownership gate v2 — 2026-07-17 (add-ons, NOT VPS-tested)
+
+Operator-decided redesign of the account-page gate ([owner-proof.js](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js) rewritten):
+
+1. **C2 closed — every money action is now gated.** `POST /api/account/:addr/withdraw`
+   (BOTH rails), `…/withdraw/:id/finalize`, and `…/withdraw/:id/cancel` all require an
+   ownership proof. The balance-lock griefing / forced-payout / fee-burn vectors on the Tor
+   rail and the nuisance-cancel vector are gone. Failures are audited per action
+   (`owner_proof:withdraw_tor|withdraw_slatepack|slatepack_finalize|withdraw_cancel:deny`).
+2. **Proof = recent mining IP (IPv4 or IPv6) OR the rig's stratum password.** Both captured
+   at the stratum layer on a session's **first accepted share** (PoW-backed, same
+   anti-poisoning rationale as D.2), each in a last-2 distinct window (ISP re-lease /
+   rig-side password change never locks the owner out). Trivial passwords (`x`, `123`,
+   factory defaults, `d=…` directives, <4 chars) are never captured and never verify —
+   a shared default must not become a skeleton key.
+3. **Proofs hashed at rest (data minimisation).** Salted scrypt (`N=16384, r=8, p=1`,
+   memory-hard vs GPU brute-force of the 2^32 IPv4 space / low-entropy passwords), format
+   `v1$salt$hash` in `miner_accounts.last_ip/prev_ip/last_pass_hash/prev_pass_hash`.
+   The DB never holds a raw mining IP or password; legacy plaintext IPs are upgraded in a
+   background startup migration (`migrateOwnerProofHashes`), with dual-form verify meanwhile.
+   Trade-off accepted: no raw-IP forensics from the accounts table (the audit log still
+   records HTTP request IPs).
+4. **IPv6 canonicalisation** (`canonicalizeIp`): brackets/zone-id stripped, `::ffff:` mapped
+   prefix removed, `::` expanded, embedded IPv4 tails folded — one stable form so socket-
+   captured and user-typed representations always compare equal.
+5. **Per-account `min_payout` endpoint removed** (auto-payout relic; manual withdrawals carry
+   an explicit amount). Only the pool-wide `config.min_withdrawal` floor is enforced, in the
+   scheduler. Attack surface: one fewer gated mutation endpoint.
+
+Residual risk (unchanged in kind): the gate remains anti-griefing, not authentication — a
+NAT/CGNAT co-tenant sharing the miner's public IP can still pass it; both rails stay
+independently theft-proof (pay-to-self over Tor; slatepack age-encrypted to the address).

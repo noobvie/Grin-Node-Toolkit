@@ -117,7 +117,7 @@ Listed here so we don't re-litigate or accidentally re-implement.
 | # | Item | Status / why deferred | Recommendation |
 |---|---|---|---|
 | D1 | **System-health fake metrics** | ✅ **Resolved 2026-06-08** — real metrics via admin `GET /api/admin/health/system`; health page moved into the admin panel (gated, not public). ⚠ confirm the legacy public `system-health.html` / `miners-stats` uptime no longer render hardcoded values. | Done (backend + page move). Frontend verification owed. |
-| D2 | **Money precision `REAL` GRIN → integer nanoGRIN** | Touches all payout/reward/withdrawal/balance_log math + display. High blast radius. | Do as its **own PR + full testnet soak**, never as a side-change. Engine-independent (do it in SQLite, carries to Postgres). |
+| D2 | **Money precision `REAL` GRIN → integer nanoGRIN** | Touches all payout/reward/withdrawal/balance_log math + display. High blast radius. **Carve-out landed 2026-07-17:** per-payout network fees are now RECORDED (`withdrawals.fee` — slatepack from the slate, Tor from the wallet tx log) and reconciliation coverage is fee-adjusted, so fee accumulation no longer false-trips `coverage_shortfall`. The REAL→nanoGRIN unit change itself stays deferred. | Do as its **own PR + full testnet soak**, never as a side-change. Engine-independent (do it in SQLite, carries to Postgres). |
 | D3 | **mTLS satellite→hub** | v1 is shared-secret header over HTTPS (+ IP allowlist), which is acceptable. | Infra/manual (cert provisioning) — defer until multi-operator trust needs it. |
 | D4 | **Grin Transporter payout rail** | `lib/wallet-transporter.js` is a forced-off stub; blocked on Script 092 (not built, deferred). | Keep stub off until [092 Transporter](script09_design.md) ships. |
 | D5 | **Theme-system unification** (public `body.<theme>-theme` → `theme.js` CSS variables) | Cosmetic; refactor risk across 13 themes. | Defer; not launch-blocking. |
@@ -414,6 +414,94 @@ journalctl -u grin-pool-manager${NET:+-$NET} -n 50 --no-pager
 > matured block + a Tor listener). Validate it during the 7-day soak: confirm a real block, wait
 > `confirm_depth`, watch the 6h auto-payout produce a `withdrawals` row and a `txid`, then verify the
 > reversal/CAS branches per Layer 2.
+
+---
+
+## 9. Durable trend metrics & public chart recorders (2026-07-17, add-ons — NOT VPS-tested)
+
+Two never-pruned hourly rollup tables (kept out of `lib/retention.js`), written by
+`HashrateTracker.rollupCompletedHours()` each completed hour, idempotent upserts:
+
+- **`pool_metrics_hourly`** — pool GPS, distinct miners, blocks, earnings, payout **+ new
+  `network_hashrate_gps`** (NULL until sampled). The network sample comes from
+  `hashrateTracker.networkGpsProvider` (wired in `index.js` to the block monitor's node client;
+  `diff × 42 / 60 / 16384`), fetched at most once per completed hour and applied only to the
+  just-completed bucket (catch-up buckets after an outage keep NULL — no fake history). Upsert
+  keeps an existing sample via `COALESCE` when a re-run passes NULL.
+- **`pool_region_metrics_hourly`** — `(bucket_start, region)` PK: per-region GPS, distinct
+  miners, share count, from the `shares.region` stamp. Backs "miners by gateway" trends.
+
+**Endpoints** (public, rate-limited, same `?range=day|week|month|year|all` vocabulary):
+- `/api/pool/metrics/history` — now also returns `network_hashrate_gps` per point (null-safe).
+- `/api/pool/metrics/history/regions` (new) — `{ series: [{ region, points: [{t, miner_count,
+  hashrate_gps}] }] }`, busiest-first.
+
+**Frontend**
+- Homepage **P-04** now stacks three Chart.js recorders (the hand-rolled 24h strip chart was
+  removed; `chart.umd.min.js` + `charts-init.js` are now loaded by `index.html`): pool hashrate
+  (24H = fine 5-min series from `/api/pool/hashrate/history`, 7D/30D = rollup), **network
+  hashrate as an aligned small-multiple below it** (never dual-axis — network GPS is orders of
+  magnitude above pool GPS), and miners online (fixed 30d). Range toggle 24H/7D/30D in the
+  panel title (`.chart-range`, reactor.css).
+- **miners-stats P-02b** "Chart recorder — miners by gateway": multi-line per region via new
+  `PoolCharts.renderMultiTrendLine()` (union-of-timestamps alignment, gaps NOT interpolated,
+  legend for ≥2 series, single y-axis). Colors from `PoolCharts.PALETTE` — 8 fixed slots,
+  CVD-validated against the dark panel surface — assigned by region NAME in alphabetical slot
+  order (color follows the entity, not the rank). Panel hidden when the only region is
+  `default` (single-box) or there's no data.
+
+**Gateway status fix** (same date): `readGatewayStatus()` no longer skips WireGuard peers with
+no handshake — a never-handshaked/downed gateway now yields `{handshake: 0}` so
+`/api/pool/stats/regions` can mark it `offline` (red). Previously an all-gateways-down pool
+returned `{}`, indistinguishable from "wg unavailable", and every dead gateway showed idle
+(blue) forever.
+
+**Public copy** (index.html): P-05 patch-note folded into the miner-setup guide (password
+guidance now tells miners to pick a real private password — a future release may verify it);
+P-08 vardiff line removed (no vardiff exists); payout lines now describe the miner-initiated
+Tor/slatepack rails with 6h→48h retry back-off and refund-on-failure; P-03 mimic says
+`SLATEPACK ▸ ON REQUEST`. Note: the stratum password is currently **not read or stored**
+anywhere (`handleLogin` parses only `login`). *(Superseded later the same day — §10 makes the
+password an ownership proof.)*
+
+## 10. Ownership gate v2 + manual-withdrawal simplification (2026-07-17, add-ons — NOT VPS-tested)
+
+Operator decisions (same-day discussion): proof = IP **or** password; keep last-2 windows but
+hash at rest; gate **all** money actions; retire the per-account payout threshold.
+
+**Gate (lib/owner-proof.js, rewritten):** `verifyOwnerProof(db, addr, submitted)` takes ONE
+field — if it parses as an IP (v4/v6, canonicalised) it's checked against the last-2 IP
+window; a usable password is checked against the last-2 password-hash window. All proofs
+stored as salted scrypt `v1$salt$hash` (never plaintext); legacy plaintext IPs upgraded by a
+background `migrateOwnerProofHashes(db)` at startup (index.js calls it after scheduler start).
+Trivial passwords (`x`, `123`, defaults, `d=…`, <4 chars) never capture/verify. Fail throttle
+unchanged (8/10 min → 5 min lockout). `canonicalizeIp` gives IPv6 one stable form (zone/
+brackets/`::ffff:`/`::`-expansion/v4-tails).
+
+**Capture (stratum):** `handleLogin` now also reads `params.pass` → kept on the in-memory
+session only; on a session's **first accepted share** `handleSubmit` calls
+`minerManager.recordOwnerEvidence(addr, ip, pass)` (async fire-and-forget) which shifts the
+last-2 windows for both proofs. Schema: `miner_accounts` + `last_pass_hash`/`prev_pass_hash`
+(migrateMinerAccounts).
+
+**Routes (index.js):** `POST /api/account/:addr/withdraw` (tor AND slatepack),
+`…/:id/finalize`, `…/:id/cancel` all verify `req.body.proof` (legacy `ip_proof` accepted) —
+rationale: an ungated Tor trigger let anyone force payouts for leaderboard addresses (pool-paid
+fees, output consumption, forced timing) and an open cancel was a nuisance vector.
+`POST /api/account/:addr/min-payout` **removed**; account GET no longer returns
+`min_payout`/`effective_min_payout` and adds `has_recorded_pass` next to `has_recorded_ip`.
+Scheduler enforces only pool-wide `config.min_withdrawal` (min_payout column now dead).
+
+**Account page (account-settings.html):** P-04 is one column — single ownership-proof input
+(hint links https://tools.grin.money/tools/my-ip/ for IPv4/IPv6 lookup), shared amount field
+(blank = full balance, label shows the pool minimum), Tor/slatepack radio. Threshold UI
+removed; cancel now sends the proof; friendly `PROOF_REASONS` mapping for gate errors; demo
+dataset updated. Sidebar shows the pool minimum.
+
+**Verified locally:** `node --check` on index.js + 5 libs + the extracted inline script;
+owner-proof smoke test (canonicalisation v4/v6, capture/no-op/rotation, IP+password verify,
+trivial-password rejection, legacy plaintext verify) — all pass. Deploy needs a backend
+restart (column migration + background hash migration run automatically).
 
 ---
 

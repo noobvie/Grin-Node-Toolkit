@@ -108,9 +108,9 @@
       font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .18em;
       text-transform: uppercase; color: var(--info); margin-bottom: 10px;
     }
-    .controls-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 22px; }
-    @media (max-width: 640px) { .controls-cols { grid-template-columns: minmax(0, 1fr); } }
-    .controls-cols h4 {
+    /* single withdraw column (per-account threshold retired 2026-07-17) */
+    .withdraw-col { max-width: 560px; }
+    .withdraw-col h4 {
       font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .16em;
       text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px;
       padding-bottom: 7px; border-bottom: 1px solid var(--border-soft);
@@ -283,66 +283,57 @@
                 <div class="deck-row acct-main">
                     <!-- ═══ P-04 · PAYOUT CONTROLS (one ownership gate) ═══ -->
                     <div class="panel"><span class="screws"></span>
-                        <h2 class="panel-title"><span class="tag">P-04</span> Payout controls <span class="right">threshold &middot; withdraw &middot; one ownership gate</span></h2>
+                        <h2 class="panel-title"><span class="tag">P-04</span> Payout controls <span class="right">one gate &middot; amount &middot; Tor or slatepack</span></h2>
                         <div class="panel-body">
 
                             <div class="gate-block">
-                                <div class="gate-title">🔐 Ownership gate — verify before changing anything</div>
+                                <div class="gate-title">🔐 Ownership gate — required for every payout action</div>
                                 <div class="form-group" style="margin-bottom:0">
-                                    <label for="acct-ip-proof">Recent mining IP (one of the last two your miner connected from)</label>
-                                    <input type="text" id="acct-ip-proof" placeholder="e.g. 203.0.113.42" autocomplete="off" spellcheck="false">
+                                    <label for="acct-ip-proof">A recent mining IP (IPv4 or IPv6) <b>or</b> your rig's stratum password</label>
+                                    <input type="text" id="acct-ip-proof" placeholder="e.g. 203.0.113.42, 2001:db8::1, or your rig password" autocomplete="off" spellcheck="false">
                                     <small id="acct-ip-hint" style="color:var(--text-dim);"></small>
-                                    <small style="color:var(--text-mute);">Required for: <b>threshold changes</b> and <b>Slatepack payouts</b>. Tor payouts don't need it — they can only pay to this address's own wallet.</small>
+                                    <small style="color:var(--text-mute);">Accepted: one of the last two IPs your miner submitted shares from
+                                        (check yours at <a href="https://tools.grin.money/tools/my-ip/" target="_blank" rel="noopener">tools.grin.money/tools/my-ip</a>),
+                                        or the password set in your miner's pool config. Common defaults like <code>x</code> or <code>123</code> never count — set a real one on your rig.</small>
                                 </div>
                             </div>
 
-                            <div class="controls-cols">
-                                <div>
-                                    <h4>Payout threshold</h4>
-                                    <div class="form-group">
-                                        <label for="acct-min-payout-input">Minimum payout (≥ <span id="acct-pool-min">—</span> ツ)</label>
-                                        <input type="number" id="acct-min-payout-input" min="0" step="0.1" placeholder="pool default" autocomplete="off">
-                                    </div>
-                                    <button class="btn-save" id="acct-save-min">Save Threshold</button>
-                                    <div class="acct-msg" id="acct-min-msg"></div>
+                            <div class="withdraw-col">
+                                <h4>Withdraw</h4>
+                                <div class="form-group">
+                                    <label for="acct-amount">Amount (GRIN, blank = full balance &middot; minimum <span id="acct-pool-min">—</span> ツ)</label>
+                                    <input type="number" id="acct-amount" min="0" step="0.1" placeholder="full balance" autocomplete="off">
                                 </div>
-                                <div>
-                                    <h4>Withdraw</h4>
-                                    <div class="radio-row" role="radiogroup" aria-label="Payout method">
-                                        <label><input type="radio" name="acct-pay-method" id="acct-pay-tor" value="tor" checked> Tor</label>
-                                        <label><input type="radio" name="acct-pay-method" id="acct-pay-slatepack" value="slatepack"> Slatepack (manual)</label>
-                                    </div>
+                                <div class="radio-row" role="radiogroup" aria-label="Payout method">
+                                    <label><input type="radio" name="acct-pay-method" id="acct-pay-tor" value="tor" checked> Tor</label>
+                                    <label><input type="radio" name="acct-pay-method" id="acct-pay-slatepack" value="slatepack"> Slatepack (manual)</label>
+                                </div>
 
-                                    <!-- Tor method -->
-                                    <div id="acct-pay-tor-pane">
-                                        <p class="note" style="margin-bottom:12px">Sends your balance to this address's wallet over Tor. Wallet reachability:
-                                            <span id="acct-tor" style="font-family:var(--mono);">checking…</span></p>
-                                        <button class="btn-save" id="acct-withdraw">Request Tor Payout</button>
-                                        <div class="acct-msg" id="acct-withdraw-msg"></div>
-                                    </div>
+                                <!-- Tor method -->
+                                <div id="acct-pay-tor-pane">
+                                    <p class="note" style="margin-bottom:12px">Sends the amount to this address's wallet over Tor. Wallet reachability:
+                                        <span id="acct-tor" style="font-family:var(--mono);">checking…</span></p>
+                                    <button class="btn-save" id="acct-withdraw">Request Tor Payout</button>
+                                    <div class="acct-msg" id="acct-withdraw-msg"></div>
+                                </div>
 
-                                    <!-- Slatepack method -->
-                                    <div id="acct-pay-slatepack-pane" style="display:none;">
-                                        <p class="note" style="margin-bottom:12px">
-                                            Generates a slatepack <b>encrypted to your address</b> — only your wallet can open it.
-                                            Steps: 1) generate, 2) <code>receive</code> it in your wallet, 3) paste the response to finalize.
-                                        </p>
-                                        <div class="form-group">
-                                            <label for="acct-sp-amount">Amount (GRIN, blank = full balance)</label>
-                                            <input type="number" id="acct-sp-amount" min="0" step="0.1" placeholder="full balance" autocomplete="off">
+                                <!-- Slatepack method -->
+                                <div id="acct-pay-slatepack-pane" style="display:none;">
+                                    <p class="note" style="margin-bottom:12px">
+                                        Generates a slatepack <b>encrypted to your address</b> — only your wallet can open it.
+                                        Steps: 1) generate, 2) <code>receive</code> it in your wallet, 3) paste the response to finalize.
+                                    </p>
+                                    <button class="btn-save" id="acct-sp-create">Generate Slatepack</button>
+                                    <div class="acct-msg" id="acct-sp-msg"></div>
+                                    <div id="acct-sp-out" style="display:none;margin-top:14px;">
+                                        <label>Encrypted slatepack — import into your wallet and run <code>receive</code>:</label>
+                                        <textarea id="acct-sp-armored" readonly rows="5" style="width:100%;font-family:var(--mono);font-size:12px;"></textarea>
+                                        <div class="form-group" style="margin-top:12px;">
+                                            <label for="acct-sp-response">Paste your wallet's response slatepack:</label>
+                                            <textarea id="acct-sp-response" rows="5" style="width:100%;font-family:var(--mono);font-size:12px;" placeholder="BEGINSLATEPACK. ..."></textarea>
                                         </div>
-                                        <button class="btn-save" id="acct-sp-create">Generate Slatepack</button>
-                                        <div class="acct-msg" id="acct-sp-msg"></div>
-                                        <div id="acct-sp-out" style="display:none;margin-top:14px;">
-                                            <label>Encrypted slatepack — import into your wallet and run <code>receive</code>:</label>
-                                            <textarea id="acct-sp-armored" readonly rows="5" style="width:100%;font-family:var(--mono);font-size:12px;"></textarea>
-                                            <div class="form-group" style="margin-top:12px;">
-                                                <label for="acct-sp-response">Paste your wallet's response slatepack:</label>
-                                                <textarea id="acct-sp-response" rows="5" style="width:100%;font-family:var(--mono);font-size:12px;" placeholder="BEGINSLATEPACK. ..."></textarea>
-                                            </div>
-                                            <button class="btn-save" id="acct-sp-finalize">Finalize Payout</button>
-                                            <div class="acct-msg" id="acct-sp-final-msg"></div>
-                                        </div>
+                                        <button class="btn-save" id="acct-sp-finalize">Finalize Payout</button>
+                                        <div class="acct-msg" id="acct-sp-final-msg"></div>
                                     </div>
                                 </div>
                             </div>
@@ -371,7 +362,7 @@
                                 <li><span class="k">Total shares submitted</span><span class="v" id="acct-shares">—</span></li>
                                 <li><span class="k">Last share</span><span class="v" id="acct-last-share">—</span></li>
                                 <li><span class="k">Pending withdrawals</span><span class="v" id="acct-pending">—</span></li>
-                                <li><span class="k">Minimum payout</span><span class="v" id="acct-min">—</span></li>
+                                <li><span class="k">Minimum payout (pool)</span><span class="v" id="acct-min">—</span></li>
                                 <li><span class="k">Mining here since</span><span class="v" id="acct-since">—</span></li>
                             </ul>
 
@@ -463,8 +454,10 @@
         //   GET  /api/account/:addr/balance/log        ledger (?direction=in|out, ?format=csv)
         //   GET  /api/account/:addr/tor-check          wallet reachability hint
         //   GET  /api/public/price                     cached GRIN spot price (USD + BTC)
-        //   POST /api/account/:addr/withdraw           request a payout
-        //   POST /api/account/:addr/withdraw/:id/cancel  cancel a parked pending payout
+        //   POST /api/account/:addr/withdraw           request a payout (ownership-gated)
+        //   POST /api/account/:addr/withdraw/:id/cancel  cancel a parked pending payout (gated)
+        // Every payout action sends `proof` — a recent mining IP (v4/v6) or the rig's stratum
+        // password — from the single ownership-gate input (one gate, all actions).
         // All DOM writes use textContent or escHtml — addresses/events are external data.
         //
         // Demo mode: the address below renders a built-in sample dataset with no API calls,
@@ -573,7 +566,7 @@
             $id('acct-shares').textContent = Number(a.shares && a.shares.count || 0).toLocaleString('en-US');
             $id('acct-last-share').textContent = fmtWhen(a.shares && a.shares.last_share_at);
             $id('acct-pending').textContent = (a.pending_withdrawals || 0) + ' (max 1 per address)';
-            $id('acct-min').textContent = fmtGrin(a.effective_min_payout != null ? a.effective_min_payout : a.min_withdrawal);
+            $id('acct-min').textContent = fmtGrin(a.min_withdrawal);
             $id('acct-since').textContent = fmtWhen(a.created_at);
 
             const lamp = $id('acct-lamp');
@@ -582,12 +575,14 @@
             $id('acct-lamp-text').textContent = a.is_online ? 'Miner online' : 'Miner offline';
 
             $id('acct-pool-min').textContent = Number(a.min_withdrawal || 0).toFixed(1);
-            $id('acct-min-payout-input').value = (a.min_payout != null) ? a.min_payout : '';
-            $id('acct-ip-hint').textContent = a.has_recorded_ip
-                ? 'A mining IP is on record for this address.'
-                : 'No mining IP recorded yet — connect a miner first, then settings unlock.';
+            const proofs = [];
+            if (a.has_recorded_ip) proofs.push('a mining IP');
+            if (a.has_recorded_pass) proofs.push('a rig password');
+            $id('acct-ip-hint').textContent = proofs.length
+                ? 'On record for this address: ' + proofs.join(' and ') + '.'
+                : 'No proof recorded yet — connect a miner and submit at least one accepted share first.';
 
-            const canWithdraw = (a.balance || 0) >= (a.effective_min_payout != null ? a.effective_min_payout : a.min_withdrawal || 0) && !a.pending_withdrawals;
+            const canWithdraw = (a.balance || 0) >= (a.min_withdrawal || 0) && !a.pending_withdrawals;
             $id('acct-withdraw').disabled = !canWithdraw;
 
             renderPending(a.pending_withdrawal);
@@ -625,17 +620,20 @@
             const wid = $id('acct-pending-cancel').dataset.wid;
             const msg = $id('acct-cancel-msg');
             if (!wid) return;
+            const proof = getProof(msg);
+            if (!proof) return;
             setMsg(msg, 'Cancelling…', true);
             try {
                 const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw/' + encodeURIComponent(wid) + '/cancel', {
-                    method: 'POST', credentials: 'same-origin'
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ proof: proof })
                 });
                 const json = await r.json().catch(() => null);
                 if (r.ok && json && json.success) {
                     setMsg(msg, 'Payout #' + wid + ' cancelled — ' + fmtGrin(json.amount) + ' returned to your balance.', true);
                     lookup();
                 } else {
-                    setMsg(msg, (json && json.error) || 'Cancel failed', false);
+                    setMsg(msg, apiErr(json, 'Cancel failed'), false);
                 }
             } catch (e) { setMsg(msg, 'Cancel failed: ' + e.message, false); }
         }
@@ -887,11 +885,37 @@
             }
         }
 
-        // ── Mutations (threshold / withdraw / slatepack) ───────────────────
+        // ── Mutations (withdraw / slatepack / cancel — all ownership-gated) ─
         function demoBlock(msgEl) {
             if (!isDemo) return false;
             setMsg(msgEl, 'Demo account — actions are disabled.', false);
             return true;
+        }
+
+        // One gate, all actions: returns the trimmed proof (IP or rig password) or '' after
+        // showing the "fill the gate" message. Friendlier text for backend reason codes.
+        function getProof(msgEl) {
+            const proof = $id('acct-ip-proof').value.trim();
+            if (!proof) setMsg(msgEl, 'Enter your ownership proof above — a recent mining IP or your rig\'s stratum password.', false);
+            return proof;
+        }
+        const PROOF_REASONS = {
+            no_match: 'the IP/password did not match this address\'s records',
+            trivial_password: 'that password is too common to count as proof — use your mining IP instead',
+            too_many_attempts: 'too many failed attempts — wait 5 minutes',
+            no_recorded_proof: 'nothing on record yet — submit at least one accepted share first',
+            proof_required: 'enter your ownership proof above',
+            account_not_found: 'no mining account for this address'
+        };
+        function apiErr(json, fallback) {
+            if (!json) return fallback;
+            const why = json.reason && PROOF_REASONS[json.reason];
+            return json.error ? (json.error + (why ? ' — ' + why : (json.reason ? ' (' + json.reason + ')' : ''))) : fallback;
+        }
+
+        function amountValue() {
+            const amt = $id('acct-amount').value.trim();
+            return amt === '' ? null : Number(amt);
         }
 
         async function withdraw() {
@@ -899,6 +923,8 @@
             const btn = $id('acct-withdraw');
             const msg = $id('acct-withdraw-msg');
             if (demoBlock(msg)) return;
+            const proof = getProof(msg);
+            if (!proof) return;
             btn.disabled = true;
             setMsg(msg, 'Submitting…', true);
             try {
@@ -906,14 +932,14 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     credentials: 'same-origin',
-                    body: JSON.stringify({ method: 'tor' })
+                    body: JSON.stringify({ method: 'tor', amount: amountValue(), proof: proof })
                 });
                 const json = await r.json().catch(() => null);
                 if (r.ok && json && json.success) {
                     setMsg(msg, 'Payout queued (#' + json.withdrawal_id + ') — it will be sent to your wallet over Tor.', true);
                     lookup(); // refresh balances + pending strip
                 } else {
-                    setMsg(msg, (json && json.error) || 'Withdrawal failed', false);
+                    setMsg(msg, apiErr(json, 'Withdrawal failed'), false);
                     btn.disabled = false;
                 }
             } catch (e) {
@@ -922,41 +948,17 @@
             }
         }
 
-        async function saveMinPayout() {
-            if (!currentAddr) return;
-            const msg = $id('acct-min-msg');
-            if (demoBlock(msg)) return;
-            const ipProof = $id('acct-ip-proof').value.trim();
-            if (!ipProof) { setMsg(msg, 'Enter a recent mining IP in the ownership gate above.', false); return; }
-            const raw = $id('acct-min-payout-input').value.trim();
-            setMsg(msg, 'Saving…', true);
-            try {
-                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/min-payout', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-                    body: JSON.stringify({ min_payout: raw === '' ? null : Number(raw), ip_proof: ipProof })
-                });
-                const json = await r.json().catch(() => null);
-                if (r.ok && json && json.success) {
-                    setMsg(msg, raw === '' ? 'Reverted to pool default.' : 'Threshold saved.', true);
-                    lookup();
-                } else {
-                    setMsg(msg, (json && (json.error + (json.reason ? ' (' + json.reason + ')' : ''))) || 'Save failed', false);
-                }
-            } catch (e) { setMsg(msg, 'Save failed: ' + e.message, false); }
-        }
-
         async function slatepackCreate() {
             if (!currentAddr) return;
             const msg = $id('acct-sp-msg');
             if (demoBlock(msg)) return;
-            const ipProof = $id('acct-ip-proof').value.trim();
-            if (!ipProof) { setMsg(msg, 'Enter a recent mining IP in the ownership gate above.', false); return; }
-            const amt = $id('acct-sp-amount').value.trim();
+            const proof = getProof(msg);
+            if (!proof) return;
             setMsg(msg, 'Generating encrypted slatepack…', true);
             try {
                 const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-                    body: JSON.stringify({ method: 'slatepack', amount: amt === '' ? null : Number(amt), ip_proof: ipProof })
+                    body: JSON.stringify({ method: 'slatepack', amount: amountValue(), proof: proof })
                 });
                 const json = await r.json().catch(() => null);
                 if (r.ok && json && json.success) {
@@ -966,7 +968,7 @@
                     setMsg(msg, 'Slatepack #' + json.withdrawal_id + ' created (' + json.amount + ' ツ). Import it, run receive, paste the response below.', true);
                     lookup();
                 } else {
-                    setMsg(msg, (json && (json.error + (json.reason ? ' (' + json.reason + ')' : ''))) || 'Failed', false);
+                    setMsg(msg, apiErr(json, 'Failed'), false);
                 }
             } catch (e) { setMsg(msg, 'Failed: ' + e.message, false); }
         }
@@ -976,15 +978,16 @@
             const msg = $id('acct-sp-final-msg');
             if (demoBlock(msg)) return;
             const wid = $id('acct-sp-finalize').dataset.wid;
-            const ipProof = $id('acct-ip-proof').value.trim();
             const resp = $id('acct-sp-response').value.trim();
             if (!wid) { setMsg(msg, 'Generate a slatepack first.', false); return; }
             if (!resp) { setMsg(msg, 'Paste the response slatepack from your wallet.', false); return; }
+            const proof = getProof(msg);
+            if (!proof) return;
             setMsg(msg, 'Finalizing + broadcasting…', true);
             try {
                 const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw/' + encodeURIComponent(wid) + '/finalize', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-                    body: JSON.stringify({ response_slatepack: resp, ip_proof: ipProof })
+                    body: JSON.stringify({ response_slatepack: resp, proof: proof })
                 });
                 const json = await r.json().catch(() => null);
                 if (r.ok && json && json.success) {
@@ -993,7 +996,7 @@
                     $id('acct-sp-response').value = '';
                     lookup();
                 } else {
-                    setMsg(msg, (json && json.error) || 'Finalize failed', false);
+                    setMsg(msg, apiErr(json, 'Finalize failed'), false);
                 }
             } catch (e) { setMsg(msg, 'Finalize failed: ' + e.message, false); }
         }
@@ -1053,8 +1056,8 @@
                     pending_withdrawals: 0, pending_withdrawal: null,
                     is_online: true, last_seen_at: now - 40, created_at: now - 75 * 86400,
                     shares: { count: 184207, last_share_at: now - 40 },
-                    hashrate_gps: 4.82, min_withdrawal: 25.0, min_payout: null,
-                    effective_min_payout: 25.0, has_recorded_ip: true
+                    hashrate_gps: 4.82, min_withdrawal: 25.0,
+                    has_recorded_ip: true, has_recorded_pass: true
                 },
                 series, workers10, workers24,
                 earnings: { periods: { h1: 0.2604, h24: 6.1418, d7: 41.0317, d30: 172.4402 }, in_30d: 174.4402, out_30d: 50.742 },
@@ -1084,7 +1087,6 @@
             $id('acct-lookup').addEventListener('click', lookup);
             $id('acct-addr').addEventListener('keydown', function (e) { if (e.key === 'Enter') lookup(); });
             $id('acct-withdraw').addEventListener('click', withdraw);
-            $id('acct-save-min').addEventListener('click', saveMinPayout);
             $id('acct-sp-create').addEventListener('click', slatepackCreate);
             $id('acct-sp-finalize').addEventListener('click', slatepackFinalize);
             $id('acct-pending-cancel').addEventListener('click', cancelPending);

@@ -260,6 +260,83 @@
     return _charts[canvasId];
   }
 
+  // Fixed categorical palette for multi-series charts (per-region lines). Eight dark-surface
+  // steps validated (2026-07-17) against the pool panel background for adjacent-pair CVD
+  // separation, normal-vision separation, chroma and ≥3:1 contrast. Assign slots to entities
+  // in a FIXED order (e.g. region names sorted alphabetically), never by rank and never
+  // cycled past 8 — the public region UI is already capped at 8 regions.
+  var PALETTE = ['#3987e5', '#008300', '#d55181', '#c98500', '#199e70', '#d95926', '#9085e9', '#e66767'];
+
+  // Multi-series line chart on ONE shared y-axis (never dual-axis — two measures of different
+  // magnitude get two charts instead). `seriesList` = [{ label, points: [{t, v}], color }];
+  // series are aligned on the union of their timestamps, with nulls where a series has no
+  // bucket (gaps stay visible — an offline gateway shows a hole, not an interpolated line).
+  // A legend renders automatically for ≥2 series. opts: valueFmt, bucketSeconds, spanGaps.
+  function renderMultiTrendLine(canvasId, seriesList, opts) {
+    opts = opts || {};
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || typeof global.Chart === 'undefined') return null;
+    seriesList = Array.isArray(seriesList) ? seriesList : [];
+    const valueFmt = typeof opts.valueFmt === 'function' ? opts.valueFmt : fmtGps;
+
+    // Union time grid, oldest→newest, so differently-gapped series stay x-aligned.
+    const tSet = new Set();
+    seriesList.forEach(function (s) {
+      (s.points || []).forEach(function (p) { tSet.add(p.t); });
+    });
+    const grid = [...tSet].sort(function (a, b) { return a - b; });
+    const labels = grid.map(function (t) { return fmtBucketLabel(t, opts.bucketSeconds); });
+
+    const mk = function (s, i) {
+      const c = s.color || PALETTE[i % PALETTE.length];
+      const byT = new Map((s.points || []).map(function (p) { return [p.t, Number(p.v) || 0]; }));
+      return {
+        label: s.label || ('Series ' + (i + 1)),
+        data: grid.map(function (t) { return byT.has(t) ? byT.get(t) : null; }),
+        borderColor: c,
+        backgroundColor: c + '22',
+        borderWidth: 2,
+        pointRadius: 0,
+        pointHoverRadius: 3,
+        tension: 0.25,
+        fill: false,
+        spanGaps: !!opts.spanGaps
+      };
+    };
+
+    if (_charts[canvasId]) {
+      const ch = _charts[canvasId];
+      ch.data.labels = labels;
+      ch.data.datasets = seriesList.map(mk);
+      ch.options.plugins.legend.display = seriesList.length > 1;
+      ch.options.plugins.tooltip.callbacks.label = function (ctx) {
+        return ctx.dataset.label + ': ' + valueFmt(ctx.parsed.y);
+      };
+      ch.options.scales.y.ticks.callback = function (v) { return valueFmt(v); };
+      ch.update('none');
+      return ch;
+    }
+
+    _charts[canvasId] = new global.Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets: seriesList.map(mk) },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { intersect: false, mode: 'index' },
+        plugins: {
+          legend: { display: seriesList.length > 1, position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
+          tooltip: { callbacks: { label: (ctx) => ctx.dataset.label + ': ' + valueFmt(ctx.parsed.y) } }
+        },
+        scales: {
+          x: { ticks: { maxTicksLimit: 8, autoSkip: true }, grid: { display: false } },
+          y: { beginAtZero: true, ticks: { callback: (v) => valueFmt(v) } }
+        }
+      }
+    });
+    return _charts[canvasId];
+  }
+
   // Grouped (side-by-side) bar chart for multi-series buckets, e.g. earnings vs payout per period.
   // `labels` = x categories; `datasets` = [{ label, data[], color }]; opts.valueFmt formats y-axis +
   // tooltips (defaults to integer). Returns the Chart instance or null if unavailable.
@@ -316,7 +393,7 @@
 
   global.PoolCharts = {
     renderHashrateChart, renderBarChart, renderDoughnutChart,
-    renderTrendLine, renderGroupedBarChart,
-    fmtGps, fmtInt
+    renderTrendLine, renderMultiTrendLine, renderGroupedBarChart,
+    fmtGps, fmtInt, PALETTE
   };
 })(window);

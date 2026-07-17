@@ -148,6 +148,18 @@
                 </div>
             </div>
 
+            <!-- ═══ P-02b · MINERS BY GATEWAY (region) ═══
+                 One line per stratum region, same timeframe toggle as the other recorders.
+                 Hidden while there is no per-region history, and on a single-box pool whose
+                 only region is 'default' — P-02 already tells that story. -->
+            <div class="panel" id="panel-regions" style="display:none;"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-02b</span> Chart recorder — miners by gateway</h2>
+                <div class="panel-body chart-wrap">
+                    <canvas id="ms-chart-regions" aria-label="Miners online per gateway region over the selected timeframe" role="img"></canvas>
+                    <div class="chart-empty" id="ms-empty-regions">NO REGION DATA YET</div>
+                </div>
+            </div>
+
             <!-- ═══ P-03 · EARNINGS vs PAYOUT ═══ -->
             <div class="panel"><span class="screws"></span>
                 <h2 class="panel-title"><span class="tag">P-03</span> Ledger recorder — earnings vs payout
@@ -400,6 +412,34 @@
                 toggleEmpty('ms-empty-hashrate', true);
                 toggleEmpty('ms-empty-miners', true);
                 toggleEmpty('ms-empty-ledger', true);
+            }
+
+            // P-02b: miners per gateway region (multi-line, same range). The whole panel stays
+            // hidden when there's nothing regional to show. Colours are keyed to the region
+            // NAME in fixed alphabetical slot order — colour follows the entity, so the
+            // busiest-first legend order never repaints a line as rankings shift.
+            const regionPanel = document.getElementById('panel-regions');
+            try {
+                const rd = await Auth.fetch('/api/pool/metrics/history/regions?range=' + encodeURIComponent(msRange));
+                let series = (rd && Array.isArray(rd.series)) ? rd.series : [];
+                series = series.filter(s => s.points && s.points.length).slice(0, 8); // palette is 8 slots, UI caps regions at 8
+                const onlyDefault = series.length === 1 && series[0].region === 'default';
+                if (!series.length || onlyDefault) {
+                    if (regionPanel) regionPanel.style.display = 'none';
+                } else {
+                    if (regionPanel) regionPanel.style.display = '';
+                    toggleEmpty('ms-empty-regions', false);
+                    const names = series.map(s => s.region).slice().sort();
+                    PoolCharts.renderMultiTrendLine('ms-chart-regions',
+                        series.map(s => ({
+                            label: String(s.region).toUpperCase(),
+                            color: PoolCharts.PALETTE[names.indexOf(s.region) % PoolCharts.PALETTE.length],
+                            points: s.points.map(p => ({ t: p.t, v: p.miner_count }))
+                        })),
+                        { bucketSeconds: rd.bucket_seconds, valueFmt: PoolCharts.fmtInt });
+                }
+            } catch (e) {
+                if (regionPanel) regionPanel.style.display = 'none';
             }
         }
 

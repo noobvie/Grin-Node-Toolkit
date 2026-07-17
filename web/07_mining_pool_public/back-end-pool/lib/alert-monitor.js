@@ -183,8 +183,8 @@ class AlertMonitor {
       if (c.coverage_full_ok === false) {
         await this.triggerAlert('coverage_shortfall', {
           level: 'critical',
-          message: `Pool under-funded: wallet total ${recon.wallet.total} GRIN < owed ${recon.ledger.total_owed} GRIN (gap ${c.coverage_full_gap}).`,
-          data: { coverage_full_gap: c.coverage_full_gap, wallet_total: recon.wallet.total, total_owed: recon.ledger.total_owed }
+          message: `Pool under-funded: wallet total ${recon.wallet.total} GRIN vs owed ${recon.ledger.total_owed} GRIN (unexplained gap ${c.coverage_full_gap} after ${c.network_fees_paid} GRIN recorded network fees).`,
+          data: { coverage_full_gap: c.coverage_full_gap, network_fees_paid: c.network_fees_paid, wallet_total: recon.wallet.total, total_owed: recon.ledger.total_owed }
         });
         await this._maybeFreeze(`coverage shortfall ${c.coverage_full_gap} GRIN`);
       } else if (c.coverage_full_ok === true) {
@@ -216,11 +216,13 @@ class AlertMonitor {
         // currently in-flight. Including in-flight absorbs the timing skew between the wallet
         // seeing the on-chain spend and the scheduler marking the withdrawal 'confirmed' — so a
         // legit big payout mid-flight is never mistaken for a drain (biased against false freeze).
+        // amount + fee: the wallet spends both on a payout (sender-pays), so the fee is part
+        // of the EXPLAINED outflow — without it every payout leaves a small "unexplained" residue.
         const paid = this.db.prepare(
-          `SELECT COALESCE(SUM(amount),0) AS s FROM withdrawals WHERE status='confirmed' AND confirmed_at > ?`
+          `SELECT COALESCE(SUM(amount + COALESCE(fee,0)),0) AS s FROM withdrawals WHERE status='confirmed' AND confirmed_at > ?`
         ).get(this.prevWalletCheckAt).s;
         const inFlight = this.db.prepare(
-          `SELECT COALESCE(SUM(amount),0) AS s FROM withdrawals
+          `SELECT COALESCE(SUM(amount + COALESCE(fee,0)),0) AS s FROM withdrawals
            WHERE status IN ('tor_sending','tor_checking','retry_scheduled','slatepack_pending')`
         ).get().s;
         const drop = this.prevWalletTotal - recon.wallet.total;

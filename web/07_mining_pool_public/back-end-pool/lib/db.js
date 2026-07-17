@@ -79,10 +79,13 @@ function migrateUsers() {
   }
 }
 
-// Additive, non-destructive: add per-miner payout threshold + last-seen source IPs to an
-// existing miner_accounts table (older DBs predate them). min_payout NULL = use the pool
-// default (config.min_withdrawal). last_ip/prev_ip back the address-as-identity ownership
-// gate (one of the address's last-2 mining source IPs must be supplied for sensitive actions).
+// Additive, non-destructive: add the ownership-gate proof columns to an existing
+// miner_accounts table (older DBs predate them). last_ip/prev_ip + last_pass_hash/
+// prev_pass_hash back the address-as-identity ownership gate (lib/owner-proof.js): the
+// last-2 mining source IPs and last-2 stratum passwords, all stored as salted scrypt
+// hashes (`v1$…`) — the *_ip names are kept for schema continuity but no longer hold raw
+// IPs after migrateOwnerProofHashes() runs. min_payout is a legacy column from the retired
+// per-account payout threshold (2026-07-17) — kept in the schema, read by nothing.
 function migrateMinerAccounts() {
   try {
     const cols = db.prepare("PRAGMA table_info(miner_accounts)").all();
@@ -92,6 +95,8 @@ function migrateMinerAccounts() {
       min_payout: 'REAL DEFAULT NULL',
       last_ip: 'TEXT DEFAULT NULL',
       prev_ip: 'TEXT DEFAULT NULL',
+      last_pass_hash: 'TEXT DEFAULT NULL',
+      prev_pass_hash: 'TEXT DEFAULT NULL',
       is_banned: 'INTEGER NOT NULL DEFAULT 0',
       ban_reason: 'TEXT DEFAULT NULL',
       banned_at: 'INTEGER DEFAULT NULL'
@@ -173,6 +178,23 @@ function migrateLotteryDraws() {
   }
 }
 
+// Additive, non-destructive: add the sampled network hashrate to an existing
+// pool_metrics_hourly table (older DBs predate it). NULL = hour rolled up before the
+// column existed / node unreachable at rollup time — trend charts skip those points.
+function migratePoolMetricsHourly() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(pool_metrics_hourly)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the column
+    const have = new Set(cols.map(c => c.name));
+    if (!have.has('network_hashrate_gps')) {
+      db.exec(`ALTER TABLE pool_metrics_hourly ADD COLUMN network_hashrate_gps REAL DEFAULT NULL`);
+      console.warn(`[db] pool_metrics_hourly: added missing column network_hashrate_gps`);
+    }
+  } catch (e) {
+    console.error(`[db] pool_metrics_hourly migration check failed: ${e.message}`);
+  }
+}
+
 // Additive, non-destructive: add the multi-region `region` column to an existing
 // shares table (older testnet DBs predate it). NOT NULL DEFAULT 'default' backfills
 // every existing row, so legacy single-region shares group under 'default'.
@@ -208,6 +230,8 @@ function createSchema() {
       min_payout REAL DEFAULT NULL,
       last_ip TEXT DEFAULT NULL,
       prev_ip TEXT DEFAULT NULL,
+      last_pass_hash TEXT DEFAULT NULL,
+      prev_pass_hash TEXT DEFAULT NULL,
       is_banned INTEGER NOT NULL DEFAULT 0,
       ban_reason TEXT DEFAULT NULL,
       banned_at INTEGER DEFAULT NULL,
@@ -275,7 +299,22 @@ function createSchema() {
       blocks_found      INTEGER NOT NULL DEFAULT 0,  -- blocks found that hour (by found_at)
       earnings          REAL    NOT NULL DEFAULT 0,  -- block rewards confirmed that hour (by confirmed_at)
       payout            REAL    NOT NULL DEFAULT 0,  -- withdrawals confirmed that hour (by confirmed_at)
+      network_hashrate_gps REAL DEFAULT NULL,  -- network GPS sampled at rollup time (NULL = no sample)
       updated_at        INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    // Per-region companion to pool_metrics_hourly — one row per (hour, region), aggregated
+    // from the region tag the stratum listeners stamp on shares. Backs the public
+    // "miners per gateway" trend charts, so like its parent it is NEVER pruned (kept out of
+    // lib/retention.js); size is bounded by region count (~8) — still a few MB/year.
+    `CREATE TABLE IF NOT EXISTS pool_region_metrics_hourly (
+      bucket_start  INTEGER NOT NULL,          -- unix ts floored to the hour
+      region        TEXT    NOT NULL,          -- shares.region ('default' = single-box/public listener)
+      hashrate_gps  REAL    NOT NULL DEFAULT 0,-- avg region GPS that hour (from shares)
+      miner_count   INTEGER NOT NULL DEFAULT 0,-- distinct miners active on the region that hour
+      shares        INTEGER NOT NULL DEFAULT 0,-- accepted shares that hour
+      updated_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+      PRIMARY KEY (bucket_start, region)
     )`,
 
     `CREATE TABLE IF NOT EXISTS withdrawals (
@@ -641,6 +680,7 @@ function createSchema() {
   migrateBlocks();
   migrateWithdrawals();
   migrateLotteryDraws();
+  migratePoolMetricsHourly();
   migrateLocations();
   migratePagesFromConfig();
   // The default grinium regional endpoints are seeded once (see seedDefaultRegions,

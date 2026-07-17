@@ -67,6 +67,21 @@ class WithdrawalScheduler {
     } catch (e) { return false; }
   }
 
+  // Freeze gate for every NEW fund-moving entry point (Tor create, slatepack create, slatepack
+  // finalize). The scheduler loop skipping sends is NOT enough: the slatepack rail moves coins
+  // synchronously in the request (create locks wallet outputs, finalize broadcasts on-chain), so
+  // without this gate a miner could complete a payout end-to-end DURING a wallet_drain /
+  // integrity_drift incident — the exact scenario the kill-switch exists for. Throws the same
+  // shaped 4xx the routes already map (409, like the admin retry gate). Cancels and slatepack
+  // expiry stay allowed while frozen — they only refund locked balances.
+  _assertNotFrozen() {
+    if (this.isFrozen()) {
+      const e = new Error('payouts are temporarily frozen by the pool operator — try again later');
+      e.code = 409;
+      throw e;
+    }
+  }
+
   freeze(reason, by) {
     try {
       const now = Math.floor(Date.now() / 1000);
@@ -206,6 +221,7 @@ class WithdrawalScheduler {
       );
 
       if (sendResult.success) {
+        await this.recordTorFee(withdrawalId, withdrawal.amount);
         await this.markConfirmed(withdrawalId, sendResult.output);
       } else {
         console.error(`Send failed for withdrawal ${withdrawalId}: ${sendResult.error}`);
@@ -278,23 +294,7 @@ class WithdrawalScheduler {
         'SELECT * FROM withdrawals WHERE id = ?'
       ).get(withdrawalId);
 
-      const balanceStmt = this.db.prepare(`
-        UPDATE miner_accounts
-        SET balance_locked = CASE
-          WHEN balance_locked >= ? THEN balance_locked - ?
-          ELSE 0
-        END
-        WHERE grin_address = ?
-      `);
-      balanceStmt.run(withdrawal.amount, withdrawal.amount, withdrawal.grin_address);
-
-      const logStmt = this.db.prepare(`
-        INSERT INTO balance_log
-        (grin_address, event_type, amount, balance_before, balance_after,
-         locked_before, locked_after, reference_type, reference_id)
-        VALUES (?, 'debit', ?, 0, 0, 0, 0, 'withdrawal', ?)
-      `);
-      logStmt.run(withdrawal.grin_address, withdrawal.amount, withdrawalId);
+      this._releaseLockAndDebit(withdrawal);
 
       console.log(
         `[${new Date().toISOString()}] Withdrawal ${withdrawalId} confirmed (${withdrawal.amount} GRIN to ${withdrawal.grin_address})`
@@ -357,17 +357,19 @@ class WithdrawalScheduler {
   //   balance −= amount ; balance_locked += amount  (only if balance ≥ amount)
   // Then the scheduler's tor_checking → tor_sending → confirmed/failed states take over.
   // Throws an Error carrying a numeric `.code` (400/404/409/429) so the route maps it to
-  // the right HTTP status. fee is held at 0 to stay consistent with the existing
-  // markConfirmed/markFailed math (which un-lock/reverse `amount`); per-tx network fees
-  // are part of the deferred nanoGRIN rework (design §12 D2).
+  // the right HTTP status. fee starts at 0 and is backfilled with the REAL network fee once
+  // known (recordTorFee after a successful Tor send; _slateFeeGrin at slatepack creation).
+  // The fee never enters the miner's ledger math (un-lock/reverse always move `amount`) —
+  // it exists so reconciliation can explain the wallet-vs-ledger gap (sender pays fees).
   createWithdrawal(grinAddress, amount, method = 'tor') {
     const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
 
     if (!grinAddress) fail('address required', 400);
     if (method !== 'tor') fail('only Tor withdrawals are supported', 400);
+    this._assertNotFrozen();
 
     const acct0 = this.db.prepare(
-      'SELECT balance, min_payout FROM miner_accounts WHERE grin_address = ?'
+      'SELECT balance FROM miner_accounts WHERE grin_address = ?'
     ).get(grinAddress);
     if (!acct0) fail('account not found', 404);
 
@@ -378,10 +380,9 @@ class WithdrawalScheduler {
     if (isNaN(amt) || amt <= 0) fail('invalid amount', 400);
     amt = parseFloat(amt.toFixed(9));
 
-    // Per-miner payout threshold: the account's own min_payout (set via the IP-gated endpoint)
-    // overrides the pool default when present. It can only RAISE the floor (enforced at write
-    // time), so this never lets a withdrawal slip below the pool minimum.
-    const minW = (acct0.min_payout != null) ? acct0.min_payout : (this.config.min_withdrawal || 25.0);
+    // Withdrawals are manual with an explicit amount, so only the pool-wide floor applies
+    // (the per-account min_payout override was retired 2026-07-17).
+    const minW = this.config.min_withdrawal || 25.0;
     if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
 
     const txn = this.db.transaction(() => {
@@ -447,11 +448,12 @@ class WithdrawalScheduler {
     const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
     if (!grinAddress) fail('address required', 400);
     if (!this.wallet) fail('slatepack payouts are not configured on this pool', 503);
+    this._assertNotFrozen();
 
     const PENDING = "status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')";
 
     const acct0 = this.db.prepare(
-      'SELECT balance, min_payout FROM miner_accounts WHERE grin_address = ?'
+      'SELECT balance FROM miner_accounts WHERE grin_address = ?'
     ).get(grinAddress);
     if (!acct0) fail('account not found', 404);
 
@@ -459,7 +461,8 @@ class WithdrawalScheduler {
     if (isNaN(amt) || amt <= 0) fail('invalid amount', 400);
     amt = parseFloat(amt.toFixed(9));
 
-    const minW = (acct0.min_payout != null) ? acct0.min_payout : (this.config.min_withdrawal || 25.0);
+    // Pool-wide floor only (per-account min_payout retired 2026-07-17 — manual withdrawals).
+    const minW = this.config.min_withdrawal || 25.0;
     if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
 
     // Lock the pool-side balance first (authoritative for accounting); the wallet-side output
@@ -505,7 +508,12 @@ class WithdrawalScheduler {
       await this.wallet.txLockOutputs(slate);
       const armored = await this.wallet.createSlatepackMessage(slate, [grinAddress]);
       const slateId = slate && slate.id ? slate.id : null;
-      this.db.prepare('UPDATE withdrawals SET slate_id = ? WHERE id = ?').run(slateId, withdrawalId);
+      // Record the real network fee (sender-pays in Grin: the wallet spends amount + fee while
+      // the ledger debits only amount). Reconciliation reads withdrawals.fee to explain the
+      // wallet-vs-ledger gap — a permanent fee = 0 makes coverage erode silently.
+      const feeGrin = this._slateFeeGrin(slate);
+      this.db.prepare('UPDATE withdrawals SET slate_id = ?, fee = COALESCE(?, fee) WHERE id = ?')
+        .run(slateId, feeGrin, withdrawalId);
       console.log(`[${new Date().toISOString()}] Slatepack withdrawal ${withdrawalId} created for ${grinAddress} (${amt} GRIN, slate ${slateId})`);
       return { success: true, withdrawal_id: withdrawalId, amount: amt, slatepack: armored };
     } catch (err) {
@@ -519,6 +527,10 @@ class WithdrawalScheduler {
   async finalizeSlatepackWithdrawal(grinAddress, withdrawalId, responseSlatepack) {
     const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
     if (!this.wallet) fail('slatepack payouts are not configured on this pool', 503);
+    // Finalize is the on-chain broadcast — it MUST honour the kill-switch too. The row stays
+    // slatepack_pending, so the miner can simply re-submit the response slate after a resume
+    // (or the TTL expiry refunds the lock).
+    this._assertNotFrozen();
     if (!responseSlatepack || typeof responseSlatepack !== 'string') fail('response slatepack required', 400);
 
     const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
@@ -616,6 +628,78 @@ class WithdrawalScheduler {
     }
   }
 
+  // Network fee from a slate (V4 serialises `fee` as a nanoGRIN string; older shapes nest it
+  // as an object) → GRIN, or null when absent so the caller keeps the existing column value.
+  _slateFeeGrin(slate) {
+    if (!slate) return null;
+    let f = slate.fee;
+    if (f && typeof f === 'object') f = f.fee;
+    const n = Number(f);
+    return Number.isFinite(n) && n > 0 ? parseFloat((n / 1e9).toFixed(9)) : null;
+  }
+
+  // The Tor rail sends via the grin-wallet CLI, which doesn't report the network fee — but the
+  // wallet's own tx log does. Best-effort right after a successful send: read the newest TxSent
+  // whose net recipient amount matches this payout and store its fee, so reconciliation can
+  // explain the wallet-vs-ledger gap. Fee stays 0 when the Owner API isn't configured.
+  async recordTorFee(withdrawalId, amountGrin) {
+    if (!this.wallet || typeof this.wallet.getTransactions !== 'function') return;
+    try {
+      const entries = await this.wallet.getTransactions(false);
+      if (!Array.isArray(entries)) return;
+      const feeNano = (e) => {
+        if (e.fee == null) return 0;
+        if (typeof e.fee === 'object') return Number(e.fee.fee || 0) || 0;
+        return Number(e.fee) || 0;
+      };
+      let best = null;
+      for (const e of entries) {
+        if (!e || e.tx_type !== 'TxSent') continue;
+        const fee = feeNano(e);
+        if (!fee) continue;
+        const recipient = (Number(e.amount_debited || 0) - Number(e.amount_credited || 0) - fee) / 1e9;
+        if (Math.abs(recipient - amountGrin) > 1e-6) continue;
+        if (!best || Number(e.id || 0) > Number(best.id || 0)) best = e;
+      }
+      if (!best) return;
+      this.db.prepare('UPDATE withdrawals SET fee = ? WHERE id = ?')
+        .run(parseFloat((feeNano(best) / 1e9).toFixed(9)), withdrawalId);
+    } catch (e) {
+      console.warn(`[fee] could not record network fee for withdrawal ${withdrawalId}: ${e.message}`);
+    }
+  }
+
+  // Release the payout lock and write the matching ledger debit ATOMICALLY, debiting exactly what
+  // was unlocked. If balance_locked < amount (possible only under prior corruption — a lock always
+  // precedes in normal flow), BOTH the release and the logged debit are clamped: releasing less
+  // while logging the full amount would make the account total fall by less than the ledger
+  // records → integrity_drift → an auto-freeze the alarm itself can't explain.
+  _releaseLockAndDebit(withdrawal) {
+    const txn = this.db.transaction(() => {
+      const acct = this.db.prepare(
+        'SELECT balance_locked FROM miner_accounts WHERE grin_address = ?'
+      ).get(withdrawal.grin_address);
+      const lockedBefore = acct ? acct.balance_locked : 0;
+      const released = Math.min(lockedBefore, withdrawal.amount);
+      if (released < withdrawal.amount) {
+        console.error(
+          `⚠️  Withdrawal ${withdrawal.id}: balance_locked (${lockedBefore}) < amount (${withdrawal.amount}) — ` +
+          `releasing only ${released}; the locked balance was corrupted BEFORE this payout, investigate`
+        );
+      }
+      this.db.prepare(
+        'UPDATE miner_accounts SET balance_locked = balance_locked - ?, updated_at = unixepoch() WHERE grin_address = ?'
+      ).run(released, withdrawal.grin_address);
+      this.db.prepare(`
+        INSERT INTO balance_log
+        (grin_address, event_type, amount, balance_before, balance_after,
+         locked_before, locked_after, reference_type, reference_id)
+        VALUES (?, 'debit', ?, 0, 0, ?, ?, 'withdrawal', ?)
+      `).run(withdrawal.grin_address, released, lockedBefore, lockedBefore - released, withdrawal.id);
+    });
+    txn();
+  }
+
   // Confirm a payout: mark confirmed, release the lock (locked −= amount = paid out), ledger debit,
   // join-bonus. Generic over fromStatus so both the Tor and slatepack rails reuse it.
   _creditConfirm(withdrawalId, fromStatus, note) {
@@ -627,16 +711,7 @@ class WithdrawalScheduler {
       `).run(withdrawalId, fromStatus, note);
 
       const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
-      this.db.prepare(`
-        UPDATE miner_accounts
-        SET balance_locked = CASE WHEN balance_locked >= ? THEN balance_locked - ? ELSE 0 END
-        WHERE grin_address = ?
-      `).run(w.amount, w.amount, w.grin_address);
-      this.db.prepare(`
-        INSERT INTO balance_log
-        (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
-        VALUES (?, 'debit', ?, 0, 0, 0, 0, 'withdrawal', ?)
-      `).run(w.grin_address, w.amount, withdrawalId);
+      this._releaseLockAndDebit(w);
 
       console.log(`[${new Date().toISOString()}] Withdrawal ${withdrawalId} confirmed (${w.amount} GRIN to ${w.grin_address})`);
       try { this.incentives.maybePayJoinBonus(w.grin_address); }

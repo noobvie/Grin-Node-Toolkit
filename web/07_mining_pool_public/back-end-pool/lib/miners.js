@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { getDb } = require('./db');
-const { recordSourceIp } = require('./owner-proof');
+const { recordOwnerEvidence } = require('./owner-proof');
 
 class MinerManager {
   constructor(config) {
@@ -9,13 +9,16 @@ class MinerManager {
     this.activeSessions = new Map();
   }
 
-  createSession(grinAddress, workerName, ip, region) {
+  createSession(grinAddress, workerName, ip, region, pass) {
     const sessionId = crypto.randomBytes(16).toString('hex');
     const session = {
       sessionId,
       grinAddress,
       workerName,
       ip,
+      // Stratum password as typed by the rig — in-memory only, hashed into the ownership-proof
+      // window on the first accepted share (owner-proof.js), never persisted or logged raw.
+      pass: typeof pass === 'string' ? pass : '',
       // Region the miner connected through (which stratum listener accepted it). Stamped on
       // every share for per-region aggregation; falls back to this box's configured region.
       region: region || this.config.region || 'default',
@@ -78,12 +81,14 @@ class MinerManager {
     }
   }
 
-  // Record the source IP seen for an address into its last-2 distinct-IP window (backs the
-  // address-as-identity ownership gate). Delegates to owner-proof.recordSourceIp; cheap no-op
-  // when the IP is unchanged. Called from stratum login with the real miner IP (direct socket
-  // address, or the gateway's PROXY-protocol v2 header value under Model C).
-  recordSourceIp(grinAddress, ip) {
-    return recordSourceIp(this.db, grinAddress, ip);
+  // Record the ownership-gate evidence for an address — source IP (last-2 window) and, when
+  // usable, the rig's stratum password — both as salted hashes. Delegates to
+  // owner-proof.recordOwnerEvidence; no-op when both are unchanged. Called from stratum-server
+  // on a session's first ACCEPTED share (never at login — that would let a bare TCP connect
+  // poison the windows) with the real miner IP (direct socket address, or the gateway's
+  // PROXY-protocol v2 header value under Model C). Async (scrypt); errors are swallowed inside.
+  recordOwnerEvidence(grinAddress, ip, pass) {
+    return recordOwnerEvidence(this.db, grinAddress, ip, pass);
   }
 
   // Moderation — is this address banned from logging in / submitting shares?

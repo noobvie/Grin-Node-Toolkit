@@ -24,7 +24,7 @@ class HashrateTracker {
       try {
         await this.recordHashrates();
         // Cheap + idempotent: only writes when a fresh completed hour exists (no-op otherwise).
-        this.rollupCompletedHours();
+        await this.rollupCompletedHours();
       } catch (err) {
         console.error(`[ERROR] Hashrate tracking error: ${err.message}`);
       }
@@ -300,7 +300,7 @@ class HashrateTracker {
   // trend charts have Day→All-Time history at ~1 MB/year (size independent of miner count).
   // Idempotent upsert (safe to re-run a bucket). No backfill: an empty table starts at the
   // just-completed hour. Called every tracking loop; a no-op on minutes with no new completed hour.
-  rollupCompletedHours() {
+  async rollupCompletedHours() {
     try {
       const H = HashrateTracker.HOUR;
       const nowHour = Math.floor(Date.now() / 1000 / H) * H;   // start of the current (incomplete) hour
@@ -312,21 +312,48 @@ class HashrateTracker {
       if (start < nowHour - MAX_HOURS * H) start = nowHour - H;
       if (start > nowHour - H) return 0; // no fully-completed hour to roll up yet
 
+      // Network hashrate sample for the pool-vs-network trend (P-04). Fetched only when a
+      // rollup will actually write (≤1 node round-trip per hour). Applied to the JUST-completed
+      // hour only — catch-up buckets after an outage keep NULL rather than a wrong "now" value.
+      let netGps = null;
+      if (typeof this.networkGpsProvider === 'function') {
+        try { netGps = await this.networkGpsProvider(); } catch (e) { netGps = null; }
+        if (!(netGps > 0)) netGps = null;
+      }
+
       const upsert = this.db.prepare(`
         INSERT INTO pool_metrics_hourly
-          (bucket_start, pool_hashrate_gps, miner_count, blocks_found, earnings, payout, updated_at)
-        VALUES (@b, @gps, @miners, @blocks, @earnings, @payout, unixepoch())
+          (bucket_start, pool_hashrate_gps, miner_count, blocks_found, earnings, payout, network_hashrate_gps, updated_at)
+        VALUES (@b, @gps, @miners, @blocks, @earnings, @payout, @net, unixepoch())
         ON CONFLICT(bucket_start) DO UPDATE SET
           pool_hashrate_gps = excluded.pool_hashrate_gps,
           miner_count       = excluded.miner_count,
           blocks_found      = excluded.blocks_found,
           earnings          = excluded.earnings,
           payout            = excluded.payout,
+          network_hashrate_gps = COALESCE(excluded.network_hashrate_gps, pool_metrics_hourly.network_hashrate_gps),
           updated_at        = unixepoch()
+      `);
+      const regionUpsert = this.db.prepare(`
+        INSERT INTO pool_region_metrics_hourly
+          (bucket_start, region, hashrate_gps, miner_count, shares, updated_at)
+        VALUES (@b, @region, @gps, @miners, @shares, unixepoch())
+        ON CONFLICT(bucket_start, region) DO UPDATE SET
+          hashrate_gps = excluded.hashrate_gps,
+          miner_count  = excluded.miner_count,
+          shares       = excluded.shares,
+          updated_at   = unixepoch()
       `);
       const shareStmt = this.db.prepare(`
         SELECT COALESCE(SUM(difficulty), 0) AS sumdiff, COUNT(DISTINCT grin_address) AS miners
         FROM shares WHERE created_at >= ? AND created_at < ?`);
+      const regionStmt = this.db.prepare(`
+        SELECT COALESCE(region, 'default') AS region,
+               COALESCE(SUM(difficulty), 0) AS sumdiff,
+               COUNT(DISTINCT grin_address) AS miners,
+               COUNT(*) AS shares
+        FROM shares WHERE created_at >= ? AND created_at < ?
+        GROUP BY COALESCE(region, 'default')`);
       const blockStmt = this.db.prepare(`
         SELECT COUNT(*) AS n FROM blocks
         WHERE found_at >= ? AND found_at < ? AND status != 'orphaned'`);
@@ -351,8 +378,18 @@ class HashrateTracker {
             miners: sh.miners || 0,
             blocks: bl.n || 0,
             earnings: parseFloat((en.s || 0).toFixed(9)),
-            payout: parseFloat((pa.s || 0).toFixed(9))
+            payout: parseFloat((pa.s || 0).toFixed(9)),
+            net: (netGps != null && b === nowHour - H) ? parseFloat(netGps.toFixed(6)) : null
           });
+          for (const r of regionStmt.all(b, b + H)) {
+            regionUpsert.run({
+              b,
+              region: r.region,
+              gps: parseFloat((r.sumdiff * factor).toFixed(6)),
+              miners: r.miners || 0,
+              shares: r.shares || 0
+            });
+          }
           wrote++;
         }
       });
@@ -400,7 +437,8 @@ class HashrateTracker {
                AVG(miner_count)                 AS miner_count,
                COALESCE(SUM(blocks_found), 0)   AS blocks_found,
                COALESCE(SUM(earnings), 0)       AS earnings,
-               COALESCE(SUM(payout), 0)         AS payout
+               COALESCE(SUM(payout), 0)         AS payout,
+               AVG(network_hashrate_gps)        AS network_hashrate_gps
         FROM pool_metrics_hourly
         WHERE bucket_start >= ?
         GROUP BY t
@@ -416,12 +454,80 @@ class HashrateTracker {
           miner_count: Math.round(r.miner_count || 0),
           blocks_found: r.blocks_found || 0,
           earnings: parseFloat((r.earnings || 0).toFixed(9)),
-          payout: parseFloat((r.payout || 0).toFixed(9))
+          payout: parseFloat((r.payout || 0).toFixed(9)),
+          // NULL until the first sampled hour (or when the node was unreachable) — charts skip gaps.
+          network_hashrate_gps: r.network_hashrate_gps != null
+            ? parseFloat(r.network_hashrate_gps.toFixed(6)) : null
         }))
       };
     } catch (err) {
       console.error(`Error fetching metrics history: ${err.message}`);
       return { range, bucket_seconds: null, points: [] };
+    }
+  }
+
+  // Per-region (gateway) trend series from pool_region_metrics_hourly — same range/bucket rules
+  // as getMetricsHistory (they chart side by side off one range toggle). Returns
+  // { range, bucket_seconds, series: [{ region, points: [{ t, miner_count, hashrate_gps }] }] }
+  // with series ordered by total shares desc (busiest first, for legend order). Chart colours
+  // are NOT tied to this order — the frontend keys them by region name so a region never
+  // changes colour when the ranking shifts.
+  getRegionMetricsHistory(range = 'day') {
+    try {
+      const H = HashrateTracker.HOUR;
+      const DAY = 86400;
+      const now = Math.floor(Date.now() / 1000);
+      let bucket, cutoff;
+
+      if (range === 'all') {
+        const first = this.db.prepare('SELECT MIN(bucket_start) AS b FROM pool_region_metrics_hourly').get();
+        const earliest = (first && first.b != null) ? first.b : now - DAY;
+        const totalSpan = now - earliest;
+        bucket = totalSpan <= 90 * DAY ? DAY : (totalSpan <= 730 * DAY ? 7 * DAY : 30 * DAY);
+        cutoff = earliest;
+      } else {
+        let span;
+        switch (range) {
+          case 'week':  span = 7 * DAY;   bucket = H;   break;
+          case 'month': span = 30 * DAY;  bucket = DAY; break;
+          case 'year':  span = 365 * DAY; bucket = DAY; break;
+          case 'day':
+          default:      span = 24 * H;    bucket = H;   break;
+        }
+        cutoff = now - span;
+      }
+
+      const rows = this.db.prepare(`
+        SELECT CAST(bucket_start / ? AS INTEGER) * ? AS t,
+               region,
+               AVG(hashrate_gps)   AS hashrate_gps,
+               AVG(miner_count)    AS miner_count,
+               COALESCE(SUM(shares), 0) AS shares
+        FROM pool_region_metrics_hourly
+        WHERE bucket_start >= ?
+        GROUP BY t, region
+        ORDER BY t ASC
+      `).all(bucket, bucket, cutoff);
+
+      const byRegion = new Map();
+      const shareTotals = new Map();
+      for (const r of rows) {
+        if (!byRegion.has(r.region)) byRegion.set(r.region, []);
+        byRegion.get(r.region).push({
+          t: r.t,
+          miner_count: Math.round(r.miner_count || 0),
+          hashrate_gps: parseFloat((r.hashrate_gps || 0).toFixed(6))
+        });
+        shareTotals.set(r.region, (shareTotals.get(r.region) || 0) + (r.shares || 0));
+      }
+      const series = [...byRegion.entries()]
+        .sort((a, b) => (shareTotals.get(b[0]) || 0) - (shareTotals.get(a[0]) || 0))
+        .map(([region, points]) => ({ region, points }));
+
+      return { range, bucket_seconds: bucket, series };
+    } catch (err) {
+      console.error(`Error fetching region metrics history: ${err.message}`);
+      return { range, bucket_seconds: null, series: [] };
     }
   }
 

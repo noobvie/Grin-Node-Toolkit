@@ -227,7 +227,7 @@
                         <div class="mlink" data-flow="BLOCK FOUND"><i></i></div>
                         <div class="mnode">
                             <span class="lbl">Wallet · Tor</span>
-                            <span class="val mg">SLATEPACK ▸ AUTO</span>
+                            <span class="val mg">SLATEPACK ▸ ON REQUEST</span>
                         </div>
                         <div class="mlink" data-flow="PAYOUT"><i></i></div>
                         <div class="mnode">
@@ -235,18 +235,40 @@
                             <span class="val mg">PAID · SLATEPACK / TOR</span>
                         </div>
                     </div>
-                    <p class="mimic-note">Payouts are encrypted <b>Slatepacks</b> delivered over <b>Tor</b> to each miner&rsquo;s wallet listener &mdash; your address is your identity, no account needed. <span class="dim">Nostr / Goblin transport planned.</span></p>
+                    <p class="mimic-note">Payouts are <b>requested by you</b> from your account page and delivered as encrypted <b>Slatepacks</b> over <b>Tor</b> to your wallet listener &mdash; your address is your identity, no account needed. <span class="dim">Nostr / Goblin transport planned.</span></p>
                 </div>
             </div>
 
             <div class="deck-row half">
-                <!-- ═══ P-04 · CHART RECORDER: 24h pool hashrate ═══ -->
+                <!-- ═══ P-04 · CHART RECORDERS: hashrate (pool vs network) + miners online ═══
+                     Pool and network hashrate are two ALIGNED small-multiple traces, not one
+                     dual-axis chart — network GPS is orders of magnitude above pool GPS and
+                     would flatten the pool line to the floor. 24H keeps the fine 5-min pool
+                     sampling; 7D/30D and the network trace read the durable hourly rollup
+                     (the network line accrues from first deploy forward — no backfill). -->
                 <div class="panel"><span class="screws"></span>
-                    <h2 class="panel-title"><span class="tag">P-04</span> Chart recorder — hashrate <span class="right">24h</span></h2>
-                    <div class="panel-body chart-wrap">
-                        <canvas id="rx-chart" aria-label="Pool hashrate over the last 24 hours" role="img"></canvas>
-                        <div class="chart-tip" id="rx-tip"></div>
-                        <div class="chart-empty" id="rx-chart-empty">NO TRACE DATA YET</div>
+                    <h2 class="panel-title"><span class="tag">P-04</span> Chart recorder — hashrate
+                        <span class="right"><span class="chart-range" id="rx-range" role="tablist" aria-label="Hashrate chart timeframe">
+                            <button type="button" data-range="day" class="active" role="tab" aria-selected="true">24H</button>
+                            <button type="button" data-range="week" role="tab" aria-selected="false">7D</button>
+                            <button type="button" data-range="month" role="tab" aria-selected="false">30D</button>
+                        </span></span></h2>
+                    <div class="panel-body">
+                        <div class="chart-sub">Pool hashrate</div>
+                        <div class="chart-wrap chart-wrap--pool">
+                            <canvas id="rx-chart" aria-label="Pool hashrate over the selected timeframe" role="img"></canvas>
+                            <div class="chart-empty" id="rx-chart-empty">NO TRACE DATA YET</div>
+                        </div>
+                        <div class="chart-sub">Network hashrate <span class="dim">same timeframe — compare the shapes</span></div>
+                        <div class="chart-wrap chart-wrap--net">
+                            <canvas id="rx-chart-net" aria-label="Grin network hashrate over the selected timeframe" role="img"></canvas>
+                            <div class="chart-empty" id="rx-chart-net-empty">NO NETWORK TRACE YET</div>
+                        </div>
+                        <div class="chart-sub">Miners online <span class="dim">30 days</span></div>
+                        <div class="chart-wrap chart-wrap--miners">
+                            <canvas id="rx-chart-miners" aria-label="Miners online over the last 30 days" role="img"></canvas>
+                            <div class="chart-empty" id="rx-chart-miners-empty">NO TRACE DATA YET</div>
+                        </div>
                     </div>
                 </div>
 
@@ -280,16 +302,8 @@
                                     <button class="btn sm" id="rx-copy" type="button">Copy</button>
                                 </div>
                                 <div class="patch-meta" id="rx-meta"></div>
-                                <div class="patch-note">
-                                    USER <code>&lt;your_grin_address&gt;.rig1</code> — your address is your login, no account or
-                                    registration needed. <code>.rig1</code> optionally names this machine (lowercase
-                                    letters/digits/<code>-</code>/<code>_</code>, max <strong>25 chars</strong> — longer
-                                    names are shortened automatically, so you never get rejected).
-                                    PASS — put any text or number you like (e.g. <code>x</code>). The pool
-                                    doesn&rsquo;t check it today, so pick something memorable: a future release
-                                    may read it to verify a payment method or other account settings.
-                                    Algorithm <strong>Cuckatoo32</strong>.
-                                </div>
+                                <!-- The old USER/PASS/Algorithm paragraph that lived here was folded into the
+                                     miner-setup guide below (operator request 2026-07-17) — one place, no repeat. -->
                                 <!-- Collapsed miner-setup guide (operator request 2026-07-16): a
                                      theme-native HTML mock of an ASIC web panel (iPollo-style) —
                                      NOT a screenshot, so the Pool 1 host stays bound to the region
@@ -301,16 +315,23 @@
                                         <div class="mform-row"><span class="mform-k">Select Coin</span><span class="mform-val">GRIN</span></div>
                                         <div class="mform-row"><span class="mform-k">Pool 1</span><span class="mform-val is-live" id="rx-guide-uri">stratum host not configured</span></div>
                                         <div class="mform-row"><span class="mform-k">Pool1 worker</span><span class="mform-val">&lt;your_grin_address&gt;.rig1</span></div>
-                                        <div class="mform-row"><span class="mform-k">Pool1 password</span><span class="mform-val">x</span></div>
+                                        <div class="mform-row"><span class="mform-k">Pool1 password</span><span class="mform-val">&lt;your_own_password&gt;</span></div>
                                     </div>
                                     <ol class="mguide-steps">
                                         <li>Open your miner&rsquo;s web panel (type its IP address into a browser) and go to
                                             <b>Miners → Pool Configuration</b> — iPollo shown; other vendors name the menu similarly.</li>
                                         <li><b>Pool 1</b> — the endpoint shown above; it updates as you pick a region in the
                                             patch bay. If your firmware rejects a bare <code>host:port</code>, prefix it with
-                                            <code>stratum+tcp://</code>.</li>
-                                        <li><b>Worker</b> — your Grin address plus an optional <code>.rig1</code> machine name.
-                                            <b>Password</b> — any text, e.g. <code>x</code>.</li>
+                                            <code>stratum+tcp://</code>. Algorithm: <b>Cuckatoo32</b> (GRIN).</li>
+                                        <li><b>Worker</b> — your Grin address; it <b>is</b> your login, no account or registration
+                                            needed. Add an optional <code>.rig1</code> to name this machine (lowercase
+                                            letters/digits/<code>-</code>/<code>_</code>, max 25 chars — longer names are
+                                            shortened automatically, never rejected).</li>
+                                        <li><b>Password</b> — pick your own private password or random text (4+ characters;
+                                            not defaults like <code>x</code> or <code>123</code>) and use the same one on all
+                                            your rigs. It doubles as your <b>ownership proof</b> on the account page — payouts
+                                            can be verified with either it or a recent mining IP, so a real password here
+                                            means you can always withdraw even if your IP changes.</li>
                                         <li>Optionally set <b>Pool 2 / Pool 3</b> to other green or blue regions as automatic
                                             backups, then save — the miner reconnects and accepted shares should appear within
                                             a few minutes.</li>
@@ -351,8 +372,8 @@
                     <ul class="proc">
                         <li><b>PPLNS</b> (Pay Per Last N Shares) — rewards follow your recent contributed work</li>
                         <li>No account, email, or registration — your Grin address <b>is</b> your identity</li>
-                        <li>Per-miner variable difficulty (vardiff) tunes itself to your hardware</li>
-                        <li>Payouts are sent automatically over <b>Tor</b>; unreachable wallets are retried every 6h for up to 7 days</li>
+                        <li>Payouts are <b>requested by you</b> (account page) and delivered over <b>Tor</b> or as an encrypted <b>slatepack</b> — nothing is sent unless you ask</li>
+                        <li>An unreachable Tor wallet is retried automatically (6h → 48h back-off); undeliverable or unclaimed payouts are returned to your balance</li>
                         <li>Block rewards mature after <b>1,440 confirmations</b> (~24h) before they are credited</li>
                         <li>Orphaned blocks are detected automatically and their rewards reversed fairly</li>
                         <li style="display:none" id="info-email">Email: <span data-brand="contact_email"></span></li>
@@ -372,6 +393,8 @@
     <!-- footer injected by /js/public-shell.js -->
 
     <script src="/js/auth.js"></script>
+    <script src="/js/vendor/chart.umd.min.js"></script>
+    <script src="/js/charts-init.js"></script>
     <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>
     <script src="/js/branding.js"></script>

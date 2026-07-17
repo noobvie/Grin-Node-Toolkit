@@ -8,7 +8,8 @@
     "start": "node index.js",
     "dev": "NODE_ENV=development node index.js",
     "nuke": "node scripts/nuke.js",
-    "test": "npm run check-syntax",
+    "test": "npm run check-syntax && npm run test:unit",
+    "test:unit": "node scripts/test-proxy-v2.js && node scripts/test-stratum-guards.js",
     "check-syntax": "node -c index.js && node -c lib/*.js && node -c routes/*.js 2>/dev/null || true"
   },
   "keywords": [

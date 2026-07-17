@@ -304,6 +304,31 @@ body {
 .chart-tip .t { color: var(--text-mute); }
 .chart-empty { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--text-mute); font-family: var(--mono); font-size: 12px; letter-spacing: .12em; }
 
+/* P-04 stacked recorders: sub-labels between charts + per-chart heights (three traces
+   share one panel, so each runs shorter than the default 240px single chart). */
+.chart-sub {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--text-dim); margin: 14px 0 6px;
+}
+.chart-sub:first-child { margin-top: 0; }
+.chart-sub .dim { color: var(--text-mute); text-transform: none; letter-spacing: .06em; }
+.chart-wrap--pool canvas   { height: 170px; }
+.chart-wrap--net canvas    { height: 120px; }
+.chart-wrap--miners canvas { height: 140px; }
+
+/* 24H/7D/30D toggle riding the panel title (same interaction as the miners-stats rangebar,
+   sized down to fit a title row). */
+.chart-range { display: inline-flex; gap: 4px; }
+.chart-range button {
+  font: inherit; font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em;
+  padding: 2px 8px; border-radius: 4px; cursor: pointer;
+  background: var(--rx-inset, rgba(255,255,255,.04)); color: var(--text-dim);
+  border: 1px solid var(--rx-bezel, rgba(255,255,255,.12));
+  transition: background .12s, color .12s;
+}
+.chart-range button:hover { color: var(--text); }
+.chart-range button.active { background: var(--accent); border-color: var(--accent); color: var(--bg, #07090c); font-weight: 600; }
+
 /* ── region patch bay ───────────────────────────────────────────────────── */
 /* Stack the switch bank (full-width row of region toggles) above the endpoint
    readout — the old `auto 1fr` grid reserved a tall empty column beside the short

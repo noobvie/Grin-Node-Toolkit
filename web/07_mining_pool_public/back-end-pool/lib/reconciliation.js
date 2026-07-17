@@ -5,7 +5,8 @@
  * Three layers:
  *   1. Coverage — does the on-chain wallet hold at least what the ledger owes? LIQUID (spendable
  *      coins vs currently-withdrawable balances = can we pay now) vs FULL (total incl. maturing
- *      coinbase vs everything owed = long-run solvency).
+ *      coinbase vs everything owed = long-run solvency). Both gaps are net of recorded payout
+ *      network fees (withdrawals.fee) — a sender-paid cost the ledger never debits.
  *   2. Flow statement — external money IN (block rewards, fee, top-ups, admin injects) vs OUT
  *      (confirmed payouts, orphan clawbacks) over lifetime / 7d / 24h.
  *   3. Integrity invariant — SUM(balance+locked) across ALL accounts must equal the net of the
@@ -160,10 +161,16 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
   const integrity_drift = r9(ledgerTotal - inv.expected_total);
 
   // ── Coverage (wallet vs ledger) ──
+  // Network fees are sender-paid in Grin: each confirmed payout spends amount + fee from the
+  // wallet while the ledger debits only amount, so the wallet legitimately holds Σ(recorded
+  // fees) less than raw owed. Add them back so the gap measures only the UNEXPLAINED shortfall
+  // — otherwise accumulated fees slowly drag the gap negative and false-trip the
+  // coverage_shortfall auto-freeze (or mask a small real shortfall of the same size).
+  const network_fees_paid = payoutFeeStmt.get(0).fees;
   const spendableOwed = ledger.sum_balance;   // withdrawable now (incl. operator buckets)
   const totalOwed = ledgerTotal;
-  const coverage_liquid_gap = r9(walletBalance.spendable - spendableOwed);
-  const coverage_full_gap = r9(walletBalance.total - totalOwed);
+  const coverage_liquid_gap = r9(walletBalance.spendable - spendableOwed + network_fees_paid);
+  const coverage_full_gap = r9(walletBalance.total - totalOwed + network_fees_paid);
   const locked_drift = r9(ledger.sum_locked - pending.amt);
 
   return {
@@ -197,6 +204,7 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
     pending_withdrawals: { count: pending.cnt, amount: r9(pending.amt) },
     flows: { lifetime: flow(0), d7: flow(now - 7 * 86400), d1: flow(now - 86400) },
     checks: {
+      network_fees_paid: r9(network_fees_paid),
       coverage_liquid_gap,
       coverage_liquid_ok: !walletReachable ? null : coverage_liquid_gap >= -TOL,
       coverage_full_gap,

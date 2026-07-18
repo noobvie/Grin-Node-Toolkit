@@ -26,7 +26,7 @@
         { file: 'miners.html',   title: 'Miners' },
         { file: 'payments.html', title: 'Payouts' },
         { file: 'blocks.html',   title: 'Blocks' },
-        { file: 'users.html',    title: 'Users' },
+        { file: 'users.html',    title: 'Sessions' },
         { file: 'regions.html',  title: 'Regions' },
         { file: 'health.html',   title: 'System Health' }
       ] },

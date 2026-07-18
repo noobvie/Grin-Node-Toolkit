@@ -3558,10 +3558,9 @@ function setupRoutes() {
   // Node Health Status - FIX #2, #14: Use async/await and remove hardcoded data
   app.get('/api/admin/health/node', secureAdmin, async (req, res) => {
     try {
-      const status = await blockMonitor.grinNode.getStatus();
+      // Time the actual round-trip: start the clock BEFORE the call, read it after.
       const startTime = Date.now();
-
-      // Check if node API is reachable (by getting status successfully)
+      const status = await blockMonitor.grinNode.getStatus();
       const latencyMs = Date.now() - startTime;
       const isSynced = status?.synced === true;
 
@@ -3611,13 +3610,16 @@ function setupRoutes() {
     try {
       let walletStatus = 'unknown';
       let walletBalance = { total: 0, available: 0, locked: 0 };
+      let walletLatencyMs = 0;
       let torStatus = config.tor_enabled ? 'enabled' : 'disabled';
 
       // Attempt to query wallet if API exists. retrieve_summary_info returns
       // [was_refreshed, WalletInfo] with amounts as nanoGRIN strings — parse to GRIN.
       if (wallet && wallet.getBalance) {
         try {
+          const startTime = Date.now();
           const summary = await wallet.getBalance();
+          walletLatencyMs = Date.now() - startTime;
           const info = Array.isArray(summary) ? summary[1] : (summary || {});
           walletBalance = {
             total: Number(info.total || 0) / 1e9,
@@ -3639,7 +3641,7 @@ function setupRoutes() {
             // Combined listener: the wallet's Foreign API (build_coinbase) is mounted on the
             // Owner port via owner_api_include_foreign=true, so coinbase + payouts share one port.
             endpoint: `http://127.0.0.1:${config.wallet_owner_port || 13420}/v2/foreign`,
-            latency_ms: walletStatus === 'ok' ? 52 : 0
+            latency_ms: walletLatencyMs
           },
           tor_reachable: {
             status: torStatus,

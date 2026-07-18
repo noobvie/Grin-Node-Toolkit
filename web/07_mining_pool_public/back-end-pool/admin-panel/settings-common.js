@@ -526,6 +526,12 @@
       return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
+    // Full escape incl. quotes — for values placed inside an HTML attribute (value="…"),
+    // where escapeHtmlSafe alone leaves a " able to break out of the attribute.
+    function escapeAttrSafe(s) {
+      return escapeHtmlSafe(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
     async function ipFilterCall(path, ip) {
       const r = await adminFetch(path, {
         method: 'POST', credentials: 'include',
@@ -576,7 +582,7 @@
       const item = document.createElement('div');
       item.className = 'list-item';
       item.innerHTML = `
-        <span>${value}</span>
+        <span>${escapeHtmlSafe(value)}</span>
         <button class="btn btn-danger" style="min-width: auto; padding: 0.5rem 1rem;" onclick="this.parentElement.remove()">Remove</button>
       `;
       list.appendChild(item);
@@ -720,16 +726,16 @@
       row.dataset.key = key;
       row.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;">
-          <strong>${key}</strong>
+          <strong>${escapeHtmlSafe(key)}</strong>
           <button type="button" class="btn btn-danger" style="min-width:auto;padding:.4rem .9rem;" onclick="this.closest('.page-seo-row').remove()">Remove</button>
         </div>
         <div class="form-group">
           <label>Title</label>
-          <input type="text" class="page-seo-title settings-skip" value="${(title || '').replace(/"/g, '&quot;')}">
+          <input type="text" class="page-seo-title settings-skip" value="${escapeAttrSafe(title || '')}">
         </div>
         <div class="form-group">
           <label>Description</label>
-          <textarea class="page-seo-desc settings-skip" rows="2">${description || ''}</textarea>
+          <textarea class="page-seo-desc settings-skip" rows="2">${escapeHtmlSafe(description || '')}</textarea>
         </div>`;
       list.appendChild(row);
     }
@@ -923,7 +929,7 @@
           if (bal) bal.textContent = (d.balance || 0).toFixed(4);
           const led = document.getElementById('prize-pool-ledger');
           if (led) led.innerHTML = (d.ledger || []).slice(0, 8).map(e =>
-            `${new Date(e.created_at * 1000).toLocaleString()} — ${e.event_type} ${(e.amount).toFixed(4)} (${e.reference_type})`
+            `${escapeHtmlSafe(new Date(e.created_at * 1000).toLocaleString())} — ${escapeHtmlSafe(e.event_type)} ${(e.amount).toFixed(4)} (${escapeHtmlSafe(e.reference_type)})`
           ).join('<br>');
         }
       } catch (e) { /* non-fatal */ }
@@ -933,7 +939,7 @@
           const d = await r.json();
           const el = document.getElementById('lottery-draws');
           if (el) el.innerHTML = (d.draws || []).slice(0, 5).map(dr =>
-            `#${dr.id} ${dr.event_name || 'weekly'} — ${dr.status} — ${(dr.winners || []).map(w => `${w.grin_address.slice(0, 12)}… ${w.amount.toFixed(4)}`).join(', ') || 'no winners'}`
+            `#${dr.id} ${escapeHtmlSafe(dr.event_name || 'weekly')} — ${escapeHtmlSafe(dr.status)} — ${(dr.winners || []).map(w => `${escapeHtmlSafe(String(w.grin_address || '').slice(0, 12))}… ${w.amount.toFixed(4)}`).join(', ') || 'no winners'}`
           ).join('<br>');
         }
       } catch (e) { /* non-fatal */ }

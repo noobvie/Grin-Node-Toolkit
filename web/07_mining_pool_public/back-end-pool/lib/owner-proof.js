@@ -81,11 +81,38 @@ const TRIVIAL_PASSWORDS = new Set([
   'worker', 'miner', 'default', 'admin', 'test', 'grin', 'asic', 'anything'
 ]);
 
-function isUsablePassword(pass) {
+// Operator-added banned passwords (admin → Access, access.extra_banned_passwords) —
+// additions-only ON TOP of the hardcoded seed above; the seed + structural rules always
+// apply so an admin edit can never turn `x` into a valid proof. Cached briefly so the hot
+// paths (share capture, gate verify) don't hit pool_config on every call. Because the
+// submitted value is re-checked at VERIFY time, adding an entry immediately stops it
+// working as proof even for accounts that captured it earlier.
+let _extraBanned = { at: 0, set: new Set() };
+function extraBannedSet(db) {
+  if (!db) return _extraBanned.set;
+  const now = Date.now();
+  if (now - _extraBanned.at > 60000) {
+    let set = new Set();
+    try {
+      const row = db.prepare(
+        "SELECT value FROM pool_config WHERE section = 'access' AND key = 'extra_banned_passwords'"
+      ).get();
+      if (row && row.value) {
+        const arr = JSON.parse(row.value);
+        if (Array.isArray(arr)) set = new Set(arr.map((p) => String(p).toLowerCase()));
+      }
+    } catch (e) { /* missing table/row or corrupt json → seed list only */ }
+    _extraBanned = { at: now, set };
+  }
+  return _extraBanned.set;
+}
+
+function isUsablePassword(pass, db) {
   if (typeof pass !== 'string') return false;
   const p = pass.trim();
   if (p.length < 4 || p.length > 128) return false;
   if (TRIVIAL_PASSWORDS.has(p.toLowerCase())) return false;
+  if (extraBannedSet(db).has(p.toLowerCase())) return false;
   if (/^d=/i.test(p)) return false; // difficulty-request convention, not a secret
   return true;
 }
@@ -189,7 +216,7 @@ async function recordOwnerEvidence(db, grinAddress, rawIp, rawPass) {
     }
 
     const pass = typeof rawPass === 'string' ? rawPass.trim() : '';
-    if (isUsablePassword(pass)) {
+    if (isUsablePassword(pass, db)) {
       if (!(await verifyHashedProof(pass, row.last_pass_hash))) {
         sets.push('prev_pass_hash = ?', 'last_pass_hash = ?');
         vals.push(row.last_pass_hash || null, await hashProof(pass));
@@ -239,7 +266,7 @@ async function verifyOwnerProof(db, grinAddress, submitted) {
       return { ok: true, reason: 'match', method: 'ip' };
     }
   }
-  if (isUsablePassword(raw)) {
+  if (isUsablePassword(raw, db)) {
     if (await verifyHashedProof(raw, row.last_pass_hash) || await verifyHashedProof(raw, row.prev_pass_hash)) {
       _clearFails(grinAddress);
       return { ok: true, reason: 'match', method: 'password' };

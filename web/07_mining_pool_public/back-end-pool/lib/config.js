@@ -52,6 +52,22 @@ function mergeEnvVars(config) {
     jwt_secret: config.jwt_secret || process.env.JWT_SECRET || '',
     pool_fee_percent: config.pool_fee_percent !== undefined ? config.pool_fee_percent : 1.0,
     min_withdrawal: config.min_withdrawal !== undefined ? config.min_withdrawal : 25.0,
+    // Cross-rail wait after a reversed payout before the miner can request another (0 disables).
+    withdrawal_cooldown_minutes: config.withdrawal_cooldown_minutes !== undefined ? config.withdrawal_cooldown_minutes : 30,
+
+    // ── Goblin/Nostr payout rail (design §15; OFF by default — needs `npm install`
+    // for nostr-tools + ws and a VPS E2E test with a real Goblin wallet). Pays a THIRD
+    // party (the miner's Goblin username), so the route/scheduler enforce a registered
+    // destination + cooldown + TOFU npub pin on top of the ownership gate.
+    nostr_payouts_enabled: config.nostr_payouts_enabled === true || config.nostr_payouts_enabled === 'true',
+    nostr_relays: config.nostr_relays || ['wss://relay.floonet.dev', 'wss://relay.0xchat.com', 'wss://offchain.pub'],
+    // NIP-05 domains the pool will resolve a username against (SSRF + typo-squat guard).
+    nostr_nip05_domains: config.nostr_nip05_domains || ['goblin.st'],
+    nostr_home_domain: config.nostr_home_domain || 'goblin.st',
+    // Hours a registered destination must age before it can receive a payout.
+    nostr_destination_cooldown_hours: config.nostr_destination_cooldown_hours !== undefined ? config.nostr_destination_cooldown_hours : 48,
+    // Pool Nostr identity key file (hex secret). Blank → derived next to the DB file.
+    nostr_key_file: config.nostr_key_file || '',
     // Grin COINBASE_MATURITY = 1440; a coinbase cannot be spent until 1440 confirmations,
     // so payouts must wait at least that long to be reorg-safe.
     confirm_depth_mainnet: config.confirm_depth_mainnet || 1440,

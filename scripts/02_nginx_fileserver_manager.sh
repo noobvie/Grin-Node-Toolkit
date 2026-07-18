@@ -485,28 +485,9 @@ get_action() {
 # Common Functions (Used by Setup and Add)
 #############################################################################
 
-# Stop apache2 if running so it cannot block nginx on port 80/443.
-# Also disables it at boot if it is enabled-but-stopped.
-_evict_apache2() {
-    if systemctl is-active --quiet apache2 2>/dev/null; then
-        print_warning "apache2 is running and occupies port 80 — nginx cannot start."
-        local yn
-        read -r -p "  Stop and disable apache2 now? [Y/n]: " yn
-        if [[ "${yn,,}" != "n" ]]; then
-            systemctl stop    apache2 2>/dev/null || true
-            systemctl disable apache2 2>/dev/null || true
-            print_info "apache2 stopped and disabled."
-        else
-            print_warning "Skipping — nginx may fail to bind port 80/443."
-        fi
-    elif systemctl is-enabled --quiet apache2 2>/dev/null; then
-        print_warning "apache2 is enabled at boot (not running now) — disabling to avoid port conflict on reboot."
-        systemctl disable apache2 2>/dev/null || true
-        print_info "apache2 boot-start disabled."
-    fi
-}
-
-# _ensure_sites_enabled_include is provided by lib/nginx_shared_helpers.sh (sourced above).
+# apache2 eviction is delegated to nginx_evict_apache2 (invoked inside
+# nginx_install_with_certbot) from lib/nginx_shared_helpers.sh, sourced above.
+# _ensure_sites_enabled_include is likewise provided by that shared lib.
 
 # Open HTTP/HTTPS in the active firewall. Debian/Ubuntu images usually ship no
 # active firewall, but Rocky/Alma run firewalld by default with 80/443 closed —
@@ -552,31 +533,9 @@ ensure_nginx_certbot() {
     [[ "$_choice" == "0" ]]        && return 1
     [[ "${_choice,,}" =~ ^n ]]     && print_error "${label} required. Exiting." && return 1
 
-    if $need_nginx; then
-        print_section "Installing Nginx"
-        _evict_apache2
-        if [[ -f /etc/debian_version ]]; then
-            apt-get update && apt-get install -y nginx
-        elif [[ -f /etc/redhat-release ]]; then
-            yum install -y epel-release nginx
-        else
-            print_error "Unsupported OS"; return 1
-        fi
-        systemctl enable nginx && systemctl start nginx
-        print_info "Nginx installed and started successfully"
-    fi
-
-    if $need_certbot; then
-        print_section "Installing Certbot"
-        if [[ -f /etc/debian_version ]]; then
-            apt-get update && apt-get install -y certbot python3-certbot-nginx
-        elif [[ -f /etc/redhat-release ]]; then
-            # certbot lives in EPEL — ensure the repo is enabled first
-            rpm -q epel-release &>/dev/null || yum install -y epel-release
-            yum install -y certbot python3-certbot-nginx
-        fi
-        print_info "Certbot installed successfully"
-    fi
+    # Install (+ apache2 eviction) delegated to the shared lib. Distro-aware and
+    # the single source of truth; this script keeps only its firewall + prompt UX.
+    nginx_install_with_certbot || { print_error "nginx/certbot install failed — see above."; return 1; }
 }
 
 # 4.0 - Function to show help

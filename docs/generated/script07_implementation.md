@@ -503,6 +503,98 @@ owner-proof smoke test (canonicalisation v4/v6, capture/no-op/rotation, IP+passw
 trivial-password rejection, legacy plaintext verify) — all pass. Deploy needs a backend
 restart (column migration + background hash migration run automatically).
 
+### 10.2 Goblin/Nostr payout rail BUILT (2026-07-18, add-ons — NOT VPS-tested)
+
+Full implementation of design §15 (which now carries a §15.5 "what shipped" note). A miner
+registers a Goblin username on the account page and is paid over a Nostr DM — no Tor listener.
+**OFF by default** (`nostr_payouts_enabled`); needs `npm install` (nostr-tools + ws) and a
+backend restart. Third-party rail (pays a username, not the address's own wallet), so it
+layers a registered destination + ≥48 h cooldown + TOFU npub re-pin on top of the ownership
+gate — see security_audit §E.3 for the threat model.
+
+Build shape (bottom-up):
+- `lib/nostr-payout.js` — the bridge. nostr-tools + ws lazy-required inside `start()` (pool
+  boots without them when the feature is off / not yet installed). All nostr-tools calls are
+  confined to a "wire" section so a future API drift is a localized fix. Does NOT touch
+  balances — transport only. Resolves usernames (NIP-05, domain-allowlisted), publishes the
+  NIP-17 gift-wrapped slatepack, and runs a persistent subscription that routes an incoming S2
+  back to the scheduler. Dedup via a `nostr_seen_events` table. Pool identity key persisted to
+  a `.nostr_payout_key` file (transport-only; can't sign slates).
+- `lib/withdrawal-scheduler.js` — `createNostrWithdrawal` (mirrors the slatepack rail: same
+  CAS lock, `PENDING_SQL` cross-rail one-pending, freeze + failed-payout-cooldown gates, TTL
+  refund; S1 is **plain armor** `recipients:[]`; publishes via the bridge, reverses the lock on
+  any wallet/relay failure) and `finalizeNostrWithdrawal` (called by the bridge on an S2:
+  re-checks sender==registered npub + binds slate.id, then finalize+post+confirm; errors leave
+  the row pending for resend/TTL). `nostrBridge` injected post-construction to avoid a cycle.
+- `index.js` — constructs+starts the bridge at boot inside a try/catch (missing package →
+  warn + disable, never crash); wires the response handler; adds
+  `POST`/`DELETE /api/account/:addr/nostr-destination` (ownership-gated, rate-limited) and a
+  `method:'nostr'` branch in the withdraw route that enforces registered + cooled-down +
+  TOFU-verified destination before calling the scheduler; account summary gains
+  `nostr_payouts_enabled` + a `nostr_destination` state object (username + active_at, npub
+  never exposed).
+- Config: `lib/config.js` defaults + `lib/pool-settings.js` (defaults/validators/applyToConfig)
+  for `nostr_payouts_enabled`, `nostr_relays`, `nostr_nip05_domains`,
+  `nostr_destination_cooldown_hours`. Admin fields on `settings-payout.html` (+ the
+  JSON-array↔newline populate special-case in `settings-common.js`). `package.json` gains
+  `nostr-tools` + `ws`.
+- Frontend `account-settings.html` P-04: a "Goblin (Nostr)" payout option (shown only when the
+  pool enabled the rail) with a register/replace/remove destination form and a send button that
+  unlocks only once the destination is past its cooldown.
+
+Verified: `node --check` on all edited JS + the extracted account-page inline script; a
+23-case stub smoke test (slatepack extraction one/none/two/oversized, relay-floor forcing +
+domain allowlist parsing, all four validators, and the scheduler's createNostrWithdrawal
+guards + lock/reverse-on-publish-failure + finalize sender-mismatch rejection) — all pass.
+**NOT VPS-tested**: the live Nostr transport (nip59 wrap/unwrap signatures, SimplePool relay
+I/O, real goblin AutoReceive round-trip) needs an E2E run against `relay.floonet.dev` with a
+real Goblin wallet — do a testnet / tiny-amount pilot first.
+
+### 10.1 Same-day follow-up (2026-07-17 later, add-ons — NOT VPS-tested)
+
+Operator decisions after a second discussion round:
+
+- **Public cancel REMOVED** (route + P-04 button + `cancelPending`). Both parked states
+  self-recover — Tor `markFailed()` auto-reverses after max retries, slatepack auto-refunds
+  via TTL expiry — so cancel was pure abuse surface: a Grin send that *looks* failed may have
+  actually posted, and reversing the lock then = double-pay. Admin support cases use the
+  existing step-up `POST /api/admin/withdrawals/:id/cancel` (payments page);
+  `scheduler.cancelWithdrawal()` kept for admin tooling only. Known residual (documented, not
+  built): the automatic retry/reversal paths carry the same theoretical exposure — proper fix
+  is recording slate_id on Tor sends + checking wallet tx state (`retrieve_txs`) before any
+  retry/reversal.
+- **Explicit amount + min/max chips**: blank-=-full-balance retired on the page (API still
+  accepts `amount:null`). The amount label has clickable `min <pool-min>` / `max <balance>`
+  chips that autofill; `amountValue(msgEl)` now rejects blank/non-positive with a hint.
+- **Blocklist additions-only**: new `access.extra_banned_passwords` (pool_config, JSON array;
+  validator accepts newline/comma lists and normalises to deduped lowercase, cap 500).
+  `isUsablePassword(pass, db)` merges it (60 s cache) ON TOP of the hardcoded seed — the seed
+  and structural rules can never be removed via admin. Editable in settings-access.html
+  (textarea, one per line; populate special-case in settings-common.js). Because verify
+  re-checks the submitted value, a newly added entry stops working as proof immediately.
+- **Payout rail status chip**: account summary now returns `payouts_frozen`
+  (`scheduler.isFrozen()`, boolean only — the freeze reason stays admin-side); P-04 title
+  shows "payouts active/paused" chip and the Tor button disables while frozen.
+- **Goblin nickname payouts over Nostr**: design only → `script07_design.md` §15 (registered
+  destination + 48 h cooldown + npub TOFU pin; bridge sketch reusing the slatepack state
+  machine). Not scheduled.
+
+Verified: `node --check` ×5 + re-extracted inline script; blocklist smoke test (seed + extra
+entries, case-insensitivity, corrupt-JSON fail-open) and validator normalisation tests pass.
+
+**Round 3 (same day):** cross-rail payout exclusivity + cooldown (audit §E.2 has the full
+security rationale). Shared `PENDING_SQL` in withdrawal-scheduler.js closes the hole where a
+pending slatepack didn't block a Tor create (and fixes the same 3-status list in the admin
+miner-detail pending view). New `_assertNoRecentReversal()` gate in both create paths:
+after any withdrawal reversal (Tor failure, slatepack expiry/creation failure, admin cancel)
+the address waits `payout.withdrawal_cooldown_minutes` (default 30, 0 disables) before
+requesting another payout on any rail. Plumbed through pool-settings defaults/validator/
+applyToConfig, config.js default, and a field on admin settings-payout.html (applied at
+backend restart, like min_withdrawal); account-page note mentions the cooldown. The designed
+Nostr rail (design §15) inherits both gates automatically since it parks in
+`slatepack_pending`. Verified: `node --check` ×4 + 12-case stub-db smoke test (pending gate
+cross-rail, cooldown default/custom/disabled, validator bounds) all pass.
+
 ---
 
 ## Appendix — Model C refactor plan (multi-region thin gateways), merged from flowcharts/script07_mining_public_planning.txt 2026-07-09

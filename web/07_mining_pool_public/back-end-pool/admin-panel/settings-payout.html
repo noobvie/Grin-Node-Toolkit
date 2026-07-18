@@ -37,6 +37,14 @@
             </div>
           </div>
 
+          <div class="form-row">
+            <div class="form-group">
+              <label for="withdrawal_cooldown_minutes">Failed-Payout Cooldown (minutes)</label>
+              <input type="number" id="withdrawal_cooldown_minutes" name="withdrawal_cooldown_minutes" min="0" max="1440" step="1" value="30">
+              <div class="helper-text">After a payout is returned to a miner's balance (Tor failure, expired slatepack, cancel), the miner must wait this long before requesting another — on any payout method. 0 disables. Applied on backend restart.</div>
+            </div>
+          </div>
+
           <div class="checkbox-group">
             <input type="checkbox" id="auto_payout" name="auto_payout">
             <label for="auto_payout">Enable automatic payouts</label>
@@ -71,6 +79,41 @@
               <label for="max_user_pending">Max Pending Per Miner</label>
               <input type="number" id="max_user_pending" name="max_user_pending" value="10">
               <div class="helper-text">Per-address concurrent limit</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Goblin / Nostr Payouts (experimental)</h3>
+          <p class="helper-text" style="margin-bottom:12px;">
+            Lets a miner register a Goblin username and be paid over Nostr (no Tor listener needed). This rail pays a
+            <b>username</b>, not the mining address's own wallet, so it is guarded by a registration + cooldown + key-pin on
+            top of the ownership gate. Requires <code>npm install</code> in the backend (adds nostr-tools + ws) and a backend
+            restart. Test on testnet / with tiny amounts first.
+          </p>
+          <div class="checkbox-group">
+            <input type="checkbox" id="nostr_payouts_enabled" name="nostr_payouts_enabled">
+            <label for="nostr_payouts_enabled">Enable Goblin/Nostr payouts</label>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="nostr_destination_cooldown_hours">Destination Cooldown (hours)</label>
+              <input type="number" id="nostr_destination_cooldown_hours" name="nostr_destination_cooldown_hours" min="0" max="720" step="1" value="48">
+              <div class="helper-text">A newly registered Goblin destination can't receive a payout until it is this old. Gives the real owner time to spot and undo a hijack. 0 disables the wait (not recommended).</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="nostr_nip05_domains">Allowed NIP-05 Domains</label>
+              <textarea id="nostr_nip05_domains" rows="2" placeholder="goblin.st">goblin.st</textarea>
+              <div class="helper-text">One hostname per line. The ONLY domains a username is resolved against — the SSRF / look-alike-domain guard. Leave as <code>goblin.st</code> unless you know why.</div>
+            </div>
+            <div class="form-group">
+              <label for="nostr_relays">Relays</label>
+              <textarea id="nostr_relays" rows="3" placeholder="wss://relay.floonet.dev">wss://relay.floonet.dev
+wss://relay.0xchat.com
+wss://offchain.pub</textarea>
+              <div class="helper-text">One <code>wss://</code> URL per line. The floor <code>wss://relay.floonet.dev</code> is always included automatically.</div>
             </div>
           </div>
         </div>

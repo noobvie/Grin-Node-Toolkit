@@ -340,3 +340,85 @@ Operator-decided redesign of the account-page gate ([owner-proof.js](../../web/0
 Residual risk (unchanged in kind): the gate remains anti-griefing, not authentication — a
 NAT/CGNAT co-tenant sharing the miner's public IP can still pass it; both rails stay
 independently theft-proof (pay-to-self over Tor; slatepack age-encrypted to the address).
+
+### E.1 Follow-up hardening — 2026-07-17 later same day (add-ons, NOT VPS-tested)
+
+- **Public cancel removed entirely** (supersedes the gated cancel in point 1 above): both parked
+  states self-recover (Tor auto-reversal after max retries; slatepack TTL refund), and in
+  Grin a send that appears failed may still have posted — a late cancel reversing the lock
+  is a **double-pay** vector even when ownership-gated (the legitimate owner could abuse it
+  deliberately). Admin cancel stays (step-up gated). OPEN follow-up: the automatic
+  retry/reversal paths carry the same theoretical double-pay exposure; fix = record slate_id
+  on Tor sends and check wallet tx state (`retrieve_txs`) before any retry or reversal.
+- **Operator-extendable password blocklist, additions-only**: `access.extra_banned_passwords`
+  (pool_config) merges on top of the hardcoded seed in owner-proof.js with a 60 s cache;
+  the seed + structural rules are not admin-removable, so a bad edit can weaken nothing.
+  Fail-open to seed-only on missing/corrupt row. Verify re-checks the submitted value, so a
+  new entry disables that password as proof immediately, even for accounts that captured it.
+- **Freeze visibility**: account summary exposes `payouts_frozen` as a **boolean only** —
+  the freeze reason (wallet_drain / integrity_drift …) stays admin-side, since it would tell
+  an attacker exactly which incident the pool is fighting.
+
+### E.2 Cross-rail pending gate + failed-payout cooldown — 2026-07-17 round 3 (add-ons, NOT VPS-tested)
+
+- **FIXED: one-directional pending hole.** `createWithdrawal` (Tor) counted only the three
+  Tor statuses, so a miner with a pending **slatepack** could open a **Tor** payout in
+  parallel — two concurrent locks, violating design §8's one-pending-per-address rule (the
+  slatepack path already counted all four statuses; the hole was Tor-side only). Both create
+  paths now share one module-level `PENDING_SQL`
+  (`tor_checking, tor_sending, retry_scheduled, slatepack_pending`); any future rail that
+  parks in these states (e.g. the designed Nostr rail) is inside the gate by construction.
+  Admin miner-detail view (`GET /api/admin/miners/:addr`) had the same 3-status list in its
+  pending display — also fixed.
+- **NEW: cross-rail cooldown after a reversed payout** (operator decision, default 30 min,
+  `payout.withdrawal_cooldown_minutes`, 0 disables, cap 1440). `_assertNoRecentReversal()`
+  checks the address's latest `balance_log` row with `event_type='reversal'` +
+  `reference_type='withdrawal'` (written by Tor `markFailed`, slatepack expiry/creation
+  failure `_reverseLock`, and admin cancel) and 429s both create paths while inside the
+  window, before any lock is taken. Purpose: (1) safety margin over the OPEN
+  slate_id/`retrieve_txs` double-pay window in E.1 — a "failed" Tor send that actually posted
+  gets 30 min to surface before the miner can pull the same funds through another rail;
+  (2) kills rapid-fire rail-hopping after failures. Orphan/jackpot clawback reversals use
+  `reference_type≠'withdrawal'` and do NOT trigger the cooldown.
+
+### E.3 Goblin/Nostr payout rail — threat model (BUILT 2026-07-18, add-ons, NOT VPS-tested)
+
+This rail is categorically different from Tor/slatepack: those can only pay the mining
+address's **own** wallet (Tor dials its onion; the slatepack is age-encrypted to it), so the
+ownership gate is merely anti-griefing — a passed gate cannot redirect funds. The Nostr rail
+pays a **username → npub → whoever controls that key**. So the gate alone must NOT be able to
+authorize an arbitrary-destination payout. Layered defenses (all implemented):
+
+1. **Registered destination, not a request parameter.** A payout never takes a username from
+   the withdraw body. The destination is stored once via `POST /api/account/:addr/nostr-destination`
+   (ownership-gated + rate-limited) and the send route reads only the stored, pinned npub.
+2. **≥48 h destination cooldown** (`nostr_destination_cooldown_hours`). A freshly registered
+   destination can't receive a payout until it ages out. Registration is visible on the miner's
+   own account page, so the real owner — who watches their stats — has the whole window to spot
+   a hijack, re-register (which resets the clock and evicts the attacker's entry) and rotate
+   the rig password. Re-registration always resets the clock.
+3. **TOFU npub re-pin at send time.** The route re-resolves the stored username via NIP-05 and
+   refuses the payout (409) if the npub differs from the one pinned at registration — a
+   goblin.st account takeover cannot silently redirect a standing destination.
+4. **NIP-05 domain allowlist** (`nostr_nip05_domains`, default `["goblin.st"]`) — the resolver
+   only fetches `/.well-known/nostr.json` from allowlisted hostnames, and rejects IP-literals /
+   paths / ports. This is the SSRF + look-alike-domain guard: the pool's resolver can't be
+   pointed at an internal host or a typo-squat domain.
+5. **Response (S2) binding, defense in depth.** The bridge routes an incoming gift-wrapped S2
+   to a pending row only when the seal-verified sender pubkey equals the registered `nostr_npub`;
+   the scheduler then re-checks that equality AND binds `slate.id` to the issued slate before
+   finalizing. A forged/mismatched S2 is dropped without any on-chain action. Incoming events
+   are size-capped (wrap/rumor/slatepack) and deduped (`nostr_seen_events`) before any parsing.
+6. **Inherits every existing money guard.** `method='nostr'` rows park in `slatepack_pending`,
+   so they are inside `PENDING_SQL` (one-pending-per-address across all rails), the freeze
+   kill-switch (`_assertNotFrozen` on create + finalize), the failed-payout cooldown
+   (`_assertNoRecentReversal`), the min-withdrawal floor, and the TTL expiry refund — no
+   parallel accounting path. Any wallet/relay send failure reverses the balance lock.
+7. **Transport key ≠ money key.** The pool's Nostr identity (`.nostr_payout_key`) can only
+   sign Nostr events, never a Grin slate; a leak exposes payout *metadata* (timing/counts on
+   public relays — an accepted trade-off, same as goblin itself), not funds.
+
+Residual / to validate on the VPS: the live nostr-tools crypto (nip59 wrap/unwrap) and relay
+delivery are exercised only by an E2E run — do a testnet / tiny-amount pilot before enabling on
+mainnet. The E.1 slate_id/`retrieve_txs` double-pay hardening applies here too (the failed-send
+reversal shares the exposure); the failed-payout cooldown is the current mitigation.

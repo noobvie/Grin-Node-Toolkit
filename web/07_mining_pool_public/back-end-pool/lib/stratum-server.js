@@ -591,6 +591,9 @@ class StratumServer {
       if (!session.ipRecorded) {
         session.ipRecorded = true;
         this.minerManager.recordOwnerEvidence(session.grinAddress, session.ip, session.pass);
+        // Network-map: resolve the same real IP to a COUNTRY ONLY (never stored raw). Best-effort,
+        // no-op without geoip-lite; own 6h throttle inside. See miners.recordMinerCountry.
+        this.minerManager.recordMinerCountry(session.grinAddress, session.ip);
       }
 
       if (nodeResult.blockHash) {

@@ -77,6 +77,12 @@
           } else if (el.type === 'range') {
             el.value = value;
             updateRangeDisplay(el);
+          } else if (key === 'extra_banned_passwords' || key === 'nostr_relays' || key === 'nostr_nip05_domains') {
+            // Stored as a JSON array; edited one entry per line (the back-end validator
+            // accepts the newline-separated form and re-serialises it).
+            let arr = value;
+            if (typeof arr === 'string') { try { arr = JSON.parse(arr || '[]'); } catch (e) { arr = []; } }
+            el.value = Array.isArray(arr) ? arr.join('\n') : '';
           } else if (el.tagName === 'TEXTAREA' || el.type === 'text' || el.type === 'email' || el.type === 'url' || el.type === 'number') {
             el.value = value || '';
           } else if (el.tagName === 'SELECT') {
@@ -134,7 +140,11 @@
           data[el.id] = el.value; // JSON builders: always send, even when '{}'/empty
         } else if (el.tagName === 'TEXTAREA') {
           data[el.id] = el.value; // content fields: send even when cleared (to disable a page)
-        } else if (el.value) {
+        } else if (el.value || el.classList.contains('settings-allow-empty')) {
+          // Non-empty scalars are always sent. Empty scalars are DROPPED (merge-upsert keeps the
+          // stored value) so a blank number can't clobber e.g. min_withdrawal → 0 — EXCEPT inputs
+          // tagged `settings-allow-empty`, whose UI documents "leave blank to …" and must be able
+          // to persist an empty value (home_title, ga_tracking_id, public_stratum_host, founded_year).
           data[el.id] = el.value;
         }
       });

@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { getDb } = require('./db');
 const { recordOwnerEvidence } = require('./owner-proof');
+const geoip = require('./geoip');
 
 class MinerManager {
   constructor(config) {
@@ -89,6 +90,32 @@ class MinerManager {
   // PROXY-protocol v2 header value under Model C). Async (scrypt); errors are swallowed inside.
   recordOwnerEvidence(grinAddress, ip, pass) {
     return recordOwnerEvidence(this.db, grinAddress, ip, pass);
+  }
+
+  // Network-map geo capture (lib/geoip.js). Resolves the miner's transient real IP to an ISO
+  // COUNTRY CODE and upserts miner_geo — COUNTRY ONLY, the IP is never stored. Throttled to one
+  // write per address per 6h (a miner rarely changes country). Silent no-op when geoip-lite is
+  // not installed or the IP has no country. Called beside recordOwnerEvidence on a session's
+  // first accepted share (same once-per-session gate), so it never touches the hot share path
+  // for an already-known miner and never blocks (best-effort, errors swallowed).
+  recordMinerCountry(grinAddress, ip) {
+    try {
+      if (!geoip.available()) return;
+      const geo = geoip.lookupCountry(ip);
+      if (!geo) return;
+      const now = Math.floor(Date.now() / 1000);
+      const row = this.db.prepare('SELECT last_seen FROM miner_geo WHERE grin_address = ?').get(grinAddress);
+      if (row && (now - row.last_seen) < 6 * 3600) return; // throttle repeat writes
+      this.db.prepare(`
+        INSERT INTO miner_geo (grin_address, country_code, country, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(grin_address) DO UPDATE SET
+          country_code = excluded.country_code, country = excluded.country, last_seen = excluded.last_seen
+      `).run(grinAddress, geo.cc, geo.name, now, now);
+    } catch (err) {
+      // geo is best-effort decoration for the public map — never disturb mining.
+      console.error(`[geoip] recordMinerCountry failed: ${err.message}`);
+    }
   }
 
   // Moderation — is this address banned from logging in / submitting shares?

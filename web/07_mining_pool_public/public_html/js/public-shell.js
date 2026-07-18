@@ -34,9 +34,15 @@
   // Each item carries an icon: on narrow screens the header collapses to icons-only
   // (the .nav-label is hidden via CSS) so the mobile header stays tidy; desktop shows
   // icon + label. The footer "Pool" column reuses the labels only (always text).
+  // An item is either a leaf link ({href,label,icon}) or a GROUP
+  // ({label,icon,children:[…leaf links…]}). A group has NO href of its own — it
+  // only opens a dropdown of its children (Pool Stats → Miners Stats / Network Map).
   var NAV = [
     { href: 'index.html',            label: 'Dashboard',     icon: '🏠' },
-    { href: 'miners-stats.html',     label: 'Pool Stats',    icon: '📊' },
+    { label: 'Pool Stats', icon: '📊', children: [
+      { href: 'miners-stats.html',   label: 'Miners Stats',  icon: '📈' },
+      { href: 'network-map.html',    label: 'Network Map',   icon: '🛰️' }
+    ] },
     { href: 'account-settings.html', label: 'My Stats',      icon: '👤' },
     { href: 'blocks.html',           label: 'Blocks',        icon: '🧱' },
     { href: 'payment-history.html',  label: 'Payouts',       icon: '💸' },
@@ -60,12 +66,31 @@
 
   var here = currentFile();
 
-  var navLinks = NAV.map(function (l) {
+  // Render one leaf link (also used for the items inside a group dropdown).
+  function leafLink(l) {
     var active = fileOf(l.href) === here ? ' active' : '';
     return '<a href="' + l.href + '" class="nav-link' + active + '" title="' + esc(l.label) + '">' +
       '<span class="nav-ico" aria-hidden="true">' + (l.icon || '') + '</span>' +
       '<span class="nav-label">' + esc(l.label) + '</span>' +
     '</a>';
+  }
+
+  var navLinks = NAV.map(function (l) {
+    if (!l.children) return leafLink(l);
+    // Group: a caret trigger (no href) + a dropdown of children. The trigger carries
+    // .active when the current page is one of the children so the parent stays lit.
+    var childActive = l.children.some(function (c) { return fileOf(c.href) === here; });
+    return '<div class="nav-group' + (childActive ? ' active' : '') + '">' +
+      '<button type="button" class="nav-link nav-group-trigger" aria-haspopup="true" ' +
+        'aria-expanded="false" title="' + esc(l.label) + '">' +
+        '<span class="nav-ico" aria-hidden="true">' + (l.icon || '') + '</span>' +
+        '<span class="nav-label">' + esc(l.label) + '</span>' +
+        '<span class="nav-caret" aria-hidden="true">▾</span>' +
+      '</button>' +
+      '<div class="nav-dropdown" role="menu">' +
+        l.children.map(leafLink).join('') +
+      '</div>' +
+    '</div>';
   }).join('');
 
   // ── Header: byte-identical to the old per-page markup so existing CSS and
@@ -90,8 +115,17 @@
   // (network/fee/min/price/stratum) is filled by this script's own light fetches below.
 
   // Pool column reuses the canonical NAV (no anchor stays active in the footer), minus
-  // Blog — it lives in the Resources column below to avoid a duplicate link.
-  var poolCol = NAV.filter(function (l) { return fileOf(l.href) !== 'blog.html'; })
+  // Blog — it lives in the Resources column below to avoid a duplicate link. Groups have
+  // no page of their own, so they're flattened to their child links here.
+  var poolLeaves = [];
+  NAV.forEach(function (l) {
+    if (l.children) { l.children.forEach(function (c) { poolLeaves.push(c); }); }
+    else poolLeaves.push(l);
+  });
+  // Excluded from the Pool column: Blog (Resources col), Dashboard (redundant — the
+  // brand logo links home) and Fortune Board (surfaced under Donate in the brand col).
+  var POOL_COL_SKIP = { 'blog.html': 1, 'index.html': 1, 'fortune-board.html': 1 };
+  var poolCol = poolLeaves.filter(function (l) { return !POOL_COL_SKIP[fileOf(l.href)]; })
     .map(function (l) {
       return '<a href="' + l.href + '">' + esc(l.label) + '</a>';
     }).join('');
@@ -116,9 +150,13 @@
           '<a data-brand="social-nostr" href="#" target="_blank" rel="noopener" style="display:none">Nostr</a>' +
         '</div>' +
         // Donate lives in the brand column, highlighted with a heart, as the primary
-        // community call-to-action (moved out of the Legal column).
+        // community call-to-action (moved out of the Legal column). Fortune Board sits
+        // right below it (moved out of the Pool column to keep the columns balanced).
         '<a class="footer-donate" href="donate.html">' +
           '<span class="footer-donate-ico" aria-hidden="true">❤</span> Donate' +
+        '</a>' +
+        '<a class="footer-fortune" href="fortune-board.html">' +
+          '<span class="footer-fortune-ico" aria-hidden="true">🎁</span> Fortune Board' +
         '</a>' +
       '</div>' +
       // Pool navigation
@@ -269,6 +307,39 @@
     document.body.classList.add('has-testnet-banner');
   }
 
+  // Nav dropdown groups: desktop opens on :hover / :focus-within (pure CSS); touch and
+  // keyboard need an explicit toggle. Click the trigger to open/close; clicking outside
+  // or pressing Escape closes. Only one group open at a time.
+  function wireNavGroups() {
+    var groups = header.querySelectorAll('.nav-group');
+    if (!groups.length) return;
+    function closeAll(except) {
+      groups.forEach(function (g) {
+        if (g === except) return;
+        g.classList.remove('open');
+        var t = g.querySelector('.nav-group-trigger');
+        if (t) t.setAttribute('aria-expanded', 'false');
+      });
+    }
+    groups.forEach(function (g) {
+      var trigger = g.querySelector('.nav-group-trigger');
+      if (!trigger) return;
+      trigger.addEventListener('click', function (e) {
+        e.preventDefault();
+        var willOpen = !g.classList.contains('open');
+        closeAll(g);
+        g.classList.toggle('open', willOpen);
+        trigger.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      });
+    });
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest('.nav-group')) closeAll(null);
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeAll(null);
+    });
+  }
+
   function mount() {
     // Remove any legacy hardcoded chrome a page might still carry (defensive —
     // converted pages ship none), then inject the canonical header/footer.
@@ -280,6 +351,7 @@
     document.body.appendChild(adSlot('footer'));
     document.body.appendChild(footer);
     startBrandSwing();
+    wireNavGroups();
     enhanceFooter();
 
     // Load the ad renderer once (it fills every [data-ad-slot] on the page).

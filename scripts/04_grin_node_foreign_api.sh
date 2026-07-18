@@ -573,14 +573,13 @@ _enable_node_api_nginx() {
     echo -e "  Blocks  ${BOLD}/v2/owner${RESET}   (admin endpoints stay private)"
     echo ""
 
-    if ! command -v nginx &>/dev/null; then
-        warn "nginx is not installed. Install it first via 'Manage Nginx Server'."
-        return
-    fi
-
-    if ! command -v certbot &>/dev/null; then
-        warn "certbot is not installed: apt-get install certbot python3-certbot-nginx"
-        return
+    if ! command -v nginx &>/dev/null || ! command -v certbot &>/dev/null; then
+        command -v nginx   &>/dev/null || warn "nginx is not installed."
+        command -v certbot &>/dev/null || warn "certbot is not installed."
+        echo -ne "Install the missing package(s) now? [Y/n]: "
+        read -r _yn
+        [[ "${_yn,,}" == "n" ]] && return
+        nginx_install_with_certbot || { error "Install failed — resolve the errors above and retry."; return; }
     fi
 
     if ! ss -tlnp 2>/dev/null | grep -q ":$port "; then

@@ -235,7 +235,16 @@ flr_toml_set() {  # <section> <key> <toml_value>
 }
 
 # Quote a shell string as a TOML string.
-flr_toml_str() { printf '"%s"' "${1//\"/\\\"}"; }
+# Strip ANSI/color escapes and any other control chars FIRST: a colored prompt
+# default or a captured value must never leak an ESC byte (0x1b) into config.toml
+# — floonet-rs's strict Rust TOML parser rejects it ("invalid character `\u{1b}`")
+# and the relay refuses to start. Remove the full SGR sequence, then mop up any
+# stray control byte (bare ESC, newline, tab, CR).
+flr_toml_str() {
+    local s
+    s=$(printf '%s' "$1" | LC_ALL=C sed -e 's/\x1b\[[0-9;?]*[ -/]*[@-~]//g' -e 's/[[:cntrl:]]//g')
+    printf '"%s"' "${s//\"/\\\"}"
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SETUP STEPS (each idempotent — the wizard re-runs safely)
@@ -397,6 +406,45 @@ flr_build() {
     success "floonet-rs built."
 }
 
+# Heal the state dir for a static-user (StateDirectory=) unit.
+# systemd refuses a StateDirectory= whose /var/lib/<name> is a pre-existing
+# SYMLINK — it fails setup with status=238/STATE_DIRECTORY ("Failed to set up
+# special execution directory in /var/lib: File exists"). That symlink is the
+# residue of an earlier DynamicUser unit (upstream install.sh): the real dir
+# lives at /var/lib/private/floonet-rs and /var/lib/floonet-rs is a symlink into
+# it. Our fallback unit runs as the stable `floonet` user, so convert it back to
+# a REAL owned dir, migrating any SQLite state out of the private dir first.
+# Idempotent; a live DynamicUser unit is left untouched (systemd manages it).
+_flr_heal_state_dir() {
+    if systemctl cat "$FLR_SVC" 2>/dev/null | grep -qsE '^DynamicUser=(yes|true|1)'; then
+        mkdir -p "$FLR_STATE" 2>/dev/null || true
+        return 0
+    fi
+    local priv="/var/lib/private/floonet-rs"
+    if [[ -L "$FLR_STATE" ]]; then
+        warn "Healing leftover DynamicUser symlink at ${FLR_STATE}…"
+        local tgt src
+        tgt=$(readlink -f "$FLR_STATE" 2>/dev/null || true)
+        rm -f "$FLR_STATE"
+        mkdir -p "$FLR_STATE"
+        for src in "$priv" "$tgt"; do
+            if [[ -n "$src" && -d "$src" && "$src" != "$FLR_STATE" ]]; then
+                cp -a "$src/." "$FLR_STATE/" 2>/dev/null || true
+                rm -rf "${src:?}" 2>/dev/null || true
+                break
+            fi
+        done
+    else
+        mkdir -p "$FLR_STATE"
+        # A stray private dir with no symlink also confuses a later start.
+        if [[ -d "$priv" ]]; then rm -rf "${priv:?}" 2>/dev/null || true; fi
+    fi
+    if id -u floonet >/dev/null 2>&1; then
+        chown -R floonet:floonet "$FLR_STATE" 2>/dev/null || true
+    fi
+    return 0
+}
+
 # Fallback unit — only used when upstream deploy/install.sh is absent/broken.
 # Stable `floonet` user instead of DynamicUser: the 0600 config must stay
 # readable by the service without loosening it to world-readable.
@@ -404,8 +452,7 @@ _flr_write_fallback_unit() {
     id -u floonet >/dev/null 2>&1 || useradd --system --home-dir "$FLR_STATE" \
         --shell /usr/sbin/nologin floonet 2>/dev/null \
         || useradd --system --home-dir "$FLR_STATE" --shell /sbin/nologin floonet
-    mkdir -p "$FLR_STATE"
-    chown -R floonet:floonet "$FLR_STATE"
+    _flr_heal_state_dir
     cat > /etc/systemd/system/${FLR_SVC}.service <<UNIT
 [Unit]
 Description=Floonet — Grin-native Nostr relay (floonet-rs)
@@ -465,7 +512,7 @@ flr_install_binary() {
         warn "No systemd unit from upstream installer — writing the toolkit fallback unit."
         _flr_write_fallback_unit
     fi
-    mkdir -p "$FLR_STATE"
+    _flr_heal_state_dir
     flr_ensure_config
     # Record which source rev is now installed — flr_update compares against
     # THIS (not the fetch delta), so a fetch followed by a failed build can
@@ -1173,6 +1220,9 @@ flr_nginx_setup() {  # <domain> <email>
 }
 
 flr_start_verify() {
+    # Heal a leftover DynamicUser symlink before start (status=238/STATE_DIRECTORY
+    # otherwise) — safe no-op on a clean install or a live DynamicUser unit.
+    _flr_heal_state_dir
     systemctl daemon-reload
     systemctl enable "$FLR_SVC" >/dev/null 2>&1 || true
     info "Starting ${FLR_SVC}…"
@@ -1701,7 +1751,9 @@ flr_uninstall() {
     echo -ne "  Also DELETE relay data (${FLR_STATE}) and config (${FLR_ETC})? [Y/n]: "
     read -r c || true
     if [[ "${c,,}" != "n" ]]; then
-        rm -rf "${FLR_STATE:?}" "${FLR_ETC:?}"
+        # Also clear the DynamicUser private dir so a from-scratch reinstall
+        # never inherits a stale /var/lib/private/floonet-rs → symlink trap.
+        rm -rf "${FLR_STATE:?}" "/var/lib/private/floonet-rs" "${FLR_ETC:?}"
         rm -f "$FLR_CONF"
         success "Data and config deleted."
     else

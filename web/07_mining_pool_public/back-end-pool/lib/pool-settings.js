@@ -9,6 +9,43 @@ function hashStr(s) {
   return h;
 }
 
+// Normalise a settings value (JSON array OR comma/newline-separated string) into a
+// deduped JSON-array string. `each(s)` validates+transforms one entry (return null to
+// drop it); an empty result falls back to `opts.fallback`. Throws on malformed JSON.
+function normStrArray(val, opts) {
+  const { cap = 50, each = (s) => s, fallback = [], label = 'list' } = opts || {};
+  let arr = val;
+  if (typeof arr === 'string') {
+    const s = arr.trim();
+    if (s === '') return JSON.stringify(fallback);
+    if (s.startsWith('[')) {
+      try { arr = JSON.parse(s); } catch (e) { throw new Error(`${label} must be a JSON array or a comma/newline-separated list`); }
+    } else {
+      arr = s.split(/[\n,]+/);
+    }
+  }
+  if (!Array.isArray(arr)) throw new Error(`${label} must be an array`);
+  const cleaned = [];
+  const seen = new Set();
+  for (const raw of arr) {
+    const t = each(String(raw).trim());
+    if (t && !seen.has(t)) { seen.add(t); cleaned.push(t); }
+  }
+  if (cleaned.length === 0) return JSON.stringify(fallback);
+  if (cleaned.length > cap) throw new Error(`${label}: max ${cap} entries`);
+  return JSON.stringify(cleaned);
+}
+
+// Parse a stored JSON-array string (already validator-normalised) back to an array at
+// startup; tolerate a value that is already an array, and fall back on any corruption.
+function parseJsonArray(val, fallback) {
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'string') {
+    try { const a = JSON.parse(val); if (Array.isArray(a)) return a; } catch (_) { /* fall through */ }
+  }
+  return fallback;
+}
+
 class PoolSettings {
   constructor(db) {
     this.db = db;
@@ -130,6 +167,15 @@ class PoolSettings {
       max_pending_withdrawals: 100,
       max_user_pending: 10,
       withdrawal_retry_delays: '[21600,43200,86400,172800]',
+      // Minutes a miner must wait after a reversed payout (Tor failure, slatepack expiry,
+      // admin cancel) before requesting another payout on ANY rail. 0 disables.
+      withdrawal_cooldown_minutes: 30,
+      // ── Goblin/Nostr payout rail (design §15). OFF by default. Relays + NIP-05 domains
+      // are JSON arrays of strings; the domain list is the SSRF/typo-squat allowlist.
+      nostr_payouts_enabled: 'false',
+      nostr_relays: '["wss://relay.floonet.dev","wss://relay.0xchat.com","wss://offchain.pub"]',
+      nostr_nip05_domains: '["goblin.st"]',
+      nostr_destination_cooldown_hours: 48,
     },
     access: {
       admin_ip_allowlist: '[]',
@@ -137,6 +183,12 @@ class PoolSettings {
       session_timeout_hours: 1,
       invite_codes_enabled: 'false',
       invite_codes: '[]',
+      // Extra stratum passwords banned from the ownership gate, ON TOP of the hardcoded
+      // seed in lib/owner-proof.js — additions-only: the seed and the structural rules
+      // (length, d= prefix) always apply and cannot be removed here. Use it for newly
+      // discovered firmware defaults (per-ASIC-model factory passwords etc.).
+      // Stored as a JSON array of lowercase strings.
+      extra_banned_passwords: '[]',
     },
     alerts: {
       alert_check_interval_secs: 60,
@@ -544,12 +596,67 @@ class PoolSettings {
         if (!['manual', 'hourly', 'daily', 'weekly'].includes(val)) throw new Error('invalid payout_frequency');
         return val;
       },
+      withdrawal_cooldown_minutes: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 0 || n > 1440) throw new Error('withdrawal_cooldown_minutes must be 0-1440');
+        return n;
+      },
+      nostr_payouts_enabled: (val) => {
+        if (val === true || val === 'true') return 'true';
+        if (val === false || val === 'false' || val === undefined || val === '') return 'false';
+        throw new Error('nostr_payouts_enabled must be true or false');
+      },
+      // Accepts a JSON array or a comma/newline-separated list; normalises to a JSON array
+      // of trimmed wss:// URLs (deduped, cap 6). Empty → the relay floor only.
+      nostr_relays: (val) => normStrArray(val, {
+        cap: 6,
+        each: (s) => (/^wss:\/\/[^\s]+$/.test(s) ? s : null),
+        fallback: ['wss://relay.floonet.dev'],
+        label: 'nostr_relays (wss:// URLs)',
+      }),
+      // JSON array or comma/newline list of bare hostnames (no scheme, no path). Deduped,
+      // lowercased, cap 20. Empty → goblin.st.
+      nostr_nip05_domains: (val) => normStrArray(val, {
+        cap: 20,
+        each: (s) => {
+          const d = s.toLowerCase();
+          return /^[a-z0-9.-]{1,253}$/.test(d) && !/^\d+\.\d+\.\d+\.\d+$/.test(d) &&
+                 !d.startsWith('.') && !d.endsWith('.') && !d.includes('..') ? d : null;
+        },
+        fallback: ['goblin.st'],
+        label: 'nostr_nip05_domains (hostnames)',
+      }),
+      nostr_destination_cooldown_hours: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 0 || n > 720) throw new Error('nostr_destination_cooldown_hours must be 0-720');
+        return n;
+      },
     },
     access: {
       session_timeout_hours: (val) => {
         const n = parseInt(val, 10);
         if (isNaN(n) || n < 1 || n > 168) throw new Error('session_timeout_hours must be 1-168');
         return n;
+      },
+      // Accepts a JSON array or a comma/newline-separated list; normalises to a deduped
+      // lowercase JSON array (matching is case-insensitive in owner-proof).
+      extra_banned_passwords: (val) => {
+        let arr = val;
+        if (typeof arr === 'string') {
+          const s = arr.trim();
+          if (s === '') return '[]';
+          if (s.startsWith('[')) {
+            try { arr = JSON.parse(s); } catch (e) { throw new Error('extra_banned_passwords must be a JSON array or a comma/newline-separated list'); }
+          } else {
+            arr = s.split(/[\n,]+/);
+          }
+        }
+        if (!Array.isArray(arr)) throw new Error('extra_banned_passwords must be a JSON array or a comma/newline-separated list');
+        const cleaned = [...new Set(
+          arr.map((p) => String(p).trim().toLowerCase()).filter((p) => p.length >= 1 && p.length <= 128)
+        )];
+        if (cleaned.length > 500) throw new Error('extra_banned_passwords: max 500 entries');
+        return JSON.stringify(cleaned);
       },
     },
     alerts: {
@@ -977,6 +1084,23 @@ class PoolSettings {
     }
     if (payout.max_user_pending !== undefined) {
       config.max_user_pending = payout.max_user_pending;
+    }
+    if (payout.withdrawal_cooldown_minutes !== undefined) {
+      config.withdrawal_cooldown_minutes = payout.withdrawal_cooldown_minutes;
+    }
+    // Nostr payout rail — stored as strings/JSON; coerce to the runtime shapes the bridge
+    // expects (boolean, arrays, number). Malformed JSON falls back to the safe default.
+    if (payout.nostr_payouts_enabled !== undefined) {
+      config.nostr_payouts_enabled = payout.nostr_payouts_enabled === true || payout.nostr_payouts_enabled === 'true';
+    }
+    if (payout.nostr_relays !== undefined) {
+      config.nostr_relays = parseJsonArray(payout.nostr_relays, ['wss://relay.floonet.dev']);
+    }
+    if (payout.nostr_nip05_domains !== undefined) {
+      config.nostr_nip05_domains = parseJsonArray(payout.nostr_nip05_domains, ['goblin.st']);
+    }
+    if (payout.nostr_destination_cooldown_hours !== undefined) {
+      config.nostr_destination_cooldown_hours = payout.nostr_destination_cooldown_hours;
     }
     if (pool_info.pool_name !== undefined) {
       config.pool_name = pool_info.pool_name;

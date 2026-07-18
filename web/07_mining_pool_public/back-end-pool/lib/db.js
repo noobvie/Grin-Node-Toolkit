@@ -99,7 +99,16 @@ function migrateMinerAccounts() {
       prev_pass_hash: 'TEXT DEFAULT NULL',
       is_banned: 'INTEGER NOT NULL DEFAULT 0',
       ban_reason: 'TEXT DEFAULT NULL',
-      banned_at: 'INTEGER DEFAULT NULL'
+      banned_at: 'INTEGER DEFAULT NULL',
+      // Goblin/Nostr payout destination (design §15). nostr_username = display form
+      // (name@domain or npub); nostr_npub = the resolved 64-hex pubkey (matched against
+      // the seal-sender on an incoming response, and TOFU-re-pinned at send time);
+      // nostr_registered_at arms the destination cooldown (a payout is refused until
+      // now - registered_at >= nostr_destination_cooldown_hours). Re-registration
+      // overwrites all three and resets the clock.
+      nostr_username: 'TEXT DEFAULT NULL',
+      nostr_npub: 'TEXT DEFAULT NULL',
+      nostr_registered_at: 'INTEGER DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -259,6 +268,9 @@ function createSchema() {
       is_banned INTEGER NOT NULL DEFAULT 0,
       ban_reason TEXT DEFAULT NULL,
       banned_at INTEGER DEFAULT NULL,
+      nostr_username TEXT DEFAULT NULL,
+      nostr_npub TEXT DEFAULT NULL,
+      nostr_registered_at INTEGER DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
@@ -625,6 +637,35 @@ function createSchema() {
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_pool_locations_active ON pool_locations(is_active)`,
+
+    // ─── Network-map geo layers (COUNTRY-ONLY; feeds /api/pool/topology + /api/network/peers) ──
+    // Privacy contract (lib/geoip.js): a miner's transient real IP is resolved to a COUNTRY
+    // CODE at its first accepted share and ONLY the country is kept here — never the IP, never
+    // a city, never coordinates. Map dots are randomized within the country server-side. One
+    // row per address; upserted (throttled) so a miner's country stays current without history.
+    `CREATE TABLE IF NOT EXISTS miner_geo (
+      grin_address TEXT PRIMARY KEY,
+      country_code TEXT DEFAULT NULL,
+      country      TEXT DEFAULT NULL,
+      first_seen   INTEGER NOT NULL DEFAULT (unixepoch()),
+      last_seen    INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_miner_geo_cc ON miner_geo(country_code)`,
+
+    // Rolling 30-day view of Grin P2P peers seen by THIS pool's node, aggregated to country.
+    // peer_key is a truncated sha256(ip) — a stable dedup handle so the same peer isn't double
+    // counted across snapshots — the raw IP is NEVER stored. net = 'main' | 'test' (this node's
+    // network). Populated by the peer-snapshot collector in index.js; read by /api/network/peers.
+    `CREATE TABLE IF NOT EXISTS network_peers (
+      peer_key     TEXT PRIMARY KEY,
+      country_code TEXT DEFAULT NULL,
+      country      TEXT DEFAULT NULL,
+      net          TEXT NOT NULL DEFAULT 'main',
+      first_seen   INTEGER NOT NULL DEFAULT (unixepoch()),
+      last_seen    INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_network_peers_seen ON network_peers(last_seen)`,
+    `CREATE INDEX IF NOT EXISTS idx_network_peers_cc ON network_peers(country_code, net)`,
 
     // ─── Ads (operator-managed promotions shown on public pages) ──────────────
     // Two kinds: a self-hosted `banner` (image_url + link_url) or a raw `code` snippet

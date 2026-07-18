@@ -7,6 +7,19 @@
   <link rel="stylesheet" href="/css/pool.css">
   <link rel="stylesheet" href="/admin/styles.css">
   <style>
+    /* Country-flag emoji polyfill. Chrome/Edge on Windows render emoji via
+       Segoe UI Emoji, which omits country-flag glyphs, so regional-indicator
+       emoji fall back to the two ISO letters. This self-hosted Twemoji flag
+       font supplies them; unicode-range limits it to flag codepoints so it
+       never affects other text. Firefox ships its own flag font already. */
+    @font-face {
+      font-family: 'Twemoji Country Flags';
+      src: url('/assets/TwemojiCountryFlags.woff2') format('woff2');
+      unicode-range: U+1F1E6-1F1FF;
+      font-display: swap;
+    }
+    .flag-emoji { font-family: 'Twemoji Country Flags', sans-serif; }
+
     .howto { margin-bottom: 1.2rem; }
     .howto > summary { cursor: pointer; font-size: 1rem; padding: .2rem 0; }
     .howto > summary::marker { color: var(--accent, #b8e600); }
@@ -285,8 +298,11 @@ function flagEmoji(cc) {
   if (!cc) return '';
   cc = String(cc).toUpperCase();
   if (!/^[A-Z]{2}$/.test(cc)) return '';
-  return String.fromCodePoint(0x1F1E6 + cc.charCodeAt(0) - 65) +
-         String.fromCodePoint(0x1F1E6 + cc.charCodeAt(1) - 65);
+  const emoji = String.fromCodePoint(0x1F1E6 + cc.charCodeAt(0) - 65) +
+                String.fromCodePoint(0x1F1E6 + cc.charCodeAt(1) - 65);
+  // Wrap in .flag-emoji so the Twemoji flag font applies (fixes Chrome/Edge
+  // on Windows, which otherwise show the bare ISO letters).
+  return '<span class="flag-emoji">' + emoji + '</span>';
 }
 
 // Flag as HTML: VN uses the custom yellow Heritage & Freedom SVG (same as the

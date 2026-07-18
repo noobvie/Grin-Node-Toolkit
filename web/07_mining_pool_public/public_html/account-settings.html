@@ -119,7 +119,7 @@
     .radio-row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 14px; color: var(--text); font-weight: 400; margin: 0; }
     .radio-row input { width: auto; accent-color: var(--accent); }
 
-    /* one-pending payout strip (status + cancel) */
+    /* one-pending payout strip (status only — no manual cancel; parked payouts auto-refund) */
     .pending-strip {
       display: none; margin-top: 16px; padding: 11px 14px; border-radius: 6px;
       border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--bg));
@@ -128,7 +128,21 @@
       align-items: center; gap: 12px; flex-wrap: wrap;
     }
     .pending-strip b { color: var(--warn); font-weight: 600; }
-    .pending-strip .btn.sm { margin-left: auto; }
+
+    /* clickable min/max autofill chips on the amount label */
+    .amt-chip {
+      font-family: var(--mono); font-size: 12px; color: var(--accent);
+      text-decoration: none; border-bottom: 1px dashed var(--accent); cursor: pointer;
+    }
+    .amt-chip:hover { color: var(--text); border-bottom-color: var(--text); }
+
+    /* payout rail status chip (active / paused by operator) */
+    .pstat {
+      font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .12em;
+      text-transform: uppercase; padding: 2px 8px; border-radius: 4px; margin-right: 10px;
+    }
+    .pstat.on  { color: var(--ok);   border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); }
+    .pstat.off { color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); }
 
     /* ── compact earnings → BTC/USD table (account details card) ────────── */
     .fx-head {
@@ -283,7 +297,7 @@
                 <div class="deck-row acct-main">
                     <!-- ═══ P-04 · PAYOUT CONTROLS (one ownership gate) ═══ -->
                     <div class="panel"><span class="screws"></span>
-                        <h2 class="panel-title"><span class="tag">P-04</span> Payout controls <span class="right">one gate &middot; amount &middot; Tor or slatepack</span></h2>
+                        <h2 class="panel-title"><span class="tag">P-04</span> Payout controls <span class="right"><span class="pstat" id="acct-payout-status" style="display:none"></span>one gate &middot; amount &middot; Tor or slatepack</span></h2>
                         <div class="panel-body">
 
                             <div class="gate-block">
@@ -301,12 +315,15 @@
                             <div class="withdraw-col">
                                 <h4>Withdraw</h4>
                                 <div class="form-group">
-                                    <label for="acct-amount">Amount (GRIN, blank = full balance &middot; minimum <span id="acct-pool-min">—</span> ツ)</label>
-                                    <input type="number" id="acct-amount" min="0" step="0.1" placeholder="full balance" autocomplete="off">
+                                    <label for="acct-amount">Amount (GRIN) &middot;
+                                        <a class="amt-chip" id="acct-amt-min" title="Fill the pool minimum">min <span id="acct-pool-min">—</span> ツ</a> &middot;
+                                        <a class="amt-chip" id="acct-amt-max" title="Fill your full available balance">max <span id="acct-amt-max-val">—</span> ツ</a></label>
+                                    <input type="number" id="acct-amount" min="0" step="0.1" placeholder="tap min or max to autofill" autocomplete="off">
                                 </div>
                                 <div class="radio-row" role="radiogroup" aria-label="Payout method">
                                     <label><input type="radio" name="acct-pay-method" id="acct-pay-tor" value="tor" checked> Tor</label>
                                     <label><input type="radio" name="acct-pay-method" id="acct-pay-slatepack" value="slatepack"> Slatepack (manual)</label>
+                                    <label id="acct-pay-nostr-label" style="display:none;"><input type="radio" name="acct-pay-method" id="acct-pay-nostr" value="nostr"> Goblin (Nostr)</label>
                                 </div>
 
                                 <!-- Tor method -->
@@ -336,18 +353,49 @@
                                         <div class="acct-msg" id="acct-sp-final-msg"></div>
                                     </div>
                                 </div>
+
+                                <!-- Goblin / Nostr method (third-party rail — needs a registered, cooled-down destination) -->
+                                <div id="acct-pay-nostr-pane" style="display:none;">
+                                    <p class="note" style="margin-bottom:12px">
+                                        Delivers the payout straight into your <b>Goblin wallet</b> over Nostr — no Tor listener, no copy/paste.
+                                        Because this rail pays a <b>username</b> (not this address's own wallet), you must register the destination
+                                        once and wait out a short security window before the first payout. This gives you time to notice and undo a
+                                        hijack: if someone who guessed your gate registers their own Goblin name, re-registering yours resets the clock
+                                        and evicts theirs.
+                                    </p>
+
+                                    <div id="acct-nostr-state" class="note" style="margin-bottom:12px;font-family:var(--mono);">—</div>
+
+                                    <div class="form-group">
+                                        <label for="acct-nostr-username">Goblin username (<code>name</code>, <code>name@goblin.st</code>, or an <code>npub…</code>)</label>
+                                        <input type="text" id="acct-nostr-username" placeholder="e.g. alice or alice@goblin.st" autocomplete="off" spellcheck="false">
+                                    </div>
+                                    <div class="btn-row" style="display:flex;gap:8px;flex-wrap:wrap;">
+                                        <button class="btn-save" id="acct-nostr-register">Register / Replace Destination</button>
+                                        <button class="btn-save" id="acct-nostr-remove" style="display:none;background:transparent;border:1px solid var(--line);">Remove</button>
+                                    </div>
+                                    <div class="acct-msg" id="acct-nostr-reg-msg"></div>
+
+                                    <div style="margin-top:14px;border-top:1px dashed var(--line);padding-top:14px;">
+                                        <button class="btn-save" id="acct-nostr-send" disabled>Send to my Goblin wallet</button>
+                                        <div class="acct-msg" id="acct-nostr-send-msg"></div>
+                                    </div>
+                                </div>
                             </div>
 
                             <div class="pending-strip" id="acct-pending-strip">
                                 <span id="acct-pending-text"></span>
-                                <button class="btn sm" id="acct-pending-cancel" style="display:none">Cancel</button>
                             </div>
-                            <div class="acct-msg" id="acct-cancel-msg"></div>
 
                             <p class="note" style="margin:16px 0 0;font-size:12.5px;color:var(--text-mute);">
-                                One payout at a time — while one is in flight it appears above with its status
-                                and, when parked between retries, a <b>Cancel</b> option (cancelling returns the
-                                amount to your balance).
+                                One payout at a time — while one is in flight it appears above with its status.
+                                Nothing is ever stuck: a Tor payout that can't reach your wallet retries on a
+                                schedule and, after the final retry, the amount returns to your balance
+                                automatically; an unclaimed slatepack refunds itself when its expiry window
+                                passes. There is no manual cancel — in Grin a payout that looks failed can
+                                still land, so cancelling one could pay twice. For the same reason, after a
+                                payout is returned to your balance a short cooldown applies before you can
+                                request the next one (on any method).
                             </p>
                         </div>
                     </div>
@@ -455,7 +503,8 @@
         //   GET  /api/account/:addr/tor-check          wallet reachability hint
         //   GET  /api/public/price                     cached GRIN spot price (USD + BTC)
         //   POST /api/account/:addr/withdraw           request a payout (ownership-gated)
-        //   POST /api/account/:addr/withdraw/:id/cancel  cancel a parked pending payout (gated)
+        // (No public cancel — parked payouts auto-refund: Tor after its final retry,
+        //  slatepack when the expiry window passes. Admin-only cancel exists server-side.)
         // Every payout action sends `proof` — a recent mining IP (v4/v6) or the rig's stratum
         // password — from the single ownership-gate input (one gate, all actions).
         // All DOM writes use textContent or escHtml — addresses/events are external data.
@@ -470,6 +519,7 @@
         let currentAddr = '';
         let isDemo = false;
         let acctRange = 'day';
+        let acctSummary = null;   // last /api/account summary (nostr send re-reads destination state)
         const ledger = { in: { page: 0, total: 0 }, out: { page: 0, total: 0 } };
 
         function $id(id) { return document.getElementById(id); }
@@ -575,6 +625,20 @@
             $id('acct-lamp-text').textContent = a.is_online ? 'Miner online' : 'Miner offline';
 
             $id('acct-pool-min').textContent = Number(a.min_withdrawal || 0).toFixed(1);
+            // min/max autofill chips: min = pool minimum, max = current spendable balance
+            $id('acct-amt-min').dataset.v = Number(a.min_withdrawal || 0).toFixed(1);
+            $id('acct-amt-max').dataset.v = Number(a.balance || 0).toFixed(9).replace(/0+$/, '').replace(/\.$/, '');
+            $id('acct-amt-max-val').textContent = fmtGrin(a.balance);
+
+            // Payout rail status (pool-wide kill-switch state; reason stays operator-side)
+            const pstat = $id('acct-payout-status');
+            pstat.style.display = '';
+            pstat.className = 'pstat ' + (a.payouts_frozen ? 'off' : 'on');
+            pstat.textContent = a.payouts_frozen ? 'payouts paused' : 'payouts active';
+            pstat.title = a.payouts_frozen
+                ? 'The operator has temporarily paused all payouts — balances are safe, try again later.'
+                : 'Payouts are operating normally.';
+
             const proofs = [];
             if (a.has_recorded_ip) proofs.push('a mining IP');
             if (a.has_recorded_pass) proofs.push('a rig password');
@@ -582,10 +646,43 @@
                 ? 'On record for this address: ' + proofs.join(' and ') + '.'
                 : 'No proof recorded yet — connect a miner and submit at least one accepted share first.';
 
-            const canWithdraw = (a.balance || 0) >= (a.min_withdrawal || 0) && !a.pending_withdrawals;
+            const canWithdraw = (a.balance || 0) >= (a.min_withdrawal || 0)
+                && !a.pending_withdrawals && !a.payouts_frozen;
             $id('acct-withdraw').disabled = !canWithdraw;
 
+            acctSummary = a;
+            renderNostr(a, canWithdraw);
             renderPending(a.pending_withdrawal);
+        }
+
+        // ── Goblin/Nostr destination state (only when the pool enabled the rail) ──
+        function renderNostr(a, canWithdraw) {
+            const on = !!a.nostr_payouts_enabled;
+            $id('acct-pay-nostr-label').style.display = on ? '' : 'none';
+            if (!on) {
+                // Rail disabled — if it was the selected method, fall back to Tor.
+                if ($id('acct-pay-nostr').checked) { $id('acct-pay-tor').checked = true; syncPayMethod(); }
+                return;
+            }
+            const d = a.nostr_destination;
+            const stateEl = $id('acct-nostr-state');
+            const removeBtn = $id('acct-nostr-remove');
+            const sendBtn = $id('acct-nostr-send');
+            if (!d) {
+                stateEl.textContent = 'No Goblin destination registered yet.';
+                removeBtn.style.display = 'none';
+                sendBtn.disabled = true;
+                return;
+            }
+            removeBtn.style.display = '';
+            if (d.active) {
+                stateEl.innerHTML = '✅ Active destination: <b>' + escHtml(d.username) + '</b>';
+                sendBtn.disabled = !canWithdraw;
+            } else {
+                stateEl.innerHTML = '⏳ <b>' + escHtml(d.username) + '</b> — in security cooldown, active at '
+                    + fmtWhen(d.active_at) + '. You can still use Tor or Slatepack meanwhile.';
+                sendBtn.disabled = true;
+            }
         }
 
         // ── Pending payout strip (one-pending-per-address slot) ────────────
@@ -597,45 +694,19 @@
         };
         function renderPending(p) {
             const strip = $id('acct-pending-strip');
-            const cancelBtn = $id('acct-pending-cancel');
-            setMsg($id('acct-cancel-msg'), '', true);
             if (!p) {
                 strip.style.display = 'none';
                 $id('pl-pending').textContent = 'none';
                 return;
             }
-            const cancellable = p.status === 'retry_scheduled' || p.status === 'slatepack_pending';
+            let label = PENDING_LABEL[p.status] || p.status;
+            if (p.status === 'slatepack_pending' && p.method === 'nostr') label = 'sent to your Goblin wallet — awaiting auto-finalize';
             let text = 'Pending payout #' + p.id + ' · ' + fmtGrin(p.amount) + ' · ' + (p.method || 'tor')
-                     + ' — ' + (PENDING_LABEL[p.status] || p.status);
+                     + ' — ' + label;
             if (p.status === 'retry_scheduled' && p.next_retry_at) text += ' · next attempt ' + fmtWhen(p.next_retry_at);
             $id('acct-pending-text').innerHTML = escHtml(text).replace('Pending payout', '<b>Pending payout</b>');
-            cancelBtn.style.display = cancellable ? '' : 'none';
-            cancelBtn.dataset.wid = p.id;
             strip.style.display = 'flex';
             $id('pl-pending').textContent = '#' + p.id + ' · ' + (p.method || 'tor');
-        }
-
-        async function cancelPending() {
-            if (!currentAddr || isDemo) { if (isDemo) setMsg($id('acct-cancel-msg'), 'Demo account — actions are disabled.', false); return; }
-            const wid = $id('acct-pending-cancel').dataset.wid;
-            const msg = $id('acct-cancel-msg');
-            if (!wid) return;
-            const proof = getProof(msg);
-            if (!proof) return;
-            setMsg(msg, 'Cancelling…', true);
-            try {
-                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw/' + encodeURIComponent(wid) + '/cancel', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-                    body: JSON.stringify({ proof: proof })
-                });
-                const json = await r.json().catch(() => null);
-                if (r.ok && json && json.success) {
-                    setMsg(msg, 'Payout #' + wid + ' cancelled — ' + fmtGrin(json.amount) + ' returned to your balance.', true);
-                    lookup();
-                } else {
-                    setMsg(msg, apiErr(json, 'Cancel failed'), false);
-                }
-            } catch (e) { setMsg(msg, 'Cancel failed: ' + e.message, false); }
         }
 
         // ── P-01 hashrate chart (Day/Week/Month; retention caps at 100 days) ──
@@ -885,7 +956,7 @@
             }
         }
 
-        // ── Mutations (withdraw / slatepack / cancel — all ownership-gated) ─
+        // ── Mutations (withdraw / slatepack — all ownership-gated) ─────────
         function demoBlock(msgEl) {
             if (!isDemo) return false;
             setMsg(msgEl, 'Demo account — actions are disabled.', false);
@@ -913,9 +984,16 @@
             return json.error ? (json.error + (why ? ' — ' + why : (json.reason ? ' (' + json.reason + ')' : ''))) : fallback;
         }
 
-        function amountValue() {
-            const amt = $id('acct-amount').value.trim();
-            return amt === '' ? null : Number(amt);
+        // An explicit amount is required (blank no longer means full balance — tap the
+        // "max" chip instead). Returns a positive Number, or null after showing why.
+        function amountValue(msgEl) {
+            const raw = $id('acct-amount').value.trim();
+            const amt = Number(raw);
+            if (raw === '' || !isFinite(amt) || amt <= 0) {
+                setMsg(msgEl, 'Enter an amount — tap min or max above the field to autofill.', false);
+                return null;
+            }
+            return amt;
         }
 
         async function withdraw() {
@@ -925,6 +1003,8 @@
             if (demoBlock(msg)) return;
             const proof = getProof(msg);
             if (!proof) return;
+            const amount = amountValue(msg);
+            if (amount === null) return;
             btn.disabled = true;
             setMsg(msg, 'Submitting…', true);
             try {
@@ -932,7 +1012,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     credentials: 'same-origin',
-                    body: JSON.stringify({ method: 'tor', amount: amountValue(), proof: proof })
+                    body: JSON.stringify({ method: 'tor', amount: amount, proof: proof })
                 });
                 const json = await r.json().catch(() => null);
                 if (r.ok && json && json.success) {
@@ -954,11 +1034,13 @@
             if (demoBlock(msg)) return;
             const proof = getProof(msg);
             if (!proof) return;
+            const amount = amountValue(msg);
+            if (amount === null) return;
             setMsg(msg, 'Generating encrypted slatepack…', true);
             try {
                 const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-                    body: JSON.stringify({ method: 'slatepack', amount: amountValue(), proof: proof })
+                    body: JSON.stringify({ method: 'slatepack', amount: amount, proof: proof })
                 });
                 const json = await r.json().catch(() => null);
                 if (r.ok && json && json.success) {
@@ -1001,11 +1083,84 @@
             } catch (e) { setMsg(msg, 'Finalize failed: ' + e.message, false); }
         }
 
+        // ── Goblin/Nostr destination registration + send ──────────────────────
+        async function nostrRegister() {
+            if (!currentAddr) return;
+            const msg = $id('acct-nostr-reg-msg');
+            if (demoBlock(msg)) return;
+            const proof = getProof(msg);
+            if (!proof) return;
+            const username = $id('acct-nostr-username').value.trim();
+            if (!username) { setMsg(msg, 'Enter your Goblin username.', false); return; }
+            setMsg(msg, 'Resolving + registering…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/nostr-destination', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ username: username, proof: proof })
+                });
+                const json = await r.json().catch(() => null);
+                if (r.ok && json && json.success) {
+                    setMsg(msg, 'Registered ' + json.username + ' — active at ' + fmtWhen(json.active_at)
+                        + ' (a ' + json.cooldown_hours + 'h security cooldown). Payouts to it unlock then.', true);
+                    lookup();
+                } else {
+                    setMsg(msg, apiErr(json, 'Registration failed'), false);
+                }
+            } catch (e) { setMsg(msg, 'Registration failed: ' + e.message, false); }
+        }
+
+        async function nostrRemove() {
+            if (!currentAddr) return;
+            const msg = $id('acct-nostr-reg-msg');
+            if (demoBlock(msg)) return;
+            const proof = getProof(msg);
+            if (!proof) return;
+            setMsg(msg, 'Removing…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/nostr-destination', {
+                    method: 'DELETE', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ proof: proof })
+                });
+                const json = await r.json().catch(() => null);
+                if (r.ok && json && json.success) { setMsg(msg, 'Destination removed.', true); lookup(); }
+                else { setMsg(msg, apiErr(json, 'Remove failed'), false); }
+            } catch (e) { setMsg(msg, 'Remove failed: ' + e.message, false); }
+        }
+
+        async function nostrSend() {
+            if (!currentAddr) return;
+            const msg = $id('acct-nostr-send-msg');
+            if (demoBlock(msg)) return;
+            const proof = getProof(msg);
+            if (!proof) return;
+            const amount = amountValue(msg);
+            if (amount === null) return;
+            const btn = $id('acct-nostr-send');
+            btn.disabled = true;
+            setMsg(msg, 'Sending to your Goblin wallet over Nostr…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ method: 'nostr', amount: amount, proof: proof })
+                });
+                const json = await r.json().catch(() => null);
+                if (r.ok && json && json.success) {
+                    setMsg(msg, 'Payout #' + json.withdrawal_id + ' sent — your Goblin wallet finalizes it automatically when it next comes online.', true);
+                    lookup();
+                } else {
+                    setMsg(msg, apiErr(json, 'Send failed'), false);
+                    btn.disabled = false;
+                }
+            } catch (e) { setMsg(msg, 'Send failed: ' + e.message, false); btn.disabled = false; }
+        }
+
         // Only one payout method is shown at a time (radio-driven).
         function syncPayMethod() {
-            const slatepack = $id('acct-pay-slatepack').checked;
-            $id('acct-pay-tor-pane').style.display = slatepack ? 'none' : '';
-            $id('acct-pay-slatepack-pane').style.display = slatepack ? '' : 'none';
+            const m = document.querySelector('input[name="acct-pay-method"]:checked');
+            const method = m ? m.value : 'tor';
+            $id('acct-pay-tor-pane').style.display = method === 'tor' ? '' : 'none';
+            $id('acct-pay-slatepack-pane').style.display = method === 'slatepack' ? '' : 'none';
+            $id('acct-pay-nostr-pane').style.display = method === 'nostr' ? '' : 'none';
         }
 
         // ── Demo dataset (address grin1demo…) — explore the page on any pool ──
@@ -1056,8 +1211,9 @@
                     pending_withdrawals: 0, pending_withdrawal: null,
                     is_online: true, last_seen_at: now - 40, created_at: now - 75 * 86400,
                     shares: { count: 184207, last_share_at: now - 40 },
-                    hashrate_gps: 4.82, min_withdrawal: 25.0,
-                    has_recorded_ip: true, has_recorded_pass: true
+                    hashrate_gps: 4.82, min_withdrawal: 25.0, payouts_frozen: false,
+                    has_recorded_ip: true, has_recorded_pass: true,
+                    nostr_payouts_enabled: false, nostr_destination: null
                 },
                 series, workers10, workers24,
                 earnings: { periods: { h1: 0.2604, h24: 6.1418, d7: 41.0317, d30: 172.4402 }, in_30d: 174.4402, out_30d: 50.742 },
@@ -1089,9 +1245,20 @@
             $id('acct-withdraw').addEventListener('click', withdraw);
             $id('acct-sp-create').addEventListener('click', slatepackCreate);
             $id('acct-sp-finalize').addEventListener('click', slatepackFinalize);
-            $id('acct-pending-cancel').addEventListener('click', cancelPending);
+            $id('acct-amt-min').addEventListener('click', function (e) {
+                e.preventDefault();
+                if (this.dataset.v) $id('acct-amount').value = this.dataset.v;
+            });
+            $id('acct-amt-max').addEventListener('click', function (e) {
+                e.preventDefault();
+                if (this.dataset.v) $id('acct-amount').value = this.dataset.v;
+            });
             $id('acct-pay-tor').addEventListener('change', syncPayMethod);
             $id('acct-pay-slatepack').addEventListener('change', syncPayMethod);
+            $id('acct-pay-nostr').addEventListener('change', syncPayMethod);
+            $id('acct-nostr-register').addEventListener('click', nostrRegister);
+            $id('acct-nostr-remove').addEventListener('click', nostrRemove);
+            $id('acct-nostr-send').addEventListener('click', nostrSend);
             syncPayMethod();
 
             // Hashrate range toggle

@@ -311,12 +311,12 @@ These remain **documented targets without backend routes**; tracked so the catal
 - **Double-pay guard:** distributed shares are marked paid (per-block) inside the distribution
   transaction so overlapping windows can't pay a share twice.
 - **Fee routing:** `fee = gross − net`; credited to the `pool_fee` pseudo-address. Default
-  `pool_fee_percent` is **1.0** (`config.js`, `pool.json.template`, `pool-settings.js`, and the bash
+  `pool_fee_percent` is **1.0** (`config.js`, `pool-settings.js`, and the bash
   installers all agree); operator-editable via the admin panel.
 - **Orphan reversal** reads the *actual* credited amounts from `balance_log` and reverses those
   exact values (PPLNS-weighted, including the fee credit); never pushes a balance below 0.
 - **Payout threshold:** default `min_withdrawal` = **25 GRIN** (raised from 5.0 on 2026-07-13; agrees
-  across `config.js`, `pool.json.template`, `pool-settings.js`, admin `settings-payout.html`, and the
+  across `config.js`, `pool-settings.js`, admin `settings-payout.html`, and the
   bash installer). Rationale: each payout is an interactive tx that adds a **permanent kernel** to the
   chain, so a low floor multiplies both chain growth and pool payout load. Operator-editable in the
   admin panel. Each miner may set a personal `min_payout` override (IP-gated
@@ -611,8 +611,8 @@ via CLI-only pairing) but should become rare.
 
 - **grinsecret group covers BOTH node secrets, not just foreign.** The §13.9 audit missed
   that `lib/grin-node.js` reads the node's `.api_secret` (Owner, `get_status`) *and*
-  `.foreign_api_secret` directly by path ("the pool runs as root" comment in
-  `pool.json.template`). `pool_deroot` + `grin_sync_pool_stratum` set `root:grinsecret 640`
+  `.foreign_api_secret` directly by path (the pool runs as root). `pool_deroot` +
+  `grin_sync_pool_stratum` set `root:grinsecret 640`
   on both (the secret self-heal re-applies it after a node rebuild).
 - **The pool wallet LISTENER is de-rooted too.** The backend spawns `grin-wallet send`
   (payouts) as `grinpool`; a root-run tmux listener would leave root-owned lmdb/tx-log
@@ -856,6 +856,145 @@ vardiff (bounds share-row rate), per-miner **hourly** hashrate rollup w/ optiona
 dimension (would allow cutting `hashrate_keep_days` and enable per-rig history >24 h — worker
 detail today exists only in `shares`). Optional future: yearly SQLite/CSV cold archive of pruned
 raw ledger as a public transparency download.
+
+---
+
+## 15. Goblin nickname payouts over Nostr — DESIGN ONLY (2026-07-17, NOT built)
+
+Operator idea: on the account page, a miner passes the ownership gate, enters their **Goblin
+wallet username** (e.g. `alice` → `alice@goblin.st` via NIP-05), and the pool delivers the
+payout slatepack to their Goblin wallet over Nostr — no Tor listener, no manual copy/paste.
+Decision 2026-07-17: **design first, build later** (after the current batch is VPS-tested).
+
+### 15.1 Why it's feasible (verified groundwork)
+
+The slatepack-over-Nostr wire format was SOURCE-VERIFIED 2026-07-09 against goblin
+`src/nostr/*.rs` (full detail → `script05_planning_goblin.md`, memory
+`reference_goblin_ecosystem`). Facts that matter here:
+
+- **Payload**: NIP-17 private DM — kind-14 rumor, content = `"[Goblin] GRIN payment message …"`
+  preamble + blank line + **plain-armor** slatepack (confidentiality = the DM layer, so the
+  pool's existing `recipients: []` slatepack creation is byte-compatible). Tags `["goblin","1"]`.
+  Caps: rumor 32 KB, slatepack 30 KB, note 256 chars.
+- **Encryption**: standard **NIP-44 v2 always works** (goblin's "v3" is its own negotiated
+  extension, only used when the peer advertises it — a Node bridge never needs it).
+  `nostr-tools` (nip44/nip59/nip17/nip05 + SimplePool over ws) covers everything.
+- **Ingest**: goblin AutoReceive (default policy Everyone) signs S2 automatically when the
+  wallet is online; it finalizes only if the sender pubkey == stored counterparty ⇒ **the pool
+  must send from the same Nostr key it listens on** (one persistent pool identity key).
+- **Relays**: shared floor `wss://relay.floonet.dev` is pinned in every goblin publish+inbox
+  set (plus relay.0xchat.com, offchain.pub). Public wss — no relay of our own is required
+  (the 091 floonet-rs deployer stays optional compose-when-present).
+- **Timing**: goblin pending-send expiry is **24 h**; catch-up lookback 3 days (wrap
+  `created_at` fuzzed ≤ 2 d past). Pairs naturally with our slatepack TTL expiry/refund.
+
+### 15.2 The security tension — this rail pays a THIRD PARTY
+
+Every existing rail can only pay the miner's own wallet: Tor dials the mining address's
+`.onion`; the manual slatepack is age-encrypted **to the mining address**. That is why the
+ownership gate is anti-griefing, not authentication — a passed gate cannot redirect funds.
+A nickname rail breaks that invariant: coins go to **whoever controls the npub** behind the
+username. A guessed IP (CGNAT neighbour!) or a leaked rig password would become real theft.
+The IP-or-password gate MUST NOT be the only thing standing between an attacker and an
+arbitrary-destination payout.
+
+**Mitigation — registered destination + cooldown (exchange-style address whitelisting):**
+1. `POST /api/account/:addr/nostr-destination` (ownership-gated, rate-limited): resolves the
+   NIP-05 username → npub, stores `{username, npub, registered_at}` on `miner_accounts`,
+   audit-logs the change. Re-registration overwrites and **resets the clock**.
+2. A Nostr payout is allowed only when `now - registered_at ≥ cooldown` (config, default
+   **48 h**, operator-tunable ≥ 24 h). Until then the account page shows "activates at <UTC>".
+3. The pending registration is prominently visible on the account page (and in the account
+   audit trail), so the legitimate owner — who checks their stats — has the whole cooldown
+   window to notice a hijack attempt, re-register (clock reset evicts the attacker's entry),
+   and rotate their rig password.
+4. Registration + first use each raise an admin money-alert (reuses AlertMonitor channels);
+   per-rail spend caps can piggyback on the existing large_withdrawal alert.
+5. The npub is pinned at registration time (TOFU): at send time the pool re-resolves the
+   NIP-05 name and **refuses if the npub changed** (a goblin.st account takeover must not
+   silently redirect payouts — the miner must re-register through the gate + cooldown).
+
+### 15.3 Bridge module sketch (`lib/nostr-payout.js`, in-process — no separate daemon)
+
+- One pool Nostr identity key (generated at setup, stored like `.wallet_pass`; NEVER the
+  operator's social `nostr_link` key from branding).
+- `SimplePool` over `wss://relay.floonet.dev` + 2 fallback relays (operator-configurable
+  JSON list in pool_config; compose-with-091 just prepends the self-hosted relay).
+- Send path (piggybacks the existing slatepack state machine — NEW `method='nostr'` rows
+  reuse `slatepack_pending`): create S1 (same wallet call as the manual rail, `recipients:
+  []` plain armor) → wrap per NIP-17 (kind-14 rumor → NIP-44 v2 seal → gift wrap) → publish
+  to the destination's inbox relays (kind-10050 lookup, fallback to the shared floor).
+- Receive path: persistent subscription for gift wraps addressed to the pool key; unwrap →
+  regex-extract exactly ONE `BEGINSLATEPACK` block (tag-distrusting, same as goblin) →
+  classify by parsed slate state → if it's S2 for a `slatepack_pending` nostr row, run the
+  existing finalize path (same code as the manual rail's finalize, minus the HTTP route).
+- Failure states map onto what already exists: no S2 within TTL → the standard slatepack
+  expiry refund (goblin's own 24 h pending expiry means a dead wallet fails fast); relay
+  publish failure → park as `retry_scheduled` and reuse the Tor retry ladder; NIP-05
+  resolution failure or npub mismatch → 4xx at request time, nothing locked.
+- Freeze/kill-switch: `_assertNotFrozen()` gates the new entry point exactly like the other
+  rails; the reconciliation coverage math needs no change (locked balances behave identically
+  to the manual slatepack rail).
+- **Pending exclusivity + cooldown come for free.** Because `method='nostr'` rows park in
+  `slatepack_pending`, they are already counted by the shared `PENDING_SQL`, so the
+  one-pending-per-address rule holds across Tor + slatepack + Nostr with no new code — a miner
+  can never run a Nostr payout alongside another rail. The nostr create entry point must also
+  call `_assertNoRecentReversal()` (added round 3, 2026-07-17) so the failed-payout cooldown
+  spans this rail too; a Nostr failure that reverses the lock goes through the same
+  `_reverseLock` → `balance_log` reversal row that arms the cooldown. This is the concrete
+  payoff of "reuse the withdrawal state machine": the cross-rail double-pay guard already
+  covers a rail that isn't built yet.
+
+### 15.4 Build order (when green-lit)
+
+1. Schema + registration endpoint + cooldown + account-page UI (no sending yet) — smallest
+   reviewable slice, and the cooldown clock can already be running for early adopters.
+2. Bridge send/receive with a testnet goblin wallet against the public relay floor.
+3. Alerts + admin visibility (registered destinations list, per-rail counters).
+4. VPS E2E with a real Goblin wallet, then enable on mainnet behind a pool_config flag
+   (default OFF).
+
+Est. scope: ~1 session for slice 1, 1–2 for the bridge. Deps: `nostr-tools` (+ `ws`) — the
+only new npm packages; everything else reuses the existing withdrawal state machine.
+
+### 15.5 BUILT 2026-07-18 (add-ons, NOT VPS-tested) — what shipped vs the sketch
+
+Implemented as one in-process bridge `lib/nostr-payout.js` + a `method='nostr'` rail on the
+existing scheduler. Feature flag `nostr_payouts_enabled` defaults **OFF**; nostr-tools + ws are
+lazy-required inside `start()` so a pool without `npm install` (or with the flag off) boots
+normally. Deviations from the sketch, all deliberate:
+
+- **Send-only rail (no donation-receive).** The pool is always the payout *sender*; the bridge
+  subscribes for the S2 *response* only. The §3.2 donation-ingest flow is out of scope here
+  (that was a Drop feature) — the receive pipeline finalizes S2s for our own pending sends and
+  drops everything else.
+- **S1 is plain armor (`recipients:[]`)** — the ONE wallet-call difference from the manual
+  slatepack rail (which age-encrypts to the mining address). Confidentiality is the Nostr DM
+  layer, and goblin's AutoReceive expects plain armor (§2.4). Everything else reuses
+  `createSlatepackWithdrawal`'s lock/fee/expiry machinery verbatim.
+- **Publish failure reverses immediately** (status `nostr_failed`) rather than entering the Tor
+  retry ladder (which is Tor-transport-specific). Simpler and safe: the miner just re-requests.
+  A *delivered but unanswered* send still parks in `slatepack_pending` and refunds via the
+  normal TTL sweep, so a genuinely-offline wallet is covered.
+- **NIP-05 domain allowlist** (`nostr_nip05_domains`, default `["goblin.st"]`) added as an
+  explicit SSRF + look-alike-domain guard beyond §2.6's hostname validation — the pool will
+  only resolve a username against an allowlisted domain.
+- **TOFU re-pin at send time**: the route re-resolves the stored username and refuses the
+  payout if the npub changed since registration (§15.2 #5), on top of the ≥48 h cooldown.
+- **Response binding is defence-in-depth**: the bridge routes an incoming S2 to a pending row
+  by matching the seal-sender pubkey to the registered `nostr_npub`; the scheduler then
+  re-checks that match AND binds `slate.id` before finalizing.
+
+Files: `lib/nostr-payout.js` (bridge, all nostr-tools calls isolated in a "wire" section),
+`lib/withdrawal-scheduler.js` (`createNostrWithdrawal` / `finalizeNostrWithdrawal` +
+`nostrBridge` injection), `index.js` (startup construct+start, response-handler wiring,
+`POST`/`DELETE /api/account/:addr/nostr-destination`, `method:'nostr'` withdraw branch,
+account-summary `nostr_destination` + `nostr_payouts_enabled`), `lib/db.js`
+(miner_accounts `nostr_username`/`nostr_npub`/`nostr_registered_at`, `nostr_seen_events` dedup
+table created by the bridge), `lib/config.js` + `lib/pool-settings.js` (4 config keys),
+`admin-panel/settings-payout.html` + `settings-common.js` (admin fields),
+`public_html/account-settings.html` (P-04 Goblin option + registration UI). Security detail →
+security_audit §E.3; build notes → implementation §10.2.
 
 ---
 

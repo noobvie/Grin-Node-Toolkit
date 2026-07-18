@@ -342,7 +342,7 @@
                     } else {
                         tbody.innerHTML = data.slice(0, 25).map(w => `
                             <tr>
-                                <td>${escHtml(new Date(when(w) * 1000).toLocaleString('en-US', { timeZone: 'UTC' }))} UTC</td>
+                                <td>${escHtml(new Date(when(w) * 1000).toLocaleString('en-US', { timeZone: 'UTC' }))}</td>
                                 <td>${addrCell(w.grin_address)}</td>
                                 <td class="num">${Number(w.amount || 0).toFixed(2)}</td>
                                 <td><span class="status-badge status-active">confirmed</span></td>

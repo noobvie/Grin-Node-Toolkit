@@ -2,6 +2,13 @@ const { getDb } = require('./db');
 const WalletTor = require('./wallet-tor');
 const IncentivesManager = require('./incentives');
 
+// Every status that occupies the ONE-pending-per-address slot — across ALL payout rails
+// (Tor, slatepack, and any future method that reuses these states, e.g. the designed Nostr
+// rail, which parks in slatepack_pending). Both create paths MUST share this list: a
+// rail-specific subset re-opens the hole where a miner with a pending slatepack could start
+// a Tor payout in parallel (found + fixed 2026-07-17).
+const PENDING_SQL = "status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')";
+
 class WithdrawalScheduler {
   constructor(config, wallet = null) {
     this.config = config;
@@ -10,6 +17,10 @@ class WithdrawalScheduler {
     // WalletAPI (Owner API v3) — required only for the slatepack payout rail. Tor payouts use
     // walletTor (CLI). Left null in deployments that never enable slatepack.
     this.wallet = wallet;
+    // Goblin/Nostr payout bridge (design §15) — injected by index.js AFTER construction
+    // (the bridge needs a response handler that calls back into this scheduler, so the two
+    // are wired post-hoc to avoid a construction cycle). Null when the feature is off.
+    this.nostrBridge = null;
     this.incentives = new IncentivesManager(config);
     this.isRunning = false;
     this.checkInterval = 60000;
@@ -78,6 +89,34 @@ class WithdrawalScheduler {
     if (this.isFrozen()) {
       const e = new Error('payouts are temporarily frozen by the pool operator — try again later');
       e.code = 409;
+      throw e;
+    }
+  }
+
+  // Cross-rail cooldown after a reversed payout (operator decision 2026-07-17, default 30 min).
+  // When a payout's lock is reversed back to balance — Tor final-failure, slatepack expiry or
+  // creation failure, admin cancel — the miner must wait before requesting ANOTHER payout on
+  // ANY rail. Two jobs: (1) safety margin for the known theoretical double-pay window (a Tor
+  // send that looked failed may still land — see audit §E.1; the slate_id/retrieve_txs check
+  // is the real fix, this narrows the race meanwhile), (2) stops rapid-fire rail-hopping after
+  // failures. Configured via payout.withdrawal_cooldown_minutes (applied at startup, like
+  // min_withdrawal); 0 disables.
+  _assertNoRecentReversal(grinAddress) {
+    const mins = this.config.withdrawal_cooldown_minutes;
+    const cooldown = (mins === undefined || mins === null ? 30 : mins) * 60;
+    if (!cooldown) return;
+    const row = this.db.prepare(`
+      SELECT MAX(created_at) AS t FROM balance_log
+      WHERE grin_address = ? AND event_type = 'reversal' AND reference_type = 'withdrawal'
+    `).get(grinAddress);
+    if (!row || !row.t) return;
+    const remaining = cooldown - (Math.floor(Date.now() / 1000) - row.t);
+    if (remaining > 0) {
+      const waitMin = Math.ceil(remaining / 60);
+      const e = new Error(
+        `a recent payout was returned to your balance — please wait ${waitMin} min before requesting another`
+      );
+      e.code = 429;
       throw e;
     }
   }
@@ -367,6 +406,7 @@ class WithdrawalScheduler {
     if (!grinAddress) fail('address required', 400);
     if (method !== 'tor') fail('only Tor withdrawals are supported', 400);
     this._assertNotFrozen();
+    this._assertNoRecentReversal(grinAddress);
 
     const acct0 = this.db.prepare(
       'SELECT balance FROM miner_accounts WHERE grin_address = ?'
@@ -387,14 +427,14 @@ class WithdrawalScheduler {
 
     const txn = this.db.transaction(() => {
       const totalPending = this.db.prepare(
-        "SELECT COUNT(*) AS c FROM withdrawals WHERE status IN ('tor_checking','tor_sending','retry_scheduled')"
+        `SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING_SQL}`
       ).get().c;
       if (totalPending >= this.MAX_PENDING_WITHDRAWALS) {
         fail(`pool has reached maximum pending withdrawals (${this.MAX_PENDING_WITHDRAWALS})`, 429);
       }
-      // Design §8: at most ONE pending withdrawal per address.
+      // Design §8: at most ONE pending withdrawal per address — across ALL rails.
       const userPending = this.db.prepare(
-        "SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled')"
+        `SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND ${PENDING_SQL}`
       ).get(grinAddress).c;
       if (userPending >= 1) fail('you already have a pending withdrawal', 429);
 
@@ -449,8 +489,7 @@ class WithdrawalScheduler {
     if (!grinAddress) fail('address required', 400);
     if (!this.wallet) fail('slatepack payouts are not configured on this pool', 503);
     this._assertNotFrozen();
-
-    const PENDING = "status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')";
+    this._assertNoRecentReversal(grinAddress);
 
     const acct0 = this.db.prepare(
       'SELECT balance FROM miner_accounts WHERE grin_address = ?'
@@ -468,9 +507,9 @@ class WithdrawalScheduler {
     // Lock the pool-side balance first (authoritative for accounting); the wallet-side output
     // lock happens during tx_lock_outputs below, and is released via cancelTx on failure.
     const txn = this.db.transaction(() => {
-      const totalPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING}`).get().c;
+      const totalPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING_SQL}`).get().c;
       if (totalPending >= this.MAX_PENDING_WITHDRAWALS) fail(`pool has reached maximum pending withdrawals (${this.MAX_PENDING_WITHDRAWALS})`, 429);
-      const userPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND ${PENDING}`).get(grinAddress).c;
+      const userPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND ${PENDING_SQL}`).get(grinAddress).c;
       if (userPending >= 1) fail('you already have a pending withdrawal', 429);
 
       const before = this.db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(grinAddress);
@@ -556,8 +595,133 @@ class WithdrawalScheduler {
     return { success: true, withdrawal_id: withdrawalId, status: 'confirmed' };
   }
 
+  // ─── Goblin/Nostr payout (design §15) ───────────────────────────────────────
+  // Third-party rail: the slate is delivered to the miner's registered Goblin username
+  // over a Nostr DM. The route has ALREADY resolved + TOFU-verified `recipientPubHex`
+  // against the stored destination and enforced the destination cooldown — this method
+  // never trusts a raw username. It reuses the slatepack state machine end-to-end:
+  //   • parks in 'slatepack_pending' with method='nostr' → inside PENDING_SQL (one-pending
+  //     cross-rail) and processSlatepackExpiry (TTL refund) with no extra code;
+  //   • the same freeze + failed-payout-cooldown gates as every other rail;
+  //   • the S1 is PLAIN armor (recipients:[]) — confidentiality is the Nostr DM layer, and
+  //     goblin's AutoReceive expects plain armor (verified, design §15.1). This is the ONE
+  //     difference from the manual slatepack rail (which age-encrypts to the mining address).
+  // On any wallet OR relay failure the balance lock is reversed so funds are never stranded.
+  async createNostrWithdrawal(grinAddress, amount, recipientPubHex, note) {
+    const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
+    if (!grinAddress) fail('address required', 400);
+    if (!this.wallet) fail('slatepack payouts are not configured on this pool', 503);
+    if (!this.nostrBridge || !this.nostrBridge.isEnabled()) fail('nostr payouts are not enabled on this pool', 503);
+    if (!/^[0-9a-f]{64}$/.test(String(recipientPubHex || ''))) fail('invalid destination', 400);
+    this._assertNotFrozen();
+    this._assertNoRecentReversal(grinAddress);
+
+    const acct0 = this.db.prepare('SELECT balance FROM miner_accounts WHERE grin_address = ?').get(grinAddress);
+    if (!acct0) fail('account not found', 404);
+
+    let amt = amount === undefined || amount === null || amount === '' ? acct0.balance : parseFloat(amount);
+    if (isNaN(amt) || amt <= 0) fail('invalid amount', 400);
+    amt = parseFloat(amt.toFixed(9));
+    const minW = this.config.min_withdrawal || 25.0;
+    if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
+
+    // Lock the pool-side balance first (authoritative). Same CAS + caps as the other rails.
+    const txn = this.db.transaction(() => {
+      const totalPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING_SQL}`).get().c;
+      if (totalPending >= this.MAX_PENDING_WITHDRAWALS) fail(`pool has reached maximum pending withdrawals (${this.MAX_PENDING_WITHDRAWALS})`, 429);
+      const userPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND ${PENDING_SQL}`).get(grinAddress).c;
+      if (userPending >= 1) fail('you already have a pending withdrawal', 429);
+
+      const before = this.db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(grinAddress);
+      const locked = this.db.prepare(
+        `UPDATE miner_accounts SET balance = balance - ?, balance_locked = balance_locked + ?, updated_at = unixepoch()
+         WHERE grin_address = ? AND balance >= ?`
+      ).run(amt, amt, grinAddress, amt);
+      if (locked.changes !== 1) fail('insufficient balance', 409);
+
+      const wid = this.db.prepare(
+        "INSERT INTO withdrawals (grin_address, amount, fee, status, method) VALUES (?, ?, 0, 'slatepack_pending', 'nostr')"
+      ).run(grinAddress, amt).lastInsertRowid;
+
+      this.db.prepare(`
+        INSERT INTO balance_log
+        (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+        VALUES (?, 'lock', ?, ?, ?, ?, ?, 'withdrawal', ?)
+      `).run(grinAddress, amt, before.balance, before.balance - amt, before.balance_locked, before.balance_locked + amt, wid);
+
+      this.db.prepare(`
+        INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+        VALUES (?, NULL, 'slatepack_pending', 'miner', ?)
+      `).run(wid, `nostr payout requested (${amt} GRIN)`);
+
+      return wid;
+    });
+
+    const withdrawalId = txn();
+
+    // Build the S1 slate (plain armor) and hand it to the bridge to wrap + publish. Any
+    // failure (wallet OR no relay accepted) reverses the lock — nothing is stranded.
+    let slate = null;
+    try {
+      slate = await this.wallet.initSendTx(amt);
+      await this.wallet.txLockOutputs(slate);
+      const armored = await this.wallet.createSlatepackMessage(slate, []); // recipients:[] → plain armor
+      const slateId = slate && slate.id ? slate.id : null;
+      const feeGrin = this._slateFeeGrin(slate);
+      this.db.prepare('UPDATE withdrawals SET slate_id = ?, fee = COALESCE(?, fee) WHERE id = ?')
+        .run(slateId, feeGrin, withdrawalId);
+
+      await this.nostrBridge.publishSlatepack(recipientPubHex, armored, note);
+
+      console.log(`[${new Date().toISOString()}] Nostr payout ${withdrawalId} sent for ${grinAddress} (${amt} GRIN, slate ${slateId})`);
+      return { success: true, withdrawal_id: withdrawalId, amount: amt, status: 'slatepack_pending' };
+    } catch (err) {
+      try { if (slate && slate.id) await this.wallet.cancelTx(slate.id); } catch (_) { /* best-effort */ }
+      this._reverseLock(withdrawalId, 'nostr_failed', 'slatepack_pending', `nostr send failed: ${err.message}`);
+      const e = new Error(`failed to send nostr payout: ${err.message}`); e.code = err.code && err.code >= 400 && err.code < 600 ? err.code : 502; throw e;
+    }
+  }
+
+  // Called by the bridge when a RESPONSE (S2) slatepack arrives for a pending nostr row.
+  // `senderPubHex` is the seal-verified Nostr sender — re-checked here (defence in depth)
+  // against the address's registered destination before any on-chain action. Errors are
+  // logged and the row is LEFT pending (goblin may resend; the TTL sweep refunds otherwise)
+  // — this runs off a relay event, not a request, so throwing would only spam the log.
+  async finalizeNostrWithdrawal(withdrawalId, grinAddress, responseSlatepack, senderPubHex) {
+    if (!this.wallet) return;
+    if (this.isFrozen()) {
+      console.warn(`[nostr-payout] finalize ${withdrawalId} skipped — payouts frozen; will retry on resend/TTL`);
+      return;
+    }
+    try {
+      const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
+      if (!w || w.status !== 'slatepack_pending' || w.method !== 'nostr') return;
+      if (w.grin_address !== grinAddress) return;
+
+      const acct = this.db.prepare('SELECT nostr_npub FROM miner_accounts WHERE grin_address = ?').get(grinAddress);
+      if (!acct || !acct.nostr_npub || acct.nostr_npub !== senderPubHex) {
+        console.warn(`[nostr-payout] finalize ${withdrawalId} rejected — sender ${senderPubHex.slice(0, 12)}… ≠ registered destination`);
+        return;
+      }
+
+      const slate = await this.wallet.slateFromSlatepackMessage(responseSlatepack, [0]);
+      if (w.slate_id && slate && slate.id && slate.id !== w.slate_id) {
+        console.warn(`[nostr-payout] finalize ${withdrawalId} rejected — slate ${slate && slate.id} ≠ issued ${w.slate_id}`);
+        return;
+      }
+      const finalized = await this.wallet.finalizeTx(slate);
+      await this.wallet.postTx(finalized, true);
+      this._creditConfirm(withdrawalId, 'slatepack_pending', 'nostr response finalized + posted');
+      console.log(`[${new Date().toISOString()}] Nostr payout ${withdrawalId} confirmed (${w.amount} GRIN to ${grinAddress})`);
+    } catch (err) {
+      console.warn(`[nostr-payout] finalize ${withdrawalId} error (left pending): ${err.message}`);
+    }
+  }
+
   // Miner-initiated cancel: frees the one-pending-per-address slot and returns the locked
-  // amount to spendable balance. Only PARKED states are cancellable — retry_scheduled (Tor
+  // amount to spendable balance. NOTE: the public cancel route was removed 2026-07-17 (parked
+  // states self-recover; a late cancel after a send that actually posted would double-pay) —
+  // this method is kept for admin/support tooling only. Only PARKED states are cancellable — retry_scheduled (Tor
   // payout waiting hours for its next attempt) and slatepack_pending (miner never returned
   // the slate). tor_checking/tor_sending are actively being sent and must settle first.
   // The status transition is a guarded UPDATE inside a transaction, so it can never race the

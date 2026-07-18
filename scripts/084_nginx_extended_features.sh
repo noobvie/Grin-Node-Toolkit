@@ -55,6 +55,10 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 die()     { error "$*"; exit 1; }
 pause()   { echo ""; echo "Press Enter to continue..."; read -r; }
 
+# ─── Shared nginx/certbot install + evict helpers ─────────────────────────────
+# shellcheck source=lib/nginx_shared_helpers.sh
+source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+
 # ─── Reserved Grin names (owned by script 02) ─────────────────────────────────
 RESERVED_PREFIXES=("fullmain" "prunemain" "prunetest")
 
@@ -71,55 +75,15 @@ _assert_not_reserved() {
 # =============================================================================
 # Shared nginx/certbot helpers
 # =============================================================================
+# nginx/certbot INSTALL + apache2 eviction are delegated to the shared lib
+# (nginx_install_with_certbot / nginx_ensure_certbot / nginx_evict_apache2),
+# sourced above. Only these thin presence checks are local.
 _check_nginx() {
     command -v nginx &>/dev/null
 }
 
-_evict_apache2() {
-    if systemctl is-active --quiet apache2 2>/dev/null; then
-        warn "apache2 is running and occupies port 80 — nginx cannot start."
-        local yn
-        echo -ne "  Stop and disable apache2 now? [Y/n]: "
-        read -r yn || true
-        if [[ "${yn,,}" != "n" ]]; then
-            systemctl stop    apache2 2>/dev/null || true
-            systemctl disable apache2 2>/dev/null || true
-            success "apache2 stopped and disabled."
-        else
-            warn "Skipping — nginx may fail to bind port 80/443."
-        fi
-    elif systemctl is-enabled --quiet apache2 2>/dev/null; then
-        warn "apache2 is enabled at boot (not running now) — disabling to avoid port conflict on reboot."
-        systemctl disable apache2 2>/dev/null || true
-        success "apache2 boot-start disabled."
-    fi
-}
-
-_install_nginx() {
-    info "Installing nginx..."
-    _evict_apache2
-    if command -v dnf &>/dev/null; then
-        dnf install -y nginx || die "Failed to install nginx."
-    else
-        apt-get update -qq && apt-get install -y nginx || die "Failed to install nginx."
-    fi
-    systemctl enable nginx
-    systemctl start nginx
-    success "nginx installed."
-}
-
 _check_certbot() {
     command -v certbot &>/dev/null
-}
-
-_install_certbot() {
-    info "Installing certbot..."
-    if command -v dnf &>/dev/null; then
-        dnf install -y certbot python3-certbot-nginx || die "Failed to install certbot."
-    else
-        apt-get update -qq && apt-get install -y certbot python3-certbot-nginx || die "Failed to install certbot."
-    fi
-    success "certbot installed."
 }
 
 _nginx_reload() {
@@ -258,18 +222,12 @@ _proxy_add() {
     echo -e "${BOLD}Add Reverse Proxy${RESET}"
     echo ""
 
-    if ! _check_nginx; then
-        warn "nginx is not installed."
-        echo -ne "Install nginx now? [Y/n]: "; read -r _yn
+    if ! _check_nginx || ! _check_certbot; then
+        _check_nginx   || warn "nginx is not installed."
+        _check_certbot || warn "certbot is not installed."
+        echo -ne "Install the missing package(s) now? [Y/n]: "; read -r _yn
         [[ "${_yn,,}" == "n" ]] && return
-        _install_nginx
-    fi
-
-    if ! _check_certbot; then
-        warn "certbot is not installed."
-        echo -ne "Install certbot now? [Y/n]: "; read -r _yn
-        [[ "${_yn,,}" == "n" ]] && return
-        _install_certbot
+        nginx_install_with_certbot || { error "Install failed — resolve the errors above and retry."; return; }
     fi
 
     # Collect inputs

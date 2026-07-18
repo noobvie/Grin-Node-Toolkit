@@ -109,6 +109,23 @@ flr_port() {
     [[ "$p" =~ ^[0-9]+$ ]] && echo "$p" || echo "$FLR_DEFAULT_PORT"
 }
 
+# Echo the first free TCP port ≥ $1 (scans a small window). "Free" = nothing is
+# LISTENing on it right now. Used to keep the relay's loopback listener off a
+# port another local service already owns — most importantly :8080, which the
+# toolkit's own Script 07 pool Central API reserves on loopback.
+_flr_free_loopback_port() {
+    local start="${1:-$FLR_DEFAULT_PORT}" p
+    [[ "$start" =~ ^[0-9]+$ ]] || start=$FLR_DEFAULT_PORT
+    for (( p=start; p<start+50; p++ )); do
+        # ss local-address column ends the port with a space; ":<p> " matches
+        # both 127.0.0.1:<p> and [::]:<p> without matching a longer port.
+        if ! ss -ltn 2>/dev/null | grep -qE ":${p} "; then
+            echo "$p"; return 0
+        fi
+    done
+    echo "$start"   # window exhausted — hand back the requested port
+}
+
 flr_relay_url() {
     local u
     u=$(flr_toml_get info relay_url)
@@ -562,6 +579,26 @@ MINCONF
     # rate/conn limits and expose the bare relay port).
     _flr_py_toml set "$FLR_CONFIG" database data_directory "$(flr_toml_str "$FLR_STATE")"
     _flr_py_toml set "$FLR_CONFIG" network address "$(flr_toml_str "127.0.0.1")"
+    # floonet-rs' upstream example config ships network.port = 8080 — the exact
+    # loopback port the toolkit's own Script 07 pool Central API reserves. On a
+    # box running both, the relay then can't bind (EADDRINUSE) and never starts.
+    # Never let the relay inherit 8080; and land it on a port nothing is already
+    # LISTENing on so an unrelated squatter doesn't wedge it either. nginx reads
+    # the same value via flr_port(), so the vhost and the relay always agree.
+    # (If the relay is already up on its current port, that port reads as "in
+    # use" by itself — but we only re-pick when the current port is unset/8080,
+    # so a healthy re-run never churns the port.)
+    local _cur_port _want_port
+    _cur_port=$(_flr_py_toml get "$FLR_CONFIG" network port 2>/dev/null || true)
+    if [[ ! "$_cur_port" =~ ^[0-9]+$ || "$_cur_port" == "8080" ]]; then
+        _want_port=$(_flr_free_loopback_port "$FLR_DEFAULT_PORT")
+        _flr_py_toml set "$FLR_CONFIG" network port "$_want_port"
+        if [[ "$_cur_port" == "8080" ]]; then
+            info "Moved relay off :8080 (reserved for the pool Central API) → :${_want_port}."
+        else
+            info "Relay loopback port set to :${_want_port}."
+        fi
+    fi
     # Upstream's example config can ship [goblinpay] with pay_mode enabled
     # (name/write) and no url — floonet-rs then panics on startup
     # ("goblinpay.url must be set when goblinpay.pay_mode is enabled"), an

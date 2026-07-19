@@ -672,6 +672,19 @@ flr_write_landing_page() {
     # path is wanted. Shown before the client JS re-reads location.host.
     relayhost="${relay_url#wss://}"; relayhost="${relayhost#ws://}"; relayhost="${relayhost%/}"
 
+    # Version + uptime for the status block. Version is a build-time fallback only —
+    # the browser prefers the live NIP-11 `version` field (Python also prefers it
+    # below). Uptime: floonet-rs never reports it in NIP-11, so bake the systemd
+    # service start time (Unix seconds) and let the page count up from it live.
+    local version started_epoch since_ts
+    version=$("$FLR_BIN" --version 2>/dev/null | head -n1 || true)
+    since_ts=$(systemctl show "$FLR_SVC" -p ActiveEnterTimestamp --value 2>/dev/null || true)
+    if [[ -n "$since_ts" && "$since_ts" != "n/a" ]]; then
+        started_epoch=$(date -d "$since_ts" +%s 2>/dev/null || echo "")
+    else
+        started_epoch=""
+    fi
+
     # supported_nips must reflect what the relay ACTUALLY has activated, not a
     # guess. The relay computes that itself and publishes it in its NIP-11 doc,
     # so fetch it from the local listener and bake the real list into the page as
@@ -1047,6 +1060,8 @@ flr_write_landing_page() {
         <div class="k">name</div><div class="v" id="n-name">@@NAME@@</div>
         <div class="k">description</div><div class="v" id="n-desc">@@DESC@@</div>
         <div class="k">software</div><div class="v" id="n-soft">@@SOFTWARE@@</div>
+        <div class="k">version</div><div class="v" id="n-ver">@@VERSION@@</div>
+        <div class="k">uptime</div><div class="v" id="n-up" data-started="@@STARTED@@">@@UPTIME_INIT@@</div>
         <div class="k">supported nips</div><div class="v" id="n-nips">@@NIPS@@</div>
         <div class="k">endpoint</div><div class="v" id="n-url">@@RELAYURL@@</div>
       </div>
@@ -1139,16 +1154,39 @@ flr_write_landing_page() {
         if(!d || typeof d!=="object") throw 0;
         set("n-name", d.name); set("n-desc", d.description);
         set("n-soft", d.software && String(d.software).replace(/^.*\//,""));
+        set("n-ver", d.version);
         set("n-url", fullUrl);
         if(Array.isArray(d.supported_nips)){
           var box=document.getElementById("n-nips");
-          if(box){ box.innerHTML=""; d.supported_nips.forEach(function(nn){
+          if(box){ box.innerHTML=""; d.supported_nips.forEach(function(nn,i){
+            if(i) box.appendChild(document.createTextNode(" "));  // copyable separator
             var s=document.createElement("span"); s.className="chip"; s.textContent=nn; box.appendChild(s); }); }
         }
         if(src) src.textContent="live";
       })
       .catch(function(){ if(src) src.textContent="static preview"; set("n-url", fullUrl); });
     function set(id,val){ if(val==null||val==="") return; var el=document.getElementById(id); if(el) el.textContent=val; }
+  })();
+
+  // Uptime: floonet-rs doesn't publish uptime in its NIP-11 doc, so the service
+  // start time is baked into data-started (Unix seconds) at page-build time and
+  // the elapsed time is counted up live here. Reflects the start captured when
+  // the landing page was last rebuilt — a silent relay restart since then reads
+  // stale until the next rebuild (menu L). Empty data-started → leave the SSR text.
+  (function(){
+    var el = document.getElementById("n-up"); if(!el) return;
+    var started = parseInt(el.getAttribute("data-started") || "0", 10);
+    if(!started) return;
+    function plural(n,w){ return n + " " + w + (n!==1 ? "s" : ""); }
+    function fmt(secs){
+      if(secs < 0) secs = 0;
+      var d=Math.floor(secs/86400), h=Math.floor((secs%86400)/3600), m=Math.floor((secs%3600)/60);
+      if(d>0) return "up " + plural(d,"day") + ", " + plural(h,"hour");
+      if(h>0) return "up " + plural(h,"hour") + ", " + plural(m,"min");
+      return "up " + plural(m,"min");
+    }
+    function tick(){ el.textContent = fmt(Math.floor(Date.now()/1000) - started); }
+    tick(); setInterval(tick, 30000);
   })();
 
   // Ambient cloak-veil: drifting aurora blobs + rising spectral motes.
@@ -1202,17 +1240,23 @@ FLR_LANDING_HTML
     # silently corrupt any value containing them; 5.1 does not. Python is immune.
     if ! FLR_TMPL="$html" FLR_NIP11="$live_nip11" python3 - \
             "$name" "$desc" "$software" "$relay_url" "$relayhost" \
-            "$FLR_LANDING_NIPS" "$netlabel" \
+            "$FLR_LANDING_NIPS" "$netlabel" "$version" "$started_epoch" \
             > "$FLR_WWW/index.html" <<'PYEOF'
-import os, sys, json, html as H
+import os, sys, json, time, html as H
 tmpl = os.environ.get("FLR_TMPL", "")
-a = (sys.argv[1:8] + [""] * 7)[:7]
-name, desc, software, relay_url, relayhost, nips_csv, netlabel = a
+a = (sys.argv[1:10] + [""] * 9)[:9]
+name, desc, software, relay_url, relayhost, nips_csv, netlabel, version, started = a
 esc = lambda s: H.escape(str(s) if s is not None else "", quote=True)
 
+# Version fallback comes from `floonet-rs --version` ("floonet-rs x.y.z") — keep
+# just the version token so it doesn't duplicate the software row.
+if version:
+    version = version.split()[-1]
+
 # Prefer the relay's OWN live NIP-11 doc — it lists the ACTUALLY activated NIPs
-# (and the real software string). Fall back to the configured CSV when the relay
-# wasn't reachable at write time (e.g. first deploy, before service start).
+# (and the real software/version strings). Fall back to the configured CSV /
+# binary version when the relay wasn't reachable at write time (e.g. first
+# deploy, before service start).
 nips = [n.strip() for n in nips_csv.split(",") if n.strip()]
 try:
     doc = json.loads(os.environ.get("FLR_NIP11", "") or "{}")
@@ -1220,14 +1264,39 @@ try:
         nips = [str(n) for n in doc["supported_nips"]]
     if doc.get("software"):
         software = str(doc["software"]).rsplit("/", 1)[-1]
+    if doc.get("version"):
+        version = str(doc["version"])
 except Exception:
     pass
+if not version:
+    version = "—"
 
-chips = "".join('<span class="chip">%s</span>' % esc(n) for n in nips)
+# SSR uptime string from the baked start epoch (JS re-computes + ticks live).
+def fmt_uptime(started):
+    try:
+        started = int(started)
+    except (TypeError, ValueError):
+        return "—"
+    if started <= 0:
+        return "—"
+    secs = max(0, int(time.time()) - started)
+    d, h, m = secs // 86400, (secs % 86400) // 3600, (secs % 3600) // 60
+    pl = lambda n, w: "%d %s%s" % (n, w, "" if n == 1 else "s")
+    if d:
+        return "up %s, %s" % (pl(d, "day"), pl(h, "hour"))
+    if h:
+        return "up %s, %s" % (pl(h, "hour"), pl(m, "min"))
+    return "up %s" % pl(m, "min")
+
+# Join chips with a space so selecting/copying the row yields "1 2 9 11 …",
+# not a run-together "12911…". The JS rebuild (live NIP-11) does the same.
+chips = " ".join('<span class="chip">%s</span>' % esc(n) for n in nips)
 repl = {
     "@@NAME@@": esc(name), "@@DESC@@": esc(desc),
     "@@SOFTWARE@@": esc(software), "@@RELAYURL@@": esc(relay_url),
     "@@RELAYHOST@@": esc(relayhost), "@@NIPS@@": chips, "@@NETLABEL@@": esc(netlabel),
+    "@@VERSION@@": esc(version), "@@STARTED@@": esc(started or ""),
+    "@@UPTIME_INIT@@": esc(fmt_uptime(started)),
 }
 for k, v in repl.items():
     tmpl = tmpl.replace(k, v)
@@ -1277,6 +1346,12 @@ flr_start_verify() {
     else
         warn "No WebSocket handshake on 127.0.0.1:${port} yet (relay may still be initialising)."
     fi
+    # The landing page was written in step 7, BEFORE the service started, so its
+    # baked uptime start-time (and any live NIP-11 fields) were unavailable then.
+    # Now that the relay is up, rebuild it once so the status block is accurate on
+    # first deploy — no nginx reload needed (nginx serves the static file directly).
+    flr_load_conf
+    flr_write_landing_page >/dev/null 2>&1 || true
     return 0
 }
 

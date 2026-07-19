@@ -57,10 +57,13 @@
 #           · CORS enabled; Cache-Control: public, max-age=60
 #           · Requires status page deployed (option 6/7) first
 #
-#   T/U)  Tor onion  (MODE B add-on)
+#   T/U/V) Tor onion  (MODE B add-on)
 #           · Publishes /v2/foreign as a .onion hidden service via nginx
 #           · Auth injected by nginx — callers need no credentials
 #           · Key dir: /var/lib/tor/grin-<net>-nginx/ (separate from Script 01)
+#           · First-time enable asks NEW address vs RECOVER from backup
+#           · Identity auto-backed up to /opt/grin/backups/grin_tor_onion_<net>.tar.gz;
+#             V re-snapshots on demand (archive holds the ed25519 secret key, mode 600)
 #           · Requires nginx proxy active (option 4) first
 #
 # NETWORKS
@@ -127,6 +130,9 @@ TOR_LOCAL_PORT_TESTNET=18413
 # Dedicated nginx configs for the Tor listener (separate from the main HTTPS vhost)
 TOR_NGINX_CONF_MAINNET="/etc/nginx/sites-available/grin-node-api-tor"
 TOR_NGINX_CONF_TESTNET="/etc/nginx/sites-available/grin-node-api-tor-testnet"
+# .onion identity backups (the ed25519 SECRET key — not just the address string).
+# Per-network filenames so mainnet/testnet identities never clobber each other.
+TOR_BACKUP_DIR="/opt/grin/backups"
 
 # Grin instance conf — written by script 01, read here to find actual data dirs.
 CONF_DIR="/opt/grin/conf"
@@ -904,6 +910,107 @@ disable_testnet_node_api() {
 # Requires: option 4 (nginx HTTPS proxy) already active.
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ── .onion identity path + backup/restore helpers ──────────────────────────────
+# The identity IS the ed25519 secret key file, NOT the .onion string. Backing up
+# only the hostname is useless for recovery — we tar the key files.
+_tor_hs_dir()      { printf '/var/lib/tor/grin-%s-nginx' "$1"; }
+_tor_backup_file() { printf '%s/grin_tor_onion_%s.tar.gz' "$TOR_BACKUP_DIR" "$1"; }
+
+# Echo the tor service user for this distro (empty if none found).
+_tor_detect_user() {
+    local _u
+    for _u in debian-tor toranon tor _tor; do
+        if id "$_u" &>/dev/null; then printf '%s' "$_u"; return 0; fi
+    done
+    return 1
+}
+
+# Tar the Script 04 .onion identity (secret+public key, hostname) into
+# /opt/grin/backups/grin_tor_onion_<net>.tar.gz. Files are stored flat (no
+# /var/lib/tor prefix) so restore is path-independent. Unencrypted by design —
+# root-only dir — but the archive holds a secret key, so it stays mode 600.
+_backup_tor_identity() {
+    local network="$1"
+    local hs_dir; hs_dir=$(_tor_hs_dir "$network")
+    local backup_file; backup_file=$(_tor_backup_file "$network")
+
+    if [[ ! -f "$hs_dir/hs_ed25519_secret_key" ]]; then
+        warn "No .onion secret key at $hs_dir — nothing to back up (enable Tor first)."
+        return 1
+    fi
+
+    mkdir -p "$TOR_BACKUP_DIR"
+    chmod 700 "$TOR_BACKUP_DIR" 2>/dev/null || true
+
+    local _files=("hs_ed25519_secret_key")
+    [[ -f "$hs_dir/hs_ed25519_public_key" ]] && _files+=("hs_ed25519_public_key")
+    [[ -f "$hs_dir/hostname" ]]              && _files+=("hostname")
+
+    if tar -czf "$backup_file" -C "$hs_dir" "${_files[@]}" 2>/dev/null; then
+        chmod 600 "$backup_file"
+        local _hn=""
+        [[ -f "$hs_dir/hostname" ]] && _hn=$(tr -d '[:space:]' < "$hs_dir/hostname" 2>/dev/null || true)
+        success "Tor .onion identity backed up → $backup_file${_hn:+  ($_hn)}"
+        warn "This archive contains the .onion SECRET KEY — keep it private (it is not encrypted)."
+        log "[TOR-04] identity backed up: network=$network file=$backup_file"
+        return 0
+    fi
+    warn "Failed to write $backup_file"
+    return 1
+}
+
+# Restore the .onion identity from the backup tarball into the HS dir with the
+# perms/ownership tor requires. Stops tor while swapping keys so it does not
+# republish a stale descriptor; leaves tor in its prior running state.
+_restore_tor_identity() {
+    local network="$1"
+    local hs_dir; hs_dir=$(_tor_hs_dir "$network")
+    local backup_file; backup_file=$(_tor_backup_file "$network")
+
+    if [[ ! -f "$backup_file" ]]; then
+        error "No .onion backup found at $backup_file"
+        return 1
+    fi
+    info "Restoring .onion identity from $backup_file ..."
+
+    local _tor_was_running=0
+    if systemctl is-active --quiet tor 2>/dev/null; then
+        _tor_was_running=1
+        systemctl stop tor 2>/dev/null || true
+    fi
+
+    mkdir -p "$hs_dir"
+    if ! tar -xzf "$backup_file" -C "$hs_dir" 2>/dev/null; then
+        error "Failed to extract $backup_file (corrupt archive?)."
+        [[ $_tor_was_running -eq 1 ]] && systemctl start tor 2>/dev/null || true
+        return 1
+    fi
+    if [[ ! -f "$hs_dir/hs_ed25519_secret_key" ]]; then
+        error "Backup did not contain hs_ed25519_secret_key — cannot restore identity."
+        [[ $_tor_was_running -eq 1 ]] && systemctl start tor 2>/dev/null || true
+        return 1
+    fi
+
+    # Perms: 700 dir, 600 secret key — tor refuses to load a world-readable key.
+    chmod 700 "$hs_dir"
+    chmod 600 "$hs_dir/hs_ed25519_secret_key"
+
+    local _tor_user; _tor_user=$(_tor_detect_user || true)
+    if [[ -n "$_tor_user" ]]; then
+        chown -R "$_tor_user:$_tor_user" "$hs_dir" 2>/dev/null || true
+    else
+        warn "No tor user found — $hs_dir left root-owned; tor may refuse to read it."
+    fi
+
+    [[ $_tor_was_running -eq 1 ]] && systemctl start tor 2>/dev/null || true
+
+    local _hn=""
+    [[ -f "$hs_dir/hostname" ]] && _hn=$(tr -d '[:space:]' < "$hs_dir/hostname" 2>/dev/null || true)
+    success "Tor .onion identity restored${_hn:+ → $_hn}"
+    log "[TOR-04] identity restored: network=$network onion=${_hn:-unknown}"
+    return 0
+}
+
 # Install or update the marker-bounded Tor torrc stanza for Script 04.
 _torrc_04_install() {
     local network="$1" tor_port="$2"
@@ -1067,6 +1174,43 @@ _enable_tor_nginx() {
         fi
     fi
 
+    # ── .onion identity: new / reuse-on-disk / recover-from-backup ──────────────
+    # If a secret key is already on disk, tor republishes the same address — reuse
+    # it silently. Only on a true first run do we ask new-vs-recover.
+    local _hs_dir; _hs_dir=$(_tor_hs_dir "$network")
+    local _backup_file; _backup_file=$(_tor_backup_file "$network")
+    local _do_backup_after=0
+    if [[ -f "$_hs_dir/hs_ed25519_secret_key" ]]; then
+        info "Existing .onion identity found on disk — reusing it (same address)."
+        # Protect it if it has never been backed up.
+        [[ -f "$_backup_file" ]] || _do_backup_after=1
+    else
+        echo -e "  ${BOLD}No .onion identity exists yet for $network.${RESET} Choose how to set it up:"
+        echo -e "    ${GREEN}1${RESET}) Generate a ${BOLD}NEW${RESET} .onion address ${DIM}(auto-backed up once published)${RESET}"
+        if [[ -f "$_backup_file" ]]; then
+            echo -e "    ${GREEN}2${RESET}) ${BOLD}RECOVER${RESET} from backup ${DIM}($_backup_file)${RESET}"
+        else
+            echo -e "    ${DIM}2) Recover from backup — none found at $_backup_file${RESET}"
+        fi
+        echo -ne "  Select [1/2] (default 1): "
+        local _id_choice; read -r _id_choice
+        if [[ "$_id_choice" == "2" ]]; then
+            if [[ -f "$_backup_file" ]]; then
+                if ! _restore_tor_identity "$network"; then
+                    error "Recovery failed — aborting so a NEW address is not silently generated."
+                    return
+                fi
+                # Identity now on disk; the backup is the source, no re-backup needed.
+            else
+                warn "No backup to recover from — generating a new address instead."
+                _do_backup_after=1
+            fi
+        else
+            _do_backup_after=1   # new address → back it up once tor publishes it
+        fi
+        echo ""
+    fi
+
     cat > "$tor_nginx_conf" << EOF
 # Tor local HTTP listener — proxied to Grin Foreign API by nginx.
 # Bound to 127.0.0.1 only; Tor hidden service maps port 80 here.
@@ -1124,7 +1268,14 @@ EOF
     echo ""
     [[ -n "$_proxy_auth_header" ]] && \
         info "Auth injected internally — callers need no credentials."
-    warn "Back up /var/lib/tor/grin-${network}-nginx/ to preserve your .onion identity."
+
+    # Auto-back up the identity (new address, or existing one never backed up).
+    if [[ $_do_backup_after -eq 1 ]]; then
+        _backup_tor_identity "$network" || \
+            warn "Back up $_hs_dir manually to preserve your .onion identity."
+    else
+        info "Identity backup present at $_backup_file (option V re-snapshots it)."
+    fi
 
     # Refresh config.js in the deployed status page so the Tor card shows the real address.
     if [[ -n "$_onion" ]]; then
@@ -2021,11 +2172,12 @@ show_api_menu() {
     echo -e "${DIM}  ─── Tor onion /v2/foreign (requires option 4) ────────${RESET}"
     echo -e "  ${GREEN}T${RESET}) Enable Tor onion     $label_T"
     echo -e "  ${RED}U${RESET}) Disable Tor onion    ${DIM}(removes nginx listener + torrc stanza)${RESET}"
+    echo -e "  ${CYAN}V${RESET}) Backup onion identity ${DIM}(→ $TOR_BACKUP_DIR/grin_tor_onion_<net>.tar.gz)${RESET}"
     echo ""
     echo -e "  ${DIM}↩  Press Enter to refresh status${RESET}"
     echo -e "  ${RED}0${RESET}) Back to network select"
     echo ""
-    echo -ne "${BOLD}Select [1-9 / T / U / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [1-9 / T / U / V / 0]: ${RESET}"
 }
 
 # ─── Network-aware dispatch ────────────────────────────────────────────────────
@@ -2040,6 +2192,7 @@ _call_enable_status()    { if [[ "$NETWORK" == "mainnet" ]]; then enable_mainnet
 _call_disable_status()   { if [[ "$NETWORK" == "mainnet" ]]; then disable_mainnet_status_page;else disable_testnet_status_page;fi; }
 _call_enable_tor()       { if [[ "$NETWORK" == "mainnet" ]]; then enable_mainnet_tor_nginx;   else enable_testnet_tor_nginx;   fi; }
 _call_disable_tor()      { if [[ "$NETWORK" == "mainnet" ]]; then disable_mainnet_tor_nginx;  else disable_testnet_tor_nginx;  fi; }
+_call_backup_tor()       { echo -e "\n${BOLD}${CYAN}── Backup Tor Onion Identity ($NETWORK) ──${RESET}\n"; _backup_tor_identity "$NETWORK"; }
 _call_enable_rest()      { if [[ "$NETWORK" == "mainnet" ]]; then enable_mainnet_rest_api;    else enable_testnet_rest_api;    fi; }
 _call_disable_rest()     { if [[ "$NETWORK" == "mainnet" ]]; then disable_mainnet_rest_api;   else disable_testnet_rest_api;   fi; }
 
@@ -2074,6 +2227,7 @@ main() {
                         9) _call_disable_rest     || true ;;
                         T|t) _call_enable_tor     || true ;;
                         U|u) _call_disable_tor    || true ;;
+                        V|v) _call_backup_tor     || true ;;
                         0) break ;;
                         "") continue ;;
                         *) warn "Invalid option." ; sleep 1 ;;

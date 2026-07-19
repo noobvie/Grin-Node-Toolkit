@@ -5,9 +5,11 @@
  * fills for countries that have pool activity. Renders:
  *   hub → gateways (live status) → miners-by-country  + a 30-day Grin-node twinkle layer.
  *
- * DATA: fetches /api/pool/topology and /api/network/peers?window=30d. If either is
- * empty (no live miners/peers yet, or geoip-lite not installed) it falls back to a
- * small illustrative dataset and shows a "sample data" note, so the page always renders.
+ * DATA: fetches /api/pool/topology and /api/network/peers?window=30d. A SUCCESSFUL
+ * topology response always renders as-is — a live pool with an offline gateway and zero
+ * miners is real data (hub + gateway·offline + node twinkle), not "empty". The small
+ * illustrative sample topology is used ONLY when the topology feed is unreachable; the
+ * peer layer falls back to sample twinkles until the peer collector runs (noted on-page).
  * All positions come from the server RANDOMIZED within each country — never a real
  * location or IP (see back-end lib/geoip.js).
  *
@@ -240,7 +242,7 @@
       trace(); ctx.lineWidth = c.host ? 1.6 : 1; ctx.strokeStyle = c.border; if (c.host){ ctx.shadowColor=c.border; ctx.shadowBlur=6; } ctx.stroke(); ctx.shadowBlur=0;
     }
   }
-  function drawPeers(now) { for (const pr of PEERS){ const p=project(pr.v); if (p.z<=0.03) continue; let a = pr.blink ? (Math.sin(now*pr.spd*2.2+pr.phase)>0.4?1:0.12) : (0.35+0.4*(0.5+0.5*Math.sin(now*pr.spd+pr.phase))); a *= Math.min(1,p.z*1.4); const rgb = pr.net==="main"?"93,255,115":"255,79,216"; ctx.fillStyle="rgba("+rgb+","+(a*0.85).toFixed(3)+")"; ctx.shadowColor="rgba("+rgb+","+a.toFixed(3)+")"; ctx.shadowBlur=5*a; ctx.beginPath(); ctx.arc(p.x,p.y,1.6,0,7); ctx.fill(); ctx.shadowBlur=0; } }
+  function drawPeers(now) { for (const pr of PEERS){ const p=project(pr.v); if (p.z<=0.03) continue; let a = pr.blink ? (Math.sin(now*pr.spd*2.2+pr.phase)>0.4?1:0.12) : (0.35+0.4*(0.5+0.5*Math.sin(now*pr.spd+pr.phase))); a *= Math.min(1,p.z*1.4); const rgb = pr.net==="main"?"93,255,115":"255,79,216"; ctx.fillStyle="rgba("+rgb+","+(a*0.85).toFixed(3)+")"; ctx.shadowColor="rgba("+rgb+","+a.toFixed(3)+")"; ctx.shadowBlur=10*a; ctx.beginPath(); ctx.arc(p.x,p.y,3.2,0,7); ctx.fill(); ctx.shadowBlur=0; } }
   function drawAnimArc(a, b, rgb, width, lift, now, phase, period, active) {
     const N=30, pt = t => { const s=slerp(a,b,t); const k=1+lift*Math.sin(Math.PI*t); return project([s[0]*k,s[1]*k,s[2]*k]); };
     ctx.lineWidth=width; let st=false;
@@ -315,29 +317,36 @@
     ctx = cv.getContext('2d');
     buildStaticGeometry();
 
-    let topo = null, peers = null;
-    try { topo = await jget('/api/pool/topology'); } catch (_) {}
+    let topo = null, peers = null, topoOk = false;
+    try { topo = await jget('/api/pool/topology'); topoOk = !!topo; } catch (_) {}
     try { peers = await jget('/api/network/peers?window=30d'); } catch (_) {}
-    const topoEmpty = !topo || !topo.countries || topo.countries.length === 0;
-    const peersEmpty = !peers || !peers.countries || peers.countries.length === 0;
-    if (topoEmpty) topo = FALLBACK_TOPOLOGY;
+
+    // A SUCCESSFUL topology response is ground truth and always renders as-is — a live pool
+    // with an offline gateway and zero miners is REAL data (hub + gateway·offline + node
+    // twinkle), NOT "empty". We only substitute the illustrative sample topology when the
+    // feed is genuinely unreachable (API down / network error). `noMiners` is the softer
+    // state: the topology is real, there just aren't any miner-countries online yet.
+    const topoUsable = topoOk;
+    const noMiners = !topo || !Array.isArray(topo.countries) || topo.countries.length === 0;
+    const peersEmpty = !peers || !Array.isArray(peers.countries) || peers.countries.length === 0;
+    if (!topoUsable) topo = FALLBACK_TOPOLOGY;
     if (peersEmpty) peers = FALLBACK_PEERS;
 
-    // "sample data" note when either feed is empty (or geoip fell back to gateway country).
+    // Context note: distinguish "feed unreachable" (sample topology) from the ordinary
+    // "no miners yet" state (real hub + gateways still shown) and the sample-peers state.
     const noteEl = document.getElementById('nm-note');
     if (noteEl) {
-      if (topoEmpty || peersEmpty) {
-        noteEl.style.display = '';
-        noteEl.innerHTML = 'Showing <b>sample data</b> — no live ' +
-          (topoEmpty && peersEmpty ? 'miners or peers' : topoEmpty ? 'miners' : 'peer snapshots') +
-          ' recorded yet. Live data appears once miners connect' +
-          (peersEmpty ? ' and the peer collector runs' : '') + '.';
+      const msgs = [];
+      if (!topoUsable) {
+        msgs.push('Showing <b>sample data</b> — the live topology feed is unreachable');
+      } else if (noMiners) {
+        msgs.push('No miners are connected yet — the map shows the <b>live hub and gateway status</b>; miner regions appear as miners connect');
       } else if (topo.geo_source === 'gateway') {
-        noteEl.style.display = '';
-        noteEl.innerHTML = 'Miner countries are grouped by <b>gateway region</b> (install <code>geoip-lite</code> on the pool node for true per-miner country).';
-      } else {
-        noteEl.style.display = 'none';
+        msgs.push('Miner countries are grouped by <b>gateway region</b> (install <code>geoip-lite</code> on the pool node for true per-miner country)');
       }
+      if (peersEmpty) msgs.push('Grin node sightings are <b>sample data</b> until the peer collector runs');
+      if (msgs.length) { noteEl.style.display = ''; noteEl.innerHTML = msgs.join('. ') + '.'; }
+      else noteEl.style.display = 'none';
     }
 
     ingest(topo, peers);

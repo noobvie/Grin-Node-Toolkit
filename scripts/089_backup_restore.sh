@@ -32,6 +32,8 @@
 #   · /opt/grin/grin-stats/config.env  — stats collector config
 #   · /var/lib/tor/grin-mainnet/, /var/lib/tor/grin-testnet/
 #                              — Tor HiddenService Ed25519 keys (.onion identity) — optional, default Y
+#   · /etc/floonet-rs/         — Floonet relay config.toml + env (GoblinPay token) — optional, default Y
+#   · /var/lib/floonet-rs/*.db — Floonet relay NIP-05 usernames + stored events (online snapshot)
 #   · /etc/nginx/sites-available/*  (Grin-related configs only)
 #   · /etc/letsencrypt/live/ + renewal/  — SSL certs
 #   · root + www-data crontabs  — collector schedules
@@ -401,6 +403,42 @@ run_backup() {
             done
         else
             [[ "$auto" == false ]] && warn "  — Tor HiddenService keys excluded. .onion identity will be lost on VPS migration."
+        fi
+    fi
+
+    # ── Step 5c: Floonet relay (091) ─────────────────────────────────────────
+    # The Grin-native Nostr relay keeps its identity + settings in /etc/floonet-rs
+    # (config.toml + env with the GoblinPay token) and its NIP-05 username
+    # registrations + stored events in /var/lib/floonet-rs/*.db. BOTH are needed to
+    # migrate the relay to a new VPS with the same nicknames intact — a same-domain
+    # move keeps the wss connection alive, but the name@domain registry lives ONLY
+    # in the DB. (grin_floonet.conf rides along inside /opt/grin/conf, already added.)
+    if [[ -f /etc/floonet-rs/config.toml || -x /usr/local/bin/floonet-rs ]]; then
+        local include_floonet=true
+        if [[ "$auto" == false ]]; then
+            section "Step 5c: Floonet relay (Nostr)"
+            echo -e "  ${YELLOW}Detected a floonet-rs relay.${RESET} Backing it up preserves the relay"
+            echo -e "  ${YELLOW}config, GoblinPay token, and all NIP-05 usernames + stored events.${RESET}"
+            echo ""
+            echo -ne "${BOLD}Include Floonet relay (config + DB)? [Y/n]: ${RESET}"
+            read -r _floonet_choice
+            [[ "${_floonet_choice,,}" == "n" ]] && include_floonet=false
+        fi
+        if [[ "$include_floonet" == true ]]; then
+            if [[ -d /etc/floonet-rs ]]; then
+                sources+=("/etc/floonet-rs")
+                manifest_lines+=("floonet: /etc/floonet-rs (config.toml + env)")
+                [[ "$auto" == false ]] && info "  ✓ /etc/floonet-rs"
+            fi
+            local _fdb
+            for _fdb in /var/lib/floonet-rs/*.db; do
+                [[ -f "$_fdb" ]] || continue           # unmatched glob stays literal → skipped
+                db_sources+=("$_fdb")                  # consistent snapshot at archive time
+                manifest_lines+=("floonet-db: $_fdb (NIP-05 names + events)")
+                [[ "$auto" == false ]] && info "  ✓ $_fdb"
+            done
+        else
+            [[ "$auto" == false ]] && warn "  — Floonet relay excluded. Its usernames/events won't travel."
         fi
     fi
 
@@ -886,6 +924,41 @@ run_restore() {
         echo -e "        ${DIM}· grin-<net>-nginx   → Script 04 option T (reuses the restored key)${RESET}"
     fi
 
+    # Floonet relay (091) — config identity + NIP-05 username/events DB. Restore
+    # BOTH so a new VPS serves the same relay with the same nicknames (a same-domain
+    # move keeps the wss connection, but the name@domain registry lives only in the
+    # DB). Stop the service first to avoid a torn DB copy. Ownership: config →
+    # root:floonet 640 when the stable `floonet` user + unit exist (a DynamicUser
+    # fallback can't read a root-only file, so leave 600 then and let 091 relax it);
+    # DB/state → floonet:floonet. On a bare box the floonet user/unit may not exist
+    # yet — files land root-owned and a later Script 091 run reclaims them.
+    local _floonet_restored=false
+    if [[ -d "$extract_dir/etc/floonet-rs" ]] || ls "$extract_dir"/var/lib/floonet-rs/*.db >/dev/null 2>&1; then
+        systemctl stop floonet-rs 2>/dev/null || true
+        if [[ -d "$extract_dir/etc/floonet-rs" ]]; then
+            mkdir -p /etc/floonet-rs
+            cp -a "$extract_dir/etc/floonet-rs/." /etc/floonet-rs/
+            if id floonet &>/dev/null && grep -qs '^User=floonet' /etc/systemd/system/floonet-rs.service 2>/dev/null; then
+                chown root:floonet /etc/floonet-rs/config.toml 2>/dev/null || true
+                chmod 640 /etc/floonet-rs/config.toml 2>/dev/null || true
+            else
+                chmod 600 /etc/floonet-rs/config.toml 2>/dev/null || true
+            fi
+            [[ -f /etc/floonet-rs/env ]] && chmod 600 /etc/floonet-rs/env 2>/dev/null || true
+            success "Restored: /etc/floonet-rs (relay config + env)"
+            log "[RESTORE] floonet /etc/floonet-rs"
+            _floonet_restored=true
+        fi
+        if ls "$extract_dir"/var/lib/floonet-rs/*.db >/dev/null 2>&1; then
+            mkdir -p /var/lib/floonet-rs
+            cp -a "$extract_dir"/var/lib/floonet-rs/*.db /var/lib/floonet-rs/ 2>/dev/null || true
+            id floonet &>/dev/null && chown -R floonet:floonet /var/lib/floonet-rs 2>/dev/null || true
+            success "Restored: /var/lib/floonet-rs (NIP-05 usernames + events)"
+            log "[RESTORE] floonet DB"
+            _floonet_restored=true
+        fi
+    fi
+
     # Wallet dirs
     if [[ -d "$extract_dir/opt/grin/wallet" ]]; then
         mkdir -p /opt/grin/wallet
@@ -1043,6 +1116,10 @@ run_restore() {
     echo -e "  · If stats.db was restored, resume the stats cron — no re-crawl needed"
     echo -e "  · If GrinScan / solo-mining DBs were restored, (re)start those services to pick them up"
     echo -e "  · If Grin Drop was restored, restart services via ${BOLD}Script 052 → menu${RESET}"
+    if [[ "$_floonet_restored" == true ]]; then
+        echo -e "  · Re-run ${BOLD}Script 091${RESET} to (re)install the relay binary/service — your restored"
+        echo -e "    config + NIP-05 usernames are preserved; repoint the domain's DNS + re-issue SSL"
+    fi
     echo -e "  · Web content (${DIM}/var/www/${RESET}) is redeployed automatically by each setup script"
     echo ""
     log "[RESTORE] Completed from: $chosen_archive"
